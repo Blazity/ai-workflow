@@ -1,0 +1,5 @@
+node_modules/
+dist/
+.env
+*.tsbuildinfo
+# Note: drizzle/ migrations are intentionally committed for reproducibility
