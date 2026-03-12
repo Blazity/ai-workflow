@@ -1,5 +1,6 @@
 import Fastify from "fastify";
 import { env } from "./env.js";
+import { createWorker } from "./worker.js";
 
 export function buildApp() {
   const app = Fastify({ logger: true });
@@ -13,6 +14,7 @@ export function buildApp() {
 
 async function main() {
   const app = buildApp();
+  const worker = createWorker();
 
   try {
     await app.listen({ port: env.PORT, host: "0.0.0.0" });
@@ -22,6 +24,10 @@ async function main() {
   }
 
   const shutdown = async () => {
+    const forceTimeout = setTimeout(() => process.exit(1), 30_000);
+    forceTimeout.unref();
+    await worker.close();
+    clearTimeout(forceTimeout);
     await app.close();
     process.exit(0);
   };
@@ -30,7 +36,6 @@ async function main() {
   process.on("SIGINT", shutdown);
 }
 
-// Only start the server when run directly, not when imported in tests
 if (process.argv[1] && import.meta.url === `file://${process.argv[1]}`) {
   main();
 }
