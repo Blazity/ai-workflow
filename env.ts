@@ -17,6 +17,11 @@ export const env = createEnv({
     NODE_ENV: z
       .enum(["development", "production", "test"])
       .default("development"),
+    JIRA_WEBHOOK_SECRET: z.string().min(1),
+    COLUMN_AI: z.string().default("AI"),
+    COLUMN_AI_IN_PROGRESS: z.string().default("AI In Progress"),
+    COLUMN_AI_REVIEW: z.string().default("AI Review"),
+    COLUMN_BACKLOG: z.string().default("Backlog"),
   },
   runtimeEnv: process.env,
 });

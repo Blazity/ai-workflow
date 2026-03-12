@@ -9,6 +9,7 @@ describe("createWorker", () => {
     vi.unstubAllEnvs();
     vi.stubEnv("DATABASE_URL", "postgresql://user:pass@localhost:5432/db");
     vi.stubEnv("REDIS_URL", "redis://localhost:6379");
+    vi.stubEnv("JIRA_WEBHOOK_SECRET", "test-secret");
   });
 
   it("creates a worker on the 'ticket' queue", async () => {
