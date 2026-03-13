@@ -7,13 +7,6 @@ set -e
 cd /workspace/repo
 
 cp /inject/requirements.md ./requirements.md
-
-if [ ! -f .blazebot/implement.md ]; then
-  mkdir -p .blazebot
-  echo '{"summary":"","questions":[],"error":".blazebot/implement.md not found in repo"}' > .blazebot/output.json
-  exit 1
-fi
-
 mkdir -p .blazebot
 
 MODEL="${CLAUDE_MODEL:-claude-sonnet-4-20250514}"

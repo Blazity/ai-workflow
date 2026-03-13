@@ -1,5 +1,8 @@
 import { Worker, Job } from "bullmq";
 import { eq } from "drizzle-orm";
+import { readFile } from "node:fs/promises";
+import { resolve, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 import { createRedisConnection } from "./redis.js";
 import { env } from "./env.js";
 import { db } from "./db.js";
@@ -9,6 +12,9 @@ import { GitHubClient } from "./adapters/github-client.js";
 import { runSandbox } from "./sandbox/manager.js";
 import { assembleImplementationContext } from "./context.js";
 import type { TicketJobData } from "./queue.js";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const PROMPTS_DIR = resolve(__dirname, "..", "prompts");
 
 function createAdapters() {
   const jira = new JiraClient(
@@ -53,14 +59,8 @@ async function handleImplementation(data: Extract<TicketJobData, { type: "implem
 
   const ticket = await jira.fetchTicket(data.ticketId);
 
-  const promptContent = await github.getFileContent(
-    owner, repo, ".blazebot/implement.md", baseBranch,
-  );
-  if (!promptContent) {
-    throw new Error(
-      `.blazebot/implement.md not found in ${owner}/${repo} on branch ${baseBranch}`,
-    );
-  }
+  const promptPath = resolve(PROMPTS_DIR, "implement.md");
+  const promptContent = await readFile(promptPath, "utf-8");
 
   await github.createBranch(owner, repo, branchName, baseBranch);
 
@@ -92,7 +92,6 @@ async function handleImplementation(data: Extract<TicketJobData, { type: "implem
     timeoutMs: env.JOB_TIMEOUT_MS,
     memoryLimitMb: env.SANDBOX_MEMORY_MB,
   });
-
   if (result.status === "complete") {
     const pr = await github.createPR(
       owner, repo,

@@ -94,4 +94,27 @@ export async function routeTicketTransition(
     );
     return;
   }
+
+  if (ticket.workflowState === "queued" || ticket.workflowState === "implementing") {
+    return;
+  }
+
+  if (ticket.workflowState === "failed") {
+    await db
+      .update(tickets)
+      .set({ workflowState: "queued", updatedAt: new Date() })
+      .where(eq(tickets.id, ticket.id));
+
+    await ticketQueue.add(
+      "implementation",
+      {
+        type: "implementation",
+        ticketId: event.ticketId,
+        source: "jira",
+        triggeredBy: event.triggeredBy,
+      },
+      { jobId: `impl-${event.ticketId}-${ticket.id}-${Date.now()}` },
+    );
+    return;
+  }
 }
