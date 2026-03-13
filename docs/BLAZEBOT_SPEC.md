@@ -16,8 +16,10 @@ The service solves four operational problems:
 
 - It turns ticket implementation into a fully automated pipeline — from assignment through TDD,
   code review, conflict resolution, and PR delivery — without manual intervention.
-- It isolates agent execution in per-ticket Docker containers so agent commands cannot affect
-  production infrastructure or other tickets.
+- It isolates agent execution in per-ticket Docker containers as a primary containment layer.
+  Docker alone is not sufficient — additional security measures (credential scoping, network
+  policies, runtime monitoring) are required to prevent a compromised container from affecting
+  production infrastructure.
 - It manages ticket lifecycle directly — moving tickets between columns, posting clarification
   questions, and notifying users — as first-class service behavior.
 - It enforces quality through mandatory TDD and an iterative review loop (AI review → human
@@ -26,8 +28,8 @@ The service solves four operational problems:
 Important boundary:
 
 - Blazebot owns the full lifecycle from ticket pickup to merge-ready PR.
-- The coding agent inside the sandbox focuses on implementation — it does not manage ticket state,
-  PR creation, or review coordination.
+- The coding agent inside the sandbox focuses on implementation — it does not manage ticket state
+  or review coordination. PR creation is handled by the orchestrator after a successful agent run.
 - A successful run ends with a PR that has passed AI review, human review, conflict resolution,
   and CI checks.
 
@@ -36,16 +38,22 @@ Important boundary:
 ### 2.1 Goals
 
 - Receive ticket events via webhooks and dispatch work through BullMQ with bounded concurrency.
-- Maintain authoritative orchestration state in Postgres for dispatch, retries, and audit.
-- Recover from service restarts using Postgres as the single source of truth — no filesystem-based
-  recovery needed.
+- Maintain minimal orchestration state in Postgres for dispatch and audit. Each agent run must be
+  stateless — identical execution logic with different context inputs. No run depends on the
+  outcome of a previous run beyond what is captured in external systems (ticket comments, PR
+  state, branch contents).
+- Recover from service restarts gracefully. Each agent run is stateless from beginning to end —
+  if the service restarts mid-run, the run is simply re-dispatched with the same context inputs.
+  Postgres tracks dispatch state but is not required for run-level recovery.
 - Spin up isolated Docker containers per ticket with scoped Git permissions.
 - Enforce TDD — integration and e2e tests are required, not optional.
 - Run iterative code review loops (AI review → human feedback → agent fix) until clean.
 - Handle conflict resolution (merge target branch, resolve conflicts, re-review).
 - Manage two ticket transitions directly: move to **AI Review** when implementation passes
   self-review, and move to **Backlog** when clarification is needed.
-- Notify users via messaging adapter (Slack/Teams) at every status change.
+- Notify users via messaging adapter (Slack/Teams) with configurable notification preferences.
+  At minimum, always notify when user action is required (clarification needed, PR ready for
+  review). Other status change notifications are opt-in.
 - Support clarification flow — commit work-in-progress, tear down container, post questions on
   ticket, and resume in a fresh container with full conversation history when answered.
 - Support adapter modularity — all external integrations behind isolated interfaces so swapping
@@ -58,7 +66,8 @@ Important boundary:
 - Running agents outside Docker containers (bare-metal execution).
 - Replacing human final approval on PRs.
 - Built-in IDE or code editor.
-- Prescribing a specific dashboard or terminal UI implementation.
+- Prescribing a specific dashboard or terminal UI implementation. (An admin panel is planned for
+  later phases, with open questions around cost visibility to clients.)
 
 ## 3. System Overview
 
@@ -99,7 +108,9 @@ Important boundary:
 
 7. **Agent Runner**
    - Launches the coding agent (Claude Code / Codex) inside the container via `docker exec`.
-   - Streams agent stdout to logs.
+   - Captures agent stdout with anonymization — all client-specific data (code snippets, ticket
+     content, file paths) must be stripped or redacted before persisting to logs. Raw agent output
+     is never stored in plain text.
    - Reads exit code and marker file (`.blazebot/output.json`) to determine outcome.
    - Enforces timeouts.
 
@@ -121,13 +132,13 @@ Important boundary:
 
 ### 3.3 External Dependencies
 
-- Issue tracker API (Jira, Linear).
-- Messaging API (Slack, Teams).
-- VCS API (GitHub).
+- Issue tracker API (MVP: Jira; future: Linear).
+- Messaging API (MVP: Slack; future: Teams).
+- VCS API (MVP: GitHub).
 - Docker engine.
 - Postgres.
 - Redis (for BullMQ).
-- Coding agent (Claude Code / Codex).
+- Coding agent (MVP: Claude Code & Codex).
 
 ## 4. Core Domain Model
 
@@ -139,7 +150,9 @@ Fields:
 - `identifier` — human-readable key (e.g., `PROJ-123`).
 - `state` — last known tracker column/status (updated by webhooks).
 - `workflow_state` — Blazebot's internal lifecycle state (see Section 7).
-- `assignee` — user who triggered the AI run (for notifications).
+- `assignee` — user who triggered the AI run (for notifications). Requires a Jira-to-Slack user
+  mapping mechanism (TBD — could be email-based lookup, explicit mapping table, or Slack/Jira
+  integration API).
 - `branch_name` — feature branch for this ticket.
 - `pr_id` — pull request reference (set after PR creation).
 - `current_run_id` — reference to active run attempt.
@@ -172,10 +185,11 @@ retry entity needed.
 
 ## 5. Agent Prompt Contract
 
-Each repo contains prompt files that define the instructions sent to the coding agent:
+Each repo contains prompt files in a dedicated `prompts/` directory that define the instructions
+sent to the coding agent:
 
-- `.blazebot/implement.md` — initial implementation prompt.
-- `.blazebot/review-fix.md` — fixing review feedback + resolving merge conflicts.
+- `prompts/implement.md` — initial implementation prompt.
+- `prompts/review-fix.md` — fixing review feedback + resolving merge conflicts.
 
 Prompt files are:
 
@@ -183,7 +197,7 @@ Prompt files are:
 - Self-contained — no composition or inheritance between them.
 - Pure prompt content — no runtime config.
 
-When resuming after clarification, `.blazebot/implement.md` is used again. The Q&A context comes
+When resuming after clarification, `prompts/implement.md` is used again. The Q&A context comes
 from ticket comments (fetched fresh), not from the prompt file.
 
 If a prompt file is missing, the run fails with a clear error.
@@ -286,9 +300,9 @@ For each run, the Sandbox Manager:
 ### 9.2 Context Assembly per Run Type
 
 - **`implementation`**: ticket content (fetched fresh, including all comments) +
-  `.blazebot/implement.md`.
+  `prompts/implement.md`.
 - **`fixing_feedback`**: ticket content (fetched fresh, including all comments) + PR diff + liked
-  comments + human comments + conflict info if applicable + `.blazebot/review-fix.md`.
+  comments + human comments + conflict info if applicable + `prompts/review-fix.md`.
 
 ### 9.3 Teardown
 
@@ -424,7 +438,7 @@ For `implementation` runs:
 {all ticket comments, chronological}
 
 ---
-{contents of .blazebot/implement.md}
+{contents of prompts/implement.md}
 ```
 
 For `fixing_feedback` runs:
@@ -451,7 +465,7 @@ For `fixing_feedback` runs:
 {conflict info, if applicable}
 
 ---
-{contents of .blazebot/review-fix.md}
+{contents of prompts/review-fix.md}
 ```
 
 If rendering fails (missing prompt file, tracker API error), the run fails immediately.
@@ -477,11 +491,11 @@ Orchestrator events:
 - Container spin-up / teardown.
 - Retry scheduled (attempt number, reason).
 
-Agent events:
+Agent events (anonymized — no client-specific content in logs):
 
-- Agent launched (container, prompt file).
-- Agent exited (exit code).
-- Clarification requested (questions).
+- Agent launched (container ID, prompt file name — no content).
+- Agent exited (exit code, duration).
+- Clarification requested (flag only — questions are posted to ticket, never logged).
 
 Adapter events:
 
@@ -531,7 +545,9 @@ Notifications are best-effort — never block the workflow.
 
 ### 14.3 Recovery After Service Restart
 
-- Postgres is the single source of truth for orchestration state.
+- Each agent run is stateless — a restart simply re-dispatches the run with the same context
+  inputs. No run-level state needs to be recovered.
+- Postgres tracks dispatch/audit state for the orchestrator.
 - On restart, BullMQ recovers its job queue from Redis.
 - No filesystem-based recovery needed.
 - Active containers from the previous process may be orphaned — the service should detect and clean
@@ -559,6 +575,22 @@ Notifications are best-effort — never block the workflow.
 
 - Agent has full internet access inside the container.
 - No restrictions on outbound traffic.
+
+### 15.5 Log Anonymization
+
+- Agent stdout and all log entries must be anonymized before persistence.
+- Client-specific data (code snippets, ticket content, file paths, variable names) must be
+  stripped or redacted.
+- Raw agent output is ephemeral — never stored in plain text.
+- Only structural/operational data is logged (exit codes, durations, container IDs, event types).
+
+### 15.6 On-Premises and Multi-Host Deployment
+
+- The architecture must support on-premises deployment across multiple hosts.
+- Sandbox containers may run on different machines than the orchestrator.
+- Container orchestration (Docker Swarm, Kubernetes, or equivalent) is assumed for multi-host
+  scheduling.
+- Postgres and Redis must be reachable from all hosts.
 
 ## 16. Reference Algorithms
 
@@ -606,7 +638,7 @@ process_implementation_job(ticketId):
   run = db.createRunAttempt(ticketId, type="implementation")
 
   ticketContent = issueTrackerAdapter.fetchTicket(ticketId)
-  prompt = readFile(repo, ".blazebot/implement.md")
+  prompt = readFile(repo, "prompts/implement.md")
   requirementsMd = assembleContext(ticketContent, prompt)
 
   container = sandboxManager.spinUp(ticket.branch, requirementsMd)
@@ -649,7 +681,7 @@ process_fixing_feedback_job(ticketId):
   ticketContent = issueTrackerAdapter.fetchTicket(ticketId)
   prComments = vcsAdapter.getPRComments(repo, ticket.prId)
   hasConflicts = vcsAdapter.getPRConflictStatus(repo, ticket.prId)
-  prompt = readFile(repo, ".blazebot/review-fix.md")
+  prompt = readFile(repo, "prompts/review-fix.md")
   requirementsMd = assembleContext(ticketContent, prComments, hasConflicts, prompt)
 
   container = sandboxManager.spinUp(ticket.branch, requirementsMd)
@@ -736,8 +768,8 @@ process_fixing_feedback_job(ticketId):
 - [ ] Persistence — Postgres schema for tickets and run attempts.
 - [ ] Stale job protection (cancel on contradicting webhook + verify at job start).
 - [ ] Concurrency control via `MAX_CONCURRENT_AGENTS`.
-- [ ] Structured JSON logging with ticket/run context.
-- [ ] Prompt files — `.blazebot/implement.md` and `.blazebot/review-fix.md`.
+- [ ] Structured JSON logging with ticket/run context (anonymized — no client-specific data).
+- [ ] Prompt files — `prompts/implement.md` and `prompts/review-fix.md` (in dedicated `prompts/` directory).
 
 ### 18.2 Deferred
 
@@ -748,3 +780,5 @@ process_fixing_feedback_job(ticketId):
 - [ ] Metrics / alerting.
 - [ ] Additional tracker adapters (Linear, Asana).
 - [ ] Additional messaging adapters (Teams).
+- [ ] On-premises multi-host deployment support.
+- [ ] Admin panel (with cost visibility decisions pending).
