@@ -7,38 +7,38 @@ describe("schema", () => {
       expect(ticketSourceEnum.enumValues).toEqual(["jira", "linear"]);
     });
 
-    it("exports ticket status enum with expected values", async () => {
-      const { ticketStatusEnum } = await import("./schema.js");
-      expect(ticketStatusEnum.enumValues).toEqual([
+    it("exports workflow state enum with expected values", async () => {
+      const { workflowStateEnum } = await import("./schema.js");
+      expect(workflowStateEnum.enumValues).toEqual([
         "queued",
-        "in_progress",
-        "clarifying",
-        "in_review",
-        "done",
-        "failed",
-      ]);
-    });
-
-    it("exports agent run status enum with expected values", async () => {
-      const { agentRunStatusEnum } = await import("./schema.js");
-      expect(agentRunStatusEnum.enumValues).toEqual([
-        "provisioning",
-        "running",
-        "reviewing",
-        "fixing",
-        "merging",
+        "implementing",
+        "clarification_pending",
+        "awaiting_review",
+        "fixing_feedback",
         "completed",
         "failed",
-        "cancelled",
       ]);
     });
 
-    it("exports agent run trigger enum with expected values", async () => {
-      const { agentRunTriggerEnum } = await import("./schema.js");
-      expect(agentRunTriggerEnum.enumValues).toEqual([
-        "new",
+    it("exports run status enum with expected values", async () => {
+      const { runStatusEnum } = await import("./schema.js");
+      expect(runStatusEnum.enumValues).toEqual([
+        "pending",
+        "preparing_sandbox",
+        "running",
+        "succeeded",
+        "failed",
+        "timed_out",
+        "clarification_needed",
+      ]);
+    });
+
+    it("exports run type enum with expected values", async () => {
+      const { runTypeEnum } = await import("./schema.js");
+      expect(runTypeEnum.enumValues).toEqual([
+        "implementation",
         "review_fix",
-        "clarification_answer",
+        "conflict_resolution",
       ]);
     });
   });
@@ -49,9 +49,9 @@ describe("schema", () => {
       expect(tickets).toBeDefined();
     });
 
-    it("exports agentRuns table", async () => {
-      const { agentRuns } = await import("./schema.js");
-      expect(agentRuns).toBeDefined();
+    it("exports runAttempts table", async () => {
+      const { runAttempts } = await import("./schema.js");
+      expect(runAttempts).toBeDefined();
     });
   });
 });

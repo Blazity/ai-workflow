@@ -3,4 +3,5 @@ dist/
 .env
 *.tsbuildinfo
 .worktrees/
+.pnpm-store/
 # Note: drizzle/ migrations are intentionally committed for reproducibility

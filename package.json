@@ -16,6 +16,8 @@
   },
   "packageManager": "pnpm@10.22.0",
   "dependencies": {
+    "dockerode": "^4.0.9",
+    "@octokit/rest": "^22.0.1",
     "@t3-oss/env-core": "^0.13.10",
     "bullmq": "^5.71.0",
     "drizzle-orm": "~0.45.1",
@@ -25,6 +27,7 @@
     "zod": "^3.25.76"
   },
   "devDependencies": {
+    "@types/dockerode": "^3.3.26",
     "@types/node": "^25.4.0",
     "drizzle-kit": "^0.31.9",
     "tsx": "^4.21.0",

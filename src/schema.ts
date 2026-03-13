@@ -3,6 +3,7 @@ import {
   pgEnum,
   uuid,
   text,
+  integer,
   timestamp,
   index,
   unique,
@@ -12,30 +13,30 @@ import {
 
 export const ticketSourceEnum = pgEnum("ticket_source", ["jira", "linear"]);
 
-export const ticketStatusEnum = pgEnum("ticket_status", [
+export const workflowStateEnum = pgEnum("workflow_state", [
   "queued",
-  "in_progress",
-  "clarifying",
-  "in_review",
-  "done",
-  "failed",
-]);
-
-export const agentRunStatusEnum = pgEnum("agent_run_status", [
-  "provisioning",
-  "running",
-  "reviewing",
-  "fixing",
-  "merging",
+  "implementing",
+  "clarification_pending",
+  "awaiting_review",
+  "fixing_feedback",
   "completed",
   "failed",
-  "cancelled",
 ]);
 
-export const agentRunTriggerEnum = pgEnum("agent_run_trigger", [
-  "new",
+export const runStatusEnum = pgEnum("run_status", [
+  "pending",
+  "preparing_sandbox",
+  "running",
+  "succeeded",
+  "failed",
+  "timed_out",
+  "clarification_needed",
+]);
+
+export const runTypeEnum = pgEnum("run_type", [
+  "implementation",
   "review_fix",
-  "clarification_answer",
+  "conflict_resolution",
 ]);
 
 // Tables
@@ -45,8 +46,16 @@ export const tickets = pgTable(
   {
     id: uuid("id").defaultRandom().primaryKey(),
     externalId: text("external_id").notNull(),
+    identifier: text("identifier").notNull(),
     source: ticketSourceEnum("source").notNull(),
-    status: ticketStatusEnum("status").notNull().default("queued"),
+    state: text("state"),
+    workflowState: workflowStateEnum("workflow_state")
+      .notNull()
+      .default("queued"),
+    assignee: text("assignee"),
+    branchName: text("branch_name"),
+    prId: text("pr_id"),
+    currentRunId: uuid("current_run_id"),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
@@ -57,21 +66,23 @@ export const tickets = pgTable(
   (t) => [unique("tickets_external_id_source_unique").on(t.externalId, t.source)],
 );
 
-export const agentRuns = pgTable(
-  "agent_runs",
+export const runAttempts = pgTable(
+  "run_attempts",
   {
     id: uuid("id").defaultRandom().primaryKey(),
     ticketId: uuid("ticket_id")
       .notNull()
       .references(() => tickets.id),
-    status: agentRunStatusEnum("status").notNull().default("provisioning"),
-    trigger: agentRunTriggerEnum("trigger").notNull(),
-    branchName: text("branch_name"),
+    attemptNumber: integer("attempt_number").notNull().default(1),
+    type: runTypeEnum("type").notNull(),
+    status: runStatusEnum("status").notNull().default("pending"),
     containerId: text("container_id"),
+    branchName: text("branch_name"),
     startedAt: timestamp("started_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
     finishedAt: timestamp("finished_at", { withTimezone: true }),
+    error: text("error"),
   },
-  (t) => [index("agent_runs_ticket_id_idx").on(t.ticketId)],
+  (t) => [index("run_attempts_ticket_id_idx").on(t.ticketId)],
 );

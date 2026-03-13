@@ -1,4 +1,28 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import type { NormalizedEvent } from "./types.js";
+
+vi.mock("ioredis", () => ({ Redis: vi.fn() }));
+vi.mock("bullmq", () => ({
+  Queue: class {
+    add = vi.fn();
+  },
+}));
+
+const mockDb = {
+  select: vi.fn(),
+  insert: vi.fn(),
+  update: vi.fn(),
+};
+vi.mock("../db.js", () => ({
+  db: new Proxy(mockDb, {
+    get: (target, prop) => target[prop as keyof typeof target],
+  }),
+}));
+
+vi.mock("drizzle-orm", async () => {
+  const actual = await vi.importActual("drizzle-orm");
+  return { ...actual, eq: vi.fn(), and: vi.fn() };
+});
 
 describe("routeTicketTransition", () => {
   beforeEach(() => {
@@ -7,120 +31,124 @@ describe("routeTicketTransition", () => {
     vi.stubEnv("DATABASE_URL", "postgresql://user:pass@localhost:5432/db");
     vi.stubEnv("REDIS_URL", "redis://localhost:6379");
     vi.stubEnv("JIRA_WEBHOOK_SECRET", "test-secret");
+    vi.stubEnv("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat01-test");
   });
 
-  const makeEvent = (from: string, to: string) => ({
-    source: "jira" as const,
-    externalTicketId: "PROJ-42",
+  const makeEvent = (from: string, to: string): NormalizedEvent => ({
+    type: "ticket_moved",
+    ticketId: "PROJ-42",
     fromColumn: from,
     toColumn: to,
-    actor: "Mia",
+    triggeredBy: "Mia",
   });
 
-  it("logs start new work when ticket moves to AI column", async () => {
+  it("creates ticket record and enqueues implementation job for new ticket moved to AI", async () => {
     const { routeTicketTransition } = await import("./router.js");
-    const spy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const { ticketQueue } = await import("../queue.js");
 
-    routeTicketTransition(makeEvent("To Do", "AI"));
+    mockDb.select.mockReturnValue({
+      from: vi.fn().mockReturnValue({
+        where: vi.fn().mockResolvedValue([]),
+      }),
+    });
+    mockDb.insert.mockReturnValue({
+      values: vi.fn().mockReturnValue({
+        returning: vi.fn().mockResolvedValue([{ id: "uuid-1" }]),
+      }),
+    });
 
-    expect(spy).toHaveBeenCalledWith(
-      expect.stringContaining("TODO: start new work"),
+    await routeTicketTransition(makeEvent("To Do", "AI"));
+
+    expect(ticketQueue.add).toHaveBeenCalledWith(
+      "implementation",
+      expect.objectContaining({
+        type: "implementation",
+        ticketId: "PROJ-42",
+        source: "jira",
+        triggeredBy: "Mia",
+      }),
+      expect.objectContaining({ jobId: expect.stringContaining("PROJ-42") }),
     );
-    expect(spy).toHaveBeenCalledWith(
-      expect.stringContaining("PROJ-42"),
-    );
-    spy.mockRestore();
   });
 
-  it("logs review fix when ticket moves from AI Review to AI In Progress", async () => {
+  it("enqueues implementation job when ticket in clarification_pending moves to AI", async () => {
     const { routeTicketTransition } = await import("./router.js");
-    const spy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const { ticketQueue } = await import("../queue.js");
 
-    routeTicketTransition(makeEvent("AI Review", "AI In Progress"));
+    mockDb.select.mockReturnValue({
+      from: vi.fn().mockReturnValue({
+        where: vi.fn().mockResolvedValue([
+          { id: "uuid-1", workflowState: "clarification_pending" },
+        ]),
+      }),
+    });
+    mockDb.update.mockReturnValue({
+      set: vi.fn().mockReturnValue({
+        where: vi.fn().mockResolvedValue(undefined),
+      }),
+    });
 
-    expect(spy).toHaveBeenCalledWith(
-      expect.stringContaining("TODO: pick up review comments"),
+    await routeTicketTransition(makeEvent("Backlog", "AI"));
+
+    expect(ticketQueue.add).toHaveBeenCalledWith(
+      "implementation",
+      expect.objectContaining({ type: "implementation" }),
+      expect.any(Object),
     );
-    expect(spy).toHaveBeenCalledWith(
-      expect.stringContaining("PROJ-42"),
-    );
-    spy.mockRestore();
   });
 
-  it("logs clarification resume when ticket moves from Backlog to AI In Progress", async () => {
+  it("enqueues review_fix job when ticket in awaiting_review moves to AI", async () => {
     const { routeTicketTransition } = await import("./router.js");
-    const spy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const { ticketQueue } = await import("../queue.js");
 
-    routeTicketTransition(makeEvent("Backlog", "AI In Progress"));
+    mockDb.select.mockReturnValue({
+      from: vi.fn().mockReturnValue({
+        where: vi.fn().mockResolvedValue([
+          { id: "uuid-1", workflowState: "awaiting_review" },
+        ]),
+      }),
+    });
+    mockDb.update.mockReturnValue({
+      set: vi.fn().mockReturnValue({
+        where: vi.fn().mockResolvedValue(undefined),
+      }),
+    });
 
-    expect(spy).toHaveBeenCalledWith(
-      expect.stringContaining("TODO: getting ticket"),
+    await routeTicketTransition(makeEvent("AI Review", "AI"));
+
+    expect(ticketQueue.add).toHaveBeenCalledWith(
+      "review_fix",
+      expect.objectContaining({ type: "review_fix" }),
+      expect.any(Object),
     );
-    expect(spy).toHaveBeenCalledWith(
-      expect.stringContaining("PROJ-42"),
-    );
-    spy.mockRestore();
   });
 
-  it("logs cancel when ticket leaves AI In Progress to an unrecognized column", async () => {
+  it("does not enqueue for transitions not targeting AI column", async () => {
     const { routeTicketTransition } = await import("./router.js");
-    const spy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const { ticketQueue } = await import("../queue.js");
 
-    routeTicketTransition(makeEvent("AI In Progress", "Done"));
+    await routeTicketTransition(makeEvent("To Do", "In Progress"));
 
-    expect(spy).toHaveBeenCalledWith(
-      expect.stringContaining("TODO: cancel active agent run"),
-    );
-    expect(spy).toHaveBeenCalledWith(
-      expect.stringContaining("PROJ-42"),
-    );
-    spy.mockRestore();
-  });
-
-  it("does not log for irrelevant transitions", async () => {
-    const { routeTicketTransition } = await import("./router.js");
-    const spy = vi.spyOn(console, "log").mockImplementation(() => {});
-
-    routeTicketTransition(makeEvent("To Do", "In Progress"));
-
-    expect(spy).not.toHaveBeenCalled();
-    spy.mockRestore();
+    expect(ticketQueue.add).not.toHaveBeenCalled();
   });
 
   it("matches column names case-insensitively", async () => {
     const { routeTicketTransition } = await import("./router.js");
-    const spy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const { ticketQueue } = await import("../queue.js");
 
-    routeTicketTransition(makeEvent("To Do", "ai"));
+    mockDb.select.mockReturnValue({
+      from: vi.fn().mockReturnValue({
+        where: vi.fn().mockResolvedValue([]),
+      }),
+    });
+    mockDb.insert.mockReturnValue({
+      values: vi.fn().mockReturnValue({
+        returning: vi.fn().mockResolvedValue([{ id: "uuid-1" }]),
+      }),
+    });
 
-    expect(spy).toHaveBeenCalledWith(
-      expect.stringContaining("TODO: start new work"),
-    );
-    spy.mockRestore();
-  });
+    await routeTicketTransition(makeEvent("To Do", "ai"));
 
-  it("trims whitespace from column names", async () => {
-    const { routeTicketTransition } = await import("./router.js");
-    const spy = vi.spyOn(console, "log").mockImplementation(() => {});
-
-    routeTicketTransition(makeEvent("To Do", "  AI  "));
-
-    expect(spy).toHaveBeenCalledWith(
-      expect.stringContaining("TODO: start new work"),
-    );
-    spy.mockRestore();
-  });
-
-  it("uses custom column names from env", async () => {
-    vi.stubEnv("COLUMN_AI", "Custom AI");
-    const { routeTicketTransition } = await import("./router.js");
-    const spy = vi.spyOn(console, "log").mockImplementation(() => {});
-
-    routeTicketTransition(makeEvent("To Do", "Custom AI"));
-
-    expect(spy).toHaveBeenCalledWith(
-      expect.stringContaining("TODO: start new work"),
-    );
-    spy.mockRestore();
+    expect(ticketQueue.add).toHaveBeenCalled();
   });
 });

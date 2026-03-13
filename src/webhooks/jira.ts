@@ -1,6 +1,6 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { z } from "zod";
-import type { TicketTransitionEvent } from "./types.js";
+import type { NormalizedEvent } from "./types.js";
 
 const changelogItemSchema = z.object({
   field: z.string(),
@@ -36,7 +36,7 @@ export function verifyJiraWebhookSignature(
 
 export function parseJiraWebhook(
   body: unknown,
-): TicketTransitionEvent | null {
+): NormalizedEvent | null {
   const parsed = jiraWebhookSchema.safeParse(body);
   if (!parsed.success) {
     return null;
@@ -52,10 +52,10 @@ export function parseJiraWebhook(
   }
 
   return {
-    source: "jira",
-    externalTicketId: issue.key,
+    type: "ticket_moved",
+    ticketId: issue.key,
     fromColumn: statusChange.fromString,
     toColumn: statusChange.toString,
-    actor: user.displayName,
+    triggeredBy: user.displayName,
   };
 }

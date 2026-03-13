@@ -1,5 +1,5 @@
 import Fastify from "fastify";
-import { env } from "../env.js";
+import { env } from "./env.js";
 import {
   parseJiraWebhook,
   verifyJiraWebhookSignature,
@@ -52,7 +52,7 @@ export function buildApp() {
 
     const event = parseJiraWebhook(request.body);
     if (event) {
-      routeTicketTransition(event);
+      await routeTicketTransition(event);
     }
     return { ok: true };
   });

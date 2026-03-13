@@ -1,19 +1,30 @@
 export interface TicketAdapter {
-  getTicket(externalId: string): Promise<Ticket>;
-  addComment(externalId: string, body: string): Promise<void>;
-  moveTicket(externalId: string, columnName: string): Promise<void>;
+  fetchTicket(id: string): Promise<Ticket>;
+  moveTicket(id: string, column: string): Promise<void>;
+  postComment(id: string, comment: string): Promise<void>;
+  parseWebhook(req: unknown): NormalizedEvent | null;
 }
 
 export interface Ticket {
   externalId: string;
+  identifier: string;
   title: string;
   description: string;
   acceptanceCriteria: string | null;
   comments: TicketComment[];
+  labels: string[];
 }
 
 export interface TicketComment {
   author: string;
   body: string;
   createdAt: Date;
+}
+
+export interface NormalizedEvent {
+  type: "ticket_moved";
+  ticketId: string;
+  fromColumn: string;
+  toColumn: string;
+  triggeredBy: string;
 }

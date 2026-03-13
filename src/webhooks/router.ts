@@ -1,44 +1,97 @@
-import { env } from "../../env.js";
-import type { TicketTransitionEvent } from "./types.js";
+import { eq, and } from "drizzle-orm";
+import { env } from "../env.js";
+import { db } from "../db.js";
+import { tickets } from "../schema.js";
+import { ticketQueue } from "../queue.js";
+import type { NormalizedEvent } from "./types.js";
 
 function normalize(value: string): string {
   return value.trim().toLowerCase();
 }
 
-export function routeTicketTransition(event: TicketTransitionEvent): void {
-  const from = normalize(event.fromColumn);
+export async function routeTicketTransition(
+  event: NormalizedEvent,
+): Promise<void> {
   const to = normalize(event.toColumn);
-
   const colAi = normalize(env.COLUMN_AI);
-  const colInProgress = normalize(env.COLUMN_AI_IN_PROGRESS);
-  const colReview = normalize(env.COLUMN_AI_REVIEW);
-  const colBacklog = normalize(env.COLUMN_BACKLOG);
 
-  if (to === colAi) {
-    console.log(`TODO: start new work for ticket ${event.externalTicketId}`);
+  if (to !== colAi) {
     return;
   }
 
-  if (to === colInProgress && from === colReview) {
-    console.log(
-      `TODO: pick up review comments for ticket ${event.externalTicketId}`,
+  const existing = await db
+    .select()
+    .from(tickets)
+    .where(
+      and(
+        eq(tickets.externalId, event.ticketId),
+        eq(tickets.source, "jira"),
+      ),
+    );
+
+  const ticket = existing[0];
+
+  if (!ticket) {
+    const [created] = await db
+      .insert(tickets)
+      .values({
+        externalId: event.ticketId,
+        identifier: event.ticketId,
+        source: "jira",
+        state: event.toColumn,
+        workflowState: "queued",
+        assignee: event.triggeredBy,
+      })
+      .returning();
+
+    await ticketQueue.add(
+      "implementation",
+      {
+        type: "implementation",
+        ticketId: event.ticketId,
+        source: "jira",
+        triggeredBy: event.triggeredBy,
+      },
+      { jobId: `impl-${event.ticketId}-${created!.id}` },
     );
     return;
   }
 
-  if (to === colInProgress && from === colBacklog) {
-    console.log(
-      `TODO: getting ticket ${event.externalTicketId} with recent specs`,
+  if (ticket.workflowState === "clarification_pending") {
+    await db
+      .update(tickets)
+      .set({ workflowState: "queued", updatedAt: new Date() })
+      .where(eq(tickets.id, ticket.id));
+
+    await ticketQueue.add(
+      "implementation",
+      {
+        type: "implementation",
+        ticketId: event.ticketId,
+        source: "jira",
+        triggeredBy: event.triggeredBy,
+      },
+      { jobId: `impl-${event.ticketId}-${ticket.id}` },
     );
     return;
   }
 
-  if (from === colInProgress) {
-    console.log(
-      `TODO: cancel active agent run for ticket ${event.externalTicketId}`,
+  if (ticket.workflowState === "awaiting_review") {
+    await db
+      .update(tickets)
+      .set({ workflowState: "queued", updatedAt: new Date() })
+      .where(eq(tickets.id, ticket.id));
+
+    await ticketQueue.add(
+      "review_fix",
+      {
+        type: "review_fix",
+        ticketId: event.ticketId,
+        source: "jira",
+        triggeredBy: event.triggeredBy,
+      },
+      { jobId: `fix-${event.ticketId}-${ticket.id}` },
     );
     return;
   }
-
-  // Transition not relevant to Blazebot — ignore
 }

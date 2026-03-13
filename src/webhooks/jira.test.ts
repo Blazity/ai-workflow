@@ -55,11 +55,11 @@ describe("parseJiraWebhook", () => {
     const result = parseJiraWebhook(validPayload);
 
     expect(result).toEqual({
-      source: "jira",
-      externalTicketId: "PROJ-42",
+      type: "ticket_moved",
+      ticketId: "PROJ-42",
       fromColumn: "To Do",
       toColumn: "AI",
-      actor: "Mia Krystof",
+      triggeredBy: "Mia Krystof",
     });
   });
 
@@ -134,11 +134,11 @@ describe("parseJiraWebhook", () => {
 
     const result = parseJiraWebhook(payload);
     expect(result).toEqual({
-      source: "jira",
-      externalTicketId: "PROJ-42",
+      type: "ticket_moved",
+      ticketId: "PROJ-42",
       fromColumn: "",
       toColumn: "AI",
-      actor: "Mia Krystof",
+      triggeredBy: "Mia Krystof",
     });
   });
 
@@ -165,11 +165,11 @@ describe("parseJiraWebhook", () => {
 
     const result = parseJiraWebhook(payload);
     expect(result).toEqual({
-      source: "jira",
-      externalTicketId: "PROJ-42",
+      type: "ticket_moved",
+      ticketId: "PROJ-42",
       fromColumn: "Backlog",
       toColumn: "AI In Progress",
-      actor: "Mia Krystof",
+      triggeredBy: "Mia Krystof",
     });
   });
 });

@@ -2,7 +2,28 @@ import { createHmac } from "node:crypto";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 vi.mock("ioredis", () => ({ Redis: vi.fn() }));
-vi.mock("bullmq", () => ({ Worker: vi.fn() }));
+vi.mock("bullmq", () => ({
+  Worker: vi.fn(),
+  Queue: class {
+    add = vi.fn();
+  },
+}));
+
+const mockDb = {
+  select: vi.fn(),
+  insert: vi.fn(),
+  update: vi.fn(),
+};
+vi.mock("./db.js", () => ({
+  db: new Proxy(mockDb, {
+    get: (target, prop) => target[prop as keyof typeof target],
+  }),
+}));
+
+vi.mock("drizzle-orm/postgres-js", () => ({
+  drizzle: vi.fn().mockReturnValue({}),
+}));
+vi.mock("postgres", () => ({ default: vi.fn() }));
 
 describe("GET /health", () => {
   beforeEach(() => {
@@ -11,6 +32,7 @@ describe("GET /health", () => {
     vi.stubEnv("DATABASE_URL", "postgresql://user:pass@localhost:5432/db");
     vi.stubEnv("REDIS_URL", "redis://localhost:6379");
     vi.stubEnv("JIRA_WEBHOOK_SECRET", "test-secret");
+    vi.stubEnv("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat01-test");
     vi.stubEnv("PORT", "0");
   });
 
@@ -40,6 +62,17 @@ describe("POST /webhooks/jira", () => {
     vi.stubEnv("REDIS_URL", "redis://localhost:6379");
     vi.stubEnv("PORT", "0");
     vi.stubEnv("JIRA_WEBHOOK_SECRET", secret);
+    vi.stubEnv("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat01-test");
+    mockDb.select.mockReturnValue({
+      from: vi.fn().mockReturnValue({
+        where: vi.fn().mockResolvedValue([]),
+      }),
+    });
+    mockDb.insert.mockReturnValue({
+      values: vi.fn().mockReturnValue({
+        returning: vi.fn().mockResolvedValue([{ id: "uuid-1" }]),
+      }),
+    });
   });
 
   function sign(body: string): string {

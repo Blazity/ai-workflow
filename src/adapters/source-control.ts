@@ -1,4 +1,4 @@
-export interface SourceControlAdapter {
+export interface VCSAdapter {
   createBranch(
     repoOwner: string,
     repoName: string,
@@ -6,7 +6,7 @@ export interface SourceControlAdapter {
     baseBranch: string,
   ): Promise<void>;
 
-  createPullRequest(
+  createPR(
     repoOwner: string,
     repoName: string,
     title: string,
@@ -15,19 +15,17 @@ export interface SourceControlAdapter {
     base: string,
   ): Promise<PullRequest>;
 
-  getPullRequestComments(
+  getPRComments(
     repoOwner: string,
     repoName: string,
     prNumber: number,
   ): Promise<PullRequestComment[]>;
 
-  /** Merges baseBranch into branchName (e.g., merge main into feature branch for conflict resolution) */
-  mergeBranch(
+  getPRConflictStatus(
     repoOwner: string,
     repoName: string,
-    branchName: string,
-    baseBranch: string,
-  ): Promise<void>;
+    prNumber: number,
+  ): Promise<boolean>;
 }
 
 export interface PullRequest {
