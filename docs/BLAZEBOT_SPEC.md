@@ -139,7 +139,7 @@ MVP:
 - Redis (for BullMQ).
 - Coding agent (Claude Code / Codex).
 
-Deferred: Linear, Teams.
+Deferred: Linear, Teams, GitLab.
 
 ## 4. Core Domain Model
 
@@ -775,6 +775,7 @@ process_fixing_feedback_job(ticketId):
 - [ ] Metrics / alerting.
 - [ ] Additional tracker adapters (Linear, Asana).
 - [ ] Additional messaging adapters (Teams).
+- [ ] Additional VCS adapters (GitLab).
 - [ ] Per-user notifications (requires Jira→Slack user mapping).
 - [ ] Per-ticket token/cost limit — kill agent run when token budget exceeded.
 - [ ] Evaluator loop — two possible approaches:
