@@ -104,8 +104,7 @@ Important boundary:
 
 7. **Agent Runner**
    - Launches the coding agent (Claude Code / Codex) inside the container via `docker exec`.
-   - Streams agent stdout to logs.
-   - Reads exit code and marker file (`.blazebot/output.json`) to determine outcome.
+   - Reads structured output (JSON schema enforced) to determine outcome.
    - Enforces timeouts.
 
 8. **Persistence Layer** (Drizzle + Postgres)
@@ -306,7 +305,8 @@ For each run, the Sandbox Manager:
 1. Creates a Docker container from a pre-built project-specific image (dependencies pre-installed).
 2. Checks out the repo on the feature branch (branch created by orchestrator if first run).
 3. Generates `requirements.md` inside the container with assembled context.
-4. Agent has scoped Git permissions — can only commit and push to its feature branch.
+4. Agent has scoped Git permissions — can only commit locally, no remote operations.
+5. Injects a long-lived Claude Code authentication token into the container for agent API access.
 
 ### 9.2 Context Assembly per Run Type
 
@@ -337,26 +337,27 @@ Container is destroyed after every run — no container survives between workflo
 
 ### 10.2 Agent Signals
 
-Exit codes:
+The agent returns structured output via Claude Code's JSON schema enforcement. The orchestrator
+defines a schema with a required `result` field and reads the response directly — no marker file
+needed.
 
-- `0` — success.
-- `1` — failure.
-- `2` — clarification needed.
+Schema:
 
-Marker file (`.blazebot/output.json`):
+- `result` — `implemented` | `clarification_needed` | `failed`.
+- `summary` — description of work done (used for PR description, when `implemented`).
+- `questions` — list of questions to post on the ticket (when `clarification_needed`).
+- `error` — failure details (when `failed`).
 
-- On success: summary of work done (used for PR description).
-- On clarification: questions to post on the ticket.
-- On failure: error details.
+Schema validation is enforced by the agent runtime. If the agent returns invalid output or fails to
+produce structured output, the run is treated as failed and retried via BullMQ.
 
-Orchestrator reads the marker file after exit to determine next actions.
+### 10.3 Orchestrator Response to Result
 
-### 10.3 Orchestrator Response to Exit
-
-- `0` → read summary, create PR (if implementation) or signal done (if fixing_feedback), tear down
-  container.
-- `1` → read error, retry or transition to `failed`.
-- `2` → read questions, post on ticket, move ticket to Backlog, notify user, tear down container.
+- `implemented` → read summary, create PR (if implementation) or signal done (if fixing_feedback),
+  tear down container.
+- `failed` → read error, retry or transition to `failed`.
+- `clarification_needed` → read questions, post on ticket, move ticket to Backlog, notify user, tear
+  down container.
 
 ### 10.4 Responsibilities Split
 
@@ -364,7 +365,7 @@ Agent (inside sandbox):
 
 - Writes code.
 - Runs tests.
-- Commits and pushes to feature branch.
+- Commits locally to feature branch (no push — orchestrator handles push).
 - Runs self-review skill.
 - Merges target branch and resolves conflicts.
 - Commits WIP on clarification.
@@ -372,6 +373,7 @@ Agent (inside sandbox):
 Orchestrator (outside sandbox):
 
 - Creates feature branches (via VCS adapter, before sandbox spin-up).
+- Pushes feature branch after agent run completes.
 - Creates PRs (via VCS adapter).
 - Moves tickets between columns.
 - Posts clarification questions on ticket.
@@ -533,7 +535,7 @@ Structured JSON logs to stdout. Deployment decides where they go (file, log aggr
 
 1. **Webhook/Ingestion Failures** — invalid payload, validation failure, tracker API down.
 2. **Sandbox Failures** — Docker container won't start, image pull failure, disk full.
-3. **Agent Failures** — timeout, crash, exit code 1, marker file missing.
+3. **Agent Failures** — timeout, crash, invalid structured output.
 4. **Adapter Failures** — VCS API down (can't create PR), messaging down (can't notify), tracker
    down (can't move ticket).
 5. **Infrastructure Failures** — Postgres down, Redis down, BullMQ connection lost.
@@ -575,8 +577,13 @@ Notifications are best-effort — never block the workflow.
 
 ### 15.2 Git Permission Scoping
 
-- Agent can only commit and push to its feature branch.
-- No other Git operations — PRs, merges to main, branch deletion are orchestrator-only.
+- Agent can only commit locally — `git push` is not allowed from inside the container.
+- Orchestrator pushes the feature branch after the agent run completes.
+- PRs, merges to main, branch deletion are orchestrator-only.
+- Enforced via allowed command list inside the container (no remote Git operations).
+- Claude Code `PreStop` hook: if `git status` shows uncommitted changes, block the agent from
+  finishing and force it to commit or discard. This ensures no work is silently lost.
+- Codex equivalent of the PreStop hook is TBD.
 
 ### 15.3 Secret Handling
 
@@ -643,24 +650,23 @@ process_implementation_job(ticketId):
   container = sandboxManager.spinUp(ticket.branch, requirementsMd)
   db.updateRun(run, container_id=container.id)
 
-  exitCode = agentRunner.exec(container, requirementsMd)
-  output = readMarkerFile(container, ".blazebot/output.json")
+  output = agentRunner.exec(container, requirementsMd) // returns structured JSON
 
   sandboxManager.tearDown(container)
 
-  if exitCode == 0:
+  if output.result == "implemented":
     pr = vcsAdapter.createPR(repo, ticket.branch, output.title, output.summary)
     issueTrackerAdapter.moveTicket(ticketId, "AI Review")
     db.updateState(ticket, "awaiting_review")
     messagingAdapter.notify("Task " + ticket.identifier + " PR ready for review")
 
-  else if exitCode == 2:
+  else if output.result == "clarification_needed":
     issueTrackerAdapter.postComment(ticketId, output.questions)
     issueTrackerAdapter.moveTicket(ticketId, "Backlog")
     db.updateState(ticket, "clarification_pending")
     messagingAdapter.notify("Task " + ticket.identifier + " needs clarification")
 
-  else:
+  else: // "failed" or invalid output
     db.updateRun(run, status="failed", error=output.error)
     throw // BullMQ handles retry
 ```
@@ -684,17 +690,16 @@ process_fixing_feedback_job(ticketId):
   requirementsMd = assembleContext(ticketContent, prComments, hasConflicts, prompt)
 
   container = sandboxManager.spinUp(ticket.branch, requirementsMd)
-  exitCode = agentRunner.exec(container, requirementsMd)
-  output = readMarkerFile(container, ".blazebot/output.json")
+  output = agentRunner.exec(container, requirementsMd) // returns structured JSON
 
   sandboxManager.tearDown(container)
 
-  if exitCode == 0:
+  if output.result == "implemented":
     issueTrackerAdapter.moveTicket(ticketId, "AI Review")
     db.updateState(ticket, "awaiting_review")
     messagingAdapter.notify("Task " + ticket.identifier + " fixes applied, ready for re-review")
 
-  else:
+  else: // "failed" or invalid output
     db.updateRun(run, status="failed", error=output.error)
     throw // BullMQ handles retry
 ```
@@ -723,7 +728,7 @@ process_fixing_feedback_job(ticketId):
 - Exit code 0 → PR created, ticket moved to AI Review.
 - Exit code 1 → retry or fail.
 - Exit code 2 → questions posted, ticket moved to Backlog.
-- Marker file read correctly for all exit codes.
+- Structured output parsed correctly for all result types.
 - Timeout enforced — agent killed after `JOB_TIMEOUT_MS`.
 
 ### 17.4 Adapter Interfaces
@@ -762,7 +767,7 @@ process_fixing_feedback_job(ticketId):
 - [ ] Orchestrator — webhook → dispatch logic with workflow state machine.
 - [ ] BullMQ job processing for `implementation` and `fixing_feedback`.
 - [ ] Sandbox Manager — Docker container lifecycle.
-- [ ] Agent Runner — `docker exec`, exit code handling, marker file reading.
+- [ ] Agent Runner — `docker exec`, structured output parsing, schema validation.
 - [ ] Context assembly — `requirements.md` generation.
 - [ ] Persistence — Postgres schema for tickets and run attempts.
 - [ ] Stale job protection (cancel on contradicting webhook + verify at job start).
