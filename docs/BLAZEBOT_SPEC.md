@@ -808,5 +808,5 @@ process_fixing_feedback_job(ticketId):
   Datadog, Sentry, etc. for richer context. Needs careful scoping: read-only vs write access,
   credential management, isolation trade-offs. Agent should write migration code but not run it
   against real infrastructure.
-- [ ] Spec folder structure — split spec into more granular, organized files instead of a single
-  document.
+- [ ] Monorepo structure — reorganize the repo into a well-structured monorepo with clear package
+  boundaries.
