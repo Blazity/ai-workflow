@@ -191,6 +191,10 @@ sandbox setup. This keeps prompts easy to edit and version without touching clie
 - `.blazebot/prompts/implement.md` — initial implementation prompt.
 - `.blazebot/prompts/review-fix.md` — fixing review feedback + resolving merge conflicts.
 
+The agent also picks up repo-level instruction files (`CLAUDE.md`, `AGENTS.md`) from the client's
+repository at runtime. These are maintained by the client and provide general coding conventions.
+Blazebot prompts provide task-specific instructions only.
+
 Prompt files are:
 
 - Versioned in the Blazebot repo — changes go through normal PRs.
