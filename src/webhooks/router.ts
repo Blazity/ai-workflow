@@ -1,10 +1,13 @@
 import { eq, and } from "drizzle-orm";
 import { env } from "../env.js";
 import { db } from "../db.js";
-import { tickets } from "../schema.js";
+import { tickets, runAttempts } from "../schema.js";
 import { ticketQueue } from "../queue.js";
 import { teardownContainer } from "../sandbox/manager.js";
+import { createLogger } from "../logger.js";
 import type { NormalizedEvent } from "./types.js";
+
+const logger = createLogger();
 
 function normalize(value: string): string {
   return value.trim().toLowerCase();
@@ -37,6 +40,11 @@ function isAiRelatedColumn(col: string): boolean {
 }
 
 async function handleMovedToAi(event: NormalizedEvent): Promise<void> {
+  logger.info(
+    { ticketId: event.ticketId, fromColumn: event.fromColumn, toColumn: event.toColumn, triggeredBy: event.triggeredBy },
+    "webhook_received",
+  );
+
   const existing = await db
     .select()
     .from(tickets)
@@ -72,6 +80,7 @@ async function handleMovedToAi(event: NormalizedEvent): Promise<void> {
       },
       { jobId: `impl-${event.ticketId}-${created!.id}` },
     );
+    logger.info({ ticketId: event.ticketId, jobType: "implementation" }, "job_enqueued");
     return;
   }
 
@@ -91,6 +100,7 @@ async function handleMovedToAi(event: NormalizedEvent): Promise<void> {
       },
       { jobId: `impl-${event.ticketId}-${ticket.id}` },
     );
+    logger.info({ ticketId: event.ticketId, jobType: "implementation" }, "job_enqueued");
     return;
   }
 
@@ -110,10 +120,12 @@ async function handleMovedToAi(event: NormalizedEvent): Promise<void> {
       },
       { jobId: `fix-${event.ticketId}-${ticket.id}` },
     );
+    logger.info({ ticketId: event.ticketId, jobType: "review_fix" }, "job_enqueued");
     return;
   }
 
   if (ticket.workflowState === "queued" || ticket.workflowState === "implementing") {
+    logger.info({ ticketId: event.ticketId, workflowState: ticket.workflowState }, "duplicate_webhook_ignored");
     return;
   }
 
@@ -133,11 +145,17 @@ async function handleMovedToAi(event: NormalizedEvent): Promise<void> {
       },
       { jobId: `impl-${event.ticketId}-${ticket.id}-${Date.now()}` },
     );
+    logger.info({ ticketId: event.ticketId, jobType: "implementation" }, "job_enqueued");
     return;
   }
 }
 
 async function handleMovedOutOfAi(event: NormalizedEvent): Promise<void> {
+  logger.info(
+    { ticketId: event.ticketId, fromColumn: event.fromColumn, toColumn: event.toColumn },
+    "contradicting_webhook_received",
+  );
+
   const existing = await db
     .select()
     .from(tickets)
@@ -161,6 +179,7 @@ async function handleMovedOutOfAi(event: NormalizedEvent): Promise<void> {
       const state = await job.getState();
       if (state === "waiting" || state === "delayed") {
         await job.remove();
+        logger.info({ ticketId: event.ticketId, jobId }, "pending_job_cancelled");
       }
     }
   } catch {
@@ -170,12 +189,13 @@ async function handleMovedOutOfAi(event: NormalizedEvent): Promise<void> {
   if (ticket.currentRunId) {
     const runRows = await db
       .select()
-      .from(tickets)
-      .where(eq(tickets.id, ticket.id));
-    const currentRun = runRows[0];
-    if (currentRun?.currentRunId) {
+      .from(runAttempts)
+      .where(eq(runAttempts.id, ticket.currentRunId));
+    const activeRun = runRows[0];
+    if (activeRun?.containerId) {
       try {
-        await teardownContainer(currentRun.currentRunId);
+        await teardownContainer(activeRun.containerId);
+        logger.info({ ticketId: event.ticketId, containerId: activeRun.containerId }, "container_teardown");
       } catch {
         /* best effort */
       }
@@ -190,4 +210,6 @@ async function handleMovedOutOfAi(event: NormalizedEvent): Promise<void> {
       updatedAt: new Date(),
     })
     .where(eq(tickets.id, ticket.id));
+
+  logger.info({ ticketId: event.ticketId, from: ticket.workflowState, to: "failed" }, "ticket_state_transition");
 }

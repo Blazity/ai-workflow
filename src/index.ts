@@ -6,6 +6,9 @@ import {
 } from "./webhooks/jira.js";
 import { routeTicketTransition } from "./webhooks/router.js";
 import { createWorker } from "./worker.js";
+import { createLogger } from "./logger.js";
+
+const logger = createLogger();
 
 declare module "fastify" {
   interface FastifyRequest {
@@ -35,6 +38,7 @@ export function buildApp() {
 
   app.post("/webhooks/jira", async (request, reply) => {
     if (!request.rawBody) {
+      logger.warn({ path: "/webhooks/jira" }, "webhook_validation_failed");
       return reply.code(401).send({ error: "invalid signature" });
     }
     const rawSignature = request.headers["x-hub-signature"];
@@ -47,11 +51,16 @@ export function buildApp() {
       env.JIRA_WEBHOOK_SECRET,
     );
     if (!valid) {
+      logger.warn({ path: "/webhooks/jira" }, "webhook_validation_failed");
       return reply.code(401).send({ error: "invalid signature" });
     }
 
     const event = parseJiraWebhook(request.body);
     if (event) {
+      logger.info(
+        { ticketId: event.ticketId, type: event.type, triggeredBy: event.triggeredBy },
+        "webhook_received",
+      );
       await routeTicketTransition(event);
     }
     return { ok: true };
@@ -66,12 +75,14 @@ async function main() {
 
   try {
     await app.listen({ port: env.PORT, host: "0.0.0.0" });
+    logger.info({ port: env.PORT }, "server_started");
   } catch (err) {
-    app.log.error(err);
+    logger.error(err, "server_start_failed");
     process.exit(1);
   }
 
   const shutdown = async () => {
+    logger.info("shutdown_initiated");
     const forceTimeout = setTimeout(() => process.exit(1), 30_000);
     forceTimeout.unref();
     await worker.close();

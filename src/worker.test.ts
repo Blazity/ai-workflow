@@ -42,6 +42,20 @@ vi.mock("./sandbox/manager.js", () => ({
   runSandbox: (...args: unknown[]) => mockRunSandbox(...args),
 }));
 
+const mockLogFn = vi.fn();
+const mockChildLogger = { info: mockLogFn, warn: mockLogFn, error: mockLogFn, child: vi.fn() };
+mockChildLogger.child.mockReturnValue(mockChildLogger);
+vi.mock("./logger.js", () => ({
+  createLogger: () => ({
+    info: mockLogFn,
+    warn: mockLogFn,
+    error: mockLogFn,
+    child: () => mockChildLogger,
+  }),
+  createTicketLogger: () => mockChildLogger,
+  createRunLogger: () => mockChildLogger,
+}));
+
 const mockGitHub = {
   createBranch: vi.fn(),
   createPR: vi.fn().mockResolvedValue({

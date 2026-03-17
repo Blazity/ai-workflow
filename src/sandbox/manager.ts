@@ -2,6 +2,7 @@ import Docker from "dockerode";
 import { mkdtemp, writeFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { createLogger } from "../logger.js";
 
 export interface SandboxOptions {
   image: string;
@@ -32,8 +33,10 @@ interface AgentOutput {
 }
 
 const docker = new Docker();
+const logger = createLogger();
 
 export async function teardownContainer(containerId: string): Promise<void> {
+  logger.info({ containerId }, "container_teardown_requested");
   try {
     const container = docker.getContainer(containerId);
     await container.kill();
@@ -72,7 +75,9 @@ export async function runSandbox(
       },
     });
 
+    const startTime = Date.now();
     await container.start();
+    logger.info({ containerId: container.id, image: options.image, branchName: options.branchName }, "container_started");
 
     const waitPromise = container.wait();
     const timeoutPromise = new Promise<never>((_, reject) =>
@@ -86,7 +91,9 @@ export async function runSandbox(
     try {
       const result = await Promise.race([waitPromise, timeoutPromise]);
       exitCode = result.StatusCode;
+      logger.info({ containerId: container.id, exitCode, durationMs: Date.now() - startTime }, "container_exited");
     } catch {
+      logger.warn({ containerId: container?.id, timeoutMs: options.timeoutMs }, "container_timeout");
       if (container) {
         try {
           await container.kill();
@@ -114,6 +121,7 @@ export async function runSandbox(
     if (container) {
       try {
         await container.remove({ force: true });
+        logger.info({ containerId: container.id }, "container_removed");
       } catch {
         /* best effort */
       }

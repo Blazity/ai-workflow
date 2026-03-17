@@ -33,6 +33,15 @@ vi.mock("../sandbox/manager.js", () => ({
   teardownContainer: (...args: unknown[]) => mockTeardown(...args),
 }));
 
+vi.mock("../logger.js", () => ({
+  createLogger: () => ({
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+    child: vi.fn().mockReturnThis(),
+  }),
+}));
+
 describe("routeTicketTransition", () => {
   beforeEach(() => {
     vi.resetModules();
@@ -205,6 +214,37 @@ describe("routeTicketTransition", () => {
     await routeTicketTransition(makeEvent("AI", "Cancelled"));
 
     expect(mockDb.update).toHaveBeenCalled();
+  });
+
+  it("looks up containerId from run_attempts and tears down the container", async () => {
+    const { routeTicketTransition } = await import("./router.js");
+
+    mockGetJob.mockResolvedValue(null);
+
+    mockDb.select
+      .mockReturnValueOnce({
+        from: vi.fn().mockReturnValue({
+          where: vi.fn().mockResolvedValue([
+            { id: "uuid-1", workflowState: "implementing", currentRunId: "run-uuid-1" },
+          ]),
+        }),
+      })
+      .mockReturnValueOnce({
+        from: vi.fn().mockReturnValue({
+          where: vi.fn().mockResolvedValue([
+            { id: "run-uuid-1", containerId: "docker-container-xyz" },
+          ]),
+        }),
+      });
+    mockDb.update.mockReturnValue({
+      set: vi.fn().mockReturnValue({
+        where: vi.fn().mockResolvedValue(undefined),
+      }),
+    });
+
+    await routeTicketTransition(makeEvent("AI", "Done"));
+
+    expect(mockTeardown).toHaveBeenCalledWith("docker-container-xyz");
   });
 
   it("does nothing when ticket moved out of AI but no DB record exists", async () => {

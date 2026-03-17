@@ -33,6 +33,15 @@ vi.mock("node:fs/promises", () => ({
   rm: vi.fn(),
 }));
 
+vi.mock("../logger.js", () => ({
+  createLogger: () => ({
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+    child: vi.fn().mockReturnThis(),
+  }),
+}));
+
 describe("runSandbox", () => {
   beforeAll(async () => {
     await import("dockerode");
