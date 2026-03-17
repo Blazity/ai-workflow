@@ -1,14 +1,17 @@
 #!/bin/bash
-set -e
+set -euo pipefail
+
+# Trap errors to ensure the message reaches Docker's log driver before exit
+trap 'EXIT_CODE=$?; echo "entrypoint failed at line $LINENO with exit code $EXIT_CODE" >&2; exit $EXIT_CODE' ERR
 
 echo "Blazebot sandbox starting — branch: $BLAZEBOT_BRANCH" >&2
 
 /usr/bin/git clone \
-  "https://x-access-token:${GITHUB_TOKEN}@github.com/${REPO_URL}.git" /workspace/repo
+  "https://x-access-token:${GITHUB_TOKEN}@github.com/${REPO_URL}.git" /workspace/repo 2>&1
 
 cd /workspace/repo
 
-/usr/bin/git checkout "$BLAZEBOT_BRANCH" 2>/dev/null || /usr/bin/git checkout -b "$BLAZEBOT_BRANCH"
+/usr/bin/git checkout "$BLAZEBOT_BRANCH" 2>&1 || /usr/bin/git checkout -b "$BLAZEBOT_BRANCH" 2>&1
 
 cp /inject/requirements.md ./requirements.md
 
