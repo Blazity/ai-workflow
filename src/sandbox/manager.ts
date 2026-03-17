@@ -73,7 +73,7 @@ export async function pushBranchFromContainer(containerId: string, branchName: s
       const waitResult = await pushContainer.wait();
       if (waitResult.StatusCode !== 0) {
         const stderr = await readContainerLogs(pushContainer, "stderr");
-        logger.warn({ containerId, branchName, exitCode: waitResult.StatusCode, stderr: sanitizeStderr(stderr) }, "branch_push_failed");
+        logger.warn({ containerId, branchName, exitCode: waitResult.StatusCode, stderr: sanitizeForLog(stderr) }, "branch_push_failed");
       } else {
         logger.info({ containerId, branchName }, "branch_pushed");
       }
@@ -159,22 +159,9 @@ export async function runSandbox(
   }
 }
 
-function sanitizeStderr(stderr: string): string {
-  // Only keep lines that look like shell/git errors, not agent output.
-  // This prevents leaking client code or ticket data into logs.
-  const safePatterns = [
-    /^(fatal|error|warning|bash|sh|git|docker|clone|push|checkout|command not found)/i,
-    /^Blazebot sandbox/,
-    /^Launching Claude/,
-    /^Claude Code exited/,
-    /^No changes/,
-    /^remote:/i,
-  ];
-  return stderr
-    .split("\n")
-    .filter(line => safePatterns.some(p => p.test(line.trim())))
-    .join("\n")
-    .slice(-500);
+function sanitizeForLog(text: string): string {
+  // Truncate to last 1000 chars — enough for diagnostics, bounded for safety.
+  return text.slice(-1000);
 }
 
 async function readContainerLogs(
@@ -182,32 +169,50 @@ async function readContainerLogs(
   stream: "stdout" | "stderr",
 ): Promise<string> {
   try {
-    const logs = await container.logs({
+    const raw = await container.logs({
       stdout: stream === "stdout",
       stderr: stream === "stderr",
+      follow: false,
     });
-    const raw = typeof logs === "string" ? logs : logs.toString("utf-8");
-    return stripDockerHeaders(raw);
+
+    // dockerode may return a Buffer or string
+    const buf = Buffer.isBuffer(raw) ? raw : Buffer.from(String(raw), "binary");
+
+    return demuxDockerStream(buf, stream === "stdout" ? 1 : 2);
   } catch {
     return "";
   }
 }
 
-function stripDockerHeaders(raw: string): string {
-  const buf = Buffer.from(raw, "binary");
+/**
+ * Docker multiplexed streams have an 8-byte header per frame:
+ *   byte 0: stream type (0=stdin, 1=stdout, 2=stderr)
+ *   bytes 4-7: payload length (big-endian uint32)
+ * We extract only frames matching the requested stream type.
+ * If the buffer doesn't look multiplexed, return as plain text.
+ */
+function demuxDockerStream(buf: Buffer, streamType: number): string {
+  if (buf.length < 8) return buf.toString("utf-8");
+
+  const firstByte = buf[0];
+  if (firstByte !== 0 && firstByte !== 1 && firstByte !== 2) {
+    // Not a multiplexed stream — return as-is
+    return buf.toString("utf-8");
+  }
+
   const chunks: string[] = [];
   let offset = 0;
   while (offset + 8 <= buf.length) {
-    const streamType = buf[offset];
-    if (streamType !== 0 && streamType !== 1 && streamType !== 2) {
-      return raw;
-    }
+    const type = buf[offset];
+    if (type !== 0 && type !== 1 && type !== 2) break;
     const len = buf.readUInt32BE(offset + 4);
     if (offset + 8 + len > buf.length) break;
-    chunks.push(buf.subarray(offset + 8, offset + 8 + len).toString("utf-8"));
+    if (type === streamType) {
+      chunks.push(buf.subarray(offset + 8, offset + 8 + len).toString("utf-8"));
+    }
     offset += 8 + len;
   }
-  return chunks.length > 0 ? chunks.join("") : raw;
+  return chunks.join("");
 }
 
 async function readResult(
@@ -230,12 +235,12 @@ async function readResult(
   }
 
   if (!output) {
-    const sanitized = sanitizeStderr(stderr) || "(no diagnostic output)";
-    logger.error({ containerId, exitCode }, "container_no_structured_output");
+    const diagnostic = sanitizeForLog(stderr || stdout) || "(no output captured)";
+    logger.error({ containerId, exitCode, diagnostic }, "container_no_structured_output");
     return {
       exitCode,
       status: "failed",
-      error: `Agent did not return valid structured JSON output. Container stderr: ${sanitized}`,
+      error: `Agent did not return valid structured JSON output. Container output: ${diagnostic.slice(-500)}`,
       containerId,
     };
   }

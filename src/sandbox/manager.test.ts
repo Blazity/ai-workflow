@@ -159,12 +159,12 @@ describe("runSandbox", () => {
     expect(result).toEqual(
       expect.objectContaining({
         status: "failed",
-        error: expect.stringContaining("repository not found"),
+        error: expect.stringContaining("structured JSON"),
       }),
     );
   });
 
-  it("includes stderr in error message when agent fails without JSON output", async () => {
+  it("includes container output in error message when agent fails without JSON output", async () => {
     const { runSandbox } = await import("./manager.js");
 
     mockContainer.wait.mockResolvedValue({ StatusCode: 1 });
