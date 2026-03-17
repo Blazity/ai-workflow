@@ -63,10 +63,25 @@ describe("runSandbox", () => {
     JSON.stringify({ result, ...extra });
 
   function mockLogs(stdout: string, stderr = "") {
-    mockContainer.logs.mockImplementation((opts: { stdout?: boolean; stderr?: boolean }) => {
-      if (opts.stdout) return Promise.resolve(stdout);
-      if (opts.stderr) return Promise.resolve(stderr);
-      return Promise.resolve("");
+    // readAllContainerLogs calls container.logs({ stdout: true, stderr: true })
+    // and then demuxes. For tests we simulate the multiplexed format.
+    mockContainer.logs.mockImplementation(() => {
+      const frames: Buffer[] = [];
+      if (stdout) {
+        const payload = Buffer.from(stdout, "utf-8");
+        const header = Buffer.alloc(8);
+        header[0] = 1; // stdout
+        header.writeUInt32BE(payload.length, 4);
+        frames.push(header, payload);
+      }
+      if (stderr) {
+        const payload = Buffer.from(stderr, "utf-8");
+        const header = Buffer.alloc(8);
+        header[0] = 2; // stderr
+        header.writeUInt32BE(payload.length, 4);
+        frames.push(header, payload);
+      }
+      return Promise.resolve(frames.length > 0 ? Buffer.concat(frames) : Buffer.alloc(0));
     });
   }
 

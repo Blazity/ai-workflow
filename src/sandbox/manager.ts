@@ -72,8 +72,8 @@ export async function pushBranchFromContainer(containerId: string, branchName: s
       await pushContainer.start();
       const waitResult = await pushContainer.wait();
       if (waitResult.StatusCode !== 0) {
-        const stderr = await readContainerLogs(pushContainer, "stderr");
-        logger.warn({ containerId, branchName, exitCode: waitResult.StatusCode, stderr: sanitizeForLog(stderr) }, "branch_push_failed");
+        const pushLogs = await readAllContainerLogs(pushContainer);
+        logger.warn({ containerId, branchName, exitCode: waitResult.StatusCode, stderr: sanitizeForLog(pushLogs.stderr) }, "branch_push_failed");
       } else {
         logger.info({ containerId, branchName }, "branch_pushed");
       }
@@ -160,27 +160,27 @@ export async function runSandbox(
 }
 
 function sanitizeForLog(text: string): string {
-  // Truncate to last 1000 chars — enough for diagnostics, bounded for safety.
   return text.slice(-1000);
 }
 
-async function readContainerLogs(
+/**
+ * Read all container logs (both stdout and stderr) in a single call,
+ * then demux the multiplexed stream into separate strings.
+ */
+async function readAllContainerLogs(
   container: Docker.Container,
-  stream: "stdout" | "stderr",
-): Promise<string> {
+): Promise<{ stdout: string; stderr: string }> {
   try {
     const raw = await container.logs({
-      stdout: stream === "stdout",
-      stderr: stream === "stderr",
+      stdout: true,
+      stderr: true,
       follow: false,
     });
 
-    // dockerode may return a Buffer or string
     const buf = Buffer.isBuffer(raw) ? raw : Buffer.from(String(raw), "binary");
-
-    return demuxDockerStream(buf, stream === "stdout" ? 1 : 2);
+    return demuxDockerStream(buf);
   } catch {
-    return "";
+    return { stdout: "", stderr: "" };
   }
 }
 
@@ -188,31 +188,37 @@ async function readContainerLogs(
  * Docker multiplexed streams have an 8-byte header per frame:
  *   byte 0: stream type (0=stdin, 1=stdout, 2=stderr)
  *   bytes 4-7: payload length (big-endian uint32)
- * We extract only frames matching the requested stream type.
- * If the buffer doesn't look multiplexed, return as plain text.
+ * We separate frames into stdout and stderr.
+ * If the buffer doesn't look multiplexed, return everything as stdout.
  */
-function demuxDockerStream(buf: Buffer, streamType: number): string {
-  if (buf.length < 8) return buf.toString("utf-8");
+function demuxDockerStream(buf: Buffer): { stdout: string; stderr: string } {
+  if (buf.length < 8) return { stdout: buf.toString("utf-8"), stderr: "" };
 
   const firstByte = buf[0];
   if (firstByte !== 0 && firstByte !== 1 && firstByte !== 2) {
-    // Not a multiplexed stream — return as-is
-    return buf.toString("utf-8");
+    return { stdout: buf.toString("utf-8"), stderr: "" };
   }
 
-  const chunks: string[] = [];
+  const stdoutChunks: string[] = [];
+  const stderrChunks: string[] = [];
   let offset = 0;
   while (offset + 8 <= buf.length) {
     const type = buf[offset];
     if (type !== 0 && type !== 1 && type !== 2) break;
     const len = buf.readUInt32BE(offset + 4);
     if (offset + 8 + len > buf.length) break;
-    if (type === streamType) {
-      chunks.push(buf.subarray(offset + 8, offset + 8 + len).toString("utf-8"));
-    }
+    const text = buf.subarray(offset + 8, offset + 8 + len).toString("utf-8");
+    if (type === 1) stdoutChunks.push(text);
+    if (type === 2) stderrChunks.push(text);
     offset += 8 + len;
   }
-  return chunks.join("");
+
+  // If we didn't parse any frames, the stream isn't multiplexed
+  if (stdoutChunks.length === 0 && stderrChunks.length === 0) {
+    return { stdout: buf.toString("utf-8"), stderr: "" };
+  }
+
+  return { stdout: stdoutChunks.join(""), stderr: stderrChunks.join("") };
 }
 
 async function readResult(
@@ -222,8 +228,7 @@ async function readResult(
   const containerId = container.id;
   let output: AgentOutput | null = null;
 
-  const stdout = await readContainerLogs(container, "stdout");
-  const stderr = await readContainerLogs(container, "stderr");
+  const { stdout, stderr } = await readAllContainerLogs(container);
 
   try {
     const jsonMatch = stdout.match(/\{[\s\S]*"result"\s*:[\s\S]*\}$/m);
