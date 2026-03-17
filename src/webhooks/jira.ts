@@ -57,5 +57,6 @@ export function parseJiraWebhook(
     fromColumn: statusChange.fromString,
     toColumn: statusChange.toString,
     triggeredBy: user.displayName,
+    triggeredByAccountId: user.accountId,
   };
 }

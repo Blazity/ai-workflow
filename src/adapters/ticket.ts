@@ -28,4 +28,5 @@ export interface NormalizedEvent {
   fromColumn: string;
   toColumn: string;
   triggeredBy: string;
+  triggeredByAccountId: string;
 }

@@ -47,7 +47,7 @@
 - Create: `src/logger.ts`
 - Create: `src/logger.test.ts`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `src/logger.test.ts`:
 
@@ -82,12 +82,12 @@ describe("logger", () => {
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `npx vitest run src/logger.test.ts`
 Expected: FAIL — `./logger.js` module not found.
 
-- [ ] **Step 3: Write `src/logger.ts`**
+- [x] **Step 3: Write `src/logger.ts`**
 
 ```typescript
 import pino from "pino";
@@ -121,16 +121,16 @@ export function createRunLogger(
 }
 ```
 
-- [ ] **Step 4: Install pino (Fastify already depends on it, but make the import explicit)**
+- [x] **Step 4: Install pino (Fastify already depends on it, but make the import explicit)**
 
 Run: `pnpm add pino`
 
-- [ ] **Step 5: Run test to verify it passes**
+- [x] **Step 5: Run test to verify it passes**
 
 Run: `npx vitest run src/logger.test.ts`
 Expected: All 3 tests PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/logger.ts src/logger.test.ts package.json pnpm-lock.yaml
@@ -149,7 +149,7 @@ The worker currently creates a run attempt but never writes the run ID back to `
 - Modify: `src/worker.ts`
 - Modify: `src/worker.test.ts`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Add these tests to `src/worker.test.ts` inside the existing `describe("worker handler", ...)` block:
 
@@ -183,12 +183,12 @@ it("writes currentRunId to ticket and containerId to run attempt", async () => {
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails or passes with current mocks**
+- [x] **Step 2: Run test to verify it fails or passes with current mocks**
 
 Run: `npx vitest run src/worker.test.ts`
 Expected: May pass with mocks but actual DB writes are what matter. The test primarily ensures the code path exists.
 
-- [ ] **Step 3: Update `handleImplementation` in `src/worker.ts`**
+- [x] **Step 3: Update `handleImplementation` in `src/worker.ts`**
 
 After creating the run attempt (line ~85-94), add:
 
@@ -221,12 +221,12 @@ await db.update(tickets)
   .where(eq(tickets.externalId, data.ticketId));
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `npx vitest run src/worker.test.ts`
 Expected: All PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/worker.ts src/worker.test.ts
@@ -243,7 +243,7 @@ The router currently reads `ticket.currentRunId` and passes it directly to `tear
 - Modify: `src/webhooks/router.ts`
 - Modify: `src/webhooks/router.test.ts`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Add to `src/webhooks/router.test.ts`:
 
@@ -281,12 +281,12 @@ it("looks up containerId from run_attempts and tears down the container", async 
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `npx vitest run src/webhooks/router.test.ts`
 Expected: FAIL — current code passes `currentRunId` (a UUID) not the Docker container ID.
 
-- [ ] **Step 3: Fix `handleMovedOutOfAi` in `src/webhooks/router.ts`**
+- [x] **Step 3: Fix `handleMovedOutOfAi` in `src/webhooks/router.ts`**
 
 Replace the container teardown block (lines 170-183) with:
 
@@ -313,17 +313,17 @@ Also add the `runAttempts` import at the top:
 import { tickets, runAttempts } from "../schema.js";
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `npx vitest run src/webhooks/router.test.ts`
 Expected: All PASS.
 
-- [ ] **Step 5: Run full test suite**
+- [x] **Step 5: Run full test suite**
 
 Run: `npx vitest run`
 Expected: All PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/webhooks/router.ts src/webhooks/router.test.ts
@@ -349,7 +349,7 @@ git commit -m "fix: look up containerId from run_attempts for container teardown
 **Files:**
 - Modify: `src/worker.ts`
 
-- [ ] **Step 1: Add logger imports and create loggers in `handleImplementation`**
+- [x] **Step 1: Add logger imports and create loggers in `handleImplementation`**
 
 At the top of `src/worker.ts`, add:
 
@@ -376,7 +376,7 @@ const runLog = createRunLogger(ticketLog, run!.id);
 runLog.info({ type: "implementation", branchName }, "job_started");
 ```
 
-- [ ] **Step 2: Add structured log calls at each event point**
+- [x] **Step 2: Add structured log calls at each event point**
 
 After stale job check:
 ```typescript
@@ -410,7 +410,7 @@ runLog.error({ error: result.error }, "agent_failed");
 ticketLog.info({ from: "implementing", to: "failed" }, "ticket_state_transition");
 ```
 
-- [ ] **Step 3: Add `startTime` tracking**
+- [x] **Step 3: Add `startTime` tracking**
 
 At the start of `handleImplementation`, before the sandbox call:
 
@@ -418,7 +418,7 @@ At the start of `handleImplementation`, before the sandbox call:
 const startTime = Date.now();
 ```
 
-- [ ] **Step 4: Update worker tests — mock the logger module**
+- [x] **Step 4: Update worker tests — mock the logger module**
 
 At the top of `src/worker.test.ts`, add a logger mock:
 
@@ -458,12 +458,12 @@ vi.mock("./logger.js", () => ({
 }));
 ```
 
-- [ ] **Step 5: Run tests to verify they pass**
+- [x] **Step 5: Run tests to verify they pass**
 
 Run: `npx vitest run src/worker.test.ts`
 Expected: All PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/worker.ts src/worker.test.ts
@@ -484,7 +484,7 @@ git commit -m "feat: add structured JSON logging to worker with ticket/run conte
 - Modify: `src/webhooks/router.ts`
 - Modify: `src/webhooks/router.test.ts`
 
-- [ ] **Step 1: Add logger to router**
+- [x] **Step 1: Add logger to router**
 
 At the top of `src/webhooks/router.ts`, add:
 
@@ -494,7 +494,7 @@ import { createLogger } from "../logger.js";
 const logger = createLogger();
 ```
 
-- [ ] **Step 2: Add log calls in `handleMovedToAi`**
+- [x] **Step 2: Add log calls in `handleMovedToAi`**
 
 At the start of `handleMovedToAi`:
 ```typescript
@@ -509,7 +509,7 @@ After each `ticketQueue.add`:
 logger.info({ ticketId: event.ticketId, jobType: "implementation" }, "job_enqueued");
 ```
 
-- [ ] **Step 3: Add log calls in `handleMovedOutOfAi`**
+- [x] **Step 3: Add log calls in `handleMovedOutOfAi`**
 
 ```typescript
 logger.info(
@@ -528,7 +528,7 @@ After container teardown:
 logger.info({ ticketId: event.ticketId, containerId: activeRun.containerId }, "container_teardown");
 ```
 
-- [ ] **Step 4: Mock logger in router tests**
+- [x] **Step 4: Mock logger in router tests**
 
 Add to `src/webhooks/router.test.ts`:
 
@@ -543,17 +543,17 @@ vi.mock("../logger.js", () => ({
 }));
 ```
 
-- [ ] **Step 5: Run tests to verify they pass**
+- [x] **Step 5: Run tests to verify they pass**
 
 Run: `npx vitest run src/webhooks/router.test.ts`
 Expected: All PASS.
 
-- [ ] **Step 6: Run full test suite**
+- [x] **Step 6: Run full test suite**
 
 Run: `npx vitest run`
 Expected: All PASS.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add src/webhooks/router.ts src/webhooks/router.test.ts
@@ -574,7 +574,7 @@ git commit -m "feat: add structured JSON logging to webhook router"
 - Modify: `src/sandbox/manager.ts`
 - Modify: `src/sandbox/manager.test.ts`
 
-- [ ] **Step 1: Add logger to sandbox manager**
+- [x] **Step 1: Add logger to sandbox manager**
 
 At the top of `src/sandbox/manager.ts`, add:
 
@@ -584,7 +584,7 @@ import { createLogger } from "../logger.js";
 const logger = createLogger();
 ```
 
-- [ ] **Step 2: Add log calls at key lifecycle points**
+- [x] **Step 2: Add log calls at key lifecycle points**
 
 After `container.start()`:
 ```typescript
@@ -611,14 +611,14 @@ On timeout:
 logger.warn({ containerId: container?.id, timeoutMs: options.timeoutMs }, "container_timeout");
 ```
 
-- [ ] **Step 3: Add `startTime` tracking**
+- [x] **Step 3: Add `startTime` tracking**
 
 Right before `container.start()`:
 ```typescript
 const startTime = Date.now();
 ```
 
-- [ ] **Step 4: Mock logger in sandbox manager tests**
+- [x] **Step 4: Mock logger in sandbox manager tests**
 
 Add to `src/sandbox/manager.test.ts`:
 
@@ -633,12 +633,12 @@ vi.mock("../logger.js", () => ({
 }));
 ```
 
-- [ ] **Step 5: Run tests to verify they pass**
+- [x] **Step 5: Run tests to verify they pass**
 
 Run: `npx vitest run src/sandbox/manager.test.ts`
 Expected: All PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/sandbox/manager.ts src/sandbox/manager.test.ts
@@ -663,7 +663,7 @@ git commit -m "feat: add structured JSON logging to sandbox manager"
 - Modify: `src/index.ts`
 - Modify: `src/adapters/console-messaging.ts`
 
-- [ ] **Step 1: Add structured log for webhook validation failure in `src/index.ts`**
+- [x] **Step 1: Add structured log for webhook validation failure in `src/index.ts`**
 
 Replace the Fastify logger with a structured logger import and log webhook events:
 
@@ -688,7 +688,7 @@ if (event) {
 }
 ```
 
-- [ ] **Step 2: Add logging to ConsoleMessagingAdapter**
+- [x] **Step 2: Add logging to ConsoleMessagingAdapter**
 
 Update `src/adapters/console-messaging.ts`:
 
@@ -709,17 +709,17 @@ export class ConsoleMessagingAdapter implements MessagingAdapter {
 }
 ```
 
-- [ ] **Step 3: Run full test suite**
+- [x] **Step 3: Run full test suite**
 
 Run: `npx vitest run`
 Expected: All PASS.
 
-- [ ] **Step 4: Verify TypeScript compiles**
+- [x] **Step 4: Verify TypeScript compiles**
 
 Run: `npx tsc --noEmit`
 Expected: No errors.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/index.ts src/adapters/console-messaging.ts
@@ -733,17 +733,17 @@ git commit -m "feat: add structured logging to webhook endpoint and messaging ad
 **Files:**
 - None — verification only
 
-- [ ] **Step 1: Run full test suite**
+- [x] **Step 1: Run full test suite**
 
 Run: `npx vitest run`
 Expected: All tests PASS.
 
-- [ ] **Step 2: Verify TypeScript compiles**
+- [x] **Step 2: Verify TypeScript compiles**
 
 Run: `npx tsc --noEmit`
 Expected: No errors.
 
-- [ ] **Step 3: Verify git status is clean**
+- [x] **Step 3: Verify git status is clean**
 
 Run: `git status`
 Expected: No unstaged changes.

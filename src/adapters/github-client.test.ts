@@ -8,6 +8,8 @@ vi.mock("@octokit/rest", () => {
     },
     pulls: {
       create: vi.fn(),
+      list: vi.fn(),
+      update: vi.fn(),
       listReviewComments: vi.fn(),
       get: vi.fn(),
     },
@@ -92,6 +94,30 @@ describe("GitHubClient", () => {
       number: 42,
       url: "https://github.com/owner/repo/pull/42",
     });
+  });
+
+  it("returns existing PR when create returns 422", async () => {
+    const { Octokit } = await import("@octokit/rest");
+    const { GitHubClient } = await import("./github-client.js");
+    const client = new GitHubClient("test-token");
+
+    const mockInstance = vi.mocked(Octokit).mock.results[0]!.value;
+    mockInstance.pulls.create.mockRejectedValue(
+      Object.assign(new Error("Validation Failed"), { status: 422 }),
+    );
+    mockInstance.pulls.list.mockResolvedValue({
+      data: [{ number: 99, html_url: "https://github.com/owner/repo/pull/99" }],
+    });
+    mockInstance.pulls.update.mockResolvedValue({ data: {} });
+
+    const pr = await client.createPR(
+      "owner", "repo", "updated title", "updated body", "blazebot/PROJ-42", "main",
+    );
+
+    expect(pr).toEqual({ number: 99, url: "https://github.com/owner/repo/pull/99" });
+    expect(mockInstance.pulls.update).toHaveBeenCalledWith(
+      expect.objectContaining({ pull_number: 99, title: "updated title", body: "updated body" }),
+    );
   });
 
   it("getFileContent returns decoded file content", async () => {

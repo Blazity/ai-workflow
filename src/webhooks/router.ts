@@ -151,11 +151,6 @@ async function handleMovedToAi(event: NormalizedEvent): Promise<void> {
 }
 
 async function handleMovedOutOfAi(event: NormalizedEvent): Promise<void> {
-  logger.info(
-    { ticketId: event.ticketId, fromColumn: event.fromColumn, toColumn: event.toColumn },
-    "contradicting_webhook_received",
-  );
-
   const existing = await db
     .select()
     .from(tickets)
@@ -168,6 +163,24 @@ async function handleMovedOutOfAi(event: NormalizedEvent): Promise<void> {
 
   const ticket = existing[0];
   if (!ticket) return;
+
+  const to = normalize(event.toColumn);
+  const colAiReview = normalize(env.COLUMN_AI_REVIEW);
+  const colBacklog = normalize(env.COLUMN_BACKLOG);
+
+  if (ticket.workflowState === "awaiting_review" && to === colAiReview) {
+    logger.info({ ticketId: event.ticketId, toColumn: event.toColumn }, "self_transition_ignored");
+    return;
+  }
+  if (ticket.workflowState === "clarification_pending" && to === colBacklog) {
+    logger.info({ ticketId: event.ticketId, toColumn: event.toColumn }, "self_transition_ignored");
+    return;
+  }
+
+  logger.info(
+    { ticketId: event.ticketId, fromColumn: event.fromColumn, toColumn: event.toColumn },
+    "contradicting_webhook_received",
+  );
 
   const jobId = ticket.workflowState === "awaiting_review"
     ? `fix-${event.ticketId}-${ticket.id}`

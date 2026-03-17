@@ -60,6 +60,7 @@ describe("parseJiraWebhook", () => {
       fromColumn: "To Do",
       toColumn: "AI",
       triggeredBy: "Mia Krystof",
+      triggeredByAccountId: "abc123",
     });
   });
 
@@ -139,6 +140,7 @@ describe("parseJiraWebhook", () => {
       fromColumn: "",
       toColumn: "AI",
       triggeredBy: "Mia Krystof",
+      triggeredByAccountId: "abc123",
     });
   });
 
@@ -170,6 +172,7 @@ describe("parseJiraWebhook", () => {
       fromColumn: "Backlog",
       toColumn: "AI In Progress",
       triggeredBy: "Mia Krystof",
+      triggeredByAccountId: "abc123",
     });
   });
 });

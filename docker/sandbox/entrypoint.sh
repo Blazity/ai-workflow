@@ -13,14 +13,16 @@ cd /workspace/repo
 
 /usr/bin/git checkout "$BLAZEBOT_BRANCH" 2>&1 || /usr/bin/git checkout -b "$BLAZEBOT_BRANCH" 2>&1
 
-cp /inject/requirements.md ./requirements.md
+cp /inject/requirements.md /workspace/requirements.md
 
 MODEL="${CLAUDE_MODEL:-claude-sonnet-4-20250514}"
+
+AGENT_SCHEMA='{"type":"object","required":["result"],"properties":{"result":{"type":"string","enum":["implemented","clarification_needed","failed"]},"summary":{"type":"string"},"questions":{"type":"array","items":{"type":"string"}},"error":{"type":"string"}},"additionalProperties":false}'
 
 echo "Launching Claude Code (model: $MODEL)" >&2
 
 CLAUDE_EXIT=0
-claude --print --output-format json --model "$MODEL" --dangerously-skip-permissions < requirements.md || CLAUDE_EXIT=$?
+claude --print --output-format json --json-schema "$AGENT_SCHEMA" --model "$MODEL" --dangerously-skip-permissions < /workspace/requirements.md || CLAUDE_EXIT=$?
 
 echo "Claude Code exited with code: $CLAUDE_EXIT" >&2
 

@@ -60,7 +60,13 @@ describe("runSandbox", () => {
   };
 
   const makeAgentOutput = (result: string, extra: Record<string, unknown> = {}) =>
-    JSON.stringify({ result, ...extra });
+    JSON.stringify({
+      type: "result",
+      subtype: "success",
+      result: "Full text response from Claude...",
+      structured_output: { result, ...extra },
+      session_id: "test-session",
+    });
 
   function mockLogs(stdout: string, stderr = "") {
     // readAllContainerLogs calls container.logs({ stdout: true, stderr: true })
@@ -89,6 +95,7 @@ describe("runSandbox", () => {
     vi.clearAllMocks();
     await import("dockerode");
     createContainerSpy?.mockResolvedValue(mockContainer);
+    mockContainer.start.mockResolvedValue(undefined);
     mockContainer.wait.mockResolvedValue({ StatusCode: 0 });
     mockLogs(makeAgentOutput("implemented", { summary: "" }));
   });
@@ -238,6 +245,37 @@ describe("runSandbox", () => {
     const result = await runSandbox(defaultOptions);
 
     expect(result.containerId).toBe("container-abc123");
+  });
+
+  it("falls back to bare result field when structured_output is absent", async () => {
+    const { runSandbox } = await import("./manager.js");
+
+    mockLogs(JSON.stringify({ result: "implemented", summary: "Bare format" }));
+
+    const result = await runSandbox(defaultOptions);
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        status: "complete",
+        summary: "Bare format",
+      }),
+    );
+  });
+
+  it("treats envelope result containing full text (not enum) as failed without structured_output", async () => {
+    const { runSandbox } = await import("./manager.js");
+
+    mockLogs(JSON.stringify({
+      type: "result",
+      subtype: "success",
+      result: "Perfect! I have successfully converted the HTML page...",
+      session_id: "test-session",
+    }));
+
+    const result = await runSandbox(defaultOptions);
+
+    expect(result.status).toBe("failed");
+    expect(result.error).toContain("structured JSON");
   });
 });
 

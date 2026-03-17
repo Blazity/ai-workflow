@@ -65,17 +65,19 @@ export async function pushBranchFromContainer(containerId: string, branchName: s
     const commitResult = await container.commit({ repo: "blazebot-push-tmp", tag: "latest" });
     const pushContainer = await docker.createContainer({
       Image: (commitResult as { Id?: string }).Id ?? "blazebot-push-tmp:latest",
-      Cmd: ["/bin/bash", "-c", `cd /workspace/repo && /usr/bin/git push origin ${branchName}`],
+      Entrypoint: ["/bin/bash", "-c"],
+      Cmd: [`cd /workspace/repo && /usr/bin/git push origin HEAD:${branchName} 2>&1`],
       User: "blazebot",
     });
     try {
       await pushContainer.start();
       const waitResult = await pushContainer.wait();
+      const pushLogs = await readAllContainerLogs(pushContainer);
+      const output = sanitizeForLog(pushLogs.stdout + pushLogs.stderr);
       if (waitResult.StatusCode !== 0) {
-        const pushLogs = await readAllContainerLogs(pushContainer);
-        logger.warn({ containerId, branchName, exitCode: waitResult.StatusCode, stderr: sanitizeForLog(pushLogs.stderr) }, "branch_push_failed");
+        logger.warn({ containerId, branchName, exitCode: waitResult.StatusCode, output }, "branch_push_failed");
       } else {
-        logger.info({ containerId, branchName }, "branch_pushed");
+        logger.info({ containerId, branchName, output }, "branch_pushed");
       }
     } finally {
       try { await pushContainer.remove({ force: true }); } catch { /* best effort */ }
@@ -221,23 +223,46 @@ function demuxDockerStream(buf: Buffer): { stdout: string; stderr: string } {
   return { stdout: stdoutChunks.join(""), stderr: stderrChunks.join("") };
 }
 
+/**
+ * Claude Code with `--output-format json --json-schema <schema>` returns an envelope:
+ *   { "type": "result", "subtype": "success", "result": "...", "structured_output": { ... } }
+ * Our agent schema lives in `structured_output`. If `--json-schema` was not honoured
+ * (older Claude Code, or schema error) we fall back to parsing the envelope `result` field.
+ */
+function parseAgentOutput(stdout: string): AgentOutput | null {
+  const lines = stdout.split("\n");
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i]!.trim();
+    if (!line.startsWith("{")) continue;
+    try {
+      const envelope = JSON.parse(line);
+
+      if (envelope.structured_output && typeof envelope.structured_output.result === "string") {
+        return envelope.structured_output as AgentOutput;
+      }
+
+      if (
+        envelope.result &&
+        typeof envelope.result === "string" &&
+        ["implemented", "clarification_needed", "failed"].includes(envelope.result)
+      ) {
+        return envelope as AgentOutput;
+      }
+    } catch {
+      continue;
+    }
+  }
+  return null;
+}
+
 async function readResult(
   container: Docker.Container,
   exitCode: number,
 ): Promise<SandboxResult> {
   const containerId = container.id;
-  let output: AgentOutput | null = null;
 
   const { stdout, stderr } = await readAllContainerLogs(container);
-
-  try {
-    const jsonMatch = stdout.match(/\{[\s\S]*"result"\s*:[\s\S]*\}$/m);
-    if (jsonMatch) {
-      output = JSON.parse(jsonMatch[0]);
-    }
-  } catch {
-    /* fall through to default handling */
-  }
+  const output = parseAgentOutput(stdout);
 
   if (!output) {
     const diagnostic = sanitizeForLog(stderr || stdout) || "(no output captured)";

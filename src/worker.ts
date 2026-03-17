@@ -151,12 +151,24 @@ async function handleImplementation(data: Extract<TicketJobData, { type: "implem
   }
 
   if (result.status === "complete") {
-    const pr = await github.createPR(
-      owner, repo,
-      `[${data.ticketId}] ${ticket.title}`,
-      result.summary ?? "",
-      branchName, baseBranch,
-    );
+    let pr;
+    try {
+      pr = await github.createPR(
+        owner, repo,
+        `[${data.ticketId}] ${ticket.title}`,
+        result.summary ?? "",
+        branchName, baseBranch,
+      );
+    } catch (prErr: unknown) {
+      const ghErr = prErr as { status?: number; message?: string; response?: { data?: unknown } };
+      runLog.error({
+        status: ghErr.status,
+        message: ghErr.message,
+        responseData: ghErr.response?.data,
+        branchName,
+      }, "pr_creation_failed");
+      throw prErr;
+    }
 
     runLog.info({ prNumber: pr.number, prUrl: pr.url }, "pr_created");
 

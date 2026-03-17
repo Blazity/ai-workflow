@@ -59,6 +59,7 @@ describe("routeTicketTransition", () => {
     fromColumn: from,
     toColumn: to,
     triggeredBy: "Mia",
+    triggeredByAccountId: "user-abc123",
   });
 
   it("creates ticket record and enqueues implementation job for new ticket moved to AI", async () => {

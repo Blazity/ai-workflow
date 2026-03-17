@@ -46,16 +46,41 @@ export class GitHubClient implements VCSAdapter {
     head: string,
     base: string,
   ): Promise<PullRequest> {
-    const { data } = await this.octokit.pulls.create({
-      owner: repoOwner,
-      repo: repoName,
-      title,
-      body,
-      head,
-      base,
-    });
+    try {
+      const { data } = await this.octokit.pulls.create({
+        owner: repoOwner,
+        repo: repoName,
+        title,
+        body,
+        head,
+        base,
+      });
 
-    return { number: data.number, url: data.html_url };
+      return { number: data.number, url: data.html_url };
+    } catch (err: unknown) {
+      const error = err as { status?: number };
+      if (error.status === 422) {
+        const { data: prs } = await this.octokit.pulls.list({
+          owner: repoOwner,
+          repo: repoName,
+          head: `${repoOwner}:${head}`,
+          base,
+          state: "open",
+          per_page: 1,
+        });
+        if (prs.length > 0) {
+          await this.octokit.pulls.update({
+            owner: repoOwner,
+            repo: repoName,
+            pull_number: prs[0]!.number,
+            title,
+            body,
+          });
+          return { number: prs[0]!.number, url: prs[0]!.html_url };
+        }
+      }
+      throw err;
+    }
   }
 
   async getPRComments(

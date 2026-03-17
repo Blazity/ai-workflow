@@ -205,6 +205,7 @@ describe("JiraClient", () => {
         fromColumn: "To Do",
         toColumn: "AI",
         triggeredBy: "Mia",
+        triggeredByAccountId: "abc",
       });
     });
   });
