@@ -10,7 +10,7 @@ import { tickets, runAttempts } from "./schema.js";
 import { JiraClient } from "./adapters/jira-client.js";
 import { GitHubClient } from "./adapters/github-client.js";
 import { ConsoleMessagingAdapter } from "./adapters/console-messaging.js";
-import { runSandbox } from "./sandbox/manager.js";
+import { runSandbox, pushBranchFromContainer, teardownContainer } from "./sandbox/manager.js";
 import { assembleImplementationContext } from "./context.js";
 import { createLogger, createTicketLogger, createRunLogger } from "./logger.js";
 import type { TicketJobData } from "./queue.js";
@@ -136,6 +136,18 @@ async function handleImplementation(data: Extract<TicketJobData, { type: "implem
     await db.update(runAttempts)
       .set({ containerId: result.containerId })
       .where(eq(runAttempts.id, run!.id));
+  }
+
+  // Orchestrator pushes the branch on success/clarification (spec 15.2),
+  // then always tears down the container (spec 9.3).
+  try {
+    if (result.containerId && (result.status === "complete" || result.status === "clarification_needed")) {
+      await pushBranchFromContainer(result.containerId, branchName);
+    }
+  } finally {
+    if (result.containerId) {
+      await teardownContainer(result.containerId);
+    }
   }
 
   if (result.status === "complete") {

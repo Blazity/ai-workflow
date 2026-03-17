@@ -51,6 +51,40 @@ export async function teardownContainer(containerId: string): Promise<void> {
   }
 }
 
+/**
+ * Push the feature branch from inside a stopped container.
+ * Restarts the container with a push-only command, then stops it.
+ * Must be called before teardownContainer / container removal.
+ */
+export async function pushBranchFromContainer(containerId: string, branchName: string): Promise<void> {
+  const container = docker.getContainer(containerId);
+  try {
+    // Commit the stopped container's filesystem to a temporary image, then
+    // run a new container from it with the push command. This is necessary
+    // because docker exec requires a running container.
+    const commitResult = await container.commit({ repo: "blazebot-push-tmp", tag: "latest" });
+    const pushContainer = await docker.createContainer({
+      Image: (commitResult as { Id?: string }).Id ?? "blazebot-push-tmp:latest",
+      Cmd: ["/bin/bash", "-c", `cd /workspace/repo && /usr/bin/git push origin ${branchName}`],
+      User: "blazebot",
+    });
+    try {
+      await pushContainer.start();
+      const waitResult = await pushContainer.wait();
+      if (waitResult.StatusCode !== 0) {
+        const stderr = await readContainerLogs(pushContainer, "stderr");
+        logger.warn({ containerId, branchName, exitCode: waitResult.StatusCode, stderr: sanitizeStderr(stderr) }, "branch_push_failed");
+      } else {
+        logger.info({ containerId, branchName }, "branch_pushed");
+      }
+    } finally {
+      try { await pushContainer.remove({ force: true }); } catch { /* best effort */ }
+    }
+  } catch (err) {
+    logger.warn({ containerId, branchName, error: err instanceof Error ? err.message : "Unknown error" }, "branch_push_failed");
+  }
+}
+
 export async function runSandbox(
   options: SandboxOptions,
 ): Promise<SandboxResult> {
@@ -109,7 +143,10 @@ export async function runSandbox(
       };
     }
 
-    return await readResult(container, exitCode);
+    const sandboxResult = await readResult(container, exitCode);
+
+    // Container is NOT removed here — the worker handles push + teardown
+    return sandboxResult;
   } catch (err) {
     return {
       exitCode: -1,
@@ -118,16 +155,26 @@ export async function runSandbox(
       containerId: container?.id,
     };
   } finally {
-    if (container) {
-      try {
-        await container.remove({ force: true });
-        logger.info({ containerId: container.id }, "container_removed");
-      } catch {
-        /* best effort */
-      }
-    }
     await rm(tmpDir, { recursive: true, force: true });
   }
+}
+
+function sanitizeStderr(stderr: string): string {
+  // Only keep lines that look like shell/git errors, not agent output.
+  // This prevents leaking client code or ticket data into logs.
+  const safePatterns = [
+    /^(fatal|error|warning|bash|sh|git|docker|clone|push|checkout|command not found)/i,
+    /^Blazebot sandbox/,
+    /^Launching Claude/,
+    /^Claude Code exited/,
+    /^No changes/,
+    /^remote:/i,
+  ];
+  return stderr
+    .split("\n")
+    .filter(line => safePatterns.some(p => p.test(line.trim())))
+    .join("\n")
+    .slice(-500);
 }
 
 async function readContainerLogs(
@@ -147,15 +194,12 @@ async function readContainerLogs(
 }
 
 function stripDockerHeaders(raw: string): string {
-  // Docker multiplexed stream has 8-byte headers per frame.
-  // If the first byte is 0x01 (stdout) or 0x02 (stderr), strip headers.
   const buf = Buffer.from(raw, "binary");
   const chunks: string[] = [];
   let offset = 0;
   while (offset + 8 <= buf.length) {
     const streamType = buf[offset];
     if (streamType !== 0 && streamType !== 1 && streamType !== 2) {
-      // Not a multiplexed stream — return as-is
       return raw;
     }
     const len = buf.readUInt32BE(offset + 4);
@@ -186,12 +230,12 @@ async function readResult(
   }
 
   if (!output) {
-    const diagnostic = stderr.trim() || stdout.trim() || "(no output captured)";
-    logger.error({ containerId, exitCode, stderr: stderr.slice(-2000) }, "container_no_structured_output");
+    const sanitized = sanitizeStderr(stderr) || "(no diagnostic output)";
+    logger.error({ containerId, exitCode }, "container_no_structured_output");
     return {
       exitCode,
       status: "failed",
-      error: `Agent did not return valid structured JSON output. Container stderr: ${diagnostic.slice(-500)}`,
+      error: `Agent did not return valid structured JSON output. Container stderr: ${sanitized}`,
       containerId,
     };
   }

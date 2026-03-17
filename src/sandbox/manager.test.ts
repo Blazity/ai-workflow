@@ -193,17 +193,17 @@ describe("runSandbox", () => {
     expect(mockContainer.kill).toHaveBeenCalled();
   });
 
-  it("removes container after execution", async () => {
+  it("does not remove container after execution (worker handles teardown)", async () => {
     const { runSandbox } = await import("./manager.js");
 
     mockLogs(makeAgentOutput("implemented", { summary: "Done" }));
 
     await runSandbox(defaultOptions);
 
-    expect(mockContainer.remove).toHaveBeenCalledWith({ force: true });
+    expect(mockContainer.remove).not.toHaveBeenCalled();
   });
 
-  it("cleans up container even when start fails", async () => {
+  it("cleans up tmp dir even when start fails", async () => {
     const fs = await import("node:fs/promises");
     const { runSandbox } = await import("./manager.js");
 
@@ -212,7 +212,6 @@ describe("runSandbox", () => {
     const result = await runSandbox(defaultOptions);
 
     expect(result.status).toBe("failed");
-    expect(mockContainer.remove).toHaveBeenCalledWith({ force: true });
     expect(fs.rm).toHaveBeenCalled();
   });
 

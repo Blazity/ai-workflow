@@ -38,8 +38,12 @@ vi.mock("drizzle-orm/postgres-js", () => ({
 vi.mock("postgres", () => ({ default: vi.fn() }));
 
 const mockRunSandbox = vi.fn();
+const mockPushBranch = vi.fn();
+const mockTeardownContainer = vi.fn();
 vi.mock("./sandbox/manager.js", () => ({
   runSandbox: (...args: unknown[]) => mockRunSandbox(...args),
+  pushBranchFromContainer: (...args: unknown[]) => mockPushBranch(...args),
+  teardownContainer: (...args: unknown[]) => mockTeardownContainer(...args),
 }));
 
 const mockLogFn = vi.fn();

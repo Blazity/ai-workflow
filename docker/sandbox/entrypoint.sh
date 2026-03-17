@@ -21,13 +21,4 @@ claude --print --output-format json --model "$MODEL" --dangerously-skip-permissi
 
 echo "Claude Code exited with code: $CLAUDE_EXIT" >&2
 
-if [ "$CLAUDE_EXIT" -eq 0 ] || [ "$CLAUDE_EXIT" -eq 2 ]; then
-  if /usr/bin/git diff --quiet HEAD 2>/dev/null; then
-    echo "No changes to push" >&2
-  else
-    echo "Pushing changes to origin/$BLAZEBOT_BRANCH" >&2
-    /usr/bin/git push origin "$BLAZEBOT_BRANCH"
-  fi
-fi
-
 exit $CLAUDE_EXIT
