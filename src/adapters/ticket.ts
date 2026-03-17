@@ -13,6 +13,7 @@ export interface Ticket {
   acceptanceCriteria: string | null;
   comments: TicketComment[];
   labels: string[];
+  trackerStatus: string;
 }
 
 export interface TicketComment {

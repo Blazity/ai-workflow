@@ -18,6 +18,7 @@ describe("assembleImplementationContext", () => {
           },
         ],
         labels: ["frontend"],
+        trackerStatus: "AI",
       },
       "You are an agent. Implement the feature using TDD.",
     );
@@ -43,6 +44,7 @@ describe("assembleImplementationContext", () => {
         acceptanceCriteria: null,
         comments: [],
         labels: [],
+        trackerStatus: "AI",
       },
       "prompt",
     );
@@ -60,6 +62,7 @@ describe("assembleImplementationContext", () => {
         acceptanceCriteria: null,
         comments: [],
         labels: [],
+        trackerStatus: "AI",
       },
       "prompt",
     );
@@ -77,6 +80,7 @@ describe("assembleImplementationContext", () => {
         acceptanceCriteria: null,
         comments: [],
         labels: [],
+        trackerStatus: "AI",
       },
       "Do TDD",
     );

@@ -70,6 +70,29 @@ vi.mock("./adapters/jira-client.js", () => ({
   }),
 }));
 
+const mockMessaging = {
+  notify: vi.fn(),
+  ping: vi.fn(),
+};
+vi.mock("./adapters/console-messaging.js", () => ({
+  ConsoleMessagingAdapter: vi.fn().mockImplementation(function (this: unknown) {
+    return mockMessaging;
+  }),
+}));
+
+const defaultTicket = {
+  externalId: "PROJ-42",
+  identifier: "PROJ-42",
+  title: "Add dark mode",
+  description: "Implement dark mode across all pages",
+  acceptanceCriteria: null,
+  comments: [
+    { author: "Alice", body: "Use CSS variables", createdAt: new Date("2026-03-10") },
+  ],
+  labels: ["frontend"],
+  trackerStatus: "AI",
+};
+
 describe("worker handler", () => {
   beforeEach(() => {
     vi.resetModules();
@@ -90,18 +113,8 @@ describe("worker handler", () => {
   const makeJob = (data: TicketJobData): Job<TicketJobData> =>
     ({ data, name: data.type }) as Job<TicketJobData>;
 
-  it("fetches ticket, creates branch, runs sandbox, creates PR on exit 0", async () => {
-    mockJira.fetchTicket.mockResolvedValue({
-      externalId: "PROJ-42",
-      identifier: "PROJ-42",
-      title: "Add dark mode",
-      description: "Implement dark mode across all pages",
-      acceptanceCriteria: null,
-      comments: [
-        { author: "Alice", body: "Use CSS variables", createdAt: new Date("2026-03-10") },
-      ],
-      labels: ["frontend"],
-    });
+  it("fetches ticket, creates branch, runs sandbox, creates PR on success", async () => {
+    mockJira.fetchTicket.mockResolvedValue({ ...defaultTicket });
     mockRunSandbox.mockResolvedValue({
       exitCode: 0,
       status: "complete",
@@ -122,9 +135,6 @@ describe("worker handler", () => {
     );
 
     expect(mockJira.fetchTicket).toHaveBeenCalledWith("PROJ-42");
-    expect(mockGitHub.getFileContent).toHaveBeenCalledWith(
-      "owner", "repo", ".blazebot/implement.md", "main",
-    );
     expect(mockGitHub.createBranch).toHaveBeenCalledWith(
       "owner", "repo", "blazebot/PROJ-42", "main",
     );
@@ -138,16 +148,35 @@ describe("worker handler", () => {
     expect(mockJira.moveTicket).toHaveBeenCalledWith("PROJ-42", "AI Review");
   });
 
-  it("posts questions and moves to backlog on exit 2", async () => {
-    mockJira.fetchTicket.mockResolvedValue({
-      externalId: "PROJ-42",
-      identifier: "PROJ-42",
-      title: "Add dark mode",
-      description: "Implement dark mode",
-      acceptanceCriteria: null,
-      comments: [],
-      labels: [],
+  it("sends notification after PR creation", async () => {
+    mockJira.fetchTicket.mockResolvedValue({ ...defaultTicket });
+    mockRunSandbox.mockResolvedValue({
+      exitCode: 0,
+      status: "complete",
+      summary: "Implemented dark mode",
     });
+
+    const { createWorker } = await import("./worker.js");
+    const worker = createWorker();
+    const handler = (worker as unknown as { handler: (job: Job<TicketJobData>) => Promise<void> }).handler;
+
+    await handler(
+      makeJob({
+        type: "implementation",
+        ticketId: "PROJ-42",
+        source: "jira",
+        triggeredBy: "Mia",
+      }),
+    );
+
+    expect(mockMessaging.notify).toHaveBeenCalledWith(
+      "Mia",
+      expect.stringContaining("PR ready for review"),
+    );
+  });
+
+  it("posts questions, moves to backlog, and notifies on clarification", async () => {
+    mockJira.fetchTicket.mockResolvedValue({ ...defaultTicket });
     mockRunSandbox.mockResolvedValue({
       exitCode: 2,
       status: "clarification_needed",
@@ -172,18 +201,14 @@ describe("worker handler", () => {
       expect.stringContaining("What color scheme?"),
     );
     expect(mockJira.moveTicket).toHaveBeenCalledWith("PROJ-42", "Backlog");
+    expect(mockMessaging.notify).toHaveBeenCalledWith(
+      "Mia",
+      expect.stringContaining("needs clarification"),
+    );
   });
 
-  it("throws on exit 1 so BullMQ retries", async () => {
-    mockJira.fetchTicket.mockResolvedValue({
-      externalId: "PROJ-42",
-      identifier: "PROJ-42",
-      title: "Add dark mode",
-      description: "Implement dark mode",
-      acceptanceCriteria: null,
-      comments: [],
-      labels: [],
-    });
+  it("throws on failure so BullMQ retries", async () => {
+    mockJira.fetchTicket.mockResolvedValue({ ...defaultTicket });
     mockRunSandbox.mockResolvedValue({
       exitCode: 1,
       status: "failed",
@@ -208,33 +233,51 @@ describe("worker handler", () => {
     expect(mockGitHub.createPR).not.toHaveBeenCalled();
   });
 
-  it("fails immediately when .blazebot/implement.md is missing", async () => {
+  it("skips job when ticket is no longer in AI column (stale job protection)", async () => {
     mockJira.fetchTicket.mockResolvedValue({
-      externalId: "PROJ-42",
-      identifier: "PROJ-42",
-      title: "T",
-      description: "D",
-      acceptanceCriteria: null,
-      comments: [],
-      labels: [],
+      ...defaultTicket,
+      trackerStatus: "Done",
     });
-    mockGitHub.getFileContent.mockResolvedValue(null);
 
     const { createWorker } = await import("./worker.js");
     const worker = createWorker();
     const handler = (worker as unknown as { handler: (job: Job<TicketJobData>) => Promise<void> }).handler;
 
-    await expect(
-      handler(
-        makeJob({
-          type: "implementation",
-          ticketId: "PROJ-42",
-          source: "jira",
-          triggeredBy: "Mia",
-        }),
-      ),
-    ).rejects.toThrow(".blazebot/implement.md");
+    await handler(
+      makeJob({
+        type: "implementation",
+        ticketId: "PROJ-42",
+        source: "jira",
+        triggeredBy: "Mia",
+      }),
+    );
 
     expect(mockRunSandbox).not.toHaveBeenCalled();
+    expect(mockGitHub.createBranch).not.toHaveBeenCalled();
+    expect(mockGitHub.createPR).not.toHaveBeenCalled();
+  });
+
+  it("proceeds when ticket tracker status matches AI column", async () => {
+    mockJira.fetchTicket.mockResolvedValue({ ...defaultTicket, trackerStatus: "AI" });
+    mockRunSandbox.mockResolvedValue({
+      exitCode: 0,
+      status: "complete",
+      summary: "Done",
+    });
+
+    const { createWorker } = await import("./worker.js");
+    const worker = createWorker();
+    const handler = (worker as unknown as { handler: (job: Job<TicketJobData>) => Promise<void> }).handler;
+
+    await handler(
+      makeJob({
+        type: "implementation",
+        ticketId: "PROJ-42",
+        source: "jira",
+        triggeredBy: "Mia",
+      }),
+    );
+
+    expect(mockRunSandbox).toHaveBeenCalled();
   });
 });

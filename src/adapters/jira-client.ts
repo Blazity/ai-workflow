@@ -31,7 +31,7 @@ export class JiraClient implements TicketAdapter {
 
   async fetchTicket(id: string): Promise<Ticket> {
     const res = await this.request(
-      `/rest/api/3/issue/${id}?fields=summary,description,comment,labels`,
+      `/rest/api/3/issue/${id}?fields=summary,description,comment,labels,status`,
     );
     const data = await res.json();
     return {
@@ -52,6 +52,7 @@ export class JiraClient implements TicketAdapter {
         }),
       ),
       labels: data.fields.labels ?? [],
+      trackerStatus: data.fields.status?.name ?? "",
     };
   }
 

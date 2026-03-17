@@ -7,16 +7,8 @@ case "$1" in
     exit 1
     ;;
   push)
-    for arg in "$@"; do
-      if [ "$arg" = "$BLAZEBOT_BRANCH" ] || [ "$arg" = "origin" ] || [ "$arg" = "push" ]; then
-        continue
-      fi
-      if echo "$arg" | grep -q ":" && ! echo "$arg" | grep -q "$BLAZEBOT_BRANCH"; then
-        echo "ERROR: You can only push to $BLAZEBOT_BRANCH." >&2
-        exit 1
-      fi
-    done
-    $REAL_GIT "$@"
+    echo "ERROR: git push is not allowed inside the sandbox. The orchestrator pushes after the run completes." >&2
+    exit 1
     ;;
   *)
     $REAL_GIT "$@"

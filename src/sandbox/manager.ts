@@ -21,9 +21,32 @@ export type SandboxResult = {
   summary?: string;
   questions?: string[];
   error?: string;
+  containerId?: string;
 };
 
+interface AgentOutput {
+  result: "implemented" | "clarification_needed" | "failed";
+  summary?: string;
+  questions?: string[];
+  error?: string;
+}
+
 const docker = new Docker();
+
+export async function teardownContainer(containerId: string): Promise<void> {
+  try {
+    const container = docker.getContainer(containerId);
+    await container.kill();
+  } catch {
+    /* may already be stopped */
+  }
+  try {
+    const container = docker.getContainer(containerId);
+    await container.remove({ force: true });
+  } catch {
+    /* best effort */
+  }
+}
 
 export async function runSandbox(
   options: SandboxOptions,
@@ -75,6 +98,7 @@ export async function runSandbox(
         exitCode: -1,
         status: "failed",
         error: "Sandbox timeout exceeded",
+        containerId: container?.id,
       };
     }
 
@@ -84,6 +108,7 @@ export async function runSandbox(
       exitCode: -1,
       status: "failed",
       error: err instanceof Error ? err.message : "Unknown error",
+      containerId: container?.id,
     };
   } finally {
     if (container) {
@@ -101,51 +126,50 @@ async function readResult(
   container: Docker.Container,
   exitCode: number,
 ): Promise<SandboxResult> {
-  let output: { summary?: string; questions?: string[]; error?: string } = {};
+  const containerId = container.id;
+  let output: AgentOutput | null = null;
 
   try {
-    const archive = await container.getArchive({
-      path: "/workspace/repo/.blazebot/output.json",
-    });
-    const content = await streamToString(archive);
-    output = JSON.parse(content);
+    const logs = await container.logs({ stdout: true, stderr: false });
+    const stdout = typeof logs === "string" ? logs : logs.toString("utf-8");
+    const jsonMatch = stdout.match(/\{[\s\S]*"result"\s*:[\s\S]*\}$/m);
+    if (jsonMatch) {
+      output = JSON.parse(jsonMatch[0]);
+    }
   } catch {
+    /* fall through to default handling */
+  }
+
+  if (!output) {
     return {
       exitCode,
       status: "failed",
-      error: "Failed to read .blazebot/output.json from container",
+      error: "Agent did not return valid structured JSON output",
+      containerId,
     };
   }
 
-  switch (exitCode) {
-    case 0:
-      return { exitCode, status: "complete", summary: output.summary ?? "" };
-    case 2:
+  switch (output.result) {
+    case "implemented":
+      return {
+        exitCode,
+        status: "complete",
+        summary: output.summary ?? "",
+        containerId,
+      };
+    case "clarification_needed":
       return {
         exitCode,
         status: "clarification_needed",
         questions: output.questions ?? [],
+        containerId,
       };
     default:
       return {
         exitCode,
         status: "failed",
-        error: output.error ?? `Agent exited with code ${exitCode}`,
+        error: output.error ?? `Agent returned result: ${output.result}`,
+        containerId,
       };
   }
-}
-
-async function streamToString(
-  stream: NodeJS.ReadableStream,
-): Promise<string> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of stream) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-  }
-  const buffer = Buffer.concat(chunks);
-  const content = buffer.subarray(512);
-  const nullIndex = content.indexOf(0);
-  return content
-    .subarray(0, nullIndex > 0 ? nullIndex : content.length)
-    .toString("utf-8");
 }

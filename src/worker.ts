@@ -9,12 +9,17 @@ import { db } from "./db.js";
 import { tickets, runAttempts } from "./schema.js";
 import { JiraClient } from "./adapters/jira-client.js";
 import { GitHubClient } from "./adapters/github-client.js";
+import { ConsoleMessagingAdapter } from "./adapters/console-messaging.js";
 import { runSandbox } from "./sandbox/manager.js";
 import { assembleImplementationContext } from "./context.js";
 import type { TicketJobData } from "./queue.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PROMPTS_DIR = resolve(__dirname, "..", "prompts");
+
+function normalize(value: string): string {
+  return value.trim().toLowerCase();
+}
 
 function createAdapters() {
   const jira = new JiraClient(
@@ -23,7 +28,8 @@ function createAdapters() {
     env.JIRA_API_TOKEN!,
   );
   const github = new GitHubClient(env.GITHUB_TOKEN!);
-  return { jira, github };
+  const messaging = new ConsoleMessagingAdapter();
+  return { jira, github, messaging };
 }
 
 export function createWorker(): Worker<TicketJobData> {
@@ -51,13 +57,21 @@ export function createWorker(): Worker<TicketJobData> {
 }
 
 async function handleImplementation(data: Extract<TicketJobData, { type: "implementation" }>) {
-  const { jira, github } = createAdapters();
+  const { jira, github, messaging } = createAdapters();
   const owner = env.GITHUB_REPO_OWNER!;
   const repo = env.GITHUB_REPO_NAME!;
   const baseBranch = env.GITHUB_BASE_BRANCH;
   const branchName = `blazebot/${data.ticketId}`;
 
   const ticket = await jira.fetchTicket(data.ticketId);
+
+  const colAi = normalize(env.COLUMN_AI);
+  if (normalize(ticket.trackerStatus) !== colAi) {
+    console.log(
+      `Stale job: ticket ${data.ticketId} is no longer in AI column (current: ${ticket.trackerStatus}), skipping`,
+    );
+    return;
+  }
 
   const promptPath = resolve(PROMPTS_DIR, "implement.md");
   const promptContent = await readFile(promptPath, "utf-8");
@@ -92,6 +106,7 @@ async function handleImplementation(data: Extract<TicketJobData, { type: "implem
     timeoutMs: env.JOB_TIMEOUT_MS,
     memoryLimitMb: env.SANDBOX_MEMORY_MB,
   });
+
   if (result.status === "complete") {
     const pr = await github.createPR(
       owner, repo,
@@ -114,6 +129,10 @@ async function handleImplementation(data: Extract<TicketJobData, { type: "implem
       .where(eq(runAttempts.id, run!.id));
 
     await jira.moveTicket(data.ticketId, env.COLUMN_AI_REVIEW);
+    await messaging.notify(
+      data.triggeredBy,
+      `Task ${ticket.identifier} PR ready for review: ${pr.url}`,
+    );
     return;
   }
 
@@ -134,6 +153,10 @@ async function handleImplementation(data: Extract<TicketJobData, { type: "implem
       .where(eq(runAttempts.id, run!.id));
 
     await jira.moveTicket(data.ticketId, env.COLUMN_BACKLOG);
+    await messaging.notify(
+      data.triggeredBy,
+      `Task ${ticket.identifier} needs clarification`,
+    );
     return;
   }
 
