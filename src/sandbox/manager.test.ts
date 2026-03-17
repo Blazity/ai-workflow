@@ -62,22 +62,26 @@ describe("runSandbox", () => {
   const makeAgentOutput = (result: string, extra: Record<string, unknown> = {}) =>
     JSON.stringify({ result, ...extra });
 
+  function mockLogs(stdout: string, stderr = "") {
+    mockContainer.logs.mockImplementation((opts: { stdout?: boolean; stderr?: boolean }) => {
+      if (opts.stdout) return Promise.resolve(stdout);
+      if (opts.stderr) return Promise.resolve(stderr);
+      return Promise.resolve("");
+    });
+  }
+
   beforeEach(async () => {
     vi.clearAllMocks();
     await import("dockerode");
     createContainerSpy?.mockResolvedValue(mockContainer);
     mockContainer.wait.mockResolvedValue({ StatusCode: 0 });
-    mockContainer.logs.mockResolvedValue(
-      makeAgentOutput("implemented", { summary: "" }),
-    );
+    mockLogs(makeAgentOutput("implemented", { summary: "" }));
   });
 
   it("creates container with correct env and memory limit", async () => {
     const { runSandbox } = await import("./manager.js");
 
-    mockContainer.logs.mockResolvedValue(
-      makeAgentOutput("implemented", { summary: "Done" }),
-    );
+    mockLogs(makeAgentOutput("implemented", { summary: "Done" }));
 
     await runSandbox(defaultOptions);
 
@@ -101,9 +105,7 @@ describe("runSandbox", () => {
   it("returns complete when agent output has result 'implemented'", async () => {
     const { runSandbox } = await import("./manager.js");
 
-    mockContainer.logs.mockResolvedValue(
-      makeAgentOutput("implemented", { summary: "Implemented dark mode" }),
-    );
+    mockLogs(makeAgentOutput("implemented", { summary: "Implemented dark mode" }));
 
     const result = await runSandbox(defaultOptions);
 
@@ -118,11 +120,7 @@ describe("runSandbox", () => {
   it("returns clarification_needed when agent output has result 'clarification_needed'", async () => {
     const { runSandbox } = await import("./manager.js");
 
-    mockContainer.logs.mockResolvedValue(
-      makeAgentOutput("clarification_needed", {
-        questions: ["What color scheme?"],
-      }),
-    );
+    mockLogs(makeAgentOutput("clarification_needed", { questions: ["What color scheme?"] }));
 
     const result = await runSandbox(defaultOptions);
 
@@ -138,9 +136,7 @@ describe("runSandbox", () => {
     const { runSandbox } = await import("./manager.js");
 
     mockContainer.wait.mockResolvedValue({ StatusCode: 1 });
-    mockContainer.logs.mockResolvedValue(
-      makeAgentOutput("failed", { error: "Tests failed" }),
-    );
+    mockLogs(makeAgentOutput("failed", { error: "Tests failed" }));
 
     const result = await runSandbox(defaultOptions);
 
@@ -156,16 +152,28 @@ describe("runSandbox", () => {
     const { runSandbox } = await import("./manager.js");
 
     mockContainer.wait.mockResolvedValue({ StatusCode: 1 });
-    mockContainer.logs.mockResolvedValue("some random output without JSON");
+    mockLogs("some random output without JSON", "fatal: repository not found");
 
     const result = await runSandbox(defaultOptions);
 
     expect(result).toEqual(
       expect.objectContaining({
         status: "failed",
-        error: expect.stringContaining("structured JSON"),
+        error: expect.stringContaining("repository not found"),
       }),
     );
+  });
+
+  it("includes stderr in error message when agent fails without JSON output", async () => {
+    const { runSandbox } = await import("./manager.js");
+
+    mockContainer.wait.mockResolvedValue({ StatusCode: 1 });
+    mockLogs("", "bash: claude: command not found");
+
+    const result = await runSandbox(defaultOptions);
+
+    expect(result.status).toBe("failed");
+    expect(result.error).toContain("claude: command not found");
   });
 
   it("returns failed on timeout and kills container", async () => {
@@ -188,9 +196,7 @@ describe("runSandbox", () => {
   it("removes container after execution", async () => {
     const { runSandbox } = await import("./manager.js");
 
-    mockContainer.logs.mockResolvedValue(
-      makeAgentOutput("implemented", { summary: "Done" }),
-    );
+    mockLogs(makeAgentOutput("implemented", { summary: "Done" }));
 
     await runSandbox(defaultOptions);
 
@@ -213,9 +219,7 @@ describe("runSandbox", () => {
   it("includes containerId in result", async () => {
     const { runSandbox } = await import("./manager.js");
 
-    mockContainer.logs.mockResolvedValue(
-      makeAgentOutput("implemented", { summary: "Done" }),
-    );
+    mockLogs(makeAgentOutput("implemented", { summary: "Done" }));
 
     const result = await runSandbox(defaultOptions);
 

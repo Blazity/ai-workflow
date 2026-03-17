@@ -130,6 +130,42 @@ export async function runSandbox(
   }
 }
 
+async function readContainerLogs(
+  container: Docker.Container,
+  stream: "stdout" | "stderr",
+): Promise<string> {
+  try {
+    const logs = await container.logs({
+      stdout: stream === "stdout",
+      stderr: stream === "stderr",
+    });
+    const raw = typeof logs === "string" ? logs : logs.toString("utf-8");
+    return stripDockerHeaders(raw);
+  } catch {
+    return "";
+  }
+}
+
+function stripDockerHeaders(raw: string): string {
+  // Docker multiplexed stream has 8-byte headers per frame.
+  // If the first byte is 0x01 (stdout) or 0x02 (stderr), strip headers.
+  const buf = Buffer.from(raw, "binary");
+  const chunks: string[] = [];
+  let offset = 0;
+  while (offset + 8 <= buf.length) {
+    const streamType = buf[offset];
+    if (streamType !== 0 && streamType !== 1 && streamType !== 2) {
+      // Not a multiplexed stream — return as-is
+      return raw;
+    }
+    const len = buf.readUInt32BE(offset + 4);
+    if (offset + 8 + len > buf.length) break;
+    chunks.push(buf.subarray(offset + 8, offset + 8 + len).toString("utf-8"));
+    offset += 8 + len;
+  }
+  return chunks.length > 0 ? chunks.join("") : raw;
+}
+
 async function readResult(
   container: Docker.Container,
   exitCode: number,
@@ -137,9 +173,10 @@ async function readResult(
   const containerId = container.id;
   let output: AgentOutput | null = null;
 
+  const stdout = await readContainerLogs(container, "stdout");
+  const stderr = await readContainerLogs(container, "stderr");
+
   try {
-    const logs = await container.logs({ stdout: true, stderr: false });
-    const stdout = typeof logs === "string" ? logs : logs.toString("utf-8");
     const jsonMatch = stdout.match(/\{[\s\S]*"result"\s*:[\s\S]*\}$/m);
     if (jsonMatch) {
       output = JSON.parse(jsonMatch[0]);
@@ -149,10 +186,12 @@ async function readResult(
   }
 
   if (!output) {
+    const diagnostic = stderr.trim() || stdout.trim() || "(no output captured)";
+    logger.error({ containerId, exitCode, stderr: stderr.slice(-2000) }, "container_no_structured_output");
     return {
       exitCode,
       status: "failed",
-      error: "Agent did not return valid structured JSON output",
+      error: `Agent did not return valid structured JSON output. Container stderr: ${diagnostic.slice(-500)}`,
       containerId,
     };
   }
