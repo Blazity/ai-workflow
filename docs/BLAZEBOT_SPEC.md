@@ -400,6 +400,15 @@ getPRComments(repo, prId) → liked comments + human comments
 getPRConflictStatus(repo, prId) → boolean
 ```
 
+**Empty repository handling:** `createBranch` must handle the case where the target repository has
+no commits. GitHub's Git API returns a 409 ("Git Repository is empty") when attempting to read refs
+from an empty repo. When this occurs, the adapter seeds the repository with an initial commit
+(README.md) using the Contents API (`repos.createOrUpdateFileContents`), then uses the resulting
+commit SHA as the base for branch creation. Low-level Git endpoints (`git.createTree`,
+`git.createCommit`, `git.createRef`) also return 409 on empty repos — only the Contents API can
+bootstrap them. If the seed commit fails, the error is wrapped with repository context and
+propagated.
+
 ### 11.3 Messaging Adapter
 
 ```
@@ -546,6 +555,7 @@ Structured JSON logs to stdout. Deployment decides where they go (file, log aggr
 |---------|----------|
 | Webhook invalid | Log and discard, return 400 |
 | Tracker API down during context fetch | Retry via BullMQ backoff |
+| Empty repository (no commits) | VCS adapter seeds repo with initial commit, then creates branch |
 | Container won't start | Retry via BullMQ backoff |
 | Agent timeout/crash | Retry via BullMQ backoff |
 | Agent clarification (exit 2) | Not a failure — normal flow |
@@ -737,6 +747,9 @@ process_fixing_feedback_job(ticketId):
 - Webhook parsing returns normalized events.
 - Invalid webhooks return 400, don't enqueue work.
 - Adapter failures trigger retries (except notifications — best effort).
+- VCS `createBranch` on empty repo (409) → seeds repo with initial commit, then creates branch.
+- VCS `createBranch` on empty repo with seed failure → wraps error with repository context.
+- VCS `createBranch` non-409 errors from `getRef` → propagated unchanged.
 
 ### 17.5 Context Assembly
 
