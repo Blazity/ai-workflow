@@ -188,8 +188,6 @@ async function handleImplementation(data: Extract<TicketJobData, { type: "implem
       .where(eq(runAttempts.id, run!.id));
   }
 
-  // Orchestrator pushes the branch on success/clarification (spec 15.2),
-  // then always tears down the container (spec 9.3).
   try {
     if (result.containerId && (result.status === "complete" || result.status === "clarification_needed")) {
       await pushBranchFromContainer(result.containerId, branchName);

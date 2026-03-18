@@ -141,17 +141,15 @@ describe("runMaintenancePoll", () => {
       mockDbSelectWhere.mockImplementation(() => {
         selectCallCount++;
         if (selectCallCount === 1) {
-          // missed webhook: ticket exists and is implementing
-          return Promise.resolve([{
-            id: "ticket-uuid",
-            externalId: "PROJ-30",
-            workflowState: "implementing",
-            assignee: "Mia",
-            updatedAt: new Date(),
-          }]);
+          return Promise.resolve([]);
         }
-        // stuck job check: no stuck tickets
-        return Promise.resolve([]);
+        return Promise.resolve([{
+          id: "ticket-uuid",
+          externalId: "PROJ-30",
+          workflowState: "implementing",
+          assignee: "Mia",
+          updatedAt: new Date(),
+        }]);
       });
 
       const { runMaintenancePoll } = await import("./poller.js");

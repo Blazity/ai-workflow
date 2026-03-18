@@ -27,17 +27,20 @@ function createAdapters() {
 export async function runMaintenancePoll(): Promise<void> {
   logger.info("poll_started");
 
-  await checkMissedWebhooks();
-  await checkStuckJobs();
+  const adapters = createAdapters();
+  await Promise.allSettled([
+    checkMissedWebhooks(adapters),
+    checkStuckJobs(adapters),
+  ]);
 
   logger.info("poll_completed");
 }
 
-async function checkMissedWebhooks(): Promise<void> {
+async function checkMissedWebhooks(adapters: ReturnType<typeof createAdapters>): Promise<void> {
   const projectKey = env.JIRA_PROJECT_KEY;
   if (!projectKey) return;
 
-  const { jira } = createAdapters();
+  const { jira } = adapters;
 
   let ticketKeys: string[];
   try {
@@ -51,18 +54,19 @@ async function checkMissedWebhooks(): Promise<void> {
 
   if (ticketKeys.length === 0) return;
 
-  for (const ticketId of ticketKeys) {
-    const existing = await db
-      .select()
-      .from(tickets)
-      .where(
-        and(
-          eq(tickets.externalId, ticketId),
-          eq(tickets.source, "jira"),
-        ),
-      );
+  const existingTickets = await db
+    .select()
+    .from(tickets)
+    .where(
+      and(
+        inArray(tickets.externalId, ticketKeys),
+        eq(tickets.source, "jira"),
+      ),
+    );
+  const existingMap = new Map(existingTickets.map(t => [t.externalId, t]));
 
-    const ticket = existing[0];
+  for (const ticketId of ticketKeys) {
+    const ticket = existingMap.get(ticketId);
 
     if (!ticket) {
       const [created] = await db
@@ -110,11 +114,11 @@ async function checkMissedWebhooks(): Promise<void> {
       logger.info({ ticketId }, "poll_ticket_discovered");
     }
 
-    // Already queued/implementing/fixing_feedback — skip
   }
 }
 
-async function checkStuckJobs(): Promise<void> {
+async function checkStuckJobs(adapters: ReturnType<typeof createAdapters>): Promise<void> {
+  const { messaging } = adapters;
   const thresholdMs = env.STUCK_JOB_THRESHOLD_MS ?? env.JOB_TIMEOUT_MS * 2;
   const cutoff = new Date(Date.now() - thresholdMs);
 
@@ -130,8 +134,6 @@ async function checkStuckJobs(): Promise<void> {
 
   if (stuckTickets.length === 0) return;
 
-  const { messaging } = createAdapters();
-
   for (const ticket of stuckTickets) {
     logger.info({ ticketId: ticket.externalId, workflowState: ticket.workflowState }, "stuck_job_detected");
 
@@ -146,9 +148,7 @@ async function checkStuckJobs(): Promise<void> {
         try {
           await teardownContainer(activeRun.containerId);
           logger.info({ ticketId: ticket.externalId, containerId: activeRun.containerId }, "stuck_container_teardown");
-        } catch {
-          /* best effort */
-        }
+        } catch {}
       }
 
       if (activeRun) {
@@ -159,7 +159,6 @@ async function checkStuckJobs(): Promise<void> {
       }
     }
 
-    // Count previous attempts to check against retry limit
     const attempts = await db
       .select()
       .from(runAttempts)
