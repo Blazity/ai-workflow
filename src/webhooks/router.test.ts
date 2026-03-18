@@ -49,6 +49,7 @@ describe("routeTicketTransition", () => {
     vi.stubEnv("DATABASE_URL", "postgresql://user:pass@localhost:5432/db");
     vi.stubEnv("REDIS_URL", "redis://localhost:6379");
     vi.stubEnv("JIRA_WEBHOOK_SECRET", "test-secret");
+    vi.stubEnv("JIRA_PROJECT_KEY", "PROJ");
     vi.stubEnv("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat01-test");
     vi.clearAllMocks();
   });

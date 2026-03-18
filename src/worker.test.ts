@@ -154,6 +154,7 @@ describe("worker handler", () => {
     vi.stubEnv("DATABASE_URL", "postgresql://user:pass@localhost:5432/db");
     vi.stubEnv("REDIS_URL", "redis://localhost:6379");
     vi.stubEnv("JIRA_WEBHOOK_SECRET", "test-secret");
+    vi.stubEnv("JIRA_PROJECT_KEY", "PROJ");
     vi.stubEnv("JIRA_BASE_URL", "https://team.atlassian.net");
     vi.stubEnv("JIRA_USER_EMAIL", "bot@team.com");
     vi.stubEnv("JIRA_API_TOKEN", "jira-token");
