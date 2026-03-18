@@ -110,10 +110,8 @@ const mockMessaging = {
   notify: vi.fn(),
   ping: vi.fn(),
 };
-vi.mock("./adapters/console-messaging.js", () => ({
-  ConsoleMessagingAdapter: vi.fn().mockImplementation(function (this: unknown) {
-    return mockMessaging;
-  }),
+vi.mock("./adapters/messaging-factory.js", () => ({
+  createMessagingAdapter: vi.fn().mockReturnValue(mockMessaging),
 }));
 
 const defaultTicket = {
@@ -387,6 +385,33 @@ describe("worker handler", () => {
     );
 
     expect(mockRunSandbox).toHaveBeenCalled();
+  });
+
+  it("uses createMessagingAdapter factory for notifications", async () => {
+    const { createMessagingAdapter } = await import("./adapters/messaging-factory.js");
+
+    mockJira.fetchTicket.mockResolvedValue({ ...defaultTicket });
+    mockRunSandbox.mockResolvedValue({
+      exitCode: 0,
+      status: "complete",
+      summary: "Done",
+    });
+
+    const { createWorker } = await import("./worker.js");
+    const worker = createWorker();
+    const handler = (worker as unknown as { handler: (job: Job<TicketJobData>) => Promise<void> }).handler;
+
+    await handler(
+      makeJob({
+        type: "implementation",
+        ticketId: "PROJ-42",
+        source: "jira",
+        triggeredBy: "Mia",
+      }),
+    );
+
+    expect(createMessagingAdapter).toHaveBeenCalled();
+    expect(mockMessaging.notify).toHaveBeenCalled();
   });
 
   describe("review_fix handler", () => {

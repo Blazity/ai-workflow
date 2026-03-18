@@ -21,6 +21,8 @@ export const env = createEnv({
     COLUMN_AI: z.string().default("AI"),
     ISSUE_TRACKER_KIND: z.enum(["jira", "linear"]).default("jira"),
     MESSAGING_KIND: z.enum(["slack"]).default("slack"),
+    SLACK_BOT_TOKEN: z.string().min(1).optional(),
+    SLACK_DEFAULT_CHANNEL: z.string().min(1).optional(),
     VCS_KIND: z.enum(["github"]).default("github"),
     JOB_TIMEOUT_MS: z
       .string()

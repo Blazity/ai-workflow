@@ -9,7 +9,7 @@ import { db } from "./db.js";
 import { tickets, runAttempts } from "./schema.js";
 import { JiraClient } from "./adapters/jira-client.js";
 import { GitHubClient } from "./adapters/github-client.js";
-import { ConsoleMessagingAdapter } from "./adapters/console-messaging.js";
+import { createMessagingAdapter } from "./adapters/messaging-factory.js";
 import { runSandbox, pushBranchFromContainer, teardownContainer } from "./sandbox/manager.js";
 import { assembleImplementationContext, assembleFixingFeedbackContext } from "./context.js";
 import { createLogger, createTicketLogger, createRunLogger } from "./logger.js";
@@ -31,7 +31,11 @@ function createAdapters() {
     env.JIRA_API_TOKEN!,
   );
   const github = new GitHubClient(env.GITHUB_TOKEN!);
-  const messaging = new ConsoleMessagingAdapter();
+  const messaging = createMessagingAdapter(
+    env.MESSAGING_KIND,
+    env.SLACK_BOT_TOKEN,
+    env.SLACK_DEFAULT_CHANNEL,
+  );
   return { jira, github, messaging };
 }
 

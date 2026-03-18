@@ -237,6 +237,40 @@ describe("env", () => {
     await expect(import("./env.js")).rejects.toThrow();
   });
 
+  it("allows optional SLACK_BOT_TOKEN", async () => {
+    vi.stubEnv("DATABASE_URL", "postgresql://user:pass@localhost:5432/db");
+    vi.stubEnv("REDIS_URL", "redis://localhost:6379");
+
+    const { env } = await import("./env.js");
+    expect(env.SLACK_BOT_TOKEN).toBeUndefined();
+  });
+
+  it("parses SLACK_BOT_TOKEN when set", async () => {
+    vi.stubEnv("DATABASE_URL", "postgresql://user:pass@localhost:5432/db");
+    vi.stubEnv("REDIS_URL", "redis://localhost:6379");
+    vi.stubEnv("SLACK_BOT_TOKEN", "xoxb-test-token");
+
+    const { env } = await import("./env.js");
+    expect(env.SLACK_BOT_TOKEN).toBe("xoxb-test-token");
+  });
+
+  it("allows optional SLACK_DEFAULT_CHANNEL", async () => {
+    vi.stubEnv("DATABASE_URL", "postgresql://user:pass@localhost:5432/db");
+    vi.stubEnv("REDIS_URL", "redis://localhost:6379");
+
+    const { env } = await import("./env.js");
+    expect(env.SLACK_DEFAULT_CHANNEL).toBeUndefined();
+  });
+
+  it("parses SLACK_DEFAULT_CHANNEL when set", async () => {
+    vi.stubEnv("DATABASE_URL", "postgresql://user:pass@localhost:5432/db");
+    vi.stubEnv("REDIS_URL", "redis://localhost:6379");
+    vi.stubEnv("SLACK_DEFAULT_CHANNEL", "#blazebot-notifications");
+
+    const { env } = await import("./env.js");
+    expect(env.SLACK_DEFAULT_CHANNEL).toBe("#blazebot-notifications");
+  });
+
   it("uses default CLAUDE_MODEL of 'claude-sonnet-4-20250514'", async () => {
     vi.stubEnv("DATABASE_URL", "postgresql://user:pass@localhost:5432/db");
     vi.stubEnv("REDIS_URL", "redis://localhost:6379");

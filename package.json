@@ -17,6 +17,7 @@
   "packageManager": "pnpm@10.22.0",
   "dependencies": {
     "@octokit/rest": "^22.0.1",
+    "@slack/web-api": "^7.15.0",
     "@t3-oss/env-core": "^0.13.10",
     "bullmq": "^5.71.0",
     "dockerode": "^4.0.9",
