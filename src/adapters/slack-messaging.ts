@@ -22,7 +22,10 @@ export class SlackMessagingAdapter implements MessagingAdapter {
       logger.info({ channel: this.defaultChannel }, "slack_notification_sent");
     } catch (err) {
       logger.warn(
-        { error: err instanceof Error ? err.message : "Unknown error", channel: this.defaultChannel },
+        {
+          error: err instanceof Error ? err.message : "Unknown error",
+          channel: this.defaultChannel,
+        },
         "slack_notification_failed",
       );
     }
@@ -37,7 +40,10 @@ export class SlackMessagingAdapter implements MessagingAdapter {
       logger.info({ channel: this.defaultChannel }, "slack_ping_sent");
     } catch (err) {
       logger.warn(
-        { error: err instanceof Error ? err.message : "Unknown error", channel: this.defaultChannel },
+        {
+          error: err instanceof Error ? err.message : "Unknown error",
+          channel: this.defaultChannel,
+        },
         "slack_ping_failed",
       );
     }

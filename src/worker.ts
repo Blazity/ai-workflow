@@ -10,8 +10,15 @@ import { tickets, runAttempts } from "./schema.js";
 import { JiraClient } from "./adapters/jira-client.js";
 import { GitHubClient } from "./adapters/github-client.js";
 import { createMessagingAdapter } from "./adapters/messaging-factory.js";
-import { runSandbox, pushBranchFromContainer, teardownContainer } from "./sandbox/manager.js";
-import { assembleImplementationContext, assembleFixingFeedbackContext } from "./context.js";
+import {
+  runSandbox,
+  pushBranchFromContainer,
+  teardownContainer,
+} from "./sandbox/manager.js";
+import {
+  assembleImplementationContext,
+  assembleFixingFeedbackContext,
+} from "./context.js";
 import { createLogger, createTicketLogger, createRunLogger } from "./logger.js";
 import type { TicketJobData } from "./queue.js";
 
@@ -46,7 +53,9 @@ async function readPromptFile(filename: string): Promise<string> {
   } catch (err) {
     const error = err as NodeJS.ErrnoException;
     if (error.code === "ENOENT") {
-      throw new Error(`Prompt file not found at ${promptPath}. Ensure the prompts/ directory contains ${filename}.`);
+      throw new Error(
+        `Prompt file not found at ${promptPath}. Ensure the prompts/ directory contains ${filename}.`,
+      );
     }
     throw err;
   }
@@ -81,20 +90,35 @@ export function createWorker(): Worker<TicketJobData> {
 
     if (!isFinalAttempt) {
       logger.info(
-        { ticketId: job.data.ticketId, attempt: job.attemptsMade, maxAttempts, error: err.message },
+        {
+          ticketId: job.data.ticketId,
+          attempt: job.attemptsMade,
+          maxAttempts,
+          error: err.message,
+        },
         "job_retry_scheduled",
       );
       return;
     }
 
     logger.error(
-      { ticketId: job.data.ticketId, attempt: job.attemptsMade, maxAttempts, error: err.message },
+      {
+        ticketId: job.data.ticketId,
+        attempt: job.attemptsMade,
+        maxAttempts,
+        error: err.message,
+      },
       "job_retries_exhausted",
     );
 
     try {
-      await db.update(tickets)
-        .set({ workflowState: "failed", currentRunId: null, updatedAt: new Date() })
+      await db
+        .update(tickets)
+        .set({
+          workflowState: "failed",
+          currentRunId: null,
+          updatedAt: new Date(),
+        })
         .where(eq(tickets.externalId, job.data.ticketId));
 
       const { messaging } = createAdapters();
@@ -103,14 +127,19 @@ export function createWorker(): Worker<TicketJobData> {
         `Task ${job.data.ticketId} failed permanently after ${job.attemptsMade} attempts: ${err.message}`,
       );
     } catch (notifyErr) {
-      logger.error({ ticketId: job.data.ticketId, error: (notifyErr as Error).message }, "retries_exhausted_handler_error");
+      logger.error(
+        { ticketId: job.data.ticketId, error: (notifyErr as Error).message },
+        "retries_exhausted_handler_error",
+      );
     }
   });
 
   return worker;
 }
 
-async function handleImplementation(data: Extract<TicketJobData, { type: "implementation" }>) {
+async function handleImplementation(
+  data: Extract<TicketJobData, { type: "implementation" }>,
+) {
   const { jira, github, messaging } = createAdapters();
   const owner = env.GITHUB_REPO_OWNER!;
   const repo = env.GITHUB_REPO_NAME!;
@@ -132,7 +161,8 @@ async function handleImplementation(data: Extract<TicketJobData, { type: "implem
 
   await github.createBranch(owner, repo, branchName, baseBranch);
 
-  await db.update(tickets)
+  await db
+    .update(tickets)
     .set({ workflowState: "implementing", updatedAt: new Date() })
     .where(eq(tickets.externalId, data.ticketId));
 
@@ -142,7 +172,8 @@ async function handleImplementation(data: Extract<TicketJobData, { type: "implem
 
   const ticketLog = createTicketLogger(logger, ticketRow.id, data.ticketId);
 
-  const [run] = await db.insert(runAttempts)
+  const [run] = await db
+    .insert(runAttempts)
     .values({
       ticketId: ticketRow.id,
       type: "implementation",
@@ -151,14 +182,18 @@ async function handleImplementation(data: Extract<TicketJobData, { type: "implem
     })
     .returning();
 
-  await db.update(tickets)
+  await db
+    .update(tickets)
     .set({ currentRunId: run!.id, updatedAt: new Date() })
     .where(eq(tickets.externalId, data.ticketId));
 
   const runLog = createRunLogger(ticketLog, run!.id);
   runLog.info({ type: "implementation", branchName }, "job_started");
 
-  ticketLog.info({ from: "queued", to: "implementing" }, "ticket_state_transition");
+  ticketLog.info(
+    { from: "queued", to: "implementing" },
+    "ticket_state_transition",
+  );
 
   const requirementsMd = assembleImplementationContext(ticket, promptContent);
 
@@ -183,15 +218,17 @@ async function handleImplementation(data: Extract<TicketJobData, { type: "implem
   );
 
   if (result.containerId) {
-    await db.update(runAttempts)
+    await db
+      .update(runAttempts)
       .set({ containerId: result.containerId })
       .where(eq(runAttempts.id, run!.id));
   }
 
-  // Orchestrator pushes the branch on success/clarification (spec 15.2),
-  // then always tears down the container (spec 9.3).
   try {
-    if (result.containerId && (result.status === "complete" || result.status === "clarification_needed")) {
+    if (
+      result.containerId &&
+      (result.status === "complete" || result.status === "clarification_needed")
+    ) {
       await pushBranchFromContainer(result.containerId, branchName);
     }
   } finally {
@@ -204,25 +241,35 @@ async function handleImplementation(data: Extract<TicketJobData, { type: "implem
     let pr;
     try {
       pr = await github.createPR(
-        owner, repo,
+        owner,
+        repo,
         `[${data.ticketId}] ${ticket.title}`,
         result.summary ?? "",
-        branchName, baseBranch,
+        branchName,
+        baseBranch,
       );
     } catch (prErr: unknown) {
-      const ghErr = prErr as { status?: number; message?: string; response?: { data?: unknown } };
-      runLog.error({
-        status: ghErr.status,
-        message: ghErr.message,
-        responseData: ghErr.response?.data,
-        branchName,
-      }, "pr_creation_failed");
+      const ghErr = prErr as {
+        status?: number;
+        message?: string;
+        response?: { data?: unknown };
+      };
+      runLog.error(
+        {
+          status: ghErr.status,
+          message: ghErr.message,
+          responseData: ghErr.response?.data,
+          branchName,
+        },
+        "pr_creation_failed",
+      );
       throw prErr;
     }
 
     runLog.info({ prNumber: pr.number, prUrl: pr.url }, "pr_created");
 
-    await db.update(tickets)
+    await db
+      .update(tickets)
       .set({
         workflowState: "awaiting_review",
         prId: String(pr.number),
@@ -232,11 +279,15 @@ async function handleImplementation(data: Extract<TicketJobData, { type: "implem
       })
       .where(eq(tickets.externalId, data.ticketId));
 
-    await db.update(runAttempts)
+    await db
+      .update(runAttempts)
       .set({ status: "succeeded", finishedAt: new Date() })
       .where(eq(runAttempts.id, run!.id));
 
-    ticketLog.info({ from: "implementing", to: "awaiting_review" }, "ticket_state_transition");
+    ticketLog.info(
+      { from: "implementing", to: "awaiting_review" },
+      "ticket_state_transition",
+    );
 
     await jira.moveTicket(data.ticketId, env.COLUMN_AI_REVIEW);
     await messaging.notify(
@@ -252,7 +303,8 @@ async function handleImplementation(data: Extract<TicketJobData, { type: "implem
 
     runLog.info("clarification_requested");
 
-    await db.update(tickets)
+    await db
+      .update(tickets)
       .set({
         workflowState: "clarification_pending",
         branchName,
@@ -261,11 +313,15 @@ async function handleImplementation(data: Extract<TicketJobData, { type: "implem
       })
       .where(eq(tickets.externalId, data.ticketId));
 
-    await db.update(runAttempts)
+    await db
+      .update(runAttempts)
       .set({ status: "clarification_needed", finishedAt: new Date() })
       .where(eq(runAttempts.id, run!.id));
 
-    ticketLog.info({ from: "implementing", to: "clarification_pending" }, "ticket_state_transition");
+    ticketLog.info(
+      { from: "implementing", to: "clarification_pending" },
+      "ticket_state_transition",
+    );
 
     await jira.moveTicket(data.ticketId, env.COLUMN_BACKLOG);
     await messaging.notify(
@@ -277,22 +333,27 @@ async function handleImplementation(data: Extract<TicketJobData, { type: "implem
 
   runLog.error({ error: result.error }, "agent_failed");
 
-  await db.update(runAttempts)
+  await db
+    .update(runAttempts)
     .set({ status: "failed", error: result.error, finishedAt: new Date() })
     .where(eq(runAttempts.id, run!.id));
 
-  await db.update(tickets)
+  await db
+    .update(tickets)
     .set({ workflowState: "failed", currentRunId: null, updatedAt: new Date() })
     .where(eq(tickets.externalId, data.ticketId));
 
-  ticketLog.info({ from: "implementing", to: "failed" }, "ticket_state_transition");
-
-  throw new Error(
-    `Agent failed for ${data.ticketId}: ${result.error}`,
+  ticketLog.info(
+    { from: "implementing", to: "failed" },
+    "ticket_state_transition",
   );
+
+  throw new Error(`Agent failed for ${data.ticketId}: ${result.error}`);
 }
 
-async function handleReviewFix(data: Extract<TicketJobData, { type: "review_fix" }>) {
+async function handleReviewFix(
+  data: Extract<TicketJobData, { type: "review_fix" }>,
+) {
   const { jira, github, messaging } = createAdapters();
   const owner = env.GITHUB_REPO_OWNER!;
   const repo = env.GITHUB_REPO_NAME!;
@@ -313,20 +374,27 @@ async function handleReviewFix(data: Extract<TicketJobData, { type: "review_fix"
   )[0]!;
 
   if (!ticketRow.prId || !ticketRow.branchName) {
-    logger.error({ ticketId: data.ticketId }, "review_fix_missing_pr_or_branch");
-    throw new Error(`review_fix requires prId and branchName for ${data.ticketId}`);
+    logger.error(
+      { ticketId: data.ticketId },
+      "review_fix_missing_pr_or_branch",
+    );
+    throw new Error(
+      `review_fix requires prId and branchName for ${data.ticketId}`,
+    );
   }
 
   const prNumber = parseInt(ticketRow.prId, 10);
   const branchName = ticketRow.branchName;
 
-  await db.update(tickets)
+  await db
+    .update(tickets)
     .set({ workflowState: "fixing_feedback", updatedAt: new Date() })
     .where(eq(tickets.externalId, data.ticketId));
 
   const ticketLog = createTicketLogger(logger, ticketRow.id, data.ticketId);
 
-  const [run] = await db.insert(runAttempts)
+  const [run] = await db
+    .insert(runAttempts)
     .values({
       ticketId: ticketRow.id,
       type: "review_fix",
@@ -335,14 +403,18 @@ async function handleReviewFix(data: Extract<TicketJobData, { type: "review_fix"
     })
     .returning();
 
-  await db.update(tickets)
+  await db
+    .update(tickets)
     .set({ currentRunId: run!.id, updatedAt: new Date() })
     .where(eq(tickets.externalId, data.ticketId));
 
   const runLog = createRunLogger(ticketLog, run!.id);
   runLog.info({ type: "review_fix", branchName, prNumber }, "job_started");
 
-  ticketLog.info({ from: "awaiting_review", to: "fixing_feedback" }, "ticket_state_transition");
+  ticketLog.info(
+    { from: "awaiting_review", to: "fixing_feedback" },
+    "ticket_state_transition",
+  );
 
   const promptContent = await readPromptFile("review-fix.md");
 
@@ -352,7 +424,10 @@ async function handleReviewFix(data: Extract<TicketJobData, { type: "review_fix"
   ]);
 
   const requirementsMd = assembleFixingFeedbackContext(
-    ticket, prComments, hasConflicts, promptContent,
+    ticket,
+    prComments,
+    hasConflicts,
+    promptContent,
   );
 
   const startTime = Date.now();
@@ -376,7 +451,8 @@ async function handleReviewFix(data: Extract<TicketJobData, { type: "review_fix"
   );
 
   if (result.containerId) {
-    await db.update(runAttempts)
+    await db
+      .update(runAttempts)
       .set({ containerId: result.containerId })
       .where(eq(runAttempts.id, run!.id));
   }
@@ -394,7 +470,8 @@ async function handleReviewFix(data: Extract<TicketJobData, { type: "review_fix"
   if (result.status === "complete") {
     runLog.info({ prNumber }, "review_fix_complete");
 
-    await db.update(tickets)
+    await db
+      .update(tickets)
       .set({
         workflowState: "awaiting_review",
         currentRunId: null,
@@ -402,11 +479,15 @@ async function handleReviewFix(data: Extract<TicketJobData, { type: "review_fix"
       })
       .where(eq(tickets.externalId, data.ticketId));
 
-    await db.update(runAttempts)
+    await db
+      .update(runAttempts)
       .set({ status: "succeeded", finishedAt: new Date() })
       .where(eq(runAttempts.id, run!.id));
 
-    ticketLog.info({ from: "fixing_feedback", to: "awaiting_review" }, "ticket_state_transition");
+    ticketLog.info(
+      { from: "fixing_feedback", to: "awaiting_review" },
+      "ticket_state_transition",
+    );
 
     await jira.moveTicket(data.ticketId, env.COLUMN_AI_REVIEW);
     await messaging.notify(
@@ -418,17 +499,20 @@ async function handleReviewFix(data: Extract<TicketJobData, { type: "review_fix"
 
   runLog.error({ error: result.error }, "agent_failed");
 
-  await db.update(runAttempts)
+  await db
+    .update(runAttempts)
     .set({ status: "failed", error: result.error, finishedAt: new Date() })
     .where(eq(runAttempts.id, run!.id));
 
-  await db.update(tickets)
+  await db
+    .update(tickets)
     .set({ workflowState: "failed", currentRunId: null, updatedAt: new Date() })
     .where(eq(tickets.externalId, data.ticketId));
 
-  ticketLog.info({ from: "fixing_feedback", to: "failed" }, "ticket_state_transition");
-
-  throw new Error(
-    `Agent failed for ${data.ticketId}: ${result.error}`,
+  ticketLog.info(
+    { from: "fixing_feedback", to: "failed" },
+    "ticket_state_transition",
   );
+
+  throw new Error(`Agent failed for ${data.ticketId}: ${result.error}`);
 }

@@ -1,5 +1,10 @@
 import { parseJiraWebhook } from "../webhooks/jira.js";
-import type { NormalizedEvent, Ticket, TicketAdapter, TicketComment } from "./ticket.js";
+import type {
+  NormalizedEvent,
+  Ticket,
+  TicketAdapter,
+  TicketComment,
+} from "./ticket.js";
 
 export class JiraClient implements TicketAdapter {
   private readonly baseUrl: string;
@@ -57,14 +62,12 @@ export class JiraClient implements TicketAdapter {
   }
 
   async moveTicket(id: string, column: string): Promise<void> {
-    const res = await this.request(
-      `/rest/api/3/issue/${id}/transitions`,
-      { method: "GET" },
-    );
+    const res = await this.request(`/rest/api/3/issue/${id}/transitions`, {
+      method: "GET",
+    });
     const data = await res.json();
     const transition = data.transitions.find(
-      (t: { name: string }) =>
-        t.name.toLowerCase() === column.toLowerCase(),
+      (t: { name: string }) => t.name.toLowerCase() === column.toLowerCase(),
     );
     if (!transition) {
       throw new Error(`No transition found matching '${column}'`);
@@ -91,6 +94,19 @@ export class JiraClient implements TicketAdapter {
         },
       }),
     });
+  }
+
+  async searchTickets(jql: string): Promise<string[]> {
+    const res = await this.request("/rest/api/3/search/jql", {
+      method: "POST",
+      body: JSON.stringify({
+        jql,
+        fields: ["key"],
+        maxResults: 50,
+      }),
+    });
+    const data = await res.json();
+    return (data.issues ?? []).map((issue: { key: string }) => issue.key);
   }
 
   parseWebhook(req: unknown): NormalizedEvent | null {

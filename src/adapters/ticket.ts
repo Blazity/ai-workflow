@@ -3,6 +3,7 @@ export interface TicketAdapter {
   moveTicket(id: string, column: string): Promise<void>;
   postComment(id: string, comment: string): Promise<void>;
   parseWebhook(req: unknown): NormalizedEvent | null;
+  searchTickets?(query: string): Promise<string[]>;
 }
 
 export interface Ticket {

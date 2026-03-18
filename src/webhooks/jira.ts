@@ -5,7 +5,10 @@ import type { NormalizedEvent } from "./types.js";
 const changelogItemSchema = z.object({
   field: z.string(),
   fieldtype: z.string(),
-  fromString: z.string().nullable().transform((v) => v ?? ""),
+  fromString: z
+    .string()
+    .nullable()
+    .transform((v) => v ?? ""),
   toString: z.string(),
 });
 
@@ -34,18 +37,14 @@ export function verifyJiraWebhookSignature(
   return timingSafeEqual(Buffer.from(signature), Buffer.from(expected));
 }
 
-export function parseJiraWebhook(
-  body: unknown,
-): NormalizedEvent | null {
+export function parseJiraWebhook(body: unknown): NormalizedEvent | null {
   const parsed = jiraWebhookSchema.safeParse(body);
   if (!parsed.success) {
     return null;
   }
 
   const { user, issue, changelog } = parsed.data;
-  const statusChange = changelog.items.find(
-    (item) => item.field === "status",
-  );
+  const statusChange = changelog.items.find((item) => item.field === "status");
 
   if (!statusChange) {
     return null;

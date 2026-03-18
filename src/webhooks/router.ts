@@ -32,16 +32,18 @@ export async function routeTicketTransition(
 }
 
 function isAiRelatedColumn(col: string): boolean {
-  const aiColumns = [
-    normalize(env.COLUMN_AI),
-    normalize(env.COLUMN_AI_REVIEW),
-  ];
+  const aiColumns = [normalize(env.COLUMN_AI), normalize(env.COLUMN_AI_REVIEW)];
   return aiColumns.includes(col);
 }
 
 async function handleMovedToAi(event: NormalizedEvent): Promise<void> {
   logger.info(
-    { ticketId: event.ticketId, fromColumn: event.fromColumn, toColumn: event.toColumn, triggeredBy: event.triggeredBy },
+    {
+      ticketId: event.ticketId,
+      fromColumn: event.fromColumn,
+      toColumn: event.toColumn,
+      triggeredBy: event.triggeredBy,
+    },
     "webhook_received",
   );
 
@@ -49,10 +51,7 @@ async function handleMovedToAi(event: NormalizedEvent): Promise<void> {
     .select()
     .from(tickets)
     .where(
-      and(
-        eq(tickets.externalId, event.ticketId),
-        eq(tickets.source, "jira"),
-      ),
+      and(eq(tickets.externalId, event.ticketId), eq(tickets.source, "jira")),
     );
 
   const ticket = existing[0];
@@ -80,7 +79,10 @@ async function handleMovedToAi(event: NormalizedEvent): Promise<void> {
       },
       { jobId: `impl-${event.ticketId}-${created!.id}` },
     );
-    logger.info({ ticketId: event.ticketId, jobType: "implementation" }, "job_enqueued");
+    logger.info(
+      { ticketId: event.ticketId, jobType: "implementation" },
+      "job_enqueued",
+    );
     return;
   }
 
@@ -100,7 +102,10 @@ async function handleMovedToAi(event: NormalizedEvent): Promise<void> {
       },
       { jobId: `impl-${event.ticketId}-${ticket.id}` },
     );
-    logger.info({ ticketId: event.ticketId, jobType: "implementation" }, "job_enqueued");
+    logger.info(
+      { ticketId: event.ticketId, jobType: "implementation" },
+      "job_enqueued",
+    );
     return;
   }
 
@@ -120,12 +125,21 @@ async function handleMovedToAi(event: NormalizedEvent): Promise<void> {
       },
       { jobId: `fix-${event.ticketId}-${ticket.id}` },
     );
-    logger.info({ ticketId: event.ticketId, jobType: "review_fix" }, "job_enqueued");
+    logger.info(
+      { ticketId: event.ticketId, jobType: "review_fix" },
+      "job_enqueued",
+    );
     return;
   }
 
-  if (ticket.workflowState === "queued" || ticket.workflowState === "implementing") {
-    logger.info({ ticketId: event.ticketId, workflowState: ticket.workflowState }, "duplicate_webhook_ignored");
+  if (
+    ticket.workflowState === "queued" ||
+    ticket.workflowState === "implementing"
+  ) {
+    logger.info(
+      { ticketId: event.ticketId, workflowState: ticket.workflowState },
+      "duplicate_webhook_ignored",
+    );
     return;
   }
 
@@ -145,7 +159,10 @@ async function handleMovedToAi(event: NormalizedEvent): Promise<void> {
       },
       { jobId: `impl-${event.ticketId}-${ticket.id}-${Date.now()}` },
     );
-    logger.info({ ticketId: event.ticketId, jobType: "implementation" }, "job_enqueued");
+    logger.info(
+      { ticketId: event.ticketId, jobType: "implementation" },
+      "job_enqueued",
+    );
     return;
   }
 }
@@ -155,10 +172,7 @@ async function handleMovedOutOfAi(event: NormalizedEvent): Promise<void> {
     .select()
     .from(tickets)
     .where(
-      and(
-        eq(tickets.externalId, event.ticketId),
-        eq(tickets.source, "jira"),
-      ),
+      and(eq(tickets.externalId, event.ticketId), eq(tickets.source, "jira")),
     );
 
   const ticket = existing[0];
@@ -169,22 +183,33 @@ async function handleMovedOutOfAi(event: NormalizedEvent): Promise<void> {
   const colBacklog = normalize(env.COLUMN_BACKLOG);
 
   if (ticket.workflowState === "awaiting_review" && to === colAiReview) {
-    logger.info({ ticketId: event.ticketId, toColumn: event.toColumn }, "self_transition_ignored");
+    logger.info(
+      { ticketId: event.ticketId, toColumn: event.toColumn },
+      "self_transition_ignored",
+    );
     return;
   }
   if (ticket.workflowState === "clarification_pending" && to === colBacklog) {
-    logger.info({ ticketId: event.ticketId, toColumn: event.toColumn }, "self_transition_ignored");
+    logger.info(
+      { ticketId: event.ticketId, toColumn: event.toColumn },
+      "self_transition_ignored",
+    );
     return;
   }
 
   logger.info(
-    { ticketId: event.ticketId, fromColumn: event.fromColumn, toColumn: event.toColumn },
+    {
+      ticketId: event.ticketId,
+      fromColumn: event.fromColumn,
+      toColumn: event.toColumn,
+    },
     "contradicting_webhook_received",
   );
 
-  const jobId = ticket.workflowState === "awaiting_review"
-    ? `fix-${event.ticketId}-${ticket.id}`
-    : `impl-${event.ticketId}-${ticket.id}`;
+  const jobId =
+    ticket.workflowState === "awaiting_review"
+      ? `fix-${event.ticketId}-${ticket.id}`
+      : `impl-${event.ticketId}-${ticket.id}`;
 
   try {
     const job = await ticketQueue.getJob(jobId);
@@ -192,7 +217,10 @@ async function handleMovedOutOfAi(event: NormalizedEvent): Promise<void> {
       const state = await job.getState();
       if (state === "waiting" || state === "delayed") {
         await job.remove();
-        logger.info({ ticketId: event.ticketId, jobId }, "pending_job_cancelled");
+        logger.info(
+          { ticketId: event.ticketId, jobId },
+          "pending_job_cancelled",
+        );
       }
     }
   } catch {
@@ -208,7 +236,10 @@ async function handleMovedOutOfAi(event: NormalizedEvent): Promise<void> {
     if (activeRun?.containerId) {
       try {
         await teardownContainer(activeRun.containerId);
-        logger.info({ ticketId: event.ticketId, containerId: activeRun.containerId }, "container_teardown");
+        logger.info(
+          { ticketId: event.ticketId, containerId: activeRun.containerId },
+          "container_teardown",
+        );
       } catch {
         /* best effort */
       }
@@ -224,5 +255,8 @@ async function handleMovedOutOfAi(event: NormalizedEvent): Promise<void> {
     })
     .where(eq(tickets.id, ticket.id));
 
-  logger.info({ ticketId: event.ticketId, from: ticket.workflowState, to: "failed" }, "ticket_state_transition");
+  logger.info(
+    { ticketId: event.ticketId, from: ticket.workflowState, to: "failed" },
+    "ticket_state_transition",
+  );
 }

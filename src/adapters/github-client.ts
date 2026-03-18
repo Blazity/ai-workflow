@@ -1,9 +1,9 @@
-import { Octokit } from '@octokit/rest';
+import { Octokit } from "@octokit/rest";
 import type {
   PullRequest,
   PullRequestComment,
   VCSAdapter,
-} from './source-control.js';
+} from "./source-control.js";
 
 export class GitHubClient implements VCSAdapter {
   private readonly octokit: Octokit;
@@ -34,9 +34,9 @@ export class GitHubClient implements VCSAdapter {
         const { data } = await this.octokit.repos.createOrUpdateFileContents({
           owner: repoOwner,
           repo: repoName,
-          path: 'README.md',
-          message: 'Initial commit',
-          content: Buffer.from(`# ${repoName}\n`).toString('base64'),
+          path: "README.md",
+          message: "Initial commit",
+          content: Buffer.from(`# ${repoName}\n`).toString("base64"),
         });
         refSha = data.commit.sha!;
       } catch (initErr) {
@@ -87,7 +87,7 @@ export class GitHubClient implements VCSAdapter {
           repo: repoName,
           head: `${repoOwner}:${head}`,
           base,
-          state: 'open',
+          state: "open",
           per_page: 1,
         });
         if (prs.length > 0) {
@@ -118,13 +118,13 @@ export class GitHubClient implements VCSAdapter {
 
     return data.map(
       (c): PullRequestComment => ({
-        author: c.user?.login ?? 'unknown',
+        author: c.user?.login ?? "unknown",
         body: c.body,
         path: c.path ?? null,
         line: c.line ?? null,
         fromApprovedReview:
-          (c.reactions as Record<string, number> | undefined)?.['+1'] != null &&
-          (c.reactions as Record<string, number>)['+1'] > 0,
+          (c.reactions as Record<string, number> | undefined)?.["+1"] != null &&
+          (c.reactions as Record<string, number>)["+1"] > 0,
       }),
     );
   }
@@ -156,8 +156,8 @@ export class GitHubClient implements VCSAdapter {
         path,
         ref,
       });
-      if ('content' in data && data.type === 'file') {
-        return Buffer.from(data.content, 'base64').toString('utf-8');
+      if ("content" in data && data.type === "file") {
+        return Buffer.from(data.content, "base64").toString("utf-8");
       }
       return null;
     } catch (err: unknown) {

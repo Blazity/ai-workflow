@@ -33,9 +33,7 @@ describe("verifyJiraWebhookSignature", () => {
   });
 
   it("returns false for an invalid signature", () => {
-    expect(
-      verifyJiraWebhookSignature(body, "sha256=bad", secret),
-    ).toBe(false);
+    expect(verifyJiraWebhookSignature(body, "sha256=bad", secret)).toBe(false);
   });
 
   it("returns false when signature is undefined", () => {
@@ -44,9 +42,7 @@ describe("verifyJiraWebhookSignature", () => {
 
   it("returns false when body has been tampered with", () => {
     const tampered = Buffer.from('{"test":false}');
-    expect(verifyJiraWebhookSignature(tampered, validSig, secret)).toBe(
-      false,
-    );
+    expect(verifyJiraWebhookSignature(tampered, validSig, secret)).toBe(false);
   });
 });
 
