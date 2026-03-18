@@ -89,7 +89,7 @@ A webhook and poller can discover the same ticket simultaneously. The DB lookup 
 |----------|---------|---------|
 | `POLL_INTERVAL_MS` | `300000` (5 min) | How often the maintenance poll runs |
 | `STUCK_JOB_THRESHOLD_MS` | `JOB_TIMEOUT_MS * 2` (20 min) | How long before a job is considered stuck |
-| `JIRA_PROJECT_KEY` | (optional) | Jira project key for JQL queries (e.g., `PROJ`). When unset, missed-webhook detection is skipped — stuck job detection still runs. |
+| `JIRA_PROJECT_KEY` | (required) | Jira project key for JQL queries (e.g., `PROJ`) |
 
 ---
 
@@ -113,6 +113,6 @@ A webhook and poller can discover the same ticket simultaneously. The DB lookup 
 - [ ] Unit tests for idempotency (poller skips tickets already `queued`/`implementing`/`fixing_feedback`)
 - [ ] Unit tests for retry limit enforcement (`JOB_MAX_RETRIES + 1` attempts → transition to `failed`)
 - [ ] Unit tests for `fixing_feedback` stuck tickets re-enqueued as `review_fix` (not `implementation`)
-- [ ] Unit tests for graceful degradation (Jira error doesn't block stuck job detection, missing `JIRA_PROJECT_KEY` skips webhook check)
+- [ ] Unit tests for graceful degradation (Jira error doesn't block stuck job detection)
 - [ ] Integration: start service, verify repeatable job appears in BullMQ dashboard/logs
 - [ ] Manual: move a Jira ticket to AI column without webhook → verify poller picks it up within `POLL_INTERVAL_MS`
