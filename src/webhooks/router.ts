@@ -67,7 +67,29 @@ async function handleMovedToAi(event: NormalizedEvent): Promise<void> {
         workflowState: "queued",
         assignee: event.triggeredBy,
       })
+      .onConflictDoNothing({ target: [tickets.externalId, tickets.source] })
       .returning();
+
+    if (!created) {
+      // Concurrent insert won the race — re-read and let the state machine handle it
+      const rows = await db
+        .select()
+        .from(tickets)
+        .where(
+          and(
+            eq(tickets.externalId, event.ticketId),
+            eq(tickets.source, "jira"),
+          ),
+        );
+      const existing = rows[0];
+      if (existing?.workflowState === "queued" || existing?.workflowState === "implementing") {
+        logger.info({ ticketId: event.ticketId, workflowState: existing.workflowState }, "duplicate_webhook_ignored");
+        return;
+      }
+      // Fall through shouldn't happen (concurrent insert means ticket was just created as "queued")
+      logger.info({ ticketId: event.ticketId }, "duplicate_webhook_ignored");
+      return;
+    }
 
     await ticketQueue.add(
       "implementation",
@@ -77,7 +99,7 @@ async function handleMovedToAi(event: NormalizedEvent): Promise<void> {
         source: "jira",
         triggeredBy: event.triggeredBy,
       },
-      { jobId: `impl-${event.ticketId}-${created!.id}` },
+      { jobId: `impl-${event.ticketId}-${created.id}` },
     );
     logger.info(
       { ticketId: event.ticketId, jobType: "implementation" },
@@ -157,7 +179,7 @@ async function handleMovedToAi(event: NormalizedEvent): Promise<void> {
         source: "jira",
         triggeredBy: event.triggeredBy,
       },
-      { jobId: `impl-${event.ticketId}-${ticket.id}-${Date.now()}` },
+      { jobId: `impl-${event.ticketId}-${ticket.id}` },
     );
     logger.info(
       { ticketId: event.ticketId, jobType: "implementation" },

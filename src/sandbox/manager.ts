@@ -14,6 +14,7 @@ export interface SandboxOptions {
   model: string;
   timeoutMs: number;
   memoryLimitMb: number;
+  developerMode: boolean;
 }
 
 export type SandboxResult = {
@@ -120,13 +121,14 @@ export async function runSandbox(
   try {
     container = await docker.createContainer({
       Image: options.image,
-      Labels: { blazebot: "true" },
+      Labels: { blazebot: "true", "blazebot.branch": options.branchName },
       Env: [
         `BLAZEBOT_BRANCH=${options.branchName}`,
         `GITHUB_TOKEN=${options.githubToken}`,
         `REPO_URL=${options.repoUrl}`,
         `CLAUDE_CODE_OAUTH_TOKEN=${options.oauthToken}`,
         `CLAUDE_MODEL=${options.model}`,
+        `DEVELOPER_MODE=${options.developerMode}`,
       ],
       HostConfig: {
         Memory: options.memoryLimitMb * 1024 * 1024,

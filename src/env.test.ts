@@ -5,6 +5,7 @@ describe("env", () => {
     vi.resetModules();
     vi.unstubAllEnvs();
     vi.stubEnv("JIRA_WEBHOOK_SECRET", "test-secret");
+    vi.stubEnv("JIRA_PROJECT_KEY", "PROJ");
     vi.stubEnv("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat01-test");
   });
 

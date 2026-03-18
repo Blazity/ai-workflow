@@ -54,6 +54,7 @@ describe("GET /health", () => {
     vi.stubEnv("DATABASE_URL", "postgresql://user:pass@localhost:5432/db");
     vi.stubEnv("REDIS_URL", "redis://localhost:6379");
     vi.stubEnv("JIRA_WEBHOOK_SECRET", "test-secret");
+    vi.stubEnv("JIRA_PROJECT_KEY", "PROJ");
     vi.stubEnv("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat01-test");
     vi.stubEnv("PORT", "0");
   });
@@ -84,6 +85,7 @@ describe("POST /webhooks/jira", () => {
     vi.stubEnv("REDIS_URL", "redis://localhost:6379");
     vi.stubEnv("PORT", "0");
     vi.stubEnv("JIRA_WEBHOOK_SECRET", secret);
+    vi.stubEnv("JIRA_PROJECT_KEY", "PROJ");
     vi.stubEnv("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat01-test");
     mockDb.select.mockReturnValue({
       from: vi.fn().mockReturnValue({
@@ -92,7 +94,9 @@ describe("POST /webhooks/jira", () => {
     });
     mockDb.insert.mockReturnValue({
       values: vi.fn().mockReturnValue({
-        returning: vi.fn().mockResolvedValue([{ id: "uuid-1" }]),
+        onConflictDoNothing: vi.fn().mockReturnValue({
+          returning: vi.fn().mockResolvedValue([{ id: "uuid-1" }]),
+        }),
       }),
     });
   });
@@ -222,6 +226,7 @@ describe("startup", () => {
     vi.stubEnv("DATABASE_URL", "postgresql://user:pass@localhost:5432/db");
     vi.stubEnv("REDIS_URL", "redis://localhost:6379");
     vi.stubEnv("JIRA_WEBHOOK_SECRET", "test-secret");
+    vi.stubEnv("JIRA_PROJECT_KEY", "PROJ");
     vi.stubEnv("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat01-test");
     vi.stubEnv("PORT", "0");
     vi.clearAllMocks();

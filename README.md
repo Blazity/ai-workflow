@@ -68,6 +68,7 @@ pnpm start
 | `pnpm db:generate` | Generate Drizzle migration files |
 | `pnpm db:migrate` | Run pending migrations |
 | `pnpm db:push` | Push schema directly to database (dev) |
+| `pnpm inspect` | Attach to a running sandbox container's live logs (requires `DEVELOPER_MODE=true`) |
 
 ## Environment Variables
 
@@ -123,6 +124,7 @@ All of these have sensible defaults and are optional.
 | `DOCKER_IMAGE` | `blazebot-sandbox` | Docker image for sandbox containers |
 | `SANDBOX_MEMORY_MB` | `4096` | Memory limit per sandbox container |
 | `CLAUDE_MODEL` | `claude-sonnet-4-20250514` | AI model for agent runs |
+| `DEVELOPER_MODE` | `false` | Stream live agent output for `docker logs` inspection |
 | `POLL_INTERVAL_MS` | `300000` | Maintenance poll interval (5 minutes) |
 | `STUCK_JOB_THRESHOLD_MS` | `1200000` | Time before a job is considered stuck (20 minutes) |
 
@@ -154,6 +156,43 @@ When a ticket is moved to the AI column, Blazebot picks it up automatically.
 5. The ticket moves to **AI Review** and the user is notified (if Slack is configured)
 6. If the agent needs clarification, questions are posted on the ticket and it moves to **Backlog**
 7. When a human moves the ticket back to AI (after review feedback or clarification), the cycle repeats
+
+## Developer Mode
+
+Developer mode lets you inspect what a Claude Code agent is doing inside a sandbox container in real-time.
+
+### Setup
+
+1. Set `DEVELOPER_MODE=true` in your `.env`
+2. Rebuild the sandbox image: `docker build -t blazebot-sandbox docker/sandbox/`
+3. Start the service: `pnpm dev`
+
+### Inspecting a container
+
+Trigger a job, then run:
+
+```bash
+pnpm inspect
+```
+
+This lists running sandbox containers and lets you pick one to attach to. If only one is running, it attaches automatically.
+
+You'll see live, timestamped output:
+
+```
+[12:34:05] system: initialized (model: claude-sonnet-4-20250514)
+[12:34:07] assistant: Let me read the codebase first.
+[12:34:07] tool_use: Read(file_path)
+[12:34:08] tool_result: ok
+[12:34:10] assistant: Now I'll implement the feature.
+[12:34:10] tool_use: Edit(file_path, new_string, old_string)
+[12:34:11] tool_result: ok
+[12:34:15] result: implemented
+```
+
+You can also attach manually: `docker logs -f <container_id>`.
+
+Use `docker ps --filter label=blazebot=true` to list containers, or filter by branch: `docker ps --filter label=blazebot.branch=blazebot/PROJ-42`.
 
 ## Testing
 

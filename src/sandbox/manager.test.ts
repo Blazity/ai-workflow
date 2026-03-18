@@ -62,6 +62,7 @@ describe("runSandbox", () => {
     model: "claude-sonnet-4-20250514",
     timeoutMs: 30000,
     memoryLimitMb: 4096,
+    developerMode: false,
   };
 
   const makeAgentOutput = (
@@ -240,7 +241,40 @@ describe("runSandbox", () => {
 
     expect(createContainerSpy).toHaveBeenCalledWith(
       expect.objectContaining({
-        Labels: { blazebot: "true" },
+        Labels: { blazebot: "true", "blazebot.branch": "blazebot/PROJ-42" },
+      }),
+    );
+  });
+
+  it("passes DEVELOPER_MODE into container env", async () => {
+    const { runSandbox } = await import("./manager.js");
+
+    mockLogs(makeAgentOutput("implemented", { summary: "Done" }));
+
+    await runSandbox({ ...defaultOptions, developerMode: true });
+
+    expect(createContainerSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        Env: expect.arrayContaining([
+          "DEVELOPER_MODE=true",
+        ]),
+      }),
+    );
+  });
+
+  it("adds blazebot.branch label to container", async () => {
+    const { runSandbox } = await import("./manager.js");
+
+    mockLogs(makeAgentOutput("implemented", { summary: "Done" }));
+
+    await runSandbox(defaultOptions);
+
+    expect(createContainerSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        Labels: {
+          blazebot: "true",
+          "blazebot.branch": "blazebot/PROJ-42",
+        },
       }),
     );
   });
