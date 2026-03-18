@@ -63,7 +63,9 @@ export const tickets = pgTable(
       .notNull()
       .defaultNow(),
   },
-  (t) => [unique("tickets_external_id_source_unique").on(t.externalId, t.source)],
+  (t) => [
+    unique("tickets_external_id_source_unique").on(t.externalId, t.source),
+  ],
 );
 
 export const runAttempts = pgTable(

@@ -29,13 +29,19 @@ describe("assembleImplementationContext", () => {
 
     expect(result).toContain("# Requirements");
     expect(result).toContain("## Ticket\nAdd dark mode");
-    expect(result).toContain("## Description\nImplement dark mode across all pages");
-    expect(result).toContain("## Acceptance Criteria\nAll pages support dark theme");
+    expect(result).toContain(
+      "## Description\nImplement dark mode across all pages",
+    );
+    expect(result).toContain(
+      "## Acceptance Criteria\nAll pages support dark theme",
+    );
     expect(result).toContain("## Comments");
     expect(result).toContain("**Alice**");
     expect(result).toContain("Use CSS variables");
     expect(result).toContain("---");
-    expect(result).toContain("You are an agent. Implement the feature using TDD.");
+    expect(result).toContain(
+      "You are an agent. Implement the feature using TDD.",
+    );
   });
 
   it("omits acceptance criteria when null", () => {
@@ -142,7 +148,9 @@ describe("assembleFixingFeedbackContext", () => {
     expect(result).toContain("# Requirements");
     expect(result).toContain("## Ticket\nAdd dark mode");
     expect(result).toContain("## Description\nImplement dark mode");
-    expect(result).toContain("## Acceptance Criteria\nAll pages support dark theme");
+    expect(result).toContain(
+      "## Acceptance Criteria\nAll pages support dark theme",
+    );
     expect(result).toContain("## Comments");
     expect(result).toContain("**Alice**");
     expect(result).toContain("## PR Review Feedback");
@@ -180,7 +188,12 @@ describe("assembleFixingFeedbackContext", () => {
         fromApprovedReview: false,
       },
     ];
-    const result = assembleFixingFeedbackContext(ticket, noLiked, false, "prompt");
+    const result = assembleFixingFeedbackContext(
+      ticket,
+      noLiked,
+      false,
+      "prompt",
+    );
 
     expect(result).toContain("## PR Review Feedback");
     expect(result).not.toContain("### Liked Comments");
@@ -236,6 +249,8 @@ describe("assembleFixingFeedbackContext", () => {
     const lines = result.split("\n");
     const separatorIdx = lines.indexOf("---");
     expect(separatorIdx).toBeGreaterThan(-1);
-    expect(lines.slice(separatorIdx + 1).join("\n")).toContain("Fix the issues");
+    expect(lines.slice(separatorIdx + 1).join("\n")).toContain(
+      "Fix the issues",
+    );
   });
 });

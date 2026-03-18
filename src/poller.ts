@@ -22,10 +22,7 @@ export async function runMaintenancePoll(): Promise<void> {
   logger.info("poll_started");
 
   const messaging = createMessaging();
-  await Promise.allSettled([
-    checkMissedWebhooks(),
-    checkStuckJobs(messaging),
-  ]);
+  await Promise.allSettled([checkMissedWebhooks(), checkStuckJobs(messaging)]);
 
   logger.info("poll_completed");
 }
@@ -39,7 +36,11 @@ async function checkMissedWebhooks(): Promise<void> {
     return;
   }
 
-  const jira = new JiraClient(env.JIRA_BASE_URL, env.JIRA_USER_EMAIL, env.JIRA_API_TOKEN);
+  const jira = new JiraClient(
+    env.JIRA_BASE_URL,
+    env.JIRA_USER_EMAIL,
+    env.JIRA_API_TOKEN,
+  );
 
   let ticketKeys: string[];
   try {
@@ -57,12 +58,9 @@ async function checkMissedWebhooks(): Promise<void> {
     .select()
     .from(tickets)
     .where(
-      and(
-        inArray(tickets.externalId, ticketKeys),
-        eq(tickets.source, "jira"),
-      ),
+      and(inArray(tickets.externalId, ticketKeys), eq(tickets.source, "jira")),
     );
-  const existingMap = new Map(existingTickets.map(t => [t.externalId, t]));
+  const existingMap = new Map(existingTickets.map((t) => [t.externalId, t]));
 
   for (const ticketId of ticketKeys) {
     const ticket = existingMap.get(ticketId);
@@ -91,7 +89,7 @@ async function checkMissedWebhooks(): Promise<void> {
           source: "jira",
           triggeredBy: "poller",
         },
-        { ...defaultJobOptions, jobId: `impl-${ticketId}-${created!.id}` },
+        { ...defaultJobOptions, jobId: `impl-${ticketId}-${created.id}` },
       );
       logger.info({ ticketId }, "poll_ticket_discovered");
       continue;
@@ -111,15 +109,19 @@ async function checkMissedWebhooks(): Promise<void> {
           source: "jira",
           triggeredBy: ticket.assignee ?? "poller",
         },
-        { ...defaultJobOptions, jobId: `impl-${ticketId}-${ticket.id}-${Date.now()}` },
+        {
+          ...defaultJobOptions,
+          jobId: `impl-${ticketId}-${ticket.id}-${Date.now()}`,
+        },
       );
-      logger.info({ ticketId }, "poll_ticket_discovered");
+      logger.info({ ticketId }, "poll_failed_ticket_reenqueued");
     }
-
   }
 }
 
-async function checkStuckJobs(messaging: ReturnType<typeof createMessaging>): Promise<void> {
+async function checkStuckJobs(
+  messaging: ReturnType<typeof createMessaging>,
+): Promise<void> {
   const thresholdMs = env.STUCK_JOB_THRESHOLD_MS ?? env.JOB_TIMEOUT_MS * 2;
   const cutoff = new Date(Date.now() - thresholdMs);
 
@@ -136,7 +138,10 @@ async function checkStuckJobs(messaging: ReturnType<typeof createMessaging>): Pr
   if (stuckTickets.length === 0) return;
 
   for (const ticket of stuckTickets) {
-    logger.info({ ticketId: ticket.externalId, workflowState: ticket.workflowState }, "stuck_job_detected");
+    logger.info(
+      { ticketId: ticket.externalId, workflowState: ticket.workflowState },
+      "stuck_job_detected",
+    );
 
     if (ticket.currentRunId) {
       const runRows = await db
@@ -148,9 +153,19 @@ async function checkStuckJobs(messaging: ReturnType<typeof createMessaging>): Pr
       if (activeRun?.containerId) {
         try {
           await teardownContainer(activeRun.containerId);
-          logger.info({ ticketId: ticket.externalId, containerId: activeRun.containerId }, "stuck_container_teardown");
+          logger.info(
+            { ticketId: ticket.externalId, containerId: activeRun.containerId },
+            "stuck_container_teardown",
+          );
         } catch (err) {
-          logger.warn({ ticketId: ticket.externalId, containerId: activeRun.containerId, error: (err as Error).message }, "stuck_container_teardown_failed");
+          logger.warn(
+            {
+              ticketId: ticket.externalId,
+              containerId: activeRun.containerId,
+              error: (err as Error).message,
+            },
+            "stuck_container_teardown_failed",
+          );
         }
       }
 
@@ -172,22 +187,36 @@ async function checkStuckJobs(messaging: ReturnType<typeof createMessaging>): Pr
     if (attemptCount >= env.JOB_MAX_RETRIES + 1) {
       await db
         .update(tickets)
-        .set({ workflowState: "failed", currentRunId: null, updatedAt: new Date() })
+        .set({
+          workflowState: "failed",
+          currentRunId: null,
+          updatedAt: new Date(),
+        })
         .where(eq(tickets.id, ticket.id));
 
       await messaging.notify(
         ticket.assignee ?? "poller",
         `Task ${ticket.externalId} stuck and retries exhausted after ${attemptCount} attempts`,
       );
-      logger.info({ ticketId: ticket.externalId, attemptCount }, "stuck_job_exhausted");
+      logger.info(
+        { ticketId: ticket.externalId, attemptCount },
+        "stuck_job_exhausted",
+      );
       continue;
     }
 
-    const jobType = ticket.workflowState === "fixing_feedback" ? "review_fix" : "implementation";
+    const jobType =
+      ticket.workflowState === "fixing_feedback"
+        ? "review_fix"
+        : "implementation";
 
     await db
       .update(tickets)
-      .set({ workflowState: "queued", currentRunId: null, updatedAt: new Date() })
+      .set({
+        workflowState: "queued",
+        currentRunId: null,
+        updatedAt: new Date(),
+      })
       .where(eq(tickets.id, ticket.id));
 
     await ticketQueue.add(
@@ -198,13 +227,19 @@ async function checkStuckJobs(messaging: ReturnType<typeof createMessaging>): Pr
         source: ticket.source as "jira" | "linear",
         triggeredBy: ticket.assignee ?? "poller",
       },
-      { ...defaultJobOptions, jobId: `${jobType === "review_fix" ? "fix" : "impl"}-${ticket.externalId}-${ticket.id}-${Date.now()}` },
+      {
+        ...defaultJobOptions,
+        jobId: `${jobType === "review_fix" ? "fix" : "impl"}-${ticket.externalId}-${ticket.id}-${Date.now()}`,
+      },
     );
 
     await messaging.notify(
       ticket.assignee ?? "poller",
       `Task ${ticket.externalId} appeared stuck — re-enqueued automatically`,
     );
-    logger.info({ ticketId: ticket.externalId, jobType }, "stuck_job_recovered");
+    logger.info(
+      { ticketId: ticket.externalId, jobType },
+      "stuck_job_recovered",
+    );
   }
 }

@@ -13,9 +13,12 @@ vi.mock("bullmq", () => ({
   }),
 }));
 
-const mockDbInsertReturning = vi.fn().mockResolvedValue([{ id: "new-ticket-uuid" }]);
+const mockDbInsertReturning = vi
+  .fn()
+  .mockResolvedValue([{ id: "new-ticket-uuid" }]);
 const mockDbUpdateWhere = vi.fn().mockResolvedValue(undefined);
-const mockDbSelectWhere = vi.fn();
+const mockTicketsSelectWhere = vi.fn();
+const mockRunAttemptsSelectWhere = vi.fn();
 
 vi.mock("drizzle-orm/postgres-js", () => ({
   drizzle: vi.fn().mockReturnValue({
@@ -32,9 +35,12 @@ vi.mock("drizzle-orm/postgres-js", () => ({
       }),
     }),
     select: vi.fn().mockReturnValue({
-      from: vi.fn().mockReturnValue({
-        where: mockDbSelectWhere,
-      }),
+      from: vi.fn().mockImplementation((table: Record<string, unknown>) => ({
+        where:
+          "containerId" in table
+            ? mockRunAttemptsSelectWhere
+            : mockTicketsSelectWhere,
+      })),
     }),
   }),
 }));
@@ -82,13 +88,13 @@ describe("runMaintenancePoll", () => {
     vi.stubEnv("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat01-test");
     vi.stubEnv("JIRA_PROJECT_KEY", "PROJ");
     vi.clearAllMocks();
-    mockDbSelectWhere.mockResolvedValue([]);
+    mockTicketsSelectWhere.mockResolvedValue([]);
+    mockRunAttemptsSelectWhere.mockResolvedValue([]);
   });
 
   describe("missed webhook detection", () => {
     it("discovers tickets in AI column not in DB and enqueues them", async () => {
       mockSearchTickets.mockResolvedValue(["PROJ-10"]);
-      mockDbSelectWhere.mockResolvedValue([]);
 
       const { runMaintenancePoll } = await import("./poller.js");
       await runMaintenancePoll();
@@ -112,12 +118,14 @@ describe("runMaintenancePoll", () => {
 
     it("re-enqueues tickets in failed state", async () => {
       mockSearchTickets.mockResolvedValue(["PROJ-20"]);
-      mockDbSelectWhere.mockResolvedValue([{
-        id: "ticket-uuid",
-        externalId: "PROJ-20",
-        workflowState: "failed",
-        assignee: "Mia",
-      }]);
+      mockTicketsSelectWhere.mockResolvedValueOnce([]).mockResolvedValueOnce([
+        {
+          id: "ticket-uuid",
+          externalId: "PROJ-20",
+          workflowState: "failed",
+          assignee: "Mia",
+        },
+      ]);
 
       const { runMaintenancePoll } = await import("./poller.js");
       await runMaintenancePoll();
@@ -138,21 +146,15 @@ describe("runMaintenancePoll", () => {
 
     it("skips tickets already queued or implementing", async () => {
       mockSearchTickets.mockResolvedValue(["PROJ-30"]);
-
-      let selectCallCount = 0;
-      mockDbSelectWhere.mockImplementation(() => {
-        selectCallCount++;
-        if (selectCallCount === 1) {
-          return Promise.resolve([]);
-        }
-        return Promise.resolve([{
+      mockTicketsSelectWhere.mockResolvedValueOnce([]).mockResolvedValueOnce([
+        {
           id: "ticket-uuid",
           externalId: "PROJ-30",
           workflowState: "implementing",
           assignee: "Mia",
           updatedAt: new Date(),
-        }]);
-      });
+        },
+      ]);
 
       const { runMaintenancePoll } = await import("./poller.js");
       await runMaintenancePoll();
@@ -195,38 +197,24 @@ describe("runMaintenancePoll", () => {
   describe("stuck job detection", () => {
     it("tears down container, marks timed_out, and re-enqueues stuck job", async () => {
       mockSearchTickets.mockResolvedValue([]);
-
-      // First select: missed webhooks (no results)
-      // Second select: stuck tickets query
-      // Third select: runAttempts lookup
-      // Fourth select: attempt count
-      let selectCallCount = 0;
-      mockDbSelectWhere.mockImplementation(() => {
-        selectCallCount++;
-        if (selectCallCount === 1) {
-          // stuck tickets query
-          return Promise.resolve([{
-            id: "ticket-uuid",
-            externalId: "PROJ-40",
-            workflowState: "implementing",
-            currentRunId: "run-uuid",
-            assignee: "Mia",
-            updatedAt: new Date(Date.now() - 9999999),
-          }]);
-        }
-        if (selectCallCount === 2) {
-          // runAttempts lookup for container
-          return Promise.resolve([{
+      mockTicketsSelectWhere.mockResolvedValueOnce([
+        {
+          id: "ticket-uuid",
+          externalId: "PROJ-40",
+          workflowState: "implementing",
+          currentRunId: "run-uuid",
+          assignee: "Mia",
+          updatedAt: new Date(Date.now() - 9999999),
+        },
+      ]);
+      mockRunAttemptsSelectWhere
+        .mockResolvedValueOnce([
+          {
             id: "run-uuid",
             containerId: "container-abc",
-          }]);
-        }
-        if (selectCallCount === 3) {
-          // attempt count (1 attempt, under limit)
-          return Promise.resolve([{ id: "run-uuid" }]);
-        }
-        return Promise.resolve([]);
-      });
+          },
+        ])
+        .mockResolvedValueOnce([{ id: "run-uuid" }]);
 
       const { runMaintenancePoll } = await import("./poller.js");
       await runMaintenancePoll();
@@ -249,35 +237,29 @@ describe("runMaintenancePoll", () => {
 
     it("transitions to failed when retry limit exhausted", async () => {
       mockSearchTickets.mockResolvedValue([]);
-
-      let selectCallCount = 0;
-      mockDbSelectWhere.mockImplementation(() => {
-        selectCallCount++;
-        if (selectCallCount === 1) {
-          return Promise.resolve([{
-            id: "ticket-uuid",
-            externalId: "PROJ-50",
-            workflowState: "implementing",
-            currentRunId: "run-uuid",
-            assignee: "Mia",
-            updatedAt: new Date(Date.now() - 9999999),
-          }]);
-        }
-        if (selectCallCount === 2) {
-          // runAttempts lookup
-          return Promise.resolve([{
+      mockTicketsSelectWhere.mockResolvedValueOnce([
+        {
+          id: "ticket-uuid",
+          externalId: "PROJ-50",
+          workflowState: "implementing",
+          currentRunId: "run-uuid",
+          assignee: "Mia",
+          updatedAt: new Date(Date.now() - 9999999),
+        },
+      ]);
+      mockRunAttemptsSelectWhere
+        .mockResolvedValueOnce([
+          {
             id: "run-uuid",
             containerId: null,
-          }]);
-        }
-        if (selectCallCount === 3) {
-          // 4 attempts (JOB_MAX_RETRIES default=3, so limit=4)
-          return Promise.resolve([
-            { id: "r1" }, { id: "r2" }, { id: "r3" }, { id: "r4" },
-          ]);
-        }
-        return Promise.resolve([]);
-      });
+          },
+        ])
+        .mockResolvedValueOnce([
+          { id: "r1" },
+          { id: "r2" },
+          { id: "r3" },
+          { id: "r4" },
+        ]);
 
       const { runMaintenancePoll } = await import("./poller.js");
       await runMaintenancePoll();
@@ -291,26 +273,17 @@ describe("runMaintenancePoll", () => {
 
     it("re-enqueues review_fix for stuck fixing_feedback tickets", async () => {
       mockSearchTickets.mockResolvedValue([]);
-
-      let selectCallCount = 0;
-      mockDbSelectWhere.mockImplementation(() => {
-        selectCallCount++;
-        if (selectCallCount === 1) {
-          return Promise.resolve([{
-            id: "ticket-uuid",
-            externalId: "PROJ-60",
-            workflowState: "fixing_feedback",
-            currentRunId: null,
-            assignee: "Mia",
-            updatedAt: new Date(Date.now() - 9999999),
-          }]);
-        }
-        if (selectCallCount === 2) {
-          // attempt count (under limit)
-          return Promise.resolve([{ id: "r1" }]);
-        }
-        return Promise.resolve([]);
-      });
+      mockTicketsSelectWhere.mockResolvedValueOnce([
+        {
+          id: "ticket-uuid",
+          externalId: "PROJ-60",
+          workflowState: "fixing_feedback",
+          currentRunId: null,
+          assignee: "Mia",
+          updatedAt: new Date(Date.now() - 9999999),
+        },
+      ]);
+      mockRunAttemptsSelectWhere.mockResolvedValueOnce([{ id: "r1" }]);
 
       const { runMaintenancePoll } = await import("./poller.js");
       await runMaintenancePoll();
@@ -328,31 +301,24 @@ describe("runMaintenancePoll", () => {
     it("continues recovery when container teardown fails", async () => {
       mockSearchTickets.mockResolvedValue([]);
       mockTeardownContainer.mockRejectedValue(new Error("container not found"));
-
-      let selectCallCount = 0;
-      mockDbSelectWhere.mockImplementation(() => {
-        selectCallCount++;
-        if (selectCallCount === 1) {
-          return Promise.resolve([{
-            id: "ticket-uuid",
-            externalId: "PROJ-70",
-            workflowState: "implementing",
-            currentRunId: "run-uuid",
-            assignee: "Mia",
-            updatedAt: new Date(Date.now() - 9999999),
-          }]);
-        }
-        if (selectCallCount === 2) {
-          return Promise.resolve([{
+      mockTicketsSelectWhere.mockResolvedValueOnce([
+        {
+          id: "ticket-uuid",
+          externalId: "PROJ-70",
+          workflowState: "implementing",
+          currentRunId: "run-uuid",
+          assignee: "Mia",
+          updatedAt: new Date(Date.now() - 9999999),
+        },
+      ]);
+      mockRunAttemptsSelectWhere
+        .mockResolvedValueOnce([
+          {
             id: "run-uuid",
             containerId: "container-dead",
-          }]);
-        }
-        if (selectCallCount === 3) {
-          return Promise.resolve([{ id: "r1" }]);
-        }
-        return Promise.resolve([]);
-      });
+          },
+        ])
+        .mockResolvedValueOnce([{ id: "r1" }]);
 
       const { runMaintenancePoll } = await import("./poller.js");
       await runMaintenancePoll();
@@ -372,7 +338,6 @@ describe("runMaintenancePoll", () => {
 
     it("does nothing when no stuck tickets exist", async () => {
       mockSearchTickets.mockResolvedValue([]);
-      mockDbSelectWhere.mockResolvedValue([]);
 
       const { runMaintenancePoll } = await import("./poller.js");
       await runMaintenancePoll();

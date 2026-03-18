@@ -1,6 +1,6 @@
-import { createHmac, timingSafeEqual } from 'node:crypto';
-import { z } from 'zod';
-import type { NormalizedEvent } from './types.js';
+import { createHmac, timingSafeEqual } from "node:crypto";
+import { z } from "zod";
+import type { NormalizedEvent } from "./types.js";
 
 const changelogItemSchema = z.object({
   field: z.string(),
@@ -8,7 +8,7 @@ const changelogItemSchema = z.object({
   fromString: z
     .string()
     .nullable()
-    .transform((v) => v ?? ''),
+    .transform((v) => v ?? ""),
   toString: z.string(),
 });
 
@@ -32,7 +32,7 @@ export function verifyJiraWebhookSignature(
 ): boolean {
   if (!signature) return false;
   const expected =
-    'sha256=' + createHmac('sha256', secret).update(rawBody).digest('hex');
+    "sha256=" + createHmac("sha256", secret).update(rawBody).digest("hex");
   if (signature.length !== expected.length) return false;
   return timingSafeEqual(Buffer.from(signature), Buffer.from(expected));
 }
@@ -44,14 +44,14 @@ export function parseJiraWebhook(body: unknown): NormalizedEvent | null {
   }
 
   const { user, issue, changelog } = parsed.data;
-  const statusChange = changelog.items.find((item) => item.field === 'status');
+  const statusChange = changelog.items.find((item) => item.field === "status");
 
   if (!statusChange) {
     return null;
   }
 
   return {
-    type: 'ticket_moved',
+    type: "ticket_moved",
     ticketId: issue.key,
     fromColumn: statusChange.fromString,
     toColumn: statusChange.toString,

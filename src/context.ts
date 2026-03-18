@@ -74,7 +74,9 @@ export function assembleFixingFeedbackContext(
     lines.push("", "## PR Review Feedback");
 
     const formatComment = (c: PullRequestComment) => {
-      const location = c.path ? ` (\`${c.path}${c.line ? `:${c.line}` : ""}\`)` : "";
+      const location = c.path
+        ? ` (\`${c.path}${c.line ? `:${c.line}` : ""}\`)`
+        : "";
       lines.push("", `**${c.author}**${location}:`, c.body);
     };
 

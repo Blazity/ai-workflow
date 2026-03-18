@@ -3,19 +3,25 @@ import type { Job } from "bullmq";
 import type { TicketJobData } from "./queue.js";
 
 vi.mock("ioredis", () => ({ Redis: vi.fn() }));
-const mockWorkerEventHandlers: Record<string, ((...args: unknown[]) => void)[]> = {};
+const mockWorkerEventHandlers: Record<
+  string,
+  ((...args: unknown[]) => void)[]
+> = {};
 vi.mock("bullmq", () => ({
   Worker: vi.fn().mockImplementation(function WorkerMock(
     _name: string,
     handler: (job: unknown) => Promise<void>,
     _opts?: unknown,
   ) {
-    Object.keys(mockWorkerEventHandlers).forEach((k) => delete mockWorkerEventHandlers[k]);
+    Object.keys(mockWorkerEventHandlers).forEach(
+      (k) => delete mockWorkerEventHandlers[k],
+    );
     return {
       handler,
       close: vi.fn(),
       on: vi.fn((event: string, cb: (...args: unknown[]) => void) => {
-        if (!mockWorkerEventHandlers[event]) mockWorkerEventHandlers[event] = [];
+        if (!mockWorkerEventHandlers[event])
+          mockWorkerEventHandlers[event] = [];
         mockWorkerEventHandlers[event].push(cb);
       }),
     };
@@ -46,9 +52,14 @@ vi.mock("drizzle-orm/postgres-js", () => ({
 }));
 vi.mock("postgres", () => ({ default: vi.fn() }));
 
-const mockReadFile = vi.fn().mockResolvedValue("You are an agent prompt content");
+const mockReadFile = vi
+  .fn()
+  .mockResolvedValue("You are an agent prompt content");
 vi.mock("node:fs/promises", async () => {
-  const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+  const actual =
+    await vi.importActual<typeof import("node:fs/promises")>(
+      "node:fs/promises",
+    );
   return {
     ...actual,
     readFile: (...args: unknown[]) => mockReadFile(...args),
@@ -65,7 +76,12 @@ vi.mock("./sandbox/manager.js", () => ({
 }));
 
 const mockLogFn = vi.fn();
-const mockChildLogger = { info: mockLogFn, warn: mockLogFn, error: mockLogFn, child: vi.fn() };
+const mockChildLogger = {
+  info: mockLogFn,
+  warn: mockLogFn,
+  error: mockLogFn,
+  child: vi.fn(),
+};
 mockChildLogger.child.mockReturnValue(mockChildLogger);
 vi.mock("./logger.js", () => ({
   createLogger: () => ({
@@ -121,7 +137,11 @@ const defaultTicket = {
   description: "Implement dark mode across all pages",
   acceptanceCriteria: null,
   comments: [
-    { author: "Alice", body: "Use CSS variables", createdAt: new Date("2026-03-10") },
+    {
+      author: "Alice",
+      body: "Use CSS variables",
+      createdAt: new Date("2026-03-10"),
+    },
   ],
   labels: ["frontend"],
   trackerStatus: "AI",
@@ -158,7 +178,11 @@ describe("worker handler", () => {
 
     const { createWorker } = await import("./worker.js");
     const worker = createWorker();
-    const handler = (worker as unknown as { handler: (job: Job<TicketJobData>) => Promise<void> }).handler;
+    const handler = (
+      worker as unknown as {
+        handler: (job: Job<TicketJobData>) => Promise<void>;
+      }
+    ).handler;
 
     await handler(
       makeJob({
@@ -171,7 +195,10 @@ describe("worker handler", () => {
 
     expect(mockJira.fetchTicket).toHaveBeenCalledWith("PROJ-42");
     expect(mockGitHub.createBranch).toHaveBeenCalledWith(
-      "owner", "repo", "blazebot/PROJ-42", "main",
+      "owner",
+      "repo",
+      "blazebot/PROJ-42",
+      "main",
     );
     expect(mockRunSandbox).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -193,7 +220,11 @@ describe("worker handler", () => {
 
     const { createWorker } = await import("./worker.js");
     const worker = createWorker();
-    const handler = (worker as unknown as { handler: (job: Job<TicketJobData>) => Promise<void> }).handler;
+    const handler = (
+      worker as unknown as {
+        handler: (job: Job<TicketJobData>) => Promise<void>;
+      }
+    ).handler;
 
     await handler(
       makeJob({
@@ -220,7 +251,11 @@ describe("worker handler", () => {
 
     const { createWorker } = await import("./worker.js");
     const worker = createWorker();
-    const handler = (worker as unknown as { handler: (job: Job<TicketJobData>) => Promise<void> }).handler;
+    const handler = (
+      worker as unknown as {
+        handler: (job: Job<TicketJobData>) => Promise<void>;
+      }
+    ).handler;
 
     await handler(
       makeJob({
@@ -252,7 +287,11 @@ describe("worker handler", () => {
 
     const { createWorker } = await import("./worker.js");
     const worker = createWorker();
-    const handler = (worker as unknown as { handler: (job: Job<TicketJobData>) => Promise<void> }).handler;
+    const handler = (
+      worker as unknown as {
+        handler: (job: Job<TicketJobData>) => Promise<void>;
+      }
+    ).handler;
 
     await expect(
       handler(
@@ -276,7 +315,11 @@ describe("worker handler", () => {
 
     const { createWorker } = await import("./worker.js");
     const worker = createWorker();
-    const handler = (worker as unknown as { handler: (job: Job<TicketJobData>) => Promise<void> }).handler;
+    const handler = (
+      worker as unknown as {
+        handler: (job: Job<TicketJobData>) => Promise<void>;
+      }
+    ).handler;
 
     await handler(
       makeJob({
@@ -296,9 +339,21 @@ describe("worker handler", () => {
     const ticketWithAnswers = {
       ...defaultTicket,
       comments: [
-        { author: "Alice", body: "Use CSS variables", createdAt: new Date("2026-03-10") },
-        { author: "Blazebot", body: "What color scheme should be used?", createdAt: new Date("2026-03-11") },
-        { author: "Alice", body: "Use the Material Design dark palette", createdAt: new Date("2026-03-12") },
+        {
+          author: "Alice",
+          body: "Use CSS variables",
+          createdAt: new Date("2026-03-10"),
+        },
+        {
+          author: "Blazebot",
+          body: "What color scheme should be used?",
+          createdAt: new Date("2026-03-11"),
+        },
+        {
+          author: "Alice",
+          body: "Use the Material Design dark palette",
+          createdAt: new Date("2026-03-12"),
+        },
       ],
     };
 
@@ -311,7 +366,11 @@ describe("worker handler", () => {
 
     const { createWorker } = await import("./worker.js");
     const worker = createWorker();
-    const handler = (worker as unknown as { handler: (job: Job<TicketJobData>) => Promise<void> }).handler;
+    const handler = (
+      worker as unknown as {
+        handler: (job: Job<TicketJobData>) => Promise<void>;
+      }
+    ).handler;
 
     await handler(
       makeJob({
@@ -324,12 +383,16 @@ describe("worker handler", () => {
 
     expect(mockRunSandbox).toHaveBeenCalledWith(
       expect.objectContaining({
-        requirementsMd: expect.stringContaining("What color scheme should be used?"),
+        requirementsMd: expect.stringContaining(
+          "What color scheme should be used?",
+        ),
       }),
     );
     expect(mockRunSandbox).toHaveBeenCalledWith(
       expect.objectContaining({
-        requirementsMd: expect.stringContaining("Use the Material Design dark palette"),
+        requirementsMd: expect.stringContaining(
+          "Use the Material Design dark palette",
+        ),
       }),
     );
   });
@@ -345,7 +408,11 @@ describe("worker handler", () => {
 
     const { createWorker } = await import("./worker.js");
     const worker = createWorker();
-    const handler = (worker as unknown as { handler: (job: Job<TicketJobData>) => Promise<void> }).handler;
+    const handler = (
+      worker as unknown as {
+        handler: (job: Job<TicketJobData>) => Promise<void>;
+      }
+    ).handler;
 
     await handler(
       makeJob({
@@ -357,14 +424,20 @@ describe("worker handler", () => {
     );
 
     expect(mockGitHub.createBranch).toHaveBeenCalledWith(
-      "owner", "repo", "blazebot/PROJ-42", "main",
+      "owner",
+      "repo",
+      "blazebot/PROJ-42",
+      "main",
     );
     expect(mockRunSandbox).toHaveBeenCalled();
     expect(mockGitHub.createPR).toHaveBeenCalled();
   });
 
   it("proceeds when ticket tracker status matches AI column", async () => {
-    mockJira.fetchTicket.mockResolvedValue({ ...defaultTicket, trackerStatus: "AI" });
+    mockJira.fetchTicket.mockResolvedValue({
+      ...defaultTicket,
+      trackerStatus: "AI",
+    });
     mockRunSandbox.mockResolvedValue({
       exitCode: 0,
       status: "complete",
@@ -373,7 +446,11 @@ describe("worker handler", () => {
 
     const { createWorker } = await import("./worker.js");
     const worker = createWorker();
-    const handler = (worker as unknown as { handler: (job: Job<TicketJobData>) => Promise<void> }).handler;
+    const handler = (
+      worker as unknown as {
+        handler: (job: Job<TicketJobData>) => Promise<void>;
+      }
+    ).handler;
 
     await handler(
       makeJob({
@@ -388,7 +465,8 @@ describe("worker handler", () => {
   });
 
   it("uses createMessagingAdapter factory for notifications", async () => {
-    const { createMessagingAdapter } = await import("./adapters/messaging-factory.js");
+    const { createMessagingAdapter } =
+      await import("./adapters/messaging-factory.js");
 
     mockJira.fetchTicket.mockResolvedValue({ ...defaultTicket });
     mockRunSandbox.mockResolvedValue({
@@ -399,7 +477,11 @@ describe("worker handler", () => {
 
     const { createWorker } = await import("./worker.js");
     const worker = createWorker();
-    const handler = (worker as unknown as { handler: (job: Job<TicketJobData>) => Promise<void> }).handler;
+    const handler = (
+      worker as unknown as {
+        handler: (job: Job<TicketJobData>) => Promise<void>;
+      }
+    ).handler;
 
     await handler(
       makeJob({
@@ -418,7 +500,13 @@ describe("worker handler", () => {
     it("fetches ticket, PR comments, conflict status, runs sandbox, and moves to AI Review on success", async () => {
       mockJira.fetchTicket.mockResolvedValue({ ...defaultTicket });
       mockGitHub.getPRComments.mockResolvedValue([
-        { author: "bob", body: "Add tests", path: "src/index.ts", line: 10, fromApprovedReview: false },
+        {
+          author: "bob",
+          body: "Add tests",
+          path: "src/index.ts",
+          line: 10,
+          fromApprovedReview: false,
+        },
       ]);
       mockGitHub.getPRConflictStatus.mockResolvedValue(false);
       mockRunSandbox.mockResolvedValue({
@@ -431,17 +519,23 @@ describe("worker handler", () => {
       const { db } = await import("./db.js");
       vi.mocked(db.select).mockReturnValue({
         from: vi.fn().mockReturnValue({
-          where: vi.fn().mockResolvedValue([{
-            id: "ticket-uuid",
-            prId: "42",
-            branchName: "blazebot/PROJ-42",
-          }]),
+          where: vi.fn().mockResolvedValue([
+            {
+              id: "ticket-uuid",
+              prId: "42",
+              branchName: "blazebot/PROJ-42",
+            },
+          ]),
         }),
       } as ReturnType<typeof db.select>);
 
       const { createWorker } = await import("./worker.js");
       const worker = createWorker();
-      const handler = (worker as unknown as { handler: (job: Job<TicketJobData>) => Promise<void> }).handler;
+      const handler = (
+        worker as unknown as {
+          handler: (job: Job<TicketJobData>) => Promise<void>;
+        }
+      ).handler;
 
       await handler(
         makeJob({
@@ -453,8 +547,16 @@ describe("worker handler", () => {
       );
 
       expect(mockJira.fetchTicket).toHaveBeenCalledWith("PROJ-42");
-      expect(mockGitHub.getPRComments).toHaveBeenCalledWith("owner", "repo", 42);
-      expect(mockGitHub.getPRConflictStatus).toHaveBeenCalledWith("owner", "repo", 42);
+      expect(mockGitHub.getPRComments).toHaveBeenCalledWith(
+        "owner",
+        "repo",
+        42,
+      );
+      expect(mockGitHub.getPRConflictStatus).toHaveBeenCalledWith(
+        "owner",
+        "repo",
+        42,
+      );
       expect(mockRunSandbox).toHaveBeenCalledWith(
         expect.objectContaining({
           branchName: "blazebot/PROJ-42",
@@ -478,17 +580,23 @@ describe("worker handler", () => {
       const { db } = await import("./db.js");
       vi.mocked(db.select).mockReturnValue({
         from: vi.fn().mockReturnValue({
-          where: vi.fn().mockResolvedValue([{
-            id: "ticket-uuid",
-            prId: "42",
-            branchName: "blazebot/PROJ-42",
-          }]),
+          where: vi.fn().mockResolvedValue([
+            {
+              id: "ticket-uuid",
+              prId: "42",
+              branchName: "blazebot/PROJ-42",
+            },
+          ]),
         }),
       } as ReturnType<typeof db.select>);
 
       const { createWorker } = await import("./worker.js");
       const worker = createWorker();
-      const handler = (worker as unknown as { handler: (job: Job<TicketJobData>) => Promise<void> }).handler;
+      const handler = (
+        worker as unknown as {
+          handler: (job: Job<TicketJobData>) => Promise<void>;
+        }
+      ).handler;
 
       await expect(
         handler(
@@ -512,7 +620,11 @@ describe("worker handler", () => {
 
       const { createWorker } = await import("./worker.js");
       const worker = createWorker();
-      const handler = (worker as unknown as { handler: (job: Job<TicketJobData>) => Promise<void> }).handler;
+      const handler = (
+        worker as unknown as {
+          handler: (job: Job<TicketJobData>) => Promise<void>;
+        }
+      ).handler;
 
       await handler(
         makeJob({
@@ -540,17 +652,23 @@ describe("worker handler", () => {
       const { db } = await import("./db.js");
       vi.mocked(db.select).mockReturnValue({
         from: vi.fn().mockReturnValue({
-          where: vi.fn().mockResolvedValue([{
-            id: "ticket-uuid",
-            prId: "42",
-            branchName: "blazebot/PROJ-42",
-          }]),
+          where: vi.fn().mockResolvedValue([
+            {
+              id: "ticket-uuid",
+              prId: "42",
+              branchName: "blazebot/PROJ-42",
+            },
+          ]),
         }),
       } as ReturnType<typeof db.select>);
 
       const { createWorker } = await import("./worker.js");
       const worker = createWorker();
-      const handler = (worker as unknown as { handler: (job: Job<TicketJobData>) => Promise<void> }).handler;
+      const handler = (
+        worker as unknown as {
+          handler: (job: Job<TicketJobData>) => Promise<void>;
+        }
+      ).handler;
 
       await handler(
         makeJob({
@@ -572,12 +690,18 @@ describe("worker handler", () => {
     it("throws a clear error when implement.md is missing", async () => {
       mockJira.fetchTicket.mockResolvedValue({ ...defaultTicket });
       mockReadFile.mockRejectedValueOnce(
-        Object.assign(new Error("ENOENT: no such file or directory"), { code: "ENOENT" }),
+        Object.assign(new Error("ENOENT: no such file or directory"), {
+          code: "ENOENT",
+        }),
       );
 
       const { createWorker } = await import("./worker.js");
       const worker = createWorker();
-      const handler = (worker as unknown as { handler: (job: Job<TicketJobData>) => Promise<void> }).handler;
+      const handler = (
+        worker as unknown as {
+          handler: (job: Job<TicketJobData>) => Promise<void>;
+        }
+      ).handler;
 
       await expect(
         handler(
@@ -597,21 +721,29 @@ describe("worker handler", () => {
       const { db } = await import("./db.js");
       vi.mocked(db.select).mockReturnValue({
         from: vi.fn().mockReturnValue({
-          where: vi.fn().mockResolvedValue([{
-            id: "ticket-uuid",
-            prId: "42",
-            branchName: "blazebot/PROJ-42",
-          }]),
+          where: vi.fn().mockResolvedValue([
+            {
+              id: "ticket-uuid",
+              prId: "42",
+              branchName: "blazebot/PROJ-42",
+            },
+          ]),
         }),
       } as ReturnType<typeof db.select>);
 
       mockReadFile.mockRejectedValueOnce(
-        Object.assign(new Error("ENOENT: no such file or directory"), { code: "ENOENT" }),
+        Object.assign(new Error("ENOENT: no such file or directory"), {
+          code: "ENOENT",
+        }),
       );
 
       const { createWorker } = await import("./worker.js");
       const worker = createWorker();
-      const handler = (worker as unknown as { handler: (job: Job<TicketJobData>) => Promise<void> }).handler;
+      const handler = (
+        worker as unknown as {
+          handler: (job: Job<TicketJobData>) => Promise<void>;
+        }
+      ).handler;
 
       await expect(
         handler(
@@ -641,7 +773,12 @@ describe("worker handler", () => {
 
       const failedHandler = mockWorkerEventHandlers["failed"][0]!;
       const fakeJob = {
-        data: { type: "implementation", ticketId: "PROJ-42", source: "jira", triggeredBy: "Mia" },
+        data: {
+          type: "implementation",
+          ticketId: "PROJ-42",
+          source: "jira",
+          triggeredBy: "Mia",
+        },
         attemptsMade: 4,
         opts: { attempts: 4 },
       };
@@ -670,7 +807,12 @@ describe("worker handler", () => {
 
       const failedHandler = mockWorkerEventHandlers["failed"][0]!;
       const fakeJob = {
-        data: { type: "implementation", ticketId: "PROJ-42", source: "jira", triggeredBy: "Mia" },
+        data: {
+          type: "implementation",
+          ticketId: "PROJ-42",
+          source: "jira",
+          triggeredBy: "Mia",
+        },
         attemptsMade: 1,
         opts: { attempts: 4 },
       };

@@ -95,9 +95,11 @@ describe("routeTicketTransition", () => {
 
     mockDb.select.mockReturnValue({
       from: vi.fn().mockReturnValue({
-        where: vi.fn().mockResolvedValue([
-          { id: "uuid-1", workflowState: "clarification_pending" },
-        ]),
+        where: vi
+          .fn()
+          .mockResolvedValue([
+            { id: "uuid-1", workflowState: "clarification_pending" },
+          ]),
       }),
     });
     mockDb.update.mockReturnValue({
@@ -120,9 +122,11 @@ describe("routeTicketTransition", () => {
 
     mockDb.select.mockReturnValue({
       from: vi.fn().mockReturnValue({
-        where: vi.fn().mockResolvedValue([
-          { id: "uuid-1", workflowState: "awaiting_review" },
-        ]),
+        where: vi
+          .fn()
+          .mockResolvedValue([
+            { id: "uuid-1", workflowState: "awaiting_review" },
+          ]),
       }),
     });
     mockDb.update.mockReturnValue({
@@ -178,9 +182,11 @@ describe("routeTicketTransition", () => {
 
     mockDb.select.mockReturnValue({
       from: vi.fn().mockReturnValue({
-        where: vi.fn().mockResolvedValue([
-          { id: "uuid-1", workflowState: "implementing", currentRunId: null },
-        ]),
+        where: vi
+          .fn()
+          .mockResolvedValue([
+            { id: "uuid-1", workflowState: "implementing", currentRunId: null },
+          ]),
       }),
     });
     mockDb.update.mockReturnValue({
@@ -201,9 +207,11 @@ describe("routeTicketTransition", () => {
 
     mockDb.select.mockReturnValue({
       from: vi.fn().mockReturnValue({
-        where: vi.fn().mockResolvedValue([
-          { id: "uuid-1", workflowState: "implementing", currentRunId: null },
-        ]),
+        where: vi
+          .fn()
+          .mockResolvedValue([
+            { id: "uuid-1", workflowState: "implementing", currentRunId: null },
+          ]),
       }),
     });
     mockDb.update.mockReturnValue({
@@ -225,16 +233,24 @@ describe("routeTicketTransition", () => {
     mockDb.select
       .mockReturnValueOnce({
         from: vi.fn().mockReturnValue({
-          where: vi.fn().mockResolvedValue([
-            { id: "uuid-1", workflowState: "implementing", currentRunId: "run-uuid-1" },
-          ]),
+          where: vi
+            .fn()
+            .mockResolvedValue([
+              {
+                id: "uuid-1",
+                workflowState: "implementing",
+                currentRunId: "run-uuid-1",
+              },
+            ]),
         }),
       })
       .mockReturnValueOnce({
         from: vi.fn().mockReturnValue({
-          where: vi.fn().mockResolvedValue([
-            { id: "run-uuid-1", containerId: "docker-container-xyz" },
-          ]),
+          where: vi
+            .fn()
+            .mockResolvedValue([
+              { id: "run-uuid-1", containerId: "docker-container-xyz" },
+            ]),
         }),
       });
     mockDb.update.mockReturnValue({
@@ -253,9 +269,11 @@ describe("routeTicketTransition", () => {
 
     mockDb.select.mockReturnValue({
       from: vi.fn().mockReturnValue({
-        where: vi.fn().mockResolvedValue([
-          { id: "uuid-1", workflowState: "clarification_pending" },
-        ]),
+        where: vi
+          .fn()
+          .mockResolvedValue([
+            { id: "uuid-1", workflowState: "clarification_pending" },
+          ]),
       }),
     });
     mockDb.update.mockReturnValue({

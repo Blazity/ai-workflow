@@ -63,7 +63,11 @@ export function buildApp() {
     const event = parseJiraWebhook(request.body);
     if (event) {
       logger.info(
-        { ticketId: event.ticketId, type: event.type, triggeredBy: event.triggeredBy },
+        {
+          ticketId: event.ticketId,
+          type: event.type,
+          triggeredBy: event.triggeredBy,
+        },
         "webhook_received",
       );
       await routeTicketTransition(event);
@@ -82,7 +86,9 @@ export async function main() {
 
   const maintenanceWorker = new Worker(
     "maintenance",
-    async () => { await runMaintenancePoll(); },
+    async () => {
+      await runMaintenancePoll();
+    },
     { connection: createRedisConnection(), concurrency: 1 },
   );
 
@@ -91,7 +97,10 @@ export async function main() {
     {},
     { repeat: { every: env.POLL_INTERVAL_MS } },
   );
-  logger.info({ intervalMs: env.POLL_INTERVAL_MS }, "maintenance_poll_scheduled");
+  logger.info(
+    { intervalMs: env.POLL_INTERVAL_MS },
+    "maintenance_poll_scheduled",
+  );
 
   try {
     await app.listen({ port: env.PORT, host: "0.0.0.0" });

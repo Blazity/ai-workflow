@@ -69,7 +69,11 @@ describe("createMessagingAdapter", () => {
     const { createMessagingAdapter } = await import("./messaging-factory.js");
     const { NoopMessagingAdapter } = await import("./noop-messaging.js");
 
-    const adapter = createMessagingAdapter("unknown" as "slack", undefined, undefined);
+    const adapter = createMessagingAdapter(
+      "unknown" as "slack",
+      undefined,
+      undefined,
+    );
 
     expect(adapter).toBeInstanceOf(NoopMessagingAdapter);
   });

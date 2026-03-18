@@ -98,9 +98,7 @@ describe("POST /webhooks/jira", () => {
   });
 
   function sign(body: string): string {
-    return (
-      "sha256=" + createHmac("sha256", secret).update(body).digest("hex")
-    );
+    return "sha256=" + createHmac("sha256", secret).update(body).digest("hex");
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
