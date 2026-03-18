@@ -11,7 +11,7 @@ import { JiraClient } from "./adapters/jira-client.js";
 import { GitHubClient } from "./adapters/github-client.js";
 import { ConsoleMessagingAdapter } from "./adapters/console-messaging.js";
 import { runSandbox, pushBranchFromContainer, teardownContainer } from "./sandbox/manager.js";
-import { assembleImplementationContext } from "./context.js";
+import { assembleImplementationContext, assembleFixingFeedbackContext } from "./context.js";
 import { createLogger, createTicketLogger, createRunLogger } from "./logger.js";
 import type { TicketJobData } from "./queue.js";
 
@@ -47,9 +47,7 @@ export function createWorker(): Worker<TicketJobData> {
       if (job.data.type === "implementation") {
         await handleImplementation(job.data);
       } else if (job.data.type === "review_fix") {
-        throw new Error(
-          `review_fix handler not yet implemented for ${job.data.ticketId}`,
-        );
+        await handleReviewFix(job.data);
       }
     },
     {
@@ -236,6 +234,148 @@ async function handleImplementation(data: Extract<TicketJobData, { type: "implem
     .where(eq(tickets.externalId, data.ticketId));
 
   ticketLog.info({ from: "implementing", to: "failed" }, "ticket_state_transition");
+
+  throw new Error(
+    `Agent failed for ${data.ticketId}: ${result.error}`,
+  );
+}
+
+async function handleReviewFix(data: Extract<TicketJobData, { type: "review_fix" }>) {
+  const { jira, github, messaging } = createAdapters();
+  const owner = env.GITHUB_REPO_OWNER!;
+  const repo = env.GITHUB_REPO_NAME!;
+
+  const ticket = await jira.fetchTicket(data.ticketId);
+
+  const colAi = normalize(env.COLUMN_AI);
+  if (normalize(ticket.trackerStatus) !== colAi) {
+    logger.info(
+      { ticketId: data.ticketId, trackerStatus: ticket.trackerStatus },
+      "stale_job_skipped",
+    );
+    return;
+  }
+
+  const ticketRow = (
+    await db.select().from(tickets).where(eq(tickets.externalId, data.ticketId))
+  )[0]!;
+
+  if (!ticketRow.prId || !ticketRow.branchName) {
+    logger.error({ ticketId: data.ticketId }, "review_fix_missing_pr_or_branch");
+    throw new Error(`review_fix requires prId and branchName for ${data.ticketId}`);
+  }
+
+  const prNumber = parseInt(ticketRow.prId, 10);
+  const branchName = ticketRow.branchName;
+
+  await db.update(tickets)
+    .set({ workflowState: "fixing_feedback", updatedAt: new Date() })
+    .where(eq(tickets.externalId, data.ticketId));
+
+  const ticketLog = createTicketLogger(logger, ticketRow.id, data.ticketId);
+
+  const [run] = await db.insert(runAttempts)
+    .values({
+      ticketId: ticketRow.id,
+      type: "review_fix",
+      status: "running",
+      branchName,
+    })
+    .returning();
+
+  await db.update(tickets)
+    .set({ currentRunId: run!.id, updatedAt: new Date() })
+    .where(eq(tickets.externalId, data.ticketId));
+
+  const runLog = createRunLogger(ticketLog, run!.id);
+  runLog.info({ type: "review_fix", branchName, prNumber }, "job_started");
+
+  ticketLog.info({ from: "awaiting_review", to: "fixing_feedback" }, "ticket_state_transition");
+
+  const promptPath = resolve(PROMPTS_DIR, "review-fix.md");
+  const promptContent = await readFile(promptPath, "utf-8");
+
+  const [prComments, hasConflicts] = await Promise.all([
+    github.getPRComments(owner, repo, prNumber),
+    github.getPRConflictStatus(owner, repo, prNumber),
+  ]);
+
+  const requirementsMd = assembleFixingFeedbackContext(
+    ticket, prComments, hasConflicts, promptContent,
+  );
+
+  const startTime = Date.now();
+
+  const result = await runSandbox({
+    image: env.DOCKER_IMAGE,
+    branchName,
+    requirementsMd,
+    githubToken: env.GITHUB_TOKEN!,
+    repoUrl: `${owner}/${repo}`,
+    oauthToken: env.CLAUDE_CODE_OAUTH_TOKEN,
+    model: env.CLAUDE_MODEL,
+    timeoutMs: env.JOB_TIMEOUT_MS,
+    memoryLimitMb: env.SANDBOX_MEMORY_MB,
+  });
+
+  const durationMs = Date.now() - startTime;
+  runLog.info(
+    { exitCode: result.exitCode, containerId: result.containerId, durationMs },
+    "agent_exited",
+  );
+
+  if (result.containerId) {
+    await db.update(runAttempts)
+      .set({ containerId: result.containerId })
+      .where(eq(runAttempts.id, run!.id));
+  }
+
+  try {
+    if (result.containerId && result.status === "complete") {
+      await pushBranchFromContainer(result.containerId, branchName);
+    }
+  } finally {
+    if (result.containerId) {
+      await teardownContainer(result.containerId);
+    }
+  }
+
+  if (result.status === "complete") {
+    runLog.info({ prNumber }, "review_fix_complete");
+
+    await db.update(tickets)
+      .set({
+        workflowState: "awaiting_review",
+        currentRunId: null,
+        updatedAt: new Date(),
+      })
+      .where(eq(tickets.externalId, data.ticketId));
+
+    await db.update(runAttempts)
+      .set({ status: "succeeded", finishedAt: new Date() })
+      .where(eq(runAttempts.id, run!.id));
+
+    ticketLog.info({ from: "fixing_feedback", to: "awaiting_review" }, "ticket_state_transition");
+
+    await jira.moveTicket(data.ticketId, env.COLUMN_AI_REVIEW);
+    await messaging.notify(
+      data.triggeredBy,
+      `Task ${ticket.identifier} fixes applied, ready for re-review`,
+    );
+    return;
+  }
+
+  runLog.error({ error: result.error }, "agent_failed");
+
+  await db.update(runAttempts)
+    .set({ status: "failed", error: result.error, finishedAt: new Date() })
+    .where(eq(runAttempts.id, run!.id));
+
+  await db.update(tickets)
+    .set({ workflowState: "failed", currentRunId: null, updatedAt: new Date() })
+    .where(eq(tickets.externalId, data.ticketId));
+
+  ticketLog.info({ from: "fixing_feedback", to: "failed" }, "ticket_state_transition");
 
   throw new Error(
     `Agent failed for ${data.ticketId}: ${result.error}`,

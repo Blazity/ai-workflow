@@ -248,6 +248,42 @@ describe("routeTicketTransition", () => {
     expect(mockTeardown).toHaveBeenCalledWith("docker-container-xyz");
   });
 
+  it("carries triggeredBy through when resuming from clarification_pending", async () => {
+    const { routeTicketTransition } = await import("./router.js");
+
+    mockDb.select.mockReturnValue({
+      from: vi.fn().mockReturnValue({
+        where: vi.fn().mockResolvedValue([
+          { id: "uuid-1", workflowState: "clarification_pending" },
+        ]),
+      }),
+    });
+    mockDb.update.mockReturnValue({
+      set: vi.fn().mockReturnValue({
+        where: vi.fn().mockResolvedValue(undefined),
+      }),
+    });
+
+    await routeTicketTransition({
+      type: "ticket_moved",
+      ticketId: "PROJ-42",
+      fromColumn: "Backlog",
+      toColumn: "AI",
+      triggeredBy: "Bob",
+      triggeredByAccountId: "user-bob-456",
+    });
+
+    expect(mockQueueAdd).toHaveBeenCalledWith(
+      "implementation",
+      expect.objectContaining({
+        type: "implementation",
+        ticketId: "PROJ-42",
+        triggeredBy: "Bob",
+      }),
+      expect.any(Object),
+    );
+  });
+
   it("does nothing when ticket moved out of AI but no DB record exists", async () => {
     const { routeTicketTransition } = await import("./router.js");
 

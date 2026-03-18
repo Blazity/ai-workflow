@@ -275,6 +275,77 @@ describe("worker handler", () => {
     expect(mockGitHub.createPR).not.toHaveBeenCalled();
   });
 
+  it("includes Q&A comments in context when resuming after clarification", async () => {
+    const ticketWithAnswers = {
+      ...defaultTicket,
+      comments: [
+        { author: "Alice", body: "Use CSS variables", createdAt: new Date("2026-03-10") },
+        { author: "Blazebot", body: "What color scheme should be used?", createdAt: new Date("2026-03-11") },
+        { author: "Alice", body: "Use the Material Design dark palette", createdAt: new Date("2026-03-12") },
+      ],
+    };
+
+    mockJira.fetchTicket.mockResolvedValue(ticketWithAnswers);
+    mockRunSandbox.mockResolvedValue({
+      exitCode: 0,
+      status: "complete",
+      summary: "Implemented with Material Design palette",
+    });
+
+    const { createWorker } = await import("./worker.js");
+    const worker = createWorker();
+    const handler = (worker as unknown as { handler: (job: Job<TicketJobData>) => Promise<void> }).handler;
+
+    await handler(
+      makeJob({
+        type: "implementation",
+        ticketId: "PROJ-42",
+        source: "jira",
+        triggeredBy: "Mia",
+      }),
+    );
+
+    expect(mockRunSandbox).toHaveBeenCalledWith(
+      expect.objectContaining({
+        requirementsMd: expect.stringContaining("What color scheme should be used?"),
+      }),
+    );
+    expect(mockRunSandbox).toHaveBeenCalledWith(
+      expect.objectContaining({
+        requirementsMd: expect.stringContaining("Use the Material Design dark palette"),
+      }),
+    );
+  });
+
+  it("calls createBranch on resume from clarification (adapter handles 422)", async () => {
+    mockJira.fetchTicket.mockResolvedValue({ ...defaultTicket });
+    mockGitHub.createBranch.mockResolvedValue(undefined);
+    mockRunSandbox.mockResolvedValue({
+      exitCode: 0,
+      status: "complete",
+      summary: "Done after resume",
+    });
+
+    const { createWorker } = await import("./worker.js");
+    const worker = createWorker();
+    const handler = (worker as unknown as { handler: (job: Job<TicketJobData>) => Promise<void> }).handler;
+
+    await handler(
+      makeJob({
+        type: "implementation",
+        ticketId: "PROJ-42",
+        source: "jira",
+        triggeredBy: "Mia",
+      }),
+    );
+
+    expect(mockGitHub.createBranch).toHaveBeenCalledWith(
+      "owner", "repo", "blazebot/PROJ-42", "main",
+    );
+    expect(mockRunSandbox).toHaveBeenCalled();
+    expect(mockGitHub.createPR).toHaveBeenCalled();
+  });
+
   it("proceeds when ticket tracker status matches AI column", async () => {
     mockJira.fetchTicket.mockResolvedValue({ ...defaultTicket, trackerStatus: "AI" });
     mockRunSandbox.mockResolvedValue({
@@ -297,5 +368,159 @@ describe("worker handler", () => {
     );
 
     expect(mockRunSandbox).toHaveBeenCalled();
+  });
+
+  describe("review_fix handler", () => {
+    it("fetches ticket, PR comments, conflict status, runs sandbox, and moves to AI Review on success", async () => {
+      mockJira.fetchTicket.mockResolvedValue({ ...defaultTicket });
+      mockGitHub.getPRComments.mockResolvedValue([
+        { author: "bob", body: "Add tests", path: "src/index.ts", line: 10, fromApprovedReview: false },
+      ]);
+      mockGitHub.getPRConflictStatus.mockResolvedValue(false);
+      mockRunSandbox.mockResolvedValue({
+        exitCode: 0,
+        status: "complete",
+        summary: "Fixed review feedback",
+        containerId: "container-xyz",
+      });
+
+      const { db } = await import("./db.js");
+      vi.mocked(db.select).mockReturnValue({
+        from: vi.fn().mockReturnValue({
+          where: vi.fn().mockResolvedValue([{
+            id: "ticket-uuid",
+            prId: "42",
+            branchName: "blazebot/PROJ-42",
+          }]),
+        }),
+      } as ReturnType<typeof db.select>);
+
+      const { createWorker } = await import("./worker.js");
+      const worker = createWorker();
+      const handler = (worker as unknown as { handler: (job: Job<TicketJobData>) => Promise<void> }).handler;
+
+      await handler(
+        makeJob({
+          type: "review_fix",
+          ticketId: "PROJ-42",
+          source: "jira",
+          triggeredBy: "Mia",
+        }),
+      );
+
+      expect(mockJira.fetchTicket).toHaveBeenCalledWith("PROJ-42");
+      expect(mockGitHub.getPRComments).toHaveBeenCalledWith("owner", "repo", 42);
+      expect(mockGitHub.getPRConflictStatus).toHaveBeenCalledWith("owner", "repo", 42);
+      expect(mockRunSandbox).toHaveBeenCalledWith(
+        expect.objectContaining({
+          branchName: "blazebot/PROJ-42",
+          requirementsMd: expect.stringContaining("## PR Review Feedback"),
+        }),
+      );
+      expect(mockJira.moveTicket).toHaveBeenCalledWith("PROJ-42", "AI Review");
+    });
+
+    it("throws on failure so BullMQ retries (review_fix)", async () => {
+      mockJira.fetchTicket.mockResolvedValue({ ...defaultTicket });
+      mockGitHub.getPRComments.mockResolvedValue([]);
+      mockGitHub.getPRConflictStatus.mockResolvedValue(false);
+      mockRunSandbox.mockResolvedValue({
+        exitCode: 1,
+        status: "failed",
+        error: "Merge conflict unresolvable",
+        containerId: "container-fail",
+      });
+
+      const { db } = await import("./db.js");
+      vi.mocked(db.select).mockReturnValue({
+        from: vi.fn().mockReturnValue({
+          where: vi.fn().mockResolvedValue([{
+            id: "ticket-uuid",
+            prId: "42",
+            branchName: "blazebot/PROJ-42",
+          }]),
+        }),
+      } as ReturnType<typeof db.select>);
+
+      const { createWorker } = await import("./worker.js");
+      const worker = createWorker();
+      const handler = (worker as unknown as { handler: (job: Job<TicketJobData>) => Promise<void> }).handler;
+
+      await expect(
+        handler(
+          makeJob({
+            type: "review_fix",
+            ticketId: "PROJ-42",
+            source: "jira",
+            triggeredBy: "Mia",
+          }),
+        ),
+      ).rejects.toThrow();
+
+      expect(mockGitHub.createPR).not.toHaveBeenCalled();
+    });
+
+    it("skips review_fix when ticket is no longer in AI column", async () => {
+      mockJira.fetchTicket.mockResolvedValue({
+        ...defaultTicket,
+        trackerStatus: "Done",
+      });
+
+      const { createWorker } = await import("./worker.js");
+      const worker = createWorker();
+      const handler = (worker as unknown as { handler: (job: Job<TicketJobData>) => Promise<void> }).handler;
+
+      await handler(
+        makeJob({
+          type: "review_fix",
+          ticketId: "PROJ-42",
+          source: "jira",
+          triggeredBy: "Mia",
+        }),
+      );
+
+      expect(mockRunSandbox).not.toHaveBeenCalled();
+    });
+
+    it("sends notification after review fix completes", async () => {
+      mockJira.fetchTicket.mockResolvedValue({ ...defaultTicket });
+      mockGitHub.getPRComments.mockResolvedValue([]);
+      mockGitHub.getPRConflictStatus.mockResolvedValue(false);
+      mockRunSandbox.mockResolvedValue({
+        exitCode: 0,
+        status: "complete",
+        summary: "Fixed",
+        containerId: "container-notif",
+      });
+
+      const { db } = await import("./db.js");
+      vi.mocked(db.select).mockReturnValue({
+        from: vi.fn().mockReturnValue({
+          where: vi.fn().mockResolvedValue([{
+            id: "ticket-uuid",
+            prId: "42",
+            branchName: "blazebot/PROJ-42",
+          }]),
+        }),
+      } as ReturnType<typeof db.select>);
+
+      const { createWorker } = await import("./worker.js");
+      const worker = createWorker();
+      const handler = (worker as unknown as { handler: (job: Job<TicketJobData>) => Promise<void> }).handler;
+
+      await handler(
+        makeJob({
+          type: "review_fix",
+          ticketId: "PROJ-42",
+          source: "jira",
+          triggeredBy: "Mia",
+        }),
+      );
+
+      expect(mockMessaging.notify).toHaveBeenCalledWith(
+        "Mia",
+        expect.stringContaining("fixes applied"),
+      );
+    });
   });
 });

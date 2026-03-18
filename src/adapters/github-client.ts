@@ -100,7 +100,9 @@ export class GitHubClient implements VCSAdapter {
         body: c.body,
         path: c.path ?? null,
         line: c.line ?? null,
-        fromApprovedReview: false,
+        fromApprovedReview:
+          (c.reactions as Record<string, number> | undefined)?.["+1"] != null &&
+          (c.reactions as Record<string, number>)["+1"] > 0,
       }),
     );
   }

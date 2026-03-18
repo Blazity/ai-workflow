@@ -192,6 +192,46 @@ describe("GitHubClient", () => {
     ]);
   });
 
+  it("getPRComments marks comments with +1 reactions as liked", async () => {
+    const { Octokit } = await import("@octokit/rest");
+    const { GitHubClient } = await import("./github-client.js");
+    const client = new GitHubClient("test-token");
+
+    const mockInstance = vi.mocked(Octokit).mock.results[0]!.value;
+    mockInstance.pulls.listReviewComments.mockResolvedValue({
+      data: [
+        {
+          user: { login: "reviewer" },
+          body: "This needs fixing",
+          path: "src/app.ts",
+          line: 10,
+          reactions: { "+1": 2, "-1": 0 },
+        },
+        {
+          user: { login: "reviewer2" },
+          body: "Nit: spacing",
+          path: "src/app.ts",
+          line: 20,
+          reactions: { "+1": 0, "-1": 0 },
+        },
+        {
+          user: { login: "reviewer3" },
+          body: "Old comment",
+          path: "src/old.ts",
+          line: 5,
+        },
+      ],
+    });
+
+    const comments = await client.getPRComments("owner", "repo", 1);
+
+    expect(comments).toEqual([
+      expect.objectContaining({ author: "reviewer", fromApprovedReview: true }),
+      expect.objectContaining({ author: "reviewer2", fromApprovedReview: false }),
+      expect.objectContaining({ author: "reviewer3", fromApprovedReview: false }),
+    ]);
+  });
+
   it("getPRConflictStatus returns true when mergeable is false", async () => {
     const { Octokit } = await import("@octokit/rest");
     const { GitHubClient } = await import("./github-client.js");
