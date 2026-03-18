@@ -23,6 +23,8 @@ export const defaultJobOptions: JobsOptions = {
     type: "exponential",
     delay: env.JOB_BACKOFF_MS,
   },
+  removeOnComplete: true,
+  removeOnFail: true,
 };
 
 export const ticketQueue = new Queue<TicketJobData>("ticket", {

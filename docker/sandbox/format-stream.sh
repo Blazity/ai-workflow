@@ -13,6 +13,15 @@
 #   result:     { "type": "result", "subtype": "success", "result": "...", "structured_output": {...} }
 
 while IFS= read -r line; do
+  ts=$(date +"%H:%M:%S")
+
+  # Non-JSON lines: pass through as-is with timestamp
+  if [[ "$line" != "{"* ]]; then
+    [ -n "$line" ] && echo "[$ts] $line"
+    continue
+  fi
+
+  # Single jq call: outputs formatted lines prefixed with __RESULT__ for result events
   parsed=$(echo "$line" | jq -r '
     if type != "object" then
       empty
@@ -30,7 +39,7 @@ while IFS= read -r line; do
     elif .type == "tool_result" then
       "tool_result: " + (if .is_error then "ERROR: " + (.content | tostring | .[0:200]) else "ok" end)
     elif .type == "result" then
-      "result: " + (.structured_output.result // .subtype // "unknown")
+      "__RESULT__result: " + (.structured_output.result // .subtype // "unknown")
     elif .type == "system" then
       if .subtype == "init" then
         "system: initialized (model: " + (.model // "unknown") + ")"
@@ -50,18 +59,23 @@ while IFS= read -r line; do
     end
   ' 2>/dev/null)
 
-  ts=$(date +"%H:%M:%S")
-
-  if [ -n "$parsed" ]; then
+  if [ -z "$parsed" ]; then
+    # jq produced no output (filtered event like user/rate_limit) — skip
+    continue
+  else
+    is_result=false
     # parsed may contain multiple lines (from assistant events with text + tool_use)
     while IFS= read -r out_line; do
+      # Strip __RESULT__ sentinel and flag for raw passthrough
+      if [[ "$out_line" == __RESULT__* ]]; then
+        out_line="${out_line#__RESULT__}"
+        is_result=true
+      fi
       [ -n "$out_line" ] && echo "[$ts] $out_line"
     done <<< "$parsed"
     # For result events, also emit the raw JSON for parseAgentOutput
-    is_result=$(echo "$line" | jq -r 'if .type == "result" then "yes" else "no" end' 2>/dev/null)
-    if [ "$is_result" = "yes" ]; then
+    if [ "$is_result" = true ]; then
       echo "$line"
     fi
   fi
-  # Non-JSON lines and empty parsed results are silently dropped
 done

@@ -89,7 +89,9 @@ describe("POST /webhooks/jira", () => {
     });
     mockDb.insert.mockReturnValue({
       values: vi.fn().mockReturnValue({
-        returning: vi.fn().mockResolvedValue([{ id: "uuid-1" }]),
+        onConflictDoNothing: vi.fn().mockReturnValue({
+          returning: vi.fn().mockResolvedValue([{ id: "uuid-1" }]),
+        }),
       }),
     });
   });

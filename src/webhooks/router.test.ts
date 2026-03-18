@@ -72,7 +72,9 @@ describe("routeTicketTransition", () => {
     });
     mockDb.insert.mockReturnValue({
       values: vi.fn().mockReturnValue({
-        returning: vi.fn().mockResolvedValue([{ id: "uuid-1" }]),
+        onConflictDoNothing: vi.fn().mockReturnValue({
+          returning: vi.fn().mockResolvedValue([{ id: "uuid-1" }]),
+        }),
       }),
     });
 
@@ -88,6 +90,36 @@ describe("routeTicketTransition", () => {
       }),
       expect.objectContaining({ jobId: expect.stringContaining("PROJ-42") }),
     );
+  });
+
+  it("ignores duplicate webhook when concurrent insert loses the race", async () => {
+    const { routeTicketTransition } = await import("./router.js");
+
+    mockDb.select
+      .mockReturnValueOnce({
+        from: vi.fn().mockReturnValue({
+          where: vi.fn().mockResolvedValue([]),
+        }),
+      })
+      .mockReturnValueOnce({
+        from: vi.fn().mockReturnValue({
+          where: vi.fn().mockResolvedValue([
+            { id: "uuid-1", workflowState: "queued" },
+          ]),
+        }),
+      });
+
+    mockDb.insert.mockReturnValue({
+      values: vi.fn().mockReturnValue({
+        onConflictDoNothing: vi.fn().mockReturnValue({
+          returning: vi.fn().mockResolvedValue([]),
+        }),
+      }),
+    });
+
+    await routeTicketTransition(makeEvent("To Do", "AI"));
+
+    expect(mockQueueAdd).not.toHaveBeenCalled();
   });
 
   it("enqueues implementation job when ticket in clarification_pending moves to AI", async () => {
@@ -158,7 +190,9 @@ describe("routeTicketTransition", () => {
     });
     mockDb.insert.mockReturnValue({
       values: vi.fn().mockReturnValue({
-        returning: vi.fn().mockResolvedValue([{ id: "uuid-1" }]),
+        onConflictDoNothing: vi.fn().mockReturnValue({
+          returning: vi.fn().mockResolvedValue([{ id: "uuid-1" }]),
+        }),
       }),
     });
 
