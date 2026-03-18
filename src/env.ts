@@ -27,6 +27,16 @@ export const env = createEnv({
       .default("600000")
       .transform((v) => parseInt(v, 10))
       .pipe(z.number().int().positive()),
+    JOB_MAX_RETRIES: z
+      .string()
+      .default("3")
+      .transform((v) => parseInt(v, 10))
+      .pipe(z.number().int().nonnegative()),
+    JOB_BACKOFF_MS: z
+      .string()
+      .default("30000")
+      .transform((v) => parseInt(v, 10))
+      .pipe(z.number().int().positive()),
     JIRA_BASE_URL: z.string().url().optional(),
     JIRA_USER_EMAIL: z.string().email().optional(),
     JIRA_API_TOKEN: z.string().min(1).optional(),

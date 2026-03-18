@@ -22,4 +22,37 @@ describe("ticketQueue", () => {
       expect.objectContaining({ connection: expect.anything() }),
     );
   });
+
+  it("configures default job options with retry attempts and exponential backoff", async () => {
+    const bullmq = await import("bullmq");
+    await import("./queue.js");
+
+    expect(bullmq.Queue).toHaveBeenCalledWith(
+      "ticket",
+      expect.objectContaining({
+        defaultJobOptions: expect.objectContaining({
+          attempts: 4,
+          backoff: { type: "exponential", delay: 30000 },
+        }),
+      }),
+    );
+  });
+
+  it("uses custom retry config from env", async () => {
+    vi.stubEnv("JOB_MAX_RETRIES", "5");
+    vi.stubEnv("JOB_BACKOFF_MS", "10000");
+
+    const bullmq = await import("bullmq");
+    await import("./queue.js");
+
+    expect(bullmq.Queue).toHaveBeenCalledWith(
+      "ticket",
+      expect.objectContaining({
+        defaultJobOptions: expect.objectContaining({
+          attempts: 6,
+          backoff: { type: "exponential", delay: 10000 },
+        }),
+      }),
+    );
+  });
 });

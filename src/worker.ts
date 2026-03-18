@@ -35,8 +35,21 @@ function createAdapters() {
   return { jira, github, messaging };
 }
 
+async function readPromptFile(filename: string): Promise<string> {
+  const promptPath = resolve(PROMPTS_DIR, filename);
+  try {
+    return await readFile(promptPath, "utf-8");
+  } catch (err) {
+    const error = err as NodeJS.ErrnoException;
+    if (error.code === "ENOENT") {
+      throw new Error(`Prompt file not found at ${promptPath}. Ensure the prompts/ directory contains ${filename}.`);
+    }
+    throw err;
+  }
+}
+
 export function createWorker(): Worker<TicketJobData> {
-  return new Worker<TicketJobData>(
+  const worker = new Worker<TicketJobData>(
     "ticket",
     async (job: Job<TicketJobData>) => {
       if (!("type" in job.data) || !("source" in job.data)) {
@@ -55,6 +68,42 @@ export function createWorker(): Worker<TicketJobData> {
       concurrency: env.MAX_CONCURRENT_AGENTS,
     },
   );
+
+  worker.on("failed", async (job, err) => {
+    if (!job) return;
+
+    const maxAttempts = job.opts?.attempts ?? 1;
+    const isFinalAttempt = job.attemptsMade >= maxAttempts;
+
+    if (!isFinalAttempt) {
+      logger.info(
+        { ticketId: job.data.ticketId, attempt: job.attemptsMade, maxAttempts, error: err.message },
+        "job_retry_scheduled",
+      );
+      return;
+    }
+
+    logger.error(
+      { ticketId: job.data.ticketId, attempt: job.attemptsMade, maxAttempts, error: err.message },
+      "job_retries_exhausted",
+    );
+
+    try {
+      await db.update(tickets)
+        .set({ workflowState: "failed", currentRunId: null, updatedAt: new Date() })
+        .where(eq(tickets.externalId, job.data.ticketId));
+
+      const { messaging } = createAdapters();
+      await messaging.notify(
+        job.data.triggeredBy,
+        `Task ${job.data.ticketId} failed permanently after ${job.attemptsMade} attempts: ${err.message}`,
+      );
+    } catch (notifyErr) {
+      logger.error({ ticketId: job.data.ticketId, error: (notifyErr as Error).message }, "retries_exhausted_handler_error");
+    }
+  });
+
+  return worker;
 }
 
 async function handleImplementation(data: Extract<TicketJobData, { type: "implementation" }>) {
@@ -75,8 +124,7 @@ async function handleImplementation(data: Extract<TicketJobData, { type: "implem
     return;
   }
 
-  const promptPath = resolve(PROMPTS_DIR, "implement.md");
-  const promptContent = await readFile(promptPath, "utf-8");
+  const promptContent = await readPromptFile("implement.md");
 
   await github.createBranch(owner, repo, branchName, baseBranch);
 
@@ -292,8 +340,7 @@ async function handleReviewFix(data: Extract<TicketJobData, { type: "review_fix"
 
   ticketLog.info({ from: "awaiting_review", to: "fixing_feedback" }, "ticket_state_transition");
 
-  const promptPath = resolve(PROMPTS_DIR, "review-fix.md");
-  const promptContent = await readFile(promptPath, "utf-8");
+  const promptContent = await readPromptFile("review-fix.md");
 
   const [prComments, hasConflicts] = await Promise.all([
     github.getPRComments(owner, repo, prNumber),

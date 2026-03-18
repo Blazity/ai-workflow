@@ -3,13 +3,22 @@ import type { Job } from "bullmq";
 import type { TicketJobData } from "./queue.js";
 
 vi.mock("ioredis", () => ({ Redis: vi.fn() }));
+const mockWorkerEventHandlers: Record<string, ((...args: unknown[]) => void)[]> = {};
 vi.mock("bullmq", () => ({
   Worker: vi.fn().mockImplementation(function WorkerMock(
     _name: string,
     handler: (job: unknown) => Promise<void>,
     _opts?: unknown,
   ) {
-    return { handler, close: vi.fn() };
+    Object.keys(mockWorkerEventHandlers).forEach((k) => delete mockWorkerEventHandlers[k]);
+    return {
+      handler,
+      close: vi.fn(),
+      on: vi.fn((event: string, cb: (...args: unknown[]) => void) => {
+        if (!mockWorkerEventHandlers[event]) mockWorkerEventHandlers[event] = [];
+        mockWorkerEventHandlers[event].push(cb);
+      }),
+    };
   }),
   Queue: vi.fn().mockImplementation(() => ({ add: vi.fn() })),
 }));
@@ -36,6 +45,15 @@ vi.mock("drizzle-orm/postgres-js", () => ({
   }),
 }));
 vi.mock("postgres", () => ({ default: vi.fn() }));
+
+const mockReadFile = vi.fn().mockResolvedValue("You are an agent prompt content");
+vi.mock("node:fs/promises", async () => {
+  const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+  return {
+    ...actual,
+    readFile: (...args: unknown[]) => mockReadFile(...args),
+  };
+});
 
 const mockRunSandbox = vi.fn();
 const mockPushBranch = vi.fn();
@@ -126,6 +144,7 @@ describe("worker handler", () => {
     vi.stubEnv("GITHUB_REPO_NAME", "repo");
     vi.stubEnv("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat01-test");
     vi.clearAllMocks();
+    mockReadFile.mockResolvedValue("You are an agent prompt content");
   });
 
   const makeJob = (data: TicketJobData): Job<TicketJobData> =>
@@ -521,6 +540,128 @@ describe("worker handler", () => {
         "Mia",
         expect.stringContaining("fixes applied"),
       );
+    });
+  });
+
+  describe("prompt file error handling", () => {
+    it("throws a clear error when implement.md is missing", async () => {
+      mockJira.fetchTicket.mockResolvedValue({ ...defaultTicket });
+      mockReadFile.mockRejectedValueOnce(
+        Object.assign(new Error("ENOENT: no such file or directory"), { code: "ENOENT" }),
+      );
+
+      const { createWorker } = await import("./worker.js");
+      const worker = createWorker();
+      const handler = (worker as unknown as { handler: (job: Job<TicketJobData>) => Promise<void> }).handler;
+
+      await expect(
+        handler(
+          makeJob({
+            type: "implementation",
+            ticketId: "PROJ-42",
+            source: "jira",
+            triggeredBy: "Mia",
+          }),
+        ),
+      ).rejects.toThrow(/Prompt file not found/);
+    });
+
+    it("throws a clear error when review-fix.md is missing", async () => {
+      mockJira.fetchTicket.mockResolvedValue({ ...defaultTicket });
+
+      const { db } = await import("./db.js");
+      vi.mocked(db.select).mockReturnValue({
+        from: vi.fn().mockReturnValue({
+          where: vi.fn().mockResolvedValue([{
+            id: "ticket-uuid",
+            prId: "42",
+            branchName: "blazebot/PROJ-42",
+          }]),
+        }),
+      } as ReturnType<typeof db.select>);
+
+      mockReadFile.mockRejectedValueOnce(
+        Object.assign(new Error("ENOENT: no such file or directory"), { code: "ENOENT" }),
+      );
+
+      const { createWorker } = await import("./worker.js");
+      const worker = createWorker();
+      const handler = (worker as unknown as { handler: (job: Job<TicketJobData>) => Promise<void> }).handler;
+
+      await expect(
+        handler(
+          makeJob({
+            type: "review_fix",
+            ticketId: "PROJ-42",
+            source: "jira",
+            triggeredBy: "Mia",
+          }),
+        ),
+      ).rejects.toThrow(/Prompt file not found/);
+    });
+  });
+
+  describe("failed event handler (retries exhausted)", () => {
+    it("registers a 'failed' event listener", async () => {
+      const { createWorker } = await import("./worker.js");
+      createWorker();
+
+      expect(mockWorkerEventHandlers["failed"]).toBeDefined();
+      expect(mockWorkerEventHandlers["failed"].length).toBe(1);
+    });
+
+    it("transitions ticket to failed and notifies when retries are exhausted", async () => {
+      const { createWorker } = await import("./worker.js");
+      createWorker();
+
+      const failedHandler = mockWorkerEventHandlers["failed"][0]!;
+      const fakeJob = {
+        data: { type: "implementation", ticketId: "PROJ-42", source: "jira", triggeredBy: "Mia" },
+        attemptsMade: 4,
+        opts: { attempts: 4 },
+      };
+
+      await failedHandler(fakeJob, new Error("Docker failed to start"));
+
+      const { db } = await import("./db.js");
+      expect(db.update).toHaveBeenCalled();
+      expect(mockMessaging.notify).toHaveBeenCalledWith(
+        "Mia",
+        expect.stringContaining("failed permanently"),
+      );
+      expect(mockMessaging.notify).toHaveBeenCalledWith(
+        "Mia",
+        expect.stringContaining("4 attempts"),
+      );
+    });
+
+    it("does not transition or notify when retries remain", async () => {
+      const { createWorker } = await import("./worker.js");
+      createWorker();
+
+      const { db } = await import("./db.js");
+      vi.mocked(db.update).mockClear();
+      mockMessaging.notify.mockClear();
+
+      const failedHandler = mockWorkerEventHandlers["failed"][0]!;
+      const fakeJob = {
+        data: { type: "implementation", ticketId: "PROJ-42", source: "jira", triggeredBy: "Mia" },
+        attemptsMade: 1,
+        opts: { attempts: 4 },
+      };
+
+      await failedHandler(fakeJob, new Error("Transient error"));
+
+      expect(db.update).not.toHaveBeenCalled();
+      expect(mockMessaging.notify).not.toHaveBeenCalled();
+    });
+
+    it("handles null job gracefully", async () => {
+      const { createWorker } = await import("./worker.js");
+      createWorker();
+
+      const failedHandler = mockWorkerEventHandlers["failed"][0]!;
+      await failedHandler(null, new Error("Unknown"));
     });
   });
 });

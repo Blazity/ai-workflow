@@ -187,6 +187,48 @@ describe("env", () => {
     expect(env.DOCKER_IMAGE).toBe("blazebot-sandbox");
   });
 
+  it("uses default JOB_MAX_RETRIES of 3", async () => {
+    vi.stubEnv("DATABASE_URL", "postgresql://user:pass@localhost:5432/db");
+    vi.stubEnv("REDIS_URL", "redis://localhost:6379");
+
+    const { env } = await import("./env.js");
+    expect(env.JOB_MAX_RETRIES).toBe(3);
+  });
+
+  it("allows overriding JOB_MAX_RETRIES via env", async () => {
+    vi.stubEnv("DATABASE_URL", "postgresql://user:pass@localhost:5432/db");
+    vi.stubEnv("REDIS_URL", "redis://localhost:6379");
+    vi.stubEnv("JOB_MAX_RETRIES", "5");
+
+    const { env } = await import("./env.js");
+    expect(env.JOB_MAX_RETRIES).toBe(5);
+  });
+
+  it("allows JOB_MAX_RETRIES of 0 (no retries)", async () => {
+    vi.stubEnv("DATABASE_URL", "postgresql://user:pass@localhost:5432/db");
+    vi.stubEnv("REDIS_URL", "redis://localhost:6379");
+    vi.stubEnv("JOB_MAX_RETRIES", "0");
+
+    const { env } = await import("./env.js");
+    expect(env.JOB_MAX_RETRIES).toBe(0);
+  });
+
+  it("uses default JOB_BACKOFF_MS of 30000", async () => {
+    vi.stubEnv("DATABASE_URL", "postgresql://user:pass@localhost:5432/db");
+    vi.stubEnv("REDIS_URL", "redis://localhost:6379");
+
+    const { env } = await import("./env.js");
+    expect(env.JOB_BACKOFF_MS).toBe(30000);
+  });
+
+  it("throws when JOB_BACKOFF_MS is not a positive integer", async () => {
+    vi.stubEnv("DATABASE_URL", "postgresql://user:pass@localhost:5432/db");
+    vi.stubEnv("REDIS_URL", "redis://localhost:6379");
+    vi.stubEnv("JOB_BACKOFF_MS", "0");
+
+    await expect(import("./env.js")).rejects.toThrow();
+  });
+
   it("requires CLAUDE_CODE_OAUTH_TOKEN", async () => {
     vi.stubEnv("DATABASE_URL", "postgresql://user:pass@localhost:5432/db");
     vi.stubEnv("REDIS_URL", "redis://localhost:6379");

@@ -3,10 +3,29 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 vi.mock("ioredis", () => ({ Redis: vi.fn() }));
 vi.mock("bullmq", () => ({
-  Worker: vi.fn(),
+  Worker: vi.fn().mockImplementation(() => ({
+    close: vi.fn(),
+    on: vi.fn(),
+  })),
   Queue: class {
     add = vi.fn();
   },
+}));
+
+const mockCleanupOrphans = vi.fn().mockResolvedValue(undefined);
+vi.mock("./sandbox/manager.js", () => ({
+  cleanupOrphanContainers: (...args: unknown[]) => mockCleanupOrphans(...args),
+  runSandbox: vi.fn(),
+  pushBranchFromContainer: vi.fn(),
+  teardownContainer: vi.fn(),
+}));
+
+const mockWorkerClose = vi.fn();
+vi.mock("./worker.js", () => ({
+  createWorker: vi.fn().mockReturnValue({
+    close: mockWorkerClose,
+    on: vi.fn(),
+  }),
 }));
 
 const mockDb = {
@@ -192,5 +211,27 @@ describe("POST /webhooks/jira", () => {
     expect(response.json()).toEqual({ error: "invalid signature" });
 
     await app.close();
+  });
+});
+
+describe("startup", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    vi.unstubAllEnvs();
+    vi.stubEnv("DATABASE_URL", "postgresql://user:pass@localhost:5432/db");
+    vi.stubEnv("REDIS_URL", "redis://localhost:6379");
+    vi.stubEnv("JIRA_WEBHOOK_SECRET", "test-secret");
+    vi.stubEnv("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat01-test");
+    vi.stubEnv("PORT", "0");
+    vi.clearAllMocks();
+    mockCleanupOrphans.mockResolvedValue(undefined);
+  });
+
+  it("runs orphan container cleanup before starting", async () => {
+    const { main } = await import("./index.js");
+
+    await main();
+
+    expect(mockCleanupOrphans).toHaveBeenCalled();
   });
 });

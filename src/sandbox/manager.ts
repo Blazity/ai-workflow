@@ -98,6 +98,7 @@ export async function runSandbox(
   try {
     container = await docker.createContainer({
       Image: options.image,
+      Labels: { blazebot: "true" },
       Env: [
         `BLAZEBOT_BRANCH=${options.branchName}`,
         `GITHUB_TOKEN=${options.githubToken}`,
@@ -158,6 +159,38 @@ export async function runSandbox(
     };
   } finally {
     await rm(tmpDir, { recursive: true, force: true });
+  }
+}
+
+export async function cleanupOrphanContainers(): Promise<void> {
+  try {
+    const containers = await docker.listContainers({
+      all: true,
+      filters: { label: ["blazebot=true"] },
+    });
+
+    if (containers.length === 0) {
+      logger.info("orphan_cleanup_none_found");
+      return;
+    }
+
+    logger.info({ count: containers.length }, "orphan_cleanup_started");
+
+    for (const containerInfo of containers) {
+      try {
+        await teardownContainer(containerInfo.Id);
+        logger.info({ containerId: containerInfo.Id }, "orphan_container_removed");
+      } catch {
+        logger.warn({ containerId: containerInfo.Id }, "orphan_container_removal_failed");
+      }
+    }
+
+    logger.info({ removed: containers.length }, "orphan_cleanup_complete");
+  } catch (err) {
+    logger.warn(
+      { error: err instanceof Error ? err.message : "Unknown error" },
+      "orphan_cleanup_failed",
+    );
   }
 }
 

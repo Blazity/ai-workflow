@@ -1,5 +1,7 @@
 import { Queue } from "bullmq";
+import type { JobsOptions } from "bullmq";
 import { createRedisConnection } from "./redis.js";
+import { env } from "./env.js";
 
 export type TicketJobData =
   | {
@@ -15,6 +17,15 @@ export type TicketJobData =
       triggeredBy: string;
     };
 
+export const defaultJobOptions: JobsOptions = {
+  attempts: env.JOB_MAX_RETRIES + 1,
+  backoff: {
+    type: "exponential",
+    delay: env.JOB_BACKOFF_MS,
+  },
+};
+
 export const ticketQueue = new Queue<TicketJobData>("ticket", {
   connection: createRedisConnection(),
+  defaultJobOptions,
 });

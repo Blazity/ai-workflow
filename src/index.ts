@@ -6,6 +6,7 @@ import {
 } from "./webhooks/jira.js";
 import { routeTicketTransition } from "./webhooks/router.js";
 import { createWorker } from "./worker.js";
+import { cleanupOrphanContainers } from "./sandbox/manager.js";
 import { createLogger } from "./logger.js";
 
 const logger = createLogger();
@@ -69,7 +70,9 @@ export function buildApp() {
   return app;
 }
 
-async function main() {
+export async function main() {
+  await cleanupOrphanContainers();
+
   const app = buildApp();
   const worker = createWorker();
 

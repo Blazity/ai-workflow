@@ -10,6 +10,8 @@ let mockContainer: {
 };
 let createContainerSpy: ReturnType<typeof vi.fn>;
 
+let listContainersSpy: ReturnType<typeof vi.fn>;
+
 vi.mock("dockerode", () => {
   mockContainer = {
     id: "container-abc123",
@@ -20,9 +22,11 @@ vi.mock("dockerode", () => {
     kill: vi.fn(),
   };
   createContainerSpy = vi.fn().mockResolvedValue(mockContainer);
+  listContainersSpy = vi.fn().mockResolvedValue([]);
   class MockDocker {
     createContainer = createContainerSpy;
     getContainer = vi.fn().mockReturnValue(mockContainer);
+    listContainers = listContainersSpy;
   }
   return { default: MockDocker };
 });
@@ -215,6 +219,20 @@ describe("runSandbox", () => {
     expect(mockContainer.kill).toHaveBeenCalled();
   });
 
+  it("labels containers with blazebot=true for orphan detection", async () => {
+    const { runSandbox } = await import("./manager.js");
+
+    mockLogs(makeAgentOutput("implemented", { summary: "Done" }));
+
+    await runSandbox(defaultOptions);
+
+    expect(createContainerSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        Labels: { blazebot: "true" },
+      }),
+    );
+  });
+
   it("does not remove container after execution (worker handles teardown)", async () => {
     const { runSandbox } = await import("./manager.js");
 
@@ -291,5 +309,46 @@ describe("teardownContainer", () => {
 
     expect(mockContainer.kill).toHaveBeenCalled();
     expect(mockContainer.remove).toHaveBeenCalledWith({ force: true });
+  });
+});
+
+describe("cleanupOrphanContainers", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    listContainersSpy.mockResolvedValue([]);
+  });
+
+  it("removes containers with blazebot label", async () => {
+    listContainersSpy.mockResolvedValue([
+      { Id: "orphan-123", Labels: { blazebot: "true" }, State: "running" },
+      { Id: "orphan-456", Labels: { blazebot: "true" }, State: "exited" },
+    ]);
+
+    const { cleanupOrphanContainers } = await import("./manager.js");
+    await cleanupOrphanContainers();
+
+    expect(listContainersSpy).toHaveBeenCalledWith({
+      all: true,
+      filters: { label: ["blazebot=true"] },
+    });
+    expect(mockContainer.kill).toHaveBeenCalled();
+    expect(mockContainer.remove).toHaveBeenCalledWith({ force: true });
+  });
+
+  it("does nothing when no blazebot containers exist", async () => {
+    listContainersSpy.mockResolvedValue([]);
+
+    const { cleanupOrphanContainers } = await import("./manager.js");
+    await cleanupOrphanContainers();
+
+    expect(mockContainer.kill).not.toHaveBeenCalled();
+    expect(mockContainer.remove).not.toHaveBeenCalled();
+  });
+
+  it("does not throw when Docker API fails", async () => {
+    listContainersSpy.mockRejectedValue(new Error("Docker not running"));
+
+    const { cleanupOrphanContainers } = await import("./manager.js");
+    await expect(cleanupOrphanContainers()).resolves.not.toThrow();
   });
 });
