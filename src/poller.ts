@@ -148,7 +148,9 @@ async function checkStuckJobs(adapters: ReturnType<typeof createAdapters>): Prom
         try {
           await teardownContainer(activeRun.containerId);
           logger.info({ ticketId: ticket.externalId, containerId: activeRun.containerId }, "stuck_container_teardown");
-        } catch {}
+        } catch (err) {
+          logger.warn({ ticketId: ticket.externalId, containerId: activeRun.containerId, error: (err as Error).message }, "stuck_container_teardown_failed");
+        }
       }
 
       if (activeRun) {
