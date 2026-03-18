@@ -225,7 +225,7 @@ Key config groups:
 
 - **Sandbox:** Docker image, concurrency limit (`MAX_CONCURRENT_AGENTS`), job timeout
   (`JOB_TIMEOUT_MS`).
-- **Issue Tracker:** adapter kind (`ISSUE_TRACKER_KIND`), credentials, webhook secrets.
+- **Issue Tracker:** adapter kind (`ISSUE_TRACKER_KIND`), project key (`JIRA_PROJECT_KEY`), credentials, webhook secrets.
 - **Messaging:** adapter kind (`MESSAGING_KIND`), credentials.
 - **VCS:** adapter kind (`VCS_KIND`), credentials.
 - **Infrastructure:** Postgres connection, Redis connection.
