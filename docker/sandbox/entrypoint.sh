@@ -22,7 +22,12 @@ AGENT_SCHEMA='{"type":"object","required":["result"],"properties":{"result":{"ty
 echo "Launching Claude Code (model: $MODEL)" >&2
 
 CLAUDE_EXIT=0
-claude --print --output-format json --json-schema "$AGENT_SCHEMA" --model "$MODEL" --dangerously-skip-permissions < /workspace/requirements.md || CLAUDE_EXIT=$?
+if [ "${DEVELOPER_MODE:-false}" = "true" ]; then
+  echo "Developer mode enabled — streaming structured output" >&2
+  claude --print --verbose --output-format stream-json --json-schema "$AGENT_SCHEMA" --model "$MODEL" --dangerously-skip-permissions < /workspace/requirements.md | /opt/blazebot/format-stream.sh || CLAUDE_EXIT=$?
+else
+  claude --print --output-format json --json-schema "$AGENT_SCHEMA" --model "$MODEL" --dangerously-skip-permissions < /workspace/requirements.md || CLAUDE_EXIT=$?
+fi
 
 echo "Claude Code exited with code: $CLAUDE_EXIT" >&2
 

@@ -56,6 +56,10 @@ export const env = createEnv({
       .default("4096")
       .transform((v) => parseInt(v, 10))
       .pipe(z.number().int().positive()),
+    DEVELOPER_MODE: z
+      .enum(["true", "false"])
+      .default("false")
+      .transform((v) => v === "true"),
   },
   runtimeEnv: process.env,
 });

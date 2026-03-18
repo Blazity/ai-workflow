@@ -12,3 +12,8 @@
 ## env.ts moved into src/
 - `env.ts` was originally at the project root, which broke `pnpm build` (`rootDir: "src"` caused TS6059).
 - Fixed by moving `env.ts` into `src/` and updating all imports from `../env.js` to `./env.js` (or `../env.js` for nested dirs).
+
+## Claude Code --print --output-format stream-json requires --verbose
+- When using `claude --print --output-format stream-json`, the `--verbose` flag is mandatory.
+- Without it, Claude Code exits with error: "When using --print, --output-format=stream-json requires --verbose".
+- This is required for the developer mode feature in the sandbox entrypoint.

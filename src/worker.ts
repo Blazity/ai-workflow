@@ -174,6 +174,7 @@ async function handleImplementation(data: Extract<TicketJobData, { type: "implem
     model: env.CLAUDE_MODEL,
     timeoutMs: env.JOB_TIMEOUT_MS,
     memoryLimitMb: env.SANDBOX_MEMORY_MB,
+    developerMode: env.DEVELOPER_MODE,
   });
 
   const durationMs = Date.now() - startTime;
@@ -367,6 +368,7 @@ async function handleReviewFix(data: Extract<TicketJobData, { type: "review_fix"
     model: env.CLAUDE_MODEL,
     timeoutMs: env.JOB_TIMEOUT_MS,
     memoryLimitMb: env.SANDBOX_MEMORY_MB,
+    developerMode: env.DEVELOPER_MODE,
   });
 
   const durationMs = Date.now() - startTime;
