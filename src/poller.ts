@@ -96,6 +96,19 @@ async function checkMissedWebhooks(): Promise<void> {
     }
 
     if (ticket.workflowState === "failed") {
+      const attempts = await db
+        .select()
+        .from(runAttempts)
+        .where(eq(runAttempts.ticketId, ticket.id));
+
+      if (attempts.length >= env.JOB_MAX_RETRIES + 1) {
+        logger.info(
+          { ticketId, attemptCount: attempts.length },
+          "poll_failed_ticket_exhausted",
+        );
+        continue;
+      }
+
       await db
         .update(tickets)
         .set({ workflowState: "queued", updatedAt: new Date() })

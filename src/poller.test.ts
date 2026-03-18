@@ -144,6 +144,30 @@ describe("runMaintenancePoll", () => {
       );
     });
 
+    it("does not re-enqueue failed ticket when max retries exhausted", async () => {
+      mockSearchTickets.mockResolvedValue(["PROJ-25"]);
+      mockTicketsSelectWhere.mockResolvedValueOnce([]).mockResolvedValueOnce([
+        {
+          id: "ticket-uuid",
+          externalId: "PROJ-25",
+          workflowState: "failed",
+          assignee: "Mia",
+        },
+      ]);
+      mockRunAttemptsSelectWhere.mockResolvedValueOnce([
+        { id: "r1" },
+        { id: "r2" },
+        { id: "r3" },
+        { id: "r4" },
+      ]);
+
+      const { runMaintenancePoll } = await import("./poller.js");
+      await runMaintenancePoll();
+
+      expect(mockQueueAdd).not.toHaveBeenCalled();
+      expect(mockDbUpdateWhere).not.toHaveBeenCalled();
+    });
+
     it("skips tickets already queued or implementing", async () => {
       mockSearchTickets.mockResolvedValue(["PROJ-30"]);
       mockTicketsSelectWhere.mockResolvedValueOnce([]).mockResolvedValueOnce([
