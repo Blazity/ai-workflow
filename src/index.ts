@@ -1,4 +1,5 @@
 import Fastify from "fastify";
+import { Worker } from "bullmq";
 import { env } from "./env.js";
 import {
   parseJiraWebhook,
@@ -8,6 +9,9 @@ import { routeTicketTransition } from "./webhooks/router.js";
 import { createWorker } from "./worker.js";
 import { cleanupOrphanContainers } from "./sandbox/manager.js";
 import { createLogger } from "./logger.js";
+import { maintenanceQueue } from "./queue.js";
+import { createRedisConnection } from "./redis.js";
+import { runMaintenancePoll } from "./poller.js";
 
 const logger = createLogger();
 
@@ -59,7 +63,11 @@ export function buildApp() {
     const event = parseJiraWebhook(request.body);
     if (event) {
       logger.info(
-        { ticketId: event.ticketId, type: event.type, triggeredBy: event.triggeredBy },
+        {
+          ticketId: event.ticketId,
+          type: event.type,
+          triggeredBy: event.triggeredBy,
+        },
         "webhook_received",
       );
       await routeTicketTransition(event);
@@ -76,6 +84,24 @@ export async function main() {
   const app = buildApp();
   const worker = createWorker();
 
+  const maintenanceWorker = new Worker(
+    "maintenance",
+    async () => {
+      await runMaintenancePoll();
+    },
+    { connection: createRedisConnection(), concurrency: 1 },
+  );
+
+  await maintenanceQueue.add(
+    "poll",
+    {},
+    { repeat: { every: env.POLL_INTERVAL_MS } },
+  );
+  logger.info(
+    { intervalMs: env.POLL_INTERVAL_MS },
+    "maintenance_poll_scheduled",
+  );
+
   try {
     await app.listen({ port: env.PORT, host: "0.0.0.0" });
     logger.info({ port: env.PORT }, "server_started");
@@ -89,6 +115,7 @@ export async function main() {
     const forceTimeout = setTimeout(() => process.exit(1), 30_000);
     forceTimeout.unref();
     await worker.close();
+    await maintenanceWorker.close();
     clearTimeout(forceTimeout);
     await app.close();
     process.exit(0);

@@ -54,7 +54,8 @@ describe("runSandbox", () => {
   const defaultOptions = {
     image: "blazebot-sandbox",
     branchName: "blazebot/PROJ-42",
-    requirementsMd: "# Requirements\n\n## Ticket\nDo the thing\n\n---\nYou are an agent...",
+    requirementsMd:
+      "# Requirements\n\n## Ticket\nDo the thing\n\n---\nYou are an agent...",
     githubToken: "ghp_test",
     repoUrl: "owner/repo",
     oauthToken: "sk-ant-oat01-test",
@@ -64,7 +65,10 @@ describe("runSandbox", () => {
     developerMode: false,
   };
 
-  const makeAgentOutput = (result: string, extra: Record<string, unknown> = {}) =>
+  const makeAgentOutput = (
+    result: string,
+    extra: Record<string, unknown> = {},
+  ) =>
     JSON.stringify({
       type: "result",
       subtype: "success",
@@ -92,7 +96,9 @@ describe("runSandbox", () => {
         header.writeUInt32BE(payload.length, 4);
         frames.push(header, payload);
       }
-      return Promise.resolve(frames.length > 0 ? Buffer.concat(frames) : Buffer.alloc(0));
+      return Promise.resolve(
+        frames.length > 0 ? Buffer.concat(frames) : Buffer.alloc(0),
+      );
     });
   }
 
@@ -132,7 +138,9 @@ describe("runSandbox", () => {
   it("returns complete when agent output has result 'implemented'", async () => {
     const { runSandbox } = await import("./manager.js");
 
-    mockLogs(makeAgentOutput("implemented", { summary: "Implemented dark mode" }));
+    mockLogs(
+      makeAgentOutput("implemented", { summary: "Implemented dark mode" }),
+    );
 
     const result = await runSandbox(defaultOptions);
 
@@ -147,7 +155,11 @@ describe("runSandbox", () => {
   it("returns clarification_needed when agent output has result 'clarification_needed'", async () => {
     const { runSandbox } = await import("./manager.js");
 
-    mockLogs(makeAgentOutput("clarification_needed", { questions: ["What color scheme?"] }));
+    mockLogs(
+      makeAgentOutput("clarification_needed", {
+        questions: ["What color scheme?"],
+      }),
+    );
 
     const result = await runSandbox(defaultOptions);
 
@@ -317,12 +329,14 @@ describe("runSandbox", () => {
   it("treats envelope result containing full text (not enum) as failed without structured_output", async () => {
     const { runSandbox } = await import("./manager.js");
 
-    mockLogs(JSON.stringify({
-      type: "result",
-      subtype: "success",
-      result: "Perfect! I have successfully converted the HTML page...",
-      session_id: "test-session",
-    }));
+    mockLogs(
+      JSON.stringify({
+        type: "result",
+        subtype: "success",
+        result: "Perfect! I have successfully converted the HTML page...",
+        session_id: "test-session",
+      }),
+    );
 
     const result = await runSandbox(defaultOptions);
 

@@ -57,17 +57,25 @@ export async function teardownContainer(containerId: string): Promise<void> {
  * Restarts the container with a push-only command, then stops it.
  * Must be called before teardownContainer / container removal.
  */
-export async function pushBranchFromContainer(containerId: string, branchName: string): Promise<void> {
+export async function pushBranchFromContainer(
+  containerId: string,
+  branchName: string,
+): Promise<void> {
   const container = docker.getContainer(containerId);
   try {
     // Commit the stopped container's filesystem to a temporary image, then
     // run a new container from it with the push command. This is necessary
     // because docker exec requires a running container.
-    const commitResult = await container.commit({ repo: "blazebot-push-tmp", tag: "latest" });
+    const commitResult = await container.commit({
+      repo: "blazebot-push-tmp",
+      tag: "latest",
+    });
     const pushContainer = await docker.createContainer({
       Image: (commitResult as { Id?: string }).Id ?? "blazebot-push-tmp:latest",
       Entrypoint: ["/bin/bash", "-c"],
-      Cmd: [`cd /workspace/repo && /usr/bin/git push origin HEAD:${branchName} 2>&1`],
+      Cmd: [
+        `cd /workspace/repo && /usr/bin/git push origin HEAD:${branchName} 2>&1`,
+      ],
       User: "blazebot",
     });
     try {
@@ -76,15 +84,29 @@ export async function pushBranchFromContainer(containerId: string, branchName: s
       const pushLogs = await readAllContainerLogs(pushContainer);
       const output = sanitizeForLog(pushLogs.stdout + pushLogs.stderr);
       if (waitResult.StatusCode !== 0) {
-        logger.warn({ containerId, branchName, exitCode: waitResult.StatusCode, output }, "branch_push_failed");
+        logger.warn(
+          { containerId, branchName, exitCode: waitResult.StatusCode, output },
+          "branch_push_failed",
+        );
       } else {
         logger.info({ containerId, branchName, output }, "branch_pushed");
       }
     } finally {
-      try { await pushContainer.remove({ force: true }); } catch { /* best effort */ }
+      try {
+        await pushContainer.remove({ force: true });
+      } catch {
+        /* best effort */
+      }
     }
   } catch (err) {
-    logger.warn({ containerId, branchName, error: err instanceof Error ? err.message : "Unknown error" }, "branch_push_failed");
+    logger.warn(
+      {
+        containerId,
+        branchName,
+        error: err instanceof Error ? err.message : "Unknown error",
+      },
+      "branch_push_failed",
+    );
   }
 }
 
@@ -116,7 +138,14 @@ export async function runSandbox(
 
     const startTime = Date.now();
     await container.start();
-    logger.info({ containerId: container.id, image: options.image, branchName: options.branchName }, "container_started");
+    logger.info(
+      {
+        containerId: container.id,
+        image: options.image,
+        branchName: options.branchName,
+      },
+      "container_started",
+    );
 
     const waitPromise = container.wait();
     const timeoutPromise = new Promise<never>((_, reject) =>
@@ -130,9 +159,19 @@ export async function runSandbox(
     try {
       const result = await Promise.race([waitPromise, timeoutPromise]);
       exitCode = result.StatusCode;
-      logger.info({ containerId: container.id, exitCode, durationMs: Date.now() - startTime }, "container_exited");
+      logger.info(
+        {
+          containerId: container.id,
+          exitCode,
+          durationMs: Date.now() - startTime,
+        },
+        "container_exited",
+      );
     } catch {
-      logger.warn({ containerId: container?.id, timeoutMs: options.timeoutMs }, "container_timeout");
+      logger.warn(
+        { containerId: container?.id, timeoutMs: options.timeoutMs },
+        "container_timeout",
+      );
       if (container) {
         try {
           await container.kill();
@@ -181,9 +220,15 @@ export async function cleanupOrphanContainers(): Promise<void> {
     for (const containerInfo of containers) {
       try {
         await teardownContainer(containerInfo.Id);
-        logger.info({ containerId: containerInfo.Id }, "orphan_container_removed");
+        logger.info(
+          { containerId: containerInfo.Id },
+          "orphan_container_removed",
+        );
       } catch {
-        logger.warn({ containerId: containerInfo.Id }, "orphan_container_removal_failed");
+        logger.warn(
+          { containerId: containerInfo.Id },
+          "orphan_container_removal_failed",
+        );
       }
     }
 
@@ -272,14 +317,19 @@ function parseAgentOutput(stdout: string): AgentOutput | null {
     try {
       const envelope = JSON.parse(line);
 
-      if (envelope.structured_output && typeof envelope.structured_output.result === "string") {
+      if (
+        envelope.structured_output &&
+        typeof envelope.structured_output.result === "string"
+      ) {
         return envelope.structured_output as AgentOutput;
       }
 
       if (
         envelope.result &&
         typeof envelope.result === "string" &&
-        ["implemented", "clarification_needed", "failed"].includes(envelope.result)
+        ["implemented", "clarification_needed", "failed"].includes(
+          envelope.result,
+        )
       ) {
         return envelope as AgentOutput;
       }
@@ -300,8 +350,12 @@ async function readResult(
   const output = parseAgentOutput(stdout);
 
   if (!output) {
-    const diagnostic = sanitizeForLog(stderr || stdout) || "(no output captured)";
-    logger.error({ containerId, exitCode, diagnostic }, "container_no_structured_output");
+    const diagnostic =
+      sanitizeForLog(stderr || stdout) || "(no output captured)";
+    logger.error(
+      { containerId, exitCode, diagnostic },
+      "container_no_structured_output",
+    );
     return {
       exitCode,
       status: "failed",

@@ -90,6 +90,7 @@ These must be set or the service will fail to start.
 | `JIRA_BASE_URL` | Jira instance URL (e.g. `https://yourteam.atlassian.net`) |
 | `JIRA_USER_EMAIL` | Jira service account email |
 | `JIRA_API_TOKEN` | Jira API token for the service account |
+| `JIRA_PROJECT_KEY` | Jira project key for JQL queries (e.g. `PROJ`) |
 
 ### GitHub (required for worker)
 
@@ -124,6 +125,8 @@ All of these have sensible defaults and are optional.
 | `SANDBOX_MEMORY_MB` | `4096` | Memory limit per sandbox container |
 | `CLAUDE_MODEL` | `claude-sonnet-4-20250514` | AI model for agent runs |
 | `DEVELOPER_MODE` | `false` | Stream live agent output for `docker logs` inspection |
+| `POLL_INTERVAL_MS` | `300000` | Maintenance poll interval (5 minutes) |
+| `STUCK_JOB_THRESHOLD_MS` | `1200000` | Time before a job is considered stuck (20 minutes) |
 
 ### Column Mapping
 

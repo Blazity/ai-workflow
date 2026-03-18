@@ -60,6 +60,17 @@ export const env = createEnv({
       .enum(["true", "false"])
       .default("false")
       .transform((v) => v === "true"),
+    JIRA_PROJECT_KEY: z.string().min(1),
+    POLL_INTERVAL_MS: z
+      .string()
+      .default("300000")
+      .transform((v) => parseInt(v, 10))
+      .pipe(z.number().int().positive()),
+    STUCK_JOB_THRESHOLD_MS: z
+      .string()
+      .optional()
+      .transform((v) => (v ? parseInt(v, 10) : undefined))
+      .pipe(z.number().int().positive().optional()),
   },
   runtimeEnv: process.env,
 });

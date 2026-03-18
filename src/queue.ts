@@ -31,3 +31,7 @@ export const ticketQueue = new Queue<TicketJobData>("ticket", {
   connection: createRedisConnection(),
   defaultJobOptions,
 });
+
+export const maintenanceQueue = new Queue("maintenance", {
+  connection: createRedisConnection(),
+});

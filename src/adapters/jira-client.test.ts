@@ -89,9 +89,11 @@ describe("JiraClient", () => {
 
   describe("postComment", () => {
     it("posts an ADF-formatted comment", async () => {
-      const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
-        new Response(JSON.stringify({ id: "123" }), { status: 201 }),
-      );
+      const fetchSpy = vi
+        .spyOn(globalThis, "fetch")
+        .mockResolvedValue(
+          new Response(JSON.stringify({ id: "123" }), { status: 201 }),
+        );
 
       await client.postComment("PROJ-42", "Need clarification on X");
 
@@ -110,9 +112,7 @@ describe("JiraClient", () => {
               content: [
                 {
                   type: "paragraph",
-                  content: [
-                    { type: "text", text: "Need clarification on X" },
-                  ],
+                  content: [{ type: "text", text: "Need clarification on X" }],
                 },
               ],
             },
@@ -126,9 +126,9 @@ describe("JiraClient", () => {
         new Response("Not Found", { status: 404 }),
       );
 
-      await expect(
-        client.postComment("PROJ-999", "text"),
-      ).rejects.toThrow("Jira API error: 404");
+      await expect(client.postComment("PROJ-999", "text")).rejects.toThrow(
+        "Jira API error: 404",
+      );
     });
   });
 
@@ -176,9 +176,63 @@ describe("JiraClient", () => {
         ),
       );
 
-      await expect(
-        client.moveTicket("PROJ-42", "AI Review"),
-      ).rejects.toThrow("No transition found matching 'AI Review'");
+      await expect(client.moveTicket("PROJ-42", "AI Review")).rejects.toThrow(
+        "No transition found matching 'AI Review'",
+      );
+    });
+  });
+
+  describe("searchTickets", () => {
+    it("sends JQL query and returns ticket keys", async () => {
+      const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            issues: [{ key: "PROJ-1" }, { key: "PROJ-5" }, { key: "PROJ-12" }],
+          }),
+          { status: 200 },
+        ),
+      );
+
+      const keys = await client.searchTickets(
+        'status = "AI" AND project = PROJ',
+      );
+
+      expect(keys).toEqual(["PROJ-1", "PROJ-5", "PROJ-12"]);
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "https://team.atlassian.net/rest/api/3/search/jql",
+        expect.objectContaining({
+          method: "POST",
+          headers: expect.objectContaining({
+            Authorization: expect.stringContaining("Basic "),
+          }),
+          body: JSON.stringify({
+            jql: 'status = "AI" AND project = PROJ',
+            fields: ["key"],
+            maxResults: 50,
+          }),
+        }),
+      );
+    });
+
+    it("returns empty array when no issues match", async () => {
+      vi.spyOn(globalThis, "fetch").mockResolvedValue(
+        new Response(JSON.stringify({ issues: [] }), { status: 200 }),
+      );
+
+      const keys = await client.searchTickets(
+        'status = "AI" AND project = PROJ',
+      );
+      expect(keys).toEqual([]);
+    });
+
+    it("throws on non-ok response", async () => {
+      vi.spyOn(globalThis, "fetch").mockResolvedValue(
+        new Response("Bad Request", { status: 400 }),
+      );
+
+      await expect(client.searchTickets("invalid jql")).rejects.toThrow(
+        "Jira API error: 400",
+      );
     });
   });
 
