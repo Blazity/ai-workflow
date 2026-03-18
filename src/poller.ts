@@ -29,7 +29,6 @@ export async function runMaintenancePoll(): Promise<void> {
 
 async function checkMissedWebhooks(): Promise<void> {
   const projectKey = env.JIRA_PROJECT_KEY;
-  if (!projectKey) return;
 
   if (!env.JIRA_BASE_URL || !env.JIRA_USER_EMAIL || !env.JIRA_API_TOKEN) {
     logger.warn("poll_jira_skipped_no_credentials");
