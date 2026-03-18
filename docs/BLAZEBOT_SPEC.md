@@ -94,7 +94,7 @@ Important boundary:
    - Decides what action to take based on normalized webhook events and current workflow state.
    - Enqueues jobs (`implementation`, `fixing_feedback`).
    - Manages concurrency limits.
-   - Handles stale job protection (cancel on contradicting webhook + verify at job start).
+   - Handles stale job protection (cancel on contradicting webhook + verify at job start + polling fallback for missed webhooks and stuck jobs).
 
 6. **Sandbox Manager**
    - Spins up Docker containers from a pre-built project-specific image.
@@ -292,9 +292,12 @@ Blazebot-initiated transitions (not webhook triggers):
 
 ### 8.3 Stale Job Protection
 
-- On contradicting webhook (ticket moved out of AI), cancel any pending job in BullMQ.
-- At job start, fetch current ticket state from tracker — skip if no longer in AI.
-- Both layers to eliminate race conditions.
+- **Layer 1 — Webhook cancellation:** On contradicting webhook (ticket moved out of AI), cancel any pending job in BullMQ.
+- **Layer 2 — Job-start verification:** At job start, fetch current ticket state from tracker — skip if no longer in AI.
+- **Layer 3 — Polling fallback:** A BullMQ repeatable job runs every `POLL_INTERVAL_MS` (default 5 min) performing two checks:
+  - **Missed webhooks:** JQL search against tracker for tickets in AI column, cross-referenced with DB. Tickets not in DB or in `failed` state are enqueued automatically.
+  - **Stuck jobs:** Tickets in `implementing`/`fixing_feedback` past `STUCK_JOB_THRESHOLD_MS` (default `JOB_TIMEOUT_MS × 2`) are recovered — container torn down, run marked `timed_out`, job re-enqueued (respecting `JOB_MAX_RETRIES`).
+- All three layers combined eliminate race conditions, missed webhooks, and silently stuck jobs.
 
 ## 9. Sandbox Management
 
@@ -388,6 +391,7 @@ Orchestrator (outside sandbox):
 fetchTicket(id) → TicketContent (title, description, acceptance criteria, comments, labels)
 moveTicket(id, column) → void
 postComment(id, comment) → void
+searchTickets(jql) → string[] (ticket keys matching query)
 parseWebhook(req) → NormalizedEvent
 ```
 
@@ -726,6 +730,10 @@ process_fixing_feedback_job(ticketId):
 - Contradicting webhook cancels pending job in queue.
 - Max retries exhausted → ticket transitions to `failed`, user notified.
 - Concurrency limit respected — jobs wait in queue when at capacity.
+- Polling fallback — discovers tickets in AI column missed by webhooks.
+- Polling fallback — detects stuck jobs past threshold, tears down container, re-enqueues or fails.
+- Polling fallback — skips tickets already queued/implementing/fixing_feedback (idempotent).
+- Polling fallback — respects retry limits on stuck job recovery.
 
 ### 17.2 Sandbox Management
 
@@ -783,7 +791,7 @@ process_fixing_feedback_job(ticketId):
 - [ ] Agent Runner — `docker exec`, structured output parsing, schema validation.
 - [ ] Context assembly — `requirements.md` generation.
 - [ ] Persistence — Postgres schema for tickets and run attempts.
-- [ ] Stale job protection (cancel on contradicting webhook + verify at job start).
+- [ ] Stale job protection (cancel on contradicting webhook + verify at job start + polling fallback).
 - [ ] Concurrency control via `MAX_CONCURRENT_AGENTS`.
 - [ ] Structured JSON logging with ticket/run context.
 - [ ] Prompt files — `.blazebot/prompts/implement.md` and `.blazebot/prompts/review-fix.md`.

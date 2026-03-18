@@ -1,14 +1,19 @@
-import { parseJiraWebhook } from "../webhooks/jira.js";
-import type { NormalizedEvent, Ticket, TicketAdapter, TicketComment } from "./ticket.js";
+import { parseJiraWebhook } from '../webhooks/jira.js';
+import type {
+  NormalizedEvent,
+  Ticket,
+  TicketAdapter,
+  TicketComment,
+} from './ticket.js';
 
 export class JiraClient implements TicketAdapter {
   private readonly baseUrl: string;
   private readonly authHeader: string;
 
   constructor(baseUrl: string, email: string, apiToken: string) {
-    this.baseUrl = baseUrl.replace(/\/$/, "");
+    this.baseUrl = baseUrl.replace(/\/$/, '');
     this.authHeader =
-      "Basic " + Buffer.from(`${email}:${apiToken}`).toString("base64");
+      'Basic ' + Buffer.from(`${email}:${apiToken}`).toString('base64');
   }
 
   private async request(
@@ -18,7 +23,7 @@ export class JiraClient implements TicketAdapter {
     const res = await fetch(`${this.baseUrl}${path}`, {
       ...options,
       headers: {
-        "Content-Type": "application/json",
+        'Content-Type': 'application/json',
         Authorization: this.authHeader,
         ...options.headers,
       },
@@ -47,45 +52,43 @@ export class JiraClient implements TicketAdapter {
           created: string;
         }): TicketComment => ({
           author: c.author.displayName,
-          body: typeof c.body === "string" ? c.body : this.extractText(c.body),
+          body: typeof c.body === 'string' ? c.body : this.extractText(c.body),
           createdAt: new Date(c.created),
         }),
       ),
       labels: data.fields.labels ?? [],
-      trackerStatus: data.fields.status?.name ?? "",
+      trackerStatus: data.fields.status?.name ?? '',
     };
   }
 
   async moveTicket(id: string, column: string): Promise<void> {
-    const res = await this.request(
-      `/rest/api/3/issue/${id}/transitions`,
-      { method: "GET" },
-    );
+    const res = await this.request(`/rest/api/3/issue/${id}/transitions`, {
+      method: 'GET',
+    });
     const data = await res.json();
     const transition = data.transitions.find(
-      (t: { name: string }) =>
-        t.name.toLowerCase() === column.toLowerCase(),
+      (t: { name: string }) => t.name.toLowerCase() === column.toLowerCase(),
     );
     if (!transition) {
       throw new Error(`No transition found matching '${column}'`);
     }
     await this.request(`/rest/api/3/issue/${id}/transitions`, {
-      method: "POST",
+      method: 'POST',
       body: JSON.stringify({ transition: { id: transition.id } }),
     });
   }
 
   async postComment(id: string, comment: string): Promise<void> {
     await this.request(`/rest/api/3/issue/${id}/comment`, {
-      method: "POST",
+      method: 'POST',
       body: JSON.stringify({
         body: {
-          type: "doc",
+          type: 'doc',
           version: 1,
           content: [
             {
-              type: "paragraph",
-              content: [{ type: "text", text: comment }],
+              type: 'paragraph',
+              content: [{ type: 'text', text: comment }],
             },
           ],
         },
@@ -93,22 +96,35 @@ export class JiraClient implements TicketAdapter {
     });
   }
 
+  async searchTickets(jql: string): Promise<string[]> {
+    const res = await this.request('/rest/api/3/search/jql', {
+      method: 'POST',
+      body: JSON.stringify({
+        jql,
+        fields: ['key'],
+        maxResults: 50,
+      }),
+    });
+    const data = await res.json();
+    return (data.issues ?? []).map((issue: { key: string }) => issue.key);
+  }
+
   parseWebhook(req: unknown): NormalizedEvent | null {
     return parseJiraWebhook(req);
   }
 
   private extractText(adf: unknown): string {
-    if (typeof adf === "string") return adf;
-    if (!adf || typeof adf !== "object") return "";
+    if (typeof adf === 'string') return adf;
+    if (!adf || typeof adf !== 'object') return '';
     const node = adf as { content?: unknown[] };
-    if (!node.content) return "";
+    if (!node.content) return '';
     return node.content
       .map((child: unknown) => {
         const c = child as { text?: string; content?: unknown[] };
         if (c.text) return c.text;
         if (c.content) return this.extractText(child);
-        return "";
+        return '';
       })
-      .join("");
+      .join('');
   }
 }

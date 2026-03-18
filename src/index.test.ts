@@ -3,10 +3,9 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 vi.mock("ioredis", () => ({ Redis: vi.fn() }));
 vi.mock("bullmq", () => ({
-  Worker: vi.fn().mockImplementation(() => ({
-    close: vi.fn(),
-    on: vi.fn(),
-  })),
+  Worker: vi.fn().mockImplementation(function WorkerMock() {
+    return { close: vi.fn(), on: vi.fn() };
+  }),
   Queue: class {
     add = vi.fn();
   },
@@ -26,6 +25,10 @@ vi.mock("./worker.js", () => ({
     close: mockWorkerClose,
     on: vi.fn(),
   }),
+}));
+
+vi.mock("./poller.js", () => ({
+  runMaintenancePoll: vi.fn().mockResolvedValue(undefined),
 }));
 
 const mockDb = {

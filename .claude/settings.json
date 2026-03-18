@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(find /Users/wojtekwrotek/Desktop/ai-workflow/src -type f -name *.ts)",
+      "Bash(grep -r \"list\\\\|search\\\\|query\" /Users/wojtekwrotek/Desktop/ai-workflow/src/adapters/*.ts)",
+      "Bash(npx vitest:*)",
+      "Bash(redis-cli FLUSHDB)"
+    ]
+  }
+}

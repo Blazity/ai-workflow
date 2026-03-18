@@ -182,6 +182,58 @@ describe("JiraClient", () => {
     });
   });
 
+  describe("searchTickets", () => {
+    it("sends JQL query and returns ticket keys", async () => {
+      const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            issues: [
+              { key: "PROJ-1" },
+              { key: "PROJ-5" },
+              { key: "PROJ-12" },
+            ],
+          }),
+          { status: 200 },
+        ),
+      );
+
+      const keys = await client.searchTickets('status = "AI" AND project = PROJ');
+
+      expect(keys).toEqual(["PROJ-1", "PROJ-5", "PROJ-12"]);
+      expect(fetchSpy).toHaveBeenCalledWith(
+        expect.stringContaining("/rest/api/3/search?"),
+        expect.objectContaining({
+          headers: expect.objectContaining({
+            Authorization: expect.stringContaining("Basic "),
+          }),
+        }),
+      );
+      const url = fetchSpy.mock.calls[0]![0] as string;
+      expect(url).toContain("jql=");
+      expect(url).toContain("fields=key");
+      expect(url).toContain("maxResults=50");
+    });
+
+    it("returns empty array when no issues match", async () => {
+      vi.spyOn(globalThis, "fetch").mockResolvedValue(
+        new Response(JSON.stringify({ issues: [] }), { status: 200 }),
+      );
+
+      const keys = await client.searchTickets('status = "AI" AND project = PROJ');
+      expect(keys).toEqual([]);
+    });
+
+    it("throws on non-ok response", async () => {
+      vi.spyOn(globalThis, "fetch").mockResolvedValue(
+        new Response("Bad Request", { status: 400 }),
+      );
+
+      await expect(
+        client.searchTickets("invalid jql"),
+      ).rejects.toThrow("Jira API error: 400");
+    });
+  });
+
   describe("parseWebhook", () => {
     it("delegates to parseJiraWebhook (tested separately)", () => {
       const result = client.parseWebhook({
