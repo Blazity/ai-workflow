@@ -56,7 +56,7 @@ export const env = createEnv({
       .default("4096")
       .transform((v) => parseInt(v, 10))
       .pipe(z.number().int().positive()),
-    JIRA_PROJECT_KEY: z.string().min(1).optional(),
+    JIRA_PROJECT_KEY: z.string().min(1),
     POLL_INTERVAL_MS: z
       .string()
       .default("300000")

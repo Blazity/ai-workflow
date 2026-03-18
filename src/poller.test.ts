@@ -186,15 +186,6 @@ describe("runMaintenancePoll", () => {
       expect(mockQueueAdd).not.toHaveBeenCalled();
     });
 
-    it("skips when JIRA_PROJECT_KEY is not set", async () => {
-      delete process.env.JIRA_PROJECT_KEY;
-
-      const { runMaintenancePoll } = await import("./poller.js");
-      await runMaintenancePoll();
-
-      expect(mockSearchTickets).not.toHaveBeenCalled();
-    });
-
     it("handles Jira API errors gracefully", async () => {
       mockSearchTickets.mockRejectedValue(new Error("Jira API error: 503"));
 
