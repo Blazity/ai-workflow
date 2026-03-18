@@ -21,7 +21,9 @@ vi.mock("drizzle-orm/postgres-js", () => ({
   drizzle: vi.fn().mockReturnValue({
     insert: vi.fn().mockReturnValue({
       values: vi.fn().mockReturnValue({
-        returning: mockDbInsertReturning,
+        onConflictDoNothing: vi.fn().mockReturnValue({
+          returning: mockDbInsertReturning,
+        }),
       }),
     }),
     update: vi.fn().mockReturnValue({
@@ -320,6 +322,51 @@ describe("runMaintenancePoll", () => {
           ticketId: "PROJ-60",
         }),
         expect.anything(),
+      );
+    });
+
+    it("continues recovery when container teardown fails", async () => {
+      mockSearchTickets.mockResolvedValue([]);
+      mockTeardownContainer.mockRejectedValue(new Error("container not found"));
+
+      let selectCallCount = 0;
+      mockDbSelectWhere.mockImplementation(() => {
+        selectCallCount++;
+        if (selectCallCount === 1) {
+          return Promise.resolve([{
+            id: "ticket-uuid",
+            externalId: "PROJ-70",
+            workflowState: "implementing",
+            currentRunId: "run-uuid",
+            assignee: "Mia",
+            updatedAt: new Date(Date.now() - 9999999),
+          }]);
+        }
+        if (selectCallCount === 2) {
+          return Promise.resolve([{
+            id: "run-uuid",
+            containerId: "container-dead",
+          }]);
+        }
+        if (selectCallCount === 3) {
+          return Promise.resolve([{ id: "r1" }]);
+        }
+        return Promise.resolve([]);
+      });
+
+      const { runMaintenancePoll } = await import("./poller.js");
+      await runMaintenancePoll();
+
+      expect(mockTeardownContainer).toHaveBeenCalledWith("container-dead");
+      expect(mockDbUpdateWhere).toHaveBeenCalled();
+      expect(mockQueueAdd).toHaveBeenCalledWith(
+        "implementation",
+        expect.objectContaining({ ticketId: "PROJ-70" }),
+        expect.anything(),
+      );
+      expect(mockNotify).toHaveBeenCalledWith(
+        "Mia",
+        expect.stringContaining("re-enqueued"),
       );
     });
 

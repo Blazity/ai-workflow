@@ -65,7 +65,8 @@ export const env = createEnv({
     STUCK_JOB_THRESHOLD_MS: z
       .string()
       .optional()
-      .transform((v) => (v ? parseInt(v, 10) : undefined)),
+      .transform((v) => (v ? parseInt(v, 10) : undefined))
+      .pipe(z.number().int().positive().optional()),
   },
   runtimeEnv: process.env,
 });

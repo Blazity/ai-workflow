@@ -201,17 +201,19 @@ describe("JiraClient", () => {
 
       expect(keys).toEqual(["PROJ-1", "PROJ-5", "PROJ-12"]);
       expect(fetchSpy).toHaveBeenCalledWith(
-        expect.stringContaining("/rest/api/3/search?"),
+        "https://team.atlassian.net/rest/api/3/search/jql",
         expect.objectContaining({
+          method: "POST",
           headers: expect.objectContaining({
             Authorization: expect.stringContaining("Basic "),
           }),
+          body: JSON.stringify({
+            jql: 'status = "AI" AND project = PROJ',
+            fields: ["key"],
+            maxResults: 50,
+          }),
         }),
       );
-      const url = fetchSpy.mock.calls[0]![0] as string;
-      expect(url).toContain("jql=");
-      expect(url).toContain("fields=key");
-      expect(url).toContain("maxResults=50");
     });
 
     it("returns empty array when no issues match", async () => {

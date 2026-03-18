@@ -10,37 +10,36 @@ import { createLogger } from "./logger.js";
 
 const logger = createLogger();
 
-function createAdapters() {
-  const jira = new JiraClient(
-    env.JIRA_BASE_URL!,
-    env.JIRA_USER_EMAIL!,
-    env.JIRA_API_TOKEN!,
-  );
-  const messaging = createMessagingAdapter(
+function createMessaging() {
+  return createMessagingAdapter(
     env.MESSAGING_KIND,
     env.SLACK_BOT_TOKEN,
     env.SLACK_DEFAULT_CHANNEL,
   );
-  return { jira, messaging };
 }
 
 export async function runMaintenancePoll(): Promise<void> {
   logger.info("poll_started");
 
-  const adapters = createAdapters();
+  const messaging = createMessaging();
   await Promise.allSettled([
-    checkMissedWebhooks(adapters),
-    checkStuckJobs(adapters),
+    checkMissedWebhooks(),
+    checkStuckJobs(messaging),
   ]);
 
   logger.info("poll_completed");
 }
 
-async function checkMissedWebhooks(adapters: ReturnType<typeof createAdapters>): Promise<void> {
+async function checkMissedWebhooks(): Promise<void> {
   const projectKey = env.JIRA_PROJECT_KEY;
   if (!projectKey) return;
 
-  const { jira } = adapters;
+  if (!env.JIRA_BASE_URL || !env.JIRA_USER_EMAIL || !env.JIRA_API_TOKEN) {
+    logger.warn("poll_jira_skipped_no_credentials");
+    return;
+  }
+
+  const jira = new JiraClient(env.JIRA_BASE_URL, env.JIRA_USER_EMAIL, env.JIRA_API_TOKEN);
 
   let ticketKeys: string[];
   try {
@@ -79,7 +78,10 @@ async function checkMissedWebhooks(adapters: ReturnType<typeof createAdapters>):
           workflowState: "queued",
           assignee: "poller",
         })
+        .onConflictDoNothing()
         .returning();
+
+      if (!created) continue;
 
       await ticketQueue.add(
         "implementation",
@@ -117,8 +119,7 @@ async function checkMissedWebhooks(adapters: ReturnType<typeof createAdapters>):
   }
 }
 
-async function checkStuckJobs(adapters: ReturnType<typeof createAdapters>): Promise<void> {
-  const { messaging } = adapters;
+async function checkStuckJobs(messaging: ReturnType<typeof createMessaging>): Promise<void> {
   const thresholdMs = env.STUCK_JOB_THRESHOLD_MS ?? env.JOB_TIMEOUT_MS * 2;
   const cutoff = new Date(Date.now() - thresholdMs);
 
@@ -194,7 +195,7 @@ async function checkStuckJobs(adapters: ReturnType<typeof createAdapters>): Prom
       {
         type: jobType,
         ticketId: ticket.externalId,
-        source: "jira",
+        source: ticket.source as "jira" | "linear",
         triggeredBy: ticket.assignee ?? "poller",
       },
       { ...defaultJobOptions, jobId: `${jobType === "review_fix" ? "fix" : "impl"}-${ticket.externalId}-${ticket.id}-${Date.now()}` },
