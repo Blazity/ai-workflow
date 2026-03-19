@@ -89,7 +89,6 @@ async function checkMissedWebhooks(): Promise<void> {
 
   for (const ticketId of ticketKeys) {
     const ticket = existingMap.get(ticketId);
-    console.log("ticket", ticket);
     if (!ticket) {
       const [created] = await db
         .insert(tickets)
