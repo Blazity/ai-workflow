@@ -11,7 +11,7 @@
     "start": "pnpm --filter @blazebot/app start",
     "test": "pnpm -r test",
     "db:generate": "drizzle-kit generate",
-    "db:migrate": "drizzle-kit migrate",
+    "db:migrate": "drizzle-kit migrate && bash -c 'set -a && source .env && set +a && pnpm --filter @blazebot/app exec workflow-postgres-setup'",
     "db:push": "drizzle-kit push",
     "inspect": "bash scripts/inspect.sh",
     "workflow:inspect": "bash -c 'set -a && source .env && set +a && pnpm --filter @blazebot/app exec workflow inspect runs --backend @workflow/world-postgres'",

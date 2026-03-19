@@ -27,5 +27,13 @@ services:
     depends_on:
       postgres: { condition: service_healthy }
 
+  sandbox:
+    build:
+      context: ./docker/sandbox
+      dockerfile: Dockerfile
+    image: blazebot-sandbox:latest
+    profiles:
+      - build-only
+
 volumes:
   postgres_data:

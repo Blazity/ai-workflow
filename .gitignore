@@ -5,3 +5,5 @@ dist/
 .worktrees/
 .pnpm-store/
 # Note: drizzle/ migrations are intentionally committed for reproducibility
+
+.workflow-data
