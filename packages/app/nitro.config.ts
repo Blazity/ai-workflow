@@ -10,4 +10,9 @@ export default defineNitroConfig({
   runtimeConfig: {
     workflowTargetWorld: "@workflow/world-postgres",
   },
+
+  // Prevent bundling of dockerode and its native dependencies (cpu-features)
+  externals: {
+    external: ["dockerode"],
+  },
 });
