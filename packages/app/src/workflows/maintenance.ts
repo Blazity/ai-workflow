@@ -11,8 +11,7 @@ import {
   createLogger,
 } from "@blazebot/shared";
 import { appEnv } from "../env.js";
-import { teardownContainer } from "../sandbox/manager.js";
-import { start } from "workflow/api";
+import { startWorkflowRun, cancelWorkflowRun } from "../lib/workflow-helpers.js";
 import { implementTicket } from "./implementation.js";
 import { reviewFixTicket } from "./review-fix.js";
 
@@ -100,8 +99,13 @@ async function checkMissedWebhooks(): Promise<void> {
 
       if (!created) continue;
 
-      await start(implementTicket, [ticketId, "jira", "poller"], {
-        id: `impl-${ticketId}-${created.id}`,
+      await startWorkflowRun({
+        ticketRowId: created.id,
+        ticketExternalId: ticketId,
+        type: "implementation",
+        workflow: implementTicket,
+        workflowArgs: [ticketId, "jira", "poller"],
+        dedupeId: `impl-${ticketId}-${created.id}`,
       });
       logger.info({ ticketId }, "poll_ticket_discovered");
       continue;
@@ -123,8 +127,13 @@ async function checkMissedWebhooks(): Promise<void> {
         .set({ workflowState: "queued", updatedAt: new Date() })
         .where(eq(tickets.id, ticket.id));
 
-      await start(implementTicket, [ticketId, "jira", ticket.assignee ?? "poller"], {
-        id: `impl-${ticketId}-${ticket.id}-${Date.now()}`,
+      await startWorkflowRun({
+        ticketRowId: ticket.id,
+        ticketExternalId: ticketId,
+        type: "implementation",
+        workflow: implementTicket,
+        workflowArgs: [ticketId, "jira", ticket.assignee ?? "poller"],
+        dedupeId: `impl-${ticketId}-${ticket.id}-${Date.now()}`,
       });
       logger.info({ ticketId }, "poll_failed_ticket_reenqueued");
     }
@@ -161,22 +170,17 @@ async function checkStuckJobs(): Promise<void> {
         .where(eq(runAttempts.id, ticket.currentRunId));
       const activeRun = runRows[0];
 
-      if (activeRun?.containerId) {
-        try {
-          await teardownContainer(activeRun.containerId);
-          logger.info({ ticketId: ticket.externalId, containerId: activeRun.containerId }, "stuck_container_teardown");
-        } catch (err) {
-          logger.warn(
-            { ticketId: ticket.externalId, containerId: activeRun.containerId, error: (err as Error).message },
-            "stuck_container_teardown_failed",
-          );
-        }
-      }
-
       if (activeRun) {
+        await cancelWorkflowRun({
+          runAttemptId: activeRun.id,
+          workflowRunId: activeRun.workflowRunId,
+          containerId: activeRun.containerId,
+          ticketExternalId: ticket.externalId,
+        });
+        // Override status: stuck jobs timed out, not user-cancelled
         await db
           .update(runAttempts)
-          .set({ status: "timed_out", finishedAt: new Date() })
+          .set({ status: "timed_out" })
           .where(eq(runAttempts.id, activeRun.id));
       }
     }
@@ -206,8 +210,13 @@ async function checkStuckJobs(): Promise<void> {
       .set({ workflowState: "queued", currentRunId: null, updatedAt: new Date() })
       .where(eq(tickets.id, ticket.id));
 
-    await start(workflowFn, [ticket.externalId, ticket.source as "jira" | "linear", ticket.assignee ?? "poller"], {
-      id: `${jobType === "review_fix" ? "fix" : "impl"}-${ticket.externalId}-${ticket.id}-${Date.now()}`,
+    await startWorkflowRun({
+      ticketRowId: ticket.id,
+      ticketExternalId: ticket.externalId,
+      type: jobType === "review_fix" ? "review_fix" : "implementation",
+      workflow: workflowFn,
+      workflowArgs: [ticket.externalId, ticket.source as "jira" | "linear", ticket.assignee ?? "poller"],
+      dedupeId: `${jobType === "review_fix" ? "fix" : "impl"}-${ticket.externalId}-${ticket.id}-${Date.now()}`,
     });
 
     await messaging.notify(

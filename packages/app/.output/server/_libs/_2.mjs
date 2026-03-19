@@ -1,2 +1,2 @@
-import { z as FatalError } from "./@workflow/core+[...].mjs";
-export { FatalError };
+import { o as getWorld } from "./@workflow/core+[...].mjs";
+export { getWorld };

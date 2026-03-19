@@ -1,5 +1,5 @@
 import { i as __toESM } from "../_runtime.mjs";
-import { I as _enum, L as number, R as string, z as FatalError } from "../_libs/@workflow/core+[...].mjs";
+import { I as _enum, L as number, R as string, o as getWorld, r as start, z as FatalError } from "../_libs/@workflow/core+[...].mjs";
 import { t as require_dist } from "../_libs/@slack/web-api+[...].mjs";
 import { a as eq, c as pgTable, d as text, f as integer, l as uuid, m as unique, n as index, p as pgEnum, r as src_default, t as drizzle, u as timestamp } from "../_libs/drizzle-orm+postgres.mjs";
 import { n as createEnv, t as createEnv$1 } from "../_libs/t3-oss__env-core.mjs";
@@ -61,7 +61,8 @@ const runStatusEnum = pgEnum("run_status", [
 	"succeeded",
 	"failed",
 	"timed_out",
-	"clarification_needed"
+	"clarification_needed",
+	"cancelled"
 ]);
 const runTypeEnum = pgEnum("run_type", [
 	"implementation",
@@ -88,6 +89,7 @@ const runAttempts = pgTable("run_attempts", {
 	attemptNumber: integer("attempt_number").notNull().default(1),
 	type: runTypeEnum("type").notNull(),
 	status: runStatusEnum("status").notNull().default("pending"),
+	workflowRunId: text("workflow_run_id"),
 	containerId: text("container_id"),
 	branchName: text("branch_name"),
 	startedAt: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),
@@ -375,7 +377,7 @@ var NoopMessagingAdapter = class {
 //#endregion
 //#region ../shared/dist/adapters/slack-messaging.js
 var import_dist = require_dist();
-const logger$4 = createLogger();
+const logger$5 = createLogger();
 var SlackMessagingAdapter = class {
 	client;
 	defaultChannel;
@@ -389,9 +391,9 @@ var SlackMessagingAdapter = class {
 				channel: this.defaultChannel,
 				text: message
 			});
-			logger$4.info({ channel: this.defaultChannel }, "slack_notification_sent");
+			logger$5.info({ channel: this.defaultChannel }, "slack_notification_sent");
 		} catch (err) {
-			logger$4.warn({
+			logger$5.warn({
 				error: err instanceof Error ? err.message : "Unknown error",
 				channel: this.defaultChannel
 			}, "slack_notification_failed");
@@ -403,9 +405,9 @@ var SlackMessagingAdapter = class {
 				channel: this.defaultChannel,
 				text: message
 			});
-			logger$4.info({ channel: this.defaultChannel }, "slack_ping_sent");
+			logger$5.info({ channel: this.defaultChannel }, "slack_ping_sent");
 		} catch (err) {
-			logger$4.warn({
+			logger$5.warn({
 				error: err instanceof Error ? err.message : "Unknown error",
 				channel: this.defaultChannel
 			}, "slack_ping_failed");
@@ -414,15 +416,15 @@ var SlackMessagingAdapter = class {
 };
 //#endregion
 //#region ../shared/dist/adapters/messaging-factory.js
-const logger$3 = createLogger();
+const logger$4 = createLogger();
 function createMessagingAdapter(kind, slackBotToken, slackDefaultChannel) {
 	if (kind === "slack") {
 		if (!slackBotToken) {
-			logger$3.warn("SLACK_BOT_TOKEN not set — notifications disabled");
+			logger$4.warn("SLACK_BOT_TOKEN not set — notifications disabled");
 			return new NoopMessagingAdapter();
 		}
 		if (!slackDefaultChannel) {
-			logger$3.warn("SLACK_DEFAULT_CHANNEL not set — notifications disabled");
+			logger$4.warn("SLACK_DEFAULT_CHANNEL not set — notifications disabled");
 			return new NoopMessagingAdapter();
 		}
 		return new SlackMessagingAdapter(slackBotToken, slackDefaultChannel);
@@ -456,9 +458,9 @@ const appEnv = createEnv$1({
 	runtimeEnv: process.env
 });
 const docker = new (/* @__PURE__ */ __toESM(require_docker(), 1)).default();
-const logger$2 = createLogger();
+const logger$3 = createLogger();
 async function teardownContainer(containerId) {
-	logger$2.info({ containerId }, "container_teardown_requested");
+	logger$3.info({ containerId }, "container_teardown_requested");
 	try {
 		await docker.getContainer(containerId).kill();
 	} catch {}
@@ -490,7 +492,7 @@ async function pushBranchFromContainer(containerId, branchName) {
 			const pushLogs = await readAllContainerLogs(pushContainer);
 			const output = sanitizeForLog(pushLogs.stdout + pushLogs.stderr);
 			if (waitResult.StatusCode !== 0) {
-				logger$2.warn({
+				logger$3.warn({
 					containerId,
 					branchName,
 					exitCode: waitResult.StatusCode,
@@ -501,7 +503,7 @@ async function pushBranchFromContainer(containerId, branchName) {
 					output
 				};
 			} else {
-				logger$2.info({
+				logger$3.info({
 					containerId,
 					branchName,
 					output
@@ -518,7 +520,7 @@ async function pushBranchFromContainer(containerId, branchName) {
 		}
 	} catch (err) {
 		const msg = err instanceof Error ? err.message : "Unknown error";
-		logger$2.warn({
+		logger$3.warn({
 			containerId,
 			branchName,
 			error: msg
@@ -555,7 +557,7 @@ async function runSandbox(options) {
 		});
 		const startTime = Date.now();
 		await container.start();
-		logger$2.info({
+		logger$3.info({
 			containerId: container.id,
 			image: options.image,
 			branchName: options.branchName
@@ -565,13 +567,13 @@ async function runSandbox(options) {
 		let exitCode;
 		try {
 			exitCode = (await Promise.race([waitPromise, timeoutPromise])).StatusCode;
-			logger$2.info({
+			logger$3.info({
 				containerId: container.id,
 				exitCode,
 				durationMs: Date.now() - startTime
 			}, "container_exited");
 		} catch {
-			logger$2.warn({
+			logger$3.warn({
 				containerId: container?.id,
 				timeoutMs: options.timeoutMs
 			}, "container_timeout");
@@ -607,19 +609,19 @@ async function cleanupOrphanContainers() {
 			filters: { label: ["blazebot=true"] }
 		});
 		if (containers.length === 0) {
-			logger$2.info("orphan_cleanup_none_found");
+			logger$3.info("orphan_cleanup_none_found");
 			return;
 		}
-		logger$2.info({ count: containers.length }, "orphan_cleanup_started");
+		logger$3.info({ count: containers.length }, "orphan_cleanup_started");
 		for (const containerInfo of containers) try {
 			await teardownContainer(containerInfo.Id);
-			logger$2.info({ containerId: containerInfo.Id }, "orphan_container_removed");
+			logger$3.info({ containerId: containerInfo.Id }, "orphan_container_removed");
 		} catch {
-			logger$2.warn({ containerId: containerInfo.Id }, "orphan_container_removal_failed");
+			logger$3.warn({ containerId: containerInfo.Id }, "orphan_container_removal_failed");
 		}
-		logger$2.info({ removed: containers.length }, "orphan_cleanup_complete");
+		logger$3.info({ removed: containers.length }, "orphan_cleanup_complete");
 	} catch (err) {
-		logger$2.warn({ error: err instanceof Error ? err.message : "Unknown error" }, "orphan_cleanup_failed");
+		logger$3.warn({ error: err instanceof Error ? err.message : "Unknown error" }, "orphan_cleanup_failed");
 	}
 }
 function sanitizeForLog(text) {
@@ -714,7 +716,7 @@ async function readResult(container, exitCode) {
 	const output = parseAgentOutput(stdout);
 	if (!output) {
 		const diagnostic = sanitizeForLog(stderr || stdout) || "(no output captured)";
-		logger$2.error({
+		logger$3.error({
 			containerId,
 			exitCode,
 			diagnostic
@@ -746,6 +748,73 @@ async function readResult(container, exitCode) {
 			containerId
 		};
 	}
+}
+//#endregion
+//#region src/lib/workflow-helpers.ts
+const logger$2 = createLogger();
+/**
+* Create a run_attempts row, start the workflow, and store the workflow run ID.
+* Appends the run_attempts ID as the last workflow argument automatically.
+*/
+async function startWorkflowRun(options) {
+	const [run] = await db.insert(runAttempts).values({
+		ticketId: options.ticketRowId,
+		type: options.type,
+		status: "pending",
+		branchName: options.branchName
+	}).returning();
+	await db.update(tickets).set({
+		currentRunId: run.id,
+		updatedAt: /* @__PURE__ */ new Date()
+	}).where(eq(tickets.id, options.ticketRowId));
+	const handle = await start(options.workflow, [...options.workflowArgs, run.id], { id: options.dedupeId });
+	await db.update(runAttempts).set({ workflowRunId: handle.runId }).where(eq(runAttempts.id, run.id));
+	logger$2.info({
+		ticketId: options.ticketExternalId,
+		runAttemptId: run.id,
+		workflowRunId: handle.runId,
+		type: options.type
+	}, "workflow_run_started");
+	return run.id;
+}
+/**
+* Cancel an active workflow run: cancel at the framework level, teardown
+* the container, and update the run_attempts record.
+*/
+async function cancelWorkflowRun(options) {
+	if (options.workflowRunId) try {
+		await getWorld().events.create(options.workflowRunId, {
+			eventType: "run_cancelled",
+			specVersion: 2
+		});
+		logger$2.info({
+			ticketId: options.ticketExternalId,
+			workflowRunId: options.workflowRunId
+		}, "workflow_run_cancelled");
+	} catch (err) {
+		logger$2.warn({
+			ticketId: options.ticketExternalId,
+			workflowRunId: options.workflowRunId,
+			error: err.message
+		}, "workflow_cancel_failed");
+	}
+	if (options.containerId) try {
+		await teardownContainer(options.containerId);
+		logger$2.info({
+			ticketId: options.ticketExternalId,
+			containerId: options.containerId
+		}, "container_teardown_direct");
+	} catch (err) {
+		logger$2.warn({
+			ticketId: options.ticketExternalId,
+			containerId: options.containerId,
+			error: err.message
+		}, "container_teardown_failed");
+	}
+	await db.update(runAttempts).set({
+		status: "cancelled",
+		finishedAt: /* @__PURE__ */ new Date()
+	}).where(eq(runAttempts.id, options.runAttemptId));
 }
 //#endregion
 //#region src/lib/adapters.ts
@@ -827,7 +896,7 @@ const logger$1 = createLogger();
 function normalize$1(value) {
 	return value.trim().toLowerCase();
 }
-async function implementTicket(ticketId, source, triggeredBy) {
+async function implementTicket(ticketId, source, triggeredBy, runAttemptId) {
 	throw new Error("You attempted to execute workflow implementTicket function directly. To start a workflow, use start(implementTicket) from workflow/api");
 }
 implementTicket.workflowId = "workflow//./src/workflows/implementation//implementTicket";
@@ -845,7 +914,7 @@ async function fetchAndValidateTicket(ticketId) {
 	return ticket;
 }
 fetchAndValidateTicket.stepId = "step//./src/workflows/implementation//fetchAndValidateTicket";
-async function setupBranch(ticketId, branchName) {
+async function setupBranch(ticketId, branchName, runAttemptId) {
 	const { github } = createAdapters();
 	const owner = appEnv.GITHUB_REPO_OWNER;
 	const repo = appEnv.GITHUB_REPO_NAME;
@@ -860,29 +929,12 @@ async function setupBranch(ticketId, branchName) {
 		from: "queued",
 		to: "implementing"
 	}, "ticket_state_transition");
-}
-setupBranch.stepId = "step//./src/workflows/implementation//setupBranch";
-async function createRun(ticketId, branchName) {
-	const ticketRow = (await db.select().from(tickets).where(eq(tickets.externalId, ticketId)))[0];
-	const [run] = await db.insert(runAttempts).values({
-		ticketId: ticketRow.id,
-		type: "implementation",
+	await db.update(runAttempts).set({
 		status: "running",
 		branchName
-	}).returning();
-	await db.update(tickets).set({
-		currentRunId: run.id,
-		updatedAt: /* @__PURE__ */ new Date()
-	}).where(eq(tickets.externalId, ticketId));
-	logger$1.info({
-		ticketId,
-		runId: run.id,
-		type: "implementation",
-		branchName
-	}, "job_started");
-	return run;
+	}).where(eq(runAttempts.id, runAttemptId));
 }
-createRun.stepId = "step//./src/workflows/implementation//createRun";
+setupBranch.stepId = "step//./src/workflows/implementation//setupBranch";
 async function executeSandbox(ticketId, branchName, ticket) {
 	const requirementsMd = assembleImplementationContext(ticket, await readPromptFile("implement.md"));
 	const startTime = Date.now();
@@ -941,7 +993,7 @@ async function createPullRequest(ticketId, title, branchName, summary) {
 			branchName
 		}, "pr_creation_failed");
 		if (ghErr.status === 422 && JSON.stringify(ghErr.response?.data ?? "").includes("No commits between")) {
-			const { FatalError } = await import("../_libs/_2.mjs");
+			const { FatalError } = await import("../_libs/_3.mjs");
 			throw new FatalError(`No commits on branch ${branchName} — agent completed without committing code`);
 		}
 		throw prErr;
@@ -1027,11 +1079,11 @@ const logger = createLogger();
 function normalize(value) {
 	return value.trim().toLowerCase();
 }
-async function reviewFixTicket(ticketId, source, triggeredBy) {
+async function reviewFixTicket(ticketId, source, triggeredBy, runAttemptId) {
 	throw new Error("You attempted to execute workflow reviewFixTicket function directly. To start a workflow, use start(reviewFixTicket) from workflow/api");
 }
 reviewFixTicket.workflowId = "workflow//./src/workflows/review-fix//reviewFixTicket";
-async function validateReviewFix(ticketId) {
+async function validateReviewFix(ticketId, runAttemptId) {
 	const { jira } = createAdapters();
 	const ticket = await jira.fetchTicket(ticketId);
 	const colAi = normalize(env.COLUMN_AI);
@@ -1044,38 +1096,27 @@ async function validateReviewFix(ticketId) {
 	}
 	const ticketRow = (await db.select().from(tickets).where(eq(tickets.externalId, ticketId)))[0];
 	if (!ticketRow.prId || !ticketRow.branchName) throw new FatalError(`review_fix requires prId and branchName for ${ticketId}`);
-	return {
-		branchName: ticketRow.branchName,
-		prNumber: parseInt(ticketRow.prId, 10),
-		ticketRowId: ticketRow.id
-	};
-}
-validateReviewFix.stepId = "step//./src/workflows/review-fix//validateReviewFix";
-async function createFixRun(ticketId, ticketRowId, branchName, prNumber) {
 	await db.update(tickets).set({
 		workflowState: "fixing_feedback",
 		updatedAt: /* @__PURE__ */ new Date()
 	}).where(eq(tickets.externalId, ticketId));
-	const [run] = await db.insert(runAttempts).values({
-		ticketId: ticketRowId,
-		type: "review_fix",
+	await db.update(runAttempts).set({
 		status: "running",
-		branchName
-	}).returning();
-	await db.update(tickets).set({
-		currentRunId: run.id,
-		updatedAt: /* @__PURE__ */ new Date()
-	}).where(eq(tickets.externalId, ticketId));
+		branchName: ticketRow.branchName
+	}).where(eq(runAttempts.id, runAttemptId));
 	logger.info({
 		ticketId,
-		runId: run.id,
+		runAttemptId,
 		type: "review_fix",
-		branchName,
-		prNumber
+		branchName: ticketRow.branchName,
+		prNumber: parseInt(ticketRow.prId, 10)
 	}, "job_started");
-	return run;
+	return {
+		branchName: ticketRow.branchName,
+		prNumber: parseInt(ticketRow.prId, 10)
+	};
 }
-createFixRun.stepId = "step//./src/workflows/review-fix//createFixRun";
+validateReviewFix.stepId = "step//./src/workflows/review-fix//validateReviewFix";
 async function executeFixSandbox(ticketId, branchName, prNumber) {
 	const { jira, github } = createAdapters();
 	const owner = appEnv.GITHUB_REPO_OWNER;
@@ -1150,4 +1191,4 @@ async function finalizeFixFailure(ticketId, runId, error) {
 }
 finalizeFixFailure.stepId = "step//./src/workflows/review-fix//finalizeFixFailure";
 //#endregion
-export { appEnv as a, parseJiraWebhook as c, createLogger as d, db as f, teardownContainer as i, runAttempts as l, implementTicket as n, createMessagingAdapter as o, env as p, cleanupOrphanContainers as r, JiraClient as s, reviewFixTicket as t, tickets as u };
+export { cleanupOrphanContainers as a, JiraClient as c, tickets as d, createLogger as f, startWorkflowRun as i, parseJiraWebhook as l, env as m, implementTicket as n, appEnv as o, db as p, cancelWorkflowRun as r, createMessagingAdapter as s, reviewFixTicket as t, runAttempts as u };

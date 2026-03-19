@@ -1,6 +1,5 @@
 // packages/app/src/lib/webhook-router.ts
 import { eq, and } from "drizzle-orm";
-import { start } from "workflow/api";
 import {
   env,
   db,
@@ -11,7 +10,7 @@ import {
 import type { NormalizedEvent } from "@blazebot/shared";
 import { implementTicket } from "../workflows/implementation.js";
 import { reviewFixTicket } from "../workflows/review-fix.js";
-import { teardownContainer } from "../sandbox/manager.js";
+import { startWorkflowRun, cancelWorkflowRun } from "./workflow-helpers.js";
 
 const logger = createLogger();
 
@@ -92,10 +91,14 @@ async function handleMovedToAi(event: NormalizedEvent): Promise<void> {
       return;
     }
 
-    await start(implementTicket, [event.ticketId, "jira", event.triggeredBy], {
-      id: `impl-${event.ticketId}-${created.id}`,
+    await startWorkflowRun({
+      ticketRowId: created.id,
+      ticketExternalId: event.ticketId,
+      type: "implementation",
+      workflow: implementTicket,
+      workflowArgs: [event.ticketId, "jira", event.triggeredBy],
+      dedupeId: `impl-${event.ticketId}-${created.id}`,
     });
-    logger.info({ ticketId: event.ticketId, jobType: "implementation" }, "workflow_started");
     return;
   }
 
@@ -105,10 +108,14 @@ async function handleMovedToAi(event: NormalizedEvent): Promise<void> {
       .set({ workflowState: "queued", updatedAt: new Date() })
       .where(eq(tickets.id, ticket.id));
 
-    await start(implementTicket, [event.ticketId, "jira", event.triggeredBy], {
-      id: `impl-${event.ticketId}-${ticket.id}`,
+    await startWorkflowRun({
+      ticketRowId: ticket.id,
+      ticketExternalId: event.ticketId,
+      type: "implementation",
+      workflow: implementTicket,
+      workflowArgs: [event.ticketId, "jira", event.triggeredBy],
+      dedupeId: `impl-${event.ticketId}-${ticket.id}`,
     });
-    logger.info({ ticketId: event.ticketId, jobType: "implementation" }, "workflow_started");
     return;
   }
 
@@ -118,10 +125,14 @@ async function handleMovedToAi(event: NormalizedEvent): Promise<void> {
       .set({ workflowState: "queued", updatedAt: new Date() })
       .where(eq(tickets.id, ticket.id));
 
-    await start(reviewFixTicket, [event.ticketId, "jira", event.triggeredBy], {
-      id: `fix-${event.ticketId}-${ticket.id}`,
+    await startWorkflowRun({
+      ticketRowId: ticket.id,
+      ticketExternalId: event.ticketId,
+      type: "review_fix",
+      workflow: reviewFixTicket,
+      workflowArgs: [event.ticketId, "jira", event.triggeredBy],
+      dedupeId: `fix-${event.ticketId}-${ticket.id}`,
     });
-    logger.info({ ticketId: event.ticketId, jobType: "review_fix" }, "workflow_started");
     return;
   }
 
@@ -136,10 +147,14 @@ async function handleMovedToAi(event: NormalizedEvent): Promise<void> {
       .set({ workflowState: "queued", updatedAt: new Date() })
       .where(eq(tickets.id, ticket.id));
 
-    await start(implementTicket, [event.ticketId, "jira", event.triggeredBy], {
-      id: `impl-${event.ticketId}-${ticket.id}`,
+    await startWorkflowRun({
+      ticketRowId: ticket.id,
+      ticketExternalId: event.ticketId,
+      type: "implementation",
+      workflow: implementTicket,
+      workflowArgs: [event.ticketId, "jira", event.triggeredBy],
+      dedupeId: `impl-${event.ticketId}-${ticket.id}`,
     });
-    logger.info({ ticketId: event.ticketId, jobType: "implementation" }, "workflow_started");
     return;
   }
 }
@@ -173,26 +188,19 @@ async function handleMovedOutOfAi(event: NormalizedEvent): Promise<void> {
     "contradicting_webhook_received",
   );
 
-  // Direct container teardown -- no queue needed, teardown is fast
   if (ticket.currentRunId) {
     const runRows = await db
       .select()
       .from(runAttempts)
       .where(eq(runAttempts.id, ticket.currentRunId));
     const activeRun = runRows[0];
-    if (activeRun?.containerId) {
-      try {
-        await teardownContainer(activeRun.containerId);
-        logger.info(
-          { ticketId: event.ticketId, containerId: activeRun.containerId },
-          "container_teardown_direct",
-        );
-      } catch (err) {
-        logger.warn(
-          { ticketId: event.ticketId, containerId: activeRun.containerId, error: (err as Error).message },
-          "container_teardown_failed",
-        );
-      }
+    if (activeRun) {
+      await cancelWorkflowRun({
+        runAttemptId: activeRun.id,
+        workflowRunId: activeRun.workflowRunId,
+        containerId: activeRun.containerId,
+        ticketExternalId: event.ticketId,
+      });
     }
   }
 
@@ -201,6 +209,7 @@ async function handleMovedOutOfAi(event: NormalizedEvent): Promise<void> {
     .set({
       workflowState: "failed",
       state: event.toColumn,
+      currentRunId: null,
       updatedAt: new Date(),
     })
     .where(eq(tickets.id, ticket.id));

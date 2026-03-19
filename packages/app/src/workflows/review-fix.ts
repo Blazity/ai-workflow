@@ -29,37 +29,36 @@ export async function reviewFixTicket(
   ticketId: string,
   source: "jira" | "linear",
   triggeredBy: string,
+  runAttemptId: string,
 ) {
   "use workflow";
 
-  const validation = await validateReviewFix(ticketId);
-  if (!validation) return; // stale or missing data
+  const validation = await validateReviewFix(ticketId, runAttemptId);
+  if (!validation) return;
 
-  const { branchName, prNumber, ticketRowId } = validation;
-  const run = await createFixRun(ticketId, ticketRowId, branchName, prNumber);
+  const { branchName, prNumber } = validation;
   const result = await executeFixSandbox(ticketId, branchName, prNumber);
 
   if (result.containerId) {
-    await recordContainerId(run.id, result.containerId);
+    await recordContainerId(runAttemptId, result.containerId);
   }
 
   if (result.status === "complete" && result.containerId) {
     await pushAndTeardown(result.containerId, branchName);
-    await finalizeFixSuccess(ticketId, run.id, triggeredBy);
+    await finalizeFixSuccess(ticketId, runAttemptId, triggeredBy);
     return;
   }
 
-  // Failed
   if (result.containerId) {
     await teardownStep(result.containerId);
   }
-  await finalizeFixFailure(ticketId, run.id, result.error);
+  await finalizeFixFailure(ticketId, runAttemptId, result.error);
   throw new Error(`Agent failed for ${ticketId}: ${result.error}`);
 }
 
 // ── Steps ──────────────────────────────────────────────────────────
 
-async function validateReviewFix(ticketId: string) {
+async function validateReviewFix(ticketId: string, runAttemptId: string) {
   "use step";
   const { jira } = createAdapters();
   const ticket = await jira.fetchTicket(ticketId);
@@ -78,43 +77,24 @@ async function validateReviewFix(ticketId: string) {
     throw new FatalError(`review_fix requires prId and branchName for ${ticketId}`);
   }
 
-  return {
-    branchName: ticketRow.branchName,
-    prNumber: parseInt(ticketRow.prId, 10),
-    ticketRowId: ticketRow.id,
-  };
-}
-
-async function createFixRun(
-  ticketId: string,
-  ticketRowId: string,
-  branchName: string,
-  prNumber: number,
-) {
-  "use step";
   await db
     .update(tickets)
     .set({ workflowState: "fixing_feedback", updatedAt: new Date() })
     .where(eq(tickets.externalId, ticketId));
 
-  const [run] = await db
-    .insert(runAttempts)
-    .values({
-      ticketId: ticketRowId,
-      type: "review_fix",
-      status: "running",
-      branchName,
-    })
-    .returning();
-
   await db
-    .update(tickets)
-    .set({ currentRunId: run!.id, updatedAt: new Date() })
-    .where(eq(tickets.externalId, ticketId));
+    .update(runAttempts)
+    .set({ status: "running", branchName: ticketRow.branchName })
+    .where(eq(runAttempts.id, runAttemptId));
 
-  logger.info({ ticketId, runId: run!.id, type: "review_fix", branchName, prNumber }, "job_started");
-  return run!;
+  logger.info({ ticketId, runAttemptId, type: "review_fix", branchName: ticketRow.branchName, prNumber: parseInt(ticketRow.prId, 10) }, "job_started");
+
+  return {
+    branchName: ticketRow.branchName,
+    prNumber: parseInt(ticketRow.prId, 10),
+  };
 }
+
 
 async function executeFixSandbox(
   ticketId: string,

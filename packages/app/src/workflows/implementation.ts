@@ -30,30 +30,30 @@ export async function implementTicket(
   ticketId: string,
   source: "jira" | "linear",
   triggeredBy: string,
+  runAttemptId: string,
 ) {
   "use workflow";
 
   const ticket = await fetchAndValidateTicket(ticketId);
-  if (!ticket) return; // stale, skip silently
+  if (!ticket) return;
 
   const branchName = `blazebot/${ticketId}`;
 
-  await setupBranch(ticketId, branchName);
-  const run = await createRun(ticketId, branchName);
+  await setupBranch(ticketId, branchName, runAttemptId);
   const result = await executeSandbox(ticketId, branchName, ticket);
 
   if (result.containerId) {
-    await recordContainerId(run.id, result.containerId);
+    await recordContainerId(runAttemptId, result.containerId);
   }
 
   if (result.status === "complete" && result.containerId) {
     const pushResult = await pushAndTeardown(result.containerId, branchName);
     if (!pushResult.pushed) {
-      await finalizeFailure(ticketId, run.id, `Branch push failed — agent may not have committed code. Output: ${pushResult.output}`);
+      await finalizeFailure(ticketId, runAttemptId, `Branch push failed — agent may not have committed code. Output: ${pushResult.output}`);
       throw new Error(`Push failed for ${ticketId}: ${pushResult.output}`);
     }
     const pr = await createPullRequest(ticketId, ticket.title, branchName, result.summary ?? "");
-    await finalizeSuccess(ticketId, run.id, branchName, pr, triggeredBy, ticket.identifier);
+    await finalizeSuccess(ticketId, runAttemptId, branchName, pr, triggeredBy, ticket.identifier);
     return;
   }
 
@@ -61,15 +61,14 @@ export async function implementTicket(
     if (result.containerId) {
       await pushAndTeardown(result.containerId, branchName);
     }
-    await finalizeClarification(ticketId, run.id, branchName, result.questions ?? [], triggeredBy, ticket.identifier);
+    await finalizeClarification(ticketId, runAttemptId, branchName, result.questions ?? [], triggeredBy, ticket.identifier);
     return;
   }
 
-  // Failed
   if (result.containerId) {
     await teardownStep(result.containerId);
   }
-  await finalizeFailure(ticketId, run.id, result.error);
+  await finalizeFailure(ticketId, runAttemptId, result.error);
   throw new Error(`Agent failed for ${ticketId}: ${result.error}`);
 }
 
@@ -90,7 +89,7 @@ async function fetchAndValidateTicket(ticketId: string) {
   return ticket;
 }
 
-async function setupBranch(ticketId: string, branchName: string) {
+async function setupBranch(ticketId: string, branchName: string, runAttemptId: string) {
   "use step";
   const { github } = createAdapters();
   const owner = appEnv.GITHUB_REPO_OWNER!;
@@ -105,33 +104,13 @@ async function setupBranch(ticketId: string, branchName: string) {
     .where(eq(tickets.externalId, ticketId));
 
   logger.info({ ticketId, from: "queued", to: "implementing" }, "ticket_state_transition");
-}
-
-async function createRun(ticketId: string, branchName: string) {
-  "use step";
-  const ticketRow = (
-    await db.select().from(tickets).where(eq(tickets.externalId, ticketId))
-  )[0]!;
-
-  const [run] = await db
-    .insert(runAttempts)
-    .values({
-      ticketId: ticketRow.id,
-      type: "implementation",
-      status: "running",
-      branchName,
-    })
-    .returning();
 
   await db
-    .update(tickets)
-    .set({ currentRunId: run!.id, updatedAt: new Date() })
-    .where(eq(tickets.externalId, ticketId));
-
-  logger.info({ ticketId, runId: run!.id, type: "implementation", branchName }, "job_started");
-
-  return run!;
+    .update(runAttempts)
+    .set({ status: "running", branchName })
+    .where(eq(runAttempts.id, runAttemptId));
 }
+
 
 async function executeSandbox(
   ticketId: string,
