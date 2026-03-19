@@ -5,6 +5,7 @@ import {
   tickets,
   runAttempts,
   ticketQueue,
+  cancellationQueue,
   createLogger,
 } from "@blazebot/shared";
 import type { NormalizedEvent } from "./types.js";
@@ -249,8 +250,9 @@ async function handleMovedOutOfAi(event: NormalizedEvent): Promise<void> {
     /* best effort — job may already be processing */
   }
 
-  // Instead of directly calling teardownContainer (which lives in worker),
-  // enqueue a cancellation job for the worker to handle
+  // Enqueue teardown on a dedicated cancellation queue so it runs immediately
+  // without waiting for long-running implementation/review_fix jobs to finish.
+  // Best-effort: if Redis is unavailable, the DB state update below still executes.
   if (ticket.currentRunId) {
     const runRows = await db
       .select()
@@ -258,20 +260,21 @@ async function handleMovedOutOfAi(event: NormalizedEvent): Promise<void> {
       .where(eq(runAttempts.id, ticket.currentRunId));
     const activeRun = runRows[0];
     if (activeRun?.containerId) {
-      await ticketQueue.add(
-        "cancellation",
-        {
-          type: "cancellation",
+      try {
+        await cancellationQueue.add("teardown", {
           ticketId: event.ticketId,
           containerId: activeRun.containerId,
-          source: "jira",
-          triggeredBy: event.triggeredBy,
-        },
-      );
-      logger.info(
-        { ticketId: event.ticketId, containerId: activeRun.containerId },
-        "container_teardown_enqueued",
-      );
+        });
+        logger.info(
+          { ticketId: event.ticketId, containerId: activeRun.containerId },
+          "container_teardown_enqueued",
+        );
+      } catch (err) {
+        logger.warn(
+          { ticketId: event.ticketId, containerId: activeRun.containerId, error: (err as Error).message },
+          "container_teardown_enqueue_failed",
+        );
+      }
     }
   }
 

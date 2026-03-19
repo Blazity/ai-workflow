@@ -16,8 +16,8 @@ export {
 } from "./schema.js";
 
 // Queue
-export { ticketQueue, maintenanceQueue, defaultJobOptions } from "./queue.js";
-export type { TicketJobData } from "./queue.js";
+export { ticketQueue, cancellationQueue, maintenanceQueue, defaultJobOptions } from "./queue.js";
+export type { TicketJobData, CancellationJobData } from "./queue.js";
 
 // Adapters
 export type { MessagingAdapter } from "./adapters/messaging.js";

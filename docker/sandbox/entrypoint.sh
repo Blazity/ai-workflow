@@ -15,7 +15,7 @@ cd /workspace/repo
 
 cp /inject/requirements.md /workspace/requirements.md
 
-MODEL="${CLAUDE_MODEL:-claude-sonnet-4-20250514}"
+MODEL="${CLAUDE_MODEL:-claude-opus-4-6}"
 
 AGENT_SCHEMA='{"type":"object","required":["result"],"properties":{"result":{"type":"string","enum":["implemented","clarification_needed","failed"]},"summary":{"type":"string"},"questions":{"type":"array","items":{"type":"string"}},"error":{"type":"string"}},"additionalProperties":false}'
 

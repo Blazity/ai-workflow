@@ -1,4 +1,5 @@
 import { Worker } from "bullmq";
+import type { CancellationJobData } from "@blazebot/shared";
 import {
   createRedisConnection,
   maintenanceQueue,
@@ -6,7 +7,7 @@ import {
 } from "@blazebot/shared";
 import { workerEnv } from "./env.js";
 import { createWorker } from "./worker.js";
-import { cleanupOrphanContainers } from "./sandbox/manager.js";
+import { cleanupOrphanContainers, teardownContainer } from "./sandbox/manager.js";
 import { runMaintenancePoll } from "./poller.js";
 
 const logger = createLogger();
@@ -15,6 +16,20 @@ async function main() {
   await cleanupOrphanContainers();
 
   const worker = createWorker();
+
+  // Dedicated cancellation worker on a separate queue so teardowns
+  // run immediately without waiting for long-running jobs to finish.
+  const cancellationWorker = new Worker<CancellationJobData>(
+    "cancellation",
+    async (job) => {
+      await teardownContainer(job.data.containerId);
+      logger.info(
+        { ticketId: job.data.ticketId, containerId: job.data.containerId },
+        "container_teardown",
+      );
+    },
+    { connection: createRedisConnection(), concurrency: 2 },
+  );
 
   const maintenanceWorker = new Worker(
     "maintenance",
@@ -41,6 +56,7 @@ async function main() {
     const forceTimeout = setTimeout(() => process.exit(1), 30_000);
     forceTimeout.unref();
     await worker.close();
+    await cancellationWorker.close();
     await maintenanceWorker.close();
     clearTimeout(forceTimeout);
     process.exit(0);

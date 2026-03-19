@@ -5,6 +5,7 @@ vi.mock("ioredis", () => ({ Redis: vi.fn() }));
 
 const mockQueueAdd = vi.fn();
 const mockGetJob = vi.fn();
+const mockCancellationAdd = vi.fn();
 vi.mock("bullmq", () => ({
   Queue: class {
     add = mockQueueAdd;
@@ -50,6 +51,9 @@ vi.mock("@blazebot/shared", async () => {
     ticketQueue: {
       add: (...args: unknown[]) => mockQueueAdd(...args),
       getJob: (...args: unknown[]) => mockGetJob(...args),
+    },
+    cancellationQueue: {
+      add: (...args: unknown[]) => mockCancellationAdd(...args),
     },
     createLogger: () => ({
       info: vi.fn(),
@@ -313,14 +317,11 @@ describe("routeTicketTransition", () => {
 
     await routeTicketTransition(makeEvent("AI", "Done"));
 
-    expect(mockQueueAdd).toHaveBeenCalledWith(
-      "cancellation",
+    expect(mockCancellationAdd).toHaveBeenCalledWith(
+      "teardown",
       expect.objectContaining({
-        type: "cancellation",
         ticketId: "PROJ-42",
         containerId: "docker-container-xyz",
-        source: "jira",
-        triggeredBy: "Mia",
       }),
     );
   });

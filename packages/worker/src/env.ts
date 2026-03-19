@@ -17,7 +17,7 @@ export const workerEnv = createEnv({
     GITHUB_REPO_NAME: z.string().min(1).optional(),
     GITHUB_BASE_BRANCH: z.string().default("main"),
     CLAUDE_CODE_OAUTH_TOKEN: z.string().min(1),
-    CLAUDE_MODEL: z.string().default("claude-opus-4-20250514"),
+    CLAUDE_MODEL: z.string().default("claude-opus-4-6"),
     DOCKER_IMAGE: z.string().default("blazebot-sandbox"),
     SANDBOX_MEMORY_MB: z
       .string()

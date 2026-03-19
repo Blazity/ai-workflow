@@ -76,15 +76,6 @@ export function createWorker(): Worker<TicketJobData> {
         return;
       }
 
-      if (job.data.type === "cancellation") {
-        await teardownContainer(job.data.containerId);
-        logger.info(
-          { ticketId: job.data.ticketId, containerId: job.data.containerId },
-          "container_teardown",
-        );
-        return;
-      }
-
       if (job.data.type === "implementation") {
         await handleImplementation(job.data);
       } else if (job.data.type === "review_fix") {

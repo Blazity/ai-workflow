@@ -15,14 +15,12 @@ export type TicketJobData =
       ticketId: string;
       source: "jira" | "linear";
       triggeredBy: string;
-    }
-  | {
-      type: "cancellation";
-      ticketId: string;
-      containerId: string;
-      source: "jira" | "linear";
-      triggeredBy: string;
     };
+
+export interface CancellationJobData {
+  ticketId: string;
+  containerId: string;
+}
 
 export const defaultJobOptions: JobsOptions = {
   attempts: env.JOB_MAX_RETRIES + 1,
@@ -37,6 +35,16 @@ export const defaultJobOptions: JobsOptions = {
 export const ticketQueue = new Queue<TicketJobData>("ticket", {
   connection: createRedisConnection(),
   defaultJobOptions,
+});
+
+export const cancellationQueue = new Queue<CancellationJobData>("cancellation", {
+  connection: createRedisConnection(),
+  defaultJobOptions: {
+    attempts: 3,
+    backoff: { type: "fixed", delay: 5000 },
+    removeOnComplete: true,
+    removeOnFail: true,
+  },
 });
 
 export const maintenanceQueue = new Queue("maintenance", {
