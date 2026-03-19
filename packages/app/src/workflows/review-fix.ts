@@ -17,15 +17,10 @@ import { assembleFixingFeedbackContext } from "../context.js";
 const logger = createLogger();
 
 async function createProvider(): Promise<SandboxProvider> {
-  if (appEnv.SANDBOX_PROVIDER === "vercel") {
-    return createSandboxProvider({
-      provider: "vercel",
-      vercel: { vcpus: appEnv.VERCEL_SANDBOX_VCPUS },
-    });
-  }
+  // TODO: Re-enable Docker provider when not deploying to Vercel
   return createSandboxProvider({
-    provider: "docker",
-    docker: { image: appEnv.DOCKER_IMAGE, memoryLimitMb: appEnv.SANDBOX_MEMORY_MB },
+    provider: "vercel",
+    vercel: { vcpus: appEnv.VERCEL_SANDBOX_VCPUS },
   });
 }
 

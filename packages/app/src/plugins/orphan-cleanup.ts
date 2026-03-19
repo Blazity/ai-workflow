@@ -3,11 +3,11 @@ import { createSandboxProvider } from "../sandbox/index.js";
 import { appEnv } from "../env.js";
 
 export default definePlugin(async () => {
-  const provider = await (
-    appEnv.SANDBOX_PROVIDER === "vercel"
-      ? createSandboxProvider({ provider: "vercel", vercel: { vcpus: appEnv.VERCEL_SANDBOX_VCPUS } })
-      : createSandboxProvider({ provider: "docker", docker: { image: appEnv.DOCKER_IMAGE, memoryLimitMb: appEnv.SANDBOX_MEMORY_MB } })
-  );
+  // TODO: Re-enable Docker provider when not deploying to Vercel
+  const provider = await createSandboxProvider({
+    provider: "vercel",
+    vercel: { vcpus: appEnv.VERCEL_SANDBOX_VCPUS },
+  });
 
   await provider.cleanupOrphans();
 });
