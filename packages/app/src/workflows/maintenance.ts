@@ -72,7 +72,6 @@ async function checkMissedWebhooks(): Promise<void> {
     ticketKeys = await jira.searchTickets(
       `status = "${env.COLUMN_AI}" AND project = ${appEnv.JIRA_PROJECT_KEY}`,
     );
-    console.log("ticketKeys", ticketKeys);
   } catch (err) {
     logger.error({ error: (err as Error).message }, "poll_jira_error");
     return;
@@ -86,7 +85,6 @@ async function checkMissedWebhooks(): Promise<void> {
     .where(
       and(inArray(tickets.externalId, ticketKeys), eq(tickets.source, "jira")),
     );
-  console.log("existingTickets", existingTickets);
   const existingMap = new Map(existingTickets.map((t) => [t.externalId, t]));
 
   for (const ticketId of ticketKeys) {
@@ -105,9 +103,7 @@ async function checkMissedWebhooks(): Promise<void> {
         })
         .onConflictDoNothing()
         .returning();
-      console.log("created", created);
       if (!created) continue;
-      console.log("starting workflow run");
       await startWorkflowRun({
         ticketRowId: created.id,
         ticketExternalId: ticketId,
