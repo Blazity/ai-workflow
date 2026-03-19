@@ -7,3 +7,5 @@ dist/
 # Note: drizzle/ migrations are intentionally committed for reproducibility
 
 .workflow-data
+.vercel
+.output
