@@ -15,40 +15,17 @@ services:
       timeout: 5s
       retries: 5
 
-  redis:
-    image: redis:7
-    ports:
-      - "6379:6379"
-    volumes:
-      - redis_data:/data
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
-
-  api:
+  app:
     build:
       context: .
-      dockerfile: packages/api/Dockerfile
+      dockerfile: packages/app/Dockerfile
     ports:
       - "3000:3000"
-    env_file: .env
-    depends_on:
-      postgres: { condition: service_healthy }
-      redis: { condition: service_healthy }
-
-  worker:
-    build:
-      context: .
-      dockerfile: packages/worker/Dockerfile
     env_file: .env
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
       postgres: { condition: service_healthy }
-      redis: { condition: service_healthy }
 
 volumes:
   postgres_data:
-  redis_data:

@@ -60,7 +60,7 @@ export async function teardownContainer(containerId: string): Promise<void> {
 export async function pushBranchFromContainer(
   containerId: string,
   branchName: string,
-): Promise<void> {
+): Promise<{ pushed: boolean; output: string }> {
   const container = docker.getContainer(containerId);
   try {
     // Commit the stopped container's filesystem to a temporary image, then
@@ -88,8 +88,10 @@ export async function pushBranchFromContainer(
           { containerId, branchName, exitCode: waitResult.StatusCode, output },
           "branch_push_failed",
         );
+        return { pushed: false, output };
       } else {
         logger.info({ containerId, branchName, output }, "branch_pushed");
+        return { pushed: true, output };
       }
     } finally {
       try {
@@ -99,14 +101,12 @@ export async function pushBranchFromContainer(
       }
     }
   } catch (err) {
+    const msg = err instanceof Error ? err.message : "Unknown error";
     logger.warn(
-      {
-        containerId,
-        branchName,
-        error: err instanceof Error ? err.message : "Unknown error",
-      },
+      { containerId, branchName, error: msg },
       "branch_push_failed",
     );
+    return { pushed: false, output: msg };
   }
 }
 

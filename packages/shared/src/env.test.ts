@@ -8,17 +8,18 @@ describe("env", () => {
 
   it("validates when all required env vars are set", async () => {
     vi.stubEnv("DATABASE_URL", "postgresql://user:pass@localhost:5432/db");
-    vi.stubEnv("REDIS_URL", "redis://localhost:6379");
 
     const { env } = await import("./env.js");
     expect(env.DATABASE_URL).toBe("postgresql://user:pass@localhost:5432/db");
-    expect(env.REDIS_URL).toBe("redis://localhost:6379");
+    expect(env.REDIS_URL).toBeUndefined();
   });
 
-  it("throws when REDIS_URL is missing", async () => {
+  it("accepts optional REDIS_URL", async () => {
     vi.stubEnv("DATABASE_URL", "postgresql://user:pass@localhost:5432/db");
+    vi.stubEnv("REDIS_URL", "redis://localhost:6379");
 
-    await expect(import("./env.js")).rejects.toThrow();
+    const { env } = await import("./env.js");
+    expect(env.REDIS_URL).toBe("redis://localhost:6379");
   });
 
   it("uses default NODE_ENV of development", async () => {

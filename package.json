@@ -6,15 +6,16 @@
     "node": ">=20"
   },
   "scripts": {
-    "dev": "pnpm -r --parallel dev",
+    "dev": "pnpm --filter @blazebot/app dev",
     "build": "pnpm -r build",
-    "start:api": "pnpm --filter @blazebot/api start",
-    "start:worker": "pnpm --filter @blazebot/worker start",
+    "start": "pnpm --filter @blazebot/app start",
     "test": "pnpm -r test",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
     "db:push": "drizzle-kit push",
-    "inspect": "bash scripts/inspect.sh"
+    "inspect": "bash scripts/inspect.sh",
+    "workflow:inspect": "bash -c 'set -a && source .env && set +a && pnpm --filter @blazebot/app exec workflow inspect runs --backend @workflow/world-postgres'",
+    "workflow:inspect:web": "bash -c 'set -a && source .env && set +a && pnpm --filter @blazebot/app exec workflow inspect runs --backend @workflow/world-postgres --web'"
   },
   "packageManager": "pnpm@10.22.0",
   "devDependencies": {

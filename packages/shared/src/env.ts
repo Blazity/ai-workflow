@@ -4,7 +4,7 @@ import { z } from "zod";
 export const env = createEnv({
   server: {
     DATABASE_URL: z.string().url(),
-    REDIS_URL: z.string().url(),
+    REDIS_URL: z.string().url().optional(),
     NODE_ENV: z
       .enum(["development", "production", "test"])
       .default("development"),
@@ -25,7 +25,8 @@ export const env = createEnv({
       .string()
       .default("30000")
       .transform((v) => parseInt(v, 10))
-      .pipe(z.number().int().positive()),
+      .pipe(z.number().int().positive())
+      .optional(),
   },
   runtimeEnv: process.env,
 });
