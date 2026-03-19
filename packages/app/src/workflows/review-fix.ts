@@ -10,14 +10,24 @@ import {
 } from "@blazebot/shared";
 import { appEnv } from "../env.js";
 import { createAdapters, readPromptFile } from "../lib/adapters.js";
-import {
-  runSandbox,
-  pushBranchFromContainer,
-  teardownContainer,
-} from "../sandbox/manager.js";
+import { createSandboxProvider } from "../sandbox/index.js";
+import type { SandboxProvider } from "../sandbox/types.js";
 import { assembleFixingFeedbackContext } from "../context.js";
 
 const logger = createLogger();
+
+async function createProvider(): Promise<SandboxProvider> {
+  if (appEnv.SANDBOX_PROVIDER === "vercel") {
+    return createSandboxProvider({
+      provider: "vercel",
+      vercel: { vcpus: appEnv.VERCEL_SANDBOX_VCPUS },
+    });
+  }
+  return createSandboxProvider({
+    provider: "docker",
+    docker: { image: appEnv.DOCKER_IMAGE, memoryLimitMb: appEnv.SANDBOX_MEMORY_MB },
+  });
+}
 
 function normalize(value: string): string {
   return value.trim().toLowerCase();
@@ -121,8 +131,8 @@ async function executeFixSandbox(
     promptContent,
   );
 
-  const result = await runSandbox({
-    image: appEnv.DOCKER_IMAGE,
+  const provider = await createProvider();
+  const result = await provider.runSandbox({
     branchName,
     requirementsMd,
     githubToken: appEnv.GITHUB_TOKEN!,
@@ -130,7 +140,6 @@ async function executeFixSandbox(
     oauthToken: appEnv.CLAUDE_CODE_OAUTH_TOKEN,
     model: appEnv.CLAUDE_MODEL,
     timeoutMs: appEnv.JOB_TIMEOUT_MS,
-    memoryLimitMb: appEnv.SANDBOX_MEMORY_MB,
     developerMode: appEnv.DEVELOPER_MODE,
   });
 
@@ -152,16 +161,18 @@ async function recordContainerId(runId: string, containerId: string) {
 
 async function pushAndTeardown(containerId: string, branchName: string) {
   "use step";
+  const provider = await createProvider();
   try {
-    await pushBranchFromContainer(containerId, branchName);
+    await provider.pushBranch(containerId, branchName);
   } finally {
-    await teardownContainer(containerId);
+    await provider.teardown(containerId);
   }
 }
 
 async function teardownStep(containerId: string) {
   "use step";
-  await teardownContainer(containerId);
+  const provider = await createProvider();
+  await provider.teardown(containerId);
 }
 
 async function finalizeFixSuccess(

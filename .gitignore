@@ -8,4 +8,5 @@ dist/
 
 .workflow-data
 .vercel
-.output
+**/.output
+

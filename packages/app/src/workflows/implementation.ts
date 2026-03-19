@@ -17,7 +17,7 @@ import {
 
 const logger = createLogger();
 
-function createProvider(): SandboxProvider {
+async function createProvider(): Promise<SandboxProvider> {
   if (appEnv.SANDBOX_PROVIDER === "vercel") {
     return createSandboxProvider({
       provider: "vercel",
@@ -128,7 +128,7 @@ async function executeSandbox(
   ticket: { title: string; description?: string; comments?: Array<{ body: string }> },
 ) {
   "use step";
-  const provider = createProvider();
+  const provider = await createProvider();
   const promptContent = await readPromptFile("implement.md");
   const requirementsMd = assembleImplementationContext(ticket, promptContent);
 
@@ -164,7 +164,7 @@ async function recordContainerId(runId: string, containerId: string) {
 
 async function pushAndTeardown(containerId: string, branchName: string) {
   "use step";
-  const provider = createProvider();
+  const provider = await createProvider();
   try {
     const result = await provider.pushBranch(containerId, branchName);
     return result;
@@ -175,7 +175,7 @@ async function pushAndTeardown(containerId: string, branchName: string) {
 
 async function teardownStep(containerId: string) {
   "use step";
-  const provider = createProvider();
+  const provider = await createProvider();
   await provider.teardown(containerId);
 }
 
