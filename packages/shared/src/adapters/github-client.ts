@@ -110,13 +110,26 @@ export class GitHubClient implements VCSAdapter {
     repoName: string,
     prNumber: number,
   ): Promise<PullRequestComment[]> {
-    const { data } = await this.octokit.pulls.listReviewComments({
-      owner: repoOwner,
-      repo: repoName,
-      pull_number: prNumber,
-    });
+    const [reviewComments, issueComments, reviews] = await Promise.all([
+      this.octokit.pulls.listReviewComments({
+        owner: repoOwner,
+        repo: repoName,
+        pull_number: prNumber,
+      }),
+      this.octokit.issues.listComments({
+        owner: repoOwner,
+        repo: repoName,
+        issue_number: prNumber,
+      }),
+      this.octokit.pulls.listReviews({
+        owner: repoOwner,
+        repo: repoName,
+        pull_number: prNumber,
+      }),
+    ]);
 
-    return data.map(
+    // Inline code review comments (attached to specific lines)
+    const inline: PullRequestComment[] = reviewComments.data.map(
       (c): PullRequestComment => ({
         author: c.user?.login ?? "unknown",
         body: c.body,
@@ -127,6 +140,34 @@ export class GitHubClient implements VCSAdapter {
           (c.reactions as unknown as Record<string, number>)["+1"] > 0,
       }),
     );
+
+    // General PR conversation comments
+    const general: PullRequestComment[] = issueComments.data
+      .filter((c) => c.body)
+      .map(
+        (c): PullRequestComment => ({
+          author: c.user?.login ?? "unknown",
+          body: c.body!,
+          path: null,
+          line: null,
+          fromApprovedReview: false,
+        }),
+      );
+
+    // Review body text (from "Request changes" / "Approve" submissions)
+    const reviewBodies: PullRequestComment[] = reviews.data
+      .filter((r) => r.body)
+      .map(
+        (r): PullRequestComment => ({
+          author: r.user?.login ?? "unknown",
+          body: r.body!,
+          path: null,
+          line: null,
+          fromApprovedReview: r.state === "APPROVED",
+        }),
+      );
+
+    return [...inline, ...general, ...reviewBodies];
   }
 
   async getPRConflictStatus(
