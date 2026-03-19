@@ -41,25 +41,29 @@ vi.mock("@blazebot/shared", () => ({
 }));
 
 describe("createSandboxProvider", () => {
-  it("returns DockerSandboxProvider when provider is docker", async () => {
-    const { createSandboxProvider } = await import("./index.js");
-    const provider = createSandboxProvider({
-      provider: "docker",
-      docker: { image: "test", memoryLimitMb: 4096 },
-    });
-    expect(provider.constructor.name).toBe("DockerSandboxProvider");
-  });
-
   it("returns VercelSandboxProvider when provider is vercel", async () => {
+    process.env.VERCEL_TOKEN = "tok";
+    process.env.VERCEL_TEAM_ID = "team";
+    process.env.VERCEL_PROJECT_ID = "proj";
     const { createSandboxProvider } = await import("./index.js");
-    const provider = createSandboxProvider({ provider: "vercel", vercel: { vcpus: 2 } });
+    const provider = await createSandboxProvider({ provider: "vercel", vercel: { vcpus: 2 } });
     expect(provider.constructor.name).toBe("VercelSandboxProvider");
   });
 
   it("throws on unknown provider", async () => {
     const { createSandboxProvider } = await import("./index.js");
-    expect(() =>
+    await expect(
       createSandboxProvider({ provider: "unknown" as any } as any),
-    ).toThrow("Unknown sandbox provider");
+    ).rejects.toThrow("Unknown sandbox provider");
+  });
+
+  it("throws when Vercel env vars are missing", async () => {
+    delete process.env.VERCEL_TOKEN;
+    delete process.env.VERCEL_TEAM_ID;
+    delete process.env.VERCEL_PROJECT_ID;
+    const { createSandboxProvider } = await import("./index.js");
+    await expect(
+      createSandboxProvider({ provider: "vercel", vercel: { vcpus: 2 } }),
+    ).rejects.toThrow("VERCEL_TOKEN, VERCEL_TEAM_ID, VERCEL_PROJECT_ID");
   });
 });

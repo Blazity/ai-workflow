@@ -36,6 +36,7 @@ export class VercelSandboxProvider implements SandboxProvider {
         source: {
           type: "git",
           url: `https://github.com/${options.repoUrl}.git`,
+          username: "x-access-token",
           password: options.githubToken,
           revision: options.branchName,
           depth: 1,
@@ -109,10 +110,15 @@ export class VercelSandboxProvider implements SandboxProvider {
           return { exitCode, status: "failed", error: output.error ?? `Agent returned result: ${output.result}`, containerId: sandboxId };
       }
     } catch (err) {
+      const errMsg = err instanceof Error ? err.message : "Unknown error";
+      const errJson = (err as any)?.json;
+      const errText = (err as any)?.text;
+      const errStatus = (err as any)?.response?.status;
+      logger.error({ error: errMsg, status: errStatus, responseJson: errJson, responseText: errText, stack: (err as Error)?.stack }, "vercel_sandbox_error");
       return {
         exitCode: -1,
         status: "failed",
-        error: err instanceof Error ? err.message : "Unknown error",
+        error: errMsg,
         containerId: sandbox?.sandboxId,
       };
     }

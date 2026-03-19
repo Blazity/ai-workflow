@@ -19,6 +19,11 @@ export async function createSandboxProvider(config: ProviderConfig): Promise<San
     //   return new DockerSandboxProvider(config.docker);
     // }
     case "vercel": {
+      const missing = (["VERCEL_TOKEN", "VERCEL_TEAM_ID", "VERCEL_PROJECT_ID"] as const)
+        .filter((k) => !process.env[k]);
+      if (missing.length > 0) {
+        throw new Error(`Vercel sandbox requires env vars: ${missing.join(", ")}`);
+      }
       const { VercelSandboxProvider } = await import("./vercel-provider.js");
       return new VercelSandboxProvider(config.vercel);
     }

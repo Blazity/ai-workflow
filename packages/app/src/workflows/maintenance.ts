@@ -11,7 +11,10 @@ import {
   createLogger,
 } from "@blazebot/shared";
 import { appEnv } from "../env.js";
-import { startWorkflowRun, cancelWorkflowRun } from "../lib/workflow-helpers.js";
+import {
+  startWorkflowRun,
+  cancelWorkflowRun,
+} from "../lib/workflow-helpers.js";
 import { implementTicket } from "./implementation.js";
 import { reviewFixTicket } from "./review-fix.js";
 
@@ -49,7 +52,11 @@ function createMessaging() {
 }
 
 async function checkMissedWebhooks(): Promise<void> {
-  if (!appEnv.JIRA_BASE_URL || !appEnv.JIRA_USER_EMAIL || !appEnv.JIRA_API_TOKEN) {
+  if (
+    !appEnv.JIRA_BASE_URL ||
+    !appEnv.JIRA_USER_EMAIL ||
+    !appEnv.JIRA_API_TOKEN
+  ) {
     logger.warn("poll_jira_skipped_no_credentials");
     return;
   }
@@ -65,6 +72,7 @@ async function checkMissedWebhooks(): Promise<void> {
     ticketKeys = await jira.searchTickets(
       `status = "${env.COLUMN_AI}" AND project = ${appEnv.JIRA_PROJECT_KEY}`,
     );
+    console.log("ticketKeys", ticketKeys);
   } catch (err) {
     logger.error({ error: (err as Error).message }, "poll_jira_error");
     return;
@@ -78,11 +86,12 @@ async function checkMissedWebhooks(): Promise<void> {
     .where(
       and(inArray(tickets.externalId, ticketKeys), eq(tickets.source, "jira")),
     );
+  console.log("existingTickets", existingTickets);
   const existingMap = new Map(existingTickets.map((t) => [t.externalId, t]));
 
   for (const ticketId of ticketKeys) {
     const ticket = existingMap.get(ticketId);
-
+    console.log("ticket", ticket);
     if (!ticket) {
       const [created] = await db
         .insert(tickets)
@@ -96,9 +105,9 @@ async function checkMissedWebhooks(): Promise<void> {
         })
         .onConflictDoNothing()
         .returning();
-
+      console.log("created", created);
       if (!created) continue;
-
+      console.log("starting workflow run");
       await startWorkflowRun({
         ticketRowId: created.id,
         ticketExternalId: ticketId,
@@ -118,7 +127,10 @@ async function checkMissedWebhooks(): Promise<void> {
         .where(eq(runAttempts.ticketId, ticket.id));
 
       if (attempts.length >= env.JOB_MAX_RETRIES + 1) {
-        logger.info({ ticketId, attemptCount: attempts.length }, "poll_failed_ticket_exhausted");
+        logger.info(
+          { ticketId, attemptCount: attempts.length },
+          "poll_failed_ticket_exhausted",
+        );
         continue;
       }
 
@@ -142,7 +154,8 @@ async function checkMissedWebhooks(): Promise<void> {
 
 async function checkStuckJobs(): Promise<void> {
   const messaging = createMessaging();
-  const thresholdMs = appEnv.STUCK_JOB_THRESHOLD_MS ?? appEnv.JOB_TIMEOUT_MS * 2;
+  const thresholdMs =
+    appEnv.STUCK_JOB_THRESHOLD_MS ?? appEnv.JOB_TIMEOUT_MS * 2;
   const cutoff = new Date(Date.now() - thresholdMs);
 
   const stuckTickets = await db
@@ -150,7 +163,11 @@ async function checkStuckJobs(): Promise<void> {
     .from(tickets)
     .where(
       and(
-        inArray(tickets.workflowState, ["implementing", "fixing_feedback"]),
+        inArray(tickets.workflowState, [
+          "queued",
+          "implementing",
+          "fixing_feedback",
+        ]),
         lt(tickets.updatedAt, cutoff),
       ),
     );
@@ -193,7 +210,11 @@ async function checkStuckJobs(): Promise<void> {
     if (attempts.length >= env.JOB_MAX_RETRIES + 1) {
       await db
         .update(tickets)
-        .set({ workflowState: "failed", currentRunId: null, updatedAt: new Date() })
+        .set({
+          workflowState: "failed",
+          currentRunId: null,
+          updatedAt: new Date(),
+        })
         .where(eq(tickets.id, ticket.id));
       await messaging.notify(
         ticket.assignee ?? "poller",
@@ -202,12 +223,20 @@ async function checkStuckJobs(): Promise<void> {
       continue;
     }
 
-    const jobType = ticket.workflowState === "fixing_feedback" ? "review_fix" : "implementation";
-    const workflowFn = jobType === "review_fix" ? reviewFixTicket : implementTicket;
+    const jobType =
+      ticket.workflowState === "fixing_feedback"
+        ? "review_fix"
+        : "implementation";
+    const workflowFn =
+      jobType === "review_fix" ? reviewFixTicket : implementTicket;
 
     await db
       .update(tickets)
-      .set({ workflowState: "queued", currentRunId: null, updatedAt: new Date() })
+      .set({
+        workflowState: "queued",
+        currentRunId: null,
+        updatedAt: new Date(),
+      })
       .where(eq(tickets.id, ticket.id));
 
     await startWorkflowRun({
@@ -215,7 +244,11 @@ async function checkStuckJobs(): Promise<void> {
       ticketExternalId: ticket.externalId,
       type: jobType === "review_fix" ? "review_fix" : "implementation",
       workflow: workflowFn,
-      workflowArgs: [ticket.externalId, ticket.source as "jira" | "linear", ticket.assignee ?? "poller"],
+      workflowArgs: [
+        ticket.externalId,
+        ticket.source as "jira" | "linear",
+        ticket.assignee ?? "poller",
+      ],
       dedupeId: `${jobType === "review_fix" ? "fix" : "impl"}-${ticket.externalId}-${ticket.id}-${Date.now()}`,
     });
 
@@ -223,6 +256,9 @@ async function checkStuckJobs(): Promise<void> {
       ticket.assignee ?? "poller",
       `Task ${ticket.externalId} appeared stuck -- re-enqueued automatically`,
     );
-    logger.info({ ticketId: ticket.externalId, jobType }, "stuck_job_recovered");
+    logger.info(
+      { ticketId: ticket.externalId, jobType },
+      "stuck_job_recovered",
+    );
   }
 }
