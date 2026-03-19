@@ -11,7 +11,11 @@ vi.mock("@octokit/rest", () => {
       list: vi.fn(),
       update: vi.fn(),
       listReviewComments: vi.fn(),
+      listReviews: vi.fn(),
       get: vi.fn(),
+    },
+    issues: {
+      listComments: vi.fn(),
     },
     repos: {
       getContent: vi.fn(),
@@ -191,6 +195,8 @@ describe("GitHubClient", () => {
         },
       ],
     });
+    mockInstance.issues.listComments.mockResolvedValue({ data: [] });
+    mockInstance.pulls.listReviews.mockResolvedValue({ data: [] });
 
     const comments = await client.getPRComments("owner", "repo", 1);
 
@@ -235,6 +241,8 @@ describe("GitHubClient", () => {
         },
       ],
     });
+    mockInstance.issues.listComments.mockResolvedValue({ data: [] });
+    mockInstance.pulls.listReviews.mockResolvedValue({ data: [] });
 
     const comments = await client.getPRComments("owner", "repo", 1);
 
