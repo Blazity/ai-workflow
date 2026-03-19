@@ -11,32 +11,49 @@ vi.mock("../logger.js", () => ({
   }),
 }));
 
-vi.mock("@slack/web-api", () => {
-  const MockWebClient = vi.fn().mockImplementation(function (this: unknown) {
-    (this as Record<string, unknown>).chat = { postMessage: vi.fn() };
+vi.mock("chat", () => {
+  const MockChat = vi.fn().mockImplementation(function (this: unknown) {
+    (this as Record<string, unknown>).channel = vi.fn().mockReturnValue({
+      post: vi.fn(),
+    });
   });
-  return { WebClient: MockWebClient };
+  return { Chat: MockChat };
 });
+
+vi.mock("@chat-adapter/slack", () => ({
+  createSlackAdapter: vi.fn().mockReturnValue({ type: "slack-adapter" }),
+}));
 
 describe("createMessagingAdapter", () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
-  it("returns SlackMessagingAdapter when token and channel are provided", async () => {
+  it("returns ChatSDKMessagingAdapter when token and channel are provided", async () => {
     const { createMessagingAdapter } = await import("./messaging-factory.js");
-    const { SlackMessagingAdapter } = await import("./slack-messaging.js");
+    const { ChatSDKMessagingAdapter } = await import("./chatsdk-messaging.js");
 
-    const adapter = createMessagingAdapter("slack", "xoxb-test", "#general");
+    const adapter = createMessagingAdapter("slack", "xoxb-test", "C123ABC");
 
-    expect(adapter).toBeInstanceOf(SlackMessagingAdapter);
+    expect(adapter).toBeInstanceOf(ChatSDKMessagingAdapter);
+  });
+
+  it("passes bot token to createSlackAdapter", async () => {
+    const { createMessagingAdapter } = await import("./messaging-factory.js");
+    const { createSlackAdapter } = await import("@chat-adapter/slack");
+
+    createMessagingAdapter("slack", "xoxb-test", "C123ABC");
+
+    expect(createSlackAdapter).toHaveBeenCalledWith({
+      botToken: "xoxb-test",
+    });
   });
 
   it("returns NoopMessagingAdapter when SLACK_BOT_TOKEN is missing", async () => {
     const { createMessagingAdapter } = await import("./messaging-factory.js");
     const { NoopMessagingAdapter } = await import("./noop-messaging.js");
 
-    const adapter = createMessagingAdapter("slack", undefined, "#general");
+    const adapter = createMessagingAdapter("slack", undefined, "C123ABC");
 
     expect(adapter).toBeInstanceOf(NoopMessagingAdapter);
     expect(mockWarn).toHaveBeenCalledWith(
