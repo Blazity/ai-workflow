@@ -12,6 +12,7 @@
   "dependencies": {
     "@blazebot/shared": "workspace:*",
     "@t3-oss/env-core": "^0.13.10",
+    "@vercel/sandbox": "^1.8.1",
     "@workflow/world-postgres": "latest",
     "dockerode": "^4.0.9",
     "drizzle-orm": "~0.45.1",

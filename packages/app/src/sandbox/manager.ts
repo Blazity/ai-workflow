@@ -3,34 +3,14 @@ import { mkdtemp, writeFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { createLogger } from "@blazebot/shared";
+import type { SandboxOptions as BaseSandboxOptions, SandboxResult } from "./types.js";
+import { parseAgentOutput, sanitizeForLog } from "./parse-output.js";
 
-export interface SandboxOptions {
+export type { SandboxResult } from "./types.js";
+
+interface DockerRunOptions extends BaseSandboxOptions {
   image: string;
-  branchName: string;
-  requirementsMd: string;
-  githubToken: string;
-  repoUrl: string;
-  oauthToken: string;
-  model: string;
-  timeoutMs: number;
   memoryLimitMb: number;
-  developerMode: boolean;
-}
-
-export type SandboxResult = {
-  exitCode: number;
-  status: "complete" | "clarification_needed" | "failed";
-  summary?: string;
-  questions?: string[];
-  error?: string;
-  containerId?: string;
-};
-
-interface AgentOutput {
-  result: "implemented" | "clarification_needed" | "failed";
-  summary?: string;
-  questions?: string[];
-  error?: string;
 }
 
 const docker = new Docker();
@@ -111,7 +91,7 @@ export async function pushBranchFromContainer(
 }
 
 export async function runSandbox(
-  options: SandboxOptions,
+  options: DockerRunOptions,
 ): Promise<SandboxResult> {
   const tmpDir = await mkdtemp(join(tmpdir(), "blazebot-"));
   await writeFile(join(tmpDir, "requirements.md"), options.requirementsMd);
@@ -241,10 +221,6 @@ export async function cleanupOrphanContainers(): Promise<void> {
   }
 }
 
-function sanitizeForLog(text: string): string {
-  return text.slice(-1000);
-}
-
 /**
  * Read all container logs (both stdout and stderr) in a single call,
  * then demux the multiplexed stream into separate strings.
@@ -301,43 +277,6 @@ function demuxDockerStream(buf: Buffer): { stdout: string; stderr: string } {
   }
 
   return { stdout: stdoutChunks.join(""), stderr: stderrChunks.join("") };
-}
-
-/**
- * Claude Code with `--output-format json --json-schema <schema>` returns an envelope:
- *   { "type": "result", "subtype": "success", "result": "...", "structured_output": { ... } }
- * Our agent schema lives in `structured_output`. If `--json-schema` was not honoured
- * (older Claude Code, or schema error) we fall back to parsing the envelope `result` field.
- */
-function parseAgentOutput(stdout: string): AgentOutput | null {
-  const lines = stdout.split("\n");
-  for (let i = lines.length - 1; i >= 0; i--) {
-    const line = lines[i]!.trim();
-    if (!line.startsWith("{")) continue;
-    try {
-      const envelope = JSON.parse(line);
-
-      if (
-        envelope.structured_output &&
-        typeof envelope.structured_output.result === "string"
-      ) {
-        return envelope.structured_output as AgentOutput;
-      }
-
-      if (
-        envelope.result &&
-        typeof envelope.result === "string" &&
-        ["implemented", "clarification_needed", "failed"].includes(
-          envelope.result,
-        )
-      ) {
-        return envelope as AgentOutput;
-      }
-    } catch {
-      continue;
-    }
-  }
-  return null;
 }
 
 async function readResult(

@@ -37,6 +37,15 @@ export const appEnv = createEnv({
       .enum(["true", "false"])
       .default("false")
       .transform((v) => v === "true"),
+    SANDBOX_PROVIDER: z.enum(["docker", "vercel"]).default("docker"),
+    VERCEL_TOKEN: z.string().min(1).optional(),
+    VERCEL_TEAM_ID: z.string().min(1).optional(),
+    VERCEL_PROJECT_ID: z.string().min(1).optional(),
+    VERCEL_SANDBOX_VCPUS: z
+      .string()
+      .default("2")
+      .transform((v) => parseInt(v, 10))
+      .pipe(z.number().int().min(1).max(8)),
     JOB_TIMEOUT_MS: z
       .string()
       .default("600000")
