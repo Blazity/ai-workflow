@@ -31,6 +31,7 @@ export const runStatusEnum = pgEnum("run_status", [
   "failed",
   "timed_out",
   "clarification_needed",
+  "cancelled",
 ]);
 
 export const runTypeEnum = pgEnum("run_type", [
@@ -78,6 +79,7 @@ export const runAttempts = pgTable(
     attemptNumber: integer("attempt_number").notNull().default(1),
     type: runTypeEnum("type").notNull(),
     status: runStatusEnum("status").notNull().default("pending"),
+    workflowRunId: text("workflow_run_id"),
     containerId: text("container_id"),
     branchName: text("branch_name"),
     startedAt: timestamp("started_at", { withTimezone: true })
