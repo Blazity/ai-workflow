@@ -1,0 +1,526 @@
+import { Worker, Job } from "bullmq";
+import { eq } from "drizzle-orm";
+import { readFile } from "node:fs/promises";
+import { resolve, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
+import {
+  env,
+  db,
+  tickets,
+  runAttempts,
+  createRedisConnection,
+  JiraClient,
+  GitHubClient,
+  createMessagingAdapter,
+  createLogger,
+  createTicketLogger,
+  createRunLogger,
+} from "@blazebot/shared";
+import type { TicketJobData } from "@blazebot/shared";
+import { workerEnv } from "./env.js";
+import {
+  runSandbox,
+  pushBranchFromContainer,
+  teardownContainer,
+} from "./sandbox/manager.js";
+import {
+  assembleImplementationContext,
+  assembleFixingFeedbackContext,
+} from "./context.js";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const PROMPTS_DIR = resolve(__dirname, "..", "prompts");
+
+const logger = createLogger();
+
+function normalize(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+function createAdapters() {
+  const jira = new JiraClient(
+    workerEnv.JIRA_BASE_URL!,
+    workerEnv.JIRA_USER_EMAIL!,
+    workerEnv.JIRA_API_TOKEN!,
+  );
+  const github = new GitHubClient(workerEnv.GITHUB_TOKEN!);
+  const messaging = createMessagingAdapter(
+    env.MESSAGING_KIND,
+    env.SLACK_BOT_TOKEN,
+    env.SLACK_DEFAULT_CHANNEL,
+  );
+  return { jira, github, messaging };
+}
+
+async function readPromptFile(filename: string): Promise<string> {
+  const promptPath = resolve(PROMPTS_DIR, filename);
+  try {
+    return await readFile(promptPath, "utf-8");
+  } catch (err) {
+    const error = err as NodeJS.ErrnoException;
+    if (error.code === "ENOENT") {
+      throw new Error(
+        `Prompt file not found at ${promptPath}. Ensure the prompts/ directory contains ${filename}.`,
+      );
+    }
+    throw err;
+  }
+}
+
+export function createWorker(): Worker<TicketJobData> {
+  const worker = new Worker<TicketJobData>(
+    "ticket",
+    async (job: Job<TicketJobData>) => {
+      if (!("type" in job.data) || !("source" in job.data)) {
+        logger.warn({ jobData: job.data }, "job_format_unrecognized");
+        return;
+      }
+
+      if (job.data.type === "implementation") {
+        await handleImplementation(job.data);
+      } else if (job.data.type === "review_fix") {
+        await handleReviewFix(job.data);
+      }
+    },
+    {
+      connection: createRedisConnection(),
+      concurrency: workerEnv.MAX_CONCURRENT_AGENTS,
+    },
+  );
+
+  worker.on("failed", async (job, err) => {
+    if (!job) return;
+
+    const maxAttempts = job.opts?.attempts ?? 1;
+    const isFinalAttempt = job.attemptsMade >= maxAttempts;
+
+    if (!isFinalAttempt) {
+      logger.info(
+        {
+          ticketId: job.data.ticketId,
+          attempt: job.attemptsMade,
+          maxAttempts,
+          error: err.message,
+        },
+        "job_retry_scheduled",
+      );
+      return;
+    }
+
+    logger.error(
+      {
+        ticketId: job.data.ticketId,
+        attempt: job.attemptsMade,
+        maxAttempts,
+        error: err.message,
+      },
+      "job_retries_exhausted",
+    );
+
+    try {
+      await db
+        .update(tickets)
+        .set({
+          workflowState: "failed",
+          currentRunId: null,
+          updatedAt: new Date(),
+        })
+        .where(eq(tickets.externalId, job.data.ticketId));
+
+      const { messaging } = createAdapters();
+      await messaging.notify(
+        job.data.triggeredBy,
+        `Task ${job.data.ticketId} failed permanently after ${job.attemptsMade} attempts: ${err.message}`,
+      );
+    } catch (notifyErr) {
+      logger.error(
+        { ticketId: job.data.ticketId, error: (notifyErr as Error).message },
+        "retries_exhausted_handler_error",
+      );
+    }
+  });
+
+  return worker;
+}
+
+async function handleImplementation(
+  data: Extract<TicketJobData, { type: "implementation" }>,
+) {
+  const { jira, github, messaging } = createAdapters();
+  const owner = workerEnv.GITHUB_REPO_OWNER!;
+  const repo = workerEnv.GITHUB_REPO_NAME!;
+  const baseBranch = workerEnv.GITHUB_BASE_BRANCH;
+  const branchName = `blazebot/${data.ticketId}`;
+
+  const ticket = await jira.fetchTicket(data.ticketId);
+
+  const colAi = normalize(env.COLUMN_AI);
+  if (normalize(ticket.trackerStatus) !== colAi) {
+    logger.info(
+      { ticketId: data.ticketId, trackerStatus: ticket.trackerStatus },
+      "stale_job_skipped",
+    );
+    return;
+  }
+
+  const promptContent = await readPromptFile("implement.md");
+
+  await github.createBranch(owner, repo, branchName, baseBranch);
+
+  await db
+    .update(tickets)
+    .set({ workflowState: "implementing", updatedAt: new Date() })
+    .where(eq(tickets.externalId, data.ticketId));
+
+  const ticketRow = (
+    await db.select().from(tickets).where(eq(tickets.externalId, data.ticketId))
+  )[0]!;
+
+  const ticketLog = createTicketLogger(logger, ticketRow.id, data.ticketId);
+
+  const [run] = await db
+    .insert(runAttempts)
+    .values({
+      ticketId: ticketRow.id,
+      type: "implementation",
+      status: "running",
+      branchName,
+    })
+    .returning();
+
+  await db
+    .update(tickets)
+    .set({ currentRunId: run!.id, updatedAt: new Date() })
+    .where(eq(tickets.externalId, data.ticketId));
+
+  const runLog = createRunLogger(ticketLog, run!.id);
+  runLog.info({ type: "implementation", branchName }, "job_started");
+
+  ticketLog.info(
+    { from: "queued", to: "implementing" },
+    "ticket_state_transition",
+  );
+
+  const requirementsMd = assembleImplementationContext(ticket, promptContent);
+
+  const startTime = Date.now();
+
+  const result = await runSandbox({
+    image: workerEnv.DOCKER_IMAGE,
+    branchName,
+    requirementsMd,
+    githubToken: workerEnv.GITHUB_TOKEN!,
+    repoUrl: `${owner}/${repo}`,
+    oauthToken: workerEnv.CLAUDE_CODE_OAUTH_TOKEN,
+    model: workerEnv.CLAUDE_MODEL,
+    timeoutMs: workerEnv.JOB_TIMEOUT_MS,
+    memoryLimitMb: workerEnv.SANDBOX_MEMORY_MB,
+    developerMode: workerEnv.DEVELOPER_MODE,
+  });
+
+  const durationMs = Date.now() - startTime;
+  runLog.info(
+    { exitCode: result.exitCode, containerId: result.containerId, durationMs },
+    "agent_exited",
+  );
+
+  if (result.containerId) {
+    await db
+      .update(runAttempts)
+      .set({ containerId: result.containerId })
+      .where(eq(runAttempts.id, run!.id));
+  }
+
+  try {
+    if (
+      result.containerId &&
+      (result.status === "complete" || result.status === "clarification_needed")
+    ) {
+      await pushBranchFromContainer(result.containerId, branchName);
+    }
+  } finally {
+    if (result.containerId) {
+      await teardownContainer(result.containerId);
+    }
+  }
+
+  if (result.status === "complete") {
+    let pr;
+    try {
+      pr = await github.createPR(
+        owner,
+        repo,
+        `[${data.ticketId}] ${ticket.title}`,
+        result.summary ?? "",
+        branchName,
+        baseBranch,
+      );
+    } catch (prErr: unknown) {
+      const ghErr = prErr as {
+        status?: number;
+        message?: string;
+        response?: { data?: unknown };
+      };
+      runLog.error(
+        {
+          status: ghErr.status,
+          message: ghErr.message,
+          responseData: ghErr.response?.data,
+          branchName,
+        },
+        "pr_creation_failed",
+      );
+      throw prErr;
+    }
+
+    runLog.info({ prNumber: pr.number, prUrl: pr.url }, "pr_created");
+
+    await db
+      .update(tickets)
+      .set({
+        workflowState: "awaiting_review",
+        prId: String(pr.number),
+        branchName,
+        currentRunId: null,
+        updatedAt: new Date(),
+      })
+      .where(eq(tickets.externalId, data.ticketId));
+
+    await db
+      .update(runAttempts)
+      .set({ status: "succeeded", finishedAt: new Date() })
+      .where(eq(runAttempts.id, run!.id));
+
+    ticketLog.info(
+      { from: "implementing", to: "awaiting_review" },
+      "ticket_state_transition",
+    );
+
+    await jira.moveTicket(data.ticketId, env.COLUMN_AI_REVIEW);
+    await messaging.notify(
+      data.triggeredBy,
+      `Task ${ticket.identifier} PR ready for review: ${pr.url}`,
+    );
+    return;
+  }
+
+  if (result.status === "clarification_needed") {
+    const questions = (result.questions ?? []).join("\n\n");
+    await jira.postComment(data.ticketId, questions);
+
+    runLog.info("clarification_requested");
+
+    await db
+      .update(tickets)
+      .set({
+        workflowState: "clarification_pending",
+        branchName,
+        currentRunId: null,
+        updatedAt: new Date(),
+      })
+      .where(eq(tickets.externalId, data.ticketId));
+
+    await db
+      .update(runAttempts)
+      .set({ status: "clarification_needed", finishedAt: new Date() })
+      .where(eq(runAttempts.id, run!.id));
+
+    ticketLog.info(
+      { from: "implementing", to: "clarification_pending" },
+      "ticket_state_transition",
+    );
+
+    await jira.moveTicket(data.ticketId, env.COLUMN_BACKLOG);
+    await messaging.notify(
+      data.triggeredBy,
+      `Task ${ticket.identifier} needs clarification`,
+    );
+    return;
+  }
+
+  runLog.error({ error: result.error }, "agent_failed");
+
+  await db
+    .update(runAttempts)
+    .set({ status: "failed", error: result.error, finishedAt: new Date() })
+    .where(eq(runAttempts.id, run!.id));
+
+  await db
+    .update(tickets)
+    .set({ workflowState: "failed", currentRunId: null, updatedAt: new Date() })
+    .where(eq(tickets.externalId, data.ticketId));
+
+  ticketLog.info(
+    { from: "implementing", to: "failed" },
+    "ticket_state_transition",
+  );
+
+  throw new Error(`Agent failed for ${data.ticketId}: ${result.error}`);
+}
+
+async function handleReviewFix(
+  data: Extract<TicketJobData, { type: "review_fix" }>,
+) {
+  const { jira, github, messaging } = createAdapters();
+  const owner = workerEnv.GITHUB_REPO_OWNER!;
+  const repo = workerEnv.GITHUB_REPO_NAME!;
+
+  const ticket = await jira.fetchTicket(data.ticketId);
+
+  const colAi = normalize(env.COLUMN_AI);
+  if (normalize(ticket.trackerStatus) !== colAi) {
+    logger.info(
+      { ticketId: data.ticketId, trackerStatus: ticket.trackerStatus },
+      "stale_job_skipped",
+    );
+    return;
+  }
+
+  const ticketRow = (
+    await db.select().from(tickets).where(eq(tickets.externalId, data.ticketId))
+  )[0]!;
+
+  if (!ticketRow.prId || !ticketRow.branchName) {
+    logger.error(
+      { ticketId: data.ticketId },
+      "review_fix_missing_pr_or_branch",
+    );
+    throw new Error(
+      `review_fix requires prId and branchName for ${data.ticketId}`,
+    );
+  }
+
+  const prNumber = parseInt(ticketRow.prId, 10);
+  const branchName = ticketRow.branchName;
+
+  await db
+    .update(tickets)
+    .set({ workflowState: "fixing_feedback", updatedAt: new Date() })
+    .where(eq(tickets.externalId, data.ticketId));
+
+  const ticketLog = createTicketLogger(logger, ticketRow.id, data.ticketId);
+
+  const [run] = await db
+    .insert(runAttempts)
+    .values({
+      ticketId: ticketRow.id,
+      type: "review_fix",
+      status: "running",
+      branchName,
+    })
+    .returning();
+
+  await db
+    .update(tickets)
+    .set({ currentRunId: run!.id, updatedAt: new Date() })
+    .where(eq(tickets.externalId, data.ticketId));
+
+  const runLog = createRunLogger(ticketLog, run!.id);
+  runLog.info({ type: "review_fix", branchName, prNumber }, "job_started");
+
+  ticketLog.info(
+    { from: "awaiting_review", to: "fixing_feedback" },
+    "ticket_state_transition",
+  );
+
+  const promptContent = await readPromptFile("review-fix.md");
+
+  const [prComments, hasConflicts] = await Promise.all([
+    github.getPRComments(owner, repo, prNumber),
+    github.getPRConflictStatus(owner, repo, prNumber),
+  ]);
+
+  const requirementsMd = assembleFixingFeedbackContext(
+    ticket,
+    prComments,
+    hasConflicts,
+    promptContent,
+  );
+
+  const startTime = Date.now();
+
+  const result = await runSandbox({
+    image: workerEnv.DOCKER_IMAGE,
+    branchName,
+    requirementsMd,
+    githubToken: workerEnv.GITHUB_TOKEN!,
+    repoUrl: `${owner}/${repo}`,
+    oauthToken: workerEnv.CLAUDE_CODE_OAUTH_TOKEN,
+    model: workerEnv.CLAUDE_MODEL,
+    timeoutMs: workerEnv.JOB_TIMEOUT_MS,
+    memoryLimitMb: workerEnv.SANDBOX_MEMORY_MB,
+    developerMode: workerEnv.DEVELOPER_MODE,
+  });
+
+  const durationMs = Date.now() - startTime;
+  runLog.info(
+    { exitCode: result.exitCode, containerId: result.containerId, durationMs },
+    "agent_exited",
+  );
+
+  if (result.containerId) {
+    await db
+      .update(runAttempts)
+      .set({ containerId: result.containerId })
+      .where(eq(runAttempts.id, run!.id));
+  }
+
+  try {
+    if (result.containerId && result.status === "complete") {
+      await pushBranchFromContainer(result.containerId, branchName);
+    }
+  } finally {
+    if (result.containerId) {
+      await teardownContainer(result.containerId);
+    }
+  }
+
+  if (result.status === "complete") {
+    runLog.info({ prNumber }, "review_fix_complete");
+
+    await db
+      .update(tickets)
+      .set({
+        workflowState: "awaiting_review",
+        currentRunId: null,
+        updatedAt: new Date(),
+      })
+      .where(eq(tickets.externalId, data.ticketId));
+
+    await db
+      .update(runAttempts)
+      .set({ status: "succeeded", finishedAt: new Date() })
+      .where(eq(runAttempts.id, run!.id));
+
+    ticketLog.info(
+      { from: "fixing_feedback", to: "awaiting_review" },
+      "ticket_state_transition",
+    );
+
+    await jira.moveTicket(data.ticketId, env.COLUMN_AI_REVIEW);
+    await messaging.notify(
+      data.triggeredBy,
+      `Task ${ticket.identifier} fixes applied, ready for re-review`,
+    );
+    return;
+  }
+
+  runLog.error({ error: result.error }, "agent_failed");
+
+  await db
+    .update(runAttempts)
+    .set({ status: "failed", error: result.error, finishedAt: new Date() })
+    .where(eq(runAttempts.id, run!.id));
+
+  await db
+    .update(tickets)
+    .set({ workflowState: "failed", currentRunId: null, updatedAt: new Date() })
+    .where(eq(tickets.externalId, data.ticketId));
+
+  ticketLog.info(
+    { from: "fixing_feedback", to: "failed" },
+    "ticket_state_transition",
+  );
+
+  throw new Error(`Agent failed for ${data.ticketId}: ${result.error}`);
+}

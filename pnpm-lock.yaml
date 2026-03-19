@@ -7,6 +7,46 @@ settings:
 importers:
 
   .:
+    devDependencies:
+      drizzle-kit:
+        specifier: ^0.31.9
+        version: 0.31.9
+      typescript:
+        specifier: ~5.9.3
+        version: 5.9.3
+
+  packages/api:
+    dependencies:
+      '@blazebot/shared':
+        specifier: workspace:*
+        version: link:../shared
+      '@t3-oss/env-core':
+        specifier: ^0.13.10
+        version: 0.13.10(typescript@5.9.3)(zod@3.25.76)
+      drizzle-orm:
+        specifier: ~0.45.1
+        version: 0.45.1(postgres@3.4.8)
+      fastify:
+        specifier: ^5.8.2
+        version: 5.8.2
+      zod:
+        specifier: ^3.25.76
+        version: 3.25.76
+    devDependencies:
+      '@types/node':
+        specifier: ^25.4.0
+        version: 25.4.0
+      tsx:
+        specifier: ^4.21.0
+        version: 4.21.0
+      typescript:
+        specifier: ~5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^4.0.18
+        version: 4.0.18(@types/node@25.4.0)(tsx@4.21.0)
+
+  packages/shared:
     dependencies:
       '@octokit/rest':
         specifier: ^22.0.1
@@ -20,15 +60,9 @@ importers:
       bullmq:
         specifier: ^5.71.0
         version: 5.71.0
-      dockerode:
-        specifier: ^4.0.9
-        version: 4.0.9
       drizzle-orm:
         specifier: ~0.45.1
         version: 0.45.1(postgres@3.4.8)
-      fastify:
-        specifier: ^5.8.2
-        version: 5.8.2
       ioredis:
         specifier: ^5.9.3
         version: 5.9.3
@@ -42,15 +76,46 @@ importers:
         specifier: ^3.25.76
         version: 3.25.76
     devDependencies:
+      '@types/node':
+        specifier: ^25.4.0
+        version: 25.4.0
+      tsx:
+        specifier: ^4.21.0
+        version: 4.21.0
+      typescript:
+        specifier: ~5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^4.0.18
+        version: 4.0.18(@types/node@25.4.0)(tsx@4.21.0)
+
+  packages/worker:
+    dependencies:
+      '@blazebot/shared':
+        specifier: workspace:*
+        version: link:../shared
+      '@t3-oss/env-core':
+        specifier: ^0.13.10
+        version: 0.13.10(typescript@5.9.3)(zod@3.25.76)
+      bullmq:
+        specifier: ^5.71.0
+        version: 5.71.0
+      dockerode:
+        specifier: ^4.0.9
+        version: 4.0.9
+      drizzle-orm:
+        specifier: ~0.45.1
+        version: 0.45.1(postgres@3.4.8)
+      zod:
+        specifier: ^3.25.76
+        version: 3.25.76
+    devDependencies:
       '@types/dockerode':
         specifier: ^3.3.26
         version: 3.3.47
       '@types/node':
         specifier: ^25.4.0
         version: 25.4.0
-      drizzle-kit:
-        specifier: ^0.31.9
-        version: 0.31.9
       tsx:
         specifier: ^4.21.0
         version: 4.21.0

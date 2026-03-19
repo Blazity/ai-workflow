@@ -1,40 +1,24 @@
 {
-  "name": "ai-workflow",
-  "version": "0.0.1",
+  "name": "blazebot",
+  "private": true,
   "type": "module",
   "engines": {
     "node": ">=20"
   },
   "scripts": {
-    "dev": "tsx watch --env-file=.env src/index.ts",
-    "build": "tsc",
-    "start": "node dist/index.js",
-    "test": "vitest",
+    "dev": "pnpm -r --parallel dev",
+    "build": "pnpm -r build",
+    "start:api": "pnpm --filter @blazebot/api start",
+    "start:worker": "pnpm --filter @blazebot/worker start",
+    "test": "pnpm -r test",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
     "db:push": "drizzle-kit push",
     "inspect": "bash scripts/inspect.sh"
   },
   "packageManager": "pnpm@10.22.0",
-  "dependencies": {
-    "@octokit/rest": "^22.0.1",
-    "@slack/web-api": "^7.15.0",
-    "@t3-oss/env-core": "^0.13.10",
-    "bullmq": "^5.71.0",
-    "dockerode": "^4.0.9",
-    "drizzle-orm": "~0.45.1",
-    "fastify": "^5.8.2",
-    "ioredis": "^5.9.3",
-    "pino": "^10.3.1",
-    "postgres": "~3.4.8",
-    "zod": "^3.25.76"
-  },
   "devDependencies": {
-    "@types/dockerode": "^3.3.26",
-    "@types/node": "^25.4.0",
     "drizzle-kit": "^0.31.9",
-    "tsx": "^4.21.0",
-    "typescript": "~5.9.3",
-    "vitest": "^4.0.18"
+    "typescript": "~5.9.3"
   }
 }
