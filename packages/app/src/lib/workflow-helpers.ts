@@ -2,7 +2,8 @@ import { eq } from "drizzle-orm";
 import { start } from "workflow/api";
 import { getWorld } from "workflow/runtime";
 import { db, runAttempts, tickets, createLogger } from "@blazebot/shared";
-import { teardownContainer } from "../sandbox/manager.js";
+import { createSandboxProvider } from "../sandbox/index.js";
+import { appEnv } from "../env.js";
 
 const logger = createLogger();
 
@@ -91,10 +92,14 @@ export async function cancelWorkflowRun(options: {
     }
   }
 
-  // 2. Teardown the container
+  // 2. Teardown the sandbox
   if (options.containerId) {
     try {
-      await teardownContainer(options.containerId);
+      const provider = await createSandboxProvider({
+        provider: "vercel",
+        vercel: { vcpus: appEnv.VERCEL_SANDBOX_VCPUS },
+      });
+      await provider.teardown(options.containerId);
       logger.info(
         { ticketId: options.ticketExternalId, containerId: options.containerId },
         "container_teardown_direct",

@@ -14,13 +14,11 @@
     "@t3-oss/env-core": "^0.13.10",
     "@vercel/sandbox": "^1.8.1",
     "@workflow/world-postgres": "latest",
-    "dockerode": "^4.0.9",
     "drizzle-orm": "~0.45.1",
     "workflow": "latest",
     "zod": "^4.3.6"
   },
   "devDependencies": {
-    "@types/dockerode": "^4.0.1",
     "@types/node": "^25.4.0",
     "@workflow/vitest": "latest",
     "nitro": "latest",
