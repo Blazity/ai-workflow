@@ -81,8 +81,10 @@ Important boundary:
    - Parses and validates incoming webhooks into normalized events.
 
 3. **Messaging Adapter**
-   - Sends status notifications (Slack/Teams).
+   - Sends status notifications via ChatSDK (`chat` + platform adapters like `@chat-adapter/slack`).
    - Pings users on clarification requests.
+   - ChatSDK provides unified multi-platform support (Slack, Discord, Teams, etc.) through a single
+     `Chat` instance with pluggable platform adapters.
 
 4. **VCS Adapter**
    - Creates feature branches.
@@ -131,14 +133,15 @@ Important boundary:
 MVP:
 
 - Issue tracker API (Jira).
-- Messaging API (Slack).
+- Messaging via ChatSDK (Slack adapter; Discord, Teams available via additional adapters).
 - VCS API (GitHub).
 - Docker engine.
 - Postgres.
 - Redis (for BullMQ).
 - Coding agent (Claude Code / Codex).
 
-Deferred: Linear, Teams, GitLab.
+Deferred: Linear, GitLab. Additional messaging platforms (Discord, Teams) are available via
+ChatSDK adapters — install the corresponding `@chat-adapter/*` package.
 
 ## 4. Core Domain Model
 
@@ -226,7 +229,8 @@ Key config groups:
 - **Sandbox:** Docker image, concurrency limit (`MAX_CONCURRENT_AGENTS`), job timeout
   (`JOB_TIMEOUT_MS`).
 - **Issue Tracker:** adapter kind (`ISSUE_TRACKER_KIND`), project key (`JIRA_PROJECT_KEY`), credentials, webhook secrets.
-- **Messaging:** adapter kind (`MESSAGING_KIND`), credentials.
+- **Messaging:** adapter kind (`MESSAGING_KIND`), credentials (`SLACK_BOT_TOKEN`,
+  `SLACK_DEFAULT_CHANNEL` as channel ID).
 - **VCS:** adapter kind (`VCS_KIND`), credentials.
 - **Infrastructure:** Postgres connection, Redis connection.
 
@@ -415,9 +419,18 @@ propagated.
 
 ### 11.3 Messaging Adapter
 
+Backed by ChatSDK (`chat` package). The `MessagingAdapter` interface wraps a ChatSDK `Chat`
+instance and delegates to `channel.post()`. Platform adapters (Slack, Discord, Teams) are
+configured via `createSlackAdapter()` etc. and passed to the `Chat` constructor.
+
 ```
-notify(message) → void
+notify(userId, message) → void
+ping(userId, message) → void
 ```
+
+Adding a new platform requires installing the corresponding `@chat-adapter/*` package and
+registering it in the `Chat` constructor — no changes to the `MessagingAdapter` interface or
+worker code.
 
 ### 11.4 Normalized Webhook Event
 
@@ -804,7 +817,7 @@ process_fixing_feedback_job(ticketId):
 - [ ] Admin panel / dashboard (scope TBD — open question around exposing cost data to clients).
 - [ ] Metrics / alerting.
 - [ ] Additional tracker adapters (Linear, Asana).
-- [ ] Additional messaging adapters (Teams).
+- [ ] Additional messaging adapters (Teams, Discord) — available via ChatSDK `@chat-adapter/*` packages, needs config/env wiring.
 - [ ] Additional VCS adapters (GitLab).
 - [ ] Per-user notifications (requires Jira→Slack user mapping).
 - [ ] Per-ticket token/cost limit — kill agent run when token budget exceeded.
