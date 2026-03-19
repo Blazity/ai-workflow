@@ -12,7 +12,7 @@ export default defineNitroConfig({
   },
 
   // Prevent bundling of dockerode and its native dependencies (cpu-features)
-  externals: {
+  rollupConfig: {
     external: ["dockerode"],
   },
 });
