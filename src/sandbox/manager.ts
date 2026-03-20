@@ -27,13 +27,19 @@ export class SandboxManager {
   ): Promise<SandboxInstance> {
     const { Sandbox } = await import("@vercel/sandbox");
 
-    const credentials: Record<string, string> = {};
-    if (this.config.vercelToken) credentials.token = this.config.vercelToken;
-    if (this.config.vercelTeamId) credentials.teamId = this.config.vercelTeamId;
-    if (this.config.vercelProjectId) credentials.projectId = this.config.vercelProjectId;
+    // Pass explicit credentials only when all three are provided (local dev).
+    // On Vercel, omit them entirely so the SDK uses OIDC auto-detection.
+    const hasExplicitCredentials =
+      this.config.vercelToken && this.config.vercelTeamId && this.config.vercelProjectId;
 
     const sandbox = await Sandbox.create({
-      ...credentials,
+      ...(hasExplicitCredentials
+        ? {
+            token: this.config.vercelToken,
+            teamId: this.config.vercelTeamId,
+            projectId: this.config.vercelProjectId,
+          }
+        : {}),
       source: {
         type: "git",
         url: `https://github.com/${this.config.owner}/${this.config.repo}.git`,
