@@ -4,6 +4,7 @@ import { UpstashRunRegistry } from "./upstash.js";
 const HASH_KEY = "blazebot:active-runs";
 
 const mockRedis = {
+  hsetnx: vi.fn(),
   hset: vi.fn(),
   hget: vi.fn(),
   hdel: vi.fn(),
@@ -24,6 +25,23 @@ function createRegistry() {
 describe("UpstashRunRegistry", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  describe("claim", () => {
+    it("returns true when key was not already set", async () => {
+      mockRedis.hsetnx.mockResolvedValueOnce(1);
+      const registry = createRegistry();
+      const result = await registry.claim("PROJ-1", "claiming");
+      expect(result).toBe(true);
+      expect(mockRedis.hsetnx).toHaveBeenCalledWith(HASH_KEY, "PROJ-1", "claiming");
+    });
+
+    it("returns false when key already exists", async () => {
+      mockRedis.hsetnx.mockResolvedValueOnce(0);
+      const registry = createRegistry();
+      const result = await registry.claim("PROJ-1", "claiming");
+      expect(result).toBe(false);
+    });
   });
 
   describe("register", () => {

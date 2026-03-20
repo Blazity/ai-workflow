@@ -10,6 +10,11 @@ export class UpstashRunRegistry implements RunRegistryAdapter {
     this.redis = new Redis({ url: opts.url, token: opts.token });
   }
 
+  async claim(ticketKey: string, runId: string): Promise<boolean> {
+    const result = await this.redis.hsetnx(HASH_KEY, ticketKey, runId);
+    return result === 1;
+  }
+
   async register(ticketKey: string, runId: string): Promise<void> {
     await this.redis.hset(HASH_KEY, { [ticketKey]: runId });
   }
