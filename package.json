@@ -1,25 +1,31 @@
 {
-  "name": "blazebot",
+  "name": "ai-workflow",
   "private": true,
   "type": "module",
-  "engines": {
-    "node": ">=20"
-  },
   "scripts": {
-    "dev": "pnpm --filter @blazebot/app dev",
-    "build": "pnpm -r build",
-    "start": "pnpm --filter @blazebot/app start",
-    "test": "pnpm -r test",
-    "db:generate": "drizzle-kit generate",
-    "db:migrate": "drizzle-kit migrate && bash -c 'set -a && source .env && set +a && pnpm --filter @blazebot/app exec workflow-postgres-setup'",
-    "db:push": "drizzle-kit push",
-    "inspect": "bash scripts/inspect.sh",
-    "workflow:inspect": "bash -c 'set -a && source .env && set +a && pnpm --filter @blazebot/app exec workflow inspect runs --backend @workflow/world-postgres'",
-    "workflow:inspect:web": "bash -c 'set -a && source .env && set +a && pnpm --filter @blazebot/app exec workflow inspect runs --backend @workflow/world-postgres --web'"
+    "dev": "rm -rf .nitro/workflow && nitro dev",
+    "build": "rm -rf .nitro/workflow && NODE_OPTIONS=--max-old-space-size=8192 nitro build",
+    "preview": "nitro preview",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit"
   },
-  "packageManager": "pnpm@10.22.0",
+  "dependencies": {
+    "@chat-adapter/slack": "^4.20.2",
+    "@octokit/rest": "^22.0.1",
+    "@t3-oss/env-core": "^0.13.10",
+    "@vercel/sandbox": "^1.8.1",
+    "@workflow/world-postgres": "latest",
+    "chat": "^4.20.2",
+    "h3": "^1",
+    "nitropack": "^2",
+    "pino": "^10.3.1",
+    "workflow": "latest",
+    "zod": "^3.25.76"
+  },
   "devDependencies": {
-    "drizzle-kit": "^0.31.9",
-    "typescript": "~5.9.3"
+    "@workflow/vitest": "latest",
+    "typescript": "^5.8",
+    "vitest": "^3"
   }
 }

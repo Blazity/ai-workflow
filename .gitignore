@@ -1,13 +1,11 @@
 node_modules/
 dist/
+.output/
+.nitro/
 .env
-*.tsbuildinfo
-.worktrees/
-.pnpm-store/
-# Note: drizzle/ migrations are intentionally committed for reproducibility
-
-.workflow-data
+*.local
+.vercel/
+.swc/
 .vercel
-**/.output
-
 .env*.local
+.workflow-data/
