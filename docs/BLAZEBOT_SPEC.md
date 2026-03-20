@@ -1,23 +1,22 @@
 # Blazebot Service Specification
 
-Status: Draft v1
+Status: Draft v2
 
-Purpose: Define a queue-driven automation service that picks up tickets, implements features
-end-to-end inside isolated Docker containers, and delivers merge-ready pull requests for human
-approval.
+Purpose: Define a workflow-driven automation service that picks up tickets, implements features
+end-to-end inside isolated sandboxes, and delivers merge-ready pull requests for human approval.
 
 ## 1. Problem Statement
 
-Blazebot is a long-running, queue-driven automation service that watches an issue tracker for
-tickets assigned to AI, implements features end-to-end inside isolated Docker containers, and
-delivers merge-ready pull requests for human approval.
+Blazebot is a long-running, workflow-driven automation service that watches an issue tracker for
+tickets assigned to AI, implements features end-to-end inside isolated sandboxes (Vercel Sandbox
+or Docker containers), and delivers merge-ready pull requests for human approval.
 
 The service solves four operational problems:
 
 - It turns ticket implementation into a fully automated pipeline — from assignment through TDD,
   code review, conflict resolution, and PR delivery — without manual intervention.
-- It isolates agent execution in per-ticket Docker containers so agent commands cannot affect
-  production infrastructure or other tickets.
+- It isolates agent execution in per-ticket sandboxes so agent commands cannot affect production
+  infrastructure or other tickets.
 - It manages ticket lifecycle directly — moving tickets between columns, posting clarification
   questions, and notifying users — as first-class service behavior.
 - It enforces quality through mandatory TDD and an iterative review loop (AI review → human
@@ -28,20 +27,21 @@ Important boundary:
 - Blazebot owns the full lifecycle from ticket pickup to merge-ready PR.
 - The coding agent inside the sandbox focuses on implementation — it does not manage ticket state,
   PR creation, or review coordination.
-- A successful run ends with a PR that has passed AI review, human review, conflict resolution,
-  and CI checks.
+- A successful run ends with a PR ready for human review.
 
 ## 2. Goals and Non-Goals
 
 ### 2.1 Goals
 
-- Receive ticket events via webhooks and dispatch work through BullMQ with bounded concurrency.
+- Receive ticket events via webhooks and dispatch work through a durable workflow engine
+  (`workflow/api` + `@workflow/world-postgres`) with bounded concurrency.
 - Maintain authoritative orchestration state in Postgres for dispatch, retries, and audit.
 - Recover orchestrator state from service restarts using Postgres as the single source of truth — no
   filesystem-based recovery needed. Individual agent runs are stateless — each run spins up a fresh
-  container, fetches context from the tracker, and tears down on completion. Postgres recovery applies
+  sandbox, fetches context from the tracker, and tears down on completion. Postgres recovery applies
   to the orchestrator knowing which tickets are in-flight and what workflow state to resume from.
-- Spin up isolated Docker containers per ticket with scoped Git permissions.
+- Spin up isolated sandboxes per ticket (Vercel Sandbox or Docker containers) with scoped Git
+  permissions.
 - Enforce TDD — integration and e2e tests are required, not optional.
 - Run iterative code review loops (AI review → human feedback → agent fix) until clean.
 - Handle conflict resolution (merge target branch, resolve conflicts, re-review).
@@ -60,7 +60,7 @@ Important boundary:
 
 - Rich multi-tenant control plane or SaaS UI.
 - General-purpose CI/CD or workflow engine.
-- Running agents outside Docker containers (bare-metal execution).
+- Running agents outside sandboxes (bare-metal execution).
 - Replacing human final approval on PRs.
 - Built-in IDE or code editor.
 - Prescribing a specific dashboard or terminal UI implementation.
@@ -69,10 +69,10 @@ Important boundary:
 
 ### 3.1 Main Components
 
-1. **Webhook Receiver** (Fastify)
+1. **Webhook Receiver** (Nitro)
    - Receives ticket events from issue tracker (Jira/Linear).
-   - Validates payloads (e.g., HMAC verification).
-   - Delegates to adapter for normalization, enqueues work onto BullMQ.
+   - Validates payloads (HMAC-SHA256 verification via `x-hub-signature` header).
+   - Delegates to adapter for normalization, routes to orchestrator for workflow dispatch.
 
 2. **Issue Tracker Adapter**
    - Reads ticket data (description, acceptance criteria, comments, labels).
@@ -92,22 +92,30 @@ Important boundary:
    - Fetches PR comments (liked + human-written).
    - Reports PR conflict status.
 
-5. **Orchestrator**
+5. **Orchestrator** (Webhook Router + Workflow Helpers)
    - Decides what action to take based on normalized webhook events and current workflow state.
-   - Enqueues jobs (`implementation`, `fixing_feedback`).
+   - Starts durable workflows (`implementation`, `review_fix`) via the workflow framework.
    - Manages concurrency limits.
-   - Handles stale job protection (cancel on contradicting webhook + verify at job start + polling fallback for missed webhooks and stuck jobs).
+   - Handles stale job protection (cancel on contradicting webhook + verify at job start + polling
+     fallback for missed webhooks and stuck jobs).
+   - Deduplicates webhooks — ignores duplicate events for tickets already `queued`/`implementing`.
 
-6. **Sandbox Manager**
-   - Spins up Docker containers from a pre-built project-specific image.
-   - Checks out the repo on the feature branch.
-   - Generates `requirements.md` inside the container with assembled context.
-   - Tears down containers after every run.
+6. **Sandbox Provider** (pluggable)
+   - Two implementations: **Vercel Sandbox** (active) and **Docker** (available, currently disabled
+     in code but with full Dockerfile and guard scripts in `docker/sandbox/`).
+   - Clones the repo at the feature branch.
+   - Writes `requirements.md` into the sandbox with assembled context.
+   - Installs and runs the Claude Code CLI.
+   - Pushes the feature branch after the agent completes.
+   - Tears down sandboxes after every run.
+   - Cleans up orphaned sandboxes on service startup.
 
-7. **Agent Runner**
-   - Launches the coding agent (Claude Code / Codex) inside the container via `docker exec`.
+7. **Agent Runner** (integrated into Sandbox Provider)
+   - Launches Claude Code CLI inside the sandbox via
+     `claude --print --output-format json --json-schema <schema> --model <model> --dangerously-skip-permissions`
+     with `requirements.md` piped to stdin.
    - Reads structured output (JSON schema enforced) to determine outcome.
-   - Enforces timeouts.
+   - Timeout enforced by the sandbox provider.
 
 8. **Persistence Layer** (Drizzle + Postgres)
    - Stores ticket orchestration state and run attempts.
@@ -123,9 +131,9 @@ Important boundary:
 ### 3.2 Abstraction Layers
 
 1. **Adapter Layer** — Issue tracker, messaging, VCS adapters (all behind interfaces, swappable).
-2. **Orchestration Layer** — Job dispatch, concurrency, retries, ticket state decisions.
-3. **Execution Layer** — Sandbox lifecycle, agent runner, Docker management.
-4. **Persistence Layer** — Postgres state, BullMQ queues.
+2. **Orchestration Layer** — Workflow dispatch, concurrency, retries, ticket state decisions.
+3. **Execution Layer** — Sandbox lifecycle, agent runner, provider management.
+4. **Persistence Layer** — Postgres state (orchestration + workflow engine).
 5. **Observability Layer** — Logging, metrics, optional dashboard.
 
 ### 3.3 External Dependencies
@@ -133,12 +141,12 @@ Important boundary:
 MVP:
 
 - Issue tracker API (Jira).
-- Messaging via ChatSDK (Slack adapter; Discord, Teams available via additional adapters).
-- VCS API (GitHub).
-- Docker engine.
-- Postgres.
-- Redis (for BullMQ).
-- Coding agent (Claude Code / Codex).
+- Messaging via ChatSDK (Slack adapter via `@chat-adapter/slack`; Discord, Teams available via
+  additional adapters).
+- VCS API (GitHub via Octokit).
+- Sandbox runtime (Vercel Sandbox via `@vercel/sandbox`, or Docker engine).
+- Postgres (orchestration state + workflow engine state via `@workflow/world-postgres`).
+- Coding agent (Claude Code CLI — `@anthropic-ai/claude-code`).
 
 Deferred: Linear, GitLab. Additional messaging platforms (Discord, Teams) are available via
 ChatSDK adapters — install the corresponding `@chat-adapter/*` package.
@@ -149,17 +157,20 @@ ChatSDK adapters — install the corresponding `@chat-adapter/*` package.
 
 Fields:
 
-- `id` — stable tracker-internal ID.
-- `identifier` — human-readable key (e.g., `PROJ-123`).
+- `id` — UUID, primary key.
+- `external_id` — tracker-issued key (e.g., `PROJ-123`).
+- `identifier` — human-readable display key.
+- `source` — enum: `jira` | `linear`.
 - `state` — last known tracker column/status (updated by webhooks).
 - `workflow_state` — Blazebot's internal lifecycle state (see Section 7).
 - `assignee` — user who triggered the AI run (stored for audit; not used for notifications in MVP).
 - `branch_name` — feature branch for this ticket.
-- `pr_id` — pull request reference (set after PR creation).
+- `pr_id` — pull request number as string (set after PR creation).
 - `current_run_id` — reference to active run attempt. All historical run attempts are persisted and
-  queryable via `RunAttempt.ticket_id` for audit and visibility.
+  queryable via `RunAttempt.ticket_id` for audit and visibility. Set to `null` when a run completes.
 - `created_at`
 - `updated_at`
+- Unique constraint on `(external_id, source)`.
 
 Ticket content (title, description, acceptance criteria, comments, labels) is always fetched fresh
 from the tracker API — never stored in the database.
@@ -170,28 +181,30 @@ One execution attempt for one ticket.
 
 Fields:
 
-- `id`
+- `id` — UUID, primary key.
 - `ticket_id` — **indexed** (frequently queried for run history per ticket).
 - `attempt_number` — 1 for first, increments on retry.
 - `type` — `implementation`, `review_fix`, `conflict_resolution`.
 - `status` — `pending`, `preparing_sandbox`, `running`, `succeeded`, `failed`, `timed_out`,
-  `clarification_needed`.
-- `container_id` — Docker container reference.
+  `clarification_needed`, `cancelled`.
+- `workflow_run_id` — workflow framework run ID (for cancellation and tracking).
+- `container_id` — sandbox/container reference (Vercel sandbox ID or Docker container ID).
 - `branch_name`
 - `started_at`
 - `finished_at`
 - `error` — failure reason if any.
 
-Retries are handled natively by BullMQ (exponential backoff, configurable per job type). No custom
-retry entity needed.
+Retries are handled by the maintenance polling loop — stuck or failed jobs are detected and
+re-enqueued with a new workflow run, respecting `JOB_MAX_RETRIES`. No custom retry entity needed.
 
 ## 5. Agent Prompt Contract
 
-Prompt files live in the Blazebot service repository and are copied into the Docker container at
-sandbox setup. This keeps prompts easy to edit and version without touching client repos.
+Prompt files live in the Blazebot service repository at `packages/app/prompts/` and are read by the
+orchestrator during context assembly. The assembled `requirements.md` (which includes the prompt
+content) is written into the sandbox before the agent starts.
 
-- `.blazebot/prompts/implement.md` — initial implementation prompt.
-- `.blazebot/prompts/review-fix.md` — fixing review feedback + resolving merge conflicts.
+- `packages/app/prompts/implement.md` — initial implementation prompt.
+- `packages/app/prompts/review-fix.md` — fixing review feedback + resolving merge conflicts.
 
 The agent also picks up repo-level instruction files (`CLAUDE.md`, `AGENTS.md`) from the client's
 repository at runtime. These are maintained by the client and provide general coding conventions.
@@ -210,8 +223,8 @@ Prompt files are:
   instructions from different commenters cause the agent to do the wrong thing. The agent should
   treat the latest `[OVERRIDE]` comment as authoritative over prior conflicting instructions.
 
-When resuming after clarification, `.blazebot/prompts/implement.md` is used again. The Q&A context comes
-from ticket comments (fetched fresh), not from the prompt file.
+When resuming after clarification, `packages/app/prompts/implement.md` is used again. The Q&A context
+comes from ticket comments (fetched fresh), not from the prompt file.
 
 If a prompt file is missing, the run fails with a clear error.
 
@@ -224,15 +237,26 @@ All runtime config lives in environment variables, validated at startup. Changes
 restart. In-flight jobs finish with the config they started with; new jobs pick up new config after
 restart.
 
-Key config groups:
+Key config groups (validated via `@t3-oss/env-core` + Zod at startup):
 
-- **Sandbox:** Docker image, concurrency limit (`MAX_CONCURRENT_AGENTS`), job timeout
-  (`JOB_TIMEOUT_MS`).
-- **Issue Tracker:** adapter kind (`ISSUE_TRACKER_KIND`), project key (`JIRA_PROJECT_KEY`), credentials, webhook secrets.
+- **Sandbox:** provider (`SANDBOX_PROVIDER`: `docker` | `vercel`), Docker image (`DOCKER_IMAGE`),
+  memory limit (`SANDBOX_MEMORY_MB`), Vercel credentials (`VERCEL_TOKEN`, `VERCEL_TEAM_ID`,
+  `VERCEL_PROJECT_ID`), vCPUs (`VERCEL_SANDBOX_VCPUS`), concurrency limit
+  (`MAX_CONCURRENT_AGENTS`), job timeout (`JOB_TIMEOUT_MS`).
+- **Issue Tracker:** adapter kind (`ISSUE_TRACKER_KIND`), project key (`JIRA_PROJECT_KEY`),
+  credentials (`JIRA_BASE_URL`, `JIRA_USER_EMAIL`, `JIRA_API_TOKEN`), webhook secret
+  (`JIRA_WEBHOOK_SECRET`).
 - **Messaging:** adapter kind (`MESSAGING_KIND`), credentials (`SLACK_BOT_TOKEN`,
   `SLACK_DEFAULT_CHANNEL` as channel ID).
-- **VCS:** adapter kind (`VCS_KIND`), credentials.
-- **Infrastructure:** Postgres connection, Redis connection.
+- **VCS:** adapter kind (`VCS_KIND`), credentials (`GITHUB_TOKEN`, `GITHUB_REPO_OWNER`,
+  `GITHUB_REPO_NAME`, `GITHUB_BASE_BRANCH`).
+- **Agent:** Claude Code auth (`CLAUDE_CODE_OAUTH_TOKEN`), model (`CLAUDE_MODEL`, default
+  `claude-opus-4-6`), developer mode (`DEVELOPER_MODE`).
+- **Polling:** poll interval (`POLL_INTERVAL_MS`, default 5 min), stuck threshold
+  (`STUCK_JOB_THRESHOLD_MS`, default `JOB_TIMEOUT_MS × 2`), max retries (`JOB_MAX_RETRIES`).
+- **Board columns:** configurable column names (`COLUMN_AI`, `COLUMN_AI_REVIEW`, `COLUMN_BACKLOG`).
+- **Infrastructure:** Postgres connection (`DATABASE_URL`), workflow engine Postgres
+  (`WORKFLOW_POSTGRES_URL`).
 
 If required config is missing or invalid, the service fails startup with a clear error.
 
@@ -250,103 +274,196 @@ If required config is missing or invalid, the service fails startup with a clear
 
 ### 7.2 Transitions
 
-```
-queued → implementing                    (sandbox spun up)
-implementing → clarification_pending     (agent needs answers, container torn down)
-implementing → awaiting_review           (PR created, container torn down)
+```text
+queued → implementing                    (sandbox spun up, branch created)
+implementing → clarification_pending     (agent needs answers, sandbox torn down)
+implementing → awaiting_review           (PR created, sandbox torn down)
 implementing → failed                    (unrecoverable error)
-clarification_pending → implementing     (user answers, moves ticket back to AI)
-awaiting_review → fixing_feedback        (human moves ticket to AI In Progress)
+clarification_pending → queued           (user answers, moves ticket back to AI column)
+awaiting_review → queued                 (human moves ticket back to AI column for fixes)
+queued → fixing_feedback                 (sandbox spun up for review-fix workflow)
 fixing_feedback → awaiting_review        (fixes done, re-review)
-fixing_feedback → completed              (CI passes, PR ready)
 fixing_feedback → failed                 (unrecoverable error)
-any → failed                             (max retries exhausted)
+failed → queued                          (ticket moved back to AI column, or polling retry)
+any → failed                             (max retries exhausted, or contradicting webhook)
 ```
 
-### 7.3 Container Lifecycle
+Note: `clarification_pending` and `awaiting_review` first transition through `queued` before
+reaching `implementing` or `fixing_feedback` — the webhook handler sets `queued`, then starts
+the workflow which transitions to the active state.
 
-Containers are alive only during `implementing` and `fixing_feedback`. Torn down on every other
-transition.
+### 7.3 Sandbox Lifecycle
+
+Sandboxes are alive only during `implementing` and `fixing_feedback`. Torn down on every other
+transition. On service startup, orphaned sandboxes from previous runs are cleaned up.
 
 ### 7.4 Retry Strategy
 
-- BullMQ's built-in retry with exponential backoff.
-- Retry config (max attempts, backoff) set per job type in env config.
-- After max retries exhausted → ticket transitions to `failed`.
+- Retries are driven by the **maintenance polling loop**, not by built-in queue backoff.
+- The polling loop (`maintenanceLoop` workflow) runs every `POLL_INTERVAL_MS` (default 5 min) and
+  detects failed or stuck tickets.
+- Failed tickets still in the AI column are re-enqueued automatically.
+- Stuck tickets (past `STUCK_JOB_THRESHOLD_MS`) are cancelled, marked `timed_out`, and re-enqueued.
+- Total attempts are counted via `run_attempts` rows — after `JOB_MAX_RETRIES + 1` total attempts,
+  the ticket transitions to `failed` permanently.
+- Notifications are sent when a stuck job is recovered or retries are exhausted.
 
 ## 8. Event Handling and Job Dispatch
 
 ### 8.1 Trigger Events
 
-1. **Ticket moved to AI** → check workflow state in DB:
-   - No record → first time, create branch, enqueue `implementation` job.
-   - `clarification_pending` → enqueue `implementation` job (with Q&A context from comments).
-   - `awaiting_review` → check PR for conflicts and comments, enqueue `fixing_feedback` job.
-2. **Ticket moved to terminal state** (Closed/Cancelled) → cancel any queued/active job, tear down
-   container.
+1. **Ticket moved to AI column** → check workflow state in DB:
+   - No record → first time, insert ticket row, start `implementation` workflow.
+   - `clarification_pending` → set `queued`, start `implementation` workflow.
+   - `awaiting_review` → set `queued`, start `review_fix` workflow.
+   - `failed` → set `queued`, start `implementation` workflow (retry).
+   - `queued` or `implementing` → **ignore** (duplicate webhook).
+2. **Ticket moved out of AI column** (from AI or AI Review) → cancel active workflow run, tear
+   down sandbox, set ticket to `failed`.
+   - Self-transitions are ignored: `awaiting_review` → AI Review and
+     `clarification_pending` → Backlog are recognized as Blazebot-initiated moves and skipped.
 
 Blazebot-initiated transitions (not webhook triggers):
-- → **AI Review** when PR is ready.
-- → **Backlog** when clarification is needed.
+
+- → **AI Review** (`COLUMN_AI_REVIEW`) when PR is ready.
+- → **Backlog** (`COLUMN_BACKLOG`) when clarification is needed.
 
 ### 8.2 Concurrency Control
 
-- `MAX_CONCURRENT_AGENTS` — global limit on running containers.
-- Jobs wait in BullMQ queue until a slot opens.
+- `MAX_CONCURRENT_AGENTS` — global limit on running sandboxes.
+- Managed by the workflow framework.
 
 ### 8.3 Stale Job Protection
 
-- **Layer 1 — Webhook cancellation:** On contradicting webhook (ticket moved out of AI), cancel any pending job in BullMQ.
-- **Layer 2 — Job-start verification:** At job start, fetch current ticket state from tracker — skip if no longer in AI.
-- **Layer 3 — Polling fallback:** A BullMQ repeatable job runs every `POLL_INTERVAL_MS` (default 5 min) performing two checks:
-  - **Missed webhooks:** JQL search against tracker for tickets in AI column, cross-referenced with DB. Tickets not in DB or in `failed` state are enqueued automatically.
-  - **Stuck jobs:** Tickets in `implementing`/`fixing_feedback` past `STUCK_JOB_THRESHOLD_MS` (default `JOB_TIMEOUT_MS × 2`) are recovered — container torn down, run marked `timed_out`, job re-enqueued (respecting `JOB_MAX_RETRIES`).
+- **Layer 1 — Webhook cancellation:** On contradicting webhook (ticket moved out of AI), cancel
+  the active workflow run via the workflow framework, tear down the sandbox, and mark the ticket
+  `failed`.
+- **Layer 2 — Job-start verification:** At workflow start, fetch current ticket state from
+  tracker — silently skip (return null) if no longer in AI column.
+- **Layer 3 — Polling fallback:** A durable `maintenanceLoop` workflow runs every
+  `POLL_INTERVAL_MS` (default 5 min) performing two checks:
+  - **Missed webhooks:** JQL search against tracker for tickets in AI column, cross-referenced
+    with DB. Tickets not in DB are inserted and enqueued. Tickets in `failed` state are
+    re-enqueued (respecting `JOB_MAX_RETRIES`).
+  - **Stuck jobs:** Tickets in `queued`/`implementing`/`fixing_feedback` past
+    `STUCK_JOB_THRESHOLD_MS` (default `JOB_TIMEOUT_MS × 2`) are recovered — workflow cancelled,
+    sandbox torn down, run marked `timed_out`, new workflow started (respecting
+    `JOB_MAX_RETRIES`). Stuck `fixing_feedback` tickets are re-enqueued as `review_fix`; others
+    as `implementation`.
+
 - All three layers combined eliminate race conditions, missed webhooks, and silently stuck jobs.
 
 ## 9. Sandbox Management
 
-### 9.1 Sandbox Setup
+### 9.1 Sandbox Provider Interface
 
-For each run, the Sandbox Manager:
+The sandbox is managed through a pluggable `SandboxProvider` interface:
 
-1. Creates a Docker container from a pre-built project-specific image (dependencies pre-installed).
-2. Checks out the repo on the feature branch (branch created by orchestrator if first run).
-3. Generates `requirements.md` inside the container with assembled context.
-4. Agent has scoped Git permissions — can only commit locally, no remote operations.
-5. Injects a long-lived Claude Code authentication token into the container for agent API access.
+```typescript
+interface SandboxProvider {
+  runSandbox(options: SandboxOptions): Promise<SandboxResult>;
+  pushBranch(handle: string, branchName: string): Promise<{ pushed: boolean; output: string }>;
+  teardown(handle: string): Promise<void>;
+  cleanupOrphans(): Promise<void>;
+}
+```
 
-### 9.2 Context Assembly per Run Type
+Two providers are implemented:
+
+- **Vercel Sandbox** (`@vercel/sandbox`) — currently active. Creates cloud sandboxes with
+  configurable vCPUs, git source cloning, and managed timeouts.
+- **Docker** (`dockerode`) — available in `docker/sandbox/` with full Dockerfile, entrypoint, and
+  guard scripts. Currently disabled in the provider factory but fully functional.
+
+### 9.2 Sandbox Setup
+
+#### Vercel Provider
+
+1. Creates a sandbox via `Sandbox.create()` with git source (shallow clone at feature branch).
+2. Runtime: `node22`, configurable vCPUs (`VERCEL_SANDBOX_VCPUS`, default 2).
+3. Environment injected: `CLAUDE_CODE_OAUTH_TOKEN`, `CLAUDE_MODEL`, `GITHUB_TOKEN`.
+4. Writes `requirements.md` into the sandbox filesystem.
+5. Installs Claude Code CLI globally: `npm install -g @anthropic-ai/claude-code`.
+6. Runs the agent (see Section 10).
+7. After agent completion, pushes via `git push origin HEAD:<branchName>` inside the sandbox.
+8. Stops the sandbox.
+
+#### Docker Provider
+
+1. Creates a container from a pre-built image (`blazebot-sandbox`, based on `node:20-slim`).
+2. Mounts a temp directory with `requirements.md` as read-only at `/inject`.
+3. Entrypoint (`entrypoint.sh`) clones the repo, checks out the branch, copies requirements,
+   and launches Claude Code CLI.
+4. Git guard script (`git-guard.sh`) overrides the `git` binary to block `checkout`, `switch`,
+   and `push` — all other git operations pass through to `/usr/bin/git`.
+5. Claude Code Stop hook (`commit-guard.sh`) blocks the agent from finishing if there are
+   uncommitted changes — forces the agent to commit or discard before exiting.
+6. Push is done after agent completion by committing the stopped container to an image and
+   running a new container that executes `git push`.
+7. Container memory limit configurable via `SANDBOX_MEMORY_MB` (default 4096 MB).
+
+### 9.3 Context Assembly per Run Type
 
 - **`implementation`**: ticket content (fetched fresh, including all comments) +
-  `.blazebot/prompts/implement.md`.
-- **`fixing_feedback`**: ticket content (fetched fresh, including all comments) + PR diff + liked
-  comments + human comments + conflict info if applicable + `.blazebot/prompts/review-fix.md`.
+  `packages/app/prompts/implement.md`.
+- **`review_fix`**: ticket content (fetched fresh, including all comments), PR review comments
+  (separated into "liked" from approved reviews vs. other comments), conflict info if applicable,
+  and `packages/app/prompts/review-fix.md`.
 
-### 9.3 Teardown
+### 9.4 Teardown
 
-Container is destroyed after every run — no container survives between workflow states.
+Sandbox is destroyed after every run — no sandbox survives between workflow states. On service
+startup, the `orphan-cleanup` plugin calls `provider.cleanupOrphans()` to stop any stale sandboxes
+from previous runs.
 
-### 9.4 Safety Invariants
+### 9.5 Safety Invariants
 
 - Agent Git permissions scoped to its feature branch only.
-- Container is isolated — no access to production infrastructure or other containers.
-- All commits authored as Blazebot.
+- Sandbox is isolated — no access to production infrastructure or other sandboxes.
+- Docker provider: agent runs as non-root user (`kasin-it`), git operations restricted by guard
+  scripts.
+- Vercel provider: sandbox has `GITHUB_TOKEN` for push; orchestrator creates the branch before
+  sandbox spin-up via VCS adapter.
 
 ## 10. Agent Runner
 
 ### 10.1 Launch
 
-- Orchestrator runs `docker exec` to launch the coding agent (Claude Code / Codex) inside the
-  container with the assembled prompt.
+The agent is launched inside the sandbox as the Claude Code CLI:
+
+```bash
+claude --print --output-format json --json-schema '<schema>' \
+  --model "$CLAUDE_MODEL" --dangerously-skip-permissions < requirements.md
+```
+
+- `requirements.md` is piped to stdin.
+- `--output-format json` with `--json-schema` enforces structured output.
+- `--dangerously-skip-permissions` allows the agent to run without interactive permission prompts.
 - Agent stdout is not logged — it may contain client code and confidential ticket data. Only
   anonymized, structured events (start, exit code, duration) are logged.
-- Timeout enforced via config (`JOB_TIMEOUT_MS`).
+- Timeout enforced via sandbox provider (`JOB_TIMEOUT_MS`, default 10 min).
+- Docker provider also supports `DEVELOPER_MODE` — uses `--output-format stream-json --verbose`
+  piped through `format-stream.sh` for human-readable real-time output.
 
 ### 10.2 Agent Signals
 
 The agent returns structured output via Claude Code's JSON schema enforcement. The orchestrator
-defines a schema with a required `result` field and reads the response directly — no marker file
-needed.
+parses the response from stdout — no marker file needed.
+
+Claude Code wraps the structured output in an envelope:
+
+```json
+{
+  "type": "result",
+  "subtype": "success",
+  "result": "...",
+  "structured_output": { ... }
+}
+```
+
+The parser (`parseAgentOutput`) scans stdout lines bottom-up for JSON, checking
+`structured_output.result` first, falling back to the envelope `result` field for older Claude Code
+versions.
 
 Schema:
 
@@ -355,16 +472,20 @@ Schema:
 - `questions` — list of questions to post on the ticket (when `clarification_needed`).
 - `error` — failure details (when `failed`).
 
-Schema validation is enforced by the agent runtime. If the agent returns invalid output or fails to
-produce structured output, the run is treated as failed and retried via BullMQ.
+If the agent returns no valid structured JSON output, the run is treated as failed.
 
 ### 10.3 Orchestrator Response to Result
 
-- `implemented` → read summary, create PR (if implementation) or signal done (if fixing_feedback),
-  tear down container.
-- `failed` → read error, retry or transition to `failed`.
-- `clarification_needed` → read questions, post on ticket, move ticket to Backlog, notify user, tear
-  down container.
+- `implemented` → push branch, create PR (if implementation) or just push (if review_fix), move
+  ticket to AI Review, tear down sandbox, notify user.
+- `failed` → tear down sandbox, mark run and ticket as failed, throw error.
+- `clarification_needed` → push WIP (optional), post questions on ticket, move ticket to Backlog,
+  tear down sandbox, notify user.
+
+If push fails after `implemented`, the run is treated as failed (agent may not have committed code).
+
+If PR creation fails with "No commits between branches" (422), the error is treated as fatal
+(non-retryable) — the agent reported success but didn't actually commit anything.
 
 ### 10.4 Responsibilities Split
 
@@ -372,50 +493,76 @@ Agent (inside sandbox):
 
 - Writes code.
 - Runs tests.
-- Commits locally to feature branch (no push — orchestrator handles push).
-- Runs self-review skill.
-- Merges target branch and resolves conflicts.
+- Commits locally to feature branch.
+- Merges target branch and resolves conflicts (in review-fix runs).
 - Commits WIP on clarification.
 
 Orchestrator (outside sandbox):
 
 - Creates feature branches (via VCS adapter, before sandbox spin-up).
-- Pushes feature branch after agent run completes.
+- Pushes feature branch after agent run completes (via sandbox provider).
 - Creates PRs (via VCS adapter).
 - Moves tickets between columns.
 - Posts clarification questions on ticket.
 - Sends notifications.
-- Tears down containers.
+- Tears down sandboxes.
 
 ## 11. Adapter Interfaces
 
 ### 11.1 Issue Tracker Adapter
 
+```typescript
+interface TicketAdapter {
+  fetchTicket(id: string): Promise<Ticket>;
+  moveTicket(id: string, column: string): Promise<void>;
+  postComment(id: string, comment: string): Promise<void>;
+  parseWebhook(req: unknown): NormalizedEvent | null;
+  searchTickets?(query: string): Promise<string[]>;  // optional, used by polling
+}
+
+interface Ticket {
+  externalId: string;
+  identifier: string;
+  title: string;
+  description: string;
+  acceptanceCriteria: string | null;
+  comments: TicketComment[];
+  labels: string[];
+  trackerStatus: string;
+}
 ```
-fetchTicket(id) → TicketContent (title, description, acceptance criteria, comments, labels)
-moveTicket(id, column) → void
-postComment(id, comment) → void
-searchTickets(jql) → string[] (ticket keys matching query)
-parseWebhook(req) → NormalizedEvent
-```
+
+Jira implementation uses Basic Auth (email + API token), Zod schema validation for webhook parsing,
+and ADF (Atlassian Document Format) for posting comments.
 
 ### 11.2 VCS Adapter
 
+```typescript
+interface VCSAdapter {
+  createBranch(repoOwner: string, repoName: string, branchName: string, baseBranch: string): Promise<void>;
+  createPR(repoOwner: string, repoName: string, title: string, body: string, head: string, base: string): Promise<PullRequest>;
+  getPRComments(repoOwner: string, repoName: string, prNumber: number): Promise<PullRequestComment[]>;
+  getPRConflictStatus(repoOwner: string, repoName: string, prNumber: number): Promise<boolean>;
+}
+
+interface PullRequestComment {
+  author: string;
+  body: string;
+  path: string | null;      // file path for inline comments
+  line: number | null;       // line number for inline comments
+  fromApprovedReview: boolean;  // true if from an approved review
+}
 ```
-createBranch(repo, name, base) → void
-createPR(repo, branch, title, body) → PR
-getPRComments(repo, prId) → liked comments + human comments
-getPRConflictStatus(repo, prId) → boolean
-```
+
+GitHub implementation uses Octokit. `getPRComments` fetches three sources: inline review comments,
+general PR conversation comments, and review body text. `createPR` handles 422 conflicts (existing
+PR on same branch) by returning the existing PR.
 
 **Empty repository handling:** `createBranch` must handle the case where the target repository has
 no commits. GitHub's Git API returns a 409 ("Git Repository is empty") when attempting to read refs
 from an empty repo. When this occurs, the adapter seeds the repository with an initial commit
 (README.md) using the Contents API (`repos.createOrUpdateFileContents`), then uses the resulting
-commit SHA as the base for branch creation. Low-level Git endpoints (`git.createTree`,
-`git.createCommit`, `git.createRef`) also return 409 on empty repos — only the Contents API can
-bootstrap them. If the seed commit fails, the error is wrapped with repository context and
-propagated.
+commit SHA as the base for branch creation.
 
 ### 11.3 Messaging Adapter
 
@@ -423,28 +570,39 @@ Backed by ChatSDK (`chat` package). The `MessagingAdapter` interface wraps a Cha
 instance and delegates to `channel.post()`. Platform adapters (Slack, Discord, Teams) are
 configured via `createSlackAdapter()` etc. and passed to the `Chat` constructor.
 
-```
-notify(userId, message) → void
-ping(userId, message) → void
+```typescript
+interface MessagingAdapter {
+  notify(userId: string, message: string): Promise<void>;
+  ping(userId: string, message: string): Promise<void>;
+}
 ```
 
-Adding a new platform requires installing the corresponding `@chat-adapter/*` package and
-registering it in the `Chat` constructor — no changes to the `MessagingAdapter` interface or
-worker code.
+Three implementations exist:
+
+- `ChatSDKMessagingAdapter` — production, uses `@chat-adapter/slack` + `chat` SDK.
+- `NoopMessagingAdapter` — returned when Slack credentials are missing.
+- `ConsoleMessagingAdapter` — logs to stdout (development).
+
+A factory (`createMessagingAdapter`) selects the implementation based on `MESSAGING_KIND` and
+available credentials.
 
 ### 11.4 Normalized Webhook Event
 
 All tracker webhooks normalize to:
 
-```
-{
-  type: "ticket_moved"
-  ticketId: string
-  fromColumn: string
-  toColumn: string
-  triggeredBy: string (user who moved it)
+```typescript
+interface NormalizedEvent {
+  type: "ticket_moved";
+  ticketId: string;
+  fromColumn: string;
+  toColumn: string;
+  triggeredBy: string;
+  triggeredByAccountId: string;
 }
 ```
+
+The Jira webhook parser uses Zod to validate the incoming payload and extracts status changes from
+the changelog. Non-status-change webhooks return `null` and are silently discarded.
 
 The orchestrator only works with normalized events — never raw webhook payloads.
 
@@ -456,8 +614,8 @@ The orchestrator only works with normalized events — never raw webhook payload
 
 ## 12. Context Assembly
 
-The Sandbox Manager builds `requirements.md` inside the container before the agent starts. The
-format is fixed.
+The orchestrator builds `requirements.md` in memory (`packages/app/src/context.ts`) and writes it
+into the sandbox before the agent starts. The format is fixed.
 
 For `implementation` runs:
 
@@ -471,16 +629,18 @@ For `implementation` runs:
 {ticket description}
 
 ## Acceptance Criteria
-{acceptance criteria}
+{acceptance criteria, if present}
 
 ## Comments
-{all ticket comments, chronological}
+**{author}** ({ISO timestamp}):
+{comment body}
+...
 
 ---
-{contents of .blazebot/prompts/implement.md}
+{contents of packages/app/prompts/implement.md}
 ```
 
-For `fixing_feedback` runs:
+For `review_fix` runs:
 
 ```markdown
 # Requirements
@@ -492,20 +652,34 @@ For `fixing_feedback` runs:
 {ticket description}
 
 ## Acceptance Criteria
-{acceptance criteria}
+{acceptance criteria, if present}
 
 ## Comments
-{all ticket comments, chronological}
+**{author}** ({ISO timestamp}):
+{comment body}
+...
 
 ## PR Review Feedback
-{liked comments + human comments}
+
+### Liked Comments
+**{author}** (`path:line`):
+{comment body}
+
+### Other Comments
+**{author}** (`path:line`):
+{comment body}
 
 ## Merge Conflicts
-{conflict info, if applicable}
+This PR has merge conflicts with the target branch. Merge the target branch and resolve all
+conflicts before addressing review feedback.
 
 ---
-{contents of .blazebot/prompts/review-fix.md}
+{contents of packages/app/prompts/review-fix.md}
 ```
+
+The "Liked Comments" / "Other Comments" subheadings only appear when both categories have comments.
+The "Acceptance Criteria", "Comments", "PR Review Feedback", and "Merge Conflicts" sections are
+omitted if empty.
 
 If rendering fails (missing prompt file, tracker API error), the run fails immediately.
 
@@ -547,7 +721,8 @@ Adapter events:
 
 ### 13.3 Log Format
 
-Structured JSON logs to stdout. Deployment decides where they go (file, log aggregator, etc.).
+Structured JSON logs to stdout via Pino. Deployment decides where they go (file, log aggregator,
+etc.). Log level configurable via `LOG_LEVEL` env var.
 
 ### 13.4 Deferred
 
@@ -559,28 +734,28 @@ Structured JSON logs to stdout. Deployment decides where they go (file, log aggr
 
 ### 14.1 Failure Classes
 
-1. **Webhook/Ingestion Failures** — invalid payload, validation failure, tracker API down.
-2. **Sandbox Failures** — Docker container won't start, image pull failure, disk full.
-3. **Agent Failures** — timeout, crash, invalid structured output.
+1. **Webhook/Ingestion Failures** — invalid payload, HMAC validation failure, tracker API down.
+2. **Sandbox Failures** — sandbox won't start, Vercel API error, Docker container failure.
+3. **Agent Failures** — timeout, crash, invalid structured output, no commits produced.
 4. **Adapter Failures** — VCS API down (can't create PR), messaging down (can't notify), tracker
    down (can't move ticket).
-5. **Infrastructure Failures** — Postgres down, Redis down, BullMQ connection lost.
+5. **Infrastructure Failures** — Postgres down, workflow engine unavailable.
 
 ### 14.2 Recovery Behavior
 
 | Failure | Recovery |
-|---------|----------|
-| Webhook invalid | Log and discard, return 400 |
-| Tracker API down during context fetch | Retry via BullMQ backoff |
+| ------- | -------- |
+| Webhook invalid | Log and discard, return 400/401 |
+| Tracker API down during context fetch | Workflow step fails, detected by polling |
 | Empty repository (no commits) | VCS adapter seeds repo with initial commit, then creates branch |
-| Container won't start | Retry via BullMQ backoff |
-| Agent timeout/crash | Retry via BullMQ backoff |
-| Agent clarification (exit 2) | Not a failure — normal flow |
-| Can't create PR | Retry via BullMQ backoff |
-| Can't move ticket | Retry, log warning |
+| Sandbox won't start | Workflow fails, detected and retried by polling |
+| Agent timeout/crash | Workflow fails, detected and retried by polling |
+| Agent clarification | Not a failure — normal flow |
+| No commits on branch (422) | Fatal error — non-retryable (`FatalError`) |
+| Can't create PR | Workflow fails, retried by polling |
+| Can't move ticket | Log warning |
 | Can't send notification | Log warning, don't block workflow |
-| Postgres down | Service unhealthy, jobs stall until recovery |
-| Redis down | BullMQ unavailable, service unhealthy |
+| Postgres down | Service unhealthy, workflows stall until recovery |
 | Max retries exhausted | Ticket → `failed`, notify user |
 
 Notifications are best-effort — never block the workflow.
@@ -588,29 +763,37 @@ Notifications are best-effort — never block the workflow.
 ### 14.3 Recovery After Service Restart
 
 - Postgres is the single source of truth for orchestration state.
-- On restart, BullMQ recovers its job queue from Redis.
+- On restart, the workflow engine (`@workflow/world-postgres`) recovers in-flight workflows from
+  Postgres.
 - No filesystem-based recovery needed.
-- Active containers from the previous process may be orphaned — the service should detect and clean
-  up stale containers on startup.
+- Active sandboxes from the previous process may be orphaned — the `orphan-cleanup` plugin detects
+  and stops stale sandboxes on startup.
 
 ## 15. Security and Operational Safety
 
 ### 15.1 Sandbox Isolation
 
-- Each agent runs in an isolated Docker container.
-- Agent process runs as a non-root user inside the container with limited filesystem and system-level
-  permissions.
-- No access to production infrastructure or other containers.
+- Each agent runs in an isolated sandbox (Vercel Sandbox or Docker container).
+- Docker provider: agent process runs as a non-root user (`kasin-it`) inside the container.
+- No access to production infrastructure or other sandboxes.
 
 ### 15.2 Git Permission Scoping
 
-- Agent can only commit locally — `git push` is not allowed from inside the container.
-- Orchestrator pushes the feature branch after the agent run completes.
-- PRs, merges to main, branch deletion are orchestrator-only.
-- Enforced via allowed command list inside the container (no remote Git operations).
-- Claude Code `PreStop` hook: if `git status` shows uncommitted changes, block the agent from
-  finishing and force it to commit or discard. This ensures no work is silently lost.
-- Codex equivalent of the PreStop hook is TBD.
+**Docker provider:**
+
+- Agent can only commit locally — `git push` is blocked by `git-guard.sh` which overrides the
+  `git` binary at `/usr/local/bin/git`. `checkout` and `switch` are also blocked.
+- Orchestrator pushes the feature branch after the agent run completes (via commit + new container).
+- Claude Code `Stop` hook (`commit-guard.sh`): if `git status --porcelain` shows uncommitted
+  changes, exit with code 2 to block the stop and feed instructions back to the agent. On the
+  second pass (when `stop_hook_active` is set), allow exit. This ensures no work is silently lost.
+
+**Vercel provider:**
+
+- Agent has `GITHUB_TOKEN` in the sandbox environment (needed for Claude Code operations).
+- Push is performed by the orchestrator via `sandbox.runCommand("git", ["push", ...])` after the
+  agent completes — the agent itself does not push.
+- Branch creation is done by the orchestrator via VCS adapter before sandbox spin-up.
 
 ### 15.3 Secret Handling
 
@@ -629,138 +812,151 @@ Notifications are best-effort — never block the workflow.
 
 ### 16.1 Webhook Reception
 
-```
+```pseudocode
 on_webhook(req):
-  event = issueTrackerAdapter.parseWebhook(req)
-  if event.type != "ticket_moved": discard
+  rawBody = readRawBody(req)
+  if !verifyHMAC(rawBody, req.headers["x-hub-signature"], JIRA_WEBHOOK_SECRET):
+    return 401
 
-  if event.toColumn == "AI":
-    ticket = db.findTicket(event.ticketId)
+  event = parseJiraWebhook(JSON.parse(rawBody))
+  if event is null: return { ok: true }  // not a status change
 
-    if ticket is null:
-      // First time — new implementation
-      branch = vcsAdapter.createBranch(repo, branchName, "main")
-      db.createTicket(event.ticketId, state="queued", branch=branch)
-      enqueue("implementation", event.ticketId)
+  routeTicketTransition(event)
+  return { ok: true }
 
-    else if ticket.workflow_state == "clarification_pending":
-      db.updateState(ticket, "queued")
-      enqueue("implementation", event.ticketId)
+routeTicketTransition(event):
+  if normalize(event.toColumn) == normalize(COLUMN_AI):
+    handleMovedToAi(event)
+  else if normalize(event.fromColumn) is AI-related:
+    handleMovedOutOfAi(event)
 
-    else if ticket.workflow_state == "awaiting_review":
-      db.updateState(ticket, "queued")
-      enqueue("fixing_feedback", event.ticketId)
+handleMovedToAi(event):
+  ticket = db.findTicket(event.ticketId, source="jira")
 
-  else if event.toColumn is terminal:
-    cancelActiveJob(event.ticketId)
-    teardownContainer(event.ticketId)
-    db.updateState(ticket, "failed")
+  if ticket is null:
+    created = db.insertTicket(event.ticketId, state="queued")
+    startWorkflowRun(type="implementation", workflow=implementTicket, dedupeId="impl-{id}-{rowId}")
+
+  else if ticket.workflowState == "clarification_pending":
+    db.updateState(ticket, "queued")
+    startWorkflowRun(type="implementation", workflow=implementTicket)
+
+  else if ticket.workflowState == "awaiting_review":
+    db.updateState(ticket, "queued")
+    startWorkflowRun(type="review_fix", workflow=reviewFixTicket)
+
+  else if ticket.workflowState == "failed":
+    db.updateState(ticket, "queued")
+    startWorkflowRun(type="implementation", workflow=implementTicket)
+
+  else if ticket.workflowState in ["queued", "implementing"]:
+    // Duplicate webhook — ignore
+
+handleMovedOutOfAi(event):
+  ticket = db.findTicket(event.ticketId, source="jira")
+  if ticket is null: return
+
+  // Ignore self-transitions (Blazebot moved the ticket itself)
+  if ticket.workflowState == "awaiting_review" and event.toColumn == COLUMN_AI_REVIEW: return
+  if ticket.workflowState == "clarification_pending" and event.toColumn == COLUMN_BACKLOG: return
+
+  if ticket.currentRunId:
+    cancelWorkflowRun(ticket.currentRunId)  // cancel workflow + teardown sandbox
+
+  db.updateState(ticket, "failed")
 ```
 
-### 16.2 Job Execution (Implementation)
+### 16.2 Workflow Execution (Implementation)
 
-```
-process_implementation_job(ticketId):
-  ticket = db.findTicket(ticketId)
+```pseudocode
+implementTicket(ticketId, source, triggeredBy, runAttemptId):
+  "use workflow"
 
-  // Stale job protection
-  currentState = issueTrackerAdapter.fetchTicket(ticketId).state
-  if currentState != "AI": skip job
+  ticket = fetchAndValidateTicket(ticketId)  // "use step"
+  if ticket is null: return  // stale job — ticket no longer in AI column
 
-  db.updateState(ticket, "implementing")
-  run = db.createRunAttempt(ticketId, type="implementation")
+  branchName = "blazebot/{ticketId}"
+  setupBranch(ticketId, branchName, runAttemptId)  // create branch, set "implementing"
 
-  ticketContent = issueTrackerAdapter.fetchTicket(ticketId)
-  prompt = readFile(repo, ".blazebot/prompts/implement.md")
-  requirementsMd = assembleContext(ticketContent, prompt)
+  result = executeSandbox(ticketId, branchName, ticket)  // "use step" — runs agent
+  if result.containerId: recordContainerId(runAttemptId, result.containerId)
 
-  container = sandboxManager.spinUp(ticket.branch, requirementsMd)
-  db.updateRun(run, container_id=container.id)
+  if result.status == "complete":
+    pushResult = pushAndTeardown(result.containerId, branchName)
+    if !pushResult.pushed: finalizeFailure(...); throw
+    pr = createPullRequest(ticketId, ticket.title, branchName, result.summary)
+    finalizeSuccess(ticketId, runAttemptId, branchName, pr)
+    // → workflowState: "awaiting_review", moveTicket → COLUMN_AI_REVIEW, notify
 
-  output = agentRunner.exec(container, requirementsMd) // returns structured JSON
+  else if result.status == "clarification_needed":
+    pushAndTeardown(result.containerId, branchName)  // push WIP
+    finalizeClarification(ticketId, runAttemptId, branchName, result.questions)
+    // → postComment, workflowState: "clarification_pending", moveTicket → COLUMN_BACKLOG, notify
 
-  sandboxManager.tearDown(container)
-
-  if output.result == "implemented":
-    pr = vcsAdapter.createPR(repo, ticket.branch, output.title, output.summary)
-    issueTrackerAdapter.moveTicket(ticketId, "AI Review")
-    db.updateState(ticket, "awaiting_review")
-    messagingAdapter.notify("Task " + ticket.identifier + " PR ready for review")
-
-  else if output.result == "clarification_needed":
-    issueTrackerAdapter.postComment(ticketId, output.questions)
-    issueTrackerAdapter.moveTicket(ticketId, "Backlog")
-    db.updateState(ticket, "clarification_pending")
-    messagingAdapter.notify("Task " + ticket.identifier + " needs clarification")
-
-  else: // "failed" or invalid output
-    db.updateRun(run, status="failed", error=output.error)
-    throw // BullMQ handles retry
+  else:  // "failed"
+    teardown(result.containerId)
+    finalizeFailure(ticketId, runAttemptId, result.error)
+    throw Error  // workflow fails
 ```
 
-### 16.3 Job Execution (Fixing Feedback)
+### 16.3 Workflow Execution (Fixing Feedback)
 
-```
-process_fixing_feedback_job(ticketId):
-  ticket = db.findTicket(ticketId)
+```pseudocode
+reviewFixTicket(ticketId, source, triggeredBy, runAttemptId):
+  "use workflow"
 
-  currentState = issueTrackerAdapter.fetchTicket(ticketId).state
-  if currentState != "AI": skip job
+  validation = validateReviewFix(ticketId, runAttemptId)  // "use step"
+  if validation is null: return  // stale job
+  // validation checks: ticket in AI column, has prId and branchName
+  // → workflowState: "fixing_feedback", run status: "running"
 
-  db.updateState(ticket, "fixing_feedback")
-  run = db.createRunAttempt(ticketId, type="fixing_feedback")
+  result = executeFixSandbox(ticketId, validation.branchName, validation.prNumber)
+  // fetches ticket, PR comments, conflict status, assembles context, runs agent
 
-  ticketContent = issueTrackerAdapter.fetchTicket(ticketId)
-  prComments = vcsAdapter.getPRComments(repo, ticket.prId)
-  hasConflicts = vcsAdapter.getPRConflictStatus(repo, ticket.prId)
-  prompt = readFile(repo, ".blazebot/prompts/review-fix.md")
-  requirementsMd = assembleContext(ticketContent, prComments, hasConflicts, prompt)
+  if result.containerId: recordContainerId(runAttemptId, result.containerId)
 
-  container = sandboxManager.spinUp(ticket.branch, requirementsMd)
-  output = agentRunner.exec(container, requirementsMd) // returns structured JSON
+  if result.status == "complete":
+    pushAndTeardown(result.containerId, validation.branchName)
+    finalizeFixSuccess(ticketId, runAttemptId)
+    // → workflowState: "awaiting_review", moveTicket → COLUMN_AI_REVIEW, notify
 
-  sandboxManager.tearDown(container)
-
-  if output.result == "implemented":
-    issueTrackerAdapter.moveTicket(ticketId, "AI Review")
-    db.updateState(ticket, "awaiting_review")
-    messagingAdapter.notify("Task " + ticket.identifier + " fixes applied, ready for re-review")
-
-  else: // "failed" or invalid output
-    db.updateRun(run, status="failed", error=output.error)
-    throw // BullMQ handles retry
+  else:
+    teardown(result.containerId)
+    finalizeFixFailure(ticketId, runAttemptId, result.error)
+    throw Error
 ```
 
 ## 17. Test and Validation Matrix
 
 ### 17.1 Orchestration
 
-- Webhook with ticket moved to AI → enqueues implementation job.
-- Webhook with ticket moved to AI (from `clarification_pending`) → enqueues implementation job.
-- Webhook with ticket moved to AI (from `awaiting_review`) → enqueues fixing_feedback job.
-- Webhook with ticket moved to terminal → cancels active job, tears down container.
-- Stale job protection — job skipped if ticket no longer in AI at start.
-- Contradicting webhook cancels pending job in queue.
+- Webhook with ticket moved to AI → starts implementation workflow.
+- Webhook with ticket moved to AI (from `clarification_pending`) → starts implementation workflow.
+- Webhook with ticket moved to AI (from `awaiting_review`) → starts review_fix workflow.
+- Webhook with ticket moved to AI (from `failed`) → starts implementation workflow (retry).
+- Webhook with ticket already `queued`/`implementing` → duplicate ignored.
+- Webhook with ticket moved out of AI → cancels active workflow, tears down sandbox, marks failed.
+- Self-transitions (awaiting_review → AI Review, clarification_pending → Backlog) → ignored.
+- Stale job protection — workflow skipped if ticket no longer in AI at start.
 - Max retries exhausted → ticket transitions to `failed`, user notified.
-- Concurrency limit respected — jobs wait in queue when at capacity.
 - Polling fallback — discovers tickets in AI column missed by webhooks.
-- Polling fallback — detects stuck jobs past threshold, tears down container, re-enqueues or fails.
-- Polling fallback — skips tickets already queued/implementing/fixing_feedback (idempotent).
-- Polling fallback — respects retry limits on stuck job recovery.
+- Polling fallback — detects stuck jobs past threshold, cancels workflow, re-enqueues or fails.
+- Polling fallback — respects retry limits on stuck job recovery (`JOB_MAX_RETRIES + 1` attempts).
 
 ### 17.2 Sandbox Management
 
-- Container spun up with correct branch and `requirements.md`.
-- Container torn down after every run (success, failure, clarification).
-- Git permissions scoped to feature branch only.
+- Sandbox created with correct branch and `requirements.md`.
+- Sandbox torn down after every run (success, failure, clarification).
+- Orphaned sandboxes cleaned up on service startup.
+- Push fails → run treated as failure.
 
 ### 17.3 Agent Runner
 
-- Exit code 0 → PR created, ticket moved to AI Review.
-- Exit code 1 → retry or fail.
-- Exit code 2 → questions posted, ticket moved to Backlog.
-- Structured output parsed correctly for all result types.
-- Timeout enforced — agent killed after `JOB_TIMEOUT_MS`.
+- Structured output `implemented` → push, PR created, ticket moved to AI Review.
+- Structured output `failed` → sandbox torn down, ticket marked failed.
+- Structured output `clarification_needed` → push WIP, questions posted, ticket moved to Backlog.
+- No valid structured output → run treated as failed.
+- Timeout enforced by sandbox provider (`JOB_TIMEOUT_MS`).
 
 ### 17.4 Adapter Interfaces
 
@@ -774,8 +970,9 @@ process_fixing_feedback_job(ticketId):
 
 ### 17.5 Context Assembly
 
-- Implementation context includes full ticket content + all comments + prompt.
-- Fixing feedback context includes ticket content + PR comments + conflict info + prompt.
+- Implementation context includes full ticket content + all comments + prompt file.
+- Fixing feedback context includes ticket content, PR comments (liked vs. other), conflict info,
+  and prompt file.
 - Missing prompt file fails the run immediately.
 
 ### 17.6 Workflow State Machine
@@ -794,20 +991,24 @@ process_fixing_feedback_job(ticketId):
 
 ### 18.1 Required for MVP
 
-- [ ] Webhook receiver with HMAC validation.
-- [ ] Issue Tracker adapter (Jira first).
-- [ ] VCS adapter (GitHub).
-- [ ] Messaging adapter (Slack).
-- [ ] Orchestrator — webhook → dispatch logic with workflow state machine.
-- [ ] BullMQ job processing for `implementation` and `fixing_feedback`.
-- [ ] Sandbox Manager — Docker container lifecycle.
-- [ ] Agent Runner — `docker exec`, structured output parsing, schema validation.
-- [ ] Context assembly — `requirements.md` generation.
-- [ ] Persistence — Postgres schema for tickets and run attempts.
-- [ ] Stale job protection (cancel on contradicting webhook + verify at job start + polling fallback).
-- [ ] Concurrency control via `MAX_CONCURRENT_AGENTS`.
-- [ ] Structured JSON logging with ticket/run context.
-- [ ] Prompt files — `.blazebot/prompts/implement.md` and `.blazebot/prompts/review-fix.md`.
+- [x] Webhook receiver with HMAC validation (Nitro + `x-hub-signature`).
+- [x] Issue Tracker adapter (Jira — fetch, move, comment, search, webhook parsing).
+- [x] VCS adapter (GitHub — branch, PR, comments, conflict status, empty repo handling).
+- [x] Messaging adapter (Slack via ChatSDK, with noop fallback).
+- [x] Orchestrator — webhook router + workflow helpers with state machine.
+- [x] Durable workflow execution for `implementation` and `review_fix` (`workflow/api` +
+  `@workflow/world-postgres`).
+- [x] Sandbox Provider — Vercel Sandbox (active) + Docker (available).
+- [x] Agent Runner — Claude Code CLI, structured JSON output parsing, schema validation.
+- [x] Context assembly — `requirements.md` generation with ticket + PR comments + prompts.
+- [x] Persistence — Drizzle + Postgres schema for tickets and run attempts.
+- [x] Stale job protection (cancel on contradicting webhook + verify at job start + polling
+  fallback).
+- [x] Concurrency control via `MAX_CONCURRENT_AGENTS`.
+- [x] Structured JSON logging with ticket/run context (Pino).
+- [x] Prompt files — `packages/app/prompts/implement.md` and `packages/app/prompts/review-fix.md`.
+- [x] Orphan sandbox cleanup on startup.
+- [x] Webhook deduplication (ignore duplicate events for queued/implementing tickets).
 
 ### 18.2 Deferred
 
