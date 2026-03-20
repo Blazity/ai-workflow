@@ -20,7 +20,7 @@ import { reviewFixTicket } from "./review-fix.js";
 
 const logger = createLogger();
 
-// ── Workflow: infinite polling loop ────────────────────────────────
+// ── Workflow: infinite polling loop (dev / non-serverless) ────────
 
 export async function maintenanceLoop() {
   "use workflow";
@@ -30,6 +30,13 @@ export async function maintenanceLoop() {
     await pollOnce();
     await sleep(`${appEnv.POLL_INTERVAL_MS}ms`);
   }
+}
+
+// ── Workflow: single poll cycle (Vercel cron) ────────────────────
+
+export async function pollOnceWorkflow() {
+  "use workflow";
+  await pollOnce();
 }
 
 // ── Steps ──────────────────────────────────────────────────────────
