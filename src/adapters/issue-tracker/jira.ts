@@ -30,7 +30,12 @@ export class JiraAdapter implements IssueTrackerAdapter {
     if (!res.ok) {
       throw new Error(`Jira API error: ${res.status} ${res.statusText} on ${path}`);
     }
-    return res.json();
+    if (res.status === 204) return null;
+    try {
+      return await res.json();
+    } catch {
+      return null;
+    }
   }
 
   async fetchTicket(id: string): Promise<TicketContent> {

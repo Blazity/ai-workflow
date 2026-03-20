@@ -119,18 +119,9 @@ async function moveTicket(ticketId: string, column: string) {
 
 async function notifySlack(message: string) {
   "use step";
-  const { env } = await import("../../env.js");
-  await fetch("https://slack.com/api/chat.postMessage", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${env.CHAT_SDK_SLACK_TOKEN}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      channel: env.CHAT_SDK_CHANNEL_ID,
-      text: message,
-    }),
-  }).catch(() => {});
+  const { createStepAdapters } = await import("../lib/step-adapters.js");
+  const { messaging } = createStepAdapters();
+  await messaging.notify(message);
 }
 
 // --- Workflow ---

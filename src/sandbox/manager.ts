@@ -109,7 +109,10 @@ export class SandboxManager {
     const diffOutput = (await diffResult.stdout()).trim();
     if (!diffOutput) return [];
 
-    const filePaths = diffOutput.split("\n").filter(Boolean);
+    const filePaths = diffOutput
+      .split("\n")
+      .filter(Boolean)
+      .filter((p) => p !== "requirements.md");
     const files: Array<{ path: string; content: string }> = [];
 
     for (const filePath of filePaths) {
