@@ -26,6 +26,14 @@ export interface VCSAdapter {
     repoName: string,
     prNumber: number,
   ): Promise<boolean>;
+
+  pushChanges(
+    repoOwner: string,
+    repoName: string,
+    branchName: string,
+    message: string,
+    files: Array<{ path: string; content: string | null }>,
+  ): Promise<string>;
 }
 
 export interface PullRequest {

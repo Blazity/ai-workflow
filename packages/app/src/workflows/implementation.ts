@@ -51,11 +51,11 @@ export async function implementTicket(
     await recordContainerId(runAttemptId, result.containerId);
   }
 
-  if (result.status === "complete" && result.containerId) {
-    const pushResult = await pushAndTeardown(result.containerId, branchName);
+  if (result.status === "complete" && result.containerId && result.initialSha) {
+    const pushResult = await extractAndPush(result.containerId, result.initialSha, branchName, ticketId);
     if (!pushResult.pushed) {
-      await finalizeFailure(ticketId, runAttemptId, `Branch push failed — agent may not have committed code. Output: ${pushResult.output}`);
-      throw new Error(`Push failed for ${ticketId}: ${pushResult.output}`);
+      await finalizeFailure(ticketId, runAttemptId, `No changes detected — agent may not have committed code.`);
+      throw new Error(`No changes for ${ticketId}`);
     }
     const pr = await createPullRequest(ticketId, ticket.title, branchName, result.summary ?? "");
     await finalizeSuccess(ticketId, runAttemptId, branchName, pr, triggeredBy, ticket.identifier);
@@ -63,8 +63,8 @@ export async function implementTicket(
   }
 
   if (result.status === "clarification_needed") {
-    if (result.containerId) {
-      await pushAndTeardown(result.containerId, branchName);
+    if (result.containerId && result.initialSha) {
+      await extractAndPush(result.containerId, result.initialSha, branchName, ticketId);
     }
     await finalizeClarification(ticketId, runAttemptId, branchName, result.questions ?? [], triggeredBy, ticket.identifier);
     return;
@@ -157,12 +157,23 @@ async function recordContainerId(runId: string, containerId: string) {
     .where(eq(runAttempts.id, runId));
 }
 
-async function pushAndTeardown(containerId: string, branchName: string) {
+async function extractAndPush(containerId: string, initialSha: string, branchName: string, ticketId: string) {
   "use step";
   const provider = await createProvider();
+  const { github } = createAdapters();
+  const owner = appEnv.GITHUB_REPO_OWNER!;
+  const repo = appEnv.GITHUB_REPO_NAME!;
+
   try {
-    const result = await provider.pushBranch(containerId, branchName);
-    return result;
+    const changes = await provider.extractChanges(containerId, initialSha);
+    if (!changes.hasChanges) {
+      return { pushed: false };
+    }
+
+    const message = changes.commitMessage || `[${ticketId}] Agent implementation`;
+    await github.pushChanges(owner, repo, branchName, message, changes.files);
+    logger.info({ ticketId, branchName, fileCount: changes.files.length }, "changes_pushed_via_api");
+    return { pushed: true };
   } finally {
     await provider.teardown(containerId);
   }

@@ -184,6 +184,75 @@ export class GitHubClient implements VCSAdapter {
     return data.mergeable === false;
   }
 
+  async pushChanges(
+    repoOwner: string,
+    repoName: string,
+    branchName: string,
+    message: string,
+    files: Array<{ path: string; content: string | null }>,
+  ): Promise<string> {
+    // Get the current branch tip
+    const { data: ref } = await this.octokit.git.getRef({
+      owner: repoOwner,
+      repo: repoName,
+      ref: `heads/${branchName}`,
+    });
+    const baseSha = ref.object.sha;
+
+    const { data: baseCommit } = await this.octokit.git.getCommit({
+      owner: repoOwner,
+      repo: repoName,
+      commit_sha: baseSha,
+    });
+
+    // Build tree entries — create blobs for added/modified, null sha for deleted
+    const treeItems: Array<{
+      path: string;
+      mode: "100644";
+      type: "blob";
+      sha: string | null;
+    }> = [];
+
+    for (const file of files) {
+      if (file.content === null) {
+        // Deleted file — sha null removes it from the tree
+        treeItems.push({ path: file.path, mode: "100644", type: "blob", sha: null });
+      } else {
+        const { data: blob } = await this.octokit.git.createBlob({
+          owner: repoOwner,
+          repo: repoName,
+          content: file.content,
+          encoding: "base64",
+        });
+        treeItems.push({ path: file.path, mode: "100644", type: "blob", sha: blob.sha });
+      }
+    }
+
+    const { data: tree } = await this.octokit.git.createTree({
+      owner: repoOwner,
+      repo: repoName,
+      base_tree: baseCommit.tree.sha,
+      tree: treeItems,
+    });
+
+    const { data: commit } = await this.octokit.git.createCommit({
+      owner: repoOwner,
+      repo: repoName,
+      message,
+      tree: tree.sha,
+      parents: [baseSha],
+    });
+
+    await this.octokit.git.updateRef({
+      owner: repoOwner,
+      repo: repoName,
+      ref: `heads/${branchName}`,
+      sha: commit.sha,
+    });
+
+    return commit.sha;
+  }
+
   async getFileContent(
     repoOwner: string,
     repoName: string,

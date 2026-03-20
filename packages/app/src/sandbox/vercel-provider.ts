@@ -1,6 +1,6 @@
 import { Sandbox } from "@vercel/sandbox";
 import { createLogger } from "@blazebot/shared";
-import type { SandboxProvider, SandboxOptions, SandboxResult } from "./types.js";
+import type { SandboxProvider, SandboxOptions, SandboxResult, ExtractedChanges } from "./types.js";
 import { parseAgentOutput, sanitizeForLog } from "./parse-output.js";
 
 export interface VercelSandboxConfig {
@@ -55,10 +55,37 @@ export class VercelSandboxProvider implements SandboxProvider {
       const startTime = Date.now();
       logger.info({ sandboxId, branchName: options.branchName }, "vercel_sandbox_created");
 
-      // Write requirements into the sandbox
+      // Write requirements and Claude Code Stop hook that auto-commits changes
+      const claudeSettings = JSON.stringify({
+        hooks: {
+          Stop: [
+            {
+              hooks: [
+                {
+                  type: "command",
+                  command: "git add -A && (git diff --cached --quiet || git commit -m 'Apply agent changes')",
+                },
+              ],
+            },
+          ],
+        },
+      });
+
       await sandbox.writeFiles([
         { path: "requirements.md", content: Buffer.from(options.requirementsMd) },
+        { path: ".claude/settings.json", content: Buffer.from(claudeSettings) },
       ]);
+
+      // Configure git identity and exclude blazebot files from commits
+      await sandbox.runCommand({
+        cmd: "bash",
+        args: ["-c", 'git config user.name "ai-workflow-blazity" && git config user.email "ai-workflow-blazity@users.noreply.github.com" && echo -e "requirements.md\\n.claude/" >> .git/info/exclude'],
+        cwd: "/vercel/sandbox",
+      });
+
+      // Record initial HEAD SHA before agent runs (used as diff base later)
+      const shaResult = await sandbox.runCommand({ cmd: "git", args: ["rev-parse", "HEAD"], cwd: "/vercel/sandbox" });
+      const initialSha = (await shaResult.stdout()).trim();
 
       // Install Claude Code CLI
       const installResult = await sandbox.runCommand("npm", ["install", "-g", "@anthropic-ai/claude-code"]);
@@ -86,8 +113,25 @@ export class VercelSandboxProvider implements SandboxProvider {
       const durationMs = Date.now() - startTime;
       logger.info({ sandboxId, exitCode, durationMs }, "vercel_agent_exited");
 
+      // Commit any uncommitted changes left by the agent (fallback if Stop hook didn't fire)
+      await sandbox.runCommand({
+        cmd: "bash",
+        args: ["-c", "git add -A && (git diff --cached --quiet || git commit -m 'Apply agent changes')"],
+        cwd: "/vercel/sandbox",
+      });
+
+      // Diagnostic: check sandbox state after agent exits
+      const diag = await sandbox.runCommand({
+        cmd: "bash",
+        args: ["-c", "echo '=== git status ===' && git status && echo '=== git log ===' && git log --oneline -5"],
+        cwd: "/vercel/sandbox",
+      });
+      const diagStdout = await diag.stdout();
+      logger.info({ sandboxId, initialSha, diagStdout: diagStdout.slice(0, 1500) }, "vercel_post_agent_diag");
+
       const stdout = await agentResult.stdout();
       const stderr = await agentResult.stderr();
+      logger.info({ sandboxId, stdoutTail: sanitizeForLog(stdout).slice(-800), stderrTail: sanitizeForLog(stderr).slice(-500) }, "vercel_agent_output");
       const output = parseAgentOutput(stdout);
 
       if (!output) {
@@ -103,11 +147,11 @@ export class VercelSandboxProvider implements SandboxProvider {
 
       switch (output.result) {
         case "implemented":
-          return { exitCode, status: "complete", summary: output.summary ?? "", containerId: sandboxId };
+          return { exitCode, status: "complete", summary: output.summary ?? "", containerId: sandboxId, initialSha };
         case "clarification_needed":
-          return { exitCode, status: "clarification_needed", questions: output.questions ?? [], containerId: sandboxId };
+          return { exitCode, status: "clarification_needed", questions: output.questions ?? [], containerId: sandboxId, initialSha };
         default:
-          return { exitCode, status: "failed", error: output.error ?? `Agent returned result: ${output.result}`, containerId: sandboxId };
+          return { exitCode, status: "failed", error: output.error ?? `Agent returned result: ${output.result}`, containerId: sandboxId, initialSha };
       }
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : "Unknown error";
@@ -124,28 +168,56 @@ export class VercelSandboxProvider implements SandboxProvider {
     }
   }
 
-  async pushBranch(handle: string, branchName: string): Promise<{ pushed: boolean; output: string }> {
-    try {
-      const sandbox = await Sandbox.get({ sandboxId: handle });
-      const result = await sandbox.runCommand({
-        cmd: "git",
-        args: ["push", "origin", `HEAD:${branchName}`],
-        cwd: "/vercel/sandbox",
+  async extractChanges(handle: string, initialSha: string): Promise<ExtractedChanges> {
+    const sandbox = await Sandbox.get({ sandboxId: handle });
+
+    // Ensure any uncommitted changes are staged and committed
+    await sandbox.runCommand({ cmd: "git", args: ["add", "-A"], cwd: "/vercel/sandbox" });
+    const statusResult = await sandbox.runCommand({
+      cmd: "git", args: ["status", "--porcelain"], cwd: "/vercel/sandbox",
+    });
+    const statusOutput = await statusResult.stdout();
+    if (statusOutput.trim()) {
+      await sandbox.runCommand({
+        cmd: "git", args: ["commit", "-m", "Apply agent changes"], cwd: "/vercel/sandbox",
       });
-      const stdout = await result.stdout();
-      const stderr = await result.stderr();
-      const output = stdout + stderr;
-      if (result.exitCode !== 0) {
-        logger.warn({ sandboxId: handle, branchName, exitCode: result.exitCode, output: sanitizeForLog(output) }, "vercel_push_failed");
-        return { pushed: false, output: sanitizeForLog(output) };
-      }
-      logger.info({ sandboxId: handle, branchName }, "vercel_branch_pushed");
-      return { pushed: true, output: sanitizeForLog(output) };
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : "Unknown error";
-      logger.warn({ sandboxId: handle, branchName, error: msg }, "vercel_push_failed");
-      return { pushed: false, output: msg };
     }
+
+    // Get list of changed files vs the initial state (using recorded SHA, not origin ref)
+    const diffResult = await sandbox.runCommand({
+      cmd: "git", args: ["diff", "--name-status", initialSha, "HEAD"],
+      cwd: "/vercel/sandbox",
+    });
+    const diffOutput = (await diffResult.stdout()).trim();
+    if (!diffOutput) {
+      logger.info({ sandboxId: handle, initialSha }, "vercel_no_changes_detected");
+      return { files: [], commitMessage: "", hasChanges: false };
+    }
+
+    // Collect commit messages
+    const logResult = await sandbox.runCommand({
+      cmd: "git", args: ["log", "--format=%s", `${initialSha}..HEAD`],
+      cwd: "/vercel/sandbox",
+    });
+    const commitMessage = (await logResult.stdout()).trim();
+
+    // Read each changed file
+    const files: ExtractedChanges["files"] = [];
+    for (const line of diffOutput.split("\n")) {
+      const [status, ...pathParts] = line.split("\t");
+      const filePath = pathParts.join("\t");
+      if (!filePath) continue;
+
+      if (status?.startsWith("D")) {
+        files.push({ path: filePath, content: null });
+      } else {
+        const buf = await sandbox.readFileToBuffer({ path: filePath, cwd: "/vercel/sandbox" });
+        files.push({ path: filePath, content: buf?.toString("base64") ?? null });
+      }
+    }
+
+    logger.info({ sandboxId: handle, initialSha, fileCount: files.length }, "vercel_changes_extracted");
+    return { files, commitMessage, hasChanges: true };
   }
 
   async teardown(handle: string): Promise<void> {

@@ -3,6 +3,7 @@ import type { SandboxProvider, SandboxOptions } from "./types.js";
 
 const mockRunCommand = vi.fn();
 const mockWriteFiles = vi.fn();
+const mockReadFileToBuffer = vi.fn();
 const mockStop = vi.fn();
 const mockSandboxId = "sbx-abc123";
 
@@ -10,6 +11,7 @@ const mockSandbox = {
   sandboxId: mockSandboxId,
   runCommand: mockRunCommand,
   writeFiles: mockWriteFiles,
+  readFileToBuffer: mockReadFileToBuffer,
   stop: mockStop,
   status: "running" as const,
 };
@@ -75,10 +77,14 @@ describe("VercelSandboxProvider", () => {
     mockList.mockResolvedValue({ json: { sandboxes: [], pagination: {} } });
     mockWriteFiles.mockResolvedValue(undefined);
     mockStop.mockResolvedValue(undefined);
-    // Default: install succeeds, agent returns "implemented"
+    // Default: git config, rev-parse, install, agent, post-agent commit, diag
     mockRunCommand
+      .mockResolvedValueOnce(makeCommandResult(0, "", ""))                                             // git config
+      .mockResolvedValueOnce(makeCommandResult(0, "abc123\n", ""))                                     // git rev-parse HEAD
       .mockResolvedValueOnce(makeCommandResult(0, "", ""))                                             // npm install
-      .mockResolvedValueOnce(makeCommandResult(0, makeAgentOutput("implemented", { summary: "Done" }), "")); // claude agent
+      .mockResolvedValueOnce(makeCommandResult(0, makeAgentOutput("implemented", { summary: "Done" }), "")) // claude agent
+      .mockResolvedValueOnce(makeCommandResult(0, "", ""))                                             // post-agent commit
+      .mockResolvedValueOnce(makeCommandResult(0, "=== git status ===\n", ""));                        // diagnostic
   });
 
   it("implements the SandboxProvider interface", async () => {
@@ -86,7 +92,7 @@ describe("VercelSandboxProvider", () => {
     const provider: SandboxProvider = new VercelSandboxProvider({ vcpus: 2 });
     expect(provider).toBeDefined();
     expect(typeof provider.runSandbox).toBe("function");
-    expect(typeof provider.pushBranch).toBe("function");
+    expect(typeof provider.extractChanges).toBe("function");
     expect(typeof provider.teardown).toBe("function");
     expect(typeof provider.cleanupOrphans).toBe("function");
   });
@@ -119,7 +125,7 @@ describe("VercelSandboxProvider", () => {
       );
     });
 
-    it("writes requirements.md into sandbox", async () => {
+    it("writes requirements.md and claude settings into sandbox", async () => {
       const { VercelSandboxProvider } = await import("./vercel-provider.js");
       const provider = new VercelSandboxProvider({});
 
@@ -130,7 +136,17 @@ describe("VercelSandboxProvider", () => {
           path: "requirements.md",
           content: Buffer.from(defaultSandboxOptions.requirementsMd),
         },
+        {
+          path: ".claude/settings.json",
+          content: expect.any(Buffer),
+        },
       ]);
+
+      // Verify settings contain SessionEnd hook
+      const settingsBuffer = mockWriteFiles.mock.calls[0][0][1].content;
+      const settings = JSON.parse(settingsBuffer.toString());
+      expect(settings.hooks.Stop).toBeDefined();
+      expect(settings.hooks.Stop[0].hooks[0].type).toBe("command");
     });
 
     it("installs claude-code CLI", async () => {
@@ -151,10 +167,12 @@ describe("VercelSandboxProvider", () => {
 
       mockRunCommand.mockReset();
       mockRunCommand
-        .mockResolvedValueOnce(makeCommandResult(0, "", ""))
-        .mockResolvedValueOnce(
-          makeCommandResult(0, makeAgentOutput("implemented", { summary: "Implemented dark mode" }), ""),
-        );
+        .mockResolvedValueOnce(makeCommandResult(0, "", ""))  // git config
+        .mockResolvedValueOnce(makeCommandResult(0, "abc123\n", ""))  // git rev-parse
+        .mockResolvedValueOnce(makeCommandResult(0, "", ""))  // npm install
+        .mockResolvedValueOnce(makeCommandResult(0, makeAgentOutput("implemented", { summary: "Implemented dark mode" }), ""))
+        .mockResolvedValueOnce(makeCommandResult(0, "", ""))  // post-agent commit
+        .mockResolvedValueOnce(makeCommandResult(0, "", ""));  // diagnostic
 
       const result = await provider.runSandbox(defaultSandboxOptions);
 
@@ -163,6 +181,7 @@ describe("VercelSandboxProvider", () => {
           status: "complete",
           summary: "Implemented dark mode",
           containerId: mockSandboxId,
+          initialSha: "abc123",
         }),
       );
     });
@@ -173,16 +192,12 @@ describe("VercelSandboxProvider", () => {
 
       mockRunCommand.mockReset();
       mockRunCommand
-        .mockResolvedValueOnce(makeCommandResult(0, "", ""))
-        .mockResolvedValueOnce(
-          makeCommandResult(
-            0,
-            makeAgentOutput("clarification_needed", {
-              questions: ["What color scheme?", "Which framework?"],
-            }),
-            "",
-          ),
-        );
+        .mockResolvedValueOnce(makeCommandResult(0, "", ""))  // git config
+        .mockResolvedValueOnce(makeCommandResult(0, "abc123\n", ""))  // git rev-parse
+        .mockResolvedValueOnce(makeCommandResult(0, "", ""))  // npm install
+        .mockResolvedValueOnce(makeCommandResult(0, makeAgentOutput("clarification_needed", { questions: ["What color scheme?", "Which framework?"] }), ""))
+        .mockResolvedValueOnce(makeCommandResult(0, "", ""))  // post-agent commit
+        .mockResolvedValueOnce(makeCommandResult(0, "", ""));  // diagnostic
 
       const result = await provider.runSandbox(defaultSandboxOptions);
 
@@ -201,10 +216,12 @@ describe("VercelSandboxProvider", () => {
 
       mockRunCommand.mockReset();
       mockRunCommand
-        .mockResolvedValueOnce(makeCommandResult(0, "", ""))
-        .mockResolvedValueOnce(
-          makeCommandResult(1, makeAgentOutput("failed", { error: "Tests failed" }), ""),
-        );
+        .mockResolvedValueOnce(makeCommandResult(0, "", ""))  // git config
+        .mockResolvedValueOnce(makeCommandResult(0, "abc123\n", ""))  // git rev-parse
+        .mockResolvedValueOnce(makeCommandResult(0, "", ""))  // npm install
+        .mockResolvedValueOnce(makeCommandResult(1, makeAgentOutput("failed", { error: "Tests failed" }), ""))
+        .mockResolvedValueOnce(makeCommandResult(0, "", ""))  // post-agent commit
+        .mockResolvedValueOnce(makeCommandResult(0, "", ""));  // diagnostic
 
       const result = await provider.runSandbox(defaultSandboxOptions);
 
@@ -223,8 +240,12 @@ describe("VercelSandboxProvider", () => {
 
       mockRunCommand.mockReset();
       mockRunCommand
-        .mockResolvedValueOnce(makeCommandResult(0, "", ""))
-        .mockResolvedValueOnce(makeCommandResult(1, "some random text", "some error text"));
+        .mockResolvedValueOnce(makeCommandResult(0, "", ""))  // git config
+        .mockResolvedValueOnce(makeCommandResult(0, "abc123\n", ""))  // git rev-parse
+        .mockResolvedValueOnce(makeCommandResult(0, "", ""))  // npm install
+        .mockResolvedValueOnce(makeCommandResult(1, "some random text", "some error text"))
+        .mockResolvedValueOnce(makeCommandResult(0, "", ""))  // post-agent commit
+        .mockResolvedValueOnce(makeCommandResult(0, "", ""));  // diagnostic
 
       const result = await provider.runSandbox(defaultSandboxOptions);
 
@@ -238,9 +259,12 @@ describe("VercelSandboxProvider", () => {
       const provider = new VercelSandboxProvider({});
 
       mockRunCommand.mockReset();
-      mockRunCommand.mockResolvedValueOnce(
-        makeCommandResult(1, "", "npm ERR! install failed"),
-      );
+      mockRunCommand
+        .mockResolvedValueOnce(makeCommandResult(0, "", ""))  // git config
+        .mockResolvedValueOnce(makeCommandResult(0, "abc123\n", ""))  // git rev-parse
+        .mockResolvedValueOnce(
+          makeCommandResult(1, "", "npm ERR! install failed"),
+        );
 
       const result = await provider.runSandbox(defaultSandboxOptions);
 
@@ -281,55 +305,91 @@ describe("VercelSandboxProvider", () => {
     });
   });
 
-  describe("pushBranch", () => {
-    it("runs git push and returns pushed=true on success", async () => {
+  describe("extractChanges", () => {
+    it("extracts changed files from sandbox", async () => {
       const { VercelSandboxProvider } = await import("./vercel-provider.js");
       const provider = new VercelSandboxProvider({});
 
       mockRunCommand.mockReset();
-      mockRunCommand.mockResolvedValueOnce(
-        makeCommandResult(0, "Everything up-to-date", ""),
-      );
+      mockRunCommand
+        .mockResolvedValueOnce(makeCommandResult(0, "", ""))           // git add -A
+        .mockResolvedValueOnce(makeCommandResult(0, "", ""))           // git status --porcelain (clean)
+        .mockResolvedValueOnce(makeCommandResult(0, "A\tsrc/index.ts\nM\tREADME.md\n", "")) // git diff --name-status
+        .mockResolvedValueOnce(makeCommandResult(0, "feat: add feature", ""));               // git log
 
-      const result = await provider.pushBranch(mockSandboxId, "blazebot/feat-1");
+      mockReadFileToBuffer
+        .mockResolvedValueOnce(Buffer.from("console.log('hello');"))
+        .mockResolvedValueOnce(Buffer.from("# Updated"));
+
+      const result = await provider.extractChanges(mockSandboxId, "abc123");
 
       expect(mockGet).toHaveBeenCalledWith({ sandboxId: mockSandboxId });
+      expect(result.hasChanges).toBe(true);
+      expect(result.files).toHaveLength(2);
+      expect(result.files[0]!.path).toBe("src/index.ts");
+      expect(result.files[0]!.content).toBe(Buffer.from("console.log('hello');").toString("base64"));
+      expect(result.commitMessage).toBe("feat: add feature");
+    });
+
+    it("returns hasChanges=false when no diff", async () => {
+      const { VercelSandboxProvider } = await import("./vercel-provider.js");
+      const provider = new VercelSandboxProvider({});
+
+      mockRunCommand.mockReset();
+      mockRunCommand
+        .mockResolvedValueOnce(makeCommandResult(0, "", ""))  // git add -A
+        .mockResolvedValueOnce(makeCommandResult(0, "", ""))  // git status --porcelain
+        .mockResolvedValueOnce(makeCommandResult(0, "", "")); // git diff --name-status (empty)
+
+      const result = await provider.extractChanges(mockSandboxId, "abc123");
+
+      expect(result.hasChanges).toBe(false);
+      expect(result.files).toHaveLength(0);
+    });
+
+    it("handles deleted files with null content", async () => {
+      const { VercelSandboxProvider } = await import("./vercel-provider.js");
+      const provider = new VercelSandboxProvider({});
+
+      mockRunCommand.mockReset();
+      mockRunCommand
+        .mockResolvedValueOnce(makeCommandResult(0, "", ""))
+        .mockResolvedValueOnce(makeCommandResult(0, "", ""))
+        .mockResolvedValueOnce(makeCommandResult(0, "D\told-file.ts\n", ""))
+        .mockResolvedValueOnce(makeCommandResult(0, "chore: remove old file", ""));
+
+      const result = await provider.extractChanges(mockSandboxId, "abc123");
+
+      expect(result.hasChanges).toBe(true);
+      expect(result.files).toHaveLength(1);
+      expect(result.files[0]!.path).toBe("old-file.ts");
+      expect(result.files[0]!.content).toBeNull();
+    });
+
+    it("commits uncommitted changes before extracting", async () => {
+      const { VercelSandboxProvider } = await import("./vercel-provider.js");
+      const provider = new VercelSandboxProvider({});
+
+      mockRunCommand.mockReset();
+      mockRunCommand
+        .mockResolvedValueOnce(makeCommandResult(0, "", ""))                    // git add -A
+        .mockResolvedValueOnce(makeCommandResult(0, "M src/app.ts\n", ""))      // git status --porcelain (dirty)
+        .mockResolvedValueOnce(makeCommandResult(0, "", ""))                    // git commit
+        .mockResolvedValueOnce(makeCommandResult(0, "M\tsrc/app.ts\n", ""))    // git diff --name-status
+        .mockResolvedValueOnce(makeCommandResult(0, "Apply agent changes", "")); // git log
+
+      mockReadFileToBuffer.mockResolvedValueOnce(Buffer.from("updated"));
+
+      const result = await provider.extractChanges(mockSandboxId, "abc123");
+
+      // Verify git commit was called
       expect(mockRunCommand).toHaveBeenCalledWith(
         expect.objectContaining({
           cmd: "git",
-          args: ["push", "origin", "HEAD:blazebot/feat-1"],
-          cwd: "/vercel/sandbox",
+          args: ["commit", "-m", "Apply agent changes"],
         }),
       );
-      expect(result.pushed).toBe(true);
-      expect(result.output).toContain("Everything up-to-date");
-    });
-
-    it("returns pushed=false on non-zero exit code", async () => {
-      const { VercelSandboxProvider } = await import("./vercel-provider.js");
-      const provider = new VercelSandboxProvider({});
-
-      mockRunCommand.mockReset();
-      mockRunCommand.mockResolvedValueOnce(
-        makeCommandResult(128, "", "fatal: remote rejected"),
-      );
-
-      const result = await provider.pushBranch(mockSandboxId, "blazebot/feat-1");
-
-      expect(result.pushed).toBe(false);
-      expect(result.output).toContain("fatal: remote rejected");
-    });
-
-    it("handles exceptions and returns pushed=false", async () => {
-      const { VercelSandboxProvider } = await import("./vercel-provider.js");
-      const provider = new VercelSandboxProvider({});
-
-      mockGet.mockRejectedValueOnce(new Error("Sandbox not found"));
-
-      const result = await provider.pushBranch(mockSandboxId, "blazebot/feat-1");
-
-      expect(result.pushed).toBe(false);
-      expect(result.output).toBe("Sandbox not found");
+      expect(result.hasChanges).toBe(true);
     });
   });
 

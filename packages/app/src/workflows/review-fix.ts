@@ -48,8 +48,8 @@ export async function reviewFixTicket(
     await recordContainerId(runAttemptId, result.containerId);
   }
 
-  if (result.status === "complete" && result.containerId) {
-    await pushAndTeardown(result.containerId, branchName);
+  if (result.status === "complete" && result.containerId && result.initialSha) {
+    await extractAndPush(result.containerId, result.initialSha, branchName, ticketId);
     await finalizeFixSuccess(ticketId, runAttemptId, triggeredBy);
     return;
   }
@@ -154,11 +154,19 @@ async function recordContainerId(runId: string, containerId: string) {
     .where(eq(runAttempts.id, runId));
 }
 
-async function pushAndTeardown(containerId: string, branchName: string) {
+async function extractAndPush(containerId: string, initialSha: string, branchName: string, ticketId: string) {
   "use step";
   const provider = await createProvider();
+  const { github } = createAdapters();
+  const owner = appEnv.GITHUB_REPO_OWNER!;
+  const repo = appEnv.GITHUB_REPO_NAME!;
+
   try {
-    await provider.pushBranch(containerId, branchName);
+    const changes = await provider.extractChanges(containerId, initialSha);
+    if (!changes.hasChanges) return;
+
+    const message = changes.commitMessage || `[${ticketId}] Fix review feedback`;
+    await github.pushChanges(owner, repo, branchName, message, changes.files);
   } finally {
     await provider.teardown(containerId);
   }
