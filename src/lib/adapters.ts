@@ -2,14 +2,17 @@ import { env } from "../../env.js";
 import { JiraAdapter } from "../adapters/issue-tracker/jira.js";
 import { GitHubAdapter } from "../adapters/vcs/github.js";
 import { ChatSDKAdapter } from "../adapters/messaging/chatsdk.js";
+import { UpstashRunRegistry } from "../adapters/run-registry/upstash.js";
 import type { IssueTrackerAdapter } from "../adapters/issue-tracker/types.js";
 import type { VCSAdapter } from "../adapters/vcs/types.js";
 import type { MessagingAdapter } from "../adapters/messaging/types.js";
+import type { RunRegistryAdapter } from "../adapters/run-registry/types.js";
 
 export interface Adapters {
   issueTracker: IssueTrackerAdapter;
   vcs: VCSAdapter;
   messaging: MessagingAdapter;
+  runRegistry: RunRegistryAdapter;
 }
 
 export function createAdapters(): Adapters {
@@ -30,6 +33,10 @@ export function createAdapters(): Adapters {
       slackToken: env.CHAT_SDK_SLACK_TOKEN,
       channelId: env.CHAT_SDK_CHANNEL_ID,
       botName: env.CHAT_SDK_BOT_NAME,
+    }),
+    runRegistry: new UpstashRunRegistry({
+      url: env.AI_WORKFLOW_KV_REST_API_URL,
+      token: env.AI_WORKFLOW_KV_REST_API_TOKEN,
     }),
   };
 }

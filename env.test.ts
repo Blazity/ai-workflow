@@ -25,6 +25,8 @@ describe("env", () => {
     MAX_CONCURRENT_AGENTS: "3",
     JOB_TIMEOUT_MS: "1800000",
     POLL_INTERVAL_MS: "300000",
+    AI_WORKFLOW_KV_REST_API_URL: "https://fake.upstash.io",
+    AI_WORKFLOW_KV_REST_API_TOKEN: "fake-token",
   };
 
   let originalEnv: NodeJS.ProcessEnv;
