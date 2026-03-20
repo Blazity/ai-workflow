@@ -1,0 +1,31 @@
+{
+  "name": "ai-workflow",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "rm -rf .nitro/workflow && nitro dev",
+    "build": "rm -rf .nitro/workflow && NODE_OPTIONS=--max-old-space-size=8192 nitro build",
+    "preview": "nitro preview",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@chat-adapter/slack": "^4.20.2",
+    "@octokit/rest": "^22.0.1",
+    "@t3-oss/env-core": "^0.13.10",
+    "@vercel/sandbox": "^1.8.1",
+    "@workflow/world-postgres": "latest",
+    "chat": "^4.20.2",
+    "h3": "^1",
+    "nitropack": "^2",
+    "pino": "^10.3.1",
+    "workflow": "latest",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@workflow/vitest": "latest",
+    "typescript": "^5.8",
+    "vitest": "^3"
+  }
+}

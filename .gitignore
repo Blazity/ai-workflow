@@ -1,0 +1,11 @@
+node_modules/
+dist/
+.output/
+.nitro/
+.env
+*.local
+.vercel/
+.swc/
+.vercel
+.env*.local
+.workflow-data/

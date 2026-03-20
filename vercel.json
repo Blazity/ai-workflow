@@ -1,0 +1,8 @@
+{
+  "crons": [
+    {
+      "path": "/cron/poll",
+      "schedule": "*/5 * * * *"
+    }
+  ]
+}

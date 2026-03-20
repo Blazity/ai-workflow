@@ -1,22 +1,22 @@
 # Blazebot Service Specification
 
-Status: Draft v1
+Status: Draft v2
 
-Purpose: Define a queue-driven automation service that picks up tickets, implements features
-end-to-end inside isolated Docker containers, and delivers merge-ready pull requests for human
-approval.
+Purpose: Define a workflow-driven automation service that polls an issue tracker for tickets assigned
+to AI, implements features end-to-end inside isolated Vercel Sandboxes, and delivers merge-ready
+pull requests for human approval.
 
 ## 1. Problem Statement
 
-Blazebot is a long-running, queue-driven automation service that watches an issue tracker for
-tickets assigned to AI, implements features end-to-end inside isolated Docker containers, and
-delivers merge-ready pull requests for human approval.
+Blazebot is a workflow-driven automation service that polls an issue tracker for tickets assigned to
+AI, implements features end-to-end inside isolated Vercel Sandboxes, and delivers merge-ready pull
+requests for human approval.
 
 The service solves four operational problems:
 
 - It turns ticket implementation into a fully automated pipeline — from assignment through TDD,
   code review, conflict resolution, and PR delivery — without manual intervention.
-- It isolates agent execution in per-ticket Docker containers so agent commands cannot affect
+- It isolates agent execution in per-ticket Vercel Sandboxes so agent commands cannot affect
   production infrastructure or other tickets.
 - It manages ticket lifecycle directly — moving tickets between columns, posting clarification
   questions, and notifying users — as first-class service behavior.
@@ -35,24 +35,24 @@ Important boundary:
 
 ### 2.1 Goals
 
-- Receive ticket events via webhooks and dispatch work through BullMQ with bounded concurrency.
-- Maintain authoritative orchestration state in Postgres for dispatch, retries, and audit.
-- Recover orchestrator state from service restarts using Postgres as the single source of truth — no
-  filesystem-based recovery needed. Individual agent runs are stateless — each run spins up a fresh
-  container, fetches context from the tracker, and tears down on completion. Postgres recovery applies
-  to the orchestrator knowing which tickets are in-flight and what workflow state to resume from.
-- Spin up isolated Docker containers per ticket with scoped Git permissions.
+- Poll the issue tracker on a configurable interval to discover tickets assigned to AI and dispatch
+  Vercel Workflow runs.
+- Use Vercel Workflows as the durable orchestration layer — workflow state survives failures and
+  restarts automatically. No external persistence needed for MVP.
+- Individual agent runs are stateless — each run spins up a fresh sandbox, fetches context from the
+  tracker, and tears down on completion.
+- Spin up isolated Vercel Sandboxes per ticket with scoped Git permissions.
 - Enforce TDD — integration and e2e tests are required, not optional.
 - Run iterative code review loops (AI review → human feedback → agent fix) until clean.
 - Handle conflict resolution (merge target branch, resolve conflicts, re-review).
 - Manage two ticket transitions directly: move to **AI Review** when implementation passes
   self-review, and move to **Backlog** when clarification is needed.
-- Notify users via messaging adapter (Slack/Teams) when user action is required (e.g., clarification
-  needed, PR ready for review).
-- Support clarification flow — commit work-in-progress, tear down container, post questions on
-  ticket, and resume in a fresh container with full conversation history when answered.
+- Notify users via Chat SDK (Slack/Teams) when user action is required (e.g., clarification needed,
+  PR ready for review).
+- Support clarification flow — commit work-in-progress, tear down sandbox, post questions on
+  ticket, and resume in a fresh sandbox with full conversation history when answered.
 - Support adapter modularity — all external integrations behind isolated interfaces so swapping
-  e.g. Jira → Linear or Slack → Teams is a single-module replacement.
+  e.g. Jira → Linear is a single-module replacement.
 - Design for self-hosting — users provide their own API keys (issue tracker, VCS, messaging, AI
   model) and run the service on their own infrastructure. The project is intended to be open source.
 
@@ -60,132 +60,112 @@ Important boundary:
 
 - Rich multi-tenant control plane or SaaS UI.
 - General-purpose CI/CD or workflow engine.
-- Running agents outside Docker containers (bare-metal execution).
 - Replacing human final approval on PRs.
 - Built-in IDE or code editor.
 - Prescribing a specific dashboard or terminal UI implementation.
+- Webhook-driven event ingestion (polling only for MVP).
 
 ## 3. System Overview
 
 ### 3.1 Main Components
 
-1. **Webhook Receiver** (Fastify)
-   - Receives ticket events from issue tracker (Jira/Linear).
-   - Validates payloads (e.g., HMAC verification).
-   - Delegates to adapter for normalization, enqueues work onto BullMQ.
+1. **Poller** (Vercel Cron)
+   - Runs on a configurable interval (`POLL_INTERVAL_MS`, default 5 min).
+   - Queries the issue tracker for tickets in the AI column.
+   - For each discovered ticket, starts a Vercel Workflow run if one is not already active.
 
 2. **Issue Tracker Adapter**
    - Reads ticket data (description, acceptance criteria, comments, labels).
    - Writes ticket transitions (→ AI Review, → Backlog).
    - Posts clarifying questions as ticket comments.
-   - Parses and validates incoming webhooks into normalized events.
+   - Searches for tickets by column/status (JQL or equivalent).
 
-3. **Messaging Adapter**
-   - Sends status notifications (Slack/Teams).
+3. **Messaging Adapter** (Chat SDK — chat-sdk.dev)
+   - Sends status notifications (Slack/Teams) via Chat SDK.
    - Pings users on clarification requests.
+   - Chat SDK provides a unified interface for Slack and Teams — no per-platform adapter needed.
 
 4. **VCS Adapter**
    - Creates feature branches.
    - Creates pull requests.
+   - Pushes feature branches after agent run completes.
    - Fetches PR comments (liked + human-written).
    - Reports PR conflict status.
 
-5. **Orchestrator**
-   - Decides what action to take based on normalized webhook events and current workflow state.
-   - Enqueues jobs (`implementation`, `fixing_feedback`).
-   - Manages concurrency limits.
-   - Handles stale job protection (cancel on contradicting webhook + verify at job start + polling fallback for missed webhooks and stuck jobs).
+5. **Orchestrator** (Vercel Workflow)
+   - Decides what action to take based on ticket state and existing PR state.
+   - Runs `implementation` and `fixing_feedback` steps as durable workflow steps.
+   - Handles retries with built-in Vercel Workflow retry semantics.
+   - Verifies ticket is still in AI column at workflow start (stale job protection).
 
 6. **Sandbox Manager**
-   - Spins up Docker containers from a pre-built project-specific image.
+   - Provisions Vercel Sandboxes with the project repository.
    - Checks out the repo on the feature branch.
-   - Generates `requirements.md` inside the container with assembled context.
-   - Tears down containers after every run.
+   - Writes `requirements.md` inside the sandbox with assembled context.
+   - Injects Anthropic API key (`ANTHROPIC_API_KEY`) for Claude Code authentication.
+   - Runs sandbox end hook before teardown (see Section 9.4).
+   - Tears down sandboxes after every run.
 
 7. **Agent Runner**
-   - Launches the coding agent (Claude Code / Codex) inside the container via `docker exec`.
+   - Launches the coding agent (Claude Code / Codex) inside the sandbox via the Vercel Sandbox API.
    - Reads structured output (JSON schema enforced) to determine outcome.
    - Enforces timeouts.
 
-8. **Persistence Layer** (Drizzle + Postgres)
-   - Stores ticket orchestration state and run attempts.
-   - Single source of truth for recovery after service restarts.
-   - Strict data boundary: Postgres holds only orchestration state, reporting, and observability
-     data. No ticket content, client code, or confidential data is ever stored — that stays in the
-     issue tracker and VCS as the source of truth.
-
-9. **Logging & Observability**
+8. **Logging & Observability**
    - Structured JSON logs with ticket/run context.
    - Dashboard, metrics, and token tracking deferred.
 
 ### 3.2 Abstraction Layers
 
-1. **Adapter Layer** — Issue tracker, messaging, VCS adapters (all behind interfaces, swappable).
-2. **Orchestration Layer** — Job dispatch, concurrency, retries, ticket state decisions.
-3. **Execution Layer** — Sandbox lifecycle, agent runner, Docker management.
-4. **Persistence Layer** — Postgres state, BullMQ queues.
-5. **Observability Layer** — Logging, metrics, optional dashboard.
+1. **Adapter Layer** — Issue tracker, messaging (Chat SDK), VCS adapters (all behind interfaces,
+   swappable).
+2. **Orchestration Layer** — Vercel Workflows for dispatch, retries, ticket state decisions.
+3. **Execution Layer** — Sandbox lifecycle, agent runner, Vercel Sandbox management.
+4. **Observability Layer** — Logging, metrics, optional dashboard.
 
 ### 3.3 External Dependencies
 
 MVP:
 
 - Issue tracker API (Jira).
-- Messaging API (Slack).
+- Chat SDK (chat-sdk.dev) for Slack/Teams messaging.
 - VCS API (GitHub).
-- Docker engine.
-- Postgres.
-- Redis (for BullMQ).
+- Vercel Workflows (durable orchestration).
+- Vercel Sandbox (isolated agent execution).
+- Anthropic API (Claude Code authentication).
 - Coding agent (Claude Code / Codex).
 
-Deferred: Linear, Teams, GitLab.
+Deferred: Linear, GitLab, Docker (for self-hosted sandbox), Postgres (for audit/reporting).
 
 ## 4. Core Domain Model
 
-### 4.1 Ticket (DB Record — Orchestration State)
+### 4.1 Workflow Run State
 
-Fields:
+For MVP, workflow state lives inside the Vercel Workflow run — no external database. The workflow
+tracks:
 
-- `id` — stable tracker-internal ID.
+- `ticketId` — stable tracker-internal ID.
 - `identifier` — human-readable key (e.g., `PROJ-123`).
-- `state` — last known tracker column/status (updated by webhooks).
-- `workflow_state` — Blazebot's internal lifecycle state (see Section 7).
-- `assignee` — user who triggered the AI run (stored for audit; not used for notifications in MVP).
-- `branch_name` — feature branch for this ticket.
-- `pr_id` — pull request reference (set after PR creation).
-- `current_run_id` — reference to active run attempt. All historical run attempts are persisted and
-  queryable via `RunAttempt.ticket_id` for audit and visibility.
-- `created_at`
-- `updated_at`
+- `workflowState` — Blazebot's internal lifecycle state (see Section 7).
+- `branchName` — feature branch for this ticket.
+- `prId` — pull request reference (set after PR creation).
+- `attemptNumber` — current attempt count for retries.
 
 Ticket content (title, description, acceptance criteria, comments, labels) is always fetched fresh
-from the tracker API — never stored in the database.
+from the tracker API — never stored.
 
 ### 4.2 Run Attempt
 
-One execution attempt for one ticket.
+Run attempts are not persisted to a database for MVP. The Vercel Workflow run itself serves as the
+record of execution. Structured logs capture run events (start, exit code, duration) for
+observability.
 
-Fields:
-
-- `id`
-- `ticket_id` — **indexed** (frequently queried for run history per ticket).
-- `attempt_number` — 1 for first, increments on retry.
-- `type` — `implementation`, `review_fix`, `conflict_resolution`.
-- `status` — `pending`, `preparing_sandbox`, `running`, `succeeded`, `failed`, `timed_out`,
-  `clarification_needed`.
-- `container_id` — Docker container reference.
-- `branch_name`
-- `started_at`
-- `finished_at`
-- `error` — failure reason if any.
-
-Retries are handled natively by BullMQ (exponential backoff, configurable per job type). No custom
-retry entity needed.
+Retries are handled by Vercel Workflow's built-in retry semantics. No custom retry entity needed.
 
 ## 5. Agent Prompt Contract
 
-Prompt files live in the Blazebot service repository and are copied into the Docker container at
-sandbox setup. This keeps prompts easy to edit and version without touching client repos.
+Prompt files live in the Blazebot service repository and are written into the sandbox at setup. This
+keeps prompts easy to edit and version without touching client repos.
 
 - `.blazebot/prompts/implement.md` — initial implementation prompt.
 - `.blazebot/prompts/review-fix.md` — fixing review feedback + resolving merge conflicts.
@@ -207,8 +187,8 @@ Prompt files are:
   instructions from different commenters cause the agent to do the wrong thing. The agent should
   treat the latest `[OVERRIDE]` comment as authoritative over prior conflicting instructions.
 
-When resuming after clarification, `.blazebot/prompts/implement.md` is used again. The Q&A context comes
-from ticket comments (fetched fresh), not from the prompt file.
+When resuming after clarification, `.blazebot/prompts/implement.md` is used again. The Q&A context
+comes from ticket comments (fetched fresh), not from the prompt file.
 
 If a prompt file is missing, the run fails with a clear error.
 
@@ -217,18 +197,19 @@ on labels or complexity) is deferred.
 
 ## 6. Configuration
 
-All runtime config lives in environment variables, validated at startup. Changes require service
-restart. In-flight jobs finish with the config they started with; new jobs pick up new config after
-restart.
+All runtime config lives in environment variables, validated at startup.
 
 Key config groups:
 
-- **Sandbox:** Docker image, concurrency limit (`MAX_CONCURRENT_AGENTS`), job timeout
-  (`JOB_TIMEOUT_MS`).
-- **Issue Tracker:** adapter kind (`ISSUE_TRACKER_KIND`), project key (`JIRA_PROJECT_KEY`), credentials, webhook secrets.
-- **Messaging:** adapter kind (`MESSAGING_KIND`), credentials.
+- **Sandbox:** concurrency limit (`MAX_CONCURRENT_AGENTS`), job timeout (`JOB_TIMEOUT_MS`).
+- **Polling:** interval (`POLL_INTERVAL_MS`).
+- **Issue Tracker:** adapter kind (`ISSUE_TRACKER_KIND`), project key (`JIRA_PROJECT_KEY`),
+  credentials.
+- **Messaging:** Chat SDK credentials (`CHAT_SDK_API_KEY`), channel config.
 - **VCS:** adapter kind (`VCS_KIND`), credentials.
-- **Infrastructure:** Postgres connection, Redis connection.
+- **Agent:** Anthropic API key (`ANTHROPIC_API_KEY`), commit author (`COMMIT_AUTHOR`,
+  default `ai-workflow-blazity`).
+- **Vercel:** API token, team ID.
 
 If required config is missing or invalid, the service fails startup with a clear error.
 
@@ -236,10 +217,10 @@ If required config is missing or invalid, the service fails startup with a clear
 
 ### 7.1 Ticket Workflow States
 
-1. `queued` — webhook received, job enqueued.
+1. `queued` — ticket discovered by poller, workflow started.
 2. `implementing` — agent working on implementation + self-review.
-3. `clarification_pending` — waiting for user answers, container torn down.
-4. `awaiting_review` — PR created, container torn down, waiting for human.
+3. `clarification_pending` — waiting for user answers, sandbox torn down.
+4. `awaiting_review` — PR created, sandbox torn down, waiting for human.
 5. `fixing_feedback` — agent fixing review comments + self-review + conflict resolution + CI.
 6. `completed` — PR ready for human final approval.
 7. `failed` — unrecoverable failure.
@@ -248,8 +229,8 @@ If required config is missing or invalid, the service fails startup with a clear
 
 ```
 queued → implementing                    (sandbox spun up)
-implementing → clarification_pending     (agent needs answers, container torn down)
-implementing → awaiting_review           (PR created, container torn down)
+implementing → clarification_pending     (agent needs answers, sandbox torn down)
+implementing → awaiting_review           (PR created, sandbox torn down)
 implementing → failed                    (unrecoverable error)
 clarification_pending → implementing     (user answers, moves ticket back to AI)
 awaiting_review → fixing_feedback        (human moves ticket to AI In Progress)
@@ -259,46 +240,50 @@ fixing_feedback → failed                 (unrecoverable error)
 any → failed                             (max retries exhausted)
 ```
 
-### 7.3 Container Lifecycle
+### 7.3 Sandbox Lifecycle
 
-Containers are alive only during `implementing` and `fixing_feedback`. Torn down on every other
+Sandboxes are alive only during `implementing` and `fixing_feedback`. Torn down on every other
 transition.
 
 ### 7.4 Retry Strategy
 
-- BullMQ's built-in retry with exponential backoff.
-- Retry config (max attempts, backoff) set per job type in env config.
+- Vercel Workflow's built-in retry with backoff.
+- Retry config (max attempts, backoff) set per workflow step.
 - After max retries exhausted → ticket transitions to `failed`.
 
-## 8. Event Handling and Job Dispatch
+## 8. Ticket Discovery and Job Dispatch
 
-### 8.1 Trigger Events
+### 8.1 Polling
 
-1. **Ticket moved to AI** → check workflow state in DB:
-   - No record → first time, create branch, enqueue `implementation` job.
-   - `clarification_pending` → enqueue `implementation` job (with Q&A context from comments).
-   - `awaiting_review` → check PR for conflicts and comments, enqueue `fixing_feedback` job.
-2. **Ticket moved to terminal state** (Closed/Cancelled) → cancel any queued/active job, tear down
-   container.
+The poller (Vercel Cron) runs every `POLL_INTERVAL_MS` and queries the issue tracker for tickets
+in the AI column. For each discovered ticket:
 
-Blazebot-initiated transitions (not webhook triggers):
-
-- → **AI Review** when PR is ready.
-- → **Backlog** when clarification is needed.
+1. Check if a Vercel Workflow run is already active for this ticket — if so, skip.
+2. Determine run type based on ticket state:
+   - No existing PR → first time, start `implementation` workflow.
+   - Existing PR with review comments → start `fixing_feedback` workflow.
+   - Ticket was previously in clarification (detected via tracker comments/state) → start
+     `implementation` workflow with Q&A context from comments.
 
 ### 8.2 Concurrency Control
 
-- `MAX_CONCURRENT_AGENTS` — global limit on running containers.
-- Jobs wait in BullMQ queue until a slot opens.
+- `MAX_CONCURRENT_AGENTS` — global limit on running sandboxes.
+- Enforced at the workflow level before sandbox spin-up. If at capacity, the ticket is skipped and
+  will be picked up on the next poll cycle.
 
 ### 8.3 Stale Job Protection
 
-- **Layer 1 — Webhook cancellation:** On contradicting webhook (ticket moved out of AI), cancel any pending job in BullMQ.
-- **Layer 2 — Job-start verification:** At job start, fetch current ticket state from tracker — skip if no longer in AI.
-- **Layer 3 — Polling fallback:** A BullMQ repeatable job runs every `POLL_INTERVAL_MS` (default 5 min) performing two checks:
-  - **Missed webhooks:** JQL search against tracker for tickets in AI column, cross-referenced with DB. Tickets not in DB or in `failed` state are enqueued automatically.
-  - **Stuck jobs:** Tickets in `implementing`/`fixing_feedback` past `STUCK_JOB_THRESHOLD_MS` (default `JOB_TIMEOUT_MS × 2`) are recovered — container torn down, run marked `timed_out`, job re-enqueued (respecting `JOB_MAX_RETRIES`).
-- All three layers combined eliminate race conditions, missed webhooks, and silently stuck jobs.
+- **Layer 1 — Workflow-start verification:** At workflow start, fetch current ticket state from
+  tracker — skip if no longer in AI.
+- **Layer 2 — Polling idempotency:** The poller skips tickets that already have an active workflow
+  run, preventing duplicate work.
+
+Webhook-based cancellation and stuck job detection are deferred (see Section 18.2).
+
+Blazebot-initiated transitions (not poll triggers):
+
+- → **AI Review** when PR is ready.
+- → **Backlog** when clarification is needed.
 
 ## 9. Sandbox Management
 
@@ -306,11 +291,13 @@ Blazebot-initiated transitions (not webhook triggers):
 
 For each run, the Sandbox Manager:
 
-1. Creates a Docker container from a pre-built project-specific image (dependencies pre-installed).
+1. Provisions a Vercel Sandbox with the project repository.
 2. Checks out the repo on the feature branch (branch created by orchestrator if first run).
-3. Generates `requirements.md` inside the container with assembled context.
+3. Writes `requirements.md` inside the sandbox with assembled context.
 4. Agent has scoped Git permissions — can only commit locally, no remote operations.
-5. Injects a long-lived Claude Code authentication token into the container for agent API access.
+5. Injects the Anthropic API key (`ANTHROPIC_API_KEY`) into the sandbox for Claude Code
+   authentication.
+6. Configures the commit author to `COMMIT_AUTHOR` env var (default: `ai-workflow-blazity`).
 
 ### 9.2 Context Assembly per Run Type
 
@@ -321,20 +308,33 @@ For each run, the Sandbox Manager:
 
 ### 9.3 Teardown
 
-Container is destroyed after every run — no container survives between workflow states.
+Sandbox is destroyed after every run — no sandbox survives between workflow states.
 
-### 9.4 Safety Invariants
+### 9.4 Sandbox End Hook
+
+Before teardown, the orchestrator runs a sandbox end hook:
+
+1. Execute `git status` inside the sandbox.
+2. If uncommitted changes exist, force the agent to commit or discard them.
+3. This ensures no work is silently lost when a sandbox session ends.
+
+The hook runs regardless of agent exit status (success, failure, clarification). It is the last
+operation before the orchestrator pushes the branch and tears down the sandbox.
+
+### 9.5 Safety Invariants
 
 - Agent Git permissions scoped to its feature branch only.
-- Container is isolated — no access to production infrastructure or other containers.
-- All commits authored as Blazebot.
+- Sandbox is isolated — no access to production infrastructure or other sandboxes.
+- All commits authored as `COMMIT_AUTHOR` (configurable via env var, default:
+  `ai-workflow-blazity`).
 
 ## 10. Agent Runner
 
 ### 10.1 Launch
 
-- Orchestrator runs `docker exec` to launch the coding agent (Claude Code / Codex) inside the
-  container with the assembled prompt.
+- Orchestrator launches the coding agent (Claude Code / Codex) inside the sandbox via the Vercel
+  Sandbox API.
+- Agent authenticates with the Anthropic API using the injected `ANTHROPIC_API_KEY`.
 - Agent stdout is not logged — it may contain client code and confidential ticket data. Only
   anonymized, structured events (start, exit code, duration) are logged.
 - Timeout enforced via config (`JOB_TIMEOUT_MS`).
@@ -353,15 +353,16 @@ Schema:
 - `error` — failure details (when `failed`).
 
 Schema validation is enforced by the agent runtime. If the agent returns invalid output or fails to
-produce structured output, the run is treated as failed and retried via BullMQ.
+produce structured output, the run is treated as failed and retried by the workflow.
 
 ### 10.3 Orchestrator Response to Result
 
-- `implemented` → read summary, create PR (if implementation) or signal done (if fixing_feedback),
-  tear down container.
-- `failed` → read error, retry or transition to `failed`.
-- `clarification_needed` → read questions, post on ticket, move ticket to Backlog, notify user, tear
-  down container.
+- `implemented` → run sandbox end hook, push branch, create PR (if implementation) or signal done
+  (if fixing_feedback), tear down sandbox.
+- `failed` → run sandbox end hook, push branch (preserve WIP), retry or transition to `failed`,
+  tear down sandbox.
+- `clarification_needed` → run sandbox end hook, push branch (preserve WIP), post questions on
+  ticket, move ticket to Backlog, notify user, tear down sandbox.
 
 ### 10.4 Responsibilities Split
 
@@ -377,12 +378,13 @@ Agent (inside sandbox):
 Orchestrator (outside sandbox):
 
 - Creates feature branches (via VCS adapter, before sandbox spin-up).
+- Runs sandbox end hook (force commit/discard uncommitted changes).
 - Pushes feature branch after agent run completes.
 - Creates PRs (via VCS adapter).
 - Moves tickets between columns.
 - Posts clarification questions on ticket.
-- Sends notifications.
-- Tears down containers.
+- Sends notifications via Chat SDK.
+- Tears down sandboxes.
 
 ## 11. Adapter Interfaces
 
@@ -392,8 +394,7 @@ Orchestrator (outside sandbox):
 fetchTicket(id) → TicketContent (title, description, acceptance criteria, comments, labels)
 moveTicket(id, column) → void
 postComment(id, comment) → void
-searchTickets(jql) → string[] (ticket keys matching query)
-parseWebhook(req) → NormalizedEvent
+searchTickets(query) → string[] (ticket keys matching query)
 ```
 
 ### 11.2 VCS Adapter
@@ -401,8 +402,10 @@ parseWebhook(req) → NormalizedEvent
 ```
 createBranch(repo, name, base) → void
 createPR(repo, branch, title, body) → PR
+push(repo, branch) → void
 getPRComments(repo, prId) → liked comments + human comments
 getPRConflictStatus(repo, prId) → boolean
+findPR(repo, branch) → PR | null
 ```
 
 **Empty repository handling:** `createBranch` must handle the case where the target repository has
@@ -414,38 +417,26 @@ commit SHA as the base for branch creation. Low-level Git endpoints (`git.create
 bootstrap them. If the seed commit fails, the error is wrapped with repository context and
 propagated.
 
-### 11.3 Messaging Adapter
+### 11.3 Messaging Adapter (Chat SDK)
 
 ```
-notify(message) → void
+notify(channel, message) → void
 ```
 
-### 11.4 Normalized Webhook Event
+Implemented via Chat SDK (chat-sdk.dev), which provides a unified API for Slack and Teams. The
+adapter wraps Chat SDK — swapping messaging platforms requires only a config change, not a code
+change.
 
-All tracker webhooks normalize to:
+### 11.4 Adapter Registration
 
-```
-{
-  type: "ticket_moved"
-  ticketId: string
-  fromColumn: string
-  toColumn: string
-  triggeredBy: string (user who moved it)
-}
-```
-
-The orchestrator only works with normalized events — never raw webhook payloads.
-
-### 11.5 Adapter Registration
-
-- Active adapters configured via env (`ISSUE_TRACKER_KIND`, `MESSAGING_KIND`, `VCS_KIND`).
-- Each adapter registers its webhook route on startup.
+- Active adapters configured via env (`ISSUE_TRACKER_KIND`, `VCS_KIND`).
+- Messaging is always Chat SDK — platform selection (Slack/Teams) is a Chat SDK config concern.
 - Swapping an adapter is a single-module replacement with no changes to core logic.
 
 ## 12. Context Assembly
 
-The Sandbox Manager builds `requirements.md` inside the container before the agent starts. The
-format is fixed.
+The Sandbox Manager writes `requirements.md` inside the sandbox before the agent starts. The format
+is fixed.
 
 For `implementation` runs:
 
@@ -517,22 +508,23 @@ Every log entry for a ticket-related action includes:
 
 - `ticket_id`
 - `ticket_identifier`
-- `run_attempt_id` (when applicable)
+- `workflow_run_id` (when applicable)
 
 ### 13.2 Key Events to Log
 
 Orchestrator events:
 
-- Webhook received (ticket, event type, triggered by).
-- Job enqueued (ticket, run type).
-- Job started / completed / failed.
+- Ticket discovered by poller (ticket, run type).
+- Workflow started (ticket, run type).
+- Workflow step completed / failed.
 - Ticket state transition (from → to).
-- Container spin-up / teardown.
+- Sandbox spin-up / teardown.
+- Sandbox end hook result (committed / discarded / clean).
 - Retry scheduled (attempt number, reason).
 
 Agent events:
 
-- Agent launched (container ID, run type).
+- Agent launched (sandbox ID, run type).
 - Agent exited (exit code, duration).
 - Clarification requested (no question content — only the event itself).
 
@@ -542,8 +534,7 @@ Adapter events:
 
 - PR created.
 - Comment posted on ticket.
-- Notification sent.
-- Webhook validation failure.
+- Notification sent via Chat SDK.
 
 ### 13.3 Log Format
 
@@ -559,200 +550,183 @@ Structured JSON logs to stdout. Deployment decides where they go (file, log aggr
 
 ### 14.1 Failure Classes
 
-1. **Webhook/Ingestion Failures** — invalid payload, validation failure, tracker API down.
-2. **Sandbox Failures** — Docker container won't start, image pull failure, disk full.
+1. **Polling Failures** — tracker API down, query timeout.
+2. **Sandbox Failures** — Vercel Sandbox won't provision, API error, quota exceeded.
 3. **Agent Failures** — timeout, crash, invalid structured output.
-4. **Adapter Failures** — VCS API down (can't create PR), messaging down (can't notify), tracker
+4. **Adapter Failures** — VCS API down (can't create PR), Chat SDK down (can't notify), tracker
    down (can't move ticket).
-5. **Infrastructure Failures** — Postgres down, Redis down, BullMQ connection lost.
+5. **Infrastructure Failures** — Vercel Workflow service degradation.
 
 ### 14.2 Recovery Behavior
 
 | Failure                               | Recovery                                                        |
 | ------------------------------------- | --------------------------------------------------------------- |
-| Webhook invalid                       | Log and discard, return 400                                     |
-| Tracker API down during context fetch | Retry via BullMQ backoff                                        |
+| Tracker API down during poll          | Next poll cycle retries automatically                           |
+| Tracker API down during context fetch | Retry via Vercel Workflow backoff                                |
 | Empty repository (no commits)         | VCS adapter seeds repo with initial commit, then creates branch |
-| Container won't start                 | Retry via BullMQ backoff                                        |
-| Agent timeout/crash                   | Retry via BullMQ backoff                                        |
-| Agent clarification (exit 2)          | Not a failure — normal flow                                     |
-| Can't create PR                       | Retry via BullMQ backoff                                        |
+| Sandbox won't provision               | Retry via Vercel Workflow backoff                                |
+| Agent timeout/crash                   | Retry via Vercel Workflow backoff                                |
+| Agent clarification                   | Not a failure — normal flow                                     |
+| Can't create PR                       | Retry via Vercel Workflow backoff                                |
 | Can't move ticket                     | Retry, log warning                                              |
 | Can't send notification               | Log warning, don't block workflow                               |
-| Postgres down                         | Service unhealthy, jobs stall until recovery                    |
-| Redis down                            | BullMQ unavailable, service unhealthy                           |
+| Vercel Workflow degradation           | Workflows are durable — resume automatically when service recovers |
 | Max retries exhausted                 | Ticket → `failed`, notify user                                  |
 
 Notifications are best-effort — never block the workflow.
 
-### 14.3 Recovery After Service Restart
+### 14.3 Recovery After Failure
 
-- Postgres is the single source of truth for orchestration state.
-- On restart, BullMQ recovers its job queue from Redis.
-- No filesystem-based recovery needed.
-- Active containers from the previous process may be orphaned — the service should detect and clean
-  up stale containers on startup.
+- Vercel Workflows are inherently durable — workflow state survives failures and restarts
+  automatically.
+- No filesystem-based or database-based recovery needed for MVP.
+- Orphaned sandboxes (from workflow failures) are detected and cleaned up by the poller.
 
 ## 15. Security and Operational Safety
 
 ### 15.1 Sandbox Isolation
 
-- Each agent runs in an isolated Docker container.
-- Agent process runs as a non-root user inside the container with limited filesystem and system-level
-  permissions.
-- No access to production infrastructure or other containers.
+- Each agent runs in an isolated Vercel Sandbox.
+- Sandbox has limited filesystem and system-level permissions.
+- No access to production infrastructure or other sandboxes.
 
 ### 15.2 Git Permission Scoping
 
-- Agent can only commit locally — `git push` is not allowed from inside the container.
+- Agent can only commit locally — `git push` is not allowed from inside the sandbox.
 - Orchestrator pushes the feature branch after the agent run completes.
 - PRs, merges to main, branch deletion are orchestrator-only.
-- Enforced via allowed command list inside the container (no remote Git operations).
-- Claude Code `PreStop` hook: if `git status` shows uncommitted changes, block the agent from
-  finishing and force it to commit or discard. This ensures no work is silently lost.
-- Codex equivalent of the PreStop hook is TBD.
+- Enforced via allowed command list inside the sandbox (no remote Git operations).
+- Sandbox end hook enforces that no uncommitted changes are lost (see Section 9.4).
 
 ### 15.3 Secret Handling
 
-- Tracker API keys, VCS tokens, messaging credentials stored as env vars.
+- Tracker API keys, VCS tokens, Chat SDK credentials stored as env vars.
 - Never logged or exposed to the agent.
-- Agent receives only the scoped Git credentials it needs.
+- Agent receives only the Anthropic API key and scoped Git credentials it needs.
 
 ### 15.4 Network Access
 
-- Agent has full internet access inside the container.
+- Agent has full internet access inside the sandbox.
 - No restrictions on outbound traffic.
-- All outbound network traffic from the container is logged (destination, port, bytes) for
-  visibility. Logs must not capture request/response content — only connection metadata.
+- Network traffic logging capabilities depend on Vercel Sandbox features. MVP logs what is
+  available — connection metadata preferred over request/response content.
 
 ## 16. Reference Algorithms
 
-### 16.1 Webhook Reception
+### 16.1 Poller
 
 ```
-on_webhook(req):
-  event = issueTrackerAdapter.parseWebhook(req)
-  if event.type != "ticket_moved": discard
+on_poll():
+  tickets = issueTrackerAdapter.searchTickets("column = AI")
 
-  if event.toColumn == "AI":
-    ticket = db.findTicket(event.ticketId)
+  for ticket in tickets:
+    if hasActiveWorkflowRun(ticket.id): continue
+    if atConcurrencyLimit(): break
 
-    if ticket is null:
-      // First time — new implementation
-      branch = vcsAdapter.createBranch(repo, branchName, "main")
-      db.createTicket(event.ticketId, state="queued", branch=branch)
-      enqueue("implementation", event.ticketId)
-
-    else if ticket.workflow_state == "clarification_pending":
-      db.updateState(ticket, "queued")
-      enqueue("implementation", event.ticketId)
-
-    else if ticket.workflow_state == "awaiting_review":
-      db.updateState(ticket, "queued")
-      enqueue("fixing_feedback", event.ticketId)
-
-  else if event.toColumn is terminal:
-    cancelActiveJob(event.ticketId)
-    teardownContainer(event.ticketId)
-    db.updateState(ticket, "failed")
+    workflow.start("ticket_workflow", {
+      ticketId: ticket.id,
+      identifier: ticket.identifier
+    })
 ```
 
-### 16.2 Job Execution (Implementation)
+### 16.2 Ticket Workflow (Vercel Workflow)
 
 ```
-process_implementation_job(ticketId):
-  ticket = db.findTicket(ticketId)
+ticket_workflow(input):
+  ticketId = input.ticketId
 
   // Stale job protection
   currentState = issueTrackerAdapter.fetchTicket(ticketId).state
-  if currentState != "AI": skip job
+  if currentState != "AI": return // skip
 
-  db.updateState(ticket, "implementing")
-  run = db.createRunAttempt(ticketId, type="implementation")
+  // Determine run type based on ticket state
+  existingPR = vcsAdapter.findPR(repo, ticketId)
 
+  if existingPR and existingPR.hasReviewComments:
+    run_fixing_feedback(ticketId, existingPR)
+  else:
+    run_implementation(ticketId)
+```
+
+### 16.3 Implementation Step
+
+```
+run_implementation(ticketId):
   ticketContent = issueTrackerAdapter.fetchTicket(ticketId)
+
+  branchName = deriveBranchName(ticketContent.identifier)
+  vcsAdapter.createBranch(repo, branchName, "main")
+
   prompt = readFile(repo, ".blazebot/prompts/implement.md")
   requirementsMd = assembleContext(ticketContent, prompt)
 
-  container = sandboxManager.spinUp(ticket.branch, requirementsMd)
-  db.updateRun(run, container_id=container.id)
+  sandbox = sandboxManager.spinUp(branchName, requirementsMd)
+  output = agentRunner.exec(sandbox, requirementsMd) // returns structured JSON
 
-  output = agentRunner.exec(container, requirementsMd) // returns structured JSON
-
-  sandboxManager.tearDown(container)
+  sandboxManager.runEndHook(sandbox) // force commit/discard uncommitted changes
+  vcsAdapter.push(repo, branchName)
+  sandboxManager.tearDown(sandbox)
 
   if output.result == "implemented":
-    pr = vcsAdapter.createPR(repo, ticket.branch, output.title, output.summary)
+    pr = vcsAdapter.createPR(repo, branchName, output.title, output.summary)
     issueTrackerAdapter.moveTicket(ticketId, "AI Review")
-    db.updateState(ticket, "awaiting_review")
-    messagingAdapter.notify("Task " + ticket.identifier + " PR ready for review")
+    messagingAdapter.notify(channel, "Task " + ticketContent.identifier + " PR ready for review")
 
   else if output.result == "clarification_needed":
     issueTrackerAdapter.postComment(ticketId, output.questions)
     issueTrackerAdapter.moveTicket(ticketId, "Backlog")
-    db.updateState(ticket, "clarification_pending")
-    messagingAdapter.notify("Task " + ticket.identifier + " needs clarification")
+    messagingAdapter.notify(channel, "Task " + ticketContent.identifier + " needs clarification")
 
   else: // "failed" or invalid output
-    db.updateRun(run, status="failed", error=output.error)
-    throw // BullMQ handles retry
+    throw // Vercel Workflow handles retry
 ```
 
-### 16.3 Job Execution (Fixing Feedback)
+### 16.4 Fixing Feedback Step
 
 ```
-process_fixing_feedback_job(ticketId):
-  ticket = db.findTicket(ticketId)
-
-  currentState = issueTrackerAdapter.fetchTicket(ticketId).state
-  if currentState != "AI": skip job
-
-  db.updateState(ticket, "fixing_feedback")
-  run = db.createRunAttempt(ticketId, type="fixing_feedback")
-
+run_fixing_feedback(ticketId, existingPR):
   ticketContent = issueTrackerAdapter.fetchTicket(ticketId)
-  prComments = vcsAdapter.getPRComments(repo, ticket.prId)
-  hasConflicts = vcsAdapter.getPRConflictStatus(repo, ticket.prId)
+  prComments = vcsAdapter.getPRComments(repo, existingPR.id)
+  hasConflicts = vcsAdapter.getPRConflictStatus(repo, existingPR.id)
   prompt = readFile(repo, ".blazebot/prompts/review-fix.md")
   requirementsMd = assembleContext(ticketContent, prComments, hasConflicts, prompt)
 
-  container = sandboxManager.spinUp(ticket.branch, requirementsMd)
-  output = agentRunner.exec(container, requirementsMd) // returns structured JSON
+  sandbox = sandboxManager.spinUp(existingPR.branchName, requirementsMd)
+  output = agentRunner.exec(sandbox, requirementsMd) // returns structured JSON
 
-  sandboxManager.tearDown(container)
+  sandboxManager.runEndHook(sandbox) // force commit/discard uncommitted changes
+  vcsAdapter.push(repo, existingPR.branchName)
+  sandboxManager.tearDown(sandbox)
 
   if output.result == "implemented":
     issueTrackerAdapter.moveTicket(ticketId, "AI Review")
-    db.updateState(ticket, "awaiting_review")
-    messagingAdapter.notify("Task " + ticket.identifier + " fixes applied, ready for re-review")
+    messagingAdapter.notify(channel, "Task " + ticketContent.identifier + " fixes applied, ready for re-review")
 
   else: // "failed" or invalid output
-    db.updateRun(run, status="failed", error=output.error)
-    throw // BullMQ handles retry
+    throw // Vercel Workflow handles retry
 ```
 
 ## 17. Test and Validation Matrix
 
 ### 17.1 Orchestration
 
-- Webhook with ticket moved to AI → enqueues implementation job.
-- Webhook with ticket moved to AI (from `clarification_pending`) → enqueues implementation job.
-- Webhook with ticket moved to AI (from `awaiting_review`) → enqueues fixing_feedback job.
-- Webhook with ticket moved to terminal → cancels active job, tears down container.
-- Stale job protection — job skipped if ticket no longer in AI at start.
-- Contradicting webhook cancels pending job in queue.
+- Poller discovers ticket in AI column → starts workflow, runs implementation.
+- Poller discovers ticket in AI column (with prior clarification) → starts workflow, runs
+  implementation with Q&A context.
+- Poller discovers ticket in AI column (with existing PR + review comments) → starts workflow, runs
+  fixing_feedback.
+- Stale job protection — workflow skipped if ticket no longer in AI at start.
 - Max retries exhausted → ticket transitions to `failed`, user notified.
-- Concurrency limit respected — jobs wait in queue when at capacity.
-- Polling fallback — discovers tickets in AI column missed by webhooks.
-- Polling fallback — detects stuck jobs past threshold, tears down container, re-enqueues or fails.
-- Polling fallback — skips tickets already queued/implementing/fixing_feedback (idempotent).
-- Polling fallback — respects retry limits on stuck job recovery.
+- Poller skips tickets with active workflow runs (idempotent).
+- Concurrency limit respected — tickets skipped when at capacity.
 
 ### 17.2 Sandbox Management
 
-- Container spun up with correct branch and `requirements.md`.
-- Container torn down after every run (success, failure, clarification).
+- Sandbox provisioned with correct branch and `requirements.md`.
+- Sandbox torn down after every run (success, failure, clarification).
 - Git permissions scoped to feature branch only.
+- Sandbox end hook runs before teardown — uncommitted changes committed or discarded.
+- Commit author matches `COMMIT_AUTHOR` env var.
 
 ### 17.3 Agent Runner
 
@@ -765,12 +739,11 @@ process_fixing_feedback_job(ticketId):
 ### 17.4 Adapter Interfaces
 
 - Each adapter implementation satisfies its interface contract.
-- Webhook parsing returns normalized events.
-- Invalid webhooks return 400, don't enqueue work.
 - Adapter failures trigger retries (except notifications — best effort).
 - VCS `createBranch` on empty repo (409) → seeds repo with initial commit, then creates branch.
 - VCS `createBranch` on empty repo with seed failure → wraps error with repository context.
 - VCS `createBranch` non-409 errors from `getRef` → propagated unchanged.
+- Chat SDK notifications delivered to correct channel for Slack and Teams.
 
 ### 17.5 Context Assembly
 
@@ -782,42 +755,46 @@ process_fixing_feedback_job(ticketId):
 
 - All transitions from Section 7.2 are tested.
 - No invalid transitions possible.
-- Recovery from restart — Postgres state drives correct behavior.
 
 ### 17.7 Integration (Recommended)
 
-- End-to-end: ticket moved to AI → implementation → PR created → review fix → completed.
+- End-to-end: ticket in AI column → implementation → PR created → review fix → completed.
 - Clarification flow: implementation → clarification → resume → PR created.
-- Real tracker webhook validation with credentials.
 
 ## 18. Implementation Checklist
 
 ### 18.1 Required for MVP
 
-- [ ] Webhook receiver with HMAC validation.
+- [ ] Poller — Vercel Cron that queries issue tracker and dispatches workflow runs.
 - [ ] Issue Tracker adapter (Jira first).
 - [ ] VCS adapter (GitHub).
-- [ ] Messaging adapter (Slack).
-- [ ] Orchestrator — webhook → dispatch logic with workflow state machine.
-- [ ] BullMQ job processing for `implementation` and `fixing_feedback`.
-- [ ] Sandbox Manager — Docker container lifecycle.
-- [ ] Agent Runner — `docker exec`, structured output parsing, schema validation.
+- [ ] Messaging adapter (Chat SDK — chat-sdk.dev — for Slack/Teams).
+- [ ] Orchestrator — Vercel Workflow with polling → dispatch logic and workflow state machine.
+- [ ] Vercel Workflow steps for `implementation` and `fixing_feedback`.
+- [ ] Sandbox Manager — Vercel Sandbox lifecycle (provision, exec, teardown).
+- [ ] Sandbox end hook — detect uncommitted changes, force commit or discard.
+- [ ] Agent Runner — Vercel Sandbox API execution, structured output parsing, schema validation.
+- [ ] Agent authentication via Anthropic API key (`ANTHROPIC_API_KEY`).
 - [ ] Context assembly — `requirements.md` generation.
-- [ ] Persistence — Postgres schema for tickets and run attempts.
-- [ ] Stale job protection (cancel on contradicting webhook + verify at job start + polling fallback).
+- [ ] Stale job protection (verify at workflow start + polling idempotency).
 - [ ] Concurrency control via `MAX_CONCURRENT_AGENTS`.
+- [ ] Configurable commit author via `COMMIT_AUTHOR` env var.
 - [ ] Structured JSON logging with ticket/run context.
 - [ ] Prompt files — `.blazebot/prompts/implement.md` and `.blazebot/prompts/review-fix.md`.
 
 ### 18.2 Deferred
 
+- [ ] Ticket cancellation flow (cancel active workflows when ticket moved to terminal state).
+- [ ] Webhook-driven event ingestion (complement polling with real-time webhooks).
+- [ ] Stuck job detection and recovery.
+- [ ] Persistence layer (Postgres) for audit trail, run history, and reporting.
+- [ ] Docker sandbox provider (for self-hosted deployments without Vercel).
 - [ ] Model routing (per-ticket model selection).
 - [ ] Hot config reload.
 - [ ] Token usage tracking.
 - [ ] Admin panel / dashboard (scope TBD — open question around exposing cost data to clients).
 - [ ] Metrics / alerting.
 - [ ] Additional tracker adapters (Linear, Asana).
-- [ ] Additional messaging adapters (Teams).
 - [ ] Additional VCS adapters (GitLab).
 - [ ] Per-user notifications (requires Jira→Slack user mapping).
 - [ ] Per-ticket token/cost limit — kill agent run when token budget exceeded.
@@ -834,7 +811,7 @@ process_fixing_feedback_job(ticketId):
 - [ ] Self-improvement feedback loop — agents report feedback to a shared endpoint, stored in
       Postgres. PR review comments and corrections are captured so agents don't repeat the same
       mistakes across runs.
-- [ ] Network egress controls — web searches from containers can leak sensitive data. MVP logs
+- [ ] Network egress controls — web searches from sandboxes can leak sensitive data. MVP logs
       connection metadata only. Future: evaluate allowlists, proxy, or content filtering for outbound
       traffic.
 - [ ] Tool support (Figma, Notion, attachments) — structured access to rich ticket content
