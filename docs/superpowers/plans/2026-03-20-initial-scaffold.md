@@ -207,7 +207,7 @@ CHAT_SDK_BOT_NAME=blazebot
 
 # Agent
 ANTHROPIC_API_KEY=sk-ant-xxxxxxxxxxxx
-CLAUDE_MODEL=claude-sonnet-4-20250514
+CLAUDE_MODEL=claude-opus-4-6
 COMMIT_AUTHOR=ai-workflow-blazity
 COMMIT_EMAIL=ai-workflow@blazity.com
 
@@ -290,7 +290,7 @@ describe("env", () => {
     CHAT_SDK_CHANNEL_ID: "C123",
     CHAT_SDK_BOT_NAME: "blazebot",
     ANTHROPIC_API_KEY: "sk-ant-test",
-    CLAUDE_MODEL: "claude-sonnet-4-20250514",
+    CLAUDE_MODEL: "claude-opus-4-6",
     COMMIT_AUTHOR: "ai-workflow-blazity",
     COMMIT_EMAIL: "bot@blazity.com",
     MAX_CONCURRENT_AGENTS: "3",
@@ -375,7 +375,7 @@ const envSchema = z.object({
 
   // Agent
   ANTHROPIC_API_KEY: z.string().min(1),
-  CLAUDE_MODEL: z.string().default("claude-sonnet-4-20250514"),
+  CLAUDE_MODEL: z.string().default("claude-opus-4-6"),
   COMMIT_AUTHOR: z.string().default("ai-workflow-blazity"),
   COMMIT_EMAIL: z.string().default("ai-workflow@blazity.com"),
 
@@ -1670,7 +1670,7 @@ describe("SandboxManager", () => {
       owner: "test-org",
       repo: "test-repo",
       anthropicApiKey: "sk-ant-test",
-      claudeModel: "claude-sonnet-4-20250514",
+      claudeModel: "claude-opus-4-6",
       commitAuthor: "ai-workflow-blazity",
       commitEmail: "bot@blazity.com",
       jobTimeoutMs: 1_800_000,
@@ -1701,7 +1701,7 @@ describe("SandboxManager", () => {
       owner: "test-org",
       repo: "test-repo",
       anthropicApiKey: "sk-ant-test",
-      claudeModel: "claude-sonnet-4-20250514",
+      claudeModel: "claude-opus-4-6",
       commitAuthor: "ai-workflow-blazity",
       commitEmail: "bot@blazity.com",
       jobTimeoutMs: 1_800_000,
@@ -1727,7 +1727,7 @@ describe("SandboxManager", () => {
       owner: "test-org",
       repo: "test-repo",
       anthropicApiKey: "sk-ant-test",
-      claudeModel: "claude-sonnet-4-20250514",
+      claudeModel: "claude-opus-4-6",
       commitAuthor: "ai-workflow-blazity",
       commitEmail: "bot@blazity.com",
       jobTimeoutMs: 1_800_000,

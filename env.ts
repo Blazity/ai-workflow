@@ -27,7 +27,7 @@ export const env = createEnv({
 
     // Agent
     ANTHROPIC_API_KEY: z.string().min(1),
-    CLAUDE_MODEL: z.string().default("claude-sonnet-4-20250514"),
+    CLAUDE_MODEL: z.string().default("claude-opus-4-6"),
     COMMIT_AUTHOR: z.string().default("ai-workflow-blazity"),
     COMMIT_EMAIL: z.string().default("ai-workflow@blazity.com"),
 
