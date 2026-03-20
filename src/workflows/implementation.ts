@@ -138,6 +138,13 @@ async function postClarificationAndMoveBack(
   await issueTracker.moveTicket(ticketId, backlogColumn);
 }
 
+async function unregisterRun(ticketIdentifier: string) {
+  "use step";
+  const { createStepAdapters } = await import("../lib/step-adapters.js");
+  const { runRegistry } = createStepAdapters();
+  await runRegistry.unregister(ticketIdentifier);
+}
+
 // --- Workflow (durable orchestration — no I/O directly here) ---
 
 export async function implementationWorkflow(ticketId: string) {
@@ -161,6 +168,7 @@ export async function implementationWorkflow(ticketId: string) {
     await createPullRequest(branchName, ticket.title, output.summary ?? "");
     await moveTicket(ticketId, env.COLUMN_AI_REVIEW);
     await notifySlack(`Task ${ticket.identifier} PR ready for review`);
+    await unregisterRun(ticket.identifier);
     return;
   }
 
@@ -172,8 +180,10 @@ export async function implementationWorkflow(ticketId: string) {
       env.COLUMN_BACKLOG,
     );
     await notifySlack(`Task ${ticket.identifier} needs clarification`);
+    await unregisterRun(ticket.identifier);
     return;
   }
 
+  await unregisterRun(ticket.identifier);
   throw new Error(`Agent failed for ${ticketId}: ${output.error}`);
 }

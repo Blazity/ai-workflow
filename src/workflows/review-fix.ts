@@ -124,6 +124,13 @@ async function notifySlack(message: string) {
   await messaging.notify(message);
 }
 
+async function unregisterRun(ticketIdentifier: string) {
+  "use step";
+  const { createStepAdapters } = await import("../lib/step-adapters.js");
+  const { runRegistry } = createStepAdapters();
+  await runRegistry.unregister(ticketIdentifier);
+}
+
 // --- Workflow ---
 
 export async function reviewFixWorkflow(
@@ -152,8 +159,10 @@ export async function reviewFixWorkflow(
   if (output.result === "implemented") {
     await moveTicket(ticketId, env.COLUMN_AI_REVIEW);
     await notifySlack(`Task ${ticket.identifier} fixes applied, ready for re-review`);
+    await unregisterRun(ticket.identifier);
     return;
   }
 
+  await unregisterRun(ticket.identifier);
   throw new Error(`Agent failed for ${ticketId}: ${output.error}`);
 }
