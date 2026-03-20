@@ -30,6 +30,9 @@ async function cancelStaleRuns() {
 }
 
 export default definePlugin(async () => {
+  // Skip in serverless — only run inside the long-lived sandbox
+  if (process.env.SERVERLESS) return;
+
   await cancelStaleRuns();
   await start(maintenanceLoop, []);
   logger.info("maintenance_loop_started");
