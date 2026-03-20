@@ -15,7 +15,6 @@
     "@octokit/rest": "^22.0.1",
     "@t3-oss/env-core": "^0.13.10",
     "@vercel/sandbox": "^1.8.1",
-    "@workflow/world-postgres": "latest",
     "chat": "^4.20.2",
     "h3": "^1",
     "nitropack": "^2",
@@ -25,6 +24,7 @@
   },
   "devDependencies": {
     "@workflow/vitest": "latest",
+    "@workflow/world-postgres": "latest",
     "typescript": "^5.8",
     "vitest": "^3"
   }
