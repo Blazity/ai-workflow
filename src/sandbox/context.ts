@@ -1,6 +1,7 @@
 import type { PRComment } from "../adapters/vcs/types.js";
 
 interface TicketData {
+  identifier: string;
   title: string;
   description: string;
   acceptanceCriteria: string;
@@ -25,6 +26,10 @@ export function assembleImplementationContext(
   const { ticket, prompt } = input;
 
   return `# Requirements
+
+## Ticket ID
+
+${ticket.identifier}
 
 ## Ticket
 
@@ -54,6 +59,10 @@ export function assembleFixingFeedbackContext(
   const { ticket, prompt, prComments, hasConflicts } = input;
 
   return `# Requirements
+
+## Ticket ID
+
+${ticket.identifier}
 
 ## Ticket
 

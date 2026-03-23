@@ -5,6 +5,7 @@ describe("assembleImplementationContext", () => {
   it("assembles requirements.md for implementation", () => {
     const result = assembleImplementationContext({
       ticket: {
+        identifier: "TEST-1",
         title: "Add login page",
         description: "Build a login page with OAuth",
         acceptanceCriteria: "- User can log in\n- User can log out",
@@ -16,6 +17,9 @@ describe("assembleImplementationContext", () => {
     });
 
     expect(result).toContain("# Requirements");
+    expect(result).toContain("## Ticket ID");
+    expect(result).toContain("TEST-1");
+    expect(result.indexOf("## Ticket ID")).toBeLessThan(result.indexOf("## Ticket\n"));
     expect(result).toContain("Add login page");
     expect(result).toContain("Build a login page with OAuth");
     expect(result).toContain("User can log in");
@@ -28,6 +32,7 @@ describe("assembleFixingFeedbackContext", () => {
   it("assembles requirements.md for fixing feedback", () => {
     const result = assembleFixingFeedbackContext({
       ticket: {
+        identifier: "TEST-2",
         title: "Add login page",
         description: "Build a login page",
         acceptanceCriteria: "",
@@ -41,6 +46,9 @@ describe("assembleFixingFeedbackContext", () => {
     });
 
     expect(result).toContain("# Requirements");
+    expect(result).toContain("## Ticket ID");
+    expect(result).toContain("TEST-2");
+    expect(result.indexOf("## Ticket ID")).toBeLessThan(result.indexOf("## Ticket\n"));
     expect(result).toContain("## PR Review Feedback");
     expect(result).toContain("Fix the typo on line 5");
     expect(result).toContain("## Merge Conflicts");

@@ -31,6 +31,7 @@ async function assembleImplementationRequirements(ticket: TicketContent) {
   const prompt = env.IMPLEMENTATION_PROMPT ?? "";
   return assembleImplementationContext({
     ticket: {
+      identifier: ticket.identifier,
       title: ticket.title,
       description: ticket.description,
       acceptanceCriteria: ticket.acceptanceCriteria,

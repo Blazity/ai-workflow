@@ -41,6 +41,7 @@ async function assembleReviewFixRequirements(
   const prompt = env.REVIEW_FIX_PROMPT ?? "";
   return assembleFixingFeedbackContext({
     ticket: {
+      identifier: ticket.identifier,
       title: ticket.title,
       description: ticket.description,
       acceptanceCriteria: ticket.acceptanceCriteria,
