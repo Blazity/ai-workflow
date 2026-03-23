@@ -1,8 +1,8 @@
 {
   "crons": [
     {
-      "path": "/cron/poll",
-      "schedule": "* * * * *"
+      "path": "/poll/start",
+      "schedule": "*/15 * * * *"
     }
   ]
 }

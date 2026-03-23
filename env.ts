@@ -38,13 +38,13 @@ export const env = createEnv({
     // Polling
     POLL_INTERVAL_MS: z.coerce.number().int().positive().default(300_000),
 
+    // Cron
+    CRON_SECRET: z.string().min(1).optional(),
+
     // Vercel (optional — auto via OIDC on Vercel)
     VERCEL_TOKEN: z.string().min(1).optional(),
     VERCEL_TEAM_ID: z.string().min(1).optional(),
     VERCEL_PROJECT_ID: z.string().min(1).optional(),
-
-    // Cron
-    CRON_SECRET: z.string().min(1).optional(),
 
     // Redis (run registry)
     AI_WORKFLOW_KV_REST_API_URL: z.string().url(),
