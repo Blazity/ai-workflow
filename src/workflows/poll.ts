@@ -1,9 +1,22 @@
 import { sleep } from "workflow";
 
-async function pollAndDispatch(): Promise<{
-  ticketKeys: string[];
-  started: number;
-}> {
+async function discoverTickets(): Promise<string[]> {
+  "use step";
+  const { env } = await import("../../env.js");
+  const { createStepAdapters } = await import("../lib/step-adapters.js");
+  const { logger } = await import("../lib/logger.js");
+
+  const { issueTracker } = createStepAdapters();
+
+  const jql = `project = ${env.JIRA_PROJECT_KEY} AND status = "${env.COLUMN_AI}"`;
+  const ticketKeys = await issueTracker.searchTickets(jql);
+
+  logger.info({ ticketCount: ticketKeys.length }, "poll_discovered_tickets");
+
+  return ticketKeys;
+}
+
+async function dispatchTickets(ticketKeys: string[]): Promise<number> {
   "use step";
   const { env } = await import("../../env.js");
   const { createStepAdapters } = await import("../lib/step-adapters.js");
@@ -15,17 +28,19 @@ async function pollAndDispatch(): Promise<{
 
   const { issueTracker, vcs, runRegistry } = createStepAdapters();
 
-  const jql = `project = ${env.JIRA_PROJECT_KEY} AND status = "${env.COLUMN_AI}"`;
-  const ticketKeys = await issueTracker.searchTickets(jql);
-
-  logger.info({ ticketCount: ticketKeys.length }, "poll_discovered_tickets");
-
   let activeSandboxes = 0;
   try {
-    const { json } = await Sandbox.list({ limit: 100 });
-    activeSandboxes = json.sandboxes.filter(
-      (s: any) => s.status === "running",
-    ).length;
+    let nextCursor: number | null = null;
+    do {
+      const { json } = await Sandbox.list({
+        limit: 100,
+        ...(nextCursor != null ? { until: nextCursor } : {}),
+      });
+      activeSandboxes += json.sandboxes.filter(
+        (s: any) => s.status === "running",
+      ).length;
+      nextCursor = json.pagination.next;
+    } while (nextCursor != null);
   } catch {
     // If we can't check, assume 0 and let sandbox provisioning fail if truly at capacity
   }
@@ -39,7 +54,7 @@ async function pollAndDispatch(): Promise<{
       { active: activeSandboxes, max: env.MAX_CONCURRENT_AGENTS },
       "poll_at_capacity",
     );
-    return { ticketKeys, started: 0 };
+    return 0;
   }
 
   const started: string[] = [];
@@ -92,7 +107,7 @@ async function pollAndDispatch(): Promise<{
     }
   }
 
-  return { ticketKeys, started: started.length };
+  return started.length;
 }
 
 async function reconcileRegistry(
@@ -156,7 +171,8 @@ export async function pollWorkflow() {
   const { env } = await import("../../env.js");
 
   while (true) {
-    const { ticketKeys } = await pollAndDispatch();
+    const ticketKeys = await discoverTickets();
+    await dispatchTickets(ticketKeys);
     await reconcileRegistry(ticketKeys);
     await sleep(env.POLL_INTERVAL_MS);
   }

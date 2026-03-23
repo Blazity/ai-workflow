@@ -6,6 +6,13 @@ import { pollWorkflow } from "../../workflows/poll.js";
 import { logger } from "../../lib/logger.js";
 
 const POLL_WORKFLOW_KEY = "blazebot:poll-workflow";
+const LOCK_KEY = "blazebot:poll-workflow:lock";
+const LOCK_TTL_S = 30;
+
+const redis = new Redis({
+  url: env.AI_WORKFLOW_KV_REST_API_URL,
+  token: env.AI_WORKFLOW_KV_REST_API_TOKEN,
+});
 
 export default defineEventHandler(async (event) => {
   if (env.CRON_SECRET) {
@@ -14,11 +21,6 @@ export default defineEventHandler(async (event) => {
       throw createError({ statusCode: 401, statusMessage: "Unauthorized" });
     }
   }
-
-  const redis = new Redis({
-    url: env.AI_WORKFLOW_KV_REST_API_URL,
-    token: env.AI_WORKFLOW_KV_REST_API_TOKEN,
-  });
 
   const existingRunId = await redis.get<string>(POLL_WORKFLOW_KEY);
 
@@ -34,8 +36,33 @@ export default defineEventHandler(async (event) => {
     }
   }
 
-  const handle = await start(pollWorkflow);
-  await redis.set(POLL_WORKFLOW_KEY, handle.runId);
-  logger.info({ runId: handle.runId }, "poll_workflow_started");
-  return { status: "started", runId: handle.runId };
+  const acquired = await redis.set(LOCK_KEY, "1", { nx: true, ex: LOCK_TTL_S });
+  if (!acquired) {
+    return {
+      status: "lock_contention",
+      message: "Another start request is in progress",
+    };
+  }
+
+  try {
+    const recheckRunId = await redis.get<string>(POLL_WORKFLOW_KEY);
+    if (recheckRunId) {
+      try {
+        const run = getRun(recheckRunId);
+        const status = await run.status;
+        if (status === "running") {
+          return { status: "already_running", runId: recheckRunId };
+        }
+      } catch {
+        // Fall through to start
+      }
+    }
+
+    const handle = await start(pollWorkflow);
+    await redis.set(POLL_WORKFLOW_KEY, handle.runId);
+    logger.info({ runId: handle.runId }, "poll_workflow_started");
+    return { status: "started", runId: handle.runId };
+  } finally {
+    await redis.del(LOCK_KEY);
+  }
 });

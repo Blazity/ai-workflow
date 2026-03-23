@@ -70,10 +70,11 @@ Important boundary:
 ### 3.1 Main Components
 
 1. **Poller** (Vercel Workflow with sleep)
-   - Runs as a long-lived Vercel Workflow that sleeps between poll cycles (`POLL_SLEEP_DURATION`, default 15s).
+   - Runs as a long-lived Vercel Workflow that sleeps between poll cycles (`POLL_INTERVAL_MS`, default 15s).
    - Queries the issue tracker for tickets in the AI column.
    - For each discovered ticket, starts a Vercel Workflow run if one is not already active.
-   - Started via `GET /poll/start` route which ensures singleton operation.
+   - Started via `GET /poll/start` route which ensures singleton operation. Vercel Cron hits this
+     route every 15 minutes as a liveness check — if the workflow died, the route restarts it.
 
 2. **Issue Tracker Adapter**
    - Reads ticket data (description, acceptance criteria, comments, labels).
@@ -203,7 +204,7 @@ All runtime config lives in environment variables, validated at startup.
 Key config groups:
 
 - **Sandbox:** concurrency limit (`MAX_CONCURRENT_AGENTS`), job timeout (`JOB_TIMEOUT_MS`).
-- **Polling:** sleep duration between cycles (`POLL_SLEEP_DURATION`).
+- **Polling:** interval between cycles (`POLL_INTERVAL_MS`, default 15s).
 - **Issue Tracker:** adapter kind (`ISSUE_TRACKER_KIND`), project key (`JIRA_PROJECT_KEY`),
   credentials.
 - **Messaging:** Chat SDK credentials (`CHAT_SDK_API_KEY`), channel config.
@@ -256,7 +257,7 @@ transition.
 
 ### 8.1 Polling
 
-The poller runs as a long-lived Vercel Workflow that sleeps `POLL_SLEEP_DURATION` (default 15s)
+The poller runs as a long-lived Vercel Workflow that sleeps `POLL_INTERVAL_MS` (default 15s)
 between cycles and queries the issue tracker for tickets in the AI column. For each discovered ticket:
 
 1. Check if a Vercel Workflow run is already active for this ticket — if so, skip.
@@ -619,19 +620,19 @@ Notifications are best-effort — never block the workflow.
 ```
 poll_workflow():
   while true:
-    tickets = issueTrackerAdapter.searchTickets("column = AI")
+    ticketKeys = issueTrackerAdapter.searchTickets("column = AI")
 
-    for ticket in tickets:
-      if hasActiveWorkflowRun(ticket.id): continue
+    for key in ticketKeys:
+      if hasActiveWorkflowRun(key): continue
       if atConcurrencyLimit(): break
 
       workflow.start("ticket_workflow", {
-        ticketId: ticket.id,
-        identifier: ticket.identifier
+        ticketId: key,
+        identifier: key
       })
 
-    reconcileRegistry(tickets)
-    sleep(POLL_SLEEP_DURATION)
+    reconcileRegistry(ticketKeys)
+    sleep(POLL_INTERVAL_MS)
 ```
 
 ### 16.2 Ticket Workflow (Vercel Workflow)

@@ -1,16 +1,18 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-const mockRedis = {
-  get: vi.fn(),
-  set: vi.fn(),
-};
+const { mockRedis, mockStart, mockGetRun } = vi.hoisted(() => ({
+  mockRedis: {
+    get: vi.fn(),
+    set: vi.fn(),
+    del: vi.fn(),
+  },
+  mockStart: vi.fn(),
+  mockGetRun: vi.fn(),
+}));
 
 vi.mock("@upstash/redis", () => ({
   Redis: vi.fn(() => mockRedis),
 }));
-
-const mockStart = vi.fn();
-const mockGetRun = vi.fn();
 
 vi.mock("workflow/api", () => ({
   start: (...args: any[]) => mockStart(...args),
@@ -33,6 +35,7 @@ vi.mock("../../lib/logger.js", () => ({
 }));
 
 import handler from "./start.get.js";
+import { env } from "../../../env.js";
 
 const handle =
   typeof handler === "function" ? handler : (handler as any).handler;
@@ -43,13 +46,18 @@ describe("GET /poll/start", () => {
   });
 
   it("starts a new workflow when none exists", async () => {
-    mockRedis.get.mockResolvedValueOnce(null);
+    mockRedis.get.mockResolvedValueOnce(null).mockResolvedValueOnce(null);
+    mockRedis.set.mockResolvedValueOnce("OK").mockResolvedValueOnce("OK");
     mockStart.mockResolvedValueOnce({ runId: "run_new" });
 
     const result = await handle({} as any);
 
     expect(result).toEqual({ status: "started", runId: "run_new" });
-    expect(mockRedis.set).toHaveBeenCalledWith("blazebot:poll-workflow", "run_new");
+    expect(mockRedis.set).toHaveBeenCalledWith(
+      "blazebot:poll-workflow",
+      "run_new",
+    );
+    expect(mockRedis.del).toHaveBeenCalledWith("blazebot:poll-workflow:lock");
   });
 
   it("returns already_running when workflow is active", async () => {
@@ -58,27 +66,85 @@ describe("GET /poll/start", () => {
 
     const result = await handle({} as any);
 
-    expect(result).toEqual({ status: "already_running", runId: "run_existing" });
+    expect(result).toEqual({
+      status: "already_running",
+      runId: "run_existing",
+    });
     expect(mockStart).not.toHaveBeenCalled();
   });
 
   it("starts a new workflow when existing one is dead", async () => {
-    mockRedis.get.mockResolvedValueOnce("run_dead");
+    mockRedis.get.mockResolvedValueOnce("run_dead").mockResolvedValueOnce(null);
     mockGetRun.mockReturnValueOnce({ status: Promise.resolve("completed") });
+    mockRedis.set.mockResolvedValueOnce("OK").mockResolvedValueOnce("OK");
     mockStart.mockResolvedValueOnce({ runId: "run_replacement" });
 
     const result = await handle({} as any);
 
     expect(result).toEqual({ status: "started", runId: "run_replacement" });
+    expect(mockRedis.del).toHaveBeenCalledWith("blazebot:poll-workflow:lock");
   });
 
   it("starts a new workflow when getRun throws", async () => {
-    mockRedis.get.mockResolvedValueOnce("run_gone");
-    mockGetRun.mockImplementationOnce(() => { throw new Error("not found"); });
+    mockRedis.get.mockResolvedValueOnce("run_gone").mockResolvedValueOnce(null);
+    mockGetRun.mockImplementationOnce(() => {
+      throw new Error("not found");
+    });
+    mockRedis.set.mockResolvedValueOnce("OK").mockResolvedValueOnce("OK");
     mockStart.mockResolvedValueOnce({ runId: "run_fresh" });
 
     const result = await handle({} as any);
 
     expect(result).toEqual({ status: "started", runId: "run_fresh" });
+    expect(mockRedis.del).toHaveBeenCalledWith("blazebot:poll-workflow:lock");
+  });
+
+  it("returns lock_contention when another start is in progress", async () => {
+    mockRedis.get.mockResolvedValueOnce(null);
+    mockRedis.set.mockResolvedValueOnce(null);
+
+    const result = await handle({} as any);
+
+    expect(result).toEqual({
+      status: "lock_contention",
+      message: "Another start request is in progress",
+    });
+    expect(mockStart).not.toHaveBeenCalled();
+  });
+
+  it("rejects requests with wrong bearer token when CRON_SECRET is set", async () => {
+    (env as any).CRON_SECRET = "real-secret";
+
+    const mockEvent = {
+      node: {
+        req: {
+          headers: {
+            authorization: "Bearer wrong-secret",
+          },
+        },
+      },
+    };
+
+    try {
+      await expect(handle(mockEvent as any)).rejects.toMatchObject({
+        statusCode: 401,
+      });
+    } finally {
+      delete (env as any).CRON_SECRET;
+    }
+  });
+
+  it("returns already_running after lock when another request started workflow", async () => {
+    mockRedis.get
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce("run_raced");
+    mockRedis.set.mockResolvedValueOnce("OK");
+    mockGetRun.mockReturnValueOnce({ status: Promise.resolve("running") });
+
+    const result = await handle({} as any);
+
+    expect(result).toEqual({ status: "already_running", runId: "run_raced" });
+    expect(mockStart).not.toHaveBeenCalled();
+    expect(mockRedis.del).toHaveBeenCalledWith("blazebot:poll-workflow:lock");
   });
 });

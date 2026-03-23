@@ -36,7 +36,7 @@ export const env = createEnv({
     JOB_TIMEOUT_MS: z.coerce.number().int().positive().default(1_800_000),
 
     // Polling
-    POLL_INTERVAL_MS: z.coerce.number().int().positive().default(300_000),
+    POLL_INTERVAL_MS: z.coerce.number().int().positive().default(15_000),
 
     // Cron
     CRON_SECRET: z.string().min(1).optional(),
