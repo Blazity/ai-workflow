@@ -171,9 +171,17 @@ export async function pollWorkflow() {
   const { env } = await import("../../env.js");
 
   while (true) {
-    const ticketKeys = await discoverTickets();
-    await dispatchTickets(ticketKeys);
-    await reconcileRegistry(ticketKeys);
+    try {
+      const ticketKeys = await discoverTickets();
+      await dispatchTickets(ticketKeys);
+      await reconcileRegistry(ticketKeys);
+    } catch (err) {
+      const { logger } = await import("../lib/logger.js");
+      logger.warn(
+        { error: (err as Error).message },
+        "poll_cycle_failed",
+      );
+    }
     await sleep(env.POLL_INTERVAL_MS);
   }
 }

@@ -134,6 +134,19 @@ describe("GET /poll/start", () => {
     }
   });
 
+  it("returns already_running when workflow is pending", async () => {
+    mockRedis.get.mockResolvedValueOnce("run_pending");
+    mockGetRun.mockReturnValueOnce({ status: Promise.resolve("pending") });
+
+    const result = await handle({} as any);
+
+    expect(result).toEqual({
+      status: "already_running",
+      runId: "run_pending",
+    });
+    expect(mockStart).not.toHaveBeenCalled();
+  });
+
   it("returns already_running after lock when another request started workflow", async () => {
     mockRedis.get
       .mockResolvedValueOnce(null)

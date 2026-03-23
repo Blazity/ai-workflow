@@ -8,6 +8,7 @@ import { logger } from "../../lib/logger.js";
 const POLL_WORKFLOW_KEY = "blazebot:poll-workflow";
 const LOCK_KEY = "blazebot:poll-workflow:lock";
 const LOCK_TTL_S = 30;
+const ALIVE_STATUSES: string[] = ["running", "pending"];
 
 const redis = new Redis({
   url: env.AI_WORKFLOW_KV_REST_API_URL,
@@ -28,7 +29,7 @@ export default defineEventHandler(async (event) => {
     try {
       const run = getRun(existingRunId);
       const status = await run.status;
-      if (status === "running") {
+      if (ALIVE_STATUSES.includes(status)) {
         return { status: "already_running", runId: existingRunId };
       }
     } catch {
@@ -50,7 +51,7 @@ export default defineEventHandler(async (event) => {
       try {
         const run = getRun(recheckRunId);
         const status = await run.status;
-        if (status === "running") {
+        if (ALIVE_STATUSES.includes(status)) {
           return { status: "already_running", runId: recheckRunId };
         }
       } catch {
