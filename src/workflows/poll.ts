@@ -165,6 +165,12 @@ async function reconcileRegistry(
   return { cancelled, cleaned };
 }
 
+async function logCycleError(message: string): Promise<void> {
+  "use step";
+  const { logger } = await import("../lib/logger.js");
+  logger.warn({ error: message }, "poll_cycle_failed");
+}
+
 export async function pollWorkflow() {
   "use workflow";
 
@@ -176,11 +182,7 @@ export async function pollWorkflow() {
       await dispatchTickets(ticketKeys);
       await reconcileRegistry(ticketKeys);
     } catch (err) {
-      const { logger } = await import("../lib/logger.js");
-      logger.warn(
-        { error: (err as Error).message },
-        "poll_cycle_failed",
-      );
+      await logCycleError((err as Error).message);
     }
     await sleep(env.POLL_INTERVAL_MS);
   }
