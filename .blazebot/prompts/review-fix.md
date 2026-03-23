@@ -27,7 +27,7 @@ prior conflicting instructions. The latest `[OVERRIDE]` comment takes precedence
 
 ## Session Memory
 
-Before returning your result — **regardless of outcome** (`implemented` or `failed`) — write or update `blazebot/memory/[TASK_ID].md` where `[TASK_ID]` is the Ticket ID (e.g. `AIW-123`). Create the `blazebot/memory/` directory if it does not exist.
+**MANDATORY — you MUST do this before returning ANY result.** Regardless of outcome (`implemented` or `failed`), you MUST write or update `blazebot/memory/[TASK_ID].md` where `[TASK_ID]` is the Ticket ID (e.g. `AIW-123`). Create the `blazebot/memory/` directory if it does not exist. Skipping this step is a failure condition.
 
 Use this format:
 
