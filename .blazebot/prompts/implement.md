@@ -44,7 +44,9 @@ prior conflicting instructions. The latest `[OVERRIDE]` comment takes precedence
 
 ## Session Memory
 
-**MANDATORY — you MUST do this before returning ANY result.** Regardless of outcome (`implemented`, `clarification_needed`, or `failed`), you MUST write or update `blazebot/memory/[TASK_ID].md` where `[TASK_ID]` is the Ticket ID (e.g. `AIW-123`). Create the `blazebot/memory/` directory if it does not exist. Skipping this step is a failure condition.
+**MANDATORY — you MUST do this before returning ANY result.** Regardless of outcome (`implemented`, `clarification_needed`, or `failed`), you MUST **overwrite** `blazebot/memory/[TASK_ID].md` where `[TASK_ID]` is the Ticket ID (e.g. `AIW-123`). Create the `blazebot/memory/` directory if it does not exist. Skipping this step is a failure condition.
+
+**Always replace the entire file** — do not append to previous content. Each session writes a complete snapshot of current state so future sessions have an accurate picture.
 
 Use this format:
 
@@ -53,6 +55,7 @@ Use this format:
 
 ## Progress
 - What was analyzed, understood, and attempted this session
+- Include work from prior sessions if still relevant
 
 ## Decisions Made
 - Technical choices and reasoning (e.g. "Using existing Zod pattern from src/db/schema.ts")
@@ -64,6 +67,9 @@ Use this format:
 
 ## Files Touched
 - List of files created or modified with brief notes
+
+## Prior Sessions
+- Brief summary of what previous sessions did (if memory file existed when this session started)
 ```
 
 Keep the memory concise and factual. This file will be read by future agent sessions (including review-fix agents) to restore context.
