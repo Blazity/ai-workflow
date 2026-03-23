@@ -13,13 +13,13 @@ You are an AI coding agent implementing a feature based on the requirements abov
 
 0. **Restore session memory** — Check if `blazebot/memory/[TASK_ID].md` exists (where `[TASK_ID]` is the Ticket ID from above, e.g. `AIW-123`). If it exists, read it immediately. Use the progress, decisions, and file list to skip redundant analysis and pick up where the previous session left off.
 1. Read and understand the requirements, description, and acceptance criteria.
-2. Review existing code to understand the codebase structure.
-3. **Assess ticket clarity** — before writing any code, evaluate whether the ticket provides enough information to implement correctly. If not, return `clarification_needed` (see below).
+2. Briefly review the codebase to understand the relevant structure (do not deep-dive yet).
+3. **Assess ticket clarity** — with the ticket and codebase context in mind, evaluate whether the ticket provides enough information to implement correctly (see "When to Ask for Clarification" below). If not, write session memory and return `clarification_needed`. Do NOT write any code.
 4. Write tests first (TDD) — integration and e2e tests are required.
 5. Implement the feature to make tests pass.
 6. Run all tests to ensure nothing is broken.
 7. Self-review your changes for quality, correctness, and completeness.
-8. **Update session memory** — before returning your result, write/update `blazebot/memory/[TASK_ID].md` (see Session Memory below).
+8. **Update session memory** — write/update `blazebot/memory/[TASK_ID].md` (see Session Memory below).
 9. Commit your work with descriptive commit messages.
 
 ## When to Ask for Clarification
