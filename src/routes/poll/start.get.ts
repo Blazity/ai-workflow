@@ -52,6 +52,9 @@ export default defineEventHandler(async (event) => {
     await redis.set(POLL_WORKFLOW_KEY, handle.runId);
     logger.info({ runId: handle.runId, cancelledRunId }, "poll_workflow_started");
     return { status: "restarted", runId: handle.runId, cancelledRunId };
+  } catch (err) {
+    logger.error({ error: (err as Error).message }, "poll_workflow_start_failed");
+    throw createError({ statusCode: 500, statusMessage: (err as Error).message });
   } finally {
     await redis.del(LOCK_KEY);
   }
