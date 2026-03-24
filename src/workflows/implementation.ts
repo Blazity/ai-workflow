@@ -25,12 +25,15 @@ async function createFeatureBranch(branchName: string, baseBranch: string) {
 async function assembleImplementationRequirements(ticket: TicketContent) {
   "use step";
   const { assembleImplementationContext } = await import("../sandbox/context.js");
-  const { env } = await import("../../env.js");
+  const { readFile } = await import("fs/promises");
+  const { fileURLToPath } = await import("url");
+  const { dirname, resolve } = await import("path");
 
-  // Read prompt via fetch to avoid fs/promises Node.js dependency
-  const prompt = env.IMPLEMENTATION_PROMPT ?? "";
+  const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
+  const prompt = await readFile(resolve(projectRoot, ".blazebot/prompts/implement.md"), "utf-8");
   return assembleImplementationContext({
     ticket: {
+      identifier: ticket.identifier,
       title: ticket.title,
       description: ticket.description,
       acceptanceCriteria: ticket.acceptanceCriteria,
@@ -47,9 +50,8 @@ async function runAgentInSandbox(
   "use step";
   const { env } = await import("../../env.js");
   const { SandboxManager } = await import("../sandbox/manager.js");
-  const { buildAgentCommand, parseAgentOutput } = await import(
-    "../sandbox/agent-runner.js"
-  );
+  const { runAgent } = await import("../sandbox/run-agent.js");
+
   const manager = new SandboxManager({
     githubToken: env.GITHUB_TOKEN,
     owner: env.GITHUB_OWNER,
@@ -65,27 +67,7 @@ async function runAgentInSandbox(
   });
 
   const sandbox = await manager.provision(branchName, requirementsMd);
-
-  try {
-    const { cmd, args } = buildAgentCommand(env.CLAUDE_MODEL);
-    const result = await sandbox.runCommand({ cmd, args, cwd: "/vercel/sandbox" });
-    const stdout = await result.stdout();
-    const stderr = await result.stderr();
-
-    await manager.runEndHook(sandbox);
-    const files = await manager.extractChanges(sandbox);
-
-    // If stdout is empty but stderr has content, agent likely crashed
-    const raw = stdout.trim() || stderr.trim();
-    const output = parseAgentOutput(raw);
-    return { output, files };
-  } catch (err) {
-    await manager.runEndHook(sandbox).catch(() => {});
-    const files = await manager.extractChanges(sandbox).catch(() => []);
-    throw Object.assign(err as Error, { files });
-  } finally {
-    await manager.teardown(sandbox);
-  }
+  return runAgent({ sandbox, manager, model: env.CLAUDE_MODEL, debug: env.DEBUG_AGENT });
 }
 
 async function pushChanges(
