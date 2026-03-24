@@ -69,13 +69,10 @@ Important boundary:
 
 ### 3.1 Main Components
 
-1. **Poller** (Vercel Workflow with sleep)
-   - Runs as a long-lived Vercel Workflow that sleeps between poll cycles (`POLL_INTERVAL_MS`, default 15s).
+1. **Poller** (Vercel Cron)
+   - Runs on a configurable interval (`POLL_INTERVAL_MS`, default 5 min).
    - Queries the issue tracker for tickets in the AI column.
    - For each discovered ticket, starts a Vercel Workflow run if one is not already active.
-   - Started via `GET /poll/start` route which cancels any existing poll run and starts a fresh one.
-     A GitHub Action triggers this route on every successful deployment — no Vercel Cron needed.
-     Protected by `DEPLOY_HOOK_SECRET` bearer token.
 
 2. **Issue Tracker Adapter**
    - Reads ticket data (description, acceptance criteria, comments, labels).
@@ -205,7 +202,7 @@ All runtime config lives in environment variables, validated at startup.
 Key config groups:
 
 - **Sandbox:** concurrency limit (`MAX_CONCURRENT_AGENTS`), job timeout (`JOB_TIMEOUT_MS`).
-- **Polling:** interval between cycles (`POLL_INTERVAL_MS`, default 15s).
+- **Polling:** interval (`POLL_INTERVAL_MS`).
 - **Issue Tracker:** adapter kind (`ISSUE_TRACKER_KIND`), project key (`JIRA_PROJECT_KEY`),
   credentials.
 - **Messaging:** Chat SDK credentials (`CHAT_SDK_API_KEY`), channel config.
@@ -258,8 +255,8 @@ transition.
 
 ### 8.1 Polling
 
-The poller runs as a long-lived Vercel Workflow that sleeps `POLL_INTERVAL_MS` (default 15s)
-between cycles and queries the issue tracker for tickets in the AI column. For each discovered ticket:
+The poller (Vercel Cron) runs every `POLL_INTERVAL_MS` and queries the issue tracker for tickets
+in the AI column. For each discovered ticket:
 
 1. Check if a Vercel Workflow run is already active for this ticket — if so, skip.
 2. Determine run type based on ticket state:
@@ -619,21 +616,17 @@ Notifications are best-effort — never block the workflow.
 ### 16.1 Poller
 
 ```
-poll_workflow():
-  while true:
-    ticketKeys = issueTrackerAdapter.searchTickets("column = AI")
+on_poll():
+  tickets = issueTrackerAdapter.searchTickets("column = AI")
 
-    for key in ticketKeys:
-      if hasActiveWorkflowRun(key): continue
-      if atConcurrencyLimit(): break
+  for ticket in tickets:
+    if hasActiveWorkflowRun(ticket.id): continue
+    if atConcurrencyLimit(): break
 
-      workflow.start("ticket_workflow", {
-        ticketId: key,
-        identifier: key
-      })
-
-    reconcileRegistry(ticketKeys)
-    sleep(POLL_INTERVAL_MS)
+    workflow.start("ticket_workflow", {
+      ticketId: ticket.id,
+      identifier: ticket.identifier
+    })
 ```
 
 ### 16.2 Ticket Workflow (Vercel Workflow)
@@ -772,7 +765,7 @@ run_fixing_feedback(ticketId, existingPR):
 
 ### 18.1 Required for MVP
 
-- [ ] Poller — GitHub Action deploy hook that starts the poll workflow on each deployment.
+- [ ] Poller — Vercel Cron that queries issue tracker and dispatches workflow runs.
 - [ ] Issue Tracker adapter (Jira first).
 - [ ] VCS adapter (GitHub).
 - [ ] Messaging adapter (Chat SDK — chat-sdk.dev — for Slack/Teams).

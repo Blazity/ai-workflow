@@ -5,5 +5,4 @@ export default defineNitroConfig({
   modules: ["workflow/nitro"],
   compatibilityDate: "2025-01-01",
   srcDir: "src",
-  ignore: ["**/*.test.ts"],
 });
