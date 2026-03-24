@@ -25,12 +25,9 @@ async function createFeatureBranch(branchName: string, baseBranch: string) {
 async function assembleImplementationRequirements(ticket: TicketContent) {
   "use step";
   const { assembleImplementationContext } = await import("../sandbox/context.js");
-  const { readFile } = await import("fs/promises");
-  const { fileURLToPath } = await import("url");
-  const { dirname, resolve } = await import("path");
 
-  const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
-  const prompt = await readFile(resolve(projectRoot, ".blazebot/prompts/implement.md"), "utf-8");
+  const prompt = await useStorage("assets:prompts").getItem<string>("implement.md");
+  if (!prompt) throw new Error("Missing prompt asset: implement.md");
   return assembleImplementationContext({
     ticket: {
       identifier: ticket.identifier,

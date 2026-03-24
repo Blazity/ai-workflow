@@ -11,11 +11,13 @@ interface TicketData {
 export interface ImplementationContextInput {
   ticket: TicketData;
   prompt: string;
+  skills?: string;
 }
 
 export interface FixingFeedbackContextInput {
   ticket: TicketData;
   prompt: string;
+  skills?: string;
   prComments: PRComment[];
   hasConflicts: boolean;
 }

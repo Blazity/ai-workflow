@@ -36,12 +36,9 @@ async function assembleReviewFixRequirements(
 ) {
   "use step";
   const { assembleFixingFeedbackContext } = await import("../sandbox/context.js");
-  const { readFile } = await import("fs/promises");
-  const { fileURLToPath } = await import("url");
-  const { dirname, resolve } = await import("path");
 
-  const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
-  const prompt = await readFile(resolve(projectRoot, ".blazebot/prompts/review-fix.md"), "utf-8");
+  const prompt = await useStorage("assets:prompts").getItem<string>("review-fix.md");
+  if (!prompt) throw new Error("Missing prompt asset: review-fix.md");
   return assembleFixingFeedbackContext({
     ticket: {
       identifier: ticket.identifier,
