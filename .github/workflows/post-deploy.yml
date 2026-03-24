@@ -1,0 +1,18 @@
+name: Start poll workflow after deploy
+
+on:
+  deployment_status:
+
+jobs:
+  start-poll:
+    if: github.event.deployment_status.state == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger poll workflow
+        run: |
+          URL="${{ github.event.deployment_status.target_url }}/poll/start"
+          echo "Calling: $URL"
+          curl -sf -X GET \
+            -H "Authorization: Bearer ${{ secrets.DEPLOY_HOOK_SECRET }}" \
+            -H "x-vercel-protection-bypass: ${{ secrets.VERCEL_AUTOMATION_BYPASS }}" \
+            "$URL"
