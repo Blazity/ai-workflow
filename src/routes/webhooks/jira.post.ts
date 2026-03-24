@@ -1,4 +1,5 @@
 import { defineEventHandler, getHeader, readRawBody, createError } from "h3";
+import { getRun } from "workflow/api";
 import { env } from "../../../env.js";
 import {
   verifyJiraWebhookSignature,
@@ -22,19 +23,42 @@ export default defineEventHandler(async (event) => {
   }
 
   const payload = JSON.parse(rawBody);
-  const { ticketKey, relevant } = parseJiraWebhookEvent(payload, env.COLUMN_AI);
+  const { ticketKey, action } = parseJiraWebhookEvent(payload, env.COLUMN_AI);
 
-  if (!relevant) {
+  if (action === "ignore") {
     logger.info(
       { ticketKey, event: payload.webhookEvent },
       "webhook_event_ignored",
     );
-    return { ok: true, dispatched: false };
+    return { ok: true, action: "ignored" };
+  }
+
+  const adapters = createAdapters();
+
+  if (action === "cancel") {
+    const runId = await adapters.runRegistry.getRunId(ticketKey);
+    if (!runId) {
+      logger.info({ ticketKey }, "webhook_cancel_no_active_run");
+      return { ok: true, action: "cancel", cancelled: false };
+    }
+
+    try {
+      const run = getRun(runId);
+      await run.cancel();
+    } catch (err) {
+      logger.warn(
+        { ticketKey, runId, error: (err as Error).message },
+        "webhook_cancel_run_error",
+      );
+    }
+
+    await adapters.runRegistry.unregister(ticketKey).catch(() => {});
+    logger.info({ ticketKey, runId }, "webhook_cancelled_run");
+    return { ok: true, action: "cancel", cancelled: true, runId };
   }
 
   logger.info({ ticketKey }, "webhook_dispatching");
 
-  const adapters = createAdapters();
   const result = await dispatchTicket(
     ticketKey,
     adapters,
@@ -45,6 +69,7 @@ export default defineEventHandler(async (event) => {
 
   return {
     ok: true,
+    action: "dispatch",
     dispatched: result.started,
     runId: result.runId,
     reason: result.reason,

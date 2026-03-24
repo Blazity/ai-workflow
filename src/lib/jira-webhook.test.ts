@@ -43,12 +43,24 @@ describe("parseJiraWebhookEvent", () => {
     };
   }
 
-  it("returns relevant: true for a status change to the target column", () => {
+  it("returns dispatch for a status change to the target column", () => {
     const result = parseJiraWebhookEvent(makePayload(), targetColumn);
-    expect(result).toEqual({ ticketKey: "PROJ-42", relevant: true });
+    expect(result).toEqual({ ticketKey: "PROJ-42", action: "dispatch" });
   });
 
-  it("returns relevant: false for non-status field changes", () => {
+  it("returns cancel for a status change away from the target column", () => {
+    const payload = makePayload({
+      changelog: {
+        items: [
+          { field: "status", fromString: "AI", toString: "In Progress" },
+        ],
+      },
+    });
+    const result = parseJiraWebhookEvent(payload, targetColumn);
+    expect(result).toEqual({ ticketKey: "PROJ-42", action: "cancel" });
+  });
+
+  it("returns ignore for non-status field changes", () => {
     const payload = makePayload({
       changelog: {
         items: [
@@ -57,10 +69,10 @@ describe("parseJiraWebhookEvent", () => {
       },
     });
     const result = parseJiraWebhookEvent(payload, targetColumn);
-    expect(result).toEqual({ ticketKey: "PROJ-42", relevant: false });
+    expect(result).toEqual({ ticketKey: "PROJ-42", action: "ignore" });
   });
 
-  it("returns relevant: false for a status change to a different column", () => {
+  it("returns ignore for a status change between unrelated columns", () => {
     const payload = makePayload({
       changelog: {
         items: [
@@ -69,18 +81,18 @@ describe("parseJiraWebhookEvent", () => {
       },
     });
     const result = parseJiraWebhookEvent(payload, targetColumn);
-    expect(result).toEqual({ ticketKey: "PROJ-42", relevant: false });
+    expect(result).toEqual({ ticketKey: "PROJ-42", action: "ignore" });
   });
 
-  it("returns relevant: false for non-issue events", () => {
+  it("returns ignore for non-issue events", () => {
     const payload = makePayload({ webhookEvent: "jira:worklog_updated" });
     const result = parseJiraWebhookEvent(payload, targetColumn);
-    expect(result).toEqual({ ticketKey: "PROJ-42", relevant: false });
+    expect(result).toEqual({ ticketKey: "PROJ-42", action: "ignore" });
   });
 
-  it("returns relevant: false when no changelog is present", () => {
+  it("returns ignore when no changelog is present", () => {
     const payload = makePayload({ changelog: undefined });
     const result = parseJiraWebhookEvent(payload, targetColumn);
-    expect(result).toEqual({ ticketKey: "PROJ-42", relevant: false });
+    expect(result).toEqual({ ticketKey: "PROJ-42", action: "ignore" });
   });
 });

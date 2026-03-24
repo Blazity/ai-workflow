@@ -22,9 +22,11 @@ export function verifyJiraWebhookSignature(
   return timingSafeEqual(sigBuf, expectedBuf);
 }
 
+export type WebhookAction = "dispatch" | "cancel" | "ignore";
+
 export interface JiraWebhookResult {
   ticketKey: string;
-  relevant: boolean;
+  action: WebhookAction;
 }
 
 export function parseJiraWebhookEvent(
@@ -34,17 +36,29 @@ export function parseJiraWebhookEvent(
   const ticketKey: string = payload?.issue?.key ?? "";
 
   if (payload?.webhookEvent !== "jira:issue_updated") {
-    return { ticketKey, relevant: false };
+    return { ticketKey, action: "ignore" };
   }
 
   const items: any[] | undefined = payload?.changelog?.items;
   if (!Array.isArray(items)) {
-    return { ticketKey, relevant: false };
+    return { ticketKey, action: "ignore" };
   }
 
   const statusChange = items.find(
-    (item: any) => item.field === "status" && item.toString === targetColumn,
+    (item: any) => item.field === "status",
   );
 
-  return { ticketKey, relevant: !!statusChange };
+  if (!statusChange) {
+    return { ticketKey, action: "ignore" };
+  }
+
+  if (statusChange.toString === targetColumn) {
+    return { ticketKey, action: "dispatch" };
+  }
+
+  if (statusChange.fromString === targetColumn) {
+    return { ticketKey, action: "cancel" };
+  }
+
+  return { ticketKey, action: "ignore" };
 }
