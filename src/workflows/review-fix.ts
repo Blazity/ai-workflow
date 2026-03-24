@@ -38,7 +38,7 @@ async function assembleReviewFixRequirements(
   const { assembleFixingFeedbackContext } = await import("../sandbox/context.js");
   const { getPrompt } = await import("../lib/prompts.js");
 
-  const prompt = await getPrompt("review-fix.md");
+  const prompt = getPrompt("review-fix.md");
   return assembleFixingFeedbackContext({
     ticket: {
       identifier: ticket.identifier,

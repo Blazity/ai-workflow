@@ -5,10 +5,4 @@ export default defineNitroConfig({
   modules: ["workflow/nitro"],
   compatibilityDate: "2025-01-01",
   srcDir: "src",
-  serverAssets: [
-    {
-      baseName: "prompts",
-      dir: "./blazebot/prompts",
-    },
-  ],
 });

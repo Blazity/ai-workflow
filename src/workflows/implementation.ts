@@ -27,7 +27,7 @@ async function assembleImplementationRequirements(ticket: TicketContent) {
   const { assembleImplementationContext } = await import("../sandbox/context.js");
   const { getPrompt } = await import("../lib/prompts.js");
 
-  const prompt = await getPrompt("implement.md");
+  const prompt = getPrompt("implement.md");
   return assembleImplementationContext({
     ticket: {
       identifier: ticket.identifier,
