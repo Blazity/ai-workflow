@@ -7,6 +7,7 @@ describe("env", () => {
     JIRA_EMAIL: "test@example.com",
     JIRA_API_TOKEN: "token",
     JIRA_PROJECT_KEY: "PROJ",
+    JIRA_WEBHOOK_SECRET: "test-webhook-secret",
     COLUMN_AI: "AI",
     COLUMN_AI_REVIEW: "AI Review",
     COLUMN_BACKLOG: "Backlog",
@@ -24,7 +25,6 @@ describe("env", () => {
     COMMIT_EMAIL: "bot@blazity.com",
     MAX_CONCURRENT_AGENTS: "3",
     JOB_TIMEOUT_MS: "1800000",
-    POLL_INTERVAL_MS: "300000",
     AI_WORKFLOW_KV_REST_API_URL: "https://fake.upstash.io",
     AI_WORKFLOW_KV_REST_API_TOKEN: "fake-token",
   };

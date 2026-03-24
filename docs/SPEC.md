@@ -37,6 +37,7 @@ Important boundary:
 
 - Poll the issue tracker on a configurable interval to discover tickets assigned to AI and dispatch
   Vercel Workflow runs.
+- Accept Jira webhooks for real-time ticket dispatch and cancellation, complementing the poller.
 - Use Vercel Workflows as the durable orchestration layer — workflow state survives failures and
   restarts automatically. No external persistence needed for MVP.
 - Individual agent runs are stateless — each run spins up a fresh sandbox, fetches context from the
@@ -63,7 +64,6 @@ Important boundary:
 - Replacing human final approval on PRs.
 - Built-in IDE or code editor.
 - Prescribing a specific dashboard or terminal UI implementation.
-- Webhook-driven event ingestion (polling only for MVP).
 
 ## 3. System Overview
 
@@ -72,33 +72,41 @@ Important boundary:
 1. **Poller** (Vercel Cron)
    - Runs on a configurable interval (`POLL_INTERVAL_MS`, default 5 min).
    - Queries the issue tracker for tickets in the AI column.
-   - For each discovered ticket, starts a Vercel Workflow run if one is not already active.
+   - For each discovered ticket, dispatches via shared `dispatchTicket` logic if one is not already
+     active.
 
-2. **Issue Tracker Adapter**
+2. **Jira Webhook Endpoint** (`POST /webhooks/jira`)
+   - Receives `jira:issue_updated` events in real time.
+   - Verifies request signature using HMAC-SHA256 (`JIRA_WEBHOOK_SECRET`).
+   - On status change **into** the AI column → dispatches the ticket (same `dispatchTicket` path as
+     the poller).
+   - On status change **out of** the AI column → cancels the active workflow run and unregisters it.
+
+3. **Issue Tracker Adapter**
    - Reads ticket data (description, acceptance criteria, comments, labels).
    - Writes ticket transitions (→ AI Review, → Backlog).
    - Posts clarifying questions as ticket comments.
    - Searches for tickets by column/status (JQL or equivalent).
 
-3. **Messaging Adapter** (Chat SDK — chat-sdk.dev)
+4. **Messaging Adapter** (Chat SDK — chat-sdk.dev)
    - Sends status notifications (Slack/Teams) via Chat SDK.
    - Pings users on clarification requests.
    - Chat SDK provides a unified interface for Slack and Teams — no per-platform adapter needed.
 
-4. **VCS Adapter**
+5. **VCS Adapter**
    - Creates feature branches.
    - Creates pull requests.
    - Pushes feature branches after agent run completes.
    - Fetches PR comments (liked + human-written).
    - Reports PR conflict status.
 
-5. **Orchestrator** (Vercel Workflow)
+6. **Orchestrator** (Vercel Workflow)
    - Decides what action to take based on ticket state and existing PR state.
    - Runs `implementation` and `fixing_feedback` steps as durable workflow steps.
    - Handles retries with built-in Vercel Workflow retry semantics.
    - Verifies ticket is still in AI column at workflow start (stale job protection).
 
-6. **Sandbox Manager**
+7. **Sandbox Manager**
    - Provisions Vercel Sandboxes with the project repository.
    - Checks out the repo on the feature branch.
    - Writes `requirements.md` inside the sandbox with assembled context.
@@ -106,12 +114,12 @@ Important boundary:
    - Runs sandbox end hook before teardown (see Section 9.4).
    - Tears down sandboxes after every run.
 
-7. **Agent Runner**
+8. **Agent Runner**
    - Launches the coding agent (Claude Code / Codex) inside the sandbox via the Vercel Sandbox API.
    - Reads structured output (JSON schema enforced) to determine outcome.
    - Enforces timeouts.
 
-8. **Logging & Observability**
+9. **Logging & Observability**
    - Structured JSON logs with ticket/run context.
    - Dashboard, metrics, and token tracking deferred.
 
@@ -204,7 +212,7 @@ Key config groups:
 - **Sandbox:** concurrency limit (`MAX_CONCURRENT_AGENTS`), job timeout (`JOB_TIMEOUT_MS`).
 - **Polling:** interval (`POLL_INTERVAL_MS`).
 - **Issue Tracker:** adapter kind (`ISSUE_TRACKER_KIND`), project key (`JIRA_PROJECT_KEY`),
-  credentials.
+  credentials, webhook secret (`JIRA_WEBHOOK_SECRET`).
 - **Messaging:** Chat SDK credentials (`CHAT_SDK_API_KEY`), channel config.
 - **VCS:** adapter kind (`VCS_KIND`), credentials.
 - **Agent:** Anthropic API key (`ANTHROPIC_API_KEY`), commit author (`COMMIT_AUTHOR`,
@@ -253,34 +261,58 @@ transition.
 
 ## 8. Ticket Discovery and Job Dispatch
 
+Both the poller and the webhook endpoint share a common `dispatchTicket` function that handles
+concurrency checks, claim-before-dispatch, workflow selection (implementation vs review-fix), and
+error recovery. This ensures consistent dispatch behavior regardless of the trigger source.
+
 ### 8.1 Polling
 
 The poller (Vercel Cron) runs every `POLL_INTERVAL_MS` and queries the issue tracker for tickets
-in the AI column. For each discovered ticket:
+in the AI column. For each discovered ticket it calls `dispatchTicket`. The poller also performs
+stale run cleanup — cancelling runs for tickets that left the AI column and unregistering dead runs.
 
-1. Check if a Vercel Workflow run is already active for this ticket — if so, skip.
-2. Determine run type based on ticket state:
-   - No existing PR → first time, start `implementation` workflow.
-   - Existing PR with review comments → start `fixing_feedback` workflow.
-   - Ticket was previously in clarification (detected via tracker comments/state) → start
-     `implementation` workflow with Q&A context from comments.
+### 8.2 Jira Webhook
 
-### 8.2 Concurrency Control
+The webhook endpoint (`POST /webhooks/jira`) provides real-time dispatch and cancellation:
+
+1. Verifies the request signature using HMAC-SHA256 (`JIRA_WEBHOOK_SECRET`, `x-hub-signature`
+   header).
+2. Parses the `jira:issue_updated` event and extracts the status change from `changelog.items`.
+3. If the ticket moved **into** the AI column → calls `dispatchTicket` (same path as the poller).
+4. If the ticket moved **out of** the AI column → cancels the active workflow run via the run
+   registry and Vercel Workflow API.
+5. All other events are ignored.
+
+### 8.3 Dispatch Logic (`dispatchTicket`)
+
+For each ticket to dispatch:
+
+1. Check active sandbox count against `MAX_CONCURRENT_AGENTS` — if at capacity, return early.
+2. Atomically claim the ticket in the run registry to prevent duplicate dispatches.
+3. Fetch ticket content and determine run type:
+   - No existing PR → start `implementation` workflow.
+   - Existing PR → start `review-fix` workflow.
+4. Register the workflow run ID in the run registry.
+5. On failure, release the claim so the ticket can be retried.
+
+### 8.4 Concurrency Control
 
 - `MAX_CONCURRENT_AGENTS` — global limit on running sandboxes.
-- Enforced at the workflow level before sandbox spin-up. If at capacity, the ticket is skipped and
-  will be picked up on the next poll cycle.
+- Enforced by `dispatchTicket` before claiming. If at capacity, the ticket is skipped and will be
+  picked up on the next poll cycle or webhook event.
 
-### 8.3 Stale Job Protection
+### 8.5 Stale Job Protection
 
 - **Layer 1 — Workflow-start verification:** At workflow start, fetch current ticket state from
   tracker — skip if no longer in AI.
 - **Layer 2 — Polling idempotency:** The poller skips tickets that already have an active workflow
   run, preventing duplicate work.
+- **Layer 3 — Webhook cancellation:** When a ticket is moved out of the AI column, the webhook
+  endpoint cancels the active workflow run immediately.
+- **Layer 4 — Poller cleanup:** The poller detects runs for tickets no longer in the AI column and
+  cancels them. It also unregisters dead runs (completed, failed, or cancelled).
 
-Webhook-based cancellation and stuck job detection are deferred (see Section 18.2).
-
-Blazebot-initiated transitions (not poll triggers):
+Blazebot-initiated transitions (not poll/webhook triggers):
 
 - → **AI Review** when PR is ready.
 - → **Backlog** when clarification is needed.
@@ -613,23 +645,65 @@ Notifications are best-effort — never block the workflow.
 
 ## 16. Reference Algorithms
 
-### 16.1 Poller
+### 16.1 Shared Dispatch
+
+```
+dispatchTicket(ticketKey, adapters, maxConcurrentAgents):
+  if getActiveSandboxCount() >= maxConcurrentAgents:
+    return { started: false, reason: "at_capacity" }
+
+  if not runRegistry.claim(ticketKey, "claiming"):
+    return { started: false, reason: "already_claimed" }
+
+  ticket = issueTrackerAdapter.fetchTicket(ticketKey)
+  branchName = "blazebot/" + ticket.identifier.toLowerCase()
+  existingPR = vcsAdapter.findPR(branchName)
+
+  if existingPR:
+    handle = workflow.start(reviewFixWorkflow, [ticket.id, branchName])
+  else:
+    handle = workflow.start(implementationWorkflow, [ticket.id])
+
+  runRegistry.register(ticket.identifier, handle.runId)
+  return { started: true, runId: handle.runId }
+```
+
+### 16.2 Poller
 
 ```
 on_poll():
   tickets = issueTrackerAdapter.searchTickets("column = AI")
 
   for ticket in tickets:
-    if hasActiveWorkflowRun(ticket.id): continue
-    if atConcurrencyLimit(): break
+    dispatchTicket(ticket.key, adapters, MAX_CONCURRENT_AGENTS)
 
-    workflow.start("ticket_workflow", {
-      ticketId: ticket.id,
-      identifier: ticket.identifier
-    })
+  // Stale run cleanup
+  for run in runRegistry.listActive():
+    if run.ticketKey not in tickets:
+      workflow.cancel(run.runId)
+      runRegistry.unregister(run.ticketKey)
+    else if workflow.status(run.runId) in ["completed", "failed", "cancelled"]:
+      runRegistry.unregister(run.ticketKey)
 ```
 
-### 16.2 Ticket Workflow (Vercel Workflow)
+### 16.3 Jira Webhook
+
+```
+on_webhook(request):
+  verify_signature(request.rawBody, request.headers["x-hub-signature"], JIRA_WEBHOOK_SECRET)
+  event = parse_jira_event(request.body, COLUMN_AI)
+
+  if event.action == "dispatch":
+    dispatchTicket(event.ticketKey, adapters, MAX_CONCURRENT_AGENTS)
+
+  if event.action == "cancel":
+    runId = runRegistry.getRunId(event.ticketKey)
+    if runId:
+      workflow.cancel(runId)
+      runRegistry.unregister(event.ticketKey)
+```
+
+### 16.4 Ticket Workflow (Vercel Workflow)
 
 ```
 ticket_workflow(input):
@@ -648,7 +722,7 @@ ticket_workflow(input):
     run_implementation(ticketId)
 ```
 
-### 16.3 Implementation Step
+### 16.5 Implementation Step
 
 ```
 run_implementation(ticketId):
@@ -681,7 +755,7 @@ run_implementation(ticketId):
     throw // Vercel Workflow handles retry
 ```
 
-### 16.4 Fixing Feedback Step
+### 16.6 Fixing Feedback Step
 
 ```
 run_fixing_feedback(ticketId, existingPR):
@@ -719,6 +793,10 @@ run_fixing_feedback(ticketId, existingPR):
 - Max retries exhausted → ticket transitions to `failed`, user notified.
 - Poller skips tickets with active workflow runs (idempotent).
 - Concurrency limit respected — tickets skipped when at capacity.
+- Webhook dispatches ticket on status change into AI column.
+- Webhook cancels active run on status change out of AI column.
+- Webhook signature verification rejects invalid requests.
+- Webhook ignores non-status-change events.
 
 ### 17.2 Sandbox Management
 
@@ -781,11 +859,14 @@ run_fixing_feedback(ticketId, existingPR):
 - [ ] Configurable commit author via `COMMIT_AUTHOR` env var.
 - [ ] Structured JSON logging with ticket/run context.
 - [ ] Prompt files — `.blazebot/prompts/implement.md` and `.blazebot/prompts/review-fix.md`.
+- [x] Jira webhook endpoint — real-time dispatch and cancellation via `POST /webhooks/jira`.
+- [x] Webhook signature verification — HMAC-SHA256 with `JIRA_WEBHOOK_SECRET`.
+- [x] Shared dispatch logic — `dispatchTicket` used by both poller and webhook.
 
 ### 18.2 Deferred
 
-- [ ] Ticket cancellation flow (cancel active workflows when ticket moved to terminal state).
-- [ ] Webhook-driven event ingestion (complement polling with real-time webhooks).
+- [x] Ticket cancellation flow (cancel active workflows when ticket moved out of AI column).
+- [x] Webhook-driven event ingestion (Jira webhook for real-time dispatch and cancellation).
 - [ ] Stuck job detection and recovery.
 - [ ] Persistence layer (Postgres) for audit trail, run history, and reporting.
 - [ ] Docker sandbox provider (for self-hosted deployments without Vercel).
