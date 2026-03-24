@@ -25,9 +25,9 @@ async function createFeatureBranch(branchName: string, baseBranch: string) {
 async function assembleImplementationRequirements(ticket: TicketContent) {
   "use step";
   const { assembleImplementationContext } = await import("../sandbox/context.js");
+  const { getPrompt } = await import("../lib/prompts.js");
 
-  const prompt = await useStorage("assets:prompts").getItem<string>("implement.md");
-  if (!prompt) throw new Error("Missing prompt asset: implement.md");
+  const prompt = await getPrompt("implement.md");
   return assembleImplementationContext({
     ticket: {
       identifier: ticket.identifier,

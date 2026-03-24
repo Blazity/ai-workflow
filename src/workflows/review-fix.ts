@@ -36,9 +36,9 @@ async function assembleReviewFixRequirements(
 ) {
   "use step";
   const { assembleFixingFeedbackContext } = await import("../sandbox/context.js");
+  const { getPrompt } = await import("../lib/prompts.js");
 
-  const prompt = await useStorage("assets:prompts").getItem<string>("review-fix.md");
-  if (!prompt) throw new Error("Missing prompt asset: review-fix.md");
+  const prompt = await getPrompt("review-fix.md");
   return assembleFixingFeedbackContext({
     ticket: {
       identifier: ticket.identifier,
