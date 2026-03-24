@@ -73,8 +73,9 @@ Important boundary:
    - Runs as a long-lived Vercel Workflow that sleeps between poll cycles (`POLL_INTERVAL_MS`, default 15s).
    - Queries the issue tracker for tickets in the AI column.
    - For each discovered ticket, starts a Vercel Workflow run if one is not already active.
-   - Started via `GET /poll/start` route which ensures singleton operation. Vercel Cron hits this
-     route every 15 minutes as a liveness check — if the workflow died, the route restarts it.
+   - Started via `GET /poll/start` route which cancels any existing poll run and starts a fresh one.
+     A GitHub Action triggers this route on every successful deployment — no Vercel Cron needed.
+     Protected by `DEPLOY_HOOK_SECRET` bearer token.
 
 2. **Issue Tracker Adapter**
    - Reads ticket data (description, acceptance criteria, comments, labels).
@@ -771,7 +772,7 @@ run_fixing_feedback(ticketId, existingPR):
 
 ### 18.1 Required for MVP
 
-- [ ] Poller — Vercel Cron that queries issue tracker and dispatches workflow runs.
+- [ ] Poller — GitHub Action deploy hook that starts the poll workflow on each deployment.
 - [ ] Issue Tracker adapter (Jira first).
 - [ ] VCS adapter (GitHub).
 - [ ] Messaging adapter (Chat SDK — chat-sdk.dev — for Slack/Teams).
