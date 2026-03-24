@@ -8,32 +8,33 @@ import { logger } from "../../lib/logger.js";
 const POLL_WORKFLOW_KEY = "blazebot:poll-workflow";
 const LOCK_KEY = "blazebot:poll-workflow:lock";
 const LOCK_TTL_S = 30;
-const ALIVE_STATUSES: string[] = ["running", "pending"];
 
 const redis = new Redis({
   url: env.AI_WORKFLOW_KV_REST_API_URL,
   token: env.AI_WORKFLOW_KV_REST_API_TOKEN,
 });
 
-export default defineEventHandler(async (event) => {
-  if (env.CRON_SECRET) {
-    const auth = getHeader(event, "authorization");
-    if (auth !== `Bearer ${env.CRON_SECRET}`) {
-      throw createError({ statusCode: 401, statusMessage: "Unauthorized" });
-    }
+async function cancelExisting(): Promise<string | null> {
+  const runId = await redis.get<string>(POLL_WORKFLOW_KEY);
+  if (!runId) return null;
+
+  try {
+    const run = getRun(runId);
+    await run.cancel();
+    logger.info({ runId }, "poll_workflow_cancelled");
+  } catch {
+    // already dead or not found
   }
 
-  const existingRunId = await redis.get<string>(POLL_WORKFLOW_KEY);
+  await redis.del(POLL_WORKFLOW_KEY);
+  return runId;
+}
 
-  if (existingRunId) {
-    try {
-      const run = getRun(existingRunId);
-      const status = await run.status;
-      if (ALIVE_STATUSES.includes(status)) {
-        return { status: "already_running", runId: existingRunId };
-      }
-    } catch {
-      // Run not found — fall through to start a new one
+export default defineEventHandler(async (event) => {
+  if (env.DEPLOY_HOOK_SECRET) {
+    const auth = getHeader(event, "authorization");
+    if (auth !== `Bearer ${env.DEPLOY_HOOK_SECRET}`) {
+      throw createError({ statusCode: 401, statusMessage: "Unauthorized" });
     }
   }
 
@@ -46,23 +47,11 @@ export default defineEventHandler(async (event) => {
   }
 
   try {
-    const recheckRunId = await redis.get<string>(POLL_WORKFLOW_KEY);
-    if (recheckRunId) {
-      try {
-        const run = getRun(recheckRunId);
-        const status = await run.status;
-        if (ALIVE_STATUSES.includes(status)) {
-          return { status: "already_running", runId: recheckRunId };
-        }
-      } catch {
-        // Fall through to start
-      }
-    }
-
+    const cancelledRunId = await cancelExisting();
     const handle = await start(pollWorkflow);
     await redis.set(POLL_WORKFLOW_KEY, handle.runId);
-    logger.info({ runId: handle.runId }, "poll_workflow_started");
-    return { status: "started", runId: handle.runId };
+    logger.info({ runId: handle.runId, cancelledRunId }, "poll_workflow_started");
+    return { status: "restarted", runId: handle.runId, cancelledRunId };
   } finally {
     await redis.del(LOCK_KEY);
   }

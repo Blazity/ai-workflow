@@ -38,8 +38,8 @@ export const env = createEnv({
     // Polling
     POLL_INTERVAL_MS: z.coerce.number().int().positive().default(15_000),
 
-    // Cron
-    CRON_SECRET: z.string().min(1).optional(),
+    // Deploy hook auth
+    DEPLOY_HOOK_SECRET: z.string().min(1).optional(),
 
     // Vercel (optional — auto via OIDC on Vercel)
     VERCEL_TOKEN: z.string().min(1).optional(),
