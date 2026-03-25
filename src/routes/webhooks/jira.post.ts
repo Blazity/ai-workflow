@@ -5,7 +5,7 @@ import {
   verifyJiraWebhookSignature,
   parseJiraWebhookEvent,
 } from "../../lib/jira-webhook.js";
-import { dispatchTicket } from "../../lib/dispatch.js";
+import { dispatchTicket, CLAIMING_SENTINEL } from "../../lib/dispatch.js";
 import { createAdapters } from "../../lib/adapters.js";
 import { logger } from "../../lib/logger.js";
 
@@ -40,6 +40,11 @@ export default defineEventHandler(async (event) => {
     if (!runId) {
       logger.info({ ticketKey }, "webhook_cancel_no_active_run");
       return { ok: true, action: "cancel", cancelled: false };
+    }
+
+    if (runId === CLAIMING_SENTINEL) {
+      logger.info({ ticketKey }, "webhook_cancel_dispatch_in_flight");
+      return { ok: true, action: "cancel", cancelled: false, pending: true };
     }
 
     try {
