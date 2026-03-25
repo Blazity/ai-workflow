@@ -4,8 +4,10 @@ import type { TicketContent } from "../adapters/issue-tracker/types.js";
 
 
 const mockStart = vi.fn();
+const mockGetRun = vi.fn();
 vi.mock("workflow/api", () => ({
   start: (...args: any[]) => mockStart(...args),
+  getRun: (...args: any[]) => mockGetRun(...args),
 }));
 
 vi.mock("../workflows/implementation.js", () => ({
@@ -42,9 +44,13 @@ function makeAdapters(overrides: Partial<{
   claim: ReturnType<typeof vi.fn>;
   register: ReturnType<typeof vi.fn>;
   unregister: ReturnType<typeof vi.fn>;
+  getRunId: ReturnType<typeof vi.fn>;
   fetchTicket: ReturnType<typeof vi.fn>;
   findPR: ReturnType<typeof vi.fn>;
 }>= {}): Adapters {
+  // Track the claim value so getRunId can return it by default
+  let claimedValue: string | undefined;
+
   return {
     issueTracker: {
       fetchTicket: overrides.fetchTicket ?? vi.fn().mockResolvedValue(makeTicket()),
@@ -64,10 +70,13 @@ function makeAdapters(overrides: Partial<{
       notify: vi.fn(),
     },
     runRegistry: {
-      claim: overrides.claim ?? vi.fn().mockResolvedValue(true),
+      claim: overrides.claim ?? vi.fn().mockImplementation(async (_key: string, value: string) => {
+        claimedValue = value;
+        return true;
+      }),
       register: overrides.register ?? vi.fn().mockResolvedValue(undefined),
       unregister: overrides.unregister ?? vi.fn().mockResolvedValue(undefined),
-      getRunId: vi.fn(),
+      getRunId: overrides.getRunId ?? vi.fn().mockImplementation(async () => claimedValue),
       listAll: vi.fn(),
     },
   };
@@ -90,7 +99,7 @@ describe("dispatchTicket", () => {
     const result = await dispatchTicket("PROJ-42", adapters, 5);
 
     expect(result).toEqual({ started: true, runId: "run_123" });
-    expect(adapters.runRegistry.claim).toHaveBeenCalledWith("PROJ-42", "claiming");
+    expect(adapters.runRegistry.claim).toHaveBeenCalledWith("PROJ-42", expect.stringMatching(/^claiming:\d+$/));
     expect(adapters.issueTracker.fetchTicket).toHaveBeenCalledWith("PROJ-42");
     expect(adapters.vcs.findPR).toHaveBeenCalledWith("blazebot/proj-42");
     expect(mockStart).toHaveBeenCalledWith("implementationWorkflow_sentinel", ["ticket-001"]);
@@ -141,6 +150,25 @@ describe("dispatchTicket", () => {
     expect(result).toEqual({ started: false, reason: "at_capacity" });
     expect(adapters.runRegistry.claim).not.toHaveBeenCalled();
     expect(mockStart).not.toHaveBeenCalled();
+  });
+
+  it("aborts workflow if claim was removed during dispatch", async () => {
+    const mockCancel = vi.fn().mockResolvedValue(undefined);
+    mockGetRun.mockReturnValue({ cancel: mockCancel });
+
+    // getRunId returns null — claim was removed by a cancel while workflow was starting
+    const adapters = makeAdapters({
+      getRunId: vi.fn().mockResolvedValue(null),
+    });
+    const { dispatchTicket } = await import("./dispatch.js");
+
+    const result = await dispatchTicket("PROJ-42", adapters, 5);
+
+    expect(result).toEqual({ started: false, reason: "already_claimed" });
+    expect(mockStart).toHaveBeenCalled();
+    expect(mockGetRun).toHaveBeenCalledWith("run_123");
+    expect(mockCancel).toHaveBeenCalled();
+    expect(adapters.runRegistry.register).not.toHaveBeenCalled();
   });
 
   it("unregisters claim and returns error on dispatch failure", async () => {

@@ -1,10 +1,18 @@
-import { start } from "workflow/api";
+import { start, getRun } from "workflow/api";
 import { implementationWorkflow } from "../workflows/implementation.js";
 import { reviewFixWorkflow } from "../workflows/review-fix.js";
 import { logger } from "./logger.js";
 import type { Adapters } from "./adapters.js";
 
-export const CLAIMING_SENTINEL = "claiming";
+const CLAIMING_PREFIX = "claiming:";
+
+export function isClaimingSentinel(runId: string): boolean {
+  return runId.startsWith(CLAIMING_PREFIX);
+}
+
+export function getClaimTimestamp(runId: string): number {
+  return parseInt(runId.slice(CLAIMING_PREFIX.length), 10);
+}
 
 async function getActiveSandboxCount(): Promise<number> {
   try {
@@ -42,7 +50,8 @@ export async function dispatchTicket(
     return { started: false, reason: "at_capacity" };
   }
 
-  const claimed = await runRegistry.claim(ticketKey, CLAIMING_SENTINEL);
+  const claimValue = `${CLAIMING_PREFIX}${Date.now()}`;
+  const claimed = await runRegistry.claim(ticketKey, claimValue);
   if (!claimed) {
     logger.info({ ticketKey }, "dispatch_ticket_already_claimed");
     return { started: false, reason: "already_claimed" };
@@ -74,6 +83,21 @@ export async function dispatchTicket(
         },
         "workflow_started_implementation",
       );
+    }
+
+    // Verify claim wasn't cancelled while the workflow was starting.
+    // If a cancel removed our sentinel, abort the just-started workflow.
+    const currentRunId = await runRegistry.getRunId(ticketKey);
+    if (currentRunId !== claimValue) {
+      logger.info(
+        { ticketKey, runId: handle.runId },
+        "dispatch_aborted_claim_cancelled",
+      );
+      try {
+        const run = getRun(handle.runId);
+        await run.cancel();
+      } catch {}
+      return { started: false, reason: "already_claimed" };
     }
 
     await runRegistry.register(ticket.identifier, handle.runId);

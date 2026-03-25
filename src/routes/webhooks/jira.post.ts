@@ -1,11 +1,11 @@
 import { defineEventHandler, getHeader, readRawBody, createError } from "h3";
-import { getRun } from "workflow/api";
 import { env } from "../../../env.js";
 import {
   verifyJiraWebhookSignature,
   parseJiraWebhookEvent,
 } from "../../lib/jira-webhook.js";
-import { dispatchTicket } from "../../lib/dispatch.js";
+import { cancelRun } from "../../lib/cancel-run.js";
+import { dispatchTicket, isClaimingSentinel } from "../../lib/dispatch.js";
 import { createAdapters } from "../../lib/adapters.js";
 import { logger } from "../../lib/logger.js";
 
@@ -42,19 +42,16 @@ export default defineEventHandler(async (event) => {
       return { ok: true, action: "cancel", cancelled: false };
     }
 
-    try {
-      const run = getRun(runId);
-      await run.cancel();
-    } catch (err) {
-      logger.warn(
-        { ticketKey, runId, error: (err as Error).message },
-        "webhook_cancel_run_error",
-      );
+    if (isClaimingSentinel(runId)) {
+      // Dispatch is in-flight — remove the claim so dispatch detects cancellation
+      await adapters.runRegistry.unregister(ticketKey);
+      logger.info({ ticketKey }, "webhook_cancel_cleared_claim");
+      return { ok: true, action: "cancel", cancelled: true };
     }
 
-    await adapters.runRegistry.unregister(ticketKey).catch(() => {});
-    logger.info({ ticketKey, runId }, "webhook_cancelled_run");
-    return { ok: true, action: "cancel", cancelled: true, runId };
+    const cancelled = await cancelRun(ticketKey, runId, adapters.runRegistry);
+    logger.info({ ticketKey, runId, cancelled }, "webhook_cancel_result");
+    return { ok: true, action: "cancel", cancelled, runId };
   }
 
   logger.info({ ticketKey }, "webhook_dispatching");
