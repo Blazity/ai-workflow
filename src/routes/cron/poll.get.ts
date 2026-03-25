@@ -2,7 +2,7 @@ import { defineEventHandler, getHeader, createError } from "h3";
 import { getRun } from "workflow/api";
 import { env } from "../../../env.js";
 import { createAdapters } from "../../lib/adapters.js";
-import { dispatchTicket } from "../../lib/dispatch.js";
+import { dispatchTicket, CLAIMING_SENTINEL } from "../../lib/dispatch.js";
 import { logger } from "../../lib/logger.js";
 
 export default defineEventHandler(async (event) => {
@@ -43,6 +43,10 @@ export default defineEventHandler(async (event) => {
   let cleaned = 0;
 
   for (const { ticketKey, runId } of activeRuns) {
+    if (runId === CLAIMING_SENTINEL) {
+      continue;
+    }
+
     if (aiColumnSet.has(ticketKey)) {
       try {
         const run = getRun(runId);

@@ -4,13 +4,18 @@ import { reviewFixWorkflow } from "../workflows/review-fix.js";
 import { logger } from "./logger.js";
 import type { Adapters } from "./adapters.js";
 
+export const CLAIMING_SENTINEL = "claiming";
+
 async function getActiveSandboxCount(): Promise<number> {
   try {
     const { Sandbox } = await import("@vercel/sandbox");
     const { json } = await Sandbox.list({ limit: 100 });
     return json.sandboxes.filter((s: any) => s.status === "running").length;
   } catch (err) {
-    logger.warn({ error: (err as Error).message }, "sandbox_count_check_failed");
+    logger.warn(
+      { error: (err as Error).message },
+      "sandbox_count_check_failed",
+    );
     return 0;
   }
 }
@@ -30,11 +35,14 @@ export async function dispatchTicket(
 
   const activeSandboxes = await getActiveSandboxCount();
   if (activeSandboxes >= maxConcurrentAgents) {
-    logger.info({ active: activeSandboxes, max: maxConcurrentAgents }, "dispatch_at_capacity");
+    logger.info(
+      { active: activeSandboxes, max: maxConcurrentAgents },
+      "dispatch_at_capacity",
+    );
     return { started: false, reason: "at_capacity" };
   }
 
-  const claimed = await runRegistry.claim(ticketKey, "claiming");
+  const claimed = await runRegistry.claim(ticketKey, CLAIMING_SENTINEL);
   if (!claimed) {
     logger.info({ ticketKey }, "dispatch_ticket_already_claimed");
     return { started: false, reason: "already_claimed" };
@@ -49,13 +57,21 @@ export async function dispatchTicket(
     if (existingPR) {
       handle = await start(reviewFixWorkflow, [ticket.id, branchName]);
       logger.info(
-        { ticketId: ticket.id, identifier: ticket.identifier, runId: handle.runId },
+        {
+          ticketId: ticket.id,
+          identifier: ticket.identifier,
+          runId: handle.runId,
+        },
         "workflow_started_review_fix",
       );
     } else {
       handle = await start(implementationWorkflow, [ticket.id]);
       logger.info(
-        { ticketId: ticket.id, identifier: ticket.identifier, runId: handle.runId },
+        {
+          ticketId: ticket.id,
+          identifier: ticket.identifier,
+          runId: handle.runId,
+        },
         "workflow_started_implementation",
       );
     }
@@ -64,7 +80,10 @@ export async function dispatchTicket(
     return { started: true, runId: handle.runId };
   } catch (err) {
     await runRegistry.unregister(ticketKey).catch(() => {});
-    logger.warn({ ticketKey, error: (err as Error).message }, "dispatch_ticket_error");
+    logger.warn(
+      { ticketKey, error: (err as Error).message },
+      "dispatch_ticket_error",
+    );
     return { started: false, reason: "error" };
   }
 }
