@@ -41,6 +41,7 @@ export function parseJiraWebhookEvent(
 
   const items: any[] | undefined = payload?.changelog?.items;
   if (!Array.isArray(items)) {
+    console.log("[DEBUG] No changelog.items array", { ticketKey, changelog: payload?.changelog });
     return { ticketKey, action: "ignore" };
   }
 
@@ -49,8 +50,11 @@ export function parseJiraWebhookEvent(
   );
 
   if (!statusChange) {
+    console.log("[DEBUG] No status change in items", { ticketKey, items });
     return { ticketKey, action: "ignore" };
   }
+
+  console.log("[DEBUG] statusChange found", { ticketKey, statusChange, targetColumn });
 
   if (statusChange.toString === targetColumn) {
     return { ticketKey, action: "dispatch" };
