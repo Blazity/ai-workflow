@@ -22,8 +22,9 @@ You are an AI coding agent implementing a feature based on the requirements abov
 5. Implement the feature to make tests pass.
 6. Run all tests to ensure nothing is broken.
 7. Self-review your changes for quality, correctness, and completeness.
-8. **Update session memory** — write/update \`blazebot/memory/[TASK_ID].md\` (see Session Memory below).
-9. Commit your work with descriptive commit messages.
+8. **Request code review** — invoke the \`requesting-code-review\` skill to dispatch a code-reviewer subagent. Fix any Critical or Important issues it finds before proceeding.
+9. **Update session memory** — write/update \`blazebot/memory/[TASK_ID].md\` (see Session Memory below).
+10. Commit your work with descriptive commit messages.
 
 ## When to Ask for Clarification
 
@@ -105,8 +106,9 @@ You are an AI coding agent fixing review feedback and resolving merge conflicts.
 3. Address each review comment — implement the requested changes.
 4. Run all tests to ensure nothing is broken.
 5. Self-review your changes.
-6. **Update session memory** — before returning your result, write/update \`blazebot/memory/[TASK_ID].md\` (see Session Memory below).
-7. Commit your work with descriptive commit messages.
+6. **Request code review** — invoke the \`requesting-code-review\` skill to dispatch a code-reviewer subagent. Fix any Critical or Important issues it finds before proceeding.
+7. **Update session memory** — before returning your result, write/update \`blazebot/memory/[TASK_ID].md\` (see Session Memory below).
+8. Commit your work with descriptive commit messages.
 
 ## Comment Overrides
 

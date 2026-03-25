@@ -163,6 +163,7 @@ export async function implementationWorkflow(ticketId: string) {
     return;
   }
 
+  await notifySlack(`Task ${ticket.identifier} failed: ${output.error ?? "unknown error"}`);
   await unregisterRun(ticket.identifier);
   throw new Error(`Agent failed for ${ticketId}: ${output.error}`);
 }
