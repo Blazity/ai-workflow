@@ -43,6 +43,7 @@ export default defineEventHandler(async (event) => {
     }
 
     if (runId === CLAIMING_SENTINEL) {
+      await adapters.runRegistry.markPendingCancel(ticketKey);
       logger.info({ ticketKey }, "webhook_cancel_dispatch_in_flight");
       return { ok: true, action: "cancel", cancelled: false, pending: true };
     }

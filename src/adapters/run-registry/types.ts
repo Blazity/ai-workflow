@@ -9,4 +9,8 @@ export interface RunRegistryAdapter {
   unregister(ticketKey: string): Promise<void>;
   /** Get all tracked ticket -> runId pairs. */
   listAll(): Promise<Array<{ ticketKey: string; runId: string }>>;
+  /** Flag a ticket for cancellation while its dispatch is still in-flight. */
+  markPendingCancel(ticketKey: string): Promise<void>;
+  /** Consume (get and delete) the pending-cancel flag. Returns true if it was set. */
+  consumePendingCancel(ticketKey: string): Promise<boolean>;
 }

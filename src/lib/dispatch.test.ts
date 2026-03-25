@@ -4,8 +4,11 @@ import type { TicketContent } from "../adapters/issue-tracker/types.js";
 
 
 const mockStart = vi.fn();
+const mockCancel = vi.fn();
+const mockGetRun = vi.fn(() => ({ cancel: mockCancel }));
 vi.mock("workflow/api", () => ({
   start: (...args: any[]) => mockStart(...args),
+  getRun: (...args: any[]) => mockGetRun(...args),
 }));
 
 vi.mock("../workflows/implementation.js", () => ({
@@ -42,6 +45,7 @@ function makeAdapters(overrides: Partial<{
   claim: ReturnType<typeof vi.fn>;
   register: ReturnType<typeof vi.fn>;
   unregister: ReturnType<typeof vi.fn>;
+  consumePendingCancel: ReturnType<typeof vi.fn>;
   fetchTicket: ReturnType<typeof vi.fn>;
   findPR: ReturnType<typeof vi.fn>;
 }>= {}): Adapters {
@@ -69,6 +73,8 @@ function makeAdapters(overrides: Partial<{
       unregister: overrides.unregister ?? vi.fn().mockResolvedValue(undefined),
       getRunId: vi.fn(),
       listAll: vi.fn(),
+      markPendingCancel: vi.fn().mockResolvedValue(undefined),
+      consumePendingCancel: overrides.consumePendingCancel ?? vi.fn().mockResolvedValue(false),
     },
   };
 }
@@ -141,6 +147,23 @@ describe("dispatchTicket", () => {
     expect(result).toEqual({ started: false, reason: "at_capacity" });
     expect(adapters.runRegistry.claim).not.toHaveBeenCalled();
     expect(mockStart).not.toHaveBeenCalled();
+  });
+
+  it("cancels workflow when pending cancel was flagged during dispatch", async () => {
+    const unregister = vi.fn().mockResolvedValue(undefined);
+    const adapters = makeAdapters({
+      consumePendingCancel: vi.fn().mockResolvedValue(true),
+      unregister,
+    });
+    const { dispatchTicket } = await import("./dispatch.js");
+
+    const result = await dispatchTicket("PROJ-42", adapters, 5);
+
+    expect(result).toEqual({ started: false, reason: "cancelled_before_run" });
+    expect(adapters.runRegistry.register).toHaveBeenCalledWith("PROJ-42", "run_123");
+    expect(mockGetRun).toHaveBeenCalledWith("run_123");
+    expect(mockCancel).toHaveBeenCalled();
+    expect(unregister).toHaveBeenCalledWith("PROJ-42");
   });
 
   it("unregisters claim and returns error on dispatch failure", async () => {

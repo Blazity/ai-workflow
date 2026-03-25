@@ -9,6 +9,8 @@ const mockRedis = {
   hget: vi.fn(),
   hdel: vi.fn(),
   hgetall: vi.fn(),
+  set: vi.fn(),
+  del: vi.fn(),
 };
 
 vi.mock("@upstash/redis", () => ({
@@ -96,6 +98,35 @@ describe("UpstashRunRegistry", () => {
       const registry = createRegistry();
       const result = await registry.listAll();
       expect(result).toEqual([]);
+    });
+  });
+
+  describe("markPendingCancel", () => {
+    it("sets a key with TTL", async () => {
+      const registry = createRegistry();
+      await registry.markPendingCancel("PROJ-1");
+      expect(mockRedis.set).toHaveBeenCalledWith(
+        "blazebot:pending-cancel:PROJ-1",
+        "1",
+        { ex: 60 },
+      );
+    });
+  });
+
+  describe("consumePendingCancel", () => {
+    it("returns true and deletes when flag exists", async () => {
+      mockRedis.del.mockResolvedValueOnce(1);
+      const registry = createRegistry();
+      const result = await registry.consumePendingCancel("PROJ-1");
+      expect(result).toBe(true);
+      expect(mockRedis.del).toHaveBeenCalledWith("blazebot:pending-cancel:PROJ-1");
+    });
+
+    it("returns false when flag does not exist", async () => {
+      mockRedis.del.mockResolvedValueOnce(0);
+      const registry = createRegistry();
+      const result = await registry.consumePendingCancel("PROJ-1");
+      expect(result).toBe(false);
     });
   });
 });

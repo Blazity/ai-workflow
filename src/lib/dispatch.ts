@@ -1,4 +1,4 @@
-import { start } from "workflow/api";
+import { start, getRun } from "workflow/api";
 import { implementationWorkflow } from "../workflows/implementation.js";
 import { reviewFixWorkflow } from "../workflows/review-fix.js";
 import { logger } from "./logger.js";
@@ -23,7 +23,7 @@ async function getActiveSandboxCount(): Promise<number> {
 export interface DispatchResult {
   started: boolean;
   runId?: string;
-  reason?: "already_claimed" | "at_capacity" | "error";
+  reason?: "already_claimed" | "at_capacity" | "error" | "cancelled_before_run";
 }
 
 export async function dispatchTicket(
@@ -77,6 +77,26 @@ export async function dispatchTicket(
     }
 
     await runRegistry.register(ticket.identifier, handle.runId);
+
+    const shouldCancel = await runRegistry.consumePendingCancel(ticketKey);
+    if (shouldCancel) {
+      logger.info(
+        { ticketKey, runId: handle.runId },
+        "dispatch_cancelled_pending",
+      );
+      try {
+        const run = getRun(handle.runId);
+        await run.cancel();
+      } catch (cancelErr) {
+        logger.warn(
+          { ticketKey, runId: handle.runId, error: (cancelErr as Error).message },
+          "dispatch_pending_cancel_error",
+        );
+      }
+      await runRegistry.unregister(ticketKey).catch(() => {});
+      return { started: false, reason: "cancelled_before_run" as const };
+    }
+
     return { started: true, runId: handle.runId };
   } catch (err) {
     await runRegistry.unregister(ticketKey).catch(() => {});

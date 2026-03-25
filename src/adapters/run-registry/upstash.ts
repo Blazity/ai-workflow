@@ -2,6 +2,8 @@ import { Redis } from "@upstash/redis";
 import type { RunRegistryAdapter } from "./types.js";
 
 const HASH_KEY = "blazebot:active-runs";
+const PENDING_CANCEL_PREFIX = "blazebot:pending-cancel:";
+const PENDING_CANCEL_TTL_SECONDS = 60;
 
 export class UpstashRunRegistry implements RunRegistryAdapter {
   private redis: Redis;
@@ -31,5 +33,19 @@ export class UpstashRunRegistry implements RunRegistryAdapter {
     const all = await this.redis.hgetall<Record<string, string>>(HASH_KEY);
     if (!all) return [];
     return Object.entries(all).map(([ticketKey, runId]) => ({ ticketKey, runId }));
+  }
+
+  async markPendingCancel(ticketKey: string): Promise<void> {
+    await this.redis.set(
+      `${PENDING_CANCEL_PREFIX}${ticketKey}`,
+      "1",
+      { ex: PENDING_CANCEL_TTL_SECONDS },
+    );
+  }
+
+  async consumePendingCancel(ticketKey: string): Promise<boolean> {
+    const key = `${PENDING_CANCEL_PREFIX}${ticketKey}`;
+    const result = await this.redis.del(key);
+    return result === 1;
   }
 }
