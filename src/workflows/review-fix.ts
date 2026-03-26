@@ -144,6 +144,7 @@ export async function reviewFixWorkflow(
     return;
   }
 
+  await notifySlack(`Task ${ticket.identifier} review-fix failed: ${output.error ?? "unknown error"}`);
   await unregisterRun(ticket.identifier);
   throw new Error(`Agent failed for ${ticketId}: ${output.error}`);
 }
