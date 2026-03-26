@@ -36,12 +36,13 @@ jobs:
       AI_WORKFLOW_KV_REST_API_TOKEN: ${{ secrets.AI_WORKFLOW_KV_REST_API_TOKEN }}
     steps:
       - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: npm
-      - run: npm ci
-      - run: npm run test:e2e:tier1
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run test:e2e:tier1
       - if: failure()
         uses: actions/upload-artifact@v4
         with:
@@ -74,12 +75,13 @@ jobs:
       AI_WORKFLOW_KV_REST_API_TOKEN: ${{ secrets.AI_WORKFLOW_KV_REST_API_TOKEN }}
     steps:
       - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: npm
-      - run: npm ci
-      - run: npm run test:e2e:tier2
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run test:e2e:tier2
       - if: failure()
         uses: actions/upload-artifact@v4
         with:
