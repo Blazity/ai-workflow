@@ -36,7 +36,7 @@ describe("implementation happy path → review-fix flow", () => {
     const ticket = await createTestTicket({
       summary: `[E2E] Add GET /ping endpoint`,
       description:
-        "Add a GET /ping endpoint that returns { ping: 'pong' } with status 200.",
+        "Add a GET /api/ping API route that returns { ping: 'pong' } with status 200. Create only one route file at app/api/ping/route.ts.",
     });
     ticketKey = ticket.ticketKey;
     branchName = `blazebot/${ticketKey.toLowerCase()}`;

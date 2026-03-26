@@ -28,6 +28,7 @@ describe("cron reconciliation", () => {
 
     expect(status).toBe(200);
     expect(body.status).toBe("ok");
+    expect(body.cancelled + body.cleaned).toBeGreaterThanOrEqual(1);
 
     // The real assertion: Redis entry is gone after reconciliation
     const after = await getRunId(fakeTicketKey);

@@ -34,6 +34,7 @@ jobs:
       CRON_SECRET: ${{ secrets.CRON_SECRET }}
       AI_WORKFLOW_KV_REST_API_URL: ${{ secrets.AI_WORKFLOW_KV_REST_API_URL }}
       AI_WORKFLOW_KV_REST_API_TOKEN: ${{ secrets.AI_WORKFLOW_KV_REST_API_TOKEN }}
+      VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -41,7 +42,7 @@ jobs:
           version: 10
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: "20.12"
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm run test:e2e:tier1
@@ -75,6 +76,7 @@ jobs:
       CRON_SECRET: ${{ secrets.CRON_SECRET }}
       AI_WORKFLOW_KV_REST_API_URL: ${{ secrets.AI_WORKFLOW_KV_REST_API_URL }}
       AI_WORKFLOW_KV_REST_API_TOKEN: ${{ secrets.AI_WORKFLOW_KV_REST_API_TOKEN }}
+      VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -82,7 +84,7 @@ jobs:
           version: 10
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: "20.12"
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm run test:e2e:tier2

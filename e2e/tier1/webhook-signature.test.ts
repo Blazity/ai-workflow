@@ -27,6 +27,8 @@ describe("webhook signature validation", () => {
   });
 
   it("rejects an empty body", async () => {
+    // Sends no body AND no signature header. The server checks body presence
+    // before signature validation, so this returns 400 (not 401).
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
     };

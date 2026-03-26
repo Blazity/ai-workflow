@@ -37,16 +37,52 @@ export function parseAgentOutput(raw: string): AgentOutput {
     // Not valid JSON — try extraction below
   }
 
-  // stream-json format: one JSON object per line — look for the result event
-  // The result message has type:"result" with a JSON string in subtype
+  // stream-json / result-envelope format: one JSON object per line — look for the result event
   const lines = raw.split("\n").filter(Boolean);
   for (let i = lines.length - 1; i >= 0; i--) {
     try {
       const event = JSON.parse(lines[i]);
-      if (event.type === "result" && typeof event.subtype === "string") {
-        const parsed = agentOutputSchema.safeParse(JSON.parse(event.subtype));
-        if (parsed.success) return parsed.data;
+
+      if (event.type === "result") {
+        // Try event.result as JSON (--output-format json envelope)
+        if (typeof event.result === "string") {
+          try {
+            const parsed = agentOutputSchema.safeParse(JSON.parse(event.result));
+            if (parsed.success) return parsed.data;
+          } catch {
+            // event.result is not valid JSON
+          }
+        }
+
+        // Try event.subtype as JSON (legacy stream-json format)
+        if (typeof event.subtype === "string") {
+          try {
+            const parsed = agentOutputSchema.safeParse(JSON.parse(event.subtype));
+            if (parsed.success) return parsed.data;
+          } catch {
+            // subtype is not valid JSON
+          }
+        }
+
+        // Agent completed but returned text instead of structured JSON.
+        // Infer result from the envelope's success/failure status.
+        if (event.subtype === "success" && !event.is_error) {
+          return {
+            result: "implemented",
+            summary: typeof event.result === "string"
+              ? event.result.trim().slice(0, 500)
+              : undefined,
+          };
+        }
+
+        return {
+          result: "failed",
+          error: typeof event.result === "string"
+            ? event.result.trim().slice(0, 500)
+            : "Agent returned non-structured result",
+        };
       }
+
       // Also check if the line itself matches our schema
       const direct = agentOutputSchema.safeParse(event);
       if (direct.success) return direct.data;

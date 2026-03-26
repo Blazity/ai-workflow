@@ -65,6 +65,44 @@ describe("parseAgentOutput", () => {
     const output = parseAgentOutput(JSON.stringify({ summary: "oops" }));
     expect(output.result).toBe("failed");
   });
+
+  it("parses structured JSON from result envelope event.result", () => {
+    const envelope = JSON.stringify({
+      type: "result",
+      subtype: "success",
+      is_error: false,
+      result: JSON.stringify({ result: "implemented", summary: "Renamed endpoint" }),
+    });
+    const output = parseAgentOutput(envelope);
+    expect(output.result).toBe("implemented");
+    expect(output.summary).toBe("Renamed endpoint");
+  });
+
+  it("infers implemented when result envelope has success but text output", () => {
+    const envelope = JSON.stringify({
+      type: "result",
+      subtype: "success",
+      is_error: false,
+      duration_ms: 6404,
+      num_turns: 1,
+      result: "\n\nI kept the response as-is to match the acceptance criteria.\n",
+    });
+    const output = parseAgentOutput(envelope);
+    expect(output.result).toBe("implemented");
+    expect(output.summary).toContain("acceptance criteria");
+  });
+
+  it("infers failed when result envelope has error status", () => {
+    const envelope = JSON.stringify({
+      type: "result",
+      subtype: "error",
+      is_error: true,
+      result: "Agent crashed unexpectedly",
+    });
+    const output = parseAgentOutput(envelope);
+    expect(output.result).toBe("failed");
+    expect(output.error).toContain("crashed");
+  });
 });
 
 describe("AGENT_SCHEMA", () => {
