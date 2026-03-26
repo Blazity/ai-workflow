@@ -8,7 +8,10 @@
     "preview": "nitro preview",
     "test": "vitest run",
     "test:watch": "vitest",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test:e2e": "vitest run --config e2e/vitest.e2e.config.ts",
+    "test:e2e:tier1": "vitest run --config e2e/vitest.e2e.config.ts --project tier1",
+    "test:e2e:tier2": "vitest run --config e2e/vitest.e2e.config.ts --project tier2"
   },
   "dependencies": {
     "@chat-adapter/slack": "^4.20.2",
