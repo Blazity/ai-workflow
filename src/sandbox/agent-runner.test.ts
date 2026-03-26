@@ -66,16 +66,29 @@ describe("parseAgentOutput", () => {
     expect(output.result).toBe("failed");
   });
 
-  it("parses structured JSON from result envelope event.result", () => {
+  it("parses structured_output from result envelope", () => {
     const envelope = JSON.stringify({
       type: "result",
       subtype: "success",
       is_error: false,
-      result: JSON.stringify({ result: "implemented", summary: "Renamed endpoint" }),
+      result: "I renamed the endpoint.",
+      structured_output: { result: "implemented", summary: "Renamed endpoint" },
     });
     const output = parseAgentOutput(envelope);
     expect(output.result).toBe("implemented");
     expect(output.summary).toBe("Renamed endpoint");
+  });
+
+  it("falls back to event.result as JSON when structured_output is missing", () => {
+    const envelope = JSON.stringify({
+      type: "result",
+      subtype: "success",
+      is_error: false,
+      result: JSON.stringify({ result: "clarification_needed", questions: ["Which DB?"] }),
+    });
+    const output = parseAgentOutput(envelope);
+    expect(output.result).toBe("clarification_needed");
+    expect(output.questions).toEqual(["Which DB?"]);
   });
 
   it("infers implemented when result envelope has success but text output", () => {

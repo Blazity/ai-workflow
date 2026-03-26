@@ -44,7 +44,13 @@ export function parseAgentOutput(raw: string): AgentOutput {
       const event = JSON.parse(lines[i]);
 
       if (event.type === "result") {
-        // Try event.result as JSON (--output-format json envelope)
+        // --json-schema puts validated output in structured_output
+        if (event.structured_output != null) {
+          const parsed = agentOutputSchema.safeParse(event.structured_output);
+          if (parsed.success) return parsed.data;
+        }
+
+        // Fallback: try event.result as JSON
         if (typeof event.result === "string") {
           try {
             const parsed = agentOutputSchema.safeParse(JSON.parse(event.result));
@@ -54,18 +60,8 @@ export function parseAgentOutput(raw: string): AgentOutput {
           }
         }
 
-        // Try event.subtype as JSON (legacy stream-json format)
-        if (typeof event.subtype === "string") {
-          try {
-            const parsed = agentOutputSchema.safeParse(JSON.parse(event.subtype));
-            if (parsed.success) return parsed.data;
-          } catch {
-            // subtype is not valid JSON
-          }
-        }
-
-        // Agent completed but returned text instead of structured JSON.
-        // Infer result from the envelope's success/failure status.
+        // Agent completed but structured_output was missing/invalid.
+        // Infer from the envelope status as last resort.
         if (event.subtype === "success" && !event.is_error) {
           return {
             result: "implemented",
