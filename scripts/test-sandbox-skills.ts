@@ -24,10 +24,8 @@ async function main() {
 
   console.log("Sandbox created.\n");
 
-  // Init a git repo so skills CLI doesn't complain
   await sandbox.runCommand("bash", ["-c", "git init && git commit --allow-empty -m 'init'"]);
 
-  // --- Install Claude Code ---
   console.log("=== Installing Claude Code ===");
   const installCC = await sandbox.runCommand("npm", [
     "install",
@@ -37,7 +35,6 @@ async function main() {
   console.log("stdout:", (await installCC.stdout()).slice(-200));
   console.log("stderr:", (await installCC.stderr()).slice(-200));
 
-  // --- Install each skill globally ---
   for (const { repo, skill } of INJECTED_SKILLS) {
     console.log(`\n=== Installing skill globally: ${skill} ===`);
     const result = await sandbox.runCommand("npx", [
@@ -47,7 +44,6 @@ async function main() {
     console.log("stderr:", (await result.stderr()).slice(-300) || "(empty)");
   }
 
-  // --- Inspect: project-level (should be empty) ---
   console.log("\n=== .claude/skills/ (project) ===");
   const projectSkills = await sandbox.runCommand("bash", [
     "-c",
@@ -62,7 +58,6 @@ async function main() {
   ]);
   console.log(await lock.stdout());
 
-  // --- Inspect: global location ---
   console.log("=== ~/.claude/skills/ (global) ===");
   const globalSkills = await sandbox.runCommand("bash", [
     "-c",
@@ -77,7 +72,6 @@ async function main() {
   ]);
   console.log(await skillFiles.stdout());
 
-  // --- Cleanup ---
   console.log("\n=== Stopping sandbox ===");
   await sandbox.stop();
   console.log("Done.");
