@@ -1,5 +1,15 @@
 import type { Sandbox as SandboxType } from "@vercel/sandbox";
 
+/**
+ * Skills installed globally in the sandbox (~/.claude/skills/).
+ * Global install keeps the client repo completely untouched — no git concerns.
+ */
+const GLOBAL_SKILLS = [
+  { repo: "https://github.com/obra/superpowers", skill: "using-superpowers" },
+  { repo: "https://github.com/obra/superpowers", skill: "requesting-code-review" },
+  { repo: "https://github.com/anthropics/skills", skill: "frontend-design" },
+] as const;
+
 export interface SandboxConfig {
   githubToken: string;
   owner: string;
@@ -65,12 +75,27 @@ export class SandboxManager {
     // Install Claude Code
     await sandbox.runCommand("npm", ["install", "-g", "@anthropic-ai/claude-code"]);
 
+    // Install skills globally (outside the client repo)
+    await this.installGlobalSkills(sandbox);
+
     // Write requirements.md
     await sandbox.writeFiles([
       { path: "requirements.md", content: Buffer.from(requirementsMd) },
     ]);
 
     return sandbox;
+  }
+
+  /**
+   * Install Claude Code skills globally in the sandbox (~/.claude/skills/).
+   * Global install keeps the client repo completely untouched.
+   */
+  private async installGlobalSkills(sandbox: SandboxInstance): Promise<void> {
+    for (const { repo, skill } of GLOBAL_SKILLS) {
+      await sandbox.runCommand("npx", [
+        "-y", "skills", "add", repo, "--skill", skill, "--yes", "-g",
+      ]);
+    }
   }
 
   async runEndHook(sandbox: SandboxInstance): Promise<EndHookResult> {
