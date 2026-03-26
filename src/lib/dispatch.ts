@@ -14,20 +14,6 @@ export function getClaimTimestamp(runId: string): number {
   return parseInt(runId.slice(CLAIMING_PREFIX.length), 10);
 }
 
-async function getActiveSandboxCount(): Promise<number> {
-  try {
-    const { Sandbox } = await import("@vercel/sandbox");
-    const { json } = await Sandbox.list({ limit: 100 });
-    return json.sandboxes.filter((s: any) => s.status === "running").length;
-  } catch (err) {
-    logger.warn(
-      { error: (err as Error).message },
-      "sandbox_count_check_failed",
-    );
-    return 0;
-  }
-}
-
 export interface DispatchResult {
   started: boolean;
   runId?: string;
@@ -41,73 +27,97 @@ export async function dispatchTicket(
 ): Promise<DispatchResult> {
   const { issueTracker, vcs, runRegistry } = adapters;
 
-  const activeSandboxes = await getActiveSandboxCount();
-  if (activeSandboxes >= maxConcurrentAgents) {
-    logger.info(
-      { active: activeSandboxes, max: maxConcurrentAgents },
-      "dispatch_at_capacity",
-    );
+  if (await isAtCapacity(maxConcurrentAgents)) {
     return { started: false, reason: "at_capacity" };
   }
 
   const claimValue = `${CLAIMING_PREFIX}${Date.now()}`;
   const claimed = await runRegistry.claim(ticketKey, claimValue);
   if (!claimed) {
-    logger.info({ ticketKey }, "dispatch_ticket_already_claimed");
+    logger.info({ ticketKey }, "dispatch_already_claimed");
     return { started: false, reason: "already_claimed" };
   }
 
   try {
     const ticket = await issueTracker.fetchTicket(ticketKey);
     const branchName = `blazebot/${ticket.identifier.toLowerCase()}`;
-    const existingPR = await vcs.findPR(branchName);
 
-    let handle;
-    if (existingPR) {
-      handle = await start(reviewFixWorkflow, [ticket.id, branchName]);
-      logger.info(
-        {
-          ticketId: ticket.id,
-          identifier: ticket.identifier,
-          runId: handle.runId,
-        },
-        "workflow_started_review_fix",
-      );
-    } else {
-      handle = await start(implementationWorkflow, [ticket.id]);
-      logger.info(
-        {
-          ticketId: ticket.id,
-          identifier: ticket.identifier,
-          runId: handle.runId,
-        },
-        "workflow_started_implementation",
-      );
-    }
+    const handle = await startWorkflow(ticket, branchName, vcs);
 
-    // Verify claim wasn't cancelled while the workflow was starting.
-    // If a cancel removed our sentinel, abort the just-started workflow.
-    const currentRunId = await runRegistry.getRunId(ticketKey);
-    if (currentRunId !== claimValue) {
-      logger.info(
-        { ticketKey, runId: handle.runId },
-        "dispatch_aborted_claim_cancelled",
-      );
-      try {
-        const run = getRun(handle.runId);
-        await run.cancel();
-      } catch {}
+    const claimStillHeld = await verifyClaimNotCancelled(
+      ticketKey,
+      claimValue,
+      runRegistry,
+    );
+    if (!claimStillHeld) {
+      await abortWorkflow(handle.runId, ticketKey);
       return { started: false, reason: "already_claimed" };
     }
 
-    await runRegistry.register(ticket.identifier, handle.runId);
+    await runRegistry.register(ticketKey, handle.runId);
     return { started: true, runId: handle.runId };
   } catch (err) {
     await runRegistry.unregister(ticketKey).catch(() => {});
     logger.warn(
       { ticketKey, error: (err as Error).message },
-      "dispatch_ticket_error",
+      "dispatch_error",
     );
     return { started: false, reason: "error" };
   }
+}
+
+async function isAtCapacity(max: number): Promise<boolean> {
+  const active = await getActiveSandboxCount();
+  if (active < max) return false;
+
+  logger.info({ active, max }, "dispatch_at_capacity");
+  return true;
+}
+
+async function getActiveSandboxCount(): Promise<number> {
+  try {
+    const { Sandbox } = await import("@vercel/sandbox");
+    const { json } = await Sandbox.list({ limit: 100 });
+    return json.sandboxes.filter((s: any) => s.status === "running").length;
+  } catch (err) {
+    logger.warn({ error: (err as Error).message }, "sandbox_count_check_failed");
+    return 0;
+  }
+}
+
+async function startWorkflow(
+  ticket: { id: string; identifier: string },
+  branchName: string,
+  vcs: Adapters["vcs"],
+) {
+  const existingPR = await vcs.findPR(branchName);
+
+  const handle = existingPR
+    ? await start(reviewFixWorkflow, [ticket.id, branchName])
+    : await start(implementationWorkflow, [ticket.id]);
+
+  const workflowType = existingPR ? "review_fix" : "implementation";
+  logger.info(
+    { ticketId: ticket.id, identifier: ticket.identifier, runId: handle.runId },
+    `workflow_started_${workflowType}`,
+  );
+
+  return handle;
+}
+
+async function verifyClaimNotCancelled(
+  ticketKey: string,
+  expectedClaimValue: string,
+  runRegistry: Adapters["runRegistry"],
+): Promise<boolean> {
+  const currentValue = await runRegistry.getRunId(ticketKey);
+  return currentValue === expectedClaimValue;
+}
+
+async function abortWorkflow(runId: string, ticketKey: string): Promise<void> {
+  logger.info({ ticketKey, runId }, "dispatch_aborted_claim_cancelled");
+  try {
+    const run = getRun(runId);
+    await run.cancel();
+  } catch {}
 }
