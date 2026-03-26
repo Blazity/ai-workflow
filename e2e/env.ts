@@ -20,6 +20,8 @@ const schema = z.object({
 
   AI_WORKFLOW_KV_REST_API_URL: z.string().url(),
   AI_WORKFLOW_KV_REST_API_TOKEN: z.string().min(1),
+
+  VERCEL_AUTOMATION_BYPASS_SECRET: z.string().optional(),
 });
 
 export type E2EEnv = z.infer<typeof schema>;

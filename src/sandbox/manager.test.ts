@@ -87,7 +87,10 @@ describe("SandboxManager", () => {
     const endHookStdout = vi.fn()
       .mockResolvedValueOnce(" M src/index.ts"); // git status --porcelain
     mockRunCommand
-      // provision calls (git config + npm install)
+      // provision calls (git config + npm install + 3 skill installs)
+      .mockResolvedValueOnce({ exitCode: 0, stdout: vi.fn().mockResolvedValue("") })
+      .mockResolvedValueOnce({ exitCode: 0, stdout: vi.fn().mockResolvedValue("") })
+      .mockResolvedValueOnce({ exitCode: 0, stdout: vi.fn().mockResolvedValue("") })
       .mockResolvedValueOnce({ exitCode: 0, stdout: vi.fn().mockResolvedValue("") })
       .mockResolvedValueOnce({ exitCode: 0, stdout: vi.fn().mockResolvedValue("") })
       // runEndHook calls

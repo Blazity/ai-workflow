@@ -5,6 +5,12 @@ function sign(body: string, secret: string): string {
   return "sha256=" + createHmac("sha256", secret).update(body).digest("hex");
 }
 
+function bypassHeaders(): Record<string, string> {
+  const secret = e2eEnv.VERCEL_AUTOMATION_BYPASS_SECRET;
+  if (!secret) return {};
+  return { "x-vercel-protection-bypass": secret };
+}
+
 export interface WebhookOptions {
   invalidSignature?: boolean;
   omitSignature?: boolean;
@@ -65,6 +71,7 @@ export async function sendJiraWebhook(
   const rawBody = JSON.stringify(payload);
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
+    ...bypassHeaders(),
   };
 
   if (!options.omitSignature) {
@@ -94,7 +101,7 @@ export async function sendJiraWebhook(
 export async function callCronPoll(opts?: {
   omitAuth?: boolean;
 }): Promise<{ status: number; body: any }> {
-  const headers: Record<string, string> = {};
+  const headers: Record<string, string> = { ...bypassHeaders() };
   if (!opts?.omitAuth) {
     headers["Authorization"] = `Bearer ${e2eEnv.CRON_SECRET}`;
   }

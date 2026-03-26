@@ -94,7 +94,7 @@ describe("implementation happy path → review-fix flow", () => {
     // Add a review comment
     await addPRComment(
       prNumber!,
-      "Please rename the endpoint to `/healthcheck` instead of `/ping`.",
+      "Rename the `/ping` endpoint to `/healthcheck` — remove the old `/ping` route and update its handler, tests, and any references so only `/healthcheck` exists.",
     );
 
     // Move ticket back to AI column and dispatch review-fix

@@ -101,11 +101,15 @@ export async function getTicketComments(
 }
 
 export async function deleteTicket(ticketKey: string): Promise<void> {
+  // Only delete tickets created by e2e tests
+  const data = await jiraRequest(
+    `/rest/api/3/issue/${ticketKey}?fields=summary`,
+  ).catch(() => null);
+  if (!data?.fields?.summary?.startsWith("[E2E]")) return;
+
   await jiraRequest(`/rest/api/3/issue/${ticketKey}`, {
     method: "DELETE",
-  }).catch(() => {
-    // Best-effort cleanup
-  });
+  }).catch(() => {});
 }
 
 function extractAdfText(adf: any): string {

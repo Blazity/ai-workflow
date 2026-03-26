@@ -14,6 +14,7 @@ export default defineConfig({
     environment: "node",
     include: ["e2e/**/*.test.ts"],
     sequence: { concurrent: false },
+    fileParallelism: false,
     projects: [
       {
         test: {

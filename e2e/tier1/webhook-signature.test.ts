@@ -27,9 +27,16 @@ describe("webhook signature validation", () => {
   });
 
   it("rejects an empty body", async () => {
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+    };
+    const bypass = e2eEnv.VERCEL_AUTOMATION_BYPASS_SECRET;
+    if (bypass) {
+      headers["x-vercel-protection-bypass"] = bypass;
+    }
     const res = await fetch(`${e2eEnv.E2E_BASE_URL}/webhooks/jira`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers,
     });
     expect(res.status).toBe(400);
   });
