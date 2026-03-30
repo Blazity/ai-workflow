@@ -194,6 +194,32 @@ describe("dispatchTicket", () => {
     expect(adapters.runRegistry.register).not.toHaveBeenCalled();
   });
 
+  it("only one concurrent dispatch wins when claim is atomic", async () => {
+    let claimed = false;
+    const claim = vi.fn().mockImplementation(async (_key: string, value: string) => {
+      if (claimed) return false;
+      claimed = true;
+      return true;
+    });
+    const getRunId = vi.fn().mockImplementation(async () => (claimed ? `claiming:${Date.now()}` : null));
+
+    const makeAdaptersForRace = () => makeAdapters({ claim, getRunId });
+    const { dispatchTicket } = await import("./dispatch.js");
+
+    const [a, b] = await Promise.all([
+      dispatchTicket("PROJ-42", makeAdaptersForRace(), 5),
+      dispatchTicket("PROJ-42", makeAdaptersForRace(), 5),
+    ]);
+
+    const results = [a, b];
+    const winners = results.filter((r) => r.started);
+    const losers = results.filter((r) => !r.started);
+
+    expect(winners).toHaveLength(1);
+    expect(losers).toHaveLength(1);
+    expect(losers[0].reason).toBe("already_claimed");
+  });
+
   it("unregisters claim and returns error on dispatch failure", async () => {
     const unregister = vi.fn().mockResolvedValue(undefined);
     const adapters = makeAdapters({
