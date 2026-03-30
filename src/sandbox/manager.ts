@@ -14,7 +14,8 @@ export interface SandboxConfig {
   githubToken: string;
   owner: string;
   repo: string;
-  anthropicApiKey: string;
+  anthropicApiKey?: string;
+  claudeCodeOauthToken?: string;
   claudeModel: string;
   commitAuthor: string;
   commitEmail: string;
@@ -61,7 +62,9 @@ export class SandboxManager {
       runtime: "node24",
       timeout: this.config.jobTimeoutMs,
       env: {
-        ANTHROPIC_API_KEY: this.config.anthropicApiKey,
+        ...(this.config.claudeCodeOauthToken
+          ? { CLAUDE_CODE_OAUTH_TOKEN: this.config.claudeCodeOauthToken }
+          : { ANTHROPIC_API_KEY: this.config.anthropicApiKey! }),
         CLAUDE_MODEL: this.config.claudeModel,
       },
     });
@@ -74,6 +77,14 @@ export class SandboxManager {
 
     // Install Claude Code
     await sandbox.runCommand("npm", ["install", "-g", "@anthropic-ai/claude-code"]);
+
+    // Skip interactive onboarding (required for headless OAuth token auth)
+    if (this.config.claudeCodeOauthToken) {
+      await sandbox.runCommand("bash", [
+        "-c",
+        `mkdir -p ~/.claude && echo '{"hasCompletedOnboarding":true}' > ~/.claude.json`,
+      ]);
+    }
 
     // Install skills globally (outside the client repo)
     await this.installGlobalSkills(sandbox);

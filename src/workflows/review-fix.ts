@@ -71,6 +71,7 @@ async function runFixingAgentInSandbox(
     owner: env.GITHUB_OWNER,
     repo: env.GITHUB_REPO,
     anthropicApiKey: env.ANTHROPIC_API_KEY,
+    claudeCodeOauthToken: env.CLAUDE_CODE_OAUTH_TOKEN,
     claudeModel: env.CLAUDE_MODEL,
     commitAuthor: env.COMMIT_AUTHOR,
     commitEmail: env.COMMIT_EMAIL,
