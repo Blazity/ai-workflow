@@ -134,12 +134,23 @@ export async function implementationWorkflow(ticketId: string) {
   const ticket = await fetchAndValidateTicket(ticketId, env.COLUMN_AI);
   if (!ticket) return;
 
+  await notifySlack(`Task ${ticket.identifier} started — implementing`);
+
   const branchName = `blazebot/${ticket.identifier.toLowerCase()}`;
   await createFeatureBranch(branchName, env.GITHUB_BASE_BRANCH);
 
   const requirementsMd = await assembleImplementationRequirements(ticket);
 
-  const { output, files } = await runAgentInSandbox(branchName, requirementsMd);
+  let output: AgentOutput;
+  let files: Array<{ path: string; content: string }>;
+  try {
+    ({ output, files } = await runAgentInSandbox(branchName, requirementsMd));
+  } catch (err) {
+    await moveTicket(ticketId, env.COLUMN_BACKLOG);
+    await notifySlack(`Task ${ticket.identifier} sandbox error: ${(err as Error).message ?? "unknown"}`);
+    await unregisterRun(ticket.identifier);
+    throw err;
+  }
 
   await pushChanges(branchName, files);
 
@@ -163,7 +174,7 @@ export async function implementationWorkflow(ticketId: string) {
     return;
   }
 
+  await moveTicket(ticketId, env.COLUMN_BACKLOG);
   await notifySlack(`Task ${ticket.identifier} failed: ${output.error ?? "unknown error"}`);
   await unregisterRun(ticket.identifier);
-  throw new Error(`Agent failed for ${ticketId}: ${output.error}`);
 }

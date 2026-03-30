@@ -193,19 +193,17 @@ describe("dispatchTicket", () => {
   });
 
   it("only one concurrent dispatch wins when claim is atomic", async () => {
-    let claimed = false;
+    let claimedValue: string | null = null;
     const claim = vi
       .fn()
       .mockImplementation(async (_key: string, value: string) => {
-        if (claimed) return false;
-        claimed = true;
+        if (claimedValue !== null) return false;
+        claimedValue = value;
         return true;
       });
     const getRunId = vi
       .fn()
-      .mockImplementation(async () =>
-        claimed ? `claiming:${Date.now()}` : null,
-      );
+      .mockImplementation(async () => claimedValue);
 
     const makeAdaptersForRace = () => makeAdapters({ claim, getRunId });
     const { dispatchTicket } = await import("./dispatch.js");

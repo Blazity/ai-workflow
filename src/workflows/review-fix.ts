@@ -35,7 +35,8 @@ async function assembleReviewFixRequirements(
   hasConflicts: boolean,
 ) {
   "use step";
-  const { assembleFixingFeedbackContext } = await import("../sandbox/context.js");
+  const { assembleFixingFeedbackContext } =
+    await import("../sandbox/context.js");
   const { getPrompt } = await import("../lib/prompts.js");
 
   const prompt = getPrompt("review-fix.md");
@@ -56,7 +57,10 @@ async function assembleReviewFixRequirements(
 async function runFixingAgentInSandbox(
   branchName: string,
   requirementsMd: string,
-): Promise<{ output: AgentOutput; files: Array<{ path: string; content: string }> }> {
+): Promise<{
+  output: AgentOutput;
+  files: Array<{ path: string; content: string }>;
+}> {
   "use step";
   const { env } = await import("../../env.js");
   const { SandboxManager } = await import("../sandbox/manager.js");
@@ -77,7 +81,12 @@ async function runFixingAgentInSandbox(
   });
 
   const sandbox = await manager.provision(branchName, requirementsMd);
-  return runAgent({ sandbox, manager, model: env.CLAUDE_MODEL, debug: env.DEBUG_AGENT });
+  return runAgent({
+    sandbox,
+    manager,
+    model: env.CLAUDE_MODEL,
+    debug: env.DEBUG_AGENT,
+  });
 }
 
 async function pushChanges(
@@ -114,16 +123,17 @@ async function unregisterRun(ticketIdentifier: string) {
 
 // --- Workflow ---
 
-export async function reviewFixWorkflow(
-  ticketId: string,
-  branchName: string,
-) {
+export async function reviewFixWorkflow(ticketId: string, branchName: string) {
   "use workflow";
 
   const { env } = await import("../../env.js");
 
   const ticket = await fetchAndValidateTicket(ticketId, env.COLUMN_AI);
   if (!ticket) return;
+
+  await notifySlack(
+    `Task ${ticket.identifier} started — fixing review feedback`,
+  );
 
   const { pr, comments, hasConflicts } = await fetchPRContext(branchName);
 
@@ -133,18 +143,36 @@ export async function reviewFixWorkflow(
     hasConflicts,
   );
 
-  const { output, files } = await runFixingAgentInSandbox(branchName, requirementsMd);
+  let output: AgentOutput;
+  let files: Array<{ path: string; content: string }>;
+  try {
+    ({ output, files } = await runFixingAgentInSandbox(
+      branchName,
+      requirementsMd,
+    ));
+  } catch (err) {
+    await moveTicket(ticketId, env.COLUMN_BACKLOG);
+    await notifySlack(
+      `Task ${ticket.identifier} sandbox error: ${(err as Error).message ?? "unknown"}`,
+    );
+    await unregisterRun(ticket.identifier);
+    throw err;
+  }
 
   await pushChanges(branchName, files);
 
   if (output.result === "implemented") {
     await moveTicket(ticketId, env.COLUMN_AI_REVIEW);
-    await notifySlack(`Task ${ticket.identifier} fixes applied, ready for re-review`);
+    await notifySlack(
+      `Task ${ticket.identifier} fixes applied, ready for re-review`,
+    );
     await unregisterRun(ticket.identifier);
     return;
   }
 
-  await notifySlack(`Task ${ticket.identifier} review-fix failed: ${output.error ?? "unknown error"}`);
+  await moveTicket(ticketId, env.COLUMN_BACKLOG);
+  await notifySlack(
+    `Task ${ticket.identifier} review-fix failed: ${output.error ?? "unknown error"}`,
+  );
   await unregisterRun(ticket.identifier);
-  throw new Error(`Agent failed for ${ticketId}: ${output.error}`);
 }
