@@ -125,6 +125,8 @@ export async function reviewFixWorkflow(
   const ticket = await fetchAndValidateTicket(ticketId, env.COLUMN_AI);
   if (!ticket) return;
 
+  await notifySlack(`Task ${ticket.identifier} started — fixing review feedback`);
+
   const { pr, comments, hasConflicts } = await fetchPRContext(branchName);
 
   const requirementsMd = await assembleReviewFixRequirements(

@@ -134,6 +134,8 @@ export async function implementationWorkflow(ticketId: string) {
   const ticket = await fetchAndValidateTicket(ticketId, env.COLUMN_AI);
   if (!ticket) return;
 
+  await notifySlack(`Task ${ticket.identifier} started — implementing`);
+
   const branchName = `blazebot/${ticket.identifier.toLowerCase()}`;
   await createFeatureBranch(branchName, env.GITHUB_BASE_BRANCH);
 
