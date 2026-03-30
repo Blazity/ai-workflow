@@ -1,5 +1,5 @@
 import { describe, it, expect, afterAll } from "vitest";
-import { callCronPoll } from "../helpers/webhook.js";
+import { callCronPoll } from "../helpers/cron.js";
 import {
   setEntry,
   getRunId,

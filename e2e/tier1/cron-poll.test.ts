@@ -4,7 +4,7 @@ import {
   moveTicketToColumn,
   deleteTicket,
 } from "../helpers/jira.js";
-import { callCronPoll } from "../helpers/webhook.js";
+import { callCronPoll } from "../helpers/cron.js";
 import { cleanup as redisCleanup } from "../helpers/redis.js";
 import { waitFor } from "../helpers/wait.js";
 import { e2eEnv } from "../env.js";

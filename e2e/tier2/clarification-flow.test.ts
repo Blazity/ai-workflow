@@ -8,7 +8,7 @@ import {
 } from "../helpers/jira.js";
 import { getRunId, cleanup as redisCleanup } from "../helpers/redis.js";
 import { deleteBranch } from "../helpers/github.js";
-import { sendJiraWebhook, makeDispatchPayload } from "../helpers/webhook.js";
+import { callCronPoll } from "../helpers/cron.js";
 import { waitFor } from "../helpers/wait.js";
 import { e2eEnv } from "../env.js";
 
@@ -32,11 +32,17 @@ describe("clarification flow", () => {
     ticketKey = ticket.ticketKey;
     branchName = `blazebot/${ticketKey.toLowerCase()}`;
 
-    // Move to AI column and dispatch
+    // Move to AI column and dispatch via cron poll
     await moveTicketToColumn(ticketKey, e2eEnv.COLUMN_AI);
-    const payload = makeDispatchPayload(ticketKey);
-    const { body } = await sendJiraWebhook(payload);
-    expect(body.dispatched).toBe(true);
+    const { body } = await waitFor(
+      async () => {
+        const res = await callCronPoll();
+        if (res.status === 200 && res.body.started?.includes(ticketKey)) return res;
+        return null;
+      },
+      { description: `cron dispatches ${ticketKey}`, timeoutMs: 30_000, intervalMs: 3_000 },
+    );
+    expect(body.status).toBe("ok");
 
     // Wait for ticket to move to Backlog (clarification needed)
     await waitFor(
