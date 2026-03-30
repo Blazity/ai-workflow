@@ -7,7 +7,7 @@ const schema = z.object({
   JIRA_EMAIL: z.string().email(),
   JIRA_API_TOKEN: z.string().min(1),
   JIRA_PROJECT_KEY: z.string().min(1),
-  JIRA_WEBHOOK_SECRET: z.string().min(1),
+
   COLUMN_AI: z.string().min(1),
   COLUMN_AI_REVIEW: z.string().min(1),
   COLUMN_BACKLOG: z.string().min(1),

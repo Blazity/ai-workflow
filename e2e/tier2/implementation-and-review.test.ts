@@ -13,7 +13,7 @@ import {
   deleteBranch,
 } from "../helpers/github.js";
 import { getRunId, cleanup as redisCleanup } from "../helpers/redis.js";
-import { sendJiraWebhook, makeDispatchPayload } from "../helpers/webhook.js";
+import { callCronPoll } from "../helpers/cron.js";
 import { waitFor } from "../helpers/wait.js";
 import { e2eEnv } from "../env.js";
 
@@ -41,11 +41,17 @@ describe("implementation happy path → review-fix flow", () => {
     ticketKey = ticket.ticketKey;
     branchName = `blazebot/${ticketKey.toLowerCase()}`;
 
-    // Move to AI column and dispatch
+    // Move to AI column and dispatch via cron poll
     await moveTicketToColumn(ticketKey, e2eEnv.COLUMN_AI);
-    const payload = makeDispatchPayload(ticketKey);
-    const { body } = await sendJiraWebhook(payload);
-    expect(body.dispatched).toBe(true);
+    const { body } = await waitFor(
+      async () => {
+        const res = await callCronPoll();
+        if (res.status === 200 && res.body.started?.includes(ticketKey)) return res;
+        return null;
+      },
+      { description: `cron dispatches ${ticketKey}`, timeoutMs: 30_000, intervalMs: 3_000 },
+    );
+    expect(body.status).toBe("ok");
 
     // Wait for PR to appear (up to 35 min)
     const pr = await waitFor(() => findPR(branchName), {
@@ -97,11 +103,16 @@ describe("implementation happy path → review-fix flow", () => {
       "Rename the `/ping` endpoint to `/healthcheck` — remove the old `/ping` route and update its handler, tests, and any references so only `/healthcheck` exists.",
     );
 
-    // Move ticket back to AI column and dispatch review-fix
+    // Move ticket back to AI column and dispatch review-fix via cron poll
     await moveTicketToColumn(ticketKey, e2eEnv.COLUMN_AI);
-    const payload = makeDispatchPayload(ticketKey);
-    const { body } = await sendJiraWebhook(payload);
-    expect(body.dispatched).toBe(true);
+    await waitFor(
+      async () => {
+        const res = await callCronPoll();
+        if (res.status === 200 && res.body.started?.includes(ticketKey)) return res;
+        return null;
+      },
+      { description: `cron dispatches review-fix for ${ticketKey}`, timeoutMs: 30_000, intervalMs: 3_000 },
+    );
 
     // Wait for ticket to move back to AI Review (review-fix completed)
     await waitFor(
