@@ -119,13 +119,11 @@ describe("dispatchTicket", () => {
 
   it("dispatches review-fix workflow when PR exists", async () => {
     const adapters = makeAdapters({
-      findPR: vi
-        .fn()
-        .mockResolvedValue({
-          id: 7,
-          url: "https://github.com/pr/7",
-          branch: "blazebot/proj-42",
-        }),
+      findPR: vi.fn().mockResolvedValue({
+        id: 7,
+        url: "https://github.com/pr/7",
+        branch: "blazebot/proj-42",
+      }),
     });
     const { dispatchTicket } = await import("./dispatch.js");
 
@@ -192,6 +190,38 @@ describe("dispatchTicket", () => {
     expect(mockGetRun).toHaveBeenCalledWith("run_123");
     expect(mockCancel).toHaveBeenCalled();
     expect(adapters.runRegistry.register).not.toHaveBeenCalled();
+  });
+
+  it("only one concurrent dispatch wins when claim is atomic", async () => {
+    let claimed = false;
+    const claim = vi
+      .fn()
+      .mockImplementation(async (_key: string, value: string) => {
+        if (claimed) return false;
+        claimed = true;
+        return true;
+      });
+    const getRunId = vi
+      .fn()
+      .mockImplementation(async () =>
+        claimed ? `claiming:${Date.now()}` : null,
+      );
+
+    const makeAdaptersForRace = () => makeAdapters({ claim, getRunId });
+    const { dispatchTicket } = await import("./dispatch.js");
+
+    const [a, b] = await Promise.all([
+      dispatchTicket("PROJ-42", makeAdaptersForRace(), 5),
+      dispatchTicket("PROJ-42", makeAdaptersForRace(), 5),
+    ]);
+
+    const results = [a, b];
+    const winners = results.filter((r) => r.started);
+    const losers = results.filter((r) => !r.started);
+
+    expect(winners).toHaveLength(1);
+    expect(losers).toHaveLength(1);
+    expect(losers[0].reason).toBe("already_claimed");
   });
 
   it("unregisters claim and returns error on dispatch failure", async () => {

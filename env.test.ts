@@ -7,7 +7,6 @@ describe("env", () => {
     JIRA_EMAIL: "test@example.com",
     JIRA_API_TOKEN: "token",
     JIRA_PROJECT_KEY: "PROJ",
-    JIRA_WEBHOOK_SECRET: "test-webhook-secret",
     COLUMN_AI: "AI",
     COLUMN_AI_REVIEW: "AI Review",
     COLUMN_BACKLOG: "Backlog",

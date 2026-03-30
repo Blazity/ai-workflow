@@ -1,0 +1,97 @@
+name: E2E Tests
+
+on:
+  workflow_dispatch:
+    inputs:
+      tier:
+        description: "Which tier to run"
+        type: choice
+        options:
+          - tier1
+          - tier2
+          - all
+        default: all
+
+jobs:
+  e2e-tier1:
+    if: inputs.tier == 'tier1' || inputs.tier == 'all'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: e2e
+    env:
+      E2E_BASE_URL: ${{ secrets.E2E_BASE_URL }}
+      JIRA_BASE_URL: ${{ secrets.JIRA_BASE_URL }}
+      JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
+      JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+      JIRA_PROJECT_KEY: ${{ secrets.JIRA_PROJECT_KEY }}
+      JIRA_WEBHOOK_SECRET: ${{ secrets.JIRA_WEBHOOK_SECRET }}
+      COLUMN_AI: ${{ secrets.COLUMN_AI }}
+      COLUMN_AI_REVIEW: ${{ secrets.COLUMN_AI_REVIEW }}
+      COLUMN_BACKLOG: ${{ secrets.COLUMN_BACKLOG }}
+      GITHUB_TOKEN: ${{ secrets.E2E_GITHUB_TOKEN }}
+      GITHUB_OWNER: ${{ secrets.E2E_GITHUB_OWNER }}
+      GITHUB_REPO: ${{ secrets.E2E_GITHUB_REPO }}
+      CRON_SECRET: ${{ secrets.CRON_SECRET }}
+      AI_WORKFLOW_KV_REST_API_URL: ${{ secrets.AI_WORKFLOW_KV_REST_API_URL }}
+      AI_WORKFLOW_KV_REST_API_TOKEN: ${{ secrets.AI_WORKFLOW_KV_REST_API_TOKEN }}
+      VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20.12"
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run test:e2e:tier1
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-tier1-results
+          path: |
+            e2e/**/*.log
+          retention-days: 7
+
+  e2e-tier2:
+    if: inputs.tier == 'tier2' || inputs.tier == 'all'
+    needs: [e2e-tier1]
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    environment: e2e
+    env:
+      E2E_BASE_URL: ${{ secrets.E2E_BASE_URL }}
+      JIRA_BASE_URL: ${{ secrets.JIRA_BASE_URL }}
+      JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
+      JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+      JIRA_PROJECT_KEY: ${{ secrets.JIRA_PROJECT_KEY }}
+      JIRA_WEBHOOK_SECRET: ${{ secrets.JIRA_WEBHOOK_SECRET }}
+      COLUMN_AI: ${{ secrets.COLUMN_AI }}
+      COLUMN_AI_REVIEW: ${{ secrets.COLUMN_AI_REVIEW }}
+      COLUMN_BACKLOG: ${{ secrets.COLUMN_BACKLOG }}
+      GITHUB_TOKEN: ${{ secrets.E2E_GITHUB_TOKEN }}
+      GITHUB_OWNER: ${{ secrets.E2E_GITHUB_OWNER }}
+      GITHUB_REPO: ${{ secrets.E2E_GITHUB_REPO }}
+      CRON_SECRET: ${{ secrets.CRON_SECRET }}
+      AI_WORKFLOW_KV_REST_API_URL: ${{ secrets.AI_WORKFLOW_KV_REST_API_URL }}
+      AI_WORKFLOW_KV_REST_API_TOKEN: ${{ secrets.AI_WORKFLOW_KV_REST_API_TOKEN }}
+      VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20.12"
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run test:e2e:tier2
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-tier2-results
+          path: |
+            e2e/**/*.log
+          retention-days: 7

@@ -1,0 +1,35 @@
+import { Redis } from "@upstash/redis";
+import { e2eEnv } from "../env.js";
+
+const HASH_KEY = "blazebot:active-runs";
+
+const redis = new Redis({
+  url: e2eEnv.AI_WORKFLOW_KV_REST_API_URL,
+  token: e2eEnv.AI_WORKFLOW_KV_REST_API_TOKEN,
+});
+
+export async function getRunId(ticketKey: string): Promise<string | null> {
+  return redis.hget<string>(HASH_KEY, ticketKey);
+}
+
+export async function listAll(): Promise<
+  Array<{ ticketKey: string; runId: string }>
+> {
+  const all = await redis.hgetall<Record<string, string>>(HASH_KEY);
+  if (!all) return [];
+  return Object.entries(all).map(([ticketKey, runId]) => ({
+    ticketKey,
+    runId,
+  }));
+}
+
+export async function setEntry(
+  ticketKey: string,
+  runId: string,
+): Promise<void> {
+  await redis.hset(HASH_KEY, { [ticketKey]: runId });
+}
+
+export async function cleanup(ticketKey: string): Promise<void> {
+  await redis.hdel(HASH_KEY, ticketKey).catch(() => {});
+}
