@@ -215,6 +215,7 @@ export async function reviewFixWorkflow(ticketId: string, branchName: string) {
       branchName,
       requirementsMd,
     );
+    const { output, files } = await waitAndCollectFixResults(sandboxId, cmdId);
 
     // Poll with sleep — workflow suspends between checks, no compute wasted.
     let status = await pollAgentStatus(sandboxId, cmdId);
