@@ -17,7 +17,7 @@ async function fetchAndValidateTicket(ticketId: string, columnAi: string) {
   return ticket;
 }
 
-async function fetchPRContext(branchName: string) {
+async function fetchPRContext(branchName: string, baseBranch: string) {
   "use step";
   const { createStepAdapters } = await import("../lib/step-adapters.js");
   const { vcs } = createStepAdapters();
@@ -26,7 +26,16 @@ async function fetchPRContext(branchName: string) {
 
   const comments = await vcs.getPRComments(pr.id);
   const hasConflicts = await vcs.getPRConflictStatus(pr.id);
-  return { pr, comments, hasConflicts };
+
+  // Resolve the base branch SHA so we can create a merge commit when pushing
+  // conflict resolutions (a merge commit with two parents tells GitHub the
+  // histories are reconciled and clears the "has conflicts" status).
+  let baseSha: string | undefined;
+  if (hasConflicts) {
+    baseSha = await vcs.getBranchSha(baseBranch);
+  }
+
+  return { pr, comments, hasConflicts, baseSha };
 }
 
 async function assembleReviewFixRequirements(
@@ -81,7 +90,7 @@ async function runFixingAgentInSandbox(
     vercelProjectId: env.VERCEL_PROJECT_ID,
   });
 
-  const sandbox = await manager.provision(branchName, requirementsMd);
+  const sandbox = await manager.provision(branchName, requirementsMd, env.GITHUB_BASE_BRANCH);
   return runAgent({
     sandbox,
     manager,
@@ -93,12 +102,13 @@ async function runFixingAgentInSandbox(
 async function pushChanges(
   branchName: string,
   files: Array<{ path: string; content: string }>,
+  mergeParentSha?: string,
 ) {
   "use step";
   if (files.length === 0) return;
   const { createStepAdapters } = await import("../lib/step-adapters.js");
   const { vcs } = createStepAdapters();
-  await vcs.push(branchName, files);
+  await vcs.push(branchName, files, mergeParentSha ? { mergeParentSha } : undefined);
 }
 
 async function moveTicket(ticketId: string, column: string) {
@@ -132,48 +142,45 @@ export async function reviewFixWorkflow(ticketId: string, branchName: string) {
   const ticket = await fetchAndValidateTicket(ticketId, env.COLUMN_AI);
   if (!ticket) return;
 
-  await notifySlack(
-    `Task ${ticket.identifier} started — fixing review feedback`,
-  );
-
-  const { pr, comments, hasConflicts } = await fetchPRContext(branchName);
-
-  const requirementsMd = await assembleReviewFixRequirements(
-    ticket,
-    comments,
-    hasConflicts,
-  );
-
-  let output: AgentOutput;
-  let files: Array<{ path: string; content: string }>;
   try {
-    ({ output, files } = await runFixingAgentInSandbox(
+    await notifySlack(
+      `Task ${ticket.identifier} started — fixing review feedback`,
+    );
+
+    const { comments, hasConflicts, baseSha } = await fetchPRContext(branchName, env.GITHUB_BASE_BRANCH);
+
+    const requirementsMd = await assembleReviewFixRequirements(
+      ticket,
+      comments,
+      hasConflicts,
+    );
+
+    const { output, files } = await runFixingAgentInSandbox(
       branchName,
       requirementsMd,
-    ));
-  } catch (err) {
+    );
+
+    await pushChanges(branchName, files, baseSha);
+
+    if (output.result === "implemented") {
+      await moveTicket(ticketId, env.COLUMN_AI_REVIEW);
+      await notifySlack(
+        `Task ${ticket.identifier} fixes applied, ready for re-review`,
+      );
+      await unregisterRun(ticket.identifier);
+      return;
+    }
+
     await moveTicket(ticketId, env.COLUMN_BACKLOG);
     await notifySlack(
-      `Task ${ticket.identifier} sandbox error: ${(err as Error).message ?? "unknown"}`,
+      `Task ${ticket.identifier} review-fix failed: ${output.error ?? "unknown error"}`,
     );
     await unregisterRun(ticket.identifier);
+  } catch (err) {
+    console.error(`Workflow failed for ${ticket.identifier}:`, err);
+    await moveTicket(ticketId, env.COLUMN_BACKLOG).catch(() => {});
+    await notifySlack(`Task ${ticket.identifier} failed: ${(err as Error).message ?? "unknown"}`).catch(() => {});
+    await unregisterRun(ticket.identifier).catch(() => {});
     throw err;
   }
-
-  await pushChanges(branchName, files);
-
-  if (output.result === "implemented") {
-    await moveTicket(ticketId, env.COLUMN_AI_REVIEW);
-    await notifySlack(
-      `Task ${ticket.identifier} fixes applied, ready for re-review`,
-    );
-    await unregisterRun(ticket.identifier);
-    return;
-  }
-
-  await moveTicket(ticketId, env.COLUMN_BACKLOG);
-  await notifySlack(
-    `Task ${ticket.identifier} review-fix failed: ${output.error ?? "unknown error"}`,
-  );
-  await unregisterRun(ticket.identifier);
 }
