@@ -64,6 +64,8 @@ async function provisionAndStartAgent(
     vercelProjectId: env.VERCEL_PROJECT_ID,
   });
 
+  // No mergeBase needed — the branch was just created from GITHUB_BASE_BRANCH,
+  // so it's already at the tip. Only review-fix passes mergeBase to handle drift.
   const sandbox = await manager.provision(branchName, requirementsMd);
   return startAgent({ sandbox, model: env.CLAUDE_MODEL, debug: env.DEBUG_AGENT });
 }
