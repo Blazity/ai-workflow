@@ -87,13 +87,16 @@ describe("SandboxManager", () => {
     const endHookStdout = vi.fn()
       .mockResolvedValueOnce(" M src/index.ts"); // git status --porcelain
     mockRunCommand
-      // provision calls (git config + npm install + 3 skill installs)
+      // provision calls (git config + pre-agent-sha + npm install + stop hook + 3 skill installs)
+      .mockResolvedValueOnce({ exitCode: 0, stdout: vi.fn().mockResolvedValue("") })
+      .mockResolvedValueOnce({ exitCode: 0, stdout: vi.fn().mockResolvedValue("") })
       .mockResolvedValueOnce({ exitCode: 0, stdout: vi.fn().mockResolvedValue("") })
       .mockResolvedValueOnce({ exitCode: 0, stdout: vi.fn().mockResolvedValue("") })
       .mockResolvedValueOnce({ exitCode: 0, stdout: vi.fn().mockResolvedValue("") })
       .mockResolvedValueOnce({ exitCode: 0, stdout: vi.fn().mockResolvedValue("") })
       .mockResolvedValueOnce({ exitCode: 0, stdout: vi.fn().mockResolvedValue("") })
       // runEndHook calls
+      .mockResolvedValueOnce({ exitCode: 0, stdout: vi.fn().mockResolvedValue("") }) // rm -rf .claude/ requirements.md
       .mockResolvedValueOnce({ exitCode: 0, stdout: endHookStdout }) // git status
       .mockResolvedValueOnce({ exitCode: 0, stdout: vi.fn().mockResolvedValue("") }) // git add
       .mockResolvedValueOnce({ exitCode: 0, stdout: vi.fn().mockResolvedValue("") }); // git commit

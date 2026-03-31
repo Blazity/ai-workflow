@@ -27,7 +27,8 @@ export const env = createEnv({
     CHAT_SDK_BOT_NAME: z.string().default("blazebot"),
 
     // Agent
-    ANTHROPIC_API_KEY: z.string().min(1),
+    ANTHROPIC_API_KEY: z.string().min(1).optional(),
+    CLAUDE_CODE_OAUTH_TOKEN: z.string().min(1).optional(),
     CLAUDE_MODEL: z.string().default("claude-opus-4-6"),
     COMMIT_AUTHOR: z.string().default("ai-workflow-blazity"),
     COMMIT_EMAIL: z.string().default("ai-workflow@blazity.com"),

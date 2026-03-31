@@ -54,6 +54,7 @@ async function runAgentInSandbox(
     owner: env.GITHUB_OWNER,
     repo: env.GITHUB_REPO,
     anthropicApiKey: env.ANTHROPIC_API_KEY,
+    claudeCodeOauthToken: env.CLAUDE_CODE_OAUTH_TOKEN,
     claudeModel: env.CLAUDE_MODEL,
     commitAuthor: env.COMMIT_AUTHOR,
     commitEmail: env.COMMIT_EMAIL,
@@ -63,6 +64,8 @@ async function runAgentInSandbox(
     vercelProjectId: env.VERCEL_PROJECT_ID,
   });
 
+  // No mergeBase needed — the branch was just created from GITHUB_BASE_BRANCH,
+  // so it's already at the tip. Only review-fix passes mergeBase to handle drift.
   const sandbox = await manager.provision(branchName, requirementsMd);
   return runAgent({ sandbox, manager, model: env.CLAUDE_MODEL, debug: env.DEBUG_AGENT });
 }
@@ -134,47 +137,45 @@ export async function implementationWorkflow(ticketId: string) {
   const ticket = await fetchAndValidateTicket(ticketId, env.COLUMN_AI);
   if (!ticket) return;
 
-  await notifySlack(`Task ${ticket.identifier} started — implementing`);
-
-  const branchName = `blazebot/${ticket.identifier.toLowerCase()}`;
-  await createFeatureBranch(branchName, env.GITHUB_BASE_BRANCH);
-
-  const requirementsMd = await assembleImplementationRequirements(ticket);
-
-  let output: AgentOutput;
-  let files: Array<{ path: string; content: string }>;
   try {
-    ({ output, files } = await runAgentInSandbox(branchName, requirementsMd));
-  } catch (err) {
+    await notifySlack(`Task ${ticket.identifier} started — implementing`);
+
+    const branchName = `blazebot/${ticket.identifier.toLowerCase()}`;
+    await createFeatureBranch(branchName, env.GITHUB_BASE_BRANCH);
+
+    const requirementsMd = await assembleImplementationRequirements(ticket);
+    const { output, files } = await runAgentInSandbox(branchName, requirementsMd);
+
+    await pushChanges(branchName, files);
+
+    if (output.result === "implemented") {
+      await createPullRequest(branchName, ticket.title, output.summary ?? "");
+      await moveTicket(ticketId, env.COLUMN_AI_REVIEW);
+      await notifySlack(`Task ${ticket.identifier} PR ready for review`);
+      await unregisterRun(ticket.identifier);
+      return;
+    }
+
+    if (output.result === "clarification_needed") {
+      await postClarificationAndMoveBack(
+        ticketId,
+        output.questions ?? [],
+        ticket.identifier,
+        env.COLUMN_BACKLOG,
+      );
+      await notifySlack(`Task ${ticket.identifier} needs clarification`);
+      await unregisterRun(ticket.identifier);
+      return;
+    }
+
     await moveTicket(ticketId, env.COLUMN_BACKLOG);
-    await notifySlack(`Task ${ticket.identifier} sandbox error: ${(err as Error).message ?? "unknown"}`);
+    await notifySlack(`Task ${ticket.identifier} failed: ${output.error ?? "unknown error"}`);
     await unregisterRun(ticket.identifier);
+  } catch (err) {
+    console.error(`Workflow failed for ${ticket.identifier}:`, err);
+    await moveTicket(ticketId, env.COLUMN_BACKLOG).catch(() => {});
+    await notifySlack(`Task ${ticket.identifier} failed: ${(err as Error).message ?? "unknown"}`).catch(() => {});
+    await unregisterRun(ticket.identifier).catch(() => {});
     throw err;
   }
-
-  await pushChanges(branchName, files);
-
-  if (output.result === "implemented") {
-    await createPullRequest(branchName, ticket.title, output.summary ?? "");
-    await moveTicket(ticketId, env.COLUMN_AI_REVIEW);
-    await notifySlack(`Task ${ticket.identifier} PR ready for review`);
-    await unregisterRun(ticket.identifier);
-    return;
-  }
-
-  if (output.result === "clarification_needed") {
-    await postClarificationAndMoveBack(
-      ticketId,
-      output.questions ?? [],
-      ticket.identifier,
-      env.COLUMN_BACKLOG,
-    );
-    await notifySlack(`Task ${ticket.identifier} needs clarification`);
-    await unregisterRun(ticket.identifier);
-    return;
-  }
-
-  await moveTicket(ticketId, env.COLUMN_BACKLOG);
-  await notifySlack(`Task ${ticket.identifier} failed: ${output.error ?? "unknown error"}`);
-  await unregisterRun(ticket.identifier);
 }

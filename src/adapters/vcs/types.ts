@@ -13,8 +13,13 @@ export interface PRComment {
 export interface VCSAdapter {
   createBranch(name: string, base: string): Promise<void>;
   createPR(branch: string, title: string, body: string): Promise<PullRequest>;
-  push(branch: string, files: Array<{ path: string; content: string }>): Promise<void>;
+  push(
+    branch: string,
+    files: Array<{ path: string; content: string }>,
+    options?: { mergeParentSha?: string },
+  ): Promise<void>;
   getPRComments(prId: number): Promise<PRComment[]>;
   getPRConflictStatus(prId: number): Promise<boolean>;
   findPR(branch: string): Promise<PullRequest | null>;
+  getBranchSha(branch: string): Promise<string>;
 }

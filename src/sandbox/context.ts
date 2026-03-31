@@ -88,7 +88,7 @@ ${formatPRComments(prComments)}
 
 ## Merge Conflicts
 
-${hasConflicts ? "This PR has merge conflicts that must be resolved." : "No merge conflicts."}
+${hasConflicts ? "This PR has merge conflicts. The base branch has already been merged — the repo is in a MERGING state with conflict markers in the affected files. Resolve the markers, `git add` the files, and run `git merge --continue`." : "No merge conflicts."}
 
 ---
 

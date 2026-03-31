@@ -59,7 +59,7 @@ describe("env", () => {
 
   it("throws on missing required field", async () => {
     const partial = { ...VALID_ENV };
-    delete (partial as any).ANTHROPIC_API_KEY;
+    delete (partial as any).GITHUB_TOKEN;
     Object.assign(process.env, partial);
     await expect(async () => {
       await import("./env.js");
