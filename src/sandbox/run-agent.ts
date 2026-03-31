@@ -4,36 +4,75 @@ import { buildAgentCommand, parseAgentOutput, formatStreamEvent } from "./agent-
 import type { AgentOutput } from "./agent-runner.js";
 import { SandboxManager } from "./manager.js";
 
-type SandboxInstance = Awaited<ReturnType<typeof SandboxType.create>>;
+type SandboxInstance = InstanceType<typeof SandboxType>;
 
-interface RunAgentOptions {
+interface StartAgentOptions {
   sandbox: SandboxInstance;
-  manager: SandboxManager;
   model: string;
   debug: boolean;
 }
 
-export async function runAgent(
-  opts: RunAgentOptions,
+export interface StartAgentResult {
+  sandboxId: string;
+  cmdId: string;
+}
+
+/**
+ * Provisions and starts the agent command in detached mode.
+ * Returns identifiers to reconnect later — does NOT wait for the agent to finish.
+ */
+export async function startAgent(
+  opts: StartAgentOptions,
+): Promise<StartAgentResult> {
+  const { sandbox, model, debug } = opts;
+  const { cmd, args } = buildAgentCommand(model, debug);
+
+  const command = await sandbox.runCommand({
+    cmd,
+    args,
+    cwd: "/vercel/sandbox",
+    detached: true,
+  });
+
+  return { sandboxId: sandbox.sandboxId, cmdId: command.cmdId };
+}
+
+interface CollectResultsOptions {
+  sandboxId: string;
+  cmdId: string;
+  manager: SandboxManager;
+  debug: boolean;
+}
+
+/**
+ * Reconnects to a running sandbox, waits for the agent command to finish,
+ * then runs end-hook, extracts changed files, and tears down the sandbox.
+ *
+ * If the Vercel function times out while waiting, WDK replays the workflow
+ * and re-executes this step. It reconnects to the same sandbox/command —
+ * if the agent already finished, `wait()` resolves immediately.
+ */
+export async function collectAgentResults(
+  opts: CollectResultsOptions,
 ): Promise<{ output: AgentOutput; files: Array<{ path: string; content: string }> }> {
-  const { sandbox, manager, model, debug } = opts;
+  const { sandboxId, cmdId, manager, debug } = opts;
+
+  const sandbox = await manager.reconnect(sandboxId);
 
   try {
-    const { cmd, args } = buildAgentCommand(model, debug);
+    const command = await sandbox.getCommand(cmdId);
 
     let stdout: string;
     let stderr: string;
 
     if (debug) {
-      const command = await sandbox.runCommand({ cmd, args, cwd: "/vercel/sandbox", detached: true });
-
       const writable = getWritable<string>();
       const writer = writable.getWriter();
       stdout = "";
       stderr = "";
       let lineBuf = "";
       try {
-        await writer.write("[debug] Agent started\n");
+        await writer.write("[debug] Agent reconnected, streaming logs\n");
         for await (const log of command.logs()) {
           if (log.stream === "stdout") {
             stdout += log.data;
@@ -48,7 +87,6 @@ export async function runAgent(
             stderr += log.data;
           }
         }
-        // Flush remaining buffer
         if (lineBuf.trim()) {
           const formatted = formatStreamEvent(lineBuf);
           if (formatted) await writer.write(formatted + "\n");
@@ -59,9 +97,9 @@ export async function runAgent(
       }
       await command.wait();
     } else {
-      const result = await sandbox.runCommand({ cmd, args, cwd: "/vercel/sandbox" });
-      stdout = await result.stdout();
-      stderr = await result.stderr();
+      await command.wait();
+      stdout = await command.stdout();
+      stderr = await command.stderr();
     }
 
     await manager.runEndHook(sandbox);

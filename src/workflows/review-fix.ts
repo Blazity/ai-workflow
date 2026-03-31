@@ -27,9 +27,6 @@ async function fetchPRContext(branchName: string, baseBranch: string) {
   const comments = await vcs.getPRComments(pr.id);
   const hasConflicts = await vcs.getPRConflictStatus(pr.id);
 
-  // Resolve the base branch SHA so we can create a merge commit when pushing
-  // conflict resolutions (a merge commit with two parents tells GitHub the
-  // histories are reconciled and clears the "has conflicts" status).
   let baseSha: string | undefined;
   if (hasConflicts) {
     baseSha = await vcs.getBranchSha(baseBranch);
@@ -63,17 +60,14 @@ async function assembleReviewFixRequirements(
   });
 }
 
-async function runFixingAgentInSandbox(
+async function provisionAndStartFixingAgent(
   branchName: string,
   requirementsMd: string,
-): Promise<{
-  output: AgentOutput;
-  files: Array<{ path: string; content: string }>;
-}> {
+): Promise<{ sandboxId: string; cmdId: string }> {
   "use step";
   const { env } = await import("../../env.js");
   const { SandboxManager } = await import("../sandbox/manager.js");
-  const { runAgent } = await import("../sandbox/run-agent.js");
+  const { startAgent } = await import("../sandbox/run-agent.js");
 
   const manager = new SandboxManager({
     githubToken: env.GITHUB_TOKEN,
@@ -91,10 +85,37 @@ async function runFixingAgentInSandbox(
   });
 
   const sandbox = await manager.provision(branchName, requirementsMd, env.GITHUB_BASE_BRANCH);
-  return runAgent({
-    sandbox,
+  return startAgent({ sandbox, model: env.CLAUDE_MODEL, debug: env.DEBUG_AGENT });
+}
+
+async function waitAndCollectFixResults(
+  sandboxId: string,
+  cmdId: string,
+): Promise<{ output: AgentOutput; files: Array<{ path: string; content: string }> }> {
+  "use step";
+  const { env } = await import("../../env.js");
+  const { SandboxManager } = await import("../sandbox/manager.js");
+  const { collectAgentResults } = await import("../sandbox/run-agent.js");
+
+  const manager = new SandboxManager({
+    githubToken: env.GITHUB_TOKEN,
+    owner: env.GITHUB_OWNER,
+    repo: env.GITHUB_REPO,
+    anthropicApiKey: env.ANTHROPIC_API_KEY,
+    claudeCodeOauthToken: env.CLAUDE_CODE_OAUTH_TOKEN,
+    claudeModel: env.CLAUDE_MODEL,
+    commitAuthor: env.COMMIT_AUTHOR,
+    commitEmail: env.COMMIT_EMAIL,
+    jobTimeoutMs: env.JOB_TIMEOUT_MS,
+    vercelToken: env.VERCEL_TOKEN,
+    vercelTeamId: env.VERCEL_TEAM_ID,
+    vercelProjectId: env.VERCEL_PROJECT_ID,
+  });
+
+  return collectAgentResults({
+    sandboxId,
+    cmdId,
     manager,
-    model: env.CLAUDE_MODEL,
     debug: env.DEBUG_AGENT,
   });
 }
@@ -132,6 +153,13 @@ async function unregisterRun(ticketIdentifier: string) {
   await runRegistry.unregister(ticketIdentifier);
 }
 
+function formatStats(output: AgentOutput): string {
+  const parts: string[] = [];
+  if (output.numTurns != null) parts.push(`${output.numTurns} turns`);
+  if (output.costUsd != null) parts.push(`$${output.costUsd.toFixed(2)}`);
+  return parts.length ? ` (${parts.join(", ")})` : "";
+}
+
 // --- Workflow ---
 
 export async function reviewFixWorkflow(ticketId: string, branchName: string) {
@@ -155,17 +183,20 @@ export async function reviewFixWorkflow(ticketId: string, branchName: string) {
       hasConflicts,
     );
 
-    const { output, files } = await runFixingAgentInSandbox(
+    const { sandboxId, cmdId } = await provisionAndStartFixingAgent(
       branchName,
       requirementsMd,
     );
+    const { output, files } = await waitAndCollectFixResults(sandboxId, cmdId);
 
     await pushChanges(branchName, files, baseSha);
+
+    const stats = formatStats(output);
 
     if (output.result === "implemented") {
       await moveTicket(ticketId, env.COLUMN_AI_REVIEW);
       await notifySlack(
-        `Task ${ticket.identifier} fixes applied, ready for re-review`,
+        `Task ${ticket.identifier} fixes applied, ready for re-review${stats}`,
       );
       await unregisterRun(ticket.identifier);
       return;
@@ -173,7 +204,7 @@ export async function reviewFixWorkflow(ticketId: string, branchName: string) {
 
     await moveTicket(ticketId, env.COLUMN_BACKLOG);
     await notifySlack(
-      `Task ${ticket.identifier} review-fix failed: ${output.error ?? "unknown error"}`,
+      `Task ${ticket.identifier} review-fix failed: ${output.error ?? "unknown error"}${stats}`,
     );
     await unregisterRun(ticket.identifier);
   } catch (err) {

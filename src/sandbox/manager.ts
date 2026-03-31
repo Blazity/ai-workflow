@@ -25,7 +25,8 @@ export interface SandboxConfig {
   vercelProjectId?: string;
 }
 
-type SandboxInstance = Awaited<ReturnType<typeof SandboxType.create>>;
+/** Sandbox instance — we use InstanceType to avoid requiring AsyncDisposable from .create() */
+type SandboxInstance = InstanceType<typeof SandboxType>;
 
 export type EndHookResult = "clean" | "committed" | "error";
 
@@ -85,7 +86,7 @@ export class SandboxManager {
     // The shallow clone has no remote, so we fetch directly via authenticated URL.
     if (mergeBase) {
       const repoUrl = `https://x-access-token:${this.config.githubToken}@github.com/${this.config.owner}/${this.config.repo}.git`;
-      const fetchResult = await sandbox.runCommand("bash", [
+      await sandbox.runCommand("bash", [
         "-c",
         `git fetch --unshallow "${repoUrl}" ${mergeBase} 2>&1`,
       ]);
@@ -239,6 +240,24 @@ export class SandboxManager {
       }
     }
     return files;
+  }
+
+  async reconnect(sandboxId: string): Promise<SandboxInstance> {
+    const { Sandbox } = await import("@vercel/sandbox");
+
+    const hasExplicitCredentials =
+      this.config.vercelToken && this.config.vercelTeamId && this.config.vercelProjectId;
+
+    return Sandbox.get({
+      sandboxId,
+      ...(hasExplicitCredentials
+        ? {
+            token: this.config.vercelToken,
+            teamId: this.config.vercelTeamId,
+            projectId: this.config.vercelProjectId,
+          }
+        : {}),
+    });
   }
 
   async teardown(sandbox: SandboxInstance): Promise<void> {
