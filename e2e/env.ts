@@ -12,9 +12,9 @@ const schema = z.object({
   COLUMN_AI_REVIEW: z.string().min(1),
   COLUMN_BACKLOG: z.string().min(1),
 
-  GITHUB_TOKEN: z.string().min(1),
-  GITHUB_OWNER: z.string().min(1),
-  GITHUB_REPO: z.string().min(1),
+  E2E_GITHUB_TOKEN: z.string().min(1),
+  E2E_GITHUB_OWNER: z.string().min(1),
+  E2E_GITHUB_REPO: z.string().min(1),
 
   CRON_SECRET: z.string().min(1),
 

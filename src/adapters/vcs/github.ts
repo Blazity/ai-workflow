@@ -1,4 +1,5 @@
 import { Octokit } from "@octokit/rest";
+import { FatalError } from "workflow";
 import type { VCSAdapter, PullRequest, PRComment } from "./types.js";
 
 export interface GitHubConfig {
@@ -70,17 +71,30 @@ export class GitHubAdapter implements VCSAdapter {
     title: string,
     body: string,
   ): Promise<PullRequest> {
-    const { data } = await this.octokit.pulls.create({
-      ...this.ownerRepo,
-      head: branch,
-      base: this.config.baseBranch,
-      title,
-      body,
-    });
-    return { id: data.number, url: data.html_url, branch };
+    try {
+      const { data } = await this.octokit.pulls.create({
+        ...this.ownerRepo,
+        head: branch,
+        base: this.config.baseBranch,
+        title,
+        body,
+      });
+      return { id: data.number, url: data.html_url, branch };
+    } catch (err: any) {
+      // 422 (validation: PR already exists, branch missing) and 404 are non-retryable.
+      // 401/403 (token expired, rate limit) are transient and should be retried.
+      if (err.status === 422 || err.status === 404) {
+        throw new FatalError(err.message);
+      }
+      throw err;
+    }
   }
 
-  async push(branch: string, files: Array<{ path: string; content: string }>): Promise<void> {
+  async push(
+    branch: string,
+    files: Array<{ path: string; content: string }>,
+    options?: { mergeParentSha?: string },
+  ): Promise<void> {
     const { data: refData } = await this.octokit.git.getRef({
       ...this.ownerRepo,
       ref: `heads/${branch}`,
@@ -114,11 +128,20 @@ export class GitHubAdapter implements VCSAdapter {
       tree: treeItems,
     });
 
+    // When mergeParentSha is set, create a merge commit with two parents.
+    // This tells GitHub the branch histories have been reconciled, clearing
+    // the "has conflicts" status on the PR.
+    const parents = options?.mergeParentSha
+      ? [latestCommitSha, options.mergeParentSha]
+      : [latestCommitSha];
+
     const { data: newCommit } = await this.octokit.git.createCommit({
       ...this.ownerRepo,
-      message: "feat: agent implementation",
+      message: options?.mergeParentSha
+        ? "merge: resolve conflicts with base branch"
+        : "feat: agent implementation",
       tree: tree.sha,
-      parents: [latestCommitSha],
+      parents,
     });
 
     await this.octokit.git.updateRef({
@@ -126,6 +149,14 @@ export class GitHubAdapter implements VCSAdapter {
       ref: `heads/${branch}`,
       sha: newCommit.sha,
     });
+  }
+
+  async getBranchSha(branch: string): Promise<string> {
+    const { data } = await this.octokit.git.getRef({
+      ...this.ownerRepo,
+      ref: `heads/${branch}`,
+    });
+    return data.object.sha;
   }
 
   async getPRComments(prId: number): Promise<PRComment[]> {

@@ -146,7 +146,7 @@ You have access to **superpowers skills** installed globally. Use them to improv
 
 0. **Restore session memory** — Check if \`blazebot/memory/[TASK_ID].md\` exists (where \`[TASK_ID]\` is the Ticket ID from above, e.g. \`AIW-123\`). If it exists, read it immediately. Use the progress, decisions, and file list to understand prior implementation context and any previous fix attempts.
 1. Read the review feedback carefully.
-2. If merge conflicts exist, merge the target branch and resolve conflicts first.
+2. If merge conflicts exist, the base branch has already been merged into your branch — the repo is in a \`MERGING\` state with conflict markers (\`<<<<<<<\`, \`=======\`, \`>>>>>>>\`) in the affected files. Do NOT run \`git merge\` again. Instead: edit each conflicted file to resolve the markers, then \`git add\` the resolved files, then run \`git merge --continue\` to complete the merge.
 3. Address each review comment — implement the requested changes.
 4. Run all tests to ensure nothing is broken.
 5. Self-review your changes.
