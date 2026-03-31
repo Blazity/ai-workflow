@@ -1,9 +1,4 @@
 {
-  "functions": {
-    "**/*": {
-      "maxDuration": 800
-    }
-  },
   "crons": [
     {
       "path": "/cron/poll",
