@@ -1,4 +1,6 @@
+import { sleep } from "workflow";
 import type { AgentOutput } from "../sandbox/agent-runner.js";
+import type { AgentStatus } from "../sandbox/run-agent.js";
 import type { TicketContent } from "../adapters/issue-tracker/types.js";
 
 // --- Step Functions ---
@@ -68,6 +70,33 @@ async function provisionAndStartAgent(
   // so it's already at the tip. Only review-fix passes mergeBase to handle drift.
   const sandbox = await manager.provision(branchName, requirementsMd);
   return startAgent({ sandbox, model: env.CLAUDE_MODEL, debug: env.DEBUG_AGENT });
+}
+
+async function pollAgentStatus(
+  sandboxId: string,
+  cmdId: string,
+): Promise<AgentStatus> {
+  "use step";
+  const { env } = await import("../../env.js");
+  const { SandboxManager } = await import("../sandbox/manager.js");
+  const { checkAgentStatus } = await import("../sandbox/run-agent.js");
+
+  const manager = new SandboxManager({
+    githubToken: env.GITHUB_TOKEN,
+    owner: env.GITHUB_OWNER,
+    repo: env.GITHUB_REPO,
+    anthropicApiKey: env.ANTHROPIC_API_KEY,
+    claudeCodeOauthToken: env.CLAUDE_CODE_OAUTH_TOKEN,
+    claudeModel: env.CLAUDE_MODEL,
+    commitAuthor: env.COMMIT_AUTHOR,
+    commitEmail: env.COMMIT_EMAIL,
+    jobTimeoutMs: env.JOB_TIMEOUT_MS,
+    vercelToken: env.VERCEL_TOKEN,
+    vercelTeamId: env.VERCEL_TEAM_ID,
+    vercelProjectId: env.VERCEL_PROJECT_ID,
+  });
+
+  return checkAgentStatus({ sandboxId, cmdId, manager });
 }
 
 async function waitAndCollectResults(
@@ -184,6 +213,21 @@ export async function implementationWorkflow(ticketId: string) {
 
     const requirementsMd = await assembleImplementationRequirements(ticket);
     const { sandboxId, cmdId } = await provisionAndStartAgent(branchName, requirementsMd);
+
+    // Poll with sleep — workflow suspends between checks, no compute wasted.
+    let status = await pollAgentStatus(sandboxId, cmdId);
+    while (status === "running") {
+      await sleep("30s");
+      status = await pollAgentStatus(sandboxId, cmdId);
+    }
+
+    if (status === "gone") {
+      await moveTicket(ticketId, env.COLUMN_BACKLOG);
+      await notifySlack(`Task ${ticket.identifier} failed: sandbox expired before agent finished`);
+      await unregisterRun(ticket.identifier);
+      return;
+    }
+
     const { output, files } = await waitAndCollectResults(sandboxId, cmdId);
 
     await pushChanges(branchName, files);

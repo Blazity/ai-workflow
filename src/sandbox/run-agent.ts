@@ -37,6 +37,57 @@ export async function startAgent(
   return { sandboxId: sandbox.sandboxId, cmdId: command.cmdId };
 }
 
+/**
+ * Returns true when the error indicates the sandbox has been torn down
+ * (HTTP 410 Gone). Once gone, the sandbox will never come back, so
+ * retrying is pointless.
+ */
+function isSandboxGone(err: unknown): boolean {
+  return err instanceof Error && /status code 410/i.test(err.message);
+}
+
+// --- Non-blocking status check (used with sleep() polling) ---
+
+export type AgentStatus = "running" | "done" | "gone";
+
+interface CheckStatusOptions {
+  sandboxId: string;
+  cmdId: string;
+  manager: SandboxManager;
+}
+
+/**
+ * Non-blocking check: reconnects to the sandbox, fetches command state,
+ * and returns the current status without waiting.
+ *
+ * - "running" → agent still executing
+ * - "done"    → agent finished (exitCode is set)
+ * - "gone"    → sandbox was torn down (410)
+ */
+export async function checkAgentStatus(
+  opts: CheckStatusOptions,
+): Promise<AgentStatus> {
+  const { sandboxId, cmdId, manager } = opts;
+
+  let sandbox;
+  try {
+    sandbox = await manager.reconnect(sandboxId);
+  } catch (err) {
+    if (isSandboxGone(err)) return "gone";
+    throw err;
+  }
+
+  try {
+    const command = await sandbox.getCommand(cmdId);
+    return command.exitCode !== null ? "done" : "running";
+  } catch (err) {
+    if (isSandboxGone(err)) return "gone";
+    throw err;
+  }
+}
+
+// --- Result collection (called only after agent is done) ---
+
 interface CollectResultsOptions {
   sandboxId: string;
   cmdId: string;
@@ -45,19 +96,31 @@ interface CollectResultsOptions {
 }
 
 /**
- * Reconnects to a running sandbox, waits for the agent command to finish,
- * then runs end-hook, extracts changed files, and tears down the sandbox.
+ * Reconnects to a sandbox whose agent command has already finished,
+ * collects stdout/stderr, runs end-hook, extracts changed files, and
+ * tears down the sandbox.
  *
- * If the Vercel function times out while waiting, WDK replays the workflow
- * and re-executes this step. It reconnects to the same sandbox/command —
- * if the agent already finished, `wait()` resolves immediately.
+ * Must be called only after {@link checkAgentStatus} returned "done".
+ * If the sandbox is gone (410), returns a graceful failure.
  */
 export async function collectAgentResults(
   opts: CollectResultsOptions,
 ): Promise<{ output: AgentOutput; files: Array<{ path: string; content: string }> }> {
   const { sandboxId, cmdId, manager, debug } = opts;
 
-  const sandbox = await manager.reconnect(sandboxId);
+  let sandbox;
+  try {
+    sandbox = await manager.reconnect(sandboxId);
+  } catch (err) {
+    if (isSandboxGone(err)) {
+      console.error(`Sandbox ${sandboxId} is gone (410) — cannot reconnect.`);
+      return {
+        output: { result: "failed", error: "Sandbox expired (410 Gone) before results could be collected." },
+        files: [],
+      };
+    }
+    throw err;
+  }
 
   try {
     const command = await sandbox.getCommand(cmdId);
@@ -72,7 +135,7 @@ export async function collectAgentResults(
       stderr = "";
       let lineBuf = "";
       try {
-        await writer.write("[debug] Agent reconnected, streaming logs\n");
+        await writer.write("[debug] Agent finished, streaming logs\n");
         for await (const log of command.logs()) {
           if (log.stream === "stdout") {
             stdout += log.data;
@@ -91,13 +154,11 @@ export async function collectAgentResults(
           const formatted = formatStreamEvent(lineBuf);
           if (formatted) await writer.write(formatted + "\n");
         }
-        await writer.write("[debug] Agent finished\n");
+        await writer.write("[debug] Logs collected\n");
       } finally {
         writer.releaseLock();
       }
-      await command.wait();
     } else {
-      await command.wait();
       stdout = await command.stdout();
       stderr = await command.stderr();
     }
@@ -109,10 +170,17 @@ export async function collectAgentResults(
     const output = parseAgentOutput(raw);
     return { output, files };
   } catch (err) {
+    if (isSandboxGone(err)) {
+      console.error(`Sandbox ${sandboxId} expired (410) during result collection.`);
+      return {
+        output: { result: "failed", error: "Sandbox expired (410 Gone) during result collection." },
+        files: [],
+      };
+    }
     await manager.runEndHook(sandbox).catch(() => {});
     const files = await manager.extractChanges(sandbox).catch(() => []);
     throw Object.assign(err as Error, { files });
   } finally {
-    await manager.teardown(sandbox);
+    if (sandbox) await manager.teardown(sandbox);
   }
 }
