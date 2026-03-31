@@ -7,7 +7,10 @@ const agentOutputSchema = z.object({
   error: z.string().optional(),
 });
 
-export type AgentOutput = z.infer<typeof agentOutputSchema>;
+export type AgentOutput = z.infer<typeof agentOutputSchema> & {
+  costUsd?: number;
+  numTurns?: number;
+};
 
 export const AGENT_SCHEMA = JSON.stringify({
   type: "object",
@@ -44,17 +47,19 @@ export function parseAgentOutput(raw: string): AgentOutput {
       const event = JSON.parse(lines[i]);
 
       if (event.type === "result") {
+        const stats = extractStats(event);
+
         // --json-schema puts validated output in structured_output
         if (event.structured_output != null) {
           const parsed = agentOutputSchema.safeParse(event.structured_output);
-          if (parsed.success) return parsed.data;
+          if (parsed.success) return { ...parsed.data, ...stats };
         }
 
         // Fallback: try event.result as JSON
         if (typeof event.result === "string") {
           try {
             const parsed = agentOutputSchema.safeParse(JSON.parse(event.result));
-            if (parsed.success) return parsed.data;
+            if (parsed.success) return { ...parsed.data, ...stats };
           } catch {
             // event.result is not valid JSON
           }
@@ -68,6 +73,7 @@ export function parseAgentOutput(raw: string): AgentOutput {
             summary: typeof event.result === "string"
               ? event.result.trim().slice(0, 500)
               : undefined,
+            ...stats,
           };
         }
 
@@ -76,6 +82,7 @@ export function parseAgentOutput(raw: string): AgentOutput {
           error: typeof event.result === "string"
             ? event.result.trim().slice(0, 500)
             : "Agent returned non-structured result",
+          ...stats,
         };
       }
 
@@ -101,6 +108,13 @@ export function parseAgentOutput(raw: string): AgentOutput {
   return {
     result: "failed",
     error: `Agent output was not structured JSON. Output starts with: ${raw.slice(0, 500)}`,
+  };
+}
+
+function extractStats(event: Record<string, unknown>): Pick<AgentOutput, "costUsd" | "numTurns"> {
+  return {
+    ...(typeof event.total_cost_usd === "number" ? { costUsd: event.total_cost_usd } : {}),
+    ...(typeof event.num_turns === "number" ? { numTurns: event.num_turns } : {}),
   };
 }
 

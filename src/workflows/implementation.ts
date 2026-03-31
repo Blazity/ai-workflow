@@ -40,14 +40,14 @@ async function assembleImplementationRequirements(ticket: TicketContent) {
   });
 }
 
-async function runAgentInSandbox(
+async function provisionAndStartAgent(
   branchName: string,
   requirementsMd: string,
-): Promise<{ output: AgentOutput; files: Array<{ path: string; content: string }> }> {
+): Promise<{ sandboxId: string; cmdId: string }> {
   "use step";
   const { env } = await import("../../env.js");
   const { SandboxManager } = await import("../sandbox/manager.js");
-  const { runAgent } = await import("../sandbox/run-agent.js");
+  const { startAgent } = await import("../sandbox/run-agent.js");
 
   const manager = new SandboxManager({
     githubToken: env.GITHUB_TOKEN,
@@ -67,7 +67,39 @@ async function runAgentInSandbox(
   // No mergeBase needed — the branch was just created from GITHUB_BASE_BRANCH,
   // so it's already at the tip. Only review-fix passes mergeBase to handle drift.
   const sandbox = await manager.provision(branchName, requirementsMd);
-  return runAgent({ sandbox, manager, model: env.CLAUDE_MODEL, debug: env.DEBUG_AGENT });
+  return startAgent({ sandbox, model: env.CLAUDE_MODEL, debug: env.DEBUG_AGENT });
+}
+
+async function waitAndCollectResults(
+  sandboxId: string,
+  cmdId: string,
+): Promise<{ output: AgentOutput; files: Array<{ path: string; content: string }> }> {
+  "use step";
+  const { env } = await import("../../env.js");
+  const { SandboxManager } = await import("../sandbox/manager.js");
+  const { collectAgentResults } = await import("../sandbox/run-agent.js");
+
+  const manager = new SandboxManager({
+    githubToken: env.GITHUB_TOKEN,
+    owner: env.GITHUB_OWNER,
+    repo: env.GITHUB_REPO,
+    anthropicApiKey: env.ANTHROPIC_API_KEY,
+    claudeCodeOauthToken: env.CLAUDE_CODE_OAUTH_TOKEN,
+    claudeModel: env.CLAUDE_MODEL,
+    commitAuthor: env.COMMIT_AUTHOR,
+    commitEmail: env.COMMIT_EMAIL,
+    jobTimeoutMs: env.JOB_TIMEOUT_MS,
+    vercelToken: env.VERCEL_TOKEN,
+    vercelTeamId: env.VERCEL_TEAM_ID,
+    vercelProjectId: env.VERCEL_PROJECT_ID,
+  });
+
+  return collectAgentResults({
+    sandboxId,
+    cmdId,
+    manager,
+    debug: env.DEBUG_AGENT,
+  });
 }
 
 async function pushChanges(
@@ -127,6 +159,13 @@ async function unregisterRun(ticketIdentifier: string) {
   await runRegistry.unregister(ticketIdentifier);
 }
 
+function formatStats(output: AgentOutput): string {
+  const parts: string[] = [];
+  if (output.numTurns != null) parts.push(`${output.numTurns} turns`);
+  if (output.costUsd != null) parts.push(`$${output.costUsd.toFixed(2)}`);
+  return parts.length ? ` (${parts.join(", ")})` : "";
+}
+
 // --- Workflow (durable orchestration — no I/O directly here) ---
 
 export async function implementationWorkflow(ticketId: string) {
@@ -144,14 +183,17 @@ export async function implementationWorkflow(ticketId: string) {
     await createFeatureBranch(branchName, env.GITHUB_BASE_BRANCH);
 
     const requirementsMd = await assembleImplementationRequirements(ticket);
-    const { output, files } = await runAgentInSandbox(branchName, requirementsMd);
+    const { sandboxId, cmdId } = await provisionAndStartAgent(branchName, requirementsMd);
+    const { output, files } = await waitAndCollectResults(sandboxId, cmdId);
 
     await pushChanges(branchName, files);
+
+    const stats = formatStats(output);
 
     if (output.result === "implemented") {
       await createPullRequest(branchName, ticket.title, output.summary ?? "");
       await moveTicket(ticketId, env.COLUMN_AI_REVIEW);
-      await notifySlack(`Task ${ticket.identifier} PR ready for review`);
+      await notifySlack(`Task ${ticket.identifier} PR ready for review${stats}`);
       await unregisterRun(ticket.identifier);
       return;
     }
@@ -163,13 +205,13 @@ export async function implementationWorkflow(ticketId: string) {
         ticket.identifier,
         env.COLUMN_BACKLOG,
       );
-      await notifySlack(`Task ${ticket.identifier} needs clarification`);
+      await notifySlack(`Task ${ticket.identifier} needs clarification${stats}`);
       await unregisterRun(ticket.identifier);
       return;
     }
 
     await moveTicket(ticketId, env.COLUMN_BACKLOG);
-    await notifySlack(`Task ${ticket.identifier} failed: ${output.error ?? "unknown error"}`);
+    await notifySlack(`Task ${ticket.identifier} failed: ${output.error ?? "unknown error"}${stats}`);
     await unregisterRun(ticket.identifier);
   } catch (err) {
     console.error(`Workflow failed for ${ticket.identifier}:`, err);
