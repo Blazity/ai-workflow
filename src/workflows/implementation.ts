@@ -1,3 +1,4 @@
+import { sleep } from "workflow";
 import type { AgentOutput } from "../sandbox/agent-runner.js";
 import type { TicketContent } from "../adapters/issue-tracker/types.js";
 
@@ -40,14 +41,14 @@ async function assembleImplementationRequirements(ticket: TicketContent) {
   });
 }
 
-async function runAgentInSandbox(
+async function provisionAndStartAgent(
   branchName: string,
   requirementsMd: string,
-): Promise<{ output: AgentOutput; files: Array<{ path: string; content: string }> }> {
+): Promise<string> {
   "use step";
   const { env } = await import("../../env.js");
   const { SandboxManager } = await import("../sandbox/manager.js");
-  const { runAgent } = await import("../sandbox/run-agent.js");
+  const { startAgentDetached } = await import("../sandbox/run-agent.js");
 
   const manager = new SandboxManager({
     githubToken: env.GITHUB_TOKEN,
@@ -59,16 +60,13 @@ async function runAgentInSandbox(
     commitAuthor: env.COMMIT_AUTHOR,
     commitEmail: env.COMMIT_EMAIL,
     jobTimeoutMs: env.JOB_TIMEOUT_MS,
-    vercelToken: env.VERCEL_TOKEN,
-    vercelTeamId: env.VERCEL_TEAM_ID,
-    vercelProjectId: env.VERCEL_PROJECT_ID,
   });
 
-  // No mergeBase needed — the branch was just created from GITHUB_BASE_BRANCH,
-  // so it's already at the tip. Only review-fix passes mergeBase to handle drift.
   const sandbox = await manager.provision(branchName, requirementsMd);
-  return runAgent({ sandbox, manager, model: env.CLAUDE_MODEL, debug: env.DEBUG_AGENT });
+  await startAgentDetached(sandbox);
+  return sandbox.sandboxId;
 }
+provisionAndStartAgent.maxRetries = 0;
 
 async function pushChanges(
   branchName: string,
@@ -144,38 +142,84 @@ export async function implementationWorkflow(ticketId: string) {
     await createFeatureBranch(branchName, env.GITHUB_BASE_BRANCH);
 
     const requirementsMd = await assembleImplementationRequirements(ticket);
-    const { output, files } = await runAgentInSandbox(branchName, requirementsMd);
 
-    await pushChanges(branchName, files);
+    // --- Detached execution with polling ---
+    const { checkAgentDone, collectAgentResults, teardownSandbox } =
+      await import("../sandbox/poll-agent.js");
 
-    if (output.result === "implemented") {
-      await createPullRequest(branchName, ticket.title, output.summary ?? "");
-      await moveTicket(ticketId, env.COLUMN_AI_REVIEW);
-      await notifySlack(`Task ${ticket.identifier} PR ready for review`);
+    const sandboxId = await provisionAndStartAgent(branchName, requirementsMd);
+
+    // Poll until agent finishes — workflow truly suspends between polls.
+    // Use an iteration counter (not Date.now()) for deterministic WDK replay.
+    const POLL_INTERVAL = "30s";
+    const MAX_POLLS = Math.ceil((35 * 60) / 30); // ~70 iterations ≈ 35 min
+    let pollCount = 0;
+    let agentDone = false;
+
+    try {
+      while (!agentDone) {
+        await sleep(POLL_INTERVAL);
+        pollCount++;
+
+        if (pollCount >= MAX_POLLS) break;
+
+        const status = await checkAgentDone(sandboxId);
+        if (status === true) {
+          agentDone = true;
+        } else if (status === "stopped") {
+          break;
+        }
+      }
+
+      let output: AgentOutput;
+      let files: Array<{ path: string; content: string }>;
+
+      if (agentDone) {
+        ({ output, files } = await collectAgentResults(sandboxId));
+      } else {
+        output = { result: "failed", error: "Agent timed out or sandbox stopped unexpectedly" };
+        files = [];
+      }
+
+      await pushChanges(branchName, files);
+
+      if (output.result === "implemented") {
+        await createPullRequest(branchName, ticket.title, output.summary ?? "");
+        await moveTicket(ticketId, env.COLUMN_AI_REVIEW);
+        await notifySlack(`Task ${ticket.identifier} PR ready for review`);
+        await unregisterRun(ticket.identifier);
+        return;
+      }
+
+      if (output.result === "clarification_needed") {
+        await postClarificationAndMoveBack(
+          ticketId,
+          output.questions ?? [],
+          ticket.identifier,
+          env.COLUMN_BACKLOG,
+        );
+        await notifySlack(`Task ${ticket.identifier} needs clarification`);
+        await unregisterRun(ticket.identifier);
+        return;
+      }
+
+      await moveTicket(ticketId, env.COLUMN_BACKLOG);
+      await notifySlack(`Task ${ticket.identifier} failed: ${output.error ?? "unknown error"}`);
       await unregisterRun(ticket.identifier);
-      return;
+    } finally {
+      await teardownSandbox(sandboxId);
     }
-
-    if (output.result === "clarification_needed") {
-      await postClarificationAndMoveBack(
-        ticketId,
-        output.questions ?? [],
-        ticket.identifier,
-        env.COLUMN_BACKLOG,
-      );
-      await notifySlack(`Task ${ticket.identifier} needs clarification`);
-      await unregisterRun(ticket.identifier);
-      return;
-    }
-
-    await moveTicket(ticketId, env.COLUMN_BACKLOG);
-    await notifySlack(`Task ${ticket.identifier} failed: ${output.error ?? "unknown error"}`);
-    await unregisterRun(ticket.identifier);
   } catch (err) {
     console.error(`Workflow failed for ${ticket.identifier}:`, err);
-    await moveTicket(ticketId, env.COLUMN_BACKLOG).catch(() => {});
+    const moved = await moveTicket(ticketId, env.COLUMN_BACKLOG).then(() => true).catch(() => false);
     await notifySlack(`Task ${ticket.identifier} failed: ${(err as Error).message ?? "unknown"}`).catch(() => {});
-    await unregisterRun(ticket.identifier).catch(() => {});
+    // Only unregister if the ticket was moved out of AI column.
+    // If moveTicket failed, leave the Redis entry so the cron doesn't
+    // dispatch a duplicate — reconcile will clean it up once the ticket
+    // is manually moved or the run becomes terminal.
+    if (moved) {
+      await unregisterRun(ticket.identifier).catch(() => {});
+    }
     throw err;
   }
 }

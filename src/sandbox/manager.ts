@@ -1,4 +1,6 @@
 import type { Sandbox as SandboxType } from "@vercel/sandbox";
+import { getSandboxCredentials } from "./credentials.js";
+import { buildWrapperScript } from "./wrapper-script.js";
 
 /**
  * Skills installed globally in the sandbox (~/.claude/skills/).
@@ -20,14 +22,9 @@ export interface SandboxConfig {
   commitAuthor: string;
   commitEmail: string;
   jobTimeoutMs: number;
-  vercelToken?: string;
-  vercelTeamId?: string;
-  vercelProjectId?: string;
 }
 
 type SandboxInstance = Awaited<ReturnType<typeof SandboxType.create>>;
-
-export type EndHookResult = "clean" | "committed" | "error";
 
 export class SandboxManager {
   constructor(private config: SandboxConfig) {}
@@ -40,23 +37,12 @@ export class SandboxManager {
   ): Promise<SandboxInstance> {
     const { Sandbox } = await import("@vercel/sandbox");
 
-    // Pass explicit credentials only when all three are provided (local dev).
-    // On Vercel, omit them entirely so the SDK uses OIDC auto-detection.
     if (!this.config.claudeCodeOauthToken && !this.config.anthropicApiKey) {
       throw new Error("Either anthropicApiKey or claudeCodeOauthToken must be provided");
     }
 
-    const hasExplicitCredentials =
-      this.config.vercelToken && this.config.vercelTeamId && this.config.vercelProjectId;
-
     const sandbox = await Sandbox.create({
-      ...(hasExplicitCredentials
-        ? {
-            token: this.config.vercelToken,
-            teamId: this.config.vercelTeamId,
-            projectId: this.config.vercelProjectId,
-          }
-        : {}),
+      ...getSandboxCredentials(),
       source: {
         type: "git",
         url: `https://github.com/${this.config.owner}/${this.config.repo}.git`,
@@ -104,7 +90,7 @@ export class SandboxManager {
       }
     }
 
-    // Record the pre-agent HEAD so extractChanges can diff only agent work.
+    // Record the pre-agent HEAD so the poll step (collectAgentResults) can diff only agent work.
     // Must happen after clone + optional merge, before the agent touches anything.
     await sandbox.runCommand("bash", [
       "-c",
@@ -148,10 +134,13 @@ export class SandboxManager {
     // Install skills globally (outside the client repo)
     await this.installGlobalSkills(sandbox);
 
-    // Write requirements.md
+    // Write requirements.md and wrapper script for detached execution
+    const wrapperScript = buildWrapperScript({ model: this.config.claudeModel });
     await sandbox.writeFiles([
       { path: "requirements.md", content: Buffer.from(requirementsMd) },
+      { path: "/tmp/agent-wrapper.sh", content: Buffer.from(wrapperScript) },
     ]);
+    await sandbox.runCommand("chmod", ["+x", "/tmp/agent-wrapper.sh"]);
 
     return sandbox;
   }
@@ -166,79 +155,6 @@ export class SandboxManager {
         "-y", "skills", "add", repo, "--skill", skill, "--yes", "-g",
       ]);
     }
-  }
-
-  async runEndHook(sandbox: SandboxInstance): Promise<EndHookResult> {
-    try {
-      // Remove repo-level .claude/ artifacts that Claude Code auto-creates at runtime.
-      // rm -rf removes untracked files; git checkout restores any that were already committed
-      // so their deletion doesn't appear as dirty state.
-      await sandbox.runCommand("bash", [
-        "-c",
-        "cd /vercel/sandbox; rm -rf .claude/ requirements.md; git checkout -- .claude/ 2>/dev/null; git checkout -- requirements.md 2>/dev/null; true",
-      ]);
-
-      const statusResult = await sandbox.runCommand("git", [
-        "status",
-        "--porcelain",
-      ]);
-      const status = (await statusResult.stdout()).trim();
-
-      if (!status) return "clean";
-
-      // Uncommitted changes exist — force commit
-      await sandbox.runCommand("git", ["add", "-A"]);
-      await sandbox.runCommand("git", [
-        "commit",
-        "-m",
-        "wip: auto-commit uncommitted changes before sandbox teardown",
-      ]);
-
-      return "committed";
-    } catch {
-      return "error";
-    }
-  }
-
-  async extractChanges(
-    sandbox: SandboxInstance,
-  ): Promise<Array<{ path: string; content: string }>> {
-    // Diff against the pre-agent snapshot saved during provision().
-    // This captures exactly the agent's work, regardless of whether the clone
-    // was unshallowed (mergeBase) or remains shallow.
-    const baseResult = await sandbox.runCommand("bash", [
-      "-c",
-      "cat /tmp/.pre-agent-sha 2>/dev/null || git rev-list --max-parents=0 HEAD",
-    ]);
-    const baseSha = (await baseResult.stdout()).trim();
-    if (!baseSha) return [];
-
-    const diffResult = await sandbox.runCommand("git", [
-      "diff",
-      "--name-only",
-      baseSha,
-      "HEAD",
-    ]);
-    const diffOutput = (await diffResult.stdout()).trim();
-    if (!diffOutput) return [];
-
-    const filePaths = diffOutput
-      .split("\n")
-      .filter(Boolean)
-      .filter((p) => p !== "requirements.md")
-      .filter((p) => !p.startsWith(".claude/"));
-    const files: Array<{ path: string; content: string }> = [];
-
-    for (const filePath of filePaths) {
-      const buf = await sandbox.readFileToBuffer({
-        path: filePath,
-        cwd: "/vercel/sandbox",
-      });
-      if (buf) {
-        files.push({ path: filePath, content: buf.toString("utf-8") });
-      }
-    }
-    return files;
   }
 
   async teardown(sandbox: SandboxInstance): Promise<void> {

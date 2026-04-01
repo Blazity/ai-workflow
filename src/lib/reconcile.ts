@@ -7,6 +7,15 @@ import type { RunRegistryAdapter } from "../adapters/run-registry/types.js";
 const TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled"]);
 const STALE_CLAIM_MS = 5 * 60 * 1000;
 
+/**
+ * Track consecutive getRun failures per ticket.
+ * Only unregister after UNREACHABLE_STRIKES_LIMIT consecutive failures
+ * to avoid nuking dedup entries on transient WDK API errors
+ * (especially during workflow sleep/suspend states).
+ */
+const unreachableStrikes = new Map<string, number>();
+const UNREACHABLE_STRIKES_LIMIT = 3;
+
 export async function reconcileRuns(
   aiColumnTickets: Set<string>,
   runRegistry: RunRegistryAdapter,
@@ -76,12 +85,28 @@ async function cleanFinishedRun(
     const run = getRun(runId);
     const status = await run.status;
 
+    // Success — reset strike counter
+    unreachableStrikes.delete(ticketKey);
+
     if (!TERMINAL_STATUSES.has(status)) return 0;
 
     await runRegistry.unregister(ticketKey);
     logger.info({ ticketKey, runId, status }, "reconcile_cleaned_finished_run");
     return 1;
   } catch {
+    const strikes = (unreachableStrikes.get(ticketKey) ?? 0) + 1;
+    unreachableStrikes.set(ticketKey, strikes);
+
+    if (strikes < UNREACHABLE_STRIKES_LIMIT) {
+      logger.warn(
+        { ticketKey, runId, strikes, limit: UNREACHABLE_STRIKES_LIMIT },
+        "reconcile_unreachable_strike",
+      );
+      return 0;
+    }
+
+    // Exceeded strike limit — genuinely gone
+    unreachableStrikes.delete(ticketKey);
     await runRegistry.unregister(ticketKey).catch(() => {});
     logger.warn({ ticketKey, runId }, "reconcile_cleaned_unreachable_run");
     return 1;

@@ -120,7 +120,7 @@ describe("reconcileRuns", () => {
     expect(mockCancelRun).toHaveBeenCalledWith("PROJ-1", "run_stale", registry);
   });
 
-  it("cleans unreachable runs (getRun throws)", async () => {
+  it("does not unregister on a single getRun failure (strike 1 of 3)", async () => {
     const registry = makeRegistry([
       { ticketKey: "PROJ-1", runId: "run_ghost" },
     ]);
@@ -129,9 +129,56 @@ describe("reconcileRuns", () => {
     });
     const { reconcileRuns } = await import("./reconcile.js");
 
+    // First failure — should NOT unregister (strike 1)
+    const result = await reconcileRuns(new Set(["PROJ-1"]), registry);
+
+    expect(result).toEqual({ cancelled: 0, cleaned: 0 });
+    expect(registry.unregister).not.toHaveBeenCalled();
+  });
+
+  it("unregisters after 3 consecutive getRun failures", async () => {
+    const registry = makeRegistry([
+      { ticketKey: "PROJ-1", runId: "run_ghost" },
+    ]);
+    mockGetRun.mockReturnValue({
+      get status() { return Promise.reject(new Error("not found")); },
+    });
+    const { reconcileRuns } = await import("./reconcile.js");
+
+    // Strike 2 (strike 1 was in the previous test — same module instance)
+    await reconcileRuns(new Set(["PROJ-1"]), registry);
+    expect(registry.unregister).not.toHaveBeenCalled();
+
+    // Strike 3 — should unregister now
     const result = await reconcileRuns(new Set(["PROJ-1"]), registry);
 
     expect(result).toEqual({ cancelled: 0, cleaned: 1 });
     expect(registry.unregister).toHaveBeenCalledWith("PROJ-1");
+  });
+
+  it("resets strike counter on successful getRun", async () => {
+    const registry = makeRegistry([
+      { ticketKey: "PROJ-1", runId: "run_flaky" },
+    ]);
+    const { reconcileRuns } = await import("./reconcile.js");
+
+    // One failure — strike 1
+    mockGetRun.mockReturnValue({
+      get status() { return Promise.reject(new Error("transient")); },
+    });
+    await reconcileRuns(new Set(["PROJ-1"]), registry);
+    expect(registry.unregister).not.toHaveBeenCalled();
+
+    // Success — resets counter
+    mockGetRun.mockReturnValue({ status: Promise.resolve("running") });
+    await reconcileRuns(new Set(["PROJ-1"]), registry);
+    expect(registry.unregister).not.toHaveBeenCalled();
+
+    // Another failure — strike 1 again (not 2)
+    mockGetRun.mockReturnValue({
+      get status() { return Promise.reject(new Error("transient")); },
+    });
+    await reconcileRuns(new Set(["PROJ-1"]), registry);
+    expect(registry.unregister).not.toHaveBeenCalled();
   });
 });

@@ -1,4 +1,5 @@
 import { FatalError } from "workflow";
+import { sleep } from "workflow";
 import type { AgentOutput } from "../sandbox/agent-runner.js";
 import type { TicketContent } from "../adapters/issue-tracker/types.js";
 import type { PRComment } from "../adapters/vcs/types.js";
@@ -27,9 +28,6 @@ async function fetchPRContext(branchName: string, baseBranch: string) {
   const comments = await vcs.getPRComments(pr.id);
   const hasConflicts = await vcs.getPRConflictStatus(pr.id);
 
-  // Resolve the base branch SHA so we can create a merge commit when pushing
-  // conflict resolutions (a merge commit with two parents tells GitHub the
-  // histories are reconciled and clears the "has conflicts" status).
   let baseSha: string | undefined;
   if (hasConflicts) {
     baseSha = await vcs.getBranchSha(baseBranch);
@@ -63,17 +61,15 @@ async function assembleReviewFixRequirements(
   });
 }
 
-async function runFixingAgentInSandbox(
+async function provisionAndStartFixingAgent(
   branchName: string,
   requirementsMd: string,
-): Promise<{
-  output: AgentOutput;
-  files: Array<{ path: string; content: string }>;
-}> {
+  mergeBase: string,
+): Promise<string> {
   "use step";
   const { env } = await import("../../env.js");
   const { SandboxManager } = await import("../sandbox/manager.js");
-  const { runAgent } = await import("../sandbox/run-agent.js");
+  const { startAgentDetached } = await import("../sandbox/run-agent.js");
 
   const manager = new SandboxManager({
     githubToken: env.GITHUB_TOKEN,
@@ -85,19 +81,13 @@ async function runFixingAgentInSandbox(
     commitAuthor: env.COMMIT_AUTHOR,
     commitEmail: env.COMMIT_EMAIL,
     jobTimeoutMs: env.JOB_TIMEOUT_MS,
-    vercelToken: env.VERCEL_TOKEN,
-    vercelTeamId: env.VERCEL_TEAM_ID,
-    vercelProjectId: env.VERCEL_PROJECT_ID,
   });
 
-  const sandbox = await manager.provision(branchName, requirementsMd, env.GITHUB_BASE_BRANCH);
-  return runAgent({
-    sandbox,
-    manager,
-    model: env.CLAUDE_MODEL,
-    debug: env.DEBUG_AGENT,
-  });
+  const sandbox = await manager.provision(branchName, requirementsMd, mergeBase);
+  await startAgentDetached(sandbox);
+  return sandbox.sandboxId;
 }
+provisionAndStartFixingAgent.maxRetries = 0;
 
 async function pushChanges(
   branchName: string,
@@ -155,32 +145,73 @@ export async function reviewFixWorkflow(ticketId: string, branchName: string) {
       hasConflicts,
     );
 
-    const { output, files } = await runFixingAgentInSandbox(
+    // --- Detached execution with polling ---
+    const { checkAgentDone, collectAgentResults, teardownSandbox } =
+      await import("../sandbox/poll-agent.js");
+
+    const sandboxId = await provisionAndStartFixingAgent(
       branchName,
       requirementsMd,
+      env.GITHUB_BASE_BRANCH,
     );
 
-    await pushChanges(branchName, files, baseSha);
+    // Poll until agent finishes — use iteration counter for deterministic WDK replay.
+    const POLL_INTERVAL = "30s";
+    const MAX_POLLS = Math.ceil((35 * 60) / 30); // ~70 iterations ≈ 35 min
+    let pollCount = 0;
+    let agentDone = false;
 
-    if (output.result === "implemented") {
-      await moveTicket(ticketId, env.COLUMN_AI_REVIEW);
+    try {
+      while (!agentDone) {
+        await sleep(POLL_INTERVAL);
+        pollCount++;
+
+        if (pollCount >= MAX_POLLS) break;
+
+        const status = await checkAgentDone(sandboxId);
+        if (status === true) {
+          agentDone = true;
+        } else if (status === "stopped") {
+          break;
+        }
+      }
+
+      let output: AgentOutput;
+      let files: Array<{ path: string; content: string }>;
+
+      if (agentDone) {
+        ({ output, files } = await collectAgentResults(sandboxId));
+      } else {
+        output = { result: "failed", error: "Agent timed out or sandbox stopped unexpectedly" };
+        files = [];
+      }
+
+      await pushChanges(branchName, files, baseSha);
+
+      if (output.result === "implemented") {
+        await moveTicket(ticketId, env.COLUMN_AI_REVIEW);
+        await notifySlack(
+          `Task ${ticket.identifier} fixes applied, ready for re-review`,
+        );
+        await unregisterRun(ticket.identifier);
+        return;
+      }
+
+      await moveTicket(ticketId, env.COLUMN_BACKLOG);
       await notifySlack(
-        `Task ${ticket.identifier} fixes applied, ready for re-review`,
+        `Task ${ticket.identifier} review-fix failed: ${output.error ?? "unknown error"}`,
       );
       await unregisterRun(ticket.identifier);
-      return;
+    } finally {
+      await teardownSandbox(sandboxId);
     }
-
-    await moveTicket(ticketId, env.COLUMN_BACKLOG);
-    await notifySlack(
-      `Task ${ticket.identifier} review-fix failed: ${output.error ?? "unknown error"}`,
-    );
-    await unregisterRun(ticket.identifier);
   } catch (err) {
     console.error(`Workflow failed for ${ticket.identifier}:`, err);
-    await moveTicket(ticketId, env.COLUMN_BACKLOG).catch(() => {});
+    const moved = await moveTicket(ticketId, env.COLUMN_BACKLOG).then(() => true).catch(() => false);
     await notifySlack(`Task ${ticket.identifier} failed: ${(err as Error).message ?? "unknown"}`).catch(() => {});
-    await unregisterRun(ticket.identifier).catch(() => {});
+    if (moved) {
+      await unregisterRun(ticket.identifier).catch(() => {});
+    }
     throw err;
   }
 }
