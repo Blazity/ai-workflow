@@ -1,7 +1,8 @@
 import { Redis } from "@upstash/redis";
 import type { RunRegistryAdapter } from "./types.js";
 
-const HASH_KEY = "blazebot:active-runs";
+const ENV_PREFIX = process.env.VERCEL_ENV ?? "development";
+const HASH_KEY = `blazebot:active-runs:${ENV_PREFIX}`;
 
 export class UpstashRunRegistry implements RunRegistryAdapter {
   private redis: Redis;
@@ -17,6 +18,8 @@ export class UpstashRunRegistry implements RunRegistryAdapter {
 
   async register(ticketKey: string, runId: string): Promise<void> {
     await this.redis.hset(HASH_KEY, { [ticketKey]: runId });
+    // Ensure the hash has no expiry — defend against external TTL being set
+    await this.redis.persist(HASH_KEY);
   }
 
   async getRunId(ticketKey: string): Promise<string | null> {

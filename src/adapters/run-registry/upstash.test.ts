@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { UpstashRunRegistry } from "./upstash.js";
 
-const HASH_KEY = "blazebot:active-runs";
+const HASH_KEY = `blazebot:active-runs:${process.env.VERCEL_ENV ?? "development"}`;
 
 const mockRedis = {
   hsetnx: vi.fn(),
@@ -9,6 +9,7 @@ const mockRedis = {
   hget: vi.fn(),
   hdel: vi.fn(),
   hgetall: vi.fn(),
+  persist: vi.fn(),
 };
 
 vi.mock("@upstash/redis", () => ({

@@ -240,9 +240,6 @@ curl -H "Authorization: Bearer $CRON_SECRET" http://localhost:3000/cron/poll
 | `AI_WORKFLOW_KV_REST_API_TOKEN` | Yes | — | Upstash Redis REST token |
 | **Security** | | | |
 | `CRON_SECRET` | No | — | Cron endpoint auth token |
-| **Debug** | | | |
-| `DEBUG_AGENT` | No | `false` | Enable stream-json agent logging |
-
 \* On Vercel, OIDC authenticates automatically. These are only needed for local development if `vercel env pull` doesn't cover your setup.
 
 ## Deploying to Vercel
@@ -302,7 +299,9 @@ When a ticket is discovered in the AI column and no PR exists yet, the **impleme
 | `fetchAndValidateTicket` | Fetches ticket from Jira, verifies it's still in the AI column |
 | `createFeatureBranch` | Creates `blazebot/{ticket-key}` branch from the base branch |
 | `assembleImplementationRequirements` | Combines ticket title, description, acceptance criteria, and comments into a `requirements.md` prompt |
-| `runAgentInSandbox` | Provisions a Vercel Sandbox, installs Claude Code + global skills, runs the agent with a JSON output schema |
+| `provisionAndStartAgent` | Provisions a Vercel Sandbox, installs Claude Code + global skills, starts the agent detached with a JSON output schema |
+| *poll loop* | Polls the sandbox every 30s for completion (workflow suspends between polls) |
+| `collectAgentResults` | Reads agent output and extracts changed files from the sandbox |
 | `pushChanges` | Pushes all modified files to the feature branch via the GitHub API |
 | `createPullRequest` | Opens a PR targeting the base branch |
 | `moveTicket` | Moves the Jira ticket to the "AI Review" column |
@@ -320,7 +319,9 @@ When a ticket is in the AI column but a PR already exists (indicating review fee
 | `fetchAndValidateTicket` | Same as implementation |
 | `fetchPRContext` | Fetches all PR comments (review + issue) and merge conflict status |
 | `assembleReviewFixRequirements` | Builds requirements including the original ticket context plus PR feedback and conflict status |
-| `runFixingAgentInSandbox` | Runs the agent with the fixing prompt |
+| `provisionAndStartFixingAgent` | Starts the agent detached with the fixing prompt |
+| *poll loop* | Polls the sandbox every 30s for completion |
+| `collectAgentResults` | Reads agent output and extracts changed files |
 | `pushChanges` | Pushes fixes to the existing branch |
 | `moveTicket` | Moves back to AI Review |
 | `notifySlack` | Notifies the team |
@@ -348,7 +349,7 @@ The sandbox runs on **Node.js 24** with a configurable timeout (`JOB_TIMEOUT_MS`
 
 Claude Code is invoked inside the sandbox with:
 - `--dangerously-skip-permissions` — safe because the sandbox is fully isolated
-- `--output-format json` — enforces structured output (or `stream-json` when `DEBUG_AGENT=true`)
+- `--output-format json` — enforces structured output
 - `--json-schema '{...}'` — the agent must return output matching the schema below
 
 The agent reads `requirements.md` via stdin and implements the feature autonomously. It has access to the full repository, can run tests, install dependencies, and make commits.
@@ -366,13 +367,12 @@ The agent must return structured output conforming to:
 
 #### How commits are extracted
 
-The agent commits inside the sandbox like any developer. Before teardown, Blazebot runs an **end hook**:
+The agent commits inside the sandbox via a **stop hook** that blocks exit until all changes are committed. A **wrapper script** runs the agent detached, cleans up artifacts (`.claude/`, `requirements.md`), and writes a sentinel file (`/tmp/agent-done`) on completion. The workflow polls for this sentinel every 30 seconds, then:
 
-1. Checks `git status --porcelain` for uncommitted changes
-2. If any exist, runs `git add -A` and `git commit` with a WIP message — this ensures no work is lost
-3. Extracts changed files via `git diff --name-only HEAD~1 HEAD`
-4. Reads each modified file's content from the sandbox (excluding `requirements.md`)
-5. Returns the file list `Array<{ path, content }>` to the workflow
+1. Reads agent stdout/stderr from `/tmp/agent-stdout.txt` and `/tmp/agent-stderr.txt`
+2. Diffs against the pre-agent SHA to find changed files (`git diff --name-only`)
+3. Reads each modified file's content from the sandbox (excluding `requirements.md` and `.claude/`)
+4. Returns the file list `Array<{ path, content }>` to the workflow
 
 #### How changes get pushed to GitHub
 

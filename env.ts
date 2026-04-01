@@ -51,13 +51,6 @@ export const env = createEnv({
     // Redis (run registry)
     AI_WORKFLOW_KV_REST_API_URL: z.string().url(),
     AI_WORKFLOW_KV_REST_API_TOKEN: z.string().min(1),
-
-
-    // Debug
-    DEBUG_AGENT: z
-      .string()
-      .transform((v) => v === "true" || v === "1")
-      .default("false"),
   },
   runtimeEnv: process.env,
   emptyStringAsUndefined: true,
