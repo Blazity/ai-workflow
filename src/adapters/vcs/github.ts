@@ -1,6 +1,6 @@
 import { Octokit } from "@octokit/rest";
 import { FatalError } from "workflow";
-import type { VCSAdapter, PullRequest, PRComment } from "./types.js";
+import type { VCSAdapter, PullRequest, PRComment, CheckRunResult } from "./types.js";
 
 export interface GitHubConfig {
   token: string;
@@ -174,6 +174,9 @@ export class GitHubAdapter implements VCSAdapter {
         author: c.user?.login ?? "unknown",
         body: c.body ?? "",
         liked: (c.reactions?.total_count ?? 0) > 0,
+        filePath: c.path,
+        startLine: c.start_line ?? c.line,
+        endLine: c.line,
       })),
       ...issueComments.map((c) => ({
         author: c.user?.login ?? "unknown",
@@ -182,6 +185,68 @@ export class GitHubAdapter implements VCSAdapter {
       })),
     ];
     return comments;
+  }
+
+  async getCheckRunResults(prId: number): Promise<CheckRunResult[]> {
+    const { data: pr } = await this.octokit.pulls.get({
+      ...this.ownerRepo,
+      pull_number: prId,
+    });
+    const headSha = pr.head.sha;
+
+    const { data: checksData } = await this.octokit.checks.listForRef({
+      ...this.ownerRepo,
+      ref: headSha,
+    });
+
+    const results: CheckRunResult[] = [];
+    for (const check of checksData.check_runs) {
+      const entry: CheckRunResult = {
+        name: check.name,
+        status: check.status as CheckRunResult["status"],
+        conclusion: check.conclusion ?? null,
+      };
+
+      if (
+        check.status === "completed" &&
+        check.conclusion !== "success" &&
+        check.conclusion !== null
+      ) {
+        try {
+          // Find the matching workflow job and fetch its logs
+          const runs =
+            await this.octokit.actions.listWorkflowRunsForRepo({
+              ...this.ownerRepo,
+              head_sha: headSha,
+            });
+
+          for (const run of runs.data.workflow_runs) {
+            const { data: jobs } =
+              await this.octokit.actions.listJobsForWorkflowRun({
+                ...this.ownerRepo,
+                run_id: run.id,
+              });
+
+            const matchingJob = jobs.jobs.find((j) => j.name === check.name);
+            if (matchingJob) {
+              const { data: logData } =
+                await this.octokit.actions.downloadJobLogsForWorkflowRun({
+                  ...this.ownerRepo,
+                  job_id: matchingJob.id,
+                });
+              entry.logs = String(logData);
+              break;
+            }
+          }
+        } catch {
+          // Non-GitHub-Actions checks (CircleCI, Jenkins, etc.) won't have logs
+        }
+      }
+
+      results.push(entry);
+    }
+
+    return results;
   }
 
   async getPRConflictStatus(prId: number): Promise<boolean> {

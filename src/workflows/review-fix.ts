@@ -2,7 +2,7 @@ import { FatalError } from "workflow";
 import { sleep } from "workflow";
 import type { AgentOutput } from "../sandbox/agent-runner.js";
 import type { TicketContent } from "../adapters/issue-tracker/types.js";
-import type { PRComment } from "../adapters/vcs/types.js";
+import type { PRComment, CheckRunResult } from "../adapters/vcs/types.js";
 
 // --- Step Functions ---
 
@@ -27,19 +27,21 @@ async function fetchPRContext(branchName: string, baseBranch: string) {
 
   const comments = await vcs.getPRComments(pr.id);
   const hasConflicts = await vcs.getPRConflictStatus(pr.id);
+  const checkResults = await vcs.getCheckRunResults(pr.id);
 
   let baseSha: string | undefined;
   if (hasConflicts) {
     baseSha = await vcs.getBranchSha(baseBranch);
   }
 
-  return { pr, comments, hasConflicts, baseSha };
+  return { pr, comments, hasConflicts, baseSha, checkResults };
 }
 
 async function assembleReviewFixRequirements(
   ticket: TicketContent,
   prComments: PRComment[],
   hasConflicts: boolean,
+  checkResults: CheckRunResult[],
 ) {
   "use step";
   const { assembleFixingFeedbackContext } =
@@ -58,6 +60,7 @@ async function assembleReviewFixRequirements(
     prompt,
     prComments,
     hasConflicts,
+    checkResults,
   });
 }
 
@@ -137,12 +140,13 @@ export async function reviewFixWorkflow(ticketId: string, branchName: string) {
       `Task ${ticket.identifier} started — fixing review feedback`,
     );
 
-    const { comments, hasConflicts, baseSha } = await fetchPRContext(branchName, env.GITHUB_BASE_BRANCH);
+    const { comments, hasConflicts, baseSha, checkResults } = await fetchPRContext(branchName, env.GITHUB_BASE_BRANCH);
 
     const requirementsMd = await assembleReviewFixRequirements(
       ticket,
       comments,
       hasConflicts,
+      checkResults,
     );
 
     // --- Detached execution with polling ---
