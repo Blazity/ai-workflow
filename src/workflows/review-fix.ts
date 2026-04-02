@@ -137,7 +137,7 @@ async function markTicketFailed(ticketIdentifier: string, error: string) {
   "use step";
   const { createStepAdapters } = await import("../lib/step-adapters.js");
   const { runRegistry } = createStepAdapters();
-  const runId = await runRegistry.getRunId(ticketIdentifier) ?? "unknown";
+  const runId = (await runRegistry.getRunId(ticketIdentifier)) ?? "unknown";
   await runRegistry.markFailed(ticketIdentifier, {
     runId,
     error,
@@ -160,8 +160,10 @@ export async function reviewFixWorkflow(ticketId: string, branchName: string) {
       `Task ${ticket.identifier} started — fixing review feedback`,
     );
 
-    const { comments, hasConflicts, checkResults } =
-      await fetchPRContext(branchName, env.GITHUB_BASE_BRANCH);
+    const { comments, hasConflicts, checkResults } = await fetchPRContext(
+      branchName,
+      env.GITHUB_BASE_BRANCH,
+    );
 
     const requirementsMd = await assembleReviewFixRequirements(
       ticket,
@@ -170,14 +172,14 @@ export async function reviewFixWorkflow(ticketId: string, branchName: string) {
       checkResults,
     );
 
-    // TODO: TEMP logging — remove after testing
-    console.log("[review-fix] === ASSEMBLED CONTEXT START ===");
-    console.log(requirementsMd);
-    console.log("[review-fix] === ASSEMBLED CONTEXT END ===");
-
     // --- Detached execution with polling ---
-    const { checkAgentDone, collectAgentOutput, pushFromSandbox, fixAndRetryPush, teardownSandbox } =
-      await import("../sandbox/poll-agent.js");
+    const {
+      checkAgentDone,
+      collectAgentOutput,
+      pushFromSandbox,
+      fixAndRetryPush,
+      teardownSandbox,
+    } = await import("../sandbox/poll-agent.js");
 
     const sandboxId = await provisionAndStartFixingAgent(
       branchName,
@@ -221,12 +223,18 @@ export async function reviewFixWorkflow(ticketId: string, branchName: string) {
         let pushResult = await pushFromSandbox(sandboxId, branchName);
 
         if (!pushResult.pushed && pushResult.error) {
-          pushResult = await fixAndRetryPush(sandboxId, branchName, pushResult.error);
+          pushResult = await fixAndRetryPush(
+            sandboxId,
+            branchName,
+            pushResult.error,
+          );
         }
 
         if (!pushResult.pushed) {
           await moveTicket(ticketId, env.COLUMN_BACKLOG);
-          await notifySlack(`Task ${ticket.identifier} failed: push failed — ${pushResult.error ?? "unknown"}`);
+          await notifySlack(
+            `Task ${ticket.identifier} failed: push failed — ${pushResult.error ?? "unknown"}`,
+          );
           await unregisterRun(ticket.identifier);
           return;
         }
@@ -258,7 +266,10 @@ export async function reviewFixWorkflow(ticketId: string, branchName: string) {
     if (moved) {
       await unregisterRun(ticket.identifier).catch(() => {});
     } else {
-      await markTicketFailed(ticket.identifier, `Failed to move ticket to backlog: ${(err as Error).message ?? "unknown"}`).catch(() => {});
+      await markTicketFailed(
+        ticket.identifier,
+        `Failed to move ticket to backlog: ${(err as Error).message ?? "unknown"}`,
+      ).catch(() => {});
     }
     throw err;
   }
