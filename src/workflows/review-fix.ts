@@ -18,7 +18,7 @@ async function fetchAndValidateTicket(ticketId: string, columnAi: string) {
   return ticket;
 }
 
-async function fetchPRContext(branchName: string, baseBranch: string) {
+async function fetchPRContext(branchName: string) {
   "use step";
   const { createStepAdapters } = await import("../lib/step-adapters.js");
   const { vcs } = createStepAdapters();
@@ -29,12 +29,7 @@ async function fetchPRContext(branchName: string, baseBranch: string) {
   const hasConflicts = await vcs.getPRConflictStatus(pr.id);
   const checkResults = await vcs.getCheckRunResults(pr.id);
 
-  let baseSha: string | undefined;
-  if (hasConflicts) {
-    baseSha = await vcs.getBranchSha(baseBranch);
-  }
-
-  return { pr, comments, hasConflicts, baseSha, checkResults };
+  return { pr, comments, hasConflicts };
 }
 
 async function assembleReviewFixRequirements(
@@ -96,22 +91,6 @@ async function provisionAndStartFixingAgent(
 }
 provisionAndStartFixingAgent.maxRetries = 0;
 
-async function pushChanges(
-  branchName: string,
-  files: Array<{ path: string; content: string }>,
-  mergeParentSha?: string,
-) {
-  "use step";
-  if (files.length === 0) return;
-  const { createStepAdapters } = await import("../lib/step-adapters.js");
-  const { vcs } = createStepAdapters();
-  await vcs.push(
-    branchName,
-    files,
-    mergeParentSha ? { mergeParentSha } : undefined,
-  );
-}
-
 async function moveTicket(ticketId: string, column: string) {
   "use step";
   const { createStepAdapters } = await import("../lib/step-adapters.js");
@@ -137,7 +116,7 @@ async function markTicketFailed(ticketIdentifier: string, error: string) {
   "use step";
   const { createStepAdapters } = await import("../lib/step-adapters.js");
   const { runRegistry } = createStepAdapters();
-  const runId = (await runRegistry.getRunId(ticketIdentifier)) ?? "unknown";
+  const runId = await runRegistry.getRunId(ticketIdentifier) ?? "unknown";
   await runRegistry.markFailed(ticketIdentifier, {
     runId,
     error,
@@ -160,10 +139,7 @@ export async function reviewFixWorkflow(ticketId: string, branchName: string) {
       `Task ${ticket.identifier} started — fixing review feedback`,
     );
 
-    const { comments, hasConflicts, checkResults } = await fetchPRContext(
-      branchName,
-      env.GITHUB_BASE_BRANCH,
-    );
+    const { comments, hasConflicts } = await fetchPRContext(branchName);
 
     const requirementsMd = await assembleReviewFixRequirements(
       ticket,
@@ -173,13 +149,8 @@ export async function reviewFixWorkflow(ticketId: string, branchName: string) {
     );
 
     // --- Detached execution with polling ---
-    const {
-      checkAgentDone,
-      collectAgentOutput,
-      pushFromSandbox,
-      fixAndRetryPush,
-      teardownSandbox,
-    } = await import("../sandbox/poll-agent.js");
+    const { checkAgentDone, collectAgentOutput, pushFromSandbox, fixAndRetryPush, teardownSandbox } =
+      await import("../sandbox/poll-agent.js");
 
     const sandboxId = await provisionAndStartFixingAgent(
       branchName,
@@ -213,28 +184,19 @@ export async function reviewFixWorkflow(ticketId: string, branchName: string) {
       if (agentDone) {
         ({ output } = await collectAgentOutput(sandboxId));
       } else {
-        output = {
-          result: "failed",
-          error: "Agent timed out or sandbox stopped unexpectedly",
-        };
+        output = { result: "failed", error: "Agent timed out or sandbox stopped unexpectedly" };
       }
 
       if (output.result === "implemented") {
         let pushResult = await pushFromSandbox(sandboxId, branchName);
 
         if (!pushResult.pushed && pushResult.error) {
-          pushResult = await fixAndRetryPush(
-            sandboxId,
-            branchName,
-            pushResult.error,
-          );
+          pushResult = await fixAndRetryPush(sandboxId, branchName, pushResult.error);
         }
 
         if (!pushResult.pushed) {
           await moveTicket(ticketId, env.COLUMN_BACKLOG);
-          await notifySlack(
-            `Task ${ticket.identifier} failed: push failed — ${pushResult.error ?? "unknown"}`,
-          );
+          await notifySlack(`Task ${ticket.identifier} failed: push failed — ${pushResult.error ?? "unknown"}`);
           await unregisterRun(ticket.identifier);
           return;
         }
@@ -266,10 +228,7 @@ export async function reviewFixWorkflow(ticketId: string, branchName: string) {
     if (moved) {
       await unregisterRun(ticket.identifier).catch(() => {});
     } else {
-      await markTicketFailed(
-        ticket.identifier,
-        `Failed to move ticket to backlog: ${(err as Error).message ?? "unknown"}`,
-      ).catch(() => {});
+      await markTicketFailed(ticket.identifier, `Failed to move ticket to backlog: ${(err as Error).message ?? "unknown"}`).catch(() => {});
     }
     throw err;
   }

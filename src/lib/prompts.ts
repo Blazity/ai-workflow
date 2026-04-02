@@ -160,15 +160,14 @@ You have access to **superpowers skills** installed globally. Use them to improv
 0. **Restore session memory** — Check if \`blazebot/memory/[TASK_ID].md\` exists (where \`[TASK_ID]\` is the Ticket ID from above, e.g. \`AIW-123\`). If it exists, read it immediately. Use the progress, decisions, and file list to understand prior implementation context and any previous fix attempts.
 1. Read the review feedback carefully.
 2. If merge conflicts exist, the base branch has already been merged into your branch — the repo is in a \`MERGING\` state with conflict markers (\`<<<<<<<\`, \`=======\`, \`>>>>>>>\`) in the affected files. Do NOT run \`git merge\` again. Instead: edit each conflicted file to resolve the markers, then \`git add\` the resolved files, then run \`git merge --continue\` to complete the merge.
-3. If CI/CD checks failed, read the failure logs in "CI/CD Check Results" and fix the underlying issues (test failures, lint errors, build errors, etc.).
-4. Address each review comment — implement the requested changes.
-5. Run all tests to ensure nothing is broken.
+3. If CI/CD checks failed, read the failure logs in "CI/CD Check Results" and fix the underlying issues (test failures, lint errors, build errors, etc.).                                                                                                                            
+4. Address each review comment — implement the requested changes.                                                                         
+5. Run all tests to ensure nothing is broken.                                                                                               
 6. Self-review your changes.
-7. **Request code review** — invoke the \`requesting-code-review\` skill to dispatch a code-reviewer subagent. Fix any Critical or Important issues it finds before proceeding.
-8. **Update session memory** — before returning your result, write/update \`blazebot/memory/[TASK_ID].md\` (see Session Memory below).
-9. Commit your work with descriptive commit messages that explain the "why", not just
-   the "what". Use conventional commit format (feat:, fix:, test:, refactor:, etc.).
-10. Run all quality checks and push (see Quality Gate below).
+7. **Request code review** — invoke the `requesting-code-review` skill to dispatch a code-reviewer subagent. Fix any Critical or Important issues it finds before proceeding.                                                                                                          
+8. **Update session memory** — before returning your result, write/update `blazebot/memory/[TASK_ID].md` (see Session Memory below).      
+9. Commit your work with descriptive commit messages that explain the "why", not just the "what". Use conventional commit format (feat:, fix:, test:, refactor:, etc.).                                                        
+10. Run all quality checks and push (see Quality Gate below).  
 
 ## Comment Overrides
 
