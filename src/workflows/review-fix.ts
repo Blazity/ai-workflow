@@ -86,7 +86,11 @@ async function provisionAndStartFixingAgent(
     jobTimeoutMs: env.JOB_TIMEOUT_MS,
   });
 
-  const sandbox = await manager.provision(branchName, requirementsMd, mergeBase);
+  const sandbox = await manager.provision(
+    branchName,
+    requirementsMd,
+    mergeBase,
+  );
   await startAgentDetached(sandbox);
   return sandbox.sandboxId;
 }
@@ -101,7 +105,11 @@ async function pushChanges(
   if (files.length === 0) return;
   const { createStepAdapters } = await import("../lib/step-adapters.js");
   const { vcs } = createStepAdapters();
-  await vcs.push(branchName, files, mergeParentSha ? { mergeParentSha } : undefined);
+  await vcs.push(
+    branchName,
+    files,
+    mergeParentSha ? { mergeParentSha } : undefined,
+  );
 }
 
 async function moveTicket(ticketId: string, column: string) {
@@ -140,12 +148,8 @@ export async function reviewFixWorkflow(ticketId: string, branchName: string) {
       `Task ${ticket.identifier} started — fixing review feedback`,
     );
 
-    const { comments, hasConflicts, baseSha, checkResults } = await fetchPRContext(branchName, env.GITHUB_BASE_BRANCH);
-
-    // TODO: TEMP logging — remove after testing
-    console.log("[review-fix] PR comments:", JSON.stringify(comments, null, 2));
-    console.log("[review-fix] Check results:", JSON.stringify(checkResults, null, 2));
-    console.log("[review-fix] Has conflicts:", hasConflicts);
+    const { comments, hasConflicts, baseSha, checkResults } =
+      await fetchPRContext(branchName, env.GITHUB_BASE_BRANCH);
 
     const requirementsMd = await assembleReviewFixRequirements(
       ticket,
@@ -196,7 +200,10 @@ export async function reviewFixWorkflow(ticketId: string, branchName: string) {
       if (agentDone) {
         ({ output, files } = await collectAgentResults(sandboxId));
       } else {
-        output = { result: "failed", error: "Agent timed out or sandbox stopped unexpectedly" };
+        output = {
+          result: "failed",
+          error: "Agent timed out or sandbox stopped unexpectedly",
+        };
         files = [];
       }
 
@@ -221,8 +228,12 @@ export async function reviewFixWorkflow(ticketId: string, branchName: string) {
     }
   } catch (err) {
     console.error(`Workflow failed for ${ticket.identifier}:`, err);
-    const moved = await moveTicket(ticketId, env.COLUMN_BACKLOG).then(() => true).catch(() => false);
-    await notifySlack(`Task ${ticket.identifier} failed: ${(err as Error).message ?? "unknown"}`).catch(() => {});
+    const moved = await moveTicket(ticketId, env.COLUMN_BACKLOG)
+      .then(() => true)
+      .catch(() => false);
+    await notifySlack(
+      `Task ${ticket.identifier} failed: ${(err as Error).message ?? "unknown"}`,
+    ).catch(() => {});
     if (moved) {
       await unregisterRun(ticket.identifier).catch(() => {});
     }
