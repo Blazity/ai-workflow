@@ -17,7 +17,7 @@ export function getClaimTimestamp(runId: string): number {
 export interface DispatchResult {
   started: boolean;
   runId?: string;
-  reason?: "already_claimed" | "at_capacity" | "error";
+  reason?: "already_claimed" | "at_capacity" | "error" | "previously_failed";
 }
 
 export async function dispatchTicket(
@@ -26,6 +26,11 @@ export async function dispatchTicket(
   maxConcurrentAgents: number,
 ): Promise<DispatchResult> {
   const { issueTracker, vcs, runRegistry } = adapters;
+
+  if (await runRegistry.isTicketFailed(ticketKey)) {
+    logger.info({ ticketKey }, "dispatch_skipped_previously_failed");
+    return { started: false, reason: "previously_failed" };
+  }
 
   if (await isAtCapacity(maxConcurrentAgents)) {
     return { started: false, reason: "at_capacity" };

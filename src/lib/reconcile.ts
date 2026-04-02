@@ -48,6 +48,15 @@ export async function reconcileRuns(
     }
   }
 
+  // Clean up failed-ticket markers for tickets that left the AI column
+  const failedTickets = await runRegistry.listAllFailed();
+  for (const { ticketKey } of failedTickets) {
+    if (!aiColumnTickets.has(ticketKey)) {
+      await runRegistry.clearFailedMark(ticketKey);
+      logger.info({ ticketKey }, "reconcile_cleared_failed_mark");
+    }
+  }
+
   return { cancelled, cleaned };
 }
 
