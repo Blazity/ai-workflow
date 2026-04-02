@@ -96,6 +96,22 @@ async function provisionAndStartFixingAgent(
 }
 provisionAndStartFixingAgent.maxRetries = 0;
 
+async function pushChanges(
+  branchName: string,
+  files: Array<{ path: string; content: string }>,
+  mergeParentSha?: string,
+) {
+  "use step";
+  if (files.length === 0) return;
+  const { createStepAdapters } = await import("../lib/step-adapters.js");
+  const { vcs } = createStepAdapters();
+  await vcs.push(
+    branchName,
+    files,
+    mergeParentSha ? { mergeParentSha } : undefined,
+  );
+}
+
 async function moveTicket(ticketId: string, column: string) {
   "use step";
   const { createStepAdapters } = await import("../lib/step-adapters.js");
@@ -147,11 +163,6 @@ export async function reviewFixWorkflow(ticketId: string, branchName: string) {
     const { comments, hasConflicts, checkResults } =
       await fetchPRContext(branchName, env.GITHUB_BASE_BRANCH);
 
-    // TODO: TEMP logging — remove after testing
-    console.log("[review-fix] PR comments:", JSON.stringify(comments, null, 2));
-    console.log("[review-fix] Check results:", JSON.stringify(checkResults, null, 2));
-    console.log("[review-fix] Has conflicts:", hasConflicts);
-
     const requirementsMd = await assembleReviewFixRequirements(
       ticket,
       comments,
@@ -200,7 +211,10 @@ export async function reviewFixWorkflow(ticketId: string, branchName: string) {
       if (agentDone) {
         ({ output } = await collectAgentOutput(sandboxId));
       } else {
-        output = { result: "failed", error: "Agent timed out or sandbox stopped unexpectedly" };
+        output = {
+          result: "failed",
+          error: "Agent timed out or sandbox stopped unexpectedly",
+        };
       }
 
       if (output.result === "implemented") {
