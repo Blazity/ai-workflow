@@ -18,7 +18,7 @@ async function fetchAndValidateTicket(ticketId: string, columnAi: string) {
   return ticket;
 }
 
-async function fetchPRContext(branchName: string, baseBranch: string) {
+async function fetchPRContext(branchName: string) {
   "use step";
   const { createStepAdapters } = await import("../lib/step-adapters.js");
   const { vcs } = createStepAdapters();
@@ -29,12 +29,7 @@ async function fetchPRContext(branchName: string, baseBranch: string) {
   const hasConflicts = await vcs.getPRConflictStatus(pr.id);
   const checkResults = await vcs.getCheckRunResults(pr.id);
 
-  let baseSha: string | undefined;
-  if (hasConflicts) {
-    baseSha = await vcs.getBranchSha(baseBranch);
-  }
-
-  return { pr, comments, hasConflicts, baseSha, checkResults };
+  return { pr, comments, hasConflicts, checkResults };
 }
 
 async function assembleReviewFixRequirements(
@@ -96,22 +91,6 @@ async function provisionAndStartFixingAgent(
 }
 provisionAndStartFixingAgent.maxRetries = 0;
 
-async function pushChanges(
-  branchName: string,
-  files: Array<{ path: string; content: string }>,
-  mergeParentSha?: string,
-) {
-  "use step";
-  if (files.length === 0) return;
-  const { createStepAdapters } = await import("../lib/step-adapters.js");
-  const { vcs } = createStepAdapters();
-  await vcs.push(
-    branchName,
-    files,
-    mergeParentSha ? { mergeParentSha } : undefined,
-  );
-}
-
 async function moveTicket(ticketId: string, column: string) {
   "use step";
   const { createStepAdapters } = await import("../lib/step-adapters.js");
@@ -160,8 +139,8 @@ export async function reviewFixWorkflow(ticketId: string, branchName: string) {
       `Task ${ticket.identifier} started — fixing review feedback`,
     );
 
-    const { comments, hasConflicts, baseSha, checkResults } =
-      await fetchPRContext(branchName, env.GITHUB_BASE_BRANCH);
+    const { comments, hasConflicts, checkResults } =
+      await fetchPRContext(branchName);
 
     const requirementsMd = await assembleReviewFixRequirements(
       ticket,
@@ -176,7 +155,7 @@ export async function reviewFixWorkflow(ticketId: string, branchName: string) {
     console.log("[review-fix] === ASSEMBLED CONTEXT END ===");
 
     // --- Detached execution with polling ---
-    const { checkAgentDone, collectAgentResults, teardownSandbox } =
+    const { checkAgentDone, collectAgentOutput, pushFromSandbox, fixAndRetryPush, teardownSandbox } =
       await import("../sandbox/poll-agent.js");
 
     const sandboxId = await provisionAndStartFixingAgent(
@@ -207,21 +186,27 @@ export async function reviewFixWorkflow(ticketId: string, branchName: string) {
       }
 
       let output: AgentOutput;
-      let files: Array<{ path: string; content: string }>;
 
       if (agentDone) {
-        ({ output, files } = await collectAgentResults(sandboxId));
+        ({ output } = await collectAgentOutput(sandboxId));
       } else {
-        output = {
-          result: "failed",
-          error: "Agent timed out or sandbox stopped unexpectedly",
-        };
-        files = [];
+        output = { result: "failed", error: "Agent timed out or sandbox stopped unexpectedly" };
       }
 
-      await pushChanges(branchName, files, baseSha);
-
       if (output.result === "implemented") {
+        let pushResult = await pushFromSandbox(sandboxId, branchName);
+
+        if (!pushResult.pushed && pushResult.error) {
+          pushResult = await fixAndRetryPush(sandboxId, branchName, pushResult.error);
+        }
+
+        if (!pushResult.pushed) {
+          await moveTicket(ticketId, env.COLUMN_BACKLOG);
+          await notifySlack(`Task ${ticket.identifier} failed: push failed — ${pushResult.error ?? "unknown"}`);
+          await unregisterRun(ticket.identifier);
+          return;
+        }
+
         await moveTicket(ticketId, env.COLUMN_AI_REVIEW);
         await notifySlack(
           `Task ${ticket.identifier} fixes applied, ready for re-review`,
