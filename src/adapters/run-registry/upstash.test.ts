@@ -99,4 +99,69 @@ describe("UpstashRunRegistry", () => {
       expect(result).toEqual([]);
     });
   });
+
+  const FAILED_HASH_KEY = `blazebot:failed-tickets:${process.env.VERCEL_ENV ?? "development"}`;
+
+  describe("markFailed", () => {
+    it("stores failure metadata in the failed-tickets hash", async () => {
+      const registry = createRegistry();
+      const meta = {
+        runId: "run_abc",
+        error: "Failed to move ticket to backlog: 403 Forbidden",
+        failedAt: "2026-04-02T12:34:56.000Z",
+      };
+      await registry.markFailed("AWT-42", meta);
+      expect(mockRedis.hset).toHaveBeenCalledWith(FAILED_HASH_KEY, {
+        "AWT-42": JSON.stringify(meta),
+      });
+    });
+  });
+
+  describe("isTicketFailed", () => {
+    it("returns true when a failure marker exists", async () => {
+      mockRedis.hget.mockResolvedValueOnce('{"runId":"run_abc","error":"err","failedAt":"2026-04-02T12:34:56.000Z"}');
+      const registry = createRegistry();
+      const result = await registry.isTicketFailed("AWT-42");
+      expect(result).toBe(true);
+      expect(mockRedis.hget).toHaveBeenCalledWith(FAILED_HASH_KEY, "AWT-42");
+    });
+
+    it("returns false when no failure marker exists", async () => {
+      mockRedis.hget.mockResolvedValueOnce(null);
+      const registry = createRegistry();
+      const result = await registry.isTicketFailed("AWT-99");
+      expect(result).toBe(false);
+    });
+  });
+
+  describe("listAllFailed", () => {
+    it("returns all failed ticket markers", async () => {
+      mockRedis.hgetall.mockResolvedValueOnce({
+        "AWT-1": '{"runId":"run_a","error":"err1","failedAt":"2026-04-02T10:00:00.000Z"}',
+        "AWT-2": '{"runId":"run_b","error":"err2","failedAt":"2026-04-02T11:00:00.000Z"}',
+      });
+      const registry = createRegistry();
+      const result = await registry.listAllFailed();
+      expect(result).toEqual([
+        { ticketKey: "AWT-1", meta: { runId: "run_a", error: "err1", failedAt: "2026-04-02T10:00:00.000Z" } },
+        { ticketKey: "AWT-2", meta: { runId: "run_b", error: "err2", failedAt: "2026-04-02T11:00:00.000Z" } },
+      ]);
+      expect(mockRedis.hgetall).toHaveBeenCalledWith(FAILED_HASH_KEY);
+    });
+
+    it("returns empty array when no failed tickets", async () => {
+      mockRedis.hgetall.mockResolvedValueOnce(null);
+      const registry = createRegistry();
+      const result = await registry.listAllFailed();
+      expect(result).toEqual([]);
+    });
+  });
+
+  describe("clearFailedMark", () => {
+    it("removes the failure marker from the hash", async () => {
+      const registry = createRegistry();
+      await registry.clearFailedMark("AWT-42");
+      expect(mockRedis.hdel).toHaveBeenCalledWith(FAILED_HASH_KEY, "AWT-42");
+    });
+  });
 });

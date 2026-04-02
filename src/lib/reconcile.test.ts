@@ -13,6 +13,7 @@ vi.mock("./cancel-run.js", () => ({
 
 function makeRegistry(
   runs: Array<{ ticketKey: string; runId: string }> = [],
+  failed: Array<{ ticketKey: string; meta: { runId: string; error: string; failedAt: string } }> = [],
 ): RunRegistryAdapter {
   return {
     claim: vi.fn(),
@@ -20,6 +21,10 @@ function makeRegistry(
     getRunId: vi.fn(),
     unregister: vi.fn().mockResolvedValue(undefined),
     listAll: vi.fn().mockResolvedValue(runs),
+    markFailed: vi.fn().mockResolvedValue(undefined),
+    isTicketFailed: vi.fn().mockResolvedValue(false),
+    listAllFailed: vi.fn().mockResolvedValue(failed),
+    clearFailedMark: vi.fn().mockResolvedValue(undefined),
   };
 }
 
@@ -180,5 +185,29 @@ describe("reconcileRuns", () => {
     });
     await reconcileRuns(new Set(["PROJ-1"]), registry);
     expect(registry.unregister).not.toHaveBeenCalled();
+  });
+
+  it("clears failed-ticket marker when ticket leaves AI column", async () => {
+    const registry = makeRegistry([], [
+      { ticketKey: "PROJ-1", meta: { runId: "run_a", error: "move failed", failedAt: "2026-04-02T10:00:00.000Z" } },
+    ]);
+    const { reconcileRuns } = await import("./reconcile.js");
+
+    // PROJ-1 is NOT in AI column — human moved it out
+    await reconcileRuns(new Set(), registry);
+
+    expect(registry.clearFailedMark).toHaveBeenCalledWith("PROJ-1");
+  });
+
+  it("keeps failed-ticket marker when ticket is still in AI column", async () => {
+    const registry = makeRegistry([], [
+      { ticketKey: "PROJ-1", meta: { runId: "run_a", error: "move failed", failedAt: "2026-04-02T10:00:00.000Z" } },
+    ]);
+    const { reconcileRuns } = await import("./reconcile.js");
+
+    // PROJ-1 still in AI column
+    await reconcileRuns(new Set(["PROJ-1"]), registry);
+
+    expect(registry.clearFailedMark).not.toHaveBeenCalled();
   });
 });
