@@ -51,7 +51,7 @@ export class UpstashRunRegistry implements RunRegistryAdapter {
     if (!all) return [];
     return Object.entries(all).map(([ticketKey, raw]) => ({
       ticketKey,
-      meta: JSON.parse(raw) as FailedTicketMeta,
+      meta: (typeof raw === "string" ? JSON.parse(raw) : raw) as FailedTicketMeta,
     }));
   }
 
