@@ -49,7 +49,7 @@ You have access to **superpowers skills** installed globally. Use them — they 
 9. **Update session memory** — write/update \`blazebot/memory/[TASK_ID].md\` (see Session Memory below).
 10. Commit your work with descriptive commit messages that explain the "why", not just
     the "what". Use conventional commit format (feat:, fix:, test:, refactor:, etc.).
-11. Run all quality checks and push (see Quality Gate below).
+11. Run all quality checks (see Quality Gate below).
 
 ## When to Ask for Clarification
 
@@ -114,9 +114,6 @@ Before finishing, you MUST:
 - Find and run ALL quality checks in the project: tests, linting, type checking,
   formatting, and any other validation scripts.
 - Fix all failures and commit your fixes with descriptive messages.
-- Push your work to origin (\`git push origin <branch>\`).
-  - If the push fails due to pre-push hooks, fix the issues, commit, and push again.
-  - If the push succeeds, you are clear to finish.
 
 ## Output
 
@@ -166,8 +163,8 @@ You have access to **superpowers skills** installed globally. Use them to improv
 6. Self-review your changes.
 7. **Request code review** — invoke the \`requesting-code-review\` skill to dispatch a code-reviewer subagent. Fix any Critical or Important issues it finds before proceeding.
 8. **Update session memory** — before returning your result, write/update \`blazebot/memory/[TASK_ID].md\` (see Session Memory below).      
-9. Commit your work with descriptive commit messages that explain the "why", not just the "what". Use conventional commit format (feat:, fix:, test:, refactor:, etc.).                                                        
-10. Run all quality checks and push (see Quality Gate below).  
+9. Commit your work with descriptive commit messages that explain the "why", not just the "what". Use conventional commit format (feat:, fix:, test:, refactor:, etc.).
+10. Run all quality checks (see Quality Gate below).
 
 ## Comment Overrides
 
@@ -211,9 +208,6 @@ Before finishing, you MUST:
 - Find and run ALL quality checks in the project: tests, linting, type checking,
   formatting, and any other validation scripts.
 - Fix all failures and commit your fixes with descriptive messages.
-- Push your work to origin (\`git push origin <branch>\`).
-  - If the push fails due to pre-push hooks, fix the issues, commit, and push again.
-  - If the push succeeds, you are clear to finish.
 
 ## Output
 

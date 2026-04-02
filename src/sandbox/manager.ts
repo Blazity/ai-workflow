@@ -49,7 +49,6 @@ export class SandboxManager {
         username: "x-access-token",
         password: this.config.githubToken,
         revision: branch,
-        depth: 1,
       },
       runtime: "node24",
       timeout: this.config.jobTimeoutMs,
@@ -61,17 +60,16 @@ export class SandboxManager {
       },
     });
 
-    // Sanitize remote — remove origin (may contain token from clone) and
-    // set up a local bare repo as the push target so the agent never sees
-    // the GitHub token. Pre-push hooks fire naturally on `git push`.
-    await sandbox.runCommand("bash", [
-      "-c",
-      [
-        "git remote remove origin",
-        "git init --bare /tmp/push-target.git",
-        "git remote add origin /tmp/push-target.git",
-      ].join(" && "),
+    // Strip auth from origin — the clone URL contains the token, replace it
+    // with the unauthenticated URL so the agent never has push access.
+    await sandbox.runCommand("git", [
+      "remote", "set-url", "origin",
+      `https://github.com/${this.config.owner}/${this.config.repo}.git`,
     ]);
+
+    // The sandbox clones a specific revision, which leaves git in detached HEAD.
+    // Create a local branch so pushFromSandbox can push without HEAD resolution issues.
+    await sandbox.runCommand("git", ["checkout", "-B", branch]);
 
     // Configure git identity
     await sandbox.runCommand("bash", [
@@ -85,7 +83,7 @@ export class SandboxManager {
       const repoUrl = `https://x-access-token:${this.config.githubToken}@github.com/${this.config.owner}/${this.config.repo}.git`;
       const fetchResult = await sandbox.runCommand("bash", [
         "-c",
-        `git fetch --unshallow "${repoUrl}" ${mergeBase} 2>&1`,
+        `git fetch "${repoUrl}" ${mergeBase} 2>&1`,
       ]);
       // Create a named local branch so the agent can reference it (e.g. `git show main:path`)
       await sandbox.runCommand("bash", [

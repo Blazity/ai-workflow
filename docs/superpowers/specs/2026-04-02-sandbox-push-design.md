@@ -1,31 +1,39 @@
 # Sandbox Push — Push from Sandbox with Real Commit Messages
 
 **Date:** 2026-04-02
-**Status:** Draft
+**Status:** Draft (v2 — full clone approach)
 
 ## Problem
 
-Today, the agent commits inside the sandbox with real commit messages, but the server
-throws them away — it extracts files via `git diff`, then recreates a single commit via
-the GitHub API with a hardcoded `"feat: agent implementation"` message. This means:
+The original GitHub API push flow (blob → tree → commit → updateRef) lost all agent commit
+messages and created a single flat commit. We replaced it with sandbox-side `git push`, but
+shallow clones (`depth: 1`) cause "no history in common with main" errors on PR creation —
+the unshallow + remote-swap flow is fragile and hard to debug.
 
-1. **All agent commit messages are lost.** The PR always shows one flat commit.
-2. **Pre-push hooks never run.** The GitHub API bypasses git hooks entirely.
-3. **The GitHub token lives in the sandbox** as part of the clone URL in `.git/config`,
-   potentially visible to the agent.
+Root cause: shallow clones combined with remote removal/re-addition create edge cases where
+git's object graph becomes disconnected. GitHub then rejects the PR because the branch
+commits don't share ancestry with main.
 
 ## Solution
 
-Push from inside the sandbox after the agent exits. The agent commits and pushes to a
-local mock remote (triggering pre-push hooks naturally). After the agent process is dead,
-the server injects the GitHub token and does the real `git push` to GitHub.
+**Full clone, no bare repo, agent commits only, server pushes.**
+
+1. Remove `depth: 1` — clone the full repo. The ~10-30s overhead is negligible vs. the
+   agent's 5-35 min execution time.
+2. Strip auth from origin URL (instead of swapping to a local bare repo). The agent can
+   see the remote URL but can't push without a token.
+3. Agent only commits — remove push from the Quality Gate prompt.
+4. After the agent exits, server injects the token and pushes to GitHub.
+
+This eliminates all shallow-clone edge cases, the unshallow step, the local bare repo,
+and the commit chain verification — ~40 lines of complexity that existed solely to work
+around depth-1 limitations.
 
 ## Detailed Flow
 
 ### 1. Branch Creation (unchanged — server-side)
 
 The server creates the branch via GitHub API before the sandbox is provisioned.
-This requires the token and stays on the server.
 
 ```
 Server: vcs.createBranch("blazebot/awt-123", "main")  // Octokit API
@@ -36,34 +44,45 @@ Server: vcs.createBranch("blazebot/awt-123", "main")  // Octokit API
 
 ### 2. Sandbox Provisioning (modified)
 
-After `Sandbox.create` clones the repo, immediately sanitize the remote and set up
-a local push target. This ensures the agent never sees the GitHub token.
+Remove `depth: 1` from the clone. After clone, strip the token from the origin URL
+so the agent never has push access.
 
-```bash
-# Remove origin (may contain token from clone)
-git remote remove origin
-
-# Create local bare repo as push target
-git init --bare /tmp/push-target.git
-git remote add origin /tmp/push-target.git
+```typescript
+// src/sandbox/manager.ts — Sandbox.create source
+source: {
+  type: "git",
+  url: `https://github.com/${owner}/${repo}.git`,
+  username: "x-access-token",
+  password: githubToken,
+  revision: branch,
+  // No depth — full clone
+},
 ```
 
-**File:** `src/sandbox/manager.ts` (after line 62, before git config)
-**Change:** Add remote sanitization + local bare repo setup after sandbox creation.
+```bash
+# After clone: strip auth from origin, replace with unauthenticated URL
+git remote set-url origin https://github.com/<owner>/<repo>.git
+```
 
-### 3. Git Identity + Optional Merge (unchanged)
+**File:** `src/sandbox/manager.ts`
+**Changes:**
+- Remove `depth: 1` from `Sandbox.create` source config.
+- Replace the 3-command bare-repo setup with a single `git remote set-url` to strip auth.
+
+### 3. Git Identity + Optional Merge (simplified)
 
 ```bash
 git config user.name "ai-workflow-blazity"
 git config user.email "ai-workflow@blazity.com"
 ```
 
-For review-fix workflow, the merge fetch still uses an authenticated URL passed as a
-CLI argument to `git fetch`. This appears briefly in process args but is not stored.
-No change needed — the agent process hasn't started yet.
+For review-fix workflow, the merge fetch uses an authenticated URL passed as a CLI
+argument. With a full clone, we no longer need `--unshallow` during the merge fetch —
+just a normal `git fetch <url> <branch>`.
 
-**File:** `src/sandbox/manager.ts:64-91`
-**Change:** None.
+**File:** `src/sandbox/manager.ts`
+**Change:** Remove `--unshallow` from the merge fetch command (no longer needed with
+full clone). Use plain `git fetch "<url>" <branch>`.
 
 ### 4. Pre-Agent SHA Recording (unchanged)
 
@@ -71,15 +90,14 @@ No change needed — the agent process hasn't started yet.
 git rev-parse HEAD > /tmp/.pre-agent-sha
 ```
 
-**File:** `src/sandbox/manager.ts:93-98`
+**File:** `src/sandbox/manager.ts`
 **Change:** None.
 
 ### 5. Agent Execution (modified prompt)
 
-The implementation and review-fix prompts gain a quality gate instruction and a push
-instruction. The agent now pushes to `origin` (which points to the local bare repo).
+The Quality Gate no longer includes push instructions. The agent commits only.
 
-**Prompt additions (both `implement.md` and `review-fix.md`):**
+**Quality Gate (both prompts):**
 
 ```
 ## Quality Gate
@@ -88,24 +106,9 @@ Before finishing, you MUST:
 - Find and run ALL quality checks in the project: tests, linting, type checking,
   formatting, and any other validation scripts.
 - Fix all failures and commit your fixes with descriptive messages.
-- Push your work to origin (`git push origin <branch>`).
-  - If the push fails due to pre-push hooks, fix the issues, commit, and push again.
-  - If the push succeeds, you are clear to finish.
 ```
 
-**Prompt modification for commit messages:**
-
-Replace the existing line:
-```
-10. Commit your work with descriptive commit messages.
-```
-
-With:
-```
-10. Commit your work with descriptive commit messages that explain the "why", not just
-    the "what". Use conventional commit format (feat:, fix:, test:, refactor:, etc.).
-11. Run all quality checks and push (see Quality Gate above).
-```
+The push instruction (`git push origin <branch>`) is removed. The agent should NOT push.
 
 **Files:** `src/lib/prompts.ts` (both `implementPrompt` and `reviewFixPrompt`)
 
@@ -120,42 +123,19 @@ git commit -m "fix: handle duplicate email edge case"
 git commit -m "test: add registration tests"
 ```
 
-Then pushes:
+No push. The agent exits, wrapper script touches `/tmp/agent-done`.
 
-```
-git push origin blazebot/awt-123
-  → .husky/pre-push fires (if present) → runs lint/test
-  → If hook fails → agent fixes, commits, pushes again
-  → If hook passes → push succeeds to /tmp/push-target.git
-```
+### 7. Collect Agent Output (unchanged from v1)
 
-The agent exits, wrapper script touches `/tmp/agent-done`.
+Reads agent stdout/stderr and parses JSON. No file extraction.
 
-### 7. Collect Agent Output (simplified)
+**File:** `src/sandbox/poll-agent.ts` — `collectAgentOutput()`
+**Change:** None (already simplified in v1).
 
-Only read the agent's JSON output. **Remove file extraction entirely** — no more
-`git diff` + `readFileToBuffer` loop.
-
-**Before:**
-```typescript
-// poll-agent.ts collectAgentResults()
-// Reads stdout, parses JSON, extracts files via git diff, reads each file content
-```
-
-**After:**
-```typescript
-// poll-agent.ts collectAgentOutput()
-// Reads stdout, parses JSON — that's it
-// Returns: { output: AgentOutput } (no files array)
-```
-
-**File:** `src/sandbox/poll-agent.ts:36-98`
-**Change:** Remove lines 63-94 (file extraction). Rename to `collectAgentOutput`.
-Return type changes from `{ output, files }` to `{ output }`.
-
-### 8. Push from Sandbox (new step)
+### 8. Push from Sandbox (simplified)
 
 After the agent exits and output is collected, inject the token and push.
+No unshallow needed — the full clone has complete history.
 
 ```typescript
 async function pushFromSandbox(
@@ -168,39 +148,49 @@ async function pushFromSandbox(
   const sandbox = await Sandbox.get({ sandboxId, ...getSandboxCredentials() });
 
   // Check if agent made any commits
-  const baseSha = await sandbox.runCommand("bash", [
-    "-c", "cat /tmp/.pre-agent-sha",
+  const baseShaResult = await sandbox.runCommand("bash", [
+    "-c", "cat /tmp/.pre-agent-sha 2>/dev/null || echo ''",
   ]);
-  const headSha = await sandbox.runCommand("bash", ["-c", "git rev-parse HEAD"]);
+  const headShaResult = await sandbox.runCommand("bash", ["-c", "git rev-parse HEAD"]);
+  const baseSha = (await baseShaResult.stdout()).trim();
+  const headSha = (await headShaResult.stdout()).trim();
 
-  if ((await baseSha.stdout()).trim() === (await headSha.stdout()).trim()) {
-    return { pushed: false }; // No commits to push
+  if (baseSha && baseSha === headSha) {
+    return { pushed: false, error: "Agent reported success but made no commits" };
   }
 
   // Inject token — agent process is dead
   const pushUrl = `https://x-access-token:${env.GITHUB_TOKEN}@github.com/${env.GITHUB_OWNER}/${env.GITHUB_REPO}.git`;
   await sandbox.runCommand("git", ["remote", "set-url", "origin", pushUrl]);
 
-  // Push to GitHub
-  const result = await sandbox.runCommand("bash", [
-    "-c", `git push origin ${branch} 2>&1`,
+  // Push to GitHub — use HEAD:<ref> so it works even if the local branch name
+  // doesn't match. Use --force-with-lease so retries on an existing branch
+  // succeed without risking concurrent-push data loss.
+  const result = await sandbox.runCommand("git", [
+    "push", "--force-with-lease", "origin", `HEAD:refs/heads/${branch}`,
   ]);
 
   if (result.exitCode !== 0) {
-    const error = (await result.stdout()).trim();
-    return { pushed: false, error };
+    const stdout = (await result.stdout()).trim();
+    const stderr = (await result.stderr()).trim();
+    return { pushed: false, error: stderr || stdout };
   }
 
   return { pushed: true };
 }
 ```
 
-**File:** New function in `src/sandbox/poll-agent.ts` (or new file `src/sandbox/push.ts`)
+**What's removed vs. v1:**
+- Shallow check (`git rev-parse --is-shallow-repository`)
+- Unshallow step (`git fetch --unshallow origin`)
+- Fallback fetch (`git fetch origin`)
+- Commit chain verification (`git rev-list --count HEAD`)
 
-### 9. Fix Agent on Push Failure (new step)
+**File:** `src/sandbox/poll-agent.ts`
 
-If `pushFromSandbox` fails (e.g., pre-push hook failure), spawn a lightweight fix
-agent in the same sandbox to resolve the issue.
+### 9. Fix Agent on Push Failure (unchanged from v1)
+
+If `pushFromSandbox` fails, spawn a lightweight fix agent in the same sandbox.
 
 ```typescript
 async function fixAndRetryPush(
@@ -210,55 +200,51 @@ async function fixAndRetryPush(
 ): Promise<{ pushed: boolean; error?: string }> {
   "use step";
   const { Sandbox } = await import("@vercel/sandbox");
+  const { env } = await import("../../env.js");
   const sandbox = await Sandbox.get({ sandboxId, ...getSandboxCredentials() });
 
-  // Run a quick fix agent with the error context
+  // Write prompt to a file to avoid shell injection via pushError content
   const fixPrompt = `The git push failed with this error:\n\n${pushError}\n\nFix the issues, commit your fixes, then push to origin.`;
+  await sandbox.writeFiles([
+    { path: "/tmp/fix-prompt.txt", content: Buffer.from(fixPrompt) },
+  ]);
+
   await sandbox.runCommand("bash", [
     "-c",
-    `echo '${fixPrompt.replace(/'/g, "'\\''")}' | claude --print --model '${env.CLAUDE_MODEL}' --dangerously-skip-permissions > /tmp/fix-stdout.txt 2>/tmp/fix-stderr.txt || true`,
+    `cat /tmp/fix-prompt.txt | claude --print --model '${env.CLAUDE_MODEL}' --dangerously-skip-permissions > /tmp/fix-stdout.txt 2>/tmp/fix-stderr.txt || true`,
   ]);
 
   // Retry push (token is still in remote URL from previous step)
-  const result = await sandbox.runCommand("bash", [
-    "-c", `git push origin ${branch} 2>&1`,
+  const result = await sandbox.runCommand("git", [
+    "push", "--force-with-lease", "origin", `HEAD:refs/heads/${branch}`,
   ]);
 
   if (result.exitCode !== 0) {
-    return { pushed: false, error: (await result.stdout()).trim() };
+    const stdout = (await result.stdout()).trim();
+    const stderr = (await result.stderr()).trim();
+    return { pushed: false, error: stderr || stdout };
   }
   return { pushed: true };
 }
 ```
 
-**File:** New function alongside `pushFromSandbox`.
+**File:** `src/sandbox/poll-agent.ts`
 
-### 10. Workflow Integration
+### 10. Workflow Integration (unchanged from v1)
 
-**Implementation workflow** (`src/workflows/implementation.ts`):
+Both workflows use the same pattern:
 
-Replace:
 ```typescript
-// Old
-const { output, files } = await collectAgentResults(sandboxId);
-await pushChanges(branchName, files);
-```
-
-With:
-```typescript
-// New
 const { output } = await collectAgentOutput(sandboxId);
 
 if (output.result === "implemented") {
   let pushResult = await pushFromSandbox(sandboxId, branchName);
 
   if (!pushResult.pushed && pushResult.error) {
-    // Pre-push hook or other failure — try fix agent
     pushResult = await fixAndRetryPush(sandboxId, branchName, pushResult.error);
   }
 
   if (!pushResult.pushed) {
-    // Push failed even after fix attempt
     await moveTicket(ticketId, env.COLUMN_BACKLOG);
     await notifySlack(`Task ${ticket.identifier} failed: push failed — ${pushResult.error ?? "unknown"}`);
     await unregisterRun(ticket.identifier);
@@ -270,65 +256,58 @@ if (output.result === "implemented") {
 }
 ```
 
-**Review-fix workflow** (`src/workflows/review-fix.ts`):
-
-Same pattern. Replace `collectAgentResults` + `pushChanges` with
-`collectAgentOutput` + `pushFromSandbox` + `fixAndRetryPush`.
-
-**Note on merge commits:** The current review-fix flow uses `mergeParentSha` to create
-a merge commit via the GitHub API. With sandbox push, this is handled naturally — the
-sandbox already has the merge commit from step 3 (optional merge). When we `git push`,
-the merge commit is included in the push. The `mergeParentSha` parameter on
-`github.ts:push()` is no longer needed.
+**Files:** `src/workflows/implementation.ts`, `src/workflows/review-fix.ts`
+**Change:** None (already using this pattern).
 
 ### 11. PR Creation, Ticket Update, Teardown (unchanged)
 
-PR creation still uses Octokit API (no token needed in sandbox for this).
-Ticket moves and Slack notifications are unchanged.
+PR creation still uses Octokit API. Ticket moves and Slack notifications unchanged.
 
 ## Files Changed
 
 | File | Change |
 |------|--------|
-| `src/sandbox/manager.ts` | Add remote sanitization + local bare repo setup after clone |
-| `src/lib/prompts.ts` | Add quality gate + push instructions to both prompts |
-| `src/sandbox/poll-agent.ts` | Simplify `collectAgentResults` → `collectAgentOutput` (remove file extraction). Add `pushFromSandbox` + `fixAndRetryPush` |
-| `src/workflows/implementation.ts` | Replace `pushChanges(files)` with `pushFromSandbox` + `fixAndRetryPush` |
-| `src/workflows/review-fix.ts` | Same as implementation.ts |
-| `src/adapters/vcs/github.ts` | `push()` method no longer called for agent work (keep for other uses or remove) |
+| `src/sandbox/manager.ts` | Remove `depth: 1`. Replace bare-repo setup with `git remote set-url` to strip auth. Remove `--unshallow` from merge fetch. |
+| `src/lib/prompts.ts` | Remove push instruction from Quality Gate in both prompts. |
+| `src/sandbox/poll-agent.ts` | Remove unshallow/shallow-check/chain-verify logic from `pushFromSandbox`. |
+| `src/sandbox/poll-agent.test.ts` | Remove shallow/unshallow test cases. Simplify push tests. |
+| `e2e/tier2/shallow-push.test.ts` | Delete — no longer relevant (no shallow clones). |
+| `src/adapters/vcs/github.ts` | `push()` method no longer called for agent work (keep for other uses or remove). |
 
 ## What's Preserved
 
 - All agent commits with their original messages
 - Full commit history on the PR (not squashed)
-- Pre-push hooks fire naturally during `git push`
-- Agent can fix hook failures before exiting
-- Merge commits in review-fix flow (natural git merge, not API-fabricated)
+- Token security — agent never has push access
+- Merge commits in review-fix flow (natural git merge)
+- Fix agent for push failures
 
-## What's Removed
+## What's Removed (vs. current code)
 
-- File extraction in `collectAgentResults` (`git diff` + `readFileToBuffer` loop)
-- Hardcoded `"feat: agent implementation"` commit message
-- GitHub API push flow (blob → tree → commit → updateRef) for agent work
+- `depth: 1` shallow cloning
+- Local bare repo (`/tmp/push-target.git`) setup
+- Unshallow step (`git fetch --unshallow origin`)
+- Shallow repository detection
+- Commit chain verification (`git rev-list --count HEAD`)
+- Push instruction in agent prompts (agent commits only)
+- E2E shallow push test
 
 ## Edge Cases
 
 | Case | Handling |
 |------|----------|
-| No pre-push hooks in target repo | Push to local bare succeeds, real push succeeds. No change. |
-| Agent doesn't push (forgets/skips) | Commits are still in sandbox. `pushFromSandbox` pushes them. |
-| Pre-push hook fails during real push | `fixAndRetryPush` spawns fix agent, retries once. |
+| Agent doesn't commit | `pushFromSandbox` detects baseSha == HEAD, returns error. Workflow moves ticket to backlog. |
+| Push fails (pre-push hook on GitHub, network) | `fixAndRetryPush` spawns fix agent, retries once. |
 | Fix agent also fails | Move ticket to backlog with error details. |
-| Sandbox dies between agent exit and push | Existing `"stopped"` detection catches this — ticket moves to backlog. |
-| Agent makes zero commits | `pushFromSandbox` detects baseSha == HEAD, returns `{ pushed: false }`. Workflow handles as no-op or failure based on agent output. |
-| Shallow clone push to GitHub | Works — GitHub has the parent commit (branch was created from base). Git sends the delta. |
-| Token in .git/config from clone | Removed in step 2 (`git remote remove origin`). |
+| Sandbox dies between agent exit and push | Existing `"stopped"` detection catches this. |
+| Large repository (slow full clone) | Accepted trade-off. Clone overhead is negligible vs. 5-35 min agent runtime. |
+| Token in .git/config from clone | Stripped immediately via `git remote set-url` to unauthenticated URL. |
 
 ## Security
 
-- **Agent never sees the GitHub token.** Remote is sanitized immediately after clone.
+- **Agent never sees the GitHub token.** Origin URL stripped of auth immediately after clone.
 - **Token injected only after agent process exits.** The sentinel file `/tmp/agent-done`
   confirms the agent is dead before any token enters the sandbox.
-- **Token exists briefly** in the sandbox git config during step 10, then sandbox is torn down.
+- **Token exists briefly** in the sandbox git config during push, then sandbox is torn down.
 - **Fix agent (step 9)** runs with the token in git config, but this is a controlled,
-  short-lived session with a narrow prompt — not the main agent with full autonomy.
+  short-lived session with a narrow prompt.

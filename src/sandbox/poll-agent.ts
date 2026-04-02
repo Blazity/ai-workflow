@@ -93,14 +93,11 @@ export async function pushFromSandbox(
   const pushUrl = `https://x-access-token:${env.GITHUB_TOKEN}@github.com/${env.GITHUB_OWNER}/${env.GITHUB_REPO}.git`;
   await sandbox.runCommand("git", ["remote", "set-url", "origin", pushUrl]);
 
-  // Unshallow so git can negotiate objects with GitHub during push.
-  // The sandbox clones with depth:1 — without full history, push fails with
-  // "Could not read <sha>" when the remote has commits the shallow clone can't traverse.
-  await sandbox.runCommand("git", ["fetch", "--unshallow", "origin"]);
-
   // Push to GitHub — use HEAD:<ref> so it works even if the local branch name
-  // doesn't match (e.g. shallow clone leaves HEAD detached).
-  const result = await sandbox.runCommand("git", ["push", "origin", `HEAD:refs/heads/${branch}`]);
+  // doesn't match. Use --force for retries where the branch already has commits
+  // from a prior failed run. Safe because these are bot-created branches with
+  // no concurrent pushers.
+  const result = await sandbox.runCommand("git", ["push", "--force", "origin", `HEAD:refs/heads/${branch}`]);
 
   if (result.exitCode !== 0) {
     const stdout = (await result.stdout()).trim();
@@ -116,10 +113,8 @@ export async function pushFromSandbox(
  * spawns a lightweight fix agent in the same sandbox to resolve the issue,
  * then retries the push once.
  *
- * SECURITY NOTE: The fix agent runs with the GitHub token present in
- * .git/config (set by the prior `pushFromSandbox` call). This is a deliberate
- * trade-off — the agent is short-lived, narrowly prompted, and the sandbox is
- * torn down immediately after.
+ * The fix agent never has push access — the token is stripped before it runs
+ * and re-injected only after it exits, matching the main agent's security model.
  */
 export async function fixAndRetryPush(
   sandboxId: string,
@@ -131,8 +126,14 @@ export async function fixAndRetryPush(
   const { env } = await import("../../env.js");
   const sandbox = await Sandbox.get({ sandboxId, ...getSandboxCredentials() });
 
+  // Strip token from origin before the fix agent runs — agent only commits, never pushes.
+  await sandbox.runCommand("git", [
+    "remote", "set-url", "origin",
+    `https://github.com/${env.GITHUB_OWNER}/${env.GITHUB_REPO}.git`,
+  ]);
+
   // Write prompt to a file to avoid shell injection via pushError content
-  const fixPrompt = `The git push failed with this error:\n\n${pushError}\n\nFix the issues, commit your fixes, then push to origin.`;
+  const fixPrompt = `The git push failed with this error:\n\n${pushError}\n\nFix the issues and commit your fixes. Do NOT push.`;
   await sandbox.writeFiles([
     { path: "/tmp/fix-prompt.txt", content: Buffer.from(fixPrompt) },
   ]);
@@ -149,8 +150,11 @@ export async function fixAndRetryPush(
     console.log(`[fixAndRetryPush] fix agent output: ${fixLog.slice(0, 500)}`);
   }
 
-  // Retry push — use HEAD:<ref> to handle detached HEAD from shallow clone
-  const result = await sandbox.runCommand("git", ["push", "origin", `HEAD:refs/heads/${branch}`]);
+  // Re-inject token and push — server pushes, not the agent.
+  const pushUrl = `https://x-access-token:${env.GITHUB_TOKEN}@github.com/${env.GITHUB_OWNER}/${env.GITHUB_REPO}.git`;
+  await sandbox.runCommand("git", ["remote", "set-url", "origin", pushUrl]);
+
+  const result = await sandbox.runCommand("git", ["push", "--force", "origin", `HEAD:refs/heads/${branch}`]);
 
   if (result.exitCode !== 0) {
     const stdout = (await result.stdout()).trim();

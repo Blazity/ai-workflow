@@ -115,7 +115,7 @@ describe("pushFromSandbox", () => {
     expect(result.error).toContain("no commits");
   });
 
-  it("pushes successfully when agent made commits", async () => {
+  it("pushes successfully", async () => {
     const callIndex = { value: 0 };
     mockRunCommand.mockImplementation((..._args: unknown[]) => {
       const i = callIndex.value++;
@@ -137,8 +137,7 @@ describe("pushFromSandbox", () => {
     const result = await pushFromSandbox("sbx-test-123", "blazebot/task-1");
 
     expect(result.pushed).toBe(true);
-    // Verify git push was called with args array (no shell injection)
-    expect(mockRunCommand).toHaveBeenCalledWith("git", ["push", "origin", "HEAD:refs/heads/blazebot/task-1"]);
+    expect(mockRunCommand).toHaveBeenCalledWith("git", ["push", "--force", "origin", "HEAD:refs/heads/blazebot/task-1"]);
   });
 
   it("returns error when push fails", async () => {
@@ -150,6 +149,7 @@ describe("pushFromSandbox", () => {
       } else if (i === 1) {
         return { exitCode: 0, stdout: vi.fn().mockResolvedValue("def456") };
       } else if (i === 2) {
+        // git remote set-url
         return { exitCode: 0, stdout: vi.fn().mockResolvedValue("") };
       } else {
         // git push fails
@@ -177,6 +177,7 @@ describe("pushFromSandbox", () => {
       } else if (i === 1) {
         return { exitCode: 0, stdout: vi.fn().mockResolvedValue("def456") };
       } else if (i === 2) {
+        // git remote set-url
         return { exitCode: 0, stdout: vi.fn().mockResolvedValue("") };
       } else {
         return { exitCode: 0, stdout: vi.fn().mockResolvedValue(""), stderr: vi.fn().mockResolvedValue("") };
@@ -217,7 +218,7 @@ describe("fixAndRetryPush", () => {
       expect.objectContaining({ path: "/tmp/fix-prompt.txt" }),
     ]);
     // Verify push uses args array
-    expect(mockRunCommand).toHaveBeenCalledWith("git", ["push", "origin", "HEAD:refs/heads/blazebot/task-1"]);
+    expect(mockRunCommand).toHaveBeenCalledWith("git", ["push", "--force", "origin", "HEAD:refs/heads/blazebot/task-1"]);
   });
 
   it("returns error when retry push also fails", async () => {
