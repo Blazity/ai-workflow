@@ -122,6 +122,18 @@ async function unregisterRun(ticketIdentifier: string) {
   await runRegistry.unregister(ticketIdentifier);
 }
 
+async function markTicketFailed(ticketIdentifier: string, error: string) {
+  "use step";
+  const { createStepAdapters } = await import("../lib/step-adapters.js");
+  const { runRegistry } = createStepAdapters();
+  const runId = await runRegistry.getRunId(ticketIdentifier) ?? "unknown";
+  await runRegistry.markFailed(ticketIdentifier, {
+    runId,
+    error,
+    failedAt: new Date().toISOString(),
+  });
+}
+
 // --- Workflow ---
 
 export async function reviewFixWorkflow(ticketId: string, branchName: string) {
@@ -211,6 +223,8 @@ export async function reviewFixWorkflow(ticketId: string, branchName: string) {
     await notifySlack(`Task ${ticket.identifier} failed: ${(err as Error).message ?? "unknown"}`).catch(() => {});
     if (moved) {
       await unregisterRun(ticket.identifier).catch(() => {});
+    } else {
+      await markTicketFailed(ticket.identifier, `Failed to move ticket to backlog: ${(err as Error).message ?? "unknown"}`).catch(() => {});
     }
     throw err;
   }

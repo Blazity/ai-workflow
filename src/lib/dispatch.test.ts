@@ -46,6 +46,7 @@ function makeAdapters(
     getRunId: ReturnType<typeof vi.fn>;
     fetchTicket: ReturnType<typeof vi.fn>;
     findPR: ReturnType<typeof vi.fn>;
+    isTicketFailed: ReturnType<typeof vi.fn>;
   }> = {},
 ): Adapters {
   let claimedValue: string | undefined;
@@ -83,6 +84,10 @@ function makeAdapters(
         overrides.getRunId ??
         vi.fn().mockImplementation(async () => claimedValue),
       listAll: vi.fn(),
+      markFailed: vi.fn().mockResolvedValue(undefined),
+      isTicketFailed: overrides.isTicketFailed ?? vi.fn().mockResolvedValue(false),
+      listAllFailed: vi.fn().mockResolvedValue([]),
+      clearFailedMark: vi.fn().mockResolvedValue(undefined),
     },
   };
 }
@@ -236,5 +241,85 @@ describe("dispatchTicket", () => {
     expect(result).toEqual({ started: false, reason: "error" });
     expect(unregister).toHaveBeenCalledWith("PROJ-42");
     expect(mockStart).not.toHaveBeenCalled();
+  });
+
+  it("skips dispatch for previously failed tickets", async () => {
+    const adapters = makeAdapters({
+      isTicketFailed: vi.fn().mockResolvedValue(true),
+    });
+    const { dispatchTicket } = await import("./dispatch.js");
+
+    const result = await dispatchTicket("PROJ-42", adapters, 5);
+
+    expect(result).toEqual({ started: false, reason: "previously_failed" });
+    expect(adapters.runRegistry.claim).not.toHaveBeenCalled();
+    expect(mockStart).not.toHaveBeenCalled();
+  });
+});
+
+describe("failed-ticket safeguard full loop", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockSandboxList.mockResolvedValue({ json: { sandboxes: [] } });
+    mockStart.mockResolvedValue({ runId: "run_123" });
+  });
+
+  it("mark → skip → clear → redispatch", async () => {
+    // Shared mutable state simulating Redis
+    const failedMarkers = new Map<string, string>();
+    let claimedValue: string | undefined;
+
+    const registry: Adapters["runRegistry"] = {
+      claim: vi.fn().mockImplementation(async (_key: string, value: string) => {
+        claimedValue = value;
+        return true;
+      }),
+      register: vi.fn().mockResolvedValue(undefined),
+      getRunId: vi.fn().mockImplementation(async () => claimedValue),
+      unregister: vi.fn().mockResolvedValue(undefined),
+      listAll: vi.fn().mockResolvedValue([]),
+      markFailed: vi.fn().mockImplementation(async (key: string, meta: any) => {
+        failedMarkers.set(key, JSON.stringify(meta));
+      }),
+      isTicketFailed: vi.fn().mockImplementation(async (key: string) => {
+        return failedMarkers.has(key);
+      }),
+      listAllFailed: vi.fn().mockImplementation(async () => {
+        return [...failedMarkers.entries()].map(([ticketKey, raw]) => ({
+          ticketKey,
+          meta: JSON.parse(raw),
+        }));
+      }),
+      clearFailedMark: vi.fn().mockImplementation(async (key: string) => {
+        failedMarkers.delete(key);
+      }),
+    };
+
+    const adapters = makeAdapters();
+    // Replace registry with our stateful mock
+    Object.assign(adapters.runRegistry, registry);
+
+    const { dispatchTicket } = await import("./dispatch.js");
+    const { reconcileRuns } = await import("./reconcile.js");
+
+    // Step 1: Mark ticket as failed (simulates workflow catch block)
+    await registry.markFailed("PROJ-42", {
+      runId: "run_failed",
+      error: "move failed",
+      failedAt: "2026-04-02T10:00:00.000Z",
+    });
+
+    // Step 2: Dispatch is skipped because ticket is marked failed
+    const skip = await dispatchTicket("PROJ-42", adapters, 5);
+    expect(skip).toEqual({ started: false, reason: "previously_failed" });
+
+    // Step 3: Human moves ticket out of AI column → reconcile clears marker
+    await reconcileRuns(new Set(), registry);
+    expect(failedMarkers.has("PROJ-42")).toBe(false);
+
+    // Step 4: Ticket moved back to AI → fresh dispatch succeeds
+    const success = await dispatchTicket("PROJ-42", adapters, 5);
+    expect(success.started).toBe(true);
+    expect(success.runId).toBe("run_123");
   });
 });

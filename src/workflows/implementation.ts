@@ -125,6 +125,18 @@ async function unregisterRun(ticketIdentifier: string) {
   await runRegistry.unregister(ticketIdentifier);
 }
 
+async function markTicketFailed(ticketIdentifier: string, error: string) {
+  "use step";
+  const { createStepAdapters } = await import("../lib/step-adapters.js");
+  const { runRegistry } = createStepAdapters();
+  const runId = await runRegistry.getRunId(ticketIdentifier) ?? "unknown";
+  await runRegistry.markFailed(ticketIdentifier, {
+    runId,
+    error,
+    failedAt: new Date().toISOString(),
+  });
+}
+
 // --- Workflow (durable orchestration — no I/O directly here) ---
 
 export async function implementationWorkflow(ticketId: string) {
@@ -213,12 +225,10 @@ export async function implementationWorkflow(ticketId: string) {
     console.error(`Workflow failed for ${ticket.identifier}:`, err);
     const moved = await moveTicket(ticketId, env.COLUMN_BACKLOG).then(() => true).catch(() => false);
     await notifySlack(`Task ${ticket.identifier} failed: ${(err as Error).message ?? "unknown"}`).catch(() => {});
-    // Only unregister if the ticket was moved out of AI column.
-    // If moveTicket failed, leave the Redis entry so the cron doesn't
-    // dispatch a duplicate — reconcile will clean it up once the ticket
-    // is manually moved or the run becomes terminal.
     if (moved) {
       await unregisterRun(ticket.identifier).catch(() => {});
+    } else {
+      await markTicketFailed(ticket.identifier, `Failed to move ticket to backlog: ${(err as Error).message ?? "unknown"}`).catch(() => {});
     }
     throw err;
   }
