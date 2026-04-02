@@ -61,6 +61,18 @@ export class SandboxManager {
       },
     });
 
+    // Sanitize remote — remove origin (may contain token from clone) and
+    // set up a local bare repo as the push target so the agent never sees
+    // the GitHub token. Pre-push hooks fire naturally on `git push`.
+    await sandbox.runCommand("bash", [
+      "-c",
+      [
+        "git remote remove origin",
+        "git init --bare /tmp/push-target.git",
+        "git remote add origin /tmp/push-target.git",
+      ].join(" && "),
+    ]);
+
     // Configure git identity
     await sandbox.runCommand("bash", [
       "-c",
@@ -90,7 +102,7 @@ export class SandboxManager {
       }
     }
 
-    // Record the pre-agent HEAD so the poll step (collectAgentResults) can diff only agent work.
+    // Record the pre-agent HEAD so pushFromSandbox can detect whether the agent made commits.
     // Must happen after clone + optional merge, before the agent touches anything.
     await sandbox.runCommand("bash", [
       "-c",

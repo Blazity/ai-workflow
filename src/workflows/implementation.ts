@@ -68,17 +68,6 @@ async function provisionAndStartAgent(
 }
 provisionAndStartAgent.maxRetries = 0;
 
-async function pushChanges(
-  branchName: string,
-  files: Array<{ path: string; content: string }>,
-) {
-  "use step";
-  if (files.length === 0) return;
-  const { createStepAdapters } = await import("../lib/step-adapters.js");
-  const { vcs } = createStepAdapters();
-  await vcs.push(branchName, files);
-}
-
 async function createPullRequest(
   branchName: string,
   title: string,
@@ -144,7 +133,7 @@ export async function implementationWorkflow(ticketId: string) {
     const requirementsMd = await assembleImplementationRequirements(ticket);
 
     // --- Detached execution with polling ---
-    const { checkAgentDone, collectAgentResults, teardownSandbox } =
+    const { checkAgentDone, collectAgentOutput, pushFromSandbox, fixAndRetryPush, teardownSandbox } =
       await import("../sandbox/poll-agent.js");
 
     const sandboxId = await provisionAndStartAgent(branchName, requirementsMd);
@@ -172,18 +161,27 @@ export async function implementationWorkflow(ticketId: string) {
       }
 
       let output: AgentOutput;
-      let files: Array<{ path: string; content: string }>;
 
       if (agentDone) {
-        ({ output, files } = await collectAgentResults(sandboxId));
+        ({ output } = await collectAgentOutput(sandboxId));
       } else {
         output = { result: "failed", error: "Agent timed out or sandbox stopped unexpectedly" };
-        files = [];
       }
 
-      await pushChanges(branchName, files);
-
       if (output.result === "implemented") {
+        let pushResult = await pushFromSandbox(sandboxId, branchName);
+
+        if (!pushResult.pushed && pushResult.error) {
+          pushResult = await fixAndRetryPush(sandboxId, branchName, pushResult.error);
+        }
+
+        if (!pushResult.pushed) {
+          await moveTicket(ticketId, env.COLUMN_BACKLOG);
+          await notifySlack(`Task ${ticket.identifier} failed: push failed — ${pushResult.error ?? "unknown"}`);
+          await unregisterRun(ticket.identifier);
+          return;
+        }
+
         await createPullRequest(branchName, ticket.title, output.summary ?? "");
         await moveTicket(ticketId, env.COLUMN_AI_REVIEW);
         await notifySlack(`Task ${ticket.identifier} PR ready for review`);
