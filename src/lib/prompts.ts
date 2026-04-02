@@ -164,8 +164,8 @@ You have access to **superpowers skills** installed globally. Use them to improv
 4. Address each review comment — implement the requested changes.                                                                         
 5. Run all tests to ensure nothing is broken.                                                                                               
 6. Self-review your changes.
-7. **Request code review** — invoke the `requesting-code-review` skill to dispatch a code-reviewer subagent. Fix any Critical or Important issues it finds before proceeding.                                                                                                          
-8. **Update session memory** — before returning your result, write/update `blazebot/memory/[TASK_ID].md` (see Session Memory below).      
+7. **Request code review** — invoke the \`requesting-code-review\` skill to dispatch a code-reviewer subagent. Fix any Critical or Important issues it finds before proceeding.
+8. **Update session memory** — before returning your result, write/update \`blazebot/memory/[TASK_ID].md\` (see Session Memory below).      
 9. Commit your work with descriptive commit messages that explain the "why", not just the "what". Use conventional commit format (feat:, fix:, test:, refactor:, etc.).                                                        
 10. Run all quality checks and push (see Quality Gate below).  
 

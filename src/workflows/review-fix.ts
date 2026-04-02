@@ -29,7 +29,7 @@ async function fetchPRContext(branchName: string) {
   const hasConflicts = await vcs.getPRConflictStatus(pr.id);
   const checkResults = await vcs.getCheckRunResults(pr.id);
 
-  return { pr, comments, hasConflicts };
+  return { pr, comments, hasConflicts, checkResults };
 }
 
 async function assembleReviewFixRequirements(
@@ -139,7 +139,7 @@ export async function reviewFixWorkflow(ticketId: string, branchName: string) {
       `Task ${ticket.identifier} started — fixing review feedback`,
     );
 
-    const { comments, hasConflicts } = await fetchPRContext(branchName);
+    const { comments, hasConflicts, checkResults } = await fetchPRContext(branchName);
 
     const requirementsMd = await assembleReviewFixRequirements(
       ticket,
