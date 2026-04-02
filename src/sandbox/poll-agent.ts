@@ -30,12 +30,13 @@ export async function checkAgentDone(
 }
 
 /**
- * Reconnects to the sandbox, reads agent stdout/stderr, extracts changed files,
- * and returns the parsed result.
+ * Reconnects to the sandbox, reads agent stdout/stderr, and returns the
+ * parsed result. File extraction is no longer needed — commits are pushed
+ * directly from the sandbox via `pushFromSandbox`.
  */
-export async function collectAgentResults(
+export async function collectAgentOutput(
   sandboxId: string,
-): Promise<{ output: AgentOutput; files: Array<{ path: string; content: string }> }> {
+): Promise<{ output: AgentOutput }> {
   "use step";
   const { Sandbox } = await import("@vercel/sandbox");
 
@@ -46,7 +47,6 @@ export async function collectAgentResults(
     // Sandbox unreachable between final poll and collection — return a clear failure
     return {
       output: { result: "failed", error: "Sandbox became unreachable before results could be collected" },
-      files: [],
     };
   }
 
@@ -60,41 +60,104 @@ export async function collectAgentResults(
   const raw = stdout || stderr;
   const output = parseAgentOutput(raw);
 
-  // Extract changed files
-  const baseResult = await sandbox.runCommand("bash", [
-    "-c",
-    "cat /tmp/.pre-agent-sha 2>/dev/null || git rev-list --max-parents=0 HEAD",
+  return { output };
+}
+
+/**
+ * After the agent exits, injects the GitHub token and pushes commits to GitHub.
+ * The agent process is dead at this point — the token is never visible to it.
+ */
+export async function pushFromSandbox(
+  sandboxId: string,
+  branch: string,
+): Promise<{ pushed: boolean; error?: string }> {
+  "use step";
+  const { Sandbox } = await import("@vercel/sandbox");
+  const { env } = await import("../../env.js");
+  const sandbox = await Sandbox.get({ sandboxId, ...getSandboxCredentials() });
+
+  // Check if agent made any commits.
+  // If the sentinel file is missing (provisioning issue), skip the check and push anyway.
+  const baseShaResult = await sandbox.runCommand("bash", [
+    "-c", "cat /tmp/.pre-agent-sha 2>/dev/null || echo ''",
   ]);
-  const baseSha = (await baseResult.stdout()).trim();
+  const headShaResult = await sandbox.runCommand("bash", ["-c", "git rev-parse HEAD"]);
+  const baseSha = (await baseShaResult.stdout()).trim();
+  const headSha = (await headShaResult.stdout()).trim();
 
-  let files: Array<{ path: string; content: string }> = [];
-
-  if (baseSha) {
-    const diffResult = await sandbox.runCommand("git", [
-      "diff", "--name-only", baseSha, "HEAD",
-    ]);
-    const diffOutput = (await diffResult.stdout()).trim();
-
-    if (diffOutput) {
-      const filePaths = diffOutput
-        .split("\n")
-        .filter(Boolean)
-        .filter((p) => p !== "requirements.md")
-        .filter((p) => !p.startsWith(".claude/"));
-
-      for (const filePath of filePaths) {
-        const buf = await sandbox.readFileToBuffer({
-          path: filePath,
-          cwd: "/vercel/sandbox",
-        });
-        if (buf) {
-          files.push({ path: filePath, content: buf.toString("utf-8") });
-        }
-      }
-    }
+  if (baseSha && baseSha === headSha) {
+    return { pushed: false, error: "Agent reported success but made no commits" };
   }
 
-  return { output, files };
+  // Inject token — agent process is dead
+  const pushUrl = `https://x-access-token:${env.GITHUB_TOKEN}@github.com/${env.GITHUB_OWNER}/${env.GITHUB_REPO}.git`;
+  await sandbox.runCommand("git", ["remote", "set-url", "origin", pushUrl]);
+
+  // Unshallow so git can negotiate objects with GitHub during push.
+  // The sandbox clones with depth:1 — without full history, push fails with
+  // "Could not read <sha>" when the remote has commits the shallow clone can't traverse.
+  await sandbox.runCommand("git", ["fetch", "--unshallow", "origin"]);
+
+  // Push to GitHub — use HEAD:<ref> so it works even if the local branch name
+  // doesn't match (e.g. shallow clone leaves HEAD detached).
+  const result = await sandbox.runCommand("git", ["push", "origin", `HEAD:refs/heads/${branch}`]);
+
+  if (result.exitCode !== 0) {
+    const stdout = (await result.stdout()).trim();
+    const stderr = (await result.stderr()).trim();
+    return { pushed: false, error: stderr || stdout };
+  }
+
+  return { pushed: true };
+}
+
+/**
+ * If `pushFromSandbox` fails (e.g. pre-push hook failure on the real remote),
+ * spawns a lightweight fix agent in the same sandbox to resolve the issue,
+ * then retries the push once.
+ *
+ * SECURITY NOTE: The fix agent runs with the GitHub token present in
+ * .git/config (set by the prior `pushFromSandbox` call). This is a deliberate
+ * trade-off — the agent is short-lived, narrowly prompted, and the sandbox is
+ * torn down immediately after.
+ */
+export async function fixAndRetryPush(
+  sandboxId: string,
+  branch: string,
+  pushError: string,
+): Promise<{ pushed: boolean; error?: string }> {
+  "use step";
+  const { Sandbox } = await import("@vercel/sandbox");
+  const { env } = await import("../../env.js");
+  const sandbox = await Sandbox.get({ sandboxId, ...getSandboxCredentials() });
+
+  // Write prompt to a file to avoid shell injection via pushError content
+  const fixPrompt = `The git push failed with this error:\n\n${pushError}\n\nFix the issues, commit your fixes, then push to origin.`;
+  await sandbox.writeFiles([
+    { path: "/tmp/fix-prompt.txt", content: Buffer.from(fixPrompt) },
+  ]);
+
+  await sandbox.runCommand("bash", [
+    "-c",
+    `cat /tmp/fix-prompt.txt | claude --print --model '${env.CLAUDE_MODEL}' --dangerously-skip-permissions > /tmp/fix-stdout.txt 2>/tmp/fix-stderr.txt || true`,
+  ]);
+
+  // Log fix agent output for observability
+  const fixOut = await sandbox.runCommand("cat", ["/tmp/fix-stdout.txt"]);
+  const fixLog = (await fixOut.stdout()).trim();
+  if (fixLog) {
+    console.log(`[fixAndRetryPush] fix agent output: ${fixLog.slice(0, 500)}`);
+  }
+
+  // Retry push — use HEAD:<ref> to handle detached HEAD from shallow clone
+  const result = await sandbox.runCommand("git", ["push", "origin", `HEAD:refs/heads/${branch}`]);
+
+  if (result.exitCode !== 0) {
+    const stdout = (await result.stdout()).trim();
+    const stderr = (await result.stderr()).trim();
+    return { pushed: false, error: stderr || stdout };
+  }
+  return { pushed: true };
 }
 
 /**
