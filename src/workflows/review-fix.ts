@@ -18,7 +18,7 @@ async function fetchAndValidateTicket(ticketId: string, columnAi: string) {
   return ticket;
 }
 
-async function fetchPRContext(branchName: string) {
+async function fetchPRContext(branchName: string, baseBranch: string) {
   "use step";
   const { createStepAdapters } = await import("../lib/step-adapters.js");
   const { vcs } = createStepAdapters();
@@ -29,7 +29,12 @@ async function fetchPRContext(branchName: string) {
   const hasConflicts = await vcs.getPRConflictStatus(pr.id);
   const checkResults = await vcs.getCheckRunResults(pr.id);
 
-  return { pr, comments, hasConflicts, checkResults };
+  let baseSha: string | undefined;
+  if (hasConflicts) {
+    baseSha = await vcs.getBranchSha(baseBranch);
+  }
+
+  return { pr, comments, hasConflicts, baseSha, checkResults };
 }
 
 async function assembleReviewFixRequirements(
@@ -140,7 +145,7 @@ export async function reviewFixWorkflow(ticketId: string, branchName: string) {
     );
 
     const { comments, hasConflicts, checkResults } =
-      await fetchPRContext(branchName);
+      await fetchPRContext(branchName, env.GITHUB_BASE_BRANCH);
 
     const requirementsMd = await assembleReviewFixRequirements(
       ticket,
