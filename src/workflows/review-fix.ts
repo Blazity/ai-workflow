@@ -142,12 +142,22 @@ export async function reviewFixWorkflow(ticketId: string, branchName: string) {
 
     const { comments, hasConflicts, baseSha, checkResults } = await fetchPRContext(branchName, env.GITHUB_BASE_BRANCH);
 
+    // TODO: TEMP logging — remove after testing
+    console.log("[review-fix] PR comments:", JSON.stringify(comments, null, 2));
+    console.log("[review-fix] Check results:", JSON.stringify(checkResults, null, 2));
+    console.log("[review-fix] Has conflicts:", hasConflicts);
+
     const requirementsMd = await assembleReviewFixRequirements(
       ticket,
       comments,
       hasConflicts,
       checkResults,
     );
+
+    // TODO: TEMP logging — remove after testing
+    console.log("[review-fix] === ASSEMBLED CONTEXT START ===");
+    console.log(requirementsMd);
+    console.log("[review-fix] === ASSEMBLED CONTEXT END ===");
 
     // --- Detached execution with polling ---
     const { checkAgentDone, collectAgentResults, teardownSandbox } =
