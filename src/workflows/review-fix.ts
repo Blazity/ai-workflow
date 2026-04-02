@@ -2,7 +2,7 @@ import { FatalError } from "workflow";
 import { sleep } from "workflow";
 import type { AgentOutput } from "../sandbox/agent-runner.js";
 import type { TicketContent } from "../adapters/issue-tracker/types.js";
-import type { PRComment } from "../adapters/vcs/types.js";
+import type { PRComment, CheckRunResult } from "../adapters/vcs/types.js";
 
 // --- Step Functions ---
 
@@ -27,14 +27,16 @@ async function fetchPRContext(branchName: string) {
 
   const comments = await vcs.getPRComments(pr.id);
   const hasConflicts = await vcs.getPRConflictStatus(pr.id);
+  const checkResults = await vcs.getCheckRunResults(pr.id);
 
-  return { pr, comments, hasConflicts };
+  return { pr, comments, hasConflicts, checkResults };
 }
 
 async function assembleReviewFixRequirements(
   ticket: TicketContent,
   prComments: PRComment[],
   hasConflicts: boolean,
+  checkResults: CheckRunResult[],
 ) {
   "use step";
   const { assembleFixingFeedbackContext } =
@@ -53,6 +55,7 @@ async function assembleReviewFixRequirements(
     prompt,
     prComments,
     hasConflicts,
+    checkResults,
   });
 }
 
@@ -78,7 +81,11 @@ async function provisionAndStartFixingAgent(
     jobTimeoutMs: env.JOB_TIMEOUT_MS,
   });
 
-  const sandbox = await manager.provision(branchName, requirementsMd, mergeBase);
+  const sandbox = await manager.provision(
+    branchName,
+    requirementsMd,
+    mergeBase,
+  );
   await startAgentDetached(sandbox);
   return sandbox.sandboxId;
 }
@@ -132,12 +139,13 @@ export async function reviewFixWorkflow(ticketId: string, branchName: string) {
       `Task ${ticket.identifier} started — fixing review feedback`,
     );
 
-    const { comments, hasConflicts } = await fetchPRContext(branchName);
+    const { comments, hasConflicts, checkResults } = await fetchPRContext(branchName);
 
     const requirementsMd = await assembleReviewFixRequirements(
       ticket,
       comments,
       hasConflicts,
+      checkResults,
     );
 
     // --- Detached execution with polling ---
@@ -211,8 +219,12 @@ export async function reviewFixWorkflow(ticketId: string, branchName: string) {
     }
   } catch (err) {
     console.error(`Workflow failed for ${ticket.identifier}:`, err);
-    const moved = await moveTicket(ticketId, env.COLUMN_BACKLOG).then(() => true).catch(() => false);
-    await notifySlack(`Task ${ticket.identifier} failed: ${(err as Error).message ?? "unknown"}`).catch(() => {});
+    const moved = await moveTicket(ticketId, env.COLUMN_BACKLOG)
+      .then(() => true)
+      .catch(() => false);
+    await notifySlack(
+      `Task ${ticket.identifier} failed: ${(err as Error).message ?? "unknown"}`,
+    ).catch(() => {});
     if (moved) {
       await unregisterRun(ticket.identifier).catch(() => {});
     } else {

@@ -8,6 +8,16 @@ export interface PRComment {
   author: string;
   body: string;
   liked: boolean;
+  filePath?: string;
+  startLine?: number;
+  endLine?: number;
+}
+
+export interface CheckRunResult {
+  name: string;
+  status: "completed" | "in_progress" | "queued";
+  conclusion: string | null;
+  logs?: string;
 }
 
 export interface VCSAdapter {
@@ -19,6 +29,7 @@ export interface VCSAdapter {
     options?: { mergeParentSha?: string },
   ): Promise<void>;
   getPRComments(prId: number): Promise<PRComment[]>;
+  getCheckRunResults(prId: number): Promise<CheckRunResult[]>;
   getPRConflictStatus(prId: number): Promise<boolean>;
   findPR(branch: string): Promise<PullRequest | null>;
   getBranchSha(branch: string): Promise<string>;

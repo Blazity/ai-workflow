@@ -64,6 +64,7 @@ function makeAdapters(
       createPR: vi.fn(),
       push: vi.fn(),
       getPRComments: vi.fn(),
+      getCheckRunResults: vi.fn().mockResolvedValue([]),
       getPRConflictStatus: vi.fn(),
       findPR: overrides.findPR ?? vi.fn().mockResolvedValue(null),
       getBranchSha: vi.fn().mockResolvedValue("abc123"),
