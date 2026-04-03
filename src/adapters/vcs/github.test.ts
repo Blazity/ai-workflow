@@ -5,6 +5,7 @@ const mockOctokit = {
   git: {
     getRef: vi.fn(),
     createRef: vi.fn(),
+    updateRef: vi.fn(),
   },
   repos: {
     createOrUpdateFileContents: vi.fn(),
@@ -71,6 +72,27 @@ describe("GitHubAdapter", () => {
       expect(mockOctokit.git.createRef).toHaveBeenCalledWith(
         expect.objectContaining({ sha: "seed123" }),
       );
+    });
+
+    it("force-resets existing branch to base SHA on 422", async () => {
+      mockOctokit.git.getRef.mockResolvedValueOnce({
+        data: { object: { sha: "base-sha" } },
+      });
+      const error = new Error("Reference already exists") as any;
+      error.status = 422;
+      mockOctokit.git.createRef.mockRejectedValueOnce(error);
+      mockOctokit.git.updateRef.mockResolvedValueOnce({ data: {} });
+
+      const adapter = ghAdapter();
+      await adapter.createBranch("feat/test", "main");
+
+      expect(mockOctokit.git.updateRef).toHaveBeenCalledWith({
+        owner: "test-org",
+        repo: "test-repo",
+        ref: "heads/feat/test",
+        sha: "base-sha",
+        force: true,
+      });
     });
   });
 

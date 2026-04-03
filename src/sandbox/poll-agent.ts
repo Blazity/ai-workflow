@@ -93,6 +93,13 @@ export async function pushFromSandbox(
   const pushUrl = `https://x-access-token:${env.GITHUB_TOKEN}@github.com/${env.GITHUB_OWNER}/${env.GITHUB_REPO}.git`;
   await sandbox.runCommand("git", ["remote", "set-url", "origin", pushUrl]);
 
+  // Unshallow if needed — shallow clones cause "no history in common with main"
+  // errors on PR creation because the pushed commits lack shared ancestry.
+  await sandbox.runCommand("bash", [
+    "-c",
+    'if [ "$(git rev-parse --is-shallow-repository)" = "true" ]; then git fetch --unshallow origin; fi',
+  ]);
+
   // Push to GitHub — use HEAD:<ref> so it works even if the local branch name
   // doesn't match. Use --force for retries where the branch already has commits
   // from a prior failed run. Safe because these are bot-created branches with

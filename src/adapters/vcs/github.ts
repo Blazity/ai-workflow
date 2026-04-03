@@ -43,7 +43,17 @@ export class GitHubAdapter implements VCSAdapter {
       });
     } catch (err: any) {
       if (err.status === 422) {
-        // Branch already exists — idempotent, nothing to do
+        // Branch already exists — force-reset it to the base SHA so the next
+        // sandbox run starts with history rooted in the base branch.  Without
+        // this, a stale branch from a previous failed run (e.g. one pushed from
+        // a shallow clone) would retain orphan history, causing "no history in
+        // common with main" errors on PR creation.
+        await this.octokit.git.updateRef({
+          ...this.ownerRepo,
+          ref: `heads/${name}`,
+          sha: baseSha,
+          force: true,
+        });
         return;
       }
       throw err;
@@ -169,6 +179,7 @@ export class GitHubAdapter implements VCSAdapter {
       ...this.ownerRepo,
       issue_number: prId,
     });
+
     const comments: PRComment[] = [
       ...reviewComments.map((c) => ({
         author: c.user?.login ?? "unknown",
