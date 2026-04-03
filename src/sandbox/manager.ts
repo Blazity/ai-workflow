@@ -147,7 +147,7 @@ export class SandboxManager {
     // Write requirements.md and wrapper script for detached execution
     const wrapperScript = buildWrapperScript({ model: this.config.claudeModel });
     await sandbox.writeFiles([
-      { path: "requirements.md", content: Buffer.from(requirementsMd) },
+      { path: "/tmp/requirements.md", content: Buffer.from(requirementsMd) },
       { path: "/tmp/agent-wrapper.sh", content: Buffer.from(wrapperScript) },
     ]);
     await sandbox.runCommand("chmod", ["+x", "/tmp/agent-wrapper.sh"]);
