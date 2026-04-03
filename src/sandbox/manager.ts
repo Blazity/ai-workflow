@@ -49,7 +49,6 @@ export class SandboxManager {
         username: "x-access-token",
         password: this.config.githubToken,
         revision: branch,
-        depth: 1,
       },
       runtime: "node24",
       timeout: this.config.jobTimeoutMs,
@@ -60,6 +59,17 @@ export class SandboxManager {
         CLAUDE_MODEL: this.config.claudeModel,
       },
     });
+
+    // Strip auth from origin — the clone URL contains the token, replace it
+    // with the unauthenticated URL so the agent never has push access.
+    await sandbox.runCommand("git", [
+      "remote", "set-url", "origin",
+      `https://github.com/${this.config.owner}/${this.config.repo}.git`,
+    ]);
+
+    // The sandbox clones a specific revision, which leaves git in detached HEAD.
+    // Create a local branch so pushFromSandbox can push without HEAD resolution issues.
+    await sandbox.runCommand("git", ["checkout", "-B", branch]);
 
     // Configure git identity
     await sandbox.runCommand("bash", [
@@ -73,7 +83,7 @@ export class SandboxManager {
       const repoUrl = `https://x-access-token:${this.config.githubToken}@github.com/${this.config.owner}/${this.config.repo}.git`;
       const fetchResult = await sandbox.runCommand("bash", [
         "-c",
-        `git fetch --unshallow "${repoUrl}" ${mergeBase} 2>&1`,
+        `git fetch "${repoUrl}" ${mergeBase} 2>&1`,
       ]);
       // Create a named local branch so the agent can reference it (e.g. `git show main:path`)
       await sandbox.runCommand("bash", [
@@ -90,7 +100,7 @@ export class SandboxManager {
       }
     }
 
-    // Record the pre-agent HEAD so the poll step (collectAgentResults) can diff only agent work.
+    // Record the pre-agent HEAD so pushFromSandbox can detect whether the agent made commits.
     // Must happen after clone + optional merge, before the agent touches anything.
     await sandbox.runCommand("bash", [
       "-c",

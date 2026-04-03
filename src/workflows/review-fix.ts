@@ -2,7 +2,7 @@ import { FatalError } from "workflow";
 import { sleep } from "workflow";
 import type { AgentOutput } from "../sandbox/agent-runner.js";
 import type { TicketContent } from "../adapters/issue-tracker/types.js";
-import type { PRComment } from "../adapters/vcs/types.js";
+import type { PRComment, CheckRunResult } from "../adapters/vcs/types.js";
 
 // --- Step Functions ---
 
@@ -18,7 +18,7 @@ async function fetchAndValidateTicket(ticketId: string, columnAi: string) {
   return ticket;
 }
 
-async function fetchPRContext(branchName: string, baseBranch: string) {
+async function fetchPRContext(branchName: string) {
   "use step";
   const { createStepAdapters } = await import("../lib/step-adapters.js");
   const { vcs } = createStepAdapters();
@@ -27,19 +27,16 @@ async function fetchPRContext(branchName: string, baseBranch: string) {
 
   const comments = await vcs.getPRComments(pr.id);
   const hasConflicts = await vcs.getPRConflictStatus(pr.id);
+  const checkResults = await vcs.getCheckRunResults(pr.id);
 
-  let baseSha: string | undefined;
-  if (hasConflicts) {
-    baseSha = await vcs.getBranchSha(baseBranch);
-  }
-
-  return { pr, comments, hasConflicts, baseSha };
+  return { pr, comments, hasConflicts, checkResults };
 }
 
 async function assembleReviewFixRequirements(
   ticket: TicketContent,
   prComments: PRComment[],
   hasConflicts: boolean,
+  checkResults: CheckRunResult[],
 ) {
   "use step";
   const { assembleFixingFeedbackContext } =
@@ -58,6 +55,7 @@ async function assembleReviewFixRequirements(
     prompt,
     prComments,
     hasConflicts,
+    checkResults,
   });
 }
 
@@ -83,23 +81,15 @@ async function provisionAndStartFixingAgent(
     jobTimeoutMs: env.JOB_TIMEOUT_MS,
   });
 
-  const sandbox = await manager.provision(branchName, requirementsMd, mergeBase);
+  const sandbox = await manager.provision(
+    branchName,
+    requirementsMd,
+    mergeBase,
+  );
   await startAgentDetached(sandbox);
   return sandbox.sandboxId;
 }
 provisionAndStartFixingAgent.maxRetries = 0;
-
-async function pushChanges(
-  branchName: string,
-  files: Array<{ path: string; content: string }>,
-  mergeParentSha?: string,
-) {
-  "use step";
-  if (files.length === 0) return;
-  const { createStepAdapters } = await import("../lib/step-adapters.js");
-  const { vcs } = createStepAdapters();
-  await vcs.push(branchName, files, mergeParentSha ? { mergeParentSha } : undefined);
-}
 
 async function moveTicket(ticketId: string, column: string) {
   "use step";
@@ -122,6 +112,18 @@ async function unregisterRun(ticketIdentifier: string) {
   await runRegistry.unregister(ticketIdentifier);
 }
 
+async function markTicketFailed(ticketIdentifier: string, error: string) {
+  "use step";
+  const { createStepAdapters } = await import("../lib/step-adapters.js");
+  const { runRegistry } = createStepAdapters();
+  const runId = await runRegistry.getRunId(ticketIdentifier) ?? "unknown";
+  await runRegistry.markFailed(ticketIdentifier, {
+    runId,
+    error,
+    failedAt: new Date().toISOString(),
+  });
+}
+
 // --- Workflow ---
 
 export async function reviewFixWorkflow(ticketId: string, branchName: string) {
@@ -137,16 +139,17 @@ export async function reviewFixWorkflow(ticketId: string, branchName: string) {
       `Task ${ticket.identifier} started — fixing review feedback`,
     );
 
-    const { comments, hasConflicts, baseSha } = await fetchPRContext(branchName, env.GITHUB_BASE_BRANCH);
+    const { comments, hasConflicts, checkResults } = await fetchPRContext(branchName);
 
     const requirementsMd = await assembleReviewFixRequirements(
       ticket,
       comments,
       hasConflicts,
+      checkResults,
     );
 
     // --- Detached execution with polling ---
-    const { checkAgentDone, collectAgentResults, teardownSandbox } =
+    const { checkAgentDone, collectAgentOutput, pushFromSandbox, fixAndRetryPush, teardownSandbox } =
       await import("../sandbox/poll-agent.js");
 
     const sandboxId = await provisionAndStartFixingAgent(
@@ -177,18 +180,27 @@ export async function reviewFixWorkflow(ticketId: string, branchName: string) {
       }
 
       let output: AgentOutput;
-      let files: Array<{ path: string; content: string }>;
 
       if (agentDone) {
-        ({ output, files } = await collectAgentResults(sandboxId));
+        ({ output } = await collectAgentOutput(sandboxId));
       } else {
         output = { result: "failed", error: "Agent timed out or sandbox stopped unexpectedly" };
-        files = [];
       }
 
-      await pushChanges(branchName, files, baseSha);
-
       if (output.result === "implemented") {
+        let pushResult = await pushFromSandbox(sandboxId, branchName);
+
+        if (!pushResult.pushed && pushResult.error) {
+          pushResult = await fixAndRetryPush(sandboxId, branchName, pushResult.error);
+        }
+
+        if (!pushResult.pushed) {
+          await moveTicket(ticketId, env.COLUMN_BACKLOG);
+          await notifySlack(`Task ${ticket.identifier} failed: push failed — ${pushResult.error ?? "unknown"}`);
+          await unregisterRun(ticket.identifier);
+          return;
+        }
+
         await moveTicket(ticketId, env.COLUMN_AI_REVIEW);
         await notifySlack(
           `Task ${ticket.identifier} fixes applied, ready for re-review`,
@@ -207,10 +219,16 @@ export async function reviewFixWorkflow(ticketId: string, branchName: string) {
     }
   } catch (err) {
     console.error(`Workflow failed for ${ticket.identifier}:`, err);
-    const moved = await moveTicket(ticketId, env.COLUMN_BACKLOG).then(() => true).catch(() => false);
-    await notifySlack(`Task ${ticket.identifier} failed: ${(err as Error).message ?? "unknown"}`).catch(() => {});
+    const moved = await moveTicket(ticketId, env.COLUMN_BACKLOG)
+      .then(() => true)
+      .catch(() => false);
+    await notifySlack(
+      `Task ${ticket.identifier} failed: ${(err as Error).message ?? "unknown"}`,
+    ).catch(() => {});
     if (moved) {
       await unregisterRun(ticket.identifier).catch(() => {});
+    } else {
+      await markTicketFailed(ticket.identifier, `Failed to move ticket to backlog: ${(err as Error).message ?? "unknown"}`).catch(() => {});
     }
     throw err;
   }

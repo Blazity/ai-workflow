@@ -1,8 +1,9 @@
 import { Redis } from "@upstash/redis";
-import type { RunRegistryAdapter } from "./types.js";
+import type { RunRegistryAdapter, FailedTicketMeta } from "./types.js";
 
 const ENV_PREFIX = process.env.VERCEL_ENV ?? "development";
 const HASH_KEY = `blazebot:active-runs:${ENV_PREFIX}`;
+const FAILED_HASH_KEY = `blazebot:failed-tickets:${ENV_PREFIX}`;
 
 export class UpstashRunRegistry implements RunRegistryAdapter {
   private redis: Redis;
@@ -34,5 +35,27 @@ export class UpstashRunRegistry implements RunRegistryAdapter {
     const all = await this.redis.hgetall<Record<string, string>>(HASH_KEY);
     if (!all) return [];
     return Object.entries(all).map(([ticketKey, runId]) => ({ ticketKey, runId }));
+  }
+
+  async markFailed(ticketKey: string, meta: FailedTicketMeta): Promise<void> {
+    await this.redis.hset(FAILED_HASH_KEY, { [ticketKey]: JSON.stringify(meta) });
+  }
+
+  async isTicketFailed(ticketKey: string): Promise<boolean> {
+    const value = await this.redis.hget(FAILED_HASH_KEY, ticketKey);
+    return value != null;
+  }
+
+  async listAllFailed(): Promise<Array<{ ticketKey: string; meta: FailedTicketMeta }>> {
+    const all = await this.redis.hgetall<Record<string, string>>(FAILED_HASH_KEY);
+    if (!all) return [];
+    return Object.entries(all).map(([ticketKey, raw]) => ({
+      ticketKey,
+      meta: (typeof raw === "string" ? JSON.parse(raw) : raw) as FailedTicketMeta,
+    }));
+  }
+
+  async clearFailedMark(ticketKey: string): Promise<void> {
+    await this.redis.hdel(FAILED_HASH_KEY, ticketKey);
   }
 }
