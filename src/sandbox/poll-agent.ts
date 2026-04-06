@@ -1,67 +1,4 @@
 import { getSandboxCredentials } from "./credentials.js";
-import { parseAgentOutput } from "./agent-runner.js";
-import type { AgentOutput } from "./agent-runner.js";
-
-/**
- * Reconnects to a sandbox and checks whether the agent has finished.
- * Returns:
- * - `true` if /tmp/agent-done sentinel exists
- * - `false` if sandbox is running but agent not done yet
- * - `"stopped"` if sandbox is no longer running (timeout/crash)
- */
-export async function checkAgentDone(
-  sandboxId: string,
-): Promise<boolean | "stopped"> {
-  "use step";
-  const { Sandbox } = await import("@vercel/sandbox");
-  try {
-    const sandbox = await Sandbox.get({ sandboxId, ...getSandboxCredentials() });
-
-    if (sandbox.status !== "running") {
-      return "stopped";
-    }
-
-    const result = await sandbox.runCommand("test", ["-f", "/tmp/agent-done"]);
-    return result.exitCode === 0;
-  } catch {
-    // Sandbox unreachable (network error, GC'd, etc.) — treat as stopped
-    return "stopped";
-  }
-}
-
-/**
- * Reconnects to the sandbox, reads agent stdout/stderr, and returns the
- * parsed result. File extraction is no longer needed — commits are pushed
- * directly from the sandbox via `pushFromSandbox`.
- */
-export async function collectAgentOutput(
-  sandboxId: string,
-): Promise<{ output: AgentOutput }> {
-  "use step";
-  const { Sandbox } = await import("@vercel/sandbox");
-
-  let sandbox;
-  try {
-    sandbox = await Sandbox.get({ sandboxId, ...getSandboxCredentials() });
-  } catch {
-    // Sandbox unreachable between final poll and collection — return a clear failure
-    return {
-      output: { result: "failed", error: "Sandbox became unreachable before results could be collected" },
-    };
-  }
-
-  // Read agent output files
-  const stdoutResult = await sandbox.runCommand("cat", ["/tmp/agent-stdout.txt"]);
-  const stdout = (await stdoutResult.stdout()).trim();
-
-  const stderrResult = await sandbox.runCommand("cat", ["/tmp/agent-stderr.txt"]);
-  const stderr = (await stderrResult.stdout()).trim();
-
-  const raw = stdout || stderr;
-  const output = parseAgentOutput(raw);
-
-  return { output };
-}
 
 /**
  * After the agent exits, injects the GitHub token and pushes commits to GitHub.
@@ -169,6 +106,52 @@ export async function fixAndRetryPush(
     return { pushed: false, error: stderr || stdout };
   }
   return { pushed: true };
+}
+
+/**
+ * Generalized sentinel check — works with any sentinel file path.
+ */
+export async function checkPhaseDone(
+  sandboxId: string,
+  sentinelFile: string,
+): Promise<boolean | "stopped"> {
+  "use step";
+  const { Sandbox } = await import("@vercel/sandbox");
+  try {
+    const sandbox = await Sandbox.get({ sandboxId, ...getSandboxCredentials() });
+
+    if (sandbox.status !== "running") {
+      return "stopped";
+    }
+
+    const result = await sandbox.runCommand("test", ["-f", sentinelFile]);
+    return result.exitCode === 0;
+  } catch {
+    return "stopped";
+  }
+}
+
+/**
+ * Generalized output collector — reads from any stdout/stderr file paths.
+ * Returns raw string. Caller is responsible for parsing.
+ */
+export async function collectPhaseOutput(
+  sandboxId: string,
+  outputFile: string,
+  stderrFile: string,
+): Promise<string> {
+  "use step";
+  const { Sandbox } = await import("@vercel/sandbox");
+
+  const sandbox = await Sandbox.get({ sandboxId, ...getSandboxCredentials() });
+
+  const stdoutResult = await sandbox.runCommand("cat", [outputFile]);
+  const stdout = (await stdoutResult.stdout()).trim();
+
+  const stderrResult = await sandbox.runCommand("cat", [stderrFile]);
+  const stderr = (await stderrResult.stdout()).trim();
+
+  return stdout || stderr;
 }
 
 /**

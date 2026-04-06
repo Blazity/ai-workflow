@@ -1,34 +1,47 @@
 import type { PRComment, CheckRunResult } from "../adapters/vcs/types.js";
+import type { ReviewOutput } from "./agent-runner.js";
 
 interface TicketData {
   identifier: string;
   title: string;
   description: string;
   acceptanceCriteria: string;
-  comments: Array<{ author: string; body: string; createdAt: string }>;
+  comments: Array<{ author: string; body: string; createdAt?: string }>;
+}
+
+export interface ResearchPlanContextInput {
+  ticket: TicketData;
+  prompt: string;
+  branchName: string;
+  prComments?: PRComment[];
+  checkResults?: CheckRunResult[];
+  hasConflicts?: boolean;
 }
 
 export interface ImplementationContextInput {
   ticket: TicketData;
   prompt: string;
-  skills?: string;
+  researchPlanMarkdown: string;
 }
 
-export interface FixingFeedbackContextInput {
+export interface ImplementationRetryContextInput {
   ticket: TicketData;
   prompt: string;
-  skills?: string;
-  prComments: PRComment[];
-  hasConflicts: boolean;
-  checkResults: CheckRunResult[];
+  researchPlanMarkdown: string;
+  reviewFeedback: ReviewOutput;
 }
 
-export function assembleImplementationContext(
-  input: ImplementationContextInput,
-): string {
-  const { ticket, prompt } = input;
+export interface ReviewContextInput {
+  ticket: TicketData;
+  prompt: string;
+  researchPlanMarkdown: string;
+  gitDiff: string;
+}
 
-  return `# Requirements
+export function assembleResearchPlanContext(input: ResearchPlanContextInput): string {
+  const { ticket, prompt, branchName, prComments, checkResults, hasConflicts } = input;
+
+  let md = `# Requirements
 
 ## Ticket ID
 
@@ -50,17 +63,29 @@ ${ticket.acceptanceCriteria || "None specified."}
 
 ${formatComments(ticket.comments)}
 
----
+## Branch
 
-${prompt}
+${branchName}
 `;
+
+  if (prComments && prComments.length > 0) {
+    md += `\n## PR Review Feedback\n\n${formatPRComments(prComments)}\n`;
+  }
+
+  if (checkResults && checkResults.length > 0) {
+    md += `\n## CI/CD Check Results\n\n${formatCheckResults(checkResults)}\n`;
+  }
+
+  if (hasConflicts) {
+    md += `\n## Merge Conflicts\n\nThis PR has merge conflicts. The base branch has already been merged — the repo is in a MERGING state with conflict markers in the affected files. Resolve the markers, \`git add\` the files, and run \`git merge --continue\`.\n`;
+  }
+
+  md += `\n---\n\n${prompt}\n`;
+  return md;
 }
 
-export function assembleFixingFeedbackContext(
-  input: FixingFeedbackContextInput,
-): string {
-  const { ticket, prompt, prComments, hasConflicts, checkResults } = input;
-
+export function assembleImplementationContext(input: ImplementationContextInput): string {
+  const { ticket, prompt, researchPlanMarkdown } = input;
   return `# Requirements
 
 ## Ticket ID
@@ -71,38 +96,95 @@ ${ticket.identifier}
 
 ${ticket.title}
 
-## Description
-
-${ticket.description}
-
 ## Acceptance Criteria
 
 ${ticket.acceptanceCriteria || "None specified."}
 
-## Comments
+## Research & Plan
 
-${formatComments(ticket.comments)}
-
-## PR Review Feedback
-
-${formatPRComments(prComments)}
-
-## CI/CD Check Results
-
-${formatCheckResults(checkResults)}
-
-## Merge Conflicts
-
-${hasConflicts ? "This PR has merge conflicts. The base branch has already been merged — the repo is in a MERGING state with conflict markers in the affected files. Resolve the markers, `git add` the files, and run `git merge --continue`." : "No merge conflicts."}
+${researchPlanMarkdown}
 
 ---
 
 ${prompt}
 `;
+}
+
+export function assembleImplementationRetryContext(input: ImplementationRetryContextInput): string {
+  const { ticket, prompt, researchPlanMarkdown, reviewFeedback } = input;
+  return `# Requirements
+
+## Ticket ID
+
+${ticket.identifier}
+
+## Ticket
+
+${ticket.title}
+
+## Acceptance Criteria
+
+${ticket.acceptanceCriteria || "None specified."}
+
+## Research & Plan
+
+${researchPlanMarkdown}
+
+## Review Feedback
+
+${reviewFeedback.feedback}
+
+### Issues
+
+${formatReviewIssues(reviewFeedback.issues)}
+
+---
+
+${prompt}
+`;
+}
+
+export function assembleReviewContext(input: ReviewContextInput): string {
+  const { ticket, prompt, researchPlanMarkdown, gitDiff } = input;
+  return `# Requirements
+
+## Ticket ID
+
+${ticket.identifier}
+
+## Ticket
+
+${ticket.title}
+
+## Acceptance Criteria
+
+${ticket.acceptanceCriteria || "None specified."}
+
+## Research & Plan
+
+${researchPlanMarkdown}
+
+## Git Diff
+
+\`\`\`diff
+${gitDiff}
+\`\`\`
+
+---
+
+${prompt}
+`;
+}
+
+function formatReviewIssues(issues: Array<{ file: string; description: string; severity: string }>): string {
+  if (issues.length === 0) return "No specific issues listed.";
+  return issues
+    .map((i) => `- **[${i.severity}]** ${i.file}: ${i.description}`)
+    .join("\n");
 }
 
 function formatComments(
-  comments: Array<{ author: string; body: string; createdAt: string }>,
+  comments: Array<{ author: string; body: string; createdAt?: string }>,
 ): string {
   if (comments.length === 0) return "No comments.";
   return comments

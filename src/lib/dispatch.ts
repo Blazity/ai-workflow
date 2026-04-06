@@ -1,6 +1,5 @@
 import { start, getRun } from "workflow/api";
-import { implementationWorkflow } from "../workflows/implementation.js";
-import { reviewFixWorkflow } from "../workflows/review-fix.js";
+import { agentWorkflow } from "../workflows/agent.js";
 import { logger } from "./logger.js";
 import type { Adapters } from "./adapters.js";
 
@@ -25,7 +24,7 @@ export async function dispatchTicket(
   adapters: Adapters,
   maxConcurrentAgents: number,
 ): Promise<DispatchResult> {
-  const { issueTracker, vcs, runRegistry } = adapters;
+  const { issueTracker, runRegistry } = adapters;
 
   if (await runRegistry.isTicketFailed(ticketKey)) {
     logger.info({ ticketKey }, "dispatch_skipped_previously_failed");
@@ -45,9 +44,12 @@ export async function dispatchTicket(
 
   try {
     const ticket = await issueTracker.fetchTicket(ticketKey);
-    const branchName = `blazebot/${ticket.identifier.toLowerCase()}`;
 
-    const handle = await startWorkflow(ticket, branchName, vcs);
+    const handle = await start(agentWorkflow, [ticket.id]);
+    logger.info(
+      { ticketId: ticket.id, identifier: ticket.identifier, runId: handle.runId },
+      "workflow_started",
+    );
 
     const claimStillHeld = await verifyClaimNotCancelled(
       ticketKey,
@@ -88,26 +90,6 @@ async function getActiveSandboxCount(): Promise<number> {
     logger.warn({ error: (err as Error).message }, "sandbox_count_check_failed");
     return 0;
   }
-}
-
-async function startWorkflow(
-  ticket: { id: string; identifier: string },
-  branchName: string,
-  vcs: Adapters["vcs"],
-) {
-  const existingPR = await vcs.findPR(branchName);
-
-  const handle = existingPR
-    ? await start(reviewFixWorkflow, [ticket.id, branchName])
-    : await start(implementationWorkflow, [ticket.id]);
-
-  const workflowType = existingPR ? "review_fix" : "implementation";
-  logger.info(
-    { ticketId: ticket.id, identifier: ticket.identifier, runId: handle.runId },
-    `workflow_started_${workflowType}`,
-  );
-
-  return handle;
 }
 
 async function verifyClaimNotCancelled(

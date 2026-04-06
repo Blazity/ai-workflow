@@ -1,37 +1,38 @@
-import { AGENT_SCHEMA } from "./agent-runner.js";
-
-interface WrapperScriptOptions {
+export interface PhaseScriptOptions {
   model: string;
+  phase: "research" | "impl" | "review";
+  inputFile: string;
+  outputFile: string;
+  stderrFile: string;
+  sentinelFile: string;
+  jsonSchema?: string;
 }
 
 /**
- * Generates a bash wrapper script that:
- * 1. Runs claude --print with the given model (agent commits via stop hook)
- * 2. Does cleanup (removes .claude/ artifacts)
- * 3. Writes stdout/stderr to /tmp/ files
- * 4. Touches /tmp/agent-done as sentinel
- *
+ * Generates a bash script for a single agent phase.
  * Designed to run detached inside a Vercel Sandbox.
- * The agent is responsible for committing — this script does NOT auto-commit.
  */
-export function buildWrapperScript(opts: WrapperScriptOptions): string {
-  const { model } = opts;
+export function buildPhaseScript(opts: PhaseScriptOptions): string {
+  const { model, inputFile, outputFile, stderrFile, sentinelFile, jsonSchema } = opts;
 
-  // Escape single quotes in the schema for safe embedding in bash
-  const escapedSchema = AGENT_SCHEMA.replace(/'/g, "'\\''");
+  let claudeFlags = `--print --model '${model}' --dangerously-skip-permissions`;
+
+  if (jsonSchema) {
+    const escapedSchema = jsonSchema.replace(/'/g, "'\\''");
+    claudeFlags += ` --output-format json --json-schema '${escapedSchema}'`;
+  }
 
   return `#!/bin/bash
 
-# --- Phase 1: Run Claude Code agent ---
-cat /tmp/requirements.md | claude \\
-  --print \\
-  --model '${model}' \\
-  --dangerously-skip-permissions \\
-  --output-format json \\
-  --json-schema '${escapedSchema}' \\
-  > /tmp/agent-stdout.txt 2>/tmp/agent-stderr.txt; echo $? > /tmp/agent-exit-code || true
+# --- Cleanup stale files from prior runs ---
+rm -f ${sentinelFile} ${outputFile} ${stderrFile}
 
-# --- Phase 2: Cleanup ---
+# --- Phase: ${opts.phase} ---
+cat ${inputFile} | claude \\
+  ${claudeFlags} \\
+  > ${outputFile} 2>${stderrFile}; echo $? > /tmp/${opts.phase}-exit-code || true
+
+# --- Cleanup ---
 cd /vercel/sandbox
 
 # Remove repo-level .claude/ artifacts that Claude Code auto-creates.
@@ -39,7 +40,7 @@ cd /vercel/sandbox
 rm -rf .claude/
 git checkout -- .claude/ 2>/dev/null || true
 
-# --- Phase 3: Signal completion ---
-touch /tmp/agent-done
+# --- Signal completion ---
+touch ${sentinelFile}
 `;
 }
