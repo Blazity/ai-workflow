@@ -112,6 +112,7 @@ You have access to **superpowers skills** installed globally. Use them.
 - Do not refactor code outside the scope of the plan.
 - Do not install new dependencies unless the plan specifies them.
 - Follow existing code conventions (check CLAUDE.md, AGENTS.md if present).
+- Do NOT add \`blazebot/memory\` to \`.gitignore\` unless the user explicitly asks you to. Session memory must be committed to the branch.
 - Do NOT invoke \`requesting-code-review\` — that happens in a separate review phase.
 
 ## When to Ask for Clarification
