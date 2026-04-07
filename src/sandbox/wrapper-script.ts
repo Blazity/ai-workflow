@@ -15,11 +15,11 @@ export interface PhaseScriptOptions {
 export function buildPhaseScript(opts: PhaseScriptOptions): string {
   const { model, inputFile, outputFile, stderrFile, sentinelFile, jsonSchema } = opts;
 
-  let claudeFlags = `--print --model '${model}' --dangerously-skip-permissions`;
+  let claudeFlags = `--print --model '${model}' --dangerously-skip-permissions --output-format json`;
 
   if (jsonSchema) {
     const escapedSchema = jsonSchema.replace(/'/g, "'\\''");
-    claudeFlags += ` --output-format json --json-schema '${escapedSchema}'`;
+    claudeFlags += ` --json-schema '${escapedSchema}'`;
   }
 
   return `#!/bin/bash
