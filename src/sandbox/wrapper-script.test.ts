@@ -20,7 +20,7 @@ describe("buildPhaseScript", () => {
     expect(script).toContain("/tmp/research-stderr.txt");
     expect(script).toContain("/tmp/research-done");
     expect(script).not.toContain("--json-schema");
-    expect(script).not.toContain("--output-format");
+    expect(script).toContain("--output-format json");
   });
 
   it("generates impl phase script with json-schema", () => {

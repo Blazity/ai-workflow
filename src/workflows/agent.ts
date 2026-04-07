@@ -2,6 +2,7 @@ import { sleep } from "workflow";
 import type { AgentOutput } from "../sandbox/agent-runner.js";
 import type { ReviewOutput } from "../sandbox/agent-runner.js";
 import type { PRComment, CheckRunResult } from "../adapters/vcs/types.js";
+import type { PhaseUsage } from "../sandbox/usage.js";
 
 // --- Step Functions ---
 
@@ -210,6 +211,8 @@ export async function agentWorkflow(ticketId: string) {
     await import("../sandbox/context.js");
   const { collectPhaseOutput, pushFromSandbox, fixAndRetryPush, teardownSandbox } =
     await import("../sandbox/poll-agent.js");
+  const { extractUsage, unwrapResearchText, formatUsageReport } =
+    await import("../sandbox/usage.js");
 
   const ticket = await fetchAndValidateTicket(ticketId, env.COLUMN_AI);
   if (!ticket) return;
@@ -280,7 +283,8 @@ export async function agentWorkflow(ticketId: string) {
       }
 
       const researchRaw = await collectPhaseOutput(sandboxId, "/tmp/research-stdout.txt", "/tmp/research-stderr.txt");
-      const research = parseResearchStatus(researchRaw);
+      const researchUsage = extractUsage(researchRaw);
+      const research = parseResearchStatus(unwrapResearchText(researchRaw));
 
       if (research.status === "clarification_needed") {
         const questions = research.body.split("\n").filter((l) => /^\d+\./.test(l.trim()));
@@ -304,6 +308,7 @@ export async function agentWorkflow(ticketId: string) {
       const researchPlanMarkdown = research.body;
 
       // ========== PHASE 2 & 3 LOOP ==========
+      const phaseUsages: Record<string, PhaseUsage | null> = { Research: researchUsage };
       let reviewRetries = 0;
       let lastReviewFeedback: ReviewOutput | undefined;
 
@@ -345,6 +350,8 @@ export async function agentWorkflow(ticketId: string) {
 
         if (implDone) {
           const implRaw = await collectPhaseOutput(sandboxId, "/tmp/impl-stdout.txt", "/tmp/impl-stderr.txt");
+          const implLabel = reviewRetries > 0 ? `Impl retry ${reviewRetries}` : "Impl";
+          phaseUsages[implLabel] = extractUsage(implRaw);
           implOutput = parseAgentOutput(implRaw);
         } else {
           implOutput = { result: "failed", error: "Implementation phase timed out" };
@@ -401,6 +408,8 @@ export async function agentWorkflow(ticketId: string) {
 
         if (reviewDone) {
           const reviewRaw = await collectPhaseOutput(sandboxId, "/tmp/review-stdout.txt", "/tmp/review-stderr.txt");
+          const reviewLabel = reviewRetries > 0 ? `Review retry ${reviewRetries}` : "Review";
+          phaseUsages[reviewLabel] = extractUsage(reviewRaw);
           reviewOutput = parseReviewOutput(reviewRaw);
         } else {
           reviewOutput = { result: "failed", feedback: "", issues: [], error: "Review phase timed out" };
@@ -446,7 +455,8 @@ export async function agentWorkflow(ticketId: string) {
         await createPullRequest(branchName, ticket.title, "");
       }
       await moveTicket(ticketId, env.COLUMN_AI_REVIEW);
-      await notifySlack(`Task ${ticket.identifier} PR ready for review`);
+      const usageReport = formatUsageReport(phaseUsages);
+      await notifySlack(`Task ${ticket.identifier} PR ready for review\n${usageReport}`);
       await unregisterRun(ticket.identifier);
     } finally {
       await teardownSandbox(sandboxId);
