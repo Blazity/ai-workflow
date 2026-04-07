@@ -32,67 +32,7 @@ vi.mock("../../env.js", () => ({
   },
 }));
 
-import { checkAgentDone, collectAgentOutput, pushFromSandbox, fixAndRetryPush, teardownSandbox } from "./poll-agent.js";
-
-describe("checkAgentDone", () => {
-  beforeEach(() => vi.clearAllMocks());
-
-  it("returns false when sentinel file does not exist", async () => {
-    mockRunCommand.mockResolvedValue({ exitCode: 1 });
-
-    const result = await checkAgentDone("sbx-test-123");
-    expect(result).toBe(false);
-  });
-
-  it("returns true when sentinel file exists", async () => {
-    mockRunCommand.mockResolvedValue({ exitCode: 0 });
-
-    const result = await checkAgentDone("sbx-test-123");
-    expect(result).toBe(true);
-  });
-
-  it("returns 'stopped' when sandbox is not running", async () => {
-    const { Sandbox } = await import("@vercel/sandbox");
-    (Sandbox.get as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
-      sandboxId: "sbx-test-123",
-      status: "stopped",
-      runCommand: mockRunCommand,
-    });
-
-    const result = await checkAgentDone("sbx-test-123");
-    expect(result).toBe("stopped");
-  });
-});
-
-describe("collectAgentOutput", () => {
-  beforeEach(() => vi.clearAllMocks());
-
-  it("returns failure when sandbox is unreachable", async () => {
-    const { Sandbox } = await import("@vercel/sandbox");
-    (Sandbox.get as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error("gone"));
-
-    const result = await collectAgentOutput("sbx-test-123");
-
-    expect(result.output.result).toBe("failed");
-    expect(result.output.error).toContain("unreachable");
-  });
-
-  it("reads stdout and stderr and parses agent output", async () => {
-    const mockStdout = vi.fn();
-    mockRunCommand.mockImplementation(() => ({
-      exitCode: 0,
-      stdout: mockStdout,
-    }));
-
-    mockStdout
-      .mockResolvedValueOnce(JSON.stringify({ result: "implemented", summary: "Done" })) // stdout
-      .mockResolvedValueOnce(""); // stderr
-
-    const result = await collectAgentOutput("sbx-test-123");
-
-    expect(result.output.result).toBe("implemented");
-  });
-});
+import { pushFromSandbox, fixAndRetryPush, teardownSandbox, checkPhaseDone, collectPhaseOutput } from "./poll-agent.js";
 
 describe("pushFromSandbox", () => {
   beforeEach(() => vi.clearAllMocks());
@@ -259,5 +199,90 @@ describe("teardownSandbox", () => {
     (Sandbox.get as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error("gone"));
 
     await expect(teardownSandbox("sbx-test-123")).resolves.not.toThrow();
+  });
+});
+
+describe("checkPhaseDone", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("returns true when sentinel file exists", async () => {
+    mockRunCommand.mockResolvedValue({ exitCode: 0 });
+
+    const result = await checkPhaseDone("sbx-test-123", "/tmp/phase-1-done");
+    expect(result).toBe(true);
+    expect(mockRunCommand).toHaveBeenCalledWith("test", ["-f", "/tmp/phase-1-done"]);
+  });
+
+  it("returns false when sentinel file is missing", async () => {
+    mockRunCommand.mockResolvedValue({ exitCode: 1 });
+
+    const result = await checkPhaseDone("sbx-test-123", "/tmp/phase-1-done");
+    expect(result).toBe(false);
+  });
+
+  it("returns 'stopped' when sandbox is not running", async () => {
+    const { Sandbox } = await import("@vercel/sandbox");
+    (Sandbox.get as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      sandboxId: "sbx-test-123",
+      status: "stopped",
+      runCommand: mockRunCommand,
+    });
+
+    const result = await checkPhaseDone("sbx-test-123", "/tmp/phase-1-done");
+    expect(result).toBe("stopped");
+  });
+
+  it("returns 'stopped' when sandbox is unreachable", async () => {
+    const { Sandbox } = await import("@vercel/sandbox");
+    (Sandbox.get as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error("gone"));
+
+    const result = await checkPhaseDone("sbx-test-123", "/tmp/phase-1-done");
+    expect(result).toBe("stopped");
+  });
+});
+
+describe("collectPhaseOutput", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("reads from custom output file paths", async () => {
+    const mockStdout = vi.fn();
+    mockRunCommand.mockImplementation(() => ({
+      exitCode: 0,
+      stdout: mockStdout,
+    }));
+
+    mockStdout
+      .mockResolvedValueOnce("phase output content") // stdout file
+      .mockResolvedValueOnce(""); // stderr file
+
+    const result = await collectPhaseOutput(
+      "sbx-test-123",
+      "/tmp/phase-1-stdout.txt",
+      "/tmp/phase-1-stderr.txt",
+    );
+
+    expect(result).toBe("phase output content");
+    expect(mockRunCommand).toHaveBeenCalledWith("cat", ["/tmp/phase-1-stdout.txt"]);
+    expect(mockRunCommand).toHaveBeenCalledWith("cat", ["/tmp/phase-1-stderr.txt"]);
+  });
+
+  it("returns stderr when stdout is empty", async () => {
+    const mockStdout = vi.fn();
+    mockRunCommand.mockImplementation(() => ({
+      exitCode: 0,
+      stdout: mockStdout,
+    }));
+
+    mockStdout
+      .mockResolvedValueOnce("") // stdout file empty
+      .mockResolvedValueOnce("error details from phase"); // stderr file
+
+    const result = await collectPhaseOutput(
+      "sbx-test-123",
+      "/tmp/phase-1-stdout.txt",
+      "/tmp/phase-1-stderr.txt",
+    );
+
+    expect(result).toBe("error details from phase");
   });
 });

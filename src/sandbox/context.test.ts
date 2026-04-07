@@ -1,116 +1,135 @@
 import { describe, it, expect } from "vitest";
-import { assembleImplementationContext, assembleFixingFeedbackContext, formatCheckResults } from "./context.js";
+import {
+  assembleResearchPlanContext,
+  assembleImplementationContext,
+  assembleImplementationRetryContext,
+  assembleReviewContext,
+  formatCheckResults,
+} from "./context.js";
 
-describe("assembleImplementationContext", () => {
-  it("assembles requirements.md for implementation", () => {
-    const result = assembleImplementationContext({
+describe("assembleResearchPlanContext", () => {
+  it("assembles context for new ticket (no PR feedback)", () => {
+    const result = assembleResearchPlanContext({
       ticket: {
         identifier: "TEST-1",
         title: "Add login page",
-        description: "Build a login page with OAuth",
-        acceptanceCriteria: "- User can log in\n- User can log out",
-        comments: [
-          { author: "Alice", body: "Use OAuth2", createdAt: "2026-03-20T10:00:00Z" },
-        ],
-      },
-      prompt: "You are an implementation agent...",
-    });
-
-    expect(result).toContain("# Requirements");
-    expect(result).toContain("## Ticket ID");
-    expect(result).toContain("TEST-1");
-    expect(result.indexOf("## Ticket ID")).toBeLessThan(result.indexOf("## Ticket\n"));
-    expect(result).toContain("Add login page");
-    expect(result).toContain("Build a login page with OAuth");
-    expect(result).toContain("User can log in");
-    expect(result).toContain("Alice: Use OAuth2");
-    expect(result).toContain("You are an implementation agent...");
-  });
-});
-
-describe("assembleFixingFeedbackContext", () => {
-  it("assembles requirements.md for fixing feedback", () => {
-    const result = assembleFixingFeedbackContext({
-      ticket: {
-        identifier: "TEST-2",
-        title: "Add login page",
         description: "Build a login page",
-        acceptanceCriteria: "",
+        acceptanceCriteria: "User can log in",
         comments: [],
       },
-      prompt: "You are a review-fix agent...",
-      prComments: [
-        { author: "Bob", body: "Fix the typo on line 5", liked: true },
-      ],
-      hasConflicts: true,
-      checkResults: [],
+      prompt: "You are a research agent...",
+      branchName: "blazebot/test-1",
     });
 
-    expect(result).toContain("# Requirements");
     expect(result).toContain("## Ticket ID");
-    expect(result).toContain("TEST-2");
-    expect(result.indexOf("## Ticket ID")).toBeLessThan(result.indexOf("## Ticket\n"));
-    expect(result).toContain("## PR Review Feedback");
-    expect(result).toContain("Fix the typo on line 5");
-    expect(result).toContain("## CI/CD Check Results");
-    expect(result).toContain("## Merge Conflicts");
-    expect(result).toContain("You are a review-fix agent...");
+    expect(result).toContain("TEST-1");
+    expect(result).toContain("## Branch");
+    expect(result).toContain("blazebot/test-1");
+    expect(result).toContain("You are a research agent...");
+    expect(result).not.toContain("## PR Review Feedback");
   });
 
-  it("renders line-coupled comments with file path and line range", () => {
-    const result = assembleFixingFeedbackContext({
+  it("assembles context with PR feedback for review-fix scenario", () => {
+    const result = assembleResearchPlanContext({
       ticket: {
-        identifier: "TEST-3",
+        identifier: "TEST-2",
         title: "Fix auth",
         description: "Fix auth module",
         acceptanceCriteria: "",
         comments: [],
       },
       prompt: "prompt",
+      branchName: "blazebot/test-2",
       prComments: [
-        { author: "Bob", body: "Use a constant", liked: false, filePath: "src/lib/auth.ts", startLine: 42, endLine: 45 },
-        { author: "Alice", body: "Looks good but add error handling", liked: true, filePath: "src/components/Form.tsx", startLine: 12, endLine: 12 },
-        { author: "Charlie", body: "Overall looks good", liked: false },
+        { author: "Bob", body: "Fix the null check", liked: false },
       ],
-      hasConflicts: false,
-      checkResults: [],
+      checkResults: [
+        { name: "test", status: "completed", conclusion: "failure", logs: "FAIL" },
+      ],
+      hasConflicts: true,
     });
 
-    expect(result).toContain("### src/lib/auth.ts (lines 42-45)");
-    expect(result).toContain("Bob: Use a constant");
-    expect(result).toContain("### src/components/Form.tsx (line 12)");
-    expect(result).toContain("Alice (liked): Looks good but add error handling");
-    expect(result).toContain("Charlie: Overall looks good");
-    // Line-coupled comments should appear before general comments
-    expect(result.indexOf("src/components/Form.tsx")).toBeLessThan(result.indexOf("Charlie: Overall looks good"));
+    expect(result).toContain("## PR Review Feedback");
+    expect(result).toContain("Fix the null check");
+    expect(result).toContain("## CI/CD Check Results");
+    expect(result).toContain("### Failed: test");
+    expect(result).toContain("## Merge Conflicts");
   });
+});
 
-  it("includes CI/CD check results section between PR feedback and merge conflicts", () => {
-    const result = assembleFixingFeedbackContext({
+describe("assembleImplementationContext (new)", () => {
+  it("assembles context with research plan markdown", () => {
+    const result = assembleImplementationContext({
       ticket: {
-        identifier: "TEST-4",
-        title: "Fix tests",
-        description: "Fix failing tests",
-        acceptanceCriteria: "",
+        identifier: "TEST-1",
+        title: "Add login page",
+        description: "Build a login page",
+        acceptanceCriteria: "User can log in",
+        comments: [],
+      },
+      prompt: "You are an implementation agent...",
+      researchPlanMarkdown: "# Plan\n1. Create LoginForm component\n2. Add route handler",
+    });
+
+    expect(result).toContain("## Ticket ID");
+    expect(result).toContain("TEST-1");
+    expect(result).toContain("## Research & Plan");
+    expect(result).toContain("# Plan");
+    expect(result).toContain("Create LoginForm component");
+    expect(result).toContain("You are an implementation agent...");
+  });
+});
+
+describe("assembleImplementationRetryContext", () => {
+  it("includes plan and review feedback", () => {
+    const result = assembleImplementationRetryContext({
+      ticket: {
+        identifier: "TEST-1",
+        title: "Add login page",
+        description: "Build a login page",
+        acceptanceCriteria: "User can log in",
         comments: [],
       },
       prompt: "prompt",
-      prComments: [],
-      hasConflicts: false,
-      checkResults: [
-        { name: "lint", status: "completed", conclusion: "success" },
-        { name: "test", status: "completed", conclusion: "failure", logs: "FAIL src/app.test.ts\nExpected true, got false" },
-      ],
+      researchPlanMarkdown: "# Plan\n1. Create LoginForm",
+      reviewFeedback: {
+        result: "changes_requested",
+        feedback: "Missing error handling",
+        issues: [
+          { file: "src/LoginForm.tsx", description: "No null check", severity: "critical" },
+        ],
+      },
     });
 
-    const prFeedbackIdx = result.indexOf("## PR Review Feedback");
-    const ciIdx = result.indexOf("## CI/CD Check Results");
-    const mergeIdx = result.indexOf("## Merge Conflicts");
-    expect(ciIdx).toBeGreaterThan(prFeedbackIdx);
-    expect(ciIdx).toBeLessThan(mergeIdx);
-    expect(result).toContain("Passed: lint");
-    expect(result).toContain("### Failed: test");
-    expect(result).toContain("FAIL src/app.test.ts");
+    expect(result).toContain("## Research & Plan");
+    expect(result).toContain("Create LoginForm");
+    expect(result).toContain("## Review Feedback");
+    expect(result).toContain("Missing error handling");
+    expect(result).toContain("src/LoginForm.tsx");
+    expect(result).toContain("No null check");
+    expect(result).toContain("critical");
+  });
+});
+
+describe("assembleReviewContext", () => {
+  it("includes plan and git diff", () => {
+    const result = assembleReviewContext({
+      ticket: {
+        identifier: "TEST-1",
+        title: "Add login page",
+        description: "Build a login page",
+        acceptanceCriteria: "User can log in",
+        comments: [],
+      },
+      prompt: "You are a review agent...",
+      researchPlanMarkdown: "# Plan\n1. Create LoginForm",
+      gitDiff: "diff --git a/src/LoginForm.tsx b/src/LoginForm.tsx\n+export function LoginForm() {}",
+    });
+
+    expect(result).toContain("## Research & Plan");
+    expect(result).toContain("## Git Diff");
+    expect(result).toContain("+export function LoginForm()");
+    expect(result).toContain("You are a review agent...");
   });
 });
 

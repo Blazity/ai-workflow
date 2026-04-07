@@ -1,6 +1,5 @@
 import type { Sandbox as SandboxType } from "@vercel/sandbox";
 import { getSandboxCredentials } from "./credentials.js";
-import { buildWrapperScript } from "./wrapper-script.js";
 
 /**
  * Skills installed globally in the sandbox (~/.claude/skills/).
@@ -26,12 +25,51 @@ export interface SandboxConfig {
 
 type SandboxInstance = Awaited<ReturnType<typeof SandboxType.create>>;
 
+/** Minimal interface for sandbox objects that support runCommand (works with both Sandbox.create and Sandbox.get). */
+interface RunnableSandbox {
+  runCommand: SandboxInstance["runCommand"];
+}
+
+/**
+ * Configures or disables the commit-guard stop hook in a sandbox.
+ * Standalone function so both SandboxManager and workflow steps can call it
+ * without type mismatches between Sandbox.create() and Sandbox.get().
+ */
+export async function configureStopHookInSandbox(sandbox: RunnableSandbox, enabled: boolean): Promise<void> {
+  if (enabled) {
+    await sandbox.runCommand("bash", [
+      "-c",
+      [
+        `mkdir -p ~/.claude`,
+        `cat > ~/.claude/commit-guard.sh << 'SCRIPT'`,
+        `#!/bin/bash`,
+        `input=$(cat)`,
+        `if echo "$input" | grep -q '"stop_hook_active":true'; then exit 0; fi`,
+        `changes=$(git status --porcelain | grep -v '^.. \\.claude/' | grep -v '^?? \\.claude/')`,
+        `if [ -n "$changes" ]; then`,
+        `  echo '{"decision":"block","reason":"You have uncommitted changes. You MUST either commit all changes with a descriptive message or revert them before stopping."}' >&2`,
+        `  exit 2`,
+        `fi`,
+        `SCRIPT`,
+        `chmod +x ~/.claude/commit-guard.sh`,
+        `cat > ~/.claude/settings.json << 'JSON'`,
+        `{"hooks":{"Stop":[{"matcher":"","hooks":[{"type":"command","command":"bash ~/.claude/commit-guard.sh"}]}]}}`,
+        `JSON`,
+      ].join("\n"),
+    ]);
+  } else {
+    await sandbox.runCommand("bash", [
+      "-c",
+      `mkdir -p ~/.claude && echo '{}' > ~/.claude/settings.json`,
+    ]);
+  }
+}
+
 export class SandboxManager {
   constructor(private config: SandboxConfig) {}
 
   async provision(
     branch: string,
-    requirementsMd: string,
     /** If set, fetches and merges this branch (e.g. "main") so the agent can resolve conflicts. */
     mergeBase?: string,
   ): Promise<SandboxInstance> {
@@ -118,39 +156,8 @@ export class SandboxManager {
       ]);
     }
 
-    // Configure Stop hook — forces agent to commit or discard before exiting.
-    // Written to ~/.claude/ (user-level) so it doesn't pollute the repo working tree.
-    await sandbox.runCommand("bash", [
-      "-c",
-      [
-        `mkdir -p ~/.claude`,
-        `cat > ~/.claude/commit-guard.sh << 'SCRIPT'`,
-        `#!/bin/bash`,
-        `input=$(cat)`,
-        `if echo "$input" | grep -q '"stop_hook_active":true'; then exit 0; fi`,
-        `changes=$(git status --porcelain | grep -v '^.. \\.claude/' | grep -v '^?? \\.claude/' | grep -v 'requirements\\.md')`,
-        `if [ -n "$changes" ]; then`,
-        `  echo '{"decision":"block","reason":"You have uncommitted changes. You MUST either commit all changes with a descriptive message or revert them before stopping."}' >&2`,
-        `  exit 2`,
-        `fi`,
-        `SCRIPT`,
-        `chmod +x ~/.claude/commit-guard.sh`,
-        `cat > ~/.claude/settings.json << 'JSON'`,
-        `{"hooks":{"Stop":[{"matcher":"","hooks":[{"type":"command","command":"bash ~/.claude/commit-guard.sh"}]}]}}`,
-        `JSON`,
-      ].join("\n"),
-    ]);
-
     // Install skills globally (outside the client repo)
     await this.installGlobalSkills(sandbox);
-
-    // Write requirements.md and wrapper script for detached execution
-    const wrapperScript = buildWrapperScript({ model: this.config.claudeModel });
-    await sandbox.writeFiles([
-      { path: "/tmp/requirements.md", content: Buffer.from(requirementsMd) },
-      { path: "/tmp/agent-wrapper.sh", content: Buffer.from(wrapperScript) },
-    ]);
-    await sandbox.runCommand("chmod", ["+x", "/tmp/agent-wrapper.sh"]);
 
     return sandbox;
   }
@@ -165,6 +172,10 @@ export class SandboxManager {
         "-y", "skills", "add", repo, "--skill", skill, "--yes", "-g",
       ]);
     }
+  }
+
+  async configureStopHook(sandbox: SandboxInstance, enabled: boolean): Promise<void> {
+    await configureStopHookInSandbox(sandbox, enabled);
   }
 
   async teardown(sandbox: SandboxInstance): Promise<void> {
