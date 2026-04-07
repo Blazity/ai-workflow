@@ -9,12 +9,8 @@ vi.mock("workflow/api", () => ({
   getRun: (...args: any[]) => mockGetRun(...args),
 }));
 
-vi.mock("../workflows/implementation.js", () => ({
-  implementationWorkflow: "implementationWorkflow_sentinel",
-}));
-
-vi.mock("../workflows/review-fix.js", () => ({
-  reviewFixWorkflow: "reviewFixWorkflow_sentinel",
+vi.mock("../workflows/agent.js", () => ({
+  agentWorkflow: "agentWorkflow_sentinel",
 }));
 
 const mockSandboxList = vi.fn();
@@ -102,7 +98,7 @@ describe("dispatchTicket", () => {
     mockStart.mockResolvedValue({ runId: "run_123" });
   });
 
-  it("dispatches implementation workflow when no PR exists", async () => {
+  it("dispatches agentWorkflow for any ticket", async () => {
     const adapters = makeAdapters();
     const { dispatchTicket } = await import("./dispatch.js");
 
@@ -114,32 +110,8 @@ describe("dispatchTicket", () => {
       expect.stringMatching(/^claiming:\d+$/),
     );
     expect(adapters.issueTracker.fetchTicket).toHaveBeenCalledWith("PROJ-42");
-    expect(adapters.vcs.findPR).toHaveBeenCalledWith("blazebot/proj-42");
-    expect(mockStart).toHaveBeenCalledWith("implementationWorkflow_sentinel", [
+    expect(mockStart).toHaveBeenCalledWith("agentWorkflow_sentinel", [
       "ticket-001",
-    ]);
-    expect(adapters.runRegistry.register).toHaveBeenCalledWith(
-      "PROJ-42",
-      "run_123",
-    );
-  });
-
-  it("dispatches review-fix workflow when PR exists", async () => {
-    const adapters = makeAdapters({
-      findPR: vi.fn().mockResolvedValue({
-        id: 7,
-        url: "https://github.com/pr/7",
-        branch: "blazebot/proj-42",
-      }),
-    });
-    const { dispatchTicket } = await import("./dispatch.js");
-
-    const result = await dispatchTicket("PROJ-42", adapters, 5);
-
-    expect(result).toEqual({ started: true, runId: "run_123" });
-    expect(mockStart).toHaveBeenCalledWith("reviewFixWorkflow_sentinel", [
-      "ticket-001",
-      "blazebot/proj-42",
     ]);
     expect(adapters.runRegistry.register).toHaveBeenCalledWith(
       "PROJ-42",

@@ -3,6 +3,9 @@ import {
   parseAgentOutput,
   AGENT_SCHEMA,
   type AgentOutput,
+  parseResearchStatus,
+  parseReviewOutput,
+  REVIEW_SCHEMA,
 } from "./agent-runner.js";
 
 describe("parseAgentOutput", () => {
@@ -121,5 +124,99 @@ describe("parseAgentOutput", () => {
 describe("AGENT_SCHEMA", () => {
   it("is valid JSON", () => {
     expect(() => JSON.parse(AGENT_SCHEMA)).not.toThrow();
+  });
+});
+
+describe("parseResearchStatus", () => {
+  it("extracts completed status", () => {
+    const raw = "STATUS: completed\n\n# Implementation Plan\n1. Create foo.ts";
+    const { status, body } = parseResearchStatus(raw);
+    expect(status).toBe("completed");
+    expect(body).toContain("# Implementation Plan");
+  });
+
+  it("extracts clarification_needed status", () => {
+    const raw = "STATUS: clarification_needed\n\n1. What database?\n2. Which auth?";
+    const { status, body } = parseResearchStatus(raw);
+    expect(status).toBe("clarification_needed");
+    expect(body).toContain("What database?");
+  });
+
+  it("extracts failed status", () => {
+    const raw = "STATUS: failed\n\nCould not access repository";
+    const { status, body } = parseResearchStatus(raw);
+    expect(status).toBe("failed");
+  });
+
+  it("defaults to failed when no STATUS line", () => {
+    const raw = "Here is my analysis of the codebase...";
+    const { status, body } = parseResearchStatus(raw);
+    expect(status).toBe("failed");
+    expect(body).toContain("analysis");
+  });
+
+  it("handles STATUS line with extra whitespace", () => {
+    const raw = "  STATUS:   completed  \n\nPlan here";
+    const { status } = parseResearchStatus(raw);
+    expect(status).toBe("completed");
+  });
+});
+
+describe("parseReviewOutput", () => {
+  it("parses approved result", () => {
+    const raw = JSON.stringify({
+      result: "approved",
+      feedback: "Looks good",
+      issues: [],
+    });
+    const output = parseReviewOutput(raw);
+    expect(output.result).toBe("approved");
+    expect(output.feedback).toBe("Looks good");
+  });
+
+  it("parses changes_requested result with issues", () => {
+    const raw = JSON.stringify({
+      result: "changes_requested",
+      feedback: "Several issues found",
+      issues: [
+        { file: "src/foo.ts", description: "Missing null check", severity: "critical" },
+      ],
+    });
+    const output = parseReviewOutput(raw);
+    expect(output.result).toBe("changes_requested");
+    expect(output.issues).toHaveLength(1);
+    expect(output.issues[0].severity).toBe("critical");
+  });
+
+  it("returns failed on unparseable output", () => {
+    const output = parseReviewOutput("not json");
+    expect(output.result).toBe("failed");
+    expect(output.error).toBeDefined();
+  });
+
+  it("returns failed on empty output", () => {
+    const output = parseReviewOutput("");
+    expect(output.result).toBe("failed");
+  });
+
+  it("extracts from result envelope", () => {
+    const envelope = JSON.stringify({
+      type: "result",
+      subtype: "success",
+      is_error: false,
+      structured_output: {
+        result: "approved",
+        feedback: "All good",
+        issues: [],
+      },
+    });
+    const output = parseReviewOutput(envelope);
+    expect(output.result).toBe("approved");
+  });
+});
+
+describe("REVIEW_SCHEMA", () => {
+  it("is valid JSON", () => {
+    expect(() => JSON.parse(REVIEW_SCHEMA)).not.toThrow();
   });
 });

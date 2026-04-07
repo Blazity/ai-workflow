@@ -103,3 +103,111 @@ export function parseAgentOutput(raw: string): AgentOutput {
     error: `Agent output was not structured JSON. Output starts with: ${raw.slice(0, 500)}`,
   };
 }
+
+// --- Research Status Parser ---
+
+export type ResearchStatus = "completed" | "clarification_needed" | "failed";
+
+export interface ResearchResult {
+  status: ResearchStatus;
+  body: string;
+}
+
+const VALID_RESEARCH_STATUSES: ResearchStatus[] = ["completed", "clarification_needed", "failed"];
+
+export function parseResearchStatus(raw: string): ResearchResult {
+  const lines = raw.split("\n");
+  const firstLine = lines[0]?.trim() ?? "";
+  const match = firstLine.match(/^STATUS:\s*(\S+)/i);
+
+  if (match && VALID_RESEARCH_STATUSES.includes(match[1] as ResearchStatus)) {
+    const body = lines.slice(1).join("\n").trim();
+    return { status: match[1] as ResearchStatus, body };
+  }
+
+  return { status: "failed", body: raw };
+}
+
+// --- Review Output Schema ---
+
+const reviewOutputSchema = z.object({
+  result: z.enum(["approved", "changes_requested", "failed"]),
+  feedback: z.string(),
+  issues: z.array(z.object({
+    file: z.string(),
+    description: z.string(),
+    severity: z.enum(["critical", "suggestion"]),
+  })),
+  error: z.string().optional(),
+});
+
+export type ReviewOutput = z.infer<typeof reviewOutputSchema>;
+
+export const REVIEW_SCHEMA = JSON.stringify({
+  type: "object",
+  properties: {
+    result: {
+      type: "string",
+      enum: ["approved", "changes_requested", "failed"],
+    },
+    feedback: { type: "string" },
+    issues: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          file: { type: "string" },
+          description: { type: "string" },
+          severity: { type: "string", enum: ["critical", "suggestion"] },
+        },
+        required: ["file", "description", "severity"],
+      },
+    },
+    error: { type: "string" },
+  },
+  required: ["result", "feedback", "issues"],
+});
+
+export function parseReviewOutput(raw: string): ReviewOutput {
+  if (!raw.trim()) {
+    return { result: "failed", feedback: "", issues: [], error: "Review agent produced no output" };
+  }
+
+  // Direct parse
+  try {
+    const direct = reviewOutputSchema.safeParse(JSON.parse(raw));
+    if (direct.success) return direct.data;
+  } catch {}
+
+  // Stream-json / result-envelope format
+  const lines = raw.split("\n").filter(Boolean);
+  for (let i = lines.length - 1; i >= 0; i--) {
+    try {
+      const event = JSON.parse(lines[i]);
+
+      if (event.type === "result" && event.structured_output != null) {
+        const parsed = reviewOutputSchema.safeParse(event.structured_output);
+        if (parsed.success) return parsed.data;
+      }
+
+      const direct = reviewOutputSchema.safeParse(event);
+      if (direct.success) return direct.data;
+    } catch {}
+  }
+
+  // Fallback: extract JSON objects
+  const objects = raw.matchAll(/\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}/g);
+  for (const [candidate] of objects) {
+    try {
+      const result = reviewOutputSchema.safeParse(JSON.parse(candidate));
+      if (result.success) return result.data;
+    } catch {}
+  }
+
+  return {
+    result: "failed",
+    feedback: "",
+    issues: [],
+    error: `Review output was not structured JSON. Output starts with: ${raw.slice(0, 500)}`,
+  };
+}
