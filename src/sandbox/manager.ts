@@ -151,17 +151,19 @@ export class SandboxManager {
     // Write auth env vars to a file that phase scripts can source.
     // Sandbox.create({ env }) does NOT propagate vars to runCommand sessions,
     // so we persist them to disk and source before every `claude` invocation.
+    // NOTE: Only auth credentials go here. CLAUDE_MODEL is passed via the
+    // explicit --model flag in phase scripts and poll-agent to keep one source of truth.
     const envLines: string[] = [];
     if (this.config.claudeCodeOauthToken) {
       envLines.push(`export CLAUDE_CODE_OAUTH_TOKEN=${this.shellQuote(this.config.claudeCodeOauthToken)}`);
     } else if (this.config.anthropicApiKey) {
       envLines.push(`export ANTHROPIC_API_KEY=${this.shellQuote(this.config.anthropicApiKey)}`);
     }
-    envLines.push(`export CLAUDE_MODEL=${this.shellQuote(this.config.claudeModel)}`);
 
     await sandbox.writeFiles([
       { path: "/tmp/agent-env.sh", content: Buffer.from(envLines.join("\n") + "\n") },
     ]);
+    await sandbox.runCommand("chmod", ["600", "/tmp/agent-env.sh"]);
 
     // Skip interactive onboarding (required for headless auth — both OAuth and API key)
     await sandbox.runCommand("bash", [

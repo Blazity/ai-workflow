@@ -84,7 +84,7 @@ describe("SandboxManager", () => {
     const content = Buffer.from(files[0].content).toString();
     expect(content).toContain("ANTHROPIC_API_KEY");
     expect(content).toContain("sk-ant-test");
-    expect(content).toContain("CLAUDE_MODEL");
+    expect(content).not.toContain("CLAUDE_MODEL");
   });
 
   it("writes CLAUDE_CODE_OAUTH_TOKEN when OAuth token is provided", async () => {
