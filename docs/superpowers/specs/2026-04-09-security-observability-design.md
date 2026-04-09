@@ -1,6 +1,6 @@
 # Security Observability Spec
 
-Security observability for the AI workflow system (AWS on-prem). Monitors LLM behavior using Arthur Engine for content analysis, AWS-native tooling for network monitoring, and custom Nitro logic for behavioral anomalies.
+Security observability for the AI workflow system (AWS on-prem).
 
 Target deployment: AWS on-prem architecture (Fargate agents, EC2 Nitro server).
 
@@ -174,12 +174,12 @@ Jira Ticket Discovered
 
 Four severity tiers with escalation:
 
-| Severity | Triggers | Action |
-|----------|----------|--------|
-| Critical | Prompt injection detected, secrets in output, unauthorized network connection, data exfiltration | Kill sandbox, cancel workflow, move ticket to "Security Review" column, Slack alert |
-| High | PII in generated code (SSN, credit card), OWASP vulnerability patterns, sensitive business data leak | Block PR creation, move ticket to "Security Review", Slack alert |
-| Medium | PII in inputs (Jira ticket), mild anomalies in tool usage, elevated token spend | Create PR with `security-review` label + comment describing the finding, Slack notification |
-| Low | Minor behavioral anomalies (long duration, unusual output size) | Log only, included in Slack usage report |
+| Severity | Triggers                                                                                             | Action                                                                                      |
+| -------- | ---------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| Critical | Prompt injection detected, secrets in output, unauthorized network connection, data exfiltration     | Kill sandbox, cancel workflow, move ticket to "Security Review" column, Slack alert         |
+| High     | PII in generated code (SSN, credit card), OWASP vulnerability patterns, sensitive business data leak | Block PR creation, move ticket to "Security Review", Slack alert                            |
+| Medium   | PII in inputs (Jira ticket), mild anomalies in tool usage, elevated token spend                      | Create PR with `security-review` label + comment describing the finding, Slack notification |
+| Low      | Minor behavioral anomalies (long duration, unusual output size)                                      | Log only, included in Slack usage report                                                    |
 
 **Escalation rule:** If the same ticket triggers 2+ medium findings across phases, auto-escalate to high (block PR).
 
@@ -187,14 +187,40 @@ Four severity tiers with escalation:
 
 Three independent streams unified by Slack alerting:
 
-| Stream | Tool | Scope |
-|--------|------|-------|
-| Content analysis | Arthur Engine | Prompts, responses, generated code — prompt injection, PII, secrets, toxicity, code safety |
-| Network monitoring | AWS (VPC Flow Logs, DNS query logging, CloudWatch) | Outbound connections, DNS resolution, traffic volume, unauthorized endpoints |
-| Behavioral analysis | Custom Nitro logic | Tool usage patterns, execution duration, output size, retry storms, token usage |
+| Stream              | Tool                                               | Scope                                                                                      |
+| ------------------- | -------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| Content analysis    | Arthur Engine                                      | Prompts, responses, generated code — prompt injection, PII, secrets, toxicity, code safety |
+| Network monitoring  | AWS (VPC Flow Logs, DNS query logging, CloudWatch) | Outbound connections, DNS resolution, traffic volume, unauthorized endpoints               |
+| Behavioral analysis | Custom Nitro logic                                 | Tool usage patterns, execution duration, output size, retry storms, token usage            |
 
 ## WebFetch Strategy
 
 No domain allowlist. The agent can fetch any URL during research. All fetched content is scanned for prompt injection patterns by Arthur Engine before it enters the LLM context. If injection is detected, the sandbox is killed (critical severity).
 
 Rationale: a strict allowlist would break the research phase since the agent needs to read arbitrary documentation, Stack Overflow, npm registries, etc.
+
+## Debug Mode
+
+On-demand deep inspection mode for investigating suspicious agent behavior or post-incident analysis. Not always-on — toggled per ticket or per workflow run to avoid performance/cost overhead.
+
+**Activation:** Set `DEBUG_MODE=true` as an env override on the ECS RunTask call. Can be triggered:
+
+- Manually — operator flags a ticket ID for debug mode via Slack command or API call
+- Automatically — when a medium+ severity finding triggers, the next retry (if any) runs in debug mode
+
+**What debug mode enables:**
+
+| Capability | What it captures | How |
+|---|---|---|
+| Full prompt logging | Complete prompts sent to Claude, including system prompt, ticket context, and all tool results | Capture stdin of the `claude --print` command |
+| Full response logging | Complete LLM responses, including reasoning and tool calls | Already captured via stdout — debug mode preserves the raw unredacted output |
+| Tool call trace | Every tool invocation (WebFetch URLs, file reads, file writes, bash commands) with timestamps | Parse Claude Code JSON output for tool-use events |
+| Network packet capture | Full TCP payload logging for all outbound connections from the container | Run `tcpdump` as a sidecar process in the Fargate task, write pcap to EFS |
+| File system diff | Snapshot of all file changes at each tool call, not just the final diff | Git commit after each tool call via Claude Code end-hook, inspect the commit log post-run |
+| Environment dump | All non-secret env vars visible to the agent at startup | Log at container entry point, before claude starts |
+
+**Data retention:** Debug artifacts are written to `/workspace/$RUN_ID/.debug/` on EFS. Retained for 7 days (configurable via `DEBUG_RETENTION_DAYS`), then cleaned up by the daily EFS sweep.
+
+**Access control:** Debug output may contain sensitive data (full prompts, network payloads). Access restricted to operators with security review permissions. Debug artifacts are never included in Slack notifications — only a link to the EFS path.
+
+**Performance impact:** Network packet capture and per-tool-call git commits add overhead. Expected ~10-20% increase in phase duration. This is acceptable since debug mode is not always-on.
