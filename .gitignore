@@ -10,3 +10,4 @@ dist/
 .env*.local
 .workflow-data/
 .env.e2e
+.worktrees/
