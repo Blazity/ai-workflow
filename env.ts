@@ -48,6 +48,9 @@ export const env = createEnv({
     // Cron
     CRON_SECRET: z.string().min(1).optional(),
 
+    // Jira Webhook
+    JIRA_WEBHOOK_SECRET: z.string().min(1).optional(),
+
     // Redis (run registry)
     AI_WORKFLOW_KV_REST_API_URL: z.string().url(),
     AI_WORKFLOW_KV_REST_API_TOKEN: z.string().min(1),
