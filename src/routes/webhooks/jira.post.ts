@@ -20,6 +20,8 @@ import { logger } from "../../lib/logger.js";
  * eliminating the up-to-1-minute polling delay.
  */
 export default defineEventHandler(async (event) => {
+  console.log("[webhook] all headers:", JSON.stringify(event.node.req.headers, null, 2));
+
   const rawBody = await readRawBody(event, "utf8");
 
   verifyWebhookSignature(
