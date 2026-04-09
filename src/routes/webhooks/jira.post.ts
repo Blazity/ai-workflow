@@ -1,4 +1,5 @@
-import { defineEventHandler, readBody, getHeader, createError } from "h3";
+import { createHmac, timingSafeEqual } from "node:crypto";
+import { defineEventHandler, readRawBody, getHeader, createError } from "h3";
 import { env } from "../../../env.js";
 import { createAdapters } from "../../lib/adapters.js";
 import { dispatchTicket } from "../../lib/dispatch.js";
@@ -8,17 +9,25 @@ import { logger } from "../../lib/logger.js";
  * Jira webhook handler — triggers the same dispatch logic as the cron poller.
  *
  * Configure in Jira (Settings → System → Webhooks) with:
- *   URL:     https://<your-domain>/webhooks/jira
- *   Headers: Authorization: Bearer <JIRA_WEBHOOK_SECRET>
- *   Events:  Issue updated
+ *   URL:    https://<your-domain>/webhooks/jira
+ *   Secret: <JIRA_WEBHOOK_SECRET>
+ *   Events: Issue updated
+ *
+ * Jira signs the payload with HMAC-SHA256 and sends it in the
+ * X-Hub-Signature header (format: "sha256=<hex>").
  *
  * The webhook fires immediately when a ticket is moved to the AI column,
  * eliminating the up-to-1-minute polling delay.
  */
 export default defineEventHandler(async (event) => {
-  verifyWebhookAuth(event);
+  const rawBody = await readRawBody(event, "utf8");
 
-  const body = await readBody(event);
+  verifyWebhookSignature(
+    rawBody ?? "",
+    getHeader(event, "x-hub-signature"),
+  );
+
+  const body = rawBody ? JSON.parse(rawBody) : {};
 
   const ticketKey = extractTicketKey(body);
   if (!ticketKey) {
@@ -62,16 +71,42 @@ export default defineEventHandler(async (event) => {
 });
 
 // ---------------------------------------------------------------------------
-// Auth
+// Auth — HMAC-SHA256 signature verification
 // ---------------------------------------------------------------------------
 
-function verifyWebhookAuth(event: Parameters<typeof getHeader>[0]): void {
+/**
+ * Verify the X-Hub-Signature header sent by Jira Cloud.
+ *
+ * Jira computes HMAC-SHA256 of the raw request body using the webhook
+ * secret and sends it as "sha256=<hex>" in the X-Hub-Signature header.
+ *
+ * When JIRA_WEBHOOK_SECRET is not set, verification is skipped (open access).
+ */
+function verifyWebhookSignature(
+  rawBody: string,
+  signatureHeader: string | undefined,
+): void {
   if (!env.JIRA_WEBHOOK_SECRET) return;
 
-  const headerSecret = getHeader(event, "authorization")?.replace(/^Bearer\s+/i, "");
-  if (headerSecret === env.JIRA_WEBHOOK_SECRET) return;
+  if (!signatureHeader) {
+    throw createError({ statusCode: 401, statusMessage: "Missing X-Hub-Signature header" });
+  }
 
-  throw createError({ statusCode: 401, statusMessage: "Unauthorized" });
+  const [method, receivedSig] = signatureHeader.split("=", 2);
+  if (!method || !receivedSig) {
+    throw createError({ statusCode: 401, statusMessage: "Malformed X-Hub-Signature header" });
+  }
+
+  const expectedSig = createHmac(method, env.JIRA_WEBHOOK_SECRET)
+    .update(rawBody, "utf8")
+    .digest("hex");
+
+  const a = Buffer.from(receivedSig, "hex");
+  const b = Buffer.from(expectedSig, "hex");
+
+  if (a.length !== b.length || !timingSafeEqual(a, b)) {
+    throw createError({ statusCode: 401, statusMessage: "Invalid webhook signature" });
+  }
 }
 
 // ---------------------------------------------------------------------------
