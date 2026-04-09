@@ -62,7 +62,7 @@ describe("SandboxManager", () => {
     expect(sandbox.sandboxId).toBe("sbx-test-123");
   });
 
-  it("does not write wrapper script or requirements during provision", async () => {
+  it("writes agent-env.sh with auth credentials during provision", async () => {
     const manager = new SandboxManager({
       githubToken: "ghp_test",
       owner: "test-org",
@@ -76,8 +76,36 @@ describe("SandboxManager", () => {
 
     await manager.provision("feat/test-branch");
 
-    // writeFiles should not be called during provision (no wrapper script or requirements)
-    expect(mockWriteFiles).not.toHaveBeenCalled();
+    // writeFiles should be called once — to persist auth env vars to /tmp/agent-env.sh
+    expect(mockWriteFiles).toHaveBeenCalledTimes(1);
+    const [[files]] = mockWriteFiles.mock.calls;
+    expect(files).toHaveLength(1);
+    expect(files[0].path).toBe("/tmp/agent-env.sh");
+    const content = Buffer.from(files[0].content).toString();
+    expect(content).toContain("ANTHROPIC_API_KEY");
+    expect(content).toContain("sk-ant-test");
+    expect(content).toContain("CLAUDE_MODEL");
+  });
+
+  it("writes CLAUDE_CODE_OAUTH_TOKEN when OAuth token is provided", async () => {
+    const manager = new SandboxManager({
+      githubToken: "ghp_test",
+      owner: "test-org",
+      repo: "test-repo",
+      claudeCodeOauthToken: "oauth-token-test",
+      claudeModel: "claude-opus-4-6",
+      commitAuthor: "ai-workflow-blazity",
+      commitEmail: "bot@blazity.com",
+      jobTimeoutMs: 1_800_000,
+    });
+
+    await manager.provision("feat/test-branch");
+
+    const [[files]] = mockWriteFiles.mock.calls;
+    const content = Buffer.from(files[0].content).toString();
+    expect(content).toContain("CLAUDE_CODE_OAUTH_TOKEN");
+    expect(content).toContain("oauth-token-test");
+    expect(content).not.toContain("ANTHROPIC_API_KEY");
   });
 
   it("configures stop hook when enabled", async () => {

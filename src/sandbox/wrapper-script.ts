@@ -27,6 +27,9 @@ export function buildPhaseScript(opts: PhaseScriptOptions): string {
 # --- Cleanup stale files from prior runs ---
 rm -f ${sentinelFile} ${outputFile} ${stderrFile}
 
+# --- Source auth env vars (Sandbox.create env does not propagate to runCommand) ---
+[ -f /tmp/agent-env.sh ] && source /tmp/agent-env.sh
+
 # --- Phase: ${opts.phase} ---
 cat ${inputFile} | claude \\
   ${claudeFlags} \\

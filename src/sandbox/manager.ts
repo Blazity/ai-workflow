@@ -148,13 +148,26 @@ export class SandboxManager {
     // Install Claude Code
     await sandbox.runCommand("npm", ["install", "-g", "@anthropic-ai/claude-code"]);
 
-    // Skip interactive onboarding (required for headless OAuth token auth)
+    // Write auth env vars to a file that phase scripts can source.
+    // Sandbox.create({ env }) does NOT propagate vars to runCommand sessions,
+    // so we persist them to disk and source before every `claude` invocation.
+    const envLines: string[] = [];
     if (this.config.claudeCodeOauthToken) {
-      await sandbox.runCommand("bash", [
-        "-c",
-        `mkdir -p ~/.claude && echo '{"hasCompletedOnboarding":true}' > ~/.claude.json`,
-      ]);
+      envLines.push(`export CLAUDE_CODE_OAUTH_TOKEN=${this.shellQuote(this.config.claudeCodeOauthToken)}`);
+    } else if (this.config.anthropicApiKey) {
+      envLines.push(`export ANTHROPIC_API_KEY=${this.shellQuote(this.config.anthropicApiKey)}`);
     }
+    envLines.push(`export CLAUDE_MODEL=${this.shellQuote(this.config.claudeModel)}`);
+
+    await sandbox.writeFiles([
+      { path: "/tmp/agent-env.sh", content: Buffer.from(envLines.join("\n") + "\n") },
+    ]);
+
+    // Skip interactive onboarding (required for headless auth — both OAuth and API key)
+    await sandbox.runCommand("bash", [
+      "-c",
+      `mkdir -p ~/.claude && echo '{"hasCompletedOnboarding":true}' > ~/.claude.json`,
+    ]);
 
     // Install skills globally (outside the client repo)
     await this.installGlobalSkills(sandbox);
@@ -172,6 +185,12 @@ export class SandboxManager {
         "-y", "skills", "add", repo, "--skill", skill, "--yes", "-g",
       ]);
     }
+  }
+
+  /** Safely quote a value for use in a shell variable assignment. */
+  private shellQuote(val: string): string {
+    // Single-quote the value, escaping any embedded single quotes.
+    return `'${val.replace(/'/g, "'\\''")}'`;
   }
 
   async configureStopHook(sandbox: SandboxInstance, enabled: boolean): Promise<void> {
