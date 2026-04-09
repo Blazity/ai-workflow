@@ -86,14 +86,25 @@ function verifyWebhookSignature(
   rawBody: string,
   signatureHeader: string | undefined,
 ): void {
+  console.log("[webhook-auth] JIRA_WEBHOOK_SECRET set:", !!env.JIRA_WEBHOOK_SECRET);
+  console.log("[webhook-auth] JIRA_WEBHOOK_SECRET value:", env.JIRA_WEBHOOK_SECRET);
+  console.log("[webhook-auth] X-Hub-Signature header:", signatureHeader);
+  console.log("[webhook-auth] rawBody length:", rawBody.length);
+  console.log("[webhook-auth] rawBody first 200 chars:", rawBody.slice(0, 200));
+
   if (!env.JIRA_WEBHOOK_SECRET) return;
 
   if (!signatureHeader) {
+    console.log("[webhook-auth] REJECTED: no X-Hub-Signature header");
     throw createError({ statusCode: 401, statusMessage: "Missing X-Hub-Signature header" });
   }
 
   const [method, receivedSig] = signatureHeader.split("=", 2);
+  console.log("[webhook-auth] method:", method);
+  console.log("[webhook-auth] receivedSig:", receivedSig);
+
   if (!method || !receivedSig) {
+    console.log("[webhook-auth] REJECTED: malformed header");
     throw createError({ statusCode: 401, statusMessage: "Malformed X-Hub-Signature header" });
   }
 
@@ -101,12 +112,19 @@ function verifyWebhookSignature(
     .update(rawBody, "utf8")
     .digest("hex");
 
+  console.log("[webhook-auth] expectedSig:", expectedSig);
+  console.log("[webhook-auth] receivedSig:", receivedSig);
+  console.log("[webhook-auth] match:", expectedSig === receivedSig);
+
   const a = Buffer.from(receivedSig, "hex");
   const b = Buffer.from(expectedSig, "hex");
 
   if (a.length !== b.length || !timingSafeEqual(a, b)) {
+    console.log("[webhook-auth] REJECTED: signature mismatch", { aLen: a.length, bLen: b.length });
     throw createError({ statusCode: 401, statusMessage: "Invalid webhook signature" });
   }
+
+  console.log("[webhook-auth] PASSED");
 }
 
 // ---------------------------------------------------------------------------
