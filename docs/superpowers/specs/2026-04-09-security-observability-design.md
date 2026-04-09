@@ -28,6 +28,7 @@ Detect unauthorized outbound communication from agent sandboxes. The primary fea
 
 - Outbound connections — every TCP connection from Fargate agents via VPC Flow Logs on `sg-fargate`
 - DNS queries — domain names the agent resolves via VPC DNS query logging
+- DNS tunneling — detect data exfiltration via DNS by monitoring for unusually long subdomain labels (>50 chars), high query volume to a single domain (>100 queries/min), and TXT record queries to non-standard domains
 - Traffic volume — bytes uploaded per connection via VPC Flow Logs aggregation
 - Unauthorized endpoints — connections to IPs/domains outside GitHub + Anthropic API
 - Large uploads — unusual outbound data volume (e.g., >10MB to a single IP)
@@ -79,7 +80,7 @@ Detect common security vulnerabilities in LLM-generated code.
 
 **Detection:** Arthur Engine custom rules (keyword + regex) for OWASP Top 10 patterns. Potential future integration with a dedicated SAST tool for deeper analysis.
 
-**Response:** Medium — PR created with `security-review` label + comment describing the specific vulnerability.
+**Response:** High — block PR creation, move ticket to "Security Review", Slack alert.
 
 ### 6. Behavioral Anomalies
 
@@ -94,6 +95,18 @@ Detect unusual agent behavior that may indicate compromise or malfunction.
 - Token usage spikes — cost per phase significantly above baseline (usage extraction)
 
 **Detection:** Custom Nitro-side logic — threshold-based alerts on CloudWatch metrics and workflow metadata.
+
+**Initial thresholds (static, tuned from first month of production data):**
+
+| Metric | Threshold | Baseline assumption |
+|---|---|---|
+| WebFetch calls per phase | >30 | Typical research phase: 5-15 fetches |
+| Phase execution duration | >20 min (research), >30 min (implementation) | Median: ~8 min research, ~15 min implementation |
+| Output size | >500KB or <100 bytes | Typical: 1-50KB |
+| Retry count per ticket | >3 within 24h | Most tickets succeed in 1-2 attempts |
+| Token usage per phase | >200k tokens | Median: ~50-80k tokens |
+
+Thresholds are static at launch. After 30 days of production data, revisit and consider adaptive baselines derived from rolling 7-day percentiles (p95).
 
 **Response:** Low — log only, included in Slack usage report.
 
@@ -151,10 +164,28 @@ Jira Ticket Discovered
               | pass
               v
 +-----------------------------+
+| REVIEW PHASE (Fargate)      |
+| (same runtime monitoring)   |
+|                             |
+| Input: git diff (untrusted  |
+| if impl phase compromised)  |
++-------------+---------------+
+              |
+              v
++-----------------------------+
+| OUTPUT GATE (post-review)   |
+| - Secrets scan              |
+| - PII scan                  |
+| - Behavioral anomaly check  |
++-------------+---------------+
+              | pass
+              v
++-----------------------------+
 | PRE-PUSH GATE               |
 | - Final secrets scan on     |
 |   full PR diff              |
 | - Final PII check           |
+| - Code safety (OWASP)       |
 +-------------+---------------+
               | pass
               v
@@ -168,7 +199,8 @@ Jira Ticket Discovered
 - WebFetch interception — hook/proxy inside the agent container
 - Runtime monitoring — AWS-native (VPC Flow Logs, DNS logs, CloudWatch)
 - Output gate — in `collectPhaseOutput` before returning results
-- Pre-push gate — in `pushChanges` before GitHub API calls
+- Pre-push gate — in `pushFromSandbox` before the git push
+- Fix-and-retry path — `fixAndRetryPush` in `poll-agent.ts` spawns a lightweight Claude agent to fix push failures. This agent receives untrusted input (the push error) and runs with `--dangerously-skip-permissions`. Its output must pass through the output gate and pre-push gate before the retry push proceeds.
 
 ## Response Model
 
