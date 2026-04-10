@@ -13,11 +13,9 @@ import { logger } from "../../lib/logger.js";
  *   Secret: <JIRA_WEBHOOK_SECRET>
  *   Events: Issue updated
  *
- * Auth strategy (checked in order):
- *   1. X-Hub-Signature HMAC-SHA256 (Jira signs the body when a secret is set)
- *   2. ?secret= query param (fallback — some Jira instances don't send the header)
+ * Auth: X-Hub-Signature HMAC-SHA256 (Jira signs the body when a secret is set)
  *
- * The webhook fires immediately when a ticket is moved to the AI column,
+ * The webhook fires immediately when a ticket changes,
  * eliminating the up-to-1-minute polling delay.
  */
 export default defineEventHandler(async (event) => {
@@ -42,16 +40,7 @@ export default defineEventHandler(async (event) => {
     return { status: "ignored", reason: "wrong_project", ticketKey };
   }
 
-  const targetColumn = extractDestinationStatus(body);
-  if (!targetColumn || targetColumn.toLowerCase() !== env.COLUMN_AI.toLowerCase()) {
-    logger.debug(
-      { ticketKey, targetColumn, expectedColumn: env.COLUMN_AI },
-      "webhook_ignored_not_ai_column",
-    );
-    return { status: "ignored", reason: "not_ai_column", ticketKey };
-  }
-
-  logger.info({ ticketKey }, "webhook_received_ai_column_transition");
+  logger.info({ ticketKey }, "webhook_received");
 
   const adapters = createAdapters();
   const result = await dispatchTicket(ticketKey, adapters, env.MAX_CONCURRENT_AGENTS);
@@ -127,15 +116,3 @@ function extractProjectKey(body: any): string | null {
   return body?.issue?.fields?.project?.key ?? null;
 }
 
-/**
- * Extract the destination status after a transition.
- *
- * Jira "issue_updated" webhooks include a `changelog.items` array.
- * When the status field changes, one item will have `field === "status"`
- * with `toString` being the new status name.
- */
-function extractDestinationStatus(body: any): string | null {
-  const items: any[] = body?.changelog?.items ?? [];
-  const statusChange = items.find((item: any) => item.field === "status");
-  return statusChange?.toString ?? null;
-}
