@@ -13,21 +13,17 @@ import { logger } from "../../lib/logger.js";
  *   Secret: <JIRA_WEBHOOK_SECRET>
  *   Events: Issue updated
  *
- * Jira signs the payload with HMAC-SHA256 and sends it in the
- * X-Hub-Signature header (format: "sha256=<hex>").
+ * Auth strategy (checked in order):
+ *   1. X-Hub-Signature HMAC-SHA256 (Jira signs the body when a secret is set)
+ *   2. ?secret= query param (fallback — some Jira instances don't send the header)
  *
  * The webhook fires immediately when a ticket is moved to the AI column,
  * eliminating the up-to-1-minute polling delay.
  */
 export default defineEventHandler(async (event) => {
-  console.log("[webhook] all headers:", JSON.stringify(event.node.req.headers, null, 2));
+  const rawBody = (await readRawBody(event, "utf8")) ?? "";
 
-  const rawBody = await readRawBody(event, "utf8");
-
-  verifyWebhookSignature(
-    rawBody ?? "",
-    getHeader(event, "x-hub-signature"),
-  );
+  verifyWebhookAuth(event, rawBody);
 
   const body = rawBody ? JSON.parse(rawBody) : {};
 
@@ -73,60 +69,42 @@ export default defineEventHandler(async (event) => {
 });
 
 // ---------------------------------------------------------------------------
-// Auth — HMAC-SHA256 signature verification
+// Auth
 // ---------------------------------------------------------------------------
 
 /**
- * Verify the X-Hub-Signature header sent by Jira Cloud.
- *
- * Jira computes HMAC-SHA256 of the raw request body using the webhook
- * secret and sends it as "sha256=<hex>" in the X-Hub-Signature header.
- *
- * When JIRA_WEBHOOK_SECRET is not set, verification is skipped (open access).
+ * Verify the X-Hub-Signature HMAC sent by Jira Cloud.
  */
-function verifyWebhookSignature(
+function verifyWebhookAuth(
+  event: Parameters<typeof getHeader>[0],
   rawBody: string,
-  signatureHeader: string | undefined,
 ): void {
-  console.log("[webhook-auth] JIRA_WEBHOOK_SECRET set:", !!env.JIRA_WEBHOOK_SECRET);
-  console.log("[webhook-auth] JIRA_WEBHOOK_SECRET value:", env.JIRA_WEBHOOK_SECRET);
-  console.log("[webhook-auth] X-Hub-Signature header:", signatureHeader);
-  console.log("[webhook-auth] rawBody length:", rawBody.length);
-  console.log("[webhook-auth] rawBody first 200 chars:", rawBody.slice(0, 200));
-
   if (!env.JIRA_WEBHOOK_SECRET) return;
 
+  const signatureHeader = getHeader(event, "x-hub-signature");
   if (!signatureHeader) {
-    console.log("[webhook-auth] REJECTED: no X-Hub-Signature header");
     throw createError({ statusCode: 401, statusMessage: "Missing X-Hub-Signature header" });
   }
 
-  const [method, receivedSig] = signatureHeader.split("=", 2);
-  console.log("[webhook-auth] method:", method);
-  console.log("[webhook-auth] receivedSig:", receivedSig);
+  verifyHmacSignature(rawBody, signatureHeader);
+}
 
+function verifyHmacSignature(rawBody: string, signatureHeader: string): void {
+  const [method, receivedSig] = signatureHeader.split("=", 2);
   if (!method || !receivedSig) {
-    console.log("[webhook-auth] REJECTED: malformed header");
     throw createError({ statusCode: 401, statusMessage: "Malformed X-Hub-Signature header" });
   }
 
-  const expectedSig = createHmac(method, env.JIRA_WEBHOOK_SECRET)
+  const expectedSig = createHmac(method, env.JIRA_WEBHOOK_SECRET!)
     .update(rawBody, "utf8")
     .digest("hex");
-
-  console.log("[webhook-auth] expectedSig:", expectedSig);
-  console.log("[webhook-auth] receivedSig:", receivedSig);
-  console.log("[webhook-auth] match:", expectedSig === receivedSig);
 
   const a = Buffer.from(receivedSig, "hex");
   const b = Buffer.from(expectedSig, "hex");
 
   if (a.length !== b.length || !timingSafeEqual(a, b)) {
-    console.log("[webhook-auth] REJECTED: signature mismatch", { aLen: a.length, bLen: b.length });
     throw createError({ statusCode: 401, statusMessage: "Invalid webhook signature" });
   }
-
-  console.log("[webhook-auth] PASSED");
 }
 
 // ---------------------------------------------------------------------------
