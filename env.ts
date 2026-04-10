@@ -2,6 +2,12 @@ import { createEnv } from "@t3-oss/env-core";
 import { z } from "zod";
 
 export const env = createEnv({
+  onValidationError: (issues) => {
+    const details = (issues as Array<{ path?: (string | number)[]; message: string }>)
+      .map((i) => `  ${i.path?.join(".") ?? "unknown"}: ${i.message}`)
+      .join("\n");
+    throw new Error(`Invalid environment variables:\n${details}`);
+  },
   server: {
     // Issue Tracker
     ISSUE_TRACKER_KIND: z.enum(["jira"]),
@@ -47,6 +53,9 @@ export const env = createEnv({
 
     // Cron
     CRON_SECRET: z.string().min(1).optional(),
+
+    // Jira Webhook
+    JIRA_WEBHOOK_SECRET: z.string().min(1).optional(),
 
     // Redis (run registry)
     AI_WORKFLOW_KV_REST_API_URL: z.string().url(),

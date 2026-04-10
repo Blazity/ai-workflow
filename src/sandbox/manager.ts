@@ -148,13 +148,28 @@ export class SandboxManager {
     // Install Claude Code
     await sandbox.runCommand("npm", ["install", "-g", "@anthropic-ai/claude-code"]);
 
-    // Skip interactive onboarding (required for headless OAuth token auth)
+    // Write auth env vars to a file that phase scripts can source.
+    // Sandbox.create({ env }) does NOT propagate vars to runCommand sessions,
+    // so we persist them to disk and source before every `claude` invocation.
+    // NOTE: Only auth credentials go here. CLAUDE_MODEL is passed via the
+    // explicit --model flag in phase scripts and poll-agent to keep one source of truth.
+    const envLines: string[] = [];
     if (this.config.claudeCodeOauthToken) {
-      await sandbox.runCommand("bash", [
-        "-c",
-        `mkdir -p ~/.claude && echo '{"hasCompletedOnboarding":true}' > ~/.claude.json`,
-      ]);
+      envLines.push(`export CLAUDE_CODE_OAUTH_TOKEN=${this.shellQuote(this.config.claudeCodeOauthToken)}`);
+    } else if (this.config.anthropicApiKey) {
+      envLines.push(`export ANTHROPIC_API_KEY=${this.shellQuote(this.config.anthropicApiKey)}`);
     }
+
+    await sandbox.writeFiles([
+      { path: "/tmp/agent-env.sh", content: Buffer.from(envLines.join("\n") + "\n") },
+    ]);
+    await sandbox.runCommand("chmod", ["600", "/tmp/agent-env.sh"]);
+
+    // Skip interactive onboarding (required for headless auth — both OAuth and API key)
+    await sandbox.runCommand("bash", [
+      "-c",
+      `mkdir -p ~/.claude && echo '{"hasCompletedOnboarding":true}' > ~/.claude.json`,
+    ]);
 
     // Install skills globally (outside the client repo)
     await this.installGlobalSkills(sandbox);
@@ -172,6 +187,12 @@ export class SandboxManager {
         "-y", "skills", "add", repo, "--skill", skill, "--yes", "-g",
       ]);
     }
+  }
+
+  /** Safely quote a value for use in a shell variable assignment. */
+  private shellQuote(val: string): string {
+    // Single-quote the value, escaping any embedded single quotes.
+    return `'${val.replace(/'/g, "'\\''")}'`;
   }
 
   async configureStopHook(sandbox: SandboxInstance, enabled: boolean): Promise<void> {

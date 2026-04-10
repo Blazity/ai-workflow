@@ -84,7 +84,7 @@ export async function fixAndRetryPush(
 
   await sandbox.runCommand("bash", [
     "-c",
-    `cat /tmp/fix-prompt.txt | claude --print --model '${env.CLAUDE_MODEL}' --dangerously-skip-permissions > /tmp/fix-stdout.txt 2>/tmp/fix-stderr.txt || true`,
+    `[ -f /tmp/agent-env.sh ] && source /tmp/agent-env.sh; cat /tmp/fix-prompt.txt | claude --print --model '${env.CLAUDE_MODEL}' --dangerously-skip-permissions > /tmp/fix-stdout.txt 2>/tmp/fix-stderr.txt || true`,
   ]);
 
   // Log fix agent output for observability
