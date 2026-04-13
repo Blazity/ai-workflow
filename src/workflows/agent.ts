@@ -48,6 +48,19 @@ async function provisionSandbox(
   const { SandboxManager } = await import("../sandbox/manager.js");
   const vcs = getVcsConfig();
 
+  // The sandbox builds clone/push URLs by interpolating repoPath into a URL,
+  // so it must be a URL-safe namespace/project path (e.g. "group/repo").
+  // GitLab also accepts numeric project IDs in its REST API, but those produce
+  // invalid clone URLs like "https://gitlab.com/12345.git". Fail fast with a
+  // clear message rather than producing a confusing git clone error.
+  if (vcs.kind === "gitlab" && /^\d+$/.test(vcs.repoPath)) {
+    throw new Error(
+      `GITLAB_PROJECT_ID must be a namespace/project path (e.g. "group/repo"), ` +
+        `not a numeric project ID ("${vcs.repoPath}"). Numeric IDs work for the ` +
+        `GitLab REST API but cannot be used to construct a git clone URL.`,
+    );
+  }
+
   const manager = new SandboxManager({
     kind: vcs.kind,
     token: vcs.token,

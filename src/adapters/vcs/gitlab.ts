@@ -18,6 +18,8 @@ interface GitLabMR {
 interface GitLabNotePosition {
   new_path?: string;
   new_line?: number;
+  old_path?: string;
+  old_line?: number;
 }
 interface GitLabNote {
   system?: boolean;
@@ -222,9 +224,11 @@ export class GitLabAdapter implements VCSAdapter {
           // GitLab notes have no direct "liked" signal comparable to GitHub
           // reactions. Intentionally hardcoded — see design spec.
           liked: false,
-          filePath: note.position?.new_path,
-          startLine: note.position?.new_line,
-          endLine: note.position?.new_line,
+          // Comments on deleted lines only have old_path/old_line —
+          // fall back so the anchor isn't lost.
+          filePath: note.position?.new_path ?? note.position?.old_path,
+          startLine: note.position?.new_line ?? note.position?.old_line,
+          endLine: note.position?.new_line ?? note.position?.old_line,
         });
       }
     }

@@ -35,12 +35,16 @@ export function buildVcsUrls(config: {
 }) {
   // Strip trailing slash for consistent URL joining.
   const host = config.host.replace(/\/+$/, "");
+  // Preserve the scheme from the configured host so cloneUrl and authUrl agree
+  // (e.g. http:// for a self-hosted GitLab dev instance must not silently
+  // become https:// in authUrl).
+  const scheme = host.match(/^https?:\/\//)?.[0] ?? "https://";
   // Extract `host.tld` (no scheme) so we can interpolate credentials into the URL.
   const hostNoScheme = host.replace(/^https?:\/\//, "");
   const authUser = config.kind === "gitlab" ? "oauth2" : "x-access-token";
   return {
     cloneUrl: `${host}/${config.repoPath}.git`,
-    authUrl: `https://${authUser}:${config.token}@${hostNoScheme}/${config.repoPath}.git`,
+    authUrl: `${scheme}${authUser}:${config.token}@${hostNoScheme}/${config.repoPath}.git`,
     authUser,
   };
 }
