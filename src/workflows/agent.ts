@@ -44,13 +44,15 @@ async function provisionSandbox(
   mergeBase?: string,
 ): Promise<string> {
   "use step";
-  const { env } = await import("../../env.js");
+  const { env, getVcsConfig } = await import("../../env.js");
   const { SandboxManager } = await import("../sandbox/manager.js");
+  const vcs = getVcsConfig();
 
   const manager = new SandboxManager({
-    githubToken: env.GITHUB_TOKEN,
-    owner: env.GITHUB_OWNER,
-    repo: env.GITHUB_REPO,
+    kind: vcs.kind,
+    token: vcs.token,
+    repoPath: vcs.repoPath,
+    host: vcs.host,
     anthropicApiKey: env.ANTHROPIC_API_KEY,
     claudeCodeOauthToken: env.CLAUDE_CODE_OAUTH_TOKEN,
     claudeModel: env.CLAUDE_MODEL,
@@ -202,7 +204,7 @@ const MAX_REVIEW_RETRIES = 2;
 export async function agentWorkflow(ticketId: string) {
   "use workflow";
 
-  const { env } = await import("../../env.js");
+  const { env, getVcsConfig } = await import("../../env.js");
   const { getPrompt } = await import("../lib/prompts.js");
   const { buildPhaseScript } = await import("../sandbox/wrapper-script.js");
   const { parseResearchStatus, parseAgentOutput, parseReviewOutput, REVIEW_SCHEMA, AGENT_SCHEMA } =
@@ -227,13 +229,15 @@ export async function agentWorkflow(ticketId: string) {
     // GitHub to auto-close any open PR (no diff = no PR).
     const prContext = await fetchPRContext(branchName);
 
+    const baseBranch = getVcsConfig().baseBranch;
+
     if (!prContext) {
       // New ticket — create (or reset) the branch from base
-      await createFeatureBranch(branchName, env.GITHUB_BASE_BRANCH);
+      await createFeatureBranch(branchName, baseBranch);
     }
     // Review-fix: branch + PR already exist, keep the branch as-is
 
-    const mergeBase = prContext?.hasConflicts ? env.GITHUB_BASE_BRANCH : undefined;
+    const mergeBase = prContext?.hasConflicts ? baseBranch : undefined;
 
     // Provision sandbox once for all phases
     const sandboxId = await provisionSandbox(branchName, mergeBase);

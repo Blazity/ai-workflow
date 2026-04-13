@@ -26,7 +26,7 @@ export interface VCSAdapter {
   push(
     branch: string,
     files: Array<{ path: string; content: string }>,
-    options?: { mergeParentSha?: string },
+    options?: { mergeParentSha?: string; message?: string },
   ): Promise<void>;
   getPRComments(prId: number): Promise<PRComment[]>;
   getCheckRunResults(prId: number): Promise<CheckRunResult[]>;

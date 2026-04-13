@@ -25,11 +25,19 @@ vi.mock("./credentials.js", () => ({
 
 vi.mock("../../env.js", () => ({
   env: {
+    VCS_KIND: "github",
     GITHUB_TOKEN: "ghp_test_token",
     GITHUB_OWNER: "test-owner",
     GITHUB_REPO: "test-repo",
     CLAUDE_MODEL: "claude-sonnet-4-20250514",
   },
+  getVcsConfig: () => ({
+    kind: "github",
+    token: "ghp_test_token",
+    repoPath: "test-owner/test-repo",
+    baseBranch: "main",
+    host: "https://github.com",
+  }),
 }));
 
 import { pushFromSandbox, fixAndRetryPush, teardownSandbox, checkPhaseDone, collectPhaseOutput } from "./poll-agent.js";

@@ -103,7 +103,7 @@ export class GitHubAdapter implements VCSAdapter {
   async push(
     branch: string,
     files: Array<{ path: string; content: string }>,
-    options?: { mergeParentSha?: string },
+    options?: { mergeParentSha?: string; message?: string },
   ): Promise<void> {
     const { data: refData } = await this.octokit.git.getRef({
       ...this.ownerRepo,
@@ -147,9 +147,11 @@ export class GitHubAdapter implements VCSAdapter {
 
     const { data: newCommit } = await this.octokit.git.createCommit({
       ...this.ownerRepo,
-      message: options?.mergeParentSha
-        ? "merge: resolve conflicts with base branch"
-        : "feat: agent implementation",
+      message:
+        options?.message ??
+        (options?.mergeParentSha
+          ? "merge: resolve conflicts with base branch"
+          : "feat: agent implementation"),
       tree: tree.sha,
       parents,
     });
