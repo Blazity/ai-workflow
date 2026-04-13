@@ -36,9 +36,10 @@ describe("SandboxManager", () => {
     const { Sandbox } = await import("@vercel/sandbox");
 
     const manager = new SandboxManager({
-      githubToken: "ghp_test",
-      owner: "test-org",
-      repo: "test-repo",
+      kind: "github",
+      token: "ghp_test",
+      repoPath: "test-org/test-repo",
+      host: "https://github.com",
       anthropicApiKey: "sk-ant-test",
       claudeModel: "claude-opus-4-6",
       commitAuthor: "ai-workflow-blazity",
@@ -64,9 +65,10 @@ describe("SandboxManager", () => {
 
   it("writes agent-env.sh with auth credentials during provision", async () => {
     const manager = new SandboxManager({
-      githubToken: "ghp_test",
-      owner: "test-org",
-      repo: "test-repo",
+      kind: "github",
+      token: "ghp_test",
+      repoPath: "test-org/test-repo",
+      host: "https://github.com",
       anthropicApiKey: "sk-ant-test",
       claudeModel: "claude-opus-4-6",
       commitAuthor: "ai-workflow-blazity",
@@ -89,9 +91,10 @@ describe("SandboxManager", () => {
 
   it("writes CLAUDE_CODE_OAUTH_TOKEN when OAuth token is provided", async () => {
     const manager = new SandboxManager({
-      githubToken: "ghp_test",
-      owner: "test-org",
-      repo: "test-repo",
+      kind: "github",
+      token: "ghp_test",
+      repoPath: "test-org/test-repo",
+      host: "https://github.com",
       claudeCodeOauthToken: "oauth-token-test",
       claudeModel: "claude-opus-4-6",
       commitAuthor: "ai-workflow-blazity",
@@ -110,9 +113,10 @@ describe("SandboxManager", () => {
 
   it("configures stop hook when enabled", async () => {
     const manager = new SandboxManager({
-      githubToken: "ghp_test",
-      owner: "test-org",
-      repo: "test-repo",
+      kind: "github",
+      token: "ghp_test",
+      repoPath: "test-org/test-repo",
+      host: "https://github.com",
       anthropicApiKey: "sk-ant-test",
       claudeModel: "claude-opus-4-6",
       commitAuthor: "ai-workflow-blazity",
@@ -131,9 +135,10 @@ describe("SandboxManager", () => {
 
   it("clears stop hook when disabled", async () => {
     const manager = new SandboxManager({
-      githubToken: "ghp_test",
-      owner: "test-org",
-      repo: "test-repo",
+      kind: "github",
+      token: "ghp_test",
+      repoPath: "test-org/test-repo",
+      host: "https://github.com",
       anthropicApiKey: "sk-ant-test",
       claudeModel: "claude-opus-4-6",
       commitAuthor: "ai-workflow-blazity",

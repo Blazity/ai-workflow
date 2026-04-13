@@ -1,7 +1,8 @@
 import { getSandboxCredentials } from "./credentials.js";
+import { buildVcsUrls } from "./manager.js";
 
 /**
- * After the agent exits, injects the GitHub token and pushes commits to GitHub.
+ * After the agent exits, injects the VCS token and pushes commits.
  * The agent process is dead at this point — the token is never visible to it.
  */
 export async function pushFromSandbox(
@@ -10,8 +11,9 @@ export async function pushFromSandbox(
 ): Promise<{ pushed: boolean; error?: string }> {
   "use step";
   const { Sandbox } = await import("@vercel/sandbox");
-  const { env } = await import("../../env.js");
+  const { getVcsConfig } = await import("../../env.js");
   const sandbox = await Sandbox.get({ sandboxId, ...getSandboxCredentials() });
+  const urls = buildVcsUrls(getVcsConfig());
 
   // Check if agent made any commits.
   // If the sentinel file is missing (provisioning issue), skip the check and push anyway.
@@ -27,8 +29,7 @@ export async function pushFromSandbox(
   }
 
   // Inject token — agent process is dead
-  const pushUrl = `https://x-access-token:${env.GITHUB_TOKEN}@github.com/${env.GITHUB_OWNER}/${env.GITHUB_REPO}.git`;
-  await sandbox.runCommand("git", ["remote", "set-url", "origin", pushUrl]);
+  await sandbox.runCommand("git", ["remote", "set-url", "origin", urls.authUrl]);
 
   // Unshallow if needed — shallow clones cause "no history in common with main"
   // errors on PR creation because the pushed commits lack shared ancestry.
@@ -37,7 +38,7 @@ export async function pushFromSandbox(
     'if [ "$(git rev-parse --is-shallow-repository)" = "true" ]; then git fetch --unshallow origin; fi',
   ]);
 
-  // Push to GitHub — use HEAD:<ref> so it works even if the local branch name
+  // Push to remote — use HEAD:<ref> so it works even if the local branch name
   // doesn't match. Use --force for retries where the branch already has commits
   // from a prior failed run. Safe because these are bot-created branches with
   // no concurrent pushers.
@@ -67,13 +68,13 @@ export async function fixAndRetryPush(
 ): Promise<{ pushed: boolean; error?: string }> {
   "use step";
   const { Sandbox } = await import("@vercel/sandbox");
-  const { env } = await import("../../env.js");
+  const { env, getVcsConfig } = await import("../../env.js");
   const sandbox = await Sandbox.get({ sandboxId, ...getSandboxCredentials() });
+  const urls = buildVcsUrls(getVcsConfig());
 
   // Strip token from origin before the fix agent runs — agent only commits, never pushes.
   await sandbox.runCommand("git", [
-    "remote", "set-url", "origin",
-    `https://github.com/${env.GITHUB_OWNER}/${env.GITHUB_REPO}.git`,
+    "remote", "set-url", "origin", urls.cloneUrl,
   ]);
 
   // Write prompt to a file to avoid shell injection via pushError content
@@ -88,15 +89,15 @@ export async function fixAndRetryPush(
   ]);
 
   // Log fix agent output for observability
+  const { logger } = await import("../lib/logger.js");
   const fixOut = await sandbox.runCommand("cat", ["/tmp/fix-stdout.txt"]);
   const fixLog = (await fixOut.stdout()).trim();
   if (fixLog) {
-    console.log(`[fixAndRetryPush] fix agent output: ${fixLog.slice(0, 500)}`);
+    logger.info({ output: fixLog.slice(0, 500) }, "fix_and_retry_push_output");
   }
 
   // Re-inject token and push — server pushes, not the agent.
-  const pushUrl = `https://x-access-token:${env.GITHUB_TOKEN}@github.com/${env.GITHUB_OWNER}/${env.GITHUB_REPO}.git`;
-  await sandbox.runCommand("git", ["remote", "set-url", "origin", pushUrl]);
+  await sandbox.runCommand("git", ["remote", "set-url", "origin", urls.authUrl]);
 
   const result = await sandbox.runCommand("git", ["push", "--force", "origin", `HEAD:refs/heads/${branch}`]);
 

@@ -44,13 +44,28 @@ async function provisionSandbox(
   mergeBase?: string,
 ): Promise<string> {
   "use step";
-  const { env } = await import("../../env.js");
+  const { env, getVcsConfig } = await import("../../env.js");
   const { SandboxManager } = await import("../sandbox/manager.js");
+  const vcs = getVcsConfig();
+
+  // The sandbox builds clone/push URLs by interpolating repoPath into a URL,
+  // so it must be a URL-safe namespace/project path (e.g. "group/repo").
+  // GitLab also accepts numeric project IDs in its REST API, but those produce
+  // invalid clone URLs like "https://gitlab.com/12345.git". Fail fast with a
+  // clear message rather than producing a confusing git clone error.
+  if (vcs.kind === "gitlab" && /^\d+$/.test(vcs.repoPath)) {
+    throw new Error(
+      `GITLAB_PROJECT_ID must be a namespace/project path (e.g. "group/repo"), ` +
+        `not a numeric project ID ("${vcs.repoPath}"). Numeric IDs work for the ` +
+        `GitLab REST API but cannot be used to construct a git clone URL.`,
+    );
+  }
 
   const manager = new SandboxManager({
-    githubToken: env.GITHUB_TOKEN,
-    owner: env.GITHUB_OWNER,
-    repo: env.GITHUB_REPO,
+    kind: vcs.kind,
+    token: vcs.token,
+    repoPath: vcs.repoPath,
+    host: vcs.host,
     anthropicApiKey: env.ANTHROPIC_API_KEY,
     claudeCodeOauthToken: env.CLAUDE_CODE_OAUTH_TOKEN,
     claudeModel: env.CLAUDE_MODEL,
@@ -202,7 +217,7 @@ const MAX_REVIEW_RETRIES = 2;
 export async function agentWorkflow(ticketId: string) {
   "use workflow";
 
-  const { env } = await import("../../env.js");
+  const { env, getVcsConfig } = await import("../../env.js");
   const { getPrompt } = await import("../lib/prompts.js");
   const { buildPhaseScript } = await import("../sandbox/wrapper-script.js");
   const { parseResearchStatus, parseAgentOutput, parseReviewOutput, REVIEW_SCHEMA, AGENT_SCHEMA } =
@@ -227,13 +242,15 @@ export async function agentWorkflow(ticketId: string) {
     // GitHub to auto-close any open PR (no diff = no PR).
     const prContext = await fetchPRContext(branchName);
 
+    const baseBranch = getVcsConfig().baseBranch;
+
     if (!prContext) {
       // New ticket — create (or reset) the branch from base
-      await createFeatureBranch(branchName, env.GITHUB_BASE_BRANCH);
+      await createFeatureBranch(branchName, baseBranch);
     }
     // Review-fix: branch + PR already exist, keep the branch as-is
 
-    const mergeBase = prContext?.hasConflicts ? env.GITHUB_BASE_BRANCH : undefined;
+    const mergeBase = prContext?.hasConflicts ? baseBranch : undefined;
 
     // Provision sandbox once for all phases
     const sandboxId = await provisionSandbox(branchName, mergeBase);

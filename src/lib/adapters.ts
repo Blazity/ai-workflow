@@ -1,8 +1,8 @@
 import { env } from "../../env.js";
 import { JiraAdapter } from "../adapters/issue-tracker/jira.js";
-import { GitHubAdapter } from "../adapters/vcs/github.js";
 import { ChatSDKAdapter } from "../adapters/messaging/chatsdk.js";
 import { UpstashRunRegistry } from "../adapters/run-registry/upstash.js";
+import { createVCS } from "./create-vcs.js";
 import type { IssueTrackerAdapter } from "../adapters/issue-tracker/types.js";
 import type { VCSAdapter } from "../adapters/vcs/types.js";
 import type { MessagingAdapter } from "../adapters/messaging/types.js";
@@ -23,12 +23,7 @@ export function createAdapters(): Adapters {
       apiToken: env.JIRA_API_TOKEN,
       projectKey: env.JIRA_PROJECT_KEY,
     }),
-    vcs: new GitHubAdapter({
-      token: env.GITHUB_TOKEN,
-      owner: env.GITHUB_OWNER,
-      repo: env.GITHUB_REPO,
-      baseBranch: env.GITHUB_BASE_BRANCH,
-    }),
+    vcs: createVCS(),
     messaging: new ChatSDKAdapter({
       slackToken: env.CHAT_SDK_SLACK_TOKEN,
       channelId: env.CHAT_SDK_CHANNEL_ID,

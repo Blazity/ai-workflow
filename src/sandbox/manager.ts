@@ -12,15 +12,41 @@ const GLOBAL_SKILLS = [
 ] as const;
 
 export interface SandboxConfig {
-  githubToken: string;
-  owner: string;
-  repo: string;
+  kind: "github" | "gitlab";
+  token: string;
+  /** GitHub: "owner/repo", GitLab: project path e.g. "group/repo" */
+  repoPath: string;
+  /** VCS host base URL, e.g. https://github.com or https://gitlab.example.com */
+  host: string;
   anthropicApiKey?: string;
   claudeCodeOauthToken?: string;
   claudeModel: string;
   commitAuthor: string;
   commitEmail: string;
   jobTimeoutMs: number;
+}
+
+/** Build clone/push URLs for the configured VCS. Supports github.com and any GitLab host (incl. self-hosted). */
+export function buildVcsUrls(config: {
+  kind: "github" | "gitlab";
+  token: string;
+  repoPath: string;
+  host: string;
+}) {
+  // Strip trailing slash for consistent URL joining.
+  const host = config.host.replace(/\/+$/, "");
+  // Preserve the scheme from the configured host so cloneUrl and authUrl agree
+  // (e.g. http:// for a self-hosted GitLab dev instance must not silently
+  // become https:// in authUrl).
+  const scheme = host.match(/^https?:\/\//)?.[0] ?? "https://";
+  // Extract `host.tld` (no scheme) so we can interpolate credentials into the URL.
+  const hostNoScheme = host.replace(/^https?:\/\//, "");
+  const authUser = config.kind === "gitlab" ? "oauth2" : "x-access-token";
+  return {
+    cloneUrl: `${host}/${config.repoPath}.git`,
+    authUrl: `${scheme}${authUser}:${config.token}@${hostNoScheme}/${config.repoPath}.git`,
+    authUser,
+  };
 }
 
 type SandboxInstance = Awaited<ReturnType<typeof SandboxType.create>>;
@@ -79,13 +105,15 @@ export class SandboxManager {
       throw new Error("Either anthropicApiKey or claudeCodeOauthToken must be provided");
     }
 
+    const urls = buildVcsUrls(this.config);
+
     const sandbox = await Sandbox.create({
       ...getSandboxCredentials(),
       source: {
         type: "git",
-        url: `https://github.com/${this.config.owner}/${this.config.repo}.git`,
-        username: "x-access-token",
-        password: this.config.githubToken,
+        url: urls.cloneUrl,
+        username: urls.authUser,
+        password: this.config.token,
         revision: branch,
       },
       runtime: "node24",
@@ -101,8 +129,7 @@ export class SandboxManager {
     // Strip auth from origin — the clone URL contains the token, replace it
     // with the unauthenticated URL so the agent never has push access.
     await sandbox.runCommand("git", [
-      "remote", "set-url", "origin",
-      `https://github.com/${this.config.owner}/${this.config.repo}.git`,
+      "remote", "set-url", "origin", urls.cloneUrl,
     ]);
 
     // The sandbox clones a specific revision, which leaves git in detached HEAD.
@@ -118,7 +145,7 @@ export class SandboxManager {
     // Merge base branch so the agent can see and resolve conflicts.
     // The shallow clone has no remote, so we fetch directly via authenticated URL.
     if (mergeBase) {
-      const repoUrl = `https://x-access-token:${this.config.githubToken}@github.com/${this.config.owner}/${this.config.repo}.git`;
+      const repoUrl = urls.authUrl;
       const fetchResult = await sandbox.runCommand("bash", [
         "-c",
         `git fetch "${repoUrl}" ${mergeBase} 2>&1`,
@@ -134,7 +161,11 @@ export class SandboxManager {
       ]);
       if (mergeResult.exitCode !== 0) {
         const mergeOutput = (await mergeResult.stdout()).trim();
-        console.warn(`Merge of ${mergeBase} had conflicts (exit=${mergeResult.exitCode}): ${mergeOutput}`);
+        const { logger } = await import("../lib/logger.js");
+        logger.warn(
+          { mergeBase, exitCode: mergeResult.exitCode, output: mergeOutput.slice(0, 500) },
+          "merge_conflicts_during_provision",
+        );
       }
     }
 
