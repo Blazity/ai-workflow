@@ -50,6 +50,12 @@ export const env = createEnv({
     MAX_CONCURRENT_AGENTS: z.coerce.number().int().positive().default(3),
     JOB_TIMEOUT_MS: z.coerce.number().int().positive().default(1_800_000),
 
+    // Attachments
+    ATTACHMENT_MAX_FILE_SIZE_MB: z.coerce.number().int().positive().default(25),
+    ATTACHMENT_MAX_TOTAL_SIZE_MB: z.coerce.number().int().positive().default(100),
+    ATTACHMENT_MAX_COUNT: z.coerce.number().int().positive().default(20),
+    ATTACHMENT_DOWNLOAD_TIMEOUT_MS: z.coerce.number().int().positive().default(30_000),
+
     // Polling
     POLL_INTERVAL_MS: z.coerce.number().int().positive().default(300_000),
 

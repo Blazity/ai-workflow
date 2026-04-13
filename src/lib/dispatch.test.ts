@@ -30,6 +30,7 @@ function makeTicket(overrides: Partial<TicketContent> = {}): TicketContent {
     comments: [],
     labels: [],
     trackerStatus: "AI",
+    attachments: [],
     ...overrides,
   };
 }
