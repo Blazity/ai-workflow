@@ -1,6 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { RunRegistryAdapter } from "../adapters/run-registry/types.js";
 
+vi.mock("../../env.js", () => ({
+  env: {
+    JIRA_PROJECT_KEY: "PROJ",
+    COLUMN_AI: "AI",
+  },
+}));
+
 const mockGetRun = vi.fn();
 vi.mock("workflow/api", () => ({
   getRun: (...args: any[]) => mockGetRun(...args),

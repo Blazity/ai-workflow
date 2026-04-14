@@ -2,6 +2,13 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { Adapters } from "./adapters.js";
 import type { TicketContent } from "../adapters/issue-tracker/types.js";
 
+vi.mock("../../env.js", () => ({
+  env: {
+    JIRA_PROJECT_KEY: "PROJ",
+    COLUMN_AI: "AI",
+  },
+}));
+
 const mockStart = vi.fn();
 const mockGetRun = vi.fn();
 vi.mock("workflow/api", () => ({
