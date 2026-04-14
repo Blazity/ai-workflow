@@ -98,7 +98,7 @@ describe("dispatchTicket", () => {
     mockStart.mockResolvedValue({ runId: "run_123" });
   });
 
-  it("dispatches agentWorkflow for any ticket", async () => {
+  it("dispatches agentWorkflow for a ticket in configured project + AI column", async () => {
     const adapters = makeAdapters();
     const { dispatchTicket } = await import("./dispatch.js");
 
@@ -117,6 +117,36 @@ describe("dispatchTicket", () => {
       "PROJ-42",
       "run_123",
     );
+  });
+
+  it("skips dispatch when ticket is no longer in AI column", async () => {
+    const unregister = vi.fn().mockResolvedValue(undefined);
+    const adapters = makeAdapters({
+      fetchTicket: vi.fn().mockResolvedValue(makeTicket({ trackerStatus: "Backlog" })),
+      unregister,
+    });
+    const { dispatchTicket } = await import("./dispatch.js");
+
+    const result = await dispatchTicket("PROJ-42", adapters, 5);
+
+    expect(result).toEqual({ started: false, reason: "not_in_ai_column" });
+    expect(unregister).toHaveBeenCalledWith("PROJ-42");
+    expect(mockStart).not.toHaveBeenCalled();
+  });
+
+  it("skips dispatch when ticket is outside configured Jira project key", async () => {
+    const unregister = vi.fn().mockResolvedValue(undefined);
+    const adapters = makeAdapters({
+      fetchTicket: vi.fn().mockResolvedValue(makeTicket({ identifier: "OTHER-42" })),
+      unregister,
+    });
+    const { dispatchTicket } = await import("./dispatch.js");
+
+    const result = await dispatchTicket("PROJ-42", adapters, 5);
+
+    expect(result).toEqual({ started: false, reason: "wrong_project_key" });
+    expect(unregister).toHaveBeenCalledWith("PROJ-42");
+    expect(mockStart).not.toHaveBeenCalled();
   });
 
   it("returns already_claimed when claim fails", async () => {
