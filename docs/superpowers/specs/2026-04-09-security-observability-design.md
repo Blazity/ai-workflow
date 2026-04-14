@@ -2,7 +2,9 @@
 
 Security observability for the AI workflow system (AWS on-prem).
 
-Target deployment: AWS on-prem architecture (Fargate agents, EC2 Nitro server).
+Target deployment: AWS on-prem architecture (Fargate agents, EC2 Nitro server). Architecture should be cloud-agnostic via adapters — AWS is first implementation.
+
+All explicit threshold values, file paths, and integration details are preliminary and need to be validated against production data. Review after first month of real usage.
 
 ## Threat Categories
 
@@ -18,7 +20,7 @@ Detect adversarial instructions injected into the LLM context from untrusted sou
 
 **Detection:** Arthur Engine Prompt Injection evaluation (DeBERTa v3 classifier).
 
-**Response:** Critical — kill sandbox, cancel workflow, move ticket to "Security Review" Jira column, Slack alert.
+**Response:** Critical — kill sandbox, cancel workflow, Slack alert with details.
 
 ### 2. Data Exfiltration & Network Monitoring
 
@@ -28,14 +30,16 @@ Detect unauthorized outbound communication from agent sandboxes. The primary fea
 
 - Outbound connections — every TCP connection from Fargate agents via VPC Flow Logs on `sg-fargate`
 - DNS queries — domain names the agent resolves via VPC DNS query logging
-- DNS tunneling — detect data exfiltration via DNS by monitoring for unusually long subdomain labels (>50 chars), high query volume to a single domain (>100 queries/min), and TXT record queries to non-standard domains
 - Traffic volume — bytes uploaded per connection via VPC Flow Logs aggregation
-- Unauthorized endpoints — connections to IPs/domains outside GitHub + Anthropic API
 - Large uploads — unusual outbound data volume (e.g., >10MB to a single IP)
 
-**Detection:** AWS-native — VPC Flow Logs, DNS query logging, CloudWatch metric filters.
+No endpoint allowlist — the agent needs unrestricted research access (docs, Stack Overflow, npm registries, etc.). Restricting outbound destinations would degrade research quality. Instead, rely on traffic volume anomaly detection and egress proxy logging to catch exfiltration after the fact.
 
-**Response:** Unauthorized endpoint → critical (kill sandbox). Volume anomaly → medium (flag + alert).
+DNS tunneling detection (subdomain length / query volume heuristics) was evaluated and removed — too spotty to be reliable, a determined attacker would trivially bypass the thresholds. Better to invest in egress proxy with TLS inspection (future).
+
+**Detection:** AWS-native — VPC Flow Logs, DNS query logging, CloudWatch metric filters. Architecture should be cloud-agnostic via an adapter — AWS is first implementation, but GCP (VPC Flow Logs equivalent) and Azure (NSG Flow Logs) will need their own adapters.
+
+**Response:** Volume anomaly → medium (flag + Slack alert). For true prevention (not just detection), the long-term approach is an egress proxy that blocks uploads above a size threshold before the connection completes — killing a sandbox after exfiltration already happened is pointless.
 
 ### 3. Secrets & Credential Leakage
 
@@ -50,7 +54,7 @@ Prevent API keys, tokens, passwords, and connection strings from appearing in ge
 
 **Detection:** Arthur Engine PII Detection (Presidio) + custom regex rules for secret patterns (AWS access keys, GitHub tokens, JWTs, database connection strings, private keys).
 
-**Response:** Critical — no PR created, sandbox killed, ticket to "Security Review", Slack alert with redacted details.
+**Response:** Critical — no PR created, sandbox killed, Slack alert with redacted details.
 
 ### 4. PII & Sensitive Business Data
 
@@ -64,25 +68,9 @@ Detect personally identifiable information and confidential business data in inp
 
 **Detection:** Arthur Engine PII Detection (Presidio) for standard PII (names, emails, SSNs, credit cards). Arthur Engine Sensitive Data evaluation (few-shot LLM Judge) for business-specific confidential data — requires custom examples defining what "sensitive" means for the organization.
 
-**Response:** Critical PII (SSN, credit card) → high (block PR). Other PII/sensitive data → medium (PR with `security-review` label + comment).
+**Response:** Critical PII (SSN, credit card) → high (block PR, Slack alert). Other PII/sensitive data → medium (PR with `security-review` label + comment, Slack notification).
 
-### 5. Code Safety & Vulnerability Detection
-
-Detect common security vulnerabilities in LLM-generated code.
-
-**Checks:**
-
-- SQL injection patterns in generated database queries
-- Command injection via shell commands, exec calls
-- XSS vulnerabilities from unsanitized user input rendering
-- Insecure dependencies — newly added packages with known CVEs
-- Hardcoded secrets (overlaps with threat 3)
-
-**Detection:** Arthur Engine custom rules (keyword + regex) for OWASP Top 10 patterns. Potential future integration with a dedicated SAST tool for deeper analysis.
-
-**Response:** High — block PR creation, move ticket to "Security Review", Slack alert.
-
-### 6. Behavioral Anomalies
+### 5. Behavioral Anomalies
 
 Detect unusual agent behavior that may indicate compromise or malfunction.
 
@@ -108,7 +96,7 @@ Detect unusual agent behavior that may indicate compromise or malfunction.
 
 Thresholds are static at launch. After 30 days of production data, revisit and consider adaptive baselines derived from rolling 7-day percentiles (p95).
 
-**Response:** Low — log only, included in Slack usage report.
+**Response:** Token budget exceeded → critical (kill sandbox — circuit breaker for the infinite loop P0 bug that burned 100M+ tokens). Token usage must have a hard ceiling per phase, not a soft alert. All other anomalies → low (log only, included in Slack usage report).
 
 ## Pipeline Integration
 
@@ -131,7 +119,6 @@ Jira Ticket Discovered
 |                             |
 | Runtime monitoring:         |
 | - VPC Flow Logs (network)   |
-| - DNS query logging         |
 | - CloudWatch (tool usage)   |
 |                             |
 | WebFetch interception:      |
@@ -158,7 +145,6 @@ Jira Ticket Discovered
 +-----------------------------+
 | OUTPUT GATE (post-impl)     |
 | - All output checks         |
-| - Code safety (OWASP)       |
 | - Secrets in generated code |
 +-------------+---------------+
               | pass
@@ -185,7 +171,6 @@ Jira Ticket Discovered
 | - Final secrets scan on     |
 |   full PR diff              |
 | - Final PII check           |
-| - Code safety (OWASP)       |
 +-------------+---------------+
               | pass
               v
@@ -197,7 +182,7 @@ Jira Ticket Discovered
 
 - Input gate — in `agentWorkflow` before `writeAndStartPhase`
 - WebFetch interception — hook/proxy inside the agent container
-- Runtime monitoring — AWS-native (VPC Flow Logs, DNS logs, CloudWatch)
+- Runtime monitoring — cloud-native (VPC Flow Logs, CloudWatch or equivalent)
 - Output gate — in `collectPhaseOutput` before returning results
 - Pre-push gate — in `pushFromSandbox` before the git push
 - Fix-and-retry path — `fixAndRetryPush` in `poll-agent.ts` spawns a lightweight Claude agent to fix push failures. This agent receives untrusted input (the push error) and runs with `--dangerously-skip-permissions`. Its output must pass through the output gate and pre-push gate before the retry push proceeds.
@@ -206,12 +191,12 @@ Jira Ticket Discovered
 
 Four severity tiers with escalation:
 
-| Severity | Triggers                                                                                             | Action                                                                                      |
-| -------- | ---------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
-| Critical | Prompt injection detected, secrets in output, unauthorized network connection, data exfiltration     | Kill sandbox, cancel workflow, move ticket to "Security Review" column, Slack alert         |
-| High     | PII in generated code (SSN, credit card), OWASP vulnerability patterns, sensitive business data leak | Block PR creation, move ticket to "Security Review", Slack alert                            |
-| Medium   | PII in inputs (Jira ticket), mild anomalies in tool usage, elevated token spend                      | Create PR with `security-review` label + comment describing the finding, Slack notification |
-| Low      | Minor behavioral anomalies (long duration, unusual output size)                                      | Log only, included in Slack usage report                                                    |
+| Severity | Triggers | Action |
+| -------- | -------- | ------ |
+| Critical | Prompt injection detected, secrets in output, data exfiltration (volume anomaly), token budget exceeded | Kill sandbox, cancel workflow, Slack alert |
+| High | PII in generated code (SSN, credit card), sensitive business data leak | Block PR creation, Slack alert |
+| Medium | PII in inputs (Jira ticket), elevated token spend, unusual tool usage patterns | Create PR with `security-review` label + comment, Slack notification |
+| Low | Minor behavioral anomalies (long duration, unusual output size) | Log only, included in Slack usage report |
 
 **Escalation rule:** If the same ticket triggers 2+ medium findings across phases, auto-escalate to high (block PR).
 
@@ -219,11 +204,11 @@ Four severity tiers with escalation:
 
 Three independent streams unified by Slack alerting:
 
-| Stream              | Tool                                               | Scope                                                                                      |
-| ------------------- | -------------------------------------------------- | ------------------------------------------------------------------------------------------ |
-| Content analysis    | Arthur Engine                                      | Prompts, responses, generated code — prompt injection, PII, secrets, toxicity, code safety |
-| Network monitoring  | AWS (VPC Flow Logs, DNS query logging, CloudWatch) | Outbound connections, DNS resolution, traffic volume, unauthorized endpoints               |
-| Behavioral analysis | Custom Nitro logic                                 | Tool usage patterns, execution duration, output size, retry storms, token usage            |
+| Stream | Tool | Scope |
+| ------ | ---- | ----- |
+| Content analysis | Arthur Engine (adapter-based — Arthur is first impl, others possible) | Prompts, responses, generated code — prompt injection, PII, secrets |
+| Network monitoring | Cloud-native (AWS: VPC Flow Logs + CloudWatch; GCP/Azure: equivalent) | Outbound connections, traffic volume, egress anomalies |
+| Behavioral analysis | Custom Nitro logic | Tool usage patterns, execution duration, output size, retry storms, token budget enforcement |
 
 ## WebFetch Strategy
 
