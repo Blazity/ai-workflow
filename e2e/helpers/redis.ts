@@ -1,7 +1,7 @@
 import { Redis } from "@upstash/redis";
 import { e2eEnv } from "../env.js";
 
-const HASH_KEY = "blazebot:active-runs";
+const HASH_KEY = `blazebot:active-runs:${e2eEnv.VERCEL_ENV}`;
 
 const redis = new Redis({
   url: e2eEnv.AI_WORKFLOW_KV_REST_API_URL,
@@ -11,6 +11,7 @@ const redis = new Redis({
 export async function getRunId(ticketKey: string): Promise<string | null> {
   return redis.hget<string>(HASH_KEY, ticketKey);
 }
+
 
 export async function listAll(): Promise<
   Array<{ ticketKey: string; runId: string }>

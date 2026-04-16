@@ -21,6 +21,9 @@ const schema = z.object({
   AI_WORKFLOW_KV_REST_API_URL: z.string().url(),
   AI_WORKFLOW_KV_REST_API_TOKEN: z.string().min(1),
 
+  /** Must match the deployed app's VERCEL_ENV (e.g. "preview", "production") */
+  VERCEL_ENV: z.string().min(1).default("preview"),
+
   VERCEL_AUTOMATION_BYPASS_SECRET: z.string().optional(),
 });
 
