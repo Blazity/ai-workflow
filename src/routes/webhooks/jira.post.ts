@@ -45,8 +45,28 @@ export default defineEventHandler(async (event) => {
   logger.info({ ticketKey }, "webhook_received");
 
   const adapters = createAdapters();
+  const webhookEvent = typeof body?.webhookEvent === "string" ? body.webhookEvent : null;
   const ticketStatus = extractTicketStatus(body);
+  logger.info(
+    {
+      ticketKey,
+      webhookEvent,
+      payloadStatus: ticketStatus,
+      payloadProjectKey: projectKey,
+    },
+    "webhook_payload_parsed",
+  );
+
+  if (!ticketStatus) {
+    logger.info({ ticketKey }, "webhook_missing_payload_status_dispatching_anyway");
+  }
+
   if (ticketStatus && !isAiColumnStatus(ticketStatus)) {
+    logger.info(
+      { ticketKey, payloadStatus: ticketStatus, expectedAiStatus: env.COLUMN_AI },
+      "webhook_payload_status_outside_ai_column",
+    );
+
     const liveTicketState = await getLiveTicketState(ticketKey, adapters.issueTracker);
     if (liveTicketState.inAiColumn) {
       logger.info(
@@ -59,6 +79,16 @@ export default defineEventHandler(async (event) => {
         "webhook_skip_cancel_live_ticket_in_ai_column",
       );
       const result = await dispatchTicket(ticketKey, adapters, env.MAX_CONCURRENT_AGENTS);
+      logger.info(
+        {
+          ticketKey,
+          started: result.started,
+          reason: result.reason,
+          runId: result.runId,
+          dispatchContext: "payload_outdated_live_ticket_in_ai",
+        },
+        "webhook_dispatch_result",
+      );
       return {
         status: result.started ? "dispatched" : "skipped",
         ticketKey,
