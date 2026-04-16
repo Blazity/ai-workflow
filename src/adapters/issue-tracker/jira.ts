@@ -118,7 +118,7 @@ export class JiraAdapter implements IssueTrackerAdapter {
       signal,
     });
 
-    if (first.status === 302 || first.status === 301) {
+    if ([301, 302, 303, 307, 308].includes(first.status)) {
       const location = first.headers.get("location");
       if (!location) {
         throw new Error(
@@ -137,7 +137,7 @@ export class JiraAdapter implements IssueTrackerAdapter {
       });
       if (!second.ok) {
         throw new Error(
-          `Jira attachment CDN error: ${second.status} ${second.statusText} on ${location}`,
+          `Jira attachment CDN error: status ${second.status} ${second.statusText} on ${location}`,
         );
       }
       return Buffer.from(await second.arrayBuffer());
@@ -145,7 +145,7 @@ export class JiraAdapter implements IssueTrackerAdapter {
 
     if (!first.ok) {
       throw new Error(
-        `Jira attachment error: ${first.status} ${first.statusText} on ${url}`,
+        `Jira attachment error: status ${first.status} ${first.statusText} on ${url}`,
       );
     }
     return Buffer.from(await first.arrayBuffer());

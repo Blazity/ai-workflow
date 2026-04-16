@@ -233,7 +233,7 @@ describe("fetchAttachmentsWithRetry", () => {
     const downloader = {
       downloadAttachment: vi
         .fn()
-        .mockRejectedValue(new Error("Jira attachment error: 500 Internal Server Error on url")),
+        .mockRejectedValue(new Error("Jira attachment error: status 500 Internal Server Error on url")),
     };
     const out = await fetchAttachmentsWithRetry(
       downloader,
@@ -250,7 +250,7 @@ describe("fetchAttachmentsWithRetry", () => {
     const downloader = {
       downloadAttachment: vi
         .fn()
-        .mockRejectedValue(new Error("Jira attachment error: 404 Not Found on url")),
+        .mockRejectedValue(new Error("Jira attachment error: status 404 Not Found on url")),
     };
     const out = await fetchAttachmentsWithRetry(
       downloader,
@@ -267,7 +267,7 @@ describe("fetchAttachmentsWithRetry", () => {
     const downloader = {
       downloadAttachment: vi
         .fn()
-        .mockRejectedValueOnce(new Error("Jira attachment error: 503 Service Unavailable on url"))
+        .mockRejectedValueOnce(new Error("Jira attachment error: status 503 Service Unavailable on url"))
         .mockResolvedValueOnce(Buffer.from([9])),
     };
     const out = await fetchAttachmentsWithRetry(
@@ -279,6 +279,23 @@ describe("fetchAttachmentsWithRetry", () => {
     expect(out[0].content).toBeDefined();
     expect(out[0].failed).toBeUndefined();
     expect(downloader.downloadAttachment).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not treat a bare 5xx sequence in a URL as retryable", async () => {
+    const downloader = {
+      downloadAttachment: vi
+        .fn()
+        .mockRejectedValue(new Error("fetch failed on https://example.test/path/500/resource")),
+    };
+    const out = await fetchAttachmentsWithRetry(
+      downloader,
+      [meta("1", "a.bin", 10)],
+      defaultCaps,
+      noopLogger(),
+    );
+    expect(out[0].failed).toBeDefined();
+    expect(out[0].failed?.attempts).toBe(1);
+    expect(downloader.downloadAttachment).toHaveBeenCalledTimes(1);
   });
 
   it("resolves collisions by appending -{id} before the extension", async () => {

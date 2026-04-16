@@ -32,7 +32,7 @@ We want the agent to have access to those files inside the sandbox so it can rea
 
 ## Architecture
 
-```
+```text
 Workflow start (src/workflows/agent.ts)
   ├─ fetchAndValidateTicket        (existing)
   ├─ fetchAttachments              (NEW step — downloads bytes from Jira)
@@ -140,7 +140,7 @@ Add an `attachments?: DownloadedAttachment[]` parameter to all four `assembleXCo
 
 New helper `formatAttachmentsIndex(attachments)`:
 
-```
+```md
 ## Attachments
 
 The following files from the Jira ticket are available in `/tmp/attachments/`.
@@ -182,13 +182,13 @@ All caps are applied **before** downloading — cap decisions use the metadata `
 
 Two layers:
 
-1. **WDK step-level (free).** The `fetchAttachments` step inherits the default retry behavior from the workflow runtime. If the whole step throws, it re-runs.
-2. **Per-file retry loop (inside the step).** Implemented in `fetchAttachmentsWithRetry`:
+1. **WDK step-level retries are disabled.** `fetchAttachments.maxRetries = 0` and `writeAttachments.maxRetries = 0`.
+2. **Per-file retry loop (inside the step).** Implemented in `fetchAttachmentsWithRetry` (called by `fetchAttachments`):
    - Max 3 attempts.
    - Exponential backoff: 500ms → 2000ms → 5000ms.
    - Retryable errors: network errors (`ECONNRESET`, `ETIMEDOUT`, `AbortError`), HTTP 5xx, HTTP 429 (honors `Retry-After` if present, capped at 10s).
    - Non-retryable: 4xx other than 429 (401/403/404 typically mean auth/missing, not transient).
-   - After max attempts: mark the file as failed in the returned array. Do **not** throw from the step — other attachments and the workflow continue.
+   - After max attempts: mark the file as failed in the returned array. Do **not** throw from `fetchAttachments` — other attachments and the workflow continue.
 
 ## Observability
 

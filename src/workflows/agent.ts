@@ -2,6 +2,8 @@ import { sleep } from "workflow";
 import type { AgentOutput } from "../sandbox/agent-runner.js";
 import type { ReviewOutput } from "../sandbox/agent-runner.js";
 import type { PRComment, CheckRunResult } from "../adapters/vcs/types.js";
+import type { TicketAttachment } from "../adapters/issue-tracker/types.js";
+import type { DownloadedAttachment } from "../sandbox/attachments.js";
 import type { PhaseUsage } from "../sandbox/usage.js";
 
 // --- Step Functions ---
@@ -17,13 +19,7 @@ async function fetchAndValidateTicket(ticketId: string, columnAi: string) {
 
 async function fetchAttachments(
   ticketIdentifier: string,
-  attachments: Array<{
-    id: string;
-    filename: string;
-    mimeType: string;
-    size: number;
-    contentUrl: string;
-  }>,
+  attachments: TicketAttachment[],
 ) {
   "use step";
   const { logger } = await import("../lib/logger.js");
@@ -78,14 +74,7 @@ fetchAttachments.maxRetries = 0;
 
 async function writeAttachments(
   sandboxId: string,
-  attachments: Array<{
-    filename: string;
-    originalFilename: string;
-    mimeType: string;
-    size: number;
-    content?: Buffer | Uint8Array;
-    failed?: { reason: string; attempts: number };
-  }>,
+  attachments: DownloadedAttachment[],
 ): Promise<void> {
   "use step";
   const { logger } = await import("../lib/logger.js");
@@ -114,7 +103,7 @@ async function writeAttachments(
       path: `/tmp/attachments/${a.filename}`,
       content: Buffer.isBuffer(a.content)
         ? (a.content as Buffer)
-        : Buffer.from(a.content as Uint8Array),
+        : Buffer.from(a.content as unknown as Uint8Array),
     })),
   );
   log.info({ count: toWrite.length }, "writeAttachments: done");

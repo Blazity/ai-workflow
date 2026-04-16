@@ -444,9 +444,10 @@ In `src/adapters/issue-tracker/jira.ts`, add the following method to the `JiraAd
         );
       }
       // Re-fetch the signed CDN URL WITHOUT Authorization (its signature IS the auth).
+      // Use redirect: "follow" so CDN-internal redirects (e.g. S3 region redirects) work.
       const second = await fetch(location, {
         method: "GET",
-        redirect: "manual",
+        redirect: "follow",
         signal,
       });
       if (!second.ok) {
@@ -988,6 +989,7 @@ export async function fetchAttachmentsWithRetry(
   const result: DownloadedAttachment[] = [];
   const usedFilenames = new Set<string>();
   let bytesCommitted = 0;
+  let totalCapTripped = false;
 
   for (let i = 0; i < attachments.length; i++) {
     const att = attachments[i];
@@ -1003,7 +1005,8 @@ export async function fetchAttachmentsWithRetry(
       continue;
     }
     // Cap: total size — once exceeded, all remaining are skipped.
-    if (bytesCommitted + att.size > caps.maxTotalSizeBytes) {
+    if (totalCapTripped || bytesCommitted + att.size > caps.maxTotalSizeBytes) {
+      totalCapTripped = true;
       result.push(skip(att, "skipped: total size cap", log));
       continue;
     }

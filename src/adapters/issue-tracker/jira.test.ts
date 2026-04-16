@@ -188,6 +188,34 @@ describe("JiraAdapter", () => {
       expect(mockFetch.mock.calls[1][0]).toBe(redirectUrl);
     });
 
+    it("also follows one 303 redirect", async () => {
+      const redirectUrl = "https://atlassian-cdn.example/signed-303?x=1";
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: false,
+          status: 303,
+          statusText: "See Other",
+          headers: { get: (n: string) => (n.toLowerCase() === "location" ? redirectUrl : null) },
+          body: { cancel: vi.fn() },
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          statusText: "OK",
+          arrayBuffer: async () => new Uint8Array([1, 2, 3, 4]).buffer,
+        });
+
+      const adapter = jiraAdapter();
+      const buf = await adapter.downloadAttachment(
+        "https://test.atlassian.net/secure/attachment/att-303/file.png",
+      );
+
+      expect(buf).toBeInstanceOf(Buffer);
+      expect(buf.length).toBe(4);
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+      expect(mockFetch.mock.calls[1][0]).toBe(redirectUrl);
+    });
+
     it("returns bytes directly on 200 (no redirect)", async () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,
@@ -204,7 +232,7 @@ describe("JiraAdapter", () => {
       expect(mockFetch).toHaveBeenCalledTimes(1);
     });
 
-    it("throws on non-2xx, non-302 responses", async () => {
+    it("throws on non-2xx, non-redirect responses", async () => {
       mockFetch.mockResolvedValueOnce({
         ok: false,
         status: 500,

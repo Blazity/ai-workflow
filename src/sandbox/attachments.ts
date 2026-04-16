@@ -214,10 +214,14 @@ function resolveFilename(
 
 function isRetryable(err: Error): boolean {
   const msg = err.message ?? "";
+  const status5xxPattern =
+    /\b(?:status(?:Code)?\s*[:=]?\s*5\d\d|HTTP\/\d(?:\.\d)?\s+5\d\d)\b/i;
+  const status429Pattern =
+    /\b(?:status(?:Code)?\s*[:=]?\s*429|HTTP\/\d(?:\.\d)?\s+429)\b/i;
   if (err.name === "AbortError") return true;
   if (/ECONNRESET|ETIMEDOUT|ENETUNREACH|EAI_AGAIN/i.test(msg)) return true;
-  if (/\b5\d\d\b/.test(msg)) return true;
-  if (/\b429\b/.test(msg)) return true;
+  if (status5xxPattern.test(msg)) return true;
+  if (status429Pattern.test(msg)) return true;
   return false;
 }
 
