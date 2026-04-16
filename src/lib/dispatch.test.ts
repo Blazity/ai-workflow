@@ -195,6 +195,18 @@ describe("dispatchTicket", () => {
     expect(mockStart).not.toHaveBeenCalled();
   });
 
+  it("fails open when sandbox count check hangs", async () => {
+    mockSandboxList.mockImplementation(() => new Promise(() => {}));
+    const adapters = makeAdapters();
+    const { dispatchTicket } = await import("./dispatch.js");
+
+    const result = await dispatchTicket("PROJ-42", adapters, 5);
+
+    expect(result).toEqual({ started: true, runId: "run_123" });
+    expect(adapters.runRegistry.claim).toHaveBeenCalledTimes(1);
+    expect(mockStart).toHaveBeenCalledTimes(1);
+  });
+
   it("aborts workflow if claim was removed during dispatch", async () => {
     const mockCancel = vi.fn().mockResolvedValue(undefined);
     mockGetRun.mockReturnValue({ cancel: mockCancel });

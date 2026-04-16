@@ -1,6 +1,7 @@
 import {
   IssueTrackerNotFoundError,
   type IssueTrackerAdapter,
+  type TicketAttachment,
   type TicketContent,
   type TicketComment,
 } from "./types.js";

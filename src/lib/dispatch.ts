@@ -6,6 +6,7 @@ import type { Adapters } from "./adapters.js";
 import { stopTicketSandboxes } from "../sandbox/stop-ticket-sandboxes.js";
 
 const CLAIMING_PREFIX = "claiming:";
+const SANDBOX_LIST_TIMEOUT_MS = 1_000;
 
 export function isClaimingSentinel(runId: string): boolean {
   return runId.startsWith(CLAIMING_PREFIX);
@@ -118,12 +119,36 @@ async function isAtCapacity(max: number): Promise<boolean> {
 async function getActiveSandboxCount(): Promise<number> {
   try {
     const { Sandbox } = await import("@vercel/sandbox");
-    const { json } = await Sandbox.list({ limit: 100 });
+    const { json } = await withTimeout(
+      Sandbox.list({ limit: 100 }),
+      SANDBOX_LIST_TIMEOUT_MS,
+      "sandbox list timeout",
+    );
     return json.sandboxes.filter((s: any) => s.status === "running").length;
   } catch (err) {
     logger.warn({ error: (err as Error).message }, "sandbox_count_check_failed");
     return 0;
   }
+}
+
+async function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  reason: string,
+): Promise<T> {
+  return await new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(reason)), timeoutMs);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
 }
 
 async function verifyClaimNotCancelled(
