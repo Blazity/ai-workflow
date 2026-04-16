@@ -326,6 +326,19 @@ describe("dispatchTicket", () => {
     expect(adapters.runRegistry.claim).not.toHaveBeenCalled();
     expect(mockStart).not.toHaveBeenCalled();
   });
+
+  it("returns error when failed-marker precheck throws", async () => {
+    const adapters = makeAdapters({
+      isTicketFailed: vi.fn().mockRejectedValue(new Error("registry unavailable")),
+    });
+    const { dispatchTicket } = await import("./dispatch.js");
+
+    const result = await dispatchTicket("PROJ-42", adapters, 5);
+
+    expect(result).toEqual({ started: false, reason: "error" });
+    expect(adapters.runRegistry.claim).not.toHaveBeenCalled();
+    expect(mockStart).not.toHaveBeenCalled();
+  });
 });
 
 describe("failed-ticket safeguard full loop", () => {

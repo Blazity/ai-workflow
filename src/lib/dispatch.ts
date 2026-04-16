@@ -31,32 +31,49 @@ export interface DispatchResult {
     | "wrong_project_key";
 }
 
+export interface DispatchOptions {
+  skipCapacityCheck?: boolean;
+}
+
 export async function dispatchTicket(
   ticketKey: string,
   adapters: Adapters,
   maxConcurrentAgents: number,
+  options: DispatchOptions = {},
 ): Promise<DispatchResult> {
   const expectedProjectKey = env.JIRA_PROJECT_KEY.trim().toUpperCase();
   const expectedAiStatus = env.COLUMN_AI.trim().toLowerCase();
   const { issueTracker, runRegistry } = adapters;
-
-  if (await runRegistry.isTicketFailed(ticketKey)) {
-    logger.info({ ticketKey }, "dispatch_skipped_previously_failed");
-    return { started: false, reason: "previously_failed" };
-  }
-
-  if (await isAtCapacity(maxConcurrentAgents)) {
-    return { started: false, reason: "at_capacity" };
-  }
-
-  const claimValue = `${CLAIMING_PREFIX}${Date.now()}`;
-  const claimed = await runRegistry.claim(ticketKey, claimValue);
-  if (!claimed) {
-    logger.info({ ticketKey }, "dispatch_already_claimed");
-    return { started: false, reason: "already_claimed" };
-  }
-
+  let stage = "precheck_failed_marker";
+  let claimHeld = false;
+  let claimValue = "";
   try {
+    logger.info({ ticketKey, maxConcurrentAgents }, "dispatch_attempt");
+
+    if (await runRegistry.isTicketFailed(ticketKey)) {
+      logger.info({ ticketKey }, "dispatch_skipped_previously_failed");
+      return { started: false, reason: "previously_failed" };
+    }
+
+    if (!options.skipCapacityCheck) {
+      stage = "precheck_capacity";
+      if (await isAtCapacity(maxConcurrentAgents)) {
+        return { started: false, reason: "at_capacity" };
+      }
+    } else {
+      logger.info({ ticketKey }, "dispatch_capacity_check_skipped");
+    }
+
+    stage = "claim_ticket";
+    claimValue = `${CLAIMING_PREFIX}${Date.now()}`;
+    const claimed = await runRegistry.claim(ticketKey, claimValue);
+    if (!claimed) {
+      logger.info({ ticketKey }, "dispatch_already_claimed");
+      return { started: false, reason: "already_claimed" };
+    }
+    claimHeld = true;
+
+    stage = "fetch_ticket";
     const ticket = await issueTracker.fetchTicket(ticketKey);
     const ticketStatus = ticket.trackerStatus.trim().toLowerCase();
     if (ticketStatus !== expectedAiStatus) {
@@ -83,12 +100,14 @@ export async function dispatchTicket(
       return { started: false, reason: "wrong_project_key" };
     }
 
+    stage = "start_workflow";
     const handle = await start(agentWorkflow, [ticket.id]);
     logger.info(
       { ticketId: ticket.id, identifier: ticket.identifier, runId: handle.runId },
       "workflow_started",
     );
 
+    stage = "verify_claim_after_start";
     const claimStillHeld = await verifyClaimNotCancelled(
       ticketKey,
       claimValue,
@@ -99,12 +118,15 @@ export async function dispatchTicket(
       return { started: false, reason: "already_claimed" };
     }
 
+    stage = "register_run";
     await runRegistry.register(ticketKey, handle.runId);
     return { started: true, runId: handle.runId };
   } catch (err) {
-    await runRegistry.unregister(ticketKey).catch(() => {});
+    if (claimHeld) {
+      await runRegistry.unregister(ticketKey).catch(() => {});
+    }
     logger.warn(
-      { ticketKey, error: (err as Error).message },
+      { ticketKey, stage, error: (err as Error).message },
       "dispatch_error",
     );
     return { started: false, reason: "error" };

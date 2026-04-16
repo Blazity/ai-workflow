@@ -78,7 +78,17 @@ export default defineEventHandler(async (event) => {
         },
         "webhook_skip_cancel_live_ticket_in_ai_column",
       );
-      const result = await dispatchTicket(ticketKey, adapters, env.MAX_CONCURRENT_AGENTS);
+      logger.info(
+        {
+          ticketKey,
+          maxConcurrentAgents: env.MAX_CONCURRENT_AGENTS,
+          dispatchContext: "payload_outdated_live_ticket_in_ai",
+        },
+        "webhook_dispatch_started",
+      );
+      const result = await dispatchTicket(ticketKey, adapters, env.MAX_CONCURRENT_AGENTS, {
+        skipCapacityCheck: true,
+      });
       logger.info(
         {
           ticketKey,
@@ -119,7 +129,17 @@ export default defineEventHandler(async (event) => {
     };
   }
 
-  const result = await dispatchTicket(ticketKey, adapters, env.MAX_CONCURRENT_AGENTS);
+  logger.info(
+    {
+      ticketKey,
+      maxConcurrentAgents: env.MAX_CONCURRENT_AGENTS,
+      dispatchContext: "default",
+    },
+    "webhook_dispatch_started",
+  );
+  const result = await dispatchTicket(ticketKey, adapters, env.MAX_CONCURRENT_AGENTS, {
+    skipCapacityCheck: true,
+  });
 
   logger.info(
     { ticketKey, started: result.started, reason: result.reason, runId: result.runId },
