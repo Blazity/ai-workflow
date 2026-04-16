@@ -69,15 +69,17 @@ export class JiraAdapter implements IssueTrackerAdapter {
       ),
       labels: data.fields.labels ?? [],
       trackerStatus: data.fields.status?.name ?? "",
-      attachments: (data.fields.attachment ?? []).map(
-        (a: any): TicketAttachment => ({
+      attachments: (data.fields.attachment ?? []).map((a: any): TicketAttachment => {
+        const contentUrl =
+          a.content == null ? undefined : String(a.content).trim();
+        return {
           id: String(a.id),
           filename: a.filename ?? "",
           mimeType: a.mimeType ?? "application/octet-stream",
           size: sanitizeAttachmentSize(a.size),
-          contentUrl: a.content ?? "",
-        }),
-      ),
+          contentUrl: contentUrl || undefined,
+        };
+      }),
     };
   }
 
@@ -123,6 +125,9 @@ export class JiraAdapter implements IssueTrackerAdapter {
     const signal = AbortSignal.timeout(timeoutMs);
     const redirectStatuses = new Set([301, 302, 303, 307, 308]);
     const maxRedirects = 5;
+    if (!url || url.trim() === "") {
+      throw new Error("Jira attachment error: missing attachment content URL");
+    }
     let currentUrl = new URL(url, this.baseUrl).toString();
 
     for (let redirects = 0; redirects <= maxRedirects; redirects++) {
@@ -136,6 +141,7 @@ export class JiraAdapter implements IssueTrackerAdapter {
       if (redirectStatuses.has(res.status)) {
         const location = res.headers.get("location");
         if (!location) {
+          await res.body?.cancel?.();
           throw new Error(
             `Jira attachment redirect (${res.status}) missing Location header for ${currentUrl}`,
           );
@@ -147,6 +153,7 @@ export class JiraAdapter implements IssueTrackerAdapter {
       }
 
       if (!res.ok) {
+        await res.body?.cancel?.();
         throw new Error(
           `Jira attachment error: status ${res.status} ${res.statusText} on ${currentUrl}`,
         );

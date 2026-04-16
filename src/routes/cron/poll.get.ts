@@ -76,8 +76,8 @@ async function dispatchDiscoveredTickets(
       result = await dispatchTicket(key, adapters, env.MAX_CONCURRENT_AGENTS);
     } catch (err) {
       logger.warn(
-        { ticketKey: key, error: (err as Error).message },
-        "poll_dispatch_aborted_capacity_check_failed",
+        { ticketKey: key, error: err },
+        "poll_dispatch_failed",
       );
       break;
     }

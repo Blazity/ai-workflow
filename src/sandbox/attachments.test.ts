@@ -170,6 +170,34 @@ describe("fetchAttachmentsWithRetry", () => {
     expect(downloader.downloadAttachment).toHaveBeenCalledTimes(2);
   });
 
+  it("skips attachments without content URL", async () => {
+    const downloader = {
+      downloadAttachment: vi.fn(async () => Buffer.from([1, 2, 3])),
+    };
+    const out = await fetchAttachmentsWithRetry(
+      downloader,
+      [
+        {
+          id: "1",
+          filename: "missing.bin",
+          mimeType: "application/octet-stream",
+          size: 3,
+        },
+        meta("2", "present.bin", 3),
+      ],
+      defaultCaps,
+      noopLogger(),
+    );
+    expect(out).toHaveLength(2);
+    expect(out[0].failed?.reason).toMatch(/missing content url/);
+    expect(out[1].failed).toBeUndefined();
+    expect(downloader.downloadAttachment).toHaveBeenCalledTimes(1);
+    expect(downloader.downloadAttachment).toHaveBeenCalledWith(
+      "https://jira.example/attachment/2",
+      { timeoutMs: defaultCaps.downloadTimeoutMs },
+    );
+  });
+
   it("skips attachments over per-file cap without downloading", async () => {
     const downloader = {
       downloadAttachment: vi.fn(async () => Buffer.from([])),

@@ -128,6 +128,37 @@ describe("JiraAdapter", () => {
       expect(ticket.attachments.map((a) => a.size)).toEqual([64, 0, 0, 0, 7]);
     });
 
+    it("omits contentUrl when Jira does not provide attachment content", async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          id: "10001",
+          key: "PROJ-1",
+          fields: {
+            summary: "Has partial attachment metadata",
+            description: null,
+            comment: { comments: [] },
+            labels: [],
+            status: { name: "AI" },
+            attachment: [
+              {
+                id: "att-1",
+                filename: "spec.pdf",
+                mimeType: "application/pdf",
+                size: 52100,
+              },
+            ],
+          },
+        }),
+      });
+
+      const adapter = jiraAdapter();
+      const ticket = await adapter.fetchTicket("10001");
+
+      expect(ticket.attachments).toHaveLength(1);
+      expect(ticket.attachments[0].contentUrl).toBeUndefined();
+    });
+
     it("returns empty attachments array when field is absent", async () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,
@@ -293,6 +324,23 @@ describe("JiraAdapter", () => {
       expect(secondHeaders.Authorization).toBeUndefined();
     });
 
+    it("drains body and throws when redirect is missing Location", async () => {
+      const cancelFn = vi.fn();
+      mockFetch.mockResolvedValueOnce({
+        ok: false,
+        status: 302,
+        statusText: "Found",
+        headers: { get: () => null },
+        body: { cancel: cancelFn },
+      });
+
+      const adapter = jiraAdapter();
+      await expect(
+        adapter.downloadAttachment("https://test.atlassian.net/secure/attachment/att-1/missing"),
+      ).rejects.toThrow(/missing Location header/i);
+      expect(cancelFn).toHaveBeenCalledOnce();
+    });
+
     it("returns bytes directly on 200 (no redirect)", async () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,
@@ -310,17 +358,20 @@ describe("JiraAdapter", () => {
     });
 
     it("throws on non-2xx, non-redirect responses", async () => {
+      const cancelFn = vi.fn();
       mockFetch.mockResolvedValueOnce({
         ok: false,
         status: 500,
         statusText: "Internal Server Error",
         headers: { get: () => null },
+        body: { cancel: cancelFn },
       });
 
       const adapter = jiraAdapter();
       await expect(
         adapter.downloadAttachment("https://test.atlassian.net/secure/attachment/att-1/x"),
       ).rejects.toThrow(/500/);
+      expect(cancelFn).toHaveBeenCalledOnce();
     });
 
     it("throws IssueTrackerNotFoundError on 404", async () => {

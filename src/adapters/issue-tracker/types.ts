@@ -31,7 +31,7 @@ export interface TicketAttachment {
   filename: string;
   mimeType: string;
   size: number;
-  contentUrl: string;
+  contentUrl?: string;
 }
 
 export interface IssueTrackerAdapter {

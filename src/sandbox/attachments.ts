@@ -120,6 +120,11 @@ export async function fetchAttachmentsWithRetry(
       result.push(skip(att, "skipped: total size cap", log));
       continue;
     }
+    const contentUrl = att.contentUrl?.trim();
+    if (!contentUrl) {
+      result.push(skip(att, "skipped: missing content url", log));
+      continue;
+    }
 
     const safeName = resolveFilename(att, usedFilenames);
     usedFilenames.add(safeName);
@@ -129,7 +134,7 @@ export async function fetchAttachmentsWithRetry(
     while (attempts < MAX_ATTEMPTS) {
       attempts++;
       try {
-        const content = await downloader.downloadAttachment(att.contentUrl, {
+        const content = await downloader.downloadAttachment(contentUrl, {
           timeoutMs: caps.downloadTimeoutMs,
         });
         bytesCommitted += att.size;
