@@ -160,6 +160,26 @@ describe("parseResearchStatus", () => {
     const { status } = parseResearchStatus(raw);
     expect(status).toBe("completed");
   });
+
+  it("handles leading blank lines before STATUS", () => {
+    const raw = "\n\nSTATUS: clarification_needed\n\n1. Which provider?";
+    const { status, body } = parseResearchStatus(raw);
+    expect(status).toBe("clarification_needed");
+    expect(body).toContain("Which provider?");
+  });
+
+  it("normalizes uppercase status values", () => {
+    const raw = "STATUS: CLARIFICATION_NEEDED\n\n1. Which provider?";
+    const { status } = parseResearchStatus(raw);
+    expect(status).toBe("clarification_needed");
+  });
+
+  it("extracts STATUS from fenced output", () => {
+    const raw = "```markdown\nSTATUS: clarification_needed\n\n1. Which provider?\n```";
+    const { status, body } = parseResearchStatus(raw);
+    expect(status).toBe("clarification_needed");
+    expect(body).toContain("Which provider?");
+  });
 });
 
 describe("parseReviewOutput", () => {
