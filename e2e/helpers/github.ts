@@ -139,6 +139,26 @@ export async function isPRMergeable(prNumber: number): Promise<boolean | null> {
   return data.mergeable;
 }
 
+/** Read a file's text content from a branch. Returns null if not found. */
+export async function getFileContent(
+  branch: string,
+  filePath: string,
+): Promise<string | null> {
+  try {
+    const { data } = await octokit.repos.getContent({
+      ...ownerRepo,
+      path: filePath,
+      ref: branch,
+    });
+    if (!Array.isArray(data) && data.type === "file") {
+      return Buffer.from(data.content, "base64").toString("utf-8");
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 export async function deleteFile(
   branch: string,
   filePath: string,

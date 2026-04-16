@@ -12,6 +12,7 @@ import {
   findPR,
   getPRCommits,
   getPRFiles,
+  getFileContent,
   addPRComment,
   closePR,
   deleteBranch,
@@ -53,8 +54,14 @@ describe("US-3: Review feedback triggers a fix cycle", () => {
     const ticket = await createTestTicket({
       summary: "[E2E] Add GET /api/ping endpoint",
       description: [
-        "Add a GET /api/ping API route that returns { ping: 'pong' } with status 200.",
-        "Create only one route file at app/api/ping/route.ts.",
+        "Add a GET /api/ping API route that returns JSON { ping: 'pong' } with status 200.",
+        "",
+        "Acceptance criteria:",
+        "- Route file at app/api/ping/route.ts",
+        "- Exports a GET handler function",
+        '- Returns JSON response: { ping: "pong" }',
+        "- HTTP 200 response",
+        "- No other files created or modified",
       ].join("\n"),
     });
     ticketKey = ticket.ticketKey;
@@ -86,10 +93,16 @@ describe("US-3: Review feedback triggers a fix cycle", () => {
     const commitsBefore = await getPRCommits(prNumber);
     const commitCountBefore = commitsBefore.length;
 
-    // Add a review comment requesting a rename
+    // Add a review comment requesting a rename with specific instructions
     await addPRComment(
       prNumber,
-      'Rename the `/ping` endpoint to `/healthcheck` — remove the old `/ping` route entirely and create `/healthcheck` instead.',
+      [
+        "Please make these changes:",
+        "1. Delete app/api/ping/route.ts entirely",
+        "2. Create app/api/healthcheck/route.ts instead",
+        '3. The new route must export a GET handler that returns JSON { healthcheck: "passed" }',
+        "4. No other files should be created or modified",
+      ].join("\n"),
     );
 
     // --- Act: move ticket to AI to trigger the review-fix workflow ---
@@ -127,6 +140,19 @@ describe("US-3: Review feedback triggers a fix cycle", () => {
     const filenames = prFiles.map((f) => f.filename);
     expect(filenames.some((f) => f.includes("healthcheck"))).toBe(true);
     expect(filenames.some((f) => f.includes("/ping/"))).toBe(false);
+
+    // Healthcheck route file exists on the branch with correct content
+    const routeContent = await getFileContent(
+      branchName,
+      "app/api/healthcheck/route.ts",
+    );
+    expect(routeContent).not.toBeNull();
+    expect(routeContent).toMatch(/export\s+(async\s+)?function\s+GET/);
+    expect(routeContent).toContain('"passed"');
+
+    // Old ping route must not exist on the branch
+    const oldRoute = await getFileContent(branchName, "app/api/ping/route.ts");
+    expect(oldRoute).toBeNull();
 
     // Redis cleaned up
     await waitFor(

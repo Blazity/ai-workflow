@@ -10,6 +10,7 @@ import {
   createOrUpdateFile,
   openPR,
   getPRCommits,
+  getFileContent,
   isPRMergeable,
   closePR,
   deleteBranch,
@@ -59,11 +60,13 @@ describe("US-4: PR with merge conflicts — agent rebases", () => {
     const ticket = await createTestTicket({
       summary: `[E2E] Add greeting file at ${conflictFile}`,
       description: [
-        `Create a file at ${conflictFile} containing exactly: "Hello from blazebot"`,
+        `Create a file at ${conflictFile} with a single line containing exactly: Hello from blazebot`,
         "",
         "Acceptance criteria:",
-        `- File exists at ${conflictFile}`,
-        '- File content is exactly "Hello from blazebot"',
+        `- File exists at path ${conflictFile}`,
+        "- File contains exactly one line: Hello from blazebot",
+        "- No other text or content in the file",
+        "- No other files created or modified",
       ].join("\n"),
     });
     ticketKey = ticket.ticketKey;
@@ -146,6 +149,13 @@ describe("US-4: PR with merge conflicts — agent rebases", () => {
     // PR has new commits (conflict resolution commit)
     const commitsAfter = await getPRCommits(prNumber);
     expect(commitsAfter.length).toBeGreaterThan(commitCountBefore);
+
+    // Conflict file on the branch contains the ticket's expected content
+    const fileContent = await getFileContent(branchName, conflictFile);
+    expect(fileContent).not.toBeNull();
+    expect(fileContent!.trim()).toContain("Hello from blazebot");
+    // Must not contain conflict markers
+    expect(fileContent).not.toMatch(/^<{7}/m);
 
     // Ticket status is AI Review
     const finalStatus = await getTicketStatus(ticketKey);
