@@ -67,6 +67,11 @@ export default defineEventHandler(async (event) => {
     }
 
     const cancelled = await cancelTrackedRun(ticketKey, adapters.runRegistry);
+    if (cancelled) {
+      await adapters.messaging.notify(
+        `Task ${ticketKey} canceled: webhook confirmed ticket is outside AI column.`,
+      );
+    }
     logger.info(
       {
         ticketKey,

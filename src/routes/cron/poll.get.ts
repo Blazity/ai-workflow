@@ -15,6 +15,15 @@ export default defineEventHandler(async (event) => {
     new Set(ticketKeys),
     adapters.runRegistry,
     adapters.issueTracker,
+    async (ticketKey, reason) => {
+      const detail =
+        reason === "inflight_claim"
+          ? "claim was cleared after the ticket left AI"
+          : "workflow run was cancelled after the ticket left AI";
+      await adapters.messaging.notify(
+        `Task ${ticketKey} canceled: ${detail}.`,
+      );
+    },
   );
 
   return {

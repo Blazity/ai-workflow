@@ -172,6 +172,19 @@ describe("reconcileRuns", () => {
     expect(mockCancelRun).toHaveBeenCalledWith("PROJ-1", "run_stale", registry);
   });
 
+  it("emits cancel callback when run is cancelled in reconcile", async () => {
+    const registry = makeRegistry([
+      { ticketKey: "PROJ-1", runId: "run_stale" },
+    ]);
+    mockCancelRun.mockResolvedValue(true);
+    const onTicketCancelled = vi.fn().mockResolvedValue(undefined);
+    const { reconcileRuns } = await import("./reconcile.js");
+
+    await reconcileRuns(new Set(), registry, undefined, onTicketCancelled);
+
+    expect(onTicketCancelled).toHaveBeenCalledWith("PROJ-1", "orphaned_run");
+  });
+
   it("keeps running run when missing from JQL snapshot but Jira still says AI", async () => {
     const registry = makeRegistry([
       { ticketKey: "PROJ-1", runId: "run_live" },

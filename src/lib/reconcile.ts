@@ -25,6 +25,10 @@ export async function reconcileRuns(
   aiColumnTickets: Set<string>,
   runRegistry: RunRegistryAdapter,
   issueTracker?: IssueTrackerAdapter,
+  onTicketCancelled?: (
+    ticketKey: string,
+    reason: "orphaned_run" | "inflight_claim",
+  ) => Promise<void> | void,
 ): Promise<{ cancelled: number; cleaned: number }> {
   const activeRuns = await runRegistry.listAll();
   let cancelled = 0;
@@ -38,6 +42,7 @@ export async function reconcileRuns(
         aiColumnTickets,
         runRegistry,
         issueTracker,
+        onTicketCancelled,
       );
       cancelled += result.cancelled;
       cleaned += result.cleaned;
@@ -53,6 +58,7 @@ export async function reconcileRuns(
       if (!leftAiColumn) continue;
       await cancelRun(ticketKey, runId, runRegistry);
       logger.info({ ticketKey, runId }, "reconcile_cancelled_orphaned_run");
+      await notifyTicketCancelled(ticketKey, "orphaned_run", onTicketCancelled);
       cancelled++;
     }
   }
@@ -132,6 +138,10 @@ async function reconcileInflightClaim(
   aiColumnTickets: Set<string>,
   runRegistry: RunRegistryAdapter,
   issueTracker?: IssueTrackerAdapter,
+  onTicketCancelled?: (
+    ticketKey: string,
+    reason: "orphaned_run" | "inflight_claim",
+  ) => Promise<void> | void,
 ): Promise<{ cancelled: number; cleaned: number }> {
   const claimAge = Date.now() - getClaimTimestamp(runId);
   const claimIsStale = claimAge > STALE_CLAIM_MS;
@@ -148,10 +158,30 @@ async function reconcileInflightClaim(
     if (!leftAiColumn) return { cancelled: 0, cleaned: 0 };
     await runRegistry.unregister(ticketKey);
     logger.info({ ticketKey, runId }, "reconcile_cancelled_inflight_claim");
+    await notifyTicketCancelled(ticketKey, "inflight_claim", onTicketCancelled);
     return { cancelled: 1, cleaned: 0 };
   }
 
   return { cancelled: 0, cleaned: 0 };
+}
+
+async function notifyTicketCancelled(
+  ticketKey: string,
+  reason: "orphaned_run" | "inflight_claim",
+  onTicketCancelled?: (
+    ticketKey: string,
+    reason: "orphaned_run" | "inflight_claim",
+  ) => Promise<void> | void,
+): Promise<void> {
+  if (!onTicketCancelled) return;
+  try {
+    await onTicketCancelled(ticketKey, reason);
+  } catch (err) {
+    logger.warn(
+      { ticketKey, reason, error: (err as Error).message },
+      "reconcile_cancel_notification_failed",
+    );
+  }
 }
 
 async function cleanFinishedRun(
