@@ -1,4 +1,9 @@
-import type { IssueTrackerAdapter, TicketContent, TicketComment } from "./types.js";
+import {
+  IssueTrackerNotFoundError,
+  type IssueTrackerAdapter,
+  type TicketContent,
+  type TicketComment,
+} from "./types.js";
 
 export interface JiraConfig {
   baseUrl: string;
@@ -28,6 +33,9 @@ export class JiraAdapter implements IssueTrackerAdapter {
       },
     });
     if (!res.ok) {
+      if (res.status === 404) {
+        throw new IssueTrackerNotFoundError("Jira resource", path);
+      }
       throw new Error(`Jira API error: ${res.status} ${res.statusText} on ${path}`);
     }
     if (res.status === 204) return null;
@@ -40,11 +48,12 @@ export class JiraAdapter implements IssueTrackerAdapter {
 
   async fetchTicket(id: string): Promise<TicketContent> {
     const data = await this.request(
-      `/rest/api/3/issue/${id}?fields=summary,description,comment,labels,status`,
+      `/rest/api/3/issue/${id}?fields=summary,description,comment,labels,status,project`,
     );
     return {
       id: data.id,
       identifier: data.key,
+      projectKey: data.fields.project?.key ?? extractProjectKey(data.key),
       title: data.fields.summary ?? "",
       description: extractAdfText(data.fields.description),
       acceptanceCriteria: extractAcceptanceCriteria(data.fields.description),
@@ -116,4 +125,11 @@ function extractAcceptanceCriteria(description: any): string {
   const text = extractAdfText(description);
   const match = text.match(/acceptance criteria[:\s]*([\s\S]*?)(?:\n\n|\n#|$)/i);
   return match?.[1]?.trim() ?? "";
+}
+
+function extractProjectKey(identifier: string): string | undefined {
+  if (!identifier) return undefined;
+  const dash = identifier.indexOf("-");
+  if (dash <= 0) return undefined;
+  return identifier.slice(0, dash).toUpperCase();
 }

@@ -14,6 +14,7 @@ export default defineEventHandler(async (event) => {
   const { cancelled, cleaned } = await reconcileRuns(
     new Set(ticketKeys),
     adapters.runRegistry,
+    adapters.issueTracker,
   );
 
   return {
@@ -35,10 +36,23 @@ function verifyCronAuth(authHeader: string | undefined): void {
 async function discoverAiColumnTickets(
   adapters: ReturnType<typeof createAdapters>,
 ): Promise<string[]> {
-  const jql = `project = ${env.JIRA_PROJECT_KEY} AND status = "${env.COLUMN_AI}"`;
+  const jql = `project = "${env.JIRA_PROJECT_KEY}" AND status = "${env.COLUMN_AI}"`;
   const ticketKeys = await adapters.issueTracker.searchTickets(jql);
-  logger.info({ ticketCount: ticketKeys.length }, "poll_discovered_tickets");
-  return ticketKeys;
+  const normalizedKeys = normalizeTicketKeys(ticketKeys);
+
+  if (normalizedKeys.length !== ticketKeys.length) {
+    logger.warn(
+      {
+        discovered: ticketKeys.length,
+        valid: normalizedKeys.length,
+        expectedProjectKey: env.JIRA_PROJECT_KEY,
+      },
+      "poll_discarded_invalid_ticket_keys",
+    );
+  }
+
+  logger.info({ ticketCount: normalizedKeys.length }, "poll_discovered_tickets");
+  return normalizedKeys;
 }
 
 async function dispatchDiscoveredTickets(
@@ -54,4 +68,19 @@ async function dispatchDiscoveredTickets(
   }
 
   return started;
+}
+
+function normalizeTicketKeys(ticketKeys: string[]): string[] {
+  const expectedPrefix = `${env.JIRA_PROJECT_KEY.trim().toUpperCase()}-`;
+  const unique = new Set<string>();
+
+  for (const rawKey of ticketKeys) {
+    const key = typeof rawKey === "string" ? rawKey.trim() : "";
+    if (!key) continue;
+    const normalizedKey = key.toUpperCase();
+    if (!normalizedKey.startsWith(expectedPrefix)) continue;
+    unique.add(normalizedKey);
+  }
+
+  return [...unique];
 }
