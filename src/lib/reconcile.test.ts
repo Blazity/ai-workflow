@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import type { IssueTrackerAdapter } from "../adapters/issue-tracker/types.js";
 import type { RunRegistryAdapter } from "../adapters/run-registry/types.js";
 
 vi.mock("../../env.js", () => ({
@@ -32,6 +33,18 @@ function makeRegistry(
     isTicketFailed: vi.fn().mockResolvedValue(false),
     listAllFailed: vi.fn().mockResolvedValue(failed),
     clearFailedMark: vi.fn().mockResolvedValue(undefined),
+  };
+}
+
+function makeIssueTracker(
+  overrides: Partial<IssueTrackerAdapter> = {},
+): IssueTrackerAdapter {
+  return {
+    fetchTicket: vi.fn(),
+    moveTicket: vi.fn(),
+    postComment: vi.fn(),
+    searchTickets: vi.fn(),
+    ...overrides,
   };
 }
 
@@ -78,6 +91,30 @@ describe("reconcileRuns", () => {
     expect(result).toEqual({ cancelled: 1, cleaned: 0 });
     expect(registry.unregister).toHaveBeenCalledWith("PROJ-1");
     expect(mockCancelRun).not.toHaveBeenCalled();
+  });
+
+  it("keeps fresh claiming entry when missing from JQL snapshot but Jira still says AI", async () => {
+    const registry = makeRegistry([
+      { ticketKey: "PROJ-1", runId: `claiming:${Date.now()}` },
+    ]);
+    const issueTracker = makeIssueTracker({
+      fetchTicket: vi.fn().mockResolvedValue({
+        id: "id-1",
+        identifier: "PROJ-1",
+        title: "x",
+        description: "",
+        acceptanceCriteria: "",
+        comments: [],
+        labels: [],
+        trackerStatus: "AI",
+      }),
+    });
+    const { reconcileRuns } = await import("./reconcile.js");
+
+    const result = await reconcileRuns(new Set(), registry, issueTracker);
+
+    expect(result).toEqual({ cancelled: 0, cleaned: 0 });
+    expect(registry.unregister).not.toHaveBeenCalled();
   });
 
   it("cleans completed runs that are still in AI column", async () => {
@@ -130,6 +167,47 @@ describe("reconcileRuns", () => {
 
     expect(result).toEqual({ cancelled: 1, cleaned: 0 });
     expect(mockCancelRun).toHaveBeenCalledWith("PROJ-1", "run_stale", registry);
+  });
+
+  it("keeps running run when missing from JQL snapshot but Jira still says AI", async () => {
+    const registry = makeRegistry([
+      { ticketKey: "PROJ-1", runId: "run_live" },
+    ]);
+    const issueTracker = makeIssueTracker({
+      fetchTicket: vi.fn().mockResolvedValue({
+        id: "id-1",
+        identifier: "PROJ-1",
+        title: "x",
+        description: "",
+        acceptanceCriteria: "",
+        comments: [],
+        labels: [],
+        trackerStatus: "AI",
+      }),
+    });
+    const { reconcileRuns } = await import("./reconcile.js");
+
+    const result = await reconcileRuns(new Set(), registry, issueTracker);
+
+    expect(result).toEqual({ cancelled: 0, cleaned: 0 });
+    expect(mockCancelRun).not.toHaveBeenCalled();
+    expect(registry.unregister).not.toHaveBeenCalled();
+  });
+
+  it("keeps running run when orphan verification fails", async () => {
+    const registry = makeRegistry([
+      { ticketKey: "PROJ-1", runId: "run_live" },
+    ]);
+    const issueTracker = makeIssueTracker({
+      fetchTicket: vi.fn().mockRejectedValue(new Error("Jira API error: 500 Internal Server Error")),
+    });
+    const { reconcileRuns } = await import("./reconcile.js");
+
+    const result = await reconcileRuns(new Set(), registry, issueTracker);
+
+    expect(result).toEqual({ cancelled: 0, cleaned: 0 });
+    expect(mockCancelRun).not.toHaveBeenCalled();
+    expect(registry.unregister).not.toHaveBeenCalled();
   });
 
   it("does not unregister on a single getRun failure (strike 1 of 3)", async () => {

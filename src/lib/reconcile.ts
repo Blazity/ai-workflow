@@ -1,7 +1,9 @@
 import { getRun } from "workflow/api";
+import { env } from "../../env.js";
 import { isClaimingSentinel, getClaimTimestamp } from "./dispatch.js";
 import { cancelRun } from "./cancel-run.js";
 import { logger } from "./logger.js";
+import type { IssueTrackerAdapter } from "../adapters/issue-tracker/types.js";
 import type { RunRegistryAdapter } from "../adapters/run-registry/types.js";
 
 const TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled"]);
@@ -19,6 +21,7 @@ const UNREACHABLE_STRIKES_LIMIT = 3;
 export async function reconcileRuns(
   aiColumnTickets: Set<string>,
   runRegistry: RunRegistryAdapter,
+  issueTracker?: IssueTrackerAdapter,
 ): Promise<{ cancelled: number; cleaned: number }> {
   const activeRuns = await runRegistry.listAll();
   let cancelled = 0;
@@ -31,6 +34,7 @@ export async function reconcileRuns(
         runId,
         aiColumnTickets,
         runRegistry,
+        issueTracker,
       );
       cancelled += result.cancelled;
       cleaned += result.cleaned;
@@ -42,6 +46,8 @@ export async function reconcileRuns(
     if (ticketStillInAiColumn) {
       cleaned += await cleanFinishedRun(ticketKey, runId, runRegistry);
     } else {
+      const leftAiColumn = await verifyTicketLeftAiColumn(ticketKey, issueTracker);
+      if (!leftAiColumn) continue;
       await cancelRun(ticketKey, runId, runRegistry);
       logger.info({ ticketKey, runId }, "reconcile_cancelled_orphaned_run");
       cancelled++;
@@ -60,11 +66,44 @@ export async function reconcileRuns(
   return { cancelled, cleaned };
 }
 
+async function verifyTicketLeftAiColumn(
+  ticketKey: string,
+  issueTracker?: IssueTrackerAdapter,
+): Promise<boolean> {
+  if (!issueTracker) return true;
+
+  try {
+    const ticket = await issueTracker.fetchTicket(ticketKey);
+    const status = ticket.trackerStatus.trim().toLowerCase();
+    const expectedStatus = env.COLUMN_AI.trim().toLowerCase();
+    const stillInAiColumn = status === expectedStatus;
+
+    if (stillInAiColumn) {
+      logger.info(
+        { ticketKey, status: ticket.trackerStatus },
+        "reconcile_kept_run_missing_from_poll_snapshot",
+      );
+      return false;
+    }
+
+    return true;
+  } catch (err) {
+    const message = (err as Error).message;
+    if (/\b404\b/.test(message)) return true;
+    logger.warn(
+      { ticketKey, error: message },
+      "reconcile_orphan_verification_failed",
+    );
+    return false;
+  }
+}
+
 async function reconcileInflightClaim(
   ticketKey: string,
   runId: string,
   aiColumnTickets: Set<string>,
   runRegistry: RunRegistryAdapter,
+  issueTracker?: IssueTrackerAdapter,
 ): Promise<{ cancelled: number; cleaned: number }> {
   const claimAge = Date.now() - getClaimTimestamp(runId);
   const claimIsStale = claimAge > STALE_CLAIM_MS;
@@ -77,6 +116,8 @@ async function reconcileInflightClaim(
   }
 
   if (ticketLeftAiColumn) {
+    const leftAiColumn = await verifyTicketLeftAiColumn(ticketKey, issueTracker);
+    if (!leftAiColumn) return { cancelled: 0, cleaned: 0 };
     await runRegistry.unregister(ticketKey);
     logger.info({ ticketKey, runId }, "reconcile_cancelled_inflight_claim");
     return { cancelled: 1, cleaned: 0 };

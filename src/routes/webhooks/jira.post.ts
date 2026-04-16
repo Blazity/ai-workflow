@@ -2,7 +2,8 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 import { defineEventHandler, readRawBody, getHeader, createError } from "h3";
 import { env } from "../../../env.js";
 import { createAdapters } from "../../lib/adapters.js";
-import { dispatchTicket } from "../../lib/dispatch.js";
+import { cancelRun } from "../../lib/cancel-run.js";
+import { dispatchTicket, isClaimingSentinel } from "../../lib/dispatch.js";
 import { logger } from "../../lib/logger.js";
 
 /**
@@ -43,6 +44,20 @@ export default defineEventHandler(async (event) => {
   logger.info({ ticketKey }, "webhook_received");
 
   const adapters = createAdapters();
+  const ticketStatus = extractTicketStatus(body);
+  if (ticketStatus && !isAiColumnStatus(ticketStatus)) {
+    const cancelled = await cancelTrackedRun(ticketKey, adapters.runRegistry);
+    logger.info(
+      { ticketKey, ticketStatus, cancelled },
+      "webhook_ticket_left_ai_column",
+    );
+    return {
+      status: cancelled ? "cancelled" : "ignored",
+      reason: "left_ai_column",
+      ticketKey,
+    };
+  }
+
   const result = await dispatchTicket(ticketKey, adapters, env.MAX_CONCURRENT_AGENTS);
 
   logger.info(
@@ -116,3 +131,25 @@ function extractProjectKey(body: any): string | null {
   return body?.issue?.fields?.project?.key ?? null;
 }
 
+function extractTicketStatus(body: any): string | null {
+  return body?.issue?.fields?.status?.name ?? null;
+}
+
+function isAiColumnStatus(status: string): boolean {
+  return status.trim().toLowerCase() === env.COLUMN_AI.trim().toLowerCase();
+}
+
+async function cancelTrackedRun(
+  ticketKey: string,
+  runRegistry: ReturnType<typeof createAdapters>["runRegistry"],
+): Promise<boolean> {
+  const trackedRunId = await runRegistry.getRunId(ticketKey);
+  if (!trackedRunId) return false;
+
+  if (isClaimingSentinel(trackedRunId)) {
+    await runRegistry.unregister(ticketKey).catch(() => {});
+    return true;
+  }
+
+  return cancelRun(ticketKey, trackedRunId, runRegistry);
+}

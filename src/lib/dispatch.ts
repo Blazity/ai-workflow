@@ -5,8 +5,6 @@ import { logger } from "./logger.js";
 import type { Adapters } from "./adapters.js";
 
 const CLAIMING_PREFIX = "claiming:";
-const EXPECTED_PROJECT_KEY = env.JIRA_PROJECT_KEY.trim().toUpperCase();
-const EXPECTED_AI_STATUS = env.COLUMN_AI.trim().toLowerCase();
 
 export function isClaimingSentinel(runId: string): boolean {
   return runId.startsWith(CLAIMING_PREFIX);
@@ -33,6 +31,8 @@ export async function dispatchTicket(
   adapters: Adapters,
   maxConcurrentAgents: number,
 ): Promise<DispatchResult> {
+  const expectedProjectKey = env.JIRA_PROJECT_KEY.trim().toUpperCase();
+  const expectedAiStatus = env.COLUMN_AI.trim().toLowerCase();
   const { issueTracker, runRegistry } = adapters;
 
   if (await runRegistry.isTicketFailed(ticketKey)) {
@@ -54,7 +54,7 @@ export async function dispatchTicket(
   try {
     const ticket = await issueTracker.fetchTicket(ticketKey);
     const ticketStatus = ticket.trackerStatus.trim().toLowerCase();
-    if (ticketStatus !== EXPECTED_AI_STATUS) {
+    if (ticketStatus !== expectedAiStatus) {
       await runRegistry.unregister(ticketKey).catch(() => {});
       logger.info(
         { ticketKey, ticketStatus: ticket.trackerStatus, expectedStatus: env.COLUMN_AI },
@@ -64,7 +64,7 @@ export async function dispatchTicket(
     }
 
     const ticketProjectKey = extractProjectKey(ticket.identifier);
-    if (!ticketProjectKey || ticketProjectKey !== EXPECTED_PROJECT_KEY) {
+    if (!ticketProjectKey || ticketProjectKey !== expectedProjectKey) {
       await runRegistry.unregister(ticketKey).catch(() => {});
       logger.info(
         {

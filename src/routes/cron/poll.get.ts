@@ -14,6 +14,7 @@ export default defineEventHandler(async (event) => {
   const { cancelled, cleaned } = await reconcileRuns(
     new Set(ticketKeys),
     adapters.runRegistry,
+    adapters.issueTracker,
   );
 
   return {
