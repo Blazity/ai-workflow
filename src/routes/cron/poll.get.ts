@@ -77,8 +77,9 @@ function normalizeTicketKeys(ticketKeys: string[]): string[] {
   for (const rawKey of ticketKeys) {
     const key = typeof rawKey === "string" ? rawKey.trim() : "";
     if (!key) continue;
-    if (!key.toUpperCase().startsWith(expectedPrefix)) continue;
-    unique.add(key);
+    const normalizedKey = key.toUpperCase();
+    if (!normalizedKey.startsWith(expectedPrefix)) continue;
+    unique.add(normalizedKey);
   }
 
   return [...unique];

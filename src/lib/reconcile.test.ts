@@ -1,5 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import type { IssueTrackerAdapter } from "../adapters/issue-tracker/types.js";
+import {
+  IssueTrackerNotFoundError,
+  type IssueTrackerAdapter,
+} from "../adapters/issue-tracker/types.js";
 import type { RunRegistryAdapter } from "../adapters/run-registry/types.js";
 
 vi.mock("../../env.js", () => ({
@@ -192,6 +195,50 @@ describe("reconcileRuns", () => {
     expect(result).toEqual({ cancelled: 0, cleaned: 0 });
     expect(mockCancelRun).not.toHaveBeenCalled();
     expect(registry.unregister).not.toHaveBeenCalled();
+  });
+
+  it("cancels running run when ticket moved to a different project", async () => {
+    const registry = makeRegistry([
+      { ticketKey: "PROJ-1", runId: "run_live" },
+    ]);
+    mockCancelRun.mockResolvedValue(true);
+    const issueTracker = makeIssueTracker({
+      fetchTicket: vi.fn().mockResolvedValue({
+        id: "id-1",
+        identifier: "OTHER-1",
+        projectKey: "OTHER",
+        title: "x",
+        description: "",
+        acceptanceCriteria: "",
+        comments: [],
+        labels: [],
+        trackerStatus: "AI",
+      }),
+    });
+    const { reconcileRuns } = await import("./reconcile.js");
+
+    const result = await reconcileRuns(new Set(), registry, issueTracker);
+
+    expect(result).toEqual({ cancelled: 1, cleaned: 0 });
+    expect(mockCancelRun).toHaveBeenCalledWith("PROJ-1", "run_live", registry);
+  });
+
+  it("treats typed not-found as left column and cancels running run", async () => {
+    const registry = makeRegistry([
+      { ticketKey: "PROJ-1", runId: "run_live" },
+    ]);
+    mockCancelRun.mockResolvedValue(true);
+    const issueTracker = makeIssueTracker({
+      fetchTicket: vi.fn().mockRejectedValue(
+        new IssueTrackerNotFoundError("ticket", "PROJ-1"),
+      ),
+    });
+    const { reconcileRuns } = await import("./reconcile.js");
+
+    const result = await reconcileRuns(new Set(), registry, issueTracker);
+
+    expect(result).toEqual({ cancelled: 1, cleaned: 0 });
+    expect(mockCancelRun).toHaveBeenCalledWith("PROJ-1", "run_live", registry);
   });
 
   it("keeps running run when orphan verification fails", async () => {

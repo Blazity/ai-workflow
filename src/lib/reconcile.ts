@@ -3,7 +3,10 @@ import { env } from "../../env.js";
 import { isClaimingSentinel, getClaimTimestamp } from "./dispatch.js";
 import { cancelRun } from "./cancel-run.js";
 import { logger } from "./logger.js";
-import type { IssueTrackerAdapter } from "../adapters/issue-tracker/types.js";
+import {
+  IssueTrackerNotFoundError,
+  type IssueTrackerAdapter,
+} from "../adapters/issue-tracker/types.js";
 import type { RunRegistryAdapter } from "../adapters/run-registry/types.js";
 
 const TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled"]);
@@ -74,13 +77,16 @@ async function verifyTicketLeftAiColumn(
 
   try {
     const ticket = await issueTracker.fetchTicket(ticketKey);
-    const status = ticket.trackerStatus.trim().toLowerCase();
+    const ticketStatus = ticket.trackerStatus.trim().toLowerCase();
     const expectedStatus = env.COLUMN_AI.trim().toLowerCase();
-    const stillInAiColumn = status === expectedStatus;
+    const ticketProjectKey = resolveTicketProjectKey(ticket);
+    const expectedProjectKey = env.JIRA_PROJECT_KEY.trim().toUpperCase();
+    const stillInExpectedAiColumn =
+      ticketStatus === expectedStatus && ticketProjectKey === expectedProjectKey;
 
-    if (stillInAiColumn) {
+    if (stillInExpectedAiColumn) {
       logger.info(
-        { ticketKey, status: ticket.trackerStatus },
+        { ticketKey, status: ticket.trackerStatus, projectKey: ticketProjectKey },
         "reconcile_kept_run_missing_from_poll_snapshot",
       );
       return false;
@@ -88,14 +94,36 @@ async function verifyTicketLeftAiColumn(
 
     return true;
   } catch (err) {
-    const message = (err as Error).message;
-    if (/\b404\b/.test(message)) return true;
+    if (err instanceof IssueTrackerNotFoundError || getErrorCode(err) === "NOT_FOUND") {
+      return true;
+    }
     logger.warn(
-      { ticketKey, error: message },
+      { ticketKey, error: (err as Error).message },
       "reconcile_orphan_verification_failed",
     );
     return false;
   }
+}
+
+function resolveTicketProjectKey(ticket: {
+  projectKey?: string;
+  identifier: string;
+}): string | null {
+  const direct = ticket.projectKey?.trim();
+  if (direct) return direct.toUpperCase();
+
+  const identifier = ticket.identifier?.trim();
+  if (!identifier) return null;
+
+  const dashIndex = identifier.indexOf("-");
+  if (dashIndex <= 0) return null;
+  return identifier.slice(0, dashIndex).toUpperCase();
+}
+
+function getErrorCode(err: unknown): string | undefined {
+  if (!err || typeof err !== "object") return undefined;
+  const maybeCode = (err as { code?: unknown }).code;
+  return typeof maybeCode === "string" ? maybeCode : undefined;
 }
 
 async function reconcileInflightClaim(
