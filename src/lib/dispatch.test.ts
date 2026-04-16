@@ -41,6 +41,7 @@ function makeTicket(overrides: Partial<TicketContent> = {}): TicketContent {
     comments: [],
     labels: [],
     trackerStatus: "AI",
+    attachments: [],
     ...overrides,
   };
 }
@@ -102,9 +103,15 @@ function makeAdapters(
 
 describe("dispatchTicket", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    mockSandboxList.mockReset();
+    mockStart.mockReset();
+    mockGetRun.mockReset();
+    mockStopTicketSandboxes.mockReset();
     mockSandboxList.mockResolvedValue({
-      json: { sandboxes: [] },
+      json: {
+        sandboxes: [],
+        pagination: { count: 0, next: null, prev: null },
+      },
     });
     mockStart.mockResolvedValue({ runId: "run_123" });
     mockStopTicketSandboxes.mockResolvedValue(0);
@@ -182,12 +189,60 @@ describe("dispatchTicket", () => {
           { status: "running" },
           { status: "running" },
         ],
+        pagination: { count: 3, next: null, prev: null },
       },
     });
     const adapters = makeAdapters();
     const { dispatchTicket } = await import("./dispatch.js");
 
     const result = await dispatchTicket("PROJ-42", adapters, 3);
+
+    expect(result).toEqual({ started: false, reason: "at_capacity" });
+    expect(adapters.runRegistry.claim).not.toHaveBeenCalled();
+    expect(mockStart).not.toHaveBeenCalled();
+  });
+
+  it("paginates sandbox list when counting active sandboxes", async () => {
+    mockSandboxList
+      .mockResolvedValueOnce({
+        json: {
+          sandboxes: [{ status: "running" }],
+          pagination: { count: 1, next: 123, prev: null },
+        },
+      })
+      .mockResolvedValueOnce({
+        json: {
+          sandboxes: [{ status: "running" }, { status: "running" }],
+          pagination: { count: 2, next: null, prev: 123 },
+        },
+      });
+    const adapters = makeAdapters();
+    const { dispatchTicket } = await import("./dispatch.js");
+
+    const result = await dispatchTicket("PROJ-42", adapters, 3);
+
+    expect(result).toEqual({ started: false, reason: "at_capacity" });
+    expect(mockSandboxList).toHaveBeenCalledTimes(2);
+    expect(mockSandboxList.mock.calls[0][0]).toMatchObject({
+      limit: 100,
+      since: undefined,
+      signal: expect.any(AbortSignal),
+    });
+    expect(mockSandboxList.mock.calls[1][0]).toMatchObject({
+      limit: 100,
+      since: 123,
+      signal: expect.any(AbortSignal),
+    });
+    expect(adapters.runRegistry.claim).not.toHaveBeenCalled();
+    expect(mockStart).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when sandbox count check fails", async () => {
+    mockSandboxList.mockRejectedValue(new Error("sandbox list timeout"));
+    const adapters = makeAdapters();
+    const { dispatchTicket } = await import("./dispatch.js");
+
+    const result = await dispatchTicket("PROJ-42", adapters, 5);
 
     expect(result).toEqual({ started: false, reason: "at_capacity" });
     expect(adapters.runRegistry.claim).not.toHaveBeenCalled();
@@ -275,8 +330,16 @@ describe("dispatchTicket", () => {
 
 describe("failed-ticket safeguard full loop", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
-    mockSandboxList.mockResolvedValue({ json: { sandboxes: [] } });
+    mockSandboxList.mockReset();
+    mockStart.mockReset();
+    mockGetRun.mockReset();
+    mockStopTicketSandboxes.mockReset();
+    mockSandboxList.mockResolvedValue({
+      json: {
+        sandboxes: [],
+        pagination: { count: 0, next: null, prev: null },
+      },
+    });
     mockStart.mockResolvedValue({ runId: "run_123" });
     mockStopTicketSandboxes.mockResolvedValue(0);
   });

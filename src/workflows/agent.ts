@@ -2,6 +2,8 @@ import { sleep } from "workflow";
 import type { AgentOutput } from "../sandbox/agent-runner.js";
 import type { ReviewOutput } from "../sandbox/agent-runner.js";
 import type { PRComment, CheckRunResult } from "../adapters/vcs/types.js";
+import type { TicketAttachment } from "../adapters/issue-tracker/types.js";
+import type { DownloadedAttachment } from "../sandbox/attachments.js";
 import type { PhaseUsage } from "../sandbox/usage.js";
 
 // --- Step Functions ---
@@ -14,6 +16,99 @@ async function fetchAndValidateTicket(ticketId: string, columnAi: string) {
   if (ticket.trackerStatus.toLowerCase() !== columnAi.toLowerCase()) return null;
   return ticket;
 }
+
+async function fetchAttachments(
+  ticketIdentifier: string,
+  attachments: TicketAttachment[],
+) {
+  "use step";
+  const { logger } = await import("../lib/logger.js");
+  const log = logger.child({ ticket_identifier: ticketIdentifier, step: "fetchAttachments" });
+  log.info({ count: attachments.length }, "fetchAttachments: start");
+
+  if (attachments.length === 0) {
+    log.info({}, "fetchAttachments: no attachments");
+    return [];
+  }
+
+  const { env } = await import("../../env.js");
+  const { createStepAdapters } = await import("../lib/step-adapters.js");
+  const { fetchAttachmentsWithRetry } = await import("../sandbox/attachments.js");
+  const { issueTracker } = createStepAdapters();
+
+  // downloadAttachment is optional on IssueTrackerAdapter — not all trackers
+  // support it. If absent, skip attachments cleanly.
+  if (typeof issueTracker.downloadAttachment !== "function") {
+    log.warn(
+      { tracker: issueTracker.constructor.name },
+      "issue tracker does not support attachment downloads; skipping",
+    );
+    return [];
+  }
+
+  const downloader = issueTracker as {
+    downloadAttachment: (url: string, opts?: { timeoutMs?: number }) => Promise<Buffer>;
+  };
+
+  const result = await fetchAttachmentsWithRetry(
+    downloader,
+    attachments,
+    {
+      maxFileSizeBytes: env.ATTACHMENT_MAX_FILE_SIZE_MB * 1024 * 1024,
+      maxTotalSizeBytes: env.ATTACHMENT_MAX_TOTAL_SIZE_MB * 1024 * 1024,
+      maxCount: env.ATTACHMENT_MAX_COUNT,
+      downloadTimeoutMs: env.ATTACHMENT_DOWNLOAD_TIMEOUT_MS,
+    },
+    log,
+  );
+  log.info(
+    {
+      succeeded: result.filter((a) => !a.failed).length,
+      failed: result.filter((a) => a.failed).length,
+    },
+    "fetchAttachments: done",
+  );
+  return result;
+}
+fetchAttachments.maxRetries = 0;
+
+async function writeAttachments(
+  sandboxId: string,
+  attachments: DownloadedAttachment[],
+): Promise<void> {
+  "use step";
+  const { logger } = await import("../lib/logger.js");
+  const log = logger.child({ sandboxId, step: "writeAttachments" });
+
+  const toWrite = attachments.filter((a) => a.content && !a.failed);
+  log.info(
+    { count: toWrite.length, totalReceived: attachments.length },
+    "writeAttachments: start",
+  );
+  if (toWrite.length === 0) {
+    log.info({}, "writeAttachments: nothing to write");
+    return;
+  }
+
+  const { Sandbox } = await import("@vercel/sandbox");
+  const { getSandboxCredentials } = await import("../sandbox/credentials.js");
+
+  const sandbox = await Sandbox.get({ sandboxId, ...getSandboxCredentials() });
+
+  // Ensure target directory exists — writeFiles does not guarantee mkdir -p semantics.
+  await sandbox.runCommand("mkdir", ["-p", "/tmp/attachments"]);
+
+  await sandbox.writeFiles(
+    toWrite.map((a) => ({
+      path: `/tmp/attachments/${a.filename}`,
+      content: Buffer.isBuffer(a.content)
+        ? (a.content as Buffer)
+        : Buffer.from(a.content as unknown as Uint8Array),
+    })),
+  );
+  log.info({ count: toWrite.length }, "writeAttachments: done");
+}
+writeAttachments.maxRetries = 0;
 
 async function createFeatureBranch(branchName: string, baseBranch: string) {
   "use step";
@@ -252,10 +347,14 @@ export async function agentWorkflow(ticketId: string) {
 
     const mergeBase = prContext?.hasConflicts ? baseBranch : undefined;
 
+    const downloadedAttachments = await fetchAttachments(ticket.identifier, ticket.attachments);
+
     // Provision sandbox once for all phases
     const sandboxId = await provisionSandbox(branchName, mergeBase);
 
     try {
+      await writeAttachments(sandboxId, downloadedAttachments);
+
       // ========== PHASE 1: Research & Plan ==========
       await configureStopHook(sandboxId, false);
 
@@ -274,6 +373,7 @@ export async function agentWorkflow(ticketId: string) {
         prComments: prContext?.prComments,
         checkResults: prContext?.checkResults,
         hasConflicts: prContext?.hasConflicts,
+        attachments: downloadedAttachments,
       });
 
       const researchScript = buildPhaseScript({
@@ -339,11 +439,13 @@ export async function agentWorkflow(ticketId: string) {
               prompt: getPrompt("implement.md"),
               researchPlanMarkdown,
               reviewFeedback: lastReviewFeedback,
+              attachments: downloadedAttachments,
             })
           : assembleImplementationContext({
               ticket: ticketData,
               prompt: getPrompt("implement.md"),
               researchPlanMarkdown,
+              attachments: downloadedAttachments,
             });
 
         const implScript = buildPhaseScript({
@@ -402,6 +504,7 @@ export async function agentWorkflow(ticketId: string) {
           prompt: getPrompt("review.md"),
           researchPlanMarkdown,
           gitDiff,
+          attachments: downloadedAttachments,
         });
 
         const reviewScript = buildPhaseScript({

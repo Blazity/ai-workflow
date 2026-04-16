@@ -71,7 +71,16 @@ async function dispatchDiscoveredTickets(
   const started: string[] = [];
 
   for (const key of ticketKeys) {
-    const result = await dispatchTicket(key, adapters, env.MAX_CONCURRENT_AGENTS);
+    let result: Awaited<ReturnType<typeof dispatchTicket>>;
+    try {
+      result = await dispatchTicket(key, adapters, env.MAX_CONCURRENT_AGENTS);
+    } catch (err) {
+      logger.warn(
+        { ticketKey: key, error: err },
+        "poll_dispatch_failed",
+      );
+      break;
+    }
     if (result.started) started.push(key);
     if (result.reason === "at_capacity") break;
   }

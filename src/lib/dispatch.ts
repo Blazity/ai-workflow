@@ -1,4 +1,5 @@
 import { start, getRun } from "workflow/api";
+import { Sandbox } from "@vercel/sandbox";
 import { env } from "../../env.js";
 import { agentWorkflow } from "../workflows/agent.js";
 import { logger } from "./logger.js";
@@ -6,6 +7,9 @@ import type { Adapters } from "./adapters.js";
 import { stopTicketSandboxes } from "../sandbox/stop-ticket-sandboxes.js";
 
 const CLAIMING_PREFIX = "claiming:";
+const SANDBOX_LIST_TIMEOUT_MS = 1_000;
+const SANDBOX_LIST_PAGE_LIMIT = 100;
+const SANDBOX_COUNT_FAILED = Number.MAX_SAFE_INTEGER;
 
 export function isClaimingSentinel(runId: string): boolean {
   return runId.startsWith(CLAIMING_PREFIX);
@@ -109,6 +113,10 @@ export async function dispatchTicket(
 
 async function isAtCapacity(max: number): Promise<boolean> {
   const active = await getActiveSandboxCount();
+  if (active === SANDBOX_COUNT_FAILED) {
+    logger.warn({ max }, "dispatch_capacity_check_failed_closed");
+    return true;
+  }
   if (active < max) return false;
 
   logger.info({ active, max }, "dispatch_at_capacity");
@@ -117,12 +125,30 @@ async function isAtCapacity(max: number): Promise<boolean> {
 
 async function getActiveSandboxCount(): Promise<number> {
   try {
-    const { Sandbox } = await import("@vercel/sandbox");
-    const { json } = await Sandbox.list({ limit: 100 });
-    return json.sandboxes.filter((s: any) => s.status === "running").length;
+    let runningCount = 0;
+    let since: number | undefined;
+
+    while (true) {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), SANDBOX_LIST_TIMEOUT_MS);
+      try {
+        const { json } = await Sandbox.list({
+          limit: SANDBOX_LIST_PAGE_LIMIT,
+          since,
+          signal: controller.signal,
+        });
+        runningCount += json.sandboxes.filter(
+          (sandbox: { status?: string }) => sandbox.status === "running",
+        ).length;
+        if (json.pagination.next == null) return runningCount;
+        since = json.pagination.next;
+      } finally {
+        clearTimeout(timeout);
+      }
+    }
   } catch (err) {
     logger.warn({ error: (err as Error).message }, "sandbox_count_check_failed");
-    return 0;
+    return SANDBOX_COUNT_FAILED;
   }
 }
 
