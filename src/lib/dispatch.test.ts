@@ -2,6 +2,13 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { Adapters } from "./adapters.js";
 import type { TicketContent } from "../adapters/issue-tracker/types.js";
 
+vi.mock("../../env.js", () => ({
+  env: {
+    JIRA_PROJECT_KEY: "PROJ",
+    COLUMN_AI: "AI",
+  },
+}));
+
 const mockStart = vi.fn();
 const mockGetRun = vi.fn();
 vi.mock("workflow/api", () => ({
@@ -14,10 +21,14 @@ vi.mock("../workflows/agent.js", () => ({
 }));
 
 const mockSandboxList = vi.fn();
+const mockStopTicketSandboxes = vi.fn();
 vi.mock("@vercel/sandbox", () => ({
   Sandbox: {
     list: (...args: any[]) => mockSandboxList(...args),
   },
+}));
+vi.mock("../sandbox/stop-ticket-sandboxes.js", () => ({
+  stopTicketSandboxes: (...args: any[]) => mockStopTicketSandboxes(...args),
 }));
 
 function makeTicket(overrides: Partial<TicketContent> = {}): TicketContent {
@@ -97,9 +108,10 @@ describe("dispatchTicket", () => {
       json: { sandboxes: [] },
     });
     mockStart.mockResolvedValue({ runId: "run_123" });
+    mockStopTicketSandboxes.mockResolvedValue(0);
   });
 
-  it("dispatches agentWorkflow for any ticket", async () => {
+  it("dispatches agentWorkflow for a ticket in configured project + AI column", async () => {
     const adapters = makeAdapters();
     const { dispatchTicket } = await import("./dispatch.js");
 
@@ -118,6 +130,36 @@ describe("dispatchTicket", () => {
       "PROJ-42",
       "run_123",
     );
+  });
+
+  it("skips dispatch when ticket is no longer in AI column", async () => {
+    const unregister = vi.fn().mockResolvedValue(undefined);
+    const adapters = makeAdapters({
+      fetchTicket: vi.fn().mockResolvedValue(makeTicket({ trackerStatus: "Backlog" })),
+      unregister,
+    });
+    const { dispatchTicket } = await import("./dispatch.js");
+
+    const result = await dispatchTicket("PROJ-42", adapters, 5);
+
+    expect(result).toEqual({ started: false, reason: "not_in_ai_column" });
+    expect(unregister).toHaveBeenCalledWith("PROJ-42");
+    expect(mockStart).not.toHaveBeenCalled();
+  });
+
+  it("skips dispatch when ticket is outside configured Jira project key", async () => {
+    const unregister = vi.fn().mockResolvedValue(undefined);
+    const adapters = makeAdapters({
+      fetchTicket: vi.fn().mockResolvedValue(makeTicket({ identifier: "OTHER-42" })),
+      unregister,
+    });
+    const { dispatchTicket } = await import("./dispatch.js");
+
+    const result = await dispatchTicket("PROJ-42", adapters, 5);
+
+    expect(result).toEqual({ started: false, reason: "wrong_project_key" });
+    expect(unregister).toHaveBeenCalledWith("PROJ-42");
+    expect(mockStart).not.toHaveBeenCalled();
   });
 
   it("returns already_claimed when claim fails", async () => {
@@ -169,6 +211,7 @@ describe("dispatchTicket", () => {
     expect(mockStart).toHaveBeenCalled();
     expect(mockGetRun).toHaveBeenCalledWith("run_123");
     expect(mockCancel).toHaveBeenCalled();
+    expect(mockStopTicketSandboxes).toHaveBeenCalledWith("PROJ-42");
     expect(adapters.runRegistry.register).not.toHaveBeenCalled();
   });
 
@@ -236,6 +279,7 @@ describe("failed-ticket safeguard full loop", () => {
     vi.clearAllMocks();
     mockSandboxList.mockResolvedValue({ json: { sandboxes: [] } });
     mockStart.mockResolvedValue({ runId: "run_123" });
+    mockStopTicketSandboxes.mockResolvedValue(0);
   });
 
   it("mark → skip → clear → redispatch", async () => {

@@ -50,8 +50,20 @@ Return \`STATUS: clarification_needed\` if:
 - Contradictory requirements
 - Multiple valid interpretations
 - Missing design/UX details for UI work
+- The ticket uses subjective/vague references (for example "favorite page", "do the thing", "fix it") without an explicit file/route/component target
+
+If the ticket requires assumptions to pick a target or behavior, you MUST ask clarification instead of guessing from repository structure.
 
 When you need clarification, list your questions as numbered lines after the STATUS line. Batch ALL questions — never return with just one.
+
+## Mandatory Clarity Gate (Before Choosing STATUS: completed)
+
+You MUST answer YES to ALL checks below before returning \`STATUS: completed\`:
+1. Is the exact implementation target explicit (file/path/component/endpoint), without relying on assumptions?
+2. Is the expected behavior explicit enough to implement and verify?
+3. Is "done" objectively checkable from ticket + comments + acceptance criteria?
+
+If any answer is NO, return \`STATUS: clarification_needed\` with precise numbered questions.
 
 ## Constraints
 

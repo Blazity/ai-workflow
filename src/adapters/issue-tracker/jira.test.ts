@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { JiraAdapter } from "./jira.js";
+import { IssueTrackerNotFoundError } from "./types.js";
 
 const mockFetch = vi.fn();
 global.fetch = mockFetch;
@@ -244,6 +245,19 @@ describe("JiraAdapter", () => {
       await expect(
         adapter.downloadAttachment("https://test.atlassian.net/secure/attachment/att-1/x"),
       ).rejects.toThrow(/500/);
+    });
+
+    it("throws IssueTrackerNotFoundError on 404", async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: false,
+        status: 404,
+        statusText: "Not Found",
+      });
+
+      const adapter = jiraAdapter();
+      await expect(adapter.fetchTicket("10001")).rejects.toBeInstanceOf(
+        IssueTrackerNotFoundError,
+      );
     });
   });
 

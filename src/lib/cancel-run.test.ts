@@ -2,8 +2,12 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { RunRegistryAdapter } from "../adapters/run-registry/types.js";
 
 const mockGetRun = vi.fn();
+const mockStopTicketSandboxes = vi.fn();
 vi.mock("workflow/api", () => ({
   getRun: (...args: any[]) => mockGetRun(...args),
+}));
+vi.mock("../sandbox/stop-ticket-sandboxes.js", () => ({
+  stopTicketSandboxes: (...args: any[]) => mockStopTicketSandboxes(...args),
 }));
 
 function makeRegistry(overrides: Partial<RunRegistryAdapter> = {}): RunRegistryAdapter {
@@ -21,7 +25,10 @@ function makeRegistry(overrides: Partial<RunRegistryAdapter> = {}): RunRegistryA
 }
 
 describe("cancelRun", () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockStopTicketSandboxes.mockResolvedValue(0);
+  });
 
   it("cancels the run and unregisters", async () => {
     const mockCancel = vi.fn().mockResolvedValue(undefined);
@@ -34,6 +41,7 @@ describe("cancelRun", () => {
     expect(result).toBe(true);
     expect(mockGetRun).toHaveBeenCalledWith("run_abc");
     expect(mockCancel).toHaveBeenCalled();
+    expect(mockStopTicketSandboxes).toHaveBeenCalledWith("PROJ-1");
     expect(registry.unregister).toHaveBeenCalledWith("PROJ-1");
   });
 
@@ -47,6 +55,7 @@ describe("cancelRun", () => {
     const result = await cancelRun("PROJ-1", "run_abc", registry);
 
     expect(result).toBe(false);
+    expect(mockStopTicketSandboxes).toHaveBeenCalledWith("PROJ-1");
     expect(registry.unregister).toHaveBeenCalledWith("PROJ-1");
   });
 
@@ -63,5 +72,6 @@ describe("cancelRun", () => {
 
     expect(result).toBe(false);
     expect(unregister).toHaveBeenCalledTimes(2);
+    expect(mockStopTicketSandboxes).toHaveBeenCalledTimes(2);
   });
 });
