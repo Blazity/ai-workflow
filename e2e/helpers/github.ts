@@ -1,7 +1,15 @@
 import { Octokit } from "@octokit/rest";
 import { e2eEnv } from "../env.js";
 
-const octokit = new Octokit({ auth: e2eEnv.E2E_GITHUB_TOKEN });
+const octokit = new Octokit({
+  auth: e2eEnv.E2E_GITHUB_TOKEN,
+  log: {
+    debug: () => {},
+    info: () => {},
+    warn: () => {},
+    error: () => {},
+  },
+});
 const ownerRepo = { owner: e2eEnv.E2E_GITHUB_OWNER, repo: e2eEnv.E2E_GITHUB_REPO };
 
 export async function findPR(
