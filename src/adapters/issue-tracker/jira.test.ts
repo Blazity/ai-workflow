@@ -99,6 +99,35 @@ describe("JiraAdapter", () => {
       });
     });
 
+    it("sanitizes malformed attachment sizes", async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          id: "10001",
+          key: "PROJ-1",
+          fields: {
+            summary: "Has malformed sizes",
+            description: null,
+            comment: { comments: [] },
+            labels: [],
+            status: { name: "AI" },
+            attachment: [
+              { id: "att-1", size: "64", content: "https://test.atlassian.net/1" },
+              { id: "att-2", size: "bad", content: "https://test.atlassian.net/2" },
+              { id: "att-3", size: -10, content: "https://test.atlassian.net/3" },
+              { id: "att-4", size: Number.POSITIVE_INFINITY, content: "https://test.atlassian.net/4" },
+              { id: "att-5", size: 7.9, content: "https://test.atlassian.net/5" },
+            ],
+          },
+        }),
+      });
+
+      const adapter = jiraAdapter();
+      const ticket = await adapter.fetchTicket("10001");
+
+      expect(ticket.attachments.map((a) => a.size)).toEqual([64, 0, 0, 0, 7]);
+    });
+
     it("returns empty attachments array when field is absent", async () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,
@@ -189,6 +218,50 @@ describe("JiraAdapter", () => {
       expect(mockFetch.mock.calls[1][0]).toBe(redirectUrl);
     });
 
+    it("does not send Authorization when the initial URL is cross-origin", async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        statusText: "OK",
+        arrayBuffer: async () => new Uint8Array([1]).buffer,
+      });
+
+      const adapter = jiraAdapter();
+      await adapter.downloadAttachment("https://atlassian-cdn.example/signed?x=1");
+
+      const firstInit = mockFetch.mock.calls[0][1] as RequestInit;
+      const firstHeaders = (firstInit.headers ?? {}) as Record<string, string>;
+      expect(firstHeaders.Authorization).toBeUndefined();
+    });
+
+    it("resolves relative redirect targets and keeps Authorization for same-origin refetches", async () => {
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: false,
+          status: 302,
+          statusText: "Found",
+          headers: {
+            get: (n: string) => (n.toLowerCase() === "location" ? "/secure/attachment/att-9/file.png?dl=1" : null),
+          },
+          body: { cancel: vi.fn() },
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          statusText: "OK",
+          arrayBuffer: async () => new Uint8Array([9]).buffer,
+        });
+
+      const adapter = jiraAdapter();
+      await adapter.downloadAttachment("https://test.atlassian.net/secure/attachment/att-9/file.png");
+
+      expect(mockFetch.mock.calls[1][0]).toBe(
+        "https://test.atlassian.net/secure/attachment/att-9/file.png?dl=1",
+      );
+      const secondInit = mockFetch.mock.calls[1][1] as RequestInit;
+      expect((secondInit.headers as Record<string, string>).Authorization).toMatch(/^Basic /);
+    });
+
     it("also follows one 303 redirect", async () => {
       const redirectUrl = "https://atlassian-cdn.example/signed-303?x=1";
       mockFetch
@@ -215,6 +288,9 @@ describe("JiraAdapter", () => {
       expect(buf.length).toBe(4);
       expect(mockFetch).toHaveBeenCalledTimes(2);
       expect(mockFetch.mock.calls[1][0]).toBe(redirectUrl);
+      const secondInit = mockFetch.mock.calls[1][1] as RequestInit;
+      const secondHeaders = (secondInit.headers ?? {}) as Record<string, string>;
+      expect(secondHeaders.Authorization).toBeUndefined();
     });
 
     it("returns bytes directly on 200 (no redirect)", async () => {

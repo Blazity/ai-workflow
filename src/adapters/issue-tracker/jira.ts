@@ -15,10 +15,12 @@ export interface JiraConfig {
 
 export class JiraAdapter implements IssueTrackerAdapter {
   private baseUrl: string;
+  private jiraBaseOrigin: string;
   private authHeader: string;
 
   constructor(private config: JiraConfig) {
     this.baseUrl = config.baseUrl.replace(/\/$/, "");
+    this.jiraBaseOrigin = new URL(this.baseUrl).origin;
     this.authHeader =
       "Basic " +
       Buffer.from(`${config.email}:${config.apiToken}`).toString("base64");
@@ -72,7 +74,7 @@ export class JiraAdapter implements IssueTrackerAdapter {
           id: String(a.id),
           filename: a.filename ?? "",
           mimeType: a.mimeType ?? "application/octet-stream",
-          size: Number(a.size ?? 0),
+          size: sanitizeAttachmentSize(a.size),
           contentUrl: a.content ?? "",
         }),
       ),
@@ -119,46 +121,47 @@ export class JiraAdapter implements IssueTrackerAdapter {
   ): Promise<Buffer> {
     const timeoutMs = opts.timeoutMs ?? 30_000;
     const signal = AbortSignal.timeout(timeoutMs);
+    const redirectStatuses = new Set([301, 302, 303, 307, 308]);
+    const maxRedirects = 5;
+    let currentUrl = new URL(url, this.baseUrl).toString();
 
-    // First request: authenticated, manual redirect handling.
-    const first = await fetch(url, {
-      method: "GET",
-      headers: { Authorization: this.authHeader },
-      redirect: "manual",
-      signal,
-    });
-
-    if ([301, 302, 303, 307, 308].includes(first.status)) {
-      const location = first.headers.get("location");
-      if (!location) {
-        throw new Error(
-          `Jira attachment redirect (${first.status}) missing Location header for ${url}`,
-        );
-      }
-      // Drain first response body to release the socket back to the pool.
-      await first.body?.cancel?.();
-      // Re-fetch the signed CDN URL WITHOUT Authorization (its signature IS the auth).
-      // Use redirect: "follow" here since the auth header is already stripped — further
-      // CDN-internal redirects (e.g. S3 region redirects) are safe and common.
-      const second = await fetch(location, {
+    for (let redirects = 0; redirects <= maxRedirects; redirects++) {
+      const res = await fetch(currentUrl, {
         method: "GET",
-        redirect: "follow",
+        headers: this.buildAttachmentHeaders(currentUrl),
+        redirect: "manual",
         signal,
       });
-      if (!second.ok) {
+
+      if (redirectStatuses.has(res.status)) {
+        const location = res.headers.get("location");
+        if (!location) {
+          throw new Error(
+            `Jira attachment redirect (${res.status}) missing Location header for ${currentUrl}`,
+          );
+        }
+        // Drain redirect response body to release the socket back to the pool.
+        await res.body?.cancel?.();
+        currentUrl = new URL(location, currentUrl).toString();
+        continue;
+      }
+
+      if (!res.ok) {
         throw new Error(
-          `Jira attachment CDN error: status ${second.status} ${second.statusText} on ${location}`,
+          `Jira attachment error: status ${res.status} ${res.statusText} on ${currentUrl}`,
         );
       }
-      return Buffer.from(await second.arrayBuffer());
+      return Buffer.from(await res.arrayBuffer());
     }
 
-    if (!first.ok) {
-      throw new Error(
-        `Jira attachment error: status ${first.status} ${first.statusText} on ${url}`,
-      );
-    }
-    return Buffer.from(await first.arrayBuffer());
+    throw new Error(
+      `Jira attachment error: too many redirects while fetching ${url}`,
+    );
+  }
+
+  private buildAttachmentHeaders(url: string): HeadersInit | undefined {
+    if (new URL(url).origin !== this.jiraBaseOrigin) return undefined;
+    return { Authorization: this.authHeader };
   }
 
   async searchTickets(jql: string): Promise<string[]> {
@@ -190,4 +193,11 @@ function extractProjectKey(identifier: string): string | undefined {
   const dash = identifier.indexOf("-");
   if (dash <= 0) return undefined;
   return identifier.slice(0, dash).toUpperCase();
+}
+
+function sanitizeAttachmentSize(size: unknown): number {
+  const parsed = Number(size ?? 0);
+  if (!Number.isFinite(parsed)) return 0;
+  if (parsed <= 0) return 0;
+  return Math.trunc(parsed);
 }
