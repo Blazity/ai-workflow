@@ -1,6 +1,7 @@
 import { getRun } from "workflow/api";
 import { logger } from "./logger.js";
 import type { RunRegistryAdapter } from "../adapters/run-registry/types.js";
+import { stopTicketSandboxes } from "../sandbox/stop-ticket-sandboxes.js";
 
 /**
  * Cancel a workflow run and unregister it from the registry.
@@ -24,6 +25,7 @@ export async function cancelRun(
     );
   }
 
+  await stopTicketSandboxes(ticketKey).catch(() => {});
   await runRegistry.unregister(ticketKey).catch(() => {});
   return cancelled;
 }

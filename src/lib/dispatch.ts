@@ -3,6 +3,7 @@ import { env } from "../../env.js";
 import { agentWorkflow } from "../workflows/agent.js";
 import { logger } from "./logger.js";
 import type { Adapters } from "./adapters.js";
+import { stopTicketSandboxes } from "../sandbox/stop-ticket-sandboxes.js";
 
 const CLAIMING_PREFIX = "claiming:";
 
@@ -140,6 +141,7 @@ async function abortWorkflow(runId: string, ticketKey: string): Promise<void> {
     const run = getRun(runId);
     await run.cancel();
   } catch {}
+  await stopTicketSandboxes(ticketKey).catch(() => {});
 }
 
 function extractProjectKey(ticketIdentifier: string): string | null {

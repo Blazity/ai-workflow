@@ -21,10 +21,14 @@ vi.mock("../workflows/agent.js", () => ({
 }));
 
 const mockSandboxList = vi.fn();
+const mockStopTicketSandboxes = vi.fn();
 vi.mock("@vercel/sandbox", () => ({
   Sandbox: {
     list: (...args: any[]) => mockSandboxList(...args),
   },
+}));
+vi.mock("../sandbox/stop-ticket-sandboxes.js", () => ({
+  stopTicketSandboxes: (...args: any[]) => mockStopTicketSandboxes(...args),
 }));
 
 function makeTicket(overrides: Partial<TicketContent> = {}): TicketContent {
@@ -103,6 +107,7 @@ describe("dispatchTicket", () => {
       json: { sandboxes: [] },
     });
     mockStart.mockResolvedValue({ runId: "run_123" });
+    mockStopTicketSandboxes.mockResolvedValue(0);
   });
 
   it("dispatches agentWorkflow for a ticket in configured project + AI column", async () => {
@@ -205,6 +210,7 @@ describe("dispatchTicket", () => {
     expect(mockStart).toHaveBeenCalled();
     expect(mockGetRun).toHaveBeenCalledWith("run_123");
     expect(mockCancel).toHaveBeenCalled();
+    expect(mockStopTicketSandboxes).toHaveBeenCalledWith("PROJ-42");
     expect(adapters.runRegistry.register).not.toHaveBeenCalled();
   });
 
@@ -272,6 +278,7 @@ describe("failed-ticket safeguard full loop", () => {
     vi.clearAllMocks();
     mockSandboxList.mockResolvedValue({ json: { sandboxes: [] } });
     mockStart.mockResolvedValue({ runId: "run_123" });
+    mockStopTicketSandboxes.mockResolvedValue(0);
   });
 
   it("mark → skip → clear → redispatch", async () => {
