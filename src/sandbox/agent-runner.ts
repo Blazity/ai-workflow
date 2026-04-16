@@ -135,7 +135,7 @@ export function parseResearchStatus(raw: string): ResearchResult {
 // --- Review Output Schema ---
 
 const reviewOutputSchema = z.object({
-  result: z.enum(["approved", "changes_requested", "failed"]),
+  result: z.enum(["approved", "failed"]),
   feedback: z.string(),
   issues: z.array(z.object({
     file: z.string(),
@@ -152,7 +152,7 @@ export const REVIEW_SCHEMA = JSON.stringify({
   properties: {
     result: {
       type: "string",
-      enum: ["approved", "changes_requested", "failed"],
+      enum: ["approved", "failed"],
     },
     feedback: { type: "string" },
     issues: {

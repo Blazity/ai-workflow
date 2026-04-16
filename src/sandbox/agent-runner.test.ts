@@ -194,16 +194,16 @@ describe("parseReviewOutput", () => {
     expect(output.feedback).toBe("Looks good");
   });
 
-  it("parses changes_requested result with issues", () => {
+  it("parses approved result with issues", () => {
     const raw = JSON.stringify({
-      result: "changes_requested",
-      feedback: "Several issues found",
+      result: "approved",
+      feedback: "Fixed several issues",
       issues: [
-        { file: "src/foo.ts", description: "Missing null check", severity: "critical" },
+        { file: "src/foo.ts", description: "Fixed missing null check", severity: "critical" },
       ],
     });
     const output = parseReviewOutput(raw);
-    expect(output.result).toBe("changes_requested");
+    expect(output.result).toBe("approved");
     expect(output.issues).toHaveLength(1);
     expect(output.issues[0].severity).toBe("critical");
   });

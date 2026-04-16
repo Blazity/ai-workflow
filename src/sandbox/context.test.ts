@@ -2,7 +2,6 @@ import { describe, it, expect } from "vitest";
 import {
   assembleResearchPlanContext,
   assembleImplementationContext,
-  assembleImplementationRetryContext,
   assembleReviewContext,
   formatCheckResults,
 } from "./context.js";
@@ -199,108 +198,6 @@ describe("assembleImplementationContext (new)", () => {
       ticket: { identifier: "X", title: "t", description: "d", acceptanceCriteria: "a", comments: [] },
       prompt: "p",
       researchPlanMarkdown: "plan",
-      attachments: [
-        {
-          filename: "spec.pdf",
-          originalFilename: "spec.pdf",
-          mimeType: "application/pdf",
-          size: 0,
-          failed: { reason: "HTTP 500", attempts: 3 },
-        },
-      ],
-    });
-    expect(result).toContain("## Attachments");
-    expect(result).toContain("⚠️");
-    expect(result).toContain("spec.pdf");
-  });
-});
-
-describe("assembleImplementationRetryContext", () => {
-  it("includes plan and review feedback", () => {
-    const result = assembleImplementationRetryContext({
-      ticket: {
-        identifier: "TEST-1",
-        title: "Add login page",
-        description: "Build a login page",
-        acceptanceCriteria: "User can log in",
-        comments: [],
-      },
-      prompt: "prompt",
-      researchPlanMarkdown: "# Plan\n1. Create LoginForm",
-      reviewFeedback: {
-        result: "changes_requested",
-        feedback: "Missing error handling",
-        issues: [
-          { file: "src/LoginForm.tsx", description: "No null check", severity: "critical" },
-        ],
-      },
-    });
-
-    expect(result).toContain("## Research & Plan");
-    expect(result).toContain("Create LoginForm");
-    expect(result).toContain("## Review Feedback");
-    expect(result).toContain("Missing error handling");
-    expect(result).toContain("src/LoginForm.tsx");
-    expect(result).toContain("No null check");
-    expect(result).toContain("critical");
-  });
-
-  it("renders attachments index when attachments are provided", () => {
-    const result = assembleImplementationRetryContext({
-      ticket: {
-        identifier: "TEST-3",
-        title: "With files",
-        description: "desc",
-        acceptanceCriteria: "ac",
-        comments: [],
-      },
-      prompt: "prompt",
-      researchPlanMarkdown: "plan",
-      reviewFeedback: { result: "changes_requested", feedback: "fb", issues: [] },
-      attachments: [
-        {
-          filename: "mockup.png",
-          originalFilename: "mockup.png",
-          mimeType: "image/png",
-          size: 348_192,
-          content: Buffer.from([]),
-        },
-      ],
-    });
-    expect(result).toContain("## Attachments");
-    expect(result).toContain("/tmp/attachments/mockup.png");
-
-    const atIdx = result.indexOf("## Attachments");
-    const acIdx = result.indexOf("## Acceptance Criteria");
-    expect(atIdx).toBeGreaterThan(-1);
-    expect(acIdx).toBeGreaterThan(atIdx);
-  });
-
-  it("omits attachments section when list is empty or absent", () => {
-    const withoutField = assembleImplementationRetryContext({
-      ticket: { identifier: "X", title: "t", description: "d", acceptanceCriteria: "a", comments: [] },
-      prompt: "p",
-      researchPlanMarkdown: "plan",
-      reviewFeedback: { result: "changes_requested", feedback: "fb", issues: [] },
-    });
-    expect(withoutField).not.toContain("## Attachments");
-
-    const withEmpty = assembleImplementationRetryContext({
-      ticket: { identifier: "X", title: "t", description: "d", acceptanceCriteria: "a", comments: [] },
-      prompt: "p",
-      researchPlanMarkdown: "plan",
-      reviewFeedback: { result: "changes_requested", feedback: "fb", issues: [] },
-      attachments: [],
-    });
-    expect(withEmpty).not.toContain("## Attachments");
-  });
-
-  it("shows failed attachments in the index even when no bytes downloaded", () => {
-    const result = assembleImplementationRetryContext({
-      ticket: { identifier: "X", title: "t", description: "d", acceptanceCriteria: "a", comments: [] },
-      prompt: "p",
-      researchPlanMarkdown: "plan",
-      reviewFeedback: { result: "changes_requested", feedback: "fb", issues: [] },
       attachments: [
         {
           filename: "spec.pdf",

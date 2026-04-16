@@ -307,8 +307,6 @@ async function pollUntilDone(
 
 // --- Main Workflow ---
 
-const MAX_REVIEW_RETRIES = 2;
-
 export async function agentWorkflow(ticketId: string) {
   "use workflow";
 
@@ -317,7 +315,7 @@ export async function agentWorkflow(ticketId: string) {
   const { buildPhaseScript } = await import("../sandbox/wrapper-script.js");
   const { parseResearchStatus, parseAgentOutput, parseReviewOutput, REVIEW_SCHEMA, AGENT_SCHEMA } =
     await import("../sandbox/agent-runner.js");
-  const { assembleResearchPlanContext, assembleImplementationContext, assembleImplementationRetryContext, assembleReviewContext } =
+  const { assembleResearchPlanContext, assembleImplementationContext, assembleReviewContext } =
     await import("../sandbox/context.js");
   const { collectPhaseOutput, pushFromSandbox, fixAndRetryPush, teardownSandbox } =
     await import("../sandbox/poll-agent.js");
@@ -424,134 +422,104 @@ export async function agentWorkflow(ticketId: string) {
 
       const researchPlanMarkdown = research.body;
 
-      // ========== PHASE 2 & 3 LOOP ==========
+      // ========== PHASE 2: Implementation ==========
       const phaseUsages: Record<string, PhaseUsage | null> = { Research: researchUsage };
-      let reviewRetries = 0;
-      let lastReviewFeedback: ReviewOutput | undefined;
 
-      while (true) {
-        // ========== PHASE 2: Implementation ==========
-        await configureStopHook(sandboxId, true);
+      await configureStopHook(sandboxId, true);
 
-        const implInput = lastReviewFeedback
-          ? assembleImplementationRetryContext({
-              ticket: ticketData,
-              prompt: getPrompt("implement.md"),
-              researchPlanMarkdown,
-              reviewFeedback: lastReviewFeedback,
-              attachments: downloadedAttachments,
-            })
-          : assembleImplementationContext({
-              ticket: ticketData,
-              prompt: getPrompt("implement.md"),
-              researchPlanMarkdown,
-              attachments: downloadedAttachments,
-            });
+      const implInput = assembleImplementationContext({
+        ticket: ticketData,
+        prompt: getPrompt("implement.md"),
+        researchPlanMarkdown,
+        attachments: downloadedAttachments,
+      });
 
-        const implScript = buildPhaseScript({
-          model: env.CLAUDE_MODEL,
-          phase: "impl",
-          inputFile: "/tmp/impl-requirements.md",
-          outputFile: "/tmp/impl-stdout.txt",
-          stderrFile: "/tmp/impl-stderr.txt",
-          sentinelFile: "/tmp/impl-done",
-          jsonSchema: AGENT_SCHEMA,
-        });
+      const implScript = buildPhaseScript({
+        model: env.CLAUDE_MODEL,
+        phase: "impl",
+        inputFile: "/tmp/impl-requirements.md",
+        outputFile: "/tmp/impl-stdout.txt",
+        stderrFile: "/tmp/impl-stderr.txt",
+        sentinelFile: "/tmp/impl-done",
+        jsonSchema: AGENT_SCHEMA,
+      });
 
-        await writeAndStartPhase(
-          sandboxId,
-          "/tmp/impl-requirements.md", implInput,
-          "/tmp/impl-wrapper.sh", implScript,
+      await writeAndStartPhase(
+        sandboxId,
+        "/tmp/impl-requirements.md", implInput,
+        "/tmp/impl-wrapper.sh", implScript,
+      );
+
+      const implDone = await pollUntilDone(sandboxId, "/tmp/impl-done", 35);
+      let implOutput: AgentOutput;
+
+      if (implDone) {
+        const implRaw = await collectPhaseOutput(sandboxId, "/tmp/impl-stdout.txt", "/tmp/impl-stderr.txt");
+        phaseUsages["Impl"] = extractUsage(implRaw);
+        implOutput = parseAgentOutput(implRaw);
+      } else {
+        implOutput = { result: "failed", error: "Implementation phase timed out" };
+      }
+
+      if (implOutput.result === "clarification_needed") {
+        await postClarificationAndMoveBack(
+          ticketId,
+          implOutput.questions ?? [],
+          env.COLUMN_BACKLOG,
         );
+        await notifySlack(`Task ${ticket.identifier} needs clarification`);
+        await unregisterRun(ticket.identifier);
+        return;
+      }
 
-        const implDone = await pollUntilDone(sandboxId, "/tmp/impl-done", 35);
-        let implOutput: AgentOutput;
+      if (implOutput.result === "failed") {
+        await moveTicket(ticketId, env.COLUMN_BACKLOG);
+        await notifySlack(`Task ${ticket.identifier} failed: implementation — ${implOutput.error ?? "unknown"}`);
+        await unregisterRun(ticket.identifier);
+        return;
+      }
 
-        if (implDone) {
-          const implRaw = await collectPhaseOutput(sandboxId, "/tmp/impl-stdout.txt", "/tmp/impl-stderr.txt");
-          const implLabel = reviewRetries > 0 ? `Impl retry ${reviewRetries}` : "Impl";
-          phaseUsages[implLabel] = extractUsage(implRaw);
-          implOutput = parseAgentOutput(implRaw);
-        } else {
-          implOutput = { result: "failed", error: "Implementation phase timed out" };
-        }
+      // ========== PHASE 3: Review ==========
+      await configureStopHook(sandboxId, true);
 
-        if (implOutput.result === "clarification_needed") {
-          await postClarificationAndMoveBack(
-            ticketId,
-            implOutput.questions ?? [],
-            env.COLUMN_BACKLOG,
-          );
-          await notifySlack(`Task ${ticket.identifier} needs clarification`);
-          await unregisterRun(ticket.identifier);
-          return;
-        }
+      const gitDiff = await captureGitDiff(sandboxId);
 
-        if (implOutput.result === "failed") {
-          await moveTicket(ticketId, env.COLUMN_BACKLOG);
-          await notifySlack(`Task ${ticket.identifier} failed: implementation — ${implOutput.error ?? "unknown"}`);
-          await unregisterRun(ticket.identifier);
-          return;
-        }
+      const reviewInput = assembleReviewContext({
+        ticket: ticketData,
+        prompt: getPrompt("review.md"),
+        researchPlanMarkdown,
+        gitDiff,
+        attachments: downloadedAttachments,
+      });
 
-        // ========== PHASE 3: Review ==========
-        await configureStopHook(sandboxId, false);
+      const reviewScript = buildPhaseScript({
+        model: env.CLAUDE_MODEL,
+        phase: "review",
+        inputFile: "/tmp/review-requirements.md",
+        outputFile: "/tmp/review-stdout.txt",
+        stderrFile: "/tmp/review-stderr.txt",
+        sentinelFile: "/tmp/review-done",
+        jsonSchema: REVIEW_SCHEMA,
+      });
 
-        const gitDiff = await captureGitDiff(sandboxId);
+      await writeAndStartPhase(
+        sandboxId,
+        "/tmp/review-requirements.md", reviewInput,
+        "/tmp/review-wrapper.sh", reviewScript,
+      );
 
-        const reviewInput = assembleReviewContext({
-          ticket: ticketData,
-          prompt: getPrompt("review.md"),
-          researchPlanMarkdown,
-          gitDiff,
-          attachments: downloadedAttachments,
-        });
+      const reviewDone = await pollUntilDone(sandboxId, "/tmp/review-done", 15);
+      let reviewOutput: ReviewOutput;
 
-        const reviewScript = buildPhaseScript({
-          model: env.CLAUDE_MODEL,
-          phase: "review",
-          inputFile: "/tmp/review-requirements.md",
-          outputFile: "/tmp/review-stdout.txt",
-          stderrFile: "/tmp/review-stderr.txt",
-          sentinelFile: "/tmp/review-done",
-          jsonSchema: REVIEW_SCHEMA,
-        });
+      if (reviewDone) {
+        const reviewRaw = await collectPhaseOutput(sandboxId, "/tmp/review-stdout.txt", "/tmp/review-stderr.txt");
+        phaseUsages["Review"] = extractUsage(reviewRaw);
+        reviewOutput = parseReviewOutput(reviewRaw);
+      } else {
+        reviewOutput = { result: "failed", feedback: "", issues: [], error: "Review phase timed out" };
+      }
 
-        await writeAndStartPhase(
-          sandboxId,
-          "/tmp/review-requirements.md", reviewInput,
-          "/tmp/review-wrapper.sh", reviewScript,
-        );
-
-        const reviewDone = await pollUntilDone(sandboxId, "/tmp/review-done", 15);
-        let reviewOutput: ReviewOutput;
-
-        if (reviewDone) {
-          const reviewRaw = await collectPhaseOutput(sandboxId, "/tmp/review-stdout.txt", "/tmp/review-stderr.txt");
-          const reviewLabel = reviewRetries > 0 ? `Review retry ${reviewRetries}` : "Review";
-          phaseUsages[reviewLabel] = extractUsage(reviewRaw);
-          reviewOutput = parseReviewOutput(reviewRaw);
-        } else {
-          reviewOutput = { result: "failed", feedback: "", issues: [], error: "Review phase timed out" };
-        }
-
-        if (reviewOutput.result === "approved") {
-          break; // Exit loop → push
-        }
-
-        if (reviewOutput.result === "changes_requested") {
-          reviewRetries++;
-          if (reviewRetries > MAX_REVIEW_RETRIES) {
-            await moveTicket(ticketId, env.COLUMN_BACKLOG);
-            await notifySlack(`Task ${ticket.identifier} failed: review rejected after ${MAX_REVIEW_RETRIES} retries`);
-            await unregisterRun(ticket.identifier);
-            return;
-          }
-          lastReviewFeedback = reviewOutput;
-          continue; // Loop back to Phase 2
-        }
-
-        // result === "failed"
+      if (reviewOutput.result === "failed") {
         await moveTicket(ticketId, env.COLUMN_BACKLOG);
         await notifySlack(`Task ${ticket.identifier} failed: review — ${reviewOutput.error ?? "unknown"}`);
         await unregisterRun(ticket.identifier);

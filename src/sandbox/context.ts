@@ -1,5 +1,4 @@
 import type { PRComment, CheckRunResult } from "../adapters/vcs/types.js";
-import type { ReviewOutput } from "./agent-runner.js";
 import type { DownloadedAttachment } from "./attachments.js";
 import { formatAttachmentsIndex } from "./attachments.js";
 
@@ -25,14 +24,6 @@ export interface ImplementationContextInput {
   ticket: TicketData;
   prompt: string;
   researchPlanMarkdown: string;
-  attachments?: DownloadedAttachment[];
-}
-
-export interface ImplementationRetryContextInput {
-  ticket: TicketData;
-  prompt: string;
-  researchPlanMarkdown: string;
-  reviewFeedback: ReviewOutput;
   attachments?: DownloadedAttachment[];
 }
 
@@ -118,41 +109,6 @@ ${prompt}
 `;
 }
 
-export function assembleImplementationRetryContext(input: ImplementationRetryContextInput): string {
-  const { ticket, prompt, researchPlanMarkdown, reviewFeedback, attachments } = input;
-  const attachmentsSection = renderAttachmentsSection(attachments);
-  return `# Requirements
-
-## Ticket ID
-
-${ticket.identifier}
-
-## Ticket
-
-${ticket.title}
-${attachmentsSection}
-## Acceptance Criteria
-
-${ticket.acceptanceCriteria || "None specified."}
-
-## Research & Plan
-
-${researchPlanMarkdown}
-
-## Review Feedback
-
-${reviewFeedback.feedback}
-
-### Issues
-
-${formatReviewIssues(reviewFeedback.issues)}
-
----
-
-${prompt}
-`;
-}
-
 export function assembleReviewContext(input: ReviewContextInput): string {
   const { ticket, prompt, researchPlanMarkdown, gitDiff, attachments } = input;
   const attachmentsSection = renderAttachmentsSection(attachments);
@@ -184,13 +140,6 @@ ${gitDiff}
 
 ${prompt}
 `;
-}
-
-function formatReviewIssues(issues: Array<{ file: string; description: string; severity: string }>): string {
-  if (issues.length === 0) return "No specific issues listed.";
-  return issues
-    .map((i) => `- **[${i.severity}]** ${i.file}: ${i.description}`)
-    .join("\n");
 }
 
 function formatComments(

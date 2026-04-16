@@ -111,8 +111,7 @@ You have access to **superpowers skills** installed globally. Use them.
 
 1. **Restore session memory** — Check if \`blazebot/memory/[TASK_ID].md\` exists. If it exists, read it.
 2. Read the plan from the "Research & Plan" section above.
-3. If review feedback is included (retry scenario): focus on fixing the flagged issues. Do not redo work that was approved.
-4. Execute each step in the plan, in order.
+3. Execute each step in the plan, in order.
 5. If the repo has tests: run them to ensure nothing is broken.
 6. **Update session memory** — overwrite \`blazebot/memory/[TASK_ID].md\`.
 7. Commit your work with descriptive commit messages (conventional commits: feat:, fix:, test:, etc.).
@@ -165,13 +164,15 @@ Return a JSON object with:
 
 const reviewPrompt = `# Instructions
 
-You are an AI code review agent. Your job is to review the implementation diff against the plan and acceptance criteria.
+You are an AI code review agent. Your job is to review the implementation diff against the plan and acceptance criteria, and **fix any issues you find**.
 
 ## Superpowers
 
 You have access to **superpowers skills** installed globally. Use them.
 
-- **Use \`requesting-code-review\` to dispatch a code-reviewer subagent** — this is your primary tool.
+- **Use \`requesting-code-review\` to dispatch a code-reviewer subagent** — this is your primary tool for identifying issues.
+- **Use \`systematic-debugging\` when encountering bugs or test failures** — do not guess at fixes.
+- **Use \`verification-before-completion\` before claiming work is done** — verify, don't assume.
 
 ## Process
 
@@ -181,7 +182,10 @@ You have access to **superpowers skills** installed globally. Use them.
 4. Check code quality, test coverage, edge cases.
 5. Invoke \`requesting-code-review\` skill to dispatch a code-reviewer subagent.
 6. Combine your findings with the subagent's findings.
-7. Output your verdict.
+7. **Fix any issues found** — apply code changes directly. This is the final phase, there is no re-implementation loop.
+8. If you made changes, run tests and quality checks to verify the fixes.
+9. Commit any fixes with descriptive commit messages (conventional commits: fix:, refactor:, test:, etc.).
+10. Output your verdict.
 
 ## Review Criteria
 
@@ -193,16 +197,17 @@ You have access to **superpowers skills** installed globally. Use them.
 
 ## Constraints
 
-- **NO coding** — do not write or modify any code
-- **NO commits** — do not create any git commits
-- Only review and report
+- Fix issues directly — do not just report them and request changes.
+- Do not refactor code outside the scope of the plan.
+- Follow existing code conventions (check CLAUDE.md, AGENTS.md if present).
+- Do NOT add \`blazebot/memory\` to \`.gitignore\` unless the user explicitly asks you to.
 
 ## Output
 
 Return a JSON object with:
-- \`result\`: "approved" if the implementation is ready, "changes_requested" if issues need fixing, "failed" if review itself failed.
-- \`feedback\`: Detailed review notes.
-- \`issues\`: Array of specific issues — each with \`file\`, \`description\`, \`severity\` ("critical" or "suggestion"). Only include issues that MUST be fixed for \`changes_requested\`.
+- \`result\`: "approved" if the implementation is ready (including after your fixes), "failed" if review itself failed or issues are unfixable.
+- \`feedback\`: Detailed review notes, including what you fixed.
+- \`issues\`: Array of issues found — each with \`file\`, \`description\`, \`severity\` ("critical" or "suggestion"). Include both fixed and unfixable issues.
 - \`error\`: Failure details (when failed).`;
 
 const prompts: Record<string, string> = {
