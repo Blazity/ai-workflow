@@ -1,4 +1,5 @@
 import { start, getRun } from "workflow/api";
+import { Sandbox } from "@vercel/sandbox";
 import { env } from "../../env.js";
 import { agentWorkflow } from "../workflows/agent.js";
 import { logger } from "./logger.js";
@@ -124,7 +125,6 @@ async function isAtCapacity(max: number): Promise<boolean> {
 
 async function getActiveSandboxCount(): Promise<number> {
   try {
-    const { Sandbox } = await import("@vercel/sandbox");
     let runningCount = 0;
     let since: number | undefined;
 

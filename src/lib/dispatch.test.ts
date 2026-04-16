@@ -103,7 +103,10 @@ function makeAdapters(
 
 describe("dispatchTicket", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    mockSandboxList.mockReset();
+    mockStart.mockReset();
+    mockGetRun.mockReset();
+    mockStopTicketSandboxes.mockReset();
     mockSandboxList.mockResolvedValue({
       json: {
         sandboxes: [],
@@ -327,7 +330,10 @@ describe("dispatchTicket", () => {
 
 describe("failed-ticket safeguard full loop", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    mockSandboxList.mockReset();
+    mockStart.mockReset();
+    mockGetRun.mockReset();
+    mockStopTicketSandboxes.mockReset();
     mockSandboxList.mockResolvedValue({
       json: {
         sandboxes: [],
