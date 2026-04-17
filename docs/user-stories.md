@@ -346,11 +346,13 @@ T=5min: Reconciliation runs
 
 **Expected behavior:**
 1. Reconciliation finds claim older than 5 minutes
-2. Stale claim removed from Redis
-3. Ticket can be picked up by next poll cycle
+2. Any sandbox matching the ticket branch is stopped (covers the case where dispatch crashed between `start()` and `register()`, leaving a sentinel in Redis but a live sandbox)
+3. Stale claim removed from Redis
+4. Ticket can be picked up by next poll cycle
 
 **Verifications:**
 - Redis entry removed
+- No sandbox running for this ticket
 - Next dispatch for same ticket succeeds
 
 ---

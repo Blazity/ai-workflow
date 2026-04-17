@@ -22,6 +22,11 @@ vi.mock("./cancel-run.js", () => ({
   cancelRun: (...args: any[]) => mockCancelRun(...args),
 }));
 
+const mockStopTicketSandboxes = vi.fn();
+vi.mock("../sandbox/stop-ticket-sandboxes.js", () => ({
+  stopTicketSandboxes: (...args: any[]) => mockStopTicketSandboxes(...args),
+}));
+
 function makeRegistry(
   runs: Array<{ ticketKey: string; runId: string }> = [],
   failed: Array<{ ticketKey: string; meta: { runId: string; error: string; failedAt: string } }> = [],
@@ -52,7 +57,10 @@ function makeIssueTracker(
 }
 
 describe("reconcileRuns", () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockStopTicketSandboxes.mockResolvedValue(0);
+  });
 
   it("skips fresh claiming entries", async () => {
     const registry = makeRegistry([
@@ -68,7 +76,7 @@ describe("reconcileRuns", () => {
     expect(mockCancelRun).not.toHaveBeenCalled();
   });
 
-  it("cleans stale claiming entries", async () => {
+  it("cleans stale claiming entries and stops sandboxes", async () => {
     const tenMinAgo = Date.now() - 10 * 60 * 1000;
     const registry = makeRegistry([
       { ticketKey: "PROJ-1", runId: `claiming:${tenMinAgo}` },
@@ -79,10 +87,13 @@ describe("reconcileRuns", () => {
 
     expect(result).toEqual({ cancelled: 0, cleaned: 1 });
     expect(registry.unregister).toHaveBeenCalledWith("PROJ-1");
+    // A crash between dispatch.start() and dispatch.register() can leave
+    // a live sandbox shadowed by a sentinel; reconcile must sweep it.
+    expect(mockStopTicketSandboxes).toHaveBeenCalledWith("PROJ-1");
   });
 
 
-  it("cancels fresh claiming entries for tickets that left AI column", async () => {
+  it("cancels fresh claiming entries for tickets that left AI column and stops sandboxes", async () => {
     const registry = makeRegistry([
       { ticketKey: "PROJ-1", runId: `claiming:${Date.now()}` },
     ]);
@@ -94,6 +105,7 @@ describe("reconcileRuns", () => {
     expect(result).toEqual({ cancelled: 1, cleaned: 0 });
     expect(registry.unregister).toHaveBeenCalledWith("PROJ-1");
     expect(mockCancelRun).not.toHaveBeenCalled();
+    expect(mockStopTicketSandboxes).toHaveBeenCalledWith("PROJ-1");
   });
 
   it("keeps fresh claiming entry when missing from JQL snapshot but Jira still says AI", async () => {
