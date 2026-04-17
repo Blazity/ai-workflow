@@ -76,7 +76,10 @@ Attachments:
 **Example:**
 ```
 Initial PR: Adds GET /api/ping returning { ping: "pong" }
-Review comment: "Rename /ping to /healthcheck. Remove the old /ping route entirely."
+Review comment: "Rename the endpoint from /api/ping to /api/healthcheck.
+                 Move app/api/ping/route.ts to app/api/healthcheck/route.ts
+                 and return { healthcheck: 'passed' }. The old /api/ping
+                 route must no longer exist."
 ```
 
 **Expected behavior:**
@@ -84,14 +87,15 @@ Review comment: "Rename /ping to /healthcheck. Remove the old /ping route entire
 2. Ticket discovered (via cron poll or webhook); agent detects existing PR on branch
 3. Agent does NOT reset the branch (preserves existing work)
 4. Research phase reads PR comments + check results
-5. Implementation phase applies the requested changes
+5. Implementation phase renames the route file and updates the response body
 6. Push updates to same branch; no new PR created
 7. Ticket moves back to "AI Review"
 
 **Verifications:**
 - Same PR number, no duplicate PR
 - PR has more commits than before the review fix
-- Old `/ping` route removed, `/healthcheck` exists
+- `app/api/healthcheck/route.ts` exists with the new response body
+- `app/api/ping/route.ts` no longer exists on the branch
 - Ticket status = "AI Review"
 - Redis cleaned up
 - No sandbox running for this ticket
