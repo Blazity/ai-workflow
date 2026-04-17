@@ -26,6 +26,16 @@ export interface RunRegistryAdapter {
   /** Get the sandboxId for a ticket, or null if none registered. */
   getSandboxId(ticketKey: string): Promise<string | null>;
 
+  /**
+   * Wall-clock timestamp (ms since epoch) when the ticket's current entry
+   * was first recorded, or null if unknown. Reconcile uses this to skip
+   * cleanup of entries that look like orphans but are actually mid-
+   * transition — without this, a cron tick that fires between a ticket
+   * entering the registry and its Jira transition completing would wipe
+   * the entry as a "stale orphan".
+   */
+  getEntryCreatedAt(ticketKey: string): Promise<number | null>;
+
   /** Mark a ticket as failed (moveTicket to backlog failed in catch block). */
   markFailed(ticketKey: string, meta: FailedTicketMeta): Promise<void>;
   /** Check if a ticket has a failure marker. */

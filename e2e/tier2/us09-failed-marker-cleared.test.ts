@@ -56,11 +56,15 @@ describe("US-09: Failed marker cleared when ticket leaves AI", () => {
 
     await moveTicketToColumn(ticketKey, e2eEnv.COLUMN_BACKLOG);
 
-    // 2. Seed a failure marker in Redis
+    // 2. Seed a failure marker in Redis. Backdate failedAt to sit outside
+    //    the reconcile grace window (ORPHAN_GRACE_MS in reconcile.ts) so
+    //    reconcile clears it on the first pass rather than treating it as
+    //    a just-seeded, mid-transition marker.
+    const oneMinuteAgo = new Date(Date.now() - 60_000).toISOString();
     await markFailed(ticketKey, {
       runId: "run_e2e_seeded",
       error: "seeded by e2e test",
-      failedAt: new Date().toISOString(),
+      failedAt: oneMinuteAgo,
     });
     expect(await isTicketFailed(ticketKey)).toBe(true);
 

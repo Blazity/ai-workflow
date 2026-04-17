@@ -19,6 +19,7 @@ function makeRegistry(overrides: Partial<RunRegistryAdapter> = {}): RunRegistryA
     listAll: vi.fn(),
     registerSandbox: vi.fn().mockResolvedValue(undefined),
     getSandboxId: overrides.getSandboxId ?? vi.fn().mockResolvedValue(null),
+    getEntryCreatedAt: vi.fn().mockResolvedValue(null),
     markFailed: vi.fn().mockResolvedValue(undefined),
     isTicketFailed: vi.fn().mockResolvedValue(false),
     listAllFailed: vi.fn().mockResolvedValue([]),

@@ -90,6 +90,7 @@ function makeAdapters(
       listAll: overrides.listAll ?? vi.fn().mockResolvedValue([]),
       registerSandbox: vi.fn().mockResolvedValue(undefined),
       getSandboxId: vi.fn().mockResolvedValue(null),
+      getEntryCreatedAt: vi.fn().mockResolvedValue(null),
       markFailed: vi.fn().mockResolvedValue(undefined),
       isTicketFailed: overrides.isTicketFailed ?? vi.fn().mockResolvedValue(false),
       listAllFailed: vi.fn().mockResolvedValue([]),
@@ -434,6 +435,7 @@ describe("failed-ticket safeguard full loop", () => {
       listAll: vi.fn().mockResolvedValue([]),
       registerSandbox: vi.fn().mockResolvedValue(undefined),
       getSandboxId: vi.fn().mockResolvedValue(null),
+      getEntryCreatedAt: vi.fn().mockResolvedValue(null),
       markFailed: vi.fn().mockImplementation(async (key: string, meta: any) => {
         failedMarkers.set(key, JSON.stringify(meta));
       }),

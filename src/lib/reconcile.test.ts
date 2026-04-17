@@ -39,6 +39,7 @@ function makeRegistry(
     listAll: vi.fn().mockResolvedValue(runs),
     registerSandbox: vi.fn().mockResolvedValue(undefined),
     getSandboxId: vi.fn().mockResolvedValue(null),
+    getEntryCreatedAt: vi.fn().mockResolvedValue(null),
     markFailed: vi.fn().mockResolvedValue(undefined),
     isTicketFailed: vi.fn().mockResolvedValue(false),
     listAllFailed: vi.fn().mockResolvedValue(failed),

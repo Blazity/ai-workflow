@@ -14,6 +14,16 @@ const TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled"]);
 const STALE_CLAIM_MS = 5 * 60 * 1000;
 
 /**
+ * Grace period applied to any cleanup that relies on "ticket isn't in the
+ * AI-column snapshot." Jira's JQL index lags transitions by seconds, and
+ * dispatch writes the registry entry before the transition commits, so a
+ * ticket genuinely moving INTO AI can briefly look like an orphan. Skip
+ * anything younger than this — reconcile runs every minute, so we'll pick
+ * up a real orphan on the next tick.
+ */
+const ORPHAN_GRACE_MS = 30 * 1000;
+
+/**
  * Track consecutive getRun failures per ticket.
  * Only unregister after UNREACHABLE_STRIKES_LIMIT consecutive failures
  * to avoid nuking dedup entries on transient WDK API errors
@@ -55,6 +65,13 @@ export async function reconcileRuns(
     if (ticketStillInAiColumn) {
       cleaned += await cleanFinishedRun(ticketKey, runId, runRegistry);
     } else {
+      if (await isWithinGracePeriod(ticketKey, runRegistry)) {
+        logger.info(
+          { ticketKey, runId },
+          "reconcile_skipped_fresh_orphan_in_grace",
+        );
+        continue;
+      }
       const leftAiColumn = await verifyTicketLeftAiColumn(ticketKey, issueTracker);
       if (!leftAiColumn) continue;
       await cancelRun(ticketKey, runId, runRegistry);
@@ -64,16 +81,37 @@ export async function reconcileRuns(
     }
   }
 
-  // Clean up failed-ticket markers for tickets that left the AI column
+  // Clean up failed-ticket markers for tickets that left the AI column.
+  // Respect the same grace window: a marker that was just written while
+  // the ticket is mid-transition shouldn't be wiped on the first cron
+  // tick that catches it between columns.
   const failedTickets = await runRegistry.listAllFailed();
-  for (const { ticketKey } of failedTickets) {
-    if (!aiColumnTickets.has(ticketKey)) {
-      await runRegistry.clearFailedMark(ticketKey);
-      logger.info({ ticketKey }, "reconcile_cleared_failed_mark");
+  for (const { ticketKey, meta } of failedTickets) {
+    if (aiColumnTickets.has(ticketKey)) continue;
+    const failedAtMs = Date.parse(meta.failedAt);
+    if (Number.isFinite(failedAtMs) && Date.now() - failedAtMs < ORPHAN_GRACE_MS) {
+      logger.info(
+        { ticketKey, failedAt: meta.failedAt },
+        "reconcile_skipped_fresh_failed_marker_in_grace",
+      );
+      continue;
     }
+    await runRegistry.clearFailedMark(ticketKey);
+    logger.info({ ticketKey }, "reconcile_cleared_failed_mark");
   }
 
   return { cancelled, cleaned };
+}
+
+async function isWithinGracePeriod(
+  ticketKey: string,
+  runRegistry: RunRegistryAdapter,
+): Promise<boolean> {
+  const createdAt = await runRegistry
+    .getEntryCreatedAt(ticketKey)
+    .catch(() => null);
+  if (createdAt == null) return false;
+  return Date.now() - createdAt < ORPHAN_GRACE_MS;
 }
 
 async function verifyTicketLeftAiColumn(
