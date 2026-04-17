@@ -2,6 +2,7 @@ import { describe, it, expect, afterAll } from "vitest";
 import {
   createTestTicket,
   moveTicketToColumn,
+  getTicketStatus,
   deleteTicket,
 } from "../helpers/jira.js";
 import { findPR, closePR, deleteBranch } from "../helpers/github.js";
@@ -28,7 +29,21 @@ describe("US-13: Webhook-triggered immediate dispatch", () => {
   let prNumber: number | undefined;
 
   afterAll(async () => {
-    if (ticketKey) await stopSandboxesForTicket(ticketKey).catch(() => {});
+    // The test returns as soon as the claim appears — the workflow is still
+    // running. Cancel it by moving the ticket out of AI: the Jira webhook
+    // then calls cancelTrackedRun, which stops the workflow gracefully
+    // before its moveTicket step can 404 on a deleted issue.
+    if (ticketKey) {
+      try {
+        const status = await getTicketStatus(ticketKey);
+        if (status.toLowerCase() === e2eEnv.COLUMN_AI.toLowerCase()) {
+          await moveTicketToColumn(ticketKey, e2eEnv.COLUMN_BACKLOG);
+        }
+      } catch {}
+      // Settling window for webhook-cancel → run.cancel → sandbox teardown.
+      await new Promise((r) => setTimeout(r, 5_000));
+      await stopSandboxesForTicket(ticketKey).catch(() => {});
+    }
     if (prNumber) await closePR(prNumber).catch(() => {});
     if (branchName) await deleteBranch(branchName).catch(() => {});
     if (ticketKey) {
