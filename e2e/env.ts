@@ -18,6 +18,9 @@ const schema = z.object({
 
   CRON_SECRET: z.string().min(1),
 
+  /** Only required by webhook-signing tests (US-12). */
+  JIRA_WEBHOOK_SECRET: z.string().min(1).optional(),
+
   AI_WORKFLOW_KV_REST_API_URL: z.string().url(),
   AI_WORKFLOW_KV_REST_API_TOKEN: z.string().min(1),
 
