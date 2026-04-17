@@ -33,7 +33,7 @@ import { e2eEnv } from "../env.js";
  * Setup uses GitHub API to create branch + code + PR in seconds,
  * instead of waiting for a full workflow run.
  */
-describe("US-3: Review feedback triggers a fix cycle", () => {
+describe("US-03: Review feedback triggers a fix cycle", () => {
   let ticketKey: string;
   let branchName: string;
   let prNumber: number | undefined;

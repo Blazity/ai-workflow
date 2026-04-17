@@ -25,7 +25,7 @@ import { e2eEnv } from "../env.js";
  * When a ticket with clear requirements is moved to the AI column,
  * the agent implements the feature and creates a PR for review.
  */
-describe("US-1: Clear ticket produces a PR", () => {
+describe("US-01: Clear ticket produces a PR", () => {
   let ticketKey: string;
   let branchName: string;
   let prNumber: number | undefined;

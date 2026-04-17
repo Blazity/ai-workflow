@@ -31,7 +31,7 @@ import { e2eEnv } from "../env.js";
  * This covers two full workflow runs in sequence, so the per-test timeout
  * is larger than the project default.
  */
-describe("US-6: Clarification answered → ticket completes", () => {
+describe("US-06: Clarification answered → ticket completes", () => {
   // Unique value so the PR content check can't pass on pre-existing files
   const uniqueGreeting = `Hello from Blazebot US-6 ${Date.now()}`;
   let ticketKey: string;

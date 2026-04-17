@@ -14,6 +14,7 @@ import {
   cleanupFailed,
 } from "../helpers/redis.js";
 import { stopSandboxesForTicket } from "../helpers/sandbox.js";
+import { callCronPoll } from "../helpers/cron.js";
 import { waitFor } from "../helpers/wait.js";
 import { e2eEnv } from "../env.js";
 
@@ -27,8 +28,12 @@ import { e2eEnv } from "../env.js";
  * We seed the failure marker directly because its only production trigger is
  * the workflow's catch-block safeguard (Jira unreachable during error
  * recovery), which is impractical to force in e2e.
+ *
+ * Both dispatch paths must honour the marker: the webhook path (fires when
+ * the ticket enters AI) and the cron re-poll path (fires on every tick
+ * while the ticket sits in AI). This test exercises both.
  */
-describe("US-8: Previously-failed ticket is skipped", () => {
+describe("US-08: Previously-failed ticket is skipped", () => {
   let ticketKey: string;
   let branchName: string;
 
@@ -62,10 +67,18 @@ describe("US-8: Previously-failed ticket is skipped", () => {
     //    because the failure marker is present.
     await moveTicketToColumn(ticketKey, e2eEnv.COLUMN_AI);
 
-    // 4. Give the webhook + dispatch precheck time to run, then assert that
-    //    no active-run Redis entry was ever created. We poll for the full
-    //    window rather than a single check to catch any claim that might
-    //    appear mid-window (e.g. from a retry).
+    // 4. Explicitly poke the cron re-poll path — this is the scenario US-8
+    //    is primarily about. Cron discovers the ticket (still in AI), calls
+    //    dispatchTicket, and the failed-marker precheck returns
+    //    `previously_failed`. The response body confirms both auth and
+    //    deployment-protection bypass are configured correctly.
+    const cronRes = await callCronPoll();
+    expect(cronRes.status).toBe(200);
+
+    // 5. Give both dispatch paths time to run, then assert that no active-run
+    //    Redis entry was ever created. We poll for the full window rather
+    //    than a single check to catch any claim that might appear mid-window
+    //    (e.g. from a retry).
     const deadline = Date.now() + 15_000;
     while (Date.now() < deadline) {
       const runId = await getRunId(ticketKey);

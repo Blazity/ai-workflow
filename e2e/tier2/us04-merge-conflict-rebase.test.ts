@@ -32,7 +32,7 @@ import { e2eEnv } from "../env.js";
  * Setup uses GitHub API to create a branch, add a file, add a
  * CONFLICTING file on main, then create a PR that shows conflicts.
  */
-describe("US-4: PR with merge conflicts — agent rebases", () => {
+describe("US-04: PR with merge conflicts — agent rebases", () => {
   const uniqueDir = `blazebot-e2e-${Date.now()}`;
   const conflictFile = `${uniqueDir}/data.txt`;
   let ticketKey: string;

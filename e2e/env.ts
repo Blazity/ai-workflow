@@ -28,6 +28,12 @@ const schema = z.object({
   VERCEL_ENV: z.string().min(1).default("preview"),
 
   VERCEL_AUTOMATION_BYPASS_SECRET: z.string().optional(),
+
+  /**
+   * Must match the deployed app's MAX_CONCURRENT_AGENTS. US-11 creates
+   * this many dummy sandboxes to saturate the dispatch capacity check.
+   */
+  MAX_CONCURRENT_AGENTS: z.coerce.number().int().positive().default(3),
 });
 
 export type E2EEnv = z.infer<typeof schema>;

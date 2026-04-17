@@ -1,5 +1,4 @@
 import { start, getRun } from "workflow/api";
-import { Sandbox } from "@vercel/sandbox";
 import { env } from "../../env.js";
 import { agentWorkflow } from "../workflows/agent.js";
 import { logger } from "./logger.js";
@@ -7,9 +6,13 @@ import type { Adapters } from "./adapters.js";
 import { stopTicketSandboxes } from "../sandbox/stop-ticket-sandboxes.js";
 
 const CLAIMING_PREFIX = "claiming:";
-const SANDBOX_LIST_TIMEOUT_MS = 1_000;
-const SANDBOX_LIST_PAGE_LIMIT = 100;
-const SANDBOX_COUNT_FAILED = Number.MAX_SAFE_INTEGER;
+/**
+ * Stale-claim horizon — claiming sentinels older than this are ignored
+ * when counting active runs for capacity. Matches the reconcile threshold
+ * (src/lib/reconcile.ts) so a crashed dispatch can't deadlock capacity
+ * for longer than reconcile would take to sweep it anyway.
+ */
+export const STALE_CLAIM_MS = 5 * 60 * 1000;
 
 export function isClaimingSentinel(runId: string): boolean {
   return runId.startsWith(CLAIMING_PREFIX);
@@ -31,15 +34,10 @@ export interface DispatchResult {
     | "wrong_project_key";
 }
 
-export interface DispatchOptions {
-  skipCapacityCheck?: boolean;
-}
-
 export async function dispatchTicket(
   ticketKey: string,
   adapters: Adapters,
   maxConcurrentAgents: number,
-  options: DispatchOptions = {},
 ): Promise<DispatchResult> {
   const expectedProjectKey = env.JIRA_PROJECT_KEY.trim().toUpperCase();
   const expectedAiStatus = env.COLUMN_AI.trim().toLowerCase();
@@ -55,13 +53,9 @@ export async function dispatchTicket(
       return { started: false, reason: "previously_failed" };
     }
 
-    if (!options.skipCapacityCheck) {
-      stage = "precheck_capacity";
-      if (await isAtCapacity(maxConcurrentAgents)) {
-        return { started: false, reason: "at_capacity" };
-      }
-    } else {
-      logger.info({ ticketKey }, "dispatch_capacity_check_skipped");
+    stage = "precheck_capacity";
+    if (await isAtCapacity(maxConcurrentAgents, runRegistry)) {
+      return { started: false, reason: "at_capacity" };
     }
 
     stage = "claim_ticket";
@@ -133,45 +127,43 @@ export async function dispatchTicket(
   }
 }
 
-async function isAtCapacity(max: number): Promise<boolean> {
-  const active = await getActiveSandboxCount();
-  if (active === SANDBOX_COUNT_FAILED) {
-    logger.warn({ max }, "dispatch_capacity_check_failed_closed");
+/**
+ * Capacity check counts active runs in the Redis registry — this is the
+ * per-app concurrency limit for blazebot, not a per-team sandbox quota.
+ *
+ * We deliberately exclude claiming sentinels older than STALE_CLAIM_MS so
+ * a crashed dispatch can't deadlock capacity indefinitely; reconcile will
+ * sweep those stale entries on its next run, but the capacity check
+ * shouldn't wait for it.
+ *
+ * Fails closed on registry errors — better to stall new dispatches than
+ * to over-allocate if we can't see the current state.
+ */
+async function isAtCapacity(
+  max: number,
+  runRegistry: Adapters["runRegistry"],
+): Promise<boolean> {
+  let entries: Awaited<ReturnType<Adapters["runRegistry"]["listAll"]>>;
+  try {
+    entries = await runRegistry.listAll();
+  } catch (err) {
+    logger.warn(
+      { max, error: (err as Error).message },
+      "dispatch_capacity_check_failed_closed",
+    );
     return true;
   }
+
+  const now = Date.now();
+  const active = entries.filter(({ runId }) => {
+    if (!isClaimingSentinel(runId)) return true;
+    return now - getClaimTimestamp(runId) <= STALE_CLAIM_MS;
+  }).length;
+
   if (active < max) return false;
 
   logger.info({ active, max }, "dispatch_at_capacity");
   return true;
-}
-
-async function getActiveSandboxCount(): Promise<number> {
-  try {
-    let runningCount = 0;
-    let since: number | undefined;
-
-    while (true) {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), SANDBOX_LIST_TIMEOUT_MS);
-      try {
-        const { json } = await Sandbox.list({
-          limit: SANDBOX_LIST_PAGE_LIMIT,
-          since,
-          signal: controller.signal,
-        });
-        runningCount += json.sandboxes.filter(
-          (sandbox: { status?: string }) => sandbox.status === "running",
-        ).length;
-        if (json.pagination.next == null) return runningCount;
-        since = json.pagination.next;
-      } finally {
-        clearTimeout(timeout);
-      }
-    }
-  } catch (err) {
-    logger.warn({ error: (err as Error).message }, "sandbox_count_check_failed");
-    return SANDBOX_COUNT_FAILED;
-  }
 }
 
 async function verifyClaimNotCancelled(

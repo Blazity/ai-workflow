@@ -86,9 +86,7 @@ export default defineEventHandler(async (event) => {
         },
         "webhook_dispatch_started",
       );
-      const result = await dispatchTicket(ticketKey, adapters, env.MAX_CONCURRENT_AGENTS, {
-        skipCapacityCheck: true,
-      });
+      const result = await dispatchTicket(ticketKey, adapters, env.MAX_CONCURRENT_AGENTS);
       logger.info(
         {
           ticketKey,
@@ -137,9 +135,7 @@ export default defineEventHandler(async (event) => {
     },
     "webhook_dispatch_started",
   );
-  const result = await dispatchTicket(ticketKey, adapters, env.MAX_CONCURRENT_AGENTS, {
-    skipCapacityCheck: true,
-  });
+  const result = await dispatchTicket(ticketKey, adapters, env.MAX_CONCURRENT_AGENTS);
 
   logger.info(
     { ticketKey, started: result.started, reason: result.reason, runId: result.runId },
