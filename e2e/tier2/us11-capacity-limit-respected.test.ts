@@ -2,6 +2,7 @@ import { describe, it, expect, afterAll } from "vitest";
 import {
   createTestTicket,
   moveTicketToColumn,
+  getTicketStatus,
   deleteTicket,
 } from "../helpers/jira.js";
 import { findPR, closePR, deleteBranch } from "../helpers/github.js";
@@ -37,6 +38,25 @@ describe("US-11: Capacity limit respected", () => {
   const tickets: Array<{ ticketKey: string; branchName: string; prNumber?: number }> = [];
 
   afterAll(async () => {
+    // Cancel running workflows FIRST by moving tickets out of AI. The Jira
+    // webhook then sees "left AI" and calls cancelTrackedRun, which
+    // gracefully stops the workflow before any moveTicket step fires a
+    // 404 on a deleted Jira issue.
+    await Promise.all(
+      tickets.map(async (t) => {
+        try {
+          const status = await getTicketStatus(t.ticketKey);
+          if (status.toLowerCase() === e2eEnv.COLUMN_AI.toLowerCase()) {
+            await moveTicketToColumn(t.ticketKey, e2eEnv.COLUMN_BACKLOG);
+          }
+        } catch {}
+      }),
+    );
+
+    // Give the webhook-driven cancel path a moment to propagate before we
+    // start tearing down sandboxes and tickets out from under it.
+    await new Promise((r) => setTimeout(r, 5_000));
+
     for (const t of tickets) {
       await stopSandboxesForTicket(t.ticketKey).catch(() => {});
       if (t.prNumber) await closePR(t.prNumber).catch(() => {});

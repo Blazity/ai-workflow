@@ -235,6 +235,86 @@ describe("dispatchTicket", () => {
     expect(mockStart).not.toHaveBeenCalled();
   });
 
+  it("post-claim verify: latest-timestamp racer bails when cap overshot", async () => {
+    // Cap = 3. Two claims already exist (T1, T2). Three more dispatches
+    // race through concurrently (T3, T4, T5). All three pass the precheck
+    // (they each see 2 entries < 3) and all three claim. After all three
+    // claims land, Redis has 5 entries for cap=3 — the latest two
+    // timestamps must bail. We play the role of T5 and must bail.
+    const T1 = 10_000, T2 = 10_010, T3 = 10_020, T4 = 10_030, T5 = 10_040;
+    const snapshots = [
+      // Call #1 — precheck: 2 pre-existing entries (< 3, passes)
+      [
+        { ticketKey: "PROJ-1", runId: `claiming:${T1}` },
+        { ticketKey: "PROJ-2", runId: `claiming:${T2}` },
+      ],
+      // Call #2 — post-claim: our claim landed, plus two other racers
+      // that also slipped through the precheck window
+      [
+        { ticketKey: "PROJ-1", runId: `claiming:${T1}` },
+        { ticketKey: "PROJ-2", runId: `claiming:${T2}` },
+        { ticketKey: "PROJ-3", runId: `claiming:${T3}` },
+        { ticketKey: "PROJ-4", runId: `claiming:${T4}` },
+        { ticketKey: "PROJ-LATE", runId: `claiming:${T5}` },
+      ],
+    ];
+    let call = 0;
+    const listAll = vi.fn().mockImplementation(async () => snapshots[call++] ?? []);
+    const unregister = vi.fn().mockResolvedValue(undefined);
+
+    const realNow = Date.now;
+    Date.now = () => T5;
+
+    try {
+      const adapters = makeAdapters({ listAll, unregister });
+      const { dispatchTicket } = await import("./dispatch.js");
+      const result = await dispatchTicket("PROJ-LATE", adapters, 3);
+      expect(result).toEqual({ started: false, reason: "at_capacity" });
+      expect(unregister).toHaveBeenCalledWith("PROJ-LATE");
+      expect(mockStart).not.toHaveBeenCalled();
+    } finally {
+      Date.now = realNow;
+    }
+  });
+
+  it("post-claim verify: earlier-timestamp racer wins even when cap overshot", async () => {
+    // Cap = 3. Same race, but our claim is the earliest of the three
+    // racers — we should be one of the three retained.
+    const T1 = 10_000, T2 = 10_010, T3 = 10_020, T4 = 10_030, T5 = 10_040;
+    const snapshots = [
+      // Precheck: 2 entries
+      [
+        { ticketKey: "PROJ-1", runId: `claiming:${T1}` },
+        { ticketKey: "PROJ-2", runId: `claiming:${T2}` },
+      ],
+      // Post-claim: 5 entries, ours at T3 (earliest of the three racers)
+      [
+        { ticketKey: "PROJ-1", runId: `claiming:${T1}` },
+        { ticketKey: "PROJ-2", runId: `claiming:${T2}` },
+        { ticketKey: "PROJ-EARLY", runId: `claiming:${T3}` },
+        { ticketKey: "PROJ-4", runId: `claiming:${T4}` },
+        { ticketKey: "PROJ-5", runId: `claiming:${T5}` },
+      ],
+    ];
+    let call = 0;
+    const listAll = vi.fn().mockImplementation(async () => snapshots[call++] ?? []);
+    const unregister = vi.fn().mockResolvedValue(undefined);
+
+    const realNow = Date.now;
+    Date.now = () => T3;
+
+    try {
+      const adapters = makeAdapters({ listAll, unregister });
+      const { dispatchTicket } = await import("./dispatch.js");
+      const result = await dispatchTicket("PROJ-EARLY", adapters, 3);
+      expect(result.started).toBe(true);
+      expect(mockStart).toHaveBeenCalled();
+      expect(unregister).not.toHaveBeenCalledWith("PROJ-EARLY");
+    } finally {
+      Date.now = realNow;
+    }
+  });
+
   it("aborts workflow if claim was removed during dispatch", async () => {
     const mockCancel = vi.fn().mockResolvedValue(undefined);
     mockGetRun.mockReturnValue({ cancel: mockCancel });

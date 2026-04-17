@@ -32,6 +32,7 @@ export default defineConfig({
           name: "tier1",
           include: ["e2e/tier1/**/*.test.ts"],
           testTimeout: 120_000,
+          hookTimeout: 120_000,
         },
       },
       {
@@ -39,6 +40,10 @@ export default defineConfig({
           name: "tier2",
           include: ["e2e/tier2/**/*.test.ts"],
           testTimeout: 2_100_000,
+          // afterAll often iterates Sandbox.list() + runs commands inside
+          // each matching sandbox to confirm branch, which easily exceeds
+          // the 10s default. Mirror testTimeout so cleanup doesn't abort.
+          hookTimeout: 2_100_000,
         },
       },
     ],

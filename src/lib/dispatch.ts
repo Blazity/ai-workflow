@@ -67,6 +67,46 @@ export async function dispatchTicket(
     }
     claimHeld = true;
 
+    // Post-claim capacity verify. The precheck above is not atomic with
+    // claim(), so N concurrent dispatches for *different* tickets can all
+    // pass the precheck and then all claim successfully — pushing Redis
+    // over the cap. Re-read the registry with our own claim visible and
+    // decide fairly who stays.
+    //
+    // Fairness rule: sort by (claim timestamp ascending, ticketKey
+    // ascending as tie-breaker); the first `max` entries win. Existing
+    // non-sentinel entries (already-running workflows) are treated as
+    // timestamp 0 so they always win over new claims. Every racer
+    // eventually converges on the same ordering once Redis writes are
+    // visible to all, so exactly the excess bail.
+    stage = "postclaim_capacity";
+    const racers = await runRegistry.listAll();
+    const now = Date.now();
+    const liveRacers = racers.filter(({ runId }) => {
+      if (!isClaimingSentinel(runId)) return true;
+      return now - getClaimTimestamp(runId) <= STALE_CLAIM_MS;
+    });
+    if (liveRacers.length > maxConcurrentAgents) {
+      const sorted = [...liveRacers].sort((a, b) => {
+        const ta = isClaimingSentinel(a.runId) ? getClaimTimestamp(a.runId) : 0;
+        const tb = isClaimingSentinel(b.runId) ? getClaimTimestamp(b.runId) : 0;
+        if (ta !== tb) return ta - tb;
+        return a.ticketKey.localeCompare(b.ticketKey);
+      });
+      const winners = new Set(
+        sorted.slice(0, maxConcurrentAgents).map((e) => e.ticketKey),
+      );
+      if (!winners.has(ticketKey)) {
+        await runRegistry.unregister(ticketKey).catch(() => {});
+        claimHeld = false;
+        logger.info(
+          { ticketKey, liveRacers: liveRacers.length, max: maxConcurrentAgents },
+          "dispatch_at_capacity_post_claim",
+        );
+        return { started: false, reason: "at_capacity" };
+      }
+    }
+
     stage = "fetch_ticket";
     const ticket = await issueTracker.fetchTicket(ticketKey);
     const ticketStatus = ticket.trackerStatus.trim().toLowerCase();
