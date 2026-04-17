@@ -11,10 +11,20 @@ export interface RunRegistryAdapter {
   register(ticketKey: string, runId: string): Promise<void>;
   /** Get the runId for a ticket, or null if none registered. */
   getRunId(ticketKey: string): Promise<string | null>;
-  /** Remove the ticket -> runId mapping. */
+  /** Remove the ticket -> runId mapping (also clears any linked sandboxId). */
   unregister(ticketKey: string): Promise<void>;
   /** Get all tracked ticket -> runId pairs. */
   listAll(): Promise<Array<{ ticketKey: string; runId: string }>>;
+
+  /**
+   * Record the sandboxId that backs this ticket's workflow. Lets cleanup
+   * paths (reconcile, cancelRun, webhook-cancel) stop the sandbox by id
+   * instead of listing all sandboxes and inspecting each one's checked-out
+   * branch.
+   */
+  registerSandbox(ticketKey: string, sandboxId: string): Promise<void>;
+  /** Get the sandboxId for a ticket, or null if none registered. */
+  getSandboxId(ticketKey: string): Promise<string | null>;
 
   /** Mark a ticket as failed (moveTicket to backlog failed in catch block). */
   markFailed(ticketKey: string, meta: FailedTicketMeta): Promise<void>;

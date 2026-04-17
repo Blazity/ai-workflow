@@ -271,6 +271,13 @@ async function unregisterRun(ticketIdentifier: string) {
   await runRegistry.unregister(ticketIdentifier);
 }
 
+async function registerTicketSandbox(ticketIdentifier: string, sandboxId: string) {
+  "use step";
+  const { createStepAdapters } = await import("../lib/step-adapters.js");
+  const { runRegistry } = createStepAdapters();
+  await runRegistry.registerSandbox(ticketIdentifier, sandboxId);
+}
+
 async function markTicketFailed(ticketIdentifier: string, error: string) {
   "use step";
   const { createStepAdapters } = await import("../lib/step-adapters.js");
@@ -355,6 +362,10 @@ export async function agentWorkflow(ticketId: string) {
 
     // Provision sandbox once for all phases
     const sandboxId = await provisionSandbox(branchName, mergeBase);
+    // Pin the sandboxId to this ticket so cleanup paths (reconcile,
+    // cancelRun, webhook-cancel) can stop it by id instead of doing a
+    // branch scan across every running sandbox.
+    await registerTicketSandbox(ticket.identifier, sandboxId);
 
     try {
       await writeAttachments(sandboxId, downloadedAttachments);

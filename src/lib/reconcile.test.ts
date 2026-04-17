@@ -37,6 +37,8 @@ function makeRegistry(
     getRunId: vi.fn(),
     unregister: vi.fn().mockResolvedValue(undefined),
     listAll: vi.fn().mockResolvedValue(runs),
+    registerSandbox: vi.fn().mockResolvedValue(undefined),
+    getSandboxId: vi.fn().mockResolvedValue(null),
     markFailed: vi.fn().mockResolvedValue(undefined),
     isTicketFailed: vi.fn().mockResolvedValue(false),
     listAllFailed: vi.fn().mockResolvedValue(failed),
@@ -89,7 +91,7 @@ describe("reconcileRuns", () => {
     expect(registry.unregister).toHaveBeenCalledWith("PROJ-1");
     // A crash between dispatch.start() and dispatch.register() can leave
     // a live sandbox shadowed by a sentinel; reconcile must sweep it.
-    expect(mockStopTicketSandboxes).toHaveBeenCalledWith("PROJ-1");
+    expect(mockStopTicketSandboxes).toHaveBeenCalledWith("PROJ-1", null);
   });
 
 
@@ -105,7 +107,7 @@ describe("reconcileRuns", () => {
     expect(result).toEqual({ cancelled: 1, cleaned: 0 });
     expect(registry.unregister).toHaveBeenCalledWith("PROJ-1");
     expect(mockCancelRun).not.toHaveBeenCalled();
-    expect(mockStopTicketSandboxes).toHaveBeenCalledWith("PROJ-1");
+    expect(mockStopTicketSandboxes).toHaveBeenCalledWith("PROJ-1", null);
   });
 
   it("keeps fresh claiming entry when missing from JQL snapshot but Jira still says AI", async () => {

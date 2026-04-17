@@ -24,8 +24,16 @@ export default defineConfig({
     globals: true,
     environment: "node",
     include: ["e2e/**/*.test.ts"],
+    // Within-file tests stay serial — each test owns setup/teardown and
+    // concurrent ordering inside one file buys nothing here.
     sequence: { concurrent: false },
-    fileParallelism: false,
+    // Enable cross-file parallelism; `maxWorkers` caps how many files run
+    // simultaneously. The `test:e2e:tier2:parallel` script relies on this;
+    // `tier2-capacity` has a single file, so this flag is a no-op for it;
+    // tier1 is currently empty.
+    fileParallelism: true,
+    maxWorkers: 6,
+    minWorkers: 1,
     projects: [
       {
         test: {
@@ -36,13 +44,28 @@ export default defineConfig({
         },
       },
       {
+        // Most of tier2 can run concurrently: each test owns a unique
+        // ticket key, branch name, and Redis field. Excludes US-11, which
+        // asserts on the *global* MAX_CONCURRENT_AGENTS cap — if other
+        // tests are holding claim slots while it runs, US-11 sees fewer
+        // than max of its own tickets claimed and fails.
         test: {
-          name: "tier2",
+          name: "tier2-parallel",
           include: ["e2e/tier2/**/*.test.ts"],
+          exclude: ["e2e/tier2/us11-*.test.ts"],
           testTimeout: 2_100_000,
-          // afterAll often iterates Sandbox.list() + runs commands inside
-          // each matching sandbox to confirm branch, which easily exceeds
-          // the 10s default. Mirror testTimeout so cleanup doesn't abort.
+          hookTimeout: 2_100_000,
+        },
+      },
+      {
+        // US-11 runs alone so the capacity cap reflects only its own
+        // tickets. Invoked via a separate `vitest run --project` call
+        // after tier2-parallel finishes (see package.json scripts), so no
+        // other tier2 files hold Redis claim slots while it runs.
+        test: {
+          name: "tier2-capacity",
+          include: ["e2e/tier2/us11-*.test.ts"],
+          testTimeout: 2_100_000,
           hookTimeout: 2_100_000,
         },
       },

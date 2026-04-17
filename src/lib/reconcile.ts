@@ -153,8 +153,13 @@ async function reconcileInflightClaim(
     // research phase) *before* overwriting the sentinel with the real
     // runId. A crash in that narrow window leaves a sentinel in Redis
     // alongside a running sandbox we have no way to cancel via the
-    // workflow handle. Sweep any matching sandbox by branch name.
-    await stopTicketSandboxes(ticketKey).catch(() => {});
+    // workflow handle. Try the fast path (sandboxId from Redis); fall
+    // back to the parallel branch scan if the workflow crashed before
+    // writing its sandboxId.
+    const sandboxId = await runRegistry
+      .getSandboxId(ticketKey)
+      .catch(() => null);
+    await stopTicketSandboxes(ticketKey, sandboxId).catch(() => {});
     await runRegistry.unregister(ticketKey);
     logger.warn({ ticketKey, runId }, "reconcile_cleaned_stale_claim");
     return { cancelled: 0, cleaned: 1 };
@@ -163,10 +168,10 @@ async function reconcileInflightClaim(
   if (ticketLeftAiColumn) {
     const leftAiColumn = await verifyTicketLeftAiColumn(ticketKey, issueTracker);
     if (!leftAiColumn) return { cancelled: 0, cleaned: 0 };
-    // Same rationale as the stale-claim branch: a sentinel can shadow a
-    // real sandbox if dispatch crashed mid-start. Stop by branch before
-    // unregistering so the cancellation is complete.
-    await stopTicketSandboxes(ticketKey).catch(() => {});
+    const sandboxId = await runRegistry
+      .getSandboxId(ticketKey)
+      .catch(() => null);
+    await stopTicketSandboxes(ticketKey, sandboxId).catch(() => {});
     await runRegistry.unregister(ticketKey);
     logger.info({ ticketKey, runId }, "reconcile_cancelled_inflight_claim");
     await notifyTicketCancelled(ticketKey, "inflight_claim", onTicketCancelled);

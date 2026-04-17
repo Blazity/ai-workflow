@@ -229,7 +229,8 @@ async function cancelTrackedRun(
     // start() but crashed before register(). Same gap that reconcile's
     // stale-claim sweep covers — we catch it here on the faster webhook
     // path so operators don't have to wait 5 minutes for reconcile.
-    await stopTicketSandboxes(ticketKey).catch(() => {});
+    const sandboxId = await runRegistry.getSandboxId(ticketKey).catch(() => null);
+    await stopTicketSandboxes(ticketKey, sandboxId).catch(() => {});
     await runRegistry.unregister(ticketKey).catch(() => {});
     return true;
   }

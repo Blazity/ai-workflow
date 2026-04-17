@@ -17,6 +17,8 @@ function makeRegistry(overrides: Partial<RunRegistryAdapter> = {}): RunRegistryA
     getRunId: vi.fn(),
     unregister: overrides.unregister ?? vi.fn().mockResolvedValue(undefined),
     listAll: vi.fn(),
+    registerSandbox: vi.fn().mockResolvedValue(undefined),
+    getSandboxId: overrides.getSandboxId ?? vi.fn().mockResolvedValue(null),
     markFailed: vi.fn().mockResolvedValue(undefined),
     isTicketFailed: vi.fn().mockResolvedValue(false),
     listAllFailed: vi.fn().mockResolvedValue([]),
@@ -41,7 +43,7 @@ describe("cancelRun", () => {
     expect(result).toBe(true);
     expect(mockGetRun).toHaveBeenCalledWith("run_abc");
     expect(mockCancel).toHaveBeenCalled();
-    expect(mockStopTicketSandboxes).toHaveBeenCalledWith("PROJ-1");
+    expect(mockStopTicketSandboxes).toHaveBeenCalledWith("PROJ-1", null);
     expect(registry.unregister).toHaveBeenCalledWith("PROJ-1");
   });
 
@@ -55,7 +57,7 @@ describe("cancelRun", () => {
     const result = await cancelRun("PROJ-1", "run_abc", registry);
 
     expect(result).toBe(false);
-    expect(mockStopTicketSandboxes).toHaveBeenCalledWith("PROJ-1");
+    expect(mockStopTicketSandboxes).toHaveBeenCalledWith("PROJ-1", null);
     expect(registry.unregister).toHaveBeenCalledWith("PROJ-1");
   });
 
