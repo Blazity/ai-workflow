@@ -18,8 +18,14 @@ const schema = z.object({
 
   CRON_SECRET: z.string().min(1),
 
+  /** Only required by webhook-signing tests (US-12). */
+  JIRA_WEBHOOK_SECRET: z.string().min(1).optional(),
+
   AI_WORKFLOW_KV_REST_API_URL: z.string().url(),
   AI_WORKFLOW_KV_REST_API_TOKEN: z.string().min(1),
+
+  /** Must match the deployed app's VERCEL_ENV (e.g. "preview", "production") */
+  VERCEL_ENV: z.string().min(1).default("preview"),
 
   VERCEL_AUTOMATION_BYPASS_SECRET: z.string().optional(),
 });

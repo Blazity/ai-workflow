@@ -2,6 +2,13 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { Adapters } from "./adapters.js";
 import type { TicketContent } from "../adapters/issue-tracker/types.js";
 
+vi.mock("../../env.js", () => ({
+  env: {
+    JIRA_PROJECT_KEY: "PROJ",
+    COLUMN_AI: "AI",
+  },
+}));
+
 const mockStart = vi.fn();
 const mockGetRun = vi.fn();
 vi.mock("workflow/api", () => ({
@@ -14,10 +21,14 @@ vi.mock("../workflows/agent.js", () => ({
 }));
 
 const mockSandboxList = vi.fn();
+const mockStopTicketSandboxes = vi.fn();
 vi.mock("@vercel/sandbox", () => ({
   Sandbox: {
     list: (...args: any[]) => mockSandboxList(...args),
   },
+}));
+vi.mock("../sandbox/stop-ticket-sandboxes.js", () => ({
+  stopTicketSandboxes: (...args: any[]) => mockStopTicketSandboxes(...args),
 }));
 
 function makeTicket(overrides: Partial<TicketContent> = {}): TicketContent {
@@ -30,6 +41,7 @@ function makeTicket(overrides: Partial<TicketContent> = {}): TicketContent {
     comments: [],
     labels: [],
     trackerStatus: "AI",
+    attachments: [],
     ...overrides,
   };
 }
@@ -91,14 +103,21 @@ function makeAdapters(
 
 describe("dispatchTicket", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    mockSandboxList.mockReset();
+    mockStart.mockReset();
+    mockGetRun.mockReset();
+    mockStopTicketSandboxes.mockReset();
     mockSandboxList.mockResolvedValue({
-      json: { sandboxes: [] },
+      json: {
+        sandboxes: [],
+        pagination: { count: 0, next: null, prev: null },
+      },
     });
     mockStart.mockResolvedValue({ runId: "run_123" });
+    mockStopTicketSandboxes.mockResolvedValue(0);
   });
 
-  it("dispatches agentWorkflow for any ticket", async () => {
+  it("dispatches agentWorkflow for a ticket in configured project + AI column", async () => {
     const adapters = makeAdapters();
     const { dispatchTicket } = await import("./dispatch.js");
 
@@ -117,6 +136,36 @@ describe("dispatchTicket", () => {
       "PROJ-42",
       "run_123",
     );
+  });
+
+  it("skips dispatch when ticket is no longer in AI column", async () => {
+    const unregister = vi.fn().mockResolvedValue(undefined);
+    const adapters = makeAdapters({
+      fetchTicket: vi.fn().mockResolvedValue(makeTicket({ trackerStatus: "Backlog" })),
+      unregister,
+    });
+    const { dispatchTicket } = await import("./dispatch.js");
+
+    const result = await dispatchTicket("PROJ-42", adapters, 5);
+
+    expect(result).toEqual({ started: false, reason: "not_in_ai_column" });
+    expect(unregister).toHaveBeenCalledWith("PROJ-42");
+    expect(mockStart).not.toHaveBeenCalled();
+  });
+
+  it("skips dispatch when ticket is outside configured Jira project key", async () => {
+    const unregister = vi.fn().mockResolvedValue(undefined);
+    const adapters = makeAdapters({
+      fetchTicket: vi.fn().mockResolvedValue(makeTicket({ identifier: "OTHER-42" })),
+      unregister,
+    });
+    const { dispatchTicket } = await import("./dispatch.js");
+
+    const result = await dispatchTicket("PROJ-42", adapters, 5);
+
+    expect(result).toEqual({ started: false, reason: "wrong_project_key" });
+    expect(unregister).toHaveBeenCalledWith("PROJ-42");
+    expect(mockStart).not.toHaveBeenCalled();
   });
 
   it("returns already_claimed when claim fails", async () => {
@@ -140,12 +189,60 @@ describe("dispatchTicket", () => {
           { status: "running" },
           { status: "running" },
         ],
+        pagination: { count: 3, next: null, prev: null },
       },
     });
     const adapters = makeAdapters();
     const { dispatchTicket } = await import("./dispatch.js");
 
     const result = await dispatchTicket("PROJ-42", adapters, 3);
+
+    expect(result).toEqual({ started: false, reason: "at_capacity" });
+    expect(adapters.runRegistry.claim).not.toHaveBeenCalled();
+    expect(mockStart).not.toHaveBeenCalled();
+  });
+
+  it("paginates sandbox list when counting active sandboxes", async () => {
+    mockSandboxList
+      .mockResolvedValueOnce({
+        json: {
+          sandboxes: [{ status: "running" }],
+          pagination: { count: 1, next: 123, prev: null },
+        },
+      })
+      .mockResolvedValueOnce({
+        json: {
+          sandboxes: [{ status: "running" }, { status: "running" }],
+          pagination: { count: 2, next: null, prev: 123 },
+        },
+      });
+    const adapters = makeAdapters();
+    const { dispatchTicket } = await import("./dispatch.js");
+
+    const result = await dispatchTicket("PROJ-42", adapters, 3);
+
+    expect(result).toEqual({ started: false, reason: "at_capacity" });
+    expect(mockSandboxList).toHaveBeenCalledTimes(2);
+    expect(mockSandboxList.mock.calls[0][0]).toMatchObject({
+      limit: 100,
+      since: undefined,
+      signal: expect.any(AbortSignal),
+    });
+    expect(mockSandboxList.mock.calls[1][0]).toMatchObject({
+      limit: 100,
+      since: 123,
+      signal: expect.any(AbortSignal),
+    });
+    expect(adapters.runRegistry.claim).not.toHaveBeenCalled();
+    expect(mockStart).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when sandbox count check fails", async () => {
+    mockSandboxList.mockRejectedValue(new Error("sandbox list timeout"));
+    const adapters = makeAdapters();
+    const { dispatchTicket } = await import("./dispatch.js");
+
+    const result = await dispatchTicket("PROJ-42", adapters, 5);
 
     expect(result).toEqual({ started: false, reason: "at_capacity" });
     expect(adapters.runRegistry.claim).not.toHaveBeenCalled();
@@ -168,6 +265,7 @@ describe("dispatchTicket", () => {
     expect(mockStart).toHaveBeenCalled();
     expect(mockGetRun).toHaveBeenCalledWith("run_123");
     expect(mockCancel).toHaveBeenCalled();
+    expect(mockStopTicketSandboxes).toHaveBeenCalledWith("PROJ-42");
     expect(adapters.runRegistry.register).not.toHaveBeenCalled();
   });
 
@@ -228,13 +326,35 @@ describe("dispatchTicket", () => {
     expect(adapters.runRegistry.claim).not.toHaveBeenCalled();
     expect(mockStart).not.toHaveBeenCalled();
   });
+
+  it("returns error when failed-marker precheck throws", async () => {
+    const adapters = makeAdapters({
+      isTicketFailed: vi.fn().mockRejectedValue(new Error("registry unavailable")),
+    });
+    const { dispatchTicket } = await import("./dispatch.js");
+
+    const result = await dispatchTicket("PROJ-42", adapters, 5);
+
+    expect(result).toEqual({ started: false, reason: "error" });
+    expect(adapters.runRegistry.claim).not.toHaveBeenCalled();
+    expect(mockStart).not.toHaveBeenCalled();
+  });
 });
 
 describe("failed-ticket safeguard full loop", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
-    mockSandboxList.mockResolvedValue({ json: { sandboxes: [] } });
+    mockSandboxList.mockReset();
+    mockStart.mockReset();
+    mockGetRun.mockReset();
+    mockStopTicketSandboxes.mockReset();
+    mockSandboxList.mockResolvedValue({
+      json: {
+        sandboxes: [],
+        pagination: { count: 0, next: null, prev: null },
+      },
+    });
     mockStart.mockResolvedValue({ runId: "run_123" });
+    mockStopTicketSandboxes.mockResolvedValue(0);
   });
 
   it("mark → skip → clear → redispatch", async () => {

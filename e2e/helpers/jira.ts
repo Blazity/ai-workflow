@@ -100,6 +100,27 @@ export async function getTicketComments(
   }));
 }
 
+export async function postComment(
+  ticketKey: string,
+  comment: string,
+): Promise<void> {
+  await jiraRequest(`/rest/api/3/issue/${ticketKey}/comment`, {
+    method: "POST",
+    body: JSON.stringify({
+      body: {
+        type: "doc",
+        version: 1,
+        content: [
+          {
+            type: "paragraph",
+            content: [{ type: "text", text: comment }],
+          },
+        ],
+      },
+    }),
+  });
+}
+
 export async function deleteTicket(ticketKey: string): Promise<void> {
   // Only delete tickets created by e2e tests
   const data = await jiraRequest(
@@ -110,6 +131,66 @@ export async function deleteTicket(ticketKey: string): Promise<void> {
   await jiraRequest(`/rest/api/3/issue/${ticketKey}`, {
     method: "DELETE",
   }).catch(() => {});
+}
+
+export async function addAttachment(
+  ticketKey: string,
+  filename: string,
+  content: Buffer,
+): Promise<void> {
+  const form = new FormData();
+  form.append("file", new Blob([new Uint8Array(content)]), filename);
+
+  const res = await fetch(
+    `${e2eEnv.JIRA_BASE_URL}/rest/api/3/issue/${ticketKey}/attachments`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: authHeader,
+        "X-Atlassian-Token": "no-check",
+      },
+      body: form,
+    },
+  );
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`Jira attachment upload failed: ${res.status} — ${text}`);
+  }
+}
+
+export async function getTicketAttachments(
+  ticketKey: string,
+): Promise<
+  Array<{
+    id: string;
+    filename: string;
+    size: number;
+    mimeType: string;
+    contentUrl: string;
+  }>
+> {
+  const data = await jiraRequest(
+    `/rest/api/3/issue/${ticketKey}?fields=attachment`,
+  );
+  return (data.fields.attachment ?? []).map((a: any) => ({
+    id: a.id,
+    filename: a.filename,
+    size: a.size,
+    mimeType: a.mimeType,
+    contentUrl: a.content,
+  }));
+}
+
+export async function downloadJiraAttachment(
+  contentUrl: string,
+): Promise<Buffer> {
+  const res = await fetch(contentUrl, {
+    headers: { Authorization: authHeader },
+  });
+  if (!res.ok) {
+    throw new Error(`Attachment download failed: ${res.status}`);
+  }
+  return Buffer.from(await res.arrayBuffer());
 }
 
 function extractAdfText(adf: any): string {

@@ -15,6 +15,7 @@
   },
   "dependencies": {
     "@chat-adapter/slack": "^4.20.2",
+    "@gitbeaker/rest": "^43.8.0",
     "@octokit/rest": "^22.0.1",
     "@t3-oss/env-core": "^0.13.10",
     "@upstash/redis": "^1.37.0",

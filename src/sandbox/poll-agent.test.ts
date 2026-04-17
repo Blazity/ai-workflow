@@ -23,19 +23,57 @@ vi.mock("./credentials.js", () => ({
   getSandboxCredentials: () => ({}),
 }));
 
+// VCS config is swapped per-test by reassigning currentVcsConfig before the
+// step under test calls getVcsConfig(). Default is GitHub; GitLab tests set
+// it to a GitLab config to exercise the oauth2 auth user and gitlab host.
+let currentVcsConfig: {
+  kind: "github" | "gitlab";
+  token: string;
+  repoPath: string;
+  baseBranch: string;
+  host: string;
+} = {
+  kind: "github",
+  token: "ghp_test_token",
+  repoPath: "test-owner/test-repo",
+  baseBranch: "main",
+  host: "https://github.com",
+};
+
+const githubVcsConfig = {
+  kind: "github" as const,
+  token: "ghp_test_token",
+  repoPath: "test-owner/test-repo",
+  baseBranch: "main",
+  host: "https://github.com",
+};
+
+const gitlabVcsConfig = {
+  kind: "gitlab" as const,
+  token: "glpat_test_token",
+  repoPath: "test-group/test-repo",
+  baseBranch: "main",
+  host: "https://gitlab.example.com",
+};
+
 vi.mock("../../env.js", () => ({
   env: {
+    VCS_KIND: "github",
     GITHUB_TOKEN: "ghp_test_token",
     GITHUB_OWNER: "test-owner",
     GITHUB_REPO: "test-repo",
     CLAUDE_MODEL: "claude-sonnet-4-20250514",
   },
+  getVcsConfig: () => currentVcsConfig,
 }));
 
 import { pushFromSandbox, fixAndRetryPush, teardownSandbox, checkPhaseDone, collectPhaseOutput } from "./poll-agent.js";
 
 describe("pushFromSandbox", () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    currentVcsConfig = githubVcsConfig;
+  });
 
   it("returns error when agent made no commits", async () => {
     const mockStdout = vi.fn();
@@ -107,6 +145,36 @@ describe("pushFromSandbox", () => {
     expect(result.error).toBe("pre-push hook declined");
   });
 
+  it("uses GitLab oauth2 auth user and host when VCS_KIND=gitlab", async () => {
+    currentVcsConfig = gitlabVcsConfig;
+    const callIndex = { value: 0 };
+    mockRunCommand.mockImplementation(() => {
+      const i = callIndex.value++;
+      if (i === 0) {
+        return { exitCode: 0, stdout: vi.fn().mockResolvedValue("abc123") };
+      } else if (i === 1) {
+        return { exitCode: 0, stdout: vi.fn().mockResolvedValue("def456") };
+      } else {
+        return { exitCode: 0, stdout: vi.fn().mockResolvedValue(""), stderr: vi.fn().mockResolvedValue("") };
+      }
+    });
+
+    const result = await pushFromSandbox("sbx-test-123", "blazebot/task-1");
+
+    expect(result.pushed).toBe(true);
+    // Auth URL should use oauth2 + GitLab host (not x-access-token + github.com).
+    expect(mockRunCommand).toHaveBeenCalledWith(
+      "git",
+      [
+        "remote",
+        "set-url",
+        "origin",
+        "https://oauth2:glpat_test_token@gitlab.example.com/test-group/test-repo.git",
+      ],
+    );
+    expect(mockRunCommand).toHaveBeenCalledWith("git", ["push", "--force", "origin", "HEAD:refs/heads/blazebot/task-1"]);
+  });
+
   it("pushes anyway when sentinel file is missing", async () => {
     const callIndex = { value: 0 };
     mockRunCommand.mockImplementation(() => {
@@ -131,7 +199,10 @@ describe("pushFromSandbox", () => {
 });
 
 describe("fixAndRetryPush", () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    currentVcsConfig = githubVcsConfig;
+  });
 
   it("writes prompt to file and retries push successfully", async () => {
     const callIndex = { value: 0 };

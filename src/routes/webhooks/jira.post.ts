@@ -1,8 +1,10 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { defineEventHandler, readRawBody, getHeader, createError } from "h3";
 import { env } from "../../../env.js";
+import { IssueTrackerNotFoundError } from "../../adapters/issue-tracker/types.js";
 import { createAdapters } from "../../lib/adapters.js";
-import { dispatchTicket } from "../../lib/dispatch.js";
+import { cancelRun } from "../../lib/cancel-run.js";
+import { dispatchTicket, isClaimingSentinel } from "../../lib/dispatch.js";
 import { logger } from "../../lib/logger.js";
 
 /**
@@ -43,7 +45,101 @@ export default defineEventHandler(async (event) => {
   logger.info({ ticketKey }, "webhook_received");
 
   const adapters = createAdapters();
-  const result = await dispatchTicket(ticketKey, adapters, env.MAX_CONCURRENT_AGENTS);
+  const webhookEvent = typeof body?.webhookEvent === "string" ? body.webhookEvent : null;
+  const ticketStatus = extractTicketStatus(body);
+  logger.info(
+    {
+      ticketKey,
+      webhookEvent,
+      payloadStatus: ticketStatus,
+      payloadProjectKey: projectKey,
+    },
+    "webhook_payload_parsed",
+  );
+
+  if (!ticketStatus) {
+    logger.info({ ticketKey }, "webhook_missing_payload_status_dispatching_anyway");
+  }
+
+  if (ticketStatus && !isAiColumnStatus(ticketStatus)) {
+    logger.info(
+      { ticketKey, payloadStatus: ticketStatus, expectedAiStatus: env.COLUMN_AI },
+      "webhook_payload_status_outside_ai_column",
+    );
+
+    const liveTicketState = await getLiveTicketState(ticketKey, adapters.issueTracker);
+    if (liveTicketState.inAiColumn) {
+      logger.info(
+        {
+          ticketKey,
+          payloadStatus: ticketStatus,
+          liveStatus: liveTicketState.status,
+          liveProjectKey: liveTicketState.projectKey,
+        },
+        "webhook_skip_cancel_live_ticket_in_ai_column",
+      );
+      logger.info(
+        {
+          ticketKey,
+          maxConcurrentAgents: env.MAX_CONCURRENT_AGENTS,
+          dispatchContext: "payload_outdated_live_ticket_in_ai",
+        },
+        "webhook_dispatch_started",
+      );
+      const result = await dispatchTicket(ticketKey, adapters, env.MAX_CONCURRENT_AGENTS, {
+        skipCapacityCheck: true,
+      });
+      logger.info(
+        {
+          ticketKey,
+          started: result.started,
+          reason: result.reason,
+          runId: result.runId,
+          dispatchContext: "payload_outdated_live_ticket_in_ai",
+        },
+        "webhook_dispatch_result",
+      );
+      return {
+        status: result.started ? "dispatched" : "skipped",
+        ticketKey,
+        reason: result.reason,
+      };
+    }
+
+    const cancelled = await cancelTrackedRun(ticketKey, adapters.runRegistry);
+    if (cancelled) {
+      await adapters.messaging.notify(
+        `Task ${ticketKey} canceled: webhook confirmed ticket is outside AI column.`,
+      );
+    }
+    logger.info(
+      {
+        ticketKey,
+        payloadStatus: ticketStatus,
+        liveStatus: liveTicketState.status,
+        liveProjectKey: liveTicketState.projectKey,
+        cancelled,
+      },
+      "webhook_ticket_left_ai_column",
+    );
+    return {
+      status: cancelled ? "cancelled" : "ignored",
+      reason: "left_ai_column",
+      ticketKey,
+    };
+  }
+
+  logger.info(
+    {
+      ticketKey,
+      maxConcurrentAgents: env.MAX_CONCURRENT_AGENTS,
+      dispatchContext: "default",
+    },
+    "webhook_dispatch_started",
+  );
+  const result = await dispatchTicket(ticketKey, adapters, env.MAX_CONCURRENT_AGENTS, {
+    skipCapacityCheck: true,
+  });
 
   logger.info(
     { ticketKey, started: result.started, reason: result.reason, runId: result.runId },
@@ -116,3 +212,67 @@ function extractProjectKey(body: any): string | null {
   return body?.issue?.fields?.project?.key ?? null;
 }
 
+function extractTicketStatus(body: any): string | null {
+  return body?.issue?.fields?.status?.name ?? null;
+}
+
+function isAiColumnStatus(status: string): boolean {
+  return status.trim().toLowerCase() === env.COLUMN_AI.trim().toLowerCase();
+}
+
+async function cancelTrackedRun(
+  ticketKey: string,
+  runRegistry: ReturnType<typeof createAdapters>["runRegistry"],
+): Promise<boolean> {
+  const trackedRunId = await runRegistry.getRunId(ticketKey);
+  if (!trackedRunId) return false;
+
+  if (isClaimingSentinel(trackedRunId)) {
+    await runRegistry.unregister(ticketKey).catch(() => {});
+    return true;
+  }
+
+  return cancelRun(ticketKey, trackedRunId, runRegistry);
+}
+
+async function getLiveTicketState(
+  ticketKey: string,
+  issueTracker: ReturnType<typeof createAdapters>["issueTracker"],
+): Promise<{ inAiColumn: boolean; status: string | null; projectKey: string | null }> {
+  try {
+    const liveTicket = await issueTracker.fetchTicket(ticketKey);
+    const status = liveTicket.trackerStatus;
+    const projectKey = liveTicket.projectKey ?? extractProjectKeyFromIdentifier(liveTicket.identifier);
+    const inExpectedProject =
+      projectKey != null &&
+      projectKey.trim().toUpperCase() === env.JIRA_PROJECT_KEY.trim().toUpperCase();
+    return {
+      inAiColumn: isAiColumnStatus(status) && inExpectedProject,
+      status,
+      projectKey,
+    };
+  } catch (err) {
+    if (err instanceof IssueTrackerNotFoundError || getErrorCode(err) === "NOT_FOUND") {
+      return { inAiColumn: false, status: null, projectKey: null };
+    }
+    logger.warn(
+      { ticketKey, error: (err as Error).message },
+      "webhook_live_ticket_state_check_failed",
+    );
+    return { inAiColumn: true, status: null, projectKey: null };
+  }
+}
+
+function extractProjectKeyFromIdentifier(identifier: string): string | null {
+  const trimmed = identifier.trim();
+  if (!trimmed) return null;
+  const dashIndex = trimmed.indexOf("-");
+  if (dashIndex <= 0) return null;
+  return trimmed.slice(0, dashIndex).toUpperCase();
+}
+
+function getErrorCode(err: unknown): string | undefined {
+  if (!err || typeof err !== "object") return undefined;
+  const maybeCode = (err as { code?: unknown }).code;
+  return typeof maybeCode === "string" ? maybeCode : undefined;
+}

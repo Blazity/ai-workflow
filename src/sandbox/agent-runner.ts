@@ -117,12 +117,16 @@ const VALID_RESEARCH_STATUSES: ResearchStatus[] = ["completed", "clarification_n
 
 export function parseResearchStatus(raw: string): ResearchResult {
   const lines = raw.split("\n");
-  const firstLine = lines[0]?.trim() ?? "";
-  const match = firstLine.match(/^STATUS:\s*(\S+)/i);
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]?.trim() ?? "";
+    const match = line.match(/^STATUS:\s*([a-z_]+)/i);
+    if (!match) continue;
 
-  if (match && VALID_RESEARCH_STATUSES.includes(match[1] as ResearchStatus)) {
-    const body = lines.slice(1).join("\n").trim();
-    return { status: match[1] as ResearchStatus, body };
+    const status = match[1].toLowerCase() as ResearchStatus;
+    if (VALID_RESEARCH_STATUSES.includes(status)) {
+      const body = lines.slice(i + 1).join("\n").trim();
+      return { status, body };
+    }
   }
 
   return { status: "failed", body: raw };
@@ -131,7 +135,7 @@ export function parseResearchStatus(raw: string): ResearchResult {
 // --- Review Output Schema ---
 
 const reviewOutputSchema = z.object({
-  result: z.enum(["approved", "changes_requested", "failed"]),
+  result: z.enum(["approved", "failed"]),
   feedback: z.string(),
   issues: z.array(z.object({
     file: z.string(),
@@ -148,7 +152,7 @@ export const REVIEW_SCHEMA = JSON.stringify({
   properties: {
     result: {
       type: "string",
-      enum: ["approved", "changes_requested", "failed"],
+      enum: ["approved", "failed"],
     },
     feedback: { type: "string" },
     issues: {

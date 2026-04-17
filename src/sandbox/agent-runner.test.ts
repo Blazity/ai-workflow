@@ -160,6 +160,26 @@ describe("parseResearchStatus", () => {
     const { status } = parseResearchStatus(raw);
     expect(status).toBe("completed");
   });
+
+  it("handles leading blank lines before STATUS", () => {
+    const raw = "\n\nSTATUS: clarification_needed\n\n1. Which provider?";
+    const { status, body } = parseResearchStatus(raw);
+    expect(status).toBe("clarification_needed");
+    expect(body).toContain("Which provider?");
+  });
+
+  it("normalizes uppercase status values", () => {
+    const raw = "STATUS: CLARIFICATION_NEEDED\n\n1. Which provider?";
+    const { status } = parseResearchStatus(raw);
+    expect(status).toBe("clarification_needed");
+  });
+
+  it("extracts STATUS from fenced output", () => {
+    const raw = "```markdown\nSTATUS: clarification_needed\n\n1. Which provider?\n```";
+    const { status, body } = parseResearchStatus(raw);
+    expect(status).toBe("clarification_needed");
+    expect(body).toContain("Which provider?");
+  });
 });
 
 describe("parseReviewOutput", () => {
@@ -174,16 +194,16 @@ describe("parseReviewOutput", () => {
     expect(output.feedback).toBe("Looks good");
   });
 
-  it("parses changes_requested result with issues", () => {
+  it("parses approved result with issues", () => {
     const raw = JSON.stringify({
-      result: "changes_requested",
-      feedback: "Several issues found",
+      result: "approved",
+      feedback: "Fixed several issues",
       issues: [
-        { file: "src/foo.ts", description: "Missing null check", severity: "critical" },
+        { file: "src/foo.ts", description: "Fixed missing null check", severity: "critical" },
       ],
     });
     const output = parseReviewOutput(raw);
-    expect(output.result).toBe("changes_requested");
+    expect(output.result).toBe("approved");
     expect(output.issues).toHaveLength(1);
     expect(output.issues[0].severity).toBe("critical");
   });

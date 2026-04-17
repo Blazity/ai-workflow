@@ -11,6 +11,9 @@ importers:
       '@chat-adapter/slack':
         specifier: ^4.20.2
         version: 4.20.2
+      '@gitbeaker/rest':
+        specifier: ^43.8.0
+        version: 43.8.0
       '@octokit/rest':
         specifier: ^22.0.1
         version: 22.0.1
@@ -353,6 +356,18 @@ packages:
     engines: {node: '>=18'}
     cpu: [x64]
     os: [win32]
+
+  '@gitbeaker/core@43.8.0':
+    resolution: {integrity: sha512-H+LfKuf4dExBinb79c+CXViRBvTVQNf5BYLNSizm2SiqdED5JruhKX88payefleY0szp7G/mySlFSXPyGRH1dQ==}
+    engines: {node: '>=18.20.0'}
+
+  '@gitbeaker/requester-utils@43.8.0':
+    resolution: {integrity: sha512-d/SiJdxijc+aH5ZBQOw83XLxNSXqsBZNm5k3nPu1EHxGxK0fajXmxdMl0/vNXbKRggnIquFCxURkrQSEzfjqxQ==}
+    engines: {node: '>=18.20.0'}
+
+  '@gitbeaker/rest@43.8.0':
+    resolution: {integrity: sha512-xxqsNsUXaFang9b2e/NTIgqUeuUlifA2Opy1mOVqTDuJZZNIOTgUNyziwBJoleBhMC0XuvY3JNVMWthufcVjRw==}
+    engines: {node: '>=18.20.0'}
 
   '@graphile/logger@0.2.0':
     resolution: {integrity: sha512-jjcWBokl9eb1gVJ85QmoaQ73CQ52xAaOCF29ukRbYNl6lY+ts0ErTaDYOBlejcbUs2OpaiqYLO5uDhyLFzWw4w==}
@@ -3307,6 +3322,10 @@ packages:
   picocolors@1.1.1:
     resolution: {integrity: sha512-xceH2snhtb5M9liqDsmEw56le376mTZkEX/jEb/RxNFyegNul7eNslCXP9FDj/Lcu0X8KEyMceP2ntpaHrDEVA==}
 
+  picomatch-browser@2.2.6:
+    resolution: {integrity: sha512-0ypsOQt9D4e3hziV8O4elD9uN0z/jtUEfxVRtNaAAtXIyUx9m/SzlO020i8YNL2aL/E6blOvvHQcin6HZlFy/w==}
+    engines: {node: '>=8.6'}
+
   picomatch@2.3.1:
     resolution: {integrity: sha512-JU3teHTNjmE2VCGFzuY8EXzCDVwEqB2a8fsIvwaStHhAWJEeVd1o1QD80CU6+ZdEXXSLbSsuLwJjkCBWqRQUVA==}
     engines: {node: '>=8.6'}
@@ -3405,6 +3424,9 @@ packages:
   range-parser@1.2.1:
     resolution: {integrity: sha512-Hrgsx+orqoygnmhFbKaHE6c296J+HTAQXoxEF6gNupROmmGJRoyzfG3ccAveqCBrwr/2yxQ5BVd/GTl5agOwSg==}
     engines: {node: '>= 0.6'}
+
+  rate-limiter-flexible@8.3.0:
+    resolution: {integrity: sha512-mzwlfipDLlRinPgELqVDJetke6Snq26nL565m8nLWXIcWgosYSeNRgqwh7ZrZ4MfYs8CNfmLvR5SBVz3rISQsQ==}
 
   raw-body@2.5.3:
     resolution: {integrity: sha512-s4VSOf6yN0rvbRZGxs8Om5CWj6seneMwK3oDb4lWDH0UPhWcxwOWw5+qk24bxq87szX1ydrwylIOp2uG1ojUpA==}
@@ -4179,6 +4201,9 @@ packages:
     resolution: {integrity: sha512-h3Fbisa2nKGPxCpm89Hk33lBLsnaGBvctQopaBSOW/uIs6FTe1ATyAnKFJrzVs9vpGdsTe73WF3V4lIsk4Gacw==}
     engines: {node: '>=18'}
 
+  xcase@2.0.1:
+    resolution: {integrity: sha512-UmFXIPU+9Eg3E9m/728Bii0lAIuoc+6nbrNUKaRPJOFp91ih44qqGlWtxMB6kXFrRD6po+86ksHM5XHCfk6iPw==}
+
   xdg-app-paths@5.1.0:
     resolution: {integrity: sha512-RAQ3WkPf4KTU1A8RtFx3gWywzVKe00tfOPFfl2NDGqbIFENQO4kqAJp7mhQjNj/33W5x5hiWWUdyfPq/5SU3QA==}
     engines: {node: '>=6'}
@@ -4553,6 +4578,24 @@ snapshots:
 
   '@esbuild/win32-x64@0.27.4':
     optional: true
+
+  '@gitbeaker/core@43.8.0':
+    dependencies:
+      '@gitbeaker/requester-utils': 43.8.0
+      qs: 6.14.2
+      xcase: 2.0.1
+
+  '@gitbeaker/requester-utils@43.8.0':
+    dependencies:
+      picomatch-browser: 2.2.6
+      qs: 6.14.2
+      rate-limiter-flexible: 8.3.0
+      xcase: 2.0.1
+
+  '@gitbeaker/rest@43.8.0':
+    dependencies:
+      '@gitbeaker/core': 43.8.0
+      '@gitbeaker/requester-utils': 43.8.0
 
   '@graphile/logger@0.2.0': {}
 
@@ -7975,6 +8018,8 @@ snapshots:
 
   picocolors@1.1.1: {}
 
+  picomatch-browser@2.2.6: {}
+
   picomatch@2.3.1: {}
 
   picomatch@4.0.3: {}
@@ -8067,6 +8112,8 @@ snapshots:
       safe-buffer: 5.2.1
 
   range-parser@1.2.1: {}
+
+  rate-limiter-flexible@8.3.0: {}
 
   raw-body@2.5.3:
     dependencies:
@@ -8912,6 +8959,8 @@ snapshots:
   wsl-utils@0.1.0:
     dependencies:
       is-wsl: 3.1.1
+
+  xcase@2.0.1: {}
 
   xdg-app-paths@5.1.0:
     dependencies:
