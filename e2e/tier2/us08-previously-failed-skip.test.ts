@@ -3,6 +3,7 @@ import {
   createTestTicket,
   moveTicketToColumn,
   getTicketStatus,
+  isTicketVisibleInJql,
   deleteTicket,
 } from "../helpers/jira.js";
 import { findPR, deleteBranch } from "../helpers/github.js";
@@ -66,6 +67,21 @@ describe("US-08: Previously-failed ticket is skipped", () => {
     // 3. Move to AI column — Jira webhook triggers dispatch, which must skip
     //    because the failure marker is present.
     await moveTicketToColumn(ticketKey, e2eEnv.COLUMN_AI);
+
+    // 3b. Wait until the ticket actually shows up in a JQL search for the
+    //     AI column. Jira's search index lags transitions by seconds; if we
+    //     poke cron before it catches up, reconcile's failed-marker loop
+    //     will see our ticket absent from `aiColumnTickets` and clear the
+    //     marker we just seeded — collapsing the whole assertion.
+    await waitFor(
+      async () =>
+        (await isTicketVisibleInJql(ticketKey, e2eEnv.COLUMN_AI)) ? true : null,
+      {
+        description: `JQL visibility for ${ticketKey} in ${e2eEnv.COLUMN_AI}`,
+        timeoutMs: 60_000,
+        intervalMs: 2_000,
+      },
+    );
 
     // 4. Explicitly poke the cron re-poll path — this is the scenario US-8
     //    is primarily about. Cron discovers the ticket (still in AI), calls
