@@ -100,6 +100,27 @@ export async function getTicketComments(
   }));
 }
 
+export async function postComment(
+  ticketKey: string,
+  comment: string,
+): Promise<void> {
+  await jiraRequest(`/rest/api/3/issue/${ticketKey}/comment`, {
+    method: "POST",
+    body: JSON.stringify({
+      body: {
+        type: "doc",
+        version: 1,
+        content: [
+          {
+            type: "paragraph",
+            content: [{ type: "text", text: comment }],
+          },
+        ],
+      },
+    }),
+  });
+}
+
 export async function deleteTicket(ticketKey: string): Promise<void> {
   // Only delete tickets created by e2e tests
   const data = await jiraRequest(

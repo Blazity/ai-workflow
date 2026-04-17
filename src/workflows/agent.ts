@@ -325,6 +325,12 @@ export async function agentWorkflow(ticketId: string) {
   const ticket = await fetchAndValidateTicket(ticketId, env.COLUMN_AI);
   if (!ticket) return;
 
+  const phaseUsages: Record<string, PhaseUsage | null> = {};
+  const usageSuffix = () =>
+    Object.keys(phaseUsages).length
+      ? `\n${formatUsageReport(phaseUsages)}`
+      : "";
+
   try {
     await notifySlack(`Task ${ticket.identifier} started`);
 
@@ -392,13 +398,13 @@ export async function agentWorkflow(ticketId: string) {
       const researchDone = await pollUntilDone(sandboxId, "/tmp/research-done", 20);
       if (!researchDone) {
         await moveTicket(ticketId, env.COLUMN_BACKLOG);
-        await notifySlack(`Task ${ticket.identifier} failed: research phase timed out`);
+        await notifySlack(`Task ${ticket.identifier} failed: research phase timed out${usageSuffix()}`);
         await unregisterRun(ticket.identifier);
         return;
       }
 
       const researchRaw = await collectPhaseOutput(sandboxId, "/tmp/research-stdout.txt", "/tmp/research-stderr.txt");
-      const researchUsage = extractUsage(researchRaw);
+      phaseUsages["Research"] = extractUsage(researchRaw);
       const research = parseResearchStatus(unwrapResearchText(researchRaw));
 
       if (research.status === "clarification_needed") {
@@ -408,14 +414,14 @@ export async function agentWorkflow(ticketId: string) {
           questions.length > 0 ? questions : [research.body],
           env.COLUMN_BACKLOG,
         );
-        await notifySlack(`Task ${ticket.identifier} needs clarification`);
+        await notifySlack(`Task ${ticket.identifier} needs clarification${usageSuffix()}`);
         await unregisterRun(ticket.identifier);
         return;
       }
 
       if (research.status === "failed") {
         await moveTicket(ticketId, env.COLUMN_BACKLOG);
-        await notifySlack(`Task ${ticket.identifier} failed: research — ${research.body.slice(0, 200)}`);
+        await notifySlack(`Task ${ticket.identifier} failed: research — ${research.body.slice(0, 200)}${usageSuffix()}`);
         await unregisterRun(ticket.identifier);
         return;
       }
@@ -423,7 +429,6 @@ export async function agentWorkflow(ticketId: string) {
       const researchPlanMarkdown = research.body;
 
       // ========== PHASE 2: Implementation ==========
-      const phaseUsages: Record<string, PhaseUsage | null> = { Research: researchUsage };
 
       await configureStopHook(sandboxId, true);
 
@@ -467,14 +472,14 @@ export async function agentWorkflow(ticketId: string) {
           implOutput.questions ?? [],
           env.COLUMN_BACKLOG,
         );
-        await notifySlack(`Task ${ticket.identifier} needs clarification`);
+        await notifySlack(`Task ${ticket.identifier} needs clarification${usageSuffix()}`);
         await unregisterRun(ticket.identifier);
         return;
       }
 
       if (implOutput.result === "failed") {
         await moveTicket(ticketId, env.COLUMN_BACKLOG);
-        await notifySlack(`Task ${ticket.identifier} failed: implementation — ${implOutput.error ?? "unknown"}`);
+        await notifySlack(`Task ${ticket.identifier} failed: implementation — ${implOutput.error ?? "unknown"}${usageSuffix()}`);
         await unregisterRun(ticket.identifier);
         return;
       }
@@ -521,7 +526,7 @@ export async function agentWorkflow(ticketId: string) {
 
       if (reviewOutput.result === "failed") {
         await moveTicket(ticketId, env.COLUMN_BACKLOG);
-        await notifySlack(`Task ${ticket.identifier} failed: review — ${reviewOutput.error ?? "unknown"}`);
+        await notifySlack(`Task ${ticket.identifier} failed: review — ${reviewOutput.error ?? "unknown"}${usageSuffix()}`);
         await unregisterRun(ticket.identifier);
         return;
       }
@@ -534,7 +539,7 @@ export async function agentWorkflow(ticketId: string) {
 
       if (!pushResult.pushed) {
         await moveTicket(ticketId, env.COLUMN_BACKLOG);
-        await notifySlack(`Task ${ticket.identifier} failed: push failed — ${pushResult.error ?? "unknown"}`);
+        await notifySlack(`Task ${ticket.identifier} failed: push failed — ${pushResult.error ?? "unknown"}${usageSuffix()}`);
         await unregisterRun(ticket.identifier);
         return;
       }
@@ -542,9 +547,12 @@ export async function agentWorkflow(ticketId: string) {
       if (!prContext) {
         await createPullRequest(branchName, ticket.title, "");
       }
-      await moveTicket(ticketId, env.COLUMN_AI_REVIEW);
+      // Notify Slack BEFORE moving the ticket out of the AI column.
+      // Reconcile cancels runs whose tickets have left AI column; racing
+      // that cancellation after moveTicket would skip the notification.
       const usageReport = formatUsageReport(phaseUsages);
       await notifySlack(`Task ${ticket.identifier} PR ready for review\n${usageReport}`);
+      await moveTicket(ticketId, env.COLUMN_AI_REVIEW);
       await unregisterRun(ticket.identifier);
     } finally {
       await teardownSandbox(sandboxId);
@@ -552,7 +560,7 @@ export async function agentWorkflow(ticketId: string) {
   } catch (err) {
     console.error(`Workflow failed for ${ticket.identifier}:`, err);
     const moved = await moveTicket(ticketId, env.COLUMN_BACKLOG).then(() => true).catch(() => false);
-    await notifySlack(`Task ${ticket.identifier} failed: ${(err as Error).message ?? "unknown"}`).catch(() => {});
+    await notifySlack(`Task ${ticket.identifier} failed: ${(err as Error).message ?? "unknown"}${usageSuffix()}`).catch(() => {});
     if (moved) {
       await unregisterRun(ticket.identifier).catch(() => {});
     } else {
