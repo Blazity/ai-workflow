@@ -32,20 +32,11 @@ export default defineConfig({
     sequence: { concurrent: false },
     // Enable cross-file parallelism; `maxWorkers` caps how many files run
     // simultaneously. The `agent` and `orchestration` projects rely on
-    // this; `capacity` has a single file, so this flag is a no-op for it;
-    // tier1 is currently empty.
+    // this; `capacity` has a single file, so this flag is a no-op for it.
     fileParallelism: true,
     maxWorkers: 6,
     minWorkers: 1,
     projects: [
-      {
-        test: {
-          name: "tier1",
-          include: ["e2e/tier1/**/*.test.ts"],
-          testTimeout: 120_000,
-          hookTimeout: 120_000,
-        },
-      },
       {
         // Agent tests — provision real sandboxes and run Claude Code.
         // Run these in parallel FIRST so expensive failures surface early
