@@ -76,7 +76,10 @@ Attachments:
 **Example:**
 ```
 Initial PR: Adds GET /api/ping returning { ping: "pong" }
-Review comment: "Rename /ping to /healthcheck. Remove the old /ping route entirely."
+Review comment: "Rename the endpoint from /api/ping to /api/healthcheck.
+                 Move app/api/ping/route.ts to app/api/healthcheck/route.ts
+                 and return { healthcheck: 'passed' }. The old /api/ping
+                 route must no longer exist."
 ```
 
 **Expected behavior:**
@@ -84,14 +87,15 @@ Review comment: "Rename /ping to /healthcheck. Remove the old /ping route entire
 2. Ticket discovered (via cron poll or webhook); agent detects existing PR on branch
 3. Agent does NOT reset the branch (preserves existing work)
 4. Research phase reads PR comments + check results
-5. Implementation phase applies the requested changes
+5. Implementation phase renames the route file and updates the response body
 6. Push updates to same branch; no new PR created
 7. Ticket moves back to "AI Review"
 
 **Verifications:**
 - Same PR number, no duplicate PR
 - PR has more commits than before the review fix
-- Old `/ping` route removed, `/healthcheck` exists
+- `app/api/healthcheck/route.ts` exists with the new response body
+- `app/api/ping/route.ts` no longer exists on the branch
 - Ticket status = "AI Review"
 - Redis cleaned up
 - No sandbox running for this ticket
@@ -346,11 +350,13 @@ T=5min: Reconciliation runs
 
 **Expected behavior:**
 1. Reconciliation finds claim older than 5 minutes
-2. Stale claim removed from Redis
-3. Ticket can be picked up by next poll cycle
+2. Any sandbox matching the ticket branch is stopped (covers the case where dispatch crashed between `start()` and `register()`, leaving a sentinel in Redis but a live sandbox)
+3. Stale claim removed from Redis
+4. Ticket can be picked up by next poll cycle
 
 **Verifications:**
 - Redis entry removed
+- No sandbox running for this ticket
 - Next dispatch for same ticket succeeds
 
 ---

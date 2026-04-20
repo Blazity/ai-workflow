@@ -4,6 +4,8 @@ import type { RunRegistryAdapter, FailedTicketMeta } from "./types.js";
 const ENV_PREFIX = process.env.VERCEL_ENV ?? "development";
 const HASH_KEY = `blazebot:active-runs:${ENV_PREFIX}`;
 const FAILED_HASH_KEY = `blazebot:failed-tickets:${ENV_PREFIX}`;
+const SANDBOX_HASH_KEY = `blazebot:sandboxes:${ENV_PREFIX}`;
+const ENTRY_TS_HASH_KEY = `blazebot:entry-timestamps:${ENV_PREFIX}`;
 
 export class UpstashRunRegistry implements RunRegistryAdapter {
   private redis: Redis;
@@ -14,13 +16,26 @@ export class UpstashRunRegistry implements RunRegistryAdapter {
 
   async claim(ticketKey: string, runId: string): Promise<boolean> {
     const result = await this.redis.hsetnx(HASH_KEY, ticketKey, runId);
-    return result === 1;
+    if (result !== 1) return false;
+    // Stamp creation time so reconcile can tell a just-written entry from
+    // a genuine orphan. Best-effort — if this write fails, reconcile just
+    // falls back to treating the entry as ageless (cleanup-eligible).
+    await this.redis
+      .hset(ENTRY_TS_HASH_KEY, { [ticketKey]: String(Date.now()) })
+      .catch(() => {});
+    return true;
   }
 
   async register(ticketKey: string, runId: string): Promise<void> {
     await this.redis.hset(HASH_KEY, { [ticketKey]: runId });
     // Ensure the hash has no expiry — defend against external TTL being set
     await this.redis.persist(HASH_KEY);
+    // Refresh the creation timestamp: register() is called both on the
+    // initial claim → runId swap and by external seeders, so it's the
+    // authoritative write point.
+    await this.redis
+      .hset(ENTRY_TS_HASH_KEY, { [ticketKey]: String(Date.now()) })
+      .catch(() => {});
   }
 
   async getRunId(ticketKey: string): Promise<string | null> {
@@ -28,13 +43,38 @@ export class UpstashRunRegistry implements RunRegistryAdapter {
   }
 
   async unregister(ticketKey: string): Promise<void> {
-    await this.redis.hdel(HASH_KEY, ticketKey);
+    // Clear all three hashes in one round-trip. Each is useless without
+    // the others, and callers expect unregister() to fully detach.
+    await Promise.all([
+      this.redis.hdel(HASH_KEY, ticketKey),
+      this.redis.hdel(SANDBOX_HASH_KEY, ticketKey),
+      this.redis.hdel(ENTRY_TS_HASH_KEY, ticketKey),
+    ]);
   }
 
   async listAll(): Promise<Array<{ ticketKey: string; runId: string }>> {
     const all = await this.redis.hgetall<Record<string, string>>(HASH_KEY);
     if (!all) return [];
     return Object.entries(all).map(([ticketKey, runId]) => ({ ticketKey, runId }));
+  }
+
+  async registerSandbox(ticketKey: string, sandboxId: string): Promise<void> {
+    await this.redis.hset(SANDBOX_HASH_KEY, { [ticketKey]: sandboxId });
+    await this.redis.persist(SANDBOX_HASH_KEY);
+  }
+
+  async getSandboxId(ticketKey: string): Promise<string | null> {
+    return this.redis.hget<string>(SANDBOX_HASH_KEY, ticketKey);
+  }
+
+  async getEntryCreatedAt(ticketKey: string): Promise<number | null> {
+    const raw = await this.redis.hget<string | number>(
+      ENTRY_TS_HASH_KEY,
+      ticketKey,
+    );
+    if (raw == null) return null;
+    const parsed = typeof raw === "number" ? raw : parseInt(raw, 10);
+    return Number.isFinite(parsed) ? parsed : null;
   }
 
   async markFailed(ticketKey: string, meta: FailedTicketMeta): Promise<void> {

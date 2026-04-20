@@ -25,7 +25,12 @@ export async function cancelRun(
     );
   }
 
-  await stopTicketSandboxes(ticketKey).catch(() => {});
+  // Look up the sandboxId first so the stop path is O(1) instead of a
+  // branch-scan across every running sandbox. Best-effort — if this
+  // lookup errors or returns null, stopTicketSandboxes falls back to the
+  // parallel branch scan.
+  const sandboxId = await runRegistry.getSandboxId(ticketKey).catch(() => null);
+  await stopTicketSandboxes(ticketKey, sandboxId).catch(() => {});
   await runRegistry.unregister(ticketKey).catch(() => {});
   return cancelled;
 }

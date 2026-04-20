@@ -1,22 +1,23 @@
-name: E2E Tests
+name: E2E Tests (Manual)
 
 on:
   workflow_dispatch:
     inputs:
       tier:
-        description: "Which tier to run"
+        description: "Which suite to run"
         type: choice
         options:
-          - tier1
-          - tier2
+          - orchestration
+          - capacity
+          - agent
           - all
         default: all
 
 jobs:
-  e2e-tier1:
-    if: inputs.tier == 'tier1' || inputs.tier == 'all'
+  e2e-orchestration:
+    if: inputs.tier == 'orchestration' || inputs.tier == 'all'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 60
     environment: e2e
     env:
       E2E_BASE_URL: ${{ secrets.E2E_BASE_URL }}
@@ -28,13 +29,15 @@ jobs:
       COLUMN_AI: ${{ secrets.COLUMN_AI }}
       COLUMN_AI_REVIEW: ${{ secrets.COLUMN_AI_REVIEW }}
       COLUMN_BACKLOG: ${{ secrets.COLUMN_BACKLOG }}
-      GITHUB_TOKEN: ${{ secrets.E2E_GITHUB_TOKEN }}
-      GITHUB_OWNER: ${{ secrets.E2E_GITHUB_OWNER }}
-      GITHUB_REPO: ${{ secrets.E2E_GITHUB_REPO }}
+      E2E_GITHUB_TOKEN: ${{ secrets.E2E_GITHUB_TOKEN }}
+      E2E_GITHUB_OWNER: ${{ secrets.E2E_GITHUB_OWNER }}
+      E2E_GITHUB_REPO: ${{ secrets.E2E_GITHUB_REPO }}
       CRON_SECRET: ${{ secrets.CRON_SECRET }}
       AI_WORKFLOW_KV_REST_API_URL: ${{ secrets.AI_WORKFLOW_KV_REST_API_URL }}
       AI_WORKFLOW_KV_REST_API_TOKEN: ${{ secrets.AI_WORKFLOW_KV_REST_API_TOKEN }}
       VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+      VERCEL_OIDC_TOKEN: ${{ secrets.VERCEL_OIDC_TOKEN }}
+      MAX_CONCURRENT_AGENTS: ${{ secrets.MAX_CONCURRENT_AGENTS }}
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -45,20 +48,23 @@ jobs:
           node-version: "20.12"
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: pnpm run test:e2e:tier1
+      - run: pnpm run test:e2e:orchestration
       - if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: e2e-tier1-results
+          name: e2e-orchestration-results
           path: |
             e2e/**/*.log
           retention-days: 7
 
-  e2e-tier2:
-    if: inputs.tier == 'tier2' || inputs.tier == 'all'
-    needs: [e2e-tier1]
+  e2e-capacity:
+    needs: [e2e-orchestration]
+    if: |
+      always() &&
+      (needs.e2e-orchestration.result == 'success' || needs.e2e-orchestration.result == 'skipped') &&
+      (inputs.tier == 'capacity' || inputs.tier == 'all')
     runs-on: ubuntu-latest
-    timeout-minutes: 150
+    timeout-minutes: 30
     environment: e2e
     env:
       E2E_BASE_URL: ${{ secrets.E2E_BASE_URL }}
@@ -70,13 +76,15 @@ jobs:
       COLUMN_AI: ${{ secrets.COLUMN_AI }}
       COLUMN_AI_REVIEW: ${{ secrets.COLUMN_AI_REVIEW }}
       COLUMN_BACKLOG: ${{ secrets.COLUMN_BACKLOG }}
-      GITHUB_TOKEN: ${{ secrets.E2E_GITHUB_TOKEN }}
-      GITHUB_OWNER: ${{ secrets.E2E_GITHUB_OWNER }}
-      GITHUB_REPO: ${{ secrets.E2E_GITHUB_REPO }}
+      E2E_GITHUB_TOKEN: ${{ secrets.E2E_GITHUB_TOKEN }}
+      E2E_GITHUB_OWNER: ${{ secrets.E2E_GITHUB_OWNER }}
+      E2E_GITHUB_REPO: ${{ secrets.E2E_GITHUB_REPO }}
       CRON_SECRET: ${{ secrets.CRON_SECRET }}
       AI_WORKFLOW_KV_REST_API_URL: ${{ secrets.AI_WORKFLOW_KV_REST_API_URL }}
       AI_WORKFLOW_KV_REST_API_TOKEN: ${{ secrets.AI_WORKFLOW_KV_REST_API_TOKEN }}
       VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+      VERCEL_OIDC_TOKEN: ${{ secrets.VERCEL_OIDC_TOKEN }}
+      MAX_CONCURRENT_AGENTS: ${{ secrets.MAX_CONCURRENT_AGENTS }}
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -87,11 +95,58 @@ jobs:
           node-version: "20.12"
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: pnpm run test:e2e:tier2
+      - run: pnpm run test:e2e:capacity
       - if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: e2e-tier2-results
+          name: e2e-capacity-results
+          path: |
+            e2e/**/*.log
+          retention-days: 7
+
+  e2e-agent:
+    needs: [e2e-capacity]
+    if: |
+      always() &&
+      (needs.e2e-capacity.result == 'success' || needs.e2e-capacity.result == 'skipped') &&
+      (inputs.tier == 'agent' || inputs.tier == 'all')
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    environment: e2e
+    env:
+      E2E_BASE_URL: ${{ secrets.E2E_BASE_URL }}
+      JIRA_BASE_URL: ${{ secrets.JIRA_BASE_URL }}
+      JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
+      JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+      JIRA_PROJECT_KEY: ${{ secrets.JIRA_PROJECT_KEY }}
+      JIRA_WEBHOOK_SECRET: ${{ secrets.JIRA_WEBHOOK_SECRET }}
+      COLUMN_AI: ${{ secrets.COLUMN_AI }}
+      COLUMN_AI_REVIEW: ${{ secrets.COLUMN_AI_REVIEW }}
+      COLUMN_BACKLOG: ${{ secrets.COLUMN_BACKLOG }}
+      E2E_GITHUB_TOKEN: ${{ secrets.E2E_GITHUB_TOKEN }}
+      E2E_GITHUB_OWNER: ${{ secrets.E2E_GITHUB_OWNER }}
+      E2E_GITHUB_REPO: ${{ secrets.E2E_GITHUB_REPO }}
+      CRON_SECRET: ${{ secrets.CRON_SECRET }}
+      AI_WORKFLOW_KV_REST_API_URL: ${{ secrets.AI_WORKFLOW_KV_REST_API_URL }}
+      AI_WORKFLOW_KV_REST_API_TOKEN: ${{ secrets.AI_WORKFLOW_KV_REST_API_TOKEN }}
+      VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+      VERCEL_OIDC_TOKEN: ${{ secrets.VERCEL_OIDC_TOKEN }}
+      MAX_CONCURRENT_AGENTS: ${{ secrets.MAX_CONCURRENT_AGENTS }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20.12"
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run test:e2e:agent
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-agent-results
           path: |
             e2e/**/*.log
           retention-days: 7

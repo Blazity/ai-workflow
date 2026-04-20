@@ -68,24 +68,27 @@ async function dispatchDiscoveredTickets(
   ticketKeys: string[],
   adapters: ReturnType<typeof createAdapters>,
 ): Promise<string[]> {
-  const started: string[] = [];
+  // Dispatch in parallel. dispatchTicket is internally atomic — the
+  // post-claim fairness check in src/lib/dispatch.ts caps started
+  // workflows at MAX_CONCURRENT_AGENTS even when racers run concurrently,
+  // so excess parallel dispatches safely return `at_capacity`.
+  const results = await Promise.all(
+    ticketKeys.map(async (key) => {
+      try {
+        const result = await dispatchTicket(
+          key,
+          adapters,
+          env.MAX_CONCURRENT_AGENTS,
+        );
+        return { key, started: result.started };
+      } catch (err) {
+        logger.warn({ ticketKey: key, error: err }, "poll_dispatch_failed");
+        return { key, started: false };
+      }
+    }),
+  );
 
-  for (const key of ticketKeys) {
-    let result: Awaited<ReturnType<typeof dispatchTicket>>;
-    try {
-      result = await dispatchTicket(key, adapters, env.MAX_CONCURRENT_AGENTS);
-    } catch (err) {
-      logger.warn(
-        { ticketKey: key, error: err },
-        "poll_dispatch_failed",
-      );
-      break;
-    }
-    if (result.started) started.push(key);
-    if (result.reason === "at_capacity") break;
-  }
-
-  return started;
+  return results.filter((r) => r.started).map((r) => r.key);
 }
 
 function normalizeTicketKeys(ticketKeys: string[]): string[] {

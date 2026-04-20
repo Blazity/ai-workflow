@@ -23,7 +23,7 @@ import { e2eEnv } from "../env.js";
  * the wrapper script's cleanup still touches the sentinel, and
  * parseResearchStatus defaults to `failed` on empty/partial stdout.
  */
-describe("US-7: Agent failure moves ticket to Backlog", () => {
+describe("US-07: Agent failure moves ticket to Backlog", () => {
   let ticketKey: string;
   let branchName: string;
 

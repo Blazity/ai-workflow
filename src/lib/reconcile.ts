@@ -3,6 +3,7 @@ import { env } from "../../env.js";
 import { isClaimingSentinel, getClaimTimestamp } from "./dispatch.js";
 import { cancelRun } from "./cancel-run.js";
 import { logger } from "./logger.js";
+import { stopTicketSandboxes } from "../sandbox/stop-ticket-sandboxes.js";
 import {
   IssueTrackerNotFoundError,
   type IssueTrackerAdapter,
@@ -11,6 +12,16 @@ import type { RunRegistryAdapter } from "../adapters/run-registry/types.js";
 
 const TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled"]);
 const STALE_CLAIM_MS = 5 * 60 * 1000;
+
+/**
+ * Grace period applied to any cleanup that relies on "ticket isn't in the
+ * AI-column snapshot." Jira's JQL index lags transitions by seconds, and
+ * dispatch writes the registry entry before the transition commits, so a
+ * ticket genuinely moving INTO AI can briefly look like an orphan. Skip
+ * anything younger than this — reconcile runs every minute, so we'll pick
+ * up a real orphan on the next tick.
+ */
+const ORPHAN_GRACE_MS = 30 * 1000;
 
 /**
  * Track consecutive getRun failures per ticket.
@@ -54,6 +65,13 @@ export async function reconcileRuns(
     if (ticketStillInAiColumn) {
       cleaned += await cleanFinishedRun(ticketKey, runId, runRegistry);
     } else {
+      if (await isWithinGracePeriod(ticketKey, runRegistry)) {
+        logger.info(
+          { ticketKey, runId },
+          "reconcile_skipped_fresh_orphan_in_grace",
+        );
+        continue;
+      }
       const leftAiColumn = await verifyTicketLeftAiColumn(ticketKey, issueTracker);
       if (!leftAiColumn) continue;
       await cancelRun(ticketKey, runId, runRegistry);
@@ -63,16 +81,37 @@ export async function reconcileRuns(
     }
   }
 
-  // Clean up failed-ticket markers for tickets that left the AI column
+  // Clean up failed-ticket markers for tickets that left the AI column.
+  // Respect the same grace window: a marker that was just written while
+  // the ticket is mid-transition shouldn't be wiped on the first cron
+  // tick that catches it between columns.
   const failedTickets = await runRegistry.listAllFailed();
-  for (const { ticketKey } of failedTickets) {
-    if (!aiColumnTickets.has(ticketKey)) {
-      await runRegistry.clearFailedMark(ticketKey);
-      logger.info({ ticketKey }, "reconcile_cleared_failed_mark");
+  for (const { ticketKey, meta } of failedTickets) {
+    if (aiColumnTickets.has(ticketKey)) continue;
+    const failedAtMs = Date.parse(meta.failedAt);
+    if (Number.isFinite(failedAtMs) && Date.now() - failedAtMs < ORPHAN_GRACE_MS) {
+      logger.info(
+        { ticketKey, failedAt: meta.failedAt },
+        "reconcile_skipped_fresh_failed_marker_in_grace",
+      );
+      continue;
     }
+    await runRegistry.clearFailedMark(ticketKey);
+    logger.info({ ticketKey }, "reconcile_cleared_failed_mark");
   }
 
   return { cancelled, cleaned };
+}
+
+async function isWithinGracePeriod(
+  ticketKey: string,
+  runRegistry: RunRegistryAdapter,
+): Promise<boolean> {
+  const createdAt = await runRegistry
+    .getEntryCreatedAt(ticketKey)
+    .catch(() => null);
+  if (createdAt == null) return false;
+  return Date.now() - createdAt < ORPHAN_GRACE_MS;
 }
 
 async function verifyTicketLeftAiColumn(
@@ -148,6 +187,17 @@ async function reconcileInflightClaim(
   const ticketLeftAiColumn = !aiColumnTickets.has(ticketKey);
 
   if (claimIsStale) {
+    // Dispatch starts the workflow (which can spin up a sandbox in the
+    // research phase) *before* overwriting the sentinel with the real
+    // runId. A crash in that narrow window leaves a sentinel in Redis
+    // alongside a running sandbox we have no way to cancel via the
+    // workflow handle. Try the fast path (sandboxId from Redis); fall
+    // back to the parallel branch scan if the workflow crashed before
+    // writing its sandboxId.
+    const sandboxId = await runRegistry
+      .getSandboxId(ticketKey)
+      .catch(() => null);
+    await stopTicketSandboxes(ticketKey, sandboxId).catch(() => {});
     await runRegistry.unregister(ticketKey);
     logger.warn({ ticketKey, runId }, "reconcile_cleaned_stale_claim");
     return { cancelled: 0, cleaned: 1 };
@@ -156,6 +206,10 @@ async function reconcileInflightClaim(
   if (ticketLeftAiColumn) {
     const leftAiColumn = await verifyTicketLeftAiColumn(ticketKey, issueTracker);
     if (!leftAiColumn) return { cancelled: 0, cleaned: 0 };
+    const sandboxId = await runRegistry
+      .getSandboxId(ticketKey)
+      .catch(() => null);
+    await stopTicketSandboxes(ticketKey, sandboxId).catch(() => {});
     await runRegistry.unregister(ticketKey);
     logger.info({ ticketKey, runId }, "reconcile_cancelled_inflight_claim");
     await notifyTicketCancelled(ticketKey, "inflight_claim", onTicketCancelled);

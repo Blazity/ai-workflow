@@ -88,6 +88,28 @@ export async function getTicketStatus(ticketKey: string): Promise<string> {
   return data.fields.status.name;
 }
 
+/**
+ * Ask Jira's search API whether `ticketKey` is currently visible under the
+ * given status. Unlike `/issue/{key}` (which returns committed state), the
+ * search endpoint hits an index that lags transitions by seconds or more.
+ *
+ * Cron's reconcile uses the same JQL-backed index to decide which tickets
+ * are in the AI column; tests that move a ticket and then immediately poke
+ * cron will race this lag and see a stale snapshot. Use this helper as a
+ * barrier between `moveTicketToColumn` and `callCronPoll`.
+ */
+export async function isTicketVisibleInJql(
+  ticketKey: string,
+  status: string,
+): Promise<boolean> {
+  const jql = `project = "${e2eEnv.JIRA_PROJECT_KEY}" AND status = "${status}" AND key = "${ticketKey}"`;
+  const data = await jiraRequest(
+    `/rest/api/3/search/jql?jql=${encodeURIComponent(jql)}&fields=summary&maxResults=1`,
+  ).catch(() => null);
+  const issues = data?.issues ?? [];
+  return issues.some((i: { key?: string }) => i.key === ticketKey);
+}
+
 export async function getTicketComments(
   ticketKey: string,
 ): Promise<Array<{ author: string; body: string }>> {

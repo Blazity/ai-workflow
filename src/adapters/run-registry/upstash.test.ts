@@ -26,6 +26,13 @@ function createRegistry() {
 describe("UpstashRunRegistry", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // Default hset to resolve so the adapter's best-effort timestamp
+    // writes (to ENTRY_TS_HASH_KEY / SANDBOX_HASH_KEY) don't blow up with
+    // "cannot read .catch of undefined" in tests that only cared about
+    // the primary HASH_KEY call.
+    mockRedis.hset.mockResolvedValue(1);
+    mockRedis.hdel.mockResolvedValue(1);
+    mockRedis.persist.mockResolvedValue(1);
   });
 
   describe("claim", () => {

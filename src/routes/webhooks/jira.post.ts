@@ -6,6 +6,7 @@ import { createAdapters } from "../../lib/adapters.js";
 import { cancelRun } from "../../lib/cancel-run.js";
 import { dispatchTicket, isClaimingSentinel } from "../../lib/dispatch.js";
 import { logger } from "../../lib/logger.js";
+import { stopTicketSandboxes } from "../../sandbox/stop-ticket-sandboxes.js";
 
 /**
  * Jira webhook handler — triggers the same dispatch logic as the cron poller.
@@ -86,9 +87,7 @@ export default defineEventHandler(async (event) => {
         },
         "webhook_dispatch_started",
       );
-      const result = await dispatchTicket(ticketKey, adapters, env.MAX_CONCURRENT_AGENTS, {
-        skipCapacityCheck: true,
-      });
+      const result = await dispatchTicket(ticketKey, adapters, env.MAX_CONCURRENT_AGENTS);
       logger.info(
         {
           ticketKey,
@@ -137,9 +136,7 @@ export default defineEventHandler(async (event) => {
     },
     "webhook_dispatch_started",
   );
-  const result = await dispatchTicket(ticketKey, adapters, env.MAX_CONCURRENT_AGENTS, {
-    skipCapacityCheck: true,
-  });
+  const result = await dispatchTicket(ticketKey, adapters, env.MAX_CONCURRENT_AGENTS);
 
   logger.info(
     { ticketKey, started: result.started, reason: result.reason, runId: result.runId },
@@ -228,6 +225,12 @@ async function cancelTrackedRun(
   if (!trackedRunId) return false;
 
   if (isClaimingSentinel(trackedRunId)) {
+    // Sentinel can shadow a real sandbox if dispatch already called
+    // start() but crashed before register(). Same gap that reconcile's
+    // stale-claim sweep covers — we catch it here on the faster webhook
+    // path so operators don't have to wait 5 minutes for reconcile.
+    const sandboxId = await runRegistry.getSandboxId(ticketKey).catch(() => null);
+    await stopTicketSandboxes(ticketKey, sandboxId).catch(() => {});
     await runRegistry.unregister(ticketKey).catch(() => {});
     return true;
   }

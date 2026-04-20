@@ -33,7 +33,7 @@ import { e2eEnv } from "../env.js";
  * Setup uses GitHub API to create branch + code + PR in seconds,
  * instead of waiting for a full workflow run.
  */
-describe("US-3: Review feedback triggers a fix cycle", () => {
+describe("US-03: Review feedback triggers a fix cycle", () => {
   let ticketKey: string;
   let branchName: string;
   let prNumber: number | undefined;
@@ -93,15 +93,20 @@ describe("US-3: Review feedback triggers a fix cycle", () => {
     const commitsBefore = await getPRCommits(prNumber);
     const commitCountBefore = commitsBefore.length;
 
-    // Add a review comment requesting a rename with specific instructions
+    // Review feedback: explicit rename instruction. Previous iterations used
+    // "delete + create" wording which the agent sometimes interpreted as
+    // "edit in place at the original path" — phrasing as a rename makes the
+    // destination path unambiguous.
     await addPRComment(
       prNumber,
       [
-        "Please make these changes:",
-        "1. Delete app/api/ping/route.ts entirely",
-        "2. Create app/api/healthcheck/route.ts instead",
-        '3. The new route must export a GET handler that returns JSON { healthcheck: "passed" }',
-        "4. No other files should be created or modified",
+        "Please rename this endpoint from /api/ping to /api/healthcheck.",
+        "",
+        "Concretely:",
+        "- Move the route file from app/api/ping/route.ts to app/api/healthcheck/route.ts",
+        '- Update the GET handler to return JSON { healthcheck: "passed" }',
+        "- The old /api/ping route must no longer exist after this change",
+        "- No other files should be created or modified",
       ].join("\n"),
     );
 
@@ -135,13 +140,7 @@ describe("US-3: Review feedback triggers a fix cycle", () => {
     expect(currentPR).not.toBeNull();
     expect(currentPR!.number).toBe(prNumber);
 
-    // Old /ping route removed, /healthcheck exists (check PR aggregate diff)
-    const prFiles = await getPRFiles(prNumber);
-    const filenames = prFiles.map((f) => f.filename);
-    expect(filenames.some((f) => f.includes("healthcheck"))).toBe(true);
-    expect(filenames.some((f) => f.includes("/ping/"))).toBe(false);
-
-    // Healthcheck route file exists on the branch with correct content
+    // Healthcheck route file exists on the branch with the new response body.
     const routeContent = await getFileContent(
       branchName,
       "app/api/healthcheck/route.ts",
@@ -150,9 +149,18 @@ describe("US-3: Review feedback triggers a fix cycle", () => {
     expect(routeContent).toMatch(/export\s+(async\s+)?function\s+GET/);
     expect(routeContent).toContain('"passed"');
 
-    // Old ping route must not exist on the branch
+    // Old ping route must be gone — the review asked to rename, not to
+    // leave a stale endpoint behind.
     const oldRoute = await getFileContent(branchName, "app/api/ping/route.ts");
     expect(oldRoute).toBeNull();
+
+    // PR diff reflects the rename on both sides. GitHub reports renames
+    // either as a single "renamed" entry with filename=new path, or as a
+    // remove+add pair — either way the new path appears in the list, and
+    // the old path does not appear as a surviving file.
+    const prFiles = await getPRFiles(prNumber);
+    const filenames = prFiles.map((f) => f.filename);
+    expect(filenames.some((f) => f.includes("healthcheck"))).toBe(true);
 
     // Redis cleaned up
     await waitFor(

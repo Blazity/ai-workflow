@@ -20,13 +20,7 @@ vi.mock("../workflows/agent.js", () => ({
   agentWorkflow: "agentWorkflow_sentinel",
 }));
 
-const mockSandboxList = vi.fn();
 const mockStopTicketSandboxes = vi.fn();
-vi.mock("@vercel/sandbox", () => ({
-  Sandbox: {
-    list: (...args: any[]) => mockSandboxList(...args),
-  },
-}));
 vi.mock("../sandbox/stop-ticket-sandboxes.js", () => ({
   stopTicketSandboxes: (...args: any[]) => mockStopTicketSandboxes(...args),
 }));
@@ -55,6 +49,7 @@ function makeAdapters(
     fetchTicket: ReturnType<typeof vi.fn>;
     findPR: ReturnType<typeof vi.fn>;
     isTicketFailed: ReturnType<typeof vi.fn>;
+    listAll: ReturnType<typeof vi.fn>;
   }> = {},
 ): Adapters {
   let claimedValue: string | undefined;
@@ -92,7 +87,10 @@ function makeAdapters(
       getRunId:
         overrides.getRunId ??
         vi.fn().mockImplementation(async () => claimedValue),
-      listAll: vi.fn(),
+      listAll: overrides.listAll ?? vi.fn().mockResolvedValue([]),
+      registerSandbox: vi.fn().mockResolvedValue(undefined),
+      getSandboxId: vi.fn().mockResolvedValue(null),
+      getEntryCreatedAt: vi.fn().mockResolvedValue(null),
       markFailed: vi.fn().mockResolvedValue(undefined),
       isTicketFailed: overrides.isTicketFailed ?? vi.fn().mockResolvedValue(false),
       listAllFailed: vi.fn().mockResolvedValue([]),
@@ -103,16 +101,9 @@ function makeAdapters(
 
 describe("dispatchTicket", () => {
   beforeEach(() => {
-    mockSandboxList.mockReset();
     mockStart.mockReset();
     mockGetRun.mockReset();
     mockStopTicketSandboxes.mockReset();
-    mockSandboxList.mockResolvedValue({
-      json: {
-        sandboxes: [],
-        pagination: { count: 0, next: null, prev: null },
-      },
-    });
     mockStart.mockResolvedValue({ runId: "run_123" });
     mockStopTicketSandboxes.mockResolvedValue(0);
   });
@@ -181,18 +172,14 @@ describe("dispatchTicket", () => {
     expect(mockStart).not.toHaveBeenCalled();
   });
 
-  it("returns at_capacity when sandbox count >= max", async () => {
-    mockSandboxList.mockResolvedValue({
-      json: {
-        sandboxes: [
-          { status: "running" },
-          { status: "running" },
-          { status: "running" },
-        ],
-        pagination: { count: 3, next: null, prev: null },
-      },
+  it("returns at_capacity when active run count >= max", async () => {
+    const adapters = makeAdapters({
+      listAll: vi.fn().mockResolvedValue([
+        { ticketKey: "PROJ-1", runId: "run_a" },
+        { ticketKey: "PROJ-2", runId: "run_b" },
+        { ticketKey: "PROJ-3", runId: "run_c" },
+      ]),
     });
-    const adapters = makeAdapters();
     const { dispatchTicket } = await import("./dispatch.js");
 
     const result = await dispatchTicket("PROJ-42", adapters, 3);
@@ -202,44 +189,46 @@ describe("dispatchTicket", () => {
     expect(mockStart).not.toHaveBeenCalled();
   });
 
-  it("paginates sandbox list when counting active sandboxes", async () => {
-    mockSandboxList
-      .mockResolvedValueOnce({
-        json: {
-          sandboxes: [{ status: "running" }],
-          pagination: { count: 1, next: 123, prev: null },
-        },
-      })
-      .mockResolvedValueOnce({
-        json: {
-          sandboxes: [{ status: "running" }, { status: "running" }],
-          pagination: { count: 2, next: null, prev: 123 },
-        },
-      });
-    const adapters = makeAdapters();
+  it("counts fresh claiming sentinels toward capacity", async () => {
+    const freshClaim = `claiming:${Date.now()}`;
+    const adapters = makeAdapters({
+      listAll: vi.fn().mockResolvedValue([
+        { ticketKey: "PROJ-1", runId: "run_a" },
+        { ticketKey: "PROJ-2", runId: "run_b" },
+        { ticketKey: "PROJ-3", runId: freshClaim },
+      ]),
+    });
     const { dispatchTicket } = await import("./dispatch.js");
 
     const result = await dispatchTicket("PROJ-42", adapters, 3);
 
     expect(result).toEqual({ started: false, reason: "at_capacity" });
-    expect(mockSandboxList).toHaveBeenCalledTimes(2);
-    expect(mockSandboxList.mock.calls[0][0]).toMatchObject({
-      limit: 100,
-      since: undefined,
-      signal: expect.any(AbortSignal),
-    });
-    expect(mockSandboxList.mock.calls[1][0]).toMatchObject({
-      limit: 100,
-      since: 123,
-      signal: expect.any(AbortSignal),
-    });
     expect(adapters.runRegistry.claim).not.toHaveBeenCalled();
-    expect(mockStart).not.toHaveBeenCalled();
   });
 
-  it("fails closed when sandbox count check fails", async () => {
-    mockSandboxList.mockRejectedValue(new Error("sandbox list timeout"));
-    const adapters = makeAdapters();
+  it("ignores stale claiming sentinels (older than STALE_CLAIM_MS)", async () => {
+    const { STALE_CLAIM_MS } = await import("./dispatch.js");
+    const staleClaim = `claiming:${Date.now() - STALE_CLAIM_MS - 1_000}`;
+    const adapters = makeAdapters({
+      listAll: vi.fn().mockResolvedValue([
+        { ticketKey: "PROJ-1", runId: "run_a" },
+        { ticketKey: "PROJ-2", runId: "run_b" },
+        { ticketKey: "PROJ-3", runId: staleClaim },
+      ]),
+    });
+    const { dispatchTicket } = await import("./dispatch.js");
+
+    // Only 2 live entries (stale sentinel dropped) → under cap of 3.
+    const result = await dispatchTicket("PROJ-42", adapters, 3);
+
+    expect(result.started).toBe(true);
+    expect(mockStart).toHaveBeenCalled();
+  });
+
+  it("fails closed when the run registry is unreachable", async () => {
+    const adapters = makeAdapters({
+      listAll: vi.fn().mockRejectedValue(new Error("registry unreachable")),
+    });
     const { dispatchTicket } = await import("./dispatch.js");
 
     const result = await dispatchTicket("PROJ-42", adapters, 5);
@@ -247,6 +236,86 @@ describe("dispatchTicket", () => {
     expect(result).toEqual({ started: false, reason: "at_capacity" });
     expect(adapters.runRegistry.claim).not.toHaveBeenCalled();
     expect(mockStart).not.toHaveBeenCalled();
+  });
+
+  it("post-claim verify: latest-timestamp racer bails when cap overshot", async () => {
+    // Cap = 3. Two claims already exist (T1, T2). Three more dispatches
+    // race through concurrently (T3, T4, T5). All three pass the precheck
+    // (they each see 2 entries < 3) and all three claim. After all three
+    // claims land, Redis has 5 entries for cap=3 — the latest two
+    // timestamps must bail. We play the role of T5 and must bail.
+    const T1 = 10_000, T2 = 10_010, T3 = 10_020, T4 = 10_030, T5 = 10_040;
+    const snapshots = [
+      // Call #1 — precheck: 2 pre-existing entries (< 3, passes)
+      [
+        { ticketKey: "PROJ-1", runId: `claiming:${T1}` },
+        { ticketKey: "PROJ-2", runId: `claiming:${T2}` },
+      ],
+      // Call #2 — post-claim: our claim landed, plus two other racers
+      // that also slipped through the precheck window
+      [
+        { ticketKey: "PROJ-1", runId: `claiming:${T1}` },
+        { ticketKey: "PROJ-2", runId: `claiming:${T2}` },
+        { ticketKey: "PROJ-3", runId: `claiming:${T3}` },
+        { ticketKey: "PROJ-4", runId: `claiming:${T4}` },
+        { ticketKey: "PROJ-LATE", runId: `claiming:${T5}` },
+      ],
+    ];
+    let call = 0;
+    const listAll = vi.fn().mockImplementation(async () => snapshots[call++] ?? []);
+    const unregister = vi.fn().mockResolvedValue(undefined);
+
+    const realNow = Date.now;
+    Date.now = () => T5;
+
+    try {
+      const adapters = makeAdapters({ listAll, unregister });
+      const { dispatchTicket } = await import("./dispatch.js");
+      const result = await dispatchTicket("PROJ-LATE", adapters, 3);
+      expect(result).toEqual({ started: false, reason: "at_capacity" });
+      expect(unregister).toHaveBeenCalledWith("PROJ-LATE");
+      expect(mockStart).not.toHaveBeenCalled();
+    } finally {
+      Date.now = realNow;
+    }
+  });
+
+  it("post-claim verify: earlier-timestamp racer wins even when cap overshot", async () => {
+    // Cap = 3. Same race, but our claim is the earliest of the three
+    // racers — we should be one of the three retained.
+    const T1 = 10_000, T2 = 10_010, T3 = 10_020, T4 = 10_030, T5 = 10_040;
+    const snapshots = [
+      // Precheck: 2 entries
+      [
+        { ticketKey: "PROJ-1", runId: `claiming:${T1}` },
+        { ticketKey: "PROJ-2", runId: `claiming:${T2}` },
+      ],
+      // Post-claim: 5 entries, ours at T3 (earliest of the three racers)
+      [
+        { ticketKey: "PROJ-1", runId: `claiming:${T1}` },
+        { ticketKey: "PROJ-2", runId: `claiming:${T2}` },
+        { ticketKey: "PROJ-EARLY", runId: `claiming:${T3}` },
+        { ticketKey: "PROJ-4", runId: `claiming:${T4}` },
+        { ticketKey: "PROJ-5", runId: `claiming:${T5}` },
+      ],
+    ];
+    let call = 0;
+    const listAll = vi.fn().mockImplementation(async () => snapshots[call++] ?? []);
+    const unregister = vi.fn().mockResolvedValue(undefined);
+
+    const realNow = Date.now;
+    Date.now = () => T3;
+
+    try {
+      const adapters = makeAdapters({ listAll, unregister });
+      const { dispatchTicket } = await import("./dispatch.js");
+      const result = await dispatchTicket("PROJ-EARLY", adapters, 3);
+      expect(result.started).toBe(true);
+      expect(mockStart).toHaveBeenCalled();
+      expect(unregister).not.toHaveBeenCalledWith("PROJ-EARLY");
+    } finally {
+      Date.now = realNow;
+    }
   });
 
   it("aborts workflow if claim was removed during dispatch", async () => {
@@ -343,16 +412,9 @@ describe("dispatchTicket", () => {
 
 describe("failed-ticket safeguard full loop", () => {
   beforeEach(() => {
-    mockSandboxList.mockReset();
     mockStart.mockReset();
     mockGetRun.mockReset();
     mockStopTicketSandboxes.mockReset();
-    mockSandboxList.mockResolvedValue({
-      json: {
-        sandboxes: [],
-        pagination: { count: 0, next: null, prev: null },
-      },
-    });
     mockStart.mockResolvedValue({ runId: "run_123" });
     mockStopTicketSandboxes.mockResolvedValue(0);
   });
@@ -371,6 +433,9 @@ describe("failed-ticket safeguard full loop", () => {
       getRunId: vi.fn().mockImplementation(async () => claimedValue),
       unregister: vi.fn().mockResolvedValue(undefined),
       listAll: vi.fn().mockResolvedValue([]),
+      registerSandbox: vi.fn().mockResolvedValue(undefined),
+      getSandboxId: vi.fn().mockResolvedValue(null),
+      getEntryCreatedAt: vi.fn().mockResolvedValue(null),
       markFailed: vi.fn().mockImplementation(async (key: string, meta: any) => {
         failedMarkers.set(key, JSON.stringify(meta));
       }),

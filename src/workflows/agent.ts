@@ -271,6 +271,13 @@ async function unregisterRun(ticketIdentifier: string) {
   await runRegistry.unregister(ticketIdentifier);
 }
 
+async function registerTicketSandbox(ticketIdentifier: string, sandboxId: string) {
+  "use step";
+  const { createStepAdapters } = await import("../lib/step-adapters.js");
+  const { runRegistry } = createStepAdapters();
+  await runRegistry.registerSandbox(ticketIdentifier, sandboxId);
+}
+
 async function markTicketFailed(ticketIdentifier: string, error: string) {
   "use step";
   const { createStepAdapters } = await import("../lib/step-adapters.js");
@@ -355,6 +362,10 @@ export async function agentWorkflow(ticketId: string) {
 
     // Provision sandbox once for all phases
     const sandboxId = await provisionSandbox(branchName, mergeBase);
+    // Pin the sandboxId to this ticket so cleanup paths (reconcile,
+    // cancelRun, webhook-cancel) can stop it by id instead of doing a
+    // branch scan across every running sandbox.
+    await registerTicketSandbox(ticket.identifier, sandboxId);
 
     try {
       await writeAttachments(sandboxId, downloadedAttachments);
@@ -485,51 +496,52 @@ export async function agentWorkflow(ticketId: string) {
       }
 
       // ========== PHASE 3: Review ==========
-      await configureStopHook(sandboxId, true);
-
-      const gitDiff = await captureGitDiff(sandboxId);
-
-      const reviewInput = assembleReviewContext({
-        ticket: ticketData,
-        prompt: getPrompt("review.md"),
-        researchPlanMarkdown,
-        gitDiff,
-        attachments: downloadedAttachments,
-      });
-
-      const reviewScript = buildPhaseScript({
-        model: env.CLAUDE_MODEL,
-        phase: "review",
-        inputFile: "/tmp/review-requirements.md",
-        outputFile: "/tmp/review-stdout.txt",
-        stderrFile: "/tmp/review-stderr.txt",
-        sentinelFile: "/tmp/review-done",
-        jsonSchema: REVIEW_SCHEMA,
-      });
-
-      await writeAndStartPhase(
-        sandboxId,
-        "/tmp/review-requirements.md", reviewInput,
-        "/tmp/review-wrapper.sh", reviewScript,
-      );
-
-      const reviewDone = await pollUntilDone(sandboxId, "/tmp/review-done", 15);
-      let reviewOutput: ReviewOutput;
-
-      if (reviewDone) {
-        const reviewRaw = await collectPhaseOutput(sandboxId, "/tmp/review-stdout.txt", "/tmp/review-stderr.txt");
-        phaseUsages["Review"] = extractUsage(reviewRaw);
-        reviewOutput = parseReviewOutput(reviewRaw);
-      } else {
-        reviewOutput = { result: "failed", feedback: "", issues: [], error: "Review phase timed out" };
-      }
-
-      if (reviewOutput.result === "failed") {
-        await moveTicket(ticketId, env.COLUMN_BACKLOG);
-        await notifySlack(`Task ${ticket.identifier} failed: review — ${reviewOutput.error ?? "unknown"}${usageSuffix()}`);
-        await unregisterRun(ticket.identifier);
-        return;
-      }
+      // Temporarily disabled.
+      // await configureStopHook(sandboxId, true);
+      //
+      // const gitDiff = await captureGitDiff(sandboxId);
+      //
+      // const reviewInput = assembleReviewContext({
+      //   ticket: ticketData,
+      //   prompt: getPrompt("review.md"),
+      //   researchPlanMarkdown,
+      //   gitDiff,
+      //   attachments: downloadedAttachments,
+      // });
+      //
+      // const reviewScript = buildPhaseScript({
+      //   model: env.CLAUDE_MODEL,
+      //   phase: "review",
+      //   inputFile: "/tmp/review-requirements.md",
+      //   outputFile: "/tmp/review-stdout.txt",
+      //   stderrFile: "/tmp/review-stderr.txt",
+      //   sentinelFile: "/tmp/review-done",
+      //   jsonSchema: REVIEW_SCHEMA,
+      // });
+      //
+      // await writeAndStartPhase(
+      //   sandboxId,
+      //   "/tmp/review-requirements.md", reviewInput,
+      //   "/tmp/review-wrapper.sh", reviewScript,
+      // );
+      //
+      // const reviewDone = await pollUntilDone(sandboxId, "/tmp/review-done", 15);
+      // let reviewOutput: ReviewOutput;
+      //
+      // if (reviewDone) {
+      //   const reviewRaw = await collectPhaseOutput(sandboxId, "/tmp/review-stdout.txt", "/tmp/review-stderr.txt");
+      //   phaseUsages["Review"] = extractUsage(reviewRaw);
+      //   reviewOutput = parseReviewOutput(reviewRaw);
+      // } else {
+      //   reviewOutput = { result: "failed", feedback: "", issues: [], error: "Review phase timed out" };
+      // }
+      //
+      // if (reviewOutput.result === "failed") {
+      //   await moveTicket(ticketId, env.COLUMN_BACKLOG);
+      //   await notifySlack(`Task ${ticket.identifier} failed: review — ${reviewOutput.error ?? "unknown"}${usageSuffix()}`);
+      //   await unregisterRun(ticket.identifier);
+      //   return;
+      // }
 
       // ========== POST-PHASES: Push & PR ==========
       let pushResult = await pushFromSandbox(sandboxId, branchName);

@@ -48,6 +48,14 @@ export async function stopSandboxesForTicket(
  * after claude exits, so killing claude causes the workflow's pollUntilDone
  * to see the sentinel with empty/partial stdout — parseResearchStatus then
  * defaults to `{ status: "failed" }`, exercising the US-7 failure path.
+ *
+ * Returns `true` only when `pkill` actually terminated a claude process.
+ * Returning `true` from "sandbox exists on the right branch" alone is unsafe:
+ * there's a window between git checkout and claude exec where the wrapper is
+ * still sourcing env files — `pkill` then matches nothing (exit 1), claude
+ * starts a moment later, the agent runs to completion, and the ticket lands
+ * in AI Review instead of Backlog. Caller polls this helper, so returning
+ * `false` on a no-op pkill makes the caller try again instead of advancing.
  */
 export async function killClaudeForTicket(
   ticketKey: string,
@@ -73,8 +81,17 @@ export async function killClaudeForTicket(
       : null;
     if (branch !== expectedBranch) continue;
 
-    await sandbox.runCommand({ cmd: "pkill", args: ["-9", "-f", "claude"] });
-    return true;
+    // `pkill` exits 0 if any process matched and was signaled, 1 if no
+    // match. We only claim success on 0 — that guarantees the wrapper's
+    // foreground pipeline was actually interrupted and the cleanup path
+    // (touch sentinel with empty stdout) will run.
+    const killResult = await sandbox.runCommand({
+      cmd: "pkill",
+      args: ["-9", "-f", "claude"],
+    });
+    if (killResult.exitCode === 0) return true;
+    // Matched sandbox but claude wasn't running yet; caller will retry.
+    return false;
   }
   return false;
 }

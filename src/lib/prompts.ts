@@ -26,7 +26,7 @@ You have access to **superpowers skills** installed globally. Use them.
 1. **Restore session memory** — Check if \`blazebot/memory/[TASK_ID].md\` exists (where \`[TASK_ID]\` is the Ticket ID from above, e.g. \`AIW-123\`). If it exists, read it immediately.
 2. Explore the repository structure. Read \`CLAUDE.md\`, \`AGENTS.md\` if present.
 3. Check \`git log\` and \`git diff\` against the base branch to identify what's already been done on this branch.
-4. If PR review feedback or CI/CD failures are included above, understand what needs to be fixed.
+4. If PR review feedback or CI/CD failures are included above, understand what needs to be fixed. **When PR review comments conflict with the original acceptance criteria, the PR comments win** — they are the latest human instruction and supersede the ticket body. Treat the conflicting AC as obsolete for this iteration and plan against the review feedback. Do NOT return \`clarification_needed\` for this kind of conflict.
 5. Identify what's already implemented vs. what remains.
 6. Analyze relevant files, code patterns, test setup.
 7. **Use the \`brainstorming\` skill** to think through the approach.
@@ -120,6 +120,7 @@ You have access to **superpowers skills** installed globally. Use them.
 ## Constraints
 
 - Follow the plan — do not explore or re-research (already done).
+- If the plan diverges from the original ticket acceptance criteria because it reflects PR review feedback, trust the plan. PR review comments supersede the original AC, and the research agent has already reconciled the two. Do not second-guess the plan by reverting to the ticket body.
 - Do not refactor code outside the scope of the plan.
 - Do not install new dependencies unless the plan specifies them.
 - Follow existing code conventions (check CLAUDE.md, AGENTS.md if present).
@@ -190,7 +191,7 @@ You have access to **superpowers skills** installed globally. Use them.
 ## Review Criteria
 
 - Does the implementation match the plan?
-- Does it satisfy the acceptance criteria?
+- Does it satisfy the acceptance criteria, **as amended by any PR review feedback**? When PR review comments conflict with the original ticket acceptance criteria, the comments win — they are the latest human instruction. Do not flag the implementation as failing AC just because it now diverges from the original ticket body.
 - Are there test gaps?
 - Are there obvious bugs or edge cases?
 - Does the code follow existing conventions?

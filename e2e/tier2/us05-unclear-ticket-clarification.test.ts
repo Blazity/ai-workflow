@@ -20,7 +20,7 @@ import { e2eEnv } from "../env.js";
  * return STATUS: clarification_needed, post numbered questions as a Jira
  * comment, move the ticket to Backlog, and clean up Redis/sandbox.
  */
-describe("US-5: Unclear ticket triggers clarification", () => {
+describe("US-05: Unclear ticket triggers clarification", () => {
   let ticketKey: string;
   let branchName: string;
 

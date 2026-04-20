@@ -13,7 +13,7 @@ import { e2eEnv } from "../env.js";
  * TXT, MD), then uses the production JiraAdapter + fetchAttachmentsWithRetry
  * + sandbox writeFiles pipeline to verify the full attachment flow end-to-end.
  */
-describe("US-2: Ticket with attachments (real pipeline)", () => {
+describe("US-02: Ticket with attachments (real pipeline)", () => {
   let ticketKey: string;
   let sandbox: { stop: () => Promise<unknown> } | undefined;
 
