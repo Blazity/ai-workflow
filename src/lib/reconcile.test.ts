@@ -135,6 +135,30 @@ describe("reconcileRuns", () => {
     expect(registry.unregister).not.toHaveBeenCalled();
   });
 
+  it("keeps fresh claiming entry when missing from JQL snapshot but Jira still says AI", async () => {
+    const registry = makeRegistry([
+      { ticketKey: "PROJ-1", runId: `claiming:${Date.now()}` },
+    ]);
+    const issueTracker = makeIssueTracker({
+      fetchTicket: vi.fn().mockResolvedValue({
+        id: "id-1",
+        identifier: "PROJ-1",
+        title: "x",
+        description: "",
+        acceptanceCriteria: "",
+        comments: [],
+        labels: [],
+        trackerStatus: "AI",
+      }),
+    });
+    const { reconcileRuns } = await import("./reconcile.js");
+
+    const result = await reconcileRuns(new Set(), registry, issueTracker);
+
+    expect(result).toEqual({ cancelled: 0, cleaned: 0 });
+    expect(registry.unregister).not.toHaveBeenCalled();
+  });
+
   it("cleans completed runs that are still in AI column", async () => {
     const registry = makeRegistry([
       { ticketKey: "PROJ-1", runId: "run_done" },
