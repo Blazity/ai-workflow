@@ -1,9 +1,10 @@
-import { describe, it, expect, afterAll } from "vitest";
+import { describe, it, expect, afterAll, beforeAll } from "vitest";
 import {
   createTestTicket,
   moveTicketToColumn,
   getTicketStatus,
   deleteTicket,
+  isTicketVisibleInJql,
 } from "../helpers/jira.js";
 import { findPR, closePR, deleteBranch } from "../helpers/github.js";
 import {
@@ -15,6 +16,7 @@ import {
   stopSandboxesForTicket,
   killClaudeForTicket,
 } from "../helpers/sandbox.js";
+import { callCronPoll } from "../helpers/cron.js";
 import { waitFor } from "../helpers/wait.js";
 import { e2eEnv } from "../env.js";
 
@@ -28,17 +30,38 @@ import { e2eEnv } from "../env.js";
  *
  * Flow:
  *   1. Create MAX_CONCURRENT_AGENTS + 1 tickets in quick succession.
- *   2. Move them all to AI. Each move fires a Jira webhook that calls
- *      dispatch; the first N claim Redis slots and start workflows, the
- *      (N+1)th hits the cap and is skipped.
- *   3. Assert: exactly N claim entries exist in the registry for our
+ *   2. Move them all to AI, then wait for Jira's JQL index to reflect the
+ *      transitions for every ticket.
+ *   3. Trigger a cron poll. Cron discovers all AI-column tickets and fires
+ *      dispatch for each in parallel; the post-claim fairness check caps
+ *      started workflows at MAX_CONCURRENT_AGENTS.
+ *   4. Assert: exactly N claim entries exist in the registry for our
  *      ticket set, and the overflow ticket has no entry.
+ *
+ * We drive dispatch from cron rather than webhooks because Jira webhook
+ * delivery is unreliable under parallel transitions (and absent in CI
+ * configurations without Jira admin access). Cron exercises the same
+ * `dispatchTicket` path.
  *
  * Cleanup stops every sandbox and closes any PRs the N in-flight workflows
  * managed to open before we interrupted them.
  */
 describe("US-11: Capacity limit respected", () => {
   const tickets: Array<{ ticketKey: string; branchName: string; prNumber?: number }> = [];
+
+  // Clear any stale registry entries left over from prior failed runs.
+  // Capacity is measured against the full registry, not just our tickets —
+  // leftovers silently consume slots and starve this test of claims.
+  beforeAll(async () => {
+    const stale = await listAllRuns();
+    if (stale.length > 0) {
+      console.warn(
+        `[US-11] Clearing ${stale.length} stale registry entries before test:`,
+        stale.map((e) => e.ticketKey).join(", "),
+      );
+      await Promise.all(stale.map((e) => redisCleanup(e.ticketKey)));
+    }
+  });
 
   afterAll(async () => {
     // Cancel running workflows FIRST by moving tickets out of AI. The Jira
@@ -93,16 +116,46 @@ describe("US-11: Capacity limit respected", () => {
       tickets.push({ ticketKey, branchName: `blazebot/${ticketKey.toLowerCase()}` });
     }
 
-    // 2. Move them all to AI in parallel. Jira fires a webhook per transition;
-    //    each webhook triggers dispatch, which claims Redis via HSETNX. The
-    //    registry-based capacity check rejects the overflow ticket.
+    // 2. Move them all to AI in parallel.
     await Promise.all(
       tickets.map((t) => moveTicketToColumn(t.ticketKey, e2eEnv.COLUMN_AI)),
     );
 
-    // 3. Wait for exactly `max` of our tickets to be claimed. We poll the
-    //    registry rather than the per-ticket entry because the Jira webhook
-    //    ordering is not guaranteed — any `max` of the `total` can win.
+    // 3. Wait for Jira's JQL index to reflect the transitions for every
+    //    ticket. Cron's `discoverAiColumnTickets` uses JQL, so we need every
+    //    ticket visible before polling — otherwise cron dispatches a subset
+    //    and the fairness cap will never produce exactly `max` claims.
+    await Promise.all(
+      tickets.map((t) =>
+        waitFor(
+          async () =>
+            (await isTicketVisibleInJql(t.ticketKey, e2eEnv.COLUMN_AI))
+              ? true
+              : null,
+          {
+            description: `${t.ticketKey} visible in JQL under ${e2eEnv.COLUMN_AI}`,
+            timeoutMs: 60_000,
+            intervalMs: 2_000,
+          },
+        ),
+      ),
+    );
+
+    // 4. Trigger cron. It fetches all AI-column tickets via JQL and calls
+    //    dispatch for each in parallel; dispatch's post-claim fairness check
+    //    caps started workflows at MAX_CONCURRENT_AGENTS.
+    const pollRes = await callCronPoll();
+    console.log("[US-11] cron response:", JSON.stringify(pollRes.body));
+    expect(pollRes.status).toBe(200);
+    // Sanity: cron saw all our tickets and dispatched the cap-limit count.
+    // If this fails, the real cause is visible in the logged response body
+    // (e.g. `discovered < total` → JQL still stale; `started < max` →
+    // capacity precheck saw a non-empty registry).
+    expect(pollRes.body?.discovered).toBeGreaterThanOrEqual(total);
+    expect(pollRes.body?.started).toBe(max);
+
+    // 5. Wait for exactly `max` of our tickets to be claimed. Any `max` of
+    //    the `total` can win under the fairness ordering.
     const ticketKeys = new Set(tickets.map((t) => t.ticketKey));
     const claimed = await waitFor(
       async () => {
