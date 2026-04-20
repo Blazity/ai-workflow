@@ -48,6 +48,10 @@ export class ChatSDKAdapter implements MessagingAdapter {
     try {
       const channel = this.chat.channel(`slack:${this.channelId}`);
       await channel.post(message);
+      logger.info(
+        { channelId: this.channelId, messagePreview: message.slice(0, 120) },
+        "notification_sent",
+      );
     } catch (err) {
       logger.warn(
         { error: (err as Error).message },
