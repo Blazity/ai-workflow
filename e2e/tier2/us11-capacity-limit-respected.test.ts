@@ -11,7 +11,10 @@ import {
   listAll as listAllRuns,
   cleanup as redisCleanup,
 } from "../helpers/redis.js";
-import { stopSandboxesForTicket } from "../helpers/sandbox.js";
+import {
+  stopSandboxesForTicket,
+  killClaudeForTicket,
+} from "../helpers/sandbox.js";
 import { waitFor } from "../helpers/wait.js";
 import { e2eEnv } from "../env.js";
 
@@ -135,7 +138,21 @@ describe("US-11: Capacity limit respected", () => {
     const loserBranch = `blazebot/${loserKey.toLowerCase()}`;
     expect(await findPR(loserBranch)).toBeNull();
 
-    // 6. Best-effort: capture any PRs the winners managed to open so cleanup
+    // 6. Capacity proven — kill claude in every winner sandbox so the
+    //    test doesn't wait for full agent runs we don't care about.
+    //    The workflow treats killed claude the same as US-7: sentinel
+    //    with empty stdout → research `failed` → ticket moves to Backlog.
+    await Promise.all(
+      claimed.map(({ ticketKey }) =>
+        waitFor(() => killClaudeForTicket(ticketKey), {
+          description: `kill claude in winner sandbox for ${ticketKey}`,
+          timeoutMs: 300_000,
+          intervalMs: 10_000,
+        }).catch(() => {}),
+      ),
+    );
+
+    // 7. Best-effort: capture any PRs the winners managed to open so cleanup
     //    can close them.
     for (const t of tickets) {
       const pr = await findPR(t.branchName).catch(() => null);

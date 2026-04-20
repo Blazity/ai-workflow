@@ -31,7 +31,17 @@ import { e2eEnv } from "../env.js";
  * is atomic").
  */
 describe("US-10: Duplicate dispatch prevented by atomic claim", () => {
-  const SEEDED_RUN_ID = "run_e2e_us10_preexisting";
+  // Seed as a claiming sentinel, not a literal runId. Reconcile's
+  // cleanFinishedRun path calls `getRun(runId).status` on non-sentinel
+  // values — with a fake runId that throws, the in-memory strike counter
+  // on a hot Vercel function instance reaches the unreachable-strikes
+  // limit quickly under parallel e2e load and unregisters the seed,
+  // breaking this test's assertion. Sentinels take the
+  // reconcileInflightClaim path, which leaves fresh (< STALE_CLAIM_MS)
+  // claims alone while the ticket is in AI. The dispatch guard itself
+  // (HSETNX on `claim()`) is agnostic to the value — any pre-existing
+  // entry blocks future claims.
+  const SEEDED_RUN_ID = `claiming:${Date.now()}`;
   let ticketKey: string;
   let branchName: string;
 
