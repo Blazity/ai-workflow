@@ -30,12 +30,16 @@ export async function listAll(): Promise<
 export async function setEntry(
   ticketKey: string,
   runId: string,
+  opts?: { ageMs?: number },
 ): Promise<void> {
   await redis.hset(HASH_KEY, { [ticketKey]: runId });
   // Mirror the production adapter: stamp a creation timestamp so
   // reconcile's orphan grace window (src/lib/reconcile.ts:ORPHAN_GRACE_MS)
   // treats the seeded entry as fresh, not as stale junk to clean up.
-  await redis.hset(ENTRY_TS_HASH_KEY, { [ticketKey]: String(Date.now()) });
+  // Callers exercising the orphan-cancel path (US-15) pass `ageMs` to
+  // backdate past the grace window so reconcile acts on the first tick.
+  const createdAt = Date.now() - (opts?.ageMs ?? 0);
+  await redis.hset(ENTRY_TS_HASH_KEY, { [ticketKey]: String(createdAt) });
 }
 
 export async function cleanup(ticketKey: string): Promise<void> {

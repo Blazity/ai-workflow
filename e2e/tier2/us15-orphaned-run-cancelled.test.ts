@@ -61,8 +61,10 @@ describe("US-15: Orphaned run cancelled when ticket leaves AI", () => {
 
     // 2. Seed a non-sentinel runId (a claiming:<ts> would trip the inflight
     //    branch instead). This simulates the "workflow registered" state
-    //    where the webhook-based cancel was missed.
-    await setEntry(ticketKey, SEEDED_RUN_ID);
+    //    where the webhook-based cancel was missed. Backdate past
+    //    reconcile's ORPHAN_GRACE_MS so the first cron tick acts on it
+    //    instead of skipping the entry as a fresh orphan.
+    await setEntry(ticketKey, SEEDED_RUN_ID, { ageMs: 60_000 });
     expect(await getRunId(ticketKey)).toBe(SEEDED_RUN_ID);
 
     // 3. Trigger the cron. Reconcile walks the registry, sees our ticket is
