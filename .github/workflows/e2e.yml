@@ -1,6 +1,8 @@
 name: E2E Tests
 
 on:
+  push:
+    branches: [main, dev]
   workflow_dispatch:
     inputs:
       tier:
@@ -15,7 +17,7 @@ on:
 
 jobs:
   e2e-agent:
-    if: inputs.tier == 'agent' || inputs.tier == 'all'
+    if: github.event_name == 'push' || inputs.tier == 'agent' || inputs.tier == 'all'
     runs-on: ubuntu-latest
     timeout-minutes: 120
     environment: e2e
@@ -62,7 +64,7 @@ jobs:
     if: |
       always() &&
       (needs.e2e-agent.result == 'success' || needs.e2e-agent.result == 'skipped') &&
-      (inputs.tier == 'orchestration' || inputs.tier == 'all')
+      (github.event_name == 'push' || inputs.tier == 'orchestration' || inputs.tier == 'all')
     runs-on: ubuntu-latest
     timeout-minutes: 60
     environment: e2e
@@ -109,7 +111,7 @@ jobs:
     if: |
       always() &&
       (needs.e2e-orchestration.result == 'success' || needs.e2e-orchestration.result == 'skipped') &&
-      (inputs.tier == 'capacity' || inputs.tier == 'all')
+      (github.event_name == 'push' || inputs.tier == 'capacity' || inputs.tier == 'all')
     runs-on: ubuntu-latest
     timeout-minutes: 30
     environment: e2e
