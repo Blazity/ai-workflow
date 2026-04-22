@@ -211,6 +211,16 @@ Return a JSON object with:
 - \`issues\`: Array of issues found — each with \`file\`, \`description\`, \`severity\` ("critical" or "suggestion"). Include both fixed and unfixable issues.
 - \`error\`: Failure details (when failed).`;
 
+export const PROMPT_NAMES = ["research-plan", "implement", "review"] as const;
+export type PromptName = typeof PROMPT_NAMES[number];
+
+/** Fallback strings keyed by Arthur prompt name (no `.md` suffix). */
+export const PROMPT_FALLBACKS: Record<PromptName, string> = {
+  "research-plan": researchPlanPrompt,
+  "implement": implementPrompt,
+  "review": reviewPrompt,
+};
+
 const prompts: Record<string, string> = {
   "research-plan.md": researchPlanPrompt,
   "implement.md": implementPrompt,

@@ -353,7 +353,6 @@ export async function agentWorkflow(ticketId: string) {
   "use workflow";
 
   const { env, getVcsConfig } = await import("../../env.js");
-  const { getPrompt } = await import("../lib/prompts.js");
   const { buildPhaseScript } = await import("../sandbox/wrapper-script.js");
   const { parseResearchStatus, parseAgentOutput, parseReviewOutput, REVIEW_SCHEMA, AGENT_SCHEMA } =
     await import("../sandbox/agent-runner.js");
@@ -366,6 +365,9 @@ export async function agentWorkflow(ticketId: string) {
 
   const ticket = await fetchAndValidateTicket(ticketId, env.COLUMN_AI);
   if (!ticket) return;
+
+  const { loadPrompts } = await import("./prompts-step.js");
+  const prompts = await loadPrompts();
 
   const phaseUsages: Record<string, PhaseUsage | null> = {};
   const usageSuffix = () =>
@@ -421,7 +423,7 @@ export async function agentWorkflow(ticketId: string) {
 
       const researchInput = assembleResearchPlanContext({
         ticket: ticketData,
-        prompt: getPrompt("research-plan.md"),
+        prompt: prompts.research,
         branchName,
         prComments: prContext?.prComments,
         checkResults: prContext?.checkResults,
@@ -483,7 +485,7 @@ export async function agentWorkflow(ticketId: string) {
 
       const implInput = assembleImplementationContext({
         ticket: ticketData,
-        prompt: getPrompt("implement.md"),
+        prompt: prompts.implement,
         researchPlanMarkdown,
         attachments: downloadedAttachments,
       });
@@ -541,7 +543,7 @@ export async function agentWorkflow(ticketId: string) {
       //
       // const reviewInput = assembleReviewContext({
       //   ticket: ticketData,
-      //   prompt: getPrompt("review.md"),
+      //   prompt: prompts.review,
       //   researchPlanMarkdown,
       //   gitDiff,
       //   attachments: downloadedAttachments,

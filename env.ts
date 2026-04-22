@@ -50,6 +50,7 @@ export const env = createEnv({
     // is auto-created, so there is no static GENAI_ENGINE_TASK_ID.
     GENAI_ENGINE_API_KEY: z.string().min(1).optional(),
     GENAI_ENGINE_TRACE_ENDPOINT: z.string().url().optional(),
+    GENAI_ENGINE_PROMPT_TASK_ID: z.string().uuid().optional(),
 
     // Sandbox
     MAX_CONCURRENT_AGENTS: z.coerce.number().int().positive().default(3),

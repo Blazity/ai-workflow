@@ -146,4 +146,79 @@ describe("ArthurClient", () => {
       await expect(client.findTicketTasks("AWT-1")).rejects.toThrow(/401/);
     });
   });
+
+  describe("findTaskByName", () => {
+    it("returns exact-name match, excluding archived", async () => {
+      mockFetch.mockResolvedValueOnce(jsonResponse({
+        count: 3,
+        tasks: [
+          { id: "a", name: "ai-workflow-prompts" },
+          { id: "b", name: "ai-workflow-prompts-old", is_archived: true },
+          { id: "c", name: "ai-workflow-prompts", is_archived: true },
+        ],
+      }));
+      const client = new ArthurClient("http://host", "k");
+      const t = await client.findTaskByName("ai-workflow-prompts");
+      expect(t?.id).toBe("a");
+    });
+
+    it("returns null on no match", async () => {
+      mockFetch.mockResolvedValueOnce(jsonResponse({ count: 0, tasks: [] }));
+      const client = new ArthurClient("http://host", "k");
+      expect(await client.findTaskByName("nothing")).toBeNull();
+    });
+  });
+
+  describe("prompts", () => {
+    it("getPromptByTag returns messages[0].content on 200", async () => {
+      mockFetch.mockResolvedValueOnce(jsonResponse({
+        name: "research-plan",
+        version: 3,
+        messages: [{ role: "user", content: "the prompt body" }],
+      }));
+      const client = new ArthurClient("http://host", "k");
+      const body = await client.getPromptByTag("task-uuid", "research-plan", "production");
+      expect(body).toBe("the prompt body");
+      const [url] = mockFetch.mock.calls[0];
+      expect(url).toBe("http://host/api/v1/tasks/task-uuid/prompts/research-plan/versions/tags/production");
+    });
+
+    it("getPromptByTag returns null on 404", async () => {
+      mockFetch.mockResolvedValueOnce(new Response("not found", { status: 404 }));
+      const client = new ArthurClient("http://host", "k");
+      expect(await client.getPromptByTag("t", "research-plan", "production")).toBeNull();
+    });
+
+    it("createPromptVersion POSTs single-message body with user role", async () => {
+      mockFetch.mockResolvedValueOnce(jsonResponse({
+        name: "implement",
+        version: 5,
+        messages: [{ role: "user", content: "x" }],
+      }));
+      const client = new ArthurClient("http://host", "k");
+      const result = await client.createPromptVersion("task-uuid", "implement", "x");
+      expect(result.version).toBe(5);
+      const [url, init] = mockFetch.mock.calls[0];
+      expect(url).toBe("http://host/api/v1/tasks/task-uuid/prompts/implement");
+      expect(init.method).toBe("POST");
+      const body = JSON.parse(init.body);
+      expect(body.messages).toEqual([{ role: "user", content: "x" }]);
+    });
+
+    it("tagPromptVersion PUTs the tag", async () => {
+      mockFetch.mockResolvedValueOnce(jsonResponse({ name: "review", version: 2, messages: [] }));
+      const client = new ArthurClient("http://host", "k");
+      await client.tagPromptVersion("t", "review", 2, "production");
+      const [url, init] = mockFetch.mock.calls[0];
+      expect(url).toBe("http://host/api/v1/tasks/t/prompts/review/versions/2/tags");
+      expect(init.method).toBe("PUT");
+      expect(JSON.parse(init.body)).toEqual({ tag: "production" });
+    });
+
+    it("getPromptByTag throws on non-404 non-2xx (5xx)", async () => {
+      mockFetch.mockResolvedValueOnce(new Response("boom", { status: 500 }));
+      const client = new ArthurClient("http://host", "k");
+      await expect(client.getPromptByTag("t", "x", "production")).rejects.toThrow(/500/);
+    });
+  });
 });

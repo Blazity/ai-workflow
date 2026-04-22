@@ -12,6 +12,12 @@ export interface ArthurTask {
   is_archived?: boolean;
 }
 
+export interface AgenticPrompt {
+  name: string;
+  version?: number | string;
+  messages: Array<{ role: string; content: string }>;
+}
+
 interface SearchResponse {
   count: number;
   tasks: ArthurTask[];
@@ -81,5 +87,68 @@ export class ArthurClient {
     const existing = await this.findTicketTasks(identifier);
     const name = existing.length === 0 ? identifier : `${identifier}.${existing.length}`;
     return this.createTask(name);
+  }
+
+  /** Exact-name lookup. Returns the task if found (non-archived), else null. */
+  async findTaskByName(name: string): Promise<ArthurTask | null> {
+    const { tasks } = await this.request<{ count: number; tasks: ArthurTask[] }>(
+      "/api/v2/tasks/search",
+      { method: "POST", body: JSON.stringify({ task_name: name }) },
+    );
+    return tasks.find((t) => t.name === name && !t.is_archived) ?? null;
+  }
+
+  /** Create a task without the agent-metadata/is_agentic defaults used by ensureTaskForTicket. */
+  async createPlainTask(name: string): Promise<ArthurTask> {
+    return this.request<ArthurTask>("/api/v2/tasks", {
+      method: "POST",
+      body: JSON.stringify({ name, is_agentic: true }),
+    });
+  }
+
+  /** Fetch a tagged prompt version. Returns the first message's content, or null if 404. */
+  async getPromptByTag(taskId: string, name: string, tag: string): Promise<string | null> {
+    const path = `/api/v1/tasks/${encodeURIComponent(taskId)}/prompts/${encodeURIComponent(name)}/versions/tags/${encodeURIComponent(tag)}`;
+    const res = await fetch(`${this.baseUrl}${path}`, {
+      method: "GET",
+      headers: {
+        "Authorization": `Bearer ${this.apiKey}`,
+        "ngrok-skip-browser-warning": "true",
+      },
+    });
+    if (res.status === 404) return null;
+    if (!res.ok) {
+      const body = await res.text().catch(() => "");
+      throw new Error(`Arthur GET ${path} → ${res.status}: ${body.slice(0, 300)}`);
+    }
+    const prompt = (await res.json()) as AgenticPrompt;
+    const first = prompt.messages?.[0];
+    return first?.content ?? null;
+  }
+
+  /** Create a new version of a named prompt on a task. Content is sent as a single user message. */
+  async createPromptVersion(taskId: string, name: string, content: string): Promise<AgenticPrompt> {
+    return this.request<AgenticPrompt>(
+      `/api/v1/tasks/${encodeURIComponent(taskId)}/prompts/${encodeURIComponent(name)}`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          messages: [{ role: "user", content }],
+          model_name: "claude-sonnet-4",
+          model_provider: "anthropic",
+        }),
+      },
+    );
+  }
+
+  /** Add a tag (e.g. "production") to a specific version. */
+  async tagPromptVersion(taskId: string, name: string, version: number | string, tag: string): Promise<void> {
+    await this.request<AgenticPrompt>(
+      `/api/v1/tasks/${encodeURIComponent(taskId)}/prompts/${encodeURIComponent(name)}/versions/${encodeURIComponent(String(version))}/tags`,
+      {
+        method: "PUT",
+        body: JSON.stringify({ tag }),
+      },
+    );
   }
 }
