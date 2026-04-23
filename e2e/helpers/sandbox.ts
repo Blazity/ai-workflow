@@ -8,7 +8,11 @@ export async function stopSandboxesForTicket(
   const expectedBranch = `blazebot/${ticketKey.trim().toLowerCase()}`;
   try {
     const { Sandbox } = await import("@vercel/sandbox");
-    const { json } = await Sandbox.list({ limit: 100 });
+    const { getSandboxCredentials } = await import(
+      "../../src/sandbox/credentials.js"
+    );
+    const credentials = getSandboxCredentials();
+    const { json } = await Sandbox.list({ ...credentials, limit: 100 });
     const running = json.sandboxes.filter(
       (s: { status?: string }) => s.status === "running",
     );
@@ -16,7 +20,10 @@ export async function stopSandboxesForTicket(
     let stopped = 0;
     for (const entry of running) {
       try {
-        const sandbox = await Sandbox.get({ sandboxId: entry.id });
+        const sandbox = await Sandbox.get({
+          ...credentials,
+          sandboxId: entry.id,
+        });
         if (sandbox.status !== "running") continue;
 
         const result = await sandbox.runCommand({
@@ -62,13 +69,20 @@ export async function killClaudeForTicket(
 ): Promise<boolean> {
   const expectedBranch = `blazebot/${ticketKey.trim().toLowerCase()}`;
   const { Sandbox } = await import("@vercel/sandbox");
-  const { json } = await Sandbox.list({ limit: 100 });
+  const { getSandboxCredentials } = await import(
+    "../../src/sandbox/credentials.js"
+  );
+  const credentials = getSandboxCredentials();
+  const { json } = await Sandbox.list({ ...credentials, limit: 100 });
   const running = json.sandboxes.filter(
     (s: { status?: string }) => s.status === "running",
   );
 
   for (const entry of running) {
-    const sandbox = await Sandbox.get({ sandboxId: entry.id });
+    const sandbox = await Sandbox.get({
+      ...credentials,
+      sandboxId: entry.id,
+    });
     if (sandbox.status !== "running") continue;
 
     const branchResult = await sandbox.runCommand({
