@@ -36,7 +36,9 @@ jobs:
       AI_WORKFLOW_KV_REST_API_URL: ${{ secrets.AI_WORKFLOW_KV_REST_API_URL }}
       AI_WORKFLOW_KV_REST_API_TOKEN: ${{ secrets.AI_WORKFLOW_KV_REST_API_TOKEN }}
       VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
-      VERCEL_OIDC_TOKEN: ${{ secrets.VERCEL_OIDC_TOKEN }}
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+      VERCEL_TEAM_ID: ${{ secrets.VERCEL_TEAM_ID }}
+      VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
       MAX_CONCURRENT_AGENTS: ${{ secrets.MAX_CONCURRENT_AGENTS }}
     steps:
       - uses: actions/checkout@v4
@@ -83,7 +85,9 @@ jobs:
       AI_WORKFLOW_KV_REST_API_URL: ${{ secrets.AI_WORKFLOW_KV_REST_API_URL }}
       AI_WORKFLOW_KV_REST_API_TOKEN: ${{ secrets.AI_WORKFLOW_KV_REST_API_TOKEN }}
       VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
-      VERCEL_OIDC_TOKEN: ${{ secrets.VERCEL_OIDC_TOKEN }}
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+      VERCEL_TEAM_ID: ${{ secrets.VERCEL_TEAM_ID }}
+      VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
       MAX_CONCURRENT_AGENTS: ${{ secrets.MAX_CONCURRENT_AGENTS }}
     steps:
       - uses: actions/checkout@v4
@@ -130,7 +134,9 @@ jobs:
       AI_WORKFLOW_KV_REST_API_URL: ${{ secrets.AI_WORKFLOW_KV_REST_API_URL }}
       AI_WORKFLOW_KV_REST_API_TOKEN: ${{ secrets.AI_WORKFLOW_KV_REST_API_TOKEN }}
       VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
-      VERCEL_OIDC_TOKEN: ${{ secrets.VERCEL_OIDC_TOKEN }}
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+      VERCEL_TEAM_ID: ${{ secrets.VERCEL_TEAM_ID }}
+      VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
       MAX_CONCURRENT_AGENTS: ${{ secrets.MAX_CONCURRENT_AGENTS }}
     steps:
       - uses: actions/checkout@v4
