@@ -587,7 +587,7 @@ pnpm setup:arthur-prompts
 
 Expected output: either `Created new task …` or `Found existing task …`, followed by three `✓ version N tagged "production"` lines, and a final:
 
-```
+```text
 Setup complete. Add this to .env:
   GENAI_ENGINE_PROMPT_TASK_ID=<uuid>
 ```
@@ -598,7 +598,7 @@ Setup complete. Add this to .env:
 
 - [ ] **Step 5:** Start `pnpm dev`, trigger a fresh ticket. Grep dev-server output for `prompts_loaded` — expect three lines, each with `source: "arthur"`:
 
-```
+```text
 msg=prompts_loaded name=research-plan source=arthur
 msg=prompts_loaded name=implement source=arthur
 msg=prompts_loaded name=review source=arthur

@@ -82,11 +82,21 @@ export class ArthurClient {
    * Resolve-or-create a task for a ticket identifier.
    *   first run:  "AWT-42"
    *   re-runs:    "AWT-42.1", "AWT-42.2", ...
+   *
+   * Uses max(existing suffix) + 1 so sparse histories (e.g. AWT-42.2 present
+   * without AWT-42.1) don't collide with an existing name.
    */
   async ensureTaskForTicket(identifier: string): Promise<ArthurTask> {
     const existing = await this.findTicketTasks(identifier);
-    const name = existing.length === 0 ? identifier : `${identifier}.${existing.length}`;
-    return this.createTask(name);
+    if (existing.length === 0) return this.createTask(identifier);
+    const escaped = identifier.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const suffixRe = new RegExp(`^${escaped}\\.(\\d+)$`);
+    let max = 0;
+    for (const t of existing) {
+      const m = t.name.match(suffixRe);
+      if (m) max = Math.max(max, parseInt(m[1], 10));
+    }
+    return this.createTask(`${identifier}.${max + 1}`);
   }
 
   /** Exact-name lookup. Returns the task if found (non-archived), else null. */

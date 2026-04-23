@@ -117,6 +117,24 @@ describe("ArthurClient", () => {
       expect(task.name).toBe("AWT-42.2");
     });
 
+    it("sparse suffixes → uses max+1 (AWT-42 + AWT-42.2 → AWT-42.3)", async () => {
+      mockFetch
+        .mockResolvedValueOnce(jsonResponse({
+          count: 2,
+          tasks: [
+            { id: "a", name: "AWT-42" },
+            { id: "b", name: "AWT-42.2" },
+          ],
+        }))
+        .mockResolvedValueOnce(jsonResponse({ id: "new", name: "AWT-42.3" }));
+
+      const client = new ArthurClient("http://host", "k");
+      const task = await client.ensureTaskForTicket("AWT-42");
+
+      expect(task.name).toBe("AWT-42.3");
+      expect(JSON.parse(mockFetch.mock.calls[1][1].body).name).toBe("AWT-42.3");
+    });
+
     it("does not collide with AWT-420 when resolving AWT-42", async () => {
       mockFetch
         .mockResolvedValueOnce(jsonResponse({

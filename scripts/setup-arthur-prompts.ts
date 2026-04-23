@@ -36,17 +36,31 @@ async function main() {
     console.log(`Created new task "${TASK_NAME}" (${task.id}).`);
   }
 
+  const failures: string[] = [];
   for (const name of PROMPT_NAMES) {
     const body = PROMPT_FALLBACKS[name];
     console.log(`\n  seeding ${name}…`);
-    const created = await client.createPromptVersion(task.id, name, body, { modelName });
-    const version = created.version;
-    if (version === undefined) {
-      console.error(`  no version returned; cannot tag. full response:`, created);
-      continue;
+    try {
+      const created = await client.createPromptVersion(task.id, name, body, { modelName });
+      const version = created.version;
+      if (version === undefined) {
+        console.error(`  no version returned; cannot tag. full response:`, created);
+        failures.push(name);
+        continue;
+      }
+      await client.tagPromptVersion(task.id, name, version, TAG);
+      console.log(`  ✓ version ${version} tagged "${TAG}"`);
+    } catch (err) {
+      console.error(`  failed to seed "${name}":`, err instanceof Error ? err.message : err);
+      failures.push(name);
     }
-    await client.tagPromptVersion(task.id, name, version, TAG);
-    console.log(`  ✓ version ${version} tagged "${TAG}"`);
+  }
+
+  if (failures.length > 0) {
+    console.error(
+      `\nSetup FAILED for task ${task.id}. Affected prompts: ${failures.join(", ")}`,
+    );
+    process.exit(1);
   }
 
   console.log(`\nSetup complete. Add this to .env:\n  GENAI_ENGINE_PROMPT_TASK_ID=${task.id}`);

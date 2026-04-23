@@ -9,6 +9,7 @@ export async function loadPrompts(): Promise<LoadedPrompts> {
   const { env } = await import("../../env.js");
   const { logger } = await import("../lib/logger.js");
   const { PROMPT_FALLBACKS } = await import("../lib/prompts.js");
+  type PromptName = keyof typeof PROMPT_FALLBACKS;
 
   const arthurEnabled =
     !!env.GENAI_ENGINE_API_KEY &&
@@ -32,7 +33,7 @@ export async function loadPrompts(): Promise<LoadedPrompts> {
   const taskId = env.GENAI_ENGINE_PROMPT_TASK_ID!;
   const TAG = "production";
 
-  async function one(name: "research-plan" | "implement" | "review"): Promise<string> {
+  async function one(name: PromptName): Promise<string> {
     try {
       const body = await client.getPromptByTag(taskId, name, TAG);
       if (body === null) {

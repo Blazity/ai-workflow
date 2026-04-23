@@ -731,7 +731,7 @@ Open `http://localhost:3030`, sign in with `changeme_genai_engine_admin_key`, cr
 
 Add to `.env` in the repo root:
 
-```
+```env
 GENAI_ENGINE_API_KEY=changeme_genai_engine_admin_key
 GENAI_ENGINE_TASK_ID=<paste-uuid>
 GENAI_ENGINE_TRACE_ENDPOINT=https://<subdomain>.ngrok-free.app/api/v1/traces

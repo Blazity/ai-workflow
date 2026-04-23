@@ -66,7 +66,7 @@ async function main() {
     await sandbox.writeFiles([{ path: "/tmp/arthur_config.json", content: Buffer.from(configJson) }]);
     await run(sandbox, "mv config", "bash", [
       "-c",
-      "mkdir -p $HOME/.claude && mv /tmp/arthur_config.json $HOME/.claude/arthur_config.json && chmod 600 $HOME/.claude/arthur_config.json && cat $HOME/.claude/arthur_config.json",
+      "mkdir -p $HOME/.claude && mv /tmp/arthur_config.json $HOME/.claude/arthur_config.json && chmod 600 $HOME/.claude/arthur_config.json && ls -l $HOME/.claude/arthur_config.json",
     ]);
 
     console.log("=== Dry-run the tracer directly with a synthetic UserPromptSubmit payload ===\n");

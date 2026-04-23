@@ -47,18 +47,29 @@ async function clearAll() {
   }
 }
 
-const [arg] = process.argv.slice(2);
+const args = process.argv.slice(2);
 (async () => {
-  if (!arg) {
+  if (args.length === 0) {
     console.log(`env=${ENV_PREFIX} — dumping current state (no writes)`);
     await dump();
     return;
   }
-  if (arg === "--all") {
+  if (args[0] === "--all") {
+    if (args.length !== 2 || args[1] !== "--yes") {
+      console.error(
+        `env=${ENV_PREFIX} — refusing to clear ALL run-registry keys without confirmation.\n` +
+          `  re-run with: pnpm exec tsx scripts/clear-run-registry.ts --all --yes`,
+      );
+      process.exit(1);
+    }
     console.log(`env=${ENV_PREFIX} — clearing ALL run-registry keys`);
     await clearAll();
     return;
   }
-  console.log(`env=${ENV_PREFIX} — clearing ticket ${arg}`);
-  await clearTicket(arg);
+  if (args.length !== 1) {
+    console.error(`env=${ENV_PREFIX} — unexpected extra args: ${args.slice(1).join(" ")}`);
+    process.exit(1);
+  }
+  console.log(`env=${ENV_PREFIX} — clearing ticket ${args[0]}`);
+  await clearTicket(args[0]);
 })().catch((e) => { console.error(e); process.exit(1); });
