@@ -32,10 +32,11 @@ const schema = z.object({
   /**
    * Persistent Vercel Sandbox credentials used by the e2e runner itself
    * (see e2e/helpers/sandbox.ts and us02-attachments). When all three are
-   * set the @vercel/sandbox SDK skips OIDC, removing the need to re-paste
-   * a rotating VERCEL_OIDC_TOKEN from `vercel env pull`. The SDK reads
-   * them from process.env directly; declaring them here just documents
-   * support and surfaces them on the typed e2eEnv object.
+   * set, getSandboxCredentials() (src/sandbox/credentials.ts) returns them
+   * and e2e Sandbox.create/list/get calls pass them explicitly, skipping
+   * OIDC — no need to re-paste a rotating VERCEL_OIDC_TOKEN from
+   * `vercel env pull`. The SDK itself does NOT auto-read these from
+   * process.env; callers must spread them into each Sandbox.* call.
    */
   VERCEL_TOKEN: z.string().min(1).optional(),
   VERCEL_TEAM_ID: z.string().min(1).optional(),
