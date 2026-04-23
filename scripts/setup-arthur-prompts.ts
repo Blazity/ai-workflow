@@ -24,6 +24,7 @@ if (!apiKey || !endpoint) {
   process.exit(1);
 }
 
+const modelName = process.env.CLAUDE_MODEL ?? "claude-opus-4-6";
 const client = ArthurClient.fromTraceEndpoint(endpoint, apiKey);
 
 async function main() {
@@ -38,7 +39,7 @@ async function main() {
   for (const name of PROMPT_NAMES) {
     const body = PROMPT_FALLBACKS[name];
     console.log(`\n  seeding ${name}…`);
-    const created = await client.createPromptVersion(task.id, name, body);
+    const created = await client.createPromptVersion(task.id, name, body, { modelName });
     const version = created.version;
     if (version === undefined) {
       console.error(`  no version returned; cannot tag. full response:`, created);

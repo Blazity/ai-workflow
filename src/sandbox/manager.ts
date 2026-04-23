@@ -81,7 +81,6 @@ async function writeClaudeSettings(
     arthur?: "install";
   },
 ): Promise<void> {
-  const directive = JSON.stringify(opts);
   const script = `
     import fs from 'node:fs';
     import path from 'node:path';
@@ -127,7 +126,6 @@ async function writeClaudeSettings(
 
     fs.writeFileSync(settingsPath, JSON.stringify(s, null, 2));
   `;
-  void directive;
   await sandbox.runCommand("node", ["--input-type=module", "-e", script]);
 }
 
@@ -310,27 +308,48 @@ export class SandboxManager {
       return;
     }
 
-    const tracerBytes = Buffer.from(ARTHUR_TRACER_PY_BASE64, "base64");
-    await sandbox.writeFiles([
-      { path: "/tmp/arthur-tracer.py", content: tracerBytes },
-    ]);
-    await sandbox.runCommand("bash", [
-      "-c",
-      "mkdir -p $HOME/.claude/hooks && mv /tmp/arthur-tracer.py $HOME/.claude/hooks/claude_code_tracer.py && chmod +x $HOME/.claude/hooks/claude_code_tracer.py",
-    ]);
+    // Tracer + config must all land successfully before we register hooks.
+    // A partial install (e.g. mv fails after pip succeeds) would leave hooks
+    // pointing at a missing tracer file and break every Claude Code turn.
+    try {
+      const tracerBytes = Buffer.from(ARTHUR_TRACER_PY_BASE64, "base64");
+      await sandbox.writeFiles([
+        { path: "/tmp/arthur-tracer.py", content: tracerBytes },
+      ]);
+      const mvTracer = await sandbox.runCommand("bash", [
+        "-c",
+        "mkdir -p $HOME/.claude/hooks && mv /tmp/arthur-tracer.py $HOME/.claude/hooks/claude_code_tracer.py && chmod +x $HOME/.claude/hooks/claude_code_tracer.py",
+      ]);
+      if (mvTracer.exitCode !== 0) {
+        const err = (await mvTracer.stderr()).trim();
+        logger.warn({ err: err.slice(0, 500) }, "arthur_tracer_install_failed");
+        return;
+      }
 
-    const configJson = JSON.stringify(
-      { api_key: arthur.apiKey, task_id: arthur.taskId, endpoint: arthur.endpoint },
-      null,
-      2,
-    );
-    await sandbox.writeFiles([
-      { path: "/tmp/arthur_config.json", content: Buffer.from(configJson) },
-    ]);
-    await sandbox.runCommand("bash", [
-      "-c",
-      "mkdir -p $HOME/.claude && mv /tmp/arthur_config.json $HOME/.claude/arthur_config.json && chmod 600 $HOME/.claude/arthur_config.json",
-    ]);
+      const configJson = JSON.stringify(
+        { api_key: arthur.apiKey, task_id: arthur.taskId, endpoint: arthur.endpoint },
+        null,
+        2,
+      );
+      await sandbox.writeFiles([
+        { path: "/tmp/arthur_config.json", content: Buffer.from(configJson) },
+      ]);
+      const mvConfig = await sandbox.runCommand("bash", [
+        "-c",
+        "mkdir -p $HOME/.claude && mv /tmp/arthur_config.json $HOME/.claude/arthur_config.json && chmod 600 $HOME/.claude/arthur_config.json",
+      ]);
+      if (mvConfig.exitCode !== 0) {
+        const err = (await mvConfig.stderr()).trim();
+        logger.warn({ err: err.slice(0, 500) }, "arthur_config_install_failed");
+        return;
+      }
+    } catch (err) {
+      logger.warn(
+        { err: err instanceof Error ? err.message : String(err) },
+        "arthur_tracer_install_failed",
+      );
+      return;
+    }
 
     await writeClaudeSettings(sandbox, { arthur: "install" });
     logger.info({}, "arthur_install_complete");

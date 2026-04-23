@@ -98,7 +98,12 @@ export class ArthurClient {
     return tasks.find((t) => t.name === name && !t.is_archived) ?? null;
   }
 
-  /** Create a task without the agent-metadata/is_agentic defaults used by ensureTaskForTicket. */
+  /**
+   * Create a task for non-ticket purposes (e.g. the shared prompt-host task).
+   * Body is identical to `createTask` today — kept as a separate method so
+   * callers signal intent and so the two paths can diverge later without
+   * touching each other's call sites.
+   */
   async createPlainTask(name: string): Promise<ArthurTask> {
     return this.request<ArthurTask>("/api/v2/tasks", {
       method: "POST",
@@ -127,15 +132,20 @@ export class ArthurClient {
   }
 
   /** Create a new version of a named prompt on a task. Content is sent as a single user message. */
-  async createPromptVersion(taskId: string, name: string, content: string): Promise<AgenticPrompt> {
+  async createPromptVersion(
+    taskId: string,
+    name: string,
+    content: string,
+    opts: { modelName?: string; modelProvider?: string } = {},
+  ): Promise<AgenticPrompt> {
     return this.request<AgenticPrompt>(
       `/api/v1/tasks/${encodeURIComponent(taskId)}/prompts/${encodeURIComponent(name)}`,
       {
         method: "POST",
         body: JSON.stringify({
           messages: [{ role: "user", content }],
-          model_name: "claude-sonnet-4",
-          model_provider: "anthropic",
+          model_name: opts.modelName ?? "claude-opus-4-6",
+          model_provider: opts.modelProvider ?? "anthropic",
         }),
       },
     );
