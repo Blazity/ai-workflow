@@ -111,7 +111,7 @@ describe("SandboxManager", () => {
     expect(content).not.toContain("ANTHROPIC_API_KEY");
   });
 
-  it("configures stop hook when enabled", async () => {
+  it("enabling the stop hook runs a node merge script that adds commit-guard", async () => {
     const manager = new SandboxManager({
       kind: "github",
       token: "ghp_test",
@@ -123,51 +123,177 @@ describe("SandboxManager", () => {
       commitEmail: "bot@blazity.com",
       jobTimeoutMs: 1_800_000,
     });
-
-    const sandbox = await manager.provision("feat/test-branch");
-    await manager.configureStopHook(sandbox, true);
-
-    // Should have called runCommand with the commit-guard script
-    const calls = mockRunCommand.mock.calls.map((c: any[]) => c[0] === "bash" ? c[1]?.[1] ?? c[1]?.[0] : "");
-    const hookCall = calls.find((c: string) => typeof c === "string" && c.includes("commit-guard"));
-    expect(hookCall).toBeDefined();
-  });
-
-  it("clears stop hook when disabled", async () => {
-    const manager = new SandboxManager({
-      kind: "github",
-      token: "ghp_test",
-      repoPath: "test-org/test-repo",
-      host: "https://github.com",
-      anthropicApiKey: "sk-ant-test",
-      claudeModel: "claude-opus-4-6",
-      commitAuthor: "ai-workflow-blazity",
-      commitEmail: "bot@blazity.com",
-      jobTimeoutMs: 1_800_000,
-    });
-
     const sandbox = await manager.provision("feat/test-branch");
     mockRunCommand.mockClear();
+
+    await manager.configureStopHook(sandbox, true);
+
+    const mergeCall = mockRunCommand.mock.calls.find(
+      (c: any[]) =>
+        c[0] === "node" &&
+        Array.isArray(c[1]) &&
+        c[1][0] === "--input-type=module" &&
+        c[1][1] === "-e" &&
+        typeof c[1][2] === "string" &&
+        c[1][2].includes("commit-guard.sh") &&
+        c[1][2].includes('"commitGuard":"enable"'),
+    );
+    expect(mergeCall).toBeDefined();
+  });
+
+  it("disabling the stop hook runs a node merge script with commitGuard=disable", async () => {
+    const manager = new SandboxManager({
+      kind: "github",
+      token: "ghp_test",
+      repoPath: "test-org/test-repo",
+      host: "https://github.com",
+      anthropicApiKey: "sk-ant-test",
+      claudeModel: "claude-opus-4-6",
+      commitAuthor: "ai-workflow-blazity",
+      commitEmail: "bot@blazity.com",
+      jobTimeoutMs: 1_800_000,
+    });
+    const sandbox = await manager.provision("feat/test-branch");
+    mockRunCommand.mockClear();
+
     await manager.configureStopHook(sandbox, false);
 
-    // Should write empty settings
-    const calls = mockRunCommand.mock.calls;
-    const clearCall = calls.find((c: any[]) =>
-      c[0] === "bash" && typeof c[1]?.[1] === "string" && c[1][1].includes("'{}' > ~/.claude/settings.json"),
+    const mergeCall = mockRunCommand.mock.calls.find(
+      (c: any[]) =>
+        c[0] === "node" &&
+        Array.isArray(c[1]) &&
+        c[1][0] === "--input-type=module" &&
+        c[1][1] === "-e" &&
+        typeof c[1][2] === "string" &&
+        c[1][2].includes('"commitGuard":"disable"'),
     );
-    expect(clearCall).toBeDefined();
+    expect(mergeCall).toBeDefined();
   });
 
   it("configureStopHookInSandbox works with any sandbox-like object", async () => {
     const fakeSandbox = { runCommand: mockRunCommand };
-
     mockRunCommand.mockClear();
+
     await configureStopHookInSandbox(fakeSandbox as any, true);
 
-    const hookCall = mockRunCommand.mock.calls.find(
-      (c: any[]) => c[0] === "bash" && typeof c[1]?.[1] === "string" && c[1][1].includes("commit-guard"),
+    const mergeCall = mockRunCommand.mock.calls.find(
+      (c: any[]) =>
+        c[0] === "node" &&
+        Array.isArray(c[1]) &&
+        c[1][0] === "--input-type=module" &&
+        c[1][1] === "-e" &&
+        typeof c[1][2] === "string" &&
+        c[1][2].includes('"commitGuard":"enable"'),
     );
-    expect(hookCall).toBeDefined();
+    expect(mergeCall).toBeDefined();
+  });
+
+  it("installs Arthur tracer when config.arthur is set", async () => {
+    const manager = new SandboxManager({
+      kind: "github",
+      token: "ghp_test",
+      repoPath: "test-org/test-repo",
+      host: "https://github.com",
+      anthropicApiKey: "sk-ant-test",
+      claudeModel: "claude-opus-4-6",
+      commitAuthor: "ai-workflow-blazity",
+      commitEmail: "bot@blazity.com",
+      jobTimeoutMs: 1_800_000,
+      arthur: {
+        apiKey: "test-key",
+        taskId: "00000000-0000-4000-8000-000000000000",
+        endpoint: "https://example.ngrok.app/api/v1/traces",
+      },
+    });
+
+    await manager.provision("feat/test-branch");
+
+    const pipCall = mockRunCommand.mock.calls.find(
+      (c: any[]) =>
+        c[0] === "bash" &&
+        typeof c[1]?.[1] === "string" &&
+        c[1][1].includes("ensurepip") &&
+        c[1][1].includes("python3 -m pip install") &&
+        c[1][1].includes("opentelemetry-sdk") &&
+        c[1][1].includes("opentelemetry-exporter-otlp-proto-http"),
+    );
+    expect(pipCall).toBeDefined();
+
+    const arthurMergeCall = mockRunCommand.mock.calls.find(
+      (c: any[]) =>
+        c[0] === "node" &&
+        Array.isArray(c[1]) &&
+        c[1][0] === "--input-type=module" &&
+        c[1][1] === "-e" &&
+        typeof c[1][2] === "string" &&
+        c[1][2].includes('"arthur":"install"') &&
+        c[1][2].includes("user_prompt_submit") &&
+        c[1][2].includes("pre_tool") &&
+        c[1][2].includes("post_tool") &&
+        c[1][2].includes("post_tool_failure"),
+    );
+    expect(arthurMergeCall).toBeDefined();
+  });
+
+  it("skips Arthur install when config.arthur is undefined", async () => {
+    const manager = new SandboxManager({
+      kind: "github",
+      token: "ghp_test",
+      repoPath: "test-org/test-repo",
+      host: "https://github.com",
+      anthropicApiKey: "sk-ant-test",
+      claudeModel: "claude-opus-4-6",
+      commitAuthor: "ai-workflow-blazity",
+      commitEmail: "bot@blazity.com",
+      jobTimeoutMs: 1_800_000,
+    });
+
+    await manager.provision("feat/test-branch");
+
+    const pipCall = mockRunCommand.mock.calls.find(
+      (c: any[]) =>
+        c[0] === "bash" &&
+        typeof c[1]?.[1] === "string" &&
+        c[1][1].includes("python3 -m pip install"),
+    );
+    expect(pipCall).toBeUndefined();
+  });
+
+  it("Arthur install writes arthur_config.json and the tracer script", async () => {
+    const manager = new SandboxManager({
+      kind: "github",
+      token: "ghp_test",
+      repoPath: "test-org/test-repo",
+      host: "https://github.com",
+      anthropicApiKey: "sk-ant-test",
+      claudeModel: "claude-opus-4-6",
+      commitAuthor: "ai-workflow-blazity",
+      commitEmail: "bot@blazity.com",
+      jobTimeoutMs: 1_800_000,
+      arthur: {
+        apiKey: "test-key",
+        taskId: "00000000-0000-4000-8000-000000000000",
+        endpoint: "https://example.ngrok.app/api/v1/traces",
+      },
+    });
+
+    await manager.provision("feat/test-branch");
+
+    // Every writeFiles call passes an array of { path, content }. Flatten them.
+    const written = mockWriteFiles.mock.calls.flatMap(([files]: any[]) => files);
+    const tracerFile = written.find((f: any) => f.path.endsWith("arthur-tracer.py"));
+    expect(tracerFile).toBeDefined();
+    expect(Buffer.isBuffer(tracerFile.content)).toBe(true);
+    expect(tracerFile.content.length).toBeGreaterThan(1000);
+
+    const configFile = written.find((f: any) => f.path.endsWith("arthur_config.json"));
+    expect(configFile).toBeDefined();
+    const cfg = JSON.parse(Buffer.from(configFile.content).toString());
+    expect(cfg).toEqual({
+      api_key: "test-key",
+      task_id: "00000000-0000-4000-8000-000000000000",
+      endpoint: "https://example.ngrok.app/api/v1/traces",
+    });
   });
 
 });

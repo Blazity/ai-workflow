@@ -50,6 +50,11 @@ jobs:
           node-version: "20.12"
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - name: Verify Vercel Sandbox credentials present
+        run: |
+          : "${VERCEL_TOKEN:?VERCEL_TOKEN missing in e2e environment}"
+          : "${VERCEL_TEAM_ID:?VERCEL_TEAM_ID missing in e2e environment}"
+          : "${VERCEL_PROJECT_ID:?VERCEL_PROJECT_ID missing in e2e environment}"
       - run: pnpm run test:e2e:orchestration
       - if: failure()
         uses: actions/upload-artifact@v4
@@ -99,6 +104,11 @@ jobs:
           node-version: "20.12"
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - name: Verify Vercel Sandbox credentials present
+        run: |
+          : "${VERCEL_TOKEN:?VERCEL_TOKEN missing in e2e environment}"
+          : "${VERCEL_TEAM_ID:?VERCEL_TEAM_ID missing in e2e environment}"
+          : "${VERCEL_PROJECT_ID:?VERCEL_PROJECT_ID missing in e2e environment}"
       - run: pnpm run test:e2e:capacity
       - if: failure()
         uses: actions/upload-artifact@v4
@@ -148,6 +158,11 @@ jobs:
           node-version: "20.12"
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - name: Verify Vercel Sandbox credentials present
+        run: |
+          : "${VERCEL_TOKEN:?VERCEL_TOKEN missing in e2e environment}"
+          : "${VERCEL_TEAM_ID:?VERCEL_TEAM_ID missing in e2e environment}"
+          : "${VERCEL_PROJECT_ID:?VERCEL_PROJECT_ID missing in e2e environment}"
       - run: pnpm run test:e2e:agent
       - if: failure()
         uses: actions/upload-artifact@v4

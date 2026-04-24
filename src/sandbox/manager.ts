@@ -1,5 +1,6 @@
 import type { Sandbox as SandboxType } from "@vercel/sandbox";
 import { getSandboxCredentials } from "./credentials.js";
+import { ARTHUR_TRACER_PY_BASE64 } from "./arthur-tracer.js";
 
 /**
  * Skills installed globally in the sandbox (~/.claude/skills/).
@@ -10,6 +11,12 @@ const GLOBAL_SKILLS = [
   { repo: "https://github.com/obra/superpowers", skill: "requesting-code-review" },
   { repo: "https://github.com/anthropics/skills", skill: "frontend-design" },
 ] as const;
+
+export interface ArthurConfig {
+  apiKey: string;
+  taskId: string;
+  endpoint: string;
+}
 
 export interface SandboxConfig {
   kind: "github" | "gitlab";
@@ -24,6 +31,8 @@ export interface SandboxConfig {
   commitAuthor: string;
   commitEmail: string;
   jobTimeoutMs: number;
+  /** Arthur AI Engine tracing config. If set, the tracer is installed into every provisioned sandbox. */
+  arthur?: ArthurConfig;
 }
 
 /** Build clone/push URLs for the configured VCS. Supports github.com and any GitLab host (incl. self-hosted). */
@@ -57,38 +66,95 @@ interface RunnableSandbox {
 }
 
 /**
+ * Merge-aware writer for ~/.claude/settings.json inside a sandbox.
+ *
+ * Accepts a partial "directive" — only the keys provided are mutated; existing
+ * hook entries (including those owned by other tools, e.g. Arthur's tracer)
+ * are preserved. The merge itself runs inside the sandbox via `node -e`
+ * because Node 24 is the sandbox runtime and we can't assume Python is
+ * available for stop-hook toggling.
+ */
+async function writeClaudeSettings(
+  sandbox: RunnableSandbox,
+  opts: {
+    commitGuard?: "enable" | "disable";
+    arthur?: "install";
+  },
+): Promise<void> {
+  const script = `
+    import fs from 'node:fs';
+    import path from 'node:path';
+    const opts = ${JSON.stringify(opts)};
+    const home = process.env.HOME;
+    const settingsPath = path.join(home, '.claude', 'settings.json');
+    fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
+    let s = {};
+    try { s = JSON.parse(fs.readFileSync(settingsPath, 'utf8')); } catch {}
+    s.hooks = s.hooks || {};
+
+    const upsertHook = (event, matcher, command) => {
+      const existing = s.hooks[event] || [];
+      const has = existing.some(e => (e && Array.isArray(e.hooks) ? e.hooks : []).some(h => h && h.command === command));
+      if (!has) existing.push({ matcher, hooks: [{ type: 'command', command }] });
+      s.hooks[event] = existing;
+    };
+    const removeHook = (event, commandPredicate) => {
+      const existing = s.hooks[event] || [];
+      s.hooks[event] = existing
+        .map(e => ({ ...e, hooks: (e.hooks || []).filter(h => !commandPredicate(h.command || '')) }))
+        .filter(e => (e.hooks || []).length > 0);
+    };
+
+    if (opts.commitGuard === 'enable') {
+      upsertHook('Stop', '', 'bash ~/.claude/commit-guard.sh');
+    } else if (opts.commitGuard === 'disable') {
+      removeHook('Stop', c => c.includes('commit-guard.sh'));
+    }
+
+    if (opts.arthur === 'install') {
+      const events = [
+        ['UserPromptSubmit', 'user_prompt_submit'],
+        ['PreToolUse', 'pre_tool'],
+        ['PostToolUse', 'post_tool'],
+        ['PostToolUseFailure', 'post_tool_failure'],
+        ['Stop', 'stop'],
+      ];
+      for (const [event, arg] of events) {
+        upsertHook(event, '', 'python3 "$HOME/.claude/hooks/claude_code_tracer.py" ' + arg);
+      }
+    }
+
+    fs.writeFileSync(settingsPath, JSON.stringify(s, null, 2));
+  `;
+  await sandbox.runCommand("node", ["--input-type=module", "-e", script]);
+}
+
+/**
  * Configures or disables the commit-guard stop hook in a sandbox.
  * Standalone function so both SandboxManager and workflow steps can call it
  * without type mismatches between Sandbox.create() and Sandbox.get().
  */
 export async function configureStopHookInSandbox(sandbox: RunnableSandbox, enabled: boolean): Promise<void> {
-  if (enabled) {
-    await sandbox.runCommand("bash", [
-      "-c",
-      [
-        `mkdir -p ~/.claude`,
-        `cat > ~/.claude/commit-guard.sh << 'SCRIPT'`,
-        `#!/bin/bash`,
-        `input=$(cat)`,
-        `if echo "$input" | grep -q '"stop_hook_active":true'; then exit 0; fi`,
-        `changes=$(git status --porcelain | grep -v '^.. \\.claude/' | grep -v '^?? \\.claude/')`,
-        `if [ -n "$changes" ]; then`,
-        `  echo '{"decision":"block","reason":"You have uncommitted changes. You MUST either commit all changes with a descriptive message or revert them before stopping."}' >&2`,
-        `  exit 2`,
-        `fi`,
-        `SCRIPT`,
-        `chmod +x ~/.claude/commit-guard.sh`,
-        `cat > ~/.claude/settings.json << 'JSON'`,
-        `{"hooks":{"Stop":[{"matcher":"","hooks":[{"type":"command","command":"bash ~/.claude/commit-guard.sh"}]}]}}`,
-        `JSON`,
-      ].join("\n"),
-    ]);
-  } else {
-    await sandbox.runCommand("bash", [
-      "-c",
-      `mkdir -p ~/.claude && echo '{}' > ~/.claude/settings.json`,
-    ]);
-  }
+  // Ensure the commit-guard script exists before toggling the hook (idempotent).
+  await sandbox.runCommand("bash", [
+    "-c",
+    [
+      `mkdir -p ~/.claude`,
+      `cat > ~/.claude/commit-guard.sh << 'SCRIPT'`,
+      `#!/bin/bash`,
+      `input=$(cat)`,
+      `if echo "$input" | grep -q '"stop_hook_active":true'; then exit 0; fi`,
+      `changes=$(git status --porcelain | grep -v '^.. \\.claude/' | grep -v '^?? \\.claude/')`,
+      `if [ -n "$changes" ]; then`,
+      `  echo '{"decision":"block","reason":"You have uncommitted changes. You MUST either commit all changes with a descriptive message or revert them before stopping."}' >&2`,
+      `  exit 2`,
+      `fi`,
+      `SCRIPT`,
+      `chmod +x ~/.claude/commit-guard.sh`,
+    ].join("\n"),
+  ]);
+
+  await writeClaudeSettings(sandbox, { commitGuard: enabled ? "enable" : "disable" });
 }
 
 export class SandboxManager {
@@ -205,7 +271,88 @@ export class SandboxManager {
     // Install skills globally (outside the client repo)
     await this.installGlobalSkills(sandbox);
 
+    await this.installArthurTracer(sandbox);
+
     return sandbox;
+  }
+
+  /**
+   * Install the Arthur AI Engine Claude Code tracer into the sandbox.
+   *
+   * No-op if the three credentials are not all configured on the SandboxManager.
+   * The tracer hooks into every Claude Code turn and exports OpenInference spans
+   * via OTLP/HTTP to the configured endpoint.
+   *
+   * If pip install fails (e.g. missing python3, offline), we log and return
+   * without registering hooks — failing hooks would block Claude Code turns.
+   */
+  private async installArthurTracer(sandbox: SandboxInstance): Promise<void> {
+    const { logger } = await import("../lib/logger.js");
+    const arthur = this.config.arthur;
+    if (!arthur) {
+      logger.info({}, "arthur_install_skipped_no_config");
+      return;
+    }
+
+    logger.info({ endpoint: arthur.endpoint, taskId: arthur.taskId }, "arthur_install_started");
+
+    // The Vercel node24 sandbox ships python3 but no pip. Bootstrap it via
+    // ensurepip (idempotent), then install the two OpenTelemetry packages.
+    const pip = await sandbox.runCommand("bash", [
+      "-c",
+      "python3 -m ensurepip --user && python3 -m pip install --user --quiet 'opentelemetry-sdk>=1.20.0' 'opentelemetry-exporter-otlp-proto-http>=1.20.0'",
+    ]);
+    if (pip.exitCode !== 0) {
+      const err = (await pip.stderr()).trim();
+      logger.warn({ err: err.slice(0, 500) }, "arthur_pip_install_failed");
+      return;
+    }
+
+    // Tracer + config must all land successfully before we register hooks.
+    // A partial install (e.g. mv fails after pip succeeds) would leave hooks
+    // pointing at a missing tracer file and break every Claude Code turn.
+    try {
+      const tracerBytes = Buffer.from(ARTHUR_TRACER_PY_BASE64, "base64");
+      await sandbox.writeFiles([
+        { path: "/tmp/arthur-tracer.py", content: tracerBytes },
+      ]);
+      const mvTracer = await sandbox.runCommand("bash", [
+        "-c",
+        "mkdir -p $HOME/.claude/hooks && mv /tmp/arthur-tracer.py $HOME/.claude/hooks/claude_code_tracer.py && chmod +x $HOME/.claude/hooks/claude_code_tracer.py",
+      ]);
+      if (mvTracer.exitCode !== 0) {
+        const err = (await mvTracer.stderr()).trim();
+        logger.warn({ err: err.slice(0, 500) }, "arthur_tracer_install_failed");
+        return;
+      }
+
+      const configJson = JSON.stringify(
+        { api_key: arthur.apiKey, task_id: arthur.taskId, endpoint: arthur.endpoint },
+        null,
+        2,
+      );
+      await sandbox.writeFiles([
+        { path: "/tmp/arthur_config.json", content: Buffer.from(configJson) },
+      ]);
+      const mvConfig = await sandbox.runCommand("bash", [
+        "-c",
+        "mkdir -p $HOME/.claude && mv /tmp/arthur_config.json $HOME/.claude/arthur_config.json && chmod 600 $HOME/.claude/arthur_config.json",
+      ]);
+      if (mvConfig.exitCode !== 0) {
+        const err = (await mvConfig.stderr()).trim();
+        logger.warn({ err: err.slice(0, 500) }, "arthur_config_install_failed");
+        return;
+      }
+    } catch (err) {
+      logger.warn(
+        { err: err instanceof Error ? err.message : String(err) },
+        "arthur_tracer_install_failed",
+      );
+      return;
+    }
+
+    await writeClaudeSettings(sandbox, { arthur: "install" });
+    logger.info({}, "arthur_install_complete");
   }
 
   /**

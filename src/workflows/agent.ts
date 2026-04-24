@@ -134,8 +134,33 @@ async function fetchPRContext(branchName: string): Promise<{
   return { prComments, hasConflicts, checkResults };
 }
 
+async function ensureArthurTaskForTicket(
+  ticketIdentifier: string,
+): Promise<string | null> {
+  "use step";
+  const { env } = await import("../../env.js");
+  if (!env.GENAI_ENGINE_API_KEY || !env.GENAI_ENGINE_TRACE_ENDPOINT) return null;
+
+  const { logger } = await import("../lib/logger.js");
+  const { ArthurClient } = await import("../sandbox/arthur-client.js");
+  const client = ArthurClient.fromTraceEndpoint(env.GENAI_ENGINE_TRACE_ENDPOINT, env.GENAI_ENGINE_API_KEY);
+  try {
+    const task = await client.ensureTaskForTicket(ticketIdentifier);
+    logger.info({ taskId: task.id, taskName: task.name, ticketIdentifier }, "arthur_task_created");
+    return task.id;
+  } catch (err) {
+    logger.warn(
+      { err: (err as Error).message, ticketIdentifier },
+      "arthur_task_create_failed",
+    );
+    return null;
+  }
+}
+ensureArthurTaskForTicket.maxRetries = 0;
+
 async function provisionSandbox(
   branchName: string,
+  arthurTaskId: string | null,
   mergeBase?: string,
 ): Promise<string> {
   "use step";
@@ -156,6 +181,15 @@ async function provisionSandbox(
     );
   }
 
+  const arthur =
+    env.GENAI_ENGINE_API_KEY && env.GENAI_ENGINE_TRACE_ENDPOINT && arthurTaskId
+      ? {
+          apiKey: env.GENAI_ENGINE_API_KEY,
+          taskId: arthurTaskId,
+          endpoint: env.GENAI_ENGINE_TRACE_ENDPOINT,
+        }
+      : undefined;
+
   const manager = new SandboxManager({
     kind: vcs.kind,
     token: vcs.token,
@@ -167,6 +201,7 @@ async function provisionSandbox(
     commitAuthor: env.COMMIT_AUTHOR,
     commitEmail: env.COMMIT_EMAIL,
     jobTimeoutMs: env.JOB_TIMEOUT_MS,
+    arthur,
   });
 
   const sandbox = await manager.provision(branchName, mergeBase);
@@ -318,7 +353,6 @@ export async function agentWorkflow(ticketId: string) {
   "use workflow";
 
   const { env, getVcsConfig } = await import("../../env.js");
-  const { getPrompt } = await import("../lib/prompts.js");
   const { buildPhaseScript } = await import("../sandbox/wrapper-script.js");
   const { parseResearchStatus, parseAgentOutput, parseReviewOutput, REVIEW_SCHEMA, AGENT_SCHEMA } =
     await import("../sandbox/agent-runner.js");
@@ -331,6 +365,9 @@ export async function agentWorkflow(ticketId: string) {
 
   const ticket = await fetchAndValidateTicket(ticketId, env.COLUMN_AI);
   if (!ticket) return;
+
+  const { loadPrompts } = await import("./prompts-step.js");
+  const prompts = await loadPrompts();
 
   const phaseUsages: Record<string, PhaseUsage | null> = {};
   const usageSuffix = () =>
@@ -360,8 +397,11 @@ export async function agentWorkflow(ticketId: string) {
 
     const downloadedAttachments = await fetchAttachments(ticket.identifier, ticket.attachments);
 
+    // One Arthur task per run: first run = ticket identifier, re-runs = identifier.N
+    const arthurTaskId = await ensureArthurTaskForTicket(ticket.identifier);
+
     // Provision sandbox once for all phases
-    const sandboxId = await provisionSandbox(branchName, mergeBase);
+    const sandboxId = await provisionSandbox(branchName, arthurTaskId, mergeBase);
     // Pin the sandboxId to this ticket so cleanup paths (reconcile,
     // cancelRun, webhook-cancel) can stop it by id instead of doing a
     // branch scan across every running sandbox.
@@ -383,7 +423,7 @@ export async function agentWorkflow(ticketId: string) {
 
       const researchInput = assembleResearchPlanContext({
         ticket: ticketData,
-        prompt: getPrompt("research-plan.md"),
+        prompt: prompts.research,
         branchName,
         prComments: prContext?.prComments,
         checkResults: prContext?.checkResults,
@@ -445,7 +485,7 @@ export async function agentWorkflow(ticketId: string) {
 
       const implInput = assembleImplementationContext({
         ticket: ticketData,
-        prompt: getPrompt("implement.md"),
+        prompt: prompts.implement,
         researchPlanMarkdown,
         attachments: downloadedAttachments,
       });
@@ -503,7 +543,7 @@ export async function agentWorkflow(ticketId: string) {
       //
       // const reviewInput = assembleReviewContext({
       //   ticket: ticketData,
-      //   prompt: getPrompt("review.md"),
+      //   prompt: prompts.review,
       //   researchPlanMarkdown,
       //   gitDiff,
       //   attachments: downloadedAttachments,

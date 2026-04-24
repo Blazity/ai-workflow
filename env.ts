@@ -46,6 +46,12 @@ export const env = createEnv({
     COMMIT_AUTHOR: z.string().default("ai-workflow-blazity"),
     COMMIT_EMAIL: z.string().default("ai-workflow@blazity.com"),
 
+    // Arthur AI Engine (optional — both required together). One task per run
+    // is auto-created, so there is no static GENAI_ENGINE_TASK_ID.
+    GENAI_ENGINE_API_KEY: z.string().min(1).optional(),
+    GENAI_ENGINE_TRACE_ENDPOINT: z.string().url().optional(),
+    GENAI_ENGINE_PROMPT_TASK_ID: z.string().uuid().optional(),
+
     // Sandbox
     MAX_CONCURRENT_AGENTS: z.coerce.number().int().positive().default(3),
     JOB_TIMEOUT_MS: z.coerce.number().int().positive().default(1_800_000),
