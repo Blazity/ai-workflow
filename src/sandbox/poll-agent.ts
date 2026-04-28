@@ -156,6 +156,33 @@ export async function collectPhaseOutput(
 }
 
 /**
+ * Collect raw + (optional) structured phase output. Replaces collectPhaseOutput
+ * in adapter-aware code paths.
+ */
+export async function collectPhase(
+  sandboxId: string,
+  paths: { stdout: string; stderr: string; structuredOutput: string | null },
+): Promise<{ raw: string; structured: string | null }> {
+  "use step";
+  const { Sandbox } = await import("@vercel/sandbox");
+  const sandbox = await Sandbox.get({ sandboxId, ...getSandboxCredentials() });
+
+  const stdoutResult = await sandbox.runCommand("cat", [paths.stdout]);
+  const stdoutText = (await stdoutResult.stdout()).trim();
+  const stderrResult = await sandbox.runCommand("cat", [paths.stderr]);
+  const stderrText = (await stderrResult.stdout()).trim();
+  const raw = stdoutText || stderrText;
+
+  let structured: string | null = null;
+  if (paths.structuredOutput) {
+    const r = await sandbox.runCommand("cat", [paths.structuredOutput]);
+    const text = (await r.stdout()).trim();
+    structured = text || null;
+  }
+  return { raw, structured };
+}
+
+/**
  * Reconnects to a sandbox and stops it.
  */
 export async function teardownSandbox(sandboxId: string): Promise<void> {

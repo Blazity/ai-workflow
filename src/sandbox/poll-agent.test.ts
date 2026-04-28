@@ -67,7 +67,7 @@ vi.mock("../../env.js", () => ({
   getVcsConfig: () => currentVcsConfig,
 }));
 
-import { pushFromSandbox, fixAndRetryPush, teardownSandbox, checkPhaseDone, collectPhaseOutput } from "./poll-agent.js";
+import { pushFromSandbox, fixAndRetryPush, teardownSandbox, checkPhaseDone, collectPhaseOutput, collectPhase } from "./poll-agent.js";
 
 describe("pushFromSandbox", () => {
   beforeEach(() => {
@@ -355,5 +355,64 @@ describe("collectPhaseOutput", () => {
     );
 
     expect(result).toBe("error details from phase");
+  });
+});
+
+describe("collectPhase", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("returns raw + structured when structuredOutput is set", async () => {
+    mockRunCommand.mockImplementation((_cmd: string, args: string[]) => {
+      const file = args[0];
+      const text =
+        file.includes("stdout") ? "ndjson body" :
+        file.includes("stderr") ? "" :
+        file.includes("result") ? '{"result":"implemented"}' :
+        "";
+      return { exitCode: 0, stdout: vi.fn().mockResolvedValue(text) };
+    });
+
+    const result = await collectPhase("sbx-test-123", {
+      stdout: "/tmp/impl-stdout.txt",
+      stderr: "/tmp/impl-stderr.txt",
+      structuredOutput: "/tmp/impl-result.json",
+    });
+
+    expect(result.raw).toBe("ndjson body");
+    expect(result.structured).toBe('{"result":"implemented"}');
+  });
+
+  it("returns structured=null when paths.structuredOutput is null", async () => {
+    mockRunCommand.mockImplementation((_cmd: string, args: string[]) => {
+      const file = args[0];
+      const text = file.includes("stdout") ? "raw text" : "";
+      return { exitCode: 0, stdout: vi.fn().mockResolvedValue(text) };
+    });
+
+    const r = await collectPhase("sbx-test-123", {
+      stdout: "/tmp/impl-stdout.txt",
+      stderr: "/tmp/impl-stderr.txt",
+      structuredOutput: null,
+    });
+    expect(r.structured).toBeNull();
+    expect(r.raw).toBe("raw text");
+  });
+
+  it("falls back to stderr when stdout is empty", async () => {
+    mockRunCommand.mockImplementation((_cmd: string, args: string[]) => {
+      const file = args[0];
+      const text =
+        file.includes("stdout") ? "" :
+        file.includes("stderr") ? "stderr text" :
+        "";
+      return { exitCode: 0, stdout: vi.fn().mockResolvedValue(text) };
+    });
+
+    const r = await collectPhase("sbx-test-123", {
+      stdout: "/tmp/impl-stdout.txt",
+      stderr: "/tmp/impl-stderr.txt",
+      structuredOutput: null,
+    });
+    expect(r.raw).toBe("stderr text");
   });
 });
