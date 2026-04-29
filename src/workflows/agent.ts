@@ -387,6 +387,12 @@ async function registerTicketSandbox(ticketIdentifier: string, sandboxId: string
   await runRegistry.registerSandbox(ticketIdentifier, sandboxId);
 }
 
+async function resolveAgentKindOverride(labels: readonly string[]): Promise<AgentKind | null> {
+  "use step";
+  const { parseAgentKindOverride } = await import("../sandbox/agents/index.js");
+  return parseAgentKindOverride(labels);
+}
+
 async function markTicketFailed(ticketIdentifier: string, error: string) {
   "use step";
   const { createStepAdapters } = await import("../lib/step-adapters.js");
@@ -477,8 +483,7 @@ export async function agentWorkflow(ticketId: string) {
     // Per-ticket agent override via labels (e.g. `agent:codex`). Falls
     // back to env.AGENT_KIND when the ticket has no override or the labels
     // are ambiguous (multiple distinct kinds).
-    const { parseAgentKindOverride } = await import("../sandbox/agents/index.js");
-    const agentKindOverride = parseAgentKindOverride(ticket.labels);
+    const agentKindOverride = await resolveAgentKindOverride(ticket.labels);
 
     // Provision sandbox once for all phases
     const { sandboxId, agentKind } = await provisionSandbox(branchName, arthurTaskId, agentKindOverride, mergeBase);
