@@ -4,7 +4,6 @@ const mockRunCommand = vi.fn();
 const mockWriteFiles = vi.fn();
 const mockStop = vi.fn();
 const mockStdout = vi.fn();
-const mockReadFileToBuffer = vi.fn();
 
 vi.mock("@vercel/sandbox", () => ({
   Sandbox: {
@@ -12,162 +11,102 @@ vi.mock("@vercel/sandbox", () => ({
       sandboxId: "sbx-test-123",
       runCommand: mockRunCommand,
       writeFiles: mockWriteFiles,
-      readFileToBuffer: mockReadFileToBuffer,
       stop: mockStop,
     })),
   },
 }));
 
-import { SandboxManager, configureStopHookInSandbox } from "./manager.js";
+import { SandboxManager } from "./manager.js";
+import type { AgentAdapter, ConfigureOpts } from "./agents/types.js";
 
-describe("SandboxManager", () => {
+const makeFakeAgent = (): AgentAdapter & { calls: any[] } => {
+  const calls: any[] = [];
+  return {
+    kind: "claude",
+    install: vi.fn(async () => { calls.push({ op: "install" }); }),
+    configure: vi.fn(async (_, opts: ConfigureOpts) => { calls.push({ op: "configure", opts }); }),
+    setCommitGuard: vi.fn(async (_s, enabled) => { calls.push({ op: "guard", enabled }); }),
+    buildPhaseScript: () => "#!/bin/bash\necho noop",
+    artifactPaths: () => ({ wrapper: "", input: "", stdout: "", stderr: "", sentinel: "", structuredOutput: null }),
+    parseAgentOutput: () => ({ result: "implemented" }),
+    parseReviewOutput: () => ({ result: "approved", feedback: "", issues: [] }),
+    parseResearchStatus: () => ({ status: "completed", body: "" }),
+    extractUsage: () => null,
+    calls,
+  } as any;
+};
+
+describe("SandboxManager.provision", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockRunCommand.mockResolvedValue({
-      exitCode: 0,
-      stdout: mockStdout,
-    });
+    mockRunCommand.mockResolvedValue({ exitCode: 0, stdout: mockStdout });
     mockStdout.mockResolvedValue("");
     mockWriteFiles.mockResolvedValue(undefined);
-    mockStop.mockResolvedValue(undefined);
   });
 
-  it("provisions sandbox with git source and env vars", async () => {
+  const baseConfig = {
+    kind: "github" as const,
+    token: "ghp_test",
+    repoPath: "test-org/test-repo",
+    host: "https://github.com",
+    jobTimeoutMs: 1_800_000,
+    commitAuthor: "ai-workflow-blazity",
+    commitEmail: "bot@blazity.com",
+  };
+
+  it("creates the sandbox with a git source pointed at the branch", async () => {
     const { Sandbox } = await import("@vercel/sandbox");
-
-    const manager = new SandboxManager({
-      kind: "github",
-      token: "ghp_test",
-      repoPath: "test-org/test-repo",
-      host: "https://github.com",
-      anthropicApiKey: "sk-ant-test",
-      claudeModel: "claude-opus-4-6",
-      commitAuthor: "ai-workflow-blazity",
-      commitEmail: "bot@blazity.com",
-      jobTimeoutMs: 1_800_000,
-    });
-
-    const sandbox = await manager.provision("feat/test-branch");
-
+    const manager = new SandboxManager(baseConfig);
+    await manager.provision("feat/test-branch", makeFakeAgent(), { model: "any", anthropicApiKey: "k" });
     expect(Sandbox.create).toHaveBeenCalledWith(
       expect.objectContaining({
-        source: expect.objectContaining({
-          type: "git",
-          revision: "feat/test-branch",
-        }),
-        env: expect.objectContaining({
-          ANTHROPIC_API_KEY: "sk-ant-test",
-        }),
+        source: expect.objectContaining({ type: "git", revision: "feat/test-branch" }),
+        runtime: "node24",
       }),
     );
-    expect(sandbox.sandboxId).toBe("sbx-test-123");
   });
 
-  it("writes agent-env.sh with auth credentials during provision", async () => {
-    const manager = new SandboxManager({
-      kind: "github",
-      token: "ghp_test",
-      repoPath: "test-org/test-repo",
-      host: "https://github.com",
-      anthropicApiKey: "sk-ant-test",
-      claudeModel: "claude-opus-4-6",
-      commitAuthor: "ai-workflow-blazity",
-      commitEmail: "bot@blazity.com",
-      jobTimeoutMs: 1_800_000,
-    });
-
-    await manager.provision("feat/test-branch");
-
-    // writeFiles should be called once — to persist auth env vars to /tmp/agent-env.sh
-    expect(mockWriteFiles).toHaveBeenCalledTimes(1);
-    const [[files]] = mockWriteFiles.mock.calls;
-    expect(files).toHaveLength(1);
-    expect(files[0].path).toBe("/tmp/agent-env.sh");
-    const content = Buffer.from(files[0].content).toString();
-    expect(content).toContain("ANTHROPIC_API_KEY");
-    expect(content).toContain("sk-ant-test");
-    expect(content).not.toContain("CLAUDE_MODEL");
-  });
-
-  it("writes CLAUDE_CODE_OAUTH_TOKEN when OAuth token is provided", async () => {
-    const manager = new SandboxManager({
-      kind: "github",
-      token: "ghp_test",
-      repoPath: "test-org/test-repo",
-      host: "https://github.com",
-      claudeCodeOauthToken: "oauth-token-test",
-      claudeModel: "claude-opus-4-6",
-      commitAuthor: "ai-workflow-blazity",
-      commitEmail: "bot@blazity.com",
-      jobTimeoutMs: 1_800_000,
-    });
-
-    await manager.provision("feat/test-branch");
-
-    const [[files]] = mockWriteFiles.mock.calls;
-    const content = Buffer.from(files[0].content).toString();
-    expect(content).toContain("CLAUDE_CODE_OAUTH_TOKEN");
-    expect(content).toContain("oauth-token-test");
-    expect(content).not.toContain("ANTHROPIC_API_KEY");
-  });
-
-  it("configures stop hook when enabled", async () => {
-    const manager = new SandboxManager({
-      kind: "github",
-      token: "ghp_test",
-      repoPath: "test-org/test-repo",
-      host: "https://github.com",
-      anthropicApiKey: "sk-ant-test",
-      claudeModel: "claude-opus-4-6",
-      commitAuthor: "ai-workflow-blazity",
-      commitEmail: "bot@blazity.com",
-      jobTimeoutMs: 1_800_000,
-    });
-
-    const sandbox = await manager.provision("feat/test-branch");
-    await manager.configureStopHook(sandbox, true);
-
-    // Should have called runCommand with the commit-guard script
-    const calls = mockRunCommand.mock.calls.map((c: any[]) => c[0] === "bash" ? c[1]?.[1] ?? c[1]?.[0] : "");
-    const hookCall = calls.find((c: string) => typeof c === "string" && c.includes("commit-guard"));
-    expect(hookCall).toBeDefined();
-  });
-
-  it("clears stop hook when disabled", async () => {
-    const manager = new SandboxManager({
-      kind: "github",
-      token: "ghp_test",
-      repoPath: "test-org/test-repo",
-      host: "https://github.com",
-      anthropicApiKey: "sk-ant-test",
-      claudeModel: "claude-opus-4-6",
-      commitAuthor: "ai-workflow-blazity",
-      commitEmail: "bot@blazity.com",
-      jobTimeoutMs: 1_800_000,
-    });
-
-    const sandbox = await manager.provision("feat/test-branch");
-    mockRunCommand.mockClear();
-    await manager.configureStopHook(sandbox, false);
-
-    // Should write empty settings
-    const calls = mockRunCommand.mock.calls;
-    const clearCall = calls.find((c: any[]) =>
-      c[0] === "bash" && typeof c[1]?.[1] === "string" && c[1][1].includes("'{}' > ~/.claude/settings.json"),
+  it("sets git identity to commitAuthor / commitEmail", async () => {
+    const manager = new SandboxManager(baseConfig);
+    await manager.provision("feat/test-branch", makeFakeAgent(), { model: "any", anthropicApiKey: "k" });
+    const idCall = mockRunCommand.mock.calls.find(
+      ([cmd, args]) => cmd === "bash" && typeof args[1] === "string" && args[1].includes("git config user.name"),
     );
-    expect(clearCall).toBeDefined();
+    expect(idCall).toBeDefined();
+    expect(idCall![1][1]).toContain("ai-workflow-blazity");
+    expect(idCall![1][1]).toContain("bot@blazity.com");
   });
 
-  it("configureStopHookInSandbox works with any sandbox-like object", async () => {
-    const fakeSandbox = { runCommand: mockRunCommand };
-
-    mockRunCommand.mockClear();
-    await configureStopHookInSandbox(fakeSandbox as any, true);
-
-    const hookCall = mockRunCommand.mock.calls.find(
-      (c: any[]) => c[0] === "bash" && typeof c[1]?.[1] === "string" && c[1][1].includes("commit-guard"),
+  it("captures pre-agent HEAD SHA for the push step", async () => {
+    const manager = new SandboxManager(baseConfig);
+    await manager.provision("feat/test-branch", makeFakeAgent(), { model: "any", anthropicApiKey: "k" });
+    const shaCall = mockRunCommand.mock.calls.find(
+      ([cmd, args]) => cmd === "bash" && typeof args[1] === "string" && args[1].includes("/tmp/.pre-agent-sha"),
     );
-    expect(hookCall).toBeDefined();
+    expect(shaCall).toBeDefined();
   });
 
+  it("calls agent.install then agent.configure with the supplied opts", async () => {
+    const agent = makeFakeAgent();
+    const manager = new SandboxManager(baseConfig);
+    await manager.provision("feat/test-branch", agent, {
+      anthropicApiKey: "sk-ant-test",
+      model: "claude-opus-4-6",
+    });
+    const ops = (agent as any).calls.map((c: any) => c.op);
+    expect(ops).toEqual(["install", "configure"]);
+    expect((agent as any).calls[1].opts).toEqual(
+      expect.objectContaining({ anthropicApiKey: "sk-ant-test", model: "claude-opus-4-6" }),
+    );
+  });
+
+  it("fetches and merges mergeBase when supplied", async () => {
+    const manager = new SandboxManager(baseConfig);
+    await manager.provision("feat/test-branch", makeFakeAgent(), { model: "any", anthropicApiKey: "k" }, "main");
+    const fetchCall = mockRunCommand.mock.calls.find(
+      ([cmd, args]) => cmd === "bash" && typeof args[1] === "string" && args[1].includes("git fetch"),
+    );
+    expect(fetchCall).toBeDefined();
+    expect(fetchCall![1][1]).toContain("main");
+  });
 });
