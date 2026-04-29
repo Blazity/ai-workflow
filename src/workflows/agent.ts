@@ -162,6 +162,7 @@ ensureArthurTaskForTicket.maxRetries = 0;
 async function provisionSandbox(
   branchName: string,
   arthurTaskId: string | null,
+  agentKindOverride: AgentKind | null,
   mergeBase?: string,
 ): Promise<{ sandboxId: string; agentKind: AgentKind }> {
   "use step";
@@ -192,7 +193,17 @@ async function provisionSandbox(
         }
       : undefined;
 
-  const agentKind: AgentKind = env.AGENT_KIND;
+  const agentKind: AgentKind = agentKindOverride ?? env.AGENT_KIND;
+  if (agentKind === "codex" && !env.CODEX_API_KEY && !env.CODEX_CHATGPT_OAUTH_TOKEN) {
+    throw new Error(
+      "agent override agent:codex requires CODEX_API_KEY or CODEX_CHATGPT_OAUTH_TOKEN in the deployed environment",
+    );
+  }
+  if (agentKind === "claude" && !env.ANTHROPIC_API_KEY && !env.CLAUDE_CODE_OAUTH_TOKEN) {
+    throw new Error(
+      "agent override agent:claude requires ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN in the deployed environment",
+    );
+  }
   const agent = createAgentAdapter(agentKind);
 
   const manager = new SandboxManager({
@@ -463,8 +474,14 @@ export async function agentWorkflow(ticketId: string) {
     // One Arthur task per run: first run = ticket identifier, re-runs = identifier.N
     const arthurTaskId = await ensureArthurTaskForTicket(ticket.identifier);
 
+    // Per-ticket agent override via labels (e.g. `agent:codex`). Falls
+    // back to env.AGENT_KIND when the ticket has no override or the labels
+    // are ambiguous (multiple distinct kinds).
+    const { parseAgentKindOverride } = await import("../sandbox/agents/index.js");
+    const agentKindOverride = parseAgentKindOverride(ticket.labels);
+
     // Provision sandbox once for all phases
-    const { sandboxId, agentKind } = await provisionSandbox(branchName, arthurTaskId, mergeBase);
+    const { sandboxId, agentKind } = await provisionSandbox(branchName, arthurTaskId, agentKindOverride, mergeBase);
     // Pin the sandboxId to this ticket so cleanup paths (reconcile,
     // cancelRun, webhook-cancel) can stop it by id instead of doing a
     // branch scan across every running sandbox.
@@ -641,7 +658,7 @@ export async function agentWorkflow(ticketId: string) {
       // ========== POST-PHASES: Push & PR ==========
       let pushResult = await pushFromSandbox(sandboxId, branchName);
       if (!pushResult.pushed && pushResult.error) {
-        pushResult = await fixAndRetryPush(sandboxId, branchName, pushResult.error);
+        pushResult = await fixAndRetryPush(sandboxId, branchName, pushResult.error, agentKind, activeModel);
       }
 
       if (!pushResult.pushed) {

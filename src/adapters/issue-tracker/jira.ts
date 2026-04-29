@@ -106,12 +106,7 @@ export class JiraAdapter implements IssueTrackerAdapter {
         body: {
           type: "doc",
           version: 1,
-          content: [
-            {
-              type: "paragraph",
-              content: [{ type: "text", text: comment }],
-            },
-          ],
+          content: toAdfParagraphs(comment),
         },
       }),
     });
@@ -177,6 +172,18 @@ export class JiraAdapter implements IssueTrackerAdapter {
     );
     return (data.issues ?? []).map((issue: any) => issue.key);
   }
+}
+
+function toAdfParagraphs(text: string) {
+  const lines = text.split("\n");
+  const paragraphs = lines.map((line) => {
+    if (line === "") return { type: "paragraph" };
+    return {
+      type: "paragraph",
+      content: [{ type: "text", text: line }],
+    };
+  });
+  return paragraphs.length > 0 ? paragraphs : [{ type: "paragraph" }];
 }
 
 function extractAdfText(adf: any): string {

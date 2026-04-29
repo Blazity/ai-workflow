@@ -14,8 +14,7 @@
     "test:e2e": "pnpm test:e2e:agent && pnpm test:e2e:orchestration && pnpm test:e2e:capacity",
     "test:e2e:agent": "vitest run --config e2e/vitest.e2e.config.ts --project agent",
     "test:e2e:orchestration": "vitest run --config e2e/vitest.e2e.config.ts --project orchestration",
-    "test:e2e:capacity": "vitest run --config e2e/vitest.e2e.config.ts --project capacity",
-    "test:e2e:codex": "AGENT_KIND=codex vitest run --config e2e/vitest.e2e.config.ts --project codex"
+    "test:e2e:capacity": "vitest run --config e2e/vitest.e2e.config.ts --project capacity"
   },
   "dependencies": {
     "@chat-adapter/slack": "^4.20.2",

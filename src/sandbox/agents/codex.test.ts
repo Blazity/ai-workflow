@@ -113,6 +113,26 @@ describe("CodexAgentAdapter.extractUsage", () => {
   it("returns null when no turn.completed event is present", () => {
     expect(adapter.extractUsage("\n", null)).toBeNull();
   });
+
+  it("falls back to phase.duration synthetic event when events lack timestamps", () => {
+    const ndjson = [
+      JSON.stringify({ type: "turn.completed", usage: { input_tokens: 10, output_tokens: 20, cached_input_tokens: 0 } }),
+      JSON.stringify({ type: "phase.duration", duration_ms: 90_000 }),
+    ].join("\n");
+    const u = adapter.extractUsage(ndjson, null);
+    expect(u?.duration_ms).toBe(90_000);
+  });
+
+  it("prefers event-derived duration over wall-clock when both are present", () => {
+    const t0 = "2026-04-27T10:00:00.000Z";
+    const t1 = "2026-04-27T10:01:00.000Z";
+    const ndjson = [
+      JSON.stringify({ type: "thread.started", timestamp: t0 }),
+      JSON.stringify({ type: "turn.completed", timestamp: t1, usage: { input_tokens: 1, output_tokens: 1, cached_input_tokens: 0 } }),
+      JSON.stringify({ type: "phase.duration", duration_ms: 99_999 }),
+    ].join("\n");
+    expect(adapter.extractUsage(ndjson, null)?.duration_ms).toBe(60_000);
+  });
 });
 
 describe("CodexAgentAdapter.buildPhaseScript", () => {
@@ -155,11 +175,36 @@ describe("CodexAgentAdapter.buildPhaseScript", () => {
     expect(s).toContain(`rm -f ${paths.sentinel} ${paths.stdout} ${paths.stderr} ${paths.structuredOutput}`);
     expect(s).toContain(`touch ${paths.sentinel}`);
   });
+
+  it("emits a phase.duration NDJSON event after codex exits", () => {
+    const paths = adapter.artifactPaths("impl");
+    const s = adapter.buildPhaseScript({ phase: "impl", model: "gpt-5-codex", paths });
+    expect(s).toContain("START_MS=$(date +%s%3N)");
+    expect(s).toContain("END_MS=$(date +%s%3N)");
+    expect(s).toContain('\\"type\\":\\"phase.duration\\"');
+  });
 });
 
 describe("CodexAgentAdapter.artifactPaths", () => {
   it("includes structuredOutput pointing at -o file", () => {
     expect(adapter.artifactPaths("impl").structuredOutput).toBe("/tmp/impl-result.json");
+  });
+});
+
+describe("CodexAgentAdapter.configure", () => {
+  it("adds .codex/ to .git/info/exclude so the agent never sees session pollution", async () => {
+    const runCommand = vi.fn().mockResolvedValue({ exitCode: 0 });
+    const writeFiles = vi.fn().mockResolvedValue(undefined);
+    const sandbox = { runCommand, writeFiles } as any;
+    await adapter.configure(sandbox, { codexApiKey: "sk-test", model: "gpt-5-codex" });
+    const excludeCall = runCommand.mock.calls.find(
+      ([cmd, args]) =>
+        cmd === "bash" &&
+        typeof args?.[1] === "string" &&
+        args[1].includes(".git/info/exclude"),
+    );
+    expect(excludeCall).toBeDefined();
+    expect(excludeCall![1][1]).toContain(".codex/");
   });
 });
 

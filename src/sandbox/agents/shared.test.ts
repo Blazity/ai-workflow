@@ -4,9 +4,7 @@ import { GLOBAL_SKILLS, installSkillsToAgentsDir } from "./shared.js";
 describe("GLOBAL_SKILLS", () => {
   it("contains the expected skill repos", () => {
     const ids = GLOBAL_SKILLS.map((s) => `${s.repo}#${s.skill}`);
-    // Wildcard pulls in using-superpowers + every skill it routes to.
-    expect(ids).toContain("https://github.com/obra/superpowers#*");
-    expect(ids).toContain("https://github.com/anthropics/skills#frontend-design");
+    expect(ids).toEqual(["https://github.com/anthropics/skills#frontend-design"]);
   });
 });
 

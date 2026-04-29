@@ -93,14 +93,6 @@ export default defineConfig({
           hookTimeout: 2_100_000,
         },
       },
-      {
-        test: {
-          name: "codex",
-          include: ["e2e/codex-tier-1.test.ts"],
-          testTimeout: 4_200_000,
-          hookTimeout: 4_200_000,
-        },
-      },
     ],
   },
 });

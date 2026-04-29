@@ -439,5 +439,21 @@ describe("JiraAdapter", () => {
       const body = JSON.parse(call[1].body);
       expect(body.body.type).toBe("doc");
     });
+
+    it("splits multi-line comments into separate paragraphs (no \\n inside text nodes)", async () => {
+      mockFetch.mockResolvedValueOnce({ ok: true, json: async () => ({}) });
+
+      const adapter = jiraAdapter();
+      await adapter.postComment("10001", "1. First question\n2. Second question");
+
+      const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+      expect(body.body.content).toEqual([
+        { type: "paragraph", content: [{ type: "text", text: "1. First question" }] },
+        { type: "paragraph", content: [{ type: "text", text: "2. Second question" }] },
+      ]);
+      const collectText = (n: any): string =>
+        n?.text ?? (n?.content?.map(collectText).join("") ?? "");
+      expect(collectText(body.body)).not.toContain("\n");
+    });
   });
 });

@@ -73,7 +73,17 @@ export class CodexAgentAdapter implements AgentAdapter {
     // 5) commit-guard script (idempotent)
     await this.writeCommitGuardScript(sandbox);
 
-    // 6) Arthur tracer. Re-uses the Claude Code tracer; Codex traces will be
+    // 6) Hide Codex's per-cwd session dir from git status. Without this the
+    // agent sees `.codex/` as untracked, "fixes" it by adding the path to
+    // `.gitignore`, commits only that, and the implementation never runs —
+    // observed on AWT-641 ($14 of impl-phase tokens, PR diff = .gitignore).
+    // .git/info/exclude is local to this clone and never pushed.
+    await sandbox.runCommand("bash", [
+      "-c",
+      `mkdir -p /vercel/sandbox/.git/info && grep -qxF '.codex/' /vercel/sandbox/.git/info/exclude 2>/dev/null || echo '.codex/' >> /vercel/sandbox/.git/info/exclude`,
+    ]);
+
+    // 7) Arthur tracer. Re-uses the Claude Code tracer; Codex traces will be
     // labeled as "claude-code" in Arthur until a dedicated Codex tracer ships.
     if (opts.arthur) await this.installArthurTracer(sandbox, opts.arthur);
   }
@@ -121,10 +131,15 @@ rm -f ${paths.sentinel} ${paths.stdout} ${paths.stderr} ${paths.structuredOutput
 ${schemaBlock}
 
 # --- Phase: ${phase} ---
+# Record wall-clock duration as a fallback for usage reporting — Codex's
+# NDJSON events do not carry a timestamp field that extractUsage can parse.
+START_MS=$(date +%s%3N)
 cat ${paths.input} | codex exec \\
   ${flags.join(" \\\n  ")} \\
   - \\
   > ${paths.stdout} 2> ${paths.stderr}; echo $? > /tmp/${phase}-exit-code || true
+END_MS=$(date +%s%3N)
+echo "{\\"type\\":\\"phase.duration\\",\\"duration_ms\\":$((END_MS - START_MS))}" >> ${paths.stdout}
 
 # --- Cleanup ---
 cd /vercel/sandbox
@@ -208,6 +223,7 @@ touch ${paths.sentinel}
     let input = 0, cached = 0, output = 0, turns = 0;
     let firstTs: number | null = null;
     let lastTs: number | null = null;
+    let wallClockMs: number | null = null;
     for (const line of raw.split("\n")) {
       if (!line.trim()) continue;
       try {
@@ -223,14 +239,18 @@ touch ${paths.sentinel}
           output += numOr0(event.usage.output_tokens);
           turns  += 1;
         }
+        // Synthetic event written by the wrapper script — see buildPhaseScript.
+        if (event?.type === "phase.duration" && typeof event.duration_ms === "number") {
+          wallClockMs = event.duration_ms;
+        }
       } catch { /* ignore non-JSON lines */ }
     }
     if (turns === 0) return null;
-    const duration_ms = firstTs != null && lastTs != null && lastTs > firstTs ? lastTs - firstTs : 0;
+    const eventDurationMs = firstTs != null && lastTs != null && lastTs > firstTs ? lastTs - firstTs : 0;
     return {
       cost_usd: null,
       tokens: { input, cached_input: cached, output },
-      duration_ms,
+      duration_ms: eventDurationMs > 0 ? eventDurationMs : (wallClockMs ?? 0),
       duration_api_ms: 0,
       num_turns: turns,
     };

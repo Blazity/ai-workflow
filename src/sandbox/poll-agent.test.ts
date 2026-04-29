@@ -221,7 +221,9 @@ describe("fixAndRetryPush", () => {
     });
     mockWriteFiles.mockResolvedValue(undefined);
 
-    const result = await fixAndRetryPush("sbx-test-123", "blazebot/task-1", "lint failed");
+    const result = await fixAndRetryPush(
+      "sbx-test-123", "blazebot/task-1", "lint failed", "claude", "claude-sonnet-4-20250514",
+    );
 
     expect(result.pushed).toBe(true);
     // Verify prompt was written to file (not echoed into shell)
@@ -230,6 +232,27 @@ describe("fixAndRetryPush", () => {
     ]);
     // Verify push uses args array
     expect(mockRunCommand).toHaveBeenCalledWith("git", ["push", "--force", "origin", "HEAD:refs/heads/blazebot/task-1"]);
+  });
+
+  it("invokes codex CLI when agentKind=codex", async () => {
+    mockRunCommand.mockImplementation(() => ({
+      exitCode: 0,
+      stdout: vi.fn().mockResolvedValue(""),
+      stderr: vi.fn().mockResolvedValue(""),
+    }));
+    mockWriteFiles.mockResolvedValue(undefined);
+
+    await fixAndRetryPush(
+      "sbx-test-123", "blazebot/task-1", "lint failed", "codex", "gpt-5-codex",
+    );
+
+    const fixCall = mockRunCommand.mock.calls.find(
+      ([cmd, args]) => cmd === "bash" && typeof args?.[1] === "string" && args[1].includes("/tmp/fix-prompt.txt"),
+    );
+    expect(fixCall).toBeDefined();
+    expect(fixCall![1][1]).toContain("codex exec");
+    expect(fixCall![1][1]).toContain("gpt-5-codex");
+    expect(fixCall![1][1]).not.toContain("claude --print");
   });
 
   it("returns error when retry push also fails", async () => {
@@ -250,7 +273,9 @@ describe("fixAndRetryPush", () => {
     });
     mockWriteFiles.mockResolvedValue(undefined);
 
-    const result = await fixAndRetryPush("sbx-test-123", "blazebot/task-1", "lint failed");
+    const result = await fixAndRetryPush(
+      "sbx-test-123", "blazebot/task-1", "lint failed", "claude", "claude-sonnet-4-20250514",
+    );
 
     expect(result.pushed).toBe(false);
     expect(result.error).toBe("still failing");

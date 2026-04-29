@@ -65,10 +65,12 @@ export async function fixAndRetryPush(
   sandboxId: string,
   branch: string,
   pushError: string,
+  agentKind: "claude" | "codex",
+  model: string,
 ): Promise<{ pushed: boolean; error?: string }> {
   "use step";
   const { Sandbox } = await import("@vercel/sandbox");
-  const { env, getVcsConfig } = await import("../../env.js");
+  const { getVcsConfig } = await import("../../env.js");
   const sandbox = await Sandbox.get({ sandboxId, ...getSandboxCredentials() });
   const urls = buildVcsUrls(getVcsConfig());
 
@@ -83,9 +85,19 @@ export async function fixAndRetryPush(
     { path: "/tmp/fix-prompt.txt", content: Buffer.from(fixPrompt) },
   ]);
 
+  // Same CLI flags as the main phase scripts, minus structured output / schema.
+  // Codex needs `--skip-git-repo-check` (sandbox sees the repo as dirty after
+  // the agent's changes) and `--dangerously-bypass-approvals-and-sandbox` to
+  // match the main run; otherwise its inner sandbox would reject edits inside
+  // the Vercel microVM.
+  const cli =
+    agentKind === "codex"
+      ? `codex exec --model "${model}" --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check --json -`
+      : `claude --print --model '${model}' --dangerously-skip-permissions`;
+
   await sandbox.runCommand("bash", [
     "-c",
-    `[ -f /tmp/agent-env.sh ] && source /tmp/agent-env.sh; cat /tmp/fix-prompt.txt | claude --print --model '${env.CLAUDE_MODEL}' --dangerously-skip-permissions > /tmp/fix-stdout.txt 2>/tmp/fix-stderr.txt || true`,
+    `[ -f /tmp/agent-env.sh ] && source /tmp/agent-env.sh; cat /tmp/fix-prompt.txt | ${cli} > /tmp/fix-stdout.txt 2>/tmp/fix-stderr.txt || true`,
   ]);
 
   // Log fix agent output for observability
