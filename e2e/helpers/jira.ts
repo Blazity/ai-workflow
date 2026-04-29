@@ -30,11 +30,24 @@ async function jiraRequest(path: string, options?: RequestInit) {
 }
 
 export async function createTestTicket(
-  overrides: { summary?: string; description?: string } = {},
+  overrides: { summary?: string; description?: string; labels?: string[] } = {},
 ): Promise<{ ticketKey: string; ticketId: string }> {
   const summary =
     overrides.summary ?? `[E2E] test-${crypto.randomUUID().slice(0, 8)}`;
   const description = overrides.description ?? "Automated e2e test ticket";
+
+  // Per-ticket agent override label, set by the e2e workflow input. The
+  // deployed app's agent.ts reads `agent:<kind>` labels via
+  // parseAgentKindOverride to decide which adapter to spin up.
+  const envAgent = process.env.E2E_AGENT_KIND?.toLowerCase();
+  const autoLabels =
+    envAgent === "codex" || envAgent === "claude" ? [`agent:${envAgent}`] : [];
+  // Strip any caller-supplied agent:* labels so the env-driven autoLabel wins
+  // and the parseAgentKindOverride lookup never sees conflicting entries.
+  const filteredOverrides = (overrides.labels ?? []).filter(
+    (l) => !/^agent:/i.test(l),
+  );
+  const labels = [...autoLabels, ...filteredOverrides];
 
   const data = await jiraRequest("/rest/api/3/issue", {
     method: "POST",
@@ -53,6 +66,7 @@ export async function createTestTicket(
           ],
         },
         issuetype: { name: "Task" },
+        ...(labels.length ? { labels } : {}),
       },
     }),
   });

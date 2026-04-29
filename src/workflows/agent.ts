@@ -1,10 +1,11 @@
 import { sleep } from "workflow";
-import type { AgentOutput } from "../sandbox/agent-runner.js";
-import type { ReviewOutput } from "../sandbox/agent-runner.js";
+import type {
+  AgentOutput, ReviewOutput, PhaseUsage, PhaseKind, PhaseArtifactPaths, ResearchResult,
+} from "../sandbox/agents/types.js";
+import type { AgentKind } from "../sandbox/agents/index.js";
 import type { PRComment, CheckRunResult } from "../adapters/vcs/types.js";
 import type { TicketAttachment } from "../adapters/issue-tracker/types.js";
 import type { DownloadedAttachment } from "../sandbox/attachments.js";
-import type { PhaseUsage } from "../sandbox/usage.js";
 
 // --- Step Functions ---
 
@@ -161,11 +162,13 @@ ensureArthurTaskForTicket.maxRetries = 0;
 async function provisionSandbox(
   branchName: string,
   arthurTaskId: string | null,
+  agentKindOverride: AgentKind | null,
   mergeBase?: string,
-): Promise<string> {
+): Promise<{ sandboxId: string; agentKind: AgentKind }> {
   "use step";
   const { env, getVcsConfig } = await import("../../env.js");
   const { SandboxManager } = await import("../sandbox/manager.js");
+  const { createAgentAdapter } = await import("../sandbox/agents/index.js");
   const vcs = getVcsConfig();
 
   // The sandbox builds clone/push URLs by interpolating repoPath into a URL,
@@ -190,22 +193,39 @@ async function provisionSandbox(
         }
       : undefined;
 
+  const agentKind: AgentKind = agentKindOverride ?? env.AGENT_KIND;
+  if (agentKind === "codex" && !env.CODEX_API_KEY && !env.CODEX_CHATGPT_OAUTH_TOKEN) {
+    throw new Error(
+      "agent override agent:codex requires CODEX_API_KEY or CODEX_CHATGPT_OAUTH_TOKEN in the deployed environment",
+    );
+  }
+  if (agentKind === "claude" && !env.ANTHROPIC_API_KEY && !env.CLAUDE_CODE_OAUTH_TOKEN) {
+    throw new Error(
+      "agent override agent:claude requires ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN in the deployed environment",
+    );
+  }
+  const agent = createAgentAdapter(agentKind);
+
   const manager = new SandboxManager({
     kind: vcs.kind,
     token: vcs.token,
     repoPath: vcs.repoPath,
     host: vcs.host,
-    anthropicApiKey: env.ANTHROPIC_API_KEY,
-    claudeCodeOauthToken: env.CLAUDE_CODE_OAUTH_TOKEN,
-    claudeModel: env.CLAUDE_MODEL,
+    jobTimeoutMs: env.JOB_TIMEOUT_MS,
     commitAuthor: env.COMMIT_AUTHOR,
     commitEmail: env.COMMIT_EMAIL,
-    jobTimeoutMs: env.JOB_TIMEOUT_MS,
-    arthur,
   });
 
-  const sandbox = await manager.provision(branchName, mergeBase);
-  return sandbox.sandboxId;
+  const sandbox = await manager.provision(branchName, agent, {
+    anthropicApiKey: env.ANTHROPIC_API_KEY,
+    claudeCodeOauthToken: env.CLAUDE_CODE_OAUTH_TOKEN,
+    codexApiKey: env.CODEX_API_KEY,
+    codexChatGptOauthToken: env.CODEX_CHATGPT_OAUTH_TOKEN,
+    model: agentKind === "codex" ? env.CODEX_MODEL : env.CLAUDE_MODEL,
+    arthur,
+  }, mergeBase);
+
+  return { sandboxId: sandbox.sandboxId, agentKind };
 }
 provisionSandbox.maxRetries = 0;
 
@@ -237,14 +257,68 @@ async function writeAndStartPhase(
 }
 writeAndStartPhase.maxRetries = 0;
 
-async function configureStopHook(sandboxId: string, enabled: boolean): Promise<void> {
+async function fetchCodexPriceStep(model: string): Promise<{ input: number; cached_input: number; output: number } | null> {
+  "use step";
+  const { fetchModelPrice } = await import("../sandbox/agents/pricing.js");
+  try {
+    return await fetchModelPrice(model);
+  } catch (err) {
+    const { logger } = await import("../lib/logger.js");
+    logger.warn({ err: (err as Error).message, model }, "pricing_fetch_failed");
+    return null;
+  }
+}
+fetchCodexPriceStep.maxRetries = 0;
+
+async function setCommitGuardStep(sandboxId: string, agentKind: AgentKind, enabled: boolean): Promise<void> {
   "use step";
   const { Sandbox } = await import("@vercel/sandbox");
   const { getSandboxCredentials } = await import("../sandbox/credentials.js");
-  const { configureStopHookInSandbox } = await import("../sandbox/manager.js");
+  const { createAgentAdapter } = await import("../sandbox/agents/index.js");
 
   const sandbox = await Sandbox.get({ sandboxId, ...getSandboxCredentials() });
-  await configureStopHookInSandbox(sandbox, enabled);
+  const agent = createAgentAdapter(agentKind);
+  await agent.setCommitGuard(sandbox, enabled);
+}
+
+// Step wrappers around the AgentAdapter class methods. The adapter classes
+// transitively reach the pino logger (via installArthurTracer); the workflow
+// bundler can't tolerate that, so all adapter method calls happen inside
+// step bundles rather than the workflow body.
+async function planPhaseStep(
+  agentKind: AgentKind,
+  phase: PhaseKind,
+  model: string,
+  jsonSchema?: string,
+): Promise<{ paths: PhaseArtifactPaths; script: string }> {
+  "use step";
+  const { createAgentAdapter } = await import("../sandbox/agents/index.js");
+  const a = createAgentAdapter(agentKind);
+  const paths = a.artifactPaths(phase);
+  const script = a.buildPhaseScript({ phase, model, paths, jsonSchema });
+  return { paths, script };
+}
+
+async function parseResearchStep(
+  agentKind: AgentKind,
+  raw: string,
+  structured: string | null,
+): Promise<{ research: ResearchResult; usage: PhaseUsage | null }> {
+  "use step";
+  const { createAgentAdapter } = await import("../sandbox/agents/index.js");
+  const a = createAgentAdapter(agentKind);
+  return { research: a.parseResearchStatus(raw, structured), usage: a.extractUsage(raw, structured) };
+}
+
+async function parseAgentOutputStep(
+  agentKind: AgentKind,
+  raw: string,
+  structured: string | null,
+): Promise<{ output: AgentOutput; usage: PhaseUsage | null }> {
+  "use step";
+  const { createAgentAdapter } = await import("../sandbox/agents/index.js");
+  const a = createAgentAdapter(agentKind);
+  return { output: a.parseAgentOutput(raw, structured), usage: a.extractUsage(raw, structured) };
 }
 
 async function captureGitDiff(sandboxId: string): Promise<string> {
@@ -353,15 +427,12 @@ export async function agentWorkflow(ticketId: string) {
   "use workflow";
 
   const { env, getVcsConfig } = await import("../../env.js");
-  const { buildPhaseScript } = await import("../sandbox/wrapper-script.js");
-  const { parseResearchStatus, parseAgentOutput, parseReviewOutput, REVIEW_SCHEMA, AGENT_SCHEMA } =
-    await import("../sandbox/agent-runner.js");
-  const { assembleResearchPlanContext, assembleImplementationContext, assembleReviewContext } =
+  const { assembleResearchPlanContext, assembleImplementationContext } =
     await import("../sandbox/context.js");
-  const { collectPhaseOutput, pushFromSandbox, fixAndRetryPush, teardownSandbox } =
+  const { collectPhase, pushFromSandbox, fixAndRetryPush, teardownSandbox } =
     await import("../sandbox/poll-agent.js");
-  const { extractUsage, unwrapResearchText, formatUsageReport } =
-    await import("../sandbox/usage.js");
+  const { formatUsageReport } = await import("../sandbox/usage.js");
+  const { AGENT_SCHEMA } = await import("../sandbox/agents/types.js");
 
   const ticket = await fetchAndValidateTicket(ticketId, env.COLUMN_AI);
   if (!ticket) return;
@@ -370,9 +441,12 @@ export async function agentWorkflow(ticketId: string) {
   const prompts = await loadPrompts();
 
   const phaseUsages: Record<string, PhaseUsage | null> = {};
+  // Set after provisionSandbox once agentKind is known.
+  let activeModel: string | undefined;
+  let priceLookup: ((m: string) => { input: number; cached_input: number; output: number } | null) | undefined;
   const usageSuffix = () =>
     Object.keys(phaseUsages).length
-      ? `\n${formatUsageReport(phaseUsages)}`
+      ? `\n${formatUsageReport(phaseUsages, priceLookup, activeModel)}`
       : "";
 
   try {
@@ -400,18 +474,30 @@ export async function agentWorkflow(ticketId: string) {
     // One Arthur task per run: first run = ticket identifier, re-runs = identifier.N
     const arthurTaskId = await ensureArthurTaskForTicket(ticket.identifier);
 
+    // Per-ticket agent override via labels (e.g. `agent:codex`). Falls
+    // back to env.AGENT_KIND when the ticket has no override or the labels
+    // are ambiguous (multiple distinct kinds).
+    const { parseAgentKindOverride } = await import("../sandbox/agents/index.js");
+    const agentKindOverride = parseAgentKindOverride(ticket.labels);
+
     // Provision sandbox once for all phases
-    const sandboxId = await provisionSandbox(branchName, arthurTaskId, mergeBase);
+    const { sandboxId, agentKind } = await provisionSandbox(branchName, arthurTaskId, agentKindOverride, mergeBase);
     // Pin the sandboxId to this ticket so cleanup paths (reconcile,
     // cancelRun, webhook-cancel) can stop it by id instead of doing a
     // branch scan across every running sandbox.
     await registerTicketSandbox(ticket.identifier, sandboxId);
 
+    activeModel = agentKind === "codex" ? env.CODEX_MODEL : env.CLAUDE_MODEL;
+    if (agentKind === "codex") {
+      const priceCache = await fetchCodexPriceStep(activeModel);
+      if (priceCache) priceLookup = () => priceCache;
+    }
+
     try {
       await writeAttachments(sandboxId, downloadedAttachments);
 
       // ========== PHASE 1: Research & Plan ==========
-      await configureStopHook(sandboxId, false);
+      await setCommitGuardStep(sandboxId, agentKind, false);
 
       const ticketData = {
         identifier: ticket.identifier,
@@ -421,6 +507,8 @@ export async function agentWorkflow(ticketId: string) {
         comments: ticket.comments,
       };
 
+      const { paths: researchPaths, script: researchScript } =
+        await planPhaseStep(agentKind, "research", activeModel);
       const researchInput = assembleResearchPlanContext({
         ticket: ticketData,
         prompt: prompts.research,
@@ -431,22 +519,13 @@ export async function agentWorkflow(ticketId: string) {
         attachments: downloadedAttachments,
       });
 
-      const researchScript = buildPhaseScript({
-        model: env.CLAUDE_MODEL,
-        phase: "research",
-        inputFile: "/tmp/research-requirements.md",
-        outputFile: "/tmp/research-stdout.txt",
-        stderrFile: "/tmp/research-stderr.txt",
-        sentinelFile: "/tmp/research-done",
-      });
-
       await writeAndStartPhase(
         sandboxId,
-        "/tmp/research-requirements.md", researchInput,
-        "/tmp/research-wrapper.sh", researchScript,
+        researchPaths.input, researchInput,
+        researchPaths.wrapper, researchScript,
       );
 
-      const researchDone = await pollUntilDone(sandboxId, "/tmp/research-done", 20);
+      const researchDone = await pollUntilDone(sandboxId, researchPaths.sentinel, 20);
       if (!researchDone) {
         await moveTicket(ticketId, env.COLUMN_BACKLOG);
         await notifySlack(`Task ${ticket.identifier} failed: research phase timed out${usageSuffix()}`);
@@ -454,9 +533,11 @@ export async function agentWorkflow(ticketId: string) {
         return;
       }
 
-      const researchRaw = await collectPhaseOutput(sandboxId, "/tmp/research-stdout.txt", "/tmp/research-stderr.txt");
-      phaseUsages["Research"] = extractUsage(researchRaw);
-      const research = parseResearchStatus(unwrapResearchText(researchRaw));
+      const { raw: researchRaw, structured: researchStructured } =
+        await collectPhase(sandboxId, researchPaths);
+      const { research, usage: researchUsage } =
+        await parseResearchStep(agentKind, researchRaw, researchStructured);
+      phaseUsages["Research"] = researchUsage;
 
       if (research.status === "clarification_needed") {
         const questions = research.body.split("\n").filter((l) => /^\d+\./.test(l.trim()));
@@ -481,8 +562,10 @@ export async function agentWorkflow(ticketId: string) {
 
       // ========== PHASE 2: Implementation ==========
 
-      await configureStopHook(sandboxId, true);
+      await setCommitGuardStep(sandboxId, agentKind, true);
 
+      const { paths: implPaths, script: implScript } =
+        await planPhaseStep(agentKind, "impl", activeModel, AGENT_SCHEMA);
       const implInput = assembleImplementationContext({
         ticket: ticketData,
         prompt: prompts.implement,
@@ -490,29 +573,20 @@ export async function agentWorkflow(ticketId: string) {
         attachments: downloadedAttachments,
       });
 
-      const implScript = buildPhaseScript({
-        model: env.CLAUDE_MODEL,
-        phase: "impl",
-        inputFile: "/tmp/impl-requirements.md",
-        outputFile: "/tmp/impl-stdout.txt",
-        stderrFile: "/tmp/impl-stderr.txt",
-        sentinelFile: "/tmp/impl-done",
-        jsonSchema: AGENT_SCHEMA,
-      });
-
       await writeAndStartPhase(
         sandboxId,
-        "/tmp/impl-requirements.md", implInput,
-        "/tmp/impl-wrapper.sh", implScript,
+        implPaths.input, implInput,
+        implPaths.wrapper, implScript,
       );
 
-      const implDone = await pollUntilDone(sandboxId, "/tmp/impl-done", 35);
+      const implDone = await pollUntilDone(sandboxId, implPaths.sentinel, 35);
       let implOutput: AgentOutput;
 
       if (implDone) {
-        const implRaw = await collectPhaseOutput(sandboxId, "/tmp/impl-stdout.txt", "/tmp/impl-stderr.txt");
-        phaseUsages["Impl"] = extractUsage(implRaw);
-        implOutput = parseAgentOutput(implRaw);
+        const { raw: implRaw, structured: implStructured } = await collectPhase(sandboxId, implPaths);
+        const { output, usage: implUsage } = await parseAgentOutputStep(agentKind, implRaw, implStructured);
+        phaseUsages["Impl"] = implUsage;
+        implOutput = output;
       } else {
         implOutput = { result: "failed", error: "Implementation phase timed out" };
       }
@@ -537,10 +611,11 @@ export async function agentWorkflow(ticketId: string) {
 
       // ========== PHASE 3: Review ==========
       // Temporarily disabled.
-      // await configureStopHook(sandboxId, true);
+      // await setCommitGuardStep(sandboxId, agentKind, true);
       //
       // const gitDiff = await captureGitDiff(sandboxId);
       //
+      // const reviewPaths = agent.artifactPaths("review");
       // const reviewInput = assembleReviewContext({
       //   ticket: ticketData,
       //   prompt: prompts.review,
@@ -549,29 +624,26 @@ export async function agentWorkflow(ticketId: string) {
       //   attachments: downloadedAttachments,
       // });
       //
-      // const reviewScript = buildPhaseScript({
-      //   model: env.CLAUDE_MODEL,
+      // const reviewScript = agent.buildPhaseScript({
       //   phase: "review",
-      //   inputFile: "/tmp/review-requirements.md",
-      //   outputFile: "/tmp/review-stdout.txt",
-      //   stderrFile: "/tmp/review-stderr.txt",
-      //   sentinelFile: "/tmp/review-done",
+      //   model: activeModel,
+      //   paths: reviewPaths,
       //   jsonSchema: REVIEW_SCHEMA,
       // });
       //
       // await writeAndStartPhase(
       //   sandboxId,
-      //   "/tmp/review-requirements.md", reviewInput,
-      //   "/tmp/review-wrapper.sh", reviewScript,
+      //   reviewPaths.input, reviewInput,
+      //   reviewPaths.wrapper, reviewScript,
       // );
       //
-      // const reviewDone = await pollUntilDone(sandboxId, "/tmp/review-done", 15);
+      // const reviewDone = await pollUntilDone(sandboxId, reviewPaths.sentinel, 15);
       // let reviewOutput: ReviewOutput;
       //
       // if (reviewDone) {
-      //   const reviewRaw = await collectPhaseOutput(sandboxId, "/tmp/review-stdout.txt", "/tmp/review-stderr.txt");
-      //   phaseUsages["Review"] = extractUsage(reviewRaw);
-      //   reviewOutput = parseReviewOutput(reviewRaw);
+      //   const { raw: reviewRaw, structured: reviewStructured } = await collectPhase(sandboxId, reviewPaths);
+      //   phaseUsages["Review"] = agent.extractUsage(reviewRaw, reviewStructured);
+      //   reviewOutput = agent.parseReviewOutput(reviewRaw, reviewStructured);
       // } else {
       //   reviewOutput = { result: "failed", feedback: "", issues: [], error: "Review phase timed out" };
       // }
@@ -586,7 +658,7 @@ export async function agentWorkflow(ticketId: string) {
       // ========== POST-PHASES: Push & PR ==========
       let pushResult = await pushFromSandbox(sandboxId, branchName);
       if (!pushResult.pushed && pushResult.error) {
-        pushResult = await fixAndRetryPush(sandboxId, branchName, pushResult.error);
+        pushResult = await fixAndRetryPush(sandboxId, branchName, pushResult.error, agentKind, activeModel);
       }
 
       if (!pushResult.pushed) {
@@ -602,7 +674,7 @@ export async function agentWorkflow(ticketId: string) {
       // Notify Slack BEFORE moving the ticket out of the AI column.
       // Reconcile cancels runs whose tickets have left AI column; racing
       // that cancellation after moveTicket would skip the notification.
-      const usageReport = formatUsageReport(phaseUsages);
+      const usageReport = formatUsageReport(phaseUsages, priceLookup, activeModel);
       await notifySlack(`Task ${ticket.identifier} PR ready for review\n${usageReport}`);
       await moveTicket(ticketId, env.COLUMN_AI_REVIEW);
       await unregisterRun(ticket.identifier);

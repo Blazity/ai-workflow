@@ -12,6 +12,13 @@ on:
           - agent
           - all
         default: all
+      agent:
+        description: "Which agent the agent-tier should run under (per-ticket label override)"
+        type: choice
+        options:
+          - claude
+          - codex
+        default: claude
 
 jobs:
   e2e-orchestration:
@@ -148,6 +155,7 @@ jobs:
       VERCEL_TEAM_ID: ${{ secrets.VERCEL_TEAM_ID }}
       VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
       MAX_CONCURRENT_AGENTS: ${{ secrets.MAX_CONCURRENT_AGENTS }}
+      E2E_AGENT_KIND: ${{ inputs.agent }}
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4

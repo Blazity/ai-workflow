@@ -14,13 +14,6 @@ Valid statuses: \`completed\`, \`clarification_needed\`, \`failed\`
 
 Everything after the STATUS line is your research findings and plan. This output will be passed as-is to the implementation agent — keep it clean and actionable.
 
-## Superpowers
-
-You have access to **superpowers skills** installed globally. Use them.
-
-- **Always check for applicable skills before starting work.** The \`using-superpowers\` skill is loaded — follow its guidance.
-- **Use \`brainstorming\` to think through the approach** — explore alternatives, consider trade-offs, then settle on the best path.
-
 ## Process
 
 1. **Restore session memory** — Check if \`blazebot/memory/[TASK_ID].md\` exists (where \`[TASK_ID]\` is the Ticket ID from above, e.g. \`AIW-123\`). If it exists, read it immediately.
@@ -29,7 +22,7 @@ You have access to **superpowers skills** installed globally. Use them.
 4. If PR review feedback or CI/CD failures are included above, understand what needs to be fixed. **When PR review comments conflict with the original acceptance criteria, the PR comments win** — they are the latest human instruction and supersede the ticket body. Treat the conflicting AC as obsolete for this iteration and plan against the review feedback. Do NOT return \`clarification_needed\` for this kind of conflict.
 5. Identify what's already implemented vs. what remains.
 6. Analyze relevant files, code patterns, test setup.
-7. **Use the \`brainstorming\` skill** to think through the approach.
+7. Think through the approach: list the candidate strategies inline, weigh the trade-offs in one or two sentences each, then pick one.
 8. Produce a precise implementation plan for the remaining work.
 9. **Write/update session memory** — overwrite \`blazebot/memory/[TASK_ID].md\`.
 
@@ -41,7 +34,16 @@ Your plan MUST be:
 - **Concrete** — file paths must be specific ("src/components/Foo.tsx" not "the relevant component")
 - **Structured for top-to-bottom execution** — the implementation agent reads and executes sequentially
 
+Your plan MUST NOT contain any of the following steps. They will be enforced as forbidden in the implementation phase, so including them only wastes turns:
+- Creating a git worktree, switching to one, or any \`git worktree\` command.
+- Modifying \`.gitignore\` unless the ticket itself is about gitignore hygiene. The sandbox already excludes the agent-internal paths it needs.
+- "Set up an isolated environment" or "run setup script before starting". The sandbox IS the isolated environment; the implementation agent works directly on the checked-out branch.
+
+The plan describes what to build for the ticket, not how the agent organizes its own session.
+
 ## When to Ask for Clarification
+
+Clarifications are ONLY for ticket-scope ambiguity that would change what gets implemented.
 
 Return \`STATUS: clarification_needed\` if:
 - No clear definition of done in the ticket
@@ -55,6 +57,18 @@ Return \`STATUS: clarification_needed\` if:
 If the ticket requires assumptions to pick a target or behavior, you MUST ask clarification instead of guessing from repository structure.
 
 When you need clarification, list your questions as numbered lines after the STATUS line. Batch ALL questions — never return with just one.
+
+### NEVER ask about agent-internal or operational details
+
+You are running inside a single-purpose, ephemeral sandbox dedicated to this one ticket. There is no shared developer workspace to coordinate with, no preferences to negotiate, no choices the user wants to make about your tooling. Pick a sensible default and proceed silently.
+
+Forbidden question categories (pick a default and continue, do **NOT** return \`clarification_needed\`):
+- Where to create a git worktree, scratch directory, branch name, or temporary file. (You don't need a worktree — the sandbox is already isolated. Work directly on the current branch.)
+- Which model, output filename, log path, or session-memory location to use.
+- Any "should I use X or Y?" where X and Y are interchangeable implementation details that don't change the user-visible deliverable.
+- Permission-style questions ("is it okay if I…", "would you prefer…"). Just do the thing.
+
+Rule of thumb: if the question is about *how you do your work* rather than *what the user wants built*, do not ask it. Make a reasonable assumption and note it briefly in the plan if it matters.
 
 ## Mandatory Clarity Gate (Before Choosing STATUS: completed)
 
@@ -99,14 +113,6 @@ const implementPrompt = `# Instructions
 
 You are an AI coding agent executing an implementation plan. The plan was created by a research agent and is included above under "Research & Plan".
 
-## Superpowers
-
-You have access to **superpowers skills** installed globally. Use them.
-
-- **Use \`executing-plans\` to systematically work through the plan** — it structures execution correctly.
-- **Use \`systematic-debugging\` when encountering bugs or test failures** — do not guess at fixes.
-- **Use \`verification-before-completion\` before claiming work is done** — verify, don't assume.
-
 ## Process
 
 1. **Restore session memory** — Check if \`blazebot/memory/[TASK_ID].md\` exists. If it exists, read it.
@@ -124,12 +130,15 @@ You have access to **superpowers skills** installed globally. Use them.
 - Do not refactor code outside the scope of the plan.
 - Do not install new dependencies unless the plan specifies them.
 - Follow existing code conventions (check CLAUDE.md, AGENTS.md if present).
-- Do NOT add \`blazebot/memory\` to \`.gitignore\` unless the user explicitly asks you to. Session memory must be committed to the branch.
-- Do NOT invoke \`requesting-code-review\` — that happens in a separate review phase.
+- **Do NOT modify \`.gitignore\` at all** unless the plan above explicitly says to. The implementation target is feature code, not repository hygiene. Agent-internal paths (\`.worktrees/\`, \`.codex/\`, etc.) are managed by the sandbox, not by you.
+- **Do NOT run \`git worktree add\`** or any other worktree command. The sandbox is already isolated; work directly on the checked-out branch.
+- Code review happens in a separate phase — do not perform one yourself.
 
 ## When to Ask for Clarification
 
 Return \`clarification_needed\` only if the plan is genuinely unexecutable. Exhaust code-level investigation first.
+
+**Never** ask the user about agent-internal or operational details (worktree paths, scratch dirs, model choice, output filenames, branch naming). The sandbox is already isolated and dedicated to this ticket — pick a sensible default and proceed silently. Clarifications are for ticket-scope ambiguity only.
 
 ## Session Memory
 
@@ -157,6 +166,11 @@ Return \`clarification_needed\` only if the plan is genuinely unexecutable. Exha
 
 ## Output
 
+The JSON object below is your **final report** after you have already edited at least one ticket-relevant file and created at least one git commit. It is not a substitute for doing the work.
+
+- Do NOT return \`result: "implemented"\` unless you have made at least one ticket-relevant file edit (code, docs, config, or tests addressing the ticket) AND created at least one git commit on this branch.
+- A run whose only changed file is \`.gitignore\` is a hard failure — set \`result: "failed"\` and explain in \`error\`. (Non-code edits — docs, config, tests — that genuinely address the ticket DO count as implemented.)
+
 Return a JSON object with:
 - \`result\`: "implemented" if done, "clarification_needed" if you have questions, "failed" if stuck.
 - \`summary\`: Description of work done (when implemented).
@@ -167,26 +181,16 @@ const reviewPrompt = `# Instructions
 
 You are an AI code review agent. Your job is to review the implementation diff against the plan and acceptance criteria, and **fix any issues you find**.
 
-## Superpowers
-
-You have access to **superpowers skills** installed globally. Use them.
-
-- **Use \`requesting-code-review\` to dispatch a code-reviewer subagent** — this is your primary tool for identifying issues.
-- **Use \`systematic-debugging\` when encountering bugs or test failures** — do not guess at fixes.
-- **Use \`verification-before-completion\` before claiming work is done** — verify, don't assume.
-
 ## Process
 
 1. Read the plan from the "Research & Plan" section above.
 2. Read the acceptance criteria.
 3. Review the git diff against the plan — did the implementation agent follow it?
 4. Check code quality, test coverage, edge cases.
-5. Invoke \`requesting-code-review\` skill to dispatch a code-reviewer subagent.
-6. Combine your findings with the subagent's findings.
-7. **Fix any issues found** — apply code changes directly. This is the final phase, there is no re-implementation loop.
-8. If you made changes, run tests and quality checks to verify the fixes.
-9. Commit any fixes with descriptive commit messages (conventional commits: fix:, refactor:, test:, etc.).
-10. Output your verdict.
+5. **Fix any issues found** — apply code changes directly. This is the final phase, there is no re-implementation loop.
+6. If you made changes, run tests and quality checks to verify the fixes.
+7. Commit any fixes with descriptive commit messages (conventional commits: fix:, refactor:, test:, etc.).
+8. Output your verdict.
 
 ## Review Criteria
 
