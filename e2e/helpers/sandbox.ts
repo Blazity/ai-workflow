@@ -49,25 +49,55 @@ export async function stopSandboxesForTicket(
 }
 
 /**
- * Kill the running `claude` process inside the ticket's sandbox.
+ * Kill the running agent process (claude or codex) inside the ticket's sandbox.
  *
  * The wrapper script's cleanup section (touch sentinel) runs unconditionally
- * after claude exits, so killing claude causes the workflow's pollUntilDone
- * to see the sentinel with empty/partial stdout — parseResearchStatus then
- * defaults to `{ status: "failed" }`, exercising the US-7 failure path.
+ * after the agent exits, so killing the agent causes the workflow's
+ * pollUntilDone to see the sentinel with empty/partial stdout —
+ * parseResearchStatus then defaults to `{ status: "failed" }`, exercising the
+ * US-7 failure path.
  *
- * Returns `true` only when `pkill` actually terminated a claude process.
+ * The pkill pattern matches a flag unique to the agent's wrapper invocation
+ * (`claude --print` / `codex exec`) rather than the bare binary name. This
+ * avoids false positives from the Arthur tracer hook (`claude_code_tracer.py`)
+ * which runs as a transient `python3` subprocess whose cmdline contains the
+ * substring "claude" — without this constraint, the previous `-f claude`
+ * pattern matched the tracer in codex sandboxes, returned exit 0, but never
+ * actually killed codex; the agent ran to completion and the ticket landed in
+ * AI Review instead of Backlog.
+ *
+ * Agent kind is resolved from the ticket's `agent:<kind>` label using the
+ * same `parseAgentKindOverride` the workflow runs server-side, so the helper
+ * targets whichever agent the deployed app actually started.
+ *
+ * Returns `true` only when `pkill` actually terminated a matching process.
  * Returning `true` from "sandbox exists on the right branch" alone is unsafe:
- * there's a window between git checkout and claude exec where the wrapper is
- * still sourcing env files — `pkill` then matches nothing (exit 1), claude
- * starts a moment later, the agent runs to completion, and the ticket lands
- * in AI Review instead of Backlog. Caller polls this helper, so returning
- * `false` on a no-op pkill makes the caller try again instead of advancing.
+ * there's a window between git checkout and the agent exec where the wrapper
+ * is still sourcing env files — `pkill` then matches nothing (exit 1), the
+ * agent starts a moment later, and runs to completion. Caller polls this
+ * helper, so returning `false` on a no-op pkill makes the caller try again
+ * instead of advancing.
  */
 export async function killClaudeForTicket(
   ticketKey: string,
 ): Promise<boolean> {
   const expectedBranch = `blazebot/${ticketKey.trim().toLowerCase()}`;
+  const { getTicketLabels } = await import("./jira.js");
+  const { parseAgentKindOverride } = await import(
+    "../../src/sandbox/agents/index.js"
+  );
+  const labels = await getTicketLabels(ticketKey).catch(() => [] as string[]);
+  const labelKind = parseAgentKindOverride(labels);
+  // Fall back to the same default the deployed app uses when no agent:* label
+  // is present (env.AGENT_KIND, default "claude").
+  const envFallback =
+    process.env.E2E_AGENT_KIND?.toLowerCase() === "codex" ? "codex" : "claude";
+  const agentKind = labelKind ?? envFallback;
+  // Pattern targets a flag that appears only in the agent's wrapper-script
+  // invocation, never in the Arthur tracer's argv. See claude.ts/codex.ts
+  // buildPhaseScript for the exact command line.
+  const killPattern = agentKind === "codex" ? "codex exec" : "claude --print";
+
   const { Sandbox } = await import("@vercel/sandbox");
   const { getSandboxCredentials } = await import(
     "../../src/sandbox/credentials.js"
@@ -101,10 +131,10 @@ export async function killClaudeForTicket(
     // (touch sentinel with empty stdout) will run.
     const killResult = await sandbox.runCommand({
       cmd: "pkill",
-      args: ["-9", "-f", "claude"],
+      args: ["-9", "-f", killPattern],
     });
     if (killResult.exitCode === 0) return true;
-    // Matched sandbox but claude wasn't running yet; caller will retry.
+    // Matched sandbox but agent wasn't running yet; caller will retry.
     return false;
   }
   return false;

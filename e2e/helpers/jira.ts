@@ -102,6 +102,13 @@ export async function getTicketStatus(ticketKey: string): Promise<string> {
   return data.fields.status.name;
 }
 
+export async function getTicketLabels(ticketKey: string): Promise<string[]> {
+  const data = await jiraRequest(
+    `/rest/api/3/issue/${ticketKey}?fields=labels`,
+  );
+  return Array.isArray(data?.fields?.labels) ? data.fields.labels : [];
+}
+
 /**
  * Ask Jira's search API whether `ticketKey` is currently visible under the
  * given status. Unlike `/issue/{key}` (which returns committed state), the

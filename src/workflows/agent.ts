@@ -1,6 +1,6 @@
 import { sleep } from "workflow";
 import type {
-  AgentOutput, ReviewOutput, PhaseUsage, PhaseKind, PhaseArtifactPaths, ResearchResult,
+  AgentOutput, PhaseUsage, PhaseKind, PhaseArtifactPaths, ResearchResult,
 } from "../sandbox/agents/types.js";
 import type { AgentKind } from "../sandbox/agents/index.js";
 import type { PRComment, CheckRunResult } from "../adapters/vcs/types.js";
@@ -319,24 +319,6 @@ async function parseAgentOutputStep(
   const { createAgentAdapter } = await import("../sandbox/agents/index.js");
   const a = createAgentAdapter(agentKind);
   return { output: a.parseAgentOutput(raw, structured), usage: a.extractUsage(raw, structured) };
-}
-
-async function captureGitDiff(sandboxId: string): Promise<string> {
-  "use step";
-  const { Sandbox } = await import("@vercel/sandbox");
-  const { getSandboxCredentials } = await import("../sandbox/credentials.js");
-
-  const sandbox = await Sandbox.get({ sandboxId, ...getSandboxCredentials() });
-  const baseShaResult = await sandbox.runCommand("bash", [
-    "-c", "cat /tmp/.pre-agent-sha 2>/dev/null || echo ''",
-  ]);
-  const baseSha = (await baseShaResult.stdout()).trim();
-
-  const diffCmd = baseSha
-    ? `git diff ${baseSha}..HEAD`
-    : "git diff HEAD";
-  const diffResult = await sandbox.runCommand("bash", ["-c", diffCmd]);
-  return (await diffResult.stdout()).trim();
 }
 
 async function createPullRequest(branchName: string, title: string, summary: string) {
