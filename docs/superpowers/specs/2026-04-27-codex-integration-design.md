@@ -58,7 +58,7 @@ The Claude adapter ignores the `structured` argument in every parser — Claude 
 
 ## File Layout
 
-```
+```text
 src/sandbox/
   agents/
     types.ts              # AgentAdapter interface, shared types
@@ -91,7 +91,7 @@ Files **untouched**: `src/adapters/**`, `src/lib/**`, `src/routes/**`, `src/work
 
 ## Data Flow per Ticket (Codex)
 
-```
+```text
 1. Cron poll → dispatch (unchanged)
 2. agentWorkflow(ticketId)
    a. fetchAndValidateTicket / fetchPRContext / fetchAttachments / ensureArthurTaskForTicket (unchanged)

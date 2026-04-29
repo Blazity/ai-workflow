@@ -42,7 +42,12 @@ export async function createTestTicket(
   const envAgent = process.env.E2E_AGENT_KIND?.toLowerCase();
   const autoLabels =
     envAgent === "codex" || envAgent === "claude" ? [`agent:${envAgent}`] : [];
-  const labels = [...autoLabels, ...(overrides.labels ?? [])];
+  // Strip any caller-supplied agent:* labels so the env-driven autoLabel wins
+  // and the parseAgentKindOverride lookup never sees conflicting entries.
+  const filteredOverrides = (overrides.labels ?? []).filter(
+    (l) => !/^agent:/i.test(l),
+  );
+  const labels = [...autoLabels, ...filteredOverrides];
 
   const data = await jiraRequest("/rest/api/3/issue", {
     method: "POST",

@@ -166,10 +166,10 @@ Return \`clarification_needed\` only if the plan is genuinely unexecutable. Exha
 
 ## Output
 
-The JSON object below is your **final report** after you have already edited code and created at least one git commit. It is not a substitute for doing the work.
+The JSON object below is your **final report** after you have already edited at least one ticket-relevant file and created at least one git commit. It is not a substitute for doing the work.
 
-- Do NOT return \`result: "implemented"\` unless you have made code edits AND created at least one git commit on this branch.
-- A run whose only changed file is \`.gitignore\` is a hard failure — set \`result: "failed"\` and explain in \`error\`.
+- Do NOT return \`result: "implemented"\` unless you have made at least one ticket-relevant file edit (code, docs, config, or tests addressing the ticket) AND created at least one git commit on this branch.
+- A run whose only changed file is \`.gitignore\` is a hard failure — set \`result: "failed"\` and explain in \`error\`. (Non-code edits — docs, config, tests — that genuinely address the ticket DO count as implemented.)
 
 Return a JSON object with:
 - \`result\`: "implemented" if done, "clarification_needed" if you have questions, "failed" if stuck.

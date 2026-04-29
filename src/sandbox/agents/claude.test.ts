@@ -27,18 +27,6 @@ describe("ClaudeAgentAdapter.parseAgentOutput", () => {
     expect(out.error).toBe("Tests do not pass");
   });
 
-  it("extracts JSON from markdown-wrapped output", () => {
-    const raw = `Here is my result:\n\`\`\`json\n{"result": "implemented", "summary": "Done"}\n\`\`\``;
-    const out = adapter.parseAgentOutput(raw, null);
-    expect(out.result).toBe("implemented");
-    expect(out.summary).toBe("Done");
-  });
-
-  it("extracts JSON from text-wrapped output", () => {
-    const raw = `I completed the task.\n{"result": "implemented", "summary": "Added feature"}\nThat's all.`;
-    expect(adapter.parseAgentOutput(raw, null).result).toBe("implemented");
-  });
-
   it("returns failed on empty output", () => {
     expect(adapter.parseAgentOutput("", null).result).toBe("failed");
   });

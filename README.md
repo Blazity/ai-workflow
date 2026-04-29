@@ -157,7 +157,7 @@ CODEX_API_KEY=sk-codex-xxxxxxxxxxxx   # or CODEX_CHATGPT_OAUTH_TOKEN
 CODEX_MODEL=gpt-5-codex                # default
 ```
 
-Pricing is fetched from [LiteLLM's community-maintained JSON](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json) on each cold start (1h TTL by default). Override `CODEX_PRICING_URL` in airgapped environments. When pricing is unavailable, Slack reports show tokens-only with `cost unknown`.
+Pricing is fetched from [LiteLLM's community-maintained JSON](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json) on each cold start (1h TTL by default). Override `CODEX_PRICING_URL` in air-gapped environments. When pricing is unavailable, Slack reports show tokens-only with `cost unknown`.
 
 **Sandbox** — Concurrency and timeout limits:
 ```bash

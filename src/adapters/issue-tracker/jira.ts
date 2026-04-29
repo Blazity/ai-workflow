@@ -175,7 +175,7 @@ export class JiraAdapter implements IssueTrackerAdapter {
 }
 
 function toAdfParagraphs(text: string) {
-  const lines = text.split("\n");
+  const lines = text.split(/\r?\n/);
   const paragraphs = lines.map((line) => {
     if (line === "") return { type: "paragraph" };
     return {

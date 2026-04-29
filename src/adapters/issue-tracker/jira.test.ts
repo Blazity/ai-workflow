@@ -455,5 +455,22 @@ describe("JiraAdapter", () => {
         n?.text ?? (n?.content?.map(collectText).join("") ?? "");
       expect(collectText(body.body)).not.toContain("\n");
     });
+
+    it("normalizes CRLF line endings into separate paragraphs", async () => {
+      mockFetch.mockResolvedValueOnce({ ok: true, json: async () => ({}) });
+
+      const adapter = jiraAdapter();
+      await adapter.postComment("10001", "1. First question\r\n2. Second question");
+
+      const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+      expect(body.body.content).toEqual([
+        { type: "paragraph", content: [{ type: "text", text: "1. First question" }] },
+        { type: "paragraph", content: [{ type: "text", text: "2. Second question" }] },
+      ]);
+      const collectText = (n: any): string =>
+        n?.text ?? (n?.content?.map(collectText).join("") ?? "");
+      expect(collectText(body.body)).not.toContain("\r");
+      expect(collectText(body.body)).not.toContain("\n");
+    });
   });
 });

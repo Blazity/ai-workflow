@@ -154,14 +154,6 @@ touch ${paths.sentinel}
       } catch { /* try next line */ }
     }
 
-    const objects = raw.matchAll(/\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}/g);
-    for (const [candidate] of objects) {
-      try {
-        const result = agentOutputSchema.safeParse(JSON.parse(candidate));
-        if (result.success) return result.data;
-      } catch { /* try next */ }
-    }
-
     return { result: "failed", error: `Agent output was not structured JSON. Output starts with: ${raw.slice(0, 500)}` };
   }
 
@@ -184,14 +176,6 @@ touch ${paths.sentinel}
         }
         const direct = reviewOutputSchema.safeParse(event);
         if (direct.success) return direct.data;
-      } catch { /* try next */ }
-    }
-
-    const objects = raw.matchAll(/\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}/g);
-    for (const [candidate] of objects) {
-      try {
-        const result = reviewOutputSchema.safeParse(JSON.parse(candidate));
-        if (result.success) return result.data;
       } catch { /* try next */ }
     }
 
@@ -224,7 +208,6 @@ touch ${paths.sentinel}
       typeof envelope.cost_usd === "number" ? envelope.cost_usd
       : typeof envelope.total_cost_usd === "number" ? envelope.total_cost_usd
       : null;
-    if (cost === null) return null;
     return {
       cost_usd: cost,
       tokens: null,

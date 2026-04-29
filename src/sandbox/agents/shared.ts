@@ -9,7 +9,7 @@ export const GLOBAL_SKILLS = [
 
 export async function installSkillsToAgentsDir(sandbox: RunnableSandbox): Promise<void> {
   for (const { repo, skill } of GLOBAL_SKILLS) {
-    await sandbox.runCommand("npx", [
+    const result = await sandbox.runCommand("npx", [
       "-y", "skills", "add", repo,
       "--skill", skill,
       "--yes",
@@ -17,6 +17,15 @@ export async function installSkillsToAgentsDir(sandbox: RunnableSandbox): Promis
       "--agent", "claude-code", "codex",
       "--copy",
     ]);
+    if (result.exitCode !== 0) {
+      const { logger } = await import("../../lib/logger.js");
+      const stderr = await result.stderr().catch(() => "");
+      logger.error(
+        { repo, skill, exitCode: result.exitCode, output: stderr.slice(0, 500) },
+        "skill_install_failed",
+      );
+      throw new Error(`Failed to install skill ${skill} from ${repo} (exit ${result.exitCode})`);
+    }
   }
 }
 
