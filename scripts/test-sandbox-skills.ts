@@ -9,8 +9,6 @@
 import { Sandbox } from "@vercel/sandbox";
 
 const INJECTED_SKILLS = [
-  { repo: "https://github.com/obra/superpowers", skill: "using-superpowers" },
-  { repo: "https://github.com/obra/superpowers", skill: "requesting-code-review" },
   { repo: "https://github.com/anthropics/skills", skill: "frontend-design" },
 ];
 

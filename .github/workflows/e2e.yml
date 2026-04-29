@@ -12,6 +12,13 @@ on:
           - agent
           - all
         default: all
+      agent:
+        description: "Which agent the agent-tier should run under (per-ticket label override)"
+        type: choice
+        options:
+          - claude
+          - codex
+        default: claude
 
 jobs:
   e2e-orchestration:
@@ -36,7 +43,9 @@ jobs:
       AI_WORKFLOW_KV_REST_API_URL: ${{ secrets.AI_WORKFLOW_KV_REST_API_URL }}
       AI_WORKFLOW_KV_REST_API_TOKEN: ${{ secrets.AI_WORKFLOW_KV_REST_API_TOKEN }}
       VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
-      VERCEL_OIDC_TOKEN: ${{ secrets.VERCEL_OIDC_TOKEN }}
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+      VERCEL_TEAM_ID: ${{ secrets.VERCEL_TEAM_ID }}
+      VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
       MAX_CONCURRENT_AGENTS: ${{ secrets.MAX_CONCURRENT_AGENTS }}
     steps:
       - uses: actions/checkout@v4
@@ -48,6 +57,11 @@ jobs:
           node-version: "20.12"
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - name: Verify Vercel Sandbox credentials present
+        run: |
+          : "${VERCEL_TOKEN:?VERCEL_TOKEN missing in e2e environment}"
+          : "${VERCEL_TEAM_ID:?VERCEL_TEAM_ID missing in e2e environment}"
+          : "${VERCEL_PROJECT_ID:?VERCEL_PROJECT_ID missing in e2e environment}"
       - run: pnpm run test:e2e:orchestration
       - if: failure()
         uses: actions/upload-artifact@v4
@@ -83,7 +97,9 @@ jobs:
       AI_WORKFLOW_KV_REST_API_URL: ${{ secrets.AI_WORKFLOW_KV_REST_API_URL }}
       AI_WORKFLOW_KV_REST_API_TOKEN: ${{ secrets.AI_WORKFLOW_KV_REST_API_TOKEN }}
       VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
-      VERCEL_OIDC_TOKEN: ${{ secrets.VERCEL_OIDC_TOKEN }}
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+      VERCEL_TEAM_ID: ${{ secrets.VERCEL_TEAM_ID }}
+      VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
       MAX_CONCURRENT_AGENTS: ${{ secrets.MAX_CONCURRENT_AGENTS }}
     steps:
       - uses: actions/checkout@v4
@@ -95,6 +111,11 @@ jobs:
           node-version: "20.12"
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - name: Verify Vercel Sandbox credentials present
+        run: |
+          : "${VERCEL_TOKEN:?VERCEL_TOKEN missing in e2e environment}"
+          : "${VERCEL_TEAM_ID:?VERCEL_TEAM_ID missing in e2e environment}"
+          : "${VERCEL_PROJECT_ID:?VERCEL_PROJECT_ID missing in e2e environment}"
       - run: pnpm run test:e2e:capacity
       - if: failure()
         uses: actions/upload-artifact@v4
@@ -130,8 +151,11 @@ jobs:
       AI_WORKFLOW_KV_REST_API_URL: ${{ secrets.AI_WORKFLOW_KV_REST_API_URL }}
       AI_WORKFLOW_KV_REST_API_TOKEN: ${{ secrets.AI_WORKFLOW_KV_REST_API_TOKEN }}
       VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
-      VERCEL_OIDC_TOKEN: ${{ secrets.VERCEL_OIDC_TOKEN }}
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+      VERCEL_TEAM_ID: ${{ secrets.VERCEL_TEAM_ID }}
+      VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
       MAX_CONCURRENT_AGENTS: ${{ secrets.MAX_CONCURRENT_AGENTS }}
+      E2E_AGENT_KIND: ${{ inputs.agent }}
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -142,6 +166,11 @@ jobs:
           node-version: "20.12"
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - name: Verify Vercel Sandbox credentials present
+        run: |
+          : "${VERCEL_TOKEN:?VERCEL_TOKEN missing in e2e environment}"
+          : "${VERCEL_TEAM_ID:?VERCEL_TEAM_ID missing in e2e environment}"
+          : "${VERCEL_PROJECT_ID:?VERCEL_PROJECT_ID missing in e2e environment}"
       - run: pnpm run test:e2e:agent
       - if: failure()
         uses: actions/upload-artifact@v4

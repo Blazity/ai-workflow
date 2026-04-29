@@ -105,7 +105,11 @@ describe("US-02: Ticket with attachments (real pipeline)", () => {
 
     // 5. Create a sandbox and write files using the same pattern as the workflow
     const { Sandbox } = await import("@vercel/sandbox");
+    const { getSandboxCredentials } = await import(
+      "../../src/sandbox/credentials.js"
+    );
     const sbx = await Sandbox.create({
+      ...getSandboxCredentials(),
       source: {
         type: "git",
         url: `https://github.com/${e2eEnv.E2E_GITHUB_OWNER}/${e2eEnv.E2E_GITHUB_REPO}.git`,

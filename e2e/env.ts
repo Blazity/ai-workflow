@@ -30,6 +30,19 @@ const schema = z.object({
   VERCEL_AUTOMATION_BYPASS_SECRET: z.string().optional(),
 
   /**
+   * Persistent Vercel Sandbox credentials used by the e2e runner itself
+   * (see e2e/helpers/sandbox.ts and us02-attachments). When all three are
+   * set, getSandboxCredentials() (src/sandbox/credentials.ts) returns them
+   * and e2e Sandbox.create/list/get calls pass them explicitly, skipping
+   * OIDC — no need to re-paste a rotating VERCEL_OIDC_TOKEN from
+   * `vercel env pull`. The SDK itself does NOT auto-read these from
+   * process.env; callers must spread them into each Sandbox.* call.
+   */
+  VERCEL_TOKEN: z.string().min(1).optional(),
+  VERCEL_TEAM_ID: z.string().min(1).optional(),
+  VERCEL_PROJECT_ID: z.string().min(1).optional(),
+
+  /**
    * Must match the deployed app's MAX_CONCURRENT_AGENTS. US-11 creates
    * this many dummy sandboxes to saturate the dispatch capacity check.
    */

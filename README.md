@@ -142,6 +142,23 @@ COMMIT_AUTHOR=ai-workflow-blazity      # Git commit author name
 COMMIT_EMAIL=ai-workflow@blazity.com   # Git commit author email
 ```
 
+**Switching agents** — Blazebot supports two CLI runtimes. Set `AGENT_KIND` once per deployment:
+
+```bash
+AGENT_KIND=claude    # default — Anthropic Claude Code
+# or
+AGENT_KIND=codex     # OpenAI Codex CLI
+```
+
+When `AGENT_KIND=codex`:
+
+```bash
+CODEX_API_KEY=sk-codex-xxxxxxxxxxxx   # or CODEX_CHATGPT_OAUTH_TOKEN
+CODEX_MODEL=gpt-5-codex                # default
+```
+
+Pricing is fetched from [LiteLLM's community-maintained JSON](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json) on each cold start (1h TTL by default). Override `CODEX_PRICING_URL` in air-gapped environments. When pricing is unavailable, Slack reports show tokens-only with `cost unknown`.
+
 **Sandbox** — Concurrency and timeout limits:
 ```bash
 MAX_CONCURRENT_AGENTS=3   # Max parallel sandboxes (default: 3)
@@ -222,8 +239,15 @@ curl -H "Authorization: Bearer $CRON_SECRET" http://localhost:3000/cron/poll
 | `CHAT_SDK_CHANNEL_ID` | Yes | — | Notification channel ID |
 | `CHAT_SDK_BOT_NAME` | No | `blazebot` | Bot display name |
 | **Agent** | | | |
-| `ANTHROPIC_API_KEY` | Yes | — | Anthropic API key |
+| `AGENT_KIND` | No | `claude` | Runtime: `claude` or `codex` |
+| `ANTHROPIC_API_KEY` | Yes* | — | Anthropic API key (required when `AGENT_KIND=claude`) |
+| `CLAUDE_CODE_OAUTH_TOKEN` | No | — | Alternative to `ANTHROPIC_API_KEY` |
 | `CLAUDE_MODEL` | No | `claude-opus-4-6` | Claude model ID |
+| `CODEX_API_KEY` | Yes* | — | OpenAI Codex API key (required when `AGENT_KIND=codex`) |
+| `CODEX_CHATGPT_OAUTH_TOKEN` | No | — | Alternative to `CODEX_API_KEY` |
+| `CODEX_MODEL` | No | `gpt-5-codex` | Codex model ID |
+| `CODEX_PRICING_URL` | No | LiteLLM JSON | Pricing source for Codex cost reporting |
+| `CODEX_PRICING_TTL_MS` | No | `3600000` | Pricing cache TTL (ms) |
 | `COMMIT_AUTHOR` | No | `ai-workflow-blazity` | Git author name |
 | `COMMIT_EMAIL` | No | `ai-workflow@blazity.com` | Git author email |
 | **Sandbox** | | | |
