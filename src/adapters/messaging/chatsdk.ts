@@ -142,7 +142,7 @@ export class ChatSDKAdapter implements MessagingAdapter {
         // Parent is gone — clear and fall through to re-create below.
         logger.debug(
           { ticketKey, parent: stored, eventKind },
-          "thread_parent_recovered",
+          "thread_parent_recovery_attempt",
         );
         await this.threadStore.clearParent(ticketKey).catch(() => {});
       }
@@ -158,6 +158,12 @@ export class ChatSDKAdapter implements MessagingAdapter {
             "thread_parent_persist_failed",
           ),
         );
+      if (stored) {
+        logger.debug(
+          { ticketKey, oldParent: stored, newParent: sentId, eventKind },
+          "thread_parent_recovered",
+        );
+      }
       return sentId;
     } catch (err) {
       this.logFailure(ticketKey, eventKind, err, "parent_post_failed");

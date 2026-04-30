@@ -4,7 +4,7 @@
 
 Today, every per-ticket notification posts as a top-level message in the configured Slack channel. The `MessagingAdapter.notify(message)` interface has no concept of conversation grouping, so a single ticket can produce 3–5 unrelated-looking messages scattered across the channel:
 
-```
+```text
 [10:01] Task AWT-42 started
 [10:14] Task AWT-42 needs clarification
 [14:02] Task AWT-42 PR ready for review
@@ -57,7 +57,7 @@ Implication: out-of-band events that arrive before any `started` (e.g., a webhoo
 
 ## Architecture
 
-```
+```text
                            UpstashRunRegistry
                            ├── HASH_KEY            (ticket → runId)
                            ├── SANDBOX_HASH_KEY    (ticket → sandboxId)
@@ -132,7 +132,7 @@ Verified during implementation by posting one of each event type to a real Slack
 
 ## Adapter Behavior (Pseudocode)
 
-```
+```pseudo
 notifyForTicket(ticketKey, event):
   parent = threadStore.getParent(ticketKey)
   text   = format(event, ticketKey, jiraBaseUrl)

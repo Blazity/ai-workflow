@@ -14,7 +14,7 @@
 
 ## File Structure
 
-```
+```text
 src/
 ├── adapters/
 │   ├── messaging/
