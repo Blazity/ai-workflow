@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { UpstashRunRegistry } from "./upstash.js";
 
 const HASH_KEY = `blazebot:active-runs:${process.env.VERCEL_ENV ?? "development"}`;
+const THREAD_HASH_KEY = `blazebot:thread-parents:${process.env.VERCEL_ENV ?? "development"}`;
 
 const mockRedis = {
   hsetnx: vi.fn(),
@@ -169,6 +170,57 @@ describe("UpstashRunRegistry", () => {
       const registry = createRegistry();
       await registry.clearFailedMark("AWT-42");
       expect(mockRedis.hdel).toHaveBeenCalledWith(FAILED_HASH_KEY, "AWT-42");
+    });
+  });
+
+  describe("ThreadStore methods", () => {
+    it("setParent then getParent round-trips the message id", async () => {
+      // Phase 1: setParent writes
+      const registry = createRegistry();
+      await registry.setParent("AWT-42", "1700000000.000123");
+      expect(mockRedis.hset).toHaveBeenCalledWith(THREAD_HASH_KEY, {
+        "AWT-42": "1700000000.000123",
+      });
+      expect(mockRedis.persist).toHaveBeenCalledWith(THREAD_HASH_KEY);
+
+      // Phase 2: getParent reads
+      mockRedis.hget.mockResolvedValueOnce("1700000000.000123");
+      const result = await registry.getParent("AWT-42");
+      expect(result).toBe("1700000000.000123");
+      expect(mockRedis.hget).toHaveBeenCalledWith(THREAD_HASH_KEY, "AWT-42");
+    });
+
+    it("getParent returns null when no entry exists", async () => {
+      mockRedis.hget.mockResolvedValueOnce(null);
+      const registry = createRegistry();
+      const result = await registry.getParent("AWT-99");
+      expect(result).toBeNull();
+    });
+
+    it("getParent coerces a number-typed result back to a string (Upstash JSON-parses Slack ts)", async () => {
+      // Slack ts "1777542341.966359" is a string in our setParent call, but
+      // the @upstash/redis client auto-JSON-parses values, turning numeric-
+      // looking strings into JS numbers on retrieval. The Slack SDK calls
+      // .startsWith on the returned messageId, so a number would crash it.
+      mockRedis.hget.mockResolvedValueOnce(1777542341.966359);
+      const registry = createRegistry();
+      const result = await registry.getParent("AWT-42");
+      expect(result).toBe("1777542341.966359");
+      expect(typeof result).toBe("string");
+    });
+
+    it("clearParent deletes the entry from the thread hash", async () => {
+      const registry = createRegistry();
+      await registry.clearParent("AWT-42");
+      expect(mockRedis.hdel).toHaveBeenCalledWith(THREAD_HASH_KEY, "AWT-42");
+    });
+
+    it("unregister does not touch the thread hash", async () => {
+      const registry = createRegistry();
+      await registry.unregister("AWT-42");
+      // unregister deletes from HASH_KEY, SANDBOX_HASH_KEY, ENTRY_TS_HASH_KEY only.
+      const hdelCalls = mockRedis.hdel.mock.calls.map((c) => c[0]);
+      expect(hdelCalls).not.toContain(THREAD_HASH_KEY);
     });
   });
 });
