@@ -121,7 +121,7 @@ describe("dispatchTicket", () => {
     );
     expect(adapters.issueTracker.fetchTicket).toHaveBeenCalledWith("PROJ-42");
     expect(mockStart).toHaveBeenCalledWith("agentWorkflow_sentinel", [
-      "ticket-001",
+      "PROJ-42",
     ]);
     expect(adapters.runRegistry.register).toHaveBeenCalledWith(
       "PROJ-42",

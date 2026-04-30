@@ -197,6 +197,18 @@ describe("UpstashRunRegistry", () => {
       expect(result).toBeNull();
     });
 
+    it("getParent coerces a number-typed result back to a string (Upstash JSON-parses Slack ts)", async () => {
+      // Slack ts "1777542341.966359" is a string in our setParent call, but
+      // the @upstash/redis client auto-JSON-parses values, turning numeric-
+      // looking strings into JS numbers on retrieval. The Slack SDK calls
+      // .startsWith on the returned messageId, so a number would crash it.
+      mockRedis.hget.mockResolvedValueOnce(1777542341.966359);
+      const registry = createRegistry();
+      const result = await registry.getParent("AWT-42");
+      expect(result).toBe("1777542341.966359");
+      expect(typeof result).toBe("string");
+    });
+
     it("clearParent deletes the entry from the thread hash", async () => {
       const registry = createRegistry();
       await registry.clearParent("AWT-42");

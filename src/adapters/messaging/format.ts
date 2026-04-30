@@ -16,6 +16,39 @@ const EVENT_EMOJI: Record<TicketEvent["kind"], string> = {
 };
 
 /**
+ * Short, status-bar style text for the parent (top-level) message that gets
+ * edited in place on every event. Detailed event copy still goes in the
+ * thread via {@link formatTicketEvent}.
+ *
+ * Examples:
+ *   :hourglass_flowing_sand: <link|AWT-42> STATUS: in progress
+ *   :white_check_mark: <link|AWT-42> STATUS: PR ready (<prUrl|#123>)
+ *   :warning: <link|AWT-42> STATUS: failed (research)
+ */
+export function formatTicketStatus(
+  event: TicketEvent,
+  ticketKey: string,
+  jiraBaseUrl: string,
+): string {
+  const link = jiraLink(ticketKey, jiraBaseUrl);
+  const emoji = EVENT_EMOJI[event.kind];
+  const head = `${emoji} ${link} STATUS:`;
+
+  switch (event.kind) {
+    case "started":
+      return `${head} in progress`;
+    case "needs_clarification":
+      return `${head} needs clarification`;
+    case "pr_ready":
+      return `${head} PR ready (<${event.pr.url}|#${event.pr.number}>)`;
+    case "failed":
+      return event.phase ? `${head} failed (${event.phase})` : `${head} failed`;
+    case "canceled":
+      return `${head} canceled`;
+  }
+}
+
+/**
  * Format a TicketEvent as Slack-mrkdwn text with embedded links.
  *
  * Output is intended for `chat.channel(...).post(text)` or `thread.post(text)`.

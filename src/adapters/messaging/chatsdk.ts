@@ -2,7 +2,7 @@ import { Chat, ThreadImpl } from "chat";
 import type { StateAdapter, Lock } from "chat";
 import { createSlackAdapter } from "@chat-adapter/slack";
 import { logger } from "../../lib/logger.js";
-import { formatTicketEvent } from "./format.js";
+import { formatTicketEvent, formatTicketStatus } from "./format.js";
 import type { MessagingAdapter, TicketEvent } from "./types.js";
 import type { ThreadStore } from "../run-registry/types.js";
 
@@ -35,10 +35,8 @@ const noopState: StateAdapter = {
 
 /**
  * Slack error codes that mean "the parent message is gone."
- * When we see one of these on a thread reply, we clear the stored parent
- * and retry top-level. List sourced from Slack's chat.postMessage docs;
- * exact codes are confirmed during smoke-testing (deliberately delete a
- * parent in a test channel).
+ * When we see one of these on an edit or thread reply, we clear the stored
+ * parent and re-anchor by posting a new top-level status message.
  */
 const MISSING_PARENT_ERROR_CODES = new Set([
   "thread_not_found",
@@ -64,56 +62,31 @@ export class ChatSDKAdapter implements MessagingAdapter {
     });
   }
 
+  /**
+   * Ticket lifecycle as a single Slack thread:
+   *   1. Parent (top-level) message is a live status header — edited in place
+   *      on every event so the channel always shows the current state at a
+   *      glance ("AWT-42 STATUS: in progress" → "...PR ready" → ...).
+   *   2. Each event also lands as a detailed reply inside that thread, so the
+   *      thread acts as a chronological audit log.
+   *
+   * Failures are logged and swallowed; workflow runs are never broken by
+   * notification errors.
+   */
   async notifyForTicket(
     ticketKey: string,
     event: TicketEvent,
   ): Promise<void> {
-    const text = formatTicketEvent(event, ticketKey, this.jiraBaseUrl);
-    let parent = await this.threadStore
-      .getParent(ticketKey)
-      .catch((err) => {
-        logger.warn(
-          { ticketKey, error: (err as Error).message },
-          "thread_parent_lookup_failed",
-        );
-        return null;
-      });
+    const status = formatTicketStatus(event, ticketKey, this.jiraBaseUrl);
+    const detail = formatTicketEvent(event, ticketKey, this.jiraBaseUrl);
 
-    let sentId: string | null = null;
-    try {
-      sentId = parent
-        ? await this.postReply(parent, text)
-        : await this.postTopLevel(text);
-    } catch (err) {
-      if (parent && isMissingParentError(err)) {
-        logger.debug(
-          { ticketKey, parent, eventKind: event.kind },
-          "thread_parent_recovered",
-        );
-        await this.threadStore.clearParent(ticketKey).catch(() => {});
-        parent = null;
-        try {
-          sentId = await this.postTopLevel(text);
-        } catch (retryErr) {
-          this.logFailure(ticketKey, event.kind, retryErr);
-          return;
-        }
-      } else {
-        this.logFailure(ticketKey, event.kind, err);
-        return;
-      }
-    }
+    const parent = await this.ensureParentWithStatus(
+      ticketKey,
+      status,
+      event.kind,
+    );
 
-    if (event.kind === "started" && parent == null && sentId) {
-      await this.threadStore
-        .setParent(ticketKey, sentId)
-        .catch((err) =>
-          logger.warn(
-            { ticketKey, error: (err as Error).message },
-            "thread_parent_persist_failed",
-          ),
-        );
-    }
+    await this.postDetail(ticketKey, parent, detail, event.kind);
 
     logger.info(
       {
@@ -126,11 +99,120 @@ export class ChatSDKAdapter implements MessagingAdapter {
     );
   }
 
+  /**
+   * Ensure a parent status message exists for this ticket and reflects the
+   * current event. Returns the parent ts on success, or null if the parent
+   * could not be (re)created — in which case the caller falls back to an
+   * orphaned top-level detail post.
+   */
+  private async ensureParentWithStatus(
+    ticketKey: string,
+    status: string,
+    eventKind: TicketEvent["kind"],
+  ): Promise<string | null> {
+    const stored = await this.threadStore.getParent(ticketKey).catch((err) => {
+      logger.warn(
+        { ticketKey, error: (err as Error).message },
+        "thread_parent_lookup_failed",
+      );
+      return null;
+    });
+
+    if (stored) {
+      try {
+        await this.editTopLevel(stored, status);
+        logger.info(
+          {
+            ticketKey,
+            parent: stored,
+            eventKind,
+            channelId: this.channelId,
+            statusLength: status.length,
+          },
+          "thread_parent_status_updated",
+        );
+        return stored;
+      } catch (err) {
+        if (!isMissingParentError(err)) {
+          // Edit failed for a non-fatal reason (rate limit, transient).
+          // Parent presumably still exists; keep using it for the thread reply.
+          this.logFailure(ticketKey, eventKind, err, "parent_edit_failed");
+          return stored;
+        }
+        // Parent is gone — clear and fall through to re-create below.
+        logger.debug(
+          { ticketKey, parent: stored, eventKind },
+          "thread_parent_recovered",
+        );
+        await this.threadStore.clearParent(ticketKey).catch(() => {});
+      }
+    }
+
+    try {
+      const sentId = await this.postTopLevel(status);
+      await this.threadStore
+        .setParent(ticketKey, sentId)
+        .catch((err) =>
+          logger.warn(
+            { ticketKey, error: (err as Error).message },
+            "thread_parent_persist_failed",
+          ),
+        );
+      return sentId;
+    } catch (err) {
+      this.logFailure(ticketKey, eventKind, err, "parent_post_failed");
+      return null;
+    }
+  }
+
+  /**
+   * Post the detailed event message. When a parent is available, posts as a
+   * thread reply; otherwise falls back to an orphaned top-level message so
+   * the event still leaves a record.
+   */
+  private async postDetail(
+    ticketKey: string,
+    parent: string | null,
+    detail: string,
+    eventKind: TicketEvent["kind"],
+  ): Promise<void> {
+    if (!parent) {
+      await this.postTopLevel(detail).catch((err) =>
+        this.logFailure(ticketKey, eventKind, err, "detail_post_failed"),
+      );
+      return;
+    }
+    try {
+      await this.postReply(parent, detail);
+    } catch (err) {
+      if (isMissingParentError(err)) {
+        // Race: parent vanished between edit/post and the thread reply.
+        // Drop the mapping and fall back to top-level so the audit log
+        // still gets the event; the next notification will re-anchor.
+        await this.threadStore.clearParent(ticketKey).catch(() => {});
+        await this.postTopLevel(detail).catch((retryErr) =>
+          this.logFailure(ticketKey, eventKind, retryErr, "detail_post_failed"),
+        );
+        return;
+      }
+      this.logFailure(ticketKey, eventKind, err, "detail_post_failed");
+    }
+  }
+
   /** Top-level post to the configured channel. Returns the sent message id. */
   private async postTopLevel(text: string): Promise<string> {
     const channel = this.chat.channel(`slack:${this.channelId}`);
     const sent = await channel.post(text);
     return sent.id;
+  }
+
+  /** Edit a previously posted top-level message in place. */
+  private async editTopLevel(parentTs: string, text: string): Promise<void> {
+    await this.slackAdapter.editMessage(
+      `slack:${this.channelId}`,
+      parentTs,
+      text,
+    );
   }
 
   /** Thread reply under `parentTs`. Returns the sent message id. */
@@ -150,6 +232,7 @@ export class ChatSDKAdapter implements MessagingAdapter {
     ticketKey: string,
     eventKind: TicketEvent["kind"],
     err: unknown,
+    msg: string,
   ): void {
     logger.warn(
       {
@@ -158,7 +241,7 @@ export class ChatSDKAdapter implements MessagingAdapter {
         error: (err as Error).message,
         slackErrorCode: extractSlackErrorCode(err),
       },
-      "notification_failed",
+      msg,
     );
   }
 }

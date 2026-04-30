@@ -1,9 +1,72 @@
 import { describe, it, expect } from "vitest";
-import { formatTicketEvent } from "./format.js";
+import { formatTicketEvent, formatTicketStatus } from "./format.js";
 
 const JIRA = "https://example.atlassian.net";
 const KEY = "AWT-42";
 const LINK = `<${JIRA}/browse/${KEY}|${KEY}>`;
+
+describe("formatTicketStatus", () => {
+  it("started → in progress", () => {
+    expect(formatTicketStatus({ kind: "started" }, KEY, JIRA)).toBe(
+      `:hourglass_flowing_sand: ${LINK} STATUS: in progress`,
+    );
+  });
+
+  it("needs_clarification → needs clarification (no commentUrl in header)", () => {
+    expect(
+      formatTicketStatus(
+        {
+          kind: "needs_clarification",
+          commentUrl: `${JIRA}/browse/${KEY}?focusedCommentId=1`,
+        },
+        KEY,
+        JIRA,
+      ),
+    ).toBe(`:question: ${LINK} STATUS: needs clarification`);
+  });
+
+  it("pr_ready → includes PR link inline", () => {
+    expect(
+      formatTicketStatus(
+        {
+          kind: "pr_ready",
+          pr: { url: "https://github.com/o/r/pull/9", number: 9 },
+          usageReport: "u",
+        },
+        KEY,
+        JIRA,
+      ),
+    ).toBe(
+      `:white_check_mark: ${LINK} STATUS: PR ready (<https://github.com/o/r/pull/9|#9>)`,
+    );
+  });
+
+  it("failed with phase → status names the phase", () => {
+    expect(
+      formatTicketStatus(
+        { kind: "failed", phase: "research", reason: "x" },
+        KEY,
+        JIRA,
+      ),
+    ).toBe(`:warning: ${LINK} STATUS: failed (research)`);
+  });
+
+  it("failed without phase → bare failed", () => {
+    expect(formatTicketStatus({ kind: "failed" }, KEY, JIRA)).toBe(
+      `:warning: ${LINK} STATUS: failed`,
+    );
+  });
+
+  it("canceled → bare canceled (no reason in header)", () => {
+    expect(
+      formatTicketStatus(
+        { kind: "canceled", reason: "left AI column" },
+        KEY,
+        JIRA,
+      ),
+    ).toBe(`:no_entry: ${LINK} STATUS: canceled`);
+  });
+});
 
 describe("formatTicketEvent", () => {
   it("started — links the ticket key", () => {

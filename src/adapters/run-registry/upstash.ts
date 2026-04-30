@@ -101,7 +101,12 @@ export class UpstashRunRegistry implements RunRegistryAdapter, ThreadStore {
   }
 
   async getParent(ticketKey: string): Promise<string | null> {
-    return this.redis.hget<string>(THREAD_HASH_KEY, ticketKey);
+    // Slack ts values like "1777542341.966359" look numeric, and the Upstash
+    // client auto-JSON-parses string-encoded numbers back into JS numbers.
+    // Coerce to string so the Slack SDK (which calls .startsWith on it) works.
+    const raw = await this.redis.hget<string | number>(THREAD_HASH_KEY, ticketKey);
+    if (raw == null) return null;
+    return String(raw);
   }
 
   async setParent(ticketKey: string, messageId: string): Promise<void> {
