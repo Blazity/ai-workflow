@@ -99,8 +99,8 @@ export class JiraAdapter implements IssueTrackerAdapter {
     });
   }
 
-  async postComment(id: string, comment: string): Promise<void> {
-    await this.request(`/rest/api/3/issue/${id}/comment`, {
+  async postComment(id: string, comment: string): Promise<string | null> {
+    const data = await this.request(`/rest/api/3/issue/${id}/comment`, {
       method: "POST",
       body: JSON.stringify({
         body: {
@@ -110,6 +110,9 @@ export class JiraAdapter implements IssueTrackerAdapter {
         },
       }),
     });
+    const commentId = typeof data?.id === "string" ? data.id : null;
+    if (!commentId) return null;
+    return `${this.baseUrl}/browse/${encodeURIComponent(id)}?focusedCommentId=${encodeURIComponent(commentId)}`;
   }
 
   async downloadAttachment(

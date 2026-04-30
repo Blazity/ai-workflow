@@ -41,7 +41,14 @@ export interface IssueTrackerAdapter {
    */
   fetchTicket(id: string): Promise<TicketContent>;
   moveTicket(id: string, column: string): Promise<void>;
-  postComment(id: string, comment: string): Promise<void>;
+  /**
+   * Post a comment on a ticket.
+   *
+   * Returns a deep-linkable URL to the created comment when the underlying
+   * tracker exposes one (e.g. Jira's `?focusedCommentId=...`), or `null` when
+   * unavailable so callers can fall back to a plain ticket link.
+   */
+  postComment(id: string, comment: string): Promise<string | null>;
   searchTickets(query: string): Promise<string[]>;
   /**
    * Download an attachment by URL. Optional — not all issue trackers support this.

@@ -429,19 +429,36 @@ describe("JiraAdapter", () => {
   });
 
   describe("postComment", () => {
-    it("posts ADF-formatted comment", async () => {
-      mockFetch.mockResolvedValueOnce({ ok: true, json: async () => ({}) });
+    it("posts ADF-formatted comment and returns a deep link to the new comment", async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ id: "98765" }),
+      });
 
       const adapter = jiraAdapter();
-      await adapter.postComment("10001", "Need more details");
+      const url = await adapter.postComment("PROJ-1", "Need more details");
 
       const call = mockFetch.mock.calls[0];
       const body = JSON.parse(call[1].body);
       expect(body.body.type).toBe("doc");
+      expect(url).toBe(
+        "https://test.atlassian.net/browse/PROJ-1?focusedCommentId=98765",
+      );
+    });
+
+    it("returns null when Jira's response omits a comment id", async () => {
+      mockFetch.mockResolvedValueOnce({ ok: true, json: async () => ({}) });
+
+      const adapter = jiraAdapter();
+      const url = await adapter.postComment("PROJ-1", "x");
+      expect(url).toBeNull();
     });
 
     it("splits multi-line comments into separate paragraphs (no \\n inside text nodes)", async () => {
-      mockFetch.mockResolvedValueOnce({ ok: true, json: async () => ({}) });
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ id: "1" }),
+      });
 
       const adapter = jiraAdapter();
       await adapter.postComment("10001", "1. First question\n2. Second question");
@@ -457,7 +474,10 @@ describe("JiraAdapter", () => {
     });
 
     it("normalizes CRLF line endings into separate paragraphs", async () => {
-      mockFetch.mockResolvedValueOnce({ ok: true, json: async () => ({}) });
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ id: "1" }),
+      });
 
       const adapter = jiraAdapter();
       await adapter.postComment("10001", "1. First question\r\n2. Second question");

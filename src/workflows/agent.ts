@@ -364,13 +364,14 @@ async function postClarificationAndMoveBack(
   ticketId: string,
   questions: string[],
   backlogColumn: string,
-) {
+): Promise<string | null> {
   "use step";
   const { createStepAdapters } = await import("../lib/step-adapters.js");
   const { issueTracker } = createStepAdapters();
   const comment = questions.map((q, i) => `${i + 1}. ${q}`).join("\n");
-  await issueTracker.postComment(ticketId, comment);
+  const commentUrl = await issueTracker.postComment(ticketId, comment);
   await issueTracker.moveTicket(ticketId, backlogColumn);
+  return commentUrl;
 }
 
 async function unregisterRun(ticketIdentifier: string) {
@@ -553,13 +554,14 @@ export async function agentWorkflow(ticketId: string) {
 
       if (research.status === "clarification_needed") {
         const questions = research.body.split("\n").filter((l) => /^\d+\./.test(l.trim()));
-        await postClarificationAndMoveBack(
+        const commentUrl = await postClarificationAndMoveBack(
           ticketId,
           questions.length > 0 ? questions : [research.body],
           env.COLUMN_BACKLOG,
         );
         await notifyTicket(ticket.identifier, {
           kind: "needs_clarification",
+          commentUrl: commentUrl ?? undefined,
           usageReport: usageReportOrUndefined(),
         });
         await unregisterRun(ticket.identifier);
@@ -612,13 +614,14 @@ export async function agentWorkflow(ticketId: string) {
       }
 
       if (implOutput.result === "clarification_needed") {
-        await postClarificationAndMoveBack(
+        const commentUrl = await postClarificationAndMoveBack(
           ticketId,
           implOutput.questions ?? [],
           env.COLUMN_BACKLOG,
         );
         await notifyTicket(ticket.identifier, {
           kind: "needs_clarification",
+          commentUrl: commentUrl ?? undefined,
           usageReport: usageReportOrUndefined(),
         });
         await unregisterRun(ticket.identifier);

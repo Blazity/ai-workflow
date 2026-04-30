@@ -1,6 +1,15 @@
 export type TicketEvent =
   | { kind: "started" }
-  | { kind: "needs_clarification"; usageReport?: string }
+  | {
+      kind: "needs_clarification";
+      /**
+       * Deep link to the posted Jira comment (e.g. `?focusedCommentId=...`).
+       * When present, the Slack message links directly to the questions;
+       * when absent, the formatter falls back to the plain ticket link.
+       */
+      commentUrl?: string;
+      usageReport?: string;
+    }
   | {
       kind: "pr_ready";
       pr: { url: string; number: number };

@@ -1,6 +1,21 @@
 import type { TicketEvent } from "./types.js";
 
 /**
+ * Slack emoji prefixes per event kind. The palette differentiates three
+ * states at a glance:
+ *   - INFO (in progress / terminal info): :hourglass_flowing_sand:, :no_entry:
+ *   - ACTION required from a human:        :question:, :warning:
+ *   - DONE / ready for review:             :white_check_mark:
+ */
+const EVENT_EMOJI: Record<TicketEvent["kind"], string> = {
+  started: ":hourglass_flowing_sand:",
+  needs_clarification: ":question:",
+  pr_ready: ":white_check_mark:",
+  failed: ":warning:",
+  canceled: ":no_entry:",
+};
+
+/**
  * Format a TicketEvent as Slack-mrkdwn text with embedded links.
  *
  * Output is intended for `chat.channel(...).post(text)` or `thread.post(text)`.
@@ -14,14 +29,22 @@ export function formatTicketEvent(
   jiraBaseUrl: string,
 ): string {
   const link = jiraLink(ticketKey, jiraBaseUrl);
-  const head = `Task ${link}`;
+  const emoji = EVENT_EMOJI[event.kind];
+  const head = `${emoji} Task ${link}`;
 
   switch (event.kind) {
     case "started":
       return `${head} started`;
 
-    case "needs_clarification":
-      return appendUsage(`${head} needs clarification`, event.usageReport);
+    case "needs_clarification": {
+      const tail = event.commentUrl
+        ? ` — <${event.commentUrl}|view questions>`
+        : "";
+      return appendUsage(
+        `${head} needs clarification${tail}`,
+        event.usageReport,
+      );
+    }
 
     case "pr_ready": {
       const prLink = `<${event.pr.url}|#${event.pr.number}>`;

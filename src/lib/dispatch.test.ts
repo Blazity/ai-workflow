@@ -59,7 +59,7 @@ function makeAdapters(
       fetchTicket:
         overrides.fetchTicket ?? vi.fn().mockResolvedValue(makeTicket()),
       moveTicket: vi.fn(),
-      postComment: vi.fn(),
+      postComment: vi.fn().mockResolvedValue(null),
       searchTickets: vi.fn(),
     },
     vcs: {

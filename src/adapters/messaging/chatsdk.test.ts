@@ -62,7 +62,9 @@ describe("ChatSDKAdapter.notifyForTicket", () => {
 
     await adapter.notifyForTicket("AWT-42", { kind: "started" });
 
-    expect(mockChannelPost).toHaveBeenCalledWith(`Task ${JIRA_LINK} started`);
+    expect(mockChannelPost).toHaveBeenCalledWith(
+      `:hourglass_flowing_sand: Task ${JIRA_LINK} started`,
+    );
     expect(mockThreadPost).not.toHaveBeenCalled();
     expect(store.setParent).toHaveBeenCalledWith("AWT-42", "1700000000.000111");
   });
@@ -79,7 +81,7 @@ describe("ChatSDKAdapter.notifyForTicket", () => {
 
     expect(mockChannelPost).not.toHaveBeenCalled();
     expect(mockThreadPost).toHaveBeenCalledWith(
-      `Task ${JIRA_LINK} needs clarification\nu`,
+      `:question: Task ${JIRA_LINK} needs clarification\nu`,
     );
     expect(ThreadImpl).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -101,7 +103,7 @@ describe("ChatSDKAdapter.notifyForTicket", () => {
     });
 
     expect(mockChannelPost).toHaveBeenCalledWith(
-      `Task ${JIRA_LINK} canceled: left AI column`,
+      `:no_entry: Task ${JIRA_LINK} canceled: left AI column`,
     );
     expect(store.setParent).not.toHaveBeenCalled();
   });
@@ -145,7 +147,7 @@ describe("ChatSDKAdapter.notifyForTicket", () => {
 
     expect(store.clearParent).toHaveBeenCalledWith("AWT-42");
     expect(mockChannelPost).toHaveBeenCalledWith(
-      `Task ${JIRA_LINK} failed: impl — boom`,
+      `:warning: Task ${JIRA_LINK} failed: impl — boom`,
     );
     expect(store.setParent).not.toHaveBeenCalled();
   });
@@ -189,7 +191,7 @@ describe("ChatSDKAdapter.notifyForTicket", () => {
     });
 
     expect(mockThreadPost).toHaveBeenCalledWith(
-      `Task ${JIRA_LINK} PR ready for review — <https://github.com/o/r/pull/7|#7>\nTotal: $0.10`,
+      `:white_check_mark: Task ${JIRA_LINK} PR ready for review — <https://github.com/o/r/pull/7|#7>\nTotal: $0.10`,
     );
   });
 });
