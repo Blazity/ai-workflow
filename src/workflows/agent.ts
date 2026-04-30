@@ -554,8 +554,10 @@ export async function agentWorkflow(ticketId: string) {
 
       if (research.status === "clarification_needed") {
         const questions = research.body.split("\n").filter((l) => /^\d+\./.test(l.trim()));
+        // Pass the issue key (not the numeric id) so the returned URL is a
+        // /browse/{KEY}?focusedCommentId=... deep link rather than /browse/{numericId}/...
         const commentUrl = await postClarificationAndMoveBack(
-          ticketId,
+          ticket.identifier,
           questions.length > 0 ? questions : [research.body],
           env.COLUMN_BACKLOG,
         );
@@ -615,7 +617,7 @@ export async function agentWorkflow(ticketId: string) {
 
       if (implOutput.result === "clarification_needed") {
         const commentUrl = await postClarificationAndMoveBack(
-          ticketId,
+          ticket.identifier,
           implOutput.questions ?? [],
           env.COLUMN_BACKLOG,
         );
