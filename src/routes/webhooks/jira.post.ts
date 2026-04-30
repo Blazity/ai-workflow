@@ -1,6 +1,5 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { defineEventHandler, readRawBody, getHeader, createError } from "h3";
-import { getRun } from "workflow/api";
 import { env } from "../../../env.js";
 import { IssueTrackerNotFoundError } from "../../adapters/issue-tracker/types.js";
 import { createAdapters } from "../../lib/adapters.js";
@@ -8,8 +7,6 @@ import { cancelRun } from "../../lib/cancel-run.js";
 import { dispatchTicket, isClaimingSentinel } from "../../lib/dispatch.js";
 import { logger } from "../../lib/logger.js";
 import { stopTicketSandboxes } from "../../sandbox/stop-ticket-sandboxes.js";
-
-const TERMINAL_RUN_STATUSES = new Set(["completed", "failed", "cancelled"]);
 
 /**
  * Jira webhook handler — triggers the same dispatch logic as the cron poller.
@@ -237,28 +234,6 @@ async function cancelTrackedRun(
     await stopTicketSandboxes(ticketKey, sandboxId).catch(() => {});
     await runRegistry.unregister(ticketKey).catch(() => {});
     return true;
-  }
-
-  // Race guard: terminal workflow paths move the ticket out of the AI column
-  // BEFORE calling unregisterRun, so a failed move can't leave a stuck registry
-  // entry. The Jira webhook for that move can land here before unregisterRun
-  // runs, making a finished run look active. If the run is already terminal,
-  // clean up the stale registry entry silently — no cancel notification.
-  try {
-    const status = await getRun(trackedRunId).status;
-    if (TERMINAL_RUN_STATUSES.has(status)) {
-      await runRegistry.unregister(ticketKey).catch(() => {});
-      logger.info(
-        { ticketKey, runId: trackedRunId, status },
-        "webhook_skip_cancel_run_already_terminal",
-      );
-      return false;
-    }
-  } catch (err) {
-    logger.warn(
-      { ticketKey, runId: trackedRunId, error: (err as Error).message },
-      "webhook_run_status_check_failed",
-    );
   }
 
   return cancelRun(ticketKey, trackedRunId, runRegistry);

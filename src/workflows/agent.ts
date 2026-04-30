@@ -535,6 +535,12 @@ export async function agentWorkflow(ticketId: string) {
 
       const researchDone = await pollUntilDone(sandboxId, researchPaths.sentinel, 20);
       if (!researchDone) {
+        // Unregister BEFORE moveTicket so the Jira webhook for this move
+        // can't race ahead and fire a duplicate "canceled" notification
+        // (the registry entry is what makes the webhook treat a finishing
+        // run as a cancellable orphan). Same reasoning at every terminal
+        // path below.
+        await unregisterRun(ticket.identifier);
         await moveTicket(ticketId, env.COLUMN_BACKLOG);
         await notifyTicket(ticket.identifier, {
           kind: "failed",
@@ -542,7 +548,6 @@ export async function agentWorkflow(ticketId: string) {
           reason: "phase timed out",
           usageReport: usageReportOrUndefined(),
         });
-        await unregisterRun(ticket.identifier);
         return;
       }
 
@@ -554,6 +559,7 @@ export async function agentWorkflow(ticketId: string) {
 
       if (research.status === "clarification_needed") {
         const questions = research.body.split("\n").filter((l) => /^\d+\./.test(l.trim()));
+        await unregisterRun(ticket.identifier);
         const commentUrl = await postClarificationAndMoveBack(
           ticketId,
           questions.length > 0 ? questions : [research.body],
@@ -564,11 +570,11 @@ export async function agentWorkflow(ticketId: string) {
           commentUrl: commentUrl ?? undefined,
           usageReport: usageReportOrUndefined(),
         });
-        await unregisterRun(ticket.identifier);
         return;
       }
 
       if (research.status === "failed") {
+        await unregisterRun(ticket.identifier);
         await moveTicket(ticketId, env.COLUMN_BACKLOG);
         await notifyTicket(ticket.identifier, {
           kind: "failed",
@@ -576,7 +582,6 @@ export async function agentWorkflow(ticketId: string) {
           reason: research.body.slice(0, 200),
           usageReport: usageReportOrUndefined(),
         });
-        await unregisterRun(ticket.identifier);
         return;
       }
 
@@ -614,6 +619,7 @@ export async function agentWorkflow(ticketId: string) {
       }
 
       if (implOutput.result === "clarification_needed") {
+        await unregisterRun(ticket.identifier);
         const commentUrl = await postClarificationAndMoveBack(
           ticketId,
           implOutput.questions ?? [],
@@ -624,11 +630,11 @@ export async function agentWorkflow(ticketId: string) {
           commentUrl: commentUrl ?? undefined,
           usageReport: usageReportOrUndefined(),
         });
-        await unregisterRun(ticket.identifier);
         return;
       }
 
       if (implOutput.result === "failed") {
+        await unregisterRun(ticket.identifier);
         await moveTicket(ticketId, env.COLUMN_BACKLOG);
         await notifyTicket(ticket.identifier, {
           kind: "failed",
@@ -636,7 +642,6 @@ export async function agentWorkflow(ticketId: string) {
           reason: implOutput.error ?? "unknown",
           usageReport: usageReportOrUndefined(),
         });
-        await unregisterRun(ticket.identifier);
         return;
       }
 
@@ -693,6 +698,7 @@ export async function agentWorkflow(ticketId: string) {
       }
 
       if (!pushResult.pushed) {
+        await unregisterRun(ticket.identifier);
         await moveTicket(ticketId, env.COLUMN_BACKLOG);
         await notifyTicket(ticket.identifier, {
           kind: "failed",
@@ -700,7 +706,6 @@ export async function agentWorkflow(ticketId: string) {
           reason: pushResult.error ?? "unknown",
           usageReport: usageReportOrUndefined(),
         });
-        await unregisterRun(ticket.identifier);
         return;
       }
 
@@ -719,22 +724,25 @@ export async function agentWorkflow(ticketId: string) {
         pr: { url: pr.url, number: pr.id },
         usageReport,
       });
-      await moveTicket(ticketId, env.COLUMN_AI_REVIEW);
       await unregisterRun(ticket.identifier);
+      await moveTicket(ticketId, env.COLUMN_AI_REVIEW);
     } finally {
       await teardownSandbox(sandboxId);
     }
   } catch (err) {
     console.error(`Workflow failed for ${ticket.identifier}:`, err);
+    // Unregister BEFORE the move so the move's webhook can't race ahead and
+    // fire a duplicate "canceled" notification on top of the "failed" one.
+    // If the move then fails, markTicketFailed re-records a marker that
+    // dispatch.isTicketFailed checks to keep the ticket from being re-picked.
+    await unregisterRun(ticket.identifier).catch(() => {});
     const moved = await moveTicket(ticketId, env.COLUMN_BACKLOG).then(() => true).catch(() => false);
     await notifyTicket(ticket.identifier, {
       kind: "failed",
       reason: (err as Error).message ?? "unknown",
       usageReport: usageReportOrUndefined(),
     }).catch(() => {});
-    if (moved) {
-      await unregisterRun(ticket.identifier).catch(() => {});
-    } else {
+    if (!moved) {
       await markTicketFailed(ticket.identifier, `Failed to move ticket to backlog: ${(err as Error).message ?? "unknown"}`).catch(() => {});
     }
     throw err;
