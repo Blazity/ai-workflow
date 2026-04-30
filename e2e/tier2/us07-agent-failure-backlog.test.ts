@@ -92,9 +92,18 @@ describe("US-07: Agent failure moves ticket to Backlog", () => {
       { description: `Redis clean for ${ticketKey}`, timeoutMs: 60_000 },
     );
 
-    // 7. No sandbox still running for this ticket
-    const stopped = await stopSandboxesForTicket(ticketKey);
-    expect(stopped).toBe(0);
+    // 7. No sandbox still running for this ticket. Redis cleanup
+    //    (unregisterRun) and sandbox teardown happen in separate workflow
+    //    steps — Redis lands first, then teardownSandbox runs in the outer
+    //    finally. Poll until the teardown actually completes instead of
+    //    asserting immediately.
+    await waitFor(
+      async () => {
+        const stopped = await stopSandboxesForTicket(ticketKey);
+        return stopped === 0 ? true : null;
+      },
+      { description: `sandbox stopped for ${ticketKey}`, timeoutMs: 60_000 },
+    );
 
     // 8. Final status assertion
     const finalStatus = await getTicketStatus(ticketKey);
