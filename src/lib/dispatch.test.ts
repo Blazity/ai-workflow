@@ -73,7 +73,7 @@ function makeAdapters(
       getBranchSha: vi.fn().mockResolvedValue("abc123"),
     },
     messaging: {
-      notify: vi.fn(),
+      notifyForTicket: vi.fn(),
     },
     runRegistry: {
       claim:

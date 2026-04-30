@@ -45,3 +45,20 @@ export interface RunRegistryAdapter {
   /** Remove the failure marker for a ticket. */
   clearFailedMark(ticketKey: string): Promise<void>;
 }
+
+/**
+ * Per-ticket Slack thread parent store. Implemented alongside RunRegistryAdapter
+ * by UpstashRunRegistry, but exposed as a separate interface so the messaging
+ * adapter only depends on the slice it needs.
+ *
+ * Lifetime: an entry survives across multiple workflow runs for the same
+ * ticket. unregister(ticketKey) does NOT clear it — see clearParent().
+ */
+export interface ThreadStore {
+  /** Returns the Slack message id (timestamp) anchoring this ticket's thread, or null. */
+  getParent(ticketKey: string): Promise<string | null>;
+  /** Records the message id as the parent for this ticket. Overwrites any prior value. */
+  setParent(ticketKey: string, messageId: string): Promise<void>;
+  /** Removes the entry. Used after Slack reports the parent message no longer exists. */
+  clearParent(ticketKey: string): Promise<void>;
+}

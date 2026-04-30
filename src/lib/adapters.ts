@@ -16,6 +16,10 @@ export interface Adapters {
 }
 
 export function createAdapters(): Adapters {
+  const runRegistry = new UpstashRunRegistry({
+    url: env.AI_WORKFLOW_KV_REST_API_URL,
+    token: env.AI_WORKFLOW_KV_REST_API_TOKEN,
+  });
   return {
     issueTracker: new JiraAdapter({
       baseUrl: env.JIRA_BASE_URL,
@@ -28,10 +32,9 @@ export function createAdapters(): Adapters {
       slackToken: env.CHAT_SDK_SLACK_TOKEN,
       channelId: env.CHAT_SDK_CHANNEL_ID,
       botName: env.CHAT_SDK_BOT_NAME,
+      jiraBaseUrl: env.JIRA_BASE_URL,
+      threadStore: runRegistry,
     }),
-    runRegistry: new UpstashRunRegistry({
-      url: env.AI_WORKFLOW_KV_REST_API_URL,
-      token: env.AI_WORKFLOW_KV_REST_API_TOKEN,
-    }),
+    runRegistry,
   };
 }

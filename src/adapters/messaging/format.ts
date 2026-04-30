@@ -1,0 +1,61 @@
+import type { TicketEvent } from "./types.js";
+
+/**
+ * Format a TicketEvent as Slack-mrkdwn text with embedded links.
+ *
+ * Output is intended for `chat.channel(...).post(text)` or `thread.post(text)`.
+ * Slack-native `<url|label>` syntax is used because remark/mdast escaping
+ * via PostableMarkdown can mangle the angle brackets. We pass it as a plain
+ * string; the chat package treats unmarked strings as PostableRaw on Slack.
+ */
+export function formatTicketEvent(
+  event: TicketEvent,
+  ticketKey: string,
+  jiraBaseUrl: string,
+): string {
+  const link = jiraLink(ticketKey, jiraBaseUrl);
+  const head = `Task ${link}`;
+
+  switch (event.kind) {
+    case "started":
+      return `${head} started`;
+
+    case "needs_clarification":
+      return appendUsage(`${head} needs clarification`, event.usageReport);
+
+    case "pr_ready": {
+      const prLink = `<${event.pr.url}|#${event.pr.number}>`;
+      return appendUsage(
+        `${head} PR ready for review — ${prLink}`,
+        event.usageReport,
+      );
+    }
+
+    case "failed": {
+      const body = formatFailedBody(event.phase, event.reason);
+      return appendUsage(`${head} failed${body}`, event.usageReport);
+    }
+
+    case "canceled":
+      return `${head} canceled: ${event.reason}`;
+  }
+}
+
+function jiraLink(ticketKey: string, jiraBaseUrl: string): string {
+  const base = jiraBaseUrl.replace(/\/$/, "");
+  return `<${base}/browse/${ticketKey}|${ticketKey}>`;
+}
+
+function formatFailedBody(
+  phase: "research" | "impl" | "push" | undefined,
+  reason: string | undefined,
+): string {
+  if (phase && reason) return `: ${phase} — ${reason}`;
+  if (reason) return `: ${reason}`;
+  return "";
+}
+
+function appendUsage(base: string, usageReport: string | undefined): string {
+  if (!usageReport) return base;
+  return `${base}\n${usageReport}`;
+}
