@@ -135,7 +135,10 @@ export async function dispatchTicket(
     }
 
     stage = "start_workflow";
-    const handle = await start(agentWorkflow, [ticket.id]);
+    // Pass the issue key (not the numeric id) so the workflow can build
+    // /browse/{KEY}?focusedCommentId=... deep links in Slack notifications.
+    // Jira's REST API accepts either id or key for fetch/transition/comment.
+    const handle = await start(agentWorkflow, [ticketKey]);
     logger.info(
       { ticketId: ticket.id, identifier: ticket.identifier, runId: handle.runId },
       "workflow_started",

@@ -59,7 +59,7 @@ function makeAdapters(
       fetchTicket:
         overrides.fetchTicket ?? vi.fn().mockResolvedValue(makeTicket()),
       moveTicket: vi.fn(),
-      postComment: vi.fn(),
+      postComment: vi.fn().mockResolvedValue(null),
       searchTickets: vi.fn(),
     },
     vcs: {
@@ -73,7 +73,7 @@ function makeAdapters(
       getBranchSha: vi.fn().mockResolvedValue("abc123"),
     },
     messaging: {
-      notify: vi.fn(),
+      notifyForTicket: vi.fn(),
     },
     runRegistry: {
       claim:
@@ -121,7 +121,7 @@ describe("dispatchTicket", () => {
     );
     expect(adapters.issueTracker.fetchTicket).toHaveBeenCalledWith("PROJ-42");
     expect(mockStart).toHaveBeenCalledWith("agentWorkflow_sentinel", [
-      "ticket-001",
+      "PROJ-42",
     ]);
     expect(adapters.runRegistry.register).toHaveBeenCalledWith(
       "PROJ-42",

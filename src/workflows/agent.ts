@@ -5,6 +5,7 @@ import type {
 import type { AgentKind } from "../sandbox/agents/index.js";
 import type { PRComment, CheckRunResult } from "../adapters/vcs/types.js";
 import type { TicketAttachment } from "../adapters/issue-tracker/types.js";
+import type { TicketEvent } from "../adapters/messaging/types.js";
 import type { DownloadedAttachment } from "../sandbox/attachments.js";
 
 // --- Step Functions ---
@@ -328,6 +329,23 @@ async function createPullRequest(branchName: string, title: string, summary: str
   return vcs.createPR(branchName, title, summary);
 }
 
+async function findPRForBranch(branchName: string) {
+  "use step";
+  const { createStepAdapters } = await import("../lib/step-adapters.js");
+  const { vcs } = createStepAdapters();
+  const pr = await vcs.findPR(branchName);
+  if (!pr) {
+    // We only call this on the pr_ready branch when prContext was non-null
+    // (i.e. a PR existed at fetchPRContext time). A null here means the PR
+    // was closed manually between fetch and post-push lookup — rare, but
+    // possible. Throwing escalates to the workflow's catch handler, which
+    // posts a `failed` event. Acceptable degradation; if this becomes
+    // common, downgrade to a graceful pr_ready with branch-only context.
+    throw new Error(`Expected PR for branch ${branchName} but findPR returned null`);
+  }
+  return pr;
+}
+
 async function moveTicket(ticketId: string, column: string) {
   "use step";
   const { createStepAdapters } = await import("../lib/step-adapters.js");
@@ -335,24 +353,25 @@ async function moveTicket(ticketId: string, column: string) {
   await issueTracker.moveTicket(ticketId, column);
 }
 
-async function notifySlack(message: string) {
+async function notifyTicket(ticketKey: string, event: TicketEvent) {
   "use step";
   const { createStepAdapters } = await import("../lib/step-adapters.js");
   const { messaging } = createStepAdapters();
-  await messaging.notify(message);
+  await messaging.notifyForTicket(ticketKey, event);
 }
 
 async function postClarificationAndMoveBack(
   ticketId: string,
   questions: string[],
   backlogColumn: string,
-) {
+): Promise<string | null> {
   "use step";
   const { createStepAdapters } = await import("../lib/step-adapters.js");
   const { issueTracker } = createStepAdapters();
   const comment = questions.map((q, i) => `${i + 1}. ${q}`).join("\n");
-  await issueTracker.postComment(ticketId, comment);
+  const commentUrl = await issueTracker.postComment(ticketId, comment);
   await issueTracker.moveTicket(ticketId, backlogColumn);
+  return commentUrl;
 }
 
 async function unregisterRun(ticketIdentifier: string) {
@@ -432,13 +451,15 @@ export async function agentWorkflow(ticketId: string) {
   // Set after provisionSandbox once agentKind is known.
   let activeModel: string | undefined;
   let priceLookup: ((m: string) => { input: number; cached_input: number; output: number } | null) | undefined;
-  const usageSuffix = () =>
+  // Returns the formatted usage report when any phase has produced usage,
+  // otherwise undefined so the messaging formatter can omit the trailing block.
+  const usageReportOrUndefined = (): string | undefined =>
     Object.keys(phaseUsages).length
-      ? `\n${formatUsageReport(phaseUsages, priceLookup, activeModel)}`
-      : "";
+      ? formatUsageReport(phaseUsages, priceLookup, activeModel)
+      : undefined;
 
   try {
-    await notifySlack(`Task ${ticket.identifier} started`);
+    await notifyTicket(ticket.identifier, { kind: "started" });
 
     const branchName = `blazebot/${ticket.identifier.toLowerCase()}`;
 
@@ -515,7 +536,12 @@ export async function agentWorkflow(ticketId: string) {
       const researchDone = await pollUntilDone(sandboxId, researchPaths.sentinel, 20);
       if (!researchDone) {
         await moveTicket(ticketId, env.COLUMN_BACKLOG);
-        await notifySlack(`Task ${ticket.identifier} failed: research phase timed out${usageSuffix()}`);
+        await notifyTicket(ticket.identifier, {
+          kind: "failed",
+          phase: "research",
+          reason: "phase timed out",
+          usageReport: usageReportOrUndefined(),
+        });
         await unregisterRun(ticket.identifier);
         return;
       }
@@ -528,19 +554,28 @@ export async function agentWorkflow(ticketId: string) {
 
       if (research.status === "clarification_needed") {
         const questions = research.body.split("\n").filter((l) => /^\d+\./.test(l.trim()));
-        await postClarificationAndMoveBack(
+        const commentUrl = await postClarificationAndMoveBack(
           ticketId,
           questions.length > 0 ? questions : [research.body],
           env.COLUMN_BACKLOG,
         );
-        await notifySlack(`Task ${ticket.identifier} needs clarification${usageSuffix()}`);
+        await notifyTicket(ticket.identifier, {
+          kind: "needs_clarification",
+          commentUrl: commentUrl ?? undefined,
+          usageReport: usageReportOrUndefined(),
+        });
         await unregisterRun(ticket.identifier);
         return;
       }
 
       if (research.status === "failed") {
         await moveTicket(ticketId, env.COLUMN_BACKLOG);
-        await notifySlack(`Task ${ticket.identifier} failed: research — ${research.body.slice(0, 200)}${usageSuffix()}`);
+        await notifyTicket(ticket.identifier, {
+          kind: "failed",
+          phase: "research",
+          reason: research.body.slice(0, 200),
+          usageReport: usageReportOrUndefined(),
+        });
         await unregisterRun(ticket.identifier);
         return;
       }
@@ -579,19 +614,28 @@ export async function agentWorkflow(ticketId: string) {
       }
 
       if (implOutput.result === "clarification_needed") {
-        await postClarificationAndMoveBack(
+        const commentUrl = await postClarificationAndMoveBack(
           ticketId,
           implOutput.questions ?? [],
           env.COLUMN_BACKLOG,
         );
-        await notifySlack(`Task ${ticket.identifier} needs clarification${usageSuffix()}`);
+        await notifyTicket(ticket.identifier, {
+          kind: "needs_clarification",
+          commentUrl: commentUrl ?? undefined,
+          usageReport: usageReportOrUndefined(),
+        });
         await unregisterRun(ticket.identifier);
         return;
       }
 
       if (implOutput.result === "failed") {
         await moveTicket(ticketId, env.COLUMN_BACKLOG);
-        await notifySlack(`Task ${ticket.identifier} failed: implementation — ${implOutput.error ?? "unknown"}${usageSuffix()}`);
+        await notifyTicket(ticket.identifier, {
+          kind: "failed",
+          phase: "impl",
+          reason: implOutput.error ?? "unknown",
+          usageReport: usageReportOrUndefined(),
+        });
         await unregisterRun(ticket.identifier);
         return;
       }
@@ -650,19 +694,31 @@ export async function agentWorkflow(ticketId: string) {
 
       if (!pushResult.pushed) {
         await moveTicket(ticketId, env.COLUMN_BACKLOG);
-        await notifySlack(`Task ${ticket.identifier} failed: push failed — ${pushResult.error ?? "unknown"}${usageSuffix()}`);
+        await notifyTicket(ticket.identifier, {
+          kind: "failed",
+          phase: "push",
+          reason: pushResult.error ?? "unknown",
+          usageReport: usageReportOrUndefined(),
+        });
         await unregisterRun(ticket.identifier);
         return;
       }
 
-      if (!prContext) {
-        await createPullRequest(branchName, ticket.title, "");
-      }
-      // Notify Slack BEFORE moving the ticket out of the AI column.
-      // Reconcile cancels runs whose tickets have left AI column; racing
-      // that cancellation after moveTicket would skip the notification.
+      // We need a {url, number} regardless of whether the PR is new or pre-existing.
+      // - New PR: createPullRequest returns the PullRequest ({ id, url, branch }) — capture it.
+      // - Existing PR: prContext was built from vcs.findPR(branch), but findPR's return
+      //   is dropped today. Re-fetch via the VCS adapter step (cheap; same call already
+      //   ran on this branch earlier in the workflow).
+      const pr = !prContext
+        ? await createPullRequest(branchName, ticket.title, "")
+        : await findPRForBranch(branchName);
+
       const usageReport = formatUsageReport(phaseUsages, priceLookup, activeModel);
-      await notifySlack(`Task ${ticket.identifier} PR ready for review\n${usageReport}`);
+      await notifyTicket(ticket.identifier, {
+        kind: "pr_ready",
+        pr: { url: pr.url, number: pr.id },
+        usageReport,
+      });
       await moveTicket(ticketId, env.COLUMN_AI_REVIEW);
       await unregisterRun(ticket.identifier);
     } finally {
@@ -671,7 +727,11 @@ export async function agentWorkflow(ticketId: string) {
   } catch (err) {
     console.error(`Workflow failed for ${ticket.identifier}:`, err);
     const moved = await moveTicket(ticketId, env.COLUMN_BACKLOG).then(() => true).catch(() => false);
-    await notifySlack(`Task ${ticket.identifier} failed: ${(err as Error).message ?? "unknown"}${usageSuffix()}`).catch(() => {});
+    await notifyTicket(ticket.identifier, {
+      kind: "failed",
+      reason: (err as Error).message ?? "unknown",
+      usageReport: usageReportOrUndefined(),
+    }).catch(() => {});
     if (moved) {
       await unregisterRun(ticket.identifier).catch(() => {});
     } else {

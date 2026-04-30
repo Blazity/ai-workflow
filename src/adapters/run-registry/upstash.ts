@@ -1,13 +1,14 @@
 import { Redis } from "@upstash/redis";
-import type { RunRegistryAdapter, FailedTicketMeta } from "./types.js";
+import type { RunRegistryAdapter, FailedTicketMeta, ThreadStore } from "./types.js";
 
 const ENV_PREFIX = process.env.VERCEL_ENV ?? "development";
 const HASH_KEY = `blazebot:active-runs:${ENV_PREFIX}`;
 const FAILED_HASH_KEY = `blazebot:failed-tickets:${ENV_PREFIX}`;
 const SANDBOX_HASH_KEY = `blazebot:sandboxes:${ENV_PREFIX}`;
 const ENTRY_TS_HASH_KEY = `blazebot:entry-timestamps:${ENV_PREFIX}`;
+const THREAD_HASH_KEY = `blazebot:thread-parents:${ENV_PREFIX}`;
 
-export class UpstashRunRegistry implements RunRegistryAdapter {
+export class UpstashRunRegistry implements RunRegistryAdapter, ThreadStore {
   private redis: Redis;
 
   constructor(opts: { url: string; token: string }) {
@@ -97,5 +98,24 @@ export class UpstashRunRegistry implements RunRegistryAdapter {
 
   async clearFailedMark(ticketKey: string): Promise<void> {
     await this.redis.hdel(FAILED_HASH_KEY, ticketKey);
+  }
+
+  async getParent(ticketKey: string): Promise<string | null> {
+    // Slack ts values like "1777542341.966359" look numeric, and the Upstash
+    // client auto-JSON-parses string-encoded numbers back into JS numbers.
+    // Coerce to string so the Slack SDK (which calls .startsWith on it) works.
+    const raw = await this.redis.hget<string | number>(THREAD_HASH_KEY, ticketKey);
+    if (raw == null) return null;
+    return String(raw);
+  }
+
+  async setParent(ticketKey: string, messageId: string): Promise<void> {
+    await this.redis.hset(THREAD_HASH_KEY, { [ticketKey]: messageId });
+    // Defend against any external TTL — the thread mapping must outlive runs.
+    await this.redis.persist(THREAD_HASH_KEY);
+  }
+
+  async clearParent(ticketKey: string): Promise<void> {
+    await this.redis.hdel(THREAD_HASH_KEY, ticketKey);
   }
 }

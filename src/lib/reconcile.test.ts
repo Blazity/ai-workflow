@@ -53,7 +53,7 @@ function makeIssueTracker(
   return {
     fetchTicket: vi.fn(),
     moveTicket: vi.fn(),
-    postComment: vi.fn(),
+    postComment: vi.fn().mockResolvedValue(null),
     searchTickets: vi.fn(),
     ...overrides,
   };

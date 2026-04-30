@@ -20,9 +20,10 @@ export default defineEventHandler(async (event) => {
         reason === "inflight_claim"
           ? "claim was cleared after the ticket left AI"
           : "workflow run was cancelled after the ticket left AI";
-      await adapters.messaging.notify(
-        `Task ${ticketKey} canceled: ${detail}.`,
-      );
+      await adapters.messaging.notifyForTicket(ticketKey, {
+        kind: "canceled",
+        reason: `${detail}.`,
+      });
     },
   );
 
