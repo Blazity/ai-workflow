@@ -10,7 +10,7 @@ export const env = createEnv({
   },
   server: {
     // Issue Tracker
-    ISSUE_TRACKER_KIND: z.enum(["jira"]),
+    ISSUE_TRACKER_KIND: z.literal("jira").default("jira"),
     JIRA_BASE_URL: z.string().url(),
     JIRA_EMAIL: z.string().email(),
     JIRA_API_TOKEN: z.string().min(1),
