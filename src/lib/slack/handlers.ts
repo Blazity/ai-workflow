@@ -113,27 +113,30 @@ export async function handleCancel(
 
 export async function handleInspect(
   registry: RunRegistryAdapter & ThreadStore,
-  ticketKey: string | null,
+  ticketKey: string,
   jiraBaseUrl: string,
 ): Promise<string> {
-  if (ticketKey) {
-    const [runId, sandboxId, entryCreatedAt, threadParent, isFailed] =
-      await Promise.all([
-        registry.getRunId(ticketKey).catch(() => null),
-        registry.getSandboxId(ticketKey).catch(() => null),
-        registry.getEntryCreatedAt(ticketKey).catch(() => null),
-        registry.getParent(ticketKey).catch(() => null),
-        registry.isTicketFailed(ticketKey).catch(() => false),
-      ]);
-    return formatInspectTicket(ticketKey, jiraBaseUrl, {
-      runId,
-      sandboxId,
-      entryCreatedAt,
-      threadParent,
-      isFailed,
-    });
-  }
+  const [runId, sandboxId, entryCreatedAt, threadParent, isFailed] =
+    await Promise.all([
+      registry.getRunId(ticketKey).catch(() => null),
+      registry.getSandboxId(ticketKey).catch(() => null),
+      registry.getEntryCreatedAt(ticketKey).catch(() => null),
+      registry.getParent(ticketKey).catch(() => null),
+      registry.isTicketFailed(ticketKey).catch(() => false),
+    ]);
+  return formatInspectTicket(ticketKey, jiraBaseUrl, {
+    runId,
+    sandboxId,
+    entryCreatedAt,
+    threadParent,
+    isFailed,
+  });
+}
 
+export async function handleSummary(
+  registry: RunRegistryAdapter & ThreadStore,
+  jiraBaseUrl: string,
+): Promise<string> {
   const [active, failed] = await Promise.all([
     registry.listAll().catch(() => []),
     registry.listAllFailed().catch(() => []),
