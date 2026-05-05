@@ -133,7 +133,13 @@ describe("handleCancel", () => {
       cancelRunFn,
       stopSandboxes,
     );
-    expect(cancelRunFn).toHaveBeenCalledWith("AWT-1", "run_a", registry);
+    expect(cancelRunFn).toHaveBeenCalledWith(
+      "AWT-1",
+      "run_a",
+      registry,
+      undefined,
+      undefined,
+    );
     expect(out).toContain("Cancelled");
     expect(out).toContain("AWT-1");
   });

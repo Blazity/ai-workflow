@@ -95,6 +95,9 @@ function makeAdapters(
       isTicketFailed: overrides.isTicketFailed ?? vi.fn().mockResolvedValue(false),
       listAllFailed: vi.fn().mockResolvedValue([]),
       clearFailedMark: vi.fn().mockResolvedValue(undefined),
+      getParent: vi.fn().mockResolvedValue(null),
+      setParent: vi.fn().mockResolvedValue(undefined),
+      clearParent: vi.fn().mockResolvedValue(undefined),
     },
   };
 }
@@ -451,6 +454,9 @@ describe("failed-ticket safeguard full loop", () => {
       clearFailedMark: vi.fn().mockImplementation(async (key: string) => {
         failedMarkers.delete(key);
       }),
+      getParent: vi.fn().mockResolvedValue(null),
+      setParent: vi.fn().mockResolvedValue(undefined),
+      clearParent: vi.fn().mockResolvedValue(undefined),
     };
 
     const adapters = makeAdapters();
