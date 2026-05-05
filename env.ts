@@ -10,7 +10,7 @@ export const env = createEnv({
   },
   server: {
     // Issue Tracker
-    ISSUE_TRACKER_KIND: z.enum(["jira"]),
+    ISSUE_TRACKER_KIND: z.literal("jira").default("jira"),
     JIRA_BASE_URL: z.string().url(),
     JIRA_EMAIL: z.string().email(),
     JIRA_API_TOKEN: z.string().min(1),
@@ -38,6 +38,11 @@ export const env = createEnv({
     CHAT_SDK_SLACK_TOKEN: z.string().min(1),
     CHAT_SDK_CHANNEL_ID: z.string().min(1),
     CHAT_SDK_BOT_NAME: z.string().default("blazebot"),
+
+    // Slack slash commands
+    SLACK_SIGNING_SECRET: z.string().min(1),
+    /** Comma-separated list of Slack user IDs allowed to invoke slash commands. Empty = anyone. */
+    SLACK_ALLOWED_USER_IDS: z.string().optional(),
 
     // Agent
     ANTHROPIC_API_KEY: z.string().min(1).optional(),

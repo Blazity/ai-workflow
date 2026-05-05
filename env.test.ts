@@ -18,6 +18,7 @@ describe("env", () => {
     CHAT_SDK_SLACK_TOKEN: "xoxb-test",
     CHAT_SDK_CHANNEL_ID: "C123",
     CHAT_SDK_BOT_NAME: "blazebot",
+    SLACK_SIGNING_SECRET: "fake-signing-secret",
     ANTHROPIC_API_KEY: "sk-ant-test",
     CLAUDE_MODEL: "claude-opus-4-6",
     COMMIT_AUTHOR: "ai-workflow-blazity",
