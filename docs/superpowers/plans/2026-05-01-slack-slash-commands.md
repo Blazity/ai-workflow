@@ -120,7 +120,7 @@ Each returns a `string` (Slack mrkdwn) — no Slack I/O inside, so they're trivi
 - Reinstall app (`commands` scope is already granted on most chat-adapter installs; verify).
 - Copy the Signing Secret into Vercel env (`SLACK_SIGNING_SECRET`) for Production + Preview.
 
-**Task 5.2:** Update `init-slack` skill (`/Users/kacper/.claude/skills/init-slack`) to also prompt for `SLACK_SIGNING_SECRET` and mention the slash-command URL. Add a one-paragraph operator note in `README.md` under the existing Slack section.
+**Task 5.2:** Update `init-slack` skill (`.claude/skills/init-slack`) to also prompt for `SLACK_SIGNING_SECRET` and mention the slash-command URL. Add a one-paragraph operator note in `README.md` under the existing Slack section.
 
 ---
 

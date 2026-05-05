@@ -18,15 +18,20 @@ export interface SlackResponsePayload {
  * has already been ack'd should not retry the user's request just because
  * Slack momentarily 5xx'd on the follow-up post.
  */
+const RESPONSE_URL_TIMEOUT_MS = 5000;
+
 export async function postToResponseUrl(
   responseUrl: string,
   payload: SlackResponsePayload,
 ): Promise<void> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), RESPONSE_URL_TIMEOUT_MS);
   try {
     const res = await fetch(responseUrl, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(payload),
+      signal: controller.signal,
     });
     if (!res.ok) {
       logger.warn(
@@ -39,5 +44,7 @@ export async function postToResponseUrl(
       { error: (err as Error).message },
       "slack_response_url_post_error",
     );
+  } finally {
+    clearTimeout(timer);
   }
 }

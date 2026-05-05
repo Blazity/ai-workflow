@@ -47,19 +47,19 @@ The bot must be invited to the channel: `/invite @blazebot` from inside the chan
 
 ## Step 3 — Emit paste-template
 
-```
+```bash
 CHAT_SDK_SLACK_TOKEN=<value>
 CHAT_SDK_CHANNEL_ID=<value>
 SLACK_SIGNING_SECRET=<value>
 ```
 
 If non-default bot name:
-```
+```bash
 CHAT_SDK_BOT_NAME=<value>
 ```
 
 If restricting slash commands to specific users:
-```
+```bash
 SLACK_ALLOWED_USER_IDS=U0123,U4567
 ```
 

@@ -123,18 +123,23 @@ function scheduleHandler(
   parsed: ParsedCommand,
   responseUrl: string,
 ): void {
-  const promise = runHandler(parsed, responseUrl);
+  // Always attach error logging *before* handing the promise off — otherwise an
+  // unhandled rejection inside the waitUntil-extended invocation disappears
+  // silently. The .catch returns void, so waitUntil still sees a settled
+  // promise and keeps the function alive for the original work.
+  const promise = runHandler(parsed, responseUrl).catch((err) =>
+    logger.error(
+      { error: (err as Error).message, parsedKind: parsed.kind },
+      "slack_handler_unhandled_error",
+    ),
+  );
   // Nitro mounts waitUntil onto the event in its app entry. On platforms that
   // support it (Vercel, Cloudflare) this lets the function keep working after
   // the response is sent. On platforms without it, fall back to fire-and-
   // forget — the slash command will still ack within 3s.
   if (typeof event.waitUntil === "function") {
     event.waitUntil(promise);
-    return;
   }
-  promise.catch((err) =>
-    logger.error({ error: (err as Error).message }, "slack_handler_unhandled_error"),
-  );
 }
 
 async function runHandler(parsed: ParsedCommand, responseUrl: string): Promise<void> {

@@ -25,7 +25,7 @@ If you don't want any random workspace member to be able to cancel runs, set `SL
 
 How to find a user ID: in Slack, click the person → **View full profile** → **More** (`⋮`) → **Copy member ID** (looks like `U0123ABCD`).
 
-```
+```bash
 SLACK_ALLOWED_USER_IDS=U0123ABCD,U4567WXYZ
 ```
 
@@ -48,7 +48,7 @@ Save. If the app is already installed, Slack will prompt you to **Reinstall** so
 
 In any channel the bot can see:
 
-```
+```bash
 /ai-workflow list
 ```
 

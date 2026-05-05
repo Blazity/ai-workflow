@@ -199,6 +199,7 @@ describe("POST /webhooks/slack", () => {
     await handler(makeRequest(body));
     await flushDeferred();
     expect(cancelRunFn).not.toHaveBeenCalled();
+    expect(postedToResponseUrl).toHaveLength(1);
     expect(postedToResponseUrl[0]!.payload.text).toContain("No active run for AWT-1");
   });
 
@@ -218,6 +219,7 @@ describe("POST /webhooks/slack", () => {
 
     expect(cancelRunFn).toHaveBeenCalledTimes(1);
     expect(cancelRunFn).toHaveBeenCalledWith("AWT-1", "run_a", runRegistry);
+    expect(postedToResponseUrl).toHaveLength(1);
     expect(postedToResponseUrl[0]!.payload.text).toContain("Cancelled AWT-1");
   });
 
