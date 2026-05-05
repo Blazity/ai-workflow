@@ -11,6 +11,7 @@ vi.mock("../../../env.js", () => ({
     SLACK_SIGNING_SECRET: SIGNING_SECRET,
     SLACK_ALLOWED_USER_IDS: undefined as string | undefined,
     JIRA_BASE_URL,
+    COLUMN_BACKLOG: "Backlog",
   },
 }));
 
@@ -23,11 +24,14 @@ const runRegistry = {
   listAll: vi.fn(),
   registerSandbox: vi.fn(),
   getSandboxId: vi.fn().mockResolvedValue(null),
-  getEntryCreatedAt: vi.fn(),
+  getEntryCreatedAt: vi.fn().mockResolvedValue(null),
   markFailed: vi.fn(),
-  isTicketFailed: vi.fn(),
-  listAllFailed: vi.fn(),
-  clearFailedMark: vi.fn(),
+  isTicketFailed: vi.fn().mockResolvedValue(false),
+  listAllFailed: vi.fn().mockResolvedValue([]),
+  clearFailedMark: vi.fn().mockResolvedValue(undefined),
+  getParent: vi.fn().mockResolvedValue(null),
+  setParent: vi.fn().mockResolvedValue(undefined),
+  clearParent: vi.fn().mockResolvedValue(undefined),
 };
 vi.mock("../../lib/adapters.js", () => ({
   createAdapters: () => ({
@@ -218,7 +222,13 @@ describe("POST /webhooks/slack", () => {
     await flushDeferred();
 
     expect(cancelRunFn).toHaveBeenCalledTimes(1);
-    expect(cancelRunFn).toHaveBeenCalledWith("AWT-1", "run_a", runRegistry);
+    expect(cancelRunFn).toHaveBeenCalledWith(
+      "AWT-1",
+      "run_a",
+      runRegistry,
+      expect.anything(),
+      "Backlog",
+    );
     expect(postedToResponseUrl).toHaveLength(1);
     expect(postedToResponseUrl[0]!.payload.text).toContain("Cancelled AWT-1");
   });

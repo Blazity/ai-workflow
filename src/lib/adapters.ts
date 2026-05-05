@@ -6,13 +6,16 @@ import { createVCS } from "./create-vcs.js";
 import type { IssueTrackerAdapter } from "../adapters/issue-tracker/types.js";
 import type { VCSAdapter } from "../adapters/vcs/types.js";
 import type { MessagingAdapter } from "../adapters/messaging/types.js";
-import type { RunRegistryAdapter } from "../adapters/run-registry/types.js";
+import type {
+  RunRegistryAdapter,
+  ThreadStore,
+} from "../adapters/run-registry/types.js";
 
 export interface Adapters {
   issueTracker: IssueTrackerAdapter;
   vcs: VCSAdapter;
   messaging: MessagingAdapter;
-  runRegistry: RunRegistryAdapter;
+  runRegistry: RunRegistryAdapter & ThreadStore;
 }
 
 export function createAdapters(): Adapters {

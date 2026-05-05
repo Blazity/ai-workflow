@@ -1,12 +1,23 @@
-import type { RunRegistryAdapter } from "../../adapters/run-registry/types.js";
+import type {
+  RunRegistryAdapter,
+  ThreadStore,
+} from "../../adapters/run-registry/types.js";
+import type { IssueTrackerAdapter } from "../../adapters/issue-tracker/types.js";
 import { isClaimingSentinel } from "../dispatch.js";
 import { logger } from "../logger.js";
-import { formatRunList, formatRunStatus } from "./format.js";
+import {
+  formatInspectAll,
+  formatInspectTicket,
+  formatRunList,
+  formatRunStatus,
+} from "./format.js";
 
 export type CancelRunFn = (
   ticketKey: string,
   runId: string,
   registry: RunRegistryAdapter,
+  issueTracker?: IssueTrackerAdapter,
+  targetColumn?: string,
 ) => Promise<boolean>;
 
 export type StopTicketSandboxesFn = (
@@ -48,6 +59,8 @@ export async function handleCancel(
   ticketKey: string,
   cancelRunFn: CancelRunFn,
   stopSandboxes: StopTicketSandboxesFn,
+  issueTracker?: IssueTrackerAdapter,
+  targetColumn?: string,
 ): Promise<string> {
   const runId = await registry.getRunId(ticketKey);
   if (!runId) return `No active run for ${ticketKey}.`;
@@ -93,7 +106,73 @@ export async function handleCancel(
     return `${ticketKey} is mid-dispatch; cleared the claim. Try the cancel again in a moment if a real run shows up.`;
   }
 
-  const ok = await cancelRunFn(ticketKey, runId, registry);
+  const ok = await cancelRunFn(ticketKey, runId, registry, issueTracker, targetColumn);
   if (ok) return `Cancelled ${ticketKey} (runId \`${runId}\`).`;
   return `${ticketKey}: could not cancel run \`${runId}\` cleanly — sandbox + registry have been cleaned up.`;
+}
+
+export async function handleInspect(
+  registry: RunRegistryAdapter & ThreadStore,
+  ticketKey: string | null,
+  jiraBaseUrl: string,
+): Promise<string> {
+  if (ticketKey) {
+    const [runId, sandboxId, entryCreatedAt, threadParent, isFailed] =
+      await Promise.all([
+        registry.getRunId(ticketKey).catch(() => null),
+        registry.getSandboxId(ticketKey).catch(() => null),
+        registry.getEntryCreatedAt(ticketKey).catch(() => null),
+        registry.getParent(ticketKey).catch(() => null),
+        registry.isTicketFailed(ticketKey).catch(() => false),
+      ]);
+    return formatInspectTicket(ticketKey, jiraBaseUrl, {
+      runId,
+      sandboxId,
+      entryCreatedAt,
+      threadParent,
+      isFailed,
+    });
+  }
+
+  const [active, failed] = await Promise.all([
+    registry.listAll().catch(() => []),
+    registry.listAllFailed().catch(() => []),
+  ]);
+  return formatInspectAll(active, failed, jiraBaseUrl);
+}
+
+export async function handleReset(
+  registry: RunRegistryAdapter & ThreadStore,
+  ticketKey: string,
+): Promise<string> {
+  const cleared: string[] = [];
+  const failures: string[] = [];
+
+  try {
+    await registry.unregister(ticketKey);
+    cleared.push("active+sandbox+entry-ts");
+  } catch (err) {
+    failures.push(`unregister: ${(err as Error).message}`);
+  }
+  try {
+    await registry.clearFailedMark(ticketKey);
+    cleared.push("failed-mark");
+  } catch (err) {
+    failures.push(`clearFailedMark: ${(err as Error).message}`);
+  }
+  try {
+    await registry.clearParent(ticketKey);
+    cleared.push("thread-parent");
+  } catch (err) {
+    failures.push(`clearParent: ${(err as Error).message}`);
+  }
+
+  if (failures.length > 0) {
+    logger.warn(
+      { ticketKey, failures },
+      "slack_reset_partial",
+    );
+    return `${ticketKey}: partial reset. Cleared ${cleared.join(", ")}. Failed: ${failures.join("; ")}.`;
+  }
+  return `${ticketKey}: reset Redis entries (${cleared.join(", ")}). Workflow run was NOT cancelled — use \`cancel\` for that.`;
 }
