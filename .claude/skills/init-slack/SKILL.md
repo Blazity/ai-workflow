@@ -33,6 +33,8 @@ Ask:
 - `CHAT_SDK_SLACK_TOKEN` — bot token, starts with `xoxb-`
 - `CHAT_SDK_CHANNEL_ID` — channel ID like `C0123456789` (not `#channel-name`)
 - `CHAT_SDK_BOT_NAME` — defaults to `blazebot`; only ask if the user wants to override
+- `SLACK_SIGNING_SECRET` — required. App settings → **Basic Information** → **App Credentials** → **Signing Secret**. Used to verify inbound `/ai-workflow` slash command requests. See `references/slash-commands.md` for the full slash-command setup.
+- `SLACK_ALLOWED_USER_IDS` — optional. Comma-separated Slack user IDs (`U…`) allowed to run `/ai-workflow`. Empty = anyone in the workspace.
 
 ### Finding the channel ID
 
@@ -45,17 +47,33 @@ The bot must be invited to the channel: `/invite @blazebot` from inside the chan
 
 ## Step 3 — Emit paste-template
 
-```
+```bash
 CHAT_SDK_SLACK_TOKEN=<value>
 CHAT_SDK_CHANNEL_ID=<value>
+SLACK_SIGNING_SECRET=<value>
 ```
 
 If non-default bot name:
-```
+```bash
 CHAT_SDK_BOT_NAME=<value>
 ```
 
+If restricting slash commands to specific users:
+```bash
+SLACK_ALLOWED_USER_IDS=U0123,U4567
+```
+
 Tell the user to paste into Vercel → Project Settings → Environment Variables (all three environments), save, and reply when done.
+
+## Step 4 — Register the slash command
+
+After the env vars are saved and the project has been deployed at least once, the operator must register the slash command in Slack:
+
+- Slash Commands → **Create New Command** → `/ai-workflow`
+- Request URL: `https://<your-vercel-domain>/webhooks/slack`
+- Reinstall the app so Slack picks up the new command
+
+Full walkthrough in `references/slash-commands.md`.
 
 ## Don'ts
 

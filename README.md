@@ -127,12 +127,16 @@ GITHUB_REPO=your-repo                  # Target repository name
 GITHUB_BASE_BRANCH=main               # Branch PRs will target
 ```
 
-**Slack** — Bot notifications:
+**Slack** — Bot notifications and slash commands:
 ```bash
 CHAT_SDK_SLACK_TOKEN=xoxb-xxxxxxxxxxxx  # Slack bot token (chat:write scope)
 CHAT_SDK_CHANNEL_ID=C0123456789         # Channel ID for notifications
 CHAT_SDK_BOT_NAME=blazebot             # Display name for the bot
+SLACK_SIGNING_SECRET=xxxxxxxxxxxxxxxx   # Required for /ai-workflow slash commands
+SLACK_ALLOWED_USER_IDS=U0123,U4567      # Optional: comma-separated allowlist
 ```
+
+Operators can drive workflows directly from Slack with `/ai-workflow list | status <KEY> | cancel <KEY>` once `SLACK_SIGNING_SECRET` is set and the slash command is registered (Request URL: `https://<your-domain>/webhooks/slack`). See `.claude/skills/init-slack/references/slash-commands.md` for the full setup walkthrough.
 
 **Agent** — AI model configuration:
 ```bash
@@ -238,6 +242,8 @@ curl -H "Authorization: Bearer $CRON_SECRET" http://localhost:3000/cron/poll
 | `CHAT_SDK_SLACK_TOKEN` | Yes | — | Slack bot token |
 | `CHAT_SDK_CHANNEL_ID` | Yes | — | Notification channel ID |
 | `CHAT_SDK_BOT_NAME` | No | `blazebot` | Bot display name |
+| `SLACK_SIGNING_SECRET` | Yes | — | Slack app signing secret; verifies `/ai-workflow` slash commands |
+| `SLACK_ALLOWED_USER_IDS` | No | — | Comma-separated Slack user IDs allowed to run `/ai-workflow`; empty = anyone |
 | **Agent** | | | |
 | `AGENT_KIND` | No | `claude` | Runtime: `claude` or `codex` |
 | `ANTHROPIC_API_KEY` | Yes* | — | Anthropic API key (required when `AGENT_KIND=claude`) |
