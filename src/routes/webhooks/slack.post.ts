@@ -13,6 +13,7 @@ import {
   handleList,
   handleReset,
   handleStatus,
+  handleSummary,
 } from "../../lib/slack/handlers.js";
 import { postToResponseUrl } from "../../lib/slack/respond.js";
 import { verifySlackSignature } from "../../lib/slack/verify.js";
@@ -165,6 +166,8 @@ async function executeCommand(parsed: ParsedCommand): Promise<string> {
       );
     case "inspect":
       return handleInspect(runRegistry, parsed.ticketKey, env.JIRA_BASE_URL);
+    case "summary":
+      return handleSummary(runRegistry, env.JIRA_BASE_URL);
     case "reset":
       return handleReset(runRegistry, parsed.ticketKey);
     case "help":

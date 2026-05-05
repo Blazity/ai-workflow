@@ -85,8 +85,9 @@ export const HELP_TEXT = [
   "• `/ai-workflow list` — show every tracked workflow",
   "• `/ai-workflow status <KEY>` — show the run + sandbox tied to a ticket",
   "• `/ai-workflow cancel <KEY>` — cancel the workflow run + move ticket to backlog",
-  "• `/ai-workflow inspect [KEY]` — dump Redis state for a ticket, or summary across all hashes",
-  "• `/ai-workflow reset <KEY>` — clear Redis entries for a ticket (does NOT cancel the run)",
+  "• `/ai-workflow redis inspect <KEY>` — dump Redis state for a ticket",
+  "• `/ai-workflow redis summary` — summary across all Redis hashes",
+  "• `/ai-workflow redis reset <KEY>` — clear Redis entries for a ticket (does NOT cancel the run)",
 ].join("\n");
 
 function jiraLink(ticketKey: string, jiraBaseUrl: string): string {
