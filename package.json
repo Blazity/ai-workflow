@@ -22,6 +22,7 @@
     "@octokit/rest": "^22.0.1",
     "@t3-oss/env-core": "^0.13.10",
     "@upstash/redis": "^1.37.0",
+    "@vercel/functions": "^3.5.0",
     "@vercel/sandbox": "^1.8.1",
     "chat": "^4.20.2",
     "h3": "^1",

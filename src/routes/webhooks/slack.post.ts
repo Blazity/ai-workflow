@@ -1,4 +1,5 @@
 import { defineEventHandler, readRawBody, getHeader, createError, type H3Event } from "h3";
+import { waitUntil } from "@vercel/functions";
 import { env } from "../../../env.js";
 import { createAdapters } from "../../lib/adapters.js";
 import { cancelRun } from "../../lib/cancel-run.js";
@@ -8,7 +9,9 @@ import { parseCommand, type ParsedCommand } from "../../lib/slack/commands.js";
 import { HELP_TEXT } from "../../lib/slack/format.js";
 import {
   handleCancel,
+  handleInspect,
   handleList,
+  handleReset,
   handleStatus,
 } from "../../lib/slack/handlers.js";
 import { postToResponseUrl } from "../../lib/slack/respond.js";
@@ -62,7 +65,7 @@ export default defineEventHandler(async (event) => {
     "slack_command_dispatching",
   );
 
-  scheduleHandler(event, parsed, responseUrl);
+  scheduleHandler(parsed, responseUrl);
 
   return ephemeral(`Working on \`${command} ${text}\`…`);
 });
@@ -118,28 +121,21 @@ function ephemeral(text: string) {
 // Deferred work
 // ---------------------------------------------------------------------------
 
-function scheduleHandler(
-  event: H3Event,
-  parsed: ParsedCommand,
-  responseUrl: string,
-): void {
-  // Always attach error logging *before* handing the promise off — otherwise an
-  // unhandled rejection inside the waitUntil-extended invocation disappears
-  // silently. The .catch returns void, so waitUntil still sees a settled
-  // promise and keeps the function alive for the original work.
+function scheduleHandler(parsed: ParsedCommand, responseUrl: string): void {
+  // Attach error logging before handing off — an unhandled rejection inside
+  // the waitUntil-extended invocation would disappear silently otherwise.
   const promise = runHandler(parsed, responseUrl).catch((err) =>
     logger.error(
       { error: (err as Error).message, parsedKind: parsed.kind },
       "slack_handler_unhandled_error",
     ),
   );
-  // Nitro mounts waitUntil onto the event in its app entry. On platforms that
-  // support it (Vercel, Cloudflare) this lets the function keep working after
-  // the response is sent. On platforms without it, fall back to fire-and-
-  // forget — the slash command will still ack within 3s.
-  if (typeof event.waitUntil === "function") {
-    event.waitUntil(promise);
-  }
+  // @vercel/functions waitUntil is the documented Vercel-native API. It keeps
+  // the serverless invocation alive until the promise resolves, even after
+  // the response is sent. Outside a Vercel runtime (tests, dev), getContext()
+  // returns no waitUntil and this no-ops — the promise still runs in the
+  // microtask queue.
+  waitUntil(promise);
 }
 
 async function runHandler(parsed: ParsedCommand, responseUrl: string): Promise<void> {
@@ -151,14 +147,26 @@ async function runHandler(parsed: ParsedCommand, responseUrl: string): Promise<v
 }
 
 async function executeCommand(parsed: ParsedCommand): Promise<string> {
-  const { runRegistry } = createAdapters();
+  const adapters = createAdapters();
+  const { runRegistry, issueTracker } = adapters;
   switch (parsed.kind) {
     case "list":
       return handleList(runRegistry, env.JIRA_BASE_URL);
     case "status":
       return handleStatus(runRegistry, parsed.ticketKey, env.JIRA_BASE_URL);
     case "cancel":
-      return handleCancel(runRegistry, parsed.ticketKey, cancelRun, stopTicketSandboxes);
+      return handleCancel(
+        runRegistry,
+        parsed.ticketKey,
+        cancelRun,
+        stopTicketSandboxes,
+        issueTracker,
+        env.COLUMN_BACKLOG,
+      );
+    case "inspect":
+      return handleInspect(runRegistry, parsed.ticketKey, env.JIRA_BASE_URL);
+    case "reset":
+      return handleReset(runRegistry, parsed.ticketKey);
     case "help":
     case "unknown":
       // Already handled synchronously, but exhaustive for type-narrowing.
