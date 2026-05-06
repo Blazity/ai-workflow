@@ -77,7 +77,7 @@ flowchart TD
 ### 1. Clone and install
 
 ```bash
-git clone https://github.com/AmeliaBlaworiq/ai-workflow.git
+git clone https://github.com/Blazity/ai-workflow.git
 cd ai-workflow
 pnpm install
 ```
@@ -104,12 +104,14 @@ Walk through each section:
 
 **Jira** — Your Atlassian instance and API credentials:
 ```bash
-ISSUE_TRACKER_KIND=jira
 JIRA_BASE_URL=https://your-domain.atlassian.net
 JIRA_EMAIL=your-email@example.com
 JIRA_API_TOKEN=your-jira-api-token    # Generate at https://id.atlassian.com/manage-profile/security/api-tokens
 JIRA_PROJECT_KEY=PROJ                  # Your Jira project key (e.g., AWT)
+JIRA_WEBHOOK_SECRET=                   # Optional: openssl rand -hex 32. Without it, dispatch falls back to 1-min cron polling.
 ```
+
+> The Jira webhook is registered separately (see [SETUP.md § 8](./SETUP.md#8-register-the-jira-webhook)). The handler at `/webhooks/jira` verifies an `X-Hub-Signature` HMAC-SHA256 header.
 
 **Jira columns** — The board column names Blazebot watches and moves tickets between:
 ```bash
@@ -118,21 +120,34 @@ COLUMN_AI_REVIEW=AI Review  # Column where completed tickets go for human review
 COLUMN_BACKLOG=Backlog      # Column where tickets go when clarification is needed
 ```
 
-**GitHub** — Repository where PRs will be created:
+**VCS** — Choose `github` or `gitlab`. Only fill the block matching your provider.
+
 ```bash
 VCS_KIND=github
+
+# GitHub (active when VCS_KIND=github)
 GITHUB_TOKEN=ghp_xxxxxxxxxxxx          # Personal access token with repo scope
 GITHUB_OWNER=your-org                  # GitHub org or username
 GITHUB_REPO=your-repo                  # Target repository name
-GITHUB_BASE_BRANCH=main               # Branch PRs will target
+GITHUB_BASE_BRANCH=main                # Branch PRs will target
 ```
 
-**Slack** — Bot notifications and slash commands:
 ```bash
-CHAT_SDK_SLACK_TOKEN=xoxb-xxxxxxxxxxxx  # Slack bot token (chat:write scope)
+VCS_KIND=gitlab
+
+# GitLab (active when VCS_KIND=gitlab)
+GITLAB_TOKEN=glpat-xxxxxxxxxxxx        # PAT with api, read_repository, write_repository scopes
+GITLAB_PROJECT_ID=group/repo           # Project ID or full path
+GITLAB_BASE_BRANCH=main                # Branch PRs will target
+GITLAB_HOST=https://gitlab.com         # Override for self-hosted
+```
+
+**Slack** — Bot notifications and slash commands. Bot scopes: `chat:write`, `commands`, `files:read`, `users:read`.
+```bash
+CHAT_SDK_SLACK_TOKEN=xoxb-xxxxxxxxxxxx  # Slack bot token
 CHAT_SDK_CHANNEL_ID=C0123456789         # Channel ID for notifications
 CHAT_SDK_BOT_NAME=blazebot             # Display name for the bot
-SLACK_SIGNING_SECRET=xxxxxxxxxxxxxxxx   # Required for /ai-workflow slash commands
+SLACK_SIGNING_SECRET=xxxxxxxxxxxxxxxx   # Required — verifies /ai-workflow slash commands
 SLACK_ALLOWED_USER_IDS=U0123,U4567      # Optional: comma-separated allowlist
 ```
 
@@ -224,20 +239,25 @@ curl -H "Authorization: Bearer $CRON_SECRET" http://localhost:3000/cron/poll
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | **Jira** | | | |
-| `ISSUE_TRACKER_KIND` | Yes | — | Issue tracker type (`jira`) |
+| `ISSUE_TRACKER_KIND` | No | `jira` | Issue tracker type (only `jira` supported today) |
 | `JIRA_BASE_URL` | Yes | — | Atlassian instance URL |
 | `JIRA_EMAIL` | Yes | — | Jira account email |
 | `JIRA_API_TOKEN` | Yes | — | Jira API token |
 | `JIRA_PROJECT_KEY` | Yes | — | Jira project key |
+| `JIRA_WEBHOOK_SECRET` | No | — | HMAC secret for `/webhooks/jira`. Without it, dispatch is cron-bound. |
 | `COLUMN_AI` | Yes | — | Board column for AI-assigned tickets |
 | `COLUMN_AI_REVIEW` | Yes | — | Board column for completed tickets |
 | `COLUMN_BACKLOG` | Yes | — | Board column for tickets needing clarification |
-| **GitHub** | | | |
-| `VCS_KIND` | Yes | — | VCS provider (`github`) |
-| `GITHUB_TOKEN` | Yes | — | GitHub PAT with repo scope |
-| `GITHUB_OWNER` | Yes | — | GitHub org or username |
-| `GITHUB_REPO` | Yes | — | Target repository |
+| **VCS** | | | |
+| `VCS_KIND` | Yes | — | `github` or `gitlab` |
+| `GITHUB_TOKEN` | Yes† | — | GitHub PAT with `repo` scope (when `VCS_KIND=github`) |
+| `GITHUB_OWNER` | Yes† | — | GitHub org or username (when `VCS_KIND=github`) |
+| `GITHUB_REPO` | Yes† | — | Target repository (when `VCS_KIND=github`) |
 | `GITHUB_BASE_BRANCH` | No | `main` | Base branch for PRs |
+| `GITLAB_TOKEN` | Yes† | — | GitLab PAT with `api`, `read_repository`, `write_repository` (when `VCS_KIND=gitlab`) |
+| `GITLAB_PROJECT_ID` | Yes† | — | Project ID or `group/repo` path (when `VCS_KIND=gitlab`) |
+| `GITLAB_BASE_BRANCH` | No | `main` | Base branch for MRs |
+| `GITLAB_HOST` | No | `https://gitlab.com` | Override for self-hosted GitLab |
 | **Slack** | | | |
 | `CHAT_SDK_SLACK_TOKEN` | Yes | — | Slack bot token |
 | `CHAT_SDK_CHANNEL_ID` | Yes | — | Notification channel ID |
@@ -246,10 +266,10 @@ curl -H "Authorization: Bearer $CRON_SECRET" http://localhost:3000/cron/poll
 | `SLACK_ALLOWED_USER_IDS` | No | — | Comma-separated Slack user IDs allowed to run `/ai-workflow`; empty = anyone |
 | **Agent** | | | |
 | `AGENT_KIND` | No | `claude` | Runtime: `claude` or `codex` |
-| `ANTHROPIC_API_KEY` | Yes* | — | Anthropic API key (required when `AGENT_KIND=claude`) |
+| `ANTHROPIC_API_KEY` | Yes‡ | — | Anthropic API key (required when `AGENT_KIND=claude`) |
 | `CLAUDE_CODE_OAUTH_TOKEN` | No | — | Alternative to `ANTHROPIC_API_KEY` |
 | `CLAUDE_MODEL` | No | `claude-opus-4-6` | Claude model ID |
-| `CODEX_API_KEY` | Yes* | — | OpenAI Codex API key (required when `AGENT_KIND=codex`) |
+| `CODEX_API_KEY` | Yes‡ | — | OpenAI Codex API key (required when `AGENT_KIND=codex`) |
 | `CODEX_CHATGPT_OAUTH_TOKEN` | No | — | Alternative to `CODEX_API_KEY` |
 | `CODEX_MODEL` | No | `gpt-5-codex` | Codex model ID |
 | `CODEX_PRICING_URL` | No | LiteLLM JSON | Pricing source for Codex cost reporting |
@@ -259,18 +279,31 @@ curl -H "Authorization: Bearer $CRON_SECRET" http://localhost:3000/cron/poll
 | **Sandbox** | | | |
 | `MAX_CONCURRENT_AGENTS` | No | `3` | Max parallel sandboxes |
 | `JOB_TIMEOUT_MS` | No | `1800000` | Agent timeout (ms) |
+| **Attachments** | | | |
+| `ATTACHMENT_MAX_FILE_SIZE_MB` | No | `25` | Per-file size limit |
+| `ATTACHMENT_MAX_TOTAL_SIZE_MB` | No | `100` | Combined attachment size limit |
+| `ATTACHMENT_MAX_COUNT` | No | `20` | Max attachments per ticket |
+| `ATTACHMENT_DOWNLOAD_TIMEOUT_MS` | No | `30000` | Download timeout per attachment |
 | **Polling** | | | |
-| `POLL_INTERVAL_MS` | No | `300000` | Poll interval (ms) |
+| `POLL_INTERVAL_MS` | No | `300000` | Internal poll cadence (ms) — separate from the 1-min Vercel cron |
 | **Vercel** | | | |
 | `VERCEL_TOKEN` | No* | — | Vercel API token (local dev only) |
 | `VERCEL_TEAM_ID` | No* | — | Vercel team ID (local dev only) |
 | `VERCEL_PROJECT_ID` | No* | — | Vercel project ID (local dev only) |
+| `WORKFLOW_POSTGRES_URL` | No* | — | Local Postgres for Vercel Workflow durable state (dev only) |
+| **Arthur (optional)** | | | |
+| `GENAI_ENGINE_API_KEY` | No | — | Arthur AI Engine API key |
+| `GENAI_ENGINE_TRACE_ENDPOINT` | No | — | Arthur trace endpoint URL |
+| `GENAI_ENGINE_PROMPT_TASK_ID` | No | — | Hosted prompt task ID (set after `pnpm setup:arthur-prompts`) |
 | **Redis** | | | |
-| `AI_WORKFLOW_KV_REST_API_URL` | Yes | — | Upstash Redis REST URL |
-| `AI_WORKFLOW_KV_REST_API_TOKEN` | Yes | — | Upstash Redis REST token |
+| `AI_WORKFLOW_KV_REST_API_URL` | Yes | — | Upstash Redis REST URL (auto-injected by Marketplace integration) |
+| `AI_WORKFLOW_KV_REST_API_TOKEN` | Yes | — | Upstash Redis REST token (auto-injected) |
 | **Security** | | | |
-| `CRON_SECRET` | No | — | Cron endpoint auth token |
-\* On Vercel, OIDC authenticates automatically. These are only needed for local development if `vercel env pull` doesn't cover your setup.
+| `CRON_SECRET` | No | — | Cron endpoint auth token (Vercel sets this automatically when defined) |
+
+† Required only for the matching `VCS_KIND`. `env.ts` cross-validates at startup.
+‡ Required only for the matching `AGENT_KIND` (the OAuth token alternative also satisfies this).
+\* On Vercel, OIDC authenticates the sandbox automatically. These are only needed for local development if `vercel env pull` doesn't cover your setup.
 
 ## Deploying to Vercel
 
@@ -313,10 +346,11 @@ This hits `/cron/poll` every minute. Vercel injects the `CRON_SECRET` header aut
 
 Two GitHub Actions workflows are included:
 
-- **CI** (`ci.yml`) — Runs on every push to `main`/`dev` and on pull requests. Runs typecheck and unit tests.
-- **E2E** (`e2e.yml`) — Manual trigger with tier selection:
-  - **Tier 1** — Basic integration tests (15 min timeout)
-  - **Tier 2** — Full end-to-end with real Jira/GitHub (150 min timeout, requires Tier 1 to pass first)
+- **CI** (`ci.yml`) — Runs on pull requests targeting `main`/`dev` and on `merge_group` events. Runs typecheck and unit tests; gates the merge queue on `e2e-orchestration → e2e-capacity → e2e-agent`.
+- **E2E** (`e2e.yml`) — Manual `workflow_dispatch` with tier selection (`orchestration`, `capacity`, `agent`, `all`) and an `agent` choice (`claude` | `codex`):
+  - **orchestration** — dispatch / cron / webhook flows (60 min timeout)
+  - **capacity** — concurrency, claim/release, reconciler (30 min timeout, runs after orchestration)
+  - **agent** — full ticket → PR run against real Jira + GitHub (120 min timeout, runs after capacity)
 
 ## Workflow Deep-dive
 
