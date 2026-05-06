@@ -2,7 +2,7 @@
 
 A workflow-driven AI coding automation service that turns Jira tickets into merge-ready pull requests. ai workflow polls your issue tracker for tickets assigned to AI, implements features end-to-end inside isolated [Vercel Sandboxes](https://vercel.com/docs/sandbox), and delivers PRs for human approval — no manual intervention required.
 
-Designed for **self-hosting**: bring your own API keys (Jira, GitHub, Slack, Anthropic) and run on your own Vercel infrastructure.
+Designed to work with **Vercel infrastructure**: bring your own API keys (Jira, GitHub, Slack, Anthropic) and deploy onto Vercel — Functions for the HTTP server, Workflows for durable orchestration, and Sandboxes for isolated agent execution.
 
 ## How It Works
 
