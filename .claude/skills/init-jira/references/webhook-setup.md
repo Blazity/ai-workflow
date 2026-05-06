@@ -6,6 +6,10 @@
 
 The handler dispatches when the ticket lands in `COLUMN_AI` and cancels in-flight runs when it leaves. Both cases are detected on `jira:issue_updated`. Subscribing to `created`, `deleted`, etc. just adds noise that gets filtered away — the handler ignores anything without a project-key match or without an issue key.
 
+### Optional: instant create / comment dispatch
+
+If you want creates and new comments to dispatch immediately (rather than waiting for the next `jira:issue_updated` from a transition or edit), also check **Issue → Issue created** and **Comment → Comment created**. Tradeoff: more webhook traffic, but no perceptible latency on freshly-created tickets or replies. The handler still applies the same column/state filters either way — extra events are filtered out, not acted on.
+
 ## Open the webhook admin page
 
 ```

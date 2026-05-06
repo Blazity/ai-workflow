@@ -1,11 +1,13 @@
 ---
 name: init-env
-description: First-time setup orchestrator for the Blazebot ai-workflow repo. Coordinates project linking, env var population across Jira / VCS / Agent / Slack / Upstash, deployment, and webhook registration in a single guided flow. Use when starting fresh on this repo for the first time — "init project", "first-time setup", "bootstrap this repo", "onboard me", "set up env from scratch".
+description: First-time setup orchestrator for the Blazebot ai-workflow repo. Mirrors SETUP.md as an agent-driven flow — project linking, env vars across Jira / VCS / Agent / Slack / Upstash, production deploy, post-deploy registrations (Jira webhook + Slack /ai-workflow slash command), and smoke checks. Use when starting fresh on this repo for the first time — "init project", "first-time setup", "bootstrap this repo", "onboard me", "set up env from scratch".
 ---
 
 # Initialize Project Environment (Cold Start)
 
-Cold-start orchestrator. Coordinates project linking, paste-template-driven env population across 5 domains, a single production deploy, webhook registration, and a manual smoke handoff. Self-contained — does not invoke other plugins.
+Cold-start orchestrator. Coordinates project linking, paste-template-driven env population across 5 domains, a single production deploy, post-deploy registrations (Jira webhook + Slack slash command), and a smoke handoff. Self-contained — does not invoke other plugins.
+
+> **Canonical reference:** [SETUP.md](../../../SETUP.md) at the repo root is the human-readable end-to-end guide. This skill is the agent-driven orchestration of that same flow. When the two diverge, SETUP.md wins — update this skill.
 
 ## What this skill does NOT do
 
@@ -28,19 +30,19 @@ If the user replies with anything other than a clear go-signal, do not advance �
 ## Sequence
 
 ```
-0.  Pre-flight              → vercel whoami, existing-link check, team scope
+0.  Pre-flight              → tool versions, vercel whoami, existing-link check, team scope
 1.  vercel link             → only if not already linked
 2.  init-jira (phase 1)     → credentials + columns + JIRA_WEBHOOK_SECRET
 3.  init-vcs                → branch on github | gitlab
 4.  init-agent              → branch on claude  | codex
-5.  init-slack
+5.  init-slack              → bot token, channel, signing secret
 6.  init-upstash            → Marketplace install runbook
 7.  Inline: CRON_SECRET     → auto-generate, paste-template
-8.  vercel env pull         → produces .env.local
-9.  Validate                → pnpm tsx --env-file=.env.local env.ts
-10. vercel --prod           → single production deploy
-11. init-jira (phase 2)     → webhook registration with deploy URL
-12. Manual smoke            → user drags a ticket, reports result
+8.  vercel env pull + validate → .env.local + pnpm tsx env.ts
+9.  vercel --prod           → single production deploy
+10. init-jira (phase 2)     → webhook registration with deploy URL
+11. Slack slash command     → /ai-workflow registration with deploy URL
+12. Smoke checks            → /health + /cron/poll auth + manual ticket
 13. Final summary
 ```
 
@@ -50,27 +52,42 @@ If the user replies with anything other than a clear go-signal, do not advance �
 
 Run these in order. Halt with a clear message on any failure; never invoke `vercel login` from this skill.
 
-### 0a. Authentication
+### 0a. Toolchain
+
+Required (per [SETUP.md §1](../../../SETUP.md#1-prerequisites)):
+
+```bash
+node --version    # v20+
+pnpm --version    # v10+
+vercel --version  # latest — older CLIs may miss flags this skill expects
+git --version     # 2.40+
+```
+
+If any version is below the floor, HALT with the exact mismatch and the install command from SETUP.md §1 (`npm i -g pnpm`, `npm i -g vercel@latest`, etc.). Don't try to upgrade for the user.
+
+Also assume the user has run `pnpm install` after cloning. If `node_modules/` is missing, halt and direct them to run it.
+
+### 0b. Authentication
 
 ```bash
 vercel whoami
 ```
 
 - **Fails:** HALT. Tell the user: *"Vercel CLI not authenticated. Run `vercel login`, then re-invoke `init-env`."*
-- **OK:** record the current scope (team or personal) for step 0c.
+- **OK:** record the current scope (team or personal) for step 0d.
 
-### 0b. Existing link
+### 0c. Existing link
 
 ```bash
 test -f .vercel/project.json && cat .vercel/project.json
 ```
 
-- **No link:** continue to step 0c.
+- **No link:** continue to step 0d.
 - **Link present:** read its `orgId` / `projectId`. Print: *"Existing link found: scope=\<X\> project=\<Y\>. Use this link or relink?"*
   - **Use:** skip step 1 entirely; carry this link forward.
   - **Relink:** HALT. Tell the user: *"Remove `.vercel/project.json` (`rm .vercel/project.json`) and re-invoke `init-env`."*
 
-### 0c. Team-scope confirmation
+### 0d. Team-scope confirmation
 
 Compare the existing link's scope (if any) with `vercel whoami` output. If they differ, surface the mismatch explicitly. Otherwise:
 
@@ -85,7 +102,7 @@ Print: *"Will link to team scope: \<current-team\>. Correct?"*
 
 ## Step 1 — `vercel link`
 
-Skip if step 0b found a usable existing link.
+Skip if step 0c found a usable existing link.
 
 ```bash
 vercel link
@@ -218,16 +235,81 @@ Phase 2 derives the webhook URL from `.vercel/project.json` (`https://<project>.
 
 If the user opts to defer webhook registration (custom domain coming, admin permission missing, etc.), record it as a TODO for the final summary and continue.
 
-→ **Stop. Ask:** *"Webhook registered (or deferred). Ready for Step 11: smoke test?"*
+→ **Stop. Ask:** *"Webhook registered (or deferred). Ready for Step 11: Slack slash command?"*
 
 ---
 
-## Step 11 — Manual smoke
+## Step 11 — Slack slash command
+
+Register the `/ai-workflow` slash command against the deployed URL. This is the Slack analogue of Step 10 — both webhook and slash command need a live deploy URL, hence both run post-deploy.
+
+Read `.vercel/project.json` for the project name and construct:
+
+```
+https://<project>.vercel.app/webhooks/slack
+```
+
+Walk the user through the runbook (full version: `init-slack/references/slash-commands.md`). The TL;DR:
+
+1. Open the Slack app's config page (https://api.slack.com/apps → your Blazebot app).
+2. **Slash Commands → Create New Command.**
+3. Fill:
+   - **Command:** `/ai-workflow`
+   - **Request URL:** the slash URL from above
+   - **Short description:** `Manage ai-workflow runs`
+   - **Usage hint:** `list | status <KEY> | cancel <KEY>`
+4. Save and **reinstall the app** to the workspace if Slack prompts.
+5. Confirm `SLACK_SIGNING_SECRET` is set in Vercel (collected in Step 5). The handler at `src/routes/webhooks/slack.post.ts` rejects bad signatures.
+
+Verify in Slack:
+
+```
+/ai-workflow list
+```
+
+If the user can't register the slash command now (admin permission missing, custom domain pending, etc.), record it as a TODO for the final summary and continue.
+
+→ **Stop. Ask:** *"Slash command registered (or deferred). Ready for Step 12: smoke checks?"*
+
+---
+
+## Step 12 — Smoke checks
+
+Three checks, in order. Don't skip the first two — they catch deploy/env issues without needing a live ticket round-trip.
+
+### 12a. Health endpoint
+
+```bash
+curl https://<project>.vercel.app/health
+# expect: {"status":"ok","timestamp":"..."}
+```
+
+Failure modes:
+- Non-200: build is broken or env-var validation crashed at startup. Run `vercel logs --prod` to inspect; the user must fix and redeploy.
+- 200 but wrong body: middleware or routing regression — surface the response and stop.
+
+### 12b. Cron auth
+
+```bash
+# unauth — must reject
+curl -i https://<project>.vercel.app/cron/poll
+# expect: HTTP/1.1 401
+
+# authed — must succeed
+curl -i -H "Authorization: Bearer $CRON_SECRET" https://<project>.vercel.app/cron/poll
+# expect: HTTP/1.1 200
+```
+
+If the unauth call returns 200, `CRON_SECRET` is missing in Production. Ask the user to set it (Step 7's value) and redeploy.
+
+The user can paste `$CRON_SECRET` directly from their local shell if they ran `vercel env pull` in Step 8 and source `.env.local` first.
+
+### 12c. End-to-end ticket
 
 Print:
 
 ```
-Last step. Drop a test ticket in Jira to verify the bot end-to-end.
+Last check. Drop a test ticket in Jira to verify the bot end-to-end.
 
   1. Open ${JIRA_BASE_URL}/jira/your-projects
   2. Create a small issue:
@@ -246,13 +328,13 @@ Within ~5s (with webhook) or ~60s (cron fallback), expect:
 Reply when you've seen the PR (or "stuck on X" if a step is missing).
 ```
 
-Wait for the user's response. If they report a failure, capture which milestone was missing and include it in the final summary.
+Wait for the user's response. If they report a failure, capture which milestone was missing and route to the matching row in [SETUP.md §13 — Troubleshooting](../../../SETUP.md#13-troubleshooting). Include the result in the final summary.
 
 → **Stop. Ask:** *"Smoke passed?"*
 
 ---
 
-## Step 12 — Final summary
+## Step 13 — Final summary
 
 Print the summary template below, populated with the values gathered during the flow. Use the actual project name from `.vercel/project.json` and the user-reported smoke result.
 
@@ -261,27 +343,35 @@ Cold start complete.
 
 Linked Vercel project:  <team>/<project>
 Production URL:         https://<project>.vercel.app
-Webhook URL:            https://<project>.vercel.app/webhooks/jira
+Jira webhook URL:       https://<project>.vercel.app/webhooks/jira
+Slack request URL:      https://<project>.vercel.app/webhooks/slack
 
 Configured:
   Jira     <project_key>           webhook <registered | deferred>
   VCS      <github|gitlab>         <owner>/<repo>
   Agent    <claude|codex>          model <model>
-  Slack    channel <id>            bot @<bot_name>
+  Slack    channel <id>            bot @<bot_name>, slash <registered | deferred>
   Upstash  AI_WORKFLOW_KV prefix   via Marketplace
   Cron     CRON_SECRET set         schedule * * * * *
 
-Skipped (you can add these later):
-  - Arthur AI tracing — see https://www.arthur.ai/ for setup; both
-    GENAI_ENGINE_API_KEY and GENAI_ENGINE_TRACE_ENDPOINT, then run
-    `pnpm setup:arthur-prompts`.
+Skipped (see SETUP.md for the full how-to):
+  - Arthur AI tracing — SETUP.md §12. Set GENAI_ENGINE_API_KEY and
+    GENAI_ENGINE_TRACE_ENDPOINT, then run `pnpm setup:arthur-prompts`
+    and persist the resulting GENAI_ENGINE_PROMPT_TASK_ID.
+  - GitLab swap — SETUP.md §12. Flip VCS_KIND=gitlab and provide
+    GITLAB_TOKEN + GITLAB_PROJECT_ID (+ GITLAB_HOST for self-hosted).
+  - CI / GitHub Actions — SETUP.md §11. The `e2e` GitHub environment
+    needs the prod env vars plus E2E_BASE_URL, E2E_GITHUB_TOKEN/OWNER/
+    REPO, and VERCEL_AUTOMATION_BYPASS_SECRET as secrets.
   - Custom domain — point a domain at the Vercel project for a stable
-    webhook URL (replace <project>.vercel.app in Jira's webhook config).
-  - WORKFLOW_POSTGRES_URL — local dev only.
-  - VERCEL_TOKEN local PAT — local dev only; Vercel uses OIDC.
+    webhook URL (then update Jira webhook + Slack request URLs).
+  - WORKFLOW_POSTGRES_URL — local dev only (SETUP.md §6).
+  - VERCEL_TOKEN local PAT — local dev only; Vercel uses OIDC in prod.
 
-Smoke test:
-  <user-reported pass | fail with diagnostic>
+Smoke checks:
+  /health        <pass | fail>
+  /cron/poll     <pass | fail>
+  end-to-end     <user-reported pass | fail with diagnostic>
 
 Maintenance:
   Rotate one integration later by invoking that subskill standalone:
@@ -290,6 +380,8 @@ Maintenance:
   Inspect the deployment:
     vercel logs --prod
     https://vercel.com/<team>/<project>/observability
+
+  Troubleshooting matrix: SETUP.md §13.
 
 No git changes were made. .env.local and .vercel/project.json are gitignored.
 ```

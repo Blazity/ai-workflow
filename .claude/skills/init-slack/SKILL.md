@@ -34,7 +34,7 @@ Ask:
 - `CHAT_SDK_CHANNEL_ID` — channel ID like `C0123456789` (not `#channel-name`)
 - `CHAT_SDK_BOT_NAME` — defaults to `blazebot`; only ask if the user wants to override
 - `SLACK_SIGNING_SECRET` — required. App settings → **Basic Information** → **App Credentials** → **Signing Secret**. Used to verify inbound `/ai-workflow` slash command requests. See `references/slash-commands.md` for the full slash-command setup.
-- `SLACK_ALLOWED_USER_IDS` — optional. Comma-separated Slack user IDs (`U…`) allowed to run `/ai-workflow`. Empty = anyone in the workspace.
+- `SLACK_ALLOWED_USER_IDS` — optional. Comma-separated Slack user IDs (`U…`) allowed to run `/ai-workflow`. Defaults to empty, which lets anyone in the workspace run the slash command. Only ask if the user wants to restrict access.
 
 ### Finding the channel ID
 

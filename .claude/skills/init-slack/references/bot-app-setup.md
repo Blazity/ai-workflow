@@ -16,10 +16,12 @@ In the app settings sidebar:
 1. **OAuth & Permissions** → **Scopes** → **Bot Token Scopes** → **Add an OAuth Scope**.
 2. Add these scopes:
    - `chat:write` — required. Lets the bot post messages.
+   - `commands` — required. Lets Slack deliver `/ai-workflow` slash command invocations to the bot.
+   - `files:read` — required. Lets the bot read file uploads attached to messages and threads.
+   - `users:read` — required. Resolves user IDs to display names.
    - `chat:write.public` — optional. Lets the bot post in public channels it isn't a member of. Skip if you'll always invite the bot.
-   - `users:read` — optional. For mentioning specific users in messages.
 
-Only `chat:write` is hard-required.
+The four above (`chat:write`, `commands`, `files:read`, `users:read`) are all required.
 
 ## Install the app to the workspace
 
