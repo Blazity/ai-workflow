@@ -44,6 +44,14 @@ Tell the user to confirm in Vercel → Project Settings → Environment Variable
 - `AI_WORKFLOW_KV_REST_API_URL` (value: `https://<id>.upstash.io`)
 - `AI_WORKFLOW_KV_REST_API_TOKEN`
 
+CLI alternative (faster from a terminal):
+
+```bash
+vercel env ls | grep AI_WORKFLOW_KV
+```
+
+Success: both `AI_WORKFLOW_KV_REST_API_URL` and `AI_WORKFLOW_KV_REST_API_TOKEN` appear, scoped to all three environments (Production, Preview, Development).
+
 If the keys are named differently (e.g. `KV_REST_API_URL` without the `AI_WORKFLOW_KV` prefix), the prefix wasn't set correctly during install. Two recovery paths:
 
 - **Easier:** uninstall the Upstash integration (Storage → Upstash → Disconnect), reinstall with the correct prefix.

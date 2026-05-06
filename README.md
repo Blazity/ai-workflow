@@ -1,47 +1,54 @@
-# Blazebot
+# ai workflow
 
-A workflow-driven AI coding automation service that turns Jira tickets into merge-ready pull requests. Blazebot polls your issue tracker for tickets assigned to AI, implements features end-to-end inside isolated [Vercel Sandboxes](https://vercel.com/docs/sandbox), and delivers PRs for human approval — no manual intervention required.
+A workflow-driven AI coding automation service that turns Jira tickets into merge-ready pull requests. ai workflow polls your issue tracker for tickets assigned to AI, implements features end-to-end inside isolated [Vercel Sandboxes](https://vercel.com/docs/sandbox), and delivers PRs for human approval — no manual intervention required.
 
-Designed for **self-hosting**: bring your own API keys (Jira, GitHub, Slack, Anthropic) and run on your own Vercel infrastructure.
+Designed to work with **Vercel infrastructure**: bring your own API keys (Jira, GitHub, Slack, Anthropic) and deploy onto Vercel — Functions for the HTTP server, Workflows for durable orchestration, and Sandboxes for isolated agent execution.
 
 ## How It Works
 
 1. **You move a Jira ticket** to the "AI" column on your board
-2. **Blazebot's poller** discovers the ticket (runs every minute via Vercel Cron)
-3. **A durable Vercel Workflow** orchestrates the full implementation lifecycle
-4. **Claude Code** runs inside an isolated Vercel Sandbox — one sandbox per ticket, no access to production
-5. **A pull request is created**, the ticket moves to "AI Review", and your team gets a Slack notification
+2. **ai workflow dispatches** the ticket — instantly via the Jira webhook, or within ~1 min via the Vercel Cron poller as a fallback
+3. **A durable Vercel Workflow** runs the agent in phases (research → implementation) inside a single Vercel Sandbox per ticket
+4. **The sandbox pushes commits** directly to the feature branch, the ticket moves to "AI Review", and your team gets a Slack notification
 
-If the PR gets review feedback, Blazebot picks it up again, runs a fix cycle, and pushes updates. If the agent can't proceed without human input, it posts clarification questions on the ticket and waits.
+If the ticket already has an open PR (review feedback), the same workflow re-runs and feeds the PR comments + conflict status into the agent's context. If the agent can't proceed without human input, it posts clarification questions on the ticket and moves it to Backlog.
 
 ```mermaid
 flowchart TD
-    A["Jira ticket moved to AI column"] --> B["Poller discovers ticket"]
-    B --> C{"PR already exists?"}
+    A["Jira ticket moved to AI column"] --> B{"Dispatch"}
+    B -- "webhook (instant)" --> D["agentWorkflow"]
+    B -- "cron poll (~1 min)" --> D
 
-    C -- No --> D["Implementation Workflow"]
-    C -- Yes --> E["Review-Fix Workflow"]
+    D --> E["fetchPRContext (existing PR?)"]
+    E --> F["createFeatureBranch (only if no PR)"]
+    F --> G["provisionSandbox + register sandbox"]
 
-    D --> F["Create feature branch"]
-    F --> G["Provision Vercel Sandbox"]
-    G --> H["Run Claude Code agent"]
-    H --> I{Agent result?}
+    G --> P1["Phase 1: Research / Plan"]
+    P1 --> P1R{Research result?}
+    P1R -- "clarification_needed" --> CL["Post questions → Backlog → notify"]
+    P1R -- "failed / timeout" --> FB["Move to Backlog → notify failed"]
+    P1R -- "completed" --> P2["Phase 2: Implementation"]
 
-    I -- "implemented" --> J["Push changes & create PR"]
-    J --> K["Move ticket to AI Review"]
-    K --> L["Notify via Slack"]
+    P2 --> P2R{Impl result?}
+    P2R -- "clarification_needed" --> CL
+    P2R -- "failed / timeout" --> FB
+    P2R -- "implemented" --> PUSH["pushFromSandbox (git push --force from inside sandbox)"]
 
-    I -- "clarification_needed" --> M["Post questions on ticket"]
-    M --> N["Move ticket to Backlog"]
-    N --> O["Notify via Slack"]
+    PUSH --> PUSHR{Push ok?}
+    PUSHR -- "no" --> FIX["fixAndRetryPush (lightweight fix agent)"]
+    FIX --> PUSHR
+    PUSHR -- "yes" --> PR["createPullRequest / findPR"]
+    PR --> MV["Move to AI Review → notify pr_ready"]
 
-    I -- "failed" --> P["Notify failure via Slack"]
+    TD["teardownSandbox (always runs in finally)"]
+    MV -.-> TD
+    CL -.-> TD
+    FB -.-> TD
 
-    E --> Q["Fetch PR comments & conflict status"]
-    Q --> G
-
-    R["Reconciler runs on every poll"] -.-> S["Cleans finished runs"]
-    R -.-> T["Cancels orphaned runs"]
+    R["Reconciler (every poll)"] -.-> R1["Stale claims (>5 min)"]
+    R -.-> R2["Finished runs"]
+    R -.-> R3["Orphaned runs (ticket left AI column)"]
+    R -.-> R4["Stale failed-ticket markers"]
 ```
 
 ## Tech Stack
@@ -51,11 +58,12 @@ flowchart TD
 | Server | [Nitropack](https://nitro.build) | HTTP server framework (Vercel Functions) |
 | Orchestration | [Vercel Workflows](https://vercel.com/docs/workflow) | Durable execution — survives crashes and deploys |
 | Agent Execution | [Vercel Sandbox](https://vercel.com/docs/sandbox) | Isolated per-ticket environments |
-| AI Agent | [Claude Code](https://docs.anthropic.com/en/docs/claude-code) | Coding agent (Anthropic) |
+| AI Agent | [Claude Code](https://docs.anthropic.com/en/docs/claude-code) or [OpenAI Codex CLI](https://github.com/openai/codex) | Coding agent (selectable via `AGENT_KIND`) |
 | Issue Tracker | Jira REST API | Ticket lifecycle management |
-| VCS | GitHub ([Octokit](https://github.com/octokit/rest.js)) | Branches, PRs, file pushes |
-| Messaging | [Chat SDK](https://chat-sdk.dev) + Slack | Team notifications |
-| Run Registry | [Upstash Redis](https://upstash.com) via [Vercel KV](https://vercel.com/docs/storage/vercel-kv) | Atomic claim/release for concurrent runs |
+| VCS | GitHub ([Octokit](https://github.com/octokit/rest.js)) or GitLab ([@gitbeaker/rest](https://github.com/jdalrymple/gitbeaker)) | Branches, PRs/MRs, comments |
+| Messaging | [Chat SDK](https://chat-sdk.dev) + Slack | Team notifications + `/ai-workflow` slash commands |
+| Run Registry | [Upstash Redis](https://upstash.com) (via Vercel Marketplace integration) | Atomic claim/release for concurrent runs |
+| Tracing (optional) | [Arthur AI Engine](https://www.arthur.ai/) | Per-run prompt/tool tracing inside the sandbox |
 | Validation | [Zod](https://zod.dev) | Schema validation for config and agent output |
 | Logging | [Pino](https://getpino.io) | Structured JSON logs |
 | Testing | [Vitest](https://vitest.dev) | Unit and E2E tests |
@@ -77,14 +85,14 @@ flowchart TD
 ### 1. Clone and install
 
 ```bash
-git clone https://github.com/AmeliaBlaworiq/ai-workflow.git
+git clone https://github.com/Blazity/ai-workflow.git
 cd ai-workflow
 pnpm install
 ```
 
 ### 2. Link to Vercel
 
-Blazebot runs on Vercel and uses OIDC for Sandbox authentication. Link the project first:
+ai workflow runs on Vercel and uses OIDC for Sandbox authentication. Link the project first:
 
 ```bash
 vercel link
@@ -104,35 +112,50 @@ Walk through each section:
 
 **Jira** — Your Atlassian instance and API credentials:
 ```bash
-ISSUE_TRACKER_KIND=jira
 JIRA_BASE_URL=https://your-domain.atlassian.net
 JIRA_EMAIL=your-email@example.com
 JIRA_API_TOKEN=your-jira-api-token    # Generate at https://id.atlassian.com/manage-profile/security/api-tokens
 JIRA_PROJECT_KEY=PROJ                  # Your Jira project key (e.g., AWT)
+JIRA_WEBHOOK_SECRET=                   # Optional: openssl rand -hex 32. Without it, dispatch falls back to 1-min cron polling.
 ```
 
-**Jira columns** — The board column names Blazebot watches and moves tickets between:
+> The Jira webhook is registered separately (see [SETUP.md § 8](./SETUP.md#8-register-the-jira-webhook)). The handler at `/webhooks/jira` verifies an `X-Hub-Signature` HMAC-SHA256 header.
+
+**Jira columns** — The board column names ai workflow watches and moves tickets between:
 ```bash
 COLUMN_AI=AI                # Column where tickets are assigned to the agent
 COLUMN_AI_REVIEW=AI Review  # Column where completed tickets go for human review
 COLUMN_BACKLOG=Backlog      # Column where tickets go when clarification is needed
 ```
 
-**GitHub** — Repository where PRs will be created:
+**VCS** — Choose `github` or `gitlab`. Only fill the block matching your provider.
+
 ```bash
 VCS_KIND=github
+
+# GitHub (active when VCS_KIND=github)
 GITHUB_TOKEN=ghp_xxxxxxxxxxxx          # Personal access token with repo scope
 GITHUB_OWNER=your-org                  # GitHub org or username
 GITHUB_REPO=your-repo                  # Target repository name
-GITHUB_BASE_BRANCH=main               # Branch PRs will target
+GITHUB_BASE_BRANCH=main                # Branch PRs will target
 ```
 
-**Slack** — Bot notifications and slash commands:
 ```bash
-CHAT_SDK_SLACK_TOKEN=xoxb-xxxxxxxxxxxx  # Slack bot token (chat:write scope)
+VCS_KIND=gitlab
+
+# GitLab (active when VCS_KIND=gitlab)
+GITLAB_TOKEN=glpat-xxxxxxxxxxxx        # PAT with api, read_repository, write_repository scopes
+GITLAB_PROJECT_ID=group/repo           # Project ID or full path
+GITLAB_BASE_BRANCH=main                # Branch PRs will target
+GITLAB_HOST=https://gitlab.com         # Override for self-hosted
+```
+
+**Slack** — Bot notifications and slash commands. Bot scopes: `chat:write`, `commands`, `files:read`, `users:read`.
+```bash
+CHAT_SDK_SLACK_TOKEN=xoxb-xxxxxxxxxxxx  # Slack bot token
 CHAT_SDK_CHANNEL_ID=C0123456789         # Channel ID for notifications
 CHAT_SDK_BOT_NAME=blazebot             # Display name for the bot
-SLACK_SIGNING_SECRET=xxxxxxxxxxxxxxxx   # Required for /ai-workflow slash commands
+SLACK_SIGNING_SECRET=xxxxxxxxxxxxxxxx   # Required — verifies /ai-workflow slash commands
 SLACK_ALLOWED_USER_IDS=U0123,U4567      # Optional: comma-separated allowlist
 ```
 
@@ -146,7 +169,7 @@ COMMIT_AUTHOR=ai-workflow-blazity      # Git commit author name
 COMMIT_EMAIL=ai-workflow@blazity.com   # Git commit author email
 ```
 
-**Switching agents** — Blazebot supports two CLI runtimes. Set `AGENT_KIND` once per deployment:
+**Switching agents** — ai workflow supports two CLI runtimes. Set `AGENT_KIND` once per deployment:
 
 ```bash
 AGENT_KIND=claude    # default — Anthropic Claude Code
@@ -224,20 +247,25 @@ curl -H "Authorization: Bearer $CRON_SECRET" http://localhost:3000/cron/poll
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | **Jira** | | | |
-| `ISSUE_TRACKER_KIND` | Yes | — | Issue tracker type (`jira`) |
+| `ISSUE_TRACKER_KIND` | No | `jira` | Issue tracker type (only `jira` supported today) |
 | `JIRA_BASE_URL` | Yes | — | Atlassian instance URL |
 | `JIRA_EMAIL` | Yes | — | Jira account email |
 | `JIRA_API_TOKEN` | Yes | — | Jira API token |
 | `JIRA_PROJECT_KEY` | Yes | — | Jira project key |
+| `JIRA_WEBHOOK_SECRET` | No | — | HMAC secret for `/webhooks/jira`. Without it, dispatch is cron-bound. |
 | `COLUMN_AI` | Yes | — | Board column for AI-assigned tickets |
 | `COLUMN_AI_REVIEW` | Yes | — | Board column for completed tickets |
 | `COLUMN_BACKLOG` | Yes | — | Board column for tickets needing clarification |
-| **GitHub** | | | |
-| `VCS_KIND` | Yes | — | VCS provider (`github`) |
-| `GITHUB_TOKEN` | Yes | — | GitHub PAT with repo scope |
-| `GITHUB_OWNER` | Yes | — | GitHub org or username |
-| `GITHUB_REPO` | Yes | — | Target repository |
+| **VCS** | | | |
+| `VCS_KIND` | Yes | — | `github` or `gitlab` |
+| `GITHUB_TOKEN` | Yes† | — | GitHub PAT with `repo` scope (when `VCS_KIND=github`) |
+| `GITHUB_OWNER` | Yes† | — | GitHub org or username (when `VCS_KIND=github`) |
+| `GITHUB_REPO` | Yes† | — | Target repository (when `VCS_KIND=github`) |
 | `GITHUB_BASE_BRANCH` | No | `main` | Base branch for PRs |
+| `GITLAB_TOKEN` | Yes† | — | GitLab PAT with `api`, `read_repository`, `write_repository` (when `VCS_KIND=gitlab`) |
+| `GITLAB_PROJECT_ID` | Yes† | — | Project ID or `group/repo` path (when `VCS_KIND=gitlab`) |
+| `GITLAB_BASE_BRANCH` | No | `main` | Base branch for MRs |
+| `GITLAB_HOST` | No | `https://gitlab.com` | Override for self-hosted GitLab |
 | **Slack** | | | |
 | `CHAT_SDK_SLACK_TOKEN` | Yes | — | Slack bot token |
 | `CHAT_SDK_CHANNEL_ID` | Yes | — | Notification channel ID |
@@ -246,10 +274,10 @@ curl -H "Authorization: Bearer $CRON_SECRET" http://localhost:3000/cron/poll
 | `SLACK_ALLOWED_USER_IDS` | No | — | Comma-separated Slack user IDs allowed to run `/ai-workflow`; empty = anyone |
 | **Agent** | | | |
 | `AGENT_KIND` | No | `claude` | Runtime: `claude` or `codex` |
-| `ANTHROPIC_API_KEY` | Yes* | — | Anthropic API key (required when `AGENT_KIND=claude`) |
+| `ANTHROPIC_API_KEY` | Yes‡ | — | Anthropic API key (required when `AGENT_KIND=claude`) |
 | `CLAUDE_CODE_OAUTH_TOKEN` | No | — | Alternative to `ANTHROPIC_API_KEY` |
 | `CLAUDE_MODEL` | No | `claude-opus-4-6` | Claude model ID |
-| `CODEX_API_KEY` | Yes* | — | OpenAI Codex API key (required when `AGENT_KIND=codex`) |
+| `CODEX_API_KEY` | Yes‡ | — | OpenAI Codex API key (required when `AGENT_KIND=codex`) |
 | `CODEX_CHATGPT_OAUTH_TOKEN` | No | — | Alternative to `CODEX_API_KEY` |
 | `CODEX_MODEL` | No | `gpt-5-codex` | Codex model ID |
 | `CODEX_PRICING_URL` | No | LiteLLM JSON | Pricing source for Codex cost reporting |
@@ -259,24 +287,37 @@ curl -H "Authorization: Bearer $CRON_SECRET" http://localhost:3000/cron/poll
 | **Sandbox** | | | |
 | `MAX_CONCURRENT_AGENTS` | No | `3` | Max parallel sandboxes |
 | `JOB_TIMEOUT_MS` | No | `1800000` | Agent timeout (ms) |
+| **Attachments** | | | |
+| `ATTACHMENT_MAX_FILE_SIZE_MB` | No | `25` | Per-file size limit |
+| `ATTACHMENT_MAX_TOTAL_SIZE_MB` | No | `100` | Combined attachment size limit |
+| `ATTACHMENT_MAX_COUNT` | No | `20` | Max attachments per ticket |
+| `ATTACHMENT_DOWNLOAD_TIMEOUT_MS` | No | `30000` | Download timeout per attachment |
 | **Polling** | | | |
-| `POLL_INTERVAL_MS` | No | `300000` | Poll interval (ms) |
+| `POLL_INTERVAL_MS` | No | `300000` | Internal poll cadence (ms) — separate from the 1-min Vercel cron |
 | **Vercel** | | | |
 | `VERCEL_TOKEN` | No* | — | Vercel API token (local dev only) |
 | `VERCEL_TEAM_ID` | No* | — | Vercel team ID (local dev only) |
 | `VERCEL_PROJECT_ID` | No* | — | Vercel project ID (local dev only) |
+| `WORKFLOW_POSTGRES_URL` | No* | — | Local Postgres for Vercel Workflow durable state (dev only) |
+| **Arthur (optional)** | | | |
+| `GENAI_ENGINE_API_KEY` | No | — | Arthur AI Engine API key |
+| `GENAI_ENGINE_TRACE_ENDPOINT` | No | — | Arthur trace endpoint URL |
+| `GENAI_ENGINE_PROMPT_TASK_ID` | No | — | Hosted prompt task ID (set after `pnpm setup:arthur-prompts`) |
 | **Redis** | | | |
-| `AI_WORKFLOW_KV_REST_API_URL` | Yes | — | Upstash Redis REST URL |
-| `AI_WORKFLOW_KV_REST_API_TOKEN` | Yes | — | Upstash Redis REST token |
+| `AI_WORKFLOW_KV_REST_API_URL` | Yes | — | Upstash Redis REST URL (auto-injected by Marketplace integration) |
+| `AI_WORKFLOW_KV_REST_API_TOKEN` | Yes | — | Upstash Redis REST token (auto-injected) |
 | **Security** | | | |
-| `CRON_SECRET` | No | — | Cron endpoint auth token |
-\* On Vercel, OIDC authenticates automatically. These are only needed for local development if `vercel env pull` doesn't cover your setup.
+| `CRON_SECRET` | No | — | Cron endpoint auth token (Vercel sets this automatically when defined) |
+
+† Required only for the matching `VCS_KIND`. `env.ts` cross-validates at startup.
+‡ Required only for the matching `AGENT_KIND` (the OAuth token alternative also satisfies this).
+\* On Vercel, OIDC authenticates the sandbox automatically. These are only needed for local development if `vercel env pull` doesn't cover your setup.
 
 ## Deploying to Vercel
 
 ### 1. Push to GitHub
 
-Blazebot deploys automatically when connected to Vercel via Git integration.
+ai workflow deploys automatically when connected to Vercel via Git integration.
 
 ### 2. Import project
 
@@ -313,49 +354,41 @@ This hits `/cron/poll` every minute. Vercel injects the `CRON_SECRET` header aut
 
 Two GitHub Actions workflows are included:
 
-- **CI** (`ci.yml`) — Runs on every push to `main`/`dev` and on pull requests. Runs typecheck and unit tests.
-- **E2E** (`e2e.yml`) — Manual trigger with tier selection:
-  - **Tier 1** — Basic integration tests (15 min timeout)
-  - **Tier 2** — Full end-to-end with real Jira/GitHub (150 min timeout, requires Tier 1 to pass first)
+- **CI** (`ci.yml`) — Runs on pull requests targeting `main`/`dev` and on `merge_group` events. Runs typecheck and unit tests; gates the merge queue on `e2e-orchestration → e2e-capacity → e2e-agent`.
+- **E2E** (`e2e.yml`) — Manual `workflow_dispatch` with tier selection (`orchestration`, `capacity`, `agent`, `all`) and an `agent` choice (`claude` | `codex`):
+  - **orchestration** — dispatch / cron / webhook flows (60 min timeout)
+  - **capacity** — concurrency, claim/release, reconciler (30 min timeout, runs after orchestration)
+  - **agent** — full ticket → PR run against real Jira + GitHub (120 min timeout, runs after capacity)
 
 ## Workflow Deep-dive
 
-### Implementation Workflow
+### One workflow, two phases
 
-When a ticket is discovered in the AI column and no PR exists yet, the **implementation workflow** runs:
-
-| Step | What happens |
-|------|-------------|
-| `fetchAndValidateTicket` | Fetches ticket from Jira, verifies it's still in the AI column |
-| `createFeatureBranch` | Creates `blazebot/{ticket-key}` branch from the base branch |
-| `assembleImplementationRequirements` | Combines ticket title, description, acceptance criteria, and comments into a `requirements.md` prompt |
-| `provisionAndStartAgent` | Provisions a Vercel Sandbox, installs Claude Code + global skills, starts the agent detached with a JSON output schema |
-| *poll loop* | Polls the sandbox every 30s for completion (workflow suspends between polls) |
-| `collectAgentResults` | Reads agent output and extracts changed files from the sandbox |
-| `pushChanges` | Pushes all modified files to the feature branch via the GitHub API |
-| `createPullRequest` | Opens a PR targeting the base branch |
-| `moveTicket` | Moves the Jira ticket to the "AI Review" column |
-| `notifySlack` | Sends a Slack message to the configured channel |
-| `unregisterRun` | Removes the ticket from the run registry |
-
-If the agent returns `clarification_needed`, the workflow instead posts the questions as a Jira comment, moves the ticket to Backlog, and notifies via Slack. When someone answers and moves the ticket back to AI, Blazebot picks it up again with the full conversation history.
-
-### Review-Fix Workflow
-
-When a ticket is in the AI column but a PR already exists (indicating review feedback), the **review-fix workflow** runs:
+There is a single durable workflow — `agentWorkflow` in [`src/workflows/agent.ts`](./src/workflows/agent.ts) — that handles both fresh tickets and review-fix re-runs. The branching happens at *context-assembly* time, not at the workflow level: if an open PR for `blazebot/{ticket-key}` already exists, its comments, check results, and conflict status are folded into the agent's input.
 
 | Step | What happens |
 |------|-------------|
-| `fetchAndValidateTicket` | Same as implementation |
-| `fetchPRContext` | Fetches all PR comments (review + issue) and merge conflict status |
-| `assembleReviewFixRequirements` | Builds requirements including the original ticket context plus PR feedback and conflict status |
-| `provisionAndStartFixingAgent` | Starts the agent detached with the fixing prompt |
-| *poll loop* | Polls the sandbox every 30s for completion |
-| `collectAgentResults` | Reads agent output and extracts changed files |
-| `pushChanges` | Pushes fixes to the existing branch |
-| `moveTicket` | Moves back to AI Review |
-| `notifySlack` | Notifies the team |
-| `unregisterRun` | Cleans up |
+| `fetchAndValidateTicket` | Fetches the ticket from Jira; aborts if it's no longer in the AI column |
+| `fetchPRContext` | Looks up an open PR for `blazebot/{ticket-key}`; returns comments, check results, conflict status (or `null` for fresh tickets) |
+| `createFeatureBranch` | Only when there's no existing PR — creates/resets `blazebot/{ticket-key}` from the base branch |
+| `fetchAttachments` | Downloads ticket attachments (size/count limited by `ATTACHMENT_*` env vars) |
+| `ensureArthurTaskForTicket` | Optional — creates an Arthur trace task when `GENAI_ENGINE_*` is configured |
+| `resolveAgentKindOverride` | Per-ticket override via labels (e.g. `agent:codex`); falls back to `AGENT_KIND` |
+| `provisionSandbox` | Provisions a Vercel Sandbox, installs the agent CLI + skills, configures auth + Arthur tracer |
+| `registerTicketSandbox` | Pins the sandbox id to the ticket in Redis so cleanup paths can stop it by id |
+| `writeAttachments` | Writes downloaded attachments under `/tmp/attachments/` inside the sandbox |
+| **Phase 1 — Research/Plan** | `setCommitGuardStep(false)` → `planPhaseStep("research")` → `writeAndStartPhase` → `pollUntilDone` (20 min) → `collectPhase` → `parseResearchStep`. Result is `completed`, `clarification_needed`, or `failed` |
+| **Phase 2 — Implementation** | `setCommitGuardStep(true)` → `planPhaseStep("impl", AGENT_SCHEMA)` → `writeAndStartPhase` → `pollUntilDone` (35 min) → `collectPhase` → `parseAgentOutputStep` |
+| `pushFromSandbox` | Injects the VCS token into the sandbox's git remote (after the agent process is dead) and runs `git push --force` from inside the sandbox |
+| `fixAndRetryPush` | Fallback: if the push is rejected (e.g. pre-receive hook), spawns a lightweight fix agent in the same sandbox, then retries the push once |
+| `createPullRequest` / `findPRForBranch` | Opens a new PR (no prior PR) or re-fetches the existing PR (review-fix path) |
+| `moveTicket` → `notifyTicket("pr_ready")` | Moves the ticket to "AI Review" and sends the Slack notification with the usage report |
+| `unregisterRun` | Removes the ticket from the Redis run registry |
+| `teardownSandbox` | Always runs in `finally` — destroys the sandbox regardless of outcome |
+
+If either phase returns `clarification_needed`, the workflow posts numbered questions as a Jira comment, moves the ticket to Backlog, and emits a `needs_clarification` Slack event. If a phase fails or times out, the ticket is moved to Backlog with a `failed` event.
+
+> A third "Review" phase exists as commented-out scaffolding in `agent.ts`. It's intentionally disabled today.
 
 ### Sandbox Lifecycle
 
@@ -365,26 +398,34 @@ Each agent run gets a fresh, isolated [Vercel Sandbox](https://vercel.com/docs/s
 
 | Input | How it's provided |
 |-------|-------------------|
-| Repository source code | Cloned via `git` source at the feature branch (shallow clone, `depth=1`) |
-| `ANTHROPIC_API_KEY` | Injected as an environment variable |
-| `CLAUDE_MODEL` | Injected as an environment variable |
-| `requirements.md` | Written to the sandbox root via `sandbox.writeFiles()` — contains ticket title, description, acceptance criteria, comments, and the agent prompt |
-| Git identity | Configured inside the sandbox (`git config user.name` / `user.email`) |
-| Claude Code | Installed globally via `npm i -g @anthropic-ai/claude-code` |
-| Skills | Installed globally to `~/.claude/skills/` (not in the repo) — includes `using-superpowers`, `requesting-code-review`, and `frontend-design` |
+| Repository source code | Cloned via `git` source at the feature branch (shallow `depth=1`); unshallowed before push if needed |
+| Auth env vars | `ANTHROPIC_API_KEY` / `CLAUDE_CODE_OAUTH_TOKEN` (Claude) or `CODEX_API_KEY` / `CODEX_CHATGPT_OAUTH_TOKEN` (Codex) — written to `/tmp/agent-env.sh` (mode 0600) and sourced by each phase script |
+| Model | `CLAUDE_MODEL` or `CODEX_MODEL` baked into the phase wrapper script |
+| Per-phase input | `/tmp/research-requirements.md` and `/tmp/impl-requirements.md` — assembled by `assembleResearchPlanContext` / `assembleImplementationContext` |
+| Attachments | Written to `/tmp/attachments/<filename>` |
+| Git identity | `git config user.name` / `user.email` from `COMMIT_AUTHOR` / `COMMIT_EMAIL` |
+| Agent CLI | `@anthropic-ai/claude-code` (Claude) or `@openai/codex` (Codex), installed globally |
+| Skills | Installed via `npx skills add ... -g --agent claude-code codex --copy` to **both** `~/.claude/skills/` and `~/.agents/skills/`. Currently only [`frontend-design`](https://github.com/anthropics/skills) is in `GLOBAL_SKILLS` |
+| Arthur tracer (optional) | Python tracer + `~/.claude/arthur_config.json` + hook entries in `~/.claude/settings.json` |
 
 The sandbox runs on **Node.js 24** with a configurable timeout (`JOB_TIMEOUT_MS`, default 30 minutes). On Vercel, OIDC authenticates the sandbox automatically. For local dev, explicit `VERCEL_TOKEN` / `VERCEL_TEAM_ID` / `VERCEL_PROJECT_ID` are needed.
 
 #### How the agent runs
 
-Claude Code is invoked inside the sandbox with:
-- `--dangerously-skip-permissions` — safe because the sandbox is fully isolated
-- `--output-format json` — enforces structured output
-- `--json-schema '{...}'` — the agent must return output matching the schema below
+Each phase has its own wrapper script (`/tmp/{phase}-wrapper.sh`) that sources `/tmp/agent-env.sh` and pipes the phase input into the agent CLI:
 
-The agent reads `requirements.md` via stdin and implements the feature autonomously. It has access to the full repository, can run tests, install dependencies, and make commits.
+- **Claude** (`buildPhaseScript` in [`src/sandbox/agents/claude.ts`](./src/sandbox/agents/claude.ts)):
+  ```
+  cat /tmp/{phase}-requirements.md | claude \
+    --print --model '<model>' --dangerously-skip-permissions --output-format json \
+    [--json-schema '<AGENT_SCHEMA>'] \
+    > /tmp/{phase}-stdout.txt 2>/tmp/{phase}-stderr.txt
+  ```
+- **Codex** (`buildPhaseScript` in [`src/sandbox/agents/codex.ts`](./src/sandbox/agents/codex.ts)) uses `codex exec --model … --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check --json` with `--output-schema` for structured output.
 
-The agent must return structured output conforming to:
+The script ends by writing a sentinel file (`/tmp/{phase}-done`). The workflow polls every 30 seconds via `checkPhaseDone` and suspends between polls — durable across redeploys.
+
+The implementation phase enforces the structured contract:
 
 ```json
 {
@@ -395,34 +436,27 @@ The agent must return structured output conforming to:
 }
 ```
 
-#### How commits are extracted
+A **commit-guard stop hook** (toggled per phase via `setCommitGuardStep`) blocks the agent from exiting with uncommitted changes. Phase 1 has it disabled (research only — no commits expected); phase 2 enables it so the implementation phase can't return `result: "implemented"` while leaving the working tree dirty.
 
-The agent commits inside the sandbox via a **stop hook** that blocks exit until all changes are committed. A **wrapper script** runs the agent detached, cleans up artifacts (`.claude/`, `requirements.md`), and writes a sentinel file (`/tmp/agent-done`) on completion. The workflow polls for this sentinel every 30 seconds, then:
+#### How changes get pushed
 
-1. Reads agent stdout/stderr from `/tmp/agent-stdout.txt` and `/tmp/agent-stderr.txt`
-2. Diffs against the pre-agent SHA to find changed files (`git diff --name-only`)
-3. Reads each modified file's content from the sandbox (excluding `requirements.md` and `.claude/`)
-4. Returns the file list `Array<{ path, content }>` to the workflow
+ai workflow pushes from **inside the sandbox**, but only after the agent process has exited. The flow in [`src/sandbox/poll-agent.ts`](./src/sandbox/poll-agent.ts):
 
-#### How changes get pushed to GitHub
+1. **Verify commits exist** — compare the saved `/tmp/.pre-agent-sha` to the current `HEAD`. If unchanged, the workflow fails the run with "Agent reported success but made no commits."
+2. **Inject the token** — `git remote set-url origin <auth-url>`. The agent process is already dead at this point and never sees the token.
+3. **Unshallow if needed** — shallow clones miss shared ancestry with `main`, which breaks PR creation.
+4. **Push** — `git push --force origin HEAD:refs/heads/{branch}` (force-push is safe; `blazebot/*` branches have no concurrent pushers).
 
-Blazebot does **not** push from inside the sandbox. Instead, the extracted files are pushed via the **GitHub Git Data API** (Octokit), which builds a commit from the outside:
-
-1. **Create blobs** — each file's content is uploaded as a base64-encoded blob
-2. **Create tree** — a new Git tree is assembled referencing all blobs, based on the branch's current tree
-3. **Create commit** — a new commit object is created with the tree and the branch tip as parent
-4. **Update ref** — the branch ref (`refs/heads/blazebot/{ticket-key}`) is fast-forwarded to the new commit
-
-This approach avoids giving the sandbox push credentials to the target repository.
+If the push is rejected (e.g. by a remote pre-receive hook), `fixAndRetryPush` strips the token, spawns a smaller fix agent in the same sandbox with the push error as context, lets it commit fixes, then re-injects the token and retries the push once.
 
 #### How PRs are created
 
-After pushing, the workflow calls `octokit.pulls.create()` to open a PR:
-- **Head**: the feature branch (`blazebot/{ticket-key}`)
-- **Base**: the configured base branch (default `main`)
-- **Title and body**: generated from the ticket title and the agent's summary
+For fresh tickets, the workflow opens a PR via the VCS adapter (`octokit.pulls.create()` for GitHub, `@gitbeaker/rest` for GitLab):
+- **Head**: `blazebot/{ticket-key}`
+- **Base**: `GITHUB_BASE_BRANCH` / `GITLAB_BASE_BRANCH` (default `main`)
+- **Title**: the ticket title
 
-For the review-fix workflow, no new PR is created — the existing PR is updated by pushing to the same branch.
+For tickets that already had a PR (the review-fix path), no new PR is created — the existing PR is updated by the force-push and re-fetched via `findPRForBranch`.
 
 #### Teardown
 
@@ -430,15 +464,17 @@ The sandbox is **always destroyed** after each run (in a `finally` block), wheth
 
 ### Run Registry and Reconciliation
 
-Blazebot uses an **atomic claim pattern** via Upstash Redis to prevent duplicate runs:
+ai workflow uses an **atomic claim pattern** via Upstash Redis to prevent duplicate runs:
 
 - When a ticket is dispatched, a `claiming:{timestamp}` sentinel is set atomically (`hsetnx`)
 - Only one poller instance can win the claim — others see it's taken
-- After the workflow starts, the sentinel is replaced with the real workflow run ID
-- On every poll cycle, the **reconciler** cleans up:
-  - Stale claims older than 5 minutes
-  - Finished runs still tracked in the registry
-  - Orphaned runs for tickets that left the AI column (cancels the workflow)
+- After the workflow starts, the sentinel is replaced with the real workflow run ID and the sandbox id is pinned to the ticket
+- On every poll cycle, the **reconciler** ([`src/lib/reconcile.ts`](./src/lib/reconcile.ts)) cleans up:
+  - Stale claims older than 5 minutes (kills any orphaned sandbox + clears the sentinel)
+  - Finished runs still tracked in the registry (status `completed` / `failed` / `cancelled`)
+  - Orphaned runs for tickets that left the AI column — cancels the workflow and stops the sandbox
+  - Stale failed-ticket markers (cleared once the ticket leaves the AI column)
+  - A 30-second grace window guards against Jira's JQL index lag during column transitions
 
 ## License
 
