@@ -48,7 +48,6 @@ export const env = createEnv({
 
     // Agent
     ANTHROPIC_API_KEY: z.string().min(1).optional(),
-    CLAUDE_CODE_OAUTH_TOKEN: z.string().min(1).optional(),
     CLAUDE_MODEL: z.string().default("claude-opus-4-6"),
     COMMIT_AUTHOR: z.string().default("ai-workflow-blazity"),
     COMMIT_EMAIL: z.string().default("ai-workflow@blazity.com"),
@@ -141,10 +140,10 @@ export const env = createEnv({
         "  AGENT_KIND=codex requires CODEX_API_KEY or CODEX_CHATGPT_OAUTH_TOKEN",
     );
   }
-  if (env.AGENT_KIND === "claude" && !env.ANTHROPIC_API_KEY && !env.CLAUDE_CODE_OAUTH_TOKEN) {
+  if (env.AGENT_KIND === "claude" && !env.ANTHROPIC_API_KEY) {
     throw new Error(
       "Invalid environment variables:\n" +
-        "  AGENT_KIND=claude requires ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN",
+        "  AGENT_KIND=claude requires ANTHROPIC_API_KEY",
     );
   }
 }

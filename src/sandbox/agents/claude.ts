@@ -27,15 +27,12 @@ export class ClaudeAgentAdapter implements AgentAdapter {
   }
 
   async configure(sandbox: RunnableSandbox, opts: ConfigureOpts): Promise<void> {
-    if (!opts.anthropicApiKey && !opts.claudeCodeOauthToken) {
-      throw new Error("ClaudeAgentAdapter.configure requires anthropicApiKey or claudeCodeOauthToken");
+    if (!opts.anthropicApiKey) {
+      throw new Error("ClaudeAgentAdapter.configure requires anthropicApiKey");
     }
-    const envLines: string[] = [];
-    if (opts.claudeCodeOauthToken) {
-      envLines.push(`export CLAUDE_CODE_OAUTH_TOKEN=${shellQuote(opts.claudeCodeOauthToken)}`);
-    } else if (opts.anthropicApiKey) {
-      envLines.push(`export ANTHROPIC_API_KEY=${shellQuote(opts.anthropicApiKey)}`);
-    }
+    const envLines: string[] = [
+      `export ANTHROPIC_API_KEY=${shellQuote(opts.anthropicApiKey)}`,
+    ];
     await sandbox.writeFiles([
       { path: "/tmp/agent-env.sh", content: Buffer.from(envLines.join("\n") + "\n") },
     ]);

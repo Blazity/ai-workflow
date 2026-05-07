@@ -275,7 +275,6 @@ curl -H "Authorization: Bearer $CRON_SECRET" http://localhost:3000/cron/poll
 | **Agent** | | | |
 | `AGENT_KIND` | No | `claude` | Runtime: `claude` or `codex` |
 | `ANTHROPIC_API_KEY` | Yes‡ | — | Anthropic API key (required when `AGENT_KIND=claude`) |
-| `CLAUDE_CODE_OAUTH_TOKEN` | No | — | Alternative to `ANTHROPIC_API_KEY` |
 | `CLAUDE_MODEL` | No | `claude-opus-4-6` | Claude model ID |
 | `CODEX_API_KEY` | Yes‡ | — | OpenAI Codex API key (required when `AGENT_KIND=codex`) |
 | `CODEX_CHATGPT_OAUTH_TOKEN` | No | — | Alternative to `CODEX_API_KEY` |
@@ -399,7 +398,7 @@ Each agent run gets a fresh, isolated [Vercel Sandbox](https://vercel.com/docs/s
 | Input | How it's provided |
 |-------|-------------------|
 | Repository source code | Cloned via `git` source at the feature branch (shallow `depth=1`); unshallowed before push if needed |
-| Auth env vars | `ANTHROPIC_API_KEY` / `CLAUDE_CODE_OAUTH_TOKEN` (Claude) or `CODEX_API_KEY` / `CODEX_CHATGPT_OAUTH_TOKEN` (Codex) — written to `/tmp/agent-env.sh` (mode 0600) and sourced by each phase script |
+| Auth env vars | `ANTHROPIC_API_KEY` (Claude) or `CODEX_API_KEY` / `CODEX_CHATGPT_OAUTH_TOKEN` (Codex) — written to `/tmp/agent-env.sh` (mode 0600) and sourced by each phase script |
 | Model | `CLAUDE_MODEL` or `CODEX_MODEL` baked into the phase wrapper script |
 | Per-phase input | `/tmp/research-requirements.md` and `/tmp/impl-requirements.md` — assembled by `assembleResearchPlanContext` / `assembleImplementationContext` |
 | Attachments | Written to `/tmp/attachments/<filename>` |

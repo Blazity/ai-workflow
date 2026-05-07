@@ -160,7 +160,7 @@ vercel env add JIRA_API_TOKEN production
 | `VCS_KIND` | `github` or `gitlab` |
 | `GITHUB_TOKEN`, `GITHUB_OWNER`, `GITHUB_REPO` | If `VCS_KIND=github` |
 | `GITLAB_TOKEN`, `GITLAB_PROJECT_ID` | If `VCS_KIND=gitlab` |
-| `ANTHROPIC_API_KEY` (or `CLAUDE_CODE_OAUTH_TOKEN`) | If `AGENT_KIND=claude` (default) |
+| `ANTHROPIC_API_KEY` | If `AGENT_KIND=claude` (default) |
 | `CODEX_API_KEY` (or `CODEX_CHATGPT_OAUTH_TOKEN`) | If `AGENT_KIND=codex` |
 | `AI_WORKFLOW_KV_REST_API_URL`, `AI_WORKFLOW_KV_REST_API_TOKEN` | Auto-injected by Upstash integration |
 

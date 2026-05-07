@@ -200,9 +200,9 @@ async function provisionSandbox(
       "agent override agent:codex requires CODEX_API_KEY or CODEX_CHATGPT_OAUTH_TOKEN in the deployed environment",
     );
   }
-  if (agentKind === "claude" && !env.ANTHROPIC_API_KEY && !env.CLAUDE_CODE_OAUTH_TOKEN) {
+  if (agentKind === "claude" && !env.ANTHROPIC_API_KEY) {
     throw new Error(
-      "agent override agent:claude requires ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN in the deployed environment",
+      "agent override agent:claude requires ANTHROPIC_API_KEY in the deployed environment",
     );
   }
   const agent = createAgentAdapter(agentKind);
@@ -219,7 +219,6 @@ async function provisionSandbox(
 
   const sandbox = await manager.provision(branchName, agent, {
     anthropicApiKey: env.ANTHROPIC_API_KEY,
-    claudeCodeOauthToken: env.CLAUDE_CODE_OAUTH_TOKEN,
     codexApiKey: env.CODEX_API_KEY,
     codexChatGptOauthToken: env.CODEX_CHATGPT_OAUTH_TOKEN,
     model: agentKind === "codex" ? env.CODEX_MODEL : env.CLAUDE_MODEL,

@@ -196,7 +196,7 @@ pnpm tsx --env-file=.env.local env.ts
 The validator (`env.ts` via `@t3-oss/env-core`) catches:
 - Missing required keys.
 - URL/email/UUID format violations.
-- Cross-field violations (`VCS_KIND=github` requires `GITHUB_TOKEN/OWNER/REPO`; `AGENT_KIND=claude` requires `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN`; etc.).
+- Cross-field violations (`VCS_KIND=github` requires `GITHUB_TOKEN/OWNER/REPO`; `AGENT_KIND=claude` requires `ANTHROPIC_API_KEY`; etc.).
 
 **On failure:** the validator prints `Invalid environment variables:` followed by the specific paths. Identify the responsible subskill from the path prefix (`JIRA_*` → init-jira; `GITHUB_*` / `GITLAB_*` → init-vcs; etc.) and direct the user to fix in the Vercel dashboard, then re-run this step.
 
