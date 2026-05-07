@@ -106,6 +106,11 @@ export const env = createEnv({
     // Jira Webhook
     JIRA_WEBHOOK_SECRET: z.string().min(1).optional(),
 
+    // Forge app — shared secret required when using the Jira Forge app
+    // instead of (or alongside) the classic webhook. Both /jira/dispatch
+    // and /runs/:key are gated by an X-Forge-Secret header matching this.
+    FORGE_SHARED_SECRET: z.string().min(1).optional(),
+
     // Redis (run registry)
     AI_WORKFLOW_KV_REST_API_URL: z.string().url(),
     AI_WORKFLOW_KV_REST_API_TOKEN: z.string().min(1),
