@@ -160,22 +160,21 @@ vercel env add JIRA_API_TOKEN production
 | `VCS_KIND` | `github` or `gitlab` |
 | `GITHUB_TOKEN`, `GITHUB_OWNER`, `GITHUB_REPO` | If `VCS_KIND=github` |
 | `GITLAB_TOKEN`, `GITLAB_PROJECT_ID` | If `VCS_KIND=gitlab` |
-| `CHAT_SDK_SLACK_TOKEN`, `CHAT_SDK_CHANNEL_ID` | Slack bot |
-| `SLACK_SIGNING_SECRET` | Verifies `/ai-workflow` slash commands |
-| `AGENT_KIND` | `claude` (default) or `codex` |
-| `ANTHROPIC_API_KEY` | If `AGENT_KIND=claude` |
-| `CODEX_API_KEY` | If `AGENT_KIND=codex` |
+| `ANTHROPIC_API_KEY` (or `CLAUDE_CODE_OAUTH_TOKEN`) | If `AGENT_KIND=claude` (default) |
+| `CODEX_API_KEY` (or `CODEX_CHATGPT_OAUTH_TOKEN`) | If `AGENT_KIND=codex` |
 | `AI_WORKFLOW_KV_REST_API_URL`, `AI_WORKFLOW_KV_REST_API_TOKEN` | Auto-injected by Upstash integration |
-| `CRON_SECRET` | Generate: `openssl rand -hex 32`. Required so `/cron/poll` rejects unauthenticated callers. |
-| `JIRA_WEBHOOK_SECRET` | Generate: `openssl rand -hex 32`. Strongly recommended — without it, dispatch is cron-bound. |
 
 ### Optional / has defaults
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `GITHUB_BASE_BRANCH` | `main` | PR target branch |
+| `CHAT_SDK_SLACK_TOKEN`, `CHAT_SDK_CHANNEL_ID` | unset | Slack bot. When unset, runs proceed silently (no notifications). |
 | `CHAT_SDK_BOT_NAME` | `blazebot` | Slack display name |
+| `SLACK_SIGNING_SECRET` | unset | Required only if you register the `/ai-workflow` slash command. When unset, `/webhooks/slack` rejects all requests. |
 | `SLACK_ALLOWED_USER_IDS` | empty (anyone) | Comma-separated user IDs allowed to run slash commands |
+| `CRON_SECRET` | unset | Generate: `openssl rand -hex 32`. Without it, `/cron/poll` accepts unauthenticated callers — strongly recommended in production. |
+| `JIRA_WEBHOOK_SECRET` | unset | Generate: `openssl rand -hex 32`. Without it, dispatch is cron-bound (1-min latency). |
 | `CLAUDE_MODEL` | `claude-opus-4-6` | Anthropic model |
 | `CODEX_MODEL` | `gpt-5-codex` | Codex model |
 | `MAX_CONCURRENT_AGENTS` | `3` | Parallel sandbox cap |
@@ -364,7 +363,7 @@ Flip `VCS_KIND=gitlab` and provide `GITLAB_TOKEN` + `GITLAB_PROJECT_ID`. For sel
 | `/cron/poll` returns 401 from Vercel Cron | `CRON_SECRET` mismatch | Ensure the var is set in Production environment. Redeploy after changing. |
 | Tickets in AI column never get picked up | Cron disabled / webhook misregistered | Check **Vercel → Project → Cron Jobs** is enabled. Curl `/cron/poll` with the secret to test manually. |
 | Workflow starts but sandbox fails to provision | Missing Vercel OIDC / Sandbox quota | On Vercel, OIDC is automatic. Check the project has Sandbox enabled (Pro plan). For local dev, set `VERCEL_TOKEN`/`VERCEL_TEAM_ID`/`VERCEL_PROJECT_ID`. |
-| Run registry: `AI_WORKFLOW_KV_REST_API_URL undefined` | Upstash integration installed with wrong prefix | Reinstall with prefix `AI_WORKFLOW_KV`. |
+| Run registry: `AI_WORKFLOW_KV_REST_API_URL undefined` | Upstash integration installed with wrong prefix | Reinstall with prefix `AI_WORKFLOW` (Upstash appends `_KV_REST_API_URL` / `_KV_REST_API_TOKEN`). |
 | Agent runs but PR isn't created | `GITHUB_TOKEN` lacks `repo` scope, or wrong owner/repo | Re-create the PAT with `repo` scope. Verify `GITHUB_OWNER`/`GITHUB_REPO` point at the *target* repo, not this repo. |
 | Slack messages don't arrive | Bot not in channel, or wrong `CHAT_SDK_CHANNEL_ID` | Invite bot to the channel. Re-copy the channel ID. |
 | Slash command returns `dispatch_failed` | Signing secret wrong, or app not reinstalled | Verify `SLACK_SIGNING_SECRET`. Reinstall the Slack app after adding the slash command. |

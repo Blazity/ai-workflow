@@ -1,6 +1,7 @@
 import { env } from "../../env.js";
 import { JiraAdapter } from "../adapters/issue-tracker/jira.js";
 import { ChatSDKAdapter } from "../adapters/messaging/chatsdk.js";
+import { NoopMessagingAdapter } from "../adapters/messaging/noop.js";
 import { UpstashRunRegistry } from "../adapters/run-registry/upstash.js";
 import { createVCS } from "./create-vcs.js";
 import type { IssueTrackerAdapter } from "../adapters/issue-tracker/types.js";
@@ -20,6 +21,16 @@ export function createStepAdapters(): StepAdapters {
     url: env.AI_WORKFLOW_KV_REST_API_URL,
     token: env.AI_WORKFLOW_KV_REST_API_TOKEN,
   });
+  const messaging: MessagingAdapter =
+    env.CHAT_SDK_SLACK_TOKEN && env.CHAT_SDK_CHANNEL_ID
+      ? new ChatSDKAdapter({
+          slackToken: env.CHAT_SDK_SLACK_TOKEN,
+          channelId: env.CHAT_SDK_CHANNEL_ID,
+          botName: env.CHAT_SDK_BOT_NAME,
+          jiraBaseUrl: env.JIRA_BASE_URL,
+          threadStore: runRegistry,
+        })
+      : new NoopMessagingAdapter();
   return {
     issueTracker: new JiraAdapter({
       baseUrl: env.JIRA_BASE_URL,
@@ -28,13 +39,7 @@ export function createStepAdapters(): StepAdapters {
       projectKey: env.JIRA_PROJECT_KEY,
     }),
     vcs: createVCS(),
-    messaging: new ChatSDKAdapter({
-      slackToken: env.CHAT_SDK_SLACK_TOKEN,
-      channelId: env.CHAT_SDK_CHANNEL_ID,
-      botName: env.CHAT_SDK_BOT_NAME,
-      jiraBaseUrl: env.JIRA_BASE_URL,
-      threadStore: runRegistry,
-    }),
+    messaging,
     runRegistry,
   };
 }
