@@ -123,7 +123,7 @@ ai-workflow uses Upstash Redis as its run registry (atomic claim/release for con
 
 1. Open https://vercel.com/marketplace/upstash and click **Install**.
 2. Pick the team and project you just linked.
-3. **Critical:** when prompted for the env-var prefix, set it to `AI_WORKFLOW_KV`. The code reads `AI_WORKFLOW_KV_REST_API_URL` and `AI_WORKFLOW_KV_REST_API_TOKEN` — wrong prefix means ai-workflow can't find the registry.
+3. **Critical:** when prompted for the env-var prefix, set it to `AI_WORKFLOW` (not `AI_WORKFLOW_KV`). Upstash appends `_KV_REST_API_URL` / `_KV_REST_API_TOKEN`, so the resulting vars are `AI_WORKFLOW_KV_REST_API_URL` and `AI_WORKFLOW_KV_REST_API_TOKEN` — which is what the code reads. Wrong prefix means ai-workflow can't find the registry.
 4. Vercel auto-injects both vars into Production, Preview, and Development environments.
 
 Verify:
