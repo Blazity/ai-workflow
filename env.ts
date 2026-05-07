@@ -87,6 +87,13 @@ export const env = createEnv({
     // Polling
     POLL_INTERVAL_MS: z.coerce.number().int().positive().default(300_000),
 
+    // Phase 3 (Review) — agent self-reviews diff and fixes issues before push.
+    // Off by default so existing deployments keep current two-phase behavior.
+    ENABLE_REVIEW_PHASE: z
+      .enum(["true", "false"])
+      .default("false")
+      .transform((v) => v === "true"),
+
     // Vercel (optional — auto via OIDC on Vercel)
     VERCEL_TOKEN: z.string().min(1).optional(),
     VERCEL_TEAM_ID: z.string().min(1).optional(),

@@ -1,6 +1,6 @@
 import { sleep } from "workflow";
 import type {
-  AgentOutput, PhaseUsage, PhaseKind, PhaseArtifactPaths, ResearchResult,
+  AgentOutput, PhaseUsage, PhaseKind, PhaseArtifactPaths, ResearchResult, ReviewOutput,
 } from "../sandbox/agents/types.js";
 import type { AgentKind } from "../sandbox/agents/index.js";
 import type { PRComment, CheckRunResult } from "../adapters/vcs/types.js";
@@ -322,6 +322,17 @@ async function parseAgentOutputStep(
   return { output: a.parseAgentOutput(raw, structured), usage: a.extractUsage(raw, structured) };
 }
 
+async function parseReviewStep(
+  agentKind: AgentKind,
+  raw: string,
+  structured: string | null,
+): Promise<{ output: ReviewOutput; usage: PhaseUsage | null }> {
+  "use step";
+  const { createAgentAdapter } = await import("../sandbox/agents/index.js");
+  const a = createAgentAdapter(agentKind);
+  return { output: a.parseReviewOutput(raw, structured), usage: a.extractUsage(raw, structured) };
+}
+
 async function createPullRequest(branchName: string, title: string, summary: string) {
   "use step";
   const { createStepAdapters } = await import("../lib/step-adapters.js");
@@ -434,12 +445,12 @@ export async function agentWorkflow(ticketId: string) {
   "use workflow";
 
   const { env, getVcsConfig } = await import("../../env.js");
-  const { assembleResearchPlanContext, assembleImplementationContext } =
+  const { assembleResearchPlanContext, assembleImplementationContext, assembleReviewContext } =
     await import("../sandbox/context.js");
   const { collectPhase, pushFromSandbox, fixAndRetryPush, teardownSandbox } =
     await import("../sandbox/poll-agent.js");
   const { formatUsageReport } = await import("../sandbox/usage.js");
-  const { AGENT_SCHEMA } = await import("../sandbox/agents/types.js");
+  const { AGENT_SCHEMA, REVIEW_SCHEMA } = await import("../sandbox/agents/types.js");
 
   const ticket = await fetchAndValidateTicket(ticketId, env.COLUMN_AI);
   if (!ticket) return;
@@ -646,50 +657,48 @@ export async function agentWorkflow(ticketId: string) {
       }
 
       // ========== PHASE 3: Review ==========
-      // Temporarily disabled.
-      // await setCommitGuardStep(sandboxId, agentKind, true);
-      //
-      // const gitDiff = await captureGitDiff(sandboxId);
-      //
-      // const reviewPaths = agent.artifactPaths("review");
-      // const reviewInput = assembleReviewContext({
-      //   ticket: ticketData,
-      //   prompt: prompts.review,
-      //   researchPlanMarkdown,
-      //   gitDiff,
-      //   attachments: downloadedAttachments,
-      // });
-      //
-      // const reviewScript = agent.buildPhaseScript({
-      //   phase: "review",
-      //   model: activeModel,
-      //   paths: reviewPaths,
-      //   jsonSchema: REVIEW_SCHEMA,
-      // });
-      //
-      // await writeAndStartPhase(
-      //   sandboxId,
-      //   reviewPaths.input, reviewInput,
-      //   reviewPaths.wrapper, reviewScript,
-      // );
-      //
-      // const reviewDone = await pollUntilDone(sandboxId, reviewPaths.sentinel, 15);
-      // let reviewOutput: ReviewOutput;
-      //
-      // if (reviewDone) {
-      //   const { raw: reviewRaw, structured: reviewStructured } = await collectPhase(sandboxId, reviewPaths);
-      //   phaseUsages["Review"] = agent.extractUsage(reviewRaw, reviewStructured);
-      //   reviewOutput = agent.parseReviewOutput(reviewRaw, reviewStructured);
-      // } else {
-      //   reviewOutput = { result: "failed", feedback: "", issues: [], error: "Review phase timed out" };
-      // }
-      //
-      // if (reviewOutput.result === "failed") {
-      //   await moveTicket(ticketId, env.COLUMN_BACKLOG);
-      //   await notifySlack(`Task ${ticket.identifier} failed: review — ${reviewOutput.error ?? "unknown"}${usageSuffix()}`);
-      //   await unregisterRun(ticket.identifier);
-      //   return;
-      // }
+      // Gated by ENABLE_REVIEW_PHASE so deployments can opt in without code
+      // changes. Commit guard stays enabled (review fixes its own findings).
+      if (env.ENABLE_REVIEW_PHASE) {
+        const { paths: reviewPaths, script: reviewScript } =
+          await planPhaseStep(agentKind, "review", activeModel, REVIEW_SCHEMA);
+        const reviewInput = assembleReviewContext({
+          ticket: ticketData,
+          prompt: prompts.review,
+          researchPlanMarkdown,
+          attachments: downloadedAttachments,
+        });
+
+        await writeAndStartPhase(
+          sandboxId,
+          reviewPaths.input, reviewInput,
+          reviewPaths.wrapper, reviewScript,
+        );
+
+        const reviewDone = await pollUntilDone(sandboxId, reviewPaths.sentinel, 15);
+        let reviewOutput: ReviewOutput;
+
+        if (reviewDone) {
+          const { raw: reviewRaw, structured: reviewStructured } = await collectPhase(sandboxId, reviewPaths);
+          const { output, usage: reviewUsage } = await parseReviewStep(agentKind, reviewRaw, reviewStructured);
+          phaseUsages["Review"] = reviewUsage;
+          reviewOutput = output;
+        } else {
+          reviewOutput = { result: "failed", feedback: "", issues: [], error: "Review phase timed out" };
+        }
+
+        if (reviewOutput.result === "failed") {
+          await unregisterRun(ticket.identifier);
+          await moveTicket(ticketId, env.COLUMN_BACKLOG);
+          await notifyTicket(ticket.identifier, {
+            kind: "failed",
+            phase: "review",
+            reason: reviewOutput.error ?? "unknown",
+            usageReport: usageReportOrUndefined(),
+          });
+          return;
+        }
+      }
 
       // ========== POST-PHASES: Push & PR ==========
       let pushResult = await pushFromSandbox(sandboxId, branchName);

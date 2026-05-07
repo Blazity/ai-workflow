@@ -31,7 +31,6 @@ export interface ReviewContextInput {
   ticket: TicketData;
   prompt: string;
   researchPlanMarkdown: string;
-  gitDiff: string;
   attachments?: DownloadedAttachment[];
 }
 
@@ -110,7 +109,7 @@ ${prompt}
 }
 
 export function assembleReviewContext(input: ReviewContextInput): string {
-  const { ticket, prompt, researchPlanMarkdown, gitDiff, attachments } = input;
+  const { ticket, prompt, researchPlanMarkdown, attachments } = input;
   const attachmentsSection = renderAttachmentsSection(attachments);
   return `# Requirements
 
@@ -129,12 +128,6 @@ ${ticket.acceptanceCriteria || "None specified."}
 ## Research & Plan
 
 ${researchPlanMarkdown}
-
-## Git Diff
-
-\`\`\`diff
-${gitDiff}
-\`\`\`
 
 ---
 
