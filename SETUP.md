@@ -11,14 +11,13 @@ End-to-end instructions for deploying ai-workflow to your own Vercel account. Re
 3. [Clone the repo and link to Vercel](#3-clone-the-repo-and-link-to-vercel)
 4. [Install the Upstash marketplace integration](#4-install-the-upstash-marketplace-integration)
 5. [Configure environment variables](#5-configure-environment-variables)
-6. [Local development (optional)](#6-local-development-optional)
-7. [Deploy to Vercel](#7-deploy-to-vercel)
-8. [Register the Jira webhook](#8-register-the-jira-webhook)
-9. [Register the Slack slash command](#9-register-the-slack-slash-command)
-10. [Smoke test the deployment](#10-smoke-test-the-deployment)
-11. [CI / GitHub Actions](#11-ci--github-actions)
-12. [Optional integrations](#12-optional-integrations)
-13. [Troubleshooting](#13-troubleshooting)
+6. [Deploy to Vercel](#6-deploy-to-vercel)
+7. [Register the Jira webhook](#7-register-the-jira-webhook)
+8. [Register the Slack slash command](#8-register-the-slack-slash-command)
+9. [Smoke test the deployment](#9-smoke-test-the-deployment)
+10. [CI / GitHub Actions](#10-ci--github-actions)
+11. [Optional integrations](#11-optional-integrations)
+12. [Troubleshooting](#12-troubleshooting)
 
 ---
 
@@ -50,28 +49,83 @@ Do these in any order — you'll paste the resulting values into Vercel in step 
 
 ### 2.1 Jira
 
-1. Go to https://id.atlassian.com/manage-profile/security/api-tokens and create an API token. Save it as `JIRA_API_TOKEN`.
-2. Note your Atlassian instance URL (e.g. `https://your-domain.atlassian.net`) → `JIRA_BASE_URL`.
-3. Note the email of the Jira user the token belongs to → `JIRA_EMAIL`.
-4. Open the project ai-workflow will operate on. Note its key (e.g. `AWT`) → `JIRA_PROJECT_KEY`.
-5. On the project board, identify the three columns ai-workflow uses. Create them if they don't exist:
+ai-workflow authenticates to Jira as a **scoped service account** — a dedicated Atlassian user that owns only the API token and only the scopes the bot needs. Don't use a human's personal token: rotation, audit, and least-privilege all break down when the bot shares an identity with a real engineer.
+
+**Create the service account:**
+
+1. In Atlassian admin (https://admin.atlassian.com), invite a new user — e.g. `ai-workflow@your-domain.com` — into the same site as your Jira project. Give it product access to **Jira** only.
+2. Add the service account to the project as a **member** (or to a group that has project access). Grant it permission to browse, create, edit, transition, and comment on issues in `JIRA_PROJECT_KEY`. Nothing else.
+3. Sign in as the service account once to accept the EULA, then sign out.
+
+**Generate a scoped API token:**
+
+4. Sign back in as the service account and go to https://id.atlassian.com/manage-profile/security/api-tokens → **Create API token with scopes**. Pick the granular scopes below — _not_ a classic unscoped token:
+
+   | Scope | Why |
+   |-------|-----|
+   | `read:issue:jira` | Read issue core fields (summary, description, status, assignee, dates) |
+   | `read:issue-meta:jira` | Read create/edit metadata (which fields exist, which are required, allowed values) |
+   | `read:issuedetails:jira` | Read full issue payload incl. nested fields, links, relations |
+   | `read:issue.transition:jira` | List available workflow transitions for an issue (does NOT execute them) |
+   | `read:comment:jira` | Read issue comments |
+   | `read:attachment:jira` | Read attachment metadata and download attachment files |
+   | `read:project:jira` | Read project info (key, name, lead, components, versions) |
+   | `read:status:jira` | Read workflow status definitions |
+   | `read:user:jira` | Look up user profiles by accountId / search users |
+   | `read:jql:jira` | Execute JQL queries (`/search/jql`) to find issues |
+   | `read:field:jira` | Read field definitions (system + custom field schemas) |
+   | `read:issue-type:jira` | Read issue type definitions (Task, Bug, Story, custom types) |
+   | `write:issue:jira` | Create issues, edit fields, assign, execute transitions, delete issues |
+   | `write:comment:jira` | Add, edit, delete comments on issues |
+
+5. Copy the token immediately (it's shown once) → `JIRA_API_TOKEN`.
+
+**Capture the rest of the config:**
+
+6. Note your Atlassian instance URL (e.g. `https://your-domain.atlassian.net`) → `JIRA_BASE_URL`.
+7. Note the email of the **service account** (not your personal email) → `JIRA_EMAIL`.
+8. Open the project ai-workflow will operate on. Note its key (e.g. `AWT`) → `JIRA_PROJECT_KEY`.
+9. On the project board, identify the three columns ai-workflow uses. Create them if they don't exist:
    - `COLUMN_AI` — tickets assigned to the agent (default: `AI`)
    - `COLUMN_AI_REVIEW` — completed tickets pending human review (default: `AI Review`)
    - `COLUMN_BACKLOG` — tickets bounced back for clarification (default: `Backlog`)
-6. Generate a webhook secret to authenticate Jira → Vercel deliveries:
-   ```bash
-   openssl rand -hex 32
-   ```
-   Save as `JIRA_WEBHOOK_SECRET`. You'll register the webhook itself in step 8.
+10. Generate a webhook secret to authenticate Jira → Vercel deliveries:
+    ```bash
+    openssl rand -hex 32
+    ```
+    Save as `JIRA_WEBHOOK_SECRET`. You'll register the webhook itself in step 7.
 
 > Without a webhook, dispatch falls back to the 1-minute cron poll — workable for testing, sluggish in production.
 
 ### 2.2 GitHub (or GitLab)
 
-**GitHub:**
-1. Create a fine-grained or classic PAT with `repo` scope at https://github.com/settings/tokens → `GITHUB_TOKEN`.
-2. Note the target repo's `owner` and `name` → `GITHUB_OWNER`, `GITHUB_REPO`.
-3. Note the base branch (usually `main`) → `GITHUB_BASE_BRANCH`.
+**GitHub (GitHub App — required):**
+
+ai-workflow authenticates to GitHub via a **GitHub App**. The App scopes the bot to a single installation, commits as `<app-slug>[bot]`, and lets you rotate the private key without touching a human account. See [`.claude/skills/init-vcs/`](./.claude/skills/init-vcs/) for the full walkthrough — the short version:
+
+1. Go to **https://github.com/settings/apps → New GitHub App**.
+2. Set **Webhook → Active** to off (ai-workflow drives via Jira, not GitHub events) and pick a name + homepage URL.
+3. Under **Repository permissions**, grant exactly:
+
+   | Permission | Access | Why |
+   |------------|--------|-----|
+   | Contents | Read & write | Clone the repo, push commits |
+   | Pull requests | Read & write | Create PRs, fetch PR data |
+   | Issues | Read & write | PR review comments live on the issues API |
+   | Checks | Read-only | Read CI check results |
+   | Actions | Read-only | Read workflow run status |
+   | Metadata | Read-only | Mandatory, auto-included |
+
+   Leave every other permission at **No access**.
+4. Choose **Only on this account** for installation scope, create the app, then **Install App** on the target repo's owner and select that one repo.
+5. From the app settings page, capture:
+   - **App ID** → `GITHUB_APP_ID`
+   - **Generate a private key** → download the `.pem`. Base64-encode the file contents (`base64 -i app.pem | tr -d '\n'`) → `GITHUB_APP_PRIVATE_KEY`.
+   - From the **Installations** list, the numeric installation ID → `GITHUB_INSTALLATION_ID`.
+6. Note the target repo's `owner` and `name` → `GITHUB_OWNER`, `GITHUB_REPO`.
+7. Note the base branch (usually `main`) → `GITHUB_BASE_BRANCH`.
+
+> The legacy `GITHUB_TOKEN` PAT path was removed — `VCS_KIND=github` now requires the App vars above. `env.ts` enforces this at boot.
 
 **GitLab:**
 1. Create a project access token (or PAT) with `api`, `read_repository`, `write_repository` scopes → `GITLAB_TOKEN`.
@@ -80,14 +134,33 @@ Do these in any order — you'll paste the resulting values into Vercel in step 
 
 ### 2.3 Slack
 
-1. Create a new Slack app at https://api.slack.com/apps → **From scratch**.
-2. Under **OAuth & Permissions**, add bot scopes: `chat:write`, `commands`, `files:read`, `users:read`.
-3. Install the app to your workspace and copy the **Bot User OAuth Token** (`xoxb-...`) → `CHAT_SDK_SLACK_TOKEN`.
-4. Under **Basic Information → App Credentials**, copy **Signing Secret** → `SLACK_SIGNING_SECRET`.
-5. In the Slack client, right-click the destination channel → **View channel details** → copy the channel ID (`C...`) → `CHAT_SDK_CHANNEL_ID`. Invite the bot to the channel.
-6. Optional: choose a display name → `CHAT_SDK_BOT_NAME` (default `blazebot`).
+The Slack app powers two things: **notifications** (run start, success, failure messages posted to a channel) and the **`/ai-workflow` slash command** (registered later in step 8).
 
-The slash command itself is registered in step 9 (after you have a deployment URL).
+**Create the app:**
+
+1. Go to https://api.slack.com/apps → **Create New App** → **From scratch**. Name it (e.g. `ai-workflow`) and pick the workspace.
+2. Under **OAuth & Permissions → Bot Token Scopes**, add exactly:
+
+   | Scope | Why |
+   |-------|-----|
+   | `chat:write` | Post notifications to the channel |
+   | `commands` | Register and respond to the `/ai-workflow` slash command |
+
+   Don't add `chat:write.public` unless you want the bot to post in channels it isn't a member of — keeping it out forces the explicit invite below, which is what you want.
+3. Click **Install to Workspace** and approve. Copy the **Bot User OAuth Token** (`xoxb-...`) → `CHAT_SDK_SLACK_TOKEN`.
+4. Under **Basic Information → App Credentials**, copy **Signing Secret** → `SLACK_SIGNING_SECRET`. This authenticates incoming slash-command requests.
+
+**Wire up notifications:**
+
+5. Pick (or create) the channel where ai-workflow should post — e.g. `#ai-workflow` or your team's engineering channel. Public is simplest; private works as long as you invite the bot.
+6. In Slack, open the channel → **Channel details → Integrations → Add apps** → select the ai-workflow app you just installed. (Or run `/invite @ai-workflow` in the channel.) Without this the bot's posts will fail with `not_in_channel`.
+7. Right-click the channel → **View channel details** → copy the channel ID at the bottom (looks like `C0123456789`) → `CHAT_SDK_CHANNEL_ID`.
+8. Optional: choose a display name → `CHAT_SDK_BOT_NAME` (default `blazebot`). This is what users see as the message author.
+9. Optional: restrict who can invoke the slash command by setting `SLACK_ALLOWED_USER_IDS` to a comma-separated list of Slack user IDs (`U0123…`). When unset, anyone in the workspace can run it.
+
+> If you skip the Slack section entirely (`CHAT_SDK_SLACK_TOKEN` and `CHAT_SDK_CHANNEL_ID` unset), runs proceed silently — Jira and PRs still update, just no chat notifications.
+
+The slash command itself is registered in step 8 (after you have a deployment URL). For the deeper walkthrough, see [`.claude/skills/init-slack/`](./.claude/skills/init-slack/).
 
 ### 2.4 Agent runtime
 
@@ -158,7 +231,7 @@ vercel env add JIRA_API_TOKEN production
 | `JIRA_BASE_URL`, `JIRA_EMAIL`, `JIRA_API_TOKEN`, `JIRA_PROJECT_KEY` | Jira credentials |
 | `COLUMN_AI`, `COLUMN_AI_REVIEW`, `COLUMN_BACKLOG` | Board columns |
 | `VCS_KIND` | `github` or `gitlab` |
-| `GITHUB_TOKEN`, `GITHUB_OWNER`, `GITHUB_REPO` | If `VCS_KIND=github` |
+| `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY`, `GITHUB_INSTALLATION_ID`, `GITHUB_OWNER`, `GITHUB_REPO` | If `VCS_KIND=github` (GitHub App auth) |
 | `GITLAB_TOKEN`, `GITLAB_PROJECT_ID` | If `VCS_KIND=gitlab` |
 | `ANTHROPIC_API_KEY` | If `AGENT_KIND=claude` (default) |
 | `CODEX_API_KEY` (or `CODEX_CHATGPT_OAUTH_TOKEN`) | If `AGENT_KIND=codex` |
@@ -186,36 +259,7 @@ vercel env add JIRA_API_TOKEN production
 
 ---
 
-## 6. Local development (optional)
-
-For local runs, pull the Vercel env (provisions OIDC tokens for Sandbox auth automatically):
-
-```bash
-vercel env pull .env.local
-```
-
-Vercel Workflows needs a local Postgres for durable state in dev:
-
-```bash
-# example with Docker
-docker run -d --name workflow-pg -p 5432:5432 -e POSTGRES_PASSWORD=postgres postgres:16
-createdb -h localhost -U postgres ai_workflow
-
-# add to .env.local
-WORKFLOW_POSTGRES_URL=postgresql://postgres:postgres@localhost:5432/ai_workflow
-```
-
-Run:
-```bash
-pnpm dev
-curl http://localhost:3000/health   # → {"status":"ok",...}
-```
-
-If `vercel env pull` doesn't cover Sandbox auth, set `VERCEL_TOKEN`, `VERCEL_TEAM_ID`, `VERCEL_PROJECT_ID` manually.
-
----
-
-## 7. Deploy to Vercel
+## 6. Deploy to Vercel
 
 ### First deploy (preview)
 
@@ -244,7 +288,7 @@ Or push to your production branch if you've connected the Vercel Git integration
 
 ---
 
-## 8. Register the Jira webhook
+## 7. Register the Jira webhook
 
 Without this, ai-workflow only learns about ticket changes via the 1-minute cron poll.
 
@@ -260,7 +304,7 @@ Verify by moving a test ticket into the AI column and watching the Vercel runtim
 
 ---
 
-## 9. Register the Slack slash command
+## 8. Register the Slack slash command
 
 1. In your Slack app config, go to **Slash Commands → Create New Command**.
 2. Configure:
@@ -282,7 +326,7 @@ If you set `SLACK_ALLOWED_USER_IDS`, only those Slack user IDs can invoke the co
 
 ---
 
-## 10. Smoke test the deployment
+## 9. Smoke test the deployment
 
 ### Health
 ```bash
@@ -308,11 +352,11 @@ curl -H "Authorization: Bearer $CRON_SECRET" https://<your-vercel-domain>/cron/p
    - Target repo — new branch `blazebot/<ticket-key>` and an open PR.
    - Slack channel — notification fires.
 
-If anything stalls, jump to [troubleshooting](#13-troubleshooting).
+If anything stalls, jump to [troubleshooting](#12-troubleshooting).
 
 ---
 
-## 11. CI / GitHub Actions
+## 10. CI / GitHub Actions
 
 Two workflows ship in `.github/workflows/`:
 
@@ -330,7 +374,7 @@ The E2E jobs need the production env vars exposed as GitHub Actions secrets in t
 
 ---
 
-## 12. Optional integrations
+## 11. Optional integrations
 
 ### Arthur AI Engine (tracing + hosted prompts)
 
@@ -355,7 +399,7 @@ Flip `VCS_KIND=gitlab` and provide `GITLAB_TOKEN` + `GITLAB_PROJECT_ID`. For sel
 
 ---
 
-## 13. Troubleshooting
+## 12. Troubleshooting
 
 | Symptom | Likely cause | Fix |
 |---------|--------------|-----|
@@ -364,7 +408,7 @@ Flip `VCS_KIND=gitlab` and provide `GITLAB_TOKEN` + `GITLAB_PROJECT_ID`. For sel
 | Tickets in AI column never get picked up | Cron disabled / webhook misregistered | Check **Vercel → Project → Cron Jobs** is enabled. Curl `/cron/poll` with the secret to test manually. |
 | Workflow starts but sandbox fails to provision | Missing Vercel OIDC / Sandbox quota | On Vercel, OIDC is automatic. Check the project has Sandbox enabled (Pro plan). For local dev, set `VERCEL_TOKEN`/`VERCEL_TEAM_ID`/`VERCEL_PROJECT_ID`. |
 | Run registry: `AI_WORKFLOW_KV_REST_API_URL undefined` | Upstash integration installed with wrong prefix | Reinstall with prefix `AI_WORKFLOW` (Upstash appends `_KV_REST_API_URL` / `_KV_REST_API_TOKEN`). |
-| Agent runs but PR isn't created | `GITHUB_TOKEN` lacks `repo` scope, or wrong owner/repo | Re-create the PAT with `repo` scope. Verify `GITHUB_OWNER`/`GITHUB_REPO` point at the *target* repo, not this repo. |
+| Agent runs but PR isn't created | GitHub App missing **Pull requests: Read & write** or **Contents: Read & write**, App not installed on target repo, or wrong owner/repo | In the App settings, re-check **Repository permissions** and the **Installations** list. Verify `GITHUB_OWNER`/`GITHUB_REPO` point at the *target* repo, not this repo. |
 | Slack messages don't arrive | Bot not in channel, or wrong `CHAT_SDK_CHANNEL_ID` | Invite bot to the channel. Re-copy the channel ID. |
 | Slash command returns `dispatch_failed` | Signing secret wrong, or app not reinstalled | Verify `SLACK_SIGNING_SECRET`. Reinstall the Slack app after adding the slash command. |
 | Two pollers race on the same ticket | Stale claim sentinel | The reconciler clears claims older than 5 minutes on every poll — wait one cycle, or flush the registry key in Upstash. |
