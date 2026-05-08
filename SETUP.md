@@ -180,7 +180,7 @@ vercel env add JIRA_API_TOKEN production
 | `MAX_CONCURRENT_AGENTS` | `3` | Parallel sandbox cap |
 | `JOB_TIMEOUT_MS` | `1800000` (30 min) | Per-run timeout |
 | `POLL_INTERVAL_MS` | `300000` (5 min) | Internal poll cadence |
-| `COMMIT_AUTHOR`, `COMMIT_EMAIL` | `ai-workflow-blazity`, `ai-workflow@blazity.com` | Git identity inside sandboxes |
+| `COMMIT_AUTHOR`, `COMMIT_EMAIL` | _unset_ on GitHub → auto-derived from the App (commits author as `<app-slug>[bot]`); GitLab falls back to `ai-workflow-blazity` / `ai-workflow@blazity.com` | Optional override; set both or neither |
 
 `env.ts` cross-validates at startup — missing required vars or wrong combinations (e.g. `VCS_KIND=github` without `GITHUB_OWNER`) crash the process with a precise error.
 

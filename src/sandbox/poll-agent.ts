@@ -1,5 +1,5 @@
 import { getSandboxCredentials } from "./credentials.js";
-import { buildVcsUrls } from "./manager.js";
+import { buildCloneUrl, buildVcsUrls } from "./manager.js";
 
 /**
  * After the agent exits, injects the VCS token and pushes commits.
@@ -11,9 +11,11 @@ export async function pushFromSandbox(
 ): Promise<{ pushed: boolean; error?: string }> {
   "use step";
   const { Sandbox } = await import("@vercel/sandbox");
-  const { getVcsConfig } = await import("../../env.js");
+  const { getVcsConfig, getVcsToken } = await import("../../env.js");
   const sandbox = await Sandbox.get({ sandboxId, ...getSandboxCredentials() });
-  const urls = buildVcsUrls(getVcsConfig());
+  const config = getVcsConfig();
+  const token = await getVcsToken(config);
+  const urls = buildVcsUrls(config, token);
 
   // Check if agent made any commits.
   // If the sentinel file is missing (provisioning issue), skip the check and push anyway.
@@ -70,13 +72,13 @@ export async function fixAndRetryPush(
 ): Promise<{ pushed: boolean; error?: string }> {
   "use step";
   const { Sandbox } = await import("@vercel/sandbox");
-  const { getVcsConfig } = await import("../../env.js");
+  const { getVcsConfig, getVcsToken } = await import("../../env.js");
   const sandbox = await Sandbox.get({ sandboxId, ...getSandboxCredentials() });
-  const urls = buildVcsUrls(getVcsConfig());
+  const config = getVcsConfig();
 
   // Strip token from origin before the fix agent runs — agent only commits, never pushes.
   await sandbox.runCommand("git", [
-    "remote", "set-url", "origin", urls.cloneUrl,
+    "remote", "set-url", "origin", buildCloneUrl(config),
   ]);
 
   // Write prompt to a file to avoid shell injection via pushError content
@@ -108,7 +110,10 @@ export async function fixAndRetryPush(
     logger.info({ output: fixLog.slice(0, 500) }, "fix_and_retry_push_output");
   }
 
-  // Re-inject token and push — server pushes, not the agent.
+  // Re-inject token and push — server pushes, not the agent. Mint fresh token
+  // here (after the fix agent runs) so we never have a stale token in scope.
+  const token = await getVcsToken(config);
+  const urls = buildVcsUrls(config, token);
   await sandbox.runCommand("git", ["remote", "set-url", "origin", urls.authUrl]);
 
   const result = await sandbox.runCommand("git", ["push", "--force", "origin", `HEAD:refs/heads/${branch}`]);
