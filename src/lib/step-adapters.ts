@@ -37,8 +37,6 @@ export function createStepAdapters(): StepAdapters {
       email: env.JIRA_EMAIL,
       apiToken: env.JIRA_API_TOKEN,
       projectKey: env.JIRA_PROJECT_KEY,
-      forgeCommentUrl: env.FORGE_COMMENT_URL,
-      forgeSharedSecret: env.FORGE_SHARED_SECRET,
     }),
     vcs: createVCS(),
     messaging,
