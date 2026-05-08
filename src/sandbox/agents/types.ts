@@ -102,7 +102,6 @@ export interface ArthurConfig {
 
 export interface ConfigureOpts {
   anthropicApiKey?: string;
-  claudeCodeOauthToken?: string;
   codexApiKey?: string;
   codexChatGptOauthToken?: string;
   model: string;

@@ -17,7 +17,7 @@ export type TicketEvent =
     }
   | {
       kind: "failed";
-      phase?: "research" | "impl" | "push";
+      phase?: "research" | "impl" | "review" | "push";
       reason?: string;
       usageReport?: string;
     }

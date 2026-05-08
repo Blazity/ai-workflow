@@ -196,7 +196,7 @@ pnpm tsx --env-file=.env.local env.ts
 The validator (`env.ts` via `@t3-oss/env-core`) catches:
 - Missing required keys.
 - URL/email/UUID format violations.
-- Cross-field violations (`VCS_KIND=github` requires `GITHUB_TOKEN/OWNER/REPO`; `AGENT_KIND=claude` requires `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN`; etc.).
+- Cross-field violations (`VCS_KIND=github` requires `GITHUB_TOKEN/OWNER/REPO`; `AGENT_KIND=claude` requires `ANTHROPIC_API_KEY`; etc.).
 
 **On failure:** the validator prints `Invalid environment variables:` followed by the specific paths. Identify the responsible subskill from the path prefix (`JIRA_*` → init-jira; `GITHUB_*` / `GITLAB_*` → init-vcs; etc.) and direct the user to fix in the Vercel dashboard, then re-run this step.
 
@@ -361,8 +361,10 @@ Skipped (see SETUP.md for the full how-to):
   - GitLab swap — SETUP.md §12. Flip VCS_KIND=gitlab and provide
     GITLAB_TOKEN + GITLAB_PROJECT_ID (+ GITLAB_HOST for self-hosted).
   - CI / GitHub Actions — SETUP.md §11. The `e2e` GitHub environment
-    needs the prod env vars plus E2E_BASE_URL, E2E_GITHUB_TOKEN/OWNER/
-    REPO, and VERCEL_AUTOMATION_BYPASS_SECRET as secrets.
+    needs the prod env vars plus E2E_BASE_URL, E2E_GITHUB_APP_ID,
+    E2E_GITHUB_APP_PRIVATE_KEY (base64 PEM), E2E_GITHUB_INSTALLATION_ID,
+    E2E_GITHUB_OWNER, E2E_GITHUB_REPO, and VERCEL_AUTOMATION_BYPASS_SECRET
+    as secrets.
   - Custom domain — point a domain at the Vercel project for a stable
     webhook URL (then update Jira webhook + Slack request URLs).
   - WORKFLOW_POSTGRES_URL — local dev only (SETUP.md §6).

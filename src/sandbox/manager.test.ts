@@ -46,7 +46,7 @@ describe("SandboxManager.provision", () => {
 
   const baseConfig = {
     kind: "github" as const,
-    token: "ghp_test",
+    getToken: () => Promise.resolve("ghs_test"),
     repoPath: "test-org/test-repo",
     host: "https://github.com",
     jobTimeoutMs: 1_800_000,

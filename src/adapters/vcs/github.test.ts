@@ -20,13 +20,13 @@ const mockOctokit = {
   },
 };
 
-vi.mock("@octokit/rest", () => ({
-  Octokit: vi.fn(() => mockOctokit),
+vi.mock("../../lib/github-auth.js", () => ({
+  buildOctokit: vi.fn(() => mockOctokit),
 }));
 
 function ghAdapter() {
   return new GitHubAdapter({
-    token: "ghp_test",
+    auth: { appId: 1, privateKeyBase64: "a2V5", installationId: 2 },
     owner: "test-org",
     repo: "test-repo",
     baseBranch: "main",

@@ -165,9 +165,11 @@ Operators can drive workflows directly from Slack with `/ai-workflow list | stat
 ```bash
 ANTHROPIC_API_KEY=sk-ant-xxxxxxxxxxxx  # Anthropic API key
 CLAUDE_MODEL=claude-opus-4-6           # Model to use (default: claude-opus-4-6)
-COMMIT_AUTHOR=ai-workflow-blazity      # Git commit author name
-COMMIT_EMAIL=ai-workflow@blazity.com   # Git commit author email
+# COMMIT_AUTHOR=                       # Optional override (set with COMMIT_EMAIL).
+# COMMIT_EMAIL=                        # On GitHub, leave unset to author commits as the App's bot.
 ```
+
+**GitHub App bot identity** — when `VCS_KIND=github` and both `COMMIT_AUTHOR` / `COMMIT_EMAIL` are unset, the workflow derives the identity from the configured GitHub App (`<app-slug>[bot]` + the `<id>+<slug>[bot]@users.noreply.github.com` noreply address). GitHub then renders commits with the App's avatar and the `[bot]` badge in the UI.
 
 **Switching agents** — ai workflow supports two CLI runtimes. Set `AGENT_KIND` once per deployment:
 
@@ -275,15 +277,14 @@ curl -H "Authorization: Bearer $CRON_SECRET" http://localhost:3000/cron/poll
 | **Agent** | | | |
 | `AGENT_KIND` | No | `claude` | Runtime: `claude` or `codex` |
 | `ANTHROPIC_API_KEY` | Yes‡ | — | Anthropic API key (required when `AGENT_KIND=claude`) |
-| `CLAUDE_CODE_OAUTH_TOKEN` | No | — | Alternative to `ANTHROPIC_API_KEY` |
 | `CLAUDE_MODEL` | No | `claude-opus-4-6` | Claude model ID |
 | `CODEX_API_KEY` | Yes‡ | — | OpenAI Codex API key (required when `AGENT_KIND=codex`) |
 | `CODEX_CHATGPT_OAUTH_TOKEN` | No | — | Alternative to `CODEX_API_KEY` |
 | `CODEX_MODEL` | No | `gpt-5-codex` | Codex model ID |
 | `CODEX_PRICING_URL` | No | LiteLLM JSON | Pricing source for Codex cost reporting |
 | `CODEX_PRICING_TTL_MS` | No | `3600000` | Pricing cache TTL (ms) |
-| `COMMIT_AUTHOR` | No | `ai-workflow-blazity` | Git author name |
-| `COMMIT_EMAIL` | No | `ai-workflow@blazity.com` | Git author email |
+| `COMMIT_AUTHOR` | No | _GitHub: App bot / GitLab: `ai-workflow-blazity`_ | Git author name (override; pair with `COMMIT_EMAIL`) |
+| `COMMIT_EMAIL` | No | _GitHub: App bot / GitLab: `ai-workflow@blazity.com`_ | Git author email (override; pair with `COMMIT_AUTHOR`) |
 | **Sandbox** | | | |
 | `MAX_CONCURRENT_AGENTS` | No | `3` | Max parallel sandboxes |
 | `JOB_TIMEOUT_MS` | No | `1800000` | Agent timeout (ms) |
@@ -399,11 +400,11 @@ Each agent run gets a fresh, isolated [Vercel Sandbox](https://vercel.com/docs/s
 | Input | How it's provided |
 |-------|-------------------|
 | Repository source code | Cloned via `git` source at the feature branch (shallow `depth=1`); unshallowed before push if needed |
-| Auth env vars | `ANTHROPIC_API_KEY` / `CLAUDE_CODE_OAUTH_TOKEN` (Claude) or `CODEX_API_KEY` / `CODEX_CHATGPT_OAUTH_TOKEN` (Codex) — written to `/tmp/agent-env.sh` (mode 0600) and sourced by each phase script |
+| Auth env vars | `ANTHROPIC_API_KEY` (Claude) or `CODEX_API_KEY` / `CODEX_CHATGPT_OAUTH_TOKEN` (Codex) — written to `/tmp/agent-env.sh` (mode 0600) and sourced by each phase script |
 | Model | `CLAUDE_MODEL` or `CODEX_MODEL` baked into the phase wrapper script |
 | Per-phase input | `/tmp/research-requirements.md` and `/tmp/impl-requirements.md` — assembled by `assembleResearchPlanContext` / `assembleImplementationContext` |
 | Attachments | Written to `/tmp/attachments/<filename>` |
-| Git identity | `git config user.name` / `user.email` from `COMMIT_AUTHOR` / `COMMIT_EMAIL` |
+| Git identity | `git config user.name` / `user.email` from `COMMIT_AUTHOR` / `COMMIT_EMAIL` (or auto-derived from the GitHub App when unset) |
 | Agent CLI | `@anthropic-ai/claude-code` (Claude) or `@openai/codex` (Codex), installed globally |
 | Skills | Installed via `npx skills add ... -g --agent claude-code codex --copy` to **both** `~/.claude/skills/` and `~/.agents/skills/`. Currently only [`frontend-design`](https://github.com/anthropics/skills) is in `GLOBAL_SKILLS` |
 | Arthur tracer (optional) | Python tracer + `~/.claude/arthur_config.json` + hook entries in `~/.claude/settings.json` |

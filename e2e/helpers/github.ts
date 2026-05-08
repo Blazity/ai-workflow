@@ -1,8 +1,14 @@
+import { createAppAuth } from "@octokit/auth-app";
 import { Octokit } from "@octokit/rest";
 import { e2eEnv } from "../env.js";
 
 const octokit = new Octokit({
-  auth: e2eEnv.E2E_GITHUB_TOKEN,
+  authStrategy: createAppAuth,
+  auth: {
+    appId: e2eEnv.E2E_GITHUB_APP_ID,
+    privateKey: Buffer.from(e2eEnv.E2E_GITHUB_APP_PRIVATE_KEY, "base64").toString("utf8"),
+    installationId: e2eEnv.E2E_GITHUB_INSTALLATION_ID,
+  },
   log: {
     debug: () => {},
     info: () => {},
