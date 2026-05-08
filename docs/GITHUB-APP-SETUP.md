@@ -1,0 +1,214 @@
+# GitHub App setup
+
+Step-by-step guide for registering a GitHub App for the ai-workflow bot and collecting the four env vars the deployment needs.
+
+This replaces the previous "personal access token" setup. The App is **organization-owned** so it survives the creator leaving the org.
+
+---
+
+## What you'll end up with
+
+Six values to set on the Vercel deployment:
+
+```
+VCS_KIND=github
+GITHUB_APP_ID=<numeric app id>
+GITHUB_APP_PRIVATE_KEY=<base64 of the .pem file>
+GITHUB_INSTALLATION_ID=<numeric installation id>
+GITHUB_OWNER=<target org or user that hosts the repo>
+GITHUB_REPO=<target repo name>
+```
+
+---
+
+## 1. Open the org's developer settings
+
+Navigate to:
+
+```
+https://github.com/organizations/<YOUR-ORG>/settings/apps
+```
+
+Or click through: **org page → Settings → Developer settings → GitHub Apps**.
+
+Click **"New GitHub App"**.
+
+## 2. Fill in basics
+
+| Field | Value |
+|---|---|
+| GitHub App name | `blazity-ai-workflow` (must be globally unique on github.com) |
+| Homepage URL | Your Vercel deployment URL, or any valid URL |
+| Description | Optional |
+
+## 3. Disable webhooks
+
+The bot does not receive webhooks.
+
+- **Webhook → Active** → **uncheck**
+
+The webhook URL field can be left blank once Active is unchecked.
+
+## 4. Set permissions
+
+### Repository permissions
+
+| Permission | Level | Why |
+|---|---|---|
+| Contents | Read & write | Clone the repo, push commits |
+| Pull requests | Read & write | Create PRs, fetch PR data |
+| Issues | Read & write | PR review comments live on the issues API |
+| Checks | Read-only | Read CI check results |
+| Actions | Read-only | Read workflow run status |
+| Metadata | Read-only | Mandatory, auto-included |
+
+Leave all other repository permissions on **No access**.
+
+### Organization permissions
+
+Leave everything on **No access**.
+
+### Account permissions
+
+Leave everything on **No access**.
+
+## 5. Choose installation scope
+
+**Where can this GitHub App be installed?**
+
+- **Only on this account** — restricts to your org. Pick this for the single-tenant-per-deployment model (one Vercel deployment serves one org).
+- **Any account** — only needed if external clients self-install. Not the default.
+
+Click **"Create GitHub App"**.
+
+## 6. Generate a private key
+
+On the new App's page, scroll down to **"Private keys"** → click **"Generate a private key"**.
+
+GitHub downloads a file like `blazity-ai-workflow.2026-05-07.private-key.pem`.
+
+> Save this file. GitHub never shows it again. If lost, generate a new key from this page and revoke the old one.
+
+## 7. Note the App ID
+
+At the top of the App settings page:
+
+```
+App ID: 1234567
+```
+
+That number is your `GITHUB_APP_ID`.
+
+## 8. Install the App on the target repo
+
+On the App's page, click **"Install App"** in the left sidebar.
+
+1. Click **"Install"** next to the org that owns the target repo.
+2. Choose **"Only select repositories"**.
+3. Pick the repo(s) the bot will operate on.
+4. Click **"Install"**.
+
+## 9. Get the Installation ID
+
+The Installation ID is a numeric identifier that scopes the App to one specific
+install (org-or-user × selected repos). It's distinct from the App ID.
+
+Pick whichever of the three paths below matches your situation.
+
+### Path A — right after installing (easiest)
+
+Immediately after step 8, GitHub redirects you to the configuration page. Copy
+the trailing number from the browser URL:
+
+```
+# Org install:
+https://github.com/organizations/<ORG>/settings/installations/<INSTALLATION_ID>
+                                                              ^^^^^^^^^^^^^^^^^
+
+# Personal-account install:
+https://github.com/settings/installations/<INSTALLATION_ID>
+                                          ^^^^^^^^^^^^^^^^^
+```
+
+### Path B — finding it later (org install)
+
+1. Go to your org's page on github.com.
+2. Click **Settings** (top tab).
+3. In the left sidebar: **Integrations → GitHub Apps**.
+4. Find your App in the list and click **Configure**.
+5. The browser URL is now the same as Path A — grab the trailing number.
+
+You need org-owner or app-manager permissions to see this page.
+
+### Path C — finding it later (personal-account install)
+
+1. Click your avatar (top right) → **Settings**.
+2. Left sidebar: **Applications → Installed GitHub Apps**.
+3. Click **Configure** next to your App.
+4. The trailing number in the URL is your Installation ID.
+
+### Path D — programmatically (sanity check)
+
+If you have the App ID and private key but want to confirm the Installation ID,
+list installations from the App's identity:
+
+```bash
+# Generate an App JWT (10-min lifetime), then:
+curl -H "Authorization: Bearer $APP_JWT" \
+     -H "Accept: application/vnd.github+json" \
+     https://api.github.com/app/installations
+```
+
+Each entry has an `id` field — that's the Installation ID. If your App is
+installed in multiple places (e.g. several orgs), you'll see one entry per
+install; pick the one whose `account.login` matches `GITHUB_OWNER`.
+
+> Each org/user that installs the App gets its **own** Installation ID. If you
+> later install the App on a second org, that's a new ID — don't reuse the old
+> one.
+
+## 10. Base64-encode the private key
+
+The deployment expects the PEM as a single-line base64 string (multi-line PEM does not round-trip cleanly through Vercel's env UI):
+
+```bash
+base64 -i blazity-ai-workflow.2026-05-07.private-key.pem | tr -d '\n' | pbcopy
+```
+
+The clipboard now holds your `GITHUB_APP_PRIVATE_KEY`.
+
+> **macOS note:** `base64 -i` works on macOS. On Linux use `base64 -w 0 < <file>`.
+
+## 11. Set the env vars on Vercel
+
+```
+GITHUB_APP_ID=1234567
+GITHUB_APP_PRIVATE_KEY=<paste the base64 string>
+GITHUB_INSTALLATION_ID=98765432
+GITHUB_OWNER=<target-org>
+GITHUB_REPO=<target-repo>
+VCS_KIND=github
+```
+
+Set them in **Vercel → project → Settings → Environment Variables** for the appropriate environments (Production / Preview / Development as needed).
+
+## 12. Redeploy
+
+The bot validates env vars at startup. After setting the values, trigger a redeploy so the new env is loaded.
+
+---
+
+## Rotating the private key
+
+1. Generate a new key from the App settings page (step 6).
+2. Update `GITHUB_APP_PRIVATE_KEY` on Vercel with the base64 of the new `.pem`.
+3. Redeploy.
+4. **Then** revoke the old key from the App settings page.
+
+Order matters — revoke last, otherwise the running deployment loses auth before the new key is live.
+
+## Removing the App from a repo
+
+Org **Settings → Integrations → GitHub Apps → Configure** → uncheck the repo or click **Uninstall**.
+
+The deployment will start failing on the next workflow run because installation tokens are scoped to installed repos.

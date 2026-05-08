@@ -207,14 +207,31 @@ async function provisionSandbox(
   }
   const agent = createAgentAdapter(agentKind);
 
+  const { getVcsToken } = await import("../../env.js");
+
+  // Resolve the git identity used inside the sandbox.
+  // Explicit COMMIT_AUTHOR/EMAIL always wins. Otherwise, on GitHub we derive
+  // the App's bot identity (`<slug>[bot]` + numeric-id noreply email) so the
+  // commits render with the App's avatar and `[bot]` badge. On GitLab there
+  // is no equivalent App identity, so we fall back to a static default.
+  let commitIdentity: { name: string; email: string };
+  if (env.COMMIT_AUTHOR && env.COMMIT_EMAIL) {
+    commitIdentity = { name: env.COMMIT_AUTHOR, email: env.COMMIT_EMAIL };
+  } else if (vcs.kind === "github") {
+    const { getBotIdentity } = await import("../lib/github-auth.js");
+    commitIdentity = await getBotIdentity(vcs.auth);
+  } else {
+    commitIdentity = { name: "ai-workflow-blazity", email: "ai-workflow@blazity.com" };
+  }
+
   const manager = new SandboxManager({
     kind: vcs.kind,
-    token: vcs.token,
+    getToken: () => getVcsToken(vcs),
     repoPath: vcs.repoPath,
     host: vcs.host,
     jobTimeoutMs: env.JOB_TIMEOUT_MS,
-    commitAuthor: env.COMMIT_AUTHOR,
-    commitEmail: env.COMMIT_EMAIL,
+    commitAuthor: commitIdentity.name,
+    commitEmail: commitIdentity.email,
   });
 
   const sandbox = await manager.provision(branchName, agent, {
