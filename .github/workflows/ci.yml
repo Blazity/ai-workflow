@@ -42,7 +42,9 @@ jobs:
       COLUMN_AI: ${{ secrets.COLUMN_AI }}
       COLUMN_AI_REVIEW: ${{ secrets.COLUMN_AI_REVIEW }}
       COLUMN_BACKLOG: ${{ secrets.COLUMN_BACKLOG }}
-      E2E_GITHUB_TOKEN: ${{ secrets.E2E_GITHUB_TOKEN }}
+      E2E_GITHUB_APP_ID: ${{ secrets.E2E_GITHUB_APP_ID }}
+      E2E_GITHUB_APP_PRIVATE_KEY: ${{ secrets.E2E_GITHUB_APP_PRIVATE_KEY }}
+      E2E_GITHUB_INSTALLATION_ID: ${{ secrets.E2E_GITHUB_INSTALLATION_ID }}
       E2E_GITHUB_OWNER: ${{ secrets.E2E_GITHUB_OWNER }}
       E2E_GITHUB_REPO: ${{ secrets.E2E_GITHUB_REPO }}
       CRON_SECRET: ${{ secrets.CRON_SECRET }}
@@ -93,7 +95,9 @@ jobs:
       COLUMN_AI: ${{ secrets.COLUMN_AI }}
       COLUMN_AI_REVIEW: ${{ secrets.COLUMN_AI_REVIEW }}
       COLUMN_BACKLOG: ${{ secrets.COLUMN_BACKLOG }}
-      E2E_GITHUB_TOKEN: ${{ secrets.E2E_GITHUB_TOKEN }}
+      E2E_GITHUB_APP_ID: ${{ secrets.E2E_GITHUB_APP_ID }}
+      E2E_GITHUB_APP_PRIVATE_KEY: ${{ secrets.E2E_GITHUB_APP_PRIVATE_KEY }}
+      E2E_GITHUB_INSTALLATION_ID: ${{ secrets.E2E_GITHUB_INSTALLATION_ID }}
       E2E_GITHUB_OWNER: ${{ secrets.E2E_GITHUB_OWNER }}
       E2E_GITHUB_REPO: ${{ secrets.E2E_GITHUB_REPO }}
       CRON_SECRET: ${{ secrets.CRON_SECRET }}
@@ -144,7 +148,9 @@ jobs:
       COLUMN_AI: ${{ secrets.COLUMN_AI }}
       COLUMN_AI_REVIEW: ${{ secrets.COLUMN_AI_REVIEW }}
       COLUMN_BACKLOG: ${{ secrets.COLUMN_BACKLOG }}
-      E2E_GITHUB_TOKEN: ${{ secrets.E2E_GITHUB_TOKEN }}
+      E2E_GITHUB_APP_ID: ${{ secrets.E2E_GITHUB_APP_ID }}
+      E2E_GITHUB_APP_PRIVATE_KEY: ${{ secrets.E2E_GITHUB_APP_PRIVATE_KEY }}
+      E2E_GITHUB_INSTALLATION_ID: ${{ secrets.E2E_GITHUB_INSTALLATION_ID }}
       E2E_GITHUB_OWNER: ${{ secrets.E2E_GITHUB_OWNER }}
       E2E_GITHUB_REPO: ${{ secrets.E2E_GITHUB_REPO }}
       CRON_SECRET: ${{ secrets.CRON_SECRET }}

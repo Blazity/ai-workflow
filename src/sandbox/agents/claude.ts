@@ -30,8 +30,16 @@ export class ClaudeAgentAdapter implements AgentAdapter {
     if (!opts.anthropicApiKey) {
       throw new Error("ClaudeAgentAdapter.configure requires anthropicApiKey");
     }
+    // Claude Code CLI accepts standard API keys (`sk-ant-api...`) via
+    // ANTHROPIC_API_KEY and OAuth tokens (`sk-ant-oat...`, issued by
+    // `claude setup-token`) via CLAUDE_CODE_OAUTH_TOKEN. Operators paste
+    // either flavor into ANTHROPIC_API_KEY; route to the right sandbox var
+    // by prefix so OAuth tokens don't get rejected as invalid API keys.
+    const isOauthToken = opts.anthropicApiKey.startsWith("sk-ant-oat");
     const envLines: string[] = [
-      `export ANTHROPIC_API_KEY=${shellQuote(opts.anthropicApiKey)}`,
+      isOauthToken
+        ? `export CLAUDE_CODE_OAUTH_TOKEN=${shellQuote(opts.anthropicApiKey)}`
+        : `export ANTHROPIC_API_KEY=${shellQuote(opts.anthropicApiKey)}`,
     ];
     await sandbox.writeFiles([
       { path: "/tmp/agent-env.sh", content: Buffer.from(envLines.join("\n") + "\n") },

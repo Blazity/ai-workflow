@@ -361,8 +361,10 @@ Skipped (see SETUP.md for the full how-to):
   - GitLab swap — SETUP.md §12. Flip VCS_KIND=gitlab and provide
     GITLAB_TOKEN + GITLAB_PROJECT_ID (+ GITLAB_HOST for self-hosted).
   - CI / GitHub Actions — SETUP.md §11. The `e2e` GitHub environment
-    needs the prod env vars plus E2E_BASE_URL, E2E_GITHUB_TOKEN/OWNER/
-    REPO, and VERCEL_AUTOMATION_BYPASS_SECRET as secrets.
+    needs the prod env vars plus E2E_BASE_URL, E2E_GITHUB_APP_ID,
+    E2E_GITHUB_APP_PRIVATE_KEY (base64 PEM), E2E_GITHUB_INSTALLATION_ID,
+    E2E_GITHUB_OWNER, E2E_GITHUB_REPO, and VERCEL_AUTOMATION_BYPASS_SECRET
+    as secrets.
   - Custom domain — point a domain at the Vercel project for a stable
     webhook URL (then update Jira webhook + Slack request URLs).
   - WORKFLOW_POSTGRES_URL — local dev only (SETUP.md §6).

@@ -326,7 +326,7 @@ Two workflows ship in `.github/workflows/`:
   - **capacity** — concurrency, claim/release, reconciler (30 min, gated on orchestration).
   - **agent** — full ticket → PR run against real Jira + GitHub (120 min, gated on capacity).
 
-The E2E jobs need the production env vars exposed as GitHub Actions secrets in the `e2e` environment (Repo Settings → Environments → e2e → Secrets). They additionally require `E2E_BASE_URL`, `E2E_GITHUB_TOKEN`, `E2E_GITHUB_OWNER`, `E2E_GITHUB_REPO`, and `VERCEL_AUTOMATION_BYPASS_SECRET`.
+The E2E jobs need the production env vars exposed as GitHub Actions secrets in the `e2e` environment (Repo Settings → Environments → e2e → Secrets). They additionally require `E2E_BASE_URL`, `E2E_GITHUB_APP_ID`, `E2E_GITHUB_APP_PRIVATE_KEY` (base64-encoded PEM), `E2E_GITHUB_INSTALLATION_ID`, `E2E_GITHUB_OWNER`, `E2E_GITHUB_REPO`, and `VERCEL_AUTOMATION_BYPASS_SECRET`.
 
 ---
 
