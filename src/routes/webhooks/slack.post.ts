@@ -76,6 +76,9 @@ export default defineEventHandler(async (event) => {
 // ---------------------------------------------------------------------------
 
 function verifyWebhookAuth(event: H3Event, rawBody: string): void {
+  if (!env.SLACK_SIGNING_SECRET) {
+    throw createError({ statusCode: 503, statusMessage: "Slack integration not configured" });
+  }
   const signature = getHeader(event, "x-slack-signature");
   const timestamp = getHeader(event, "x-slack-request-timestamp");
   if (!signature || !timestamp) {

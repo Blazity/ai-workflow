@@ -215,7 +215,7 @@ describe("assembleImplementationContext (new)", () => {
 });
 
 describe("assembleReviewContext", () => {
-  it("includes plan and git diff", () => {
+  it("includes plan and prompt", () => {
     const result = assembleReviewContext({
       ticket: {
         identifier: "TEST-1",
@@ -226,12 +226,10 @@ describe("assembleReviewContext", () => {
       },
       prompt: "You are a review agent...",
       researchPlanMarkdown: "# Plan\n1. Create LoginForm",
-      gitDiff: "diff --git a/src/LoginForm.tsx b/src/LoginForm.tsx\n+export function LoginForm() {}",
     });
 
     expect(result).toContain("## Research & Plan");
-    expect(result).toContain("## Git Diff");
-    expect(result).toContain("+export function LoginForm()");
+    expect(result).toContain("1. Create LoginForm");
     expect(result).toContain("You are a review agent...");
   });
 
@@ -246,7 +244,6 @@ describe("assembleReviewContext", () => {
       },
       prompt: "prompt",
       researchPlanMarkdown: "plan",
-      gitDiff: "diff",
       attachments: [
         {
           filename: "mockup.png",
@@ -271,7 +268,6 @@ describe("assembleReviewContext", () => {
       ticket: { identifier: "X", title: "t", description: "d", acceptanceCriteria: "a", comments: [] },
       prompt: "p",
       researchPlanMarkdown: "plan",
-      gitDiff: "diff",
     });
     expect(withoutField).not.toContain("## Attachments");
 
@@ -279,7 +275,6 @@ describe("assembleReviewContext", () => {
       ticket: { identifier: "X", title: "t", description: "d", acceptanceCriteria: "a", comments: [] },
       prompt: "p",
       researchPlanMarkdown: "plan",
-      gitDiff: "diff",
       attachments: [],
     });
     expect(withEmpty).not.toContain("## Attachments");
@@ -290,7 +285,6 @@ describe("assembleReviewContext", () => {
       ticket: { identifier: "X", title: "t", description: "d", acceptanceCriteria: "a", comments: [] },
       prompt: "p",
       researchPlanMarkdown: "plan",
-      gitDiff: "diff",
       attachments: [
         {
           filename: "spec.pdf",

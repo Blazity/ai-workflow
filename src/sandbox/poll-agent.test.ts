@@ -26,45 +26,51 @@ vi.mock("./credentials.js", () => ({
 // VCS config is swapped per-test by reassigning currentVcsConfig before the
 // step under test calls getVcsConfig(). Default is GitHub; GitLab tests set
 // it to a GitLab config to exercise the oauth2 auth user and gitlab host.
-let currentVcsConfig: {
-  kind: "github" | "gitlab";
-  token: string;
-  repoPath: string;
-  baseBranch: string;
-  host: string;
-} = {
+// Shape mirrors the discriminated union in env.ts (GitHub uses App auth, not a PAT).
+type TestVcsConfig =
+  | {
+      kind: "github";
+      auth: { appId: number; privateKeyBase64: string; installationId: number };
+      repoPath: string;
+      baseBranch: string;
+      host: string;
+    }
+  | {
+      kind: "gitlab";
+      token: string;
+      repoPath: string;
+      baseBranch: string;
+      host: string;
+    };
+
+const githubVcsConfig: TestVcsConfig = {
   kind: "github",
-  token: "ghp_test_token",
+  auth: { appId: 123, privateKeyBase64: "ZmFrZS1wZW0=", installationId: 456 },
   repoPath: "test-owner/test-repo",
   baseBranch: "main",
   host: "https://github.com",
 };
 
-const githubVcsConfig = {
-  kind: "github" as const,
-  token: "ghp_test_token",
-  repoPath: "test-owner/test-repo",
-  baseBranch: "main",
-  host: "https://github.com",
-};
-
-const gitlabVcsConfig = {
-  kind: "gitlab" as const,
+const gitlabVcsConfig: TestVcsConfig = {
+  kind: "gitlab",
   token: "glpat_test_token",
   repoPath: "test-group/test-repo",
   baseBranch: "main",
   host: "https://gitlab.example.com",
 };
 
+let currentVcsConfig: TestVcsConfig = githubVcsConfig;
+
 vi.mock("../../env.js", () => ({
   env: {
     VCS_KIND: "github",
-    GITHUB_TOKEN: "ghp_test_token",
     GITHUB_OWNER: "test-owner",
     GITHUB_REPO: "test-repo",
     CLAUDE_MODEL: "claude-sonnet-4-20250514",
   },
   getVcsConfig: () => currentVcsConfig,
+  getVcsToken: async (config: TestVcsConfig) =>
+    config.kind === "gitlab" ? config.token : "ghs_test_minted_token",
 }));
 
 import { pushFromSandbox, fixAndRetryPush, teardownSandbox, checkPhaseDone, collectPhaseOutput, collectPhase } from "./poll-agent.js";

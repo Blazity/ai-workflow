@@ -4,7 +4,8 @@ import type { AgentAdapter, ConfigureOpts } from "./agents/types.js";
 
 export interface SandboxConfig {
   kind: "github" | "gitlab";
-  token: string;
+  /** Resolves a fresh, short-lived token at the moment of use. */
+  getToken: () => Promise<string>;
   repoPath: string;
   host: string;
   jobTimeoutMs: number;
@@ -12,15 +13,28 @@ export interface SandboxConfig {
   commitEmail: string;
 }
 
-/** Build clone/push URLs for the configured VCS. Unchanged from previous behaviour. */
-export function buildVcsUrls(config: { kind: "github" | "gitlab"; token: string; repoPath: string; host: string }) {
+/** Bare clone URL with no auth — host normalization shared with `buildVcsUrls`. */
+export function buildCloneUrl(config: { host: string; repoPath: string }): string {
+  const host = config.host.replace(/\/+$/, "");
+  return `${host}/${config.repoPath}.git`;
+}
+
+/**
+ * Build clone/push URLs for the configured VCS. The caller resolves the token
+ * just-in-time and passes it as the second arg, so this function stays pure
+ * and does not capture credentials.
+ */
+export function buildVcsUrls(
+  config: { kind: "github" | "gitlab"; repoPath: string; host: string },
+  token: string,
+) {
   const host = config.host.replace(/\/+$/, "");
   const scheme = host.match(/^https?:\/\//)?.[0] ?? "https://";
   const hostNoScheme = host.replace(/^https?:\/\//, "");
   const authUser = config.kind === "gitlab" ? "oauth2" : "x-access-token";
   return {
-    cloneUrl: `${host}/${config.repoPath}.git`,
-    authUrl: `${scheme}${authUser}:${config.token}@${hostNoScheme}/${config.repoPath}.git`,
+    cloneUrl: buildCloneUrl(config),
+    authUrl: `${scheme}${authUser}:${token}@${hostNoScheme}/${config.repoPath}.git`,
     authUser,
   };
 }
@@ -37,7 +51,8 @@ export class SandboxManager {
     mergeBase?: string,
   ): Promise<SandboxInstance> {
     const { Sandbox } = await import("@vercel/sandbox");
-    const urls = buildVcsUrls(this.config);
+    const token = await this.config.getToken();
+    const urls = buildVcsUrls(this.config, token);
 
     const sandbox = await Sandbox.create({
       ...getSandboxCredentials(),
@@ -45,7 +60,7 @@ export class SandboxManager {
         type: "git",
         url: urls.cloneUrl,
         username: urls.authUser,
-        password: this.config.token,
+        password: token,
         revision: branch,
       },
       runtime: "node24",

@@ -12,7 +12,14 @@ const schema = z.object({
   COLUMN_AI_REVIEW: z.string().min(1),
   COLUMN_BACKLOG: z.string().min(1),
 
-  E2E_GITHUB_TOKEN: z.string().min(1),
+  /**
+   * GitHub App credentials used by the e2e helpers (and us02 sandbox clone).
+   * Mirrors the deployed app's GITHUB_APP_* shape so the same auth code path
+   * is exercised end-to-end. Private key is base64-encoded PEM.
+   */
+  E2E_GITHUB_APP_ID: z.coerce.number().int().positive(),
+  E2E_GITHUB_APP_PRIVATE_KEY: z.string().min(1),
+  E2E_GITHUB_INSTALLATION_ID: z.coerce.number().int().positive(),
   E2E_GITHUB_OWNER: z.string().min(1),
   E2E_GITHUB_REPO: z.string().min(1),
 

@@ -90,7 +90,7 @@ Rebuild the image when Claude Code or skills are updated. Skills installation (`
 
 ### Container Lifecycle
 
-Each agent run is one Fargate task. Configuration (branch, requirements, model) passed as ECS task environment variables at launch time. Secrets (`ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`, `GITHUB_TOKEN`) are stored in AWS Secrets Manager and injected via `secrets`/`valueFrom` in the task definition — never as plaintext `environment` entries.
+Each agent run is one Fargate task. Configuration (branch, requirements, model) passed as ECS task environment variables at launch time. Secrets (`ANTHROPIC_API_KEY`, `GITHUB_TOKEN`) are stored in AWS Secrets Manager and injected via `secrets`/`valueFrom` in the task definition — never as plaintext `environment` entries.
 
 The container only runs Claude Code — it does not push to GitHub, move Jira tickets, or communicate results. The Nitro server handles all of that after the container finishes.
 
@@ -346,7 +346,7 @@ Agent containers are immutable — new tasks always pull the latest image tag.
 | `ISSUE_TRACKER_KIND`, `JIRA_*`                    | Jira connection                                                      |
 | `VCS_KIND`, `GITHUB_*`                            | GitHub connection                                                    |
 | `CHAT_SDK_*`                                      | Slack messaging                                                      |
-| `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN`  | Claude Code auth (via Secrets Manager `valueFrom`)                   |
+| `ANTHROPIC_API_KEY`                               | Claude Code auth (via Secrets Manager `valueFrom`)                   |
 | `CLAUDE_MODEL`                                    | Model selection                                                      |
 | `COMMIT_AUTHOR`, `COMMIT_EMAIL`                   | Git identity for agent commits                                       |
 | `MAX_CONCURRENT_AGENTS`                           | Concurrency limit (default: 100)                                     |

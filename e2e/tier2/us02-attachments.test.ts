@@ -108,13 +108,19 @@ describe("US-02: Ticket with attachments (real pipeline)", () => {
     const { getSandboxCredentials } = await import(
       "../../src/sandbox/credentials.js"
     );
+    const { mintInstallationToken } = await import("../../src/lib/github-auth.js");
+    const installationToken = await mintInstallationToken({
+      appId: e2eEnv.E2E_GITHUB_APP_ID,
+      privateKeyBase64: e2eEnv.E2E_GITHUB_APP_PRIVATE_KEY,
+      installationId: e2eEnv.E2E_GITHUB_INSTALLATION_ID,
+    });
     const sbx = await Sandbox.create({
       ...getSandboxCredentials(),
       source: {
         type: "git",
         url: `https://github.com/${e2eEnv.E2E_GITHUB_OWNER}/${e2eEnv.E2E_GITHUB_REPO}.git`,
         username: "x-access-token",
-        password: e2eEnv.E2E_GITHUB_TOKEN,
+        password: installationToken,
         revision: "main",
         depth: 1,
       },

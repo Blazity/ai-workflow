@@ -103,7 +103,7 @@ function jiraLink(ticketKey: string, jiraBaseUrl: string): string {
 }
 
 function formatFailedBody(
-  phase: "research" | "impl" | "push" | undefined,
+  phase: "research" | "impl" | "review" | "push" | undefined,
   reason: string | undefined,
 ): string {
   if (phase && reason) return `: ${phase} — ${reason}`;

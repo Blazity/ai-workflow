@@ -1,11 +1,11 @@
 ---
 name: init-agent
-description: Configure or rotate the agent runtime (Claude or Codex) for the Blazebot workflow. Branches on runtime choice and emits a single paste-template for the chosen kind. Defaults to API key with OAuth alternative documented in references. Use for "set up claude", "set up codex", "rotate anthropic key", "switch agent to codex", "configure agent runtime".
+description: Configure or rotate the agent runtime (Claude or Codex) for the Blazebot workflow. Branches on runtime choice and emits a single paste-template for the chosen kind. Use for "set up claude", "set up codex", "rotate anthropic key", "switch agent to codex", "configure agent runtime".
 ---
 
 # Initialize Agent Runtime
 
-Branch-on-choice skill. Asks **Claude or Codex**, then emits a single paste-template for the chosen runtime. Cross-field rule in `env.ts` (`AGENT_KIND=claude` requires `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN`; `AGENT_KIND=codex` requires `CODEX_API_KEY` or `CODEX_CHATGPT_OAUTH_TOKEN`) is enforced by construction.
+Branch-on-choice skill. Asks **Claude or Codex**, then emits a single paste-template for the chosen runtime. Cross-field rule in `env.ts` (`AGENT_KIND=claude` requires `ANTHROPIC_API_KEY`; `AGENT_KIND=codex` requires `CODEX_API_KEY` or `CODEX_CHATGPT_OAUTH_TOKEN`) is enforced by construction.
 
 > If you want full project setup (Jira + VCS + Agent + Slack + Upstash + deploy), invoke `init-env` instead. This skill only handles the agent runtime.
 
@@ -28,9 +28,9 @@ If switching from a previously-configured runtime, the user should also remove t
 
 ## Step 2 — Emit paste-template
 
-### Claude branch (default API key, OAuth alternative)
+### Claude branch
 
-Walk the user through https://console.anthropic.com/settings/keys to create an API key. The default flow uses `ANTHROPIC_API_KEY`; OAuth via `CLAUDE_CODE_OAUTH_TOKEN` is documented in `references/oauth-alternative.md`.
+Walk the user through https://console.anthropic.com/settings/keys to create an API key. Codex OAuth is documented in `references/oauth-alternative.md`.
 
 Collect:
 - `ANTHROPIC_API_KEY` (starts with `sk-ant-`)

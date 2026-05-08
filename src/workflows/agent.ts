@@ -1,6 +1,6 @@
 import { sleep } from "workflow";
 import type {
-  AgentOutput, PhaseUsage, PhaseKind, PhaseArtifactPaths, ResearchResult,
+  AgentOutput, PhaseUsage, PhaseKind, PhaseArtifactPaths, ResearchResult, ReviewOutput,
 } from "../sandbox/agents/types.js";
 import type { AgentKind } from "../sandbox/agents/index.js";
 import type { PRComment, CheckRunResult } from "../adapters/vcs/types.js";
@@ -200,26 +200,42 @@ async function provisionSandbox(
       "agent override agent:codex requires CODEX_API_KEY or CODEX_CHATGPT_OAUTH_TOKEN in the deployed environment",
     );
   }
-  if (agentKind === "claude" && !env.ANTHROPIC_API_KEY && !env.CLAUDE_CODE_OAUTH_TOKEN) {
+  if (agentKind === "claude" && !env.ANTHROPIC_API_KEY) {
     throw new Error(
-      "agent override agent:claude requires ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN in the deployed environment",
+      "agent override agent:claude requires ANTHROPIC_API_KEY in the deployed environment",
     );
   }
   const agent = createAgentAdapter(agentKind);
 
+  const { getVcsToken } = await import("../../env.js");
+
+  // Resolve the git identity used inside the sandbox.
+  // Explicit COMMIT_AUTHOR/EMAIL always wins. Otherwise, on GitHub we derive
+  // the App's bot identity (`<slug>[bot]` + numeric-id noreply email) so the
+  // commits render with the App's avatar and `[bot]` badge. On GitLab there
+  // is no equivalent App identity, so we fall back to a static default.
+  let commitIdentity: { name: string; email: string };
+  if (env.COMMIT_AUTHOR && env.COMMIT_EMAIL) {
+    commitIdentity = { name: env.COMMIT_AUTHOR, email: env.COMMIT_EMAIL };
+  } else if (vcs.kind === "github") {
+    const { getBotIdentity } = await import("../lib/github-auth.js");
+    commitIdentity = await getBotIdentity(vcs.auth);
+  } else {
+    commitIdentity = { name: "ai-workflow-blazity", email: "ai-workflow@blazity.com" };
+  }
+
   const manager = new SandboxManager({
     kind: vcs.kind,
-    token: vcs.token,
+    getToken: () => getVcsToken(vcs),
     repoPath: vcs.repoPath,
     host: vcs.host,
     jobTimeoutMs: env.JOB_TIMEOUT_MS,
-    commitAuthor: env.COMMIT_AUTHOR,
-    commitEmail: env.COMMIT_EMAIL,
+    commitAuthor: commitIdentity.name,
+    commitEmail: commitIdentity.email,
   });
 
   const sandbox = await manager.provision(branchName, agent, {
     anthropicApiKey: env.ANTHROPIC_API_KEY,
-    claudeCodeOauthToken: env.CLAUDE_CODE_OAUTH_TOKEN,
     codexApiKey: env.CODEX_API_KEY,
     codexChatGptOauthToken: env.CODEX_CHATGPT_OAUTH_TOKEN,
     model: agentKind === "codex" ? env.CODEX_MODEL : env.CLAUDE_MODEL,
@@ -320,6 +336,17 @@ async function parseAgentOutputStep(
   const { createAgentAdapter } = await import("../sandbox/agents/index.js");
   const a = createAgentAdapter(agentKind);
   return { output: a.parseAgentOutput(raw, structured), usage: a.extractUsage(raw, structured) };
+}
+
+async function parseReviewStep(
+  agentKind: AgentKind,
+  raw: string,
+  structured: string | null,
+): Promise<{ output: ReviewOutput; usage: PhaseUsage | null }> {
+  "use step";
+  const { createAgentAdapter } = await import("../sandbox/agents/index.js");
+  const a = createAgentAdapter(agentKind);
+  return { output: a.parseReviewOutput(raw, structured), usage: a.extractUsage(raw, structured) };
 }
 
 async function createPullRequest(branchName: string, title: string, summary: string) {
@@ -434,12 +461,12 @@ export async function agentWorkflow(ticketId: string) {
   "use workflow";
 
   const { env, getVcsConfig } = await import("../../env.js");
-  const { assembleResearchPlanContext, assembleImplementationContext } =
+  const { assembleResearchPlanContext, assembleImplementationContext, assembleReviewContext } =
     await import("../sandbox/context.js");
   const { collectPhase, pushFromSandbox, fixAndRetryPush, teardownSandbox } =
     await import("../sandbox/poll-agent.js");
   const { formatUsageReport } = await import("../sandbox/usage.js");
-  const { AGENT_SCHEMA } = await import("../sandbox/agents/types.js");
+  const { AGENT_SCHEMA, REVIEW_SCHEMA } = await import("../sandbox/agents/types.js");
 
   const ticket = await fetchAndValidateTicket(ticketId, env.COLUMN_AI);
   if (!ticket) return;
@@ -646,50 +673,48 @@ export async function agentWorkflow(ticketId: string) {
       }
 
       // ========== PHASE 3: Review ==========
-      // Temporarily disabled.
-      // await setCommitGuardStep(sandboxId, agentKind, true);
-      //
-      // const gitDiff = await captureGitDiff(sandboxId);
-      //
-      // const reviewPaths = agent.artifactPaths("review");
-      // const reviewInput = assembleReviewContext({
-      //   ticket: ticketData,
-      //   prompt: prompts.review,
-      //   researchPlanMarkdown,
-      //   gitDiff,
-      //   attachments: downloadedAttachments,
-      // });
-      //
-      // const reviewScript = agent.buildPhaseScript({
-      //   phase: "review",
-      //   model: activeModel,
-      //   paths: reviewPaths,
-      //   jsonSchema: REVIEW_SCHEMA,
-      // });
-      //
-      // await writeAndStartPhase(
-      //   sandboxId,
-      //   reviewPaths.input, reviewInput,
-      //   reviewPaths.wrapper, reviewScript,
-      // );
-      //
-      // const reviewDone = await pollUntilDone(sandboxId, reviewPaths.sentinel, 15);
-      // let reviewOutput: ReviewOutput;
-      //
-      // if (reviewDone) {
-      //   const { raw: reviewRaw, structured: reviewStructured } = await collectPhase(sandboxId, reviewPaths);
-      //   phaseUsages["Review"] = agent.extractUsage(reviewRaw, reviewStructured);
-      //   reviewOutput = agent.parseReviewOutput(reviewRaw, reviewStructured);
-      // } else {
-      //   reviewOutput = { result: "failed", feedback: "", issues: [], error: "Review phase timed out" };
-      // }
-      //
-      // if (reviewOutput.result === "failed") {
-      //   await moveTicket(ticketId, env.COLUMN_BACKLOG);
-      //   await notifySlack(`Task ${ticket.identifier} failed: review — ${reviewOutput.error ?? "unknown"}${usageSuffix()}`);
-      //   await unregisterRun(ticket.identifier);
-      //   return;
-      // }
+      // Gated by ENABLE_REVIEW_PHASE so deployments can opt in without code
+      // changes. Commit guard stays enabled (review fixes its own findings).
+      if (env.ENABLE_REVIEW_PHASE) {
+        const { paths: reviewPaths, script: reviewScript } =
+          await planPhaseStep(agentKind, "review", activeModel, REVIEW_SCHEMA);
+        const reviewInput = assembleReviewContext({
+          ticket: ticketData,
+          prompt: prompts.review,
+          researchPlanMarkdown,
+          attachments: downloadedAttachments,
+        });
+
+        await writeAndStartPhase(
+          sandboxId,
+          reviewPaths.input, reviewInput,
+          reviewPaths.wrapper, reviewScript,
+        );
+
+        const reviewDone = await pollUntilDone(sandboxId, reviewPaths.sentinel, 15);
+        let reviewOutput: ReviewOutput;
+
+        if (reviewDone) {
+          const { raw: reviewRaw, structured: reviewStructured } = await collectPhase(sandboxId, reviewPaths);
+          const { output, usage: reviewUsage } = await parseReviewStep(agentKind, reviewRaw, reviewStructured);
+          phaseUsages["Review"] = reviewUsage;
+          reviewOutput = output;
+        } else {
+          reviewOutput = { result: "failed", feedback: "", issues: [], error: "Review phase timed out" };
+        }
+
+        if (reviewOutput.result === "failed") {
+          await unregisterRun(ticket.identifier);
+          await moveTicket(ticketId, env.COLUMN_BACKLOG);
+          await notifyTicket(ticket.identifier, {
+            kind: "failed",
+            phase: "review",
+            reason: reviewOutput.error ?? "unknown",
+            usageReport: usageReportOrUndefined(),
+          });
+          return;
+        }
+      }
 
       // ========== POST-PHASES: Push & PR ==========
       let pushResult = await pushFromSandbox(sandboxId, branchName);
