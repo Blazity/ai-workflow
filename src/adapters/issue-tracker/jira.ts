@@ -11,6 +11,8 @@ export interface JiraConfig {
   email: string;
   apiToken: string;
   projectKey: string;
+  forgeCommentUrl?: string;
+  forgeSharedSecret?: string;
 }
 
 export class JiraAdapter implements IssueTrackerAdapter {
@@ -39,7 +41,9 @@ export class JiraAdapter implements IssueTrackerAdapter {
       if (res.status === 404) {
         throw new IssueTrackerNotFoundError("Jira resource", path);
       }
-      throw new Error(`Jira API error: ${res.status} ${res.statusText} on ${path}`);
+      throw new Error(
+        `Jira API error: ${res.status} ${res.statusText} on ${path}`,
+      );
     }
     if (res.status === 204) return null;
     try {
@@ -69,17 +73,19 @@ export class JiraAdapter implements IssueTrackerAdapter {
       ),
       labels: data.fields.labels ?? [],
       trackerStatus: data.fields.status?.name ?? "",
-      attachments: (data.fields.attachment ?? []).map((a: any): TicketAttachment => {
-        const contentUrl =
-          a.content == null ? undefined : String(a.content).trim();
-        return {
-          id: String(a.id),
-          filename: a.filename ?? "",
-          mimeType: a.mimeType ?? "application/octet-stream",
-          size: sanitizeAttachmentSize(a.size),
-          contentUrl: contentUrl || undefined,
-        };
-      }),
+      attachments: (data.fields.attachment ?? []).map(
+        (a: any): TicketAttachment => {
+          const contentUrl =
+            a.content == null ? undefined : String(a.content).trim();
+          return {
+            id: String(a.id),
+            filename: a.filename ?? "",
+            mimeType: a.mimeType ?? "application/octet-stream",
+            size: sanitizeAttachmentSize(a.size),
+            contentUrl: contentUrl || undefined,
+          };
+        },
+      ),
     };
   }
 
@@ -100,6 +106,9 @@ export class JiraAdapter implements IssueTrackerAdapter {
   }
 
   async postComment(id: string, comment: string): Promise<string | null> {
+    if (this.config.forgeCommentUrl && this.config.forgeSharedSecret) {
+      return this.postCommentViaForge(id, comment);
+    }
     const data = await this.request(`/rest/api/3/issue/${id}/comment`, {
       method: "POST",
       body: JSON.stringify({
@@ -113,6 +122,34 @@ export class JiraAdapter implements IssueTrackerAdapter {
     const commentId = typeof data?.id === "string" ? data.id : null;
     if (!commentId) return null;
     return `${this.baseUrl}/browse/${encodeURIComponent(id)}?focusedCommentId=${encodeURIComponent(commentId)}`;
+  }
+
+  private async postCommentViaForge(
+    id: string,
+    comment: string,
+  ): Promise<string | null> {
+    const res = await fetch(this.config.forgeCommentUrl!, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-shared-secret": this.config.forgeSharedSecret!,
+      },
+      body: JSON.stringify({ issueKey: id, body: comment }),
+    });
+    if (res.status === 404) {
+      throw new IssueTrackerNotFoundError("Jira issue", id);
+    }
+    if (!res.ok) {
+      throw new Error(
+        `Forge postComment error: ${res.status} ${res.statusText}`,
+      );
+    }
+    const data = (await res.json()) as {
+      id?: string | null;
+      permalinkPath?: string | null;
+    };
+    if (!data?.id || !data?.permalinkPath) return null;
+    return `${this.baseUrl}/browse/${encodeURIComponent(id)}${data.permalinkPath}`;
   }
 
   async downloadAttachment(
@@ -201,7 +238,9 @@ function extractAdfText(adf: any): string {
 
 function extractAcceptanceCriteria(description: any): string {
   const text = extractAdfText(description);
-  const match = text.match(/acceptance criteria[:\s]*([\s\S]*?)(?:\n\n|\n#|$)/i);
+  const match = text.match(
+    /acceptance criteria[:\s]*([\s\S]*?)(?:\n\n|\n#|$)/i,
+  );
   return match?.[1]?.trim() ?? "";
 }
 

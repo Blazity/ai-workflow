@@ -493,4 +493,109 @@ describe("JiraAdapter", () => {
       expect(collectText(body.body)).not.toContain("\n");
     });
   });
+
+  describe("postComment via Forge bridge", () => {
+    function forgeAdapter() {
+      return new JiraAdapter({
+        baseUrl: "https://test.atlassian.net",
+        email: "test@example.com",
+        apiToken: "token",
+        projectKey: "PROJ",
+        forgeCommentUrl: "https://forge.example/x/post-comment",
+        forgeSharedSecret: "shh",
+      });
+    }
+
+    it("POSTs to the Forge web trigger with shared-secret header and plain-text body", async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        statusText: "OK",
+        json: async () => ({ id: "55555", permalinkPath: "?focusedCommentId=55555" }),
+      });
+
+      const url = await forgeAdapter().postComment("PROJ-1", "hello\nworld");
+
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+      const [calledUrl, init] = mockFetch.mock.calls[0];
+      expect(calledUrl).toBe("https://forge.example/x/post-comment");
+      const headers = init.headers as Record<string, string>;
+      expect(headers["x-shared-secret"]).toBe("shh");
+      expect(headers["Content-Type"]).toBe("application/json");
+      expect(JSON.parse(init.body)).toEqual({
+        issueKey: "PROJ-1",
+        body: "hello\nworld",
+      });
+      expect(url).toBe(
+        "https://test.atlassian.net/browse/PROJ-1?focusedCommentId=55555",
+      );
+    });
+
+    it("returns null when Forge response omits id or permalinkPath", async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        statusText: "OK",
+        json: async () => ({ id: null, permalinkPath: null }),
+      });
+
+      const url = await forgeAdapter().postComment("PROJ-1", "hi");
+      expect(url).toBeNull();
+    });
+
+    it("maps 404 from Forge to IssueTrackerNotFoundError", async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: false,
+        status: 404,
+        statusText: "Not Found",
+        json: async () => ({ error: "jira_error", status: 404 }),
+      });
+
+      await expect(forgeAdapter().postComment("PROJ-9", "x")).rejects.toBeInstanceOf(
+        IssueTrackerNotFoundError,
+      );
+    });
+
+    it("throws on other non-2xx Forge responses", async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: false,
+        status: 502,
+        statusText: "Bad Gateway",
+        json: async () => ({ error: "jira_error", status: 500 }),
+      });
+
+      await expect(forgeAdapter().postComment("PROJ-1", "x")).rejects.toThrow(
+        /Forge postComment error: 502/,
+      );
+    });
+
+    it("falls back to direct Basic-auth path when only one Forge field is set", async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ id: "98765" }),
+      });
+
+      const adapter = new JiraAdapter({
+        baseUrl: "https://test.atlassian.net",
+        email: "test@example.com",
+        apiToken: "token",
+        projectKey: "PROJ",
+        forgeCommentUrl: "https://forge.example/x/post-comment",
+        // forgeSharedSecret intentionally omitted
+      });
+
+      const url = await adapter.postComment("PROJ-1", "hi");
+
+      const [calledUrl, init] = mockFetch.mock.calls[0];
+      expect(calledUrl).toBe(
+        "https://test.atlassian.net/rest/api/3/issue/PROJ-1/comment",
+      );
+      expect((init.headers as Record<string, string>).Authorization).toMatch(
+        /^Basic /,
+      );
+      expect(url).toBe(
+        "https://test.atlassian.net/browse/PROJ-1?focusedCommentId=98765",
+      );
+    });
+  });
 });
