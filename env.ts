@@ -116,6 +116,13 @@ export const env = createEnv({
     // Jira Webhook
     JIRA_WEBHOOK_SECRET: z.string().min(1).optional(),
 
+    // Forge bridge — when both are set, /jira/dispatch authenticates the
+    // X-Forge-Secret header and JiraAdapter.postComment routes through the
+    // ai-workflow-jira-app Forge web trigger so comments are authored by
+    // the Forge app user instead of a personal Atlassian account.
+    FORGE_SHARED_SECRET: z.string().min(1).optional(),
+    FORGE_COMMENT_URL: z.string().url().optional(),
+
     // Redis (run registry)
     AI_WORKFLOW_KV_REST_API_URL: z.string().url(),
     AI_WORKFLOW_KV_REST_API_TOKEN: z.string().min(1),
