@@ -5,12 +5,15 @@ import { IssueTrackerNotFoundError } from "./types.js";
 const mockFetch = vi.fn();
 global.fetch = mockFetch;
 
+const CLOUD_ID = "test-cloud-id";
+const API_BASE = `https://api.atlassian.com/ex/jira/${CLOUD_ID}`;
+
 function jiraAdapter() {
   return new JiraAdapter({
     baseUrl: "https://test.atlassian.net",
-    email: "test@example.com",
     apiToken: "token",
     projectKey: "PROJ",
+    cloudId: CLOUD_ID,
   });
 }
 
@@ -234,10 +237,13 @@ describe("JiraAdapter", () => {
       expect(buf.length).toBe(4);
       expect(mockFetch).toHaveBeenCalledTimes(2);
 
-      // First call: to Jira, with Authorization.
+      // First call: to Atlassian API gateway, with Bearer Authorization.
       const firstInit = mockFetch.mock.calls[0][1] as RequestInit;
-      expect((firstInit.headers as Record<string, string>).Authorization).toMatch(/^Basic /);
+      expect((firstInit.headers as Record<string, string>).Authorization).toMatch(/^Bearer /);
       expect(firstInit.redirect).toBe("manual");
+      expect(mockFetch.mock.calls[0][0]).toBe(
+        `${API_BASE}/secure/attachment/att-1/mockup.png`,
+      );
 
       // First response body drained to release the socket back to the pool.
       expect(cancelFn).toHaveBeenCalledOnce();
@@ -265,14 +271,17 @@ describe("JiraAdapter", () => {
       expect(firstHeaders.Authorization).toBeUndefined();
     });
 
-    it("resolves relative redirect targets and keeps Authorization for same-origin refetches", async () => {
+    it("rewrites tenant-origin redirect targets onto the Atlassian gateway and keeps Authorization", async () => {
       mockFetch
         .mockResolvedValueOnce({
           ok: false,
           status: 302,
           statusText: "Found",
           headers: {
-            get: (n: string) => (n.toLowerCase() === "location" ? "/secure/attachment/att-9/file.png?dl=1" : null),
+            get: (n: string) =>
+              n.toLowerCase() === "location"
+                ? "https://test.atlassian.net/secure/attachment/att-9/file.png?dl=1"
+                : null,
           },
           body: { cancel: vi.fn() },
         })
@@ -286,11 +295,14 @@ describe("JiraAdapter", () => {
       const adapter = jiraAdapter();
       await adapter.downloadAttachment("https://test.atlassian.net/secure/attachment/att-9/file.png");
 
+      expect(mockFetch.mock.calls[0][0]).toBe(
+        `${API_BASE}/secure/attachment/att-9/file.png`,
+      );
       expect(mockFetch.mock.calls[1][0]).toBe(
-        "https://test.atlassian.net/secure/attachment/att-9/file.png?dl=1",
+        `${API_BASE}/secure/attachment/att-9/file.png?dl=1`,
       );
       const secondInit = mockFetch.mock.calls[1][1] as RequestInit;
-      expect((secondInit.headers as Record<string, string>).Authorization).toMatch(/^Basic /);
+      expect((secondInit.headers as Record<string, string>).Authorization).toMatch(/^Bearer /);
     });
 
     it("also follows one 303 redirect", async () => {

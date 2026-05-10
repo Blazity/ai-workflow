@@ -123,7 +123,7 @@ The CLI is interactive — let the user complete it. On success, `.vercel/projec
 
 Invoke the `init-jira` subskill via the Skill tool. It detects state and runs phase 1 because `JIRA_BASE_URL` is not yet set in Vercel:
 
-- Asks for `JIRA_BASE_URL` / `JIRA_EMAIL` / `JIRA_API_TOKEN` / `JIRA_PROJECT_KEY` / `COLUMN_AI` / `COLUMN_AI_REVIEW` / `COLUMN_BACKLOG`.
+- Asks for `JIRA_BASE_URL` / `JIRA_API_TOKEN` / `JIRA_PROJECT_KEY` / `COLUMN_AI` / `COLUMN_AI_REVIEW` / `COLUMN_BACKLOG`.
 - **Pre-generates `JIRA_WEBHOOK_SECRET`** via `openssl rand -hex 32`.
 - Emits a single `.env`-format paste-template.
 - Walks the user through pasting into the Vercel dashboard (Project Settings → Environment Variables).

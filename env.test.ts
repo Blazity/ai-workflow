@@ -4,7 +4,6 @@ describe("env", () => {
   const VALID_ENV = {
     ISSUE_TRACKER_KIND: "jira",
     JIRA_BASE_URL: "https://test.atlassian.net",
-    JIRA_EMAIL: "test@example.com",
     JIRA_API_TOKEN: "token",
     JIRA_PROJECT_KEY: "PROJ",
     COLUMN_AI: "AI",

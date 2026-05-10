@@ -83,8 +83,7 @@ ai-workflow authenticates to Jira as a **scoped service account** — a dedicate
 **Capture the rest of the config:**
 
 6. Note your Atlassian instance URL (e.g. `https://your-domain.atlassian.net`) → `JIRA_BASE_URL`.
-7. Note the email of the **service account** (not your personal email) → `JIRA_EMAIL`.
-8. Open the project ai-workflow will operate on. Note its key (e.g. `AWT`) → `JIRA_PROJECT_KEY`.
+7. Open the project ai-workflow will operate on. Note its key (e.g. `AWT`) → `JIRA_PROJECT_KEY`.
 9. On the project board, identify the three columns ai-workflow uses. Create them if they don't exist:
    - `COLUMN_AI` — tickets assigned to the agent (default: `AI`)
    - `COLUMN_AI_REVIEW` — completed tickets pending human review (default: `AI Review`)
@@ -228,7 +227,7 @@ vercel env add JIRA_API_TOKEN production
 
 | Variable | Purpose |
 |----------|---------|
-| `JIRA_BASE_URL`, `JIRA_EMAIL`, `JIRA_API_TOKEN`, `JIRA_PROJECT_KEY` | Jira credentials |
+| `JIRA_BASE_URL`, `JIRA_API_TOKEN`, `JIRA_PROJECT_KEY` | Jira credentials (scoped service-account Bearer token) |
 | `COLUMN_AI`, `COLUMN_AI_REVIEW`, `COLUMN_BACKLOG` | Board columns |
 | `VCS_KIND` | `github` or `gitlab` |
 | `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY`, `GITHUB_INSTALLATION_ID`, `GITHUB_OWNER`, `GITHUB_REPO` | If `VCS_KIND=github` (GitHub App auth) |
