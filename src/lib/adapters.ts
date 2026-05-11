@@ -37,7 +37,6 @@ export function createAdapters(): Adapters {
   return {
     issueTracker: new JiraAdapter({
       baseUrl: env.JIRA_BASE_URL,
-      email: env.JIRA_EMAIL,
       apiToken: env.JIRA_API_TOKEN,
       projectKey: env.JIRA_PROJECT_KEY,
     }),

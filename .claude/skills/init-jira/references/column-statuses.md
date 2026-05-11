@@ -39,8 +39,9 @@ Each column should contain exactly one status with the matching name. Don't put 
 ## Verify the status spelling
 
 ```bash
-curl -u "$JIRA_EMAIL:$JIRA_API_TOKEN" \
-  "$JIRA_BASE_URL/rest/api/3/project/$JIRA_PROJECT_KEY/statuses" | \
+CLOUD_ID=$(curl -s "$JIRA_BASE_URL/_edge/tenant_info" | jq -r .cloudId)
+curl -H "Authorization: Bearer $JIRA_API_TOKEN" \
+  "https://api.atlassian.com/ex/jira/$CLOUD_ID/rest/api/3/project/$JIRA_PROJECT_KEY/statuses" | \
   jq '.[].statuses[].name'
 ```
 
