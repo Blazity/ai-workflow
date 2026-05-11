@@ -66,8 +66,7 @@ Hold the value for the paste-template below. Even if the user later defers webho
 Ask in one prompt (single credential bundle):
 
 - `JIRA_BASE_URL` — e.g. `https://acme.atlassian.net` (no trailing slash, no `/jira`)
-- `JIRA_EMAIL` — the bot account's email
-- `JIRA_API_TOKEN` — created at https://id.atlassian.com/manage-profile/security/api-tokens
+- `JIRA_API_TOKEN` — scoped service-account token (Bearer) from https://id.atlassian.com/manage-profile/security/api-tokens
 - `JIRA_PROJECT_KEY` — e.g. `AWT`
 
 Then ask:
@@ -84,7 +83,6 @@ Print this single block for the user to copy into Vercel → Project Settings �
 
 ```
 JIRA_BASE_URL=<value>
-JIRA_EMAIL=<value>
 JIRA_API_TOKEN=<value>
 JIRA_PROJECT_KEY=<value>
 COLUMN_AI=<value>

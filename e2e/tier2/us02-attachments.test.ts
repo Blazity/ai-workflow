@@ -66,7 +66,6 @@ describe("US-02: Ticket with attachments (real pipeline)", () => {
     );
     const jira = new JiraAdapter({
       baseUrl: e2eEnv.JIRA_BASE_URL,
-      email: e2eEnv.JIRA_EMAIL,
       apiToken: e2eEnv.JIRA_API_TOKEN,
       projectKey: e2eEnv.JIRA_PROJECT_KEY,
     });

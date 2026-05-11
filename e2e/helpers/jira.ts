@@ -1,13 +1,38 @@
 import { e2eEnv } from "../env.js";
 
-const authHeader =
-  "Basic " +
-  Buffer.from(`${e2eEnv.JIRA_EMAIL}:${e2eEnv.JIRA_API_TOKEN}`).toString(
-    "base64",
-  );
+const ATLASSIAN_API_ORIGIN = "https://api.atlassian.com";
+const authHeader = `Bearer ${e2eEnv.JIRA_API_TOKEN}`;
+
+let cloudIdPromise: Promise<string> | null = null;
+function getCloudId(): Promise<string> {
+  if (cloudIdPromise) return cloudIdPromise;
+  cloudIdPromise = (async () => {
+    const tenantOrigin = new URL(e2eEnv.JIRA_BASE_URL).origin;
+    const res = await fetch(`${tenantOrigin}/_edge/tenant_info`);
+    if (!res.ok) {
+      throw new Error(
+        `Jira cloudId discovery failed: ${res.status} ${res.statusText}`,
+      );
+    }
+    const data = (await res.json()) as { cloudId?: unknown };
+    if (typeof data?.cloudId !== "string" || data.cloudId === "") {
+      throw new Error("Jira cloudId discovery: missing cloudId in response");
+    }
+    return data.cloudId;
+  })().catch((err) => {
+    cloudIdPromise = null;
+    throw err;
+  });
+  return cloudIdPromise;
+}
+
+async function apiUrl(path: string): Promise<string> {
+  const cloudId = await getCloudId();
+  return `${ATLASSIAN_API_ORIGIN}/ex/jira/${cloudId}${path}`;
+}
 
 async function jiraRequest(path: string, options?: RequestInit) {
-  const res = await fetch(`${e2eEnv.JIRA_BASE_URL}${path}`, {
+  const res = await fetch(await apiUrl(path), {
     ...options,
     headers: {
       Authorization: authHeader,
@@ -185,7 +210,7 @@ export async function addAttachment(
   form.append("file", new Blob([new Uint8Array(content)]), filename);
 
   const res = await fetch(
-    `${e2eEnv.JIRA_BASE_URL}/rest/api/3/issue/${ticketKey}/attachments`,
+    await apiUrl(`/rest/api/3/issue/${ticketKey}/attachments`),
     {
       method: "POST",
       headers: {
@@ -227,7 +252,13 @@ export async function getTicketAttachments(
 export async function downloadJiraAttachment(
   contentUrl: string,
 ): Promise<Buffer> {
-  const res = await fetch(contentUrl, {
+  const tenantOrigin = new URL(e2eEnv.JIRA_BASE_URL).origin;
+  const parsed = new URL(contentUrl);
+  const url =
+    parsed.origin === tenantOrigin
+      ? `${ATLASSIAN_API_ORIGIN}/ex/jira/${await getCloudId()}${parsed.pathname}${parsed.search}`
+      : contentUrl;
+  const res = await fetch(url, {
     headers: { Authorization: authHeader },
   });
   if (!res.ok) {

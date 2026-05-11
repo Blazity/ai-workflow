@@ -32,8 +32,9 @@ If the source status doesn't have an outbound transition to the target, draw a n
 For an issue currently in `AI`:
 
 ```bash
-curl -u "$JIRA_EMAIL:$JIRA_API_TOKEN" \
-  "$JIRA_BASE_URL/rest/api/3/issue/$JIRA_PROJECT_KEY-1/transitions" | \
+CLOUD_ID=$(curl -s "$JIRA_BASE_URL/_edge/tenant_info" | jq -r .cloudId)
+curl -H "Authorization: Bearer $JIRA_API_TOKEN" \
+  "https://api.atlassian.com/ex/jira/$CLOUD_ID/rest/api/3/issue/$JIRA_PROJECT_KEY-1/transitions" | \
   jq '.transitions[] | {name, to: .to.name}'
 ```
 

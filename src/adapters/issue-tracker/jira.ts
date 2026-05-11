@@ -8,26 +8,62 @@ import {
 
 export interface JiraConfig {
   baseUrl: string;
-  email: string;
   apiToken: string;
   projectKey: string;
+  cloudId?: string;
 }
 
-export class JiraAdapter implements IssueTrackerAdapter {
-  private baseUrl: string;
-  private jiraBaseOrigin: string;
-  private authHeader: string;
+const ATLASSIAN_API_ORIGIN = "https://api.atlassian.com";
 
-  constructor(private config: JiraConfig) {
-    this.baseUrl = config.baseUrl.replace(/\/$/, "");
-    this.jiraBaseOrigin = new URL(this.baseUrl).origin;
-    this.authHeader =
-      "Basic " +
-      Buffer.from(`${config.email}:${config.apiToken}`).toString("base64");
+export class JiraAdapter implements IssueTrackerAdapter {
+  private tenantOrigin: string;
+  private authHeader: string;
+  private cloudIdPromise: Promise<string> | null;
+
+  constructor(config: JiraConfig) {
+    const trimmed = config.baseUrl.replace(/\/$/, "");
+    this.tenantOrigin = new URL(trimmed).origin;
+    this.authHeader = `Bearer ${config.apiToken}`;
+    this.cloudIdPromise = config.cloudId
+      ? Promise.resolve(config.cloudId)
+      : null;
+  }
+
+  private getCloudId(): Promise<string> {
+    if (this.cloudIdPromise) return this.cloudIdPromise;
+    const pending = this.discoverCloudId();
+    this.cloudIdPromise = pending.catch((err) => {
+      this.cloudIdPromise = null;
+      throw err;
+    });
+    return this.cloudIdPromise;
+  }
+
+  private async discoverCloudId(): Promise<string> {
+    const url = `${this.tenantOrigin}/_edge/tenant_info`;
+    const res = await fetch(url);
+    if (!res.ok) {
+      throw new Error(
+        `Jira cloudId discovery failed: ${res.status} ${res.statusText} on ${url}`,
+      );
+    }
+    const data = (await res.json()) as { cloudId?: unknown };
+    if (typeof data?.cloudId !== "string" || data.cloudId === "") {
+      throw new Error(
+        `Jira cloudId discovery: missing cloudId in ${url} response`,
+      );
+    }
+    return data.cloudId;
+  }
+
+  private async apiUrl(path: string): Promise<string> {
+    const cloudId = await this.getCloudId();
+    return `${ATLASSIAN_API_ORIGIN}/ex/jira/${cloudId}${path}`;
   }
 
   private async request(path: string, options?: RequestInit) {
-    const res = await fetch(`${this.baseUrl}${path}`, {
+    const url = await this.apiUrl(path);
+    const res = await fetch(url, {
       ...options,
       headers: {
         Authorization: this.authHeader,
@@ -112,7 +148,7 @@ export class JiraAdapter implements IssueTrackerAdapter {
     });
     const commentId = typeof data?.id === "string" ? data.id : null;
     if (!commentId) return null;
-    return `${this.baseUrl}/browse/${encodeURIComponent(id)}?focusedCommentId=${encodeURIComponent(commentId)}`;
+    return `${this.tenantOrigin}/browse/${encodeURIComponent(id)}?focusedCommentId=${encodeURIComponent(commentId)}`;
   }
 
   async downloadAttachment(
@@ -126,7 +162,9 @@ export class JiraAdapter implements IssueTrackerAdapter {
     if (!url || url.trim() === "") {
       throw new Error("Jira attachment error: missing attachment content URL");
     }
-    let currentUrl = new URL(url, this.baseUrl).toString();
+    let currentUrl = await this.rewriteIfTenant(
+      new URL(url, this.tenantOrigin).toString(),
+    );
 
     for (let redirects = 0; redirects <= maxRedirects; redirects++) {
       const res = await fetch(currentUrl, {
@@ -144,9 +182,10 @@ export class JiraAdapter implements IssueTrackerAdapter {
             `Jira attachment redirect (${res.status}) missing Location header for ${currentUrl}`,
           );
         }
-        // Drain redirect response body to release the socket back to the pool.
         await res.body?.cancel?.();
-        currentUrl = new URL(location, currentUrl).toString();
+        currentUrl = await this.rewriteIfTenant(
+          new URL(location, currentUrl).toString(),
+        );
         continue;
       }
 
@@ -164,8 +203,15 @@ export class JiraAdapter implements IssueTrackerAdapter {
     );
   }
 
+  private async rewriteIfTenant(url: string): Promise<string> {
+    const parsed = new URL(url);
+    if (parsed.origin !== this.tenantOrigin) return url;
+    const cloudId = await this.getCloudId();
+    return `${ATLASSIAN_API_ORIGIN}/ex/jira/${cloudId}${parsed.pathname}${parsed.search}`;
+  }
+
   private buildAttachmentHeaders(url: string): HeadersInit | undefined {
-    if (new URL(url).origin !== this.jiraBaseOrigin) return undefined;
+    if (new URL(url).origin !== ATLASSIAN_API_ORIGIN) return undefined;
     return { Authorization: this.authHeader };
   }
 
