@@ -55,28 +55,31 @@ ai-workflow authenticates to Jira as an **Atlassian service account** — a mach
 
 1. Go to **https://admin.atlassian.com** → pick your organization → **Directory** → **Service accounts**.
 2. **Create service account** → name it (e.g. `ai-workflow`) → grant product access to **Jira** only.
-3. In Jira, add the service account (by its principal name) to the target project as a **member** or via a group. Grant exactly: browse, create, edit, transition, and comment on issues in `JIRA_PROJECT_KEY`. Nothing else.
 
 **Generate a scoped API token:**
 
-4. Back in **admin.atlassian.com → Directory → Service accounts**, open the account you just created → **API tokens** → **Create credentials**. Give it a label (e.g. `ai-workflow-prod`) and pick these two **classic** scopes:
+1. Back in **admin.atlassian.com → Directory → Service accounts**, open the account you just created → **API tokens** → **Create credentials**. Give it a label (e.g. `ai-workflow-prod`) and pick these two **classic** scopes:
 
    | Scope             | Covers                                                                                                                                                          |
    | ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
    | `read:jira-work`  | `GET /issue/{id}` (summary, description, comments, labels, status, project, attachments), `GET /issue/{id}/transitions`, `GET /search/jql`, attachment download |
    | `write:jira-work` | `POST /issue/{id}/comment`, `POST /issue/{id}/transitions` (move ticket)                                                                                        |
 
-5. Copy the token immediately (it's shown once) → `JIRA_API_TOKEN`.
+2. Copy the token immediately (it's shown once) → `JIRA_API_TOKEN`.
+
+> **Scope ≠ project permissions.** The token's scopes (`read:jira-work`, `write:jira-work`) gate _which API categories_ the token can call — but `write:jira-work` covers destructive endpoints like `DELETE /issue/{id}` too. The second gate is the project's **Permission Scheme** in Jira itself: the service account is a regular Jira user, and Jira filters every request by that user's permissions on the project.
+>
+> Concretely: leave the service account in `jira-users` (default) and make sure your project's Permission Scheme does **not** grant `Delete Issues`, `Delete All Comments`, `Delete All Attachments`, `Administer Projects`, or `Manage Sprints` to `jira-users` or `Any logged in user`. Atlassian's `Default Permission Scheme` ships this way out of the box — verify at `<site>/secure/admin/ViewPermissionSchemes.jspa` → find `Default Permission Scheme` → click **Permissions**. A `DELETE` from the bot will then return `403 You do not have permission to delete issues in this project.` even though the token scope allows the call. If you need stricter isolation (e.g. hide the bot from other projects), create a dedicated group + dedicated scheme — otherwise the default should be sufficient.
 
 **Capture the rest of the config:**
 
-6. Note your Atlassian instance URL (e.g. `https://your-domain.atlassian.net`) → `JIRA_BASE_URL`.
-7. Open the project ai-workflow will operate on. Note its key (e.g. `AWT`) → `JIRA_PROJECT_KEY`.
-8. On the project board, identify the three columns ai-workflow uses. Create them if they don't exist:
+1. Note your Atlassian instance URL (e.g. `https://your-domain.atlassian.net`) → `JIRA_BASE_URL`.
+2. Open the project ai-workflow will operate on. Note its key (e.g. `AWT`) → `JIRA_PROJECT_KEY`.
+3. On the project board, identify the three columns ai-workflow uses. Create them if they don't exist:
    - `COLUMN_AI` — tickets assigned to the agent (default: `AI`)
    - `COLUMN_AI_REVIEW` — completed tickets pending human review (default: `AI Review`)
    - `COLUMN_BACKLOG` — tickets bounced back for clarification (default: `Backlog`)
-9. Generate a webhook secret to authenticate Jira → Vercel deliveries:
+4. Generate a webhook secret to authenticate Jira → Vercel deliveries:
    ```bash
    openssl rand -hex 32
    ```
