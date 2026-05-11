@@ -4,7 +4,6 @@ const schema = z.object({
   E2E_BASE_URL: z.string().url(),
 
   JIRA_BASE_URL: z.string().url(),
-  JIRA_EMAIL: z.string().email(),
   JIRA_API_TOKEN: z.string().min(1),
   JIRA_PROJECT_KEY: z.string().min(1),
 
