@@ -734,6 +734,15 @@ export async function agentWorkflow(ticketId: string) {
         return;
       }
 
+      // Push has landed — agent work is durable. Unregister BEFORE any
+      // downstream step that can trigger a Jira webhook: opening a PR can
+      // transition the linked issue (GitHub-for-Jira / Jira automation),
+      // and our own moveTicket fires a webhook for the AI → AI Review move.
+      // Either webhook, if it sees a still-registered run, will call
+      // cancelRun and emit a spurious "canceled" notification on top of
+      // "pr_ready". Clearing the registry here closes that window.
+      await unregisterRun(ticket.identifier);
+
       // We need a {url, number} regardless of whether the PR is new or pre-existing.
       // - New PR: createPullRequest returns the PullRequest ({ id, url, branch }) — capture it.
       // - Existing PR: prContext was built from vcs.findPR(branch), but findPR's return
@@ -749,7 +758,6 @@ export async function agentWorkflow(ticketId: string) {
         pr: { url: pr.url, number: pr.id },
         usageReport,
       });
-      await unregisterRun(ticket.identifier);
       await moveTicket(ticketId, env.COLUMN_AI_REVIEW);
     } finally {
       await teardownSandbox(sandboxId);
