@@ -10,9 +10,11 @@ vi.mock("../sandbox/arthur-client.js", () => ({
 }));
 
 vi.mock("node:fs/promises", () => ({
-  default: { readFile: vi.fn(), stat: vi.fn() },
+  default: { readFile: vi.fn(), stat: vi.fn(), lstat: vi.fn(), realpath: vi.fn() },
   readFile: vi.fn(),
   stat: vi.fn(),
+  lstat: vi.fn(),
+  realpath: vi.fn(),
 }));
 
 import { loadPrompts, loadReviewPrompt } from "./prompts-step.js";
@@ -97,11 +99,19 @@ describe("loadReviewPrompt", () => {
     mockGetPromptByTag.mockReset();
     (fsPromises.readFile as unknown as ReturnType<typeof vi.fn>).mockReset();
     (fsPromises.stat as unknown as ReturnType<typeof vi.fn>).mockReset();
+    (fsPromises.lstat as unknown as ReturnType<typeof vi.fn>).mockReset();
+    (fsPromises.realpath as unknown as ReturnType<typeof vi.fn>).mockReset();
     // Default: stat returns a small regular file. Individual tests override.
     (fsPromises.stat as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
       isFile: () => true,
       size: 100,
     });
+    (fsPromises.lstat as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+      isSymbolicLink: () => false,
+    });
+    (fsPromises.realpath as unknown as ReturnType<typeof vi.fn>).mockImplementation(
+      async (p: string) => p,
+    );
     await setEnv({
       GENAI_ENGINE_API_KEY: undefined,
       GENAI_ENGINE_TRACE_ENDPOINT: undefined,
