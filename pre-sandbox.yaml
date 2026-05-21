@@ -4,11 +4,14 @@ preSandbox:
     existingPr: true
     mergeConflict: true
   steps:
-    - uses: require-title-length
-      name: Require Title Length
+    - uses: judge-ticket-size
+      name: Judge Ticket Size
       onFailure: fail
-      timeoutMs: 5000
+      timeoutMs: 30000
       with:
         input:
           ticket:
             - title
+            - description
+            - acceptanceCriteria
+            - labels

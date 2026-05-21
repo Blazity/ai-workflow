@@ -1,8 +1,8 @@
-import { requireTitleLengthStep } from "./require-title-length.js";
+import { judgeTicketSizeStep } from "./judge-ticket-size.js";
 import type { PreSandboxStepRegistry } from "../types.js";
 
 export const preSandboxStepRegistry = {
-  "require-title-length": requireTitleLengthStep,
+  "judge-ticket-size": judgeTicketSizeStep,
 } satisfies PreSandboxStepRegistry;
 
 export type PreSandboxStepId = keyof typeof preSandboxStepRegistry;

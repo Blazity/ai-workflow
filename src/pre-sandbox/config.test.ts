@@ -96,15 +96,15 @@ preSandbox:
         validConfig({
           steps: [
             {
-              uses: "require-title-length",
-              name: "Require Title Length",
+              uses: "judge-ticket-size",
+              name: "Judge Ticket Size",
               timeoutMs: 5000,
               onFailure: "fail",
             },
           ],
         }),
       ).preSandbox.steps[0]?.uses,
-    ).toBe("require-title-length");
+    ).toBe("judge-ticket-size");
   });
 
   it.each([
@@ -117,7 +117,7 @@ preSandbox:
         validConfig({
           steps: [
             {
-              uses: "require-title-length",
+              uses: "judge-ticket-size",
               onFailure: "fail",
               ...override,
             },
