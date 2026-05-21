@@ -122,6 +122,37 @@ describe("assembleResearchPlanContext", () => {
     expect(result).toContain("⚠️");
     expect(result).toContain("spec.pdf");
   });
+
+  it("renders research pre-sandbox additions only when provided", () => {
+    const result = assembleResearchPlanContext({
+      ticket: {
+        identifier: "TEST-4",
+        title: "Research note",
+        description: "desc",
+        acceptanceCriteria: "ac",
+        comments: [],
+      },
+      prompt: "prompt",
+      branchName: "blazebot/test-4",
+      preSandboxAdditions: [
+        {
+          target: ["research"],
+          title: "Ticket Complexity Check",
+          content: "This ticket should be researched before implementation.",
+        },
+      ],
+    });
+    expect(result).toContain("## Pre-Sandbox: Ticket Complexity Check");
+    expect(result).toContain("This information was produced before sandbox creation.");
+    expect(result).toContain("This ticket should be researched before implementation.");
+
+    const withoutAdditions = assembleResearchPlanContext({
+      ticket: { identifier: "X", title: "t", description: "d", acceptanceCriteria: "a", comments: [] },
+      prompt: "p",
+      branchName: "b",
+    });
+    expect(withoutAdditions).not.toContain("## Pre-Sandbox");
+  });
 });
 
 describe("assembleImplementationContext (new)", () => {
@@ -212,6 +243,37 @@ describe("assembleImplementationContext (new)", () => {
     expect(result).toContain("⚠️");
     expect(result).toContain("spec.pdf");
   });
+
+  it("renders implementation pre-sandbox additions only when provided", () => {
+    const result = assembleImplementationContext({
+      ticket: {
+        identifier: "TEST-4",
+        title: "Implementation note",
+        description: "desc",
+        acceptanceCriteria: "ac",
+        comments: [],
+      },
+      prompt: "prompt",
+      researchPlanMarkdown: "plan",
+      preSandboxAdditions: [
+        {
+          target: ["implementation"],
+          title: "Dependency Check",
+          content: "Install dependencies before coding.",
+        },
+      ],
+    });
+    expect(result).toContain("## Pre-Sandbox: Dependency Check");
+    expect(result).toContain("This information was produced before sandbox creation.");
+    expect(result).toContain("Install dependencies before coding.");
+
+    const withoutAdditions = assembleImplementationContext({
+      ticket: { identifier: "X", title: "t", description: "d", acceptanceCriteria: "a", comments: [] },
+      prompt: "p",
+      researchPlanMarkdown: "plan",
+    });
+    expect(withoutAdditions).not.toContain("## Pre-Sandbox");
+  });
 });
 
 describe("assembleReviewContext", () => {
@@ -298,6 +360,37 @@ describe("assembleReviewContext", () => {
     expect(result).toContain("## Attachments");
     expect(result).toContain("⚠️");
     expect(result).toContain("spec.pdf");
+  });
+
+  it("renders review pre-sandbox additions only when provided", () => {
+    const result = assembleReviewContext({
+      ticket: {
+        identifier: "TEST-4",
+        title: "Review note",
+        description: "desc",
+        acceptanceCriteria: "ac",
+        comments: [],
+      },
+      prompt: "prompt",
+      researchPlanMarkdown: "plan",
+      preSandboxAdditions: [
+        {
+          target: ["review"],
+          title: "Review Checklist",
+          content: "Verify pre-sandbox findings before approving.",
+        },
+      ],
+    });
+    expect(result).toContain("## Pre-Sandbox: Review Checklist");
+    expect(result).toContain("This information was produced before sandbox creation.");
+    expect(result).toContain("Verify pre-sandbox findings before approving.");
+
+    const withoutAdditions = assembleReviewContext({
+      ticket: { identifier: "X", title: "t", description: "d", acceptanceCriteria: "a", comments: [] },
+      prompt: "p",
+      researchPlanMarkdown: "plan",
+    });
+    expect(withoutAdditions).not.toContain("## Pre-Sandbox");
   });
 });
 
