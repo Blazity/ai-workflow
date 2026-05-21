@@ -3,15 +3,4 @@ preSandbox:
     newTicket: true
     existingPr: true
     mergeConflict: true
-  steps:
-    - uses: judge-ticket-size
-      name: Judge Ticket Size
-      onFailure: fail
-      timeoutMs: 30000
-      with:
-        input:
-          ticket:
-            - title
-            - description
-            - acceptanceCriteria
-            - labels
+  steps: []

@@ -90,23 +90,6 @@ preSandbox:
     ).toThrow(/unknown pre-sandbox step "unknown-step"/);
   });
 
-  it("accepts a registered step id", () => {
-    expect(
-      parsePreSandboxConfig(
-        validConfig({
-          steps: [
-            {
-              uses: "judge-ticket-size",
-              name: "Judge Ticket Size",
-              timeoutMs: 5000,
-              onFailure: "fail",
-            },
-          ],
-        }),
-      ).preSandbox.steps[0]?.uses,
-    ).toBe("judge-ticket-size");
-  });
-
   it.each([
     ["non-positive timeout", { timeoutMs: 0 }, /preSandbox\.steps\.0\.timeoutMs/],
     ["invalid onFailure", { onFailure: "retry" }, /preSandbox\.steps\.0\.onFailure/],
@@ -117,7 +100,7 @@ preSandbox:
         validConfig({
           steps: [
             {
-              uses: "judge-ticket-size",
+              uses: "some-step",
               onFailure: "fail",
               ...override,
             },
