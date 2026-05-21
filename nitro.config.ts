@@ -1,21 +1,47 @@
-import { copyFile } from "node:fs/promises";
-import { resolve } from "node:path";
+import { copyFile, readdir } from "node:fs/promises";
+import { join, resolve } from "node:path";
 import { defineNitroConfig } from "nitropack/config";
+
+async function findFuncDirs(root: string): Promise<string[]> {
+  const out: string[] = [];
+  async function walk(dir: string) {
+    const entries = await readdir(dir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      const full = join(dir, entry.name);
+      if (entry.name.endsWith(".func")) {
+        out.push(full);
+        continue;
+      }
+      await walk(full);
+    }
+  }
+  try {
+    await walk(root);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+  }
+  return out;
+}
 
 export default defineNitroConfig({
   preset: "vercel",
   modules: [
     "workflow/nitro",
-    // Ship pre-sandbox.yaml alongside the bundled function so the runtime can
-    // read it from process.cwd() (Vercel /var/task). Nitro bundles JS only, so
-    // root-level config files would otherwise be missing in prod. Registering
-    // via a module avoids clobbering the Vercel preset's own `compiled` hook
-    // (which writes the Build Output API config.json).
+    // Ship pre-sandbox.yaml into every Vercel function bundle so runtime code
+    // can read it from process.cwd() (= /var/task). Nitro bundles JS only, and
+    // @workflow/nitro emits separate step/flow/webhook functions in addition
+    // to __fallback.func — each gets its own /var/task, so the yaml must be
+    // copied into all of them. Registering as a module (not a `hooks` field)
+    // ensures the Vercel preset's own `compiled` hook still runs.
     (nitro) => {
       nitro.hooks.hook("compiled", async () => {
-        await copyFile(
-          resolve(nitro.options.rootDir, "pre-sandbox.yaml"),
-          resolve(nitro.options.output.serverDir, "pre-sandbox.yaml"),
+        const src = resolve(nitro.options.rootDir, "pre-sandbox.yaml");
+        const funcDirs = await findFuncDirs(
+          resolve(nitro.options.output.dir, "functions"),
+        );
+        await Promise.all(
+          funcDirs.map((dir) => copyFile(src, join(dir, "pre-sandbox.yaml"))),
         );
       });
     },
