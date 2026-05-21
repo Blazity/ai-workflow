@@ -228,7 +228,7 @@ Enable the webhook on the App (the base setup disables it):
 1. Go to the App's settings page → **Webhook**.
 2. **Active** → **check**.
 3. **Webhook URL:**
-   ```
+   ```text
    https://<your-vercel-domain>/webhooks/vcs/github/pull-request
    ```
 4. **Webhook secret:** generate a secret and paste it here:
@@ -270,4 +270,4 @@ Review behavior is controlled by `workflow.config.yaml` at the project root of t
 | `GITHUB_WEBHOOK_SECRET` | — (required)          | Signs incoming webhook deliveries                  |
 | `WORKFLOW_CONFIG_PATH` | `workflow.config.yaml` | Override the config file path (absolute or relative to cwd) |
 
-See [PR Review Pipeline (v1)](#) in `SETUP.md` for the full dark-launch walkthrough and a sample config snippet.
+See [PR Review Pipeline (v1)](../SETUP.md#12-pr-review-pipeline-v1) in `SETUP.md` for the full dark-launch walkthrough and a sample config snippet.

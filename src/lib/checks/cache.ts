@@ -26,11 +26,11 @@ export function serializeCacheManifest(manifest: CheckCacheManifest): string {
  */
 export function parseCacheManifest(text: string | null | undefined): CheckCacheManifest | null {
   if (!text) return null;
-  const start = text.indexOf(MANIFEST_OPEN);
+  const start = text.lastIndexOf(MANIFEST_OPEN);
   if (start < 0) return null;
   const after = start + MANIFEST_OPEN.length;
-  const end = text.indexOf(MANIFEST_CLOSE, after);
-  if (end < 0) return null;
+  const end = text.lastIndexOf(MANIFEST_CLOSE);
+  if (end <= start) return null;
   const body = text.slice(after, end).trim();
   if (Buffer.byteLength(body, "utf8") > MAX_MANIFEST_BYTES) return null;
   let parsed: unknown;

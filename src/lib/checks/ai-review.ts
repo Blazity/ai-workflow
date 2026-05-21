@@ -381,6 +381,9 @@ async function runPerFile(rc: RunCtx): Promise<CheckResult> {
 async function runWholePr(rc: RunCtx): Promise<CheckResult> {
   const { params, ctx, generate, promptBody } = rc;
   const notices: string[] = [];
+  const checkId = typeof ctx.requested_data["check_id"] === "string"
+    ? (ctx.requested_data["check_id"] as string)
+    : "ai_review";
 
   // whole_pr mode does not use per-file caching. If the workflow still set up
   // a previous_cache (because cache.mode is configured), emit a notice so the
@@ -408,7 +411,7 @@ async function runWholePr(rc: RunCtx): Promise<CheckResult> {
       }
       findings.push(
         toFinding({
-          checkId: "ai_review",
+          checkId,
           headSha: ctx.pr.head_sha,
           path: f.primary_location?.path ?? "",
           finding: f,
@@ -439,7 +442,7 @@ interface PerFileInput {
 
 function buildPerFilePrompt(file: PerFileInput): string {
   const parts: string[] = [];
-  parts.push(`# File: ${file.path}\n`);
+  parts.push(`# File: ${wrapUntrusted(file.path)}\n`);
   if (file.file_diff) {
     parts.push(`## Diff\n\n${wrapUntrusted(file.file_diff)}\n`);
   }
@@ -457,7 +460,7 @@ function buildWholePrPrompt(ctx: import("./types.js").CheckContext): string {
 
   const changedFiles = ctx.requested_data["changed_files"];
   if (Array.isArray(changedFiles)) {
-    parts.push(`## Changed files\n\n${(changedFiles as string[]).map((p) => `- ${p}`).join("\n")}\n`);
+    parts.push(`## Changed files\n\n${(changedFiles as string[]).map((p) => `- ${wrapUntrusted(p)}`).join("\n")}\n`);
   }
 
   const ticket = ctx.requested_data["ticket"] as

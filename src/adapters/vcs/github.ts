@@ -531,6 +531,8 @@ export function parseChangedLineRangesFromPatch(
           rangeEnd = null;
         }
         // do NOT advance newLineNum for deletions
+      } else if (line.startsWith("\\")) {
+        // diff metadata (e.g. "\ No newline at end of file") — skip
       } else {
         // context line: flush any open range
         if (rangeStart !== null && rangeEnd !== null) {

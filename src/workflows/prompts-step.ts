@@ -108,6 +108,28 @@ export async function loadReviewPrompt(spec: ReviewPromptSource): Promise<Loaded
     if (rel.startsWith("..") || path.isAbsolute(rel)) {
       throw new Error(`local prompt path escapes deployment repo root: ${spec.path}`);
     }
+    // Symlink guard: reject if the final component is a symlink.
+    let lst: Awaited<ReturnType<typeof fs.lstat>>;
+    try {
+      lst = await fs.lstat(abs);
+    } catch {
+      throw new Error(`prompt file not found at ${abs}`);
+    }
+    if (lst.isSymbolicLink()) {
+      throw new Error(`local prompt path is a symlink: ${spec.path}`);
+    }
+    // Realpath guard: canonicalized path must stay under the canonicalized repo root.
+    let realRoot: string;
+    let realAbs: string;
+    try {
+      realRoot = await fs.realpath(repoRoot);
+      realAbs = await fs.realpath(abs);
+    } catch {
+      throw new Error(`prompt file not found at ${abs}`);
+    }
+    if (realAbs !== realRoot && !realAbs.startsWith(realRoot + path.sep)) {
+      throw new Error(`local prompt path escapes deployment repo root: ${spec.path}`);
+    }
     let stat: Awaited<ReturnType<typeof fs.stat>>;
     try {
       stat = await fs.stat(abs);

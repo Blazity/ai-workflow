@@ -540,4 +540,11 @@ describe("parseChangedLineRangesFromPatch", () => {
     // only the real addition inside the hunk should appear
     expect(ranges).toEqual([{ start: 2, end: 2 }]);
   });
+
+  it("ignores the in-hunk '\\ No newline at end of file' marker", () => {
+    const patch = "@@ -1,1 +1,1 @@\n+real addition\n\\ No newline at end of file\n";
+    const ranges = parseChangedLineRangesFromPatch(patch);
+    // only the real addition should appear — the backslash metadata marker is not an addition
+    expect(ranges).toEqual([{ start: 1, end: 1 }]);
+  });
 });

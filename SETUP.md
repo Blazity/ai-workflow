@@ -354,7 +354,7 @@ curl -H "Authorization: Bearer $CRON_SECRET" https://<your-vercel-domain>/cron/p
    - Target repo — new branch `blazebot/<ticket-key>` and an open PR.
    - Slack channel — notification fires.
 
-If anything stalls, jump to [troubleshooting](#12-troubleshooting).
+If anything stalls, jump to [troubleshooting](#13-troubleshooting).
 
 ---
 

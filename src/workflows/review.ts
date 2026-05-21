@@ -466,6 +466,16 @@ async function buildCheckRequestedData(
       if (data.includes("diff")) {
         base["diff"] = bundle.full_diff?.content;
       }
+      if (data.includes("file_content")) {
+        base["file_content"] = bundle.files
+          .filter((f) => f.status !== "removed")
+          .map((f) => ({
+            path: f.path,
+            status: f.status,
+            file_content: bundle.file_contents?.[f.path]?.content,
+            skipped: bundle.file_contents?.[f.path]?.skipped,
+          }));
+      }
       base["changed_files"] = bundle.files.map((f) => f.path);
       if (data.includes("prior_comments")) {
         base["prior_comments"] = bundle.prior_comments;
@@ -807,13 +817,25 @@ export async function reviewWorkflow(args: ReviewWorkflowArgs): Promise<void> {
         });
 
         if (comments.length || suggestions.length) {
-          await createReviewStep({
-            owner: args.owner,
-            repo: args.repo,
-            prNumber: args.prNumber,
-            comments: [...comments, ...suggestions],
-            body: result.summary,
-          });
+          // Isolate review-comment publishing failures from check completion.
+          // If createReviewStep throws (e.g. a transient GitHub error or a
+          // rejected suggestion), we still want to persist the Check Run with
+          // the computed conclusion below rather than fall into the outer
+          // catch and lose the result.
+          try {
+            await createReviewStep({
+              owner: args.owner,
+              repo: args.repo,
+              prNumber: args.prNumber,
+              comments: [...comments, ...suggestions],
+              body: result.summary,
+            });
+          } catch (reviewErr) {
+            log.error(
+              { checkId: checkCfg.id, err: (reviewErr as Error).message },
+              "review_check_publish_comments_failed",
+            );
+          }
         }
       }
 

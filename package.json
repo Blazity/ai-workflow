@@ -26,12 +26,12 @@
     "@upstash/redis": "^1.37.0",
     "@vercel/functions": "^3.5.0",
     "@vercel/sandbox": "^1.8.1",
+    "ai": "^5.0.0",
     "chat": "^4.20.2",
     "h3": "^1",
     "js-yaml": "^4.1.0",
     "nitropack": "^2",
     "pino": "^10.3.1",
-    "ai": "^5.0.0",
     "workflow": "latest",
     "zod": "^3.25.76"
   },

@@ -40,7 +40,7 @@ export function formatFindingMarker(fingerprint: string): string {
  * round-trippability through markdown parsers.
  */
 function sanitizeFences(text: string): string {
-  return text.replace(/```/g, "`‍``");
+  return text.replace(/`{3,}/g, (match) => match.split("").join("‍"));
 }
 
 /** Truncate a comment body to MAX_COMMENT_BODY, appending a visible notice. */

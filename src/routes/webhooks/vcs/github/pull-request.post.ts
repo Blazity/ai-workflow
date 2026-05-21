@@ -69,8 +69,10 @@ export default defineEventHandler(async (event) => {
   // 6. Check repo matches expected owner/repo
   const fullName: string = body.repository?.full_name ?? "";
   const expectedFullName = `${env.GITHUB_OWNER}/${env.GITHUB_REPO}`;
-  if (fullName !== expectedFullName) {
-    logger.info({ fullName, expectedFullName }, "github_webhook_ignored_wrong_repo");
+  const normalizedFullName = fullName.trim().toLowerCase();
+  const normalizedExpectedFullName = expectedFullName.trim().toLowerCase();
+  if (normalizedFullName !== normalizedExpectedFullName) {
+    logger.info({ fullName: normalizedFullName, expectedFullName: normalizedExpectedFullName }, "github_webhook_ignored_wrong_repo");
     return { status: "ignored", reason: "wrong_repo" };
   }
 
