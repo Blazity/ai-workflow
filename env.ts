@@ -115,6 +115,12 @@ export const env = createEnv({
     // Jira Webhook
     JIRA_WEBHOOK_SECRET: z.string().min(1).optional(),
 
+    // PR Review Extensions — see workflow.config.yaml for the full config.
+    // Only required when review.enabled is true; enforced at config-load time.
+    GITHUB_WEBHOOK_SECRET: z.string().min(1).optional(),
+    /** Override path for workflow.config.yaml. Defaults to workflow.config.yaml in cwd. */
+    WORKFLOW_CONFIG_PATH: z.string().min(1).optional(),
+
     // Redis (run registry)
     AI_WORKFLOW_KV_REST_API_URL: z.string().url(),
     AI_WORKFLOW_KV_REST_API_TOKEN: z.string().min(1),

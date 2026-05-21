@@ -212,3 +212,62 @@ Order matters — revoke last, otherwise the running deployment loses auth befor
 Org **Settings → Integrations → GitHub Apps → Configure** → uncheck the repo or click **Uninstall**.
 
 The deployment will start failing on the next workflow run because installation tokens are scoped to installed repos.
+
+---
+
+## PR Review Pipeline — additional setup
+
+The PR Review Pipeline is a separate capability layered on top of the same GitHub App. When enabled, ai-workflow receives `pull_request` events from GitHub, runs configured checks, and posts results as Check Runs and inline review comments.
+
+This section covers only the delta from the base setup above.
+
+### Webhook
+
+Enable the webhook on the App (the base setup disables it):
+
+1. Go to the App's settings page → **Webhook**.
+2. **Active** → **check**.
+3. **Webhook URL:**
+   ```
+   https://<your-vercel-domain>/webhooks/vcs/github/pull-request
+   ```
+4. **Webhook secret:** generate a secret and paste it here:
+   ```bash
+   openssl rand -hex 32
+   ```
+   Save the value as `GITHUB_WEBHOOK_SECRET` in Vercel (step 11 of the base setup). The handler at `src/routes/webhooks/vcs/github/pull-request.post.ts` verifies every delivery with HMAC-SHA256.
+5. Under **Subscribe to events**, enable **Pull requests** only.
+6. Save.
+
+### Additional permissions
+
+The PR Review Pipeline needs two permissions beyond the base set:
+
+| Permission    | Level        | Why                                       |
+| ------------- | ------------ | ----------------------------------------- |
+| Checks        | Read & write | Create and update Check Runs on PRs       |
+| Contents      | Read         | Read file contents for `ai_review` checks |
+
+Update the App's permissions (App settings → **Permissions & events** → **Repository permissions**). GitHub will ask all existing installations to accept the new permissions — you must approve via **Org Settings → Integrations → GitHub Apps → Configure → Review request**.
+
+The full permission set for an App that handles both code push and PR review:
+
+| Permission    | Level        |
+| ------------- | ------------ |
+| Contents      | Read & write |
+| Pull requests | Read & write |
+| Issues        | Read & write |
+| Checks        | Read & write |
+| Actions       | Read-only    |
+| Metadata      | Read-only    |
+
+### Review config
+
+Review behavior is controlled by `workflow.config.yaml` at the project root of the **ai-workflow deployment** (not the target repo). The config path can be overridden:
+
+| Variable               | Default                | Purpose                                            |
+| ---------------------- | ---------------------- | -------------------------------------------------- |
+| `GITHUB_WEBHOOK_SECRET` | — (required)          | Signs incoming webhook deliveries                  |
+| `WORKFLOW_CONFIG_PATH` | `workflow.config.yaml` | Override the config file path (absolute or relative to cwd) |
+
+See [PR Review Pipeline (v1)](#) in `SETUP.md` for the full dark-launch walkthrough and a sample config snippet.

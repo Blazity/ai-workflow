@@ -5,7 +5,17 @@ import type {
   PullRequest,
   PRComment,
   CheckRunResult,
+  ReviewPullRequest,
+  PRFile,
+  PRCommitInfo,
+  CheckRunRef,
+  CheckRunCreateInput,
+  CheckRunUpdateInput,
+  CheckRunAnnotation,
+  ExistingReviewComment,
+  ReviewCommentInput,
 } from "./types.js";
+import { NotSupportedError } from "./types.js";
 
 // Minimal shapes for gitbeaker responses we touch. Declared locally so we do
 // not depend on gitbeaker's deep generic return types, which have changed
@@ -319,5 +329,49 @@ export class GitLabAdapter implements VCSAdapter {
   async getPRConflictStatus(prId: number): Promise<boolean> {
     const mr = await this.gl.MergeRequests.show(this.projectId, prId);
     return (mr as { has_conflicts?: boolean }).has_conflicts === true;
+  }
+
+  async getPullRequest(_prNumber: number): Promise<ReviewPullRequest> {
+    throw new NotSupportedError("getPullRequest");
+  }
+
+  async listPRFiles(_prNumber: number): Promise<PRFile[]> {
+    throw new NotSupportedError("listPRFiles");
+  }
+
+  async getPRDiff(_prNumber: number): Promise<string> {
+    throw new NotSupportedError("getPRDiff");
+  }
+
+  async getFileContentAtRef(_path: string, _ref: string): Promise<string | null> {
+    throw new NotSupportedError("getFileContentAtRef");
+  }
+
+  async listPRCommits(_prNumber: number): Promise<PRCommitInfo[]> {
+    throw new NotSupportedError("listPRCommits");
+  }
+
+  async listCheckRunsForRef(_ref: string): Promise<CheckRunRef[]> {
+    throw new NotSupportedError("listCheckRunsForRef");
+  }
+
+  async createCheckRun(_input: CheckRunCreateInput): Promise<CheckRunRef> {
+    throw new NotSupportedError("createCheckRun");
+  }
+
+  async updateCheckRun(_checkRunId: number, _input: CheckRunUpdateInput): Promise<CheckRunRef> {
+    throw new NotSupportedError("updateCheckRun");
+  }
+
+  async listCheckRunAnnotations(_checkRunId: number): Promise<CheckRunAnnotation[]> {
+    throw new NotSupportedError("listCheckRunAnnotations");
+  }
+
+  async listExistingReviewComments(_prNumber: number): Promise<ExistingReviewComment[]> {
+    throw new NotSupportedError("listExistingReviewComments");
+  }
+
+  async createReview(_prNumber: number, _comments: ReviewCommentInput[], _body: string): Promise<void> {
+    throw new NotSupportedError("createReview");
   }
 }

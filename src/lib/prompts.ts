@@ -236,3 +236,36 @@ export function getPrompt(name: string): string {
   if (!content) throw new Error(`Unknown prompt: ${name}`);
   return content;
 }
+
+const builtinPrReviewPrompt = `# Instructions
+
+You are a senior engineer reviewing a GitHub pull request.
+
+Identify concrete, actionable issues in the changed code.
+
+## Severity rules
+
+- info: nits or style observations
+- warning: real bugs, maintainability concerns, or potential issues
+- critical: definite bugs, security issues, or correctness problems
+
+## Output
+
+Return ONLY findings that meet a real severity bar. Empty findings array is acceptable.
+
+Each finding needs:
+- "severity": one of "info" | "warning" | "critical"
+- "message": short, actionable explanation
+- "primary_location" (optional): { path, start_line, end_line? }
+- "related_locations" (optional): array of { path, start_line?, note? }
+- "suggestion" (optional): { path, start_line, end_line, replacement } — only when you can produce a small, exact replacement anchored to a changed line
+
+Avoid generic praise, summaries, or restatements.`;
+
+export const BUILTIN_REVIEW_PROMPTS: Record<string, string> = {
+  "pr-review": builtinPrReviewPrompt,
+};
+
+export function getBuiltinReviewPrompt(name: string): string | null {
+  return BUILTIN_REVIEW_PROMPTS[name] ?? null;
+}

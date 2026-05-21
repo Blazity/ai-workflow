@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { GitLabAdapter } from "./gitlab.js";
+import { NotSupportedError } from "./types.js";
 
 const mockBranches = {
   create: vi.fn(),
@@ -396,6 +397,34 @@ describe("GitLabAdapter", () => {
       const adapter = glAdapter();
       const hasConflicts = await adapter.getPRConflictStatus(42);
       expect(hasConflicts).toBe(false);
+    });
+  });
+
+  describe("review pipeline", () => {
+    it.each<[string, (a: GitLabAdapter) => Promise<unknown>]>([
+      ["getPullRequest", (a) => a.getPullRequest(1)],
+      ["listPRFiles", (a) => a.listPRFiles(1)],
+      ["getPRDiff", (a) => a.getPRDiff(1)],
+      ["getFileContentAtRef", (a) => a.getFileContentAtRef("foo.ts", "sha")],
+      ["listPRCommits", (a) => a.listPRCommits(1)],
+      ["listCheckRunsForRef", (a) => a.listCheckRunsForRef("sha")],
+      [
+        "createCheckRun",
+        (a) =>
+          a.createCheckRun({
+            name: "test",
+            head_sha: "sha",
+            external_id: "ext",
+            status: "queued",
+          }),
+      ],
+      ["updateCheckRun", (a) => a.updateCheckRun(1, { status: "completed" })],
+      ["listCheckRunAnnotations", (a) => a.listCheckRunAnnotations(1)],
+      ["listExistingReviewComments", (a) => a.listExistingReviewComments(1)],
+      ["createReview", (a) => a.createReview(1, [], "body")],
+    ])("%s throws NotSupportedError", async (_name, invoke) => {
+      const adapter = glAdapter();
+      await expect(invoke(adapter)).rejects.toThrow(NotSupportedError);
     });
   });
 });

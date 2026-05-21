@@ -1,0 +1,77 @@
+version: 1
+
+review:
+  # Dark by default — set to true to enable the review pipeline.
+  enabled: false
+
+  scope:
+    mode: label
+    label: ai-review
+
+  triggers:
+    - opened
+    - synchronize
+    - reopened
+    - labeled
+
+  default_ignore:
+    - "**/dist/**"
+    - "**/build/**"
+    - "**/coverage/**"
+    - "**/vendor/**"
+    - "**/*.generated.*"
+    - "**/*.lock"
+    - "pnpm-lock.yaml"
+    - "package-lock.json"
+
+  limits:
+    max_changed_files: 25
+    max_total_diff_bytes: 80000
+    max_file_content_bytes: 30000
+    max_check_annotations: 50
+    max_review_comments: 10
+    max_suggestions: 5
+
+  checks:
+    - id: complexity
+      kind: complexity
+      name: "AI / Complexity"
+      enabled: true
+      blocking: false
+      fail_on: critical
+      params:
+        files: "**/*.{ts,tsx,js,jsx}"
+        ignore:
+          - "**/*.test.ts"
+          - "**/*.test.tsx"
+        max_cyclomatic: 10
+
+    # Optional AI review — keep disabled until you configure the prompt source.
+    # - id: style-per-file
+    #   kind: ai_review
+    #   name: "AI / Style"
+    #   enabled: false
+    #   blocking: false
+    #   fail_on: warning
+    #   comments:
+    #     enabled: true
+    #     severity_threshold: warning
+    #     suggestions: true
+    #     suggestions_threshold: warning
+    #   cache:
+    #     mode: per_file_content_hash
+    #     reuse_previous_annotations: true
+    #   params:
+    #     mode: per_file
+    #     model: claude-sonnet-4-5
+    #     prompt:
+    #       source: builtin
+    #       name: pr-review
+    #     data:
+    #       - file_diff
+    #       - file_content
+    #     limits:
+    #       max_files: 15
+    #       max_file_diff_bytes: 12000
+    #       max_file_content_bytes: 20000
+    #       max_findings: 20

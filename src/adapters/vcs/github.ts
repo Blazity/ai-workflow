@@ -1,7 +1,21 @@
 import { FatalError } from "workflow";
 import type { Octokit } from "@octokit/rest";
 import { buildOctokit, type GitHubAppAuth } from "../../lib/github-auth.js";
-import type { VCSAdapter, PullRequest, PRComment, CheckRunResult } from "./types.js";
+import type {
+  VCSAdapter,
+  PullRequest,
+  PRComment,
+  CheckRunResult,
+  ReviewPullRequest,
+  PRFile,
+  PRCommitInfo,
+  CheckRunRef,
+  CheckRunCreateInput,
+  CheckRunUpdateInput,
+  CheckRunAnnotation,
+  ExistingReviewComment,
+  ReviewCommentInput,
+} from "./types.js";
 
 export interface GitHubConfig {
   auth: GitHubAppAuth;
@@ -281,4 +295,260 @@ export class GitHubAdapter implements VCSAdapter {
     const pr = data[0];
     return { id: pr.number, url: pr.html_url, branch: pr.head.ref };
   }
+
+  async getPullRequest(prNumber: number): Promise<ReviewPullRequest> {
+    const { data } = await this.octokit.pulls.get({
+      ...this.ownerRepo,
+      pull_number: prNumber,
+    });
+    return {
+      owner: this.config.owner,
+      repo: this.config.repo,
+      number: data.number,
+      url: data.html_url,
+      base: { ref: data.base.ref, sha: data.base.sha },
+      head: { ref: data.head.ref, sha: data.head.sha },
+      labels: data.labels.map((l) => l.name).filter((n): n is string => Boolean(n)),
+      title: data.title,
+      body: data.body ?? null,
+      draft: data.draft ?? false,
+      user: data.user?.login ?? null,
+    };
+  }
+
+  async listPRFiles(prNumber: number): Promise<PRFile[]> {
+    const files = await this.octokit.paginate(this.octokit.pulls.listFiles, {
+      ...this.ownerRepo,
+      pull_number: prNumber,
+      per_page: 100,
+    });
+    return files.map((f) => ({
+      path: f.filename,
+      previous_path: f.previous_filename,
+      status: f.status as PRFile["status"],
+      additions: f.additions,
+      deletions: f.deletions,
+      patch: f.patch,
+      changed_line_ranges: parseChangedLineRangesFromPatch(f.patch),
+    }));
+  }
+
+  async getPRDiff(prNumber: number): Promise<string> {
+    const { data } = await this.octokit.pulls.get({
+      ...this.ownerRepo,
+      pull_number: prNumber,
+      mediaType: { format: "diff" },
+    });
+    if (typeof data !== "string") {
+      throw new Error(`Expected raw diff string from GitHub, got ${typeof data}`);
+    }
+    return data;
+  }
+
+  async getFileContentAtRef(path: string, ref: string): Promise<string | null> {
+    try {
+      const { data } = await this.octokit.repos.getContent({
+        ...this.ownerRepo,
+        path,
+        ref,
+      });
+      if (Array.isArray(data) || data.type !== "file") return null;
+      return Buffer.from(data.content, "base64").toString("utf8");
+    } catch (err: any) {
+      if (err.status === 404) return null;
+      throw err;
+    }
+  }
+
+  async listPRCommits(prNumber: number): Promise<PRCommitInfo[]> {
+    const commits = await this.octokit.paginate(this.octokit.pulls.listCommits, {
+      ...this.ownerRepo,
+      pull_number: prNumber,
+      per_page: 100,
+    });
+    return commits.map((c) => ({
+      sha: c.sha,
+      message: c.commit.message,
+      author: c.author?.login ?? c.commit.author?.name ?? null,
+      date: c.commit.author?.date ?? null,
+    }));
+  }
+
+  async listCheckRunsForRef(ref: string): Promise<CheckRunRef[]> {
+    const checks = await this.octokit.paginate(this.octokit.checks.listForRef, {
+      ...this.ownerRepo,
+      ref,
+      per_page: 100,
+    });
+    return checks.map((c) => ({
+      id: c.id,
+      external_id: c.external_id ?? null,
+      name: c.name,
+      head_sha: c.head_sha,
+      status: c.status as CheckRunRef["status"],
+      conclusion: c.conclusion ?? null,
+      output_text: c.output?.text ?? null,
+    }));
+  }
+
+  async createCheckRun(input: CheckRunCreateInput): Promise<CheckRunRef> {
+    const { data } = await this.octokit.checks.create({
+      ...this.ownerRepo,
+      name: input.name,
+      head_sha: input.head_sha,
+      external_id: input.external_id,
+      status: input.status,
+      started_at: input.started_at,
+      completed_at: input.completed_at,
+      conclusion: input.conclusion,
+      output: input.output,
+    });
+    return {
+      id: data.id,
+      external_id: data.external_id ?? null,
+      name: data.name,
+      head_sha: data.head_sha,
+      status: data.status as CheckRunRef["status"],
+      conclusion: data.conclusion ?? null,
+      output_text: data.output?.text ?? null,
+    };
+  }
+
+  async updateCheckRun(checkRunId: number, input: CheckRunUpdateInput): Promise<CheckRunRef> {
+    const { data } = await this.octokit.checks.update({
+      ...this.ownerRepo,
+      check_run_id: checkRunId,
+      status: input.status,
+      started_at: input.started_at,
+      completed_at: input.completed_at,
+      conclusion: input.conclusion,
+      output: input.output,
+    });
+    return {
+      id: data.id,
+      external_id: data.external_id ?? null,
+      name: data.name,
+      head_sha: data.head_sha,
+      status: data.status as CheckRunRef["status"],
+      conclusion: data.conclusion ?? null,
+      output_text: data.output?.text ?? null,
+    };
+  }
+
+  async listCheckRunAnnotations(checkRunId: number): Promise<CheckRunAnnotation[]> {
+    const annotations = await this.octokit.paginate(this.octokit.checks.listAnnotations, {
+      ...this.ownerRepo,
+      check_run_id: checkRunId,
+      per_page: 100,
+    });
+    return annotations.map((a) => ({
+      path: a.path,
+      start_line: a.start_line,
+      end_line: a.end_line,
+      start_column: a.start_column ?? undefined,
+      end_column: a.end_column ?? undefined,
+      annotation_level: a.annotation_level as CheckRunAnnotation["annotation_level"],
+      message: a.message ?? "",
+      title: a.title ?? undefined,
+      raw_details: a.raw_details ?? undefined,
+    }));
+  }
+
+  async listExistingReviewComments(prNumber: number): Promise<ExistingReviewComment[]> {
+    const comments = await this.octokit.paginate(this.octokit.pulls.listReviewComments, {
+      ...this.ownerRepo,
+      pull_number: prNumber,
+      per_page: 100,
+    });
+    return comments.map((c) => ({
+      id: c.id,
+      path: c.path ?? null,
+      line: c.line ?? null,
+      body: c.body,
+      user: c.user?.login ?? null,
+    }));
+  }
+
+  async createReview(prNumber: number, comments: ReviewCommentInput[], body: string): Promise<void> {
+    await this.octokit.pulls.createReview({
+      ...this.ownerRepo,
+      pull_number: prNumber,
+      event: "COMMENT",
+      body,
+      comments: comments.map((c) => ({
+        path: c.path,
+        line: c.line,
+        side: c.side ?? "RIGHT",
+        body: c.body,
+      })),
+    });
+  }
+}
+
+export function buildCheckRunExternalId(configHash: string, checkId: string, headSha: string): string {
+  return `ai-workflow:${configHash}:${checkId}:${headSha}`;
+}
+
+export function parseChangedLineRangesFromPatch(
+  patch: string | undefined,
+): Array<{ start: number; end: number }> {
+  if (!patch) return [];
+
+  const ranges: Array<{ start: number; end: number }> = [];
+  const hunkHeaderRe = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/;
+
+  const lines = patch.split("\n");
+  let i = 0;
+
+  while (i < lines.length) {
+    const headerMatch = hunkHeaderRe.exec(lines[i]);
+    if (!headerMatch) {
+      i++;
+      continue;
+    }
+
+    let newLineNum = parseInt(headerMatch[1], 10);
+    i++;
+
+    let rangeStart: number | null = null;
+    let rangeEnd: number | null = null;
+
+    while (i < lines.length && !hunkHeaderRe.test(lines[i])) {
+      const line = lines[i];
+
+      if (line.startsWith("+")) {
+        // addition: part of the new file
+        if (rangeStart === null) {
+          rangeStart = newLineNum;
+        }
+        rangeEnd = newLineNum;
+        newLineNum++;
+      } else if (line.startsWith("-")) {
+        // deletion: does not exist in new file — flush any open range
+        if (rangeStart !== null && rangeEnd !== null) {
+          ranges.push({ start: rangeStart, end: rangeEnd });
+          rangeStart = null;
+          rangeEnd = null;
+        }
+        // do NOT advance newLineNum for deletions
+      } else {
+        // context line: flush any open range
+        if (rangeStart !== null && rangeEnd !== null) {
+          ranges.push({ start: rangeStart, end: rangeEnd });
+          rangeStart = null;
+          rangeEnd = null;
+        }
+        newLineNum++;
+      }
+
+      i++;
+    }
+
+    // flush trailing range at end of hunk
+    if (rangeStart !== null && rangeEnd !== null) {
+      ranges.push({ start: rangeStart, end: rangeEnd });
+    }
+  }
+
+  return ranges;
 }

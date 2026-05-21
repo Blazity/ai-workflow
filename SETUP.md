@@ -17,7 +17,8 @@ End-to-end instructions for deploying ai-workflow to your own Vercel account. Re
 9. [Smoke test the deployment](#9-smoke-test-the-deployment)
 10. [CI / GitHub Actions](#10-ci--github-actions)
 11. [Optional integrations](#11-optional-integrations)
-12. [Troubleshooting](#12-troubleshooting)
+12. [PR Review Pipeline (v1)](#12-pr-review-pipeline-v1)
+13. [Troubleshooting](#13-troubleshooting)
 
 ---
 
@@ -402,7 +403,102 @@ Flip `VCS_KIND=gitlab` and provide `GITLAB_TOKEN` + `GITLAB_PROJECT_ID`. For sel
 
 ---
 
-## 12. Troubleshooting
+## 12. PR Review Pipeline (v1)
+
+The PR Review Pipeline runs configured checks on every pull request event and posts results as GitHub Check Runs plus inline review comments.
+
+**This feature is disabled by default.** Follow the dark-launch sequence below before enabling it in production.
+
+### Where the config lives
+
+Review behavior is controlled by `workflow.config.yaml` at the root of the **ai-workflow deployment repo** — not the target repo being reviewed. v1 is deployment-owned config: a single config file applies to all repos the App is installed on.
+
+The config file path can be overridden with the `WORKFLOW_CONFIG_PATH` env var (absolute path or relative to the process working directory).
+
+### Required env vars
+
+| Variable                | Required when           | Purpose                                              |
+| ----------------------- | ----------------------- | ---------------------------------------------------- |
+| `GITHUB_WEBHOOK_SECRET` | `review.enabled: true`  | Verifies HMAC-SHA256 signatures on incoming webhooks |
+| `WORKFLOW_CONFIG_PATH`  | optional                | Override config path (defaults to `workflow.config.yaml`) |
+
+Generate the webhook secret:
+
+```bash
+openssl rand -hex 32
+```
+
+Set it in Vercel and in the GitHub App webhook settings (see [docs/GITHUB-APP-SETUP.md](./docs/GITHUB-APP-SETUP.md)).
+
+### Dark launch
+
+Follow this sequence to roll out safely:
+
+1. **Default is off.** `review.enabled: false` in `workflow.config.yaml` makes the webhook handler return `200 ignored` immediately — no checks run, no GitHub API calls are made.
+
+2. **Enable with label scoping.** Set `review.enabled: true`, `scope.mode: label`, `scope.label: ai-review`. This limits review runs to PRs that carry the `ai-review` label — your smoke-test surface is a single PR.
+
+   ```yaml
+   review:
+     enabled: true
+     scope:
+       mode: label
+       label: ai-review
+   ```
+
+3. **Test on one PR.** Add the `ai-review` label to a low-stakes PR. Watch:
+   - Vercel runtime logs — the webhook fires and the review run starts.
+   - The PR on GitHub — a Check Run named `AI / Complexity` (or whatever your first check is) should appear within seconds.
+   - If you have comment posting enabled, inline comments appear on the Files tab.
+
+4. **Widen to all PRs.** Once the single-PR test looks clean, flip `scope.mode: all` and redeploy.
+
+   ```yaml
+   scope:
+     mode: all
+   ```
+
+### Sample config
+
+The `workflow.config.yaml` at the project root ships with a safe starting point — one complexity check enabled, AI review commented out, dark by default:
+
+```yaml
+version: 1
+
+review:
+  enabled: false   # flip to true to activate
+
+  scope:
+    mode: label
+    label: ai-review
+
+  triggers:
+    - opened
+    - synchronize
+    - reopened
+    - labeled
+
+  checks:
+    - id: complexity
+      kind: complexity
+      name: "AI / Complexity"
+      enabled: true
+      blocking: false
+      fail_on: critical
+      params:
+        files: "**/*.{ts,tsx,js,jsx}"
+        max_cyclomatic: 10
+```
+
+See `workflow.config.yaml` for the full file including `default_ignore`, `limits`, and the commented-out `ai_review` check template.
+
+### GitHub App setup
+
+The PR Review Pipeline requires two permission and webhook changes to the GitHub App registered in step 2.2. See [docs/GITHUB-APP-SETUP.md — PR Review Pipeline section](./docs/GITHUB-APP-SETUP.md) for the step-by-step.
+
+---
+
+## 13. Troubleshooting
 
 | Symptom                                               | Likely cause                                                                                                                            | Fix                                                                                                                                                                     |
 | ----------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
