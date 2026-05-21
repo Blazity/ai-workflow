@@ -4,11 +4,12 @@
   "type": "module",
   "scripts": {
     "dev": "rm -rf .nitro/workflow && nitro dev",
-    "build": "rm -rf .nitro/workflow && NODE_OPTIONS=--max-old-space-size=8192 nitro build",
+    "build": "pnpm validate:pre-sandbox && rm -rf .nitro/workflow && NODE_OPTIONS=--max-old-space-size=8192 nitro build",
     "preview": "nitro preview",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
+    "validate:pre-sandbox": "tsx scripts/validate-pre-sandbox-config.ts",
     "build:arthur-tracer": "node scripts/build-arthur-tracer.mjs",
     "setup:arthur-prompts": "tsx scripts/setup-arthur-prompts.ts",
     "test:e2e": "pnpm test:e2e:agent && pnpm test:e2e:orchestration && pnpm test:e2e:capacity",
@@ -17,6 +18,7 @@
     "test:e2e:capacity": "vitest run --config e2e/vitest.e2e.config.ts --project capacity"
   },
   "dependencies": {
+    "@ai-sdk/anthropic": "^2.0.79",
     "@chat-adapter/slack": "^4.20.2",
     "@gitbeaker/rest": "^43.8.0",
     "@octokit/auth-app": "^8.2.0",
@@ -25,11 +27,13 @@
     "@upstash/redis": "^1.37.0",
     "@vercel/functions": "^3.5.0",
     "@vercel/sandbox": "^1.8.1",
+    "ai": "^5.0.190",
     "chat": "^4.20.2",
     "h3": "^1",
     "nitropack": "^2",
     "pino": "^10.3.1",
     "workflow": "latest",
+    "yaml": "^2.9.0",
     "zod": "^3.25.76"
   },
   "devDependencies": {

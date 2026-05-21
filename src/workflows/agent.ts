@@ -8,6 +8,50 @@ import type { TicketAttachment } from "../adapters/issue-tracker/types.js";
 import type { TicketEvent } from "../adapters/messaging/types.js";
 import type { DownloadedAttachment } from "../sandbox/attachments.js";
 
+type PreSandboxPromptTarget = "research" | "implementation" | "review";
+
+interface PreSandboxPromptAddition {
+  target: PreSandboxPromptTarget[];
+  title: string;
+  content: string;
+}
+
+interface GroupedPreSandboxPromptAdditions {
+  research?: PreSandboxPromptAddition[];
+  implementation?: PreSandboxPromptAddition[];
+  review?: PreSandboxPromptAddition[];
+}
+
+interface PreSandboxPhaseContext {
+  ticket: {
+    identifier: string;
+    title: string;
+    description: string;
+    acceptanceCriteria: string;
+    comments: Array<{ author: string; body: string; createdAt?: string }>;
+    labels: string[];
+  };
+  run: {
+    branchName: string;
+    isNewTicket: boolean;
+    hasExistingPr: boolean;
+    hasMergeConflict: boolean;
+  };
+}
+
+type PreSandboxPhaseResult =
+  | {
+      status: "continue";
+      promptAdditions?: GroupedPreSandboxPromptAdditions;
+    }
+  | {
+      status: "halt";
+      outcome: "needs_clarification" | "failed";
+      message: string;
+      questions?: string[];
+      promptAdditions?: GroupedPreSandboxPromptAdditions;
+    };
+
 // --- Step Functions ---
 
 async function fetchAndValidateTicket(ticketId: string, columnAi: string) {
@@ -73,6 +117,15 @@ async function fetchAttachments(
   return result;
 }
 fetchAttachments.maxRetries = 0;
+
+async function runPreSandboxPhaseStep(
+  context: PreSandboxPhaseContext,
+): Promise<PreSandboxPhaseResult> {
+  "use step";
+  const { runPreSandboxPhase } = await import("../pre-sandbox/runner.js");
+  return runPreSandboxPhase(context);
+}
+runPreSandboxPhaseStep.maxRetries = 0;
 
 async function writeAttachments(
   sandboxId: string,
@@ -507,6 +560,53 @@ export async function agentWorkflow(ticketId: string) {
 
     const downloadedAttachments = await fetchAttachments(ticket.identifier, ticket.attachments);
 
+    const ticketData = {
+      identifier: ticket.identifier,
+      title: ticket.title,
+      description: ticket.description,
+      acceptanceCriteria: ticket.acceptanceCriteria,
+      comments: ticket.comments,
+      labels: ticket.labels,
+    };
+
+    const preSandboxResult = await runPreSandboxPhaseStep({
+      ticket: ticketData,
+      run: {
+        branchName,
+        isNewTicket: !prContext,
+        hasExistingPr: Boolean(prContext),
+        hasMergeConflict: prContext?.hasConflicts ?? false,
+      },
+    });
+
+    const preSandboxAdditions = preSandboxResult.promptAdditions ?? {};
+    if (preSandboxResult.status === "halt") {
+      await unregisterRun(ticket.identifier);
+
+      if (preSandboxResult.outcome === "needs_clarification") {
+        const questions = preSandboxResult.questions?.filter((q) => q.trim().length > 0) ?? [];
+        const commentUrl = await postClarificationAndMoveBack(
+          ticketId,
+          questions.length > 0 ? questions : [preSandboxResult.message],
+          env.COLUMN_BACKLOG,
+        );
+        await notifyTicket(ticket.identifier, {
+          kind: "needs_clarification",
+          commentUrl: commentUrl ?? undefined,
+          usageReport: usageReportOrUndefined(),
+        });
+        return;
+      }
+
+      await moveTicket(ticketId, env.COLUMN_BACKLOG);
+      await notifyTicket(ticket.identifier, {
+        kind: "failed",
+        reason: `pre-sandbox: ${preSandboxResult.message}`,
+        usageReport: usageReportOrUndefined(),
+      });
+      return;
+    }
+
     // One Arthur task per run: first run = ticket identifier, re-runs = identifier.N
     const arthurTaskId = await ensureArthurTaskForTicket(ticket.identifier);
 
@@ -534,14 +634,6 @@ export async function agentWorkflow(ticketId: string) {
       // ========== PHASE 1: Research & Plan ==========
       await setCommitGuardStep(sandboxId, agentKind, false);
 
-      const ticketData = {
-        identifier: ticket.identifier,
-        title: ticket.title,
-        description: ticket.description,
-        acceptanceCriteria: ticket.acceptanceCriteria,
-        comments: ticket.comments,
-      };
-
       const { paths: researchPaths, script: researchScript } =
         await planPhaseStep(agentKind, "research", activeModel);
       const researchInput = assembleResearchPlanContext({
@@ -552,6 +644,7 @@ export async function agentWorkflow(ticketId: string) {
         checkResults: prContext?.checkResults,
         hasConflicts: prContext?.hasConflicts,
         attachments: downloadedAttachments,
+        preSandboxAdditions: preSandboxAdditions.research,
       });
 
       await writeAndStartPhase(
@@ -625,6 +718,7 @@ export async function agentWorkflow(ticketId: string) {
         prompt: prompts.implement,
         researchPlanMarkdown,
         attachments: downloadedAttachments,
+        preSandboxAdditions: preSandboxAdditions.implementation,
       });
 
       await writeAndStartPhase(
@@ -683,6 +777,7 @@ export async function agentWorkflow(ticketId: string) {
           prompt: prompts.review,
           researchPlanMarkdown,
           attachments: downloadedAttachments,
+          preSandboxAdditions: preSandboxAdditions.review,
         });
 
         await writeAndStartPhase(
