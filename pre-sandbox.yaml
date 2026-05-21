@@ -3,4 +3,12 @@ preSandbox:
     newTicket: true
     existingPr: true
     mergeConflict: true
-  steps: []
+  steps:
+    - uses: require-title-length
+      name: Require Title Length
+      onFailure: fail
+      timeoutMs: 5000
+      with:
+        input:
+          ticket:
+            - title

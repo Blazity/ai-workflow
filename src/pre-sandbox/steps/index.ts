@@ -1,8 +1,8 @@
-import { ticketComplexityCheckStep } from "./ticket-complexity-check.js";
+import { requireTitleLengthStep } from "./require-title-length.js";
 import type { PreSandboxStepRegistry } from "../types.js";
 
 export const preSandboxStepRegistry = {
-  "ticket-complexity-check": ticketComplexityCheckStep,
+  "require-title-length": requireTitleLengthStep,
 } satisfies PreSandboxStepRegistry;
 
 export type PreSandboxStepId = keyof typeof preSandboxStepRegistry;

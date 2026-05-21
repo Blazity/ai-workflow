@@ -90,21 +90,21 @@ preSandbox:
     ).toThrow(/unknown pre-sandbox step "unknown-step"/);
   });
 
-  it("accepts the registered showcase step id", () => {
+  it("accepts a registered step id", () => {
     expect(
       parsePreSandboxConfig(
         validConfig({
           steps: [
             {
-              uses: "ticket-complexity-check",
-              name: "Ticket Complexity Check",
-              timeoutMs: 120000,
+              uses: "require-title-length",
+              name: "Require Title Length",
+              timeoutMs: 5000,
               onFailure: "fail",
             },
           ],
         }),
       ).preSandbox.steps[0]?.uses,
-    ).toBe("ticket-complexity-check");
+    ).toBe("require-title-length");
   });
 
   it.each([
@@ -117,7 +117,7 @@ preSandbox:
         validConfig({
           steps: [
             {
-              uses: "ticket-complexity-check",
+              uses: "require-title-length",
               onFailure: "fail",
               ...override,
             },
