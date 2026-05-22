@@ -281,4 +281,87 @@ export class GitHubAdapter implements VCSAdapter {
     const pr = data[0];
     return { id: pr.number, url: pr.html_url, branch: pr.head.ref };
   }
+
+  async createCheckRun(name: string, headSha: string): Promise<number> {
+    const { data } = await this.octokit.checks.create({
+      ...this.ownerRepo,
+      name,
+      head_sha: headSha,
+      status: "in_progress",
+      started_at: new Date().toISOString(),
+    });
+    return data.id;
+  }
+
+  async updateCheckRun(
+    id: number,
+    update: import("./types.js").CheckRunUpdate,
+  ): Promise<void> {
+    const baseParams = {
+      ...this.ownerRepo,
+      check_run_id: id,
+      status: update.status,
+      ...(update.conclusion ? { conclusion: update.conclusion } : {}),
+      ...(update.status === "completed"
+        ? { completed_at: new Date().toISOString() }
+        : {}),
+    };
+
+    const output =
+      update.summary !== undefined || update.details !== undefined
+        ? {
+            title: update.summary?.slice(0, 200) ?? "",
+            summary: update.summary ?? "",
+            ...(update.details ? { text: update.details } : {}),
+          }
+        : undefined;
+
+    const annotations = update.annotations ?? [];
+    if (annotations.length === 0) {
+      await this.octokit.checks.update({
+        ...baseParams,
+        ...(output ? { output } : {}),
+      });
+      return;
+    }
+
+    // GitHub's `output` is fully overwritten on each update. Carry title +
+    // summary + text through every batch so subsequent calls don't erase the
+    // details body set by the first.
+    const outputBase = {
+      title: output?.title ?? "",
+      summary: output?.summary ?? "",
+      ...(output?.text ? { text: output.text } : {}),
+    };
+
+    for (let i = 0; i < annotations.length; i += 50) {
+      const batch = annotations.slice(i, i + 50);
+      const isFirst = i === 0;
+      await this.octokit.checks.update({
+        ...this.ownerRepo,
+        // Only the first batch flips status / conclusion / completed_at.
+        ...(isFirst
+          ? baseParams
+          : { check_run_id: id, status: update.status }),
+        output: {
+          ...outputBase,
+          annotations: batch.map(mapAnnotation),
+        },
+      });
+    }
+  }
+}
+
+function mapAnnotation(a: import("./types.js").CheckRunAnnotation) {
+  return {
+    path: a.path,
+    start_line: a.startLine,
+    end_line: a.endLine,
+    ...(a.startColumn !== undefined ? { start_column: a.startColumn } : {}),
+    ...(a.endColumn !== undefined ? { end_column: a.endColumn } : {}),
+    annotation_level: a.annotationLevel,
+    message: a.message,
+    ...(a.title ? { title: a.title } : {}),
+    ...(a.rawDetails ? { raw_details: a.rawDetails } : {}),
+  };
 }
