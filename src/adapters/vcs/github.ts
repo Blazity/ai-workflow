@@ -1,7 +1,7 @@
 import { FatalError } from "workflow";
 import type { Octokit } from "@octokit/rest";
 import { buildOctokit, type GitHubAppAuth } from "../../lib/github-auth.js";
-import type { VCSAdapter, PullRequest, PRComment, CheckRunResult } from "./types.js";
+import type { VCSAdapter, CheckRunCapableVCS, PullRequest, PRComment, CheckRunResult } from "./types.js";
 
 export interface GitHubConfig {
   auth: GitHubAppAuth;
@@ -10,7 +10,7 @@ export interface GitHubConfig {
   baseBranch: string;
 }
 
-export class GitHubAdapter implements VCSAdapter {
+export class GitHubAdapter implements VCSAdapter, CheckRunCapableVCS {
   private octokit: Octokit;
 
   constructor(private config: GitHubConfig) {
