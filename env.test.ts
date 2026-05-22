@@ -27,6 +27,7 @@ describe("env", () => {
     JOB_TIMEOUT_MS: "1800000",
     AI_WORKFLOW_KV_REST_API_URL: "https://fake.upstash.io",
     AI_WORKFLOW_KV_REST_API_TOKEN: "fake-token",
+    GITHUB_WEBHOOK_SECRET: "github-webhook-secret",
   };
 
   let originalEnv: NodeJS.ProcessEnv;

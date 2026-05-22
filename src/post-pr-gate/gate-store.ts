@@ -115,17 +115,73 @@ export class GateStore {
     await this.redis.set(this.currentKey(repo, pr), value, { ex: TTL_SECONDS });
   }
 
-  async appendCheckRunIds(
+  /**
+   * Atomically append check-run IDs to the current pointer, but only if the
+   * pointer's headSha still matches `expectedHeadSha`. Returns true if the
+   * append happened, false if the key is missing, malformed, or superseded by
+   * a force-push.
+   *
+   * headSha (not runId) is the guard: the webhook may not have written the
+   * real runId yet when the workflow appends. The headSha is set BEFORE
+   * `start()` in the webhook, so it's always present by the time the workflow
+   * reaches this call. KEEPTTL preserves the 14-day TTL set by `setCurrent`.
+   */
+  async appendCheckRunIdsForSha(
     repo: string,
     pr: number,
+    expectedHeadSha: string,
     ids: number[],
-  ): Promise<void> {
-    const current = await this.getCurrent(repo, pr);
-    if (!current) return;
-    await this.setCurrent(repo, pr, {
-      ...current,
-      checkRunIds: [...current.checkRunIds, ...ids],
-    });
+  ): Promise<boolean> {
+    if (ids.length === 0) return true;
+    const script = `
+local cur = redis.call("get", KEYS[1])
+if cur == false then return 0 end
+local ok, parsed = pcall(cjson.decode, cur)
+if not ok then return 0 end
+if parsed.headSha ~= ARGV[1] then return 0 end
+parsed.checkRunIds = parsed.checkRunIds or {}
+for i = 2, #ARGV do
+  parsed.checkRunIds[#parsed.checkRunIds + 1] = tonumber(ARGV[i])
+end
+redis.call("set", KEYS[1], cjson.encode(parsed), "KEEPTTL")
+return 1
+`;
+    const args = [expectedHeadSha, ...ids.map((id) => String(id))];
+    const res = await this.redis.eval(script, [this.currentKey(repo, pr)], args);
+    return res === 1;
+  }
+
+  /**
+   * Atomically set the `runId` field of the current pointer, but only if the
+   * pointer's headSha still matches `expectedHeadSha`. Returns true if the
+   * update happened, false if the key is missing or superseded.
+   *
+   * Used by the webhook to fill in the real runId AFTER `start()` returns,
+   * without stomping `checkRunIds` that the workflow may have already
+   * appended. KEEPTTL preserves the TTL from the prior `setCurrent`.
+   */
+  async updateRunIdIfHeadSha(
+    repo: string,
+    pr: number,
+    expectedHeadSha: string,
+    runId: string,
+  ): Promise<boolean> {
+    const script = `
+local cur = redis.call("get", KEYS[1])
+if cur == false then return 0 end
+local ok, parsed = pcall(cjson.decode, cur)
+if not ok then return 0 end
+if parsed.headSha ~= ARGV[1] then return 0 end
+parsed.runId = ARGV[2]
+redis.call("set", KEYS[1], cjson.encode(parsed), "KEEPTTL")
+return 1
+`;
+    const res = await this.redis.eval(
+      script,
+      [this.currentKey(repo, pr)],
+      [expectedHeadSha, runId],
+    );
+    return res === 1;
   }
 
   async clearCurrent(repo: string, pr: number): Promise<void> {

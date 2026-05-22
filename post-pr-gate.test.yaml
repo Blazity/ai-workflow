@@ -1,0 +1,14 @@
+postPrGate:
+  runOn:
+    botPrsOnly: true
+    draftPrs: false
+    baseBranches: []
+  steps:
+    - uses: pr-title-format
+      name: pr-title-format-strict
+      onFailure: fail
+      with:
+        pattern: '^(feat|fix): .+'
+    - uses: pr-title-format
+      name: pr-title-format-permissive
+      onFailure: continue

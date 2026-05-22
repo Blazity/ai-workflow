@@ -33,7 +33,8 @@ const postPrGateConfigSchema = z
   .strict();
 
 export function defaultPostPrGateConfigPath(): string {
-  return resolve(process.cwd(), "post-pr-gate.yaml");
+  return process.env.POST_PR_GATE_CONFIG_PATH
+    ?? resolve(process.cwd(), "post-pr-gate.yaml");
 }
 
 export function loadPostPrGateConfig(

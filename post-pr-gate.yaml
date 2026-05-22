@@ -1,0 +1,16 @@
+postPrGate:
+  runOn:
+    botPrsOnly: true
+    draftPrs: false
+    baseBranches: [] # empty = all base branches
+
+  steps:
+    # The `name` field becomes part of the GitHub Check Run name
+    # ("blazebot / <name>"). GitHub does NOT allow renaming check runs after
+    # creation. Pick a stable value.
+    - uses: pr-title-format
+      name: pr-title-format
+      onFailure: continue
+      # Override the default regex if your project uses a different convention.
+      # with:
+      #   pattern: '^(feat|fix): .+'
