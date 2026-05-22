@@ -1,4 +1,5 @@
 import { sleep } from "workflow";
+import { branchForTicket } from "../lib/branch-prefix.js";
 import type {
   AgentOutput, PhaseUsage, PhaseKind, PhaseArtifactPaths, ResearchResult, ReviewOutput,
 } from "../sandbox/agents/types.js";
@@ -541,7 +542,7 @@ export async function agentWorkflow(ticketId: string) {
   try {
     await notifyTicket(ticket.identifier, { kind: "started" });
 
-    const branchName = `blazebot/${ticket.identifier.toLowerCase()}`;
+    const branchName = branchForTicket(ticket.identifier);
 
     // Check for existing PR BEFORE creating/resetting the branch.
     // createFeatureBranch force-resets the branch to main's HEAD, which causes

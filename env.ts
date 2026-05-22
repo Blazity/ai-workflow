@@ -105,6 +105,7 @@ export const env = createEnv({
       .transform((v) => v === "true"),
 
     // Vercel (optional — auto via OIDC on Vercel)
+    VERCEL_ENV: z.string().min(1).optional(),
     VERCEL_TOKEN: z.string().min(1).optional(),
     VERCEL_TEAM_ID: z.string().min(1).optional(),
     VERCEL_PROJECT_ID: z.string().min(1).optional(),
@@ -114,6 +115,9 @@ export const env = createEnv({
 
     // Jira Webhook
     JIRA_WEBHOOK_SECRET: z.string().min(1).optional(),
+
+    // GitHub Webhook
+    GITHUB_WEBHOOK_SECRET: z.string().min(1),
 
     // Redis (run registry)
     AI_WORKFLOW_KV_REST_API_URL: z.string().url(),

@@ -124,6 +124,7 @@ export async function openPR(
   branch: string,
   title: string,
   body = "",
+  options?: { draft?: boolean },
 ): Promise<{ number: number; url: string }> {
   const { data } = await octokit.pulls.create({
     ...ownerRepo,
@@ -131,8 +132,17 @@ export async function openPR(
     base: "main",
     title,
     body,
+    ...(options?.draft !== undefined ? { draft: options.draft } : {}),
   });
   return { number: data.number, url: data.html_url };
+}
+
+export async function reopenPR(prNumber: number): Promise<void> {
+  await octokit.pulls.update({
+    ...ownerRepo,
+    pull_number: prNumber,
+    state: "open",
+  });
 }
 
 export async function getPRFiles(
@@ -196,4 +206,21 @@ export async function deleteFile(
   } catch {
     // File doesn't exist, nothing to delete
   }
+}
+
+export async function listCheckRuns(
+  headSha: string,
+): Promise<Array<{ id: number; name: string; status: string; conclusion: string | null }>> {
+  const { data } = await octokit.checks.listForRef({ ...ownerRepo, ref: headSha });
+  return data.check_runs.map((c) => ({
+    id: c.id,
+    name: c.name,
+    status: c.status,
+    conclusion: c.conclusion ?? null,
+  }));
+}
+
+export async function getPRHeadSha(prNumber: number): Promise<string> {
+  const { data } = await octokit.pulls.get({ ...ownerRepo, pull_number: prNumber });
+  return data.head.sha;
 }
