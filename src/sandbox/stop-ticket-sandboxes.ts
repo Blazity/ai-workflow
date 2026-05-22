@@ -1,7 +1,6 @@
 import { logger } from "../lib/logger.js";
+import { BRANCH_PREFIX } from "../lib/branch-prefix.js";
 import { getSandboxCredentials } from "./credentials.js";
-
-const BRANCH_PREFIX = "blazebot/";
 
 /**
  * Best-effort cleanup for leaked sandboxes after ticket cancellation.
