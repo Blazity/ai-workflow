@@ -13,11 +13,12 @@ End-to-end instructions for deploying ai-workflow to your own Vercel account. Re
 5. [Configure environment variables](#5-configure-environment-variables)
 6. [Deploy to Vercel](#6-deploy-to-vercel)
 7. [Register the Jira webhook](#7-register-the-jira-webhook)
-8. [Register the Slack slash command](#8-register-the-slack-slash-command)
-9. [Smoke test the deployment](#9-smoke-test-the-deployment)
-10. [CI / GitHub Actions](#10-ci--github-actions)
-11. [Optional integrations](#11-optional-integrations)
-12. [Troubleshooting](#12-troubleshooting)
+8. [Register the GitHub webhook (post-PR gate)](#8-register-the-github-webhook-post-pr-gate)
+9. [Register the Slack slash command](#9-register-the-slack-slash-command)
+10. [Smoke test the deployment](#10-smoke-test-the-deployment)
+11. [CI / GitHub Actions](#11-ci--github-actions)
+12. [Optional integrations](#12-optional-integrations)
+13. [Troubleshooting](#13-troubleshooting)
 
 ---
 
@@ -91,32 +92,33 @@ ai-workflow authenticates to Jira as an **Atlassian service account** — a mach
 
 **GitHub (GitHub App — required):**
 
-ai-workflow authenticates to GitHub via a **GitHub App**. The App scopes the bot to a single installation, commits as `<app-slug>[bot]`, and lets you rotate the private key without touching a human account. See [`.claude/skills/init-vcs/`](./.claude/skills/init-vcs/) for the full walkthrough — the short version:
+ai-workflow authenticates to GitHub via a **GitHub App**. The App scopes the bot to a single installation, commits as `<app-slug>[bot]`, and lets you rotate the private key without touching a human account. See [`docs/GITHUB-APP-SETUP.md`](./docs/GITHUB-APP-SETUP.md) for the full step-by-step walkthrough — the short version:
 
 1. Go to **https://github.com/settings/apps → New GitHub App**.
-2. Set **Webhook → Active** to off (ai-workflow drives via Jira, not GitHub events) and pick a name + homepage URL.
+2. Set **Webhook → Active** to **on**, set the URL to `https://<your-deployment>/webhooks/github` (placeholder ok pre-deploy), and generate a secret (`openssl rand -hex 32`) → `GITHUB_WEBHOOK_SECRET`. The post-PR gate verifies `X-Hub-Signature-256` on every delivery.
 3. Under **Repository permissions**, grant exactly:
 
-   | Permission    | Access       | Why                                       |
-   | ------------- | ------------ | ----------------------------------------- |
-   | Contents      | Read & write | Clone the repo, push commits              |
-   | Pull requests | Read & write | Create PRs, fetch PR data                 |
-   | Issues        | Read & write | PR review comments live on the issues API |
-   | Checks        | Read-only    | Read CI check results                     |
-   | Actions       | Read-only    | Read workflow run status                  |
-   | Metadata      | Read-only    | Mandatory, auto-included                  |
+   | Permission    | Access       | Why                                                                       |
+   | ------------- | ------------ | ------------------------------------------------------------------------- |
+   | Contents      | Read & write | Clone the repo, push commits                                              |
+   | Pull requests | Read & write | Create PRs, fetch PR data                                                 |
+   | Issues        | Read & write | PR review comments live on the issues API                                 |
+   | Checks        | Read & write | Read CI check results + create post-PR gate check runs                    |
+   | Actions       | Read-only    | Read workflow run status                                                  |
+   | Metadata      | Read-only    | Mandatory, auto-included                                                  |
 
    Leave every other permission at **No access**.
 
-4. Choose **Only on this account** for installation scope, create the app, then **Install App** on the target repo's owner and select that one repo.
-5. From the app settings page, capture:
+4. Under **Subscribe to events**, enable **Pull request** (drives the post-PR gate on `opened` / `synchronize` / `reopened`). Leave everything else unchecked.
+5. Choose **Only on this account** for installation scope, create the app, then **Install App** on the target repo's owner and select that one repo. If you change permissions later, every installed repo will need a one-click re-acceptance from a repo admin.
+6. From the app settings page, capture:
    - **App ID** → `GITHUB_APP_ID`
    - **Generate a private key** → download the `.pem`. Base64-encode the file contents (`base64 -i app.pem | tr -d '\n'`) → `GITHUB_APP_PRIVATE_KEY`.
    - From the **Installations** list, the numeric installation ID → `GITHUB_INSTALLATION_ID`.
-6. Note the target repo's `owner` and `name` → `GITHUB_OWNER`, `GITHUB_REPO`.
-7. Note the base branch (usually `main`) → `GITHUB_BASE_BRANCH`.
+7. Note the target repo's `owner` and `name` → `GITHUB_OWNER`, `GITHUB_REPO`.
+8. Note the base branch (usually `main`) → `GITHUB_BASE_BRANCH`.
 
-> The legacy `GITHUB_TOKEN` PAT path was removed — `VCS_KIND=github` now requires the App vars above. `env.ts` enforces this at boot.
+> The legacy `GITHUB_TOKEN` PAT path was removed — `VCS_KIND=github` now requires the App vars above. `env.ts` enforces this at boot, including `GITHUB_WEBHOOK_SECRET`.
 
 **GitLab:**
 
@@ -228,6 +230,7 @@ vercel env add JIRA_API_TOKEN production
 | `COLUMN_AI`, `COLUMN_AI_REVIEW`, `COLUMN_BACKLOG`                                                  | Board columns                                          |
 | `VCS_KIND`                                                                                         | `github` or `gitlab`                                   |
 | `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY`, `GITHUB_INSTALLATION_ID`, `GITHUB_OWNER`, `GITHUB_REPO` | If `VCS_KIND=github` (GitHub App auth)                 |
+| `GITHUB_WEBHOOK_SECRET`                                                                            | If `VCS_KIND=github` — signs `pull_request` webhook deliveries for the post-PR gate. Required in **every** environment (Production, Preview, Development) because the webhook fires on preview deployments too. Generate: `openssl rand -hex 32`. |
 | `GITLAB_TOKEN`, `GITLAB_PROJECT_ID`                                                                | If `VCS_KIND=gitlab`                                   |
 | `ANTHROPIC_API_KEY`                                                                                | If `AGENT_KIND=claude` (default)                       |
 | `CODEX_API_KEY` (or `CODEX_CHATGPT_OAUTH_TOKEN`)                                                   | If `AGENT_KIND=codex`                                  |
@@ -301,7 +304,25 @@ Verify by moving a test ticket into the AI column and watching the Vercel runtim
 
 ---
 
-## 8. Register the Slack slash command
+## 8. Register the GitHub webhook (post-PR gate)
+
+The post-PR gate runs configurable checks (e.g. PR title format) against every PR on the target repo and surfaces results as GitHub Check Runs on the head SHA. The webhook is what triggers it. See [`docs/post-pr-gate-spec.md`](./docs/post-pr-gate-spec.md) for the architecture.
+
+If you followed [`docs/GITHUB-APP-SETUP.md`](./docs/GITHUB-APP-SETUP.md) in step 2.2, the App is already configured with the right webhook URL, secret, permissions, and event subscription. This section is the post-deploy verification — and the place to fix things if any of the above were skipped.
+
+1. **Update the webhook URL** if you used a placeholder during App creation. In the App settings (`https://github.com/settings/apps/<your-app>` or via the org's developer settings), set **Webhook URL** to `https://<your-vercel-domain>/webhooks/github`.
+2. **Confirm the App has the right permissions and event subscription:**
+   - Repository permissions → **Checks: Read & write**
+   - Subscribe to events → **Pull request** (checked)
+3. **Re-accept on every installed repo** if you changed permissions or events after the initial install. A repo admin opens `https://github.com/organizations/<ORG>/settings/installations/<INSTALLATION_ID>` and clicks "Review request" → "Accept". Until accepted, the new permissions and events are inert and the gate webhook stays silent.
+4. **Confirm `GITHUB_WEBHOOK_SECRET`** is set in Vercel (step 5) and matches the value pasted into the App's webhook config. A mismatch returns 401 on every delivery — visible in the App's **Advanced → Recent Deliveries** tab.
+5. **Tune `post-pr-gate.yaml`** at the repo root if the defaults don't fit. The default config runs on `blazebot/*` branches only, skips drafts, and runs a single `pr-title-format` step (Conventional Commits) as advisory (`onFailure: continue`). Steps are defined in `src/post-pr-gate/steps/`.
+
+Verify by opening a manual PR titled `feat: smoke check` against the target repo (any `blazebot/*` branch — or set `botPrsOnly: false` in `post-pr-gate.yaml` to test from any branch). Within a few seconds you should see a `blazebot / pr-title-format` check run appear on the PR's head SHA and resolve to `success`.
+
+---
+
+## 9. Register the Slack slash command
 
 1. In your Slack app config, go to **Slash Commands → Create New Command**.
 2. Configure:
@@ -324,7 +345,7 @@ If you set `SLACK_ALLOWED_USER_IDS`, only those Slack user IDs can invoke the co
 
 ---
 
-## 9. Smoke test the deployment
+## 10. Smoke test the deployment
 
 ### Health
 
@@ -353,11 +374,11 @@ curl -H "Authorization: Bearer $CRON_SECRET" https://<your-vercel-domain>/cron/p
    - Target repo — new branch `blazebot/<ticket-key>` and an open PR.
    - Slack channel — notification fires.
 
-If anything stalls, jump to [troubleshooting](#12-troubleshooting).
+If anything stalls, jump to [troubleshooting](#13-troubleshooting).
 
 ---
 
-## 10. CI / GitHub Actions
+## 11. CI / GitHub Actions
 
 Two workflows ship in `.github/workflows/`:
 
@@ -375,7 +396,7 @@ The E2E jobs need the production env vars exposed as GitHub Actions secrets in t
 
 ---
 
-## 11. Optional integrations
+## 12. Optional integrations
 
 ### Arthur AI Engine (tracing + hosted prompts)
 
@@ -402,7 +423,7 @@ Flip `VCS_KIND=gitlab` and provide `GITLAB_TOKEN` + `GITLAB_PROJECT_ID`. For sel
 
 ---
 
-## 12. Troubleshooting
+## 13. Troubleshooting
 
 | Symptom                                               | Likely cause                                                                                                                            | Fix                                                                                                                                                                     |
 | ----------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -412,6 +433,8 @@ Flip `VCS_KIND=gitlab` and provide `GITLAB_TOKEN` + `GITLAB_PROJECT_ID`. For sel
 | Workflow starts but sandbox fails to provision        | Missing Vercel OIDC / Sandbox quota                                                                                                     | On Vercel, OIDC is automatic. Check the project has Sandbox enabled (Pro plan). For local dev, set `VERCEL_TOKEN`/`VERCEL_TEAM_ID`/`VERCEL_PROJECT_ID`.                 |
 | Run registry: `AI_WORKFLOW_KV_REST_API_URL undefined` | Upstash integration installed with wrong prefix                                                                                         | Reinstall with prefix `AI_WORKFLOW` (Upstash appends `_KV_REST_API_URL` / `_KV_REST_API_TOKEN`).                                                                        |
 | Agent runs but PR isn't created                       | GitHub App missing **Pull requests: Read & write** or **Contents: Read & write**, App not installed on target repo, or wrong owner/repo | In the App settings, re-check **Repository permissions** and the **Installations** list. Verify `GITHUB_OWNER`/`GITHUB_REPO` point at the _target_ repo, not this repo. |
+| Post-PR gate never runs on opened PRs                 | App webhook inactive, `Pull request` event not subscribed, missing `Checks: Read & write`, or permission/event change not re-accepted on the installed repo | App settings → **Webhook: Active** + URL set to `/webhooks/github`. Subscribe to **Pull request**. Bump **Checks** to read & write. Then have a repo admin re-accept the install at `https://github.com/organizations/<ORG>/settings/installations/<INSTALLATION_ID>`. Check **Advanced → Recent Deliveries** for 2xx responses. |
+| Post-PR gate webhook returns 401 in Recent Deliveries | `GITHUB_WEBHOOK_SECRET` missing on the deployment or different from the value pasted into the App | Set the var on **every** environment (production + preview + development) — preview deployments receive the webhook too. Redeploy after changing. Test by re-sending a delivery from the App's Recent Deliveries tab. |
 | Slack messages don't arrive                           | Bot not in channel, or wrong `CHAT_SDK_CHANNEL_ID`                                                                                      | Invite bot to the channel. Re-copy the channel ID.                                                                                                                      |
 | Slash command returns `dispatch_failed`               | Signing secret wrong, or app not reinstalled                                                                                            | Verify `SLACK_SIGNING_SECRET`. Reinstall the Slack app after adding the slash command.                                                                                  |
 | Two pollers race on the same ticket                   | Stale claim sentinel                                                                                                                    | The reconciler clears claims older than 5 minutes on every poll — wait one cycle, or flush the registry key in Upstash.                                                 |
