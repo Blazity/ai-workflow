@@ -84,3 +84,22 @@ export function hasCheckRunCapability(
     typeof (adapter as Partial<CheckRunCapableVCS>).updateCheckRun === "function"
   );
 }
+
+export interface PRFile {
+  path: string;
+  additions: number;
+  deletions: number;
+  changeType: "added" | "removed" | "modified" | "renamed";
+  /** Unified diff hunk. Absent for binary or very large files. */
+  patch?: string;
+}
+
+export interface PRFilesCapableVCS {
+  listPRFiles(prId: number): Promise<PRFile[]>;
+}
+
+export function hasPRFilesCapability(
+  adapter: VCSAdapter,
+): adapter is VCSAdapter & PRFilesCapableVCS {
+  return typeof (adapter as Partial<PRFilesCapableVCS>).listPRFiles === "function";
+}

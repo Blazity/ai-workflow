@@ -1,7 +1,15 @@
 import { FatalError } from "workflow";
 import type { Octokit } from "@octokit/rest";
 import { buildOctokit, type GitHubAppAuth } from "../../lib/github-auth.js";
-import type { VCSAdapter, CheckRunCapableVCS, PullRequest, PRComment, CheckRunResult } from "./types.js";
+import type {
+  VCSAdapter,
+  CheckRunCapableVCS,
+  PRFile,
+  PRFilesCapableVCS,
+  PullRequest,
+  PRComment,
+  CheckRunResult,
+} from "./types.js";
 
 export interface GitHubConfig {
   auth: GitHubAppAuth;
@@ -10,7 +18,7 @@ export interface GitHubConfig {
   baseBranch: string;
 }
 
-export class GitHubAdapter implements VCSAdapter, CheckRunCapableVCS {
+export class GitHubAdapter implements VCSAdapter, CheckRunCapableVCS, PRFilesCapableVCS {
   private octokit: Octokit;
 
   constructor(private config: GitHubConfig) {
@@ -282,6 +290,21 @@ export class GitHubAdapter implements VCSAdapter, CheckRunCapableVCS {
     return { id: pr.number, url: pr.html_url, branch: pr.head.ref };
   }
 
+  async listPRFiles(prId: number): Promise<PRFile[]> {
+    const files = await this.octokit.paginate(this.octokit.pulls.listFiles, {
+      ...this.ownerRepo,
+      pull_number: prId,
+      per_page: 100,
+    });
+    return files.map((f) => ({
+      path: f.filename,
+      additions: f.additions,
+      deletions: f.deletions,
+      changeType: mapFileStatus(f.status),
+      patch: f.patch,
+    }));
+  }
+
   async createCheckRun(name: string, headSha: string): Promise<number> {
     const { data } = await this.octokit.checks.create({
       ...this.ownerRepo,
@@ -350,6 +373,13 @@ export class GitHubAdapter implements VCSAdapter, CheckRunCapableVCS {
       });
     }
   }
+}
+
+function mapFileStatus(status: string): PRFile["changeType"] {
+  if (status === "added") return "added";
+  if (status === "removed") return "removed";
+  if (status === "renamed") return "renamed";
+  return "modified";
 }
 
 function mapAnnotation(a: import("./types.js").CheckRunAnnotation) {
