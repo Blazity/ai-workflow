@@ -2,7 +2,7 @@ import type {
   AgentAdapter, AgentOutput, ConfigureOpts, PhaseArtifactPaths, PhaseKind,
   PhaseScriptOpts, PhaseUsage, ResearchResult, ReviewOutput, RunnableSandbox,
 } from "./types.js";
-import { agentOutputSchema, reviewOutputSchema } from "./types.js";
+import { agentOutputSchema, foldResearchOutput, researchOutputSchema, reviewOutputSchema } from "./types.js";
 import { installSkillsToAgentsDir } from "./shared.js";
 import { ARTHUR_TRACER_PY_BASE64 } from "../arthur-tracer.js";
 
@@ -205,10 +205,26 @@ touch ${paths.sentinel}
   }
 
   parseResearchStatus(raw: string, structured: string | null): ResearchResult {
-    const text = (structured ?? unwrapLastAgentMessage(raw) ?? raw).trim();
+    // Structured file: written by Codex when --output-schema is set.
+    if (structured) {
+      try {
+        const parsed = researchOutputSchema.safeParse(JSON.parse(structured));
+        if (parsed.success) return foldResearchOutput(parsed.data);
+      } catch { /* not JSON — fall through to text */ }
+    }
+    // Agent message may itself be a JSON object even without a schema.
+    const message = unwrapLastAgentMessage(raw);
+    if (message) {
+      try {
+        const parsed = researchOutputSchema.safeParse(JSON.parse(message));
+        if (parsed.success) return foldResearchOutput(parsed.data);
+      } catch { /* not JSON */ }
+    }
+    // Fallback: text-based STATUS parsing. Tolerates markdown prefixes.
+    const text = (structured ?? message ?? raw).trim();
     const lines = text.split("\n");
     for (let i = 0; i < lines.length; i++) {
-      const m = (lines[i] ?? "").trim().match(/^STATUS:\s*([a-z_]+)/i);
+      const m = (lines[i] ?? "").trim().match(/^(?:#+\s*|\*+\s*)?STATUS:\s*\*?([a-z_]+)/i);
       if (!m) continue;
       const status = m[1].toLowerCase();
       if (status === "completed" || status === "clarification_needed" || status === "failed") {

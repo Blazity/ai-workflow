@@ -520,7 +520,7 @@ export async function agentWorkflow(ticketId: string) {
   const { collectPhase, pushFromSandbox, fixAndRetryPush, teardownSandbox } =
     await import("../sandbox/poll-agent.js");
   const { formatUsageReport } = await import("../sandbox/usage.js");
-  const { AGENT_SCHEMA, REVIEW_SCHEMA } = await import("../sandbox/agents/types.js");
+  const { AGENT_SCHEMA, RESEARCH_SCHEMA, REVIEW_SCHEMA } = await import("../sandbox/agents/types.js");
 
   const ticket = await fetchAndValidateTicket(ticketId, env.COLUMN_AI);
   if (!ticket) return;
@@ -636,7 +636,7 @@ export async function agentWorkflow(ticketId: string) {
       await setCommitGuardStep(sandboxId, agentKind, false);
 
       const { paths: researchPaths, script: researchScript } =
-        await planPhaseStep(agentKind, "research", activeModel);
+        await planPhaseStep(agentKind, "research", activeModel, RESEARCH_SCHEMA);
       const researchInput = assembleResearchPlanContext({
         ticket: ticketData,
         prompt: prompts.research,

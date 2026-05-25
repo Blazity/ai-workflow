@@ -17,7 +17,7 @@ import { e2eEnv } from "../env.js";
  * US-5: Unclear ticket triggers clarification
  *
  * When a ticket is too vague/subjective to implement, the agent should
- * return STATUS: clarification_needed, post numbered questions as a Jira
+ * return status: "clarification_needed", post numbered questions as a Jira
  * comment, move the ticket to Backlog, and clean up Redis/sandbox.
  */
 describe("US-05: Unclear ticket triggers clarification", () => {

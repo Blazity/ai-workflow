@@ -54,21 +54,54 @@ describe("CodexAgentAdapter.parseAgentOutput", () => {
 });
 
 describe("CodexAgentAdapter.parseResearchStatus", () => {
-  it("reads STATUS line from structured (free-form text)", () => {
+  it("parses schema-validated structured JSON (completed)", () => {
+    const structured = JSON.stringify({
+      status: "completed",
+      plan: "Plan body",
+      questions: null,
+      error: null,
+    });
+    const r = adapter.parseResearchStatus("ndjson irrelevant", structured);
+    expect(r.status).toBe("completed");
+    expect(r.body).toBe("Plan body");
+  });
+
+  it("parses schema-validated structured JSON (clarification_needed) and numbers questions", () => {
+    const structured = JSON.stringify({
+      status: "clarification_needed",
+      plan: null,
+      questions: ["First?", "Second?"],
+      error: null,
+    });
+    const r = adapter.parseResearchStatus("", structured);
+    expect(r.status).toBe("clarification_needed");
+    expect(r.body).toBe("1. First?\n2. Second?");
+  });
+
+  it("falls back to JSON inside last agent_message when structured is null", () => {
+    const text = JSON.stringify({ status: "failed", plan: null, questions: null, error: "boom" });
+    const ndjson = [
+      JSON.stringify({ type: "item.completed", item: { type: "agent_message", text } }),
+    ].join("\n");
+    const r = adapter.parseResearchStatus(ndjson, null);
+    expect(r.status).toBe("failed");
+    expect(r.body).toBe("boom");
+  });
+
+  it("falls back to text STATUS line when JSON parsing fails", () => {
     const r = adapter.parseResearchStatus("ndjson irrelevant", "STATUS: completed\n\nbody");
     expect(r.status).toBe("completed");
     expect(r.body).toBe("body");
   });
 
-  it("falls back to last item.completed text when structured is null", () => {
+  it("falls back to text STATUS line from last item.completed message", () => {
     const ndjson = [
       JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: "STATUS: failed\n\nreason" } }),
     ].join("\n");
-    const r = adapter.parseResearchStatus(ndjson, null);
-    expect(r.status).toBe("failed");
+    expect(adapter.parseResearchStatus(ndjson, null).status).toBe("failed");
   });
 
-  it("returns failed when no STATUS line is present", () => {
+  it("returns failed when no STATUS line and no JSON is present", () => {
     expect(adapter.parseResearchStatus("no status here", null).status).toBe("failed");
   });
 });
@@ -136,18 +169,25 @@ describe("CodexAgentAdapter.extractUsage", () => {
 });
 
 describe("CodexAgentAdapter.buildPhaseScript", () => {
-  it("research phase uses -o without --output-schema", () => {
+  it("research phase uses -o and accepts --output-schema when supplied", () => {
     const paths = adapter.artifactPaths("research");
-    const s = adapter.buildPhaseScript({ phase: "research", model: "gpt-5-codex", paths });
-    expect(s).toContain("codex exec");
+    const baseScript = adapter.buildPhaseScript({ phase: "research", model: "gpt-5-codex", paths });
+    expect(baseScript).toContain("codex exec");
     // We bypass Codex's inner sandbox because Vercel Sandbox (outer microVM)
     // already provides isolation and blocks bwrap's user-namespace syscall.
-    expect(s).toContain("--dangerously-bypass-approvals-and-sandbox");
-    expect(s).not.toContain("--full-auto");
-    expect(s).toContain("--skip-git-repo-check");
-    expect(s).toContain("--json");
-    expect(s).toContain("-o /tmp/research-result.json");
-    expect(s).not.toContain("--output-schema");
+    expect(baseScript).toContain("--dangerously-bypass-approvals-and-sandbox");
+    expect(baseScript).not.toContain("--full-auto");
+    expect(baseScript).toContain("--skip-git-repo-check");
+    expect(baseScript).toContain("--json");
+    expect(baseScript).toContain("-o /tmp/research-result.json");
+
+    const withSchema = adapter.buildPhaseScript({
+      phase: "research",
+      model: "gpt-5-codex",
+      paths,
+      jsonSchema: '{"type":"object"}',
+    });
+    expect(withSchema).toContain("--output-schema /tmp/research-schema.json");
   });
 
   it("impl phase uses --output-schema with a quoted heredoc", () => {

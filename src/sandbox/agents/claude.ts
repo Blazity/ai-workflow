@@ -2,7 +2,7 @@ import type {
   AgentAdapter, AgentOutput, ConfigureOpts, PhaseArtifactPaths, PhaseKind,
   PhaseScriptOpts, PhaseUsage, ResearchResult, ReviewOutput, RunnableSandbox,
 } from "./types.js";
-import { agentOutputSchema, reviewOutputSchema } from "./types.js";
+import { agentOutputSchema, foldResearchOutput, researchOutputSchema, reviewOutputSchema } from "./types.js";
 import { installSkillsToAgentsDir } from "./shared.js";
 import { ARTHUR_TRACER_PY_BASE64 } from "../arthur-tracer.js";
 
@@ -143,15 +143,13 @@ touch ${paths.sentinel}
               if (parsed.success) return parsed.data;
             } catch { /* not JSON */ }
           }
-          if (event.subtype === "success" && !event.is_error) {
-            return {
-              result: "implemented",
-              summary: typeof event.result === "string" ? event.result.trim().slice(0, 500) : undefined,
-            };
-          }
+          // Claude runs with --json-schema; a success envelope with no
+          // schema-validated payload is anomalous, not implicitly "implemented".
           return {
             result: "failed",
-            error: typeof event.result === "string" ? event.result.trim().slice(0, 500) : "Agent returned non-structured result",
+            error: typeof event.result === "string"
+              ? event.result.trim().slice(0, 500)
+              : "Agent returned non-structured result",
           };
         }
         const direct = agentOutputSchema.safeParse(event);
@@ -191,18 +189,15 @@ touch ${paths.sentinel}
   }
 
   parseResearchStatus(raw: string, _structured: string | null): ResearchResult {
-    const text = unwrapResearchEnvelope(raw);
-    const lines = text.split("\n");
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i]?.trim() ?? "";
-      const m = line.match(/^STATUS:\s*([a-z_]+)/i);
-      if (!m) continue;
-      const status = m[1].toLowerCase();
-      if (status === "completed" || status === "clarification_needed" || status === "failed") {
-        return { status, body: lines.slice(i + 1).join("\n").trim() };
-      }
-    }
-    return { status: "failed", body: text };
+    // Claude runs with --json-schema for every phase; we never accept
+    // free-form text here. If the schema-validated payload is missing,
+    // surface that as a failure instead of fishing for a STATUS line.
+    const json = tryParseResearchJson(raw);
+    if (json) return foldResearchOutput(json);
+    return {
+      status: "failed",
+      body: `Research output was not schema-validated JSON. Output starts with: ${raw.slice(0, 500)}`,
+    };
   }
 
   extractUsage(raw: string, _structured: string | null): PhaseUsage | null {
@@ -331,9 +326,36 @@ function findResultEnvelope(raw: string): Record<string, unknown> | null {
   return null;
 }
 
-function unwrapResearchEnvelope(raw: string): string {
-  if (!raw.trim()) return raw;
+function tryParseResearchJson(raw: string): ReturnType<typeof researchOutputSchema.safeParse>["data"] | null {
+  if (!raw.trim()) return null;
+
+  const tryParse = (value: unknown) => {
+    const parsed = researchOutputSchema.safeParse(value);
+    return parsed.success ? parsed.data : null;
+  };
+
+  // Direct JSON (no Claude Code envelope)
+  try {
+    const direct = tryParse(JSON.parse(raw));
+    if (direct) return direct;
+  } catch { /* not direct JSON */ }
+
+  // Claude Code wraps the model output in a `type:"result"` envelope.
+  // With --json-schema, the validated payload lands in `structured_output`;
+  // otherwise the model's reply text is in `result` (may itself be JSON).
   const env = findResultEnvelope(raw);
-  if (!env) return raw;
-  return typeof env.result === "string" ? env.result : raw;
+  if (!env) return null;
+
+  if (env.structured_output != null) {
+    const got = tryParse(env.structured_output);
+    if (got) return got;
+  }
+  if (typeof env.result === "string") {
+    try {
+      const got = tryParse(JSON.parse(env.result));
+      if (got) return got;
+    } catch { /* not JSON */ }
+  }
+  return null;
 }
+

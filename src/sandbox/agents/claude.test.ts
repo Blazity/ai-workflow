@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import { ClaudeAgentAdapter } from "./claude.js";
-import { AGENT_SCHEMA, REVIEW_SCHEMA } from "./types.js";
+import { AGENT_SCHEMA, RESEARCH_SCHEMA, REVIEW_SCHEMA } from "./types.js";
 
 const adapter = new ClaudeAgentAdapter();
 
@@ -64,7 +64,9 @@ describe("ClaudeAgentAdapter.parseAgentOutput", () => {
     expect(out.questions).toEqual(["Which DB?"]);
   });
 
-  it("infers implemented when result envelope has success but text output", () => {
+  it("fails (not infers implemented) when envelope is success but payload is plain text", () => {
+    // Claude runs with --json-schema; a success envelope without structured
+    // output means the schema didn't kick in. Don't silently call that a win.
     const envelope = JSON.stringify({
       type: "result",
       subtype: "success",
@@ -74,8 +76,8 @@ describe("ClaudeAgentAdapter.parseAgentOutput", () => {
       result: "\n\nI kept the response as-is to match the acceptance criteria.\n",
     });
     const out = adapter.parseAgentOutput(envelope, null);
-    expect(out.result).toBe("implemented");
-    expect(out.summary).toContain("acceptance criteria");
+    expect(out.result).toBe("failed");
+    expect(out.error).toContain("acceptance criteria");
   });
 
   it("infers failed when result envelope has error status", () => {
@@ -97,45 +99,82 @@ describe("ClaudeAgentAdapter.parseAgentOutput", () => {
 });
 
 describe("ClaudeAgentAdapter.parseResearchStatus", () => {
-  it("parses a STATUS line and returns the body", () => {
+  it("parses structured_output JSON from result envelope (completed)", () => {
+    const envelope = JSON.stringify({
+      type: "result",
+      subtype: "success",
+      structured_output: {
+        status: "completed",
+        plan: "Step 1: edit foo.ts\nStep 2: run tests",
+        questions: null,
+        error: null,
+      },
+    });
+    const r = adapter.parseResearchStatus(envelope, null);
+    expect(r.status).toBe("completed");
+    expect(r.body).toContain("Step 1");
+  });
+
+  it("parses structured_output JSON (clarification_needed) and numbers questions", () => {
+    const envelope = JSON.stringify({
+      type: "result",
+      subtype: "success",
+      structured_output: {
+        status: "clarification_needed",
+        plan: null,
+        questions: ["Which database?", "Which auth provider?"],
+        error: null,
+      },
+    });
+    const r = adapter.parseResearchStatus(envelope, null);
+    expect(r.status).toBe("clarification_needed");
+    expect(r.body).toBe("1. Which database?\n2. Which auth provider?");
+  });
+
+  it("parses structured_output JSON (failed) and exposes error in body", () => {
+    const envelope = JSON.stringify({
+      type: "result",
+      subtype: "success",
+      structured_output: { status: "failed", plan: null, questions: null, error: "Could not read repo" },
+    });
+    const r = adapter.parseResearchStatus(envelope, null);
+    expect(r.status).toBe("failed");
+    expect(r.body).toBe("Could not read repo");
+  });
+
+  it("parses direct JSON output when there is no Claude envelope", () => {
+    const raw = JSON.stringify({ status: "completed", plan: "Plan", questions: null, error: null });
+    expect(adapter.parseResearchStatus(raw, null).status).toBe("completed");
+  });
+
+  it("parses JSON encoded in envelope.result string (no structured_output)", () => {
+    const envelope = JSON.stringify({
+      type: "result",
+      subtype: "success",
+      result: JSON.stringify({ status: "completed", plan: "P", questions: null, error: null }),
+    });
+    expect(adapter.parseResearchStatus(envelope, null).status).toBe("completed");
+  });
+
+  it("fails when output is a STATUS text line (no schema-validated JSON)", () => {
+    // Claude runs with --json-schema; if we only see a STATUS text line then
+    // the schema didn't enforce. Don't fall back to fuzzy text matching —
+    // surface the anomaly instead of pretending it worked.
     const envelope = JSON.stringify({
       type: "result",
       subtype: "success",
       result: "STATUS: completed\n\nPlan body here",
     });
-    const r = adapter.parseResearchStatus(envelope, null);
-    expect(r.status).toBe("completed");
-    expect(r.body).toBe("Plan body here");
+    expect(adapter.parseResearchStatus(envelope, null).status).toBe("failed");
   });
 
-  it("parses clarification_needed with numbered questions", () => {
-    const raw = "STATUS: clarification_needed\n\n1. What database?\n2. Which auth?";
-    const r = adapter.parseResearchStatus(raw, null);
-    expect(r.status).toBe("clarification_needed");
-    expect(r.body).toContain("What database?");
-  });
-
-  it("parses failed status", () => {
-    expect(adapter.parseResearchStatus("STATUS: failed\n\nCould not access repository", null).status).toBe("failed");
-  });
-
-  it("falls back to failed when no STATUS line is present", () => {
+  it("fails when no JSON payload is present", () => {
     expect(adapter.parseResearchStatus("no status here", null).status).toBe("failed");
   });
 
-  it("handles STATUS line with extra whitespace", () => {
-    expect(adapter.parseResearchStatus("  STATUS:   completed  \n\nPlan here", null).status).toBe("completed");
-  });
-
-  it("handles leading blank lines before STATUS", () => {
-    const r = adapter.parseResearchStatus("\n\nSTATUS: clarification_needed\n\n1. Which provider?", null);
-    expect(r.status).toBe("clarification_needed");
-    expect(r.body).toContain("Which provider?");
-  });
-
-  it("normalizes uppercase status values", () => {
-    expect(adapter.parseResearchStatus("STATUS: CLARIFICATION_NEEDED\n\n1. Which provider?", null).status)
-      .toBe("clarification_needed");
+  it("error body for failed parse includes the raw prefix for debugging", () => {
+    const out = adapter.parseResearchStatus("garbage in, garbage out", null);
+    expect(out.body).toContain("garbage in, garbage out");
   });
 });
 
@@ -184,6 +223,11 @@ describe("schema constants", () => {
   it("REVIEW_SCHEMA is valid JSON", () => {
     expect(() => JSON.parse(REVIEW_SCHEMA)).not.toThrow();
   });
+  it("RESEARCH_SCHEMA is valid JSON with the expected fields", () => {
+    const s = JSON.parse(RESEARCH_SCHEMA);
+    expect(s.required).toEqual(["status", "plan", "questions", "error"]);
+    expect(s.properties.status.enum).toEqual(["completed", "clarification_needed", "failed"]);
+  });
 });
 
 describe("ClaudeAgentAdapter.extractUsage", () => {
@@ -219,7 +263,17 @@ describe("ClaudeAgentAdapter.buildPhaseScript", () => {
     expect(s).toContain("/tmp/research-stdout.txt");
     expect(s).toContain("/tmp/research-stderr.txt");
     expect(s).toContain("/tmp/research-done");
-    expect(s).not.toContain("--json-schema");
+  });
+
+  it("research phase includes --json-schema when supplied", () => {
+    const paths = adapter.artifactPaths("research");
+    const s = adapter.buildPhaseScript({
+      phase: "research",
+      model: "claude-opus-4-6",
+      paths,
+      jsonSchema: '{"type":"object"}',
+    });
+    expect(s).toContain("--json-schema");
   });
 
   it("impl phase includes --json-schema when supplied", () => {

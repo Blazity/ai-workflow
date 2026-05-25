@@ -80,6 +80,44 @@ export const REVIEW_SCHEMA = JSON.stringify({
 export type ResearchStatus = "completed" | "clarification_needed" | "failed";
 export interface ResearchResult { status: ResearchStatus; body: string; }
 
+export const researchOutputSchema = z.object({
+  status: z.enum(["completed", "clarification_needed", "failed"]),
+  plan: z.string().nullish(),
+  questions: z.array(z.string()).nullish(),
+  error: z.string().nullish(),
+});
+export type ResearchOutput = z.infer<typeof researchOutputSchema>;
+
+export const RESEARCH_SCHEMA = JSON.stringify({
+  type: "object",
+  properties: {
+    status: { type: "string", enum: ["completed", "clarification_needed", "failed"] },
+    plan: { type: ["string", "null"] },
+    questions: {
+      anyOf: [
+        { type: "array", items: { type: "string" } },
+        { type: "null" },
+      ],
+    },
+    error: { type: ["string", "null"] },
+  },
+  required: ["status", "plan", "questions", "error"],
+  additionalProperties: false,
+});
+
+/** Collapse the structured research output to the {status, body} contract used downstream. */
+export function foldResearchOutput(o: ResearchOutput): ResearchResult {
+  if (o.status === "completed") return { status: "completed", body: (o.plan ?? "").trim() };
+  if (o.status === "clarification_needed") {
+    const qs = (o.questions ?? []).filter((q) => q.trim().length > 0);
+    return {
+      status: "clarification_needed",
+      body: qs.map((q, i) => `${i + 1}. ${q}`).join("\n"),
+    };
+  }
+  return { status: "failed", body: (o.error ?? "").trim() };
+}
+
 // --- Usage (replaces shape in src/sandbox/usage.ts) ---
 
 export interface PhaseUsage {
