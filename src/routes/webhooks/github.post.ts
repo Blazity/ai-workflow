@@ -40,6 +40,15 @@ export default defineEventHandler(async (event) => {
   }
 
   const ownerRepo = `${repo.owner.login}/${repo.name}`;
+
+  if (env.GITHUB_OWNER && env.GITHUB_REPO) {
+    const expected = `${env.GITHUB_OWNER}/${env.GITHUB_REPO}`;
+    if (ownerRepo !== expected) {
+      logger.info({ ownerRepo, expected }, "post_pr_gate_webhook_skipped_other_repo");
+      return { status: "ignored", reason: "other_repo" };
+    }
+  }
+
   const prNumber = pr.number;
   const headSha = pr.head.sha;
   const headRef = pr.head.ref;
