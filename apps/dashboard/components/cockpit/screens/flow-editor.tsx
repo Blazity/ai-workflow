@@ -2,7 +2,6 @@
 
 import React, { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { CkChip } from "@/components/ui";
-import { ckBorder, ckMono, ckDisp, ckBody } from "@/lib/theme";
 import type { Flow, FlowNodeDef, RunStatusMap, NodeType } from "@/lib/flows";
 
 /* ────────────────────────────────────────────────────────────────────────
@@ -80,64 +79,58 @@ function FlowNode({
     <div
       onMouseDown={(e) => onDragStart(e, node)}
       onClick={(e) => { e.stopPropagation(); onSelect(node.id); }}
+      className={`absolute rounded-sm cursor-grab select-none transition-[box-shadow,border-color] duration-[120ms] ${
+        dark ? "bg-coal" : "bg-panel"
+      } ${
+        selected
+          ? "border-2 border-mariner shadow-[0_0_0_4px_rgba(60,67,231,0.12),0_4px_12px_rgba(24,27,32,0.08)] z-[3]"
+          : `border ${dark ? "border-coal" : "border-neutral-200"} shadow-[0_1px_2px_rgba(24,27,32,0.05)] z-[2]`
+      }`}
       style={{
-        position: "absolute", left: node.x, top: node.y,
+        left: node.x, top: node.y,
         width: NODE_W, height: NODE_H,
-        background: dark ? "#181B20" : "#fff",
-        border: selected ? "2px solid #3C43E7" : "1px solid " + (dark ? "#181B20" : "#E6E8EB"),
-        borderRadius: 4,
-        boxShadow: selected ? "0 0 0 4px rgba(60,67,231,0.12), 0 4px 12px rgba(24,27,32,0.08)" : "0 1px 2px rgba(24,27,32,0.05)",
-        cursor: "grab", userSelect: "none",
-        transition: "box-shadow 120ms, border-color 120ms",
-        zIndex: selected ? 3 : 2,
       }}
     >
       {/* Header strip */}
-      <div style={{
-        display: "flex", alignItems: "center", gap: 6,
-        padding: "6px 10px",
-        background: dark ? "#0E1014" : cat.soft,
-        borderBottom: dark ? "1px solid #2A2D33" : "1px solid " + cat.soft,
-        borderTopLeftRadius: 3, borderTopRightRadius: 3,
-        fontFamily: ckMono, fontSize: 9, fontWeight: 600, letterSpacing: "0.06em", textTransform: "uppercase",
-        color: dark ? "#fff" : cat.color,
-      }}>
-        <span style={{
-          width: 16, height: 16, borderRadius: 2, background: cat.color, color: "#fff",
-          display: "inline-flex", alignItems: "center", justifyContent: "center",
-          fontSize: 10, fontWeight: 700,
-        }}>{cat.glyph}</span>
+      <div
+        className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-t-[3px] font-mono text-[9px] font-semibold tracking-[0.06em] uppercase ${
+          dark ? "bg-[#0E1014] border-b border-[#2A2D33] text-white" : "border-b"
+        }`}
+        style={dark ? undefined : { background: cat.soft, borderBottomColor: cat.soft, color: cat.color }}
+      >
+        <span
+          className="w-4 h-4 rounded-xs text-white inline-flex items-center justify-center text-[10px] font-bold"
+          style={{ background: cat.color }}
+        >{cat.glyph}</span>
         {cat.label}
-        <span style={{ marginLeft: "auto", fontFamily: ckMono, fontSize: 9, color: dark ? "#9EA3AA" : "#9EA3AA" }}>{node.id}</span>
+        <span className="ml-auto font-mono text-[9px] text-neutral-500">{node.id}</span>
         {runStatus && (
-          <span title={"last run: " + runStatus} style={{
-            width: 6, height: 6, borderRadius: 999,
-            background: runStatus === "ok" ? "#5BB04A" : runStatus === "warn" ? "#FFC800" : runStatus === "fail" ? "#D14343" : "#9EA3AA",
-          }} />
+          <span
+            title={"last run: " + runStatus}
+            className="w-1.5 h-1.5 rounded-full"
+            style={{
+              background: runStatus === "ok" ? "#5BB04A" : runStatus === "warn" ? "#FFC800" : runStatus === "fail" ? "#D14343" : "#9EA3AA",
+            }}
+          />
         )}
       </div>
       {/* Body */}
-      <div style={{ padding: "8px 10px", display: "flex", flexDirection: "column", gap: 2 }}>
-        <div style={{
-          fontFamily: ckBody, fontSize: 13, fontWeight: 600,
-          color: dark ? "#fff" : "#181B20", lineHeight: 1.2,
-          overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
-        }}>{node.name}</div>
+      <div className="px-2.5 py-2 flex flex-col gap-0.5">
+        <div className={`font-body text-[13px] font-semibold leading-[1.2] overflow-hidden text-ellipsis whitespace-nowrap ${dark ? "text-white" : "text-coal"}`}>{node.name}</div>
         {summary && (
-          <div style={{
-            fontFamily: ckMono, fontSize: 10, color: dark ? "#9EA3AA" : "#5F666F",
-            overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
-          }}>{String(summary)}</div>
+          <div className={`font-mono text-[10px] overflow-hidden text-ellipsis whitespace-nowrap ${dark ? "text-neutral-500" : "text-neutral-700"}`}>{String(summary)}</div>
         )}
       </div>
 
       {/* Input port — left edge */}
       {node.type !== "trigger" && (
-        <span style={{
-          position: "absolute", left: -7, top: NODE_H / 2 - 7,
-          width: 12, height: 12, borderRadius: 999,
-          background: "#fff", border: "2px solid " + (dark ? "#fff" : cat.color),
-        }} />
+        <span
+          className="absolute w-3 h-3 rounded-full bg-panel border-2"
+          style={{
+            left: -7, top: NODE_H / 2 - 7,
+            borderColor: dark ? "#fff" : cat.color,
+          }}
+        />
       )}
       {/* Output ports — right edge */}
       {node.type !== "output" && Array.from({ length: ports }, (_, i) => {
@@ -145,19 +138,21 @@ function FlowNode({
         const lbl = node.portLabels && node.portLabels[i];
         return (
           <React.Fragment key={i}>
-            <span style={{
-              position: "absolute",
-              left: NODE_W - 5, top: (pos.y - node.y) - 7,
-              width: 12, height: 12, borderRadius: 999,
-              background: cat.color, border: "2px solid #fff",
-            }} />
+            <span
+              className="absolute w-3 h-3 rounded-full border-2 border-white"
+              style={{
+                left: NODE_W - 5, top: (pos.y - node.y) - 7,
+                background: cat.color,
+              }}
+            />
             {lbl && ports > 1 && (
-              <span style={{
-                position: "absolute",
-                left: NODE_W + 10, top: (pos.y - node.y) - 8,
-                fontFamily: ckMono, fontSize: 9, fontWeight: 600, letterSpacing: "0.04em", textTransform: "uppercase",
-                color: cat.color, whiteSpace: "nowrap",
-              }}>{lbl}</span>
+              <span
+                className="absolute font-mono text-[9px] font-semibold tracking-[0.04em] uppercase whitespace-nowrap"
+                style={{
+                  left: NODE_W + 10, top: (pos.y - node.y) - 8,
+                  color: cat.color,
+                }}
+              >{lbl}</span>
             )}
           </React.Fragment>
         );
@@ -223,25 +218,17 @@ function NodePalette() {
   const [query, setQuery] = useState("");
 
   return (
-    <aside style={{
-      width: 240, flex: "0 0 240px",
-      background: "#fff", borderRight: ckBorder,
-      display: "flex", flexDirection: "column", overflow: "hidden",
-    }}>
-      <div style={{ padding: "14px 14px 10px", borderBottom: ckBorder, display: "flex", flexDirection: "column", gap: 8 }}>
-        <div style={{ fontFamily: ckMono, fontSize: 9, color: "#9EA3AA", letterSpacing: "0.06em", textTransform: "uppercase" }}>Node palette</div>
+    <aside className="w-60 flex-[0_0_240px] bg-panel border-r border-neutral-200 flex flex-col overflow-hidden">
+      <div className="pt-[14px] px-[14px] pb-[10px] border-b border-neutral-200 flex flex-col gap-2">
+        <div className="font-mono text-[9px] text-neutral-500 tracking-[0.06em] uppercase">Node palette</div>
         <input
           value={query} onChange={(e) => setQuery(e.target.value)}
           placeholder="Search nodes…"
-          style={{
-            height: 28, padding: "0 10px",
-            background: "#F2F4F6", border: ckBorder, borderRadius: 3,
-            fontFamily: ckBody, fontSize: 12, color: "#181B20", outline: "none",
-          }}
+          className="h-7 px-2.5 bg-app-bg border border-neutral-200 rounded-[3px] font-body text-xs text-coal outline-none"
         />
-        <div style={{ fontFamily: ckMono, fontSize: 9, color: "#9EA3AA", letterSpacing: "0.04em" }}>Drag → canvas, or click +</div>
+        <div className="font-mono text-[9px] text-neutral-500 tracking-[0.04em]">Drag → canvas, or click +</div>
       </div>
-      <div style={{ flex: 1, overflow: "auto", padding: "4px 0" }}>
+      <div className="flex-1 overflow-auto py-1">
         {PALETTE_GROUPS.map((g) => {
           const items = query
             ? g.items.filter(i => i.name.toLowerCase().includes(query.toLowerCase()))
@@ -250,38 +237,32 @@ function NodePalette() {
           const isOpen = query ? true : open.has(g.label);
           return (
             <div key={g.label}>
-              <button onClick={() => toggle(g.label)} style={{
-                appearance: "none", border: "none", background: "transparent",
-                cursor: "pointer", width: "100%", textAlign: "left",
-                padding: "10px 14px 4px",
-                fontFamily: ckMono, fontSize: 9, color: "#5F666F", letterSpacing: "0.08em", textTransform: "uppercase",
-                display: "flex", alignItems: "center", gap: 6,
-              }}>
-                <span style={{ color: "#9EA3AA", width: 8 }}>{isOpen ? "▾" : "▸"}</span>
+              <button
+                onClick={() => toggle(g.label)}
+                className="appearance-none border-none bg-transparent cursor-pointer w-full text-left pt-2.5 px-[14px] pb-1 font-mono text-[9px] text-neutral-700 tracking-[0.08em] uppercase flex items-center gap-1.5"
+              >
+                <span className="text-neutral-500 w-2">{isOpen ? "▾" : "▸"}</span>
                 {g.label}
-                <span style={{ marginLeft: "auto", color: "#9EA3AA" }}>{items.length}</span>
+                <span className="ml-auto text-neutral-500">{items.length}</span>
               </button>
               {isOpen && (
-                <div style={{ display: "flex", flexDirection: "column" }}>
+                <div className="flex flex-col">
                   {items.map((it, i) => {
                     const cat = NODE_CATEGORIES[it.type] || NODE_CATEGORIES.tool;
                     return (
-                      <div key={i} draggable style={{
-                        margin: "1px 8px", padding: "6px 8px",
-                        border: ckBorder, borderRadius: 3,
-                        display: "flex", alignItems: "center", gap: 8,
-                        cursor: "grab", background: "#fff",
-                        transition: "background 120ms",
-                      }}
-                      onMouseEnter={(e) => e.currentTarget.style.background = cat.soft}
-                      onMouseLeave={(e) => e.currentTarget.style.background = "#fff"}>
-                        <span style={{
-                          width: 18, height: 18, borderRadius: 2, background: cat.color, color: "#fff",
-                          display: "inline-flex", alignItems: "center", justifyContent: "center",
-                          fontFamily: ckMono, fontSize: 11, fontWeight: 700, flex: "0 0 18px",
-                        }}>{cat.glyph}</span>
-                        <span style={{ fontFamily: ckBody, fontSize: 12, color: "#181B20", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{it.name}</span>
-                        <span style={{ marginLeft: "auto", fontFamily: ckMono, fontSize: 10, color: "#9EA3AA" }}>+</span>
+                      <div
+                        key={i}
+                        draggable
+                        className="mx-2 my-px py-1.5 px-2 border border-neutral-200 rounded-[3px] flex items-center gap-2 cursor-grab bg-panel transition-colors duration-[120ms]"
+                        onMouseEnter={(e) => e.currentTarget.style.background = cat.soft}
+                        onMouseLeave={(e) => e.currentTarget.style.background = "#fff"}
+                      >
+                        <span
+                          className="w-[18px] h-[18px] rounded-xs text-white inline-flex items-center justify-center font-mono text-[11px] font-bold flex-[0_0_18px]"
+                          style={{ background: cat.color }}
+                        >{cat.glyph}</span>
+                        <span className="font-body text-xs text-coal overflow-hidden text-ellipsis whitespace-nowrap">{it.name}</span>
+                        <span className="ml-auto font-mono text-[10px] text-neutral-500">+</span>
                       </div>
                     );
                   })}
@@ -291,11 +272,11 @@ function NodePalette() {
           );
         })}
       </div>
-      <div style={{ padding: "12px 14px", borderTop: ckBorder, fontFamily: ckMono, fontSize: 10, color: "#5F666F" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
-          <span style={{ width: 6, height: 6, borderRadius: 999, background: "#5BB04A" }} /> 38 community nodes
+      <div className="py-3 px-[14px] border-t border-neutral-200 font-mono text-[10px] text-neutral-700">
+        <div className="flex items-center gap-1.5 mb-1">
+          <span className="w-1.5 h-1.5 rounded-full bg-[#5BB04A]" /> 38 community nodes
         </div>
-        <a style={{ color: "#3C43E7", textDecoration: "none", cursor: "pointer" }}>Browse marketplace →</a>
+        <a className="text-mariner no-underline cursor-pointer">Browse marketplace →</a>
       </div>
     </aside>
   );
@@ -331,17 +312,15 @@ function FieldRow({ k, value, onChange }: { k: string; value: FieldValue; onChan
   const display = isArr ? value.join(", ") : isBool ? value : value;
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 4, padding: "10px 14px", borderBottom: ckBorder }}>
-      <label style={{ fontFamily: ckMono, fontSize: 9, color: "#5F666F", letterSpacing: "0.06em", textTransform: "uppercase" }}>{label}</label>
+    <div className="flex flex-col gap-1 py-2.5 px-[14px] border-b border-neutral-200">
+      <label className="font-mono text-[9px] text-neutral-700 tracking-[0.06em] uppercase">{label}</label>
       {isBool ? (
-        <button onClick={() => onChange(k, !value)} style={{
-          appearance: "none", cursor: "pointer", alignSelf: "flex-start",
-          padding: "4px 10px", borderRadius: 999,
-          border: "1px solid " + (value ? "#3C43E7" : "#E6E8EB"),
-          background: value ? "#3C43E7" : "#fff",
-          color: value ? "#fff" : "#5F666F",
-          fontFamily: ckMono, fontSize: 10, fontWeight: 600, letterSpacing: "0.04em", textTransform: "uppercase",
-        }}>{value ? "on" : "off"}</button>
+        <button
+          onClick={() => onChange(k, !value)}
+          className={`appearance-none cursor-pointer self-start py-1 px-2.5 rounded-full border font-mono text-[10px] font-semibold tracking-[0.04em] uppercase ${
+            value ? "border-mariner bg-mariner text-white" : "border-neutral-200 bg-panel text-neutral-700"
+          }`}
+        >{value ? "on" : "off"}</button>
       ) : (
         <input
           value={String(display)}
@@ -349,11 +328,7 @@ function FieldRow({ k, value, onChange }: { k: string; value: FieldValue; onChan
             const v: FieldValue = isNum ? Number(e.target.value) : isArr ? e.target.value.split(",").map(s => s.trim()).filter(Boolean) : e.target.value;
             onChange(k, v);
           }}
-          style={{
-            height: 26, padding: "0 8px",
-            background: "#F9FAFB", border: ckBorder, borderRadius: 2,
-            fontFamily: ckMono, fontSize: 12, color: "#181B20", outline: "none",
-          }}
+          className="h-[26px] px-2 bg-off-white border border-neutral-200 rounded-xs font-mono text-xs text-coal outline-none"
         />
       )}
     </div>
@@ -371,25 +346,21 @@ function NodeConfig({
 }) {
   if (!node) {
     return (
-      <aside style={{
-        width: 320, flex: "0 0 320px",
-        background: "#fff", borderLeft: ckBorder,
-        display: "flex", flexDirection: "column", overflow: "hidden",
-      }}>
-        <div style={{ padding: "16px 18px", borderBottom: ckBorder }}>
-          <div style={{ fontFamily: ckMono, fontSize: 9, color: "#9EA3AA", letterSpacing: "0.06em", textTransform: "uppercase" }}>Inspector</div>
-          <h3 style={{ font: '500 15px/1.3 ' + ckDisp, margin: "4px 0 0", color: "#181B20" }}>Nothing selected</h3>
+      <aside className="w-80 flex-[0_0_320px] bg-panel border-l border-neutral-200 flex flex-col overflow-hidden">
+        <div className="py-4 px-[18px] border-b border-neutral-200">
+          <div className="font-mono text-[9px] text-neutral-500 tracking-[0.06em] uppercase">Inspector</div>
+          <h3 className="font-display font-medium text-[15px] leading-[1.3] mt-1 mb-0 text-coal">Nothing selected</h3>
         </div>
-        <div style={{ padding: "16px 18px", flex: 1, display: "flex", flexDirection: "column", gap: 12, color: "#5F666F", fontFamily: ckBody, fontSize: 13 }}>
-          <p style={{ margin: 0, lineHeight: 1.55 }}>Click a node on the canvas to edit its parameters, or drag from the palette to add a new step.</p>
-          <div style={{ marginTop: 8, fontFamily: ckMono, fontSize: 10, color: "#9EA3AA", letterSpacing: "0.06em", textTransform: "uppercase" }}>Shortcuts</div>
-          <div style={{ display: "grid", gridTemplateColumns: "auto 1fr", rowGap: 6, columnGap: 12, fontFamily: ckMono, fontSize: 11 }}>
-            <kbd style={kbdStyle}>↑↓←→</kbd><span>Nudge selected node</span>
-            <kbd style={kbdStyle}>⌫</kbd><span>Delete node</span>
-            <kbd style={kbdStyle}>⌘D</kbd><span>Duplicate</span>
-            <kbd style={kbdStyle}>⌘E</kbd><span>Open prompt editor</span>
-            <kbd style={kbdStyle}>F</kbd><span>Fit flow to viewport</span>
-            <kbd style={kbdStyle}>R</kbd><span>Replay last run</span>
+        <div className="py-4 px-[18px] flex-1 flex flex-col gap-3 text-neutral-700 font-body text-[13px]">
+          <p className="m-0 leading-[1.55]">Click a node on the canvas to edit its parameters, or drag from the palette to add a new step.</p>
+          <div className="mt-2 font-mono text-[10px] text-neutral-500 tracking-[0.06em] uppercase">Shortcuts</div>
+          <div className="grid grid-cols-[auto_1fr] gap-y-1.5 gap-x-3 font-mono text-[11px]">
+            <kbd className={kbdCls}>↑↓←→</kbd><span>Nudge selected node</span>
+            <kbd className={kbdCls}>⌫</kbd><span>Delete node</span>
+            <kbd className={kbdCls}>⌘D</kbd><span>Duplicate</span>
+            <kbd className={kbdCls}>⌘E</kbd><span>Open prompt editor</span>
+            <kbd className={kbdCls}>F</kbd><span>Fit flow to viewport</span>
+            <kbd className={kbdCls}>R</kbd><span>Replay last run</span>
           </div>
         </div>
       </aside>
@@ -397,92 +368,69 @@ function NodeConfig({
   }
   const cat = NODE_CATEGORIES[node.type] || NODE_CATEGORIES.tool;
   return (
-    <aside style={{
-      width: 320, flex: "0 0 320px",
-      background: "#fff", borderLeft: ckBorder,
-      display: "flex", flexDirection: "column", overflow: "hidden",
-    }}>
-      <div style={{ padding: "14px 18px", borderBottom: ckBorder, display: "flex", flexDirection: "column", gap: 6 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <span style={{
-            width: 22, height: 22, borderRadius: 3, background: cat.color, color: "#fff",
-            display: "inline-flex", alignItems: "center", justifyContent: "center",
-            fontFamily: ckMono, fontSize: 13, fontWeight: 700,
-          }}>{cat.glyph}</span>
-          <span style={{ fontFamily: ckMono, fontSize: 9, color: cat.color, letterSpacing: "0.06em", textTransform: "uppercase", fontWeight: 600 }}>{cat.label}</span>
-          <span style={{ marginLeft: "auto", fontFamily: ckMono, fontSize: 10, color: "#9EA3AA" }}>{node.id}</span>
+    <aside className="w-80 flex-[0_0_320px] bg-panel border-l border-neutral-200 flex flex-col overflow-hidden">
+      <div className="pt-[14px] px-[18px] pb-[14px] border-b border-neutral-200 flex flex-col gap-1.5">
+        <div className="flex items-center gap-2">
+          <span
+            className="w-[22px] h-[22px] rounded-[3px] text-white inline-flex items-center justify-center font-mono text-[13px] font-bold"
+            style={{ background: cat.color }}
+          >{cat.glyph}</span>
+          <span
+            className="font-mono text-[9px] tracking-[0.06em] uppercase font-semibold"
+            style={{ color: cat.color }}
+          >{cat.label}</span>
+          <span className="ml-auto font-mono text-[10px] text-neutral-500">{node.id}</span>
         </div>
         <input
           value={node.name}
           onChange={(e) => onChange("name", e.target.value)}
-          style={{
-            border: "none", outline: "none", padding: 0, background: "transparent",
-            font: '500 17px/1.3 ' + ckDisp, color: "#181B20",
-          }}
+          className="border-none outline-none p-0 bg-transparent font-display font-medium text-[17px] leading-[1.3] text-coal"
         />
       </div>
 
-      <div style={{ flex: 1, overflow: "auto" }}>
-        <div style={{ padding: "10px 14px", borderBottom: ckBorder, fontFamily: ckMono, fontSize: 9, color: "#5F666F", letterSpacing: "0.06em", textTransform: "uppercase" }}>Parameters</div>
+      <div className="flex-1 overflow-auto">
+        <div className="py-2.5 px-[14px] border-b border-neutral-200 font-mono text-[9px] text-neutral-700 tracking-[0.06em] uppercase">Parameters</div>
         {Object.entries(node.params).map(([k, v]) => (
           <FieldRow key={k} k={k} value={v} onChange={(kk, vv) => onChange("params." + kk, vv)} />
         ))}
-        <div style={{ padding: "10px 14px", borderBottom: ckBorder, borderTop: ckBorder, fontFamily: ckMono, fontSize: 9, color: "#5F666F", letterSpacing: "0.06em", textTransform: "uppercase" }}>Execution</div>
+        <div className="py-2.5 px-[14px] border-y border-neutral-200 font-mono text-[9px] text-neutral-700 tracking-[0.06em] uppercase">Execution</div>
         <FieldRow k="retries" value={node.params.retries ?? 1} onChange={() => {}} />
         <FieldRow k="timeout" value={node.params.timeout ?? "30s"} onChange={() => {}} />
-        <div style={{ padding: "10px 14px", borderBottom: ckBorder, fontFamily: ckMono, fontSize: 9, color: "#5F666F", letterSpacing: "0.06em", textTransform: "uppercase" }}>Observability</div>
-        <div style={{ padding: "10px 14px", display: "flex", flexDirection: "column", gap: 8 }}>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", fontFamily: ckBody, fontSize: 12, color: "#3E444C" }}>
+        <div className="py-2.5 px-[14px] border-b border-neutral-200 font-mono text-[9px] text-neutral-700 tracking-[0.06em] uppercase">Observability</div>
+        <div className="py-2.5 px-[14px] flex flex-col gap-2">
+          <div className="flex items-center justify-between font-body text-xs text-neutral-800">
             <span>Emit OpenInference span</span>
-            <span style={{ ...togglePill, background: "#3C43E7", color: "#fff" }}>on</span>
+            <span className={`${togglePillCls} bg-mariner text-white`}>on</span>
           </div>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", fontFamily: ckBody, fontSize: 12, color: "#3E444C" }}>
+          <div className="flex items-center justify-between font-body text-xs text-neutral-800">
             <span>Forward to Arthur</span>
-            <span style={{ ...togglePill, background: "#3C43E7", color: "#fff" }}>on</span>
+            <span className={`${togglePillCls} bg-mariner text-white`}>on</span>
           </div>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", fontFamily: ckBody, fontSize: 12, color: "#3E444C" }}>
+          <div className="flex items-center justify-between font-body text-xs text-neutral-800">
             <span>Cost tracking</span>
-            <span style={{ ...togglePill, background: "#3C43E7", color: "#fff" }}>on</span>
+            <span className={`${togglePillCls} bg-mariner text-white`}>on</span>
           </div>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", fontFamily: ckBody, fontSize: 12, color: "#3E444C" }}>
+          <div className="flex items-center justify-between font-body text-xs text-neutral-800">
             <span>Pause on error</span>
-            <span style={{ ...togglePill, background: "#fff", color: "#5F666F", border: ckBorder }}>off</span>
+            <span className={`${togglePillCls} bg-panel text-neutral-700 border border-neutral-200`}>off</span>
           </div>
         </div>
       </div>
 
-      <div style={{ borderTop: ckBorder, padding: "12px 14px", display: "flex", gap: 8 }}>
-        <button onClick={onDelete} style={{
-          appearance: "none", cursor: "pointer", border: ckBorder, background: "#fff",
-          padding: "6px 12px", borderRadius: 3,
-          fontFamily: ckMono, fontSize: 11, color: "#A2351C", letterSpacing: "0.04em", textTransform: "uppercase",
-        }}>Delete</button>
-        <button style={{
-          appearance: "none", cursor: "pointer", border: ckBorder, background: "#fff",
-          padding: "6px 12px", borderRadius: 3,
-          fontFamily: ckMono, fontSize: 11, color: "#181B20", letterSpacing: "0.04em", textTransform: "uppercase",
-        }}>Duplicate</button>
-        <button style={{
-          marginLeft: "auto",
-          appearance: "none", cursor: "pointer", border: "1px solid #181B20", background: "#181B20", color: "#fff",
-          padding: "6px 12px", borderRadius: 3,
-          fontFamily: ckMono, fontSize: 11, letterSpacing: "0.04em", textTransform: "uppercase",
-        }}>Test step ▷</button>
+      <div className="border-t border-neutral-200 py-3 px-[14px] flex gap-2">
+        <button
+          onClick={onDelete}
+          className="appearance-none cursor-pointer border border-neutral-200 bg-panel py-1.5 px-3 rounded-[3px] font-mono text-[11px] text-[#A2351C] tracking-[0.04em] uppercase"
+        >Delete</button>
+        <button className="appearance-none cursor-pointer border border-neutral-200 bg-panel py-1.5 px-3 rounded-[3px] font-mono text-[11px] text-coal tracking-[0.04em] uppercase">Duplicate</button>
+        <button className="ml-auto appearance-none cursor-pointer border border-coal bg-coal text-white py-1.5 px-3 rounded-[3px] font-mono text-[11px] tracking-[0.04em] uppercase">Test step ▷</button>
       </div>
     </aside>
   );
 }
 
-const kbdStyle: React.CSSProperties = {
-  fontFamily: '"JetBrains Mono", monospace', fontSize: 10,
-  padding: "1px 6px", border: "1px solid #E6E8EB", borderRadius: 2,
-  background: "#F9FAFB", color: "#3E444C", textAlign: "center",
-};
-const togglePill: React.CSSProperties = {
-  padding: "2px 8px", borderRadius: 999,
-  fontFamily: '"JetBrains Mono", monospace', fontSize: 10, fontWeight: 600,
-  letterSpacing: "0.04em", textTransform: "uppercase",
-};
+const kbdCls = "font-mono text-[10px] py-px px-1.5 border border-neutral-200 rounded-xs bg-off-white text-neutral-800 text-center";
+const togglePillCls = "py-0.5 px-2 rounded-full font-mono text-[10px] font-semibold tracking-[0.04em] uppercase";
 
 /* ────────────────────────────────────────────────────────────────────────
    The flow canvas itself.
@@ -574,24 +522,23 @@ function FlowCanvas({
       onMouseUp={onMouseUp}
       onMouseLeave={onMouseUp}
       onWheel={onWheel}
-      className="flow-canvas-bg"
+      className={`flow-canvas-bg flex-1 relative overflow-hidden bg-[#FAFBFC] ${drag?.kind === "pan" ? "cursor-grabbing" : "cursor-grab"}`}
       style={{
-        flex: 1, position: "relative", overflow: "hidden",
-        background: "#FAFBFC",
         backgroundImage: "radial-gradient(circle, #D2D6DA 1px, transparent 1px)",
-        backgroundSize: 20 + "px " + 20 + "px",
+        backgroundSize: "20px 20px",
         backgroundPosition: pan.x + "px " + pan.y + "px",
-        cursor: drag?.kind === "pan" ? "grabbing" : "grab",
       }}
     >
       {/* Inner scaled layer */}
-      <div style={{
-        position: "absolute", left: pan.x, top: pan.y,
-        transform: `scale(${zoom})`, transformOrigin: "0 0",
-        width: 2200, height: 1000,
-      }}>
+      <div
+        className="absolute origin-top-left w-[2200px] h-[1000px]"
+        style={{
+          left: pan.x, top: pan.y,
+          transform: `scale(${zoom})`,
+        }}
+      >
         {/* Edges */}
-        <svg width="2200" height="1000" style={{ position: "absolute", inset: 0, pointerEvents: "none", overflow: "visible" }}>
+        <svg width="2200" height="1000" className="absolute inset-0 pointer-events-none overflow-visible">
           <defs>
             <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
               <path d="M 0 0 L 10 5 L 0 10 z" fill="#9EA3AA" />
@@ -616,7 +563,7 @@ function FlowCanvas({
                   fill="none"
                   strokeDasharray={e.dashed ? "5 4" : "none"}
                   markerEnd={isActive ? "url(#arrowBlue)" : "url(#arrow)"}
-                  style={{ transition: "stroke 120ms" }}
+                  className="transition-[stroke] duration-[120ms]"
                 />
                 {e.label && (
                   <g transform={`translate(${(p1.x + p2.x) / 2}, ${(p1.y + p2.y) / 2 - 8})`}>
@@ -648,44 +595,33 @@ function FlowCanvas({
       {/* Canvas overlays: zoom controls, mini status */}
       <div
         onMouseDown={(e) => e.stopPropagation()}
-        style={{
-        position: "absolute", right: 16, bottom: 16, zIndex: 10,
-        display: "flex", flexDirection: "column", gap: 4,
-        background: "#fff", border: ckBorder, borderRadius: 3, padding: 4,
-        boxShadow: "0 2px 6px rgba(24,27,32,0.08)",
-      }}>
+        className="absolute right-4 bottom-4 z-10 flex flex-col gap-1 bg-panel border border-neutral-200 rounded-[3px] p-1 shadow-[0_2px_6px_rgba(24,27,32,0.08)]"
+      >
         {[
           { label: "+", onClick: () => setZoom(z => Math.min(1.4, z + 0.1)) },
           { label: "−", onClick: () => setZoom(z => Math.max(0.4, z - 0.1)) },
           { label: "⊡", onClick: () => fit() },
         ].map((b, i) => (
-          <button key={i} onClick={(e) => { e.stopPropagation(); b.onClick(); }} style={{
-            appearance: "none", border: "none", background: "transparent", cursor: "pointer",
-            width: 26, height: 26, borderRadius: 2,
-            fontFamily: ckMono, fontSize: 14, color: "#181B20",
-          }}
-          onMouseEnter={(e) => e.currentTarget.style.background = "#F2F4F6"}
-          onMouseLeave={(e) => e.currentTarget.style.background = "transparent"}>{b.label}</button>
+          <button
+            key={i}
+            onClick={(e) => { e.stopPropagation(); b.onClick(); }}
+            className="appearance-none border-none bg-transparent cursor-pointer w-[26px] h-[26px] rounded-xs font-mono text-sm text-coal hover:bg-app-bg"
+          >{b.label}</button>
         ))}
-        <div style={{ fontFamily: ckMono, fontSize: 9, color: "#9EA3AA", textAlign: "center", padding: "2px 0", borderTop: ckBorder }}>
+        <div className="font-mono text-[9px] text-neutral-500 text-center py-0.5 border-t border-neutral-200">
           {Math.round(zoom * 100)}%
         </div>
       </div>
 
       <div
         onMouseDown={(e) => e.stopPropagation()}
-        style={{
-        position: "absolute", left: 16, bottom: 16, zIndex: 10,
-        background: "#fff", border: ckBorder, borderRadius: 3,
-        padding: "8px 12px", display: "flex", alignItems: "center", gap: 12,
-        fontFamily: ckMono, fontSize: 11, color: "#3E444C",
-        boxShadow: "0 2px 6px rgba(24,27,32,0.08)",
-      }}>
-        <span style={{ display: "inline-flex", alignItems: "center", gap: 6, color: "#5F666F" }}>
-          <span style={{ width: 6, height: 6, borderRadius: 999, background: "#5BB04A" }} />
+        className="absolute left-4 bottom-4 z-10 bg-panel border border-neutral-200 rounded-[3px] py-2 px-3 flex items-center gap-3 font-mono text-[11px] text-neutral-800 shadow-[0_2px_6px_rgba(24,27,32,0.08)]"
+      >
+        <span className="inline-flex items-center gap-1.5 text-neutral-700">
+          <span className="w-1.5 h-1.5 rounded-full bg-[#5BB04A]" />
           {nodes.length} nodes · {flow.edges.length} edges
         </span>
-        <span style={{ color: "#D2D6DA" }}>|</span>
+        <span className="text-[#D2D6DA]">|</span>
         <span>Valid · last lint clean</span>
       </div>
     </div>
@@ -703,34 +639,24 @@ function LastRunHeader({ flow, runStatuses }: { flow: Flow; runStatuses: RunStat
   const fail  = Object.values(runStatuses).filter(s => s === "fail").length;
   const pend  = Object.values(runStatuses).filter(s => s === "pending").length;
   return (
-    <div style={{
-      display: "flex", alignItems: "center", gap: 16,
-      padding: "10px 16px",
-      background: "#181B20", color: "#fff",
-      borderBottom: "1px solid #2A2D33",
-    }}>
-      <span style={{ fontFamily: ckMono, fontSize: 9, color: "#9EA3AA", letterSpacing: "0.06em", textTransform: "uppercase" }}>Last run · 4m ago</span>
-      <span style={{ fontFamily: ckMono, fontSize: 11, color: "#fff" }}>{flow.id === "presandbox" ? "LIN-4527 · gift wrapping refactor" : "PR #2147 · multi-currency checkout"}</span>
-      <span style={{ display: "inline-flex", alignItems: "center", gap: 12, marginLeft: 16, fontFamily: ckMono, fontSize: 11 }}>
-        <span style={{ color: "#5BB04A" }}>● {ok} ok</span>
-        {warn > 0 && <span style={{ color: "#FFC800" }}>● {warn} warn</span>}
-        {fail > 0 && <span style={{ color: "#D14343" }}>● {fail} fail</span>}
-        {pend > 0 && <span style={{ color: "#9EA3AA" }}>● {pend} pending</span>}
-        <span style={{ color: "#5F666F" }}>/ {total}</span>
+    <div className="flex items-center gap-4 py-2.5 px-4 bg-coal text-white border-b border-[#2A2D33]">
+      <span className="font-mono text-[9px] text-neutral-500 tracking-[0.06em] uppercase">Last run · 4m ago</span>
+      <span className="font-mono text-[11px] text-white">{flow.id === "presandbox" ? "LIN-4527 · gift wrapping refactor" : "PR #2147 · multi-currency checkout"}</span>
+      <span className="inline-flex items-center gap-3 ml-4 font-mono text-[11px]">
+        <span className="text-[#5BB04A]">● {ok} ok</span>
+        {warn > 0 && <span className="text-vibe-yellow">● {warn} warn</span>}
+        {fail > 0 && <span className="text-[#D14343]">● {fail} fail</span>}
+        {pend > 0 && <span className="text-neutral-500">● {pend} pending</span>}
+        <span className="text-neutral-700">/ {total}</span>
       </span>
-      <span style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
-        <button style={darkBtn}>Open trace ↗</button>
-        <button style={darkBtn}>Replay ▷</button>
+      <span className="ml-auto flex gap-2">
+        <button className={darkBtnCls}>Open trace ↗</button>
+        <button className={darkBtnCls}>Replay ▷</button>
       </span>
     </div>
   );
 }
-const darkBtn: React.CSSProperties = {
-  appearance: "none", cursor: "pointer",
-  border: "1px solid #2A2D33", background: "#0E1014", color: "#fff",
-  padding: "5px 10px", borderRadius: 3,
-  fontFamily: '"JetBrains Mono", monospace', fontSize: 10, letterSpacing: "0.04em", textTransform: "uppercase",
-};
+const darkBtnCls = "appearance-none cursor-pointer border border-[#2A2D33] bg-[#0E1014] text-white py-[5px] px-2.5 rounded-[3px] font-mono text-[10px] tracking-[0.04em] uppercase";
 
 /* ────────────────────────────────────────────────────────────────────────
    Flow editor — wraps everything: header bar, palette, canvas, config.
@@ -770,52 +696,43 @@ export function FlowEditor({
   };
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
+    <div className="flex flex-col h-full min-h-0">
       {/* Editor toolbar */}
-      <div style={{
-        display: "flex", alignItems: "center", gap: 16,
-        padding: "12px 24px",
-        background: "#fff", borderBottom: ckBorder,
-      }}>
-        <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-          <div style={{ fontFamily: ckMono, fontSize: 10, color: "#9EA3AA", letterSpacing: "0.06em", textTransform: "uppercase" }}>{subtitle}</div>
-          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-            <h2 style={{ font: '500 20px/1.2 ' + ckDisp, margin: 0, color: "#181B20" }}>{title}</h2>
+      <div className="flex items-center gap-4 py-3 px-6 bg-panel border-b border-neutral-200">
+        <div className="flex flex-col gap-0.5">
+          <div className="font-mono text-[10px] text-neutral-500 tracking-[0.06em] uppercase">{subtitle}</div>
+          <div className="flex items-center gap-2.5">
+            <h2 className="font-display font-medium text-xl leading-[1.2] m-0 text-coal">{title}</h2>
             <CkChip tone="mariner">v{flow.version}</CkChip>
             <CkChip tone="success">deployed</CkChip>
           </div>
         </div>
-        <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 10 }}>
-          <div style={{ fontFamily: ckMono, fontSize: 11, color: "#5F666F" }}>
-            <span style={{ color: "#9EA3AA" }}>workflow ·</span> {flow.workflow}
+        <div className="ml-auto flex items-center gap-2.5">
+          <div className="font-mono text-[11px] text-neutral-700">
+            <span className="text-neutral-500">workflow ·</span> {flow.workflow}
           </div>
-          <span style={{ color: "#D2D6DA" }}>·</span>
-          <div style={{ fontFamily: ckMono, fontSize: 11, color: "#5F666F" }}>
-            <span style={{ color: "#9EA3AA" }}>last deploy ·</span> {flow.lastDeployed} by {flow.lastDeployedBy}
+          <span className="text-[#D2D6DA]">·</span>
+          <div className="font-mono text-[11px] text-neutral-700">
+            <span className="text-neutral-500">last deploy ·</span> {flow.lastDeployed} by {flow.lastDeployedBy}
           </div>
-          <div style={{ width: 1, height: 22, background: "#E6E8EB", margin: "0 6px" }} />
-          <button style={ghostBtn}>Lint flow</button>
-          <button style={ghostBtn}>Run dry ▷</button>
-          <button style={ghostBtn}>History</button>
-          <button style={darkBtnLight}>Deploy →</button>
+          <div className="w-px h-[22px] bg-neutral-200 mx-1.5" />
+          <button className={ghostBtnCls}>Lint flow</button>
+          <button className={ghostBtnCls}>Run dry ▷</button>
+          <button className={ghostBtnCls}>History</button>
+          <button className={darkBtnLightCls}>Deploy →</button>
         </div>
       </div>
 
       {/* Description strip */}
-      <div style={{
-        padding: "10px 24px",
-        background: "#F9FAFB", borderBottom: ckBorder,
-        display: "flex", alignItems: "center", gap: 12,
-        fontFamily: ckBody, fontSize: 13, color: "#3E444C",
-      }}>
-        <span style={{ fontFamily: ckMono, fontSize: 10, color: "#5F666F", letterSpacing: "0.06em", textTransform: "uppercase" }}>About</span>
-        <span style={{ flex: 1, maxWidth: 880 }}>{flow.description}</span>
+      <div className="py-2.5 px-6 bg-off-white border-b border-neutral-200 flex items-center gap-3 font-body text-[13px] text-neutral-800">
+        <span className="font-mono text-[10px] text-neutral-700 tracking-[0.06em] uppercase">About</span>
+        <span className="flex-1 max-w-[880px]">{flow.description}</span>
       </div>
 
       <LastRunHeader flow={flow} runStatuses={runStatuses} />
 
       {/* Editor body */}
-      <div style={{ flex: 1, display: "flex", minHeight: 0 }}>
+      <div className="flex-1 flex min-h-0">
         <NodePalette />
         <FlowCanvas
           flow={{ ...flow, nodes }}
@@ -832,15 +749,5 @@ export function FlowEditor({
     </div>
   );
 }
-const ghostBtn: React.CSSProperties = {
-  appearance: "none", cursor: "pointer",
-  border: "1px solid #E6E8EB", background: "#fff", color: "#181B20",
-  padding: "6px 12px", borderRadius: 3,
-  fontFamily: '"JetBrains Mono", monospace', fontSize: 11, letterSpacing: "0.04em", textTransform: "uppercase",
-};
-const darkBtnLight: React.CSSProperties = {
-  appearance: "none", cursor: "pointer",
-  border: "1px solid #181B20", background: "#181B20", color: "#fff",
-  padding: "6px 14px", borderRadius: 3,
-  fontFamily: '"JetBrains Mono", monospace', fontSize: 11, letterSpacing: "0.04em", textTransform: "uppercase",
-};
+const ghostBtnCls = "appearance-none cursor-pointer border border-neutral-200 bg-panel text-coal py-1.5 px-3 rounded-[3px] font-mono text-[11px] tracking-[0.04em] uppercase";
+const darkBtnLightCls = "appearance-none cursor-pointer border border-coal bg-coal text-white py-1.5 px-3.5 rounded-[3px] font-mono text-[11px] tracking-[0.04em] uppercase";

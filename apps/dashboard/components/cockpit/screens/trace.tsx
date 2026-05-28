@@ -2,7 +2,6 @@
 
 import React from "react";
 import { FlameGraph } from "@/components/flame-graph";
-import { ckBorder, ckMono, ckDisp, ckBody } from "@/lib/theme";
 import { CkCard, CkKPI, CkChip, CkStatusPill } from "@/components/ui";
 import { BarRow } from "@/components/charts";
 import { AIWF_DATA } from "@/lib/data/mock";
@@ -17,30 +16,30 @@ export function TraceScreen({ run, onBack }: { run: Run; onBack: () => void }) {
   const span = D.TRACE.find((s) => s.id === selectedId) || D.TRACE[0];
 
   return (
-    <div style={{ padding: "20px 24px 32px", display: "flex", flexDirection: "column", gap: 16 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 12, fontFamily: ckBody, fontSize: 13 }}>
-        <a onClick={onBack} style={{ fontFamily: ckMono, fontSize: 11, color: "#3C43E7", cursor: "pointer", textTransform: "uppercase", letterSpacing: "0.04em" }}>← Runs</a>
-        <span style={{ color: "#D2D6DA" }}>/</span>
-        <span style={{ fontFamily: ckMono, color: "#5F666F" }}>{run.id}</span>
+    <div className="px-6 pt-5 pb-8 flex flex-col gap-4">
+      <div className="flex items-center gap-3 font-body text-[13px]">
+        <a onClick={onBack} className="font-mono text-[11px] text-mariner cursor-pointer uppercase tracking-[0.04em]">← Runs</a>
+        <span className="text-[#D2D6DA]">/</span>
+        <span className="font-mono text-neutral-700">{run.id}</span>
       </div>
 
-      <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between" }}>
-        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+      <div className="flex items-end justify-between">
+        <div className="flex flex-col gap-1">
+          <div className="flex items-center gap-2.5">
             <CkStatusPill status={run.status} />
             <CkChip tone="mariner">{run.workflowName}</CkChip>
-            <span style={{ fontFamily: ckMono, fontSize: 11, color: "#5F666F" }}>{run.ticket} · {run.actor}</span>
+            <span className="font-mono text-[11px] text-neutral-700">{run.ticket} · {run.actor}</span>
           </div>
-          <h2 style={{ font: '500 24px/1.2 ' + ckDisp, margin: 0, color: "#181B20" }}>Add multi-currency support to checkout</h2>
+          <h2 className="font-display font-medium text-2xl leading-[1.2] m-0 text-neutral-900">Add multi-currency support to checkout</h2>
         </div>
-        <div style={{ display: "flex", gap: 8 }}>
-          <button style={{ appearance: "none", border: ckBorder, background: "#fff", padding: "8px 14px", borderRadius: 3, fontFamily: ckMono, fontSize: 11, color: "#181B20", textTransform: "uppercase", letterSpacing: "0.04em", cursor: "pointer" }}>Replay</button>
-          <button style={{ appearance: "none", border: ckBorder, background: "#fff", padding: "8px 14px", borderRadius: 3, fontFamily: ckMono, fontSize: 11, color: "#181B20", textTransform: "uppercase", letterSpacing: "0.04em", cursor: "pointer" }}>Open in Vercel ↗</button>
-          <button style={{ appearance: "none", border: "1px solid #181B20", background: "#181B20", color: "#fff", padding: "8px 14px", borderRadius: 3, fontFamily: ckMono, fontSize: 11, textTransform: "uppercase", letterSpacing: "0.04em", cursor: "pointer" }}>View PR ↗</button>
+        <div className="flex gap-2">
+          <button className="appearance-none border border-neutral-200 bg-panel px-3.5 py-2 rounded-[3px] font-mono text-[11px] text-neutral-900 uppercase tracking-[0.04em] cursor-pointer">Replay</button>
+          <button className="appearance-none border border-neutral-200 bg-panel px-3.5 py-2 rounded-[3px] font-mono text-[11px] text-neutral-900 uppercase tracking-[0.04em] cursor-pointer">Open in Vercel ↗</button>
+          <button className="appearance-none border border-coal bg-coal text-white px-3.5 py-2 rounded-[3px] font-mono text-[11px] uppercase tracking-[0.04em] cursor-pointer">View PR ↗</button>
         </div>
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 8 }}>
+      <div className="grid grid-cols-5 gap-2">
         <CkKPI label="Duration" value="18.3s" sub="elapsed" />
         <CkKPI label="Tokens" value="24.5k" sub="in + out" />
         <CkKPI label="Cost" value="$0.34" sub="this run" />
@@ -52,31 +51,31 @@ export function TraceScreen({ run, onBack }: { run: Run; onBack: () => void }) {
         eyebrow="Arthur OpenInference trace"
         title="Span timeline"
         action={
-        <div style={{ display: "flex", gap: 12, fontFamily: ckBody, fontSize: 12, color: "#5F666F" }}>
-            <span style={{ display: "flex", alignItems: "center", gap: 6 }}><span style={{ width: 10, height: 10, background: "#3C43E7", borderRadius: 1 }} />LLM</span>
-            <span style={{ display: "flex", alignItems: "center", gap: 6 }}><span style={{ width: 10, height: 10, background: "#FD6027", borderRadius: 1 }} />Tool</span>
-            <span style={{ display: "flex", alignItems: "center", gap: 6 }}><span style={{ width: 10, height: 10, background: "#FFC800", borderRadius: 1 }} />Guardrail</span>
-            <span style={{ display: "flex", alignItems: "center", gap: 6 }}><span style={{ width: 10, height: 10, background: "#181B20", borderRadius: 1 }} />Workflow</span>
+        <div className="flex gap-3 font-body text-xs text-neutral-700">
+            <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 bg-mariner rounded-[1px]" />LLM</span>
+            <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 bg-burnt-orange rounded-[1px]" />Tool</span>
+            <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 bg-vibe-yellow rounded-[1px]" />Guardrail</span>
+            <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 bg-coal rounded-[1px]" />Workflow</span>
           </div>
         }>
 
-        <div style={{ marginTop: 18 }}>
+        <div className="mt-[18px]">
           <FlameGraph spans={D.TRACE} width={1080} rowH={22} gap={3} selectedId={selectedId} onSelect={setSelectedId} />
         </div>
       </CkCard>
 
-      <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr", gap: 12 }}>
+      <div className="grid grid-cols-[1.4fr_1fr] gap-3">
         <CkCard eyebrow={span.kind} title={span.name}>
-          <div style={{ display: "grid", gridTemplateColumns: "auto 1fr", rowGap: 8, columnGap: 24, fontFamily: ckMono, fontSize: 12 }}>
-            <span style={{ color: "#9EA3AA" }}>span_id</span><span style={{ color: "#181B20" }}>{span.id}</span>
-            <span style={{ color: "#9EA3AA" }}>started_at</span><span style={{ color: "#181B20" }}>+{(span.start / 1000).toFixed(2)}s</span>
-            <span style={{ color: "#9EA3AA" }}>duration</span><span style={{ color: "#181B20" }}>{span.duration}ms</span>
-            <span style={{ color: "#9EA3AA" }}>status</span>
+          <div className="grid grid-cols-[auto_1fr] gap-y-2 gap-x-6 font-mono text-xs">
+            <span className="text-neutral-500">span_id</span><span className="text-neutral-900">{span.id}</span>
+            <span className="text-neutral-500">started_at</span><span className="text-neutral-900">+{(span.start / 1000).toFixed(2)}s</span>
+            <span className="text-neutral-500">duration</span><span className="text-neutral-900">{span.duration}ms</span>
+            <span className="text-neutral-500">status</span>
             <span>{span.status === "warn" ? <CkChip tone="warn">flag</CkChip> : <CkChip tone="success">ok</CkChip>}</span>
             {span.attrs && Object.entries(span.attrs).map(([k, v]) =>
             <React.Fragment key={k}>
-                <span style={{ color: "#9EA3AA" }}>{k}</span>
-                <span style={{ color: "#181B20", wordBreak: "break-all" }}>{String(v)}</span>
+                <span className="text-neutral-500">{k}</span>
+                <span className="text-neutral-900 break-all">{String(v)}</span>
               </React.Fragment>
             )}
           </div>
@@ -84,7 +83,7 @@ export function TraceScreen({ run, onBack }: { run: Run; onBack: () => void }) {
 
         <CkCard eyebrow="Arthur" title="Span evaluations">
           {span.evals ?
-          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          <div className="flex flex-col gap-2.5">
                 {Object.entries(span.evals).map(([k, v]) =>
             <BarRow key={k} label={k.replace(/([A-Z])/g, ' $1').replace(/^./, (c) => c.toUpperCase())}
             value={typeof v === "number" ? v.toFixed(3) : v}
@@ -92,10 +91,10 @@ export function TraceScreen({ run, onBack }: { run: Run; onBack: () => void }) {
             color={v > 0.9 ? "#5BB04A" : v > 0.5 ? "#3C43E7" : "#FD6027"} />
             )}
               </div> :
-          <div style={{ padding: "20px 0", textAlign: "center", color: "#9EA3AA", fontFamily: ckBody, fontSize: 13 }}>
+          <div className="py-5 text-center text-neutral-500 font-body text-[13px]">
                 No evals run on this span kind.
               </div>}
-          <div style={{ marginTop: 16, paddingTop: 12, borderTop: ckBorder, fontFamily: ckMono, fontSize: 10, color: "#5F666F", letterSpacing: "0.06em", textTransform: "uppercase" }}>
+          <div className="mt-4 pt-3 border-t border-neutral-200 font-mono text-[10px] text-neutral-700 tracking-[0.06em] uppercase">
             Evaluator: arthur-engine v3.4 · openinference
           </div>
         </CkCard>
@@ -103,7 +102,7 @@ export function TraceScreen({ run, onBack }: { run: Run; onBack: () => void }) {
 
       <CkLLMViewer span={span} />
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1.3fr", gap: 12 }}>
+      <div className="grid grid-cols-[1fr_1.3fr] gap-3">
         <CkSandboxTests />
         <CkPRDiff />
       </div>
@@ -167,31 +166,17 @@ CONSTRAINTS:
       eyebrow="LLM I/O · arthur span"
       title={span.name}
       action={
-      <div style={{ display: "inline-flex", gap: 2, padding: 3, background: "#F2F4F6", borderRadius: 4, border: ckBorder }}>
+      <div className="inline-flex gap-0.5 p-[3px] bg-app-bg rounded-sm border border-neutral-200">
           {tabs.map((tb) =>
-        <button key={tb.id} onClick={() => setTab(tb.id)} style={{
-          appearance: "none", border: "none", cursor: "pointer",
-          padding: "6px 12px", borderRadius: 3,
-          background: tab === tb.id ? "#fff" : "transparent",
-          boxShadow: tab === tb.id ? "0 1px 2px rgba(24,27,32,0.06)" : "none",
-          color: tab === tb.id ? "#181B20" : "#5F666F",
-          fontFamily: ckMono, fontWeight: 500, fontSize: 11,
-          display: "inline-flex", alignItems: "center", gap: 6,
-          letterSpacing: "-0.01em"
-        }}>
+        <button key={tb.id} onClick={() => setTab(tb.id)} className={`appearance-none border-none cursor-pointer px-3 py-1.5 rounded-[3px] font-mono font-medium text-[11px] inline-flex items-center gap-1.5 tracking-[-0.01em] ${tab === tb.id ? "bg-panel text-neutral-900 shadow-[0_1px_2px_rgba(24,27,32,0.06)]" : "bg-transparent text-neutral-700"}`}>
               {tb.label}
-              <span style={{ color: "#9EA3AA", fontWeight: 400, fontSize: 10 }}>{tb.sub}</span>
+              <span className="text-neutral-500 font-normal text-[10px]">{tb.sub}</span>
             </button>
         )}
         </div>
       }>
 
-      <div style={{
-        background: "#0E1014", color: "#E6E8EB",
-        borderRadius: 3, padding: 16,
-        fontFamily: ckMono, fontSize: 12, lineHeight: 1.65,
-        whiteSpace: "pre-wrap", maxHeight: 320, overflow: "auto"
-      }}>
+      <div className="bg-[#0E1014] text-neutral-200 rounded-[3px] p-4 font-mono text-xs leading-[1.65] whitespace-pre-wrap max-h-80 overflow-auto">
         {tab === "prompt" && <span>{PROMPT}</span>}
         {tab === "completion" &&
         <span dangerouslySetInnerHTML={{
@@ -205,23 +190,23 @@ CONSTRAINTS:
         }} />
         }
         {tab === "messages" &&
-        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        <div className="flex flex-col gap-2.5">
             {[
           { role: "system", body: "You are an autonomous coding agent for ai-workflow. Reply with diffs only." },
           { role: "user", body: "Implement LIN-4521 from the plan in span s04." },
           { role: "assistant", body: "[tool: read_files] cart.tsx, useCart.ts, formatMoney.ts → [tool: write_diff] 9 files patched. PR opened." }].
           map((m, i) =>
           <div key={i}>
-                <span style={{ color: "#FD6027", textTransform: "uppercase", letterSpacing: "0.06em", fontSize: 10 }}>{m.role}</span>
-                <div style={{ color: "#E6E8EB", marginTop: 2 }}>{m.body}</div>
+                <span className="text-burnt-orange uppercase tracking-[0.06em] text-[10px]">{m.role}</span>
+                <div className="text-neutral-200 mt-0.5">{m.body}</div>
               </div>
           )}
           </div>
         }
         {tab === "tools" &&
-        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            <div><span style={{ color: "#5BB04A" }}>● </span><span style={{ color: "#FFC800" }}>sandbox.fs.readMany</span>({'{ paths: ["cart.tsx","useCart.ts","formatMoney.ts"] }'}) <span style={{ color: "#9EA3AA" }}>→ 14 files · 82.4kb</span></div>
-            <div><span style={{ color: "#5BB04A" }}>● </span><span style={{ color: "#FFC800" }}>sandbox.fs.writeMany</span>({'{ files: 9 }'}) <span style={{ color: "#9EA3AA" }}>→ ok</span></div>
+        <div className="flex flex-col gap-2">
+            <div><span className="text-[#5BB04A]">● </span><span className="text-vibe-yellow">sandbox.fs.readMany</span>({'{ paths: ["cart.tsx","useCart.ts","formatMoney.ts"] }'}) <span className="text-neutral-500">→ 14 files · 82.4kb</span></div>
+            <div><span className="text-[#5BB04A]">● </span><span className="text-vibe-yellow">sandbox.fs.writeMany</span>({'{ files: 9 }'}) <span className="text-neutral-500">→ ok</span></div>
           </div>
         }
       </div>
@@ -242,19 +227,19 @@ function CkSandboxTests() {
   const totalP = SUITE.reduce((a, s) => a + s.p, 0);
   return (
     <CkCard eyebrow="Vercel Sandbox · pnpm test" title="Test results" action={<CkChip tone="success">{totalP} passed · 0 failed</CkChip>}>
-      <div style={{ display: "flex", flexDirection: "column", gap: 6, fontFamily: ckMono, fontSize: 12 }}>
+      <div className="flex flex-col gap-1.5 font-mono text-xs">
         {SUITE.map((s, i) =>
-        <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 10px", background: s.hl ? "#F6FAF1" : "#F9FAFB", borderRadius: 2, border: "1px solid " + (s.hl ? "#D7F4B3" : ckBorder) }}>
-            <span style={{ color: "#5BB04A", fontSize: 14 }}>✓</span>
-            <span style={{ flex: 1, color: "#181B20", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.f}</span>
-            <span style={{ color: "#3F6B1E" }}>{s.p}</span>
-            <span style={{ color: "#9EA3AA", fontSize: 11 }}>{s.t}ms</span>
+        <div key={i} className={`flex items-center gap-2 px-2.5 py-1.5 rounded-xs border ${s.hl ? "bg-[#F6FAF1] border-[#D7F4B3]" : "bg-off-white border-neutral-200"}`}>
+            <span className="text-[#5BB04A] text-sm">✓</span>
+            <span className="flex-1 text-neutral-900 overflow-hidden text-ellipsis whitespace-nowrap">{s.f}</span>
+            <span className="text-[#3F6B1E]">{s.p}</span>
+            <span className="text-neutral-500 text-[11px]">{s.t}ms</span>
           </div>
         )}
       </div>
-      <div style={{ marginTop: 12, paddingTop: 10, borderTop: ckBorder, display: "flex", alignItems: "center", gap: 16, fontFamily: ckMono, fontSize: 10, color: "#5F666F", letterSpacing: "0.06em", textTransform: "uppercase" }}>
+      <div className="mt-3 pt-2.5 border-t border-neutral-200 flex items-center gap-4 font-mono text-[10px] text-neutral-700 tracking-[0.06em] uppercase">
         <span>span s11 · sandbox.exec</span>
-        <span style={{ marginLeft: "auto" }}>4.12s · 312 specs</span>
+        <span className="ml-auto">4.12s · 312 specs</span>
       </div>
     </CkCard>);
 
@@ -288,28 +273,28 @@ function CkPRDiff() {
       eyebrow="GitHub · pulls.create"
       title="PR #2147 · checkout: multi-currency support"
       action={
-      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+      <div className="flex gap-2 items-center">
           <CkChip tone="success">+142 / −36</CkChip>
           <CkChip>9 files</CkChip>
-          <a style={{ fontFamily: ckMono, fontSize: 11, color: "#3C43E7", textDecoration: "none", textTransform: "uppercase", letterSpacing: "0.04em", cursor: "pointer" }}>View on GitHub ↗</a>
+          <a className="font-mono text-[11px] text-mariner no-underline uppercase tracking-[0.04em] cursor-pointer">View on GitHub ↗</a>
         </div>
       }>
 
-      <div style={{ fontFamily: ckMono, fontSize: 11, lineHeight: 1.55, border: ckBorder, borderRadius: 3, overflow: "hidden" }}>
+      <div className="font-mono text-[11px] leading-[1.55] border border-neutral-200 rounded-[3px] overflow-hidden">
         {DIFF.map((line, i) => {
           const c = color(line.kind);
           return (
-            <div key={i} style={{ display: "flex", background: c.bg, color: c.fg }}>
-              <span style={{ flex: "0 0 32px", textAlign: "right", padding: "2px 8px", color: "#9EA3AA", borderRight: ckBorder, userSelect: "none" }}>{i + 1}</span>
-              <span style={{ flex: "0 0 16px", textAlign: "center", padding: "2px 0", fontWeight: 600 }}>{c.pre}</span>
-              <span style={{ flex: 1, padding: "2px 8px", whiteSpace: "pre" }}>{line.v}</span>
+            <div key={i} className="flex" style={{ background: c.bg, color: c.fg }}>
+              <span className="flex-[0_0_32px] text-right px-2 py-0.5 text-neutral-500 border-r border-neutral-200 select-none">{i + 1}</span>
+              <span className="flex-[0_0_16px] text-center py-0.5 font-semibold">{c.pre}</span>
+              <span className="flex-1 px-2 py-0.5 whitespace-pre">{line.v}</span>
             </div>);
 
         })}
       </div>
-      <div style={{ marginTop: 12, paddingTop: 10, borderTop: ckBorder, fontFamily: ckMono, fontSize: 10, color: "#5F666F", letterSpacing: "0.06em", textTransform: "uppercase", display: "flex", alignItems: "center", gap: 12 }}>
+      <div className="mt-3 pt-2.5 border-t border-neutral-200 font-mono text-[10px] text-neutral-700 tracking-[0.06em] uppercase flex items-center gap-3">
         <span>span s13 · github.pulls.create</span>
-        <span style={{ marginLeft: "auto" }}>Awaiting review · sara.k</span>
+        <span className="ml-auto">Awaiting review · sara.k</span>
       </div>
     </CkCard>);
 

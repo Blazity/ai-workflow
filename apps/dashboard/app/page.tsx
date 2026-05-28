@@ -76,26 +76,9 @@ export default function CockpitApp() {
 
   return (
     <CockpitCtx.Provider value={{ t, setTweak, persona, range, env }}>
-      <div
-        style={{
-          height: "100vh",
-          width: "100vw",
-          display: "flex",
-          overflow: "hidden",
-          background: "#F2F4F6",
-          position: "relative",
-        }}
-      >
+      <div className="h-screen w-screen flex overflow-hidden bg-app-bg relative">
         <CkSidebar active={screen} onNav={setScreen} />
-        <main
-          style={{
-            flex: 1,
-            display: "flex",
-            flexDirection: "column",
-            minWidth: 0,
-            minHeight: 0,
-          }}
-        >
+        <main className="flex-1 flex flex-col min-w-0 min-h-0">
           <CkTopbar
             persona={persona}
             setPersona={setPersona}
@@ -106,7 +89,7 @@ export default function CockpitApp() {
             activityOpen={activityOpen}
             onToggleActivity={() => setActivityOpen((v) => !v)}
           />
-          <div style={{ flex: 1, overflow: "auto", minHeight: 0 }}>
+          <div className="flex-1 overflow-auto min-h-0">
             {screen === "overview" && <OverviewScreen onOpenRun={openRun} />}
             {screen === "runs" && <RunsScreen onOpenRun={openRun} />}
             {screen === "trace" && (

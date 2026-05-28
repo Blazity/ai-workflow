@@ -2,7 +2,6 @@
 
 import React, { useState } from "react";
 import { CkCard, CkChip, CkStatusPill, CkTabs, TicketLink, PRLink } from "@/components/ui";
-import { ckBorder, ckMono, ckDisp, ckBody } from "@/lib/theme";
 import { AIWF_DATA } from "@/lib/data/mock";
 import type { Run } from "@/lib/types";
 
@@ -13,13 +12,13 @@ export function RunsScreen({ onOpenRun }: { onOpenRun: (run: Run) => void }) {
   const filtered = filter === "all" ? D.RUNS : D.RUNS.filter((r) => r.status === filter);
 
   return (
-    <div style={{ padding: "20px 24px 32px", display: "flex", flexDirection: "column", gap: 16 }}>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-          <div style={{ fontFamily: ckMono, fontSize: 10, color: "#9EA3AA", letterSpacing: "0.06em", textTransform: "uppercase" }}>Workflow runs</div>
-          <h2 style={{ font: '500 24px/1.2 ' + ckDisp, margin: 0, color: "#181B20" }}>{D.RUNS.length} runs · last 24h</h2>
+    <div className="flex flex-col gap-4 px-6 pt-5 pb-8">
+      <div className="flex items-center justify-between">
+        <div className="flex flex-col gap-1">
+          <div className="font-mono text-[10px] uppercase tracking-[0.06em] text-neutral-500">Workflow runs</div>
+          <h2 className="font-display text-2xl font-medium leading-[1.2] text-neutral-900 m-0">{D.RUNS.length} runs · last 24h</h2>
         </div>
-        <div style={{ display: "flex", gap: 8 }}>
+        <div className="flex gap-2">
           <CkTabs active={filter} onChange={setFilter} tabs={[
             { id: "all", label: "All" },
             { id: "success", label: "Success" },
@@ -28,53 +27,51 @@ export function RunsScreen({ onOpenRun }: { onOpenRun: (run: Run) => void }) {
             { id: "failed", label: "Failed" },
             { id: "blocked", label: "Blocked" }]
           } />
-          <button style={{ appearance: "none", border: ckBorder, background: "#fff", padding: "6px 12px", borderRadius: 3, fontFamily: ckMono, fontSize: 11, color: "#181B20", textTransform: "uppercase", letterSpacing: "0.04em", cursor: "pointer" }}>+ Filter</button>
-          <button style={{ appearance: "none", border: "1px solid #181B20", background: "#181B20", color: "#fff", padding: "6px 12px", borderRadius: 3, fontFamily: ckMono, fontSize: 11, textTransform: "uppercase", letterSpacing: "0.04em", cursor: "pointer" }}>Export ↓</button>
+          <button className="appearance-none border border-neutral-200 bg-panel px-3 py-1.5 rounded-[3px] font-mono text-[11px] text-neutral-900 uppercase tracking-[0.04em] cursor-pointer">+ Filter</button>
+          <button className="appearance-none border border-neutral-900 bg-neutral-900 text-white px-3 py-1.5 rounded-[3px] font-mono text-[11px] uppercase tracking-[0.04em] cursor-pointer">Export ↓</button>
         </div>
       </div>
 
       <CkCard pad={0}>
-        <table style={{ width: "100%", borderCollapse: "collapse", fontFamily: ckBody, fontSize: 13 }}>
+        <table className="w-full border-collapse font-body text-[13px]">
           <thead>
-            <tr style={{ background: "#F9FAFB", color: "#5F666F", fontFamily: ckMono, fontSize: 10, letterSpacing: "0.06em", textTransform: "uppercase" }}>
+            <tr className="bg-neutral-100 text-neutral-700 font-mono text-[10px] uppercase tracking-[0.06em]">
               {["Status", "Ticket · title", "Workflow", "Model", "Started", "Duration", "Tokens", "Cost", "Eval", "Guard"].map((h, i) =>
-                <th key={i} style={{ padding: "10px 12px", textAlign: i >= 4 ? "right" : "left", fontWeight: 500, borderBottom: ckBorder, whiteSpace: "nowrap" }}>{h}</th>
+                <th key={i} className={`px-3 py-2.5 font-medium border-b border-neutral-200 whitespace-nowrap ${i >= 4 ? "text-right" : "text-left"}`}>{h}</th>
               )}
             </tr>
           </thead>
           <tbody>
             {filtered.map((r, i) =>
-              <tr key={r.id} onClick={() => onOpenRun(r)} style={{ borderBottom: i < filtered.length - 1 ? ckBorder : "none", cursor: "pointer" }}
-                onMouseEnter={(e) => e.currentTarget.style.background = "#F9FAFB"}
-                onMouseLeave={(e) => e.currentTarget.style.background = "transparent"}>
-                <td style={{ padding: "10px 12px" }}><CkStatusPill status={r.status} /></td>
-                <td style={{ padding: "10px 12px" }}>
-                  <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                    <span style={{ fontWeight: 600, color: "#181B20", maxWidth: 320, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", display: "block" }}>{r.ticketTitle}</span>
-                    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <tr key={r.id} onClick={() => onOpenRun(r)} className={`cursor-pointer hover:bg-neutral-100 ${i < filtered.length - 1 ? "border-b border-neutral-200" : ""}`}>
+                <td className="px-3 py-2.5"><CkStatusPill status={r.status} /></td>
+                <td className="px-3 py-2.5">
+                  <div className="flex flex-col gap-1">
+                    <span className="block font-semibold text-neutral-900 max-w-[320px] overflow-hidden text-ellipsis whitespace-nowrap">{r.ticketTitle}</span>
+                    <div className="flex items-center gap-1.5">
                       <TicketLink ticket={r.ticket} url={r.ticketUrl} />
                       {r.prNumber && r.prUrl && <PRLink num={r.prNumber} url={r.prUrl} />}
-                      <span style={{ fontFamily: ckMono, fontSize: 10, color: "#9EA3AA" }}>{r.id}</span>
+                      <span className="font-mono text-[10px] text-neutral-500">{r.id}</span>
                     </div>
                   </div>
                 </td>
-                <td style={{ padding: "10px 12px" }}>
-                  <CkChip style={{ background: "#F2F4F6", color: "#3E444C" }}>{r.workflowName}</CkChip>
+                <td className="px-3 py-2.5">
+                  <CkChip>{r.workflowName}</CkChip>
                 </td>
-                <td style={{ padding: "10px 12px", fontFamily: ckMono, fontSize: 11, color: "#5F666F" }}>{r.model}</td>
-                <td style={{ padding: "10px 12px", textAlign: "right", fontFamily: ckMono, fontSize: 11, color: "#9EA3AA" }}>{r.startedAtMin}m ago</td>
-                <td style={{ padding: "10px 12px", textAlign: "right", fontFamily: ckMono, fontWeight: 500 }}>{r.duration ? r.duration + "s" : "—"}</td>
-                <td style={{ padding: "10px 12px", textAlign: "right", fontFamily: ckMono, color: "#5F666F" }}>{(r.tokens / 1000).toFixed(1)}k</td>
-                <td style={{ padding: "10px 12px", textAlign: "right", fontFamily: ckMono, fontWeight: 500 }}>${r.cost.toFixed(2)}</td>
-                <td style={{ padding: "10px 12px", textAlign: "right" }}>
+                <td className="px-3 py-2.5 font-mono text-[11px] text-neutral-700">{r.model}</td>
+                <td className="px-3 py-2.5 text-right font-mono text-[11px] text-neutral-500">{r.startedAtMin}m ago</td>
+                <td className="px-3 py-2.5 text-right font-mono font-medium">{r.duration ? r.duration + "s" : "—"}</td>
+                <td className="px-3 py-2.5 text-right font-mono text-neutral-700">{(r.tokens / 1000).toFixed(1)}k</td>
+                <td className="px-3 py-2.5 text-right font-mono font-medium">${r.cost.toFixed(2)}</td>
+                <td className="px-3 py-2.5 text-right">
                   {r.evalScore ?
-                    <span style={{ fontFamily: ckMono, fontSize: 11, color: r.evalScore > 0.9 ? "#3F6B1E" : r.evalScore > 0.85 ? "#7A5A00" : "#A2351C", fontWeight: 600 }}>{(r.evalScore * 100).toFixed(0)}</span> :
-                    <span style={{ fontFamily: ckMono, fontSize: 11, color: "#D2D6DA" }}>—</span>}
+                    <span className={`font-mono text-[11px] font-semibold ${r.evalScore > 0.9 ? "text-success-fg" : r.evalScore > 0.85 ? "text-[#7A5A00]" : "text-fail-fg"}`}>{(r.evalScore * 100).toFixed(0)}</span> :
+                    <span className="font-mono text-[11px] text-neutral-300">—</span>}
                 </td>
-                <td style={{ padding: "10px 12px", textAlign: "right" }}>
+                <td className="px-3 py-2.5 text-right">
                   {r.guardrailHits > 0 ?
                     <CkChip tone="warn">{r.guardrailHits}</CkChip> :
-                    <span style={{ fontFamily: ckMono, fontSize: 11, color: "#D2D6DA" }}>—</span>}
+                    <span className="font-mono text-[11px] text-neutral-300">—</span>}
                 </td>
               </tr>
             )}

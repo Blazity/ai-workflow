@@ -2,7 +2,6 @@
 
 import React from "react";
 import { BlazityLogo } from "@/components/ui";
-import { ckBorder, ckMono, ckBody } from "@/lib/theme";
 
 const NAV = [
   { id: "overview", label: "Overview", glyph: "◇", group: "obs" },
@@ -17,20 +16,10 @@ const NAV = [
 
 export function CkSidebar({ active, onNav }: { active: string; onNav: (id: string) => void }) {
   return (
-    <aside
-      style={{
-        width: 220,
-        flex: "0 0 220px",
-        background: "#fff",
-        borderRight: ckBorder,
-        display: "flex",
-        flexDirection: "column",
-        padding: "20px 0",
-      }}
-    >
-      <div style={{ padding: "0 20px 18px", display: "flex", alignItems: "center", gap: 8 }}>
+    <aside className="w-[220px] flex-[0_0_220px] bg-panel border-r border-neutral-200 flex flex-col py-5">
+      <div className="px-5 pb-[18px] flex items-center gap-2">
         <BlazityLogo size={22} color="#FD6027" wordmarkColor="#181B20" />
-        <span style={{ fontFamily: ckMono, fontSize: 9, color: "#5F666F", letterSpacing: "0.06em", textTransform: "uppercase", marginLeft: 2, marginTop: 4 }}>/ AI Workflow</span>
+        <span className="font-mono text-[9px] text-neutral-700 tracking-[0.06em] uppercase ml-0.5 mt-1">/ AI Workflow</span>
       </div>
 
       {[
@@ -38,40 +27,22 @@ export function CkSidebar({ active, onNav }: { active: string; onNav: (id: strin
         { id: "flow", label: "Workflow editor" },
       ].map((grp, gi) => (
         <React.Fragment key={grp.id}>
-          <nav style={{ display: "flex", flexDirection: "column", gap: 1, padding: "0 8px", marginTop: gi === 0 ? 8 : 12 }}>
+          <nav className={`flex flex-col gap-px px-2 ${gi === 0 ? "mt-2" : "mt-3"}`}>
             {NAV.filter((n) => n.group === grp.id).map((n) => {
               const on = active === n.id;
               return (
                 <button
                   key={n.id}
                   onClick={() => onNav(n.id)}
-                  style={{
-                    appearance: "none",
-                    textAlign: "left",
-                    border: "none",
-                    cursor: "pointer",
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 10,
-                    padding: "9px 12px",
-                    borderRadius: 3,
-                    background: on ? "#ECECFD" : "transparent",
-                    color: on ? "#3C43E7" : "#3E444C",
-                    fontFamily: ckBody,
-                    fontSize: 13,
-                    fontWeight: on ? 600 : 500,
-                    transition: "all 120ms cubic-bezier(.2,0,0,1)",
-                  }}
-                  onMouseEnter={(e) => {
-                    if (!on) e.currentTarget.style.background = "#F2F4F6";
-                  }}
-                  onMouseLeave={(e) => {
-                    if (!on) e.currentTarget.style.background = "transparent";
-                  }}
+                  className={`appearance-none text-left border-none cursor-pointer flex items-center gap-[10px] px-3 py-[9px] rounded-[3px] font-body text-[13px] transition-all duration-[120ms] ease-[cubic-bezier(.2,0,0,1)] ${
+                    on
+                      ? "bg-[#ECECFD] text-mariner font-semibold"
+                      : "bg-transparent text-neutral-800 font-medium hover:bg-app-bg"
+                  }`}
                 >
-                  <span style={{ fontFamily: ckMono, fontSize: 12, width: 14, textAlign: "center", color: on ? "#3C43E7" : "#9EA3AA" }}>{n.glyph}</span>
+                  <span className={`font-mono text-xs w-[14px] text-center ${on ? "text-mariner" : "text-neutral-500"}`}>{n.glyph}</span>
                   {n.label}
-                  {on && <span style={{ marginLeft: "auto", width: 4, height: 16, background: "#3C43E7", borderRadius: 999 }} />}
+                  {on && <span className="ml-auto w-1 h-4 bg-mariner rounded-full" />}
                 </button>
               );
             })}
@@ -102,63 +73,28 @@ export function CkTopbar({
   onToggleActivity: () => void;
 }) {
   return (
-    <div
-      style={{
-        height: 56,
-        flex: "0 0 56px",
-        borderBottom: ckBorder,
-        background: "#fff",
-        display: "flex",
-        alignItems: "center",
-        padding: "0 24px",
-        gap: 16,
-      }}
-    >
-      <div style={{ flex: 1, maxWidth: 380, position: "relative" }}>
+    <div className="h-14 flex-[0_0_56px] border-b border-neutral-200 bg-panel flex items-center px-6 gap-4">
+      <div className="flex-1 max-w-[380px] relative">
         <input
           placeholder="Search runs, traces, span IDs, tickets…"
-          style={{
-            width: "100%",
-            height: 34,
-            background: "#F2F4F6",
-            border: ckBorder,
-            borderRadius: 3,
-            padding: "0 12px 0 32px",
-            fontFamily: ckBody,
-            fontSize: 13,
-            color: "#181B20",
-            outline: "none",
-          }}
+          className="w-full h-[34px] bg-app-bg border border-neutral-200 rounded-[3px] pl-8 pr-3 font-body text-[13px] text-neutral-900 outline-none"
         />
-        <span style={{ position: "absolute", left: 10, top: 9, color: "#9EA3AA", fontFamily: ckMono, fontSize: 14 }}>⌕</span>
-        <span style={{ position: "absolute", right: 10, top: 9, fontFamily: ckMono, fontSize: 10, color: "#9EA3AA", border: "1px solid #D2D6DA", borderRadius: 2, padding: "1px 5px" }}>⌘K</span>
+        <span className="absolute left-[10px] top-[9px] text-neutral-500 font-mono text-sm">⌕</span>
+        <span className="absolute right-[10px] top-[9px] font-mono text-[10px] text-neutral-500 border border-[#D2D6DA] rounded-xs px-[5px] py-px">⌘K</span>
       </div>
 
-      <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8 }}>
+      <div className="ml-auto flex items-center gap-2">
         <button
           onClick={onToggleActivity}
           title="Activity stream"
-          style={{
-            appearance: "none",
-            border: ckBorder,
-            background: activityOpen ? "#181B20" : "#fff",
-            color: activityOpen ? "#fff" : "#181B20",
-            width: 34,
-            height: 34,
-            borderRadius: 3,
-            cursor: "pointer",
-            display: "inline-flex",
-            alignItems: "center",
-            justifyContent: "center",
-            fontFamily: ckMono,
-            fontSize: 14,
-            position: "relative",
-          }}
+          className={`appearance-none border border-neutral-200 w-[34px] h-[34px] rounded-[3px] cursor-pointer inline-flex items-center justify-center font-mono text-sm relative ${
+            activityOpen ? "bg-neutral-900 text-white" : "bg-panel text-neutral-900"
+          }`}
         >
           ≣
-          <span style={{ position: "absolute", top: 4, right: 4, width: 6, height: 6, borderRadius: 999, background: "#FD6027" }} />
+          <span className="absolute top-1 right-1 w-1.5 h-1.5 rounded-full bg-burnt-orange" />
         </button>
-        <div style={{ width: 28, height: 28, borderRadius: 999, background: "#3C43E7", color: "#fff", fontFamily: ckMono, fontWeight: 500, fontSize: 11, display: "flex", alignItems: "center", justifyContent: "center" }}>SK</div>
+        <div className="w-7 h-7 rounded-full bg-mariner text-white font-mono font-medium text-[11px] flex items-center justify-center">SK</div>
       </div>
     </div>
   );

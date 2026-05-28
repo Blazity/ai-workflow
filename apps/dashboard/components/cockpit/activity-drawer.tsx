@@ -1,7 +1,6 @@
 "use client";
 
 import { useState } from "react";
-import { ckBorder, ckMono, ckBody, ckDisp } from "@/lib/theme";
 import { AIWF_DATA } from "@/lib/data/mock";
 
 const D = AIWF_DATA;
@@ -54,25 +53,17 @@ export function CkActivityDrawer({ open, onClose }: { open: boolean; onClose: ()
   return (
     <>
       {/* scrim */}
-      <div onClick={onClose} style={{
-        position: "fixed", inset: 0, background: "rgba(24,27,32,0.16)", zIndex: 50, animation: "ckPulse 200ms ease-out",
-      }} />
-      <aside style={{
-        position: "fixed", top: 0, right: 0, bottom: 0, width: 420,
-        background: "#fff", borderLeft: ckBorder, zIndex: 51,
-        display: "flex", flexDirection: "column",
-        boxShadow: "-12px 0 32px rgba(24,27,32,0.08)",
-        animation: "ckSlide 280ms cubic-bezier(.2,0,0,1) both",
-      }}>
-        <header style={{ flex: "0 0 auto", padding: "16px 18px", borderBottom: ckBorder, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-          <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-            <span style={{ fontFamily: ckMono, fontSize: 10, color: "#5F666F", letterSpacing: "0.08em", textTransform: "uppercase" }}>Activity stream</span>
-            <span style={{ font: "500 16px/1.2 " + ckDisp, color: "#181B20" }}>Live events · all sources</span>
+      <div onClick={onClose} className="fixed inset-0 bg-[rgba(24,27,32,0.16)] z-50 animate-ck-pulse" />
+      <aside className="fixed top-0 right-0 bottom-0 w-[420px] bg-panel border-l border-neutral-200 z-[51] flex flex-col animate-ck-slide shadow-[-12px_0_32px_rgba(24,27,32,0.08)]">
+        <header className="flex-[0_0_auto] px-[18px] py-4 border-b border-neutral-200 flex items-center justify-between">
+          <div className="flex flex-col gap-0.5">
+            <span className="font-mono text-[10px] text-neutral-700 tracking-[0.08em] uppercase">Activity stream</span>
+            <span className="font-display font-medium text-base leading-[1.2] text-neutral-900">Live events · all sources</span>
           </div>
-          <button onClick={onClose} style={{ appearance: "none", border: ckBorder, background: "#fff", width: 28, height: 28, borderRadius: 3, cursor: "pointer", fontFamily: ckMono, fontSize: 14, color: "#5F666F" }}>×</button>
+          <button onClick={onClose} className="appearance-none border border-neutral-200 bg-panel w-7 h-7 rounded-[3px] cursor-pointer font-mono text-sm text-neutral-700">×</button>
         </header>
 
-        <div style={{ flex: "0 0 auto", padding: "10px 18px", borderBottom: ckBorder, display: "flex", gap: 6, flexWrap: "wrap" }}>
+        <div className="flex-[0_0_auto] px-[18px] py-[10px] border-b border-neutral-200 flex gap-1.5 flex-wrap">
           {[
             { id: "all",    label: "All" },
             { id: "vercel", label: "Vercel" },
@@ -80,46 +71,48 @@ export function CkActivityDrawer({ open, onClose }: { open: boolean; onClose: ()
             { id: "github", label: "GitHub" },
             { id: "linear", label: "Linear" },
           ].map(f => (
-            <button key={f.id} onClick={() => setFilter(f.id)} style={{
-              appearance: "none", cursor: "pointer",
-              padding: "4px 10px", borderRadius: 2,
-              border: "1px solid " + (filter === f.id ? "#181B20" : "#E6E8EB"),
-              background: filter === f.id ? "#181B20" : "#fff",
-              color: filter === f.id ? "#fff" : "#5F666F",
-              fontFamily: ckMono, fontSize: 10, fontWeight: 500, letterSpacing: "0.04em", textTransform: "uppercase",
-            }}>{f.label}</button>
+            <button
+              key={f.id}
+              onClick={() => setFilter(f.id)}
+              className={`appearance-none cursor-pointer px-[10px] py-1 rounded-xs border font-mono text-[10px] font-medium tracking-[0.04em] uppercase ${
+                filter === f.id
+                  ? "bg-neutral-900 text-white border-neutral-900"
+                  : "bg-panel text-neutral-700 border-neutral-200"
+              }`}
+            >
+              {f.label}
+            </button>
           ))}
-          <span style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 6, fontFamily: ckMono, fontSize: 10, color: "#3F6B1E", letterSpacing: "0.04em", textTransform: "uppercase" }}>
-            <span style={{ position: "relative", width: 6, height: 6 }}>
-              <span style={{ position: "absolute", inset: 0, borderRadius: 999, background: "#5BB04A" }} />
-              <span style={{ position: "absolute", inset: -3, borderRadius: 999, border: "1px solid #5BB04A", animation: "ckPulse 1.6s infinite" }} />
+          <span className="ml-auto inline-flex items-center gap-1.5 font-mono text-[10px] text-[#3F6B1E] tracking-[0.04em] uppercase">
+            <span className="relative w-1.5 h-1.5">
+              <span className="absolute inset-0 rounded-full bg-[#5BB04A]" />
+              <span className="absolute -inset-[3px] rounded-full border border-[#5BB04A] animate-ck-pulse" />
             </span>
             Tailing
           </span>
         </div>
 
-        <div style={{ flex: 1, overflow: "auto", padding: "8px 0" }}>
+        <div className="flex-1 overflow-auto py-2">
           {list.map((e, i) => {
             const c = lvlColor(e.lvl);
             const s = srcLabel(e.src);
             return (
-              <div key={e.id} style={{
-                padding: "10px 18px",
-                borderLeft: "2px solid " + c,
-                borderBottom: i < list.length - 1 ? ckBorder : "none",
-                display: "flex", flexDirection: "column", gap: 4,
-              }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 8, fontFamily: ckMono, fontSize: 10 }}>
-                  <span style={{ color: "#9EA3AA" }}>{e.t}</span>
-                  <span style={{ color: s.fg, fontWeight: 500 }}>{s.label}</span>
-                  <span style={{ color: "#D2D6DA" }}>·</span>
-                  <span style={{ color: c, textTransform: "uppercase", letterSpacing: "0.06em", fontWeight: 600 }}>{e.lvl}</span>
-                  <span style={{ marginLeft: "auto", color: "#5F666F" }}>{e.scope}</span>
+              <div
+                key={e.id}
+                className={`px-[18px] py-[10px] flex flex-col gap-1 border-l-2 ${i < list.length - 1 ? "border-b border-b-neutral-200" : ""}`}
+                style={{ borderLeftColor: c }}
+              >
+                <div className="flex items-center gap-2 font-mono text-[10px]">
+                  <span className="text-neutral-500">{e.t}</span>
+                  <span className="font-medium" style={{ color: s.fg }}>{s.label}</span>
+                  <span className="text-[#D2D6DA]">·</span>
+                  <span className="uppercase tracking-[0.06em] font-semibold" style={{ color: c }}>{e.lvl}</span>
+                  <span className="ml-auto text-neutral-700">{e.scope}</span>
                 </div>
-                <div style={{ fontFamily: ckBody, fontSize: 13, color: "#181B20" }}>{e.msg}</div>
+                <div className="font-body text-[13px] text-neutral-900">{e.msg}</div>
                 {e.ticket && (
-                  <div style={{ display: "flex", gap: 6, marginTop: 2 }}>
-                    <span style={{ fontFamily: ckMono, fontSize: 10, color: "#5F666F", border: "1px solid #E6E8EB", padding: "1px 6px", borderRadius: 2 }}>{e.ticket}</span>
+                  <div className="flex gap-1.5 mt-0.5">
+                    <span className="font-mono text-[10px] text-neutral-700 border border-neutral-200 px-1.5 py-px rounded-xs">{e.ticket}</span>
                   </div>
                 )}
               </div>
@@ -127,7 +120,7 @@ export function CkActivityDrawer({ open, onClose }: { open: boolean; onClose: ()
           })}
         </div>
 
-        <footer style={{ flex: "0 0 auto", padding: "12px 18px", borderTop: ckBorder, display: "flex", alignItems: "center", justifyContent: "space-between", fontFamily: ckMono, fontSize: 10, color: "#9EA3AA" }}>
+        <footer className="flex-[0_0_auto] px-[18px] py-3 border-t border-neutral-200 flex items-center justify-between font-mono text-[10px] text-neutral-500">
           <span>{list.length} events</span>
           <span>⌘. to close</span>
         </footer>

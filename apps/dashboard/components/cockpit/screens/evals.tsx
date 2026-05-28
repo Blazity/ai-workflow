@@ -1,9 +1,9 @@
 "use client";
 
-import { ckBorder, ckMono, ckDisp, ckBody } from "@/lib/theme";
 import { CkCard, CkChip } from "@/components/ui";
 import { Spark } from "@/components/charts";
 import { AIWF_DATA } from "@/lib/data/mock";
+import { jitterSeries } from "@/lib/rng";
 
 const D = AIWF_DATA;
 
@@ -12,15 +12,15 @@ const D = AIWF_DATA;
 export function EvalsScreen() {
   const groups = ["safety", "quality", "ops"];
   return (
-    <div style={{ padding: "20px 24px 32px", display: "flex", flexDirection: "column", gap: 16 }}>
-      <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between" }}>
+    <div className="flex flex-col gap-4 px-6 pt-5 pb-8">
+      <div className="flex items-end justify-between">
         <div>
-          <div style={{ fontFamily: ckMono, fontSize: 10, color: "#9EA3AA", letterSpacing: "0.06em", textTransform: "uppercase" }}>Arthur engine · continuous evaluation</div>
-          <h2 style={{ font: '500 24px/1.2 ' + ckDisp, margin: 0, color: "#181B20" }}>Evaluations & guardrails</h2>
+          <div className="font-mono text-[10px] uppercase tracking-[0.06em] text-neutral-500">Arthur engine · continuous evaluation</div>
+          <h2 className="font-display text-2xl font-medium leading-[1.2] text-neutral-900 m-0">Evaluations & guardrails</h2>
         </div>
-        <div style={{ display: "flex", gap: 8 }}>
+        <div className="flex gap-2">
           <CkChip tone="success">Live · 12,408 spans · 24h</CkChip>
-          <button style={{ appearance: "none", border: ckBorder, background: "#fff", padding: "8px 14px", borderRadius: 3, fontFamily: ckMono, fontSize: 11, color: "#181B20", textTransform: "uppercase", letterSpacing: "0.04em", cursor: "pointer" }}>+ New eval</button>
+          <button className="appearance-none border border-neutral-200 bg-panel px-3.5 py-2 rounded-[3px] font-mono text-[11px] text-neutral-900 uppercase tracking-[0.04em] cursor-pointer">+ New eval</button>
         </div>
       </div>
 
@@ -32,36 +32,31 @@ export function EvalsScreen() {
           <CkCard key={g}
           eyebrow={g}
           title={titles[g]}
-          action={<span style={{ fontFamily: ckMono, fontSize: 11, color: "#5F666F", letterSpacing: "0.04em", textTransform: "uppercase" }}>{list.length} evaluators</span>}
+          action={<span className="font-mono text-[11px] text-neutral-700 uppercase tracking-[0.04em]">{list.length} evaluators</span>}
           style={{ borderLeft: "3px solid " + accents[g] }}
           pad={0}>
 
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)" }}>
+            <div className="grid grid-cols-2">
               {list.map((e, i) =>
-              <div key={e.metric} style={{
-                padding: "16px 20px",
-                borderBottom: i < list.length - (list.length % 2 === 0 ? 2 : 1) ? ckBorder : "none",
-                borderRight: i % 2 === 0 ? ckBorder : "none",
-                display: "flex", flexDirection: "column", gap: 10
-              }}>
-                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                    <span style={{ fontFamily: ckBody, fontSize: 14, fontWeight: 500, color: "#181B20" }}>{e.metric}</span>
+              <div key={e.metric} className={`flex flex-col gap-2.5 px-5 py-4 ${i < list.length - (list.length % 2 === 0 ? 2 : 1) ? "border-b border-neutral-200" : ""} ${i % 2 === 0 ? "border-r border-neutral-200" : ""}`}>
+                  <div className="flex items-center justify-between">
+                    <span className="font-body text-sm font-medium text-neutral-900">{e.metric}</span>
                     {e.status === "pass" ? <CkChip tone="success">Pass</CkChip> :
                   e.status === "warn" ? <CkChip tone="warn">Warn</CkChip> :
                   <CkChip tone="failed">Fail</CkChip>}
                   </div>
-                  <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
-                    <span style={{ font: '600 28px/1 ' + ckDisp, letterSpacing: "-0.02em", color: "#181B20" }}>
+                  <div className="flex items-baseline gap-2.5">
+                    <span className="font-display text-[28px] font-semibold leading-none tracking-[-0.02em] text-neutral-900">
                       {typeof e.value === "number" ? e.value < 1 ? e.value.toFixed(3) : e.value : e.value}
                     </span>
-                    {e.unit && <span style={{ fontFamily: ckMono, fontSize: 11, color: "#9EA3AA" }}>{e.unit}</span>}
-                    <span style={{ fontFamily: ckMono, fontSize: 11, color: e.trend < 0 ? "#3F6B1E" : e.trend > 0 ? "#A2351C" : "#9EA3AA", marginLeft: "auto" }}>
+                    {e.unit && <span className="font-mono text-[11px] text-neutral-500">{e.unit}</span>}
+                    <span className={`font-mono text-[11px] ml-auto ${e.trend < 0 ? "text-success-fg" : e.trend > 0 ? "text-fail-fg" : "text-neutral-500"}`}>
                       {e.trend > 0 ? "↗" : e.trend < 0 ? "↘" : "→"} {Math.abs(e.trend).toFixed(3)}
                     </span>
                   </div>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                    <Spark data={Array.from({ length: 24 }, () => (e.value || 0.5) + (Math.random() - 0.5) * 0.05)} w={140} h={22} stroke={accents[g]} fill={accents[g]} />
-                    <span style={{ marginLeft: "auto", fontFamily: ckMono, fontSize: 11, color: "#9EA3AA" }}>target {e.target}</span>
+                  <div className="flex items-center gap-2">
+                    <Spark data={jitterSeries(i + 1, 24, (typeof e.value === "number" ? e.value : 0.5), 0.05)} w={140} h={22} stroke={accents[g]} fill={accents[g]} />
+                    <span className="ml-auto font-mono text-[11px] text-neutral-500">target {e.target}</span>
                   </div>
                 </div>
               )}

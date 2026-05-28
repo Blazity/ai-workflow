@@ -25,7 +25,7 @@ export function Spark({
   const d = pts.map((p, i) => (i === 0 ? `M${p[0]},${p[1]}` : `L${p[0]},${p[1]}`)).join(" ");
   const area = `${d} L${w},${h} L0,${h} Z`;
   return (
-    <svg width={w} height={h} style={{ display: "block", overflow: "visible" }}>
+    <svg width={w} height={h} className="block overflow-visible">
       {fill !== "none" && <path d={area} fill={fill} opacity="0.18" />}
       <path d={d} fill="none" stroke={stroke} strokeWidth={strokeWidth} strokeLinejoin="round" strokeLinecap="round" />
     </svg>
@@ -69,7 +69,7 @@ export function AreaChart({
   const area = `${path} L${xOf(data.length - 1)},${padT + ih} L${padL},${padT + ih} Z`;
   const yTicks = [min, min + range / 2, max];
   return (
-    <svg width={w} height={h} style={{ display: "block", overflow: "visible" }}>
+    <svg width={w} height={h} className="block overflow-visible">
       {grid &&
         yTicks.map((v, i) => (
           <g key={i}>
@@ -113,13 +113,13 @@ export function BarRow({
   const numeric = typeof value === "number" ? value : Number(value);
   const pct = max > 0 ? Math.min(100, (numeric / max) * 100) : 0;
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 8, fontFamily: '"Inter", sans-serif', fontSize: 12 }}>
-      <div style={{ width: 110, flex: "0 0 110px", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{label}</div>
-      <div style={{ flex: 1, height: 8, background: barBg, borderRadius: 1, position: "relative", minWidth: 40 }}>
-        <div style={{ width: `${pct}%`, height: "100%", background: color, borderRadius: 1 }} />
+    <div className="flex items-center gap-2 font-body text-xs">
+      <div className="w-[110px] flex-none whitespace-nowrap overflow-hidden text-ellipsis">{label}</div>
+      <div className="flex-1 h-2 rounded-[1px] relative min-w-10" style={{ background: barBg }}>
+        <div className="h-full rounded-[1px]" style={{ width: `${pct}%`, background: color }} />
       </div>
-      <div style={{ width: 64, flex: "0 0 64px", textAlign: "right", fontFamily: '"JetBrains Mono", monospace', fontWeight: 500 }}>
-        {typeof value === "number" ? value.toLocaleString() : value}
+      <div className="w-16 flex-none text-right font-mono font-medium">
+        {typeof value === "number" ? value.toLocaleString("en-US") : value}
         {suffix}
       </div>
     </div>
@@ -148,7 +148,7 @@ export function Donut({
     cy = size / 2;
   let acc = 0;
   return (
-    <svg width={size} height={size} style={{ overflow: "visible", display: "block" }}>
+    <svg width={size} height={size} className="block overflow-visible">
       <circle cx={cx} cy={cy} r={r} fill="none" stroke="rgba(0,0,0,0.06)" strokeWidth={thickness} />
       {shares.map((s, i) => {
         const len = s * c;
@@ -198,7 +198,7 @@ export function Histogram({
   const max = Math.max(...buckets) || 1;
   const bw = w / buckets.length;
   return (
-    <svg width={w} height={h} style={{ display: "block" }}>
+    <svg width={w} height={h} className="block">
       {buckets.map((v, i) => {
         const bh = (v / max) * h;
         return <rect key={i} x={i * bw + 1} y={h - bh} width={bw - 2} height={bh} fill={color} opacity={0.4 + 0.6 * (v / max)} />;

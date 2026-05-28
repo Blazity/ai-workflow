@@ -42,7 +42,7 @@ export function FlameGraph({
   const height = maxDepth * (rowH + gap);
 
   return (
-    <div style={{ position: "relative", width, height }}>
+    <div className="relative" style={{ width, height }}>
       {/* timeline grid */}
       {[0, 0.25, 0.5, 0.75, 1].map((t, i) => {
         const x = t * width;
@@ -50,14 +50,8 @@ export function FlameGraph({
         return (
           <div
             key={i}
-            style={{
-              position: "absolute",
-              left: x,
-              top: -14,
-              fontFamily: '"JetBrains Mono", monospace',
-              fontSize: 9,
-              color: dark ? "rgba(255,255,255,0.4)" : "rgba(0,0,0,0.45)",
-            }}
+            className={`absolute -top-3.5 font-mono text-[9px] ${dark ? "text-white/40" : "text-black/45"}`}
+            style={{ left: x }}
           >
             {label}
           </div>
@@ -66,14 +60,8 @@ export function FlameGraph({
       {[0.25, 0.5, 0.75].map((t, i) => (
         <div
           key={i}
-          style={{
-            position: "absolute",
-            left: t * width,
-            top: 0,
-            bottom: 0,
-            width: 1,
-            background: dark ? "rgba(255,255,255,0.05)" : "rgba(0,0,0,0.05)",
-          }}
+          className={`absolute top-0 bottom-0 w-px ${dark ? "bg-white/5" : "bg-black/5"}`}
+          style={{ left: t * width }}
         />
       ))}
       {spans.map((s) => {
@@ -89,33 +77,19 @@ export function FlameGraph({
           <div
             key={s.id}
             onClick={() => onSelect && onSelect(s.id)}
+            className="absolute text-white font-mono text-[11px] px-1.5 flex items-center rounded-xs cursor-pointer opacity-95 hover:opacity-100 whitespace-nowrap overflow-hidden transition-transform duration-[120ms] ease-[cubic-bezier(.2,0,0,1)]"
             style={{
-              position: "absolute",
               left: x,
               top: y,
               width: w,
               height: rowH,
               background: bg,
-              color: "#fff",
-              fontFamily: '"JetBrains Mono", monospace',
-              fontSize: 11,
-              padding: "0 6px",
-              display: "flex",
-              alignItems: "center",
-              borderRadius: 2,
-              cursor: "pointer",
               boxShadow: isSel ? "0 0 0 2px #fff, 0 0 0 4px " + bg : "none",
-              opacity: 0.94,
-              whiteSpace: "nowrap",
-              overflow: "hidden",
-              transition: "transform 120ms cubic-bezier(.2,0,0,1)",
             }}
-            onMouseEnter={(e) => (e.currentTarget.style.opacity = "1")}
-            onMouseLeave={(e) => (e.currentTarget.style.opacity = "0.94")}
             title={`${s.name} · ${s.duration}ms`}
           >
-            {showLabels && w > 60 && <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{s.name}</span>}
-            {showLabels && w > 120 && <span style={{ marginLeft: "auto", opacity: 0.75, fontSize: 10 }}>{s.duration}ms</span>}
+            {showLabels && w > 60 && <span className="overflow-hidden text-ellipsis">{s.name}</span>}
+            {showLabels && w > 120 && <span className="ml-auto opacity-75 text-[10px]">{s.duration}ms</span>}
           </div>
         );
       })}

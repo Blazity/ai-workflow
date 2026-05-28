@@ -12,8 +12,9 @@ import {
   CkPagination,
 } from "@/components/ui";
 import { Spark, Donut } from "@/components/charts";
-import { ckBorder, ckMono, ckDisp, ckBody, spanColor } from "@/lib/theme";
+import { spanColor } from "@/lib/theme";
 import { AIWF_DATA } from "@/lib/data/mock";
+import { sparkSeries } from "@/lib/rng";
 import { useCockpit } from "@/components/cockpit/context";
 import type { Run } from "@/lib/types";
 
@@ -22,26 +23,44 @@ const D = AIWF_DATA;
 /* Eval health KPI — fits the hero KPI strip but shows a mini-donut + breakdown. */
 function EvalHealthKPI() {
   return (
-    <div style={{ background: "#fff", border: ckBorder, borderRadius: 4, padding: "16px 18px", display: "flex", flexDirection: "column", gap: 6, minHeight: 124 }}>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-        <div style={{ fontFamily: ckMono, fontSize: 10, fontWeight: 500, letterSpacing: "0.06em", textTransform: "uppercase", color: "#5F666F" }}>Eval health</div>
-        <a style={{ fontFamily: ckMono, fontSize: 10, color: "#3C43E7", textDecoration: "none", letterSpacing: "0.04em", textTransform: "uppercase", cursor: "pointer" }}>Detail →</a>
+    <div className="bg-panel border border-neutral-200 rounded-sm px-[18px] py-4 flex flex-col gap-1.5 min-h-[124px]">
+      <div className="flex items-center justify-between">
+        <div className="font-mono text-[10px] font-medium tracking-[0.06em] uppercase text-neutral-700">
+          Eval health
+        </div>
+        <a className="font-mono text-[10px] text-mariner no-underline tracking-[0.04em] uppercase cursor-pointer">
+          Detail →
+        </a>
       </div>
-      <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 2 }}>
-        <Donut shares={[0.78, 0.14, 0.08]} colors={["#5BB04A", "#FFC800", "#D14343"]} size={64} thickness={10} centerLabel="92.3" />
-        <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 3 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 6, fontFamily: ckBody, fontSize: 12 }}>
-            <CkDot color="#5BB04A" /><span style={{ flex: 1, color: "#3E444C" }}>Pass</span><b style={{ fontFamily: ckMono, color: "#181B20" }}>7</b>
+      <div className="flex items-center gap-3 mt-0.5">
+        <Donut
+          shares={[0.78, 0.14, 0.08]}
+          colors={["#5BB04A", "#FFC800", "#D14343"]}
+          size={64}
+          thickness={10}
+          centerLabel="92.3"
+        />
+        <div className="flex-1 flex flex-col gap-[3px]">
+          <div className="flex items-center gap-1.5 font-body text-xs">
+            <CkDot color="#5BB04A" />
+            <span className="flex-1 text-neutral-800">Pass</span>
+            <b className="font-mono text-neutral-900">7</b>
           </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 6, fontFamily: ckBody, fontSize: 12 }}>
-            <CkDot color="#FFC800" /><span style={{ flex: 1, color: "#3E444C" }}>Warn</span><b style={{ fontFamily: ckMono, color: "#181B20" }}>2</b>
+          <div className="flex items-center gap-1.5 font-body text-xs">
+            <CkDot color="#FFC800" />
+            <span className="flex-1 text-neutral-800">Warn</span>
+            <b className="font-mono text-neutral-900">2</b>
           </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 6, fontFamily: ckBody, fontSize: 12 }}>
-            <CkDot color="#D14343" /><span style={{ flex: 1, color: "#3E444C" }}>Fail</span><b style={{ fontFamily: ckMono, color: "#181B20" }}>0</b>
+          <div className="flex items-center gap-1.5 font-body text-xs">
+            <CkDot color="#D14343" />
+            <span className="flex-1 text-neutral-800">Fail</span>
+            <b className="font-mono text-neutral-900">0</b>
           </div>
         </div>
       </div>
-      <div style={{ marginTop: "auto", fontFamily: ckMono, fontSize: 10, color: "#9EA3AA", letterSpacing: "0.04em" }}>12.4k spans graded · 24h</div>
+      <div className="mt-auto font-mono text-[10px] text-neutral-500 tracking-[0.04em]">
+        12.4k spans graded · 24h
+      </div>
     </div>
   );
 }
@@ -62,50 +81,68 @@ function NowRunningPanel({ onOpenRun }: { onOpenRun: (run: Run) => void }) {
       eyebrow="Vercel workflow · live"
       title="Now running"
       action={
-        <span style={{ display: "inline-flex", alignItems: "center", gap: 6, fontFamily: ckMono, fontSize: 10, color: "#3C43E7", letterSpacing: "0.04em", textTransform: "uppercase" }}>
-          <span style={{ position: "relative", width: 6, height: 6 }}>
-            <span style={{ position: "absolute", inset: 0, borderRadius: 999, background: "#3C43E7" }} />
-            <span style={{ position: "absolute", inset: -3, borderRadius: 999, border: "1px solid #3C43E7", animation: "ckPulse 1.6s infinite" }} />
+        <span className="inline-flex items-center gap-1.5 font-mono text-[10px] text-mariner tracking-[0.04em] uppercase">
+          <span className="relative w-1.5 h-1.5">
+            <span className="absolute inset-0 rounded-full bg-mariner" />
+            <span className="absolute -inset-[3px] rounded-full border border-mariner animate-ck-pulse" />
           </span>
           {running.length} executing
         </span>
       }
       pad={0}
     >
-      <div style={{ display: "flex", flexDirection: "column" }}>
+      <div className="flex flex-col">
         {running.map((r, i) => {
           const elapsed = ((r.elapsed ?? 0) + tick).toFixed(1);
           const etaLeft = Math.max(0, (r.etaSec ?? 0) - tick);
           const progress = Math.min(0.99, (r.progress ?? 0) + tick * 0.02);
           return (
-            <div key={r.id} onClick={() => onOpenRun(r)} style={{
-              padding: "14px 20px",
-              borderBottom: i < running.length - 1 ? ckBorder : "none",
-              cursor: "pointer", transition: "background 120ms"
-            }}
-              onMouseEnter={(e) => e.currentTarget.style.background = "#F9FAFB"}
-              onMouseLeave={(e) => e.currentTarget.style.background = "transparent"}>
-              <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8, flexWrap: "wrap" }}>
+            <div
+              key={r.id}
+              onClick={() => onOpenRun(r)}
+              className={`px-5 py-[14px] cursor-pointer transition-colors duration-100 hover:bg-off-white ${i < running.length - 1 ? "border-b border-neutral-200" : ""}`}
+            >
+              <div className="flex items-center gap-2.5 mb-2 flex-wrap">
                 <CkStatusPill status="running" />
-                <span style={{ fontFamily: ckBody, fontSize: 14, fontWeight: 600, color: "#181B20" }}>{r.workflowName}</span>
-                <CkChip style={{ background: "#F2F4F6", color: "#5F666F" }}>{r.ticket}</CkChip>
-                <span style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 10, fontFamily: ckMono, fontSize: 11, color: "#5F666F" }}>
+                <span className="font-body text-sm font-semibold text-neutral-900">
+                  {r.workflowName}
+                </span>
+                <CkChip tone="blocked">{r.ticket}</CkChip>
+                <span className="ml-auto inline-flex items-center gap-2.5 font-mono text-[11px] text-neutral-700">
                   <span>{elapsed}s</span>
-                  <span style={{ color: "#9EA3AA" }}>· ETA {etaLeft}s</span>
+                  <span className="text-neutral-500">· ETA {etaLeft}s</span>
                 </span>
               </div>
-              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                <div style={{ flex: 1, height: 6, background: "#F2F4F6", borderRadius: 1, position: "relative", overflow: "hidden" }}>
-                  <div style={{ width: progress * 100 + "%", height: "100%", background: "#3C43E7", borderRadius: 1, transition: "width 1s linear", position: "relative" }}>
-                    <span style={{ position: "absolute", inset: 0, background: "linear-gradient(90deg, transparent, rgba(255,255,255,0.4), transparent)", animation: "ckShimmer 1.4s infinite" }} />
+              <div className="flex items-center gap-2.5">
+                <div className="flex-1 h-1.5 bg-app-bg rounded-[1px] relative overflow-hidden">
+                  <div
+                    className="h-full bg-mariner rounded-[1px] transition-[width] duration-1000 ease-linear relative"
+                    style={{ width: progress * 100 + "%" }}
+                  >
+                    <span
+                      className="absolute inset-0 animate-ck-shimmer"
+                      style={{
+                        background:
+                          "linear-gradient(90deg, transparent, rgba(255,255,255,0.4), transparent)",
+                      }}
+                    />
                   </div>
                 </div>
-                <span style={{ fontFamily: ckMono, fontSize: 11, color: "#9EA3AA", width: 58, textAlign: "right" }}>{r.spanIndex}/{r.spansTotal}</span>
+                <span className="font-mono text-[11px] text-neutral-500 w-[58px] text-right">
+                  {r.spanIndex}/{r.spansTotal}
+                </span>
               </div>
-              <div style={{ marginTop: 6, display: "flex", alignItems: "center", gap: 6, fontFamily: ckMono, fontSize: 11 }}>
-                <span style={{ width: 8, height: 8, borderRadius: 1, background: spanColor(r.currentSpanKind) }} />
-                <span style={{ color: "#181B20", fontWeight: 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.currentSpan}</span>
-                <span style={{ marginLeft: "auto", color: "#9EA3AA", whiteSpace: "nowrap" }}>{r.model}</span>
+              <div className="mt-1.5 flex items-center gap-1.5 font-mono text-[11px]">
+                <span
+                  className="w-2 h-2 rounded-[1px]"
+                  style={{ background: spanColor(r.currentSpanKind) }}
+                />
+                <span className="text-neutral-900 font-medium overflow-hidden text-ellipsis whitespace-nowrap">
+                  {r.currentSpan}
+                </span>
+                <span className="ml-auto text-neutral-500 whitespace-nowrap">
+                  {r.model}
+                </span>
               </div>
             </div>
           );
@@ -123,10 +160,10 @@ function AwaitingInputPanel({ onOpenRun }: { onOpenRun: (run: Run) => void }) {
       eyebrow="Human-in-the-loop"
       title="Input needed"
       action={
-        <span style={{ display: "inline-flex", alignItems: "center", gap: 6, fontFamily: ckMono, fontSize: 10, color: "#A2351C", letterSpacing: "0.04em", textTransform: "uppercase" }}>
-          <span style={{ position: "relative", width: 6, height: 6 }}>
-            <span style={{ position: "absolute", inset: 0, borderRadius: 999, background: "#FD6027" }} />
-            <span style={{ position: "absolute", inset: -3, borderRadius: 999, border: "1px solid #FD6027", animation: "ckPulse 1.6s infinite" }} />
+        <span className="inline-flex items-center gap-1.5 font-mono text-[10px] text-[#A2351C] tracking-[0.04em] uppercase">
+          <span className="relative w-1.5 h-1.5">
+            <span className="absolute inset-0 rounded-full bg-burnt-orange" />
+            <span className="absolute -inset-[3px] rounded-full border border-burnt-orange animate-ck-pulse" />
           </span>
           {awaiting.length} paused
         </span>
@@ -134,54 +171,70 @@ function AwaitingInputPanel({ onOpenRun }: { onOpenRun: (run: Run) => void }) {
       pad={0}
       style={{ background: "#FFFCFA", borderColor: "#FFE4D6" }}
     >
-      <div style={{ display: "flex", flexDirection: "column" }}>
-        {awaiting.map((r, i) =>
-          <div key={r.id} style={{
-            padding: "14px 20px",
-            borderBottom: i < awaiting.length - 1 ? "1px solid #FFE4D6" : "none"
-          }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
+      <div className="flex flex-col">
+        {awaiting.map((r, i) => (
+          <div
+            key={r.id}
+            className={`px-5 py-[14px] ${i < awaiting.length - 1 ? "border-b border-[#FFE4D6]" : ""}`}
+          >
+            <div className="flex items-center gap-2 mb-2 flex-wrap">
               <CkStatusPill status="awaiting" />
-              <span onClick={() => onOpenRun(r)} style={{ fontFamily: ckBody, fontSize: 14, fontWeight: 600, color: "#181B20", cursor: "pointer" }}>{r.workflowName}</span>
-              <CkChip style={{ background: "#fff", color: "#5F666F", border: "1px solid #E6E8EB" }}>{r.ticket}</CkChip>
+              <span
+                onClick={() => onOpenRun(r)}
+                className="font-body text-sm font-semibold text-neutral-900 cursor-pointer"
+              >
+                {r.workflowName}
+              </span>
+              <CkChip
+                style={{
+                  background: "#fff",
+                  color: "#5F666F",
+                  border: "1px solid #E6E8EB",
+                }}
+              >
+                {r.ticket}
+              </CkChip>
               <CkChip tone="warn">@{r.questionFor}</CkChip>
-              <span style={{ marginLeft: "auto", fontFamily: ckMono, fontSize: 11, color: "#9EA3AA", whiteSpace: "nowrap" }}>{r.askedAtMin}m ago</span>
+              <span className="ml-auto font-mono text-[11px] text-neutral-500 whitespace-nowrap">
+                {r.askedAtMin}m ago
+              </span>
             </div>
-            <p style={{ font: '400 13px/1.55 ' + ckBody, color: "#3E444C", margin: "0 0 10px", borderLeft: "2px solid #FD6027", paddingLeft: 12 }}>
+            <p className="font-body font-normal text-[13px] leading-[1.55] text-neutral-800 m-0 mb-2.5 border-l-2 border-burnt-orange pl-3">
               {r.question}
             </p>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
-              {r.suggestedAnswers && r.suggestedAnswers.map((a, j) =>
-                <button key={j} style={{
-                  appearance: "none", border: ckBorder, background: "#fff",
-                  padding: "5px 10px", borderRadius: 3, cursor: "pointer",
-                  fontFamily: ckBody, fontSize: 12, color: "#181B20",
-                  transition: "all 120ms"
-                }}
-                  onMouseEnter={(e) => { e.currentTarget.style.background = "#181B20"; e.currentTarget.style.color = "#fff"; }}
-                  onMouseLeave={(e) => { e.currentTarget.style.background = "#fff"; e.currentTarget.style.color = "#181B20"; }}>
-                  {a}
-                </button>
-              )}
-              <button style={{
-                marginLeft: "auto",
-                appearance: "none", border: "1px solid #181B20", background: "#181B20", color: "#fff",
-                padding: "5px 12px", borderRadius: 3, cursor: "pointer",
-                fontFamily: ckMono, fontSize: 11, fontWeight: 500, textTransform: "uppercase", letterSpacing: "0.04em"
-              }}>Reply →</button>
+            <div className="flex flex-wrap gap-1.5 items-center">
+              {r.suggestedAnswers &&
+                r.suggestedAnswers.map((a, j) => (
+                  <button
+                    key={j}
+                    className="appearance-none border border-neutral-200 bg-panel px-2.5 py-[5px] rounded-[3px] cursor-pointer font-body text-xs text-neutral-900 transition-all duration-100 hover:bg-coal hover:text-white"
+                  >
+                    {a}
+                  </button>
+                ))}
+              <button className="ml-auto appearance-none border border-coal bg-coal text-white px-3 py-[5px] rounded-[3px] cursor-pointer font-mono text-[11px] font-medium uppercase tracking-[0.04em]">
+                Reply →
+              </button>
             </div>
           </div>
-        )}
+        ))}
       </div>
     </CkCard>
   );
 }
 
-export function OverviewScreen({ onOpenRun }: { onOpenRun: (run: Run) => void }) {
+export function OverviewScreen({
+  onOpenRun,
+}: {
+  onOpenRun: (run: Run) => void;
+}) {
   const { t } = useCockpit();
   const totalRuns = D.WORKFLOWS.reduce((a, w) => a + w.runs24h, 0);
   const totalCost = D.WORKFLOWS.reduce((a, w) => a + w.costToday, 0);
-  const totalErrors = D.WORKFLOWS.reduce((a, w) => a + Math.round(w.runs24h * w.errRate), 0);
+  const totalErrors = D.WORKFLOWS.reduce(
+    (a, w) => a + Math.round(w.runs24h * w.errRate),
+    0,
+  );
   const sparkRuns = D.HOURS24.map((h) => h.runs);
   const sparkP95 = D.HOURS24.map((h) => h.p95);
   const sparkErr = D.HOURS24.map((h) => h.errors);
@@ -196,58 +249,127 @@ export function OverviewScreen({ onOpenRun }: { onOpenRun: (run: Run) => void })
   // Workflows pagination
   const WF_PAGE_SIZE = 5;
   const [wfPage, setWfPage] = useState(0);
-  const wfTotalPages = Math.max(1, Math.ceil(D.WORKFLOWS.length / WF_PAGE_SIZE));
+  const wfTotalPages = Math.max(
+    1,
+    Math.ceil(D.WORKFLOWS.length / WF_PAGE_SIZE),
+  );
   const wfPageStart = wfPage * WF_PAGE_SIZE;
   const wfPageRows = D.WORKFLOWS.slice(wfPageStart, wfPageStart + WF_PAGE_SIZE);
 
   return (
-    <div style={{ padding: "20px 24px 32px", display: "flex", flexDirection: "column", gap: 20 }}>
+    <div className="px-6 pt-5 pb-8 flex flex-col gap-5">
       {/* Editorial hero (toggle from tweaks) */}
-      {t.showEditorialHero &&
-        <div style={{ background: "#181B20", color: "#fff", borderRadius: 4, padding: 28, display: "grid", gridTemplateColumns: "1.5fr 1fr", gap: 32, position: "relative", overflow: "hidden" }}>
-          <svg style={{ position: "absolute", right: -60, top: -60, opacity: 0.07 }} width="320" height="320" viewBox="0 0 320 320">
-            {Array.from({ length: 8 }, (_, i) => <circle key={i} cx="160" cy="160" r={16 + i * 18} fill="none" stroke="#fff" strokeWidth="1" />)}
+      {t.showEditorialHero && (
+        <div className="bg-coal text-white rounded-sm p-7 grid grid-cols-[1.5fr_1fr] gap-8 relative overflow-hidden">
+          <svg
+            className="absolute -right-[60px] -top-[60px] opacity-[0.07]"
+            width="320"
+            height="320"
+            viewBox="0 0 320 320"
+          >
+            {Array.from({ length: 8 }, (_, i) => (
+              <circle
+                key={i}
+                cx="160"
+                cy="160"
+                r={16 + i * 18}
+                fill="none"
+                stroke="#fff"
+                strokeWidth="1"
+              />
+            ))}
           </svg>
-          <div style={{ position: "relative", zIndex: 1, display: "flex", flexDirection: "column", gap: 12 }}>
-            <div style={{ fontFamily: ckMono, fontSize: 10, color: "rgba(255,255,255,0.5)", letterSpacing: "0.08em", textTransform: "uppercase" }}>Tuesday, 26 May · last 24 hours</div>
-            <div style={{ font: '500 36px/1.15 ' + ckDisp, letterSpacing: "-0.025em", margin: 0, textWrap: "balance" }}>
-              <span style={{ color: "#BBED80" }}>{totalRuns.toLocaleString()}</span> runs shipped <span style={{ color: "#FD6027" }}>147 PRs</span> for <span style={{ fontFamily: ckMono, fontSize: 28 }}>${totalCost.toFixed(0)}</span>.
+          <div className="relative z-[1] flex flex-col gap-3">
+            <div className="font-mono text-[10px] text-white/50 tracking-[0.08em] uppercase">
+              Tuesday, 26 May · last 24 hours
             </div>
-            <div style={{ font: '400 14px/1.55 ' + ckBody, color: "rgba(255,255,255,0.7)", maxWidth: 540 }}>
-              All six workflows green. Arthur evals stable at 92.3. One advisory: toxicity flag rate on Release Notes ticked up — under review.
+            <div className="font-display font-medium text-[36px] leading-[1.15] tracking-[-0.025em] m-0 text-balance">
+              <span className="text-sulu">{totalRuns.toLocaleString("en-US")}</span>{" "}
+              runs shipped <span className="text-burnt-orange">147 PRs</span>{" "}
+              for{" "}
+              <span className="font-mono text-[28px]">
+                ${totalCost.toFixed(0)}
+              </span>
+              .
             </div>
-            <div style={{ display: "flex", gap: 6, marginTop: 4 }}>
+            <div className="font-body font-normal text-sm leading-[1.55] text-white/70 max-w-[540px]">
+              All six workflows green. Arthur evals stable at 92.3. One
+              advisory: toxicity flag rate on Release Notes ticked up — under
+              review.
+            </div>
+            <div className="flex gap-1.5 mt-1">
               <CkChip tone="success">All systems operational</CkChip>
-              <CkChip style={{ background: "rgba(255,255,255,0.08)", color: "#fff", border: "1px solid rgba(255,255,255,0.2)" }}>1 advisory open</CkChip>
-              <CkChip style={{ background: "rgba(255,255,255,0.08)", color: "#fff", border: "1px solid rgba(255,255,255,0.2)" }}>29% of monthly cap</CkChip>
+              <CkChip
+                style={{
+                  background: "rgba(255,255,255,0.08)",
+                  color: "#fff",
+                  border: "1px solid rgba(255,255,255,0.2)",
+                }}
+              >
+                1 advisory open
+              </CkChip>
+              <CkChip
+                style={{
+                  background: "rgba(255,255,255,0.08)",
+                  color: "#fff",
+                  border: "1px solid rgba(255,255,255,0.2)",
+                }}
+              >
+                29% of monthly cap
+              </CkChip>
             </div>
           </div>
-          <div style={{ position: "relative", zIndex: 1, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, alignContent: "center" }}>
+          <div className="relative z-1 grid grid-cols-2 gap-4 content-center">
             {[
-              { l: "Runs · 24h", v: totalRuns.toLocaleString() },
+              { l: "Runs · 24h", v: totalRuns.toLocaleString("en-US") },
               { l: "Cost today", v: "$" + totalCost.toFixed(0) },
               { l: "p95 latency", v: "23.1s" },
-              { l: "Eval score", v: "92.3" }].
-              map((k) =>
-                <div key={k.l}>
-                  <div style={{ fontFamily: ckMono, fontSize: 10, color: "rgba(255,255,255,0.5)", letterSpacing: "0.06em", textTransform: "uppercase" }}>{k.l}</div>
-                  <div style={{ font: '500 32px/1 ' + ckDisp, letterSpacing: "-0.02em", marginTop: 4 }}>{k.v}</div>
+              { l: "Eval score", v: "92.3" },
+            ].map((k) => (
+              <div key={k.l}>
+                <div className="font-mono text-[10px] text-white/50 tracking-[0.06em] uppercase">
+                  {k.l}
                 </div>
-              )}
+                <div className="font-display font-medium text-[32px] leading-none tracking-[-0.02em] mt-1">
+                  {k.v}
+                </div>
+              </div>
+            ))}
           </div>
         </div>
-      }
+      )}
 
       {/* Hero KPIs */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12 }}>
-        <CkKPI label="Runs · 24h" value={totalRuns.toLocaleString()} delta="↗ +12.4% vs 24h ago" deltaTone="good" spark={sparkRuns} sparkColor="#3C43E7" />
+      <div className="grid grid-cols-4 gap-3">
+        <CkKPI
+          label="Runs · 24h"
+          value={totalRuns.toLocaleString("en-US")}
+          delta="↗ +12.4% vs 24h ago"
+          deltaTone="good"
+          spark={sparkRuns}
+          sparkColor="#3C43E7"
+        />
         <EvalHealthKPI />
-        <CkKPI label="p95 latency" value={"23.1s"} delta="↘ −1.4s vs 24h ago" deltaTone="good" spark={sparkP95} sparkColor="#181B20" />
-        <CkKPI label="Errors · 24h" value={totalErrors.toString()} delta="↘ −18% vs 24h ago" deltaTone="good" spark={sparkErr} sparkColor="#D14343" />
+        <CkKPI
+          label="p95 latency"
+          value={"23.1s"}
+          delta="↘ −1.4s vs 24h ago"
+          deltaTone="good"
+          spark={sparkP95}
+          sparkColor="#181B20"
+        />
+        <CkKPI
+          label="Errors · 24h"
+          value={totalErrors.toString()}
+          delta="↘ −18% vs 24h ago"
+          deltaTone="good"
+          spark={sparkErr}
+          sparkColor="#D14343"
+        />
       </div>
 
       {/* Row 2: Now running + Awaiting input, same level */}
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+      <div className="grid grid-cols-2 gap-3">
         <NowRunningPanel onOpenRun={onOpenRun} />
         <AwaitingInputPanel onOpenRun={onOpenRun} />
       </div>
@@ -257,53 +379,114 @@ export function OverviewScreen({ onOpenRun }: { onOpenRun: (run: Run) => void })
         eyebrow="Run timeline · last 24h"
         title="Recent runs"
         action={
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <CkChip tone="success">{D.RUNS.filter((r) => r.status === "success").length} shipped</CkChip>
-            <CkChip tone="running">{D.RUNS.filter((r) => r.status === "running").length} running</CkChip>
-            <CkChip tone="awaiting">{D.RUNS.filter((r) => r.status === "awaiting").length} awaiting</CkChip>
-            <a onClick={() => onOpenRun(D.RUNS[0])} style={{ fontFamily: ckMono, fontSize: 11, color: "#3C43E7", textDecoration: "none", textTransform: "uppercase", letterSpacing: "0.04em", cursor: "pointer", marginLeft: 4 }}>All runs →</a>
+          <div className="flex items-center gap-2">
+            <CkChip tone="success">
+              {D.RUNS.filter((r) => r.status === "success").length} shipped
+            </CkChip>
+            <CkChip tone="running">
+              {D.RUNS.filter((r) => r.status === "running").length} running
+            </CkChip>
+            <CkChip tone="awaiting">
+              {D.RUNS.filter((r) => r.status === "awaiting").length} awaiting
+            </CkChip>
+            <a
+              onClick={() => onOpenRun(D.RUNS[0])}
+              className="font-mono text-[11px] text-mariner no-underline uppercase tracking-[0.04em] cursor-pointer ml-1"
+            >
+              All runs →
+            </a>
           </div>
         }
         pad={0}
       >
-        <table style={{ width: "100%", borderCollapse: "collapse", fontFamily: ckBody, fontSize: 13 }}>
+        <table className="w-full border-collapse font-body text-[13px]">
           <thead>
-            <tr style={{ background: "#F9FAFB", color: "#5F666F", fontFamily: ckMono, fontSize: 10, letterSpacing: "0.06em", textTransform: "uppercase" }}>
-              {["Status", "Ticket · title", "Workflow", "Model", "Started", "Duration", "Cost", "Eval"].map((h, i) =>
-                <th key={i} style={{ padding: "10px 16px", textAlign: i >= 4 ? "right" : "left", fontWeight: 500, borderBottom: ckBorder, whiteSpace: "nowrap" }}>{h}</th>
-              )}
+            <tr className="bg-off-white text-neutral-700 font-mono text-[10px] tracking-[0.06em] uppercase">
+              {[
+                "Status",
+                "Ticket · title",
+                "Workflow",
+                "Model",
+                "Started",
+                "Duration",
+                "Cost",
+                "Eval",
+              ].map((h, i) => (
+                <th
+                  key={i}
+                  className={`px-4 py-2.5 font-medium border-b border-neutral-200 whitespace-nowrap ${i >= 4 ? "text-right" : "text-left"}`}
+                >
+                  {h}
+                </th>
+              ))}
             </tr>
           </thead>
           <tbody>
-            {runsPageRows.map((r, i) =>
-              <tr key={r.id} onClick={() => onOpenRun(r)} style={{ borderBottom: i < runsPageRows.length - 1 ? ckBorder : "none", cursor: "pointer", transition: "background 120ms" }}
-                onMouseEnter={(e) => e.currentTarget.style.background = "#F9FAFB"}
-                onMouseLeave={(e) => e.currentTarget.style.background = "transparent"}>
-                <td style={{ padding: "12px 16px" }}><CkStatusPill status={r.status} /></td>
-                <td style={{ padding: "12px 16px" }}>
-                  <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                    <span style={{ fontWeight: 600, color: "#181B20", maxWidth: 480, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", display: "block" }}>{r.ticketTitle}</span>
-                    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            {runsPageRows.map((r, i) => (
+              <tr
+                key={r.id}
+                onClick={() => onOpenRun(r)}
+                className={`cursor-pointer transition-colors duration-100 hover:bg-off-white ${i < runsPageRows.length - 1 ? "border-b border-neutral-200" : ""}`}
+              >
+                <td className="px-4 py-3">
+                  <CkStatusPill status={r.status} />
+                </td>
+                <td className="px-4 py-3">
+                  <div className="flex flex-col gap-1">
+                    <span className="font-semibold text-neutral-900 max-w-[480px] overflow-hidden text-ellipsis whitespace-nowrap block">
+                      {r.ticketTitle}
+                    </span>
+                    <div className="flex items-center gap-1.5">
                       <TicketLink ticket={r.ticket} url={r.ticketUrl} />
-                      {r.prNumber && r.prUrl && <PRLink num={r.prNumber} url={r.prUrl} />}
-                      <span style={{ fontFamily: ckMono, fontSize: 10, color: "#9EA3AA" }}>{r.actor}</span>
+                      {r.prNumber && r.prUrl && (
+                        <PRLink num={r.prNumber} url={r.prUrl} />
+                      )}
+                      <span className="font-mono text-[10px] text-neutral-500">
+                        {r.actor}
+                      </span>
                     </div>
                   </div>
                 </td>
-                <td style={{ padding: "12px 16px" }}>
-                  <CkChip style={{ background: "#F2F4F6", color: "#3E444C" }}>{r.workflowName}</CkChip>
+                <td className="px-4 py-3">
+                  <CkChip style={{ background: "#F2F4F6", color: "#3E444C" }}>
+                    {r.workflowName}
+                  </CkChip>
                 </td>
-                <td style={{ padding: "12px 16px", fontFamily: ckMono, fontSize: 11, color: "#5F666F" }}>{r.model}</td>
-                <td style={{ padding: "12px 16px", textAlign: "right", fontFamily: ckMono, fontSize: 11, color: "#9EA3AA" }}>{r.startedAtMin}m ago</td>
-                <td style={{ padding: "12px 16px", textAlign: "right", fontFamily: ckMono, fontWeight: 500 }}>{r.duration ? r.duration + "s" : "—"}</td>
-                <td style={{ padding: "12px 16px", textAlign: "right", fontFamily: ckMono, fontWeight: 500 }}>${r.cost.toFixed(2)}</td>
-                <td style={{ padding: "12px 16px", textAlign: "right" }}>
-                  {r.evalScore ?
-                    <span style={{ fontFamily: ckMono, fontSize: 12, color: r.evalScore > 0.9 ? "#3F6B1E" : r.evalScore > 0.85 ? "#7A5A00" : "#A2351C", fontWeight: 600 }}>{(r.evalScore * 100).toFixed(0)}</span> :
-                    <span style={{ fontFamily: ckMono, fontSize: 11, color: "#D2D6DA" }}>—</span>}
+                <td className="px-4 py-3 font-mono text-[11px] text-neutral-700">
+                  {r.model}
+                </td>
+                <td className="px-4 py-3 text-right font-mono text-[11px] text-neutral-500">
+                  {r.startedAtMin}m ago
+                </td>
+                <td className="px-4 py-3 text-right font-mono font-medium">
+                  {r.duration ? r.duration + "s" : "—"}
+                </td>
+                <td className="px-4 py-3 text-right font-mono font-medium">
+                  ${r.cost.toFixed(2)}
+                </td>
+                <td className="px-4 py-3 text-right">
+                  {r.evalScore ? (
+                    <span
+                      className="font-mono text-xs font-semibold"
+                      style={{
+                        color:
+                          r.evalScore > 0.9
+                            ? "#3F6B1E"
+                            : r.evalScore > 0.85
+                              ? "#7A5A00"
+                              : "#A2351C",
+                      }}
+                    >
+                      {(r.evalScore * 100).toFixed(0)}
+                    </span>
+                  ) : (
+                    <span className="font-mono text-[11px] text-[#D2D6DA]">
+                      —
+                    </span>
+                  )}
                 </td>
               </tr>
-            )}
+            ))}
           </tbody>
         </table>
         <CkPagination
@@ -312,63 +495,110 @@ export function OverviewScreen({ onOpenRun }: { onOpenRun: (run: Run) => void })
           total={D.RUNS.length}
           start={runsPageStart}
           shown={runsPageRows.length}
-          onChange={setRunsPage} />
+          onChange={setRunsPage}
+        />
       </CkCard>
 
       {/* Row 4: Workflows (full width, table with sparkline trend) */}
       <CkCard
         eyebrow="Vercel workflow registry"
         title="Workflows"
-        action={<a style={{ fontFamily: ckMono, fontSize: 11, color: "#3C43E7", textDecoration: "none", textTransform: "uppercase", letterSpacing: "0.04em", cursor: "pointer" }}>+ New workflow</a>}
+        action={
+          <a className="font-mono text-[11px] text-mariner no-underline uppercase tracking-[0.04em] cursor-pointer">
+            + New workflow
+          </a>
+        }
         pad={0}
       >
-        <table style={{ width: "100%", borderCollapse: "collapse", fontFamily: ckBody, fontSize: 13 }}>
+        <table className="w-full border-collapse font-body text-[13px]">
           <thead>
-            <tr style={{ background: "#F9FAFB", color: "#5F666F", fontFamily: ckMono, fontSize: 10, letterSpacing: "0.06em", textTransform: "uppercase" }}>
-              <th style={{ padding: "10px 16px", textAlign: "left", fontWeight: 500, borderBottom: ckBorder }}>Workflow · latest ticket</th>
-              <th style={{ padding: "10px 8px", textAlign: "right", fontWeight: 500, borderBottom: ckBorder }}>Runs 24h</th>
-              <th style={{ padding: "10px 8px", textAlign: "right", fontWeight: 500, borderBottom: ckBorder }}>p95</th>
-              <th style={{ padding: "10px 8px", textAlign: "right", fontWeight: 500, borderBottom: ckBorder }}>Err</th>
-              <th style={{ padding: "10px 8px", textAlign: "right", fontWeight: 500, borderBottom: ckBorder }}>Cost</th>
-              <th style={{ padding: "10px 16px", textAlign: "right", fontWeight: 500, borderBottom: ckBorder }}>24h trend</th>
+            <tr className="bg-off-white text-neutral-700 font-mono text-[10px] tracking-[0.06em] uppercase">
+              <th className="px-4 py-2.5 text-left font-medium border-b border-neutral-200">
+                Workflow · latest ticket
+              </th>
+              <th className="px-2 py-2.5 text-right font-medium border-b border-neutral-200">
+                Runs 24h
+              </th>
+              <th className="px-2 py-2.5 text-right font-medium border-b border-neutral-200">
+                p95
+              </th>
+              <th className="px-2 py-2.5 text-right font-medium border-b border-neutral-200">
+                Err
+              </th>
+              <th className="px-2 py-2.5 text-right font-medium border-b border-neutral-200">
+                Cost
+              </th>
+              <th className="px-4 py-2.5 text-right font-medium border-b border-neutral-200">
+                24h trend
+              </th>
             </tr>
           </thead>
           <tbody>
             {wfPageRows.map((w, i) => {
               const latest = D.RUNS.find((r) => r.workflow === w.id);
               return (
-                <tr key={w.id} style={{ borderBottom: i < wfPageRows.length - 1 ? ckBorder : "none", transition: "background 120ms" }}
-                  onMouseEnter={(e) => e.currentTarget.style.background = "#F9FAFB"}
-                  onMouseLeave={(e) => e.currentTarget.style.background = "transparent"}>
-                  <td style={{ padding: "12px 16px" }}>
-                    <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                        <span style={{ fontWeight: 600, color: "#181B20" }}>{w.name}</span>
+                <tr
+                  key={w.id}
+                  className={`transition-colors duration-100 hover:bg-off-white ${i < wfPageRows.length - 1 ? "border-b border-neutral-200" : ""}`}
+                >
+                  <td className="px-4 py-3">
+                    <div className="flex flex-col gap-1">
+                      <div className="flex items-center gap-2">
+                        <span className="font-semibold text-neutral-900">
+                          {w.name}
+                        </span>
                         {w.primary && <CkChip tone="mariner">primary</CkChip>}
-                        <span style={{ fontFamily: ckMono, fontSize: 10, color: "#9EA3AA" }}>· {w.gateway}</span>
+                        <span className="font-mono text-[10px] text-neutral-500">
+                          · {w.gateway}
+                        </span>
                       </div>
-                      {latest ?
-                        <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: "#5F666F" }}>
-                          <TicketLink ticket={latest.ticket} url={latest.ticketUrl} />
-                          <span style={{ color: "#181B20", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 560 }}>{latest.ticketTitle}</span>
-                          {latest.prNumber && latest.prUrl && <PRLink num={latest.prNumber} url={latest.prUrl} />}
-                        </div> :
-
-                        <div style={{ fontSize: 11, color: "#9EA3AA" }}>No recent tickets</div>
-                      }
+                      {latest ? (
+                        <div className="flex items-center gap-2 text-xs text-neutral-700">
+                          <TicketLink
+                            ticket={latest.ticket}
+                            url={latest.ticketUrl}
+                          />
+                          <span className="text-neutral-900 overflow-hidden text-ellipsis whitespace-nowrap max-w-[560px]">
+                            {latest.ticketTitle}
+                          </span>
+                          {latest.prNumber && latest.prUrl && (
+                            <PRLink num={latest.prNumber} url={latest.prUrl} />
+                          )}
+                        </div>
+                      ) : (
+                        <div className="text-[11px] text-neutral-500">
+                          No recent tickets
+                        </div>
+                      )}
                     </div>
                   </td>
-                  <td style={{ padding: "12px 8px", textAlign: "right", fontFamily: ckMono, fontWeight: 500 }}>{w.runs24h.toLocaleString()}</td>
-                  <td style={{ padding: "12px 8px", textAlign: "right", fontFamily: ckMono, color: "#5F666F" }}>{w.p95}s</td>
-                  <td style={{ padding: "12px 8px", textAlign: "right", fontFamily: ckMono, color: w.errRate > 0.02 ? "#A2351C" : "#5F666F" }}>{(w.errRate * 100).toFixed(2)}%</td>
-                  <td style={{ padding: "12px 8px", textAlign: "right", fontFamily: ckMono, fontWeight: 500 }}>${w.costToday.toFixed(2)}</td>
-                  <td style={{ padding: "12px 16px", textAlign: "right" }}>
-                    <div style={{ display: "inline-block" }}>
-                      <Spark data={Array.from({ length: 18 }, (_, j) => 0.4 + Math.sin(j * 0.5 + i) * 0.3 + Math.random() * 0.4)} w={120} h={24} stroke="#3C43E7" fill="#3C43E7" />
+                  <td className="px-2 py-3 text-right font-mono font-medium">
+                    {w.runs24h.toLocaleString("en-US")}
+                  </td>
+                  <td className="px-2 py-3 text-right font-mono text-neutral-700">
+                    {w.p95}s
+                  </td>
+                  <td
+                    className={`px-2 py-3 text-right font-mono ${w.errRate > 0.02 ? "text-[#A2351C]" : "text-neutral-700"}`}
+                  >
+                    {(w.errRate * 100).toFixed(2)}%
+                  </td>
+                  <td className="px-2 py-3 text-right font-mono font-medium">
+                    ${w.costToday.toFixed(2)}
+                  </td>
+                  <td className="px-4 py-3 text-right">
+                    <div className="inline-block">
+                      <Spark
+                        data={sparkSeries(i + 1, 18, 0.4, 0.7)}
+                        w={120}
+                        h={24}
+                        stroke="#3C43E7"
+                        fill="#3C43E7"
+                      />
                     </div>
                   </td>
-                </tr>);
-
+                </tr>
+              );
             })}
           </tbody>
         </table>
@@ -378,7 +608,8 @@ export function OverviewScreen({ onOpenRun }: { onOpenRun: (run: Run) => void })
           total={D.WORKFLOWS.length}
           start={wfPageStart}
           shown={wfPageRows.length}
-          onChange={setWfPage} />
+          onChange={setWfPage}
+        />
       </CkCard>
     </div>
   );
