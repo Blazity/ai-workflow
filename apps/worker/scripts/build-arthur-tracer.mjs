@@ -6,9 +6,11 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const repoRoot = path.resolve(__dirname, "..");
+const workerRoot = path.resolve(__dirname, "..");
+// arthur-engine lives as a sibling of the monorepo root (apps/worker → apps → repo → arthur-engine)
+const monorepoRoot = path.resolve(workerRoot, "..", "..");
 const defaultSource = path.resolve(
-  repoRoot,
+  monorepoRoot,
   "..",
   "arthur-engine",
   "integrations",
@@ -27,10 +29,10 @@ if (!fs.existsSync(sourcePath)) {
 
 const bytes = fs.readFileSync(sourcePath);
 const base64 = bytes.toString("base64");
-const outPath = path.resolve(repoRoot, "src", "sandbox", "arthur-tracer.ts");
+const outPath = path.resolve(workerRoot, "src", "sandbox", "arthur-tracer.ts");
 
 const out = `// AUTO-GENERATED — do not edit by hand.
-// Source: ${path.relative(repoRoot, sourcePath)}
+// Source: ${path.relative(workerRoot, sourcePath)}
 // Regenerate: pnpm build:arthur-tracer
 //
 // Base64-encoded Python source of the Arthur Engine Claude Code tracer.
@@ -40,4 +42,4 @@ export const ARTHUR_TRACER_PY_BASE64 = "${base64}";
 `;
 
 fs.writeFileSync(outPath, out);
-console.log(`Wrote ${path.relative(repoRoot, outPath)} (${bytes.length} bytes -> ${base64.length} base64 chars)`);
+console.log(`Wrote ${path.relative(workerRoot, outPath)} (${bytes.length} bytes -> ${base64.length} base64 chars)`);

@@ -75,7 +75,7 @@ jobs:
         with:
           name: e2e-orchestration-results
           path: |
-            e2e/**/*.log
+            apps/worker/e2e/**/*.log
           retention-days: 7
 
   e2e-capacity:
@@ -127,7 +127,7 @@ jobs:
         with:
           name: e2e-capacity-results
           path: |
-            e2e/**/*.log
+            apps/worker/e2e/**/*.log
           retention-days: 7
 
   e2e-agent:
@@ -179,5 +179,5 @@ jobs:
         with:
           name: e2e-agent-results
           path: |
-            e2e/**/*.log
+            apps/worker/e2e/**/*.log
           retention-days: 7
