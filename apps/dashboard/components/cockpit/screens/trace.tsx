@@ -1,9 +1,5 @@
 "use client";
 
-// components/cockpit/screens/trace.tsx — Run trace screen.
-// Renders the flame graph, span detail + evals, LLM I/O viewer, sandbox tests,
-// and PR diff. Ported verbatim from variations/cockpit-screens.jsx (TraceScreen).
-
 import React from "react";
 import { FlameGraph } from "@/components/flame-graph";
 import { ckBorder, ckMono, ckDisp, ckBody } from "@/lib/theme";

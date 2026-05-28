@@ -1,9 +1,5 @@
 "use client";
 
-// components/cockpit/screens/prompts.tsx — Arthur Prompt Versioning screen.
-// Two-pane: prompts list (left), selected prompt detail (right).
-// Ported from variations/cockpit-prompts.jsx.
-
 import React, { useState, useEffect } from "react";
 import { CkCard, CkKPI, CkChip } from "@/components/ui";
 import { ckBorder, ckMono, ckDisp, ckBody } from "@/lib/theme";

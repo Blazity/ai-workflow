@@ -1,10 +1,5 @@
-// lib/data/mock.ts — mock observability data for the Blazity AI Workflow cockpit.
-// Pretends to be merged from: (1) Vercel Workflow + Function logs,
-// (2) Arthur Engine OpenInference traces & evals, (3) Vercel AI Gateway.
-//
-// Ported from the design bundle (shared/data.js). All Math.random() calls were
-// replaced with a seeded RNG so the data is identical on server and client
-// (no hydration mismatches; stable run IDs for trace deep-links).
+// Seeded RNG (not Math.random) so the data is identical on server and client —
+// avoids hydration mismatches and keeps run IDs stable for trace deep-links.
 
 import { makeRng } from "@/lib/rng";
 import type {

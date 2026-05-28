@@ -44,7 +44,6 @@ const VALID_SCREENS = [
 export default function CockpitApp() {
   const [t, setTweak] = useTweaks<Tweaks>(TWEAK_DEFAULTS);
 
-  // Screen routing is synced to the URL hash, mirroring the prototype.
   const [screen, setScreen] = useState<string>("overview");
   const [activeRun, setActiveRun] = useState<Run>(AIWF_DATA.RUNS[0]);
   const [persona, setPersona] = useState("swe");

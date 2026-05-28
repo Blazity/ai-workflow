@@ -1,9 +1,5 @@
 "use client";
 
-// components/flame-graph.tsx — span flame graph rendered as stacked colored bars.
-// Walk the parent links to compute depth, lay out left-to-right by start/duration.
-// Ported from shared/trace.jsx.
-
 import React from "react";
 import { SPAN_KIND_COLOR } from "@/lib/theme";
 import type { Span } from "@/lib/types";

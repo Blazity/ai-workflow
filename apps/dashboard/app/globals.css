@@ -1,22 +1,3 @@
-/* ==========================================================================
-   Blazity Design System — Colors & Typography
-   Source of truth: Blazity Brand 2.0 (Figma) + web-design-Design-System
-   Ported from the Claude Design handoff bundle (design-system/colors_and_type.css)
-   ========================================================================== */
-
-/* ---------- Webfonts ----------------------------------------------------
-   Rethink Sans   — wordmark only (Google Fonts)
-   Manrope        — display/headings (local variable file)
-   Inter          — body prose (Google upright + local italic variable)
-   JetBrains Mono — labels/CTAs/tagline (local variable file)
-
-   Manrope / JetBrains Mono / Inter-italic are self-hosted below via @font-face
-   (files in /public/fonts). Rethink Sans (wordmark) + Inter upright are loaded
-   from Google Fonts via a preconnected <link> in app/layout.tsx — preferred over
-   a render-blocking CSS @import, while keeping the literal family-name contract
-   ("Inter", "Rethink Sans") that the component inline styles depend on.
-------------------------------------------------------------------------- */
-
 @font-face {
   font-family: "Manrope";
   src: url("/fonts/Manrope.ttf") format("truetype-variations");
@@ -121,7 +102,8 @@
   --font-wordmark: "Rethink Sans", system-ui, sans-serif; /* logo only */
   --font-display: "Manrope", system-ui, sans-serif; /* headings */
   --font-body: "Inter", system-ui, sans-serif; /* prose */
-  --font-mono: "JetBrains Mono", ui-monospace, monospace; /* labels/CTAs/tagline */
+  --font-mono:
+    "JetBrains Mono", ui-monospace, monospace; /* labels/CTAs/tagline */
 
   /* ── RADII ──────────────────────────────────────────────────────────── */
   /* Brand favors squared corners — radii are small & intentional. */

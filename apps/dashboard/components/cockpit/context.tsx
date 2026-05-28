@@ -2,10 +2,6 @@
 
 import { createContext, useContext } from "react";
 
-/**
- * Cockpit-wide UI tweaks. Mirrors the TWEAK_DEFAULTS block in the original
- * index.html prototype. Screens read these to adjust density, hero, etc.
- */
 export type Density = "compact" | "comfy";
 
 export type Tweaks = {

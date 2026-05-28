@@ -1,9 +1,5 @@
 "use client";
 
-// components/cockpit/activity-drawer.tsx — slide-out activity drawer (right side).
-// Ported from variations/cockpit-activity.jsx. Imports the same look-and-feel
-// atoms used elsewhere.
-
 import { useState } from "react";
 import { ckBorder, ckMono, ckBody, ckDisp } from "@/lib/theme";
 import { AIWF_DATA } from "@/lib/data/mock";

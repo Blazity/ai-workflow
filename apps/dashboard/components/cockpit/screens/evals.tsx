@@ -1,9 +1,5 @@
 "use client";
 
-// components/cockpit/screens/evals.tsx — Arthur evals & guardrails screen.
-// Grouped evaluators (safety / quality / ops) with status, value, trend, spark.
-// Ported verbatim from variations/cockpit-screens.jsx (EvalsScreen).
-
 import { ckBorder, ckMono, ckDisp, ckBody } from "@/lib/theme";
 import { CkCard, CkChip } from "@/components/ui";
 import { Spark } from "@/components/charts";

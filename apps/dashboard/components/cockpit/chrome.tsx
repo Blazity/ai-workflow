@@ -1,17 +1,8 @@
 "use client";
 
-// components/cockpit/chrome.tsx — Cockpit side nav + top bar.
-// Ported verbatim from variations/cockpit-chrome.jsx. Shared atoms
-// (CkChip/CkDot/CkCard/CkKPI/CkTabs/CkStatusPill) live in @/components/ui
-// and theme literals in @/lib/theme — imported, never redefined.
-
 import React from "react";
 import { BlazityLogo } from "@/components/ui";
 import { ckBorder, ckMono, ckBody } from "@/lib/theme";
-
-/* ──────────────────────────────────────────────────────────────────────
-   Side nav + top bar
-   ────────────────────────────────────────────────────────────────────── */
 
 const NAV = [
   { id: "overview", label: "Overview", glyph: "◇", group: "obs" },

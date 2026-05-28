@@ -1,8 +1,3 @@
-// lib/types.ts — typed model for the AI Workflow observability data.
-// Shapes mirror what you'd merge from Vercel Workflow + Function logs, Arthur
-// Engine OpenInference traces/evals, and the Vercel AI Gateway. See app/api/*
-// route handlers for the real-endpoint mapping.
-
 export type RunStatus = "success" | "running" | "failed" | "blocked" | "awaiting";
 export type SpanKind = "workflow" | "llm" | "tool" | "guardrail" | "retrieval";
 export type SpanStatus = "ok" | "warn" | "error";

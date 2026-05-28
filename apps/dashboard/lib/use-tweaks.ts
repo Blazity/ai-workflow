@@ -1,13 +1,7 @@
 "use client";
 
-// lib/use-tweaks.ts
-// Ported from .design_tmp/ai-workflow/project/tweaks-panel.jsx (useTweaks).
-//
-// The prototype persisted tweak values through a host postMessage protocol
-// (__edit_mode_set_keys). In Next.js there is no host frame, so we persist to
-// localStorage instead. The hook stays SSR-safe: state initializes from the
-// passed-in `defaults` on first render (matching the server-rendered markup),
-// then hydrates from localStorage in an effect to avoid a hydration mismatch.
+// SSR-safe: state initializes from `defaults` so the first client render
+// matches server-rendered markup, then hydrates from localStorage in an effect.
 
 import { useCallback, useEffect, useState } from "react";
 
@@ -54,8 +48,6 @@ export function useTweaks<T extends Record<string, unknown>>(
             // Storage unavailable (private mode / quota) — state still updates.
           }
         }
-        // Same-window signal so in-page listeners can react, mirroring the
-        // prototype's `tweakchange` CustomEvent dispatch.
         if (typeof window !== "undefined") {
           window.dispatchEvent(
             new CustomEvent("tweakchange", { detail: { [key]: value } }),

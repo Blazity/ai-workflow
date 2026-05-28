@@ -1,7 +1,3 @@
-// lib/flows.ts — preset flow definitions for the n8n-style editor (Pre-sandbox
-// and Post-PR review). x/y are canvas coordinates; `ports` is the output-port
-// count (default 1). Ported from variations/cockpit-flow.jsx.
-
 export type NodeType =
   | "trigger"
   | "fetch"

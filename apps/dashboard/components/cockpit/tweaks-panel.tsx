@@ -1,17 +1,9 @@
 "use client";
 
-// components/cockpit/tweaks-panel.tsx
-// Ported verbatim from .design_tmp/ai-workflow/project/tweaks-panel.jsx.
-// Reusable Tweaks shell + form-control helpers (pixel-perfect inline styles
-// preserved; all `.twk-*` class styling lives in the inline <style> block).
-//
-// Behavioral notes vs the prototype:
-//  - The prototype relied on a host iframe protocol (__activate_edit_mode etc.)
-//    to toggle the panel open. There is no host frame in Next.js, so the panel
-//    defaults to open. The message listeners are kept (SSR-guarded) so an
-//    embedding host can still drive open/close if present.
-//  - `window.parent.postMessage` calls are guarded for SSR and degrade to
-//    no-ops when there is no parent (window.parent === window).
+// Defaults open since the standalone app has no host frame; postMessage
+// listeners are kept (SSR-guarded) so an embedding host can still drive
+// open/close. `window.parent.postMessage` calls no-op when there is no
+// parent (window.parent === window).
 
 import {
   useCallback,
@@ -131,15 +123,8 @@ const __TWEAKS_STYLE = `
     filter:drop-shadow(0 1px 1px rgba(0,0,0,.3))}
 `;
 
-/* ── Shared option typing ──────────────────────────────────────────────────
- * Options accept either a bare value or an {value, label} object, mirroring
- * the prototype's `typeof o === 'object'` branching. */
 type TweakOption<V> = V | { value: V; label: ReactNode };
 
-// ── TweaksPanel ─────────────────────────────────────────────────────────────
-// Floating shell. Keeps the host protocol listener (SSR-guarded) so an
-// embedding host can drive open/close, but defaults open since the standalone
-// Next.js app has no host frame to send __activate_edit_mode.
 export function TweaksPanel({
   title = "Tweaks",
   children,

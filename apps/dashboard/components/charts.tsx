@@ -1,7 +1,3 @@
-// components/charts.tsx — tiny inline SVG charts (no deps). Stateless.
-// Ported from shared/charts.jsx. Universal components (usable from server or
-// client trees); the parent screens that animate them are client components.
-
 import React from "react";
 
 /** Sparkline: 1D series → smooth line, 80x24 by default. */

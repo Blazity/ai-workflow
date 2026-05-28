@@ -1,9 +1,5 @@
-// lib/rng.ts — deterministic pseudo-randomness.
-//
-// The prototype used Math.random() for mock data and decorative sparklines.
-// Under Next.js SSR that would (a) mismatch between server and client (hydration
-// errors) and (b) produce unstable run IDs that break trace deep-links. A seeded
-// generator keeps every value identical across server and client renders.
+// Seeded so values are identical across SSR and client renders — Math.random
+// would mismatch (hydration errors) and produce unstable IDs for trace links.
 
 /** mulberry32 — small, fast, seedable PRNG returning floats in [0, 1). */
 export function makeRng(seed: number): () => number {

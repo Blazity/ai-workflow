@@ -1,7 +1,3 @@
-// lib/theme.ts — Cockpit-scoped style constants, mirrored from the design bundle
-// (variations/cockpit-chrome.jsx + shared/trace.jsx). The ported components use
-// these literal values inline so the visual output matches the prototype exactly.
-
 export const ckBorder = "1px solid #E6E8EB";
 export const ckMono = '"JetBrains Mono", monospace';
 export const ckDisp = '"Manrope", system-ui, sans-serif';

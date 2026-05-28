@@ -1,8 +1,5 @@
 "use client";
 
-// components/cockpit/screens/postpr.tsx — post-PR-review flow editor screen.
-// Ported from variations/cockpit-flow.jsx (PostPRReviewScreen).
-
 import { FlowEditor } from "@/components/cockpit/screens/flow-editor";
 import { POSTPR_FLOW, POSTPR_RUN_STATUS } from "@/lib/flows";
 

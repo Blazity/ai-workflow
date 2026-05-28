@@ -1,8 +1,5 @@
 "use client";
 
-// components/cockpit/screens/presandbox.tsx — pre-sandbox flow editor screen.
-// Ported from variations/cockpit-flow.jsx (PreSandboxScreen).
-
 import { FlowEditor } from "@/components/cockpit/screens/flow-editor";
 import { PRESANDBOX_FLOW, PRESANDBOX_RUN_STATUS } from "@/lib/flows";
 

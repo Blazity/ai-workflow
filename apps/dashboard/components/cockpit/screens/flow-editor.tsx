@@ -1,10 +1,5 @@
 "use client";
 
-// components/cockpit/screens/flow-editor.tsx — n8n-style flow editor shared by
-// the pre-sandbox and post-PR-review screens. Canvas + node palette + config
-// panel. Ported from variations/cockpit-flow.jsx (visual source of truth).
-// Flow/status DATA + TYPES live in @/lib/flows; UI-only constants stay local.
-
 import React, { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { CkChip } from "@/components/ui";
 import { ckBorder, ckMono, ckDisp, ckBody } from "@/lib/theme";

@@ -1,10 +1,5 @@
 "use client";
 
-// components/ui.tsx — Cockpit UI atoms shared across every screen.
-// Ported from variations/cockpit-chrome.jsx (+ the Ticket/PR/Pagination helpers
-// that lived in cockpit-screens.jsx). These are the design vocabulary; screens
-// import from here and must not redefine them.
-
 import React from "react";
 import { Spark } from "@/components/charts";
 import { ckBorder, ckMono, ckDisp, ckBody } from "@/lib/theme";
