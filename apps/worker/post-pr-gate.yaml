@@ -1,0 +1,26 @@
+postPrGate:
+  runOn:
+    botPrsOnly: true
+    draftPrs: false
+    baseBranches: [] # empty = all base branches
+
+  steps:
+    # AI-powered hygiene check. One Claude Haiku 4.5 call per changed file
+    # (via @ai-sdk/anthropic), scoped to the unified diff of that file. Flags:
+    #  - TODO / FIXME / HACK markers, commented-out code, placeholder "trash" comments
+    #  - Stray console.log / print / debug statements on added lines
+    #  - debugger; statements
+    # Requires ANTHROPIC_API_KEY in env.
+    #
+    # The `name` field becomes part of the GitHub Check Run name
+    # ("blazebot / <name>"). GitHub does NOT allow renaming check runs after
+    # creation. Pick a stable value.
+    - uses: code-hygiene
+      name: code-hygiene
+      onFailure: continue
+      timeoutMs: 180000
+      # with:
+      #   model: claude-haiku-4-5
+      #   maxFiles: 50
+      #   maxPatchCharsPerFile: 8000
+      #   concurrency: 5

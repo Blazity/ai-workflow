@@ -142,7 +142,7 @@ Description: Update the primary brand color across the site to my favorite color
 
 **Expected behavior:**
 1. Research phase identifies the ticket as unclear (vague, subjective, missing details, contradictory, etc.)
-2. Agent returns `STATUS: clarification_needed`
+2. Agent returns `status: "clarification_needed"` in its structured output
 3. Numbered clarification questions posted as a Jira comment
 4. Ticket moves to "Backlog" column
 5. Redis entry cleaned up, sandbox torn down
