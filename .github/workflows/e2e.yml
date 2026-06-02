@@ -51,8 +51,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
-        with:
-          version: 10
       - uses: actions/setup-node@v4
         with:
           node-version: "20.12"
@@ -69,7 +67,7 @@ jobs:
         with:
           name: e2e-orchestration-results
           path: |
-            e2e/**/*.log
+            apps/worker/e2e/**/*.log
           retention-days: 7
 
   e2e-capacity:
@@ -106,8 +104,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
-        with:
-          version: 10
       - uses: actions/setup-node@v4
         with:
           node-version: "20.12"
@@ -124,7 +120,7 @@ jobs:
         with:
           name: e2e-capacity-results
           path: |
-            e2e/**/*.log
+            apps/worker/e2e/**/*.log
           retention-days: 7
 
   e2e-agent:
@@ -162,8 +158,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
-        with:
-          version: 10
       - uses: actions/setup-node@v4
         with:
           node-version: "20.12"
@@ -180,5 +174,5 @@ jobs:
         with:
           name: e2e-agent-results
           path: |
-            e2e/**/*.log
+            apps/worker/e2e/**/*.log
           retention-days: 7
