@@ -8,7 +8,7 @@ This replaces the previous "personal access token" setup. The App is **organizat
 
 ## What you'll end up with
 
-Six values to set on the Vercel deployment:
+Seven values to set on the Vercel deployment:
 
 ```
 VCS_KIND=github
@@ -17,6 +17,7 @@ GITHUB_APP_PRIVATE_KEY=<base64 of the .pem file>
 GITHUB_INSTALLATION_ID=<numeric installation id>
 GITHUB_OWNER=<target org or user that hosts the repo>
 GITHUB_REPO=<target repo name>
+GITHUB_WEBHOOK_SECRET=<random hex, used to sign pull_request webhook deliveries>
 ```
 
 ---
@@ -41,13 +42,21 @@ Click **"New GitHub App"**.
 | Homepage URL | Your Vercel deployment URL, or any valid URL |
 | Description | Optional |
 
-## 3. Disable webhooks
+## 3. Configure the webhook
 
-The bot does not receive webhooks.
+The bot receives GitHub `pull_request` events to drive the post-PR gate (see [post-pr-gate-spec.md](./post-pr-gate-spec.md)). The webhook URL points at the deployment's `/webhooks/github` route and is signed with a shared secret.
 
-- **Webhook → Active** → **uncheck**
+- **Webhook → Active** → **checked**
+- **Webhook URL** → `https://<your-deployment>/webhooks/github` (use the production URL once you have one; you can set a placeholder now and update after first deploy)
+- **Webhook secret** → generate a random value and paste it:
 
-The webhook URL field can be left blank once Active is unchecked.
+  ```bash
+  openssl rand -hex 32
+  ```
+
+  Save the same value as `GITHUB_WEBHOOK_SECRET` in Vercel (step 11). The deployment validates `X-Hub-Signature-256` on every delivery — a missing or mismatched secret returns 401.
+
+> No need to subscribe to events yet — the next step (permissions) gates which event types are available, and event subscription is configured separately in step 5.
 
 ## 4. Set permissions
 
@@ -58,7 +67,7 @@ The webhook URL field can be left blank once Active is unchecked.
 | Contents | Read & write | Clone the repo, push commits |
 | Pull requests | Read & write | Create PRs, fetch PR data |
 | Issues | Read & write | PR review comments live on the issues API |
-| Checks | Read-only | Read CI check results |
+| Checks | Read & write | Read CI check results + create post-PR gate check runs |
 | Actions | Read-only | Read workflow run status |
 | Metadata | Read-only | Mandatory, auto-included |
 
@@ -72,7 +81,15 @@ Leave everything on **No access**.
 
 Leave everything on **No access**.
 
-## 5. Choose installation scope
+## 5. Subscribe to events
+
+Under **Subscribe to events**, enable exactly one:
+
+- **Pull request** — fires the `pull_request` event on `opened` / `synchronize` / `reopened` / `closed`. The deployment filters to the actions it cares about; subscribing to the umbrella event is required.
+
+Leave every other event unchecked.
+
+## 6. Choose installation scope
 
 **Where can this GitHub App be installed?**
 
@@ -81,7 +98,7 @@ Leave everything on **No access**.
 
 Click **"Create GitHub App"**.
 
-## 6. Generate a private key
+## 7. Generate a private key
 
 On the new App's page, scroll down to **"Private keys"** → click **"Generate a private key"**.
 
@@ -89,7 +106,7 @@ GitHub downloads a file like `blazity-ai-workflow.2026-05-07.private-key.pem`.
 
 > Save this file. GitHub never shows it again. If lost, generate a new key from this page and revoke the old one.
 
-## 7. Note the App ID
+## 8. Note the App ID
 
 At the top of the App settings page:
 
@@ -99,7 +116,7 @@ App ID: 1234567
 
 That number is your `GITHUB_APP_ID`.
 
-## 8. Install the App on the target repo
+## 9. Install the App on the target repo
 
 On the App's page, click **"Install App"** in the left sidebar.
 
@@ -108,7 +125,9 @@ On the App's page, click **"Install App"** in the left sidebar.
 3. Pick the repo(s) the bot will operate on.
 4. Click **"Install"**.
 
-## 9. Get the Installation ID
+> **Re-accepting after permission changes.** GitHub flags the installation as "pending acceptance" on every installed repo whenever you change permissions (e.g. raising `Checks` to read & write, or adding the `Pull request` event subscription). A repo admin must click "Review request" at `https://github.com/organizations/<ORG>/settings/installations/<INSTALLATION_ID>` and accept the new permission set — until they do, the new permissions are inert and the post-PR gate webhook will fail silently.
+
+## 10. Get the Installation ID
 
 The Installation ID is a numeric identifier that scopes the App to one specific
 install (org-or-user × selected repos). It's distinct from the App ID.
@@ -167,7 +186,7 @@ install; pick the one whose `account.login` matches `GITHUB_OWNER`.
 > later install the App on a second org, that's a new ID — don't reuse the old
 > one.
 
-## 10. Base64-encode the private key
+## 11. Base64-encode the private key
 
 The deployment expects the PEM as a single-line base64 string (multi-line PEM does not round-trip cleanly through Vercel's env UI):
 
@@ -179,7 +198,7 @@ The clipboard now holds your `GITHUB_APP_PRIVATE_KEY`.
 
 > **macOS note:** `base64 -i` works on macOS. On Linux use `base64 -w 0 < <file>`.
 
-## 11. Set the env vars on Vercel
+## 12. Set the env vars on Vercel
 
 ```
 GITHUB_APP_ID=1234567
@@ -187,12 +206,13 @@ GITHUB_APP_PRIVATE_KEY=<paste the base64 string>
 GITHUB_INSTALLATION_ID=98765432
 GITHUB_OWNER=<target-org>
 GITHUB_REPO=<target-repo>
+GITHUB_WEBHOOK_SECRET=<the same secret you pasted in step 3>
 VCS_KIND=github
 ```
 
-Set them in **Vercel → project → Settings → Environment Variables** for the appropriate environments (Production / Preview / Development as needed).
+Set them in **Vercel → project → Settings → Environment Variables** for the appropriate environments (Production / Preview / Development as needed). `GITHUB_WEBHOOK_SECRET` is required in **every** environment — the webhook fires on preview deployments too, and the handler returns 401 without it.
 
-## 12. Redeploy
+## 13. Redeploy
 
 The bot validates env vars at startup. After setting the values, trigger a redeploy so the new env is loaded.
 

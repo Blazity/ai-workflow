@@ -1,0 +1,6 @@
+preSandbox:
+  runOn:
+    newTicket: true
+    existingPr: true
+    mergeConflict: true
+  steps: []
