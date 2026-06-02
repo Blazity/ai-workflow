@@ -139,6 +139,7 @@ export function CkKPI({
   deltaTone = "good",
   spark,
   sparkColor = "#3C43E7",
+  disabled = false,
 }: {
   label: React.ReactNode;
   value: React.ReactNode;
@@ -147,6 +148,7 @@ export function CkKPI({
   deltaTone?: "good" | "bad" | "neutral";
   spark?: number[];
   sparkColor?: string;
+  disabled?: boolean;
 }) {
   const deltaToneClass =
     deltaTone === "good" ? "text-success-fg" : deltaTone === "bad" ? "text-fail-fg" : "text-neutral-700";
@@ -154,14 +156,20 @@ export function CkKPI({
     <div className="bg-panel border border-neutral-200 rounded-sm py-4 px-[18px] flex flex-col gap-1.5 min-h-[124px]">
       <div className="font-mono text-[10px] font-medium tracking-[0.06em] uppercase text-neutral-700">{label}</div>
       <div className="flex items-baseline gap-2">
-        <div className="font-display font-semibold text-[32px] leading-none tracking-[-0.02em] text-coal">{value}</div>
-        {sub && <div className="font-body font-medium text-sm leading-none text-neutral-700">{sub}</div>}
+        {disabled ? (
+          <div className="font-display font-semibold text-[32px] leading-none tracking-[-0.02em] text-neutral-400">N/A</div>
+        ) : (
+          <div className="font-display font-semibold text-[32px] leading-none tracking-[-0.02em] text-coal">{value}</div>
+        )}
+        {!disabled && sub && (
+          <div className="font-body font-medium text-sm leading-none text-neutral-700">{sub}</div>
+        )}
       </div>
       <div className="flex items-center justify-between mt-auto">
-        {delta != null && (
+        {!disabled && delta != null && (
           <div className={`font-mono text-[11px] ${deltaToneClass}`}>{delta}</div>
         )}
-        {spark && (
+        {!disabled && spark && (
           <div className="opacity-85" style={{ color: sparkColor }}>
             <Spark data={spark} stroke={sparkColor} fill={sparkColor} w={96} h={28} />
           </div>

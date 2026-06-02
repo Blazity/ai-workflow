@@ -1,6 +1,7 @@
 "use client";
 
 import { createContext, useContext } from "react";
+import type { Run } from "@/lib/types";
 
 export type Density = "compact" | "comfy";
 
@@ -31,6 +32,8 @@ export interface CockpitCtxValue {
   persona: Persona;
   range: TimeRange;
   env: EnvName;
+  /** Open a run in the Trace screen. Provided by CockpitApp; no-op in the default ctx. */
+  openRun: (run: Run) => void;
 }
 
 export const CockpitCtx = createContext<CockpitCtxValue>({
@@ -39,6 +42,7 @@ export const CockpitCtx = createContext<CockpitCtxValue>({
   persona: "swe",
   range: "24h",
   env: "prod",
+  openRun: () => {},
 });
 
 /** Convenience hook for nested screens to read cockpit context without prop drilling. */

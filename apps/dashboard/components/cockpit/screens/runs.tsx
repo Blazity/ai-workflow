@@ -60,16 +60,16 @@ export function RunsScreen({ onOpenRun }: { onOpenRun: (run: Run) => void }) {
                 </td>
                 <td className="px-3 py-2.5 font-mono text-[11px] text-neutral-700">{r.model}</td>
                 <td className="px-3 py-2.5 text-right font-mono text-[11px] text-neutral-500">{r.startedAtMin}m ago</td>
-                <td className="px-3 py-2.5 text-right font-mono font-medium">{r.duration ? r.duration + "s" : "—"}</td>
-                <td className="px-3 py-2.5 text-right font-mono text-neutral-700">{(r.tokens / 1000).toFixed(1)}k</td>
-                <td className="px-3 py-2.5 text-right font-mono font-medium">${r.cost.toFixed(2)}</td>
+                <td className="px-3 py-2.5 text-right font-mono font-medium">{r.duration === null ? "—" : `${r.duration}s`}</td>
+                <td className="px-3 py-2.5 text-right font-mono text-neutral-700">{r.tokens === null ? "—" : `${(r.tokens / 1000).toFixed(1)}k`}</td>
+                <td className="px-3 py-2.5 text-right font-mono font-medium">{r.cost === null ? "—" : `$${r.cost.toFixed(2)}`}</td>
                 <td className="px-3 py-2.5 text-right">
-                  {r.evalScore ?
-                    <span className={`font-mono text-[11px] font-semibold ${r.evalScore > 0.9 ? "text-success-fg" : r.evalScore > 0.85 ? "text-[#7A5A00]" : "text-fail-fg"}`}>{(r.evalScore * 100).toFixed(0)}</span> :
-                    <span className="font-mono text-[11px] text-neutral-300">—</span>}
+                  {r.evalScore === null ?
+                    <span className="font-mono text-[11px] text-neutral-300">—</span> :
+                    <span className={`font-mono text-[11px] font-semibold ${r.evalScore > 0.9 ? "text-success-fg" : r.evalScore > 0.85 ? "text-[#7A5A00]" : "text-fail-fg"}`}>{(r.evalScore * 100).toFixed(0)}</span>}
                 </td>
                 <td className="px-3 py-2.5 text-right">
-                  {r.guardrailHits > 0 ?
+                  {r.guardrailHits !== null && r.guardrailHits > 0 ?
                     <CkChip tone="warn">{r.guardrailHits}</CkChip> :
                     <span className="font-mono text-[11px] text-neutral-300">—</span>}
                 </td>

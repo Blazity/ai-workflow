@@ -4,6 +4,52 @@ A workflow-driven AI coding automation service that turns Jira tickets into merg
 
 Designed to work with **Vercel infrastructure**: bring your own API keys (Jira, GitHub, Slack, Anthropic) and deploy onto Vercel — Functions for the HTTP server, Workflows for durable orchestration, and Sandboxes for isolated agent execution.
 
+## Repository Layout
+
+This is a [pnpm workspace](https://pnpm.io/workspaces) monorepo. The workspace globs `apps/*` (see [`pnpm-workspace.yaml`](./pnpm-workspace.yaml)):
+
+```
+ai-workflow/
+├── apps/
+│   ├── worker/      # The bot — Nitro HTTP server + Vercel Workflows + Sandbox orchestration
+│   ├── dashboard/   # The cockpit — Next.js observability UI (read-only)
+│   └── shared/      # Type-only contracts shared between worker and dashboard
+├── docs/            # Specs, plans, and integration guides
+├── pnpm-workspace.yaml
+└── package.json     # Root scripts that fan out across the workspace
+```
+
+| Package | Name | What it is |
+|---------|------|-----------|
+| `apps/worker` | `worker` | The actual automation service: Nitro server, durable workflow, sandbox lifecycle, Jira/VCS/Slack adapters. This is what you deploy to run the bot. Everything in the [Workflow Deep-dive](#workflow-deep-dive) below lives here, under `apps/worker/src/`. |
+| `apps/dashboard` | `ai-workflow-dashboard` | A Next.js "cockpit" that visualizes runs, KPIs, and eval health. **Read-only** — it holds no credentials and never writes; it fetches the worker's `/api/v1/*` API server-side and renders it. Optional: the bot runs fine without it. |
+| `apps/shared` | _(no package — see below)_ | Shared TypeScript contracts (`domain.ts`, `api.ts`) describing the worker's API responses, so the dashboard and worker stay in sync at the type level. |
+
+### How the packages connect
+
+- **`@shared/*` is a path alias, not an npm package.** `apps/shared` has no `package.json` and emits nothing (`noEmit: true`). Both apps map `@shared/*` → `../shared/*` in their `tsconfig.json` and import the contracts directly from source (`import type { RunsResponse } from "@shared/contracts"`). It's a type-only seam — no build step, no version to bump.
+- **The dashboard talks to the worker over HTTP.** The worker exposes a read-only, bearer-gated API under `/api/v1/*` (`apps/worker/src/routes/api/v1/`), gated by [`apps/worker/src/middleware/api-auth.ts`](./apps/worker/src/middleware/api-auth.ts) against `WORKER_API_TOKEN`. The dashboard fetches it server-side (`apps/dashboard/lib/api/server.ts`) with `Authorization: Bearer <WORKER_API_TOKEN>`, so the token never reaches the browser. The two apps deploy as **separate Vercel projects** and share only that token and the `@shared/contracts` types.
+
+### Working in the monorepo
+
+Install once at the root; pnpm installs every workspace:
+
+```bash
+pnpm install
+```
+
+Root scripts in [`package.json`](./package.json) fan out across the workspace:
+
+| Command | What it does |
+|---------|-------------|
+| `pnpm dev` | Runs the worker in dev (`pnpm --filter worker dev`). Run the dashboard with `pnpm --filter ai-workflow-dashboard dev`. |
+| `pnpm build` | `pnpm -r build` — builds every app |
+| `pnpm typecheck` | `pnpm -r typecheck` — typechecks every app (validates the `@shared` contracts on both sides) |
+| `pnpm test` | `pnpm -r test` — runs each app's unit tests |
+| `pnpm test:e2e` | Runs the worker's E2E suites |
+
+To target a single app, use pnpm's `--filter`: `pnpm --filter worker test`, `pnpm --filter ai-workflow-dashboard build`.
+
 ## How It Works
 
 1. **You move a Jira ticket** to the "AI" column on your board
@@ -76,7 +122,7 @@ For installation, environment variables, and deployment instructions, see [SETUP
 
 ### One workflow, two phases
 
-There is a single durable workflow — `agentWorkflow` in [`src/workflows/agent.ts`](./src/workflows/agent.ts) — that handles both fresh tickets and review-fix re-runs. The branching happens at *context-assembly* time, not at the workflow level: if an open PR for `blazebot/{ticket-key}` already exists, its comments, check results, and conflict status are folded into the agent's input.
+There is a single durable workflow — `agentWorkflow` in [`apps/worker/src/workflows/agent.ts`](./apps/worker/src/workflows/agent.ts) — that handles both fresh tickets and review-fix re-runs. The branching happens at *context-assembly* time, not at the workflow level: if an open PR for `blazebot/{ticket-key}` already exists, its comments, check results, and conflict status are folded into the agent's input.
 
 | Step | What happens |
 |------|-------------|
@@ -126,14 +172,14 @@ The sandbox runs on **Node.js 24** with a configurable timeout (`JOB_TIMEOUT_MS`
 
 Each phase has its own wrapper script (`/tmp/{phase}-wrapper.sh`) that sources `/tmp/agent-env.sh` and pipes the phase input into the agent CLI:
 
-- **Claude** (`buildPhaseScript` in [`src/sandbox/agents/claude.ts`](./src/sandbox/agents/claude.ts)):
+- **Claude** (`buildPhaseScript` in [`apps/worker/src/sandbox/agents/claude.ts`](./apps/worker/src/sandbox/agents/claude.ts)):
   ```
   cat /tmp/{phase}-requirements.md | claude \
     --print --model '<model>' --dangerously-skip-permissions --output-format json \
     [--json-schema '<AGENT_SCHEMA>'] \
     > /tmp/{phase}-stdout.txt 2>/tmp/{phase}-stderr.txt
   ```
-- **Codex** (`buildPhaseScript` in [`src/sandbox/agents/codex.ts`](./src/sandbox/agents/codex.ts)) uses `codex exec --model … --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check --json` with `--output-schema` for structured output.
+- **Codex** (`buildPhaseScript` in [`apps/worker/src/sandbox/agents/codex.ts`](./apps/worker/src/sandbox/agents/codex.ts)) uses `codex exec --model … --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check --json` with `--output-schema` for structured output.
 
 The script ends by writing a sentinel file (`/tmp/{phase}-done`). The workflow polls every 30 seconds via `checkPhaseDone` and suspends between polls — durable across redeploys.
 
@@ -152,7 +198,7 @@ A **commit-guard stop hook** (toggled per phase via `setCommitGuardStep`) blocks
 
 #### How changes get pushed
 
-ai workflow pushes from **inside the sandbox**, but only after the agent process has exited. The flow in [`src/sandbox/poll-agent.ts`](./src/sandbox/poll-agent.ts):
+ai workflow pushes from **inside the sandbox**, but only after the agent process has exited. The flow in [`apps/worker/src/sandbox/poll-agent.ts`](./apps/worker/src/sandbox/poll-agent.ts):
 
 1. **Verify commits exist** — compare the saved `/tmp/.pre-agent-sha` to the current `HEAD`. If unchanged, the workflow fails the run with "Agent reported success but made no commits."
 2. **Inject the token** — `git remote set-url origin <auth-url>`. The agent process is already dead at this point and never sees the token.
@@ -181,7 +227,7 @@ ai workflow uses an **atomic claim pattern** via Upstash Redis to prevent duplic
 - When a ticket is dispatched, a `claiming:{timestamp}` sentinel is set atomically (`hsetnx`)
 - Only one poller instance can win the claim — others see it's taken
 - After the workflow starts, the sentinel is replaced with the real workflow run ID and the sandbox id is pinned to the ticket
-- On every poll cycle, the **reconciler** ([`src/lib/reconcile.ts`](./src/lib/reconcile.ts)) cleans up:
+- On every poll cycle, the **reconciler** ([`apps/worker/src/lib/reconcile.ts`](./apps/worker/src/lib/reconcile.ts)) cleans up:
   - Stale claims older than 5 minutes (kills any orphaned sandbox + clears the sentinel)
   - Finished runs still tracked in the registry (status `completed` / `failed` / `cancelled`)
   - Orphaned runs for tickets that left the AI column — cancels the workflow and stops the sandbox

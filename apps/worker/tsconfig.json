@@ -7,9 +7,18 @@
     "esModuleInterop": true,
     "skipLibCheck": true,
     "outDir": "dist",
-    "rootDir": ".",
+    "baseUrl": ".",
+    "paths": {
+      "@shared/*": ["../shared/*"]
+    },
     "types": ["vitest/globals"]
   },
-  "include": ["src/**/*.ts", "env.ts", "nitro.config.ts", "vitest.config.ts"],
+  "include": [
+    "src/**/*.ts",
+    "env.ts",
+    "nitro.config.ts",
+    "vitest.config.ts",
+    "../shared/contracts/**/*.ts"
+  ],
   "exclude": ["node_modules", "dist", ".output", ".nitro"]
 }

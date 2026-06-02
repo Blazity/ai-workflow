@@ -1,56 +1,14 @@
-export type RunStatus = "success" | "running" | "failed" | "blocked" | "awaiting";
-export type SpanKind = "workflow" | "llm" | "tool" | "guardrail" | "retrieval";
+import type { SpanKind, Workflow, Run, HourPoint } from "@shared/contracts";
+
+export type {
+  RunStatus,
+  SpanKind,
+  Workflow,
+  Run,
+  HourPoint,
+} from "@shared/contracts";
+
 export type SpanStatus = "ok" | "warn" | "error";
-
-export interface Workflow {
-  id: string;
-  name: string;
-  blurb: string;
-  runs24h: number;
-  p50: number;
-  p95: number;
-  errRate: number;
-  costToday: number;
-  gateway: string;
-  primary?: boolean;
-}
-
-export interface Run {
-  id: string;
-  workflow: string;
-  workflowName: string;
-  status: RunStatus;
-  ticket: string;
-  actor: string;
-  model: string;
-  startedAtMin: number;
-  duration: number | null;
-  tokens: number;
-  cost: number;
-  spans: number;
-  evalScore: number;
-  guardrailHits: number;
-  // Decorated (Linear/Jira/GitHub refs)
-  ticketTitle: string;
-  prNumber: number | null;
-  ticketUrl: string;
-  prUrl: string | null;
-  // Live — status === "running"
-  currentSpan?: string;
-  currentSpanKind?: SpanKind;
-  progress?: number;
-  spanIndex?: number;
-  spansTotal?: number;
-  elapsed?: number;
-  etaSec?: number;
-  // Human-in-the-loop — status === "awaiting"
-  pausedAtSpan?: string;
-  askedAtMin?: number;
-  question?: string;
-  questionFor?: string;
-  blockingReason?: string;
-  suggestedAnswers?: string[];
-}
 
 export interface Span {
   id: string;
@@ -81,14 +39,6 @@ export interface CostByModel {
   cost: number;
   tokens: number;
   share: number;
-}
-
-export interface HourPoint {
-  h: number;
-  runs: number;
-  cost: number;
-  p95: number;
-  errors: number;
 }
 
 export interface Deployment {
