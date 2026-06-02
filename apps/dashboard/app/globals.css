@@ -1,0 +1,177 @@
+@import "tailwindcss";
+
+@font-face {
+  font-family: "Manrope";
+  src: url("/fonts/Manrope.ttf") format("truetype-variations");
+  font-weight: 200 800;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "JetBrains Mono";
+  src: url("/fonts/JetBrainsMono.ttf") format("truetype-variations");
+  font-weight: 100 800;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Inter";
+  src: url("/fonts/Inter-Italic.ttf") format("truetype-variations");
+  font-weight: 100 900;
+  font-style: italic;
+  font-display: swap;
+}
+
+@theme {
+  /* ── BRAND CORE ────────────────────────────────────────────────────── */
+  --color-burnt-orange: #fd6027;
+  --color-mariner: #3c43e7;
+  --color-off-white: #f9fafb;
+  --color-coal: #181b20;
+  --color-vibe-yellow: #ffc800;
+  --color-sulu: #bbed80;
+
+  /* App canvas */
+  --color-app-bg: #f2f4f6;
+  --color-panel: #ffffff;
+
+  /* ── NEUTRAL SCALE (overrides Tailwind defaults) ──────────────────── */
+  --color-neutral-100: #f9fafb;
+  --color-neutral-200: #e6e8eb;
+  --color-neutral-300: #d2d6da;
+  --color-neutral-400: #b9bdc3;
+  --color-neutral-500: #9ea3aa;
+  --color-neutral-600: #7f858d;
+  --color-neutral-700: #5f666f;
+  --color-neutral-800: #3e444c;
+  --color-neutral-900: #181b20;
+  --color-neutral-1000: #121418;
+
+  /* ── MARINER (Blue) SCALE ─────────────────────────────────────────── */
+  --color-mariner-100: #ececfd;
+  --color-mariner-200: #d8d9fa;
+  --color-mariner-300: #c5c7f8;
+  --color-mariner-400: #b1b4f5;
+  --color-mariner-500: #8a8ef1;
+  --color-mariner-600: #6369ec;
+  --color-mariner-700: #3c43e7;
+
+  /* ── YELLOW SCALE (overrides) ─────────────────────────────────────── */
+  --color-yellow-100: #fffae6;
+  --color-yellow-200: #fff4cc;
+  --color-yellow-300: #ffefb3;
+  --color-yellow-400: #ffe999;
+  --color-yellow-500: #ffde66;
+  --color-yellow-600: #ffd333;
+  --color-yellow-700: #ffc800;
+
+  /* ── ORANGE SCALE (overrides) ─────────────────────────────────────── */
+  --color-orange-100: #ffefe9;
+  --color-orange-200: #ffdfd4;
+  --color-orange-300: #fecfbe;
+  --color-orange-400: #febfa9;
+  --color-orange-500: #fea07d;
+  --color-orange-600: #fd8052;
+  --color-orange-700: #fd6027;
+
+  /* ── SULU (Green CTA) SCALE ───────────────────────────────────────── */
+  --color-sulu-100: #f2fbe6;
+  --color-sulu-300: #d7f4b3;
+  --color-sulu-500: #bbed80;
+  --color-sulu-700: #8fc548;
+
+  /* ── SEMANTIC STATUS DOT COLORS ───────────────────────────────────── */
+  --color-success: #5bb04a;
+  --color-success-bg: #eaf7e0;
+  --color-success-fg: #3f6b1e;
+  --color-fail: #d14343;
+  --color-fail-bg: #fce6e2;
+  --color-fail-fg: #a2351c;
+
+  /* ── FONT FAMILIES ────────────────────────────────────────────────── */
+  --font-sans: "Inter", system-ui, sans-serif;
+  --font-display: "Manrope", system-ui, sans-serif;
+  --font-body: "Inter", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+  --font-wordmark: "Rethink Sans", system-ui, sans-serif;
+
+  /* ── RADII ────────────────────────────────────────────────────────── */
+  --radius-pill: 999px;
+
+  /* ── EASING + DURATION ────────────────────────────────────────────── */
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  --ease-emphasized: cubic-bezier(0.3, 0, 0, 1);
+
+  /* ── ANIMATIONS (utility class generated as e.g. animate-ck-pulse) ── */
+  --animate-ck-pulse: ckPulse 1.4s ease-in-out infinite;
+  --animate-ck-slide: ckSlide 320ms cubic-bezier(0.2, 0, 0, 1);
+  --animate-ck-shimmer: ckShimmer 1.6s ease-in-out infinite;
+  --animate-ck-march: ckMarchDash 600ms linear infinite;
+}
+
+/* ==========================================================================
+   Base reset + app canvas
+   ========================================================================== */
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background: #f2f4f6;
+  font-family: var(--font-body);
+  color: #181b20;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+@layer base {
+  a {
+    color: inherit;
+  }
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.18);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+@keyframes ckPulse {
+  0% {
+    transform: scale(0.8);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(2.2);
+    opacity: 0;
+  }
+}
+@keyframes ckMarchDash {
+  to {
+    stroke-dashoffset: -16;
+  }
+}
+@keyframes ckSlide {
+  from {
+    transform: translateX(100%);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
+@keyframes ckShimmer {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(100%);
+  }
+}

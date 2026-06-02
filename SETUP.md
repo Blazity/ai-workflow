@@ -176,14 +176,25 @@ Pick one — controlled by `AGENT_KIND`.
 
 ## 3. Clone the repo and link to Vercel
 
+This repo is a **pnpm workspace monorepo** (see the [Repository Layout](./README.md#repository-layout) section of the README). `pnpm install` from the root installs every app at once:
+
 ```bash
 git clone <your-fork-or-this-repo>.git
 cd ai-workflow
 pnpm install
-vercel link
 ```
 
-`vercel link` walks you through selecting the team and either creating a new project or linking to an existing one. The result is `.vercel/project.json` — keep it out of source control (already gitignored).
+The two deployable apps — `apps/worker` (the bot) and `apps/dashboard` (the cockpit) — deploy as **separate Vercel projects**, each linked from its own directory. Link the worker now; the dashboard is optional and covered under [Optional integrations → Dashboard](#dashboard-cockpit--observability-ui).
+
+```bash
+cd apps/worker
+vercel link
+cd ../..
+```
+
+`vercel link` walks you through selecting the team and either creating a new project or linking to an existing one. Running it from `apps/worker` produces `apps/worker/.vercel/project.json` and pins the project's **Root Directory** to `apps/worker`, so Vercel builds the worker (and picks up its `vercel.json` cron) rather than the repo root. The `.vercel/` dir is gitignored — keep it out of source control.
+
+> If you instead create the project through the Vercel dashboard, set **Project → Settings → Build & Development → Root Directory** to `apps/worker` manually.
 
 ---
 
@@ -214,7 +225,10 @@ Open **Project → Settings → Environment Variables** and add every required v
 
 ### 5b. Via the CLI
 
+The worker's vars belong to the worker's Vercel project, so run these from `apps/worker` (where you linked in step 3):
+
 ```bash
+cd apps/worker
 cp .env.example .env
 # fill in values, then:
 vercel env add JIRA_BASE_URL production
@@ -235,6 +249,7 @@ vercel env add JIRA_API_TOKEN production
 | `ANTHROPIC_API_KEY`                                                                                | If `AGENT_KIND=claude` (default)                       |
 | `CODEX_API_KEY` (or `CODEX_CHATGPT_OAUTH_TOKEN`)                                                   | If `AGENT_KIND=codex`                                  |
 | `AI_WORKFLOW_KV_REST_API_URL`, `AI_WORKFLOW_KV_REST_API_TOKEN`                                     | Auto-injected by Upstash integration                   |
+| `WORKER_API_TOKEN`                                                                                 | Shared bearer secret gating the read-only `/api/v1/*` API that the dashboard consumes. Required even if you don't deploy the dashboard. Generate: `openssl rand -hex 32`. The dashboard's `WORKER_API_TOKEN` must match this value. |
 
 ### Optional / has defaults
 
@@ -260,6 +275,8 @@ vercel env add JIRA_API_TOKEN production
 
 ## 6. Deploy to Vercel
 
+Run these from `apps/worker` (the linked worker project). The dashboard deploys separately — see [Optional integrations → Dashboard](#dashboard-cockpit--observability-ui).
+
 ### First deploy (preview)
 
 ```bash
@@ -282,7 +299,7 @@ Or push to your production branch if you've connected the Vercel Git integration
 
 ### What deploys
 
-- HTTP routes from `src/routes/` — health, cron, webhooks, slash commands.
+- HTTP routes from `apps/worker/src/routes/` — health, cron, webhooks, slash commands, and the read-only `/api/v1/*` API.
 - Vercel Workflow definitions — workflow state is managed by Vercel in production (no Postgres needed).
 - Cron job from `vercel.json` (`* * * * *` → `/cron/poll`) — activates automatically. Vercel injects the `CRON_SECRET` auth header.
 
@@ -295,7 +312,7 @@ Without this, ai-workflow only learns about ticket changes via the 1-minute cron
 1. Go to **Jira → System Settings → WebHooks** (admin only) or use the Atlassian REST API.
 2. Create a webhook:
    - **URL:** `https://<your-vercel-domain>/webhooks/jira`
-   - **Secret:** the `JIRA_WEBHOOK_SECRET` value from step 5. Jira signs each delivery with HMAC-SHA256 in the `X-Hub-Signature` header; the handler at `src/routes/webhooks/jira.post.ts` verifies it with `timingSafeEqual`.
+   - **Secret:** the `JIRA_WEBHOOK_SECRET` value from step 5. Jira signs each delivery with HMAC-SHA256 in the `X-Hub-Signature` header; the handler at `apps/worker/src/routes/webhooks/jira.post.ts` verifies it with `timingSafeEqual`.
    - **Events:** `jira:issue_updated` (required). Add `jira:issue_created` and `comment_created` if you want creates and comments to dispatch instantly.
    - **JQL filter** (optional): `project = AWT` to limit deliveries to the relevant project.
 3. Save.
@@ -316,7 +333,7 @@ If you followed [`docs/GITHUB-APP-SETUP.md`](./docs/GITHUB-APP-SETUP.md) in step
    - Subscribe to events → **Pull request** (checked)
 3. **Re-accept on every installed repo** if you changed permissions or events after the initial install. A repo admin opens `https://github.com/organizations/<ORG>/settings/installations/<INSTALLATION_ID>` and clicks "Review request" → "Accept". Until accepted, the new permissions and events are inert and the gate webhook stays silent.
 4. **Confirm `GITHUB_WEBHOOK_SECRET`** is set in Vercel (step 5) and matches the value pasted into the App's webhook config. A mismatch returns 401 on every delivery — visible in the App's **Advanced → Recent Deliveries** tab.
-5. **Tune `post-pr-gate.yaml`** at the repo root if the defaults don't fit. The default config runs on `blazebot/*` branches only, skips drafts, and runs a single `pr-title-format` step (Conventional Commits) as advisory (`onFailure: continue`). Steps are defined in `src/post-pr-gate/steps/`.
+5. **Tune `post-pr-gate.yaml`** at the repo root if the defaults don't fit. The default config runs on `blazebot/*` branches only, skips drafts, and runs a single `pr-title-format` step (Conventional Commits) as advisory (`onFailure: continue`). Steps are defined in `apps/worker/src/post-pr-gate/steps/`.
 
 Verify by opening a manual PR titled `feat: smoke check` against the target repo (any `blazebot/*` branch — or set `botPrsOnly: false` in `post-pr-gate.yaml` to test from any branch). Within a few seconds you should see a `blazebot / pr-title-format` check run appear on the PR's head SHA and resolve to `success`.
 
@@ -397,6 +414,37 @@ The E2E jobs need the production env vars exposed as GitHub Actions secrets in t
 ---
 
 ## 12. Optional integrations
+
+### Dashboard (cockpit — observability UI)
+
+`apps/dashboard` is a separate Next.js app that renders the worker's runs, KPIs, and eval health. It's **read-only** and entirely optional — the bot runs without it. It holds no integration credentials; it just calls the worker's gated `/api/v1/*` API server-side. Deploy it as its **own Vercel project**:
+
+1. Link the dashboard from its directory (sets Root Directory to `apps/dashboard`):
+
+   ```bash
+   cd apps/dashboard
+   vercel link        # create/select a SECOND project (e.g. ai-workflow-dashboard)
+   ```
+
+2. Set its two env vars (`apps/dashboard/.env.example` documents both):
+
+   | Variable           | Value                                                                                              |
+   | ------------------ | -------------------------------------------------------------------------------------------------- |
+   | `WORKER_BASE_URL`  | The deployed worker's base URL, no trailing slash (e.g. `https://<your-worker>.vercel.app`).       |
+   | `WORKER_API_TOKEN` | **The same value** you set as `WORKER_API_TOKEN` on the worker (step 5). This authenticates the dashboard's server-side fetches. |
+
+   ```bash
+   vercel env add WORKER_BASE_URL production
+   vercel env add WORKER_API_TOKEN production
+   ```
+
+3. Deploy:
+
+   ```bash
+   vercel --prod
+   ```
+
+The token stays server-side (the dashboard fetches in React Server Components, never the browser). If `WORKER_API_TOKEN` is missing or doesn't match the worker's, the worker returns 401 and the dashboard renders its empty/N-A fallback state instead of crashing — a quick way to confirm the wiring is the difference between real data and N-A tiles.
 
 ### Arthur AI Engine (tracing + hosted prompts)
 

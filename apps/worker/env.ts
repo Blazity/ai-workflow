@@ -122,6 +122,12 @@ export const env = createEnv({
     // Redis (run registry)
     AI_WORKFLOW_KV_REST_API_URL: z.string().url(),
     AI_WORKFLOW_KV_REST_API_TOKEN: z.string().min(1),
+
+    // Dashboard API — shared bearer secret gating the read-only /api/v1/*
+    // endpoints (verified in src/middleware/api-auth.ts). The dashboard (a
+    // separate deployment) sends it as `Authorization: Bearer <token>`.
+    // Generate with `openssl rand -hex 32`.
+    WORKER_API_TOKEN: z.string().min(1),
   },
   runtimeEnv: process.env,
   emptyStringAsUndefined: true,
