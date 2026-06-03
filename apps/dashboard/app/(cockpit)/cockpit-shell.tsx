@@ -69,8 +69,6 @@ export function CockpitShell({ children }: { children: React.ReactNode }) {
             setRange={setRange}
             env={env}
             setEnv={setEnv}
-            activityOpen={activityOpen}
-            onToggleActivity={() => setActivityOpen((v) => !v)}
           />
           <div className="flex-1 overflow-auto min-h-0">{children}</div>
         </main>

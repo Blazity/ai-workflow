@@ -1,10 +1,13 @@
 // apps/dashboard/app/(cockpit)/runs/page.tsx — Workflow runs ("/runs")
-"use client";
+import { Suspense } from "react";
 
-import { RunsScreen } from "@/components/cockpit/screens/runs";
-import { useCockpit } from "@/components/cockpit/context";
+import { RunsData } from "@/app/runs-data";
+import { RunsSkeleton } from "@/app/runs-skeleton";
 
 export default function RunsPage() {
-  const { openRun } = useCockpit();
-  return <RunsScreen onOpenRun={openRun} />;
+  return (
+    <Suspense fallback={<RunsSkeleton />}>
+      <RunsData />
+    </Suspense>
+  );
 }

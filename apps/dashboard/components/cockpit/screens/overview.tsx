@@ -148,7 +148,9 @@ function NowRunningPanel({
                   <span className="font-body text-sm font-semibold text-neutral-900">
                     {r.workflowName}
                   </span>
-                  <CkChip tone="blocked">{r.ticket}</CkChip>
+                  {r.ticket && r.ticketUrl ? (
+                    <TicketLink ticket={r.ticket} url={r.ticketUrl} />
+                  ) : null}
                   <span className="ml-auto inline-flex items-center gap-2.5 font-mono text-[11px] text-neutral-700">
                     {r.elapsed != null && <span>{(r.elapsed ?? 0).toFixed(1)}s</span>}
                     {r.etaSec != null && <span className="text-neutral-500">· ETA {r.etaSec}s</span>}
@@ -240,15 +242,9 @@ function AwaitingInputPanel({
                 >
                   {r.workflowName}
                 </span>
-                <CkChip
-                  style={{
-                    background: "#fff",
-                    color: "#5F666F",
-                    border: "1px solid #E6E8EB",
-                  }}
-                >
-                  {r.ticket}
-                </CkChip>
+                {r.ticket && r.ticketUrl ? (
+                  <TicketLink ticket={r.ticket} url={r.ticketUrl} />
+                ) : null}
                 {r.questionFor && <CkChip tone="warn">@{r.questionFor}</CkChip>}
                 {typeof r.askedAtMin === "number" && (
                   <span className="ml-auto font-mono text-[11px] text-neutral-500 whitespace-nowrap">
@@ -270,9 +266,6 @@ function AwaitingInputPanel({
                     {a}
                   </button>
                 ))}
-                <button className="ml-auto appearance-none border border-coal bg-coal text-white px-3 py-[5px] rounded-[3px] cursor-pointer font-mono text-[11px] font-medium uppercase tracking-[0.04em]">
-                  Reply →
-                </button>
               </div>
             </div>
           ))}
@@ -483,7 +476,9 @@ export function OverviewScreen({ data }: { data: OverviewScreenData }) {
                           {r.ticketTitle}
                         </span>
                         <div className="flex items-center gap-1.5">
-                          <TicketLink ticket={r.ticket} url={r.ticketUrl} />
+                          {r.ticket && r.ticketUrl && (
+                            <TicketLink ticket={r.ticket} url={r.ticketUrl} />
+                          )}
                           {r.prNumber && r.prUrl && (
                             <PRLink num={r.prNumber} url={r.prUrl} />
                           )}
@@ -584,7 +579,9 @@ export function OverviewScreen({ data }: { data: OverviewScreenData }) {
                       </div>
                       {latest ? (
                         <div className="flex items-center gap-2 text-xs text-neutral-700">
-                          <TicketLink ticket={latest.ticket} url={latest.ticketUrl} />
+                          {latest.ticket && latest.ticketUrl && (
+                            <TicketLink ticket={latest.ticket} url={latest.ticketUrl} />
+                          )}
                           <span className="text-neutral-900 overflow-hidden text-ellipsis whitespace-nowrap max-w-[560px]">
                             {latest.ticketTitle}
                           </span>

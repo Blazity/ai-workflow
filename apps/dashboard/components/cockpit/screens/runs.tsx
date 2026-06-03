@@ -2,21 +2,20 @@
 
 import React, { useState } from "react";
 import { CkCard, CkChip, CkStatusPill, CkTabs, TicketLink, PRLink } from "@/components/ui";
-import { AIWF_DATA } from "@/lib/data/mock";
-import type { Run } from "@/lib/types";
+import { useCockpit } from "@/components/cockpit/context";
+import type { RunsResponse } from "@shared/contracts";
 
-const D = AIWF_DATA;
-
-export function RunsScreen({ onOpenRun }: { onOpenRun: (run: Run) => void }) {
+export function RunsScreen({ data }: { data: RunsResponse }) {
+  const { openRun } = useCockpit();
   const [filter, setFilter] = useState("all");
-  const filtered = filter === "all" ? D.RUNS : D.RUNS.filter((r) => r.status === filter);
+  const filtered = filter === "all" ? data.rows : data.rows.filter((r) => r.status === filter);
 
   return (
     <div className="flex flex-col gap-4 px-6 pt-5 pb-8">
       <div className="flex items-center justify-between">
         <div className="flex flex-col gap-1">
           <div className="font-mono text-[10px] uppercase tracking-[0.06em] text-neutral-500">Workflow runs</div>
-          <h2 className="font-display text-2xl font-medium leading-[1.2] text-neutral-900 m-0">{D.RUNS.length} runs · last 24h</h2>
+          <h2 className="font-display text-2xl font-medium leading-[1.2] text-neutral-900 m-0">{data.total} runs · last 24h</h2>
         </div>
         <div className="flex gap-2">
           <CkTabs active={filter} onChange={setFilter} tabs={[
@@ -43,7 +42,7 @@ export function RunsScreen({ onOpenRun }: { onOpenRun: (run: Run) => void }) {
           </thead>
           <tbody>
             {filtered.map((r, i) =>
-              <tr key={r.id} onClick={() => onOpenRun(r)} className={`cursor-pointer hover:bg-neutral-100 ${i < filtered.length - 1 ? "border-b border-neutral-200" : ""}`}>
+              <tr key={r.id} onClick={() => openRun(r)} className={`cursor-pointer hover:bg-neutral-100 ${i < filtered.length - 1 ? "border-b border-neutral-200" : ""}`}>
                 <td className="px-3 py-2.5"><CkStatusPill status={r.status} /></td>
                 <td className="px-3 py-2.5">
                   <div className="flex flex-col gap-1">

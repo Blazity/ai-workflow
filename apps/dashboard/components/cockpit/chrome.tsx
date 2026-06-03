@@ -60,8 +60,6 @@ export function CkTopbar({
   setRange,
   env,
   setEnv,
-  activityOpen,
-  onToggleActivity,
 }: {
   persona: string;
   setPersona: (v: string) => void;
@@ -69,33 +67,9 @@ export function CkTopbar({
   setRange: (v: string) => void;
   env: string;
   setEnv: (v: string) => void;
-  activityOpen: boolean;
-  onToggleActivity: () => void;
 }) {
   return (
     <div className="h-14 flex-[0_0_56px] border-b border-neutral-200 bg-panel flex items-center px-6 gap-4">
-      <div className="flex-1 max-w-[380px] relative">
-        <input
-          placeholder="Search runs, traces, span IDs, tickets…"
-          className="w-full h-[34px] bg-app-bg border border-neutral-200 rounded-[3px] pl-8 pr-3 font-body text-[13px] text-neutral-900 outline-none"
-        />
-        <span className="absolute left-[10px] top-[9px] text-neutral-500 font-mono text-sm">⌕</span>
-        <span className="absolute right-[10px] top-[9px] font-mono text-[10px] text-neutral-500 border border-[#D2D6DA] rounded-xs px-[5px] py-px">⌘K</span>
-      </div>
-
-      <div className="ml-auto flex items-center gap-2">
-        <button
-          onClick={onToggleActivity}
-          title="Activity stream"
-          className={`appearance-none border border-neutral-200 w-[34px] h-[34px] rounded-[3px] cursor-pointer inline-flex items-center justify-center font-mono text-sm relative ${
-            activityOpen ? "bg-neutral-900 text-white" : "bg-panel text-neutral-900"
-          }`}
-        >
-          ≣
-          <span className="absolute top-1 right-1 w-1.5 h-1.5 rounded-full bg-burnt-orange" />
-        </button>
-        <div className="w-7 h-7 rounded-full bg-mariner text-white font-mono font-medium text-[11px] flex items-center justify-center">SK</div>
-      </div>
     </div>
   );
 }
