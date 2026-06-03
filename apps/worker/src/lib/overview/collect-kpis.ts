@@ -7,7 +7,11 @@ const DAY = 24 * HOUR;
 export interface CollectKpisOptions {
   runsLister: RunsLister;
   now: Date;
-  /** How many recent runs to scan (covers the 48h delta window). */
+  /**
+   * How many recent runs to scan (covers the 48h delta window). The Vercel
+   * Workflow `/v2/runs` API rejects `limit > 100` with HTTP 400, so this must
+   * stay <= 100 or `runsLister.list` throws and the KPIs degrade to N/A.
+   */
   limit?: number;
 }
 
@@ -22,7 +26,7 @@ export async function collectKpis(
   opts: CollectKpisOptions,
 ): Promise<Omit<KpisResponse, "generatedAt">> {
   const { runsLister, now } = opts;
-  const limit = opts.limit ?? 500;
+  const limit = opts.limit ?? 100;
   const curStart = now.getTime() - DAY;
   const prevStart = now.getTime() - 2 * DAY;
 
