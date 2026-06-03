@@ -4,7 +4,6 @@
 import { useEffect, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 
-import { AIWF_DATA } from "@/lib/data/mock";
 import { useTweaks } from "@/lib/use-tweaks";
 import type { Run } from "@/lib/types";
 
@@ -35,7 +34,6 @@ export function CockpitShell({ children }: { children: React.ReactNode }) {
   const screen = screenForPath(pathname);
 
   const [t, setTweak] = useTweaks<Tweaks>(TWEAK_DEFAULTS);
-  const [activeRun, setActiveRun] = useState<Run>(AIWF_DATA.RUNS[0]);
   const [persona, setPersona] = useState("swe");
   const [range, setRange] = useState("24h");
   const [env, setEnv] = useState("prod");
@@ -48,13 +46,12 @@ export function CockpitShell({ children }: { children: React.ReactNode }) {
   }, [t.activityDrawerOpen]);
 
   const openRun = (r: Run) => {
-    setActiveRun(r);
-    router.push("/trace");
+    router.push(`/trace/${encodeURIComponent(r.id)}`);
   };
 
   return (
     <CockpitCtx.Provider
-      value={{ t, setTweak, persona, range, env, activeRun, openRun }}
+      value={{ t, setTweak, persona, range, env, openRun }}
     >
       <div className="h-screen w-screen flex overflow-hidden bg-app-bg relative">
         <CkSidebar

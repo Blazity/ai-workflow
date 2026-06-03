@@ -1,4 +1,4 @@
-import type { Run, Workflow } from "./domain.js";
+import type { Run, RunDetail, RunStep, Workflow } from "./domain.js";
 
 export interface ErrorEnvelope {
   error: { code: string; message: string; details?: unknown };
@@ -41,6 +41,14 @@ export interface RunsResponse {
     failed: number;
     blocked: number;
   };
+}
+
+export interface RunDetailResponse {
+  generatedAt: string;
+  /** `false` when the run can't be read (worker/world unavailable or unknown id). */
+  available: boolean;
+  run: RunDetail | null;
+  steps: RunStep[];
 }
 
 export interface WorkflowRow extends Pick<Workflow, "id" | "name" | "blurb" | "gateway"> {

@@ -6,7 +6,6 @@ import { BlazityLogo } from "@/components/ui";
 const NAV = [
   { id: "overview", label: "Overview", glyph: "◇", group: "obs" },
   { id: "runs", label: "Workflow runs", glyph: "≡", group: "obs" },
-  { id: "trace", label: "Run trace", glyph: "⟐", group: "obs" },
   { id: "prompts", label: "Prompts", glyph: "❡", group: "obs" },
   { id: "evals", label: "Arthur evals", glyph: "✓", group: "obs" },
   { id: "cost", label: "Cost & usage", glyph: "$", group: "obs" },

@@ -2,6 +2,7 @@ import type {
   KpisResponse,
   EvalHealthResponse,
   RunsResponse,
+  RunDetailResponse,
   LiveRunsResponse,
   WorkflowsResponse,
 } from "@shared/contracts";
@@ -28,6 +29,10 @@ export function recentRunsFallback(now: string): RunsResponse {
     total: 0,
     counts: { success: 0, running: 0, awaiting: 0, failed: 0, blocked: 0 },
   };
+}
+
+export function runDetailFallback(now: string): RunDetailResponse {
+  return { generatedAt: now, available: false, run: null, steps: [] };
 }
 
 export function liveRunsFallback(now: string): LiveRunsResponse {

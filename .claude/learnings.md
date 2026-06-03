@@ -34,3 +34,11 @@
 
 ## collectRuns has two callers (collectWorkflows shares its options)
 - `CollectRunsOptions` is reused by `collectWorkflows` (`export type CollectWorkflowsOptions = CollectRunsOptions`), which delegates to `collectRuns`. So adding a *required* field to `CollectRunsOptions` breaks BOTH `routes/api/v1/runs.get.ts` AND `routes/api/v1/workflows.get.ts` (+ `collect-workflows.test.ts`). When threading a new option through `collectRuns`, update all of them. Discovered 2026-06-03 implementing run-id ticket labels (plan only listed the runs.get.ts caller).
+
+## Per-run trace data: what Vercel Workflow exposes (vs. what's mock)
+- `getWorld()` exposes `runs`, `steps`, `events`, `hooks`. For a single run trace:
+  `world.runs.get(runId, {resolveData:'none'})` → status/workflowName/timestamps/error/deploymentId, and `world.steps.list({runId, resolveData:'none'})` → flat (no parent) step list: stepId/stepName/status/attempt/timestamps/error. This backs `/trace/[runId]` (`collect-run-detail.ts` → `GET /api/v1/runs/[runId]`).
+- Use `resolveData:'none'` for steps too (same expired-run schema-crash reason as `collect-runs.ts`). Step `input`/`output` are encrypted at rest and `hydrateResourceIO` does NOT decrypt → the trace shows step I/O as "encrypted, not viewable". Parse step labels with `parseStepName(name).functionName`.
+- NOT available per run (all were mock in the old `/trace` screen, now dropped): tokens/cost (computed in-workflow as `phaseUsages`, emitted only to Slack — never persisted to a queryable store), Arthur eval scores (separate system), sandbox test results, PR diff. Steps have no "kind" (llm/tool/guard) — the trace colors by status instead.
+- Ticket for a run is recovered the same way as `collect-runs`: JQL `labels in ("run:<id>")` (the dispatcher's run-label tag), since the workflow `input` is encrypted.
+- Removed the standalone `/trace` tab + its `activeRun` cockpit-context state; runs now deep-link to `/trace/${run.id}`. Discovered/implemented 2026-06-03.

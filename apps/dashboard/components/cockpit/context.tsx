@@ -2,7 +2,6 @@
 
 import { createContext, useContext } from "react";
 import type { Run } from "@/lib/types";
-import { AIWF_DATA } from "@/lib/data/mock";
 
 export type Density = "compact" | "comfy";
 
@@ -33,8 +32,6 @@ export interface CockpitCtxValue {
   persona: Persona;
   range: TimeRange;
   env: EnvName;
-  /** The run currently selected for the Trace screen. */
-  activeRun: Run;
   /** Open a run in the Trace screen. Provided by CockpitShell; no-op in the default ctx. */
   openRun: (run: Run) => void;
 }
@@ -45,7 +42,6 @@ export const CockpitCtx = createContext<CockpitCtxValue>({
   persona: "swe",
   range: "24h",
   env: "prod",
-  activeRun: AIWF_DATA.RUNS[0],
   openRun: () => {},
 });
 
