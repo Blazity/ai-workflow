@@ -42,6 +42,7 @@ function run(opts: {
     runsLister: opts.runsLister,
     issueTracker: makeTracker(),
     jiraBaseUrl: "https://example.atlassian.net",
+    projectKey: "AWT",
     model: "claude-opus-4-8",
     now: NOW,
   });

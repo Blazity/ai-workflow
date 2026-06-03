@@ -2,6 +2,7 @@ import { start, getRun } from "workflow/api";
 import { env } from "../../env.js";
 import { agentWorkflow } from "../workflows/agent.js";
 import { logger } from "./logger.js";
+import { runLabel } from "./labels.js";
 import type { Adapters } from "./adapters.js";
 import { stopTicketSandboxes } from "../sandbox/stop-ticket-sandboxes.js";
 
@@ -157,6 +158,22 @@ export async function dispatchTicket(
 
     stage = "register_run";
     await runRegistry.register(ticketKey, handle.runId);
+
+    // Durable ticket↔run mapping: tag the ticket with its runId so the
+    // dashboard (and operators in Jira) can recover which run processed it,
+    // even after the run completes and its encrypted workflow input is no
+    // longer decodable. Best-effort — the workflow has already started, so a
+    // label failure must not fail the dispatch. Add-only: labels accumulate so
+    // a re-dispatched ticket keeps one `run:<id>` label per run.
+    await issueTracker
+      .updateLabels?.(ticketKey, { add: [runLabel(handle.runId)] })
+      .catch((err: unknown) =>
+        logger.warn(
+          { ticketKey, runId: handle.runId, err: (err as Error).message },
+          "run_label_add_failed",
+        ),
+      );
+
     return { started: true, runId: handle.runId };
   } catch (err) {
     if (claimHeld) {

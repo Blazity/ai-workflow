@@ -62,6 +62,7 @@ describe("collectRuns", () => {
       runsLister: lister,
       issueTracker: tracker,
       jiraBaseUrl: "https://example.atlassian.net/",
+      projectKey: "AWT",
       model: "claude-opus-4-8",
       now: NOW,
     });
@@ -119,6 +120,7 @@ describe("collectRuns", () => {
       runsLister: lister,
       issueTracker: makeTracker(),
       jiraBaseUrl: "https://example.atlassian.net",
+      projectKey: "AWT",
       model: "m",
       now: NOW,
     });
@@ -138,6 +140,7 @@ describe("collectRuns", () => {
       runsLister: lister,
       issueTracker: makeTracker(),
       jiraBaseUrl: "https://example.atlassian.net",
+      projectKey: "AWT",
       model: "m",
       now: NOW,
     });
@@ -153,6 +156,7 @@ describe("collectRuns", () => {
       runsLister: lister,
       issueTracker: makeTracker(),
       jiraBaseUrl: "https://example.atlassian.net",
+      projectKey: "AWT",
       model: "m",
       now: NOW,
     });
@@ -162,11 +166,80 @@ describe("collectRuns", () => {
     expect(rows[0].workflowName).toBe("Post-PR gate");
   });
 
+  it("resolves ticket from a run:<id> label when input is undecodable", async () => {
+    const lister = makeLister([record({ runId: "run_x", input: undefined })]);
+    const tracker = makeTracker({
+      searchTickets: vi.fn().mockResolvedValue(["AWT-77"]),
+      fetchTicket: vi.fn(async (key: string) => ({
+        id: key,
+        identifier: key,
+        projectKey: "AWT",
+        title: "Labeled ticket",
+        description: "",
+        acceptanceCriteria: "",
+        comments: [],
+        labels: ["run:run_x", "needs-clarification"],
+        trackerStatus: "AI",
+        attachments: [],
+      })),
+    });
+
+    const { rows } = await collectRuns({
+      runsLister: lister,
+      issueTracker: tracker,
+      jiraBaseUrl: "https://example.atlassian.net",
+      projectKey: "AWT",
+      model: "m",
+      now: NOW,
+    });
+
+    expect(rows[0].ticket).toBe("AWT-77");
+    expect(rows[0].ticketTitle).toBe("Labeled ticket");
+    expect(rows[0].ticketUrl).toBe("https://example.atlassian.net/browse/AWT-77");
+    expect(tracker.searchTickets).toHaveBeenCalledWith(
+      `project = "AWT" AND labels in ("run:run_x")`,
+    );
+  });
+
+  it("falls back to extractTicket when no run label matches", async () => {
+    const lister = makeLister([record({ runId: "r", input: ["AWT-9"] })]);
+    const tracker = makeTracker({
+      searchTickets: vi.fn().mockResolvedValue([]),
+    });
+
+    const { rows } = await collectRuns({
+      runsLister: lister,
+      issueTracker: tracker,
+      jiraBaseUrl: "https://example.atlassian.net",
+      projectKey: "AWT",
+      model: "m",
+      now: NOW,
+    });
+
+    expect(rows[0].ticket).toBe("AWT-9");
+  });
+
+  it("does not query Jira when there are no runs", async () => {
+    const searchTickets = vi.fn();
+    const { rows } = await collectRuns({
+      runsLister: makeLister([]),
+      issueTracker: makeTracker({ searchTickets }),
+      jiraBaseUrl: "https://example.atlassian.net",
+      projectKey: "AWT",
+      model: "m",
+      now: NOW,
+    });
+
+    expect(rows).toEqual([]);
+    expect(searchTickets).not.toHaveBeenCalled();
+  });
+
   it("returns empty result for no runs", async () => {
     const { rows, total } = await collectRuns({
       runsLister: makeLister([]),
       issueTracker: makeTracker(),
       jiraBaseUrl: "https://example.atlassian.net",
+      projectKey: "AWT",
       model: "m",
       now: NOW,
     });

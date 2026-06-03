@@ -26,6 +26,7 @@ export default defineEventHandler(async (event): Promise<WorkflowsResponse> => {
       runsLister: getWorld().runs as RunsLister,
       issueTracker: adapters.issueTracker,
       jiraBaseUrl: env.JIRA_BASE_URL,
+      projectKey: env.JIRA_PROJECT_KEY,
       model,
       now: new Date(),
     });
