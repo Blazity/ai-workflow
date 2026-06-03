@@ -448,11 +448,26 @@ async function postClarificationAndMoveBack(
 ): Promise<string | null> {
   "use step";
   const { createStepAdapters } = await import("../lib/step-adapters.js");
+  const { NEEDS_CLARIFICATION_LABEL } = await import("../lib/labels.js");
   const { issueTracker } = createStepAdapters();
   const comment = questions.map((q, i) => `${i + 1}. ${q}`).join("\n");
   const commentUrl = await issueTracker.postComment(ticketId, comment);
+  // Tag the ticket so the overview's awaiting-input scan can find it cheaply.
+  await issueTracker.updateLabels?.(ticketId, {
+    add: [NEEDS_CLARIFICATION_LABEL],
+  });
   await issueTracker.moveTicket(ticketId, backlogColumn);
   return commentUrl;
+}
+
+async function clearClarificationLabel(ticketId: string) {
+  "use step";
+  const { createStepAdapters } = await import("../lib/step-adapters.js");
+  const { NEEDS_CLARIFICATION_LABEL } = await import("../lib/labels.js");
+  const { issueTracker } = createStepAdapters();
+  await issueTracker.updateLabels?.(ticketId, {
+    remove: [NEEDS_CLARIFICATION_LABEL],
+  });
 }
 
 async function unregisterRun(ticketIdentifier: string) {
@@ -524,6 +539,14 @@ export async function agentWorkflow(ticketId: string) {
 
   const ticket = await fetchAndValidateTicket(ticketId, env.COLUMN_AI);
   if (!ticket) return;
+
+  // Re-picked from backlog after a human answered a clarification: clear the
+  // awaiting-input marker so the overview stops listing it (and a later failure
+  // back to backlog can't resurface it as "awaiting").
+  const { NEEDS_CLARIFICATION_LABEL } = await import("../lib/labels.js");
+  if (ticket.labels.includes(NEEDS_CLARIFICATION_LABEL)) {
+    await clearClarificationLabel(ticket.identifier);
+  }
 
   const { loadPrompts } = await import("./prompts-step.js");
   const prompts = await loadPrompts();

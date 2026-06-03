@@ -8,6 +8,13 @@
 - `@vercel/sandbox` git clones can be shallow by default, causing "no history in common with main" on PR creation when force-pushing from the sandbox. Always unshallow before pushing (`git fetch --unshallow origin`).
 - `GitHubAdapter.createBranch` must force-reset existing branches to the base SHA on 422, not silently return. Stale branches from previous failed runs can retain orphan history.
 
+## Overview KPIs / Workflow run store
+- The Vercel Workflow `/v2/runs` list API (`world.runs.list({ pagination: { limit } })`) **caps `limit` at 100** — `limit > 100` returns HTTP 400 Bad Request, which surfaces as a thrown `WorkflowWorldError`. `collectKpis` defaulted to `limit: 500`, so the KPIs endpoint always threw → caught → `runs24h:null` → dashboard showed "N/A", while `/api/v1/runs` worked because `collectRuns` uses `limit: 50`. Keep any `world.runs.list` limit ≤ 100. Verified empirically 2026-06-03 (50/100 OK, 200/500 → 400).
+- The dashboard reads KPIs from the **deployed** worker (`WORKER_BASE_URL`), so worker-side fixes don't show on localhost until redeploy. A *local* worker can't validate run-store data either (dev-scoped OIDC → 0 runs, see [[project_workflow_run_history_auth]]). `apps/dashboard/lib/api/derive-kpis.ts` derives `runs24h`/`p95`/`errors24h` from the runs list as a per-field fallback when the worker returns null, so the tiles populate on localhost without a deploy.
+
+## Human-in-the-loop ("Input needed")
+- Clarifications are NOT a durable workflow pause. When a phase returns `needs_clarification`, `agent.ts` unregisters the run, posts the questions as a Jira comment, moves the ticket to `COLUMN_BACKLOG`, and ends. The human answers on Jira and re-queues to `COLUMN_AI`; the cron re-picks it as a fresh run. The bot's ONLY Jira comment path is `postClarificationAndMoveBack` (failures notify Slack only, post no comment) — so "ticket in backlog + latest comment authored by the bot" is a reliable awaiting-input signal. Surfaced via the `needs-clarification` label (added on ask, removed on re-pickup to avoid a stale label resurfacing failed tickets) + `collect-awaiting-runs.ts` scanning that label.
+
 ## Jira adapter
 - Jira REST v3 comments require ADF, and **ADF text nodes cannot contain `\n`**. Multi-line content must be modeled as multiple paragraph nodes (or use `hardBreak` inline nodes between text nodes). Stuffing newline-joined text into a single text node returns 400 Bad Request on `/rest/api/3/issue/{id}/comment`. Adapter helper `toAdfParagraphs` splits on `\n` and emits one paragraph per line.
 

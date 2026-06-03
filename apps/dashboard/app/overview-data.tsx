@@ -18,6 +18,7 @@ import {
   liveRunsFallback,
   workflowsFallback,
 } from "@/lib/api/fallbacks";
+import { deriveKpisFromRuns } from "@/lib/api/derive-kpis";
 
 export async function OverviewData() {
   const now = new Date().toISOString();
@@ -32,6 +33,29 @@ export async function OverviewData() {
     getJSON<WorkflowsResponse>("/api/v1/workflows").catch(() => workflowsFallback(now)),
   ]);
 
-  const data: OverviewScreenData = { kpis, evalHealth, liveRuns, recentRuns, workflows };
+  // The worker's KPI endpoint returns null when its run-store fetch is rejected
+  // (page-size cap). Derive the tiles from the runs list we already have so the
+  // overview shows live counts instead of N/A. Per field: worker data wins when
+  // present, derived fills the gaps.
+  const derived = recentRuns.available
+    ? deriveKpisFromRuns(recentRuns, kpis.generatedAt)
+    : null;
+  const mergedKpis: KpisResponse = derived
+    ? {
+        generatedAt: kpis.generatedAt,
+        runs24h: kpis.runs24h ?? derived.runs24h,
+        p95: kpis.p95 ?? derived.p95,
+        errors24h: kpis.errors24h ?? derived.errors24h,
+        cost24h: kpis.cost24h ?? derived.cost24h,
+      }
+    : kpis;
+
+  const data: OverviewScreenData = {
+    kpis: mergedKpis,
+    evalHealth,
+    liveRuns,
+    recentRuns,
+    workflows,
+  };
   return <OverviewScreen data={data} />;
 }

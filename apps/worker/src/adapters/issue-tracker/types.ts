@@ -22,6 +22,8 @@ export class IssueTrackerNotFoundError extends Error {
 
 export interface TicketComment {
   author: string;
+  /** Stable account id of the comment author, used to recognise the bot's own comments. */
+  accountId?: string;
   body: string;
   createdAt: string;
 }
@@ -50,6 +52,19 @@ export interface IssueTrackerAdapter {
    */
   postComment(id: string, comment: string): Promise<string | null>;
   searchTickets(query: string): Promise<string[]>;
+  /**
+   * Add and/or remove labels on a ticket. Optional — not all issue trackers
+   * support label mutation.
+   */
+  updateLabels?(
+    id: string,
+    changes: { add?: string[]; remove?: string[] },
+  ): Promise<void>;
+  /**
+   * Account id of the authenticated (bot) user, used to recognise the app's own
+   * comments. Optional — not all issue trackers expose a "current user" concept.
+   */
+  getCurrentUserAccountId?(): Promise<string>;
   /**
    * Download an attachment by URL. Optional — not all issue trackers support this.
    * Implementations should handle auth and redirects (e.g. signed CDN URLs) internally.

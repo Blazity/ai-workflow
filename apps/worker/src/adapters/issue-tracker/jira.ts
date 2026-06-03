@@ -19,6 +19,7 @@ export class JiraAdapter implements IssueTrackerAdapter {
   private tenantOrigin: string;
   private authHeader: string;
   private cloudIdPromise: Promise<string> | null;
+  private selfAccountIdPromise: Promise<string> | null = null;
 
   constructor(config: JiraConfig) {
     const trimmed = config.baseUrl.replace(/\/$/, "");
@@ -99,6 +100,7 @@ export class JiraAdapter implements IssueTrackerAdapter {
       comments: (data.fields.comment?.comments ?? []).map(
         (c: any): TicketComment => ({
           author: c.author?.displayName ?? "unknown",
+          accountId: c.author?.accountId,
           body: extractAdfText(c.body),
           createdAt: c.created,
         }),
@@ -220,6 +222,39 @@ export class JiraAdapter implements IssueTrackerAdapter {
       `/rest/api/3/search/jql?jql=${encodeURIComponent(jql)}&fields=key&maxResults=50`,
     );
     return (data.issues ?? []).map((issue: any) => issue.key);
+  }
+
+  async updateLabels(
+    id: string,
+    changes: { add?: string[]; remove?: string[] },
+  ): Promise<void> {
+    const ops = [
+      ...(changes.add ?? []).map((label) => ({ add: label })),
+      ...(changes.remove ?? []).map((label) => ({ remove: label })),
+    ];
+    if (ops.length === 0) return;
+    await this.request(`/rest/api/3/issue/${id}`, {
+      method: "PUT",
+      body: JSON.stringify({ update: { labels: ops } }),
+    });
+  }
+
+  async getCurrentUserAccountId(): Promise<string> {
+    if (!this.selfAccountIdPromise) {
+      this.selfAccountIdPromise = this.request(`/rest/api/3/myself`)
+        .then((data: any) => {
+          const accountId = data?.accountId;
+          if (typeof accountId !== "string" || accountId === "") {
+            throw new Error("Jira /myself: missing accountId");
+          }
+          return accountId;
+        })
+        .catch((err) => {
+          this.selfAccountIdPromise = null;
+          throw err;
+        });
+    }
+    return this.selfAccountIdPromise;
   }
 }
 
