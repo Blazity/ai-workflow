@@ -134,9 +134,12 @@ export async function collectRunDetail(
   const { world, issueTracker, jiraBaseUrl, model, runId } = opts;
   const tenantOrigin = jiraBaseUrl.replace(/\/+$/, "");
 
+  // The steps endpoint caps `limit` at 100 (a higher value is rejected with
+  // HTTP 400; the default page size is only 20). 100 comfortably covers the
+  // agent/post-PR workflows, whose step counts are well under that.
   const [run, stepsPage] = await Promise.all([
     world.runs.get(runId, { resolveData: "none" }),
-    world.steps.list({ runId, resolveData: "none", pagination: { limit: 200 } }),
+    world.steps.list({ runId, resolveData: "none", pagination: { limit: 100 } }),
   ]);
 
   const runStart = (run.startedAt ?? run.createdAt).getTime();
