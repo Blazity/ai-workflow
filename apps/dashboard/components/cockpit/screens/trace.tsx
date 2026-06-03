@@ -3,25 +3,102 @@
 import React from "react";
 import { useRouter } from "next/navigation";
 
+import { FlameGraph } from "@/components/flame-graph";
 import { CkCard, CkKPI, CkChip, CkStatusPill } from "@/components/ui";
+import { SPAN_KIND_COLOR } from "@/lib/theme";
+import type { Span, SpanKind, SpanStatus } from "@/lib/types";
 import type { RunDetailResponse, RunStep, StepStatus } from "@shared/contracts";
 
 /* ───────────────────── RUN TRACE ───────────────────── */
 
-const STEP_COLOR: Record<StepStatus, string> = {
-  completed: "#5BB04A",
-  running: "#3C43E7",
-  pending: "#9EA3AA",
-  failed: "#D14343",
-  cancelled: "#7A8089",
+type PhaseName =
+  | "Setup"
+  | "Research"
+  | "Implementation"
+  | "Review"
+  | "Finalize"
+  | "Run";
+
+/** Each phase borrows a span "kind" so the FlameGraph colors it distinctly. */
+const PHASE_KIND: Record<PhaseName, SpanKind> = {
+  Setup: "workflow",
+  Research: "retrieval",
+  Implementation: "llm",
+  Review: "guardrail",
+  Finalize: "tool",
+  Run: "workflow",
 };
 
-const STEP_LABEL: Record<StepStatus, string> = {
+const PHASE_ORDER: PhaseName[] = [
+  "Setup",
+  "Research",
+  "Implementation",
+  "Review",
+  "Finalize",
+  "Run",
+];
+
+const SEQ: PhaseName[] = ["Research", "Implementation", "Review"];
+/** Unique, once-per-phase terminal steps — the reliable phase boundaries. */
+const TERMINAL: Record<string, PhaseName> = {
+  parseResearchStep: "Research",
+  parseAgentOutputStep: "Implementation",
+  parseReviewStep: "Review",
+};
+
+/**
+ * Assign each step its workflow phase. The phase-running steps repeat
+ * (`planPhaseStep`, `collectPhase`…), so we anchor on `planPhaseStep` — called
+ * exactly once per phase, always in Research → Implementation → Review order —
+ * and only fall through to "Finalize" once a phase's unique terminal step has
+ * run. Steps started but not yet terminated (running/cancelled mid-phase) stay
+ * in their phase rather than leaking into Finalize. Steps are pre-sorted by
+ * start time, so index order is execution order.
+ */
+function derivePhases(steps: RunStep[]): PhaseName[] {
+  const names = steps.map((s) => s.name);
+  const starts: { idx: number; phase: PhaseName }[] = [];
+  names.forEach((n, i) => {
+    if (n === "planPhaseStep" && starts.length < SEQ.length) {
+      starts.push({ idx: i, phase: SEQ[starts.length] });
+    }
+  });
+  const terminalIdx: Partial<Record<PhaseName, number>> = {};
+  names.forEach((n, i) => {
+    const p = TERMINAL[n];
+    if (p && terminalIdx[p] == null) terminalIdx[p] = i;
+  });
+
+  if (starts.length === 0) return names.map(() => "Run");
+
+  return names.map((_, i) => {
+    if (i < starts[0].idx) return "Setup";
+    let k = 0;
+    for (let j = 0; j < starts.length; j++) if (starts[j].idx <= i) k = j;
+    const term = terminalIdx[starts[k].phase];
+    if (term != null && i > term) {
+      return starts[k + 1] ? starts[k + 1].phase : "Finalize";
+    }
+    return starts[k].phase;
+  });
+}
+
+interface PhaseGroup {
+  name: PhaseName;
+  kind: SpanKind;
+  color: string;
+  steps: RunStep[];
+  start: number;
+  end: number;
+  failed: boolean;
+}
+
+const STEP_SPAN_STATUS: Record<StepStatus, SpanStatus> = {
   completed: "ok",
-  running: "running",
-  pending: "pending",
-  failed: "failed",
-  cancelled: "cancelled",
+  running: "ok",
+  pending: "ok",
+  failed: "error",
+  cancelled: "error",
 };
 
 function fmtMs(ms: number | null): string {
@@ -32,7 +109,6 @@ function fmtMs(ms: number | null): string {
 
 function fmtClock(iso: string | null): string {
   if (!iso) return "—";
-  // Locale-stable, second precision — avoids hydration drift from toLocaleString.
   return iso.replace("T", " ").replace(/\.\d+Z$/, "Z");
 }
 
@@ -45,14 +121,89 @@ export function TraceScreen({
 }) {
   const router = useRouter();
   const { run, steps } = data;
+  const onBack = () => router.push("/runs");
+
+  // Wall-clock offset of "now" from run start — sizes bars for running steps.
+  const runStartMs = run ? Date.parse(run.startedAt ?? run.createdAt) : 0;
+  const nowOffsetMs = Math.max(0, Date.parse(data.generatedAt) - runStartMs);
+  const barMs = React.useCallback(
+    (s: RunStep): number =>
+      s.durationMs ?? Math.max(0, nowOffsetMs - s.startOffsetMs),
+    [nowOffsetMs],
+  );
+
+  const { phaseOf, groups, spans } = React.useMemo(() => {
+    const names = derivePhases(steps);
+    const phaseOf = new Map<string, PhaseName>();
+    steps.forEach((s, i) => phaseOf.set(s.stepId, names[i]));
+
+    const byName = new Map<PhaseName, PhaseGroup>();
+    steps.forEach((s) => {
+      const name = phaseOf.get(s.stepId)!;
+      const end = s.startOffsetMs + barMs(s);
+      const g = byName.get(name);
+      if (!g) {
+        byName.set(name, {
+          name,
+          kind: PHASE_KIND[name],
+          color: SPAN_KIND_COLOR[PHASE_KIND[name]],
+          steps: [s],
+          start: s.startOffsetMs,
+          end,
+          failed: s.status === "failed" || s.status === "cancelled",
+        });
+      } else {
+        g.steps.push(s);
+        g.start = Math.min(g.start, s.startOffsetMs);
+        g.end = Math.max(g.end, end);
+        g.failed ||= s.status === "failed" || s.status === "cancelled";
+      }
+    });
+    const groups = PHASE_ORDER.filter((p) => byName.has(p)).map(
+      (p) => byName.get(p)!,
+    );
+
+    const phaseSpans: Span[] = groups.map((g) => ({
+      id: `phase:${g.name}`,
+      parent: null,
+      name: g.name,
+      kind: g.kind,
+      start: g.start,
+      duration: Math.max(1, g.end - g.start),
+      status: g.failed ? "error" : "ok",
+    }));
+    const stepSpans: Span[] = steps.map((s) => {
+      const name = phaseOf.get(s.stepId)!;
+      return {
+        id: s.stepId,
+        name: s.name,
+        kind: PHASE_KIND[name],
+        start: s.startOffsetMs,
+        duration: Math.max(1, barMs(s)),
+        status: STEP_SPAN_STATUS[s.status],
+        parent: `phase:${name}`,
+      };
+    });
+    return { phaseOf, groups, spans: [...phaseSpans, ...stepSpans] };
+  }, [steps, barMs]);
 
   const [selectedId, setSelectedId] = React.useState<string | null>(
     steps[0]?.stepId ?? null,
   );
   const selected =
     steps.find((s) => s.stepId === selectedId) ?? steps[0] ?? null;
+  const selectedPhase = selected ? phaseOf.get(selected.stepId) : undefined;
+  const selectedGroup = groups.find((g) => g.name === selectedPhase);
 
-  const onBack = () => router.push("/runs");
+  const onSelect = (id: string) => {
+    if (id.startsWith("phase:")) {
+      const name = id.slice("phase:".length);
+      const first = groups.find((g) => g.name === name)?.steps[0];
+      if (first) setSelectedId(first.stepId);
+      return;
+    }
+    setSelectedId(id);
+  };
 
   if (!data.available || !run) {
     return (
@@ -68,19 +219,6 @@ export function TraceScreen({
     );
   }
 
-  // Wall-clock offset of "now" from the run start, used to size bars for steps
-  // that are still running (no completedAt yet).
-  const runStartMs = Date.parse(run.startedAt ?? run.createdAt);
-  const nowOffsetMs = Math.max(0, Date.parse(data.generatedAt) - runStartMs);
-  const barMs = (s: RunStep): number =>
-    s.durationMs ?? Math.max(0, nowOffsetMs - s.startOffsetMs);
-  const total = Math.max(
-    1,
-    nowOffsetMs,
-    ...steps.map((s) => s.startOffsetMs + barMs(s)),
-  );
-
-  const completed = steps.filter((s) => s.status === "completed").length;
   const failedSteps = steps.filter((s) => s.status === "failed").length;
   const retries = steps.reduce((n, s) => n + Math.max(0, s.attempt - 1), 0);
 
@@ -113,13 +251,14 @@ export function TraceScreen({
         )}
       </div>
 
-      <div className="grid grid-cols-4 gap-2">
+      <div className="grid grid-cols-5 gap-2">
         <CkKPI
           label="Duration"
           value={run.durationSec === null ? "—" : `${run.durationSec}s`}
           sub={run.status === "running" ? "in progress" : "elapsed"}
         />
-        <CkKPI label="Steps" value={steps.length} sub={`${completed} completed`} />
+        <CkKPI label="Phases" value={groups.length} sub="detected" />
+        <CkKPI label="Steps" value={steps.length} sub="durable" />
         <CkKPI label="Retries" value={retries} sub="step re-attempts" />
         <CkKPI label="Failed" value={failedSteps} sub="failed steps" />
       </div>
@@ -139,16 +278,16 @@ export function TraceScreen({
 
       <CkCard
         eyebrow="Vercel Workflow · steps.list"
-        title="Step timeline"
+        title="Step timeline · phases"
         action={
-          <div className="flex gap-3 font-body text-xs text-neutral-700">
-            {(["completed", "running", "failed"] as StepStatus[]).map((s) => (
-              <span key={s} className="flex items-center gap-1.5">
+          <div className="flex flex-wrap gap-3 font-body text-xs text-neutral-700">
+            {groups.map((g) => (
+              <span key={g.name} className="flex items-center gap-1.5">
                 <span
                   className="w-2.5 h-2.5 rounded-[1px]"
-                  style={{ background: STEP_COLOR[s] }}
+                  style={{ background: g.color }}
                 />
-                {STEP_LABEL[s]}
+                {g.name}
               </span>
             ))}
           </div>
@@ -159,19 +298,22 @@ export function TraceScreen({
             No steps recorded for this run yet.
           </div>
         ) : (
-          <StepWaterfall
-            steps={steps}
-            total={total}
-            barMs={barMs}
-            selectedId={selected?.stepId ?? null}
-            onSelect={setSelectedId}
-          />
+          <div className="mt-[18px] overflow-x-auto">
+            <FlameGraph
+              spans={spans}
+              width={1040}
+              rowH={30}
+              gap={4}
+              selectedId={selected?.stepId ?? undefined}
+              onSelect={onSelect}
+            />
+          </div>
         )}
       </CkCard>
 
       {selected && (
         <div className="grid grid-cols-[1.4fr_1fr] gap-3">
-          <CkCard eyebrow={STEP_LABEL[selected.status]} title={selected.name}>
+          <CkCard eyebrow={selectedPhase ?? "step"} title={selected.name}>
             <div className="grid grid-cols-[auto_1fr] gap-y-2 gap-x-6 font-mono text-xs">
               <span className="text-neutral-500">step_id</span>
               <span className="text-neutral-900 break-all">{selected.stepId}</span>
@@ -217,13 +359,36 @@ export function TraceScreen({
             </div>
           </CkCard>
 
-          <CkCard eyebrow="Vercel Workflow" title="Step I/O">
-            <div className="py-5 text-center text-neutral-500 font-body text-[13px]">
+          <CkCard
+            eyebrow="Phase"
+            title={selectedPhase ?? "—"}
+            action={
+              selectedGroup && (
+                <CkChip tone={selectedGroup.failed ? "failed" : "success"}>
+                  {selectedGroup.failed ? "had failures" : "ok"}
+                </CkChip>
+              )
+            }
+          >
+            {selectedGroup && (
+              <div className="grid grid-cols-[auto_1fr] gap-y-2 gap-x-6 font-mono text-xs">
+                <span className="text-neutral-500">steps</span>
+                <span className="text-neutral-900">
+                  {selectedGroup.steps.length}
+                </span>
+                <span className="text-neutral-500">started</span>
+                <span className="text-neutral-900">
+                  +{(selectedGroup.start / 1000).toFixed(2)}s
+                </span>
+                <span className="text-neutral-500">duration</span>
+                <span className="text-neutral-900">
+                  {fmtMs(selectedGroup.end - selectedGroup.start)}
+                </span>
+              </div>
+            )}
+            <div className="mt-4 pt-3 border-t border-neutral-200 font-body text-[12px] text-neutral-500 leading-snug">
               Step input &amp; output are encrypted at rest by the Workflow
               runtime and are not viewable here.
-            </div>
-            <div className="mt-4 pt-3 border-t border-neutral-200 font-mono text-[10px] text-neutral-700 tracking-[0.06em] uppercase">
-              Source: world.steps.list · resolveData=none
             </div>
           </CkCard>
         </div>
@@ -243,72 +408,6 @@ function Breadcrumb({ runId, onBack }: { runId: string; onBack: () => void }) {
       </a>
       <span className="text-[#D2D6DA]">/</span>
       <span className="font-mono text-neutral-700">{runId}</span>
-    </div>
-  );
-}
-
-/* ── Step waterfall (one row per step, positioned by real timing) ── */
-
-function StepWaterfall({
-  steps,
-  total,
-  barMs,
-  selectedId,
-  onSelect,
-}: {
-  steps: RunStep[];
-  total: number;
-  barMs: (s: RunStep) => number;
-  selectedId: string | null;
-  onSelect: (id: string) => void;
-}) {
-  return (
-    <div className="mt-1 flex flex-col">
-      {steps.map((s) => {
-        const left = (s.startOffsetMs / total) * 100;
-        const width = Math.max(0.6, (barMs(s) / total) * 100);
-        const isSel = selectedId === s.stepId;
-        return (
-          <div
-            key={s.stepId}
-            onClick={() => onSelect(s.stepId)}
-            className={`grid grid-cols-[220px_1fr] items-center gap-3 px-2 py-1 rounded-xs cursor-pointer ${isSel ? "bg-neutral-100" : "hover:bg-neutral-50"}`}
-          >
-            <div className="flex items-center gap-1.5 min-w-0">
-              <span
-                className="w-1.5 h-1.5 rounded-full shrink-0"
-                style={{ background: STEP_COLOR[s.status] }}
-              />
-              <span className="font-mono text-[11px] text-neutral-900 truncate">
-                {s.name}
-              </span>
-              {s.attempt > 1 && (
-                <span className="font-mono text-[10px] text-burnt-orange shrink-0">
-                  ×{s.attempt}
-                </span>
-              )}
-            </div>
-            <div className="relative h-4">
-              <div
-                className="absolute top-0 h-4 rounded-xs"
-                style={{
-                  left: `${left}%`,
-                  width: `${width}%`,
-                  background: STEP_COLOR[s.status],
-                  opacity: isSel ? 1 : 0.9,
-                }}
-                title={`${s.name} · ${fmtMs(s.durationMs)}`}
-              />
-              <span
-                className="absolute top-0 h-4 flex items-center font-mono text-[10px] text-neutral-500"
-                style={{ left: `calc(${Math.min(left + width, 99)}% + 6px)` }}
-              >
-                {fmtMs(s.durationMs)}
-              </span>
-            </div>
-          </div>
-        );
-      })}
     </div>
   );
 }
