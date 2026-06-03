@@ -105,8 +105,13 @@ export async function collectRuns(
   const limit = opts.limit ?? 50;
   const tenantOrigin = jiraBaseUrl.replace(/\/+$/, "");
 
+  // `resolveData: "none"` (not "all"): expired runs return an `error` field that
+  // `@workflow/world-vercel`'s schema rejects, and one bad row throws away the
+  // whole page (the runs table would render empty). Lazy mode skips that field.
+  // The cost is an unresolved `input`, so `extractTicket` degrades to "" — the
+  // ticket is best-effort anyway (the resolved input is encrypted here).
   const { data } = await runsLister.list({
-    resolveData: "all",
+    resolveData: "none",
     pagination: { limit },
   });
 
