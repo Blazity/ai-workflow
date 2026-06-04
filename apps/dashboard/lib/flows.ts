@@ -23,6 +23,10 @@ export interface FlowNodeDef {
   ports?: number;
   portLabels?: string[];
   params: Record<string, FlowParamValue>;
+  /** Anchor steps (flow start / end). Locked nodes can't be deleted. */
+  locked?: boolean;
+  /** Per-step JavaScript body, editable in the inspector. */
+  code?: string;
 }
 
 export interface FlowEdgeDef {
@@ -57,7 +61,7 @@ export const PRESANDBOX_FLOW: Flow = {
   lastDeployedBy: "sara.k",
   version: 14,
   nodes: [
-    { id: "n1", type: "trigger", name: "Linear · issue assigned", x: 30, y: 240, params: { source: "Linear", event: "issue.assigned", filter: "label = ai-workflow AND assignee = ai-bot", debounce: "2s" } },
+    { id: "n1", type: "trigger", name: "Pre-sandbox start", x: 30, y: 240, locked: true, code: "export default async (ctx) => {\n  // Entry point: a Linear issue was assigned to ai-bot.\n  return { ticket: ctx.event.issue };\n};\n", params: { source: "Linear", event: "issue.assigned", filter: "label = ai-workflow AND assignee = ai-bot", debounce: "2s" } },
     { id: "n2", type: "fetch", name: "Fetch ticket", x: 230, y: 240, params: { tool: "linear.getIssue", include: ["body", "comments", "attachments"], timeout: "5s", retries: 2 } },
     { id: "n3", type: "fetch", name: "Fetch repo state", x: 430, y: 140, params: { tool: "github.repos.get", branch: "main", depth: 1, include: ["tree", "CODEOWNERS", "package.json"] } },
     { id: "n4", type: "fetch", name: "Find related PRs", x: 430, y: 340, params: { tool: "github.search.issues", query: "ticket:{{ticket.id}} OR body:{{ticket.title}}", limit: 5 } },
@@ -67,7 +71,7 @@ export const PRESANDBOX_FLOW: Flow = {
     { id: "n8", type: "human", name: "Request clarification", x: 1230, y: 360, params: { channel: "Linear comment", template: "clarify_v3", timeout: "12h", fallback: "page on-call", autoSuggest: 3 } },
     { id: "n9", type: "llm", name: "Estimate budget", x: 1230, y: 120, params: { model: "claude-haiku-4-5", returns: "{ tokens, cost_usd, duration_s }", maxCost: 1.5 } },
     { id: "n10", type: "guard", name: "Cost ceiling", x: 1430, y: 120, params: { evaluator: "ops.cost_ceiling", ceiling: 1.5, action: "block", notify: "owner" } },
-    { id: "n11", type: "output", name: "→ Sandbox", x: 1630, y: 180, params: { handoff: "sandbox.execute", payload: "plan + budget + repo_snapshot" } },
+    { id: "n11", type: "output", name: "Sandbox block", x: 1630, y: 180, locked: true, code: "export default async (ctx) => {\n  // Terminal: hand the plan + budget to the sandbox runner.\n  return sandbox.execute({\n    plan: ctx.plan,\n    budget: ctx.budget,\n    repoSnapshot: ctx.repo,\n  });\n};\n", params: { handoff: "sandbox.execute", payload: "plan + budget + repo_snapshot" } },
   ],
   edges: [
     { from: "n1", to: "n2" }, { from: "n2", to: "n3" }, { from: "n2", to: "n4" },
@@ -90,7 +94,7 @@ export const POSTPR_FLOW: Flow = {
   lastDeployedBy: "marcin.w",
   version: 22,
   nodes: [
-    { id: "n1", type: "trigger", name: "PR opened by ai-bot", x: 30, y: 280, params: { source: "GitHub", event: "pull_request.opened", filter: "author = ai-bot", refresh: "on push" } },
+    { id: "n1", type: "trigger", name: "PR created", x: 30, y: 280, locked: true, code: "export default async (ctx) => {\n  // Entry point: ai-bot opened a pull request.\n  return { pr: ctx.event.pull_request };\n};\n", params: { source: "GitHub", event: "pull_request.opened", filter: "author = ai-bot", refresh: "on push" } },
     { id: "n2", type: "check", name: "Post check · pending", x: 220, y: 280, params: { check: "ai-review/quality", state: "pending", description: "Reviewing diff…" } },
     { id: "n3", type: "fetch", name: "Fetch PR diff", x: 410, y: 280, params: { tool: "github.pulls.get", include: ["diff", "files", "commits"], maxDiffKb: 512 } },
     { id: "n4", type: "tool", name: "Lint", x: 600, y: 60, params: { runner: "sandbox.exec", cmd: "pnpm lint --filter=...changed", timeout: "60s" } },
@@ -105,6 +109,7 @@ export const POSTPR_FLOW: Flow = {
     { id: "n13", type: "notify", name: "Comment on PR", x: 1410, y: 280, params: { tool: "github.pulls.createReview", template: "review_summary_v6", inline: "review.comments" } },
     { id: "n14", type: "notify", name: "Update Linear", x: 1610, y: 170, params: { tool: "linear.commentCreate", template: "pr_ready_v2", transition: "In review" } },
     { id: "n15", type: "notify", name: "Slack · #ai-workflow", x: 1610, y: 390, params: { channel: "#ai-workflow", template: "pr_review_done", mention: "@reviewers" } },
+    { id: "n16", type: "output", name: "Checks results", x: 1810, y: 280, locked: true, code: "export default async (ctx) => {\n  // Terminal: report the final check status back to GitHub.\n  return {\n    state: ctx.verdict.pass ? \"success\" : \"failure\",\n    summary: ctx.verdict.summary,\n  };\n};\n", params: { check: "ai-review/quality", required: true } },
   ],
   edges: [
     { from: "n1", to: "n2" }, { from: "n2", to: "n3" },
@@ -117,6 +122,7 @@ export const POSTPR_FLOW: Flow = {
     { from: "n10", to: "n12", fromPort: 1, label: "fail" },
     { from: "n11", to: "n13" }, { from: "n12", to: "n13" },
     { from: "n13", to: "n14" }, { from: "n13", to: "n15" },
+    { from: "n14", to: "n16" }, { from: "n15", to: "n16" },
   ],
 };
 
@@ -128,5 +134,33 @@ export const PRESANDBOX_RUN_STATUS: RunStatusMap = {
 export const POSTPR_RUN_STATUS: RunStatusMap = {
   n1: "ok", n2: "ok", n3: "ok", n4: "ok", n5: "ok", n6: "ok",
   n7: "ok", n8: "warn", n9: "ok", n10: "ok", n11: "ok", n12: "pending",
-  n13: "ok", n14: "ok", n15: "ok",
+  n13: "ok", n14: "ok", n15: "ok", n16: "pending",
 };
+
+/* ────────────────────────────────────────────────────────────────────────
+   Registry — both flows the editor can switch between via the toolbar select.
+   ──────────────────────────────────────────────────────────────────────── */
+
+export interface FlowRegistryEntry {
+  flow: Flow;
+  runStatuses: RunStatusMap;
+  label: string;
+  subtitle: string;
+}
+
+export const FLOWS: FlowRegistryEntry[] = [
+  {
+    flow: PRESANDBOX_FLOW,
+    runStatuses: PRESANDBOX_RUN_STATUS,
+    label: "Pre-sandbox",
+    subtitle: "Vercel workflow · wf_pr_review · steps that run before sandbox.execute",
+  },
+  {
+    flow: POSTPR_FLOW,
+    runStatuses: POSTPR_RUN_STATUS,
+    label: "Post-PR review",
+    subtitle: "Triggered after the agent opens a PR · drives GitHub checks",
+  },
+];
+
+export const DEFAULT_FLOW_ID = PRESANDBOX_FLOW.id;

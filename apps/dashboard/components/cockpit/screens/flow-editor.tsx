@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { CkChip } from "@/components/ui";
-import type { Flow, FlowNodeDef, RunStatusMap, NodeType } from "@/lib/flows";
+import type { Flow, FlowNodeDef, FlowEdgeDef, FlowParamValue, RunStatusMap, NodeType } from "@/lib/flows";
 
 /* ────────────────────────────────────────────────────────────────────────
    Node category styling — drives header color, icon, palette grouping.
@@ -26,7 +26,7 @@ const NODE_CATEGORIES: Record<NodeType, { color: string; soft: string; label: st
    ──────────────────────────────────────────────────────────────────────── */
 
 const NODE_W = 168;
-const NODE_H = 68;
+const NODE_H = 84;
 
 interface Point { x: number; y: number; }
 
@@ -53,12 +53,16 @@ function FlowNode({
   selected,
   onSelect,
   onDragStart,
+  onPortDown,
+  onPortUp,
   runStatus,
 }: {
   node: FlowNodeDef;
   selected: boolean;
   onSelect: (id: string) => void;
   onDragStart: (e: React.MouseEvent, node: FlowNodeDef) => void;
+  onPortDown: (e: React.MouseEvent, nodeId: string, portIdx: number) => void;
+  onPortUp: (e: React.MouseEvent, nodeId: string) => void;
   runStatus?: string;
 }) {
   const cat = NODE_CATEGORIES[node.type] || NODE_CATEGORIES.tool;
@@ -104,6 +108,7 @@ function FlowNode({
         >{cat.glyph}</span>
         {cat.label}
         <span className="ml-auto font-mono text-[9px] text-neutral-500">{node.id}</span>
+        {node.locked && <span title="Anchor step — can't be removed" className="text-[9px] leading-none" aria-hidden>🔒</span>}
         {runStatus && (
           <span
             title={"last run: " + runStatus}
@@ -125,7 +130,9 @@ function FlowNode({
       {/* Input port — left edge */}
       {node.type !== "trigger" && (
         <span
-          className="absolute w-3 h-3 rounded-full bg-panel border-2"
+          onMouseUp={(e) => onPortUp(e, node.id)}
+          title="Drop a connection here"
+          className="absolute w-3.5 h-3.5 rounded-full bg-panel border-2 cursor-crosshair hover:scale-125 transition-transform"
           style={{
             left: -7, top: NODE_H / 2 - 7,
             borderColor: dark ? "#fff" : cat.color,
@@ -139,7 +146,9 @@ function FlowNode({
         return (
           <React.Fragment key={i}>
             <span
-              className="absolute w-3 h-3 rounded-full border-2 border-white"
+              onMouseDown={(e) => onPortDown(e, node.id, i)}
+              title="Drag to another node to connect"
+              className="absolute w-3.5 h-3.5 rounded-full border-2 border-white cursor-crosshair hover:scale-125 transition-transform"
               style={{
                 left: NODE_W - 5, top: (pos.y - node.y) - 7,
                 background: cat.color,
@@ -165,118 +174,56 @@ function FlowNode({
    Node palette (left rail) — categories you can add to the flow.
    ──────────────────────────────────────────────────────────────────────── */
 
-const PALETTE_GROUPS: { label: string; items: { type: NodeType; name: string }[] }[] = [
-  { label: "Triggers", items: [
-    { type: "trigger", name: "Linear · issue assigned" },
-    { type: "trigger", name: "GitHub · PR opened" },
-    { type: "trigger", name: "Slack · slash command" },
-    { type: "trigger", name: "Cron · schedule" },
-  ]},
-  { label: "Data", items: [
-    { type: "fetch", name: "Fetch · Linear issue" },
-    { type: "fetch", name: "Fetch · GitHub PR" },
-    { type: "fetch", name: "Fetch · repo tree" },
-    { type: "fetch", name: "Search · code" },
-  ]},
-  { label: "LLM", items: [
-    { type: "llm", name: "LLM · single completion" },
-    { type: "llm", name: "LLM · structured output" },
-    { type: "llm", name: "LLM · multi-turn agent" },
-  ]},
-  { label: "Tools (sandbox)", items: [
-    { type: "tool", name: "Run · shell command" },
-    { type: "tool", name: "Run · pnpm test" },
-    { type: "tool", name: "Run · lint" },
-    { type: "tool", name: "Run · typecheck" },
-  ]},
-  { label: "Arthur evals", items: [
-    { type: "guard", name: "Guard · prompt injection" },
-    { type: "guard", name: "Guard · scope check" },
-    { type: "guard", name: "Guard · cost ceiling" },
-    { type: "guard", name: "Aggregator · weighted" },
-  ]},
-  { label: "Logic", items: [
-    { type: "branch", name: "Branch · if/else" },
-    { type: "branch", name: "Branch · 3-way switch" },
-    { type: "human", name: "Human · ask for input" },
-  ]},
-  { label: "GitHub / Notify", items: [
-    { type: "check", name: "GitHub · post check" },
-    { type: "notify", name: "GitHub · PR comment" },
-    { type: "notify", name: "Linear · update ticket" },
-    { type: "notify", name: "Slack · post message" },
-  ]},
+interface PaletteItem {
+  type: NodeType;
+  name: string;
+  params: Record<string, FlowParamValue>;
+}
+
+const PALETTE_ITEMS: PaletteItem[] = [
+  { type: "fetch", name: "Fetch data", params: { tool: "github.repos.get", timeout: "5s" } },
+  { type: "llm", name: "LLM step", params: { prompt: "p_new@v1", model: "claude-sonnet-4", temperature: 0.2 } },
+  { type: "tool", name: "Run command", params: { runner: "sandbox.exec", cmd: "echo hello", timeout: "60s" } },
+  { type: "guard", name: "Guardrail", params: { evaluator: "arthur.scope_check" } },
+  { type: "branch", name: "Branch", params: { condition: "result.ok == true" } },
+  { type: "notify", name: "Notify", params: { channel: "#ai-workflow", template: "msg_v1" } },
 ];
 
-function NodePalette() {
-  const [open, setOpen] = useState(new Set(["Triggers", "Data", "LLM"]));
-  const toggle = (k: string) => {
-    const n = new Set(open);
-    if (n.has(k)) n.delete(k); else n.add(k);
-    setOpen(n);
-  };
-  const [query, setQuery] = useState("");
-
+function NodePalette({ onAdd }: { onAdd: (item: PaletteItem) => void }) {
   return (
-    <aside className="w-60 flex-[0_0_240px] bg-panel border-r border-neutral-200 flex flex-col overflow-hidden">
-      <div className="pt-[14px] px-[14px] pb-[10px] border-b border-neutral-200 flex flex-col gap-2">
-        <div className="font-mono text-[9px] text-neutral-500 tracking-[0.06em] uppercase">Node palette</div>
-        <input
-          value={query} onChange={(e) => setQuery(e.target.value)}
-          placeholder="Search nodes…"
-          className="h-7 px-2.5 bg-app-bg border border-neutral-200 rounded-[3px] font-body text-xs text-coal outline-none"
-        />
-        <div className="font-mono text-[9px] text-neutral-500 tracking-[0.04em]">Drag → canvas, or click +</div>
+    <aside className="w-52 flex-[0_0_208px] bg-panel border-r border-neutral-200 flex flex-col overflow-hidden">
+      <div className="pt-[14px] px-[14px] pb-[10px] border-b border-neutral-200 flex flex-col gap-1">
+        <div className="font-mono text-[9px] text-neutral-500 tracking-[0.06em] uppercase">Add step</div>
+        <div className="font-mono text-[9px] text-neutral-500 tracking-[0.04em]">Drag onto canvas, or click to add</div>
       </div>
-      <div className="flex-1 overflow-auto py-1">
-        {PALETTE_GROUPS.map((g) => {
-          const items = query
-            ? g.items.filter(i => i.name.toLowerCase().includes(query.toLowerCase()))
-            : g.items;
-          if (query && items.length === 0) return null;
-          const isOpen = query ? true : open.has(g.label);
+      <div className="flex-1 overflow-auto py-2 flex flex-col">
+        {PALETTE_ITEMS.map((it) => {
+          const cat = NODE_CATEGORIES[it.type] || NODE_CATEGORIES.tool;
           return (
-            <div key={g.label}>
-              <button
-                onClick={() => toggle(g.label)}
-                className="appearance-none border-none bg-transparent cursor-pointer w-full text-left pt-2.5 px-[14px] pb-1 font-mono text-[9px] text-neutral-700 tracking-[0.08em] uppercase flex items-center gap-1.5"
-              >
-                <span className="text-neutral-500 w-2">{isOpen ? "▾" : "▸"}</span>
-                {g.label}
-                <span className="ml-auto text-neutral-500">{items.length}</span>
-              </button>
-              {isOpen && (
-                <div className="flex flex-col">
-                  {items.map((it, i) => {
-                    const cat = NODE_CATEGORIES[it.type] || NODE_CATEGORIES.tool;
-                    return (
-                      <div
-                        key={i}
-                        draggable
-                        className="mx-2 my-px py-1.5 px-2 border border-neutral-200 rounded-[3px] flex items-center gap-2 cursor-grab bg-panel transition-colors duration-[120ms]"
-                        onMouseEnter={(e) => e.currentTarget.style.background = cat.soft}
-                        onMouseLeave={(e) => e.currentTarget.style.background = "#fff"}
-                      >
-                        <span
-                          className="w-[18px] h-[18px] rounded-xs text-white inline-flex items-center justify-center font-mono text-[11px] font-bold flex-[0_0_18px]"
-                          style={{ background: cat.color }}
-                        >{cat.glyph}</span>
-                        <span className="font-body text-xs text-coal overflow-hidden text-ellipsis whitespace-nowrap">{it.name}</span>
-                        <span className="ml-auto font-mono text-[10px] text-neutral-500">+</span>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
+            <button
+              key={it.name}
+              draggable
+              onDragStart={(e) => {
+                e.dataTransfer.setData("application/x-flow-node", JSON.stringify(it));
+                e.dataTransfer.effectAllowed = "copy";
+              }}
+              onClick={() => onAdd(it)}
+              className="appearance-none text-left mx-2 my-px py-2 px-2 border border-neutral-200 rounded-[3px] flex items-center gap-2 cursor-grab active:cursor-grabbing bg-panel transition-colors duration-[120ms]"
+              onMouseEnter={(e) => (e.currentTarget.style.background = cat.soft)}
+              onMouseLeave={(e) => (e.currentTarget.style.background = "#fff")}
+            >
+              <span
+                className="w-[18px] h-[18px] rounded-xs text-white inline-flex items-center justify-center font-mono text-[11px] font-bold flex-[0_0_18px]"
+                style={{ background: cat.color }}
+              >{cat.glyph}</span>
+              <span className="font-body text-xs text-coal overflow-hidden text-ellipsis whitespace-nowrap">{it.name}</span>
+              <span className="ml-auto font-mono text-[12px] text-neutral-500 leading-none">+</span>
+            </button>
           );
         })}
       </div>
-      <div className="py-3 px-[14px] border-t border-neutral-200 font-mono text-[10px] text-neutral-700">
-        <div className="flex items-center gap-1.5 mb-1">
-          <span className="w-1.5 h-1.5 rounded-full bg-[#5BB04A]" /> 38 community nodes
-        </div>
-        <a className="text-mariner no-underline cursor-pointer">Browse marketplace →</a>
+      <div className="py-2.5 px-[14px] border-t border-neutral-200 font-mono text-[9px] text-neutral-500 tracking-[0.04em] leading-[1.5]">
+        Drag a node&apos;s right port onto another node&apos;s left port to connect them.
       </div>
     </aside>
   );
@@ -335,6 +282,51 @@ function FieldRow({ k, value, onChange }: { k: string; value: FieldValue; onChan
   );
 }
 
+/* Per-step code editor — dark textarea with a line-number gutter. */
+function StepCodeEditor({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  const gutterRef = useRef<HTMLDivElement>(null);
+  const lineCount = value.split("\n").length;
+
+  const onScroll = (e: React.UIEvent<HTMLTextAreaElement>) => {
+    if (gutterRef.current) gutterRef.current.scrollTop = e.currentTarget.scrollTop;
+  };
+  const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key !== "Tab") return;
+    e.preventDefault();
+    const ta = e.currentTarget;
+    const { selectionStart, selectionEnd } = ta;
+    const next = value.slice(0, selectionStart) + "  " + value.slice(selectionEnd);
+    onChange(next);
+    requestAnimationFrame(() => { ta.selectionStart = ta.selectionEnd = selectionStart + 2; });
+  };
+
+  return (
+    <div className="flex h-[200px] bg-[#0E1014] rounded-[3px] border border-[#2A2D33] overflow-hidden">
+      <div
+        ref={gutterRef}
+        aria-hidden
+        className="flex-[0_0_30px] overflow-hidden py-2 text-right select-none bg-[#0B0D10] font-mono text-[11px] leading-[18px] text-neutral-700"
+      >
+        {Array.from({ length: lineCount }, (_, i) => (
+          <div key={i} className="px-1.5">{i + 1}</div>
+        ))}
+      </div>
+      <textarea
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        onScroll={onScroll}
+        onKeyDown={onKeyDown}
+        spellCheck={false}
+        className="flex-1 min-w-0 resize-none outline-none py-2 px-2 bg-transparent font-mono text-[11px] leading-[18px] text-[#E6E8EB]"
+        style={{ tabSize: 2 }}
+      />
+    </div>
+  );
+}
+
+const defaultStepCode = (node: FlowNodeDef) =>
+  `export default async (ctx) => {\n  // ${node.name}\n  return ctx;\n};\n`;
+
 function NodeConfig({
   node,
   onChange,
@@ -350,18 +342,6 @@ function NodeConfig({
         <div className="py-4 px-[18px] border-b border-neutral-200">
           <div className="font-mono text-[9px] text-neutral-500 tracking-[0.06em] uppercase">Inspector</div>
           <h3 className="font-display font-medium text-[15px] leading-[1.3] mt-1 mb-0 text-coal">Nothing selected</h3>
-        </div>
-        <div className="py-4 px-[18px] flex-1 flex flex-col gap-3 text-neutral-700 font-body text-[13px]">
-          <p className="m-0 leading-[1.55]">Click a node on the canvas to edit its parameters, or drag from the palette to add a new step.</p>
-          <div className="mt-2 font-mono text-[10px] text-neutral-500 tracking-[0.06em] uppercase">Shortcuts</div>
-          <div className="grid grid-cols-[auto_1fr] gap-y-1.5 gap-x-3 font-mono text-[11px]">
-            <kbd className={kbdCls}>↑↓←→</kbd><span>Nudge selected node</span>
-            <kbd className={kbdCls}>⌫</kbd><span>Delete node</span>
-            <kbd className={kbdCls}>⌘D</kbd><span>Duplicate</span>
-            <kbd className={kbdCls}>⌘E</kbd><span>Open prompt editor</span>
-            <kbd className={kbdCls}>F</kbd><span>Fit flow to viewport</span>
-            <kbd className={kbdCls}>R</kbd><span>Replay last run</span>
-          </div>
         </div>
       </aside>
     );
@@ -393,6 +373,13 @@ function NodeConfig({
         {Object.entries(node.params).map(([k, v]) => (
           <FieldRow key={k} k={k} value={v} onChange={(kk, vv) => onChange("params." + kk, vv)} />
         ))}
+        <div className="py-2.5 px-[14px] border-y border-neutral-200 font-mono text-[9px] text-neutral-700 tracking-[0.06em] uppercase">Step code · JavaScript</div>
+        <div className="p-[14px]">
+          <StepCodeEditor
+            value={node.code ?? defaultStepCode(node)}
+            onChange={(v) => onChange("code", v)}
+          />
+        </div>
         <div className="py-2.5 px-[14px] border-y border-neutral-200 font-mono text-[9px] text-neutral-700 tracking-[0.06em] uppercase">Execution</div>
         <FieldRow k="retries" value={node.params.retries ?? 1} onChange={(_, value) => onChange("params.retries", value)} />
         <FieldRow k="timeout" value={node.params.timeout ?? "30s"} onChange={(_, value) => onChange("params.timeout", value)} />
@@ -417,19 +404,26 @@ function NodeConfig({
         </div>
       </div>
 
-      <div className="border-t border-neutral-200 py-3 px-[14px] flex gap-2">
-        <button
-          onClick={onDelete}
-          className="appearance-none cursor-pointer border border-neutral-200 bg-panel py-1.5 px-3 rounded-[3px] font-mono text-[11px] text-[#A2351C] tracking-[0.04em] uppercase"
-        >Delete</button>
-        <button className="appearance-none cursor-pointer border border-neutral-200 bg-panel py-1.5 px-3 rounded-[3px] font-mono text-[11px] text-coal tracking-[0.04em] uppercase">Duplicate</button>
+      <div className="border-t border-neutral-200 py-3 px-[14px] flex gap-2 items-center">
+        {node.locked ? (
+          <span className="inline-flex items-center gap-1.5 font-mono text-[10px] text-neutral-700 tracking-[0.04em] uppercase">
+            <span aria-hidden>🔒</span> Anchor step · can&apos;t be removed
+          </span>
+        ) : (
+          <>
+            <button
+              onClick={onDelete}
+              className="appearance-none cursor-pointer border border-neutral-200 bg-panel py-1.5 px-3 rounded-[3px] font-mono text-[11px] text-[#A2351C] tracking-[0.04em] uppercase"
+            >Delete</button>
+            <button className="appearance-none cursor-pointer border border-neutral-200 bg-panel py-1.5 px-3 rounded-[3px] font-mono text-[11px] text-coal tracking-[0.04em] uppercase">Duplicate</button>
+          </>
+        )}
         <button className="ml-auto appearance-none cursor-pointer border border-coal bg-coal text-white py-1.5 px-3 rounded-[3px] font-mono text-[11px] tracking-[0.04em] uppercase">Test step ▷</button>
       </div>
     </aside>
   );
 }
 
-const kbdCls = "font-mono text-[10px] py-px px-1.5 border border-neutral-200 rounded-xs bg-off-white text-neutral-800 text-center";
 const togglePillCls = "py-0.5 px-2 rounded-full font-mono text-[10px] font-semibold tracking-[0.04em] uppercase";
 
 /* ────────────────────────────────────────────────────────────────────────
@@ -445,17 +439,31 @@ interface DragState {
   startY: number;
 }
 
+interface ConnectState {
+  from: string;
+  fromPort: number;
+  cursor: Point;
+}
+
 function FlowCanvas({
   flow,
   nodes,
+  edges,
   onNodesChange,
+  onAddEdge,
+  onRemoveEdge,
+  onDropNode,
   runStatuses,
   selectedId,
   setSelectedId,
 }: {
   flow: Flow;
   nodes: FlowNodeDef[];
+  edges: FlowEdgeDef[];
   onNodesChange: React.Dispatch<React.SetStateAction<FlowNodeDef[]>>;
+  onAddEdge: (from: string, to: string, fromPort: number) => void;
+  onRemoveEdge: (edge: FlowEdgeDef) => void;
+  onDropNode: (item: PaletteItem, at: Point) => void;
   runStatuses?: RunStatusMap;
   selectedId: string | null;
   setSelectedId: (id: string | null) => void;
@@ -463,7 +471,18 @@ function FlowCanvas({
   const [pan, setPan] = useState({ x: 0, y: -40 });
   const [zoom, setZoom] = useState(0.85);
   const [drag, setDrag] = useState<DragState | null>(null);  // { kind: "node"|"pan", id, ox, oy }
+  const [connect, setConnect] = useState<ConnectState | null>(null);
+  const [hoverEdge, setHoverEdge] = useState<number | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+
+  // Convert a client point into canvas (unscaled) coordinates.
+  const toCanvas = useCallback((clientX: number, clientY: number): Point => {
+    const el = containerRef.current;
+    const rect = el?.getBoundingClientRect();
+    const left = rect?.left ?? 0;
+    const top = rect?.top ?? 0;
+    return { x: (clientX - left - pan.x) / zoom, y: (clientY - top - pan.y) / zoom };
+  }, [pan.x, pan.y, zoom]);
 
   // Auto-fit on flow change: compute bbox of all nodes and zoom/pan to fit.
   const fitNodes = useCallback((nodesToFit: FlowNodeDef[]) => {
@@ -484,6 +503,10 @@ function FlowCanvas({
   useEffect(() => { const t = setTimeout(() => fitNodes(flow.nodes), 50); return () => clearTimeout(t); }, [fitNodes, flow.id, flow.nodes]);
 
   const onMouseMove = (e: React.MouseEvent) => {
+    if (connect) {
+      setConnect((c) => (c ? { ...c, cursor: toCanvas(e.clientX, e.clientY) } : c));
+      return;
+    }
     if (!drag) return;
     if (drag.kind === "node") {
       const dx = (e.clientX - drag.startX) / zoom;
@@ -493,7 +516,8 @@ function FlowCanvas({
       setPan({ x: drag.ox + (e.clientX - drag.startX), y: drag.oy + (e.clientY - drag.startY) });
     }
   };
-  const onMouseUp = () => setDrag(null);
+  // Drop on empty canvas cancels an in-progress connection.
+  const onMouseUp = () => { setDrag(null); setConnect(null); };
 
   const startNodeDrag = (e: React.MouseEvent, node: FlowNodeDef) => {
     e.stopPropagation();
@@ -506,10 +530,25 @@ function FlowCanvas({
     setDrag({ kind: "pan", ox: pan.x, oy: pan.y, startX: e.clientX, startY: e.clientY });
   };
 
+  // Edge connecting: mousedown on an output port, mouseup on a target input port.
+  const onPortDown = (e: React.MouseEvent, nodeId: string, portIdx: number) => {
+    e.stopPropagation();
+    setConnect({ from: nodeId, fromPort: portIdx, cursor: toCanvas(e.clientX, e.clientY) });
+  };
+  const onPortUp = (e: React.MouseEvent, nodeId: string) => {
+    e.stopPropagation();
+    if (connect && connect.from !== nodeId) onAddEdge(connect.from, nodeId, connect.fromPort);
+    setConnect(null);
+  };
+
   const onWheel = (e: React.WheelEvent) => {
     if (!e.ctrlKey && !e.metaKey) return;
     e.preventDefault();
-    setZoom((z) => Math.max(0.4, Math.min(1.4, z + (e.deltaY > 0 ? -0.06 : 0.06))));
+    // Proportional, bounded zoom — clamp per-event delta so trackpad pinches
+    // and large wheel notches don't jump.
+    const d = Math.max(-40, Math.min(40, e.deltaY));
+    const factor = Math.exp(-d * 0.0015);
+    setZoom((z) => Math.max(0.4, Math.min(1.4, z * factor)));
   };
 
   // For edges
@@ -523,6 +562,18 @@ function FlowCanvas({
       onMouseUp={onMouseUp}
       onMouseLeave={onMouseUp}
       onWheel={onWheel}
+      onDragOver={(e) => {
+        if (e.dataTransfer.types.includes("application/x-flow-node")) {
+          e.preventDefault();
+          e.dataTransfer.dropEffect = "copy";
+        }
+      }}
+      onDrop={(e) => {
+        const raw = e.dataTransfer.getData("application/x-flow-node");
+        if (!raw) return;
+        e.preventDefault();
+        onDropNode(JSON.parse(raw) as PaletteItem, toCanvas(e.clientX, e.clientY));
+      }}
       className={`flow-canvas-bg flex-1 relative overflow-hidden bg-[#FAFBFC] ${drag?.kind === "pan" ? "cursor-grabbing" : "cursor-grab"}`}
       style={{
         backgroundImage: "radial-gradient(circle, #D2D6DA 1px, transparent 1px)",
@@ -539,7 +590,7 @@ function FlowCanvas({
         }}
       >
         {/* Edges */}
-        <svg width="2200" height="1000" className="absolute inset-0 pointer-events-none overflow-visible">
+        <svg width="2200" height="1000" className="absolute inset-0 overflow-visible">
           <defs>
             <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
               <path d="M 0 0 L 10 5 L 0 10 z" fill="#9EA3AA" />
@@ -548,26 +599,34 @@ function FlowCanvas({
               <path d="M 0 0 L 10 5 L 0 10 z" fill="#3C43E7" />
             </marker>
           </defs>
-          {flow.edges.map((e, i) => {
+          {edges.map((e, i) => {
             const a = nodeById[e.from], b = nodeById[e.to];
             if (!a || !b) return null;
             const p1 = portPos(a, "out", e.fromPort || 0);
             const p2 = portPos(b, "in", 0);
             const isActive = (selectedId === a.id || selectedId === b.id);
             const stroke = isActive ? "#3C43E7" : "#9EA3AA";
+            const hovered = hoverEdge === i;
+            const mx = (p1.x + p2.x) / 2, my = (p1.y + p2.y) / 2;
             return (
-              <g key={i}>
+              <g
+                key={i}
+                onMouseEnter={() => setHoverEdge(i)}
+                onMouseLeave={() => setHoverEdge((h) => (h === i ? null : h))}
+              >
                 <path
                   d={bezier(p1, p2)}
-                  stroke={stroke}
-                  strokeWidth={isActive ? 2 : 1.5}
+                  stroke={hovered ? "#D14343" : stroke}
+                  strokeWidth={isActive || hovered ? 2 : 1.5}
                   fill="none"
                   strokeDasharray={e.dashed ? "5 4" : "none"}
-                  markerEnd={isActive ? "url(#arrowBlue)" : "url(#arrow)"}
-                  className="transition-[stroke] duration-[120ms]"
+                  markerEnd={hovered ? undefined : isActive ? "url(#arrowBlue)" : "url(#arrow)"}
+                  className="transition-[stroke] duration-[120ms] pointer-events-none"
                 />
-                {e.label && (
-                  <g transform={`translate(${(p1.x + p2.x) / 2}, ${(p1.y + p2.y) / 2 - 8})`}>
+                {/* Fat transparent hit area so the thin edge is easy to hover */}
+                <path d={bezier(p1, p2)} stroke="transparent" strokeWidth={18} fill="none" style={{ pointerEvents: "stroke" }} />
+                {e.label && !hovered && (
+                  <g transform={`translate(${mx}, ${my - 8})`} className="pointer-events-none">
                     <rect x={-22} y={-9} width={44} height={16} rx={2} fill="#fff" stroke={stroke} strokeWidth={1} />
                     <text x={0} y={3} fontFamily='"JetBrains Mono", monospace' fontSize={9} fontWeight={600}
                           textAnchor="middle" fill={stroke} style={{ letterSpacing: "0.04em", textTransform: "uppercase" }}>
@@ -575,9 +634,39 @@ function FlowCanvas({
                     </text>
                   </g>
                 )}
+                {/* Hover to delete: ✕ badge at the edge midpoint */}
+                {hovered && (
+                  <g
+                    transform={`translate(${mx}, ${my})`}
+                    style={{ cursor: "pointer", pointerEvents: "auto" }}
+                    onMouseDown={(ev) => ev.stopPropagation()}
+                    onClick={(ev) => { ev.stopPropagation(); onRemoveEdge(e); setHoverEdge(null); }}
+                  >
+                    <circle r={9} fill="#fff" stroke="#D14343" strokeWidth={1.5} />
+                    <text x={0} y={3.5} textAnchor="middle" fontSize={12} fontWeight={700} fill="#D14343"
+                          style={{ fontFamily: '"JetBrains Mono", monospace' }}>×</text>
+                  </g>
+                )}
               </g>
             );
           })}
+          {/* Live connection being dragged from an output port */}
+          {connect && (() => {
+            const a = nodeById[connect.from];
+            if (!a) return null;
+            const p1 = portPos(a, "out", connect.fromPort);
+            return (
+              <path
+                d={bezier(p1, connect.cursor)}
+                stroke="#3C43E7"
+                strokeWidth={2}
+                strokeDasharray="5 4"
+                fill="none"
+                markerEnd="url(#arrowBlue)"
+                className="pointer-events-none"
+              />
+            );
+          })()}
         </svg>
 
         {/* Nodes */}
@@ -588,6 +677,8 @@ function FlowCanvas({
             selected={selectedId === n.id}
             onSelect={setSelectedId}
             onDragStart={startNodeDrag}
+            onPortDown={onPortDown}
+            onPortUp={onPortUp}
             runStatus={runStatuses?.[n.id]}
           />
         ))}
@@ -620,7 +711,7 @@ function FlowCanvas({
       >
         <span className="inline-flex items-center gap-1.5 text-neutral-700">
           <span className="w-1.5 h-1.5 rounded-full bg-[#5BB04A]" />
-          {nodes.length} nodes · {flow.edges.length} edges
+          {nodes.length} nodes · {edges.length} edges
         </span>
         <span className="text-[#D2D6DA]">|</span>
         <span>Valid · last lint clean</span>
@@ -666,24 +757,62 @@ const darkBtnCls = "appearance-none cursor-pointer border border-[#2A2D33] bg-[#
 export function FlowEditor({
   flow,
   runStatuses,
-  title,
   subtitle,
+  flows,
+  flowId,
+  onSelectFlow,
 }: {
   flow: Flow;
   runStatuses: RunStatusMap;
-  title: string;
   subtitle?: string;
+  flows: { id: string; label: string }[];
+  flowId: string;
+  onSelectFlow: (id: string) => void;
 }) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [nodes, setNodes] = useState<FlowNodeDef[]>(flow.nodes);
-  useEffect(() => { setNodes(flow.nodes); setSelectedId(null); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [flow.id]);
+  const [edges, setEdges] = useState<FlowEdgeDef[]>(flow.edges);
+  useEffect(() => { setNodes(flow.nodes); setEdges(flow.edges); setSelectedId(null); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [flow.id]);
 
   const selected = selectedId ? nodes.find(n => n.id === selectedId) ?? null : null;
+
+  const addNode = (item: PaletteItem, at?: Point) => {
+    const num = (s: string) => parseInt(s.replace(/\D/g, ""), 10) || 0;
+    const id = "n" + (Math.max(0, ...nodes.map(n => num(n.id))) + 1);
+    let x: number, y: number;
+    if (at) {
+      // Dropped on the canvas — center the node under the cursor.
+      x = Math.round(at.x - NODE_W / 2);
+      y = Math.round(at.y - NODE_H / 2);
+    } else {
+      // Clicked — spawn just right of the rightmost node, at the flow's average height.
+      x = (nodes.length ? Math.max(...nodes.map(n => n.x)) : 200) + 60;
+      y = nodes.length ? Math.round(nodes.reduce((s, n) => s + n.y, 0) / nodes.length) : 280;
+    }
+    setNodes(prev => [...prev, { id, type: item.type, name: item.name, x, y, params: { ...item.params } }]);
+    setSelectedId(id);
+  };
+
+  const addEdge = (from: string, to: string, fromPort: number) => {
+    if (from === to) return;
+    setEdges(prev =>
+      prev.some(e => e.from === from && e.to === to && (e.fromPort || 0) === fromPort)
+        ? prev
+        : [...prev, { from, to, fromPort }],
+    );
+  };
+
+  const removeEdge = (edge: FlowEdgeDef) => {
+    setEdges(prev =>
+      prev.filter(e => !(e.from === edge.from && e.to === edge.to && (e.fromPort || 0) === (edge.fromPort || 0))),
+    );
+  };
 
   const updateSelected = (path: string, value: FieldValue) => {
     setNodes((prev) => prev.map(n => {
       if (n.id !== selectedId) return n;
       if (path === "name") return { ...n, name: value as string };
+      if (path === "code") return { ...n, code: value as string };
       if (path.startsWith("params.")) {
         const k = path.slice(7);
         return { ...n, params: { ...n.params, [k]: value } };
@@ -692,7 +821,10 @@ export function FlowEditor({
     }));
   };
   const deleteSelected = () => {
+    // Anchor (locked) steps can't be removed.
+    if (selected?.locked) return;
     setNodes(prev => prev.filter(n => n.id !== selectedId));
+    setEdges(prev => prev.filter(e => e.from !== selectedId && e.to !== selectedId));
     setSelectedId(null);
   };
 
@@ -703,7 +835,18 @@ export function FlowEditor({
         <div className="flex flex-col gap-0.5">
           <div className="font-mono text-[10px] text-neutral-500 tracking-[0.06em] uppercase">{subtitle}</div>
           <div className="flex items-center gap-2.5">
-            <h2 className="font-display font-medium text-xl leading-[1.2] m-0 text-coal">{title}</h2>
+            <div className="relative">
+              <select
+                value={flowId}
+                onChange={(e) => onSelectFlow(e.target.value)}
+                className="appearance-none cursor-pointer bg-transparent border border-neutral-200 rounded-[3px] pl-2.5 pr-7 py-0.5 font-display font-medium text-xl leading-[1.2] text-coal outline-none hover:bg-app-bg focus:border-mariner"
+              >
+                {flows.map((f) => (
+                  <option key={f.id} value={f.id}>{f.label}</option>
+                ))}
+              </select>
+              <span className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 font-mono text-[10px] text-neutral-500">▼</span>
+            </div>
             <CkChip tone="mariner">v{flow.version}</CkChip>
             <CkChip tone="success">deployed</CkChip>
           </div>
@@ -734,11 +877,15 @@ export function FlowEditor({
 
       {/* Editor body */}
       <div className="flex-1 flex min-h-0">
-        <NodePalette />
+        <NodePalette onAdd={addNode} />
         <FlowCanvas
           flow={flow}
           nodes={nodes}
+          edges={edges}
           onNodesChange={setNodes}
+          onAddEdge={addEdge}
+          onRemoveEdge={removeEdge}
+          onDropNode={addNode}
           runStatuses={runStatuses}
           selectedId={selectedId}
           setSelectedId={setSelectedId}

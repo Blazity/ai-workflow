@@ -9,8 +9,7 @@ const NAV = [
   { id: "prompts", label: "Prompts", glyph: "❡", group: "obs" },
   { id: "evals", label: "Arthur evals", glyph: "✓", group: "obs" },
   { id: "cost", label: "Cost & usage", glyph: "$", group: "obs" },
-  { id: "presandbox", label: "Pre-sandbox", glyph: "▷", group: "flow" },
-  { id: "postpr", label: "Post-PR review", glyph: "◈", group: "flow" },
+  { id: "editor", label: "Workflow editor", glyph: "▷", group: "flow" },
 ];
 
 export function CkSidebar({ active, onNav }: { active: string; onNav: (id: string) => void }) {

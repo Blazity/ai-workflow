@@ -11,6 +11,8 @@ export type Tweaks = {
   showStreamingRun: boolean;
   activityDrawerOpen: boolean;
   accentColor: string;
+  /** Flow selected in the workflow editor; persists the select across visits. */
+  editorFlow: string;
 };
 
 export const TWEAK_DEFAULTS: Tweaks = {
@@ -19,6 +21,7 @@ export const TWEAK_DEFAULTS: Tweaks = {
   showStreamingRun: true,
   activityDrawerOpen: false,
   accentColor: "#3C43E7",
+  editorFlow: "presandbox",
 };
 
 /** Topbar selections. Kept as loose string unions; the topbar owns the option lists. */
