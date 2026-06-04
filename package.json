@@ -4,6 +4,8 @@
   "type": "module",
   "scripts": {
     "dev": "pnpm --filter worker dev",
+    "dev:dashboard": "pnpm --filter ai-workflow-dashboard dev",
+    "dev:all": "pnpm --parallel -r run dev",
     "build": "pnpm -r build",
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test",
