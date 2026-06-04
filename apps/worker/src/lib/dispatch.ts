@@ -165,14 +165,16 @@ export async function dispatchTicket(
     // longer decodable. Best-effort — the workflow has already started, so a
     // label failure must not fail the dispatch. Add-only: labels accumulate so
     // a re-dispatched ticket keeps one `run:<id>` label per run.
-    await issueTracker
-      .updateLabels?.(ticketKey, { add: [runLabel(handle.runId)] })
-      .catch((err: unknown) =>
+    if (typeof issueTracker.updateLabels === "function") {
+      try {
+        await issueTracker.updateLabels(ticketKey, { add: [runLabel(handle.runId)] });
+      } catch (err) {
         logger.warn(
-          { ticketKey, runId: handle.runId, err: (err as Error).message },
+          { ticketKey, runId: handle.runId, err: errorMessage(err) },
           "run_label_add_failed",
-        ),
-      );
+        );
+      }
+    }
 
     return { started: true, runId: handle.runId };
   } catch (err) {
@@ -250,4 +252,8 @@ function extractProjectKey(ticketIdentifier: string): string | null {
   const dashIndex = trimmed.indexOf("-");
   if (dashIndex <= 0) return null;
   return trimmed.slice(0, dashIndex).toUpperCase();
+}
+
+function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
 }

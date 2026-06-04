@@ -42,7 +42,20 @@ export function RunsScreen({ data }: { data: RunsResponse }) {
           </thead>
           <tbody>
             {filtered.map((r, i) =>
-              <tr key={r.id} onClick={() => openRun(r)} className={`cursor-pointer hover:bg-neutral-100 ${i < filtered.length - 1 ? "border-b border-neutral-200" : ""}`}>
+              <tr
+                key={r.id}
+                role="button"
+                tabIndex={0}
+                aria-label={`Open run ${r.id}: ${r.ticketTitle}`}
+                onClick={() => openRun(r)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    openRun(r);
+                  }
+                }}
+                className={`cursor-pointer hover:bg-neutral-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-mariner focus-visible:outline-offset-[-2px] ${i < filtered.length - 1 ? "border-b border-neutral-200" : ""}`}
+              >
                 <td className="px-3 py-2.5"><CkStatusPill status={r.status} /></td>
                 <td className="px-3 py-2.5">
                   <div className="flex flex-col gap-1">

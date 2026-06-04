@@ -1,7 +1,7 @@
 @import "tailwindcss";
 
 @font-face {
-  font-family: "Manrope";
+  font-family: Manrope;
   src: url("/fonts/Manrope.ttf") format("truetype-variations");
   font-weight: 200 800;
   font-style: normal;
@@ -17,7 +17,7 @@
 }
 
 @font-face {
-  font-family: "Inter";
+  font-family: Inter;
   src: url("/fonts/Inter-Italic.ttf") format("truetype-variations");
   font-weight: 100 900;
   font-style: italic;
@@ -91,9 +91,9 @@
   --color-fail-fg: #a2351c;
 
   /* ── FONT FAMILIES ────────────────────────────────────────────────── */
-  --font-sans: "Inter", system-ui, sans-serif;
-  --font-display: "Manrope", system-ui, sans-serif;
-  --font-body: "Inter", system-ui, sans-serif;
+  --font-sans: Inter, system-ui, sans-serif;
+  --font-display: Manrope, system-ui, sans-serif;
+  --font-body: Inter, system-ui, sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, monospace;
   --font-wordmark: "Rethink Sans", system-ui, sans-serif;
 
@@ -105,10 +105,10 @@
   --ease-emphasized: cubic-bezier(0.3, 0, 0, 1);
 
   /* ── ANIMATIONS (utility class generated as e.g. animate-ck-pulse) ── */
-  --animate-ck-pulse: ckPulse 1.4s ease-in-out infinite;
-  --animate-ck-slide: ckSlide 320ms cubic-bezier(0.2, 0, 0, 1);
-  --animate-ck-shimmer: ckShimmer 1.6s ease-in-out infinite;
-  --animate-ck-march: ckMarchDash 600ms linear infinite;
+  --animate-ck-pulse: ck-pulse 1.4s ease-in-out infinite;
+  --animate-ck-slide: ck-slide 320ms cubic-bezier(0.2, 0, 0, 1);
+  --animate-ck-shimmer: ck-shimmer 1.6s ease-in-out infinite;
+  --animate-ck-march: ck-march-dash 600ms linear infinite;
 }
 
 /* ==========================================================================
@@ -144,7 +144,7 @@ body {
   background: transparent;
 }
 
-@keyframes ckPulse {
+@keyframes ck-pulse {
   0% {
     transform: scale(0.8);
     opacity: 1;
@@ -154,12 +154,12 @@ body {
     opacity: 0;
   }
 }
-@keyframes ckMarchDash {
+@keyframes ck-march-dash {
   to {
     stroke-dashoffset: -16;
   }
 }
-@keyframes ckSlide {
+@keyframes ck-slide {
   from {
     transform: translateX(100%);
   }
@@ -167,7 +167,7 @@ body {
     transform: translateX(0);
   }
 }
-@keyframes ckShimmer {
+@keyframes ck-shimmer {
   from {
     transform: translateX(-100%);
   }

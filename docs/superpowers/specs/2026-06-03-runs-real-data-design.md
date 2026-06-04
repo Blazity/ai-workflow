@@ -24,7 +24,13 @@ interface RunsResponse {
   available: boolean;
   rows: Run[];
   total: number;
-  counts: { success; running; awaiting; failed; blocked };
+  counts: {
+    success: number;
+    running: number;
+    awaiting: number;
+    failed: number;
+    blocked: number;
+  };
 }
 ```
 

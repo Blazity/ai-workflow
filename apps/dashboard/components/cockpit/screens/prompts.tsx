@@ -61,10 +61,11 @@ function PromptList({ active, onSelect }: { active: string; onSelect: (id: strin
         {list.map((p, i) => {
           const on = active === p.id;
           return (
-            <div
+            <button
+              type="button"
               key={p.id}
               onClick={() => onSelect(p.id)}
-              className={`px-4 py-[14px] cursor-pointer transition-all duration-100 border-l-[3px] ${i < list.length - 1 ? "border-b border-b-neutral-200" : ""} ${on ? "border-l-mariner bg-off-white" : "border-l-transparent bg-panel hover:bg-[#FAFBFC]"}`}
+              className={`block w-full appearance-none text-left px-4 py-[14px] cursor-pointer transition-all duration-100 border-l-[3px] focus-visible:outline focus-visible:outline-2 focus-visible:outline-mariner focus-visible:outline-offset-[-2px] ${i < list.length - 1 ? "border-b border-b-neutral-200" : ""} ${on ? "border-l-mariner bg-off-white" : "border-l-transparent bg-panel hover:bg-[#FAFBFC]"}`}
             >
               <div className="flex items-center justify-between gap-2">
                 <span className="font-mono text-[13px] font-semibold text-neutral-900">{p.name}</span>
@@ -78,7 +79,7 @@ function PromptList({ active, onSelect }: { active: string; onSelect: (id: strin
                   <span>{p.evalDelta > 0 ? "↗" : p.evalDelta < 0 ? "↘" : "→"}</span>
                 </span>
               </div>
-            </div>
+            </button>
           );
         })}
       </div>
@@ -287,9 +288,14 @@ function PromptMetrics({ versions, selA, selB }: { versions: PromptVersion[]; se
           const bv = b ? (b[r.k] as number) : null;
           let aWins = false, bWins = false;
           if (av !== null && bv !== null && r.better) {
-            if (r.better === "higher") aWins = av > bv;
-            if (r.better === "lower")  aWins = av < bv;
-            bWins = !aWins;
+            if (r.better === "higher") {
+              aWins = av > bv;
+              bWins = bv > av;
+            }
+            if (r.better === "lower") {
+              aWins = av < bv;
+              bWins = bv < av;
+            }
           }
           return (
             <React.Fragment key={r.k}>
@@ -315,7 +321,7 @@ function PromptMetrics({ versions, selA, selB }: { versions: PromptVersion[]; se
 
 /* ───── Top-level screen ───── */
 export function PromptsScreen() {
-  const [active, setActive] = useState(D.PROMPTS[0].id);
+  const [active, setActive] = useState(D.PROMPTS[0]?.id ?? "");
   return (
     <div className="px-6 pt-5 pb-8 flex flex-col gap-4">
       <div className="flex items-end justify-between">

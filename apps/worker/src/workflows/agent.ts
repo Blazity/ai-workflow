@@ -453,9 +453,19 @@ async function postClarificationAndMoveBack(
   const comment = questions.map((q, i) => `${i + 1}. ${q}`).join("\n");
   const commentUrl = await issueTracker.postComment(ticketId, comment);
   // Tag the ticket so the overview's awaiting-input scan can find it cheaply.
-  await issueTracker.updateLabels?.(ticketId, {
-    add: [NEEDS_CLARIFICATION_LABEL],
-  });
+  if (typeof issueTracker.updateLabels === "function") {
+    try {
+      await issueTracker.updateLabels(ticketId, {
+        add: [NEEDS_CLARIFICATION_LABEL],
+      });
+    } catch (err) {
+      const { logger } = await import("../lib/logger.js");
+      logger.warn(
+        { ticketId, err: errorMessage(err) },
+        "clarification_label_add_failed",
+      );
+    }
+  }
   await issueTracker.moveTicket(ticketId, backlogColumn);
   return commentUrl;
 }
@@ -465,9 +475,19 @@ async function clearClarificationLabel(ticketId: string) {
   const { createStepAdapters } = await import("../lib/step-adapters.js");
   const { NEEDS_CLARIFICATION_LABEL } = await import("../lib/labels.js");
   const { issueTracker } = createStepAdapters();
-  await issueTracker.updateLabels?.(ticketId, {
-    remove: [NEEDS_CLARIFICATION_LABEL],
-  });
+  if (typeof issueTracker.updateLabels === "function") {
+    try {
+      await issueTracker.updateLabels(ticketId, {
+        remove: [NEEDS_CLARIFICATION_LABEL],
+      });
+    } catch (err) {
+      const { logger } = await import("../lib/logger.js");
+      logger.warn(
+        { ticketId, err: errorMessage(err) },
+        "clarification_label_remove_failed",
+      );
+    }
+  }
 }
 
 async function unregisterRun(ticketIdentifier: string) {
@@ -500,6 +520,10 @@ async function markTicketFailed(ticketIdentifier: string, error: string) {
     error,
     failedAt: new Date().toISOString(),
   });
+}
+
+function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
 }
 
 // --- Polling helper (not a step — called within the workflow) ---

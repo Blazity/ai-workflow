@@ -66,6 +66,22 @@ async function call<T>(path: string, init?: RequestInit): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function hasRuns(value: unknown): value is { runs: VercelRunRaw[] } {
+  return isRecord(value) && Array.isArray(value.runs);
+}
+
+function hasLogs(
+  value: unknown,
+): value is {
+  logs: { timestamp: number; durationMs: number; statusCode: number }[];
+} {
+  return isRecord(value) && Array.isArray(value.logs);
+}
+
 /**
  * List workflow runs for the configured project.
  *
@@ -86,8 +102,17 @@ export async function listRuns(opts: {
   if (opts.since) qs.set("since", String(opts.since));
   opts.status?.forEach((s) => qs.append("status", s));
   // TODO(verify): path not found in public Vercel OpenAPI spec as of 2026-05-28
-  const data = await call<{ runs: VercelRunRaw[] }>(`/v1/workflows/runs?${qs}`);
-  return data.runs;
+  try {
+    const data = await call<unknown>(`/v1/workflows/runs?${qs}`);
+    if (!hasRuns(data)) {
+      console.warn("vercel_list_runs_unverified_shape");
+      return [];
+    }
+    return data.runs;
+  } catch (err) {
+    console.warn("vercel_list_runs_unverified_endpoint_failed", err);
+    return [];
+  }
 }
 
 /**
@@ -107,10 +132,17 @@ export async function listFunctionLogs(opts: {
   if (!isConfigured.vercel()) return [];
   const project = env.vercel.projectId()!;
   // TODO(verify): path not found in public Vercel OpenAPI spec as of 2026-05-28
-  const data = await call<{
-    logs: { timestamp: number; durationMs: number; statusCode: number }[];
-  }>(
-    `/v2/logs?projectId=${project}&since=${opts.since}&until=${opts.until}`,
-  );
-  return data.logs;
+  try {
+    const data = await call<unknown>(
+      `/v2/logs?projectId=${project}&since=${opts.since}&until=${opts.until}`,
+    );
+    if (!hasLogs(data)) {
+      console.warn("vercel_list_function_logs_unverified_shape");
+      return [];
+    }
+    return data.logs;
+  } catch (err) {
+    console.warn("vercel_list_function_logs_unverified_endpoint_failed", err);
+    return [];
+  }
 }

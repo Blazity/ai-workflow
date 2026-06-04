@@ -394,8 +394,8 @@ function NodeConfig({
           <FieldRow key={k} k={k} value={v} onChange={(kk, vv) => onChange("params." + kk, vv)} />
         ))}
         <div className="py-2.5 px-[14px] border-y border-neutral-200 font-mono text-[9px] text-neutral-700 tracking-[0.06em] uppercase">Execution</div>
-        <FieldRow k="retries" value={node.params.retries ?? 1} onChange={() => {}} />
-        <FieldRow k="timeout" value={node.params.timeout ?? "30s"} onChange={() => {}} />
+        <FieldRow k="retries" value={node.params.retries ?? 1} onChange={(_, value) => onChange("params.retries", value)} />
+        <FieldRow k="timeout" value={node.params.timeout ?? "30s"} onChange={(_, value) => onChange("params.timeout", value)} />
         <div className="py-2.5 px-[14px] border-b border-neutral-200 font-mono text-[9px] text-neutral-700 tracking-[0.06em] uppercase">Observability</div>
         <div className="py-2.5 px-[14px] flex flex-col gap-2">
           <div className="flex items-center justify-between font-body text-xs text-neutral-800">
@@ -447,47 +447,48 @@ interface DragState {
 
 function FlowCanvas({
   flow,
+  nodes,
+  onNodesChange,
   runStatuses,
   selectedId,
   setSelectedId,
 }: {
   flow: Flow;
+  nodes: FlowNodeDef[];
+  onNodesChange: React.Dispatch<React.SetStateAction<FlowNodeDef[]>>;
   runStatuses?: RunStatusMap;
   selectedId: string | null;
   setSelectedId: (id: string | null) => void;
 }) {
-  const [nodes, setNodes] = useState<FlowNodeDef[]>(flow.nodes);
   const [pan, setPan] = useState({ x: 0, y: -40 });
   const [zoom, setZoom] = useState(0.85);
   const [drag, setDrag] = useState<DragState | null>(null);  // { kind: "node"|"pan", id, ox, oy }
   const containerRef = useRef<HTMLDivElement>(null);
 
   // Auto-fit on flow change: compute bbox of all nodes and zoom/pan to fit.
-  const fit = useCallback(() => {
+  const fitNodes = useCallback((nodesToFit: FlowNodeDef[]) => {
     const el = containerRef.current;
-    if (!el || !flow.nodes.length) return;
-    const minX = Math.min(...flow.nodes.map(n => n.x));
-    const minY = Math.min(...flow.nodes.map(n => n.y));
-    const maxX = Math.max(...flow.nodes.map(n => n.x + NODE_W));
-    const maxY = Math.max(...flow.nodes.map(n => n.y + NODE_H));
+    if (!el || !nodesToFit.length) return;
+    const minX = Math.min(...nodesToFit.map(n => n.x));
+    const minY = Math.min(...nodesToFit.map(n => n.y));
+    const maxX = Math.max(...nodesToFit.map(n => n.x + NODE_W));
+    const maxY = Math.max(...nodesToFit.map(n => n.y + NODE_H));
     const bw = maxX - minX, bh = maxY - minY;
     const cw = el.clientWidth - 40, ch = el.clientHeight - 80;
     const z = Math.max(0.45, Math.min(1.0, Math.min(cw / bw, ch / bh)));
     setZoom(z);
     setPan({ x: 20 - minX * z, y: 40 - minY * z });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [flow.id]);
+  }, []);
+  const fit = useCallback(() => fitNodes(nodes), [fitNodes, nodes]);
 
-  // Reset when switching flows
-  useEffect(() => { setNodes(flow.nodes); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [flow.id]);
-  useEffect(() => { const t = setTimeout(fit, 50); return () => clearTimeout(t); }, [fit]);
+  useEffect(() => { const t = setTimeout(() => fitNodes(flow.nodes), 50); return () => clearTimeout(t); }, [fitNodes, flow.id, flow.nodes]);
 
   const onMouseMove = (e: React.MouseEvent) => {
     if (!drag) return;
     if (drag.kind === "node") {
       const dx = (e.clientX - drag.startX) / zoom;
       const dy = (e.clientY - drag.startY) / zoom;
-      setNodes((prev) => prev.map(n => n.id === drag.id ? { ...n, x: drag.ox + dx, y: drag.oy + dy } : n));
+      onNodesChange((prev) => prev.map(n => n.id === drag.id ? { ...n, x: drag.ox + dx, y: drag.oy + dy } : n));
     } else if (drag.kind === "pan") {
       setPan({ x: drag.ox + (e.clientX - drag.startX), y: drag.oy + (e.clientY - drag.startY) });
     }
@@ -735,7 +736,9 @@ export function FlowEditor({
       <div className="flex-1 flex min-h-0">
         <NodePalette />
         <FlowCanvas
-          flow={{ ...flow, nodes }}
+          flow={flow}
+          nodes={nodes}
+          onNodesChange={setNodes}
           runStatuses={runStatuses}
           selectedId={selectedId}
           setSelectedId={setSelectedId}

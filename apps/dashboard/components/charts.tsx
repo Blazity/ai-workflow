@@ -20,7 +20,7 @@ export function Spark({
   const max = Math.max(...data),
     min = Math.min(...data);
   const range = max - min || 1;
-  const dx = w / (data.length - 1);
+  const dx = w / Math.max(1, data.length - 1);
   const pts = data.map((v, i) => [i * dx, h - ((v - min) / range) * (h - 2) - 1]);
   const d = pts.map((p, i) => (i === 0 ? `M${p[0]},${p[1]}` : `L${p[0]},${p[1]}`)).join(" ");
   const area = `${d} L${w},${h} L0,${h} Z`;
@@ -62,7 +62,7 @@ export function AreaChart({
   const max = Math.max(...data),
     min = Math.min(0, Math.min(...data));
   const range = max - min || 1;
-  const dx = iw / (data.length - 1);
+  const dx = iw / Math.max(1, data.length - 1);
   const yOf = (v: number) => padT + ih - ((v - min) / range) * ih;
   const xOf = (i: number) => padL + i * dx;
   const path = data.map((v, i) => `${i === 0 ? "M" : "L"}${xOf(i)},${yOf(v)}`).join(" ");

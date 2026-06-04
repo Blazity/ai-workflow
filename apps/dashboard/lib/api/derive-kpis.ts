@@ -9,7 +9,7 @@ const DAY_MIN = 24 * 60;
  * the (already-fetched) runs list instead. Cost is not tracked per run, so
  * `cost24h` stays null. The runs list is capped at one page (~50 rows), so the
  * 48h delta window is best-effort — `deltaPct`/`deltaSec` are 0 when the prior
- * window isn't covered by that page.
+ * metric data isn't covered by that page.
  */
 export function deriveKpisFromRuns(
   runs: RunsResponse,
@@ -24,23 +24,26 @@ export function deriveKpisFromRuns(
   const prevFailed = prev.filter((r) => r.status === "failed");
 
   const curDur = durations(cur);
+  const prevDur = durations(prev);
   const curP95 = percentile(curDur, 95);
+  const prevP95 = prevDur.length > 0 ? percentile(prevDur, 95) : null;
 
   return {
     generatedAt,
     runs24h: {
       value: cur.length,
-      deltaPct: deltaPct(cur.length, prev.length),
+      deltaPct: prev.length > 0 ? deltaPct(cur.length, prev.length) : 0,
       spark: hourlyCounts(cur),
     },
     p95: {
       valueSec: curP95,
-      deltaSec: curP95 - percentile(durations(prev), 95),
+      deltaSec: prevP95 === null ? 0 : curP95 - prevP95,
       spark: hourlyP95(cur),
     },
     errors24h: {
       value: curFailed.length,
-      deltaPct: deltaPct(curFailed.length, prevFailed.length),
+      deltaPct:
+        prevFailed.length > 0 ? deltaPct(curFailed.length, prevFailed.length) : 0,
       spark: hourlyCounts(curFailed),
     },
     cost24h: null,
@@ -80,6 +83,5 @@ function percentile(values: number[], p: number): number {
 }
 
 function deltaPct(cur: number, prev: number): number {
-  if (prev === 0) return cur > 0 ? 100 : 0;
   return Math.round(((cur - prev) / prev) * 1000) / 10;
 }

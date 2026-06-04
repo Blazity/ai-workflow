@@ -254,6 +254,8 @@ export function CkPagination({
 }) {
   const prevDisabled = page <= 0;
   const nextDisabled = page >= totalPages - 1;
+  const labelStart = total === 0 ? 0 : Math.min(start + 1, total);
+  const labelEnd = total === 0 ? 0 : Math.min(start + shown, total);
   const btnClass = (disabled: boolean) =>
     `appearance-none border border-neutral-200 py-[5px] px-2.5 rounded-[3px] font-mono text-[11px] font-medium uppercase tracking-[0.04em] inline-flex items-center gap-1 transition-all duration-[120ms] ${
       disabled ? "bg-off-white text-[#C7CBD0] cursor-default" : "bg-panel text-coal cursor-pointer"
@@ -266,7 +268,7 @@ export function CkPagination({
   return (
     <div className="flex items-center gap-2 py-3 px-5 border-t border-neutral-200 bg-[#FBFBFC]">
       <span className="font-mono text-[11px] text-neutral-700 tracking-[0.02em]">
-        {start + 1}–{start + shown} <span className="text-neutral-500">of</span> {total}
+        {labelStart}–{labelEnd} <span className="text-neutral-500">of</span> {total}
       </span>
       <div className="ml-auto inline-flex items-center gap-1">
         <button disabled={prevDisabled} onClick={() => !prevDisabled && onChange(page - 1)} className={btnClass(prevDisabled)}>

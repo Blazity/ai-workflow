@@ -1141,7 +1141,7 @@ pnpm add -D @tanstack/react-query-devtools
 - [ ] **Step 2: Confirm the dependency change**
 
 ```bash
-grep -E '"swr"|"@tanstack/react-query"' apps/dashboard/package.json
+grep -E '"swr"|"@tanstack/react-query"' package.json
 ```
 
 Expected: `"@tanstack/react-query": "..."` present, `"swr"` absent.
@@ -1149,7 +1149,7 @@ Expected: `"@tanstack/react-query": "..."` present, `"swr"` absent.
 - [ ] **Step 3: Verify SWR isn't imported anywhere**
 
 ```bash
-grep -rn "from ['\"]swr['\"]" apps/dashboard --include='*.ts' --include='*.tsx'
+grep -rn "from ['\"]swr['\"]" . --include='*.ts' --include='*.tsx'
 ```
 
 Expected: no output. (If anything appears, it must be migrated before the next task — but the design's §1 footnote says only `lib/data/hooks.ts` would use SWR, and we never built that file.)
@@ -2194,7 +2194,7 @@ No commit; this task confirms the wiring.
 
 - [ ] **Step 1: Repo-wide typecheck**
 
-Run: `cd /Users/kacper/Desktop/blazity/ai-workflow && pnpm -w typecheck`
+Run: `pnpm -w typecheck`
 Expected: exit 0 for both apps.
 
 - [ ] **Step 2: Worker unit tests**

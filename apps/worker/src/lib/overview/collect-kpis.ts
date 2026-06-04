@@ -26,7 +26,7 @@ export async function collectKpis(
   opts: CollectKpisOptions,
 ): Promise<Omit<KpisResponse, "generatedAt">> {
   const { runsLister, now } = opts;
-  const limit = opts.limit ?? 100;
+  const limit = clampLimit(opts.limit);
   const curStart = now.getTime() - DAY;
   const prevStart = now.getTime() - 2 * DAY;
 
@@ -73,10 +73,8 @@ export async function collectKpis(
 function durations(runs: WorkflowRunRecord[]): number[] {
   const out: number[] = [];
   for (const r of runs) {
-    const start = r.startedAt ?? r.createdAt;
-    if (r.completedAt) {
-      out.push(Math.max(0, Math.round((r.completedAt.getTime() - start.getTime()) / 1000)));
-    }
+    const duration = durationSec(r);
+    if (duration != null) out.push(duration);
   }
   return out;
 }
@@ -107,12 +105,20 @@ function hourlyCounts(runs: WorkflowRunRecord[], windowStart: number): number[] 
 function hourlyP95(runs: WorkflowRunRecord[], windowStart: number): number[] {
   const perHour: number[][] = Array.from({ length: 24 }, () => []);
   for (const r of runs) {
-    const start = r.startedAt ?? r.createdAt;
-    if (r.completedAt) {
-      perHour[bucketOf(r, windowStart)].push(
-        Math.max(0, Math.round((r.completedAt.getTime() - start.getTime()) / 1000)),
-      );
-    }
+    const duration = durationSec(r);
+    if (duration != null) perHour[bucketOf(r, windowStart)].push(duration);
   }
   return perHour.map((d) => percentile(d, 95));
+}
+
+function durationSec(run: WorkflowRunRecord): number | null {
+  if (run.status !== "completed" || !run.completedAt) return null;
+  const start = run.startedAt ?? run.createdAt;
+  return Math.max(0, Math.round((run.completedAt.getTime() - start.getTime()) / 1000));
+}
+
+function clampLimit(limit: number | undefined): number {
+  const value = limit ?? 100;
+  if (!Number.isFinite(value)) return 100;
+  return Math.max(1, Math.min(100, Math.trunc(value)));
 }

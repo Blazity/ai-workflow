@@ -45,9 +45,13 @@ export default defineEventHandler(async (event): Promise<RunDetailResponse> => {
     // World unavailable (local dev without the Vercel runtime) or unknown run
     // — degrade to the documented N/A state instead of a 500.
     logger.warn(
-      { err: (err as Error).message, runId },
+      { err: errorMessage(err), runId },
       "run_detail_failed",
     );
     return { generatedAt, ...EMPTY };
   }
 });
+
+function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}

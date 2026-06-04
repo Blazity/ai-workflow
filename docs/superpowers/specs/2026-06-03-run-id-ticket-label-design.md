@@ -95,7 +95,7 @@ Requires `JIRA_PROJECT_KEY` in the collector: add a `projectKey` field to
 
 ## Data flow
 
-```
+```text
 dispatch → start(agentWorkflow) → register(ticketKey, runId)
          → updateLabels(ticketKey, add: ["run:<runId>"])   [best-effort]
 

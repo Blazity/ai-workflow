@@ -127,7 +127,9 @@ export const env = createEnv({
     // endpoints (verified in src/middleware/api-auth.ts). The dashboard (a
     // separate deployment) sends it as `Authorization: Bearer <token>`.
     // Generate with `openssl rand -hex 32`.
-    WORKER_API_TOKEN: z.string().min(1),
+    WORKER_API_TOKEN: z.string().regex(/^[0-9a-fA-F]{64}$/, {
+      message: "must be a 64-character hex string",
+    }),
   },
   runtimeEnv: process.env,
   emptyStringAsUndefined: true,

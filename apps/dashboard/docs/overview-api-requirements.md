@@ -162,9 +162,9 @@ Backs the hero KPI strip (panel 1).
 ```ts
 {
   generatedAt: string;
-  runs24h:   { value: number; deltaPct: number; spark: number[24] };
-  p95:       { valueSec: number; deltaSec: number; spark: number[24] };
-  errors24h: { value: number; deltaPct: number; spark: number[24] };
+  runs24h:   { value: number; deltaPct: number; spark: number[] }; // length 24
+  p95:       { valueSec: number; deltaSec: number; spark: number[] }; // length 24
+  errors24h: { value: number; deltaPct: number; spark: number[] }; // length 24
   cost24h:   { value: number; deltaPct: number };
 }
 ```

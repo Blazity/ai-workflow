@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { AIWF_DATA } from "@/lib/data/mock";
 
 const D = AIWF_DATA;
@@ -48,6 +48,18 @@ const srcLabel = (src: string): { fg: string; label: string } => {
 export function CkActivityDrawer({ open, onClose }: { open: boolean; onClose: () => void }) {
   const [filter, setFilter] = useState("all");
   const list = filter === "all" ? ACT_EVENTS : ACT_EVENTS.filter(e => e.src.startsWith(filter) || e.src === filter);
+
+  useEffect(() => {
+    if (!open) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "." && (event.metaKey || event.ctrlKey)) {
+        event.preventDefault();
+        onClose();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [open, onClose]);
 
   if (!open) return null;
   return (

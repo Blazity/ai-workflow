@@ -39,24 +39,21 @@ export function useTweaks<T extends Record<string, unknown>>(
 
   const setTweak = useCallback(
     <K extends keyof T>(key: K, value: T[K]) => {
-      setValues((prev) => {
-        const next = { ...prev, [key]: value };
-        if (typeof window !== "undefined") {
-          try {
-            window.localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
-          } catch {
-            // Storage unavailable (private mode / quota) — state still updates.
-          }
+      const next = { ...values, [key]: value };
+      setValues(next);
+
+      if (typeof window !== "undefined") {
+        try {
+          window.localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+        } catch {
+          // Storage unavailable (private mode / quota) — state still updates.
         }
-        if (typeof window !== "undefined") {
-          window.dispatchEvent(
-            new CustomEvent("tweakchange", { detail: { [key]: value } }),
-          );
-        }
-        return next;
-      });
+        window.dispatchEvent(
+          new CustomEvent("tweakchange", { detail: { [key]: value } }),
+        );
+      }
     },
-    [],
+    [values],
   );
 
   return [values, setTweak];

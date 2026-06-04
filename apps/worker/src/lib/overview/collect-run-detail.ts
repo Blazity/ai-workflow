@@ -214,7 +214,9 @@ async function resolveRunTicket(
   issueTracker: IssueTrackerAdapter,
   projectKey: string,
 ): Promise<{ ticket: string; ticketTitle: string }> {
-  const jql = `project = "${projectKey}" AND labels in ("${runLabel(runId)}")`;
+  const jql = buildRunTicketJql(projectKey, runId);
+  if (!jql) return { ticket: "", ticketTitle: "" };
+
   try {
     const keys = (await issueTracker.searchTickets(jql)) ?? [];
     const key = keys[0];
@@ -224,4 +226,16 @@ async function resolveRunTicket(
   } catch {
     return { ticket: "", ticketTitle: "" };
   }
+}
+
+function buildRunTicketJql(projectKey: string, runId: string): string | null {
+  const project = jqlQuotedString(projectKey.trim());
+  const label = jqlQuotedString(runLabel(runId));
+  if (!project || !label) return null;
+  return `project = ${project} AND labels in (${label})`;
+}
+
+function jqlQuotedString(value: string): string | null {
+  if (value.length === 0 || /[\u0000-\u001F\u007F]/.test(value)) return null;
+  return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
 }

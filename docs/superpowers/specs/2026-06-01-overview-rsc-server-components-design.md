@@ -17,7 +17,7 @@ Replace the dashboard Overview screen's client-side React Query polling with a *
 
 ## Architecture
 
-```
+```text
 Browser GET /
   └─ app/page.tsx (Server Component)
        renders <CockpitApp overviewSlot={<Suspense fallback={<OverviewSkeleton/>}>
@@ -89,9 +89,9 @@ Local dev: `WORKER_BASE_URL=http://localhost:3000` for the dashboard; worker boo
 - `@shared/contracts` types — reused as-is.
 
 ## Testing / verification
-1. `cd apps/dashboard && npx tsc --noEmit` → 0.
-2. `cd apps/worker && npx tsc --noEmit` → 0; `pnpm test` → all pass (env test no longer references `DASHBOARD_ORIGIN`).
-3. `grep -rn "@tanstack/react-query\|overviewQueries\|useQuery\|NEXT_PUBLIC_WORKER_BASE_URL" apps/dashboard` (excl. node_modules) → no source matches.
+1. `pnpm --dir apps/dashboard exec tsc --noEmit` → 0.
+2. `pnpm --dir apps/worker exec tsc --noEmit` → 0; `pnpm --dir apps/worker test` → all pass (env test no longer references `DASHBOARD_ORIGIN`).
+3. `rg -n "@tanstack/react-query|overviewQueries|useQuery|NEXT_PUBLIC_WORKER_BASE_URL" apps/dashboard -g "!node_modules"` → no source matches.
 4. Live: boot worker (`pnpm dev`) + dashboard (`PORT=3001 WORKER_BASE_URL=http://localhost:3000 pnpm dev`). Confirm:
    - Overview renders server-side (view source shows the data region, not just a client loading shell).
    - N/A KPIs, eval donut, "No runs in flight", "No clarifications pending", "Run history coming soon", 3-row workflows table with "—".

@@ -8,7 +8,7 @@ Designed to work with **Vercel infrastructure**: bring your own API keys (Jira, 
 
 This is a [pnpm workspace](https://pnpm.io/workspaces) monorepo. The workspace globs `apps/*` (see [`pnpm-workspace.yaml`](./pnpm-workspace.yaml)):
 
-```
+```text
 ai-workflow/
 ├── apps/
 │   ├── worker/      # The bot — Nitro HTTP server + Vercel Workflows + Sandbox orchestration
@@ -173,7 +173,7 @@ The sandbox runs on **Node.js 24** with a configurable timeout (`JOB_TIMEOUT_MS`
 Each phase has its own wrapper script (`/tmp/{phase}-wrapper.sh`) that sources `/tmp/agent-env.sh` and pipes the phase input into the agent CLI:
 
 - **Claude** (`buildPhaseScript` in [`apps/worker/src/sandbox/agents/claude.ts`](./apps/worker/src/sandbox/agents/claude.ts)):
-  ```
+  ```bash
   cat /tmp/{phase}-requirements.md | claude \
     --print --model '<model>' --dangerously-skip-permissions --output-format json \
     [--json-schema '<AGENT_SCHEMA>'] \

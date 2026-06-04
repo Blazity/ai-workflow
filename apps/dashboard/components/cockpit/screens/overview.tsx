@@ -42,9 +42,12 @@ function EvalHealthKPI({ data }: { data: EvalHealthResponse | undefined }) {
           <div className="font-mono text-[10px] font-medium tracking-[0.06em] uppercase text-neutral-700">
             Eval health
           </div>
-          <a className="font-mono text-[10px] text-mariner no-underline tracking-[0.04em] uppercase cursor-pointer">
+          <button
+            type="button"
+            className="appearance-none border-0 bg-transparent p-0 font-mono text-[10px] text-mariner tracking-[0.04em] uppercase cursor-pointer"
+          >
             Detail →
-          </a>
+          </button>
         </div>
         <div className="flex items-center gap-3 mt-0.5">
           <Donut

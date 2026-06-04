@@ -1,6 +1,9 @@
 // apps/dashboard/lib/api/server.ts
+import "server-only";
+
 const BASE = process.env.WORKER_BASE_URL ?? "";
 const TOKEN = process.env.WORKER_API_TOKEN ?? "";
+const FETCH_TIMEOUT_MS = 10_000;
 
 /**
  * Server-only JSON fetch. Runs on the Next server (never the browser), so no
@@ -16,6 +19,7 @@ export async function getJSON<T>(path: string): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
     cache: "no-store",
     headers: TOKEN ? { Authorization: `Bearer ${TOKEN}` } : undefined,
+    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
   });
   if (!res.ok) {
     throw new Error(`GET ${path} → ${res.status} ${res.statusText}`);

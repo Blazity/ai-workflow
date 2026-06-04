@@ -363,22 +363,12 @@ export function TweakRadio<V extends string | number | boolean>({
   const fitsAsSegments =
     maxLen <= (({ 2: 16, 3: 10 } as Record<number, number>)[options.length] ?? 0);
   if (!fitsAsSegments) {
-    // <select> emits strings — map back to the original option value so the
-    // fallback stays type-preserving (numbers, booleans) like the segment path.
-    const resolve = (s: string): V => {
-      const m = options.find(
-        (o) =>
-          String(typeof o === "object" && o !== null ? o.value : o) === s,
-      );
-      if (m === undefined) return s as V;
-      return typeof m === "object" && m !== null ? m.value : m;
-    };
     return (
       <TweakSelect
         label={label}
         value={value}
         options={options}
-        onChange={(s) => onChange(resolve(String(s)))}
+        onChange={onChange}
       />
     );
   }
@@ -434,6 +424,23 @@ export function TweakRadio<V extends string | number | boolean>({
             type="button"
             role="radio"
             aria-checked={o.value === value}
+            onClick={() => onChange(o.value)}
+            onKeyDown={(e) => {
+              const i = opts.findIndex((opt) => opt.value === o.value);
+              if (e.key === "ArrowRight" || e.key === "ArrowDown") {
+                e.preventDefault();
+                onChange(opts[(i + 1) % n].value);
+              } else if (e.key === "ArrowLeft" || e.key === "ArrowUp") {
+                e.preventDefault();
+                onChange(opts[(i - 1 + n) % n].value);
+              } else if (e.key === "Home") {
+                e.preventDefault();
+                onChange(opts[0].value);
+              } else if (e.key === "End") {
+                e.preventDefault();
+                onChange(opts[n - 1].value);
+              }
+            }}
           >
             {o.label}
           </button>
@@ -454,19 +461,24 @@ export function TweakSelect<V extends string | number | boolean>({
   options: TweakOption<V>[];
   onChange: (value: V) => void;
 }) {
+  const opts = options.map((o) =>
+    typeof o === "object" && o !== null ? o : { value: o, label: o as ReactNode },
+  );
+  const selectedIndex = opts.findIndex((o) => o.value === value);
   return (
     <TweakRow label={label}>
       <select
         className="twk-field"
-        value={String(value)}
-        onChange={(e) => onChange(e.target.value as V)}
+        value={selectedIndex >= 0 ? String(selectedIndex) : ""}
+        onChange={(e) => {
+          const option = opts[Number(e.target.value)];
+          if (option) onChange(option.value);
+        }}
       >
-        {options.map((o) => {
-          const v = typeof o === "object" && o !== null ? o.value : o;
-          const l = typeof o === "object" && o !== null ? o.label : o;
+        {opts.map((o, i) => {
           return (
-            <option key={String(v)} value={String(v)}>
-              {l as ReactNode}
+            <option key={String(o.value)} value={String(i)}>
+              {o.label as ReactNode}
             </option>
           );
         })}

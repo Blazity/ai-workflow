@@ -400,12 +400,14 @@ export function TraceScreen({
 function Breadcrumb({ runId, onBack }: { runId: string; onBack: () => void }) {
   return (
     <div className="flex items-center gap-3 font-body text-[13px]">
-      <a
+      <button
+        type="button"
         onClick={onBack}
-        className="font-mono text-[11px] text-mariner cursor-pointer uppercase tracking-[0.04em]"
+        aria-label="Back to runs"
+        className="appearance-none border-0 bg-transparent p-0 font-mono text-[11px] text-mariner cursor-pointer uppercase tracking-[0.04em]"
       >
         ← Runs
-      </a>
+      </button>
       <span className="text-[#D2D6DA]">/</span>
       <span className="font-mono text-neutral-700">{runId}</span>
     </div>

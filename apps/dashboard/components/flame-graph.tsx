@@ -14,7 +14,7 @@ function flameLayout(spans: Span[]) {
     return (depthOf[id] = d(s.parent) + 1);
   }
   spans.forEach((s) => d(s.id));
-  const total = Math.max(...spans.map((s) => s.start + s.duration));
+  const total = Math.max(1, ...spans.map((s) => s.start + s.duration));
   return { byId, depthOf, total };
 }
 
@@ -38,7 +38,7 @@ export function FlameGraph({
   showLabels?: boolean;
 }) {
   const { depthOf, total } = flameLayout(spans);
-  const maxDepth = Math.max(...Object.values(depthOf)) + 1;
+  const maxDepth = Math.max(0, ...Object.values(depthOf)) + 1;
   const height = maxDepth * (rowH + gap);
 
   return (
@@ -74,10 +74,14 @@ export function FlameGraph({
         const isErr = s.status === "error";
         const bg = isErr ? "#D14343" : isWarn ? "#FD6027" : baseBg;
         return (
-          <div
+          <button
+            type="button"
             key={s.id}
             onClick={() => onSelect && onSelect(s.id)}
-            className="absolute text-white font-mono text-[11px] px-1.5 flex items-center rounded-xs cursor-pointer opacity-95 hover:opacity-100 whitespace-nowrap overflow-hidden transition-transform duration-[120ms] ease-[cubic-bezier(.2,0,0,1)]"
+            aria-pressed={isSel}
+            aria-label={`${s.name}, ${s.duration}ms`}
+            disabled={!onSelect}
+            className={`absolute appearance-none border-0 text-white font-mono text-[11px] px-1.5 flex items-center rounded-xs opacity-95 hover:opacity-100 whitespace-nowrap overflow-hidden transition-transform duration-[120ms] ease-[cubic-bezier(.2,0,0,1)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-white focus-visible:outline-offset-1 ${onSelect ? "cursor-pointer" : "cursor-default"}`}
             style={{
               left: x,
               top: y,
@@ -90,7 +94,7 @@ export function FlameGraph({
           >
             {showLabels && w > 60 && <span className="overflow-hidden text-ellipsis">{s.name}</span>}
             {showLabels && w > 120 && <span className="ml-auto opacity-75 text-[10px]">{s.duration}ms</span>}
-          </div>
+          </button>
         );
       })}
     </div>
