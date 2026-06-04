@@ -1,0 +1,28 @@
+{
+  "name": "ai-workflow-dashboard",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Blazity AI Workflow Cockpit — observability for Vercel Workflow runs, Arthur Engine evals & traces, and AI Gateway cost.",
+  "scripts": {
+    "dev": "next dev -p 3001",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint"
+  },
+  "dependencies": {
+    "@octokit/auth-app": "^8.2.0",
+    "@octokit/request": "^10.0.10",
+    "next": "^15.0.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4.0.0",
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "postcss": "^8.4.47",
+    "tailwindcss": "^4.0.0",
+    "typescript": "^5.6.0"
+  }
+}

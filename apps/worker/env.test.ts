@@ -28,6 +28,7 @@ describe("env", () => {
     AI_WORKFLOW_KV_REST_API_URL: "https://fake.upstash.io",
     AI_WORKFLOW_KV_REST_API_TOKEN: "fake-token",
     GITHUB_WEBHOOK_SECRET: "github-webhook-secret",
+    WORKER_API_TOKEN: "a".repeat(64),
   };
 
   let originalEnv: NodeJS.ProcessEnv;

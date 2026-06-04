@@ -8,6 +8,13 @@
 - `@vercel/sandbox` git clones can be shallow by default, causing "no history in common with main" on PR creation when force-pushing from the sandbox. Always unshallow before pushing (`git fetch --unshallow origin`).
 - `GitHubAdapter.createBranch` must force-reset existing branches to the base SHA on 422, not silently return. Stale branches from previous failed runs can retain orphan history.
 
+## Overview KPIs / Workflow run store
+- The Vercel Workflow `/v2/runs` list API (`world.runs.list({ pagination: { limit } })`) **caps `limit` at 100** — `limit > 100` returns HTTP 400 Bad Request, which surfaces as a thrown `WorkflowWorldError`. `collectKpis` defaulted to `limit: 500`, so the KPIs endpoint always threw → caught → `runs24h:null` → dashboard showed "N/A", while `/api/v1/runs` worked because `collectRuns` uses `limit: 50`. Keep any `world.runs.list` limit ≤ 100. Verified empirically 2026-06-03 (50/100 OK, 200/500 → 400).
+- The dashboard reads KPIs from the **deployed** worker (`WORKER_BASE_URL`), so worker-side fixes don't show on localhost until redeploy. A *local* worker can't validate run-store data either (dev-scoped OIDC → 0 runs, see [[project_workflow_run_history_auth]]). `apps/dashboard/lib/api/derive-kpis.ts` derives `runs24h`/`p95`/`errors24h` from the runs list as a per-field fallback when the worker returns null, so the tiles populate on localhost without a deploy.
+
+## Human-in-the-loop ("Input needed")
+- Clarifications are NOT a durable workflow pause. When a phase returns `needs_clarification`, `agent.ts` unregisters the run, posts the questions as a Jira comment, moves the ticket to `COLUMN_BACKLOG`, and ends. The human answers on Jira and re-queues to `COLUMN_AI`; the cron re-picks it as a fresh run. The bot's ONLY Jira comment path is `postClarificationAndMoveBack` (failures notify Slack only, post no comment) — so "ticket in backlog + latest comment authored by the bot" is a reliable awaiting-input signal. Surfaced via the `needs-clarification` label (added on ask, removed on re-pickup to avoid a stale label resurfacing failed tickets) + `collect-awaiting-runs.ts` scanning that label.
+
 ## Jira adapter
 - Jira REST v3 comments require ADF, and **ADF text nodes cannot contain `\n`**. Multi-line content must be modeled as multiple paragraph nodes (or use `hardBreak` inline nodes between text nodes). Stuffing newline-joined text into a single text node returns 400 Bad Request on `/rest/api/3/issue/{id}/comment`. Adapter helper `toAdfParagraphs` splits on `\n` and emits one paragraph per line.
 
@@ -24,3 +31,14 @@
 ## E2E in GitHub Actions
 - `@vercel/sandbox` reads credentials from `process.env` — a GH secret is not enough; it must be mapped via the job's `env:` block (e.g. `VERCEL_OIDC_TOKEN: ${{ secrets.VERCEL_OIDC_TOKEN }}`). Prefer long-lived `VERCEL_TOKEN` + `VERCEL_TEAM_ID` + `VERCEL_PROJECT_ID` over OIDC — OIDC tokens expire in ~12h and the SDK's refresh path requires `.vercel/project.json`, which CI doesn't have.
 - Reconcile (`src/lib/reconcile.ts`) has a 30s `ORPHAN_GRACE_MS` window that skips entries younger than 30s. Any e2e test seeding a registry entry via `setEntry` and expecting reconcile to cancel it on the next cron tick must backdate the timestamp past the grace window (`setEntry(key, runId, { ageMs: 60_000 })`). Without backdating the test is racy — it only passes if Vercel's 1-min scheduled cron happens to fire at T>30s during the test's wait window.
+
+## collectRuns has two callers (collectWorkflows shares its options)
+- `CollectRunsOptions` is reused by `collectWorkflows` (`export type CollectWorkflowsOptions = CollectRunsOptions`), which delegates to `collectRuns`. So adding a *required* field to `CollectRunsOptions` breaks BOTH `routes/api/v1/runs.get.ts` AND `routes/api/v1/workflows.get.ts` (+ `collect-workflows.test.ts`). When threading a new option through `collectRuns`, update all of them. Discovered 2026-06-03 implementing run-id ticket labels (plan only listed the runs.get.ts caller).
+
+## Per-run trace data: what Vercel Workflow exposes (vs. what's mock)
+- `getWorld()` exposes `runs`, `steps`, `events`, `hooks`. For a single run trace:
+  `world.runs.get(runId, {resolveData:'none'})` → status/workflowName/timestamps/error/deploymentId, and `world.steps.list({runId, resolveData:'none'})` → flat (no parent) step list: stepId/stepName/status/attempt/timestamps/error. This backs `/trace/[runId]` (`collect-run-detail.ts` → `GET /api/v1/runs/[runId]`).
+- Use `resolveData:'none'` for steps too (same expired-run schema-crash reason as `collect-runs.ts`). Step `input`/`output` are encrypted at rest and `hydrateResourceIO` does NOT decrypt → the trace shows step I/O as "encrypted, not viewable". Parse step labels with `parseStepName(name).functionName`.
+- NOT available per run (all were mock in the old `/trace` screen, now dropped): tokens/cost (computed in-workflow as `phaseUsages`, emitted only to Slack — never persisted to a queryable store), Arthur eval scores (separate system), sandbox test results, PR diff. Steps have no "kind" (llm/tool/guard) — the trace colors by status instead.
+- Ticket for a run is recovered the same way as `collect-runs`: JQL `labels in ("run:<id>")` (the dispatcher's run-label tag), since the workflow `input` is encrypted.
+- Removed the standalone `/trace` tab + its `activeRun` cockpit-context state; runs now deep-link to `/trace/${run.id}`. Discovered/implemented 2026-06-03.
