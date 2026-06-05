@@ -12,3 +12,4 @@ dist/
 .env.e2e
 .worktrees/
 .superpowers/
+*.tsbuildinfo

@@ -50,7 +50,7 @@ function bezier(p1: Point, p2: Point): string {
    Flow node — draggable card.
    ──────────────────────────────────────────────────────────────────────── */
 
-function FlowNode({
+const FlowNode = React.memo(function FlowNode({
   node,
   selected,
   onSelect,
@@ -173,7 +173,7 @@ function FlowNode({
       })}
     </div>
   );
-}
+});
 
 /* ────────────────────────────────────────────────────────────────────────
    Node palette (left rail) — categories you can add to the flow.
@@ -488,6 +488,10 @@ function FlowCanvas({
   const containerRef = useRef<HTMLDivElement>(null);
   const pointers = useRef<Map<number, Point>>(new Map());
   const pinch = useRef<{ dist: number; cx: number; cy: number } | null>(null);
+  // A node press only becomes a drag once the pointer travels past this many
+  // screen px. Below it, the press stays a tap — so touch jitter neither nudges
+  // the node nor suppresses the synthetic click that selects it.
+  const movedRef = useRef(false);
   // Mirror latest pan/zoom for the native wheel listener (attached once).
   const viewRef = useRef({ pan, zoom });
   viewRef.current = { pan, zoom };
@@ -498,8 +502,11 @@ function FlowCanvas({
     const rect = el?.getBoundingClientRect();
     const left = rect?.left ?? 0;
     const top = rect?.top ?? 0;
+    // Read live pan/zoom from the ref so this stays identity-stable across
+    // pan/zoom — lets the port handlers be memoized without breaking on pan.
+    const { pan, zoom } = viewRef.current;
     return { x: (clientX - left - pan.x) / zoom, y: (clientY - top - pan.y) / zoom };
-  }, [pan.x, pan.y, zoom]);
+  }, []);
 
   // Auto-fit on flow change: compute bbox of all nodes and zoom/pan to fit.
   const fitNodes = useCallback((nodesToFit: FlowNodeDef[]) => {
@@ -603,8 +610,13 @@ function FlowCanvas({
     }
     if (!drag) return;
     if (drag.kind === "node") {
-      const dx = (e.clientX - drag.startX) / zoom;
-      const dy = (e.clientY - drag.startY) / zoom;
+      const dxPx = e.clientX - drag.startX;
+      const dyPx = e.clientY - drag.startY;
+      // Ignore sub-threshold jitter so a tap stays a tap (no nudge, no re-render).
+      if (!movedRef.current && Math.hypot(dxPx, dyPx) < 5) return;
+      movedRef.current = true;
+      const dx = dxPx / zoom;
+      const dy = dyPx / zoom;
       onNodesChange((prev) => prev.map(n => n.id === drag.id ? { ...n, x: drag.ox + dx, y: drag.oy + dy } : n));
     } else if (drag.kind === "pan") {
       setPan({ x: drag.ox + (e.clientX - drag.startX), y: drag.oy + (e.clientY - drag.startY) });
@@ -620,11 +632,12 @@ function FlowCanvas({
     if (e.pointerType !== "touch") setConnect(null);
   };
 
-  const startNodeDrag = (e: React.PointerEvent, node: FlowNodeDef) => {
+  const startNodeDrag = useCallback((e: React.PointerEvent, node: FlowNodeDef) => {
     e.stopPropagation();
     e.currentTarget.setPointerCapture?.(e.pointerId);
+    movedRef.current = false;
     setDrag({ kind: "node", id: node.id, ox: node.x, oy: node.y, startX: e.clientX, startY: e.clientY, pointerId: e.pointerId });
-  };
+  }, []);
   const startPanDrag = (e: React.PointerEvent) => {
     // Node pointerdown stops propagation, so this only fires for empty canvas hits.
     // Bottom-corner control overlays also stopPropagation in their handlers.
@@ -640,15 +653,15 @@ function FlowCanvas({
   };
 
   // Edge connecting: pointerdown on an output port, pointerup on a target input port.
-  const onPortDown = (e: React.PointerEvent, nodeId: string, portIdx: number) => {
+  const onPortDown = useCallback((e: React.PointerEvent, nodeId: string, portIdx: number) => {
     e.stopPropagation();
     setConnect({ from: nodeId, fromPort: portIdx, cursor: toCanvas(e.clientX, e.clientY) });
-  };
-  const onPortUp = (e: React.PointerEvent, nodeId: string) => {
+  }, [toCanvas]);
+  const onPortUp = useCallback((e: React.PointerEvent, nodeId: string) => {
     e.stopPropagation();
     if (connect && connect.from !== nodeId) onAddEdge(connect.from, nodeId, connect.fromPort);
     setConnect(null);
-  };
+  }, [connect, onAddEdge]);
 
   // For edges
   const nodeById = useMemo(() => Object.fromEntries(nodes.map(n => [n.id, n])), [nodes]);
