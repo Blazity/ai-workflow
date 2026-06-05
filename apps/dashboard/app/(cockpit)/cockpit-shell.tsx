@@ -57,6 +57,10 @@ export function CockpitShell({ children }: { children: React.ReactNode }) {
         <CkSidebar
           active={screen}
           onNav={(id) => router.push(pathForScreen(id))}
+          collapsed={!!t.sidebarCollapsed}
+          onToggleCollapse={() =>
+            setTweak("sidebarCollapsed", !t.sidebarCollapsed)
+          }
         />
         <main className="flex-1 flex flex-col min-w-0 min-h-0">
           <CkTopbar

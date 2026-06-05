@@ -109,6 +109,7 @@
   --animate-ck-slide: ck-slide 320ms cubic-bezier(0.2, 0, 0, 1);
   --animate-ck-shimmer: ck-shimmer 1.6s ease-in-out infinite;
   --animate-ck-march: ck-march-dash 600ms linear infinite;
+  --animate-ck-pop: ck-pop 140ms cubic-bezier(0.2, 0, 0, 1);
 }
 
 /* ==========================================================================
@@ -165,6 +166,16 @@ body {
   }
   to {
     transform: translateX(0);
+  }
+}
+@keyframes ck-pop {
+  from {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
   }
 }
 @keyframes ck-shimmer {
