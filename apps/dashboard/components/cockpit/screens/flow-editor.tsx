@@ -3,6 +3,8 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { CkChip } from "@/components/ui";
 import type { Flow, FlowNodeDef, FlowEdgeDef, FlowParamValue, RunStatusMap, NodeType } from "@/lib/flows";
+import { useIsMobileViewport } from "@/lib/use-media-query";
+import { MobileSheet } from "@/components/cockpit/mobile/mobile-sheet";
 
 /* ────────────────────────────────────────────────────────────────────────
    Node category styling — drives header color, icon, palette grouping.
@@ -56,14 +58,16 @@ function FlowNode({
   onPortDown,
   onPortUp,
   runStatus,
+  connectingPort,
 }: {
   node: FlowNodeDef;
   selected: boolean;
   onSelect: (id: string) => void;
-  onDragStart: (e: React.MouseEvent, node: FlowNodeDef) => void;
-  onPortDown: (e: React.MouseEvent, nodeId: string, portIdx: number) => void;
-  onPortUp: (e: React.MouseEvent, nodeId: string) => void;
+  onDragStart: (e: React.PointerEvent, node: FlowNodeDef) => void;
+  onPortDown: (e: React.PointerEvent, nodeId: string, portIdx: number) => void;
+  onPortUp: (e: React.PointerEvent, nodeId: string) => void;
   runStatus?: string;
+  connectingPort?: number | null;
 }) {
   const cat = NODE_CATEGORIES[node.type] || NODE_CATEGORIES.tool;
   const dark = node.type === "output";
@@ -81,7 +85,7 @@ function FlowNode({
 
   return (
     <div
-      onMouseDown={(e) => onDragStart(e, node)}
+      onPointerDown={(e) => onDragStart(e, node)}
       onClick={(e) => { e.stopPropagation(); onSelect(node.id); }}
       className={`absolute rounded-sm cursor-grab select-none transition-[box-shadow,border-color] duration-[120ms] ${
         dark ? "bg-coal" : "bg-panel"
@@ -130,7 +134,8 @@ function FlowNode({
       {/* Input port — left edge */}
       {node.type !== "trigger" && (
         <span
-          onMouseUp={(e) => onPortUp(e, node.id)}
+          onPointerDown={(e) => e.stopPropagation()}
+          onPointerUp={(e) => onPortUp(e, node.id)}
           title="Drop a connection here"
           className="absolute w-3.5 h-3.5 rounded-full bg-panel border-2 cursor-crosshair hover:scale-125 transition-transform"
           style={{
@@ -146,9 +151,9 @@ function FlowNode({
         return (
           <React.Fragment key={i}>
             <span
-              onMouseDown={(e) => onPortDown(e, node.id, i)}
+              onPointerDown={(e) => onPortDown(e, node.id, i)}
               title="Drag to another node to connect"
-              className="absolute w-3.5 h-3.5 rounded-full border-2 border-white cursor-crosshair hover:scale-125 transition-transform"
+              className={`absolute w-3.5 h-3.5 rounded-full border-2 border-white cursor-crosshair hover:scale-125 transition-transform ${connectingPort === i ? "ring-2 ring-mariner ring-offset-1 scale-125" : ""}`}
               style={{
                 left: NODE_W - 5, top: (pos.y - node.y) - 7,
                 background: cat.color,
@@ -329,15 +334,17 @@ function NodeConfig({
   onChange,
   onDelete,
   onClose,
+  embedded,
 }: {
   node: FlowNodeDef;
   onChange: (path: string, value: FieldValue) => void;
   onDelete: () => void;
   onClose: () => void;
+  embedded?: boolean;
 }) {
   const cat = NODE_CATEGORIES[node.type] || NODE_CATEGORIES.tool;
-  return (
-    <aside className="w-80 flex-[0_0_320px] bg-panel border-l border-neutral-200 flex flex-col overflow-hidden">
+  const inner = (
+    <>
       <div className="pt-[14px] px-[18px] pb-[14px] border-b border-neutral-200 flex flex-col gap-1.5">
         <div className="flex items-center gap-2">
           <span
@@ -415,7 +422,12 @@ function NodeConfig({
         )}
         <button className="ml-auto appearance-none cursor-pointer border border-coal bg-coal text-white py-1.5 px-3 rounded-[3px] font-mono text-[11px] tracking-[0.04em] uppercase">Test step ▷</button>
       </div>
-    </aside>
+    </>
+  );
+  return embedded ? (
+    <div className="flex flex-col">{inner}</div>
+  ) : (
+    <aside className="w-80 flex-[0_0_320px] bg-panel border-l border-neutral-200 flex flex-col overflow-hidden">{inner}</aside>
   );
 }
 
@@ -432,6 +444,7 @@ interface DragState {
   oy: number;
   startX: number;
   startY: number;
+  pointerId?: number;
 }
 
 interface ConnectState {
@@ -473,6 +486,8 @@ function FlowCanvas({
   const [connect, setConnect] = useState<ConnectState | null>(null);
   const [hoverEdge, setHoverEdge] = useState<number | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const pointers = useRef<Map<number, Point>>(new Map());
+  const pinch = useRef<{ dist: number; cx: number; cy: number } | null>(null);
   // Mirror latest pan/zoom for the native wheel listener (attached once).
   const viewRef = useRef({ pan, zoom });
   viewRef.current = { pan, zoom };
@@ -504,6 +519,29 @@ function FlowCanvas({
 
   useEffect(() => { const t = setTimeout(() => fitNodes(flow.nodes), 50); return () => clearTimeout(t); }, [fitNodes, flow.id, flow.nodes]);
 
+  // Pan so a node sits in the middle of the viewport, keeping the current zoom.
+  const centerNode = useCallback((node: FlowNodeDef) => {
+    const el = containerRef.current;
+    if (!el) return;
+    const { zoom: z } = viewRef.current;
+    setPan({
+      x: el.clientWidth / 2 - (node.x + NODE_W / 2) * z,
+      y: el.clientHeight / 2 - (node.y + NODE_H / 2) * z,
+    });
+  }, []);
+
+  // On mobile a palette-added node spawns to the right of the rightmost node —
+  // off the narrow viewport, so it looks like nothing happened. When the node
+  // count grows, relocate the canvas to center the freshly spawned step.
+  const isMobileCanvas = useIsMobileViewport();
+  const nodeCountRef = useRef(nodes.length);
+  useEffect(() => {
+    if (isMobileCanvas && nodes.length > nodeCountRef.current) {
+      centerNode(nodes[nodes.length - 1]);
+    }
+    nodeCountRef.current = nodes.length;
+  }, [nodes, isMobileCanvas, centerNode]);
+
   // Native, non-passive wheel listener. React's onWheel is passive, so its
   // preventDefault() is ignored and a trackpad pinch (ctrl+wheel) zooms the
   // whole page. Attaching here lets us own the gesture: pinch zooms the canvas
@@ -532,7 +570,33 @@ function FlowCanvas({
     return () => el.removeEventListener("wheel", handleWheel);
   }, []);
 
-  const onMouseMove = (e: React.MouseEvent) => {
+  const onPointerMove = (e: React.PointerEvent) => {
+    if (pointers.current.has(e.pointerId)) {
+      pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    }
+    if (pointers.current.size === 2) {
+      const [a, b] = Array.from(pointers.current.values());
+      const dist = Math.hypot(a.x - b.x, a.y - b.y);
+      const cx = (a.x + b.x) / 2;
+      const cy = (a.y + b.y) / 2;
+      const rect = containerRef.current?.getBoundingClientRect();
+      const lx = cx - (rect?.left ?? 0);
+      const ly = cy - (rect?.top ?? 0);
+      if (pinch.current) {
+        const { pan: vpan, zoom: vzoom } = viewRef.current;
+        const ratio = dist / (pinch.current.dist || dist);
+        const nz = Math.max(0.4, Math.min(1.4, vzoom * ratio));
+        const scale = nz / vzoom;
+        // Anchored scale at the gesture centroid, plus pan by the centroid delta.
+        setPan({
+          x: lx - (lx - vpan.x) * scale + (cx - pinch.current.cx),
+          y: ly - (ly - vpan.y) * scale + (cy - pinch.current.cy),
+        });
+        setZoom(nz);
+      }
+      pinch.current = { dist, cx, cy };
+      return; // don't also run node/pan drag this frame
+    }
     if (connect) {
       setConnect((c) => (c ? { ...c, cursor: toCanvas(e.clientX, e.clientY) } : c));
       return;
@@ -547,25 +611,40 @@ function FlowCanvas({
     }
   };
   // Drop on empty canvas cancels an in-progress connection.
-  const onMouseUp = () => { setDrag(null); setConnect(null); };
+  const onPointerUp = (e: React.PointerEvent) => {
+    pointers.current.delete(e.pointerId);
+    pinch.current = null;
+    setDrag(null);
+    // On touch, keep an armed connection alive until the user taps a target
+    // input port (completes) or empty canvas (cancels); mouse release ends drag-connect.
+    if (e.pointerType !== "touch") setConnect(null);
+  };
 
-  const startNodeDrag = (e: React.MouseEvent, node: FlowNodeDef) => {
+  const startNodeDrag = (e: React.PointerEvent, node: FlowNodeDef) => {
     e.stopPropagation();
-    setDrag({ kind: "node", id: node.id, ox: node.x, oy: node.y, startX: e.clientX, startY: e.clientY });
+    e.currentTarget.setPointerCapture?.(e.pointerId);
+    setDrag({ kind: "node", id: node.id, ox: node.x, oy: node.y, startX: e.clientX, startY: e.clientY, pointerId: e.pointerId });
   };
-  const startPanDrag = (e: React.MouseEvent) => {
-    // Node mousedown stops propagation, so this only fires for empty canvas hits.
+  const startPanDrag = (e: React.PointerEvent) => {
+    // Node pointerdown stops propagation, so this only fires for empty canvas hits.
     // Bottom-corner control overlays also stopPropagation in their handlers.
+    pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (e.pointerType === "touch" && connect) {
+      pointers.current.delete(e.pointerId);
+      setConnect(null);
+      return;
+    }
     setSelectedId(null);
-    setDrag({ kind: "pan", ox: pan.x, oy: pan.y, startX: e.clientX, startY: e.clientY });
+    e.currentTarget.setPointerCapture?.(e.pointerId);
+    setDrag({ kind: "pan", ox: pan.x, oy: pan.y, startX: e.clientX, startY: e.clientY, pointerId: e.pointerId });
   };
 
-  // Edge connecting: mousedown on an output port, mouseup on a target input port.
-  const onPortDown = (e: React.MouseEvent, nodeId: string, portIdx: number) => {
+  // Edge connecting: pointerdown on an output port, pointerup on a target input port.
+  const onPortDown = (e: React.PointerEvent, nodeId: string, portIdx: number) => {
     e.stopPropagation();
     setConnect({ from: nodeId, fromPort: portIdx, cursor: toCanvas(e.clientX, e.clientY) });
   };
-  const onPortUp = (e: React.MouseEvent, nodeId: string) => {
+  const onPortUp = (e: React.PointerEvent, nodeId: string) => {
     e.stopPropagation();
     if (connect && connect.from !== nodeId) onAddEdge(connect.from, nodeId, connect.fromPort);
     setConnect(null);
@@ -577,10 +656,11 @@ function FlowCanvas({
   return (
     <div
       ref={containerRef}
-      onMouseDown={startPanDrag}
-      onMouseMove={onMouseMove}
-      onMouseUp={onMouseUp}
-      onMouseLeave={onMouseUp}
+      onPointerDown={startPanDrag}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
+      onPointerLeave={onPointerUp}
+      onPointerCancel={onPointerUp}
       onDragOver={(e) => {
         if (e.dataTransfer.types.includes("application/x-flow-node")) {
           e.preventDefault();
@@ -658,7 +738,7 @@ function FlowCanvas({
                   <g
                     transform={`translate(${mx}, ${my})`}
                     style={{ cursor: "pointer", pointerEvents: "auto" }}
-                    onMouseDown={(ev) => ev.stopPropagation()}
+                    onPointerDown={(ev) => ev.stopPropagation()}
                     onClick={(ev) => { ev.stopPropagation(); onRemoveEdge(e); setHoverEdge(null); }}
                   >
                     <circle r={9} fill="#fff" stroke="#D14343" strokeWidth={1.5} />
@@ -699,13 +779,14 @@ function FlowCanvas({
             onPortDown={onPortDown}
             onPortUp={onPortUp}
             runStatus={runStatuses?.[n.id]}
+            connectingPort={connect?.from === n.id ? connect.fromPort : null}
           />
         ))}
       </div>
 
       {/* Canvas overlays: zoom controls, mini status */}
       <div
-        onMouseDown={(e) => e.stopPropagation()}
+        onPointerDown={(e) => e.stopPropagation()}
         className="absolute right-4 bottom-4 z-10 flex flex-col gap-1 bg-panel border border-neutral-200 rounded-[3px] p-1 shadow-[0_2px_6px_rgba(24,27,32,0.08)]"
       >
         <button
@@ -924,6 +1005,8 @@ export function FlowEditor({
   const [nodes, setNodes] = useState<FlowNodeDef[]>(flow.nodes);
   const [edges, setEdges] = useState<FlowEdgeDef[]>(flow.edges);
   const [fullView, setFullView] = useState(false);
+  const isMobile = useIsMobileViewport();
+  const [paletteOpen, setPaletteOpen] = useState(false);
   useEffect(() => { setNodes(flow.nodes); setEdges(flow.edges); setSelectedId(null); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [flow.id]);
 
   useEffect(() => {
@@ -1002,7 +1085,7 @@ export function FlowEditor({
 
       {/* Editor body */}
       <div className="flex-1 flex min-h-0">
-        <NodePalette onAdd={addNode} />
+        {!isMobile && <NodePalette onAdd={addNode} />}
         <FlowCanvas
           flow={flow}
           nodes={nodes}
@@ -1017,13 +1100,60 @@ export function FlowEditor({
           fullView={fullView}
           onToggleFullView={() => setFullView((v) => !v)}
         />
-        {selected && (
+        {selected && !isMobile && (
           <NodeConfig
             node={selected}
             onChange={updateSelected}
             onDelete={deleteSelected}
             onClose={() => setSelectedId(null)}
           />
+        )}
+        {isMobile && (
+          <MobileSheet
+            open={!!selected}
+            onClose={() => setSelectedId(null)}
+            title={selected ? `${selected.type} · ${selected.name}` : ""}
+            heightClass="max-h-[80vh]"
+          >
+            {selected && (
+              <NodeConfig
+                node={selected}
+                onChange={updateSelected}
+                onDelete={deleteSelected}
+                onClose={() => setSelectedId(null)}
+                embedded
+              />
+            )}
+          </MobileSheet>
+        )}
+        {isMobile && (
+          <button
+            onClick={() => setPaletteOpen(true)}
+            aria-label="Add step"
+            className="fixed left-4 bottom-[72px] z-40 w-12 h-12 rounded-full bg-mariner text-white text-2xl leading-none shadow-[0_3px_10px_rgba(24,27,32,0.25)] flex items-center justify-center"
+          >＋</button>
+        )}
+        {isMobile && (
+          <MobileSheet open={paletteOpen} onClose={() => setPaletteOpen(false)} title="Add step" heightClass="max-h-[60vh]">
+            <div className="flex flex-col py-1">
+              {PALETTE_ITEMS.map((it) => {
+                const cat = NODE_CATEGORIES[it.type] || NODE_CATEGORIES.tool;
+                return (
+                  <button
+                    key={it.name}
+                    onClick={() => { addNode(it); setPaletteOpen(false); }}
+                    className="appearance-none text-left border-none cursor-pointer flex items-center gap-3 px-[18px] py-3.5 bg-transparent active:bg-app-bg"
+                  >
+                    <span
+                      className="w-[22px] h-[22px] rounded-xs text-white inline-flex items-center justify-center font-mono text-[12px] font-bold flex-[0_0_22px]"
+                      style={{ background: cat.color }}
+                    >{cat.glyph}</span>
+                    <span className="font-body text-[15px] text-coal">{it.name}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </MobileSheet>
         )}
       </div>
     </div>

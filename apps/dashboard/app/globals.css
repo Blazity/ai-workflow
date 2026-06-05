@@ -107,6 +107,7 @@
   /* ── ANIMATIONS (utility class generated as e.g. animate-ck-pulse) ── */
   --animate-ck-pulse: ck-pulse 1.4s ease-in-out infinite;
   --animate-ck-slide: ck-slide 320ms cubic-bezier(0.2, 0, 0, 1);
+  --animate-ck-slide-up: ck-slide-up 280ms cubic-bezier(0.2, 0, 0, 1);
   --animate-ck-shimmer: ck-shimmer 1.6s ease-in-out infinite;
   --animate-ck-march: ck-march-dash 600ms linear infinite;
   --animate-ck-pop: ck-pop 140ms cubic-bezier(0.2, 0, 0, 1);
@@ -167,6 +168,10 @@ body {
   to {
     transform: translateX(0);
   }
+}
+@keyframes ck-slide-up {
+  from { transform: translateY(100%); }
+  to   { transform: translateY(0); }
 }
 @keyframes ck-pop {
   from {

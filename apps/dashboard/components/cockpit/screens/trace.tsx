@@ -207,7 +207,7 @@ export function TraceScreen({
 
   if (!data.available || !run) {
     return (
-      <div className="px-6 pt-5 pb-8 flex flex-col gap-4">
+      <div className="flex flex-col gap-4 px-4 pt-4 pb-6 lg:px-6 lg:pt-5 lg:pb-8">
         <Breadcrumb runId={runId} onBack={onBack} />
         <CkCard eyebrow="Run trace" title="Run unavailable">
           <div className="py-6 text-center text-neutral-500 font-body text-[13px]">
@@ -223,12 +223,12 @@ export function TraceScreen({
   const retries = steps.reduce((n, s) => n + Math.max(0, s.attempt - 1), 0);
 
   return (
-    <div className="px-6 pt-5 pb-8 flex flex-col gap-4">
+    <div className="flex flex-col gap-4 px-4 pt-4 pb-6 lg:px-6 lg:pt-5 lg:pb-8">
       <Breadcrumb runId={run.id} onBack={onBack} />
 
-      <div className="flex items-end justify-between">
-        <div className="flex flex-col gap-1">
-          <div className="flex items-center gap-2.5">
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+        <div className="flex flex-col gap-1 min-w-0">
+          <div className="flex items-center gap-2.5 flex-wrap lg:flex-nowrap">
             <CkStatusPill status={run.status} />
             <CkChip tone="mariner">{run.workflowName}</CkChip>
             <span className="font-mono text-[11px] text-neutral-700">
@@ -244,14 +244,14 @@ export function TraceScreen({
             href={run.ticketUrl}
             target="_blank"
             rel="noreferrer"
-            className="appearance-none border border-neutral-200 bg-panel px-3.5 py-2 rounded-[3px] font-mono text-[11px] text-neutral-900 uppercase tracking-[0.04em] cursor-pointer no-underline"
+            className="appearance-none border border-neutral-200 bg-panel px-3.5 py-2 rounded-[3px] font-mono text-[11px] text-neutral-900 uppercase tracking-[0.04em] cursor-pointer no-underline self-start lg:self-auto"
           >
             Open ticket ↗
           </a>
         )}
       </div>
 
-      <div className="grid grid-cols-5 gap-2">
+      <div className="grid grid-cols-2 gap-2 lg:grid-cols-5">
         <CkKPI
           label="Duration"
           value={run.durationSec === null ? "—" : `${run.durationSec}s`}
@@ -298,21 +298,23 @@ export function TraceScreen({
             No steps recorded for this run yet.
           </div>
         ) : (
-          <div className="mt-[18px] overflow-x-auto">
-            <FlameGraph
-              spans={spans}
-              width={1040}
-              rowH={30}
-              gap={4}
-              selectedId={selected?.stepId ?? undefined}
-              onSelect={onSelect}
-            />
+          <div className="mt-[18px] overflow-x-auto -mx-4 px-4 lg:mx-0 lg:px-0">
+            <div className="min-w-[640px] lg:min-w-0">
+              <FlameGraph
+                spans={spans}
+                width={1040}
+                rowH={30}
+                gap={4}
+                selectedId={selected?.stepId ?? undefined}
+                onSelect={onSelect}
+              />
+            </div>
           </div>
         )}
       </CkCard>
 
       {selected && (
-        <div className="grid grid-cols-[1.4fr_1fr] gap-3">
+        <div className="flex flex-col lg:grid lg:grid-cols-[1.4fr_1fr] gap-3">
           <CkCard eyebrow={selectedPhase ?? "step"} title={selected.name}>
             <div className="grid grid-cols-[auto_1fr] gap-y-2 gap-x-6 font-mono text-xs">
               <span className="text-neutral-500">step_id</span>
@@ -399,17 +401,17 @@ export function TraceScreen({
 
 function Breadcrumb({ runId, onBack }: { runId: string; onBack: () => void }) {
   return (
-    <div className="flex items-center gap-3 font-body text-[13px]">
+    <div className="flex items-center gap-3 font-body text-[13px] min-w-0">
       <button
         type="button"
         onClick={onBack}
         aria-label="Back to runs"
-        className="appearance-none border-0 bg-transparent p-0 font-mono text-[11px] text-mariner cursor-pointer uppercase tracking-[0.04em]"
+        className="appearance-none border-0 bg-transparent p-0 font-mono text-[11px] text-mariner cursor-pointer uppercase tracking-[0.04em] shrink-0"
       >
         ← Runs
       </button>
-      <span className="text-[#D2D6DA]">/</span>
-      <span className="font-mono text-neutral-700">{runId}</span>
+      <span className="text-[#D2D6DA] shrink-0">/</span>
+      <span className="font-mono text-neutral-700 truncate">{runId}</span>
     </div>
   );
 }

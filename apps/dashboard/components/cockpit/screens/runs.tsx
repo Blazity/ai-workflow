@@ -1,14 +1,20 @@
 "use client";
 
 import React, { useState } from "react";
-import { CkCard, CkChip, CkStatusPill, CkTabs, TicketLink, PRLink } from "@/components/ui";
+import { CkCard, CkChip, CkStatusPill, CkTabs, CkPagination, TicketLink, PRLink } from "@/components/ui";
 import { useCockpit } from "@/components/cockpit/context";
 import type { RunsResponse } from "@shared/contracts";
+
+const PAGE_SIZE = 25;
 
 export function RunsScreen({ data }: { data: RunsResponse }) {
   const { openRun } = useCockpit();
   const [filter, setFilter] = useState("all");
+  const [page, setPage] = useState(0);
   const filtered = filter === "all" ? data.rows : data.rows.filter((r) => r.status === filter);
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  const start = page * PAGE_SIZE;
+  const paged = filtered.slice(start, start + PAGE_SIZE);
 
   return (
     <div className="flex flex-col gap-4 px-6 pt-5 pb-8">
@@ -18,7 +24,7 @@ export function RunsScreen({ data }: { data: RunsResponse }) {
           <h2 className="font-display text-2xl font-medium leading-[1.2] text-neutral-900 m-0">{data.total} runs · last 24h</h2>
         </div>
         <div className="flex gap-2">
-          <CkTabs active={filter} onChange={setFilter} tabs={[
+          <CkTabs active={filter} onChange={(f) => { setFilter(f); setPage(0); }} tabs={[
             { id: "all", label: "All" },
             { id: "success", label: "Success" },
             { id: "running", label: "Running" },
@@ -41,7 +47,7 @@ export function RunsScreen({ data }: { data: RunsResponse }) {
             </tr>
           </thead>
           <tbody>
-            {filtered.map((r, i) =>
+            {paged.map((r, i) =>
               <tr
                 key={r.id}
                 role="button"
@@ -54,7 +60,7 @@ export function RunsScreen({ data }: { data: RunsResponse }) {
                     openRun(r);
                   }
                 }}
-                className={`cursor-pointer hover:bg-neutral-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-mariner focus-visible:outline-offset-[-2px] ${i < filtered.length - 1 ? "border-b border-neutral-200" : ""}`}
+                className={`cursor-pointer hover:bg-neutral-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-mariner focus-visible:outline-offset-[-2px] ${i < paged.length - 1 ? "border-b border-neutral-200" : ""}`}
               >
                 <td className="px-3 py-2.5"><CkStatusPill status={r.status} /></td>
                 <td className="px-3 py-2.5">
@@ -89,6 +95,14 @@ export function RunsScreen({ data }: { data: RunsResponse }) {
             )}
           </tbody>
         </table>
+        <CkPagination
+          page={page}
+          totalPages={totalPages}
+          total={filtered.length}
+          start={start}
+          shown={paged.length}
+          onChange={setPage}
+        />
       </CkCard>
     </div>
   );
