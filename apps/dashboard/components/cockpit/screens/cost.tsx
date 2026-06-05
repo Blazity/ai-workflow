@@ -12,7 +12,7 @@ export function CostScreen() {
   const total = D.COST_BY_MODEL.reduce((a, m) => a + m.cost, 0);
   const tokensTotal = D.COST_BY_MODEL.reduce((a, m) => a + m.tokens, 0);
   return (
-    <div className="flex flex-col gap-4 px-6 pt-5 pb-8">
+    <div className="flex flex-col gap-4 px-4 lg:px-6 pt-5 pb-8">
       <div className="flex items-end justify-between">
         <div>
           <div className="font-mono text-[10px] uppercase tracking-[0.06em] text-neutral-500">Vercel ai gateway · billing</div>
@@ -26,17 +26,19 @@ export function CostScreen() {
         </div>
       </div>
 
-      <div className="grid grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-2.5 lg:gap-3">
         <CkKPI label="MTD spend" value={"$" + total.toFixed(2)} sub="of $1,200 budget" delta="↗ +18% MoM" deltaTone="bad" />
         <CkKPI label="Tokens · MTD" value={(tokensTotal / 1_000_000).toFixed(2) + "M"} delta="↗ +24% MoM" deltaTone="bad" />
         <CkKPI label="Cost / run avg" value="$0.41" sub="all workflows" delta="↘ −$0.03 WoW" deltaTone="good" />
         <CkKPI label="Projection · EoM" value="$1,184" sub="98.7% of budget" delta="⚠ tight" deltaTone="bad" />
       </div>
 
-      <div className="grid grid-cols-[1.5fr_1fr] gap-3">
+      <div className="flex flex-col lg:grid lg:grid-cols-[1.5fr_1fr] gap-3">
         <CkCard eyebrow="Spend trajectory" title="Daily spend · MTD"
           action={<CkTabs active="cost" onChange={() => {}} tabs={[{ id: "cost", label: "Cost" }, { id: "tokens", label: "Tokens" }]} />}>
-          <AreaChart data={D.HOURS24.map((h) => h.cost * 24)} w={680} h={200} stroke="#FD6027" fill="#FD6027" labels={D.HOURS24.map((_, i) => "D" + (i + 1))} valueFmt={(v) => "$" + Math.round(v)} />
+          <div className="overflow-x-auto">
+            <AreaChart data={D.HOURS24.map((h) => h.cost * 24)} w={680} h={200} stroke="#FD6027" fill="#FD6027" labels={D.HOURS24.map((_, i) => "D" + (i + 1))} valueFmt={(v) => "$" + Math.round(v)} />
+          </div>
         </CkCard>
 
         <CkCard eyebrow="Vercel AI Gateway" title="Model mix">
@@ -56,6 +58,7 @@ export function CostScreen() {
       </div>
 
       <CkCard eyebrow="Per-model breakdown" title="Spend & throughput" pad={0}>
+        <div className="overflow-x-auto">
         <table className="w-full border-collapse font-body text-[13px]">
           <thead>
             <tr className="bg-neutral-100 text-neutral-700 font-mono text-[10px] uppercase tracking-[0.06em]">
@@ -86,9 +89,11 @@ export function CostScreen() {
             )}
           </tbody>
         </table>
+        </div>
       </CkCard>
 
       <CkCard eyebrow="Per-workflow breakdown" title="Where the spend is going" pad={0}>
+        <div className="overflow-x-auto">
         <table className="w-full border-collapse font-body text-[13px]">
           <thead>
             <tr className="bg-neutral-100 text-neutral-700 font-mono text-[10px] uppercase tracking-[0.06em]">
@@ -130,6 +135,7 @@ export function CostScreen() {
             })}
           </tbody>
         </table>
+        </div>
       </CkCard>
     </div>
   );

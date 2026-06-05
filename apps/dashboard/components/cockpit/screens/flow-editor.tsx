@@ -3,6 +3,8 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { CkChip } from "@/components/ui";
 import type { Flow, FlowNodeDef, FlowEdgeDef, FlowParamValue, RunStatusMap, NodeType } from "@/lib/flows";
+import { useIsMobileViewport } from "@/lib/use-media-query";
+import { MobileSheet } from "@/components/cockpit/mobile/mobile-sheet";
 
 /* ────────────────────────────────────────────────────────────────────────
    Node category styling — drives header color, icon, palette grouping.
@@ -48,7 +50,7 @@ function bezier(p1: Point, p2: Point): string {
    Flow node — draggable card.
    ──────────────────────────────────────────────────────────────────────── */
 
-function FlowNode({
+const FlowNode = React.memo(function FlowNode({
   node,
   selected,
   onSelect,
@@ -56,14 +58,16 @@ function FlowNode({
   onPortDown,
   onPortUp,
   runStatus,
+  connectingPort,
 }: {
   node: FlowNodeDef;
   selected: boolean;
   onSelect: (id: string) => void;
-  onDragStart: (e: React.MouseEvent, node: FlowNodeDef) => void;
-  onPortDown: (e: React.MouseEvent, nodeId: string, portIdx: number) => void;
-  onPortUp: (e: React.MouseEvent, nodeId: string) => void;
+  onDragStart: (e: React.PointerEvent, node: FlowNodeDef) => void;
+  onPortDown: (e: React.PointerEvent, nodeId: string, portIdx: number) => void;
+  onPortUp: (e: React.PointerEvent, nodeId: string) => void;
   runStatus?: string;
+  connectingPort?: number | null;
 }) {
   const cat = NODE_CATEGORIES[node.type] || NODE_CATEGORIES.tool;
   const dark = node.type === "output";
@@ -81,7 +85,7 @@ function FlowNode({
 
   return (
     <div
-      onMouseDown={(e) => onDragStart(e, node)}
+      onPointerDown={(e) => onDragStart(e, node)}
       onClick={(e) => { e.stopPropagation(); onSelect(node.id); }}
       className={`absolute rounded-sm cursor-grab select-none transition-[box-shadow,border-color] duration-[120ms] ${
         dark ? "bg-coal" : "bg-panel"
@@ -130,7 +134,8 @@ function FlowNode({
       {/* Input port — left edge */}
       {node.type !== "trigger" && (
         <span
-          onMouseUp={(e) => onPortUp(e, node.id)}
+          onPointerDown={(e) => e.stopPropagation()}
+          onPointerUp={(e) => onPortUp(e, node.id)}
           title="Drop a connection here"
           className="absolute w-3.5 h-3.5 rounded-full bg-panel border-2 cursor-crosshair hover:scale-125 transition-transform"
           style={{
@@ -146,9 +151,9 @@ function FlowNode({
         return (
           <React.Fragment key={i}>
             <span
-              onMouseDown={(e) => onPortDown(e, node.id, i)}
+              onPointerDown={(e) => onPortDown(e, node.id, i)}
               title="Drag to another node to connect"
-              className="absolute w-3.5 h-3.5 rounded-full border-2 border-white cursor-crosshair hover:scale-125 transition-transform"
+              className={`absolute w-3.5 h-3.5 rounded-full border-2 border-white cursor-crosshair hover:scale-125 transition-transform ${connectingPort === i ? "ring-2 ring-mariner ring-offset-1 scale-125" : ""}`}
               style={{
                 left: NODE_W - 5, top: (pos.y - node.y) - 7,
                 background: cat.color,
@@ -168,7 +173,7 @@ function FlowNode({
       })}
     </div>
   );
-}
+});
 
 /* ────────────────────────────────────────────────────────────────────────
    Node palette (left rail) — categories you can add to the flow.
@@ -221,9 +226,6 @@ function NodePalette({ onAdd }: { onAdd: (item: PaletteItem) => void }) {
             </button>
           );
         })}
-      </div>
-      <div className="py-2.5 px-[14px] border-t border-neutral-200 font-mono text-[9px] text-neutral-500 tracking-[0.04em] leading-[1.5]">
-        Drag a node&apos;s right port onto another node&apos;s left port to connect them.
       </div>
     </aside>
   );
@@ -331,24 +333,18 @@ function NodeConfig({
   node,
   onChange,
   onDelete,
+  onClose,
+  embedded,
 }: {
-  node: FlowNodeDef | null;
+  node: FlowNodeDef;
   onChange: (path: string, value: FieldValue) => void;
   onDelete: () => void;
+  onClose: () => void;
+  embedded?: boolean;
 }) {
-  if (!node) {
-    return (
-      <aside className="w-80 flex-[0_0_320px] bg-panel border-l border-neutral-200 flex flex-col overflow-hidden">
-        <div className="py-4 px-[18px] border-b border-neutral-200">
-          <div className="font-mono text-[9px] text-neutral-500 tracking-[0.06em] uppercase">Inspector</div>
-          <h3 className="font-display font-medium text-[15px] leading-[1.3] mt-1 mb-0 text-coal">Nothing selected</h3>
-        </div>
-      </aside>
-    );
-  }
   const cat = NODE_CATEGORIES[node.type] || NODE_CATEGORIES.tool;
-  return (
-    <aside className="w-80 flex-[0_0_320px] bg-panel border-l border-neutral-200 flex flex-col overflow-hidden">
+  const inner = (
+    <>
       <div className="pt-[14px] px-[18px] pb-[14px] border-b border-neutral-200 flex flex-col gap-1.5">
         <div className="flex items-center gap-2">
           <span
@@ -360,6 +356,12 @@ function NodeConfig({
             style={{ color: cat.color }}
           >{cat.label}</span>
           <span className="ml-auto font-mono text-[10px] text-neutral-500">{node.id}</span>
+          <button
+            onClick={onClose}
+            title="Close inspector"
+            aria-label="Close inspector"
+            className="appearance-none border-none bg-transparent cursor-pointer w-[22px] h-[22px] -mr-1 rounded-xs inline-flex items-center justify-center font-mono text-sm text-neutral-500 hover:bg-app-bg hover:text-coal"
+          >×</button>
         </div>
         <input
           value={node.name}
@@ -420,7 +422,12 @@ function NodeConfig({
         )}
         <button className="ml-auto appearance-none cursor-pointer border border-coal bg-coal text-white py-1.5 px-3 rounded-[3px] font-mono text-[11px] tracking-[0.04em] uppercase">Test step ▷</button>
       </div>
-    </aside>
+    </>
+  );
+  return embedded ? (
+    <div className="flex flex-col">{inner}</div>
+  ) : (
+    <aside className="w-80 flex-[0_0_320px] bg-panel border-l border-neutral-200 flex flex-col overflow-hidden">{inner}</aside>
   );
 }
 
@@ -437,6 +444,7 @@ interface DragState {
   oy: number;
   startX: number;
   startY: number;
+  pointerId?: number;
 }
 
 interface ConnectState {
@@ -456,6 +464,8 @@ function FlowCanvas({
   runStatuses,
   selectedId,
   setSelectedId,
+  fullView,
+  onToggleFullView,
 }: {
   flow: Flow;
   nodes: FlowNodeDef[];
@@ -467,6 +477,8 @@ function FlowCanvas({
   runStatuses?: RunStatusMap;
   selectedId: string | null;
   setSelectedId: (id: string | null) => void;
+  fullView: boolean;
+  onToggleFullView: () => void;
 }) {
   const [pan, setPan] = useState({ x: 0, y: -40 });
   const [zoom, setZoom] = useState(0.85);
@@ -474,6 +486,15 @@ function FlowCanvas({
   const [connect, setConnect] = useState<ConnectState | null>(null);
   const [hoverEdge, setHoverEdge] = useState<number | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const pointers = useRef<Map<number, Point>>(new Map());
+  const pinch = useRef<{ dist: number; cx: number; cy: number } | null>(null);
+  // A node press only becomes a drag once the pointer travels past this many
+  // screen px. Below it, the press stays a tap — so touch jitter neither nudges
+  // the node nor suppresses the synthetic click that selects it.
+  const movedRef = useRef(false);
+  // Mirror latest pan/zoom for the native wheel listener (attached once).
+  const viewRef = useRef({ pan, zoom });
+  viewRef.current = { pan, zoom };
 
   // Convert a client point into canvas (unscaled) coordinates.
   const toCanvas = useCallback((clientX: number, clientY: number): Point => {
@@ -481,8 +502,11 @@ function FlowCanvas({
     const rect = el?.getBoundingClientRect();
     const left = rect?.left ?? 0;
     const top = rect?.top ?? 0;
+    // Read live pan/zoom from the ref so this stays identity-stable across
+    // pan/zoom — lets the port handlers be memoized without breaking on pan.
+    const { pan, zoom } = viewRef.current;
     return { x: (clientX - left - pan.x) / zoom, y: (clientY - top - pan.y) / zoom };
-  }, [pan.x, pan.y, zoom]);
+  }, []);
 
   // Auto-fit on flow change: compute bbox of all nodes and zoom/pan to fit.
   const fitNodes = useCallback((nodesToFit: FlowNodeDef[]) => {
@@ -502,54 +526,142 @@ function FlowCanvas({
 
   useEffect(() => { const t = setTimeout(() => fitNodes(flow.nodes), 50); return () => clearTimeout(t); }, [fitNodes, flow.id, flow.nodes]);
 
-  const onMouseMove = (e: React.MouseEvent) => {
+  // Pan so a node sits in the middle of the viewport, keeping the current zoom.
+  const centerNode = useCallback((node: FlowNodeDef) => {
+    const el = containerRef.current;
+    if (!el) return;
+    const { zoom: z } = viewRef.current;
+    setPan({
+      x: el.clientWidth / 2 - (node.x + NODE_W / 2) * z,
+      y: el.clientHeight / 2 - (node.y + NODE_H / 2) * z,
+    });
+  }, []);
+
+  // On mobile a palette-added node spawns to the right of the rightmost node —
+  // off the narrow viewport, so it looks like nothing happened. When the node
+  // count grows, relocate the canvas to center the freshly spawned step.
+  const isMobileCanvas = useIsMobileViewport();
+  const nodeCountRef = useRef(nodes.length);
+  useEffect(() => {
+    if (isMobileCanvas && nodes.length > nodeCountRef.current) {
+      centerNode(nodes[nodes.length - 1]);
+    }
+    nodeCountRef.current = nodes.length;
+  }, [nodes, isMobileCanvas, centerNode]);
+
+  // Native, non-passive wheel listener. React's onWheel is passive, so its
+  // preventDefault() is ignored and a trackpad pinch (ctrl+wheel) zooms the
+  // whole page. Attaching here lets us own the gesture: pinch zooms the canvas
+  // (anchored at the cursor) and two-finger scroll pans it.
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const handleWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const { pan, zoom } = viewRef.current;
+      if (e.ctrlKey || e.metaKey) {
+        const rect = el.getBoundingClientRect();
+        const cx = e.clientX - rect.left;
+        const cy = e.clientY - rect.top;
+        const d = Math.max(-50, Math.min(50, e.deltaY));
+        const nz = Math.max(0.4, Math.min(1.4, zoom * Math.exp(-d * 0.004)));
+        const ratio = nz / zoom;
+        // Keep the point under the cursor fixed while scaling.
+        setPan({ x: cx - (cx - pan.x) * ratio, y: cy - (cy - pan.y) * ratio });
+        setZoom(nz);
+      } else {
+        setPan({ x: pan.x - e.deltaX, y: pan.y - e.deltaY });
+      }
+    };
+    el.addEventListener("wheel", handleWheel, { passive: false });
+    return () => el.removeEventListener("wheel", handleWheel);
+  }, []);
+
+  const onPointerMove = (e: React.PointerEvent) => {
+    if (pointers.current.has(e.pointerId)) {
+      pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    }
+    if (pointers.current.size === 2) {
+      const [a, b] = Array.from(pointers.current.values());
+      const dist = Math.hypot(a.x - b.x, a.y - b.y);
+      const cx = (a.x + b.x) / 2;
+      const cy = (a.y + b.y) / 2;
+      const rect = containerRef.current?.getBoundingClientRect();
+      const lx = cx - (rect?.left ?? 0);
+      const ly = cy - (rect?.top ?? 0);
+      if (pinch.current) {
+        const { pan: vpan, zoom: vzoom } = viewRef.current;
+        const ratio = dist / (pinch.current.dist || dist);
+        const nz = Math.max(0.4, Math.min(1.4, vzoom * ratio));
+        const scale = nz / vzoom;
+        // Anchored scale at the gesture centroid, plus pan by the centroid delta.
+        setPan({
+          x: lx - (lx - vpan.x) * scale + (cx - pinch.current.cx),
+          y: ly - (ly - vpan.y) * scale + (cy - pinch.current.cy),
+        });
+        setZoom(nz);
+      }
+      pinch.current = { dist, cx, cy };
+      return; // don't also run node/pan drag this frame
+    }
     if (connect) {
       setConnect((c) => (c ? { ...c, cursor: toCanvas(e.clientX, e.clientY) } : c));
       return;
     }
     if (!drag) return;
     if (drag.kind === "node") {
-      const dx = (e.clientX - drag.startX) / zoom;
-      const dy = (e.clientY - drag.startY) / zoom;
+      const dxPx = e.clientX - drag.startX;
+      const dyPx = e.clientY - drag.startY;
+      // Ignore sub-threshold jitter so a tap stays a tap (no nudge, no re-render).
+      if (!movedRef.current && Math.hypot(dxPx, dyPx) < 5) return;
+      movedRef.current = true;
+      const dx = dxPx / zoom;
+      const dy = dyPx / zoom;
       onNodesChange((prev) => prev.map(n => n.id === drag.id ? { ...n, x: drag.ox + dx, y: drag.oy + dy } : n));
     } else if (drag.kind === "pan") {
       setPan({ x: drag.ox + (e.clientX - drag.startX), y: drag.oy + (e.clientY - drag.startY) });
     }
   };
   // Drop on empty canvas cancels an in-progress connection.
-  const onMouseUp = () => { setDrag(null); setConnect(null); };
+  const onPointerUp = (e: React.PointerEvent) => {
+    pointers.current.delete(e.pointerId);
+    pinch.current = null;
+    setDrag(null);
+    // On touch, keep an armed connection alive until the user taps a target
+    // input port (completes) or empty canvas (cancels); mouse release ends drag-connect.
+    if (e.pointerType !== "touch") setConnect(null);
+  };
 
-  const startNodeDrag = (e: React.MouseEvent, node: FlowNodeDef) => {
+  const startNodeDrag = useCallback((e: React.PointerEvent, node: FlowNodeDef) => {
     e.stopPropagation();
-    setDrag({ kind: "node", id: node.id, ox: node.x, oy: node.y, startX: e.clientX, startY: e.clientY });
-  };
-  const startPanDrag = (e: React.MouseEvent) => {
-    // Node mousedown stops propagation, so this only fires for empty canvas hits.
+    e.currentTarget.setPointerCapture?.(e.pointerId);
+    movedRef.current = false;
+    setDrag({ kind: "node", id: node.id, ox: node.x, oy: node.y, startX: e.clientX, startY: e.clientY, pointerId: e.pointerId });
+  }, []);
+  const startPanDrag = (e: React.PointerEvent) => {
+    // Node pointerdown stops propagation, so this only fires for empty canvas hits.
     // Bottom-corner control overlays also stopPropagation in their handlers.
+    pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (e.pointerType === "touch" && connect) {
+      pointers.current.delete(e.pointerId);
+      setConnect(null);
+      return;
+    }
     setSelectedId(null);
-    setDrag({ kind: "pan", ox: pan.x, oy: pan.y, startX: e.clientX, startY: e.clientY });
+    e.currentTarget.setPointerCapture?.(e.pointerId);
+    setDrag({ kind: "pan", ox: pan.x, oy: pan.y, startX: e.clientX, startY: e.clientY, pointerId: e.pointerId });
   };
 
-  // Edge connecting: mousedown on an output port, mouseup on a target input port.
-  const onPortDown = (e: React.MouseEvent, nodeId: string, portIdx: number) => {
+  // Edge connecting: pointerdown on an output port, pointerup on a target input port.
+  const onPortDown = useCallback((e: React.PointerEvent, nodeId: string, portIdx: number) => {
     e.stopPropagation();
     setConnect({ from: nodeId, fromPort: portIdx, cursor: toCanvas(e.clientX, e.clientY) });
-  };
-  const onPortUp = (e: React.MouseEvent, nodeId: string) => {
+  }, [toCanvas]);
+  const onPortUp = useCallback((e: React.PointerEvent, nodeId: string) => {
     e.stopPropagation();
     if (connect && connect.from !== nodeId) onAddEdge(connect.from, nodeId, connect.fromPort);
     setConnect(null);
-  };
-
-  const onWheel = (e: React.WheelEvent) => {
-    if (!e.ctrlKey && !e.metaKey) return;
-    e.preventDefault();
-    // Proportional, bounded zoom — clamp per-event delta so trackpad pinches
-    // and large wheel notches don't jump.
-    const d = Math.max(-40, Math.min(40, e.deltaY));
-    const factor = Math.exp(-d * 0.0015);
-    setZoom((z) => Math.max(0.4, Math.min(1.4, z * factor)));
-  };
+  }, [connect, onAddEdge]);
 
   // For edges
   const nodeById = useMemo(() => Object.fromEntries(nodes.map(n => [n.id, n])), [nodes]);
@@ -557,11 +669,15 @@ function FlowCanvas({
   return (
     <div
       ref={containerRef}
-      onMouseDown={startPanDrag}
-      onMouseMove={onMouseMove}
-      onMouseUp={onMouseUp}
-      onMouseLeave={onMouseUp}
-      onWheel={onWheel}
+      onPointerDown={startPanDrag}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
+      // iOS Safari spuriously fires pointerleave mid-drag (finger still down and
+      // inside the canvas, even with pointer capture), which would end the drag
+      // one move in. Capture guarantees a real pointerup/cancel, so only use
+      // pointerleave as the desktop mouse-left-the-window fallback.
+      onPointerLeave={(e) => { if (e.pointerType !== "touch") onPointerUp(e); }}
+      onPointerCancel={onPointerUp}
       onDragOver={(e) => {
         if (e.dataTransfer.types.includes("application/x-flow-node")) {
           e.preventDefault();
@@ -574,7 +690,7 @@ function FlowCanvas({
         e.preventDefault();
         onDropNode(JSON.parse(raw) as PaletteItem, toCanvas(e.clientX, e.clientY));
       }}
-      className={`flow-canvas-bg flex-1 relative overflow-hidden bg-[#FAFBFC] ${drag?.kind === "pan" ? "cursor-grabbing" : "cursor-grab"}`}
+      className={`flow-canvas-bg flex-1 relative overflow-hidden touch-none bg-[#FAFBFC] ${drag?.kind === "pan" ? "cursor-grabbing" : "cursor-grab"}`}
       style={{
         backgroundImage: "radial-gradient(circle, #D2D6DA 1px, transparent 1px)",
         backgroundSize: "20px 20px",
@@ -639,7 +755,7 @@ function FlowCanvas({
                   <g
                     transform={`translate(${mx}, ${my})`}
                     style={{ cursor: "pointer", pointerEvents: "auto" }}
-                    onMouseDown={(ev) => ev.stopPropagation()}
+                    onPointerDown={(ev) => ev.stopPropagation()}
                     onClick={(ev) => { ev.stopPropagation(); onRemoveEdge(e); setHoverEdge(null); }}
                   >
                     <circle r={9} fill="#fff" stroke="#D14343" strokeWidth={1.5} />
@@ -680,15 +796,23 @@ function FlowCanvas({
             onPortDown={onPortDown}
             onPortUp={onPortUp}
             runStatus={runStatuses?.[n.id]}
+            connectingPort={connect?.from === n.id ? connect.fromPort : null}
           />
         ))}
       </div>
 
       {/* Canvas overlays: zoom controls, mini status */}
       <div
-        onMouseDown={(e) => e.stopPropagation()}
+        onPointerDown={(e) => e.stopPropagation()}
         className="absolute right-4 bottom-4 z-10 flex flex-col gap-1 bg-panel border border-neutral-200 rounded-[3px] p-1 shadow-[0_2px_6px_rgba(24,27,32,0.08)]"
       >
+        <button
+          onClick={(e) => { e.stopPropagation(); onToggleFullView(); }}
+          title={fullView ? "Exit full view (Esc)" : "Full view"}
+          aria-label={fullView ? "Exit full view" : "Full view"}
+          className="appearance-none border-none bg-transparent cursor-pointer w-[26px] h-[26px] rounded-xs font-mono text-sm text-coal hover:bg-app-bg"
+        >{fullView ? "⤡" : "⤢"}</button>
+        <div className="h-px bg-neutral-200 mx-1" />
         {[
           { label: "+", onClick: () => setZoom(z => Math.min(1.4, z + 0.1)) },
           { label: "−", onClick: () => setZoom(z => Math.max(0.4, z - 0.1)) },
@@ -705,17 +829,6 @@ function FlowCanvas({
         </div>
       </div>
 
-      <div
-        onMouseDown={(e) => e.stopPropagation()}
-        className="absolute left-4 bottom-4 z-10 bg-panel border border-neutral-200 rounded-[3px] py-2 px-3 flex items-center gap-3 font-mono text-[11px] text-neutral-800 shadow-[0_2px_6px_rgba(24,27,32,0.08)]"
-      >
-        <span className="inline-flex items-center gap-1.5 text-neutral-700">
-          <span className="w-1.5 h-1.5 rounded-full bg-[#5BB04A]" />
-          {nodes.length} nodes · {edges.length} edges
-        </span>
-        <span className="text-[#D2D6DA]">|</span>
-        <span>Valid · last lint clean</span>
-      </div>
     </div>
   );
 }
@@ -724,31 +837,167 @@ function FlowCanvas({
    Last-run rail: shows latest invocation of this flow with per-node status.
    ──────────────────────────────────────────────────────────────────────── */
 
-function LastRunHeader({ flow, runStatuses }: { flow: Flow; runStatuses: RunStatusMap }) {
-  const total = Object.keys(runStatuses).length;
-  const ok    = Object.values(runStatuses).filter(s => s === "ok").length;
-  const warn  = Object.values(runStatuses).filter(s => s === "warn").length;
-  const fail  = Object.values(runStatuses).filter(s => s === "fail").length;
-  const pend  = Object.values(runStatuses).filter(s => s === "pending").length;
+/* ────────────────────────────────────────────────────────────────────────
+   FlowSelect — custom listbox for the flow picker. Native <option> can't be
+   themed, so this is a button + popup that matches the cockpit design system.
+   ──────────────────────────────────────────────────────────────────────── */
+
+function FlowSelect({
+  flows,
+  flowId,
+  onSelectFlow,
+}: {
+  flows: { id: string; label: string }[];
+  flowId: string;
+  onSelectFlow: (id: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [activeIdx, setActiveIdx] = useState(0);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const listRef = useRef<HTMLUListElement>(null);
+
+  const current = flows.find((f) => f.id === flowId) ?? flows[0];
+
+  // Close on outside click.
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [open]);
+
+  // Point the active row at the current selection whenever the popup opens.
+  useEffect(() => {
+    if (open) setActiveIdx(Math.max(0, flows.findIndex((f) => f.id === flowId)));
+  }, [open, flowId, flows]);
+
+  // Keep the active row in view while arrow-keying.
+  useEffect(() => {
+    if (!open) return;
+    listRef.current?.querySelector<HTMLElement>('[data-active="true"]')?.scrollIntoView({ block: "nearest" });
+  }, [open, activeIdx]);
+
+  const commit = (idx: number) => {
+    const f = flows[idx];
+    if (f) onSelectFlow(f.id);
+    setOpen(false);
+  };
+
+  const onKeyDown = (e: React.KeyboardEvent) => {
+    switch (e.key) {
+      case "ArrowDown":
+        e.preventDefault();
+        if (!open) setOpen(true);
+        else setActiveIdx((i) => Math.min(flows.length - 1, i + 1));
+        break;
+      case "ArrowUp":
+        e.preventDefault();
+        if (!open) setOpen(true);
+        else setActiveIdx((i) => Math.max(0, i - 1));
+        break;
+      case "Enter":
+      case " ":
+        e.preventDefault();
+        if (open) commit(activeIdx);
+        else setOpen(true);
+        break;
+      case "Escape":
+        if (open) {
+          e.preventDefault();
+          setOpen(false);
+        }
+        break;
+      case "Tab":
+        if (open) setOpen(false);
+        break;
+    }
+  };
+
   return (
-    <div className="flex items-center gap-4 py-2.5 px-4 bg-coal text-white border-b border-[#2A2D33]">
-      <span className="font-mono text-[9px] text-neutral-500 tracking-[0.06em] uppercase">Last run · 4m ago</span>
-      <span className="font-mono text-[11px] text-white">{flow.id === "presandbox" ? "LIN-4527 · gift wrapping refactor" : "PR #2147 · multi-currency checkout"}</span>
-      <span className="inline-flex items-center gap-3 ml-4 font-mono text-[11px]">
-        <span className="text-[#5BB04A]">● {ok} ok</span>
-        {warn > 0 && <span className="text-vibe-yellow">● {warn} warn</span>}
-        {fail > 0 && <span className="text-[#D14343]">● {fail} fail</span>}
-        {pend > 0 && <span className="text-neutral-500">● {pend} pending</span>}
-        <span className="text-neutral-700">/ {total}</span>
-      </span>
-      <span className="ml-auto flex gap-2">
-        <button className={darkBtnCls}>Open trace ↗</button>
-        <button className={darkBtnCls}>Replay ▷</button>
-      </span>
+    <div ref={rootRef} className="relative">
+      <button
+        type="button"
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        data-open={open}
+        onClick={() => setOpen((o) => !o)}
+        onKeyDown={onKeyDown}
+        className="group/sel appearance-none cursor-pointer inline-flex items-center gap-2 bg-transparent border border-neutral-200 rounded-[3px] px-2.5 py-1 font-display font-semibold text-sm leading-[1.2] text-coal outline-none transition-[color,background-color,border-color,box-shadow] duration-[120ms] ease-standard hover:border-neutral-300 hover:bg-app-bg focus-visible:border-mariner focus-visible:bg-panel focus-visible:ring-2 focus-visible:ring-mariner-100 data-[open=true]:border-mariner data-[open=true]:bg-panel data-[open=true]:ring-2 data-[open=true]:ring-mariner-100"
+      >
+        <span className="truncate max-w-[42ch]">{current?.label}</span>
+        <svg
+          aria-hidden="true"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth={2.5}
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          className="size-3 -mr-0.5 text-neutral-400 transition-[transform,color] duration-[160ms] ease-standard group-hover/sel:text-neutral-600 group-data-[open=true]/sel:rotate-180 group-data-[open=true]/sel:text-mariner"
+        >
+          <path d="m6 9 6 6 6-6" />
+        </svg>
+      </button>
+
+      {open && (
+        <ul
+          ref={listRef}
+          role="listbox"
+          tabIndex={-1}
+          aria-activedescendant={flows[activeIdx] ? `flowopt-${flows[activeIdx].id}` : undefined}
+          className="absolute left-0 top-[calc(100%+6px)] z-50 min-w-full w-max max-w-[min(420px,80vw)] max-h-[min(60vh,360px)] overflow-y-auto py-1 bg-panel border border-neutral-200 rounded-sm shadow-[0_12px_28px_-8px_rgba(24,27,32,0.22),0_2px_6px_rgba(24,27,32,0.08)] origin-top animate-ck-pop"
+        >
+          {flows.map((f, i) => {
+            const selected = f.id === flowId;
+            const active = i === activeIdx;
+            return (
+              <li
+                key={f.id}
+                id={`flowopt-${f.id}`}
+                role="option"
+                aria-selected={selected}
+                data-active={active}
+                onMouseEnter={() => setActiveIdx(i)}
+                onClick={() => commit(i)}
+                className={`relative mx-1 flex items-center gap-2.5 rounded-[3px] pl-3 pr-2.5 py-2 cursor-pointer transition-colors duration-[90ms] ${active ? "bg-app-bg" : ""}`}
+              >
+                {selected && (
+                  <span className="absolute left-0 top-1.5 bottom-1.5 w-[2px] rounded-full bg-mariner" />
+                )}
+                <span className="flex min-w-0 flex-col gap-0.5">
+                  <span
+                    className={`font-display text-sm leading-tight truncate ${
+                      selected ? "font-semibold text-mariner" : "font-medium text-coal"
+                    }`}
+                  >
+                    {f.label}
+                  </span>
+                  <span className="font-mono text-[10px] tracking-[0.04em] text-neutral-500 truncate">{f.id}</span>
+                </span>
+                {selected && (
+                  <svg
+                    aria-hidden="true"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth={2.5}
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    className="ml-auto size-3.5 flex-none text-mariner"
+                  >
+                    <path d="m5 13 4 4L19 7" />
+                  </svg>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      )}
     </div>
   );
 }
-const darkBtnCls = "appearance-none cursor-pointer border border-[#2A2D33] bg-[#0E1014] text-white py-[5px] px-2.5 rounded-[3px] font-mono text-[10px] tracking-[0.04em] uppercase";
 
 /* ────────────────────────────────────────────────────────────────────────
    Flow editor — wraps everything: header bar, palette, canvas, config.
@@ -772,7 +1021,17 @@ export function FlowEditor({
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [nodes, setNodes] = useState<FlowNodeDef[]>(flow.nodes);
   const [edges, setEdges] = useState<FlowEdgeDef[]>(flow.edges);
+  const [fullView, setFullView] = useState(false);
+  const isMobile = useIsMobileViewport();
+  const [paletteOpen, setPaletteOpen] = useState(false);
   useEffect(() => { setNodes(flow.nodes); setEdges(flow.edges); setSelectedId(null); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [flow.id]);
+
+  useEffect(() => {
+    if (!fullView) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setFullView(false); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [fullView]);
 
   const selected = selectedId ? nodes.find(n => n.id === selectedId) ?? null : null;
 
@@ -829,55 +1088,21 @@ export function FlowEditor({
   };
 
   return (
-    <div className="flex flex-col h-full min-h-0">
+    <div className={`flex flex-col min-h-0 ${fullView ? "fixed inset-0 z-50 bg-app-bg" : "h-full"}`}>
       {/* Editor toolbar */}
       <div className="flex items-center gap-4 py-3 px-6 bg-panel border-b border-neutral-200">
         <div className="flex flex-col gap-0.5">
           <div className="font-mono text-[10px] text-neutral-500 tracking-[0.06em] uppercase">{subtitle}</div>
           <div className="flex items-center gap-2.5">
-            <div className="relative">
-              <select
-                value={flowId}
-                onChange={(e) => onSelectFlow(e.target.value)}
-                className="appearance-none cursor-pointer bg-transparent border border-neutral-200 rounded-[3px] pl-2.5 pr-7 py-0.5 font-display font-medium text-xl leading-[1.2] text-coal outline-none hover:bg-app-bg focus:border-mariner"
-              >
-                {flows.map((f) => (
-                  <option key={f.id} value={f.id}>{f.label}</option>
-                ))}
-              </select>
-              <span className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 font-mono text-[10px] text-neutral-500">▼</span>
-            </div>
-            <CkChip tone="mariner">v{flow.version}</CkChip>
-            <CkChip tone="success">deployed</CkChip>
+            <FlowSelect flows={flows} flowId={flowId} onSelectFlow={onSelectFlow} />
           </div>
-        </div>
-        <div className="ml-auto flex items-center gap-2.5">
-          <div className="font-mono text-[11px] text-neutral-700">
-            <span className="text-neutral-500">workflow ·</span> {flow.workflow}
-          </div>
-          <span className="text-[#D2D6DA]">·</span>
-          <div className="font-mono text-[11px] text-neutral-700">
-            <span className="text-neutral-500">last deploy ·</span> {flow.lastDeployed} by {flow.lastDeployedBy}
-          </div>
-          <div className="w-px h-[22px] bg-neutral-200 mx-1.5" />
-          <button className={ghostBtnCls}>Lint flow</button>
-          <button className={ghostBtnCls}>Run dry ▷</button>
-          <button className={ghostBtnCls}>History</button>
-          <button className={darkBtnLightCls}>Deploy →</button>
         </div>
       </div>
 
-      {/* Description strip */}
-      <div className="py-2.5 px-6 bg-off-white border-b border-neutral-200 flex items-center gap-3 font-body text-[13px] text-neutral-800">
-        <span className="font-mono text-[10px] text-neutral-700 tracking-[0.06em] uppercase">About</span>
-        <span className="flex-1 max-w-[880px]">{flow.description}</span>
-      </div>
-
-      <LastRunHeader flow={flow} runStatuses={runStatuses} />
 
       {/* Editor body */}
       <div className="flex-1 flex min-h-0">
-        <NodePalette onAdd={addNode} />
+        {!isMobile && <NodePalette onAdd={addNode} />}
         <FlowCanvas
           flow={flow}
           nodes={nodes}
@@ -889,12 +1114,64 @@ export function FlowEditor({
           runStatuses={runStatuses}
           selectedId={selectedId}
           setSelectedId={setSelectedId}
+          fullView={fullView}
+          onToggleFullView={() => setFullView((v) => !v)}
         />
-        <NodeConfig
-          node={selected}
-          onChange={updateSelected}
-          onDelete={deleteSelected}
-        />
+        {selected && !isMobile && (
+          <NodeConfig
+            node={selected}
+            onChange={updateSelected}
+            onDelete={deleteSelected}
+            onClose={() => setSelectedId(null)}
+          />
+        )}
+        {isMobile && (
+          <MobileSheet
+            open={!!selected}
+            onClose={() => setSelectedId(null)}
+            title={selected ? `${selected.type} · ${selected.name}` : ""}
+            heightClass="max-h-[80vh]"
+          >
+            {selected && (
+              <NodeConfig
+                node={selected}
+                onChange={updateSelected}
+                onDelete={deleteSelected}
+                onClose={() => setSelectedId(null)}
+                embedded
+              />
+            )}
+          </MobileSheet>
+        )}
+        {isMobile && (
+          <button
+            onClick={() => setPaletteOpen(true)}
+            aria-label="Add step"
+            className="fixed left-4 bottom-[72px] z-40 w-12 h-12 rounded-full bg-mariner text-white text-2xl leading-none shadow-[0_3px_10px_rgba(24,27,32,0.25)] flex items-center justify-center"
+          >＋</button>
+        )}
+        {isMobile && (
+          <MobileSheet open={paletteOpen} onClose={() => setPaletteOpen(false)} title="Add step" heightClass="max-h-[60vh]">
+            <div className="flex flex-col py-1">
+              {PALETTE_ITEMS.map((it) => {
+                const cat = NODE_CATEGORIES[it.type] || NODE_CATEGORIES.tool;
+                return (
+                  <button
+                    key={it.name}
+                    onClick={() => { addNode(it); setPaletteOpen(false); }}
+                    className="appearance-none text-left border-none cursor-pointer flex items-center gap-3 px-[18px] py-3.5 bg-transparent active:bg-app-bg"
+                  >
+                    <span
+                      className="w-[22px] h-[22px] rounded-xs text-white inline-flex items-center justify-center font-mono text-[12px] font-bold flex-[0_0_22px]"
+                      style={{ background: cat.color }}
+                    >{cat.glyph}</span>
+                    <span className="font-body text-[15px] text-coal">{it.name}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </MobileSheet>
+        )}
       </div>
     </div>
   );

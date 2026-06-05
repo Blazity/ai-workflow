@@ -12,12 +12,42 @@ const NAV = [
   { id: "editor", label: "Workflow editor", glyph: "▷", group: "flow" },
 ];
 
-export function CkSidebar({ active, onNav }: { active: string; onNav: (id: string) => void }) {
+export function CkSidebar({
+  active,
+  onNav,
+  collapsed = false,
+  onToggleCollapse,
+}: {
+  active: string;
+  onNav: (id: string) => void;
+  collapsed?: boolean;
+  onToggleCollapse?: () => void;
+}) {
   return (
-    <aside className="w-[220px] flex-[0_0_220px] bg-panel border-r border-neutral-200 flex flex-col py-5">
-      <div className="px-5 pb-[18px] flex items-center gap-2">
-        <BlazityLogo size={22} color="#FD6027" wordmarkColor="#181B20" />
-        <span className="font-mono text-[9px] text-neutral-700 tracking-[0.06em] uppercase ml-0.5 mt-1">/ AI Workflow</span>
+    <aside
+      className={`relative bg-panel border-r border-neutral-200 flex flex-col py-5 transition-[width,flex-basis] duration-[160ms] ease-[cubic-bezier(.2,0,0,1)] ${
+        collapsed ? "w-[60px] flex-[0_0_60px]" : "w-[220px] flex-[0_0_220px]"
+      }`}
+    >
+      <button
+        onClick={onToggleCollapse}
+        title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+        aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+        aria-expanded={!collapsed}
+        className="absolute top-[22px] right-0 translate-x-1/2 z-10 w-5 h-5 flex items-center justify-center rounded-full border border-neutral-200 bg-panel text-neutral-500 hover:bg-app-bg hover:text-neutral-800 cursor-pointer appearance-none transition-colors duration-[120ms]"
+      >
+        <span className="font-mono text-[11px] leading-none">{collapsed ? "›" : "‹"}</span>
+      </button>
+
+      <div
+        className={`pb-[18px] flex items-center gap-2 ${
+          collapsed ? "px-0 justify-center" : "px-5"
+        }`}
+      >
+        <BlazityLogo size={22} color="#FD6027" wordmarkColor="#181B20" showWord={!collapsed} />
+        {!collapsed && (
+          <span className="font-mono text-[9px] text-neutral-700 tracking-[0.06em] uppercase ml-0.5 mt-1">/ AI Workflow</span>
+        )}
       </div>
 
       {[
@@ -32,15 +62,19 @@ export function CkSidebar({ active, onNav }: { active: string; onNav: (id: strin
                 <button
                   key={n.id}
                   onClick={() => onNav(n.id)}
-                  className={`appearance-none text-left border-none cursor-pointer flex items-center gap-[10px] px-3 py-[9px] rounded-[3px] font-body text-[13px] transition-all duration-[120ms] ease-[cubic-bezier(.2,0,0,1)] ${
+                  title={collapsed ? n.label : undefined}
+                  aria-label={n.label}
+                  className={`appearance-none text-left border-none cursor-pointer flex items-center gap-[10px] py-[9px] rounded-[3px] font-body text-[13px] transition-all duration-[120ms] ease-[cubic-bezier(.2,0,0,1)] ${
+                    collapsed ? "px-0 justify-center" : "px-3"
+                  } ${
                     on
                       ? "bg-[#ECECFD] text-mariner font-semibold"
                       : "bg-transparent text-neutral-800 font-medium hover:bg-app-bg"
                   }`}
                 >
-                  <span className={`font-mono text-xs w-[14px] text-center ${on ? "text-mariner" : "text-neutral-500"}`}>{n.glyph}</span>
-                  {n.label}
-                  {on && <span className="ml-auto w-1 h-4 bg-mariner rounded-full" />}
+                  <span className={`font-mono text-lg leading-none ${on ? "text-mariner" : "text-neutral-700"}`}>{n.glyph}</span>
+                  {!collapsed && n.label}
+                  {!collapsed && on && <span className="ml-auto w-1 h-4 bg-mariner rounded-full" />}
                 </button>
               );
             })}

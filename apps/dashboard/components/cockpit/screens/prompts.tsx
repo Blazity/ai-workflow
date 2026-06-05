@@ -40,11 +40,12 @@ function PromptList({ active, onSelect }: { active: string; onSelect: (id: strin
       action={
         <input
           placeholder="Search…"
-          className="h-6 px-2 border border-neutral-200 rounded-xs font-mono text-[11px] text-neutral-900 outline-none bg-off-white w-[120px]"
+          className="h-6 px-2 border border-neutral-200 rounded-xs font-mono text-[11px] text-neutral-900 outline-none bg-off-white w-full lg:w-[120px]"
         />
       }
       pad={0}
-      style={{ height: "100%", display: "flex", flexDirection: "column" }}
+      className="lg:h-full"
+      style={{ display: "flex", flexDirection: "column" }}
     >
       <div className="px-3.5 py-2 border-b border-neutral-200 flex gap-1 flex-wrap">
         {["all","production","staging","draft","locked"].map(t => (
@@ -128,7 +129,7 @@ function PromptDetail({ promptId }: { promptId: string }) {
   }
 
   return (
-    <div className="flex flex-col gap-3 h-full">
+    <div className="flex flex-col gap-3 lg:h-full">
       <CkCard
         eyebrow={`Arthur · ${p.workflowName} → ${p.span}`}
         title={p.name}
@@ -141,7 +142,7 @@ function PromptDetail({ promptId }: { promptId: string }) {
           </div>
         }
       >
-        <div className="grid grid-cols-4 gap-4">
+        <div className="grid grid-cols-1 lg:grid-cols-4 gap-4">
           <Stat label="Current version" value={p.current} sub={`by ${p.lastEditedBy} · ${(p.lastEditedAtMin/60).toFixed(0)}h ago`} />
           <Stat label="Versions"        value={p.versionCount} sub="lifetime" />
           <Stat label="Eval score"      value={(p.evalScore*100).toFixed(0)} sub={`${p.evalDelta > 0 ? "↗" : "↘"} ${Math.abs(p.evalDelta).toFixed(3)} vs prev`} tone={p.evalDelta > 0 ? "good" : "bad"} />
@@ -157,21 +158,23 @@ function PromptDetail({ promptId }: { promptId: string }) {
           </span>
         }
       >
-        <div className="flex items-stretch gap-0">
+        <div className="flex flex-col lg:flex-row lg:items-stretch gap-0">
           {versions.map((v, i) => {
             const isA = selA === v.v;
             const isB = selB === v.v;
-            const borderColor = isA ? "#3C43E7" : isB ? "#FD6027" : "#E6E8EB";
-            const dropRightBorder = i < versions.length - 1 && !isA && !isB;
+            const borderClass = isA ? "border-[#3C43E7]" : isB ? "border-[#FD6027]" : "border-[#E6E8EB]";
+            const notLast = i < versions.length - 1;
+            // Mobile (stacked): drop bottom border on all but the last so stacked
+            // buttons share one horizontal divider.
+            // Desktop (row, lg): drop right border on interior neutral buttons so
+            // side-by-side buttons share one vertical divider (selected keep full border).
+            const dropMobileBottom = notLast;
+            const dropDesktopRight = notLast && !isA && !isB;
             return (
               <button
                 key={v.v}
                 onClick={(e) => { if (e.shiftKey) setSelB(v.v); else setSelA(v.v); }}
-                className={`flex-1 appearance-none cursor-pointer text-left px-4 py-[14px] relative ${isA ? "bg-mariner-100" : isB ? "bg-[#FFEFE9]" : "bg-panel"}`}
-                style={{
-                  border: "1px solid " + borderColor,
-                  borderRight: dropRightBorder ? "none" : "1px solid " + borderColor,
-                }}
+                className={`lg:flex-1 appearance-none cursor-pointer text-left px-4 py-[14px] relative border ${borderClass} ${dropMobileBottom ? "border-b-0" : ""} lg:border-b ${dropDesktopRight ? "lg:border-r-0" : "lg:border-r"} ${isA ? "bg-mariner-100" : isB ? "bg-[#FFEFE9]" : "bg-panel"}`}
               >
                 <div className="flex items-center justify-between mb-1.5">
                   <span className="font-mono text-sm font-semibold text-neutral-900">{v.v}</span>
@@ -201,7 +204,7 @@ function PromptDetail({ promptId }: { promptId: string }) {
       </CkCard>
 
       {/* Diff + metrics */}
-      <div className="grid grid-cols-[1.6fr_1fr] gap-3">
+      <div className="flex flex-col lg:grid lg:grid-cols-[1.6fr_1fr] gap-3">
         <PromptDiff a={selA} b={selB} versions={versions} />
         <PromptMetrics versions={versions} selA={selA} selB={selB} />
       </div>
@@ -323,7 +326,7 @@ function PromptMetrics({ versions, selA, selB }: { versions: PromptVersion[]; se
 export function PromptsScreen() {
   const [active, setActive] = useState(D.PROMPTS[0]?.id ?? "");
   return (
-    <div className="px-6 pt-5 pb-8 flex flex-col gap-4">
+    <div className="px-4 lg:px-6 pt-5 pb-8 flex flex-col gap-4">
       <div className="flex items-end justify-between">
         <div>
           <div className="font-mono text-[10px] text-neutral-500 tracking-[0.06em] uppercase">Arthur engine · prompt versioning</div>
@@ -335,14 +338,14 @@ export function PromptsScreen() {
         </div>
       </div>
 
-      <div className="grid grid-cols-4 gap-3">
+      <div className="grid grid-cols-1 lg:grid-cols-4 gap-3">
         <CkKPI label="Prompts"         value={D.PROMPTS.length.toString()}                                    sub="across 6 workflows" />
         <CkKPI label="In production"   value={D.PROMPTS.filter(p => p.tags.includes("production")).length.toString()} sub="serving traffic" />
         <CkKPI label="A/B tests"       value={D.PROMPTS.filter(p => p.tags.includes("ab-test")).length.toString()}    sub="live experiments" />
         <CkKPI label="Avg eval Δ · 7d" value="+0.4%"                                                          sub="across all prompts" delta="↗ improving" deltaTone="good" />
       </div>
 
-      <div className="grid grid-cols-[340px_1fr] gap-3 min-h-[720px]">
+      <div className="flex flex-col lg:grid lg:grid-cols-[340px_1fr] gap-3 lg:min-h-[720px]">
         <PromptList active={active} onSelect={setActive} />
         <PromptDetail promptId={active} />
       </div>
