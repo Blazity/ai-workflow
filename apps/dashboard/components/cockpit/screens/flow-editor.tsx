@@ -673,7 +673,7 @@ function FlowCanvas({
         e.preventDefault();
         onDropNode(JSON.parse(raw) as PaletteItem, toCanvas(e.clientX, e.clientY));
       }}
-      className={`flow-canvas-bg flex-1 relative overflow-hidden bg-[#FAFBFC] ${drag?.kind === "pan" ? "cursor-grabbing" : "cursor-grab"}`}
+      className={`flow-canvas-bg flex-1 relative overflow-hidden touch-none bg-[#FAFBFC] ${drag?.kind === "pan" ? "cursor-grabbing" : "cursor-grab"}`}
       style={{
         backgroundImage: "radial-gradient(circle, #D2D6DA 1px, transparent 1px)",
         backgroundSize: "20px 20px",

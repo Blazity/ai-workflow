@@ -68,7 +68,7 @@ export function CockpitShell({ children }: { children: React.ReactNode }) {
     <CockpitCtx.Provider
       value={{ t, setTweak, persona, range, env, openRun }}
     >
-      <div className="h-screen w-screen flex flex-col lg:flex-row overflow-hidden bg-app-bg relative">
+      <div className="h-dvh w-screen flex flex-col lg:flex-row overflow-hidden bg-app-bg relative">
         {/* Desktop sidebar — lg and up only */}
         <div className="hidden lg:flex">
           <CkSidebar
