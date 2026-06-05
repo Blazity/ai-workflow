@@ -672,7 +672,11 @@ function FlowCanvas({
       onPointerDown={startPanDrag}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
-      onPointerLeave={onPointerUp}
+      // iOS Safari spuriously fires pointerleave mid-drag (finger still down and
+      // inside the canvas, even with pointer capture), which would end the drag
+      // one move in. Capture guarantees a real pointerup/cancel, so only use
+      // pointerleave as the desktop mouse-left-the-window fallback.
+      onPointerLeave={(e) => { if (e.pointerType !== "touch") onPointerUp(e); }}
       onPointerCancel={onPointerUp}
       onDragOver={(e) => {
         if (e.dataTransfer.types.includes("application/x-flow-node")) {
