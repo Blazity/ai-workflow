@@ -10,6 +10,8 @@ export type Tweaks = {
   showEditorialHero: boolean;
   showStreamingRun: boolean;
   activityDrawerOpen: boolean;
+  /** Collapses the cockpit sidebar to an icon-only rail; persists across visits. */
+  sidebarCollapsed: boolean;
   accentColor: string;
   /** Flow selected in the workflow editor; persists the select across visits. */
   editorFlow: string;
@@ -20,6 +22,7 @@ export const TWEAK_DEFAULTS: Tweaks = {
   showEditorialHero: false,
   showStreamingRun: true,
   activityDrawerOpen: false,
+  sidebarCollapsed: false,
   accentColor: "#3C43E7",
   editorFlow: "presandbox",
 };

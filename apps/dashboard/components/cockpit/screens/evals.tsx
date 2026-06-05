@@ -12,7 +12,7 @@ const D = AIWF_DATA;
 export function EvalsScreen() {
   const groups = ["safety", "quality", "ops"];
   return (
-    <div className="flex flex-col gap-4 px-6 pt-5 pb-8">
+    <div className="flex flex-col gap-4 px-4 lg:px-6 pt-5 pb-8">
       <div className="flex items-end justify-between">
         <div>
           <div className="font-mono text-[10px] uppercase tracking-[0.06em] text-neutral-500">Arthur engine · continuous evaluation</div>
@@ -36,9 +36,9 @@ export function EvalsScreen() {
           style={{ borderLeft: "3px solid " + accents[g] }}
           pad={0}>
 
-            <div className="grid grid-cols-2">
+            <div className="grid grid-cols-1 lg:grid-cols-2">
               {list.map((e, i) =>
-              <div key={e.metric} className={`flex flex-col gap-2.5 px-5 py-4 ${i < list.length - (list.length % 2 === 0 ? 2 : 1) ? "border-b border-neutral-200" : ""} ${i % 2 === 0 ? "border-r border-neutral-200" : ""}`}>
+              <div key={e.metric} className={`flex flex-col gap-2.5 px-5 py-4 ${i < list.length - 1 ? "border-b border-neutral-200" : ""} ${i >= list.length - (list.length % 2 === 0 ? 2 : 1) ? "lg:border-b-0" : ""} ${i % 2 === 0 ? "lg:border-r lg:border-neutral-200" : ""}`}>
                   <div className="flex items-center justify-between">
                     <span className="font-body text-sm font-medium text-neutral-900">{e.metric}</span>
                     {e.status === "pass" ? <CkChip tone="success">Pass</CkChip> :

@@ -4,6 +4,7 @@ import {
   OverviewScreen,
   type OverviewScreenData,
 } from "@/components/cockpit/screens/overview";
+import { OverviewMobileScreen } from "@/components/cockpit/mobile/screens/overview-mobile";
 import type {
   KpisResponse,
   EvalHealthResponse,
@@ -57,5 +58,10 @@ export async function OverviewData() {
     recentRuns,
     workflows,
   };
-  return <OverviewScreen data={data} />;
+  return (
+    <>
+      <div className="hidden lg:block"><OverviewScreen data={data} /></div>
+      <div className="lg:hidden"><OverviewMobileScreen data={data} /></div>
+    </>
+  );
 }

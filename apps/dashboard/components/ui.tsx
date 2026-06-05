@@ -98,6 +98,7 @@ export function CkCard({
   action,
   children,
   style,
+  className,
   pad = 20,
 }: {
   title?: React.ReactNode;
@@ -105,11 +106,12 @@ export function CkCard({
   action?: React.ReactNode;
   children: React.ReactNode;
   style?: React.CSSProperties;
+  className?: string;
   pad?: number;
 }) {
   const hasHeader = title || eyebrow || action;
   return (
-    <section className="bg-panel border border-neutral-200 rounded-sm" style={style}>
+    <section className={`bg-panel border border-neutral-200 rounded-sm${className ? " " + className : ""}`} style={style}>
       {hasHeader && (
         <header
           className={`flex items-baseline justify-between gap-3 px-5 pt-[18px] pb-[14px] ${pad === 0 ? "border-b border-neutral-200" : ""}`}

@@ -12,14 +12,27 @@ import {
   TWEAK_DEFAULTS,
   type Tweaks,
 } from "@/components/cockpit/context";
-import { CkSidebar, CkTopbar } from "@/components/cockpit/chrome";
+import { CkSidebar } from "@/components/cockpit/chrome";
 import { CkActivityDrawer } from "@/components/cockpit/activity-drawer";
+import { BottomTabBar } from "@/components/cockpit/mobile/bottom-tab-bar";
+import { MobileHeader } from "@/components/cockpit/mobile/mobile-header";
+import { MoreSheet } from "@/components/cockpit/mobile/more-sheet";
 
 /** Overview lives at `/`; every other screen is `/<id>` (matches the nav ids). */
 const pathForScreen = (id: string) => (id === "overview" ? "/" : `/${id}`);
 const screenForPath = (path: string) => {
   const seg = path.replace(/^\/+/, "").split("/")[0];
   return seg === "" ? "overview" : seg;
+};
+
+const TITLE_FOR_SCREEN: Record<string, string> = {
+  overview: "Overview",
+  runs: "Workflow runs",
+  prompts: "Prompts",
+  evals: "Arthur evals",
+  cost: "Cost & usage",
+  editor: "Workflow editor",
+  trace: "Run trace",
 };
 
 /**
@@ -34,12 +47,14 @@ export function CockpitShell({ children }: { children: React.ReactNode }) {
   const screen = screenForPath(pathname);
 
   const [t, setTweak] = useTweaks<Tweaks>(TWEAK_DEFAULTS);
-  const [persona, setPersona] = useState("swe");
-  const [range, setRange] = useState("24h");
-  const [env, setEnv] = useState("prod");
+  const [persona] = useState("swe");
+  const [range] = useState("24h");
+  const [env] = useState("prod");
   const [activityOpen, setActivityOpen] = useState<boolean>(
     !!t.activityDrawerOpen,
   );
+  const [moreOpen, setMoreOpen] = useState(false);
+  const moreScreens = ["prompts", "evals", "cost"];
 
   useEffect(() => {
     setActivityOpen(!!t.activityDrawerOpen);
@@ -53,27 +68,45 @@ export function CockpitShell({ children }: { children: React.ReactNode }) {
     <CockpitCtx.Provider
       value={{ t, setTweak, persona, range, env, openRun }}
     >
-      <div className="h-screen w-screen flex overflow-hidden bg-app-bg relative">
-        <CkSidebar
-          active={screen}
-          onNav={(id) => router.push(pathForScreen(id))}
-        />
-        <main className="flex-1 flex flex-col min-w-0 min-h-0">
-          <CkTopbar
-            persona={persona}
-            setPersona={setPersona}
-            range={range}
-            setRange={setRange}
-            env={env}
-            setEnv={setEnv}
+      <div className="h-dvh w-screen flex flex-col lg:flex-row overflow-hidden bg-app-bg relative">
+        {/* Desktop sidebar — lg and up only */}
+        <div className="hidden lg:flex">
+          <CkSidebar
+            active={screen}
+            onNav={(id) => router.push(pathForScreen(id))}
+            collapsed={!!t.sidebarCollapsed}
+            onToggleCollapse={() => setTweak("sidebarCollapsed", !t.sidebarCollapsed)}
           />
+        </div>
+
+        <main className="flex-1 flex flex-col min-w-0 min-h-0">
+          {/* Mobile header */}
+          <div className="lg:hidden">
+            <MobileHeader title={TITLE_FOR_SCREEN[screen] ?? "AI Workflow"} />
+          </div>
+
           <div className="flex-1 overflow-auto min-h-0">{children}</div>
+
+          {/* Mobile bottom tab bar */}
+          <div className="lg:hidden">
+            <BottomTabBar
+              active={screen}
+              moreActive={moreScreens.includes(screen)}
+              onNav={(id) => router.push(pathForScreen(id))}
+              onOpenMore={() => setMoreOpen(true)}
+            />
+          </div>
         </main>
 
-        <CkActivityDrawer
-          open={activityOpen}
-          onClose={() => setActivityOpen(false)}
-        />
+        {/* Activity drawer — desktop only (removed on mobile by decision) */}
+        <div className="hidden lg:block">
+          <CkActivityDrawer open={activityOpen} onClose={() => setActivityOpen(false)} />
+        </div>
+
+        {/* Mobile "More" menu */}
+        <div className="lg:hidden">
+          <MoreSheet open={moreOpen} onClose={() => setMoreOpen(false)} active={screen} onNav={(id) => router.push(pathForScreen(id))} />
+        </div>
       </div>
     </CockpitCtx.Provider>
   );

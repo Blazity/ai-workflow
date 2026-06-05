@@ -11,3 +11,5 @@ dist/
 .workflow-data/
 .env.e2e
 .worktrees/
+.superpowers/
+*.tsbuildinfo
