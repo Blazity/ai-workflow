@@ -1,11 +1,9 @@
 import { describe, expect, it } from "vitest";
-
-const deploymentUrl = process.env.BLAZEBOT_DEPLOYMENT_URL;
-if (!deploymentUrl) throw new Error("BLAZEBOT_DEPLOYMENT_URL is not set");
+import { e2eEnv } from "../env.js";
 
 describe("US-27: post-pr-gate webhook rejects invalid HMAC", () => {
   it("returns 401 when X-Hub-Signature-256 is missing", async () => {
-    const res = await fetch(`${deploymentUrl}/webhooks/github`, {
+    const res = await fetch(`${e2eEnv.E2E_BASE_URL}/webhooks/github`, {
       method: "POST",
       headers: { "content-type": "application/json", "x-github-event": "pull_request" },
       body: JSON.stringify({ action: "opened" }),
@@ -14,7 +12,7 @@ describe("US-27: post-pr-gate webhook rejects invalid HMAC", () => {
   });
 
   it("returns 401 when X-Hub-Signature-256 is invalid", async () => {
-    const res = await fetch(`${deploymentUrl}/webhooks/github`, {
+    const res = await fetch(`${e2eEnv.E2E_BASE_URL}/webhooks/github`, {
       method: "POST",
       headers: {
         "content-type": "application/json",
