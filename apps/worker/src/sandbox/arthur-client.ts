@@ -23,7 +23,58 @@ interface SearchResponse {
   tasks: ArthurTask[];
 }
 
+/**
+ * One trace row from `GET /api/v1/traces`. Arthur has no pre-aggregated overview
+ * endpoint, so the cost collector pulls these rows and aggregates client-side.
+ * Token/cost come straight from Arthur (`*_token_cost` may be null when cost is
+ * unavailable — callers treat null as 0). Extra fields the API returns are
+ * ignored.
+ */
+export interface TraceRow {
+  task_id: string;
+  total_token_count: number;
+  total_token_cost: number | null;
+  /** Trace start, ISO. Used to bucket daily spend. */
+  start_time: string;
+}
+
+interface TraceListResponse {
+  count: number;
+  traces: TraceRow[];
+}
+
+/** One Arthur prompt version's metadata (no message body). */
+export interface ArthurPromptVersion {
+  version: number;
+  created_at: string;
+  deleted_at: string | null;
+  model_provider: string;
+  model_name: string;
+  tags: string[];
+  num_messages: number;
+  num_tools: number;
+}
+
+interface AgenticPromptVersionListResponse {
+  count: number;
+  versions: ArthurPromptVersion[];
+}
+
+/** Split `items` into consecutive chunks of at most `size`. */
+function chunk<T>(items: T[], size: number): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));
+  return out;
+}
+
 export class ArthurClient {
+  /** Page size for the paginated trace endpoint. */
+  private static readonly PAGE_SIZE = 100;
+  /** One oversized page for task enumeration (`GET /api/v2/tasks` pagination is unreliable). */
+  private static readonly TASK_PAGE_SIZE = 1000;
+  /** Max `task_ids` per trace query — keeps the GET URL well under server limits. */
+  private static readonly TASK_ID_BATCH = 50;
+
   constructor(
     private readonly baseUrl: string,
     private readonly apiKey: string,
@@ -52,6 +103,20 @@ export class ArthurClient {
     if (!res.ok) {
       const body = await res.text().catch(() => "");
       throw new Error(`Arthur ${init.method ?? "GET"} ${path} → ${res.status}: ${body.slice(0, 300)}`);
+    }
+    return (await res.json()) as T;
+  }
+
+  /** GET that treats 404 as "absent" (returns null) instead of throwing — for the prompt read paths. */
+  private async getAllowing404<T>(path: string): Promise<T | null> {
+    const res = await fetch(`${this.baseUrl}${path}`, {
+      method: "GET",
+      headers: { Authorization: `Bearer ${this.apiKey}`, "ngrok-skip-browser-warning": "true" },
+    });
+    if (res.status === 404) return null;
+    if (!res.ok) {
+      const body = await res.text().catch(() => "");
+      throw new Error(`Arthur GET ${path} → ${res.status}: ${body.slice(0, 300)}`);
     }
     return (await res.json()) as T;
   }
@@ -124,21 +189,8 @@ export class ArthurClient {
   /** Fetch a tagged prompt version. Returns the first message's content, or null if 404. */
   async getPromptByTag(taskId: string, name: string, tag: string): Promise<string | null> {
     const path = `/api/v1/tasks/${encodeURIComponent(taskId)}/prompts/${encodeURIComponent(name)}/versions/tags/${encodeURIComponent(tag)}`;
-    const res = await fetch(`${this.baseUrl}${path}`, {
-      method: "GET",
-      headers: {
-        "Authorization": `Bearer ${this.apiKey}`,
-        "ngrok-skip-browser-warning": "true",
-      },
-    });
-    if (res.status === 404) return null;
-    if (!res.ok) {
-      const body = await res.text().catch(() => "");
-      throw new Error(`Arthur GET ${path} → ${res.status}: ${body.slice(0, 300)}`);
-    }
-    const prompt = (await res.json()) as AgenticPrompt;
-    const first = prompt.messages?.[0];
-    return first?.content ?? null;
+    const prompt = await this.getAllowing404<AgenticPrompt>(path);
+    return prompt?.messages?.[0]?.content ?? null;
   }
 
   /** Create a new version of a named prompt on a task. Content is sent as a single user message. */
@@ -170,5 +222,108 @@ export class ArthurClient {
         body: JSON.stringify({ tag }),
       },
     );
+  }
+
+  /**
+   * Enumerate every task via `GET /api/v2/tasks` (one large page). The trace read
+   * endpoints require an explicit `task_ids` list (empty → 400), so cost/evals
+   * fan these ids into `listTraces`/`countTraces`. Includes archived tasks so
+   * historical spend stays in the totals.
+   *
+   * NOTE: `tasks/search` and the `page` param are unreliable on this Arthur build
+   * (page is effectively ignored, the result set drifts with page size), so we
+   * read a single oversized page rather than looping. Single-tenant task counts
+   * stay well under the cap; dedupe defensively.
+   */
+  async listAllTasks(): Promise<ArthurTask[]> {
+    const tasks = await this.request<ArthurTask[]>(
+      `/api/v2/tasks?page_size=${ArthurClient.TASK_PAGE_SIZE}`,
+      { method: "GET" },
+    );
+    const seen = new Set<string>();
+    return tasks.filter((t) => (seen.has(t.id) ? false : (seen.add(t.id), true)));
+  }
+
+  /**
+   * All trace rows for `taskIds` in the window, from `GET /api/v1/traces`.
+   * Batches the ids (the list lands in the query string, so we cap each request)
+   * and pages each batch via the `count` field. The collector aggregates these
+   * client-side — Arthur exposes no pre-aggregated cost/overview endpoint.
+   */
+  async listTraces(taskIds: string[], startTime: string, endTime: string): Promise<TraceRow[]> {
+    const out: TraceRow[] = [];
+    for (const batch of chunk(taskIds, ArthurClient.TASK_ID_BATCH)) {
+      let collected = 0;
+      let total = Infinity;
+      // Arthur pages are 0-indexed — page=1 skips the first page of results.
+      for (let page = 0; collected < total; page++) {
+        const qs = this.traceQuery(batch, startTime, endTime, { page: String(page) });
+        const { count, traces } = await this.request<TraceListResponse>(
+          `/api/v1/traces?${qs}`,
+          { method: "GET" },
+        );
+        total = count;
+        if (traces.length === 0) break;
+        out.push(...traces);
+        collected += traces.length;
+      }
+    }
+    return out;
+  }
+
+  /**
+   * Count of traces matching the window + optional `filters` (e.g. an eval-status
+   * filter). Reads the `count` field with `page_size=1` so no rows are fetched;
+   * sums across task-id batches (the batches are disjoint, so counts add).
+   */
+  async countTraces(
+    taskIds: string[],
+    startTime: string,
+    endTime: string,
+    filters: Record<string, string> = {},
+  ): Promise<number> {
+    let total = 0;
+    for (const batch of chunk(taskIds, ArthurClient.TASK_ID_BATCH)) {
+      const qs = this.traceQuery(batch, startTime, endTime, { page_size: "1", ...filters });
+      const { count } = await this.request<TraceListResponse>(`/api/v1/traces?${qs}`, {
+        method: "GET",
+      });
+      total += count;
+    }
+    return total;
+  }
+
+  /** Build the shared `GET /api/v1/traces` query (repeated `task_ids` + window + extras). */
+  private traceQuery(
+    taskIds: string[],
+    startTime: string,
+    endTime: string,
+    extra: Record<string, string>,
+  ): URLSearchParams {
+    const p = new URLSearchParams();
+    for (const id of taskIds) p.append("task_ids", id);
+    p.set("start_time", startTime);
+    p.set("end_time", endTime);
+    if (!("page_size" in extra)) p.set("page_size", String(ArthurClient.PAGE_SIZE));
+    for (const [k, v] of Object.entries(extra)) p.set(k, v);
+    return p;
+  }
+
+  /** List version metadata for a named prompt (newest first). First page only. Empty on 404. */
+  async listPromptVersions(taskId: string, name: string): Promise<ArthurPromptVersion[]> {
+    const path = `/api/v1/tasks/${encodeURIComponent(taskId)}/prompts/${encodeURIComponent(name)}/versions`;
+    const data = await this.getAllowing404<AgenticPromptVersionListResponse>(path);
+    return [...(data?.versions ?? [])].sort((a, b) => b.version - a.version);
+  }
+
+  /**
+   * Fetch the body of a specific version. `version` accepts an integer,
+   * `"latest"`, an ISO datetime, or a tag. Returns the first message's content,
+   * or null on 404. Generalizes the by-version GET that `getPromptByTag` uses.
+   */
+  async getPromptVersionBody(taskId: string, name: string, version: number | string): Promise<string | null> {
+    const path = `/api/v1/tasks/${encodeURIComponent(taskId)}/prompts/${encodeURIComponent(name)}/versions/${encodeURIComponent(String(version))}`;
+    const prompt = await this.getAllowing404<AgenticPrompt>(path);
+    return prompt?.messages?.[0]?.content ?? null;
   }
 }
