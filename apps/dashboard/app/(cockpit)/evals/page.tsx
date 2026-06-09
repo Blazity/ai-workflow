@@ -1,5 +1,13 @@
 // apps/dashboard/app/(cockpit)/evals/page.tsx — Arthur evals ("/evals")
-import { EvalsScreen } from "@/components/cockpit/screens/evals";
+import { Suspense } from "react";
+
+import { EvalsData } from "@/app/evals-data";
+import { EvalsSkeleton } from "@/app/evals-skeleton";
+
 export default function EvalsPage() {
-  return <EvalsScreen />;
+  return (
+    <Suspense fallback={<EvalsSkeleton />}>
+      <EvalsData />
+    </Suspense>
+  );
 }
