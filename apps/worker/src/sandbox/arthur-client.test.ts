@@ -240,106 +240,88 @@ describe("ArthurClient", () => {
     });
   });
 
-  describe("getTracesOverview", () => {
-    it("POSTs task_ids/start/end and returns the parsed list response", async () => {
-      mockFetch.mockResolvedValueOnce(jsonResponse({
-        count: 1,
-        overviews: [
-          {
-            task_id: "AWT-42",
-            trace_count: 3,
-            trace_token_count: 1200,
-            trace_token_cost: 0.42,
-            eval_count: 6,
-            continuous_eval_success_rate: 0.9,
-            last_active: "2026-06-08T00:00:00Z",
-          },
-        ],
-      }));
+  describe("listAllTasks", () => {
+    it("GETs one oversized page and dedupes by id", async () => {
+      mockFetch.mockResolvedValueOnce(jsonResponse([
+        { id: "t1", name: "AWT-1" },
+        { id: "t2", name: "AWT-2" },
+        { id: "t1", name: "AWT-1" },
+      ]));
       const client = new ArthurClient("http://host", "secret");
-      const res = await client.getTracesOverview(["AWT-42"], "2026-06-01T00:00:00Z", "2026-06-08T00:00:00Z");
+      const tasks = await client.listAllTasks();
 
-      expect(res.count).toBe(1);
-      expect(res.overviews[0].task_id).toBe("AWT-42");
+      expect(tasks.map((t) => t.id)).toEqual(["t1", "t2"]);
       const [url, init] = mockFetch.mock.calls[0];
-      expect(url).toBe("http://host/api/v1/traces/overview");
-      expect(init.method).toBe("POST");
+      expect(url).toBe("http://host/api/v2/tasks?page_size=1000");
+      expect(init.method).toBe("GET");
       expect(init.headers.Authorization).toBe("Bearer secret");
-      expect(JSON.parse(init.body)).toEqual({
-        task_ids: ["AWT-42"],
-        start_time: "2026-06-01T00:00:00Z",
-        end_time: "2026-06-08T00:00:00Z",
-      });
     });
   });
 
-  describe("getTracesTimeseries", () => {
-    it("POSTs single task_id + bucket_size and unwraps the { points } envelope", async () => {
-      mockFetch.mockResolvedValueOnce(jsonResponse({
-        points: [
-          { timestamp: "2026-06-07T00:00:00Z", trace_count: 1, trace_token_count: 400, trace_token_cost: 0.1 },
-        ],
-      }));
+  describe("listTraces", () => {
+    it("pages from 0 (0-indexed) and accumulates until count is reached", async () => {
+      mockFetch
+        .mockResolvedValueOnce(jsonResponse({
+          count: 4,
+          traces: [
+            { task_id: "AWT-42", total_token_count: 100, total_token_cost: 0.5, start_time: "2026-06-01T00:00:00Z" },
+            { task_id: "AWT-42", total_token_count: 200, total_token_cost: 1.0, start_time: "2026-06-01T01:00:00Z" },
+          ],
+        }))
+        .mockResolvedValueOnce(jsonResponse({
+          count: 4,
+          traces: [
+            { task_id: "AWT-43", total_token_count: 50, total_token_cost: null, start_time: "2026-06-02T00:00:00Z" },
+            { task_id: "AWT-43", total_token_count: 70, total_token_cost: 0.3, start_time: "2026-06-02T00:00:00Z" },
+          ],
+        }));
       const client = new ArthurClient("http://host", "k");
-      const points = await client.getTracesTimeseries("AWT-42", "s", "e", "day");
+      const traces = await client.listTraces(["AWT-42", "AWT-43"], "s", "e");
 
-      expect(points).toHaveLength(1);
-      expect(points[0].trace_token_cost).toBe(0.1);
-      const [url, init] = mockFetch.mock.calls[0];
-      expect(url).toBe("http://host/api/v1/traces/overview/timeseries");
-      expect(init.method).toBe("POST");
-      expect(JSON.parse(init.body)).toEqual({
-        task_id: "AWT-42",
-        start_time: "s",
-        end_time: "e",
-        bucket_size: "day",
-      });
+      expect(traces).toHaveLength(4);
+      const url0 = mockFetch.mock.calls[0][0] as string;
+      const url1 = mockFetch.mock.calls[1][0] as string;
+      expect(url0).toContain("/api/v1/traces?");
+      expect(url0).toContain("task_ids=AWT-42");
+      expect(url0).toContain("task_ids=AWT-43");
+      expect(url0).toContain("page=0");
+      expect(url1).toContain("page=1");
     });
 
-    it("accepts a bare array response", async () => {
-      mockFetch.mockResolvedValueOnce(jsonResponse([
-        { timestamp: "t", trace_count: 2, trace_token_count: 10, trace_token_cost: null },
-      ]));
+    it("stops on an empty page", async () => {
+      mockFetch.mockResolvedValueOnce(jsonResponse({ count: 99, traces: [] }));
       const client = new ArthurClient("http://host", "k");
-      const points = await client.getTracesTimeseries("AWT-42", "s", "e", "day");
-      expect(points).toHaveLength(1);
+      const traces = await client.listTraces(["AWT-42"], "s", "e");
+      expect(traces).toEqual([]);
+      expect(mockFetch).toHaveBeenCalledTimes(1);
     });
   });
 
-  describe("aggregateSpanTokensByModel", () => {
-    it("sums tokens/cost grouped by model_name and skips null models", async () => {
-      mockFetch.mockResolvedValueOnce(jsonResponse({
-        spans: [
-          { model_name: "claude-opus-4-6", total_token_count: 100, total_token_cost: 0.5 },
-          { model_name: "claude-opus-4-6", total_token_count: 50, total_token_cost: 0.25 },
-          { model_name: "gpt-5", total_token_count: 200, total_token_cost: 1.0 },
-          { model_name: null, total_token_count: 999, total_token_cost: 9.0 },
-        ],
-      }));
+  describe("countTraces", () => {
+    it("reads the count field with page_size=1 and passes filters", async () => {
+      mockFetch.mockResolvedValueOnce(jsonResponse({ count: 7, traces: [] }));
       const client = new ArthurClient("http://host", "k");
-      const rows = await client.aggregateSpanTokensByModel(["AWT-42"], "s", "e");
-
-      expect(rows).toEqual([
-        { model: "claude-opus-4-6", tokens: 150, cost: 0.75 },
-        { model: "gpt-5", tokens: 200, cost: 1.0 },
-      ]);
-      const [url, init] = mockFetch.mock.calls[0];
-      expect(url).toBe("http://host/api/v1/traces/spans");
-      expect(JSON.parse(init.body)).toEqual({
-        task_ids: ["AWT-42"],
-        start_time: "s",
-        end_time: "e",
-        limit: 1000,
+      const n = await client.countTraces(["AWT-42"], "s", "e", {
+        continuous_eval_run_status: "passed",
       });
+
+      expect(n).toBe(7);
+      const [url, init] = mockFetch.mock.calls[0];
+      expect(url).toContain("page_size=1");
+      expect(url).toContain("continuous_eval_run_status=passed");
+      expect(init.method).toBe("GET");
     });
 
-    it("treats null token/cost as 0", async () => {
-      mockFetch.mockResolvedValueOnce(jsonResponse([
-        { model_name: "m", total_token_count: null, total_token_cost: null },
-      ]));
+    it("sums counts across task-id batches", async () => {
+      const ids = Array.from({ length: 60 }, (_, i) => `t${i}`); // > TASK_ID_BATCH (50) → 2 batches
+      mockFetch
+        .mockResolvedValueOnce(jsonResponse({ count: 2, traces: [] }))
+        .mockResolvedValueOnce(jsonResponse({ count: 3, traces: [] }));
       const client = new ArthurClient("http://host", "k");
-      const rows = await client.aggregateSpanTokensByModel([], "s", "e");
-      expect(rows).toEqual([{ model: "m", tokens: 0, cost: 0 }]);
+      const n = await client.countTraces(ids, "s", "e");
+
+      expect(n).toBe(5);
+      expect(mockFetch).toHaveBeenCalledTimes(2);
     });
   });
 

@@ -1,11 +1,9 @@
 "use client";
 
 import React from "react";
-import { CkCard, CkKPI, CkDot } from "@/components/ui";
-import { AreaChart, Donut } from "@/components/charts";
+import { CkCard, CkKPI } from "@/components/ui";
+import { AreaChart } from "@/components/charts";
 import type { CostResponse } from "@shared/contracts";
-
-const DONUT_COLORS = ["#3C43E7", "#FD6027", "#FFC800", "#181B20", "#8FC548"];
 
 /** Short label from an ISO/bucket date string for the daily-spend x-axis. */
 function shortDate(date: string): string {
@@ -31,9 +29,8 @@ export function CostScreen({ data }: { data: CostResponse }) {
     );
   }
 
-  const { totals, byModel, byWorkflow, daily } = data;
+  const { totals, byWorkflow, daily } = data;
   const total = totals.totalTokenCost;
-  const modelCostTotal = byModel.reduce((a, m) => a + m.cost, 0);
 
   return (
     <div className="flex flex-col gap-4 px-4 lg:px-6 pt-5 pb-8">
@@ -50,8 +47,7 @@ export function CostScreen({ data }: { data: CostResponse }) {
         <CkKPI label="Cost / run avg" value={"$" + totals.costPerRun.toFixed(2)} sub="all workflows" />
       </div>
 
-      <div className="flex flex-col lg:grid lg:grid-cols-[1.5fr_1fr] gap-3">
-        <CkCard eyebrow="Spend trajectory" title="Daily spend · MTD">
+      <CkCard eyebrow="Spend trajectory" title="Daily spend · MTD">
           {daily.length > 0 ? (
             <div className="overflow-x-auto">
               <AreaChart
@@ -67,71 +63,6 @@ export function CostScreen({ data }: { data: CostResponse }) {
           ) : (
             <div className="px-5 py-10 text-center text-neutral-500 text-sm">No spend data</div>
           )}
-        </CkCard>
-
-        <CkCard eyebrow="Arthur" title="Model mix">
-          {byModel.length > 0 ? (
-            <div className="flex items-center gap-[18px]">
-              <Donut
-                shares={byModel.map((m) => (modelCostTotal ? m.cost / modelCostTotal : 0))}
-                size={140}
-                thickness={22}
-                colors={DONUT_COLORS}
-                centerLabel={"$" + Math.round(total)}
-                centerSub="MTD"
-              />
-              <div className="flex flex-1 flex-col gap-2.5">
-                {byModel.map((m, i) =>
-                  <div key={m.model} className="flex items-center gap-2 font-body text-xs">
-                    <CkDot color={DONUT_COLORS[i % DONUT_COLORS.length]} />
-                    <span className="flex-1 font-mono text-neutral-900">{m.model}</span>
-                    <span className="font-mono font-medium text-neutral-700">${m.cost.toFixed(0)}</span>
-                  </div>
-                )}
-              </div>
-            </div>
-          ) : (
-            <div className="px-5 py-10 text-center text-neutral-500 text-sm">No model data</div>
-          )}
-        </CkCard>
-      </div>
-
-      <CkCard eyebrow="Per-model breakdown" title="Spend & throughput" pad={0}>
-        {byModel.length > 0 ? (
-          <div className="overflow-x-auto">
-          <table className="w-full border-collapse font-body text-[13px]">
-            <thead>
-              <tr className="bg-neutral-100 text-neutral-700 font-mono text-[10px] uppercase tracking-[0.06em]">
-                {["Model", "Tokens", "Cost", "Share"].map((h, i) =>
-                  <th key={i} className={`px-4 py-2.5 font-medium border-b border-neutral-200 ${i >= 1 ? "text-right" : "text-left"}`}>{h}</th>
-                )}
-              </tr>
-            </thead>
-            <tbody>
-              {byModel.map((m, i) => {
-                const share = modelCostTotal ? m.cost / modelCostTotal : 0;
-                return (
-                  <tr key={m.model} className={i < byModel.length - 1 ? "border-b border-neutral-200" : ""}>
-                    <td className="px-4 py-3 font-mono font-medium text-neutral-900">{m.model}</td>
-                    <td className="px-4 py-3 text-right font-mono">{(m.tokens / 1_000_000).toFixed(2)}M</td>
-                    <td className="px-4 py-3 text-right font-mono font-semibold">${m.cost.toFixed(2)}</td>
-                    <td className="px-4 py-3 text-right">
-                      <div className="inline-flex items-center gap-2">
-                        <div className="w-20 h-1.5 bg-app-bg rounded-[1px]">
-                          <div className="h-full bg-mariner rounded-[1px]" style={{ width: share * 100 + "%" }} />
-                        </div>
-                        <span className="font-mono text-[11px] w-9 text-right">{(share * 100).toFixed(0)}%</span>
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-          </div>
-        ) : (
-          <div className="px-5 py-10 text-center text-neutral-500 text-sm">No model breakdown available</div>
-        )}
       </CkCard>
 
       <CkCard eyebrow="Per-workflow breakdown" title="Where the spend is going" pad={0}>

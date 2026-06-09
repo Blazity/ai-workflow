@@ -8,7 +8,6 @@ import { logger } from "../../../lib/logger.js";
 const EMPTY: Omit<CostResponse, "generatedAt" | "available"> = {
   window: { start: "", end: "" },
   totals: { totalTokenCost: 0, totalTokens: 0, traceCount: 0, costPerRun: 0 },
-  byModel: [],
   byWorkflow: [],
   daily: [],
 };
@@ -32,8 +31,7 @@ export default defineEventHandler(async (event): Promise<CostResponse> => {
       env.GENAI_ENGINE_TRACE_ENDPOINT,
       env.GENAI_ENGINE_API_KEY,
     );
-    // TODO(arthur-verify): bucket_size value ("day") is unconfirmed against a live instance.
-    const data = await collectCost(client, { now: new Date(), bucketSize: "day" });
+    const data = await collectCost(client, { now: new Date() });
     return { generatedAt, available: true, ...data };
   } catch (err) {
     // Arthur unreachable / 401 / unexpected shape — degrade like runs.get.ts.

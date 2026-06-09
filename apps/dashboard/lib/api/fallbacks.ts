@@ -56,7 +56,6 @@ export function costFallback(now: string): CostResponse {
     available: false,
     window: { start: now, end: now },
     totals: { totalTokenCost: 0, totalTokens: 0, traceCount: 0, costPerRun: 0 },
-    byModel: [],
     byWorkflow: [],
     daily: [],
   };
