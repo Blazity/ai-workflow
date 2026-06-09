@@ -38,15 +38,6 @@ export type EvalsResponse =
     }
   | { available: false; generatedAt: string; reason: string };
 
-export interface CostByModelEntry {
-  /** Arthur span model_name. */
-  model: string;
-  /** USD, summed total_token_cost over the window. */
-  cost: number;
-  /** Summed total_token_count over the window. */
-  tokens: number;
-}
-
 export interface CostByWorkflowEntry {
   /** Arthur task_id (per ticket-run, e.g. "AWT-42" / "AWT-42.1"). */
   taskId: string;
@@ -69,22 +60,21 @@ export interface CostResponse {
    * screen renders its empty/N-A state.
    */
   available: boolean;
-  /** Window the figures cover (the request's start_time/end_time). ISO. */
+  /** Window the figures cover (month-to-date). ISO. */
   window: { start: string; end: string };
   totals: {
-    /** USD, Σ overviews[].trace_token_cost. */
+    /** USD, Σ trace total_token_cost over the window. */
     totalTokenCost: number;
-    /** Σ overviews[].trace_token_count. */
+    /** Σ trace total_token_count over the window. */
     totalTokens: number;
-    /** Σ overviews[].trace_count. */
+    /** Number of traces in the window. */
     traceCount: number;
     /** totalTokenCost / max(1, traceCount). */
     costPerRun: number;
   };
-  byModel: CostByModelEntry[];
-  /** Per-task (= per ticket-run) breakdown from /traces/overview. */
+  /** Per-task (= per ticket-run) breakdown, aggregated from the trace rows. */
   byWorkflow: CostByWorkflowEntry[];
-  /** Per-day spend, oldest→newest, merged across tasks from the timeseries. */
+  /** Per-day spend, oldest→newest, bucketed by trace start_time. */
   daily: { date: string; cost: number; tokens: number }[];
 }
 

@@ -24,48 +24,23 @@ interface SearchResponse {
 }
 
 /**
- * Per-task aggregate over a window from `POST /api/v1/traces/overview`.
- * Token/cost fields come from Arthur's `TokenCountCostSchema`; `trace_token_cost`
- * may be null when cost is unavailable. Typed per the documented shape — these
- * read endpoints are UNVERIFIED against a live instance, so parsing stays
- * defensive (callers treat null cost as 0).
+ * One trace row from `GET /api/v1/traces`. Arthur has no pre-aggregated overview
+ * endpoint, so the cost collector pulls these rows and aggregates client-side.
+ * Token/cost come straight from Arthur (`*_token_cost` may be null when cost is
+ * unavailable — callers treat null as 0). Extra fields the API returns are
+ * ignored.
  */
-export interface TraceOverview {
+export interface TraceRow {
   task_id: string;
-  trace_count: number;
-  trace_token_count: number;
-  trace_token_cost: number | null;
-  eval_count: number;
-  continuous_eval_success_rate: number;
-  last_active?: string;
-}
-
-export interface TraceOverviewListResponse {
-  count: number;
-  overviews: TraceOverview[];
-}
-
-/** One bucket from `POST /api/v1/traces/overview/timeseries` (single task). */
-export interface TraceTimeseriesPoint {
-  timestamp: string;
-  trace_count: number;
-  trace_token_count: number;
-  trace_token_cost: number | null;
-  continuous_eval_success_rate?: number;
-}
-
-/** Token/cost-by-model aggregation result (one row per Arthur `model_name`). */
-export interface ModelTokenCost {
-  model: string;
-  tokens: number;
-  cost: number;
-}
-
-/** A span row from `GET /api/v1/traces/spans` carrying model + token/cost fields. */
-interface SpanTokenCost {
-  model_name: string | null;
-  total_token_count: number | null;
+  total_token_count: number;
   total_token_cost: number | null;
+  /** Trace start, ISO. Used to bucket daily spend. */
+  start_time: string;
+}
+
+interface TraceListResponse {
+  count: number;
+  traces: TraceRow[];
 }
 
 /** One Arthur prompt version's metadata (no message body). */
@@ -85,7 +60,21 @@ interface AgenticPromptVersionListResponse {
   versions: ArthurPromptVersion[];
 }
 
+/** Split `items` into consecutive chunks of at most `size`. */
+function chunk<T>(items: T[], size: number): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));
+  return out;
+}
+
 export class ArthurClient {
+  /** Page size for the paginated trace endpoint. */
+  private static readonly PAGE_SIZE = 100;
+  /** One oversized page for task enumeration (`GET /api/v2/tasks` pagination is unreliable). */
+  private static readonly TASK_PAGE_SIZE = 1000;
+  /** Max `task_ids` per trace query — keeps the GET URL well under server limits. */
+  private static readonly TASK_ID_BATCH = 50;
+
   constructor(
     private readonly baseUrl: string,
     private readonly apiKey: string,
@@ -236,91 +225,88 @@ export class ArthurClient {
   }
 
   /**
-   * Fleet eval/cost aggregate over a window. One call covers multiple tasks;
-   * sum across `overviews` for fleet totals. `taskIds` may be empty (see the
-   * empty-means-all-org open question in the specs). Shared by /evals + /cost.
+   * Enumerate every task via `GET /api/v2/tasks` (one large page). The trace read
+   * endpoints require an explicit `task_ids` list (empty → 400), so cost/evals
+   * fan these ids into `listTraces`/`countTraces`. Includes archived tasks so
+   * historical spend stays in the totals.
+   *
+   * NOTE: `tasks/search` and the `page` param are unreliable on this Arthur build
+   * (page is effectively ignored, the result set drifts with page size), so we
+   * read a single oversized page rather than looping. Single-tenant task counts
+   * stay well under the cap; dedupe defensively.
    */
-  async getTracesOverview(
-    taskIds: string[],
-    startTime: string,
-    endTime: string,
-  ): Promise<TraceOverviewListResponse> {
-    return this.request<TraceOverviewListResponse>("/api/v1/traces/overview", {
-      method: "POST",
-      body: JSON.stringify({
-        task_ids: taskIds,
-        start_time: startTime,
-        end_time: endTime,
-      }),
-    });
+  async listAllTasks(): Promise<ArthurTask[]> {
+    const tasks = await this.request<ArthurTask[]>(
+      `/api/v2/tasks?page_size=${ArthurClient.TASK_PAGE_SIZE}`,
+      { method: "GET" },
+    );
+    const seen = new Set<string>();
+    return tasks.filter((t) => (seen.has(t.id) ? false : (seen.add(t.id), true)));
   }
 
   /**
-   * Per-bucket timeseries for a single task. The caller fans out one call per
-   * task and merges points by timestamp. The response envelope key is
-   * unverified, so accept both a bare array and a `{ points }` wrapper.
+   * All trace rows for `taskIds` in the window, from `GET /api/v1/traces`.
+   * Batches the ids (the list lands in the query string, so we cap each request)
+   * and pages each batch via the `count` field. The collector aggregates these
+   * client-side — Arthur exposes no pre-aggregated cost/overview endpoint.
    */
-  async getTracesTimeseries(
-    taskId: string,
-    startTime: string,
-    endTime: string,
-    bucketSize: string,
-  ): Promise<TraceTimeseriesPoint[]> {
-    const res = await this.request<{ points?: TraceTimeseriesPoint[] } | TraceTimeseriesPoint[]>(
-      "/api/v1/traces/overview/timeseries",
-      {
-        method: "POST",
-        body: JSON.stringify({
-          task_id: taskId,
-          start_time: startTime,
-          end_time: endTime,
-          bucket_size: bucketSize,
-        }),
-      },
-    );
-    return Array.isArray(res) ? res : (res.points ?? []);
-  }
-
-  /**
-   * By-model token/cost aggregation — Arthur has no per-model overview, so we
-   * fetch span rows (which carry `model_name` + token/cost fields) and sum
-   * grouped by `model_name`. Spans with a null `model_name` are skipped.
-   */
-  async aggregateSpanTokensByModel(
-    taskIds: string[],
-    startTime: string,
-    endTime: string,
-  ): Promise<ModelTokenCost[]> {
-    // TODO(arthur-verify): pagination — first page only, bounded to N spans. The
-    // read endpoints are unverified, so we send a bounded `limit` rather than
-    // looping pages; this makes the ceiling explicit instead of pulling an
-    // unbounded result set and summing it silently in memory.
-    const res = await this.request<{ spans?: SpanTokenCost[] } | SpanTokenCost[]>(
-      "/api/v1/traces/spans",
-      {
-        method: "POST",
-        body: JSON.stringify({
-          task_ids: taskIds,
-          start_time: startTime,
-          end_time: endTime,
-          limit: 1000,
-        }),
-      },
-    );
-    const spans = Array.isArray(res) ? res : (res.spans ?? []);
-    const byModel = new Map<string, ModelTokenCost>();
-    for (const span of spans) {
-      if (!span.model_name) continue;
-      const row = byModel.get(span.model_name) ?? {
-        model: span.model_name,
-        tokens: 0,
-        cost: 0,
-      };
-      row.tokens += span.total_token_count ?? 0;
-      row.cost += span.total_token_cost ?? 0;
-      byModel.set(span.model_name, row);
+  async listTraces(taskIds: string[], startTime: string, endTime: string): Promise<TraceRow[]> {
+    const out: TraceRow[] = [];
+    for (const batch of chunk(taskIds, ArthurClient.TASK_ID_BATCH)) {
+      let collected = 0;
+      let total = Infinity;
+      // Arthur pages are 0-indexed — page=1 skips the first page of results.
+      for (let page = 0; collected < total; page++) {
+        const qs = this.traceQuery(batch, startTime, endTime, { page: String(page) });
+        const { count, traces } = await this.request<TraceListResponse>(
+          `/api/v1/traces?${qs}`,
+          { method: "GET" },
+        );
+        total = count;
+        if (traces.length === 0) break;
+        out.push(...traces);
+        collected += traces.length;
+      }
     }
-    return [...byModel.values()];
+    return out;
+  }
+
+  /**
+   * Count of traces matching the window + optional `filters` (e.g. an eval-status
+   * filter). Reads the `count` field with `page_size=1` so no rows are fetched;
+   * sums across task-id batches (the batches are disjoint, so counts add).
+   */
+  async countTraces(
+    taskIds: string[],
+    startTime: string,
+    endTime: string,
+    filters: Record<string, string> = {},
+  ): Promise<number> {
+    let total = 0;
+    for (const batch of chunk(taskIds, ArthurClient.TASK_ID_BATCH)) {
+      const qs = this.traceQuery(batch, startTime, endTime, { page_size: "1", ...filters });
+      const { count } = await this.request<TraceListResponse>(`/api/v1/traces?${qs}`, {
+        method: "GET",
+      });
+      total += count;
+    }
+    return total;
+  }
+
+  /** Build the shared `GET /api/v1/traces` query (repeated `task_ids` + window + extras). */
+  private traceQuery(
+    taskIds: string[],
+    startTime: string,
+    endTime: string,
+    extra: Record<string, string>,
+  ): URLSearchParams {
+    const p = new URLSearchParams();
+    for (const id of taskIds) p.append("task_ids", id);
+    p.set("start_time", startTime);
+    p.set("end_time", endTime);
+    if (!("page_size" in extra)) p.set("page_size", String(ArthurClient.PAGE_SIZE));
+    for (const [k, v] of Object.entries(extra)) p.set(k, v);
+    return p;
   }
 
   /** List version metadata for a named prompt (newest first). First page only. Empty on 404. */

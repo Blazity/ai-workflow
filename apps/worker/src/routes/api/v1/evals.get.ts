@@ -29,14 +29,10 @@ export default defineEventHandler(async (event): Promise<EvalsResponse> => {
       env.GENAI_ENGINE_TRACE_ENDPOINT,
       env.GENAI_ENGINE_API_KEY,
     );
-    // TODO(arthur-verify): pass [] if empty task_ids === all org tasks on
-    // POST /api/v1/traces/overview; otherwise enumerate via /api/v2/tasks/search.
-    const taskIds: string[] = [];
 
     const { windowHours, score, spansGraded, traceCount } =
       await collectEvals({
         client,
-        taskIds,
         windowHours: WINDOW_HOURS,
         now: new Date(),
       });

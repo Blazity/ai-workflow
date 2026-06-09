@@ -1,5 +1,5 @@
 import type { EvalsResponse } from "@shared/contracts";
-import type { TraceOverview } from "../../sandbox/arthur-client.js";
+import type { ArthurTask } from "../../sandbox/arthur-client.js";
 
 const HOUR = 3_600_000;
 
@@ -15,28 +15,30 @@ export type EvalsAggregate = Pick<
  * fake (mirrors `CostArthurClient` for the cost collector).
  */
 export interface EvalsArthurClient {
-  getTracesOverview(
+  listAllTasks(): Promise<ArthurTask[]>;
+  countTraces(
     taskIds: string[],
     startTime: string,
     endTime: string,
-  ): Promise<{ overviews: TraceOverview[] }>;
+    filters?: Record<string, string>,
+  ): Promise<number>;
 }
 
 export interface CollectEvalsOptions {
   client: EvalsArthurClient;
-  // TODO(arthur-verify): unconfirmed whether `taskIds: []` means "all org tasks"
-  // on POST /api/v1/traces/overview. If not, the route must enumerate tasks first.
-  taskIds: string[];
   windowHours: number;
   now: Date;
 }
 
 /**
- * Aggregates Arthur's per-task trace overviews into fleet-wide eval health:
- * eval-count-weighted success rate × 100, summed spans-graded and trace counts
- * over the window. When `spansGraded` sums to 0 (no continuous evals configured
- * / nothing graded), `score` is 0 and the route turns that into
- * `available: false`.
+ * Aggregates Arthur's per-trace eval outcomes into fleet-wide eval health.
+ * Arthur has no eval-overview endpoint, so we count traces by their
+ * `continuous_eval_run_status` over every task in the window:
+ *   - `spansGraded` = graded traces = passed + failed
+ *   - `score`       = pass rate = passed / graded × 100
+ *   - `traceCount`  = total traces in the window (graded or not)
+ * When `spansGraded` is 0 (no continuous evals configured / nothing graded),
+ * `score` is 0 and the route turns that into `available: false`.
  */
 export async function collectEvals(
   opts: CollectEvalsOptions,
@@ -46,29 +48,25 @@ export async function collectEvals(
     opts.now.getTime() - opts.windowHours * HOUR,
   ).toISOString();
 
-  const { overviews } = await opts.client.getTracesOverview(
-    opts.taskIds,
-    startTime,
-    endTime,
-  );
+  const ids = (await opts.client.listAllTasks()).map((t) => t.id);
 
-  const spansGraded = sum(overviews, (o) => o.eval_count);
-  const traceCount = sum(overviews, (o) => o.trace_count);
-  const score =
-    spansGraded === 0
-      ? 0
-      : (sum(overviews, (o) => o.continuous_eval_success_rate * o.eval_count) /
-          spansGraded) *
-        100;
+  const [passed, failed, traceCount] = await Promise.all([
+    opts.client.countTraces(ids, startTime, endTime, {
+      continuous_eval_run_status: "passed",
+    }),
+    opts.client.countTraces(ids, startTime, endTime, {
+      continuous_eval_run_status: "failed",
+    }),
+    opts.client.countTraces(ids, startTime, endTime),
+  ]);
+
+  const graded = passed + failed;
+  const score = graded > 0 ? (passed / graded) * 100 : 0;
 
   return {
     windowHours: opts.windowHours,
     score,
-    spansGraded,
+    spansGraded: graded,
     traceCount,
   };
-}
-
-function sum<T>(items: T[], pick: (item: T) => number): number {
-  return items.reduce((acc, item) => acc + (pick(item) || 0), 0);
 }
