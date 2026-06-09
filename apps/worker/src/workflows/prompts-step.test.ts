@@ -3,9 +3,13 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 vi.mock("../../env.js", () => ({ env: {} }));
 
 const mockGetPromptByTag = vi.fn();
+const mockListPromptVersions = vi.fn();
 vi.mock("../sandbox/arthur-client.js", () => ({
   ArthurClient: {
-    fromTraceEndpoint: vi.fn(() => ({ getPromptByTag: mockGetPromptByTag })),
+    fromTraceEndpoint: vi.fn(() => ({
+      getPromptByTag: mockGetPromptByTag,
+      listPromptVersions: mockListPromptVersions,
+    })),
   },
 }));
 
@@ -20,6 +24,8 @@ async function setEnv(partial: Record<string, string | undefined>) {
 describe("loadPrompts", () => {
   beforeEach(async () => {
     mockGetPromptByTag.mockReset();
+    mockListPromptVersions.mockReset();
+    mockListPromptVersions.mockResolvedValue([]);
     await setEnv({
       GENAI_ENGINE_API_KEY: undefined,
       GENAI_ENGINE_TRACE_ENDPOINT: undefined,
@@ -65,6 +71,9 @@ describe("loadPrompts", () => {
     expect(mockGetPromptByTag).toHaveBeenCalledTimes(3);
     const names = mockGetPromptByTag.mock.calls.map((c) => c[1]);
     expect(names).toEqual(["research-plan", "implement", "review"]);
+    // The step throws version metadata away, so it must not pay for the
+    // dashboard-only listPromptVersions fan-out.
+    expect(mockListPromptVersions).not.toHaveBeenCalled();
   });
 
   it("falls back per-prompt when Arthur returns null or throws", async () => {
