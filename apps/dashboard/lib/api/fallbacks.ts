@@ -1,6 +1,9 @@
 import type {
   KpisResponse,
   EvalHealthResponse,
+  EvalsResponse,
+  CostResponse,
+  PromptsResponse,
   RunsResponse,
   RunDetailResponse,
   LiveRunsResponse,
@@ -41,4 +44,23 @@ export function liveRunsFallback(now: string): LiveRunsResponse {
 
 export function workflowsFallback(now: string): WorkflowsResponse {
   return { generatedAt: now, rows: [], total: 0 };
+}
+
+export function evalsFallback(now: string): EvalsResponse {
+  return { available: false, generatedAt: now, reason: "Worker unavailable." };
+}
+
+export function costFallback(now: string): CostResponse {
+  return {
+    generatedAt: now,
+    available: false,
+    window: { start: now, end: now },
+    totals: { totalTokenCost: 0, totalTokens: 0, traceCount: 0, costPerRun: 0 },
+    byWorkflow: [],
+    daily: [],
+  };
+}
+
+export function promptsFallback(now: string): PromptsResponse {
+  return { generatedAt: now, available: false, arthurEnabled: false, rows: [], total: 0 };
 }

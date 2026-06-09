@@ -1,11 +1,8 @@
 "use client";
 
 import React, { useState, useEffect } from "react";
-import { CkCard, CkKPI, CkChip } from "@/components/ui";
-import { AIWF_DATA } from "@/lib/data/mock";
-import type { Prompt, PromptVersion, PromptTag } from "@/lib/types";
-
-const D = AIWF_DATA;
+import { CkCard, CkKPI } from "@/components/ui";
+import type { PromptsResponse, PromptDef, PromptVersion } from "@shared/contracts";
 
 const PROMPT_STATUS_COLOR: Record<string, { bg: string; fg: string; dot: string }> = {
   production: { bg: "#EAF7E0", fg: "#3F6B1E", dot: "#5BB04A" },
@@ -13,7 +10,8 @@ const PROMPT_STATUS_COLOR: Record<string, { bg: string; fg: string; dot: string 
   draft:      { bg: "#FFF4CC", fg: "#7A5A00", dot: "#FFC800" },
   archived:   { bg: "#F2F4F6", fg: "#5F666F", dot: "#9EA3AA" },
   locked:     { bg: "#181B20", fg: "#fff",    dot: "#fff"    },
-  "ab-test":  { bg: "#FFEFE9", fg: "#A2351C", dot: "#FD6027" },
+  arthur:     { bg: "#ECECFD", fg: "#3C43E7", dot: "#3C43E7" },
+  fallback:   { bg: "#F2F4F6", fg: "#5F666F", dot: "#9EA3AA" },
 };
 
 function PromptStatusChip({ status }: { status: string }) {
@@ -29,56 +27,74 @@ function PromptStatusChip({ status }: { status: string }) {
   );
 }
 
+/** The version tagged "production", if any (used for the row's tag chip). */
+function productionVersion(p: PromptDef): PromptVersion | undefined {
+  return p.versions.find((v) => v.tags.includes("production"));
+}
+
 /* ───── Prompts list (left rail) ───── */
-function PromptList({ active, onSelect }: { active: string; onSelect: (id: string) => void }) {
+function PromptList({
+  rows,
+  active,
+  onSelect,
+  arthurEnabled,
+}: {
+  rows: PromptDef[];
+  active: string;
+  onSelect: (name: string) => void;
+  arthurEnabled: boolean;
+}) {
   const [filter, setFilter] = useState("all");
-  const list = filter === "all" ? D.PROMPTS : D.PROMPTS.filter(p => p.tags.includes(filter as PromptTag));
+  // Derive the tag filter set from tags that actually occur across all versions.
+  const allTags = Array.from(
+    new Set(rows.flatMap((p) => p.versions.flatMap((v) => v.tags))),
+  );
+  const filters = ["all", ...allTags];
+  const list =
+    filter === "all"
+      ? rows
+      : rows.filter((p) => p.versions.some((v) => v.tags.includes(filter)));
+
   return (
     <CkCard
-      eyebrow={`Arthur · ${D.PROMPTS.length} prompts`}
+      eyebrow={`${arthurEnabled ? "Arthur" : "In-code"} · ${rows.length} prompts`}
       title="Registry"
-      action={
-        <input
-          placeholder="Search…"
-          className="h-6 px-2 border border-neutral-200 rounded-xs font-mono text-[11px] text-neutral-900 outline-none bg-off-white w-full lg:w-[120px]"
-        />
-      }
       pad={0}
       className="lg:h-full"
       style={{ display: "flex", flexDirection: "column" }}
     >
-      <div className="px-3.5 py-2 border-b border-neutral-200 flex gap-1 flex-wrap">
-        {["all","production","staging","draft","locked"].map(t => (
-          <button
-            key={t}
-            onClick={() => setFilter(t)}
-            className={`appearance-none cursor-pointer px-2 py-1 rounded-xs font-mono text-[9px] font-medium tracking-[0.04em] uppercase border ${filter === t ? "border-coal bg-coal text-white" : "border-neutral-200 bg-panel text-neutral-700"}`}
-          >
-            {t}
-          </button>
-        ))}
-      </div>
+      {filters.length > 1 && (
+        <div className="px-3.5 py-2 border-b border-neutral-200 flex gap-1 flex-wrap">
+          {filters.map((t) => (
+            <button
+              key={t}
+              onClick={() => setFilter(t)}
+              className={`appearance-none cursor-pointer px-2 py-1 rounded-xs font-mono text-[9px] font-medium tracking-[0.04em] uppercase border ${filter === t ? "border-coal bg-coal text-white" : "border-neutral-200 bg-panel text-neutral-700"}`}
+            >
+              {t}
+            </button>
+          ))}
+        </div>
+      )}
       <div className="flex-1 overflow-auto">
         {list.map((p, i) => {
-          const on = active === p.id;
+          const on = active === p.name;
+          const prod = productionVersion(p);
           return (
             <button
               type="button"
-              key={p.id}
-              onClick={() => onSelect(p.id)}
+              key={p.name}
+              onClick={() => onSelect(p.name)}
               className={`block w-full appearance-none text-left px-4 py-[14px] cursor-pointer transition-all duration-100 border-l-[3px] focus-visible:outline focus-visible:outline-2 focus-visible:outline-mariner focus-visible:outline-offset-[-2px] ${i < list.length - 1 ? "border-b border-b-neutral-200" : ""} ${on ? "border-l-mariner bg-off-white" : "border-l-transparent bg-panel hover:bg-[#FAFBFC]"}`}
             >
               <div className="flex items-center justify-between gap-2">
                 <span className="font-mono text-[13px] font-semibold text-neutral-900">{p.name}</span>
-                <span className="font-mono text-[10px] text-mariner font-semibold">{p.current}</span>
+                <span className="font-mono text-[10px] text-mariner font-semibold">{p.model}</span>
               </div>
-              <div className="text-[11px] text-neutral-500 mt-[3px]">{p.workflowName}</div>
+              <div className="text-[11px] text-neutral-500 mt-[3px]">{p.phase}</div>
               <div className="flex items-center gap-1.5 mt-1.5">
-                {p.tags.map(t => <PromptStatusChip key={t} status={t} />)}
-                <span className={`ml-auto inline-flex items-center gap-1.5 font-mono text-[10px] ${p.evalDelta > 0 ? "text-[#3F6B1E]" : p.evalDelta < 0 ? "text-[#A2351C]" : "text-neutral-500"}`}>
-                  {(p.evalScore * 100).toFixed(0)}
-                  <span>{p.evalDelta > 0 ? "↗" : p.evalDelta < 0 ? "↘" : "→"}</span>
-                </span>
+                {prod && <PromptStatusChip status="production" />}
+                <PromptStatusChip status={p.source} />
               </div>
             </button>
           );
@@ -88,19 +104,90 @@ function PromptList({ active, onSelect }: { active: string; onSelect: (id: strin
   );
 }
 
-/* ───── Selected-prompt detail (right pane) ───── */
-function PromptDetail({ promptId }: { promptId: string }) {
-  const p = D.PROMPTS.find((x: Prompt) => x.id === promptId);
-  const versions: PromptVersion[] = D.PROMPT_VERSIONS[promptId] || [];
-  const [selA, setSelA] = useState<string | null>(versions[0]?.v || null);
-  const [selB, setSelB] = useState<string | null>(versions[1]?.v || null);
-  useEffect(() => {
-    setSelA(versions[0]?.v || null);
-    setSelB(versions[1]?.v || null);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [promptId]);
+/* ───── Mini stat (used in prompt header) ───── */
+function Stat({ label, value, sub }: { label: React.ReactNode; value: React.ReactNode; sub?: React.ReactNode }) {
+  return (
+    <div>
+      <div className="font-mono text-[10px] text-neutral-700 tracking-[0.06em] uppercase">{label}</div>
+      <div className="font-display font-medium text-[26px] leading-[1.1] tracking-[-0.02em] text-neutral-900 mt-1">{value}</div>
+      {sub && <div className="font-mono text-[11px] mt-0.5 text-neutral-500">{sub}</div>}
+    </div>
+  );
+}
 
-  if (!p) {
+/* ───── Unified line diff (LCS-based, no external dep) ───── */
+type DiffLine = { type: "add" | "del" | "ctx"; text: string };
+
+/** Longest-common-subsequence line diff. O(n·m) — fine for prompt-sized bodies. */
+function diffLines(oldText: string, newText: string): DiffLine[] {
+  const a = oldText.split("\n");
+  const b = newText.split("\n");
+  const n = a.length;
+  const m = b.length;
+  const dp = Array.from({ length: n + 1 }, () => new Array<number>(m + 1).fill(0));
+  for (let i = n - 1; i >= 0; i--) {
+    for (let j = m - 1; j >= 0; j--) {
+      dp[i][j] = a[i] === b[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+    }
+  }
+  const out: DiffLine[] = [];
+  let i = 0;
+  let j = 0;
+  while (i < n && j < m) {
+    if (a[i] === b[j]) {
+      out.push({ type: "ctx", text: a[i] });
+      i++;
+      j++;
+    } else if (dp[i + 1][j] >= dp[i][j + 1]) {
+      out.push({ type: "del", text: a[i++] });
+    } else {
+      out.push({ type: "add", text: b[j++] });
+    }
+  }
+  while (i < n) out.push({ type: "del", text: a[i++] });
+  while (j < m) out.push({ type: "add", text: b[j++] });
+  return out;
+}
+
+const DIFF_LINE_STYLE: Record<DiffLine["type"], { bg: string; fg: string; sign: string }> = {
+  add: { bg: "#EAF7E0", fg: "#2E5512", sign: "+" },
+  del: { bg: "#FCE8E8", fg: "#B42318", sign: "-" },
+  ctx: { bg: "transparent", fg: "#5F666F", sign: " " },
+};
+
+function DiffView({ oldText, newText }: { oldText: string; newText: string }) {
+  const lines = diffLines(oldText, newText);
+  return (
+    <div className="font-mono text-[11px] leading-[1.55]">
+      {lines.map((l, idx) => {
+        const c = DIFF_LINE_STYLE[l.type];
+        return (
+          <div key={idx} className="flex gap-2 px-3" style={{ background: c.bg, color: c.fg }}>
+            <span className="select-none text-neutral-400">{c.sign}</span>
+            <span className="whitespace-pre-wrap break-words flex-1 min-w-0">{l.text || " "}</span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/* ───── Selected-prompt detail (right pane) ───── */
+function PromptDetail({ prompt }: { prompt: PromptDef | undefined }) {
+  const [selectedVersion, setSelectedVersion] = useState<number | null>(null);
+  const [bodyCache, setBodyCache] = useState<Record<number, string>>({});
+  const [loading, setLoading] = useState(false);
+  // "diff" compares the selected version against the immediately-prior version.
+  const [viewMode, setViewMode] = useState<"diff" | "raw">("diff");
+
+  // Reset the selected historical version whenever the active prompt changes —
+  // default view is always the resolved production body.
+  useEffect(() => {
+    setSelectedVersion(null);
+    setViewMode("diff");
+  }, [prompt?.name]);
+
+  if (!prompt) {
     return (
       <CkCard style={{ height: "100%" }}>
         <div className="p-10 text-center text-neutral-500 font-body">Select a prompt to inspect.</div>
@@ -108,228 +195,203 @@ function PromptDetail({ promptId }: { promptId: string }) {
     );
   }
 
-  if (!versions.length) {
-    return (
-      <CkCard
-        eyebrow={`Arthur · ${p.workflowName} → ${p.span}`}
-        title={p.name}
-        action={
-          <div className="flex gap-1.5">
-            {p.tags.map(t => <PromptStatusChip key={t} status={t} />)}
-          </div>
-        }
-        style={{ height: "100%" }}
-      >
-        <div className="py-10 text-center text-neutral-500 font-body">
-          Detailed version history not yet captured for this prompt.<br/>
-          <span className="font-mono text-[11px] text-neutral-700">Current: {p.current} · {p.versionCount} versions total</span>
-        </div>
-      </CkCard>
-    );
+  // Resolve a version's body from cache or the eager `body` field; null if it
+  // must still be fetched from the by-version endpoint.
+  function cachedBody(v: PromptVersion): string | null {
+    return bodyCache[v.version] ?? v.body ?? null;
   }
 
+  async function showVersion(v: PromptVersion) {
+    if (!prompt) return;
+    setSelectedVersion(v.version);
+    // Diff view needs the prior (older) version too — versions are newest-first,
+    // so the previous version sits at the next index.
+    const idx = prompt.versions.findIndex((x) => x.version === v.version);
+    const prev = prompt.versions[idx + 1];
+    const wanted = [v, prev].filter(Boolean) as PromptVersion[];
+
+    // Seed any eager bodies into the cache.
+    const eager = wanted.filter((x) => x.body !== undefined && bodyCache[x.version] === undefined);
+    if (eager.length) {
+      setBodyCache((c) => {
+        const next = { ...c };
+        for (const x of eager) next[x.version] = x.body!;
+        return next;
+      });
+    }
+
+    const missing = wanted.filter((x) => x.body === undefined && bodyCache[x.version] === undefined);
+    if (missing.length === 0) return;
+    setLoading(true);
+    try {
+      const fetched = await Promise.all(
+        missing.map(async (x) => {
+          try {
+            const res = await fetch(
+              `/api/prompts/${encodeURIComponent(prompt.name)}/versions/${x.version}`,
+            );
+            const json = (await res.json()) as { body: string | null };
+            return [x.version, json.body ?? "(version body unavailable)"] as const;
+          } catch {
+            return [x.version, "(version body unavailable)"] as const;
+          }
+        }),
+      );
+      setBodyCache((c) => {
+        const next = { ...c };
+        for (const [ver, body] of fetched) next[ver] = body;
+        return next;
+      });
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  const selectedIdx =
+    selectedVersion != null ? prompt.versions.findIndex((v) => v.version === selectedVersion) : -1;
+  const selectedV = selectedIdx >= 0 ? prompt.versions[selectedIdx] : undefined;
+  const prevV = selectedIdx >= 0 ? prompt.versions[selectedIdx + 1] : undefined;
+  const canDiff = selectedV !== undefined && prevV !== undefined;
+  const showDiff = canDiff && viewMode === "diff";
+
+  const selectedBody =
+    selectedV != null ? cachedBody(selectedV) ?? (loading ? "Loading…" : "") : prompt.body;
+  const prevBody = prevV ? cachedBody(prevV) : null;
+
+  const shownLabel = showDiff
+    ? `v${prevV!.version} → v${selectedV!.version}`
+    : selectedV != null
+      ? `v${selectedV.version}`
+      : "production";
+
   return (
-    <div className="flex flex-col gap-3 lg:h-full">
+    <div className="flex flex-col gap-3 lg:h-full min-w-0">
       <CkCard
-        eyebrow={`Arthur · ${p.workflowName} → ${p.span}`}
-        title={p.name}
+        eyebrow={`${prompt.source === "arthur" ? "Arthur" : "In-code"} · ${prompt.phase}`}
+        title={prompt.name}
         action={
           <div className="flex items-center gap-2">
-            {p.tags.map(t => <PromptStatusChip key={t} status={t} />)}
+            <PromptStatusChip status={prompt.source} />
             <span className="w-px h-4 bg-neutral-200" />
             <button className="appearance-none border border-neutral-200 bg-panel px-3 py-1.5 rounded-[3px] font-mono text-[11px] text-neutral-900 uppercase tracking-[0.04em] cursor-pointer">+ New version</button>
             <button className="appearance-none border border-coal bg-coal text-white px-3 py-1.5 rounded-[3px] font-mono text-[11px] uppercase tracking-[0.04em] cursor-pointer">Deploy</button>
           </div>
         }
       >
-        <div className="grid grid-cols-1 lg:grid-cols-4 gap-4">
-          <Stat label="Current version" value={p.current} sub={`by ${p.lastEditedBy} · ${(p.lastEditedAtMin/60).toFixed(0)}h ago`} />
-          <Stat label="Versions"        value={p.versionCount} sub="lifetime" />
-          <Stat label="Eval score"      value={(p.evalScore*100).toFixed(0)} sub={`${p.evalDelta > 0 ? "↗" : "↘"} ${Math.abs(p.evalDelta).toFixed(3)} vs prev`} tone={p.evalDelta > 0 ? "good" : "bad"} />
-          <Stat label="Traffic split"   value={Object.keys(p.trafficSplit).length + "-way"} sub={Object.entries(p.trafficSplit).map(([v,s]) => v + " " + (s*100).toFixed(0) + "%").join(" / ")} />
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+          <Stat label="Phase" value={prompt.phase} />
+          <Stat label="Source" value={prompt.source} />
+          <Stat label="Model" value={prompt.model} />
+          <Stat label="Versions" value={prompt.versions.length} sub="in Arthur" />
         </div>
       </CkCard>
 
-      {/* Version timeline */}
-      <CkCard eyebrow="Version timeline" title="History"
+      {/* Version timeline (real Arthur metadata) */}
+      {prompt.versions.length > 0 && (
+        <CkCard
+          eyebrow="Version timeline"
+          title="History"
+          action={
+            <span className="font-mono text-[10px] text-neutral-700 tracking-[0.04em] uppercase">
+              Click to inspect
+            </span>
+          }
+        >
+          <div className="flex items-stretch gap-0 overflow-x-auto">
+            {prompt.versions.map((v, i) => {
+              const on = selectedVersion === v.version;
+              const notLast = i < prompt.versions.length - 1;
+              const dropRight = notLast && !on;
+              return (
+                <button
+                  key={v.version}
+                  onClick={() => showVersion(v)}
+                  className={`shrink-0 w-[176px] appearance-none cursor-pointer text-left px-4 py-[14px] relative border ${on ? "border-[#3C43E7]" : "border-[#E6E8EB]"} ${dropRight ? "border-r-0" : ""} ${on ? "bg-mariner-100" : "bg-panel"}`}
+                >
+                  <div className="flex items-center justify-between mb-1.5">
+                    <span className="font-mono text-sm font-semibold text-neutral-900">v{v.version}</span>
+                    <div className="flex gap-1">
+                      {v.tags.map((t) => <PromptStatusChip key={t} status={t} />)}
+                    </div>
+                  </div>
+                  <div className="font-mono text-[10px] text-neutral-500 mb-2">{v.createdAt}</div>
+                  <div className="grid grid-cols-2 gap-1 font-mono text-[10px]">
+                    <span className="text-neutral-700">model</span><span className="text-neutral-900 text-right">{v.modelName}</span>
+                    <span className="text-neutral-700">messages</span><span className="text-neutral-900 text-right">{v.numMessages}</span>
+                    <span className="text-neutral-700">tools</span><span className="text-neutral-900 text-right">{v.numTools}</span>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </CkCard>
+      )}
+
+      {/* Body panel (single column, read-only) */}
+      <CkCard
+        eyebrow={showDiff ? "Prompt body · diff vs. previous" : "Prompt body · text"}
+        title={shownLabel}
         action={
-          <span className="font-mono text-[10px] text-neutral-700 tracking-[0.04em] uppercase">
-            Click to inspect · ⇧-click to compare
-          </span>
+          selectedVersion != null ? (
+            <div className="flex items-center gap-2">
+              {canDiff && (
+                <div className="inline-flex rounded-[3px] border border-neutral-200 overflow-hidden">
+                  {(["diff", "raw"] as const).map((m) => (
+                    <button
+                      key={m}
+                      onClick={() => setViewMode(m)}
+                      className={`appearance-none px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.04em] cursor-pointer ${viewMode === m ? "bg-coal text-white" : "bg-panel text-neutral-900"}`}
+                    >
+                      {m}
+                    </button>
+                  ))}
+                </div>
+              )}
+              <button
+                onClick={() => setSelectedVersion(null)}
+                className="appearance-none border border-neutral-200 bg-panel px-3 py-1.5 rounded-[3px] font-mono text-[11px] text-neutral-900 uppercase tracking-[0.04em] cursor-pointer"
+              >
+                Show production
+              </button>
+            </div>
+          ) : undefined
         }
       >
-        <div className="flex flex-col lg:flex-row lg:items-stretch gap-0">
-          {versions.map((v, i) => {
-            const isA = selA === v.v;
-            const isB = selB === v.v;
-            const borderClass = isA ? "border-[#3C43E7]" : isB ? "border-[#FD6027]" : "border-[#E6E8EB]";
-            const notLast = i < versions.length - 1;
-            // Mobile (stacked): drop bottom border on all but the last so stacked
-            // buttons share one horizontal divider.
-            // Desktop (row, lg): drop right border on interior neutral buttons so
-            // side-by-side buttons share one vertical divider (selected keep full border).
-            const dropMobileBottom = notLast;
-            const dropDesktopRight = notLast && !isA && !isB;
-            return (
-              <button
-                key={v.v}
-                onClick={(e) => { if (e.shiftKey) setSelB(v.v); else setSelA(v.v); }}
-                className={`lg:flex-1 appearance-none cursor-pointer text-left px-4 py-[14px] relative border ${borderClass} ${dropMobileBottom ? "border-b-0" : ""} lg:border-b ${dropDesktopRight ? "lg:border-r-0" : "lg:border-r"} ${isA ? "bg-mariner-100" : isB ? "bg-[#FFEFE9]" : "bg-panel"}`}
-              >
-                <div className="flex items-center justify-between mb-1.5">
-                  <span className="font-mono text-sm font-semibold text-neutral-900">{v.v}</span>
-                  <PromptStatusChip status={v.status} />
-                </div>
-                <div className="font-mono text-[10px] text-neutral-500 mb-2">{v.deployedAt} · {v.by}</div>
-                <div className="grid grid-cols-2 gap-1 font-mono text-[10px]">
-                  <span className="text-neutral-700">eval</span><span className="text-neutral-900 font-semibold text-right">{(v.evalScore*100).toFixed(0)}</span>
-                  <span className="text-neutral-700">halluc</span><span className="text-neutral-900 text-right">{v.halluc.toFixed(3)}</span>
-                  <span className="text-neutral-700">p95</span><span className="text-neutral-900 text-right">{v.p95}s</span>
-                  <span className="text-neutral-700">$/run</span><span className="text-neutral-900 text-right">${v.costAvg.toFixed(3)}</span>
-                </div>
-                {v.traffic > 0 && (
-                  <div className="mt-2 h-1 bg-app-bg rounded-[1px]">
-                    <div className={`h-full rounded-[1px] ${v.status === "production" ? "bg-[#5BB04A]" : "bg-mariner"}`} style={{ width: (v.traffic*100) + "%" }} />
-                  </div>
-                )}
-                {(isA || isB) && (
-                  <span className={`absolute -top-2 left-3 px-1.5 py-px rounded-full text-white font-mono text-[9px] tracking-[0.04em] uppercase ${isA ? "bg-mariner" : "bg-burnt-orange"}`}>
-                    {isA ? "A" : "B"}
-                  </span>
-                )}
-              </button>
-            );
-          })}
+        <div className="border border-neutral-200 rounded-xs overflow-hidden max-h-[420px]">
+          <div className="overflow-auto max-h-[420px] py-3">
+            {showDiff && prevBody != null && typeof selectedBody === "string" ? (
+              loading && (bodyCache[selectedV!.version] === undefined || bodyCache[prevV!.version] === undefined) ? (
+                <div className="px-3 font-mono text-[11px] text-neutral-500">Loading…</div>
+              ) : (
+                <DiffView oldText={prevBody} newText={selectedBody} />
+              )
+            ) : (
+              <div className="px-3 font-mono text-[11px] leading-[1.55] bg-panel text-neutral-900 whitespace-pre-wrap break-words">
+                {selectedBody}
+              </div>
+            )}
+          </div>
         </div>
       </CkCard>
-
-      {/* Diff + metrics */}
-      <div className="flex flex-col lg:grid lg:grid-cols-[1.6fr_1fr] gap-3">
-        <PromptDiff a={selA} b={selB} versions={versions} />
-        <PromptMetrics versions={versions} selA={selA} selB={selB} />
-      </div>
     </div>
-  );
-}
-
-/* ───── Mini stat (used in prompt header) ───── */
-function Stat({ label, value, sub, tone }: { label: React.ReactNode; value: React.ReactNode; sub?: React.ReactNode; tone?: "good" | "bad" }) {
-  return (
-    <div>
-      <div className="font-mono text-[10px] text-neutral-700 tracking-[0.06em] uppercase">{label}</div>
-      <div className="font-display font-medium text-[26px] leading-[1.1] tracking-[-0.02em] text-neutral-900 mt-1">{value}</div>
-      {sub && <div className={`font-mono text-[11px] mt-0.5 ${tone === "good" ? "text-[#3F6B1E]" : tone === "bad" ? "text-[#A2351C]" : "text-neutral-500"}`}>{sub}</div>}
-    </div>
-  );
-}
-
-/* ───── Diff viewer ───── */
-function PromptDiff({ a, b, versions }: { a: string | null; b: string | null; versions: PromptVersion[] }) {
-  const bodyA = (a && D.PROMPT_BODIES[a]) || `# ${a}\n(prompt body not captured in mock)`;
-  const bodyB = (b && D.PROMPT_BODIES[b]) || `# ${b}\n(prompt body not captured in mock)`;
-  // Naive line-diff: pair lines by index, mark added/removed/equal.
-  const linesA = bodyA.split("\n");
-  const linesB = bodyB.split("\n");
-  const max = Math.max(linesA.length, linesB.length);
-  return (
-    <CkCard
-      eyebrow="Prompt diff · text"
-      title={`${b} → ${a}`}
-      action={
-        <div className="flex gap-2">
-          <CkChip style={{ background: "#FFEFE9", color: "#A2351C" }}>−{linesB.length} from {b}</CkChip>
-          <CkChip style={{ background: "#EAF7E0", color: "#3F6B1E" }}>+{linesA.length} into {a}</CkChip>
-        </div>
-      }
-    >
-      <div className="border border-neutral-200 rounded-xs overflow-hidden max-h-[340px]">
-        <div className="overflow-auto max-h-[340px] font-mono text-[11px] leading-[1.55]">
-          {Array.from({ length: max }).map((_, i) => {
-            const la = linesA[i] ?? "";
-            const lb = linesB[i] ?? "";
-            const same = la === lb;
-            return (
-              <div key={i} className="grid grid-cols-2">
-                <div className={`flex border-r border-neutral-200 ${same ? "bg-panel text-neutral-700" : (lb ? "bg-[#FCE6E2] text-[#80261C]" : "bg-off-white text-neutral-700")}`}>
-                  <span className="flex-[0_0_36px] text-right px-2 py-px text-[#D2D6DA] select-none">{lb ? (i + 1) : ""}</span>
-                  <span className={`flex-[0_0_14px] text-center font-semibold ${same ? "text-[#D2D6DA]" : "text-[#A2351C]"}`}>{same ? " " : (lb ? "−" : " ")}</span>
-                  <span className="flex-1 px-1.5 py-px whitespace-pre-wrap break-words">{lb}</span>
-                </div>
-                <div className={`flex ${same ? "bg-panel text-neutral-900" : (la ? "bg-[#EAF7E0] text-[#1C4A0E]" : "bg-off-white text-neutral-900")}`}>
-                  <span className="flex-[0_0_36px] text-right px-2 py-px text-[#D2D6DA] select-none">{la ? (i + 1) : ""}</span>
-                  <span className={`flex-[0_0_14px] text-center font-semibold ${same ? "text-[#D2D6DA]" : "text-[#3F6B1E]"}`}>{same ? " " : (la ? "+" : " ")}</span>
-                  <span className="flex-1 px-1.5 py-px whitespace-pre-wrap break-words">{la}</span>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      </div>
-    </CkCard>
-  );
-}
-
-/* ───── Metrics comparison ───── */
-function PromptMetrics({ versions, selA, selB }: { versions: PromptVersion[]; selA: string | null; selB: string | null }) {
-  const a = versions.find(v => v.v === selA);
-  const b = versions.find(v => v.v === selB);
-  const rows: { k: keyof PromptVersion; l: string; fmt: (v: number) => string; better: "higher" | "lower" | null }[] = [
-    { k: "evalScore",  l: "Eval score",       fmt: (v) => (v*100).toFixed(0), better: "higher" },
-    { k: "halluc",     l: "Hallucination",    fmt: (v) => v.toFixed(3),        better: "lower"  },
-    { k: "p95",        l: "p95 latency",      fmt: (v) => v.toFixed(1) + "s",  better: "lower"  },
-    { k: "costAvg",    l: "Cost / run",       fmt: (v) => "$" + v.toFixed(3),  better: "lower"  },
-    { k: "runs",       l: "Runs (lifetime)",  fmt: (v) => v.toLocaleString("en-US"),  better: null     },
-  ];
-  return (
-    <CkCard eyebrow="Side-by-side" title="Metrics">
-      <div className="grid grid-cols-[1fr_auto_auto] gap-y-3 gap-x-4 items-center">
-        <span />
-        <span className="font-mono text-[10px] text-mariner font-semibold tracking-[0.06em] uppercase">A · {selA}</span>
-        <span className="font-mono text-[10px] text-burnt-orange font-semibold tracking-[0.06em] uppercase">B · {selB}</span>
-        {rows.map(r => {
-          const av = a ? (a[r.k] as number) : null;
-          const bv = b ? (b[r.k] as number) : null;
-          let aWins = false, bWins = false;
-          if (av !== null && bv !== null && r.better) {
-            if (r.better === "higher") {
-              aWins = av > bv;
-              bWins = bv > av;
-            }
-            if (r.better === "lower") {
-              aWins = av < bv;
-              bWins = bv < av;
-            }
-          }
-          return (
-            <React.Fragment key={r.k}>
-              <span className="font-body font-medium text-[13px] leading-none text-neutral-800">{r.l}</span>
-              <span className={`font-mono text-sm font-semibold text-right ${aWins ? "text-[#3F6B1E]" : "text-neutral-900"}`}>
-                {av != null ? r.fmt(av) : "—"}
-                {aWins && <span className="ml-1 text-[#3F6B1E] text-[11px]">✓</span>}
-              </span>
-              <span className={`font-mono text-sm font-semibold text-right ${bWins ? "text-[#3F6B1E]" : "text-neutral-500"}`}>
-                {bv != null ? r.fmt(bv) : "—"}
-                {bWins && <span className="ml-1 text-[#3F6B1E] text-[11px]">✓</span>}
-              </span>
-            </React.Fragment>
-          );
-        })}
-      </div>
-      <div className="mt-4 pt-3 border-t border-neutral-200 font-mono text-[10px] text-neutral-700 tracking-[0.04em] uppercase">
-        Sample size: {a?.runs.toLocaleString("en-US")} vs {b?.runs.toLocaleString("en-US")} runs
-      </div>
-    </CkCard>
   );
 }
 
 /* ───── Top-level screen ───── */
-export function PromptsScreen() {
-  const [active, setActive] = useState(D.PROMPTS[0]?.id ?? "");
+export function PromptsScreen({ data }: { data: PromptsResponse }) {
+  const [active, setActive] = useState(data.rows[0]?.name ?? "");
+  const selected = data.rows.find((p) => p.name === active);
+  const inProd = data.rows.filter((p) =>
+    p.versions.some((v) => v.tags.includes("production")),
+  ).length;
+
   return (
     <div className="px-4 lg:px-6 pt-5 pb-8 flex flex-col gap-4">
       <div className="flex items-end justify-between">
         <div>
-          <div className="font-mono text-[10px] text-neutral-500 tracking-[0.06em] uppercase">Arthur engine · prompt versioning</div>
+          <div className="font-mono text-[10px] text-neutral-500 tracking-[0.06em] uppercase">
+            {data.arthurEnabled ? "Arthur engine · prompt versioning" : "In-code defaults · prompt versioning"}
+          </div>
           <h2 className="font-display font-medium text-2xl leading-[1.2] m-0 text-neutral-900">Prompt registry</h2>
         </div>
         <div className="flex gap-2">
@@ -338,16 +400,18 @@ export function PromptsScreen() {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-4 gap-3">
-        <CkKPI label="Prompts"         value={D.PROMPTS.length.toString()}                                    sub="across 6 workflows" />
-        <CkKPI label="In production"   value={D.PROMPTS.filter(p => p.tags.includes("production")).length.toString()} sub="serving traffic" />
-        <CkKPI label="A/B tests"       value={D.PROMPTS.filter(p => p.tags.includes("ab-test")).length.toString()}    sub="live experiments" />
-        <CkKPI label="Avg eval Δ · 7d" value="+0.4%"                                                          sub="across all prompts" delta="↗ improving" deltaTone="good" />
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+        <CkKPI label="Prompts" value={data.total.toString()} sub="workflow phases" />
+        <CkKPI
+          label="In production"
+          value={inProd.toString()}
+          sub={data.arthurEnabled ? "tagged in Arthur" : "in-code defaults"}
+        />
       </div>
 
       <div className="flex flex-col lg:grid lg:grid-cols-[340px_1fr] gap-3 lg:min-h-[720px]">
-        <PromptList active={active} onSelect={setActive} />
-        <PromptDetail promptId={active} />
+        <PromptList rows={data.rows} active={active} onSelect={setActive} arthurEnabled={data.arthurEnabled} />
+        <PromptDetail prompt={selected} />
       </div>
     </div>
   );
