@@ -7,7 +7,7 @@ description: Configure or rotate the agent runtime (Claude or Codex) for the Bla
 
 Branch-on-choice skill. Asks **Claude or Codex**, then emits a single paste-template for the chosen runtime. Cross-field rule in `env.ts` (`AGENT_KIND=claude` requires `ANTHROPIC_API_KEY`; `AGENT_KIND=codex` requires `CODEX_API_KEY` or `CODEX_CHATGPT_OAUTH_TOKEN`) is enforced by construction.
 
-> If you want full project setup (Jira + VCS + Agent + Slack + Upstash + deploy), invoke `init-env` instead. This skill only handles the agent runtime.
+> If you want full project setup (Jira + VCS + Agent + Slack + Neon + deploy), invoke `init-env` instead. This skill only handles the agent runtime.
 
 ## Precondition
 

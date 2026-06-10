@@ -4,6 +4,8 @@ import { createAdapters } from "../../lib/adapters.js";
 import { dispatchTicket } from "../../lib/dispatch.js";
 import { reconcileRuns } from "../../lib/reconcile.js";
 import { logger } from "../../lib/logger.js";
+import { GateStore } from "../../post-pr-gate/gate-store.js";
+import { getDb } from "../../db/client.js";
 
 export default defineEventHandler(async (event) => {
   verifyCronAuth(getHeader(event, "authorization"));
@@ -26,6 +28,12 @@ export default defineEventHandler(async (event) => {
       });
     },
   );
+
+  // Housekeeping: physically drop expired gate rows (reads already treat
+  // them as absent). Best-effort — a failed purge must not fail the poll.
+  await new GateStore(getDb())
+    .purgeExpired()
+    .catch((err) => logger.warn({ err: (err as Error).message }, "poll_gate_purge_failed"));
 
   return {
     status: "ok",

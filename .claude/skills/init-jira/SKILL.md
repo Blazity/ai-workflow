@@ -10,7 +10,7 @@ State-aware skill for the Jira side of Blazebot. Two phases triggered by detecte
 - **Phase 1 — Credentials, columns, secret pre-gen.** Runs when `JIRA_BASE_URL` is not yet in Vercel env.
 - **Phase 2 — Webhook registration.** Runs when phase 1 is done and a production deploy exists.
 
-> If you want full project setup (Jira + VCS + Agent + Slack + Upstash + deploy), invoke `init-env` instead. This skill only handles Jira.
+> If you want full project setup (Jira + VCS + Agent + Slack + Neon + deploy), invoke `init-env` instead. This skill only handles Jira.
 
 ## Precondition
 

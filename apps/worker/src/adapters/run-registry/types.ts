@@ -48,7 +48,7 @@ export interface RunRegistryAdapter {
 
 /**
  * Per-ticket Slack thread parent store. Implemented alongside RunRegistryAdapter
- * by UpstashRunRegistry, but exposed as a separate interface so the messaging
+ * by PostgresRunRegistry, but exposed as a separate interface so the messaging
  * adapter only depends on the slice it needs.
  *
  * Lifetime: an entry survives across multiple workflow runs for the same

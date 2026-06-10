@@ -13,7 +13,7 @@ import {
   markFailed,
   isTicketFailed,
   cleanupFailed,
-} from "../helpers/redis.js";
+} from "../helpers/registry.js";
 import { stopSandboxesForTicket } from "../helpers/sandbox.js";
 import { callCronPoll } from "../helpers/cron.js";
 import { waitFor } from "../helpers/wait.js";
