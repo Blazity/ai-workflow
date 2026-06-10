@@ -57,7 +57,7 @@ Expect:
 1. An ephemeral "Working on `/ai-workflow list`…" message (within ~1s).
 2. A second message visible in the channel with either the list of active runs or "No active workflows."
 
-If you instead see Slack's "operation_timeout" error, the function probably can't reach Upstash — check Vercel runtime logs for the `slack_command_dispatching` log line.
+If you instead see Slack's "operation_timeout" error, the function probably can't reach the Postgres run registry — check Vercel runtime logs for the `slack_command_dispatching` log line.
 
 ## Troubleshooting
 

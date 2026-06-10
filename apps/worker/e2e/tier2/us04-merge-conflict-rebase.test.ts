@@ -16,7 +16,7 @@ import {
   deleteBranch,
   deleteFile,
 } from "../helpers/github.js";
-import { getRunId, cleanup as redisCleanup } from "../helpers/redis.js";
+import { getRunId, cleanup as redisCleanup } from "../helpers/registry.js";
 import { stopSandboxesForTicket } from "../helpers/sandbox.js";
 import { callCronPoll } from "../helpers/cron.js";
 import { waitFor } from "../helpers/wait.js";

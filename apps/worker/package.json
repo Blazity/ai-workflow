@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "dev": "rm -rf .nitro/workflow && nitro dev",
-    "build": "pnpm validate:pre-sandbox && rm -rf .nitro/workflow && NODE_OPTIONS=--max-old-space-size=8192 nitro build",
+    "build": "pnpm validate:pre-sandbox && pnpm db:migrate && rm -rf .nitro/workflow && NODE_OPTIONS=--max-old-space-size=8192 nitro build",
     "preview": "nitro preview",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -15,20 +15,23 @@
     "test:e2e": "pnpm test:e2e:agent && pnpm test:e2e:orchestration && pnpm test:e2e:capacity",
     "test:e2e:agent": "vitest run --config e2e/vitest.e2e.config.ts --project agent",
     "test:e2e:orchestration": "vitest run --config e2e/vitest.e2e.config.ts --project orchestration",
-    "test:e2e:capacity": "vitest run --config e2e/vitest.e2e.config.ts --project capacity"
+    "test:e2e:capacity": "vitest run --config e2e/vitest.e2e.config.ts --project capacity",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "tsx scripts/db-migrate.ts"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^3.0.78",
     "@chat-adapter/slack": "^4.20.2",
     "@gitbeaker/rest": "^43.8.0",
+    "@neondatabase/serverless": "^1.1.0",
     "@octokit/auth-app": "^8.2.0",
     "@octokit/rest": "^22.0.1",
     "@t3-oss/env-core": "^0.13.10",
-    "@upstash/redis": "^1.37.0",
     "@vercel/functions": "^3.5.0",
     "@vercel/sandbox": "^1.8.1",
     "ai": "^6.0.188",
     "chat": "^4.20.2",
+    "drizzle-orm": "^0.45.2",
     "h3": "^1",
     "nitropack": "^2",
     "pino": "^10.3.1",
@@ -37,8 +40,11 @@
     "zod": "^3.25.76"
   },
   "devDependencies": {
+    "@electric-sql/pglite": "^0.5.1",
     "@workflow/vitest": "latest",
     "@workflow/world-postgres": "latest",
+    "dotenv": "^17.4.2",
+    "drizzle-kit": "^0.31.10",
     "tsx": "^4.21.0",
     "typescript": "^5.8",
     "vitest": "^3"
