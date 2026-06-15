@@ -15,6 +15,13 @@
       "when": 1781519933529,
       "tag": "0001_abnormal_dreaming_celestial",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1781522704332,
+      "tag": "0002_icy_bastion",
+      "breakpoints": true
     }
   ]
 }

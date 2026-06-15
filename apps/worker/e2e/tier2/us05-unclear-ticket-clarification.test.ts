@@ -7,7 +7,7 @@ import {
   deleteTicket,
 } from "../helpers/jira.js";
 import { findPR, deleteBranch } from "../helpers/github.js";
-import { getRunId, cleanup as redisCleanup } from "../helpers/registry.js";
+import { getRunId, cleanup as registryCleanup } from "../helpers/registry.js";
 import { stopSandboxesForTicket } from "../helpers/sandbox.js";
 import { callCronPoll } from "../helpers/cron.js";
 import { waitFor } from "../helpers/wait.js";
@@ -18,7 +18,7 @@ import { e2eEnv } from "../env.js";
  *
  * When a ticket is too vague/subjective to implement, the agent should
  * return status: "clarification_needed", post numbered questions as a Jira
- * comment, move the ticket to Backlog, and clean up Redis/sandbox.
+ * comment, move the ticket to Backlog, and clean up registry/sandbox.
  */
 describe("US-05: Unclear ticket triggers clarification", () => {
   let ticketKey: string;
@@ -28,7 +28,7 @@ describe("US-05: Unclear ticket triggers clarification", () => {
     if (ticketKey) await stopSandboxesForTicket(ticketKey).catch(() => {});
     if (branchName) await deleteBranch(branchName).catch(() => {});
     if (ticketKey) {
-      await redisCleanup(ticketKey);
+      await registryCleanup(ticketKey);
       await deleteTicket(ticketKey);
     }
   });
@@ -80,13 +80,13 @@ describe("US-05: Unclear ticket triggers clarification", () => {
     const pr = await findPR(branchName);
     expect(pr).toBeNull();
 
-    // 6. Redis entry cleaned up
+    // 6. Registry entry cleaned up
     await waitFor(
       async () => {
         const runId = await getRunId(ticketKey);
         return runId === null ? true : null;
       },
-      { description: `Redis clean for ${ticketKey}`, timeoutMs: 30_000 },
+      { description: `Registry clean for ${ticketKey}`, timeoutMs: 30_000 },
     );
 
     // 7. No sandbox still running for this ticket

@@ -5,9 +5,9 @@ import {
   index,
   integer,
   jsonb,
+  numeric,
   pgTable,
   primaryKey,
-  real,
   text,
   timestamp,
 } from "drizzle-orm/pg-core";
@@ -149,7 +149,9 @@ export const workflowRuns = pgTable("workflow_runs", {
 
   // Cost & usage — workflow-owned (accumulated PhaseUsage). costKnown is false
   // when any phase cost couldn't be priced (e.g. Codex with no price lookup).
-  costUsd: real("cost_usd"),
+  // numeric(19,4): fixed-precision currency so SQL cost rollups don't drift
+  // like float (real). mode:"number" keeps the JS type a plain number.
+  costUsd: numeric("cost_usd", { precision: 19, scale: 4, mode: "number" }),
   costKnown: boolean("cost_known"),
   tokensInput: integer("tokens_input"),
   tokensCached: integer("tokens_cached"),
