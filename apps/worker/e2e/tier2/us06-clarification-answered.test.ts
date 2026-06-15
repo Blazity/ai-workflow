@@ -14,7 +14,7 @@ import {
   closePR,
   deleteBranch,
 } from "../helpers/github.js";
-import { getRunId, cleanup as redisCleanup } from "../helpers/registry.js";
+import { getRunId, cleanup as registryCleanup } from "../helpers/registry.js";
 import { stopSandboxesForTicket } from "../helpers/sandbox.js";
 import { callCronPoll } from "../helpers/cron.js";
 import { waitFor } from "../helpers/wait.js";
@@ -43,7 +43,7 @@ describe("US-06: Clarification answered → ticket completes", () => {
     if (prNumber) await closePR(prNumber);
     if (branchName) await deleteBranch(branchName).catch(() => {});
     if (ticketKey) {
-      await redisCleanup(ticketKey);
+      await registryCleanup(ticketKey);
       await deleteTicket(ticketKey);
     }
   });
@@ -95,14 +95,14 @@ describe("US-06: Clarification answered → ticket completes", () => {
       );
       expect(clarificationComment).toBeDefined();
 
-      // Redis cleaned up after clarification before we restart
+      // Registry cleaned up after clarification before we restart
       await waitFor(
         async () => {
           const runId = await getRunId(ticketKey);
           return runId === null ? true : null;
         },
         {
-          description: `Redis clean after clarification for ${ticketKey}`,
+          description: `Registry clean after clarification for ${ticketKey}`,
           timeoutMs: 30_000,
         },
       );
@@ -150,14 +150,14 @@ describe("US-06: Clarification answered → ticket completes", () => {
       expect(routeContent).toMatch(/export\s+(async\s+)?function\s+GET/);
       expect(routeContent).toContain(uniqueGreeting);
 
-      // Redis cleaned up after the implementation run
+      // Registry cleaned up after the implementation run
       await waitFor(
         async () => {
           const runId = await getRunId(ticketKey);
           return runId === null ? true : null;
         },
         {
-          description: `Redis clean after implementation for ${ticketKey}`,
+          description: `Registry clean after implementation for ${ticketKey}`,
           timeoutMs: 30_000,
         },
       );

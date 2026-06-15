@@ -616,6 +616,11 @@ export async function agentWorkflow(ticketId: string) {
   const prompts = await loadPrompts();
 
   const phaseUsages: Record<string, PhaseUsage | null> = {};
+  // Phases whose agent was launched. A phase that times out or exits before
+  // its usage is parsed never gets a phaseUsages entry; the finally reconciles
+  // any such launched-but-missing phase to null so computeUsageTotals flags
+  // costKnown=false instead of reporting a misleading costUsd=0 / costKnown=true.
+  const launchedPhases = new Set<string>();
   // Captured on the success path; written as run telemetry in the finally.
   let prForTelemetry: { url: string; number: number } | null = null;
   // Set after provisionSandbox once agentKind is known.
@@ -742,6 +747,7 @@ export async function agentWorkflow(ticketId: string) {
         researchPaths.input, researchInput,
         researchPaths.wrapper, researchScript,
       );
+      launchedPhases.add("Research");
 
       const researchDone = await pollUntilDone(sandboxId, researchPaths.sentinel, 20);
       if (!researchDone) {
@@ -816,6 +822,7 @@ export async function agentWorkflow(ticketId: string) {
         implPaths.input, implInput,
         implPaths.wrapper, implScript,
       );
+      launchedPhases.add("Impl");
 
       const implDone = await pollUntilDone(sandboxId, implPaths.sentinel, 35);
       let implOutput: AgentOutput;
@@ -875,6 +882,7 @@ export async function agentWorkflow(ticketId: string) {
           reviewPaths.input, reviewInput,
           reviewPaths.wrapper, reviewScript,
         );
+        launchedPhases.add("Review");
 
         const reviewDone = await pollUntilDone(sandboxId, reviewPaths.sentinel, 15);
         let reviewOutput: ReviewOutput;
@@ -966,6 +974,12 @@ export async function agentWorkflow(ticketId: string) {
     }
     throw err;
   } finally {
+    // A launched phase with no parsed usage (timed out / errored before
+    // collect) records as unknown, so computeUsageTotals reports
+    // costKnown=false instead of a misleading costUsd=0 / costKnown=true.
+    for (const phase of launchedPhases) {
+      if (!(phase in phaseUsages)) phaseUsages[phase] = null;
+    }
     // Durable cost/usage telemetry, recorded on every exit path (success,
     // clarification, or failure). Best-effort: the step never retries and we
     // swallow errors so telemetry can't break or delay the run.

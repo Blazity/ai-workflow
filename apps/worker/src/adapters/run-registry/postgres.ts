@@ -63,10 +63,18 @@ export class PostgresRunRegistry implements RunRegistryAdapter, ThreadStore {
   async registerSandbox(ticketKey: string, sandboxId: string): Promise<void> {
     // Sandboxes are only registered after claim()/register(), so the row
     // exists; a bare UPDATE keeps run_id NOT NULL without an upsert dance.
-    await this.db
+    // A zero-row update means the run was unregistered out from under us (a
+    // cancel webhook racing this step): fail fast so the workflow's error
+    // path tears the sandbox down, rather than silently orphaning it where
+    // cleanup can't find the missing sandbox_id linkage.
+    const rows = await this.db
       .update(activeRuns)
       .set({ sandboxId })
-      .where(eq(activeRuns.ticketKey, ticketKey));
+      .where(eq(activeRuns.ticketKey, ticketKey))
+      .returning({ ticketKey: activeRuns.ticketKey });
+    if (rows.length === 0) {
+      throw new Error(`registerSandbox: no active run for ${ticketKey}`);
+    }
   }
 
   async getSandboxId(ticketKey: string): Promise<string | null> {

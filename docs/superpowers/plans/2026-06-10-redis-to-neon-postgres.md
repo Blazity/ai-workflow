@@ -1231,7 +1231,7 @@ adding `import { getDb } from "../db/client.js";` (webhook) / `import { getDb } 
   // them as absent). Best-effort — a failed purge must not fail the poll.
   await new GateStore(getDb())
     .purgeExpired()
-    .catch((err) => logger.warn({ error: err }, "poll_gate_purge_failed"));
+    .catch((err) => logger.warn({ err: (err as Error).message }, "poll_gate_purge_failed"));
 ```
 
 with imports:

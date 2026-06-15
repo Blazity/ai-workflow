@@ -125,8 +125,12 @@ describe("sandbox", () => {
     expect(await registry.getSandboxId("PROJ-1")).toBeNull();
   });
 
-  it("registerSandbox without an active run row is a silent no-op", async () => {
-    await registry.registerSandbox("PROJ-77", "sbox_orphan");
+  it("registerSandbox throws when there is no active run row", async () => {
+    // A zero-row update means the run was unregistered out from under us;
+    // fail fast so the sandbox isn't silently orphaned (no row links it).
+    await expect(
+      registry.registerSandbox("PROJ-77", "sbox_orphan"),
+    ).rejects.toThrow("no active run for PROJ-77");
     expect(await registry.getSandboxId("PROJ-77")).toBeNull();
     expect(await registry.getRunId("PROJ-77")).toBeNull();
   });
