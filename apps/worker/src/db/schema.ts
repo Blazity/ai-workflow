@@ -1,9 +1,13 @@
 import { sql } from "drizzle-orm";
 import {
   bigint,
+  boolean,
+  index,
   integer,
+  jsonb,
   pgTable,
   primaryKey,
+  real,
   text,
   timestamp,
 } from "drizzle-orm/pg-core";
@@ -104,3 +108,66 @@ export const envMarker = pgTable("env_marker", {
   env: text("env").notNull(),
   endpointHost: text("endpoint_host").notNull(),
 });
+
+/**
+ * Durable run telemetry — one row per workflow run, keyed by runId. Survives
+ * far longer than Vercel's ~24h observability window so run history, active
+ * counts, and per-run cost stay queryable with plain SQL.
+ *
+ * Written by two upserters that own disjoint columns:
+ * - The poll cron snapshots lifecycle/status/ticket/PR(gate) from the
+ *   Workflow world + the run registry (see lib/telemetry/collect-snapshots).
+ * - The agent workflow records cost/tokens/per-phase usage + the agent PR on
+ *   completion — data that only exists inside the run (see recordRunUsage).
+ *
+ * Both use ON CONFLICT (run_id) DO UPDATE setting only their own columns, so
+ * whichever writes first inserts the row and the other fills in the rest,
+ * regardless of order.
+ */
+export const workflowRuns = pgTable("workflow_runs", {
+  runId: text("run_id").primaryKey(),
+
+  // Lifecycle — cron-owned (from the Workflow world).
+  workflowId: text("workflow_id"),
+  workflowName: text("workflow_name"),
+  status: text("status"),
+  ticketKey: text("ticket_key"),
+  ticketTitle: text("ticket_title"),
+  ticketUrl: text("ticket_url"),
+  model: text("model"),
+  sandboxId: text("sandbox_id"),
+  createdAt: timestamp("created_at", { withTimezone: true }),
+  startedAt: timestamp("started_at", { withTimezone: true }),
+  completedAt: timestamp("completed_at", { withTimezone: true }),
+  durationSec: integer("duration_sec"),
+
+  // Pull request — gate runs from gate_current (cron); agent runs from the
+  // workflow output (workflow write).
+  prUrl: text("pr_url"),
+  prNumber: integer("pr_number"),
+  prRepo: text("pr_repo"),
+
+  // Cost & usage — workflow-owned (accumulated PhaseUsage). costKnown is false
+  // when any phase cost couldn't be priced (e.g. Codex with no price lookup).
+  costUsd: real("cost_usd"),
+  costKnown: boolean("cost_known"),
+  tokensInput: integer("tokens_input"),
+  tokensCached: integer("tokens_cached"),
+  tokensOutput: integer("tokens_output"),
+  /** Per-phase breakdown: { [phase]: { costUsd, tokens, durationMs, numTurns } }. */
+  phases: jsonb("phases"),
+
+  // Bookkeeping.
+  firstSeenAt: timestamp("first_seen_at", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+}, (t) => [
+  // Built for querying: active-count by status, time-window stats by startedAt,
+  // per-ticket run history by ticketKey.
+  index("workflow_runs_status_idx").on(t.status),
+  index("workflow_runs_started_at_idx").on(t.startedAt),
+  index("workflow_runs_ticket_key_idx").on(t.ticketKey),
+]);

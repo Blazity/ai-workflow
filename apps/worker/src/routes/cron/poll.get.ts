@@ -1,4 +1,5 @@
 import { defineEventHandler, getHeader, createError } from "h3";
+import { getWorld } from "workflow/runtime";
 import { env } from "../../../env.js";
 import { createAdapters } from "../../lib/adapters.js";
 import { dispatchTicket } from "../../lib/dispatch.js";
@@ -6,6 +7,9 @@ import { reconcileRuns } from "../../lib/reconcile.js";
 import { logger } from "../../lib/logger.js";
 import { GateStore } from "../../post-pr-gate/gate-store.js";
 import { getDb } from "../../db/client.js";
+import { collectSnapshots } from "../../lib/telemetry/collect-snapshots.js";
+import { upsertRunSnapshots } from "../../lib/telemetry/run-telemetry.js";
+import type { RunsLister } from "../../lib/overview/collect-runs.js";
 
 export default defineEventHandler(async (event) => {
   verifyCronAuth(getHeader(event, "authorization"));
@@ -34,6 +38,21 @@ export default defineEventHandler(async (event) => {
   await new GateStore(getDb())
     .purgeExpired()
     .catch((err) => logger.warn({ err: (err as Error).message }, "poll_gate_purge_failed"));
+
+  // Telemetry: snapshot run lifecycle from the Workflow world into Neon so run
+  // history, active counts and durations stay SQL-queryable beyond Vercel's
+  // ~24h observability window. Per-run cost is filled separately by the agent
+  // workflow. Best-effort — a failed snapshot must not fail the poll.
+  try {
+    const db = getDb();
+    const snapshots = await collectSnapshots({
+      runsLister: getWorld().runs as RunsLister,
+      db,
+    });
+    await upsertRunSnapshots(db, snapshots);
+  } catch (err) {
+    logger.warn({ err: (err as Error).message }, "poll_snapshot_failed");
+  }
 
   return {
     status: "ok",

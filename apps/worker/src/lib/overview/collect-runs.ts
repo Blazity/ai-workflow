@@ -30,7 +30,7 @@ export interface WorkflowRunRecord {
   completedAt?: Date;
 }
 
-const STATUS_MAP: Record<WorkflowRunRecord["status"], RunStatus> = {
+export const STATUS_MAP: Record<WorkflowRunRecord["status"], RunStatus> = {
   completed: "success",
   failed: "failed",
   running: "running",
@@ -43,7 +43,7 @@ const WORKFLOW_MAP: Record<string, { id: string; name: string }> = {
   postPrGateWorkflow: { id: "wf_post_pr_gate", name: "Post-PR gate" },
 };
 
-function mapWorkflow(workflowName: string): { id: string; name: string } {
+export function mapWorkflow(workflowName: string): { id: string; name: string } {
   let fn = workflowName;
   try {
     fn = parseWorkflowName(workflowName)?.functionName ?? workflowName;
