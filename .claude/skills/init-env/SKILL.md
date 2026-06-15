@@ -1,6 +1,6 @@
 ---
 name: init-env
-description: First-time setup orchestrator for the Blazebot ai-workflow repo. Mirrors SETUP.md as an agent-driven flow — project linking, env vars across Jira / VCS / Agent / Slack / Upstash, production deploy, post-deploy registrations (Jira webhook + Slack /ai-workflow slash command), and smoke checks. Use when starting fresh on this repo for the first time — "init project", "first-time setup", "bootstrap this repo", "onboard me", "set up env from scratch".
+description: First-time setup orchestrator for the Blazebot ai-workflow repo. Mirrors SETUP.md as an agent-driven flow — project linking, env vars across Jira / VCS / Agent / Slack / Neon, production deploy, post-deploy registrations (Jira webhook + Slack /ai-workflow slash command), and smoke checks. Use when starting fresh on this repo for the first time — "init project", "first-time setup", "bootstrap this repo", "onboard me", "set up env from scratch".
 ---
 
 # Initialize Project Environment (Cold Start)
@@ -36,7 +36,7 @@ If the user replies with anything other than a clear go-signal, do not advance �
 3.  init-vcs                → branch on github | gitlab
 4.  init-agent              → branch on claude  | codex
 5.  init-slack              → bot token, channel, signing secret
-6.  init-upstash            → Marketplace install runbook
+6.  init-neon               → Marketplace install runbook
 7.  Inline: CRON_SECRET     → auto-generate, paste-template
 8.  vercel env pull + validate → .env.local + pnpm tsx env.ts
 9.  vercel --prod           → single production deploy
@@ -153,15 +153,15 @@ Invoke `init-agent`. It asks **claude or codex** and emits a single paste-templa
 
 Invoke `init-slack`. It walks the user through creating the Slack app (or finding an existing bot token), the bot's `chat:write` scope, and the channel ID format.
 
-→ **Stop. Ask:** *"Slack configured. Ready for Step 6: Upstash Redis?"*
+→ **Stop. Ask:** *"Slack configured. Ready for Step 6: Neon Postgres?"*
 
 ---
 
-## Step 6 — Invoke `init-upstash`
+## Step 6 — Invoke `init-neon`
 
-Invoke `init-upstash`. It walks the user through the Vercel Marketplace install of Upstash for Redis, with the env-var prefix set to `AI_WORKFLOW_KV` so Vercel auto-injects the two keys `env.ts` expects.
+Invoke `init-neon`. It walks the user through the Vercel Marketplace install of Neon Postgres with branch-per-environment enabled so Vercel auto-injects `DATABASE_URL` for each environment that `env.ts` expects.
 
-→ **Stop. Ask:** *"Upstash installed. Ready for Step 7: cron secret?"*
+→ **Stop. Ask:** *"Neon installed. Ready for Step 7: cron secret?"*
 
 ---
 
@@ -351,7 +351,7 @@ Configured:
   VCS      <github|gitlab>         <owner>/<repo>
   Agent    <claude|codex>          model <model>
   Slack    channel <id>            bot @<bot_name>, slash <registered | deferred>
-  Upstash  AI_WORKFLOW_KV prefix   via Marketplace
+  Neon     DATABASE_URL per env    via Marketplace
   Cron     CRON_SECRET set         schedule * * * * *
 
 Skipped (see SETUP.md for the full how-to):
@@ -377,7 +377,7 @@ Smoke checks:
 
 Maintenance:
   Rotate one integration later by invoking that subskill standalone:
-    init-jira | init-vcs | init-agent | init-slack | init-upstash
+    init-jira | init-vcs | init-agent | init-slack | init-neon
 
   Inspect the deployment:
     vercel logs --prod

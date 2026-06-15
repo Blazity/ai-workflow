@@ -1,5 +1,6 @@
-import { sleep } from "workflow";
+import { sleep, getWorkflowMetadata } from "workflow";
 import { branchForTicket } from "../lib/branch-prefix.js";
+import { computeUsageTotals, type UsageTotals } from "../sandbox/usage.js";
 import type {
   AgentOutput, PhaseUsage, PhaseKind, PhaseArtifactPaths, ResearchResult, ReviewOutput,
 } from "../sandbox/agents/types.js";
@@ -526,6 +527,43 @@ function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+/**
+ * Persist the run's cost/usage (+ agent PR + ticket) to the durable telemetry
+ * table. Called from the workflow's outer finally so cost is recorded on every
+ * exit — success, clarification, or failure. maxRetries = 0 and the caller
+ * swallows errors: telemetry must never retry or fail the run.
+ */
+async function recordRunTelemetryStep(payload: {
+  runId: string;
+  ticketKey: string;
+  ticketTitle: string;
+  ticketUrl: string;
+  model: string | null;
+  totals: UsageTotals;
+  pr: { url: string; number: number } | null;
+}) {
+  "use step";
+  const { getDb } = await import("../db/client.js");
+  const { recordRunUsage } = await import("../lib/telemetry/run-telemetry.js");
+  const { totals } = payload;
+  await recordRunUsage(getDb(), {
+    runId: payload.runId,
+    ticketKey: payload.ticketKey,
+    ticketTitle: payload.ticketTitle,
+    ticketUrl: payload.ticketUrl,
+    model: payload.model,
+    costUsd: totals.costUsd,
+    costKnown: totals.costKnown,
+    tokensInput: totals.tokensInput,
+    tokensCached: totals.tokensCached,
+    tokensOutput: totals.tokensOutput,
+    phases: totals.phases,
+    prUrl: payload.pr?.url ?? null,
+    prNumber: payload.pr?.number ?? null,
+  });
+}
+recordRunTelemetryStep.maxRetries = 0;
+
 // --- Polling helper (not a step — called within the workflow) ---
 
 async function pollUntilDone(
@@ -553,6 +591,8 @@ async function pollUntilDone(
 export async function agentWorkflow(ticketId: string) {
   "use workflow";
 
+  const { workflowRunId } = getWorkflowMetadata();
+
   const { env, getVcsConfig } = await import("../../env.js");
   const { assembleResearchPlanContext, assembleImplementationContext, assembleReviewContext } =
     await import("../sandbox/context.js");
@@ -576,6 +616,13 @@ export async function agentWorkflow(ticketId: string) {
   const prompts = await loadPrompts();
 
   const phaseUsages: Record<string, PhaseUsage | null> = {};
+  // Phases whose agent was launched. A phase that times out or exits before
+  // its usage is parsed never gets a phaseUsages entry; the finally reconciles
+  // any such launched-but-missing phase to null so computeUsageTotals flags
+  // costKnown=false instead of reporting a misleading costUsd=0 / costKnown=true.
+  const launchedPhases = new Set<string>();
+  // Captured on the success path; written as run telemetry in the finally.
+  let prForTelemetry: { url: string; number: number } | null = null;
   // Set after provisionSandbox once agentKind is known.
   let activeModel: string | undefined;
   let priceLookup: ((m: string) => { input: number; cached_input: number; output: number } | null) | undefined;
@@ -700,6 +747,7 @@ export async function agentWorkflow(ticketId: string) {
         researchPaths.input, researchInput,
         researchPaths.wrapper, researchScript,
       );
+      launchedPhases.add("Research");
 
       const researchDone = await pollUntilDone(sandboxId, researchPaths.sentinel, 20);
       if (!researchDone) {
@@ -774,6 +822,7 @@ export async function agentWorkflow(ticketId: string) {
         implPaths.input, implInput,
         implPaths.wrapper, implScript,
       );
+      launchedPhases.add("Impl");
 
       const implDone = await pollUntilDone(sandboxId, implPaths.sentinel, 35);
       let implOutput: AgentOutput;
@@ -833,6 +882,7 @@ export async function agentWorkflow(ticketId: string) {
           reviewPaths.input, reviewInput,
           reviewPaths.wrapper, reviewScript,
         );
+        launchedPhases.add("Review");
 
         const reviewDone = await pollUntilDone(sandboxId, reviewPaths.sentinel, 15);
         let reviewOutput: ReviewOutput;
@@ -894,6 +944,7 @@ export async function agentWorkflow(ticketId: string) {
       const pr = !prContext
         ? await createPullRequest(branchName, ticket.title, "")
         : await findPRForBranch(branchName);
+      prForTelemetry = { url: pr.url, number: pr.id };
 
       const usageReport = formatUsageReport(phaseUsages, priceLookup, activeModel);
       await notifyTicket(ticket.identifier, {
@@ -922,5 +973,24 @@ export async function agentWorkflow(ticketId: string) {
       await markTicketFailed(ticket.identifier, `Failed to move ticket to backlog: ${(err as Error).message ?? "unknown"}`).catch(() => {});
     }
     throw err;
+  } finally {
+    // A launched phase with no parsed usage (timed out / errored before
+    // collect) records as unknown, so computeUsageTotals reports
+    // costKnown=false instead of a misleading costUsd=0 / costKnown=true.
+    for (const phase of launchedPhases) {
+      if (!(phase in phaseUsages)) phaseUsages[phase] = null;
+    }
+    // Durable cost/usage telemetry, recorded on every exit path (success,
+    // clarification, or failure). Best-effort: the step never retries and we
+    // swallow errors so telemetry can't break or delay the run.
+    await recordRunTelemetryStep({
+      runId: workflowRunId,
+      ticketKey: ticket.identifier,
+      ticketTitle: ticket.title,
+      ticketUrl: `${env.JIRA_BASE_URL.replace(/\/+$/, "")}/browse/${ticket.identifier}`,
+      model: activeModel ?? null,
+      totals: computeUsageTotals(phaseUsages, priceLookup, activeModel),
+      pr: prForTelemetry,
+    }).catch(() => {});
   }
 }

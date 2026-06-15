@@ -34,19 +34,15 @@ async function runGate(input: PostPrGateWorkflowInput) {
   const { postPrGateStepRegistry } = await import("../post-pr-gate/steps/index.js");
   const { executePostPrGatePhase } = await import("../post-pr-gate/runner.js");
   const { GateStore } = await import("../post-pr-gate/gate-store.js");
+  const { getDb } = await import("../db/client.js");
   const { ticketKeyFromBranch } = await import("../lib/branch-prefix.js");
   const { createAdapters } = await import("../lib/adapters.js");
   const { logger } = await import("../lib/logger.js");
-  const { env } = await import("../../env.js");
   const { hasCheckRunCapability } = await import("../adapters/vcs/types.js");
 
   const config = loadPostPrGateConfig();
   const adapters = createAdapters();
-  const gateStore = new GateStore({
-    url: env.AI_WORKFLOW_KV_REST_API_URL,
-    token: env.AI_WORKFLOW_KV_REST_API_TOKEN,
-    envPrefix: env.VERCEL_ENV ?? "development",
-  });
+  const gateStore = new GateStore(getDb());
 
   if (config.postPrGate.runOn.botPrsOnly && !input.headRef.startsWith("blazebot/")) {
     logger.info({ headRef: input.headRef }, "post_pr_gate_skipped_not_bot_branch");

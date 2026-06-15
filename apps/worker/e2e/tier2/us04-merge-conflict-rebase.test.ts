@@ -16,7 +16,7 @@ import {
   deleteBranch,
   deleteFile,
 } from "../helpers/github.js";
-import { getRunId, cleanup as redisCleanup } from "../helpers/redis.js";
+import { getRunId, cleanup as registryCleanup } from "../helpers/registry.js";
 import { stopSandboxesForTicket } from "../helpers/sandbox.js";
 import { callCronPoll } from "../helpers/cron.js";
 import { waitFor } from "../helpers/wait.js";
@@ -49,7 +49,7 @@ describe("US-04: PR with merge conflicts — agent rebases", () => {
       "[E2E] cleanup conflict test file",
     ).catch(() => {});
     if (ticketKey) {
-      await redisCleanup(ticketKey);
+      await registryCleanup(ticketKey);
       await deleteTicket(ticketKey);
     }
   });
@@ -161,13 +161,13 @@ describe("US-04: PR with merge conflicts — agent rebases", () => {
     const finalStatus = await getTicketStatus(ticketKey);
     expect(finalStatus).toBe(e2eEnv.COLUMN_AI_REVIEW);
 
-    // Redis cleaned up
+    // Registry cleaned up
     await waitFor(
       async () => {
         const runId = await getRunId(ticketKey);
         return runId === null ? true : null;
       },
-      { description: `Redis clean for ${ticketKey}`, timeoutMs: 30_000 },
+      { description: `Registry clean for ${ticketKey}`, timeoutMs: 30_000 },
     );
   });
 });

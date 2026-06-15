@@ -5,12 +5,12 @@ import { getSandboxCredentials } from "./credentials.js";
 /**
  * Best-effort cleanup for leaked sandboxes after ticket cancellation.
  *
- * Fast path: if the caller knows the sandboxId (looked up from Redis via
+ * Fast path: if the caller knows the sandboxId (looked up from Postgres via
  * `runRegistry.getSandboxId`), we issue a single `Sandbox.stop()` — no
  * discovery pass at all.
  *
  * Fallback path: scan all running sandboxes and inspect each one's checked-
- * out branch. Used when the caller doesn't have a sandboxId (older Redis
+ * out branch. Used when the caller doesn't have a sandboxId (older registry
  * state, or a crash between `provisionSandbox` and the sandboxId being
  * written). The scan runs in parallel — serial iteration over N sandboxes
  * previously dominated cron's 300s budget when the environment was busy.
