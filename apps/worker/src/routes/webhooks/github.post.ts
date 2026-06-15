@@ -3,6 +3,7 @@ import { start, getRun } from "workflow/api";
 import { env } from "../../../env.js";
 import { verifyGitHubWebhookSignature } from "../../lib/github-webhook-sig.js";
 import { GateStore, type CurrentGateRun } from "../../post-pr-gate/gate-store.js";
+import { getDb } from "../../db/client.js";
 import { postPrGateWorkflow } from "../../workflows/post-pr-gate.js";
 import { logger } from "../../lib/logger.js";
 import { createAdapters } from "../../lib/adapters.js";
@@ -53,11 +54,7 @@ export default defineEventHandler(async (event) => {
   const headSha = pr.head.sha;
   const headRef = pr.head.ref;
 
-  const gateStore = new GateStore({
-    url: env.AI_WORKFLOW_KV_REST_API_URL,
-    token: env.AI_WORKFLOW_KV_REST_API_TOKEN,
-    envPrefix: env.VERCEL_ENV ?? "development",
-  });
+  const gateStore = new GateStore(getDb());
 
   const lockToken = await gateStore.acquireLock(ownerRepo, prNumber);
   if (!lockToken) {

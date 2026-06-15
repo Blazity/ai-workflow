@@ -70,15 +70,15 @@ export async function dispatchTicket(
 
     // Post-claim capacity verify. The precheck above is not atomic with
     // claim(), so N concurrent dispatches for *different* tickets can all
-    // pass the precheck and then all claim successfully — pushing Redis
-    // over the cap. Re-read the registry with our own claim visible and
-    // decide fairly who stays.
+    // pass the precheck and then all claim successfully — pushing the run
+    // registry over the cap. Re-read the registry with our own claim
+    // visible and decide fairly who stays.
     //
     // Fairness rule: sort by (claim timestamp ascending, ticketKey
     // ascending as tie-breaker); the first `max` entries win. Existing
     // non-sentinel entries (already-running workflows) are treated as
     // timestamp 0 so they always win over new claims. Every racer
-    // eventually converges on the same ordering once Redis writes are
+    // eventually converges on the same ordering once registry writes are
     // visible to all, so exactly the excess bail.
     stage = "postclaim_capacity";
     const racers = await runRegistry.listAll();
@@ -190,7 +190,7 @@ export async function dispatchTicket(
 }
 
 /**
- * Capacity check counts active runs in the Redis registry — this is the
+ * Capacity check counts active runs in the Postgres registry — this is the
  * per-app concurrency limit for blazebot, not a per-team sandbox quota.
  *
  * We deliberately exclude claiming sentinels older than STALE_CLAIM_MS so

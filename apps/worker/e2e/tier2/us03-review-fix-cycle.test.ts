@@ -17,7 +17,7 @@ import {
   closePR,
   deleteBranch,
 } from "../helpers/github.js";
-import { getRunId, cleanup as redisCleanup } from "../helpers/redis.js";
+import { getRunId, cleanup as registryCleanup } from "../helpers/registry.js";
 import { stopSandboxesForTicket } from "../helpers/sandbox.js";
 import { callCronPoll } from "../helpers/cron.js";
 import { waitFor } from "../helpers/wait.js";
@@ -43,7 +43,7 @@ describe("US-03: Review feedback triggers a fix cycle", () => {
     if (prNumber) await closePR(prNumber);
     if (branchName) await deleteBranch(branchName);
     if (ticketKey) {
-      await redisCleanup(ticketKey);
+      await registryCleanup(ticketKey);
       await deleteTicket(ticketKey);
     }
   });
@@ -162,13 +162,13 @@ describe("US-03: Review feedback triggers a fix cycle", () => {
     const filenames = prFiles.map((f) => f.filename);
     expect(filenames.some((f) => f.includes("healthcheck"))).toBe(true);
 
-    // Redis cleaned up
+    // Registry cleaned up
     await waitFor(
       async () => {
         const runId = await getRunId(ticketKey);
         return runId === null ? true : null;
       },
-      { description: `Redis clean for ${ticketKey}`, timeoutMs: 30_000 },
+      { description: `Registry clean for ${ticketKey}`, timeoutMs: 30_000 },
     );
   });
 });

@@ -1,29 +1,32 @@
 import { randomUUID } from "node:crypto";
-import { Redis } from "@upstash/redis";
+import { and, eq, sql } from "drizzle-orm";
+import type { Db } from "../db/client.js";
+import { gateCurrent, gateDedupe, gateLocks } from "../db/schema.js";
 
 /**
  * Application-level dedupe, force-push tracking, and per-PR locking for
- * post-pr-gate runs.
+ * post-pr-gate runs — Postgres edition.
  *
- * Three keys per PR:
- *   gate:lock:{repo}#{pr}        — short-TTL mutex around the webhook critical
- *                                  section. Released in `finally`; if the route
- *                                  process dies, the TTL releases it.
- *   gate:dedupe:{repo}#{pr}@{sha} — SET NX with the real `handle.runId`.
- *                                  Absent value means "never claimed for this SHA".
- *   gate:current:{repo}#{pr}     — JSON pointer to the latest run.
- *                                  Used to cancel the previous run on force-push.
+ * Three tables (see src/db/schema.ts):
+ *   gate_locks   — short-TTL mutex around the webhook critical section.
+ *                  Released in `finally`; if the route process dies, the
+ *                  expires_at timestamp lets the next acquirer steal it.
+ *   gate_dedupe  — one row per {repo, pr, headSha}; INSERT-on-conflict is
+ *                  the SET NX equivalent. Absent/expired row means "never
+ *                  claimed for this SHA".
+ *   gate_current — pointer to the latest run, used to cancel the previous
+ *                  run on force-push.
  *
- * Lifetime: 14 days. PRs older than that fall back to "fresh" behavior on
- * re-delivery; acceptable for our use case.
+ * TTL semantics: a row past its expires_at is treated as ABSENT by every
+ * read (correctness); physical deletion happens via purgeExpired() in the
+ * poll cron (housekeeping). Lifetime: 14 days, matching the Redis EX.
  *
- * The `envPrefix` is passed in (not read from `process.env` at module load),
- * so namespacing is explicit and unit-testable. Production callers pass
- * `env.VERCEL_ENV` from the validated env schema.
+ * Each former Lua script is now a single SQL statement, so it stays atomic
+ * over the sessionless neon-http driver — no transactions required.
  */
 
-const TTL_SECONDS = 60 * 60 * 24 * 14;
-const LOCK_TTL_SECONDS = 30;
+const TTL = sql`now() + interval '14 days'`;
+const LOCK_TTL = sql`now() + interval '30 seconds'`;
 
 export interface CurrentGateRun {
   runId: string;
@@ -32,53 +35,54 @@ export interface CurrentGateRun {
 }
 
 export class GateStore {
-  private redis: Redis;
-  private envPrefix: string;
-
-  constructor(opts: { url: string; token: string; envPrefix: string }) {
-    this.redis = new Redis({ url: opts.url, token: opts.token });
-    this.envPrefix = opts.envPrefix;
-  }
-
-  private lockKey(repo: string, pr: number): string {
-    return `blazebot:gate:lock:${this.envPrefix}:${repo}#${pr}`;
-  }
-
-  private currentKey(repo: string, pr: number): string {
-    return `blazebot:gate:current:${this.envPrefix}:${repo}#${pr}`;
-  }
-
-  private dedupeKey(repo: string, pr: number, headSha: string): string {
-    return `blazebot:gate:dedupe:${this.envPrefix}:${repo}#${pr}@${headSha}`;
-  }
+  constructor(private db: Db) {}
 
   /**
    * Acquire the per-PR lock. Returns a token if acquired, null if busy.
    * Caller MUST call `releaseLock` with the same token in a `finally`.
+   * Single statement: insert wins a free lock; the conflict-update with
+   * setWhere steals an expired one; otherwise no row returns → busy.
    */
   async acquireLock(repo: string, pr: number): Promise<string | null> {
     const token = randomUUID();
-    const res = await this.redis.set(this.lockKey(repo, pr), token, {
-      nx: true,
-      ex: LOCK_TTL_SECONDS,
-    });
-    return res === "OK" ? token : null;
+    const rows = await this.db
+      .insert(gateLocks)
+      .values({ repo, pr, token, expiresAt: LOCK_TTL })
+      .onConflictDoUpdate({
+        target: [gateLocks.repo, gateLocks.pr],
+        set: {
+          token: sql`excluded.token`,
+          expiresAt: sql`excluded.expires_at`,
+        },
+        setWhere: sql`${gateLocks.expiresAt} < now()`,
+      })
+      .returning({ token: gateLocks.token });
+    return rows.length > 0 ? token : null;
   }
 
   /**
-   * Release the per-PR lock — only if our token still owns it. A no-op if the
-   * lock TTL'd out and another holder took over.
+   * Release the per-PR lock — only if our token still owns it. A no-op if
+   * the lock expired and another holder took over (token-guarded DELETE,
+   * the SQL twin of the old compare-and-delete Lua script).
    */
   async releaseLock(repo: string, pr: number, token: string): Promise<void> {
-    const script = `if redis.call("get", KEYS[1]) == ARGV[1] then return redis.call("del", KEYS[1]) else return 0 end`;
-    await this.redis.eval(script, [this.lockKey(repo, pr)], [token]);
+    await this.db
+      .delete(gateLocks)
+      .where(
+        and(
+          eq(gateLocks.repo, repo),
+          eq(gateLocks.pr, pr),
+          eq(gateLocks.token, token),
+        ),
+      );
   }
 
   /**
    * Atomically claim a {repo, pr, headSha} as a unique gate run.
    * Returns the existing runId if already claimed, null if we won the race.
-   * Designed to be called *inside* `acquireLock`, but the SET NX is a
-   * defense-in-depth in case the lock TTL'd out mid-critical-section.
+   * Designed to be called *inside* `acquireLock`, but the conflict guard is
+   * defense-in-depth in case the lock expired mid-critical-section.
+   * An expired claim is re-claimable (Redis SET NX EX semantics).
    */
   async claimRun(
     repo: string,
@@ -86,13 +90,20 @@ export class GateStore {
     headSha: string,
     runId: string,
   ): Promise<string | null> {
-    const res = await this.redis.set(
-      this.dedupeKey(repo, pr, headSha),
-      runId,
-      { nx: true, ex: TTL_SECONDS },
-    );
-    if (res === "OK") return null;
-    return (await this.redis.get<string>(this.dedupeKey(repo, pr, headSha))) ?? null;
+    const rows = await this.db
+      .insert(gateDedupe)
+      .values({ repo, pr, headSha, runId, expiresAt: TTL })
+      .onConflictDoUpdate({
+        target: [gateDedupe.repo, gateDedupe.pr, gateDedupe.headSha],
+        set: {
+          runId: sql`excluded.run_id`,
+          expiresAt: sql`excluded.expires_at`,
+        },
+        setWhere: sql`${gateDedupe.expiresAt} < now()`,
+      })
+      .returning({ runId: gateDedupe.runId });
+    if (rows.length > 0) return null; // inserted fresh or reclaimed expired
+    return this.getDedupe(repo, pr, headSha);
   }
 
   async getDedupe(
@@ -100,11 +111,36 @@ export class GateStore {
     pr: number,
     headSha: string,
   ): Promise<string | null> {
-    return (await this.redis.get<string>(this.dedupeKey(repo, pr, headSha))) ?? null;
+    const rows = await this.db
+      .select({ runId: gateDedupe.runId })
+      .from(gateDedupe)
+      .where(
+        and(
+          eq(gateDedupe.repo, repo),
+          eq(gateDedupe.pr, pr),
+          eq(gateDedupe.headSha, headSha),
+          sql`${gateDedupe.expiresAt} > now()`,
+        ),
+      );
+    return rows[0]?.runId ?? null;
   }
 
   async getCurrent(repo: string, pr: number): Promise<CurrentGateRun | null> {
-    return this.redis.get<CurrentGateRun>(this.currentKey(repo, pr));
+    const rows = await this.db
+      .select({
+        runId: gateCurrent.runId,
+        headSha: gateCurrent.headSha,
+        checkRunIds: gateCurrent.checkRunIds,
+      })
+      .from(gateCurrent)
+      .where(
+        and(
+          eq(gateCurrent.repo, repo),
+          eq(gateCurrent.pr, pr),
+          sql`${gateCurrent.expiresAt} > now()`,
+        ),
+      );
+    return rows[0] ?? null;
   }
 
   async setCurrent(
@@ -112,19 +148,26 @@ export class GateStore {
     pr: number,
     value: CurrentGateRun,
   ): Promise<void> {
-    await this.redis.set(this.currentKey(repo, pr), value, { ex: TTL_SECONDS });
+    await this.db
+      .insert(gateCurrent)
+      .values({ repo, pr, ...value, expiresAt: TTL })
+      .onConflictDoUpdate({
+        target: [gateCurrent.repo, gateCurrent.pr],
+        set: {
+          runId: value.runId,
+          headSha: value.headSha,
+          checkRunIds: value.checkRunIds,
+          expiresAt: TTL,
+        },
+      });
   }
 
   /**
    * Atomically append check-run IDs to the current pointer, but only if the
    * pointer's headSha still matches `expectedHeadSha`. Returns true if the
-   * append happened, false if the key is missing, malformed, or superseded by
-   * a force-push.
-   *
-   * headSha (not runId) is the guard: the webhook may not have written the
-   * real runId yet when the workflow appends. The headSha is set BEFORE
-   * `start()` in the webhook, so it's always present by the time the workflow
-   * reaches this call. KEEPTTL preserves the 14-day TTL set by `setCurrent`.
+   * append happened, false if the row is missing, expired, or superseded by
+   * a force-push. Single conditional UPDATE = the old SHA-guarded Lua
+   * append; not touching expires_at = KEEPTTL.
    */
   async appendCheckRunIdsForSha(
     repo: string,
@@ -133,32 +176,36 @@ export class GateStore {
     ids: number[],
   ): Promise<boolean> {
     if (ids.length === 0) return true;
-    const script = `
-local cur = redis.call("get", KEYS[1])
-if cur == false then return 0 end
-local ok, parsed = pcall(cjson.decode, cur)
-if not ok then return 0 end
-if parsed.headSha ~= ARGV[1] then return 0 end
-parsed.checkRunIds = parsed.checkRunIds or {}
-for i = 2, #ARGV do
-  parsed.checkRunIds[#parsed.checkRunIds + 1] = tonumber(ARGV[i])
-end
-redis.call("set", KEYS[1], cjson.encode(parsed), "KEEPTTL")
-return 1
-`;
-    const args = [expectedHeadSha, ...ids.map((id) => String(id))];
-    const res = await this.redis.eval(script, [this.currentKey(repo, pr)], args);
-    return res === 1;
+    // IDs are validated integers; inlined as an array literal because the
+    // append expression needs a typed bigint[] on the right-hand side.
+    if (!ids.every((id) => Number.isSafeInteger(id))) {
+      throw new Error(`non-integer check-run ids: ${ids.join(",")}`);
+    }
+    const literal = sql.raw(`'{${ids.join(",")}}'::bigint[]`);
+    const rows = await this.db
+      .update(gateCurrent)
+      .set({ checkRunIds: sql`${gateCurrent.checkRunIds} || ${literal}` })
+      .where(
+        and(
+          eq(gateCurrent.repo, repo),
+          eq(gateCurrent.pr, pr),
+          eq(gateCurrent.headSha, expectedHeadSha),
+          sql`${gateCurrent.expiresAt} > now()`,
+        ),
+      )
+      .returning({ pr: gateCurrent.pr });
+    return rows.length > 0;
   }
 
   /**
-   * Atomically set the `runId` field of the current pointer, but only if the
-   * pointer's headSha still matches `expectedHeadSha`. Returns true if the
-   * update happened, false if the key is missing or superseded.
+   * Atomically set the `runId` field of the current pointer, but only if
+   * the pointer's headSha still matches `expectedHeadSha`. Returns true if
+   * the update happened, false if the row is missing or superseded.
    *
    * Used by the webhook to fill in the real runId AFTER `start()` returns,
    * without stomping `checkRunIds` that the workflow may have already
-   * appended. KEEPTTL preserves the TTL from the prior `setCurrent`.
+   * appended — a column-targeted UPDATE only touches run_id, so that
+   * property now holds structurally.
    */
   async updateRunIdIfHeadSha(
     repo: string,
@@ -166,25 +213,39 @@ return 1
     expectedHeadSha: string,
     runId: string,
   ): Promise<boolean> {
-    const script = `
-local cur = redis.call("get", KEYS[1])
-if cur == false then return 0 end
-local ok, parsed = pcall(cjson.decode, cur)
-if not ok then return 0 end
-if parsed.headSha ~= ARGV[1] then return 0 end
-parsed.runId = ARGV[2]
-redis.call("set", KEYS[1], cjson.encode(parsed), "KEEPTTL")
-return 1
-`;
-    const res = await this.redis.eval(
-      script,
-      [this.currentKey(repo, pr)],
-      [expectedHeadSha, runId],
-    );
-    return res === 1;
+    const rows = await this.db
+      .update(gateCurrent)
+      .set({ runId })
+      .where(
+        and(
+          eq(gateCurrent.repo, repo),
+          eq(gateCurrent.pr, pr),
+          eq(gateCurrent.headSha, expectedHeadSha),
+          sql`${gateCurrent.expiresAt} > now()`,
+        ),
+      )
+      .returning({ pr: gateCurrent.pr });
+    return rows.length > 0;
   }
 
   async clearCurrent(repo: string, pr: number): Promise<void> {
-    await this.redis.del(this.currentKey(repo, pr));
+    await this.db
+      .delete(gateCurrent)
+      .where(and(eq(gateCurrent.repo, repo), eq(gateCurrent.pr, pr)));
+  }
+
+  /**
+   * Physically delete expired rows. Reads already treat them as absent;
+   * this is housekeeping so tables don't grow forever. Called from the
+   * poll cron (src/routes/cron/poll.get.ts), best-effort.
+   */
+  async purgeExpired(): Promise<void> {
+    await this.db.delete(gateLocks).where(sql`${gateLocks.expiresAt} < now()`);
+    await this.db
+      .delete(gateDedupe)
+      .where(sql`${gateDedupe.expiresAt} < now()`);
+    await this.db
+      .delete(gateCurrent)
+      .where(sql`${gateCurrent.expiresAt} < now()`);
   }
 }

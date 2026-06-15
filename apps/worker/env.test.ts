@@ -25,8 +25,7 @@ describe("env", () => {
     CLAUDE_MODEL: "claude-opus-4-6",
     MAX_CONCURRENT_AGENTS: "3",
     JOB_TIMEOUT_MS: "1800000",
-    AI_WORKFLOW_KV_REST_API_URL: "https://fake.upstash.io",
-    AI_WORKFLOW_KV_REST_API_TOKEN: "fake-token",
+    DATABASE_URL: "postgresql://user:pass@ep-fake.neon.tech/neondb",
     GITHUB_WEBHOOK_SECRET: "github-webhook-secret",
     WORKER_API_TOKEN: "a".repeat(64),
   };

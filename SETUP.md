@@ -9,7 +9,7 @@ End-to-end instructions for deploying ai-workflow to your own Vercel account. Re
 1. [Prerequisites](#1-prerequisites)
 2. [Provision external accounts](#2-provision-external-accounts)
 3. [Clone the repo and link to Vercel](#3-clone-the-repo-and-link-to-vercel)
-4. [Install the Upstash marketplace integration](#4-install-the-upstash-marketplace-integration)
+4. [Install the Neon Postgres marketplace integration](#4-install-the-neon-postgres-marketplace-integration)
 5. [Configure environment variables](#5-configure-environment-variables)
 6. [Deploy to Vercel](#6-deploy-to-vercel)
 7. [Register the Jira webhook](#7-register-the-jira-webhook)
@@ -40,7 +40,7 @@ Accounts you must own:
 - **GitHub** _or_ **GitLab** — admin on the target repository (PR + branch creation).
 - **Slack** workspace — admin to install a custom app and register slash commands.
 - **Anthropic** _or_ **OpenAI** — API key for the agent runtime.
-- **Upstash** — installed via Vercel Marketplace in step 4.
+- **Neon Postgres** — installed via Vercel Marketplace in step 4.
 
 ---
 
@@ -198,20 +198,30 @@ cd ../..
 
 ---
 
-## 4. Install the Upstash marketplace integration
+## 4. Install the Neon Postgres marketplace integration
 
-ai-workflow uses Upstash Redis as its run registry (atomic claim/release for concurrent runs).
+ai-workflow uses Neon Postgres as its run registry and post-PR-gate store
+(atomic claim/release for concurrent runs, dedupe, locking). Tables are
+created automatically — migrations run during every deploy's build step.
 
-1. Open https://vercel.com/marketplace/upstash and click **Install**.
-2. Pick the team and project you just linked.
-3. **Critical:** when prompted for the env-var prefix, set it to `AI_WORKFLOW` (not `AI_WORKFLOW_KV`). Upstash appends `_KV_REST_API_URL` / `_KV_REST_API_TOKEN`, so the resulting vars are `AI_WORKFLOW_KV_REST_API_URL` and `AI_WORKFLOW_KV_REST_API_TOKEN` — which is what the code reads. Wrong prefix means ai-workflow can't find the registry.
-4. Vercel auto-injects both vars into Production, Preview, and Development environments.
+1. Open https://vercel.com/marketplace/neon and click **Install**.
+2. Connect it to the ai-workflow Vercel project.
+3. **Critical:** enable a **separate branch per environment** (development /
+   preview / production) when configuring the integration. Each environment's
+   `DATABASE_URL` must point at its own Neon branch. The build fails with an
+   `env_marker` error if two environments share one branch — that guard
+   protects the production run registry from preview deployments.
 
 Verify:
 
 ```bash
-vercel env ls | grep AI_WORKFLOW_KV
+vercel env ls | grep DATABASE_URL
 ```
+
+You should see `DATABASE_URL` present for each environment. (`vercel env ls`
+shows values as Encrypted, so it can't confirm branch isolation — use the
+pull-and-compare check in `.claude/skills/init-neon/` to verify each
+environment points at its own Neon branch.)
 
 ---
 
@@ -248,7 +258,7 @@ vercel env add JIRA_API_TOKEN production
 | `GITLAB_TOKEN`, `GITLAB_PROJECT_ID`                                                                | If `VCS_KIND=gitlab`                                   |
 | `ANTHROPIC_API_KEY`                                                                                | If `AGENT_KIND=claude` (default)                       |
 | `CODEX_API_KEY` (or `CODEX_CHATGPT_OAUTH_TOKEN`)                                                   | If `AGENT_KIND=codex`                                  |
-| `AI_WORKFLOW_KV_REST_API_URL`, `AI_WORKFLOW_KV_REST_API_TOKEN`                                     | Auto-injected by Upstash integration                   |
+| `DATABASE_URL`                                                                                     | Auto-injected by Neon integration                      |
 | `WORKER_API_TOKEN`                                                                                 | Shared bearer secret gating the read-only `/api/v1/*` API that the dashboard consumes. Required even if you don't deploy the dashboard. Generate: `openssl rand -hex 32`. The dashboard's `WORKER_API_TOKEN` must match this value. |
 
 ### Optional / has defaults
@@ -479,13 +489,13 @@ Flip `VCS_KIND=gitlab` and provide `GITLAB_TOKEN` + `GITLAB_PROJECT_ID`. For sel
 | `/cron/poll` returns 401 from Vercel Cron             | `CRON_SECRET` mismatch                                                                                                                  | Ensure the var is set in Production environment. Redeploy after changing.                                                                                               |
 | Tickets in AI column never get picked up              | Cron disabled / webhook misregistered                                                                                                   | Check **Vercel → Project → Cron Jobs** is enabled. Curl `/cron/poll` with the secret to test manually.                                                                  |
 | Workflow starts but sandbox fails to provision        | Missing Vercel OIDC / Sandbox quota                                                                                                     | On Vercel, OIDC is automatic. Check the project has Sandbox enabled (Pro plan). For local dev, set `VERCEL_TOKEN`/`VERCEL_TEAM_ID`/`VERCEL_PROJECT_ID`.                 |
-| Run registry: `AI_WORKFLOW_KV_REST_API_URL undefined` | Upstash integration installed with wrong prefix                                                                                         | Reinstall with prefix `AI_WORKFLOW` (Upstash appends `_KV_REST_API_URL` / `_KV_REST_API_TOKEN`).                                                                        |
+| Run registry: `DATABASE_URL undefined`                | Neon integration not connected to this project, or env var scoped to the wrong environments                                             | Reinstall the Neon integration / check it's connected to this project.                                                                                                  |
 | Agent runs but PR isn't created                       | GitHub App missing **Pull requests: Read & write** or **Contents: Read & write**, App not installed on target repo, or wrong owner/repo | In the App settings, re-check **Repository permissions** and the **Installations** list. Verify `GITHUB_OWNER`/`GITHUB_REPO` point at the _target_ repo, not this repo. |
 | Post-PR gate never runs on opened PRs                 | App webhook inactive, `Pull request` event not subscribed, missing `Checks: Read & write`, or permission/event change not re-accepted on the installed repo | App settings → **Webhook: Active** + URL set to `/webhooks/github`. Subscribe to **Pull request**. Bump **Checks** to read & write. Then have a repo admin re-accept the install at `https://github.com/organizations/<ORG>/settings/installations/<INSTALLATION_ID>`. Check **Advanced → Recent Deliveries** for 2xx responses. |
 | Post-PR gate webhook returns 401 in Recent Deliveries | `GITHUB_WEBHOOK_SECRET` missing on the deployment or different from the value pasted into the App | Set the var on **every** environment (production + preview + development) — preview deployments receive the webhook too. Redeploy after changing. Test by re-sending a delivery from the App's Recent Deliveries tab. |
 | Slack messages don't arrive                           | Bot not in channel, or wrong `CHAT_SDK_CHANNEL_ID`                                                                                      | Invite bot to the channel. Re-copy the channel ID.                                                                                                                      |
 | Slash command returns `dispatch_failed`               | Signing secret wrong, or app not reinstalled                                                                                            | Verify `SLACK_SIGNING_SECRET`. Reinstall the Slack app after adding the slash command.                                                                                  |
-| Two pollers race on the same ticket                   | Stale claim sentinel                                                                                                                    | The reconciler clears claims older than 5 minutes on every poll — wait one cycle, or flush the registry key in Upstash.                                                 |
+| Two pollers race on the same ticket                   | Stale claim sentinel                                                                                                                    | The reconciler clears claims older than 5 minutes on every poll — wait one cycle, or run `pnpm exec tsx scripts/clear-run-registry.ts <ticket>` from `apps/worker` (after `vercel env pull .env.local`). |
 | Sandbox times out                                     | Job too large for `JOB_TIMEOUT_MS`                                                                                                      | Increase to 60–90 minutes for complex tickets, or split the work.                                                                                                       |
 
 ### Useful logs
@@ -501,4 +511,4 @@ Flip `VCS_KIND=gitlab` and provide `GITLAB_TOKEN` + `GITLAB_PROJECT_ID`. For sel
 - Architecture and workflow internals → [README.md](./README.md)
 - Spec → [docs/SPEC.md](./docs/SPEC.md)
 - User stories → [docs/user-stories.md](./docs/user-stories.md)
-- Per-integration walkthroughs → `.claude/skills/init-*/` (Jira, Slack, Upstash, VCS, agent runtime)
+- Per-integration walkthroughs → `.claude/skills/init-*/` (Jira, Slack, Neon, VCS, agent runtime)

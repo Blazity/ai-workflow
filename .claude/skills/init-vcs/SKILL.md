@@ -7,7 +7,7 @@ description: Configure or rotate the VCS provider (GitHub or GitLab) for the Bla
 
 Branch-on-choice skill. Asks **GitHub or GitLab**, then emits a single paste-template for the chosen provider. The cross-field rule in `env.ts` (`VCS_KIND=github` requires `GITHUB_TOKEN` + `GITHUB_OWNER` + `GITHUB_REPO`; `VCS_KIND=gitlab` requires `GITLAB_TOKEN` + `GITLAB_PROJECT_ID`) is enforced by construction — only the chosen branch's keys are emitted.
 
-> If you want full project setup (Jira + VCS + Agent + Slack + Upstash + deploy), invoke `init-env` instead. This skill only handles VCS.
+> If you want full project setup (Jira + VCS + Agent + Slack + Neon + deploy), invoke `init-env` instead. This skill only handles VCS.
 
 ## Precondition
 

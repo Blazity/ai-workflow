@@ -7,7 +7,7 @@ description: Configure or rotate the Slack bot integration for Blazebot notifica
 
 Configures the Slack bot Blazebot uses to post status updates (run started, PR opened, run failed, etc.) to a single channel.
 
-> If you want full project setup (Jira + VCS + Agent + Slack + Upstash + deploy), invoke `init-env` instead. This skill only handles Slack.
+> If you want full project setup (Jira + VCS + Agent + Slack + Neon + deploy), invoke `init-env` instead. This skill only handles Slack.
 
 ## Precondition
 

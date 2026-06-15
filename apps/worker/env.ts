@@ -119,9 +119,9 @@ export const env = createEnv({
     // GitHub Webhook
     GITHUB_WEBHOOK_SECRET: z.string().min(1),
 
-    // Redis (run registry)
-    AI_WORKFLOW_KV_REST_API_URL: z.string().url(),
-    AI_WORKFLOW_KV_REST_API_TOKEN: z.string().min(1),
+    // Neon Postgres (run registry + post-PR gate store) — auto-injected by
+    // the Neon Vercel Marketplace integration, one branch per environment.
+    DATABASE_URL: z.string().url(),
 
     // Dashboard API — shared bearer secret gating the read-only /api/v1/*
     // endpoints (verified in src/middleware/api-auth.ts). The dashboard (a
