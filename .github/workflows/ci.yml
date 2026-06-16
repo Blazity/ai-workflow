@@ -59,11 +59,15 @@ jobs:
           node-version: "20.12"
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - name: Verify Vercel Sandbox credentials present
+      - name: Verify required e2e secrets present
         run: |
+          : "${DATABASE_URL:?DATABASE_URL missing in e2e environment — must be the Neon branch the deployment under test (ai-workflow-demo) uses}"
           : "${VERCEL_TOKEN:?VERCEL_TOKEN missing in e2e environment}"
           : "${VERCEL_TEAM_ID:?VERCEL_TEAM_ID missing in e2e environment}"
           : "${VERCEL_PROJECT_ID:?VERCEL_PROJECT_ID missing in e2e environment}"
+      - name: Preflight — verify e2e DATABASE_URL is the migrated branch
+        working-directory: apps/worker
+        run: pnpm exec tsx e2e/scripts/check-db.ts
       - run: pnpm run test:e2e:orchestration
       - if: failure()
         uses: actions/upload-artifact@v4
@@ -108,11 +112,15 @@ jobs:
           node-version: "20.12"
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - name: Verify Vercel Sandbox credentials present
+      - name: Verify required e2e secrets present
         run: |
+          : "${DATABASE_URL:?DATABASE_URL missing in e2e environment — must be the Neon branch the deployment under test (ai-workflow-demo) uses}"
           : "${VERCEL_TOKEN:?VERCEL_TOKEN missing in e2e environment}"
           : "${VERCEL_TEAM_ID:?VERCEL_TEAM_ID missing in e2e environment}"
           : "${VERCEL_PROJECT_ID:?VERCEL_PROJECT_ID missing in e2e environment}"
+      - name: Preflight — verify e2e DATABASE_URL is the migrated branch
+        working-directory: apps/worker
+        run: pnpm exec tsx e2e/scripts/check-db.ts
       - run: pnpm run test:e2e:capacity
       - if: failure()
         uses: actions/upload-artifact@v4
@@ -157,11 +165,15 @@ jobs:
           node-version: "20.12"
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - name: Verify Vercel Sandbox credentials present
+      - name: Verify required e2e secrets present
         run: |
+          : "${DATABASE_URL:?DATABASE_URL missing in e2e environment — must be the Neon branch the deployment under test (ai-workflow-demo) uses}"
           : "${VERCEL_TOKEN:?VERCEL_TOKEN missing in e2e environment}"
           : "${VERCEL_TEAM_ID:?VERCEL_TEAM_ID missing in e2e environment}"
           : "${VERCEL_PROJECT_ID:?VERCEL_PROJECT_ID missing in e2e environment}"
+      - name: Preflight — verify e2e DATABASE_URL is the migrated branch
+        working-directory: apps/worker
+        run: pnpm exec tsx e2e/scripts/check-db.ts
       - run: pnpm run test:e2e:agent
       - if: failure()
         uses: actions/upload-artifact@v4
