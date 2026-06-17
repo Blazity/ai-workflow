@@ -15,6 +15,17 @@ const FETCH_TIMEOUT_MS = 10_000;
  * it — the worker then returns 401 and the caller's try/catch falls back to the
  * documented empty/N-A state instead of crashing.
  */
+/** Append a query string, skipping empty/undefined values. */
+export function withQuery(
+  path: string,
+  params: Record<string, string | null | undefined>,
+): string {
+  const sp = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) if (v) sp.set(k, v);
+  const qs = sp.toString();
+  return qs ? `${path}?${qs}` : path;
+}
+
 export async function getJSON<T>(path: string): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
     cache: "no-store",

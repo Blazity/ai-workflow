@@ -191,6 +191,9 @@ export async function collectRunDetail(
     ticket,
     ticketTitle,
     ticketUrl: ticket ? `${tenantOrigin}/browse/${ticket}` : "",
+    // The Workflow world has no PR; the route enriches these from workflow_runs.
+    prNumber: null,
+    prUrl: null,
     model,
     createdAt: run.createdAt.toISOString(),
     startedAt: run.startedAt?.toISOString() ?? null,

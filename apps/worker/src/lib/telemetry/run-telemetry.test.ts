@@ -44,6 +44,7 @@ const snapshot = (over: Partial<RunSnapshot> = {}): RunSnapshot => ({
 
 const usage = (over: Partial<RunUsage> = {}): RunUsage => ({
   runId: "wrun_1",
+  status: "success",
   ticketKey: "PROJ-1",
   ticketTitle: "Add login",
   ticketUrl: "https://jira/browse/PROJ-1",
@@ -87,6 +88,25 @@ describe("upsertRunSnapshots", () => {
     expect(r.durationSec).toBe(295);
   });
 
+  it("never downgrades a terminal status back to running", async () => {
+    // The world reports a finished run as 'completed'→'success', and there's a
+    // brief post-completion window where it still reads 'running'. Once a row is
+    // terminal, a re-snapshot must leave it alone.
+    await upsertRunSnapshots(db, [snapshot({ status: "success" })]);
+    await upsertRunSnapshots(db, [snapshot({ status: "running" })]);
+    expect((await row("wrun_1")).status).toBe("success");
+
+    await upsertRunSnapshots(db, [snapshot({ runId: "wrun_2", status: "failed" })]);
+    await upsertRunSnapshots(db, [snapshot({ runId: "wrun_2", status: "running" })]);
+    expect((await row("wrun_2")).status).toBe("failed");
+  });
+
+  it("still advances a running row to a terminal status", async () => {
+    await upsertRunSnapshots(db, [snapshot({ status: "running" })]);
+    await upsertRunSnapshots(db, [snapshot({ status: "success" })]);
+    expect((await row("wrun_1")).status).toBe("success");
+  });
+
   it("does not erase a known ticket title when a later snapshot lacks it", async () => {
     await upsertRunSnapshots(db, [snapshot()]);
     await upsertRunSnapshots(db, [snapshot({ ticketTitle: null, ticketKey: null })]);
@@ -103,7 +123,33 @@ describe("recordRunUsage", () => {
     expect(r.costUsd).toBeCloseTo(1.23);
     expect(r.tokensOutput).toBe(500);
     expect(r.prNumber).toBe(7);
-    expect(r.status).toBeNull(); // cron hasn't run yet
+    // The workflow writes its own terminal status — no longer waits on the cron.
+    expect(r.status).toBe("success");
+    expect(r.completedAt).not.toBeNull();
+  });
+
+  it("records a failed outcome", async () => {
+    await recordRunUsage(db, usage({ status: "failed" }));
+    const r = await row("wrun_1");
+    expect(r.status).toBe("failed");
+  });
+
+  it("overwrites the cron's in-flight 'running' and fills duration from the start", async () => {
+    // Cron snapshotted the run mid-flight: running, started, no completion.
+    await upsertRunSnapshots(db, [
+      snapshot({
+        status: "running",
+        startedAt: new Date("2026-06-15T10:00:05Z"),
+        completedAt: null,
+        durationSec: null,
+      }),
+    ]);
+    await recordRunUsage(db, usage({ status: "failed" }));
+    const r = await row("wrun_1");
+    expect(r.status).toBe("failed"); // workflow truth beats the stale 'running'
+    expect(r.completedAt).not.toBeNull();
+    expect(r.durationSec).not.toBeNull();
+    expect(r.durationSec!).toBeGreaterThan(0); // now() - startedAt
   });
 });
 
@@ -112,7 +158,7 @@ describe("two writers converge on one row", () => {
     await upsertRunSnapshots(db, [snapshot()]);
     await recordRunUsage(db, usage());
     const r = await row("wrun_1");
-    expect(r.status).toBe("running"); // from cron
+    expect(r.status).toBe("success"); // workflow finalizes the cron's 'running'
     expect(r.ticketTitle).toBe("Add login"); // from cron
     expect(r.costUsd).toBeCloseTo(1.23); // from workflow
     expect(r.prNumber).toBe(7); // from workflow
@@ -120,9 +166,10 @@ describe("two writers converge on one row", () => {
 
   it("merges usage then snapshot (order independent)", async () => {
     await recordRunUsage(db, usage());
+    // A later cron snapshot must NOT downgrade the workflow's terminal status.
     await upsertRunSnapshots(db, [snapshot()]);
     const r = await row("wrun_1");
-    expect(r.status).toBe("running");
+    expect(r.status).toBe("success");
     expect(r.costUsd).toBeCloseTo(1.23);
     expect(r.prNumber).toBe(7);
   });

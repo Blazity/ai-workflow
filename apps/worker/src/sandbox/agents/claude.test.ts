@@ -246,6 +246,25 @@ describe("ClaudeAgentAdapter.extractUsage", () => {
     });
   });
 
+  it("parses token counts from the envelope usage object", () => {
+    const raw = JSON.stringify({
+      type: "result", subtype: "success",
+      total_cost_usd: 0.34, duration_ms: 60_000, duration_api_ms: 30_000, num_turns: 3,
+      usage: {
+        input_tokens: 100,
+        cache_creation_input_tokens: 20,
+        cache_read_input_tokens: 5_000,
+        output_tokens: 400,
+      },
+      result: "ok",
+    });
+    expect(adapter.extractUsage(raw, null)?.tokens).toEqual({
+      input: 120,
+      cached_input: 5_000,
+      output: 400,
+    });
+  });
+
   it("returns null when no envelope is present", () => {
     expect(adapter.extractUsage("not json", null)).toBeNull();
   });

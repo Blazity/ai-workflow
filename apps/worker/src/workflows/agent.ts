@@ -535,6 +535,7 @@ function errorMessage(err: unknown): string {
  */
 async function recordRunTelemetryStep(payload: {
   runId: string;
+  status: "success" | "failed";
   ticketKey: string;
   ticketTitle: string;
   ticketUrl: string;
@@ -548,6 +549,7 @@ async function recordRunTelemetryStep(payload: {
   const { totals } = payload;
   await recordRunUsage(getDb(), {
     runId: payload.runId,
+    status: payload.status,
     ticketKey: payload.ticketKey,
     ticketTitle: payload.ticketTitle,
     ticketUrl: payload.ticketUrl,
@@ -623,6 +625,11 @@ export async function agentWorkflow(ticketId: string) {
   const launchedPhases = new Set<string>();
   // Captured on the success path; written as run telemetry in the finally.
   let prForTelemetry: { url: string; number: number } | null = null;
+  // Authoritative terminal status for telemetry, written in the finally on
+  // every exit path. Defaults to "failed"; only the genuine PR-opened success
+  // and the clarification exits (which complete cleanly) flip it to "success".
+  // Every phase failure / timeout / thrown error keeps "failed".
+  let runOutcome: "success" | "failed" = "failed";
   // Set after provisionSandbox once agentKind is known.
   let activeModel: string | undefined;
   let priceLookup: ((m: string) => { input: number; cached_input: number; output: number } | null) | undefined;
@@ -690,6 +697,7 @@ export async function agentWorkflow(ticketId: string) {
           commentUrl: commentUrl ?? undefined,
           usageReport: usageReportOrUndefined(),
         });
+        runOutcome = "success";
         return;
       }
 
@@ -786,6 +794,7 @@ export async function agentWorkflow(ticketId: string) {
           commentUrl: commentUrl ?? undefined,
           usageReport: usageReportOrUndefined(),
         });
+        runOutcome = "success";
         return;
       }
 
@@ -848,6 +857,7 @@ export async function agentWorkflow(ticketId: string) {
           commentUrl: commentUrl ?? undefined,
           usageReport: usageReportOrUndefined(),
         });
+        runOutcome = "success";
         return;
       }
 
@@ -953,6 +963,7 @@ export async function agentWorkflow(ticketId: string) {
         usageReport,
       });
       await moveTicket(ticketId, env.COLUMN_AI_REVIEW);
+      runOutcome = "success";
     } finally {
       await teardownSandbox(sandboxId);
     }
@@ -985,6 +996,7 @@ export async function agentWorkflow(ticketId: string) {
     // swallow errors so telemetry can't break or delay the run.
     await recordRunTelemetryStep({
       runId: workflowRunId,
+      status: runOutcome,
       ticketKey: ticket.identifier,
       ticketTitle: ticket.title,
       ticketUrl: `${env.JIRA_BASE_URL.replace(/\/+$/, "")}/browse/${ticket.identifier}`,
