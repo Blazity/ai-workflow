@@ -1,4 +1,4 @@
-import { and, count, sql, type SQL } from "drizzle-orm";
+import { and, count, eq, sql, type SQL } from "drizzle-orm";
 import type {
   CostResponse,
   KpisResponse,
@@ -156,6 +156,73 @@ function p95Buckets(items: { t: number; dur: number }[], spec: SparkSpec): numbe
   return per.map((d) => percentile(d, 95));
 }
 
+// Shared run projection + row→Run mapper, used by listRuns and listRunsForTicket.
+const runColumns = {
+  runId: workflowRuns.runId,
+  workflowId: workflowRuns.workflowId,
+  workflowName: workflowRuns.workflowName,
+  status: workflowRuns.status,
+  ticketKey: workflowRuns.ticketKey,
+  ticketTitle: workflowRuns.ticketTitle,
+  ticketUrl: workflowRuns.ticketUrl,
+  model: workflowRuns.model,
+  startedAt: workflowRuns.startedAt,
+  firstSeenAt: workflowRuns.firstSeenAt,
+  durationSec: workflowRuns.durationSec,
+  costUsd: workflowRuns.costUsd,
+  tokensInput: workflowRuns.tokensInput,
+  tokensOutput: workflowRuns.tokensOutput,
+  prNumber: workflowRuns.prNumber,
+  prUrl: workflowRuns.prUrl,
+} as const;
+
+type RunRow = {
+  runId: string;
+  workflowId: string | null;
+  workflowName: string | null;
+  status: string | null;
+  ticketKey: string | null;
+  ticketTitle: string | null;
+  ticketUrl: string | null;
+  model: string | null;
+  startedAt: Date | null;
+  firstSeenAt: Date;
+  durationSec: number | null;
+  costUsd: number | null;
+  tokensInput: number | null;
+  tokensOutput: number | null;
+  prNumber: number | null;
+  prUrl: string | null;
+};
+
+function mapRun(r: RunRow, now: Date, tenantOrigin: string, modelFallback: string): Run {
+  const eff = r.startedAt ?? r.firstSeenAt;
+  const tokens =
+    r.tokensInput != null || r.tokensOutput != null
+      ? (r.tokensInput ?? 0) + (r.tokensOutput ?? 0)
+      : null;
+  return {
+    id: r.runId,
+    workflow: r.workflowId ?? "wf_unknown",
+    workflowName: r.workflowName ?? r.workflowId ?? "—",
+    status: coerceStatus(r.status),
+    ticket: r.ticketKey ?? "",
+    actor: "ai-bot",
+    model: r.model ?? modelFallback,
+    startedAtMin: Math.max(0, Math.round((now.getTime() - eff.getTime()) / 60000)),
+    duration: r.durationSec,
+    tokens,
+    cost: r.costUsd,
+    spans: null,
+    evalScore: null,
+    guardrailHits: null,
+    ticketTitle: r.ticketTitle ?? r.ticketKey ?? "",
+    prNumber: r.prNumber,
+    ticketUrl: r.ticketUrl ?? (r.ticketKey ? `${tenantOrigin}/browse/${r.ticketKey}` : ""),
+    prUrl: r.prUrl,
+  };
+}
+
 // ── Recent runs list ─────────────────────────────────────────────────────────
 
 export interface ListRunsOptions {
@@ -194,24 +261,7 @@ export async function listRuns(opts: ListRunsOptions): Promise<RunsResult> {
   const where = conds.length ? and(...conds) : undefined;
 
   const data = await db
-    .select({
-      runId: workflowRuns.runId,
-      workflowId: workflowRuns.workflowId,
-      workflowName: workflowRuns.workflowName,
-      status: workflowRuns.status,
-      ticketKey: workflowRuns.ticketKey,
-      ticketTitle: workflowRuns.ticketTitle,
-      ticketUrl: workflowRuns.ticketUrl,
-      model: workflowRuns.model,
-      startedAt: workflowRuns.startedAt,
-      firstSeenAt: workflowRuns.firstSeenAt,
-      durationSec: workflowRuns.durationSec,
-      costUsd: workflowRuns.costUsd,
-      tokensInput: workflowRuns.tokensInput,
-      tokensOutput: workflowRuns.tokensOutput,
-      prNumber: workflowRuns.prNumber,
-      prUrl: workflowRuns.prUrl,
-    })
+    .select(runColumns)
     .from(workflowRuns)
     .where(where)
     .orderBy(sql`${effTime()} desc`)
@@ -230,33 +280,7 @@ export async function listRuns(opts: ListRunsOptions): Promise<RunsResult> {
     total += n;
   }
 
-  const rows = data.map((r): Run => {
-    const eff = r.startedAt ?? r.firstSeenAt;
-    const tokens =
-      r.tokensInput != null || r.tokensOutput != null
-        ? (r.tokensInput ?? 0) + (r.tokensOutput ?? 0)
-        : null;
-    return {
-      id: r.runId,
-      workflow: r.workflowId ?? "wf_unknown",
-      workflowName: r.workflowName ?? r.workflowId ?? "—",
-      status: coerceStatus(r.status),
-      ticket: r.ticketKey ?? "",
-      actor: "ai-bot",
-      model: r.model ?? modelFallback,
-      startedAtMin: Math.max(0, Math.round((now.getTime() - eff.getTime()) / 60000)),
-      duration: r.durationSec,
-      tokens,
-      cost: r.costUsd,
-      spans: null,
-      evalScore: null,
-      guardrailHits: null,
-      ticketTitle: r.ticketTitle ?? r.ticketKey ?? "",
-      prNumber: r.prNumber,
-      ticketUrl: r.ticketUrl ?? (r.ticketKey ? `${tenantOrigin}/browse/${r.ticketKey}` : ""),
-      prUrl: r.prUrl,
-    };
-  });
+  const rows = data.map((r) => mapRun(r, now, tenantOrigin, modelFallback));
 
   return { rows, total, counts };
 }
@@ -519,4 +543,62 @@ export async function costAgg(
       : now.toISOString();
 
   return { window: { start, end: now.toISOString() }, totals, byWorkflow, daily };
+}
+
+// ── Runs for a single ticket (+ rollup) ──────────────────────────────────────
+
+export interface ListRunsForTicketOptions {
+  db: Db;
+  ticketKey: string;
+  now: Date;
+  jiraBaseUrl: string;
+  modelFallback: string;
+}
+
+export interface TicketRunsResult {
+  ticket: { key: string; title: string; url: string } | null;
+  runs: Run[];
+  totals: {
+    cost: number;
+    tokens: number;
+    runCount: number;
+    counts: { success: number; running: number; awaiting: number; failed: number; blocked: number };
+  };
+}
+
+export async function listRunsForTicket(
+  opts: ListRunsForTicketOptions,
+): Promise<TicketRunsResult> {
+  const { db, ticketKey, now, jiraBaseUrl, modelFallback } = opts;
+  const tenantOrigin = jiraBaseUrl.replace(/\/+$/, "");
+
+  const data = await db
+    .select(runColumns)
+    .from(workflowRuns)
+    .where(eq(workflowRuns.ticketKey, ticketKey))
+    .orderBy(sql`${effTime()} desc`);
+
+  const runs = data.map((r) => mapRun(r, now, tenantOrigin, modelFallback));
+
+  const counts = { success: 0, running: 0, awaiting: 0, failed: 0, blocked: 0 };
+  let cost = 0;
+  let tokens = 0;
+  for (const r of runs) {
+    counts[r.status] += 1;
+    cost += r.cost ?? 0;
+    tokens += r.tokens ?? 0;
+  }
+
+  const newest = data[0];
+  const ticket = newest
+    ? {
+        key: newest.ticketKey ?? ticketKey,
+        title: newest.ticketTitle ?? newest.ticketKey ?? ticketKey,
+        url:
+          newest.ticketUrl ??
+          `${tenantOrigin}/browse/${newest.ticketKey ?? ticketKey}`,
+      }
+    : null;
+
+  return { ticket, runs, totals: { cost, tokens, runCount: runs.length, counts } };
 }

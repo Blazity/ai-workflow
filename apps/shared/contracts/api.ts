@@ -117,6 +117,19 @@ export interface RunsResponse {
   };
 }
 
+export interface TicketRunsResponse {
+  generatedAt: string;
+  available: boolean;
+  ticket: { key: string; title: string; url: string } | null;
+  runs: Run[];
+  totals: {
+    cost: number;
+    tokens: number;
+    runCount: number;
+    counts: { success: number; running: number; awaiting: number; failed: number; blocked: number };
+  };
+}
+
 export interface RunDetailResponse {
   generatedAt: string;
   /** `false` when the run can't be read (worker/world unavailable or unknown id). */
