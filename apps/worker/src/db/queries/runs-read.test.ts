@@ -10,6 +10,7 @@ import {
   runKpis,
   workflowAgg,
   costAgg,
+  listRunsForTicket,
 } from "./runs-read.js";
 
 const NOW = new Date("2026-06-16T12:00:00.000Z");
@@ -257,5 +258,54 @@ describe("costAgg", () => {
     await seed({ costUsd: 9, startedAt: new Date(NOW.getTime() - 40 * DAY) });
     const c = await costAgg({ db, window: "24h", now: NOW });
     expect(c.totals.traceCount).toBe(0);
+  });
+});
+
+describe("listRunsForTicket", () => {
+  const base = { db: undefined as unknown as Db, now: NOW, jiraBaseUrl: JIRA, modelFallback: "claude-opus-4-8" };
+
+  it("returns only exact ticket_key matches, newest first", async () => {
+    await seed({ runId: "r_old", ticketKey: "AWT-738", startedAt: new Date(NOW.getTime() - 2 * HOUR) });
+    await seed({ runId: "r_new", ticketKey: "AWT-738", startedAt: new Date(NOW.getTime() - HOUR) });
+    await seed({ runId: "r_other", ticketKey: "AWT-7380" }); // must NOT match (no ILIKE)
+    await seed({ runId: "r_unrel", ticketKey: "AWT-1" });
+
+    const res = await listRunsForTicket({ ...base, db, ticketKey: "AWT-738" });
+
+    expect(res.runs.map((r) => r.id)).toEqual(["r_new", "r_old"]);
+    expect(res.totals.runCount).toBe(2);
+  });
+
+  it("rolls up cost, tokens, and outcome counts across the ticket's runs", async () => {
+    await seed({ ticketKey: "AWT-9", status: "success", costUsd: 1.5, tokensInput: 1000, tokensOutput: 500 });
+    await seed({ ticketKey: "AWT-9", status: "failed", costUsd: 0.25, tokensInput: 200, tokensOutput: 100 });
+
+    const res = await listRunsForTicket({ ...base, db, ticketKey: "AWT-9" });
+
+    expect(res.totals.cost).toBeCloseTo(1.75, 5);
+    expect(res.totals.tokens).toBe(1800);
+    expect(res.totals.counts.success).toBe(1);
+    expect(res.totals.counts.failed).toBe(1);
+  });
+
+  it("resolves ticket identity from the newest row", async () => {
+    await seed({ ticketKey: "AWT-9", ticketTitle: "Newest title", startedAt: new Date(NOW.getTime() - HOUR) });
+    await seed({ ticketKey: "AWT-9", ticketTitle: "Older title", startedAt: new Date(NOW.getTime() - 3 * HOUR) });
+
+    const res = await listRunsForTicket({ ...base, db, ticketKey: "AWT-9" });
+
+    expect(res.ticket).toEqual({
+      key: "AWT-9",
+      title: "Newest title",
+      url: "https://blazity.atlassian.net/browse/AWT-9",
+    });
+  });
+
+  it("returns an empty result for an unknown ticket", async () => {
+    await seed({ ticketKey: "AWT-1" });
+    const res = await listRunsForTicket({ ...base, db, ticketKey: "AWT-404" });
+    expect(res.runs).toEqual([]);
+    expect(res.totals.runCount).toBe(0);
+    expect(res.ticket).toBeNull();
   });
 });
