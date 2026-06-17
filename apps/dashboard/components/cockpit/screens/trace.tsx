@@ -120,8 +120,30 @@ export function TraceScreen({
   data: RunDetailResponse;
 }) {
   const router = useRouter();
-  const { run, steps } = data;
   const onBack = () => router.push("/runs");
+  const onTicket = (key: string) => router.push(`/ticket/${encodeURIComponent(key)}`);
+  return (
+    <div className="flex flex-col gap-4 px-4 pt-4 pb-6 lg:px-6 lg:pt-5 lg:pb-8">
+      <Breadcrumb
+        runId={runId}
+        ticket={data.run?.ticket ?? ""}
+        onBack={onBack}
+        onTicket={onTicket}
+      />
+      <TraceDetail runId={runId} data={data} />
+    </div>
+  );
+}
+
+export function TraceDetail({
+  runId,
+  data,
+}: {
+  runId: string;
+  data: RunDetailResponse;
+}) {
+  const router = useRouter();
+  const { run, steps } = data;
 
   // Live-tail: while the run is still in flight, softly refresh the trace's
   // server data every second so steps and status update without a full page
@@ -221,15 +243,12 @@ export function TraceScreen({
 
   if (!data.available || !run) {
     return (
-      <div className="flex flex-col gap-4 px-4 pt-4 pb-6 lg:px-6 lg:pt-5 lg:pb-8">
-        <Breadcrumb runId={runId} onBack={onBack} />
-        <CkCard eyebrow="Run trace" title="Run unavailable">
-          <div className="py-6 text-center text-neutral-500 font-body text-[13px]">
-            No trace data for <span className="font-mono">{runId}</span>. The run
-            may have expired, or the workflow runtime is unavailable.
-          </div>
-        </CkCard>
-      </div>
+      <CkCard eyebrow="Run trace" title="Run unavailable">
+        <div className="py-6 text-center text-neutral-500 font-body text-[13px]">
+          No trace data for <span className="font-mono">{runId}</span>. The run
+          may have expired, or the workflow runtime is unavailable.
+        </div>
+      </CkCard>
     );
   }
 
@@ -237,9 +256,7 @@ export function TraceScreen({
   const retries = steps.reduce((n, s) => n + Math.max(0, s.attempt - 1), 0);
 
   return (
-    <div className="flex flex-col gap-4 px-4 pt-4 pb-6 lg:px-6 lg:pt-5 lg:pb-8">
-      <Breadcrumb runId={run.id} onBack={onBack} />
-
+    <div className="flex flex-col gap-4">
       <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
         <div className="flex flex-col gap-1 min-w-0">
           <div className="flex items-center gap-2.5 flex-wrap lg:flex-nowrap">
@@ -436,7 +453,17 @@ export function TraceScreen({
   );
 }
 
-function Breadcrumb({ runId, onBack }: { runId: string; onBack: () => void }) {
+function Breadcrumb({
+  runId,
+  ticket,
+  onBack,
+  onTicket,
+}: {
+  runId: string;
+  ticket: string;
+  onBack: () => void;
+  onTicket: (key: string) => void;
+}) {
   return (
     <div className="flex items-center gap-3 font-body text-[13px] min-w-0">
       <button
@@ -447,6 +474,19 @@ function Breadcrumb({ runId, onBack }: { runId: string; onBack: () => void }) {
       >
         ← Runs
       </button>
+      {ticket && (
+        <>
+          <span className="text-[#D2D6DA] shrink-0">/</span>
+          <button
+            type="button"
+            onClick={() => onTicket(ticket)}
+            aria-label={`All runs for ${ticket}`}
+            className="appearance-none border-0 bg-transparent p-0 font-mono text-[11px] text-mariner cursor-pointer tracking-[0.04em] shrink-0"
+          >
+            {ticket}
+          </button>
+        </>
+      )}
       <span className="text-[#D2D6DA] shrink-0">/</span>
       <span className="font-mono text-neutral-700 truncate">{runId}</span>
     </div>
