@@ -117,6 +117,8 @@ export interface RunDetail {
   ticket: string;
   ticketTitle: string;
   ticketUrl: string;
+  prNumber: number | null;
+  prUrl: string | null;
   model: string;
   createdAt: string;
   startedAt: string | null;

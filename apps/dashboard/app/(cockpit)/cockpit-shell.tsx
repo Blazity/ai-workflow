@@ -14,6 +14,7 @@ import {
 } from "@/components/cockpit/context";
 import { CkSidebar } from "@/components/cockpit/chrome";
 import { CkActivityDrawer } from "@/components/cockpit/activity-drawer";
+import { SpotlightSearch } from "@/components/cockpit/spotlight-search";
 import { BottomTabBar } from "@/components/cockpit/mobile/bottom-tab-bar";
 import { MobileHeader } from "@/components/cockpit/mobile/mobile-header";
 import { MoreSheet } from "@/components/cockpit/mobile/more-sheet";
@@ -107,6 +108,9 @@ export function CockpitShell({ children }: { children: React.ReactNode }) {
         <div className="lg:hidden">
           <MoreSheet open={moreOpen} onClose={() => setMoreOpen(false)} active={screen} onNav={(id) => router.push(pathForScreen(id))} />
         </div>
+
+        {/* Spotlight ticket search — global overlay, summoned by ⌘K from any screen */}
+        <SpotlightSearch />
       </div>
     </CockpitCtx.Provider>
   );

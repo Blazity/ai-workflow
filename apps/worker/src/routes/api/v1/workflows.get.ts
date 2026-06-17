@@ -1,13 +1,10 @@
-import { defineEventHandler, setResponseHeader } from "h3";
-import { getWorld } from "workflow/runtime";
+import { defineEventHandler, getQuery, setResponseHeader } from "h3";
 import type { WorkflowsResponse } from "@shared/contracts";
 import { env } from "../../../../env.js";
-import { createAdapters } from "../../../lib/adapters.js";
-import {
-  collectWorkflows,
-  registryRows,
-} from "../../../lib/overview/collect-workflows.js";
-import { type RunsLister } from "../../../lib/overview/collect-runs.js";
+import { getDb } from "../../../db/client.js";
+import { parseWindow, workflowAgg } from "../../../db/queries/runs-read.js";
+import { getWorkflowRegistry } from "../../../lib/overview/workflow-registry.js";
+import { registryRows } from "../../../lib/overview/collect-workflows.js";
 import { logger } from "../../../lib/logger.js";
 
 export default defineEventHandler(async (event): Promise<WorkflowsResponse> => {
@@ -19,22 +16,18 @@ export default defineEventHandler(async (event): Promise<WorkflowsResponse> => {
 
   const generatedAt = new Date().toISOString();
   try {
-    const adapters = createAdapters();
-    const model = env.AGENT_KIND === "codex" ? env.CODEX_MODEL : env.CLAUDE_MODEL;
-
-    const { rows, total } = await collectWorkflows({
-      runsLister: getWorld().runs as RunsLister,
-      issueTracker: adapters.issueTracker,
-      jiraBaseUrl: env.JIRA_BASE_URL,
-      projectKey: env.JIRA_PROJECT_KEY,
-      model,
+    const window = parseWindow(getQuery(event).window);
+    const { rows, total } = await workflowAgg({
+      db: getDb(),
+      window,
       now: new Date(),
+      jiraBaseUrl: env.JIRA_BASE_URL,
+      registry: getWorkflowRegistry(),
     });
-
     return { generatedAt, rows, total };
   } catch (err) {
-    // World unavailable (e.g. local dev without the Vercel runtime) — degrade to
-    // the static registry with null metrics so the card still lists workflows.
+    // DB unreachable — degrade to the static registry with null metrics so the
+    // card still lists the workflows.
     logger.warn({ err: (err as Error).message }, "workflows_collect_failed");
     const { rows, total } = registryRows();
     return { generatedAt, rows, total };

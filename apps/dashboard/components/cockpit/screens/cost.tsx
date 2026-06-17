@@ -3,6 +3,9 @@
 import React from "react";
 import { CkCard, CkKPI } from "@/components/ui";
 import { AreaChart } from "@/components/charts";
+import { WindowSelector } from "@/components/cockpit/controls";
+import { SpotlightTrigger } from "@/components/cockpit/spotlight-search";
+import { windowPhrase, windowShort, type TimeWindow } from "@/lib/window";
 import type { CostResponse } from "@shared/contracts";
 
 /** Short label from an ISO/bucket date string for the daily-spend x-axis. */
@@ -12,18 +15,27 @@ function shortDate(date: string): string {
   return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
 }
 
-export function CostScreen({ data }: { data: CostResponse }) {
+export function CostScreen({
+  data,
+  window,
+}: {
+  data: CostResponse;
+  window: TimeWindow;
+}) {
+  const wShort = windowShort(window);
   if (!data.available) {
     return (
       <div className="flex flex-col gap-4 px-4 lg:px-6 pt-5 pb-8">
-        <div className="flex items-end justify-between">
-          <div>
-            <div className="font-mono text-[10px] uppercase tracking-[0.06em] text-neutral-500">Arthur · token usage</div>
-            <h2 className="font-display text-2xl font-medium leading-[1.2] text-neutral-900 m-0">Cost & token usage</h2>
-          </div>
+        <div className="flex items-center justify-between gap-4">
+          <SpotlightTrigger />
+          <WindowSelector value={window} />
+        </div>
+        <div>
+          <div className="font-mono text-[10px] uppercase tracking-[0.06em] text-neutral-500">Token usage</div>
+          <h2 className="font-display text-2xl font-medium leading-[1.2] text-neutral-900 m-0">Cost & token usage</h2>
         </div>
         <div className="bg-panel border border-neutral-200 rounded-sm px-5 py-8 font-body text-sm text-neutral-500">
-          Cost data is unavailable — Arthur GenAI Engine is not configured or unreachable.
+          No runs with recorded cost in the {windowPhrase(window)}.
         </div>
       </div>
     );
@@ -34,20 +46,22 @@ export function CostScreen({ data }: { data: CostResponse }) {
 
   return (
     <div className="flex flex-col gap-4 px-4 lg:px-6 pt-5 pb-8">
-      <div className="flex items-end justify-between">
-        <div>
-          <div className="font-mono text-[10px] uppercase tracking-[0.06em] text-neutral-500">Arthur · token usage</div>
-          <h2 className="font-display text-2xl font-medium leading-[1.2] text-neutral-900 m-0">Cost & token usage</h2>
-        </div>
+      <div className="flex items-center justify-between gap-4">
+        <SpotlightTrigger />
+        <WindowSelector value={window} />
+      </div>
+      <div>
+        <div className="font-mono text-[10px] uppercase tracking-[0.06em] text-neutral-500">Token usage</div>
+        <h2 className="font-display text-2xl font-medium leading-[1.2] text-neutral-900 m-0">Cost & token usage</h2>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-2.5 lg:gap-3">
-        <CkKPI label="MTD spend" value={"$" + total.toFixed(2)} />
-        <CkKPI label="Tokens · MTD" value={(totals.totalTokens / 1_000_000).toFixed(2) + "M"} />
+        <CkKPI label={`${wShort} spend`} value={"$" + total.toFixed(2)} />
+        <CkKPI label={`Tokens · ${wShort}`} value={(totals.totalTokens / 1_000_000).toFixed(2) + "M"} />
         <CkKPI label="Cost / run avg" value={"$" + totals.costPerRun.toFixed(2)} sub="all workflows" />
       </div>
 
-      <CkCard eyebrow="Spend trajectory" title="Daily spend · MTD">
+      <CkCard eyebrow="Spend trajectory" title={`Daily spend · ${windowPhrase(window)}`}>
           {daily.length > 0 ? (
             <div className="overflow-x-auto">
               <AreaChart

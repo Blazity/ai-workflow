@@ -33,6 +33,17 @@ export interface RunSnapshot {
  */
 export interface RunUsage {
   runId: string;
+  /**
+   * Terminal status the run reached on this exit path: "success" (PR opened, or
+   * a clarification that completed cleanly) or "failed" (any phase failure,
+   * timeout, or thrown error). This is the run's OWN authoritative status,
+   * written by the workflow on completion — it no longer depends on a later
+   * cron snapshot re-observing the run in the Workflow world, which never
+   * happens on deployments where the scheduled cron doesn't fire (and which
+   * mis-reports a failed-but-returned run as "success" even when it does).
+   * "blocked" (external cancellation) stays cron-driven.
+   */
+  status: "success" | "failed";
   ticketKey: string | null;
   ticketTitle: string | null;
   ticketUrl: string | null;
@@ -55,6 +66,24 @@ function keepIfNull(column: { name: string }, existing: unknown) {
 }
 
 /**
+ * Wall-clock seconds from the recorded start to now, computed only when a start
+ * is actually known (a prior cron snapshot set started_at/created_at). Keeps any
+ * duration the cron already computed, and stays null when there's no start to
+ * measure from (e.g. a workflow-only row on a deployment the cron never touches)
+ * rather than fabricating a zero.
+ */
+function durationFromStart() {
+  return sql`coalesce(
+    ${workflowRuns.durationSec},
+    case
+      when coalesce(${workflowRuns.startedAt}, ${workflowRuns.createdAt}) is not null
+      then greatest(0, extract(epoch from (now() - coalesce(${workflowRuns.startedAt}, ${workflowRuns.createdAt})))::int)
+      else null
+    end
+  )`;
+}
+
+/**
  * Cron writer. Upserts one row per run, setting only lifecycle columns.
  * status/workflowName come straight from the world (always known); ticket and
  * PR fields use COALESCE so a transient lookup miss doesn't wipe a good value
@@ -73,7 +102,16 @@ export async function upsertRunSnapshots(
       set: {
         workflowId: sql`excluded.workflow_id`,
         workflowName: sql`excluded.workflow_name`,
-        status: sql`excluded.status`,
+        // Never downgrade a terminal status. The agent workflow writes the
+        // authoritative success/failed on completion (recordRunUsage); a cron
+        // snapshot re-deriving status from the world must not clobber it — the
+        // world reports a failed-but-returned run as "completed" → "success",
+        // and there's a brief post-completion window where it still reads
+        // "running". Only advance a row that hasn't reached a terminal state.
+        status: sql`case
+          when ${workflowRuns.status} in ('success', 'failed', 'blocked') then ${workflowRuns.status}
+          else excluded.status
+        end`,
         ticketKey: keepIfNull(workflowRuns.ticketKey, workflowRuns.ticketKey),
         ticketTitle: keepIfNull(workflowRuns.ticketTitle, workflowRuns.ticketTitle),
         ticketUrl: keepIfNull(workflowRuns.ticketUrl, workflowRuns.ticketUrl),
@@ -90,15 +128,21 @@ export async function upsertRunSnapshots(
 }
 
 /**
- * Workflow writer. Upserts the cost/usage (and agent PR) for one run, setting
- * only its own columns. PR uses COALESCE so it never erases a gate PR a cron
- * snapshot may have recorded for the same row.
+ * Workflow writer. Upserts the cost/usage (and agent PR) for one run, plus the
+ * run's authoritative terminal status/completion. Status is the run's own
+ * truth on completion — see RunUsage.status. completedAt/durationSec finalize
+ * the lifecycle so a run no longer depends on a post-completion cron snapshot
+ * (which, on deployments where the scheduled cron doesn't fire, never lands —
+ * leaving the row frozen at the cron's last in-flight "running"). PR uses
+ * COALESCE so it never erases a gate PR a cron snapshot may have recorded.
  */
 export async function recordRunUsage(db: Db, usage: RunUsage): Promise<void> {
   await db
     .insert(workflowRuns)
     .values({
       runId: usage.runId,
+      status: usage.status,
+      completedAt: sql`now()`,
       ticketKey: usage.ticketKey,
       ticketTitle: usage.ticketTitle,
       ticketUrl: usage.ticketUrl,
@@ -115,6 +159,12 @@ export async function recordRunUsage(db: Db, usage: RunUsage): Promise<void> {
     .onConflictDoUpdate({
       target: workflowRuns.runId,
       set: {
+        // The workflow knows the real outcome; overwrite the cron's in-flight
+        // "running". completedAt keeps a precise cron-recorded value if present,
+        // else stamps now(); durationSec is filled from a known start.
+        status: sql`excluded.status`,
+        completedAt: sql`coalesce(${workflowRuns.completedAt}, now())`,
+        durationSec: durationFromStart(),
         ticketKey: keepIfNull(workflowRuns.ticketKey, workflowRuns.ticketKey),
         ticketTitle: sql`excluded.ticket_title`,
         ticketUrl: sql`excluded.ticket_url`,

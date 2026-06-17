@@ -123,6 +123,20 @@ export function TraceScreen({
   const { run, steps } = data;
   const onBack = () => router.push("/runs");
 
+  // Live-tail: while the run is still in flight, softly refresh the trace's
+  // server data every second so steps and status update without a full page
+  // reload. `router.refresh()` re-runs only this page's server fetch (the layout
+  // does no fetching) while preserving client state — step selection, scroll —
+  // and shows no skeleton. Polling stops once the run reaches a terminal state.
+  const isLive =
+    !run ||
+    (run.status !== "success" && run.status !== "failed" && run.status !== "blocked");
+  React.useEffect(() => {
+    if (!isLive) return;
+    const id = setInterval(() => router.refresh(), 1000);
+    return () => clearInterval(id);
+  }, [isLive, router]);
+
   // Wall-clock offset of "now" from run start — sizes bars for running steps.
   const runStartMs = run ? Date.parse(run.startedAt ?? run.createdAt) : 0;
   const nowOffsetMs = Math.max(0, Date.parse(data.generatedAt) - runStartMs);
@@ -234,20 +248,43 @@ export function TraceScreen({
             <span className="font-mono text-[11px] text-neutral-700">
               {[run.ticket, run.model].filter(Boolean).join(" · ")}
             </span>
+            {isLive && (
+              <span className="inline-flex items-center gap-1.5 font-mono text-[10px] text-mariner tracking-[0.04em] uppercase">
+                <span className="relative w-1.5 h-1.5">
+                  <span className="absolute inset-0 rounded-full bg-mariner" />
+                  <span className="absolute -inset-[3px] rounded-full border border-mariner animate-ck-pulse" />
+                </span>
+                Live
+              </span>
+            )}
           </div>
           <h2 className="font-display font-medium text-2xl leading-[1.2] m-0 text-neutral-900">
             {run.ticketTitle || run.id}
           </h2>
         </div>
-        {run.ticketUrl && (
-          <a
-            href={run.ticketUrl}
-            target="_blank"
-            rel="noreferrer"
-            className="appearance-none border border-neutral-200 bg-panel px-3.5 py-2 rounded-[3px] font-mono text-[11px] text-neutral-900 uppercase tracking-[0.04em] cursor-pointer no-underline self-start lg:self-auto"
-          >
-            Open ticket ↗
-          </a>
+        {(run.ticketUrl || run.prUrl) && (
+          <div className="flex items-center gap-2 self-start lg:self-auto">
+            {run.ticketUrl && (
+              <a
+                href={run.ticketUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="appearance-none border border-neutral-200 bg-panel px-3.5 py-2 rounded-[3px] font-mono text-[11px] text-neutral-900 uppercase tracking-[0.04em] cursor-pointer no-underline"
+              >
+                Open ticket ↗
+              </a>
+            )}
+            {run.prUrl && (
+              <a
+                href={run.prUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="appearance-none border border-neutral-200 bg-coal px-3.5 py-2 rounded-[3px] font-mono text-[11px] text-white uppercase tracking-[0.04em] cursor-pointer no-underline hover:bg-neutral-800"
+              >
+                {run.prNumber ? `PR #${run.prNumber}` : "Open PR"} ↗
+              </a>
+            )}
+          </div>
         )}
       </div>
 

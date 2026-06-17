@@ -1,5 +1,6 @@
 // apps/dashboard/app/overview-data.tsx
-import { getJSON } from "@/lib/api/server";
+import { getJSON, withQuery } from "@/lib/api/server";
+import type { TimeWindow } from "@/lib/window";
 import {
   OverviewScreen,
   type OverviewScreenData,
@@ -21,17 +22,25 @@ import {
 } from "@/lib/api/fallbacks";
 import { deriveKpisFromRuns } from "@/lib/api/derive-kpis";
 
-export async function OverviewData() {
+export async function OverviewData({ window }: { window: TimeWindow }) {
   const now = new Date().toISOString();
 
+  // Window scopes the historical aggregates (KPIs, recent runs, workflows).
+  // Eval-health (Arthur) and live runs (registry) are not windowed here.
   const [kpis, evalHealth, recentRuns, liveRuns, workflows] = await Promise.all([
-    getJSON<KpisResponse>("/api/v1/overview/kpis").catch(() => kpisFallback(now)),
+    getJSON<KpisResponse>(withQuery("/api/v1/overview/kpis", { window })).catch(
+      () => kpisFallback(now),
+    ),
     getJSON<EvalHealthResponse>("/api/v1/overview/eval-health").catch(
       () => evalHealthFallback(),
     ),
-    getJSON<RunsResponse>("/api/v1/runs").catch(() => recentRunsFallback(now)),
+    getJSON<RunsResponse>(withQuery("/api/v1/runs", { window })).catch(() =>
+      recentRunsFallback(now),
+    ),
     getJSON<LiveRunsResponse>("/api/v1/runs/live").catch(() => liveRunsFallback(now)),
-    getJSON<WorkflowsResponse>("/api/v1/workflows").catch(() => workflowsFallback(now)),
+    getJSON<WorkflowsResponse>(withQuery("/api/v1/workflows", { window })).catch(
+      () => workflowsFallback(now),
+    ),
   ]);
 
   // The worker's KPI endpoint returns null when its run-store fetch is rejected
@@ -60,8 +69,8 @@ export async function OverviewData() {
   };
   return (
     <>
-      <div className="hidden lg:block"><OverviewScreen data={data} /></div>
-      <div className="lg:hidden"><OverviewMobileScreen data={data} /></div>
+      <div className="hidden lg:block"><OverviewScreen data={data} window={window} /></div>
+      <div className="lg:hidden"><OverviewMobileScreen data={data} window={window} /></div>
     </>
   );
 }

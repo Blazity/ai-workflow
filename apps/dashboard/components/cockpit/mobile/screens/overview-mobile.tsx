@@ -5,11 +5,20 @@ import { useState } from "react";
 
 import { CkKPI, CkChip, CkStatusPill, TicketLink, CkPagination } from "@/components/ui";
 import { useCockpit } from "@/components/cockpit/context";
+import { WindowSelector } from "@/components/cockpit/controls";
+import { windowPhrase, windowShort, type TimeWindow } from "@/lib/window";
 import type { OverviewScreenData } from "@/components/cockpit/screens/overview";
 
-export function OverviewMobileScreen({ data }: { data: OverviewScreenData }) {
+export function OverviewMobileScreen({
+  data,
+  window,
+}: {
+  data: OverviewScreenData;
+  window: TimeWindow;
+}) {
   const { openRun } = useCockpit();
   const k = data.kpis;
+  const wShort = windowShort(window);
 
   const PAGE_SIZE = 6;
   const [runsPage, setRunsPage] = useState(0);
@@ -27,16 +36,19 @@ export function OverviewMobileScreen({ data }: { data: OverviewScreenData }) {
 
   return (
     <div className="flex flex-col gap-4 px-4 pt-4 pb-6">
-      <div>
-        <div className="font-mono text-[10px] uppercase tracking-[0.06em] text-neutral-500">Last 24h</div>
-        <h2 className="font-display text-xl font-medium text-neutral-900 m-0">Overview</h2>
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <div className="font-mono text-[10px] uppercase tracking-[0.06em] text-neutral-500">{windowPhrase(window)}</div>
+          <h2 className="font-display text-xl font-medium text-neutral-900 m-0">Overview</h2>
+        </div>
+        <WindowSelector value={window} size="sm" />
       </div>
 
       <div className="grid grid-cols-2 gap-2.5">
-        <CkKPI label="Runs 24h" value={k.runs24h ? k.runs24h.value.toLocaleString("en-US") : "—"} />
+        <CkKPI label={`Runs ${wShort}`} value={k.runs24h ? k.runs24h.value.toLocaleString("en-US") : "—"} />
         <CkKPI label="p95" value={k.p95 ? `${k.p95.valueSec}s` : "—"} />
-        <CkKPI label="Errors 24h" value={k.errors24h ? k.errors24h.value.toString() : "—"} />
-        <CkKPI label="Cost 24h" value={k.cost24h ? `$${k.cost24h.value.toFixed(0)}` : "—"} />
+        <CkKPI label={`Errors ${wShort}`} value={k.errors24h ? k.errors24h.value.toString() : "—"} />
+        <CkKPI label={`Cost ${wShort}`} value={k.cost24h ? `$${k.cost24h.value.toFixed(0)}` : "—"} />
       </div>
 
       {running.length > 0 && (

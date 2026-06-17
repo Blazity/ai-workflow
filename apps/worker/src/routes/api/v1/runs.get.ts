@@ -1,9 +1,8 @@
-import { defineEventHandler, setResponseHeader } from "h3";
-import { getWorld } from "workflow/runtime";
+import { defineEventHandler, getQuery, setResponseHeader } from "h3";
 import type { RunsResponse } from "@shared/contracts";
 import { env } from "../../../../env.js";
-import { createAdapters } from "../../../lib/adapters.js";
-import { collectRuns, type RunsLister } from "../../../lib/overview/collect-runs.js";
+import { getDb } from "../../../db/client.js";
+import { listRuns, parseSearch, parseWindow } from "../../../db/queries/runs-read.js";
 import { logger } from "../../../lib/logger.js";
 
 const EMPTY: Omit<RunsResponse, "generatedAt"> = {
@@ -22,22 +21,27 @@ export default defineEventHandler(async (event): Promise<RunsResponse> => {
 
   const generatedAt = new Date().toISOString();
   try {
-    const adapters = createAdapters();
+    // Filtering is parameterized SQL inside the worker: the window is whitelisted
+    // to an enum and the search is a bound, wildcard-escaped ILIKE. The dashboard
+    // sends typed intent only — never SQL.
+    const query = getQuery(event);
+    const window = parseWindow(query.window);
+    const q = parseSearch(query.q);
     const model = env.AGENT_KIND === "codex" ? env.CODEX_MODEL : env.CLAUDE_MODEL;
 
-    const { rows, total, counts } = await collectRuns({
-      runsLister: getWorld().runs as RunsLister,
-      issueTracker: adapters.issueTracker,
-      jiraBaseUrl: env.JIRA_BASE_URL,
-      projectKey: env.JIRA_PROJECT_KEY,
-      model,
+    const { rows, total, counts } = await listRuns({
+      db: getDb(),
+      window,
+      q,
       now: new Date(),
+      jiraBaseUrl: env.JIRA_BASE_URL,
+      modelFallback: model,
     });
 
     return { generatedAt, available: true, rows, total, counts };
   } catch (err) {
-    // World unavailable (e.g. local dev without the Vercel runtime) — degrade to
-    // the empty state so the dashboard renders its documented N/A view.
+    // DB unreachable — degrade to the empty state so the dashboard renders its
+    // documented N/A view instead of erroring.
     logger.warn({ err: (err as Error).message }, "runs_list_failed");
     return { generatedAt, ...EMPTY };
   }
