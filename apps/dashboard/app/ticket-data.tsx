@@ -2,9 +2,17 @@
 import { getJSON } from "@/lib/api/server";
 import { TicketScreen } from "@/components/cockpit/screens/ticket";
 import { TicketMobileScreen } from "@/components/cockpit/mobile/screens/ticket-mobile";
-import type { TicketRunsResponse, RunDetailResponse } from "@shared/contracts";
-import { ticketRunsFallback, runDetailFallback } from "@/lib/api/fallbacks";
-import { pickSelectedRunId } from "@/lib/ticket";
+import type {
+  TicketRunsResponse,
+  RunDetailResponse,
+  LiveRunsResponse,
+} from "@shared/contracts";
+import {
+  ticketRunsFallback,
+  runDetailFallback,
+  liveRunsFallback,
+} from "@/lib/api/fallbacks";
+import { pickSelectedRunId, mergeTicketLiveRuns } from "@/lib/ticket";
 
 export async function TicketData({
   ticketKey,
@@ -14,9 +22,21 @@ export async function TicketData({
   run?: string;
 }) {
   const now = new Date().toISOString();
-  const data = await getJSON<TicketRunsResponse>(
-    `/api/v1/tickets/${encodeURIComponent(ticketKey)}`,
-  ).catch(() => ticketRunsFallback(now));
+  // The ticket store (workflow_runs) only holds historical/completed runs; in-flight
+  // running/awaiting runs live in the registry, exposed via /api/v1/runs/live — fetch
+  // both and merge the live runs for this ticket, mirroring the /runs screen.
+  const [stored, live] = await Promise.all([
+    getJSON<TicketRunsResponse>(
+      `/api/v1/tickets/${encodeURIComponent(ticketKey)}`,
+    ).catch(() => ticketRunsFallback(now)),
+    getJSON<LiveRunsResponse>("/api/v1/runs/live").catch(() =>
+      liveRunsFallback(now),
+    ),
+  ]);
+  const data = mergeTicketLiveRuns(
+    stored,
+    live.rows.filter((r) => r.ticket === ticketKey),
+  );
 
   const selectedRunId = pickSelectedRunId(data.runs, run);
   const detail: RunDetailResponse = selectedRunId
