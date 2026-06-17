@@ -13,6 +13,7 @@ interface Hit {
   workflowName: string;
   status: RunStatus;
   startedAtMin: number;
+  runCount: number;
 }
 
 /** Event a header trigger dispatches to summon the shell-mounted overlay. */
@@ -110,19 +111,29 @@ export function SpotlightSearch() {
     };
   }, []);
 
-  // While open: lock body scroll, focus the input, and restore focus on close.
+  // While open: lock body scroll, focus the input, restore focus on close, and
+  // dismiss on Escape from anywhere — a modal's exit can't depend on which
+  // element currently holds focus (the input may not have been focused yet).
   useEffect(() => {
     if (!open) return;
     restoreFocus.current = document.activeElement as HTMLElement | null;
     const prevOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     const raf = requestAnimationFrame(() => inputRef.current?.focus());
+    const onEsc = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        close();
+      }
+    };
+    window.addEventListener("keydown", onEsc);
     return () => {
       cancelAnimationFrame(raf);
+      window.removeEventListener("keydown", onEsc);
       document.body.style.overflow = prevOverflow;
       restoreFocus.current?.focus?.();
     };
-  }, [open]);
+  }, [open, close]);
 
   useEffect(() => () => clearTimeout(debounce.current), []);
 
@@ -160,7 +171,11 @@ export function SpotlightSearch() {
   const go = (hit: Hit | undefined) => {
     if (!hit) return;
     close();
-    router.push(`/trace/${encodeURIComponent(hit.id)}`);
+    if (hit.ticket) {
+      router.push(`/ticket/${encodeURIComponent(hit.ticket)}`);
+    } else {
+      router.push(`/trace/${encodeURIComponent(hit.id)}`);
+    }
   };
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -173,9 +188,6 @@ export function SpotlightSearch() {
     } else if (e.key === "Enter") {
       e.preventDefault();
       go(hits[active]);
-    } else if (e.key === "Escape") {
-      e.preventDefault();
-      close();
     }
   };
 
@@ -283,7 +295,13 @@ export function SpotlightSearch() {
                       {h.ticketTitle || h.ticket || h.id}
                     </span>
                     <span className="truncate font-mono text-[10px] text-neutral-500 mt-0.5">
-                      {[h.ticket, h.workflowName, `${h.startedAtMin}m ago`].filter(Boolean).join(" · ")}
+                      {[
+                        h.ticket,
+                        h.workflowName,
+                        h.runCount > 1 ? `${h.runCount} runs` : `${h.startedAtMin}m ago`,
+                      ]
+                        .filter(Boolean)
+                        .join(" · ")}
                     </span>
                   </span>
                   <span
@@ -304,7 +322,7 @@ export function SpotlightSearch() {
             <Kbd>↑↓</Kbd> navigate
           </span>
           <span className="inline-flex items-center gap-1.5">
-            <Kbd>↩</Kbd> open trace
+            <Kbd>↩</Kbd> open ticket
           </span>
           <span className="inline-flex items-center gap-1.5">
             <Kbd>esc</Kbd> close
