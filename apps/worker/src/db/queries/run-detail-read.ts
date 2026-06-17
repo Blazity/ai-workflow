@@ -104,18 +104,44 @@ export async function fetchRunDetailFromDb(
 }
 
 /**
- * Just the PR ref for a run, from the durable telemetry. The Workflow world has
- * no PR, so the live trace path enriches its world-built header with this. Null
- * when the run isn't in the table yet (its PR is recorded on completion).
+ * The durable ticket + PR refs for a run, from the telemetry table. The Workflow
+ * world has no PR, and its JQL-based ticket recovery (`labels in ("run:<id>")`)
+ * is best-effort — a missing/removed run-label yields an empty ticket. The
+ * persisted row carries both reliably, so the live trace path enriches its
+ * world-built header with this. Null when the run isn't in the table yet (refs
+ * are recorded on completion / by the cron snapshot).
  */
-export async function fetchRunPr(
+export async function fetchRunRefs(
   db: Db,
   runId: string,
-): Promise<{ prNumber: number | null; prUrl: string | null } | null> {
+  jiraBaseUrl: string,
+): Promise<{
+  ticketKey: string | null;
+  ticketUrl: string | null;
+  ticketTitle: string | null;
+  prNumber: number | null;
+  prUrl: string | null;
+} | null> {
   const [row] = await db
-    .select({ prNumber: workflowRuns.prNumber, prUrl: workflowRuns.prUrl })
+    .select({
+      ticketKey: workflowRuns.ticketKey,
+      ticketUrl: workflowRuns.ticketUrl,
+      ticketTitle: workflowRuns.ticketTitle,
+      prNumber: workflowRuns.prNumber,
+      prUrl: workflowRuns.prUrl,
+    })
     .from(workflowRuns)
     .where(eq(workflowRuns.runId, runId))
     .limit(1);
-  return row ?? null;
+  if (!row) return null;
+  const tenantOrigin = jiraBaseUrl.replace(/\/+$/, "");
+  return {
+    ticketKey: row.ticketKey,
+    ticketUrl:
+      row.ticketUrl ??
+      (row.ticketKey ? `${tenantOrigin}/browse/${row.ticketKey}` : null),
+    ticketTitle: row.ticketTitle,
+    prNumber: row.prNumber,
+    prUrl: row.prUrl,
+  };
 }
