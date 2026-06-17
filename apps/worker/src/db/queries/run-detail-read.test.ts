@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { createTestDb } from "../test-db.js";
 import type { Db } from "../client.js";
 import { workflowRuns } from "../schema.js";
-import { fetchRunDetailFromDb, fetchRunPr } from "./run-detail-read.js";
+import { fetchRunDetailFromDb, fetchRunRefs } from "./run-detail-read.js";
 
 const JIRA = "https://blazity.atlassian.net";
 let db: Db;
@@ -82,20 +82,31 @@ describe("fetchRunDetailFromDb", () => {
   });
 });
 
-describe("fetchRunPr", () => {
+describe("fetchRunRefs", () => {
   it("returns null for an unknown run id", async () => {
-    expect(await fetchRunPr(db, "nope")).toBeNull();
+    expect(await fetchRunRefs(db, "nope", JIRA)).toBeNull();
   });
 
-  it("returns the persisted PR ref", async () => {
+  it("returns the persisted ticket + PR refs", async () => {
     await db.insert(workflowRuns).values({
       runId: "r1",
+      ticketKey: "AWT-981",
+      ticketTitle: "Add greeting endpoint",
       prUrl: "https://github.com/acme/demo/pull/42",
       prNumber: 42,
     });
-    expect(await fetchRunPr(db, "r1")).toEqual({
+    expect(await fetchRunRefs(db, "r1", JIRA)).toEqual({
+      ticketKey: "AWT-981",
+      ticketUrl: "https://blazity.atlassian.net/browse/AWT-981",
+      ticketTitle: "Add greeting endpoint",
       prUrl: "https://github.com/acme/demo/pull/42",
       prNumber: 42,
     });
+  });
+
+  it("derives the ticket url from the key when none is stored", async () => {
+    await db.insert(workflowRuns).values({ runId: "r1", ticketKey: "AWT-5" });
+    const refs = await fetchRunRefs(db, "r1", JIRA);
+    expect(refs?.ticketUrl).toBe("https://blazity.atlassian.net/browse/AWT-5");
   });
 });

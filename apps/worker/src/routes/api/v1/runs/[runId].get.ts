@@ -4,7 +4,7 @@ import type { RunDetailResponse } from "@shared/contracts";
 import { env } from "../../../../../env.js";
 import { createAdapters } from "../../../../lib/adapters.js";
 import { getDb } from "../../../../db/client.js";
-import { fetchRunDetailFromDb, fetchRunPr } from "../../../../db/queries/run-detail-read.js";
+import { fetchRunDetailFromDb, fetchRunRefs } from "../../../../db/queries/run-detail-read.js";
 import {
   collectRunDetail,
   type RunDetailSource,
@@ -33,10 +33,11 @@ export default defineEventHandler(async (event): Promise<RunDetailResponse> => {
     const model =
       env.AGENT_KIND === "codex" ? env.CODEX_MODEL : env.CLAUDE_MODEL;
 
-    // The Workflow world carries the run's lifecycle but not its PR. Read the
-    // PR ref from the durable telemetry in parallel and merge it in. Kept
-    // non-fatal: a DB hiccup nulls the PR rather than blanking the live trace.
-    const [{ run, steps }, pr] = await Promise.all([
+    // The Workflow world carries the run's lifecycle but not its PR, and its
+    // JQL-based ticket recovery is best-effort (sometimes empty). Read the
+    // durable ticket + PR refs in parallel and merge them in. Kept non-fatal:
+    // a DB hiccup leaves the world-built header as-is rather than blanking it.
+    const [{ run, steps }, refs] = await Promise.all([
       collectRunDetail({
         world: getWorld() as unknown as RunDetailSource,
         issueTracker: adapters.issueTracker,
@@ -45,10 +46,17 @@ export default defineEventHandler(async (event): Promise<RunDetailResponse> => {
         model,
         runId,
       }),
-      fetchRunPr(getDb(), runId).catch(() => null),
+      fetchRunRefs(getDb(), runId, env.JIRA_BASE_URL).catch(() => null),
     ]);
-    run.prNumber = pr?.prNumber ?? null;
-    run.prUrl = pr?.prUrl ?? null;
+    run.prNumber = refs?.prNumber ?? null;
+    run.prUrl = refs?.prUrl ?? null;
+    // Backfill the ticket from the durable row when the world's JQL recovery
+    // came back empty, so the Jira link shows alongside the PR link.
+    if (!run.ticket && refs?.ticketKey) {
+      run.ticket = refs.ticketKey;
+      run.ticketUrl = refs.ticketUrl ?? "";
+      run.ticketTitle = run.ticketTitle || refs.ticketTitle || refs.ticketKey;
+    }
 
     return { generatedAt, available: true, run, steps };
   } catch (err) {
