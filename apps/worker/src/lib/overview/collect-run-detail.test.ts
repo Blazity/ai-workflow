@@ -5,7 +5,6 @@ import {
   type WorkflowRunRecord,
   type WorkflowStepRecord,
 } from "./collect-run-detail.js";
-import type { IssueTrackerAdapter } from "../../adapters/issue-tracker/types.js";
 
 const RUN_START = new Date("2026-06-02T11:00:00.000Z");
 const AGENT = "workflow//./src/workflows/agent//agentWorkflow";
@@ -26,18 +25,6 @@ function makeSource(
       } satisfies WorkflowRunRecord),
     },
     steps: { list: vi.fn().mockResolvedValue({ data: steps }) },
-  };
-}
-
-function makeTracker(
-  overrides: Partial<IssueTrackerAdapter> = {},
-): IssueTrackerAdapter {
-  return {
-    fetchTicket: vi.fn().mockRejectedValue(new Error("not found")),
-    moveTicket: vi.fn(),
-    postComment: vi.fn().mockResolvedValue(null),
-    searchTickets: vi.fn().mockResolvedValue([]),
-    ...overrides,
   };
 }
 
@@ -80,9 +67,6 @@ describe("collectRunDetail", () => {
 
     const { run, steps } = await collectRunDetail({
       world: source,
-      issueTracker: makeTracker(),
-      jiraBaseUrl: "https://example.atlassian.net/",
-      projectKey: "AWT",
       model: "claude-opus-4-8",
       runId: "run_a",
     });
@@ -112,9 +96,6 @@ describe("collectRunDetail", () => {
 
     const { run, steps } = await collectRunDetail({
       world: source,
-      issueTracker: makeTracker(),
-      jiraBaseUrl: "https://x.atlassian.net",
-      projectKey: "AWT",
       model: "m",
       runId: "run_b",
     });
@@ -125,40 +106,24 @@ describe("collectRunDetail", () => {
     expect(steps[0].durationMs).toBeNull();
   });
 
-  it("normalizes a string run error and resolves the ticket via the run label", async () => {
+  it("normalizes a string run error and leaves the ticket empty for the route to enrich", async () => {
     const source = makeSource(
       { runId: "run_c", status: "failed", error: "boom" },
       [],
     );
-    const tracker = makeTracker({
-      searchTickets: vi.fn().mockResolvedValue(["AWT-7"]),
-      fetchTicket: vi.fn(async (key: string) => ({
-        id: key,
-        identifier: key,
-        projectKey: "AWT",
-        title: "Broken thing",
-        description: "",
-        acceptanceCriteria: "",
-        comments: [],
-        labels: ["run:run_c"],
-        trackerStatus: "AI",
-        attachments: [],
-      })),
-    });
 
     const { run } = await collectRunDetail({
       world: source,
-      issueTracker: tracker,
-      jiraBaseUrl: "https://x.atlassian.net",
-      projectKey: "AWT",
       model: "m",
       runId: "run_c",
     });
 
     expect(run.status).toBe("failed");
     expect(run.error).toEqual({ message: "boom" });
-    expect(run.ticket).toBe("AWT-7");
-    expect(run.ticketTitle).toBe("Broken thing");
-    expect(run.ticketUrl).toBe("https://x.atlassian.net/browse/AWT-7");
+    // The world has no ticket (encrypted input); the route backfills it from
+    // the durable workflow_runs row.
+    expect(run.ticket).toBe("");
+    expect(run.ticketTitle).toBe("");
+    expect(run.ticketUrl).toBe("");
   });
 });

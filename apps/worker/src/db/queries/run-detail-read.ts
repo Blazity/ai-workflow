@@ -105,11 +105,9 @@ export async function fetchRunDetailFromDb(
 
 /**
  * The durable ticket + PR refs for a run, from the telemetry table. The Workflow
- * world has no PR, and its JQL-based ticket recovery (`labels in ("run:<id>")`)
- * is best-effort — a missing/removed run-label yields an empty ticket. The
- * persisted row carries both reliably, so the live trace path enriches its
- * world-built header with this. Null when the run isn't in the table yet (refs
- * are recorded on completion / by the cron snapshot).
+ * world has neither the ticket (input is encrypted) nor the PR, so the live
+ * trace path enriches its world-built header with this. Null when the run isn't
+ * in the table yet (refs are recorded on completion / by the cron snapshot).
  */
 export async function fetchRunRefs(
   db: Db,
