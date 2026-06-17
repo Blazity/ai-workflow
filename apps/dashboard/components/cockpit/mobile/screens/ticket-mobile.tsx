@@ -3,8 +3,7 @@
 import { useRouter } from "next/navigation";
 import { CkChip, CkStatusPill, PRLink } from "@/components/ui";
 import { useCockpit } from "@/components/cockpit/context";
-import { TraceDetail } from "@/components/cockpit/screens/trace";
-import type { TicketRunsResponse, RunDetailResponse } from "@shared/contracts";
+import type { TicketRunsResponse } from "@shared/contracts";
 
 function fmtCost(n: number): string {
   return `$${n.toFixed(2)}`;
@@ -13,40 +12,29 @@ function fmtTokens(n: number): string {
   return n >= 1000 ? `${(n / 1000).toFixed(0)}k` : `${n}`;
 }
 
+/** "← All runs" header shown above a run's trace on mobile (no split view). */
+export function MobileBackToRuns({ ticketKey }: { ticketKey: string }) {
+  const router = useRouter();
+  return (
+    <button
+      type="button"
+      onClick={() => router.push(`/ticket/${encodeURIComponent(ticketKey)}`)}
+      className="self-start appearance-none border-0 bg-transparent p-0 font-mono text-[11px] text-mariner cursor-pointer uppercase tracking-[0.04em]"
+    >
+      ← All runs · {ticketKey}
+    </button>
+  );
+}
+
 export function TicketMobileScreen({
   ticketKey,
   data,
-  detail,
-  selectedRunId,
-  run,
 }: {
   ticketKey: string;
   data: TicketRunsResponse;
-  detail: RunDetailResponse;
-  selectedRunId: string | null;
-  run?: string;
 }) {
-  const router = useRouter();
   const { openRun } = useCockpit();
   const { ticket, runs, totals } = data;
-
-  // Mobile has no split view: when a specific run is requested (?run=) and it
-  // belongs to this ticket, show that run's trace inline with a way back to the
-  // list. Otherwise show the run list.
-  if (run && selectedRunId && runs.some((r) => r.id === run)) {
-    return (
-      <div className="flex flex-col gap-3 px-4 pt-4 pb-6">
-        <button
-          type="button"
-          onClick={() => router.push(`/ticket/${encodeURIComponent(ticketKey)}`)}
-          className="self-start appearance-none border-0 bg-transparent p-0 font-mono text-[11px] text-mariner cursor-pointer uppercase tracking-[0.04em]"
-        >
-          ← All runs · {ticket?.key ?? ticketKey}
-        </button>
-        <TraceDetail runId={selectedRunId} data={detail} />
-      </div>
-    );
-  }
 
   return (
     <div className="flex flex-col gap-3 px-4 pt-4 pb-6">
