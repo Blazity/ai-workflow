@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 
 import { useTweaks } from "@/lib/use-tweaks";
+import { runHref } from "@/lib/run-href";
 import type { Run } from "@/lib/types";
 
 import {
@@ -63,7 +64,7 @@ export function CockpitShell({ children }: { children: React.ReactNode }) {
   }, [t.activityDrawerOpen]);
 
   const openRun = (r: Run) => {
-    router.push(`/trace/${encodeURIComponent(r.id)}`);
+    router.push(runHref(r));
   };
 
   return (

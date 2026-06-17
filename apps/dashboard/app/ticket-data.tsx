@@ -36,7 +36,13 @@ export async function TicketData({
         />
       </div>
       <div className="lg:hidden">
-        <TicketMobileScreen ticketKey={ticketKey} data={data} />
+        <TicketMobileScreen
+          ticketKey={ticketKey}
+          data={data}
+          detail={detail}
+          selectedRunId={selectedRunId}
+          run={run}
+        />
       </div>
     </>
   );
