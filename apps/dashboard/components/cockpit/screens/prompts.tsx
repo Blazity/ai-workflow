@@ -269,14 +269,6 @@ function PromptDetail({ prompt }: { prompt: PromptDef | undefined }) {
       <CkCard
         eyebrow={`${prompt.source === "arthur" ? "Arthur" : "In-code"} · ${prompt.phase}`}
         title={prompt.name}
-        action={
-          <div className="flex items-center gap-2">
-            <PromptStatusChip status={prompt.source} />
-            <span className="w-px h-4 bg-neutral-200" />
-            <button className="appearance-none border border-neutral-200 bg-panel px-3 py-1.5 rounded-[3px] font-mono text-[11px] text-neutral-900 uppercase tracking-[0.04em] cursor-pointer">+ New version</button>
-            <button className="appearance-none border border-coal bg-coal text-white px-3 py-1.5 rounded-[3px] font-mono text-[11px] uppercase tracking-[0.04em] cursor-pointer">Deploy</button>
-          </div>
-        }
       >
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
           <Stat label="Phase" value={prompt.phase} />

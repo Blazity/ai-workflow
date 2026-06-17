@@ -6,8 +6,6 @@ import type {
   RunStatus,
   StepStatus,
 } from "@shared/contracts";
-import type { IssueTrackerAdapter } from "../../adapters/issue-tracker/types.js";
-import { runLabel } from "../labels.js";
 
 type WorkflowStatus =
   | "pending"
@@ -108,10 +106,6 @@ function normalizeRunError(error: string | RunError | undefined): RunError | nul
 
 export interface CollectRunDetailOptions {
   world: RunDetailSource;
-  issueTracker: IssueTrackerAdapter;
-  jiraBaseUrl: string;
-  /** Jira project key, used to scope the run-label lookup query. */
-  projectKey: string;
   model: string;
   runId: string;
 }
@@ -131,8 +125,7 @@ export interface CollectRunDetailResult {
 export async function collectRunDetail(
   opts: CollectRunDetailOptions,
 ): Promise<CollectRunDetailResult> {
-  const { world, issueTracker, jiraBaseUrl, model, runId } = opts;
-  const tenantOrigin = jiraBaseUrl.replace(/\/+$/, "");
+  const { world, model, runId } = opts;
 
   // The steps endpoint caps `limit` at 100 (a higher value is rejected with
   // HTTP 400; the default page size is only 20). 100 comfortably covers the
@@ -168,12 +161,6 @@ export async function collectRunDetail(
     })
     .sort((a, b) => a.startOffsetMs - b.startOffsetMs);
 
-  const { ticket, ticketTitle } = await resolveRunTicket(
-    runId,
-    issueTracker,
-    opts.projectKey,
-  );
-
   const startedAt = run.startedAt ?? run.createdAt;
   const durationSec =
     run.completedAt != null
@@ -188,10 +175,11 @@ export async function collectRunDetail(
     workflow: id,
     workflowName: name,
     status: STATUS_MAP[run.status],
-    ticket,
-    ticketTitle,
-    ticketUrl: ticket ? `${tenantOrigin}/browse/${ticket}` : "",
-    // The Workflow world has no PR; the route enriches these from workflow_runs.
+    // The Workflow world has no ticket (encrypted input) or PR; the route
+    // enriches all of these from the durable workflow_runs row.
+    ticket: "",
+    ticketTitle: "",
+    ticketUrl: "",
     prNumber: null,
     prUrl: null,
     model,
@@ -204,41 +192,4 @@ export async function collectRunDetail(
   };
 
   return { run: detail, steps };
-}
-
-/**
- * Best-effort ticket key + title for a run. The dispatcher tags each ticket
- * with a `run:<id>` label, so one JQL search recovers the ticket even though
- * the workflow's serialized `input` is encrypted. Any failure yields empty
- * strings and the trace header degrades to the run id alone.
- */
-async function resolveRunTicket(
-  runId: string,
-  issueTracker: IssueTrackerAdapter,
-  projectKey: string,
-): Promise<{ ticket: string; ticketTitle: string }> {
-  const jql = buildRunTicketJql(projectKey, runId);
-  if (!jql) return { ticket: "", ticketTitle: "" };
-
-  try {
-    const keys = (await issueTracker.searchTickets(jql)) ?? [];
-    const key = keys[0];
-    if (!key) return { ticket: "", ticketTitle: "" };
-    const t = await issueTracker.fetchTicket(key);
-    return { ticket: key, ticketTitle: t.title || key };
-  } catch {
-    return { ticket: "", ticketTitle: "" };
-  }
-}
-
-function buildRunTicketJql(projectKey: string, runId: string): string | null {
-  const project = jqlQuotedString(projectKey.trim());
-  const label = jqlQuotedString(runLabel(runId));
-  if (!project || !label) return null;
-  return `project = ${project} AND labels in (${label})`;
-}
-
-function jqlQuotedString(value: string): string | null {
-  if (value.length === 0 || /[\u0000-\u001F\u007F]/.test(value)) return null;
-  return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
 }

@@ -2,7 +2,6 @@ import { defineEventHandler, getRouterParam, setResponseHeader } from "h3";
 import { getWorld } from "workflow/runtime";
 import type { RunDetailResponse } from "@shared/contracts";
 import { env } from "../../../../../env.js";
-import { createAdapters } from "../../../../lib/adapters.js";
 import { getDb } from "../../../../db/client.js";
 import { fetchRunDetailFromDb, fetchRunRefs } from "../../../../db/queries/run-detail-read.js";
 import {
@@ -29,20 +28,16 @@ export default defineEventHandler(async (event): Promise<RunDetailResponse> => {
   if (!runId) return { generatedAt, ...EMPTY };
 
   try {
-    const adapters = createAdapters();
     const model =
       env.AGENT_KIND === "codex" ? env.CODEX_MODEL : env.CLAUDE_MODEL;
 
-    // The Workflow world carries the run's lifecycle but not its PR, and its
-    // JQL-based ticket recovery is best-effort (sometimes empty). Read the
-    // durable ticket + PR refs in parallel and merge them in. Kept non-fatal:
-    // a DB hiccup leaves the world-built header as-is rather than blanking it.
+    // The Workflow world carries the run's lifecycle + step waterfall but not
+    // its ticket (encrypted input) or PR. Read the durable ticket + PR refs
+    // from workflow_runs in parallel and merge them in. Kept non-fatal: a DB
+    // hiccup leaves the world-built header (with empty ticket/PR) as-is.
     const [{ run, steps }, refs] = await Promise.all([
       collectRunDetail({
         world: getWorld() as unknown as RunDetailSource,
-        issueTracker: adapters.issueTracker,
-        jiraBaseUrl: env.JIRA_BASE_URL,
-        projectKey: env.JIRA_PROJECT_KEY,
         model,
         runId,
       }),
@@ -50,12 +45,10 @@ export default defineEventHandler(async (event): Promise<RunDetailResponse> => {
     ]);
     run.prNumber = refs?.prNumber ?? null;
     run.prUrl = refs?.prUrl ?? null;
-    // Backfill the ticket from the durable row when the world's JQL recovery
-    // came back empty, so the Jira link shows alongside the PR link.
-    if (!run.ticket && refs?.ticketKey) {
+    if (refs?.ticketKey) {
       run.ticket = refs.ticketKey;
       run.ticketUrl = refs.ticketUrl ?? "";
-      run.ticketTitle = run.ticketTitle || refs.ticketTitle || refs.ticketKey;
+      run.ticketTitle = refs.ticketTitle || refs.ticketKey;
     }
 
     return { generatedAt, available: true, run, steps };
