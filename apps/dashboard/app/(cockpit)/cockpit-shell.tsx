@@ -34,6 +34,7 @@ const TITLE_FOR_SCREEN: Record<string, string> = {
   cost: "Cost & usage",
   editor: "Workflow editor",
   trace: "Run trace",
+  ticket: "Ticket runs",
 };
 
 /**
