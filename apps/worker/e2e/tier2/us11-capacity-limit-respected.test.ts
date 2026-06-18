@@ -35,6 +35,15 @@ describe("US-11: Capacity limit respected", () => {
   const dummyKeys: string[] = [];
   let ticketKey: string | null = null;
 
+  // Re-seed every dummy slot with a fresh `created_at`. Called before each
+  // cron poll so reconcile's 30s orphan grace never frees a slot mid-test —
+  // a freed slot could let a late poll actually start the ticket.
+  async function saturateCapacity(): Promise<void> {
+    await Promise.all(
+      dummyKeys.map((key) => setEntry(key, `run_e2e_dummy_${key}`)),
+    );
+  }
+
   beforeAll(async () => {
     const stale = await listAllRuns();
     if (stale.length > 0) {
@@ -50,10 +59,9 @@ describe("US-11: Capacity limit respected", () => {
     // slot. Fresh timestamps (default `ageMs: 0`) keep reconcile's 30s
     // orphan grace from wiping them mid-test.
     for (let i = 0; i < e2eEnv.MAX_CONCURRENT_AGENTS; i++) {
-      const key = `${DUMMY_PREFIX}${i}`;
-      dummyKeys.push(key);
-      await setEntry(key, `run_e2e_dummy_${i}`);
+      dummyKeys.push(`${DUMMY_PREFIX}${i}`);
     }
+    await saturateCapacity();
     console.log(
       `[US-11] Seeded ${dummyKeys.length} dummy entries to saturate capacity`,
     );
@@ -93,14 +101,29 @@ describe("US-11: Capacity limit respected", () => {
       },
     );
 
-    // 3. Trigger cron. Dispatch's `isAtCapacity` precheck sees MAX dummies
-    //    and rejects our ticket before it can claim. (The deployed
-    //    scheduled cron may also have fired during the JQL wait — it hits
-    //    the same at-capacity rejection, so either way no claim lands.)
-    const pollRes = await callCronPoll();
+    // 3. Trigger cron until it discovers our ticket while every slot is full.
+    //    Dispatch's `isAtCapacity` precheck sees MAX dummies and rejects the
+    //    ticket before it can claim. Jira's JQL index is eventually
+    //    consistent, so even after the visibility barrier above the cron's
+    //    own search (a separate request) can momentarily report
+    //    `discovered: 0`; retry until the ticket lands in the index.
+    //    Re-saturate before each poll so a slot never frees mid-loop, and
+    //    assert `started === 0` every tick — capacity must hold throughout.
+    const pollRes = await waitFor(
+      async () => {
+        await saturateCapacity();
+        const res = await callCronPoll();
+        expect(res.status).toBe(200);
+        expect(res.body?.started).toBe(0);
+        return (res.body?.discovered ?? 0) >= 1 ? res : null;
+      },
+      {
+        description: `cron discovers ${ticketKey} while at capacity`,
+        timeoutMs: 30_000,
+        intervalMs: 3_000,
+      },
+    );
     console.log("[US-11] cron response:", JSON.stringify(pollRes.body));
-    expect(pollRes.status).toBe(200);
-    expect(pollRes.body?.discovered).toBeGreaterThanOrEqual(1);
     expect(pollRes.body?.started).toBe(0);
 
     // 4. The ticket has no registry entry — capacity rejection confirmed.

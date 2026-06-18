@@ -48,7 +48,7 @@ export default async function TicketPage({
       <div
         className="hidden lg:grid h-full min-h-0"
         style={{
-          gridTemplateColumns: "280px 1fr",
+          gridTemplateColumns: "280px minmax(0, 1fr)",
           gridTemplateRows: "auto minmax(0, 1fr)",
           gridTemplateAreas: '"header header" "rail detail"',
         }}
