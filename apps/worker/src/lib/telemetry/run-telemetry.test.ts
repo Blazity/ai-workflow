@@ -44,6 +44,8 @@ const snapshot = (over: Partial<RunSnapshot> = {}): RunSnapshot => ({
 
 const usage = (over: Partial<RunUsage> = {}): RunUsage => ({
   runId: "wrun_1",
+  workflowId: "wf_agent",
+  workflowName: "Agent",
   status: "success",
   ticketKey: "PROJ-1",
   ticketTitle: "Add login",
@@ -57,6 +59,7 @@ const usage = (over: Partial<RunUsage> = {}): RunUsage => ({
   phases: { Research: { costUsd: 0.5, tokens: null, durationMs: 60000, numTurns: 3 } },
   prUrl: "https://github.com/o/r/pull/7",
   prNumber: 7,
+  steps: null,
   ...over,
 });
 
@@ -132,6 +135,58 @@ describe("recordRunUsage", () => {
     await recordRunUsage(db, usage({ status: "failed" }));
     const r = await row("wrun_1");
     expect(r.status).toBe("failed");
+  });
+
+  it("records the workflow identity so a cron-less run is attributable to its workflow", async () => {
+    // No prior snapshot (the cron never observed this run). The workflow knows
+    // its own identity, so the row must still carry workflowId/workflowName —
+    // otherwise it reads as wf_unknown in the runs list and is counted under no
+    // workflow in the workflows table.
+    await recordRunUsage(db, usage());
+    const r = await row("wrun_1");
+    expect(r.workflowId).toBe("wf_agent");
+    expect(r.workflowName).toBe("Agent");
+  });
+
+  it("persists the captured step waterfall", async () => {
+    const steps = [
+      {
+        stepId: "s1",
+        name: "provisionSandbox",
+        rawName: "step//provisionSandbox",
+        status: "completed" as const,
+        attempt: 1,
+        createdAt: "2026-06-15T10:00:00Z",
+        startedAt: "2026-06-15T10:00:00Z",
+        completedAt: "2026-06-15T10:00:15Z",
+        startOffsetMs: 0,
+        durationMs: 15_000,
+        error: null,
+      },
+    ];
+    await recordRunUsage(db, usage({ steps }));
+    expect((await row("wrun_1")).steps).toEqual(steps);
+  });
+
+  it("does not erase a captured waterfall when a later write has null steps", async () => {
+    const steps = [
+      {
+        stepId: "s1",
+        name: "doThing",
+        rawName: "step//doThing",
+        status: "completed" as const,
+        attempt: 1,
+        createdAt: "2026-06-15T10:00:00Z",
+        startedAt: "2026-06-15T10:00:00Z",
+        completedAt: "2026-06-15T10:00:05Z",
+        startOffsetMs: 0,
+        durationMs: 5_000,
+        error: null,
+      },
+    ];
+    await recordRunUsage(db, usage({ steps }));
+    await recordRunUsage(db, usage({ steps: null }));
+    expect((await row("wrun_1")).steps).toEqual(steps);
   });
 
   it("overwrites the cron's in-flight 'running' and fills duration from the start", async () => {

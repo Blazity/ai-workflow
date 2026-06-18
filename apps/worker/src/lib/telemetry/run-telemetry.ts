@@ -1,6 +1,7 @@
 import { sql } from "drizzle-orm";
 import type { Db } from "../../db/client.js";
 import { workflowRuns } from "../../db/schema.js";
+import type { RunStep } from "@shared/contracts";
 
 /**
  * Lifecycle/status fields the poll cron snapshots from the Workflow world and
@@ -34,6 +35,16 @@ export interface RunSnapshot {
 export interface RunUsage {
   runId: string;
   /**
+   * The workflow's own identity. Written here too (not just by the cron
+   * snapshot) so a run is attributable to its workflow even when the cron never
+   * observes it — a fast run that starts and finishes within one poll interval,
+   * or a deployment where the scheduled cron doesn't fire. Without it the row
+   * has a null workflow_id: it reads as wf_unknown in the runs list and counts
+   * under no workflow in the workflows table.
+   */
+  workflowId: string;
+  workflowName: string;
+  /**
    * Terminal status the run reached on this exit path: "success" (PR opened, or
    * a clarification that completed cleanly) or "failed" (any phase failure,
    * timeout, or thrown error). This is the run's OWN authoritative status,
@@ -55,6 +66,8 @@ export interface RunUsage {
   tokensOutput: number | null;
   /** Per-phase breakdown ({ [phase]: { costUsd, tokens, durationMs, numTurns } }). */
   phases: unknown;
+  /** Full step waterfall captured from the world on completion; null if capture failed. */
+  steps: RunStep[] | null;
   prUrl: string | null;
   prNumber: number | null;
 }
@@ -141,6 +154,8 @@ export async function recordRunUsage(db: Db, usage: RunUsage): Promise<void> {
     .insert(workflowRuns)
     .values({
       runId: usage.runId,
+      workflowId: usage.workflowId,
+      workflowName: usage.workflowName,
       status: usage.status,
       completedAt: sql`now()`,
       ticketKey: usage.ticketKey,
@@ -153,6 +168,7 @@ export async function recordRunUsage(db: Db, usage: RunUsage): Promise<void> {
       tokensCached: usage.tokensCached,
       tokensOutput: usage.tokensOutput,
       phases: usage.phases,
+      steps: usage.steps,
       prUrl: usage.prUrl,
       prNumber: usage.prNumber,
     })
@@ -163,6 +179,8 @@ export async function recordRunUsage(db: Db, usage: RunUsage): Promise<void> {
         // "running". completedAt keeps a precise cron-recorded value if present,
         // else stamps now(); durationSec is filled from a known start.
         status: sql`excluded.status`,
+        workflowId: sql`excluded.workflow_id`,
+        workflowName: sql`excluded.workflow_name`,
         completedAt: sql`coalesce(${workflowRuns.completedAt}, now())`,
         durationSec: durationFromStart(),
         ticketKey: keepIfNull(workflowRuns.ticketKey, workflowRuns.ticketKey),
@@ -175,6 +193,9 @@ export async function recordRunUsage(db: Db, usage: RunUsage): Promise<void> {
         tokensCached: sql`excluded.tokens_cached`,
         tokensOutput: sql`excluded.tokens_output`,
         phases: sql`excluded.phases`,
+        // Workflow-owned and capture is best-effort: never erase a good
+        // waterfall with a later null (a re-record whose world capture failed).
+        steps: keepIfNull(workflowRuns.steps, workflowRuns.steps),
         prUrl: keepIfNull(workflowRuns.prUrl, workflowRuns.prUrl),
         prNumber: keepIfNull(workflowRuns.prNumber, workflowRuns.prNumber),
         updatedAt: sql`now()`,

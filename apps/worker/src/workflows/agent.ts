@@ -546,9 +546,22 @@ async function recordRunTelemetryStep(payload: {
   "use step";
   const { getDb } = await import("../db/client.js");
   const { recordRunUsage } = await import("../lib/telemetry/run-telemetry.js");
+  const { getWorld } = await import("workflow/runtime");
+  const collectRunDetailMod = await import(
+    "../lib/overview/collect-run-detail.js"
+  );
+  const steps = await collectRunDetailMod.captureRunStepsBestEffort(
+    getWorld() as unknown as import("../lib/overview/collect-run-detail.js").RunDetailSource,
+    payload.runId,
+  );
   const { totals } = payload;
   await recordRunUsage(getDb(), {
     runId: payload.runId,
+    // This is the agent workflow — its canonical identity (mirrors
+    // WORKFLOW_MAP.agentWorkflow in lib/overview/collect-runs.ts). Recorded here
+    // so the run is attributed even when no cron snapshot ever observes it.
+    workflowId: "wf_agent",
+    workflowName: "Agent",
     status: payload.status,
     ticketKey: payload.ticketKey,
     ticketTitle: payload.ticketTitle,
@@ -560,6 +573,7 @@ async function recordRunTelemetryStep(payload: {
     tokensCached: totals.tokensCached,
     tokensOutput: totals.tokensOutput,
     phases: totals.phases,
+    steps,
     prUrl: payload.pr?.url ?? null,
     prNumber: payload.pr?.number ?? null,
   });

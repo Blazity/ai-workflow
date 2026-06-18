@@ -158,6 +158,8 @@ export const workflowRuns = pgTable("workflow_runs", {
   tokensOutput: integer("tokens_output"),
   /** Per-phase breakdown: { [phase]: { costUsd, tokens, durationMs, numTurns } }. */
   phases: jsonb("phases"),
+  /** Full RunStep[] trace waterfall, captured on completion (workflow-owned). */
+  steps: jsonb("steps"),
 
   // Bookkeeping.
   firstSeenAt: timestamp("first_seen_at", { withTimezone: true })

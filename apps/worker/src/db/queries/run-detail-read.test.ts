@@ -80,6 +80,74 @@ describe("fetchRunDetailFromDb", () => {
     const res = await fetchRunDetailFromDb({ db, runId: "r1", ...base });
     expect(res?.steps).toEqual([]);
   });
+
+  it("prefers persisted real steps over phase synthesis", async () => {
+    const steps = [
+      {
+        stepId: "s1",
+        name: "provisionSandbox",
+        rawName: "step//provisionSandbox",
+        status: "completed",
+        attempt: 1,
+        createdAt: "2026-06-16T10:00:00Z",
+        startedAt: "2026-06-16T10:00:00Z",
+        completedAt: "2026-06-16T10:00:15Z",
+        startOffsetMs: 0,
+        durationMs: 15_000,
+        error: null,
+      },
+    ];
+    await db.insert(workflowRuns).values({
+      runId: "r1",
+      status: "success",
+      startedAt: new Date("2026-06-16T10:00:00Z"),
+      completedAt: new Date("2026-06-16T10:05:00Z"),
+      steps,
+      phases: { Setup: { durationMs: 10_000 } }, // present but must be ignored
+    });
+    const res = await fetchRunDetailFromDb({ db, runId: "r1", ...base });
+    expect(res?.hasRealSteps).toBe(true);
+    expect(res?.steps.map((s) => s.name)).toEqual(["provisionSandbox"]);
+  });
+
+  it("normalizes a still-running step in a finished run to completed", async () => {
+    await db.insert(workflowRuns).values({
+      runId: "r1",
+      status: "success",
+      startedAt: new Date("2026-06-16T10:00:00Z"),
+      completedAt: new Date("2026-06-16T10:05:00Z"),
+      steps: [
+        {
+          stepId: "s1",
+          name: "recordRunTelemetry",
+          rawName: "step//recordRunTelemetry",
+          status: "running",
+          attempt: 1,
+          createdAt: "2026-06-16T10:04:50Z",
+          startedAt: "2026-06-16T10:04:50Z",
+          completedAt: null,
+          startOffsetMs: 290_000,
+          durationMs: null,
+          error: null,
+        },
+      ],
+    });
+    const res = await fetchRunDetailFromDb({ db, runId: "r1", ...base });
+    expect(res?.steps[0].status).toBe("completed");
+    expect(res?.steps[0].completedAt).toBe("2026-06-16T10:05:00.000Z");
+    expect(res?.steps[0].durationMs).toBe(10_000);
+  });
+
+  it("reports hasRealSteps=false when falling back to phase synthesis", async () => {
+    await db.insert(workflowRuns).values({
+      runId: "r1",
+      startedAt: new Date("2026-06-16T10:00:00Z"),
+      phases: { Setup: { durationMs: 10_000 } },
+    });
+    const res = await fetchRunDetailFromDb({ db, runId: "r1", ...base });
+    expect(res?.hasRealSteps).toBe(false);
+    expect(res?.steps.map((s) => s.name)).toEqual(["Setup"]);
+  });
 });
 
 describe("fetchRunRefs", () => {
