@@ -2,7 +2,8 @@ import { env } from "../../env.js";
 import { JiraAdapter } from "../adapters/issue-tracker/jira.js";
 import { ChatSDKAdapter } from "../adapters/messaging/chatsdk.js";
 import { NoopMessagingAdapter } from "../adapters/messaging/noop.js";
-import { UpstashRunRegistry } from "../adapters/run-registry/upstash.js";
+import { PostgresRunRegistry } from "../adapters/run-registry/postgres.js";
+import { getDb } from "../db/client.js";
 import { createVCS } from "./create-vcs.js";
 import type { IssueTrackerAdapter } from "../adapters/issue-tracker/types.js";
 import type { VCSAdapter } from "../adapters/vcs/types.js";
@@ -20,10 +21,7 @@ export interface Adapters {
 }
 
 export function createAdapters(): Adapters {
-  const runRegistry = new UpstashRunRegistry({
-    url: env.AI_WORKFLOW_KV_REST_API_URL,
-    token: env.AI_WORKFLOW_KV_REST_API_TOKEN,
-  });
+  const runRegistry = new PostgresRunRegistry(getDb());
   const messaging: MessagingAdapter =
     env.CHAT_SDK_SLACK_TOKEN && env.CHAT_SDK_CHANNEL_ID
       ? new ChatSDKAdapter({

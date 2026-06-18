@@ -269,14 +269,6 @@ function PromptDetail({ prompt }: { prompt: PromptDef | undefined }) {
       <CkCard
         eyebrow={`${prompt.source === "arthur" ? "Arthur" : "In-code"} · ${prompt.phase}`}
         title={prompt.name}
-        action={
-          <div className="flex items-center gap-2">
-            <PromptStatusChip status={prompt.source} />
-            <span className="w-px h-4 bg-neutral-200" />
-            <button className="appearance-none border border-neutral-200 bg-panel px-3 py-1.5 rounded-[3px] font-mono text-[11px] text-neutral-900 uppercase tracking-[0.04em] cursor-pointer">+ New version</button>
-            <button className="appearance-none border border-coal bg-coal text-white px-3 py-1.5 rounded-[3px] font-mono text-[11px] uppercase tracking-[0.04em] cursor-pointer">Deploy</button>
-          </div>
-        }
       >
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
           <Stat label="Phase" value={prompt.phase} />
@@ -331,31 +323,6 @@ function PromptDetail({ prompt }: { prompt: PromptDef | undefined }) {
       <CkCard
         eyebrow={showDiff ? "Prompt body · diff vs. previous" : "Prompt body · text"}
         title={shownLabel}
-        action={
-          selectedVersion != null ? (
-            <div className="flex items-center gap-2">
-              {canDiff && (
-                <div className="inline-flex rounded-[3px] border border-neutral-200 overflow-hidden">
-                  {(["diff", "raw"] as const).map((m) => (
-                    <button
-                      key={m}
-                      onClick={() => setViewMode(m)}
-                      className={`appearance-none px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.04em] cursor-pointer ${viewMode === m ? "bg-coal text-white" : "bg-panel text-neutral-900"}`}
-                    >
-                      {m}
-                    </button>
-                  ))}
-                </div>
-              )}
-              <button
-                onClick={() => setSelectedVersion(null)}
-                className="appearance-none border border-neutral-200 bg-panel px-3 py-1.5 rounded-[3px] font-mono text-[11px] text-neutral-900 uppercase tracking-[0.04em] cursor-pointer"
-              >
-                Show production
-              </button>
-            </div>
-          ) : undefined
-        }
       >
         <div className="border border-neutral-200 rounded-xs overflow-hidden max-h-[420px]">
           <div className="overflow-auto max-h-[420px] py-3">
@@ -393,10 +360,6 @@ export function PromptsScreen({ data }: { data: PromptsResponse }) {
             {data.arthurEnabled ? "Arthur engine · prompt versioning" : "In-code defaults · prompt versioning"}
           </div>
           <h2 className="font-display font-medium text-2xl leading-[1.2] m-0 text-neutral-900">Prompt registry</h2>
-        </div>
-        <div className="flex gap-2">
-          <button className="appearance-none border border-neutral-200 bg-panel px-3.5 py-2 rounded-[3px] font-mono text-[11px] text-neutral-900 uppercase tracking-[0.04em] cursor-pointer">Import from prod</button>
-          <button className="appearance-none border border-coal bg-coal text-white px-3.5 py-2 rounded-[3px] font-mono text-[11px] uppercase tracking-[0.04em] cursor-pointer">+ New prompt</button>
         </div>
       </div>
 

@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 
 import { useTweaks } from "@/lib/use-tweaks";
+import { runHref } from "@/lib/run-href";
 import type { Run } from "@/lib/types";
 
 import {
@@ -14,6 +15,7 @@ import {
 } from "@/components/cockpit/context";
 import { CkSidebar } from "@/components/cockpit/chrome";
 import { CkActivityDrawer } from "@/components/cockpit/activity-drawer";
+import { SpotlightSearch } from "@/components/cockpit/spotlight-search";
 import { BottomTabBar } from "@/components/cockpit/mobile/bottom-tab-bar";
 import { MobileHeader } from "@/components/cockpit/mobile/mobile-header";
 import { MoreSheet } from "@/components/cockpit/mobile/more-sheet";
@@ -33,6 +35,7 @@ const TITLE_FOR_SCREEN: Record<string, string> = {
   cost: "Cost & usage",
   editor: "Workflow editor",
   trace: "Run trace",
+  ticket: "Ticket runs",
 };
 
 /**
@@ -61,7 +64,7 @@ export function CockpitShell({ children }: { children: React.ReactNode }) {
   }, [t.activityDrawerOpen]);
 
   const openRun = (r: Run) => {
-    router.push(`/trace/${encodeURIComponent(r.id)}`);
+    router.push(runHref(r));
   };
 
   return (
@@ -107,6 +110,9 @@ export function CockpitShell({ children }: { children: React.ReactNode }) {
         <div className="lg:hidden">
           <MoreSheet open={moreOpen} onClose={() => setMoreOpen(false)} active={screen} onNav={(id) => router.push(pathForScreen(id))} />
         </div>
+
+        {/* Spotlight ticket search — global overlay, summoned by ⌘K from any screen */}
+        <SpotlightSearch />
       </div>
     </CockpitCtx.Provider>
   );

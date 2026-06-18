@@ -6,7 +6,7 @@ import {
   deleteTicket,
 } from "../helpers/jira.js";
 import { findPR, deleteBranch } from "../helpers/github.js";
-import { getRunId, cleanup as redisCleanup } from "../helpers/redis.js";
+import { getRunId, cleanup as redisCleanup } from "../helpers/registry.js";
 import {
   stopSandboxesForTicket,
   killClaudeForTicket,

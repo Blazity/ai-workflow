@@ -108,7 +108,7 @@ flowchart TD
 | Issue Tracker | Jira REST API | Ticket lifecycle management |
 | VCS | GitHub ([Octokit](https://github.com/octokit/rest.js)) or GitLab ([@gitbeaker/rest](https://github.com/jdalrymple/gitbeaker)) | Branches, PRs/MRs, comments |
 | Messaging | [Chat SDK](https://chat-sdk.dev) + Slack | Team notifications + `/ai-workflow` slash commands |
-| Run Registry | [Upstash Redis](https://upstash.com) (via Vercel Marketplace integration) | Atomic claim/release for concurrent runs |
+| Run Registry | [Neon Postgres](https://neon.tech) (via Vercel Marketplace integration) | Atomic claim/release for concurrent runs |
 | Tracing (optional) | [Arthur AI Engine](https://www.arthur.ai/) | Per-run prompt/tool tracing inside the sandbox |
 | Validation | [Zod](https://zod.dev) | Schema validation for config and agent output |
 | Logging | [Pino](https://getpino.io) | Structured JSON logs |
@@ -133,7 +133,7 @@ There is a single durable workflow — `agentWorkflow` in [`apps/worker/src/work
 | `ensureArthurTaskForTicket` | Optional — creates an Arthur trace task when `GENAI_ENGINE_*` is configured |
 | `resolveAgentKindOverride` | Per-ticket override via labels (e.g. `agent:codex`); falls back to `AGENT_KIND` |
 | `provisionSandbox` | Provisions a Vercel Sandbox, installs the agent CLI + skills, configures auth + Arthur tracer |
-| `registerTicketSandbox` | Pins the sandbox id to the ticket in Redis so cleanup paths can stop it by id |
+| `registerTicketSandbox` | Pins the sandbox id to the ticket in Postgres so cleanup paths can stop it by id |
 | `writeAttachments` | Writes downloaded attachments under `/tmp/attachments/` inside the sandbox |
 | **Phase 1 — Research/Plan** | `setCommitGuardStep(false)` → `planPhaseStep("research")` → `writeAndStartPhase` → `pollUntilDone` (20 min) → `collectPhase` → `parseResearchStep`. Result is `completed`, `clarification_needed`, or `failed` |
 | **Phase 2 — Implementation** | `setCommitGuardStep(true)` → `planPhaseStep("impl", AGENT_SCHEMA)` → `writeAndStartPhase` → `pollUntilDone` (35 min) → `collectPhase` → `parseAgentOutputStep` |
@@ -141,7 +141,7 @@ There is a single durable workflow — `agentWorkflow` in [`apps/worker/src/work
 | `fixAndRetryPush` | Fallback: if the push is rejected (e.g. pre-receive hook), spawns a lightweight fix agent in the same sandbox, then retries the push once |
 | `createPullRequest` / `findPRForBranch` | Opens a new PR (no prior PR) or re-fetches the existing PR (review-fix path) |
 | `moveTicket` → `notifyTicket("pr_ready")` | Moves the ticket to "AI Review" and sends the Slack notification with the usage report |
-| `unregisterRun` | Removes the ticket from the Redis run registry |
+| `unregisterRun` | Removes the ticket from the Postgres run registry |
 | `teardownSandbox` | Always runs in `finally` — destroys the sandbox regardless of outcome |
 
 If either phase returns `clarification_needed`, the workflow posts numbered questions as a Jira comment, moves the ticket to Backlog, and emits a `needs_clarification` Slack event. If a phase fails or times out, the ticket is moved to Backlog with a `failed` event.
@@ -222,9 +222,9 @@ The sandbox is **always destroyed** after each run (in a `finally` block), wheth
 
 ### Run Registry and Reconciliation
 
-ai workflow uses an **atomic claim pattern** via Upstash Redis to prevent duplicate runs:
+ai workflow uses an **atomic claim pattern** via Postgres (`INSERT … ON CONFLICT DO NOTHING`) to prevent duplicate runs:
 
-- When a ticket is dispatched, a `claiming:{timestamp}` sentinel is set atomically (`hsetnx`)
+- When a ticket is dispatched, a `claiming:{timestamp}` sentinel is set atomically (`INSERT … ON CONFLICT DO NOTHING`)
 - Only one poller instance can win the claim — others see it's taken
 - After the workflow starts, the sentinel is replaced with the real workflow run ID and the sandbox id is pinned to the ticket
 - On every poll cycle, the **reconciler** ([`apps/worker/src/lib/reconcile.ts`](./apps/worker/src/lib/reconcile.ts)) cleans up:

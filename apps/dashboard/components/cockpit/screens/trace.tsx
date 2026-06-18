@@ -120,8 +120,44 @@ export function TraceScreen({
   data: RunDetailResponse;
 }) {
   const router = useRouter();
-  const { run, steps } = data;
   const onBack = () => router.push("/runs");
+  const onTicket = (key: string) => router.push(`/ticket/${encodeURIComponent(key)}`);
+  return (
+    <div className="flex flex-col gap-4 px-4 pt-4 pb-6 lg:px-6 lg:pt-5 lg:pb-8">
+      <Breadcrumb
+        runId={runId}
+        ticket={data.run?.ticket ?? ""}
+        onBack={onBack}
+        onTicket={onTicket}
+      />
+      <TraceDetail runId={runId} data={data} />
+    </div>
+  );
+}
+
+export function TraceDetail({
+  runId,
+  data,
+}: {
+  runId: string;
+  data: RunDetailResponse;
+}) {
+  const router = useRouter();
+  const { run, steps } = data;
+
+  // Live-tail: while the run is still in flight, softly refresh the trace's
+  // server data every second so steps and status update without a full page
+  // reload. `router.refresh()` re-runs only this page's server fetch (the layout
+  // does no fetching) while preserving client state — step selection, scroll —
+  // and shows no skeleton. Polling stops once the run reaches a terminal state.
+  const isLive =
+    !run ||
+    (run.status !== "success" && run.status !== "failed" && run.status !== "blocked");
+  React.useEffect(() => {
+    if (!isLive) return;
+    const id = setInterval(() => router.refresh(), 1000);
+    return () => clearInterval(id);
+  }, [isLive, router]);
 
   // Wall-clock offset of "now" from run start — sizes bars for running steps.
   const runStartMs = run ? Date.parse(run.startedAt ?? run.createdAt) : 0;
@@ -207,15 +243,12 @@ export function TraceScreen({
 
   if (!data.available || !run) {
     return (
-      <div className="flex flex-col gap-4 px-4 pt-4 pb-6 lg:px-6 lg:pt-5 lg:pb-8">
-        <Breadcrumb runId={runId} onBack={onBack} />
-        <CkCard eyebrow="Run trace" title="Run unavailable">
-          <div className="py-6 text-center text-neutral-500 font-body text-[13px]">
-            No trace data for <span className="font-mono">{runId}</span>. The run
-            may have expired, or the workflow runtime is unavailable.
-          </div>
-        </CkCard>
-      </div>
+      <CkCard eyebrow="Run trace" title="Run unavailable">
+        <div className="py-6 text-center text-neutral-500 font-body text-[13px]">
+          No trace data for <span className="font-mono">{runId}</span>. The run
+          may have expired, or the workflow runtime is unavailable.
+        </div>
+      </CkCard>
     );
   }
 
@@ -223,9 +256,7 @@ export function TraceScreen({
   const retries = steps.reduce((n, s) => n + Math.max(0, s.attempt - 1), 0);
 
   return (
-    <div className="flex flex-col gap-4 px-4 pt-4 pb-6 lg:px-6 lg:pt-5 lg:pb-8">
-      <Breadcrumb runId={run.id} onBack={onBack} />
-
+    <div className="flex flex-col gap-4">
       <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
         <div className="flex flex-col gap-1 min-w-0">
           <div className="flex items-center gap-2.5 flex-wrap lg:flex-nowrap">
@@ -234,20 +265,43 @@ export function TraceScreen({
             <span className="font-mono text-[11px] text-neutral-700">
               {[run.ticket, run.model].filter(Boolean).join(" · ")}
             </span>
+            {isLive && (
+              <span className="inline-flex items-center gap-1.5 font-mono text-[10px] text-mariner tracking-[0.04em] uppercase">
+                <span className="relative w-1.5 h-1.5">
+                  <span className="absolute inset-0 rounded-full bg-mariner" />
+                  <span className="absolute -inset-[3px] rounded-full border border-mariner animate-ck-pulse" />
+                </span>
+                Live
+              </span>
+            )}
           </div>
           <h2 className="font-display font-medium text-2xl leading-[1.2] m-0 text-neutral-900">
             {run.ticketTitle || run.id}
           </h2>
         </div>
-        {run.ticketUrl && (
-          <a
-            href={run.ticketUrl}
-            target="_blank"
-            rel="noreferrer"
-            className="appearance-none border border-neutral-200 bg-panel px-3.5 py-2 rounded-[3px] font-mono text-[11px] text-neutral-900 uppercase tracking-[0.04em] cursor-pointer no-underline self-start lg:self-auto"
-          >
-            Open ticket ↗
-          </a>
+        {(run.ticketUrl || run.prUrl) && (
+          <div className="flex items-center gap-2 self-start lg:self-auto">
+            {run.ticketUrl && (
+              <a
+                href={run.ticketUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="appearance-none border border-neutral-200 bg-panel px-3.5 py-2 rounded-[3px] font-mono text-[11px] text-neutral-900 uppercase tracking-[0.04em] cursor-pointer no-underline"
+              >
+                Open ticket ↗
+              </a>
+            )}
+            {run.prUrl && (
+              <a
+                href={run.prUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="appearance-none border border-neutral-200 bg-coal px-3.5 py-2 rounded-[3px] font-mono text-[11px] text-white uppercase tracking-[0.04em] cursor-pointer no-underline hover:bg-neutral-800"
+              >
+                {run.prNumber ? `PR #${run.prNumber}` : "Open PR"} ↗
+              </a>
+            )}
+          </div>
         )}
       </div>
 
@@ -399,7 +453,17 @@ export function TraceScreen({
   );
 }
 
-function Breadcrumb({ runId, onBack }: { runId: string; onBack: () => void }) {
+function Breadcrumb({
+  runId,
+  ticket,
+  onBack,
+  onTicket,
+}: {
+  runId: string;
+  ticket: string;
+  onBack: () => void;
+  onTicket: (key: string) => void;
+}) {
   return (
     <div className="flex items-center gap-3 font-body text-[13px] min-w-0">
       <button
@@ -410,6 +474,19 @@ function Breadcrumb({ runId, onBack }: { runId: string; onBack: () => void }) {
       >
         ← Runs
       </button>
+      {ticket && (
+        <>
+          <span className="text-[#D2D6DA] shrink-0">/</span>
+          <button
+            type="button"
+            onClick={() => onTicket(ticket)}
+            aria-label={`All runs for ${ticket}`}
+            className="appearance-none border-0 bg-transparent p-0 font-mono text-[11px] text-mariner cursor-pointer tracking-[0.04em] shrink-0"
+          >
+            {ticket}
+          </button>
+        </>
+      )}
       <span className="text-[#D2D6DA] shrink-0">/</span>
       <span className="font-mono text-neutral-700 truncate">{runId}</span>
     </div>

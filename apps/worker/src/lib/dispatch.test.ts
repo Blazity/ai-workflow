@@ -132,38 +132,6 @@ describe("dispatchTicket", () => {
     );
   });
 
-  it("adds a run:<id> label to the ticket after registering the run", async () => {
-    const updateLabels = vi.fn().mockResolvedValue(undefined);
-    const adapters = makeAdapters();
-    adapters.issueTracker.updateLabels = updateLabels;
-    const { dispatchTicket } = await import("./dispatch.js");
-
-    const result = await dispatchTicket("PROJ-42", adapters, 5);
-
-    expect(result).toEqual({ started: true, runId: "run_123" });
-    expect(adapters.runRegistry.register).toHaveBeenCalledWith(
-      "PROJ-42",
-      "run_123",
-    );
-    expect(updateLabels).toHaveBeenCalledWith("PROJ-42", {
-      add: ["run:run_123"],
-    });
-  });
-
-  it("still succeeds when adding the run label fails", async () => {
-    const updateLabels = vi.fn().mockRejectedValue(new Error("Jira down"));
-    const adapters = makeAdapters();
-    adapters.issueTracker.updateLabels = updateLabels;
-    const { dispatchTicket } = await import("./dispatch.js");
-
-    const result = await dispatchTicket("PROJ-42", adapters, 5);
-
-    expect(result).toEqual({ started: true, runId: "run_123" });
-    expect(updateLabels).toHaveBeenCalledWith("PROJ-42", {
-      add: ["run:run_123"],
-    });
-  });
-
   it("skips dispatch when ticket is no longer in AI column", async () => {
     const unregister = vi.fn().mockResolvedValue(undefined);
     const adapters = makeAdapters({

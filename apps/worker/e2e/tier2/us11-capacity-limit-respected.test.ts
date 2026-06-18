@@ -10,7 +10,7 @@ import {
   setEntry,
   listAll as listAllRuns,
   cleanup as redisCleanup,
-} from "../helpers/redis.js";
+} from "../helpers/registry.js";
 import { callCronPoll } from "../helpers/cron.js";
 import { waitFor } from "../helpers/wait.js";
 import { e2eEnv } from "../env.js";
