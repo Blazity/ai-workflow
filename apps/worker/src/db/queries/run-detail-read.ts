@@ -17,6 +17,26 @@ import { coerceStatus } from "./runs-read.js";
 
 const PHASE_ORDER = ["Setup", "Research", "Implementation", "Review", "Finalize", "Run"];
 
+const TERMINAL = new Set(["success", "failed", "blocked"]);
+
+/**
+ * A finished run's persisted waterfall may contain the telemetry step itself,
+ * captured mid-flight (status "running"). Present it as completed at the run's
+ * completion so a finished trace shows no dangling in-progress step.
+ */
+function normalizeFinishedSteps(steps: RunStep[], completedAtIso: string | null): RunStep[] {
+  return steps.map((s) => {
+    if (s.status !== "running" && s.status !== "pending") return s;
+    const completedAt = s.completedAt ?? completedAtIso;
+    const durationMs =
+      s.durationMs ??
+      (s.startedAt && completedAt
+        ? Math.max(0, new Date(completedAt).getTime() - new Date(s.startedAt).getTime())
+        : null);
+    return { ...s, status: "completed" as const, completedAt, durationMs };
+  });
+}
+
 function phaseRank(name: string): number {
   const i = PHASE_ORDER.indexOf(name);
   return i === -1 ? PHASE_ORDER.length : i;
@@ -67,7 +87,7 @@ export interface FetchRunDetailFromDbOptions {
 
 export async function fetchRunDetailFromDb(
   opts: FetchRunDetailFromDbOptions,
-): Promise<{ run: RunDetail; steps: RunStep[] } | null> {
+): Promise<{ run: RunDetail; steps: RunStep[]; hasRealSteps: boolean } | null> {
   const { db, runId, jiraBaseUrl, modelFallback } = opts;
   const tenantOrigin = jiraBaseUrl.replace(/\/+$/, "");
 
@@ -100,7 +120,14 @@ export async function fetchRunDetailFromDb(
     deploymentId: null,
   };
 
-  return { run, steps: phasesToSteps(row.phases, base) };
+  const persisted = Array.isArray(row.steps) ? (row.steps as RunStep[]) : null;
+  if (persisted && persisted.length > 0) {
+    const steps = TERMINAL.has(run.status)
+      ? normalizeFinishedSteps(persisted, run.completedAt)
+      : persisted;
+    return { run, steps, hasRealSteps: true };
+  }
+  return { run, steps: phasesToSteps(row.phases, base), hasRealSteps: false };
 }
 
 /**

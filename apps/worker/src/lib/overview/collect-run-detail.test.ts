@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import {
   collectRunDetail,
+  captureRunStepsBestEffort,
   type RunDetailSource,
   type WorkflowRunRecord,
   type WorkflowStepRecord,
@@ -125,5 +126,28 @@ describe("collectRunDetail", () => {
     expect(run.ticket).toBe("");
     expect(run.ticketTitle).toBe("");
     expect(run.ticketUrl).toBe("");
+  });
+});
+
+describe("captureRunStepsBestEffort", () => {
+  it("returns the mapped step waterfall", async () => {
+    const source = makeSource({ runId: "run_a", startedAt: RUN_START }, [
+      step({
+        stepId: "s1",
+        stepName: STEP("provisionSandbox"),
+        startedAt: RUN_START,
+        completedAt: new Date("2026-06-02T11:00:15.000Z"),
+      }),
+    ]);
+    const steps = await captureRunStepsBestEffort(source, "run_a");
+    expect(steps?.map((s) => s.name)).toEqual(["provisionSandbox"]);
+  });
+
+  it("returns null when the world throws", async () => {
+    const source: RunDetailSource = {
+      runs: { get: vi.fn().mockRejectedValue(new Error("expired")) },
+      steps: { list: vi.fn().mockResolvedValue({ data: [] }) },
+    };
+    expect(await captureRunStepsBestEffort(source, "run_a")).toBeNull();
   });
 });

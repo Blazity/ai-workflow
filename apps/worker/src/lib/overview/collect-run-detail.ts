@@ -193,3 +193,22 @@ export async function collectRunDetail(
 
   return { run: detail, steps };
 }
+
+/**
+ * Capture just the step waterfall for a run, reusing collectRunDetail so the
+ * persisted shape is identical to the live read. Best-effort: returns null on
+ * any world failure (expired run / world unavailable) so the caller — the
+ * agent's telemetry step — never throws. The header is discarded, so the model
+ * arg is irrelevant.
+ */
+export async function captureRunStepsBestEffort(
+  world: RunDetailSource,
+  runId: string,
+): Promise<RunStep[] | null> {
+  try {
+    const { steps } = await collectRunDetail({ world, model: "", runId });
+    return steps;
+  } catch {
+    return null;
+  }
+}
