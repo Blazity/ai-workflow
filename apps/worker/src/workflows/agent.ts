@@ -428,6 +428,29 @@ async function findPRForBranch(branchName: string) {
   return pr;
 }
 
+async function postPrLinkComment(
+  ticketId: string,
+  prUrl: string,
+  prNumber: number,
+): Promise<void> {
+  "use step";
+  const { createStepAdapters } = await import("../lib/step-adapters.js");
+  const { issueTracker } = createStepAdapters();
+  try {
+    await issueTracker.postComment(
+      ticketId,
+      `🤖 Pull request #${prNumber} ready for review:\n${prUrl}`,
+    );
+  } catch (err) {
+    const { logger } = await import("../lib/logger.js");
+    logger.warn(
+      { ticketId, prUrl, err: errorMessage(err) },
+      "pr_link_comment_failed",
+    );
+  }
+}
+postPrLinkComment.maxRetries = 0;
+
 async function moveTicket(ticketId: string, column: string) {
   "use step";
   const { createStepAdapters } = await import("../lib/step-adapters.js");
@@ -965,10 +988,19 @@ export async function agentWorkflow(ticketId: string) {
       // - Existing PR: prContext was built from vcs.findPR(branch), but findPR's return
       //   is dropped today. Re-fetch via the VCS adapter step (cheap; same call already
       //   ran on this branch earlier in the workflow).
-      const pr = !prContext
+      const isNewPr = !prContext;
+      const pr = isNewPr
         ? await createPullRequest(branchName, ticket.title, "")
         : await findPRForBranch(branchName);
       prForTelemetry = { url: pr.url, number: pr.id };
+
+      // Leave a one-time Jira comment linking to the PR, only when we just
+      // opened it. On review-fix re-runs the PR already exists and its URL is
+      // unchanged, so gating on new-PR creation yields exactly one comment per
+      // ticket. Best-effort: postPrLinkComment never throws.
+      if (isNewPr) {
+        await postPrLinkComment(ticket.identifier, pr.url, pr.id);
+      }
 
       const usageReport = formatUsageReport(phaseUsages, priceLookup, activeModel);
       await notifyTicket(ticket.identifier, {

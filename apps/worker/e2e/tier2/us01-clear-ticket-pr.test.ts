@@ -3,6 +3,7 @@ import {
   createTestTicket,
   moveTicketToColumn,
   getTicketStatus,
+  getTicketComments,
   deleteTicket,
 } from "../helpers/jira.js";
 import {
@@ -95,6 +96,18 @@ describe("US-01: Clear ticket produces a PR", () => {
       },
       { description: `ticket ${ticketKey} → ${e2eEnv.COLUMN_AI_REVIEW}`, timeoutMs: 60_000 },
     );
+
+    // 7b. Jira ticket has a single comment linking to the PR
+    const prCommentBody = await waitFor(
+      async () => {
+        const comments = await getTicketComments(ticketKey);
+        const match = comments.filter((c) => c.body.includes(pr.url));
+        return match.length === 1 ? match[0].body : null;
+      },
+      { description: `PR-link comment on ${ticketKey}`, timeoutMs: 60_000 },
+    );
+    expect(prCommentBody).toContain(`#${prNumber}`);
+    expect(prCommentBody).toContain("ready for review");
 
     // 8. Redis entry cleaned up
     await waitFor(
