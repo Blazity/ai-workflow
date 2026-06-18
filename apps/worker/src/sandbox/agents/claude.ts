@@ -208,9 +208,22 @@ touch ${paths.sentinel}
       typeof envelope.cost_usd === "number" ? envelope.cost_usd
       : typeof envelope.total_cost_usd === "number" ? envelope.total_cost_usd
       : null;
+    // The Claude CLI result envelope carries an Anthropic Messages-API `usage`
+    // object; map it onto PhaseUsage.tokens so per-run token counts get persisted
+    // (cache-creation counts as input, cache reads as cached_input).
+    const u = (envelope.usage ?? {}) as Record<string, unknown>;
+    const num = (v: unknown): number => (typeof v === "number" ? v : 0);
+    const tokens =
+      typeof u.input_tokens === "number" || typeof u.output_tokens === "number"
+        ? {
+            input: num(u.input_tokens) + num(u.cache_creation_input_tokens),
+            cached_input: num(u.cache_read_input_tokens),
+            output: num(u.output_tokens),
+          }
+        : null;
     return {
       cost_usd: cost,
-      tokens: null,
+      tokens,
       duration_ms: typeof envelope.duration_ms === "number" ? envelope.duration_ms : 0,
       duration_api_ms: typeof envelope.duration_api_ms === "number" ? envelope.duration_api_ms : 0,
       num_turns: typeof envelope.num_turns === "number" ? envelope.num_turns : 0,

@@ -1,12 +1,10 @@
-import { defineEventHandler, setResponseHeader } from "h3";
+import { defineEventHandler, getQuery, setResponseHeader } from "h3";
 import type { CostResponse } from "@shared/contracts";
-import { env } from "../../../../env.js";
-import { ArthurClient } from "../../../sandbox/arthur-client.js";
-import { collectCost } from "../../../lib/overview/collect-cost.js";
+import { getDb } from "../../../db/client.js";
+import { costAgg, parseWindow } from "../../../db/queries/runs-read.js";
 import { logger } from "../../../lib/logger.js";
 
-const EMPTY: Omit<CostResponse, "generatedAt" | "available"> = {
-  window: { start: "", end: "" },
+const EMPTY: Omit<CostResponse, "generatedAt" | "available" | "window"> = {
   totals: { totalTokenCost: 0, totalTokens: 0, traceCount: 0, costPerRun: 0 },
   byWorkflow: [],
   daily: [],
@@ -20,22 +18,19 @@ export default defineEventHandler(async (event): Promise<CostResponse> => {
   );
 
   const generatedAt = new Date().toISOString();
-
-  // Arthur unconfigured — degrade to the documented empty state (no crash).
-  if (!env.GENAI_ENGINE_API_KEY || !env.GENAI_ENGINE_TRACE_ENDPOINT) {
-    return { generatedAt, available: false, ...EMPTY, window: { start: generatedAt, end: generatedAt } };
-  }
-
   try {
-    const client = ArthurClient.fromTraceEndpoint(
-      env.GENAI_ENGINE_TRACE_ENDPOINT,
-      env.GENAI_ENGINE_API_KEY,
-    );
-    const data = await collectCost(client, { now: new Date() });
-    return { generatedAt, available: true, ...data };
+    const window = parseWindow(getQuery(event).window);
+    const data = await costAgg({ db: getDb(), window, now: new Date() });
+    // Empty window → documented empty state (matches the prior Arthur behaviour).
+    return { generatedAt, available: data.totals.traceCount > 0, ...data };
   } catch (err) {
-    // Arthur unreachable / 401 / unexpected shape — degrade like runs.get.ts.
+    // DB unreachable — degrade like the other collectors.
     logger.warn({ err: (err as Error).message }, "cost_collect_failed");
-    return { generatedAt, available: false, ...EMPTY, window: { start: generatedAt, end: generatedAt } };
+    return {
+      generatedAt,
+      available: false,
+      window: { start: generatedAt, end: generatedAt },
+      ...EMPTY,
+    };
   }
 });

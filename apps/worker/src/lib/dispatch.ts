@@ -2,7 +2,6 @@ import { start, getRun } from "workflow/api";
 import { env } from "../../env.js";
 import { agentWorkflow } from "../workflows/agent.js";
 import { logger } from "./logger.js";
-import { runLabel } from "./labels.js";
 import type { Adapters } from "./adapters.js";
 import { stopTicketSandboxes } from "../sandbox/stop-ticket-sandboxes.js";
 
@@ -70,15 +69,15 @@ export async function dispatchTicket(
 
     // Post-claim capacity verify. The precheck above is not atomic with
     // claim(), so N concurrent dispatches for *different* tickets can all
-    // pass the precheck and then all claim successfully — pushing Redis
-    // over the cap. Re-read the registry with our own claim visible and
-    // decide fairly who stays.
+    // pass the precheck and then all claim successfully — pushing the run
+    // registry over the cap. Re-read the registry with our own claim
+    // visible and decide fairly who stays.
     //
     // Fairness rule: sort by (claim timestamp ascending, ticketKey
     // ascending as tie-breaker); the first `max` entries win. Existing
     // non-sentinel entries (already-running workflows) are treated as
     // timestamp 0 so they always win over new claims. Every racer
-    // eventually converges on the same ordering once Redis writes are
+    // eventually converges on the same ordering once registry writes are
     // visible to all, so exactly the excess bail.
     stage = "postclaim_capacity";
     const racers = await runRegistry.listAll();
@@ -159,23 +158,6 @@ export async function dispatchTicket(
     stage = "register_run";
     await runRegistry.register(ticketKey, handle.runId);
 
-    // Durable ticket↔run mapping: tag the ticket with its runId so the
-    // dashboard (and operators in Jira) can recover which run processed it,
-    // even after the run completes and its encrypted workflow input is no
-    // longer decodable. Best-effort — the workflow has already started, so a
-    // label failure must not fail the dispatch. Add-only: labels accumulate so
-    // a re-dispatched ticket keeps one `run:<id>` label per run.
-    if (typeof issueTracker.updateLabels === "function") {
-      try {
-        await issueTracker.updateLabels(ticketKey, { add: [runLabel(handle.runId)] });
-      } catch (err) {
-        logger.warn(
-          { ticketKey, runId: handle.runId, err: errorMessage(err) },
-          "run_label_add_failed",
-        );
-      }
-    }
-
     return { started: true, runId: handle.runId };
   } catch (err) {
     if (claimHeld) {
@@ -190,7 +172,7 @@ export async function dispatchTicket(
 }
 
 /**
- * Capacity check counts active runs in the Redis registry — this is the
+ * Capacity check counts active runs in the Postgres registry — this is the
  * per-app concurrency limit for blazebot, not a per-team sandbox quota.
  *
  * We deliberately exclude claiming sentinels older than STALE_CLAIM_MS so
@@ -252,8 +234,4 @@ function extractProjectKey(ticketIdentifier: string): string | null {
   const dashIndex = trimmed.indexOf("-");
   if (dashIndex <= 0) return null;
   return trimmed.slice(0, dashIndex).toUpperCase();
-}
-
-function errorMessage(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
 }

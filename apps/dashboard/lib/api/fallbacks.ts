@@ -8,6 +8,7 @@ import type {
   RunDetailResponse,
   LiveRunsResponse,
   WorkflowsResponse,
+  TicketRunsResponse,
 } from "@shared/contracts";
 
 export function kpisFallback(now: string): KpisResponse {
@@ -63,4 +64,19 @@ export function costFallback(now: string): CostResponse {
 
 export function promptsFallback(now: string): PromptsResponse {
   return { generatedAt: now, available: false, arthurEnabled: false, rows: [], total: 0 };
+}
+
+export function ticketRunsFallback(now: string): TicketRunsResponse {
+  return {
+    generatedAt: now,
+    available: false,
+    ticket: null,
+    runs: [],
+    totals: {
+      cost: 0,
+      tokens: 0,
+      runCount: 0,
+      counts: { success: 0, running: 0, awaiting: 0, failed: 0, blocked: 0 },
+    },
+  };
 }

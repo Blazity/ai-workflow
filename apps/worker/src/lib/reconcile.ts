@@ -189,9 +189,9 @@ async function reconcileInflightClaim(
   if (claimIsStale) {
     // Dispatch starts the workflow (which can spin up a sandbox in the
     // research phase) *before* overwriting the sentinel with the real
-    // runId. A crash in that narrow window leaves a sentinel in Redis
+    // runId. A crash in that narrow window leaves a sentinel in Postgres
     // alongside a running sandbox we have no way to cancel via the
-    // workflow handle. Try the fast path (sandboxId from Redis); fall
+    // workflow handle. Try the fast path (sandboxId from Postgres); fall
     // back to the parallel branch scan if the workflow crashed before
     // writing its sandboxId.
     const sandboxId = await runRegistry

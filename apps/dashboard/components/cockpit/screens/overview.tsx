@@ -14,6 +14,14 @@ import {
 import { Spark, Donut } from "@/components/charts";
 import { spanColor } from "@/lib/theme";
 import { useCockpit } from "@/components/cockpit/context";
+import { WindowSelector } from "@/components/cockpit/controls";
+import { SpotlightTrigger } from "@/components/cockpit/spotlight-search";
+import {
+  windowDeltaSuffix,
+  windowPhrase,
+  windowShort,
+  type TimeWindow,
+} from "@/lib/window";
 import type { Run } from "@/lib/types";
 import type {
   KpisResponse,
@@ -278,8 +286,16 @@ function AwaitingInputPanel({
   );
 }
 
-export function OverviewScreen({ data }: { data: OverviewScreenData }) {
+export function OverviewScreen({
+  data,
+  window,
+}: {
+  data: OverviewScreenData;
+  window: TimeWindow;
+}) {
   const { t, openRun } = useCockpit();
+  const wShort = windowShort(window);
+  const deltaSuffix = windowDeltaSuffix(window);
 
   const PAGE_SIZE = 7;
   const [runsPage, setRunsPage] = useState(0);
@@ -318,6 +334,12 @@ export function OverviewScreen({ data }: { data: OverviewScreenData }) {
 
   return (
     <div className="px-6 pt-5 pb-8 flex flex-col gap-5">
+      {/* Spotlight ticket search (⌘K) + global window control */}
+      <div className="flex items-center justify-between gap-4">
+        <SpotlightTrigger />
+        <WindowSelector value={window} />
+      </div>
+
       {/* Editorial hero — chrome preserved; data cells degrade to N/A */}
       {t.showEditorialHero && (
         <div className="bg-coal text-white rounded-sm p-7 grid grid-cols-[1.5fr_1fr] gap-8 relative overflow-hidden">
@@ -341,7 +363,7 @@ export function OverviewScreen({ data }: { data: OverviewScreenData }) {
           </svg>
           <div className="relative z-[1] flex flex-col gap-3">
             <div className="font-mono text-[10px] text-white/50 tracking-[0.08em] uppercase">
-              Last 24 hours
+              {windowPhrase(window)}
             </div>
             <div className="font-display font-medium text-[36px] leading-[1.15] tracking-[-0.025em] m-0 text-balance">
               Overview · {data.kpis.generatedAt ? new Date(data.kpis.generatedAt).toLocaleTimeString() : "—"}
@@ -352,8 +374,8 @@ export function OverviewScreen({ data }: { data: OverviewScreenData }) {
           </div>
           <div className="relative z-1 grid grid-cols-2 gap-4 content-center">
             {[
-              { l: "Runs · 24h", v: heroRuns ? heroRuns.value.toLocaleString("en-US") : "N/A" },
-              { l: "Cost today", v: heroCost ? "$" + heroCost.value.toFixed(0) : "N/A" },
+              { l: `Runs · ${wShort}`, v: heroRuns ? heroRuns.value.toLocaleString("en-US") : "N/A" },
+              { l: `Cost · ${wShort}`, v: heroCost ? "$" + heroCost.value.toFixed(0) : "N/A" },
               { l: "p95 latency", v: heroP95 ? heroP95.valueSec + "s" : "N/A" },
               { l: "Eval score", v: heroEval ? heroEval.score.toFixed(1) : "N/A" },
             ].map((k) => (
@@ -373,11 +395,11 @@ export function OverviewScreen({ data }: { data: OverviewScreenData }) {
       {/* Hero KPIs */}
       <div className="grid grid-cols-4 gap-3">
         <CkKPI
-          label="Runs · 24h"
+          label={`Runs · ${wShort}`}
           value={heroRuns ? heroRuns.value.toLocaleString("en-US") : ""}
           delta={
-            heroRuns
-              ? `${heroRuns.deltaPct >= 0 ? "↗" : "↘"} ${Math.abs(heroRuns.deltaPct).toFixed(1)}% vs 24h ago`
+            heroRuns && deltaSuffix
+              ? `${heroRuns.deltaPct >= 0 ? "↗" : "↘"} ${Math.abs(heroRuns.deltaPct).toFixed(1)}% ${deltaSuffix}`
               : ""
           }
           deltaTone={heroRuns && heroRuns.deltaPct >= 0 ? "good" : "bad"}
@@ -390,8 +412,8 @@ export function OverviewScreen({ data }: { data: OverviewScreenData }) {
           label="p95 latency"
           value={heroP95 ? heroP95.valueSec + "s" : ""}
           delta={
-            heroP95
-              ? `${heroP95.deltaSec >= 0 ? "↗" : "↘"} ${Math.abs(heroP95.deltaSec).toFixed(1)}s vs 24h ago`
+            heroP95 && deltaSuffix
+              ? `${heroP95.deltaSec >= 0 ? "↗" : "↘"} ${Math.abs(heroP95.deltaSec).toFixed(1)}s ${deltaSuffix}`
               : ""
           }
           deltaTone={heroP95 && heroP95.deltaSec <= 0 ? "good" : "bad"}
@@ -400,11 +422,11 @@ export function OverviewScreen({ data }: { data: OverviewScreenData }) {
           disabled={!heroP95}
         />
         <CkKPI
-          label="Errors · 24h"
+          label={`Errors · ${wShort}`}
           value={heroErrors ? heroErrors.value.toString() : ""}
           delta={
-            heroErrors
-              ? `${heroErrors.deltaPct >= 0 ? "↗" : "↘"} ${Math.abs(heroErrors.deltaPct).toFixed(1)}% vs 24h ago`
+            heroErrors && deltaSuffix
+              ? `${heroErrors.deltaPct >= 0 ? "↗" : "↘"} ${Math.abs(heroErrors.deltaPct).toFixed(1)}% ${deltaSuffix}`
               : ""
           }
           deltaTone={heroErrors && heroErrors.deltaPct <= 0 ? "good" : "bad"}
@@ -422,7 +444,7 @@ export function OverviewScreen({ data }: { data: OverviewScreenData }) {
 
       {/* Recent runs */}
       <CkCard
-        eyebrow="Run timeline · last 24h"
+        eyebrow={`Run timeline · ${windowPhrase(window)}`}
         title="Recent runs"
         action={
           recentData.available ? (
@@ -558,11 +580,11 @@ export function OverviewScreen({ data }: { data: OverviewScreenData }) {
               <th className="px-4 py-2.5 text-left font-medium border-b border-neutral-200">
                 Workflow · latest ticket
               </th>
-              <th className="px-2 py-2.5 text-right font-medium border-b border-neutral-200">Runs 24h</th>
+              <th className="px-2 py-2.5 text-right font-medium border-b border-neutral-200">Runs {wShort}</th>
               <th className="px-2 py-2.5 text-right font-medium border-b border-neutral-200">p95</th>
               <th className="px-2 py-2.5 text-right font-medium border-b border-neutral-200">Err</th>
               <th className="px-2 py-2.5 text-right font-medium border-b border-neutral-200">Cost</th>
-              <th className="px-4 py-2.5 text-right font-medium border-b border-neutral-200">24h trend</th>
+              <th className="px-4 py-2.5 text-right font-medium border-b border-neutral-200">{wShort} trend</th>
             </tr>
           </thead>
           <tbody>
