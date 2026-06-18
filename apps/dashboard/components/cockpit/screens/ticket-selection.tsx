@@ -83,7 +83,7 @@ export function useTicketSelection(): TicketSelection {
 export function DetailArea({ children }: { children: ReactNode }) {
   const { isPending } = useTicketSelection();
   return (
-    <div style={{ gridArea: "detail" }} className="relative min-h-0">
+    <div style={{ gridArea: "detail" }} className="relative min-h-0 min-w-0">
       <div className="h-full overflow-y-auto p-4 lg:p-6">{children}</div>
       {isPending && (
         <div className="absolute inset-0 overflow-hidden bg-app-bg p-4 lg:p-6">
