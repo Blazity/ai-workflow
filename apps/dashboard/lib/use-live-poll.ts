@@ -4,6 +4,9 @@
 import { useEffect, useRef } from "react";
 import { createLivePoll } from "./live-poll";
 
+/** Live-mode poll cadence (ms). Single source of truth — tune here. */
+export const LIVE_POLL_MS = 5000;
+
 /**
  * Calls `onTick` every `intervalMs` while `enabled`, pausing when the browser
  * tab is hidden (and firing once immediately when it becomes visible again).

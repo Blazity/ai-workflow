@@ -6,7 +6,7 @@ import { usePathname, useRouter } from "next/navigation";
 
 import { useTweaks } from "@/lib/use-tweaks";
 import { runHref } from "@/lib/run-href";
-import { useLivePoll } from "@/lib/use-live-poll";
+import { useLivePoll, LIVE_POLL_MS } from "@/lib/use-live-poll";
 import type { Run } from "@/lib/types";
 
 import {
@@ -20,9 +20,6 @@ import { SpotlightSearch } from "@/components/cockpit/spotlight-search";
 import { BottomTabBar } from "@/components/cockpit/mobile/bottom-tab-bar";
 import { MobileHeader } from "@/components/cockpit/mobile/mobile-header";
 import { MoreSheet } from "@/components/cockpit/mobile/more-sheet";
-
-/** Live-mode poll cadence (ms). Single source of truth — tune here. */
-const LIVE_POLL_MS = 5000;
 
 /** Overview lives at `/`; every other screen is `/<id>` (matches the nav ids). */
 const pathForScreen = (id: string) => (id === "overview" ? "/" : `/${id}`);
@@ -71,15 +68,36 @@ export function CockpitShell({ children }: { children: React.ReactNode }) {
     router.push(runHref(r));
   };
 
+  // Timestamp of the next scheduled refresh, surfaced via context so the
+  // live-poll control can render a countdown ring in sync with the actual
+  // refreshes (which are driven here, once, for the whole cockpit).
+  const [nextRefreshAt, setNextRefreshAt] = useState<number | null>(null);
+  useEffect(() => {
+    setNextRefreshAt(t.livePolling ? Date.now() + LIVE_POLL_MS : null);
+  }, [t.livePolling]);
+
   useLivePoll({
     enabled: !!t.livePolling,
     intervalMs: LIVE_POLL_MS,
-    onTick: () => router.refresh(),
+    onTick: () => {
+      router.refresh();
+      setNextRefreshAt(Date.now() + LIVE_POLL_MS);
+    },
   });
 
   return (
     <CockpitCtx.Provider
-      value={{ t, setTweak, persona, range, env, openRun }}
+      value={{
+        t,
+        setTweak,
+        persona,
+        range,
+        env,
+        openRun,
+        livePolling: !!t.livePolling,
+        toggleLive: () => setTweak("livePolling", !t.livePolling),
+        nextRefreshAt,
+      }}
     >
       <div className="h-dvh w-screen flex flex-col lg:flex-row overflow-hidden bg-app-bg relative">
         {/* Desktop sidebar — lg and up only */}
@@ -89,8 +107,6 @@ export function CockpitShell({ children }: { children: React.ReactNode }) {
             onNav={(id) => router.push(pathForScreen(id))}
             collapsed={!!t.sidebarCollapsed}
             onToggleCollapse={() => setTweak("sidebarCollapsed", !t.sidebarCollapsed)}
-            live={!!t.livePolling}
-            onToggleLive={() => setTweak("livePolling", !t.livePolling)}
           />
         </div>
 

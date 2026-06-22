@@ -4,7 +4,7 @@
 import { useState } from "react";
 import { CkStatusPill, CkChip, TicketLink, PRLink } from "@/components/ui";
 import { useCockpit } from "@/components/cockpit/context";
-import { WindowSelector } from "@/components/cockpit/controls";
+import { WindowSelector, LivePollControl } from "@/components/cockpit/controls";
 import { windowPhrase, type TimeWindow } from "@/lib/window";
 import type { RunsResponse } from "@shared/contracts";
 
@@ -37,7 +37,10 @@ export function RunsMobileScreen({
           <div className="font-mono text-[10px] uppercase tracking-[0.06em] text-neutral-500">Workflow runs</div>
           <h2 className="font-display text-xl font-medium text-neutral-900 m-0">{data.total} runs · {windowPhrase(window)}</h2>
         </div>
-        <WindowSelector value={window} size="sm" />
+        <div className="flex items-center gap-2">
+          <LivePollControl size="sm" />
+          <WindowSelector value={window} size="sm" />
+        </div>
       </div>
 
       {/* Horizontally scrollable filter chips */}
