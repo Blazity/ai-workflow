@@ -6,6 +6,7 @@ import { usePathname, useRouter } from "next/navigation";
 
 import { useTweaks } from "@/lib/use-tweaks";
 import { runHref } from "@/lib/run-href";
+import { useLivePoll } from "@/lib/use-live-poll";
 import type { Run } from "@/lib/types";
 
 import {
@@ -19,6 +20,9 @@ import { SpotlightSearch } from "@/components/cockpit/spotlight-search";
 import { BottomTabBar } from "@/components/cockpit/mobile/bottom-tab-bar";
 import { MobileHeader } from "@/components/cockpit/mobile/mobile-header";
 import { MoreSheet } from "@/components/cockpit/mobile/more-sheet";
+
+/** Live-mode poll cadence (ms). Single source of truth — tune here. */
+const LIVE_POLL_MS = 5000;
 
 /** Overview lives at `/`; every other screen is `/<id>` (matches the nav ids). */
 const pathForScreen = (id: string) => (id === "overview" ? "/" : `/${id}`);
@@ -67,6 +71,12 @@ export function CockpitShell({ children }: { children: React.ReactNode }) {
     router.push(runHref(r));
   };
 
+  useLivePoll({
+    enabled: !!t.livePolling,
+    intervalMs: LIVE_POLL_MS,
+    onTick: () => router.refresh(),
+  });
+
   return (
     <CockpitCtx.Provider
       value={{ t, setTweak, persona, range, env, openRun }}
@@ -79,6 +89,8 @@ export function CockpitShell({ children }: { children: React.ReactNode }) {
             onNav={(id) => router.push(pathForScreen(id))}
             collapsed={!!t.sidebarCollapsed}
             onToggleCollapse={() => setTweak("sidebarCollapsed", !t.sidebarCollapsed)}
+            live={!!t.livePolling}
+            onToggleLive={() => setTweak("livePolling", !t.livePolling)}
           />
         </div>
 
