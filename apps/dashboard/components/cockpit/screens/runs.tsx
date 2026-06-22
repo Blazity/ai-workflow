@@ -3,7 +3,7 @@
 import React, { useState } from "react";
 import { CkCard, CkChip, CkStatusPill, CkTabs, CkPagination, TicketLink, PRLink } from "@/components/ui";
 import { useCockpit } from "@/components/cockpit/context";
-import { WindowSelector, LivePollControl } from "@/components/cockpit/controls";
+import { WindowSelector } from "@/components/cockpit/controls";
 import { SpotlightTrigger } from "@/components/cockpit/spotlight-search";
 import { windowPhrase, type TimeWindow } from "@/lib/window";
 import type { RunsResponse } from "@shared/contracts";
@@ -33,7 +33,6 @@ export function RunsScreen({
       <div className="flex items-center justify-between gap-4">
         <SpotlightTrigger />
         <div className="flex items-center gap-2">
-          <LivePollControl />
           <WindowSelector value={window} />
         </div>
       </div>
