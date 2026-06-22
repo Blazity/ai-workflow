@@ -3,7 +3,7 @@
 import React from "react";
 import { CkCard, CkKPI } from "@/components/ui";
 import { AreaChart } from "@/components/charts";
-import { WindowSelector, LivePollControl } from "@/components/cockpit/controls";
+import { WindowSelector } from "@/components/cockpit/controls";
 import { SpotlightTrigger } from "@/components/cockpit/spotlight-search";
 import { windowPhrase, windowShort, type TimeWindow } from "@/lib/window";
 import type { CostResponse } from "@shared/contracts";
@@ -28,10 +28,7 @@ export function CostScreen({
       <div className="flex flex-col gap-4 px-4 lg:px-6 pt-5 pb-8">
         <div className="flex items-center justify-between gap-4">
           <SpotlightTrigger />
-          <div className="flex items-center gap-2">
-            <LivePollControl />
-            <WindowSelector value={window} />
-          </div>
+          <WindowSelector value={window} />
         </div>
         <div>
           <div className="font-mono text-[10px] uppercase tracking-[0.06em] text-neutral-500">Token usage</div>
@@ -51,10 +48,7 @@ export function CostScreen({
     <div className="flex flex-col gap-4 px-4 lg:px-6 pt-5 pb-8">
       <div className="flex items-center justify-between gap-4">
         <SpotlightTrigger />
-        <div className="flex items-center gap-2">
-          <LivePollControl />
-          <WindowSelector value={window} />
-        </div>
+        <WindowSelector value={window} />
       </div>
       <div>
         <div className="font-mono text-[10px] uppercase tracking-[0.06em] text-neutral-500">Token usage</div>

@@ -5,7 +5,7 @@ import { useState } from "react";
 
 import { CkKPI, CkChip, CkStatusPill, TicketLink, CkPagination } from "@/components/ui";
 import { useCockpit } from "@/components/cockpit/context";
-import { WindowSelector, LivePollControl } from "@/components/cockpit/controls";
+import { WindowSelector } from "@/components/cockpit/controls";
 import { windowPhrase, windowShort, type TimeWindow } from "@/lib/window";
 import type { OverviewScreenData } from "@/components/cockpit/screens/overview";
 
@@ -41,10 +41,7 @@ export function OverviewMobileScreen({
           <div className="font-mono text-[10px] uppercase tracking-[0.06em] text-neutral-500">{windowPhrase(window)}</div>
           <h2 className="font-display text-xl font-medium text-neutral-900 m-0">Overview</h2>
         </div>
-        <div className="flex items-center gap-2">
-          <LivePollControl size="sm" />
-          <WindowSelector value={window} size="sm" />
-        </div>
+        <WindowSelector value={window} size="sm" />
       </div>
 
       <div className="grid grid-cols-2 gap-2.5">
