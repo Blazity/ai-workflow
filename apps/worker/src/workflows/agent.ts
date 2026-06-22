@@ -1039,7 +1039,10 @@ export async function agentWorkflow(ticketId: string) {
     }
     // Durable cost/usage telemetry, recorded on every exit path (success,
     // clarification, or failure). Best-effort: the step never retries and we
-    // swallow errors so telemetry can't break or delay the run.
+    // swallow errors so telemetry can't break or delay the run — but we LOG
+    // the failure so a silent break (e.g. a schema drift like a missing column
+    // on the run's Neon branch) surfaces immediately instead of dropping run
+    // history for days unnoticed.
     await recordRunTelemetryStep({
       runId: workflowRunId,
       status: runOutcome,
@@ -1049,6 +1052,11 @@ export async function agentWorkflow(ticketId: string) {
       model: activeModel ?? null,
       totals: computeUsageTotals(phaseUsages, priceLookup, activeModel),
       pr: prForTelemetry,
-    }).catch(() => {});
+    }).catch((err) => {
+      console.error(
+        `Run telemetry failed to persist for ${ticket.identifier} (run ${workflowRunId}):`,
+        err,
+      );
+    });
   }
 }

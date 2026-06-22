@@ -15,6 +15,8 @@ export type Tweaks = {
   accentColor: string;
   /** Flow selected in the workflow editor; persists the select across visits. */
   editorFlow: string;
+  /** When on, the cockpit polls and refreshes the active screen's data. */
+  livePolling: boolean;
 };
 
 export const TWEAK_DEFAULTS: Tweaks = {
@@ -25,6 +27,7 @@ export const TWEAK_DEFAULTS: Tweaks = {
   sidebarCollapsed: false,
   accentColor: "#3C43E7",
   editorFlow: "presandbox",
+  livePolling: false,
 };
 
 /** Topbar selections. Kept as loose string unions; the topbar owns the option lists. */
@@ -40,6 +43,12 @@ export interface CockpitCtxValue {
   env: EnvName;
   /** Open a run in the Trace screen. Provided by CockpitShell; no-op in the default ctx. */
   openRun: (run: Run) => void;
+  /** Live-polling on/off (mirrors the persisted `livePolling` tweak). */
+  livePolling: boolean;
+  /** Flip live polling on/off. */
+  toggleLive: () => void;
+  /** Epoch ms of the next scheduled refresh while live; null when off. */
+  nextRefreshAt: number | null;
 }
 
 export const CockpitCtx = createContext<CockpitCtxValue>({
@@ -49,6 +58,9 @@ export const CockpitCtx = createContext<CockpitCtxValue>({
   range: "24h",
   env: "prod",
   openRun: () => {},
+  livePolling: false,
+  toggleLive: () => {},
+  nextRefreshAt: null,
 });
 
 /** Convenience hook for nested screens to read cockpit context without prop drilling. */

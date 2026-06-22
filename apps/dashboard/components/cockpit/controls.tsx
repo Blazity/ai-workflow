@@ -1,8 +1,11 @@
 "use client";
 
+import type { CSSProperties } from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { WINDOWS, type TimeWindow, windowShort } from "@/lib/window";
+import { useCockpit } from "@/components/cockpit/context";
+import { LIVE_POLL_MS } from "@/lib/use-live-poll";
 
 /** Replace the current URL's search params, preserving every key not given. */
 function useParamWriter() {
@@ -119,5 +122,93 @@ export function SearchBox({
         className="appearance-none border border-neutral-200 bg-panel rounded-[3px] h-[34px] pl-8 pr-2.5 w-full sm:w-[240px] font-body text-[12px] text-neutral-900 placeholder:text-neutral-500 focus:outline-none focus:border-mariner focus:ring-2 focus:ring-mariner/20 transition-colors"
       />
     </div>
+  );
+}
+
+/**
+ * Live-polling control — sits beside the WindowSelector. Toggles the global
+ * `livePolling` state (read from cockpit context, persisted via tweaks); while
+ * on, a ring drains over each refresh cycle. The actual `router.refresh()` loop
+ * runs once in CockpitShell — this only reflects it.
+ */
+export function LivePollControl({ size = "md" }: { size?: "md" | "sm" }) {
+  const { livePolling, toggleLive, nextRefreshAt } = useCockpit();
+  return (
+    <button
+      type="button"
+      onClick={toggleLive}
+      aria-pressed={livePolling}
+      aria-label="Toggle live updates"
+      title={
+        livePolling
+          ? "Live updates on — refreshing every 5s. Click to pause."
+          : "Live updates off — click to enable"
+      }
+      className={`appearance-none cursor-pointer inline-flex items-center gap-1.5 rounded-sm border transition-colors duration-[180ms] ease-[cubic-bezier(.2,0,0,1)] ${
+        size === "sm" ? "py-1 px-2" : "py-1.5 px-2.5"
+      } ${
+        livePolling
+          ? "border-emerald-300 bg-emerald-50 text-emerald-700"
+          : "border-neutral-200 bg-app-bg text-neutral-700 hover:text-neutral-900"
+      }`}
+    >
+      <LiveRing on={livePolling} nextRefreshAt={nextRefreshAt} dim={size === "sm" ? 12 : 13} />
+      <span className="font-mono font-medium text-[11px] uppercase tracking-[-0.01em]">
+        {livePolling ? "Live" : "Live off"}
+      </span>
+    </button>
+  );
+}
+
+/**
+ * Ring that drains over one poll cycle. Re-keyed by `nextRefreshAt` so the
+ * one-shot CSS drain restarts at full on every refresh (and on enable). When
+ * the tab is hidden no refresh fires, so the ring simply completes and waits.
+ */
+function LiveRing({
+  on,
+  nextRefreshAt,
+  dim,
+}: {
+  on: boolean;
+  nextRefreshAt: number | null;
+  dim: number;
+}) {
+  const sw = 1.5;
+  const r = dim / 2 - sw;
+  const circumference = 2 * Math.PI * r;
+  const center = dim / 2;
+
+  if (!on) {
+    return (
+      <svg width={dim} height={dim} viewBox={`0 0 ${dim} ${dim}`} aria-hidden="true">
+        <circle cx={center} cy={center} r={r} fill="none" stroke="currentColor" strokeWidth={sw} opacity={0.45} />
+      </svg>
+    );
+  }
+
+  return (
+    <svg width={dim} height={dim} viewBox={`0 0 ${dim} ${dim}`} aria-hidden="true" className="-rotate-90">
+      {/* faint track */}
+      <circle cx={center} cy={center} r={r} fill="none" stroke="currentColor" strokeWidth={sw} opacity={0.2} />
+      {/* draining arc — remounts each cycle via key, restarting the animation */}
+      <circle
+        key={nextRefreshAt ?? 0}
+        cx={center}
+        cy={center}
+        r={r}
+        fill="none"
+        stroke="currentColor"
+        strokeWidth={sw}
+        strokeLinecap="round"
+        strokeDasharray={circumference}
+        style={
+          {
+            "--ck-dash": `${circumference}`,
+            animation: `ck-drain ${LIVE_POLL_MS}ms linear forwards`,
+          } as CSSProperties
+        }
+      />
+    </svg>
   );
 }

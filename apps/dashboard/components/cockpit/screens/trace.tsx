@@ -142,22 +142,15 @@ export function TraceDetail({
   runId: string;
   data: RunDetailResponse;
 }) {
-  const router = useRouter();
   const { run, steps } = data;
 
-  // Live-tail: while the run is still in flight, softly refresh the trace's
-  // server data every second so steps and status update without a full page
-  // reload. `router.refresh()` re-runs only this page's server fetch (the layout
-  // does no fetching) while preserving client state — step selection, scroll —
-  // and shows no skeleton. Polling stops once the run reaches a terminal state.
+  // Whether the run is still in flight — drives the "Live" indicator only. The
+  // auto-refresh is owned globally by CockpitShell's live-poll control (the
+  // topbar Live toggle), which calls router.refresh() for the active screen;
+  // this screen no longer polls on its own.
   const isLive =
     !run ||
     (run.status !== "success" && run.status !== "failed" && run.status !== "blocked");
-  React.useEffect(() => {
-    if (!isLive) return;
-    const id = setInterval(() => router.refresh(), 1000);
-    return () => clearInterval(id);
-  }, [isLive, router]);
 
   // Wall-clock offset of "now" from run start — sizes bars for running steps.
   const runStartMs = run ? Date.parse(run.startedAt ?? run.createdAt) : 0;
