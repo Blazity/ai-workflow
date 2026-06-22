@@ -11,6 +11,8 @@
     "moduleResolution": "bundler",
     "resolveJsonModule": true,
     "isolatedModules": true,
+    // Lets node:test files import sibling modules with an explicit .ts extension
+    // (required for `node --test` to resolve them); safe alongside noEmit above.
     "allowImportingTsExtensions": true,
     "jsx": "preserve",
     "incremental": true,
