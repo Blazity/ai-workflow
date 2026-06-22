@@ -191,3 +191,14 @@ body {
     transform: translateX(100%);
   }
 }
+/* Drains a stroked ring from full (offset 0) to empty (offset = its
+   circumference, supplied per-element as --ck-dash). Drives the live-poll
+   countdown ring; restarted each cycle by re-keying the element. */
+@keyframes ck-drain {
+  from {
+    stroke-dashoffset: 0;
+  }
+  to {
+    stroke-dashoffset: var(--ck-dash);
+  }
+}
