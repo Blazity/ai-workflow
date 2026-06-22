@@ -17,15 +17,11 @@ export function CkSidebar({
   onNav,
   collapsed = false,
   onToggleCollapse,
-  live = false,
-  onToggleLive,
 }: {
   active: string;
   onNav: (id: string) => void;
   collapsed?: boolean;
   onToggleCollapse?: () => void;
-  live?: boolean;
-  onToggleLive?: () => void;
 }) {
   return (
     <aside
@@ -85,29 +81,6 @@ export function CkSidebar({
           </nav>
         </React.Fragment>
       ))}
-
-      <div className="mt-auto px-2 pt-3">
-        <button
-          onClick={onToggleLive}
-          title={
-            live
-              ? "Live updates on — click to pause"
-              : "Live updates off — click to enable"
-          }
-          aria-label="Toggle live updates"
-          aria-pressed={live}
-          className={`w-full appearance-none border-none cursor-pointer flex items-center gap-[10px] py-[9px] rounded-[3px] font-body text-[13px] transition-all duration-[120ms] ease-[cubic-bezier(.2,0,0,1)] hover:bg-app-bg ${
-            collapsed ? "px-0 justify-center" : "px-3"
-          } ${live ? "text-emerald-700 font-semibold" : "text-neutral-700 font-medium"}`}
-        >
-          <span
-            className={`w-2 h-2 rounded-full ${
-              live ? "bg-emerald-500 animate-pulse" : "bg-neutral-400"
-            }`}
-          />
-          {!collapsed && (live ? "Live" : "Live off")}
-        </button>
-      </div>
     </aside>
   );
 }

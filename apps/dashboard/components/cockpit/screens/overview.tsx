@@ -14,7 +14,7 @@ import {
 import { Spark, Donut } from "@/components/charts";
 import { spanColor } from "@/lib/theme";
 import { useCockpit } from "@/components/cockpit/context";
-import { WindowSelector } from "@/components/cockpit/controls";
+import { WindowSelector, LivePollControl } from "@/components/cockpit/controls";
 import { SpotlightTrigger } from "@/components/cockpit/spotlight-search";
 import {
   windowDeltaSuffix,
@@ -337,7 +337,10 @@ export function OverviewScreen({
       {/* Spotlight ticket search (⌘K) + global window control */}
       <div className="flex items-center justify-between gap-4">
         <SpotlightTrigger />
-        <WindowSelector value={window} />
+        <div className="flex items-center gap-2">
+          <LivePollControl />
+          <WindowSelector value={window} />
+        </div>
       </div>
 
       {/* Editorial hero — chrome preserved; data cells degrade to N/A */}
