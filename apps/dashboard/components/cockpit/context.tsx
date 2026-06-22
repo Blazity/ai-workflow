@@ -15,6 +15,8 @@ export type Tweaks = {
   accentColor: string;
   /** Flow selected in the workflow editor; persists the select across visits. */
   editorFlow: string;
+  /** When on, the cockpit polls and refreshes the active screen's data. */
+  livePolling: boolean;
 };
 
 export const TWEAK_DEFAULTS: Tweaks = {
@@ -25,6 +27,7 @@ export const TWEAK_DEFAULTS: Tweaks = {
   sidebarCollapsed: false,
   accentColor: "#3C43E7",
   editorFlow: "presandbox",
+  livePolling: false,
 };
 
 /** Topbar selections. Kept as loose string unions; the topbar owns the option lists. */
