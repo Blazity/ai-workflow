@@ -123,12 +123,15 @@ export const env = createEnv({
     // the Neon Vercel Marketplace integration, one branch per environment.
     DATABASE_URL: z.string().url(),
 
-    // Dashboard API — shared bearer secret gating the read-only /api/v1/*
-    // endpoints (verified in src/middleware/api-auth.ts). The dashboard (a
-    // separate deployment) sends it as `Authorization: Bearer <token>`.
-    // Generate with `openssl rand -hex 32`.
-    WORKER_API_TOKEN: z.string().regex(/^[0-9a-fA-F]{64}$/, {
-      message: "must be a 64-character hex string",
+    // Better Auth (dashboard human login). The worker is the auth authority.
+    BETTER_AUTH_SECRET: z.string().min(32, {
+      message: "must be at least 32 characters",
+    }),
+    BETTER_AUTH_URL: z.string().url(),
+    DASHBOARD_ORIGIN: z.string().url(),
+    DASHBOARD_AUTH_EMAIL: z.string().email(),
+    DASHBOARD_AUTH_PASSWORD: z.string().min(8, {
+      message: "must be at least 8 characters",
     }),
   },
   runtimeEnv: process.env,

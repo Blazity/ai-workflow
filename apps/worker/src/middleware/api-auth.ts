@@ -1,18 +1,19 @@
-import { defineEventHandler, getHeader } from "h3";
+import { defineEventHandler, toWebRequest } from "h3";
 
-import { env } from "../../env.js";
-import { verifyApiToken } from "../lib/api-auth.js";
+import { auth } from "../auth-instance.js";
+import { assertSession } from "../auth.js";
 
 /**
- * Gate the read-only `/api/v1/*` observability API behind a shared bearer
- * token. The dashboard (a separate deployment) fetches these endpoints
- * server-side with `Authorization: Bearer <WORKER_API_TOKEN>`; any request
- * without a matching token is rejected with 401.
+ * Gate the read-only `/api/v1/*` observability API behind a valid Better Auth
+ * session. The dashboard replays its httpOnly session cookie as
+ * `Authorization: Bearer <token>` on every server-side worker call; a request
+ * without a valid session is rejected with 401.
  *
- * Only `/api/v1/*` is gated — webhooks (`/webhooks/*`, HMAC-signed) and the
- * cron entrypoint (`/cron/*`) keep their own auth.
+ * Only `/api/v1/*` is gated — `/api/auth/*` (the auth handler), webhooks
+ * (`/webhooks/*`, HMAC-signed) and the cron entrypoint (`/cron/*`) keep their
+ * own handling.
  */
-export default defineEventHandler((event) => {
+export default defineEventHandler(async (event) => {
   if (!event.path.startsWith("/api/v1/")) return;
-  verifyApiToken(getHeader(event, "authorization"), env.WORKER_API_TOKEN);
+  await assertSession(auth, toWebRequest(event).headers);
 });

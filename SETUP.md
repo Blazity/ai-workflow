@@ -259,7 +259,11 @@ vercel env add JIRA_API_TOKEN production
 | `ANTHROPIC_API_KEY`                                                                                | If `AGENT_KIND=claude` (default)                       |
 | `CODEX_API_KEY` (or `CODEX_CHATGPT_OAUTH_TOKEN`)                                                   | If `AGENT_KIND=codex`                                  |
 | `DATABASE_URL`                                                                                     | Auto-injected by Neon integration                      |
-| `WORKER_API_TOKEN`                                                                                 | Shared bearer secret gating the read-only `/api/v1/*` API that the dashboard consumes. Required even if you don't deploy the dashboard. Generate: `openssl rand -hex 32`. The dashboard's `WORKER_API_TOKEN` must match this value. |
+| `BETTER_AUTH_SECRET` | Signing/encryption key for Better Auth (dashboard human login). At least 32 chars. Generate: `openssl rand -base64 32`. |
+| `BETTER_AUTH_URL` | The worker's own base URL (no trailing slash) — Better Auth's `baseURL`. |
+| `DASHBOARD_ORIGIN` | The dashboard deployment's origin, added to Better Auth `trustedOrigins`. |
+| `DASHBOARD_AUTH_EMAIL` | Email of the single predefined dashboard admin (seeded at build; no registration UI). |
+| `DASHBOARD_AUTH_PASSWORD` | Password for that admin. Changing it re-hashes on the next deploy. |
 
 ### Optional / has defaults
 
@@ -436,16 +440,14 @@ The E2E jobs need the production env vars exposed as GitHub Actions secrets in t
    vercel link        # create/select a SECOND project (e.g. ai-workflow-dashboard)
    ```
 
-2. Set its two env vars (`apps/dashboard/.env.example` documents both):
+2. Set its env var (`apps/dashboard/.env.example` documents it):
 
    | Variable           | Value                                                                                              |
    | ------------------ | -------------------------------------------------------------------------------------------------- |
    | `WORKER_BASE_URL`  | The deployed worker's base URL, no trailing slash (e.g. `https://<your-worker>.vercel.app`).       |
-   | `WORKER_API_TOKEN` | **The same value** you set as `WORKER_API_TOKEN` on the worker (step 5). This authenticates the dashboard's server-side fetches. |
 
    ```bash
    vercel env add WORKER_BASE_URL production
-   vercel env add WORKER_API_TOKEN production
    ```
 
 3. Deploy:
@@ -454,7 +456,7 @@ The E2E jobs need the production env vars exposed as GitHub Actions secrets in t
    vercel --prod
    ```
 
-The token stays server-side (the dashboard fetches in React Server Components, never the browser). If `WORKER_API_TOKEN` is missing or doesn't match the worker's, the worker returns 401 and the dashboard renders its empty/N-A fallback state instead of crashing — a quick way to confirm the wiring is the difference between real data and N-A tiles.
+The dashboard holds no worker secret. Human login is handled by the worker (Better Auth); the dashboard stores the worker-issued session token in a first-party `httpOnly` cookie and replays it server-side. Set `DASHBOARD_ORIGIN` on the **worker** to this dashboard's URL so Better Auth trusts it. Sign in at `/login` with `DASHBOARD_AUTH_EMAIL` / `DASHBOARD_AUTH_PASSWORD`.
 
 ### Arthur AI Engine (tracing + hosted prompts)
 
