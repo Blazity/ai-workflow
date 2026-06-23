@@ -28,7 +28,7 @@ ai-workflow/
 ### How the packages connect
 
 - **`@shared/*` is a path alias, not an npm package.** `apps/shared` has no `package.json` and emits nothing (`noEmit: true`). Both apps map `@shared/*` → `../shared/*` in their `tsconfig.json` and import the contracts directly from source (`import type { RunsResponse } from "@shared/contracts"`). It's a type-only seam — no build step, no version to bump.
-- **The dashboard talks to the worker over HTTP.** The worker exposes a read-only, bearer-gated API under `/api/v1/*` (`apps/worker/src/routes/api/v1/`), gated by [`apps/worker/src/middleware/api-auth.ts`](./apps/worker/src/middleware/api-auth.ts) against `WORKER_API_TOKEN`. The dashboard fetches it server-side (`apps/dashboard/lib/api/server.ts`) with `Authorization: Bearer <WORKER_API_TOKEN>`, so the token never reaches the browser. The two apps deploy as **separate Vercel projects** and share only that token and the `@shared/contracts` types.
+- **The dashboard talks to the worker over HTTP.** The worker exposes a read-only API under `/api/v1/*` (`apps/worker/src/routes/api/v1/`), gated by [`apps/worker/src/middleware/api-auth.ts`](./apps/worker/src/middleware/api-auth.ts) on a valid **Better Auth session**. Human login lives on the worker (`/api/auth/**`, `apps/worker/src/auth.ts`); the dashboard is a thin BFF that stores the worker-issued session token in a first-party `httpOnly` cookie and replays it as `Authorization: Bearer <token>` on every server-side call, so the token never reaches the browser. The two apps deploy as **separate Vercel projects** and share only the `@shared/contracts` types.
 
 ### Working in the monorepo
 

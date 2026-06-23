@@ -16,6 +16,7 @@ import {
 } from "@/components/cockpit/context";
 import { CkSidebar } from "@/components/cockpit/chrome";
 import { LivePollControl } from "@/components/cockpit/controls";
+import { LogoutButton } from "@/components/cockpit/logout-button";
 import { CkActivityDrawer } from "@/components/cockpit/activity-drawer";
 import { SpotlightSearch } from "@/components/cockpit/spotlight-search";
 import { BottomTabBar } from "@/components/cockpit/mobile/bottom-tab-bar";
@@ -122,7 +123,10 @@ export function CockpitShell({ children }: { children: React.ReactNode }) {
             <span className="font-mono text-[10px] uppercase tracking-[0.06em] text-neutral-500">
               {TITLE_FOR_SCREEN[screen] ?? "AI Workflow"}
             </span>
-            <LivePollControl />
+            <div className="flex items-center gap-4">
+              <LivePollControl />
+              <LogoutButton />
+            </div>
           </div>
 
           <div className="flex-1 overflow-auto min-h-0">{children}</div>

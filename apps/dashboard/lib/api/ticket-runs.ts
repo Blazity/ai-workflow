@@ -1,6 +1,6 @@
 // apps/dashboard/lib/api/ticket-runs.ts
 import { cache } from "react";
-import { getJSON } from "./server";
+import { getJSON, authAwareFallback } from "./server";
 import type {
   TicketRunsResponse,
   RunDetailResponse,
@@ -27,9 +27,9 @@ export const getTicketRuns = cache(
     const [stored, live] = await Promise.all([
       getJSON<TicketRunsResponse>(
         `/api/v1/tickets/${encodeURIComponent(ticketKey)}`,
-      ).catch(() => ticketRunsFallback(now)),
-      getJSON<LiveRunsResponse>("/api/v1/runs/live").catch(() =>
-        liveRunsFallback(now),
+      ).catch((e) => authAwareFallback(e, () => ticketRunsFallback(now))),
+      getJSON<LiveRunsResponse>("/api/v1/runs/live").catch((e) =>
+        authAwareFallback(e, () => liveRunsFallback(now)),
       ),
     ]);
     return mergeTicketLiveRuns(
@@ -48,6 +48,6 @@ export const getRunDetail = cache(
     const now = new Date().toISOString();
     return getJSON<RunDetailResponse>(
       `/api/v1/runs/${encodeURIComponent(runId)}`,
-    ).catch(() => runDetailFallback(now));
+    ).catch((e) => authAwareFallback(e, () => runDetailFallback(now)));
   },
 );

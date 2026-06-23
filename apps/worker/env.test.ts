@@ -27,7 +27,11 @@ describe("env", () => {
     JOB_TIMEOUT_MS: "1800000",
     DATABASE_URL: "postgresql://user:pass@ep-fake.neon.tech/neondb",
     GITHUB_WEBHOOK_SECRET: "github-webhook-secret",
-    WORKER_API_TOKEN: "a".repeat(64),
+    BETTER_AUTH_SECRET: "x".repeat(32),
+    BETTER_AUTH_URL: "https://worker.example.com",
+    DASHBOARD_ORIGIN: "https://dashboard.example.com",
+    DASHBOARD_AUTH_EMAIL: "admin@example.com",
+    DASHBOARD_AUTH_PASSWORD: "supersecret",
   };
 
   let originalEnv: NodeJS.ProcessEnv;

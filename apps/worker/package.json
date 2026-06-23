@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "dev": "rm -rf .nitro/workflow && nitro dev",
-    "build": "pnpm validate:pre-sandbox && pnpm db:migrate && rm -rf .nitro/workflow && NODE_OPTIONS=--max-old-space-size=8192 nitro build",
+    "build": "pnpm validate:pre-sandbox && pnpm db:migrate && pnpm seed:auth-user && rm -rf .nitro/workflow && NODE_OPTIONS=--max-old-space-size=8192 nitro build",
     "preview": "nitro preview",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -17,7 +17,8 @@
     "test:e2e:orchestration": "vitest run --config e2e/vitest.e2e.config.ts --project orchestration",
     "test:e2e:capacity": "vitest run --config e2e/vitest.e2e.config.ts --project capacity",
     "db:generate": "drizzle-kit generate",
-    "db:migrate": "tsx scripts/db-migrate.ts"
+    "db:migrate": "tsx scripts/db-migrate.ts",
+    "seed:auth-user": "tsx scripts/seed-auth-user.ts"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^3.0.78",
@@ -30,6 +31,7 @@
     "@vercel/functions": "^3.5.0",
     "@vercel/sandbox": "^1.8.1",
     "ai": "^6.0.188",
+    "better-auth": "^1.6.20",
     "chat": "^4.20.2",
     "drizzle-orm": "^0.45.2",
     "h3": "^1",

@@ -29,6 +29,13 @@
       "when": 1781768084144,
       "tag": "0003_even_excalibur",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1782211878344,
+      "tag": "0004_cuddly_bishop",
+      "breakpoints": true
     }
   ]
 }
