@@ -169,7 +169,19 @@ describe("dashboard invites", () => {
     });
     const before = await db.select().from(invitation);
     let deliveryExistedBeforeSend = false;
+    let sendRanAfterTransaction = false;
+    let transactionActive = false;
+    const originalTransaction = db.transaction.bind(db);
+    vi.spyOn(db, "transaction").mockImplementation((async (callback, config) => {
+      transactionActive = true;
+      try {
+        return await originalTransaction(callback, config);
+      } finally {
+        transactionActive = false;
+      }
+    }) as typeof db.transaction);
     const sendInviteEmail: SendInviteEmail = vi.fn(async ({ invitationId }) => {
+      sendRanAfterTransaction = !transactionActive;
       const [deliveryIntent] = await db
         .select({ id: inviteEmailDelivery.id })
         .from(inviteEmailDelivery)
@@ -193,6 +205,7 @@ describe("dashboard invites", () => {
 
     const after = await db.select().from(invitation);
     expect(sendInviteEmail).toHaveBeenCalledTimes(1);
+    expect(sendRanAfterTransaction).toBe(true);
     expect(deliveryExistedBeforeSend).toBe(true);
     expect(after).toHaveLength(before.length + 1);
     expect(after).toEqual(
