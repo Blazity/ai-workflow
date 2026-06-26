@@ -56,7 +56,7 @@ describe("api-auth middleware routing guard", () => {
 
   it("does NOT gate non-/api/v1/ paths (e.g. /cron/poll)", async () => {
     const { auth: fakeAuth } = await import("../auth-instance.js");
-    const getSession = fakeAuth.api.getSession as ReturnType<typeof vi.fn>;
+    const getSession = fakeAuth.api.getSession as unknown as ReturnType<typeof vi.fn>;
     getSession.mockClear();
 
     const handler = await makeApp();
@@ -68,7 +68,7 @@ describe("api-auth middleware routing guard", () => {
 
   it("gates /api/v1/ paths with no session → 401", async () => {
     const { auth: fakeAuth } = await import("../auth-instance.js");
-    const getSession = fakeAuth.api.getSession as ReturnType<typeof vi.fn>;
+    const getSession = fakeAuth.api.getSession as unknown as ReturnType<typeof vi.fn>;
     getSession.mockClear();
     getSession.mockResolvedValue(null);
 

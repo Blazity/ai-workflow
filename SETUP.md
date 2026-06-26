@@ -265,6 +265,8 @@ vercel env add JIRA_API_TOKEN production
 | `DASHBOARD_AUTH_EMAIL` | Email of the single predefined dashboard admin (seeded at build; no registration UI). |
 | `DASHBOARD_AUTH_PASSWORD` | Password for that admin. Changing it re-hashes on the next deploy. |
 
+This is enough for password-only dashboard login. SSO and Resend are optional worker-side additions.
+
 ### Optional / has defaults
 
 | Variable                                      | Default                                                                                                                                                     | Purpose                                                                                                                          |
@@ -282,6 +284,10 @@ vercel env add JIRA_API_TOKEN production
 | `JOB_TIMEOUT_MS`                              | `1800000` (30 min)                                                                                                                                          | Per-run timeout                                                                                                                  |
 | `POLL_INTERVAL_MS`                            | `300000` (5 min)                                                                                                                                            | Internal poll cadence                                                                                                            |
 | `COMMIT_AUTHOR`, `COMMIT_EMAIL`               | _unset_ on GitHub → auto-derived from the App (commits author as `<app-slug>[bot]`); GitLab falls back to `ai-workflow-blazity` / `ai-workflow@blazity.com` | Optional override; set both or neither                                                                                           |
+| `DASHBOARD_ORG_NAME`, `DASHBOARD_ORG_SLUG`    | `AI Workflow`, `ai-workflow`                                                                                                                                | Fixed dashboard organization display name and slug. Override before first auth bootstrap only.                                    |
+| `SSO_ISSUER`, `SSO_ALLOWED_DOMAIN`, `SSO_CLIENT_ID`, `SSO_CLIENT_SECRET` | unset | Optional SSO config. Set all four together, or leave all four unset for password-only login. |
+| `RESEND_API_KEY`, `RESEND_FROM_EMAIL`         | unset                                                                                                                                                       | Optional email delivery config. `RESEND_API_KEY` requires `RESEND_FROM_EMAIL`.                                                    |
+| `RESEND_WEBHOOK_SECRET`                       | unset                                                                                                                                                       | Optional Resend webhook signing secret. Requires `RESEND_API_KEY`.                                                               |
 
 `env.ts` cross-validates at startup — missing required vars or wrong combinations (e.g. `VCS_KIND=github` without `GITHUB_OWNER`) crash the process with a precise error.
 
@@ -456,7 +462,7 @@ The E2E jobs need the production env vars exposed as GitHub Actions secrets in t
    vercel --prod
    ```
 
-The dashboard holds no worker secret. Human login is handled by the worker (Better Auth); the dashboard stores the worker-issued session token in a first-party `httpOnly` cookie and replays it server-side. Set `DASHBOARD_ORIGIN` on the **worker** to this dashboard's URL so Better Auth trusts it. Sign in at `/login` with `DASHBOARD_AUTH_EMAIL` / `DASHBOARD_AUTH_PASSWORD`.
+The dashboard holds no worker secret. Human login is handled by the worker (Better Auth); the dashboard stores the worker-issued session token in a first-party `httpOnly` cookie and replays it server-side. Set `DASHBOARD_ORIGIN` on the **worker** to this dashboard's URL so Better Auth trusts it. Password-only mode needs no SSO vars; sign in at `/login` with `DASHBOARD_AUTH_EMAIL` / `DASHBOARD_AUTH_PASSWORD`. Optional SSO, Resend, and fixed organization vars belong on the worker project, not the dashboard project.
 
 ### Arthur AI Engine (tracing + hosted prompts)
 
