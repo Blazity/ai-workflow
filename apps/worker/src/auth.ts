@@ -104,6 +104,7 @@ export function createAuth(db: Db, options: AuthOptions) {
       }),
       sso({
         providersLimit: 0,
+        domainVerification: { enabled: true },
         disableImplicitSignUp: false,
         trustEmailVerified: true,
         organizationProvisioning: {
@@ -334,6 +335,7 @@ async function ensureSsoProvider(
     providerId: DASHBOARD_SSO_PROVIDER_ID,
     organizationId,
     domain: input.allowedDomain,
+    domainVerified: true,
   };
 
   const [existing] = await db
@@ -356,7 +358,8 @@ async function ensureSsoProvider(
     existing.samlConfig !== providerData.samlConfig ||
     existing.userId !== providerData.userId ||
     existing.organizationId !== providerData.organizationId ||
-    existing.domain !== providerData.domain;
+    existing.domain !== providerData.domain ||
+    existing.domainVerified !== providerData.domainVerified;
 
   if (changed) {
     await db
