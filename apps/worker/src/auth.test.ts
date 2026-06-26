@@ -1,5 +1,5 @@
-import { and, eq } from "drizzle-orm";
-import { describe, it, expect } from "vitest";
+import { and, eq, like } from "drizzle-orm";
+import { describe, it, expect, vi } from "vitest";
 import { createTestDb } from "./db/test-db.js";
 import type { Db } from "./db/client.js";
 import {
@@ -7,16 +7,21 @@ import {
   seedAuthUser,
   bootstrapDashboardAuth,
   DASHBOARD_SSO_PROVIDER_ID,
+  userHasCredentialAccount,
   type Auth,
   type AuthOptions,
 } from "./auth.js";
-import { member, organization, ssoProvider, user } from "./db/schema.js";
+import { member, organization, ssoProvider, user, verification } from "./db/schema.js";
 
 const OPTS = {
   secret: "x".repeat(32),
   baseURL: "http://localhost:3000",
   trustedOrigins: ["http://localhost:3001"],
 };
+
+type PasswordResetEmailInput = Parameters<
+  NonNullable<AuthOptions["passwordReset"]>["sendEmail"]
+>[0];
 
 async function freshAuth(): Promise<Auth> {
   return createAuth(await createTestDb(), OPTS);
@@ -214,5 +219,136 @@ describe("bearer round-trip", () => {
       headers: new Headers({ authorization: "Bearer nope" }),
     });
     expect(bad).toBeNull();
+  });
+});
+
+describe("password reset", () => {
+  it("sends dashboard reset links for existing password users", async () => {
+    const sent: PasswordResetEmailInput[] = [];
+    const sendEmail = vi.fn(async (input: PasswordResetEmailInput) => {
+      sent.push(input);
+    });
+    const db = await createTestDb();
+    const auth = createAuth(db, {
+      ...OPTS,
+      passwordReset: {
+        dashboardOrigin: "https://dashboard.example.com",
+        sendEmail,
+      },
+    });
+    await seedAuthUser(auth, {
+      email: "password@example.com",
+      password: "password123",
+      name: "Password User",
+    });
+
+    const res = await auth.handler(
+      new Request("http://localhost:3000/api/auth/request-password-reset", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ email: "password@example.com" }),
+      }),
+    );
+
+    expect(res.status).toBe(200);
+    expect(sendEmail).toHaveBeenCalledTimes(1);
+    const email = sent[0];
+    if (!email) throw new Error("expected password reset email");
+    expect(email).toMatchObject({
+      user: expect.objectContaining({ email: "password@example.com" }),
+    });
+    expect(email.resetUrl).toMatch(
+      /^https:\/\/dashboard\.example\.com\/reset-password\?token=/,
+    );
+  });
+
+  it("does not send or retain reset tokens for SSO-only users", async () => {
+    const sendEmail = vi.fn(async (_input: PasswordResetEmailInput) => {});
+    const db = await createTestDb();
+    const auth = createAuth(db, {
+      ...OPTS,
+      passwordReset: {
+        dashboardOrigin: "https://dashboard.example.com",
+        sendEmail,
+      },
+    });
+    const ctx = await auth.$context;
+    const created = await ctx.internalAdapter.createUser({
+      email: "sso@example.com",
+      name: "SSO User",
+      emailVerified: true,
+    });
+    await ctx.internalAdapter.linkAccount({
+      userId: created.id,
+      providerId: DASHBOARD_SSO_PROVIDER_ID,
+      accountId: "sso-subject",
+    });
+
+    const res = await auth.handler(
+      new Request("http://localhost:3000/api/auth/request-password-reset", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ email: "sso@example.com" }),
+      }),
+    );
+
+    expect(res.status).toBe(200);
+    expect(sendEmail).not.toHaveBeenCalled();
+    await expect(userHasCredentialAccount(db, created.id)).resolves.toBe(false);
+    const resetTokens = await db
+      .select()
+      .from(verification)
+      .where(like(verification.identifier, "reset-password:%"));
+    expect(resetTokens).toHaveLength(0);
+  });
+
+  it("consumes reset tokens without creating a new credential path for SSO-only users", async () => {
+    const sent: Array<{ token: string }> = [];
+    const db = await createTestDb();
+    const auth = createAuth(db, {
+      ...OPTS,
+      passwordReset: {
+        dashboardOrigin: "https://dashboard.example.com",
+        sendEmail: async ({ token }) => {
+          sent.push({ token });
+        },
+      },
+    });
+    await seedAuthUser(auth, {
+      email: "password@example.com",
+      password: "password123",
+      name: "Password User",
+    });
+
+    await auth.handler(
+      new Request("http://localhost:3000/api/auth/request-password-reset", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ email: "password@example.com" }),
+      }),
+    );
+    expect(sent).toHaveLength(1);
+    const reset = sent[0];
+    if (!reset) throw new Error("expected password reset token");
+
+    const res = await auth.handler(
+      new Request("http://localhost:3000/api/auth/reset-password", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ token: reset.token, newPassword: "newpassword456" }),
+      }),
+    );
+    expect(res.status).toBe(200);
+
+    const oldPassword = await auth.api.signInEmail({
+      body: { email: "password@example.com", password: "password123" },
+    }).catch((error) => error as Error);
+    expect(oldPassword).toBeInstanceOf(Error);
+
+    const newPassword = await auth.api.signInEmail({
+      body: { email: "password@example.com", password: "newpassword456" },
+      returnHeaders: true,
+    });
+    expect(tokenFrom(newPassword)).toBeTruthy();
   });
 });

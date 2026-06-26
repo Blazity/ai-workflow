@@ -3,8 +3,9 @@ import { NextResponse, type NextRequest } from "next/server";
 /**
  * Cheap presence check: any page navigation without a ba_session cookie is
  * redirected to /login. Real validation happens server-side in the cockpit
- * layout (requireSession). API routes (/api/**), /login, and Next internals
- * are excluded — /api proxies are gated by getJSON's cookie requirement.
+ * layout (requireSession). API routes (/api/**), public auth pages, and Next
+ * internals are excluded — protected /api proxies are gated by getJSON's
+ * cookie requirement.
  */
 export function middleware(req: NextRequest) {
   if (req.cookies.has("ba_session")) return NextResponse.next();
@@ -14,5 +15,7 @@ export function middleware(req: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/((?!api|_next/static|_next/image|favicon.ico|login).*)"],
+  matcher: [
+    "/((?!api|_next/static|_next/image|favicon.ico|login|forgot-password|reset-password|invite/accept).*)",
+  ],
 };

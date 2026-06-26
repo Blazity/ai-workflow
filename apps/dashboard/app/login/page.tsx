@@ -3,6 +3,16 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 
+import {
+  AuthBanner,
+  AuthButton,
+  AuthDivider,
+  AuthField,
+  AuthFormShell,
+  AuthLinkButton,
+  AuthShell,
+} from "@/components/auth/auth-shell";
+
 export default function LoginPage() {
   const router = useRouter();
   const [email, setEmail] = useState("");
@@ -14,6 +24,7 @@ export default function LoginPage() {
     e.preventDefault();
     setPending(true);
     setError(null);
+
     try {
       const res = await fetch("/api/auth/login", {
         method: "POST",
@@ -21,56 +32,74 @@ export default function LoginPage() {
         body: JSON.stringify({ email, password }),
       });
       if (res.ok) {
-        // Leave pending=true: the navigation unmounts this component.
         router.replace("/");
         router.refresh();
-      } else {
-        setPending(false);
-        setError("Invalid credentials");
+        return;
       }
+      setPending(false);
+      setError("Your email or password is incorrect.");
     } catch {
       setPending(false);
-      setError("Network error — please try again");
+      setError("Network error. Please try again.");
     }
   }
 
   return (
-    <div className="min-h-dvh flex items-center justify-center bg-app-bg">
-      <form
-        onSubmit={onSubmit}
-        className="w-[320px] flex flex-col gap-3 border border-neutral-200 bg-panel p-6"
-      >
-        <span className="font-mono text-[10px] uppercase tracking-[0.06em] text-neutral-500">
-          AI Workflow — sign in
-        </span>
-        <input
-          type="email"
-          required
-          autoFocus
-          placeholder="Email"
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-          className="border border-neutral-300 px-3 py-2 text-[13px]"
-        />
-        <input
-          type="password"
-          required
-          placeholder="Password"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          className="border border-neutral-300 px-3 py-2 text-[13px]"
-        />
-        {error ? (
-          <span className="text-[12px] text-red-600">{error}</span>
-        ) : null}
-        <button
-          type="submit"
-          disabled={pending}
-          className="bg-neutral-900 px-3 py-2 text-[13px] text-white disabled:opacity-50"
-        >
-          {pending ? "Signing in…" : "Sign in"}
-        </button>
+    <AuthShell>
+      <form onSubmit={onSubmit}>
+        <AuthFormShell title="Sign in" subtitle="Welcome back to AI Workflow.">
+          {error ? <AuthBanner tone="error">{error}</AuthBanner> : null}
+
+          <AuthButton
+            type="button"
+            onClick={() => {
+              window.location.assign("/api/auth/sso/start");
+            }}
+          >
+            Continue with SSO
+          </AuthButton>
+          <AuthDivider label="or sign in with email" />
+
+          <AuthField
+            label="Email"
+            type="email"
+            required
+            autoFocus
+            placeholder="you@company.com"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+          />
+
+          <div className="flex flex-col gap-1.5">
+            <div className="flex items-baseline justify-between gap-3">
+              <span className="font-mono text-[10px] uppercase tracking-[0.06em] text-neutral-700">
+                Password
+              </span>
+              <AuthLinkButton
+                type="button"
+                onClick={() => router.push("/forgot-password")}
+              >
+                Forgot password?
+              </AuthLinkButton>
+            </div>
+            <AuthField
+              label=""
+              type="password"
+              required
+              placeholder="Password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+            />
+          </div>
+
+          <AuthButton type="submit" variant="secondary" disabled={pending}>
+            {pending ? "Signing in..." : "Sign in"}
+          </AuthButton>
+          <p className="m-0 text-center text-[12.5px] leading-5 text-neutral-500">
+            Don't have access? Ask a workspace admin for an invite.
+          </p>
+        </AuthFormShell>
       </form>
-    </div>
+    </AuthShell>
   );
 }
