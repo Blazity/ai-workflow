@@ -16,7 +16,12 @@ export const auth = createAuth(getDb(), {
 function createPasswordResetOptions(): AuthOptions["passwordReset"] {
   const apiKey = env.RESEND_API_KEY;
   const from = env.RESEND_FROM_EMAIL;
-  if (!apiKey || !from) return undefined;
+  if (!apiKey || !from) {
+    console.warn(
+      "[dashboard-auth] password reset email delivery disabled: RESEND_API_KEY and RESEND_FROM_EMAIL are not set.",
+    );
+    return undefined;
+  }
 
   const client = new Resend(apiKey);
   return {

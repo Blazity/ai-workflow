@@ -154,6 +154,33 @@ describe("dashboard users read model", () => {
     ]);
   });
 
+  it("does not label users with no loaded account rows as password users", async () => {
+    await db.insert(user).values({
+      id: "user_unknown",
+      name: "Unknown",
+      email: "unknown@example.com",
+      emailVerified: true,
+    });
+    await db.insert(member).values({
+      id: "member_unknown",
+      organizationId: "org_aiw",
+      userId: "user_unknown",
+      role: "member",
+    });
+
+    const rows = await listDashboardUsers(db, {
+      organizationSlug: "ai-workflow",
+      actorRole: "owner",
+    });
+
+    expect(rows).toContainEqual(
+      expect.objectContaining({
+        id: "user_unknown",
+        authMethod: "Unknown",
+      }),
+    );
+  });
+
   it("does not expose role actions to admins", async () => {
     const rows = await listDashboardUsers(db, {
       organizationSlug: "ai-workflow",

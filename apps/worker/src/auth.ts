@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { sso } from "@better-auth/sso";
+import { waitUntil } from "@vercel/functions";
 import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { bearer, organization as organizationPlugin } from "better-auth/plugins";
@@ -57,12 +58,14 @@ const memberRole = defaultAc.newRole({
  * plugin lets the dashboard replay the session token as a Bearer.
  */
 export function createAuth(db: Db, options: AuthOptions) {
+  const passwordReset = options.passwordReset;
+
   return betterAuth({
     database: drizzleAdapter(db, { provider: "pg" }),
     emailAndPassword: {
       enabled: true,
       disableSignUp: true,
-      sendResetPassword: options.passwordReset
+      sendResetPassword: passwordReset
         ? async ({ user, token }) => {
             const hasCredential = await userHasCredentialAccount(db, user.id);
             if (!hasCredential) {
@@ -72,11 +75,17 @@ export function createAuth(db: Db, options: AuthOptions) {
               return;
             }
 
-            await options.passwordReset?.sendEmail({
+            const promise = passwordReset.sendEmail({
               user,
               token,
-              resetUrl: dashboardResetPasswordUrl(options.passwordReset.dashboardOrigin, token),
+              resetUrl: dashboardResetPasswordUrl(passwordReset.dashboardOrigin, token),
+            }).catch((error) => {
+              console.warn(
+                "[dashboard-auth] password reset email failed",
+                error instanceof Error ? error.message : error,
+              );
             });
+            waitUntil(promise);
           }
         : undefined,
     },
@@ -199,14 +208,22 @@ export async function seedAuthUser(
   }
 
   const credential = existing.accounts.find((a) => a.providerId === "credential");
-  const matches =
-    credential?.password != null
-      ? await ctx.password.verify({ hash: credential.password, password: creds.password })
-      : false;
+  const matches = credential?.password
+    ? await ctx.password.verify({ hash: credential.password, password: creds.password })
+    : false;
 
   if (!matches) {
     const hash = await ctx.password.hash(creds.password);
-    await ctx.internalAdapter.updatePassword(existing.user.id, hash);
+    if (!credential) {
+      await ctx.internalAdapter.linkAccount({
+        userId: existing.user.id,
+        providerId: "credential",
+        accountId: existing.user.id,
+        password: hash,
+      });
+    } else {
+      await ctx.internalAdapter.updatePassword(existing.user.id, hash);
+    }
     return { created: false, updated: true };
   }
 

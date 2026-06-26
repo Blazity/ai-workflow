@@ -25,6 +25,7 @@ const {
 if (
   !DATABASE_URL ||
   !BETTER_AUTH_SECRET ||
+  !BETTER_AUTH_URL ||
   !DASHBOARD_AUTH_EMAIL ||
   !DASHBOARD_AUTH_PASSWORD
 ) {
@@ -50,7 +51,7 @@ const db = drizzle({ client: neon(DATABASE_URL), schema }) as unknown as Paramet
 
 const auth = createAuth(db, {
   secret: BETTER_AUTH_SECRET,
-  baseURL: BETTER_AUTH_URL ?? "http://localhost:3000",
+  baseURL: BETTER_AUTH_URL,
   trustedOrigins: DASHBOARD_ORIGIN ? [DASHBOARD_ORIGIN] : [],
 });
 

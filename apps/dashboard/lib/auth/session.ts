@@ -3,6 +3,7 @@ import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 
 const BASE = process.env.WORKER_BASE_URL ?? "";
+const FETCH_TIMEOUT_MS = 10_000;
 
 /**
  * Server-side gate for the cockpit. Reads the ba_session cookie and validates
@@ -23,6 +24,7 @@ export async function requireSession(): Promise<void> {
     const res = await fetch(`${BASE}/api/auth/get-session`, {
       headers: { Authorization: `Bearer ${token}` },
       cache: "no-store",
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
     });
     // Better Auth returns 200 with a null body when the token is invalid.
     valid = res.ok && (await res.json()) !== null;

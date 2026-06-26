@@ -132,6 +132,14 @@ async function inviteCount(): Promise<number> {
 }
 
 describe("invites API", () => {
+  it("returns 400 when invite creation has no body", async () => {
+    const res = await handlerFor(invitesPost)(
+      new Request("http://localhost/", { method: "POST" }),
+    );
+
+    expect(res.status).toBe(400);
+  });
+
   it("rejects member invite creation", async () => {
     state.sessionUserId = "user_member";
 

@@ -11,7 +11,7 @@ import {
   type Auth,
   type AuthOptions,
 } from "./auth.js";
-import { member, organization, ssoProvider, user, verification } from "./db/schema.js";
+import { account, member, organization, ssoProvider, user, verification } from "./db/schema.js";
 
 const OPTS = {
   secret: "x".repeat(32),
@@ -78,6 +78,42 @@ describe("seedAuthUser", () => {
       returnHeaders: true,
     });
     expect(tokenFrom(ok)).toBeTruthy();
+  });
+
+  it("links a credential account for an existing SSO-only owner", async () => {
+    const { auth, db } = await freshAuthContext();
+    const ctx = await auth.$context;
+    const created = await ctx.internalAdapter.createUser({
+      email: "owner@example.com",
+      name: "Owner",
+      emailVerified: true,
+    });
+    await ctx.internalAdapter.linkAccount({
+      userId: created.id,
+      providerId: DASHBOARD_SSO_PROVIDER_ID,
+      accountId: "sso-subject",
+    });
+
+    const r = await seedAuthUser(auth, {
+      email: "owner@example.com",
+      password: "password123",
+    });
+
+    expect(r).toEqual({ created: false, updated: true });
+    await expect(userHasCredentialAccount(db, created.id)).resolves.toBe(true);
+    const accounts = await db
+      .select()
+      .from(account)
+      .where(eq(account.userId, created.id));
+    expect(accounts.map((row) => row.providerId).sort()).toEqual([
+      "credential",
+      DASHBOARD_SSO_PROVIDER_ID,
+    ]);
+    const signIn = await auth.api.signInEmail({
+      body: { email: "owner@example.com", password: "password123" },
+      returnHeaders: true,
+    });
+    expect(tokenFrom(signIn)).toBeTruthy();
   });
 });
 
@@ -261,6 +297,41 @@ describe("password reset", () => {
     expect(email.resetUrl).toMatch(
       /^https:\/\/dashboard\.example\.com\/reset-password\?token=/,
     );
+  });
+
+  it("does not wait for password reset email delivery", async () => {
+    const db = await createTestDb();
+    const auth = createAuth(db, {
+      ...OPTS,
+      passwordReset: {
+        dashboardOrigin: "https://dashboard.example.com",
+        sendEmail: vi.fn(
+          () =>
+            new Promise<void>(() => {
+              // Intentionally unresolved: request-password-reset must not wait.
+            }),
+        ),
+      },
+    });
+    await seedAuthUser(auth, {
+      email: "password@example.com",
+      password: "password123",
+      name: "Password User",
+    });
+
+    const result = await Promise.race([
+      auth.handler(
+        new Request("http://localhost:3000/api/auth/request-password-reset", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ email: "password@example.com" }),
+        }),
+      ),
+      new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), 50)),
+    ]);
+
+    expect(result).not.toBe("timeout");
+    expect((result as Response).status).toBe(200);
   });
 
   it("does not send or retain reset tokens for SSO-only users", async () => {
