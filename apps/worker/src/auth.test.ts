@@ -301,16 +301,17 @@ describe("password reset", () => {
 
   it("does not wait for password reset email delivery", async () => {
     const db = await createTestDb();
+    const sendEmail = vi.fn(
+      () =>
+        new Promise<void>(() => {
+          // Intentionally unresolved: request-password-reset must not wait.
+        }),
+    );
     const auth = createAuth(db, {
       ...OPTS,
       passwordReset: {
         dashboardOrigin: "https://dashboard.example.com",
-        sendEmail: vi.fn(
-          () =>
-            new Promise<void>(() => {
-              // Intentionally unresolved: request-password-reset must not wait.
-            }),
-        ),
+        sendEmail,
       },
     });
     await seedAuthUser(auth, {
@@ -319,19 +320,16 @@ describe("password reset", () => {
       name: "Password User",
     });
 
-    const result = await Promise.race([
-      auth.handler(
-        new Request("http://localhost:3000/api/auth/request-password-reset", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ email: "password@example.com" }),
-        }),
-      ),
-      new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), 50)),
-    ]);
+    const res = await auth.handler(
+      new Request("http://localhost:3000/api/auth/request-password-reset", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ email: "password@example.com" }),
+      }),
+    );
 
-    expect(result).not.toBe("timeout");
-    expect((result as Response).status).toBe(200);
+    expect(res.status).toBe(200);
+    expect(sendEmail).toHaveBeenCalledTimes(1);
   });
 
   it("does not send or retain reset tokens for SSO-only users", async () => {

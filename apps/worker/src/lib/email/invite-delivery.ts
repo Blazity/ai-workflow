@@ -19,6 +19,13 @@ export interface UpdateInviteEmailDeliveryInput {
   error?: string | null;
 }
 
+export interface UpdateInviteEmailDeliveryByIdInput {
+  id: string;
+  resendEmailId?: string;
+  status: InviteEmailDeliveryStatus;
+  error?: string | null;
+}
+
 export interface ResendEmailDeliveryEvent {
   type?: string;
   data?: {
@@ -68,6 +75,33 @@ export async function updateInviteEmailDeliveryByResendId(
       updatedAt: new Date(),
     })
     .where(eq(inviteEmailDelivery.resendEmailId, input.resendEmailId))
+    .returning({ id: inviteEmailDelivery.id });
+
+  return !!row;
+}
+
+export async function updateInviteEmailDeliveryById(
+  db: Db,
+  input: UpdateInviteEmailDeliveryByIdInput,
+): Promise<boolean> {
+  const values: {
+    resendEmailId?: string;
+    status: InviteEmailDeliveryStatus;
+    error: string | null;
+    updatedAt: Date;
+  } = {
+    status: input.status,
+    error: input.error ?? null,
+    updatedAt: new Date(),
+  };
+  if (input.resendEmailId !== undefined) {
+    values.resendEmailId = input.resendEmailId;
+  }
+
+  const [row] = await db
+    .update(inviteEmailDelivery)
+    .set(values)
+    .where(eq(inviteEmailDelivery.id, input.id))
     .returning({ id: inviteEmailDelivery.id });
 
   return !!row;

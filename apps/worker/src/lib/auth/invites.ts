@@ -11,6 +11,7 @@ import {
 import {
   createInviteEmailDelivery,
   type InviteEmailDeliveryStatus,
+  updateInviteEmailDeliveryById,
 } from "../email/invite-delivery.js";
 import { inviteEmailTemplate } from "../email/templates.js";
 import { canInvite, type DashboardRole } from "./roles.js";
@@ -68,14 +69,7 @@ export async function createDashboardInvite(
     organizationName: input.organizationName,
     inviteUrl: acceptUrl,
   });
-
-  const sendResult = await input.sendInviteEmail({
-    ...template,
-    to: email,
-    invitationId: inviteId,
-    acceptUrl,
-    expiresAt,
-  });
+  const deliveryId = randomUUID();
 
   const created = await db.transaction(async (tx) => {
     const [row] = await tx
@@ -92,11 +86,32 @@ export async function createDashboardInvite(
       .returning();
 
     await createInviteEmailDelivery(tx as Db, {
+      id: deliveryId,
       invitationId: row.id,
-      resendEmailId: sendResult.providerMessageId,
+      resendEmailId: `pending:${inviteId}`,
     });
 
     return row;
+  });
+
+  let sendResult: { providerMessageId: string };
+  try {
+    sendResult = await input.sendInviteEmail({
+      ...template,
+      to: email,
+      invitationId: inviteId,
+      acceptUrl,
+      expiresAt,
+    });
+  } catch (error) {
+    await db.delete(invitation).where(eq(invitation.id, created.id));
+    throw error;
+  }
+
+  await updateInviteEmailDeliveryById(db, {
+    id: deliveryId,
+    resendEmailId: sendResult.providerMessageId,
+    status: "queued",
   });
 
   return inviteRowFromRecord(

@@ -151,7 +151,7 @@ describe("dashboard invites", () => {
     await expect(inviteCount()).resolves.toBe(0);
   });
 
-  it("rolls back the invite when delivery metadata cannot be recorded", async () => {
+  it("keeps the invite if sent email metadata cannot be updated", async () => {
     await db.insert(invitation).values({
       id: "invite_existing",
       organizationId: "org_aiw",
@@ -168,6 +168,16 @@ describe("dashboard invites", () => {
       status: "queued",
     });
     const before = await db.select().from(invitation);
+    let deliveryExistedBeforeSend = false;
+    const sendInviteEmail: SendInviteEmail = vi.fn(async ({ invitationId }) => {
+      const [deliveryIntent] = await db
+        .select({ id: inviteEmailDelivery.id })
+        .from(inviteEmailDelivery)
+        .where(eq(inviteEmailDelivery.invitationId, invitationId))
+        .limit(1);
+      deliveryExistedBeforeSend = Boolean(deliveryIntent);
+      return { providerMessageId: "email_duplicate" };
+    });
 
     await expect(
       createDashboardInvite(db, {
@@ -176,13 +186,23 @@ describe("dashboard invites", () => {
         dashboardOrigin: "https://dashboard.example.com",
         actor: ownerActor,
         email: "new.user@example.com",
-        sendInviteEmail: acceptedEmail("email_duplicate"),
+        sendInviteEmail,
         now: new Date("2026-06-26T12:00:00.000Z"),
       }),
     ).rejects.toThrow();
 
     const after = await db.select().from(invitation);
-    expect(after).toEqual(before);
+    expect(sendInviteEmail).toHaveBeenCalledTimes(1);
+    expect(deliveryExistedBeforeSend).toBe(true);
+    expect(after).toHaveLength(before.length + 1);
+    expect(after).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          email: "new.user@example.com",
+          status: "pending",
+        }),
+      ]),
+    );
   });
 
   it("rejects member invite attempts", async () => {
