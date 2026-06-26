@@ -36,6 +36,13 @@
       "when": 1782211878344,
       "tag": "0004_cuddly_bishop",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1782490049336,
+      "tag": "0005_quiet_fantastic_four",
+      "breakpoints": true
     }
   ]
 }

@@ -177,3 +177,4 @@ export const workflowRuns = pgTable("workflow_runs", {
 ]);
 
 export * from "./auth-schema.js";
+export * from "./email-delivery-schema.js";
