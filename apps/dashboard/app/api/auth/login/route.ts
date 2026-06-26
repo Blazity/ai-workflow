@@ -1,8 +1,8 @@
 import { NextResponse } from "next/server";
-import { cookies } from "next/headers";
+
+import { setSessionCookie } from "@/lib/auth/session-cookie";
 
 const BASE = process.env.WORKER_BASE_URL ?? "";
-const SEVEN_DAYS = 60 * 60 * 24 * 7;
 
 export async function POST(req: Request) {
   const { email, password } = (await req.json()) as {
@@ -31,12 +31,6 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Auth misconfigured" }, { status: 502 });
   }
 
-  (await cookies()).set("ba_session", token, {
-    httpOnly: true,
-    secure: true,
-    sameSite: "lax",
-    path: "/",
-    maxAge: SEVEN_DAYS,
-  });
+  await setSessionCookie(token);
   return NextResponse.json({ ok: true });
 }

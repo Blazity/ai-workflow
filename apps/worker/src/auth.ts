@@ -4,16 +4,24 @@ import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { bearer, organization as organizationPlugin } from "better-auth/plugins";
 import { defaultAc } from "better-auth/plugins/organization/access";
-import { and, eq } from "drizzle-orm";
+import { and, eq, isNotNull } from "drizzle-orm";
 import { createError } from "h3";
 
 import type { Db } from "./db/client.js";
-import { member, organization, ssoProvider } from "./db/schema.js";
+import { account, member, organization, ssoProvider, verification } from "./db/schema.js";
 
 export type AuthOptions = {
   secret: string;
   baseURL: string;
   trustedOrigins: string[];
+  passwordReset?: {
+    dashboardOrigin: string;
+    sendEmail: (input: {
+      user: { id: string; email: string; name: string };
+      resetUrl: string;
+      token: string;
+    }) => Promise<void>;
+  };
 };
 
 export const DASHBOARD_SSO_PROVIDER_ID = "workspace-sso";
@@ -51,7 +59,27 @@ const memberRole = defaultAc.newRole({
 export function createAuth(db: Db, options: AuthOptions) {
   return betterAuth({
     database: drizzleAdapter(db, { provider: "pg" }),
-    emailAndPassword: { enabled: true, disableSignUp: true },
+    emailAndPassword: {
+      enabled: true,
+      disableSignUp: true,
+      sendResetPassword: options.passwordReset
+        ? async ({ user, token }) => {
+            const hasCredential = await userHasCredentialAccount(db, user.id);
+            if (!hasCredential) {
+              await db
+                .delete(verification)
+                .where(eq(verification.identifier, `reset-password:${token}`));
+              return;
+            }
+
+            await options.passwordReset?.sendEmail({
+              user,
+              token,
+              resetUrl: dashboardResetPasswordUrl(options.passwordReset.dashboardOrigin, token),
+            });
+          }
+        : undefined,
+    },
     account: {
       accountLinking: {
         enabled: true,
@@ -90,6 +118,26 @@ export function createAuth(db: Db, options: AuthOptions) {
 }
 
 export type Auth = ReturnType<typeof createAuth>;
+
+export async function userHasCredentialAccount(db: Db, userId: string): Promise<boolean> {
+  const [credential] = await db
+    .select({ id: account.id })
+    .from(account)
+    .where(
+      and(
+        eq(account.userId, userId),
+        eq(account.providerId, "credential"),
+        isNotNull(account.password),
+      ),
+    )
+    .limit(1);
+  return Boolean(credential);
+}
+
+function dashboardResetPasswordUrl(dashboardOrigin: string, token: string): string {
+  const origin = dashboardOrigin.replace(/\/$/, "");
+  return `${origin}/reset-password?token=${encodeURIComponent(token)}`;
+}
 
 export type DashboardSsoConfig = {
   issuer: string;
