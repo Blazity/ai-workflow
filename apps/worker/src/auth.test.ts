@@ -188,6 +188,7 @@ describe("bootstrapDashboardAuth", () => {
       providerId: DASHBOARD_SSO_PROVIDER_ID,
       issuer: "https://idp.acme.test",
       domain: "users.acme.test",
+      domainVerified: true,
     });
     expect(JSON.parse(providers[0].oidcConfig ?? "{}")).toMatchObject({
       issuer: "https://idp.acme.test",

@@ -80,6 +80,7 @@ export const ssoProvider = pgTable("sso_provider", {
     onDelete: "set null",
   }),
   domain: text("domain").notNull(),
+  domainVerified: boolean("domain_verified").notNull().default(false),
 });
 
 export const account = pgTable("account", {
