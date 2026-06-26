@@ -92,6 +92,7 @@ export default function LoginPage() {
             <AuthField
               id="login-password"
               label=""
+              aria-label="Password"
               type="password"
               required
               autoComplete="current-password"

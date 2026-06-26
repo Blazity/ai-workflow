@@ -10,12 +10,13 @@ import { sendEmail } from "../../../lib/email/send-email.js";
 export default defineEventHandler(async (event) => {
   const actor = await requireDashboardActor(event);
   const body = await readBody<{ email?: string; role?: string }>(event);
-  if (!body.email) {
+  if (!body?.email) {
     throw createError({ statusCode: 400, statusMessage: "Missing email" });
   }
   if (body.role && body.role !== "member") {
     throw createError({ statusCode: 400, statusMessage: "Invites can only create members" });
   }
+  const sendInviteEmail = createResendInviteSender();
 
   try {
     return await createDashboardInvite(getDb(), {
@@ -24,7 +25,7 @@ export default defineEventHandler(async (event) => {
       dashboardOrigin: env.DASHBOARD_ORIGIN,
       actor,
       email: body.email,
-      sendInviteEmail: createResendInviteSender(),
+      sendInviteEmail,
     });
   } catch (error) {
     toHttpError(error);

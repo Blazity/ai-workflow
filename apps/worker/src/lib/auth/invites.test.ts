@@ -151,6 +151,40 @@ describe("dashboard invites", () => {
     await expect(inviteCount()).resolves.toBe(0);
   });
 
+  it("rolls back the invite when delivery metadata cannot be recorded", async () => {
+    await db.insert(invitation).values({
+      id: "invite_existing",
+      organizationId: "org_aiw",
+      email: "existing@example.com",
+      role: "member",
+      status: "pending",
+      expiresAt: new Date("2026-06-27T12:00:00.000Z"),
+      inviterId: ownerActor.userId,
+    });
+    await db.insert(inviteEmailDelivery).values({
+      id: "delivery_existing",
+      invitationId: "invite_existing",
+      resendEmailId: "email_duplicate",
+      status: "queued",
+    });
+    const before = await db.select().from(invitation);
+
+    await expect(
+      createDashboardInvite(db, {
+        organizationSlug: "ai-workflow",
+        organizationName: "AI Workflow",
+        dashboardOrigin: "https://dashboard.example.com",
+        actor: ownerActor,
+        email: "new.user@example.com",
+        sendInviteEmail: acceptedEmail("email_duplicate"),
+        now: new Date("2026-06-26T12:00:00.000Z"),
+      }),
+    ).rejects.toThrow();
+
+    const after = await db.select().from(invitation);
+    expect(after).toEqual(before);
+  });
+
   it("rejects member invite attempts", async () => {
     await expect(
       createDashboardInvite(db, {
@@ -231,6 +265,28 @@ describe("dashboard invites", () => {
         organizationSlug: "ai-workflow",
         actor: adminActor,
         inviteId: invite.id,
+        now: new Date("2026-06-27T12:00:00.000Z"),
+      }),
+    ).resolves.toMatchObject({ status: "canceled" });
+  });
+
+  it("lets admins cancel expired pending invites", async () => {
+    const invite = await createDashboardInvite(db, {
+      organizationSlug: "ai-workflow",
+      organizationName: "AI Workflow",
+      dashboardOrigin: "https://dashboard.example.com",
+      actor: ownerActor,
+      email: "new.user@example.com",
+      sendInviteEmail: acceptedEmail(),
+      now: new Date("2026-06-20T12:00:00.000Z"),
+    });
+
+    await expect(
+      cancelDashboardInvite(db, {
+        organizationSlug: "ai-workflow",
+        actor: adminActor,
+        inviteId: invite.id,
+        now: new Date("2026-06-27T12:00:00.000Z"),
       }),
     ).resolves.toMatchObject({ status: "canceled" });
   });

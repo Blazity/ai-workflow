@@ -3,6 +3,9 @@
 **Date:** 2026-06-23
 **Status:** Approved (design); pending spec review → implementation plan
 
+> Superseded by `docs/plans/2026-06-26-aiw-81-dashboard-auth-design.md`
+> for the shipped dashboard auth scope.
+
 ## Problem
 
 The dashboard (`apps/dashboard`, a separate Vercel deployment) has **no human
@@ -62,7 +65,7 @@ worker secret" property and needs no CORS.
 
 ## Architecture
 
-```
+```text
 ┌─────────── browser ───────────┐         ┌──────────── worker (Nitro) ────────────┐
 │  /login  (form, same-origin)   │  POST   │  /api/auth/**   Better Auth handler      │
 │  (cockpit) pages               │ ──────► │     ├─ sign-in/email, sign-out, session  │

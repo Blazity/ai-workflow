@@ -1,11 +1,11 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useId, useState } from "react";
 
 import { CkChip, CkTabs } from "@/components/ui";
 
 export type DashboardRole = "owner" | "admin" | "member";
-export type DashboardAuthMethod = "Password" | "SSO" | "Password + SSO";
+export type DashboardAuthMethod = "Password" | "SSO" | "Password + SSO" | "Unknown";
 
 export type DashboardUserRow = {
   id: string;
@@ -465,11 +465,27 @@ function Modal({
   children: React.ReactNode;
   onClose: () => void;
 }) {
+  const titleId = useId();
+
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") onClose();
+    }
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [onClose]);
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 px-4">
-      <section className="w-full max-w-[420px] rounded-sm border border-neutral-200 bg-panel shadow-[0_18px_60px_rgba(24,27,32,0.18)]">
+      <section
+        aria-labelledby={titleId}
+        aria-modal="true"
+        role="dialog"
+        className="w-full max-w-[420px] rounded-sm border border-neutral-200 bg-panel shadow-[0_18px_60px_rgba(24,27,32,0.18)]"
+      >
         <header className="flex items-center justify-between border-b border-neutral-200 px-5 py-4">
-          <h3 className="m-0 font-display text-[18px] font-medium text-neutral-900">{title}</h3>
+          <h3 id={titleId} className="m-0 font-display text-[18px] font-medium text-neutral-900">{title}</h3>
           <button
             type="button"
             onClick={onClose}
@@ -496,7 +512,9 @@ function AuthMethod({ method }: { method: DashboardAuthMethod }) {
       ? ["PW", "SSO"]
       : method === "Password"
         ? ["PW"]
-        : ["SSO"];
+        : method === "SSO"
+          ? ["SSO"]
+          : ["Unknown"];
   return (
     <span className="inline-flex items-center gap-1.5">
       {parts.map((part) => (

@@ -12,7 +12,7 @@ import {
   type DashboardRole,
 } from "./roles.js";
 
-export type DashboardAuthMethod = "Password" | "SSO" | "Password + SSO";
+export type DashboardAuthMethod = "Password" | "SSO" | "Password + SSO" | "Unknown";
 
 export type DashboardActor = {
   organizationId: string;
@@ -197,6 +197,7 @@ async function findOrganizationBySlug(db: Db, slug: string) {
 }
 
 function authMethodForProviders(providers: Set<string> | undefined): DashboardAuthMethod {
+  if (!providers || providers.size === 0) return "Unknown";
   const hasPassword = providers?.has("credential") ?? false;
   const hasSso = [...(providers ?? [])].some((provider) => provider !== "credential");
   if (hasPassword && hasSso) return "Password + SSO";

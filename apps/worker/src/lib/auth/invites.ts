@@ -77,22 +77,26 @@ export async function createDashboardInvite(
     expiresAt,
   });
 
-  const [created] = await db
-    .insert(invitation)
-    .values({
-      id: inviteId,
-      organizationId: org.id,
-      email,
-      role: "member",
-      status: "pending",
-      expiresAt,
-      inviterId: input.actor.userId,
-    })
-    .returning();
+  const created = await db.transaction(async (tx) => {
+    const [row] = await tx
+      .insert(invitation)
+      .values({
+        id: inviteId,
+        organizationId: org.id,
+        email,
+        role: "member",
+        status: "pending",
+        expiresAt,
+        inviterId: input.actor.userId,
+      })
+      .returning();
 
-  await createInviteEmailDelivery(db, {
-    invitationId: created.id,
-    resendEmailId: sendResult.providerMessageId,
+    await createInviteEmailDelivery(tx as Db, {
+      invitationId: row.id,
+      resendEmailId: sendResult.providerMessageId,
+    });
+
+    return row;
   });
 
   return inviteRowFromRecord(
@@ -213,12 +217,15 @@ export async function cancelDashboardInvite(
     organizationSlug: string;
     actor: DashboardActor;
     inviteId: string;
+    now?: Date;
   },
 ): Promise<DashboardInviteRow> {
   assertCanManageInvites(input.actor.role);
   const org = await requireOrganization(db, input.organizationSlug);
+  const now = input.now ?? new Date();
   const existing = await requireInvite(db, org.id, input.inviteId);
-  if (existing.status !== "pending") {
+  const currentStatus = resolvedInviteStatus(existing.status, existing.expiresAt, now);
+  if (currentStatus !== "pending" && currentStatus !== "expired") {
     throw new DashboardAuthError(409, "Invite is not pending");
   }
 
@@ -236,7 +243,7 @@ export async function cancelDashboardInvite(
       latestEmailStatus: null,
     },
     input.actor.role,
-    new Date(),
+    now,
   );
 }
 

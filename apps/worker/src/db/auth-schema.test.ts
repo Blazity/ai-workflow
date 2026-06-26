@@ -67,6 +67,27 @@ describe("Better Auth organization and SSO schema", () => {
     expect(session?.activeOrganizationId).toBe("org_acme");
   });
 
+  it("rejects duplicate organization memberships for the same user", async () => {
+    await seedOwner();
+    await seedOrganization();
+
+    await db.insert(member).values({
+      id: "member_owner",
+      organizationId: "org_acme",
+      userId: "user_owner",
+      role: "owner",
+    });
+
+    await expect(
+      db.insert(member).values({
+        id: "member_owner_duplicate",
+        organizationId: "org_acme",
+        userId: "user_owner",
+        role: "admin",
+      }),
+    ).rejects.toThrow();
+  });
+
   it("persists an OIDC SSO provider for an organization", async () => {
     await seedOwner();
     await seedOrganization();

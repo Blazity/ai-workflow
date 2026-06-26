@@ -59,5 +59,8 @@ export function authAwareFallback<T>(err: unknown, fallback: () => T): T {
   if (err instanceof UnauthorizedError) {
     redirect("/login");
   }
+  if (err instanceof ForbiddenError) {
+    throw err;
+  }
   return fallback();
 }
