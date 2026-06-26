@@ -65,9 +65,16 @@ export default function LoginPage() {
             type="email"
             required
             autoFocus
+            autoComplete="username"
             placeholder="you@company.com"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key !== "Enter") return;
+              if (!e.currentTarget.checkValidity()) return;
+              e.preventDefault();
+              document.getElementById("login-password")?.focus();
+            }}
           />
 
           <div className="flex flex-col gap-1.5">
@@ -83,9 +90,11 @@ export default function LoginPage() {
               </AuthLinkButton>
             </div>
             <AuthField
+              id="login-password"
               label=""
               type="password"
               required
+              autoComplete="current-password"
               placeholder="Password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
