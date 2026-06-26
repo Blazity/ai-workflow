@@ -37,6 +37,7 @@ const TITLE_FOR_SCREEN: Record<string, string> = {
   evals: "Arthur evals",
   cost: "Cost & usage",
   editor: "Workflow editor",
+  users: "Users",
   trace: "Run trace",
   ticket: "Ticket runs",
 };
@@ -60,7 +61,7 @@ export function CockpitShell({ children }: { children: React.ReactNode }) {
     !!t.activityDrawerOpen,
   );
   const [moreOpen, setMoreOpen] = useState(false);
-  const moreScreens = ["prompts", "evals", "cost"];
+  const moreScreens = ["prompts", "evals", "cost", "users"];
 
   useEffect(() => {
     setActivityOpen(!!t.activityDrawerOpen);

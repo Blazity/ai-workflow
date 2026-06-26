@@ -2,7 +2,7 @@
 import "server-only";
 import { redirect } from "next/navigation";
 import { cookies } from "next/headers";
-import { UnauthorizedError } from "@/lib/auth/errors";
+import { ForbiddenError, UnauthorizedError } from "@/lib/auth/errors";
 
 const BASE = process.env.WORKER_BASE_URL ?? "";
 const FETCH_TIMEOUT_MS = 10_000;
@@ -39,6 +39,9 @@ export async function getJSON<T>(path: string): Promise<T> {
   });
   if (res.status === 401) {
     throw new UnauthorizedError(path);
+  }
+  if (res.status === 403) {
+    throw new ForbiddenError(path);
   }
   if (!res.ok) {
     throw new Error(`GET ${path} → ${res.status} ${res.statusText}`);

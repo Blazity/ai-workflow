@@ -7,6 +7,7 @@ const MORE = [
   { id: "prompts", label: "Prompts",     glyph: "❡" },
   { id: "evals",   label: "Arthur evals", glyph: "✓" },
   { id: "cost",    label: "Cost & usage", glyph: "$" },
+  { id: "users",   label: "Users",        glyph: "U" },
 ] as const;
 
 export function MoreSheet({
