@@ -22,6 +22,7 @@
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^3.0.78",
+    "@better-auth/sso": "^1.6.20",
     "@chat-adapter/slack": "^4.20.2",
     "@gitbeaker/rest": "^43.8.0",
     "@neondatabase/serverless": "^1.1.0",
@@ -37,6 +38,8 @@
     "h3": "^1",
     "nitropack": "^2",
     "pino": "^10.3.1",
+    "resend": "^6.16.0",
+    "svix": "^1.96.1",
     "workflow": "latest",
     "yaml": "^2.9.0",
     "zod": "^3.25.76"
