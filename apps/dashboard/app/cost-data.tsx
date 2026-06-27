@@ -1,5 +1,5 @@
 // apps/dashboard/app/cost-data.tsx
-import { getJSON, withQuery } from "@/lib/api/server";
+import { getJSON, withQuery, authAwareFallback } from "@/lib/api/server";
 import type { TimeWindow } from "@/lib/window";
 import { CostScreen } from "@/components/cockpit/screens/cost";
 import type { CostResponse } from "@shared/contracts";
@@ -9,6 +9,6 @@ export async function CostData({ window }: { window: TimeWindow }) {
   const now = new Date().toISOString();
   const data = await getJSON<CostResponse>(
     withQuery("/api/v1/cost", { window }),
-  ).catch(() => costFallback(now));
+  ).catch((e) => authAwareFallback(e, () => costFallback(now)));
   return <CostScreen data={data} window={window} />;
 }

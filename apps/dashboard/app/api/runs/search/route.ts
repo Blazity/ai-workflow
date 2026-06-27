@@ -1,6 +1,7 @@
 // apps/dashboard/app/api/runs/search/route.ts
 // Same-origin proxy for the spotlight ticket search. Lets the client search as
-// it types without the server-only WORKER_API_TOKEN ever reaching the browser.
+// it types without the worker-issued ba_session cookie ever reaching the browser
+// (the dashboard replays it server-side as Authorization: Bearer).
 // Searches across all history (the worker turns `q` into a bound, escaped
 // ILIKE over ticket key + title), then collapses runs into one hit per ticket.
 import { NextResponse } from "next/server";
