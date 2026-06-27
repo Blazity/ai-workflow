@@ -53,7 +53,35 @@ async function findDelivery(resendEmailId: string) {
   return row;
 }
 
+async function findDeliveryById(id: string) {
+  const [row] = await db
+    .select({
+      invitationId: inviteEmailDelivery.invitationId,
+      resendEmailId: inviteEmailDelivery.resendEmailId,
+      status: inviteEmailDelivery.status,
+      error: inviteEmailDelivery.error,
+    })
+    .from(inviteEmailDelivery)
+    .where(eq(inviteEmailDelivery.id, id));
+  return row;
+}
+
 describe("invite delivery helpers", () => {
+  it("creates a pending delivery intent before a provider id exists", async () => {
+    await createInviteEmailDelivery(db, {
+      id: "delivery_pending",
+      invitationId: "invite_acme",
+      status: "pending_send",
+    });
+
+    await expect(findDeliveryById("delivery_pending")).resolves.toEqual({
+      invitationId: "invite_acme",
+      resendEmailId: null,
+      status: "pending_send",
+      error: null,
+    });
+  });
+
   it("creates an invite delivery row for an accepted send", async () => {
     await createInviteEmailDelivery(db, {
       id: "delivery_acme",

@@ -43,7 +43,7 @@ CREATE TABLE "sso_provider" (
 CREATE TABLE "invite_email_delivery" (
 	"id" text PRIMARY KEY NOT NULL,
 	"invitation_id" text NOT NULL,
-	"resend_email_id" text NOT NULL,
+	"resend_email_id" text,
 	"status" text NOT NULL,
 	"error" text,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,

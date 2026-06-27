@@ -16,6 +16,22 @@ type AuthContext = Awaited<Auth["$context"]>;
 type ExistingUserWithAccounts = NonNullable<
   Awaited<ReturnType<AuthContext["internalAdapter"]["findUserByEmail"]>>
 >;
+type InviteAcceptanceReadDb = Pick<Db, "select">;
+type InviteAcceptanceMembershipDb = Pick<Db, "select" | "insert">;
+
+type AcceptedPasswordUserBase = {
+  id: string;
+  email: string;
+  name: string;
+};
+type ExistingAcceptedPasswordUser = AcceptedPasswordUserBase & {
+  kind: "existing";
+};
+type NewAcceptedPasswordUser = AcceptedPasswordUserBase & {
+  kind: "new";
+  passwordHash: string;
+};
+type AcceptedPasswordUser = ExistingAcceptedPasswordUser | NewAcceptedPasswordUser;
 
 export type AcceptDashboardInviteInput = {
   organizationSlug: string;
@@ -51,21 +67,44 @@ export async function acceptDashboardInvite(
 
   const acceptedUser = existing
     ? await requireExistingPasswordUser(ctx, existing, input.password)
-    : await createInvitedPasswordUser(ctx, {
+    : await prepareInvitedPasswordUser(ctx, {
         email: invite.email,
         name: input.name?.trim() || invite.email,
         password: input.password,
       });
 
-  await ensureInviteMembership(db, {
-    organizationId: org.id,
-    userId: acceptedUser.id,
-    role: "member",
+  await db.transaction(async (tx) => {
+    const currentInvite = await requirePendingInvite(tx, org.id, invite.id, now);
+    if (acceptedUser.kind === "new") {
+      await tx.insert(user).values({
+        id: acceptedUser.id,
+        email: acceptedUser.email,
+        name: acceptedUser.name,
+        emailVerified: true,
+      });
+      await tx.insert(account).values({
+        id: randomUUID(),
+        userId: acceptedUser.id,
+        providerId: "credential",
+        accountId: acceptedUser.id,
+        password: acceptedUser.passwordHash,
+      });
+    }
+
+    await ensureInviteMembership(tx, {
+      organizationId: org.id,
+      userId: acceptedUser.id,
+      role: "member",
+    });
+    const [accepted] = await tx
+      .update(invitation)
+      .set({ status: "accepted" })
+      .where(and(eq(invitation.id, currentInvite.id), eq(invitation.status, "pending")))
+      .returning({ id: invitation.id });
+    if (!accepted) {
+      throw new DashboardAuthError(409, "Invite is no longer pending");
+    }
   });
-  await db
-    .update(invitation)
-    .set({ status: "accepted" })
-    .where(and(eq(invitation.id, invite.id), eq(invitation.status, "pending")));
 
   const signIn = await auth.api.signInEmail({
     body: { email: invite.email, password: input.password },
@@ -97,7 +136,7 @@ async function requireOrganization(db: Db, slug: string) {
 }
 
 async function requirePendingInvite(
-  db: Db,
+  db: InviteAcceptanceReadDb,
   organizationId: string,
   inviteId: string,
   now: Date,
@@ -131,7 +170,7 @@ async function requireExistingPasswordUser(
   ctx: AuthContext,
   existing: ExistingUserWithAccounts,
   password: string,
-) {
+): Promise<AcceptedPasswordUser> {
   const credential = existing.accounts.find(
     (accountRow) => accountRow.providerId === "credential" && accountRow.password,
   );
@@ -143,30 +182,30 @@ async function requireExistingPasswordUser(
   if (!valid) {
     throw new DashboardAuthError(401, "Invalid credentials");
   }
-  return existing.user;
+  return {
+    kind: "existing",
+    id: existing.user.id,
+    email: existing.user.email,
+    name: existing.user.name,
+  };
 }
 
-async function createInvitedPasswordUser(
+async function prepareInvitedPasswordUser(
   ctx: AuthContext,
   input: { email: string; name: string; password: string },
-) {
+): Promise<AcceptedPasswordUser> {
   const hash = await ctx.password.hash(input.password);
-  const created = await ctx.internalAdapter.createUser({
+  return {
+    kind: "new",
+    id: randomUUID(),
     email: input.email,
     name: input.name,
-    emailVerified: true,
-  });
-  await ctx.internalAdapter.linkAccount({
-    userId: created.id,
-    providerId: "credential",
-    accountId: created.id,
-    password: hash,
-  });
-  return created;
+    passwordHash: hash,
+  };
 }
 
 async function ensureInviteMembership(
-  db: Db,
+  db: InviteAcceptanceMembershipDb,
   input: { organizationId: string; userId: string; role: "member" },
 ): Promise<void> {
   const [existing] = await db

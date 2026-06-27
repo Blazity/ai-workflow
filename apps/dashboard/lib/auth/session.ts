@@ -2,8 +2,7 @@ import "server-only";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 
-const BASE = process.env.WORKER_BASE_URL ?? "";
-const FETCH_TIMEOUT_MS = 10_000;
+import { fetchAuthWorker } from "@/lib/auth/worker";
 
 /**
  * Server-side gate for the cockpit. Reads the ba_session cookie and validates
@@ -21,13 +20,11 @@ export async function requireSession(): Promise<void> {
 
   let valid = false;
   try {
-    const res = await fetch(`${BASE}/api/auth/get-session`, {
+    const res = await fetchAuthWorker("/api/auth/get-session", {
       headers: { Authorization: `Bearer ${token}` },
-      cache: "no-store",
-      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
     });
     // Better Auth returns 200 with a null body when the token is invalid.
-    valid = res.ok && (await res.json()) !== null;
+    valid = Boolean(res?.ok && (await res.json()) !== null);
   } catch {
     valid = false;
   }
