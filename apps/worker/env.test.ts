@@ -27,7 +27,11 @@ describe("env", () => {
     JOB_TIMEOUT_MS: "1800000",
     DATABASE_URL: "postgresql://user:pass@ep-fake.neon.tech/neondb",
     GITHUB_WEBHOOK_SECRET: "github-webhook-secret",
-    WORKER_API_TOKEN: "a".repeat(64),
+    BETTER_AUTH_SECRET: "x".repeat(32),
+    BETTER_AUTH_URL: "https://worker.example.com",
+    DASHBOARD_ORIGIN: "https://dashboard.example.com",
+    DASHBOARD_AUTH_EMAIL: "admin@example.com",
+    DASHBOARD_AUTH_PASSWORD: "supersecret",
   };
 
   let originalEnv: NodeJS.ProcessEnv;
@@ -59,6 +63,65 @@ describe("env", () => {
     // derives the bot identity from the GitHub App when both are unset.
     expect(env.COMMIT_AUTHOR).toBeUndefined();
     expect(env.COMMIT_EMAIL).toBeUndefined();
+  });
+
+  it("accepts complete SSO env group", async () => {
+    Object.assign(process.env, {
+      ...VALID_ENV,
+      SSO_ISSUER: "https://accounts.google.com",
+      SSO_ALLOWED_DOMAIN: "example.com",
+      SSO_CLIENT_ID: "client-id",
+      SSO_CLIENT_SECRET: "client-secret",
+    });
+
+    const { env } = await import("./env.js");
+    expect(env.SSO_ISSUER).toBe("https://accounts.google.com");
+    expect(env.SSO_ALLOWED_DOMAIN).toBe("example.com");
+    expect(env.SSO_CLIENT_ID).toBe("client-id");
+    expect(env.SSO_CLIENT_SECRET).toBe("client-secret");
+  });
+
+  it("rejects partial SSO config with a helpful error", async () => {
+    Object.assign(process.env, {
+      ...VALID_ENV,
+      SSO_ISSUER: "https://accounts.google.com",
+    });
+
+    await expect(async () => {
+      await import("./env.js");
+    }).rejects.toThrow(
+      "SSO_ISSUER, SSO_ALLOWED_DOMAIN, SSO_CLIENT_ID, and SSO_CLIENT_SECRET",
+    );
+  });
+
+  it("requires Resend sender config when RESEND_API_KEY is set", async () => {
+    Object.assign(process.env, {
+      ...VALID_ENV,
+      RESEND_API_KEY: "re_test",
+    });
+
+    await expect(async () => {
+      await import("./env.js");
+    }).rejects.toThrow("RESEND_FROM_EMAIL");
+  });
+
+  it("requires Resend API key when RESEND_WEBHOOK_SECRET is set", async () => {
+    Object.assign(process.env, {
+      ...VALID_ENV,
+      RESEND_WEBHOOK_SECRET: "whsec_test",
+    });
+
+    await expect(async () => {
+      await import("./env.js");
+    }).rejects.toThrow("RESEND_API_KEY");
+  });
+
+  it("uses fixed organization defaults", async () => {
+    Object.assign(process.env, VALID_ENV);
+
+    const { env } = await import("./env.js");
+    expect(env.DASHBOARD_ORG_NAME).toBe("AI Workflow");
+    expect(env.DASHBOARD_ORG_SLUG).toBe("ai-workflow");
   });
 
   it("throws when only one of COMMIT_AUTHOR / COMMIT_EMAIL is set", async () => {

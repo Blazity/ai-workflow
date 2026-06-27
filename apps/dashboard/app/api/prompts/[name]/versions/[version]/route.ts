@@ -1,6 +1,7 @@
 // apps/dashboard/app/api/prompts/[name]/versions/[version]/route.ts
 // Same-origin proxy so the client can lazily fetch a historical prompt-version
-// body without the server-only WORKER_API_TOKEN ever reaching the browser.
+// body without the worker-issued ba_session cookie ever reaching the browser
+// (the dashboard replays it server-side as Authorization: Bearer).
 import { NextResponse } from "next/server";
 import { getJSON } from "@/lib/api/server";
 import type { PromptVersionBodyResponse } from "@shared/contracts";

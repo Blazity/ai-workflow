@@ -175,3 +175,6 @@ export const workflowRuns = pgTable("workflow_runs", {
   index("workflow_runs_started_at_idx").on(t.startedAt),
   index("workflow_runs_ticket_key_idx").on(t.ticketKey),
 ]);
+
+export * from "./auth-schema.js";
+export * from "./email-delivery-schema.js";
