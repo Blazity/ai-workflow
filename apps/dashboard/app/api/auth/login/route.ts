@@ -1,20 +1,15 @@
 import { NextResponse } from "next/server";
 
 import { setSessionCookie } from "@/lib/auth/session-cookie";
-
-const BASE = process.env.WORKER_BASE_URL ?? "";
-const WORKER_TIMEOUT_MS = 10_000;
+import {
+  authWorkerUnavailable,
+  postAuthWorkerJson,
+  readJsonBody,
+  readWorkerJson,
+} from "@/lib/auth/worker";
 
 export async function POST(req: Request) {
-  let body: { email?: string; password?: string };
-  try {
-    body = (await req.json()) as {
-      email?: string;
-      password?: string;
-    };
-  } catch {
-    body = {};
-  }
+  const body = await readJsonBody<{ email?: string; password?: string }>(req);
 
   const { email, password } = body;
   if (!email || !password) {
@@ -24,20 +19,8 @@ export async function POST(req: Request) {
     );
   }
 
-  let res: Response;
-  try {
-    res = await fetch(`${BASE}/api/auth/sign-in/email`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ email, password }),
-      signal: AbortSignal.timeout(WORKER_TIMEOUT_MS),
-    });
-  } catch {
-    return NextResponse.json(
-      { error: "Unable to reach auth service" },
-      { status: 502 },
-    );
-  }
+  const res = await postAuthWorkerJson("/api/auth/sign-in/email", { email, password });
+  if (!res) return authWorkerUnavailable("Unable to reach auth service");
 
   if (!res.ok) {
     if (res.status === 400 || res.status === 401) {
@@ -46,7 +29,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Auth service unavailable" }, { status: 502 });
   }
 
-  const responseBody = (await res.json().catch(() => ({}))) as { token?: string };
+  const responseBody = await readWorkerJson<{ token?: string }>(res);
   const token = res.headers.get("set-auth-token") ?? responseBody.token;
   if (!token) {
     return NextResponse.json({ error: "Auth misconfigured" }, { status: 502 });

@@ -274,6 +274,16 @@ describe("dashboard invites", () => {
       sendInviteEmail: acceptedEmail("email_first"),
       now: new Date("2026-06-26T12:00:00.000Z"),
     });
+    let deliveryCountBeforeResendSend = 0;
+    const resendEmail: SendInviteEmail = vi.fn(async ({ invitationId }) => {
+      deliveryCountBeforeResendSend = (
+        await db
+          .select({ id: inviteEmailDelivery.id })
+          .from(inviteEmailDelivery)
+          .where(eq(inviteEmailDelivery.invitationId, invitationId))
+      ).length;
+      return { providerMessageId: "email_second" };
+    });
 
     await expect(
       resendDashboardInvite(db, {
@@ -282,11 +292,12 @@ describe("dashboard invites", () => {
         dashboardOrigin: "https://dashboard.example.com",
         actor: adminActor,
         inviteId: invite.id,
-        sendInviteEmail: acceptedEmail("email_second"),
+        sendInviteEmail: resendEmail,
         now: new Date("2026-06-26T13:00:00.000Z"),
       }),
     ).resolves.toMatchObject({ emailStatus: "queued" });
 
+    expect(deliveryCountBeforeResendSend).toBe(2);
     const deliveries = await db.select().from(inviteEmailDelivery);
     expect(deliveries.map((row) => row.resendEmailId).sort()).toEqual([
       "email_first",
@@ -322,5 +333,42 @@ describe("dashboard invites", () => {
         now: new Date("2026-06-27T12:00:00.000Z"),
       }),
     ).resolves.toMatchObject({ status: "canceled" });
+  });
+
+  it("re-checks pending invite state before resending", async () => {
+    const invite = await createDashboardInvite(db, {
+      organizationSlug: "ai-workflow",
+      organizationName: "AI Workflow",
+      dashboardOrigin: "https://dashboard.example.com",
+      actor: ownerActor,
+      email: "new.user@example.com",
+      sendInviteEmail: acceptedEmail("email_first"),
+      now: new Date("2026-06-26T12:00:00.000Z"),
+    });
+    const originalTransaction = db.transaction.bind(db);
+    vi.spyOn(db, "transaction").mockImplementation((async (callback, config) => {
+      await db
+        .update(invitation)
+        .set({ status: "accepted" })
+        .where(eq(invitation.id, invite.id));
+      return originalTransaction(callback, config);
+    }) as typeof db.transaction);
+    const sendInviteEmail = acceptedEmail("email_second");
+
+    await expect(
+      resendDashboardInvite(db, {
+        organizationSlug: "ai-workflow",
+        organizationName: "AI Workflow",
+        dashboardOrigin: "https://dashboard.example.com",
+        actor: adminActor,
+        inviteId: invite.id,
+        sendInviteEmail,
+        now: new Date("2026-06-26T13:00:00.000Z"),
+      }),
+    ).rejects.toThrow("Invite is no longer pending");
+
+    expect(sendInviteEmail).not.toHaveBeenCalled();
+    const deliveries = await db.select().from(inviteEmailDelivery);
+    expect(deliveries.map((row) => row.resendEmailId)).toEqual(["email_first"]);
   });
 });

@@ -1,5 +1,5 @@
 import { and, eq } from "drizzle-orm";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   createAuth,
@@ -107,6 +107,32 @@ describe("acceptDashboardInvite", () => {
       .from(member)
       .where(eq(member.userId, result.user.id));
     expect(members).toHaveLength(1);
+  });
+
+  it("re-checks pending invite state before creating membership", async () => {
+    const { db, auth } = await setupInvite();
+    const originalTransaction = db.transaction.bind(db);
+    vi.spyOn(db, "transaction").mockImplementation((async (callback, config) => {
+      await db
+        .update(invitation)
+        .set({ status: "accepted" })
+        .where(eq(invitation.id, "invite_1"));
+      return originalTransaction(callback, config);
+    }) as typeof db.transaction);
+
+    await expect(
+      acceptDashboardInvite(db, auth, {
+        organizationSlug: "ai-workflow",
+        inviteId: "invite_1",
+        name: "New User",
+        password: "password123",
+        now: new Date("2026-06-26T00:00:00.000Z"),
+      }),
+    ).rejects.toThrow("Invite not found");
+
+    await expect(userCount(db, "new.user@example.com")).resolves.toBe(0);
+    const memberships = await db.select().from(member);
+    expect(memberships).toHaveLength(0);
   });
 
   it("rejects expired invites without creating a user", async () => {

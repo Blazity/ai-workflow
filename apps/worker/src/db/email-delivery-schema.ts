@@ -8,7 +8,7 @@ export const inviteEmailDelivery = pgTable(
     invitationId: text("invitation_id")
       .notNull()
       .references(() => invitation.id, { onDelete: "cascade" }),
-    resendEmailId: text("resend_email_id").notNull().unique(),
+    resendEmailId: text("resend_email_id").unique(),
     status: text("status").notNull(),
     error: text("error"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),

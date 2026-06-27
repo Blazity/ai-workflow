@@ -85,10 +85,10 @@ export async function createDashboardInvite(
       })
       .returning();
 
-    await createInviteEmailDelivery(tx as Db, {
+    await createInviteEmailDelivery(tx, {
       id: deliveryId,
       invitationId: row.id,
-      resendEmailId: `pending:${inviteId}`,
+      status: "pending_send",
     });
 
     return row;
@@ -108,11 +108,7 @@ export async function createDashboardInvite(
     throw error;
   }
 
-  await updateInviteEmailDeliveryById(db, {
-    id: deliveryId,
-    resendEmailId: sendResult.providerMessageId,
-    status: "queued",
-  });
+  await recordProviderAcceptedDelivery(db, deliveryId, sendResult.providerMessageId);
 
   return inviteRowFromRecord(
     {
@@ -195,24 +191,46 @@ export async function resendDashboardInvite(
     organizationName: input.organizationName,
     inviteUrl: acceptUrl,
   });
-  const sendResult = await input.sendInviteEmail({
-    ...template,
-    to: existing.email,
-    invitationId: existing.id,
-    acceptUrl,
-    expiresAt,
+  const deliveryId = randomUUID();
+
+  const updated = await db.transaction(async (tx) => {
+    const [row] = await tx
+      .update(invitation)
+      .set({ expiresAt, status: "pending" })
+      .where(and(eq(invitation.id, existing.id), eq(invitation.status, "pending")))
+      .returning();
+    if (!row) {
+      throw new DashboardAuthError(409, "Invite is no longer pending");
+    }
+
+    await createInviteEmailDelivery(tx, {
+      id: deliveryId,
+      invitationId: row.id,
+      status: "pending_send",
+    });
+
+    return row;
   });
 
-  const [updated] = await db
-    .update(invitation)
-    .set({ expiresAt, status: "pending" })
-    .where(eq(invitation.id, existing.id))
-    .returning();
+  let sendResult: { providerMessageId: string };
+  try {
+    sendResult = await input.sendInviteEmail({
+      ...template,
+      to: existing.email,
+      invitationId: existing.id,
+      acceptUrl,
+      expiresAt,
+    });
+  } catch (error) {
+    await updateInviteEmailDeliveryById(db, {
+      id: deliveryId,
+      status: "failed",
+      error: messageFromUnknown(error),
+    });
+    throw error;
+  }
 
-  await createInviteEmailDelivery(db, {
-    invitationId: updated.id,
-    resendEmailId: sendResult.providerMessageId,
-  });
+  await recordProviderAcceptedDelivery(db, deliveryId, sendResult.providerMessageId);
 
   return inviteRowFromRecord(
     {
@@ -266,6 +284,25 @@ function assertCanManageInvites(role: DashboardRole): void {
   if (!canInvite(role)) {
     throw new DashboardAuthError(403, "Forbidden");
   }
+}
+
+async function recordProviderAcceptedDelivery(
+  db: Db,
+  deliveryId: string,
+  providerMessageId: string,
+): Promise<void> {
+  const updated = await updateInviteEmailDeliveryById(db, {
+    id: deliveryId,
+    resendEmailId: providerMessageId,
+    status: "queued",
+  });
+  if (!updated) {
+    throw new DashboardAuthError(500, "Invite email delivery record was not found");
+  }
+}
+
+function messageFromUnknown(error: unknown): string {
+  return error instanceof Error ? error.message : "Email provider failed";
 }
 
 async function requireOrganization(db: Db, slug: string) {

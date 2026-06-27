@@ -1,18 +1,13 @@
 import { NextResponse } from "next/server";
 
-const BASE = process.env.WORKER_BASE_URL ?? "";
-const WORKER_TIMEOUT_MS = 10_000;
+import {
+  authWorkerUnavailable,
+  postAuthWorkerJson,
+  readJsonBody,
+} from "@/lib/auth/worker";
 
 export async function POST(req: Request) {
-  let body: { token?: string; password?: string };
-  try {
-    body = (await req.json()) as {
-      token?: string;
-      password?: string;
-    };
-  } catch {
-    body = {};
-  }
+  const body = await readJsonBody<{ token?: string; password?: string }>(req);
 
   const { token, password } = body;
   if (!token || !password) {
@@ -22,20 +17,11 @@ export async function POST(req: Request) {
     );
   }
 
-  let res: Response;
-  try {
-    res = await fetch(`${BASE}/api/auth/reset-password`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ token, newPassword: password }),
-      signal: AbortSignal.timeout(WORKER_TIMEOUT_MS),
-    });
-  } catch {
-    return NextResponse.json(
-      { error: "Unable to reset password" },
-      { status: 502 },
-    );
-  }
+  const res = await postAuthWorkerJson("/api/auth/reset-password", {
+    token,
+    newPassword: password,
+  });
+  if (!res) return authWorkerUnavailable("Unable to reset password");
 
   if (!res.ok) {
     if (res.status >= 400 && res.status < 500) {

@@ -1325,7 +1325,7 @@
           "name": "resend_email_id",
           "type": "text",
           "primaryKey": false,
-          "notNull": true
+          "notNull": false
         },
         "status": {
           "name": "status",

@@ -26,7 +26,7 @@ export type DashboardInviteRow = {
   invitedBy: string;
   role: "member";
   status: "pending" | "accepted" | "canceled" | "expired";
-  emailStatus: "queued" | "sent" | "failed" | "bounced" | null;
+  emailStatus: "pending_send" | "queued" | "sent" | "failed" | "bounced" | null;
   expiresAt: string | null;
   sentAt: string;
   actions: {
@@ -532,6 +532,7 @@ function AuthMethod({ method }: { method: DashboardAuthMethod }) {
 function InviteStatus({ invite }: { invite: DashboardInviteRow }) {
   const failed = invite.emailStatus === "failed" || invite.emailStatus === "bounced";
   if (failed) return <CkChip tone="failed">Email failed</CkChip>;
+  if (invite.status === "pending" && invite.emailStatus === "pending_send") return <CkChip tone="running">Sending</CkChip>;
   if (invite.status === "pending" && invite.emailStatus === "queued") return <CkChip tone="running">Queued</CkChip>;
   if (invite.status === "pending") return <CkChip tone="success">Pending</CkChip>;
   if (invite.status === "expired") return <CkChip tone="warn">Expired</CkChip>;

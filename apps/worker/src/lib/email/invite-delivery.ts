@@ -3,12 +3,19 @@ import { eq } from "drizzle-orm";
 import type { Db } from "../../db/client.js";
 import { inviteEmailDelivery } from "../../db/schema.js";
 
-export type InviteEmailDeliveryStatus = "queued" | "sent" | "bounced" | "failed";
+export type InviteEmailDeliveryStatus =
+  | "pending_send"
+  | "queued"
+  | "sent"
+  | "bounced"
+  | "failed";
+
+type InviteEmailDeliveryDb = Pick<Db, "insert" | "update">;
 
 export interface CreateInviteEmailDeliveryInput {
   id?: string;
   invitationId: string;
-  resendEmailId: string;
+  resendEmailId?: string | null;
   status?: InviteEmailDeliveryStatus;
   error?: string | null;
 }
@@ -21,7 +28,7 @@ export interface UpdateInviteEmailDeliveryInput {
 
 export interface UpdateInviteEmailDeliveryByIdInput {
   id: string;
-  resendEmailId?: string;
+  resendEmailId?: string | null;
   status: InviteEmailDeliveryStatus;
   error?: string | null;
 }
@@ -46,7 +53,7 @@ export interface ResendEmailDeliveryEvent {
 }
 
 export async function createInviteEmailDelivery(
-  db: Db,
+  db: InviteEmailDeliveryDb,
   input: CreateInviteEmailDeliveryInput,
 ) {
   const [row] = await db
@@ -54,8 +61,8 @@ export async function createInviteEmailDelivery(
     .values({
       id: input.id ?? randomUUID(),
       invitationId: input.invitationId,
-      resendEmailId: input.resendEmailId,
-      status: input.status ?? "queued",
+      resendEmailId: input.resendEmailId ?? null,
+      status: input.status ?? (input.resendEmailId ? "queued" : "pending_send"),
       error: input.error ?? null,
     })
     .returning();
@@ -81,11 +88,11 @@ export async function updateInviteEmailDeliveryByResendId(
 }
 
 export async function updateInviteEmailDeliveryById(
-  db: Db,
+  db: InviteEmailDeliveryDb,
   input: UpdateInviteEmailDeliveryByIdInput,
 ): Promise<boolean> {
   const values: {
-    resendEmailId?: string;
+    resendEmailId?: string | null;
     status: InviteEmailDeliveryStatus;
     error: string | null;
     updatedAt: Date;
