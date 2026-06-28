@@ -154,7 +154,7 @@ describe("invites API", () => {
     expect(res.status).toBe(403);
   });
 
-  it("does not create invite when Resend rejects synchronously", async () => {
+  it("keeps invite when Resend rejects synchronously", async () => {
     state.resendSend.mockResolvedValueOnce({
       data: null,
       error: { name: "validation_error", message: "Bad sender", statusCode: 422 },
@@ -170,7 +170,7 @@ describe("invites API", () => {
     );
 
     expect(res.status).toBe(502);
-    await expect(inviteCount()).resolves.toBe(0);
+    await expect(inviteCount()).resolves.toBe(1);
   });
 
   it("creates, lists, resends, and cancels invites for owner/admin", async () => {
@@ -182,6 +182,11 @@ describe("invites API", () => {
       }),
     );
     expect(created.status).toBe(200);
+    expect(state.resendSend).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        tags: [expect.objectContaining({ name: "invite_delivery_id" })],
+      }),
+    );
     const createdBody = await created.json();
     expect(createdBody).toMatchObject({
       email: "new.user@example.com",

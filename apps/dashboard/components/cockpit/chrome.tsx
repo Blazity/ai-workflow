@@ -13,17 +13,35 @@ const NAV = [
   { id: "users", label: "Users", glyph: "U", group: "team" },
 ];
 
+const NAV_GROUPS = [
+  { id: "obs", label: "Observability" },
+  { id: "flow", label: "Workflow editor" },
+  { id: "team", label: "Users" },
+];
+
+export function cockpitNavItems({
+  canManageUsers,
+}: {
+  canManageUsers: boolean;
+}) {
+  return NAV.filter((item) => item.id !== "users" || canManageUsers);
+}
+
 export function CkSidebar({
   active,
   onNav,
   collapsed = false,
   onToggleCollapse,
+  canManageUsers,
 }: {
   active: string;
   onNav: (id: string) => void;
   collapsed?: boolean;
   onToggleCollapse?: () => void;
+  canManageUsers: boolean;
 }) {
+  const nav = cockpitNavItems({ canManageUsers });
+
   return (
     <aside
       className={`relative bg-panel border-r border-neutral-200 flex flex-col py-5 transition-[width,flex-basis] duration-[160ms] ease-[cubic-bezier(.2,0,0,1)] ${
@@ -51,14 +69,12 @@ export function CkSidebar({
         )}
       </div>
 
-      {[
-        { id: "obs", label: "Observability" },
-        { id: "flow", label: "Workflow editor" },
-        { id: "team", label: "Users" },
-      ].map((grp, gi) => (
+      {NAV_GROUPS.filter((grp) =>
+        nav.some((item) => item.group === grp.id),
+      ).map((grp, gi) => (
         <React.Fragment key={grp.id}>
           <nav className={`flex flex-col gap-px px-2 ${gi === 0 ? "mt-2" : "mt-3"}`}>
-            {NAV.filter((n) => n.group === grp.id).map((n) => {
+            {nav.filter((n) => n.group === grp.id).map((n) => {
               const on = active === n.id;
               return (
                 <button

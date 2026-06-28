@@ -54,4 +54,12 @@ describe("SSO start API", () => {
       errorCallbackURL: "https://dashboard.example.com/login",
     });
   });
+
+  it("returns 502 when Better Auth does not return a redirect URL", async () => {
+    state.authHandler.mockResolvedValueOnce(Response.json({}));
+
+    const res = await handlerFor(startRoute)(new Request("http://localhost/"));
+
+    expect(res.status).toBe(502);
+  });
 });

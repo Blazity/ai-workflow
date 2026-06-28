@@ -2,8 +2,16 @@ import "server-only";
 
 import { NextResponse } from "next/server";
 
-const BASE = process.env.WORKER_BASE_URL ?? "";
+const BASE = process.env.WORKER_BASE_URL;
 const WORKER_TIMEOUT_MS = 10_000;
+
+function workerUrl(path: string): string {
+  if (!BASE) {
+    throw new Error("WORKER_BASE_URL is required for dashboard auth requests");
+  }
+
+  return `${BASE}${path}`;
+}
 
 export async function readJsonBody<T extends object>(
   req: Request,
@@ -23,8 +31,10 @@ export async function fetchAuthWorker(
   path: string,
   init: RequestInit = {},
 ): Promise<Response | null> {
+  const url = workerUrl(path);
+
   try {
-    return await fetch(`${BASE}${path}`, {
+    return await fetch(url, {
       ...init,
       cache: "no-store",
       signal: init.signal

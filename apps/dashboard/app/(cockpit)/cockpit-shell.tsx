@@ -8,13 +8,14 @@ import { useTweaks } from "@/lib/use-tweaks";
 import { runHref } from "@/lib/run-href";
 import { useLivePoll, LIVE_POLL_MS } from "@/lib/use-live-poll";
 import type { Run } from "@/lib/types";
+import type { DashboardSession } from "@/lib/auth/session";
 
 import {
   CockpitCtx,
   TWEAK_DEFAULTS,
   type Tweaks,
 } from "@/components/cockpit/context";
-import { CkSidebar } from "@/components/cockpit/chrome";
+import { CkSidebar, cockpitNavItems } from "@/components/cockpit/chrome";
 import { LivePollControl } from "@/components/cockpit/controls";
 import { LogoutButton } from "@/components/cockpit/logout-button";
 import { CkActivityDrawer } from "@/components/cockpit/activity-drawer";
@@ -48,10 +49,17 @@ const TITLE_FOR_SCREEN: Record<string, string> = {
  * selected-run state survive navigation between the per-screen routes, while
  * each route's `children` are rendered server-side where possible.
  */
-export function CockpitShell({ children }: { children: React.ReactNode }) {
+export function CockpitShell({
+  children,
+  session,
+}: {
+  children: React.ReactNode;
+  session: DashboardSession;
+}) {
   const router = useRouter();
   const pathname = usePathname();
   const screen = screenForPath(pathname);
+  const canManageUsers = session.canManageUsers;
 
   const [t, setTweak] = useTweaks<Tweaks>(TWEAK_DEFAULTS);
   const [persona] = useState("swe");
@@ -61,7 +69,9 @@ export function CockpitShell({ children }: { children: React.ReactNode }) {
     !!t.activityDrawerOpen,
   );
   const [moreOpen, setMoreOpen] = useState(false);
-  const moreScreens = ["prompts", "evals", "cost", "users"];
+  const moreScreens = cockpitNavItems({ canManageUsers })
+    .filter((item) => ["prompts", "evals", "cost", "users"].includes(item.id))
+    .map((item) => item.id);
 
   useEffect(() => {
     setActivityOpen(!!t.activityDrawerOpen);
@@ -110,6 +120,7 @@ export function CockpitShell({ children }: { children: React.ReactNode }) {
             onNav={(id) => router.push(pathForScreen(id))}
             collapsed={!!t.sidebarCollapsed}
             onToggleCollapse={() => setTweak("sidebarCollapsed", !t.sidebarCollapsed)}
+            canManageUsers={canManageUsers}
           />
         </div>
 
@@ -150,7 +161,13 @@ export function CockpitShell({ children }: { children: React.ReactNode }) {
 
         {/* Mobile "More" menu */}
         <div className="lg:hidden">
-          <MoreSheet open={moreOpen} onClose={() => setMoreOpen(false)} active={screen} onNav={(id) => router.push(pathForScreen(id))} />
+          <MoreSheet
+            open={moreOpen}
+            onClose={() => setMoreOpen(false)}
+            active={screen}
+            onNav={(id) => router.push(pathForScreen(id))}
+            canManageUsers={canManageUsers}
+          />
         </div>
 
         {/* Spotlight ticket search — global overlay, summoned by ⌘K from any screen */}

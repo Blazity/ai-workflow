@@ -24,9 +24,15 @@ export default defineEventHandler(async () => {
     url?: string;
     message?: string;
   };
-  if (!res.ok || !body.url) {
+  if (!res.ok) {
     throw createError({
       statusCode: res.status || 502,
+      statusMessage: body.message ?? "SSO is not configured",
+    });
+  }
+  if (!body.url) {
+    throw createError({
+      statusCode: 502,
       statusMessage: body.message ?? "SSO is not configured",
     });
   }

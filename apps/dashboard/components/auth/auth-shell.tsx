@@ -133,7 +133,12 @@ export function AuthBanner({
   }[tone];
 
   return (
-    <div className={`flex items-start gap-2.5 rounded-[3px] border px-3 py-2.5 ${styles.wrap}`}>
+    <div
+      aria-atomic="true"
+      aria-live={tone === "error" ? "assertive" : "polite"}
+      className={`flex items-start gap-2.5 rounded-[3px] border px-3 py-2.5 ${styles.wrap}`}
+      role={tone === "error" ? "alert" : "status"}
+    >
       <span
         className={`mt-0.5 inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-pill font-mono text-[9px] font-semibold ${styles.mark}`}
       >

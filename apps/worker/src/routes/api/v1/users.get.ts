@@ -6,12 +6,12 @@ import { canInvite } from "../../../lib/auth/roles.js";
 import { listDashboardUsers } from "../../../lib/auth/users-read.js";
 
 export default defineEventHandler(async (event) => {
-  const actor = await requireDashboardActor(event);
-  if (!canInvite(actor.role)) {
-    throw createError({ statusCode: 403, statusMessage: "Forbidden" });
-  }
-
   try {
+    const actor = await requireDashboardActor(event);
+    if (!canInvite(actor.role)) {
+      throw createError({ statusCode: 403, statusMessage: "Forbidden" });
+    }
+
     const members = await listDashboardUsers(getDb(), {
       organizationSlug: env.DASHBOARD_ORG_SLUG,
       actorRole: actor.role,
