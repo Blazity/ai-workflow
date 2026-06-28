@@ -10,6 +10,7 @@ const NAV = [
   { id: "evals", label: "Arthur evals", glyph: "✓", group: "obs" },
   { id: "cost", label: "Cost & usage", glyph: "$", group: "obs" },
   { id: "editor", label: "Workflow editor", glyph: "▷", group: "flow" },
+  { id: "users", label: "Users", glyph: "U", group: "team" },
 ];
 
 export function CkSidebar({
@@ -53,6 +54,7 @@ export function CkSidebar({
       {[
         { id: "obs", label: "Observability" },
         { id: "flow", label: "Workflow editor" },
+        { id: "team", label: "Users" },
       ].map((grp, gi) => (
         <React.Fragment key={grp.id}>
           <nav className={`flex flex-col gap-px px-2 ${gi === 0 ? "mt-2" : "mt-3"}`}>

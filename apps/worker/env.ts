@@ -123,13 +123,25 @@ export const env = createEnv({
     // the Neon Vercel Marketplace integration, one branch per environment.
     DATABASE_URL: z.string().url(),
 
-    // Dashboard API — shared bearer secret gating the read-only /api/v1/*
-    // endpoints (verified in src/middleware/api-auth.ts). The dashboard (a
-    // separate deployment) sends it as `Authorization: Bearer <token>`.
-    // Generate with `openssl rand -hex 32`.
-    WORKER_API_TOKEN: z.string().regex(/^[0-9a-fA-F]{64}$/, {
-      message: "must be a 64-character hex string",
+    // Better Auth (dashboard human login). The worker is the auth authority.
+    BETTER_AUTH_SECRET: z.string().min(32, {
+      message: "must be at least 32 characters",
     }),
+    BETTER_AUTH_URL: z.string().url(),
+    DASHBOARD_ORIGIN: z.string().url(),
+    DASHBOARD_AUTH_EMAIL: z.string().email(),
+    DASHBOARD_AUTH_PASSWORD: z.string().min(8, {
+      message: "must be at least 8 characters",
+    }),
+    DASHBOARD_ORG_NAME: z.string().min(1).default("AI Workflow"),
+    DASHBOARD_ORG_SLUG: z.string().min(1).default("ai-workflow"),
+    SSO_ISSUER: z.string().url().optional(),
+    SSO_ALLOWED_DOMAIN: z.string().min(1).optional(),
+    SSO_CLIENT_ID: z.string().min(1).optional(),
+    SSO_CLIENT_SECRET: z.string().min(1).optional(),
+    RESEND_API_KEY: z.string().min(1).optional(),
+    RESEND_FROM_EMAIL: z.string().email().optional(),
+    RESEND_WEBHOOK_SECRET: z.string().min(1).optional(),
   },
   runtimeEnv: process.env,
   emptyStringAsUndefined: true,
@@ -180,6 +192,30 @@ export const env = createEnv({
     throw new Error(
       "Invalid environment variables:\n" +
         "  AGENT_KIND=claude requires ANTHROPIC_API_KEY",
+    );
+  }
+  const ssoKeys = [
+    env.SSO_ISSUER,
+    env.SSO_ALLOWED_DOMAIN,
+    env.SSO_CLIENT_ID,
+    env.SSO_CLIENT_SECRET,
+  ];
+  if (ssoKeys.some(Boolean) && !ssoKeys.every(Boolean)) {
+    throw new Error(
+      "Invalid environment variables:\n" +
+        "  SSO_ISSUER, SSO_ALLOWED_DOMAIN, SSO_CLIENT_ID, and SSO_CLIENT_SECRET must be set together",
+    );
+  }
+  if (env.RESEND_API_KEY && !env.RESEND_FROM_EMAIL) {
+    throw new Error(
+      "Invalid environment variables:\n" +
+        "  RESEND_API_KEY requires RESEND_FROM_EMAIL",
+    );
+  }
+  if (env.RESEND_WEBHOOK_SECRET && !env.RESEND_API_KEY) {
+    throw new Error(
+      "Invalid environment variables:\n" +
+        "  RESEND_WEBHOOK_SECRET requires RESEND_API_KEY",
     );
   }
 }

@@ -28,7 +28,15 @@ ai-workflow/
 ### How the packages connect
 
 - **`@shared/*` is a path alias, not an npm package.** `apps/shared` has no `package.json` and emits nothing (`noEmit: true`). Both apps map `@shared/*` → `../shared/*` in their `tsconfig.json` and import the contracts directly from source (`import type { RunsResponse } from "@shared/contracts"`). It's a type-only seam — no build step, no version to bump.
-- **The dashboard talks to the worker over HTTP.** The worker exposes a read-only, bearer-gated API under `/api/v1/*` (`apps/worker/src/routes/api/v1/`), gated by [`apps/worker/src/middleware/api-auth.ts`](./apps/worker/src/middleware/api-auth.ts) against `WORKER_API_TOKEN`. The dashboard fetches it server-side (`apps/dashboard/lib/api/server.ts`) with `Authorization: Bearer <WORKER_API_TOKEN>`, so the token never reaches the browser. The two apps deploy as **separate Vercel projects** and share only that token and the `@shared/contracts` types.
+- **The dashboard talks to the worker over HTTP.** The worker exposes a read-only API under `/api/v1/*` (`apps/worker/src/routes/api/v1/`), gated by [`apps/worker/src/middleware/api-auth.ts`](./apps/worker/src/middleware/api-auth.ts) on a valid **Better Auth session**. Human login lives on the worker (`/api/auth/**`, `apps/worker/src/auth.ts`); the dashboard is a thin BFF that stores the worker-issued session token in a first-party `httpOnly` cookie and replays it as `Authorization: Bearer <token>` on every server-side call, so the token never reaches the browser. The two apps deploy as **separate Vercel projects** and share only the `@shared/contracts` types.
+
+### Dashboard auth configuration
+
+Password-only dashboard login is valid with just `DASHBOARD_AUTH_EMAIL` and `DASHBOARD_AUTH_PASSWORD` on the worker. The fixed organization defaults to `DASHBOARD_ORG_NAME=AI Workflow` and `DASHBOARD_ORG_SLUG=ai-workflow`.
+
+SSO is optional. To enable it, set the complete worker env group: `SSO_ISSUER`, `SSO_ALLOWED_DOMAIN`, `SSO_CLIENT_ID`, and `SSO_CLIENT_SECRET`. Leaving all four unset keeps password-only mode.
+
+Resend is optional until email delivery is enabled. `RESEND_API_KEY` requires `RESEND_FROM_EMAIL`; `RESEND_WEBHOOK_SECRET` requires `RESEND_API_KEY`.
 
 ### Working in the monorepo
 

@@ -6,6 +6,7 @@ import { usePathname, useRouter } from "next/navigation";
 
 import { useTweaks } from "@/lib/use-tweaks";
 import { runHref } from "@/lib/run-href";
+import { useLivePoll, LIVE_POLL_MS } from "@/lib/use-live-poll";
 import type { Run } from "@/lib/types";
 
 import {
@@ -14,6 +15,8 @@ import {
   type Tweaks,
 } from "@/components/cockpit/context";
 import { CkSidebar } from "@/components/cockpit/chrome";
+import { LivePollControl } from "@/components/cockpit/controls";
+import { LogoutButton } from "@/components/cockpit/logout-button";
 import { CkActivityDrawer } from "@/components/cockpit/activity-drawer";
 import { SpotlightSearch } from "@/components/cockpit/spotlight-search";
 import { BottomTabBar } from "@/components/cockpit/mobile/bottom-tab-bar";
@@ -34,6 +37,7 @@ const TITLE_FOR_SCREEN: Record<string, string> = {
   evals: "Arthur evals",
   cost: "Cost & usage",
   editor: "Workflow editor",
+  users: "Users",
   trace: "Run trace",
   ticket: "Ticket runs",
 };
@@ -57,7 +61,7 @@ export function CockpitShell({ children }: { children: React.ReactNode }) {
     !!t.activityDrawerOpen,
   );
   const [moreOpen, setMoreOpen] = useState(false);
-  const moreScreens = ["prompts", "evals", "cost"];
+  const moreScreens = ["prompts", "evals", "cost", "users"];
 
   useEffect(() => {
     setActivityOpen(!!t.activityDrawerOpen);
@@ -67,9 +71,36 @@ export function CockpitShell({ children }: { children: React.ReactNode }) {
     router.push(runHref(r));
   };
 
+  // Timestamp of the next scheduled refresh, surfaced via context so the
+  // live-poll control can render a countdown ring in sync with the actual
+  // refreshes (which are driven here, once, for the whole cockpit).
+  const [nextRefreshAt, setNextRefreshAt] = useState<number | null>(null);
+  useEffect(() => {
+    setNextRefreshAt(t.livePolling ? Date.now() + LIVE_POLL_MS : null);
+  }, [t.livePolling]);
+
+  useLivePoll({
+    enabled: !!t.livePolling,
+    intervalMs: LIVE_POLL_MS,
+    onTick: () => {
+      router.refresh();
+      setNextRefreshAt(Date.now() + LIVE_POLL_MS);
+    },
+  });
+
   return (
     <CockpitCtx.Provider
-      value={{ t, setTweak, persona, range, env, openRun }}
+      value={{
+        t,
+        setTweak,
+        persona,
+        range,
+        env,
+        openRun,
+        livePolling: !!t.livePolling,
+        toggleLive: () => setTweak("livePolling", !t.livePolling),
+        nextRefreshAt,
+      }}
     >
       <div className="h-dvh w-screen flex flex-col lg:flex-row overflow-hidden bg-app-bg relative">
         {/* Desktop sidebar — lg and up only */}
@@ -86,6 +117,17 @@ export function CockpitShell({ children }: { children: React.ReactNode }) {
           {/* Mobile header */}
           <div className="lg:hidden">
             <MobileHeader title={TITLE_FOR_SCREEN[screen] ?? "AI Workflow"} />
+          </div>
+
+          {/* Desktop top bar — global live-poll control, present on every screen */}
+          <div className="hidden lg:flex items-center justify-between flex-[0_0_44px] h-11 border-b border-neutral-200 bg-panel px-6">
+            <span className="font-mono text-[10px] uppercase tracking-[0.06em] text-neutral-500">
+              {TITLE_FOR_SCREEN[screen] ?? "AI Workflow"}
+            </span>
+            <div className="flex items-center gap-4">
+              <LivePollControl />
+              <LogoutButton />
+            </div>
           </div>
 
           <div className="flex-1 overflow-auto min-h-0">{children}</div>

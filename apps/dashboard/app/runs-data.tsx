@@ -1,5 +1,5 @@
 // apps/dashboard/app/runs-data.tsx
-import { getJSON, withQuery } from "@/lib/api/server";
+import { getJSON, withQuery, authAwareFallback } from "@/lib/api/server";
 import type { TimeWindow } from "@/lib/window";
 import { RunsScreen } from "@/components/cockpit/screens/runs";
 import { RunsMobileScreen } from "@/components/cockpit/mobile/screens/runs-mobile";
@@ -16,10 +16,10 @@ export async function RunsData({
 }) {
   const now = new Date().toISOString();
   const [runs, live] = await Promise.all([
-    getJSON<RunsResponse>(withQuery("/api/v1/runs", { window, q })).catch(() =>
-      recentRunsFallback(now),
+    getJSON<RunsResponse>(withQuery("/api/v1/runs", { window, q })).catch((e) =>
+      authAwareFallback(e, () => recentRunsFallback(now)),
     ),
-    getJSON<LiveRunsResponse>("/api/v1/runs/live").catch(() => liveRunsFallback(now)),
+    getJSON<LiveRunsResponse>("/api/v1/runs/live").catch((e) => authAwareFallback(e, () => liveRunsFallback(now))),
   ]);
   // Live runs come from the registry (not searchable server-side); when a search
   // is active, filter them client-side so the merged view matches the query.
