@@ -1,5 +1,5 @@
 // apps/dashboard/app/overview-data.tsx
-import { getJSON, withQuery } from "@/lib/api/server";
+import { getJSON, withQuery, authAwareFallback } from "@/lib/api/server";
 import type { TimeWindow } from "@/lib/window";
 import {
   OverviewScreen,
@@ -29,17 +29,17 @@ export async function OverviewData({ window }: { window: TimeWindow }) {
   // Eval-health (Arthur) and live runs (registry) are not windowed here.
   const [kpis, evalHealth, recentRuns, liveRuns, workflows] = await Promise.all([
     getJSON<KpisResponse>(withQuery("/api/v1/overview/kpis", { window })).catch(
-      () => kpisFallback(now),
+      (e) => authAwareFallback(e, () => kpisFallback(now)),
     ),
     getJSON<EvalHealthResponse>("/api/v1/overview/eval-health").catch(
-      () => evalHealthFallback(),
+      (e) => authAwareFallback(e, () => evalHealthFallback()),
     ),
-    getJSON<RunsResponse>(withQuery("/api/v1/runs", { window })).catch(() =>
-      recentRunsFallback(now),
+    getJSON<RunsResponse>(withQuery("/api/v1/runs", { window })).catch((e) =>
+      authAwareFallback(e, () => recentRunsFallback(now)),
     ),
-    getJSON<LiveRunsResponse>("/api/v1/runs/live").catch(() => liveRunsFallback(now)),
+    getJSON<LiveRunsResponse>("/api/v1/runs/live").catch((e) => authAwareFallback(e, () => liveRunsFallback(now))),
     getJSON<WorkflowsResponse>(withQuery("/api/v1/workflows", { window })).catch(
-      () => workflowsFallback(now),
+      (e) => authAwareFallback(e, () => workflowsFallback(now)),
     ),
   ]);
 
