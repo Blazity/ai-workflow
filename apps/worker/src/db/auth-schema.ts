@@ -1,18 +1,31 @@
-import { boolean, index, pgTable, text, timestamp, uniqueIndex } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
+import {
+  boolean,
+  check,
+  index,
+  pgTable,
+  text,
+  timestamp,
+  uniqueIndex,
+} from "drizzle-orm/pg-core";
 
 // Better Auth core schema (user / session / account / verification). Property
 // keys MUST stay the camelCase Better Auth field names — the drizzle adapter
 // resolves columns by key. SQL column names follow the repo's snake_case style.
 
-export const user = pgTable("user", {
-  id: text("id").primaryKey(),
-  name: text("name").notNull(),
-  email: text("email").notNull().unique(),
-  emailVerified: boolean("email_verified").notNull().default(false),
-  image: text("image"),
-  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
-});
+export const user = pgTable(
+  "user",
+  {
+    id: text("id").primaryKey(),
+    name: text("name").notNull(),
+    email: text("email").notNull(),
+    emailVerified: boolean("email_verified").notNull().default(false),
+    image: text("image"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex("user_email_lower_unique").on(sql`lower(${t.email})`)],
+);
 
 export const organization = pgTable("organization", {
   id: text("id").primaryKey(),
@@ -61,6 +74,7 @@ export const member = pgTable(
     index("member_organization_id_idx").on(t.organizationId),
     index("member_user_id_idx").on(t.userId),
     uniqueIndex("member_organization_id_user_id_unique").on(t.organizationId, t.userId),
+    check("member_role_check", sql`${t.role} in ('owner', 'admin', 'member')`),
   ],
 );
 
@@ -83,6 +97,7 @@ export const invitation = pgTable(
   (t) => [
     index("invitation_organization_id_idx").on(t.organizationId),
     index("invitation_inviter_id_idx").on(t.inviterId),
+    check("invitation_role_check", sql`${t.role} in ('owner', 'admin', 'member')`),
   ],
 );
 
@@ -128,7 +143,10 @@ export const account = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [index("account_user_id_idx").on(t.userId)],
+  (t) => [
+    index("account_user_id_idx").on(t.userId),
+    uniqueIndex("account_provider_id_account_id_unique").on(t.providerId, t.accountId),
+  ],
 );
 
 export const verification = pgTable("verification", {

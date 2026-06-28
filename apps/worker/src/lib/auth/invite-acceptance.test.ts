@@ -9,7 +9,10 @@ import {
 import type { Db } from "../../db/client.js";
 import { account, invitation, member, organization, user } from "../../db/schema.js";
 import { createTestDb } from "../../db/test-db.js";
-import { acceptDashboardInvite } from "./invite-acceptance.js";
+import {
+  acceptDashboardInvite,
+  getDashboardInviteAcceptanceState,
+} from "./invite-acceptance.js";
 
 const OPTS = {
   secret: "x".repeat(32),
@@ -46,6 +49,64 @@ async function setupInvite(email = "new.user@example.com") {
 }
 
 describe("acceptDashboardInvite", () => {
+  it("describes invite acceptance mode for new, password, and SSO-only users", async () => {
+    const { db, auth } = await setupInvite();
+    await db.insert(invitation).values([
+      {
+        id: "invite_existing",
+        organizationId: "org_aiw",
+        email: "existing@example.com",
+        role: "member",
+        status: "pending",
+        expiresAt: new Date("2026-06-28T00:00:00.000Z"),
+        inviterId: "user_owner",
+      },
+      {
+        id: "invite_sso",
+        organizationId: "org_aiw",
+        email: "sso@example.com",
+        role: "member",
+        status: "pending",
+        expiresAt: new Date("2026-06-28T00:00:00.000Z"),
+        inviterId: "user_owner",
+      },
+    ]);
+    await seedAuthUser(auth, {
+      email: "existing@example.com",
+      password: "password123",
+      name: "Existing",
+    });
+    const ctx = await auth.$context;
+    const ssoUser = await ctx.internalAdapter.createUser({
+      email: "sso@example.com",
+      name: "SSO User",
+      emailVerified: true,
+    });
+    await ctx.internalAdapter.linkAccount({
+      userId: ssoUser.id,
+      providerId: DASHBOARD_SSO_PROVIDER_ID,
+      accountId: "sso-subject",
+    });
+
+    const base = {
+      organizationSlug: "ai-workflow",
+      now: new Date("2026-06-26T00:00:00.000Z"),
+    };
+
+    await expect(
+      getDashboardInviteAcceptanceState(db, auth, { ...base, inviteId: "invite_1" }),
+    ).resolves.toMatchObject({ mode: "new_user", organizationName: "AI Workflow" });
+    await expect(
+      getDashboardInviteAcceptanceState(db, auth, {
+        ...base,
+        inviteId: "invite_existing",
+      }),
+    ).resolves.toMatchObject({ mode: "existing_password" });
+    await expect(
+      getDashboardInviteAcceptanceState(db, auth, { ...base, inviteId: "invite_sso" }),
+    ).resolves.toMatchObject({ mode: "sso_only" });
+  });
+
   it("creates a password user, accepts the invite, creates membership, and returns a session token", async () => {
     const { db, auth } = await setupInvite();
 

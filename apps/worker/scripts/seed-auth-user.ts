@@ -1,7 +1,8 @@
 /**
  * Build-time admin seeder. Runs after `db:migrate` in `pnpm build`, where
- * Vercel injects the env. Idempotent (see seedAuthUser). Locally, with env
- * missing, it warn-and-skips so `pnpm build` still works without secrets.
+ * Vercel injects the env. Idempotent (see seedAuthUser). Missing required env
+ * fails closed outside local development so deployments cannot silently build
+ * without a usable dashboard owner.
  */
 import { config } from "dotenv";
 
@@ -22,15 +23,26 @@ const {
   SSO_CLIENT_SECRET,
 } = process.env;
 
-if (
-  !DATABASE_URL ||
-  !BETTER_AUTH_SECRET ||
-  !BETTER_AUTH_URL ||
-  !DASHBOARD_AUTH_EMAIL ||
-  !DASHBOARD_AUTH_PASSWORD
-) {
-  console.warn("[seed-auth-user] missing env — skipping.");
-  process.exit(0);
+const missingRequiredEnv = [
+  ["DATABASE_URL", DATABASE_URL],
+  ["BETTER_AUTH_SECRET", BETTER_AUTH_SECRET],
+  ["BETTER_AUTH_URL", BETTER_AUTH_URL],
+  ["DASHBOARD_AUTH_EMAIL", DASHBOARD_AUTH_EMAIL],
+  ["DASHBOARD_AUTH_PASSWORD", DASHBOARD_AUTH_PASSWORD],
+]
+  .filter(([, value]) => !value)
+  .map(([name]) => name);
+
+if (missingRequiredEnv.length > 0) {
+  const message = `[seed-auth-user] missing required env: ${missingRequiredEnv.join(", ")}`;
+  const allowLocalSkip =
+    process.env.AI_WORKFLOW_ALLOW_MISSING_AUTH_SEED === "1" ||
+    (!process.env.CI && !process.env.VERCEL && process.env.NODE_ENV !== "production");
+  if (allowLocalSkip) {
+    console.warn(`${message} — skipping local bootstrap.`);
+    process.exit(0);
+  }
+  throw new Error(message);
 }
 
 const ssoKeys = [SSO_ISSUER, SSO_ALLOWED_DOMAIN, SSO_CLIENT_ID, SSO_CLIENT_SECRET];
@@ -45,20 +57,20 @@ const { drizzle } = await import("drizzle-orm/neon-http");
 const schema = await import("../src/db/schema.js");
 const { bootstrapDashboardAuth, createAuth } = await import("../src/auth.js");
 
-const db = drizzle({ client: neon(DATABASE_URL), schema }) as unknown as Parameters<
+const db = drizzle({ client: neon(DATABASE_URL!), schema }) as unknown as Parameters<
   typeof createAuth
 >[0];
 
 const auth = createAuth(db, {
-  secret: BETTER_AUTH_SECRET,
-  baseURL: BETTER_AUTH_URL,
+  secret: BETTER_AUTH_SECRET!,
+  baseURL: BETTER_AUTH_URL!,
   trustedOrigins: DASHBOARD_ORIGIN ? [DASHBOARD_ORIGIN] : [],
 });
 
 const r = await bootstrapDashboardAuth(auth, db, {
   owner: {
-    email: DASHBOARD_AUTH_EMAIL,
-    password: DASHBOARD_AUTH_PASSWORD,
+    email: DASHBOARD_AUTH_EMAIL!.trim().toLowerCase(),
+    password: DASHBOARD_AUTH_PASSWORD!,
   },
   organization: {
     name: DASHBOARD_ORG_NAME ?? "AI Workflow",

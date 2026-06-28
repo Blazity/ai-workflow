@@ -37,10 +37,15 @@ export default function LoginPage() {
         return;
       }
       setPending(false);
-      setError("Your email or password is incorrect.");
+      if (res.status === 401 || res.status === 403) {
+        setError("Your email or password is incorrect.");
+        return;
+      }
+      const body = (await res.json().catch(() => null)) as { error?: string } | null;
+      setError(body?.error ?? "Sign in is temporarily unavailable.");
     } catch {
       setPending(false);
-      setError("Network error. Please try again.");
+      setError("Sign in is temporarily unavailable.");
     }
   }
 

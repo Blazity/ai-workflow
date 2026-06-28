@@ -50,6 +50,44 @@ export type AcceptDashboardInviteResult = {
   };
 };
 
+export type DashboardInviteAcceptanceState = {
+  inviteId: string;
+  email: string;
+  organizationName: string;
+  role: "member";
+  mode: "new_user" | "existing_password" | "sso_only";
+};
+
+export async function getDashboardInviteAcceptanceState(
+  db: Db,
+  auth: Auth,
+  input: {
+    organizationSlug: string;
+    inviteId: string;
+    now?: Date;
+  },
+): Promise<DashboardInviteAcceptanceState> {
+  const now = input.now ?? new Date();
+  const org = await requireOrganization(db, input.organizationSlug);
+  const invite = await requirePendingInvite(db, org.id, input.inviteId, now);
+  const ctx = await auth.$context;
+  const existing = await ctx.internalAdapter.findUserByEmail(invite.email, {
+    includeAccounts: true,
+  });
+  const hasCredential =
+    existing?.accounts.some(
+      (accountRow) => accountRow.providerId === "credential" && accountRow.password,
+    ) ?? false;
+
+  return {
+    inviteId: invite.id,
+    email: invite.email,
+    organizationName: org.name,
+    role: "member",
+    mode: existing ? (hasCredential ? "existing_password" : "sso_only") : "new_user",
+  };
+}
+
 export async function acceptDashboardInvite(
   db: Db,
   auth: Auth,
@@ -127,7 +165,7 @@ export async function acceptDashboardInvite(
 
 async function requireOrganization(db: Db, slug: string) {
   const [org] = await db
-    .select({ id: organization.id })
+    .select({ id: organization.id, name: organization.name })
     .from(organization)
     .where(eq(organization.slug, slug))
     .limit(1);

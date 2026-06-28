@@ -2,29 +2,31 @@
 "use client";
 
 import { MobileSheet } from "./mobile-sheet";
+import { cockpitNavItems } from "@/components/cockpit/chrome";
 
-const MORE = [
-  { id: "prompts", label: "Prompts",     glyph: "❡" },
-  { id: "evals",   label: "Arthur evals", glyph: "✓" },
-  { id: "cost",    label: "Cost & usage", glyph: "$" },
-  { id: "users",   label: "Users",        glyph: "U" },
-] as const;
+const MORE_IDS = new Set(["prompts", "evals", "cost", "users"]);
 
 export function MoreSheet({
   open,
   onClose,
   active,
   onNav,
+  canManageUsers,
 }: {
   open: boolean;
   onClose: () => void;
   active: string;
   onNav: (id: string) => void;
+  canManageUsers: boolean;
 }) {
+  const more = cockpitNavItems({ canManageUsers }).filter((item) =>
+    MORE_IDS.has(item.id),
+  );
+
   return (
     <MobileSheet open={open} onClose={onClose} title="More" heightClass="max-h-[60vh]">
       <div className="flex flex-col py-1">
-        {MORE.map((m) => {
+        {more.map((m) => {
           const on = active === m.id;
           return (
             <button
