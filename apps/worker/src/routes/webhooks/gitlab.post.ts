@@ -24,7 +24,13 @@ export default defineEventHandler(async (event) => {
     return { status: "ignored", reason: "not_merge_request_event" };
   }
 
-  const body = rawBody ? JSON.parse(rawBody) : {};
+  let body;
+  try {
+    body = rawBody ? JSON.parse(rawBody) : {};
+  } catch {
+    return { status: "ignored", reason: "malformed_payload" };
+  }
+
   if (!projectMatchesConfiguredId(body?.project, env.GITLAB_PROJECT_ID!)) {
     logger.info(
       { project: body?.project, expected: env.GITLAB_PROJECT_ID },
