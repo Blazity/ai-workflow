@@ -357,11 +357,11 @@ If you followed [`docs/GITHUB-APP-SETUP.md`](./docs/GITHUB-APP-SETUP.md) in step
    - Subscribe to events → **Pull request** (checked)
 3. **Re-accept on every installed repo** if you changed permissions or events after the initial install. A repo admin opens `https://github.com/organizations/<ORG>/settings/installations/<INSTALLATION_ID>` and clicks "Review request" → "Accept". Until accepted, the new permissions and events are inert and the gate webhook stays silent.
 4. **Confirm `GITHUB_WEBHOOK_SECRET`** is set in Vercel (step 5) and matches the value pasted into the App's webhook config. A mismatch returns 401 on every delivery — visible in the App's **Advanced → Recent Deliveries** tab.
-5. **Tune `post-pr-gate.yaml`** at the repo root if the defaults don't fit. The default config runs on `blazebot/*` branches only, skips drafts, and runs a single `pr-title-format` step (Conventional Commits) as advisory (`onFailure: continue`). Steps are defined in `apps/worker/src/post-pr-gate/steps/`.
+5. **Tune `post-pr-gate.yaml`** at the repo root if the defaults don't fit. The default config runs on `blazebot/*` branches only, skips drafts, and runs a single `code-hygiene` step as advisory (`onFailure: continue`). Steps are defined in `apps/worker/src/post-pr-gate/steps/`.
 
-For GitLab.com, configure the project webhook instead: see [`docs/GITLAB-SETUP.md`](./docs/GITLAB-SETUP.md). The webhook URL is `https://<your-vercel-domain>/webhooks/gitlab`, the secret token must match `GITLAB_WEBHOOK_SECRET`, and only **Merge request events** are required.
+For GitLab.com, configure the project webhook instead: see [`docs/GITLAB-SETUP.md`](./docs/GITLAB-SETUP.md). The webhook URL is `https://<your-vercel-domain>/webhooks/gitlab`, the **Secret token** field must match `GITLAB_WEBHOOK_SECRET`, and only **Merge request events** are required. Do not use GitLab's newer **Signing token** flow until the worker implements signing-token verification.
 
-For GitHub, verify by opening a manual PR titled `feat: smoke check` against the target repo (any `blazebot/*` branch — or set `botPrsOnly: false` in `post-pr-gate.yaml` to test from any branch). Within a few seconds you should see a `blazebot / pr-title-format` check run appear on the PR's head SHA and resolve to `success`.
+For GitHub, verify by opening a manual PR titled `feat: smoke check` against the target repo (any `blazebot/*` branch — or set `botPrsOnly: false` in `post-pr-gate.yaml` to test from any branch). Within a few seconds you should see a `blazebot / code-hygiene` check run appear on the PR's head SHA and resolve.
 
 For GitLab.com, verify by opening or updating a `blazebot/*` merge request and checking that the MR head commit shows a `blazebot / ...` commit status. See the smoke checklist in [`docs/GITLAB-SETUP.md`](./docs/GITLAB-SETUP.md).
 
