@@ -3,7 +3,9 @@ import type { Octokit } from "@octokit/rest";
 import { buildOctokit, type GitHubAppAuth } from "../../lib/github-auth.js";
 import type {
   VCSAdapter,
-  CheckRunCapableVCS,
+  CheckRunUpdate,
+  GateStatusCapableVCS,
+  GateStatusRef,
   PRFile,
   PRFilesCapableVCS,
   PullRequest,
@@ -18,7 +20,7 @@ export interface GitHubConfig {
   baseBranch: string;
 }
 
-export class GitHubAdapter implements VCSAdapter, CheckRunCapableVCS, PRFilesCapableVCS {
+export class GitHubAdapter implements VCSAdapter, GateStatusCapableVCS, PRFilesCapableVCS {
   private octokit: Octokit;
 
   constructor(private config: GitHubConfig) {
@@ -305,7 +307,7 @@ export class GitHubAdapter implements VCSAdapter, CheckRunCapableVCS, PRFilesCap
     }));
   }
 
-  async createCheckRun(name: string, headSha: string): Promise<number> {
+  async createGateStatus(name: string, headSha: string): Promise<GateStatusRef> {
     const { data } = await this.octokit.checks.create({
       ...this.ownerRepo,
       name,
@@ -313,16 +315,17 @@ export class GitHubAdapter implements VCSAdapter, CheckRunCapableVCS, PRFilesCap
       status: "in_progress",
       started_at: new Date().toISOString(),
     });
-    return data.id;
+    return { provider: "github", id: data.id };
   }
 
-  async updateCheckRun(
-    id: number,
-    update: import("./types.js").CheckRunUpdate,
-  ): Promise<void> {
+  async updateGateStatus(ref: GateStatusRef, update: CheckRunUpdate): Promise<void> {
+    if (ref.provider !== "github") {
+      throw new Error(`GitHubAdapter cannot update ${ref.provider} gate status`);
+    }
+
     const baseParams = {
       ...this.ownerRepo,
-      check_run_id: id,
+      check_run_id: ref.id,
       status: update.status,
       ...(update.conclusion ? { conclusion: update.conclusion } : {}),
       ...(update.status === "completed"
@@ -365,7 +368,7 @@ export class GitHubAdapter implements VCSAdapter, CheckRunCapableVCS, PRFilesCap
         // Only the first batch flips status / conclusion / completed_at.
         ...(isFirst
           ? baseParams
-          : { check_run_id: id, status: update.status }),
+          : { check_run_id: ref.id, status: update.status }),
         output: {
           ...outputBase,
           annotations: batch.map(mapAnnotation),

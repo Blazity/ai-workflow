@@ -7,7 +7,7 @@ import { getDb } from "../../db/client.js";
 import { postPrGateWorkflow } from "../../workflows/post-pr-gate.js";
 import { logger } from "../../lib/logger.js";
 import { createAdapters } from "../../lib/adapters.js";
-import { hasCheckRunCapability } from "../../adapters/vcs/types.js";
+import { hasGateStatusCapability } from "../../adapters/vcs/types.js";
 
 const ALLOWED_ACTIONS = new Set(["opened", "synchronize", "reopened"]);
 
@@ -84,14 +84,14 @@ export default defineEventHandler(async (event) => {
       await cancelPreviousRun(previous, ownerRepo);
     }
 
-    // Write the pointer BEFORE start(). The workflow's appendCheckRunIdsForSha
+    // Write the pointer BEFORE start(). The workflow's appendGateStatusRefsForSha
     // is guarded by headSha (not runId), so it works regardless of whether
     // start() / claimRun / updateRunIdIfHeadSha have completed yet. runId is
     // filled in below once start() returns.
     await gateStore.setCurrent(ownerRepo, prNumber, {
       runId: "",
       headSha,
-      checkRunIds: [],
+      gateStatusRefs: [],
     });
 
     const handle = await start(postPrGateWorkflow, [
@@ -120,7 +120,7 @@ export default defineEventHandler(async (event) => {
       // of truth.
       return { status: "ignored", reason: "already_claimed", runId: claimed };
     }
-    // Atomic CAS by headSha — does not stomp checkRunIds that the workflow
+    // Atomic CAS by headSha — does not stomp gateStatusRefs that the workflow
     // may have already appended.
     await gateStore.updateRunIdIfHeadSha(ownerRepo, prNumber, headSha, handle.runId);
 
@@ -148,20 +148,20 @@ async function cancelPreviousRun(
     );
   }
 
-  if (previous.checkRunIds.length === 0) return;
+  if (previous.gateStatusRefs.length === 0) return;
 
   const adapters = createAdapters();
-  if (!hasCheckRunCapability(adapters.vcs)) return;
+  if (!hasGateStatusCapability(adapters.vcs)) return;
 
-  for (const id of previous.checkRunIds) {
-    await adapters.vcs.updateCheckRun(id, {
+  for (const ref of previous.gateStatusRefs) {
+    await adapters.vcs.updateGateStatus(ref, {
       status: "completed",
       conclusion: "cancelled",
       summary: "Cancelled - newer commit replaces this gate run.",
     }).catch((err) => {
       logger.warn(
-        { ownerRepo, checkRunId: id, err: (err as Error).message },
-        "post_pr_gate_cancel_check_failed",
+        { ownerRepo, gateStatusRef: ref, err: (err as Error).message },
+        "post_pr_gate_cancel_status_failed",
       );
     });
   }
