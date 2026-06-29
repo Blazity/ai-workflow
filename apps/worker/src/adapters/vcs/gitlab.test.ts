@@ -520,6 +520,78 @@ describe("GitLabAdapter", () => {
         expect.objectContaining({ method: "POST" }),
       );
     });
+
+    it("retries repeated transient 409 responses before success", async () => {
+      mockFetch
+        .mockResolvedValueOnce(
+          gitLabResponse(
+            { message: "update already in progress" },
+            { status: 409, statusText: "Conflict" },
+          ),
+        )
+        .mockResolvedValueOnce(
+          gitLabResponse(
+            { message: "still updating" },
+            { status: 409, statusText: "Conflict" },
+          ),
+        )
+        .mockResolvedValueOnce(gitLabResponse({}, { status: 201 }));
+
+      const adapter = glAdapter();
+      await adapter.updateGateStatus(
+        {
+          provider: "gitlab",
+          name: "blazebot / code-hygiene",
+          headSha: "sha1",
+        },
+        { status: "completed", conclusion: "success" },
+      );
+
+      expect(mockFetch).toHaveBeenCalledTimes(3);
+    });
+
+    it("throws the final GitLab REST error after exhausting 409 retries", async () => {
+      mockFetch
+        .mockResolvedValueOnce(
+          gitLabResponse(
+            { message: "first conflict" },
+            { status: 409, statusText: "Conflict" },
+          ),
+        )
+        .mockResolvedValueOnce(
+          gitLabResponse(
+            { message: "second conflict" },
+            { status: 409, statusText: "Conflict" },
+          ),
+        )
+        .mockResolvedValueOnce(
+          gitLabResponse(
+            { message: "final conflict" },
+            { status: 409, statusText: "Conflict" },
+          ),
+        )
+        .mockResolvedValueOnce(
+          gitLabResponse(
+            { message: "exhausted conflict" },
+            { status: 409, statusText: "Conflict" },
+          ),
+        );
+
+      const adapter = glAdapter();
+      await expect(
+        adapter.updateGateStatus(
+          {
+            provider: "gitlab",
+            name: "blazebot / code-hygiene",
+            headSha: "sha1",
+          },
+          { status: "completed", conclusion: "success" },
+        ),
+      ).rejects.toThrow(
+        'GitLab REST POST /projects/blazity%2Fdemo-app/statuses/sha1 failed with 409 Conflict: {"message":"exhausted conflict"}',
+      );
+      expect(mockFetch).toHaveBeenCalledTimes(4);
+    });
   });
 
   describe("listPRFiles", () => {
@@ -639,6 +711,71 @@ describe("GitLabAdapter", () => {
       const files = await adapter.listPRFiles(42);
 
       expect(files.map((file) => file.path)).toEqual(["src/one.ts", "src/two.ts"]);
+      expect(mockFetch).toHaveBeenNthCalledWith(
+        1,
+        "https://gitlab.com/api/v4/projects/blazity%2Fdemo-app/merge_requests/42/diffs?page=1&per_page=100",
+        expect.objectContaining({ method: "GET" }),
+      );
+      expect(mockFetch).toHaveBeenNthCalledWith(
+        2,
+        "https://gitlab.com/api/v4/projects/blazity%2Fdemo-app/merge_requests/42/diffs?page=2&per_page=100",
+        expect.objectContaining({ method: "GET" }),
+      );
+    });
+
+    it("follows GitLab Link pagination when x-next-page is absent", async () => {
+      mockFetch
+        .mockResolvedValueOnce(
+          gitLabResponse(
+            [
+              {
+                old_path: "src/one.ts",
+                new_path: "src/one.ts",
+                diff: "@@ one",
+                new_file: false,
+                deleted_file: false,
+                renamed_file: false,
+              },
+            ],
+            {
+              headers: {
+                Link: '<https://gitlab.com/api/v4/projects/blazity%2Fdemo-app/merge_requests/42/diffs?page=2&per_page=100>; rel="next"',
+              },
+            },
+          ),
+        )
+        .mockResolvedValueOnce(
+          gitLabResponse([
+            {
+              old_path: "src/two.ts",
+              new_path: "src/two.ts",
+              diff: "@@ two",
+              new_file: false,
+              deleted_file: false,
+              renamed_file: false,
+            },
+          ]),
+        );
+
+      const adapter = glAdapter();
+      const files = await adapter.listPRFiles(42);
+
+      expect(files).toEqual([
+        {
+          path: "src/one.ts",
+          changeType: "modified",
+          patch: "@@ one",
+          additions: 0,
+          deletions: 0,
+        },
+        {
+          path: "src/two.ts",
+          changeType: "modified",
+          patch: "@@ two",
+          additions: 0,
+          deletions: 0,
+        },
+      ]);
       expect(mockFetch).toHaveBeenNthCalledWith(
         1,
         "https://gitlab.com/api/v4/projects/blazity%2Fdemo-app/merge_requests/42/diffs?page=1&per_page=100",
