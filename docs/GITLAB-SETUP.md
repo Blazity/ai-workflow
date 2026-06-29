@@ -22,7 +22,12 @@ Prefer a Project Access Token when your GitLab.com plan and project settings all
 
 Do not use a human day-to-day token for production automation.
 
-Grant the token the `api` scope. ai-workflow needs GitLab REST API access for branches, merge requests, comments/discussions, commit statuses, project metadata, and REST API writes. Repository scopes such as `write_repository` are not a replacement for `api`; `write_repository` alone is not enough for REST API calls.
+Grant the token both required scopes:
+
+- `api` for GitLab REST API writes: branches, merge requests, comments/discussions, commit statuses, and project metadata.
+- `write_repository` for Git-over-HTTPS clone and push from the sandbox.
+
+`write_repository` alone is not enough because ai-workflow still needs REST API calls authenticated with `api`.
 
 Save the token as `GITLAB_TOKEN`.
 
@@ -30,9 +35,9 @@ Save the token as `GITLAB_TOKEN`.
 
 The token identity must have enough project access to create branches, open merge requests, push commits, and create commit statuses.
 
-Use the Maintainer role for the simplest setup. Developer can work only if the project's branch protection rules allow that identity to push `blazebot/*` branches and open merge requests.
+Use the Maintainer role for the simplest setup. Developer can work only if the project's branch protection rules allow that identity to push and force-push `blazebot/*` branches and open merge requests.
 
-If you protect branch patterns, make sure the token identity is allowed to push `blazebot/*`. The worker force-pushes those bot branches from the sandbox after each run.
+Prefer leaving `blazebot/*` branches unprotected. If you protect that branch pattern, make sure the token identity is allowed to push and allowed to force-push `blazebot/*`. The worker always updates bot branches with `git push --force` from the sandbox after each run.
 
 ## Find the project ID
 
