@@ -4,6 +4,7 @@ import { getDb } from "../db/client.js";
 import { createAdapters } from "./adapters.js";
 import { logger } from "./logger.js";
 import { GateStore, type CurrentGateRun } from "../post-pr-gate/gate-store.js";
+import { loadPostPrGateConfig } from "../post-pr-gate/config.js";
 import {
   postPrGateWorkflow,
   type PostPrGateWorkflowInput,
@@ -19,6 +20,10 @@ export async function dispatchPostPrGateWebhook({
   workflowInput,
 }: DispatchPostPrGateWebhookInput) {
   const { ownerRepo, prNumber, headSha } = workflowInput;
+  const config = loadPostPrGateConfig();
+  const eligibility = checkPostPrGateEligibility(workflowInput, config);
+  if (eligibility) return eligibility;
+
   const gateStore = new GateStore(getDb());
 
   const lockToken = await gateStore.acquireLock(ownerRepo, prNumber);
@@ -84,6 +89,26 @@ export async function dispatchPostPrGateWebhook({
   } finally {
     await gateStore.releaseLock(ownerRepo, prNumber, lockToken);
   }
+}
+
+function checkPostPrGateEligibility(
+  input: PostPrGateWorkflowInput,
+  config: ReturnType<typeof loadPostPrGateConfig>,
+): { status: "ignored"; reason: "not_bot_branch" | "draft" | "base_branch" } | null {
+  if (config.postPrGate.runOn.botPrsOnly && !input.headRef.startsWith("blazebot/")) {
+    logger.info({ headRef: input.headRef }, "post_pr_gate_skipped_not_bot_branch");
+    return { status: "ignored", reason: "not_bot_branch" };
+  }
+  if (!config.postPrGate.runOn.draftPrs && input.isDraft) {
+    logger.info({ pr: input.prNumber }, "post_pr_gate_skipped_draft");
+    return { status: "ignored", reason: "draft" };
+  }
+  const baseFilter = config.postPrGate.runOn.baseBranches;
+  if (baseFilter.length > 0 && !baseFilter.includes(input.baseRef)) {
+    logger.info({ baseRef: input.baseRef }, "post_pr_gate_skipped_base_branch");
+    return { status: "ignored", reason: "base_branch" };
+  }
+  return null;
 }
 
 async function cancelPreviousRun(
