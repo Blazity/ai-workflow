@@ -56,6 +56,7 @@ export type CheckRunConclusion =
   | "timed_out"
   | "action_required";
 
+// Shared by GitHub Check Runs and GitLab commit statuses.
 export interface CheckRunUpdate {
   status: "in_progress" | "completed";
   conclusion?: CheckRunConclusion;
@@ -64,18 +65,41 @@ export interface CheckRunUpdate {
   annotations?: CheckRunAnnotation[];
 }
 
+export type GateStatusRef =
+  | { provider: "github"; id: number }
+  | { provider: "gitlab"; name: string; headSha: string };
+
 /**
  * Capability interface — *not* extended onto VCSAdapter, because GitLab
- * has no equivalent. Callers check `hasCheckRunCapability(adapter)` before
+ * providers expose this differently. Callers check
+ * `hasGateStatusCapability(adapter)` before
  * invoking these methods. Adding methods to VCSAdapter directly would
- * force GitLab to throw at runtime; this surface keeps the failure to
- * detect-time, not invoke-time.
+ * force unsupported providers to throw at runtime; this surface keeps the
+ * failure to detect-time, not invoke-time.
  */
+export interface GateStatusCapableVCS {
+  createGateStatus(name: string, headSha: string): Promise<GateStatusRef>;
+  updateGateStatus(ref: GateStatusRef, update: CheckRunUpdate): Promise<void>;
+}
+
+export function hasGateStatusCapability(
+  adapter: VCSAdapter,
+): adapter is VCSAdapter & GateStatusCapableVCS {
+  return (
+    typeof (adapter as Partial<GateStatusCapableVCS>).createGateStatus ===
+      "function" &&
+    typeof (adapter as Partial<GateStatusCapableVCS>).updateGateStatus ===
+      "function"
+  );
+}
+
+/** @deprecated Use GateStatusCapableVCS after Task 3 migrates call sites. */
 export interface CheckRunCapableVCS {
   createCheckRun(name: string, headSha: string): Promise<number>;
   updateCheckRun(id: number, update: CheckRunUpdate): Promise<void>;
 }
 
+/** @deprecated Use hasGateStatusCapability after Task 3 migrates call sites. */
 export function hasCheckRunCapability(
   adapter: VCSAdapter,
 ): adapter is VCSAdapter & CheckRunCapableVCS {

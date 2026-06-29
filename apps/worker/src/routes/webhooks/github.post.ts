@@ -18,7 +18,7 @@ export default defineEventHandler(async (event) => {
     verifyGitHubWebhookSignature(
       rawBody,
       getHeader(event, "x-hub-signature-256"),
-      env.GITHUB_WEBHOOK_SECRET,
+      env.GITHUB_WEBHOOK_SECRET!,
     );
   } catch (err) {
     throw createError({ statusCode: 401, statusMessage: (err as Error).message });

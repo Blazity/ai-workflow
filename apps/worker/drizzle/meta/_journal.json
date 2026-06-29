@@ -50,6 +50,13 @@
       "when": 1782492301089,
       "tag": "0006_orange_dreaming_celestial",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1782751918069,
+      "tag": "0007_gate_status_refs",
+      "breakpoints": true
     }
   ]
 }

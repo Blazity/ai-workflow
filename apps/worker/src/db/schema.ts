@@ -11,6 +11,7 @@ import {
   text,
   timestamp,
 } from "drizzle-orm/pg-core";
+import type { GateStatusRef } from "../adapters/vcs/types.js";
 
 /**
  * Run registry — replaces the blazebot:active-runs / blazebot:sandboxes /
@@ -77,7 +78,8 @@ export const gateDedupe = pgTable(
 
 /**
  * Replaces gate:current:{repo}#{pr} (JSON pointer, EX 14d).
- * bigint[]: GitHub check-run IDs exceed int4 range.
+ * check_run_ids stays for migration compatibility. New gate code stores
+ * provider-neutral references in gate_status_refs.
  */
 export const gateCurrent = pgTable(
   "gate_current",
@@ -90,6 +92,10 @@ export const gateCurrent = pgTable(
       .array()
       .notNull()
       .default(sql`'{}'::bigint[]`),
+    gateStatusRefs: jsonb("gate_status_refs")
+      .$type<GateStatusRef[]>()
+      .notNull()
+      .default(sql`'[]'::jsonb`),
     expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
   },
   (t) => [primaryKey({ columns: [t.repo, t.pr] })],
