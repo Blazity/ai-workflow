@@ -160,7 +160,10 @@ describe("env", () => {
     expect(env.GITLAB_WEBHOOK_SECRET).toBe("gitlab-webhook-secret");
     const vcs = getVcsConfig();
     expect(vcs.kind).toBe("gitlab");
+    expect(vcs.token).toBe("glpat-test");
     expect(vcs.repoPath).toBe("group/repo");
+    expect(vcs.baseBranch).toBe("develop");
+    expect(vcs.host).toBe("https://gitlab.com");
   });
 
   it("honors GITLAB_HOST for self-hosted instances", async () => {
