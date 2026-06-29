@@ -124,8 +124,8 @@ ai-workflow authenticates to GitHub via a **GitHub App**. The App scopes the bot
 
 For GitLab.com single-project setup, see [`docs/GITLAB-SETUP.md`](./docs/GITLAB-SETUP.md). The short version:
 
-1. Create a Project Access Token when available, or a dedicated bot/service-account PAT if project tokens are unavailable. Grant the `api` scope → `GITLAB_TOKEN`.
-2. Give the token identity enough project access to create branches, open MRs, push commits, and create commit statuses. Maintainer is simplest; Developer works only if branch protection allows pushing `blazebot/*`.
+1. Create a Project Access Token when available, or a dedicated bot/service-account PAT if project tokens are unavailable. Grant `api` and `write_repository` scopes → `GITLAB_TOKEN`.
+2. Give the token identity enough project access to create branches, open MRs, push commits, and create commit statuses. Maintainer is simplest. Prefer leaving `blazebot/*` unprotected; if protected, the token identity must be allowed to push and force-push that pattern.
 3. Set the namespace/project path, for example `my-group/my-repo` → `GITLAB_PROJECT_ID`. Numeric project IDs are not supported because sandbox clone/push needs a path.
 4. Generate a random webhook secret → `GITLAB_WEBHOOK_SECRET`.
 5. Note the base branch (usually `main`) → `GITLAB_BASE_BRANCH`.
@@ -259,7 +259,7 @@ vercel env add JIRA_API_TOKEN production
 | `VCS_KIND`                                                                                         | `github` or `gitlab`                                   |
 | `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY`, `GITHUB_INSTALLATION_ID`, `GITHUB_OWNER`, `GITHUB_REPO` | If `VCS_KIND=github` (GitHub App auth)                 |
 | `GITHUB_WEBHOOK_SECRET`                                                                            | If `VCS_KIND=github` — signs `pull_request` webhook deliveries for the post-PR gate. Required in **every** environment (Production, Preview, Development) because the webhook fires on preview deployments too. Generate: `openssl rand -hex 32`. |
-| `GITLAB_TOKEN`, `GITLAB_PROJECT_ID`, `GITLAB_WEBHOOK_SECRET`                                       | If `VCS_KIND=gitlab` — GitLab.com API token, namespace/project path, and merge request webhook secret. Generate: `openssl rand -hex 32`. |
+| `GITLAB_TOKEN`, `GITLAB_PROJECT_ID`, `GITLAB_WEBHOOK_SECRET`                                       | If `VCS_KIND=gitlab` — GitLab.com token with `api` + `write_repository`, namespace/project path, and merge request webhook secret. Generate: `openssl rand -hex 32`. |
 | `ANTHROPIC_API_KEY`                                                                                | If `AGENT_KIND=claude` (default)                       |
 | `CODEX_API_KEY` (or `CODEX_CHATGPT_OAUTH_TOKEN`)                                                   | If `AGENT_KIND=codex`                                  |
 | `DATABASE_URL`                                                                                     | Auto-injected by Neon integration                      |
