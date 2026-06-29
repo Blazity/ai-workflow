@@ -47,6 +47,12 @@ function githubRefsFromCheckRunIds(ids: number[]): GateStatusRef[] {
   return ids.map((id) => ({ provider: "github", id }));
 }
 
+function validateCheckRunIds(ids: number[]): void {
+  if (!ids.every((id) => Number.isSafeInteger(id))) {
+    throw new Error(`non-integer check-run ids: ${ids.join(",")}`);
+  }
+}
+
 function legacyCheckRunIdsFromRefs(refs: GateStatusRef[]): number[] {
   return refs
     .filter(
@@ -56,11 +62,47 @@ function legacyCheckRunIdsFromRefs(refs: GateStatusRef[]): number[] {
     .map((ref) => ref.id);
 }
 
+function sameCheckRunIds(left: number[], right: number[]): boolean {
+  return (
+    left.length === right.length &&
+    left.every((id, index) => id === right[index])
+  );
+}
+
+function normalizeCurrentGateRun(value: CurrentGateRunInput): {
+  gateStatusRefs: GateStatusRef[];
+  checkRunIds: number[];
+} {
+  const gateStatusRefs =
+    value.gateStatusRefs ?? githubRefsFromCheckRunIds(value.checkRunIds ?? []);
+  const checkRunIds = value.checkRunIds ?? legacyCheckRunIdsFromRefs(gateStatusRefs);
+  validateCheckRunIds(checkRunIds);
+
+  if (
+    value.gateStatusRefs &&
+    value.checkRunIds &&
+    !sameCheckRunIds(legacyCheckRunIdsFromRefs(value.gateStatusRefs), value.checkRunIds)
+  ) {
+    throw new Error("mismatched gate status refs and check-run ids");
+  }
+
+  return { gateStatusRefs, checkRunIds };
+}
+
 function withLegacyCheckRunIds(
-  value: Omit<CurrentGateRun, "checkRunIds">,
+  value: Omit<CurrentGateRun, "checkRunIds"> & { checkRunIds?: number[] },
 ): CurrentGateRun {
-  return Object.defineProperty(value, "checkRunIds", {
-    value: legacyCheckRunIdsFromRefs(value.gateStatusRefs),
+  const refs =
+    value.gateStatusRefs.length > 0 || !value.checkRunIds
+      ? value.gateStatusRefs
+      : githubRefsFromCheckRunIds(value.checkRunIds);
+  const current = {
+    runId: value.runId,
+    headSha: value.headSha,
+    gateStatusRefs: refs,
+  };
+  return Object.defineProperty(current, "checkRunIds", {
+    value: value.checkRunIds ?? legacyCheckRunIdsFromRefs(refs),
     enumerable: false,
   }) as CurrentGateRun;
 }
@@ -162,6 +204,7 @@ export class GateStore {
         runId: gateCurrent.runId,
         headSha: gateCurrent.headSha,
         gateStatusRefs: gateCurrent.gateStatusRefs,
+        checkRunIds: gateCurrent.checkRunIds,
       })
       .from(gateCurrent)
       .where(
@@ -179,8 +222,7 @@ export class GateStore {
     pr: number,
     value: CurrentGateRunInput,
   ): Promise<void> {
-    const gateStatusRefs =
-      value.gateStatusRefs ?? githubRefsFromCheckRunIds(value.checkRunIds ?? []);
+    const { gateStatusRefs, checkRunIds } = normalizeCurrentGateRun(value);
     await this.db
       .insert(gateCurrent)
       .values({
@@ -188,6 +230,7 @@ export class GateStore {
         pr,
         runId: value.runId,
         headSha: value.headSha,
+        checkRunIds,
         gateStatusRefs,
         expiresAt: TTL,
       })
@@ -196,6 +239,7 @@ export class GateStore {
         set: {
           runId: value.runId,
           headSha: value.headSha,
+          checkRunIds,
           gateStatusRefs,
           expiresAt: TTL,
         },
@@ -216,13 +260,24 @@ export class GateStore {
     refs: GateStatusRef[],
   ): Promise<boolean> {
     if (refs.length === 0) return true;
+    const checkRunIds = legacyCheckRunIdsFromRefs(refs);
+    validateCheckRunIds(checkRunIds);
     const literal = sql.raw(
       `'${JSON.stringify(refs).replaceAll("'", "''")}'::jsonb`,
     );
+    const checkRunIdsUpdate =
+      checkRunIds.length > 0
+        ? {
+            checkRunIds: sql`${gateCurrent.checkRunIds} || ${sql.raw(
+              `'{${checkRunIds.join(",")}}'::bigint[]`,
+            )}`,
+          }
+        : {};
     const rows = await this.db
       .update(gateCurrent)
       .set({
         gateStatusRefs: sql`${gateCurrent.gateStatusRefs} || ${literal}`,
+        ...checkRunIdsUpdate,
       })
       .where(
         and(
@@ -243,9 +298,7 @@ export class GateStore {
     expectedHeadSha: string,
     ids: number[],
   ): Promise<boolean> {
-    if (!ids.every((id) => Number.isSafeInteger(id))) {
-      throw new Error(`non-integer check-run ids: ${ids.join(",")}`);
-    }
+    validateCheckRunIds(ids);
     return this.appendGateStatusRefsForSha(
       repo,
       pr,

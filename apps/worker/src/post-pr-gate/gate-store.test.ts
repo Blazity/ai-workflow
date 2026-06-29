@@ -101,9 +101,62 @@ describe("current pointer", () => {
     gateStatusRefs: [] as Array<{ provider: "github"; id: number }>,
   };
 
+  async function getRawCurrent(repo: string, pr: number) {
+    const result = await db.execute(sql`
+      SELECT
+        gate_status_refs AS "gateStatusRefs",
+        check_run_ids AS "checkRunIds"
+      FROM gate_current
+      WHERE repo = ${repo} AND pr = ${pr}
+    `);
+    return result.rows[0] as {
+      gateStatusRefs: unknown;
+      checkRunIds: unknown;
+    };
+  }
+
   it("setCurrent/getCurrent round-trips", async () => {
     await store.setCurrent("o/r", 1, current);
     expect(await store.getCurrent("o/r", 1)).toEqual(current);
+  });
+
+  it("setCurrent with gateStatusRefs keeps legacy check_run_ids in sync", async () => {
+    await store.setCurrent("o/r", 1, {
+      runId: "run_a",
+      headSha: "sha1",
+      gateStatusRefs: [{ provider: "github", id: 7 }],
+    });
+
+    expect(await getRawCurrent("o/r", 1)).toEqual({
+      gateStatusRefs: [{ provider: "github", id: 7 }],
+      checkRunIds: [7],
+    });
+  });
+
+  it("setCurrent with legacy checkRunIds keeps gate_status_refs in sync", async () => {
+    await store.setCurrent("o/r", 1, {
+      runId: "run_a",
+      headSha: "sha1",
+      checkRunIds: [42],
+    });
+
+    expect(await getRawCurrent("o/r", 1)).toEqual({
+      gateStatusRefs: [{ provider: "github", id: 42 }],
+      checkRunIds: [42],
+    });
+  });
+
+  it("setCurrent rejects mismatched gateStatusRefs and checkRunIds", async () => {
+    await expect(
+      store.setCurrent("o/r", 1, {
+        runId: "run_a",
+        headSha: "sha1",
+        gateStatusRefs: [{ provider: "github", id: 1 }],
+        checkRunIds: [2],
+      }),
+    ).rejects.toThrow("mismatched gate status refs and check-run ids");
+
+    expect(await store.getCurrent("o/r", 1)).toBeNull();
   });
 
   it("getCurrent returns null when absent or expired", async () => {
@@ -145,6 +198,23 @@ describe("current pointer", () => {
       { provider: "github", id: 30000000001 },
       { provider: "gitlab", name: "blazebot / code-hygiene", headSha: "sha1" },
     ]);
+    expect(await getRawCurrent("o/r", 1)).toEqual({
+      gateStatusRefs: [
+        { provider: "github", id: 30000000001 },
+        { provider: "gitlab", name: "blazebot / code-hygiene", headSha: "sha1" },
+      ],
+      checkRunIds: [30000000001],
+    });
+  });
+
+  it("appendCheckRunIdsForSha keeps both columns in sync", async () => {
+    await store.setCurrent("o/r", 1, current);
+
+    expect(await store.appendCheckRunIdsForSha("o/r", 1, "sha1", [99])).toBe(true);
+    expect(await getRawCurrent("o/r", 1)).toEqual({
+      gateStatusRefs: [{ provider: "github", id: 99 }],
+      checkRunIds: [99],
+    });
   });
 
   it("appendGateStatusRefsForSha returns false on SHA mismatch or missing pointer", async () => {
