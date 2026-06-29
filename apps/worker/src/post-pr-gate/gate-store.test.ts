@@ -95,7 +95,11 @@ describe("claimRun (dedupe)", () => {
 });
 
 describe("current pointer", () => {
-  const current = { runId: "run_a", headSha: "sha1", checkRunIds: [] as number[] };
+  const current = {
+    runId: "run_a",
+    headSha: "sha1",
+    gateStatusRefs: [] as Array<{ provider: "github"; id: number }>,
+  };
 
   it("setCurrent/getCurrent round-trips", async () => {
     await store.setCurrent("o/r", 1, current);
@@ -113,41 +117,65 @@ describe("current pointer", () => {
 
   it("setCurrent overwrites on force-push (same PR, new SHA)", async () => {
     await store.setCurrent("o/r", 1, current);
-    await store.setCurrent("o/r", 1, { runId: "run_b", headSha: "sha2", checkRunIds: [7] });
+    await store.setCurrent("o/r", 1, {
+      runId: "run_b",
+      headSha: "sha2",
+      gateStatusRefs: [{ provider: "github", id: 7 }],
+    });
     expect(await store.getCurrent("o/r", 1)).toEqual({
       runId: "run_b",
       headSha: "sha2",
-      checkRunIds: [7],
+      gateStatusRefs: [{ provider: "github", id: 7 }],
     });
   });
 
-  it("appendCheckRunIdsForSha appends when SHA matches, accumulating", async () => {
+  it("appendGateStatusRefsForSha appends provider refs when SHA matches", async () => {
     await store.setCurrent("o/r", 1, current);
-    // GitHub check-run IDs exceed int4 — proves bigint[].
-    expect(await store.appendCheckRunIdsForSha("o/r", 1, "sha1", [30000000001])).toBe(true);
-    expect(await store.appendCheckRunIdsForSha("o/r", 1, "sha1", [30000000002, 5])).toBe(true);
-    expect((await store.getCurrent("o/r", 1))!.checkRunIds).toEqual([
-      30000000001, 30000000002, 5,
+    expect(
+      await store.appendGateStatusRefsForSha("o/r", 1, "sha1", [
+        { provider: "github", id: 30000000001 },
+      ]),
+    ).toBe(true);
+    expect(
+      await store.appendGateStatusRefsForSha("o/r", 1, "sha1", [
+        { provider: "gitlab", name: "blazebot / code-hygiene", headSha: "sha1" },
+      ]),
+    ).toBe(true);
+    expect((await store.getCurrent("o/r", 1))!.gateStatusRefs).toEqual([
+      { provider: "github", id: 30000000001 },
+      { provider: "gitlab", name: "blazebot / code-hygiene", headSha: "sha1" },
     ]);
   });
 
-  it("appendCheckRunIdsForSha returns false on SHA mismatch or missing pointer", async () => {
-    expect(await store.appendCheckRunIdsForSha("o/r", 1, "sha1", [1])).toBe(false);
+  it("appendGateStatusRefsForSha returns false on SHA mismatch or missing pointer", async () => {
+    expect(
+      await store.appendGateStatusRefsForSha("o/r", 1, "sha1", [
+        { provider: "github", id: 1 },
+      ]),
+    ).toBe(false);
     await store.setCurrent("o/r", 1, current);
-    expect(await store.appendCheckRunIdsForSha("o/r", 1, "superseded", [1])).toBe(false);
-    expect((await store.getCurrent("o/r", 1))!.checkRunIds).toEqual([]);
+    expect(
+      await store.appendGateStatusRefsForSha("o/r", 1, "superseded", [
+        { provider: "github", id: 1 },
+      ]),
+    ).toBe(false);
+    expect((await store.getCurrent("o/r", 1))!.gateStatusRefs).toEqual([]);
   });
 
-  it("appendCheckRunIdsForSha with empty ids is a no-op true", async () => {
-    expect(await store.appendCheckRunIdsForSha("o/r", 1, "sha1", [])).toBe(true);
+  it("appendGateStatusRefsForSha with empty refs is a no-op true", async () => {
+    expect(await store.appendGateStatusRefsForSha("o/r", 1, "sha1", [])).toBe(true);
   });
 
-  it("appendCheckRunIdsForSha returns false on an expired pointer", async () => {
+  it("appendGateStatusRefsForSha returns false on an expired pointer", async () => {
     await store.setCurrent("o/r", 1, current);
     await db.execute(
       sql`UPDATE gate_current SET expires_at = now() - interval '1 second'`,
     );
-    expect(await store.appendCheckRunIdsForSha("o/r", 1, "sha1", [1])).toBe(false);
+    expect(
+      await store.appendGateStatusRefsForSha("o/r", 1, "sha1", [
+        { provider: "github", id: 1 },
+      ]),
+    ).toBe(false);
   });
 
   it("updateRunIdIfHeadSha returns false on an expired pointer", async () => {
@@ -158,14 +186,16 @@ describe("current pointer", () => {
     expect(await store.updateRunIdIfHeadSha("o/r", 1, "sha1", "run_x")).toBe(false);
   });
 
-  it("updateRunIdIfHeadSha updates only on SHA match, preserving checkRunIds", async () => {
+  it("updateRunIdIfHeadSha updates only on SHA match, preserving gateStatusRefs", async () => {
     await store.setCurrent("o/r", 1, current);
-    await store.appendCheckRunIdsForSha("o/r", 1, "sha1", [42]);
+    await store.appendGateStatusRefsForSha("o/r", 1, "sha1", [
+      { provider: "github", id: 42 },
+    ]);
     expect(await store.updateRunIdIfHeadSha("o/r", 1, "sha1", "run_real")).toBe(true);
     expect(await store.getCurrent("o/r", 1)).toEqual({
       runId: "run_real",
       headSha: "sha1",
-      checkRunIds: [42],
+      gateStatusRefs: [{ provider: "github", id: 42 }],
     });
     expect(await store.updateRunIdIfHeadSha("o/r", 1, "superseded", "run_x")).toBe(false);
   });
@@ -181,7 +211,11 @@ describe("purgeExpired", () => {
   it("deletes only expired rows across all three gate tables", async () => {
     await store.acquireLock("o/r", 1);
     await store.claimRun("o/r", 1, "sha1", "run_a");
-    await store.setCurrent("o/r", 1, { runId: "run_a", headSha: "sha1", checkRunIds: [] });
+    await store.setCurrent("o/r", 1, {
+      runId: "run_a",
+      headSha: "sha1",
+      gateStatusRefs: [],
+    });
     await store.claimRun("o/r", 2, "sha9", "run_keep");
     // Expire everything for PR 1 only.
     await db.execute(sql`UPDATE gate_locks SET expires_at = now() - interval '1 second' WHERE pr = 1`);

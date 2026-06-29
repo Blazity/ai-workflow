@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { and, eq, sql } from "drizzle-orm";
+import type { GateStatusRef } from "../adapters/vcs/types.js";
 import type { Db } from "../db/client.js";
 import { gateCurrent, gateDedupe, gateLocks } from "../db/schema.js";
 
@@ -31,7 +32,37 @@ const LOCK_TTL = sql`now() + interval '30 seconds'`;
 export interface CurrentGateRun {
   runId: string;
   headSha: string;
+  gateStatusRefs: GateStatusRef[];
+  /** @deprecated Kept until Task 3 migrates post-PR gate call sites. */
   checkRunIds: number[];
+}
+
+type CurrentGateRunInput =
+  | Omit<CurrentGateRun, "checkRunIds"> & { checkRunIds?: number[] }
+  | Omit<CurrentGateRun, "gateStatusRefs"> & {
+      gateStatusRefs?: GateStatusRef[];
+    };
+
+function githubRefsFromCheckRunIds(ids: number[]): GateStatusRef[] {
+  return ids.map((id) => ({ provider: "github", id }));
+}
+
+function legacyCheckRunIdsFromRefs(refs: GateStatusRef[]): number[] {
+  return refs
+    .filter(
+      (ref): ref is Extract<GateStatusRef, { provider: "github" }> =>
+        ref.provider === "github",
+    )
+    .map((ref) => ref.id);
+}
+
+function withLegacyCheckRunIds(
+  value: Omit<CurrentGateRun, "checkRunIds">,
+): CurrentGateRun {
+  return Object.defineProperty(value, "checkRunIds", {
+    value: legacyCheckRunIdsFromRefs(value.gateStatusRefs),
+    enumerable: false,
+  }) as CurrentGateRun;
 }
 
 export class GateStore {
@@ -130,7 +161,7 @@ export class GateStore {
       .select({
         runId: gateCurrent.runId,
         headSha: gateCurrent.headSha,
-        checkRunIds: gateCurrent.checkRunIds,
+        gateStatusRefs: gateCurrent.gateStatusRefs,
       })
       .from(gateCurrent)
       .where(
@@ -140,51 +171,59 @@ export class GateStore {
           sql`${gateCurrent.expiresAt} > now()`,
         ),
       );
-    return rows[0] ?? null;
+    return rows[0] ? withLegacyCheckRunIds(rows[0]) : null;
   }
 
   async setCurrent(
     repo: string,
     pr: number,
-    value: CurrentGateRun,
+    value: CurrentGateRunInput,
   ): Promise<void> {
+    const gateStatusRefs =
+      value.gateStatusRefs ?? githubRefsFromCheckRunIds(value.checkRunIds ?? []);
     await this.db
       .insert(gateCurrent)
-      .values({ repo, pr, ...value, expiresAt: TTL })
+      .values({
+        repo,
+        pr,
+        runId: value.runId,
+        headSha: value.headSha,
+        gateStatusRefs,
+        expiresAt: TTL,
+      })
       .onConflictDoUpdate({
         target: [gateCurrent.repo, gateCurrent.pr],
         set: {
           runId: value.runId,
           headSha: value.headSha,
-          checkRunIds: value.checkRunIds,
+          gateStatusRefs,
           expiresAt: TTL,
         },
       });
   }
 
   /**
-   * Atomically append check-run IDs to the current pointer, but only if the
+   * Atomically append gate status refs to the current pointer, but only if the
    * pointer's headSha still matches `expectedHeadSha`. Returns true if the
    * append happened, false if the row is missing, expired, or superseded by
    * a force-push. Single conditional UPDATE = the old SHA-guarded Lua
    * append; not touching expires_at = KEEPTTL.
    */
-  async appendCheckRunIdsForSha(
+  async appendGateStatusRefsForSha(
     repo: string,
     pr: number,
     expectedHeadSha: string,
-    ids: number[],
+    refs: GateStatusRef[],
   ): Promise<boolean> {
-    if (ids.length === 0) return true;
-    // IDs are validated integers; inlined as an array literal because the
-    // append expression needs a typed bigint[] on the right-hand side.
-    if (!ids.every((id) => Number.isSafeInteger(id))) {
-      throw new Error(`non-integer check-run ids: ${ids.join(",")}`);
-    }
-    const literal = sql.raw(`'{${ids.join(",")}}'::bigint[]`);
+    if (refs.length === 0) return true;
+    const literal = sql.raw(
+      `'${JSON.stringify(refs).replaceAll("'", "''")}'::jsonb`,
+    );
     const rows = await this.db
       .update(gateCurrent)
-      .set({ checkRunIds: sql`${gateCurrent.checkRunIds} || ${literal}` })
+      .set({
+        gateStatusRefs: sql`${gateCurrent.gateStatusRefs} || ${literal}`,
+      })
       .where(
         and(
           eq(gateCurrent.repo, repo),
@@ -197,13 +236,31 @@ export class GateStore {
     return rows.length > 0;
   }
 
+  /** @deprecated Kept until Task 3 migrates post-PR gate call sites. */
+  async appendCheckRunIdsForSha(
+    repo: string,
+    pr: number,
+    expectedHeadSha: string,
+    ids: number[],
+  ): Promise<boolean> {
+    if (!ids.every((id) => Number.isSafeInteger(id))) {
+      throw new Error(`non-integer check-run ids: ${ids.join(",")}`);
+    }
+    return this.appendGateStatusRefsForSha(
+      repo,
+      pr,
+      expectedHeadSha,
+      githubRefsFromCheckRunIds(ids),
+    );
+  }
+
   /**
    * Atomically set the `runId` field of the current pointer, but only if
    * the pointer's headSha still matches `expectedHeadSha`. Returns true if
    * the update happened, false if the row is missing or superseded.
    *
    * Used by the webhook to fill in the real runId AFTER `start()` returns,
-   * without stomping `checkRunIds` that the workflow may have already
+   * without stomping `gateStatusRefs` that the workflow may have already
    * appended — a column-targeted UPDATE only touches run_id, so that
    * property now holds structurally.
    */
