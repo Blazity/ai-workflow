@@ -93,22 +93,6 @@ export function hasGateStatusCapability(
   );
 }
 
-/** @deprecated Use GateStatusCapableVCS after Task 3 migrates call sites. */
-export interface CheckRunCapableVCS {
-  createCheckRun(name: string, headSha: string): Promise<number>;
-  updateCheckRun(id: number, update: CheckRunUpdate): Promise<void>;
-}
-
-/** @deprecated Use hasGateStatusCapability after Task 3 migrates call sites. */
-export function hasCheckRunCapability(
-  adapter: VCSAdapter,
-): adapter is VCSAdapter & CheckRunCapableVCS {
-  return (
-    typeof (adapter as Partial<CheckRunCapableVCS>).createCheckRun === "function" &&
-    typeof (adapter as Partial<CheckRunCapableVCS>).updateCheckRun === "function"
-  );
-}
-
 export interface PRFile {
   path: string;
   additions: number;

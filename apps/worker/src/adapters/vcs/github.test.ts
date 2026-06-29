@@ -18,6 +18,10 @@ const mockOctokit = {
   issues: {
     listComments: vi.fn(),
   },
+  checks: {
+    create: vi.fn(),
+    update: vi.fn(),
+  },
 };
 
 vi.mock("../../lib/github-auth.js", () => ({
@@ -128,6 +132,46 @@ describe("GitHubAdapter", () => {
       const pr = await adapter.findPR("feat/test");
       expect(pr).not.toBeNull();
       expect(pr!.id).toBe(42);
+    });
+  });
+
+  describe("gate statuses", () => {
+    it("creates a GitHub check run and returns a gate status ref", async () => {
+      mockOctokit.checks.create.mockResolvedValueOnce({ data: { id: 123 } });
+
+      const adapter = ghAdapter();
+      const ref = await adapter.createGateStatus("blazebot / code-hygiene", "sha1");
+
+      expect(ref).toEqual({ provider: "github", id: 123 });
+      expect(mockOctokit.checks.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          owner: "test-org",
+          repo: "test-repo",
+          name: "blazebot / code-hygiene",
+          head_sha: "sha1",
+          status: "in_progress",
+        }),
+      );
+    });
+
+    it("updates a GitHub gate status ref", async () => {
+      mockOctokit.checks.update.mockResolvedValueOnce({ data: {} });
+
+      const adapter = ghAdapter();
+      await adapter.updateGateStatus(
+        { provider: "github", id: 123 },
+        { status: "completed", conclusion: "success", summary: "ok" },
+      );
+
+      expect(mockOctokit.checks.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          owner: "test-org",
+          repo: "test-repo",
+          check_run_id: 123,
+          status: "completed",
+          conclusion: "success",
+        }),
+      );
     });
   });
 });
