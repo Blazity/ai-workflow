@@ -60,6 +60,8 @@ type GitLabCommitStatusState =
   | "canceled"
   | "skipped";
 
+const COMMIT_STATUS_409_RETRY_DELAYS_MS = [1, 2, 4];
+
 export interface GitLabConfig {
   token: string;
   projectId: string;
@@ -178,7 +180,8 @@ export class GitLabAdapter implements VCSAdapter, GateStatusCapableVCS, PRFilesC
       init.body = JSON.stringify(options.body);
     }
 
-    const maxAttempts = options.retryOn409 ? 2 : 1;
+    const retryDelays = options.retryOn409 ? COMMIT_STATUS_409_RETRY_DELAYS_MS : [];
+    const maxAttempts = retryDelays.length + 1;
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       const response = await fetch(`${this.apiBaseUrl}${path}`, init);
       if (response.ok) {
@@ -190,6 +193,7 @@ export class GitLabAdapter implements VCSAdapter, GateStatusCapableVCS, PRFilesC
       }
 
       if (response.status === 409 && options.retryOn409 && attempt < maxAttempts) {
+        await sleep(retryDelays[attempt - 1]);
         continue;
       }
 
@@ -303,16 +307,16 @@ export class GitLabAdapter implements VCSAdapter, GateStatusCapableVCS, PRFilesC
 
   async listPRFiles(prId: number): Promise<PRFile[]> {
     const diffs: GitLabMRDiff[] = [];
-    let page: string | null = "1";
+    let nextPath: string | null = this.mrDiffsPath(prId, "1");
 
-    while (page) {
+    while (nextPath) {
       const response: { data: GitLabMRDiff[]; headers: Headers } =
         await this.gitLabRestWithResponse<GitLabMRDiff[]>(
-          `/projects/${this.encodedProjectId}/merge_requests/${prId}/diffs?page=${encodeURIComponent(page)}&per_page=100`,
+          nextPath,
           { method: "GET" },
         );
       diffs.push(...response.data);
-      page = response.headers.get("x-next-page");
+      nextPath = this.nextMRDiffsPath(prId, response.headers);
     }
 
     return diffs.map((change) => {
@@ -329,6 +333,34 @@ export class GitLabAdapter implements VCSAdapter, GateStatusCapableVCS, PRFilesC
       if (change.diff !== undefined) file.patch = change.diff;
       return file;
     });
+  }
+
+  private mrDiffsPath(prId: number, page: string): string {
+    return `/projects/${this.encodedProjectId}/merge_requests/${prId}/diffs?page=${encodeURIComponent(page)}&per_page=100`;
+  }
+
+  private nextMRDiffsPath(prId: number, headers: Headers): string | null {
+    const nextPage = headers.get("x-next-page");
+    if (nextPage) return this.mrDiffsPath(prId, nextPage);
+
+    const nextUrl = this.nextLinkUrl(headers.get("link"));
+    if (!nextUrl) return null;
+
+    try {
+      const url = new URL(nextUrl);
+      return `${url.pathname.replace(/^\/api\/v4/, "")}${url.search}`;
+    } catch {
+      return nextUrl.startsWith("/") ? nextUrl : null;
+    }
+  }
+
+  private nextLinkUrl(linkHeader: string | null): string | null {
+    if (!linkHeader) return null;
+    for (const part of linkHeader.split(",")) {
+      const match = part.match(/<([^>]+)>\s*;\s*rel="next"/i);
+      if (match) return match[1];
+    }
+    return null;
   }
 
   async createGateStatus(
@@ -518,4 +550,8 @@ export class GitLabAdapter implements VCSAdapter, GateStatusCapableVCS, PRFilesC
     const mr = await this.gl.MergeRequests.show(this.projectId, prId);
     return (mr as { has_conflicts?: boolean }).has_conflicts === true;
   }
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
