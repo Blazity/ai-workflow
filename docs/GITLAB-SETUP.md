@@ -9,7 +9,7 @@ Set these on the worker deployment:
 ```bash
 VCS_KIND=gitlab
 GITLAB_TOKEN=<project access token or bot PAT>
-GITLAB_PROJECT_ID=<numeric project id or namespace/project path>
+GITLAB_PROJECT_ID=<namespace/project path>
 GITLAB_BASE_BRANCH=main
 GITLAB_WEBHOOK_SECRET=<random secret>
 ```
@@ -26,14 +26,23 @@ Grant the token the `api` scope. ai-workflow needs GitLab REST API access for br
 
 Save the token as `GITLAB_TOKEN`.
 
+## Configure permissions
+
+The token identity must have enough project access to create branches, open merge requests, push commits, and create commit statuses.
+
+Use the Maintainer role for the simplest setup. Developer can work only if the project's branch protection rules allow that identity to push `blazebot/*` branches and open merge requests.
+
+If you protect branch patterns, make sure the token identity is allowed to push `blazebot/*`. The worker force-pushes those bot branches from the sandbox after each run.
+
 ## Find the project ID
 
-Set `GITLAB_PROJECT_ID` to either:
+Set `GITLAB_PROJECT_ID` to the GitLab project path in `namespace/project` form, for example:
 
-- The numeric project ID from the GitLab project overview.
-- The project path in `namespace/project` form, for example `my-group/my-repo`.
+```bash
+GITLAB_PROJECT_ID=my-group/my-repo
+```
 
-The app URL-encodes project paths internally before calling the GitLab API.
+Numeric GitLab project IDs work for some GitLab REST APIs, but they are not supported by this app. The worker also uses `GITLAB_PROJECT_ID` to build sandbox clone and push URLs, so it must be a namespace/project path. The app URL-encodes the path internally before calling the GitLab API.
 
 ## Configure the webhook
 
