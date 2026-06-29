@@ -2,6 +2,11 @@ import { Gitlab } from "@gitbeaker/rest";
 import { FatalError } from "workflow";
 import type {
   VCSAdapter,
+  CheckRunUpdate,
+  GateStatusCapableVCS,
+  GateStatusRef,
+  PRFile,
+  PRFilesCapableVCS,
   PullRequest,
   PRComment,
   CheckRunResult,
@@ -36,6 +41,25 @@ interface GitLabJob {
   name: string;
   status: string;
 }
+interface GitLabMRChange {
+  new_path?: string;
+  old_path?: string;
+  diff?: string;
+  new_file?: boolean;
+  deleted_file?: boolean;
+  renamed_file?: boolean;
+}
+interface GitLabMRChangesResponse {
+  changes?: GitLabMRChange[];
+}
+
+type GitLabCommitStatusState =
+  | "pending"
+  | "running"
+  | "success"
+  | "failed"
+  | "canceled"
+  | "skipped";
 
 export interface GitLabConfig {
   token: string;
@@ -45,7 +69,7 @@ export interface GitLabConfig {
   host?: string;
 }
 
-export class GitLabAdapter implements VCSAdapter {
+export class GitLabAdapter implements VCSAdapter, GateStatusCapableVCS, PRFilesCapableVCS {
   private gl: InstanceType<typeof Gitlab>;
   private projectId: string;
   private baseBranch: string;
@@ -57,6 +81,14 @@ export class GitLabAdapter implements VCSAdapter {
     });
     this.projectId = config.projectId;
     this.baseBranch = config.baseBranch;
+  }
+
+  private get apiBaseUrl(): string {
+    return `${(this.config.host ?? "https://gitlab.com").replace(/\/+$/, "")}/api/v4`;
+  }
+
+  private get encodedProjectId(): string {
+    return encodeURIComponent(this.projectId);
   }
 
   async createBranch(name: string, base: string): Promise<void> {
@@ -112,6 +144,41 @@ export class GitLabAdapter implements VCSAdapter {
       err?.status ??
       err?.statusCode
     );
+  }
+
+  private async gitLabRest<T>(
+    path: string,
+    options: { method: "GET" | "POST"; body?: Record<string, unknown> },
+  ): Promise<T> {
+    const headers: Record<string, string> = {
+      "PRIVATE-TOKEN": this.config.token,
+    };
+    const init: RequestInit = {
+      method: options.method,
+      headers,
+    };
+
+    if (options.body !== undefined) {
+      headers["Content-Type"] = "application/json";
+      init.body = JSON.stringify(options.body);
+    }
+
+    const response = await fetch(`${this.apiBaseUrl}${path}`, init);
+    if (!response.ok) {
+      let details = "";
+      try {
+        details = await response.text();
+      } catch {
+        // Best-effort diagnostic body.
+      }
+      const status = `${response.status}${response.statusText ? ` ${response.statusText}` : ""}`;
+      throw new Error(
+        `GitLab REST ${options.method} ${path} failed with ${status}${details ? `: ${details}` : ""}`,
+      );
+    }
+
+    if (response.status === 204) return undefined as T;
+    return (await response.json()) as T;
   }
 
   async createPR(
@@ -205,6 +272,97 @@ export class GitLabAdapter implements VCSAdapter {
     if (mrs.length === 0) return null;
     const mr = mrs[0];
     return { id: mr.iid, url: mr.web_url, branch: mr.source_branch };
+  }
+
+  async listPRFiles(prId: number): Promise<PRFile[]> {
+    const data = await this.gitLabRest<GitLabMRChangesResponse>(
+      `/projects/${this.encodedProjectId}/merge_requests/${prId}/changes`,
+      { method: "GET" },
+    );
+
+    return (data.changes ?? []).map((change) => {
+      const file: PRFile = {
+        path: change.new_path ?? change.old_path ?? "",
+        additions: 0,
+        deletions: 0,
+        changeType: this.mapMRChangeType(change),
+      };
+      if (change.diff !== undefined) file.patch = change.diff;
+      return file;
+    });
+  }
+
+  async createGateStatus(
+    name: string,
+    headSha: string,
+  ): Promise<GateStatusRef> {
+    await this.postCommitStatus(headSha, name, { state: "running" });
+    return { provider: "gitlab", name, headSha };
+  }
+
+  async updateGateStatus(
+    ref: GateStatusRef,
+    update: CheckRunUpdate,
+  ): Promise<void> {
+    if (ref.provider !== "gitlab") {
+      throw new Error(`GitLabAdapter cannot update ${ref.provider} gate status`);
+    }
+
+    await this.postCommitStatus(ref.headSha, ref.name, {
+      state: this.mapCommitStatus(update),
+      ...(update.summary !== undefined
+        ? { description: update.summary.slice(0, 255) }
+        : {}),
+    });
+  }
+
+  private async postCommitStatus(
+    headSha: string,
+    name: string,
+    params: { state: GitLabCommitStatusState; description?: string },
+  ): Promise<void> {
+    await this.gitLabRest<unknown>(
+      `/projects/${this.encodedProjectId}/statuses/${headSha}`,
+      {
+        method: "POST",
+        body: {
+          state: params.state,
+          name,
+          ...(params.description !== undefined
+            ? { description: params.description }
+            : {}),
+        },
+      },
+    );
+  }
+
+  private mapCommitStatus(update: CheckRunUpdate): GitLabCommitStatusState {
+    if (update.status === "in_progress") return "running";
+
+    if (update.status === "completed") {
+      switch (update.conclusion) {
+        case "success":
+        case "neutral":
+          return "success";
+        case "failure":
+        case "timed_out":
+        case "action_required":
+          return "failed";
+        case "cancelled":
+          return "canceled";
+        case "skipped":
+          return "skipped";
+      }
+    }
+
+    return "pending";
+  }
+
+  private mapMRChangeType(change: GitLabMRChange): PRFile["changeType"] {
+    if (change.new_file) return "added";
+    if (change.deleted_file) return "removed";
+    if (change.renamed_file) return "renamed";
+    return "modified";
   }
 
   async getPRComments(prId: number): Promise<PRComment[]> {
