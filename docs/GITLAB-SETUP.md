@@ -58,6 +58,9 @@ In the GitLab project, open **Project Settings -> Webhooks** and add:
 - Trigger: **Merge request events**
 - SSL verification: enabled
 
+Use GitLab's **Secret token** field for now, not the newer **Signing token**
+flow. The worker currently verifies the `X-Gitlab-Token` header.
+
 Redeploy the worker after setting or rotating `GITLAB_WEBHOOK_SECRET`.
 
 ## Smoke checklist
