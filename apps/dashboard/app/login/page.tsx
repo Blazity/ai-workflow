@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import {
@@ -19,6 +19,24 @@ export default function LoginPage() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
+  const [ssoEnabled, setSsoEnabled] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    fetch("/api/auth/sso/status", { cache: "no-store" })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((body: { enabled?: unknown } | null) => {
+        if (!cancelled) setSsoEnabled(body?.enabled === true);
+      })
+      .catch(() => {
+        if (!cancelled) setSsoEnabled(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -55,15 +73,19 @@ export default function LoginPage() {
         <AuthFormShell title="Sign in" subtitle="Welcome back to AI Workflow.">
           {error ? <AuthBanner tone="error">{error}</AuthBanner> : null}
 
-          <AuthButton
-            type="button"
-            onClick={() => {
-              window.location.assign("/api/auth/sso/start");
-            }}
-          >
-            Continue with SSO
-          </AuthButton>
-          <AuthDivider label="or sign in with email" />
+          {ssoEnabled ? (
+            <>
+              <AuthButton
+                type="button"
+                onClick={() => {
+                  window.location.assign("/api/auth/sso/start");
+                }}
+              >
+                Continue with SSO
+              </AuthButton>
+              <AuthDivider label="or sign in with email" />
+            </>
+          ) : null}
 
           <AuthField
             label="Email"
