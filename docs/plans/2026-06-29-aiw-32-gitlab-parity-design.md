@@ -1,7 +1,7 @@
 # AIW-32 GitLab.com parity design
 
-**Date:** 2026-06-29  
-**Status:** Approved design  
+**Date:** 2026-06-29
+**Status:** Approved design
 **Branch/worktree:** `codex/aiw-32-gitlab-parity` at `.worktrees/aiw-32-gitlab-parity`
 
 ## Goal
