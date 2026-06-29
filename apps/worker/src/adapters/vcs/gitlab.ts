@@ -41,16 +41,15 @@ interface GitLabJob {
   name: string;
   status: string;
 }
-interface GitLabMRChange {
+interface GitLabMRDiff {
   new_path?: string;
   old_path?: string;
   diff?: string;
   new_file?: boolean;
   deleted_file?: boolean;
   renamed_file?: boolean;
-}
-interface GitLabMRChangesResponse {
-  changes?: GitLabMRChange[];
+  collapsed?: boolean;
+  too_large?: boolean;
 }
 
 type GitLabCommitStatusState =
@@ -148,8 +147,24 @@ export class GitLabAdapter implements VCSAdapter, GateStatusCapableVCS, PRFilesC
 
   private async gitLabRest<T>(
     path: string,
-    options: { method: "GET" | "POST"; body?: Record<string, unknown> },
+    options: {
+      method: "GET" | "POST";
+      body?: Record<string, unknown>;
+      retryOn409?: boolean;
+    },
   ): Promise<T> {
+    const { data } = await this.gitLabRestWithResponse<T>(path, options);
+    return data;
+  }
+
+  private async gitLabRestWithResponse<T>(
+    path: string,
+    options: {
+      method: "GET" | "POST";
+      body?: Record<string, unknown>;
+      retryOn409?: boolean;
+    },
+  ): Promise<{ data: T; headers: Headers }> {
     const headers: Record<string, string> = {
       "PRIVATE-TOKEN": this.config.token,
     };
@@ -163,8 +178,21 @@ export class GitLabAdapter implements VCSAdapter, GateStatusCapableVCS, PRFilesC
       init.body = JSON.stringify(options.body);
     }
 
-    const response = await fetch(`${this.apiBaseUrl}${path}`, init);
-    if (!response.ok) {
+    const maxAttempts = options.retryOn409 ? 2 : 1;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      const response = await fetch(`${this.apiBaseUrl}${path}`, init);
+      if (response.ok) {
+        return {
+          data:
+            response.status === 204 ? (undefined as T) : ((await response.json()) as T),
+          headers: response.headers,
+        };
+      }
+
+      if (response.status === 409 && options.retryOn409 && attempt < maxAttempts) {
+        continue;
+      }
+
       let details = "";
       try {
         details = await response.text();
@@ -177,8 +205,7 @@ export class GitLabAdapter implements VCSAdapter, GateStatusCapableVCS, PRFilesC
       );
     }
 
-    if (response.status === 204) return undefined as T;
-    return (await response.json()) as T;
+    throw new Error(`GitLab REST ${options.method} ${path} failed`);
   }
 
   async createPR(
@@ -275,14 +302,26 @@ export class GitLabAdapter implements VCSAdapter, GateStatusCapableVCS, PRFilesC
   }
 
   async listPRFiles(prId: number): Promise<PRFile[]> {
-    const data = await this.gitLabRest<GitLabMRChangesResponse>(
-      `/projects/${this.encodedProjectId}/merge_requests/${prId}/changes`,
-      { method: "GET" },
-    );
+    const diffs: GitLabMRDiff[] = [];
+    let page: string | null = "1";
 
-    return (data.changes ?? []).map((change) => {
+    while (page) {
+      const response: { data: GitLabMRDiff[]; headers: Headers } =
+        await this.gitLabRestWithResponse<GitLabMRDiff[]>(
+          `/projects/${this.encodedProjectId}/merge_requests/${prId}/diffs?page=${encodeURIComponent(page)}&per_page=100`,
+          { method: "GET" },
+        );
+      diffs.push(...response.data);
+      page = response.headers.get("x-next-page");
+    }
+
+    return diffs.map((change) => {
+      const path = change.new_path ?? change.old_path ?? "";
+      if (change.collapsed || change.too_large) {
+        throw new Error(`GitLab MR diff for ${path} is incomplete`);
+      }
       const file: PRFile = {
-        path: change.new_path ?? change.old_path ?? "",
+        path,
         additions: 0,
         deletions: 0,
         changeType: this.mapMRChangeType(change),
@@ -332,6 +371,7 @@ export class GitLabAdapter implements VCSAdapter, GateStatusCapableVCS, PRFilesC
             ? { description: params.description }
             : {}),
         },
+        retryOn409: true,
       },
     );
   }
@@ -358,7 +398,7 @@ export class GitLabAdapter implements VCSAdapter, GateStatusCapableVCS, PRFilesC
     return "pending";
   }
 
-  private mapMRChangeType(change: GitLabMRChange): PRFile["changeType"] {
+  private mapMRChangeType(change: GitLabMRDiff): PRFile["changeType"] {
     if (change.new_file) return "added";
     if (change.deleted_file) return "removed";
     if (change.renamed_file) return "renamed";

@@ -38,6 +38,21 @@ const mockJobs = {
 
 const mockFetch = vi.fn();
 
+function gitLabResponse(
+  body: unknown,
+  options: { status?: number; statusText?: string; headers?: Record<string, string> } = {},
+) {
+  const status = options.status ?? 200;
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    statusText: options.statusText ?? "",
+    headers: new Headers(options.headers ?? {}),
+    json: vi.fn().mockResolvedValue(body),
+    text: vi.fn().mockResolvedValue(JSON.stringify(body)),
+  };
+}
+
 vi.mock("@gitbeaker/rest", () => ({
   Gitlab: vi.fn(() => ({
     Branches: mockBranches,
@@ -405,11 +420,7 @@ describe("GitLabAdapter", () => {
 
   describe("gate statuses", () => {
     it("creates a GitLab commit status and returns a gate status ref", async () => {
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        status: 201,
-        json: vi.fn().mockResolvedValue({}),
-      });
+      mockFetch.mockResolvedValueOnce(gitLabResponse({}, { status: 201 }));
 
       const adapter = glAdapter();
       const ref = await adapter.createGateStatus("blazebot / code-hygiene", "sha1");
@@ -436,11 +447,7 @@ describe("GitLabAdapter", () => {
     });
 
     it("maps a completed failure update to failed with summary description", async () => {
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        status: 201,
-        json: vi.fn().mockResolvedValue({}),
-      });
+      mockFetch.mockResolvedValueOnce(gitLabResponse({}, { status: 201 }));
 
       const adapter = glAdapter();
       await adapter.updateGateStatus(
@@ -480,46 +487,79 @@ describe("GitLabAdapter", () => {
       ).rejects.toThrow("GitLabAdapter cannot update github gate status");
       expect(mockFetch).not.toHaveBeenCalled();
     });
+
+    it("retries a transient 409 from GitLab commit status creation", async () => {
+      mockFetch
+        .mockResolvedValueOnce(
+          gitLabResponse(
+            { message: "update already in progress" },
+            { status: 409, statusText: "Conflict" },
+          ),
+        )
+        .mockResolvedValueOnce(gitLabResponse({}, { status: 201 }));
+
+      const adapter = glAdapter();
+      await adapter.updateGateStatus(
+        {
+          provider: "gitlab",
+          name: "blazebot / code-hygiene",
+          headSha: "sha1",
+        },
+        { status: "completed", conclusion: "success" },
+      );
+
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+      expect(mockFetch).toHaveBeenNthCalledWith(
+        1,
+        "https://gitlab.com/api/v4/projects/blazity%2Fdemo-app/statuses/sha1",
+        expect.objectContaining({ method: "POST" }),
+      );
+      expect(mockFetch).toHaveBeenNthCalledWith(
+        2,
+        "https://gitlab.com/api/v4/projects/blazity%2Fdemo-app/statuses/sha1",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
   });
 
   describe("listPRFiles", () => {
-    it("maps GitLab MR changes to provider-neutral PR files", async () => {
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        status: 200,
-        json: vi.fn().mockResolvedValue({
-          changes: [
-            {
-              new_path: "src/new.ts",
-              diff: "@@ new",
-              new_file: true,
-              deleted_file: false,
-              renamed_file: false,
-            },
-            {
-              new_path: "src/removed.ts",
-              diff: "@@ removed",
-              new_file: false,
-              deleted_file: true,
-              renamed_file: false,
-            },
-            {
-              new_path: "src/renamed.ts",
-              diff: "@@ renamed",
-              new_file: false,
-              deleted_file: false,
-              renamed_file: true,
-            },
-            {
-              new_path: "src/modified.ts",
-              diff: "@@ modified",
-              new_file: false,
-              deleted_file: false,
-              renamed_file: false,
-            },
-          ],
-        }),
-      });
+    it("calls GitLab MR diffs and maps provider-neutral PR files", async () => {
+      mockFetch.mockResolvedValueOnce(
+        gitLabResponse([
+          {
+            old_path: "src/new.ts",
+            new_path: "src/new.ts",
+            diff: "@@ new",
+            new_file: true,
+            deleted_file: false,
+            renamed_file: false,
+          },
+          {
+            old_path: "src/removed.ts",
+            new_path: "src/removed.ts",
+            diff: "@@ removed",
+            new_file: false,
+            deleted_file: true,
+            renamed_file: false,
+          },
+          {
+            old_path: "src/old.ts",
+            new_path: "src/renamed.ts",
+            diff: "@@ renamed",
+            new_file: false,
+            deleted_file: false,
+            renamed_file: true,
+          },
+          {
+            old_path: "src/modified.ts",
+            new_path: "src/modified.ts",
+            diff: "@@ modified",
+            new_file: false,
+            deleted_file: false,
+            renamed_file: false,
+          },
+        ]),
+      );
 
       const adapter = glAdapter();
       const files = await adapter.listPRFiles(42);
@@ -555,7 +595,7 @@ describe("GitLabAdapter", () => {
         },
       ]);
       expect(mockFetch).toHaveBeenCalledWith(
-        "https://gitlab.com/api/v4/projects/blazity%2Fdemo-app/merge_requests/42/changes",
+        "https://gitlab.com/api/v4/projects/blazity%2Fdemo-app/merge_requests/42/diffs?page=1&per_page=100",
         expect.objectContaining({
           method: "GET",
           headers: {
@@ -564,5 +604,75 @@ describe("GitLabAdapter", () => {
         }),
       );
     });
+
+    it("fetches every GitLab MR diffs page", async () => {
+      mockFetch
+        .mockResolvedValueOnce(
+          gitLabResponse(
+            [
+              {
+                old_path: "src/one.ts",
+                new_path: "src/one.ts",
+                diff: "@@ one",
+                new_file: false,
+                deleted_file: false,
+                renamed_file: false,
+              },
+            ],
+            { headers: { "x-next-page": "2" } },
+          ),
+        )
+        .mockResolvedValueOnce(
+          gitLabResponse([
+            {
+              old_path: "src/two.ts",
+              new_path: "src/two.ts",
+              diff: "@@ two",
+              new_file: false,
+              deleted_file: false,
+              renamed_file: false,
+            },
+          ]),
+        );
+
+      const adapter = glAdapter();
+      const files = await adapter.listPRFiles(42);
+
+      expect(files.map((file) => file.path)).toEqual(["src/one.ts", "src/two.ts"]);
+      expect(mockFetch).toHaveBeenNthCalledWith(
+        1,
+        "https://gitlab.com/api/v4/projects/blazity%2Fdemo-app/merge_requests/42/diffs?page=1&per_page=100",
+        expect.objectContaining({ method: "GET" }),
+      );
+      expect(mockFetch).toHaveBeenNthCalledWith(
+        2,
+        "https://gitlab.com/api/v4/projects/blazity%2Fdemo-app/merge_requests/42/diffs?page=2&per_page=100",
+        expect.objectContaining({ method: "GET" }),
+      );
+    });
+
+    it.each(["collapsed", "too_large"] as const)(
+      "throws when a GitLab MR diff item is %s",
+      async (partialFlag) => {
+        mockFetch.mockResolvedValueOnce(
+          gitLabResponse([
+            {
+              old_path: "src/huge.ts",
+              new_path: "src/huge.ts",
+              diff: "",
+              new_file: false,
+              deleted_file: false,
+              renamed_file: false,
+              [partialFlag]: true,
+            },
+          ]),
+        );
+
+        const adapter = glAdapter();
+        await expect(adapter.listPRFiles(42)).rejects.toThrow(
+          "GitLab MR diff for src/huge.ts is incomplete",
+        );
+      },
+    );
   });
 });
