@@ -1,13 +1,13 @@
 import { start, getRun } from "workflow/api";
-import { hasGateStatusCapability } from "../../adapters/vcs/types.js";
-import { getDb } from "../../db/client.js";
-import { createAdapters } from "../../lib/adapters.js";
-import { logger } from "../../lib/logger.js";
-import { GateStore, type CurrentGateRun } from "../../post-pr-gate/gate-store.js";
+import { hasGateStatusCapability } from "../adapters/vcs/types.js";
+import { getDb } from "../db/client.js";
+import { createAdapters } from "./adapters.js";
+import { logger } from "./logger.js";
+import { GateStore, type CurrentGateRun } from "../post-pr-gate/gate-store.js";
 import {
   postPrGateWorkflow,
   type PostPrGateWorkflowInput,
-} from "../../workflows/post-pr-gate.js";
+} from "../workflows/post-pr-gate.js";
 
 interface DispatchPostPrGateWebhookInput {
   action: string;

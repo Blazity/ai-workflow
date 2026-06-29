@@ -2,7 +2,7 @@ import { defineEventHandler, readRawBody, getHeader, createError } from "h3";
 import { env } from "../../../env.js";
 import { verifyGitHubWebhookSignature } from "../../lib/github-webhook-sig.js";
 import { logger } from "../../lib/logger.js";
-import { dispatchPostPrGateWebhook } from "./post-pr-gate-dispatch.js";
+import { dispatchPostPrGateWebhook } from "../../lib/post-pr-gate-dispatch.js";
 
 const ALLOWED_ACTIONS = new Set(["opened", "synchronize", "reopened"]);
 
