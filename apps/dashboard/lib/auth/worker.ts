@@ -46,6 +46,17 @@ export async function fetchAuthWorker(
   }
 }
 
+export function withRequestOrigin(
+  req: Request,
+  init: RequestInit = {},
+): RequestInit {
+  const headers = new Headers(init.headers);
+  if (!headers.has("origin")) {
+    headers.set("origin", req.headers.get("origin") ?? new URL(req.url).origin);
+  }
+  return { ...init, headers };
+}
+
 export async function postAuthWorkerJson(
   path: string,
   body: unknown,
