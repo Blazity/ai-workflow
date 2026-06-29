@@ -68,7 +68,7 @@ Redeploy the worker after setting or rotating `GITLAB_WEBHOOK_SECRET`.
 After deployment, verify:
 
 - Opening or updating a `blazebot/<ticket>` merge request triggers the webhook.
-- The webhook route dispatches the post-PR gate after the PR-ready gate.
+- The webhook route dispatches the post-PR gate for eligible merge request events.
 - The merge request shows `blazebot / ...` commit statuses on the head commit.
 - Force-pushing the branch cancels or replaces stale statuses for the previous head commit.
 - Changed files are read from GitLab merge request diffs.
