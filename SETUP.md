@@ -347,7 +347,7 @@ Verify by moving a test ticket into the AI column and watching the Vercel runtim
 
 ## 8. Register the GitHub webhook (post-PR gate)
 
-The post-PR gate runs configurable checks (e.g. PR title format) against every PR on the target repo and surfaces results as GitHub Check Runs on the head SHA. The webhook is what triggers it. See [`docs/post-pr-gate-spec.md`](./docs/post-pr-gate-spec.md) for the architecture.
+The post-PR gate runs configurable checks against every PR/MR on the target repo. GitHub surfaces results as Check Runs; GitLab.com surfaces them as commit statuses on the MR head SHA. The provider webhook is what triggers it.
 
 If you followed [`docs/GITHUB-APP-SETUP.md`](./docs/GITHUB-APP-SETUP.md) in step 2.2, the App is already configured with the right webhook URL, secret, permissions, and event subscription. This section is the post-deploy verification — and the place to fix things if any of the above were skipped.
 
