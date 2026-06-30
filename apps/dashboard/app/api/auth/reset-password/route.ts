@@ -4,6 +4,7 @@ import {
   authWorkerUnavailable,
   postAuthWorkerJson,
   readJsonBody,
+  withRequestOrigin,
 } from "@/lib/auth/worker";
 
 export async function POST(req: Request) {
@@ -17,10 +18,14 @@ export async function POST(req: Request) {
     );
   }
 
-  const res = await postAuthWorkerJson("/api/auth/reset-password", {
-    token,
-    newPassword: password,
-  });
+  const res = await postAuthWorkerJson(
+    "/api/auth/reset-password",
+    {
+      token,
+      newPassword: password,
+    },
+    withRequestOrigin(req),
+  );
   if (!res) return authWorkerUnavailable("Unable to reset password");
 
   if (!res.ok) {

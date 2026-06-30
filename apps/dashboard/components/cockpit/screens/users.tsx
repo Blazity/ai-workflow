@@ -53,6 +53,14 @@ export function UsersScreen({
   const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  useEffect(() => {
+    setUsers(initialUsers);
+  }, [initialUsers]);
+
+  useEffect(() => {
+    setInvites(initialInvites);
+  }, [initialInvites]);
+
   async function changeRole(user: DashboardUserRow, nextRole: "admin" | "member") {
     setBusyId(user.id);
     setError(null);
@@ -210,6 +218,12 @@ export function NotAuthorizedScreen() {
         <p className="m-0 mt-2 text-[14px] leading-6 text-neutral-700">
           You do not have permission to view Users.
         </p>
+        <a
+          href="/"
+          className="mt-4 inline-flex h-9 items-center justify-center rounded-[3px] border border-neutral-900 bg-neutral-900 px-3 font-mono text-[11px] font-medium uppercase tracking-[0.04em] text-white transition hover:bg-neutral-800"
+        >
+          Return to dashboard
+        </a>
       </section>
     </div>
   );

@@ -4,6 +4,7 @@ import {
   authWorkerUnavailable,
   postAuthWorkerJson,
   readJsonBody,
+  withRequestOrigin,
 } from "@/lib/auth/worker";
 
 export async function POST(req: Request) {
@@ -14,7 +15,11 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Email required" }, { status: 400 });
   }
 
-  const res = await postAuthWorkerJson("/api/auth/request-password-reset", { email });
+  const res = await postAuthWorkerJson(
+    "/api/auth/request-password-reset",
+    { email },
+    withRequestOrigin(req),
+  );
   if (!res) return authWorkerUnavailable("Unable to send reset link");
 
   if (!res.ok) {

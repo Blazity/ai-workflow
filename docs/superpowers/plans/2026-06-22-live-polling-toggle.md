@@ -4,7 +4,7 @@
 
 **Goal:** Add a navbar toggle that, when on, auto-refreshes the dashboard's current screen every 5s for near-real-time data.
 
-**Architecture:** The dashboard is fully server-rendered (RSC) with `cache: "no-store"`, so "polling" = calling Next's `router.refresh()` on an interval — it re-runs the active screen's server components and streams fresh data in place, with no data-layer changes. The interval/visibility logic lives in a pure, DOM-free controller (`lib/live-poll.ts`) that's unit-tested with `node:test`; a thin React hook (`lib/use-live-poll.ts`) wires `document` + `router.refresh()` into it; the on/off state is one new `useTweaks` field persisted to localStorage; the toggle UI sits in the desktop sidebar (`CkSidebar`).
+**Architecture:** The dashboard is fully server-rendered (RSC) with `cache: "no-store"`, so "polling" = calling Next's `router.refresh()` on an interval — it re-runs the active screen's server components and streams fresh data in place, with no data-layer changes. The interval/visibility logic lives in a pure, DOM-free controller (`lib/live-poll.ts`) that's unit-tested with `node:test`; a thin React hook (`lib/use-live-poll.ts`) wires `document` + `router.refresh()` into it; the on/off state is one new `useTweaks` field persisted to localStorage; the toggle UI sits in the desktop top bar and mobile header.
 
 **Tech Stack:** Next.js 15 (App Router, RSC), React 19, TypeScript, Tailwind v4, `node:test` (built-in, Node 24).
 
@@ -14,7 +14,7 @@
 - **No new dependencies.** Tests use Node's built-in `node:test` + `mock.timers`. UI uses Tailwind's default palette (already available).
 - **Poll cadence:** 5000ms, defined once as `LIVE_POLL_MS`.
 - **Default state:** Off (`livePolling: false`).
-- **Scope:** Toggle control lives only in the desktop sidebar (`hidden lg:flex`); the polling effect runs from `CockpitShell` regardless of viewport.
+- **Scope:** Toggle control lives in the desktop top bar and mobile header; the polling effect runs from `CockpitShell` regardless of viewport.
 - **Surgical:** do not modify the pre-existing dashboard `.test.ts` files, do not add a `test` script to `apps/dashboard/package.json` (it would pull the pre-existing non-runnable tests into CI), do not refactor adjacent code.
 - **Typecheck baseline is clean:** `cd apps/dashboard && npx tsc --noEmit` exits 0 before and must exit 0 after.
 
@@ -514,9 +514,9 @@ git commit -m "feat(dashboard): add live-polling navbar toggle"
 - State (`livePolling` tweak, default off, localStorage) → Task 3. ✓
 - Pure controller `createLivePoll` (interval + visibility pause/resume) → Task 1. ✓
 - Thin hook `useLivePoll` (document deps + onTick ref + enabled lifecycle) → Task 2. ✓
-- Toggle UI in desktop sidebar (green pulse dot, "Live"/"Live off", aria-pressed, collapsed tooltip) → Task 4 steps 1–2. ✓
+- Toggle UI in the desktop top bar and mobile header (green pulse dot, "Live"/"Live off", aria-pressed) → Task 4 steps 1–2. ✓
 - 5s cadence as single constant `LIVE_POLL_MS` → Task 4 step 3b. ✓
-- Scope: control desktop-only, effect viewport-agnostic → control in `CkSidebar` (`hidden lg:flex` parent), hook in `CockpitShell`. ✓
+- Scope: controls in desktop top bar and mobile header, effect viewport-agnostic → `LivePollControl` reads cockpit context; hook in `CockpitShell`. ✓
 - Testing: `node:test` + `mock.timers`, no new deps, runnable via `node --test`; CI caveat noted → Task 1 + Global Constraints. ✓
 - Error handling: `router.refresh()` failures absorbed by existing `*-data.tsx` `.catch` fallbacks → no code needed (spec). ✓
 
