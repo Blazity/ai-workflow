@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { eq } from "drizzle-orm";
+import { and, eq, notInArray } from "drizzle-orm";
 import type { Db } from "../../db/client.js";
 import { inviteEmailDelivery } from "../../db/schema.js";
 
@@ -89,10 +89,19 @@ export async function updateInviteEmailDeliveryByResendId(
       error: input.error ?? null,
       updatedAt: new Date(),
     })
-    .where(eq(inviteEmailDelivery.resendEmailId, input.resendEmailId))
+    .where(deliveryUpdateWhere(input))
     .returning({ id: inviteEmailDelivery.id });
 
   return !!row;
+}
+
+function deliveryUpdateWhere(input: UpdateInviteEmailDeliveryInput) {
+  const byResendId = eq(inviteEmailDelivery.resendEmailId, input.resendEmailId);
+  if (input.status !== "sent") return byResendId;
+  return and(
+    byResendId,
+    notInArray(inviteEmailDelivery.status, ["bounced", "failed"]),
+  );
 }
 
 export async function updateInviteEmailDeliveryById(

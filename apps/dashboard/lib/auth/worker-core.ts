@@ -1,8 +1,8 @@
 const WORKER_TIMEOUT_MS = 10_000;
 
-function workerUrl(base: string | undefined, path: string): string {
+export function workerUrl(base: string | undefined, path: string): string {
   if (!base) {
-    throw new Error("WORKER_BASE_URL is required for dashboard auth requests");
+    throw new Error("WORKER_BASE_URL is required for dashboard worker requests");
   }
 
   return `${base}${path}`;

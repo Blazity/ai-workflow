@@ -1,12 +1,16 @@
-import { createError, defineEventHandler } from "h3";
+import { createError, defineEventHandler, getQuery } from "h3";
 
 import { env } from "../../../../../env.js";
 import { DASHBOARD_SSO_PROVIDER_ID } from "../../../../auth.js";
 import { auth } from "../../../../auth-instance.js";
 
-export default defineEventHandler(async () => {
+export default defineEventHandler(async (event) => {
   const workerOrigin = env.BETTER_AUTH_URL.replace(/\/$/, "");
   const dashboardOrigin = env.DASHBOARD_ORIGIN.replace(/\/$/, "");
+  const inviteId = inviteIdFromQuery(getQuery(event).inviteId);
+  const callbackUrl = new URL("/api/dashboard-auth/sso/complete", workerOrigin);
+  if (inviteId) callbackUrl.searchParams.set("inviteId", inviteId);
+
   const res = await auth.handler(
     new Request(`${workerOrigin}/api/auth/sign-in/sso`, {
       method: "POST",
@@ -14,7 +18,7 @@ export default defineEventHandler(async () => {
       body: JSON.stringify({
         providerId: DASHBOARD_SSO_PROVIDER_ID,
         providerType: "oidc",
-        callbackURL: `${workerOrigin}/api/dashboard-auth/sso/complete`,
+        callbackURL: callbackUrl.href,
         errorCallbackURL: `${dashboardOrigin}/login`,
       }),
     }),
@@ -30,7 +34,7 @@ export default defineEventHandler(async () => {
       statusMessage: body.message ?? "SSO is not configured",
     });
   }
-  if (!body.url) {
+  if (typeof body.url !== "string" || !body.url) {
     throw createError({
       statusCode: 502,
       statusMessage: body.message ?? "SSO is not configured",
@@ -39,3 +43,7 @@ export default defineEventHandler(async () => {
 
   return { url: body.url };
 });
+
+function inviteIdFromQuery(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}

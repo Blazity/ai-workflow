@@ -19,7 +19,7 @@ export default function LoginPage() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
-  const [ssoEnabled, setSsoEnabled] = useState(false);
+  const [ssoEnabled, setSsoEnabled] = useState<boolean | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -27,10 +27,12 @@ export default function LoginPage() {
     fetch("/api/auth/sso/status", { cache: "no-store" })
       .then((res) => (res.ok ? res.json() : null))
       .then((body: { enabled?: unknown } | null) => {
-        if (!cancelled) setSsoEnabled(body?.enabled === true);
+        if (!cancelled) {
+          setSsoEnabled(typeof body?.enabled === "boolean" ? body.enabled : null);
+        }
       })
       .catch(() => {
-        if (!cancelled) setSsoEnabled(false);
+        if (!cancelled) setSsoEnabled(null);
       });
 
     return () => {
@@ -73,7 +75,7 @@ export default function LoginPage() {
         <AuthFormShell title="Sign in" subtitle="Welcome back to AI Workflow.">
           {error ? <AuthBanner tone="error">{error}</AuthBanner> : null}
 
-          {ssoEnabled ? (
+          {ssoEnabled !== false ? (
             <>
               <AuthButton
                 type="button"
