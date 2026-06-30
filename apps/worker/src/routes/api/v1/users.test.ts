@@ -126,7 +126,7 @@ describe("users API", () => {
 
     expect(res.status).toBe(200);
     const json = await res.json();
-    expect(json.members).toEqual(
+    expect(json.users).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           id: "user_owner",
@@ -162,5 +162,13 @@ describe("users API", () => {
       }),
     );
     expect(adminRes.status).toBe(403);
+  });
+
+  it("returns 400 when role update body is missing", async () => {
+    const res = await roleHandlerFor("user_member")(
+      new Request("http://localhost/", { method: "PATCH" }),
+    );
+
+    expect(res.status).toBe(400);
   });
 });

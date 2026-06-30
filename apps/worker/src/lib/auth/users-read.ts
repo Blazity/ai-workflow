@@ -115,7 +115,11 @@ export async function listDashboardUsers(
   }
 
   return rows.map((row) => {
-    const role = normalizeDashboardRole(row.role) ?? "member";
+    const role = normalizeDashboardRole(row.role);
+    if (!role) {
+      throw new DashboardAuthError(500, "Invalid dashboard role");
+    }
+
     return {
       id: row.userId,
       name: row.name,

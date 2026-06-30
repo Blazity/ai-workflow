@@ -98,6 +98,18 @@ async function delivery() {
   return row;
 }
 
+async function deliveryById(id = "delivery_acme") {
+  const [row] = await db
+    .select({
+      resendEmailId: inviteEmailDelivery.resendEmailId,
+      status: inviteEmailDelivery.status,
+      error: inviteEmailDelivery.error,
+    })
+    .from(inviteEmailDelivery)
+    .where(eq(inviteEmailDelivery.id, id));
+  return row;
+}
+
 describe("POST /webhooks/resend", () => {
   it("returns 401 when signature headers are missing", async () => {
     const res = await makeApp()(
@@ -154,6 +166,25 @@ describe("POST /webhooks/resend", () => {
     await expect(delivery()).resolves.toEqual({
       status: "failed",
       error: "Recipient complained",
+    });
+  });
+
+  it("correlates invite delivery events by local delivery id tag", async () => {
+    const res = await makeApp()(
+      signedRequest({
+        type: "email.delivered",
+        data: {
+          email_id: "email_replayed",
+          tags: { invite_delivery_id: "delivery_acme" },
+        },
+      }),
+    );
+
+    expect(res.status).toBe(200);
+    await expect(deliveryById()).resolves.toEqual({
+      resendEmailId: "email_replayed",
+      status: "sent",
+      error: null,
     });
   });
 

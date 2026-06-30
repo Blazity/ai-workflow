@@ -1,7 +1,7 @@
 import "server-only";
 import { cookies } from "next/headers";
+import { workerUrl } from "@/lib/auth/worker-core";
 
-const BASE = process.env.WORKER_BASE_URL ?? "";
 const FETCH_TIMEOUT_MS = 10_000;
 
 export async function proxyWorker(path: string, init: RequestInit = {}): Promise<Response> {
@@ -10,7 +10,7 @@ export async function proxyWorker(path: string, init: RequestInit = {}): Promise
   const headers = new Headers(init.headers);
   if (session) headers.set("authorization", `Bearer ${session}`);
 
-  return fetch(`${BASE}${path}`, {
+  return fetch(workerUrl(process.env.WORKER_BASE_URL, path), {
     ...init,
     headers,
     cache: "no-store",

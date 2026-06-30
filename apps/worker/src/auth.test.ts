@@ -115,6 +115,39 @@ describe("seedAuthUser", () => {
     });
     expect(tokenFrom(signIn)).toBeTruthy();
   });
+
+  it("resolves concurrent credential linking for an existing SSO-only owner", async () => {
+    const { auth, db } = await freshAuthContext();
+    const ctx = await auth.$context;
+    const created = await ctx.internalAdapter.createUser({
+      email: "owner@example.com",
+      name: "Owner",
+      emailVerified: true,
+    });
+    await ctx.internalAdapter.linkAccount({
+      userId: created.id,
+      providerId: DASHBOARD_SSO_PROVIDER_ID,
+      accountId: "sso-subject",
+    });
+
+    await expect(
+      Promise.all([
+        seedAuthUser(auth, { email: "owner@example.com", password: "password123" }),
+        seedAuthUser(auth, { email: "owner@example.com", password: "password123" }),
+      ]),
+    ).resolves.toHaveLength(2);
+
+    const credentials = await db
+      .select()
+      .from(account)
+      .where(
+        and(
+          eq(account.userId, created.id),
+          eq(account.providerId, "credential"),
+        ),
+      );
+    expect(credentials).toHaveLength(1);
+  });
 });
 
 describe("bootstrapDashboardAuth", () => {

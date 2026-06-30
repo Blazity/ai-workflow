@@ -6,6 +6,7 @@ import {
   postAuthWorkerJson,
   readJsonBody,
   readWorkerJson,
+  withRequestOrigin,
 } from "@/lib/auth/worker";
 
 export async function POST(req: Request) {
@@ -19,7 +20,11 @@ export async function POST(req: Request) {
     );
   }
 
-  const res = await postAuthWorkerJson("/api/auth/sign-in/email", { email, password });
+  const res = await postAuthWorkerJson(
+    "/api/auth/sign-in/email",
+    { email, password },
+    withRequestOrigin(req),
+  );
   if (!res) return authWorkerUnavailable("Unable to reach auth service");
 
   if (!res.ok) {
