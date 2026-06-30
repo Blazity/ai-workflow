@@ -15,7 +15,11 @@ import {
   TWEAK_DEFAULTS,
   type Tweaks,
 } from "@/components/cockpit/context";
-import { CkSidebar, cockpitNavItems } from "@/components/cockpit/chrome";
+import {
+  CkSidebar,
+  cockpitNavItems,
+  isMobileMoreNavItem,
+} from "@/components/cockpit/chrome";
 import { LivePollControl } from "@/components/cockpit/controls";
 import { LogoutButton } from "@/components/cockpit/logout-button";
 import { CkActivityDrawer } from "@/components/cockpit/activity-drawer";
@@ -70,7 +74,7 @@ export function CockpitShell({
   );
   const [moreOpen, setMoreOpen] = useState(false);
   const moreScreens = cockpitNavItems({ canManageUsers })
-    .filter((item) => ["prompts", "evals", "cost", "users"].includes(item.id))
+    .filter((item) => isMobileMoreNavItem(item.id))
     .map((item) => item.id);
 
   useEffect(() => {

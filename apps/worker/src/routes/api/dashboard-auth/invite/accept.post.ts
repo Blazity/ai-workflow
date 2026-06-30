@@ -7,13 +7,18 @@ import { acceptDashboardInvite } from "../../../../lib/auth/invite-acceptance.js
 import { toHttpError } from "../../../../lib/auth/request-context.js";
 
 export default defineEventHandler(async (event) => {
-  const body = (await readBody<{
+  let body: {
     inviteId?: string;
     name?: string;
     password?: string;
-  }>(event).catch(() => null)) ?? {};
+  } | null;
+  try {
+    body = await readBody(event);
+  } catch {
+    throw createError({ statusCode: 400, statusMessage: "Invalid request body" });
+  }
 
-  if (!body.inviteId) {
+  if (!body?.inviteId) {
     throw createError({ statusCode: 400, statusMessage: "Missing invite id" });
   }
   if (!body.password) {

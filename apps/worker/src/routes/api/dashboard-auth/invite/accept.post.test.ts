@@ -85,6 +85,21 @@ describe("invite accept API", () => {
     expect(res.status).toBe(400);
   });
 
+  it("rejects malformed JSON before field validation", async () => {
+    const res = await handlerFor(acceptRoute)(
+      new Request("http://localhost/", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: "{",
+      }),
+    );
+
+    expect(res.status).toBe(400);
+    await expect(res.json()).resolves.toMatchObject({
+      statusMessage: "Invalid request body",
+    });
+  });
+
   it("accepts an invite and returns a session token", async () => {
     const res = await handlerFor(acceptRoute)(
       new Request("http://localhost/", {

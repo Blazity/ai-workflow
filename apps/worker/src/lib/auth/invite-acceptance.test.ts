@@ -9,6 +9,7 @@ import {
 import type { Db } from "../../db/client.js";
 import { account, invitation, member, organization, user } from "../../db/schema.js";
 import { createTestDb } from "../../db/test-db.js";
+import type { DashboardRole } from "./roles.js";
 import {
   acceptDashboardInvite,
   getDashboardInviteAcceptanceState,
@@ -20,7 +21,7 @@ const OPTS = {
   trustedOrigins: ["http://localhost:3001"],
 };
 
-async function setupInvite(email = "new.user@example.com") {
+async function setupInvite(email = "new.user@example.com", role: DashboardRole = "member") {
   const db = await createTestDb();
   const auth = createAuth(db, OPTS);
 
@@ -39,7 +40,7 @@ async function setupInvite(email = "new.user@example.com") {
     id: "invite_1",
     organizationId: "org_aiw",
     email,
-    role: "member",
+    role,
     status: "pending",
     expiresAt: new Date("2026-06-28T00:00:00.000Z"),
     inviterId: "user_owner",
@@ -95,7 +96,11 @@ describe("acceptDashboardInvite", () => {
 
     await expect(
       getDashboardInviteAcceptanceState(db, auth, { ...base, inviteId: "invite_1" }),
-    ).resolves.toMatchObject({ mode: "new_user", organizationName: "AI Workflow" });
+    ).resolves.toMatchObject({
+      mode: "new_user",
+      organizationName: "AI Workflow",
+      role: "member",
+    });
     await expect(
       getDashboardInviteAcceptanceState(db, auth, {
         ...base,
@@ -145,6 +150,38 @@ describe("acceptDashboardInvite", () => {
       headers: new Headers({ authorization: `Bearer ${result.token}` }),
     });
     expect(session?.user.email).toBe("new.user@example.com");
+  });
+
+  it("preserves admin invite role in preview and accepted membership", async () => {
+    const { db, auth } = await setupInvite("new.admin@example.com", "admin");
+    const now = new Date("2026-06-26T00:00:00.000Z");
+
+    await expect(
+      getDashboardInviteAcceptanceState(db, auth, {
+        organizationSlug: "ai-workflow",
+        inviteId: "invite_1",
+        now,
+      }),
+    ).resolves.toMatchObject({ role: "admin" });
+
+    const result = await acceptDashboardInvite(db, auth, {
+      organizationSlug: "ai-workflow",
+      inviteId: "invite_1",
+      name: "New Admin",
+      password: "password123",
+      now,
+    });
+
+    const [joined] = await db
+      .select()
+      .from(member)
+      .where(
+        and(
+          eq(member.organizationId, "org_aiw"),
+          eq(member.userId, result.user.id),
+        ),
+      );
+    expect(joined).toMatchObject({ role: "admin" });
   });
 
   it("lets an existing password user accept by proving the current password", async () => {
