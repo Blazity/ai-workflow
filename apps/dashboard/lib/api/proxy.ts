@@ -1,16 +1,8 @@
 import "server-only";
 import { cookies } from "next/headers";
+import { workerUrl } from "@/lib/auth/worker-core";
 
-const BASE = process.env.WORKER_BASE_URL;
 const FETCH_TIMEOUT_MS = 10_000;
-
-function workerUrl(path: string): string {
-  if (!BASE) {
-    throw new Error("WORKER_BASE_URL is required for dashboard API proxying");
-  }
-
-  return `${BASE}${path}`;
-}
 
 export async function proxyWorker(path: string, init: RequestInit = {}): Promise<Response> {
   const jar = await cookies();
@@ -18,7 +10,7 @@ export async function proxyWorker(path: string, init: RequestInit = {}): Promise
   const headers = new Headers(init.headers);
   if (session) headers.set("authorization", `Bearer ${session}`);
 
-  return fetch(workerUrl(path), {
+  return fetch(workerUrl(process.env.WORKER_BASE_URL, path), {
     ...init,
     headers,
     cache: "no-store",

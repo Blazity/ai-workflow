@@ -11,6 +11,7 @@ import { account, invitation, member, organization, user } from "../../db/schema
 import { createTestDb } from "../../db/test-db.js";
 import type { DashboardRole } from "./roles.js";
 import {
+  acceptDashboardSsoInvite,
   acceptDashboardInvite,
   getDashboardInviteAcceptanceState,
 } from "./invite-acceptance.js";
@@ -236,6 +237,72 @@ describe("acceptDashboardInvite", () => {
       .select({ role: member.role })
       .from(member)
       .where(eq(member.userId, result.user.id));
+    expect(membership).toEqual({ role: "admin" });
+  });
+
+  it("does not demote an existing owner when accepting a lower-role invite", async () => {
+    const { db, auth } = await setupInvite("existing@example.com", "member");
+    await seedAuthUser(auth, {
+      email: "existing@example.com",
+      password: "password123",
+      name: "Existing",
+    });
+    const [existingUser] = await db
+      .select({ id: user.id })
+      .from(user)
+      .where(eq(user.email, "existing@example.com"));
+    await db.insert(member).values({
+      id: "member_existing",
+      organizationId: "org_aiw",
+      userId: existingUser.id,
+      role: "owner",
+    });
+
+    await acceptDashboardInvite(db, auth, {
+      organizationSlug: "ai-workflow",
+      inviteId: "invite_1",
+      password: "password123",
+      now: new Date("2026-06-26T00:00:00.000Z"),
+    });
+
+    const [membership] = await db
+      .select({ role: member.role })
+      .from(member)
+      .where(eq(member.userId, existingUser.id));
+    expect(membership).toEqual({ role: "owner" });
+  });
+
+  it("accepts an SSO-only invite for the authenticated SSO user", async () => {
+    const { db, auth } = await setupInvite("sso@example.com", "admin");
+    const ctx = await auth.$context;
+    const ssoUser = await ctx.internalAdapter.createUser({
+      email: "sso@example.com",
+      name: "SSO User",
+      emailVerified: true,
+    });
+    await ctx.internalAdapter.linkAccount({
+      userId: ssoUser.id,
+      providerId: DASHBOARD_SSO_PROVIDER_ID,
+      accountId: "sso-subject",
+    });
+
+    await acceptDashboardSsoInvite(db, auth, {
+      organizationSlug: "ai-workflow",
+      inviteId: "invite_1",
+      user: { id: ssoUser.id, email: "sso@example.com" },
+      now: new Date("2026-06-26T00:00:00.000Z"),
+    });
+
+    const [accepted] = await db
+      .select({ status: invitation.status })
+      .from(invitation)
+      .where(eq(invitation.id, "invite_1"));
+    expect(accepted).toEqual({ status: "accepted" });
+
+    const [membership] = await db
+      .select({ role: member.role })
+      .from(member)
+      .where(eq(member.userId, ssoUser.id));
     expect(membership).toEqual({ role: "admin" });
   });
 
