@@ -178,7 +178,7 @@ describe("invite delivery helpers", () => {
     });
   });
 
-  it("maps accepted and delivered events to sent status", async () => {
+  it("does not overwrite terminal failures with later delivered events", async () => {
     await createInviteEmailDelivery(db, {
       id: "delivery_acme",
       invitationId: "invite_acme",
@@ -192,11 +192,11 @@ describe("invite delivery helpers", () => {
         type: "email.delivered",
         data: { email_id: "email_123" },
       }),
-    ).resolves.toEqual({ handled: true, updated: true });
+    ).resolves.toEqual({ handled: true, updated: false });
 
     await expect(findDelivery("email_123")).resolves.toMatchObject({
-      status: "sent",
-      error: null,
+      status: "failed",
+      error: "Previous temporary failure",
     });
   });
 });

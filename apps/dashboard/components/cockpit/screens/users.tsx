@@ -42,9 +42,13 @@ export function UsersScreen({
   initialUsers: DashboardUserRow[];
   initialInvites: DashboardInviteRow[];
 }) {
+  const initialUsersKey = snapshotKey(initialUsers);
+  const initialInvitesKey = snapshotKey(initialInvites);
   const [tab, setTab] = useState<"members" | "invites">("members");
   const [users, setUsers] = useState(initialUsers);
   const [invites, setInvites] = useState(initialInvites);
+  const [appliedUsersKey, setAppliedUsersKey] = useState(initialUsersKey);
+  const [appliedInvitesKey, setAppliedInvitesKey] = useState(initialInvitesKey);
   const [inviteOpen, setInviteOpen] = useState(false);
   const [roleChange, setRoleChange] = useState<{
     user: DashboardUserRow;
@@ -52,6 +56,18 @@ export function UsersScreen({
   } | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (initialUsersKey === appliedUsersKey) return;
+    setUsers(initialUsers);
+    setAppliedUsersKey(initialUsersKey);
+  }, [initialUsers, initialUsersKey, appliedUsersKey]);
+
+  useEffect(() => {
+    if (initialInvitesKey === appliedInvitesKey) return;
+    setInvites(initialInvites);
+    setAppliedInvitesKey(initialInvitesKey);
+  }, [initialInvites, initialInvitesKey, appliedInvitesKey]);
 
   async function changeRole(user: DashboardUserRow, nextRole: "admin" | "member") {
     setBusyId(user.id);
@@ -197,6 +213,10 @@ export function UsersScreen({
   );
 }
 
+function snapshotKey(rows: unknown[]): string {
+  return JSON.stringify(rows);
+}
+
 export function NotAuthorizedScreen() {
   return (
     <div className="flex min-h-[calc(100dvh-44px)] items-center justify-center px-4">
@@ -210,6 +230,12 @@ export function NotAuthorizedScreen() {
         <p className="m-0 mt-2 text-[14px] leading-6 text-neutral-700">
           You do not have permission to view Users.
         </p>
+        <a
+          href="/"
+          className="mt-4 inline-flex h-9 items-center justify-center rounded-[3px] border border-neutral-900 bg-neutral-900 px-3 font-mono text-[11px] font-medium uppercase tracking-[0.04em] text-white transition hover:bg-neutral-800"
+        >
+          Return to dashboard
+        </a>
       </section>
     </div>
   );

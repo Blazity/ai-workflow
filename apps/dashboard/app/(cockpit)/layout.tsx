@@ -7,6 +7,6 @@ export default async function CockpitLayout({
 }: {
   children: React.ReactNode;
 }) {
-  await requireSession();
-  return <CockpitShell>{children}</CockpitShell>;
+  const session = await requireSession();
+  return <CockpitShell session={session}>{children}</CockpitShell>;
 }

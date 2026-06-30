@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { eq } from "drizzle-orm";
+import { and, eq, notInArray } from "drizzle-orm";
 import type { Db } from "../../db/client.js";
 import { inviteEmailDelivery } from "../../db/schema.js";
 
@@ -37,6 +37,7 @@ export interface ResendEmailDeliveryEvent {
   type?: string;
   data?: {
     email_id?: string;
+    tags?: Record<string, string | undefined>;
     bounce?: {
       message?: string;
       type?: string;
@@ -51,6 +52,13 @@ export interface ResendEmailDeliveryEvent {
     };
   };
 }
+
+type MappedResendDeliveryEvent = {
+  deliveryId?: string;
+  resendEmailId?: string;
+  status: InviteEmailDeliveryStatus;
+  error?: string | null;
+};
 
 export async function createInviteEmailDelivery(
   db: InviteEmailDeliveryDb,
@@ -81,10 +89,19 @@ export async function updateInviteEmailDeliveryByResendId(
       error: input.error ?? null,
       updatedAt: new Date(),
     })
-    .where(eq(inviteEmailDelivery.resendEmailId, input.resendEmailId))
+    .where(deliveryUpdateWhere(input))
     .returning({ id: inviteEmailDelivery.id });
 
   return !!row;
+}
+
+function deliveryUpdateWhere(input: UpdateInviteEmailDeliveryInput) {
+  const byResendId = eq(inviteEmailDelivery.resendEmailId, input.resendEmailId);
+  if (input.status !== "sent") return byResendId;
+  return and(
+    byResendId,
+    notInArray(inviteEmailDelivery.status, ["bounced", "failed"]),
+  );
 }
 
 export async function updateInviteEmailDeliveryById(
@@ -123,40 +140,63 @@ export async function applyInviteEmailDeliveryEvent(
     return { handled: false, updated: false };
   }
 
-  const updated = await updateInviteEmailDeliveryByResendId(db, update);
+  if (update.deliveryId) {
+    const updatedById = await updateInviteEmailDeliveryById(db, {
+      id: update.deliveryId,
+      resendEmailId: update.resendEmailId,
+      status: update.status,
+      error: update.error,
+    });
+    if (updatedById) {
+      return { handled: true, updated: true };
+    }
+  }
+
+  const updated = update.resendEmailId
+    ? await updateInviteEmailDeliveryByResendId(db, {
+        resendEmailId: update.resendEmailId,
+        status: update.status,
+        error: update.error,
+      })
+    : false;
   return { handled: true, updated };
 }
 
 function mapResendDeliveryEvent(
   event: ResendEmailDeliveryEvent,
-): UpdateInviteEmailDeliveryInput | null {
+): MappedResendDeliveryEvent | null {
   const resendEmailId = event.data?.email_id;
-  if (!resendEmailId) return null;
+  const deliveryId = event.data?.tags?.invite_delivery_id?.trim() || undefined;
+  if (!resendEmailId && !deliveryId) return null;
 
   switch (event.type) {
     case "email.sent":
     case "email.delivered":
-      return { resendEmailId, status: "sent", error: null };
+      return { deliveryId, resendEmailId, status: "sent", error: null };
     case "email.bounced":
       return {
+        deliveryId,
         resendEmailId,
         status: "bounced",
         error: event.data?.bounce?.message ?? "Email bounced",
       };
     case "email.complained":
       return {
+        deliveryId,
         resendEmailId,
         status: "failed",
         error: "Recipient complained",
       };
     case "email.failed":
       return {
+        deliveryId,
         resendEmailId,
         status: "failed",
         error: event.data?.failed?.reason ?? "Email failed",
       };
     case "email.suppressed":
       return {
+        deliveryId,
         resendEmailId,
         status: "failed",
         error: event.data?.suppressed?.message ?? "Email suppressed",

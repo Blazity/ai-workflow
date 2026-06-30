@@ -12,7 +12,7 @@ This is a [pnpm workspace](https://pnpm.io/workspaces) monorepo. The workspace g
 ai-workflow/
 ├── apps/
 │   ├── worker/      # The bot — Nitro HTTP server + Vercel Workflows + Sandbox orchestration
-│   ├── dashboard/   # The cockpit — Next.js observability UI (read-only)
+│   ├── dashboard/   # The cockpit — Next.js observability and admin UI
 │   └── shared/      # Type-only contracts shared between worker and dashboard
 ├── docs/            # Specs, plans, and integration guides
 ├── pnpm-workspace.yaml
@@ -22,13 +22,13 @@ ai-workflow/
 | Package | Name | What it is |
 |---------|------|-----------|
 | `apps/worker` | `worker` | The actual automation service: Nitro server, durable workflow, sandbox lifecycle, Jira/VCS/Slack adapters. This is what you deploy to run the bot. Everything in the [Workflow Deep-dive](#workflow-deep-dive) below lives here, under `apps/worker/src/`. |
-| `apps/dashboard` | `ai-workflow-dashboard` | A Next.js "cockpit" that visualizes runs, KPIs, and eval health. **Read-only** — it holds no credentials and never writes; it fetches the worker's `/api/v1/*` API server-side and renders it. Optional: the bot runs fine without it. |
+| `apps/dashboard` | `ai-workflow-dashboard` | A Next.js "cockpit" that visualizes runs, KPIs, eval health, and dashboard user administration. It proxies worker APIs server-side and stores only the worker-issued dashboard session cookie. Optional: the bot runs fine without it. |
 | `apps/shared` | _(no package — see below)_ | Shared TypeScript contracts (`domain.ts`, `api.ts`) describing the worker's API responses, so the dashboard and worker stay in sync at the type level. |
 
 ### How the packages connect
 
 - **`@shared/*` is a path alias, not an npm package.** `apps/shared` has no `package.json` and emits nothing (`noEmit: true`). Both apps map `@shared/*` → `../shared/*` in their `tsconfig.json` and import the contracts directly from source (`import type { RunsResponse } from "@shared/contracts"`). It's a type-only seam — no build step, no version to bump.
-- **The dashboard talks to the worker over HTTP.** The worker exposes a read-only API under `/api/v1/*` (`apps/worker/src/routes/api/v1/`), gated by [`apps/worker/src/middleware/api-auth.ts`](./apps/worker/src/middleware/api-auth.ts) on a valid **Better Auth session**. Human login lives on the worker (`/api/auth/**`, `apps/worker/src/auth.ts`); the dashboard is a thin BFF that stores the worker-issued session token in a first-party `httpOnly` cookie and replays it as `Authorization: Bearer <token>` on every server-side call, so the token never reaches the browser. The two apps deploy as **separate Vercel projects** and share only the `@shared/contracts` types.
+- **The dashboard talks to the worker over HTTP.** The worker exposes the dashboard API under `/api/v1/*` (`apps/worker/src/routes/api/v1/`), gated by [`apps/worker/src/middleware/api-auth.ts`](./apps/worker/src/middleware/api-auth.ts) on a valid **Better Auth session**. Human login lives on the worker (`/api/auth/**`, `apps/worker/src/auth.ts`); the dashboard is a thin BFF that stores the worker-issued session token in a first-party `httpOnly` cookie. Browser requests go to the dashboard, and the Next server forwards the session to the worker as `Authorization: Bearer <token>`. The two apps deploy as **separate Vercel projects** and share only the `@shared/contracts` types.
 
 ### Dashboard auth configuration
 

@@ -5,18 +5,18 @@ import { requireDashboardActor, toHttpError } from "../../../../../lib/auth/requ
 import { updateDashboardUserRole } from "../../../../../lib/auth/users-read.js";
 
 export default defineEventHandler(async (event) => {
-  const actor = await requireDashboardActor(event);
-  const userId = getRouterParam(event, "userId");
-  if (!userId) {
-    throw createError({ statusCode: 400, statusMessage: "Missing user id" });
-  }
-
-  const body = await readBody<{ role?: string }>(event);
-  if (body.role !== "admin" && body.role !== "member") {
-    throw createError({ statusCode: 400, statusMessage: "Invalid role" });
-  }
-
   try {
+    const actor = await requireDashboardActor(event);
+    const userId = getRouterParam(event, "userId");
+    if (!userId) {
+      throw createError({ statusCode: 400, statusMessage: "Missing user id" });
+    }
+
+    const body = (await readBody<{ role?: string }>(event).catch(() => null)) ?? {};
+    if (body.role !== "admin" && body.role !== "member") {
+      throw createError({ statusCode: 400, statusMessage: "Invalid role" });
+    }
+
     return await updateDashboardUserRole(getDb(), {
       organizationSlug: env.DASHBOARD_ORG_SLUG,
       actorRole: actor.role,
