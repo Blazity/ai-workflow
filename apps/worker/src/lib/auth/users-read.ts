@@ -16,6 +16,7 @@ export type DashboardAuthMethod = "Password" | "SSO" | "Password + SSO" | "Unkno
 
 export type DashboardActor = {
   organizationId: string;
+  organizationName: string;
   memberId: string;
   userId: string;
   role: DashboardRole;
@@ -70,6 +71,7 @@ export async function getDashboardActor(
 
   return {
     organizationId: org.id,
+    organizationName: org.name,
     memberId: membership.id,
     userId: membership.userId,
     role,
@@ -193,7 +195,7 @@ export async function updateDashboardUserRole(
 
 async function findOrganizationBySlug(db: Db, slug: string) {
   const [org] = await db
-    .select({ id: organization.id, slug: organization.slug })
+    .select({ id: organization.id, name: organization.name, slug: organization.slug })
     .from(organization)
     .where(eq(organization.slug, slug))
     .limit(1);
