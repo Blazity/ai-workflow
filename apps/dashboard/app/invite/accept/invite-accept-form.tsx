@@ -235,7 +235,9 @@ export default function InviteAcceptForm({ inviteId }: { inviteId: string }) {
               <AuthButton
                 type="button"
                 onClick={() => {
-                  window.location.assign("/api/auth/sso/start");
+                  window.location.assign(
+                    `/api/auth/sso/start?inviteId=${encodeURIComponent(inviteId)}`,
+                  );
                 }}
               >
                 Continue with SSO

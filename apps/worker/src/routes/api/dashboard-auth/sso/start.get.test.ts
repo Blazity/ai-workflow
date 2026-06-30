@@ -62,4 +62,25 @@ describe("SSO start API", () => {
 
     expect(res.status).toBe(502);
   });
+
+  it("preserves invite context in the SSO callback URL", async () => {
+    const res = await handlerFor(startRoute)(
+      new Request("http://localhost/?inviteId=invite_1"),
+    );
+
+    expect(res.status).toBe(200);
+    const request = state.authHandler.mock.calls[0]?.[0] as Request | undefined;
+    await expect(request?.json()).resolves.toMatchObject({
+      callbackURL:
+        "https://worker.example.com/api/dashboard-auth/sso/complete?inviteId=invite_1",
+    });
+  });
+
+  it("rejects non-string SSO redirect URLs from Better Auth", async () => {
+    state.authHandler.mockResolvedValueOnce(Response.json({ url: 123 }));
+
+    const res = await handlerFor(startRoute)(new Request("http://localhost/"));
+
+    expect(res.status).toBe(502);
+  });
 });

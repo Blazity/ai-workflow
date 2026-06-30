@@ -51,6 +51,16 @@ export type AcceptDashboardInviteResult = {
   };
 };
 
+export type AcceptDashboardSsoInviteInput = {
+  organizationSlug: string;
+  inviteId: string;
+  user: {
+    id: string;
+    email: string;
+  };
+  now?: Date;
+};
+
 export type DashboardInviteAcceptanceState = {
   inviteId: string;
   email: string;
@@ -166,6 +176,39 @@ export async function acceptDashboardInvite(
   };
 }
 
+export async function acceptDashboardSsoInvite(
+  db: Db,
+  _auth: Auth,
+  input: AcceptDashboardSsoInviteInput,
+): Promise<void> {
+  const now = input.now ?? new Date();
+  const org = await requireOrganization(db, input.organizationSlug);
+  const invite = await requirePendingInvite(db, org.id, input.inviteId, now);
+  if (normalizeEmail(invite.email) !== normalizeEmail(input.user.email)) {
+    throw new DashboardAuthError(403, "Invite does not match signed-in user");
+  }
+
+  await db.transaction(async (tx) => {
+    const currentInvite = await requirePendingInvite(tx, org.id, invite.id, now);
+    if (normalizeEmail(currentInvite.email) !== normalizeEmail(input.user.email)) {
+      throw new DashboardAuthError(403, "Invite does not match signed-in user");
+    }
+    await ensureInviteMembership(tx, {
+      organizationId: org.id,
+      userId: input.user.id,
+      role: requireInviteRole(currentInvite.role),
+    });
+    const [accepted] = await tx
+      .update(invitation)
+      .set({ status: "accepted" })
+      .where(and(eq(invitation.id, currentInvite.id), eq(invitation.status, "pending")))
+      .returning({ id: invitation.id });
+    if (!accepted) {
+      throw new DashboardAuthError(409, "Invite is no longer pending");
+    }
+  });
+}
+
 function requireInviteRole(role: string): DashboardRole {
   if (role === "owner" || role === "admin" || role === "member") return role;
   throw new DashboardAuthError(500, "Invalid invite role");
@@ -265,7 +308,7 @@ async function ensureInviteMembership(
     )
     .limit(1);
   if (existing) {
-    if (existing.role !== input.role) {
+    if (roleRank(input.role) > roleRank(existing.role)) {
       await db
         .update(memberTable)
         .set({ role: input.role })
@@ -280,6 +323,17 @@ async function ensureInviteMembership(
     userId: input.userId,
     role: input.role,
   });
+}
+
+function roleRank(role: string): number {
+  if (role === "owner") return 3;
+  if (role === "admin") return 2;
+  if (role === "member") return 1;
+  return 0;
+}
+
+function normalizeEmail(email: string): string {
+  return email.trim().toLowerCase();
 }
 
 function sessionTokenFromSignIn(signIn: { headers: Headers; response: unknown }): string {
