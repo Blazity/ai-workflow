@@ -126,7 +126,7 @@ describe("users API", () => {
 
     expect(res.status).toBe(200);
     const json = await res.json();
-    expect(json.members).toEqual(
+    expect(json.users).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           id: "user_owner",
