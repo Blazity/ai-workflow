@@ -59,7 +59,7 @@ async function runGate(input: PostPrGateWorkflowInput) {
   }
 
   if (!hasGateStatusCapability(adapters.vcs)) {
-    throw new Error("VCS adapter does not support gate statuses (post-pr-gate requires GitHub)");
+    throw new Error("VCS adapter does not support gate statuses");
   }
   const vcs = adapters.vcs;
 

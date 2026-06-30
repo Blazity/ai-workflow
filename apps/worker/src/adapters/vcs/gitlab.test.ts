@@ -489,6 +489,7 @@ describe("GitLabAdapter", () => {
     });
 
     it("retries a transient 409 from GitLab commit status creation", async () => {
+      vi.useFakeTimers();
       mockFetch
         .mockResolvedValueOnce(
           gitLabResponse(
@@ -499,7 +500,7 @@ describe("GitLabAdapter", () => {
         .mockResolvedValueOnce(gitLabResponse({}, { status: 201 }));
 
       const adapter = glAdapter();
-      await adapter.updateGateStatus(
+      const update = adapter.updateGateStatus(
         {
           provider: "gitlab",
           name: "blazebot / code-hygiene",
@@ -507,6 +508,9 @@ describe("GitLabAdapter", () => {
         },
         { status: "completed", conclusion: "success" },
       );
+      await vi.advanceTimersByTimeAsync(500);
+      await update;
+      vi.useRealTimers();
 
       expect(mockFetch).toHaveBeenCalledTimes(2);
       expect(mockFetch).toHaveBeenNthCalledWith(
@@ -521,7 +525,39 @@ describe("GitLabAdapter", () => {
       );
     });
 
+    it("backs off before retrying GitLab commit status 409 conflicts", async () => {
+      vi.useFakeTimers();
+      mockFetch
+        .mockResolvedValueOnce(
+          gitLabResponse(
+            { message: "update already in progress" },
+            { status: 409, statusText: "Conflict" },
+          ),
+        )
+        .mockResolvedValueOnce(gitLabResponse({}, { status: 201 }));
+
+      const adapter = glAdapter();
+      const update = adapter.updateGateStatus(
+        {
+          provider: "gitlab",
+          name: "blazebot / code-hygiene",
+          headSha: "sha1",
+        },
+        { status: "completed", conclusion: "success" },
+      );
+
+      await vi.advanceTimersByTimeAsync(0);
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(499);
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);
+      await update;
+      vi.useRealTimers();
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+    });
+
     it("retries repeated transient 409 responses before success", async () => {
+      vi.useFakeTimers();
       mockFetch
         .mockResolvedValueOnce(
           gitLabResponse(
@@ -538,7 +574,7 @@ describe("GitLabAdapter", () => {
         .mockResolvedValueOnce(gitLabResponse({}, { status: 201 }));
 
       const adapter = glAdapter();
-      await adapter.updateGateStatus(
+      const update = adapter.updateGateStatus(
         {
           provider: "gitlab",
           name: "blazebot / code-hygiene",
@@ -546,11 +582,15 @@ describe("GitLabAdapter", () => {
         },
         { status: "completed", conclusion: "success" },
       );
+      await vi.advanceTimersByTimeAsync(1500);
+      await update;
+      vi.useRealTimers();
 
       expect(mockFetch).toHaveBeenCalledTimes(3);
     });
 
     it("throws the final GitLab REST error after exhausting 409 retries", async () => {
+      vi.useFakeTimers();
       mockFetch
         .mockResolvedValueOnce(
           gitLabResponse(
@@ -578,18 +618,20 @@ describe("GitLabAdapter", () => {
         );
 
       const adapter = glAdapter();
-      await expect(
-        adapter.updateGateStatus(
-          {
-            provider: "gitlab",
-            name: "blazebot / code-hygiene",
-            headSha: "sha1",
-          },
-          { status: "completed", conclusion: "success" },
-        ),
-      ).rejects.toThrow(
+      const update = adapter.updateGateStatus(
+        {
+          provider: "gitlab",
+          name: "blazebot / code-hygiene",
+          headSha: "sha1",
+        },
+        { status: "completed", conclusion: "success" },
+      );
+      const expectedError = expect(update).rejects.toThrow(
         'GitLab REST POST /projects/blazity%2Fdemo-app/statuses/sha1 failed with 409 Conflict: {"message":"exhausted conflict"}',
       );
+      await vi.advanceTimersByTimeAsync(3500);
+      await expectedError;
+      vi.useRealTimers();
       expect(mockFetch).toHaveBeenCalledTimes(4);
     });
   });
@@ -601,7 +643,7 @@ describe("GitLabAdapter", () => {
           {
             old_path: "src/new.ts",
             new_path: "src/new.ts",
-            diff: "@@ new",
+            diff: "@@ -0,0 +1,2 @@\n+one\n+two",
             new_file: true,
             deleted_file: false,
             renamed_file: false,
@@ -609,7 +651,7 @@ describe("GitLabAdapter", () => {
           {
             old_path: "src/removed.ts",
             new_path: "src/removed.ts",
-            diff: "@@ removed",
+            diff: "@@ -1,2 +0,0 @@\n-one\n-two",
             new_file: false,
             deleted_file: true,
             renamed_file: false,
@@ -617,7 +659,7 @@ describe("GitLabAdapter", () => {
           {
             old_path: "src/old.ts",
             new_path: "src/renamed.ts",
-            diff: "@@ renamed",
+            diff: "@@ -1 +1 @@\n-old\n+new",
             new_file: false,
             deleted_file: false,
             renamed_file: true,
@@ -625,7 +667,7 @@ describe("GitLabAdapter", () => {
           {
             old_path: "src/modified.ts",
             new_path: "src/modified.ts",
-            diff: "@@ modified",
+            diff: "@@ -1,2 +1,2 @@\n unchanged\n-old\n+new",
             new_file: false,
             deleted_file: false,
             renamed_file: false,
@@ -640,30 +682,30 @@ describe("GitLabAdapter", () => {
         {
           path: "src/new.ts",
           changeType: "added",
-          patch: "@@ new",
-          additions: 0,
+          patch: "@@ -0,0 +1,2 @@\n+one\n+two",
+          additions: 2,
           deletions: 0,
         },
         {
           path: "src/removed.ts",
           changeType: "removed",
-          patch: "@@ removed",
+          patch: "@@ -1,2 +0,0 @@\n-one\n-two",
           additions: 0,
-          deletions: 0,
+          deletions: 2,
         },
         {
           path: "src/renamed.ts",
           changeType: "renamed",
-          patch: "@@ renamed",
-          additions: 0,
-          deletions: 0,
+          patch: "@@ -1 +1 @@\n-old\n+new",
+          additions: 1,
+          deletions: 1,
         },
         {
           path: "src/modified.ts",
           changeType: "modified",
-          patch: "@@ modified",
-          additions: 0,
-          deletions: 0,
+          patch: "@@ -1,2 +1,2 @@\n unchanged\n-old\n+new",
+          additions: 1,
+          deletions: 1,
         },
       ]);
       expect(mockFetch).toHaveBeenCalledWith(
@@ -789,14 +831,13 @@ describe("GitLabAdapter", () => {
     });
 
     it.each(["collapsed", "too_large"] as const)(
-      "throws when a GitLab MR diff item is %s",
+      "keeps a GitLab MR diff item when it is %s",
       async (partialFlag) => {
         mockFetch.mockResolvedValueOnce(
           gitLabResponse([
             {
               old_path: "src/huge.ts",
               new_path: "src/huge.ts",
-              diff: "",
               new_file: false,
               deleted_file: false,
               renamed_file: false,
@@ -806,9 +847,14 @@ describe("GitLabAdapter", () => {
         );
 
         const adapter = glAdapter();
-        await expect(adapter.listPRFiles(42)).rejects.toThrow(
-          "GitLab MR diff for src/huge.ts is incomplete",
-        );
+        await expect(adapter.listPRFiles(42)).resolves.toEqual([
+          {
+            path: "src/huge.ts",
+            changeType: "modified",
+            additions: 0,
+            deletions: 0,
+          },
+        ]);
       },
     );
   });

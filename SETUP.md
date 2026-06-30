@@ -259,7 +259,7 @@ vercel env add JIRA_API_TOKEN production
 | `VCS_KIND`                                                                                         | `github` or `gitlab`                                   |
 | `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY`, `GITHUB_INSTALLATION_ID`, `GITHUB_OWNER`, `GITHUB_REPO` | If `VCS_KIND=github` (GitHub App auth)                 |
 | `GITHUB_WEBHOOK_SECRET`                                                                            | If `VCS_KIND=github` — signs `pull_request` webhook deliveries for the post-PR gate. Required in **every** environment (Production, Preview, Development) because the webhook fires on preview deployments too. Generate: `openssl rand -hex 32`. |
-| `GITLAB_TOKEN`, `GITLAB_PROJECT_ID`, `GITLAB_WEBHOOK_SECRET`                                       | If `VCS_KIND=gitlab` — GitLab.com token with `api` + `write_repository`, namespace/project path, and merge request webhook secret. Generate: `openssl rand -hex 32`. |
+| `GITLAB_TOKEN`, `GITLAB_PROJECT_ID`, `GITLAB_BASE_BRANCH`, `GITLAB_WEBHOOK_SECRET`                  | If `VCS_KIND=gitlab` — GitLab.com token with `api` + `write_repository`, namespace/project path, target branch, and merge request webhook secret. Generate: `openssl rand -hex 32`. |
 | `ANTHROPIC_API_KEY`                                                                                | If `AGENT_KIND=claude` (default)                       |
 | `CODEX_API_KEY` (or `CODEX_CHATGPT_OAUTH_TOKEN`)                                                   | If `AGENT_KIND=codex`                                  |
 | `DATABASE_URL`                                                                                     | Auto-injected by Neon integration                      |
@@ -345,7 +345,7 @@ Verify by moving a test ticket into the AI column and watching the Vercel runtim
 
 ---
 
-## 8. Register the GitHub webhook (post-PR gate)
+## 8. Register the VCS webhook (post-PR gate)
 
 The post-PR gate runs configurable checks against every PR/MR on the target repo. GitHub surfaces results as Check Runs; GitLab.com surfaces them as commit statuses on the MR head SHA. The provider webhook is what triggers it.
 
