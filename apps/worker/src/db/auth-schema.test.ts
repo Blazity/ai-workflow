@@ -1,3 +1,6 @@
+import { readFileSync, readdirSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { PGlite } from "@electric-sql/pglite";
 import { eq } from "drizzle-orm";
 import { beforeEach, describe, expect, it } from "vitest";
 import type { Db } from "./client.js";
@@ -168,3 +171,71 @@ describe("Better Auth organization and SSO schema", () => {
     expect(deliveries).toEqual([]);
   });
 });
+
+describe("auth invariant migration preflight", () => {
+  it.each([
+    {
+      name: "duplicate lowercased user emails",
+      sql: `
+        insert into "user" ("id", "name", "email") values
+          ('user_a', 'User A', 'Admin@Example.com'),
+          ('user_b', 'User B', 'admin@example.com');
+      `,
+      message: "auth invariant preflight failed: duplicate lowercased user emails",
+    },
+    {
+      name: "duplicate account provider/account pairs",
+      sql: `
+        insert into "user" ("id", "name", "email") values ('user_a', 'User A', 'user@example.com');
+        insert into "account" ("id", "user_id", "provider_id", "account_id") values
+          ('account_a', 'user_a', 'credential', 'same'),
+          ('account_b', 'user_a', 'credential', 'same');
+      `,
+      message: "auth invariant preflight failed: duplicate account provider/account pairs",
+    },
+    {
+      name: "invalid invitation roles",
+      sql: `
+        insert into "user" ("id", "name", "email") values ('user_a', 'User A', 'user@example.com');
+        insert into "organization" ("id", "name", "slug") values ('org_a', 'Org A', 'org-a');
+        insert into "invitation" ("id", "organization_id", "email", "role", "expires_at", "inviter_id")
+        values ('invite_a', 'org_a', 'new@example.com', 'superadmin', now(), 'user_a');
+      `,
+      message: "auth invariant preflight failed: invalid invitation roles",
+    },
+    {
+      name: "invalid member roles",
+      sql: `
+        insert into "user" ("id", "name", "email") values ('user_a', 'User A', 'user@example.com');
+        insert into "organization" ("id", "name", "slug") values ('org_a', 'Org A', 'org-a');
+        insert into "member" ("id", "organization_id", "user_id", "role")
+        values ('member_a', 'org_a', 'user_a', 'superadmin');
+      `,
+      message: "auth invariant preflight failed: invalid member roles",
+    },
+  ])("fails clearly before enforcing constraints for $name", async ({ sql, message }) => {
+    const client = await createMigratedClientThrough("0006");
+    await client.exec(sql);
+
+    await expect(applyMigration(client, "0007_auth_invariants.sql")).rejects.toThrow(
+      message,
+    );
+  });
+});
+
+async function createMigratedClientThrough(lastPrefix: string): Promise<PGlite> {
+  const client = new PGlite();
+  const dir = fileURLToPath(new URL("../../drizzle/", import.meta.url));
+  const files = readdirSync(dir)
+    .filter((f) => f.endsWith(".sql") && f.slice(0, 4) <= lastPrefix)
+    .sort();
+  for (const file of files) {
+    await client.exec(readFileSync(`${dir}${file}`, "utf8"));
+  }
+  return client;
+}
+
+async function applyMigration(client: PGlite, file: string): Promise<void> {
+  const dir = fileURLToPath(new URL("../../drizzle/", import.meta.url));
+  await client.exec(readFileSync(`${dir}${file}`, "utf8"));
+}

@@ -131,7 +131,7 @@ describe("dashboard invites", () => {
     });
   });
 
-  it("does not create an invite when the email provider rejects synchronously", async () => {
+  it("keeps the invite and records failed delivery when the email provider rejects", async () => {
     const sendInviteEmail: SendInviteEmail = vi.fn(async () => {
       throw new Error("bad sender");
     });
@@ -148,7 +148,12 @@ describe("dashboard invites", () => {
       }),
     ).rejects.toThrow("bad sender");
 
-    await expect(inviteCount()).resolves.toBe(0);
+    await expect(inviteCount()).resolves.toBe(1);
+    const [delivery] = await db.select().from(inviteEmailDelivery);
+    expect(delivery).toMatchObject({
+      status: "failed",
+      error: "bad sender",
+    });
   });
 
   it("keeps the invite if sent email metadata cannot be updated", async () => {
@@ -171,16 +176,20 @@ describe("dashboard invites", () => {
     let deliveryExistedBeforeSend = false;
     let sendRanAfterTransaction = false;
     let transactionActive = false;
+    const order: string[] = [];
     const originalTransaction = db.transaction.bind(db);
     vi.spyOn(db, "transaction").mockImplementation((async (callback, config) => {
+      order.push("transaction:start");
       transactionActive = true;
       try {
         return await originalTransaction(callback, config);
       } finally {
         transactionActive = false;
+        order.push("transaction:end");
       }
     }) as typeof db.transaction);
     const sendInviteEmail: SendInviteEmail = vi.fn(async ({ invitationId }) => {
+      order.push("send");
       sendRanAfterTransaction = !transactionActive;
       const [deliveryIntent] = await db
         .select({ id: inviteEmailDelivery.id })
@@ -206,6 +215,7 @@ describe("dashboard invites", () => {
     const after = await db.select().from(invitation);
     expect(sendInviteEmail).toHaveBeenCalledTimes(1);
     expect(sendRanAfterTransaction).toBe(true);
+    expect(order).toEqual(["transaction:start", "transaction:end", "send"]);
     expect(deliveryExistedBeforeSend).toBe(true);
     expect(after).toHaveLength(before.length + 1);
     expect(after).toEqual(
@@ -248,7 +258,7 @@ describe("dashboard invites", () => {
 
     const rows = await listDashboardInvites(db, {
       organizationSlug: "ai-workflow",
-      actorRole: "owner",
+      actor: ownerActor,
       now: new Date("2026-06-27T12:00:00.000Z"),
     });
 

@@ -4,6 +4,22 @@ import { redirect } from "next/navigation";
 
 import { fetchAuthWorker } from "@/lib/auth/worker";
 
+export type DashboardSession = {
+  role: "owner" | "admin" | "member";
+  canManageUsers: boolean;
+};
+
+function isDashboardSession(value: unknown): value is DashboardSession {
+  if (!value || typeof value !== "object") return false;
+  const session = value as Partial<DashboardSession>;
+  return (
+    (session.role === "owner" ||
+      session.role === "admin" ||
+      session.role === "member") &&
+    typeof session.canManageUsers === "boolean"
+  );
+}
+
 /**
  * Server-side gate for the cockpit. Reads the ba_session cookie and validates
  * it against the worker. Missing, invalid, OR unverifiable (worker down) →
@@ -14,19 +30,16 @@ import { fetchAuthWorker } from "@/lib/auth/worker";
  * Server Component render. A stale cookie is overwritten at next login, or
  * cleared by the explicit logout route.)
  */
-export async function requireSession(): Promise<void> {
+export async function requireSession(): Promise<DashboardSession> {
   const token = (await cookies()).get("ba_session")?.value;
   if (!token) redirect("/login");
 
-  let valid = false;
-  try {
-    const res = await fetchAuthWorker("/api/auth/get-session", {
-      headers: { Authorization: `Bearer ${token}` },
-    });
-    // Better Auth returns 200 with a null body when the token is invalid.
-    valid = Boolean(res?.ok && (await res.json()) !== null);
-  } catch {
-    valid = false;
-  }
-  if (!valid) redirect("/login");
+  const res = await fetchAuthWorker("/api/v1/session", {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res?.ok) redirect("/login");
+
+  const session = await res.json().catch(() => null);
+  if (!isDashboardSession(session)) redirect("/login");
+  return session;
 }

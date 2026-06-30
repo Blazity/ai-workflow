@@ -3,8 +3,8 @@ import "server-only";
 import { redirect } from "next/navigation";
 import { cookies } from "next/headers";
 import { ForbiddenError, UnauthorizedError } from "@/lib/auth/errors";
+import { workerUrl } from "@/lib/auth/worker-core";
 
-const BASE = process.env.WORKER_BASE_URL ?? "";
 const FETCH_TIMEOUT_MS = 10_000;
 
 /** Append a query string, skipping empty/undefined values. */
@@ -32,7 +32,7 @@ export function withQuery(
 export async function getJSON<T>(path: string): Promise<T> {
   const jar = await cookies();
   const session = jar.get("ba_session")?.value;
-  const res = await fetch(`${BASE}${path}`, {
+  const res = await fetch(workerUrl(process.env.WORKER_BASE_URL, path), {
     cache: "no-store",
     headers: session ? { Authorization: `Bearer ${session}` } : undefined,
     signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),

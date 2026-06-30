@@ -25,6 +25,7 @@ export type SendInviteEmail = (input: {
   html: string;
   text: string;
   invitationId: string;
+  deliveryId: string;
   acceptUrl: string;
   expiresAt: Date;
 }) => Promise<{ providerMessageId: string }>;
@@ -58,6 +59,7 @@ export async function createDashboardInvite(
 ): Promise<DashboardInviteRow> {
   assertCanManageInvites(input.actor.role);
   const org = await requireOrganization(db, input.organizationSlug);
+  assertActorInOrganization(input.actor, org.id);
   const email = normalizeInviteEmail(input.email);
   await assertCanInviteEmail(db, org.id, email);
 
@@ -100,11 +102,16 @@ export async function createDashboardInvite(
       ...template,
       to: email,
       invitationId: inviteId,
+      deliveryId,
       acceptUrl,
       expiresAt,
     });
   } catch (error) {
-    await db.delete(invitation).where(eq(invitation.id, created.id));
+    await updateInviteEmailDeliveryById(db, {
+      id: deliveryId,
+      status: "failed",
+      error: messageFromUnknown(error),
+    });
     throw error;
   }
 
@@ -126,12 +133,13 @@ export async function listDashboardInvites(
   db: Db,
   input: {
     organizationSlug: string;
-    actorRole: DashboardRole;
+    actor: DashboardActor;
     now?: Date;
   },
 ): Promise<DashboardInviteRow[]> {
-  assertCanManageInvites(input.actorRole);
+  assertCanManageInvites(input.actor.role);
   const org = await requireOrganization(db, input.organizationSlug);
+  assertActorInOrganization(input.actor, org.id);
   const now = input.now ?? new Date();
 
   const rows = await db
@@ -158,7 +166,7 @@ export async function listDashboardInvites(
         ...row,
         latestEmailStatus: deliveryByInvite.get(row.id) ?? null,
       },
-      input.actorRole,
+      input.actor.role,
       now,
     ),
   );
@@ -178,6 +186,7 @@ export async function resendDashboardInvite(
 ): Promise<DashboardInviteRow> {
   assertCanManageInvites(input.actor.role);
   const org = await requireOrganization(db, input.organizationSlug);
+  assertActorInOrganization(input.actor, org.id);
   const now = input.now ?? new Date();
   const existing = await requireInvite(db, org.id, input.inviteId);
   const currentStatus = resolvedInviteStatus(existing.status, existing.expiresAt, now);
@@ -218,6 +227,7 @@ export async function resendDashboardInvite(
       ...template,
       to: existing.email,
       invitationId: existing.id,
+      deliveryId,
       acceptUrl,
       expiresAt,
     });
@@ -255,6 +265,7 @@ export async function cancelDashboardInvite(
 ): Promise<DashboardInviteRow> {
   assertCanManageInvites(input.actor.role);
   const org = await requireOrganization(db, input.organizationSlug);
+  assertActorInOrganization(input.actor, org.id);
   const now = input.now ?? new Date();
   const existing = await requireInvite(db, org.id, input.inviteId);
   const currentStatus = resolvedInviteStatus(existing.status, existing.expiresAt, now);
@@ -265,8 +276,11 @@ export async function cancelDashboardInvite(
   const [updated] = await db
     .update(invitation)
     .set({ status: "canceled" })
-    .where(eq(invitation.id, existing.id))
+    .where(and(eq(invitation.id, existing.id), eq(invitation.status, "pending")))
     .returning();
+  if (!updated) {
+    throw new DashboardAuthError(409, "Invite is no longer pending");
+  }
 
   return inviteRowFromRecord(
     {
@@ -282,6 +296,15 @@ export async function cancelDashboardInvite(
 
 function assertCanManageInvites(role: DashboardRole): void {
   if (!canInvite(role)) {
+    throw new DashboardAuthError(403, "Forbidden");
+  }
+}
+
+function assertActorInOrganization(
+  actor: DashboardActor,
+  organizationId: string,
+): void {
+  if (actor.organizationId !== organizationId) {
     throw new DashboardAuthError(403, "Forbidden");
   }
 }
