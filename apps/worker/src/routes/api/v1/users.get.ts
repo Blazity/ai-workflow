@@ -12,11 +12,11 @@ export default defineEventHandler(async (event) => {
       throw createError({ statusCode: 403, statusMessage: "Forbidden" });
     }
 
-    const members = await listDashboardUsers(getDb(), {
+    const users = await listDashboardUsers(getDb(), {
       organizationSlug: env.DASHBOARD_ORG_SLUG,
       actorRole: actor.role,
     });
-    return { members };
+    return { users };
   } catch (error) {
     toHttpError(error);
   }
