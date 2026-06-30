@@ -207,6 +207,38 @@ describe("acceptDashboardInvite", () => {
     expect(members).toHaveLength(1);
   });
 
+  it("updates an existing member role when accepting a higher-role invite", async () => {
+    const { db, auth } = await setupInvite("existing@example.com", "admin");
+    await seedAuthUser(auth, {
+      email: "existing@example.com",
+      password: "password123",
+      name: "Existing",
+    });
+    const [existingUser] = await db
+      .select({ id: user.id })
+      .from(user)
+      .where(eq(user.email, "existing@example.com"));
+    await db.insert(member).values({
+      id: "member_existing",
+      organizationId: "org_aiw",
+      userId: existingUser.id,
+      role: "member",
+    });
+
+    const result = await acceptDashboardInvite(db, auth, {
+      organizationSlug: "ai-workflow",
+      inviteId: "invite_1",
+      password: "password123",
+      now: new Date("2026-06-26T00:00:00.000Z"),
+    });
+
+    const [membership] = await db
+      .select({ role: member.role })
+      .from(member)
+      .where(eq(member.userId, result.user.id));
+    expect(membership).toEqual({ role: "admin" });
+  });
+
   it("re-checks pending invite state before creating membership", async () => {
     const { db, auth } = await setupInvite();
     const originalTransaction = db.transaction.bind(db);
