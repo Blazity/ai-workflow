@@ -218,6 +218,8 @@ describe("env", () => {
     const partial = { ...VALID_ENV };
     delete (partial as any).GITHUB_WEBHOOK_SECRET;
     Object.assign(process.env, partial);
+    delete process.env.GITHUB_WEBHOOK_SECRET;
+    delete process.env.GITLAB_WEBHOOK_SECRET;
 
     await expect(async () => {
       await import("./env.js");
@@ -237,6 +239,8 @@ describe("env", () => {
     (gitlabEnv as any).GITLAB_TOKEN = "glpat-test";
     (gitlabEnv as any).GITLAB_PROJECT_ID = "group/repo";
     Object.assign(process.env, gitlabEnv);
+    delete process.env.GITHUB_WEBHOOK_SECRET;
+    delete process.env.GITLAB_WEBHOOK_SECRET;
 
     await expect(async () => {
       await import("./env.js");

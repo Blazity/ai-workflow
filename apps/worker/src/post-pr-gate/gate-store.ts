@@ -262,9 +262,7 @@ export class GateStore {
     if (refs.length === 0) return true;
     const checkRunIds = legacyCheckRunIdsFromRefs(refs);
     validateCheckRunIds(checkRunIds);
-    const literal = sql.raw(
-      `'${JSON.stringify(refs).replaceAll("'", "''")}'::jsonb`,
-    );
+    const refsJson = JSON.stringify(refs);
     const checkRunIdsUpdate =
       checkRunIds.length > 0
         ? {
@@ -276,7 +274,7 @@ export class GateStore {
     const rows = await this.db
       .update(gateCurrent)
       .set({
-        gateStatusRefs: sql`${gateCurrent.gateStatusRefs} || ${literal}`,
+        gateStatusRefs: sql`${gateCurrent.gateStatusRefs} || cast(${refsJson} as jsonb)`,
         ...checkRunIdsUpdate,
       })
       .where(

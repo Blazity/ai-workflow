@@ -60,7 +60,7 @@ type GitLabCommitStatusState =
   | "canceled"
   | "skipped";
 
-const COMMIT_STATUS_409_RETRY_DELAYS_MS = [1, 2, 4];
+const COMMIT_STATUS_409_RETRY_DELAYS_MS = [500, 1_000, 2_000];
 
 export interface GitLabConfig {
   token: string;
@@ -321,16 +321,20 @@ export class GitLabAdapter implements VCSAdapter, GateStatusCapableVCS, PRFilesC
 
     return diffs.map((change) => {
       const path = change.new_path ?? change.old_path ?? "";
-      if (change.collapsed || change.too_large) {
-        throw new Error(`GitLab MR diff for ${path} is incomplete`);
-      }
+      const patch =
+        typeof change.diff === "string" && change.diff.length > 0
+          ? change.diff
+          : undefined;
+      const stats = patch
+        ? countDiffStats(patch)
+        : { additions: 0, deletions: 0 };
       const file: PRFile = {
         path,
-        additions: 0,
-        deletions: 0,
+        additions: stats.additions,
+        deletions: stats.deletions,
         changeType: this.mapMRChangeType(change),
       };
-      if (change.diff !== undefined) file.patch = change.diff;
+      if (patch !== undefined) file.patch = patch;
       return file;
     });
   }
@@ -554,4 +558,17 @@ export class GitLabAdapter implements VCSAdapter, GateStatusCapableVCS, PRFilesC
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function countDiffStats(diff: string): Pick<PRFile, "additions" | "deletions"> {
+  let additions = 0;
+  let deletions = 0;
+
+  for (const line of diff.split("\n")) {
+    if (line.startsWith("+++") || line.startsWith("---")) continue;
+    if (line.startsWith("+")) additions++;
+    else if (line.startsWith("-")) deletions++;
+  }
+
+  return { additions, deletions };
 }

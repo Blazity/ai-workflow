@@ -207,6 +207,18 @@ describe("current pointer", () => {
     });
   });
 
+  it("appendGateStatusRefsForSha appends refs containing SQL-sensitive characters", async () => {
+    await store.setCurrent("o/r", 1, current);
+    const ref = {
+      provider: "gitlab" as const,
+      name: "blazebot / Bob's \"quoted\" check",
+      headSha: "sha'1",
+    };
+
+    expect(await store.appendGateStatusRefsForSha("o/r", 1, "sha1", [ref])).toBe(true);
+    expect((await store.getCurrent("o/r", 1))!.gateStatusRefs).toEqual([ref]);
+  });
+
   it("appendCheckRunIdsForSha keeps both columns in sync", async () => {
     await store.setCurrent("o/r", 1, current);
 
