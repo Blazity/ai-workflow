@@ -18,10 +18,11 @@ export async function GET(req: Request) {
   }
 
   const body = await readWorkerJson<{ sessionToken?: string }>(res);
-  if (!body.sessionToken) {
+  const sessionToken = body.sessionToken?.trim();
+  if (!sessionToken) {
     return NextResponse.redirect(new URL("/login", req.url));
   }
 
-  await setSessionCookie(body.sessionToken);
+  await setSessionCookie(sessionToken);
   return NextResponse.redirect(new URL("/", req.url));
 }

@@ -112,7 +112,7 @@ export function createAuth(db: Db, options: AuthOptions) {
         disableOrganizationDeletion: true,
       }),
       sso({
-        providersLimit: 0,
+        providersLimit: 10,
         domainVerification: { enabled: true },
         disableImplicitSignUp: false,
         trustEmailVerified: true,
@@ -186,25 +186,31 @@ export async function seedAuthUser(
   auth: Auth,
   creds: { email: string; password: string; name?: string },
 ): Promise<{ created: boolean; updated: boolean }> {
+  const email = creds.email.trim().toLowerCase();
   const ctx = await auth.$context;
-  const existing = await ctx.internalAdapter.findUserByEmail(creds.email, {
+  const existing = await ctx.internalAdapter.findUserByEmail(email, {
     includeAccounts: true,
   });
 
   if (!existing) {
     const hash = await ctx.password.hash(creds.password);
-    const created = await ctx.internalAdapter.createUser({
-      email: creds.email,
-      name: creds.name ?? creds.email,
-      emailVerified: true,
-    });
-    await ctx.internalAdapter.linkAccount({
-      userId: created.id,
-      providerId: "credential",
-      accountId: created.id,
-      password: hash,
-    });
-    return { created: true, updated: false };
+    try {
+      const created = await ctx.internalAdapter.createUser({
+        email,
+        name: creds.name ?? email,
+        emailVerified: true,
+      });
+      await ctx.internalAdapter.linkAccount({
+        userId: created.id,
+        providerId: "credential",
+        accountId: created.id,
+        password: hash,
+      });
+      return { created: true, updated: false };
+    } catch (error) {
+      if (!isUniqueViolation(error)) throw error;
+      return seedAuthUser(auth, { ...creds, email });
+    }
   }
 
   const credential = existing.accounts.find((a) => a.providerId === "credential");
@@ -241,7 +247,9 @@ export async function bootstrapDashboardAuth(
 ): Promise<BootstrapDashboardAuthResult> {
   const userResult = await seedAuthUser(auth, options.owner);
   const ctx = await auth.$context;
-  const existingOwner = await ctx.internalAdapter.findUserByEmail(options.owner.email);
+  const existingOwner = await ctx.internalAdapter.findUserByEmail(
+    options.owner.email.trim().toLowerCase(),
+  );
 
   if (!existingOwner) {
     throw new Error("Dashboard owner was not found after seeding");
@@ -269,24 +277,6 @@ async function ensureDashboardOrganization(
   db: Db,
   input: BootstrapDashboardAuthOptions["organization"],
 ) {
-  const [existing] = await db
-    .select()
-    .from(organization)
-    .where(eq(organization.slug, input.slug))
-    .limit(1);
-
-  if (existing) {
-    if (existing.name !== input.name) {
-      const [updated] = await db
-        .update(organization)
-        .set({ name: input.name, updatedAt: new Date() })
-        .where(eq(organization.id, existing.id))
-        .returning();
-      return { organization: updated, created: false };
-    }
-    return { organization: existing, created: false };
-  }
-
   const [created] = await db
     .insert(organization)
     .values({
@@ -294,9 +284,33 @@ async function ensureDashboardOrganization(
       name: input.name,
       slug: input.slug,
     })
+    .onConflictDoNothing({ target: organization.slug })
     .returning();
 
-  return { organization: created, created: true };
+  if (created) {
+    return { organization: created, created: true };
+  }
+
+  const [existing] = await db
+    .select()
+    .from(organization)
+    .where(eq(organization.slug, input.slug))
+    .limit(1);
+
+  if (!existing) {
+    throw new Error("Dashboard organization was not found after bootstrap");
+  }
+
+  if (existing.name !== input.name) {
+    const [updated] = await db
+      .update(organization)
+      .set({ name: input.name, updatedAt: new Date() })
+      .where(eq(organization.id, existing.id))
+      .returning();
+    return { organization: updated, created: false };
+  }
+
+  return { organization: existing, created: false };
 }
 
 async function ensureOwnerMembership(
@@ -304,6 +318,21 @@ async function ensureOwnerMembership(
   organizationId: string,
   userId: string,
 ): Promise<{ created: boolean; updated: boolean }> {
+  const [created] = await db
+    .insert(member)
+    .values({
+      id: randomUUID(),
+      organizationId,
+      userId,
+      role: "owner",
+    })
+    .onConflictDoNothing({ target: [member.organizationId, member.userId] })
+    .returning();
+
+  if (created) {
+    return { created: true, updated: false };
+  }
+
   const [existing] = await db
     .select()
     .from(member)
@@ -311,13 +340,7 @@ async function ensureOwnerMembership(
     .limit(1);
 
   if (!existing) {
-    await db.insert(member).values({
-      id: randomUUID(),
-      organizationId,
-      userId,
-      role: "owner",
-    });
-    return { created: true, updated: false };
+    throw new Error("Dashboard owner membership was not found after bootstrap");
   }
 
   if (existing.role !== "owner") {
@@ -355,6 +378,19 @@ async function ensureSsoProvider(
     domainVerified: true,
   };
 
+  const [created] = await db
+    .insert(ssoProvider)
+    .values({
+      id: randomUUID(),
+      ...providerData,
+    })
+    .onConflictDoNothing({ target: ssoProvider.providerId })
+    .returning();
+
+  if (created) {
+    return { created: true, updated: false };
+  }
+
   const [existing] = await db
     .select()
     .from(ssoProvider)
@@ -362,11 +398,7 @@ async function ensureSsoProvider(
     .limit(1);
 
   if (!existing) {
-    await db.insert(ssoProvider).values({
-      id: randomUUID(),
-      ...providerData,
-    });
-    return { created: true, updated: false };
+    throw new Error("Dashboard SSO provider was not found after bootstrap");
   }
 
   const changed =
@@ -387,6 +419,13 @@ async function ensureSsoProvider(
   }
 
   return { created: false, updated: false };
+}
+
+function isUniqueViolation(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const maybeCode = (error as { code?: unknown }).code;
+  if (maybeCode === "23505") return true;
+  return error instanceof Error && /duplicate key|unique constraint/i.test(error.message);
 }
 
 /**

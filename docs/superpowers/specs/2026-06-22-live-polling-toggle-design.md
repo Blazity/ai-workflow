@@ -10,7 +10,7 @@ component (`app/*-data.tsx`) that fetches the worker API via `getJSON`
 (`cache: "no-store"`), so the data is only as fresh as the last full page render.
 To see new runs/state the user has to manually reload. The user wants a
 **polling-based "live" mode** that refreshes the data automatically, with a
-**toggle to turn it on and off**, placed in the **navbar** (the desktop sidebar)
+**toggle to turn it on and off**, placed in the desktop top bar and mobile header
 as the easiest-to-reach location for now.
 
 ## Chosen mechanism: `router.refresh()` on an interval
@@ -115,34 +115,28 @@ useLivePoll({
 });
 ```
 
-Pass `live` / `onToggleLive` down to the sidebar (same pattern as the existing
-`collapsed` / `onToggleCollapse`):
+Expose `livePolling` / `toggleLive` through cockpit context so the top bar and mobile
+header can render the same control (same pattern as the existing
+shared cockpit state):
 
 ```ts
-<CkSidebar
-  ...
-  live={!!t.livePolling}
-  onToggleLive={() => setTweak("livePolling", !t.livePolling)}
-/>
+livePolling: !!t.livePolling,
+toggleLive: () => setTweak("livePolling", !t.livePolling),
+nextRefreshAt,
 ```
 
-### 4. Toggle UI — `components/cockpit/chrome.tsx` (`CkSidebar`)
+### 4. Toggle UI — `components/cockpit/controls.tsx` (`LivePollControl`)
 
-A footer control pinned to the bottom of the sidebar via `mt-auto`, styled to
-match existing nav items (font-mono glyph, neutral palette):
+A compact control rendered in the desktop top bar and mobile header:
 
 - **On:** pulsing **green** dot + "Live" label.
 - **Off:** static gray dot + "Live off" label.
-- `aria-pressed`, `aria-label`, and a `title` tooltip. When the sidebar is
-  collapsed to the icon rail, only the dot shows and the tooltip carries the
-  state — consistent with how nav items behave when collapsed.
-- New props on `CkSidebar`: `live: boolean`, `onToggleLive: () => void`.
+- `aria-pressed`, `aria-label`, `title` tooltip, and a countdown ring while live.
 
 ## Scope / boundaries
 
-- The **toggle control** lives only in the **desktop sidebar** (`hidden lg:flex`)
-  — the "navbar, easiest" the user asked for. Mobile gets no control yet (out of
-  scope for now); since the default is Off, mobile is simply unaffected.
+- The **toggle control** lives in the desktop top bar and the mobile header
+  — the "navbar, easiest" the user asked for.
 - The **polling effect** lives in `CockpitShell`, so once enabled it refreshes
   regardless of viewport.
 - The `CkTopbar` component in `chrome.tsx` is currently an empty shell and is not

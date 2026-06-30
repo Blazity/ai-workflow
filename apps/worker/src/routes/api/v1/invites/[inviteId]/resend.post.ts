@@ -13,6 +13,7 @@ export default defineEventHandler(async (event) => {
   if (!inviteId) {
     throw createError({ statusCode: 400, statusMessage: "Missing invite id" });
   }
+  const sendInviteEmail = createResendInviteSender();
 
   try {
     return await resendDashboardInvite(getDb(), {
@@ -21,7 +22,7 @@ export default defineEventHandler(async (event) => {
       dashboardOrigin: env.DASHBOARD_ORIGIN,
       actor,
       inviteId,
-      sendInviteEmail: createResendInviteSender(),
+      sendInviteEmail,
     });
   } catch (error) {
     toHttpError(error);
@@ -36,7 +37,7 @@ function createResendInviteSender(): SendInviteEmail {
   }
 
   const client = new Resend(apiKey);
-  return async ({ to, subject, html, text }) => {
+  return async ({ to, subject, html, text, deliveryId }) => {
     try {
       return await sendEmail(client, {
         from,
@@ -44,6 +45,7 @@ function createResendInviteSender(): SendInviteEmail {
         subject,
         html,
         text,
+        tags: [{ name: "invite_delivery_id", value: deliveryId }],
       });
     } catch (error) {
       throw new DashboardAuthError(

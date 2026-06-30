@@ -40,7 +40,7 @@ function createResendInviteSender(): SendInviteEmail {
   }
 
   const client = new Resend(apiKey);
-  return async ({ to, subject, html, text }) => {
+  return async ({ to, subject, html, text, deliveryId }) => {
     try {
       return await sendEmail(client, {
         from,
@@ -48,6 +48,7 @@ function createResendInviteSender(): SendInviteEmail {
         subject,
         html,
         text,
+        tags: [{ name: "invite_delivery_id", value: deliveryId }],
       });
     } catch (error) {
       throw new DashboardAuthError(

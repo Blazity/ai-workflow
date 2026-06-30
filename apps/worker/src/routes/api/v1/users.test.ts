@@ -163,4 +163,12 @@ describe("users API", () => {
     );
     expect(adminRes.status).toBe(403);
   });
+
+  it("returns 400 when role update body is missing", async () => {
+    const res = await roleHandlerFor("user_member")(
+      new Request("http://localhost/", { method: "PATCH" }),
+    );
+
+    expect(res.status).toBe(400);
+  });
 });
