@@ -32,6 +32,7 @@ vi.mock("../../../auth-instance.js", () => ({
 }));
 
 const usersGet = (await import("./users.get.js")).default;
+const sessionGet = (await import("./session.get.js")).default;
 const rolePatch = (await import("./users/[userId]/role.patch.js")).default;
 
 let db: Db;
@@ -114,6 +115,17 @@ function roleHandlerFor(userId: string) {
 }
 
 describe("users API", () => {
+  it("returns the active organization name in the dashboard session", async () => {
+    const res = await handlerFor(sessionGet)(new Request("http://localhost/"));
+
+    expect(res.status).toBe(200);
+    await expect(res.json()).resolves.toMatchObject({
+      organizationName: "AI Workflow",
+      role: "owner",
+      canManageUsers: true,
+    });
+  });
+
   it("returns 403 for members", async () => {
     state.sessionUserId = "user_member";
     const res = await handlerFor(usersGet)(new Request("http://localhost/"));
