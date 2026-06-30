@@ -15,6 +15,7 @@ describe("resolveSeedAuthEnv", () => {
     expect(resolved.missingRequiredEnv).toEqual([
       "BETTER_AUTH_SECRET",
       "BETTER_AUTH_URL",
+      "DASHBOARD_ORIGIN",
       "DASHBOARD_AUTH_PASSWORD",
     ]);
     expect(resolved.values.DATABASE_URL).toBe("postgres://example");

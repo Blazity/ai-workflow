@@ -18,7 +18,7 @@ type ExistingUserWithAccounts = NonNullable<
   Awaited<ReturnType<AuthContext["internalAdapter"]["findUserByEmail"]>>
 >;
 type InviteAcceptanceReadDb = Pick<Db, "select">;
-type InviteAcceptanceMembershipDb = Pick<Db, "select" | "insert">;
+type InviteAcceptanceMembershipDb = Pick<Db, "select" | "insert" | "update">;
 
 type AcceptedPasswordUserBase = {
   id: string;
@@ -255,7 +255,7 @@ async function ensureInviteMembership(
   input: { organizationId: string; userId: string; role: DashboardRole },
 ): Promise<void> {
   const [existing] = await db
-    .select({ id: memberTable.id })
+    .select({ id: memberTable.id, role: memberTable.role })
     .from(memberTable)
     .where(
       and(
@@ -264,7 +264,15 @@ async function ensureInviteMembership(
       ),
     )
     .limit(1);
-  if (existing) return;
+  if (existing) {
+    if (existing.role !== input.role) {
+      await db
+        .update(memberTable)
+        .set({ role: input.role })
+        .where(eq(memberTable.id, existing.id));
+    }
+    return;
+  }
 
   await db.insert(memberTable).values({
     id: randomUUID(),
