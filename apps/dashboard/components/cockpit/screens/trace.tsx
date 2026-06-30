@@ -144,11 +144,11 @@ export function TraceDetail({
 }) {
   const { run, steps } = data;
 
-  // Whether the run is still in flight — drives the "Live" indicator only. The
+  // Whether the run is still in flight — drives the "Running" indicator only. The
   // auto-refresh is owned globally by CockpitShell's live-poll control (the
   // topbar Live toggle), which calls router.refresh() for the active screen;
   // this screen no longer polls on its own.
-  const isLive =
+  const isRunning =
     !run ||
     (run.status !== "success" && run.status !== "failed" && run.status !== "blocked");
 
@@ -258,13 +258,13 @@ export function TraceDetail({
             <span className="font-mono text-[11px] text-neutral-700">
               {[run.ticket, run.model].filter(Boolean).join(" · ")}
             </span>
-            {isLive && (
+            {isRunning && (
               <span className="inline-flex items-center gap-1.5 font-mono text-[10px] text-mariner tracking-[0.04em] uppercase">
                 <span className="relative w-1.5 h-1.5">
                   <span className="absolute inset-0 rounded-full bg-mariner" />
                   <span className="absolute -inset-[3px] rounded-full border border-mariner animate-ck-pulse" />
                 </span>
-                Live
+                Running
               </span>
             )}
           </div>

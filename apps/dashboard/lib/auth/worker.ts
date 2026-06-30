@@ -1,9 +1,7 @@
 import "server-only";
 
 import { NextResponse } from "next/server";
-
-const BASE = process.env.WORKER_BASE_URL ?? "";
-const WORKER_TIMEOUT_MS = 10_000;
+import { fetchWorker } from "./worker-core";
 
 export async function readJsonBody<T extends object>(
   req: Request,
@@ -23,17 +21,18 @@ export async function fetchAuthWorker(
   path: string,
   init: RequestInit = {},
 ): Promise<Response | null> {
-  try {
-    return await fetch(`${BASE}${path}`, {
-      ...init,
-      cache: "no-store",
-      signal: init.signal
-        ? AbortSignal.any([init.signal, AbortSignal.timeout(WORKER_TIMEOUT_MS)])
-        : AbortSignal.timeout(WORKER_TIMEOUT_MS),
-    });
-  } catch {
-    return null;
+  return fetchWorker(process.env.WORKER_BASE_URL, path, init);
+}
+
+export function withRequestOrigin(
+  req: Request,
+  init: RequestInit = {},
+): RequestInit {
+  const headers = new Headers(init.headers);
+  if (!headers.has("origin")) {
+    headers.set("origin", req.headers.get("origin") ?? new URL(req.url).origin);
   }
+  return { ...init, headers };
 }
 
 export async function postAuthWorkerJson(

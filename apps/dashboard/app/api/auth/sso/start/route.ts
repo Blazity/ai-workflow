@@ -3,7 +3,12 @@ import { NextResponse } from "next/server";
 import { fetchAuthWorker, readWorkerJson } from "@/lib/auth/worker";
 
 export async function GET(req: Request) {
-  const res = await fetchAuthWorker("/api/dashboard-auth/sso/start");
+  const url = new URL(req.url);
+  const inviteId = url.searchParams.get("inviteId")?.trim();
+  const workerPath = inviteId
+    ? `/api/dashboard-auth/sso/start?inviteId=${encodeURIComponent(inviteId)}`
+    : "/api/dashboard-auth/sso/start";
+  const res = await fetchAuthWorker(workerPath);
   if (!res?.ok) {
     return NextResponse.redirect(new URL("/login", req.url));
   }
