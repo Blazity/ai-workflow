@@ -49,4 +49,17 @@ describe("SSO consume API", () => {
     expect(res.status).toBe(400);
     expect(state.consume).not.toHaveBeenCalled();
   });
+
+  it("returns 400 when the token is blank after trimming", async () => {
+    const res = await handlerFor(consumeRoute)(
+      new Request("http://localhost/", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ token: "   " }),
+      }),
+    );
+
+    expect(res.status).toBe(400);
+    expect(state.consume).not.toHaveBeenCalled();
+  });
 });

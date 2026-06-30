@@ -128,6 +128,9 @@ export function createAuth(db: Db, options: AuthOptions) {
 }
 
 export type Auth = ReturnType<typeof createAuth>;
+type AuthContext = Awaited<Auth["$context"]>;
+
+const AUTH_SEED_MAX_ATTEMPTS = 3;
 
 export async function userHasCredentialAccount(db: Db, userId: string): Promise<boolean> {
   const [credential] = await db
@@ -188,29 +191,32 @@ export async function seedAuthUser(
 ): Promise<{ created: boolean; updated: boolean }> {
   const email = creds.email.trim().toLowerCase();
   const ctx = await auth.$context;
+  return retryOnUniqueViolation(() => seedAuthUserOnce(ctx, { ...creds, email }));
+}
+
+async function seedAuthUserOnce(
+  ctx: AuthContext,
+  creds: { email: string; password: string; name?: string },
+): Promise<{ created: boolean; updated: boolean }> {
+  const email = creds.email;
   const existing = await ctx.internalAdapter.findUserByEmail(email, {
     includeAccounts: true,
   });
 
   if (!existing) {
     const hash = await ctx.password.hash(creds.password);
-    try {
-      const created = await ctx.internalAdapter.createUser({
-        email,
-        name: creds.name ?? email,
-        emailVerified: true,
-      });
-      await ctx.internalAdapter.linkAccount({
-        userId: created.id,
-        providerId: "credential",
-        accountId: created.id,
-        password: hash,
-      });
-      return { created: true, updated: false };
-    } catch (error) {
-      if (!isUniqueViolation(error)) throw error;
-      return seedAuthUser(auth, { ...creds, email });
-    }
+    const created = await ctx.internalAdapter.createUser({
+      email,
+      name: creds.name ?? email,
+      emailVerified: true,
+    });
+    await ctx.internalAdapter.linkAccount({
+      userId: created.id,
+      providerId: "credential",
+      accountId: created.id,
+      password: hash,
+    });
+    return { created: true, updated: false };
   }
 
   const credential = existing.accounts.find((a) => a.providerId === "credential");
@@ -234,6 +240,20 @@ export async function seedAuthUser(
   }
 
   return { created: false, updated: false };
+}
+
+async function retryOnUniqueViolation<T>(operation: () => Promise<T>): Promise<T> {
+  for (let attempt = 0; attempt < AUTH_SEED_MAX_ATTEMPTS; attempt++) {
+    try {
+      return await operation();
+    } catch (error) {
+      if (!isUniqueViolation(error) || attempt === AUTH_SEED_MAX_ATTEMPTS - 1) {
+        throw error;
+      }
+    }
+  }
+
+  throw new Error("Unreachable auth seed retry state");
 }
 
 /**
@@ -425,7 +445,10 @@ function isUniqueViolation(error: unknown): boolean {
   if (!error || typeof error !== "object") return false;
   const maybeCode = (error as { code?: unknown }).code;
   if (maybeCode === "23505") return true;
-  return error instanceof Error && /duplicate key|unique constraint/i.test(error.message);
+  if (error instanceof Error && /duplicate key|unique constraint/i.test(error.message)) {
+    return true;
+  }
+  return isUniqueViolation((error as { cause?: unknown }).cause);
 }
 
 /**

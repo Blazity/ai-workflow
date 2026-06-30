@@ -5,7 +5,7 @@ import { fetchAuthWorker, readWorkerJson } from "@/lib/auth/worker";
 export async function GET() {
   const res = await fetchAuthWorker("/api/dashboard-auth/sso/status");
   if (!res?.ok) {
-    return NextResponse.json({ enabled: false });
+    return NextResponse.json({ enabled: null }, { status: 502 });
   }
 
   const body = await readWorkerJson<{ enabled?: unknown }>(res);

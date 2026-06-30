@@ -42,9 +42,13 @@ export function UsersScreen({
   initialUsers: DashboardUserRow[];
   initialInvites: DashboardInviteRow[];
 }) {
+  const initialUsersKey = snapshotKey(initialUsers);
+  const initialInvitesKey = snapshotKey(initialInvites);
   const [tab, setTab] = useState<"members" | "invites">("members");
   const [users, setUsers] = useState(initialUsers);
   const [invites, setInvites] = useState(initialInvites);
+  const [appliedUsersKey, setAppliedUsersKey] = useState(initialUsersKey);
+  const [appliedInvitesKey, setAppliedInvitesKey] = useState(initialInvitesKey);
   const [inviteOpen, setInviteOpen] = useState(false);
   const [roleChange, setRoleChange] = useState<{
     user: DashboardUserRow;
@@ -54,12 +58,16 @@ export function UsersScreen({
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    if (initialUsersKey === appliedUsersKey) return;
     setUsers(initialUsers);
-  }, [initialUsers]);
+    setAppliedUsersKey(initialUsersKey);
+  }, [initialUsers, initialUsersKey, appliedUsersKey]);
 
   useEffect(() => {
+    if (initialInvitesKey === appliedInvitesKey) return;
     setInvites(initialInvites);
-  }, [initialInvites]);
+    setAppliedInvitesKey(initialInvitesKey);
+  }, [initialInvites, initialInvitesKey, appliedInvitesKey]);
 
   async function changeRole(user: DashboardUserRow, nextRole: "admin" | "member") {
     setBusyId(user.id);
@@ -203,6 +211,10 @@ export function UsersScreen({
       ) : null}
     </div>
   );
+}
+
+function snapshotKey(rows: unknown[]): string {
+  return JSON.stringify(rows);
 }
 
 export function NotAuthorizedScreen() {
