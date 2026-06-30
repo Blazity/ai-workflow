@@ -17,8 +17,14 @@ import {
 type InviteState = {
   email: string;
   organizationName: string;
-  role: "member";
+  role: "owner" | "admin" | "member";
   mode: "new_user" | "existing_password" | "sso_only";
+};
+
+const ROLE_LABELS: Record<InviteState["role"], string> = {
+  owner: "Owner",
+  admin: "Admin",
+  member: "Member",
 };
 
 export default function InviteAcceptForm({ inviteId }: { inviteId: string }) {
@@ -162,7 +168,7 @@ export default function InviteAcceptForm({ inviteId }: { inviteId: string }) {
                 Role
               </span>
               <span className="rounded-pill border border-neutral-200 bg-white px-2 py-0.5 font-mono text-[10px] uppercase tracking-[0.04em] text-neutral-700">
-                Member
+                {invite ? ROLE_LABELS[invite.role] : "Member"}
               </span>
             </div>
           </div>

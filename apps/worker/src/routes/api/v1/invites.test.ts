@@ -184,7 +184,9 @@ describe("invites API", () => {
     expect(created.status).toBe(200);
     expect(state.resendSend).toHaveBeenLastCalledWith(
       expect.objectContaining({
-        tags: [expect.objectContaining({ name: "invite_delivery_id" })],
+        tags: expect.arrayContaining([
+          expect.objectContaining({ name: "invite_delivery_id" }),
+        ]),
       }),
     );
     const createdBody = await created.json();

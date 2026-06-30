@@ -115,7 +115,7 @@ useLivePoll({
 });
 ```
 
-Expose `live` / `onToggleLive` through cockpit context so the top bar and mobile
+Expose `livePolling` / `toggleLive` through cockpit context so the top bar and mobile
 header can render the same control (same pattern as the existing
 shared cockpit state):
 

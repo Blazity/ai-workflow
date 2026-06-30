@@ -9,6 +9,17 @@ export type DashboardSession = {
   canManageUsers: boolean;
 };
 
+function isDashboardSession(value: unknown): value is DashboardSession {
+  if (!value || typeof value !== "object") return false;
+  const session = value as Partial<DashboardSession>;
+  return (
+    (session.role === "owner" ||
+      session.role === "admin" ||
+      session.role === "member") &&
+    typeof session.canManageUsers === "boolean"
+  );
+}
+
 /**
  * Server-side gate for the cockpit. Reads the ba_session cookie and validates
  * it against the worker. Missing, invalid, OR unverifiable (worker down) →
@@ -28,5 +39,7 @@ export async function requireSession(): Promise<DashboardSession> {
   });
   if (!res?.ok) redirect("/login");
 
-  return res.json() as Promise<DashboardSession>;
+  const session = await res.json().catch(() => null);
+  if (!isDashboardSession(session)) redirect("/login");
+  return session;
 }

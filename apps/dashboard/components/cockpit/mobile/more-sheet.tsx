@@ -2,9 +2,7 @@
 "use client";
 
 import { MobileSheet } from "./mobile-sheet";
-import { cockpitNavItems } from "@/components/cockpit/chrome";
-
-const MORE_IDS = new Set(["prompts", "evals", "cost", "users"]);
+import { cockpitNavItems, isMobileMoreNavItem } from "@/components/cockpit/chrome";
 
 export function MoreSheet({
   open,
@@ -20,7 +18,7 @@ export function MoreSheet({
   canManageUsers: boolean;
 }) {
   const more = cockpitNavItems({ canManageUsers }).filter((item) =>
-    MORE_IDS.has(item.id),
+    isMobileMoreNavItem(item.id),
   );
 
   return (

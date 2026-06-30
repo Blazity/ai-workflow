@@ -19,6 +19,12 @@ const NAV_GROUPS = [
   { id: "team", label: "Users" },
 ];
 
+export const MOBILE_MORE_NAV_IDS = ["prompts", "evals", "cost", "users"] as const;
+
+export function isMobileMoreNavItem(id: string): boolean {
+  return (MOBILE_MORE_NAV_IDS as readonly string[]).includes(id);
+}
+
 export function cockpitNavItems({
   canManageUsers,
 }: {

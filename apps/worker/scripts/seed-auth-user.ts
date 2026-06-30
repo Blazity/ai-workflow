@@ -5,9 +5,11 @@
  * without a usable dashboard owner.
  */
 import { config } from "dotenv";
+import { resolveSeedAuthEnv } from "../src/lib/auth/seed-auth-env.js";
 
 config({ path: [".env.local", ".env"], quiet: true });
 
+const { values, missingRequiredEnv } = resolveSeedAuthEnv(process.env);
 const {
   DATABASE_URL,
   BETTER_AUTH_SECRET,
@@ -21,17 +23,7 @@ const {
   SSO_ALLOWED_DOMAIN,
   SSO_CLIENT_ID,
   SSO_CLIENT_SECRET,
-} = process.env;
-
-const missingRequiredEnv = [
-  ["DATABASE_URL", DATABASE_URL],
-  ["BETTER_AUTH_SECRET", BETTER_AUTH_SECRET],
-  ["BETTER_AUTH_URL", BETTER_AUTH_URL],
-  ["DASHBOARD_AUTH_EMAIL", DASHBOARD_AUTH_EMAIL],
-  ["DASHBOARD_AUTH_PASSWORD", DASHBOARD_AUTH_PASSWORD],
-]
-  .filter(([, value]) => !value)
-  .map(([name]) => name);
+} = values;
 
 if (missingRequiredEnv.length > 0) {
   const message = `[seed-auth-user] missing required env: ${missingRequiredEnv.join(", ")}`;
@@ -69,7 +61,7 @@ const auth = createAuth(db, {
 
 const r = await bootstrapDashboardAuth(auth, db, {
   owner: {
-    email: DASHBOARD_AUTH_EMAIL!.trim().toLowerCase(),
+    email: DASHBOARD_AUTH_EMAIL!.toLowerCase(),
     password: DASHBOARD_AUTH_PASSWORD!,
   },
   organization: {

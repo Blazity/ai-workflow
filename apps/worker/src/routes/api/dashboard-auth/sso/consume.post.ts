@@ -6,7 +6,11 @@ import { toHttpError } from "../../../../lib/auth/request-context.js";
 
 export default defineEventHandler(async (event) => {
   const body = await readBody<{ token?: string }>(event);
-  const token = body?.token?.trim();
+  if (typeof body?.token !== "string") {
+    throw createError({ statusCode: 400, statusMessage: "Missing SSO handoff token" });
+  }
+
+  const token = body.token.trim();
   if (!token) {
     throw createError({ statusCode: 400, statusMessage: "Missing SSO handoff token" });
   }
