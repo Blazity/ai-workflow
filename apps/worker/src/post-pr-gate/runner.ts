@@ -7,11 +7,13 @@ import type {
 } from "./types.js";
 import { postPrGateTicketInputFields } from "./types.js";
 import type {
-  CheckRunConclusion,
   GateStatusCapableVCS,
   GateStatusRef,
 } from "../adapters/vcs/types.js";
-import { hasGateStatusCapability } from "../adapters/vcs/types.js";
+import {
+  hasGateStatusCapability,
+  hasRichGateStatusCapability,
+} from "../adapters/vcs/types.js";
 
 interface RunnerLogger {
   info: (obj: Record<string, unknown>, msg: string) => void;
@@ -107,13 +109,7 @@ export async function executePostPrGatePhase(
       };
     }
 
-    await vcs.updateGateStatus(gateStatusRef, {
-      status: "completed",
-      conclusion: result.conclusion as CheckRunConclusion,
-      summary: result.summary,
-      details: result.details,
-      annotations: result.annotations,
-    });
+    await updateCompletedGateStatus(vcs, gateStatusRef, result);
 
     if (result.conclusion === "failure" && step.onFailure === "fail") {
       failed = true;
@@ -121,6 +117,31 @@ export async function executePostPrGatePhase(
   }
 
   return { ranSteps, failed };
+}
+
+async function updateCompletedGateStatus(
+  vcs: PostPrGateStepContext["adapters"]["vcs"] & GateStatusCapableVCS,
+  gateStatusRef: GateStatusRef,
+  result: PostPrGateStepResult,
+): Promise<void> {
+  const update = {
+    status: "completed" as const,
+    conclusion: result.conclusion,
+    summary: result.summary,
+  };
+
+  if (hasRichGateStatusCapability(vcs)) {
+    await vcs.updateGateStatusDetails(gateStatusRef, {
+      ...update,
+      ...(result.details !== undefined ? { details: result.details } : {}),
+      ...(result.annotations !== undefined
+        ? { annotations: result.annotations }
+        : {}),
+    });
+    return;
+  }
+
+  await vcs.updateGateStatus(gateStatusRef, update);
 }
 
 function selectTicketFields(

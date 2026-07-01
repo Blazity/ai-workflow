@@ -117,7 +117,10 @@ describe("current pointer", () => {
 
   it("setCurrent/getCurrent round-trips", async () => {
     await store.setCurrent("o/r", 1, current);
-    expect(await store.getCurrent("o/r", 1)).toEqual(current);
+    const stored = await store.getCurrent("o/r", 1);
+
+    expect(stored).toEqual(current);
+    expect("checkRunIds" in stored!).toBe(false);
   });
 
   it("setCurrent with gateStatusRefs keeps legacy check_run_ids in sync", async () => {
@@ -131,32 +134,6 @@ describe("current pointer", () => {
       gateStatusRefs: [{ provider: "github", id: 7 }],
       checkRunIds: [7],
     });
-  });
-
-  it("setCurrent with legacy checkRunIds keeps gate_status_refs in sync", async () => {
-    await store.setCurrent("o/r", 1, {
-      runId: "run_a",
-      headSha: "sha1",
-      checkRunIds: [42],
-    });
-
-    expect(await getRawCurrent("o/r", 1)).toEqual({
-      gateStatusRefs: [{ provider: "github", id: 42 }],
-      checkRunIds: [42],
-    });
-  });
-
-  it("setCurrent rejects mismatched gateStatusRefs and checkRunIds", async () => {
-    await expect(
-      store.setCurrent("o/r", 1, {
-        runId: "run_a",
-        headSha: "sha1",
-        gateStatusRefs: [{ provider: "github", id: 1 }],
-        checkRunIds: [2],
-      }),
-    ).rejects.toThrow("mismatched gate status refs and check-run ids");
-
-    expect(await store.getCurrent("o/r", 1)).toBeNull();
   });
 
   it("getCurrent returns null when absent or expired", async () => {
@@ -217,16 +194,6 @@ describe("current pointer", () => {
 
     expect(await store.appendGateStatusRefsForSha("o/r", 1, "sha1", [ref])).toBe(true);
     expect((await store.getCurrent("o/r", 1))!.gateStatusRefs).toEqual([ref]);
-  });
-
-  it("appendCheckRunIdsForSha keeps both columns in sync", async () => {
-    await store.setCurrent("o/r", 1, current);
-
-    expect(await store.appendCheckRunIdsForSha("o/r", 1, "sha1", [99])).toBe(true);
-    expect(await getRawCurrent("o/r", 1)).toEqual({
-      gateStatusRefs: [{ provider: "github", id: 99 }],
-      checkRunIds: [99],
-    });
   });
 
   it("appendGateStatusRefsForSha returns false on SHA mismatch or missing pointer", async () => {
