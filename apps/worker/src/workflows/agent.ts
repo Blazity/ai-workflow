@@ -9,6 +9,7 @@ import type { PRComment, CheckRunResult } from "../adapters/vcs/types.js";
 import type { TicketAttachment } from "../adapters/issue-tracker/types.js";
 import type { TicketEvent } from "../adapters/messaging/types.js";
 import type { DownloadedAttachment } from "../sandbox/attachments.js";
+import type { SelectedRepository } from "../adapters/vcs/repository-directory.js";
 
 type PreSandboxPromptTarget = "research" | "implementation" | "review";
 
@@ -45,6 +46,7 @@ type PreSandboxPhaseResult =
   | {
       status: "continue";
       promptAdditions?: GroupedPreSandboxPromptAdditions;
+      selectedRepositories?: SelectedRepository[];
     }
   | {
       status: "halt";
@@ -52,6 +54,7 @@ type PreSandboxPhaseResult =
       message: string;
       questions?: string[];
       promptAdditions?: GroupedPreSandboxPromptAdditions;
+      selectedRepositories?: SelectedRepository[];
     };
 
 // --- Step Functions ---
@@ -167,28 +170,34 @@ async function writeAttachments(
 }
 writeAttachments.maxRetries = 0;
 
-async function createFeatureBranch(branchName: string, baseBranch: string) {
-  "use step";
-  const { createStepAdapters } = await import("../lib/step-adapters.js");
-  const { vcs } = createStepAdapters();
-  await vcs.createBranch(branchName, baseBranch);
-}
-
-async function fetchPRContext(branchName: string): Promise<{
+async function fetchSelectedRepositoryPRContext(
+  repositories: SelectedRepository[],
+): Promise<{
   prComments: PRComment[];
   checkResults: CheckRunResult[];
   hasConflicts: boolean;
-} | null> {
+}> {
   "use step";
-  const { createStepAdapters } = await import("../lib/step-adapters.js");
-  const { vcs } = createStepAdapters();
-  const pr = await vcs.findPR(branchName);
-  if (!pr) return null;
+  const { getVcsConfig } = await import("../../env.js");
+  const { createVCSForRepository } = await import("../lib/create-vcs.js");
+  const vcsConfig = getVcsConfig();
+  const prComments: PRComment[] = [];
+  const checkResults: CheckRunResult[] = [];
+  let hasConflicts = false;
 
-  const prComments = await vcs.getPRComments(pr.id);
-  const hasConflicts = await vcs.getPRConflictStatus(pr.id);
-  const checkResults = await vcs.getCheckRunResults(pr.id);
-  return { prComments, hasConflicts, checkResults };
+  for (const repo of repositories) {
+    const pr = repo.workflowOwnedBranch?.pr;
+    if (!pr) continue;
+    const vcs = createVCSForRepository(vcsConfig, {
+      repoPath: repo.repoPath,
+      baseBranch: repo.defaultBranch,
+    });
+    prComments.push(...await vcs.getPRComments(pr.id));
+    checkResults.push(...await vcs.getCheckRunResults(pr.id));
+    hasConflicts = (await vcs.getPRConflictStatus(pr.id)) || hasConflicts;
+  }
+
+  return { prComments, checkResults, hasConflicts };
 }
 
 async function ensureArthurTaskForTicket(
@@ -217,6 +226,7 @@ ensureArthurTaskForTicket.maxRetries = 0;
 
 async function provisionSandbox(
   branchName: string,
+  selectedRepositories: SelectedRepository[],
   arthurTaskId: string | null,
   agentKindOverride: AgentKind | null,
   mergeBase?: string,
@@ -226,19 +236,6 @@ async function provisionSandbox(
   const { SandboxManager } = await import("../sandbox/manager.js");
   const { createAgentAdapter } = await import("../sandbox/agents/index.js");
   const vcs = getVcsConfig();
-
-  // The sandbox builds clone/push URLs by interpolating repoPath into a URL,
-  // so it must be a URL-safe namespace/project path (e.g. "group/repo").
-  // GitLab also accepts numeric project IDs in its REST API, but those produce
-  // invalid clone URLs like "https://gitlab.com/12345.git". Fail fast with a
-  // clear message rather than producing a confusing git clone error.
-  if (vcs.kind === "gitlab" && /^\d+$/.test(vcs.repoPath)) {
-    throw new Error(
-      `GITLAB_PROJECT_ID must be a namespace/project path (e.g. "group/repo"), ` +
-        `not a numeric project ID ("${vcs.repoPath}"). Numeric IDs work for the ` +
-        `GitLab REST API but cannot be used to construct a git clone URL.`,
-    );
-  }
 
   const arthur =
     env.GENAI_ENGINE_API_KEY && env.GENAI_ENGINE_TRACE_ENDPOINT && arthurTaskId
@@ -289,13 +286,17 @@ async function provisionSandbox(
     commitEmail: commitIdentity.email,
   });
 
-  const sandbox = await manager.provision(branchName, agent, {
-    anthropicApiKey: env.ANTHROPIC_API_KEY,
-    codexApiKey: env.CODEX_API_KEY,
-    codexChatGptOauthToken: env.CODEX_CHATGPT_OAUTH_TOKEN,
-    model: agentKind === "codex" ? env.CODEX_MODEL : env.CLAUDE_MODEL,
-    arthur,
-  }, mergeBase);
+  const sandbox = await manager.provisionMultiRepo(
+    { branchName, repositories: selectedRepositories, mergeBase },
+    agent,
+    {
+      anthropicApiKey: env.ANTHROPIC_API_KEY,
+      codexApiKey: env.CODEX_API_KEY,
+      codexChatGptOauthToken: env.CODEX_CHATGPT_OAUTH_TOKEN,
+      model: agentKind === "codex" ? env.CODEX_MODEL : env.CLAUDE_MODEL,
+      arthur,
+    },
+  );
 
   return { sandboxId: sandbox.sandboxId, agentKind };
 }
@@ -404,52 +405,25 @@ async function parseReviewStep(
   return { output: a.parseReviewOutput(raw, structured), usage: a.extractUsage(raw, structured) };
 }
 
-async function createPullRequest(branchName: string, title: string, summary: string) {
-  "use step";
-  const { createStepAdapters } = await import("../lib/step-adapters.js");
-  const { vcs } = createStepAdapters();
-  return vcs.createPR(branchName, title, summary);
-}
-
-async function findPRForBranch(branchName: string) {
-  "use step";
-  const { createStepAdapters } = await import("../lib/step-adapters.js");
-  const { vcs } = createStepAdapters();
-  const pr = await vcs.findPR(branchName);
-  if (!pr) {
-    // We only call this on the pr_ready branch when prContext was non-null
-    // (i.e. a PR existed at fetchPRContext time). A null here means the PR
-    // was closed manually between fetch and post-push lookup — rare, but
-    // possible. Throwing escalates to the workflow's catch handler, which
-    // posts a `failed` event. Acceptable degradation; if this becomes
-    // common, downgrade to a graceful pr_ready with branch-only context.
-    throw new Error(`Expected PR for branch ${branchName} but findPR returned null`);
-  }
-  return pr;
-}
-
-async function postPrLinkComment(
+async function postPrLinksComment(
   ticketId: string,
-  prUrl: string,
-  prNumber: number,
+  prs: Array<{ repoPath: string; url: string; id: number }>,
 ): Promise<void> {
   "use step";
   const { createStepAdapters } = await import("../lib/step-adapters.js");
   const { issueTracker } = createStepAdapters();
+  const lines = prs.map((pr) => `- ${pr.repoPath}: #${pr.id} ${pr.url}`);
   try {
-    await issueTracker.postComment(
-      ticketId,
-      `🤖 Pull request #${prNumber} ready for review:\n${prUrl}`,
-    );
+    await issueTracker.postComment(ticketId, `Pull requests ready for review:\n${lines.join("\n")}`);
   } catch (err) {
     const { logger } = await import("../lib/logger.js");
     logger.warn(
-      { ticketId, prUrl, err: errorMessage(err) },
-      "pr_link_comment_failed",
+      { ticketId, prs, err: errorMessage(err) },
+      "pr_links_comment_failed",
     );
   }
 }
-postPrLinkComment.maxRetries = 0;
+postPrLinksComment.maxRetries = 0;
 
 async function moveTicket(ticketId: string, column: string) {
   "use step";
@@ -632,10 +606,10 @@ export async function agentWorkflow(ticketId: string) {
 
   const { workflowRunId } = getWorkflowMetadata();
 
-  const { env, getVcsConfig } = await import("../../env.js");
+  const { env } = await import("../../env.js");
   const { assembleResearchPlanContext, assembleImplementationContext, assembleReviewContext } =
     await import("../sandbox/context.js");
-  const { collectPhase, pushFromSandbox, fixAndRetryPush, teardownSandbox } =
+  const { collectPhase, pushWorkspaceFromSandbox, teardownSandbox } =
     await import("../sandbox/poll-agent.js");
   const { formatUsageReport } = await import("../sandbox/usage.js");
   const { AGENT_SCHEMA, RESEARCH_SCHEMA, REVIEW_SCHEMA } = await import("../sandbox/agents/types.js");
@@ -681,22 +655,6 @@ export async function agentWorkflow(ticketId: string) {
     await notifyTicket(ticket.identifier, { kind: "started" });
 
     const branchName = branchForTicket(ticket.identifier);
-
-    // Check for existing PR BEFORE creating/resetting the branch.
-    // createFeatureBranch force-resets the branch to main's HEAD, which causes
-    // GitHub to auto-close any open PR (no diff = no PR).
-    const prContext = await fetchPRContext(branchName);
-
-    const baseBranch = getVcsConfig().baseBranch;
-
-    if (!prContext) {
-      // New ticket — create (or reset) the branch from base
-      await createFeatureBranch(branchName, baseBranch);
-    }
-    // Review-fix: branch + PR already exist, keep the branch as-is
-
-    const mergeBase = prContext?.hasConflicts ? baseBranch : undefined;
-
     const downloadedAttachments = await fetchAttachments(ticket.identifier, ticket.attachments);
 
     const ticketData = {
@@ -712,9 +670,9 @@ export async function agentWorkflow(ticketId: string) {
       ticket: ticketData,
       run: {
         branchName,
-        isNewTicket: !prContext,
-        hasExistingPr: Boolean(prContext),
-        hasMergeConflict: prContext?.hasConflicts ?? false,
+        isNewTicket: true,
+        hasExistingPr: false,
+        hasMergeConflict: false,
       },
     });
 
@@ -747,6 +705,29 @@ export async function agentWorkflow(ticketId: string) {
       return;
     }
 
+    const selectedRepositories = preSandboxResult.selectedRepositories ?? [];
+    if (selectedRepositories.length === 0) {
+      await unregisterRun(ticket.identifier);
+      const commentUrl = await postClarificationAndMoveBack(
+        ticketId,
+        ["Which repository should this ticket modify?"],
+        env.COLUMN_BACKLOG,
+      );
+      await notifyTicket(ticket.identifier, {
+        kind: "needs_clarification",
+        commentUrl: commentUrl ?? undefined,
+        usageReport: usageReportOrUndefined(),
+      });
+      runOutcome = "success";
+      return;
+    }
+
+    const { prepareSelectedRepositoryBranches } = await import("./repository-prs.js");
+    await prepareSelectedRepositoryBranches(ticket.identifier, branchName, selectedRepositories);
+
+    const prContext = await fetchSelectedRepositoryPRContext(selectedRepositories);
+    const mergeBase = prContext.hasConflicts ? selectedRepositories[0]?.defaultBranch : undefined;
+
     // One Arthur task per run: first run = ticket identifier, re-runs = identifier.N
     const arthurTaskId = await ensureArthurTaskForTicket(ticket.identifier);
 
@@ -756,7 +737,13 @@ export async function agentWorkflow(ticketId: string) {
     const agentKindOverride = await resolveAgentKindOverride(ticket.labels);
 
     // Provision sandbox once for all phases
-    const { sandboxId, agentKind } = await provisionSandbox(branchName, arthurTaskId, agentKindOverride, mergeBase);
+    const { sandboxId, agentKind } = await provisionSandbox(
+      branchName,
+      selectedRepositories,
+      arthurTaskId,
+      agentKindOverride,
+      mergeBase,
+    );
     // Pin the sandboxId to this ticket so cleanup paths (reconcile,
     // cancelRun, webhook-cancel) can stop it by id instead of doing a
     // branch scan across every running sandbox.
@@ -780,11 +767,12 @@ export async function agentWorkflow(ticketId: string) {
         ticket: ticketData,
         prompt: prompts.research,
         branchName,
-        prComments: prContext?.prComments,
-        checkResults: prContext?.checkResults,
-        hasConflicts: prContext?.hasConflicts,
+        prComments: prContext.prComments,
+        checkResults: prContext.checkResults,
+        hasConflicts: prContext.hasConflicts,
         attachments: downloadedAttachments,
         preSandboxAdditions: preSandboxAdditions.research,
+        selectedRepositories,
       });
 
       await writeAndStartPhase(
@@ -861,6 +849,7 @@ export async function agentWorkflow(ticketId: string) {
         researchPlanMarkdown,
         attachments: downloadedAttachments,
         preSandboxAdditions: preSandboxAdditions.implementation,
+        selectedRepositories,
       });
 
       await writeAndStartPhase(
@@ -922,6 +911,7 @@ export async function agentWorkflow(ticketId: string) {
           researchPlanMarkdown,
           attachments: downloadedAttachments,
           preSandboxAdditions: preSandboxAdditions.review,
+          selectedRepositories,
         });
 
         await writeAndStartPhase(
@@ -957,10 +947,7 @@ export async function agentWorkflow(ticketId: string) {
       }
 
       // ========== POST-PHASES: Push & PR ==========
-      let pushResult = await pushFromSandbox(sandboxId, branchName);
-      if (!pushResult.pushed && pushResult.error) {
-        pushResult = await fixAndRetryPush(sandboxId, branchName, pushResult.error, agentKind, activeModel);
-      }
+      const pushResult = await pushWorkspaceFromSandbox(sandboxId);
 
       if (!pushResult.pushed) {
         await unregisterRun(ticket.identifier);
@@ -983,29 +970,37 @@ export async function agentWorkflow(ticketId: string) {
       // "pr_ready". Clearing the registry here closes that window.
       await unregisterRun(ticket.identifier);
 
-      // We need a {url, number} regardless of whether the PR is new or pre-existing.
-      // - New PR: createPullRequest returns the PullRequest ({ id, url, branch }) — capture it.
-      // - Existing PR: prContext was built from vcs.findPR(branch), but findPR's return
-      //   is dropped today. Re-fetch via the VCS adapter step (cheap; same call already
-      //   ran on this branch earlier in the workflow).
-      const isNewPr = !prContext;
-      const pr = isNewPr
-        ? await createPullRequest(branchName, ticket.title, "")
-        : await findPRForBranch(branchName);
-      prForTelemetry = { url: pr.url, number: pr.id };
+      const changedRepositories = selectedRepositories.filter((repo) =>
+        pushResult.repositories.some((result) => result.repoPath === repo.repoPath && result.changed && result.pushed),
+      );
+      const { createOrUseWorkflowOwnedPullRequestsForRepos } = await import("./repository-prs.js");
+      const prs = await createOrUseWorkflowOwnedPullRequestsForRepos({
+        ticketKey: ticket.identifier,
+        branchName,
+        repositories: changedRepositories,
+        title: ticket.title,
+      });
+      if (prs.length === 0) {
+        await moveTicket(ticketId, env.COLUMN_BACKLOG);
+        await notifyTicket(ticket.identifier, {
+          kind: "failed",
+          phase: "push",
+          reason: "push completed, but no changed repository produced a pull request",
+          usageReport: usageReportOrUndefined(),
+        });
+        return;
+      }
+      const primaryPr = prs[0]!;
+      prForTelemetry = { url: primaryPr.url, number: primaryPr.id };
 
-      // Leave a one-time Jira comment linking to the PR, only when we just
-      // opened it. On review-fix re-runs the PR already exists and its URL is
-      // unchanged, so gating on new-PR creation yields exactly one comment per
-      // ticket. Best-effort: postPrLinkComment never throws.
-      if (isNewPr) {
-        await postPrLinkComment(ticket.identifier, pr.url, pr.id);
+      if (prs.some((pr) => pr.isNew)) {
+        await postPrLinksComment(ticket.identifier, prs);
       }
 
       const usageReport = formatUsageReport(phaseUsages, priceLookup, activeModel);
       await notifyTicket(ticket.identifier, {
         kind: "pr_ready",
-        pr: { url: pr.url, number: pr.id },
+        pr: { url: primaryPr.url, number: primaryPr.id },
         usageReport,
       });
       await moveTicket(ticketId, env.COLUMN_AI_REVIEW);

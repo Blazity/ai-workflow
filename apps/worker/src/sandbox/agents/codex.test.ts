@@ -273,6 +273,7 @@ describe("CodexAgentAdapter.setCommitGuard", () => {
     const body: string = writeScript![1][1];
     expect(body).toContain('"stop_hook_active":true');
     expect(body).toContain('"decision":"block"');
+    expect(body).toContain("/vercel/sandbox/aiw-repos.json");
     // Must NOT use the wrong protocol (continue:false stops the hook, not Codex).
     expect(body).not.toContain('"continue":false');
   });

@@ -127,6 +127,30 @@ describe("executePreSandboxPhase", () => {
     expect(result.promptAdditions.review).toHaveLength(1);
   });
 
+  it("carries selected repositories from step output", async () => {
+    const selectedRepositories = [
+      {
+        provider: "github" as const,
+        repoPath: "acme/api",
+        defaultBranch: "main",
+        selectedRationale: "ticket mentions api",
+      },
+    ];
+    const result = await executePreSandboxPhase(
+      input,
+      config([{ uses: "select", onFailure: "fail" }]),
+      {
+        select: vi.fn(async () => ({
+          status: "continue" as const,
+          selectedRepositories,
+        })),
+      },
+    );
+
+    expect(result.status).toBe("continue");
+    expect(result.selectedRepositories).toEqual(selectedRepositories);
+  });
+
   it("returns halt output and does not run later steps", async () => {
     const later: PreSandboxStepHandler = vi.fn(async () => ({ status: "continue" as const }));
     const halt: PreSandboxStepHandler = vi.fn(async () => ({

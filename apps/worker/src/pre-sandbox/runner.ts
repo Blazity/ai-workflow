@@ -34,6 +34,7 @@ export async function executePreSandboxPhase(
   logger?: PreSandboxLogger,
 ): Promise<RunPreSandboxPhaseResult> {
   const promptAdditions = emptyPromptAdditions();
+  let selectedRepositories: RunPreSandboxPhaseResult["selectedRepositories"];
 
   if (!shouldRunPreSandbox(input.run, config.preSandbox.runOn)) {
     logger?.info({ run: input.run }, "pre_sandbox_skipped");
@@ -69,6 +70,9 @@ export async function executePreSandboxPhase(
       if (result.promptAdditions) {
         addPromptAdditions(promptAdditions, result.promptAdditions);
       }
+      if (result.selectedRepositories) {
+        selectedRepositories = result.selectedRepositories;
+      }
 
       if (result.status === "halt") {
         return {
@@ -77,6 +81,7 @@ export async function executePreSandboxPhase(
           message: result.message,
           questions: result.questions,
           promptAdditions,
+          selectedRepositories,
         };
       }
     } catch (err) {
@@ -95,7 +100,7 @@ export async function executePreSandboxPhase(
     }
   }
 
-  return { status: "continue", promptAdditions };
+  return { status: "continue", promptAdditions, selectedRepositories };
 }
 
 function shouldRunPreSandbox(

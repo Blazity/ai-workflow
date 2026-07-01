@@ -4,7 +4,7 @@
 
 **Goal:** Add multi-repo execution so one ticket run can select, clone, modify, push, and create PRs/MRs across multiple provider-accessible repositories.
 
-**Architecture:** Keep GitHub and GitLab adapters as per-repo adapters. Add provider-level repository discovery, a pre-sandbox repo-selection result, and a workspace manifest that tracks selected repos through sandbox provisioning, commit guards, push, and PR/MR creation. Runtime clone-on-demand is not implemented in this ticket, but the manifest/workspace layout must allow it later.
+**Architecture:** Keep GitHub and GitLab adapters as per-repo adapters. Add provider-level repository discovery, Workflow-Owned Branch records, a pre-sandbox repo-selection result, and a workspace manifest that tracks selected repos through sandbox provisioning, commit guards, push, and PR/MR creation. Runtime clone-on-demand is not implemented in this ticket, but the manifest/workspace layout must allow it later.
 
 **Tech Stack:** TypeScript, Nitro/Vercel Workflows, Vercel Sandbox, Vitest, Octokit GitHub App auth, `@gitbeaker/rest`, pnpm.
 
@@ -15,6 +15,10 @@
 - Use @superpowers:test-driven-development for every behavior change.
 - Base branch is `origin/dev`.
 - Design doc: `docs/plans/2026-07-01-aiw-45-multi-repo-support-design.md`.
+- Implementation update: ownership is branch-level. A Workflow-Owned Branch is
+  an AI Workflow database record for a ticket/repository branch, with optional
+  PR/MR metadata attached after review is opened. Do not infer ownership from
+  open PR/MR search results or matching branch names alone.
 - The local worktree dependency setup may require `pnpm approve-builds` policy outside this plan. Do not commit `allowBuilds` placeholders that pnpm writes into `pnpm-workspace.yaml`.
 - Run tests with `CI=true` when using pnpm in a non-interactive shell.
 - GitHub official endpoint: `GET /installation/repositories` lists repositories accessible to an installation and supports `per_page` up to 100.
@@ -137,12 +141,18 @@ export interface RepositoryDirectory {
   listRepositories(): Promise<RepositoryMetadata[]>;
 }
 
+export interface WorkflowOwnedPr {
+  id: number;
+  url: string;
+  branch: string;
+}
+
 export interface SelectedRepository {
   provider: VcsProvider;
   repoPath: string;
   defaultBranch: string;
   selectedRationale: string;
-  existingPr?: { id: number; url: string; branch: string };
+  workflowOwnedPr?: WorkflowOwnedPr;
 }
 ```
 
@@ -484,7 +494,217 @@ git commit -m "feat: list accessible VCS repositories"
 
 ---
 
-### Task 3: Deterministic Repo Selection Step
+### Task 3: Workflow-Owned Branch Records
+
+**Files:**
+- Modify: `apps/worker/src/db/schema.ts`
+- Create: `apps/worker/src/db/queries/workflow-owned-prs.ts`
+- Test: `apps/worker/src/db/queries/workflow-owned-prs.test.ts`
+- Generate: `apps/worker/drizzle/*`
+
+**Step 1: Write failing ownership-store tests**
+
+Create `apps/worker/src/db/queries/workflow-owned-prs.test.ts`:
+
+```ts
+import { describe, expect, it } from "vitest";
+import { createTestDb } from "../test-db.js";
+import {
+  listWorkflowOwnedPrsForTicket,
+  upsertWorkflowOwnedPr,
+} from "./workflow-owned-prs.js";
+
+describe("workflow-owned PR/MR records", () => {
+  it("lists only PR/MRs AI Workflow recorded for the ticket", async () => {
+    const db = await createTestDb();
+
+    await upsertWorkflowOwnedPr(db, {
+      ticketKey: "AIW-45",
+      provider: "github",
+      repoPath: "acme/web",
+      prId: 42,
+      url: "https://github.com/acme/web/pull/42",
+      branchName: "blazebot/aiw-45",
+    });
+    await upsertWorkflowOwnedPr(db, {
+      ticketKey: "AIW-46",
+      provider: "github",
+      repoPath: "acme/api",
+      prId: 43,
+      url: "https://github.com/acme/api/pull/43",
+      branchName: "blazebot/aiw-46",
+    });
+
+    await expect(listWorkflowOwnedPrsForTicket(db, "AIW-45")).resolves.toEqual([
+      expect.objectContaining({ repoPath: "acme/web", prId: 42 }),
+    ]);
+  });
+
+  it("upserts by ticket and repository", async () => {
+    const db = await createTestDb();
+
+    await upsertWorkflowOwnedPr(db, {
+      ticketKey: "AIW-45",
+      provider: "github",
+      repoPath: "acme/web",
+      prId: 42,
+      url: "https://old",
+      branchName: "blazebot/aiw-45",
+    });
+    await upsertWorkflowOwnedPr(db, {
+      ticketKey: "AIW-45",
+      provider: "github",
+      repoPath: "acme/web",
+      prId: 42,
+      url: "https://new",
+      branchName: "blazebot/aiw-45",
+    });
+
+    await expect(listWorkflowOwnedPrsForTicket(db, "AIW-45")).resolves.toEqual([
+      expect.objectContaining({ repoPath: "acme/web", url: "https://new" }),
+    ]);
+  });
+});
+```
+
+**Step 2: Run tests to verify they fail**
+
+Run:
+
+```bash
+CI=true pnpm --filter worker test -- src/db/queries/workflow-owned-prs.test.ts
+```
+
+Expected: FAIL because the table and query helper do not exist.
+
+**Step 3: Add schema**
+
+In `apps/worker/src/db/schema.ts`, add:
+
+```ts
+export const workflowOwnedPrs = pgTable(
+  "workflow_owned_prs",
+  {
+    ticketKey: text("ticket_key").notNull(),
+    provider: text("provider").notNull(),
+    repoPath: text("repo_path").notNull(),
+    prId: integer("pr_id").notNull(),
+    prUrl: text("pr_url").notNull(),
+    branchName: text("branch_name").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.ticketKey, t.provider, t.repoPath] }),
+    index("workflow_owned_prs_ticket_idx").on(t.ticketKey),
+  ],
+);
+```
+
+The primary key is the ownership rule: one ticket can own at most one PR/MR per
+repository.
+
+**Step 4: Add query helper**
+
+Create `apps/worker/src/db/queries/workflow-owned-prs.ts`:
+
+```ts
+import { eq, sql } from "drizzle-orm";
+import type { Db } from "../client.js";
+import { workflowOwnedPrs } from "../schema.js";
+import type { VcsProvider } from "../../adapters/vcs/repository-directory.js";
+
+export interface WorkflowOwnedPrRecord {
+  ticketKey: string;
+  provider: VcsProvider;
+  repoPath: string;
+  prId: number;
+  url: string;
+  branchName: string;
+}
+
+export async function listWorkflowOwnedPrsForTicket(
+  db: Db,
+  ticketKey: string,
+): Promise<WorkflowOwnedPrRecord[]> {
+  const rows = await db
+    .select()
+    .from(workflowOwnedPrs)
+    .where(eq(workflowOwnedPrs.ticketKey, ticketKey));
+
+  return rows.map((row) => ({
+    ticketKey: row.ticketKey,
+    provider: row.provider as VcsProvider,
+    repoPath: row.repoPath,
+    prId: row.prId,
+    url: row.prUrl,
+    branchName: row.branchName,
+  }));
+}
+
+export async function upsertWorkflowOwnedPr(
+  db: Db,
+  record: WorkflowOwnedPrRecord,
+): Promise<void> {
+  await db
+    .insert(workflowOwnedPrs)
+    .values({
+      ticketKey: record.ticketKey,
+      provider: record.provider,
+      repoPath: record.repoPath,
+      prId: record.prId,
+      prUrl: record.url,
+      branchName: record.branchName,
+    })
+    .onConflictDoUpdate({
+      target: [
+        workflowOwnedPrs.ticketKey,
+        workflowOwnedPrs.provider,
+        workflowOwnedPrs.repoPath,
+      ],
+      set: {
+        prId: record.prId,
+        prUrl: record.url,
+        branchName: record.branchName,
+        updatedAt: sql`now()`,
+      },
+    });
+}
+```
+
+Remove unused imports after implementation if the final code does not need
+them.
+
+**Step 5: Generate migration**
+
+Run:
+
+```bash
+pnpm --filter worker drizzle-kit generate
+```
+
+Commit the generated `apps/worker/drizzle/*` SQL and metadata with the schema
+change. Do not hand-edit generated snapshots unless the generator produces a
+known-bad diff that must be repaired.
+
+**Step 6: Run tests to verify they pass**
+
+Run:
+
+```bash
+CI=true pnpm --filter worker test -- src/db/queries/workflow-owned-prs.test.ts
+```
+
+Expected: PASS.
+
+**Step 7: Commit**
+
+```bash
+git add apps/worker/src/db/schema.ts apps/worker/src/db/queries/workflow-owned-prs.ts apps/worker/src/db/queries/workflow-owned-prs.test.ts apps/worker/drizzle
+git commit -m "feat: record workflow-owned pull requests"
+```
+
+### Task 4: Deterministic Repo Selection Step
 
 **Files:**
 - Create: `apps/worker/src/pre-sandbox/steps/repo-selection.ts`
@@ -534,7 +754,7 @@ describe("selectRepositoriesFromMetadata", () => {
     const selected = selectRepositoriesFromMetadata({
       ticketText: "Change the billing callback in acme/api.",
       repositories: repos,
-      existingPrs: [],
+      workflowOwnedPrs: [],
     });
 
     expect(selected.status).toBe("selected");
@@ -546,7 +766,7 @@ describe("selectRepositoriesFromMetadata", () => {
     const selected = selectRepositoriesFromMetadata({
       ticketText: "Fix billing webhook retry behavior",
       repositories: repos,
-      existingPrs: [],
+      workflowOwnedPrs: [],
     });
 
     expect(selected.status).toBe("selected");
@@ -558,7 +778,7 @@ describe("selectRepositoriesFromMetadata", () => {
     const selected = selectRepositoriesFromMetadata({
       ticketText: "Update data warehouse model",
       repositories: repos,
-      existingPrs: [],
+      workflowOwnedPrs: [],
     });
 
     expect(selected).toEqual({
@@ -567,18 +787,18 @@ describe("selectRepositoriesFromMetadata", () => {
     });
   });
 
-  it("force-includes repos with existing PRs", () => {
+  it("force-includes repos with Workflow-Owned PR/MRs", () => {
     const selected = selectRepositoriesFromMetadata({
       ticketText: "Address review feedback",
       repositories: repos,
-      existingPrs: [{ repoPath: "acme/web", pr: { id: 42, url: "https://pr", branch: "blazebot/aiw-45" } }],
+      workflowOwnedPrs: [{ repoPath: "acme/web", pr: { id: 42, url: "https://pr", branch: "blazebot/aiw-45" } }],
     });
 
     expect(selected.status).toBe("selected");
     if (selected.status !== "selected") throw new Error("expected selected");
     expect(selected.repositories[0]).toMatchObject({
       repoPath: "acme/web",
-      existingPr: { id: 42 },
+      workflowOwnedPr: { id: 42 },
     });
   });
 });
@@ -620,9 +840,9 @@ In `apps/worker/src/pre-sandbox/steps/repo-selection.ts`, export:
 export function selectRepositoriesFromMetadata(input: {
   ticketText: string;
   repositories: RepositoryMetadata[];
-  existingPrs: Array<{ repoPath: string; pr: { id: number; url: string; branch: string } }>;
+  workflowOwnedPrs: Array<{ repoPath: string; pr: { id: number; url: string; branch: string } }>;
 }): { status: "selected"; repositories: SelectedRepository[] } | { status: "clarification_needed"; questions: string[] } {
-  // 1. Force include existingPrs.
+  // 1. Force include workflowOwnedPrs.
   // 2. Exact repoPath match wins.
   // 3. Score token overlap across repo name, path, description, and topics.
   // 4. Select the highest positive score. Include ties only when score >= 2.
@@ -638,7 +858,8 @@ Keep stopwords small and local. Do not add dependencies.
 In the same file, export a `PreSandboxStepHandler` that:
 
 - Calls `createRepositoryDirectory().listRepositories()`.
-- Calls `createVCSForRepository(...).findPR(context.run.branchName)` for each repository with a small concurrency limit or sequential loop.
+- Calls `listWorkflowOwnedPrsForTicket(getDb(), context.ticket.identifier)` to load only PR/MR records AI Workflow created or recorded for this ticket.
+- Does not call `findPR(context.run.branchName)` across Accessible Repositories; branch-name matches do not prove ownership.
 - Builds ticket text from title, description, acceptance criteria, comments, and labels.
 - Returns `status: "continue"` with selected repositories and a prompt addition listing selected repos.
 - Returns `status: "halt"`, `outcome: "needs_clarification"` when no repo is selected.
@@ -675,7 +896,7 @@ git commit -m "feat: add pre-sandbox repository selection"
 
 ---
 
-### Task 4: Workspace Manifest Utilities
+### Task 5: Workspace Manifest Utilities
 
 **Files:**
 - Create: `apps/worker/src/sandbox/repo-workspace.ts`
@@ -764,7 +985,7 @@ export const workspaceRepoSchema = z.object({
   branchName: z.string().min(1),
   selectedRationale: z.string(),
   preAgentSha: z.string().optional(),
-  existingPr: z.object({
+  workflowOwnedPr: z.object({
     id: z.number(),
     url: z.string(),
     branch: z.string(),
@@ -805,7 +1026,7 @@ export function buildWorkspaceManifest(input: {
         defaultBranch: repo.defaultBranch,
         branchName: input.branchName,
         selectedRationale: repo.selectedRationale,
-        ...(repo.existingPr ? { existingPr: repo.existingPr } : {}),
+        ...(repo.workflowOwnedPr ? { workflowOwnedPr: repo.workflowOwnedPr } : {}),
       };
     }),
   };
@@ -835,7 +1056,7 @@ git commit -m "feat: add repository workspace manifest"
 
 ---
 
-### Task 5: Multi-Repo Sandbox Provisioning
+### Task 6: Multi-Repo Sandbox Provisioning
 
 **Files:**
 - Modify: `apps/worker/src/sandbox/manager.ts:5-105`
@@ -988,7 +1209,7 @@ git commit -m "feat: provision multi-repo sandboxes"
 
 ---
 
-### Task 6: Multi-Repo Commit Guards
+### Task 7: Multi-Repo Commit Guards
 
 **Files:**
 - Create: `apps/worker/src/sandbox/agents/commit-guard.ts`
@@ -1095,7 +1316,7 @@ git commit -m "feat: check commits across workspace repositories"
 
 ---
 
-### Task 7: Multi-Repo Push And PR/MR Creation
+### Task 8: Multi-Repo Push And PR/MR Creation
 
 **Files:**
 - Modify: `apps/worker/src/sandbox/poll-agent.ts:1-127`
@@ -1197,12 +1418,21 @@ Keep existing `pushFromSandbox` as the single-repo compatibility wrapper until t
 In `apps/worker/src/workflows/agent.ts`, add a step:
 
 ```ts
-async function createOrFindPullRequestsForRepos(input: {
-  repositories: Array<{ repoPath: string; defaultBranch: string; branchName: string; existingPr?: { id: number; url: string; branch: string } }>;
+async function createOrUseWorkflowOwnedPullRequestsForRepos(input: {
+  ticketKey: string;
+  repositories: Array<{
+    provider: "github" | "gitlab";
+    repoPath: string;
+    defaultBranch: string;
+    branchName: string;
+    workflowOwnedPr?: { id: number; url: string; branch: string };
+  }>;
   title: string;
 }): Promise<Array<{ repoPath: string; id: number; url: string; branch: string }>> {
   "use step";
   const { getVcsConfig } = await import("../../env.js");
+  const { getDb } = await import("../db/client.js");
+  const { upsertWorkflowOwnedPr } = await import("../db/queries/workflow-owned-prs.js");
   const { createVCSForRepository } = await import("../lib/create-vcs.js");
   const vcsConfig = getVcsConfig();
   const prs = [];
@@ -1211,14 +1441,27 @@ async function createOrFindPullRequestsForRepos(input: {
       repoPath: repo.repoPath,
       baseBranch: repo.defaultBranch,
     });
-    const existing = repo.existingPr ?? await vcs.findPR(repo.branchName);
-    prs.push(existing ?? await vcs.createPR(repo.branchName, input.title, ""));
+    const existing = repo.workflowOwnedPr;
+    const pr = existing ?? await vcs.createPR(repo.branchName, input.title, "");
+    if (!existing) {
+      await upsertWorkflowOwnedPr(getDb(), {
+        ticketKey: input.ticketKey,
+        provider: repo.provider,
+        repoPath: repo.repoPath,
+        prId: pr.id,
+        url: pr.url,
+        branchName: pr.branch,
+      });
+    }
+    prs.push(pr);
   }
   return prs.map((pr, index) => ({ repoPath: input.repositories[index].repoPath, id: pr.id, url: pr.url, branch: pr.branch }));
 }
 ```
 
 Only call this for repos that were pushed/changed.
+Do not call `findPR(repo.branchName)` here; a branch-name match is not a
+Workflow-Owned PR/MR unless it has an ownership record.
 
 **Step 5: Run tests**
 
@@ -1239,7 +1482,7 @@ git commit -m "feat: push changed workspace repositories"
 
 ---
 
-### Task 8: Wire Agent Workflow To Selected Repos
+### Task 9: Wire Agent Workflow To Selected Repos
 
 **Files:**
 - Modify: `apps/worker/src/workflows/agent.ts:630-1010`
@@ -1273,7 +1516,7 @@ This should be unreachable when `repo-selection` is configured, but it prevents 
 
 **Step 2: Replace single PR context with selected repo contexts**
 
-Do not use the old `fetchPRContext(branchName)` as the source of truth for multi-repo. Repo selection already found existing PR/MR matches. Use selected repo `existingPr` entries for reruns and prompt context.
+Do not use the old `fetchPRContext(branchName)` as the source of truth for multi-repo. Repo selection already loaded Workflow-Owned PR/MR records. Use selected repo `workflowOwnedPr` entries for reruns and prompt context.
 
 **Step 3: Create/reset branches per selected repo**
 
@@ -1289,7 +1532,7 @@ async function prepareSelectedRepositoryBranches(
   const { createVCSForRepository } = await import("../lib/create-vcs.js");
   const config = getVcsConfig();
   for (const repo of repositories) {
-    if (repo.existingPr) continue;
+    if (repo.workflowOwnedPr) continue;
     await createVCSForRepository(config, {
       repoPath: repo.repoPath,
       baseBranch: repo.defaultBranch,
@@ -1310,7 +1553,7 @@ In `apps/worker/src/sandbox/context.ts`, add an optional selected repositories s
 ## Selected Repositories
 
 - `acme/api` at `/vercel/sandbox/repos/acme__api` - ticket mentions billing API
-- `acme/web` at `/vercel/sandbox/repos/acme__web` - existing PR for this ticket
+- `acme/web` at `/vercel/sandbox/repos/acme__web` - Workflow-Owned PR/MR for this ticket
 ```
 
 The prompt should instruct the agent to edit only these workspace repos.
@@ -1334,7 +1577,8 @@ if (!pushResult.pushed && pushResult.error) {
 }
 ...
 const changedRepos = pushResult.repositories.filter((repo) => repo.changed && repo.pushed);
-const prs = await createOrFindPullRequestsForRepos({
+const prs = await createOrUseWorkflowOwnedPullRequestsForRepos({
+  ticketKey: ticket.identifier,
   repositories: selectedRepositories.filter((repo) =>
     changedRepos.some((changed) => changed.repoPath === repo.repoPath),
   ),
@@ -1384,7 +1628,7 @@ git commit -m "feat: wire agent workflow to selected repositories"
 
 ---
 
-### Task 9: Enable Repo Selection In Config And Docs
+### Task 10: Enable Repo Selection In Config And Docs
 
 **Files:**
 - Modify: `apps/worker/pre-sandbox.yaml`
@@ -1447,7 +1691,7 @@ git commit -m "docs: document multi-repo selection"
 
 ---
 
-### Task 10: Final Verification
+### Task 11: Final Verification
 
 **Files:**
 - No planned edits unless verification reveals issues.
@@ -1457,7 +1701,7 @@ git commit -m "docs: document multi-repo selection"
 Run:
 
 ```bash
-CI=true pnpm --filter worker test -- src/lib/create-vcs.test.ts src/adapters/vcs/github.test.ts src/adapters/vcs/gitlab.test.ts src/pre-sandbox/steps/repo-selection.test.ts src/pre-sandbox/runner.test.ts src/pre-sandbox/config.test.ts src/sandbox/repo-workspace.test.ts src/sandbox/manager.test.ts src/sandbox/agents/commit-guard.test.ts src/sandbox/poll-agent.test.ts src/sandbox/context.test.ts
+CI=true pnpm --filter worker test -- src/lib/create-vcs.test.ts src/adapters/vcs/github.test.ts src/adapters/vcs/gitlab.test.ts src/db/queries/workflow-owned-prs.test.ts src/pre-sandbox/steps/repo-selection.test.ts src/pre-sandbox/runner.test.ts src/pre-sandbox/config.test.ts src/sandbox/repo-workspace.test.ts src/sandbox/manager.test.ts src/sandbox/agents/commit-guard.test.ts src/sandbox/poll-agent.test.ts src/sandbox/context.test.ts
 ```
 
 Expected: PASS.
