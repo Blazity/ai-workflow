@@ -3,7 +3,7 @@ import type { Octokit } from "@octokit/rest";
 import { buildOctokit, type GitHubAppAuth } from "../../lib/github-auth.js";
 import type {
   VCSAdapter,
-  CheckRunUpdate,
+  GateStatusUpdate,
   GateStatusCapableVCS,
   GateStatusRef,
   PRFile,
@@ -11,6 +11,8 @@ import type {
   PullRequest,
   PRComment,
   CheckRunResult,
+  RichGateStatusCapableVCS,
+  RichGateStatusUpdate,
 } from "./types.js";
 
 export interface GitHubConfig {
@@ -20,7 +22,13 @@ export interface GitHubConfig {
   baseBranch: string;
 }
 
-export class GitHubAdapter implements VCSAdapter, GateStatusCapableVCS, PRFilesCapableVCS {
+export class GitHubAdapter
+  implements
+    VCSAdapter,
+    GateStatusCapableVCS,
+    RichGateStatusCapableVCS,
+    PRFilesCapableVCS
+{
   private octokit: Octokit;
 
   constructor(private config: GitHubConfig) {
@@ -318,7 +326,24 @@ export class GitHubAdapter implements VCSAdapter, GateStatusCapableVCS, PRFilesC
     return { provider: "github", id: data.id };
   }
 
-  async updateGateStatus(ref: GateStatusRef, update: CheckRunUpdate): Promise<void> {
+  async updateGateStatus(
+    ref: GateStatusRef,
+    update: GateStatusUpdate,
+  ): Promise<void> {
+    await this.updateGitHubGateStatus(ref, update);
+  }
+
+  async updateGateStatusDetails(
+    ref: GateStatusRef,
+    update: RichGateStatusUpdate,
+  ): Promise<void> {
+    await this.updateGitHubGateStatus(ref, update);
+  }
+
+  private async updateGitHubGateStatus(
+    ref: GateStatusRef,
+    update: RichGateStatusUpdate,
+  ): Promise<void> {
     if (ref.provider !== "github") {
       throw new Error(`GitHubAdapter cannot update ${ref.provider} gate status`);
     }

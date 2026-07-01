@@ -33,18 +33,6 @@ export interface CurrentGateRun {
   runId: string;
   headSha: string;
   gateStatusRefs: GateStatusRef[];
-  /** @deprecated Kept until Task 3 migrates post-PR gate call sites. */
-  checkRunIds: number[];
-}
-
-type CurrentGateRunInput =
-  | Omit<CurrentGateRun, "checkRunIds"> & { checkRunIds?: number[] }
-  | Omit<CurrentGateRun, "gateStatusRefs"> & {
-      gateStatusRefs?: GateStatusRef[];
-    };
-
-function githubRefsFromCheckRunIds(ids: number[]): GateStatusRef[] {
-  return ids.map((id) => ({ provider: "github", id }));
 }
 
 function validateCheckRunIds(ids: number[]): void {
@@ -62,49 +50,10 @@ function legacyCheckRunIdsFromRefs(refs: GateStatusRef[]): number[] {
     .map((ref) => ref.id);
 }
 
-function sameCheckRunIds(left: number[], right: number[]): boolean {
-  return (
-    left.length === right.length &&
-    left.every((id, index) => id === right[index])
-  );
-}
-
-function normalizeCurrentGateRun(value: CurrentGateRunInput): {
-  gateStatusRefs: GateStatusRef[];
-  checkRunIds: number[];
-} {
-  const gateStatusRefs =
-    value.gateStatusRefs ?? githubRefsFromCheckRunIds(value.checkRunIds ?? []);
-  const checkRunIds = value.checkRunIds ?? legacyCheckRunIdsFromRefs(gateStatusRefs);
+function checkRunIdsForLegacyColumn(gateStatusRefs: GateStatusRef[]): number[] {
+  const checkRunIds = legacyCheckRunIdsFromRefs(gateStatusRefs);
   validateCheckRunIds(checkRunIds);
-
-  if (
-    value.gateStatusRefs &&
-    value.checkRunIds &&
-    !sameCheckRunIds(legacyCheckRunIdsFromRefs(value.gateStatusRefs), value.checkRunIds)
-  ) {
-    throw new Error("mismatched gate status refs and check-run ids");
-  }
-
-  return { gateStatusRefs, checkRunIds };
-}
-
-function withLegacyCheckRunIds(
-  value: Omit<CurrentGateRun, "checkRunIds"> & { checkRunIds?: number[] },
-): CurrentGateRun {
-  const refs =
-    value.gateStatusRefs.length > 0 || !value.checkRunIds
-      ? value.gateStatusRefs
-      : githubRefsFromCheckRunIds(value.checkRunIds);
-  const current = {
-    runId: value.runId,
-    headSha: value.headSha,
-    gateStatusRefs: refs,
-  };
-  return Object.defineProperty(current, "checkRunIds", {
-    value: value.checkRunIds ?? legacyCheckRunIdsFromRefs(refs),
-    enumerable: false,
-  }) as CurrentGateRun;
+  return checkRunIds;
 }
 
 export class GateStore {
@@ -204,7 +153,6 @@ export class GateStore {
         runId: gateCurrent.runId,
         headSha: gateCurrent.headSha,
         gateStatusRefs: gateCurrent.gateStatusRefs,
-        checkRunIds: gateCurrent.checkRunIds,
       })
       .from(gateCurrent)
       .where(
@@ -214,15 +162,15 @@ export class GateStore {
           sql`${gateCurrent.expiresAt} > now()`,
         ),
       );
-    return rows[0] ? withLegacyCheckRunIds(rows[0]) : null;
+    return rows[0] ?? null;
   }
 
   async setCurrent(
     repo: string,
     pr: number,
-    value: CurrentGateRunInput,
+    value: CurrentGateRun,
   ): Promise<void> {
-    const { gateStatusRefs, checkRunIds } = normalizeCurrentGateRun(value);
+    const checkRunIds = checkRunIdsForLegacyColumn(value.gateStatusRefs);
     await this.db
       .insert(gateCurrent)
       .values({
@@ -231,7 +179,7 @@ export class GateStore {
         runId: value.runId,
         headSha: value.headSha,
         checkRunIds,
-        gateStatusRefs,
+        gateStatusRefs: value.gateStatusRefs,
         expiresAt: TTL,
       })
       .onConflictDoUpdate({
@@ -240,7 +188,7 @@ export class GateStore {
           runId: value.runId,
           headSha: value.headSha,
           checkRunIds,
-          gateStatusRefs,
+          gateStatusRefs: value.gateStatusRefs,
           expiresAt: TTL,
         },
       });
@@ -260,8 +208,7 @@ export class GateStore {
     refs: GateStatusRef[],
   ): Promise<boolean> {
     if (refs.length === 0) return true;
-    const checkRunIds = legacyCheckRunIdsFromRefs(refs);
-    validateCheckRunIds(checkRunIds);
+    const checkRunIds = checkRunIdsForLegacyColumn(refs);
     const refsJson = JSON.stringify(refs);
     const checkRunIdsUpdate =
       checkRunIds.length > 0
@@ -287,22 +234,6 @@ export class GateStore {
       )
       .returning({ pr: gateCurrent.pr });
     return rows.length > 0;
-  }
-
-  /** @deprecated Kept until Task 3 migrates post-PR gate call sites. */
-  async appendCheckRunIdsForSha(
-    repo: string,
-    pr: number,
-    expectedHeadSha: string,
-    ids: number[],
-  ): Promise<boolean> {
-    validateCheckRunIds(ids);
-    return this.appendGateStatusRefsForSha(
-      repo,
-      pr,
-      expectedHeadSha,
-      githubRefsFromCheckRunIds(ids),
-    );
   }
 
   /**

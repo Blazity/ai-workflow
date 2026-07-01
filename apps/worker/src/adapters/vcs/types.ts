@@ -56,11 +56,13 @@ export type CheckRunConclusion =
   | "timed_out"
   | "action_required";
 
-// Shared by GitHub Check Runs and GitLab commit statuses.
-export interface CheckRunUpdate {
+export interface GateStatusUpdate {
   status: "in_progress" | "completed";
   conclusion?: CheckRunConclusion;
   summary?: string;
+}
+
+export interface RichGateStatusUpdate extends GateStatusUpdate {
   details?: string;
   annotations?: CheckRunAnnotation[];
 }
@@ -79,7 +81,7 @@ export type GateStatusRef =
  */
 export interface GateStatusCapableVCS {
   createGateStatus(name: string, headSha: string): Promise<GateStatusRef>;
-  updateGateStatus(ref: GateStatusRef, update: CheckRunUpdate): Promise<void>;
+  updateGateStatus(ref: GateStatusRef, update: GateStatusUpdate): Promise<void>;
 }
 
 export function hasGateStatusCapability(
@@ -90,6 +92,22 @@ export function hasGateStatusCapability(
       "function" &&
     typeof (adapter as Partial<GateStatusCapableVCS>).updateGateStatus ===
       "function"
+  );
+}
+
+export interface RichGateStatusCapableVCS {
+  updateGateStatusDetails(
+    ref: GateStatusRef,
+    update: RichGateStatusUpdate,
+  ): Promise<void>;
+}
+
+export function hasRichGateStatusCapability(
+  adapter: VCSAdapter,
+): adapter is VCSAdapter & RichGateStatusCapableVCS {
+  return (
+    typeof (adapter as Partial<RichGateStatusCapableVCS>)
+      .updateGateStatusDetails === "function"
   );
 }
 

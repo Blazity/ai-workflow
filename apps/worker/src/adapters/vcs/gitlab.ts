@@ -2,7 +2,7 @@ import { Gitlab } from "@gitbeaker/rest";
 import { FatalError } from "workflow";
 import type {
   VCSAdapter,
-  CheckRunUpdate,
+  GateStatusUpdate,
   GateStatusCapableVCS,
   GateStatusRef,
   PRFile,
@@ -377,7 +377,7 @@ export class GitLabAdapter implements VCSAdapter, GateStatusCapableVCS, PRFilesC
 
   async updateGateStatus(
     ref: GateStatusRef,
-    update: CheckRunUpdate,
+    update: GateStatusUpdate,
   ): Promise<void> {
     if (ref.provider !== "gitlab") {
       throw new Error(`GitLabAdapter cannot update ${ref.provider} gate status`);
@@ -412,7 +412,7 @@ export class GitLabAdapter implements VCSAdapter, GateStatusCapableVCS, PRFilesC
     );
   }
 
-  private mapCommitStatus(update: CheckRunUpdate): GitLabCommitStatusState {
+  private mapCommitStatus(update: GateStatusUpdate): GitLabCommitStatusState {
     if (update.status === "in_progress") return "running";
 
     if (update.status === "completed") {

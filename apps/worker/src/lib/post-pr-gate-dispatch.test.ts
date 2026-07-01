@@ -219,7 +219,6 @@ describe("dispatchPostPrGateWebhook orchestration", () => {
       runId: "run_old",
       headSha: "sha0",
       gateStatusRefs: [previousRef],
-      checkRunIds: [],
     });
 
     const result = await dispatchPostPrGateWebhook({
