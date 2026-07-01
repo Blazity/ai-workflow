@@ -1,6 +1,8 @@
 import type { PRComment, CheckRunResult } from "../adapters/vcs/types.js";
+import type { SelectedRepository } from "../adapters/vcs/repository-directory.js";
 import type { DownloadedAttachment } from "./attachments.js";
 import { formatAttachmentsIndex } from "./attachments.js";
+import { buildRepoSlug, WORKSPACE_REPOS_DIR } from "./repo-workspace.js";
 
 interface TicketData {
   identifier: string;
@@ -27,6 +29,7 @@ export interface ResearchPlanContextInput {
   hasConflicts?: boolean;
   attachments?: DownloadedAttachment[];
   preSandboxAdditions?: PreSandboxPromptAddition[];
+  selectedRepositories?: SelectedRepository[];
 }
 
 export interface ImplementationContextInput {
@@ -35,6 +38,7 @@ export interface ImplementationContextInput {
   researchPlanMarkdown: string;
   attachments?: DownloadedAttachment[];
   preSandboxAdditions?: PreSandboxPromptAddition[];
+  selectedRepositories?: SelectedRepository[];
 }
 
 export interface ReviewContextInput {
@@ -43,12 +47,14 @@ export interface ReviewContextInput {
   researchPlanMarkdown: string;
   attachments?: DownloadedAttachment[];
   preSandboxAdditions?: PreSandboxPromptAddition[];
+  selectedRepositories?: SelectedRepository[];
 }
 
 export function assembleResearchPlanContext(input: ResearchPlanContextInput): string {
-  const { ticket, prompt, branchName, prComments, checkResults, hasConflicts, attachments, preSandboxAdditions } = input;
+  const { ticket, prompt, branchName, prComments, checkResults, hasConflicts, attachments, preSandboxAdditions, selectedRepositories } = input;
   const attachmentsSection = renderAttachmentsSection(attachments);
   const preSandboxSection = renderPreSandboxAdditions(preSandboxAdditions);
+  const selectedRepositoriesSection = renderSelectedRepositories(selectedRepositories);
 
   let md = `# Requirements
 
@@ -77,6 +83,8 @@ ${formatComments(ticket.comments)}
 ${branchName}
 `;
 
+  md += selectedRepositoriesSection;
+
   if (prComments && prComments.length > 0) {
     md += `\n## PR Review Feedback\n\n${formatPRComments(prComments)}\n`;
   }
@@ -95,9 +103,10 @@ ${branchName}
 }
 
 export function assembleImplementationContext(input: ImplementationContextInput): string {
-  const { ticket, prompt, researchPlanMarkdown, attachments, preSandboxAdditions } = input;
+  const { ticket, prompt, researchPlanMarkdown, attachments, preSandboxAdditions, selectedRepositories } = input;
   const attachmentsSection = renderAttachmentsSection(attachments);
   const preSandboxSection = renderPreSandboxAdditions(preSandboxAdditions);
+  const selectedRepositoriesSection = renderSelectedRepositories(selectedRepositories);
   return `# Requirements
 
 ## Ticket ID
@@ -115,6 +124,7 @@ ${ticket.acceptanceCriteria || "None specified."}
 ## Research & Plan
 
 ${researchPlanMarkdown}
+${selectedRepositoriesSection}
 ${preSandboxSection}
 
 ---
@@ -124,9 +134,10 @@ ${prompt}
 }
 
 export function assembleReviewContext(input: ReviewContextInput): string {
-  const { ticket, prompt, researchPlanMarkdown, attachments, preSandboxAdditions } = input;
+  const { ticket, prompt, researchPlanMarkdown, attachments, preSandboxAdditions, selectedRepositories } = input;
   const attachmentsSection = renderAttachmentsSection(attachments);
   const preSandboxSection = renderPreSandboxAdditions(preSandboxAdditions);
+  const selectedRepositoriesSection = renderSelectedRepositories(selectedRepositories);
   return `# Requirements
 
 ## Ticket ID
@@ -144,6 +155,7 @@ ${ticket.acceptanceCriteria || "None specified."}
 ## Research & Plan
 
 ${researchPlanMarkdown}
+${selectedRepositoriesSection}
 ${preSandboxSection}
 
 ---
@@ -232,4 +244,15 @@ This information was produced before sandbox creation.
 ${addition.content}`,
     )
     .join("\n\n")}\n`;
+}
+
+function renderSelectedRepositories(
+  repositories: SelectedRepository[] | undefined,
+): string {
+  if (!repositories || repositories.length === 0) return "";
+  const lines = repositories.map((repo) => {
+    const localPath = `${WORKSPACE_REPOS_DIR}/${buildRepoSlug(repo.repoPath)}`;
+    return `- \`${repo.repoPath}\` at \`${localPath}\` - ${repo.selectedRationale}`;
+  });
+  return `\n## Selected Repositories\n\nEdit only these Run Workspace repositories:\n\n${lines.join("\n")}\n`;
 }

@@ -3,4 +3,8 @@ preSandbox:
     newTicket: true
     existingPr: true
     mergeConflict: true
-  steps: []
+  steps:
+    - uses: repo-selection
+      name: Select repositories
+      timeoutMs: 30000
+      onFailure: fail

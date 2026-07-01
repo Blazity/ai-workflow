@@ -153,6 +153,27 @@ describe("assembleResearchPlanContext", () => {
     });
     expect(withoutAdditions).not.toContain("## Pre-Sandbox");
   });
+
+  it("renders selected repositories with Run Workspace paths", () => {
+    const result = assembleResearchPlanContext({
+      ticket: { identifier: "X", title: "t", description: "d", acceptanceCriteria: "a", comments: [] },
+      prompt: "p",
+      branchName: "b",
+      selectedRepositories: [
+        {
+          provider: "github",
+          repoPath: "acme/api",
+          defaultBranch: "main",
+          selectedRationale: "ticket mentions api",
+        },
+      ],
+    });
+
+    expect(result).toContain("## Selected Repositories");
+    expect(result).toContain("acme/api");
+    expect(result).toContain("/vercel/sandbox/repos/acme__api");
+    expect(result).toContain("Edit only these Run Workspace repositories");
+  });
 });
 
 describe("assembleImplementationContext (new)", () => {

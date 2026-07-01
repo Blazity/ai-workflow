@@ -1,5 +1,6 @@
 import { getSandboxCredentials } from "./credentials.js";
 import { buildCloneUrl, buildVcsUrls } from "./manager.js";
+import { parseWorkspaceManifest, WORKSPACE_MANIFEST_PATH } from "./repo-workspace.js";
 
 /**
  * After the agent exits, injects the VCS token and pushes commits.
@@ -53,6 +54,97 @@ export async function pushFromSandbox(
   }
 
   return { pushed: true };
+}
+
+export interface WorkspacePushRepoResult {
+  repoPath: string;
+  branchName: string;
+  pushed: boolean;
+  changed: boolean;
+  error?: string;
+}
+
+export interface WorkspacePushResult {
+  pushed: boolean;
+  repositories: WorkspacePushRepoResult[];
+  error?: string;
+}
+
+export async function pushWorkspaceFromSandbox(
+  sandboxId: string,
+): Promise<WorkspacePushResult> {
+  "use step";
+  const { Sandbox } = await import("@vercel/sandbox");
+  const { getVcsConfig, getVcsToken } = await import("../../env.js");
+  const sandbox = await Sandbox.get({ sandboxId, ...getSandboxCredentials() });
+  const config = getVcsConfig();
+  const token = await getVcsToken(config);
+
+  const manifestResult = await sandbox.runCommand("cat", [WORKSPACE_MANIFEST_PATH]);
+  const manifest = parseWorkspaceManifest(await manifestResult.stdout());
+  const repositories: WorkspacePushRepoResult[] = [];
+
+  for (const repo of manifest.repositories) {
+    const headResult = await sandbox.runCommand("git", ["-C", repo.localPath, "rev-parse", "HEAD"]);
+    const headSha = (await headResult.stdout()).trim();
+    const changed = !repo.preAgentSha || repo.preAgentSha !== headSha;
+
+    if (!changed) {
+      repositories.push({
+        repoPath: repo.repoPath,
+        branchName: repo.branchName,
+        changed: false,
+        pushed: false,
+      });
+      continue;
+    }
+
+    const urls = buildVcsUrls({ ...config, repoPath: repo.repoPath }, token);
+    await sandbox.runCommand("git", ["-C", repo.localPath, "remote", "set-url", "origin", urls.authUrl]);
+    await sandbox.runCommand("bash", [
+      "-c",
+      `if [ "$(git -C "${repo.localPath}" rev-parse --is-shallow-repository)" = "true" ]; then git -C "${repo.localPath}" fetch --unshallow origin; fi`,
+    ]);
+    const result = await sandbox.runCommand("git", [
+      "-C",
+      repo.localPath,
+      "push",
+      "--force",
+      "origin",
+      `HEAD:refs/heads/${repo.branchName}`,
+    ]);
+
+    if (result.exitCode !== 0) {
+      const stdout = (await result.stdout()).trim();
+      const stderr = (await result.stderr()).trim();
+      const error = stderr || stdout;
+      repositories.push({
+        repoPath: repo.repoPath,
+        branchName: repo.branchName,
+        changed: true,
+        pushed: false,
+        error,
+      });
+      return { pushed: false, repositories, error };
+    }
+
+    repositories.push({
+      repoPath: repo.repoPath,
+      branchName: repo.branchName,
+      changed: true,
+      pushed: true,
+    });
+  }
+
+  if (!repositories.some((repo) => repo.changed)) {
+    return {
+      pushed: false,
+      repositories,
+      error: "Agent reported success but made no commits",
+    };
+  }
+
+  return { pushed: true, repositories };
 }
 
 /**

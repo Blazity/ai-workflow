@@ -73,7 +73,16 @@ vi.mock("../../env.js", () => ({
     config.kind === "gitlab" ? config.token : "ghs_test_minted_token",
 }));
 
-import { pushFromSandbox, fixAndRetryPush, teardownSandbox, checkPhaseDone, collectPhaseOutput, collectPhase } from "./poll-agent.js";
+import {
+  pushFromSandbox,
+  pushWorkspaceFromSandbox,
+  fixAndRetryPush,
+  teardownSandbox,
+  checkPhaseDone,
+  collectPhaseOutput,
+  collectPhase,
+} from "./poll-agent.js";
+import { WORKSPACE_MANIFEST_PATH } from "./repo-workspace.js";
 
 describe("pushFromSandbox", () => {
   beforeEach(() => {
@@ -201,6 +210,110 @@ describe("pushFromSandbox", () => {
     const result = await pushFromSandbox("sbx-test-123", "blazebot/task-1");
 
     expect(result.pushed).toBe(true);
+  });
+});
+
+describe("pushWorkspaceFromSandbox", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    currentVcsConfig = githubVcsConfig;
+  });
+
+  it("returns no-commit error when no manifest repository changed", async () => {
+    const manifest = {
+      version: 1,
+      repositories: [
+        {
+          provider: "github",
+          repoPath: "acme/api",
+          slug: "acme__api",
+          localPath: "/vercel/sandbox/repos/acme__api",
+          defaultBranch: "main",
+          branchName: "blazebot/task-1",
+          selectedRationale: "ticket mentions api",
+          preAgentSha: "abc123",
+        },
+      ],
+    };
+    mockRunCommand.mockImplementation((cmd, args) => {
+      if (cmd === "cat" && args[0] === WORKSPACE_MANIFEST_PATH) {
+        return { exitCode: 0, stdout: vi.fn().mockResolvedValue(JSON.stringify(manifest)) };
+      }
+      if (cmd === "git" && args.includes("rev-parse")) {
+        return { exitCode: 0, stdout: vi.fn().mockResolvedValue("abc123") };
+      }
+      return { exitCode: 0, stdout: vi.fn().mockResolvedValue(""), stderr: vi.fn().mockResolvedValue("") };
+    });
+
+    const result = await pushWorkspaceFromSandbox("sbx-test-123");
+
+    expect(result.pushed).toBe(false);
+    expect(result.error).toContain("no commits");
+    expect(result.repositories).toEqual([
+      expect.objectContaining({ repoPath: "acme/api", changed: false, pushed: false }),
+    ]);
+  });
+
+  it("pushes changed repositories only", async () => {
+    const manifest = {
+      version: 1,
+      repositories: [
+        {
+          provider: "github",
+          repoPath: "acme/api",
+          slug: "acme__api",
+          localPath: "/vercel/sandbox/repos/acme__api",
+          defaultBranch: "main",
+          branchName: "blazebot/task-1",
+          selectedRationale: "ticket mentions api",
+          preAgentSha: "abc123",
+        },
+        {
+          provider: "github",
+          repoPath: "acme/web",
+          slug: "acme__web",
+          localPath: "/vercel/sandbox/repos/acme__web",
+          defaultBranch: "main",
+          branchName: "blazebot/task-1",
+          selectedRationale: "ticket mentions web",
+          preAgentSha: "same123",
+        },
+      ],
+    };
+    mockRunCommand.mockImplementation((cmd, args) => {
+      if (cmd === "cat" && args[0] === WORKSPACE_MANIFEST_PATH) {
+        return { exitCode: 0, stdout: vi.fn().mockResolvedValue(JSON.stringify(manifest)) };
+      }
+      if (cmd === "git" && args[0] === "-C" && args[2] === "rev-parse") {
+        const head = args[1].includes("acme__api") ? "def456" : "same123";
+        return { exitCode: 0, stdout: vi.fn().mockResolvedValue(head) };
+      }
+      return { exitCode: 0, stdout: vi.fn().mockResolvedValue(""), stderr: vi.fn().mockResolvedValue("") };
+    });
+
+    const result = await pushWorkspaceFromSandbox("sbx-test-123");
+
+    expect(result.pushed).toBe(true);
+    expect(result.repositories).toEqual([
+      expect.objectContaining({ repoPath: "acme/api", changed: true, pushed: true }),
+      expect.objectContaining({ repoPath: "acme/web", changed: false, pushed: false }),
+    ]);
+    expect(mockRunCommand).toHaveBeenCalledWith("git", [
+      "-C",
+      "/vercel/sandbox/repos/acme__api",
+      "push",
+      "--force",
+      "origin",
+      "HEAD:refs/heads/blazebot/task-1",
+    ]);
+    expect(mockRunCommand).not.toHaveBeenCalledWith("git", [
+      "-C",
+      "/vercel/sandbox/repos/acme__web",
+      "push",
+      "--force",
+      "origin",
+      "HEAD:refs/heads/blazebot/task-1",
+    ]);
   });
 });
 

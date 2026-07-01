@@ -1,6 +1,8 @@
 import type { Sandbox as SandboxType } from "@vercel/sandbox";
 import { getSandboxCredentials } from "./credentials.js";
 import type { AgentAdapter, ConfigureOpts } from "./agents/types.js";
+import type { SelectedRepository } from "../adapters/vcs/repository-directory.js";
+import { buildWorkspaceManifest, WORKSPACE_MANIFEST_PATH, WORKSPACE_REPOS_DIR } from "./repo-workspace.js";
 
 export interface SandboxConfig {
   kind: "github" | "gitlab";
@@ -93,6 +95,80 @@ export class SandboxManager {
     await sandbox.runCommand("bash", ["-c", "git rev-parse HEAD > /tmp/.pre-agent-sha"]);
 
     // --- Agent-specific work delegated to the adapter ---
+    await agent.install(sandbox);
+    await agent.configure(sandbox, configureOpts);
+
+    return sandbox;
+  }
+
+  async provisionMultiRepo(
+    input: { branchName: string; repositories: SelectedRepository[]; mergeBase?: string },
+    agent: AgentAdapter,
+    configureOpts: ConfigureOpts,
+  ): Promise<SandboxInstance> {
+    if (input.repositories.length === 0) {
+      throw new Error("Cannot provision sandbox without selected repositories");
+    }
+
+    const { Sandbox } = await import("@vercel/sandbox");
+    const token = await this.config.getToken();
+    const firstRepo = input.repositories[0];
+    const firstUrls = buildVcsUrls({ ...this.config, repoPath: firstRepo.repoPath }, token);
+
+    const sandbox = await Sandbox.create({
+      ...getSandboxCredentials(),
+      source: {
+        type: "git",
+        url: firstUrls.cloneUrl,
+        username: firstUrls.authUser,
+        password: token,
+        revision: input.branchName,
+      },
+      runtime: "node24",
+      timeout: this.config.jobTimeoutMs,
+    });
+
+    await sandbox.runCommand("mkdir", ["-p", WORKSPACE_REPOS_DIR]);
+    const manifest = buildWorkspaceManifest({
+      branchName: input.branchName,
+      repositories: input.repositories,
+    });
+
+    for (const repo of manifest.repositories) {
+      const urls = buildVcsUrls({ ...this.config, repoPath: repo.repoPath }, token);
+      await sandbox.runCommand("git", [
+        "clone",
+        "--branch",
+        repo.branchName,
+        urls.authUrl,
+        repo.localPath,
+      ]);
+      await sandbox.runCommand("git", ["-C", repo.localPath, "remote", "set-url", "origin", urls.cloneUrl]);
+      await sandbox.runCommand("git", ["-C", repo.localPath, "config", "user.name", this.config.commitAuthor]);
+      await sandbox.runCommand("git", ["-C", repo.localPath, "config", "user.email", this.config.commitEmail]);
+
+      if (input.mergeBase) {
+        await sandbox.runCommand("bash", ["-c", `git -C "${repo.localPath}" fetch "${urls.authUrl}" ${input.mergeBase} 2>&1`]);
+        await sandbox.runCommand("bash", ["-c", `git -C "${repo.localPath}" branch ${input.mergeBase} FETCH_HEAD 2>/dev/null || true`]);
+        const merge = await sandbox.runCommand("bash", ["-c", `git -C "${repo.localPath}" merge FETCH_HEAD --no-edit 2>&1`]);
+        if (merge.exitCode !== 0) {
+          const out = (await merge.stdout()).trim();
+          const { logger } = await import("../lib/logger.js");
+          logger.warn({ repoPath: repo.repoPath, mergeBase: input.mergeBase, exitCode: merge.exitCode, output: out.slice(0, 500) }, "merge_conflicts_during_provision");
+        }
+      }
+
+      const sha = await sandbox.runCommand("git", ["-C", repo.localPath, "rev-parse", "HEAD"]);
+      repo.preAgentSha = (await sha.stdout()).trim();
+    }
+
+    await sandbox.writeFiles([
+      {
+        path: WORKSPACE_MANIFEST_PATH,
+        content: Buffer.from(JSON.stringify(manifest, null, 2)),
+      },
+    ]);
+
     await agent.install(sandbox);
     await agent.configure(sandbox, configureOpts);
 

@@ -1,3 +1,5 @@
+import type { SelectedRepository } from "../adapters/vcs/repository-directory.js";
+
 export const preSandboxPromptTargets = ["research", "implementation", "review"] as const;
 export type PreSandboxPromptTarget = (typeof preSandboxPromptTargets)[number];
 
@@ -16,6 +18,7 @@ export type PreSandboxStepResult =
   | {
       status: "continue";
       promptAdditions?: PreSandboxPromptAddition[];
+      selectedRepositories?: SelectedRepository[];
     }
   | {
       status: "halt";
@@ -23,6 +26,7 @@ export type PreSandboxStepResult =
       message: string;
       questions?: string[];
       promptAdditions?: PreSandboxPromptAddition[];
+      selectedRepositories?: SelectedRepository[];
     };
 
 export const preSandboxTicketInputFields = [
@@ -96,6 +100,7 @@ export type RunPreSandboxPhaseResult =
   | {
       status: "continue";
       promptAdditions: PreSandboxPromptAdditionsByTarget;
+      selectedRepositories?: SelectedRepository[];
     }
   | {
       status: "halt";
@@ -103,4 +108,5 @@ export type RunPreSandboxPhaseResult =
       message: string;
       questions?: string[];
       promptAdditions: PreSandboxPromptAdditionsByTarget;
+      selectedRepositories?: SelectedRepository[];
     };

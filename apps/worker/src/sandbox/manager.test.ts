@@ -18,6 +18,7 @@ vi.mock("@vercel/sandbox", () => ({
 
 import { SandboxManager } from "./manager.js";
 import type { AgentAdapter, ConfigureOpts } from "./agents/types.js";
+import { WORKSPACE_MANIFEST_PATH, WORKSPACE_REPOS_DIR } from "./repo-workspace.js";
 
 const makeFakeAgent = (): AgentAdapter & { calls: any[] } => {
   const calls: any[] = [];
@@ -108,5 +109,77 @@ describe("SandboxManager.provision", () => {
     );
     expect(fetchCall).toBeDefined();
     expect(fetchCall![1][1]).toContain("main");
+  });
+
+  it("clones every selected repository into the workspace manifest paths", async () => {
+    const manager = new SandboxManager(baseConfig);
+    await manager.provisionMultiRepo(
+      {
+        branchName: "blazebot/aiw-45",
+        repositories: [
+          {
+            provider: "github",
+            repoPath: "acme/api",
+            defaultBranch: "main",
+            selectedRationale: "ticket mentions api",
+          },
+          {
+            provider: "github",
+            repoPath: "acme/web",
+            defaultBranch: "main",
+            selectedRationale: "ticket mentions web",
+          },
+        ],
+      },
+      makeFakeAgent(),
+      { model: "any", anthropicApiKey: "k" },
+    );
+
+    expect(mockRunCommand).toHaveBeenCalledWith("mkdir", ["-p", WORKSPACE_REPOS_DIR]);
+    expect(mockRunCommand).toHaveBeenCalledWith("git", [
+      "clone",
+      "--branch",
+      "blazebot/aiw-45",
+      expect.stringContaining("github.com/acme/api.git"),
+      "/vercel/sandbox/repos/acme__api",
+    ]);
+    expect(mockRunCommand).toHaveBeenCalledWith("git", [
+      "clone",
+      "--branch",
+      "blazebot/aiw-45",
+      expect.stringContaining("github.com/acme/web.git"),
+      "/vercel/sandbox/repos/acme__web",
+    ]);
+  });
+
+  it("writes a workspace manifest with pre-agent SHA per repository", async () => {
+    mockStdout.mockResolvedValue("sha-123\n");
+    const manager = new SandboxManager(baseConfig);
+
+    await manager.provisionMultiRepo(
+      {
+        branchName: "blazebot/aiw-45",
+        repositories: [
+          {
+            provider: "github",
+            repoPath: "acme/api",
+            defaultBranch: "main",
+            selectedRationale: "ticket mentions api",
+          },
+        ],
+      },
+      makeFakeAgent(),
+      { model: "any", anthropicApiKey: "k" },
+    );
+
+    const manifestWrite = mockWriteFiles.mock.calls
+      .flatMap(([files]) => files)
+      .find((file) => file.path === WORKSPACE_MANIFEST_PATH);
+    expect(manifestWrite).toBeDefined();
+    const manifest = JSON.parse(manifestWrite.content.toString("utf8"));
+    expect(manifest.repositories[0]).toMatchObject({
+      repoPath: "acme/api",
+      preAgentSha: "sha-123",
+    });
   });
 });
