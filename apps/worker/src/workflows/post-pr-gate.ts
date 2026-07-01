@@ -1,4 +1,4 @@
-import type { CheckRunCapableVCS } from "../adapters/vcs/types.js";
+import type { GateStatusCapableVCS, GateStatusRef } from "../adapters/vcs/types.js";
 
 export interface PostPrGateWorkflowInput {
   prNumber: number;
@@ -38,7 +38,7 @@ async function runGate(input: PostPrGateWorkflowInput) {
   const { ticketKeyFromBranch } = await import("../lib/branch-prefix.js");
   const { createAdapters } = await import("../lib/adapters.js");
   const { logger } = await import("../lib/logger.js");
-  const { hasCheckRunCapability } = await import("../adapters/vcs/types.js");
+  const { hasGateStatusCapability } = await import("../adapters/vcs/types.js");
 
   const config = loadPostPrGateConfig();
   const adapters = createAdapters();
@@ -58,8 +58,8 @@ async function runGate(input: PostPrGateWorkflowInput) {
     return { ranSteps: 0, failed: false };
   }
 
-  if (!hasCheckRunCapability(adapters.vcs)) {
-    throw new Error("VCS adapter does not support check runs (post-pr-gate requires GitHub)");
+  if (!hasGateStatusCapability(adapters.vcs)) {
+    throw new Error("VCS adapter does not support gate statuses");
   }
   const vcs = adapters.vcs;
 
@@ -84,22 +84,25 @@ async function runGate(input: PostPrGateWorkflowInput) {
     }
   }
 
-  const checkRunIds: number[] = [];
+  const gateStatusRefs: GateStatusRef[] = [];
   for (const step of config.postPrGate.steps) {
     const name = `blazebot / ${step.name ?? step.uses}`;
-    const id = await (vcs as CheckRunCapableVCS).createCheckRun(name, input.headSha);
-    checkRunIds.push(id);
+    const ref = await (vcs as GateStatusCapableVCS).createGateStatus(
+      name,
+      input.headSha,
+    );
+    gateStatusRefs.push(ref);
   }
-  const appended = await gateStore.appendCheckRunIdsForSha(
+  const appended = await gateStore.appendGateStatusRefsForSha(
     input.ownerRepo,
     input.prNumber,
     input.headSha,
-    checkRunIds,
+    gateStatusRefs,
   );
   if (!appended) {
     logger.warn(
       { ownerRepo: input.ownerRepo, prNumber: input.prNumber, headSha: input.headSha },
-      "post_pr_gate_append_check_run_ids_noop",
+      "post_pr_gate_append_gate_status_refs_noop",
     );
   }
 
@@ -127,7 +130,7 @@ async function runGate(input: PostPrGateWorkflowInput) {
       },
     },
     config,
-    checkRunIds,
+    gateStatusRefs,
     registry: postPrGateStepRegistry,
     logger,
   });

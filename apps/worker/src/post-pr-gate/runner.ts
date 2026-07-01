@@ -7,10 +7,13 @@ import type {
 } from "./types.js";
 import { postPrGateTicketInputFields } from "./types.js";
 import type {
-  CheckRunCapableVCS,
-  CheckRunConclusion,
+  GateStatusCapableVCS,
+  GateStatusRef,
 } from "../adapters/vcs/types.js";
-import { hasCheckRunCapability } from "../adapters/vcs/types.js";
+import {
+  hasGateStatusCapability,
+  hasRichGateStatusCapability,
+} from "../adapters/vcs/types.js";
 
 interface RunnerLogger {
   info: (obj: Record<string, unknown>, msg: string) => void;
@@ -20,8 +23,8 @@ interface RunnerLogger {
 export interface RunPostPrGateInput {
   context: PostPrGateStepContext;
   config: PostPrGateConfig;
-  /** Pre-created check run ids, in the same order as config.postPrGate.steps. */
-  checkRunIds: number[];
+  /** Pre-created gate status refs, in the same order as config.postPrGate.steps. */
+  gateStatusRefs: GateStatusRef[];
   registry: PostPrGateStepRegistry;
   logger?: RunnerLogger;
 }
@@ -32,7 +35,7 @@ export interface PostPrGateRunSummary {
 }
 
 /**
- * Sequentially run gate steps. Each step's check run id is provided by the
+ * Sequentially run gate steps. Each step's gate status ref is provided by the
  * caller (the workflow eagerly creates them all up front so they appear on
  * the PR immediately).
  *
@@ -45,16 +48,16 @@ export interface PostPrGateRunSummary {
 export async function executePostPrGatePhase(
   input: RunPostPrGateInput,
 ): Promise<PostPrGateRunSummary> {
-  const { context, config, checkRunIds, registry, logger } = input;
-  if (!hasCheckRunCapability(context.adapters.vcs)) {
-    throw new Error("VCS adapter does not support check runs");
+  const { context, config, gateStatusRefs, registry, logger } = input;
+  if (!hasGateStatusCapability(context.adapters.vcs)) {
+    throw new Error("VCS adapter does not support gate statuses");
   }
-  const vcs = context.adapters.vcs as typeof context.adapters.vcs & CheckRunCapableVCS;
+  const vcs = context.adapters.vcs as typeof context.adapters.vcs & GateStatusCapableVCS;
 
   const steps = config.postPrGate.steps;
-  if (steps.length !== checkRunIds.length) {
+  if (steps.length !== gateStatusRefs.length) {
     throw new Error(
-      `checkRunIds length (${checkRunIds.length}) must equal steps length (${steps.length})`,
+      `gateStatusRefs length (${gateStatusRefs.length}) must equal steps length (${steps.length})`,
     );
   }
 
@@ -63,12 +66,12 @@ export async function executePostPrGatePhase(
 
   for (let i = 0; i < steps.length; i++) {
     const step = steps[i];
-    const checkRunId = checkRunIds[i];
+    const gateStatusRef = gateStatusRefs[i];
     const displayName = step.name ?? step.uses;
 
     if (failed) {
       // Previous step had onFailure: "fail" — cancel remaining.
-      await vcs.updateCheckRun(checkRunId, {
+      await vcs.updateGateStatus(gateStatusRef, {
         status: "completed",
         conclusion: "cancelled",
         summary: "Skipped — previous required gate step failed.",
@@ -106,13 +109,7 @@ export async function executePostPrGatePhase(
       };
     }
 
-    await vcs.updateCheckRun(checkRunId, {
-      status: "completed",
-      conclusion: result.conclusion as CheckRunConclusion,
-      summary: result.summary,
-      details: result.details,
-      annotations: result.annotations,
-    });
+    await updateCompletedGateStatus(vcs, gateStatusRef, result);
 
     if (result.conclusion === "failure" && step.onFailure === "fail") {
       failed = true;
@@ -120,6 +117,31 @@ export async function executePostPrGatePhase(
   }
 
   return { ranSteps, failed };
+}
+
+async function updateCompletedGateStatus(
+  vcs: PostPrGateStepContext["adapters"]["vcs"] & GateStatusCapableVCS,
+  gateStatusRef: GateStatusRef,
+  result: PostPrGateStepResult,
+): Promise<void> {
+  const update = {
+    status: "completed" as const,
+    conclusion: result.conclusion,
+    summary: result.summary,
+  };
+
+  if (hasRichGateStatusCapability(vcs)) {
+    await vcs.updateGateStatusDetails(gateStatusRef, {
+      ...update,
+      ...(result.details !== undefined ? { details: result.details } : {}),
+      ...(result.annotations !== undefined
+        ? { annotations: result.annotations }
+        : {}),
+    });
+    return;
+  }
+
+  await vcs.updateGateStatus(gateStatusRef, update);
 }
 
 function selectTicketFields(

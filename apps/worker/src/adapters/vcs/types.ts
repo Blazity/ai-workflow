@@ -56,32 +56,58 @@ export type CheckRunConclusion =
   | "timed_out"
   | "action_required";
 
-export interface CheckRunUpdate {
+export interface GateStatusUpdate {
   status: "in_progress" | "completed";
   conclusion?: CheckRunConclusion;
   summary?: string;
+}
+
+export interface RichGateStatusUpdate extends GateStatusUpdate {
   details?: string;
   annotations?: CheckRunAnnotation[];
 }
 
+export type GateStatusRef =
+  | { provider: "github"; id: number }
+  | { provider: "gitlab"; name: string; headSha: string };
+
 /**
  * Capability interface — *not* extended onto VCSAdapter, because GitLab
- * has no equivalent. Callers check `hasCheckRunCapability(adapter)` before
+ * providers expose this differently. Callers check
+ * `hasGateStatusCapability(adapter)` before
  * invoking these methods. Adding methods to VCSAdapter directly would
- * force GitLab to throw at runtime; this surface keeps the failure to
- * detect-time, not invoke-time.
+ * force unsupported providers to throw at runtime; this surface keeps the
+ * failure to detect-time, not invoke-time.
  */
-export interface CheckRunCapableVCS {
-  createCheckRun(name: string, headSha: string): Promise<number>;
-  updateCheckRun(id: number, update: CheckRunUpdate): Promise<void>;
+export interface GateStatusCapableVCS {
+  createGateStatus(name: string, headSha: string): Promise<GateStatusRef>;
+  updateGateStatus(ref: GateStatusRef, update: GateStatusUpdate): Promise<void>;
 }
 
-export function hasCheckRunCapability(
+export function hasGateStatusCapability(
   adapter: VCSAdapter,
-): adapter is VCSAdapter & CheckRunCapableVCS {
+): adapter is VCSAdapter & GateStatusCapableVCS {
   return (
-    typeof (adapter as Partial<CheckRunCapableVCS>).createCheckRun === "function" &&
-    typeof (adapter as Partial<CheckRunCapableVCS>).updateCheckRun === "function"
+    typeof (adapter as Partial<GateStatusCapableVCS>).createGateStatus ===
+      "function" &&
+    typeof (adapter as Partial<GateStatusCapableVCS>).updateGateStatus ===
+      "function"
+  );
+}
+
+export interface RichGateStatusCapableVCS {
+  updateGateStatusDetails(
+    ref: GateStatusRef,
+    update: RichGateStatusUpdate,
+  ): Promise<void>;
+}
+
+export function hasRichGateStatusCapability(
+  adapter: VCSAdapter,
+): adapter is VCSAdapter & RichGateStatusCapableVCS {
+  return (
+    typeof (adapter as Partial<RichGateStatusCapableVCS>)
+      .updateGateStatusDetails === "function"
   );
 }
 

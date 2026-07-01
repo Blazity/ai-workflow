@@ -122,9 +122,13 @@ ai-workflow authenticates to GitHub via a **GitHub App**. The App scopes the bot
 
 **GitLab:**
 
-1. Create a project access token (or PAT) with `api`, `read_repository`, `write_repository` scopes → `GITLAB_TOKEN`.
-2. Note the project ID or `group/repo` path → `GITLAB_PROJECT_ID`.
-3. For self-hosted, set `GITLAB_HOST` to your instance base URL.
+For GitLab.com single-project setup, see [`docs/GITLAB-SETUP.md`](./docs/GITLAB-SETUP.md). The short version:
+
+1. Create a Project Access Token when available, or a dedicated bot/service-account PAT if project tokens are unavailable. Grant `api` and `write_repository` scopes → `GITLAB_TOKEN`.
+2. Give the token identity enough project access to create branches, open MRs, push commits, and create commit statuses. Maintainer is simplest. Prefer leaving `blazebot/*` unprotected; if protected, the token identity must be allowed to push and force-push that pattern.
+3. Set the namespace/project path, for example `my-group/my-repo` → `GITLAB_PROJECT_ID`. Numeric project IDs are not supported because sandbox clone/push needs a path.
+4. Generate a random webhook secret → `GITLAB_WEBHOOK_SECRET`.
+5. Note the base branch (usually `main`) → `GITLAB_BASE_BRANCH`.
 
 ### 2.3 Slack
 
@@ -255,7 +259,7 @@ vercel env add JIRA_API_TOKEN production
 | `VCS_KIND`                                                                                         | `github` or `gitlab`                                   |
 | `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY`, `GITHUB_INSTALLATION_ID`, `GITHUB_OWNER`, `GITHUB_REPO` | If `VCS_KIND=github` (GitHub App auth)                 |
 | `GITHUB_WEBHOOK_SECRET`                                                                            | If `VCS_KIND=github` — signs `pull_request` webhook deliveries for the post-PR gate. Required in **every** environment (Production, Preview, Development) because the webhook fires on preview deployments too. Generate: `openssl rand -hex 32`. |
-| `GITLAB_TOKEN`, `GITLAB_PROJECT_ID`                                                                | If `VCS_KIND=gitlab`                                   |
+| `GITLAB_TOKEN`, `GITLAB_PROJECT_ID`, `GITLAB_BASE_BRANCH`, `GITLAB_WEBHOOK_SECRET`                  | If `VCS_KIND=gitlab` — GitLab.com token with `api` + `write_repository`, namespace/project path, target branch, and merge request webhook secret. Generate: `openssl rand -hex 32`. |
 | `ANTHROPIC_API_KEY`                                                                                | If `AGENT_KIND=claude` (default)                       |
 | `CODEX_API_KEY` (or `CODEX_CHATGPT_OAUTH_TOKEN`)                                                   | If `AGENT_KIND=codex`                                  |
 | `DATABASE_URL`                                                                                     | Auto-injected by Neon integration                      |
@@ -341,9 +345,9 @@ Verify by moving a test ticket into the AI column and watching the Vercel runtim
 
 ---
 
-## 8. Register the GitHub webhook (post-PR gate)
+## 8. Register the VCS webhook (post-PR gate)
 
-The post-PR gate runs configurable checks (e.g. PR title format) against every PR on the target repo and surfaces results as GitHub Check Runs on the head SHA. The webhook is what triggers it. See [`docs/post-pr-gate-spec.md`](./docs/post-pr-gate-spec.md) for the architecture.
+The post-PR gate runs configurable checks against every PR/MR on the target repo. GitHub surfaces results as Check Runs; GitLab.com surfaces them as commit statuses on the MR head SHA. The provider webhook is what triggers it.
 
 If you followed [`docs/GITHUB-APP-SETUP.md`](./docs/GITHUB-APP-SETUP.md) in step 2.2, the App is already configured with the right webhook URL, secret, permissions, and event subscription. This section is the post-deploy verification — and the place to fix things if any of the above were skipped.
 
@@ -353,9 +357,13 @@ If you followed [`docs/GITHUB-APP-SETUP.md`](./docs/GITHUB-APP-SETUP.md) in step
    - Subscribe to events → **Pull request** (checked)
 3. **Re-accept on every installed repo** if you changed permissions or events after the initial install. A repo admin opens `https://github.com/organizations/<ORG>/settings/installations/<INSTALLATION_ID>` and clicks "Review request" → "Accept". Until accepted, the new permissions and events are inert and the gate webhook stays silent.
 4. **Confirm `GITHUB_WEBHOOK_SECRET`** is set in Vercel (step 5) and matches the value pasted into the App's webhook config. A mismatch returns 401 on every delivery — visible in the App's **Advanced → Recent Deliveries** tab.
-5. **Tune `post-pr-gate.yaml`** at the repo root if the defaults don't fit. The default config runs on `blazebot/*` branches only, skips drafts, and runs a single `pr-title-format` step (Conventional Commits) as advisory (`onFailure: continue`). Steps are defined in `apps/worker/src/post-pr-gate/steps/`.
+5. **Tune `post-pr-gate.yaml`** at the repo root if the defaults don't fit. The default config runs on `blazebot/*` branches only, skips drafts, and runs a single `code-hygiene` step as advisory (`onFailure: continue`). Steps are defined in `apps/worker/src/post-pr-gate/steps/`.
 
-Verify by opening a manual PR titled `feat: smoke check` against the target repo (any `blazebot/*` branch — or set `botPrsOnly: false` in `post-pr-gate.yaml` to test from any branch). Within a few seconds you should see a `blazebot / pr-title-format` check run appear on the PR's head SHA and resolve to `success`.
+For GitLab.com, configure the project webhook instead: see [`docs/GITLAB-SETUP.md`](./docs/GITLAB-SETUP.md). The webhook URL is `https://<your-vercel-domain>/webhooks/gitlab`, the **Secret token** field must match `GITLAB_WEBHOOK_SECRET`, and only **Merge request events** are required. Do not use GitLab's newer **Signing token** flow until the worker implements signing-token verification.
+
+For GitHub, verify by opening a manual PR titled `feat: smoke check` against the target repo (any `blazebot/*` branch — or set `botPrsOnly: false` in `post-pr-gate.yaml` to test from any branch). Within a few seconds you should see a `blazebot / code-hygiene` check run appear on the PR's head SHA and resolve.
+
+For GitLab.com, verify by opening or updating a `blazebot/*` merge request and checking that the MR head commit shows a `blazebot / ...` commit status. See the smoke checklist in [`docs/GITLAB-SETUP.md`](./docs/GITLAB-SETUP.md).
 
 ---
 
@@ -485,7 +493,7 @@ The tracer is built into every sandbox via `pnpm build:arthur-tracer` during dep
 
 ### GitLab instead of GitHub
 
-Flip `VCS_KIND=gitlab` and provide `GITLAB_TOKEN` + `GITLAB_PROJECT_ID`. For self-hosted, also set `GITLAB_HOST`. `GITHUB_*` vars become inert.
+Flip `VCS_KIND=gitlab` and provide `GITLAB_TOKEN`, `GITLAB_PROJECT_ID`, and `GITLAB_WEBHOOK_SECRET`. For GitLab.com setup, see [`docs/GITLAB-SETUP.md`](./docs/GITLAB-SETUP.md). `GITHUB_*` vars become inert.
 
 ---
 

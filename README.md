@@ -126,6 +126,11 @@ flowchart TD
 
 For installation, environment variables, and deployment instructions, see [SETUP.md](./SETUP.md).
 
+VCS setup guides:
+
+- GitHub App setup: [docs/GITHUB-APP-SETUP.md](./docs/GITHUB-APP-SETUP.md)
+- GitLab.com setup: [docs/GITLAB-SETUP.md](./docs/GITLAB-SETUP.md)
+
 ## Workflow Deep-dive
 
 ### One workflow, two phases
