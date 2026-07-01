@@ -2,6 +2,11 @@ import { Gitlab } from "@gitbeaker/rest";
 import { FatalError } from "workflow";
 import type {
   VCSAdapter,
+  GateStatusUpdate,
+  GateStatusCapableVCS,
+  GateStatusRef,
+  PRFile,
+  PRFilesCapableVCS,
   PullRequest,
   PRComment,
   CheckRunResult,
@@ -36,6 +41,26 @@ interface GitLabJob {
   name: string;
   status: string;
 }
+interface GitLabMRDiff {
+  new_path?: string;
+  old_path?: string;
+  diff?: string;
+  new_file?: boolean;
+  deleted_file?: boolean;
+  renamed_file?: boolean;
+  collapsed?: boolean;
+  too_large?: boolean;
+}
+
+type GitLabCommitStatusState =
+  | "pending"
+  | "running"
+  | "success"
+  | "failed"
+  | "canceled"
+  | "skipped";
+
+const COMMIT_STATUS_409_RETRY_DELAYS_MS = [500, 1_000, 2_000];
 
 export interface GitLabConfig {
   token: string;
@@ -45,7 +70,7 @@ export interface GitLabConfig {
   host?: string;
 }
 
-export class GitLabAdapter implements VCSAdapter {
+export class GitLabAdapter implements VCSAdapter, GateStatusCapableVCS, PRFilesCapableVCS {
   private gl: InstanceType<typeof Gitlab>;
   private projectId: string;
   private baseBranch: string;
@@ -57,6 +82,14 @@ export class GitLabAdapter implements VCSAdapter {
     });
     this.projectId = config.projectId;
     this.baseBranch = config.baseBranch;
+  }
+
+  private get apiBaseUrl(): string {
+    return `${(this.config.host ?? "https://gitlab.com").replace(/\/+$/, "")}/api/v4`;
+  }
+
+  private get encodedProjectId(): string {
+    return encodeURIComponent(this.projectId);
   }
 
   async createBranch(name: string, base: string): Promise<void> {
@@ -112,6 +145,71 @@ export class GitLabAdapter implements VCSAdapter {
       err?.status ??
       err?.statusCode
     );
+  }
+
+  private async gitLabRest<T>(
+    path: string,
+    options: {
+      method: "GET" | "POST";
+      body?: Record<string, unknown>;
+      retryOn409?: boolean;
+    },
+  ): Promise<T> {
+    const { data } = await this.gitLabRestWithResponse<T>(path, options);
+    return data;
+  }
+
+  private async gitLabRestWithResponse<T>(
+    path: string,
+    options: {
+      method: "GET" | "POST";
+      body?: Record<string, unknown>;
+      retryOn409?: boolean;
+    },
+  ): Promise<{ data: T; headers: Headers }> {
+    const headers: Record<string, string> = {
+      "PRIVATE-TOKEN": this.config.token,
+    };
+    const init: RequestInit = {
+      method: options.method,
+      headers,
+    };
+
+    if (options.body !== undefined) {
+      headers["Content-Type"] = "application/json";
+      init.body = JSON.stringify(options.body);
+    }
+
+    const retryDelays = options.retryOn409 ? COMMIT_STATUS_409_RETRY_DELAYS_MS : [];
+    const maxAttempts = retryDelays.length + 1;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      const response = await fetch(`${this.apiBaseUrl}${path}`, init);
+      if (response.ok) {
+        return {
+          data:
+            response.status === 204 ? (undefined as T) : ((await response.json()) as T),
+          headers: response.headers,
+        };
+      }
+
+      if (response.status === 409 && options.retryOn409 && attempt < maxAttempts) {
+        await sleep(retryDelays[attempt - 1]);
+        continue;
+      }
+
+      let details = "";
+      try {
+        details = await response.text();
+      } catch {
+        // Best-effort diagnostic body.
+      }
+      const status = `${response.status}${response.statusText ? ` ${response.statusText}` : ""}`;
+      throw new Error(
+        `GitLab REST ${options.method} ${path} failed with ${status}${details ? `: ${details}` : ""}`,
+      );
+    }
+
+    throw new Error(`GitLab REST ${options.method} ${path} failed`);
   }
 
   async createPR(
@@ -205,6 +303,142 @@ export class GitLabAdapter implements VCSAdapter {
     if (mrs.length === 0) return null;
     const mr = mrs[0];
     return { id: mr.iid, url: mr.web_url, branch: mr.source_branch };
+  }
+
+  async listPRFiles(prId: number): Promise<PRFile[]> {
+    const diffs: GitLabMRDiff[] = [];
+    let nextPath: string | null = this.mrDiffsPath(prId, "1");
+
+    while (nextPath) {
+      const response: { data: GitLabMRDiff[]; headers: Headers } =
+        await this.gitLabRestWithResponse<GitLabMRDiff[]>(
+          nextPath,
+          { method: "GET" },
+        );
+      diffs.push(...response.data);
+      nextPath = this.nextMRDiffsPath(prId, response.headers);
+    }
+
+    return diffs.map((change) => {
+      const path = change.new_path ?? change.old_path ?? "";
+      const patch =
+        typeof change.diff === "string" && change.diff.length > 0
+          ? change.diff
+          : undefined;
+      const stats = patch
+        ? countDiffStats(patch)
+        : { additions: 0, deletions: 0 };
+      const file: PRFile = {
+        path,
+        additions: stats.additions,
+        deletions: stats.deletions,
+        changeType: this.mapMRChangeType(change),
+      };
+      if (patch !== undefined) file.patch = patch;
+      return file;
+    });
+  }
+
+  private mrDiffsPath(prId: number, page: string): string {
+    return `/projects/${this.encodedProjectId}/merge_requests/${prId}/diffs?page=${encodeURIComponent(page)}&per_page=100`;
+  }
+
+  private nextMRDiffsPath(prId: number, headers: Headers): string | null {
+    const nextPage = headers.get("x-next-page");
+    if (nextPage) return this.mrDiffsPath(prId, nextPage);
+
+    const nextUrl = this.nextLinkUrl(headers.get("link"));
+    if (!nextUrl) return null;
+
+    try {
+      const url = new URL(nextUrl);
+      return `${url.pathname.replace(/^\/api\/v4/, "")}${url.search}`;
+    } catch {
+      return nextUrl.startsWith("/") ? nextUrl : null;
+    }
+  }
+
+  private nextLinkUrl(linkHeader: string | null): string | null {
+    if (!linkHeader) return null;
+    for (const part of linkHeader.split(",")) {
+      const match = part.match(/<([^>]+)>\s*;\s*rel="next"/i);
+      if (match) return match[1];
+    }
+    return null;
+  }
+
+  async createGateStatus(
+    name: string,
+    headSha: string,
+  ): Promise<GateStatusRef> {
+    await this.postCommitStatus(headSha, name, { state: "running" });
+    return { provider: "gitlab", name, headSha };
+  }
+
+  async updateGateStatus(
+    ref: GateStatusRef,
+    update: GateStatusUpdate,
+  ): Promise<void> {
+    if (ref.provider !== "gitlab") {
+      throw new Error(`GitLabAdapter cannot update ${ref.provider} gate status`);
+    }
+
+    await this.postCommitStatus(ref.headSha, ref.name, {
+      state: this.mapCommitStatus(update),
+      ...(update.summary !== undefined
+        ? { description: update.summary.slice(0, 255) }
+        : {}),
+    });
+  }
+
+  private async postCommitStatus(
+    headSha: string,
+    name: string,
+    params: { state: GitLabCommitStatusState; description?: string },
+  ): Promise<void> {
+    await this.gitLabRest<unknown>(
+      `/projects/${this.encodedProjectId}/statuses/${headSha}`,
+      {
+        method: "POST",
+        body: {
+          state: params.state,
+          name,
+          ...(params.description !== undefined
+            ? { description: params.description }
+            : {}),
+        },
+        retryOn409: true,
+      },
+    );
+  }
+
+  private mapCommitStatus(update: GateStatusUpdate): GitLabCommitStatusState {
+    if (update.status === "in_progress") return "running";
+
+    if (update.status === "completed") {
+      switch (update.conclusion) {
+        case "success":
+        case "neutral":
+          return "success";
+        case "failure":
+        case "timed_out":
+        case "action_required":
+          return "failed";
+        case "cancelled":
+          return "canceled";
+        case "skipped":
+          return "skipped";
+      }
+    }
+
+    return "pending";
+  }
+
+  private mapMRChangeType(change: GitLabMRDiff): PRFile["changeType"] {
+    if (change.new_file) return "added";
+    if (change.deleted_file) return "removed";
+    if (change.renamed_file) return "renamed";
+    return "modified";
   }
 
   async getPRComments(prId: number): Promise<PRComment[]> {
@@ -320,4 +554,21 @@ export class GitLabAdapter implements VCSAdapter {
     const mr = await this.gl.MergeRequests.show(this.projectId, prId);
     return (mr as { has_conflicts?: boolean }).has_conflicts === true;
   }
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function countDiffStats(diff: string): Pick<PRFile, "additions" | "deletions"> {
+  let additions = 0;
+  let deletions = 0;
+
+  for (const line of diff.split("\n")) {
+    if (line.startsWith("+++") || line.startsWith("---")) continue;
+    if (line.startsWith("+")) additions++;
+    else if (line.startsWith("-")) deletions++;
+  }
+
+  return { additions, deletions };
 }

@@ -117,7 +117,10 @@ export const env = createEnv({
     JIRA_WEBHOOK_SECRET: z.string().min(1).optional(),
 
     // GitHub Webhook
-    GITHUB_WEBHOOK_SECRET: z.string().min(1),
+    GITHUB_WEBHOOK_SECRET: z.string().min(1).optional(),
+
+    // GitLab Webhook
+    GITLAB_WEBHOOK_SECRET: z.string().min(1).optional(),
 
     // Neon Postgres (run registry + post-PR gate store) — auto-injected by
     // the Neon Vercel Marketplace integration, one branch per environment.
@@ -159,6 +162,12 @@ export const env = createEnv({
           "  VCS_KIND=gitlab requires GITLAB_TOKEN and GITLAB_PROJECT_ID",
       );
     }
+    if (!env.GITLAB_WEBHOOK_SECRET) {
+      throw new Error(
+        "Invalid environment variables:\n" +
+          "  VCS_KIND=gitlab requires GITLAB_WEBHOOK_SECRET",
+      );
+    }
   } else if (env.VCS_KIND === "github") {
     if (
       !env.GITHUB_APP_ID ||
@@ -170,6 +179,12 @@ export const env = createEnv({
       throw new Error(
         "Invalid environment variables:\n" +
           "  VCS_KIND=github requires GITHUB_APP_ID, GITHUB_APP_PRIVATE_KEY, GITHUB_INSTALLATION_ID, GITHUB_OWNER, and GITHUB_REPO",
+      );
+    }
+    if (!env.GITHUB_WEBHOOK_SECRET) {
+      throw new Error(
+        "Invalid environment variables:\n" +
+          "  VCS_KIND=github requires GITHUB_WEBHOOK_SECRET",
       );
     }
   }

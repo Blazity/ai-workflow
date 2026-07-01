@@ -57,6 +57,13 @@
       "when": 1782660000000,
       "tag": "0007_auth_invariants",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1782751918069,
+      "tag": "0008_gate_status_refs",
+      "breakpoints": true
     }
   ]
 }
