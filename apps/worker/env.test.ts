@@ -140,7 +140,7 @@ describe("env", () => {
     }).rejects.toThrow();
   });
 
-  it("parses valid GitLab env", async () => {
+  it("parses valid GitLab env without GitHub webhook secret", async () => {
     const gitlabEnv = { ...VALID_ENV };
     gitlabEnv.VCS_KIND = "gitlab";
     delete (gitlabEnv as any).GITHUB_APP_ID;
@@ -149,12 +149,15 @@ describe("env", () => {
     delete (gitlabEnv as any).GITHUB_OWNER;
     delete (gitlabEnv as any).GITHUB_REPO;
     delete (gitlabEnv as any).GITHUB_BASE_BRANCH;
+    delete (gitlabEnv as any).GITHUB_WEBHOOK_SECRET;
     (gitlabEnv as any).GITLAB_TOKEN = "glpat-test";
     (gitlabEnv as any).GITLAB_PROJECT_ID = "group/repo";
     (gitlabEnv as any).GITLAB_BASE_BRANCH = "develop";
+    (gitlabEnv as any).GITLAB_WEBHOOK_SECRET = "gitlab-webhook-secret";
     Object.assign(process.env, gitlabEnv);
 
-    const { getVcsConfig } = await import("./env.js");
+    const { env, getVcsConfig } = await import("./env.js");
+    expect(env.GITLAB_WEBHOOK_SECRET).toBe("gitlab-webhook-secret");
     const vcs = getVcsConfig();
     expect(vcs.kind).toBe("gitlab");
     expect(vcs.token).toBe("glpat-test");
@@ -175,6 +178,7 @@ describe("env", () => {
     (gitlabEnv as any).GITLAB_TOKEN = "glpat-test";
     (gitlabEnv as any).GITLAB_PROJECT_ID = "group/repo";
     (gitlabEnv as any).GITLAB_HOST = "https://gitlab.example.com";
+    (gitlabEnv as any).GITLAB_WEBHOOK_SECRET = "gitlab-webhook-secret";
     Object.assign(process.env, gitlabEnv);
 
     const { getVcsConfig } = await import("./env.js");
@@ -208,6 +212,39 @@ describe("env", () => {
     }).rejects.toThrow(
       "VCS_KIND=github requires GITHUB_APP_ID, GITHUB_APP_PRIVATE_KEY, GITHUB_INSTALLATION_ID, GITHUB_OWNER, and GITHUB_REPO",
     );
+  });
+
+  it("requires GITHUB_WEBHOOK_SECRET when VCS_KIND=github", async () => {
+    const partial = { ...VALID_ENV };
+    delete (partial as any).GITHUB_WEBHOOK_SECRET;
+    Object.assign(process.env, partial);
+    delete process.env.GITHUB_WEBHOOK_SECRET;
+    delete process.env.GITLAB_WEBHOOK_SECRET;
+
+    await expect(async () => {
+      await import("./env.js");
+    }).rejects.toThrow("VCS_KIND=github requires GITHUB_WEBHOOK_SECRET");
+  });
+
+  it("requires GITLAB_WEBHOOK_SECRET when VCS_KIND=gitlab", async () => {
+    const gitlabEnv = { ...VALID_ENV };
+    gitlabEnv.VCS_KIND = "gitlab";
+    delete (gitlabEnv as any).GITHUB_APP_ID;
+    delete (gitlabEnv as any).GITHUB_APP_PRIVATE_KEY;
+    delete (gitlabEnv as any).GITHUB_INSTALLATION_ID;
+    delete (gitlabEnv as any).GITHUB_OWNER;
+    delete (gitlabEnv as any).GITHUB_REPO;
+    delete (gitlabEnv as any).GITHUB_BASE_BRANCH;
+    delete (gitlabEnv as any).GITHUB_WEBHOOK_SECRET;
+    (gitlabEnv as any).GITLAB_TOKEN = "glpat-test";
+    (gitlabEnv as any).GITLAB_PROJECT_ID = "group/repo";
+    Object.assign(process.env, gitlabEnv);
+    delete process.env.GITHUB_WEBHOOK_SECRET;
+    delete process.env.GITLAB_WEBHOOK_SECRET;
+
+    await expect(async () => {
+      await import("./env.js");
+    }).rejects.toThrow("VCS_KIND=gitlab requires GITLAB_WEBHOOK_SECRET");
   });
 
   it("getVcsConfig returns GitHub App config", async () => {
