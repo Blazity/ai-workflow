@@ -26,7 +26,14 @@ const startRoute = (await import("./start.get.js")).default;
 beforeEach(() => {
   vi.clearAllMocks();
   state.authHandler.mockResolvedValue(
-    Response.json({ url: "https://idp.example.com/authorize" }),
+    Response.json(
+      { url: "https://idp.example.com/authorize" },
+      {
+        headers: {
+          "set-cookie": "better-auth.state=state-cookie; Path=/; HttpOnly",
+        },
+      },
+    ),
   );
 });
 
@@ -37,13 +44,12 @@ function handlerFor(route: Parameters<typeof eventHandler>[0]) {
 }
 
 describe("SSO start API", () => {
-  it("starts OIDC SSO against the fixed dashboard provider", async () => {
+  it("redirects to OIDC SSO and forwards Better Auth state cookies", async () => {
     const res = await handlerFor(startRoute)(new Request("http://localhost/"));
 
-    expect(res.status).toBe(200);
-    await expect(res.json()).resolves.toEqual({
-      url: "https://idp.example.com/authorize",
-    });
+    expect(res.status).toBe(302);
+    expect(res.headers.get("location")).toBe("https://idp.example.com/authorize");
+    expect(res.headers.get("set-cookie")).toContain("better-auth.state=state-cookie");
 
     const request = state.authHandler.mock.calls[0]?.[0] as Request | undefined;
     expect(request?.url).toBe("https://worker.example.com/api/auth/sign-in/sso");
@@ -68,7 +74,7 @@ describe("SSO start API", () => {
       new Request("http://localhost/?inviteId=invite_1"),
     );
 
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(302);
     const request = state.authHandler.mock.calls[0]?.[0] as Request | undefined;
     await expect(request?.json()).resolves.toMatchObject({
       callbackURL:
