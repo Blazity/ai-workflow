@@ -1,4 +1,12 @@
-import { createError, defineEventHandler, getQuery } from "h3";
+import {
+  appendResponseHeader,
+  createError,
+  defineEventHandler,
+  getQuery,
+  sendRedirect,
+  splitCookiesString,
+  type H3Event,
+} from "h3";
 
 import { env } from "../../../../../env.js";
 import { DASHBOARD_SSO_PROVIDER_ID } from "../../../../auth.js";
@@ -41,9 +49,23 @@ export default defineEventHandler(async (event) => {
     });
   }
 
-  return { url: body.url };
+  forwardSetCookieHeaders(event, res.headers);
+  return sendRedirect(event, body.url, 302);
 });
 
 function inviteIdFromQuery(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function forwardSetCookieHeaders(event: H3Event, headers: Headers) {
+  const getSetCookie = (headers as Headers & { getSetCookie?: () => string[] })
+    .getSetCookie;
+  const cookies =
+    typeof getSetCookie === "function"
+      ? getSetCookie.call(headers)
+      : splitCookiesString(headers.get("set-cookie") ?? "");
+
+  for (const cookie of cookies) {
+    appendResponseHeader(event, "set-cookie", cookie);
+  }
 }
