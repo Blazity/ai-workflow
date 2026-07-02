@@ -5,6 +5,7 @@ import { redirect } from "next/navigation";
 import { fetchAuthWorker } from "@/lib/auth/worker";
 
 export type DashboardSession = {
+  organizationName: string;
   role: "owner" | "admin" | "member";
   canManageUsers: boolean;
 };
@@ -13,6 +14,8 @@ function isDashboardSession(value: unknown): value is DashboardSession {
   if (!value || typeof value !== "object") return false;
   const session = value as Partial<DashboardSession>;
   return (
+    typeof session.organizationName === "string" &&
+    session.organizationName.trim().length > 0 &&
     (session.role === "owner" ||
       session.role === "admin" ||
       session.role === "member") &&

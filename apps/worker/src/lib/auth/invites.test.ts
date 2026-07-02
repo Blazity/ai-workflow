@@ -22,18 +22,21 @@ let db: Db;
 
 const ownerActor: DashboardActor = {
   organizationId: "org_aiw",
+  organizationName: "AI Workflow",
   memberId: "member_owner",
   userId: "user_owner",
   role: "owner",
 };
 const adminActor: DashboardActor = {
   organizationId: "org_aiw",
+  organizationName: "AI Workflow",
   memberId: "member_admin",
   userId: "user_admin",
   role: "admin",
 };
 const memberActor: DashboardActor = {
   organizationId: "org_aiw",
+  organizationName: "AI Workflow",
   memberId: "member_member",
   userId: "user_member",
   role: "member",
