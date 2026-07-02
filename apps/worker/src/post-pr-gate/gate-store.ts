@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { and, eq, sql } from "drizzle-orm";
+import type { GateStatusRef } from "../adapters/vcs/types.js";
 import type { Db } from "../db/client.js";
 import { gateCurrent, gateDedupe, gateLocks } from "../db/schema.js";
 
@@ -31,7 +32,28 @@ const LOCK_TTL = sql`now() + interval '30 seconds'`;
 export interface CurrentGateRun {
   runId: string;
   headSha: string;
-  checkRunIds: number[];
+  gateStatusRefs: GateStatusRef[];
+}
+
+function validateCheckRunIds(ids: number[]): void {
+  if (!ids.every((id) => Number.isSafeInteger(id))) {
+    throw new Error(`non-integer check-run ids: ${ids.join(",")}`);
+  }
+}
+
+function legacyCheckRunIdsFromRefs(refs: GateStatusRef[]): number[] {
+  return refs
+    .filter(
+      (ref): ref is Extract<GateStatusRef, { provider: "github" }> =>
+        ref.provider === "github",
+    )
+    .map((ref) => ref.id);
+}
+
+function checkRunIdsForLegacyColumn(gateStatusRefs: GateStatusRef[]): number[] {
+  const checkRunIds = legacyCheckRunIdsFromRefs(gateStatusRefs);
+  validateCheckRunIds(checkRunIds);
+  return checkRunIds;
 }
 
 export class GateStore {
@@ -130,7 +152,7 @@ export class GateStore {
       .select({
         runId: gateCurrent.runId,
         headSha: gateCurrent.headSha,
-        checkRunIds: gateCurrent.checkRunIds,
+        gateStatusRefs: gateCurrent.gateStatusRefs,
       })
       .from(gateCurrent)
       .where(
@@ -148,43 +170,60 @@ export class GateStore {
     pr: number,
     value: CurrentGateRun,
   ): Promise<void> {
+    const checkRunIds = checkRunIdsForLegacyColumn(value.gateStatusRefs);
     await this.db
       .insert(gateCurrent)
-      .values({ repo, pr, ...value, expiresAt: TTL })
+      .values({
+        repo,
+        pr,
+        runId: value.runId,
+        headSha: value.headSha,
+        checkRunIds,
+        gateStatusRefs: value.gateStatusRefs,
+        expiresAt: TTL,
+      })
       .onConflictDoUpdate({
         target: [gateCurrent.repo, gateCurrent.pr],
         set: {
           runId: value.runId,
           headSha: value.headSha,
-          checkRunIds: value.checkRunIds,
+          checkRunIds,
+          gateStatusRefs: value.gateStatusRefs,
           expiresAt: TTL,
         },
       });
   }
 
   /**
-   * Atomically append check-run IDs to the current pointer, but only if the
+   * Atomically append gate status refs to the current pointer, but only if the
    * pointer's headSha still matches `expectedHeadSha`. Returns true if the
    * append happened, false if the row is missing, expired, or superseded by
    * a force-push. Single conditional UPDATE = the old SHA-guarded Lua
    * append; not touching expires_at = KEEPTTL.
    */
-  async appendCheckRunIdsForSha(
+  async appendGateStatusRefsForSha(
     repo: string,
     pr: number,
     expectedHeadSha: string,
-    ids: number[],
+    refs: GateStatusRef[],
   ): Promise<boolean> {
-    if (ids.length === 0) return true;
-    // IDs are validated integers; inlined as an array literal because the
-    // append expression needs a typed bigint[] on the right-hand side.
-    if (!ids.every((id) => Number.isSafeInteger(id))) {
-      throw new Error(`non-integer check-run ids: ${ids.join(",")}`);
-    }
-    const literal = sql.raw(`'{${ids.join(",")}}'::bigint[]`);
+    if (refs.length === 0) return true;
+    const checkRunIds = checkRunIdsForLegacyColumn(refs);
+    const refsJson = JSON.stringify(refs);
+    const checkRunIdsUpdate =
+      checkRunIds.length > 0
+        ? {
+            checkRunIds: sql`${gateCurrent.checkRunIds} || ${sql.raw(
+              `'{${checkRunIds.join(",")}}'::bigint[]`,
+            )}`,
+          }
+        : {};
     const rows = await this.db
       .update(gateCurrent)
-      .set({ checkRunIds: sql`${gateCurrent.checkRunIds} || ${literal}` })
+      .set({
+        gateStatusRefs: sql`${gateCurrent.gateStatusRefs} || cast(${refsJson} as jsonb)`,
+        ...checkRunIdsUpdate,
+      })
       .where(
         and(
           eq(gateCurrent.repo, repo),
@@ -203,7 +242,7 @@ export class GateStore {
    * the update happened, false if the row is missing or superseded.
    *
    * Used by the webhook to fill in the real runId AFTER `start()` returns,
-   * without stomping `checkRunIds` that the workflow may have already
+   * without stomping `gateStatusRefs` that the workflow may have already
    * appended — a column-targeted UPDATE only touches run_id, so that
    * property now holds structurally.
    */

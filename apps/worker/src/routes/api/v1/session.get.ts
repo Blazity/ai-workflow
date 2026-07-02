@@ -6,6 +6,7 @@ export default defineEventHandler(async (event) => {
   try {
     const actor = await requireDashboardActor(event);
     return {
+      organizationName: actor.organizationName,
       role: actor.role,
       canManageUsers: canInvite(actor.role),
     };

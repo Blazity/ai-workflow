@@ -1,6 +1,6 @@
 {
-  "id": "4e6605bb-3a7f-41db-96c4-6c74f8885b42",
-  "prevId": "39fef85a-5e02-47ff-a172-3a8a2ca78e4f",
+  "id": "6d4e8d59-8fda-4636-a4a1-100fe2e8bd08",
+  "prevId": "4e6605bb-3a7f-41db-96c4-6c74f8885b42",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -150,6 +150,13 @@
           "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": true
+        },
+        "gate_status_refs": {
+          "name": "gate_status_refs",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'[]'::jsonb"
         }
       },
       "indexes": {},
