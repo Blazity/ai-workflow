@@ -17,15 +17,14 @@ export async function prepareSelectedRepositoryBranches(
   "use step";
   const { getDb } = await import("../db/client.js");
   const { upsertWorkflowOwnedBranch } = await import("../db/queries/workflow-owned-branches.js");
-  const { getVcsProviderConfig } = await import("../../env.js");
-  const { createVCSForRepository } = await import("../lib/create-vcs.js");
+  const { createRepositoryVCS } = await import("../lib/vcs-runtime.js");
   const db = getDb();
 
   for (const repo of repositories) {
     if (repo.workflowOwnedBranch) continue;
-    const vcsConfig = getVcsProviderConfig(repo.provider);
 
-    await createVCSForRepository(vcsConfig, {
+    await createRepositoryVCS({
+      provider: repo.provider,
       repoPath: repo.repoPath,
       baseBranch: repo.defaultBranch,
     }).createBranch(branchName, repo.defaultBranch);
@@ -49,8 +48,7 @@ export async function createOrUseWorkflowOwnedPullRequestsForRepos(input: {
   "use step";
   const { getDb } = await import("../db/client.js");
   const { upsertWorkflowOwnedBranch } = await import("../db/queries/workflow-owned-branches.js");
-  const { getVcsProviderConfig } = await import("../../env.js");
-  const { createVCSForRepository } = await import("../lib/create-vcs.js");
+  const { createRepositoryVCS } = await import("../lib/vcs-runtime.js");
   const db = getDb();
   const prs: WorkflowPrLink[] = [];
 
@@ -69,8 +67,8 @@ export async function createOrUseWorkflowOwnedPullRequestsForRepos(input: {
     }
 
     const branchName = repo.workflowOwnedBranch?.branchName ?? input.branchName;
-    const vcsConfig = getVcsProviderConfig(repo.provider);
-    const pr = await createVCSForRepository(vcsConfig, {
+    const pr = await createRepositoryVCS({
+      provider: repo.provider,
       repoPath: repo.repoPath,
       baseBranch: repo.defaultBranch,
     }).createPR(branchName, input.title, "");

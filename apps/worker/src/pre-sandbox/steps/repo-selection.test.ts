@@ -211,7 +211,7 @@ describe("repoSelectionStep", () => {
         workflowOwnedBranch: expect.objectContaining({ branchName: "blazebot/aiw-45" }),
       }),
     ]);
-    expect(result.promptAdditions?.[0]?.content).toContain("acme/web");
+    expect(result.promptAdditions?.[0]?.content).toContain("github:acme/web");
   });
 
   it("keeps workflow-owned branches provider-scoped when repo paths overlap", () => {

@@ -173,8 +173,7 @@ async function fetchSelectedRepositoryPRContexts(
   repositories: SelectedRepository[],
 ): Promise<SelectedRepositoryPromptContext[]> {
   "use step";
-  const { getVcsProviderConfig } = await import("../../env.js");
-  const { createVCSForRepository } = await import("../lib/create-vcs.js");
+  const { createRepositoryVCS } = await import("../lib/vcs-runtime.js");
   const contexts: SelectedRepositoryPromptContext[] = [];
 
   for (const repo of repositories) {
@@ -188,8 +187,8 @@ async function fetchSelectedRepositoryPRContexts(
       });
       continue;
     }
-    const vcsConfig = getVcsProviderConfig(repo.provider);
-    const vcs = createVCSForRepository(vcsConfig, {
+    const vcs = createRepositoryVCS({
+      provider: repo.provider,
       repoPath: repo.repoPath,
       baseBranch: repo.defaultBranch,
     });
@@ -235,9 +234,10 @@ async function provisionSandbox(
   agentKindOverride: AgentKind | null,
 ): Promise<{ sandboxId: string; agentKind: AgentKind }> {
   "use step";
-  const { env, getConfiguredVcsProviders, getVcsToken } = await import("../../env.js");
+  const { env } = await import("../../env.js");
   const { SandboxManager } = await import("../sandbox/manager.js");
   const { createAgentAdapter } = await import("../sandbox/agents/index.js");
+  const { buildSandboxProviderConfigs } = await import("../lib/vcs-runtime.js");
 
   const arthur =
     env.GENAI_ENGINE_API_KEY && env.GENAI_ENGINE_TRACE_ENDPOINT && arthurTaskId
@@ -261,35 +261,8 @@ async function provisionSandbox(
   }
   const agent = createAgentAdapter(agentKind);
 
-  const configuredProviders = getConfiguredVcsProviders();
-  const sandboxProviders = await Promise.all(
-    configuredProviders.map(async (provider) => {
-      // Resolve the git identity used inside the sandbox.
-      // Explicit COMMIT_AUTHOR/EMAIL always wins. Otherwise, on GitHub we derive
-      // the App's bot identity (`<slug>[bot]` + numeric-id noreply email) so the
-      // commits render with the App's avatar and the `[bot]` badge. On GitLab there
-      // is no equivalent App identity, so we fall back to a static default.
-      let commitIdentity: { name: string; email: string };
-      if (env.COMMIT_AUTHOR && env.COMMIT_EMAIL) {
-        commitIdentity = { name: env.COMMIT_AUTHOR, email: env.COMMIT_EMAIL };
-      } else if (provider.kind === "github") {
-        const { getBotIdentity } = await import("../lib/github-auth.js");
-        commitIdentity = await getBotIdentity(provider.auth);
-      } else {
-        commitIdentity = { name: "ai-workflow-blazity", email: "ai-workflow@blazity.com" };
-      }
-      return {
-        kind: provider.kind,
-        host: provider.host,
-        getToken: () => getVcsToken(provider),
-        commitAuthor: commitIdentity.name,
-        commitEmail: commitIdentity.email,
-      };
-    }),
-  );
-
   const manager = new SandboxManager({
-    providers: sandboxProviders,
+    providers: await buildSandboxProviderConfigs(),
     jobTimeoutMs: env.JOB_TIMEOUT_MS,
   });
 
@@ -616,8 +589,9 @@ export async function agentWorkflow(ticketId: string) {
   const { env } = await import("../../env.js");
   const { assembleResearchPlanContext, assembleImplementationContext, assembleReviewContext } =
     await import("../sandbox/context.js");
-  const { collectPhase, pushWorkspaceFromSandbox, teardownSandbox } =
+  const { collectPhase, teardownSandbox } =
     await import("../sandbox/poll-agent.js");
+  const { publishWorkspaceChanges } = await import("./workspace-publication.js");
   const { formatUsageReport } = await import("../sandbox/usage.js");
   const { AGENT_SCHEMA, RESEARCH_SCHEMA, REVIEW_SCHEMA } = await import("../sandbox/agents/types.js");
 
@@ -950,60 +924,50 @@ export async function agentWorkflow(ticketId: string) {
       }
 
       // ========== POST-PHASES: Push & PR ==========
-      const pushResult = await pushWorkspaceFromSandbox(sandboxId);
-
-      if (!pushResult.pushed) {
-        await unregisterRun(ticket.identifier);
-        await moveTicket(ticketId, env.COLUMN_BACKLOG);
-        await notifyTicket(ticket.identifier, {
-          kind: "failed",
-          phase: "push",
-          reason: pushResult.error ?? "unknown",
-          usageReport: usageReportOrUndefined(),
-        });
-        return;
-      }
-
-      // Push has landed — agent work is durable. Unregister BEFORE any
-      // downstream step that can trigger a Jira webhook: opening a PR can
-      // transition the linked issue (GitHub-for-Jira / Jira automation),
-      // and our own moveTicket fires a webhook for the AI → AI Review move.
-      // Either webhook, if it sees a still-registered run, will call
-      // cancelRun and emit a spurious "canceled" notification on top of
-      // "pr_ready". Clearing the registry here closes that window.
-      await unregisterRun(ticket.identifier);
-
-      const changedRepositories = workspaceRepositories.filter((repo) =>
-        pushResult.repositories.some((result) =>
-          result.provider === repo.provider &&
-          result.repoPath === repo.repoPath &&
-          result.changed &&
-          result.pushed,
-        ),
-      );
-      const { createOrUseWorkflowOwnedPullRequestsForRepos } = await import("./repository-prs.js");
-      const prs = await createOrUseWorkflowOwnedPullRequestsForRepos({
+      let runUnregisteredBeforePr = false;
+      const publication = await publishWorkspaceChanges({
+        sandboxId,
         ticketKey: ticket.identifier,
         branchName,
-        repositories: changedRepositories,
+        repositories: workspaceRepositories,
         title: ticket.title,
+        agentKind,
+        model: activeModel,
+        beforeCreatePullRequests: async () => {
+          // Push has landed — agent work is durable. Unregister BEFORE any
+          // downstream step that can trigger a Jira webhook: opening a PR can
+          // transition the linked issue (GitHub-for-Jira / Jira automation),
+          // and our own moveTicket fires a webhook for the AI → AI Review move.
+          // Either webhook, if it sees a still-registered run, will call
+          // cancelRun and emit a spurious "canceled" notification on top of
+          // "pr_ready". Clearing the registry here closes that window.
+          if (!runUnregisteredBeforePr) {
+            await unregisterRun(ticket.identifier);
+            runUnregisteredBeforePr = true;
+          }
+        },
       });
-      if (prs.length === 0) {
+
+      if (publication.prs.some((pr) => pr.isNew)) {
+        await postPrLinksComment(ticket.identifier, publication.prs);
+      }
+
+      if (publication.status === "failed") {
+        if (!runUnregisteredBeforePr) {
+          await unregisterRun(ticket.identifier);
+        }
         await moveTicket(ticketId, env.COLUMN_BACKLOG);
         await notifyTicket(ticket.identifier, {
           kind: "failed",
           phase: "push",
-          reason: "push completed, but no changed repository produced a pull request",
+          reason: publication.reason,
           usageReport: usageReportOrUndefined(),
         });
         return;
       }
-      const primaryPr = prs[0]!;
-      prForTelemetry = { url: primaryPr.url, number: primaryPr.id };
 
-      if (prs.some((pr) => pr.isNew)) {
-        await postPrLinksComment(ticket.identifier, prs);
-      }
+      const primaryPr = publication.prs[0]!;
+      prForTelemetry = { url: primaryPr.url, number: primaryPr.id };
 
       const usageReport = formatUsageReport(phaseUsages, priceLookup, activeModel);
       await notifyTicket(ticket.identifier, {
