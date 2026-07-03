@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { SelectedRepository } from "../adapters/vcs/repository-directory.js";
 
 export const WORKSPACE_MANIFEST_PATH = "/vercel/sandbox/aiw-repos.json";
+export const WORKSPACE_ROOT_DIR = "/vercel/sandbox";
 export const WORKSPACE_REPOS_DIR = "/vercel/sandbox/repos";
 
 export const workspaceRepoSchema = z.object({
@@ -11,6 +12,7 @@ export const workspaceRepoSchema = z.object({
   localPath: z.string().min(1),
   defaultBranch: z.string().min(1),
   branchName: z.string().min(1),
+  mergeBase: z.string().min(1).optional(),
   selectedRationale: z.string(),
   preAgentSha: z.string().optional(),
   workflowOwnedBranch: z.object({
@@ -31,6 +33,10 @@ export const workspaceManifestSchema = z.object({
 export type WorkspaceRepo = z.infer<typeof workspaceRepoSchema>;
 export type WorkspaceManifest = z.infer<typeof workspaceManifestSchema>;
 
+export interface WorkspaceRepositoryInput extends SelectedRepository {
+  mergeBase?: string;
+}
+
 export function buildRepoSlug(repoPath: string): string {
   return repoPath
     .trim()
@@ -41,21 +47,34 @@ export function buildRepoSlug(repoPath: string): string {
     .join("__");
 }
 
+export function buildProviderRepoSlug(provider: SelectedRepository["provider"], repoPath: string): string {
+  return `${provider}__${buildRepoSlug(repoPath)}`;
+}
+
+export function buildWorkspaceLocalPath(
+  provider: SelectedRepository["provider"],
+  repoPath: string,
+  index: number,
+): string {
+  return index === 0 ? WORKSPACE_ROOT_DIR : `${WORKSPACE_REPOS_DIR}/${buildProviderRepoSlug(provider, repoPath)}`;
+}
+
 export function buildWorkspaceManifest(input: {
   branchName: string;
-  repositories: SelectedRepository[];
+  repositories: WorkspaceRepositoryInput[];
 }): WorkspaceManifest {
   return {
     version: 1,
-    repositories: input.repositories.map((repo) => {
-      const slug = buildRepoSlug(repo.repoPath);
+    repositories: input.repositories.map((repo, index) => {
+      const slug = index === 0 ? buildRepoSlug(repo.repoPath) : buildProviderRepoSlug(repo.provider, repo.repoPath);
       return {
         provider: repo.provider,
         repoPath: repo.repoPath,
         slug,
-        localPath: `${WORKSPACE_REPOS_DIR}/${slug}`,
+        localPath: buildWorkspaceLocalPath(repo.provider, repo.repoPath, index),
         defaultBranch: repo.defaultBranch,
         branchName: repo.workflowOwnedBranch?.branchName ?? input.branchName,
+        ...(repo.mergeBase ? { mergeBase: repo.mergeBase } : {}),
         selectedRationale: repo.selectedRationale,
         ...(repo.workflowOwnedBranch ? { workflowOwnedBranch: repo.workflowOwnedBranch } : {}),
       };

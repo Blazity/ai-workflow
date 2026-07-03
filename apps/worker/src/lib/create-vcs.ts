@@ -1,4 +1,4 @@
-import { getVcsConfig, type VcsConfig } from "../../env.js";
+import { getVcsConfig, type VcsConfig, type VcsProviderConfig } from "../../env.js";
 import { GitHubAdapter } from "../adapters/vcs/github.js";
 import { GitLabAdapter } from "../adapters/vcs/gitlab.js";
 import type { VCSAdapter } from "../adapters/vcs/types.js";
@@ -17,7 +17,7 @@ export interface RepoTarget {
 }
 
 export function createVCSForRepository(
-  vcs: VcsConfig,
+  vcs: VcsProviderConfig | VcsConfig,
   target: RepoTarget,
 ): VCSAdapter {
   if (vcs.kind === "gitlab") {
@@ -29,7 +29,7 @@ export function createVCSForRepository(
     });
   }
   if (vcs.kind !== "github") {
-    throw new Error(`Unreachable: VCS kind ${(vcs as VcsConfig).kind} fell through GitHub branch`);
+    throw new Error(`Unreachable: VCS kind ${(vcs as VcsProviderConfig | VcsConfig).kind} fell through GitHub branch`);
   }
   const parts = target.repoPath.split("/");
   if (parts.length !== 2 || !parts[0] || !parts[1]) {

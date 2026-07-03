@@ -68,6 +68,7 @@ const workflowInput = {
   isDraft: false,
   url: "https://gitlab.com/group/demo/-/merge_requests/42",
   ownerRepo: "group/demo",
+  provider: "gitlab" as const,
 };
 
 describe("dispatchPostPrGateWebhook eligibility", () => {

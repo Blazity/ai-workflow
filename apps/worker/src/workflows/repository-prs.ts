@@ -1,6 +1,7 @@
 import type { SelectedRepository } from "../adapters/vcs/repository-directory.js";
 
 export interface WorkflowPrLink {
+  provider: SelectedRepository["provider"];
   repoPath: string;
   id: number;
   url: string;
@@ -16,13 +17,13 @@ export async function prepareSelectedRepositoryBranches(
   "use step";
   const { getDb } = await import("../db/client.js");
   const { upsertWorkflowOwnedBranch } = await import("../db/queries/workflow-owned-branches.js");
-  const { getVcsConfig } = await import("../../env.js");
+  const { getVcsProviderConfig } = await import("../../env.js");
   const { createVCSForRepository } = await import("../lib/create-vcs.js");
-  const vcsConfig = getVcsConfig();
   const db = getDb();
 
   for (const repo of repositories) {
     if (repo.workflowOwnedBranch) continue;
+    const vcsConfig = getVcsProviderConfig(repo.provider);
 
     await createVCSForRepository(vcsConfig, {
       repoPath: repo.repoPath,
@@ -48,9 +49,8 @@ export async function createOrUseWorkflowOwnedPullRequestsForRepos(input: {
   "use step";
   const { getDb } = await import("../db/client.js");
   const { upsertWorkflowOwnedBranch } = await import("../db/queries/workflow-owned-branches.js");
-  const { getVcsConfig } = await import("../../env.js");
+  const { getVcsProviderConfig } = await import("../../env.js");
   const { createVCSForRepository } = await import("../lib/create-vcs.js");
-  const vcsConfig = getVcsConfig();
   const db = getDb();
   const prs: WorkflowPrLink[] = [];
 
@@ -58,6 +58,7 @@ export async function createOrUseWorkflowOwnedPullRequestsForRepos(input: {
     const existing = repo.workflowOwnedBranch?.pr;
     if (existing) {
       prs.push({
+        provider: repo.provider,
         repoPath: repo.repoPath,
         id: existing.id,
         url: existing.url,
@@ -68,6 +69,7 @@ export async function createOrUseWorkflowOwnedPullRequestsForRepos(input: {
     }
 
     const branchName = repo.workflowOwnedBranch?.branchName ?? input.branchName;
+    const vcsConfig = getVcsProviderConfig(repo.provider);
     const pr = await createVCSForRepository(vcsConfig, {
       repoPath: repo.repoPath,
       baseBranch: repo.defaultBranch,
@@ -86,6 +88,7 @@ export async function createOrUseWorkflowOwnedPullRequestsForRepos(input: {
     });
 
     prs.push({
+      provider: repo.provider,
       repoPath: repo.repoPath,
       id: pr.id,
       url: pr.url,

@@ -34,8 +34,9 @@ The roadmap and estimate docs define the intended baseline:
 
 ## Non-goals
 
-- No mixed-provider run. A deployment still uses one active `VCS_KIND`:
-  GitHub or GitLab.
+- No multiple accounts per provider kind in v1. A deployment supports at most
+  one GitHub App installation config and one GitLab host/token config, but both
+  provider kinds can be enabled together.
 - No deep code indexing, repository knowledge graph, or cross-repo memory/KB.
 - No automatic lint/test command discovery.
 - No full runtime clone-on-demand tool in AIW-45.

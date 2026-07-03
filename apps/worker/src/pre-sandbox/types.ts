@@ -50,19 +50,10 @@ export interface PreSandboxStepContext {
   };
   run: {
     branchName: string;
-    isNewTicket: boolean;
-    hasExistingPr: boolean;
-    hasMergeConflict: boolean;
   };
 }
 
 export type PreSandboxOnFailure = "continue" | "fail" | "move_to_backlog";
-
-export interface PreSandboxRunOn {
-  newTicket: boolean;
-  existingPr: boolean;
-  mergeConflict: boolean;
-}
 
 export interface PreSandboxConfigStep<StepId extends string = string> {
   uses: StepId;
@@ -74,7 +65,6 @@ export interface PreSandboxConfigStep<StepId extends string = string> {
 
 export interface PreSandboxConfig<StepId extends string = string> {
   preSandbox: {
-    runOn: PreSandboxRunOn;
     steps: PreSandboxConfigStep<StepId>[];
   };
 }

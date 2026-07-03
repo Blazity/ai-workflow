@@ -119,6 +119,7 @@ export function normalizeGitLabMergeRequestEvent(
       isDraft: isDraftMergeRequest(attrs),
       url,
       ownerRepo,
+      provider: "gitlab",
     },
   };
 }

@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   getDb: vi.fn(),
-  getVcsConfig: vi.fn(),
+  getVcsProviderConfig: vi.fn(),
   createVCSForRepository: vi.fn(),
   upsertWorkflowOwnedBranch: vi.fn(),
 }));
@@ -12,7 +12,7 @@ vi.mock("../db/client.js", () => ({
 }));
 
 vi.mock("../../env.js", () => ({
-  getVcsConfig: mocks.getVcsConfig,
+  getVcsProviderConfig: mocks.getVcsProviderConfig,
 }));
 
 vi.mock("../lib/create-vcs.js", () => ({
@@ -34,13 +34,23 @@ const vcsConfig = {
   repoPath: "default/repo",
   baseBranch: "main",
   host: "https://github.com",
+  legacyBaseBranch: "main",
+};
+
+const gitlabVcsConfig = {
+  kind: "gitlab" as const,
+  token: "glpat",
+  host: "https://gitlab.example.com",
+  legacyBaseBranch: "main",
 };
 
 describe("prepareSelectedRepositoryBranches", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.getDb.mockReturnValue({ db: true });
-    mocks.getVcsConfig.mockReturnValue(vcsConfig);
+    mocks.getVcsProviderConfig.mockImplementation((provider) =>
+      provider === "gitlab" ? gitlabVcsConfig : vcsConfig,
+    );
   });
 
   it("creates branches and records ownership for repositories without workflow-owned branches", async () => {
@@ -57,6 +67,10 @@ describe("prepareSelectedRepositoryBranches", () => {
     ]);
 
     expect(createBranch).toHaveBeenCalledWith("blazebot/aiw-45", "main");
+    expect(mocks.createVCSForRepository).toHaveBeenCalledWith(vcsConfig, {
+      repoPath: "acme/api",
+      baseBranch: "main",
+    });
     expect(mocks.upsertWorkflowOwnedBranch).toHaveBeenCalledWith({ db: true }, {
       ticketKey: "AIW-45",
       provider: "github",
@@ -88,7 +102,9 @@ describe("createOrUseWorkflowOwnedPullRequestsForRepos", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.getDb.mockReturnValue({ db: true });
-    mocks.getVcsConfig.mockReturnValue(vcsConfig);
+    mocks.getVcsProviderConfig.mockImplementation((provider) =>
+      provider === "gitlab" ? gitlabVcsConfig : vcsConfig,
+    );
   });
 
   it("reuses existing workflow-owned PR metadata", async () => {
@@ -114,7 +130,14 @@ describe("createOrUseWorkflowOwnedPullRequestsForRepos", () => {
     });
 
     expect(createPR).not.toHaveBeenCalled();
-    expect(prs).toEqual([{ repoPath: "acme/web", id: 42, url: "https://pr", branch: "blazebot/aiw-45", isNew: false }]);
+    expect(prs).toEqual([{
+      provider: "github",
+      repoPath: "acme/web",
+      id: 42,
+      url: "https://pr",
+      branch: "blazebot/aiw-45",
+      isNew: false,
+    }]);
   });
 
   it("creates PRs and records PR metadata when no workflow-owned PR exists", async () => {
@@ -154,6 +177,7 @@ describe("createOrUseWorkflowOwnedPullRequestsForRepos", () => {
     });
     expect(prs).toEqual([
       {
+        provider: "github",
         repoPath: "acme/api",
         id: 43,
         url: "https://github.com/acme/api/pull/43",
@@ -161,5 +185,34 @@ describe("createOrUseWorkflowOwnedPullRequestsForRepos", () => {
         isNew: true,
       },
     ]);
+  });
+
+  it("creates merge requests with the selected repository provider config", async () => {
+    const createPR = vi.fn().mockResolvedValue({
+      id: 44,
+      url: "https://gitlab.example.com/acme/api/-/merge_requests/44",
+      branch: "blazebot/aiw-45",
+    });
+    mocks.createVCSForRepository.mockReturnValue({ createPR });
+
+    await createOrUseWorkflowOwnedPullRequestsForRepos({
+      ticketKey: "AIW-45",
+      branchName: "blazebot/aiw-45",
+      repositories: [
+        {
+          provider: "gitlab",
+          repoPath: "acme/api",
+          defaultBranch: "main",
+          selectedRationale: "ticket mentions api",
+          workflowOwnedBranch: { branchName: "blazebot/aiw-45" },
+        },
+      ],
+      title: "Fix API",
+    });
+
+    expect(mocks.createVCSForRepository).toHaveBeenCalledWith(gitlabVcsConfig, {
+      repoPath: "acme/api",
+      baseBranch: "main",
+    });
   });
 });

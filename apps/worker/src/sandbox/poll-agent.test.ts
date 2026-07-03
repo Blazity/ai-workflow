@@ -69,149 +69,20 @@ vi.mock("../../env.js", () => ({
     CLAUDE_MODEL: "claude-sonnet-4-20250514",
   },
   getVcsConfig: () => currentVcsConfig,
+  getVcsProviderConfig: (provider: "github" | "gitlab") =>
+    provider === "gitlab" ? gitlabVcsConfig : githubVcsConfig,
   getVcsToken: async (config: TestVcsConfig) =>
     config.kind === "gitlab" ? config.token : "ghs_test_minted_token",
 }));
 
 import {
-  pushFromSandbox,
   pushWorkspaceFromSandbox,
-  fixAndRetryPush,
   teardownSandbox,
   checkPhaseDone,
   collectPhaseOutput,
   collectPhase,
 } from "./poll-agent.js";
 import { WORKSPACE_MANIFEST_PATH } from "./repo-workspace.js";
-
-describe("pushFromSandbox", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    currentVcsConfig = githubVcsConfig;
-  });
-
-  it("returns error when agent made no commits", async () => {
-    const mockStdout = vi.fn();
-    mockRunCommand.mockImplementation(() => ({
-      exitCode: 0,
-      stdout: mockStdout,
-    }));
-
-    // baseSha and headSha are the same
-    mockStdout
-      .mockResolvedValueOnce("abc123") // cat /tmp/.pre-agent-sha
-      .mockResolvedValueOnce("abc123"); // git rev-parse HEAD
-
-    const result = await pushFromSandbox("sbx-test-123", "blazebot/task-1");
-
-    expect(result.pushed).toBe(false);
-    expect(result.error).toContain("no commits");
-  });
-
-  it("pushes successfully", async () => {
-    const callIndex = { value: 0 };
-    mockRunCommand.mockImplementation((..._args: unknown[]) => {
-      const i = callIndex.value++;
-      if (i === 0) {
-        // cat /tmp/.pre-agent-sha
-        return { exitCode: 0, stdout: vi.fn().mockResolvedValue("abc123") };
-      } else if (i === 1) {
-        // git rev-parse HEAD
-        return { exitCode: 0, stdout: vi.fn().mockResolvedValue("def456") };
-      } else if (i === 2) {
-        // git remote set-url
-        return { exitCode: 0, stdout: vi.fn().mockResolvedValue("") };
-      } else {
-        // git push
-        return { exitCode: 0, stdout: vi.fn().mockResolvedValue(""), stderr: vi.fn().mockResolvedValue("") };
-      }
-    });
-
-    const result = await pushFromSandbox("sbx-test-123", "blazebot/task-1");
-
-    expect(result.pushed).toBe(true);
-    expect(mockRunCommand).toHaveBeenCalledWith("git", ["push", "--force", "origin", "HEAD:refs/heads/blazebot/task-1"]);
-  });
-
-  it("returns error when push fails", async () => {
-    const callIndex = { value: 0 };
-    mockRunCommand.mockImplementation(() => {
-      const i = callIndex.value++;
-      if (i === 0) {
-        return { exitCode: 0, stdout: vi.fn().mockResolvedValue("abc123") };
-      } else if (i === 1) {
-        return { exitCode: 0, stdout: vi.fn().mockResolvedValue("def456") };
-      } else if (i === 2) {
-        // git remote set-url
-        return { exitCode: 0, stdout: vi.fn().mockResolvedValue("") };
-      } else {
-        // git push fails
-        return {
-          exitCode: 1,
-          stdout: vi.fn().mockResolvedValue(""),
-          stderr: vi.fn().mockResolvedValue("pre-push hook declined"),
-        };
-      }
-    });
-
-    const result = await pushFromSandbox("sbx-test-123", "blazebot/task-1");
-
-    expect(result.pushed).toBe(false);
-    expect(result.error).toBe("pre-push hook declined");
-  });
-
-  it("uses GitLab oauth2 auth user and host when VCS_KIND=gitlab", async () => {
-    currentVcsConfig = gitlabVcsConfig;
-    const callIndex = { value: 0 };
-    mockRunCommand.mockImplementation(() => {
-      const i = callIndex.value++;
-      if (i === 0) {
-        return { exitCode: 0, stdout: vi.fn().mockResolvedValue("abc123") };
-      } else if (i === 1) {
-        return { exitCode: 0, stdout: vi.fn().mockResolvedValue("def456") };
-      } else {
-        return { exitCode: 0, stdout: vi.fn().mockResolvedValue(""), stderr: vi.fn().mockResolvedValue("") };
-      }
-    });
-
-    const result = await pushFromSandbox("sbx-test-123", "blazebot/task-1");
-
-    expect(result.pushed).toBe(true);
-    // Auth URL should use oauth2 + GitLab host (not x-access-token + github.com).
-    expect(mockRunCommand).toHaveBeenCalledWith(
-      "git",
-      [
-        "remote",
-        "set-url",
-        "origin",
-        "https://oauth2:glpat_test_token@gitlab.example.com/test-group/test-repo.git",
-      ],
-    );
-    expect(mockRunCommand).toHaveBeenCalledWith("git", ["push", "--force", "origin", "HEAD:refs/heads/blazebot/task-1"]);
-  });
-
-  it("pushes anyway when sentinel file is missing", async () => {
-    const callIndex = { value: 0 };
-    mockRunCommand.mockImplementation(() => {
-      const i = callIndex.value++;
-      if (i === 0) {
-        // cat /tmp/.pre-agent-sha — missing, returns empty
-        return { exitCode: 1, stdout: vi.fn().mockResolvedValue("") };
-      } else if (i === 1) {
-        return { exitCode: 0, stdout: vi.fn().mockResolvedValue("def456") };
-      } else if (i === 2) {
-        // git remote set-url
-        return { exitCode: 0, stdout: vi.fn().mockResolvedValue("") };
-      } else {
-        return { exitCode: 0, stdout: vi.fn().mockResolvedValue(""), stderr: vi.fn().mockResolvedValue("") };
-      }
-    });
-
-    const result = await pushFromSandbox("sbx-test-123", "blazebot/task-1");
-
-    expect(result.pushed).toBe(true);
-  });
-});
 
 describe("pushWorkspaceFromSandbox", () => {
   beforeEach(() => {
@@ -227,7 +98,7 @@ describe("pushWorkspaceFromSandbox", () => {
           provider: "github",
           repoPath: "acme/api",
           slug: "acme__api",
-          localPath: "/vercel/sandbox/repos/acme__api",
+          localPath: "/vercel/sandbox/repos/github__acme__api",
           defaultBranch: "main",
           branchName: "blazebot/task-1",
           selectedRationale: "ticket mentions api",
@@ -261,8 +132,8 @@ describe("pushWorkspaceFromSandbox", () => {
         {
           provider: "github",
           repoPath: "acme/api",
-          slug: "acme__api",
-          localPath: "/vercel/sandbox/repos/acme__api",
+          slug: "github__acme__api",
+          localPath: "/vercel/sandbox/repos/github__acme__api",
           defaultBranch: "main",
           branchName: "blazebot/task-1",
           selectedRationale: "ticket mentions api",
@@ -271,8 +142,8 @@ describe("pushWorkspaceFromSandbox", () => {
         {
           provider: "github",
           repoPath: "acme/web",
-          slug: "acme__web",
-          localPath: "/vercel/sandbox/repos/acme__web",
+          slug: "github__acme__web",
+          localPath: "/vercel/sandbox/repos/github__acme__web",
           defaultBranch: "main",
           branchName: "blazebot/task-1",
           selectedRationale: "ticket mentions web",
@@ -285,7 +156,7 @@ describe("pushWorkspaceFromSandbox", () => {
         return { exitCode: 0, stdout: vi.fn().mockResolvedValue(JSON.stringify(manifest)) };
       }
       if (cmd === "git" && args[0] === "-C" && args[2] === "rev-parse") {
-        const head = args[1].includes("acme__api") ? "def456" : "same123";
+        const head = args[1].includes("github__acme__api") ? "def456" : "same123";
         return { exitCode: 0, stdout: vi.fn().mockResolvedValue(head) };
       }
       return { exitCode: 0, stdout: vi.fn().mockResolvedValue(""), stderr: vi.fn().mockResolvedValue("") };
@@ -300,7 +171,7 @@ describe("pushWorkspaceFromSandbox", () => {
     ]);
     expect(mockRunCommand).toHaveBeenCalledWith("git", [
       "-C",
-      "/vercel/sandbox/repos/acme__api",
+      "/vercel/sandbox/repos/github__acme__api",
       "push",
       "--force",
       "origin",
@@ -308,96 +179,64 @@ describe("pushWorkspaceFromSandbox", () => {
     ]);
     expect(mockRunCommand).not.toHaveBeenCalledWith("git", [
       "-C",
-      "/vercel/sandbox/repos/acme__web",
+      "/vercel/sandbox/repos/github__acme__web",
       "push",
       "--force",
       "origin",
       "HEAD:refs/heads/blazebot/task-1",
     ]);
   });
-});
 
-describe("fixAndRetryPush", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    currentVcsConfig = githubVcsConfig;
-  });
-
-  it("writes prompt to file and retries push successfully", async () => {
-    const callIndex = { value: 0 };
-    mockRunCommand.mockImplementation(() => {
-      const i = callIndex.value++;
-      if (i === 0) {
-        // claude fix agent
-        return { exitCode: 0, stdout: vi.fn().mockResolvedValue("") };
-      } else if (i === 1) {
-        // cat /tmp/fix-stdout.txt
-        return { exitCode: 0, stdout: vi.fn().mockResolvedValue("Fixed lint errors") };
-      } else {
-        // git push retry
-        return { exitCode: 0, stdout: vi.fn().mockResolvedValue(""), stderr: vi.fn().mockResolvedValue("") };
+  it("pushes mixed-provider repositories with provider-specific auth URLs", async () => {
+    const manifest = {
+      version: 1,
+      repositories: [
+        {
+          provider: "github",
+          repoPath: "acme/web",
+          slug: "github__acme__web",
+          localPath: "/vercel/sandbox",
+          defaultBranch: "main",
+          branchName: "blazebot/task-1",
+          selectedRationale: "ticket mentions web",
+          preAgentSha: "web-base",
+        },
+        {
+          provider: "gitlab",
+          repoPath: "acme/api",
+          slug: "gitlab__acme__api",
+          localPath: "/vercel/sandbox/repos/gitlab__acme__api",
+          defaultBranch: "main",
+          branchName: "blazebot/task-1",
+          selectedRationale: "ticket mentions api",
+          preAgentSha: "api-base",
+        },
+      ],
+    };
+    mockRunCommand.mockImplementation((cmd, args) => {
+      if (cmd === "cat" && args[0] === WORKSPACE_MANIFEST_PATH) {
+        return { exitCode: 0, stdout: vi.fn().mockResolvedValue(JSON.stringify(manifest)) };
       }
-    });
-    mockWriteFiles.mockResolvedValue(undefined);
-
-    const result = await fixAndRetryPush(
-      "sbx-test-123", "blazebot/task-1", "lint failed", "claude", "claude-sonnet-4-20250514",
-    );
-
-    expect(result.pushed).toBe(true);
-    // Verify prompt was written to file (not echoed into shell)
-    expect(mockWriteFiles).toHaveBeenCalledWith([
-      expect.objectContaining({ path: "/tmp/fix-prompt.txt" }),
-    ]);
-    // Verify push uses args array
-    expect(mockRunCommand).toHaveBeenCalledWith("git", ["push", "--force", "origin", "HEAD:refs/heads/blazebot/task-1"]);
-  });
-
-  it("invokes codex CLI when agentKind=codex", async () => {
-    mockRunCommand.mockImplementation(() => ({
-      exitCode: 0,
-      stdout: vi.fn().mockResolvedValue(""),
-      stderr: vi.fn().mockResolvedValue(""),
-    }));
-    mockWriteFiles.mockResolvedValue(undefined);
-
-    await fixAndRetryPush(
-      "sbx-test-123", "blazebot/task-1", "lint failed", "codex", "gpt-5-codex",
-    );
-
-    const fixCall = mockRunCommand.mock.calls.find(
-      ([cmd, args]) => cmd === "bash" && typeof args?.[1] === "string" && args[1].includes("/tmp/fix-prompt.txt"),
-    );
-    expect(fixCall).toBeDefined();
-    expect(fixCall![1][1]).toContain("codex exec");
-    expect(fixCall![1][1]).toContain("gpt-5-codex");
-    expect(fixCall![1][1]).not.toContain("claude --print");
-  });
-
-  it("returns error when retry push also fails", async () => {
-    const callIndex = { value: 0 };
-    mockRunCommand.mockImplementation(() => {
-      const i = callIndex.value++;
-      if (i === 0) {
-        return { exitCode: 0, stdout: vi.fn().mockResolvedValue("") };
-      } else if (i === 1) {
-        return { exitCode: 0, stdout: vi.fn().mockResolvedValue("") };
-      } else {
+      if (cmd === "git" && args[0] === "-C" && args[2] === "rev-parse") {
         return {
-          exitCode: 1,
-          stdout: vi.fn().mockResolvedValue(""),
-          stderr: vi.fn().mockResolvedValue("still failing"),
+          exitCode: 0,
+          stdout: vi.fn().mockResolvedValue(args[1].includes("gitlab__acme__api") ? "api-head" : "web-base"),
         };
       }
+      return { exitCode: 0, stdout: vi.fn().mockResolvedValue(""), stderr: vi.fn().mockResolvedValue("") };
     });
-    mockWriteFiles.mockResolvedValue(undefined);
 
-    const result = await fixAndRetryPush(
-      "sbx-test-123", "blazebot/task-1", "lint failed", "claude", "claude-sonnet-4-20250514",
-    );
+    const result = await pushWorkspaceFromSandbox("sbx-test-123");
 
-    expect(result.pushed).toBe(false);
-    expect(result.error).toBe("still failing");
+    expect(result.pushed).toBe(true);
+    expect(mockRunCommand).toHaveBeenCalledWith("git", [
+      "-C",
+      "/vercel/sandbox/repos/gitlab__acme__api",
+      "remote",
+      "set-url",
+      "origin",
+      "https://oauth2:glpat_test_token@gitlab.example.com/acme/api.git",
+    ]);
   });
 });
 

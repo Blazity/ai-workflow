@@ -10,6 +10,8 @@ import type { TicketAttachment } from "../adapters/issue-tracker/types.js";
 import type { TicketEvent } from "../adapters/messaging/types.js";
 import type { DownloadedAttachment } from "../sandbox/attachments.js";
 import type { SelectedRepository } from "../adapters/vcs/repository-directory.js";
+import type { SelectedRepositoryPromptContext } from "../sandbox/context.js";
+import type { WorkspaceRepositoryInput } from "../sandbox/repo-workspace.js";
 
 type PreSandboxPromptTarget = "research" | "implementation" | "review";
 
@@ -36,9 +38,6 @@ interface PreSandboxPhaseContext {
   };
   run: {
     branchName: string;
-    isNewTicket: boolean;
-    hasExistingPr: boolean;
-    hasMergeConflict: boolean;
   };
 }
 
@@ -170,34 +169,39 @@ async function writeAttachments(
 }
 writeAttachments.maxRetries = 0;
 
-async function fetchSelectedRepositoryPRContext(
+async function fetchSelectedRepositoryPRContexts(
   repositories: SelectedRepository[],
-): Promise<{
-  prComments: PRComment[];
-  checkResults: CheckRunResult[];
-  hasConflicts: boolean;
-}> {
+): Promise<SelectedRepositoryPromptContext[]> {
   "use step";
-  const { getVcsConfig } = await import("../../env.js");
+  const { getVcsProviderConfig } = await import("../../env.js");
   const { createVCSForRepository } = await import("../lib/create-vcs.js");
-  const vcsConfig = getVcsConfig();
-  const prComments: PRComment[] = [];
-  const checkResults: CheckRunResult[] = [];
-  let hasConflicts = false;
+  const contexts: SelectedRepositoryPromptContext[] = [];
 
   for (const repo of repositories) {
     const pr = repo.workflowOwnedBranch?.pr;
-    if (!pr) continue;
+    if (!pr) {
+      contexts.push({
+        repository: repo,
+        prComments: [],
+        checkResults: [],
+        hasConflicts: false,
+      });
+      continue;
+    }
+    const vcsConfig = getVcsProviderConfig(repo.provider);
     const vcs = createVCSForRepository(vcsConfig, {
       repoPath: repo.repoPath,
       baseBranch: repo.defaultBranch,
     });
-    prComments.push(...await vcs.getPRComments(pr.id));
-    checkResults.push(...await vcs.getCheckRunResults(pr.id));
-    hasConflicts = (await vcs.getPRConflictStatus(pr.id)) || hasConflicts;
+    contexts.push({
+      repository: repo,
+      prComments: await vcs.getPRComments(pr.id),
+      checkResults: await vcs.getCheckRunResults(pr.id),
+      hasConflicts: await vcs.getPRConflictStatus(pr.id),
+    });
   }
 
-  return { prComments, checkResults, hasConflicts };
+  return contexts;
 }
 
 async function ensureArthurTaskForTicket(
@@ -226,16 +230,14 @@ ensureArthurTaskForTicket.maxRetries = 0;
 
 async function provisionSandbox(
   branchName: string,
-  selectedRepositories: SelectedRepository[],
+  selectedRepositories: WorkspaceRepositoryInput[],
   arthurTaskId: string | null,
   agentKindOverride: AgentKind | null,
-  mergeBase?: string,
 ): Promise<{ sandboxId: string; agentKind: AgentKind }> {
   "use step";
-  const { env, getVcsConfig } = await import("../../env.js");
+  const { env, getConfiguredVcsProviders, getVcsToken } = await import("../../env.js");
   const { SandboxManager } = await import("../sandbox/manager.js");
   const { createAgentAdapter } = await import("../sandbox/agents/index.js");
-  const vcs = getVcsConfig();
 
   const arthur =
     env.GENAI_ENGINE_API_KEY && env.GENAI_ENGINE_TRACE_ENDPOINT && arthurTaskId
@@ -259,35 +261,40 @@ async function provisionSandbox(
   }
   const agent = createAgentAdapter(agentKind);
 
-  const { getVcsToken } = await import("../../env.js");
-
-  // Resolve the git identity used inside the sandbox.
-  // Explicit COMMIT_AUTHOR/EMAIL always wins. Otherwise, on GitHub we derive
-  // the App's bot identity (`<slug>[bot]` + numeric-id noreply email) so the
-  // commits render with the App's avatar and `[bot]` badge. On GitLab there
-  // is no equivalent App identity, so we fall back to a static default.
-  let commitIdentity: { name: string; email: string };
-  if (env.COMMIT_AUTHOR && env.COMMIT_EMAIL) {
-    commitIdentity = { name: env.COMMIT_AUTHOR, email: env.COMMIT_EMAIL };
-  } else if (vcs.kind === "github") {
-    const { getBotIdentity } = await import("../lib/github-auth.js");
-    commitIdentity = await getBotIdentity(vcs.auth);
-  } else {
-    commitIdentity = { name: "ai-workflow-blazity", email: "ai-workflow@blazity.com" };
-  }
+  const configuredProviders = getConfiguredVcsProviders();
+  const sandboxProviders = await Promise.all(
+    configuredProviders.map(async (provider) => {
+      // Resolve the git identity used inside the sandbox.
+      // Explicit COMMIT_AUTHOR/EMAIL always wins. Otherwise, on GitHub we derive
+      // the App's bot identity (`<slug>[bot]` + numeric-id noreply email) so the
+      // commits render with the App's avatar and the `[bot]` badge. On GitLab there
+      // is no equivalent App identity, so we fall back to a static default.
+      let commitIdentity: { name: string; email: string };
+      if (env.COMMIT_AUTHOR && env.COMMIT_EMAIL) {
+        commitIdentity = { name: env.COMMIT_AUTHOR, email: env.COMMIT_EMAIL };
+      } else if (provider.kind === "github") {
+        const { getBotIdentity } = await import("../lib/github-auth.js");
+        commitIdentity = await getBotIdentity(provider.auth);
+      } else {
+        commitIdentity = { name: "ai-workflow-blazity", email: "ai-workflow@blazity.com" };
+      }
+      return {
+        kind: provider.kind,
+        host: provider.host,
+        getToken: () => getVcsToken(provider),
+        commitAuthor: commitIdentity.name,
+        commitEmail: commitIdentity.email,
+      };
+    }),
+  );
 
   const manager = new SandboxManager({
-    kind: vcs.kind,
-    getToken: () => getVcsToken(vcs),
-    repoPath: vcs.repoPath,
-    host: vcs.host,
+    providers: sandboxProviders,
     jobTimeoutMs: env.JOB_TIMEOUT_MS,
-    commitAuthor: commitIdentity.name,
-    commitEmail: commitIdentity.email,
   });
 
   const sandbox = await manager.provisionMultiRepo(
-    { branchName, repositories: selectedRepositories, mergeBase },
+    { branchName, repositories: selectedRepositories },
     agent,
     {
       anthropicApiKey: env.ANTHROPIC_API_KEY,
@@ -407,12 +414,12 @@ async function parseReviewStep(
 
 async function postPrLinksComment(
   ticketId: string,
-  prs: Array<{ repoPath: string; url: string; id: number }>,
+  prs: Array<{ provider: SelectedRepository["provider"]; repoPath: string; url: string; id: number }>,
 ): Promise<void> {
   "use step";
   const { createStepAdapters } = await import("../lib/step-adapters.js");
   const { issueTracker } = createStepAdapters();
-  const lines = prs.map((pr) => `- ${pr.repoPath}: #${pr.id} ${pr.url}`);
+  const lines = prs.map((pr) => `- ${pr.provider}:${pr.repoPath}: #${pr.id} ${pr.url}`);
   try {
     await issueTracker.postComment(ticketId, `Pull requests ready for review:\n${lines.join("\n")}`);
   } catch (err) {
@@ -670,9 +677,6 @@ export async function agentWorkflow(ticketId: string) {
       ticket: ticketData,
       run: {
         branchName,
-        isNewTicket: true,
-        hasExistingPr: false,
-        hasMergeConflict: false,
       },
     });
 
@@ -725,8 +729,11 @@ export async function agentWorkflow(ticketId: string) {
     const { prepareSelectedRepositoryBranches } = await import("./repository-prs.js");
     await prepareSelectedRepositoryBranches(ticket.identifier, branchName, selectedRepositories);
 
-    const prContext = await fetchSelectedRepositoryPRContext(selectedRepositories);
-    const mergeBase = prContext.hasConflicts ? selectedRepositories[0]?.defaultBranch : undefined;
+    const repositoryContexts = await fetchSelectedRepositoryPRContexts(selectedRepositories);
+    const workspaceRepositories: WorkspaceRepositoryInput[] = repositoryContexts.map((context) => ({
+      ...context.repository,
+      ...(context.hasConflicts ? { mergeBase: context.repository.defaultBranch } : {}),
+    }));
 
     // One Arthur task per run: first run = ticket identifier, re-runs = identifier.N
     const arthurTaskId = await ensureArthurTaskForTicket(ticket.identifier);
@@ -739,10 +746,9 @@ export async function agentWorkflow(ticketId: string) {
     // Provision sandbox once for all phases
     const { sandboxId, agentKind } = await provisionSandbox(
       branchName,
-      selectedRepositories,
+      workspaceRepositories,
       arthurTaskId,
       agentKindOverride,
-      mergeBase,
     );
     // Pin the sandboxId to this ticket so cleanup paths (reconcile,
     // cancelRun, webhook-cancel) can stop it by id instead of doing a
@@ -767,12 +773,9 @@ export async function agentWorkflow(ticketId: string) {
         ticket: ticketData,
         prompt: prompts.research,
         branchName,
-        prComments: prContext.prComments,
-        checkResults: prContext.checkResults,
-        hasConflicts: prContext.hasConflicts,
         attachments: downloadedAttachments,
         preSandboxAdditions: preSandboxAdditions.research,
-        selectedRepositories,
+        repositoryContexts,
       });
 
       await writeAndStartPhase(
@@ -849,7 +852,7 @@ export async function agentWorkflow(ticketId: string) {
         researchPlanMarkdown,
         attachments: downloadedAttachments,
         preSandboxAdditions: preSandboxAdditions.implementation,
-        selectedRepositories,
+        selectedRepositories: workspaceRepositories,
       });
 
       await writeAndStartPhase(
@@ -911,7 +914,7 @@ export async function agentWorkflow(ticketId: string) {
           researchPlanMarkdown,
           attachments: downloadedAttachments,
           preSandboxAdditions: preSandboxAdditions.review,
-          selectedRepositories,
+          selectedRepositories: workspaceRepositories,
         });
 
         await writeAndStartPhase(
@@ -970,8 +973,13 @@ export async function agentWorkflow(ticketId: string) {
       // "pr_ready". Clearing the registry here closes that window.
       await unregisterRun(ticket.identifier);
 
-      const changedRepositories = selectedRepositories.filter((repo) =>
-        pushResult.repositories.some((result) => result.repoPath === repo.repoPath && result.changed && result.pushed),
+      const changedRepositories = workspaceRepositories.filter((repo) =>
+        pushResult.repositories.some((result) =>
+          result.provider === repo.provider &&
+          result.repoPath === repo.repoPath &&
+          result.changed &&
+          result.pushed,
+        ),
       );
       const { createOrUseWorkflowOwnedPullRequestsForRepos } = await import("./repository-prs.js");
       const prs = await createOrUseWorkflowOwnedPullRequestsForRepos({

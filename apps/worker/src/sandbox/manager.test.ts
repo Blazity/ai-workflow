@@ -37,7 +37,7 @@ const makeFakeAgent = (): AgentAdapter & { calls: any[] } => {
   } as any;
 };
 
-describe("SandboxManager.provision", () => {
+describe("SandboxManager.provisionMultiRepo", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockRunCommand.mockResolvedValue({ exitCode: 0, stdout: mockStdout });
@@ -46,19 +46,36 @@ describe("SandboxManager.provision", () => {
   });
 
   const baseConfig = {
-    kind: "github" as const,
-    getToken: () => Promise.resolve("ghs_test"),
-    repoPath: "test-org/test-repo",
-    host: "https://github.com",
+    providers: [
+      {
+        kind: "github" as const,
+        getToken: () => Promise.resolve("ghs_test"),
+        host: "https://github.com",
+        commitAuthor: "ai-workflow-blazity",
+        commitEmail: "bot@blazity.com",
+      },
+    ],
     jobTimeoutMs: 1_800_000,
-    commitAuthor: "ai-workflow-blazity",
-    commitEmail: "bot@blazity.com",
   };
 
-  it("creates the sandbox with a git source pointed at the branch", async () => {
+  it("creates the sandbox with a git source pointed at the first repository branch", async () => {
     const { Sandbox } = await import("@vercel/sandbox");
     const manager = new SandboxManager(baseConfig);
-    await manager.provision("feat/test-branch", makeFakeAgent(), { model: "any", anthropicApiKey: "k" });
+    await manager.provisionMultiRepo(
+      {
+        branchName: "feat/test-branch",
+        repositories: [
+          {
+            provider: "github",
+            repoPath: "test-org/test-repo",
+            defaultBranch: "main",
+            selectedRationale: "only accessible repository",
+          },
+        ],
+      },
+      makeFakeAgent(),
+      { model: "any", anthropicApiKey: "k" },
+    );
     expect(Sandbox.create).toHaveBeenCalledWith(
       expect.objectContaining({
         source: expect.objectContaining({ type: "git", revision: "feat/test-branch" }),
@@ -69,20 +86,61 @@ describe("SandboxManager.provision", () => {
 
   it("sets git identity to commitAuthor / commitEmail", async () => {
     const manager = new SandboxManager(baseConfig);
-    await manager.provision("feat/test-branch", makeFakeAgent(), { model: "any", anthropicApiKey: "k" });
+    await manager.provisionMultiRepo(
+      {
+        branchName: "feat/test-branch",
+        repositories: [
+          {
+            provider: "github",
+            repoPath: "test-org/test-repo",
+            defaultBranch: "main",
+            selectedRationale: "only accessible repository",
+          },
+        ],
+      },
+      makeFakeAgent(),
+      { model: "any", anthropicApiKey: "k" },
+    );
     const idCall = mockRunCommand.mock.calls.find(
-      ([cmd, args]) => cmd === "bash" && typeof args[1] === "string" && args[1].includes("git config user.name"),
+      ([cmd, args]) => cmd === "git" && args[0] === "-C" && args.includes("user.name"),
     );
     expect(idCall).toBeDefined();
-    expect(idCall![1][1]).toContain("ai-workflow-blazity");
-    expect(idCall![1][1]).toContain("bot@blazity.com");
+    expect(mockRunCommand).toHaveBeenCalledWith("git", [
+      "-C",
+      "/vercel/sandbox",
+      "config",
+      "user.name",
+      "ai-workflow-blazity",
+    ]);
+    expect(mockRunCommand).toHaveBeenCalledWith("git", [
+      "-C",
+      "/vercel/sandbox",
+      "config",
+      "user.email",
+      "bot@blazity.com",
+    ]);
   });
 
   it("captures pre-agent HEAD SHA for the push step", async () => {
+    mockStdout.mockResolvedValue("sha-123\n");
     const manager = new SandboxManager(baseConfig);
-    await manager.provision("feat/test-branch", makeFakeAgent(), { model: "any", anthropicApiKey: "k" });
+    await manager.provisionMultiRepo(
+      {
+        branchName: "feat/test-branch",
+        repositories: [
+          {
+            provider: "github",
+            repoPath: "test-org/test-repo",
+            defaultBranch: "main",
+            selectedRationale: "only accessible repository",
+          },
+        ],
+      },
+      makeFakeAgent(),
+      { model: "any", anthropicApiKey: "k" },
+    );
     const shaCall = mockRunCommand.mock.calls.find(
-      ([cmd, args]) => cmd === "bash" && typeof args[1] === "string" && args[1].includes("/tmp/.pre-agent-sha"),
+      ([cmd, args]) => cmd === "git" && args[0] === "-C" && args.includes("rev-parse"),
     );
     expect(shaCall).toBeDefined();
   });
@@ -90,10 +148,24 @@ describe("SandboxManager.provision", () => {
   it("calls agent.install then agent.configure with the supplied opts", async () => {
     const agent = makeFakeAgent();
     const manager = new SandboxManager(baseConfig);
-    await manager.provision("feat/test-branch", agent, {
-      anthropicApiKey: "sk-ant-test",
-      model: "claude-opus-4-6",
-    });
+    await manager.provisionMultiRepo(
+      {
+        branchName: "feat/test-branch",
+        repositories: [
+          {
+            provider: "github",
+            repoPath: "test-org/test-repo",
+            defaultBranch: "main",
+            selectedRationale: "only accessible repository",
+          },
+        ],
+      },
+      agent,
+      {
+        anthropicApiKey: "sk-ant-test",
+        model: "claude-opus-4-6",
+      },
+    );
     const ops = (agent as any).calls.map((c: any) => c.op);
     expect(ops).toEqual(["install", "configure"]);
     expect((agent as any).calls[1].opts).toEqual(
@@ -101,17 +173,88 @@ describe("SandboxManager.provision", () => {
     );
   });
 
-  it("fetches and merges mergeBase when supplied", async () => {
+  it("fetches and merges only repositories with a repository mergeBase", async () => {
     const manager = new SandboxManager(baseConfig);
-    await manager.provision("feat/test-branch", makeFakeAgent(), { model: "any", anthropicApiKey: "k" }, "main");
-    const fetchCall = mockRunCommand.mock.calls.find(
-      ([cmd, args]) => cmd === "bash" && typeof args[1] === "string" && args[1].includes("git fetch"),
+    await manager.provisionMultiRepo(
+      {
+        branchName: "blazebot/aiw-45",
+        repositories: [
+          {
+            provider: "github",
+            repoPath: "acme/api",
+            defaultBranch: "main",
+            selectedRationale: "workflow-owned branch for this ticket",
+            mergeBase: "main",
+          },
+          {
+            provider: "github",
+            repoPath: "acme/web",
+            defaultBranch: "trunk",
+            selectedRationale: "ticket mentions web",
+          },
+        ],
+      },
+      makeFakeAgent(),
+      { model: "any", anthropicApiKey: "k" },
     );
-    expect(fetchCall).toBeDefined();
-    expect(fetchCall![1][1]).toContain("main");
+
+    const mergeFetches = mockRunCommand.mock.calls.filter(
+      ([cmd, args]) => cmd === "git" && args[0] === "-C" && args.includes("fetch"),
+    );
+    expect(mergeFetches).toHaveLength(1);
+    expect(mergeFetches[0]![1]).toEqual([
+      "-C",
+      "/vercel/sandbox",
+      "fetch",
+      expect.stringContaining("github.com/acme/api.git"),
+      "main",
+    ]);
   });
 
-  it("clones every selected repository into the workspace manifest paths", async () => {
+  it("passes merge base branch names as git arguments", async () => {
+    const manager = new SandboxManager(baseConfig);
+    await manager.provisionMultiRepo(
+      {
+        branchName: "blazebot/aiw-45",
+        repositories: [
+          {
+            provider: "github",
+            repoPath: "acme/api",
+            defaultBranch: "release/2026.07",
+            selectedRationale: "workflow-owned branch for this ticket",
+            mergeBase: "release/2026.07",
+          },
+        ],
+      },
+      makeFakeAgent(),
+      { model: "any", anthropicApiKey: "k" },
+    );
+
+    expect(mockRunCommand).toHaveBeenCalledWith("git", [
+      "-C",
+      "/vercel/sandbox",
+      "fetch",
+      expect.stringContaining("github.com/acme/api.git"),
+      "release/2026.07",
+    ]);
+    expect(mockRunCommand).toHaveBeenCalledWith("git", [
+      "-C",
+      "/vercel/sandbox",
+      "branch",
+      "-f",
+      "release/2026.07",
+      "FETCH_HEAD",
+    ]);
+    expect(mockRunCommand).toHaveBeenCalledWith("git", [
+      "-C",
+      "/vercel/sandbox",
+      "merge",
+      "FETCH_HEAD",
+      "--no-edit",
+    ]);
+  });
+
+  it("uses the sandbox root for the first selected repository and clones the rest", async () => {
     const manager = new SandboxManager(baseConfig);
     await manager.provisionMultiRepo(
       {
@@ -136,19 +279,75 @@ describe("SandboxManager.provision", () => {
     );
 
     expect(mockRunCommand).toHaveBeenCalledWith("mkdir", ["-p", WORKSPACE_REPOS_DIR]);
-    expect(mockRunCommand).toHaveBeenCalledWith("git", [
+    expect(mockRunCommand).not.toHaveBeenCalledWith("git", expect.arrayContaining([
       "clone",
-      "--branch",
-      "blazebot/aiw-45",
       expect.stringContaining("github.com/acme/api.git"),
-      "/vercel/sandbox/repos/acme__api",
-    ]);
+    ]));
     expect(mockRunCommand).toHaveBeenCalledWith("git", [
       "clone",
       "--branch",
       "blazebot/aiw-45",
       expect.stringContaining("github.com/acme/web.git"),
-      "/vercel/sandbox/repos/acme__web",
+      "/vercel/sandbox/repos/github__acme__web",
+    ]);
+  });
+
+  it("uses the selected repository provider credentials when cloning mixed providers", async () => {
+    const manager = new SandboxManager({
+      providers: [
+        {
+          kind: "github",
+          getToken: () => Promise.resolve("ghs_test"),
+          host: "https://github.com",
+          commitAuthor: "github-bot",
+          commitEmail: "github-bot@example.com",
+        },
+        {
+          kind: "gitlab",
+          getToken: () => Promise.resolve("glpat_test"),
+          host: "https://gitlab.example.com",
+          commitAuthor: "gitlab-bot",
+          commitEmail: "gitlab-bot@example.com",
+        },
+      ],
+      jobTimeoutMs: 1_800_000,
+    });
+
+    await manager.provisionMultiRepo(
+      {
+        branchName: "blazebot/aiw-45",
+        repositories: [
+          {
+            provider: "github",
+            repoPath: "acme/web",
+            defaultBranch: "main",
+            selectedRationale: "ticket mentions web",
+          },
+          {
+            provider: "gitlab",
+            repoPath: "acme/api",
+            defaultBranch: "main",
+            selectedRationale: "ticket mentions api",
+          },
+        ],
+      },
+      makeFakeAgent(),
+      { model: "any", anthropicApiKey: "k" },
+    );
+
+    expect(mockRunCommand).toHaveBeenCalledWith("git", [
+      "clone",
+      "--branch",
+      "blazebot/aiw-45",
+      "https://oauth2:glpat_test@gitlab.example.com/acme/api.git",
+      "/vercel/sandbox/repos/gitlab__acme__api",
+    ]);
+    expect(mockRunCommand).toHaveBeenCalledWith("git", [
+      "-C",
+      "/vercel/sandbox/repos/gitlab__acme__api",
+      "config",
+      "user.name",
+      "gitlab-bot",
     ]);
   });
 
@@ -179,6 +378,7 @@ describe("SandboxManager.provision", () => {
     const manifest = JSON.parse(manifestWrite.content.toString("utf8"));
     expect(manifest.repositories[0]).toMatchObject({
       repoPath: "acme/api",
+      localPath: "/vercel/sandbox",
       preAgentSha: "sha-123",
     });
   });

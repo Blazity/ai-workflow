@@ -11,7 +11,10 @@ vi.mock("../../lib/github-auth.js", () => ({
   buildOctokit: vi.fn(() => mockOctokit),
 }));
 
-import { createRepositoryDirectory } from "./repository-directory.js";
+import {
+  createRepositoryDirectory,
+  createRepositoryDirectoryForProviders,
+} from "./repository-directory.js";
 
 const mockFetch = vi.fn();
 
@@ -125,5 +128,54 @@ describe("createRepositoryDirectory", () => {
     expect(mockFetch.mock.calls[0][1]).toMatchObject({
       headers: { "PRIVATE-TOKEN": "glpat" },
     });
+  });
+
+  it("merges repositories from every configured provider", async () => {
+    mockOctokit.paginate.mockResolvedValueOnce([
+      {
+        full_name: "acme/web",
+        name: "web",
+        owner: { login: "acme" },
+        default_branch: "main",
+        description: "Storefront",
+        html_url: "https://github.com/acme/web",
+        topics: [],
+        archived: false,
+        private: true,
+      },
+    ]);
+    mockFetch.mockResolvedValueOnce(gitLabResponse([
+      {
+        path_with_namespace: "acme/api",
+        name: "api",
+        namespace: { full_path: "acme" },
+        default_branch: "main",
+        description: "API",
+        web_url: "https://gitlab.example.com/acme/api",
+        topics: [],
+        archived: false,
+        visibility: "private",
+      },
+    ]));
+
+    const directory = createRepositoryDirectoryForProviders([
+      {
+        kind: "github",
+        auth: { appId: 1, privateKeyBase64: "pem", installationId: 2 },
+        host: "https://github.com",
+        legacyBaseBranch: "main",
+      },
+      {
+        kind: "gitlab",
+        token: "glpat",
+        host: "https://gitlab.example.com",
+        legacyBaseBranch: "main",
+      },
+    ]);
+
+    await expect(directory.listRepositories()).resolves.toEqual([
+      expect.objectContaining({ provider: "github", repoPath: "acme/web" }),
+      expect.objectContaining({ provider: "gitlab", repoPath: "acme/api" }),
+    ]);
   });
 });

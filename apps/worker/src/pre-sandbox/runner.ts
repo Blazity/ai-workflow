@@ -36,11 +36,6 @@ export async function executePreSandboxPhase(
   const promptAdditions = emptyPromptAdditions();
   let selectedRepositories: RunPreSandboxPhaseResult["selectedRepositories"];
 
-  if (!shouldRunPreSandbox(input.run, config.preSandbox.runOn)) {
-    logger?.info({ run: input.run }, "pre_sandbox_skipped");
-    return { status: "continue", promptAdditions };
-  }
-
   for (const step of config.preSandbox.steps) {
     const handler = registry[step.uses];
     if (!handler) {
@@ -101,17 +96,6 @@ export async function executePreSandboxPhase(
   }
 
   return { status: "continue", promptAdditions, selectedRepositories };
-}
-
-function shouldRunPreSandbox(
-  run: PreSandboxStepContext["run"],
-  runOn: PreSandboxConfig["preSandbox"]["runOn"],
-): boolean {
-  return (
-    (run.isNewTicket && runOn.newTicket) ||
-    (run.hasExistingPr && !run.hasMergeConflict && runOn.existingPr) ||
-    (run.hasMergeConflict && runOn.mergeConflict)
-  );
 }
 
 function selectTicketFields(

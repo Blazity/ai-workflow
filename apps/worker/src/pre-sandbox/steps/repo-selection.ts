@@ -6,20 +6,23 @@ import type {
 import type { PreSandboxStepHandler } from "../types.js";
 
 export interface WorkflowOwnedBranchSelectionInput {
+  provider: RepositoryMetadata["provider"];
   repoPath: string;
   branch: WorkflowOwnedBranch;
 }
 
 export const repoSelectionStep: PreSandboxStepHandler = async ({ context }) => {
-  const { createRepositoryDirectory } = await import("../../adapters/vcs/repository-directory.js");
+  const { createRepositoryDirectoryForProviders } = await import("../../adapters/vcs/repository-directory.js");
   const { getDb } = await import("../../db/client.js");
   const { listWorkflowOwnedBranchesForTicket } = await import("../../db/queries/workflow-owned-branches.js");
-  const { getVcsConfig } = await import("../../../env.js");
-  const vcsConfig = getVcsConfig();
-  const repositories = await createRepositoryDirectory(vcsConfig).listRepositories();
+  const { getConfiguredVcsProviders } = await import("../../../env.js");
+  const repositories = await createRepositoryDirectoryForProviders(
+    getConfiguredVcsProviders(),
+  ).listRepositories();
   const ticketIdentifier = context.ticket.identifier;
   const workflowOwnedBranches = ticketIdentifier
     ? (await listWorkflowOwnedBranchesForTicket(getDb(), ticketIdentifier)).map((record) => ({
+        provider: record.provider,
         repoPath: record.repoPath,
         branch: {
           branchName: record.branchName,
@@ -65,13 +68,13 @@ export function selectRepositoriesFromMetadata(input: {
 }):
   | { status: "selected"; repositories: SelectedRepository[] }
   | { status: "clarification_needed"; questions: string[] } {
-  const repositoriesByPath = new Map(input.repositories.map((repo) => [repo.repoPath, repo]));
+  const repositoriesByKey = new Map(input.repositories.map((repo) => [repositoryKey(repo), repo]));
   const selected = new Map<string, SelectedRepository>();
 
   for (const owned of input.workflowOwnedBranches) {
-    const repo = repositoriesByPath.get(owned.repoPath);
+    const repo = repositoriesByKey.get(repositoryKey(owned));
     if (!repo) continue;
-    selected.set(repo.repoPath, {
+    selected.set(repositoryKey(repo), {
       provider: repo.provider,
       repoPath: repo.repoPath,
       defaultBranch: repo.defaultBranch,
@@ -85,8 +88,9 @@ export function selectRepositoriesFromMetadata(input: {
     ticketText.includes(repo.repoPath.toLowerCase()),
   );
   for (const repo of exactMatches) {
-    if (!selected.has(repo.repoPath)) {
-      selected.set(repo.repoPath, selectedRepository(repo, "ticket mentions repository path"));
+    const key = repositoryKey(repo);
+    if (!selected.has(key)) {
+      selected.set(key, selectedRepository(repo, "ticket mentions repository path"));
     }
   }
 
@@ -97,7 +101,7 @@ export function selectRepositoriesFromMetadata(input: {
       .sort((a, b) => b.score - a.score);
     const topScore = scored[0]?.score ?? 0;
     for (const item of scored.filter((candidate) => candidate.score === topScore)) {
-      selected.set(item.repo.repoPath, selectedRepository(item.repo, "ticket text matches repository metadata"));
+      selected.set(repositoryKey(item.repo), selectedRepository(item.repo, "ticket text matches repository metadata"));
     }
   }
 
@@ -116,6 +120,10 @@ export function selectRepositoriesFromMetadata(input: {
     status: "clarification_needed",
     questions: ["Which repository should this ticket modify?"],
   };
+}
+
+function repositoryKey(repo: Pick<RepositoryMetadata, "provider" | "repoPath">): string {
+  return `${repo.provider}:${repo.repoPath}`;
 }
 
 function selectedRepository(

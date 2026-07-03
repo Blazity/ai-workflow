@@ -174,8 +174,8 @@ Jira Ticket Discovered
 +-------------+---------------+
               | pass
               v
-        Push to GitHub
-        Create PR (with any soft-flag labels)
+        Push changed repositories to VCS
+        Create PRs/MRs (with any soft-flag labels)
 ```
 
 **Codebase integration points:**
@@ -184,8 +184,7 @@ Jira Ticket Discovered
 - WebFetch interception — hook/proxy inside the agent container
 - Runtime monitoring — cloud-native (VPC Flow Logs, CloudWatch or equivalent)
 - Output gate — in `collectPhaseOutput` before returning results
-- Pre-push gate — in `pushFromSandbox` before the git push
-- Fix-and-retry path — `fixAndRetryPush` in `poll-agent.ts` spawns a lightweight Claude agent to fix push failures. This agent receives untrusted input (the push error) and runs with `--dangerously-skip-permissions`. Its output must pass through the output gate and pre-push gate before the retry push proceeds.
+- Pre-push gate — in `pushWorkspaceFromSandbox` before each changed repository push
 
 ## Response Model
 

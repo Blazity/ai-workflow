@@ -2,7 +2,7 @@ import type { PRComment, CheckRunResult } from "../adapters/vcs/types.js";
 import type { SelectedRepository } from "../adapters/vcs/repository-directory.js";
 import type { DownloadedAttachment } from "./attachments.js";
 import { formatAttachmentsIndex } from "./attachments.js";
-import { buildRepoSlug, WORKSPACE_REPOS_DIR } from "./repo-workspace.js";
+import { buildWorkspaceLocalPath } from "./repo-workspace.js";
 
 interface TicketData {
   identifier: string;
@@ -20,16 +20,21 @@ export interface PreSandboxPromptAddition {
   content: string;
 }
 
+export interface SelectedRepositoryPromptContext {
+  repository: SelectedRepository;
+  prComments: PRComment[];
+  checkResults: CheckRunResult[];
+  hasConflicts: boolean;
+}
+
 export interface ResearchPlanContextInput {
   ticket: TicketData;
   prompt: string;
   branchName: string;
-  prComments?: PRComment[];
-  checkResults?: CheckRunResult[];
-  hasConflicts?: boolean;
   attachments?: DownloadedAttachment[];
   preSandboxAdditions?: PreSandboxPromptAddition[];
   selectedRepositories?: SelectedRepository[];
+  repositoryContexts?: SelectedRepositoryPromptContext[];
 }
 
 export interface ImplementationContextInput {
@@ -51,10 +56,12 @@ export interface ReviewContextInput {
 }
 
 export function assembleResearchPlanContext(input: ResearchPlanContextInput): string {
-  const { ticket, prompt, branchName, prComments, checkResults, hasConflicts, attachments, preSandboxAdditions, selectedRepositories } = input;
+  const { ticket, prompt, branchName, attachments, preSandboxAdditions, repositoryContexts } = input;
+  const selectedRepositories = input.selectedRepositories ?? repositoryContexts?.map((context) => context.repository);
   const attachmentsSection = renderAttachmentsSection(attachments);
   const preSandboxSection = renderPreSandboxAdditions(preSandboxAdditions);
   const selectedRepositoriesSection = renderSelectedRepositories(selectedRepositories);
+  const repositoryContextSection = renderRepositoryContexts(repositoryContexts);
 
   let md = `# Requirements
 
@@ -85,18 +92,7 @@ ${branchName}
 
   md += selectedRepositoriesSection;
 
-  if (prComments && prComments.length > 0) {
-    md += `\n## PR Review Feedback\n\n${formatPRComments(prComments)}\n`;
-  }
-
-  if (checkResults && checkResults.length > 0) {
-    md += `\n## CI/CD Check Results\n\n${formatCheckResults(checkResults)}\n`;
-  }
-
-  if (hasConflicts) {
-    md += `\n## Merge Conflicts\n\nThis PR has merge conflicts. The base branch has already been merged — the repo is in a MERGING state with conflict markers in the affected files. Resolve the markers, \`git add\` the files, and run \`git merge --continue\`.\n`;
-  }
-
+  md += repositoryContextSection;
   md += preSandboxSection;
   md += `\n---\n\n${prompt}\n`;
   return md;
@@ -250,9 +246,35 @@ function renderSelectedRepositories(
   repositories: SelectedRepository[] | undefined,
 ): string {
   if (!repositories || repositories.length === 0) return "";
-  const lines = repositories.map((repo) => {
-    const localPath = `${WORKSPACE_REPOS_DIR}/${buildRepoSlug(repo.repoPath)}`;
-    return `- \`${repo.repoPath}\` at \`${localPath}\` - ${repo.selectedRationale}`;
+  const lines = repositories.map((repo, index) => {
+    const localPath = buildWorkspaceLocalPath(repo.provider, repo.repoPath, index);
+    return `- \`${repo.provider}:${repo.repoPath}\` at \`${localPath}\` - ${repo.selectedRationale}`;
   });
   return `\n## Selected Repositories\n\nEdit only these Run Workspace repositories:\n\n${lines.join("\n")}\n`;
+}
+
+function renderRepositoryContexts(
+  contexts: SelectedRepositoryPromptContext[] | undefined,
+): string {
+  if (!contexts || contexts.length === 0) return "";
+
+  const sections: string[] = [];
+  for (const context of contexts) {
+    const repoPath = context.repository.repoPath;
+    if (context.prComments.length > 0) {
+      sections.push(`## PR Review Feedback: ${repoPath}\n\n${formatPRComments(context.prComments)}`);
+    }
+    if (context.checkResults.length > 0) {
+      sections.push(`## CI/CD Check Results: ${repoPath}\n\n${formatCheckResults(context.checkResults)}`);
+    }
+    if (context.hasConflicts) {
+      sections.push(
+        `## Merge Conflicts: ${repoPath}\n\n` +
+          "This PR has merge conflicts. The base branch has already been merged into this repository checkout. " +
+          "Resolve the markers in this repository, `git add` the files, and run `git merge --continue` from that repository.",
+      );
+    }
+  }
+
+  return sections.length > 0 ? `\n${sections.join("\n\n")}\n` : "";
 }

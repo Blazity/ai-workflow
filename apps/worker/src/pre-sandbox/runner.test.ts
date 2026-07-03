@@ -20,54 +20,18 @@ const input: RunPreSandboxPhaseInput = {
   },
   run: {
     branchName: "feature/AWT-42",
-    isNewTicket: true,
-    hasExistingPr: false,
-    hasMergeConflict: false,
   },
 };
 
 function config(steps: PreSandboxConfig["preSandbox"]["steps"]): PreSandboxConfig {
   return {
     preSandbox: {
-      runOn: {
-        newTicket: true,
-        existingPr: true,
-        mergeConflict: true,
-      },
       steps,
     },
   };
 }
 
 describe("executePreSandboxPhase", () => {
-  it("skips configured steps when runOn does not match", async () => {
-    const step: PreSandboxStepHandler = vi.fn(async () => ({ status: "continue" as const }));
-    const result = await executePreSandboxPhase(
-      input,
-      {
-        preSandbox: {
-          runOn: {
-            newTicket: false,
-            existingPr: true,
-            mergeConflict: true,
-          },
-          steps: [{ uses: "step", onFailure: "fail" }],
-        },
-      },
-      { step },
-    );
-
-    expect(step).not.toHaveBeenCalled();
-    expect(result).toEqual({
-      status: "continue",
-      promptAdditions: {
-        research: [],
-        implementation: [],
-        review: [],
-      },
-    });
-  });
-
   it("runs steps sequentially and groups prompt additions by target", async () => {
     const order: string[] = [];
     const seenContexts: PreSandboxStepContext[] = [];
