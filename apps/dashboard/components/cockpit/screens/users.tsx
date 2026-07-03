@@ -2,6 +2,7 @@
 
 import { useEffect, useId, useRef, useState } from "react";
 
+import { readErrorMessage } from "@/lib/api/error-message";
 import { CkChip, CkTabs } from "@/components/ui";
 
 export type DashboardRole = "owner" | "admin" | "member";
@@ -83,7 +84,7 @@ export function UsersScreen({
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ role: nextRole }),
       });
-      if (!res.ok) throw new Error(await readError(res));
+      if (!res.ok) throw new Error(await readErrorMessage(res));
       setUsers((current) =>
         current.map((row) =>
           row.id === user.id
@@ -113,7 +114,7 @@ export function UsersScreen({
       const res = await fetch(`/api/invites/${encodeURIComponent(invite.id)}/resend`, {
         method: "POST",
       });
-      if (!res.ok) throw new Error(await readError(res));
+      if (!res.ok) throw new Error(await readErrorMessage(res));
       const updated = (await res.json()) as DashboardInviteRow;
       setInvites((current) =>
         current.map((row) => (row.id === updated.id ? { ...row, ...updated } : row)),
@@ -136,7 +137,7 @@ export function UsersScreen({
       const res = await fetch(`/api/invites/${encodeURIComponent(invite.id)}/cancel`, {
         method: "POST",
       });
-      if (!res.ok) throw new Error(await readError(res));
+      if (!res.ok) throw new Error(await readErrorMessage(res));
       setInvites((current) => current.filter((row) => row.id !== invite.id));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unable to cancel invite");
@@ -490,7 +491,7 @@ function InviteModal({
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ email, role: "member" }),
       });
-      if (!res.ok) throw new Error(await readError(res));
+      if (!res.ok) throw new Error(await readErrorMessage(res));
       onCreated((await res.json()) as DashboardInviteRow);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unable to create invite");
@@ -895,15 +896,6 @@ function InlineError({ children }: { children: React.ReactNode }) {
       {children}
     </div>
   );
-}
-
-async function readError(res: Response): Promise<string> {
-  const body = (await res.json().catch(() => ({}))) as {
-    error?: string;
-    message?: string;
-    statusMessage?: string;
-  };
-  return body.error ?? body.message ?? body.statusMessage ?? "Request failed";
 }
 
 function getInviteState(
