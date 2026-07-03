@@ -260,7 +260,7 @@ function renderRepositoryContexts(
 
   const sections: string[] = [];
   for (const context of contexts) {
-    const repoPath = context.repository.repoPath;
+    const repoPath = `${context.repository.provider}:${context.repository.repoPath}`;
     if (context.prComments.length > 0) {
       sections.push(`## PR Review Feedback: ${repoPath}\n\n${formatPRComments(context.prComments)}`);
     }

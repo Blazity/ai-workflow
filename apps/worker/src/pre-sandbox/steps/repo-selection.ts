@@ -54,7 +54,7 @@ export const repoSelectionStep: PreSandboxStepHandler = async ({ context }) => {
         target: ["research", "implementation", "review"],
         title: "Selected Repositories",
         content: selected.repositories
-          .map((repo) => `- ${repo.repoPath}: ${repo.selectedRationale}`)
+          .map((repo) => `- ${repo.provider}:${repo.repoPath}: ${repo.selectedRationale}`)
           .join("\n"),
       },
     ],

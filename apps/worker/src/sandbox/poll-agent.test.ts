@@ -23,6 +23,13 @@ vi.mock("./credentials.js", () => ({
   getSandboxCredentials: () => ({}),
 }));
 
+vi.mock("../lib/logger.js", () => ({
+  logger: {
+    info: vi.fn(),
+    warn: vi.fn(),
+  },
+}));
+
 // VCS config is swapped per-test by reassigning currentVcsConfig before the
 // step under test calls getVcsConfig(). Default is GitHub; GitLab tests set
 // it to a GitLab config to exercise the oauth2 auth user and gitlab host.
@@ -77,6 +84,7 @@ vi.mock("../../env.js", () => ({
 
 import {
   pushWorkspaceFromSandbox,
+  fixAndRetryWorkspacePush,
   teardownSandbox,
   checkPhaseDone,
   collectPhaseOutput,
@@ -237,6 +245,148 @@ describe("pushWorkspaceFromSandbox", () => {
       "origin",
       "https://oauth2:glpat_test_token@gitlab.example.com/acme/api.git",
     ]);
+  });
+
+  it("continues pushing later repositories after an earlier repository push fails", async () => {
+    const manifest = {
+      version: 1,
+      repositories: [
+        {
+          provider: "github",
+          repoPath: "acme/web",
+          slug: "github__acme__web",
+          localPath: "/vercel/sandbox",
+          defaultBranch: "main",
+          branchName: "blazebot/task-1",
+          selectedRationale: "ticket mentions web",
+          preAgentSha: "web-base",
+        },
+        {
+          provider: "gitlab",
+          repoPath: "acme/api",
+          slug: "gitlab__acme__api",
+          localPath: "/vercel/sandbox/repos/gitlab__acme__api",
+          defaultBranch: "main",
+          branchName: "blazebot/task-1",
+          selectedRationale: "ticket mentions api",
+          preAgentSha: "api-base",
+        },
+      ],
+    };
+    mockRunCommand.mockImplementation((cmd, args) => {
+      if (cmd === "cat" && args[0] === WORKSPACE_MANIFEST_PATH) {
+        return { exitCode: 0, stdout: vi.fn().mockResolvedValue(JSON.stringify(manifest)) };
+      }
+      if (cmd === "git" && args[0] === "-C" && args[2] === "rev-parse") {
+        return {
+          exitCode: 0,
+          stdout: vi.fn().mockResolvedValue(args[1].includes("gitlab__acme__api") ? "api-head" : "web-head"),
+        };
+      }
+      if (cmd === "git" && args[0] === "-C" && args[2] === "push" && args[1] === "/vercel/sandbox") {
+        return {
+          exitCode: 1,
+          stdout: vi.fn().mockResolvedValue(""),
+          stderr: vi.fn().mockResolvedValue("pre-push hook declined"),
+        };
+      }
+      return { exitCode: 0, stdout: vi.fn().mockResolvedValue(""), stderr: vi.fn().mockResolvedValue("") };
+    });
+
+    const result = await pushWorkspaceFromSandbox("sbx-test-123");
+
+    expect(result.pushed).toBe(false);
+    expect(result.repositories).toEqual([
+      expect.objectContaining({
+        provider: "github",
+        repoPath: "acme/web",
+        changed: true,
+        pushed: false,
+        error: "pre-push hook declined",
+      }),
+      expect.objectContaining({
+        provider: "gitlab",
+        repoPath: "acme/api",
+        changed: true,
+        pushed: true,
+      }),
+    ]);
+  });
+});
+
+describe("fixAndRetryWorkspacePush", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    currentVcsConfig = githubVcsConfig;
+  });
+
+  it("strips credentials, runs a fix agent, and retries the workspace push", async () => {
+    const manifest = {
+      version: 1,
+      repositories: [
+        {
+          provider: "github",
+          repoPath: "acme/web",
+          slug: "github__acme__web",
+          localPath: "/vercel/sandbox",
+          defaultBranch: "main",
+          branchName: "blazebot/task-1",
+          selectedRationale: "ticket mentions web",
+          preAgentSha: "web-base",
+        },
+      ],
+    };
+    mockRunCommand.mockImplementation((cmd, args) => {
+      if (cmd === "cat" && args[0] === WORKSPACE_MANIFEST_PATH) {
+        return { exitCode: 0, stdout: vi.fn().mockResolvedValue(JSON.stringify(manifest)) };
+      }
+      if (cmd === "cat" && args[0] === "/tmp/fix-stdout.txt") {
+        return { exitCode: 0, stdout: vi.fn().mockResolvedValue("fixed") };
+      }
+      if (cmd === "git" && args[0] === "-C" && args[2] === "rev-parse") {
+        return { exitCode: 0, stdout: vi.fn().mockResolvedValue("web-head") };
+      }
+      return { exitCode: 0, stdout: vi.fn().mockResolvedValue(""), stderr: vi.fn().mockResolvedValue("") };
+    });
+
+    const result = await fixAndRetryWorkspacePush(
+      "sbx-test-123",
+      {
+        pushed: false,
+        repositories: [
+          {
+            provider: "github",
+            repoPath: "acme/web",
+            branchName: "blazebot/task-1",
+            changed: true,
+            pushed: false,
+            error: "pre-push hook declined",
+          },
+        ],
+        error: "pre-push hook declined",
+      },
+      "codex",
+      "gpt-5",
+    );
+
+    expect(mockRunCommand).toHaveBeenCalledWith("git", [
+      "-C",
+      "/vercel/sandbox",
+      "remote",
+      "set-url",
+      "origin",
+      "https://github.com/acme/web.git",
+    ]);
+    expect(mockWriteFiles).toHaveBeenCalledWith([
+      {
+        path: "/tmp/fix-prompt.txt",
+        content: expect.any(Buffer),
+      },
+    ]);
+    const prompt = mockWriteFiles.mock.calls[0][0][0].content.toString();
+    expect(prompt).toContain("github:acme/web");
+    expect(prompt).toContain("pre-push hook declined");
+    expect(result.pushed).toBe(true);
   });
 });
 

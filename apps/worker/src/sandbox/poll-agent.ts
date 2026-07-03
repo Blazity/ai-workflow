@@ -1,6 +1,11 @@
 import { getSandboxCredentials } from "./credentials.js";
-import { buildVcsUrls } from "./manager.js";
-import { parseWorkspaceManifest, WORKSPACE_MANIFEST_PATH } from "./repo-workspace.js";
+import { buildCloneUrl, buildVcsUrls } from "../lib/vcs-urls.js";
+import {
+  parseWorkspaceManifest,
+  WORKSPACE_MANIFEST_PATH,
+  type WorkspaceManifest,
+  type WorkspaceRepo,
+} from "./repo-workspace.js";
 
 export interface WorkspacePushRepoResult {
   provider: "github" | "gitlab";
@@ -22,11 +27,76 @@ export async function pushWorkspaceFromSandbox(
 ): Promise<WorkspacePushResult> {
   "use step";
   const { Sandbox } = await import("@vercel/sandbox");
-  const { getVcsProviderConfig, getVcsToken } = await import("../../env.js");
   const sandbox = await Sandbox.get({ sandboxId, ...getSandboxCredentials() });
+  const manifest = await readWorkspaceManifest(sandbox);
+  return pushWorkspaceRepositories(sandbox, manifest);
+}
 
+export async function fixAndRetryWorkspacePush(
+  sandboxId: string,
+  failedPush: WorkspacePushResult,
+  agentKind: "claude" | "codex",
+  model: string,
+): Promise<WorkspacePushResult> {
+  "use step";
+  const { Sandbox } = await import("@vercel/sandbox");
+  const { logger } = await import("../lib/logger.js");
+  const { createRepositoryVcsRuntime } = await import("../lib/vcs-runtime.js");
+  const sandbox = await Sandbox.get({ sandboxId, ...getSandboxCredentials() });
+  const manifest = await readWorkspaceManifest(sandbox);
+
+  for (const repo of manifest.repositories) {
+    const runtime = createRepositoryVcsRuntime({
+      provider: repo.provider,
+      repoPath: repo.repoPath,
+      baseBranch: repo.defaultBranch,
+    });
+    await sandbox.runCommand("git", [
+      "-C",
+      repo.localPath,
+      "remote",
+      "set-url",
+      "origin",
+      buildCloneUrl({ host: runtime.config.host, repoPath: repo.repoPath }),
+    ]);
+  }
+
+  await sandbox.writeFiles([
+    {
+      path: "/tmp/fix-prompt.txt",
+      content: Buffer.from(buildPushFixPrompt(failedPush, manifest)),
+    },
+  ]);
+
+  const cli =
+    agentKind === "codex"
+      ? `codex exec --model "${model}" --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check --json -`
+      : `claude --print --model '${model}' --dangerously-skip-permissions`;
+
+  await sandbox.runCommand("bash", [
+    "-c",
+    `cd /vercel/sandbox || exit 1; if [ -f /tmp/agent-env.sh ]; then source /tmp/agent-env.sh; fi; cat /tmp/fix-prompt.txt | ${cli} > /tmp/fix-stdout.txt 2>/tmp/fix-stderr.txt || true`,
+  ]);
+
+  const fixOut = await sandbox.runCommand("cat", ["/tmp/fix-stdout.txt"]);
+  const fixLog = (await fixOut.stdout()).trim();
+  if (fixLog) {
+    logger.info({ output: fixLog.slice(0, 500) }, "fix_and_retry_workspace_push_output");
+  }
+
+  return pushWorkspaceRepositories(sandbox, manifest);
+}
+
+async function readWorkspaceManifest(sandbox: SandboxSession): Promise<WorkspaceManifest> {
   const manifestResult = await sandbox.runCommand("cat", [WORKSPACE_MANIFEST_PATH]);
-  const manifest = parseWorkspaceManifest(await manifestResult.stdout());
+  return parseWorkspaceManifest(await manifestResult.stdout());
+}
+
+async function pushWorkspaceRepositories(
+  sandbox: SandboxSession,
+  manifest: WorkspaceManifest,
+): Promise<WorkspacePushResult> {
+  const { createRepositoryVcsRuntime } = await import("../lib/vcs-runtime.js");
   const repositories: WorkspacePushRepoResult[] = [];
 
   for (const repo of manifest.repositories) {
@@ -45,9 +115,13 @@ export async function pushWorkspaceFromSandbox(
       continue;
     }
 
-    const config = getVcsProviderConfig(repo.provider);
-    const token = await getVcsToken(config);
-    const urls = buildVcsUrls({ ...config, repoPath: repo.repoPath }, token);
+    const runtime = createRepositoryVcsRuntime({
+      provider: repo.provider,
+      repoPath: repo.repoPath,
+      baseBranch: repo.defaultBranch,
+    });
+    const token = await runtime.getToken();
+    const urls = buildVcsUrls({ ...runtime.config, repoPath: repo.repoPath }, token);
     await sandbox.runCommand("git", ["-C", repo.localPath, "remote", "set-url", "origin", urls.authUrl]);
     await sandbox.runCommand("bash", [
       "-c",
@@ -64,7 +138,7 @@ export async function pushWorkspaceFromSandbox(
 
     if (result.exitCode !== 0) {
       const stdout = (await result.stdout()).trim();
-      const stderr = (await result.stderr()).trim();
+      const stderr = ((await result.stderr?.()) ?? "").trim();
       const error = stderr || stdout;
       repositories.push({
         provider: repo.provider,
@@ -74,7 +148,7 @@ export async function pushWorkspaceFromSandbox(
         pushed: false,
         error,
       });
-      return { pushed: false, repositories, error };
+      continue;
     }
 
     repositories.push({
@@ -94,7 +168,63 @@ export async function pushWorkspaceFromSandbox(
     };
   }
 
+  const failed = repositories.filter((repo) => repo.changed && !repo.pushed);
+  if (failed.length > 0) {
+    return {
+      pushed: false,
+      repositories,
+      error: summarizePushFailures(failed),
+    };
+  }
+
   return { pushed: true, repositories };
+}
+
+function summarizePushFailures(failed: WorkspacePushRepoResult[]): string {
+  return failed
+    .map((repo) => `${repo.provider}:${repo.repoPath}: ${repo.error ?? "push failed"}`)
+    .join("\n");
+}
+
+function buildPushFixPrompt(
+  failedPush: WorkspacePushResult,
+  manifest: WorkspaceManifest,
+): string {
+  const reposByKey = new Map(
+    manifest.repositories.map((repo) => [repositoryKey(repo), repo]),
+  );
+  const failedRepos = failedPush.repositories.filter((repo) => repo.changed && !repo.pushed);
+  const failures = failedRepos.length > 0 ? failedRepos : failedPush.repositories;
+  const details = failures.map((repo) => {
+    const workspaceRepo = reposByKey.get(repositoryKey(repo));
+    return [
+      `- Repository: ${repo.provider}:${repo.repoPath}`,
+      `  Path: ${workspaceRepo?.localPath ?? "(unknown)"}`,
+      `  Branch: ${repo.branchName}`,
+      `  Error: ${repo.error ?? failedPush.error ?? "push failed"}`,
+    ].join("\n");
+  });
+
+  return `The git push failed for one or more Run Workspace repositories.
+
+Fix the issues and commit your fixes. Do not push.
+
+${details.join("\n\n")}`;
+}
+
+function repositoryKey(repo: Pick<WorkspaceRepo | WorkspacePushRepoResult, "provider" | "repoPath">): string {
+  return `${repo.provider}:${repo.repoPath}`;
+}
+
+interface SandboxCommandResult {
+  exitCode: number;
+  stdout: () => Promise<string>;
+  stderr?: () => Promise<string>;
+}
+
+interface SandboxSession {
+  runCommand: (cmd: string, args: string[]) => Promise<SandboxCommandResult>;
+  writeFiles: (files: Array<{ path: string; content: Buffer }>) => Promise<unknown>;
 }
 
 

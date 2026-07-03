@@ -65,12 +65,12 @@ describe("assembleResearchPlanContext", () => {
       ],
     });
 
-    expect(result).toContain("## PR Review Feedback: acme/api");
+    expect(result).toContain("## PR Review Feedback: github:acme/api");
     expect(result).toContain("Fix the null check");
-    expect(result).toContain("## CI/CD Check Results: acme/api");
+    expect(result).toContain("## CI/CD Check Results: github:acme/api");
     expect(result).toContain("### Failed: test");
-    expect(result).toContain("## Merge Conflicts: acme/api");
-    expect(result).toContain("## PR Review Feedback: acme/web");
+    expect(result).toContain("## Merge Conflicts: github:acme/api");
+    expect(result).toContain("## PR Review Feedback: github:acme/web");
     expect(result).toContain("Button copy is wrong");
   });
 

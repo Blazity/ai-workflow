@@ -1,10 +1,11 @@
-import { env, getVcsProviderConfig, type VcsProviderKind } from "../../env.js";
+import { env, type VcsProviderKind } from "../../env.js";
 import { JiraAdapter } from "../adapters/issue-tracker/jira.js";
 import { ChatSDKAdapter } from "../adapters/messaging/chatsdk.js";
 import { NoopMessagingAdapter } from "../adapters/messaging/noop.js";
 import { PostgresRunRegistry } from "../adapters/run-registry/postgres.js";
 import { getDb } from "../db/client.js";
-import { createVCS, createVCSForRepository } from "./create-vcs.js";
+import { createVCS } from "./create-vcs.js";
+import { createRepositoryVCS } from "./vcs-runtime.js";
 import type { IssueTrackerAdapter } from "../adapters/issue-tracker/types.js";
 import type { VCSAdapter } from "../adapters/vcs/types.js";
 import type { MessagingAdapter } from "../adapters/messaging/types.js";
@@ -46,7 +47,8 @@ export function createAdapters(vcsTarget?: VcsAdapterTarget): Adapters {
     }),
     get vcs() {
       return vcsTarget
-        ? createVCSForRepository(getVcsProviderConfig(vcsTarget.provider), {
+        ? createRepositoryVCS({
+            provider: vcsTarget.provider,
             repoPath: vcsTarget.repoPath,
             baseBranch: vcsTarget.baseBranch,
           })
