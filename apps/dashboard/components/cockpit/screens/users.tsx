@@ -167,7 +167,7 @@ export function UsersScreen({
               { id: "invites", label: `Invites · ${pendingCount}` },
             ]}
           />
-          <DarkButton type="button" onClick={() => setInviteOpen(true)}>
+          <DarkButton className="py-[7px]" type="button" onClick={() => setInviteOpen(true)}>
             + Invite member
           </DarkButton>
         </div>
@@ -855,7 +855,7 @@ function GhostButton({
     <button
       {...props}
       className={[
-        "inline-flex h-[28px] items-center justify-center whitespace-nowrap rounded-[3px] border bg-white px-2.5 font-mono text-[10px] font-medium uppercase tracking-[0.04em] transition disabled:cursor-default disabled:opacity-40",
+        "inline-flex items-center justify-center whitespace-nowrap rounded-[3px] border bg-white px-2.5 py-[5px] font-mono text-[10px] font-medium uppercase tracking-[0.04em] transition disabled:cursor-default disabled:opacity-40",
         danger
           ? "border-[#F3CFC7] text-fail-fg hover:bg-fail-bg"
           : "border-neutral-200 text-neutral-900 hover:bg-app-bg",
@@ -876,7 +876,7 @@ function DarkButton({
     <button
       {...props}
       className={[
-        "inline-flex h-9 items-center justify-center whitespace-nowrap rounded-[3px] border border-neutral-900 bg-neutral-900 px-3.5 font-mono text-[11px] font-medium uppercase tracking-[0.04em] text-white transition hover:bg-neutral-800 disabled:cursor-default disabled:opacity-40",
+        "inline-flex items-center justify-center whitespace-nowrap rounded-[3px] border border-neutral-900 bg-neutral-900 px-3.5 py-[5px] font-mono text-[11px] font-medium uppercase tracking-[0.04em] text-white transition hover:bg-neutral-800 disabled:cursor-default disabled:opacity-40",
         className ?? "",
       ].join(" ")}
     >
