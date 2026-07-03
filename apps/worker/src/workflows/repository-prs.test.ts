@@ -190,4 +190,49 @@ describe("createOrUseWorkflowOwnedPullRequestsForRepos", () => {
       baseBranch: "main",
     });
   });
+
+  it("records an already-open provider PR before returning it", async () => {
+    const existing = {
+      id: 45,
+      url: "https://github.com/acme/api/pull/45",
+      branch: "blazebot/aiw-45",
+    };
+    const createPR = vi.fn().mockRejectedValue(new Error("A pull request already exists"));
+    const findPR = vi.fn().mockResolvedValue(existing);
+    mocks.createRepositoryVCS.mockReturnValue({ createPR, findPR });
+
+    const prs = await createOrUseWorkflowOwnedPullRequestsForRepos({
+      ticketKey: "AIW-45",
+      branchName: "blazebot/aiw-45",
+      repositories: [
+        {
+          provider: "github",
+          repoPath: "acme/api",
+          defaultBranch: "main",
+          selectedRationale: "ticket mentions api",
+          workflowOwnedBranch: { branchName: "blazebot/aiw-45" },
+        },
+      ],
+      title: "Fix API",
+    });
+
+    expect(findPR).toHaveBeenCalledWith("blazebot/aiw-45");
+    expect(mocks.upsertWorkflowOwnedBranch).toHaveBeenCalledWith({ db: true }, {
+      ticketKey: "AIW-45",
+      provider: "github",
+      repoPath: "acme/api",
+      branchName: "blazebot/aiw-45",
+      pr: existing,
+    });
+    expect(prs).toEqual([
+      {
+        provider: "github",
+        repoPath: "acme/api",
+        id: 45,
+        url: "https://github.com/acme/api/pull/45",
+        branch: "blazebot/aiw-45",
+        isNew: false,
+      },
+    ]);
+  });
 });

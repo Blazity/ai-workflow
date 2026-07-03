@@ -1,4 +1,5 @@
 import type { SelectedRepository } from "../adapters/vcs/repository-directory.js";
+import type { PullRequest, VCSAdapter } from "../adapters/vcs/types.js";
 
 export interface WorkflowPrLink {
   provider: SelectedRepository["provider"];
@@ -67,11 +68,12 @@ export async function createOrUseWorkflowOwnedPullRequestsForRepos(input: {
     }
 
     const branchName = repo.workflowOwnedBranch?.branchName ?? input.branchName;
-    const pr = await createRepositoryVCS({
+    const vcs = createRepositoryVCS({
       provider: repo.provider,
       repoPath: repo.repoPath,
       baseBranch: repo.defaultBranch,
-    }).createPR(branchName, input.title, "");
+    });
+    const { pr, isNew } = await createOrFindPullRequest(vcs, branchName, input.title);
 
     await upsertWorkflowOwnedBranch(db, {
       ticketKey: input.ticketKey,
@@ -91,10 +93,30 @@ export async function createOrUseWorkflowOwnedPullRequestsForRepos(input: {
       id: pr.id,
       url: pr.url,
       branch: pr.branch,
-      isNew: true,
+      isNew,
     });
   }
 
   return prs;
 }
 createOrUseWorkflowOwnedPullRequestsForRepos.maxRetries = 0;
+
+async function createOrFindPullRequest(
+  vcs: VCSAdapter,
+  branchName: string,
+  title: string,
+): Promise<{ pr: PullRequest; isNew: boolean }> {
+  try {
+    return { pr: await vcs.createPR(branchName, title, ""), isNew: true };
+  } catch (err) {
+    if (!isAlreadyOpenPullRequestError(err)) throw err;
+    const existing = await vcs.findPR(branchName);
+    if (!existing) throw err;
+    return { pr: existing, isNew: false };
+  }
+}
+
+function isAlreadyOpenPullRequestError(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return /already (exists|open)|pull request already exists|merge request already exists/i.test(message);
+}

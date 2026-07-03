@@ -193,6 +193,14 @@ describe("pushWorkspaceFromSandbox", () => {
       "origin",
       "HEAD:refs/heads/blazebot/task-1",
     ]);
+    expect(mockRunCommand).toHaveBeenCalledWith("git", [
+      "-C",
+      "/vercel/sandbox/repos/github__acme__api",
+      "remote",
+      "set-url",
+      "origin",
+      "https://github.com/acme/api.git",
+    ]);
   });
 
   it("pushes mixed-provider repositories with provider-specific auth URLs", async () => {
@@ -311,6 +319,77 @@ describe("pushWorkspaceFromSandbox", () => {
         pushed: true,
       }),
     ]);
+  });
+
+  it("fails fast when setting the authenticated remote fails", async () => {
+    const manifest = {
+      version: 1,
+      repositories: [
+        {
+          provider: "github",
+          repoPath: "acme/web",
+          slug: "github__acme__web",
+          localPath: "/vercel/sandbox",
+          defaultBranch: "main",
+          branchName: "blazebot/task-1",
+          selectedRationale: "ticket mentions web",
+          preAgentSha: "web-base",
+        },
+      ],
+    };
+    mockRunCommand.mockImplementation((cmd, args) => {
+      if (cmd === "cat" && args[0] === WORKSPACE_MANIFEST_PATH) {
+        return { exitCode: 0, stdout: vi.fn().mockResolvedValue(JSON.stringify(manifest)) };
+      }
+      if (cmd === "git" && args[0] === "-C" && args[2] === "rev-parse") {
+        return { exitCode: 0, stdout: vi.fn().mockResolvedValue("web-head") };
+      }
+      if (cmd === "git" && args[0] === "-C" && args[2] === "remote") {
+        return {
+          exitCode: 1,
+          stdout: vi.fn().mockResolvedValue(""),
+          stderr: vi.fn().mockResolvedValue("remote failed"),
+        };
+      }
+      return { exitCode: 0, stdout: vi.fn().mockResolvedValue(""), stderr: vi.fn().mockResolvedValue("") };
+    });
+
+    const result = await pushWorkspaceFromSandbox("sbx-test-123");
+
+    expect(result.pushed).toBe(false);
+    expect(result.repositories).toEqual([
+      expect.objectContaining({
+        repoPath: "acme/web",
+        changed: true,
+        pushed: false,
+        error: "remote failed",
+      }),
+    ]);
+    expect(mockRunCommand).not.toHaveBeenCalledWith("git", [
+      "-C",
+      "/vercel/sandbox",
+      "push",
+      "--force",
+      "origin",
+      "HEAD:refs/heads/blazebot/task-1",
+    ]);
+  });
+
+  it("throws a clear error when the workspace manifest is missing", async () => {
+    mockRunCommand.mockImplementation((cmd, args) => {
+      if (cmd === "cat" && args[0] === WORKSPACE_MANIFEST_PATH) {
+        return {
+          exitCode: 1,
+          stdout: vi.fn().mockResolvedValue(""),
+          stderr: vi.fn().mockResolvedValue("cat: not found"),
+        };
+      }
+      return { exitCode: 0, stdout: vi.fn().mockResolvedValue(""), stderr: vi.fn().mockResolvedValue("") };
+    });
+
+    await expect(pushWorkspaceFromSandbox("sbx-test-123")).rejects.toThrow(
+      /workspace manifest not found in sandbox/i,
+    );
   });
 });
 

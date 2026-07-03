@@ -75,6 +75,19 @@ describe("selectRepositoriesFromMetadata", () => {
     expect(selected.repositories.map((r) => r.repoPath)).toEqual(["acme/api"]);
   });
 
+  it("does not treat embedded repository path prefixes as exact matches", () => {
+    const selected = selectRepositoriesFromMetadata({
+      ticketText: "The failure mentions xxacme/apiary.",
+      repositories: repos,
+      workflowOwnedBranches: [],
+    });
+
+    expect(selected).toEqual({
+      status: "clarification_needed",
+      questions: ["Which repository should this ticket modify?"],
+    });
+  });
+
   it("selects repositories by name and description terms", () => {
     const selected = selectRepositoriesFromMetadata({
       ticketText: "Fix billing webhook retry behavior",

@@ -115,6 +115,69 @@ describe("executePreSandboxPhase", () => {
     expect(result.selectedRepositories).toEqual(selectedRepositories);
   });
 
+  it("preserves selected repositories when a later step is not registered", async () => {
+    const selectedRepositories = [
+      {
+        provider: "github" as const,
+        repoPath: "acme/api",
+        defaultBranch: "main",
+        selectedRationale: "ticket mentions api",
+      },
+    ];
+    const result = await executePreSandboxPhase(
+      input,
+      config([
+        { uses: "select", onFailure: "fail" },
+        { uses: "missing", onFailure: "fail" },
+      ]),
+      {
+        select: vi.fn(async () => ({
+          status: "continue" as const,
+          selectedRepositories,
+        })),
+      },
+    );
+
+    expect(result).toMatchObject({
+      status: "halt",
+      outcome: "failed",
+      selectedRepositories,
+    });
+  });
+
+  it("preserves selected repositories when a later hard-failure step throws", async () => {
+    const selectedRepositories = [
+      {
+        provider: "github" as const,
+        repoPath: "acme/api",
+        defaultBranch: "main",
+        selectedRationale: "ticket mentions api",
+      },
+    ];
+    const result = await executePreSandboxPhase(
+      input,
+      config([
+        { uses: "select", onFailure: "fail" },
+        { uses: "fails", onFailure: "fail" },
+      ]),
+      {
+        select: vi.fn(async () => ({
+          status: "continue" as const,
+          selectedRepositories,
+        })),
+        fails: vi.fn(async () => {
+          throw new Error("boom");
+        }),
+      },
+    );
+
+    expect(result).toMatchObject({
+      status: "halt",
+      outcome: "failed",
+      selectedRepositories,
+    });
+  });
+
   it("returns halt output and does not run later steps", async () => {
     const later: PreSandboxStepHandler = vi.fn(async () => ({ status: "continue" as const }));
     const halt: PreSandboxStepHandler = vi.fn(async () => ({

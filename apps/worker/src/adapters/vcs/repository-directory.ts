@@ -1,6 +1,8 @@
 import type { VcsConfig, VcsProviderConfig } from "../../../env.js";
 import { buildOctokit } from "../../lib/github-auth.js";
 
+const GITLAB_PROJECTS_TIMEOUT_MS = 15_000;
+
 export type VcsProvider = "github" | "gitlab";
 
 export interface RepositoryMetadata {
@@ -78,6 +80,12 @@ class GitLabRepositoryDirectory implements RepositoryDirectory {
       const url = `${baseUrl}/api/v4/projects?membership=true&simple=true&per_page=100&page=${page}`;
       const response = await fetch(url, {
         headers: { "PRIVATE-TOKEN": this.token },
+        signal: AbortSignal.timeout(GITLAB_PROJECTS_TIMEOUT_MS),
+      }).catch((err) => {
+        if (isAbortError(err)) {
+          throw new Error(`GitLab projects list timed out after ${GITLAB_PROJECTS_TIMEOUT_MS}ms`);
+        }
+        throw err;
       });
       if (!response.ok) {
         throw new Error(`GitLab projects list failed: ${response.status} ${response.statusText}`);
@@ -100,6 +108,10 @@ class GitLabRepositoryDirectory implements RepositoryDirectory {
       private: project.visibility !== "public",
     }));
   }
+}
+
+function isAbortError(err: unknown): boolean {
+  return err instanceof DOMException && (err.name === "AbortError" || err.name === "TimeoutError");
 }
 
 export interface WorkflowOwnedBranch {

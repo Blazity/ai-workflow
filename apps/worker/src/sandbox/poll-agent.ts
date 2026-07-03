@@ -89,6 +89,9 @@ export async function fixAndRetryWorkspacePush(
 
 async function readWorkspaceManifest(sandbox: SandboxSession): Promise<WorkspaceManifest> {
   const manifestResult = await sandbox.runCommand("cat", [WORKSPACE_MANIFEST_PATH]);
+  if (manifestResult.exitCode !== 0) {
+    throw new Error(`Workspace manifest not found in sandbox at ${WORKSPACE_MANIFEST_PATH}`);
+  }
   return parseWorkspaceManifest(await manifestResult.stdout());
 }
 
@@ -122,7 +125,19 @@ async function pushWorkspaceRepositories(
     });
     const token = await runtime.getToken();
     const urls = buildVcsUrls({ ...runtime.config, repoPath: repo.repoPath }, token);
-    await sandbox.runCommand("git", ["-C", repo.localPath, "remote", "set-url", "origin", urls.authUrl]);
+    const cloneUrl = buildCloneUrl({ host: runtime.config.host, repoPath: repo.repoPath });
+    const setAuthRemote = await sandbox.runCommand("git", ["-C", repo.localPath, "remote", "set-url", "origin", urls.authUrl]);
+    if (setAuthRemote.exitCode !== 0) {
+      repositories.push({
+        provider: repo.provider,
+        repoPath: repo.repoPath,
+        branchName: repo.branchName,
+        changed: true,
+        pushed: false,
+        error: await commandError(setAuthRemote),
+      });
+      continue;
+    }
     await sandbox.runCommand("bash", [
       "-c",
       `if [ "$(git -C "${repo.localPath}" rev-parse --is-shallow-repository)" = "true" ]; then git -C "${repo.localPath}" fetch --unshallow origin; fi`,
@@ -137,16 +152,26 @@ async function pushWorkspaceRepositories(
     ]);
 
     if (result.exitCode !== 0) {
-      const stdout = (await result.stdout()).trim();
-      const stderr = ((await result.stderr?.()) ?? "").trim();
-      const error = stderr || stdout;
       repositories.push({
         provider: repo.provider,
         repoPath: repo.repoPath,
         branchName: repo.branchName,
         changed: true,
         pushed: false,
-        error,
+        error: await commandError(result),
+      });
+      continue;
+    }
+
+    const resetRemote = await sandbox.runCommand("git", ["-C", repo.localPath, "remote", "set-url", "origin", cloneUrl]);
+    if (resetRemote.exitCode !== 0) {
+      repositories.push({
+        provider: repo.provider,
+        repoPath: repo.repoPath,
+        branchName: repo.branchName,
+        changed: true,
+        pushed: false,
+        error: `failed to reset origin after push: ${await commandError(resetRemote)}`,
       });
       continue;
     }
@@ -178,6 +203,12 @@ async function pushWorkspaceRepositories(
   }
 
   return { pushed: true, repositories };
+}
+
+async function commandError(result: SandboxCommandResult): Promise<string> {
+  const stdout = (await result.stdout()).trim();
+  const stderr = ((await result.stderr?.()) ?? "").trim();
+  return stderr || stdout || "command failed";
 }
 
 function summarizePushFailures(failed: WorkspacePushRepoResult[]): string {

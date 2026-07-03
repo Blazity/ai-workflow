@@ -382,4 +382,59 @@ describe("SandboxManager.provisionMultiRepo", () => {
       preAgentSha: "sha-123",
     });
   });
+
+  it("stops a created sandbox when provisioning fails before returning it", async () => {
+    mockRunCommand.mockRejectedValueOnce(new Error("mkdir failed"));
+    const manager = new SandboxManager(baseConfig);
+
+    await expect(
+      manager.provisionMultiRepo(
+        {
+          branchName: "feat/test-branch",
+          repositories: [
+            {
+              provider: "github",
+              repoPath: "test-org/test-repo",
+              defaultBranch: "main",
+              selectedRationale: "only accessible repository",
+            },
+          ],
+        },
+        makeFakeAgent(),
+        { model: "any", anthropicApiKey: "k" },
+      ),
+    ).rejects.toThrow("mkdir failed");
+    expect(mockStop).toHaveBeenCalled();
+  });
+
+  it("reuses the first repository token instead of minting it twice", async () => {
+    const getToken = vi.fn().mockResolvedValue("ghs_test");
+    const manager = new SandboxManager({
+      providers: [
+        {
+          ...baseConfig.providers[0],
+          getToken,
+        },
+      ],
+      jobTimeoutMs: 1_800_000,
+    });
+
+    await manager.provisionMultiRepo(
+      {
+        branchName: "feat/test-branch",
+        repositories: [
+          {
+            provider: "github",
+            repoPath: "test-org/test-repo",
+            defaultBranch: "main",
+            selectedRationale: "only accessible repository",
+          },
+        ],
+      },
+      makeFakeAgent(),
+      { model: "any", anthropicApiKey: "k" },
+    );
+
+    expect(getToken).toHaveBeenCalledTimes(1);
+  });
 });

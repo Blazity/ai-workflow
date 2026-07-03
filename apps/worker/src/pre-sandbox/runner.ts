@@ -44,6 +44,7 @@ export async function executePreSandboxPhase(
         outcome: "failed",
         message: `Pre-sandbox step "${step.uses}" is not registered.`,
         promptAdditions,
+        selectedRepositories,
       };
     }
 
@@ -91,6 +92,7 @@ export async function executePreSandboxPhase(
         outcome: "failed",
         message,
         promptAdditions,
+        selectedRepositories,
       };
     }
   }

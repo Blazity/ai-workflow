@@ -127,7 +127,25 @@ describe("createRepositoryDirectory", () => {
     );
     expect(mockFetch.mock.calls[0][1]).toMatchObject({
       headers: { "PRIVATE-TOKEN": "glpat" },
+      signal: expect.any(AbortSignal),
     });
+  });
+
+  it("throws a clear error when GitLab repository discovery times out", async () => {
+    const timeoutError = new DOMException("The operation timed out.", "TimeoutError");
+    mockFetch.mockRejectedValueOnce(timeoutError);
+
+    const directory = createRepositoryDirectory({
+      kind: "gitlab",
+      token: "glpat",
+      repoPath: "default/repo",
+      baseBranch: "main",
+      host: "https://gitlab.example.com",
+    });
+
+    await expect(directory.listRepositories()).rejects.toThrow(
+      "GitLab projects list timed out",
+    );
   });
 
   it("merges repositories from every configured provider", async () => {

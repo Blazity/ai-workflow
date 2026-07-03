@@ -85,7 +85,7 @@ export function selectRepositoriesFromMetadata(input: {
 
   const ticketText = input.ticketText.toLowerCase();
   const exactMatches = input.repositories.filter((repo) =>
-    ticketText.includes(repo.repoPath.toLowerCase()),
+    mentionsRepositoryPath(ticketText, repo.repoPath),
   );
   for (const repo of exactMatches) {
     const key = repositoryKey(repo);
@@ -136,6 +136,12 @@ function selectedRepository(
     defaultBranch: repo.defaultBranch,
     selectedRationale,
   };
+}
+
+function mentionsRepositoryPath(ticketText: string, repoPath: string): boolean {
+  const escaped = repoPath.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const boundary = "[^a-z0-9/_-]";
+  return new RegExp(`(^|${boundary})${escaped}($|${boundary})`).test(ticketText);
 }
 
 const STOPWORDS = new Set([
