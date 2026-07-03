@@ -1,11 +1,11 @@
-import { createError, toWebRequest, type H3Event } from "h3";
+import { createError, getHeaders, type H3Event } from "h3";
 import { env } from "../../../env.js";
 import { auth } from "../../auth-instance.js";
 import { getDb } from "../../db/client.js";
 import { getDashboardActor, DashboardAuthError } from "./users-read.js";
 
 export async function requireDashboardActor(event: H3Event) {
-  const session = await auth.api.getSession({ headers: toWebRequest(event).headers });
+  const session = await auth.api.getSession({ headers: headersFromEvent(event) });
   if (!session) {
     throw createError({ statusCode: 401, statusMessage: "Unauthorized" });
   }
@@ -29,4 +29,12 @@ export function toHttpError(error: unknown): never {
     });
   }
   throw error;
+}
+
+function headersFromEvent(event: H3Event): Headers {
+  const headers = new Headers();
+  for (const [name, value] of Object.entries(getHeaders(event))) {
+    if (value !== undefined) headers.set(name, value);
+  }
+  return headers;
 }
