@@ -1,4 +1,4 @@
-import { defineEventHandler, toWebRequest } from "h3";
+import { defineEventHandler, getHeaders, type H3Event } from "h3";
 
 import { auth } from "../auth-instance.js";
 import { assertSession } from "../auth.js";
@@ -15,5 +15,13 @@ import { assertSession } from "../auth.js";
  */
 export default defineEventHandler(async (event) => {
   if (!event.path.startsWith("/api/v1/")) return;
-  await assertSession(auth, toWebRequest(event).headers);
+  await assertSession(auth, headersFromEvent(event));
 });
+
+function headersFromEvent(event: H3Event): Headers {
+  const headers = new Headers();
+  for (const [name, value] of Object.entries(getHeaders(event))) {
+    if (value !== undefined) headers.set(name, value);
+  }
+  return headers;
+}
