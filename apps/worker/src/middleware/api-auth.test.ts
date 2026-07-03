@@ -1,7 +1,17 @@
 import { describe, it, expect, vi } from "vitest";
-import { createApp, eventHandler, toWebHandler } from "h3";
+import { createApp, eventHandler, readBody, toWebHandler } from "h3";
 import { createTestDb } from "../db/test-db.js";
 import { createAuth, seedAuthUser, assertSession, type Auth } from "../auth.js";
+
+vi.mock("h3", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("h3")>();
+  return {
+    ...actual,
+    toWebRequest: vi.fn(() => {
+      throw new Error("toWebRequest must not be needed for header-only auth");
+    }),
+  };
+});
 
 vi.mock("../auth-instance.js", () => {
   const getSession = vi.fn(async () => null);
@@ -77,5 +87,35 @@ describe("api-auth middleware routing guard", () => {
 
     expect(res.status).toBe(401);
     expect(getSession).toHaveBeenCalled();
+  });
+
+  it("does not convert body-bearing api requests to Web Requests before downstream body reads", async () => {
+    const { auth: fakeAuth } = await import("../auth-instance.js");
+    const getSession = fakeAuth.api.getSession as unknown as ReturnType<typeof vi.fn>;
+    getSession.mockClear();
+    getSession.mockResolvedValue({ session: { id: "session_1" }, user: { id: "user_1" } });
+
+    const middleware = (await import("./api-auth.js")).default;
+    const app = createApp();
+    app.use(middleware);
+    app.use(
+      eventHandler(async (event) => {
+        return { body: await readBody(event) };
+      }),
+    );
+
+    const res = await toWebHandler(app)(
+      new Request("http://localhost/api/v1/users/user_1/role", {
+        method: "PATCH",
+        headers: {
+          authorization: "Bearer session-token",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ role: "admin" }),
+      }),
+    );
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ body: { role: "admin" } });
   });
 });
