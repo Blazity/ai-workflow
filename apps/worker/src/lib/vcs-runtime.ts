@@ -47,18 +47,23 @@ export function createRepositoryVCS(target: RepositoryVcsTarget): VCSAdapter {
   return createRepositoryVcsRuntime(target).vcs;
 }
 
-export async function buildSandboxProviderConfigs(): Promise<SandboxProviderConfig[]> {
+export async function buildSandboxProviderConfigs(
+  neededProviders?: Iterable<VcsProviderKind>,
+): Promise<SandboxProviderConfig[]> {
+  const needed = neededProviders ? new Set(neededProviders) : null;
   return Promise.all(
-    getConfiguredVcsProviders().map(async (provider) => {
-      const commitIdentity = await resolveCommitIdentity(provider);
-      return {
-        kind: provider.kind,
-        host: provider.host,
-        getToken: () => getVcsToken(provider),
-        commitAuthor: commitIdentity.name,
-        commitEmail: commitIdentity.email,
-      };
-    }),
+    getConfiguredVcsProviders()
+      .filter((provider) => !needed || needed.has(provider.kind))
+      .map(async (provider) => {
+        const commitIdentity = await resolveCommitIdentity(provider);
+        return {
+          kind: provider.kind,
+          host: provider.host,
+          getToken: () => getVcsToken(provider),
+          commitAuthor: commitIdentity.name,
+          commitEmail: commitIdentity.email,
+        };
+      }),
   );
 }
 

@@ -14,6 +14,17 @@ describe("buildCommitGuardCheckScript", () => {
     expect(script).toContain("status");
   });
 
+  it("isolates git status failures per manifest repository", () => {
+    const script = buildCommitGuardCheckScript({
+      manifestPath: "/vercel/sandbox/aiw-repos.json",
+      ignoredDirs: [".codex"],
+    });
+
+    expect(script).toContain("try {");
+    expect(script).toContain("catch (err)");
+    expect(script).toContain("continue;");
+  });
+
   it("falls back to current repository when no manifest exists", () => {
     const script = buildCommitGuardCheckScript({
       manifestPath: "/missing.json",

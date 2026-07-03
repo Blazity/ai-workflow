@@ -49,68 +49,76 @@ export class SandboxManager {
     const firstToken = await firstProvider.getToken();
     const firstUrls = buildVcsUrls({ ...firstProvider, repoPath: firstRepo.repoPath }, firstToken);
 
-    const sandbox = await Sandbox.create({
-      ...getSandboxCredentials(),
-      source: {
-        type: "git",
-        url: firstUrls.cloneUrl,
-        username: firstUrls.authUser,
-        password: firstToken,
-        revision: firstRepo.branchName,
-      },
-      runtime: "node24",
-      timeout: this.config.jobTimeoutMs,
-    });
+    let sandbox: SandboxInstance | null = null;
+    try {
+      sandbox = await Sandbox.create({
+        ...getSandboxCredentials(),
+        source: {
+          type: "git",
+          url: firstUrls.cloneUrl,
+          username: firstUrls.authUser,
+          password: firstToken,
+          revision: firstRepo.branchName,
+        },
+        runtime: "node24",
+        timeout: this.config.jobTimeoutMs,
+      });
 
-    await sandbox.runCommand("mkdir", ["-p", WORKSPACE_REPOS_DIR]);
+      await sandbox.runCommand("mkdir", ["-p", WORKSPACE_REPOS_DIR]);
 
-    for (const [index, repo] of manifest.repositories.entries()) {
-      const provider = this.providerFor(repo.provider);
-      const token = await provider.getToken();
-      const urls = buildVcsUrls({ ...provider, repoPath: repo.repoPath }, token);
-      if (index > 0) {
-        await sandbox.runCommand("git", [
-          "clone",
-          "--branch",
-          repo.branchName,
-          urls.authUrl,
-          repo.localPath,
-        ]);
-      } else {
-        await sandbox.runCommand("git", ["-C", repo.localPath, "checkout", "-B", repo.branchName]);
-      }
-      await sandbox.runCommand("git", ["-C", repo.localPath, "remote", "set-url", "origin", urls.cloneUrl]);
-      await sandbox.runCommand("git", ["-C", repo.localPath, "config", "user.name", provider.commitAuthor]);
-      await sandbox.runCommand("git", ["-C", repo.localPath, "config", "user.email", provider.commitEmail]);
-
-      if (repo.mergeBase) {
-        await sandbox.runCommand("git", ["-C", repo.localPath, "fetch", urls.authUrl, repo.mergeBase]);
-        await sandbox.runCommand("git", ["-C", repo.localPath, "branch", "-f", repo.mergeBase, "FETCH_HEAD"]);
-        const merge = await sandbox.runCommand("git", ["-C", repo.localPath, "merge", "FETCH_HEAD", "--no-edit"]);
-        if (merge.exitCode !== 0) {
-          const stdout = (await merge.stdout()).trim();
-          const stderr = (await merge.stderr()).trim();
-          const out = stderr || stdout;
-          const { logger } = await import("../lib/logger.js");
-          logger.warn({ repoPath: repo.repoPath, mergeBase: repo.mergeBase, exitCode: merge.exitCode, output: out.slice(0, 500) }, "merge_conflicts_during_provision");
+      for (const [index, repo] of manifest.repositories.entries()) {
+        const provider = index === 0 ? firstProvider : this.providerFor(repo.provider);
+        const token = index === 0 ? firstToken : await provider.getToken();
+        const urls = index === 0
+          ? firstUrls
+          : buildVcsUrls({ ...provider, repoPath: repo.repoPath }, token);
+        if (index > 0) {
+          await sandbox.runCommand("git", [
+            "clone",
+            "--branch",
+            repo.branchName,
+            urls.authUrl,
+            repo.localPath,
+          ]);
+        } else {
+          await sandbox.runCommand("git", ["-C", repo.localPath, "checkout", "-B", repo.branchName]);
         }
+        await sandbox.runCommand("git", ["-C", repo.localPath, "remote", "set-url", "origin", urls.cloneUrl]);
+        await sandbox.runCommand("git", ["-C", repo.localPath, "config", "user.name", provider.commitAuthor]);
+        await sandbox.runCommand("git", ["-C", repo.localPath, "config", "user.email", provider.commitEmail]);
+
+        if (repo.mergeBase) {
+          await sandbox.runCommand("git", ["-C", repo.localPath, "fetch", urls.authUrl, repo.mergeBase]);
+          await sandbox.runCommand("git", ["-C", repo.localPath, "branch", "-f", repo.mergeBase, "FETCH_HEAD"]);
+          const merge = await sandbox.runCommand("git", ["-C", repo.localPath, "merge", "FETCH_HEAD", "--no-edit"]);
+          if (merge.exitCode !== 0) {
+            const stdout = (await merge.stdout()).trim();
+            const stderr = (await merge.stderr()).trim();
+            const out = stderr || stdout;
+            const { logger } = await import("../lib/logger.js");
+            logger.warn({ repoPath: repo.repoPath, mergeBase: repo.mergeBase, exitCode: merge.exitCode, output: out.slice(0, 500) }, "merge_conflicts_during_provision");
+          }
+        }
+
+        const sha = await sandbox.runCommand("git", ["-C", repo.localPath, "rev-parse", "HEAD"]);
+        repo.preAgentSha = (await sha.stdout()).trim();
       }
 
-      const sha = await sandbox.runCommand("git", ["-C", repo.localPath, "rev-parse", "HEAD"]);
-      repo.preAgentSha = (await sha.stdout()).trim();
+      await sandbox.writeFiles([
+        {
+          path: WORKSPACE_MANIFEST_PATH,
+          content: Buffer.from(JSON.stringify(manifest, null, 2)),
+        },
+      ]);
+
+      await agent.install(sandbox);
+      await agent.configure(sandbox, configureOpts);
+
+      return sandbox;
+    } catch (err) {
+      if (sandbox) await this.teardown(sandbox);
+      throw err;
     }
-
-    await sandbox.writeFiles([
-      {
-        path: WORKSPACE_MANIFEST_PATH,
-        content: Buffer.from(JSON.stringify(manifest, null, 2)),
-      },
-    ]);
-
-    await agent.install(sandbox);
-    await agent.configure(sandbox, configureOpts);
-
-    return sandbox;
   }
 
   async teardown(sandbox: SandboxInstance): Promise<void> {

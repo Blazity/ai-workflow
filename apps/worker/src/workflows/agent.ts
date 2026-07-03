@@ -174,33 +174,34 @@ async function fetchSelectedRepositoryPRContexts(
 ): Promise<SelectedRepositoryPromptContext[]> {
   "use step";
   const { createRepositoryVCS } = await import("../lib/vcs-runtime.js");
-  const contexts: SelectedRepositoryPromptContext[] = [];
 
-  for (const repo of repositories) {
+  return Promise.all(repositories.map(async (repo) => {
     const pr = repo.workflowOwnedBranch?.pr;
     if (!pr) {
-      contexts.push({
+      return {
         repository: repo,
         prComments: [],
         checkResults: [],
         hasConflicts: false,
-      });
-      continue;
+      };
     }
     const vcs = createRepositoryVCS({
       provider: repo.provider,
       repoPath: repo.repoPath,
       baseBranch: repo.defaultBranch,
     });
-    contexts.push({
+    const [prComments, checkResults, hasConflicts] = await Promise.all([
+      vcs.getPRComments(pr.id),
+      vcs.getCheckRunResults(pr.id),
+      vcs.getPRConflictStatus(pr.id),
+    ]);
+    return {
       repository: repo,
-      prComments: await vcs.getPRComments(pr.id),
-      checkResults: await vcs.getCheckRunResults(pr.id),
-      hasConflicts: await vcs.getPRConflictStatus(pr.id),
-    });
-  }
-
-  return contexts;
+      prComments,
+      checkResults,
+      hasConflicts,
+    };
+  }));
 }
 
 async function ensureArthurTaskForTicket(
@@ -262,7 +263,9 @@ async function provisionSandbox(
   const agent = createAgentAdapter(agentKind);
 
   const manager = new SandboxManager({
-    providers: await buildSandboxProviderConfigs(),
+    providers: await buildSandboxProviderConfigs(
+      selectedRepositories.map((repo) => repo.provider),
+    ),
     jobTimeoutMs: env.JOB_TIMEOUT_MS,
   });
 
@@ -948,10 +951,6 @@ export async function agentWorkflow(ticketId: string) {
         },
       });
 
-      if (publication.prs.some((pr) => pr.isNew)) {
-        await postPrLinksComment(ticket.identifier, publication.prs);
-      }
-
       if (publication.status === "failed") {
         if (!runUnregisteredBeforePr) {
           await unregisterRun(ticket.identifier);
@@ -964,6 +963,10 @@ export async function agentWorkflow(ticketId: string) {
           usageReport: usageReportOrUndefined(),
         });
         return;
+      }
+
+      if (publication.prs.some((pr) => pr.isNew)) {
+        await postPrLinksComment(ticket.identifier, publication.prs);
       }
 
       const primaryPr = publication.prs[0]!;

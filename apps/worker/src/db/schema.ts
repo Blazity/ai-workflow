@@ -2,6 +2,7 @@ import { sql } from "drizzle-orm";
 import {
   bigint,
   boolean,
+  check,
   index,
   integer,
   jsonb,
@@ -201,7 +202,7 @@ export const workflowOwnedBranches = pgTable(
   },
   (t) => [
     primaryKey({ columns: [t.ticketKey, t.provider, t.repoPath] }),
-    index("workflow_owned_branches_ticket_idx").on(t.ticketKey),
+    check("workflow_owned_branches_provider_check", sql`${t.provider} in ('github', 'gitlab')`),
   ],
 );
 

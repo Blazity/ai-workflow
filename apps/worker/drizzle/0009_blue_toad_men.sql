@@ -8,7 +8,6 @@ CREATE TABLE "workflow_owned_branches" (
 	"pr_branch_name" text,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL,
-	CONSTRAINT "workflow_owned_branches_ticket_key_provider_repo_path_pk" PRIMARY KEY("ticket_key","provider","repo_path")
+	CONSTRAINT "workflow_owned_branches_ticket_key_provider_repo_path_pk" PRIMARY KEY("ticket_key","provider","repo_path"),
+	CONSTRAINT "workflow_owned_branches_provider_check" CHECK ("provider" in ('github', 'gitlab'))
 );
---> statement-breakpoint
-CREATE INDEX "workflow_owned_branches_ticket_idx" ON "workflow_owned_branches" USING btree ("ticket_key");

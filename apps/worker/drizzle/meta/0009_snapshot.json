@@ -358,23 +358,7 @@
           "default": "now()"
         }
       },
-      "indexes": {
-        "workflow_owned_branches_ticket_idx": {
-          "name": "workflow_owned_branches_ticket_idx",
-          "columns": [
-            {
-              "expression": "ticket_key",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
+      "indexes": {},
       "foreignKeys": {},
       "compositePrimaryKeys": {
         "workflow_owned_branches_ticket_key_provider_repo_path_pk": {
@@ -388,7 +372,12 @@
       },
       "uniqueConstraints": {},
       "policies": {},
-      "checkConstraints": {},
+      "checkConstraints": {
+        "workflow_owned_branches_provider_check": {
+          "name": "workflow_owned_branches_provider_check",
+          "value": "\"workflow_owned_branches\".\"provider\" in ('github', 'gitlab')"
+        }
+      },
       "isRLSEnabled": false
     },
     "public.workflow_runs": {
