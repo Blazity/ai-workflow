@@ -3,7 +3,7 @@ import type { RepositoryMetadata } from "../../adapters/vcs/repository-directory
 
 const mocks = vi.hoisted(() => ({
   listRepositories: vi.fn(),
-  getVcsConfig: vi.fn(),
+  getConfiguredVcsProviders: vi.fn(),
   getDb: vi.fn(),
   listWorkflowOwnedBranchesForTicket: vi.fn(),
 }));
@@ -12,10 +12,13 @@ vi.mock("../../adapters/vcs/repository-directory.js", () => ({
   createRepositoryDirectory: vi.fn(() => ({
     listRepositories: mocks.listRepositories,
   })),
+  createRepositoryDirectoryForProviders: vi.fn(() => ({
+    listRepositories: mocks.listRepositories,
+  })),
 }));
 
 vi.mock("../../../env.js", () => ({
-  getVcsConfig: mocks.getVcsConfig,
+  getConfiguredVcsProviders: mocks.getConfiguredVcsProviders,
 }));
 
 vi.mock("../../db/client.js", () => ({
@@ -120,6 +123,7 @@ describe("selectRepositoriesFromMetadata", () => {
       repositories: repos,
       workflowOwnedBranches: [
         {
+          provider: "github",
           repoPath: "acme/web",
           branch: {
             branchName: "blazebot/aiw-45",
@@ -149,13 +153,20 @@ describe("repoSelectionStep", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.getDb.mockReturnValue({ db: true });
-    mocks.getVcsConfig.mockReturnValue({
-      kind: "github",
-      auth: { appId: 1, privateKeyBase64: "pem", installationId: 2 },
-      repoPath: "default/repo",
-      baseBranch: "main",
-      host: "https://github.com",
-    });
+    mocks.getConfiguredVcsProviders.mockReturnValue([
+      {
+        kind: "github",
+        auth: { appId: 1, privateKeyBase64: "pem", installationId: 2 },
+        host: "https://github.com",
+        legacyBaseBranch: "main",
+      },
+      {
+        kind: "gitlab",
+        token: "glpat",
+        host: "https://gitlab.example.com",
+        legacyBaseBranch: "main",
+      },
+    ]);
   });
 
   it("selects repositories using provider metadata and workflow-owned branches", async () => {
@@ -186,9 +197,6 @@ describe("repoSelectionStep", () => {
         },
         run: {
           branchName: "blazebot/aiw-45",
-          isNewTicket: false,
-          hasExistingPr: true,
-          hasMergeConflict: false,
         },
       },
       config: undefined,
@@ -204,5 +212,47 @@ describe("repoSelectionStep", () => {
       }),
     ]);
     expect(result.promptAdditions?.[0]?.content).toContain("acme/web");
+  });
+
+  it("keeps workflow-owned branches provider-scoped when repo paths overlap", () => {
+    const selected = selectRepositoriesFromMetadata({
+      ticketText: "Address review feedback",
+      repositories: [
+        {
+          ...repos[0],
+          provider: "github",
+          repoPath: "acme/app",
+        },
+        {
+          ...repos[1],
+          provider: "gitlab",
+          repoPath: "acme/app",
+        },
+      ],
+      workflowOwnedBranches: [
+        {
+          provider: "gitlab",
+          repoPath: "acme/app",
+          branch: {
+            branchName: "blazebot/aiw-45",
+            pr: {
+              id: 42,
+              url: "https://gitlab.example.com/acme/app/-/merge_requests/42",
+              branch: "blazebot/aiw-45",
+            },
+          },
+        },
+      ],
+    });
+
+    expect(selected.status).toBe("selected");
+    if (selected.status !== "selected") throw new Error("expected selected");
+    expect(selected.repositories).toEqual([
+      expect.objectContaining({
+        provider: "gitlab",
+        repoPath: "acme/app",
+        workflowOwnedBranch: expect.objectContaining({ branchName: "blazebot/aiw-45" }),
+      }),
+    ]);
   });
 });

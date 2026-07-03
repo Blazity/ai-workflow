@@ -1411,7 +1411,7 @@ export async function pushWorkspaceFromSandbox(sandboxId: string): Promise<Works
 }
 ```
 
-Keep existing `pushFromSandbox` as the single-repo compatibility wrapper until the workflow no longer imports it.
+Implementation update: the single-repo push wrapper was removed once the workflow switched to the workspace manifest path.
 
 **Step 4: Add PR/MR helper step**
 
@@ -1552,7 +1552,7 @@ In `apps/worker/src/sandbox/context.ts`, add an optional selected repositories s
 ```md
 ## Selected Repositories
 
-- `acme/api` at `/vercel/sandbox/repos/acme__api` - ticket mentions billing API
+- `acme/api` at `/vercel/sandbox` - ticket mentions billing API
 - `acme/web` at `/vercel/sandbox/repos/acme__web` - Workflow-Owned PR/MR for this ticket
 ```
 
@@ -1563,7 +1563,7 @@ The prompt should instruct the agent to edit only these workspace repos.
 In `agentWorkflow`, replace:
 
 ```ts
-let pushResult = await pushFromSandbox(sandboxId, branchName);
+// Previous single-repo push path using sandboxId + one branchName.
 ...
 const pr = isNewPr ? await createPullRequest(...) : await findPRForBranch(...);
 ```
@@ -1572,9 +1572,6 @@ with:
 
 ```ts
 let pushResult = await pushWorkspaceFromSandbox(sandboxId);
-if (!pushResult.pushed && pushResult.error) {
-  pushResult = await fixAndRetryWorkspacePush(sandboxId, pushResult.error, agentKind, activeModel);
-}
 ...
 const changedRepos = pushResult.repositories.filter((repo) => repo.changed && repo.pushed);
 const prs = await createOrUseWorkflowOwnedPullRequestsForRepos({
@@ -1585,8 +1582,6 @@ const prs = await createOrUseWorkflowOwnedPullRequestsForRepos({
   title: ticket.title,
 });
 ```
-
-If `fixAndRetryWorkspacePush` is too large for this task, keep one retry function that calls the existing fix agent but updates its prompt to say "fix push failures across workspace repositories", then reruns `pushWorkspaceFromSandbox`.
 
 **Step 7: Jira comment with all links**
 

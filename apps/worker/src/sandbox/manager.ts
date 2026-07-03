@@ -1,18 +1,27 @@
 import type { Sandbox as SandboxType } from "@vercel/sandbox";
 import { getSandboxCredentials } from "./credentials.js";
 import type { AgentAdapter, ConfigureOpts } from "./agents/types.js";
-import type { SelectedRepository } from "../adapters/vcs/repository-directory.js";
-import { buildWorkspaceManifest, WORKSPACE_MANIFEST_PATH, WORKSPACE_REPOS_DIR } from "./repo-workspace.js";
+import {
+  buildWorkspaceManifest,
+  WORKSPACE_MANIFEST_PATH,
+  WORKSPACE_REPOS_DIR,
+  type WorkspaceRepo,
+  type WorkspaceRepositoryInput,
+} from "./repo-workspace.js";
+import type { VcsProviderKind } from "../../env.js";
 
-export interface SandboxConfig {
+export interface SandboxProviderConfig {
   kind: "github" | "gitlab";
   /** Resolves a fresh, short-lived token at the moment of use. */
   getToken: () => Promise<string>;
-  repoPath: string;
   host: string;
-  jobTimeoutMs: number;
   commitAuthor: string;
   commitEmail: string;
+}
+
+export interface SandboxConfig {
+  providers: SandboxProviderConfig[];
+  jobTimeoutMs: number;
 }
 
 /** Bare clone URL with no auth — host normalization shared with `buildVcsUrls`. */
@@ -46,63 +55,8 @@ type SandboxInstance = Awaited<ReturnType<typeof SandboxType.create>>;
 export class SandboxManager {
   constructor(private config: SandboxConfig) {}
 
-  async provision(
-    branch: string,
-    agent: AgentAdapter,
-    configureOpts: ConfigureOpts,
-    mergeBase?: string,
-  ): Promise<SandboxInstance> {
-    const { Sandbox } = await import("@vercel/sandbox");
-    const token = await this.config.getToken();
-    const urls = buildVcsUrls(this.config, token);
-
-    const sandbox = await Sandbox.create({
-      ...getSandboxCredentials(),
-      source: {
-        type: "git",
-        url: urls.cloneUrl,
-        username: urls.authUser,
-        password: token,
-        revision: branch,
-      },
-      runtime: "node24",
-      timeout: this.config.jobTimeoutMs,
-    });
-
-    // Strip auth from origin
-    await sandbox.runCommand("git", ["remote", "set-url", "origin", urls.cloneUrl]);
-    // Re-create the local branch (clone is detached HEAD on a revision)
-    await sandbox.runCommand("git", ["checkout", "-B", branch]);
-    // Identity
-    await sandbox.runCommand("bash", [
-      "-c",
-      `git config user.name "${this.config.commitAuthor}" && git config user.email "${this.config.commitEmail}"`,
-    ]);
-
-    if (mergeBase) {
-      const repoUrl = urls.authUrl;
-      await sandbox.runCommand("bash", ["-c", `git fetch "${repoUrl}" ${mergeBase} 2>&1`]);
-      await sandbox.runCommand("bash", ["-c", `git branch ${mergeBase} FETCH_HEAD 2>/dev/null || true`]);
-      const merge = await sandbox.runCommand("bash", ["-c", `git merge FETCH_HEAD --no-edit 2>&1`]);
-      if (merge.exitCode !== 0) {
-        const out = (await merge.stdout()).trim();
-        const { logger } = await import("../lib/logger.js");
-        logger.warn({ mergeBase, exitCode: merge.exitCode, output: out.slice(0, 500) }, "merge_conflicts_during_provision");
-      }
-    }
-
-    // Pre-agent SHA so push step can detect commits
-    await sandbox.runCommand("bash", ["-c", "git rev-parse HEAD > /tmp/.pre-agent-sha"]);
-
-    // --- Agent-specific work delegated to the adapter ---
-    await agent.install(sandbox);
-    await agent.configure(sandbox, configureOpts);
-
-    return sandbox;
-  }
-
   async provisionMultiRepo(
-    input: { branchName: string; repositories: SelectedRepository[]; mergeBase?: string },
+    input: { branchName: string; repositories: WorkspaceRepositoryInput[] },
     agent: AgentAdapter,
     configureOpts: ConfigureOpts,
   ): Promise<SandboxInstance> {
@@ -111,9 +65,14 @@ export class SandboxManager {
     }
 
     const { Sandbox } = await import("@vercel/sandbox");
-    const token = await this.config.getToken();
-    const firstRepo = input.repositories[0];
-    const firstUrls = buildVcsUrls({ ...this.config, repoPath: firstRepo.repoPath }, token);
+    const manifest = buildWorkspaceManifest({
+      branchName: input.branchName,
+      repositories: input.repositories,
+    });
+    const firstRepo = manifest.repositories[0];
+    const firstProvider = this.providerFor(firstRepo.provider);
+    const firstToken = await firstProvider.getToken();
+    const firstUrls = buildVcsUrls({ ...firstProvider, repoPath: firstRepo.repoPath }, firstToken);
 
     const sandbox = await Sandbox.create({
       ...getSandboxCredentials(),
@@ -121,40 +80,44 @@ export class SandboxManager {
         type: "git",
         url: firstUrls.cloneUrl,
         username: firstUrls.authUser,
-        password: token,
-        revision: input.branchName,
+        password: firstToken,
+        revision: firstRepo.branchName,
       },
       runtime: "node24",
       timeout: this.config.jobTimeoutMs,
     });
 
     await sandbox.runCommand("mkdir", ["-p", WORKSPACE_REPOS_DIR]);
-    const manifest = buildWorkspaceManifest({
-      branchName: input.branchName,
-      repositories: input.repositories,
-    });
 
-    for (const repo of manifest.repositories) {
-      const urls = buildVcsUrls({ ...this.config, repoPath: repo.repoPath }, token);
-      await sandbox.runCommand("git", [
-        "clone",
-        "--branch",
-        repo.branchName,
-        urls.authUrl,
-        repo.localPath,
-      ]);
+    for (const [index, repo] of manifest.repositories.entries()) {
+      const provider = this.providerFor(repo.provider);
+      const token = await provider.getToken();
+      const urls = buildVcsUrls({ ...provider, repoPath: repo.repoPath }, token);
+      if (index > 0) {
+        await sandbox.runCommand("git", [
+          "clone",
+          "--branch",
+          repo.branchName,
+          urls.authUrl,
+          repo.localPath,
+        ]);
+      } else {
+        await sandbox.runCommand("git", ["-C", repo.localPath, "checkout", "-B", repo.branchName]);
+      }
       await sandbox.runCommand("git", ["-C", repo.localPath, "remote", "set-url", "origin", urls.cloneUrl]);
-      await sandbox.runCommand("git", ["-C", repo.localPath, "config", "user.name", this.config.commitAuthor]);
-      await sandbox.runCommand("git", ["-C", repo.localPath, "config", "user.email", this.config.commitEmail]);
+      await sandbox.runCommand("git", ["-C", repo.localPath, "config", "user.name", provider.commitAuthor]);
+      await sandbox.runCommand("git", ["-C", repo.localPath, "config", "user.email", provider.commitEmail]);
 
-      if (input.mergeBase) {
-        await sandbox.runCommand("bash", ["-c", `git -C "${repo.localPath}" fetch "${urls.authUrl}" ${input.mergeBase} 2>&1`]);
-        await sandbox.runCommand("bash", ["-c", `git -C "${repo.localPath}" branch ${input.mergeBase} FETCH_HEAD 2>/dev/null || true`]);
-        const merge = await sandbox.runCommand("bash", ["-c", `git -C "${repo.localPath}" merge FETCH_HEAD --no-edit 2>&1`]);
+      if (repo.mergeBase) {
+        await sandbox.runCommand("git", ["-C", repo.localPath, "fetch", urls.authUrl, repo.mergeBase]);
+        await sandbox.runCommand("git", ["-C", repo.localPath, "branch", "-f", repo.mergeBase, "FETCH_HEAD"]);
+        const merge = await sandbox.runCommand("git", ["-C", repo.localPath, "merge", "FETCH_HEAD", "--no-edit"]);
         if (merge.exitCode !== 0) {
-          const out = (await merge.stdout()).trim();
+          const stdout = (await merge.stdout()).trim();
+          const stderr = (await merge.stderr()).trim();
+          const out = stderr || stdout;
           const { logger } = await import("../lib/logger.js");
-          logger.warn({ repoPath: repo.repoPath, mergeBase: input.mergeBase, exitCode: merge.exitCode, output: out.slice(0, 500) }, "merge_conflicts_during_provision");
+          logger.warn({ repoPath: repo.repoPath, mergeBase: repo.mergeBase, exitCode: merge.exitCode, output: out.slice(0, 500) }, "merge_conflicts_during_provision");
         }
       }
 
@@ -177,5 +140,11 @@ export class SandboxManager {
 
   async teardown(sandbox: SandboxInstance): Promise<void> {
     try { await sandbox.stop(); } catch { /* non-critical */ }
+  }
+
+  private providerFor(kind: VcsProviderKind | WorkspaceRepo["provider"]): SandboxProviderConfig {
+    const provider = this.config.providers.find((candidate) => candidate.kind === kind);
+    if (!provider) throw new Error(`Sandbox provider is not configured: ${kind}`);
+    return provider;
   }
 }

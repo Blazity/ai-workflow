@@ -1,18 +1,27 @@
 # GitLab.com setup
 
-This is a single-project GitLab.com setup guide for the token-based ai-workflow integration. Self-managed GitLab is not the scope of this guide.
+This is a GitLab.com setup guide for the token-based ai-workflow integration. Self-managed GitLab is not the scope of this guide.
 
 ## Required environment variables
 
 Set these on the worker deployment:
 
 ```bash
-VCS_KIND=gitlab
 GITLAB_TOKEN=<project access token or bot PAT>
-GITLAB_PROJECT_ID=<namespace/project path>
-GITLAB_BASE_BRANCH=main
 GITLAB_WEBHOOK_SECRET=<random secret>
 ```
+
+Optional legacy single-repo defaults:
+
+```bash
+GITLAB_PROJECT_ID=<namespace/project path>
+GITLAB_BASE_BRANCH=main
+VCS_KIND=gitlab
+```
+
+`GITLAB_PROJECT_ID` is no longer required for multi-repo runs. When it is omitted, ai-workflow lists all projects visible to `GITLAB_TOKEN` and accepts GitLab merge request webhooks after token verification. When it is set, the webhook route keeps the old single-project filter.
+
+You can configure GitHub and GitLab in the same deployment. Provider credentials are additive.
 
 Redeploy the worker after changing environment variables.
 
@@ -39,7 +48,7 @@ Use the Maintainer role for the simplest setup. Developer can work only if the p
 
 Prefer leaving `blazebot/*` branches unprotected. If you protect that branch pattern, make sure the token identity is allowed to push and allowed to force-push `blazebot/*`. The worker always updates bot branches with `git push --force` from the sandbox after each run.
 
-## Find the project ID
+## Optional: set a legacy project ID
 
 Set `GITLAB_PROJECT_ID` to the GitLab project path in `namespace/project` form, for example:
 
@@ -47,7 +56,7 @@ Set `GITLAB_PROJECT_ID` to the GitLab project path in `namespace/project` form, 
 GITLAB_PROJECT_ID=my-group/my-repo
 ```
 
-Numeric GitLab project IDs work for some GitLab REST APIs, but they are not supported by this app. The worker also uses `GITLAB_PROJECT_ID` to build sandbox clone and push URLs, so it must be a namespace/project path. The app URL-encodes the path internally before calling the GitLab API.
+Numeric GitLab project IDs work for some GitLab REST APIs, but they are not supported for this legacy default because sandbox clone and push URLs need a namespace/project path. The app URL-encodes the path internally before calling the GitLab API.
 
 ## Configure the webhook
 

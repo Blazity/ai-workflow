@@ -31,7 +31,7 @@ export default defineEventHandler(async (event) => {
     return { status: "ignored", reason: "malformed_payload" };
   }
 
-  if (!projectMatchesConfiguredId(body?.project, env.GITLAB_PROJECT_ID!)) {
+  if (env.GITLAB_PROJECT_ID && !projectMatchesConfiguredId(body?.project, env.GITLAB_PROJECT_ID)) {
     logger.info(
       { project: body?.project, expected: env.GITLAB_PROJECT_ID },
       "post_pr_gate_gitlab_webhook_skipped_other_project",

@@ -1,4 +1,4 @@
-import type { VcsConfig } from "../../../env.js";
+import type { VcsConfig, VcsProviderConfig } from "../../../env.js";
 import { buildOctokit } from "../../lib/github-auth.js";
 
 export type VcsProvider = "github" | "gitlab";
@@ -20,13 +20,26 @@ export interface RepositoryDirectory {
   listRepositories(): Promise<RepositoryMetadata[]>;
 }
 
-export function createRepositoryDirectory(vcs: VcsConfig): RepositoryDirectory {
+export function createRepositoryDirectory(vcs: VcsProviderConfig | VcsConfig): RepositoryDirectory {
   if (vcs.kind === "github") return new GitHubRepositoryDirectory(vcs.auth);
   return new GitLabRepositoryDirectory(vcs.token, vcs.host);
 }
 
+export function createRepositoryDirectoryForProviders(
+  providers: VcsProviderConfig[],
+): RepositoryDirectory {
+  return {
+    async listRepositories() {
+      const lists = await Promise.all(
+        providers.map((provider) => createRepositoryDirectory(provider).listRepositories()),
+      );
+      return lists.flat();
+    },
+  };
+}
+
 class GitHubRepositoryDirectory implements RepositoryDirectory {
-  constructor(private auth: Extract<VcsConfig, { kind: "github" }>["auth"]) {}
+  constructor(private auth: Extract<VcsProviderConfig | VcsConfig, { kind: "github" }>["auth"]) {}
 
   async listRepositories(): Promise<RepositoryMetadata[]> {
     const octokit = buildOctokit(this.auth) as any;

@@ -62,6 +62,7 @@ export default defineEventHandler(async (event) => {
       isDraft: !!pr.draft,
       url: pr.html_url,
       ownerRepo,
+      provider: "github",
     },
   });
 });

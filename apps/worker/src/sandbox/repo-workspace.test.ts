@@ -11,7 +11,33 @@ describe("repo workspace manifest", () => {
     expect(buildRepoSlug("group/sub/repo")).toBe("group__sub__repo");
   });
 
-  it("builds manifest entries from selected repositories", () => {
+  it("prefixes non-root workspace paths with provider to avoid cross-provider collisions", () => {
+    const manifest = buildWorkspaceManifest({
+      branchName: "blazebot/aiw-45",
+      repositories: [
+        {
+          provider: "github",
+          repoPath: "acme/app",
+          defaultBranch: "main",
+          selectedRationale: "ticket mentions app",
+        },
+        {
+          provider: "gitlab",
+          repoPath: "acme/app",
+          defaultBranch: "main",
+          selectedRationale: "ticket mentions app",
+        },
+      ],
+    });
+
+    expect(manifest.repositories[0].localPath).toBe("/vercel/sandbox");
+    expect(manifest.repositories[1]).toMatchObject({
+      slug: "gitlab__acme__app",
+      localPath: "/vercel/sandbox/repos/gitlab__acme__app",
+    });
+  });
+
+  it("uses the sandbox root as the first selected repository path", () => {
     const manifest = buildWorkspaceManifest({
       branchName: "blazebot/aiw-45",
       repositories: [
@@ -21,6 +47,12 @@ describe("repo workspace manifest", () => {
           defaultBranch: "main",
           selectedRationale: "ticket mentions api",
         },
+        {
+          provider: "github",
+          repoPath: "acme/web",
+          defaultBranch: "main",
+          selectedRationale: "ticket mentions web",
+        },
       ],
     });
 
@@ -29,9 +61,15 @@ describe("repo workspace manifest", () => {
         provider: "github",
         repoPath: "acme/api",
         slug: "acme__api",
-        localPath: "/vercel/sandbox/repos/acme__api",
+        localPath: "/vercel/sandbox",
         branchName: "blazebot/aiw-45",
         defaultBranch: "main",
+      }),
+      expect.objectContaining({
+        provider: "github",
+        repoPath: "acme/web",
+        slug: "github__acme__web",
+        localPath: "/vercel/sandbox/repos/github__acme__web",
       }),
     ]);
   });
@@ -84,6 +122,23 @@ describe("repo workspace manifest", () => {
     });
 
     expect(manifest.repositories[0].branchName).toBe("custom/aiw-45");
+  });
+
+  it("preserves repository-specific merge bases", () => {
+    const manifest = buildWorkspaceManifest({
+      branchName: "blazebot/aiw-45",
+      repositories: [
+        {
+          provider: "github",
+          repoPath: "acme/api",
+          defaultBranch: "main",
+          selectedRationale: "workflow-owned branch for this ticket",
+          mergeBase: "main",
+        },
+      ],
+    });
+
+    expect(manifest.repositories[0].mergeBase).toBe("main");
   });
 
   it("parses valid manifest JSON", () => {

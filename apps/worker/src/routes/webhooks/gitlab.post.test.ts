@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("../../../env.js", () => ({
   env: {
     GITLAB_WEBHOOK_SECRET: "secret",
-    GITLAB_PROJECT_ID: "group/demo",
+    GITLAB_PROJECT_ID: undefined,
   },
 }));
 
@@ -98,6 +98,7 @@ describe("POST /webhooks/gitlab", () => {
         isDraft: false,
         url: "https://gitlab.com/group/demo/-/merge_requests/42",
         ownerRepo: "group/demo",
+        provider: "gitlab",
       },
     });
   });

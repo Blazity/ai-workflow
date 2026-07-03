@@ -1,8 +1,4 @@
 preSandbox:
-  runOn:
-    newTicket: true
-    existingPr: true
-    mergeConflict: true
   steps:
     - uses: repo-selection
       name: Select repositories
