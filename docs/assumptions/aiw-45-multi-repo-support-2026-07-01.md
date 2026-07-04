@@ -1,0 +1,10 @@
+# AIW-45 Multi-Repo Support Assumption Ledger
+
+| Assumption | Load-bearing? | Weight | Verdict | Evidence (citation) | Gate status |
+|---|---:|---|---|---|---|
+| The implementation worktree is on the AIW-45 branch and based on `origin/dev`. | yes | critical | TRUE | `git status --short --branch` -> `## codex/aiw-45-multi-repo-support...origin/dev [ahead 2]`; `git merge-base --is-ancestor origin/dev HEAD` -> exit 0 | pass |
+| The worker package has local Vitest tooling available for TDD. | yes | critical | TRUE | `ls apps/worker/node_modules/.bin` -> includes `vitest`; `./node_modules/.bin/vitest run src/lib/github-auth.test.ts` from `apps/worker` -> 1 file passed, 4 tests passed | pass |
+| The plan's exact `pnpm --filter worker test` wrapper is usable in this worktree. | no | medium | FALSE | `CI=true pnpm --filter worker test -- src/lib/github-auth.test.ts` -> `[ERR_PNPM_IGNORED_BUILDS] Ignored build scripts... Run "pnpm approve-builds"` | logged risk: use direct worker binaries for red/green verification and report pnpm wrapper blocker |
+| Drizzle migrations are committed under the worker package and can be extended for ownership records. | yes | high | TRUE | `test -d apps/worker/drizzle && test -f apps/worker/drizzle/meta/_journal.json` -> exit 0; `find apps/worker -maxdepth 3 -type f | rg 'drizzle|migration|sql'` -> shows `apps/worker/drizzle/*.sql` and `apps/worker/drizzle.config.ts` | pass |
+| The current VCS adapter surface is per-repository and can be wrapped by a per-repo factory. | yes | high | TRUE | `sed -n '1,220p' apps/worker/src/adapters/vcs/types.ts` -> `VCSAdapter` methods are branch/PR operations without global discovery; `sed -n '1,30p' apps/worker/src/lib/create-vcs.ts` -> singleton factory currently builds one adapter from env | pass |
+| Open PR/MR search results are enough to decide a ticket owns a repository. | yes | critical | FALSE | Domain decision during grilling: only branches AI Workflow created or durably recorded for the ticket/repository should force-select a repository on reruns; arbitrary open PR/MR matches are not ownership proof. | implementation uses `workflow_owned_branches` records |

@@ -2,6 +2,7 @@ import { sql } from "drizzle-orm";
 import {
   bigint,
   boolean,
+  check,
   index,
   integer,
   jsonb,
@@ -181,6 +182,29 @@ export const workflowRuns = pgTable("workflow_runs", {
   index("workflow_runs_started_at_idx").on(t.startedAt),
   index("workflow_runs_ticket_key_idx").on(t.ticketKey),
 ]);
+
+export const workflowOwnedBranches = pgTable(
+  "workflow_owned_branches",
+  {
+    ticketKey: text("ticket_key").notNull(),
+    provider: text("provider").notNull(),
+    repoPath: text("repo_path").notNull(),
+    branchName: text("branch_name").notNull(),
+    prId: integer("pr_id"),
+    prUrl: text("pr_url"),
+    prBranchName: text("pr_branch_name"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.ticketKey, t.provider, t.repoPath] }),
+    check("workflow_owned_branches_provider_check", sql`${t.provider} in ('github', 'gitlab')`),
+  ],
+);
 
 export * from "./auth-schema.js";
 export * from "./email-delivery-schema.js";

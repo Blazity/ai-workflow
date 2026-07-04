@@ -9,13 +9,6 @@ const preSandboxConfigSchema = z
   .object({
     preSandbox: z
       .object({
-        runOn: z
-          .object({
-            newTicket: z.boolean(),
-            existingPr: z.boolean(),
-            mergeConflict: z.boolean(),
-          })
-          .strict(),
         steps: z.array(
           z
             .object({

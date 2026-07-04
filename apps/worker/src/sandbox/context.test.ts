@@ -28,7 +28,7 @@ describe("assembleResearchPlanContext", () => {
     expect(result).not.toContain("## PR Review Feedback");
   });
 
-  it("assembles context with PR feedback for review-fix scenario", () => {
+  it("groups PR feedback, checks, and merge conflicts by selected repository", () => {
     const result = assembleResearchPlanContext({
       ticket: {
         identifier: "TEST-2",
@@ -39,20 +39,39 @@ describe("assembleResearchPlanContext", () => {
       },
       prompt: "prompt",
       branchName: "blazebot/test-2",
-      prComments: [
-        { author: "Bob", body: "Fix the null check", liked: false },
+      repositoryContexts: [
+        {
+          repository: {
+            provider: "github",
+            repoPath: "acme/api",
+            defaultBranch: "main",
+            selectedRationale: "workflow-owned branch for this ticket",
+          },
+          prComments: [{ author: "Bob", body: "Fix the null check", liked: false }],
+          checkResults: [{ name: "test", status: "completed", conclusion: "failure", logs: "FAIL" }],
+          hasConflicts: true,
+        },
+        {
+          repository: {
+            provider: "github",
+            repoPath: "acme/web",
+            defaultBranch: "main",
+            selectedRationale: "ticket mentions web",
+          },
+          prComments: [{ author: "Alice", body: "Button copy is wrong", liked: false }],
+          checkResults: [],
+          hasConflicts: false,
+        },
       ],
-      checkResults: [
-        { name: "test", status: "completed", conclusion: "failure", logs: "FAIL" },
-      ],
-      hasConflicts: true,
     });
 
-    expect(result).toContain("## PR Review Feedback");
+    expect(result).toContain("## PR Review Feedback: github:acme/api");
     expect(result).toContain("Fix the null check");
-    expect(result).toContain("## CI/CD Check Results");
+    expect(result).toContain("## CI/CD Check Results: github:acme/api");
     expect(result).toContain("### Failed: test");
-    expect(result).toContain("## Merge Conflicts");
+    expect(result).toContain("## Merge Conflicts: github:acme/api");
+    expect(result).toContain("## PR Review Feedback: github:acme/web");
+    expect(result).toContain("Button copy is wrong");
   });
 
   it("renders attachments index when attachments are provided", () => {
@@ -152,6 +171,34 @@ describe("assembleResearchPlanContext", () => {
       branchName: "b",
     });
     expect(withoutAdditions).not.toContain("## Pre-Sandbox");
+  });
+
+  it("renders selected repositories with Run Workspace paths", () => {
+    const result = assembleResearchPlanContext({
+      ticket: { identifier: "X", title: "t", description: "d", acceptanceCriteria: "a", comments: [] },
+      prompt: "p",
+      branchName: "b",
+      selectedRepositories: [
+        {
+          provider: "github",
+          repoPath: "acme/api",
+          defaultBranch: "main",
+          selectedRationale: "ticket mentions api",
+        },
+        {
+          provider: "github",
+          repoPath: "acme/web",
+          defaultBranch: "main",
+          selectedRationale: "ticket mentions web",
+        },
+      ],
+    });
+
+    expect(result).toContain("## Selected Repositories");
+    expect(result).toContain("acme/api");
+    expect(result).toContain("`github:acme/api` at `/vercel/sandbox`");
+    expect(result).toContain("`github:acme/web` at `/vercel/sandbox/repos/github__acme__web`");
+    expect(result).toContain("Edit only these Run Workspace repositories");
   });
 });
 

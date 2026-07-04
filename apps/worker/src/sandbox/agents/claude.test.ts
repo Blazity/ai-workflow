@@ -369,7 +369,9 @@ describe("ClaudeAgentAdapter.setCommitGuard", () => {
     await adapter.setCommitGuard(sandbox, true);
 
     const calls = runCommand.mock.calls;
-    expect(calls.some(([cmd, args]) => cmd === "bash" && args[1].includes("commit-guard.sh"))).toBe(true);
+    const scriptCall = calls.find(([cmd, args]) => cmd === "bash" && args[1].includes("commit-guard.sh"));
+    expect(scriptCall).toBeDefined();
+    expect(scriptCall![1][1]).toContain("/vercel/sandbox/aiw-repos.json");
     const mergeCall = calls.find(([cmd, args]) =>
       cmd === "node" && args[1] === "-e" && args[2].includes('"commitGuard":"enable"'),
     );

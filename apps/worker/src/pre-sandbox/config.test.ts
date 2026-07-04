@@ -9,11 +9,6 @@ const tempDirs: string[] = [];
 function validConfig(overrides: Record<string, unknown> = {}) {
   return {
     preSandbox: {
-      runOn: {
-        newTicket: true,
-        existingPr: true,
-        mergeConflict: true,
-      },
       steps: [],
       ...overrides,
     },
@@ -38,10 +33,6 @@ describe("pre-sandbox config", () => {
   it("loads the minimal valid YAML config", () => {
     const configPath = writeTempConfig(`
 preSandbox:
-  runOn:
-    newTicket: true
-    existingPr: true
-    mergeConflict: true
   steps: []
 `);
 
@@ -56,19 +47,6 @@ preSandbox:
 
   it("rejects a config without the required root key", () => {
     expect(() => parsePreSandboxConfig({ runOn: {}, steps: [] })).toThrow(/preSandbox/);
-  });
-
-  it("rejects missing runOn booleans", () => {
-    expect(() =>
-      parsePreSandboxConfig(
-        validConfig({
-          runOn: {
-            newTicket: true,
-            existingPr: true,
-          },
-        }),
-      ),
-    ).toThrow(/preSandbox\.runOn\.mergeConflict/);
   });
 
   it("rejects a non-array steps value", () => {

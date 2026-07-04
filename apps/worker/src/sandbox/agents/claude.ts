@@ -5,6 +5,8 @@ import type {
 import { agentOutputSchema, foldResearchOutput, researchOutputSchema, reviewOutputSchema } from "./types.js";
 import { installSkillsToAgentsDir } from "./shared.js";
 import { ARTHUR_TRACER_PY_BASE64 } from "../arthur-tracer.js";
+import { buildCommitGuardCheckScript } from "./commit-guard.js";
+import { WORKSPACE_MANIFEST_PATH } from "../repo-workspace.js";
 
 const ARTHUR_HOOK_EVENTS: ReadonlyArray<readonly [string, string]> = [
   ["UserPromptSubmit", "user_prompt_submit"],
@@ -65,7 +67,10 @@ export class ClaudeAgentAdapter implements AgentAdapter {
         "#!/bin/bash",
         "input=$(cat)",
         `if echo "$input" | grep -q '"stop_hook_active":true'; then exit 0; fi`,
-        `changes=$(git status --porcelain | grep -v '^.. \\.claude/' | grep -v '^?? \\.claude/')`,
+        buildCommitGuardCheckScript({
+          manifestPath: WORKSPACE_MANIFEST_PATH,
+          ignoredDirs: [".claude"],
+        }),
         `if [ -n "$changes" ]; then`,
         `  echo '{"decision":"block","reason":"You have uncommitted changes. You MUST either commit all changes with a descriptive message or revert them before stopping."}' >&2`,
         "  exit 2",
@@ -371,4 +376,3 @@ function tryParseResearchJson(raw: string): ReturnType<typeof researchOutputSche
   }
   return null;
 }
-

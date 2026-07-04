@@ -29,14 +29,17 @@ export function createStepAdapters(): StepAdapters {
           threadStore: runRegistry,
         })
       : new NoopMessagingAdapter();
-  return {
+  const adapters = {
     issueTracker: new JiraAdapter({
       baseUrl: env.JIRA_BASE_URL,
       apiToken: env.JIRA_API_TOKEN,
       projectKey: env.JIRA_PROJECT_KEY,
     }),
-    vcs: createVCS(),
+    get vcs() {
+      return createVCS();
+    },
     messaging,
     runRegistry,
   };
+  return adapters;
 }

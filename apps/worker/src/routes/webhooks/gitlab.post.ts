@@ -1,6 +1,8 @@
 import { createError, defineEventHandler, getHeader, readRawBody } from "h3";
-import { env } from "../../../env.js";
+import { env, getConfiguredVcsProviders } from "../../../env.js";
+import { createRepositoryDirectoryForProviders } from "../../adapters/vcs/repository-directory.js";
 import {
+  type GitLabProject,
   normalizeGitLabMergeRequestEvent,
   projectMatchesConfiguredId,
   verifyGitLabWebhookToken,
@@ -31,9 +33,9 @@ export default defineEventHandler(async (event) => {
     return { status: "ignored", reason: "malformed_payload" };
   }
 
-  if (!projectMatchesConfiguredId(body?.project, env.GITLAB_PROJECT_ID!)) {
+  if (body?.project && !(await gitLabProjectIsAllowed(body.project))) {
     logger.info(
-      { project: body?.project, expected: env.GITLAB_PROJECT_ID },
+      { project: body.project, expected: env.GITLAB_PROJECT_ID ?? "configured_gitlab_repositories" },
       "post_pr_gate_gitlab_webhook_skipped_other_project",
     );
     return { status: "ignored", reason: "other_project" };
@@ -52,3 +54,25 @@ export default defineEventHandler(async (event) => {
 
   return dispatchPostPrGateWebhook(normalized);
 });
+
+async function gitLabProjectIsAllowed(project: GitLabProject): Promise<boolean> {
+  if (env.GITLAB_PROJECT_ID) {
+    return projectMatchesConfiguredId(project, env.GITLAB_PROJECT_ID);
+  }
+
+  const gitLabProviders = getConfiguredVcsProviders().filter((provider) => provider.kind === "gitlab");
+  if (gitLabProviders.length === 0 || !project.path_with_namespace) return false;
+
+  try {
+    const repositories = await createRepositoryDirectoryForProviders(gitLabProviders).listRepositories();
+    return repositories.some(
+      (repo) => repo.provider === "gitlab" && repo.repoPath === project.path_with_namespace,
+    );
+  } catch (err) {
+    logger.warn(
+      { err: (err as Error).message, project },
+      "post_pr_gate_gitlab_webhook_scope_check_failed_closed",
+    );
+    return false;
+  }
+}
