@@ -1,5 +1,8 @@
+import { repoSelectionStep } from "./repo-selection.js";
 import type { PreSandboxStepRegistry } from "../types.js";
 
-export const preSandboxStepRegistry = {} satisfies PreSandboxStepRegistry;
+export const preSandboxStepRegistry = {
+  "repo-selection": repoSelectionStep,
+} satisfies PreSandboxStepRegistry;
 
 export type PreSandboxStepId = keyof typeof preSandboxStepRegistry;

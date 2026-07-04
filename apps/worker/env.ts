@@ -21,7 +21,7 @@ export const env = createEnv({
     COLUMN_BACKLOG: z.string().min(1),
 
     // VCS
-    VCS_KIND: z.enum(["github", "gitlab"]),
+    VCS_KIND: z.enum(["github", "gitlab"]).optional(),
     // GitHub VCS — App auth (no PAT). Private key is base64-encoded PEM so it
     // round-trips cleanly through the Vercel env UI without newline-escaping.
     GITHUB_APP_ID: z.coerce.number().int().positive().optional(),
@@ -151,42 +151,59 @@ export const env = createEnv({
 });
 
 // Cross-field validation — fail fast at startup instead of at first workflow
-// step. createEnv() validates each field individually; provider-specific
-// credentials are intentionally optional at the schema level (only one VCS is
-// active at a time) so we enforce the conditional requirement here.
+// step. Provider credentials are intentionally optional at the schema level:
+// a deployment may configure GitHub, GitLab, or both.
 {
-  if (env.VCS_KIND === "gitlab") {
-    if (!env.GITLAB_TOKEN || !env.GITLAB_PROJECT_ID) {
-      throw new Error(
-        "Invalid environment variables:\n" +
-          "  VCS_KIND=gitlab requires GITLAB_TOKEN and GITLAB_PROJECT_ID",
-      );
-    }
-    if (!env.GITLAB_WEBHOOK_SECRET) {
-      throw new Error(
-        "Invalid environment variables:\n" +
-          "  VCS_KIND=gitlab requires GITLAB_WEBHOOK_SECRET",
-      );
-    }
-  } else if (env.VCS_KIND === "github") {
-    if (
-      !env.GITHUB_APP_ID ||
-      !env.GITHUB_APP_PRIVATE_KEY ||
-      !env.GITHUB_INSTALLATION_ID ||
-      !env.GITHUB_OWNER ||
-      !env.GITHUB_REPO
-    ) {
-      throw new Error(
-        "Invalid environment variables:\n" +
-          "  VCS_KIND=github requires GITHUB_APP_ID, GITHUB_APP_PRIVATE_KEY, GITHUB_INSTALLATION_ID, GITHUB_OWNER, and GITHUB_REPO",
-      );
-    }
-    if (!env.GITHUB_WEBHOOK_SECRET) {
-      throw new Error(
-        "Invalid environment variables:\n" +
-          "  VCS_KIND=github requires GITHUB_WEBHOOK_SECRET",
-      );
-    }
+  const githubCredentialValues = [
+    env.GITHUB_APP_ID,
+    env.GITHUB_APP_PRIVATE_KEY,
+    env.GITHUB_INSTALLATION_ID,
+  ];
+  const hasAnyGithubCredential = githubCredentialValues.some(Boolean);
+  const hasGithubProvider = githubCredentialValues.every(Boolean);
+  const hasGitLabProvider = Boolean(env.GITLAB_TOKEN);
+
+  if (hasAnyGithubCredential && !hasGithubProvider) {
+    throw new Error(
+      "Invalid environment variables:\n" +
+        "  GitHub provider requires GITHUB_APP_ID, GITHUB_APP_PRIVATE_KEY, and GITHUB_INSTALLATION_ID",
+    );
+  }
+  if ((env.GITHUB_OWNER && !env.GITHUB_REPO) || (!env.GITHUB_OWNER && env.GITHUB_REPO)) {
+    throw new Error(
+      "Invalid environment variables:\n" +
+        "  GITHUB_OWNER and GITHUB_REPO must be set together for legacy single-repo config",
+    );
+  }
+  if (env.VCS_KIND === "github" && !hasGithubProvider) {
+    throw new Error(
+      "Invalid environment variables:\n" +
+        "  VCS_KIND=github requires GitHub provider credentials",
+    );
+  }
+  if (env.VCS_KIND === "gitlab" && !hasGitLabProvider) {
+    throw new Error(
+      "Invalid environment variables:\n" +
+        "  VCS_KIND=gitlab requires GITLAB_TOKEN",
+    );
+  }
+  if (!hasGithubProvider && !hasGitLabProvider) {
+    throw new Error(
+      "Invalid environment variables:\n" +
+        "  At least one VCS provider must be configured",
+    );
+  }
+  if (hasGithubProvider && !env.GITHUB_WEBHOOK_SECRET) {
+    throw new Error(
+      "Invalid environment variables:\n" +
+        "  GitHub provider requires GITHUB_WEBHOOK_SECRET",
+    );
+  }
+  if (hasGitLabProvider && !env.GITLAB_WEBHOOK_SECRET) {
+    throw new Error(
+      "Invalid environment variables:\n" +
+        "  GitLab provider requires GITLAB_WEBHOOK_SECRET",
+    );
   }
   if (
     (env.COMMIT_AUTHOR && !env.COMMIT_EMAIL) ||
@@ -242,6 +259,22 @@ export type Env = typeof env;
  * GitHub auth is App-based (mints short-lived installation tokens on demand).
  * GitLab auth is a static PAT (no App equivalent in this codebase).
  */
+export type VcsProviderConfig =
+  | {
+      kind: "github";
+      auth: GitHubAppAuth;
+      host: string;
+      legacyRepoPath?: string;
+      legacyBaseBranch: string;
+    }
+  | {
+      kind: "gitlab";
+      token: string;
+      host: string;
+      legacyRepoPath?: string;
+      legacyBaseBranch: string;
+    };
+
 export type VcsConfig =
   | {
       kind: "github";
@@ -258,45 +291,81 @@ export type VcsConfig =
       host: string;
     };
 
-/** Resolve VCS config from env. Throws if required vars are missing for the active VCS_KIND. */
-export function getVcsConfig(): VcsConfig {
-  if (env.VCS_KIND === "gitlab") {
-    if (!env.GITLAB_TOKEN || !env.GITLAB_PROJECT_ID) {
-      throw new Error("GITLAB_TOKEN and GITLAB_PROJECT_ID are required when VCS_KIND=gitlab");
-    }
-    return {
+export type VcsProviderKind = VcsProviderConfig["kind"];
+
+/** Resolve every provider configured by credentials. */
+export function getConfiguredVcsProviders(): VcsProviderConfig[] {
+  const providers: VcsProviderConfig[] = [];
+
+  if (env.GITHUB_APP_ID && env.GITHUB_APP_PRIVATE_KEY && env.GITHUB_INSTALLATION_ID) {
+    providers.push({
+      kind: "github",
+      auth: {
+        appId: env.GITHUB_APP_ID,
+        privateKeyBase64: env.GITHUB_APP_PRIVATE_KEY,
+        installationId: env.GITHUB_INSTALLATION_ID,
+      },
+      host: "https://github.com",
+      ...(env.GITHUB_OWNER && env.GITHUB_REPO
+        ? { legacyRepoPath: `${env.GITHUB_OWNER}/${env.GITHUB_REPO}` }
+        : {}),
+      legacyBaseBranch: env.GITHUB_BASE_BRANCH ?? "main",
+    });
+  }
+
+  if (env.GITLAB_TOKEN) {
+    providers.push({
       kind: "gitlab",
       token: env.GITLAB_TOKEN,
-      repoPath: env.GITLAB_PROJECT_ID,
-      baseBranch: env.GITLAB_BASE_BRANCH ?? "main",
       host: env.GITLAB_HOST,
-    };
+      ...(env.GITLAB_PROJECT_ID ? { legacyRepoPath: env.GITLAB_PROJECT_ID } : {}),
+      legacyBaseBranch: env.GITLAB_BASE_BRANCH ?? "main",
+    });
   }
-  if (
-    !env.GITHUB_APP_ID ||
-    !env.GITHUB_APP_PRIVATE_KEY ||
-    !env.GITHUB_INSTALLATION_ID ||
-    !env.GITHUB_OWNER ||
-    !env.GITHUB_REPO
-  ) {
-    throw new Error(
-      "GITHUB_APP_ID, GITHUB_APP_PRIVATE_KEY, GITHUB_INSTALLATION_ID, GITHUB_OWNER, and GITHUB_REPO are required when VCS_KIND=github",
-    );
+
+  return providers;
+}
+
+export function getVcsProviderConfig(kind: VcsProviderKind): VcsProviderConfig {
+  const provider = getConfiguredVcsProviders().find((candidate) => candidate.kind === kind);
+  if (!provider) {
+    throw new Error(`VCS provider is not configured: ${kind}`);
+  }
+  return provider;
+}
+
+/** Resolve legacy single-repo VCS config. New multi-repo code should use provider configs. */
+export function getVcsConfig(): VcsConfig {
+  const providers = getConfiguredVcsProviders();
+  const selectedProvider =
+    env.VCS_KIND
+      ? providers.find((provider) => provider.kind === env.VCS_KIND)
+      : providers.length === 1
+        ? providers[0]
+        : undefined;
+
+  if (!selectedProvider) {
+    throw new Error("legacy VCS config requires exactly one selected provider");
+  }
+  if (!selectedProvider.legacyRepoPath) {
+    throw new Error("legacy VCS config requires a repository");
+  }
+
+  if (selectedProvider.kind === "gitlab") {
+    return {
+      kind: "gitlab",
+      token: selectedProvider.token,
+      repoPath: selectedProvider.legacyRepoPath,
+      baseBranch: selectedProvider.legacyBaseBranch,
+      host: selectedProvider.host,
+    };
   }
   return {
     kind: "github",
-    auth: {
-      appId: env.GITHUB_APP_ID,
-      // Pass the base64 string through unchanged. The workflow body calls
-      // getVcsConfig() to read baseBranch, and that runtime doesn't expose
-      // Buffer or atob — so the decode happens at the use site (always inside
-      // a Node step) in src/lib/github-auth.ts.
-      privateKeyBase64: env.GITHUB_APP_PRIVATE_KEY,
-      installationId: env.GITHUB_INSTALLATION_ID,
-    },
-    repoPath: `${env.GITHUB_OWNER}/${env.GITHUB_REPO}`,
-    baseBranch: env.GITHUB_BASE_BRANCH ?? "main",
-    host: "https://github.com",
+    auth: selectedProvider.auth,
+    repoPath: selectedProvider.legacyRepoPath,
+    baseBranch: selectedProvider.legacyBaseBranch,
+    host: selectedProvider.host,
   };
 }
 
@@ -309,7 +378,7 @@ export function getVcsConfig(): VcsConfig {
  * push, Sandbox.create source.password). Do not cache the result outside the
  * operation that needs it.
  */
-export async function getVcsToken(config: VcsConfig): Promise<string> {
+export async function getVcsToken(config: VcsProviderConfig): Promise<string> {
   if (config.kind === "gitlab") return config.token;
   // Dynamic import keeps @octokit/* off the env-validation cold path. Modules
   // that only need env (e.g. Slack webhook handler) shouldn't transitively

@@ -1,3 +1,5 @@
+import type { SelectedRepository } from "../adapters/vcs/repository-directory.js";
+
 export const preSandboxPromptTargets = ["research", "implementation", "review"] as const;
 export type PreSandboxPromptTarget = (typeof preSandboxPromptTargets)[number];
 
@@ -16,6 +18,7 @@ export type PreSandboxStepResult =
   | {
       status: "continue";
       promptAdditions?: PreSandboxPromptAddition[];
+      selectedRepositories?: SelectedRepository[];
     }
   | {
       status: "halt";
@@ -23,6 +26,7 @@ export type PreSandboxStepResult =
       message: string;
       questions?: string[];
       promptAdditions?: PreSandboxPromptAddition[];
+      selectedRepositories?: SelectedRepository[];
     };
 
 export const preSandboxTicketInputFields = [
@@ -46,19 +50,10 @@ export interface PreSandboxStepContext {
   };
   run: {
     branchName: string;
-    isNewTicket: boolean;
-    hasExistingPr: boolean;
-    hasMergeConflict: boolean;
   };
 }
 
 export type PreSandboxOnFailure = "continue" | "fail" | "move_to_backlog";
-
-export interface PreSandboxRunOn {
-  newTicket: boolean;
-  existingPr: boolean;
-  mergeConflict: boolean;
-}
 
 export interface PreSandboxConfigStep<StepId extends string = string> {
   uses: StepId;
@@ -70,7 +65,6 @@ export interface PreSandboxConfigStep<StepId extends string = string> {
 
 export interface PreSandboxConfig<StepId extends string = string> {
   preSandbox: {
-    runOn: PreSandboxRunOn;
     steps: PreSandboxConfigStep<StepId>[];
   };
 }
@@ -96,6 +90,7 @@ export type RunPreSandboxPhaseResult =
   | {
       status: "continue";
       promptAdditions: PreSandboxPromptAdditionsByTarget;
+      selectedRepositories?: SelectedRepository[];
     }
   | {
       status: "halt";
@@ -103,4 +98,5 @@ export type RunPreSandboxPhaseResult =
       message: string;
       questions?: string[];
       promptAdditions: PreSandboxPromptAdditionsByTarget;
+      selectedRepositories?: SelectedRepository[];
     };
