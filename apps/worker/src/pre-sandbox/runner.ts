@@ -34,11 +34,7 @@ export async function executePreSandboxPhase(
   logger?: PreSandboxLogger,
 ): Promise<RunPreSandboxPhaseResult> {
   const promptAdditions = emptyPromptAdditions();
-
-  if (!shouldRunPreSandbox(input.run, config.preSandbox.runOn)) {
-    logger?.info({ run: input.run }, "pre_sandbox_skipped");
-    return { status: "continue", promptAdditions };
-  }
+  let selectedRepositories: RunPreSandboxPhaseResult["selectedRepositories"];
 
   for (const step of config.preSandbox.steps) {
     const handler = registry[step.uses];
@@ -48,6 +44,7 @@ export async function executePreSandboxPhase(
         outcome: "failed",
         message: `Pre-sandbox step "${step.uses}" is not registered.`,
         promptAdditions,
+        selectedRepositories,
       };
     }
 
@@ -69,6 +66,9 @@ export async function executePreSandboxPhase(
       if (result.promptAdditions) {
         addPromptAdditions(promptAdditions, result.promptAdditions);
       }
+      if (result.selectedRepositories) {
+        selectedRepositories = result.selectedRepositories;
+      }
 
       if (result.status === "halt") {
         return {
@@ -77,6 +77,7 @@ export async function executePreSandboxPhase(
           message: result.message,
           questions: result.questions,
           promptAdditions,
+          selectedRepositories,
         };
       }
     } catch (err) {
@@ -91,22 +92,12 @@ export async function executePreSandboxPhase(
         outcome: "failed",
         message,
         promptAdditions,
+        selectedRepositories,
       };
     }
   }
 
-  return { status: "continue", promptAdditions };
-}
-
-function shouldRunPreSandbox(
-  run: PreSandboxStepContext["run"],
-  runOn: PreSandboxConfig["preSandbox"]["runOn"],
-): boolean {
-  return (
-    (run.isNewTicket && runOn.newTicket) ||
-    (run.hasExistingPr && !run.hasMergeConflict && runOn.existingPr) ||
-    (run.hasMergeConflict && runOn.mergeConflict)
-  );
+  return { status: "continue", promptAdditions, selectedRepositories };
 }
 
 function selectTicketFields(

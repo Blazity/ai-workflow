@@ -8,17 +8,18 @@ This replaces the previous "personal access token" setup. The App is **organizat
 
 ## What you'll end up with
 
-Seven values to set on the Vercel deployment:
+Required GitHub provider values to set on the Vercel deployment:
 
-```
-VCS_KIND=github
+```bash
 GITHUB_APP_ID=<numeric app id>
 GITHUB_APP_PRIVATE_KEY=<base64 of the .pem file>
 GITHUB_INSTALLATION_ID=<numeric installation id>
-GITHUB_OWNER=<target org or user that hosts the repo>
-GITHUB_REPO=<target repo name>
 GITHUB_WEBHOOK_SECRET=<random hex, used to sign pull_request webhook deliveries>
 ```
+
+`GITHUB_OWNER`, `GITHUB_REPO`, `GITHUB_BASE_BRANCH`, and `VCS_KIND=github` are legacy single-repo defaults. They may remain set for older deployments, but multi-repo runs discover repositories from the GitHub App installation permissions instead.
+
+You can configure GitHub and GitLab in the same deployment. Provider credentials are additive.
 
 ---
 
@@ -26,7 +27,7 @@ GITHUB_WEBHOOK_SECRET=<random hex, used to sign pull_request webhook deliveries>
 
 Navigate to:
 
-```
+```text
 https://github.com/organizations/<YOUR-ORG>/settings/apps
 ```
 
@@ -110,7 +111,7 @@ GitHub downloads a file like `blazity-ai-workflow.2026-05-07.private-key.pem`.
 
 At the top of the App settings page:
 
-```
+```text
 App ID: 1234567
 ```
 
@@ -139,7 +140,7 @@ Pick whichever of the three paths below matches your situation.
 Immediately after step 8, GitHub redirects you to the configuration page. Copy
 the trailing number from the browser URL:
 
-```
+```text
 # Org install:
 https://github.com/organizations/<ORG>/settings/installations/<INSTALLATION_ID>
                                                               ^^^^^^^^^^^^^^^^^
@@ -200,13 +201,19 @@ The clipboard now holds your `GITHUB_APP_PRIVATE_KEY`.
 
 ## 12. Set the env vars on Vercel
 
-```
+```bash
 GITHUB_APP_ID=1234567
 GITHUB_APP_PRIVATE_KEY=<paste the base64 string>
 GITHUB_INSTALLATION_ID=98765432
+GITHUB_WEBHOOK_SECRET=<the same secret you pasted in step 3>
+```
+
+Optional legacy single-repo defaults:
+
+```bash
 GITHUB_OWNER=<target-org>
 GITHUB_REPO=<target-repo>
-GITHUB_WEBHOOK_SECRET=<the same secret you pasted in step 3>
+GITHUB_BASE_BRANCH=main
 VCS_KIND=github
 ```
 

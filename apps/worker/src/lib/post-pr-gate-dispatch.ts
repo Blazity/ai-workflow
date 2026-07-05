@@ -51,7 +51,7 @@ export async function dispatchPostPrGateWebhook({
 
     const previous = await gateStore.getCurrent(ownerRepo, prNumber);
     if (previous && previous.headSha !== headSha) {
-      await cancelPreviousRun(previous, ownerRepo);
+      await cancelPreviousRun(previous, workflowInput);
     }
 
     // Write the pointer BEFORE start(). The workflow's appendGateStatusRefsForSha
@@ -113,7 +113,7 @@ function checkPostPrGateEligibility(
 
 async function cancelPreviousRun(
   previous: CurrentGateRun,
-  ownerRepo: string,
+  input: PostPrGateWorkflowInput,
 ): Promise<void> {
   try {
     const run = getRun(previous.runId);
@@ -127,7 +127,11 @@ async function cancelPreviousRun(
 
   if (previous.gateStatusRefs.length === 0) return;
 
-  const adapters = createAdapters();
+  const adapters = createAdapters({
+    provider: input.provider,
+    repoPath: input.ownerRepo,
+    baseBranch: input.baseRef,
+  });
   if (!hasGateStatusCapability(adapters.vcs)) return;
 
   for (const ref of previous.gateStatusRefs) {
@@ -137,7 +141,7 @@ async function cancelPreviousRun(
       summary: "Cancelled - newer commit replaces this gate run.",
     }).catch((err) => {
       logger.warn(
-        { ownerRepo, gateStatusRef: ref, err: (err as Error).message },
+        { ownerRepo: input.ownerRepo, gateStatusRef: ref, err: (err as Error).message },
         "post_pr_gate_cancel_status_failed",
       );
     });

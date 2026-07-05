@@ -62,10 +62,10 @@ To target a single app, use pnpm's `--filter`: `pnpm --filter worker test`, `pnp
 
 1. **You move a Jira ticket** to the "AI" column on your board
 2. **ai workflow dispatches** the ticket — instantly via the Jira webhook, or within ~1 min via the Vercel Cron poller as a fallback
-3. **A durable Vercel Workflow** runs the agent in phases (research → implementation) inside a single Vercel Sandbox per ticket
-4. **The sandbox pushes commits** directly to the feature branch, the ticket moves to "AI Review", and your team gets a Slack notification
+3. **A durable Vercel Workflow** selects the relevant repositories, then runs the agent in phases (research → implementation) inside a single Vercel Sandbox per ticket
+4. **The sandbox pushes commits** directly to the selected repository branches, the ticket moves to "AI Review", and your team gets a Slack notification
 
-If the ticket already has an open PR (review feedback), the same workflow re-runs and feeds the PR comments + conflict status into the agent's context. If the agent can't proceed without human input, it posts clarification questions on the ticket and moves it to Backlog.
+If the ticket already has workflow-owned PRs/MRs from a previous ai workflow run, the same workflow re-runs and feeds those PR comments, check results, and conflict status into the agent's context. It does not infer ownership from unrelated open PRs/MRs. If the agent can't proceed without human input, it posts clarification questions on the ticket and moves it to Backlog.
 
 ```mermaid
 flowchart TD
@@ -73,8 +73,8 @@ flowchart TD
     B -- "webhook (instant)" --> D["agentWorkflow"]
     B -- "cron poll (~1 min)" --> D
 
-    D --> E["fetchPRContext (existing PR?)"]
-    E --> F["createFeatureBranch (only if no PR)"]
+    D --> E["runPreSandboxPhaseStep (select repos)"]
+    E --> F["prepareSelectedRepositoryBranches"]
     F --> G["provisionSandbox + register sandbox"]
 
     G --> P1["Phase 1: Research / Plan"]
@@ -86,12 +86,11 @@ flowchart TD
     P2 --> P2R{Impl result?}
     P2R -- "clarification_needed" --> CL
     P2R -- "failed / timeout" --> FB
-    P2R -- "implemented" --> PUSH["pushFromSandbox (git push --force from inside sandbox)"]
+    P2R -- "implemented" --> PUSH["pushWorkspaceFromSandbox (push changed repos)"]
 
     PUSH --> PUSHR{Push ok?}
-    PUSHR -- "no" --> FIX["fixAndRetryPush (lightweight fix agent)"]
-    FIX --> PUSHR
-    PUSHR -- "yes" --> PR["createPullRequest / findPR"]
+    PUSHR -- "no" --> FB
+    PUSHR -- "yes" --> PR["create/re-fetch PRs/MRs"]
     PR --> MV["Move to AI Review → notify pr_ready"]
 
     TD["teardownSandbox (always runs in finally)"]
@@ -140,19 +139,19 @@ There is a single durable workflow — `agentWorkflow` in [`apps/worker/src/work
 | Step | What happens |
 |------|-------------|
 | `fetchAndValidateTicket` | Fetches the ticket from Jira; aborts if it's no longer in the AI column |
-| `fetchPRContext` | Looks up an open PR for `blazebot/{ticket-key}`; returns comments, check results, conflict status (or `null` for fresh tickets) |
-| `createFeatureBranch` | Only when there's no existing PR — creates/resets `blazebot/{ticket-key}` from the base branch |
+| `runPreSandboxPhaseStep` | Runs configured pre-sandbox steps; repository selection chooses the repos the run may edit and includes workflow-owned branches for this ticket by default |
+| `prepareSelectedRepositoryBranches` | Creates/reuses the per-repository `blazebot/{ticket-key}` branch and records AI Workflow branch ownership in Postgres |
+| `fetchSelectedRepositoryPRContexts` | For each selected repository with a workflow-owned PR/MR, loads review comments, check results, and conflict status |
 | `fetchAttachments` | Downloads ticket attachments (size/count limited by `ATTACHMENT_*` env vars) |
 | `ensureArthurTaskForTicket` | Optional — creates an Arthur trace task when `GENAI_ENGINE_*` is configured |
 | `resolveAgentKindOverride` | Per-ticket override via labels (e.g. `agent:codex`); falls back to `AGENT_KIND` |
-| `provisionSandbox` | Provisions a Vercel Sandbox, installs the agent CLI + skills, configures auth + Arthur tracer |
+| `provisionSandbox` | Provisions a Vercel Sandbox with the first selected repo at `/vercel/sandbox`, clones additional repos under `/vercel/sandbox/repos/`, writes the workspace manifest, installs the agent CLI + skills, and configures auth + Arthur tracer |
 | `registerTicketSandbox` | Pins the sandbox id to the ticket in Postgres so cleanup paths can stop it by id |
 | `writeAttachments` | Writes downloaded attachments under `/tmp/attachments/` inside the sandbox |
 | **Phase 1 — Research/Plan** | `setCommitGuardStep(false)` → `planPhaseStep("research")` → `writeAndStartPhase` → `pollUntilDone` (20 min) → `collectPhase` → `parseResearchStep`. Result is `completed`, `clarification_needed`, or `failed` |
 | **Phase 2 — Implementation** | `setCommitGuardStep(true)` → `planPhaseStep("impl", AGENT_SCHEMA)` → `writeAndStartPhase` → `pollUntilDone` (35 min) → `collectPhase` → `parseAgentOutputStep` |
-| `pushFromSandbox` | Injects the VCS token into the sandbox's git remote (after the agent process is dead) and runs `git push --force` from inside the sandbox |
-| `fixAndRetryPush` | Fallback: if the push is rejected (e.g. pre-receive hook), spawns a lightweight fix agent in the same sandbox, then retries the push once |
-| `createPullRequest` / `findPRForBranch` | Opens a new PR (no prior PR) or re-fetches the existing PR (review-fix path) |
+| `pushWorkspaceFromSandbox` | Reads the workspace manifest, injects the VCS token after the agent process is dead, and force-pushes only repositories whose HEAD changed |
+| `createOrUseWorkflowOwnedPullRequestsForRepos` | Opens or reuses PRs/MRs for changed workflow-owned branches |
 | `moveTicket` → `notifyTicket("pr_ready")` | Moves the ticket to "AI Review" and sends the Slack notification with the usage report |
 | `unregisterRun` | Removes the ticket from the Postgres run registry |
 | `teardownSandbox` | Always runs in `finally` — destroys the sandbox regardless of outcome |
@@ -169,7 +168,7 @@ Each agent run gets a fresh, isolated [Vercel Sandbox](https://vercel.com/docs/s
 
 | Input | How it's provided |
 |-------|-------------------|
-| Repository source code | Cloned via `git` source at the feature branch (shallow `depth=1`); unshallowed before push if needed |
+| Repository source code | The first selected repository is cloned via the sandbox `git` source at its feature branch; additional selected repositories are cloned under `/vercel/sandbox/repos/`; changed repos are unshallowed before push if needed |
 | Auth env vars | `ANTHROPIC_API_KEY` (Claude) or `CODEX_API_KEY` / `CODEX_CHATGPT_OAUTH_TOKEN` (Codex) — written to `/tmp/agent-env.sh` (mode 0600) and sourced by each phase script |
 | Model | `CLAUDE_MODEL` or `CODEX_MODEL` baked into the phase wrapper script |
 | Per-phase input | `/tmp/research-requirements.md` and `/tmp/impl-requirements.md` — assembled by `assembleResearchPlanContext` / `assembleImplementationContext` |
@@ -213,21 +212,20 @@ A **commit-guard stop hook** (toggled per phase via `setCommitGuardStep`) blocks
 
 ai workflow pushes from **inside the sandbox**, but only after the agent process has exited. The flow in [`apps/worker/src/sandbox/poll-agent.ts`](./apps/worker/src/sandbox/poll-agent.ts):
 
-1. **Verify commits exist** — compare the saved `/tmp/.pre-agent-sha` to the current `HEAD`. If unchanged, the workflow fails the run with "Agent reported success but made no commits."
-2. **Inject the token** — `git remote set-url origin <auth-url>`. The agent process is already dead at this point and never sees the token.
-3. **Unshallow if needed** — shallow clones miss shared ancestry with `main`, which breaks PR creation.
-4. **Push** — `git push --force origin HEAD:refs/heads/{branch}` (force-push is safe; `blazebot/*` branches have no concurrent pushers).
-
-If the push is rejected (e.g. by a remote pre-receive hook), `fixAndRetryPush` strips the token, spawns a smaller fix agent in the same sandbox with the push error as context, lets it commit fixes, then re-injects the token and retries the push once.
+1. **Read the workspace manifest** — `/vercel/sandbox/aiw-repos.json` lists each selected repository, its local path, branch name, and pre-agent SHA.
+2. **Verify commits exist per repository** — compare each saved `preAgentSha` to that repository's current `HEAD`. Unchanged repositories are skipped; if none changed, the workflow fails the run with "Agent reported success but made no commits."
+3. **Inject the token per changed repository** — `git -C <repo> remote set-url origin <auth-url>`. The agent process is already dead at this point and never sees the token.
+4. **Unshallow if needed** — shallow clones miss shared ancestry with the base branch, which breaks PR/MR creation.
+5. **Push changed repositories** — `git -C <repo> push --force origin HEAD:refs/heads/{branch}`. Force-push is scoped to workflow-owned `blazebot/*` branches.
 
 #### How PRs are created
 
-For fresh tickets, the workflow opens a PR via the VCS adapter (`octokit.pulls.create()` for GitHub, `@gitbeaker/rest` for GitLab):
+For changed repositories without an existing workflow-owned PR/MR record, the workflow opens one via the VCS adapter (`octokit.pulls.create()` for GitHub, `@gitbeaker/rest` for GitLab):
 - **Head**: `blazebot/{ticket-key}`
-- **Base**: `GITHUB_BASE_BRANCH` / `GITLAB_BASE_BRANCH` (default `main`)
+- **Base**: the selected repository's default/base branch
 - **Title**: the ticket title
 
-For tickets that already had a PR (the review-fix path), no new PR is created — the existing PR is updated by the force-push and re-fetched via `findPRForBranch`.
+For repositories that already had a workflow-owned PR/MR record, no new PR/MR is created — the existing one is updated by the force-push and reused for notifications.
 
 #### Teardown
 

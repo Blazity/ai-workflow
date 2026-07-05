@@ -1,4 +1,5 @@
 import type { GateStatusCapableVCS, GateStatusRef } from "../adapters/vcs/types.js";
+import type { VcsProviderKind } from "../../env.js";
 
 export interface PostPrGateWorkflowInput {
   prNumber: number;
@@ -12,6 +13,7 @@ export interface PostPrGateWorkflowInput {
   url: string;
   /** Owner/repo string for gate-store keys. */
   ownerRepo: string;
+  provider: VcsProviderKind;
 }
 
 /**
@@ -41,7 +43,11 @@ async function runGate(input: PostPrGateWorkflowInput) {
   const { hasGateStatusCapability } = await import("../adapters/vcs/types.js");
 
   const config = loadPostPrGateConfig();
-  const adapters = createAdapters();
+  const adapters = createAdapters({
+    provider: input.provider,
+    repoPath: input.ownerRepo,
+    baseBranch: input.baseRef,
+  });
   const gateStore = new GateStore(getDb());
 
   if (config.postPrGate.runOn.botPrsOnly && !input.headRef.startsWith("blazebot/")) {
