@@ -74,6 +74,28 @@ describe("repo workspace manifest", () => {
     ]);
   });
 
+  it("rejects duplicate provider/repository selections before provisioning", () => {
+    expect(() =>
+      buildWorkspaceManifest({
+        branchName: "blazebot/aiw-45",
+        repositories: [
+          {
+            provider: "github",
+            repoPath: "acme/api",
+            defaultBranch: "main",
+            selectedRationale: "ticket mentions api",
+          },
+          {
+            provider: "github",
+            repoPath: "acme/api",
+            defaultBranch: "main",
+            selectedRationale: "workflow-owned branch",
+          },
+        ],
+      }),
+    ).toThrow("Duplicate selected repository: github:acme/api");
+  });
+
   it("preserves workflow-owned branch metadata", () => {
     const manifest = buildWorkspaceManifest({
       branchName: "blazebot/aiw-45",

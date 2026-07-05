@@ -63,9 +63,15 @@ export function buildWorkspaceManifest(input: {
   branchName: string;
   repositories: WorkspaceRepositoryInput[];
 }): WorkspaceManifest {
+  const seen = new Set<string>();
   return {
     version: 1,
     repositories: input.repositories.map((repo, index) => {
+      const key = `${repo.provider}:${repo.repoPath}`;
+      if (seen.has(key)) {
+        throw new Error(`Duplicate selected repository: ${key}`);
+      }
+      seen.add(key);
       const slug = index === 0 ? buildRepoSlug(repo.repoPath) : buildProviderRepoSlug(repo.provider, repo.repoPath);
       return {
         provider: repo.provider,

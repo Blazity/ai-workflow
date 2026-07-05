@@ -1,5 +1,5 @@
 import { getSandboxCredentials } from "./credentials.js";
-import { buildCloneUrl, buildVcsUrls } from "../lib/vcs-urls.js";
+import { buildCloneUrl, buildVcsUrls, gitAuthArgs } from "../lib/vcs-urls.js";
 import {
   parseWorkspaceManifest,
   WORKSPACE_MANIFEST_PATH,
@@ -14,6 +14,7 @@ export interface WorkspacePushRepoResult {
   pushed: boolean;
   changed: boolean;
   error?: string;
+  cleanupError?: string;
 }
 
 export interface WorkspacePushResult {
@@ -44,8 +45,9 @@ export async function fixAndRetryWorkspacePush(
   const { createRepositoryVcsRuntime } = await import("../lib/vcs-runtime.js");
   const sandbox = await Sandbox.get({ sandboxId, ...getSandboxCredentials() });
   const manifest = await readWorkspaceManifest(sandbox);
+  const failedKeys = failedRepositoryKeys(failedPush);
 
-  for (const repo of manifest.repositories) {
+  for (const repo of manifest.repositories.filter((repo) => failedKeys.has(repositoryKey(repo)))) {
     const runtime = createRepositoryVcsRuntime({
       provider: repo.provider,
       repoPath: repo.repoPath,
@@ -84,7 +86,8 @@ export async function fixAndRetryWorkspacePush(
     logger.info({ output: fixLog.slice(0, 500) }, "fix_and_retry_workspace_push_output");
   }
 
-  return pushWorkspaceRepositories(sandbox, manifest);
+  const retryResult = await pushWorkspaceRepositories(sandbox, manifest, failedKeys);
+  return mergePushRetryResults(failedPush, retryResult, failedKeys);
 }
 
 async function readWorkspaceManifest(sandbox: SandboxSession): Promise<WorkspaceManifest> {
@@ -98,11 +101,14 @@ async function readWorkspaceManifest(sandbox: SandboxSession): Promise<Workspace
 async function pushWorkspaceRepositories(
   sandbox: SandboxSession,
   manifest: WorkspaceManifest,
+  onlyRepositories?: Set<string>,
 ): Promise<WorkspacePushResult> {
   const { createRepositoryVcsRuntime } = await import("../lib/vcs-runtime.js");
   const repositories: WorkspacePushRepoResult[] = [];
 
   for (const repo of manifest.repositories) {
+    if (onlyRepositories && !onlyRepositories.has(repositoryKey(repo))) continue;
+
     const headResult = await sandbox.runCommand("git", ["-C", repo.localPath, "rev-parse", "HEAD"]);
     const headSha = (await headResult.stdout()).trim();
     const changed = !repo.preAgentSha || repo.preAgentSha !== headSha;
@@ -124,27 +130,17 @@ async function pushWorkspaceRepositories(
       baseBranch: repo.defaultBranch,
     });
     const token = await runtime.getToken();
-    const urls = buildVcsUrls({ ...runtime.config, repoPath: repo.repoPath }, token);
+    const urls = buildVcsUrls({ ...runtime.config, repoPath: repo.repoPath });
     const cloneUrl = buildCloneUrl({ host: runtime.config.host, repoPath: repo.repoPath });
-    const setAuthRemote = await sandbox.runCommand("git", ["-C", repo.localPath, "remote", "set-url", "origin", urls.authUrl]);
-    if (setAuthRemote.exitCode !== 0) {
-      repositories.push({
-        provider: repo.provider,
-        repoPath: repo.repoPath,
-        branchName: repo.branchName,
-        changed: true,
-        pushed: false,
-        error: await commandError(setAuthRemote),
-      });
-      continue;
+    const authArgs = gitAuthArgs(urls.authUser, token);
+    const shallowResult = await sandbox.runCommand("git", ["-C", repo.localPath, "rev-parse", "--is-shallow-repository"]);
+    if ((await shallowResult.stdout()).trim() === "true") {
+      await sandbox.runCommand("git", ["-C", repo.localPath, ...authArgs, "fetch", "--unshallow", "origin"]);
     }
-    await sandbox.runCommand("bash", [
-      "-c",
-      `if [ "$(git -C "${repo.localPath}" rev-parse --is-shallow-repository)" = "true" ]; then git -C "${repo.localPath}" fetch --unshallow origin; fi`,
-    ]);
     const result = await sandbox.runCommand("git", [
       "-C",
       repo.localPath,
+      ...authArgs,
       "push",
       "--force",
       "origin",
@@ -164,17 +160,9 @@ async function pushWorkspaceRepositories(
     }
 
     const resetRemote = await sandbox.runCommand("git", ["-C", repo.localPath, "remote", "set-url", "origin", cloneUrl]);
-    if (resetRemote.exitCode !== 0) {
-      repositories.push({
-        provider: repo.provider,
-        repoPath: repo.repoPath,
-        branchName: repo.branchName,
-        changed: true,
-        pushed: false,
-        error: `failed to reset origin after push: ${await commandError(resetRemote)}`,
-      });
-      continue;
-    }
+    const cleanupError = resetRemote.exitCode === 0
+      ? undefined
+      : `failed to reset origin after push: ${await commandError(resetRemote)}`;
 
     repositories.push({
       provider: repo.provider,
@@ -182,9 +170,14 @@ async function pushWorkspaceRepositories(
       branchName: repo.branchName,
       changed: true,
       pushed: true,
+      ...(cleanupError ? { cleanupError } : {}),
     });
   }
 
+  return summarizeWorkspacePush(repositories);
+}
+
+function summarizeWorkspacePush(repositories: WorkspacePushRepoResult[]): WorkspacePushResult {
   if (!repositories.some((repo) => repo.changed)) {
     return {
       pushed: false,
@@ -203,6 +196,37 @@ async function pushWorkspaceRepositories(
   }
 
   return { pushed: true, repositories };
+}
+
+function failedRepositoryKeys(failedPush: WorkspacePushResult): Set<string> {
+  const failedKeys = failedPush.repositories
+    .filter((repo) => repo.changed && !repo.pushed)
+    .map(repositoryKey);
+  return new Set(failedKeys.length > 0
+    ? failedKeys
+    : failedPush.repositories.map(repositoryKey));
+}
+
+function mergePushRetryResults(
+  failedPush: WorkspacePushResult,
+  retryResult: WorkspacePushResult,
+  retryKeys: Set<string>,
+): WorkspacePushResult {
+  const retryByKey = new Map(
+    retryResult.repositories.map((repo) => [repositoryKey(repo), repo]),
+  );
+  const merged = failedPush.repositories.map((repo) => {
+    const key = repositoryKey(repo);
+    return retryKeys.has(key) ? retryByKey.get(key) ?? repo : repo;
+  });
+
+  for (const repo of retryResult.repositories) {
+    if (!failedPush.repositories.some((previous) => repositoryKey(previous) === repositoryKey(repo))) {
+      merged.push(repo);
+    }
+  }
+
+  return summarizeWorkspacePush(merged);
 }
 
 async function commandError(result: SandboxCommandResult): Promise<string> {

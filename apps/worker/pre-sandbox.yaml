@@ -2,5 +2,5 @@ preSandbox:
   steps:
     - uses: repo-selection
       name: Select repositories
-      timeoutMs: 30000
+      timeoutMs: 60000
       onFailure: fail

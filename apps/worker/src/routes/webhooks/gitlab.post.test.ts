@@ -178,6 +178,38 @@ describe("POST /webhooks/gitlab", () => {
     expect(mockDispatchPostPrGateWebhook).not.toHaveBeenCalled();
   });
 
+  it("ignores unsupported actions before listing configured repositories", async () => {
+    const payload = JSON.parse(validMergeRequestPayload());
+    payload.object_attributes.action = "close";
+
+    const response = await makeApp()(makeRequest(JSON.stringify(payload)));
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      status: "ignored",
+      reason: "action_close",
+    });
+    expect(mocks.listRepositories).not.toHaveBeenCalled();
+    expect(mockDispatchPostPrGateWebhook).not.toHaveBeenCalled();
+  });
+
+  it("continues processing when repository scope lookup fails open", async () => {
+    mocks.listRepositories.mockRejectedValueOnce(new Error("GitLab unavailable"));
+    mockDispatchPostPrGateWebhook.mockResolvedValueOnce({
+      status: "dispatched",
+      runId: "run_123",
+    });
+
+    const response = await makeApp()(makeRequest(validMergeRequestPayload()));
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      status: "dispatched",
+      runId: "run_123",
+    });
+    expect(mockDispatchPostPrGateWebhook).toHaveBeenCalled();
+  });
+
   it("rejects invalid GitLab webhook tokens before dispatch", async () => {
     const response = await makeApp()(makeRequest(validMergeRequestPayload(), "wrong"));
 

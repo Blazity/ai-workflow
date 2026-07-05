@@ -205,6 +205,8 @@ describe("SandboxManager.provisionMultiRepo", () => {
     expect(mergeFetches[0]![1]).toEqual([
       "-C",
       "/vercel/sandbox",
+      "-c",
+      expect.stringContaining("http.extraHeader=AUTHORIZATION: Basic "),
       "fetch",
       expect.stringContaining("github.com/acme/api.git"),
       "main",
@@ -233,6 +235,8 @@ describe("SandboxManager.provisionMultiRepo", () => {
     expect(mockRunCommand).toHaveBeenCalledWith("git", [
       "-C",
       "/vercel/sandbox",
+      "-c",
+      expect.stringContaining("http.extraHeader=AUTHORIZATION: Basic "),
       "fetch",
       expect.stringContaining("github.com/acme/api.git"),
       "release/2026.07",
@@ -284,6 +288,8 @@ describe("SandboxManager.provisionMultiRepo", () => {
       expect.stringContaining("github.com/acme/api.git"),
     ]));
     expect(mockRunCommand).toHaveBeenCalledWith("git", [
+      "-c",
+      expect.stringContaining("http.extraHeader=AUTHORIZATION: Basic "),
       "clone",
       "--branch",
       "blazebot/aiw-45",
@@ -336,10 +342,12 @@ describe("SandboxManager.provisionMultiRepo", () => {
     );
 
     expect(mockRunCommand).toHaveBeenCalledWith("git", [
+      "-c",
+      expect.stringContaining("http.extraHeader=AUTHORIZATION: Basic "),
       "clone",
       "--branch",
       "blazebot/aiw-45",
-      "https://oauth2:glpat_test@gitlab.example.com/acme/api.git",
+      "https://gitlab.example.com/acme/api.git",
       "/vercel/sandbox/repos/gitlab__acme__api",
     ]);
     expect(mockRunCommand).toHaveBeenCalledWith("git", [
@@ -436,5 +444,155 @@ describe("SandboxManager.provisionMultiRepo", () => {
     );
 
     expect(getToken).toHaveBeenCalledTimes(1);
+  });
+
+  it("reuses provider tokens for additional repositories in one provisioning call", async () => {
+    const getToken = vi.fn().mockResolvedValue("ghs_test");
+    const manager = new SandboxManager({
+      providers: [
+        {
+          ...baseConfig.providers[0],
+          getToken,
+        },
+      ],
+      jobTimeoutMs: 1_800_000,
+    });
+
+    await manager.provisionMultiRepo(
+      {
+        branchName: "feat/test-branch",
+        repositories: [
+          {
+            provider: "github",
+            repoPath: "test-org/api",
+            defaultBranch: "main",
+            selectedRationale: "ticket mentions api",
+          },
+          {
+            provider: "github",
+            repoPath: "test-org/web",
+            defaultBranch: "main",
+            selectedRationale: "ticket mentions web",
+          },
+        ],
+      },
+      makeFakeAgent(),
+      { model: "any", anthropicApiKey: "k" },
+    );
+
+    expect(getToken).toHaveBeenCalledTimes(1);
+  });
+
+  it("fails fast when cloning an additional repository fails", async () => {
+    mockRunCommand.mockImplementation((cmd, args) => {
+      if (cmd === "git" && args.includes("clone")) {
+        return {
+          exitCode: 1,
+          stdout: vi.fn().mockResolvedValue(""),
+          stderr: vi.fn().mockResolvedValue("clone failed"),
+        };
+      }
+      return { exitCode: 0, stdout: mockStdout, stderr: vi.fn().mockResolvedValue("") };
+    });
+    const manager = new SandboxManager(baseConfig);
+
+    await expect(
+      manager.provisionMultiRepo(
+        {
+          branchName: "feat/test-branch",
+          repositories: [
+            {
+              provider: "github",
+              repoPath: "test-org/api",
+              defaultBranch: "main",
+              selectedRationale: "ticket mentions api",
+            },
+            {
+              provider: "github",
+              repoPath: "test-org/web",
+              defaultBranch: "main",
+              selectedRationale: "ticket mentions web",
+            },
+          ],
+        },
+        makeFakeAgent(),
+        { model: "any", anthropicApiKey: "k" },
+      ),
+    ).rejects.toThrow("git clone failed for github:test-org/web: clone failed");
+    expect(mockRunCommand).not.toHaveBeenCalledWith("git", [
+      "-C",
+      "/vercel/sandbox/repos/github__test-org__web",
+      "config",
+      "user.name",
+      "ai-workflow-blazity",
+    ]);
+    expect(mockStop).toHaveBeenCalled();
+  });
+
+  it("fails fast when the bootstrap repository checkout fails", async () => {
+    mockRunCommand.mockImplementation((cmd, args) => {
+      if (cmd === "git" && args[0] === "-C" && args.includes("checkout")) {
+        return {
+          exitCode: 1,
+          stdout: vi.fn().mockResolvedValue(""),
+          stderr: vi.fn().mockResolvedValue("checkout failed"),
+        };
+      }
+      return { exitCode: 0, stdout: mockStdout, stderr: vi.fn().mockResolvedValue("") };
+    });
+    const manager = new SandboxManager(baseConfig);
+
+    await expect(
+      manager.provisionMultiRepo(
+        {
+          branchName: "feat/test-branch",
+          repositories: [
+            {
+              provider: "github",
+              repoPath: "test-org/api",
+              defaultBranch: "main",
+              selectedRationale: "ticket mentions api",
+            },
+          ],
+        },
+        makeFakeAgent(),
+        { model: "any", anthropicApiKey: "k" },
+      ),
+    ).rejects.toThrow("git checkout failed for github:test-org/api: checkout failed");
+    expect(mockStop).toHaveBeenCalled();
+  });
+
+  it("fails fast when pre-agent SHA capture fails", async () => {
+    mockRunCommand.mockImplementation((cmd, args) => {
+      if (cmd === "git" && args[0] === "-C" && args.includes("rev-parse")) {
+        return {
+          exitCode: 1,
+          stdout: vi.fn().mockResolvedValue(""),
+          stderr: vi.fn().mockResolvedValue("rev-parse failed"),
+        };
+      }
+      return { exitCode: 0, stdout: mockStdout, stderr: vi.fn().mockResolvedValue("") };
+    });
+    const manager = new SandboxManager(baseConfig);
+
+    await expect(
+      manager.provisionMultiRepo(
+        {
+          branchName: "feat/test-branch",
+          repositories: [
+            {
+              provider: "github",
+              repoPath: "test-org/api",
+              defaultBranch: "main",
+              selectedRationale: "ticket mentions api",
+            },
+          ],
+        },
+        makeFakeAgent(),
+        { model: "any", anthropicApiKey: "k" },
+      ),
+    ).rejects.toThrow("git rev-parse failed for github:test-org/api: rev-parse failed");
+    expect(mockWriteFiles).not.toHaveBeenCalled();
+    expect(mockStop).toHaveBeenCalled();
   });
 });
