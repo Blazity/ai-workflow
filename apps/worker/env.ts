@@ -154,13 +154,8 @@ export const env = createEnv({
 // step. Provider credentials are intentionally optional at the schema level:
 // a deployment may configure GitHub, GitLab, or both.
 {
-  const githubCredentialValues = [
-    env.GITHUB_APP_ID,
-    env.GITHUB_APP_PRIVATE_KEY,
-    env.GITHUB_INSTALLATION_ID,
-  ];
-  const hasAnyGithubCredential = githubCredentialValues.some(Boolean);
-  const hasGithubProvider = githubCredentialValues.every(Boolean);
+  const hasAnyGithubCredential = hasAnyGithubProviderCredential();
+  const hasGithubProvider = isGithubProviderConfigured();
   const hasGitLabProvider = Boolean(env.GITLAB_TOKEN);
 
   if (hasAnyGithubCredential && !hasGithubProvider) {
@@ -275,35 +270,36 @@ export type VcsProviderConfig =
       legacyBaseBranch: string;
     };
 
-export type VcsConfig =
-  | {
-      kind: "github";
-      auth: GitHubAppAuth;
+type LegacyVcsConfig<T extends VcsProviderConfig> = T extends unknown
+  ? Omit<T, "legacyRepoPath" | "legacyBaseBranch"> & {
       repoPath: string;
       baseBranch: string;
-      host: string;
     }
-  | {
-      kind: "gitlab";
-      token: string;
-      repoPath: string;
-      baseBranch: string;
-      host: string;
-    };
+  : never;
+
+export type VcsConfig = LegacyVcsConfig<VcsProviderConfig>;
 
 export type VcsProviderKind = VcsProviderConfig["kind"];
+
+function hasAnyGithubProviderCredential(): boolean {
+  return Boolean(env.GITHUB_APP_ID || env.GITHUB_APP_PRIVATE_KEY || env.GITHUB_INSTALLATION_ID);
+}
+
+function isGithubProviderConfigured(): boolean {
+  return Boolean(env.GITHUB_APP_ID && env.GITHUB_APP_PRIVATE_KEY && env.GITHUB_INSTALLATION_ID);
+}
 
 /** Resolve every provider configured by credentials. */
 export function getConfiguredVcsProviders(): VcsProviderConfig[] {
   const providers: VcsProviderConfig[] = [];
 
-  if (env.GITHUB_APP_ID && env.GITHUB_APP_PRIVATE_KEY && env.GITHUB_INSTALLATION_ID) {
+  if (isGithubProviderConfigured()) {
     providers.push({
       kind: "github",
       auth: {
-        appId: env.GITHUB_APP_ID,
-        privateKeyBase64: env.GITHUB_APP_PRIVATE_KEY,
-        installationId: env.GITHUB_INSTALLATION_ID,
+        appId: env.GITHUB_APP_ID!,
+        privateKeyBase64: env.GITHUB_APP_PRIVATE_KEY!,
+        installationId: env.GITHUB_INSTALLATION_ID!,
       },
       host: "https://github.com",
       ...(env.GITHUB_OWNER && env.GITHUB_REPO

@@ -391,13 +391,14 @@ async function parseReviewStep(
 async function postPrLinksComment(
   ticketId: string,
   prs: Array<{ provider: SelectedRepository["provider"]; repoPath: string; url: string; id: number }>,
+  heading = "Pull requests ready for review:",
 ): Promise<void> {
   "use step";
   const { createStepAdapters } = await import("../lib/step-adapters.js");
   const { issueTracker } = createStepAdapters();
   const lines = prs.map((pr) => `- ${pr.provider}:${pr.repoPath}: #${pr.id} ${pr.url}`);
   try {
-    await issueTracker.postComment(ticketId, `Pull requests ready for review:\n${lines.join("\n")}`);
+    await issueTracker.postComment(ticketId, `${heading}\n${lines.join("\n")}`);
   } catch (err) {
     const { logger } = await import("../lib/logger.js");
     logger.warn(
@@ -954,6 +955,13 @@ export async function agentWorkflow(ticketId: string) {
       if (publication.status === "failed") {
         if (!runUnregisteredBeforePr) {
           await unregisterRun(ticket.identifier);
+        }
+        if (publication.prs.length > 0) {
+          await postPrLinksComment(
+            ticket.identifier,
+            publication.prs,
+            "Pull requests created before publication failed:",
+          );
         }
         await moveTicket(ticketId, env.COLUMN_BACKLOG);
         await notifyTicket(ticket.identifier, {

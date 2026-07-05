@@ -28,16 +28,18 @@ export interface RepositoryVcsRuntime {
 
 export function createRepositoryVcsRuntime(target: RepositoryVcsTarget): RepositoryVcsRuntime {
   const config = getVcsProviderConfig(target.provider);
+  let vcs: VCSAdapter | undefined;
   return {
     provider: target.provider,
     repoPath: target.repoPath,
     baseBranch: target.baseBranch,
     config,
     get vcs() {
-      return createVCSForRepository(config, {
+      vcs ??= createVCSForRepository(config, {
         repoPath: target.repoPath,
         baseBranch: target.baseBranch,
       });
+      return vcs;
     },
     getToken: () => getVcsToken(config),
   };
@@ -50,21 +52,27 @@ export function createRepositoryVCS(target: RepositoryVcsTarget): VCSAdapter {
 export async function buildSandboxProviderConfigs(
   neededProviders?: Iterable<VcsProviderKind>,
 ): Promise<SandboxProviderConfig[]> {
+  const { logger } = await import("./logger.js");
   const needed = neededProviders ? new Set(neededProviders) : null;
-  return Promise.all(
-    getConfiguredVcsProviders()
-      .filter((provider) => !needed || needed.has(provider.kind))
-      .map(async (provider) => {
-        const commitIdentity = await resolveCommitIdentity(provider);
-        return {
-          kind: provider.kind,
-          host: provider.host,
-          getToken: () => getVcsToken(provider),
-          commitAuthor: commitIdentity.name,
-          commitEmail: commitIdentity.email,
-        };
-      }),
-  );
+  const configs: SandboxProviderConfig[] = [];
+  for (const provider of getConfiguredVcsProviders().filter((provider) => !needed || needed.has(provider.kind))) {
+    try {
+      const commitIdentity = await resolveCommitIdentity(provider);
+      configs.push({
+        kind: provider.kind,
+        host: provider.host,
+        getToken: () => getVcsToken(provider),
+        commitAuthor: commitIdentity.name,
+        commitEmail: commitIdentity.email,
+      });
+    } catch (err) {
+      logger.warn(
+        { provider: provider.kind, err: err instanceof Error ? err.message : String(err) },
+        "sandbox_provider_identity_resolution_failed",
+      );
+    }
+  }
+  return configs;
 }
 
 async function resolveCommitIdentity(

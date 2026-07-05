@@ -180,6 +180,8 @@ describe("pushWorkspaceFromSandbox", () => {
     expect(mockRunCommand).toHaveBeenCalledWith("git", [
       "-C",
       "/vercel/sandbox/repos/github__acme__api",
+      "-c",
+      expect.stringContaining("http.extraHeader=AUTHORIZATION: Basic "),
       "push",
       "--force",
       "origin",
@@ -188,6 +190,8 @@ describe("pushWorkspaceFromSandbox", () => {
     expect(mockRunCommand).not.toHaveBeenCalledWith("git", [
       "-C",
       "/vercel/sandbox/repos/github__acme__web",
+      "-c",
+      expect.stringContaining("http.extraHeader=AUTHORIZATION: Basic "),
       "push",
       "--force",
       "origin",
@@ -203,7 +207,7 @@ describe("pushWorkspaceFromSandbox", () => {
     ]);
   });
 
-  it("pushes mixed-provider repositories with provider-specific auth URLs", async () => {
+  it("pushes mixed-provider repositories with provider-specific auth headers", async () => {
     const manifest = {
       version: 1,
       repositories: [
@@ -248,10 +252,12 @@ describe("pushWorkspaceFromSandbox", () => {
     expect(mockRunCommand).toHaveBeenCalledWith("git", [
       "-C",
       "/vercel/sandbox/repos/gitlab__acme__api",
-      "remote",
-      "set-url",
+      "-c",
+      expect.stringContaining("http.extraHeader=AUTHORIZATION: Basic "),
+      "push",
+      "--force",
       "origin",
-      "https://oauth2:glpat_test_token@gitlab.example.com/acme/api.git",
+      "HEAD:refs/heads/blazebot/task-1",
     ]);
   });
 
@@ -291,7 +297,7 @@ describe("pushWorkspaceFromSandbox", () => {
           stdout: vi.fn().mockResolvedValue(args[1].includes("gitlab__acme__api") ? "api-head" : "web-head"),
         };
       }
-      if (cmd === "git" && args[0] === "-C" && args[2] === "push" && args[1] === "/vercel/sandbox") {
+      if (cmd === "git" && args[0] === "-C" && args[1] === "/vercel/sandbox" && args.includes("push")) {
         return {
           exitCode: 1,
           stdout: vi.fn().mockResolvedValue(""),
@@ -321,7 +327,7 @@ describe("pushWorkspaceFromSandbox", () => {
     ]);
   });
 
-  it("fails fast when setting the authenticated remote fails", async () => {
+  it("keeps the push successful when credential-free remote cleanup fails", async () => {
     const manifest = {
       version: 1,
       repositories: [
@@ -348,7 +354,7 @@ describe("pushWorkspaceFromSandbox", () => {
         return {
           exitCode: 1,
           stdout: vi.fn().mockResolvedValue(""),
-          stderr: vi.fn().mockResolvedValue("remote failed"),
+          stderr: vi.fn().mockResolvedValue("remote cleanup failed"),
         };
       }
       return { exitCode: 0, stdout: vi.fn().mockResolvedValue(""), stderr: vi.fn().mockResolvedValue("") };
@@ -356,22 +362,14 @@ describe("pushWorkspaceFromSandbox", () => {
 
     const result = await pushWorkspaceFromSandbox("sbx-test-123");
 
-    expect(result.pushed).toBe(false);
+    expect(result.pushed).toBe(true);
     expect(result.repositories).toEqual([
       expect.objectContaining({
         repoPath: "acme/web",
         changed: true,
-        pushed: false,
-        error: "remote failed",
+        pushed: true,
+        cleanupError: "failed to reset origin after push: remote cleanup failed",
       }),
-    ]);
-    expect(mockRunCommand).not.toHaveBeenCalledWith("git", [
-      "-C",
-      "/vercel/sandbox",
-      "push",
-      "--force",
-      "origin",
-      "HEAD:refs/heads/blazebot/task-1",
     ]);
   });
 
@@ -466,6 +464,110 @@ describe("fixAndRetryWorkspacePush", () => {
     expect(prompt).toContain("github:acme/web");
     expect(prompt).toContain("pre-push hook declined");
     expect(result.pushed).toBe(true);
+  });
+
+  it("retries only failed repositories and preserves earlier successful pushes", async () => {
+    const manifest = {
+      version: 1,
+      repositories: [
+        {
+          provider: "github",
+          repoPath: "acme/web",
+          slug: "github__acme__web",
+          localPath: "/vercel/sandbox",
+          defaultBranch: "main",
+          branchName: "blazebot/task-1",
+          selectedRationale: "ticket mentions web",
+          preAgentSha: "web-base",
+        },
+        {
+          provider: "gitlab",
+          repoPath: "acme/api",
+          slug: "gitlab__acme__api",
+          localPath: "/vercel/sandbox/repos/gitlab__acme__api",
+          defaultBranch: "main",
+          branchName: "blazebot/task-1",
+          selectedRationale: "ticket mentions api",
+          preAgentSha: "api-base",
+        },
+      ],
+    };
+    mockRunCommand.mockImplementation((cmd, args) => {
+      if (cmd === "cat" && args[0] === WORKSPACE_MANIFEST_PATH) {
+        return { exitCode: 0, stdout: vi.fn().mockResolvedValue(JSON.stringify(manifest)) };
+      }
+      if (cmd === "cat" && args[0] === "/tmp/fix-stdout.txt") {
+        return { exitCode: 0, stdout: vi.fn().mockResolvedValue("fixed") };
+      }
+      if (cmd === "git" && args[0] === "-C" && args[2] === "rev-parse") {
+        return { exitCode: 0, stdout: vi.fn().mockResolvedValue("api-head") };
+      }
+      return { exitCode: 0, stdout: vi.fn().mockResolvedValue(""), stderr: vi.fn().mockResolvedValue("") };
+    });
+
+    const result = await fixAndRetryWorkspacePush(
+      "sbx-test-123",
+      {
+        pushed: false,
+        repositories: [
+          {
+            provider: "github",
+            repoPath: "acme/web",
+            branchName: "blazebot/task-1",
+            changed: true,
+            pushed: true,
+          },
+          {
+            provider: "gitlab",
+            repoPath: "acme/api",
+            branchName: "blazebot/task-1",
+            changed: true,
+            pushed: false,
+            error: "protected branch",
+          },
+        ],
+        error: "protected branch",
+      },
+      "codex",
+      "gpt-5",
+    );
+
+    expect(mockRunCommand).toHaveBeenCalledWith("git", [
+      "-C",
+      "/vercel/sandbox/repos/gitlab__acme__api",
+      "remote",
+      "set-url",
+      "origin",
+      "https://gitlab.example.com/acme/api.git",
+    ]);
+    expect(mockRunCommand).not.toHaveBeenCalledWith("git", [
+      "-C",
+      "/vercel/sandbox",
+      "remote",
+      "set-url",
+      "origin",
+      "https://github.com/acme/web.git",
+    ]);
+    const prompt = mockWriteFiles.mock.calls[0][0][0].content.toString();
+    expect(prompt).toContain("gitlab:acme/api");
+    expect(prompt).not.toContain("github:acme/web");
+    expect(result).toEqual({
+      pushed: true,
+      repositories: [
+        expect.objectContaining({
+          provider: "github",
+          repoPath: "acme/web",
+          changed: true,
+          pushed: true,
+        }),
+        expect.objectContaining({
+          provider: "gitlab",
+          repoPath: "acme/api",
+          changed: true,
+          pushed: true,
+        }),
+      ],
+    });
   });
 });
 

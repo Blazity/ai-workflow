@@ -9,7 +9,7 @@ import {
   type WorkspaceRepositoryInput,
 } from "./repo-workspace.js";
 import type { VcsProviderKind } from "../../env.js";
-import { buildVcsUrls } from "../lib/vcs-urls.js";
+import { buildVcsUrls, gitAuthArgs } from "../lib/vcs-urls.js";
 
 export interface SandboxProviderConfig {
   kind: "github" | "gitlab";
@@ -47,7 +47,16 @@ export class SandboxManager {
     const firstRepo = manifest.repositories[0];
     const firstProvider = this.providerFor(firstRepo.provider);
     const firstToken = await firstProvider.getToken();
-    const firstUrls = buildVcsUrls({ ...firstProvider, repoPath: firstRepo.repoPath }, firstToken);
+    const providerTokens = new Map<VcsProviderKind, string>([[firstProvider.kind, firstToken]]);
+    const tokenFor = async (provider: SandboxProviderConfig) => {
+      let token = providerTokens.get(provider.kind);
+      if (!token) {
+        token = await provider.getToken();
+        providerTokens.set(provider.kind, token);
+      }
+      return token;
+    };
+    const firstUrls = buildVcsUrls({ ...firstProvider, repoPath: firstRepo.repoPath });
 
     let sandbox: SandboxInstance | null = null;
     try {
@@ -68,27 +77,41 @@ export class SandboxManager {
 
       for (const [index, repo] of manifest.repositories.entries()) {
         const provider = index === 0 ? firstProvider : this.providerFor(repo.provider);
-        const token = index === 0 ? firstToken : await provider.getToken();
+        const token = await tokenFor(provider);
         const urls = index === 0
           ? firstUrls
-          : buildVcsUrls({ ...provider, repoPath: repo.repoPath }, token);
+          : buildVcsUrls({ ...provider, repoPath: repo.repoPath });
         if (index > 0) {
-          await sandbox.runCommand("git", [
-            "clone",
-            "--branch",
-            repo.branchName,
-            urls.authUrl,
-            repo.localPath,
-          ]);
+          await requireCommand(
+            await sandbox.runCommand("git", [
+              ...gitAuthArgs(urls.authUser, token),
+              "clone",
+              "--branch",
+              repo.branchName,
+              urls.cloneUrl,
+              repo.localPath,
+            ]),
+            `git clone failed for ${repo.provider}:${repo.repoPath}`,
+          );
         } else {
-          await sandbox.runCommand("git", ["-C", repo.localPath, "checkout", "-B", repo.branchName]);
+          await requireCommand(
+            await sandbox.runCommand("git", ["-C", repo.localPath, "checkout", "-B", repo.branchName]),
+            `git checkout failed for ${repo.provider}:${repo.repoPath}`,
+          );
         }
         await sandbox.runCommand("git", ["-C", repo.localPath, "remote", "set-url", "origin", urls.cloneUrl]);
         await sandbox.runCommand("git", ["-C", repo.localPath, "config", "user.name", provider.commitAuthor]);
         await sandbox.runCommand("git", ["-C", repo.localPath, "config", "user.email", provider.commitEmail]);
 
         if (repo.mergeBase) {
-          await sandbox.runCommand("git", ["-C", repo.localPath, "fetch", urls.authUrl, repo.mergeBase]);
+          await sandbox.runCommand("git", [
+            "-C",
+            repo.localPath,
+            ...gitAuthArgs(urls.authUser, token),
+            "fetch",
+            urls.cloneUrl,
+            repo.mergeBase,
+          ]);
           await sandbox.runCommand("git", ["-C", repo.localPath, "branch", "-f", repo.mergeBase, "FETCH_HEAD"]);
           const merge = await sandbox.runCommand("git", ["-C", repo.localPath, "merge", "FETCH_HEAD", "--no-edit"]);
           if (merge.exitCode !== 0) {
@@ -100,7 +123,10 @@ export class SandboxManager {
           }
         }
 
-        const sha = await sandbox.runCommand("git", ["-C", repo.localPath, "rev-parse", "HEAD"]);
+        const sha = await requireCommand(
+          await sandbox.runCommand("git", ["-C", repo.localPath, "rev-parse", "HEAD"]),
+          `git rev-parse failed for ${repo.provider}:${repo.repoPath}`,
+        );
         repo.preAgentSha = (await sha.stdout()).trim();
       }
 
@@ -130,4 +156,22 @@ export class SandboxManager {
     if (!provider) throw new Error(`Sandbox provider is not configured: ${kind}`);
     return provider;
   }
+}
+
+type SandboxCommandResult = Awaited<ReturnType<SandboxInstance["runCommand"]>>;
+
+async function requireCommand(
+  result: SandboxCommandResult,
+  context: string,
+): Promise<SandboxCommandResult> {
+  if (result.exitCode !== 0) {
+    throw new Error(`${context}: ${await commandError(result)}`);
+  }
+  return result;
+}
+
+async function commandError(result: SandboxCommandResult): Promise<string> {
+  const stdout = (await result.stdout()).trim();
+  const stderr = ((await result.stderr?.()) ?? "").trim();
+  return stderr || stdout || "command failed";
 }

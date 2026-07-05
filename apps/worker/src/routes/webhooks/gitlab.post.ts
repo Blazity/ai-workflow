@@ -33,14 +33,6 @@ export default defineEventHandler(async (event) => {
     return { status: "ignored", reason: "malformed_payload" };
   }
 
-  if (body?.project && !(await gitLabProjectIsAllowed(body.project))) {
-    logger.info(
-      { project: body.project, expected: env.GITLAB_PROJECT_ID ?? "configured_gitlab_repositories" },
-      "post_pr_gate_gitlab_webhook_skipped_other_project",
-    );
-    return { status: "ignored", reason: "other_project" };
-  }
-
   let normalized;
   try {
     normalized = normalizeGitLabMergeRequestEvent(body);
@@ -50,6 +42,14 @@ export default defineEventHandler(async (event) => {
 
   if (!ALLOWED_ACTIONS.has(normalized.action)) {
     return { status: "ignored", reason: `action_${normalized.action}` };
+  }
+
+  if (body?.project && !(await gitLabProjectIsAllowed(body.project))) {
+    logger.info(
+      { project: body.project, expected: env.GITLAB_PROJECT_ID ?? "configured_gitlab_repositories" },
+      "post_pr_gate_gitlab_webhook_skipped_other_project",
+    );
+    return { status: "ignored", reason: "other_project" };
   }
 
   return dispatchPostPrGateWebhook(normalized);
@@ -71,8 +71,8 @@ async function gitLabProjectIsAllowed(project: GitLabProject): Promise<boolean> 
   } catch (err) {
     logger.warn(
       { err: (err as Error).message, project },
-      "post_pr_gate_gitlab_webhook_scope_check_failed_closed",
+      "post_pr_gate_gitlab_webhook_scope_check_failed_open",
     );
-    return false;
+    return true;
   }
 }

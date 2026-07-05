@@ -59,7 +59,7 @@ tokens only after agent phases have exited for push operations.
 ## Architecture
 
 Add a provider-neutral repository directory layer. It lists Accessible
-Repositories for the active provider and normalizes metadata into a
+Repositories across every configured provider and normalizes metadata into a
 single internal shape: provider, repo path/project ID, display name, default
 branch, description, owner/namespace, and optional topics/tags when available.
 
@@ -121,8 +121,8 @@ created/reused PR/MR links on Workflow-Owned Branch records.
 7. Create or reset the feature branch in each Selected Repository when there is
    no Workflow-Owned Branch for that repository. Preserve Workflow-Owned
    Branches on reruns.
-8. Provision the sandbox and clone each Selected Repository under
-   `repos/<stable-slug>`.
+8. Provision the sandbox with the bootstrap Selected Repository at the sandbox
+   root, then clone additional Selected Repositories under `repos/<stable-slug>`.
 9. Write `aiw-repos.json` with each repo's local path, branch, default/base
    branch, pre-agent SHA, provider, repo path, and selection rationale.
 10. Run research, implementation, and optional review once against the

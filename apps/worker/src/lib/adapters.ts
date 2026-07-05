@@ -29,6 +29,7 @@ export interface VcsAdapterTarget {
 
 export function createAdapters(vcsTarget?: VcsAdapterTarget): Adapters {
   const runRegistry = new PostgresRunRegistry(getDb());
+  let vcs: VCSAdapter | undefined;
   const messaging: MessagingAdapter =
     env.CHAT_SDK_SLACK_TOKEN && env.CHAT_SDK_CHANNEL_ID
       ? new ChatSDKAdapter({
@@ -46,13 +47,14 @@ export function createAdapters(vcsTarget?: VcsAdapterTarget): Adapters {
       projectKey: env.JIRA_PROJECT_KEY,
     }),
     get vcs() {
-      return vcsTarget
+      vcs ??= vcsTarget
         ? createRepositoryVCS({
             provider: vcsTarget.provider,
             repoPath: vcsTarget.repoPath,
             baseBranch: vcsTarget.baseBranch,
           })
         : createVCS();
+      return vcs;
     },
     messaging,
     runRegistry,
