@@ -6,7 +6,10 @@ import type {
 } from "../sandbox/agents/types.js";
 import type { AgentKind } from "../sandbox/agents/index.js";
 import type { PRComment, CheckRunResult } from "../adapters/vcs/types.js";
-import type { TicketAttachment } from "../adapters/issue-tracker/types.js";
+import type {
+  IssueTrackerMoveTarget,
+  TicketAttachment,
+} from "../adapters/issue-tracker/types.js";
 import type { TicketEvent } from "../adapters/messaging/types.js";
 import type { DownloadedAttachment } from "../sandbox/attachments.js";
 import type { SelectedRepository } from "../adapters/vcs/repository-directory.js";
@@ -409,11 +412,11 @@ async function postPrLinksComment(
 }
 postPrLinksComment.maxRetries = 0;
 
-async function moveTicket(ticketId: string, column: string) {
+async function moveTicket(ticketId: string, target: IssueTrackerMoveTarget) {
   "use step";
   const { createStepAdapters } = await import("../lib/step-adapters.js");
   const { issueTracker } = createStepAdapters();
-  await issueTracker.moveTicket(ticketId, column);
+  await issueTracker.moveTicket(ticketId, target);
 }
 
 async function notifyTicket(ticketKey: string, event: TicketEvent) {
@@ -426,7 +429,7 @@ async function notifyTicket(ticketKey: string, event: TicketEvent) {
 async function postClarificationAndMoveBack(
   ticketId: string,
   questions: string[],
-  backlogColumn: string,
+  backlogTarget: IssueTrackerMoveTarget,
 ): Promise<string | null> {
   "use step";
   const { createStepAdapters } = await import("../lib/step-adapters.js");
@@ -448,7 +451,7 @@ async function postClarificationAndMoveBack(
       );
     }
   }
-  await issueTracker.moveTicket(ticketId, backlogColumn);
+  await issueTracker.moveTicket(ticketId, backlogTarget);
   return commentUrl;
 }
 
@@ -598,6 +601,14 @@ export async function agentWorkflow(ticketId: string) {
   const { publishWorkspaceChanges } = await import("./workspace-publication.js");
   const { formatUsageReport } = await import("../sandbox/usage.js");
   const { AGENT_SCHEMA, RESEARCH_SCHEMA, REVIEW_SCHEMA } = await import("../sandbox/agents/types.js");
+  const backlogMoveTarget = (): IssueTrackerMoveTarget =>
+    env.JIRA_BACKLOG_TRANSITION_ID
+      ? { name: env.COLUMN_BACKLOG, transitionId: env.JIRA_BACKLOG_TRANSITION_ID }
+      : env.COLUMN_BACKLOG;
+  const aiReviewMoveTarget = (): IssueTrackerMoveTarget =>
+    env.JIRA_AI_REVIEW_TRANSITION_ID
+      ? { name: env.COLUMN_AI_REVIEW, transitionId: env.JIRA_AI_REVIEW_TRANSITION_ID }
+      : env.COLUMN_AI_REVIEW;
 
   const ticket = await fetchAndValidateTicket(ticketId, env.COLUMN_AI);
   if (!ticket) return;
@@ -667,7 +678,7 @@ export async function agentWorkflow(ticketId: string) {
         const commentUrl = await postClarificationAndMoveBack(
           ticketId,
           questions.length > 0 ? questions : [preSandboxResult.message],
-          env.COLUMN_BACKLOG,
+          backlogMoveTarget(),
         );
         await notifyTicket(ticket.identifier, {
           kind: "needs_clarification",
@@ -678,7 +689,7 @@ export async function agentWorkflow(ticketId: string) {
         return;
       }
 
-      await moveTicket(ticketId, env.COLUMN_BACKLOG);
+      await moveTicket(ticketId, backlogMoveTarget());
       await notifyTicket(ticket.identifier, {
         kind: "failed",
         reason: `pre-sandbox: ${preSandboxResult.message}`,
@@ -693,7 +704,7 @@ export async function agentWorkflow(ticketId: string) {
       const commentUrl = await postClarificationAndMoveBack(
         ticketId,
         ["Which repository should this ticket modify?"],
-        env.COLUMN_BACKLOG,
+        backlogMoveTarget(),
       );
       await notifyTicket(ticket.identifier, {
         kind: "needs_clarification",
@@ -771,7 +782,7 @@ export async function agentWorkflow(ticketId: string) {
         // run as a cancellable orphan). Same reasoning at every terminal
         // path below.
         await unregisterRun(ticket.identifier);
-        await moveTicket(ticketId, env.COLUMN_BACKLOG);
+        await moveTicket(ticketId, backlogMoveTarget());
         await notifyTicket(ticket.identifier, {
           kind: "failed",
           phase: "research",
@@ -793,7 +804,7 @@ export async function agentWorkflow(ticketId: string) {
         const commentUrl = await postClarificationAndMoveBack(
           ticketId,
           questions.length > 0 ? questions : [research.body],
-          env.COLUMN_BACKLOG,
+          backlogMoveTarget(),
         );
         await notifyTicket(ticket.identifier, {
           kind: "needs_clarification",
@@ -806,7 +817,7 @@ export async function agentWorkflow(ticketId: string) {
 
       if (research.status === "failed") {
         await unregisterRun(ticket.identifier);
-        await moveTicket(ticketId, env.COLUMN_BACKLOG);
+        await moveTicket(ticketId, backlogMoveTarget());
         await notifyTicket(ticket.identifier, {
           kind: "failed",
           phase: "research",
@@ -857,7 +868,7 @@ export async function agentWorkflow(ticketId: string) {
         const commentUrl = await postClarificationAndMoveBack(
           ticketId,
           implOutput.questions ?? [],
-          env.COLUMN_BACKLOG,
+          backlogMoveTarget(),
         );
         await notifyTicket(ticket.identifier, {
           kind: "needs_clarification",
@@ -870,7 +881,7 @@ export async function agentWorkflow(ticketId: string) {
 
       if (implOutput.result === "failed") {
         await unregisterRun(ticket.identifier);
-        await moveTicket(ticketId, env.COLUMN_BACKLOG);
+        await moveTicket(ticketId, backlogMoveTarget());
         await notifyTicket(ticket.identifier, {
           kind: "failed",
           phase: "impl",
@@ -916,7 +927,7 @@ export async function agentWorkflow(ticketId: string) {
 
         if (reviewOutput.result === "failed") {
           await unregisterRun(ticket.identifier);
-          await moveTicket(ticketId, env.COLUMN_BACKLOG);
+          await moveTicket(ticketId, backlogMoveTarget());
           await notifyTicket(ticket.identifier, {
             kind: "failed",
             phase: "review",
@@ -963,7 +974,7 @@ export async function agentWorkflow(ticketId: string) {
             "Pull requests created before publication failed:",
           );
         }
-        await moveTicket(ticketId, env.COLUMN_BACKLOG);
+        await moveTicket(ticketId, backlogMoveTarget());
         await notifyTicket(ticket.identifier, {
           kind: "failed",
           phase: "push",
@@ -986,7 +997,7 @@ export async function agentWorkflow(ticketId: string) {
         pr: { url: primaryPr.url, number: primaryPr.id },
         usageReport,
       });
-      await moveTicket(ticketId, env.COLUMN_AI_REVIEW);
+      await moveTicket(ticketId, aiReviewMoveTarget());
       runOutcome = "success";
     } finally {
       await teardownSandbox(sandboxId);
@@ -998,7 +1009,7 @@ export async function agentWorkflow(ticketId: string) {
     // If the move then fails, markTicketFailed re-records a marker that
     // dispatch.isTicketFailed checks to keep the ticket from being re-picked.
     await unregisterRun(ticket.identifier).catch(() => {});
-    const moved = await moveTicket(ticketId, env.COLUMN_BACKLOG).then(() => true).catch(() => false);
+    const moved = await moveTicket(ticketId, backlogMoveTarget()).then(() => true).catch(() => false);
     await notifyTicket(ticket.identifier, {
       kind: "failed",
       reason: (err as Error).message ?? "unknown",

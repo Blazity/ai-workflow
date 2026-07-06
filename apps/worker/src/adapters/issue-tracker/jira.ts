@@ -1,6 +1,8 @@
 import {
   IssueTrackerNotFoundError,
   type IssueTrackerAdapter,
+  type IssueTrackerMoveTarget,
+  type IssueTrackerTransitionTarget,
   type TicketAttachment,
   type TicketContent,
   type TicketComment,
@@ -14,11 +16,6 @@ export interface JiraConfig {
 }
 
 const ATLASSIAN_API_ORIGIN = "https://api.atlassian.com";
-const DEFAULT_JIRA_STATUS_CATEGORY_BY_NAME = new Map([
-  ["to do", "new"],
-  ["in progress", "indeterminate"],
-  ["done", "done"],
-]);
 
 type JiraTransition = {
   id: string;
@@ -136,13 +133,17 @@ export class JiraAdapter implements IssueTrackerAdapter {
     };
   }
 
-  async moveTicket(id: string, column: string): Promise<void> {
+  async moveTicket(id: string, target: IssueTrackerMoveTarget): Promise<void> {
     const data = await this.request(`/rest/api/3/issue/${id}/transitions`);
     const transitions = data.transitions as JiraTransition[];
-    const transition = findTransition(transitions, column);
+    const transitionTarget = normalizeTransitionTarget(target);
+    const transition = findTransition(transitions, transitionTarget);
     if (!transition) {
+      const targetDescription = transitionTarget.transitionId
+        ? `${transitionTarget.name} (${transitionTarget.transitionId})`
+        : transitionTarget.name;
       throw new Error(
-        `No transition to "${column}" found for issue ${id}. Available: ${transitions.map((t) => t.name).join(", ")}`,
+        `No transition to "${targetDescription}" found for issue ${id}. Available: ${transitions.map((t) => `${t.name} (${t.id})`).join(", ")}`,
       );
     }
     await this.request(`/rest/api/3/issue/${id}/transitions`, {
@@ -272,21 +273,27 @@ export class JiraAdapter implements IssueTrackerAdapter {
   }
 }
 
-function findTransition(transitions: JiraTransition[], column: string) {
-  const normalizedColumn = column.toLowerCase();
+function normalizeTransitionTarget(
+  target: IssueTrackerMoveTarget,
+): IssueTrackerTransitionTarget {
+  return typeof target === "string" ? { name: target } : target;
+}
+
+function findTransition(
+  transitions: JiraTransition[],
+  target: IssueTrackerTransitionTarget,
+) {
+  if (target.transitionId) {
+    return transitions.find(
+      (transition) => String(transition.id) === target.transitionId,
+    );
+  }
+
+  const normalizedColumn = target.name.toLowerCase();
   const exact = transitions.find(
     (transition) => transition.name?.toLowerCase() === normalizedColumn,
   );
-  if (exact) return exact;
-
-  const categoryKey = DEFAULT_JIRA_STATUS_CATEGORY_BY_NAME.get(normalizedColumn);
-  if (!categoryKey) return undefined;
-
-  const categoryMatches = transitions.filter(
-    (transition) =>
-      transition.to?.statusCategory?.key?.toLowerCase() === categoryKey,
-  );
-  return categoryMatches.length === 1 ? categoryMatches[0] : undefined;
+  return exact;
 }
 
 function toAdfParagraphs(text: string) {
