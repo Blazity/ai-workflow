@@ -80,7 +80,12 @@ ai-workflow authenticates to Jira as an **Atlassian service account** — a mach
    - `COLUMN_AI` — tickets assigned to the agent (default: `AI`)
    - `COLUMN_AI_REVIEW` — completed tickets pending human review (default: `AI Review`)
    - `COLUMN_BACKLOG` — tickets bounced back for clarification (default: `Backlog`)
-4. Generate a webhook secret to authenticate Jira → Vercel deliveries:
+4. Optional but recommended: capture stable Jira transition IDs for workflow moves:
+   - `JIRA_BACKLOG_TRANSITION_ID` — transition back to `COLUMN_BACKLOG`
+   - `JIRA_AI_REVIEW_TRANSITION_ID` — transition to `COLUMN_AI_REVIEW`
+
+   These avoid relying on localized transition display names. You can fetch IDs from `GET /rest/api/3/issue/<KEY>/transitions` while the ticket is in the source status.
+5. Generate a webhook secret to authenticate Jira → Vercel deliveries:
    ```bash
    openssl rand -hex 32
    ```
@@ -255,7 +260,8 @@ vercel env add JIRA_API_TOKEN production
 | Variable                                                                                           | Purpose                                                |
 | -------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
 | `JIRA_BASE_URL`, `JIRA_API_TOKEN`, `JIRA_PROJECT_KEY`                                              | Jira credentials (scoped service-account Bearer token) |
-| `COLUMN_AI`, `COLUMN_AI_REVIEW`, `COLUMN_BACKLOG`                                                  | Board columns                                          |
+| `COLUMN_AI`, `COLUMN_AI_REVIEW`, `COLUMN_BACKLOG`                                                  | Jira status/display names for polling, webhooks, and fallback transition lookup |
+| `JIRA_BACKLOG_TRANSITION_ID`, `JIRA_AI_REVIEW_TRANSITION_ID`                                       | Optional stable transition IDs for Jira moves; recommended when Jira localizes transition names |
 | `VCS_KIND`                                                                                         | `github` or `gitlab`                                   |
 | `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY`, `GITHUB_INSTALLATION_ID`, `GITHUB_OWNER`, `GITHUB_REPO` | If `VCS_KIND=github` (GitHub App auth)                 |
 | `GITHUB_WEBHOOK_SECRET`                                                                            | If `VCS_KIND=github` — signs `pull_request` webhook deliveries for the post-PR gate. Required in **every** environment (Production, Preview, Development) because the webhook fires on preview deployments too. Generate: `openssl rand -hex 32`. |
