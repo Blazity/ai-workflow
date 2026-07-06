@@ -199,6 +199,8 @@ touch ${paths.sentinel}
     // surface that as a failure instead of fishing for a STATUS line.
     const json = tryParseResearchJson(raw);
     if (json) return foldResearchOutput(json);
+    const envelopeError = summarizeResultEnvelopeError(raw);
+    if (envelopeError) return { status: "failed", body: envelopeError };
     return {
       status: "failed",
       body: `Research output was not schema-validated JSON. Output starts with: ${raw.slice(0, 500)}`,
@@ -373,6 +375,21 @@ function tryParseResearchJson(raw: string): ReturnType<typeof researchOutputSche
       const got = tryParse(JSON.parse(env.result));
       if (got) return got;
     } catch { /* not JSON */ }
+  }
+  return null;
+}
+
+function summarizeResultEnvelopeError(raw: string): string | null {
+  const env = findResultEnvelope(raw);
+  if (!env) return null;
+
+  const result = typeof env.result === "string" ? env.result.trim() : "";
+  const errors = Array.isArray(env.errors)
+    ? env.errors.filter((err): err is string => typeof err === "string" && err.trim().length > 0)
+    : [];
+  if (env.is_error === true || errors.length > 0) {
+    const details = [result, ...errors].filter(Boolean).join("; ");
+    return details || "Claude CLI returned an error result";
   }
   return null;
 }

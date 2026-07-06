@@ -426,6 +426,20 @@ async function notifyTicket(ticketKey: string, event: TicketEvent) {
   await messaging.notifyForTicket(ticketKey, event);
 }
 
+async function logPhaseFailure(
+  ticketKey: string,
+  phase: "research" | "impl" | "review" | "push",
+  reason: string,
+): Promise<void> {
+  "use step";
+  const { logger } = await import("../lib/logger.js");
+  logger.warn(
+    { ticketKey, phase, reason: reason.slice(0, 1_000) },
+    "agent_phase_failed",
+  );
+}
+logPhaseFailure.maxRetries = 0;
+
 async function postClarificationAndMoveBack(
   ticketId: string,
   questions: string[],
@@ -776,6 +790,7 @@ export async function agentWorkflow(ticketId: string) {
 
       const researchDone = await pollUntilDone(sandboxId, researchPaths.sentinel, 20);
       if (!researchDone) {
+        await logPhaseFailure(ticket.identifier, "research", "phase timed out");
         // Unregister BEFORE moveTicket so the Jira webhook for this move
         // can't race ahead and fire a duplicate "canceled" notification
         // (the registry entry is what makes the webhook treat a finishing
@@ -816,12 +831,14 @@ export async function agentWorkflow(ticketId: string) {
       }
 
       if (research.status === "failed") {
+        const reason = research.body.slice(0, 200);
+        await logPhaseFailure(ticket.identifier, "research", reason);
         await unregisterRun(ticket.identifier);
         await moveTicket(ticketId, backlogMoveTarget());
         await notifyTicket(ticket.identifier, {
           kind: "failed",
           phase: "research",
-          reason: research.body.slice(0, 200),
+          reason,
           usageReport: usageReportOrUndefined(),
         });
         return;
@@ -880,12 +897,14 @@ export async function agentWorkflow(ticketId: string) {
       }
 
       if (implOutput.result === "failed") {
+        const reason = implOutput.error ?? "unknown";
+        await logPhaseFailure(ticket.identifier, "impl", reason);
         await unregisterRun(ticket.identifier);
         await moveTicket(ticketId, backlogMoveTarget());
         await notifyTicket(ticket.identifier, {
           kind: "failed",
           phase: "impl",
-          reason: implOutput.error ?? "unknown",
+          reason,
           usageReport: usageReportOrUndefined(),
         });
         return;
@@ -926,12 +945,14 @@ export async function agentWorkflow(ticketId: string) {
         }
 
         if (reviewOutput.result === "failed") {
+          const reason = reviewOutput.error ?? "unknown";
+          await logPhaseFailure(ticket.identifier, "review", reason);
           await unregisterRun(ticket.identifier);
           await moveTicket(ticketId, backlogMoveTarget());
           await notifyTicket(ticket.identifier, {
             kind: "failed",
             phase: "review",
-            reason: reviewOutput.error ?? "unknown",
+            reason,
             usageReport: usageReportOrUndefined(),
           });
           return;
@@ -964,6 +985,7 @@ export async function agentWorkflow(ticketId: string) {
       });
 
       if (publication.status === "failed") {
+        await logPhaseFailure(ticket.identifier, "push", publication.reason);
         if (!runUnregisteredBeforePr) {
           await unregisterRun(ticket.identifier);
         }
