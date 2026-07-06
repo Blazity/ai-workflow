@@ -36,13 +36,20 @@ export interface TicketAttachment {
   contentUrl?: string;
 }
 
+export interface IssueTrackerTransitionTarget {
+  name: string;
+  transitionId?: string;
+}
+
+export type IssueTrackerMoveTarget = string | IssueTrackerTransitionTarget;
+
 export interface IssueTrackerAdapter {
   /**
    * Fetch a single ticket by key/id.
    * Throws IssueTrackerNotFoundError (code: NOT_FOUND) when the ticket does not exist.
    */
   fetchTicket(id: string): Promise<TicketContent>;
-  moveTicket(id: string, column: string): Promise<void>;
+  moveTicket(id: string, target: IssueTrackerMoveTarget): Promise<void>;
   /**
    * Post a comment on a ticket.
    *

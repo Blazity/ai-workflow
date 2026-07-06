@@ -1,7 +1,10 @@
 import { getRun } from "workflow/api";
 import { logger } from "./logger.js";
 import type { RunRegistryAdapter } from "../adapters/run-registry/types.js";
-import type { IssueTrackerAdapter } from "../adapters/issue-tracker/types.js";
+import type {
+  IssueTrackerAdapter,
+  IssueTrackerMoveTarget,
+} from "../adapters/issue-tracker/types.js";
 import { stopTicketSandboxes } from "../sandbox/stop-ticket-sandboxes.js";
 
 /**
@@ -18,7 +21,7 @@ export async function cancelRun(
   runId: string,
   runRegistry: RunRegistryAdapter,
   issueTracker?: IssueTrackerAdapter,
-  targetColumn?: string,
+  targetColumn?: IssueTrackerMoveTarget,
 ): Promise<boolean> {
   let cancelled = false;
   try {

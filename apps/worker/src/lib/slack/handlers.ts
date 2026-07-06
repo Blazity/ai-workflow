@@ -2,7 +2,10 @@ import type {
   RunRegistryAdapter,
   ThreadStore,
 } from "../../adapters/run-registry/types.js";
-import type { IssueTrackerAdapter } from "../../adapters/issue-tracker/types.js";
+import type {
+  IssueTrackerAdapter,
+  IssueTrackerMoveTarget,
+} from "../../adapters/issue-tracker/types.js";
 import { isClaimingSentinel } from "../dispatch.js";
 import { logger } from "../logger.js";
 import {
@@ -17,7 +20,7 @@ export type CancelRunFn = (
   runId: string,
   registry: RunRegistryAdapter,
   issueTracker?: IssueTrackerAdapter,
-  targetColumn?: string,
+  targetColumn?: IssueTrackerMoveTarget,
 ) => Promise<boolean>;
 
 export type StopTicketSandboxesFn = (
@@ -60,7 +63,7 @@ export async function handleCancel(
   cancelRunFn: CancelRunFn,
   stopSandboxes: StopTicketSandboxesFn,
   issueTracker?: IssueTrackerAdapter,
-  targetColumn?: string,
+  targetColumn?: IssueTrackerMoveTarget,
 ): Promise<string> {
   const runId = await registry.getRunId(ticketKey);
   if (!runId) return `No active run for ${ticketKey}.`;

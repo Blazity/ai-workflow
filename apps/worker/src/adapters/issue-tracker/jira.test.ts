@@ -439,7 +439,7 @@ describe("JiraAdapter", () => {
       });
     });
 
-    it("matches default Jira workflow transitions when names are localized", async () => {
+    it("uses a configured transition id when Jira localizes names", async () => {
       mockFetch
         .mockResolvedValueOnce({
           ok: true,
@@ -461,7 +461,10 @@ describe("JiraAdapter", () => {
         .mockResolvedValueOnce({ ok: true, json: async () => ({}) });
 
       const adapter = jiraAdapter();
-      await adapter.moveTicket("10001", "To Do");
+      await adapter.moveTicket("10001", {
+        name: "To Do",
+        transitionId: "11",
+      });
 
       expect(mockFetch).toHaveBeenCalledTimes(2);
       const transitionCall = mockFetch.mock.calls[1];
