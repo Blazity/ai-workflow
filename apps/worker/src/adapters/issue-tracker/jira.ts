@@ -14,6 +14,21 @@ export interface JiraConfig {
 }
 
 const ATLASSIAN_API_ORIGIN = "https://api.atlassian.com";
+const DEFAULT_JIRA_STATUS_CATEGORY_BY_NAME = new Map([
+  ["to do", "new"],
+  ["in progress", "indeterminate"],
+  ["done", "done"],
+]);
+
+type JiraTransition = {
+  id: string;
+  name?: string;
+  to?: {
+    statusCategory?: {
+      key?: string;
+    };
+  };
+};
 
 export class JiraAdapter implements IssueTrackerAdapter {
   private tenantOrigin: string;
@@ -123,12 +138,11 @@ export class JiraAdapter implements IssueTrackerAdapter {
 
   async moveTicket(id: string, column: string): Promise<void> {
     const data = await this.request(`/rest/api/3/issue/${id}/transitions`);
-    const transition = data.transitions.find(
-      (t: any) => t.name.toLowerCase() === column.toLowerCase(),
-    );
+    const transitions = data.transitions as JiraTransition[];
+    const transition = findTransition(transitions, column);
     if (!transition) {
       throw new Error(
-        `No transition to "${column}" found for issue ${id}. Available: ${data.transitions.map((t: any) => t.name).join(", ")}`,
+        `No transition to "${column}" found for issue ${id}. Available: ${transitions.map((t) => t.name).join(", ")}`,
       );
     }
     await this.request(`/rest/api/3/issue/${id}/transitions`, {
@@ -256,6 +270,23 @@ export class JiraAdapter implements IssueTrackerAdapter {
     }
     return this.selfAccountIdPromise;
   }
+}
+
+function findTransition(transitions: JiraTransition[], column: string) {
+  const normalizedColumn = column.toLowerCase();
+  const exact = transitions.find(
+    (transition) => transition.name?.toLowerCase() === normalizedColumn,
+  );
+  if (exact) return exact;
+
+  const categoryKey = DEFAULT_JIRA_STATUS_CATEGORY_BY_NAME.get(normalizedColumn);
+  if (!categoryKey) return undefined;
+
+  const categoryMatches = transitions.filter(
+    (transition) =>
+      transition.to?.statusCategory?.key?.toLowerCase() === categoryKey,
+  );
+  return categoryMatches.length === 1 ? categoryMatches[0] : undefined;
 }
 
 function toAdfParagraphs(text: string) {
