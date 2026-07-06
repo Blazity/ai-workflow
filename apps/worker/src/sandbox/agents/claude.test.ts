@@ -156,6 +156,22 @@ describe("ClaudeAgentAdapter.parseResearchStatus", () => {
     expect(adapter.parseResearchStatus(envelope, null).status).toBe("completed");
   });
 
+  it("surfaces Claude CLI error envelopes", () => {
+    const envelope = JSON.stringify({
+      type: "result",
+      subtype: "success",
+      is_error: true,
+      result: "Not logged in - Please run /login",
+      usage: {
+        input_tokens: 0,
+        output_tokens: 0,
+      },
+    });
+    const out = adapter.parseResearchStatus(envelope, null);
+    expect(out.status).toBe("failed");
+    expect(out.body).toBe("Not logged in - Please run /login");
+  });
+
   it("fails when output is a STATUS text line (no schema-validated JSON)", () => {
     // Claude runs with --json-schema; if we only see a STATUS text line then
     // the schema didn't enforce. Don't fall back to fuzzy text matching —
