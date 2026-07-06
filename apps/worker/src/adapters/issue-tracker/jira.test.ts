@@ -438,6 +438,40 @@ describe("JiraAdapter", () => {
         transition: { id: "31" },
       });
     });
+
+    it("uses a configured transition id when Jira localizes names", async () => {
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            transitions: [
+              {
+                id: "11",
+                name: "待办",
+                to: { statusCategory: { key: "new" } },
+              },
+              {
+                id: "21",
+                name: "正在进行",
+                to: { statusCategory: { key: "indeterminate" } },
+              },
+            ],
+          }),
+        })
+        .mockResolvedValueOnce({ ok: true, json: async () => ({}) });
+
+      const adapter = jiraAdapter();
+      await adapter.moveTicket("10001", {
+        name: "To Do",
+        transitionId: "11",
+      });
+
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+      const transitionCall = mockFetch.mock.calls[1];
+      expect(JSON.parse(transitionCall[1].body)).toEqual({
+        transition: { id: "11" },
+      });
+    });
   });
 
   describe("postComment", () => {
