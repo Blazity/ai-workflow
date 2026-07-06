@@ -19,6 +19,8 @@ export const env = createEnv({
     COLUMN_AI: z.string().min(1),
     COLUMN_AI_REVIEW: z.string().min(1),
     COLUMN_BACKLOG: z.string().min(1),
+    JIRA_BACKLOG_TRANSITION_ID: z.string().min(1).optional(),
+    JIRA_AI_REVIEW_TRANSITION_ID: z.string().min(1).optional(),
 
     // VCS
     VCS_KIND: z.enum(["github", "gitlab"]).optional(),

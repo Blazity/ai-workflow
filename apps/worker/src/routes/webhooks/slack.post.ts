@@ -153,6 +153,9 @@ async function runHandler(parsed: ParsedCommand, responseUrl: string): Promise<v
 async function executeCommand(parsed: ParsedCommand): Promise<string> {
   const adapters = createAdapters();
   const { runRegistry, issueTracker } = adapters;
+  const backlogMoveTarget = env.JIRA_BACKLOG_TRANSITION_ID
+    ? { name: env.COLUMN_BACKLOG, transitionId: env.JIRA_BACKLOG_TRANSITION_ID }
+    : env.COLUMN_BACKLOG;
   switch (parsed.kind) {
     case "list":
       return handleList(runRegistry, env.JIRA_BASE_URL);
@@ -165,7 +168,7 @@ async function executeCommand(parsed: ParsedCommand): Promise<string> {
         cancelRun,
         stopTicketSandboxes,
         issueTracker,
-        env.COLUMN_BACKLOG,
+        backlogMoveTarget,
       );
     case "inspect":
       return handleInspect(runRegistry, parsed.ticketKey, env.JIRA_BASE_URL);

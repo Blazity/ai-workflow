@@ -53,6 +53,18 @@ describe("env", () => {
     expect(env.JOB_TIMEOUT_MS).toBe(1800000);
   });
 
+  it("accepts optional Jira transition ids", async () => {
+    Object.assign(process.env, {
+      ...VALID_ENV,
+      JIRA_BACKLOG_TRANSITION_ID: "11",
+      JIRA_AI_REVIEW_TRANSITION_ID: "31",
+    });
+
+    const { env } = await import("./env.js");
+    expect(env.JIRA_BACKLOG_TRANSITION_ID).toBe("11");
+    expect(env.JIRA_AI_REVIEW_TRANSITION_ID).toBe("31");
+  });
+
   it("uses defaults for optional fields", async () => {
     const partial = { ...VALID_ENV };
     delete (partial as any).MAX_CONCURRENT_AGENTS;

@@ -354,7 +354,8 @@ Agent containers are immutable — new tasks always pull the latest image tag.
 | `SPOT_MAX_RETRIES`                                | Max Spot interruption retries before On-Demand fallback (default: 3) |
 | `EFS_FILESYSTEM_ID`                               | EFS filesystem ID for shared workspace                               |
 | `JOB_TIMEOUT_MS`                                  | Per-agent timeout (default: 1,800,000ms / 30min)                     |
-| `COLUMN_AI`, `COLUMN_AI_REVIEW`, `COLUMN_BACKLOG` | Jira column names                                                    |
+| `COLUMN_AI`, `COLUMN_AI_REVIEW`, `COLUMN_BACKLOG` | Jira status/display names                                            |
+| `JIRA_BACKLOG_TRANSITION_ID`, `JIRA_AI_REVIEW_TRANSITION_ID` | Optional stable Jira transition IDs for workflow moves               |
 
 ## Operations
 
