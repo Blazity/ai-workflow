@@ -1,0 +1,1813 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AI Workflow — Workflow Design Workspace</title>
+    <style>
+      :root {
+        --paper: #f5f1e8;
+        --panel: #fffdf7;
+        --panel-soft: #fbf7ee;
+        --ink: #23282f;
+        --muted: #6b7280;
+        --faint: rgba(35, 40, 47, 0.12);
+        --hairline: rgba(35, 40, 47, 0.16);
+        --shadow-frame: 0 14px 40px rgba(35, 40, 47, 0.1), 0 2px 6px rgba(35, 40, 47, 0.05);
+        --shadow-card: 0 2px 8px rgba(35, 40, 47, 0.07);
+        --radius: 10px;
+        --serif: "Iowan Old Style", "Palatino Nova", Palatino, Georgia, "Times New Roman", serif;
+        --sans: "Avenir Next", Avenir, "Segoe UI", Seravek, Calibri, sans-serif;
+        --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+        --sidebar-w: 252px;
+      }
+
+      * { box-sizing: border-box; }
+
+      html, body {
+        margin: 0;
+        height: 100%;
+        overflow: hidden;
+        overscroll-behavior: none;
+      }
+
+      body {
+        color: var(--ink);
+        background: var(--paper);
+        font-family: var(--sans);
+      }
+
+      /* paper grain over everything */
+      body::after {
+        content: "";
+        position: fixed;
+        inset: 0;
+        z-index: 90;
+        pointer-events: none;
+        opacity: 0.05;
+        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)' opacity='0.6'/%3E%3C/svg%3E");
+      }
+
+      /* ============ sidebar ============ */
+
+      .sidebar {
+        position: fixed;
+        z-index: 40;
+        top: 0;
+        left: 0;
+        bottom: 0;
+        width: var(--sidebar-w);
+        display: flex;
+        flex-direction: column;
+        border-right: 1px solid var(--hairline);
+        background: linear-gradient(180deg, rgba(255, 253, 247, 0.96), rgba(251, 247, 238, 0.96));
+        backdrop-filter: blur(10px);
+      }
+
+      .brand {
+        padding: 22px 20px 16px;
+        border-bottom: 1px solid var(--faint);
+      }
+
+      .brand .eyebrow {
+        font-size: 10px;
+        font-weight: 800;
+        letter-spacing: 0.16em;
+        text-transform: uppercase;
+        color: var(--muted);
+      }
+
+      .brand h1 {
+        margin: 6px 0 4px;
+        font-family: var(--serif);
+        font-size: 21px;
+        line-height: 1.15;
+        font-weight: 700;
+        letter-spacing: -0.01em;
+      }
+
+      .brand p {
+        margin: 0;
+        font-size: 11.5px;
+        line-height: 1.45;
+        color: var(--muted);
+      }
+
+      .frame-list {
+        flex: 1;
+        overflow-y: auto;
+        padding: 10px 10px 12px;
+      }
+
+      .frame-list button {
+        display: flex;
+        align-items: baseline;
+        gap: 10px;
+        width: 100%;
+        padding: 9px 10px;
+        margin: 0 0 2px;
+        border: 1px solid transparent;
+        border-radius: 8px;
+        background: none;
+        color: var(--ink);
+        font: 600 12.5px/1.3 var(--sans);
+        text-align: left;
+        cursor: pointer;
+      }
+
+      .frame-list button:hover { background: rgba(35, 40, 47, 0.05); }
+
+      .frame-list button.active {
+        border-color: var(--hairline);
+        background: var(--panel);
+        box-shadow: var(--shadow-card);
+      }
+
+      .frame-list .num {
+        flex: none;
+        width: 18px;
+        height: 18px;
+        display: grid;
+        place-items: center;
+        align-self: center;
+        border: 1px solid var(--hairline);
+        border-radius: 5px;
+        font: 800 10px/1 var(--mono);
+        color: var(--muted);
+        background: var(--panel);
+      }
+
+      .frame-list .kind {
+        display: block;
+        margin-top: 2px;
+        font-size: 9.5px;
+        font-weight: 800;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        color: var(--muted);
+      }
+
+      .sidebar-foot {
+        padding: 12px 16px 14px;
+        border-top: 1px solid var(--faint);
+        font-size: 10.5px;
+        line-height: 1.7;
+        color: var(--muted);
+      }
+
+      .sidebar-foot kbd {
+        display: inline-block;
+        min-width: 16px;
+        padding: 1px 4px;
+        border: 1px solid var(--hairline);
+        border-bottom-width: 2px;
+        border-radius: 4px;
+        background: var(--panel);
+        font: 700 9.5px/1.4 var(--mono);
+        text-align: center;
+        color: var(--ink);
+      }
+
+      /* ============ floating controls ============ */
+
+      .controls {
+        position: fixed;
+        z-index: 40;
+        top: 16px;
+        right: 16px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .control-group {
+        display: flex;
+        align-items: center;
+        gap: 2px;
+        padding: 3px;
+        border: 1px solid var(--hairline);
+        border-radius: 9px;
+        background: rgba(255, 253, 247, 0.92);
+        box-shadow: var(--shadow-card);
+        backdrop-filter: blur(8px);
+      }
+
+      .controls button {
+        height: 30px;
+        min-width: 30px;
+        padding: 0 10px;
+        border: none;
+        border-radius: 6px;
+        background: none;
+        color: var(--ink);
+        font: 700 12px/1 var(--sans);
+        cursor: pointer;
+      }
+
+      .controls button:hover { background: rgba(35, 40, 47, 0.07); }
+
+      .zoom-level {
+        min-width: 46px;
+        text-align: center;
+        font: 700 11px/1 var(--mono);
+        color: var(--muted);
+      }
+
+      /* ============ canvas ============ */
+
+      .viewport {
+        position: fixed;
+        inset: 0;
+        overflow: hidden;
+        cursor: grab;
+        touch-action: none;
+      }
+
+      .viewport.panning { cursor: grabbing; }
+
+      .board {
+        position: absolute;
+        left: 0;
+        top: 0;
+        transform-origin: 0 0;
+      }
+
+      .board::before {
+        content: "";
+        position: absolute;
+        inset: -6000px;
+        z-index: 0;
+        background-image: radial-gradient(rgba(35, 40, 47, 0.13) 1.1px, transparent 1.1px);
+        background-size: 30px 30px;
+        pointer-events: none;
+      }
+
+      /* ============ frames ============ */
+
+      .frame {
+        position: absolute;
+        z-index: 1;
+        width: var(--fw);
+        border: 1px solid var(--hairline);
+        border-radius: var(--radius);
+        background: rgba(255, 253, 247, 0.92);
+        box-shadow: var(--shadow-frame);
+      }
+
+      .frame-header {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 14px 20px 13px;
+        border-bottom: 1px solid var(--faint);
+      }
+
+      .frame-header .num {
+        flex: none;
+        width: 26px;
+        height: 26px;
+        display: grid;
+        place-items: center;
+        border: 1px solid var(--hairline);
+        border-radius: 7px;
+        background: var(--panel);
+        font: 800 12px/1 var(--mono);
+        color: var(--muted);
+      }
+
+      .frame-header h2 {
+        margin: 0;
+        font-family: var(--serif);
+        font-size: 21px;
+        font-weight: 700;
+        letter-spacing: -0.01em;
+      }
+
+      .frame-header .badge {
+        margin-left: auto;
+        padding: 4px 10px;
+        border: 1px solid var(--hairline);
+        border-radius: 999px;
+        background: var(--panel);
+        font-size: 10.5px;
+        font-weight: 800;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        color: var(--muted);
+        white-space: nowrap;
+      }
+
+      /* ============ registry ============ */
+
+      .registry-body { padding: 20px; }
+
+      .registry-groups {
+        display: grid;
+        grid-template-columns: repeat(5, minmax(0, 1fr));
+        gap: 16px;
+        align-items: start;
+      }
+
+      .registry-group {
+        border: 1px solid var(--faint);
+        border-radius: var(--radius);
+        background: var(--panel-soft);
+        padding: 12px;
+      }
+
+      .registry-group.optional { border-style: dashed; }
+
+      .registry-group h3 {
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        margin: 0 0 10px;
+        font-size: 11px;
+        font-weight: 900;
+        letter-spacing: 0.07em;
+        text-transform: uppercase;
+        color: var(--g-color);
+      }
+
+      .registry-group h3::before {
+        content: "";
+        width: 8px;
+        height: 8px;
+        border-radius: 2px;
+        background: var(--g-color);
+      }
+
+      .registry-group h3 .opt-tag {
+        margin-left: auto;
+        font-size: 8.5px;
+        letter-spacing: 0.08em;
+        color: var(--muted);
+        border: 1px dashed var(--hairline);
+        border-radius: 999px;
+        padding: 2px 6px;
+      }
+
+      .deferred {
+        margin-top: 16px;
+        padding: 12px 16px;
+        border: 1px dashed var(--hairline);
+        border-radius: var(--radius);
+        color: var(--muted);
+        font-size: 11.5px;
+        line-height: 1.5;
+      }
+
+      .deferred strong {
+        color: var(--ink);
+        font-size: 10.5px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        margin-right: 6px;
+      }
+
+      /* ============ cards & nodes (shared look) ============ */
+
+      .card {
+        position: relative;
+        display: block;
+        width: 100%;
+        margin: 0 0 8px;
+        padding: 9px 11px 9px 14px;
+        border: 1px solid color-mix(in srgb, var(--g-color) 30%, transparent);
+        border-radius: 8px;
+        background: var(--panel);
+        box-shadow: var(--shadow-card);
+        text-align: left;
+        font-family: var(--sans);
+        color: var(--ink);
+        cursor: pointer;
+        transition: transform 0.12s ease, box-shadow 0.12s ease;
+      }
+
+      .card::before {
+        content: "";
+        position: absolute;
+        left: 0;
+        top: 0;
+        bottom: 0;
+        width: 4px;
+        border-radius: 8px 0 0 8px;
+        background: var(--g-color);
+      }
+
+      .card:last-child { margin-bottom: 0; }
+
+      .card:hover, .card:focus-visible {
+        transform: translateY(-1px);
+        box-shadow: 0 6px 16px rgba(35, 40, 47, 0.13);
+        outline: none;
+        border-color: color-mix(in srgb, var(--g-color) 60%, transparent);
+      }
+
+      .card strong {
+        display: block;
+        font-size: 12px;
+        line-height: 1.25;
+        color: color-mix(in srgb, var(--g-color) 82%, var(--ink) 18%);
+      }
+
+      .card p {
+        margin: 3px 0 0;
+        font-size: 10.5px;
+        line-height: 1.4;
+        color: var(--muted);
+      }
+
+      .card code {
+        display: block;
+        margin-top: 5px;
+        font-family: var(--mono);
+        font-size: 9.5px;
+        line-height: 1.35;
+        color: color-mix(in srgb, var(--ink) 70%, var(--g-color) 30%);
+        white-space: pre-wrap;
+      }
+
+      .node {
+        position: absolute;
+        left: var(--nx);
+        top: var(--ny);
+        width: var(--nw);
+        margin: 0;
+        z-index: 2;
+      }
+
+      .node .kicker {
+        font-size: 8.5px;
+        font-weight: 900;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        color: var(--g-color);
+        margin-bottom: 3px;
+      }
+
+      .node strong { font-size: 13px; }
+      .node p { font-size: 11px; }
+      .node code { font-size: 10px; }
+
+      /* ============ flow diagrams ============ */
+
+      .diagram {
+        position: relative;
+        overflow: hidden;
+        border-radius: 0 0 var(--radius) var(--radius);
+      }
+
+      .edges {
+        position: absolute;
+        inset: 0;
+        z-index: 1;
+        pointer-events: none;
+      }
+
+      .edge {
+        fill: none;
+        stroke: rgba(35, 40, 47, 0.55);
+        stroke-width: 1.75;
+        stroke-linecap: round;
+      }
+
+      .edge.dashed { stroke-dasharray: 6 6; }
+
+      .edge-label {
+        font: 800 11px var(--sans);
+        fill: var(--ink);
+        stroke: var(--paper);
+        stroke-width: 4;
+        paint-order: stroke;
+        text-anchor: middle;
+      }
+
+      .flow-note {
+        position: absolute;
+        left: var(--nx);
+        top: var(--ny);
+        width: var(--nw);
+        z-index: 2;
+        padding: 11px 14px;
+        border: 1px dashed var(--hairline);
+        border-radius: 8px;
+        background: rgba(251, 247, 238, 0.9);
+        font-size: 11px;
+        line-height: 1.5;
+        color: var(--muted);
+      }
+
+      .flow-note strong {
+        display: block;
+        margin-bottom: 3px;
+        font-size: 10px;
+        font-weight: 900;
+        letter-spacing: 0.09em;
+        text-transform: uppercase;
+        color: var(--ink);
+      }
+
+      .flow-note code {
+        font-family: var(--mono);
+        font-size: 10px;
+        color: var(--ink);
+      }
+
+      /* ============ text panels (guarantees / decisions) ============ */
+
+      .panel-body { padding: 18px 20px 20px; }
+
+      .panel-item {
+        display: flex;
+        gap: 14px;
+        padding: 13px 4px;
+      }
+
+      .panel-item + .panel-item { border-top: 1px solid var(--faint); }
+
+      .panel-item .marker {
+        flex: none;
+        width: 26px;
+        height: 26px;
+        display: grid;
+        place-items: center;
+        border-radius: 50%;
+        border: 1px solid var(--hairline);
+        background: var(--panel);
+        font-family: var(--serif);
+        font-size: 13px;
+        font-weight: 700;
+        color: var(--ink);
+      }
+
+      .panel-item h4 {
+        margin: 3px 0 4px;
+        font-family: var(--serif);
+        font-size: 15px;
+        font-weight: 700;
+      }
+
+      .panel-item p {
+        margin: 0;
+        font-size: 12px;
+        line-height: 1.55;
+        color: var(--muted);
+      }
+
+      .panel-item p code {
+        font-family: var(--mono);
+        font-size: 10.5px;
+        color: var(--ink);
+        background: rgba(35, 40, 47, 0.05);
+        border-radius: 4px;
+        padding: 1px 4px;
+      }
+
+      /* ============ detail panel ============ */
+
+      .detail {
+        position: fixed;
+        z-index: 50;
+        top: 14px;
+        right: 14px;
+        bottom: 14px;
+        width: 400px;
+        max-width: calc(100vw - 28px);
+        display: flex;
+        flex-direction: column;
+        border: 1px solid var(--hairline);
+        border-radius: 14px;
+        background: var(--panel);
+        box-shadow: 0 24px 70px rgba(35, 40, 47, 0.22);
+        transform: translateX(calc(100% + 20px));
+        transition: transform 0.22s ease;
+        visibility: hidden;
+      }
+
+      .detail.open {
+        transform: translateX(0);
+        visibility: visible;
+      }
+
+      .detail-head {
+        padding: 18px 20px 14px;
+        border-bottom: 1px solid var(--faint);
+      }
+
+      .detail-head .group-tag {
+        display: inline-block;
+        padding: 3px 9px;
+        border-radius: 999px;
+        background: color-mix(in srgb, var(--g-color) 14%, var(--panel));
+        border: 1px solid color-mix(in srgb, var(--g-color) 40%, transparent);
+        color: var(--g-color);
+        font-size: 9.5px;
+        font-weight: 900;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+      }
+
+      .detail-head h3 {
+        margin: 9px 0 0;
+        font-family: var(--serif);
+        font-size: 22px;
+        font-weight: 700;
+        letter-spacing: -0.01em;
+        padding-right: 30px;
+      }
+
+      .detail-close {
+        position: absolute;
+        top: 14px;
+        right: 14px;
+        width: 28px;
+        height: 28px;
+        border: 1px solid var(--hairline);
+        border-radius: 7px;
+        background: var(--panel);
+        color: var(--muted);
+        font: 700 13px/1 var(--sans);
+        cursor: pointer;
+      }
+
+      .detail-close:hover { color: var(--ink); background: var(--panel-soft); }
+
+      .detail-body {
+        flex: 1;
+        overflow-y: auto;
+        padding: 16px 20px 22px;
+      }
+
+      .detail-body .lede {
+        margin: 0 0 14px;
+        font-size: 13px;
+        line-height: 1.55;
+        color: var(--ink);
+      }
+
+      .detail-section { margin-bottom: 14px; }
+
+      .detail-section h5 {
+        margin: 0 0 6px;
+        font-size: 10px;
+        font-weight: 900;
+        letter-spacing: 0.11em;
+        text-transform: uppercase;
+        color: var(--muted);
+      }
+
+      .detail-section pre {
+        margin: 0;
+        padding: 11px 13px;
+        border: 1px solid var(--faint);
+        border-radius: 8px;
+        background: var(--panel-soft);
+        font-family: var(--mono);
+        font-size: 11px;
+        line-height: 1.5;
+        white-space: pre-wrap;
+        color: var(--ink);
+      }
+
+      .detail-section .ctx {
+        padding: 10px 13px;
+        border-left: 3px solid var(--g-color);
+        border-radius: 0 8px 8px 0;
+        background: color-mix(in srgb, var(--g-color) 7%, var(--panel));
+        font-size: 12px;
+        line-height: 1.5;
+        color: var(--ink);
+      }
+
+      @media (max-width: 860px) {
+        .sidebar { display: none; }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        .card, .detail { transition: none; }
+      }
+    </style>
+  </head>
+  <body>
+    <nav class="sidebar" aria-label="Frames">
+      <div class="brand">
+        <div class="eyebrow">AI Workflow</div>
+        <h1>Workflow Design Workspace</h1>
+        <p>Clean-slate block taxonomy and workflow variants for the orchestration MVP. Content lives in this file — the canvas is a viewer.</p>
+      </div>
+      <div class="frame-list" id="frame-list"></div>
+      <div class="sidebar-foot">
+        <div><kbd>1</kbd>–<kbd>7</kbd> jump to frame &nbsp; <kbd>0</kbd> fit all</div>
+        <div><kbd>+</kbd> / <kbd>−</kbd> zoom &nbsp; <kbd>esc</kbd> close details</div>
+        <div>Scroll pans · pinch or <kbd>⌘</kbd>+scroll zooms · click a block for its contract</div>
+      </div>
+    </nav>
+
+    <div class="controls">
+      <div class="control-group" role="group" aria-label="Zoom">
+        <button id="zoom-out" aria-label="Zoom out">−</button>
+        <span class="zoom-level" id="zoom-level">100%</span>
+        <button id="zoom-in" aria-label="Zoom in">+</button>
+      </div>
+      <div class="control-group">
+        <button id="fit-all" title="Fit all frames (0)">Fit view</button>
+      </div>
+    </div>
+
+    <main class="viewport" id="viewport">
+      <section class="board" id="board" aria-label="Design board"></section>
+    </main>
+
+    <aside class="detail" id="detail" role="dialog" aria-modal="false" aria-label="Block details">
+      <div class="detail-head" id="detail-head"></div>
+      <div class="detail-body" id="detail-body"></div>
+      <button class="detail-close" id="detail-close" aria-label="Close details">✕</button>
+    </aside>
+
+    <script>
+      /* ================================================================
+         CONTENT DATA — edit this section; the engine below never needs
+         changes for content edits.
+         ================================================================ */
+
+      const GROUPS = {
+        trigger:   { label: "Lifecycle triggers",  color: "#b8433a" },
+        agent:     { label: "Agents", color: "#7345c8" },
+        workspace: { label: "Workspace",           color: "#0f7f8b" },
+        control:   { label: "Control",             color: "#35823f" },
+        ticket:    { label: "Ticket actions",      color: "#2367b8" },
+        vcs:       { label: "VCS actions",         color: "#4b50bf" },
+        human:     { label: "Human-in-the-loop",   color: "#b06a14" },
+        utility:   { label: "Utility",             color: "#57616e" },
+        arthur:    { label: "Arthur Engine",        color: "#8b6f8f", optional: true },
+      };
+
+      const BLOCKS = {
+        "trig.ticket-impl": {
+          group: "trigger",
+          title: "Ticket implementation started/resumed",
+          blurb: "Jira/Linear lifecycle trigger. One entry point for every way work starts or resumes.",
+          contract: "out: ticket, comments, resume_reason",
+          input: "config {\n  providers: (\"jira\" | \"linear\")[],\n  board_column?: string\n}",
+          output: "{\n  ticket: TicketContext,\n  comments: CommentContext[],\n  attachments: AttachmentRef[],\n  resume_reason: \"new_ticket\" | \"moved_to_ai\"\n    | \"clarification_answered\" | \"comment_added\",\n  prior_run?: RunRef\n}",
+          note: "A workflow may declare multiple triggers feeding the same entry point. Granular low-level triggers (ticket created, comment added, …) are deferred; lifecycle triggers are the MVP surface."
+        },
+        "trig.plan-approved": {
+          group: "trigger",
+          title: "Plan approved",
+          blurb: "Human approval event that resumes a suspended workflow with the approved plan.",
+          contract: "out: ticket, approved_plan, approval",
+          input: "config {\n  source: \"dashboard\" | \"ticket_comment\"\n}",
+          output: "{\n  ticket: TicketContext,\n  approved_plan: string,\n  approval: {\n    approver: UserRef,\n    approved_at: ISODateTime\n  }\n}"
+        },
+        "trig.pr-created": {
+          group: "trigger",
+          title: "PR created",
+          blurb: "Fires when a pull/merge request is opened; starts standalone review workflows.",
+          contract: "out: pr, diff, commits",
+          input: "config {\n  providers: (\"github\" | \"gitlab\")[],\n  only_workflow_owned?: boolean\n}",
+          output: "{\n  pr: PrRef,\n  diff: DiffSummary,\n  commits: CommitRef[],\n  ticket?: TicketContext\n}"
+        },
+        "trig.pr-checks-failed": {
+          group: "trigger",
+          title: "PR checks failed",
+          blurb: "Fires when CI checks fail on a workflow-owned PR/MR.",
+          contract: "out: pr, failed_checks, logs",
+          input: "config {\n  providers: (\"github\" | \"gitlab\")[]\n}",
+          output: "{\n  pr: PrRef,\n  failed_checks: CheckResult[],\n  logs: string,\n  ticket?: TicketContext\n}",
+          note: "Events coalesce per ticket: one active run per ticket at a time, so simultaneous check failures across a ticket's PRs feed a single fix run rather than racing each other."
+        },
+        "trig.pr-review": {
+          group: "trigger",
+          title: "PR review submitted",
+          blurb: "Fires when a human submits review feedback on a workflow-owned PR/MR.",
+          contract: "out: pr, review, comments",
+          input: "config {\n  providers: (\"github\" | \"gitlab\")[],\n  on: (\"changes_requested\" | \"commented\")[]\n}",
+          output: "{\n  pr: PrRef,\n  review: ReviewRef,\n  comments: ReviewComment[],\n  ticket?: TicketContext\n}"
+        },
+
+        "agent.planning": {
+          group: "agent",
+          title: "Planning Agent",
+          blurb: "Requirements gathering and plan preparation, clarification loop built in.",
+          contract: "out: plan | questions",
+          input: "{\n  ticket: TicketContext,\n  comments: CommentContext[],\n  prior_answers?: HumanAnswer[]\n}",
+          output: "{\n  status: \"ready\" | \"needs_human_input\",\n  plan?: string,\n  questions?: string[],\n  assumptions?: string[]\n}",
+          note: "On needs_human_input the runtime posts the questions, suspends, and the lifecycle trigger's resume path re-enters — the clarification loop is not something a workflow author wires up."
+        },
+        "agent.implementation": {
+          group: "agent",
+          title: "Implementation Agent",
+          blurb: "Coding agent with workspace, branch policy, commit enforcement, and pre-PR verification built in.",
+          contract: "out: workspace_id, branches, commits",
+          input: "{\n  ticket: TicketContext,\n  plan: string,\n  workspace_policy: WorkspacePolicy,\n  branch_policy: BranchPolicy,\n  verification?: VerificationPolicy\n}",
+          output: "{\n  status: \"implemented\" | \"needs_human_input\"\n    | \"failed\",\n  workspace_id: string,\n  branches: BranchRef[],   // one per changed repo\n  commits: CommitRef[],\n  verification?: VerificationResult,\n  summary: string\n}",
+          note: "Prepares or resumes the run workspace implicitly. Multi-repo: repo selection happens in workspace preparation; one branch per changed repo."
+        },
+        "agent.review": {
+          group: "agent",
+          title: "Review Agent",
+          blurb: "Reviews a diff or PR and produces structured findings plus a decision.",
+          contract: "out: findings, decision",
+          input: "{\n  target: { workspace_id: string }\n        | { pr: PrRef },\n  scope: ReviewScope\n}",
+          output: "{\n  status: \"reviewed\" | \"failed\",\n  findings: Finding[],\n  decision: \"approve\" | \"request_changes\"\n}"
+        },
+        "agent.fix": {
+          group: "agent",
+          title: "Fix Agent",
+          blurb: "Repair pass scoped to structured failures: per-repo check results or review feedback.",
+          contract: "in: failures · out: commits, status",
+          input: "{\n  workspace_id: string,\n  failures: RepoCheckFailure[]\n    | ReviewFeedback,\n  plan?: string\n}",
+          output: "{\n  status: \"fixed\" | \"needs_human_input\"\n    | \"failed\",\n  commits: CommitRef[],\n  summary: string\n}"
+        },
+        "agent.generic": {
+          group: "agent",
+          title: "Generic Agent",
+          blurb: "Prompted agent with a declared output schema. Must attach a workspace to touch code.",
+          contract: "out: declared schema + status",
+          input: "{\n  prompt: string,\n  workspace_id?: string,\n  output_schema: JsonSchema\n}",
+          output: "{\n  status: \"completed\" | \"needs_human_input\"\n    | \"failed\",\n  ...declared_schema\n}",
+          note: "The escape hatch: everything the specialized agents do can be rebuilt from Generic Agent + workspace + control blocks."
+        },
+
+        "ws.prepare": {
+          group: "workspace",
+          title: "Prepare workspace",
+          blurb: "Materializes the ticket's durable workspace: create, resume warm from snapshot, or rebuild cold from branch records.",
+          contract: "out: workspace_id, repos, materialization",
+          input: "{\n  ticket: TicketContext,\n  repo_selection_policy: RepoSelectionPolicy,\n  branch_policy: BranchPolicy,\n  persistence_policy?: PersistencePolicy\n}",
+          output: "{\n  workspace_id: string,\n  repos: SelectedRepo[],\n  branches: BranchRef[],\n    // BranchRef = {provider, repo_path, branch}\n  materialization: \"created\"\n    | \"resumed_warm\" | \"rebuilt_cold\"\n}",
+          note: "Two-tier model: the workspace is a durable identity (ticket → repos + branches + manifest) in our DB. Warm path: a persistent named sandbox resumes from its auto-snapshot (Vercel Sandbox v2 persistence). Cold path: a fresh sandbox re-clones the workflow-owned branches. Snapshot expiry degrades warm to cold — it never fails the run, and the cold path is what on-prem deployments use."
+        },
+        "ws.finalize": {
+          group: "workspace",
+          title: "Finalize workspace",
+          blurb: "Deterministic end gate: clean git state, commits exist, push changed branches, capture artifacts, park or destroy the sandbox.",
+          contract: "out: status, pushed_branches, workspace_state",
+          input: "{\n  workspace_id: string,\n  required_checks?: string[]\n}",
+          output: "{\n  status: \"clean\" | \"failed\",\n  commits: CommitRef[],\n  pushed_branches: BranchRef[],\n  verification: VerificationResult,\n  artifacts: ArtifactRef[],\n  workspace_state: \"parked\" | \"destroyed\"\n}",
+          note: "Non-terminal ends (awaiting approval, review rounds expected) park the workspace — snapshot and stop. Terminal statuses destroy it; the snapshot expires per retention policy."
+        },
+
+        "ctl.branch": {
+          group: "control",
+          title: "Branch",
+          blurb: "Routes by one expression over prior step outputs. Single condition language everywhere.",
+          contract: "out: path, reason",
+          input: "config {\n  condition: Expression\n  // e.g. steps.checks.output.ok\n}",
+          output: "{\n  path: \"true\" | \"false\",\n  reason: string\n}"
+        },
+        "ctl.loop": {
+          group: "control",
+          title: "Loop",
+          blurb: "Bounds a retry cycle. Every cycle in a workflow must pass through exactly one Loop.",
+          contract: "ports: continue | exhausted",
+          input: "config {\n  max_attempts: number,\n  on_exhaust: \"fail\" | \"human\" | \"continue\"\n}",
+          output: "{\n  attempt: number\n}\n// two output ports:\n// continue — run the next attempt\n// exhausted — attempts spent",
+          note: "The exhausted port may be left unwired — it then follows the default failure path (runtime guarantee: terminate, move ticket, notify). Wire it explicitly to escalate differently, e.g. into a Human question."
+        },
+        "ctl.terminate": {
+          group: "control",
+          title: "Terminate workflow",
+          blurb: "Stops execution early with a typed terminal status.",
+          contract: "config: terminal_status",
+          input: "config {\n  terminal_status: \"waiting_for_human\"\n    | \"failed\" | \"skipped\" | \"done\",\n  post_comment?: string\n}",
+          output: "terminal — no downstream steps"
+        },
+
+        "tk.comment": {
+          group: "ticket",
+          title: "Post comment",
+          blurb: "Writes questions, plans, or status back to the Jira/Linear ticket.",
+          contract: "out: comment_id, posted_at",
+          input: "{\n  ticket: TicketContext,\n  message: string,\n  reason: \"clarifying_questions\"\n    | \"plan_posted\" | \"status_update\"\n}",
+          output: "{\n  comment_id: string,\n  posted_at: ISODateTime\n}"
+        },
+        "tk.status": {
+          group: "ticket",
+          title: "Update ticket status",
+          blurb: "Moves the ticket to a configured provider column/state.",
+          contract: "out: update_id",
+          input: "{\n  ticket: TicketContext,\n  target_status: string\n}",
+          output: "{ update_id: string }"
+        },
+
+        "vcs.open-pr": {
+          group: "vcs",
+          title: "Open PR/MR",
+          blurb: "Opens one pull/merge request per changed repo from the finalized workspace.",
+          contract: "out: prs (one per changed repo)",
+          input: "{\n  source: { workspace_id: string }\n        | { branches: BranchRef[] },\n  title: string,\n  body: string\n}",
+          output: "{ prs: PrRef[] }"
+        },
+        "vcs.pr-comment": {
+          group: "vcs",
+          title: "Post PR comment",
+          blurb: "Writes a summary or reply onto the pull/merge request.",
+          contract: "out: comment_id",
+          input: "{\n  pr: PrRef,\n  message: string\n}",
+          output: "{ comment_id: string }"
+        },
+        "vcs.fetch-context": {
+          group: "vcs",
+          title: "Fetch PR context",
+          blurb: "Loads review comments, check results, and conflict status for a PR or ticket.",
+          contract: "out: comments, check_results, conflicts",
+          input: "{\n  target: { pr: PrRef }\n        | { ticket: TicketContext }\n}",
+          output: "{\n  comments: ReviewComment[],\n  check_results: CheckResult[],\n  conflict_status: ConflictStatus\n}"
+        },
+
+        "hitl.plan-approval": {
+          group: "human",
+          title: "Send plan for approval",
+          blurb: "Creates a dashboard approval item and mirrors the plan to the ticket, then suspends.",
+          contract: "out: approval_request_id · suspends",
+          input: "{\n  ticket: TicketContext,\n  plan: string,\n  assumptions: string[],\n  reviewers: UserRef[]\n}",
+          output: "{\n  approval_request_id: string,\n  dashboard_url: string\n}",
+          note: "The workflow suspends here durably. The matching \"Plan approved\" trigger re-enters with the approved plan."
+        },
+        "hitl.question": {
+          group: "human",
+          title: "Human question",
+          blurb: "User-scoped question routed to the ticket owner via the dashboard.",
+          contract: "out: answers, answered_by",
+          input: "{\n  ticket: TicketContext,\n  questions: string[],\n  scope: \"owner\" | \"team\"\n}",
+          output: "{\n  answers: HumanAnswer[],\n  answered_by: UserRef\n}"
+        },
+
+        "util.checks": {
+          group: "utility",
+          title: "Run checks",
+          blurb: "Runs each repo's configured validation commands in the workspace; per-repo results plus one aggregate verdict.",
+          contract: "out: ok (all repos), results[], failures[]",
+          input: "{\n  workspace_id: string,\n  scope: \"changed_repos\" | RepoRef[],\n  commands?: PerRepoCommands\n    // defaults to per-repo check config\n}",
+          output: "{\n  ok: boolean,  // every repo passed\n  results: RepoCheckResult[],\n  failures: RepoCheckFailure[]\n    // {provider, repo_path, error, logs}\n}",
+          note: "Collections stay inside blocks: conditions branch on the aggregate (steps.checks.output.ok) while the Fix Agent consumes the per-repo failures[]. No fan-out construct needed in MVP."
+        },
+        "util.llm": {
+          group: "utility",
+          title: "Call LLM",
+          blurb: "Focused non-agent LLM transform with a declared output schema.",
+          contract: "out: declared schema",
+          input: "{\n  prompt: string,\n  output_schema: JsonSchema\n}",
+          output: "declared schema\n// LLM proposes; the runtime\n// enforces policy on any value it uses"
+        },
+        "util.slack": {
+          group: "utility",
+          title: "Send Slack message",
+          blurb: "Notifies a channel about a workflow milestone.",
+          contract: "out: message_ts",
+          input: "{\n  channel: string,\n  message: string,\n  context?: RunContext\n}",
+          output: "{ message_ts: string }"
+        },
+
+        "arthur.injection": {
+          group: "arthur",
+          title: "Prompt injection check",
+          blurb: "Optional Arthur Engine scan of ticket/comment content before agents see it.",
+          contract: "out: ok, findings",
+          input: "{ content: string }",
+          output: "{\n  ok: boolean,\n  findings: InjectionFinding[]\n}",
+          note: "Add-on group: the core product runs without Arthur Engine. These blocks appear only when Arthur Engine is configured."
+        },
+        "arthur.trace": {
+          group: "arthur",
+          title: "Trace run",
+          blurb: "Passive per-run prompt/tool tracing into Arthur Engine for deeper observability.",
+          contract: "passive — no output consumed",
+          input: "config { task_name?: string }",
+          output: "passive wrapper — adds tracing,\nno downstream output"
+        }
+      };
+
+      const DEFERRED_NOTE =
+        "Nested reusable workflow blocks · MCP editing surface for agents · granular low-level triggers · generic (non-delivery) automation blocks. The JS-step question is on the Open Decisions frame, not silently resolved.";
+
+      const NODE_W = 250;
+
+      const FRAMES = [
+        {
+          slug: "registry",
+          kind: "registry",
+          title: "Block Registry",
+          short: "Block Registry",
+          tag: "Registry",
+          badge: "9 groups · 27 blocks",
+          width: 1720
+        },
+        {
+          slug: "guarantees",
+          kind: "panel",
+          title: "Runtime Guarantees",
+          short: "Runtime Guarantees",
+          tag: "Principles",
+          badge: "apply to every variant",
+          width: 760,
+          items: [
+            {
+              head: "Clarification cannot be forgotten",
+              body: "Human-in-the-loop is a runtime capability, not a block. Any agent may return <code>status: \"needs_human_input\"</code>; the runtime posts the questions, suspends durably, and the lifecycle trigger's resume path re-enters. No workflow can deadlock because someone forgot a clarification block."
+            },
+            {
+              head: "Every output is typed",
+              body: "Each block emits a discriminated schema — a <code>status</code> plus typed payload — so Branch conditions and Loop exits always operate on structured data. One condition language everywhere: a single expression form over <code>steps.*.output</code> across Branch, Loop, and Terminate."
+            },
+            {
+              head: "The workspace is runtime-owned",
+              body: "The workspace is a durable identity (ticket → repos, branches, manifest) materialized into an ephemeral sandbox — warm from a persistent-sandbox snapshot, or cold from the workflow-owned branches. It is threaded via <code>workspace_id</code> and always finalized. Specialized agents attach implicitly; generic workflows compose Prepare / Finalize explicitly. LLM steps may <em>propose</em> values — the runtime <em>enforces</em> policy on anything it uses."
+            },
+            {
+              head: "Failure has a default path",
+              body: "Any block can end <code>status: \"failed\"</code>. Unless an explicit failure edge overrides it, the runtime applies the default policy: terminate the run, move the ticket to the configured column, notify the channel. Graphs draw the happy path — no <code>if err != nil</code> ladders."
+            },
+            {
+              head: "Runs serialize per ticket",
+              body: "One active run per ticket, enforced by the claim registry. Triggers that fire mid-run coalesce into the resume path instead of spawning parallel runs, and a ticket leaving the AI column cancels its active run. Multi-repo stays inside blocks: outputs carry per-repo collections plus aggregates for conditions to branch on."
+            },
+            {
+              head: "One configuration surface",
+              body: "Workflow definitions are the single source of truth for run behavior. The in-repo <code>pre-sandbox.yaml</code> and <code>post-pr-gate.yaml</code> pipelines are deprecated: their steps (repo selection, complexity check, injection check, PR gates) become blocks inside these workflows."
+            }
+          ]
+        },
+        {
+          slug: "v1-standard",
+          kind: "flow",
+          title: "V1 · Standard delivery workflow",
+          short: "V1 · Standard delivery",
+          tag: "Variant",
+          badge: "recommended default",
+          nodes: [
+            { id: "t",    type: "trig.ticket-impl", x: 30, y: 140,
+              body: "New ticket · moved to AI column · clarification answered · comment added. Jira and Linear feed the same entry." },
+            { id: "plan", type: "agent.planning", x: 340, y: 140 },
+            { id: "impl", type: "agent.implementation", x: 650, y: 140 },
+            { id: "pr",   type: "vcs.open-pr", x: 960, y: 140 },
+            { id: "tstat", type: "tk.status", x: 1270, y: 60, body: "Move to “AI Review”." },
+            { id: "slack", type: "util.slack", x: 1270, y: 300 }
+          ],
+          edges: [
+            { from: "t", to: "plan" },
+            { from: "plan", to: "impl" },
+            { from: "impl", to: "pr" },
+            { from: "pr", to: "tstat" },
+            { from: "pr", to: "slack" }
+          ],
+          notes: [
+            { x: 340, y: 460, w: 620,
+              head: "What the specialized agents absorb",
+              body: "Planning: the clarification loop and human-question protocol. Implementation: workspace prepare/resume, branch policy, commit enforcement, pre-PR verification. The runtime suspends and resumes around <code>needs_human_input</code> automatically — this five-block graph is the whole default workflow." }
+          ]
+        },
+        {
+          slug: "v2-modular",
+          kind: "flow",
+          title: "V2 · Same lifecycle, fully modular",
+          short: "V2 · Fully modular",
+          tag: "Variant",
+          badge: "generic blocks rebuild V1",
+          nodes: [
+            { id: "n1", type: "trig.ticket-impl", x: 30, y: 150 },
+            { id: "n2", type: "agent.generic", x: 330, y: 150,
+              title: "Generic Agent — planning", body: "Prompt + declared output schema; no specialized behavior." },
+            { id: "n3", type: "ctl.branch", x: 630, y: 150,
+              title: "Branch — needs human?", body: "steps.planning.output.status == \"needs_human_input\"" },
+            { id: "n4", type: "tk.comment", x: 630, y: 430, body: "Post numbered questions to the ticket." },
+            { id: "n5", type: "ctl.terminate", x: 930, y: 430,
+              title: "Terminate — waiting_for_human" },
+            { id: "n6", type: "ws.prepare", x: 930, y: 150 },
+            { id: "n7", type: "agent.generic", x: 1230, y: 150,
+              title: "Generic Agent — implementation", body: "Writes changes inside the attached workspace." },
+            { id: "n8", type: "util.checks", x: 1530, y: 150 },
+            { id: "n9", type: "ctl.branch", x: 1830, y: 150, title: "Branch — checks ok?", body: "steps.checks.output.ok" },
+            { id: "n10", type: "ctl.loop", x: 1830, y: 430,
+              title: "Loop — max 3 attempts", body: "on_exhaust: fail terminates the run with logs; no PR is opened." },
+            { id: "n11", type: "agent.fix", x: 1530, y: 430 },
+            { id: "n12", type: "ws.finalize", x: 2130, y: 150 },
+            { id: "n13", type: "vcs.open-pr", x: 2430, y: 150 }
+          ],
+          edges: [
+            { from: "n1", to: "n2" },
+            { from: "n2", to: "n3" },
+            { from: "n3", to: "n4", label: "needs human" },
+            { from: "n4", to: "n5" },
+            { from: "n3", to: "n6", label: "ready" },
+            { from: "n6", to: "n7" },
+            { from: "n7", to: "n8" },
+            { from: "n8", to: "n9" },
+            { from: "n9", to: "n12", label: "pass" },
+            { from: "n9", to: "n10", label: "fail" },
+            { from: "n10", to: "n11", label: "continue" },
+            { from: "n11", to: "n8", dashed: true, label: "re-run checks" },
+            { from: "n12", to: "n13" }
+          ],
+          notes: [
+            { x: 30, y: 430, w: 540,
+              head: "The proof of rebuildability",
+              body: "This graph reproduces V1 from generic blocks — specialized agents add convenience, not magic. To customize a detail, insert a <code>Call LLM</code> step (e.g. propose a branch slug); <code>Prepare workspace</code> still validates and creates the branch. LLM proposes, runtime enforces." }
+          ]
+        },
+        {
+          slug: "v3-approved-plan",
+          kind: "flow",
+          title: "V3 · Human-approved plan",
+          short: "V3 · Human-approved plan",
+          tag: "Variant",
+          badge: "approval gate",
+          nodes: [
+            { id: "m1", type: "trig.ticket-impl", x: 30, y: 130 },
+            { id: "m2", type: "agent.planning", x: 340, y: 130 },
+            { id: "m3", type: "hitl.plan-approval", x: 650, y: 130 },
+            { id: "m4", type: "trig.plan-approved", x: 30, y: 470 },
+            { id: "m5", type: "agent.implementation", x: 340, y: 470 },
+            { id: "m6", type: "vcs.open-pr", x: 650, y: 470 }
+          ],
+          edges: [
+            { from: "m1", to: "m2" },
+            { from: "m2", to: "m3" },
+            { from: "m3", to: "m4", dashed: true, label: "suspends · resumes on approval" },
+            { from: "m4", to: "m5" },
+            { from: "m5", to: "m6" }
+          ],
+          notes: [
+            { x: 970, y: 130, w: 420,
+              head: "One definition, two entry points",
+              body: "This is a single workflow, not two. Each trigger starts its own chain; the ticket identity correlates them, and the approval event carries the plan forward as payload. No instance sits running in between." },
+            { x: 970, y: 420, w: 420,
+              head: "Durable wait",
+              body: "Nothing is left running while a human decides. Approval in the dashboard (or the mirrored ticket comment) fires the <code>Plan approved</code> trigger, which re-enters the workflow carrying the approved plan." }
+          ]
+        },
+        {
+          slug: "v4-review-fix",
+          kind: "flow",
+          title: "V4 · Review & fix after PR",
+          short: "V4 · Review & fix after PR",
+          tag: "Variant",
+          badge: "post-PR loop",
+          nodes: [
+            { id: "p1", type: "trig.pr-checks-failed", x: 30, y: 100 },
+            { id: "p2", type: "trig.pr-review", x: 30, y: 340 },
+            { id: "p3", type: "vcs.fetch-context", x: 340, y: 220 },
+            { id: "p4", type: "agent.fix", x: 650, y: 220 },
+            { id: "p5", type: "ws.finalize", x: 960, y: 220 },
+            { id: "p6", type: "vcs.pr-comment", x: 1270, y: 220 }
+          ],
+          edges: [
+            { from: "p1", to: "p3" },
+            { from: "p2", to: "p3" },
+            { from: "p3", to: "p4" },
+            { from: "p4", to: "p5", label: "push fixes" },
+            { from: "p5", to: "p6" }
+          ],
+          notes: [
+            { x: 650, y: 500, w: 620,
+              head: "Same workspace, bounded rounds",
+              body: "The Fix Agent re-materializes the ticket's workspace — warm from its parked snapshot when available, cold from the workflow-owned branches otherwise. Check failures across a ticket's PRs coalesce into one run. A <code>Loop</code> policy bounds the rounds; exhaustion escalates to a <code>Human question</code>. This workflow subsumes the deprecated <code>post-pr-gate.yaml</code> pipeline." }
+          ]
+        },
+        {
+          slug: "decisions",
+          kind: "panel",
+          title: "Open Decisions",
+          short: "Open Decisions",
+          tag: "Decisions",
+          badge: "unresolved · owns the next design pass",
+          width: 760,
+          items: [
+            {
+              head: "Condition language",
+              body: "CEL-style expressions vs a restricted JS subset — one language across Branch, Loop, and Terminate. Decides how conditions are validated and rendered in the editor."
+            },
+            {
+              head: "JS step code: editable or illustrative?",
+              body: "Is per-step code editable execution logic, or a read-only visualization of what the block does? Changes the runtime contract and the editor's save path."
+            },
+            {
+              head: "Persistent workspace rollout",
+              body: "The two-tier model is decided (durable identity; warm/cold materialization). Remaining: migrate the worker to Sandbox SDK v2 named sandboxes (getOrCreate), snapshot TTL and keep-last policy, park-vs-destroy rules per terminal status, and storage-cost guardrails."
+            },
+            {
+              head: "MVP trigger list",
+              body: "Which of the five lifecycle triggers ship first-class in MVP, and which providers (Jira/Linear × GitHub/GitLab) each supports at launch."
+            },
+            {
+              head: "Plan approval: MVP or fast-follow?",
+              body: "V3 needs the dashboard approval queue and the Plan approved trigger. In MVP, or immediately after?"
+            },
+            {
+              head: "Review ownership",
+              body: "How much PR review the product owns (V4 + Review Agent) versus delegates to tools like CodeRabbit. Affects whether Review Agent is MVP."
+            },
+            {
+              head: "Suspend vs end-and-re-enter",
+              body: "Approval and clarification waits: durably suspend the workflow instance, or terminate and re-enter via a trigger carrying the state (what V3 draws). Affects definition versioning mid-wait and zombie-instance risk."
+            },
+            {
+              head: "Input binding mechanism",
+              body: "How block inputs bind to prior outputs: auto-wiring by shape, or explicit template expressions like ${steps.checks.output.failures} in block config — same language as conditions either way."
+            }
+          ]
+        }
+      ];
+
+      /* ================================================================
+         ENGINE — rendering, layout, navigation. Content edits above
+         never require touching anything below this line.
+         ================================================================ */
+
+      const VIEW_KEY = "aiw-workspace-view-v1";
+      const MIN_ZOOM = 0.1;
+      const MAX_ZOOM = 2;
+      const BOARD_GAP = 150;
+      const MAX_ROW_W = 4400;
+      const REDUCED_MOTION = matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+      const viewport = document.getElementById("viewport");
+      const board = document.getElementById("board");
+      const zoomLevel = document.getElementById("zoom-level");
+      const frameListEl = document.getElementById("frame-list");
+      const detailEl = document.getElementById("detail");
+
+      let view = { x: 0, y: 0, scale: 0.5 };
+      let tweenHandle = null;
+
+      const esc = (v) =>
+        String(v)
+          .replaceAll("&", "&amp;")
+          .replaceAll("<", "&lt;")
+          .replaceAll(">", "&gt;")
+          .replaceAll('"', "&quot;");
+
+      const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+
+      function groupColor(el, groupKey) {
+        el.style.setProperty("--g-color", GROUPS[groupKey].color);
+      }
+
+      /* ---------- rendering ---------- */
+
+      function cardHtml(blockId, block) {
+        return `
+          <strong>${esc(block.title)}</strong>
+          <p>${esc(block.blurb)}</p>
+          <code>${esc(block.contract)}</code>
+        `;
+      }
+
+      function renderRegistry(frame, bodyEl) {
+        bodyEl.className = "registry-body";
+        const groupsEl = document.createElement("div");
+        groupsEl.className = "registry-groups";
+        for (const [gKey, group] of Object.entries(GROUPS)) {
+          const gEl = document.createElement("section");
+          gEl.className = "registry-group" + (group.optional ? " optional" : "");
+          groupColor(gEl, gKey);
+          gEl.innerHTML = `<h3>${esc(group.label)}${group.optional ? '<span class="opt-tag">optional add-on</span>' : ""}</h3>`;
+          for (const [bId, block] of Object.entries(BLOCKS)) {
+            if (block.group !== gKey) continue;
+            const card = document.createElement("div");
+            card.className = "card";
+            card.setAttribute("role", "button");
+            card.setAttribute("tabindex", "0");
+            card.dataset.block = bId;
+            groupColor(card, gKey);
+            card.innerHTML = cardHtml(bId, block);
+            gEl.appendChild(card);
+          }
+          groupsEl.appendChild(gEl);
+        }
+        bodyEl.appendChild(groupsEl);
+        const deferred = document.createElement("div");
+        deferred.className = "deferred";
+        deferred.innerHTML = `<strong>Explicitly deferred</strong>${esc(DEFERRED_NOTE)}`;
+        bodyEl.appendChild(deferred);
+      }
+
+      function renderPanel(frame, bodyEl) {
+        bodyEl.className = "panel-body";
+        bodyEl.innerHTML = frame.items
+          .map(
+            (item, i) => `
+              <div class="panel-item">
+                <div class="marker">${i + 1}</div>
+                <div>
+                  <h4>${esc(item.head)}</h4>
+                  <p>${item.body}</p>
+                </div>
+              </div>
+            `
+          )
+          .join("");
+      }
+
+      function renderFlow(frame, bodyEl) {
+        bodyEl.className = "diagram";
+        for (const node of frame.nodes) {
+          const block = BLOCKS[node.type];
+          const el = document.createElement("div");
+          el.className = "node card";
+          el.setAttribute("role", "button");
+          el.setAttribute("tabindex", "0");
+          el.dataset.block = node.type;
+          if (node.body || node.title) el.dataset.node = `${frame.slug}:${node.id}`;
+          groupColor(el, block.group);
+          el.style.setProperty("--nx", `${node.x}px`);
+          el.style.setProperty("--ny", `${node.y}px`);
+          el.style.setProperty("--nw", `${node.w || NODE_W}px`);
+          el.innerHTML = `
+            <div class="kicker">${esc(GROUPS[block.group].label)}</div>
+            <strong>${esc(node.title || block.title)}</strong>
+            <p>${esc(node.body || block.blurb)}</p>
+            <code>${esc(block.contract)}</code>
+          `;
+          bodyEl.appendChild(el);
+        }
+        for (const note of frame.notes || []) {
+          const el = document.createElement("aside");
+          el.className = "flow-note";
+          el.style.setProperty("--nx", `${note.x}px`);
+          el.style.setProperty("--ny", `${note.y}px`);
+          el.style.setProperty("--nw", `${note.w}px`);
+          el.innerHTML = `<strong>${esc(note.head)}</strong>${note.body}`;
+          bodyEl.appendChild(el);
+        }
+      }
+
+      function renderFrames() {
+        FRAMES.forEach((frame, i) => {
+          const badge = frame.kind === "registry"
+            ? `${Object.keys(GROUPS).length} groups · ${Object.keys(BLOCKS).length} blocks`
+            : frame.badge;
+          const el = document.createElement("article");
+          el.className = "frame";
+          el.dataset.slug = frame.slug;
+          el.innerHTML = `
+            <header class="frame-header" title="Double-click to zoom to this frame">
+              <span class="num">${i + 1}</span>
+              <h2>${esc(frame.title)}</h2>
+              <span class="badge">${esc(badge)}</span>
+            </header>
+          `;
+          const body = document.createElement("div");
+          if (frame.kind === "registry") renderRegistry(frame, body);
+          else if (frame.kind === "panel") renderPanel(frame, body);
+          else renderFlow(frame, body);
+          el.appendChild(body);
+          board.appendChild(el);
+          frame.el = el;
+          frame.bodyEl = body;
+        });
+      }
+
+      /* ---------- flow geometry: measure, size, edges ---------- */
+
+      function sizeFlowFrames() {
+        for (const frame of FRAMES) {
+          if (frame.kind !== "flow") {
+            frame.el.style.setProperty("--fw", `${frame.width}px`);
+            continue;
+          }
+          let maxX = 0;
+          let maxY = 0;
+          const nodeEls = frame.bodyEl.querySelectorAll(".node");
+          frame.nodes.forEach((node, i) => {
+            node.rect = {
+              x: node.x,
+              y: node.y,
+              w: node.w || NODE_W,
+              h: nodeEls[i].offsetHeight
+            };
+            maxX = Math.max(maxX, node.rect.x + node.rect.w);
+            maxY = Math.max(maxY, node.rect.y + node.rect.h);
+          });
+          for (const note of frame.notes || []) {
+            const noteEl = [...frame.bodyEl.querySelectorAll(".flow-note")][(frame.notes || []).indexOf(note)];
+            maxX = Math.max(maxX, note.x + note.w);
+            maxY = Math.max(maxY, note.y + noteEl.offsetHeight);
+          }
+          frame.width = maxX + 30;
+          frame.el.style.setProperty("--fw", `${frame.width}px`);
+          frame.bodyEl.style.height = `${maxY + 34}px`;
+        }
+      }
+
+      function anchor(rect, side) {
+        if (side === "left") return { x: rect.x, y: rect.y + rect.h / 2 };
+        if (side === "right") return { x: rect.x + rect.w, y: rect.y + rect.h / 2 };
+        if (side === "top") return { x: rect.x + rect.w / 2, y: rect.y };
+        return { x: rect.x + rect.w / 2, y: rect.y + rect.h };
+      }
+
+      function edgePath(from, to) {
+        let a, b, path;
+        if (to.x >= from.x + from.w + 20) {
+          a = anchor(from, "right");
+          b = anchor(to, "left");
+          const mid = Math.max(40, (b.x - a.x) / 2);
+          path = `M ${a.x} ${a.y} C ${a.x + mid} ${a.y}, ${b.x - mid} ${b.y}, ${b.x} ${b.y}`;
+        } else if (to.x + to.w <= from.x - 20) {
+          a = anchor(from, "left");
+          b = anchor(to, "right");
+          const mid = Math.max(40, (a.x - b.x) / 2);
+          path = `M ${a.x} ${a.y} C ${a.x - mid} ${a.y}, ${b.x + mid} ${b.y}, ${b.x} ${b.y}`;
+        } else if (to.y > from.y) {
+          a = anchor(from, "bottom");
+          b = anchor(to, "top");
+          const mid = Math.max(36, (b.y - a.y) / 2);
+          path = `M ${a.x} ${a.y} C ${a.x} ${a.y + mid}, ${b.x} ${b.y - mid}, ${b.x} ${b.y}`;
+        } else {
+          a = anchor(from, "top");
+          b = anchor(to, "bottom");
+          const mid = Math.max(36, (a.y - b.y) / 2);
+          path = `M ${a.x} ${a.y} C ${a.x} ${a.y - mid}, ${b.x} ${b.y + mid}, ${b.x} ${b.y}`;
+        }
+        return path;
+      }
+
+      function drawEdges() {
+        const SVG = "http://www.w3.org/2000/svg";
+        for (const frame of FRAMES) {
+          if (frame.kind !== "flow") continue;
+          const rects = Object.fromEntries(frame.nodes.map((n) => [n.id, n.rect]));
+          const w = frame.width;
+          const h = parseFloat(frame.bodyEl.style.height);
+          const svg = document.createElementNS(SVG, "svg");
+          svg.classList.add("edges");
+          svg.setAttribute("viewBox", `0 0 ${w} ${h}`);
+          const markerId = `arrow-${frame.slug}`;
+          svg.innerHTML = `
+            <defs>
+              <marker id="${markerId}" markerWidth="9" markerHeight="8" refX="7.5" refY="3" orient="auto" markerUnits="userSpaceOnUse">
+                <path d="M0,0 L0,6 L8,3 z" fill="rgba(35,40,47,.6)"></path>
+              </marker>
+            </defs>
+          `;
+          for (const edge of frame.edges) {
+            const path = document.createElementNS(SVG, "path");
+            path.setAttribute("class", "edge" + (edge.dashed ? " dashed" : ""));
+            path.setAttribute("d", edgePath(rects[edge.from], rects[edge.to]));
+            path.setAttribute("marker-end", `url(#${markerId})`);
+            svg.appendChild(path);
+            if (edge.label) {
+              const text = document.createElementNS(SVG, "text");
+              text.setAttribute("class", "edge-label");
+              text.textContent = edge.label;
+              svg.appendChild(text);
+              edge._labelEl = text;
+              edge._pathEl = path;
+            }
+          }
+          frame.bodyEl.prepend(svg);
+          // position labels at path midpoints (needs the svg in the DOM)
+          for (const edge of frame.edges) {
+            if (!edge._labelEl) continue;
+            const len = edge._pathEl.getTotalLength();
+            const mid = edge._pathEl.getPointAtLength(len / 2);
+            edge._labelEl.setAttribute("x", mid.x);
+            edge._labelEl.setAttribute("y", mid.y - 9);
+          }
+        }
+      }
+
+      /* ---------- frame layout: row packer ---------- */
+
+      function packFrames() {
+        let x = 0;
+        let y = 0;
+        let rowH = 0;
+        for (const frame of FRAMES) {
+          const w = frame.width;
+          const h = frame.el.offsetHeight;
+          if (x > 0 && x + w > MAX_ROW_W) {
+            x = 0;
+            y += rowH + BOARD_GAP;
+            rowH = 0;
+          }
+          frame.pos = { x, y, w, h };
+          frame.el.style.left = `${x}px`;
+          frame.el.style.top = `${y}px`;
+          x += w + BOARD_GAP;
+          rowH = Math.max(rowH, h);
+        }
+      }
+
+      function boardBounds() {
+        return FRAMES.reduce(
+          (b, f) => ({
+            minX: Math.min(b.minX, f.pos.x),
+            minY: Math.min(b.minY, f.pos.y),
+            maxX: Math.max(b.maxX, f.pos.x + f.pos.w),
+            maxY: Math.max(b.maxY, f.pos.y + f.pos.h)
+          }),
+          { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity }
+        );
+      }
+
+      /* ---------- view: apply, fit, tween ---------- */
+
+      function sidebarWidth() {
+        return innerWidth > 860 ? 252 : 0;
+      }
+
+      function applyView({ persist = true } = {}) {
+        view.scale = clamp(view.scale, MIN_ZOOM, MAX_ZOOM);
+        board.style.transform = `translate3d(${view.x}px, ${view.y}px, 0) scale(${view.scale})`;
+        zoomLevel.textContent = `${Math.round(view.scale * 100)}%`;
+        if (persist) {
+          localStorage.setItem(
+            VIEW_KEY,
+            JSON.stringify({ x: Math.round(view.x), y: Math.round(view.y), scale: +view.scale.toFixed(4) })
+          );
+        }
+      }
+
+      function viewFor(bounds, maxScale = 1.05) {
+        const pad = { top: 70, right: 60, bottom: 60, left: sidebarWidth() + 60 };
+        const availW = Math.max(300, innerWidth - pad.left - pad.right);
+        const availH = Math.max(240, innerHeight - pad.top - pad.bottom);
+        const w = bounds.maxX - bounds.minX;
+        const h = bounds.maxY - bounds.minY;
+        const scale = clamp(Math.min(availW / w, availH / h, maxScale), MIN_ZOOM, MAX_ZOOM);
+        return {
+          scale,
+          x: pad.left + (availW - w * scale) / 2 - bounds.minX * scale,
+          y: pad.top + (availH - h * scale) / 2 - bounds.minY * scale
+        };
+      }
+
+      function stopTween() {
+        if (tweenHandle) cancelAnimationFrame(tweenHandle);
+        tweenHandle = null;
+      }
+
+      function flyTo(target, ms = 380) {
+        stopTween();
+        if (REDUCED_MOTION || ms === 0) {
+          view = { ...target };
+          applyView();
+          return;
+        }
+        const from = { ...view };
+        const start = performance.now();
+        const ease = (t) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
+        const step = (now) => {
+          const t = clamp((now - start) / ms, 0, 1);
+          const k = ease(t);
+          view = {
+            x: from.x + (target.x - from.x) * k,
+            y: from.y + (target.y - from.y) * k,
+            scale: from.scale + (target.scale - from.scale) * k
+          };
+          applyView({ persist: t === 1 });
+          if (t < 1) tweenHandle = requestAnimationFrame(step);
+          else tweenHandle = null;
+        };
+        tweenHandle = requestAnimationFrame(step);
+      }
+
+      function fitAll(animate = true) {
+        flyTo(viewFor(boardBounds()), animate ? 380 : 0);
+      }
+
+      function focusFrame(slug, animate = true) {
+        const frame = FRAMES.find((f) => f.slug === slug);
+        if (!frame) return;
+        const { x, y, w, h } = frame.pos;
+        flyTo(viewFor({ minX: x, minY: y, maxX: x + w, maxY: y + h }), animate ? 380 : 0);
+        history.replaceState(null, "", `#${slug}`);
+        markActive(slug);
+      }
+
+      function markActive(slug) {
+        for (const btn of frameListEl.querySelectorAll("button")) {
+          btn.classList.toggle("active", btn.dataset.slug === slug);
+        }
+      }
+
+      function zoomAt(nextScale, cx = innerWidth / 2, cy = innerHeight / 2) {
+        stopTween();
+        const worldX = (cx - view.x) / view.scale;
+        const worldY = (cy - view.y) / view.scale;
+        const scale = clamp(nextScale, MIN_ZOOM, MAX_ZOOM);
+        view = { scale, x: cx - worldX * scale, y: cy - worldY * scale };
+        applyView();
+      }
+
+      /* ---------- sidebar ---------- */
+
+      function renderSidebar() {
+        FRAMES.forEach((frame, i) => {
+          const btn = document.createElement("button");
+          btn.dataset.slug = frame.slug;
+          btn.innerHTML = `
+            <span class="num">${i + 1}</span>
+            <span>${esc(frame.short)}<span class="kind">${esc(frame.tag)}</span></span>
+          `;
+          btn.addEventListener("click", () => focusFrame(frame.slug));
+          frameListEl.appendChild(btn);
+        });
+      }
+
+      /* ---------- detail panel ---------- */
+
+      let detailOpen = false;
+
+      function openDetail(blockId, nodeRef) {
+        const block = BLOCKS[blockId];
+        if (!block) return;
+        const group = GROUPS[block.group];
+        const head = document.getElementById("detail-head");
+        const body = document.getElementById("detail-body");
+        detailEl.style.setProperty("--g-color", group.color);
+        head.innerHTML = `
+          <span class="group-tag">${esc(group.label)}</span>
+          <h3>${esc(block.title)}</h3>
+        `;
+        let ctx = "";
+        if (nodeRef) {
+          const [frameSlug, nodeId] = nodeRef.split(":");
+          const frame = FRAMES.find((f) => f.slug === frameSlug);
+          const node = frame?.nodes.find((n) => n.id === nodeId);
+          if (node && (node.title || node.body)) {
+            ctx = `
+              <div class="detail-section">
+                <h5>In ${esc(frame.short)}</h5>
+                <div class="ctx">${esc(node.body || node.title)}</div>
+              </div>
+            `;
+          }
+        }
+        body.innerHTML = `
+          <p class="lede">${esc(block.blurb)}</p>
+          ${ctx}
+          <div class="detail-section">
+            <h5>Input</h5>
+            <pre>${esc(block.input)}</pre>
+          </div>
+          <div class="detail-section">
+            <h5>Output</h5>
+            <pre>${esc(block.output)}</pre>
+          </div>
+          ${block.note ? `<div class="detail-section"><h5>Note</h5><div class="ctx">${esc(block.note)}</div></div>` : ""}
+        `;
+        detailEl.classList.add("open");
+        detailOpen = true;
+      }
+
+      function closeDetail() {
+        detailEl.classList.remove("open");
+        detailOpen = false;
+      }
+
+      document.getElementById("detail-close").addEventListener("click", closeDetail);
+
+      /* ---------- input: pan, zoom, click ---------- */
+
+      function installControls() {
+        const pointers = new Map();
+        let pan = null;
+        let pinch = null;
+        let moved = 0;
+        let downTarget = null;
+
+        viewport.addEventListener("pointerdown", (e) => {
+          if (e.pointerType === "mouse" && e.button !== 0 && e.button !== 1) return;
+          stopTween();
+          viewport.setPointerCapture(e.pointerId);
+          pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+          if (pointers.size === 2) {
+            const [a, b] = [...pointers.values()];
+            pinch = {
+              dist: Math.hypot(a.x - b.x, a.y - b.y),
+              scale: view.scale
+            };
+            pan = null;
+          } else if (pointers.size === 1) {
+            moved = 0;
+            downTarget = e.target;
+            pan = { startX: e.clientX, startY: e.clientY, originX: view.x, originY: view.y };
+            viewport.classList.add("panning");
+          }
+        });
+
+        viewport.addEventListener("pointermove", (e) => {
+          if (!pointers.has(e.pointerId)) return;
+          pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+          if (pinch && pointers.size === 2) {
+            const [a, b] = [...pointers.values()];
+            const dist = Math.hypot(a.x - b.x, a.y - b.y);
+            const cx = (a.x + b.x) / 2;
+            const cy = (a.y + b.y) / 2;
+            zoomAt(pinch.scale * (dist / pinch.dist), cx, cy);
+            return;
+          }
+          if (pan) {
+            const dx = e.clientX - pan.startX;
+            const dy = e.clientY - pan.startY;
+            moved = Math.max(moved, Math.hypot(dx, dy));
+            view.x = pan.originX + dx;
+            view.y = pan.originY + dy;
+            applyView();
+          }
+        });
+
+        function release(e) {
+          if (!pointers.has(e.pointerId)) return;
+          pointers.delete(e.pointerId);
+          if (pointers.size < 2) pinch = null;
+          if (pointers.size === 0) {
+            viewport.classList.remove("panning");
+            if (moved < 4 && e.type === "pointerup" && downTarget) {
+              const interactive = downTarget.closest("[data-block]");
+              if (interactive) openDetail(interactive.dataset.block, interactive.dataset.node);
+              else if (detailOpen) closeDetail();
+            }
+            pan = null;
+            downTarget = null;
+          }
+        }
+
+        viewport.addEventListener("pointerup", release);
+        viewport.addEventListener("pointercancel", release);
+
+        viewport.addEventListener(
+          "wheel",
+          (e) => {
+            e.preventDefault();
+            stopTween();
+            if (e.ctrlKey || e.metaKey) {
+              zoomAt(view.scale * Math.exp(-e.deltaY * 0.0022), e.clientX, e.clientY);
+            } else {
+              view.x -= e.deltaX;
+              view.y -= e.deltaY;
+              applyView();
+            }
+          },
+          { passive: false }
+        );
+
+        // double-click a frame header zooms to that frame
+        viewport.addEventListener("dblclick", (e) => {
+          const header = e.target.closest(".frame-header");
+          if (header) focusFrame(header.parentElement.dataset.slug);
+        });
+
+        // keyboard: Enter/Space opens focused card; global shortcuts
+        viewport.addEventListener("keydown", (e) => {
+          if ((e.key === "Enter" || e.key === " ") && e.target.dataset?.block) {
+            e.preventDefault();
+            openDetail(e.target.dataset.block, e.target.dataset.node);
+          }
+        });
+
+        document.addEventListener("keydown", (e) => {
+          if (e.metaKey || e.ctrlKey || e.altKey) return;
+          if (e.key === "Escape") { closeDetail(); return; }
+          if (e.key === "0") { history.replaceState(null, "", location.pathname); markActive(""); fitAll(); return; }
+          if (e.key >= "1" && e.key <= String(FRAMES.length)) {
+            focusFrame(FRAMES[+e.key - 1].slug);
+            return;
+          }
+          if (e.key === "+" || e.key === "=") zoomAt(view.scale * 1.2);
+          if (e.key === "-" || e.key === "_") zoomAt(view.scale / 1.2);
+        });
+
+        document.getElementById("zoom-in").addEventListener("click", () => zoomAt(view.scale * 1.2));
+        document.getElementById("zoom-out").addEventListener("click", () => zoomAt(view.scale / 1.2));
+        document.getElementById("fit-all").addEventListener("click", () => fitAll());
+
+        addEventListener("hashchange", () => {
+          const slug = location.hash.slice(1);
+          if (FRAMES.some((f) => f.slug === slug)) focusFrame(slug);
+        });
+
+        addEventListener("resize", () => applyView({ persist: false }));
+      }
+
+      /* ---------- boot ---------- */
+
+      renderFrames();
+      sizeFlowFrames();
+      drawEdges();
+      packFrames();
+      renderSidebar();
+      installControls();
+
+      const hashSlug = location.hash.slice(1);
+      const savedView = (() => {
+        try { return JSON.parse(localStorage.getItem(VIEW_KEY) || "null"); } catch { return null; }
+      })();
+
+      if (hashSlug && FRAMES.some((f) => f.slug === hashSlug)) {
+        focusFrame(hashSlug, false);
+      } else if (savedView && Number.isFinite(savedView.x) && Number.isFinite(savedView.scale)) {
+        view = savedView;
+        applyView({ persist: false });
+      } else {
+        fitAll(false);
+      }
+    </script>
+  </body>
+</html>
