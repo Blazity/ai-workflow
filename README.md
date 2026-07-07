@@ -150,6 +150,7 @@ There is a single durable workflow — `agentWorkflow` in [`apps/worker/src/work
 | `writeAttachments` | Writes downloaded attachments under `/tmp/attachments/` inside the sandbox |
 | **Phase 1 — Research/Plan** | `setCommitGuardStep(false)` → `planPhaseStep("research")` → `writeAndStartPhase` → `pollUntilDone` (20 min) → `collectPhase` → `parseResearchStep`. Result is `completed`, `clarification_needed`, or `failed` |
 | **Phase 2 — Implementation** | `setCommitGuardStep(true)` → `planPhaseStep("impl", AGENT_SCHEMA)` → `writeAndStartPhase` → `pollUntilDone` (35 min) → `collectPhase` → `parseAgentOutputStep` |
+| `runPrePrChecksStep` | Optional — runs explicit `PRE_PR_CHECKS` commands for changed repositories before branch push / PR creation; failed checks trigger up to 3 agent fix cycles, then block publication |
 | `pushWorkspaceFromSandbox` | Reads the workspace manifest, injects the VCS token after the agent process is dead, and force-pushes only repositories whose HEAD changed |
 | `createOrUseWorkflowOwnedPullRequestsForRepos` | Opens or reuses PRs/MRs for changed workflow-owned branches |
 | `moveTicket` → `notifyTicket("pr_ready")` | Moves the ticket to "AI Review" and sends the Slack notification with the usage report |
