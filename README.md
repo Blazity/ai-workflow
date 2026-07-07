@@ -22,7 +22,7 @@ ai-workflow/
 | Package | Name | What it is |
 |---------|------|-----------|
 | `apps/worker` | `worker` | The actual automation service: Nitro server, durable workflow, sandbox lifecycle, Jira/VCS/Slack adapters. This is what you deploy to run the bot. Everything in the [Workflow Deep-dive](#workflow-deep-dive) below lives here, under `apps/worker/src/`. |
-| `apps/dashboard` | `ai-workflow-dashboard` | A Next.js "cockpit" that visualizes runs, KPIs, eval health, and dashboard user administration. It proxies worker APIs server-side and stores only the worker-issued dashboard session cookie. Optional: the bot runs fine without it. |
+| `apps/dashboard` | `ai-workflow-dashboard` | A Next.js "cockpit" that visualizes runs, KPIs, cost & usage, Arthur eval health, prompt versions, and dashboard user administration. It proxies worker APIs server-side and stores only the worker-issued dashboard session cookie. Optional: the bot runs fine without it. |
 | `apps/shared` | _(no package — see below)_ | Shared TypeScript contracts (`domain.ts`, `api.ts`) describing the worker's API responses, so the dashboard and worker stay in sync at the type level. |
 
 ### How the packages connect
@@ -50,11 +50,13 @@ Root scripts in [`package.json`](./package.json) fan out across the workspace:
 
 | Command | What it does |
 |---------|-------------|
-| `pnpm dev` | Runs the worker in dev (`pnpm --filter worker dev`). Run the dashboard with `pnpm --filter ai-workflow-dashboard dev`. |
+| `pnpm dev` | Runs the worker in dev (`pnpm --filter worker dev`) |
+| `pnpm dev:dashboard` | Runs the dashboard in dev (`pnpm --filter ai-workflow-dashboard dev`) |
+| `pnpm dev:all` | Runs every app's dev server in parallel |
 | `pnpm build` | `pnpm -r build` — builds every app |
 | `pnpm typecheck` | `pnpm -r typecheck` — typechecks every app (validates the `@shared` contracts on both sides) |
 | `pnpm test` | `pnpm -r test` — runs each app's unit tests |
-| `pnpm test:e2e` | Runs the worker's E2E suites |
+| `pnpm test:e2e` | Runs the worker's E2E suites (`test:e2e:agent`, `test:e2e:orchestration`, `test:e2e:capacity` run them individually) |
 
 To target a single app, use pnpm's `--filter`: `pnpm --filter worker test`, `pnpm --filter ai-workflow-dashboard build`.
 
@@ -86,12 +88,14 @@ flowchart TD
     P2 --> P2R{Impl result?}
     P2R -- "clarification_needed" --> CL
     P2R -- "failed / timeout" --> FB
-    P2R -- "implemented" --> PUSH["pushWorkspaceFromSandbox (push changed repos)"]
+    P2R -- "implemented" --> GATE["runPrePrChecksStep (optional PRE_PR_CHECKS)"]
+    GATE -- "checks fail (≤3 fix cycles)" --> FB
+    GATE -- "pass / not configured" --> PUSH["pushWorkspaceFromSandbox (push changed repos)"]
 
     PUSH --> PUSHR{Push ok?}
     PUSHR -- "no" --> FB
     PUSHR -- "yes" --> PR["create/re-fetch PRs/MRs"]
-    PR --> MV["Move to AI Review → notify pr_ready"]
+    PR --> MV["Notify pr_ready → move to AI Review"]
 
     TD["teardownSandbox (always runs in finally)"]
     MV -.-> TD
@@ -114,7 +118,7 @@ flowchart TD
 | AI Agent | [Claude Code](https://docs.anthropic.com/en/docs/claude-code) or [OpenAI Codex CLI](https://github.com/openai/codex) | Coding agent (selectable via `AGENT_KIND`) |
 | Issue Tracker | Jira REST API | Ticket lifecycle management |
 | VCS | GitHub ([Octokit](https://github.com/octokit/rest.js)) or GitLab ([@gitbeaker/rest](https://github.com/jdalrymple/gitbeaker)) | Branches, PRs/MRs, comments |
-| Messaging | [Chat SDK](https://chat-sdk.dev) + Slack | Team notifications + `/ai-workflow` slash commands |
+| Messaging | [Chat SDK](https://github.com/vercel/chat) (`chat` + `@chat-adapter/slack`) | Slack notifications + `/ai-workflow` slash commands |
 | Run Registry | [Neon Postgres](https://neon.tech) (via Vercel Marketplace integration) | Atomic claim/release for concurrent runs |
 | Tracing (optional) | [Arthur AI Engine](https://www.arthur.ai/) | Per-run prompt/tool tracing inside the sandbox |
 | Validation | [Zod](https://zod.dev) | Schema validation for config and agent output |
@@ -139,10 +143,10 @@ There is a single durable workflow — `agentWorkflow` in [`apps/worker/src/work
 | Step | What happens |
 |------|-------------|
 | `fetchAndValidateTicket` | Fetches the ticket from Jira; aborts if it's no longer in the AI column |
-| `runPreSandboxPhaseStep` | Runs configured pre-sandbox steps; repository selection chooses the repos the run may edit and includes workflow-owned branches for this ticket by default |
-| `prepareSelectedRepositoryBranches` | Creates/reuses the per-repository `blazebot/{ticket-key}` branch and records AI Workflow branch ownership in Postgres |
-| `fetchSelectedRepositoryPRContexts` | For each selected repository with a workflow-owned PR/MR, loads review comments, check results, and conflict status |
 | `fetchAttachments` | Downloads ticket attachments (size/count limited by `ATTACHMENT_*` env vars) |
+| `runPreSandboxPhaseStep` | Runs configured pre-sandbox steps; repository selection chooses the repos the run may edit and includes workflow-owned branches for this ticket by default |
+| `prepareSelectedRepositoryBranches` | Creates/reuses the per-repository `blazebot/{ticket-key}` branch (ticket key lowercased) and records AI Workflow branch ownership in Postgres |
+| `fetchSelectedRepositoryPRContexts` | For each selected repository with a workflow-owned PR/MR, loads review comments, check results, and conflict status |
 | `ensureArthurTaskForTicket` | Optional — creates an Arthur trace task when `GENAI_ENGINE_*` is configured |
 | `resolveAgentKindOverride` | Per-ticket override via labels (e.g. `agent:codex`); falls back to `AGENT_KIND` |
 | `provisionSandbox` | Provisions a Vercel Sandbox with the first selected repo at `/vercel/sandbox`, clones additional repos under `/vercel/sandbox/repos/`, writes the workspace manifest, installs the agent CLI + skills, and configures auth + Arthur tracer |
@@ -150,10 +154,11 @@ There is a single durable workflow — `agentWorkflow` in [`apps/worker/src/work
 | `writeAttachments` | Writes downloaded attachments under `/tmp/attachments/` inside the sandbox |
 | **Phase 1 — Research/Plan** | `setCommitGuardStep(false)` → `planPhaseStep("research")` → `writeAndStartPhase` → `pollUntilDone` (20 min) → `collectPhase` → `parseResearchStep`. Result is `completed`, `clarification_needed`, or `failed` |
 | **Phase 2 — Implementation** | `setCommitGuardStep(true)` → `planPhaseStep("impl", AGENT_SCHEMA)` → `writeAndStartPhase` → `pollUntilDone` (35 min) → `collectPhase` → `parseAgentOutputStep` |
+| `runPrePrChecksStep` | Optional — runs explicit `PRE_PR_CHECKS` commands for changed repositories before branch push / PR creation; failed checks trigger up to 3 agent fix cycles, then block publication |
 | `pushWorkspaceFromSandbox` | Reads the workspace manifest, injects the VCS token after the agent process is dead, and force-pushes only repositories whose HEAD changed |
+| `unregisterRun` | Removes the ticket from the Postgres run registry (on the success path, just before PR creation) |
 | `createOrUseWorkflowOwnedPullRequestsForRepos` | Opens or reuses PRs/MRs for changed workflow-owned branches |
-| `moveTicket` → `notifyTicket("pr_ready")` | Moves the ticket to "AI Review" and sends the Slack notification with the usage report |
-| `unregisterRun` | Removes the ticket from the Postgres run registry |
+| `notifyTicket("pr_ready")` → `moveTicket` | Sends the Slack notification with the usage report, then moves the ticket to "AI Review" |
 | `teardownSandbox` | Always runs in `finally` — destroys the sandbox regardless of outcome |
 
 If either phase returns `clarification_needed`, the workflow posts numbered questions as a Jira comment, moves the ticket to Backlog, and emits a `needs_clarification` Slack event. If a phase fails or times out, the ticket is moved to Backlog with a `failed` event.
@@ -173,7 +178,7 @@ Each agent run gets a fresh, isolated [Vercel Sandbox](https://vercel.com/docs/s
 | Model | `CLAUDE_MODEL` or `CODEX_MODEL` baked into the phase wrapper script |
 | Per-phase input | `/tmp/research-requirements.md` and `/tmp/impl-requirements.md` — assembled by `assembleResearchPlanContext` / `assembleImplementationContext` |
 | Attachments | Written to `/tmp/attachments/<filename>` |
-| Git identity | `git config user.name` / `user.email` from `COMMIT_AUTHOR` / `COMMIT_EMAIL` (or auto-derived from the GitHub App when unset) |
+| Git identity | `git config user.name` / `user.email` from `COMMIT_AUTHOR` / `COMMIT_EMAIL` (when unset: auto-derived from the GitHub App, or `ai-workflow-blazity` on GitLab) |
 | Agent CLI | `@anthropic-ai/claude-code` (Claude) or `@openai/codex` (Codex), installed globally |
 | Skills | Installed via `npx skills add ... -g --agent claude-code codex --copy` to **both** `~/.claude/skills/` and `~/.agents/skills/`. Currently only [`frontend-design`](https://github.com/anthropics/skills) is in `GLOBAL_SKILLS` |
 | Arthur tracer (optional) | Python tracer + `~/.claude/arthur_config.json` + hook entries in `~/.claude/settings.json` |
@@ -214,9 +219,11 @@ ai workflow pushes from **inside the sandbox**, but only after the agent process
 
 1. **Read the workspace manifest** — `/vercel/sandbox/aiw-repos.json` lists each selected repository, its local path, branch name, and pre-agent SHA.
 2. **Verify commits exist per repository** — compare each saved `preAgentSha` to that repository's current `HEAD`. Unchanged repositories are skipped; if none changed, the workflow fails the run with "Agent reported success but made no commits."
-3. **Inject the token per changed repository** — `git -C <repo> remote set-url origin <auth-url>`. The agent process is already dead at this point and never sees the token.
+3. **Inject the token per push** — the token is passed as an `http.extraHeader` authorization header on the push command itself, never written to the remote URL or disk. The agent process is already dead at this point and never sees the token; after a successful push, `origin` is reset to the token-less clone URL.
 4. **Unshallow if needed** — shallow clones miss shared ancestry with the base branch, which breaks PR/MR creation.
 5. **Push changed repositories** — `git -C <repo> push --force origin HEAD:refs/heads/{branch}`. Force-push is scoped to workflow-owned `blazebot/*` branches.
+
+If a push fails, `fixAndRetryWorkspacePush` re-invokes the agent with a fix prompt (fix and commit, no push) and retries the push once.
 
 #### How PRs are created
 
@@ -230,6 +237,10 @@ For repositories that already had a workflow-owned PR/MR record, no new PR/MR is
 #### Teardown
 
 The sandbox is **always destroyed** after each run (in a `finally` block), whether the agent succeeded, failed, or timed out. Every run starts and ends with a clean slate.
+
+### Post-PR Gate
+
+PR creation isn't the end of the pipeline. A separate durable workflow — `postPrGateWorkflow` in [`apps/worker/src/workflows/post-pr-gate.ts`](./apps/worker/src/workflows/post-pr-gate.ts) — is triggered by GitHub/GitLab webhooks on workflow-owned `blazebot/*` branches and runs configurable checks against the PR, surfacing each step as a check run / commit status on the head SHA. Steps are configured via `post-pr-gate.yaml` (v1 ships `pr-title-format` and `code-hygiene`); locking, dedupe, and force-push handling live in the Postgres gate tables. See [docs/post-pr-gate-spec.md](./docs/post-pr-gate-spec.md).
 
 ### Run Registry and Reconciliation
 
