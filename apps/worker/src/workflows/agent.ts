@@ -428,7 +428,7 @@ async function notifyTicket(ticketKey: string, event: TicketEvent) {
 
 async function logPhaseFailure(
   ticketKey: string,
-  phase: "research" | "impl" | "review" | "push",
+  phase: "research" | "impl" | "review" | "pre-pr-checks" | "push",
   reason: string,
 ): Promise<void> {
   "use step";
@@ -508,6 +508,24 @@ async function resolveAgentKindOverride(labels: readonly string[]): Promise<Agen
   const { parseAgentKindOverride } = await import("../sandbox/agents/index.js");
   return parseAgentKindOverride(labels);
 }
+
+async function runPrePrChecksStep(
+  sandboxId: string,
+  agentKind: AgentKind,
+  model: string,
+): Promise<{ passed: boolean; fixCycles: number; summary: string }> {
+  "use step";
+  const { env } = await import("../../env.js");
+  const { parsePrePrCheckConfig } = await import("../pre-pr-checks/config.js");
+  const { runPrePrChecksWithFixes } = await import("../pre-pr-checks/runner.js");
+  return runPrePrChecksWithFixes(
+    sandboxId,
+    parsePrePrCheckConfig(env.PRE_PR_CHECKS),
+    agentKind,
+    model,
+  );
+}
+runPrePrChecksStep.maxRetries = 0;
 
 async function markTicketFailed(ticketIdentifier: string, error: string) {
   "use step";
@@ -957,6 +975,21 @@ export async function agentWorkflow(ticketId: string) {
           });
           return;
         }
+      }
+
+      const prePrChecks = await runPrePrChecksStep(sandboxId, agentKind, activeModel);
+      if (!prePrChecks.passed) {
+        const reason = prePrChecks.summary.slice(0, 2_000);
+        await logPhaseFailure(ticket.identifier, "pre-pr-checks", reason);
+        await unregisterRun(ticket.identifier);
+        await moveTicket(ticketId, backlogMoveTarget());
+        await notifyTicket(ticket.identifier, {
+          kind: "failed",
+          phase: "pre-pr-checks",
+          reason,
+          usageReport: usageReportOrUndefined(),
+        });
+        return;
       }
 
       // ========== POST-PHASES: Push & PR ==========
