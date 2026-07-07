@@ -51,6 +51,16 @@ describe("formatTicketStatus", () => {
     ).toBe(`:warning: ${LINK} STATUS: failed (research)`);
   });
 
+  it("failed with pre-PR checks phase → status names the phase", () => {
+    expect(
+      formatTicketStatus(
+        { kind: "failed", phase: "pre-pr-checks", reason: "x" },
+        KEY,
+        JIRA,
+      ),
+    ).toBe(`:warning: ${LINK} STATUS: failed (pre-pr-checks)`);
+  });
+
   it("failed without phase → bare failed", () => {
     expect(formatTicketStatus({ kind: "failed" }, KEY, JIRA)).toBe(
       `:warning: ${LINK} STATUS: failed`,
