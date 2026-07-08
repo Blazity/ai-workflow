@@ -301,6 +301,10 @@ This is enough for password-only dashboard login. SSO and Resend are optional wo
 
 `env.ts` cross-validates at startup — missing required vars or wrong combinations (e.g. `VCS_KIND=github` without `GITHUB_OWNER`) crash the process with a precise error.
 
+Pre-PR checks (per-repo commands run before push/PR creation) are configured in the dashboard:
+**Pre-PR checks** in the cockpit sidebar. Admins and owners can edit; changes are versioned with
+one-click restore.
+
 ---
 
 ## 6. Deploy to Vercel

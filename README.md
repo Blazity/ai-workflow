@@ -88,7 +88,7 @@ flowchart TD
     P2 --> P2R{Impl result?}
     P2R -- "clarification_needed" --> CL
     P2R -- "failed / timeout" --> FB
-    P2R -- "implemented" --> GATE["runPrePrChecksStep (optional PRE_PR_CHECKS)"]
+    P2R -- "implemented" --> GATE["runPrePrChecksStep (optional, dashboard-configured)"]
     GATE -- "checks fail (≤3 fix cycles)" --> FB
     GATE -- "pass / not configured" --> PUSH["pushWorkspaceFromSandbox (push changed repos)"]
 
@@ -154,7 +154,7 @@ There is a single durable workflow — `agentWorkflow` in [`apps/worker/src/work
 | `writeAttachments` | Writes downloaded attachments under `/tmp/attachments/` inside the sandbox |
 | **Phase 1 — Research/Plan** | `setCommitGuardStep(false)` → `planPhaseStep("research")` → `writeAndStartPhase` → `pollUntilDone` (20 min) → `collectPhase` → `parseResearchStep`. Result is `completed`, `clarification_needed`, or `failed` |
 | **Phase 2 — Implementation** | `setCommitGuardStep(true)` → `planPhaseStep("impl", AGENT_SCHEMA)` → `writeAndStartPhase` → `pollUntilDone` (35 min) → `collectPhase` → `parseAgentOutputStep` |
-| `runPrePrChecksStep` | Optional — runs explicit `PRE_PR_CHECKS` commands for changed repositories before branch push / PR creation; failed checks trigger up to 3 agent fix cycles, then block publication |
+| `runPrePrChecksStep` | Optional — runs dashboard-configured pre-PR check commands (cockpit → Pre-PR checks) for changed repositories before branch push / PR creation; failed checks trigger up to 3 agent fix cycles, then block publication |
 | `pushWorkspaceFromSandbox` | Reads the workspace manifest, injects the VCS token after the agent process is dead, and force-pushes only repositories whose HEAD changed |
 | `unregisterRun` | Removes the ticket from the Postgres run registry (on the success path, just before PR creation) |
 | `createOrUseWorkflowOwnedPullRequestsForRepos` | Opens or reuses PRs/MRs for changed workflow-owned branches |
