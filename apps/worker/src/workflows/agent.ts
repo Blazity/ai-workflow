@@ -515,12 +515,19 @@ async function runPrePrChecksStep(
   model: string,
 ): Promise<{ passed: boolean; fixCycles: number; summary: string }> {
   "use step";
-  const { env } = await import("../../env.js");
-  const { parsePrePrCheckConfig } = await import("../pre-pr-checks/config.js");
+  const { getDb } = await import("../db/client.js");
+  const { getCurrentPrePrCheckConfig } = await import("../pre-pr-checks/store.js");
+  const { emptyPrePrCheckConfig } = await import("../pre-pr-checks/config.js");
   const { runPrePrChecksWithFixes } = await import("../pre-pr-checks/runner.js");
+  const { logger } = await import("../lib/logger.js");
+  const current = await getCurrentPrePrCheckConfig(getDb());
+  logger.info(
+    { version: current?.version ?? null },
+    "pre_pr_checks_config_version",
+  );
   return runPrePrChecksWithFixes(
     sandboxId,
-    parsePrePrCheckConfig(env.PRE_PR_CHECKS),
+    current?.config ?? emptyPrePrCheckConfig,
     agentKind,
     model,
   );
