@@ -21,3 +21,7 @@ export function normalizeDashboardRole(role: string): DashboardRole | null {
   if (roles.includes("member")) return "member";
   return null;
 }
+
+export function canEditPrePrChecks(role: DashboardRole): boolean {
+  return role === "owner" || role === "admin";
+}

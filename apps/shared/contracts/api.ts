@@ -1,4 +1,12 @@
-import type { PromptDef, Run, RunDetail, RunStep, Workflow } from "./domain.js";
+import type {
+  PrePrCheckConfigVersion,
+  PromptDef,
+  RepositoryOption,
+  Run,
+  RunDetail,
+  RunStep,
+  Workflow,
+} from "./domain.js";
 
 export interface ErrorEnvelope {
   error: { code: string; message: string; details?: unknown };
@@ -156,4 +164,18 @@ export interface WorkflowsResponse {
   generatedAt: string;
   rows: WorkflowRow[];
   total: number;
+}
+
+export interface PrePrChecksResponse {
+  current: PrePrCheckConfigVersion | null;
+  /** Newest first, capped at 50. */
+  versions: PrePrCheckConfigVersion[];
+}
+
+export interface PrePrCheckSaveResponse {
+  version: PrePrCheckConfigVersion;
+}
+
+export interface RepositoriesResponse {
+  repositories: RepositoryOption[];
 }

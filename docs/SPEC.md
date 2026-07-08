@@ -185,6 +185,8 @@ Tables:
 - `workflow_runs` — durable run telemetry: status (`success` | `failed`), timing, agent/model, PR
   links, token/cost totals, per-phase usage, and the full step trace.
 - `gate_locks`, `gate_dedupe`, `gate_current` — post-PR gate state (Section 16).
+- `pre_pr_check_config_versions` — append-only dashboard-managed pre-PR check config (current =
+  highest version).
 - `env_marker` — guards against two environments sharing one Neon branch.
 - Better Auth tables (`db/auth-schema.ts`) — users, sessions, organizations, invites.
 - Email delivery tables (`db/email-delivery-schema.ts`) — Resend delivery tracking.
@@ -239,8 +241,8 @@ per-variable reference lives in `SETUP.md`; the groups are:
   the GitHub App, or falls back to `ai-workflow-blazity` on GitLab).
 - **Sandbox / limits:** `MAX_CONCURRENT_AGENTS` (default 3), `JOB_TIMEOUT_MS` (default 30 min),
   `ATTACHMENT_MAX_FILE_SIZE_MB` / `ATTACHMENT_MAX_TOTAL_SIZE_MB` / `ATTACHMENT_MAX_COUNT` /
-  `ATTACHMENT_DOWNLOAD_TIMEOUT_MS`, `ENABLE_REVIEW_PHASE` (default `false`), `PRE_PR_CHECKS`
-  (optional JSON — per-repo commands run as a pre-PR gate, Section 9.3).
+  `ATTACHMENT_DOWNLOAD_TIMEOUT_MS`, `ENABLE_REVIEW_PHASE` (default `false`). Pre-PR check
+  commands are dashboard-managed (Section 9.3), not env config.
 - **Arthur (optional):** `GENAI_ENGINE_API_KEY`, `GENAI_ENGINE_TRACE_ENDPOINT`,
   `GENAI_ENGINE_PROMPT_TASK_ID`.
 - **Database:** `DATABASE_URL` (required; Neon via Vercel Marketplace).
@@ -267,7 +269,7 @@ and a structured output schema:
 | `research` (plan) | 20 min | off | `completed` \| `clarification_needed` \| `failed` |
 | `impl` | 35 min | on | `implemented` \| `clarification_needed` \| `failed` + `summary` / `questions` / `error` |
 | `review` (optional, `ENABLE_REVIEW_PHASE`) | 15 min | on | `approved` \| `failed` |
-| pre-PR checks (optional, `PRE_PR_CHECKS`) | — | — | pass \| fail after ≤3 agent fix cycles |
+| pre-PR checks (optional, dashboard-configured) | — | — | pass \| fail after ≤3 agent fix cycles |
 | push + PR | — | — | — |
 
 ### 7.2 Ticket transitions (Jira columns)
@@ -367,8 +369,9 @@ commit before it can return `implemented`.
 
 ### 9.3 Pre-PR Checks (optional gate)
 
-When `PRE_PR_CHECKS` is configured (JSON: per-repo `provider` / `repoPath` / `commands`), the
-workflow runs the configured commands inside the sandbox (`src/pre-pr-checks/`) after the phases
+Pre-PR check commands are configured in the dashboard (cockpit → Pre-PR checks;
+admin/owner-editable, versioned with rollback, stored in `pre_pr_check_config_versions`). When
+configured, the workflow runs them inside the sandbox (`src/pre-pr-checks/`) after the phases
 and before push/PR creation — only for repositories whose HEAD changed since provisioning. Failed
 checks are fed back to the agent (fix and commit, no push) for up to 3 fix cycles; if checks still
 fail, publication is blocked and the ticket moves to Backlog with a `failed (pre-pr-checks)`
@@ -617,8 +620,8 @@ Arthur-backed), Arthur evals, Cost & usage, Workflow editor, and Users (invites,
 - Slack notifications (live status + threads + usage reports) and `/ai-workflow` slash command.
 - Attachments pipeline into the sandbox.
 - Reconciler (stale claims, orphaned runs, finished runs, failed markers).
-- Pre-PR check gate (`PRE_PR_CHECKS`): per-repo sandbox commands with agent fix cycles before
-  push/PR creation.
+- Pre-PR check gate: dashboard-managed per-repo sandbox commands (versioned, with rollback) with
+  agent fix cycles before push/PR creation.
 - Post-PR gate workflow with check-run reporting.
 - Dashboard with Better Auth (password + optional SSO), invites/roles, Resend email.
 - Arthur tracing, eval health, prompt versioning (optional).
