@@ -1,6 +1,7 @@
 import type {
   PrePrCheckConfigVersion,
   PromptDef,
+  RepositoryOption,
   Run,
   RunDetail,
   RunStep,
@@ -173,4 +174,8 @@ export interface PrePrChecksResponse {
 
 export interface PrePrCheckSaveResponse {
   version: PrePrCheckConfigVersion;
+}
+
+export interface RepositoriesResponse {
+  repositories: RepositoryOption[];
 }

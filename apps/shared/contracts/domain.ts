@@ -192,3 +192,13 @@ export interface PrePrCheckConfigVersion {
   createdByLabel: string;
   restoredFromVersion: number | null;
 }
+
+export interface RepositoryOption {
+  provider: VcsProviderKind;
+  repoPath: string;
+  name: string;
+  owner: string;
+  defaultBranch: string;
+  private: boolean;
+  archived: boolean;
+}
