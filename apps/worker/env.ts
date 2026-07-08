@@ -73,11 +73,6 @@ export const env = createEnv({
     // Codex model selection.
     CODEX_MODEL: z.string().default("gpt-5-codex"),
 
-    // Explicit per-repo commands run in the sandbox after implementation and
-    // before branch push / PR creation. JSON shape:
-    // {"repositories":[{"provider":"github","repoPath":"owner/repo","commands":["pnpm test"]}]}
-    PRE_PR_CHECKS: z.string().min(1).optional(),
-
     // LiteLLM community-maintained pricing JSON. Operator overridable.
     CODEX_PRICING_URL: z
       .string()

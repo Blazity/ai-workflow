@@ -12,7 +12,7 @@ export interface PrePrCheckConfig {
 
 export const emptyPrePrCheckConfig: PrePrCheckConfig = { repositories: [] };
 
-const prePrCheckConfigSchema = z
+export const prePrCheckConfigSchema = z
   .object({
     repositories: z.array(
       z
@@ -26,33 +26,8 @@ const prePrCheckConfigSchema = z
   })
   .strict();
 
-export function parsePrePrCheckConfig(raw: string | undefined | null): PrePrCheckConfig {
-  if (!raw?.trim()) return emptyPrePrCheckConfig;
-
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch (err) {
-    throw new Error(`Invalid PRE_PR_CHECKS: ${errorMessage(err)}`);
-  }
-
-  const result = prePrCheckConfigSchema.safeParse(parsed);
-  if (!result.success) {
-    throw new Error(
-      "Invalid PRE_PR_CHECKS:\n" +
-        result.error.issues
-          .map((issue) => `  ${formatPath(issue.path)}: ${issue.message}`)
-          .join("\n"),
-    );
-  }
-
-  return result.data;
-}
-
-function formatPath(path: Array<string | number>): string {
-  return path.length > 0 ? path.join(".") : "root";
-}
-
-function errorMessage(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
+export function describePrePrCheckIssues(error: z.ZodError): string {
+  return error.issues
+    .map((issue) => `${issue.path.length > 0 ? issue.path.join(".") : "root"}: ${issue.message}`)
+    .join("; ");
 }

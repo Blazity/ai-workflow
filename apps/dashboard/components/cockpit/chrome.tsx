@@ -10,16 +10,17 @@ const NAV = [
   { id: "evals", label: "Arthur evals", glyph: "✓", group: "obs" },
   { id: "cost", label: "Cost & usage", glyph: "$", group: "obs" },
   { id: "editor", label: "Workflow editor", glyph: "▷", group: "flow" },
+  { id: "checks", label: "Pre-PR checks", glyph: "☑", group: "flow" },
   { id: "users", label: "Users", glyph: "U", group: "team" },
 ];
 
 const NAV_GROUPS = [
   { id: "obs", label: "Observability" },
-  { id: "flow", label: "Workflow editor" },
+  { id: "flow", label: "Workflow" },
   { id: "team", label: "Users" },
 ];
 
-export const MOBILE_MORE_NAV_IDS = ["prompts", "evals", "cost", "users"] as const;
+export const MOBILE_MORE_NAV_IDS = ["prompts", "evals", "cost", "checks", "users"] as const;
 
 export function isMobileMoreNavItem(id: string): boolean {
   return (MOBILE_MORE_NAV_IDS as readonly string[]).includes(id);
