@@ -9,10 +9,12 @@ import {
   numeric,
   pgTable,
   primaryKey,
+  serial,
   text,
   timestamp,
 } from "drizzle-orm/pg-core";
 import type { GateStatusRef } from "../adapters/vcs/types.js";
+import type { PrePrCheckConfig } from "../pre-pr-checks/config.js";
 
 /**
  * Run registry — replaces the blazebot:active-runs / blazebot:sandboxes /
@@ -205,6 +207,20 @@ export const workflowOwnedBranches = pgTable(
     check("workflow_owned_branches_provider_check", sql`${t.provider} in ('github', 'gitlab')`),
   ],
 );
+
+/**
+ * Dashboard-managed pre-PR check configuration, append-only. The current
+ * config is the row with the highest version; a rollback appends a copy of
+ * an older version with restored_from_version set. No rows = gate disabled.
+ */
+export const prePrCheckConfigVersions = pgTable("pre_pr_check_config_versions", {
+  version: serial("version").primaryKey(),
+  config: jsonb("config").$type<PrePrCheckConfig>().notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  createdById: text("created_by_id").notNull(),
+  createdByLabel: text("created_by_label").notNull(),
+  restoredFromVersion: integer("restored_from_version"),
+});
 
 export * from "./auth-schema.js";
 export * from "./email-delivery-schema.js";
