@@ -168,3 +168,27 @@ export interface PromptDef {
   /** Real Arthur version history, newest first. Empty when source is "fallback". */
   versions: PromptVersion[];
 }
+
+// --- Pre-PR checks (dashboard-managed gate config) ---
+
+export type VcsProviderKind = "github" | "gitlab";
+
+export interface PrePrCheckRepositoryConfig {
+  provider: VcsProviderKind;
+  repoPath: string;
+  commands: string[];
+}
+
+export interface PrePrCheckConfig {
+  repositories: PrePrCheckRepositoryConfig[];
+}
+
+export interface PrePrCheckConfigVersion {
+  version: number;
+  config: PrePrCheckConfig;
+  /** ISO timestamp. */
+  createdAt: string;
+  createdById: string;
+  createdByLabel: string;
+  restoredFromVersion: number | null;
+}

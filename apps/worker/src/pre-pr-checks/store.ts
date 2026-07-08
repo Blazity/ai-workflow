@@ -1,6 +1,7 @@
+import type { PrePrCheckConfigVersion } from "@shared/contracts";
 import { desc, eq } from "drizzle-orm";
 import type { Db } from "../db/client.js";
-import { prePrCheckConfigVersions } from "../db/schema.js";
+import { prePrCheckConfigVersions, user } from "../db/schema.js";
 import { canEditPrePrChecks, type DashboardRole } from "../lib/auth/roles.js";
 import { DashboardAuthError } from "../lib/auth/users-read.js";
 import type { PrePrCheckConfig } from "./config.js";
@@ -87,4 +88,28 @@ export async function restorePrePrCheckConfig(
     config: source.config,
     restoredFromVersion: source.version,
   });
+}
+
+export function serializePrePrCheckConfigVersion(
+  row: PrePrCheckConfigVersionRow,
+): PrePrCheckConfigVersion {
+  return {
+    version: row.version,
+    config: row.config,
+    createdAt: row.createdAt.toISOString(),
+    createdById: row.createdById,
+    createdByLabel: row.createdByLabel,
+    restoredFromVersion: row.restoredFromVersion,
+  };
+}
+
+/** Display label for the audit trail: name, falling back to email, then id. */
+export async function dashboardUserLabel(db: Db, userId: string): Promise<string> {
+  const rows = await db
+    .select({ name: user.name, email: user.email })
+    .from(user)
+    .where(eq(user.id, userId))
+    .limit(1);
+  const row = rows[0];
+  return row?.name?.trim() || row?.email || userId;
 }
