@@ -17,6 +17,7 @@ import type { SelectedRepositoryPromptContext } from "../sandbox/context.js";
 import type { WorkspaceRepositoryInput } from "../sandbox/repo-workspace.js";
 import type { OrderedBlock } from "../workflow-definition/plan.js";
 import type { WorkspacePublicationResult } from "./workspace-publication.js";
+import type { BlockRunState } from "@shared/contracts";
 
 type PreSandboxPromptTarget = "research" | "implementation" | "review";
 
@@ -554,6 +555,10 @@ function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+function truncateError(text: string): string {
+  return text.length > 500 ? text.slice(0, 500) : text;
+}
+
 /**
  * Persist the run's cost/usage (+ agent PR + ticket) to the durable telemetry
  * table. Called from the workflow's outer finally so cost is recorded on every
@@ -606,6 +611,21 @@ async function recordRunTelemetryStep(payload: {
   });
 }
 recordRunTelemetryStep.maxRetries = 0;
+
+async function recordBlockStatusesStep(payload: {
+  runId: string;
+  ticketKey: string;
+  ticketTitle: string;
+  ticketUrl: string;
+  definitionVersion: number | null;
+  blockStatuses: Record<string, BlockRunState>;
+}) {
+  "use step";
+  const { getDb } = await import("../db/client.js");
+  const { recordBlockStatuses } = await import("../lib/telemetry/run-telemetry.js");
+  await recordBlockStatuses(getDb(), payload);
+}
+recordBlockStatusesStep.maxRetries = 0;
 
 // --- Polling helper (not a step — called within the workflow) ---
 
@@ -669,6 +689,21 @@ export async function agentWorkflow(ticketId: string) {
 
   const { loadWorkflowDefinition } = await import("./definition-step.js");
   const plan = await loadWorkflowDefinition();
+
+  const blockStatuses: Record<string, BlockRunState> = Object.fromEntries(
+    plan.blocks.map((b): [string, BlockRunState] => [b.id, { status: "pending" }]),
+  );
+  let currentBlockId: string | null = null;
+  const writeBlockStatuses = () =>
+    recordBlockStatusesStep({
+      runId: workflowRunId,
+      ticketKey: ticket.identifier,
+      ticketTitle: ticket.title,
+      ticketUrl: `${env.JIRA_BASE_URL.replace(/\/+$/, "")}/browse/${ticket.identifier}`,
+      definitionVersion: plan.version,
+      blockStatuses: { ...blockStatuses },
+    }).catch(() => {});
+  await writeBlockStatuses();
 
   const phaseUsages: Record<string, PhaseUsage | null> = {};
   const phaseModels: Record<string, string> = {};
@@ -831,6 +866,13 @@ export async function agentWorkflow(ticketId: string) {
       };
 
       const clarificationExit = async (questions: string[]): Promise<"stop"> => {
+        if (currentBlockId) {
+          blockStatuses[currentBlockId] = {
+            status: "warn",
+            error: truncateError(questions.join("\n")),
+          };
+          await writeBlockStatuses();
+        }
         await unregisterRun(ticket.identifier);
         const commentUrl = await postClarificationAndMoveBack(
           ticketId,
@@ -851,6 +893,10 @@ export async function agentWorkflow(ticketId: string) {
         reason: string,
         usageReport: string | undefined = usageReportOrUndefined(),
       ): Promise<"stop"> => {
+        if (currentBlockId) {
+          blockStatuses[currentBlockId] = { status: "fail", error: truncateError(reason) };
+          await writeBlockStatuses();
+        }
         await logPhaseFailure(ticket.identifier, phase, reason);
         // Unregister BEFORE moveTicket so the Jira webhook for this move
         // can't race ahead and fire a duplicate "canceled" notification
@@ -1051,6 +1097,13 @@ export async function agentWorkflow(ticketId: string) {
             ctx.publication = publication;
 
             if (publication.status === "failed") {
+              if (currentBlockId) {
+                blockStatuses[currentBlockId] = {
+                  status: "fail",
+                  error: truncateError(publication.reason),
+                };
+                await writeBlockStatuses();
+              }
               await logPhaseFailure(ticket.identifier, "push", publication.reason);
               if (!ctx.runUnregisteredBeforePr) {
                 await unregisterRun(ticket.identifier);
@@ -1111,14 +1164,27 @@ export async function agentWorkflow(ticketId: string) {
       };
 
       for (const block of plan.blocks) {
+        currentBlockId = block.id;
+        blockStatuses[block.id] = { status: "running" };
+        await writeBlockStatuses();
         const outcome = await runBlock(block);
         if (outcome === "stop") return;
+        blockStatuses[block.id] = { status: "ok" };
       }
+      currentBlockId = null;
+      await writeBlockStatuses();
       runOutcome = "success";
     } finally {
       await teardownSandbox(sandboxId);
     }
   } catch (err) {
+    if (currentBlockId) {
+      blockStatuses[currentBlockId] = {
+        status: "fail",
+        error: truncateError((err as Error).message ?? "unknown"),
+      };
+      await writeBlockStatuses();
+    }
     console.error(`Workflow failed for ${ticket.identifier}:`, err);
     // Unregister BEFORE the move so the move's webhook can't race ahead and
     // fire a duplicate "canceled" notification on top of the "failed" one.

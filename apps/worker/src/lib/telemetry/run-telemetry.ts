@@ -1,7 +1,7 @@
 import { sql } from "drizzle-orm";
 import type { Db } from "../../db/client.js";
 import { workflowRuns } from "../../db/schema.js";
-import type { RunStep } from "@shared/contracts";
+import type { BlockRunState, RunStep } from "@shared/contracts";
 
 /**
  * Lifecycle/status fields the poll cron snapshots from the Workflow world and
@@ -198,6 +198,53 @@ export async function recordRunUsage(db: Db, usage: RunUsage): Promise<void> {
         steps: keepIfNull(workflowRuns.steps, workflowRuns.steps),
         prUrl: keepIfNull(workflowRuns.prUrl, workflowRuns.prUrl),
         prNumber: keepIfNull(workflowRuns.prNumber, workflowRuns.prNumber),
+        updatedAt: sql`now()`,
+      },
+    });
+}
+
+/**
+ * Block-status fields the agent workflow streams mid-run, keyed by the
+ * definition node id. Identity is written here too (INSERT only) so a run is
+ * attributable to its workflow even when no cron snapshot ever observes it.
+ */
+export interface RunBlockStatusWrite {
+  runId: string;
+  ticketKey: string;
+  ticketTitle: string;
+  ticketUrl: string;
+  definitionVersion: number | null;
+  blockStatuses: Record<string, BlockRunState>;
+}
+
+/**
+ * Block-status writer. Upserts per-block progress for one run, owning exactly
+ * block_statuses and definition_version (plus updated_at). Identity and a
+ * "running" status land only on INSERT (same rationale as recordRunUsage); on
+ * conflict it touches nothing the cron snapshot or recordRunUsage own.
+ */
+export async function recordBlockStatuses(
+  db: Db,
+  write: RunBlockStatusWrite,
+): Promise<void> {
+  await db
+    .insert(workflowRuns)
+    .values({
+      runId: write.runId,
+      workflowId: "wf_agent",
+      workflowName: "Agent",
+      status: "running",
+      ticketKey: write.ticketKey,
+      ticketTitle: write.ticketTitle,
+      ticketUrl: write.ticketUrl,
+      definitionVersion: write.definitionVersion,
+      blockStatuses: write.blockStatuses,
+    })
+    .onConflictDoUpdate({
+      target: workflowRuns.runId,
+      set: {
+        blockStatuses: sql`excluded.block_statuses`,
+        definitionVersion: sql`excluded.definition_version`,
         updatedAt: sql`now()`,
       },
     });

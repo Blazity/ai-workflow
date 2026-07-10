@@ -6,8 +6,10 @@ import { workflowRuns } from "../../db/schema.js";
 import {
   upsertRunSnapshots,
   recordRunUsage,
+  recordBlockStatuses,
   type RunSnapshot,
   type RunUsage,
+  type RunBlockStatusWrite,
 } from "./run-telemetry.js";
 
 let db: Db;
@@ -60,6 +62,16 @@ const usage = (over: Partial<RunUsage> = {}): RunUsage => ({
   prUrl: "https://github.com/o/r/pull/7",
   prNumber: 7,
   steps: null,
+  ...over,
+});
+
+const blockWrite = (over: Partial<RunBlockStatusWrite> = {}): RunBlockStatusWrite => ({
+  runId: "wrun_1",
+  ticketKey: "PROJ-1",
+  ticketTitle: "Add login",
+  ticketUrl: "https://jira/browse/PROJ-1",
+  definitionVersion: 3,
+  blockStatuses: { b1: { status: "running" }, b2: { status: "pending" } },
   ...over,
 });
 
@@ -245,5 +257,68 @@ describe("two writers converge on one row", () => {
     const r = await row("wrun_1");
     expect(r.prNumber).toBe(42);
     expect(r.prRepo).toBe("o/r");
+  });
+});
+
+describe("recordBlockStatuses", () => {
+  it("inserts a row with statuses, version, identity and running status", async () => {
+    await recordBlockStatuses(db, blockWrite());
+    const r = await row("wrun_1");
+    expect(r.blockStatuses).toEqual({
+      b1: { status: "running" },
+      b2: { status: "pending" },
+    });
+    expect(r.definitionVersion).toBe(3);
+    expect(r.workflowId).toBe("wf_agent");
+    expect(r.workflowName).toBe("Agent");
+    expect(r.status).toBe("running");
+    expect(r.ticketKey).toBe("PROJ-1");
+    expect(r.ticketTitle).toBe("Add login");
+  });
+
+  it("leaves block columns intact when a later snapshot lands", async () => {
+    await recordBlockStatuses(db, blockWrite());
+    await upsertRunSnapshots(db, [
+      snapshot({
+        status: "success",
+        completedAt: new Date("2026-06-15T10:05:00Z"),
+        durationSec: 295,
+      }),
+    ]);
+    const r = await row("wrun_1");
+    expect(r.blockStatuses).toEqual({
+      b1: { status: "running" },
+      b2: { status: "pending" },
+    });
+    expect(r.definitionVersion).toBe(3);
+    expect(r.status).toBe("success"); // snapshot owns status
+  });
+
+  it("lands the terminal status via recordRunUsage without touching block columns", async () => {
+    await recordBlockStatuses(db, blockWrite());
+    await recordRunUsage(db, usage({ status: "success" }));
+    const r = await row("wrun_1");
+    expect(r.blockStatuses).toEqual({
+      b1: { status: "running" },
+      b2: { status: "pending" },
+    });
+    expect(r.definitionVersion).toBe(3);
+    expect(r.status).toBe("success");
+    expect(r.costUsd).toBeCloseTo(1.23);
+  });
+
+  it("updates only its own columns on a cron-inserted row", async () => {
+    await upsertRunSnapshots(db, [snapshot()]);
+    await recordBlockStatuses(
+      db,
+      blockWrite({ blockStatuses: { b1: { status: "ok" } }, definitionVersion: 5 }),
+    );
+    const r = await row("wrun_1");
+    expect(r.blockStatuses).toEqual({ b1: { status: "ok" } });
+    expect(r.definitionVersion).toBe(5);
+    // Cron-owned columns untouched.
+    expect(r.status).toBe("running");
+    expect(r.ticketTitle).toBe("Add login");
+    expect(r.sandboxId).toBe("sbx_1");
   });
 });
