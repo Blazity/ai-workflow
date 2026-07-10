@@ -241,8 +241,10 @@ per-variable reference lives in `SETUP.md`; the groups are:
   the GitHub App, or falls back to `ai-workflow-blazity` on GitLab).
 - **Sandbox / limits:** `MAX_CONCURRENT_AGENTS` (default 3), `JOB_TIMEOUT_MS` (default 30 min),
   `ATTACHMENT_MAX_FILE_SIZE_MB` / `ATTACHMENT_MAX_TOTAL_SIZE_MB` / `ATTACHMENT_MAX_COUNT` /
-  `ATTACHMENT_DOWNLOAD_TIMEOUT_MS`, `ENABLE_REVIEW_PHASE` (default `false`). Pre-PR check
-  commands are dashboard-managed (Section 9.3), not env config.
+  `ATTACHMENT_DOWNLOAD_TIMEOUT_MS`, `ENABLE_REVIEW_PHASE` (default `false`; shapes only the
+  built-in default workflow definition, the review phase itself is gated by the `review_agent`
+  block in the active definition). Pre-PR check commands are dashboard-managed (Section 9.3),
+  not env config.
 - **Arthur (optional):** `GENAI_ENGINE_API_KEY`, `GENAI_ENGINE_TRACE_ENDPOINT`,
   `GENAI_ENGINE_PROMPT_TASK_ID`.
 - **Database:** `DATABASE_URL` (required; Neon via Vercel Marketplace).
@@ -268,7 +270,7 @@ and a structured output schema:
 |-------|----------|--------------|---------------|
 | `research` (plan) | 20 min | off | `completed` \| `clarification_needed` \| `failed` |
 | `impl` | 35 min | on | `implemented` \| `clarification_needed` \| `failed` + `summary` / `questions` / `error` |
-| `review` (optional, `ENABLE_REVIEW_PHASE`) | 15 min | on | `approved` \| `failed` |
+| `review` (optional, `review_agent` block in the workflow definition) | 15 min | on | `approved` \| `failed` |
 | pre-PR checks (optional, dashboard-configured) | — | — | pass \| fail after ≤3 agent fix cycles |
 | push + PR | — | — | — |
 

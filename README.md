@@ -163,7 +163,7 @@ There is a single durable workflow — `agentWorkflow` in [`apps/worker/src/work
 
 If either phase returns `clarification_needed`, the workflow posts numbered questions as a Jira comment, moves the ticket to Backlog, and emits a `needs_clarification` Slack event. If a phase fails or times out, the ticket is moved to Backlog with a `failed` event.
 
-> A third "Review" phase is implemented in `agent.ts` but gated behind `ENABLE_REVIEW_PHASE` (default `false`). When enabled, it runs after Phase 2 — the agent self-reviews its diff and fixes issues before push (15 min poll cap, `REVIEW_SCHEMA` for structured output).
+> A third "Review" phase is implemented in `agent.ts` and runs when the active workflow definition contains a `review_agent` block. `ENABLE_REVIEW_PHASE` (default `false`) only controls whether the built-in default definition includes that block; once a definition is saved from the dashboard, the flag has no runtime effect. When the block runs, the agent self-reviews its diff and fixes issues before push (15 min poll cap, `REVIEW_SCHEMA` for structured output).
 
 ### Sandbox Lifecycle
 
