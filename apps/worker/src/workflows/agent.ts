@@ -16,6 +16,7 @@ import type { SelectedRepository } from "../adapters/vcs/repository-directory.js
 import type { SelectedRepositoryPromptContext } from "../sandbox/context.js";
 import type { WorkspaceRepositoryInput } from "../sandbox/repo-workspace.js";
 import type { OrderedBlock } from "../workflow-definition/plan.js";
+import { requiredAgentKinds, resolveBlockAgent } from "../workflow-definition/resolve-agent.js";
 import type { WorkspacePublicationResult } from "./workspace-publication.js";
 import type { BlockRunState } from "@shared/contracts";
 
@@ -239,6 +240,7 @@ async function provisionSandbox(
   selectedRepositories: WorkspaceRepositoryInput[],
   arthurTaskId: string | null,
   agentKindOverride: AgentKind | null,
+  requiredKinds: AgentKind[],
 ): Promise<{ sandboxId: string; agentKind: AgentKind }> {
   "use step";
   const { env } = await import("../../env.js");
@@ -256,17 +258,35 @@ async function provisionSandbox(
       : undefined;
 
   const agentKind: AgentKind = agentKindOverride ?? env.AGENT_KIND;
-  if (agentKind === "codex" && !env.CODEX_API_KEY && !env.CODEX_CHATGPT_OAUTH_TOKEN) {
-    throw new Error(
-      "agent override agent:codex requires CODEX_API_KEY or CODEX_CHATGPT_OAUTH_TOKEN in the deployed environment",
-    );
+
+  // Validate credentials for every provider a workflow block needs before we
+  // pay for a sandbox. requiredKinds always leads with the run default.
+  for (const kind of requiredKinds) {
+    if (kind === "codex" && !env.CODEX_API_KEY && !env.CODEX_CHATGPT_OAUTH_TOKEN) {
+      throw new Error(
+        "a workflow block requires agent codex, which needs CODEX_API_KEY or CODEX_CHATGPT_OAUTH_TOKEN in the deployed environment",
+      );
+    }
+    if (kind === "claude" && !env.ANTHROPIC_API_KEY) {
+      throw new Error(
+        "a workflow block requires agent claude, which needs ANTHROPIC_API_KEY in the deployed environment",
+      );
+    }
   }
-  if (agentKind === "claude" && !env.ANTHROPIC_API_KEY) {
-    throw new Error(
-      "agent override agent:claude requires ANTHROPIC_API_KEY in the deployed environment",
-    );
-  }
-  const agent = createAgentAdapter(agentKind);
+
+  const configureOptsFor = (kind: AgentKind) => ({
+    anthropicApiKey: env.ANTHROPIC_API_KEY,
+    codexApiKey: env.CODEX_API_KEY,
+    codexChatGptOauthToken: env.CODEX_CHATGPT_OAUTH_TOKEN,
+    model: kind === "codex" ? env.CODEX_MODEL : env.CLAUDE_MODEL,
+    arthur,
+  });
+
+  const [primaryKind, ...restKinds] = requiredKinds;
+  const additionalAgents = restKinds.map((kind) => ({
+    agent: createAgentAdapter(kind),
+    configureOpts: configureOptsFor(kind),
+  }));
 
   const manager = new SandboxManager({
     providers: await buildSandboxProviderConfigs(
@@ -277,14 +297,9 @@ async function provisionSandbox(
 
   const sandbox = await manager.provisionMultiRepo(
     { branchName, repositories: selectedRepositories },
-    agent,
-    {
-      anthropicApiKey: env.ANTHROPIC_API_KEY,
-      codexApiKey: env.CODEX_API_KEY,
-      codexChatGptOauthToken: env.CODEX_CHATGPT_OAUTH_TOKEN,
-      model: agentKind === "codex" ? env.CODEX_MODEL : env.CLAUDE_MODEL,
-      arthur,
-    },
+    createAgentAdapter(primaryKind),
+    configureOptsFor(primaryKind),
+    additionalAgents,
   );
 
   return { sandboxId: sandbox.sandboxId, agentKind };
@@ -719,7 +734,8 @@ export async function agentWorkflow(ticketId: string) {
   // and the clarification exits (which complete cleanly) flip it to "success".
   // Every phase failure / timeout / thrown error keeps "failed".
   let runOutcome: "success" | "failed" = "failed";
-  // Set after provisionSandbox once agentKind is known.
+  // Seeded with the run default model after provisionSandbox, then set to the
+  // implementation block's model once it runs.
   let activeModel: string | undefined;
   let priceLookup: ((m: string) => { input: number; cached_input: number; output: number } | null) | undefined;
   // Returns the formatted usage report when any phase has produced usage,
@@ -813,37 +829,47 @@ export async function agentWorkflow(ticketId: string) {
     // back to env.AGENT_KIND when the ticket has no override or the labels
     // are ambiguous (multiple distinct kinds).
     const agentKindOverride = await resolveAgentKindOverride(ticket.labels);
+    // The run default drives blocks that don't pin a provider, plus the pre-PR
+    // fix cycle and push fixes. Per-block overrides layer on top of it.
+    const runDefaultKind: AgentKind = agentKindOverride ?? env.AGENT_KIND;
+    const requiredKinds = requiredAgentKinds(plan.blocks, runDefaultKind);
 
-    // Provision sandbox once for all phases
-    const { sandboxId, agentKind } = await provisionSandbox(
+    // Provision sandbox once for all phases; it installs one CLI per required kind.
+    const { sandboxId } = await provisionSandbox(
       branchName,
       workspaceRepositories,
       arthurTaskId,
       agentKindOverride,
+      requiredKinds,
     );
     // Pin the sandboxId to this ticket so cleanup paths (reconcile,
     // cancelRun, webhook-cancel) can stop it by id instead of doing a
     // branch scan across every running sandbox.
     await registerTicketSandbox(ticket.identifier, sandboxId);
 
-    const defaultModel = agentKind === "codex" ? env.CODEX_MODEL : env.CLAUDE_MODEL;
+    const defaultModel = runDefaultKind === "codex" ? env.CODEX_MODEL : env.CLAUDE_MODEL;
     activeModel = defaultModel;
-    const resolveModel = (params: OrderedBlock["params"]): string =>
-      typeof params.model === "string" && params.model.trim() ? params.model.trim() : defaultModel;
+    const resolveAgent = (params: OrderedBlock["params"]) =>
+      resolveBlockAgent(params, runDefaultKind, { claude: env.CLAUDE_MODEL, codex: env.CODEX_MODEL });
 
-    if (agentKind === "codex") {
-      const distinctModels = new Set<string>([defaultModel]);
-      for (const block of plan.blocks) {
-        if (
-          block.type === "planning_agent" ||
-          block.type === "implementation_agent" ||
-          block.type === "review_agent"
-        ) {
-          distinctModels.add(resolveModel(block.params));
-        }
+    // Codex phases are priced from tokens, so gather every codex-resolved model
+    // (plus the default codex model when the run default is codex, for fix
+    // cycles). Claude-only runs leave priceLookup undefined.
+    const codexModels = new Set<string>();
+    for (const block of plan.blocks) {
+      if (
+        block.type === "planning_agent" ||
+        block.type === "implementation_agent" ||
+        block.type === "review_agent"
+      ) {
+        const resolved = resolveAgent(block.params);
+        if (resolved.kind === "codex") codexModels.add(resolved.model);
       }
+    }
+    if (runDefaultKind === "codex") codexModels.add(env.CODEX_MODEL);
+    if (codexModels.size > 0) {
       const priceMap = new Map<string, { input: number; cached_input: number; output: number }>();
-      for (const model of distinctModels) {
+      for (const model of codexModels) {
         const price = await fetchCodexPriceStep(model);
         if (price) priceMap.set(model, price);
       }
@@ -858,6 +884,7 @@ export async function agentWorkflow(ticketId: string) {
         publication: WorkspacePublicationResult | null;
         runUnregisteredBeforePr: boolean;
         implementationModel: string;
+        implementationKind?: AgentKind;
       } = {
         researchPlanMarkdown: "",
         publication: null,
@@ -917,12 +944,12 @@ export async function agentWorkflow(ticketId: string) {
       const runBlock = async (block: OrderedBlock): Promise<"continue" | "stop"> => {
         switch (block.type) {
           case "planning_agent": {
-            const model = resolveModel(block.params);
+            const { kind, model } = resolveAgent(block.params);
             phaseModels["Research"] = model;
-            await setCommitGuardStep(sandboxId, agentKind, false);
+            await setCommitGuardStep(sandboxId, kind, false);
 
             const { paths: researchPaths, script: researchScript } =
-              await planPhaseStep(agentKind, "research", model, RESEARCH_SCHEMA);
+              await planPhaseStep(kind, "research", model, RESEARCH_SCHEMA);
             const researchInput = assembleResearchPlanContext({
               ticket: ticketData,
               prompt: prompts.research,
@@ -947,7 +974,7 @@ export async function agentWorkflow(ticketId: string) {
             const { raw: researchRaw, structured: researchStructured } =
               await collectPhase(sandboxId, researchPaths);
             const { research, usage: researchUsage } =
-              await parseResearchStep(agentKind, researchRaw, researchStructured);
+              await parseResearchStep(kind, researchRaw, researchStructured);
             phaseUsages["Research"] = researchUsage;
 
             if (research.status === "clarification_needed") {
@@ -965,13 +992,16 @@ export async function agentWorkflow(ticketId: string) {
           }
 
           case "implementation_agent": {
-            const model = resolveModel(block.params);
+            const { kind, model } = resolveAgent(block.params);
             phaseModels["Impl"] = model;
             ctx.implementationModel = model;
-            await setCommitGuardStep(sandboxId, agentKind, true);
+            ctx.implementationKind = kind;
+            // Mixed-run telemetry: the run's headline model is the impl block's.
+            activeModel = model;
+            await setCommitGuardStep(sandboxId, kind, true);
 
             const { paths: implPaths, script: implScript } =
-              await planPhaseStep(agentKind, "impl", model, AGENT_SCHEMA);
+              await planPhaseStep(kind, "impl", model, AGENT_SCHEMA);
             const implInput = assembleImplementationContext({
               ticket: ticketData,
               prompt: prompts.implement,
@@ -993,7 +1023,7 @@ export async function agentWorkflow(ticketId: string) {
 
             if (implDone) {
               const { raw: implRaw, structured: implStructured } = await collectPhase(sandboxId, implPaths);
-              const { output, usage: implUsage } = await parseAgentOutputStep(agentKind, implRaw, implStructured);
+              const { output, usage: implUsage } = await parseAgentOutputStep(kind, implRaw, implStructured);
               phaseUsages["Impl"] = implUsage;
               implOutput = output;
             } else {
@@ -1013,11 +1043,13 @@ export async function agentWorkflow(ticketId: string) {
           }
 
           case "review_agent": {
-            // Commit guard stays enabled (review fixes its own findings).
-            const model = resolveModel(block.params);
+            const { kind, model } = resolveAgent(block.params);
             phaseModels["Review"] = model;
+            // Install the review provider's commit guard: in a mixed run it may
+            // differ from impl's provider, so its guard was never set up.
+            await setCommitGuardStep(sandboxId, kind, true);
             const { paths: reviewPaths, script: reviewScript } =
-              await planPhaseStep(agentKind, "review", model, REVIEW_SCHEMA);
+              await planPhaseStep(kind, "review", model, REVIEW_SCHEMA);
             const reviewInput = assembleReviewContext({
               ticket: ticketData,
               prompt: prompts.review,
@@ -1039,7 +1071,7 @@ export async function agentWorkflow(ticketId: string) {
 
             if (reviewDone) {
               const { raw: reviewRaw, structured: reviewStructured } = await collectPhase(sandboxId, reviewPaths);
-              const { output, usage: reviewUsage } = await parseReviewStep(agentKind, reviewRaw, reviewStructured);
+              const { output, usage: reviewUsage } = await parseReviewStep(kind, reviewRaw, reviewStructured);
               phaseUsages["Review"] = reviewUsage;
               reviewOutput = output;
             } else {
@@ -1059,7 +1091,7 @@ export async function agentWorkflow(ticketId: string) {
               typeof block.params.maxFixCycles === "number" ? block.params.maxFixCycles : undefined;
             const prePrChecks = await runPrePrChecksStep(
               sandboxId,
-              agentKind,
+              ctx.implementationKind ?? runDefaultKind,
               ctx.implementationModel,
               maxFixCycles,
             );
@@ -1078,7 +1110,7 @@ export async function agentWorkflow(ticketId: string) {
               branchName,
               repositories: workspaceRepositories,
               title: ticket.title,
-              agentKind,
+              agentKind: ctx.implementationKind ?? runDefaultKind,
               model: ctx.implementationModel,
               beforeCreatePullRequests: async () => {
                 // Push has landed — agent work is durable. Unregister BEFORE any

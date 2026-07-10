@@ -3,7 +3,12 @@ import type {
   PhaseScriptOpts, PhaseUsage, ResearchResult, ReviewOutput, RunnableSandbox,
 } from "./types.js";
 import { agentOutputSchema, foldResearchOutput, researchOutputSchema, reviewOutputSchema } from "./types.js";
-import { installSkillsToAgentsDir } from "./shared.js";
+import {
+  AGENT_ENV_CLAUDE_PATH,
+  AGENT_ENV_PATH,
+  AGENT_ENV_SHIM,
+  installSkillsToAgentsDir,
+} from "./shared.js";
 import { ARTHUR_TRACER_PY_BASE64 } from "../arthur-tracer.js";
 import { buildCommitGuardCheckScript } from "./commit-guard.js";
 import { WORKSPACE_MANIFEST_PATH } from "../repo-workspace.js";
@@ -44,9 +49,10 @@ export class ClaudeAgentAdapter implements AgentAdapter {
         : `export ANTHROPIC_API_KEY=${shellQuote(opts.anthropicApiKey)}`,
     ];
     await sandbox.writeFiles([
-      { path: "/tmp/agent-env.sh", content: Buffer.from(envLines.join("\n") + "\n") },
+      { path: AGENT_ENV_CLAUDE_PATH, content: Buffer.from(envLines.join("\n") + "\n") },
+      { path: AGENT_ENV_PATH, content: Buffer.from(AGENT_ENV_SHIM) },
     ]);
-    await sandbox.runCommand("chmod", ["600", "/tmp/agent-env.sh"]);
+    await sandbox.runCommand("chmod", ["600", AGENT_ENV_CLAUDE_PATH]);
 
     // Skills: installer writes to ~/.claude/skills and ~/.agents/skills directly.
     await installSkillsToAgentsDir(sandbox);

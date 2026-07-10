@@ -57,6 +57,36 @@ describe("formatUsageReport", () => {
 });
 
 describe("computeUsageTotals", () => {
+  it("sums a claude cost_usd phase and a priced codex token phase (costKnown true)", () => {
+    const totals = computeUsageTotals(
+      {
+        Research: u({ cost_usd: 0.5 }),
+        Impl: u({ tokens: { input: 1000, cached_input: 0, output: 500 } }),
+      },
+      (m) => (m === "codex-model" ? { input: 0.001, cached_input: 0, output: 0.002 } : null),
+      "claude-model",
+      { Research: "claude-model", Impl: "codex-model" },
+    );
+    expect(totals.costKnown).toBe(true);
+    // 0.5 + (1000 * 0.001 + 500 * 0.002) = 0.5 + 1 + 1
+    expect(totals.costUsd).toBeCloseTo(2.5, 5);
+  });
+
+  it("marks costKnown false when a codex phase has no price", () => {
+    const totals = computeUsageTotals(
+      {
+        Research: u({ cost_usd: 0.5 }),
+        Impl: u({ tokens: { input: 1000, cached_input: 0, output: 500 } }),
+      },
+      () => null,
+      "claude-model",
+      { Research: "claude-model", Impl: "codex-model" },
+    );
+    expect(totals.costKnown).toBe(false);
+    // Only the claude phase is priced; the codex phase is a lower bound.
+    expect(totals.costUsd).toBeCloseTo(0.5, 5);
+  });
+
   it("records the resolved per-phase model in the breakdown", () => {
     const totals = computeUsageTotals(
       { Research: u({ tokens: { input: 10, cached_input: 0, output: 10 } }), Impl: null },

@@ -1,5 +1,20 @@
 import type { RunnableSandbox } from "./types.js";
 
+// Auth env is split per provider so configuring one adapter never clobbers the
+// other's file. Every consumer keeps sourcing AGENT_ENV_PATH; the shim written
+// there sources whichever per-provider files exist.
+export const AGENT_ENV_PATH = "/tmp/agent-env.sh";
+export const AGENT_ENV_CLAUDE_PATH = "/tmp/agent-env.claude.sh";
+export const AGENT_ENV_CODEX_PATH = "/tmp/agent-env.codex.sh";
+
+export const AGENT_ENV_SHIM =
+  `[ -f ${AGENT_ENV_CLAUDE_PATH} ] && source ${AGENT_ENV_CLAUDE_PATH}\n` +
+  `[ -f ${AGENT_ENV_CODEX_PATH} ] && source ${AGENT_ENV_CODEX_PATH}\n`;
+
+// One-pass sentinel: configuring both adapters on the same sandbox must not run
+// `skills add` twice.
+const SKILLS_SENTINEL = "/tmp/.skills-installed";
+
 // `skills add --agent claude-code codex` populates BOTH agent dirs in one
 // pass: ~/.claude/skills/<skill> and ~/.agents/skills/<skill>. No symlinks
 // needed — each agent reads from its own native path.
@@ -8,6 +23,9 @@ export const GLOBAL_SKILLS = [
 ] as const;
 
 export async function installSkillsToAgentsDir(sandbox: RunnableSandbox): Promise<void> {
+  const already = await sandbox.runCommand("bash", ["-c", `test -f ${SKILLS_SENTINEL}`]);
+  if (already.exitCode === 0) return;
+
   for (const { repo, skill } of GLOBAL_SKILLS) {
     const result = await sandbox.runCommand("npx", [
       "-y", "skills", "add", repo,
@@ -27,6 +45,8 @@ export async function installSkillsToAgentsDir(sandbox: RunnableSandbox): Promis
       throw new Error(`Failed to install skill ${skill} from ${repo} (exit ${result.exitCode})`);
     }
   }
+
+  await sandbox.runCommand("bash", ["-c", `touch ${SKILLS_SENTINEL}`]);
 }
 
 /** Bash body for the commit-guard hook. The output protocol differs between agents,

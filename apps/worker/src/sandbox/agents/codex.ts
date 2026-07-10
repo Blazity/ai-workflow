@@ -3,7 +3,12 @@ import type {
   PhaseScriptOpts, PhaseUsage, ResearchResult, ReviewOutput, RunnableSandbox,
 } from "./types.js";
 import { agentOutputSchema, foldResearchOutput, researchOutputSchema, reviewOutputSchema } from "./types.js";
-import { installSkillsToAgentsDir } from "./shared.js";
+import {
+  AGENT_ENV_CODEX_PATH,
+  AGENT_ENV_PATH,
+  AGENT_ENV_SHIM,
+  installSkillsToAgentsDir,
+} from "./shared.js";
 import { ARTHUR_TRACER_PY_BASE64 } from "../arthur-tracer.js";
 import { buildCommitGuardCheckScript } from "./commit-guard.js";
 import { WORKSPACE_MANIFEST_PATH } from "../repo-workspace.js";
@@ -39,8 +44,11 @@ export class CodexAgentAdapter implements AgentAdapter {
       envLines.push(`export GENAI_ENGINE_TASK_ID=${shellQuote(opts.arthur.taskId)}`);
       envLines.push(`export GENAI_ENGINE_TRACE_ENDPOINT=${shellQuote(opts.arthur.endpoint)}`);
     }
-    await sandbox.writeFiles([{ path: "/tmp/agent-env.sh", content: Buffer.from(envLines.join("\n") + "\n") }]);
-    await sandbox.runCommand("chmod", ["600", "/tmp/agent-env.sh"]);
+    await sandbox.writeFiles([
+      { path: AGENT_ENV_CODEX_PATH, content: Buffer.from(envLines.join("\n") + "\n") },
+      { path: AGENT_ENV_PATH, content: Buffer.from(AGENT_ENV_SHIM) },
+    ]);
+    await sandbox.runCommand("chmod", ["600", AGENT_ENV_CODEX_PATH]);
 
     // 2) ~/.codex/config.toml — model + sandbox profile + hooks feature flag
     // (codex_hooks is gated; without it ~/.codex/hooks.json is ignored).

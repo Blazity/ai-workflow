@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import { ClaudeAgentAdapter } from "./claude.js";
+import { AGENT_ENV_CLAUDE_PATH, AGENT_ENV_PATH, AGENT_ENV_SHIM } from "./shared.js";
 import { AGENT_SCHEMA, RESEARCH_SCHEMA, REVIEW_SCHEMA } from "./types.js";
 
 const adapter = new ClaudeAgentAdapter();
@@ -291,6 +292,8 @@ describe("ClaudeAgentAdapter.buildPhaseScript", () => {
     const paths = adapter.artifactPaths("research");
     const s = adapter.buildPhaseScript({ phase: "research", model: "claude-opus-4-6", paths });
     expect(s).toContain("#!/bin/bash");
+    // Consumers still source the shim path unchanged; the env-file split is transparent.
+    expect(s).toContain("source /tmp/agent-env.sh");
     expect(s).toContain("claude");
     expect(s).toContain("--model 'claude-opus-4-6'");
     expect(s).toContain("--output-format json");
@@ -373,6 +376,42 @@ describe("ClaudeAgentAdapter.artifactPaths", () => {
       sentinel: "/tmp/research-done",
       structuredOutput: null,
     });
+  });
+});
+
+describe("ClaudeAgentAdapter.configure", () => {
+  const writtenFiles = (writeFiles: any) =>
+    writeFiles.mock.calls.flatMap(([files]: [any[]]) => files);
+
+  it("writes the claude per-provider env file plus the shared shim", async () => {
+    const runCommand = vi.fn().mockResolvedValue({ exitCode: 0 });
+    const writeFiles = vi.fn().mockResolvedValue(undefined);
+    const sandbox = { runCommand, writeFiles } as any;
+
+    await adapter.configure(sandbox, { model: "claude-opus-4-6", anthropicApiKey: "sk-ant-test" });
+
+    const files = writtenFiles(writeFiles);
+    const claudeEnv = files.find((f: any) => f.path === AGENT_ENV_CLAUDE_PATH);
+    expect(claudeEnv).toBeDefined();
+    expect(claudeEnv.content.toString("utf8")).toContain("ANTHROPIC_API_KEY");
+
+    const shim = files.find((f: any) => f.path === AGENT_ENV_PATH);
+    expect(shim).toBeDefined();
+    expect(shim.content.toString("utf8")).toBe(AGENT_ENV_SHIM);
+
+    // chmod 600 the secret-bearing per-provider file, not the shim.
+    expect(runCommand).toHaveBeenCalledWith("chmod", ["600", AGENT_ENV_CLAUDE_PATH]);
+  });
+
+  it("routes an OAuth token to CLAUDE_CODE_OAUTH_TOKEN in the per-provider file", async () => {
+    const runCommand = vi.fn().mockResolvedValue({ exitCode: 0 });
+    const writeFiles = vi.fn().mockResolvedValue(undefined);
+    const sandbox = { runCommand, writeFiles } as any;
+
+    await adapter.configure(sandbox, { model: "claude-opus-4-6", anthropicApiKey: "sk-ant-oat-xyz" });
+
+    const claudeEnv = writtenFiles(writeFiles).find((f: any) => f.path === AGENT_ENV_CLAUDE_PATH);
+    expect(claudeEnv.content.toString("utf8")).toContain("CLAUDE_CODE_OAUTH_TOKEN");
   });
 });
 
