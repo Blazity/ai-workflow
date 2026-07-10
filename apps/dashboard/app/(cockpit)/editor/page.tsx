@@ -1,6 +1,15 @@
-// apps/dashboard/app/(cockpit)/editor/page.tsx — Workflow editor ("/editor")
-import { WorkflowEditorScreen } from "@/components/cockpit/screens/workflow-editor";
+import { Suspense } from "react";
+
+import { EditorData } from "@/app/editor-data";
 
 export default function EditorPage() {
-  return <WorkflowEditorScreen />;
+  return (
+    <Suspense
+      fallback={
+        <div className="p-6 font-mono text-[12px] text-neutral-500">Loading workflow…</div>
+      }
+    >
+      <EditorData />
+    </Suspense>
+  );
 }

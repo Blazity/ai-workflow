@@ -1,4 +1,3 @@
-import type { ComponentType } from "react";
 import { redirect } from "next/navigation";
 
 import { getJSON } from "@/lib/api/server";
@@ -7,18 +6,13 @@ import { requireSession } from "@/lib/auth/session";
 import { WorkflowEditorScreen } from "@/components/cockpit/screens/workflow-editor";
 import type { WorkflowDefinitionResponse } from "@shared/contracts";
 
-const EditorScreen = WorkflowEditorScreen as unknown as ComponentType<{
-  initial: WorkflowDefinitionResponse;
-  canEdit: boolean;
-}>;
-
 export async function EditorData() {
   try {
     const [session, data] = await Promise.all([
       requireSession(),
       getJSON<WorkflowDefinitionResponse>("/api/v1/workflow-definition"),
     ]);
-    return <EditorScreen initial={data} canEdit={session.canEditWorkflows} />;
+    return <WorkflowEditorScreen initial={data} canEdit={session.canEditWorkflows} />;
   } catch (error) {
     if (error instanceof UnauthorizedError) {
       redirect("/login");

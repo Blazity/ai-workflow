@@ -13,8 +13,6 @@ export type Tweaks = {
   /** Collapses the cockpit sidebar to an icon-only rail; persists across visits. */
   sidebarCollapsed: boolean;
   accentColor: string;
-  /** Flow selected in the workflow editor; persists the select across visits. */
-  editorFlow: string;
   /** When on, the cockpit polls and refreshes the active screen's data. */
   livePolling: boolean;
 };
@@ -26,7 +24,6 @@ export const TWEAK_DEFAULTS: Tweaks = {
   activityDrawerOpen: false,
   sidebarCollapsed: false,
   accentColor: "#3C43E7",
-  editorFlow: "presandbox",
   livePolling: false,
 };
 

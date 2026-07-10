@@ -1,44 +1,34 @@
 "use client";
 
 import React, { useState, useEffect, useRef, useMemo, useCallback } from "react";
-import { CkChip } from "@/components/ui";
-import type { Flow, FlowNodeDef, FlowEdgeDef, FlowParamValue, RunStatusMap, NodeType } from "@/lib/flows";
+import Link from "next/link";
+import type { FlowNodeDef, FlowEdgeDef, RunStatusMap, WorkflowBlockType } from "@/lib/flows";
+import type { WorkflowEditorOptions, WorkflowParamValue } from "@shared/contracts";
 import { useIsMobileViewport } from "@/lib/use-media-query";
 import { MobileSheet } from "@/components/cockpit/mobile/mobile-sheet";
 
-/* ────────────────────────────────────────────────────────────────────────
-   Node category styling — drives header color, icon, palette grouping.
-   ──────────────────────────────────────────────────────────────────────── */
-
-const NODE_CATEGORIES: Record<NodeType, { color: string; soft: string; label: string; glyph: string }> = {
-  trigger:   { color: "#181B20", soft: "#F2F4F6", label: "Trigger",    glyph: "▶" },
-  fetch:     { color: "#3C43E7", soft: "#ECECFD", label: "Fetch",      glyph: "↓" },
-  llm:       { color: "#3C43E7", soft: "#ECECFD", label: "LLM",        glyph: "✦" },
-  guard:     { color: "#FFC800", soft: "#FFF4CC", label: "Guardrail",  glyph: "△" },
-  tool:      { color: "#FD6027", soft: "#FFEFE9", label: "Tool",       glyph: "⚙" },
-  branch:    { color: "#5BB04A", soft: "#EAF7E0", label: "Branch",     glyph: "⌥" },
-  human:     { color: "#FD6027", soft: "#FFEFE9", label: "Human",      glyph: "@" },
-  check:     { color: "#3C43E7", soft: "#ECECFD", label: "GitHub check", glyph: "✓" },
-  notify:    { color: "#181B20", soft: "#F2F4F6", label: "Notify",     glyph: "✉" },
-  output:    { color: "#181B20", soft: "#181B20", label: "Output",     glyph: "■" },
+const NODE_CATEGORIES: Record<
+  WorkflowBlockType,
+  { color: string; soft: string; label: string; glyph: string; group: string }
+> = {
+  trigger_ticket_ai:    { color: "#D14343", soft: "#FBECEC", label: "Trigger",              glyph: "▶", group: "trigger" },
+  planning_agent:       { color: "#7C3AED", soft: "#F2EBFD", label: "Planning agent",       glyph: "✦", group: "agents" },
+  implementation_agent: { color: "#7C3AED", soft: "#F2EBFD", label: "Implementation agent", glyph: "⌨", group: "agents" },
+  review_agent:         { color: "#7C3AED", soft: "#F2EBFD", label: "Review agent",         glyph: "☰", group: "agents" },
+  run_pre_pr_checks:    { color: "#64748B", soft: "#EEF1F5", label: "Pre-PR checks",        glyph: "✓", group: "utility" },
+  send_slack_message:   { color: "#64748B", soft: "#EEF1F5", label: "Slack message",        glyph: "✉", group: "utility" },
+  open_pr:              { color: "#3C43E7", soft: "#ECECFD", label: "Open PR",              glyph: "⇪", group: "vcs" },
+  update_ticket_status: { color: "#2563EB", soft: "#E9EFFD", label: "Ticket status",        glyph: "▤", group: "ticket" },
 };
-
-/* ────────────────────────────────────────────────────────────────────────
-   Node sizing + helpers
-   ──────────────────────────────────────────────────────────────────────── */
 
 const NODE_W = 168;
 const NODE_H = 84;
 
 interface Point { x: number; y: number; }
 
-function portPos(node: FlowNodeDef, kind: "in" | "out", idx = 0): Point {
-  // kind: "in" | "out". For multi-port outputs, stack vertically.
-  const ports = node.ports || 1;
+function portPos(node: FlowNodeDef, kind: "in" | "out"): Point {
   if (kind === "in") return { x: node.x, y: node.y + NODE_H / 2 };
-  if (ports === 1)   return { x: node.x + NODE_W, y: node.y + NODE_H / 2 };
-  const gap = (NODE_H - 16) / (ports + 1);
-  return { x: node.x + NODE_W, y: node.y + 8 + gap * (idx + 1) };
+  return { x: node.x + NODE_W, y: node.y + NODE_H / 2 };
 }
 
 function bezier(p1: Point, p2: Point): string {
@@ -46,65 +36,77 @@ function bezier(p1: Point, p2: Point): string {
   return `M ${p1.x} ${p1.y} C ${p1.x + dx} ${p1.y}, ${p2.x - dx} ${p2.y}, ${p2.x} ${p2.y}`;
 }
 
-/* ────────────────────────────────────────────────────────────────────────
-   Flow node — draggable card.
-   ──────────────────────────────────────────────────────────────────────── */
+function nodeSummary(node: FlowNodeDef, options: WorkflowEditorOptions): string | null {
+  switch (node.type) {
+    case "planning_agent":
+    case "implementation_agent":
+    case "review_agent": {
+      const model = node.params.model;
+      return typeof model === "string" && model !== "" ? model : null;
+    }
+    case "update_ticket_status": {
+      const target = node.params.target;
+      return options.ticketStatusTargets.find((t) => t.value === target)?.label ?? null;
+    }
+    case "send_slack_message": {
+      const message = node.params.message;
+      return typeof message === "string" && message !== "" ? message : null;
+    }
+    case "run_pre_pr_checks": {
+      const cycles = node.params.maxFixCycles;
+      return typeof cycles === "number" ? `${cycles} fix cycles` : null;
+    }
+    default:
+      return null;
+  }
+}
 
 const FlowNode = React.memo(function FlowNode({
   node,
+  options,
+  canEdit,
   selected,
   onSelect,
   onDragStart,
   onPortDown,
   onPortUp,
   runStatus,
-  connectingPort,
+  connecting,
 }: {
   node: FlowNodeDef;
+  options: WorkflowEditorOptions;
+  canEdit: boolean;
   selected: boolean;
   onSelect: (id: string) => void;
   onDragStart: (e: React.PointerEvent, node: FlowNodeDef) => void;
-  onPortDown: (e: React.PointerEvent, nodeId: string, portIdx: number) => void;
+  onPortDown: (e: React.PointerEvent, nodeId: string) => void;
   onPortUp: (e: React.PointerEvent, nodeId: string) => void;
   runStatus?: string;
-  connectingPort?: number | null;
+  connecting?: boolean;
 }) {
-  const cat = NODE_CATEGORIES[node.type] || NODE_CATEGORIES.tool;
-  const dark = node.type === "output";
-  const ports = node.ports || 1;
-
-  // Tiny param summary inline on the card — the 2 most useful keys per category.
-  const summaryKey = (
-    {
-      trigger: "event", fetch: "tool", llm: "prompt", guard: "evaluator",
-      tool: "cmd", branch: "condition", human: "channel", check: "check", notify: "tool",
-      output: "handoff",
-    } as Record<NodeType, string>
-  )[node.type];
-  const summary = summaryKey ? node.params[summaryKey] : null;
+  const cat = NODE_CATEGORIES[node.type];
+  const locked = node.type === "trigger_ticket_ai";
+  const summary = nodeSummary(node, options);
 
   return (
     <div
       onPointerDown={(e) => onDragStart(e, node)}
       onClick={(e) => { e.stopPropagation(); onSelect(node.id); }}
-      className={`absolute rounded-sm cursor-grab select-none transition-[box-shadow,border-color] duration-[120ms] ${
-        dark ? "bg-coal" : "bg-panel"
+      className={`absolute rounded-sm select-none transition-[box-shadow,border-color] duration-[120ms] bg-panel ${
+        canEdit ? "cursor-grab" : "cursor-pointer"
       } ${
         selected
           ? "border-2 border-mariner shadow-[0_0_0_4px_rgba(60,67,231,0.12),0_4px_12px_rgba(24,27,32,0.08)] z-[3]"
-          : `border ${dark ? "border-coal" : "border-neutral-200"} shadow-[0_1px_2px_rgba(24,27,32,0.05)] z-[2]`
+          : "border border-neutral-200 shadow-[0_1px_2px_rgba(24,27,32,0.05)] z-[2]"
       }`}
       style={{
         left: node.x, top: node.y,
         width: NODE_W, height: NODE_H,
       }}
     >
-      {/* Header strip */}
       <div
-        className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-t-[3px] font-mono text-[9px] font-semibold tracking-[0.06em] uppercase ${
-          dark ? "bg-[#0E1014] border-b border-[#2A2D33] text-white" : "border-b"
-        }`}
-        style={dark ? undefined : { background: cat.soft, borderBottomColor: cat.soft, color: cat.color }}
+        className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-t-[3px] font-mono text-[9px] font-semibold tracking-[0.06em] uppercase border-b"
+        style={{ background: cat.soft, borderBottomColor: cat.soft, color: cat.color }}
       >
         <span
           className="w-4 h-4 rounded-xs text-white inline-flex items-center justify-center text-[10px] font-bold"
@@ -112,7 +114,7 @@ const FlowNode = React.memo(function FlowNode({
         >{cat.glyph}</span>
         {cat.label}
         <span className="ml-auto font-mono text-[9px] text-neutral-500">{node.id}</span>
-        {node.locked && <span title="Anchor step — can't be removed" className="text-[9px] leading-none" aria-hidden>🔒</span>}
+        {locked && <span title="Anchor step, can't be removed" className="text-[9px] leading-none" aria-hidden>🔒</span>}
         {runStatus && (
           <span
             title={"last run: " + runStatus}
@@ -123,78 +125,57 @@ const FlowNode = React.memo(function FlowNode({
           />
         )}
       </div>
-      {/* Body */}
       <div className="px-2.5 py-2 flex flex-col gap-0.5">
-        <div className={`font-body text-[13px] font-semibold leading-[1.2] overflow-hidden text-ellipsis whitespace-nowrap ${dark ? "text-white" : "text-coal"}`}>{node.name}</div>
+        <div className="font-body text-[13px] font-semibold leading-[1.2] overflow-hidden text-ellipsis whitespace-nowrap text-coal">{node.name || cat.label}</div>
         {summary && (
-          <div className={`font-mono text-[10px] overflow-hidden text-ellipsis whitespace-nowrap ${dark ? "text-neutral-500" : "text-neutral-700"}`}>{String(summary)}</div>
+          <div className="font-mono text-[10px] overflow-hidden text-ellipsis whitespace-nowrap text-neutral-700">{summary}</div>
         )}
       </div>
 
-      {/* Input port — left edge */}
-      {node.type !== "trigger" && (
+      {node.type !== "trigger_ticket_ai" && (
         <span
           onPointerDown={(e) => e.stopPropagation()}
           onPointerUp={(e) => onPortUp(e, node.id)}
-          title="Drop a connection here"
-          className="absolute w-3.5 h-3.5 rounded-full bg-panel border-2 cursor-crosshair hover:scale-125 transition-transform"
+          title={canEdit ? "Drop a connection here" : undefined}
+          className={`absolute w-3.5 h-3.5 rounded-full bg-panel border-2 ${canEdit ? "cursor-crosshair hover:scale-125 transition-transform" : ""}`}
           style={{
             left: -7, top: NODE_H / 2 - 7,
-            borderColor: dark ? "#fff" : cat.color,
+            borderColor: cat.color,
           }}
         />
       )}
-      {/* Output ports — right edge */}
-      {node.type !== "output" && Array.from({ length: ports }, (_, i) => {
-        const pos = portPos(node, "out", i);
-        const lbl = node.portLabels && node.portLabels[i];
-        return (
-          <React.Fragment key={i}>
-            <span
-              onPointerDown={(e) => onPortDown(e, node.id, i)}
-              title="Drag to another node to connect"
-              className={`absolute w-3.5 h-3.5 rounded-full border-2 border-white cursor-crosshair hover:scale-125 transition-transform ${connectingPort === i ? "ring-2 ring-mariner ring-offset-1 scale-125" : ""}`}
-              style={{
-                left: NODE_W - 5, top: (pos.y - node.y) - 7,
-                background: cat.color,
-              }}
-            />
-            {lbl && ports > 1 && (
-              <span
-                className="absolute font-mono text-[9px] font-semibold tracking-[0.04em] uppercase whitespace-nowrap"
-                style={{
-                  left: NODE_W + 10, top: (pos.y - node.y) - 8,
-                  color: cat.color,
-                }}
-              >{lbl}</span>
-            )}
-          </React.Fragment>
-        );
-      })}
+      <span
+        onPointerDown={(e) => onPortDown(e, node.id)}
+        title={canEdit ? "Drag to another node to connect" : undefined}
+        className={`absolute w-3.5 h-3.5 rounded-full border-2 border-white ${canEdit ? "cursor-crosshair hover:scale-125 transition-transform" : ""} ${connecting ? "ring-2 ring-mariner ring-offset-1 scale-125" : ""}`}
+        style={{
+          left: NODE_W - 5, top: NODE_H / 2 - 7,
+          background: cat.color,
+        }}
+      />
     </div>
   );
 });
 
-/* ────────────────────────────────────────────────────────────────────────
-   Node palette (left rail) — categories you can add to the flow.
-   ──────────────────────────────────────────────────────────────────────── */
-
 interface PaletteItem {
-  type: NodeType;
+  type: WorkflowBlockType;
   name: string;
-  params: Record<string, FlowParamValue>;
+  params: Record<string, WorkflowParamValue>;
 }
 
-const PALETTE_ITEMS: PaletteItem[] = [
-  { type: "fetch", name: "Fetch data", params: { tool: "github.repos.get", timeout: "5s" } },
-  { type: "llm", name: "LLM step", params: { prompt: "p_new@v1", model: "claude-sonnet-4", temperature: 0.2 } },
-  { type: "tool", name: "Run command", params: { runner: "sandbox.exec", cmd: "echo hello", timeout: "60s" } },
-  { type: "guard", name: "Guardrail", params: { evaluator: "arthur.scope_check" } },
-  { type: "branch", name: "Branch", params: { condition: "result.ok == true" } },
-  { type: "notify", name: "Notify", params: { channel: "#ai-workflow", template: "msg_v1" } },
-];
+function buildPaletteItems(defaultModel: string): PaletteItem[] {
+  return [
+    { type: "planning_agent", name: "Planning agent", params: { model: defaultModel } },
+    { type: "implementation_agent", name: "Implementation agent", params: { model: defaultModel } },
+    { type: "review_agent", name: "Review agent", params: { model: defaultModel } },
+    { type: "run_pre_pr_checks", name: "Run pre-PR checks", params: { maxFixCycles: 3 } },
+    { type: "open_pr", name: "Open pull request", params: {} },
+    { type: "update_ticket_status", name: "Update ticket status", params: { target: "ai_review" } },
+    { type: "send_slack_message", name: "Send Slack message", params: { message: "" } },
+  ];
+}
 
-function NodePalette({ onAdd }: { onAdd: (item: PaletteItem) => void }) {
+function NodePalette({ items, onAdd }: { items: PaletteItem[]; onAdd: (item: PaletteItem) => void }) {
   return (
     <aside className="w-52 flex-[0_0_208px] bg-panel border-r border-neutral-200 flex flex-col overflow-hidden">
       <div className="pt-[14px] px-[14px] pb-[10px] border-b border-neutral-200 flex flex-col gap-1">
@@ -202,11 +183,11 @@ function NodePalette({ onAdd }: { onAdd: (item: PaletteItem) => void }) {
         <div className="font-mono text-[9px] text-neutral-500 tracking-[0.04em]">Drag onto canvas, or click to add</div>
       </div>
       <div className="flex-1 overflow-auto py-2 flex flex-col">
-        {PALETTE_ITEMS.map((it) => {
-          const cat = NODE_CATEGORIES[it.type] || NODE_CATEGORIES.tool;
+        {items.map((it) => {
+          const cat = NODE_CATEGORIES[it.type];
           return (
             <button
-              key={it.name}
+              key={it.type}
               draggable
               onDragStart={(e) => {
                 e.dataTransfer.setData("application/x-flow-node", JSON.stringify(it));
@@ -231,118 +212,179 @@ function NodePalette({ onAdd }: { onAdd: (item: PaletteItem) => void }) {
   );
 }
 
-/* ────────────────────────────────────────────────────────────────────────
-   Config panel (right rail) — form for the selected node.
-   ──────────────────────────────────────────────────────────────────────── */
+const inputCls = "h-[26px] px-2 bg-off-white border border-neutral-200 rounded-xs font-mono text-xs text-coal outline-none disabled:opacity-60";
 
-const FIELD_LABELS: Record<string, string> = {
-  source: "Source", event: "Event", filter: "Filter (DSL)", debounce: "Debounce",
-  tool: "Tool", include: "Include", timeout: "Timeout", retries: "Retries",
-  branch: "Branch", depth: "Clone depth", query: "Query", limit: "Limit",
-  evaluator: "Evaluator", maxFiles: "Max files", maxLOC: "Max LOC changed", blocklistGlobs: "Blocklist globs",
-  prompt: "Prompt version", model: "Model", temperature: "Temperature", maxTokens: "Max tokens",
-  tools: "Tools available", condition: "Condition (JS)", branchA: "Output A", branchB: "Output B",
-  channel: "Channel", template: "Template", fallback: "Fallback", autoSuggest: "Auto-suggested answers",
-  returns: "Returns", maxCost: "Max cost ($)", ceiling: "Ceiling ($)", action: "On exceed", notify: "Notify",
-  handoff: "Handoff", payload: "Payload",
-  check: "Check name", state: "State", description: "Description", requiredForMerge: "Required for merge", blockMerge: "Block merge",
-  refresh: "Refresh on", scan: "Scanners", severity: "Severity floor", reviewStyle: "Review style", maxComments: "Max comments",
-  inputs: "Inputs", threshold: "Pass threshold", runner: "Runner", cmd: "Command", coverage: "Coverage",
-  inline: "Inline comments", maxDiffKb: "Max diff (KB)", mention: "Mention", transition: "Linear transition",
-};
-
-type FieldValue = string | number | boolean | string[];
-
-function FieldRow({ k, value, onChange }: { k: string; value: FieldValue; onChange: (k: string, v: FieldValue) => void }) {
-  const label = FIELD_LABELS[k] || k;
-  const isBool = typeof value === "boolean";
-  const isArr = Array.isArray(value);
-  const isNum = typeof value === "number";
-  const display = isArr ? value.join(", ") : isBool ? value : value;
-
+function ConfigField({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="flex flex-col gap-1 py-2.5 px-[14px] border-b border-neutral-200">
       <label className="font-mono text-[9px] text-neutral-700 tracking-[0.06em] uppercase">{label}</label>
-      {isBool ? (
-        <button
-          onClick={() => onChange(k, !value)}
-          className={`appearance-none cursor-pointer self-start py-1 px-2.5 rounded-full border font-mono text-[10px] font-semibold tracking-[0.04em] uppercase ${
-            value ? "border-mariner bg-mariner text-white" : "border-neutral-200 bg-panel text-neutral-700"
-          }`}
-        >{value ? "on" : "off"}</button>
-      ) : (
+      {children}
+    </div>
+  );
+}
+
+function ConfigNote({ children }: { children: React.ReactNode }) {
+  return <div className="py-2.5 px-[14px] border-b border-neutral-200 font-body text-xs leading-[1.5] text-neutral-700">{children}</div>;
+}
+
+const CUSTOM_MODEL = "__custom__";
+
+function ModelField({
+  value,
+  options,
+  disabled,
+  onChange,
+}: {
+  value: string;
+  options: WorkflowEditorOptions;
+  disabled: boolean;
+  onChange: (v: string) => void;
+}) {
+  const models = options.models[options.agentKind];
+  const list = useMemo(
+    () => [options.defaultModel, ...models.filter((m) => m !== options.defaultModel)],
+    [models, options.defaultModel],
+  );
+  const [customPicked, setCustomPicked] = useState(false);
+  const custom = customPicked || (value !== "" && !list.includes(value));
+
+  return (
+    <div className="flex flex-col gap-1.5">
+      <select
+        value={custom ? CUSTOM_MODEL : value === "" ? options.defaultModel : value}
+        disabled={disabled}
+        onChange={(e) => {
+          if (e.target.value === CUSTOM_MODEL) {
+            setCustomPicked(true);
+            return;
+          }
+          setCustomPicked(false);
+          onChange(e.target.value);
+        }}
+        className={inputCls}
+      >
+        {list.map((m) => (
+          <option key={m} value={m}>{m}</option>
+        ))}
+        <option value={CUSTOM_MODEL}>Custom…</option>
+      </select>
+      {custom && (
         <input
-          value={String(display)}
-          onChange={(e) => {
-            const v: FieldValue = isNum ? Number(e.target.value) : isArr ? e.target.value.split(",").map(s => s.trim()).filter(Boolean) : e.target.value;
-            onChange(k, v);
-          }}
-          className="h-[26px] px-2 bg-off-white border border-neutral-200 rounded-xs font-mono text-xs text-coal outline-none"
+          value={value}
+          disabled={disabled}
+          onChange={(e) => onChange(e.target.value)}
+          className={inputCls}
         />
       )}
     </div>
   );
 }
 
-/* Per-step code editor — dark textarea with a line-number gutter. */
-function StepCodeEditor({ value, onChange }: { value: string; onChange: (v: string) => void }) {
-  const gutterRef = useRef<HTMLDivElement>(null);
-  const lineCount = value.split("\n").length;
-
-  const onScroll = (e: React.UIEvent<HTMLTextAreaElement>) => {
-    if (gutterRef.current) gutterRef.current.scrollTop = e.currentTarget.scrollTop;
-  };
-  const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key !== "Tab") return;
-    e.preventDefault();
-    const ta = e.currentTarget;
-    const { selectionStart, selectionEnd } = ta;
-    const next = value.slice(0, selectionStart) + "  " + value.slice(selectionEnd);
-    onChange(next);
-    requestAnimationFrame(() => { ta.selectionStart = ta.selectionEnd = selectionStart + 2; });
-  };
-
-  return (
-    <div className="flex h-[200px] bg-[#0E1014] rounded-[3px] border border-[#2A2D33] overflow-hidden">
-      <div
-        ref={gutterRef}
-        aria-hidden
-        className="flex-[0_0_30px] overflow-hidden py-2 text-right select-none bg-[#0B0D10] font-mono text-[11px] leading-[18px] text-neutral-700"
-      >
-        {Array.from({ length: lineCount }, (_, i) => (
-          <div key={i} className="px-1.5">{i + 1}</div>
-        ))}
-      </div>
-      <textarea
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        onScroll={onScroll}
-        onKeyDown={onKeyDown}
-        spellCheck={false}
-        className="flex-1 min-w-0 resize-none outline-none py-2 px-2 bg-transparent font-mono text-[11px] leading-[18px] text-[#E6E8EB]"
-        style={{ tabSize: 2 }}
-      />
-    </div>
-  );
+function ConfigFields({
+  node,
+  options,
+  canEdit,
+  onChange,
+}: {
+  node: FlowNodeDef;
+  options: WorkflowEditorOptions;
+  canEdit: boolean;
+  onChange: (path: string, value: WorkflowParamValue | undefined) => void;
+}) {
+  switch (node.type) {
+    case "trigger_ticket_ai":
+      return <ConfigNote>Fires when a Jira ticket enters the AI column.</ConfigNote>;
+    case "planning_agent":
+    case "implementation_agent":
+    case "review_agent":
+      return (
+        <ConfigField label="Model">
+          <ModelField
+            key={node.id}
+            value={typeof node.params.model === "string" ? node.params.model : ""}
+            options={options}
+            disabled={!canEdit}
+            onChange={(v) => onChange("params.model", v)}
+          />
+        </ConfigField>
+      );
+    case "run_pre_pr_checks":
+      return (
+        <>
+          <ConfigField label="Max fix cycles">
+            <input
+              type="number"
+              min={0}
+              max={5}
+              value={typeof node.params.maxFixCycles === "number" ? node.params.maxFixCycles : ""}
+              disabled={!canEdit}
+              onChange={(e) => {
+                if (e.target.value === "") {
+                  onChange("params.maxFixCycles", undefined);
+                  return;
+                }
+                const n = Math.round(Number(e.target.value));
+                if (!Number.isFinite(n)) return;
+                onChange("params.maxFixCycles", Math.max(0, Math.min(5, n)));
+              }}
+              className={inputCls}
+            />
+          </ConfigField>
+          <ConfigNote>
+            Commands are configured in <Link href="/checks" className="text-mariner underline">Pre-PR checks</Link>.
+          </ConfigNote>
+        </>
+      );
+    case "open_pr":
+      return <ConfigNote>Opens a pull request with the agent&apos;s changes on the ticket branch.</ConfigNote>;
+    case "update_ticket_status":
+      return (
+        <ConfigField label="Target status">
+          <select
+            value={typeof node.params.target === "string" ? node.params.target : ""}
+            disabled={!canEdit}
+            onChange={(e) => onChange("params.target", e.target.value)}
+            className={inputCls}
+          >
+            {options.ticketStatusTargets.map((t) => (
+              <option key={t.value} value={t.value}>{t.label}</option>
+            ))}
+          </select>
+        </ConfigField>
+      );
+    case "send_slack_message":
+      return (
+        <ConfigField label="Message">
+          <input
+            value={typeof node.params.message === "string" ? node.params.message : ""}
+            disabled={!canEdit}
+            onChange={(e) => onChange("params.message", e.target.value)}
+            className={inputCls}
+          />
+        </ConfigField>
+      );
+  }
 }
-
-const defaultStepCode = (node: FlowNodeDef) =>
-  `export default async (ctx) => {\n  // ${node.name}\n  return ctx;\n};\n`;
 
 function NodeConfig({
   node,
+  options,
+  canEdit,
   onChange,
   onDelete,
   onClose,
   embedded,
 }: {
   node: FlowNodeDef;
-  onChange: (path: string, value: FieldValue) => void;
+  options: WorkflowEditorOptions;
+  canEdit: boolean;
+  onChange: (path: string, value: WorkflowParamValue | undefined) => void;
   onDelete: () => void;
   onClose: () => void;
   embedded?: boolean;
 }) {
-  const cat = NODE_CATEGORIES[node.type] || NODE_CATEGORIES.tool;
+  const cat = NODE_CATEGORIES[node.type];
+  const locked = node.type === "trigger_ticket_ai";
   const inner = (
     <>
       <div className="pt-[14px] px-[18px] pb-[14px] border-b border-neutral-200 flex flex-col gap-1.5">
@@ -364,64 +406,31 @@ function NodeConfig({
           >×</button>
         </div>
         <input
-          value={node.name}
+          value={node.name ?? ""}
+          disabled={!canEdit}
           onChange={(e) => onChange("name", e.target.value)}
-          className="border-none outline-none p-0 bg-transparent font-display font-medium text-[17px] leading-[1.3] text-coal"
+          className="border-none outline-none p-0 bg-transparent font-display font-medium text-[17px] leading-[1.3] text-coal disabled:opacity-100"
         />
       </div>
 
       <div className="flex-1 overflow-auto">
-        <div className="py-2.5 px-[14px] border-b border-neutral-200 font-mono text-[9px] text-neutral-700 tracking-[0.06em] uppercase">Parameters</div>
-        {Object.entries(node.params).map(([k, v]) => (
-          <FieldRow key={k} k={k} value={v} onChange={(kk, vv) => onChange("params." + kk, vv)} />
-        ))}
-        <div className="py-2.5 px-[14px] border-y border-neutral-200 font-mono text-[9px] text-neutral-700 tracking-[0.06em] uppercase">Step code · JavaScript</div>
-        <div className="p-[14px]">
-          <StepCodeEditor
-            value={node.code ?? defaultStepCode(node)}
-            onChange={(v) => onChange("code", v)}
-          />
-        </div>
-        <div className="py-2.5 px-[14px] border-y border-neutral-200 font-mono text-[9px] text-neutral-700 tracking-[0.06em] uppercase">Execution</div>
-        <FieldRow k="retries" value={node.params.retries ?? 1} onChange={(_, value) => onChange("params.retries", value)} />
-        <FieldRow k="timeout" value={node.params.timeout ?? "30s"} onChange={(_, value) => onChange("params.timeout", value)} />
-        <div className="py-2.5 px-[14px] border-b border-neutral-200 font-mono text-[9px] text-neutral-700 tracking-[0.06em] uppercase">Observability</div>
-        <div className="py-2.5 px-[14px] flex flex-col gap-2">
-          <div className="flex items-center justify-between font-body text-xs text-neutral-800">
-            <span>Emit OpenInference span</span>
-            <span className={`${togglePillCls} bg-mariner text-white`}>on</span>
-          </div>
-          <div className="flex items-center justify-between font-body text-xs text-neutral-800">
-            <span>Forward to Arthur</span>
-            <span className={`${togglePillCls} bg-mariner text-white`}>on</span>
-          </div>
-          <div className="flex items-center justify-between font-body text-xs text-neutral-800">
-            <span>Cost tracking</span>
-            <span className={`${togglePillCls} bg-mariner text-white`}>on</span>
-          </div>
-          <div className="flex items-center justify-between font-body text-xs text-neutral-800">
-            <span>Pause on error</span>
-            <span className={`${togglePillCls} bg-panel text-neutral-700 border border-neutral-200`}>off</span>
-          </div>
-        </div>
+        <ConfigFields node={node} options={options} canEdit={canEdit} onChange={onChange} />
       </div>
 
-      <div className="border-t border-neutral-200 py-3 px-[14px] flex gap-2 items-center">
-        {node.locked ? (
-          <span className="inline-flex items-center gap-1.5 font-mono text-[10px] text-neutral-700 tracking-[0.04em] uppercase">
-            <span aria-hidden>🔒</span> Anchor step · can&apos;t be removed
-          </span>
-        ) : (
-          <>
+      {(locked || canEdit) && (
+        <div className="border-t border-neutral-200 py-3 px-[14px] flex gap-2 items-center">
+          {locked ? (
+            <span className="inline-flex items-center gap-1.5 font-mono text-[10px] text-neutral-700 tracking-[0.04em] uppercase">
+              <span aria-hidden>🔒</span> Anchor step · can&apos;t be removed
+            </span>
+          ) : (
             <button
               onClick={onDelete}
               className="appearance-none cursor-pointer border border-neutral-200 bg-panel py-1.5 px-3 rounded-[3px] font-mono text-[11px] text-[#A2351C] tracking-[0.04em] uppercase"
             >Delete</button>
-            <button className="appearance-none cursor-pointer border border-neutral-200 bg-panel py-1.5 px-3 rounded-[3px] font-mono text-[11px] text-coal tracking-[0.04em] uppercase">Duplicate</button>
-          </>
-        )}
-        <button className="ml-auto appearance-none cursor-pointer border border-coal bg-coal text-white py-1.5 px-3 rounded-[3px] font-mono text-[11px] tracking-[0.04em] uppercase">Test step ▷</button>
-      </div>
+          )}
+        </div>
+      )}
     </>
   );
   return embedded ? (
@@ -430,12 +439,6 @@ function NodeConfig({
     <aside className="w-80 flex-[0_0_320px] bg-panel border-l border-neutral-200 flex flex-col overflow-hidden">{inner}</aside>
   );
 }
-
-const togglePillCls = "py-0.5 px-2 rounded-full font-mono text-[10px] font-semibold tracking-[0.04em] uppercase";
-
-/* ────────────────────────────────────────────────────────────────────────
-   The flow canvas itself.
-   ──────────────────────────────────────────────────────────────────────── */
 
 interface DragState {
   kind: "node" | "pan";
@@ -449,14 +452,14 @@ interface DragState {
 
 interface ConnectState {
   from: string;
-  fromPort: number;
   cursor: Point;
 }
 
 function FlowCanvas({
-  flow,
   nodes,
   edges,
+  canEdit,
+  options,
   onNodesChange,
   onAddEdge,
   onRemoveEdge,
@@ -466,12 +469,14 @@ function FlowCanvas({
   setSelectedId,
   fullView,
   onToggleFullView,
+  fitSignal,
 }: {
-  flow: Flow;
   nodes: FlowNodeDef[];
   edges: FlowEdgeDef[];
+  canEdit: boolean;
+  options: WorkflowEditorOptions;
   onNodesChange: React.Dispatch<React.SetStateAction<FlowNodeDef[]>>;
-  onAddEdge: (from: string, to: string, fromPort: number) => void;
+  onAddEdge: (from: string, to: string) => void;
   onRemoveEdge: (edge: FlowEdgeDef) => void;
   onDropNode: (item: PaletteItem, at: Point) => void;
   runStatuses?: RunStatusMap;
@@ -479,6 +484,7 @@ function FlowCanvas({
   setSelectedId: (id: string | null) => void;
   fullView: boolean;
   onToggleFullView: () => void;
+  fitSignal: number;
 }) {
   const [pan, setPan] = useState({ x: 0, y: -40 });
   const [zoom, setZoom] = useState(0.85);
@@ -508,7 +514,6 @@ function FlowCanvas({
     return { x: (clientX - left - pan.x) / zoom, y: (clientY - top - pan.y) / zoom };
   }, []);
 
-  // Auto-fit on flow change: compute bbox of all nodes and zoom/pan to fit.
   const fitNodes = useCallback((nodesToFit: FlowNodeDef[]) => {
     const el = containerRef.current;
     if (!el || !nodesToFit.length) return;
@@ -524,7 +529,12 @@ function FlowCanvas({
   }, []);
   const fit = useCallback(() => fitNodes(nodes), [fitNodes, nodes]);
 
-  useEffect(() => { const t = setTimeout(() => fitNodes(flow.nodes), 50); return () => clearTimeout(t); }, [fitNodes, flow.id, flow.nodes]);
+  const nodesRef = useRef(nodes);
+  nodesRef.current = nodes;
+  useEffect(() => {
+    const t = setTimeout(() => fitNodes(nodesRef.current), 50);
+    return () => clearTimeout(t);
+  }, [fitNodes, fitSignal]);
 
   // Pan so a node sits in the middle of the viewport, keeping the current zoom.
   const centerNode = useCallback((node: FlowNodeDef) => {
@@ -634,10 +644,11 @@ function FlowCanvas({
 
   const startNodeDrag = useCallback((e: React.PointerEvent, node: FlowNodeDef) => {
     e.stopPropagation();
+    if (!canEdit) return;
     e.currentTarget.setPointerCapture?.(e.pointerId);
     movedRef.current = false;
     setDrag({ kind: "node", id: node.id, ox: node.x, oy: node.y, startX: e.clientX, startY: e.clientY, pointerId: e.pointerId });
-  }, []);
+  }, [canEdit]);
   const startPanDrag = (e: React.PointerEvent) => {
     // Node pointerdown stops propagation, so this only fires for empty canvas hits.
     // Bottom-corner control overlays also stopPropagation in their handlers.
@@ -653,13 +664,14 @@ function FlowCanvas({
   };
 
   // Edge connecting: pointerdown on an output port, pointerup on a target input port.
-  const onPortDown = useCallback((e: React.PointerEvent, nodeId: string, portIdx: number) => {
+  const onPortDown = useCallback((e: React.PointerEvent, nodeId: string) => {
     e.stopPropagation();
-    setConnect({ from: nodeId, fromPort: portIdx, cursor: toCanvas(e.clientX, e.clientY) });
-  }, [toCanvas]);
+    if (!canEdit) return;
+    setConnect({ from: nodeId, cursor: toCanvas(e.clientX, e.clientY) });
+  }, [toCanvas, canEdit]);
   const onPortUp = useCallback((e: React.PointerEvent, nodeId: string) => {
     e.stopPropagation();
-    if (connect && connect.from !== nodeId) onAddEdge(connect.from, nodeId, connect.fromPort);
+    if (connect && connect.from !== nodeId) onAddEdge(connect.from, nodeId);
     setConnect(null);
   }, [connect, onAddEdge]);
 
@@ -685,6 +697,7 @@ function FlowCanvas({
         }
       }}
       onDrop={(e) => {
+        if (!canEdit) return;
         const raw = e.dataTransfer.getData("application/x-flow-node");
         if (!raw) return;
         e.preventDefault();
@@ -718,8 +731,8 @@ function FlowCanvas({
           {edges.map((e, i) => {
             const a = nodeById[e.from], b = nodeById[e.to];
             if (!a || !b) return null;
-            const p1 = portPos(a, "out", e.fromPort || 0);
-            const p2 = portPos(b, "in", 0);
+            const p1 = portPos(a, "out");
+            const p2 = portPos(b, "in");
             const isActive = (selectedId === a.id || selectedId === b.id);
             const stroke = isActive ? "#3C43E7" : "#9EA3AA";
             const hovered = hoverEdge === i;
@@ -727,7 +740,7 @@ function FlowCanvas({
             return (
               <g
                 key={i}
-                onMouseEnter={() => setHoverEdge(i)}
+                onMouseEnter={() => { if (canEdit) setHoverEdge(i); }}
                 onMouseLeave={() => setHoverEdge((h) => (h === i ? null : h))}
               >
                 <path
@@ -735,21 +748,11 @@ function FlowCanvas({
                   stroke={hovered ? "#D14343" : stroke}
                   strokeWidth={isActive || hovered ? 2 : 1.5}
                   fill="none"
-                  strokeDasharray={e.dashed ? "5 4" : "none"}
                   markerEnd={hovered ? undefined : isActive ? "url(#arrowBlue)" : "url(#arrow)"}
                   className="transition-[stroke] duration-[120ms] pointer-events-none"
                 />
                 {/* Fat transparent hit area so the thin edge is easy to hover */}
                 <path d={bezier(p1, p2)} stroke="transparent" strokeWidth={18} fill="none" style={{ pointerEvents: "stroke" }} />
-                {e.label && !hovered && (
-                  <g transform={`translate(${mx}, ${my - 8})`} className="pointer-events-none">
-                    <rect x={-22} y={-9} width={44} height={16} rx={2} fill="#fff" stroke={stroke} strokeWidth={1} />
-                    <text x={0} y={3} fontFamily='"JetBrains Mono", monospace' fontSize={9} fontWeight={600}
-                          textAnchor="middle" fill={stroke} style={{ letterSpacing: "0.04em", textTransform: "uppercase" }}>
-                      {e.label}
-                    </text>
-                  </g>
-                )}
                 {/* Hover to delete: ✕ badge at the edge midpoint */}
                 {hovered && (
                   <g
@@ -770,7 +773,7 @@ function FlowCanvas({
           {connect && (() => {
             const a = nodeById[connect.from];
             if (!a) return null;
-            const p1 = portPos(a, "out", connect.fromPort);
+            const p1 = portPos(a, "out");
             return (
               <path
                 d={bezier(p1, connect.cursor)}
@@ -790,13 +793,15 @@ function FlowCanvas({
           <FlowNode
             key={n.id}
             node={n}
+            options={options}
+            canEdit={canEdit}
             selected={selectedId === n.id}
             onSelect={setSelectedId}
             onDragStart={startNodeDrag}
             onPortDown={onPortDown}
             onPortUp={onPortUp}
             runStatus={runStatuses?.[n.id]}
-            connectingPort={connect?.from === n.id ? connect.fromPort : null}
+            connecting={connect?.from === n.id}
           />
         ))}
       </div>
@@ -833,198 +838,45 @@ function FlowCanvas({
   );
 }
 
-/* ────────────────────────────────────────────────────────────────────────
-   Last-run rail: shows latest invocation of this flow with per-node status.
-   ──────────────────────────────────────────────────────────────────────── */
-
-/* ────────────────────────────────────────────────────────────────────────
-   FlowSelect — custom listbox for the flow picker. Native <option> can't be
-   themed, so this is a button + popup that matches the cockpit design system.
-   ──────────────────────────────────────────────────────────────────────── */
-
-function FlowSelect({
-  flows,
-  flowId,
-  onSelectFlow,
-}: {
-  flows: { id: string; label: string }[];
-  flowId: string;
-  onSelectFlow: (id: string) => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const [activeIdx, setActiveIdx] = useState(0);
-  const rootRef = useRef<HTMLDivElement>(null);
-  const listRef = useRef<HTMLUListElement>(null);
-
-  const current = flows.find((f) => f.id === flowId) ?? flows[0];
-
-  // Close on outside click.
-  useEffect(() => {
-    if (!open) return;
-    const onDown = (e: MouseEvent) => {
-      if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpen(false);
-    };
-    document.addEventListener("mousedown", onDown);
-    return () => document.removeEventListener("mousedown", onDown);
-  }, [open]);
-
-  // Point the active row at the current selection whenever the popup opens.
-  useEffect(() => {
-    if (open) setActiveIdx(Math.max(0, flows.findIndex((f) => f.id === flowId)));
-  }, [open, flowId, flows]);
-
-  // Keep the active row in view while arrow-keying.
-  useEffect(() => {
-    if (!open) return;
-    listRef.current?.querySelector<HTMLElement>('[data-active="true"]')?.scrollIntoView({ block: "nearest" });
-  }, [open, activeIdx]);
-
-  const commit = (idx: number) => {
-    const f = flows[idx];
-    if (f) onSelectFlow(f.id);
-    setOpen(false);
-  };
-
-  const onKeyDown = (e: React.KeyboardEvent) => {
-    switch (e.key) {
-      case "ArrowDown":
-        e.preventDefault();
-        if (!open) setOpen(true);
-        else setActiveIdx((i) => Math.min(flows.length - 1, i + 1));
-        break;
-      case "ArrowUp":
-        e.preventDefault();
-        if (!open) setOpen(true);
-        else setActiveIdx((i) => Math.max(0, i - 1));
-        break;
-      case "Enter":
-      case " ":
-        e.preventDefault();
-        if (open) commit(activeIdx);
-        else setOpen(true);
-        break;
-      case "Escape":
-        if (open) {
-          e.preventDefault();
-          setOpen(false);
-        }
-        break;
-      case "Tab":
-        if (open) setOpen(false);
-        break;
-    }
-  };
-
-  return (
-    <div ref={rootRef} className="relative">
-      <button
-        type="button"
-        aria-haspopup="listbox"
-        aria-expanded={open}
-        data-open={open}
-        onClick={() => setOpen((o) => !o)}
-        onKeyDown={onKeyDown}
-        className="group/sel appearance-none cursor-pointer inline-flex items-center gap-2 bg-transparent border border-neutral-200 rounded-[3px] px-2.5 py-1 font-display font-semibold text-sm leading-[1.2] text-coal outline-none transition-[color,background-color,border-color,box-shadow] duration-[120ms] ease-standard hover:border-neutral-300 hover:bg-app-bg focus-visible:border-mariner focus-visible:bg-panel focus-visible:ring-2 focus-visible:ring-mariner-100 data-[open=true]:border-mariner data-[open=true]:bg-panel data-[open=true]:ring-2 data-[open=true]:ring-mariner-100"
-      >
-        <span className="truncate max-w-[42ch]">{current?.label}</span>
-        <svg
-          aria-hidden="true"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth={2.5}
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          className="size-3 -mr-0.5 text-neutral-400 transition-[transform,color] duration-[160ms] ease-standard group-hover/sel:text-neutral-600 group-data-[open=true]/sel:rotate-180 group-data-[open=true]/sel:text-mariner"
-        >
-          <path d="m6 9 6 6 6-6" />
-        </svg>
-      </button>
-
-      {open && (
-        <ul
-          ref={listRef}
-          role="listbox"
-          tabIndex={-1}
-          aria-activedescendant={flows[activeIdx] ? `flowopt-${flows[activeIdx].id}` : undefined}
-          className="absolute left-0 top-[calc(100%+6px)] z-50 min-w-full w-max max-w-[min(420px,80vw)] max-h-[min(60vh,360px)] overflow-y-auto py-1 bg-panel border border-neutral-200 rounded-sm shadow-[0_12px_28px_-8px_rgba(24,27,32,0.22),0_2px_6px_rgba(24,27,32,0.08)] origin-top animate-ck-pop"
-        >
-          {flows.map((f, i) => {
-            const selected = f.id === flowId;
-            const active = i === activeIdx;
-            return (
-              <li
-                key={f.id}
-                id={`flowopt-${f.id}`}
-                role="option"
-                aria-selected={selected}
-                data-active={active}
-                onMouseEnter={() => setActiveIdx(i)}
-                onClick={() => commit(i)}
-                className={`relative mx-1 flex items-center gap-2.5 rounded-[3px] pl-3 pr-2.5 py-2 cursor-pointer transition-colors duration-[90ms] ${active ? "bg-app-bg" : ""}`}
-              >
-                {selected && (
-                  <span className="absolute left-0 top-1.5 bottom-1.5 w-[2px] rounded-full bg-mariner" />
-                )}
-                <span className="flex min-w-0 flex-col gap-0.5">
-                  <span
-                    className={`font-display text-sm leading-tight truncate ${
-                      selected ? "font-semibold text-mariner" : "font-medium text-coal"
-                    }`}
-                  >
-                    {f.label}
-                  </span>
-                  <span className="font-mono text-[10px] tracking-[0.04em] text-neutral-500 truncate">{f.id}</span>
-                </span>
-                {selected && (
-                  <svg
-                    aria-hidden="true"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth={2.5}
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    className="ml-auto size-3.5 flex-none text-mariner"
-                  >
-                    <path d="m5 13 4 4L19 7" />
-                  </svg>
-                )}
-              </li>
-            );
-          })}
-        </ul>
-      )}
-    </div>
-  );
-}
-
-/* ────────────────────────────────────────────────────────────────────────
-   Flow editor — wraps everything: header bar, palette, canvas, config.
-   ──────────────────────────────────────────────────────────────────────── */
-
 export function FlowEditor({
-  flow,
+  nodes,
+  edges,
+  onNodesChange,
+  onEdgesChange,
+  canEdit,
+  dirty,
+  saveEnabled,
+  saving,
+  error,
+  onSave,
+  headerTitle,
+  headerVersionBadge,
+  headerExtra,
+  options,
   runStatuses,
-  subtitle,
-  flows,
-  flowId,
-  onSelectFlow,
+  fitSignal,
 }: {
-  flow: Flow;
-  runStatuses: RunStatusMap;
-  subtitle?: string;
-  flows: { id: string; label: string }[];
-  flowId: string;
-  onSelectFlow: (id: string) => void;
+  nodes: FlowNodeDef[];
+  edges: FlowEdgeDef[];
+  onNodesChange: React.Dispatch<React.SetStateAction<FlowNodeDef[]>>;
+  onEdgesChange: React.Dispatch<React.SetStateAction<FlowEdgeDef[]>>;
+  canEdit: boolean;
+  dirty: boolean;
+  saveEnabled: boolean;
+  saving: boolean;
+  error: string | null;
+  onSave: () => void;
+  headerTitle: string;
+  headerVersionBadge: string;
+  headerExtra?: React.ReactNode;
+  options: WorkflowEditorOptions;
+  runStatuses?: RunStatusMap;
+  fitSignal?: number;
 }) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [nodes, setNodes] = useState<FlowNodeDef[]>(flow.nodes);
-  const [edges, setEdges] = useState<FlowEdgeDef[]>(flow.edges);
   const [fullView, setFullView] = useState(false);
   const isMobile = useIsMobileViewport();
   const [paletteOpen, setPaletteOpen] = useState(false);
-  useEffect(() => { setNodes(flow.nodes); setEdges(flow.edges); setSelectedId(null); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [flow.id]);
 
   useEffect(() => {
     if (!fullView) return;
@@ -1035,55 +887,56 @@ export function FlowEditor({
 
   const selected = selectedId ? nodes.find(n => n.id === selectedId) ?? null : null;
 
+  const paletteItems = useMemo(() => buildPaletteItems(options.defaultModel), [options.defaultModel]);
+
   const addNode = (item: PaletteItem, at?: Point) => {
     const num = (s: string) => parseInt(s.replace(/\D/g, ""), 10) || 0;
     const id = "n" + (Math.max(0, ...nodes.map(n => num(n.id))) + 1);
     let x: number, y: number;
     if (at) {
-      // Dropped on the canvas — center the node under the cursor.
       x = Math.round(at.x - NODE_W / 2);
       y = Math.round(at.y - NODE_H / 2);
     } else {
-      // Clicked — spawn just right of the rightmost node, at the flow's average height.
       x = (nodes.length ? Math.max(...nodes.map(n => n.x)) : 200) + 60;
       y = nodes.length ? Math.round(nodes.reduce((s, n) => s + n.y, 0) / nodes.length) : 280;
     }
-    setNodes(prev => [...prev, { id, type: item.type, name: item.name, x, y, params: { ...item.params } }]);
+    onNodesChange(prev => [...prev, { id, type: item.type, name: item.name, x, y, params: { ...item.params } }]);
     setSelectedId(id);
   };
 
-  const addEdge = (from: string, to: string, fromPort: number) => {
+  const addEdge = (from: string, to: string) => {
     if (from === to) return;
-    setEdges(prev =>
-      prev.some(e => e.from === from && e.to === to && (e.fromPort || 0) === fromPort)
+    onEdgesChange(prev =>
+      prev.some(e => e.from === from && e.to === to)
         ? prev
-        : [...prev, { from, to, fromPort }],
+        : [...prev, { from, to }],
     );
   };
 
   const removeEdge = (edge: FlowEdgeDef) => {
-    setEdges(prev =>
-      prev.filter(e => !(e.from === edge.from && e.to === edge.to && (e.fromPort || 0) === (edge.fromPort || 0))),
+    onEdgesChange(prev =>
+      prev.filter(e => !(e.from === edge.from && e.to === edge.to)),
     );
   };
 
-  const updateSelected = (path: string, value: FieldValue) => {
-    setNodes((prev) => prev.map(n => {
+  const updateSelected = (path: string, value: WorkflowParamValue | undefined) => {
+    onNodesChange((prev) => prev.map(n => {
       if (n.id !== selectedId) return n;
       if (path === "name") return { ...n, name: value as string };
-      if (path === "code") return { ...n, code: value as string };
       if (path.startsWith("params.")) {
         const k = path.slice(7);
-        return { ...n, params: { ...n.params, [k]: value } };
+        const params = { ...n.params };
+        if (value === undefined) delete params[k];
+        else params[k] = value;
+        return { ...n, params };
       }
       return n;
     }));
   };
   const deleteSelected = () => {
-    // Anchor (locked) steps can't be removed.
-    if (selected?.locked) return;
-    setNodes(prev => prev.filter(n => n.id !== selectedId));
-    setEdges(prev => prev.filter(e => e.from !== selectedId && e.to !== selectedId));
+    if (!selected || selected.type === "trigger_ticket_ai") return;
+    onNodesChange(prev => prev.filter(n => n.id !== selectedId));
+    onEdgesChange(prev => prev.filter(e => e.from !== selectedId && e.to !== selectedId));
     setSelectedId(null);
   };
 
@@ -1091,35 +944,55 @@ export function FlowEditor({
     <div className={`flex flex-col min-h-0 ${fullView ? "fixed inset-0 z-50 bg-app-bg" : "h-full"}`}>
       {/* Editor toolbar */}
       <div className="flex items-center gap-4 py-3 px-6 bg-panel border-b border-neutral-200">
-        <div className="flex flex-col gap-0.5">
-          <div className="font-mono text-[10px] text-neutral-500 tracking-[0.06em] uppercase">{subtitle}</div>
-          <div className="flex items-center gap-2.5">
-            <FlowSelect flows={flows} flowId={flowId} onSelectFlow={onSelectFlow} />
-          </div>
+        <div className="flex items-center gap-2.5 min-w-0">
+          <div className="font-display font-semibold text-sm leading-[1.2] text-coal truncate">{headerTitle}</div>
+          <span className="rounded-[3px] bg-app-bg px-[6px] py-[2px] font-mono text-[10px] uppercase tracking-[0.05em] text-neutral-600">{headerVersionBadge}</span>
+          {dirty && (
+            <span className="rounded-full border border-mariner px-2 py-0.5 font-mono text-[10px] font-semibold tracking-[0.04em] uppercase text-mariner">Unsaved changes</span>
+          )}
+          {!canEdit && (
+            <span className="rounded-full border border-neutral-200 bg-app-bg px-2 py-0.5 font-mono text-[10px] font-semibold tracking-[0.04em] uppercase text-neutral-600">Read-only</span>
+          )}
+        </div>
+        <div className="ml-auto flex items-center gap-2">
+          {headerExtra}
+          {canEdit && (
+            <button
+              onClick={onSave}
+              disabled={!saveEnabled || saving}
+              className="appearance-none cursor-pointer border border-mariner bg-mariner text-white py-1.5 px-3.5 rounded-[3px] font-mono text-[11px] tracking-[0.04em] uppercase disabled:opacity-40 disabled:cursor-default"
+            >{saving ? "Saving…" : "Save changes"}</button>
+          )}
         </div>
       </div>
-
+      {error && (
+        <div className="px-6 py-2 border-b border-red-300 bg-red-50 font-body text-[12px] text-red-700">{error}</div>
+      )}
 
       {/* Editor body */}
       <div className="flex-1 flex min-h-0">
-        {!isMobile && <NodePalette onAdd={addNode} />}
+        {!isMobile && canEdit && <NodePalette items={paletteItems} onAdd={addNode} />}
         <FlowCanvas
-          flow={flow}
           nodes={nodes}
           edges={edges}
-          onNodesChange={setNodes}
+          canEdit={canEdit}
+          options={options}
+          onNodesChange={onNodesChange}
           onAddEdge={addEdge}
           onRemoveEdge={removeEdge}
           onDropNode={addNode}
-          runStatuses={runStatuses}
+          runStatuses={runStatuses ?? {}}
           selectedId={selectedId}
           setSelectedId={setSelectedId}
           fullView={fullView}
           onToggleFullView={() => setFullView((v) => !v)}
+          fitSignal={fitSignal ?? 0}
         />
         {selected && !isMobile && (
           <NodeConfig
             node={selected}
+            options={options}
+            canEdit={canEdit}
             onChange={updateSelected}
             onDelete={deleteSelected}
             onClose={() => setSelectedId(null)}
@@ -1129,12 +1002,14 @@ export function FlowEditor({
           <MobileSheet
             open={!!selected}
             onClose={() => setSelectedId(null)}
-            title={selected ? `${selected.type} · ${selected.name}` : ""}
+            title={selected ? `${NODE_CATEGORIES[selected.type].label} · ${selected.name ?? ""}` : ""}
             heightClass="max-h-[80vh]"
           >
             {selected && (
               <NodeConfig
                 node={selected}
+                options={options}
+                canEdit={canEdit}
                 onChange={updateSelected}
                 onDelete={deleteSelected}
                 onClose={() => setSelectedId(null)}
@@ -1143,21 +1018,21 @@ export function FlowEditor({
             )}
           </MobileSheet>
         )}
-        {isMobile && (
+        {isMobile && canEdit && (
           <button
             onClick={() => setPaletteOpen(true)}
             aria-label="Add step"
             className="fixed left-4 bottom-[72px] z-40 w-12 h-12 rounded-full bg-mariner text-white text-2xl leading-none shadow-[0_3px_10px_rgba(24,27,32,0.25)] flex items-center justify-center"
           >＋</button>
         )}
-        {isMobile && (
+        {isMobile && canEdit && (
           <MobileSheet open={paletteOpen} onClose={() => setPaletteOpen(false)} title="Add step" heightClass="max-h-[60vh]">
             <div className="flex flex-col py-1">
-              {PALETTE_ITEMS.map((it) => {
-                const cat = NODE_CATEGORIES[it.type] || NODE_CATEGORIES.tool;
+              {paletteItems.map((it) => {
+                const cat = NODE_CATEGORIES[it.type];
                 return (
                   <button
-                    key={it.name}
+                    key={it.type}
                     onClick={() => { addNode(it); setPaletteOpen(false); }}
                     className="appearance-none text-left border-none cursor-pointer flex items-center gap-3 px-[18px] py-3.5 bg-transparent active:bg-app-bg"
                   >
@@ -1176,5 +1051,3 @@ export function FlowEditor({
     </div>
   );
 }
-const ghostBtnCls = "appearance-none cursor-pointer border border-neutral-200 bg-panel text-coal py-1.5 px-3 rounded-[3px] font-mono text-[11px] tracking-[0.04em] uppercase";
-const darkBtnLightCls = "appearance-none cursor-pointer border border-coal bg-coal text-white py-1.5 px-3.5 rounded-[3px] font-mono text-[11px] tracking-[0.04em] uppercase";
