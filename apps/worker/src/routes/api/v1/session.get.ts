@@ -1,6 +1,10 @@
 import { defineEventHandler } from "h3";
 import { requireDashboardActor, toHttpError } from "../../../lib/auth/request-context.js";
-import { canEditPrePrChecks, canInvite } from "../../../lib/auth/roles.js";
+import {
+  canEditPrePrChecks,
+  canEditWorkflowDefinitions,
+  canInvite,
+} from "../../../lib/auth/roles.js";
 
 export default defineEventHandler(async (event) => {
   try {
@@ -10,6 +14,7 @@ export default defineEventHandler(async (event) => {
       role: actor.role,
       canManageUsers: canInvite(actor.role),
       canEditChecks: canEditPrePrChecks(actor.role),
+      canEditWorkflows: canEditWorkflowDefinitions(actor.role),
     };
   } catch (error) {
     toHttpError(error);

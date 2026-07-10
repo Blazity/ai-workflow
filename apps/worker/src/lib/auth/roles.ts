@@ -25,3 +25,7 @@ export function normalizeDashboardRole(role: string): DashboardRole | null {
 export function canEditPrePrChecks(role: DashboardRole): boolean {
   return role === "owner" || role === "admin";
 }
+
+export function canEditWorkflowDefinitions(role: DashboardRole): boolean {
+  return role === "owner" || role === "admin";
+}

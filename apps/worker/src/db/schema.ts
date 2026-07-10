@@ -13,6 +13,7 @@ import {
   text,
   timestamp,
 } from "drizzle-orm/pg-core";
+import type { WorkflowDefinition } from "@shared/contracts";
 import type { GateStatusRef } from "../adapters/vcs/types.js";
 import type { PrePrCheckConfig } from "../pre-pr-checks/config.js";
 
@@ -216,6 +217,20 @@ export const workflowOwnedBranches = pgTable(
 export const prePrCheckConfigVersions = pgTable("pre_pr_check_config_versions", {
   version: serial("version").primaryKey(),
   config: jsonb("config").$type<PrePrCheckConfig>().notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  createdById: text("created_by_id").notNull(),
+  createdByLabel: text("created_by_label").notNull(),
+  restoredFromVersion: integer("restored_from_version"),
+});
+
+/**
+ * Dashboard-managed workflow definition, append-only. The active definition
+ * is the row with the highest version; a rollback appends a copy of an older
+ * version with restored_from_version set. No rows = built-in default.
+ */
+export const workflowDefinitionVersions = pgTable("workflow_definition_versions", {
+  version: serial("version").primaryKey(),
+  definition: jsonb("definition").$type<WorkflowDefinition>().notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   createdById: text("created_by_id").notNull(),
   createdByLabel: text("created_by_label").notNull(),
