@@ -251,6 +251,25 @@ export interface WorkflowDefinitionVersion {
 export interface WorkflowEditorOptions {
   agentKind: "claude" | "codex";
   defaultModel: string;
+  defaultModels: { claude: string; codex: string };
   models: { claude: string[]; codex: string[] };
   ticketStatusTargets: { value: TicketStatusTarget; label: string }[];
+}
+
+export type BlockRunStatus = "pending" | "running" | "ok" | "warn" | "fail";
+
+export interface BlockRunState {
+  status: BlockRunStatus;
+  error?: string;
+}
+
+export interface RunBlockStatusSnapshot {
+  runId: string;
+  ticketKey: string | null;
+  source: "live" | "last";
+  status: RunStatus;
+  definitionVersion: number | null;
+  blockStatuses: Record<string, BlockRunState>;
+  updatedAt: string;
+  completedAt: string | null;
 }

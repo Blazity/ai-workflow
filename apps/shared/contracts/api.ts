@@ -3,6 +3,7 @@ import type {
   PromptDef,
   RepositoryOption,
   Run,
+  RunBlockStatusSnapshot,
   RunDetail,
   RunStep,
   Workflow,
@@ -192,4 +193,9 @@ export interface WorkflowDefinitionResponse {
 
 export interface WorkflowDefinitionSaveResponse {
   version: WorkflowDefinitionVersion;
+}
+
+export interface RunBlockStatusesResponse {
+  generatedAt: string;
+  run: RunBlockStatusSnapshot | null;
 }
