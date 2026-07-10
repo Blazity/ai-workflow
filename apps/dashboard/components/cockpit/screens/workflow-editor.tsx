@@ -2,6 +2,7 @@
 
 import React, { useState } from "react";
 import type {
+  RunBlockStatusesResponse,
   WorkflowDefinitionNode,
   WorkflowDefinitionResponse,
   WorkflowDefinitionSaveResponse,
@@ -11,6 +12,7 @@ import { FlowEditor } from "@/components/cockpit/screens/flow-editor";
 import type { FlowEdgeDef, FlowNodeDef } from "@/lib/flows";
 import { readErrorMessage } from "@/lib/api/error-message";
 import { serializeWorkflowDefinition } from "@/lib/workflow-editor/serialize";
+import { deriveRunStatuses } from "@/lib/workflow-editor/run-statuses";
 
 function toViewNodes(nodes: WorkflowDefinitionNode[]): FlowNodeDef[] {
   return structuredClone(nodes).map((node) => ({
@@ -33,9 +35,11 @@ function nodesValid(nodes: FlowNodeDef[]): boolean {
 
 export function WorkflowEditorScreen({
   initial,
+  liveBlocks,
   canEdit,
 }: {
   initial: WorkflowDefinitionResponse;
+  liveBlocks: RunBlockStatusesResponse;
   canEdit: boolean;
 }) {
   const seed = initial.current?.definition ?? initial.defaultDefinition;
@@ -54,6 +58,47 @@ export function WorkflowEditorScreen({
     JSON.stringify(serializeWorkflowDefinition(nodes, edges)) !==
     JSON.stringify(serializeWorkflowDefinition(baseline.nodes, baseline.edges));
   const canSave = (dirty || current === null) && nodesValid(nodes);
+
+  const currentVersionNumber = current?.version ?? null;
+  const run = liveBlocks.run;
+  const derived = deriveRunStatuses(run, currentVersionNumber);
+
+  let statusBar: React.ReactNode = null;
+  if (derived && run) {
+    const nodeName = (id: string) => nodes.find((n) => n.id === id)?.name || id;
+    const truncate = (s: string) => (s.length > 120 ? s.slice(0, 120) + "…" : s);
+    const ids = Object.keys(derived.statuses);
+    const runningId = ids.find((id) => derived.statuses[id] === "running");
+    const failId = ids.find((id) => derived.statuses[id] === "fail");
+    const warnId = ids.find((id) => derived.statuses[id] === "warn");
+
+    let statusText: string;
+    if (runningId) {
+      statusText = `Running: ${nodeName(runningId)}`;
+    } else if (run.status === "failed" || failId) {
+      const where = failId ? nodeName(failId) : "run";
+      const err = failId ? derived.errors[failId] : undefined;
+      statusText = err ? `Failed at ${where}: ${truncate(err)}` : `Failed at ${where}`;
+    } else if (warnId) {
+      const err = derived.errors[warnId];
+      statusText = err
+        ? `Awaiting: questions on the ticket: ${truncate(err)}`
+        : "Awaiting: questions on the ticket";
+    } else {
+      statusText = "Completed";
+    }
+
+    const ticketLabel = run.ticketKey ?? run.runId.slice(0, 8);
+    statusBar = (
+      <div className="flex items-center gap-2 px-6 py-2 border-b border-neutral-200 bg-app-bg font-body text-[12px] text-neutral-700">
+        <span className="font-mono text-[11px] font-semibold text-coal">{ticketLabel}</span>
+        <span className="rounded-full border border-neutral-200 bg-panel px-2 py-0.5 font-mono text-[10px] font-semibold tracking-[0.04em] uppercase text-neutral-600">
+          {run.source === "live" ? "Live" : "Last run"}
+        </span>
+        <span className="truncate">{statusText}</span>
+      </div>
+    );
+  }
 
   function applyVersion(version: WorkflowDefinitionVersion, refit: boolean) {
     setVersions((prev) => [version, ...prev]);
@@ -108,6 +153,7 @@ export function WorkflowEditorScreen({
           Built-in default, save to create v1.
         </div>
       )}
+      {statusBar}
       <div className="relative flex-1 min-h-0">
         <FlowEditor
           nodes={nodes}
@@ -131,6 +177,8 @@ export function WorkflowEditorScreen({
             </button>
           }
           options={initial.options}
+          runStatuses={derived?.statuses}
+          runErrors={derived?.errors}
           fitSignal={fitSignal}
         />
         {historyOpen && (

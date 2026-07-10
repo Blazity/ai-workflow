@@ -66,3 +66,49 @@ test("omits empty model and message params and undefined name", () => {
   ]);
   assert.equal("name" in out.nodes[0], false);
 });
+
+test("emits provider for agent nodes when set and drops it when empty", () => {
+  const nodes: FlowNodeDef[] = [
+    {
+      id: "planning",
+      type: "planning_agent",
+      x: 0,
+      y: 0,
+      params: { provider: "codex", model: "gpt-5-codex" },
+    },
+    { id: "implementation", type: "implementation_agent", x: 0, y: 0, params: { provider: "" } },
+    { id: "review", type: "review_agent", x: 0, y: 0, params: { model: "claude-opus-4" } },
+  ];
+
+  const out = serializeWorkflowDefinition(nodes, []);
+  assert.deepEqual(out.nodes, [
+    {
+      id: "planning",
+      type: "planning_agent",
+      x: 0,
+      y: 0,
+      params: { provider: "codex", model: "gpt-5-codex" },
+    },
+    { id: "implementation", type: "implementation_agent", x: 0, y: 0, params: {} },
+    { id: "review", type: "review_agent", x: 0, y: 0, params: { model: "claude-opus-4" } },
+  ]);
+});
+
+test("never emits provider for non-agent node types", () => {
+  const nodes: FlowNodeDef[] = [
+    {
+      id: "status",
+      type: "update_ticket_status",
+      x: 0,
+      y: 0,
+      params: { target: "ai_review", provider: "codex" },
+    },
+    { id: "slack", type: "send_slack_message", x: 0, y: 0, params: { message: "hi", provider: "claude" } },
+  ];
+
+  const out = serializeWorkflowDefinition(nodes, []);
+  assert.deepEqual(out.nodes, [
+    { id: "status", type: "update_ticket_status", x: 0, y: 0, params: { target: "ai_review" } },
+    { id: "slack", type: "send_slack_message", x: 0, y: 0, params: { message: "hi" } },
+  ]);
+});

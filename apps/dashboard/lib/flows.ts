@@ -1,4 +1,5 @@
 import type {
+  BlockRunStatus,
   WorkflowBlockType,
   WorkflowDefinition,
   WorkflowDefinitionEdge,
@@ -6,13 +7,14 @@ import type {
 } from "@shared/contracts";
 
 export type {
+  BlockRunStatus,
   WorkflowBlockType,
   WorkflowDefinition,
   WorkflowDefinitionEdge,
   WorkflowDefinitionNode,
 };
 
-export type NodeRunStatus = "ok" | "warn" | "fail" | "pending";
+export type NodeRunStatus = BlockRunStatus;
 
 export type RunStatusMap = Record<string, NodeRunStatus>;
 

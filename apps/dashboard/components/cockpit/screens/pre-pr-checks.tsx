@@ -10,6 +10,7 @@ import type {
   RepositoryOption,
 } from "@shared/contracts";
 import { readErrorMessage } from "@/lib/api/error-message";
+import { Listbox } from "@/components/cockpit/listbox";
 
 export function PrePrChecksScreen({
   initial,
@@ -336,14 +337,17 @@ function AddRepository({
           <span className="font-body text-[12px] text-neutral-500">
             Couldn&apos;t list repositories — enter manually:
           </span>
-          <select
-            value={manualProvider}
-            onChange={(e) => setManualProvider(e.target.value as "github" | "gitlab")}
-            className="rounded-[3px] border border-neutral-200 bg-white px-1 py-[5px] font-mono text-[12px]"
-          >
-            <option value="github">github</option>
-            <option value="gitlab">gitlab</option>
-          </select>
+          <div className="w-[120px]">
+            <Listbox
+              options={[
+                { value: "github", label: "github" },
+                { value: "gitlab", label: "gitlab" },
+              ]}
+              value={manualProvider}
+              ariaLabel="VCS provider"
+              onChange={(v) => setManualProvider(v as "github" | "gitlab")}
+            />
+          </div>
           <input
             value={manualPath}
             onChange={(e) => setManualPath(e.target.value)}

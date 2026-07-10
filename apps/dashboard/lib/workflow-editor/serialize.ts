@@ -8,9 +8,9 @@ import type { FlowEdgeDef, FlowNodeDef } from "@/lib/flows";
 
 const PARAM_KEYS: Record<WorkflowBlockType, string[]> = {
   trigger_ticket_ai: [],
-  planning_agent: ["model"],
-  implementation_agent: ["model"],
-  review_agent: ["model"],
+  planning_agent: ["provider", "model"],
+  implementation_agent: ["provider", "model"],
+  review_agent: ["provider", "model"],
   run_pre_pr_checks: ["maxFixCycles"],
   open_pr: [],
   update_ticket_status: ["target"],
@@ -22,7 +22,7 @@ function serializeParams(node: FlowNodeDef): Record<string, WorkflowParamValue> 
   for (const key of PARAM_KEYS[node.type]) {
     const value = node.params[key];
     if (value === undefined) continue;
-    if ((key === "model" || key === "message") && value === "") continue;
+    if ((key === "model" || key === "message" || key === "provider") && value === "") continue;
     out[key] = value;
   }
   return out;

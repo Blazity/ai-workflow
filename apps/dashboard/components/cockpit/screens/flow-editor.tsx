@@ -2,10 +2,11 @@
 
 import React, { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import Link from "next/link";
-import type { FlowNodeDef, FlowEdgeDef, RunStatusMap, WorkflowBlockType } from "@/lib/flows";
+import type { FlowNodeDef, FlowEdgeDef, NodeRunStatus, RunStatusMap, WorkflowBlockType } from "@/lib/flows";
 import type { WorkflowEditorOptions, WorkflowParamValue } from "@shared/contracts";
 import { useIsMobileViewport } from "@/lib/use-media-query";
 import { MobileSheet } from "@/components/cockpit/mobile/mobile-sheet";
+import { Listbox } from "@/components/cockpit/listbox";
 
 const NODE_CATEGORIES: Record<
   WorkflowBlockType,
@@ -23,6 +24,14 @@ const NODE_CATEGORIES: Record<
 
 const NODE_W = 168;
 const NODE_H = 84;
+
+const RUN_STATUS_COLORS: Record<NodeRunStatus, string> = {
+  pending: "#9EA3AA",
+  running: "#3C43E7",
+  ok: "#5BB04A",
+  warn: "#FFC800",
+  fail: "#D14343",
+};
 
 interface Point { x: number; y: number; }
 
@@ -42,7 +51,12 @@ function nodeSummary(node: FlowNodeDef, options: WorkflowEditorOptions): string 
     case "implementation_agent":
     case "review_agent": {
       const model = node.params.model;
-      return typeof model === "string" && model !== "" ? model : null;
+      const modelText = typeof model === "string" && model !== "" ? model : null;
+      if (modelText === null) return null;
+      const provider = node.params.provider;
+      return provider === "claude" || provider === "codex"
+        ? `${provider} · ${modelText}`
+        : modelText;
     }
     case "update_ticket_status": {
       const target = node.params.target;
@@ -71,6 +85,7 @@ const FlowNode = React.memo(function FlowNode({
   onPortDown,
   onPortUp,
   runStatus,
+  runError,
   connecting,
 }: {
   node: FlowNodeDef;
@@ -81,7 +96,8 @@ const FlowNode = React.memo(function FlowNode({
   onDragStart: (e: React.PointerEvent, node: FlowNodeDef) => void;
   onPortDown: (e: React.PointerEvent, nodeId: string) => void;
   onPortUp: (e: React.PointerEvent, nodeId: string) => void;
-  runStatus?: string;
+  runStatus?: NodeRunStatus;
+  runError?: string;
   connecting?: boolean;
 }) {
   const cat = NODE_CATEGORIES[node.type];
@@ -117,11 +133,13 @@ const FlowNode = React.memo(function FlowNode({
         {locked && <span title="Anchor step, can't be removed" className="text-[9px] leading-none" aria-hidden>🔒</span>}
         {runStatus && (
           <span
-            title={"last run: " + runStatus}
-            className="w-1.5 h-1.5 rounded-full"
-            style={{
-              background: runStatus === "ok" ? "#5BB04A" : runStatus === "warn" ? "#FFC800" : runStatus === "fail" ? "#D14343" : "#9EA3AA",
-            }}
+            title={
+              (runStatus === "fail" || runStatus === "warn") && runError
+                ? `last run: ${runStatus} (${runError})`
+                : "last run: " + runStatus
+            }
+            className={`w-1.5 h-1.5 rounded-full ${runStatus === "running" ? "animate-pulse" : ""}`}
+            style={{ background: RUN_STATUS_COLORS[runStatus] }}
           />
         )}
       </div>
@@ -229,7 +247,7 @@ function ConfigNote({ children }: { children: React.ReactNode }) {
 
 const CUSTOM_MODEL = "__custom__";
 
-function ModelField({
+function ProviderField({
   value,
   options,
   disabled,
@@ -240,34 +258,60 @@ function ModelField({
   disabled: boolean;
   onChange: (v: string) => void;
 }) {
-  const models = options.models[options.agentKind];
+  return (
+    <Listbox
+      options={[
+        { value: "", label: `Default (${options.agentKind})` },
+        { value: "claude", label: "Claude Code" },
+        { value: "codex", label: "OpenAI Codex" },
+      ]}
+      value={value}
+      disabled={disabled}
+      ariaLabel="Provider"
+      onChange={onChange}
+    />
+  );
+}
+
+function ModelField({
+  value,
+  provider,
+  options,
+  disabled,
+  onChange,
+}: {
+  value: string;
+  provider: string;
+  options: WorkflowEditorOptions;
+  disabled: boolean;
+  onChange: (v: string) => void;
+}) {
+  const effectiveKind = provider === "claude" || provider === "codex" ? provider : options.agentKind;
+  const defaultModel = options.defaultModels[effectiveKind];
+  const models = options.models[effectiveKind];
   const list = useMemo(
-    () => [options.defaultModel, ...models.filter((m) => m !== options.defaultModel)],
-    [models, options.defaultModel],
+    () => [defaultModel, ...models.filter((m) => m !== defaultModel)],
+    [models, defaultModel],
   );
   const [customPicked, setCustomPicked] = useState(false);
   const custom = customPicked || (value !== "" && !list.includes(value));
 
   return (
     <div className="flex flex-col gap-1.5">
-      <select
-        value={custom ? CUSTOM_MODEL : value === "" ? options.defaultModel : value}
+      <Listbox
+        options={[...list.map((m) => ({ value: m, label: m })), { value: CUSTOM_MODEL, label: "Custom…" }]}
+        value={custom ? CUSTOM_MODEL : value === "" ? defaultModel : value}
         disabled={disabled}
-        onChange={(e) => {
-          if (e.target.value === CUSTOM_MODEL) {
+        ariaLabel="Model"
+        onChange={(v) => {
+          if (v === CUSTOM_MODEL) {
             setCustomPicked(true);
             return;
           }
           setCustomPicked(false);
-          onChange(e.target.value);
+          onChange(v);
         }}
-        className={inputCls}
-      >
-        {list.map((m) => (
-          <option key={m} value={m}>{m}</option>
-        ))}
-        <option value={CUSTOM_MODEL}>Custom…</option>
-      </select>
+      />
       {custom && (
         <input
           value={value}
@@ -296,18 +340,34 @@ function ConfigFields({
       return <ConfigNote>Fires when a Jira ticket enters the AI column.</ConfigNote>;
     case "planning_agent":
     case "implementation_agent":
-    case "review_agent":
+    case "review_agent": {
+      const provider = typeof node.params.provider === "string" ? node.params.provider : "";
       return (
-        <ConfigField label="Model">
-          <ModelField
-            key={node.id}
-            value={typeof node.params.model === "string" ? node.params.model : ""}
-            options={options}
-            disabled={!canEdit}
-            onChange={(v) => onChange("params.model", v)}
-          />
-        </ConfigField>
+        <>
+          <ConfigField label="Provider">
+            <ProviderField
+              value={provider}
+              options={options}
+              disabled={!canEdit}
+              onChange={(v) => {
+                onChange("params.provider", v);
+                if (v !== provider) onChange("params.model", "");
+              }}
+            />
+          </ConfigField>
+          <ConfigField label="Model">
+            <ModelField
+              key={`${node.id}:${provider}`}
+              value={typeof node.params.model === "string" ? node.params.model : ""}
+              provider={provider}
+              options={options}
+              disabled={!canEdit}
+              onChange={(v) => onChange("params.model", v)}
+            />
+          </ConfigField>
+        </>
       );
+    }
     case "run_pre_pr_checks":
       return (
         <>
@@ -340,16 +400,13 @@ function ConfigFields({
     case "update_ticket_status":
       return (
         <ConfigField label="Target status">
-          <select
+          <Listbox
+            options={options.ticketStatusTargets.map((t) => ({ value: t.value, label: t.label }))}
             value={typeof node.params.target === "string" ? node.params.target : ""}
             disabled={!canEdit}
-            onChange={(e) => onChange("params.target", e.target.value)}
-            className={inputCls}
-          >
-            {options.ticketStatusTargets.map((t) => (
-              <option key={t.value} value={t.value}>{t.label}</option>
-            ))}
-          </select>
+            ariaLabel="Target status"
+            onChange={(v) => onChange("params.target", v)}
+          />
         </ConfigField>
       );
     case "send_slack_message":
@@ -465,6 +522,7 @@ function FlowCanvas({
   onRemoveEdge,
   onDropNode,
   runStatuses,
+  runErrors,
   selectedId,
   setSelectedId,
   fullView,
@@ -480,6 +538,7 @@ function FlowCanvas({
   onRemoveEdge: (edge: FlowEdgeDef) => void;
   onDropNode: (item: PaletteItem, at: Point) => void;
   runStatuses?: RunStatusMap;
+  runErrors?: Record<string, string>;
   selectedId: string | null;
   setSelectedId: (id: string | null) => void;
   fullView: boolean;
@@ -801,6 +860,7 @@ function FlowCanvas({
             onPortDown={onPortDown}
             onPortUp={onPortUp}
             runStatus={runStatuses?.[n.id]}
+            runError={runErrors?.[n.id]}
             connecting={connect?.from === n.id}
           />
         ))}
@@ -854,6 +914,7 @@ export function FlowEditor({
   headerExtra,
   options,
   runStatuses,
+  runErrors,
   fitSignal,
 }: {
   nodes: FlowNodeDef[];
@@ -871,6 +932,7 @@ export function FlowEditor({
   headerExtra?: React.ReactNode;
   options: WorkflowEditorOptions;
   runStatuses?: RunStatusMap;
+  runErrors?: Record<string, string>;
   fitSignal?: number;
 }) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -982,6 +1044,7 @@ export function FlowEditor({
           onRemoveEdge={removeEdge}
           onDropNode={addNode}
           runStatuses={runStatuses ?? {}}
+          runErrors={runErrors ?? {}}
           selectedId={selectedId}
           setSelectedId={setSelectedId}
           fullView={fullView}
