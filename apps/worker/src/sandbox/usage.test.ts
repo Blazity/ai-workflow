@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { formatUsageReport, type PhaseUsage } from "./usage.js";
+import { formatUsageReport, computeUsageTotals, type PhaseUsage } from "./usage.js";
 
 const u = (over: Partial<PhaseUsage> = {}): PhaseUsage => ({
   cost_usd: null, tokens: null, duration_ms: 60_000, duration_api_ms: 30_000, num_turns: 1, ...over,
@@ -35,5 +35,36 @@ describe("formatUsageReport", () => {
   it("shows n/a for null phases", () => {
     const out = formatUsageReport({ Impl: null });
     expect(out).toContain("Impl: n/a");
+  });
+
+  it("prices each phase against its own model when modelsByPhase is given", () => {
+    const out = formatUsageReport(
+      {
+        Research: u({ tokens: { input: 1000, cached_input: 0, output: 1000 } }),
+        Impl: u({ tokens: { input: 1000, cached_input: 0, output: 1000 } }),
+      },
+      (m) =>
+        m === "cheap"
+          ? { input: 0, cached_input: 0, output: 0 }
+          : { input: 0.00001, cached_input: 0, output: 0.00002 },
+      "cheap",
+      { Research: "pricey", Impl: "cheap" },
+    );
+    expect(out).not.toContain("cost unknown");
+    expect(out).toContain("Research: $0.03");
+    expect(out).toContain("Impl: $0.00");
+  });
+});
+
+describe("computeUsageTotals", () => {
+  it("records the resolved per-phase model in the breakdown", () => {
+    const totals = computeUsageTotals(
+      { Research: u({ tokens: { input: 10, cached_input: 0, output: 10 } }), Impl: null },
+      () => ({ input: 0, cached_input: 0, output: 0 }),
+      "default-model",
+      { Research: "phase-model" },
+    );
+    expect(totals.phases.Research.model).toBe("phase-model");
+    expect(totals.phases.Impl.model).toBe("default-model");
   });
 });

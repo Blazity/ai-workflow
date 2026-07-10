@@ -81,10 +81,11 @@ export function formatTicketEvent(
 
     case "pr_ready": {
       const prLink = `<${event.pr.url}|#${event.pr.number}>`;
-      return appendUsage(
+      const withUsage = appendUsage(
         `${head} PR ready for review — ${prLink}`,
         event.usageReport,
       );
+      return event.extraText ? `${withUsage}\n${event.extraText}` : withUsage;
     }
 
     case "failed": {

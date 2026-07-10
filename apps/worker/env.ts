@@ -99,8 +99,11 @@ export const env = createEnv({
     // Polling
     POLL_INTERVAL_MS: z.coerce.number().int().positive().default(300_000),
 
-    // Phase 3 (Review) — agent self-reviews diff and fixes issues before push.
+    // Review phase: agent self-reviews its diff and fixes issues before push.
     // Off by default so existing deployments keep current two-phase behavior.
+    // This flag no longer gates execution directly; it only shapes the built-in
+    // default workflow definition (the includeReview input). Once a definition
+    // is saved via the dashboard, a review_agent block's presence drives it.
     ENABLE_REVIEW_PHASE: z
       .enum(["true", "false"])
       .default("false")

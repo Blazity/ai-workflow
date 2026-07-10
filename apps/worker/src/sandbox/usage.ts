@@ -19,6 +19,7 @@ export function formatUsageReport(
   phases: Record<string, PhaseUsage | null>,
   priceLookup?: PriceLookup,
   model?: string,
+  modelsByPhase?: Record<string, string>,
 ): string {
   const parts: string[] = [];
   let totalCost = 0;
@@ -27,12 +28,13 @@ export function formatUsageReport(
   for (const [name, usage] of Object.entries(phases)) {
     if (!usage) { parts.push(`${name}: n/a`); continue; }
     const mins = Math.round(usage.duration_ms / 60_000);
+    const phaseModel = modelsByPhase?.[name] ?? model;
     let costLabel: string;
     if (usage.cost_usd != null) {
       totalCost += usage.cost_usd;
       costLabel = `$${usage.cost_usd.toFixed(2)}`;
-    } else if (usage.tokens && priceLookup && model) {
-      const price = priceLookup(model);
+    } else if (usage.tokens && priceLookup && phaseModel) {
+      const price = priceLookup(phaseModel);
       if (price) {
         const cost = usage.tokens.input * price.input
                    + usage.tokens.cached_input * price.cached_input
@@ -84,6 +86,7 @@ export interface PhaseTotal {
   tokens: PhaseUsage["tokens"];
   durationMs: number;
   numTurns: number;
+  model?: string | null;
 }
 
 export interface UsageTotals {
@@ -104,6 +107,7 @@ export function computeUsageTotals(
   phases: Record<string, PhaseUsage | null>,
   priceLookup?: PriceLookup,
   model?: string,
+  modelsByPhase?: Record<string, string>,
 ): UsageTotals {
   let costUsd = 0;
   let tokensInput = 0;
@@ -113,12 +117,13 @@ export function computeUsageTotals(
   const breakdown: Record<string, PhaseTotal> = {};
 
   for (const [name, usage] of Object.entries(phases)) {
+    const phaseModel = modelsByPhase?.[name] ?? model;
     if (!usage) {
-      breakdown[name] = { costUsd: null, tokens: null, durationMs: 0, numTurns: 0 };
+      breakdown[name] = { costUsd: null, tokens: null, durationMs: 0, numTurns: 0, model: phaseModel ?? null };
       costKnown = false;
       continue;
     }
-    const { costUsd: c, known } = phaseCostUsd(usage, priceLookup, model);
+    const { costUsd: c, known } = phaseCostUsd(usage, priceLookup, phaseModel);
     if (c != null) costUsd += c;
     if (!known) costKnown = false;
     if (usage.tokens) {
@@ -131,6 +136,7 @@ export function computeUsageTotals(
       tokens: usage.tokens,
       durationMs: usage.duration_ms,
       numTurns: usage.num_turns,
+      model: phaseModel ?? null,
     };
   }
 

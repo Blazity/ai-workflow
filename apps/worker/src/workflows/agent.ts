@@ -15,6 +15,8 @@ import type { DownloadedAttachment } from "../sandbox/attachments.js";
 import type { SelectedRepository } from "../adapters/vcs/repository-directory.js";
 import type { SelectedRepositoryPromptContext } from "../sandbox/context.js";
 import type { WorkspaceRepositoryInput } from "../sandbox/repo-workspace.js";
+import type { OrderedBlock } from "../workflow-definition/plan.js";
+import type { WorkspacePublicationResult } from "./workspace-publication.js";
 
 type PreSandboxPromptTarget = "research" | "implementation" | "review";
 
@@ -513,6 +515,7 @@ async function runPrePrChecksStep(
   sandboxId: string,
   agentKind: AgentKind,
   model: string,
+  maxFixCycles?: number,
 ): Promise<{ passed: boolean; fixCycles: number; summary: string }> {
   "use step";
   const { getDb } = await import("../db/client.js");
@@ -530,6 +533,7 @@ async function runPrePrChecksStep(
     current?.config ?? emptyPrePrCheckConfig,
     agentKind,
     model,
+    maxFixCycles,
   );
 }
 runPrePrChecksStep.maxRetries = 0;
@@ -663,7 +667,11 @@ export async function agentWorkflow(ticketId: string) {
   const { loadPrompts } = await import("./prompts-step.js");
   const prompts = await loadPrompts();
 
+  const { loadWorkflowDefinition } = await import("./definition-step.js");
+  const plan = await loadWorkflowDefinition();
+
   const phaseUsages: Record<string, PhaseUsage | null> = {};
+  const phaseModels: Record<string, string> = {};
   // Phases whose agent was launched. A phase that times out or exits before
   // its usage is parsed never gets a phaseUsages entry; the finally reconciles
   // any such launched-but-missing phase to null so computeUsageTotals flags
@@ -683,7 +691,7 @@ export async function agentWorkflow(ticketId: string) {
   // otherwise undefined so the messaging formatter can omit the trailing block.
   const usageReportOrUndefined = (): string | undefined =>
     Object.keys(phaseUsages).length
-      ? formatUsageReport(phaseUsages, priceLookup, activeModel)
+      ? formatUsageReport(phaseUsages, priceLookup, activeModel, phaseModels)
       : undefined;
 
   try {
@@ -783,39 +791,67 @@ export async function agentWorkflow(ticketId: string) {
     // branch scan across every running sandbox.
     await registerTicketSandbox(ticket.identifier, sandboxId);
 
-    activeModel = agentKind === "codex" ? env.CODEX_MODEL : env.CLAUDE_MODEL;
+    const defaultModel = agentKind === "codex" ? env.CODEX_MODEL : env.CLAUDE_MODEL;
+    activeModel = defaultModel;
+    const resolveModel = (params: OrderedBlock["params"]): string =>
+      typeof params.model === "string" && params.model.trim() ? params.model.trim() : defaultModel;
+
     if (agentKind === "codex") {
-      const priceCache = await fetchCodexPriceStep(activeModel);
-      if (priceCache) priceLookup = () => priceCache;
+      const distinctModels = new Set<string>([defaultModel]);
+      for (const block of plan.blocks) {
+        if (
+          block.type === "planning_agent" ||
+          block.type === "implementation_agent" ||
+          block.type === "review_agent"
+        ) {
+          distinctModels.add(resolveModel(block.params));
+        }
+      }
+      const priceMap = new Map<string, { input: number; cached_input: number; output: number }>();
+      for (const model of distinctModels) {
+        const price = await fetchCodexPriceStep(model);
+        if (price) priceMap.set(model, price);
+      }
+      priceLookup = (model) => priceMap.get(model) ?? null;
     }
 
     try {
       await writeAttachments(sandboxId, downloadedAttachments);
 
-      // ========== PHASE 1: Research & Plan ==========
-      await setCommitGuardStep(sandboxId, agentKind, false);
+      const ctx: {
+        researchPlanMarkdown: string;
+        publication: WorkspacePublicationResult | null;
+        runUnregisteredBeforePr: boolean;
+        implementationModel: string;
+      } = {
+        researchPlanMarkdown: "",
+        publication: null,
+        runUnregisteredBeforePr: false,
+        implementationModel: defaultModel,
+      };
 
-      const { paths: researchPaths, script: researchScript } =
-        await planPhaseStep(agentKind, "research", activeModel, RESEARCH_SCHEMA);
-      const researchInput = assembleResearchPlanContext({
-        ticket: ticketData,
-        prompt: prompts.research,
-        branchName,
-        attachments: downloadedAttachments,
-        preSandboxAdditions: preSandboxAdditions.research,
-        repositoryContexts,
-      });
+      const clarificationExit = async (questions: string[]): Promise<"stop"> => {
+        await unregisterRun(ticket.identifier);
+        const commentUrl = await postClarificationAndMoveBack(
+          ticketId,
+          questions,
+          backlogMoveTarget(),
+        );
+        await notifyTicket(ticket.identifier, {
+          kind: "needs_clarification",
+          commentUrl: commentUrl ?? undefined,
+          usageReport: usageReportOrUndefined(),
+        });
+        runOutcome = "success";
+        return "stop";
+      };
 
-      await writeAndStartPhase(
-        sandboxId,
-        researchPaths.input, researchInput,
-        researchPaths.wrapper, researchScript,
-      );
-      launchedPhases.add("Research");
-
-      const researchDone = await pollUntilDone(sandboxId, researchPaths.sentinel, 20);
-      if (!researchDone) {
-        await logPhaseFailure(ticket.identifier, "research", "phase timed out");
+      const failureExit = async (
+        phase: "research" | "impl" | "review" | "pre-pr-checks" | "push",
+        reason: string,
+        usageReport: string | undefined = usageReportOrUndefined(),
+      ): Promise<"stop"> => {
+        await logPhaseFailure(ticket.identifier, phase, reason);
         // Unregister BEFORE moveTicket so the Jira webhook for this move
         // can't race ahead and fire a duplicate "canceled" notification
         // (the registry entry is what makes the webhook treat a finishing
@@ -825,241 +861,259 @@ export async function agentWorkflow(ticketId: string) {
         await moveTicket(ticketId, backlogMoveTarget());
         await notifyTicket(ticket.identifier, {
           kind: "failed",
-          phase: "research",
-          reason: "phase timed out",
-          usageReport: usageReportOrUndefined(),
-        });
-        return;
-      }
-
-      const { raw: researchRaw, structured: researchStructured } =
-        await collectPhase(sandboxId, researchPaths);
-      const { research, usage: researchUsage } =
-        await parseResearchStep(agentKind, researchRaw, researchStructured);
-      phaseUsages["Research"] = researchUsage;
-
-      if (research.status === "clarification_needed") {
-        const questions = research.body.split("\n").filter((l) => /^\d+\./.test(l.trim()));
-        await unregisterRun(ticket.identifier);
-        const commentUrl = await postClarificationAndMoveBack(
-          ticketId,
-          questions.length > 0 ? questions : [research.body],
-          backlogMoveTarget(),
-        );
-        await notifyTicket(ticket.identifier, {
-          kind: "needs_clarification",
-          commentUrl: commentUrl ?? undefined,
-          usageReport: usageReportOrUndefined(),
-        });
-        runOutcome = "success";
-        return;
-      }
-
-      if (research.status === "failed") {
-        const reason = research.body.slice(0, 200);
-        await logPhaseFailure(ticket.identifier, "research", reason);
-        await unregisterRun(ticket.identifier);
-        await moveTicket(ticketId, backlogMoveTarget());
-        await notifyTicket(ticket.identifier, {
-          kind: "failed",
-          phase: "research",
+          phase,
           reason,
-          usageReport: usageReportOrUndefined(),
+          usageReport,
         });
-        return;
-      }
+        return "stop";
+      };
 
-      const researchPlanMarkdown = research.body;
+      const runBlock = async (block: OrderedBlock): Promise<"continue" | "stop"> => {
+        switch (block.type) {
+          case "planning_agent": {
+            const model = resolveModel(block.params);
+            phaseModels["Research"] = model;
+            await setCommitGuardStep(sandboxId, agentKind, false);
 
-      // ========== PHASE 2: Implementation ==========
+            const { paths: researchPaths, script: researchScript } =
+              await planPhaseStep(agentKind, "research", model, RESEARCH_SCHEMA);
+            const researchInput = assembleResearchPlanContext({
+              ticket: ticketData,
+              prompt: prompts.research,
+              branchName,
+              attachments: downloadedAttachments,
+              preSandboxAdditions: preSandboxAdditions.research,
+              repositoryContexts,
+            });
 
-      await setCommitGuardStep(sandboxId, agentKind, true);
+            await writeAndStartPhase(
+              sandboxId,
+              researchPaths.input, researchInput,
+              researchPaths.wrapper, researchScript,
+            );
+            launchedPhases.add("Research");
 
-      const { paths: implPaths, script: implScript } =
-        await planPhaseStep(agentKind, "impl", activeModel, AGENT_SCHEMA);
-      const implInput = assembleImplementationContext({
-        ticket: ticketData,
-        prompt: prompts.implement,
-        researchPlanMarkdown,
-        attachments: downloadedAttachments,
-        preSandboxAdditions: preSandboxAdditions.implementation,
-        selectedRepositories: workspaceRepositories,
-      });
+            const researchDone = await pollUntilDone(sandboxId, researchPaths.sentinel, 20);
+            if (!researchDone) {
+              return failureExit("research", "phase timed out");
+            }
 
-      await writeAndStartPhase(
-        sandboxId,
-        implPaths.input, implInput,
-        implPaths.wrapper, implScript,
-      );
-      launchedPhases.add("Impl");
+            const { raw: researchRaw, structured: researchStructured } =
+              await collectPhase(sandboxId, researchPaths);
+            const { research, usage: researchUsage } =
+              await parseResearchStep(agentKind, researchRaw, researchStructured);
+            phaseUsages["Research"] = researchUsage;
 
-      const implDone = await pollUntilDone(sandboxId, implPaths.sentinel, 35);
-      let implOutput: AgentOutput;
+            if (research.status === "clarification_needed") {
+              const questions = research.body.split("\n").filter((l) => /^\d+\./.test(l.trim()));
+              return clarificationExit(questions.length > 0 ? questions : [research.body]);
+            }
 
-      if (implDone) {
-        const { raw: implRaw, structured: implStructured } = await collectPhase(sandboxId, implPaths);
-        const { output, usage: implUsage } = await parseAgentOutputStep(agentKind, implRaw, implStructured);
-        phaseUsages["Impl"] = implUsage;
-        implOutput = output;
-      } else {
-        implOutput = { result: "failed", error: "Implementation phase timed out" };
-      }
+            if (research.status === "failed") {
+              const reason = research.body.slice(0, 200);
+              return failureExit("research", reason);
+            }
 
-      if (implOutput.result === "clarification_needed") {
-        await unregisterRun(ticket.identifier);
-        const commentUrl = await postClarificationAndMoveBack(
-          ticketId,
-          implOutput.questions ?? [],
-          backlogMoveTarget(),
-        );
-        await notifyTicket(ticket.identifier, {
-          kind: "needs_clarification",
-          commentUrl: commentUrl ?? undefined,
-          usageReport: usageReportOrUndefined(),
-        });
-        runOutcome = "success";
-        return;
-      }
-
-      if (implOutput.result === "failed") {
-        const reason = implOutput.error ?? "unknown";
-        await logPhaseFailure(ticket.identifier, "impl", reason);
-        await unregisterRun(ticket.identifier);
-        await moveTicket(ticketId, backlogMoveTarget());
-        await notifyTicket(ticket.identifier, {
-          kind: "failed",
-          phase: "impl",
-          reason,
-          usageReport: usageReportOrUndefined(),
-        });
-        return;
-      }
-
-      // ========== PHASE 3: Review ==========
-      // Gated by ENABLE_REVIEW_PHASE so deployments can opt in without code
-      // changes. Commit guard stays enabled (review fixes its own findings).
-      if (env.ENABLE_REVIEW_PHASE) {
-        const { paths: reviewPaths, script: reviewScript } =
-          await planPhaseStep(agentKind, "review", activeModel, REVIEW_SCHEMA);
-        const reviewInput = assembleReviewContext({
-          ticket: ticketData,
-          prompt: prompts.review,
-          researchPlanMarkdown,
-          attachments: downloadedAttachments,
-          preSandboxAdditions: preSandboxAdditions.review,
-          selectedRepositories: workspaceRepositories,
-        });
-
-        await writeAndStartPhase(
-          sandboxId,
-          reviewPaths.input, reviewInput,
-          reviewPaths.wrapper, reviewScript,
-        );
-        launchedPhases.add("Review");
-
-        const reviewDone = await pollUntilDone(sandboxId, reviewPaths.sentinel, 15);
-        let reviewOutput: ReviewOutput;
-
-        if (reviewDone) {
-          const { raw: reviewRaw, structured: reviewStructured } = await collectPhase(sandboxId, reviewPaths);
-          const { output, usage: reviewUsage } = await parseReviewStep(agentKind, reviewRaw, reviewStructured);
-          phaseUsages["Review"] = reviewUsage;
-          reviewOutput = output;
-        } else {
-          reviewOutput = { result: "failed", feedback: "", issues: [], error: "Review phase timed out" };
-        }
-
-        if (reviewOutput.result === "failed") {
-          const reason = reviewOutput.error ?? "unknown";
-          await logPhaseFailure(ticket.identifier, "review", reason);
-          await unregisterRun(ticket.identifier);
-          await moveTicket(ticketId, backlogMoveTarget());
-          await notifyTicket(ticket.identifier, {
-            kind: "failed",
-            phase: "review",
-            reason,
-            usageReport: usageReportOrUndefined(),
-          });
-          return;
-        }
-      }
-
-      const prePrChecks = await runPrePrChecksStep(sandboxId, agentKind, activeModel);
-      if (!prePrChecks.passed) {
-        const reason = prePrChecks.summary.slice(0, 2_000);
-        await logPhaseFailure(ticket.identifier, "pre-pr-checks", reason);
-        await unregisterRun(ticket.identifier);
-        await moveTicket(ticketId, backlogMoveTarget());
-        await notifyTicket(ticket.identifier, {
-          kind: "failed",
-          phase: "pre-pr-checks",
-          reason,
-          usageReport: usageReportOrUndefined(),
-        });
-        return;
-      }
-
-      // ========== POST-PHASES: Push & PR ==========
-      let runUnregisteredBeforePr = false;
-      const publication = await publishWorkspaceChanges({
-        sandboxId,
-        ticketKey: ticket.identifier,
-        branchName,
-        repositories: workspaceRepositories,
-        title: ticket.title,
-        agentKind,
-        model: activeModel,
-        beforeCreatePullRequests: async () => {
-          // Push has landed — agent work is durable. Unregister BEFORE any
-          // downstream step that can trigger a Jira webhook: opening a PR can
-          // transition the linked issue (GitHub-for-Jira / Jira automation),
-          // and our own moveTicket fires a webhook for the AI → AI Review move.
-          // Either webhook, if it sees a still-registered run, will call
-          // cancelRun and emit a spurious "canceled" notification on top of
-          // "pr_ready". Clearing the registry here closes that window.
-          if (!runUnregisteredBeforePr) {
-            await unregisterRun(ticket.identifier);
-            runUnregisteredBeforePr = true;
+            ctx.researchPlanMarkdown = research.body;
+            return "continue";
           }
-        },
-      });
 
-      if (publication.status === "failed") {
-        await logPhaseFailure(ticket.identifier, "push", publication.reason);
-        if (!runUnregisteredBeforePr) {
-          await unregisterRun(ticket.identifier);
+          case "implementation_agent": {
+            const model = resolveModel(block.params);
+            phaseModels["Impl"] = model;
+            ctx.implementationModel = model;
+            await setCommitGuardStep(sandboxId, agentKind, true);
+
+            const { paths: implPaths, script: implScript } =
+              await planPhaseStep(agentKind, "impl", model, AGENT_SCHEMA);
+            const implInput = assembleImplementationContext({
+              ticket: ticketData,
+              prompt: prompts.implement,
+              researchPlanMarkdown: ctx.researchPlanMarkdown,
+              attachments: downloadedAttachments,
+              preSandboxAdditions: preSandboxAdditions.implementation,
+              selectedRepositories: workspaceRepositories,
+            });
+
+            await writeAndStartPhase(
+              sandboxId,
+              implPaths.input, implInput,
+              implPaths.wrapper, implScript,
+            );
+            launchedPhases.add("Impl");
+
+            const implDone = await pollUntilDone(sandboxId, implPaths.sentinel, 35);
+            let implOutput: AgentOutput;
+
+            if (implDone) {
+              const { raw: implRaw, structured: implStructured } = await collectPhase(sandboxId, implPaths);
+              const { output, usage: implUsage } = await parseAgentOutputStep(agentKind, implRaw, implStructured);
+              phaseUsages["Impl"] = implUsage;
+              implOutput = output;
+            } else {
+              implOutput = { result: "failed", error: "Implementation phase timed out" };
+            }
+
+            if (implOutput.result === "clarification_needed") {
+              return clarificationExit(implOutput.questions ?? []);
+            }
+
+            if (implOutput.result === "failed") {
+              const reason = implOutput.error ?? "unknown";
+              return failureExit("impl", reason);
+            }
+
+            return "continue";
+          }
+
+          case "review_agent": {
+            // Commit guard stays enabled (review fixes its own findings).
+            const model = resolveModel(block.params);
+            phaseModels["Review"] = model;
+            const { paths: reviewPaths, script: reviewScript } =
+              await planPhaseStep(agentKind, "review", model, REVIEW_SCHEMA);
+            const reviewInput = assembleReviewContext({
+              ticket: ticketData,
+              prompt: prompts.review,
+              researchPlanMarkdown: ctx.researchPlanMarkdown,
+              attachments: downloadedAttachments,
+              preSandboxAdditions: preSandboxAdditions.review,
+              selectedRepositories: workspaceRepositories,
+            });
+
+            await writeAndStartPhase(
+              sandboxId,
+              reviewPaths.input, reviewInput,
+              reviewPaths.wrapper, reviewScript,
+            );
+            launchedPhases.add("Review");
+
+            const reviewDone = await pollUntilDone(sandboxId, reviewPaths.sentinel, 15);
+            let reviewOutput: ReviewOutput;
+
+            if (reviewDone) {
+              const { raw: reviewRaw, structured: reviewStructured } = await collectPhase(sandboxId, reviewPaths);
+              const { output, usage: reviewUsage } = await parseReviewStep(agentKind, reviewRaw, reviewStructured);
+              phaseUsages["Review"] = reviewUsage;
+              reviewOutput = output;
+            } else {
+              reviewOutput = { result: "failed", feedback: "", issues: [], error: "Review phase timed out" };
+            }
+
+            if (reviewOutput.result === "failed") {
+              const reason = reviewOutput.error ?? "unknown";
+              return failureExit("review", reason);
+            }
+
+            return "continue";
+          }
+
+          case "run_pre_pr_checks": {
+            const maxFixCycles =
+              typeof block.params.maxFixCycles === "number" ? block.params.maxFixCycles : undefined;
+            const prePrChecks = await runPrePrChecksStep(
+              sandboxId,
+              agentKind,
+              ctx.implementationModel,
+              maxFixCycles,
+            );
+            if (!prePrChecks.passed) {
+              const reason = prePrChecks.summary.slice(0, 2_000);
+              return failureExit("pre-pr-checks", reason);
+            }
+            return "continue";
+          }
+
+          case "open_pr": {
+            ctx.runUnregisteredBeforePr = false;
+            const publication = await publishWorkspaceChanges({
+              sandboxId,
+              ticketKey: ticket.identifier,
+              branchName,
+              repositories: workspaceRepositories,
+              title: ticket.title,
+              agentKind,
+              model: ctx.implementationModel,
+              beforeCreatePullRequests: async () => {
+                // Push has landed — agent work is durable. Unregister BEFORE any
+                // downstream step that can trigger a Jira webhook: opening a PR can
+                // transition the linked issue (GitHub-for-Jira / Jira automation),
+                // and our own moveTicket fires a webhook for the AI → AI Review move.
+                // Either webhook, if it sees a still-registered run, will call
+                // cancelRun and emit a spurious "canceled" notification on top of
+                // "pr_ready". Clearing the registry here closes that window.
+                if (!ctx.runUnregisteredBeforePr) {
+                  await unregisterRun(ticket.identifier);
+                  ctx.runUnregisteredBeforePr = true;
+                }
+              },
+            });
+            ctx.publication = publication;
+
+            if (publication.status === "failed") {
+              await logPhaseFailure(ticket.identifier, "push", publication.reason);
+              if (!ctx.runUnregisteredBeforePr) {
+                await unregisterRun(ticket.identifier);
+              }
+              if (publication.prs.length > 0) {
+                await postPrLinksComment(
+                  ticket.identifier,
+                  publication.prs,
+                  "Pull requests created before publication failed:",
+                );
+              }
+              await moveTicket(ticketId, backlogMoveTarget());
+              await notifyTicket(ticket.identifier, {
+                kind: "failed",
+                phase: "push",
+                reason: publication.reason,
+                usageReport: usageReportOrUndefined(),
+              });
+              return "stop";
+            }
+
+            if (publication.prs.some((pr) => pr.isNew)) {
+              await postPrLinksComment(ticket.identifier, publication.prs);
+            }
+
+            const primaryPr = publication.prs[0]!;
+            prForTelemetry = { url: primaryPr.url, number: primaryPr.id };
+            return "continue";
+          }
+
+          case "send_slack_message": {
+            const publication = ctx.publication;
+            if (publication?.status === "published") {
+              const primaryPr = publication.prs[0]!;
+              const usageReport = formatUsageReport(phaseUsages, priceLookup, activeModel, phaseModels);
+              const message =
+                typeof block.params.message === "string" ? block.params.message.trim() : "";
+              await notifyTicket(ticket.identifier, {
+                kind: "pr_ready",
+                pr: { url: primaryPr.url, number: primaryPr.id },
+                usageReport,
+                ...(message ? { extraText: message } : {}),
+              });
+            }
+            return "continue";
+          }
+
+          case "update_ticket_status": {
+            const target =
+              block.params.target === "backlog" ? backlogMoveTarget() : aiReviewMoveTarget();
+            await moveTicket(ticketId, target);
+            return "continue";
+          }
+
+          default:
+            return "continue";
         }
-        if (publication.prs.length > 0) {
-          await postPrLinksComment(
-            ticket.identifier,
-            publication.prs,
-            "Pull requests created before publication failed:",
-          );
-        }
-        await moveTicket(ticketId, backlogMoveTarget());
-        await notifyTicket(ticket.identifier, {
-          kind: "failed",
-          phase: "push",
-          reason: publication.reason,
-          usageReport: usageReportOrUndefined(),
-        });
-        return;
+      };
+
+      for (const block of plan.blocks) {
+        const outcome = await runBlock(block);
+        if (outcome === "stop") return;
       }
-
-      if (publication.prs.some((pr) => pr.isNew)) {
-        await postPrLinksComment(ticket.identifier, publication.prs);
-      }
-
-      const primaryPr = publication.prs[0]!;
-      prForTelemetry = { url: primaryPr.url, number: primaryPr.id };
-
-      const usageReport = formatUsageReport(phaseUsages, priceLookup, activeModel);
-      await notifyTicket(ticket.identifier, {
-        kind: "pr_ready",
-        pr: { url: primaryPr.url, number: primaryPr.id },
-        usageReport,
-      });
-      await moveTicket(ticketId, aiReviewMoveTarget());
       runOutcome = "success";
     } finally {
       await teardownSandbox(sandboxId);
@@ -1101,7 +1155,7 @@ export async function agentWorkflow(ticketId: string) {
       ticketTitle: ticket.title,
       ticketUrl: `${env.JIRA_BASE_URL.replace(/\/+$/, "")}/browse/${ticket.identifier}`,
       model: activeModel ?? null,
-      totals: computeUsageTotals(phaseUsages, priceLookup, activeModel),
+      totals: computeUsageTotals(phaseUsages, priceLookup, activeModel, phaseModels),
       pr: prForTelemetry,
     }).catch((err) => {
       console.error(

@@ -154,6 +154,22 @@ describe("formatTicketEvent", () => {
     );
   });
 
+  it("pr_ready: appends extraText after the usage report", () => {
+    const text = formatTicketEvent(
+      {
+        kind: "pr_ready",
+        pr: { url: "https://github.com/o/r/pull/5", number: 5 },
+        usageReport: "Total: $0.10",
+        extraText: "Deployed to staging",
+      },
+      KEY,
+      JIRA,
+    );
+    expect(text).toBe(
+      `:white_check_mark: Task ${LINK} PR ready for review — <https://github.com/o/r/pull/5|#5>\nTotal: $0.10\nDeployed to staging`,
+    );
+  });
+
   it("failed with phase and reason", () => {
     expect(
       formatTicketEvent(

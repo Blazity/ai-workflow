@@ -14,6 +14,7 @@ export type TicketEvent =
       kind: "pr_ready";
       pr: { url: string; number: number };
       usageReport: string;
+      extraText?: string;
     }
   | {
       kind: "failed";
