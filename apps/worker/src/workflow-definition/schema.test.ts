@@ -61,6 +61,33 @@ describe("workflowDefinitionSchema", () => {
     def.schemaVersion = 2;
     expect(workflowDefinitionSchema.safeParse(def).success).toBe(false);
   });
+
+  it("accepts a provider on every agent block type", () => {
+    for (const provider of ["claude", "codex"] as const) {
+      const def = clone(defaultWorkflowDefinition({ includeReview: true }));
+      for (const type of ["planning_agent", "implementation_agent", "review_agent"]) {
+        def.nodes.find((n: WorkflowDefinitionNode) => n.type === type).params.provider = provider;
+      }
+      expect(workflowDefinitionSchema.safeParse(def).success).toBe(true);
+    }
+  });
+
+  it("rejects an invalid provider value", () => {
+    const def = clone(defaultWorkflowDefinition({ includeReview: true }));
+    def.nodes.find((n: WorkflowDefinitionNode) => n.type === "planning_agent").params.provider = "gemini";
+    expect(workflowDefinitionSchema.safeParse(def).success).toBe(false);
+  });
+
+  it("rejects a provider on a non-agent block type", () => {
+    const def = clone(defaultWorkflowDefinition({ includeReview: true }));
+    def.nodes.find((n: WorkflowDefinitionNode) => n.type === "open_pr").params.provider = "claude";
+    expect(workflowDefinitionSchema.safeParse(def).success).toBe(false);
+  });
+
+  it("accepts a legacy definition without a provider", () => {
+    const def = defaultWorkflowDefinition({ includeReview: true });
+    expect(workflowDefinitionSchema.safeParse(def).success).toBe(true);
+  });
 });
 
 describe("validateWorkflowGraph", () => {

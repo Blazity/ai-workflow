@@ -162,6 +162,25 @@ describe("PUT /api/v1/workflow-definition", () => {
     expect(getBody.versions.map((v: { version: number }) => v.version)).toEqual([2, 1]);
   });
 
+  it("accepts and round-trips a provider on an agent node", async () => {
+    const def = {
+      ...VALID_DEFINITION,
+      nodes: VALID_DEFINITION.nodes.map((node) =>
+        node.type === "planning_agent"
+          ? { ...node, params: { ...node.params, provider: "codex" } }
+          : node,
+      ),
+    };
+    const res = await handlerFor(definitionPut)(jsonRequest("PUT", { definition: def }));
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.version.definition).toEqual(def);
+    const stored = body.version.definition.nodes.find(
+      (node: { type: string }) => node.type === "planning_agent",
+    );
+    expect(stored.params.provider).toBe("codex");
+  });
+
   it("rejects members with 403", async () => {
     state.sessionUserId = "user_member";
     const res = await handlerFor(definitionPut)(jsonRequest("PUT", { definition: VALID_DEFINITION }));

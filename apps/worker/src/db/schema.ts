@@ -13,7 +13,7 @@ import {
   text,
   timestamp,
 } from "drizzle-orm/pg-core";
-import type { WorkflowDefinition } from "@shared/contracts";
+import type { BlockRunState, WorkflowDefinition } from "@shared/contracts";
 import type { GateStatusRef } from "../adapters/vcs/types.js";
 import type { PrePrCheckConfig } from "../pre-pr-checks/config.js";
 
@@ -124,14 +124,17 @@ export const envMarker = pgTable("env_marker", {
  * far longer than Vercel's ~24h observability window so run history, active
  * counts, and per-run cost stay queryable with plain SQL.
  *
- * Written by two upserters that own disjoint columns:
+ * Written by three upserters that own disjoint columns:
  * - The poll cron snapshots lifecycle/status/ticket/PR(gate) from the
  *   Workflow world + the run registry (see lib/telemetry/collect-snapshots).
  * - The agent workflow records cost/tokens/per-phase usage + the agent PR on
  *   completion — data that only exists inside the run (see recordRunUsage).
+ * - The mid-run block-status writer owns exactly block_statuses and
+ *   definition_version (plus updated_at), streaming per-block progress as the
+ *   run advances through the stored definition.
  *
- * Both use ON CONFLICT (run_id) DO UPDATE setting only their own columns, so
- * whichever writes first inserts the row and the other fills in the rest,
+ * All use ON CONFLICT (run_id) DO UPDATE setting only their own columns, so
+ * whichever writes first inserts the row and the others fill in the rest,
  * regardless of order.
  */
 export const workflowRuns = pgTable("workflow_runs", {
@@ -170,6 +173,9 @@ export const workflowRuns = pgTable("workflow_runs", {
   phases: jsonb("phases"),
   /** Full RunStep[] trace waterfall, captured on completion (workflow-owned). */
   steps: jsonb("steps"),
+
+  definitionVersion: integer("definition_version"),
+  blockStatuses: jsonb("block_statuses").$type<Record<string, BlockRunState>>(),
 
   // Bookkeeping.
   firstSeenAt: timestamp("first_seen_at", { withTimezone: true })

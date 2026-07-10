@@ -77,9 +77,10 @@ export function buildWorkflowEditorOptions(models: AvailableModels): WorkflowEdi
   return {
     agentKind,
     defaultModel,
+    defaultModels: { claude: env.CLAUDE_MODEL, codex: env.CODEX_MODEL },
     models: {
-      claude: agentKind === "claude" ? dedupePrepend(defaultModel, models.claude) : models.claude,
-      codex: agentKind === "codex" ? dedupePrepend(defaultModel, models.codex) : models.codex,
+      claude: dedupePrepend(env.CLAUDE_MODEL, models.claude),
+      codex: dedupePrepend(env.CODEX_MODEL, models.codex),
     },
     ticketStatusTargets: [
       { value: "ai_review", label: env.COLUMN_AI_REVIEW },

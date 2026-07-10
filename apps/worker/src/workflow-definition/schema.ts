@@ -16,22 +16,27 @@ const baseNodeFields = {
 };
 
 const emptyParams = z.object({}).strict();
-const modelParams = z.object({ model: z.string().trim().max(200).optional() }).strict();
+const agentParams = z
+  .object({
+    model: z.string().trim().max(200).optional(),
+    provider: z.enum(["claude", "codex"]).optional(),
+  })
+  .strict();
 
 const triggerNode = z
   .object({ ...baseNodeFields, type: z.literal("trigger_ticket_ai"), params: emptyParams })
   .strict();
 
 const planningNode = z
-  .object({ ...baseNodeFields, type: z.literal("planning_agent"), params: modelParams })
+  .object({ ...baseNodeFields, type: z.literal("planning_agent"), params: agentParams })
   .strict();
 
 const implementationNode = z
-  .object({ ...baseNodeFields, type: z.literal("implementation_agent"), params: modelParams })
+  .object({ ...baseNodeFields, type: z.literal("implementation_agent"), params: agentParams })
   .strict();
 
 const reviewNode = z
-  .object({ ...baseNodeFields, type: z.literal("review_agent"), params: modelParams })
+  .object({ ...baseNodeFields, type: z.literal("review_agent"), params: agentParams })
   .strict();
 
 const runPrePrChecksNode = z

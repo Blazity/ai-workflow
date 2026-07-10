@@ -118,4 +118,20 @@ describe("buildWorkflowEditorOptions", () => {
     expect(options.defaultModel).toBe("gpt-5-codex-high");
     expect(options.models.codex).toEqual(["gpt-5-codex-high", "gpt-5-codex", "gpt-5"]);
   });
+
+  it("exposes per-provider default models and prepends each to its own list without duplicates", async () => {
+    state.env.AGENT_KIND = "claude";
+    state.env.CLAUDE_MODEL = "claude-opus-4-8";
+    state.env.CODEX_MODEL = "gpt-5-codex";
+    const { buildWorkflowEditorOptions } = await import("./models.js");
+    const options = buildWorkflowEditorOptions({
+      claude: ["claude-opus-4-8", "claude-sonnet-5"],
+      codex: ["gpt-5-codex", "gpt-5"],
+    });
+    expect(options.defaultModels).toEqual({ claude: "claude-opus-4-8", codex: "gpt-5-codex" });
+    expect(options.models.claude[0]).toBe("claude-opus-4-8");
+    expect(options.models.codex[0]).toBe("gpt-5-codex");
+    expect(options.models.claude).toEqual(["claude-opus-4-8", "claude-sonnet-5"]);
+    expect(options.models.codex).toEqual(["gpt-5-codex", "gpt-5"]);
+  });
 });
