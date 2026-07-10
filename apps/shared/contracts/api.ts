@@ -6,6 +6,9 @@ import type {
   RunDetail,
   RunStep,
   Workflow,
+  WorkflowDefinition,
+  WorkflowDefinitionVersion,
+  WorkflowEditorOptions,
 } from "./domain.js";
 
 export interface ErrorEnvelope {
@@ -178,4 +181,15 @@ export interface PrePrCheckSaveResponse {
 
 export interface RepositoriesResponse {
   repositories: RepositoryOption[];
+}
+
+export interface WorkflowDefinitionResponse {
+  current: WorkflowDefinitionVersion | null;
+  versions: WorkflowDefinitionVersion[];
+  defaultDefinition: WorkflowDefinition;
+  options: WorkflowEditorOptions;
+}
+
+export interface WorkflowDefinitionSaveResponse {
+  version: WorkflowDefinitionVersion;
 }

@@ -202,3 +202,55 @@ export interface RepositoryOption {
   private: boolean;
   archived: boolean;
 }
+
+// --- Workflow definition (dashboard-managed run graph) ---
+
+export type WorkflowBlockType =
+  | "trigger_ticket_ai"
+  | "planning_agent"
+  | "implementation_agent"
+  | "review_agent"
+  | "run_pre_pr_checks"
+  | "open_pr"
+  | "update_ticket_status"
+  | "send_slack_message";
+
+export type TicketStatusTarget = "ai_review" | "backlog";
+
+export type WorkflowParamValue = string | number | boolean;
+
+export interface WorkflowDefinitionNode {
+  id: string;
+  type: WorkflowBlockType;
+  name?: string;
+  x: number;
+  y: number;
+  params: Record<string, WorkflowParamValue>;
+}
+
+export interface WorkflowDefinitionEdge {
+  from: string;
+  to: string;
+}
+
+export interface WorkflowDefinition {
+  schemaVersion: 1;
+  nodes: WorkflowDefinitionNode[];
+  edges: WorkflowDefinitionEdge[];
+}
+
+export interface WorkflowDefinitionVersion {
+  version: number;
+  definition: WorkflowDefinition;
+  createdAt: string;
+  createdById: string;
+  createdByLabel: string;
+  restoredFromVersion: number | null;
+}
+
+export interface WorkflowEditorOptions {
+  agentKind: "claude" | "codex";
+  defaultModel: string;
+  models: { claude: string[]; codex: string[] };
+  ticketStatusTargets: { value: TicketStatusTarget; label: string }[];
+}
