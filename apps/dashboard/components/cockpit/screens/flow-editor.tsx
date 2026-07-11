@@ -20,6 +20,9 @@ const NODE_CATEGORIES: Record<
   send_slack_message:   { color: "#64748B", soft: "#EEF1F5", label: "Slack message",        glyph: "✉", group: "utility" },
   open_pr:              { color: "#3C43E7", soft: "#ECECFD", label: "Open PR",              glyph: "⇪", group: "vcs" },
   update_ticket_status: { color: "#2563EB", soft: "#E9EFFD", label: "Ticket status",        glyph: "▤", group: "ticket" },
+  branch:               { color: "#35823f", soft: "#E9F3EA", label: "Branch",               glyph: "⋔", group: "control" },
+  loop:                 { color: "#35823f", soft: "#E9F3EA", label: "Loop",                 glyph: "↻", group: "control" },
+  terminate:            { color: "#35823f", soft: "#E9F3EA", label: "Terminate",            glyph: "■", group: "control" },
 };
 
 const NODE_W = 168;

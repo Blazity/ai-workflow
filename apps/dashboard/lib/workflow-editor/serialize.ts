@@ -15,6 +15,9 @@ const PARAM_KEYS: Record<WorkflowBlockType, string[]> = {
   open_pr: [],
   update_ticket_status: ["target"],
   send_slack_message: ["message"],
+  branch: ["condition"],
+  loop: ["maxAttempts", "onExhaust"],
+  terminate: ["terminalStatus", "postComment"],
 };
 
 function serializeParams(node: FlowNodeDef): Record<string, WorkflowParamValue> {

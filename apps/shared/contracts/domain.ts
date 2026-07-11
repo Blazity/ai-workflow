@@ -213,7 +213,26 @@ export type WorkflowBlockType =
   | "run_pre_pr_checks"
   | "open_pr"
   | "update_ticket_status"
-  | "send_slack_message";
+  | "send_slack_message"
+  | "branch"
+  | "loop"
+  | "terminate";
+
+/** Any value expressible in JSON, used for block outputs and condition operands. */
+export type JsonValue =
+  | string
+  | number
+  | boolean
+  | null
+  | JsonValue[]
+  | { [key: string]: JsonValue };
+
+/** Structured result a block reports on completion. `status` is always present;
+ *  the remaining keys are block-specific JSON the graph engine can read. */
+export interface BlockOutput {
+  status: string;
+  [key: string]: JsonValue;
+}
 
 export type TicketStatusTarget = "ai_review" | "backlog";
 
@@ -231,6 +250,7 @@ export interface WorkflowDefinitionNode {
 export interface WorkflowDefinitionEdge {
   from: string;
   to: string;
+  fromPort?: string;
 }
 
 export interface WorkflowDefinition {
@@ -261,6 +281,8 @@ export type BlockRunStatus = "pending" | "running" | "ok" | "warn" | "fail";
 export interface BlockRunState {
   status: BlockRunStatus;
   error?: string;
+  attempt?: number;
+  output?: BlockOutput;
 }
 
 export interface RunBlockStatusSnapshot {
