@@ -15,10 +15,16 @@ import type { DownloadedAttachment } from "../sandbox/attachments.js";
 import type { SelectedRepository } from "../adapters/vcs/repository-directory.js";
 import type { SelectedRepositoryPromptContext } from "../sandbox/context.js";
 import type { WorkspaceRepositoryInput } from "../sandbox/repo-workspace.js";
-import type { OrderedBlock } from "../workflow-definition/plan.js";
+import { buildRuntimeGraph, executeGraph } from "../workflow-definition/interpreter.js";
+import type {
+  BlockExecutionResult,
+  BlockExecutor,
+  ExecuteGraphHooks,
+} from "../workflow-definition/interpreter.js";
 import { requiredAgentKinds, resolveBlockAgent } from "../workflow-definition/resolve-agent.js";
 import type { WorkspacePublicationResult } from "./workspace-publication.js";
-import type { BlockRunState } from "@shared/contracts";
+import { isTriggerBlockType } from "@shared/contracts";
+import type { BlockOutput, BlockRunState, WorkflowDefinitionNode } from "@shared/contracts";
 
 type PreSandboxPromptTarget = "research" | "implementation" | "review";
 
@@ -437,6 +443,13 @@ async function moveTicket(ticketId: string, target: IssueTrackerMoveTarget) {
   await issueTracker.moveTicket(ticketId, target);
 }
 
+async function postTicketComment(ticketId: string, comment: string): Promise<void> {
+  "use step";
+  const { createStepAdapters } = await import("../lib/step-adapters.js");
+  const { issueTracker } = createStepAdapters();
+  await issueTracker.postComment(ticketId, comment);
+}
+
 async function notifyTicket(ticketKey: string, event: TicketEvent) {
   "use step";
   const { createStepAdapters } = await import("../lib/step-adapters.js");
@@ -446,7 +459,7 @@ async function notifyTicket(ticketKey: string, event: TicketEvent) {
 
 async function logPhaseFailure(
   ticketKey: string,
-  phase: "research" | "impl" | "review" | "pre-pr-checks" | "push",
+  phase: string,
   reason: string,
 ): Promise<void> {
   "use step";
@@ -574,6 +587,14 @@ function truncateError(text: string): string {
   return text.length > 500 ? text.slice(0, 500) : text;
 }
 
+const FAILURE_PHASES = new Set(["research", "impl", "review", "pre-pr-checks", "push"]);
+
+type NotifyPhase = "research" | "impl" | "review" | "pre-pr-checks" | "push";
+
+function phaseKey(base: string, attempt: number): string {
+  return attempt <= 1 ? base : `${base} #${attempt}`;
+}
+
 /**
  * Persist the run's cost/usage (+ agent PR + ticket) to the durable telemetry
  * table. Called from the workflow's outer finally so cost is recorded on every
@@ -666,7 +687,10 @@ async function pollUntilDone(
 
 // --- Main Workflow ---
 
-export async function agentWorkflow(ticketId: string) {
+export async function agentWorkflow(
+  ticketId: string,
+  entry?: { triggerNodeId?: string; triggerOutput?: BlockOutput },
+) {
   "use workflow";
 
   const { workflowRunId } = getWorkflowMetadata();
@@ -706,7 +730,9 @@ export async function agentWorkflow(ticketId: string) {
   const plan = await loadWorkflowDefinition();
 
   const blockStatuses: Record<string, BlockRunState> = Object.fromEntries(
-    plan.blocks.map((b): [string, BlockRunState] => [b.id, { status: "pending" }]),
+    plan.nodes
+      .filter((node) => !isTriggerBlockType(node.type))
+      .map((node): [string, BlockRunState] => [node.id, { status: "pending" }]),
   );
   let currentBlockId: string | null = null;
   const writeBlockStatuses = () =>
@@ -747,6 +773,15 @@ export async function agentWorkflow(ticketId: string) {
 
   try {
     await notifyTicket(ticket.identifier, { kind: "started" });
+
+    const graph = buildRuntimeGraph({ nodes: plan.nodes, edges: plan.edges });
+    const entryTriggerId =
+      entry?.triggerNodeId ?? plan.nodes.find((node) => isTriggerBlockType(node.type))?.id;
+    if (entryTriggerId === undefined || !graph.nodes.has(entryTriggerId)) {
+      throw new Error("workflow definition has no runnable trigger block");
+    }
+    const triggerOutput: BlockOutput =
+      entry?.triggerOutput ?? { status: "fired", ticketKey: ticketId };
 
     const branchName = branchForTicket(ticket.identifier);
     const downloadedAttachments = await fetchAttachments(ticket.identifier, ticket.attachments);
@@ -832,7 +867,7 @@ export async function agentWorkflow(ticketId: string) {
     // The run default drives blocks that don't pin a provider, plus the pre-PR
     // fix cycle and push fixes. Per-block overrides layer on top of it.
     const runDefaultKind: AgentKind = agentKindOverride ?? env.AGENT_KIND;
-    const requiredKinds = requiredAgentKinds(plan.blocks, runDefaultKind);
+    const requiredKinds = requiredAgentKinds(plan.nodes, runDefaultKind);
 
     // Provision sandbox once for all phases; it installs one CLI per required kind.
     const { sandboxId } = await provisionSandbox(
@@ -849,20 +884,20 @@ export async function agentWorkflow(ticketId: string) {
 
     const defaultModel = runDefaultKind === "codex" ? env.CODEX_MODEL : env.CLAUDE_MODEL;
     activeModel = defaultModel;
-    const resolveAgent = (params: OrderedBlock["params"]) =>
+    const resolveAgent = (params: WorkflowDefinitionNode["params"]) =>
       resolveBlockAgent(params, runDefaultKind, { claude: env.CLAUDE_MODEL, codex: env.CODEX_MODEL });
 
     // Codex phases are priced from tokens, so gather every codex-resolved model
     // (plus the default codex model when the run default is codex, for fix
     // cycles). Claude-only runs leave priceLookup undefined.
     const codexModels = new Set<string>();
-    for (const block of plan.blocks) {
+    for (const node of plan.nodes) {
       if (
-        block.type === "planning_agent" ||
-        block.type === "implementation_agent" ||
-        block.type === "review_agent"
+        node.type === "planning_agent" ||
+        node.type === "implementation_agent" ||
+        node.type === "review_agent"
       ) {
-        const resolved = resolveAgent(block.params);
+        const resolved = resolveAgent(node.params);
         if (resolved.kind === "codex") codexModels.add(resolved.model);
       }
     }
@@ -885,21 +920,16 @@ export async function agentWorkflow(ticketId: string) {
         runUnregisteredBeforePr: boolean;
         implementationModel: string;
         implementationKind?: AgentKind;
+        attempt: number;
       } = {
         researchPlanMarkdown: "",
         publication: null,
         runUnregisteredBeforePr: false,
         implementationModel: defaultModel,
+        attempt: 1,
       };
 
-      const clarificationExit = async (questions: string[]): Promise<"stop"> => {
-        if (currentBlockId) {
-          blockStatuses[currentBlockId] = {
-            status: "warn",
-            error: truncateError(questions.join("\n")),
-          };
-          await writeBlockStatuses();
-        }
+      const clarificationExit = async (questions: string[]): Promise<void> => {
         await unregisterRun(ticket.identifier);
         const commentUrl = await postClarificationAndMoveBack(
           ticketId,
@@ -912,40 +942,74 @@ export async function agentWorkflow(ticketId: string) {
           usageReport: usageReportOrUndefined(),
         });
         runOutcome = "success";
-        return "stop";
       };
 
-      const failureExit = async (
-        phase: "research" | "impl" | "review" | "pre-pr-checks" | "push",
-        reason: string,
-        usageReport: string | undefined = usageReportOrUndefined(),
-      ): Promise<"stop"> => {
-        if (currentBlockId) {
-          blockStatuses[currentBlockId] = { status: "fail", error: truncateError(reason) };
-          await writeBlockStatuses();
-        }
+      const failureExit = async (phase: string, reason: string): Promise<void> => {
+        const usageReport = usageReportOrUndefined();
         await logPhaseFailure(ticket.identifier, phase, reason);
         // Unregister BEFORE moveTicket so the Jira webhook for this move
         // can't race ahead and fire a duplicate "canceled" notification
         // (the registry entry is what makes the webhook treat a finishing
         // run as a cancellable orphan). Same reasoning at every terminal
-        // path below.
-        await unregisterRun(ticket.identifier);
+        // path below. open_pr's beforeCreatePullRequests may have already
+        // unregistered after the push landed, so dedupe via the flag.
+        if (!ctx.runUnregisteredBeforePr) {
+          await unregisterRun(ticket.identifier);
+        }
         await moveTicket(ticketId, backlogMoveTarget());
+        const knownPhase = FAILURE_PHASES.has(phase) ? (phase as NotifyPhase) : undefined;
         await notifyTicket(ticket.identifier, {
           kind: "failed",
-          phase,
+          ...(knownPhase ? { phase: knownPhase } : {}),
           reason,
           usageReport,
         });
-        return "stop";
       };
 
-      const runBlock = async (block: OrderedBlock): Promise<"continue" | "stop"> => {
-        switch (block.type) {
+      const terminate = async (params: {
+        terminalStatus: "waiting_for_human" | "failed" | "skipped" | "done";
+        postComment?: string;
+      }): Promise<void> => {
+        if (!ctx.runUnregisteredBeforePr) {
+          await unregisterRun(ticket.identifier);
+          ctx.runUnregisteredBeforePr = true;
+        }
+        if (params.terminalStatus === "done" || params.terminalStatus === "skipped") {
+          if (params.postComment) {
+            await postTicketComment(ticket.identifier, params.postComment);
+          }
+          runOutcome = "success";
+          return;
+        }
+        if (params.terminalStatus === "waiting_for_human") {
+          const commentUrl = await postClarificationAndMoveBack(
+            ticketId,
+            [params.postComment ?? "Waiting for human input."],
+            backlogMoveTarget(),
+          );
+          await notifyTicket(ticket.identifier, {
+            kind: "needs_clarification",
+            commentUrl: commentUrl ?? undefined,
+            usageReport: usageReportOrUndefined(),
+          });
+          runOutcome = "success";
+          return;
+        }
+        await moveTicket(ticketId, backlogMoveTarget());
+        await notifyTicket(ticket.identifier, {
+          kind: "failed",
+          reason: params.postComment ?? "Terminated by workflow.",
+          usageReport: usageReportOrUndefined(),
+        });
+        runOutcome = "failed";
+      };
+
+      const executeBlock: BlockExecutor = async (node): Promise<BlockExecutionResult> => {
+        switch (node.type) {
           case "planning_agent": {
-            const { kind, model } = resolveAgent(block.params);
-            phaseModels["Research"] = model;
+            const researchPhase = phaseKey("Research", ctx.attempt);
+            const { kind, model } = resolveAgent(node.params);
+            phaseModels[researchPhase] = model;
             await setCommitGuardStep(sandboxId, kind, false);
 
             const { paths: researchPaths, script: researchScript } =
@@ -964,36 +1028,42 @@ export async function agentWorkflow(ticketId: string) {
               researchPaths.input, researchInput,
               researchPaths.wrapper, researchScript,
             );
-            launchedPhases.add("Research");
+            launchedPhases.add(researchPhase);
 
             const researchDone = await pollUntilDone(sandboxId, researchPaths.sentinel, 20);
             if (!researchDone) {
-              return failureExit("research", "phase timed out");
+              return { kind: "failed", output: { status: "failed" }, reason: "phase timed out", phase: "research" };
             }
 
             const { raw: researchRaw, structured: researchStructured } =
               await collectPhase(sandboxId, researchPaths);
             const { research, usage: researchUsage } =
               await parseResearchStep(kind, researchRaw, researchStructured);
-            phaseUsages["Research"] = researchUsage;
+            phaseUsages[researchPhase] = researchUsage;
 
             if (research.status === "clarification_needed") {
-              const questions = research.body.split("\n").filter((l) => /^\d+\./.test(l.trim()));
-              return clarificationExit(questions.length > 0 ? questions : [research.body]);
+              const parsed = research.body.split("\n").filter((l) => /^\d+\./.test(l.trim()));
+              const questions = parsed.length > 0 ? parsed : [research.body];
+              return {
+                kind: "needs_human_input",
+                output: { status: "needs_human_input", questions },
+                questions,
+              };
             }
 
             if (research.status === "failed") {
               const reason = research.body.slice(0, 200);
-              return failureExit("research", reason);
+              return { kind: "failed", output: { status: "failed" }, reason, phase: "research" };
             }
 
             ctx.researchPlanMarkdown = research.body;
-            return "continue";
+            return { kind: "next", output: { status: "ready", plan: research.body } };
           }
 
           case "implementation_agent": {
-            const { kind, model } = resolveAgent(block.params);
-            phaseModels["Impl"] = model;
+            const implPhase = phaseKey("Impl", ctx.attempt);
+            const { kind, model } = resolveAgent(node.params);
+            phaseModels[implPhase] = model;
             ctx.implementationModel = model;
             ctx.implementationKind = kind;
             // Mixed-run telemetry: the run's headline model is the impl block's.
@@ -1016,7 +1086,7 @@ export async function agentWorkflow(ticketId: string) {
               implPaths.input, implInput,
               implPaths.wrapper, implScript,
             );
-            launchedPhases.add("Impl");
+            launchedPhases.add(implPhase);
 
             const implDone = await pollUntilDone(sandboxId, implPaths.sentinel, 35);
             let implOutput: AgentOutput;
@@ -1024,27 +1094,33 @@ export async function agentWorkflow(ticketId: string) {
             if (implDone) {
               const { raw: implRaw, structured: implStructured } = await collectPhase(sandboxId, implPaths);
               const { output, usage: implUsage } = await parseAgentOutputStep(kind, implRaw, implStructured);
-              phaseUsages["Impl"] = implUsage;
+              phaseUsages[implPhase] = implUsage;
               implOutput = output;
             } else {
               implOutput = { result: "failed", error: "Implementation phase timed out" };
             }
 
             if (implOutput.result === "clarification_needed") {
-              return clarificationExit(implOutput.questions ?? []);
+              const questions = implOutput.questions ?? [];
+              return {
+                kind: "needs_human_input",
+                output: { status: "needs_human_input", questions },
+                questions,
+              };
             }
 
             if (implOutput.result === "failed") {
               const reason = implOutput.error ?? "unknown";
-              return failureExit("impl", reason);
+              return { kind: "failed", output: { status: "failed" }, reason, phase: "impl" };
             }
 
-            return "continue";
+            return { kind: "next", output: { status: "implemented" } };
           }
 
           case "review_agent": {
-            const { kind, model } = resolveAgent(block.params);
-            phaseModels["Review"] = model;
+            const reviewPhase = phaseKey("Review", ctx.attempt);
+            const { kind, model } = resolveAgent(node.params);
+            phaseModels[reviewPhase] = model;
             // Install the review provider's commit guard: in a mixed run it may
             // differ from impl's provider, so its guard was never set up.
             await setCommitGuardStep(sandboxId, kind, true);
@@ -1064,7 +1140,7 @@ export async function agentWorkflow(ticketId: string) {
               reviewPaths.input, reviewInput,
               reviewPaths.wrapper, reviewScript,
             );
-            launchedPhases.add("Review");
+            launchedPhases.add(reviewPhase);
 
             const reviewDone = await pollUntilDone(sandboxId, reviewPaths.sentinel, 15);
             let reviewOutput: ReviewOutput;
@@ -1072,7 +1148,7 @@ export async function agentWorkflow(ticketId: string) {
             if (reviewDone) {
               const { raw: reviewRaw, structured: reviewStructured } = await collectPhase(sandboxId, reviewPaths);
               const { output, usage: reviewUsage } = await parseReviewStep(kind, reviewRaw, reviewStructured);
-              phaseUsages["Review"] = reviewUsage;
+              phaseUsages[reviewPhase] = reviewUsage;
               reviewOutput = output;
             } else {
               reviewOutput = { result: "failed", feedback: "", issues: [], error: "Review phase timed out" };
@@ -1080,15 +1156,22 @@ export async function agentWorkflow(ticketId: string) {
 
             if (reviewOutput.result === "failed") {
               const reason = reviewOutput.error ?? "unknown";
-              return failureExit("review", reason);
+              const feedback = reviewOutput.feedback.trim();
+              return {
+                kind: "failed",
+                output: { status: "failed", ...(feedback ? { feedback } : {}) },
+                reason,
+                phase: "review",
+              };
             }
 
-            return "continue";
+            const feedback = reviewOutput.feedback.trim();
+            return { kind: "next", output: { status: "ok", ...(feedback ? { feedback } : {}) } };
           }
 
           case "run_pre_pr_checks": {
             const maxFixCycles =
-              typeof block.params.maxFixCycles === "number" ? block.params.maxFixCycles : undefined;
+              typeof node.params.maxFixCycles === "number" ? node.params.maxFixCycles : undefined;
             const prePrChecks = await runPrePrChecksStep(
               sandboxId,
               ctx.implementationKind ?? runDefaultKind,
@@ -1096,10 +1179,27 @@ export async function agentWorkflow(ticketId: string) {
               maxFixCycles,
             );
             if (!prePrChecks.passed) {
-              const reason = prePrChecks.summary.slice(0, 2_000);
-              return failureExit("pre-pr-checks", reason);
+              return {
+                kind: "failed",
+                output: {
+                  status: "failed",
+                  ok: false,
+                  fixCycles: prePrChecks.fixCycles,
+                  summary: prePrChecks.summary,
+                },
+                reason: prePrChecks.summary,
+                phase: "pre-pr-checks",
+              };
             }
-            return "continue";
+            return {
+              kind: "next",
+              output: {
+                status: "ok",
+                ok: true,
+                fixCycles: prePrChecks.fixCycles,
+                summary: prePrChecks.summary,
+              },
+            };
           }
 
           case "open_pr": {
@@ -1129,17 +1229,9 @@ export async function agentWorkflow(ticketId: string) {
             ctx.publication = publication;
 
             if (publication.status === "failed") {
-              if (currentBlockId) {
-                blockStatuses[currentBlockId] = {
-                  status: "fail",
-                  error: truncateError(publication.reason),
-                };
-                await writeBlockStatuses();
-              }
-              await logPhaseFailure(ticket.identifier, "push", publication.reason);
-              if (!ctx.runUnregisteredBeforePr) {
-                await unregisterRun(ticket.identifier);
-              }
+              // The terminal unregister/move/notify runs in failureExit; keep only
+              // the bespoke bookkeeping here. failureExit dedupes the unregister via
+              // ctx.runUnregisteredBeforePr, set above when the push landed.
               if (publication.prs.length > 0) {
                 await postPrLinksComment(
                   ticket.identifier,
@@ -1147,14 +1239,12 @@ export async function agentWorkflow(ticketId: string) {
                   "Pull requests created before publication failed:",
                 );
               }
-              await moveTicket(ticketId, backlogMoveTarget());
-              await notifyTicket(ticket.identifier, {
+              return {
                 kind: "failed",
-                phase: "push",
+                output: { status: "failed" },
                 reason: publication.reason,
-                usageReport: usageReportOrUndefined(),
-              });
-              return "stop";
+                phase: "push",
+              };
             }
 
             if (publication.prs.some((pr) => pr.isNew)) {
@@ -1163,7 +1253,10 @@ export async function agentWorkflow(ticketId: string) {
 
             const primaryPr = publication.prs[0]!;
             prForTelemetry = { url: primaryPr.url, number: primaryPr.id };
-            return "continue";
+            return {
+              kind: "next",
+              output: { status: "ok", prUrl: primaryPr.url, prNumber: primaryPr.id },
+            };
           }
 
           case "send_slack_message": {
@@ -1172,40 +1265,62 @@ export async function agentWorkflow(ticketId: string) {
               const primaryPr = publication.prs[0]!;
               const usageReport = formatUsageReport(phaseUsages, priceLookup, activeModel, phaseModels);
               const message =
-                typeof block.params.message === "string" ? block.params.message.trim() : "";
+                typeof node.params.message === "string" ? node.params.message.trim() : "";
               await notifyTicket(ticket.identifier, {
                 kind: "pr_ready",
                 pr: { url: primaryPr.url, number: primaryPr.id },
                 usageReport,
                 ...(message ? { extraText: message } : {}),
               });
+              return { kind: "next", output: { status: "ok" } };
             }
-            return "continue";
+            return { kind: "next", output: { status: "skipped" } };
           }
 
           case "update_ticket_status": {
-            const target =
-              block.params.target === "backlog" ? backlogMoveTarget() : aiReviewMoveTarget();
+            const targetName = node.params.target === "backlog" ? "backlog" : "ai_review";
+            const target = targetName === "backlog" ? backlogMoveTarget() : aiReviewMoveTarget();
             await moveTicket(ticketId, target);
-            return "continue";
+            return { kind: "next", output: { status: "ok", target: targetName } };
           }
 
           default:
-            return "continue";
+            return { kind: "next", output: { status: "ok" } };
         }
       };
 
-      for (const block of plan.blocks) {
-        currentBlockId = block.id;
-        blockStatuses[block.id] = { status: "running" };
-        await writeBlockStatuses();
-        const outcome = await runBlock(block);
-        if (outcome === "stop") return;
-        blockStatuses[block.id] = { status: "ok" };
+      const hooks: ExecuteGraphHooks = {
+        async onBlockStart(nodeId, attempt) {
+          currentBlockId = nodeId;
+          ctx.attempt = attempt;
+          blockStatuses[nodeId] = { status: "running", attempt };
+          await writeBlockStatuses();
+        },
+        async onBlockFinish(nodeId, state) {
+          let guarded = state;
+          if (state.output && JSON.stringify(state.output).length > 8192) {
+            guarded = { ...state, output: { status: state.output.status, _truncated: true } };
+          }
+          blockStatuses[nodeId] = guarded;
+          await writeBlockStatuses();
+        },
+        clarificationExit,
+        failureExit,
+        terminate,
+      };
+
+      const walk = await executeGraph({
+        graph,
+        entryTriggerId,
+        triggerOutput,
+        executeBlock,
+        hooks,
+        maxTotalExecutions: 200,
+      });
+      if (walk.outcome === "completed") {
+        currentBlockId = null;
+        runOutcome = "success";
       }
-      currentBlockId = null;
-      await writeBlockStatuses();
-      runOutcome = "success";
     } finally {
       await teardownSandbox(sandboxId);
     }

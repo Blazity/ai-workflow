@@ -1,8 +1,12 @@
-import type { OrderedBlock } from "../workflow-definition/plan.js";
+import type {
+  WorkflowDefinitionEdge,
+  WorkflowDefinitionNode,
+} from "@shared/contracts";
 
 export interface LoadedWorkflowPlan {
   version: number | null;
-  blocks: OrderedBlock[];
+  nodes: WorkflowDefinitionNode[];
+  edges: WorkflowDefinitionEdge[];
   reviewEnabled: boolean;
 }
 
@@ -13,14 +17,21 @@ export async function loadWorkflowDefinition(): Promise<LoadedWorkflowPlan> {
   const { getCurrentWorkflowDefinition } = await import("../workflow-definition/store.js");
   const { workflowDefinitionSchema, validateWorkflowGraph, describeWorkflowDefinitionIssues } =
     await import("../workflow-definition/schema.js");
-  const { orderBlocks } = await import("../workflow-definition/plan.js");
-  const { defaultOrderedBlocks } = await import("../workflow-definition/default.js");
+  const { defaultWorkflowDefinition } = await import("../workflow-definition/default.js");
   const { logger } = await import("../lib/logger.js");
 
-  const buildDefault = (): LoadedWorkflowPlan => {
-    const blocks = defaultOrderedBlocks({ includeReview: env.ENABLE_REVIEW_PHASE });
-    return { version: null, blocks, reviewEnabled: blocks.some((b) => b.type === "review_agent") };
-  };
+  const toPlan = (
+    def: { nodes: WorkflowDefinitionNode[]; edges: WorkflowDefinitionEdge[] },
+    version: number | null,
+  ): LoadedWorkflowPlan => ({
+    version,
+    nodes: def.nodes,
+    edges: def.edges,
+    reviewEnabled: def.nodes.some((node) => node.type === "review_agent"),
+  });
+
+  const buildDefault = (): LoadedWorkflowPlan =>
+    toPlan(defaultWorkflowDefinition({ includeReview: env.ENABLE_REVIEW_PHASE }), null);
 
   const row = await getCurrentWorkflowDefinition(getDb());
   if (!row) {
@@ -38,11 +49,6 @@ export async function loadWorkflowDefinition(): Promise<LoadedWorkflowPlan> {
     return buildDefault();
   }
 
-  const blocks = orderBlocks(parsed.data);
-  return {
-    version: row.version,
-    blocks,
-    reviewEnabled: blocks.some((b) => b.type === "review_agent"),
-  };
+  return toPlan(parsed.data, row.version);
 }
 loadWorkflowDefinition.maxRetries = 0;

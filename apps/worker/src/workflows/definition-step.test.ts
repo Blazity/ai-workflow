@@ -46,12 +46,13 @@ describe("loadWorkflowDefinition", () => {
     await setEnv({ ENABLE_REVIEW_PHASE: false });
   });
 
-  it("falls back to the default blocks (no review) when there is no row", async () => {
+  it("falls back to the default nodes (no review) when there is no row", async () => {
     mockGetCurrent.mockResolvedValue(null);
     const plan = await loadWorkflowDefinition();
     expect(plan.version).toBeNull();
     expect(plan.reviewEnabled).toBe(false);
-    expect(plan.blocks.map((b) => b.type)).toEqual([
+    expect(plan.nodes.map((n) => n.type)).toEqual([
+      "trigger_ticket_ai",
       "planning_agent",
       "implementation_agent",
       "run_pre_pr_checks",
@@ -67,15 +68,16 @@ describe("loadWorkflowDefinition", () => {
     const plan = await loadWorkflowDefinition();
     expect(plan.version).toBeNull();
     expect(plan.reviewEnabled).toBe(true);
-    expect(plan.blocks.some((b) => b.type === "review_agent")).toBe(true);
+    expect(plan.nodes.some((n) => n.type === "review_agent")).toBe(true);
   });
 
-  it("uses the stored definition (ordered) when the row is valid", async () => {
+  it("uses the stored definition nodes when the row is valid", async () => {
     mockGetCurrent.mockResolvedValue(row(defaultWorkflowDefinition({ includeReview: true }), 7));
     const plan = await loadWorkflowDefinition();
     expect(plan.version).toBe(7);
     expect(plan.reviewEnabled).toBe(true);
-    expect(plan.blocks.map((b) => b.type)).toEqual([
+    expect(plan.nodes.map((n) => n.type)).toEqual([
+      "trigger_ticket_ai",
       "planning_agent",
       "implementation_agent",
       "review_agent",
@@ -100,7 +102,7 @@ describe("loadWorkflowDefinition", () => {
     );
     const plan = await loadWorkflowDefinition();
     expect(plan.version).toBeNull();
-    expect(plan.blocks.length).toBeGreaterThan(0);
+    expect(plan.nodes.length).toBeGreaterThan(0);
     expect(loggerError).toHaveBeenCalledTimes(1);
     expect(loggerError.mock.calls[0][0]).toMatchObject({ version: 9 });
   });

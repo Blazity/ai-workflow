@@ -4,7 +4,6 @@ import type {
   WorkflowDefinitionNode,
   WorkflowParamValue,
 } from "@shared/contracts";
-import { orderBlocks, type OrderedBlock } from "./plan.js";
 
 interface BlockSpec {
   id: string;
@@ -43,8 +42,4 @@ export function defaultWorkflowDefinition({ includeReview }: { includeReview: bo
   const edges = nodes.slice(1).map((node, index) => ({ from: nodes[index].id, to: node.id }));
 
   return { schemaVersion: 1, nodes, edges };
-}
-
-export function defaultOrderedBlocks(opts: { includeReview: boolean }): OrderedBlock[] {
-  return orderBlocks(defaultWorkflowDefinition(opts));
 }
