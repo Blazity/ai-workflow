@@ -79,12 +79,11 @@ function withBadParam(def: WorkflowDefinition): WorkflowDefinition {
   };
 }
 
-function withoutStatusNode(def: WorkflowDefinition): WorkflowDefinition {
+function withUnreachableNode(def: WorkflowDefinition): WorkflowDefinition {
   const statusId = def.nodes.find((node) => node.type === "update_ticket_status")!.id;
   return {
     ...def,
-    nodes: def.nodes.filter((node) => node.id !== statusId),
-    edges: def.edges.filter((edge) => edge.from !== statusId && edge.to !== statusId),
+    edges: def.edges.filter((edge) => edge.to !== statusId),
   };
 }
 
@@ -197,7 +196,7 @@ describe("PUT /api/v1/workflow-definition", () => {
 
   it("rejects a structurally invalid graph with 400 Invalid workflow", async () => {
     const res = await handlerFor(definitionPut)(
-      jsonRequest("PUT", { definition: withoutStatusNode(VALID_DEFINITION) }),
+      jsonRequest("PUT", { definition: withUnreachableNode(VALID_DEFINITION) }),
     );
     expect(res.status).toBe(400);
     expect(res.statusText).toMatch(/^Invalid workflow:/);

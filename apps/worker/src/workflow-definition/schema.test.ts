@@ -4,12 +4,18 @@ import type {
   WorkflowDefinition,
   WorkflowDefinitionEdge,
   WorkflowDefinitionNode,
+  WorkflowParamValue,
 } from "@shared/contracts";
 import { defaultWorkflowDefinition } from "./default.js";
+import { humanGateLoopDefinition, linearPipelineDefinition } from "./graph-fixtures.js";
 import { validateWorkflowGraph, workflowDefinitionSchema } from "./schema.js";
 
-function node(id: string, type: WorkflowBlockType): WorkflowDefinitionNode {
-  return { id, type, x: 0, y: 0, params: {} };
+function node(
+  id: string,
+  type: WorkflowBlockType,
+  params: Record<string, WorkflowParamValue> = {},
+): WorkflowDefinitionNode {
+  return { id, type, x: 0, y: 0, params };
 }
 
 function graph(
@@ -21,6 +27,10 @@ function graph(
 
 function clone(def: WorkflowDefinition): any {
   return JSON.parse(JSON.stringify(def));
+}
+
+function shapeOk(nodes: unknown[], edges: unknown[] = []): boolean {
+  return workflowDefinitionSchema.safeParse({ schemaVersion: 1, nodes, edges }).success;
 }
 
 describe("workflowDefinitionSchema", () => {
@@ -88,314 +98,431 @@ describe("workflowDefinitionSchema", () => {
     const def = defaultWorkflowDefinition({ includeReview: true });
     expect(workflowDefinitionSchema.safeParse(def).success).toBe(true);
   });
+
+  it("accepts a well-formed branch node and rejects out-of-bound conditions", () => {
+    const good = { id: "b", type: "branch", x: 0, y: 0, params: { condition: "steps.a.output.ok" } };
+    expect(shapeOk([good])).toBe(true);
+    expect(shapeOk([{ ...good, params: { condition: "" } }])).toBe(false);
+    expect(shapeOk([{ ...good, params: { condition: "x".repeat(1001) } }])).toBe(false);
+    expect(shapeOk([{ ...good, params: { condition: "steps.a.output.ok", extra: 1 } }])).toBe(false);
+  });
+
+  it("accepts a well-formed loop node and rejects invalid params", () => {
+    const good = { id: "l", type: "loop", x: 0, y: 0, params: { maxAttempts: 3, onExhaust: "fail" } };
+    expect(shapeOk([good])).toBe(true);
+    expect(shapeOk([{ ...good, params: { maxAttempts: 0, onExhaust: "fail" } }])).toBe(false);
+    expect(shapeOk([{ ...good, params: { maxAttempts: 21, onExhaust: "fail" } }])).toBe(false);
+    expect(shapeOk([{ ...good, params: { maxAttempts: 2.5, onExhaust: "fail" } }])).toBe(false);
+    expect(shapeOk([{ ...good, params: { maxAttempts: 3, onExhaust: "bogus" } }])).toBe(false);
+    expect(shapeOk([{ ...good, params: { maxAttempts: 3 } }])).toBe(false);
+  });
+
+  it("accepts a well-formed terminate node and rejects invalid params", () => {
+    const good = { id: "x", type: "terminate", x: 0, y: 0, params: { terminalStatus: "done" } };
+    expect(shapeOk([good])).toBe(true);
+    expect(
+      shapeOk([{ ...good, params: { terminalStatus: "waiting_for_human", postComment: "please review" } }]),
+    ).toBe(true);
+    expect(shapeOk([{ ...good, params: { terminalStatus: "unknown" } }])).toBe(false);
+    expect(shapeOk([{ ...good, params: { terminalStatus: "done", postComment: "" } }])).toBe(false);
+    expect(shapeOk([{ ...good, params: { terminalStatus: "done", extra: 1 } }])).toBe(false);
+  });
+
+  it("accepts an edge fromPort and rejects an empty one", () => {
+    const nodes = [node("t", "trigger_ticket_ai"), node("p", "planning_agent")];
+    expect(shapeOk(nodes, [{ from: "t", to: "p", fromPort: "out" }])).toBe(true);
+    expect(shapeOk(nodes, [{ from: "t", to: "p", fromPort: "" }])).toBe(false);
+  });
 });
 
-describe("validateWorkflowGraph", () => {
-  it("flags two triggers", () => {
-    const def = graph(
-      [node("t1", "trigger_ticket_ai"), node("t2", "trigger_ticket_ai")],
-      [],
-    );
-    expect(validateWorkflowGraph(def).some((issue) => issue.includes("exactly one trigger"))).toBe(true);
+describe("validateWorkflowGraph fixtures", () => {
+  it("accepts the linear pipeline fixture", () => {
+    const def = linearPipelineDefinition();
+    expect(workflowDefinitionSchema.safeParse(def).success).toBe(true);
+    expect(validateWorkflowGraph(def)).toEqual([]);
   });
 
-  it("flags a trigger with an incoming edge", () => {
-    const def = graph(
-      [node("trigger", "trigger_ticket_ai"), node("planning", "planning_agent")],
-      [{ from: "planning", to: "trigger" }],
-    );
-    expect(
-      validateWorkflowGraph(def).some((issue) => issue.includes("must not have incoming connections")),
-    ).toBe(true);
+  it("accepts the human-gate loop fixture", () => {
+    const def = humanGateLoopDefinition();
+    expect(workflowDefinitionSchema.safeParse(def).success).toBe(true);
+    expect(validateWorkflowGraph(def)).toEqual([]);
   });
+});
 
-  it("flags a cycle", () => {
+describe("validateWorkflowGraph rules", () => {
+  it("rule 1: flags a duplicate node id", () => {
     const def = graph(
-      [
-        node("trigger", "trigger_ticket_ai"),
-        node("planning", "planning_agent"),
-        node("implementation", "implementation_agent"),
-      ],
-      [
-        { from: "trigger", to: "planning" },
-        { from: "planning", to: "implementation" },
-        { from: "implementation", to: "planning" },
-      ],
-    );
-    expect(validateWorkflowGraph(def).length).toBeGreaterThan(0);
-  });
-
-  it("flags an unreachable node", () => {
-    const def = graph(
-      [
-        node("trigger", "trigger_ticket_ai"),
-        node("planning", "planning_agent"),
-        node("implementation", "implementation_agent"),
-        node("open-pr", "open_pr"),
-        node("status", "update_ticket_status"),
-        node("orphan", "send_slack_message"),
-      ],
-      [
-        { from: "trigger", to: "planning" },
-        { from: "planning", to: "implementation" },
-        { from: "implementation", to: "open-pr" },
-        { from: "open-pr", to: "status" },
-      ],
-    );
-    expect(
-      validateWorkflowGraph(def).some((issue) => issue.includes("is not reachable from the trigger")),
-    ).toBe(true);
-  });
-
-  it("flags a fan-out (out-degree 2)", () => {
-    const def = graph(
-      [
-        node("trigger", "trigger_ticket_ai"),
-        node("planning", "planning_agent"),
-        node("implementation", "implementation_agent"),
-        node("open-pr", "open_pr"),
-      ],
-      [
-        { from: "trigger", to: "planning" },
-        { from: "planning", to: "implementation" },
-        { from: "planning", to: "open-pr" },
-      ],
-    );
-    expect(
-      validateWorkflowGraph(def).some((issue) => issue.includes("more than one outgoing connection")),
-    ).toBe(true);
-  });
-
-  it("flags a duplicate agent phase", () => {
-    const def = graph(
-      [
-        node("trigger", "trigger_ticket_ai"),
-        node("planning", "planning_agent"),
-        node("planning2", "planning_agent"),
-      ],
-      [
-        { from: "trigger", to: "planning" },
-        { from: "planning", to: "planning2" },
-      ],
-    );
-    expect(
-      validateWorkflowGraph(def).some((issue) => issue.includes("at most one planning_agent")),
-    ).toBe(true);
-  });
-
-  it("flags a missing required block", () => {
-    const def = graph(
-      [
-        node("trigger", "trigger_ticket_ai"),
-        node("planning", "planning_agent"),
-        node("implementation", "implementation_agent"),
-        node("status", "update_ticket_status"),
-      ],
-      [
-        { from: "trigger", to: "planning" },
-        { from: "planning", to: "implementation" },
-        { from: "implementation", to: "status" },
-      ],
-    );
-    expect(
-      validateWorkflowGraph(def).some((issue) => issue.includes("missing a required open_pr")),
-    ).toBe(true);
-  });
-
-  it("flags planning after implementation", () => {
-    const def = graph(
-      [
-        node("trigger", "trigger_ticket_ai"),
-        node("implementation", "implementation_agent"),
-        node("planning", "planning_agent"),
-        node("open-pr", "open_pr"),
-        node("status", "update_ticket_status"),
-      ],
-      [
-        { from: "trigger", to: "implementation" },
-        { from: "implementation", to: "planning" },
-        { from: "planning", to: "open-pr" },
-        { from: "open-pr", to: "status" },
-      ],
-    );
-    expect(
-      validateWorkflowGraph(def).some((issue) =>
-        issue.includes("planning_agent block must come before the implementation_agent"),
-      ),
-    ).toBe(true);
-  });
-
-  it("flags open_pr before implementation", () => {
-    const def = graph(
-      [
-        node("trigger", "trigger_ticket_ai"),
-        node("planning", "planning_agent"),
-        node("open-pr", "open_pr"),
-        node("implementation", "implementation_agent"),
-        node("status", "update_ticket_status"),
-      ],
-      [
-        { from: "trigger", to: "planning" },
-        { from: "planning", to: "open-pr" },
-        { from: "open-pr", to: "implementation" },
-        { from: "implementation", to: "status" },
-      ],
-    );
-    expect(
-      validateWorkflowGraph(def).some((issue) =>
-        issue.includes("open_pr block must come after the implementation_agent"),
-      ),
-    ).toBe(true);
-  });
-
-  it("flags a missing trigger", () => {
-    const def = graph(
-      [node("planning", "planning_agent"), node("implementation", "implementation_agent")],
-      [{ from: "planning", to: "implementation" }],
-    );
-    expect(validateWorkflowGraph(def).some((issue) => issue.includes("exactly one trigger"))).toBe(true);
-  });
-
-  it("flags edges referencing unknown blocks", () => {
-    const def = graph(
-      [node("trigger", "trigger_ticket_ai"), node("planning", "planning_agent")],
-      [
-        { from: "ghost-source", to: "planning" },
-        { from: "planning", to: "ghost-target" },
-      ],
-    );
-    const issues = validateWorkflowGraph(def);
-    expect(issues.some((issue) => issue.includes('unknown source block "ghost-source"'))).toBe(true);
-    expect(issues.some((issue) => issue.includes('unknown target block "ghost-target"'))).toBe(true);
-  });
-
-  it("flags a self-edge", () => {
-    const def = graph(
-      [node("trigger", "trigger_ticket_ai"), node("planning", "planning_agent")],
-      [
-        { from: "trigger", to: "planning" },
-        { from: "planning", to: "planning" },
-      ],
-    );
-    expect(validateWorkflowGraph(def).some((issue) => issue.includes("cannot connect to itself"))).toBe(true);
-  });
-
-  it("flags a duplicate edge", () => {
-    const def = graph(
-      [node("trigger", "trigger_ticket_ai"), node("planning", "planning_agent")],
-      [
-        { from: "trigger", to: "planning" },
-        { from: "trigger", to: "planning" },
-      ],
-    );
-    expect(
-      validateWorkflowGraph(def).some((issue) =>
-        issue.includes('Duplicate connection from "trigger" to "planning"'),
-      ),
-    ).toBe(true);
-  });
-
-  it("flags a fan-in (in-degree 2)", () => {
-    const def = graph(
-      [
-        node("trigger", "trigger_ticket_ai"),
-        node("planning", "planning_agent"),
-        node("implementation", "implementation_agent"),
-        node("slack", "send_slack_message"),
-      ],
-      [
-        { from: "trigger", to: "planning" },
-        { from: "planning", to: "implementation" },
-        { from: "slack", to: "implementation" },
-      ],
-    );
-    expect(
-      validateWorkflowGraph(def).some((issue) => issue.includes("more than one incoming connection")),
-    ).toBe(true);
-  });
-
-  it("flags slack and status placed before open_pr", () => {
-    const def = graph(
-      [
-        node("trigger", "trigger_ticket_ai"),
-        node("planning", "planning_agent"),
-        node("implementation", "implementation_agent"),
-        node("slack", "send_slack_message"),
-        node("status", "update_ticket_status"),
-        node("open-pr", "open_pr"),
-      ],
-      [
-        { from: "trigger", to: "planning" },
-        { from: "planning", to: "implementation" },
-        { from: "implementation", to: "slack" },
-        { from: "slack", to: "status" },
-        { from: "status", to: "open-pr" },
-      ],
-    );
-    const issues = validateWorkflowGraph(def);
-    expect(issues.some((issue) => issue.includes("send_slack_message block must come after the open_pr"))).toBe(true);
-    expect(issues.some((issue) => issue.includes("update_ticket_status block must come after the open_pr"))).toBe(true);
-  });
-
-  it("flags review and checks placed before implementation", () => {
-    const def = graph(
-      [
-        node("trigger", "trigger_ticket_ai"),
-        node("planning", "planning_agent"),
-        node("review", "review_agent"),
-        node("checks", "run_pre_pr_checks"),
-        node("implementation", "implementation_agent"),
-        node("open-pr", "open_pr"),
-        node("status", "update_ticket_status"),
-      ],
-      [
-        { from: "trigger", to: "planning" },
-        { from: "planning", to: "review" },
-        { from: "review", to: "checks" },
-        { from: "checks", to: "implementation" },
-        { from: "implementation", to: "open-pr" },
-        { from: "open-pr", to: "status" },
-      ],
-    );
-    const issues = validateWorkflowGraph(def);
-    expect(issues.some((issue) => issue.includes("review_agent block must come after the implementation_agent"))).toBe(true);
-    expect(issues.some((issue) => issue.includes("run_pre_pr_checks block must come after the implementation_agent"))).toBe(true);
-  });
-
-  it("flags a duplicate node id", () => {
-    const def = graph(
-      [
-        node("trigger", "trigger_ticket_ai"),
-        node("dup", "planning_agent"),
-        node("dup", "open_pr"),
-      ],
-      [{ from: "trigger", to: "dup" }],
+      [node("t", "trigger_ticket_ai"), node("dup", "planning_agent"), node("dup", "open_pr")],
+      [{ from: "t", to: "dup" }],
     );
     expect(
       validateWorkflowGraph(def).some((issue) => issue.includes('Block id "dup" is used more than once')),
     ).toBe(true);
   });
 
-  it("flags a duplicate non-agent block type", () => {
+  it("rule 2: flags a workflow without any trigger", () => {
+    const def = graph([node("p", "planning_agent")], []);
+    expect(
+      validateWorkflowGraph(def).some((issue) =>
+        issue.includes("Workflow must contain at least one trigger block."),
+      ),
+    ).toBe(true);
+  });
+
+  it("rule 3: flags two triggers of the same type", () => {
+    const def = graph(
+      [node("t1", "trigger_ticket_ai"), node("t2", "trigger_ticket_ai")],
+      [],
+    );
+    expect(
+      validateWorkflowGraph(def).some((issue) =>
+        issue.includes("Workflow contains more than one trigger_ticket_ai trigger block."),
+      ),
+    ).toBe(true);
+  });
+
+  it("rule 4: flags a trigger with an incoming edge", () => {
+    const def = graph(
+      [node("t", "trigger_ticket_ai"), node("p", "planning_agent")],
+      [{ from: "p", to: "t" }],
+    );
+    expect(
+      validateWorkflowGraph(def).some((issue) => issue.includes("must not have incoming connections")),
+    ).toBe(true);
+  });
+
+  it("rule 5: flags edges referencing unknown blocks and self-edges", () => {
+    const def = graph(
+      [node("t", "trigger_ticket_ai"), node("p", "planning_agent")],
+      [
+        { from: "ghost-source", to: "p" },
+        { from: "p", to: "ghost-target" },
+        { from: "p", to: "p" },
+      ],
+    );
+    const issues = validateWorkflowGraph(def);
+    expect(issues.some((issue) => issue.includes('unknown source block "ghost-source"'))).toBe(true);
+    expect(issues.some((issue) => issue.includes('unknown target block "ghost-target"'))).toBe(true);
+    expect(issues.some((issue) => issue.includes('Block "p" cannot connect to itself'))).toBe(true);
+  });
+
+  it("rule 6: flags an unknown port", () => {
+    const def = graph(
+      [node("t", "trigger_ticket_ai"), node("p", "planning_agent")],
+      [{ from: "t", to: "p", fromPort: "bogus" }],
+    );
+    expect(
+      validateWorkflowGraph(def).some((issue) =>
+        issue.includes('uses unknown port "bogus" of block type trigger_ticket_ai'),
+      ),
+    ).toBe(true);
+  });
+
+  it("rule 6: flags a branch edge that omits its port", () => {
     const def = graph(
       [
-        node("trigger", "trigger_ticket_ai"),
-        node("planning", "planning_agent"),
-        node("implementation", "implementation_agent"),
-        node("open-pr", "open_pr"),
-        node("open-pr-2", "open_pr"),
-        node("status", "update_ticket_status"),
+        node("t", "trigger_ticket_ai"),
+        node("p", "planning_agent"),
+        node("b", "branch", { condition: "steps.p.output.ok" }),
+        node("x", "open_pr"),
       ],
       [
-        { from: "trigger", to: "planning" },
-        { from: "planning", to: "implementation" },
-        { from: "implementation", to: "open-pr" },
-        { from: "open-pr", to: "open-pr-2" },
-        { from: "open-pr-2", to: "status" },
+        { from: "t", to: "p" },
+        { from: "p", to: "b" },
+        { from: "b", to: "x" },
       ],
     );
     expect(
-      validateWorkflowGraph(def).some((issue) => issue.includes("at most one open_pr block")),
+      validateWorkflowGraph(def).some((issue) =>
+        issue.includes('Connection from branch "b" must specify a port (true/false)'),
+      ),
     ).toBe(true);
+  });
+
+  it("rule 6: flags a terminate block with an outgoing edge", () => {
+    const def = graph(
+      [
+        node("t", "trigger_ticket_ai"),
+        node("term", "terminate", { terminalStatus: "done" }),
+        node("p", "planning_agent"),
+      ],
+      [
+        { from: "t", to: "term" },
+        { from: "term", to: "p" },
+      ],
+    );
+    expect(
+      validateWorkflowGraph(def).some((issue) =>
+        issue.includes('Terminate block "term" cannot have outgoing connections'),
+      ),
+    ).toBe(true);
+  });
+
+  it("rule 7: forbids a fan-out from a single port", () => {
+    const def = graph(
+      [
+        node("t", "trigger_ticket_ai"),
+        node("p", "planning_agent"),
+        node("a", "open_pr"),
+        node("b", "send_slack_message"),
+      ],
+      [
+        { from: "t", to: "p" },
+        { from: "p", to: "a" },
+        { from: "p", to: "b" },
+      ],
+    );
+    expect(
+      validateWorkflowGraph(def).some((issue) =>
+        issue.includes('Block "p" has multiple connections from port "out"'),
+      ),
+    ).toBe(true);
+  });
+
+  it("rule 7: flags an exact duplicate connection", () => {
+    const def = graph(
+      [node("t", "trigger_ticket_ai"), node("p", "planning_agent")],
+      [
+        { from: "t", to: "p" },
+        { from: "t", to: "p" },
+      ],
+    );
+    expect(
+      validateWorkflowGraph(def).some((issue) =>
+        issue.includes('Duplicate connection from "t" to "p"'),
+      ),
+    ).toBe(true);
+  });
+
+  it("rule 7: allows a failure-port fan-out alongside the default port", () => {
+    const def = graph(
+      [
+        node("t", "trigger_ticket_ai"),
+        node("p", "planning_agent"),
+        node("ok", "open_pr"),
+        node("bad", "send_slack_message"),
+      ],
+      [
+        { from: "t", to: "p" },
+        { from: "p", to: "ok" },
+        { from: "p", to: "bad", fromPort: "failed" },
+      ],
+    );
+    expect(validateWorkflowGraph(def)).toEqual([]);
+  });
+
+  it("rule 8: flags an unreachable node", () => {
+    const def = graph(
+      [
+        node("t", "trigger_ticket_ai"),
+        node("p", "planning_agent"),
+        node("orphan", "send_slack_message"),
+      ],
+      [{ from: "t", to: "p" }],
+    );
+    expect(
+      validateWorkflowGraph(def).some((issue) =>
+        issue.includes('Block "orphan" is not reachable from a trigger'),
+      ),
+    ).toBe(true);
+  });
+
+  it("rule 9: flags a half-wired branch", () => {
+    const def = graph(
+      [
+        node("t", "trigger_ticket_ai"),
+        node("p", "planning_agent"),
+        node("b", "branch", { condition: "steps.p.output.ok" }),
+        node("x", "open_pr"),
+      ],
+      [
+        { from: "t", to: "p" },
+        { from: "p", to: "b" },
+        { from: "b", to: "x", fromPort: "true" },
+      ],
+    );
+    expect(
+      validateWorkflowGraph(def).some((issue) =>
+        issue.includes('Branch "b" must have its "false" port connected'),
+      ),
+    ).toBe(true);
+  });
+
+  it("rule 10: flags a loop whose continue port does not lead back", () => {
+    const def = graph(
+      [
+        node("t", "trigger_ticket_ai"),
+        node("p", "planning_agent"),
+        node("lp", "loop", { maxAttempts: 3, onExhaust: "fail" }),
+        node("f", "open_pr"),
+      ],
+      [
+        { from: "t", to: "p" },
+        { from: "p", to: "lp" },
+        { from: "lp", to: "f", fromPort: "continue" },
+      ],
+    );
+    expect(
+      validateWorkflowGraph(def).some((issue) =>
+        issue.includes(`Loop "lp"'s continue port must lead back to it`),
+      ),
+    ).toBe(true);
+  });
+
+  it("rule 10: flags onExhaust continue without an exhausted edge", () => {
+    const def = graph(
+      [
+        node("t", "trigger_ticket_ai"),
+        node("p", "planning_agent"),
+        node("lp", "loop", { maxAttempts: 3, onExhaust: "continue" }),
+        node("f", "implementation_agent"),
+      ],
+      [
+        { from: "t", to: "p" },
+        { from: "p", to: "lp" },
+        { from: "lp", to: "f", fromPort: "continue" },
+        { from: "f", to: "lp" },
+      ],
+    );
+    expect(
+      validateWorkflowGraph(def).some((issue) =>
+        issue.includes(
+          'Loop "lp" with onExhaust "continue" must have its "exhausted" port connected',
+        ),
+      ),
+    ).toBe(true);
+  });
+
+  it("rule 10: flags a loop missing its continue edge", () => {
+    const def = graph(
+      [
+        node("t", "trigger_ticket_ai"),
+        node("p", "planning_agent"),
+        node("lp", "loop", { maxAttempts: 3, onExhaust: "fail" }),
+      ],
+      [
+        { from: "t", to: "p" },
+        { from: "p", to: "lp" },
+      ],
+    );
+    expect(
+      validateWorkflowGraph(def).some((issue) =>
+        issue.includes('Loop "lp" must have its "continue" port connected'),
+      ),
+    ).toBe(true);
+  });
+
+  it("rule 11: flags a cycle that passes through no loop", () => {
+    const def = graph(
+      [
+        node("t", "trigger_ticket_ai"),
+        node("a", "planning_agent"),
+        node("b", "implementation_agent"),
+      ],
+      [
+        { from: "t", to: "a" },
+        { from: "a", to: "b" },
+        { from: "b", to: "a" },
+      ],
+    );
+    expect(
+      validateWorkflowGraph(def).some((issue) =>
+        issue.includes("form a cycle that does not pass through a Loop block"),
+      ),
+    ).toBe(true);
+  });
+
+  it("rule 11: flags a cycle region containing two loops", () => {
+    const def = graph(
+      [
+        node("t", "trigger_ticket_ai"),
+        node("p", "planning_agent"),
+        node("lp1", "loop", { maxAttempts: 3, onExhaust: "fail" }),
+        node("lp2", "loop", { maxAttempts: 3, onExhaust: "fail" }),
+      ],
+      [
+        { from: "t", to: "p" },
+        { from: "p", to: "lp1" },
+        { from: "lp1", to: "lp2", fromPort: "continue" },
+        { from: "lp2", to: "lp1", fromPort: "continue" },
+      ],
+    );
+    expect(
+      validateWorkflowGraph(def).some((issue) =>
+        issue.includes("form a cycle region with 2 Loop blocks; each cycle region must contain exactly one"),
+      ),
+    ).toBe(true);
+  });
+
+  it("rule 12: flags an invalid branch condition", () => {
+    const def = graph(
+      [
+        node("t", "trigger_ticket_ai"),
+        node("p", "planning_agent"),
+        node("b", "branch", { condition: "this is not valid @@@" }),
+        node("x", "open_pr"),
+        node("y", "send_slack_message"),
+      ],
+      [
+        { from: "t", to: "p" },
+        { from: "p", to: "b" },
+        { from: "b", to: "x", fromPort: "true" },
+        { from: "b", to: "y", fromPort: "false" },
+      ],
+    );
+    expect(
+      validateWorkflowGraph(def).some((issue) =>
+        issue.includes('Branch "b" has an invalid condition:'),
+      ),
+    ).toBe(true);
+  });
+
+  it("rule 12: flags a condition referencing a non-ancestor block", () => {
+    const def = graph(
+      [
+        node("t", "trigger_ticket_ai"),
+        node("p", "planning_agent"),
+        node("b", "branch", { condition: "steps.other.output.ok" }),
+        node("x", "open_pr"),
+        node("other", "send_slack_message"),
+        node("y", "implementation_agent"),
+      ],
+      [
+        { from: "t", to: "p" },
+        { from: "p", to: "b" },
+        { from: "b", to: "x", fromPort: "true" },
+        { from: "x", to: "other" },
+        { from: "b", to: "y", fromPort: "false" },
+      ],
+    );
+    expect(
+      validateWorkflowGraph(def).some((issue) =>
+        issue.includes('Branch "b" condition references block "other" which does not run before it'),
+      ),
+    ).toBe(true);
+  });
+
+  it("rule 12: allows a condition referencing a cycle-member ancestor", () => {
+    const def = graph(
+      [
+        node("t", "trigger_ticket_ai"),
+        node("p", "planning_agent"),
+        node("checks", "run_pre_pr_checks"),
+        node("b", "branch", { condition: "steps.fix.output.ok" }),
+        node("open", "open_pr"),
+        node("lp", "loop", { maxAttempts: 3, onExhaust: "fail" }),
+        node("fix", "review_agent"),
+      ],
+      [
+        { from: "t", to: "p" },
+        { from: "p", to: "checks" },
+        { from: "checks", to: "b" },
+        { from: "b", to: "open", fromPort: "true" },
+        { from: "b", to: "lp", fromPort: "false" },
+        { from: "lp", to: "fix", fromPort: "continue" },
+        { from: "fix", to: "checks" },
+      ],
+    );
+    expect(validateWorkflowGraph(def)).toEqual([]);
   });
 });

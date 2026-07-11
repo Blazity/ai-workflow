@@ -4,6 +4,8 @@ import type {
   WorkflowDefinition,
   WorkflowDefinitionNode,
 } from "@shared/contracts";
+import { BLOCK_TYPE_SPECS, isTriggerBlockType, wirablePorts } from "@shared/contracts";
+import { parseCondition } from "@shared/conditions";
 
 const nodeId = z.string().trim().min(1);
 const coordinate = z.number().finite();
@@ -69,6 +71,40 @@ const sendSlackMessageNode = z
   })
   .strict();
 
+const branchNode = z
+  .object({
+    ...baseNodeFields,
+    type: z.literal("branch"),
+    params: z.object({ condition: z.string().trim().min(1).max(1000) }).strict(),
+  })
+  .strict();
+
+const loopNode = z
+  .object({
+    ...baseNodeFields,
+    type: z.literal("loop"),
+    params: z
+      .object({
+        maxAttempts: z.number().int().min(1).max(20),
+        onExhaust: z.enum(["fail", "human", "continue"]),
+      })
+      .strict(),
+  })
+  .strict();
+
+const terminateNode = z
+  .object({
+    ...baseNodeFields,
+    type: z.literal("terminate"),
+    params: z
+      .object({
+        terminalStatus: z.enum(["waiting_for_human", "failed", "skipped", "done"]),
+        postComment: z.string().trim().min(1).max(2000).optional(),
+      })
+      .strict(),
+  })
+  .strict();
+
 const nodeSchema = z.discriminatedUnion("type", [
   triggerNode,
   planningNode,
@@ -78,10 +114,17 @@ const nodeSchema = z.discriminatedUnion("type", [
   openPrNode,
   updateTicketStatusNode,
   sendSlackMessageNode,
+  branchNode,
+  loopNode,
+  terminateNode,
 ]);
 
 const edgeSchema = z
-  .object({ from: z.string().trim().min(1), to: z.string().trim().min(1) })
+  .object({
+    from: z.string().trim().min(1),
+    to: z.string().trim().min(1),
+    fromPort: z.string().trim().min(1).optional(),
+  })
   .strict();
 
 export const workflowDefinitionSchema = z
@@ -101,12 +144,120 @@ export function describeWorkflowDefinitionIssues(error: z.ZodError): string {
     .join("; ");
 }
 
-const REQUIRED_TYPES: WorkflowBlockType[] = [
-  "planning_agent",
-  "implementation_agent",
-  "open_pr",
-  "update_ticket_status",
-];
+interface GraphEdge {
+  from: string;
+  to: string;
+  port: string;
+  fromType: WorkflowBlockType;
+}
+
+function findCycle(adjacency: Map<string, string[]>, nodeIds: string[]): string[] | null {
+  const WHITE = 0;
+  const GRAY = 1;
+  const BLACK = 2;
+  const color = new Map<string, number>();
+  for (const id of nodeIds) color.set(id, WHITE);
+
+  for (const start of nodeIds) {
+    if (color.get(start) !== WHITE) continue;
+    const stack: { node: string; idx: number }[] = [{ node: start, idx: 0 }];
+    color.set(start, GRAY);
+    while (stack.length > 0) {
+      const frame = stack[stack.length - 1];
+      const neighbors = adjacency.get(frame.node) ?? [];
+      if (frame.idx < neighbors.length) {
+        const next = neighbors[frame.idx];
+        frame.idx += 1;
+        const shade = color.get(next);
+        if (shade === WHITE) {
+          color.set(next, GRAY);
+          stack.push({ node: next, idx: 0 });
+        } else if (shade === GRAY) {
+          const startIdx = stack.findIndex((entry) => entry.node === next);
+          const path = stack.slice(startIdx).map((entry) => entry.node);
+          path.push(next);
+          return path;
+        }
+      } else {
+        color.set(frame.node, BLACK);
+        stack.pop();
+      }
+    }
+  }
+  return null;
+}
+
+function stronglyConnectedComponents(
+  adjacency: Map<string, string[]>,
+  nodeIds: string[],
+): string[][] {
+  let counter = 0;
+  const indices = new Map<string, number>();
+  const lowlink = new Map<string, number>();
+  const onStack = new Set<string>();
+  const componentStack: string[] = [];
+  const result: string[][] = [];
+
+  for (const start of nodeIds) {
+    if (indices.has(start)) continue;
+    const work: { node: string; idx: number }[] = [{ node: start, idx: 0 }];
+    while (work.length > 0) {
+      const frame = work[work.length - 1];
+      const node = frame.node;
+      if (frame.idx === 0) {
+        indices.set(node, counter);
+        lowlink.set(node, counter);
+        counter += 1;
+        componentStack.push(node);
+        onStack.add(node);
+      }
+      const neighbors = adjacency.get(node) ?? [];
+      if (frame.idx < neighbors.length) {
+        const next = neighbors[frame.idx];
+        frame.idx += 1;
+        if (!indices.has(next)) {
+          work.push({ node: next, idx: 0 });
+        } else if (onStack.has(next)) {
+          lowlink.set(node, Math.min(lowlink.get(node)!, indices.get(next)!));
+        }
+      } else {
+        if (lowlink.get(node) === indices.get(node)) {
+          const component: string[] = [];
+          for (;;) {
+            const popped = componentStack.pop()!;
+            onStack.delete(popped);
+            component.push(popped);
+            if (popped === node) break;
+          }
+          result.push(component);
+        }
+        work.pop();
+        if (work.length > 0) {
+          const parent = work[work.length - 1].node;
+          lowlink.set(parent, Math.min(lowlink.get(parent)!, lowlink.get(node)!));
+        }
+      }
+    }
+  }
+  return result;
+}
+
+function reachableFrom(seeds: string[], adjacency: Map<string, string[]>): Set<string> {
+  const seen = new Set<string>(seeds);
+  const queue = [...seeds];
+  let head = 0;
+  while (head < queue.length) {
+    const current = queue[head];
+    head += 1;
+    for (const next of adjacency.get(current) ?? []) {
+      if (!seen.has(next)) {
+        seen.add(next);
+        queue.push(next);
+      }
+    }
+  }
+  return seen;
+}
 
 export function validateWorkflowGraph(def: WorkflowDefinition): string[] {
   const issues: string[] = [];
@@ -120,112 +271,181 @@ export function validateWorkflowGraph(def: WorkflowDefinition): string[] {
     nodeById.set(node.id, node);
   }
 
-  const triggers = nodes.filter((node) => node.type === "trigger_ticket_ai");
-  if (triggers.length === 0) {
-    issues.push("Workflow must contain exactly one trigger block (trigger_ticket_ai).");
-  } else if (triggers.length > 1) {
-    issues.push(`Workflow must contain exactly one trigger block, found ${triggers.length}.`);
+  const nodeIds = nodes.map((node) => node.id);
+  const triggerNodes = nodes.filter((node) => isTriggerBlockType(node.type));
+
+  if (triggerNodes.length === 0) {
+    issues.push("Workflow must contain at least one trigger block.");
   }
-  const trigger = triggers.length === 1 ? triggers[0] : undefined;
 
-  const outDegree = new Map<string, number>();
-  const inDegree = new Map<string, number>();
-  const seenEdges = new Set<string>();
-  const nextOf = new Map<string, string>();
+  const triggerTypeCounts = new Map<WorkflowBlockType, number>();
+  for (const node of triggerNodes) {
+    triggerTypeCounts.set(node.type, (triggerTypeCounts.get(node.type) ?? 0) + 1);
+  }
+  for (const [type, count] of triggerTypeCounts) {
+    if (count > 1) {
+      issues.push(`Workflow contains more than one ${type} trigger block.`);
+    }
+  }
 
+  const graphEdges: GraphEdge[] = [];
   for (const edge of edges) {
-    if (!nodeById.has(edge.from)) {
+    const fromNode = nodeById.get(edge.from);
+    const toNode = nodeById.get(edge.to);
+    if (!fromNode) {
       issues.push(`Connection references an unknown source block "${edge.from}".`);
     }
-    if (!nodeById.has(edge.to)) {
+    if (!toNode) {
       issues.push(`Connection references an unknown target block "${edge.to}".`);
     }
     if (edge.from === edge.to) {
       issues.push(`Block "${edge.from}" cannot connect to itself.`);
     }
-    const key = `${edge.from}->${edge.to}`;
-    if (seenEdges.has(key)) {
-      issues.push(`Duplicate connection from "${edge.from}" to "${edge.to}".`);
-    }
-    seenEdges.add(key);
+    if (!fromNode || !toNode || edge.from === edge.to) continue;
 
-    outDegree.set(edge.from, (outDegree.get(edge.from) ?? 0) + 1);
-    inDegree.set(edge.to, (inDegree.get(edge.to) ?? 0) + 1);
-    if (!nextOf.has(edge.from)) nextOf.set(edge.from, edge.to);
+    const spec = BLOCK_TYPE_SPECS[fromNode.type];
+    if (spec.ports.length === 0) {
+      issues.push(`Terminate block "${edge.from}" cannot have outgoing connections.`);
+      continue;
+    }
+    const resolvedPort = edge.fromPort ?? spec.ports[0];
+    if (!wirablePorts(fromNode.type).includes(resolvedPort)) {
+      issues.push(
+        `Connection from "${edge.from}" uses unknown port "${resolvedPort}" of block type ${fromNode.type}.`,
+      );
+    } else if (edge.fromPort === undefined && spec.ports.length > 1) {
+      const label = fromNode.type === "loop" ? "loop" : "branch";
+      issues.push(
+        `Connection from ${label} "${edge.from}" must specify a port (${spec.ports.join("/")}).`,
+      );
+    }
+    graphEdges.push({ from: edge.from, to: edge.to, port: resolvedPort, fromType: fromNode.type });
   }
 
-  if (trigger && (inDegree.get(trigger.id) ?? 0) > 0) {
-    issues.push(`The trigger block "${trigger.id}" must not have incoming connections.`);
+  const exactSeen = new Set<string>();
+  const portTargets = new Map<string, Set<string>>();
+  for (const edge of graphEdges) {
+    const portKey = `${edge.from} ${edge.port}`;
+    const exactKey = `${portKey} ${edge.to}`;
+    if (exactSeen.has(exactKey)) {
+      issues.push(`Duplicate connection from "${edge.from}" to "${edge.to}".`);
+      continue;
+    }
+    exactSeen.add(exactKey);
+    const targets = portTargets.get(portKey);
+    if (targets) {
+      issues.push(`Block "${edge.from}" has multiple connections from port "${edge.port}".`);
+      targets.add(edge.to);
+    } else {
+      portTargets.set(portKey, new Set([edge.to]));
+    }
+  }
+
+  const incoming = new Map<string, number>();
+  for (const edge of graphEdges) {
+    incoming.set(edge.to, (incoming.get(edge.to) ?? 0) + 1);
+  }
+  for (const node of triggerNodes) {
+    if ((incoming.get(node.id) ?? 0) > 0) {
+      issues.push(`The trigger block "${node.id}" must not have incoming connections.`);
+    }
+  }
+
+  const forward = new Map<string, string[]>();
+  const reverse = new Map<string, string[]>();
+  const forwardNoLoopBack = new Map<string, string[]>();
+  const portsOut = new Map<string, Set<string>>();
+  for (const id of nodeIds) {
+    forward.set(id, []);
+    reverse.set(id, []);
+    forwardNoLoopBack.set(id, []);
+  }
+  for (const edge of graphEdges) {
+    forward.get(edge.from)!.push(edge.to);
+    reverse.get(edge.to)!.push(edge.from);
+    if (!(edge.fromType === "loop" && edge.port === "continue")) {
+      forwardNoLoopBack.get(edge.from)!.push(edge.to);
+    }
+    const used = portsOut.get(edge.from) ?? new Set<string>();
+    used.add(edge.port);
+    portsOut.set(edge.from, used);
+  }
+
+  const reachable = reachableFrom(
+    triggerNodes.map((node) => node.id),
+    forward,
+  );
+  for (const node of nodes) {
+    if (!isTriggerBlockType(node.type) && !reachable.has(node.id)) {
+      issues.push(`Block "${node.id}" is not reachable from a trigger.`);
+    }
   }
 
   for (const node of nodes) {
-    if ((outDegree.get(node.id) ?? 0) > 1) {
-      issues.push(`Block "${node.id}" has more than one outgoing connection.`);
-    }
-    if ((inDegree.get(node.id) ?? 0) > 1) {
-      issues.push(`Block "${node.id}" has more than one incoming connection.`);
-    }
-  }
-
-  const order = new Map<string, number>();
-  if (trigger) {
-    let current: string | undefined = trigger.id;
-    let index = 0;
-    while (current !== undefined && nodeById.has(current) && !order.has(current)) {
-      order.set(current, index++);
-      current = nextOf.get(current);
-    }
-    for (const node of nodes) {
-      if (!order.has(node.id)) {
-        issues.push(`Block "${node.id}" is not reachable from the trigger.`);
+    if (node.type === "branch") {
+      const used = portsOut.get(node.id) ?? new Set<string>();
+      if (!used.has("true")) {
+        issues.push(`Branch "${node.id}" must have its "true" port connected.`);
+      }
+      if (!used.has("false")) {
+        issues.push(`Branch "${node.id}" must have its "false" port connected.`);
+      }
+    } else if (node.type === "loop") {
+      const used = portsOut.get(node.id) ?? new Set<string>();
+      if (!used.has("continue")) {
+        issues.push(`Loop "${node.id}" must have its "continue" port connected.`);
+      }
+      if (node.params.onExhaust === "continue" && !used.has("exhausted")) {
+        issues.push(
+          `Loop "${node.id}" with onExhaust "continue" must have its "exhausted" port connected.`,
+        );
+      }
+      const continueTargets = graphEdges
+        .filter((edge) => edge.from === node.id && edge.port === "continue")
+        .map((edge) => edge.to);
+      if (continueTargets.length > 0) {
+        const downstream = reachableFrom(continueTargets, forward);
+        if (!downstream.has(node.id)) {
+          issues.push(`Loop "${node.id}"'s continue port must lead back to it.`);
+        }
       }
     }
   }
 
-  const typeCounts = new Map<WorkflowBlockType, number>();
-  for (const node of nodes) typeCounts.set(node.type, (typeCounts.get(node.type) ?? 0) + 1);
-  for (const [type, count] of typeCounts) {
-    if (type !== "trigger_ticket_ai" && count > 1) {
-      issues.push(`Workflow must contain at most one ${type} block.`);
+  const acyclicCycle = findCycle(forwardNoLoopBack, nodeIds);
+  if (acyclicCycle) {
+    const rendered = acyclicCycle.map((id) => `"${id}"`).join(" -> ");
+    issues.push(`Blocks ${rendered} form a cycle that does not pass through a Loop block.`);
+  }
+
+  for (const component of stronglyConnectedComponents(forward, nodeIds)) {
+    if (component.length <= 1) continue;
+    const loopCount = component.filter((id) => nodeById.get(id)?.type === "loop").length;
+    if (loopCount >= 2) {
+      const rendered = component.map((id) => `"${id}"`).join(", ");
+      issues.push(
+        `Blocks [${rendered}] form a cycle region with ${loopCount} Loop blocks; each cycle region must contain exactly one.`,
+      );
     }
   }
 
-  for (const type of REQUIRED_TYPES) {
-    if (!nodes.some((node) => node.type === type)) {
-      issues.push(`Workflow is missing a required ${type} block.`);
+  for (const node of nodes) {
+    if (node.type !== "branch") continue;
+    const condition = node.params.condition;
+    if (typeof condition !== "string") continue;
+    const parsed = parseCondition(condition);
+    if (!parsed.ok) {
+      issues.push(`Branch "${node.id}" has an invalid condition: ${parsed.error}.`);
+      continue;
     }
-  }
-
-  const positionOf = (type: WorkflowBlockType): number | undefined => {
-    const node = nodes.find((candidate) => candidate.type === type);
-    return node ? order.get(node.id) : undefined;
-  };
-
-  const planningPos = positionOf("planning_agent");
-  const implementationPos = positionOf("implementation_agent");
-  const reviewPos = positionOf("review_agent");
-  const checksPos = positionOf("run_pre_pr_checks");
-  const openPrPos = positionOf("open_pr");
-  const slackPos = positionOf("send_slack_message");
-  const statusPos = positionOf("update_ticket_status");
-
-  if (planningPos !== undefined && implementationPos !== undefined && planningPos >= implementationPos) {
-    issues.push("The planning_agent block must come before the implementation_agent block.");
-  }
-  if (reviewPos !== undefined && implementationPos !== undefined && reviewPos <= implementationPos) {
-    issues.push("The review_agent block must come after the implementation_agent block.");
-  }
-  if (checksPos !== undefined && implementationPos !== undefined && checksPos <= implementationPos) {
-    issues.push("The run_pre_pr_checks block must come after the implementation_agent block.");
-  }
-  if (openPrPos !== undefined && implementationPos !== undefined && openPrPos <= implementationPos) {
-    issues.push("The open_pr block must come after the implementation_agent block.");
-  }
-  if (slackPos !== undefined && openPrPos !== undefined && slackPos <= openPrPos) {
-    issues.push("The send_slack_message block must come after the open_pr block.");
-  }
-  if (statusPos !== undefined && openPrPos !== undefined && statusPos <= openPrPos) {
-    issues.push("The update_ticket_status block must come after the open_pr block.");
+    const ancestors = reachableFrom(reverse.get(node.id) ?? [], reverse);
+    for (const ref of parsed.refs) {
+      if (!nodeById.has(ref) || !ancestors.has(ref)) {
+        issues.push(
+          `Branch "${node.id}" condition references block "${ref}" which does not run before it.`,
+        );
+      }
+    }
   }
 
   return issues;

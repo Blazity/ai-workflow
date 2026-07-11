@@ -106,12 +106,15 @@ describe("loadWorkflowDefinition", () => {
   });
 
   it("falls back to the default and logs an error when the graph is invalid", async () => {
-    const triggerOnly: WorkflowDefinition = {
+    const invalidGraph: WorkflowDefinition = {
       schemaVersion: 1,
-      nodes: [{ id: "t", type: "trigger_ticket_ai", x: 0, y: 0, params: {} }],
+      nodes: [
+        { id: "t", type: "trigger_ticket_ai", x: 0, y: 0, params: {} },
+        { id: "p", type: "planning_agent", x: 0, y: 0, params: {} },
+      ],
       edges: [],
     };
-    mockGetCurrent.mockResolvedValue(row(triggerOnly, 12));
+    mockGetCurrent.mockResolvedValue(row(invalidGraph, 12));
     const plan = await loadWorkflowDefinition();
     expect(plan.version).toBeNull();
     expect(loggerError).toHaveBeenCalledTimes(1);
