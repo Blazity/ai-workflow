@@ -1,32 +1,16 @@
 "use client";
 
 import React, { useState, useEffect, useRef, useMemo, useCallback } from "react";
-import Link from "next/link";
-import type { FlowNodeDef, FlowEdgeDef, NodeRunStatus, RunStatusMap, WorkflowBlockType } from "@/lib/flows";
+import type { FlowNodeDef, FlowEdgeDef, NodeRunStatus, RunStatusMap } from "@/lib/flows";
 import type { WorkflowEditorOptions, WorkflowParamValue } from "@shared/contracts";
 import { useIsMobileViewport } from "@/lib/use-media-query";
 import { MobileSheet } from "@/components/cockpit/mobile/mobile-sheet";
-import { Listbox } from "@/components/cockpit/listbox";
-
-const NODE_CATEGORIES: Record<
-  WorkflowBlockType,
-  { color: string; soft: string; label: string; glyph: string; group: string }
-> = {
-  trigger_ticket_ai:    { color: "#D14343", soft: "#FBECEC", label: "Trigger",              glyph: "▶", group: "trigger" },
-  planning_agent:       { color: "#7C3AED", soft: "#F2EBFD", label: "Planning agent",       glyph: "✦", group: "agents" },
-  implementation_agent: { color: "#7C3AED", soft: "#F2EBFD", label: "Implementation agent", glyph: "⌨", group: "agents" },
-  review_agent:         { color: "#7C3AED", soft: "#F2EBFD", label: "Review agent",         glyph: "☰", group: "agents" },
-  run_pre_pr_checks:    { color: "#64748B", soft: "#EEF1F5", label: "Pre-PR checks",        glyph: "✓", group: "utility" },
-  send_slack_message:   { color: "#64748B", soft: "#EEF1F5", label: "Slack message",        glyph: "✉", group: "utility" },
-  open_pr:              { color: "#3C43E7", soft: "#ECECFD", label: "Open PR",              glyph: "⇪", group: "vcs" },
-  update_ticket_status: { color: "#2563EB", soft: "#E9EFFD", label: "Ticket status",        glyph: "▤", group: "ticket" },
-  branch:               { color: "#35823f", soft: "#E9F3EA", label: "Branch",               glyph: "⋔", group: "control" },
-  loop:                 { color: "#35823f", soft: "#E9F3EA", label: "Loop",                 glyph: "↻", group: "control" },
-  terminate:            { color: "#35823f", soft: "#E9F3EA", label: "Terminate",            glyph: "■", group: "control" },
-};
-
-const NODE_W = 168;
-const NODE_H = 84;
+import { NODE_CATEGORIES, buildPaletteItems, nodeSummary } from "./blocks";
+import type { PaletteItem } from "./blocks";
+import { NODE_W, NODE_H, portPos, bezier } from "./ports";
+import type { Point } from "./ports";
+import { NodePalette, MobilePaletteList } from "./palette";
+import { ConfigFields } from "./config-fields";
 
 const RUN_STATUS_COLORS: Record<NodeRunStatus, string> = {
   pending: "#9EA3AA",
@@ -35,48 +19,6 @@ const RUN_STATUS_COLORS: Record<NodeRunStatus, string> = {
   warn: "#FFC800",
   fail: "#D14343",
 };
-
-interface Point { x: number; y: number; }
-
-function portPos(node: FlowNodeDef, kind: "in" | "out"): Point {
-  if (kind === "in") return { x: node.x, y: node.y + NODE_H / 2 };
-  return { x: node.x + NODE_W, y: node.y + NODE_H / 2 };
-}
-
-function bezier(p1: Point, p2: Point): string {
-  const dx = Math.max(40, Math.abs(p2.x - p1.x) * 0.45);
-  return `M ${p1.x} ${p1.y} C ${p1.x + dx} ${p1.y}, ${p2.x - dx} ${p2.y}, ${p2.x} ${p2.y}`;
-}
-
-function nodeSummary(node: FlowNodeDef, options: WorkflowEditorOptions): string | null {
-  switch (node.type) {
-    case "planning_agent":
-    case "implementation_agent":
-    case "review_agent": {
-      const model = node.params.model;
-      const modelText = typeof model === "string" && model !== "" ? model : null;
-      if (modelText === null) return null;
-      const provider = node.params.provider;
-      return provider === "claude" || provider === "codex"
-        ? `${provider} · ${modelText}`
-        : modelText;
-    }
-    case "update_ticket_status": {
-      const target = node.params.target;
-      return options.ticketStatusTargets.find((t) => t.value === target)?.label ?? null;
-    }
-    case "send_slack_message": {
-      const message = node.params.message;
-      return typeof message === "string" && message !== "" ? message : null;
-    }
-    case "run_pre_pr_checks": {
-      const cycles = node.params.maxFixCycles;
-      return typeof cycles === "number" ? `${cycles} fix cycles` : null;
-    }
-    default:
-      return null;
-  }
-}
 
 const FlowNode = React.memo(function FlowNode({
   node,
@@ -177,328 +119,6 @@ const FlowNode = React.memo(function FlowNode({
     </div>
   );
 });
-
-interface PaletteItem {
-  type: WorkflowBlockType;
-  name: string;
-  params: Record<string, WorkflowParamValue>;
-}
-
-function buildPaletteItems(defaultModel: string): PaletteItem[] {
-  return [
-    { type: "planning_agent", name: "Planning agent", params: { model: defaultModel } },
-    { type: "implementation_agent", name: "Implementation agent", params: { model: defaultModel } },
-    { type: "review_agent", name: "Review agent", params: { model: defaultModel } },
-    { type: "run_pre_pr_checks", name: "Run pre-PR checks", params: { maxFixCycles: 3 } },
-    { type: "open_pr", name: "Open pull request", params: {} },
-    { type: "update_ticket_status", name: "Update ticket status", params: { target: "ai_review" } },
-    { type: "send_slack_message", name: "Send Slack message", params: { message: "" } },
-  ];
-}
-
-function NodePalette({ items, onAdd }: { items: PaletteItem[]; onAdd: (item: PaletteItem) => void }) {
-  return (
-    <aside className="w-52 flex-[0_0_208px] bg-panel border-r border-neutral-200 flex flex-col overflow-hidden">
-      <div className="pt-[14px] px-[14px] pb-[10px] border-b border-neutral-200 flex flex-col gap-1">
-        <div className="font-mono text-[9px] text-neutral-500 tracking-[0.06em] uppercase">Add step</div>
-        <div className="font-mono text-[9px] text-neutral-500 tracking-[0.04em]">Drag onto canvas, or click to add</div>
-      </div>
-      <div className="flex-1 overflow-auto py-2 flex flex-col">
-        {items.map((it) => {
-          const cat = NODE_CATEGORIES[it.type];
-          return (
-            <button
-              key={it.type}
-              draggable
-              onDragStart={(e) => {
-                e.dataTransfer.setData("application/x-flow-node", JSON.stringify(it));
-                e.dataTransfer.effectAllowed = "copy";
-              }}
-              onClick={() => onAdd(it)}
-              className="appearance-none text-left mx-2 my-px py-2 px-2 border border-neutral-200 rounded-[3px] flex items-center gap-2 cursor-grab active:cursor-grabbing bg-panel transition-colors duration-[120ms]"
-              onMouseEnter={(e) => (e.currentTarget.style.background = cat.soft)}
-              onMouseLeave={(e) => (e.currentTarget.style.background = "#fff")}
-            >
-              <span
-                className="w-[18px] h-[18px] rounded-xs text-white inline-flex items-center justify-center font-mono text-[11px] font-bold flex-[0_0_18px]"
-                style={{ background: cat.color }}
-              >{cat.glyph}</span>
-              <span className="font-body text-xs text-coal overflow-hidden text-ellipsis whitespace-nowrap">{it.name}</span>
-              <span className="ml-auto font-mono text-[12px] text-neutral-500 leading-none">+</span>
-            </button>
-          );
-        })}
-      </div>
-    </aside>
-  );
-}
-
-const inputCls = "h-[26px] px-2 bg-off-white border border-neutral-200 rounded-xs font-mono text-xs text-coal outline-none disabled:opacity-60";
-
-function ConfigField({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div className="flex flex-col gap-1 py-2.5 px-[14px] border-b border-neutral-200">
-      <label className="font-mono text-[9px] text-neutral-700 tracking-[0.06em] uppercase">{label}</label>
-      {children}
-    </div>
-  );
-}
-
-function ConfigNote({ children }: { children: React.ReactNode }) {
-  return <div className="py-2.5 px-[14px] border-b border-neutral-200 font-body text-xs leading-[1.5] text-neutral-700">{children}</div>;
-}
-
-const CUSTOM_MODEL = "__custom__";
-
-function ProviderField({
-  value,
-  options,
-  disabled,
-  onChange,
-}: {
-  value: string;
-  options: WorkflowEditorOptions;
-  disabled: boolean;
-  onChange: (v: string) => void;
-}) {
-  return (
-    <Listbox
-      options={[
-        { value: "", label: `Default (${options.agentKind})` },
-        { value: "claude", label: "Claude Code" },
-        { value: "codex", label: "OpenAI Codex" },
-      ]}
-      value={value}
-      disabled={disabled}
-      ariaLabel="Provider"
-      onChange={onChange}
-    />
-  );
-}
-
-function ModelField({
-  value,
-  provider,
-  options,
-  disabled,
-  onChange,
-}: {
-  value: string;
-  provider: string;
-  options: WorkflowEditorOptions;
-  disabled: boolean;
-  onChange: (v: string) => void;
-}) {
-  const effectiveKind = provider === "claude" || provider === "codex" ? provider : options.agentKind;
-  const defaultModel = options.defaultModels[effectiveKind];
-  const models = options.models[effectiveKind];
-  const list = useMemo(
-    () => [defaultModel, ...models.filter((m) => m !== defaultModel)],
-    [models, defaultModel],
-  );
-  const [customPicked, setCustomPicked] = useState(false);
-  const custom = customPicked || (value !== "" && !list.includes(value));
-
-  return (
-    <div className="flex flex-col gap-1.5">
-      <Listbox
-        options={[...list.map((m) => ({ value: m, label: m })), { value: CUSTOM_MODEL, label: "Custom…" }]}
-        value={custom ? CUSTOM_MODEL : value === "" ? defaultModel : value}
-        disabled={disabled}
-        ariaLabel="Model"
-        onChange={(v) => {
-          if (v === CUSTOM_MODEL) {
-            setCustomPicked(true);
-            return;
-          }
-          setCustomPicked(false);
-          onChange(v);
-        }}
-      />
-      {custom && (
-        <input
-          value={value}
-          disabled={disabled}
-          onChange={(e) => onChange(e.target.value)}
-          className={inputCls}
-        />
-      )}
-    </div>
-  );
-}
-
-function ConfigFields({
-  node,
-  options,
-  canEdit,
-  onChange,
-}: {
-  node: FlowNodeDef;
-  options: WorkflowEditorOptions;
-  canEdit: boolean;
-  onChange: (path: string, value: WorkflowParamValue | undefined) => void;
-}) {
-  switch (node.type) {
-    case "trigger_ticket_ai":
-      return <ConfigNote>Fires when a Jira ticket enters the AI column.</ConfigNote>;
-    case "planning_agent":
-    case "implementation_agent":
-    case "review_agent": {
-      const provider = typeof node.params.provider === "string" ? node.params.provider : "";
-      return (
-        <>
-          <ConfigField label="Provider">
-            <ProviderField
-              value={provider}
-              options={options}
-              disabled={!canEdit}
-              onChange={(v) => {
-                onChange("params.provider", v);
-                if (v !== provider) onChange("params.model", "");
-              }}
-            />
-          </ConfigField>
-          <ConfigField label="Model">
-            <ModelField
-              key={`${node.id}:${provider}`}
-              value={typeof node.params.model === "string" ? node.params.model : ""}
-              provider={provider}
-              options={options}
-              disabled={!canEdit}
-              onChange={(v) => onChange("params.model", v)}
-            />
-          </ConfigField>
-        </>
-      );
-    }
-    case "run_pre_pr_checks":
-      return (
-        <>
-          <ConfigField label="Max fix cycles">
-            <input
-              type="number"
-              min={0}
-              max={5}
-              value={typeof node.params.maxFixCycles === "number" ? node.params.maxFixCycles : ""}
-              disabled={!canEdit}
-              onChange={(e) => {
-                if (e.target.value === "") {
-                  onChange("params.maxFixCycles", undefined);
-                  return;
-                }
-                const n = Math.round(Number(e.target.value));
-                if (!Number.isFinite(n)) return;
-                onChange("params.maxFixCycles", Math.max(0, Math.min(5, n)));
-              }}
-              className={inputCls}
-            />
-          </ConfigField>
-          <ConfigNote>
-            Commands are configured in <Link href="/checks" className="text-mariner underline">Pre-PR checks</Link>.
-          </ConfigNote>
-        </>
-      );
-    case "open_pr":
-      return <ConfigNote>Opens a pull request with the agent&apos;s changes on the ticket branch.</ConfigNote>;
-    case "update_ticket_status":
-      return (
-        <ConfigField label="Target status">
-          <Listbox
-            options={options.ticketStatusTargets.map((t) => ({ value: t.value, label: t.label }))}
-            value={typeof node.params.target === "string" ? node.params.target : ""}
-            disabled={!canEdit}
-            ariaLabel="Target status"
-            onChange={(v) => onChange("params.target", v)}
-          />
-        </ConfigField>
-      );
-    case "send_slack_message":
-      return (
-        <ConfigField label="Message">
-          <input
-            value={typeof node.params.message === "string" ? node.params.message : ""}
-            disabled={!canEdit}
-            onChange={(e) => onChange("params.message", e.target.value)}
-            className={inputCls}
-          />
-        </ConfigField>
-      );
-  }
-}
-
-function NodeConfig({
-  node,
-  options,
-  canEdit,
-  onChange,
-  onDelete,
-  onClose,
-  embedded,
-}: {
-  node: FlowNodeDef;
-  options: WorkflowEditorOptions;
-  canEdit: boolean;
-  onChange: (path: string, value: WorkflowParamValue | undefined) => void;
-  onDelete: () => void;
-  onClose: () => void;
-  embedded?: boolean;
-}) {
-  const cat = NODE_CATEGORIES[node.type];
-  const locked = node.type === "trigger_ticket_ai";
-  const inner = (
-    <>
-      <div className="pt-[14px] px-[18px] pb-[14px] border-b border-neutral-200 flex flex-col gap-1.5">
-        <div className="flex items-center gap-2">
-          <span
-            className="w-[22px] h-[22px] rounded-[3px] text-white inline-flex items-center justify-center font-mono text-[13px] font-bold"
-            style={{ background: cat.color }}
-          >{cat.glyph}</span>
-          <span
-            className="font-mono text-[9px] tracking-[0.06em] uppercase font-semibold"
-            style={{ color: cat.color }}
-          >{cat.label}</span>
-          <span className="ml-auto font-mono text-[10px] text-neutral-500">{node.id}</span>
-          <button
-            onClick={onClose}
-            title="Close inspector"
-            aria-label="Close inspector"
-            className="appearance-none border-none bg-transparent cursor-pointer w-[22px] h-[22px] -mr-1 rounded-xs inline-flex items-center justify-center font-mono text-sm text-neutral-500 hover:bg-app-bg hover:text-coal"
-          >×</button>
-        </div>
-        <input
-          value={node.name ?? ""}
-          disabled={!canEdit}
-          onChange={(e) => onChange("name", e.target.value)}
-          className="border-none outline-none p-0 bg-transparent font-display font-medium text-[17px] leading-[1.3] text-coal disabled:opacity-100"
-        />
-      </div>
-
-      <div className="flex-1 overflow-auto">
-        <ConfigFields node={node} options={options} canEdit={canEdit} onChange={onChange} />
-      </div>
-
-      {(locked || canEdit) && (
-        <div className="border-t border-neutral-200 py-3 px-[14px] flex gap-2 items-center">
-          {locked ? (
-            <span className="inline-flex items-center gap-1.5 font-mono text-[10px] text-neutral-700 tracking-[0.04em] uppercase">
-              <span aria-hidden>🔒</span> Anchor step · can&apos;t be removed
-            </span>
-          ) : (
-            <button
-              onClick={onDelete}
-              className="appearance-none cursor-pointer border border-neutral-200 bg-panel py-1.5 px-3 rounded-[3px] font-mono text-[11px] text-[#A2351C] tracking-[0.04em] uppercase"
-            >Delete</button>
-          )}
-        </div>
-      )}
-    </>
-  );
-  return embedded ? (
-    <div className="flex flex-col">{inner}</div>
-  ) : (
-    <aside className="w-80 flex-[0_0_320px] bg-panel border-l border-neutral-200 flex flex-col overflow-hidden">{inner}</aside>
-  );
-}
 
 interface DragState {
   kind: "node" | "pan";
@@ -1093,27 +713,84 @@ export function FlowEditor({
         )}
         {isMobile && canEdit && (
           <MobileSheet open={paletteOpen} onClose={() => setPaletteOpen(false)} title="Add step" heightClass="max-h-[60vh]">
-            <div className="flex flex-col py-1">
-              {paletteItems.map((it) => {
-                const cat = NODE_CATEGORIES[it.type];
-                return (
-                  <button
-                    key={it.type}
-                    onClick={() => { addNode(it); setPaletteOpen(false); }}
-                    className="appearance-none text-left border-none cursor-pointer flex items-center gap-3 px-[18px] py-3.5 bg-transparent active:bg-app-bg"
-                  >
-                    <span
-                      className="w-[22px] h-[22px] rounded-xs text-white inline-flex items-center justify-center font-mono text-[12px] font-bold flex-[0_0_22px]"
-                      style={{ background: cat.color }}
-                    >{cat.glyph}</span>
-                    <span className="font-body text-[15px] text-coal">{it.name}</span>
-                  </button>
-                );
-              })}
-            </div>
+            <MobilePaletteList items={paletteItems} onAdd={(it) => { addNode(it); setPaletteOpen(false); }} />
           </MobileSheet>
         )}
       </div>
     </div>
+  );
+}
+
+function NodeConfig({
+  node,
+  options,
+  canEdit,
+  onChange,
+  onDelete,
+  onClose,
+  embedded,
+}: {
+  node: FlowNodeDef;
+  options: WorkflowEditorOptions;
+  canEdit: boolean;
+  onChange: (path: string, value: WorkflowParamValue | undefined) => void;
+  onDelete: () => void;
+  onClose: () => void;
+  embedded?: boolean;
+}) {
+  const cat = NODE_CATEGORIES[node.type];
+  const locked = node.type === "trigger_ticket_ai";
+  const inner = (
+    <>
+      <div className="pt-[14px] px-[18px] pb-[14px] border-b border-neutral-200 flex flex-col gap-1.5">
+        <div className="flex items-center gap-2">
+          <span
+            className="w-[22px] h-[22px] rounded-[3px] text-white inline-flex items-center justify-center font-mono text-[13px] font-bold"
+            style={{ background: cat.color }}
+          >{cat.glyph}</span>
+          <span
+            className="font-mono text-[9px] tracking-[0.06em] uppercase font-semibold"
+            style={{ color: cat.color }}
+          >{cat.label}</span>
+          <span className="ml-auto font-mono text-[10px] text-neutral-500">{node.id}</span>
+          <button
+            onClick={onClose}
+            title="Close inspector"
+            aria-label="Close inspector"
+            className="appearance-none border-none bg-transparent cursor-pointer w-[22px] h-[22px] -mr-1 rounded-xs inline-flex items-center justify-center font-mono text-sm text-neutral-500 hover:bg-app-bg hover:text-coal"
+          >×</button>
+        </div>
+        <input
+          value={node.name ?? ""}
+          disabled={!canEdit}
+          onChange={(e) => onChange("name", e.target.value)}
+          className="border-none outline-none p-0 bg-transparent font-display font-medium text-[17px] leading-[1.3] text-coal disabled:opacity-100"
+        />
+      </div>
+
+      <div className="flex-1 overflow-auto">
+        <ConfigFields node={node} options={options} canEdit={canEdit} onChange={onChange} />
+      </div>
+
+      {(locked || canEdit) && (
+        <div className="border-t border-neutral-200 py-3 px-[14px] flex gap-2 items-center">
+          {locked ? (
+            <span className="inline-flex items-center gap-1.5 font-mono text-[10px] text-neutral-700 tracking-[0.04em] uppercase">
+              <span aria-hidden>🔒</span> Anchor step · can&apos;t be removed
+            </span>
+          ) : (
+            <button
+              onClick={onDelete}
+              className="appearance-none cursor-pointer border border-neutral-200 bg-panel py-1.5 px-3 rounded-[3px] font-mono text-[11px] text-[#A2351C] tracking-[0.04em] uppercase"
+            >Delete</button>
+          )}
+        </div>
+      )}
+    </>
+  );
+  return embedded ? (
+    <div className="flex flex-col">{inner}</div>
+  ) : (
+    <aside className="w-80 flex-[0_0_320px] bg-panel border-l border-neutral-200 flex flex-col overflow-hidden">{inner}</aside>
   );
 }

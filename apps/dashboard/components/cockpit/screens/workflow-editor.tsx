@@ -8,7 +8,7 @@ import type {
   WorkflowDefinitionSaveResponse,
   WorkflowDefinitionVersion,
 } from "@shared/contracts";
-import { FlowEditor } from "@/components/cockpit/screens/flow-editor";
+import { FlowEditor } from "@/components/cockpit/flow-editor/flow-editor";
 import type { FlowEdgeDef, FlowNodeDef } from "@/lib/flows";
 import { readErrorMessage } from "@/lib/api/error-message";
 import { serializeWorkflowDefinition } from "@/lib/workflow-editor/serialize";
