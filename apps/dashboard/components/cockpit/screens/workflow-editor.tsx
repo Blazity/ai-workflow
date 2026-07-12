@@ -1,18 +1,27 @@
 "use client";
 
 import React, { useState } from "react";
-import type {
-  RunBlockStatusesResponse,
-  WorkflowDefinitionNode,
-  WorkflowDefinitionResponse,
-  WorkflowDefinitionSaveResponse,
-  WorkflowDefinitionVersion,
+import {
+  isTriggerBlockType,
+  type RunBlockStatusesResponse,
+  type WorkflowDefinition,
+  type WorkflowDefinitionDetailResponse,
+  type WorkflowDefinitionMeta,
+  type WorkflowDefinitionNode,
+  type WorkflowDefinitionSaveResponse,
+  type WorkflowDefinitionVersion,
+  type WorkflowEditorOptions,
 } from "@shared/contracts";
 import { FlowEditor } from "@/components/cockpit/flow-editor/flow-editor";
+import { Listbox } from "@/components/cockpit/listbox";
 import type { FlowEdgeDef, FlowNodeDef } from "@/lib/flows";
 import { readErrorMessage } from "@/lib/api/error-message";
 import { serializeWorkflowDefinition } from "@/lib/workflow-editor/serialize";
 import { deriveRunStatuses } from "@/lib/workflow-editor/run-statuses";
+import {
+  reduceDefinitionSwitch,
+  type DefinitionSwitchState,
+} from "@/lib/workflow-editor/definition-switch";
 
 function toViewNodes(nodes: WorkflowDefinitionNode[]): FlowNodeDef[] {
   return structuredClone(nodes).map((node) => ({
@@ -22,7 +31,7 @@ function toViewNodes(nodes: WorkflowDefinitionNode[]): FlowNodeDef[] {
 }
 
 function nodesValid(nodes: FlowNodeDef[]): boolean {
-  if (nodes.filter((n) => n.type === "trigger_ticket_ai").length !== 1) return false;
+  if (!nodes.some((n) => isTriggerBlockType(n.type))) return false;
   for (const node of nodes) {
     if (node.type === "update_ticket_status" && typeof node.params.target !== "string") return false;
     if (node.type === "run_pre_pr_checks") {
@@ -33,17 +42,28 @@ function nodesValid(nodes: FlowNodeDef[]): boolean {
   return true;
 }
 
+const headerButtonClass =
+  "appearance-none cursor-pointer border border-neutral-200 bg-panel text-coal py-1.5 px-3 rounded-[3px] font-mono text-[11px] tracking-[0.04em] uppercase hover:bg-app-bg";
+
 export function WorkflowEditorScreen({
-  initial,
+  definitions,
+  initialDetail,
+  defaultDefinition,
+  options,
   liveBlocks,
   canEdit,
 }: {
-  initial: WorkflowDefinitionResponse;
+  definitions: WorkflowDefinitionMeta[];
+  initialDetail: WorkflowDefinitionDetailResponse;
+  defaultDefinition: WorkflowDefinition;
+  options: WorkflowEditorOptions;
   liveBlocks: RunBlockStatusesResponse;
   canEdit: boolean;
 }) {
-  const seed = initial.current?.definition ?? initial.defaultDefinition;
-  const [versions, setVersions] = useState<WorkflowDefinitionVersion[]>(initial.versions);
+  const seed = initialDetail.current?.definition ?? defaultDefinition;
+  const [metas, setMetas] = useState<WorkflowDefinitionMeta[]>(definitions);
+  const [selectedId, setSelectedId] = useState(initialDetail.meta.id);
+  const [versions, setVersions] = useState<WorkflowDefinitionVersion[]>(initialDetail.versions);
   const [nodes, setNodes] = useState<FlowNodeDef[]>(() => toViewNodes(seed.nodes));
   const [edges, setEdges] = useState<FlowEdgeDef[]>(() => structuredClone(seed.edges));
   const [busy, setBusy] = useState<string | null>(null);
@@ -51,17 +71,27 @@ export function WorkflowEditorScreen({
   const [confirmRestore, setConfirmRestore] = useState<number | null>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [fitSignal, setFitSignal] = useState(0);
+  const [switchState, setSwitchState] = useState<DefinitionSwitchState>({ kind: "idle" });
+  const [defsOpen, setDefsOpen] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState<number | null>(null);
+  const [rowError, setRowError] = useState<{ id: number; message: string } | null>(null);
+  const [createError, setCreateError] = useState<string | null>(null);
+  const [newName, setNewName] = useState("");
+  const [newSource, setNewSource] = useState("default");
 
+  const selectedMeta = metas.find((m) => m.id === selectedId);
   const current = versions[0] ?? null;
-  const baseline = current?.definition ?? initial.defaultDefinition;
+  const baseline = current?.definition ?? defaultDefinition;
   const dirty =
     JSON.stringify(serializeWorkflowDefinition(nodes, edges)) !==
     JSON.stringify(serializeWorkflowDefinition(baseline.nodes, baseline.edges));
   const canSave = (dirty || current === null) && nodesValid(nodes);
 
-  const currentVersionNumber = current?.version ?? null;
   const run = liveBlocks.run;
-  const derived = deriveRunStatuses(run, currentVersionNumber);
+  const derived = deriveRunStatuses(run, {
+    definitionId: selectedId,
+    version: current?.version ?? null,
+  });
 
   let statusBar: React.ReactNode = null;
   if (derived && run) {
@@ -100,10 +130,11 @@ export function WorkflowEditorScreen({
     );
   }
 
-  function applyVersion(version: WorkflowDefinitionVersion, refit: boolean) {
-    setVersions((prev) => [version, ...prev]);
-    setNodes(toViewNodes(version.definition.nodes));
-    setEdges(structuredClone(version.definition.edges));
+  function applySave(res: WorkflowDefinitionSaveResponse, refit: boolean) {
+    setVersions((prev) => [res.version, ...prev]);
+    setNodes(toViewNodes(res.version.definition.nodes));
+    setEdges(structuredClone(res.version.definition.edges));
+    setMetas((prev) => prev.map((m) => (m.id === res.meta.id ? res.meta : m)));
     if (refit) setFitSignal((s) => s + 1);
   }
 
@@ -111,7 +142,7 @@ export function WorkflowEditorScreen({
     setBusy("save");
     setError(null);
     try {
-      const res = await fetch("/api/workflow-definition", {
+      const res = await fetch(`/api/workflow-definitions/${selectedId}`, {
         method: "PUT",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ definition: serializeWorkflowDefinition(nodes, edges) }),
@@ -120,7 +151,7 @@ export function WorkflowEditorScreen({
         setError(await readErrorMessage(res));
         return;
       }
-      applyVersion(((await res.json()) as WorkflowDefinitionSaveResponse).version, false);
+      applySave((await res.json()) as WorkflowDefinitionSaveResponse, false);
     } finally {
       setBusy(null);
     }
@@ -130,7 +161,7 @@ export function WorkflowEditorScreen({
     setBusy(`restore-${version}`);
     setError(null);
     try {
-      const res = await fetch("/api/workflow-definition/restore", {
+      const res = await fetch(`/api/workflow-definitions/${selectedId}/restore`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ version }),
@@ -139,12 +170,124 @@ export function WorkflowEditorScreen({
         setError(await readErrorMessage(res));
         return;
       }
-      applyVersion(((await res.json()) as WorkflowDefinitionSaveResponse).version, true);
+      applySave((await res.json()) as WorkflowDefinitionSaveResponse, true);
       setConfirmRestore(null);
     } finally {
       setBusy(null);
     }
   }
+
+  async function applySwitch(targetId: number) {
+    setBusy("switch");
+    setError(null);
+    try {
+      const res = await fetch(`/api/workflow-definitions/${targetId}`);
+      if (!res.ok) {
+        setError(await readErrorMessage(res));
+        return;
+      }
+      const detail = (await res.json()) as WorkflowDefinitionDetailResponse;
+      setSelectedId(detail.meta.id);
+      setMetas((prev) => prev.map((m) => (m.id === detail.meta.id ? detail.meta : m)));
+      setVersions(detail.versions);
+      const def = detail.current?.definition ?? defaultDefinition;
+      setNodes(toViewNodes(def.nodes));
+      setEdges(structuredClone(def.edges));
+      setConfirmRestore(null);
+      setFitSignal((s) => s + 1);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function requestSwitch(targetId: number) {
+    if (targetId === selectedId) return;
+    const t = reduceDefinitionSwitch(switchState, { type: "request", targetId, dirty });
+    setSwitchState(t.state);
+    if (t.switchTo !== null) await applySwitch(t.switchTo);
+  }
+
+  async function confirmSwitch() {
+    const t = reduceDefinitionSwitch(switchState, { type: "confirm" });
+    setSwitchState(t.state);
+    if (t.switchTo !== null) await applySwitch(t.switchTo);
+  }
+
+  function cancelSwitch() {
+    setSwitchState(reduceDefinitionSwitch(switchState, { type: "cancel" }).state);
+  }
+
+  async function patchDefinition(id: number, body: { name?: string; enabled?: boolean }) {
+    setBusy(`patch-${id}`);
+    setRowError(null);
+    try {
+      const res = await fetch(`/api/workflow-definitions/${id}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) {
+        setRowError({ id, message: await readErrorMessage(res) });
+        return;
+      }
+      const meta = (await res.json()) as WorkflowDefinitionMeta;
+      setMetas((prev) => prev.map((m) => (m.id === meta.id ? meta : m)));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function deleteDefinition(id: number) {
+    setBusy(`delete-${id}`);
+    setRowError(null);
+    try {
+      const res = await fetch(`/api/workflow-definitions/${id}`, { method: "DELETE" });
+      if (!res.ok) {
+        setRowError({ id, message: await readErrorMessage(res) });
+        return;
+      }
+      const remaining = metas.filter((m) => m.id !== id);
+      setMetas(remaining);
+      setConfirmDelete(null);
+      if (id === selectedId && remaining[0]) await applySwitch(remaining[0].id);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function createDefinition() {
+    const name = newName.trim();
+    if (!name) return;
+    setBusy("create");
+    setCreateError(null);
+    try {
+      const source =
+        newSource === "default"
+          ? { kind: "default" as const }
+          : { kind: "duplicate" as const, definitionId: Number(newSource) };
+      const res = await fetch("/api/workflow-definitions", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name, source }),
+      });
+      if (!res.ok) {
+        setCreateError(await readErrorMessage(res));
+        return;
+      }
+      const detail = (await res.json()) as WorkflowDefinitionDetailResponse;
+      setMetas((prev) => [...prev, detail.meta]);
+      setNewName("");
+      setNewSource("default");
+      await requestSwitch(detail.meta.id);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  const enabledPillClass = (enabled: boolean) =>
+    `rounded-full border px-2 py-0.5 font-mono text-[10px] font-semibold tracking-[0.04em] uppercase ${
+      enabled ? "border-mariner text-mariner" : "border-neutral-200 text-neutral-600"
+    }`;
 
   return (
     <div className="flex flex-col h-full min-h-0">
@@ -153,9 +296,28 @@ export function WorkflowEditorScreen({
           Built-in default, save to create v1.
         </div>
       )}
+      {switchState.kind === "confirming" && (
+        <div className="flex items-center gap-3 px-6 py-2 border-b border-neutral-200 bg-app-bg font-body text-[12px] text-neutral-700">
+          <span>Discard unsaved changes and switch?</span>
+          <button
+            onClick={() => void confirmSwitch()}
+            disabled={busy !== null}
+            className="appearance-none border-none bg-transparent font-body text-[12px] font-semibold text-red-600 cursor-pointer disabled:opacity-40"
+          >
+            Discard and switch
+          </button>
+          <button
+            onClick={cancelSwitch}
+            className="appearance-none border-none bg-transparent font-body text-[12px] text-neutral-500 cursor-pointer"
+          >
+            Cancel
+          </button>
+        </div>
+      )}
       {statusBar}
       <div className="relative flex-1 min-h-0">
         <FlowEditor
+        key={selectedId}
           nodes={nodes}
           edges={edges}
           onNodesChange={setNodes}
@@ -166,21 +328,175 @@ export function WorkflowEditorScreen({
           saving={busy === "save"}
           error={error}
           onSave={save}
-          headerTitle="Ticket workflow"
+          headerTitle={selectedMeta?.name ?? "Workflow"}
           headerVersionBadge={current ? `v${current.version}` : "default"}
           headerExtra={
-            <button
-              onClick={() => setHistoryOpen((o) => !o)}
-              className="appearance-none cursor-pointer border border-neutral-200 bg-panel text-coal py-1.5 px-3 rounded-[3px] font-mono text-[11px] tracking-[0.04em] uppercase hover:bg-app-bg"
-            >
-              History ({versions.length})
-            </button>
+            <>
+              <div className="w-[190px]">
+                <Listbox
+                  options={metas.map((m) => ({
+                    value: String(m.id),
+                    label: m.name,
+                    hint: m.enabled ? "enabled" : "disabled",
+                  }))}
+                  value={String(selectedId)}
+                  onChange={(v) => void requestSwitch(Number(v))}
+                  disabled={busy !== null}
+                  ariaLabel="Workflow definition"
+                />
+              </div>
+              <button
+                onClick={() => {
+                  setDefsOpen((o) => !o);
+                  setHistoryOpen(false);
+                }}
+                className={headerButtonClass}
+              >
+                Definitions ({metas.length})
+              </button>
+              <button
+                onClick={() => {
+                  setHistoryOpen((o) => !o);
+                  setDefsOpen(false);
+                }}
+                className={headerButtonClass}
+              >
+                History ({versions.length})
+              </button>
+            </>
           }
-          options={initial.options}
+          options={options}
           runStatuses={derived?.statuses}
           runErrors={derived?.errors}
           fitSignal={fitSignal}
         />
+        {defsOpen && (
+          <div className="absolute right-4 top-[56px] z-[60] w-[420px] max-h-[60vh] overflow-y-auto bg-panel border border-neutral-200 rounded-[4px] shadow-[0_12px_28px_-8px_rgba(24,27,32,0.22),0_2px_6px_rgba(24,27,32,0.08)] px-4 py-3">
+            <div className="flex items-center justify-between mb-1">
+              <h2 className="font-body text-[14px] font-semibold text-neutral-900">Definitions</h2>
+              <button
+                onClick={() => setDefsOpen(false)}
+                className="appearance-none border-none bg-transparent font-body text-[12px] text-neutral-500 cursor-pointer"
+              >
+                Close
+              </button>
+            </div>
+            {metas.map((m) => (
+              <div key={m.id} className="border-b border-neutral-100 py-2">
+                <div className="flex items-center gap-3 font-body text-[12px] text-neutral-700">
+                  {canEdit ? (
+                    <input
+                      key={`${m.id}-${m.name}`}
+                      defaultValue={m.name}
+                      aria-label={`Rename ${m.name}`}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") e.currentTarget.blur();
+                      }}
+                      onBlur={(e) => {
+                        const name = e.currentTarget.value.trim();
+                        if (name && name !== m.name) {
+                          void patchDefinition(m.id, { name });
+                        } else {
+                          e.currentTarget.value = m.name;
+                        }
+                      }}
+                      className="w-[150px] border border-neutral-200 bg-panel rounded-[3px] px-1.5 py-0.5 font-body text-[12px] text-neutral-900"
+                    />
+                  ) : (
+                    <span className="text-neutral-900">{m.name}</span>
+                  )}
+                  {canEdit ? (
+                    <button
+                      onClick={() => void patchDefinition(m.id, { enabled: !m.enabled })}
+                      disabled={busy !== null}
+                      className={`appearance-none cursor-pointer bg-transparent disabled:opacity-40 ${enabledPillClass(m.enabled)}`}
+                    >
+                      {m.enabled ? "Enabled" : "Disabled"}
+                    </button>
+                  ) : (
+                    <span className={enabledPillClass(m.enabled)}>
+                      {m.enabled ? "Enabled" : "Disabled"}
+                    </span>
+                  )}
+                  {canEdit && (
+                    <span className="ml-auto">
+                      {confirmDelete === m.id ? (
+                        <>
+                          <button
+                            onClick={() => void deleteDefinition(m.id)}
+                            disabled={busy !== null}
+                            className="appearance-none border-none bg-transparent font-body text-[12px] font-semibold text-red-600 cursor-pointer disabled:opacity-40"
+                          >
+                            {busy === `delete-${m.id}` ? "Deleting…" : "Confirm delete"}
+                          </button>
+                          <button
+                            onClick={() => setConfirmDelete(null)}
+                            className="appearance-none border-none bg-transparent font-body text-[12px] text-neutral-500 cursor-pointer ml-2"
+                          >
+                            Cancel
+                          </button>
+                        </>
+                      ) : (
+                        <button
+                          onClick={() => setConfirmDelete(m.id)}
+                          disabled={m.enabled}
+                          title={m.enabled ? "disable first" : undefined}
+                          className="appearance-none border-none bg-transparent font-body text-[12px] text-red-600 cursor-pointer disabled:opacity-40 disabled:cursor-default"
+                        >
+                          Delete
+                        </button>
+                      )}
+                    </span>
+                  )}
+                </div>
+                {rowError?.id === m.id && (
+                  <div className="mt-1 font-body text-[11px] text-red-600">{rowError.message}</div>
+                )}
+              </div>
+            ))}
+            {canEdit && (
+              <div className="pt-3">
+                <div className="font-body text-[12px] font-semibold text-neutral-900 mb-2">
+                  New definition
+                </div>
+                <div className="flex items-center gap-2">
+                  <input
+                    value={newName}
+                    onChange={(e) => setNewName(e.target.value)}
+                    placeholder="Name"
+                    aria-label="New definition name"
+                    className="flex-1 min-w-0 border border-neutral-200 bg-panel rounded-[3px] px-1.5 py-1 font-body text-[12px] text-neutral-900"
+                  />
+                  <div className="w-[160px]">
+                    <Listbox
+                      options={[
+                        { value: "default", label: "Built-in default" },
+                        ...metas.map((m) => ({
+                          value: String(m.id),
+                          label: `Duplicate: ${m.name}`,
+                        })),
+                      ]}
+                      value={newSource}
+                      onChange={setNewSource}
+                      disabled={busy !== null}
+                      ariaLabel="New definition source"
+                    />
+                  </div>
+                  <button
+                    onClick={() => void createDefinition()}
+                    disabled={busy !== null || newName.trim().length === 0}
+                    className="appearance-none cursor-pointer border border-mariner bg-mariner text-white py-1 px-2.5 rounded-[3px] font-mono text-[11px] tracking-[0.04em] uppercase disabled:opacity-40 disabled:cursor-default"
+                  >
+                    {busy === "create" ? "Creating…" : "Create"}
+                  </button>
+                </div>
+                {createError && (
+                  <div className="mt-1 font-body text-[11px] text-red-600">{createError}</div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
         {historyOpen && (
           <div className="absolute right-4 top-[56px] z-[60] w-[380px] max-h-[60vh] overflow-y-auto bg-panel border border-neutral-200 rounded-[4px] shadow-[0_12px_28px_-8px_rgba(24,27,32,0.22),0_2px_6px_rgba(24,27,32,0.08)] px-4 py-3">
             <div className="flex items-center justify-between mb-1">

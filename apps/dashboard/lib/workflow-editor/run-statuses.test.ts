@@ -9,7 +9,7 @@ function snapshot(overrides: Partial<RunBlockStatusSnapshot> = {}): RunBlockStat
     ticketKey: "PROJ-1",
     source: "live",
     status: "running",
-    definitionId: null,
+    definitionId: 7,
     definitionVersion: 4,
     blockStatuses: {},
     updatedAt: "2026-01-01T00:00:00.000Z",
@@ -18,24 +18,33 @@ function snapshot(overrides: Partial<RunBlockStatusSnapshot> = {}): RunBlockStat
   };
 }
 
+const editor = { definitionId: 7, version: 4 };
+
 test("returns undefined when run is null", () => {
-  assert.equal(deriveRunStatuses(null, 4), undefined);
+  assert.equal(deriveRunStatuses(null, editor), undefined);
+});
+
+test("returns undefined on definition mismatch", () => {
+  assert.equal(deriveRunStatuses(snapshot({ definitionId: 3 }), editor), undefined);
+  assert.equal(deriveRunStatuses(snapshot({ definitionId: null }), editor), undefined);
 });
 
 test("returns undefined on version mismatch", () => {
-  assert.equal(deriveRunStatuses(snapshot({ definitionVersion: 3 }), 4), undefined);
-  assert.equal(deriveRunStatuses(snapshot({ definitionVersion: null }), 4), undefined);
-  assert.equal(deriveRunStatuses(snapshot({ definitionVersion: 4 }), null), undefined);
+  assert.equal(deriveRunStatuses(snapshot({ definitionVersion: 3 }), editor), undefined);
+  assert.equal(deriveRunStatuses(snapshot({ definitionVersion: null }), editor), undefined);
+  assert.equal(deriveRunStatuses(snapshot(), { definitionId: 7, version: null }), undefined);
 });
 
-test("derives when both versions are null", () => {
-  const derived = deriveRunStatuses(snapshot({ definitionVersion: null }), null);
+test("derives when the definition matches and both versions are null", () => {
+  const derived = deriveRunStatuses(snapshot({ definitionVersion: null }), {
+    definitionId: 7,
+    version: null,
+  });
   assert.deepEqual(derived, { statuses: {}, errors: {} });
 });
 
 test("passes statuses through including running", () => {
   const run = snapshot({
-    definitionVersion: 4,
     blockStatuses: {
       n1: { status: "ok" },
       n2: { status: "running" },
@@ -44,7 +53,7 @@ test("passes statuses through including running", () => {
       n5: { status: "pending" },
     },
   });
-  const derived = deriveRunStatuses(run, 4);
+  const derived = deriveRunStatuses(run, editor);
   assert.deepEqual(derived?.statuses, {
     n1: "ok",
     n2: "running",
@@ -56,18 +65,17 @@ test("passes statuses through including running", () => {
 
 test("errors map contains only entries with an error", () => {
   const run = snapshot({
-    definitionVersion: 4,
     blockStatuses: {
       n1: { status: "ok" },
       n3: { status: "fail", error: "boom" },
       n4: { status: "warn", error: "why?" },
     },
   });
-  const derived = deriveRunStatuses(run, 4);
+  const derived = deriveRunStatuses(run, editor);
   assert.deepEqual(derived?.errors, { n3: "boom", n4: "why?" });
 });
 
 test("empty blockStatuses yields empty maps", () => {
-  const derived = deriveRunStatuses(snapshot({ definitionVersion: 4, blockStatuses: {} }), 4);
+  const derived = deriveRunStatuses(snapshot({ blockStatuses: {} }), editor);
   assert.deepEqual(derived, { statuses: {}, errors: {} });
 });
