@@ -12,6 +12,7 @@ import {
   serial,
   text,
   timestamp,
+  uniqueIndex,
 } from "drizzle-orm/pg-core";
 import type { BlockRunState, WorkflowDefinition } from "@shared/contracts";
 import type { GateStatusRef } from "../adapters/vcs/types.js";
@@ -129,9 +130,9 @@ export const envMarker = pgTable("env_marker", {
  *   Workflow world + the run registry (see lib/telemetry/collect-snapshots).
  * - The agent workflow records cost/tokens/per-phase usage + the agent PR on
  *   completion — data that only exists inside the run (see recordRunUsage).
- * - The mid-run block-status writer owns exactly block_statuses and
- *   definition_version (plus updated_at), streaming per-block progress as the
- *   run advances through the stored definition.
+ * - The mid-run block-status writer owns exactly block_statuses,
+ *   definition_version and definition_id (plus updated_at), streaming
+ *   per-block progress as the run advances through the stored definition.
  *
  * All use ON CONFLICT (run_id) DO UPDATE setting only their own columns, so
  * whichever writes first inserts the row and the others fill in the rest,
@@ -175,6 +176,7 @@ export const workflowRuns = pgTable("workflow_runs", {
   steps: jsonb("steps"),
 
   definitionVersion: integer("definition_version"),
+  definitionId: integer("definition_id"),
   blockStatuses: jsonb("block_statuses").$type<Record<string, BlockRunState>>(),
 
   // Bookkeeping.
@@ -230,18 +232,57 @@ export const prePrCheckConfigVersions = pgTable("pre_pr_check_config_versions", 
 });
 
 /**
- * Dashboard-managed workflow definition, append-only. The active definition
- * is the row with the highest version; a rollback appends a copy of an older
- * version with restored_from_version set. No rows = built-in default.
+ * Named workflow definitions: one row per definition the dashboard manages.
+ * trigger_types is denormalized from the head version, kept in sync by
+ * save/restore, and backs the one-enabled-definition-per-trigger rule so the
+ * overlap check is a plain array-overlap query instead of re-parsing every
+ * head version's graph. A definition is archived (soft-deleted) via
+ * archived_at; the partial unique index frees its name for reuse once archived.
  */
-export const workflowDefinitionVersions = pgTable("workflow_definition_versions", {
-  version: serial("version").primaryKey(),
-  definition: jsonb("definition").$type<WorkflowDefinition>().notNull(),
-  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-  createdById: text("created_by_id").notNull(),
-  createdByLabel: text("created_by_label").notNull(),
-  restoredFromVersion: integer("restored_from_version"),
-});
+export const workflowDefinitions = pgTable(
+  "workflow_definitions",
+  {
+    id: serial("id").primaryKey(),
+    name: text("name").notNull(),
+    enabled: boolean("enabled").notNull().default(false),
+    triggerTypes: text("trigger_types")
+      .array()
+      .notNull()
+      .default(sql`'{}'::text[]`),
+    archivedAt: timestamp("archived_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+    createdById: text("created_by_id").notNull(),
+    createdByLabel: text("created_by_label").notNull(),
+  },
+  (t) => [
+    uniqueIndex("workflow_definitions_name_active_idx")
+      .on(t.name)
+      .where(sql`${t.archivedAt} is null`),
+  ],
+);
+
+/**
+ * Dashboard-managed workflow definition versions, append-only per definition.
+ * Each row belongs to a workflow_definitions row; a definition's head is its
+ * highest version, and a rollback appends a copy of an older version with
+ * restored_from_version set. No versions for a definition = built-in default.
+ */
+export const workflowDefinitionVersions = pgTable(
+  "workflow_definition_versions",
+  {
+    definitionId: integer("definition_id")
+      .notNull()
+      .references(() => workflowDefinitions.id),
+    version: integer("version").notNull(),
+    definition: jsonb("definition").$type<WorkflowDefinition>().notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    createdById: text("created_by_id").notNull(),
+    createdByLabel: text("created_by_label").notNull(),
+    restoredFromVersion: integer("restored_from_version"),
+  },
+  (t) => [primaryKey({ columns: [t.definitionId, t.version] })],
+);
 
 export * from "./auth-schema.js";
 export * from "./email-delivery-schema.js";

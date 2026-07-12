@@ -261,6 +261,7 @@ export interface WorkflowDefinition {
 
 export interface WorkflowDefinitionVersion {
   version: number;
+  definitionId: number;
   definition: WorkflowDefinition;
   createdAt: string;
   createdById: string;
