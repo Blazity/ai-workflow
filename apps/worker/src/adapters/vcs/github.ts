@@ -219,6 +219,15 @@ export class GitHubAdapter
     return comments;
   }
 
+  async postPRComment(prId: number, body: string): Promise<{ url: string | null }> {
+    const { data } = await this.octokit.issues.createComment({
+      ...this.ownerRepo,
+      issue_number: prId,
+      body,
+    });
+    return { url: data.html_url ?? null };
+  }
+
   async getCheckRunResults(prId: number): Promise<CheckRunResult[]> {
     const { data: pr } = await this.octokit.pulls.get({
       ...this.ownerRepo,

@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { ClaudeAgentAdapter } from "./claude.js";
 import { AGENT_ENV_CLAUDE_PATH, AGENT_ENV_PATH, AGENT_ENV_SHIM } from "./shared.js";
-import { AGENT_SCHEMA, RESEARCH_SCHEMA, REVIEW_SCHEMA } from "./types.js";
+import { AGENT_SCHEMA, GENERIC_SCHEMA, RESEARCH_SCHEMA, REVIEW_SCHEMA } from "./types.js";
 
 const adapter = new ClaudeAgentAdapter();
 
@@ -245,6 +245,12 @@ describe("schema constants", () => {
     expect(s.required).toEqual(["status", "plan", "questions", "error"]);
     expect(s.properties.status.enum).toEqual(["completed", "clarification_needed", "failed"]);
   });
+  it("GENERIC_SCHEMA is valid JSON with the expected fields", () => {
+    const s = JSON.parse(GENERIC_SCHEMA);
+    expect(s.required).toEqual(["status", "body", "questions", "error"]);
+    expect(s.properties.status.enum).toEqual(["ok", "needs_input", "failed"]);
+    expect(s.additionalProperties).toBe(false);
+  });
 });
 
 describe("ClaudeAgentAdapter.extractUsage", () => {
@@ -364,6 +370,13 @@ describe("ClaudeAgentAdapter.buildPhaseScript", () => {
     expect(s).not.toContain("it's\"}");
     expect(s).toContain("it'\\''s");
   });
+
+  it("sanitizes the phase label in the exit-code path", () => {
+    const paths = adapter.artifactPaths("agent-Block_1");
+    const s = adapter.buildPhaseScript({ phase: "agent-Block_1", model: "claude-opus-4-6", paths });
+    expect(s).toContain("/tmp/agent-block-1-exit-code");
+    expect(s).not.toContain("agent-Block_1-exit-code");
+  });
 });
 
 describe("ClaudeAgentAdapter.artifactPaths", () => {
@@ -374,6 +387,23 @@ describe("ClaudeAgentAdapter.artifactPaths", () => {
       stdout: "/tmp/research-stdout.txt",
       stderr: "/tmp/research-stderr.txt",
       sentinel: "/tmp/research-done",
+      structuredOutput: null,
+    });
+  });
+
+  it("leaves the three built-in phases byte-identical", () => {
+    for (const phase of ["research", "impl", "review"] as const) {
+      expect(adapter.artifactPaths(phase).sentinel).toBe(`/tmp/${phase}-done`);
+    }
+  });
+
+  it("sanitizes an arbitrary phase label to a shell-safe token", () => {
+    expect(adapter.artifactPaths("agent-Block_1")).toEqual({
+      wrapper: "/tmp/agent-block-1-wrapper.sh",
+      input: "/tmp/agent-block-1-requirements.md",
+      stdout: "/tmp/agent-block-1-stdout.txt",
+      stderr: "/tmp/agent-block-1-stderr.txt",
+      sentinel: "/tmp/agent-block-1-done",
       structuredOutput: null,
     });
   });

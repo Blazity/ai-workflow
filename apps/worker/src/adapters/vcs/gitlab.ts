@@ -485,6 +485,26 @@ export class GitLabAdapter implements VCSAdapter, GateStatusCapableVCS, PRFilesC
     return comments;
   }
 
+  async postPRComment(prId: number, body: string): Promise<{ url: string | null }> {
+    const note = await this.gitLabRest<{ id?: number }>(
+      `/projects/${this.encodedProjectId}/merge_requests/${prId}/notes`,
+      { method: "POST", body: { body } },
+    );
+    return { url: this.buildNoteUrl(prId, note.id) };
+  }
+
+  /**
+   * Reconstruct a deep link to a posted MR note. GitLab's note-create response
+   * carries no MR web_url, so we rebuild it from the configured host + project
+   * path: `<host>/<projectId>/-/merge_requests/<iid>#note_<id>`. Numeric project
+   * ids have no web path we can build, so the link is not derivable (return null).
+   */
+  private buildNoteUrl(prId: number, noteId: number | undefined): string | null {
+    if (noteId == null || /^\d+$/.test(this.projectId)) return null;
+    const host = (this.config.host ?? "https://gitlab.com").replace(/\/+$/, "");
+    return `${host}/${this.projectId}/-/merge_requests/${prId}#note_${noteId}`;
+  }
+
   async getCheckRunResults(prId: number): Promise<CheckRunResult[]> {
     const pipelines = await this.gl.MergeRequests.allPipelines(
       this.projectId,

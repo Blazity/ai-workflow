@@ -105,6 +105,7 @@ export class CodexAgentAdapter implements AgentAdapter {
 
   buildPhaseScript(opts: PhaseScriptOpts): string {
     const { paths, jsonSchema, model, phase } = opts;
+    const safePhase = sanitizePhase(phase);
 
     // --dangerously-bypass-approvals-and-sandbox over --full-auto: --full-auto
     // upgrades to workspace-write which uses bwrap. bwrap fails inside Vercel
@@ -123,11 +124,11 @@ export class CodexAgentAdapter implements AgentAdapter {
       // Quoted heredoc terminator ('SCHEMA_EOF') keeps the body literal — no
       // shell expansion or escaping is needed for the JSON contents.
       schemaBlock = [
-        `cat > /tmp/${phase}-schema.json << 'SCHEMA_EOF'`,
+        `cat > /tmp/${safePhase}-schema.json << 'SCHEMA_EOF'`,
         jsonSchema,
         "SCHEMA_EOF",
       ].join("\n");
-      flags.push(`--output-schema /tmp/${phase}-schema.json`);
+      flags.push(`--output-schema /tmp/${safePhase}-schema.json`);
     }
 
     return `#!/bin/bash
@@ -140,14 +141,14 @@ rm -f ${paths.sentinel} ${paths.stdout} ${paths.stderr} ${paths.structuredOutput
 
 ${schemaBlock}
 
-# --- Phase: ${phase} ---
+# --- Phase: ${safePhase} ---
 # Record wall-clock duration as a fallback for usage reporting — Codex's
 # NDJSON events do not carry a timestamp field that extractUsage can parse.
 START_MS=$(date +%s%3N)
 cat ${paths.input} | codex exec \\
   ${flags.join(" \\\n  ")} \\
   - \\
-  > ${paths.stdout} 2> ${paths.stderr}; echo $? > /tmp/${phase}-exit-code || true
+  > ${paths.stdout} 2> ${paths.stderr}; echo $? > /tmp/${safePhase}-exit-code || true
 END_MS=$(date +%s%3N)
 echo "{\\"type\\":\\"phase.duration\\",\\"duration_ms\\":$((END_MS - START_MS))}" >> ${paths.stdout}
 
@@ -161,13 +162,14 @@ touch ${paths.sentinel}
   }
 
   artifactPaths(phase: PhaseKind): PhaseArtifactPaths {
+    const p = sanitizePhase(phase);
     return {
-      wrapper: `/tmp/${phase}-wrapper.sh`,
-      input: `/tmp/${phase}-requirements.md`,
-      stdout: `/tmp/${phase}-stdout.txt`,
-      stderr: `/tmp/${phase}-stderr.txt`,
-      sentinel: `/tmp/${phase}-done`,
-      structuredOutput: `/tmp/${phase}-result.json`,
+      wrapper: `/tmp/${p}-wrapper.sh`,
+      input: `/tmp/${p}-requirements.md`,
+      stdout: `/tmp/${p}-stdout.txt`,
+      stderr: `/tmp/${p}-stderr.txt`,
+      sentinel: `/tmp/${p}-done`,
+      structuredOutput: `/tmp/${p}-result.json`,
     };
   }
 
@@ -401,6 +403,11 @@ touch ${paths.sentinel}
 
 function shellQuote(val: string): string {
   return `'${val.replace(/'/g, "'\\''")}'`;
+}
+
+/** Collapse an arbitrary phase label to a shell/file-safe token ([a-z0-9-]). */
+function sanitizePhase(phase: string): string {
+  return phase.toLowerCase().replace(/[^a-z0-9-]/g, "-");
 }
 
 function numOr0(x: unknown): number { return typeof x === "number" ? x : 0; }

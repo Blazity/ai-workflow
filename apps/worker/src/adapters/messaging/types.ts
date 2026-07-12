@@ -22,6 +22,13 @@ export type TicketEvent =
       reason?: string;
       usageReport?: string;
     }
+  | {
+      kind: "plan_approval_requested";
+      /** Deep link to the dashboard view where a human approves the plan. */
+      dashboardUrl?: string;
+      /** Short excerpt of the proposed plan. Not rendered in the Slack copy. */
+      planPreview?: string;
+    }
   | { kind: "canceled"; reason: string };
 
 export interface MessagingAdapter {

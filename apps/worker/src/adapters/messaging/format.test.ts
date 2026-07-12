@@ -67,6 +67,16 @@ describe("formatTicketStatus", () => {
     );
   });
 
+  it("plan_approval_requested → plan awaiting approval (no dashboard link in header)", () => {
+    expect(
+      formatTicketStatus(
+        { kind: "plan_approval_requested", dashboardUrl: "https://app/plan/1" },
+        KEY,
+        JIRA,
+      ),
+    ).toBe(`:memo: ${LINK} STATUS: plan awaiting approval`);
+  });
+
   it("canceled → bare canceled (no reason in header)", () => {
     expect(
       formatTicketStatus(
@@ -204,6 +214,24 @@ describe("formatTicketEvent", () => {
         JIRA,
       ),
     ).toBe(`:warning: Task ${LINK} failed: impl — x\nu`);
+  });
+
+  it("plan_approval_requested: links to the dashboard when dashboardUrl is provided", () => {
+    expect(
+      formatTicketEvent(
+        { kind: "plan_approval_requested", dashboardUrl: "https://app/plan/1" },
+        KEY,
+        JIRA,
+      ),
+    ).toBe(
+      `:memo: Task ${LINK} plan awaiting approval (<https://app/plan/1|review plan>)`,
+    );
+  });
+
+  it("plan_approval_requested: without a dashboard link", () => {
+    expect(
+      formatTicketEvent({ kind: "plan_approval_requested" }, KEY, JIRA),
+    ).toBe(`:memo: Task ${LINK} plan awaiting approval`);
   });
 
   it("canceled — includes reason", () => {

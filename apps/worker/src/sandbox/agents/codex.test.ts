@@ -227,11 +227,36 @@ describe("CodexAgentAdapter.buildPhaseScript", () => {
     expect(s).toContain("END_MS=$(date +%s%3N)");
     expect(s).toContain('\\"type\\":\\"phase.duration\\"');
   });
+
+  it("sanitizes the phase label in schema and exit-code paths", () => {
+    const paths = adapter.artifactPaths("agent-Block_1");
+    const s = adapter.buildPhaseScript({
+      phase: "agent-Block_1",
+      model: "gpt-5-codex",
+      paths,
+      jsonSchema: '{"type":"object"}',
+    });
+    expect(s).toContain("--output-schema /tmp/agent-block-1-schema.json");
+    expect(s).toContain("cat > /tmp/agent-block-1-schema.json");
+    expect(s).toContain("/tmp/agent-block-1-exit-code");
+  });
 });
 
 describe("CodexAgentAdapter.artifactPaths", () => {
   it("includes structuredOutput pointing at -o file", () => {
     expect(adapter.artifactPaths("impl").structuredOutput).toBe("/tmp/impl-result.json");
+  });
+
+  it("leaves the three built-in phases byte-identical", () => {
+    for (const phase of ["research", "impl", "review"] as const) {
+      expect(adapter.artifactPaths(phase).structuredOutput).toBe(`/tmp/${phase}-result.json`);
+    }
+  });
+
+  it("sanitizes an arbitrary phase label in artifact paths", () => {
+    expect(adapter.artifactPaths("agent-Block_1").structuredOutput).toBe(
+      "/tmp/agent-block-1-result.json",
+    );
   });
 });
 

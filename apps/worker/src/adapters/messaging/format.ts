@@ -12,6 +12,7 @@ const EVENT_EMOJI: Record<TicketEvent["kind"], string> = {
   needs_clarification: ":question:",
   pr_ready: ":white_check_mark:",
   failed: ":warning:",
+  plan_approval_requested: ":memo:",
   canceled: ":no_entry:",
 };
 
@@ -43,6 +44,8 @@ export function formatTicketStatus(
       return `${head} PR ready (<${event.pr.url}|#${event.pr.number}>)`;
     case "failed":
       return event.phase ? `${head} failed (${event.phase})` : `${head} failed`;
+    case "plan_approval_requested":
+      return `${head} plan awaiting approval`;
     case "canceled":
       return `${head} canceled`;
   }
@@ -91,6 +94,11 @@ export function formatTicketEvent(
     case "failed": {
       const body = formatFailedBody(event.phase, event.reason);
       return appendUsage(`${head} failed${body}`, event.usageReport);
+    }
+
+    case "plan_approval_requested": {
+      const tail = event.dashboardUrl ? ` (<${event.dashboardUrl}|review plan>)` : "";
+      return `${head} plan awaiting approval${tail}`;
     }
 
     case "canceled":

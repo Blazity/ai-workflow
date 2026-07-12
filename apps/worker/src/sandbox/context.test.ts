@@ -3,6 +3,7 @@ import {
   assembleResearchPlanContext,
   assembleImplementationContext,
   assembleReviewContext,
+  assembleFixContext,
   formatCheckResults,
 } from "./context.js";
 
@@ -472,5 +473,65 @@ describe("formatCheckResults", () => {
     ]);
     expect(result).toContain("### Failed: external-ci");
     expect(result).toContain("Conclusion: failure");
+  });
+});
+
+describe("assembleFixContext", () => {
+  const ticket = {
+    identifier: "TEST-9",
+    title: "Fix the thing",
+    description: "d",
+    acceptanceCriteria: "It works",
+    comments: [],
+  };
+
+  it("assembles review feedback, failed checks, conflicts, instructions, and repos", () => {
+    const result = assembleFixContext({
+      ticket,
+      prComments: [{ author: "Bob", body: "Handle the null case", liked: false }],
+      failedChecks: [
+        { name: "test", status: "completed", conclusion: "failure", logs: "boom" },
+      ],
+      conflictNotes: "Resolve markers in api/",
+      instructions: "Address every review comment before pushing.",
+      repositories: [
+        {
+          provider: "github",
+          repoPath: "acme/api",
+          defaultBranch: "main",
+          selectedRationale: "target repo",
+        },
+      ],
+    });
+
+    expect(result).toContain("# Fix Requirements");
+    expect(result).toContain("TEST-9");
+    expect(result).toContain("## PR Review Feedback");
+    expect(result).toContain("Handle the null case");
+    expect(result).toContain("## CI/CD Check Results");
+    expect(result).toContain("### Failed: test");
+    expect(result).toContain("## Merge Conflicts");
+    expect(result).toContain("Resolve markers in api/");
+    expect(result).toContain("## Selected Repositories");
+    expect(result).toContain("acme/api");
+    expect(result).toContain("## Fix Instructions");
+    expect(result).toContain("Address every review comment");
+  });
+
+  it("omits optional sections when their inputs are empty", () => {
+    const result = assembleFixContext({
+      ticket,
+      prComments: [],
+      failedChecks: [],
+      repositories: [],
+    });
+
+    expect(result).toContain("# Fix Requirements");
+    expect(result).toContain("## Acceptance Criteria");
+    expect(result).not.toContain("## PR Review Feedback");
+    expect(result).not.toContain("## CI/CD Check Results");
+    expect(result).not.toContain("## Merge Conflicts");
+    expect(result).not.toContain("## Selected Repositories");
+    expect(result).not.toContain("## Fix Instructions");
   });
 });

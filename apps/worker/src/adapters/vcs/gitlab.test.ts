@@ -365,6 +365,43 @@ describe("GitLabAdapter", () => {
     });
   });
 
+  describe("postPRComment", () => {
+    it("posts an MR note and returns a reconstructed deep link", async () => {
+      mockFetch.mockResolvedValueOnce(gitLabResponse({ id: 555 }, { status: 201 }));
+
+      const adapter = glAdapter();
+      const result = await adapter.postPRComment(42, "Please rebase");
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        "https://gitlab.com/api/v4/projects/blazity%2Fdemo-app/merge_requests/42/notes",
+        expect.objectContaining({
+          method: "POST",
+          headers: {
+            "PRIVATE-TOKEN": "glpat-xxxxxxxxxxxx",
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ body: "Please rebase" }),
+        }),
+      );
+      expect(result).toEqual({
+        url: "https://gitlab.com/blazity/demo-app/-/merge_requests/42#note_555",
+      });
+    });
+
+    it("returns url null when the project id is numeric (no derivable web path)", async () => {
+      mockFetch.mockResolvedValueOnce(gitLabResponse({ id: 555 }, { status: 201 }));
+
+      const adapter = new GitLabAdapter({
+        token: "glpat-xxxxxxxxxxxx",
+        projectId: "12345",
+        baseBranch: "main",
+      });
+      const result = await adapter.postPRComment(42, "hi");
+
+      expect(result).toEqual({ url: null });
+    });
+  });
+
   describe("getCheckRunResults", () => {
     it("maps GitLab CI job statuses to CheckRunResult", async () => {
       mockMergeRequests.allPipelines.mockResolvedValueOnce([
