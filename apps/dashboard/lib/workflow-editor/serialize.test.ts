@@ -94,6 +94,31 @@ test("emits provider for agent nodes when set and drops it when empty", () => {
   ]);
 });
 
+test("emits array params and drops empty arrays", () => {
+  const nodes: FlowNodeDef[] = [
+    {
+      id: "fin",
+      type: "finalize_workspace",
+      x: 0,
+      y: 0,
+      params: { requiredChecks: ["checks-1", "checks-2"] },
+    },
+    { id: "rc", type: "run_checks", x: 0, y: 0, params: { commands: [] } },
+  ];
+
+  const out = serializeWorkflowDefinition(nodes, []);
+  assert.deepEqual(out.nodes, [
+    {
+      id: "fin",
+      type: "finalize_workspace",
+      x: 0,
+      y: 0,
+      params: { requiredChecks: ["checks-1", "checks-2"] },
+    },
+    { id: "rc", type: "run_checks", x: 0, y: 0, params: {} },
+  ]);
+});
+
 test("never emits provider for non-agent node types", () => {
   const nodes: FlowNodeDef[] = [
     {

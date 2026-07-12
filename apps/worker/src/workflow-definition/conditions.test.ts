@@ -171,7 +171,13 @@ describe("contract helpers", () => {
   });
 
   it("exposes only trigger blocks as trigger types", () => {
-    expect(TRIGGER_BLOCK_TYPES).toEqual(["trigger_ticket_ai"]);
+    expect(TRIGGER_BLOCK_TYPES).toEqual([
+      "trigger_ticket_ai",
+      "trigger_plan_approved",
+      "trigger_pr_created",
+      "trigger_pr_checks_failed",
+      "trigger_pr_review",
+    ]);
     expect(isTriggerBlockType("trigger_ticket_ai")).toBe(true);
     expect(isTriggerBlockType("branch")).toBe(false);
   });

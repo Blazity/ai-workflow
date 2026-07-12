@@ -207,13 +207,29 @@ export interface RepositoryOption {
 
 export type WorkflowBlockType =
   | "trigger_ticket_ai"
+  | "trigger_plan_approved"
+  | "trigger_pr_created"
+  | "trigger_pr_checks_failed"
+  | "trigger_pr_review"
   | "planning_agent"
   | "implementation_agent"
   | "review_agent"
+  | "fix_agent"
+  | "generic_agent"
+  | "prepare_workspace"
+  | "finalize_workspace"
   | "run_pre_pr_checks"
+  | "run_checks"
+  | "call_llm"
+  | "fetch_pr_context"
   | "open_pr"
   | "update_ticket_status"
+  | "post_ticket_comment"
+  | "post_pr_comment"
   | "send_slack_message"
+  | "human_question"
+  | "arthur_injection_check"
+  | "arthur_trace"
   | "branch"
   | "loop"
   | "terminate";
@@ -236,7 +252,7 @@ export interface BlockOutput {
 
 export type TicketStatusTarget = "ai_review" | "backlog";
 
-export type WorkflowParamValue = string | number | boolean;
+export type WorkflowParamValue = string | number | boolean | string[];
 
 export interface WorkflowDefinitionNode {
   id: string;
@@ -292,6 +308,7 @@ export interface RunBlockStatusSnapshot {
   source: "live" | "last";
   status: RunStatus;
   definitionVersion: number | null;
+  definitionId: number | null;
   blockStatuses: Record<string, BlockRunState>;
   updatedAt: string;
   completedAt: string | null;

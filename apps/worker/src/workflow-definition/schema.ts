@@ -6,6 +6,18 @@ import type {
 } from "@shared/contracts";
 import { BLOCK_TYPE_SPECS, isTriggerBlockType, wirablePorts } from "@shared/contracts";
 import { parseCondition } from "@shared/conditions";
+import { paramsSchema as prepareWorkspaceParams } from "../workflows/blocks/prepare-workspace.js";
+import { paramsSchema as finalizeWorkspaceParams } from "../workflows/blocks/finalize-workspace.js";
+import { paramsSchema as fixAgentParams } from "../workflows/blocks/fix-agent.js";
+import { paramsSchema as genericAgentParams } from "../workflows/blocks/generic-agent.js";
+import { paramsSchema as callLlmParams } from "../workflows/blocks/call-llm.js";
+import { paramsSchema as fetchPrContextParams } from "../workflows/blocks/fetch-pr-context.js";
+import { paramsSchema as runChecksParams } from "../workflows/blocks/run-checks.js";
+import { paramsSchema as postTicketCommentParams } from "../workflows/blocks/post-ticket-comment.js";
+import { paramsSchema as postPrCommentParams } from "../workflows/blocks/post-pr-comment.js";
+import { paramsSchema as humanQuestionParams } from "../workflows/blocks/human-question.js";
+import { paramsSchema as arthurInjectionCheckParams } from "../workflows/blocks/arthur-injection-check.js";
+import { paramsSchema as arthurTraceParams } from "../workflows/blocks/arthur-trace.js";
 
 const nodeId = z.string().trim().min(1);
 const coordinate = z.number().finite();
@@ -25,8 +37,56 @@ const agentParams = z
   })
   .strict();
 
+const vcsProviders = z.enum(["github", "gitlab"]);
+
 const triggerNode = z
   .object({ ...baseNodeFields, type: z.literal("trigger_ticket_ai"), params: emptyParams })
+  .strict();
+
+const triggerPlanApprovedNode = z
+  .object({
+    ...baseNodeFields,
+    type: z.literal("trigger_plan_approved"),
+    params: z
+      .object({ source: z.literal("dashboard").default("dashboard") })
+      .strict(),
+  })
+  .strict();
+
+const triggerPrCreatedNode = z
+  .object({
+    ...baseNodeFields,
+    type: z.literal("trigger_pr_created"),
+    params: z
+      .object({
+        providers: z.array(vcsProviders).default(["github", "gitlab"]),
+        onlyWorkflowOwned: z.boolean().default(true),
+      })
+      .strict(),
+  })
+  .strict();
+
+const triggerPrChecksFailedNode = z
+  .object({
+    ...baseNodeFields,
+    type: z.literal("trigger_pr_checks_failed"),
+    params: z
+      .object({ providers: z.array(vcsProviders).default(["github", "gitlab"]) })
+      .strict(),
+  })
+  .strict();
+
+const triggerPrReviewNode = z
+  .object({
+    ...baseNodeFields,
+    type: z.literal("trigger_pr_review"),
+    params: z
+      .object({
+        providers: z.array(vcsProviders).default(["github"]),
+        on: z.enum(["changes_requested", "commented"]).default("changes_requested"),
+      })
+      .strict(),
+  })
   .strict();
 
 const planningNode = z
@@ -59,8 +119,60 @@ const updateTicketStatusNode = z
   .object({
     ...baseNodeFields,
     type: z.literal("update_ticket_status"),
-    params: z.object({ target: z.enum(["ai_review", "backlog"]) }).strict(),
+    params: z.object({ target: z.string().trim().min(1).max(100) }).strict(),
   })
+  .strict();
+
+const prepareWorkspaceNode = z
+  .object({ ...baseNodeFields, type: z.literal("prepare_workspace"), params: prepareWorkspaceParams })
+  .strict();
+
+const finalizeWorkspaceNode = z
+  .object({ ...baseNodeFields, type: z.literal("finalize_workspace"), params: finalizeWorkspaceParams })
+  .strict();
+
+const fixAgentNode = z
+  .object({ ...baseNodeFields, type: z.literal("fix_agent"), params: fixAgentParams })
+  .strict();
+
+const genericAgentNode = z
+  .object({ ...baseNodeFields, type: z.literal("generic_agent"), params: genericAgentParams })
+  .strict();
+
+const callLlmNode = z
+  .object({ ...baseNodeFields, type: z.literal("call_llm"), params: callLlmParams })
+  .strict();
+
+const fetchPrContextNode = z
+  .object({ ...baseNodeFields, type: z.literal("fetch_pr_context"), params: fetchPrContextParams })
+  .strict();
+
+const runChecksNode = z
+  .object({ ...baseNodeFields, type: z.literal("run_checks"), params: runChecksParams })
+  .strict();
+
+const postTicketCommentNode = z
+  .object({ ...baseNodeFields, type: z.literal("post_ticket_comment"), params: postTicketCommentParams })
+  .strict();
+
+const postPrCommentNode = z
+  .object({ ...baseNodeFields, type: z.literal("post_pr_comment"), params: postPrCommentParams })
+  .strict();
+
+const humanQuestionNode = z
+  .object({ ...baseNodeFields, type: z.literal("human_question"), params: humanQuestionParams })
+  .strict();
+
+const arthurInjectionCheckNode = z
+  .object({
+    ...baseNodeFields,
+    type: z.literal("arthur_injection_check"),
+    params: arthurInjectionCheckParams,
+  })
+  .strict();
+
+const arthurTraceNode = z
+  .object({ ...baseNodeFields, type: z.literal("arthur_trace"), params: arthurTraceParams })
   .strict();
 
 const sendSlackMessageNode = z
@@ -107,13 +219,29 @@ const terminateNode = z
 
 const nodeSchema = z.discriminatedUnion("type", [
   triggerNode,
+  triggerPlanApprovedNode,
+  triggerPrCreatedNode,
+  triggerPrChecksFailedNode,
+  triggerPrReviewNode,
   planningNode,
   implementationNode,
   reviewNode,
+  fixAgentNode,
+  genericAgentNode,
+  prepareWorkspaceNode,
+  finalizeWorkspaceNode,
   runPrePrChecksNode,
+  runChecksNode,
+  callLlmNode,
+  fetchPrContextNode,
   openPrNode,
   updateTicketStatusNode,
+  postTicketCommentNode,
+  postPrCommentNode,
   sendSlackMessageNode,
+  humanQuestionNode,
+  arthurInjectionCheckNode,
+  arthurTraceNode,
   branchNode,
   loopNode,
   terminateNode,

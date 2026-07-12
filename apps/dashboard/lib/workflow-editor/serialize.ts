@@ -8,13 +8,29 @@ import type { FlowEdgeDef, FlowNodeDef } from "@/lib/flows";
 
 const PARAM_KEYS: Record<WorkflowBlockType, string[]> = {
   trigger_ticket_ai: [],
+  trigger_plan_approved: ["source"],
+  trigger_pr_created: ["providers", "onlyWorkflowOwned"],
+  trigger_pr_checks_failed: ["providers"],
+  trigger_pr_review: ["providers", "on"],
   planning_agent: ["provider", "model"],
   implementation_agent: ["provider", "model"],
   review_agent: ["provider", "model"],
+  fix_agent: ["provider", "model", "instructions", "maxMinutes"],
+  generic_agent: ["provider", "model", "prompt", "outputSchema"],
+  prepare_workspace: [],
+  finalize_workspace: ["requiredChecks"],
   run_pre_pr_checks: ["maxFixCycles"],
+  run_checks: ["commands"],
+  call_llm: ["prompt", "system", "model", "outputSchema"],
+  fetch_pr_context: [],
   open_pr: [],
   update_ticket_status: ["target"],
+  post_ticket_comment: ["body"],
+  post_pr_comment: ["body", "target"],
   send_slack_message: ["message"],
+  human_question: ["questions"],
+  arthur_injection_check: ["contentFromStep"],
+  arthur_trace: ["taskName"],
   branch: ["condition"],
   loop: ["maxAttempts", "onExhaust"],
   terminate: ["terminalStatus", "postComment"],
@@ -25,6 +41,7 @@ function serializeParams(node: FlowNodeDef): Record<string, WorkflowParamValue> 
   for (const key of PARAM_KEYS[node.type]) {
     const value = node.params[key];
     if (value === undefined) continue;
+    if (Array.isArray(value) && value.length === 0) continue;
     if ((key === "model" || key === "message" || key === "provider") && value === "") continue;
     out[key] = value;
   }

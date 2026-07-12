@@ -54,9 +54,9 @@ describe("workflowDefinitionSchema", () => {
     expect(workflowDefinitionSchema.safeParse(def).success).toBe(false);
   });
 
-  it("rejects a bad update_ticket_status target", () => {
+  it("rejects a blank update_ticket_status target", () => {
     const def = clone(defaultWorkflowDefinition({ includeReview: false }));
-    def.nodes.find((n: WorkflowDefinitionNode) => n.type === "update_ticket_status").params.target = "done";
+    def.nodes.find((n: WorkflowDefinitionNode) => n.type === "update_ticket_status").params.target = "";
     expect(workflowDefinitionSchema.safeParse(def).success).toBe(false);
   });
 
@@ -132,6 +132,109 @@ describe("workflowDefinitionSchema", () => {
     const nodes = [node("t", "trigger_ticket_ai"), node("p", "planning_agent")];
     expect(shapeOk(nodes, [{ from: "t", to: "p", fromPort: "out" }])).toBe(true);
     expect(shapeOk(nodes, [{ from: "t", to: "p", fromPort: "" }])).toBe(false);
+  });
+});
+
+describe("workflowDefinitionSchema block-executor node types", () => {
+  function parseNode(raw: Record<string, unknown>) {
+    const parsed = workflowDefinitionSchema.safeParse({
+      schemaVersion: 1,
+      nodes: [{ id: "n", x: 0, y: 0, ...raw }],
+      edges: [],
+    });
+    return parsed.success ? parsed.data.nodes[0] : null;
+  }
+
+  it("accepts valid params for every new block type", () => {
+    const valid: Array<[WorkflowBlockType, Record<string, WorkflowParamValue>]> = [
+      ["trigger_plan_approved", { source: "dashboard" }],
+      ["trigger_pr_created", { providers: ["github"], onlyWorkflowOwned: false }],
+      ["trigger_pr_checks_failed", { providers: ["gitlab"] }],
+      ["trigger_pr_review", { providers: ["github"], on: "commented" }],
+      ["prepare_workspace", {}],
+      ["finalize_workspace", { requiredChecks: ["checks-1"] }],
+      ["fix_agent", { provider: "codex", model: "gpt-5", instructions: "focus", maxMinutes: 30 }],
+      ["generic_agent", { provider: "claude", prompt: "do it", outputSchema: "{}" }],
+      ["call_llm", { prompt: "summarize", system: "be terse", model: "claude-haiku-4-5" }],
+      ["fetch_pr_context", {}],
+      ["run_checks", { commands: ["pnpm test"] }],
+      ["post_ticket_comment", { body: "done" }],
+      ["post_pr_comment", { body: "done", target: "all" }],
+      ["human_question", { questions: ["Which env?"] }],
+      ["arthur_injection_check", { contentFromStep: "step-1" }],
+      ["arthur_trace", { taskName: "custom" }],
+    ];
+    for (const [type, params] of valid) {
+      expect(shapeOk([node("n", type, params)]), type).toBe(true);
+    }
+  });
+
+  it("rejects unknown param keys on every new block type", () => {
+    const types: WorkflowBlockType[] = [
+      "trigger_plan_approved",
+      "trigger_pr_created",
+      "trigger_pr_checks_failed",
+      "trigger_pr_review",
+      "prepare_workspace",
+      "finalize_workspace",
+      "fix_agent",
+      "call_llm",
+      "fetch_pr_context",
+      "run_checks",
+      "human_question",
+      "arthur_injection_check",
+      "arthur_trace",
+    ];
+    for (const type of types) {
+      expect(shapeOk([node("n", type, { bogus: 1 })]), type).toBe(false);
+    }
+    expect(shapeOk([node("n", "generic_agent", { prompt: "p", bogus: 1 })])).toBe(false);
+    expect(shapeOk([node("n", "post_ticket_comment", { body: "b", bogus: 1 })])).toBe(false);
+    expect(shapeOk([node("n", "post_pr_comment", { body: "b", bogus: 1 })])).toBe(false);
+  });
+
+  it("applies trigger param defaults", () => {
+    expect(parseNode({ type: "trigger_plan_approved", params: {} })?.params).toEqual({
+      source: "dashboard",
+    });
+    expect(parseNode({ type: "trigger_pr_created", params: {} })?.params).toEqual({
+      providers: ["github", "gitlab"],
+      onlyWorkflowOwned: true,
+    });
+    expect(parseNode({ type: "trigger_pr_checks_failed", params: {} })?.params).toEqual({
+      providers: ["github", "gitlab"],
+    });
+    expect(parseNode({ type: "trigger_pr_review", params: {} })?.params).toEqual({
+      providers: ["github"],
+      on: "changes_requested",
+    });
+  });
+
+  it("applies action param defaults", () => {
+    expect(parseNode({ type: "fix_agent", params: {} })?.params).toEqual({ maxMinutes: 25 });
+    expect(parseNode({ type: "call_llm", params: { prompt: "p" } })?.params).toEqual({
+      prompt: "p",
+      model: "claude-haiku-4-5",
+    });
+    expect(parseNode({ type: "post_pr_comment", params: { body: "b" } })?.params).toEqual({
+      body: "b",
+      target: "primary",
+    });
+  });
+
+  it("bounds fix_agent maxMinutes and requires generic_agent prompt", () => {
+    expect(shapeOk([node("n", "fix_agent", { maxMinutes: 4 })])).toBe(false);
+    expect(shapeOk([node("n", "fix_agent", { maxMinutes: 61 })])).toBe(false);
+    expect(shapeOk([node("n", "generic_agent", {})])).toBe(false);
+    expect(shapeOk([node("n", "generic_agent", { prompt: "" })])).toBe(false);
+  });
+
+  it("generalizes update_ticket_status target to any bounded string", () => {
+    expect(shapeOk([node("n", "update_ticket_status", { target: "ai_review" })])).toBe(true);
+    expect(shapeOk([node("n", "update_ticket_status", { target: "backlog" })])).toBe(true);
+    expect(shapeOk([node("n", "update_ticket_status", { target: "Code Review" })])).toBe(true);
+    expect(shapeOk([node("n", "update_ticket_status", { target: "" })])).toBe(false);
+    expect(shapeOk([node("n", "update_ticket_status", { target: "x".repeat(101) })])).toBe(false);
   });
 });
 
