@@ -1,10 +1,12 @@
 import type {
   WorkflowBlockType,
   WorkflowDefinition,
+  WorkflowDefinitionEdge,
   WorkflowDefinitionNode,
   WorkflowParamValue,
 } from "@shared/contracts";
 import type { FlowEdgeDef, FlowNodeDef } from "@/lib/flows";
+import { defaultPort } from "./edges";
 
 const PARAM_KEYS: Record<WorkflowBlockType, string[]> = {
   trigger_ticket_ai: [],
@@ -52,6 +54,7 @@ export function serializeWorkflowDefinition(
   nodes: readonly FlowNodeDef[],
   edges: readonly FlowEdgeDef[],
 ): WorkflowDefinition {
+  const typeById = new Map(nodes.map((node) => [node.id, node.type]));
   return {
     schemaVersion: 1,
     nodes: nodes.map((node) => {
@@ -65,6 +68,17 @@ export function serializeWorkflowDefinition(
       if (node.name !== undefined) serialized.name = node.name;
       return serialized;
     }),
-    edges: edges.map((edge) => ({ from: edge.from, to: edge.to })),
+    edges: edges.map((edge) => {
+      const serialized: WorkflowDefinitionEdge = { from: edge.from, to: edge.to };
+      const sourceType = typeById.get(edge.from);
+      if (
+        edge.fromPort !== undefined &&
+        sourceType !== undefined &&
+        edge.fromPort !== defaultPort(sourceType)
+      ) {
+        serialized.fromPort = edge.fromPort;
+      }
+      return serialized;
+    }),
   };
 }

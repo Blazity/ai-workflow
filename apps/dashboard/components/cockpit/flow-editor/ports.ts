@@ -5,9 +5,13 @@ export const NODE_H = 84;
 
 export interface Point { x: number; y: number; }
 
-export function portPos(node: FlowNodeDef, kind: "in" | "out"): Point {
-  if (kind === "in") return { x: node.x, y: node.y + NODE_H / 2 };
-  return { x: node.x + NODE_W, y: node.y + NODE_H / 2 };
+export function inPortPos(node: FlowNodeDef): Point {
+  return { x: node.x, y: node.y + NODE_H / 2 };
+}
+
+export function outPortPos(node: FlowNodeDef, portIndex: number, portCount: number): Point {
+  const count = Math.max(1, portCount);
+  return { x: node.x + NODE_W, y: node.y + (NODE_H * (portIndex + 1)) / (count + 1) };
 }
 
 export function bezier(p1: Point, p2: Point): string {

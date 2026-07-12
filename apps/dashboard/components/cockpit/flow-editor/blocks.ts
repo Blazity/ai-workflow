@@ -34,26 +34,89 @@ export const NODE_CATEGORIES: Record<
   terminate:              { color: "#35823f", soft: "#E9F3EA", label: "Terminate",            glyph: "■", group: "control" },
 };
 
+function truncate(text: string, max = 48): string {
+  const clean = text.trim().replace(/\s+/g, " ");
+  return clean.length > max ? clean.slice(0, max - 1) + "…" : clean;
+}
+
+function str(value: WorkflowParamValue | undefined): string {
+  return typeof value === "string" ? value : "";
+}
+
+function agentModelSummary(node: FlowNodeDef): string | null {
+  const model = str(node.params.model);
+  if (model === "") return null;
+  const provider = node.params.provider;
+  return provider === "claude" || provider === "codex" ? `${provider} · ${model}` : model;
+}
+
 export function nodeSummary(node: FlowNodeDef, options: WorkflowEditorOptions): string | null {
   switch (node.type) {
     case "planning_agent":
     case "implementation_agent":
-    case "review_agent": {
-      const model = node.params.model;
-      const modelText = typeof model === "string" && model !== "" ? model : null;
-      if (modelText === null) return null;
-      const provider = node.params.provider;
-      return provider === "claude" || provider === "codex"
-        ? `${provider} · ${modelText}`
-        : modelText;
+    case "review_agent":
+    case "fix_agent":
+      return agentModelSummary(node);
+    case "generic_agent": {
+      const model = agentModelSummary(node);
+      if (model) return model;
+      const prompt = str(node.params.prompt);
+      return prompt !== "" ? truncate(prompt) : null;
     }
+    case "call_llm": {
+      const model = str(node.params.model);
+      if (model !== "") return model;
+      const prompt = str(node.params.prompt);
+      return prompt !== "" ? truncate(prompt) : null;
+    }
+    case "branch": {
+      const condition = str(node.params.condition);
+      return condition !== "" ? truncate(condition) : null;
+    }
+    case "loop": {
+      const attempts = node.params.maxAttempts;
+      const onExhaust = str(node.params.onExhaust);
+      if (typeof attempts !== "number" && onExhaust === "") return null;
+      const parts: string[] = [];
+      if (typeof attempts === "number") parts.push(`max ${attempts}`);
+      if (onExhaust !== "") parts.push(`on exhaust ${onExhaust}`);
+      return parts.join(", ");
+    }
+    case "terminate": {
+      const status = str(node.params.terminalStatus);
+      return status !== "" ? status : null;
+    }
+    case "run_checks": {
+      const commands = node.params.commands;
+      return Array.isArray(commands) && commands.length > 0
+        ? `${commands.length} command${commands.length === 1 ? "" : "s"}`
+        : "config checks";
+    }
+    case "human_question": {
+      const questions = node.params.questions;
+      return Array.isArray(questions) && questions.length > 0 ? truncate(String(questions[0])) : null;
+    }
+    case "post_ticket_comment":
+    case "post_pr_comment": {
+      const body = str(node.params.body);
+      return body !== "" ? truncate(body) : null;
+    }
+    case "trigger_pr_review": {
+      const on = str(node.params.on);
+      return on !== "" ? `on ${on}` : null;
+    }
+    case "trigger_pr_created":
+      return node.params.onlyWorkflowOwned === true ? "workflow-owned only" : null;
     case "update_ticket_status": {
       const target = node.params.target;
-      return options.ticketStatusTargets.find((t) => t.value === target)?.label ?? null;
+      const label = options.ticketStatusTargets.find((t) => t.value === target)?.label;
+      if (label) return label;
+      const custom = str(target);
+      return custom !== "" ? custom : null;
     }
     case "send_slack_message": {
-      const message = node.params.message;
-      return typeof message === "string" && message !== "" ? message : null;
+      const message = str(node.params.message);
+      return message !== "" ? message : null;
     }
     case "run_pre_pr_checks": {
       const cycles = node.params.maxFixCycles;
@@ -70,14 +133,59 @@ export interface PaletteItem {
   params: Record<string, WorkflowParamValue>;
 }
 
-export function buildPaletteItems(defaultModel: string): PaletteItem[] {
-  return [
-    { type: "planning_agent", name: "Planning agent", params: { model: defaultModel } },
-    { type: "implementation_agent", name: "Implementation agent", params: { model: defaultModel } },
-    { type: "review_agent", name: "Review agent", params: { model: defaultModel } },
-    { type: "run_pre_pr_checks", name: "Run pre-PR checks", params: { maxFixCycles: 3 } },
-    { type: "open_pr", name: "Open pull request", params: {} },
-    { type: "update_ticket_status", name: "Update ticket status", params: { target: "ai_review" } },
-    { type: "send_slack_message", name: "Send Slack message", params: { message: "" } },
-  ];
+export interface PaletteGroup {
+  group: string;
+  label: string;
+  color: string;
+  items: PaletteItem[];
+}
+
+const GROUP_ORDER = [
+  "trigger",
+  "agents",
+  "workspace",
+  "control",
+  "ticket",
+  "vcs",
+  "human",
+  "utility",
+  "arthur",
+] as const;
+
+const GROUP_META: Record<string, { label: string; color: string }> = {
+  trigger: { label: "Triggers", color: "#D14343" },
+  agents: { label: "Agents", color: "#7C3AED" },
+  workspace: { label: "Workspace", color: "#0f7f8b" },
+  control: { label: "Control", color: "#35823f" },
+  ticket: { label: "Ticket", color: "#2563EB" },
+  vcs: { label: "Version control", color: "#3C43E7" },
+  human: { label: "Human", color: "#b06a14" },
+  utility: { label: "Utility", color: "#64748B" },
+  arthur: { label: "Arthur", color: "#8b6f8f" },
+};
+
+function seedParams(type: WorkflowBlockType, defaultModel: string): Record<string, WorkflowParamValue> {
+  if (NODE_CATEGORIES[type].group === "agents") return { model: defaultModel };
+  if (type === "loop") return { maxAttempts: 3, onExhaust: "fail" };
+  if (type === "terminate") return { terminalStatus: "done" };
+  if (type === "branch") return { condition: "" };
+  if (type === "update_ticket_status") return { target: "ai_review" };
+  if (type === "run_pre_pr_checks") return { maxFixCycles: 3 };
+  return {};
+}
+
+export function buildPaletteItems(defaultModel: string): PaletteGroup[] {
+  const types = Object.keys(NODE_CATEGORIES) as WorkflowBlockType[];
+  return GROUP_ORDER.map((group) => ({
+    group,
+    label: GROUP_META[group].label,
+    color: GROUP_META[group].color,
+    items: types
+      .filter((type) => NODE_CATEGORIES[type].group === group)
+      .map((type) => ({
+        type,
+        name: NODE_CATEGORIES[type].label,
+        params: seedParams(type, defaultModel),
+      })),
+  }));
 }

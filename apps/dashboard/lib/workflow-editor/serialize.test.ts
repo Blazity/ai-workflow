@@ -119,6 +119,42 @@ test("emits array params and drops empty arrays", () => {
   ]);
 });
 
+test("emits fromPort only when set and not the source type default", () => {
+  const nodes: FlowNodeDef[] = [
+    { id: "branch", type: "branch", x: 0, y: 0, params: { condition: "steps.a.output.ok == true" } },
+    { id: "yes", type: "open_pr", x: 0, y: 0, params: {} },
+    { id: "no", type: "terminate", x: 0, y: 0, params: { terminalStatus: "failed" } },
+    { id: "agent", type: "implementation_agent", x: 0, y: 0, params: {} },
+    { id: "recover", type: "fix_agent", x: 0, y: 0, params: {} },
+    { id: "done", type: "open_pr", x: 0, y: 0, params: {} },
+  ];
+  const edges: FlowEdgeDef[] = [
+    { from: "branch", to: "yes", fromPort: "true" },
+    { from: "branch", to: "no", fromPort: "false" },
+    { from: "agent", to: "done", fromPort: "out" },
+    { from: "agent", to: "recover", fromPort: "failed" },
+  ];
+
+  const out = serializeWorkflowDefinition(nodes, edges);
+  assert.deepEqual(out.edges, [
+    { from: "branch", to: "yes" },
+    { from: "branch", to: "no", fromPort: "false" },
+    { from: "agent", to: "done" },
+    { from: "agent", to: "recover", fromPort: "failed" },
+  ]);
+});
+
+test("leaves legacy edges without fromPort byte-comparable", () => {
+  const nodes: FlowNodeDef[] = [
+    { id: "trigger", type: "trigger_ticket_ai", x: 0, y: 0, params: {} },
+    { id: "status", type: "update_ticket_status", x: 0, y: 0, params: { target: "ai_review" } },
+  ];
+  const edges: FlowEdgeDef[] = [{ from: "trigger", to: "status" }];
+
+  const out = serializeWorkflowDefinition(nodes, edges);
+  assert.deepEqual(out.edges, [{ from: "trigger", to: "status" }]);
+});
+
 test("never emits provider for non-agent node types", () => {
   const nodes: FlowNodeDef[] = [
     {

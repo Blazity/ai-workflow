@@ -3,11 +3,20 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import type { FlowNodeDef, FlowEdgeDef, NodeRunStatus, RunStatusMap } from "@/lib/flows";
 import type { WorkflowEditorOptions, WorkflowParamValue } from "@shared/contracts";
+import { FAILURE_PORT, isTriggerBlockType } from "@shared/contracts";
 import { useIsMobileViewport } from "@/lib/use-media-query";
 import { MobileSheet } from "@/components/cockpit/mobile/mobile-sheet";
+import {
+  defaultPort,
+  edgeKey,
+  isBackEdge,
+  resolvedPort,
+  upsertEdge,
+  visibleOutPorts,
+} from "@/lib/workflow-editor/edges";
 import { NODE_CATEGORIES, buildPaletteItems, nodeSummary } from "./blocks";
 import type { PaletteItem } from "./blocks";
-import { NODE_W, NODE_H, portPos, bezier } from "./ports";
+import { NODE_W, NODE_H, inPortPos, outPortPos, bezier } from "./ports";
 import type { Point } from "./ports";
 import { NodePalette, MobilePaletteList } from "./palette";
 import { ConfigFields } from "./config-fields";
@@ -25,29 +34,33 @@ const FlowNode = React.memo(function FlowNode({
   options,
   canEdit,
   selected,
+  locked,
+  outPorts,
   onSelect,
   onDragStart,
   onPortDown,
   onPortUp,
   runStatus,
   runError,
-  connecting,
+  connectingPort,
 }: {
   node: FlowNodeDef;
   options: WorkflowEditorOptions;
   canEdit: boolean;
   selected: boolean;
+  locked: boolean;
+  outPorts: string[];
   onSelect: (id: string) => void;
   onDragStart: (e: React.PointerEvent, node: FlowNodeDef) => void;
-  onPortDown: (e: React.PointerEvent, nodeId: string) => void;
+  onPortDown: (e: React.PointerEvent, nodeId: string, portId: string) => void;
   onPortUp: (e: React.PointerEvent, nodeId: string) => void;
   runStatus?: NodeRunStatus;
   runError?: string;
-  connecting?: boolean;
+  connectingPort?: string | null;
 }) {
   const cat = NODE_CATEGORIES[node.type];
-  const locked = node.type === "trigger_ticket_ai";
   const summary = nodeSummary(node, options);
+  const portCount = outPorts.length;
 
   return (
     <div
@@ -95,7 +108,7 @@ const FlowNode = React.memo(function FlowNode({
         )}
       </div>
 
-      {node.type !== "trigger_ticket_ai" && (
+      {!isTriggerBlockType(node.type) && (
         <span
           onPointerDown={(e) => e.stopPropagation()}
           onPointerUp={(e) => onPortUp(e, node.id)}
@@ -107,15 +120,29 @@ const FlowNode = React.memo(function FlowNode({
           }}
         />
       )}
-      <span
-        onPointerDown={(e) => onPortDown(e, node.id)}
-        title={canEdit ? "Drag to another node to connect" : undefined}
-        className={`absolute w-3.5 h-3.5 rounded-full border-2 border-white ${canEdit ? "cursor-crosshair hover:scale-125 transition-transform" : ""} ${connecting ? "ring-2 ring-mariner ring-offset-1 scale-125" : ""}`}
-        style={{
-          left: NODE_W - 5, top: NODE_H / 2 - 7,
-          background: cat.color,
-        }}
-      />
+      {outPorts.map((port, i) => {
+        const top = (NODE_H * (i + 1)) / (portCount + 1);
+        const showLabel = portCount > 1 || port === FAILURE_PORT;
+        return (
+          <span key={port}>
+            {showLabel && (
+              <span
+                className="absolute font-mono text-[8px] font-semibold tracking-[0.06em] uppercase leading-none pointer-events-none"
+                style={{ right: 12, top: top - 4, color: cat.color }}
+              >{port}</span>
+            )}
+            <span
+              onPointerDown={(e) => onPortDown(e, node.id, port)}
+              title={canEdit ? "Drag to another node to connect" : undefined}
+              className={`absolute w-3.5 h-3.5 rounded-full border-2 border-white ${canEdit ? "cursor-crosshair hover:scale-125 transition-transform" : ""} ${connectingPort === port ? "ring-2 ring-mariner ring-offset-1 scale-125" : ""}`}
+              style={{
+                left: NODE_W - 5, top: top - 7,
+                background: cat.color,
+              }}
+            />
+          </span>
+        );
+      })}
     </div>
   );
 });
@@ -132,6 +159,7 @@ interface DragState {
 
 interface ConnectState {
   from: string;
+  fromPort: string;
   cursor: Point;
 }
 
@@ -157,7 +185,7 @@ function FlowCanvas({
   canEdit: boolean;
   options: WorkflowEditorOptions;
   onNodesChange: React.Dispatch<React.SetStateAction<FlowNodeDef[]>>;
-  onAddEdge: (from: string, to: string) => void;
+  onAddEdge: (from: string, fromPort: string, to: string) => void;
   onRemoveEdge: (edge: FlowEdgeDef) => void;
   onDropNode: (item: PaletteItem, at: Point) => void;
   runStatuses?: RunStatusMap;
@@ -346,19 +374,48 @@ function FlowCanvas({
   };
 
   // Edge connecting: pointerdown on an output port, pointerup on a target input port.
-  const onPortDown = useCallback((e: React.PointerEvent, nodeId: string) => {
+  const onPortDown = useCallback((e: React.PointerEvent, nodeId: string, portId: string) => {
     e.stopPropagation();
     if (!canEdit) return;
-    setConnect({ from: nodeId, cursor: toCanvas(e.clientX, e.clientY) });
+    setConnect({ from: nodeId, fromPort: portId, cursor: toCanvas(e.clientX, e.clientY) });
   }, [toCanvas, canEdit]);
   const onPortUp = useCallback((e: React.PointerEvent, nodeId: string) => {
     e.stopPropagation();
-    if (connect && connect.from !== nodeId) onAddEdge(connect.from, nodeId);
+    if (connect && connect.from !== nodeId) onAddEdge(connect.from, connect.fromPort, nodeId);
     setConnect(null);
   }, [connect, onAddEdge]);
 
   // For edges
   const nodeById = useMemo(() => Object.fromEntries(nodes.map(n => [n.id, n])), [nodes]);
+
+  // A sole trigger cannot be deleted (a graph needs at least one entry point).
+  const triggerCount = useMemo(() => nodes.filter(n => isTriggerBlockType(n.type)).length, [nodes]);
+
+  // Nodes whose "failed" port is wired by an existing edge — such ports render
+  // even when the node isn't selected.
+  const failureUsed = useMemo(() => {
+    const set = new Set<string>();
+    for (const e of edges) if (e.fromPort === FAILURE_PORT) set.add(e.from);
+    return set;
+  }, [edges]);
+
+  // Output ports rendered per node: the spec ports plus "failed" when it is
+  // wired or the node is the editable selection.
+  const portsByNode = useMemo(() => {
+    const map: Record<string, string[]> = {};
+    for (const n of nodes) {
+      map[n.id] = visibleOutPorts(n.type, failureUsed.has(n.id), selectedId === n.id && canEdit);
+    }
+    return map;
+  }, [nodes, failureUsed, selectedId, canEdit]);
+
+  // Edges that close a cycle (their target can already reach their source) are
+  // drawn dashed. Recomputed only when the edge set changes.
+  const backEdgeKeys = useMemo(() => {
+    const set = new Set<string>();
+    for (const e of edges) if (isBackEdge(edges, e)) set.add(edgeKey(e));
+    return set;
+  }, [edges]);
 
   return (
     <div
@@ -413,12 +470,17 @@ function FlowCanvas({
           {edges.map((e, i) => {
             const a = nodeById[e.from], b = nodeById[e.to];
             if (!a || !b) return null;
-            const p1 = portPos(a, "out");
-            const p2 = portPos(b, "in");
+            const ports = portsByNode[a.id] ?? [];
+            const port = resolvedPort(e, a.type);
+            const idx = ports.indexOf(port);
+            const p1 = outPortPos(a, idx < 0 ? 0 : idx, ports.length || 1);
+            const p2 = inPortPos(b);
             const isActive = (selectedId === a.id || selectedId === b.id);
             const stroke = isActive ? "#3C43E7" : "#9EA3AA";
             const hovered = hoverEdge === i;
             const mx = (p1.x + p2.x) / 2, my = (p1.y + p2.y) / 2;
+            const back = backEdgeKeys.has(edgeKey(e));
+            const labelPort = e.fromPort !== undefined && e.fromPort !== defaultPort(a.type) ? e.fromPort : null;
             return (
               <g
                 key={i}
@@ -429,12 +491,21 @@ function FlowCanvas({
                   d={bezier(p1, p2)}
                   stroke={hovered ? "#D14343" : stroke}
                   strokeWidth={isActive || hovered ? 2 : 1.5}
+                  strokeDasharray={back ? "6 6" : undefined}
                   fill="none"
                   markerEnd={hovered ? undefined : isActive ? "url(#arrowBlue)" : "url(#arrow)"}
                   className="transition-[stroke] duration-[120ms] pointer-events-none"
                 />
                 {/* Fat transparent hit area so the thin edge is easy to hover */}
                 <path d={bezier(p1, p2)} stroke="transparent" strokeWidth={18} fill="none" style={{ pointerEvents: "stroke" }} />
+                {labelPort && !hovered && (
+                  <text
+                    x={mx} y={my - 8} textAnchor="middle" fontSize={11} fontWeight={800}
+                    fill="#181b20" stroke="#fff" strokeWidth={4} paintOrder="stroke"
+                    className="pointer-events-none"
+                    style={{ fontFamily: '"JetBrains Mono", monospace' }}
+                  >{labelPort}</text>
+                )}
                 {/* Hover to delete: ✕ badge at the edge midpoint */}
                 {hovered && (
                   <g
@@ -455,7 +526,9 @@ function FlowCanvas({
           {connect && (() => {
             const a = nodeById[connect.from];
             if (!a) return null;
-            const p1 = portPos(a, "out");
+            const ports = portsByNode[a.id] ?? [];
+            const idx = ports.indexOf(connect.fromPort);
+            const p1 = outPortPos(a, idx < 0 ? 0 : idx, ports.length || 1);
             return (
               <path
                 d={bezier(p1, connect.cursor)}
@@ -478,13 +551,15 @@ function FlowCanvas({
             options={options}
             canEdit={canEdit}
             selected={selectedId === n.id}
+            locked={isTriggerBlockType(n.type) && triggerCount === 1}
+            outPorts={portsByNode[n.id] ?? []}
             onSelect={setSelectedId}
             onDragStart={startNodeDrag}
             onPortDown={onPortDown}
             onPortUp={onPortUp}
             runStatus={runStatuses?.[n.id]}
             runError={runErrors?.[n.id]}
-            connecting={connect?.from === n.id}
+            connectingPort={connect?.from === n.id ? connect.fromPort : null}
           />
         ))}
       </div>
@@ -571,8 +646,10 @@ export function FlowEditor({
   }, [fullView]);
 
   const selected = selectedId ? nodes.find(n => n.id === selectedId) ?? null : null;
+  const triggerCount = nodes.filter(n => isTriggerBlockType(n.type)).length;
+  const selectedLocked = selected ? isTriggerBlockType(selected.type) && triggerCount === 1 : false;
 
-  const paletteItems = useMemo(() => buildPaletteItems(options.defaultModel), [options.defaultModel]);
+  const paletteGroups = useMemo(() => buildPaletteItems(options.defaultModel), [options.defaultModel]);
 
   const addNode = (item: PaletteItem, at?: Point) => {
     const num = (s: string) => parseInt(s.replace(/\D/g, ""), 10) || 0;
@@ -589,19 +666,15 @@ export function FlowEditor({
     setSelectedId(id);
   };
 
-  const addEdge = (from: string, to: string) => {
+  const addEdge = (from: string, fromPort: string, to: string) => {
     if (from === to) return;
-    onEdgesChange(prev =>
-      prev.some(e => e.from === from && e.to === to)
-        ? prev
-        : [...prev, { from, to }],
-    );
+    const source = nodes.find(n => n.id === from);
+    if (!source) return;
+    onEdgesChange(prev => upsertEdge(prev, from, fromPort, to, source.type));
   };
 
   const removeEdge = (edge: FlowEdgeDef) => {
-    onEdgesChange(prev =>
-      prev.filter(e => !(e.from === edge.from && e.to === edge.to)),
-    );
+    onEdgesChange(prev => prev.filter(e => edgeKey(e) !== edgeKey(edge)));
   };
 
   const updateSelected = (path: string, value: WorkflowParamValue | undefined) => {
@@ -619,7 +692,7 @@ export function FlowEditor({
     }));
   };
   const deleteSelected = () => {
-    if (!selected || selected.type === "trigger_ticket_ai") return;
+    if (!selected || selectedLocked) return;
     onNodesChange(prev => prev.filter(n => n.id !== selectedId));
     onEdgesChange(prev => prev.filter(e => e.from !== selectedId && e.to !== selectedId));
     setSelectedId(null);
@@ -656,7 +729,7 @@ export function FlowEditor({
 
       {/* Editor body */}
       <div className="flex-1 flex min-h-0">
-        {!isMobile && canEdit && <NodePalette items={paletteItems} onAdd={addNode} />}
+        {!isMobile && canEdit && <NodePalette groups={paletteGroups} onAdd={addNode} />}
         <FlowCanvas
           nodes={nodes}
           edges={edges}
@@ -679,6 +752,7 @@ export function FlowEditor({
             node={selected}
             options={options}
             canEdit={canEdit}
+            locked={selectedLocked}
             onChange={updateSelected}
             onDelete={deleteSelected}
             onClose={() => setSelectedId(null)}
@@ -696,6 +770,7 @@ export function FlowEditor({
                 node={selected}
                 options={options}
                 canEdit={canEdit}
+                locked={selectedLocked}
                 onChange={updateSelected}
                 onDelete={deleteSelected}
                 onClose={() => setSelectedId(null)}
@@ -713,7 +788,7 @@ export function FlowEditor({
         )}
         {isMobile && canEdit && (
           <MobileSheet open={paletteOpen} onClose={() => setPaletteOpen(false)} title="Add step" heightClass="max-h-[60vh]">
-            <MobilePaletteList items={paletteItems} onAdd={(it) => { addNode(it); setPaletteOpen(false); }} />
+            <MobilePaletteList groups={paletteGroups} onAdd={(it) => { addNode(it); setPaletteOpen(false); }} />
           </MobileSheet>
         )}
       </div>
@@ -725,6 +800,7 @@ function NodeConfig({
   node,
   options,
   canEdit,
+  locked,
   onChange,
   onDelete,
   onClose,
@@ -733,13 +809,13 @@ function NodeConfig({
   node: FlowNodeDef;
   options: WorkflowEditorOptions;
   canEdit: boolean;
+  locked: boolean;
   onChange: (path: string, value: WorkflowParamValue | undefined) => void;
   onDelete: () => void;
   onClose: () => void;
   embedded?: boolean;
 }) {
   const cat = NODE_CATEGORIES[node.type];
-  const locked = node.type === "trigger_ticket_ai";
   const inner = (
     <>
       <div className="pt-[14px] px-[18px] pb-[14px] border-b border-neutral-200 flex flex-col gap-1.5">
