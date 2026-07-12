@@ -654,6 +654,7 @@ async function recordBlockStatusesStep(payload: {
   ticketTitle: string;
   ticketUrl: string;
   definitionVersion: number | null;
+  definitionId: number | null;
   blockStatuses: Record<string, BlockRunState>;
 }) {
   "use step";
@@ -742,6 +743,7 @@ export async function agentWorkflow(
       ticketTitle: ticket.title,
       ticketUrl: `${env.JIRA_BASE_URL.replace(/\/+$/, "")}/browse/${ticket.identifier}`,
       definitionVersion: plan.version,
+      definitionId: plan.definitionId,
       blockStatuses: { ...blockStatuses },
     }).catch(() => {});
   await writeBlockStatuses();

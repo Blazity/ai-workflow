@@ -71,6 +71,7 @@ const blockWrite = (over: Partial<RunBlockStatusWrite> = {}): RunBlockStatusWrit
   ticketTitle: "Add login",
   ticketUrl: "https://jira/browse/PROJ-1",
   definitionVersion: 3,
+  definitionId: 7,
   blockStatuses: { b1: { status: "running" }, b2: { status: "pending" } },
   ...over,
 });
@@ -269,11 +270,25 @@ describe("recordBlockStatuses", () => {
       b2: { status: "pending" },
     });
     expect(r.definitionVersion).toBe(3);
+    expect(r.definitionId).toBe(7);
     expect(r.workflowId).toBe("wf_agent");
     expect(r.workflowName).toBe("Agent");
     expect(r.status).toBe("running");
     expect(r.ticketKey).toBe("PROJ-1");
     expect(r.ticketTitle).toBe("Add login");
+  });
+
+  it("updates definition_id on conflict", async () => {
+    await recordBlockStatuses(db, blockWrite());
+    await recordBlockStatuses(db, blockWrite({ definitionId: 9 }));
+    expect((await row("wrun_1")).definitionId).toBe(9);
+  });
+
+  it("does not write definition_id from the other writers", async () => {
+    await upsertRunSnapshots(db, [snapshot()]);
+    expect((await row("wrun_1")).definitionId).toBeNull();
+    await recordRunUsage(db, usage());
+    expect((await row("wrun_1")).definitionId).toBeNull();
   });
 
   it("leaves block columns intact when a later snapshot lands", async () => {

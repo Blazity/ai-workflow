@@ -32,6 +32,7 @@ interface RowInput {
   updatedAt?: Date;
   completedAt?: Date | null;
   definitionVersion?: number | null;
+  definitionId?: number | null;
 }
 
 async function insert(db: Db, over: RowInput) {
@@ -42,6 +43,7 @@ async function insert(db: Db, over: RowInput) {
     status: over.status ?? "running",
     ticketKey: "AWT-1",
     definitionVersion: over.definitionVersion ?? 1,
+    definitionId: over.definitionId ?? null,
     blockStatuses:
       over.blockStatuses === undefined
         ? { b1: { status: "running" } }
@@ -151,5 +153,79 @@ describe("collectBlockStatuses", () => {
     const db = await createTestDb();
     const registry = makeRegistry([]);
     expect(await collectBlockStatuses({ registry, db })).toBeNull();
+  });
+
+  it("carries definitionId in the snapshot", async () => {
+    const db = await createTestDb();
+    await insert(db, {
+      runId: "done",
+      status: "success",
+      completedAt: new Date("2026-07-10T12:00:00Z"),
+      updatedAt: new Date("2026-07-10T12:00:00Z"),
+      definitionId: 42,
+    });
+    const snap = await collectBlockStatuses({ registry: makeRegistry([]), db });
+    expect(snap?.definitionId).toBe(42);
+  });
+
+  it("filters a live run by definitionId", async () => {
+    const db = await createTestDb();
+    await insert(db, {
+      runId: "other",
+      updatedAt: new Date("2026-07-10T11:00:00Z"),
+      definitionId: 1,
+    });
+    await insert(db, {
+      runId: "wanted",
+      updatedAt: new Date("2026-07-10T10:00:00Z"),
+      definitionId: 2,
+    });
+    const registry = makeRegistry([
+      { ticketKey: "AWT-1", runId: "other" },
+      { ticketKey: "AWT-2", runId: "wanted" },
+    ]);
+
+    const snap = await collectBlockStatuses({ registry, db, definitionId: 2 });
+    expect(snap?.runId).toBe("wanted");
+    expect(snap?.source).toBe("live");
+  });
+
+  it("filters the completed fallback by definitionId", async () => {
+    const db = await createTestDb();
+    await insert(db, {
+      runId: "newer-other",
+      status: "success",
+      completedAt: new Date("2026-07-10T12:00:00Z"),
+      updatedAt: new Date("2026-07-10T12:00:00Z"),
+      definitionId: 1,
+    });
+    await insert(db, {
+      runId: "older-wanted",
+      status: "success",
+      completedAt: new Date("2026-07-10T09:00:00Z"),
+      updatedAt: new Date("2026-07-10T09:00:00Z"),
+      definitionId: 2,
+    });
+    const snap = await collectBlockStatuses({ registry: makeRegistry([]), db, definitionId: 2 });
+    expect(snap?.runId).toBe("older-wanted");
+    expect(snap?.source).toBe("last");
+  });
+
+  it("returns null when no run matches the definitionId filter", async () => {
+    const db = await createTestDb();
+    await insert(db, {
+      runId: "live",
+      updatedAt: new Date("2026-07-10T10:00:00Z"),
+      definitionId: 1,
+    });
+    await insert(db, {
+      runId: "done",
+      status: "success",
+      completedAt: new Date("2026-07-10T11:00:00Z"),
+      updatedAt: new Date("2026-07-10T11:00:00Z"),
+      definitionId: 1,
+    });
+    const registry = makeRegistry([{ ticketKey: "AWT-1", runId: "live" }]);
+    expect(await collectBlockStatuses({ registry, db, definitionId: 99 })).toBeNull();
   });
 });

@@ -9,6 +9,7 @@ function snapshot(overrides: Partial<RunBlockStatusSnapshot> = {}): RunBlockStat
     ticketKey: "PROJ-1",
     source: "live",
     status: "running",
+    definitionId: null,
     definitionVersion: 4,
     blockStatuses: {},
     updatedAt: "2026-01-01T00:00:00.000Z",

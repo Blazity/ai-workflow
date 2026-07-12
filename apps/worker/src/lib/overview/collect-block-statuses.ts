@@ -1,4 +1,4 @@
-import { and, desc, inArray, isNotNull, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNotNull, sql } from "drizzle-orm";
 import type { RunBlockStatusSnapshot } from "@shared/contracts";
 import type { Db } from "../../db/client.js";
 import { workflowRuns } from "../../db/schema.js";
@@ -8,6 +8,8 @@ import type { RunRegistryAdapter } from "../../adapters/run-registry/types.js";
 export interface CollectBlockStatusesOptions {
   registry: RunRegistryAdapter;
   db: Db;
+  /** When set, restrict both the live and last queries to this definition. */
+  definitionId?: number;
 }
 
 /**
@@ -21,7 +23,9 @@ export interface CollectBlockStatusesOptions {
 export async function collectBlockStatuses(
   opts: CollectBlockStatusesOptions,
 ): Promise<RunBlockStatusSnapshot | null> {
-  const { registry, db } = opts;
+  const { registry, db, definitionId } = opts;
+  const definitionFilter =
+    definitionId === undefined ? undefined : eq(workflowRuns.definitionId, definitionId);
 
   const entries = await registry.listAll();
   const liveRunIds = entries.map((e) => e.runId);
@@ -34,6 +38,7 @@ export async function collectBlockStatuses(
         and(
           inArray(workflowRuns.runId, liveRunIds),
           isNotNull(workflowRuns.blockStatuses),
+          ...(definitionFilter ? [definitionFilter] : []),
         ),
       )
       .orderBy(desc(workflowRuns.updatedAt))
@@ -48,6 +53,7 @@ export async function collectBlockStatuses(
       and(
         isNotNull(workflowRuns.blockStatuses),
         inArray(workflowRuns.status, ["success", "failed"]),
+        ...(definitionFilter ? [definitionFilter] : []),
       ),
     )
     .orderBy(desc(sql`coalesce(${workflowRuns.completedAt}, ${workflowRuns.updatedAt})`))
@@ -67,6 +73,7 @@ function toSnapshot(
     source,
     status: coerceStatus(row.status),
     definitionVersion: row.definitionVersion,
+    definitionId: row.definitionId,
     blockStatuses: row.blockStatuses ?? {},
     updatedAt: row.updatedAt.toISOString(),
     completedAt: row.completedAt?.toISOString() ?? null,

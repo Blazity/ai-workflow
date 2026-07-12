@@ -13,6 +13,12 @@ import {
   serializeWorkflowDefinitionVersion,
 } from "../../../workflow-definition/store.js";
 
+/**
+ * Legacy single-definition shim, removed once the dashboard moves to the
+ * multi-definition routes. Delegates to the store's default-definition
+ * wrappers (enabled definition handling trigger_ticket_ai, else lowest id) so a
+ * single-definition install behaves exactly as before.
+ */
 export default defineEventHandler(
   async (event): Promise<WorkflowDefinitionResponse | undefined> => {
     try {

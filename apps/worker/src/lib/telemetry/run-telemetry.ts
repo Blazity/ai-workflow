@@ -214,14 +214,16 @@ export interface RunBlockStatusWrite {
   ticketTitle: string;
   ticketUrl: string;
   definitionVersion: number | null;
+  definitionId: number | null;
   blockStatuses: Record<string, BlockRunState>;
 }
 
 /**
  * Block-status writer. Upserts per-block progress for one run, owning exactly
- * block_statuses and definition_version (plus updated_at). Identity and a
- * "running" status land only on INSERT (same rationale as recordRunUsage); on
- * conflict it touches nothing the cron snapshot or recordRunUsage own.
+ * block_statuses, definition_version and definition_id (plus updated_at).
+ * Identity and a "running" status land only on INSERT (same rationale as
+ * recordRunUsage); on conflict it touches nothing the cron snapshot or
+ * recordRunUsage own.
  */
 export async function recordBlockStatuses(
   db: Db,
@@ -238,6 +240,7 @@ export async function recordBlockStatuses(
       ticketTitle: write.ticketTitle,
       ticketUrl: write.ticketUrl,
       definitionVersion: write.definitionVersion,
+      definitionId: write.definitionId,
       blockStatuses: write.blockStatuses,
     })
     .onConflictDoUpdate({
@@ -245,6 +248,7 @@ export async function recordBlockStatuses(
       set: {
         blockStatuses: sql`excluded.block_statuses`,
         definitionVersion: sql`excluded.definition_version`,
+        definitionId: sql`excluded.definition_id`,
         updatedAt: sql`now()`,
       },
     });
