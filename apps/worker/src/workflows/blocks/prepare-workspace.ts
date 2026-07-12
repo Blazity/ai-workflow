@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { WorkflowDefinitionNode } from "@shared/contracts";
 import type { AgentKind } from "../../sandbox/agents/index.js";
 import type { SelectedRepository } from "../../adapters/vcs/repository-directory.js";
+import type { PreSandboxPromptAdditionsByTarget } from "../../pre-sandbox/types.js";
 import type { WorkspaceRepositoryInput } from "../../sandbox/repo-workspace.js";
 import { resolveBlockAgent } from "../../workflow-definition/resolve-agent.js";
 import { blockFetchPrContextsStep, blockPrTriggerRepositoriesStep } from "./fetch-pr-context.js";
@@ -22,12 +23,17 @@ interface PreSandboxTicketContext {
 }
 
 type PreSandboxOutcome =
-  | { status: "continue"; selectedRepositories?: SelectedRepository[] }
+  | {
+      status: "continue";
+      promptAdditions?: PreSandboxPromptAdditionsByTarget;
+      selectedRepositories?: SelectedRepository[];
+    }
   | {
       status: "halt";
       outcome: "needs_clarification" | "failed";
       message: string;
       questions?: string[];
+      promptAdditions?: PreSandboxPromptAdditionsByTarget;
       selectedRepositories?: SelectedRepository[];
     };
 
@@ -167,8 +173,9 @@ function requiredKindsForDefinition(
  * the PR's repository for pr_trigger entries), prepare workflow-owned branches,
  * fetch PR contexts, ensure the run's Arthur task, provision one sandbox with
  * every agent CLI the definition can need, and register it for cleanup.
- * Mutates ctx.sandboxId, ctx.selectedRepositories, ctx.repositoryContexts, and
- * ctx.arthur.taskId (see the EngineCtx mutation contract).
+ * Mutates ctx.sandboxId, ctx.selectedRepositories, ctx.repositoryContexts,
+ * ctx.preSandboxAdditions, and ctx.arthur.taskId (see the EngineCtx mutation
+ * contract).
  */
 export const execute: BlockExecuteFn = async (_block, _steps, ctx): Promise<BlockExecutionResult> => {
   try {
@@ -202,6 +209,9 @@ export const execute: BlockExecuteFn = async (_block, _steps, ctx): Promise<Bloc
           output: { status: "failed" },
           reason: `pre-sandbox: ${preSandbox.message}`,
         };
+      }
+      if (preSandbox.promptAdditions) {
+        ctx.preSandboxAdditions = preSandbox.promptAdditions;
       }
       selected = preSandbox.selectedRepositories ?? [];
     }

@@ -73,8 +73,16 @@ describe("prepare_workspace execute", () => {
   });
 
   it("selects repos, provisions the sandbox, registers it, and mutates the ctx", async () => {
+    const promptAdditions = {
+      research: [
+        { target: ["research"], title: "Selected Repositories", content: "- github:acme/api" },
+      ],
+      implementation: [],
+      review: [],
+    };
     mocks.runPreSandboxPhase.mockResolvedValue({
       status: "continue",
+      promptAdditions,
       selectedRepositories: [repo],
     });
     mocks.blockFetchPrContextsStep.mockResolvedValue(contextsFor(repo));
@@ -95,6 +103,7 @@ describe("prepare_workspace execute", () => {
     expect(ctx.sandboxId).toBe("sbx-9");
     expect(ctx.selectedRepositories).toEqual([repo]);
     expect(ctx.repositoryContexts).toEqual(contextsFor(repo));
+    expect(ctx.preSandboxAdditions).toEqual(promptAdditions);
     expect(result).toEqual({
       kind: "next",
       output: { status: "ok", sandboxId: "sbx-9", repositories: ["github:acme/api"] },

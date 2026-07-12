@@ -5,7 +5,6 @@ import type {
   AgentOutput, PhaseUsage, PhaseKind, PhaseArtifactPaths, ResearchResult, ReviewOutput,
 } from "../sandbox/agents/types.js";
 import type { AgentKind } from "../sandbox/agents/index.js";
-import type { PRComment, CheckRunResult } from "../adapters/vcs/types.js";
 import type {
   IssueTrackerMoveTarget,
   TicketAttachment,
@@ -13,70 +12,115 @@ import type {
 import type { TicketEvent } from "../adapters/messaging/types.js";
 import type { DownloadedAttachment } from "../sandbox/attachments.js";
 import type { SelectedRepository } from "../adapters/vcs/repository-directory.js";
-import type { SelectedRepositoryPromptContext } from "../sandbox/context.js";
-import type { WorkspaceRepositoryInput } from "../sandbox/repo-workspace.js";
 import { buildRuntimeGraph, executeGraph } from "../workflow-definition/interpreter.js";
 import type {
   BlockExecutionResult,
   BlockExecutor,
   ExecuteGraphHooks,
 } from "../workflow-definition/interpreter.js";
-import { requiredAgentKinds, resolveBlockAgent } from "../workflow-definition/resolve-agent.js";
-import type { WorkspacePublicationResult } from "./workspace-publication.js";
+import { resolveBlockAgent } from "../workflow-definition/resolve-agent.js";
+import type { AgentWorkflowInput } from "./agent-input.js";
+import type { BlockExecuteFn, EngineCtx } from "./blocks/types.js";
+import { execute as executePrepareWorkspace } from "./blocks/prepare-workspace.js";
+import { execute as executeFinalizeWorkspace } from "./blocks/finalize-workspace.js";
+import { execute as executeFixAgent } from "./blocks/fix-agent.js";
+import { execute as executeGenericAgent } from "./blocks/generic-agent.js";
+import { execute as executeCallLlm } from "./blocks/call-llm.js";
+import { execute as executeFetchPrContext } from "./blocks/fetch-pr-context.js";
+import { execute as executeRunChecks } from "./blocks/run-checks.js";
+import { execute as executePostTicketComment } from "./blocks/post-ticket-comment.js";
+import { execute as executePostPrComment } from "./blocks/post-pr-comment.js";
+import { execute as executeHumanQuestion } from "./blocks/human-question.js";
+import { execute as executeArthurInjectionCheck } from "./blocks/arthur-injection-check.js";
+import { execute as executeArthurTrace } from "./blocks/arthur-trace.js";
 import { isTriggerBlockType } from "@shared/contracts";
-import type { BlockOutput, BlockRunState, WorkflowDefinitionNode } from "@shared/contracts";
+import type {
+  BlockOutput,
+  BlockRunState,
+  WorkflowBlockType,
+  WorkflowDefinitionNode,
+} from "@shared/contracts";
 
-type PreSandboxPromptTarget = "research" | "implementation" | "review";
+const BLOCK_EXECUTORS: Partial<Record<WorkflowBlockType, BlockExecuteFn>> = {
+  prepare_workspace: executePrepareWorkspace,
+  finalize_workspace: executeFinalizeWorkspace,
+  fix_agent: executeFixAgent,
+  generic_agent: executeGenericAgent,
+  call_llm: executeCallLlm,
+  fetch_pr_context: executeFetchPrContext,
+  run_checks: executeRunChecks,
+  post_ticket_comment: executePostTicketComment,
+  post_pr_comment: executePostPrComment,
+  human_question: executeHumanQuestion,
+  arthur_injection_check: executeArthurInjectionCheck,
+  arthur_trace: executeArthurTrace,
+};
 
-interface PreSandboxPromptAddition {
-  target: PreSandboxPromptTarget[];
-  title: string;
-  content: string;
+function triggerTypeFor(entry: AgentWorkflowInput): WorkflowBlockType {
+  if (entry.kind === "pr_trigger") return entry.triggerType;
+  if (entry.kind === "plan_approved") return "trigger_plan_approved";
+  return "trigger_ticket_ai";
 }
 
-interface GroupedPreSandboxPromptAdditions {
-  research?: PreSandboxPromptAddition[];
-  implementation?: PreSandboxPromptAddition[];
-  review?: PreSandboxPromptAddition[];
-}
-
-interface PreSandboxPhaseContext {
-  ticket: {
-    identifier: string;
-    title: string;
-    description: string;
-    acceptanceCriteria: string;
-    comments: Array<{ author: string; body: string; createdAt?: string }>;
-    labels: string[];
-  };
-  run: {
-    branchName: string;
-  };
-}
-
-type PreSandboxPhaseResult =
-  | {
-      status: "continue";
-      promptAdditions?: GroupedPreSandboxPromptAdditions;
-      selectedRepositories?: SelectedRepository[];
-    }
-  | {
-      status: "halt";
-      outcome: "needs_clarification" | "failed";
-      message: string;
-      questions?: string[];
-      promptAdditions?: GroupedPreSandboxPromptAdditions;
-      selectedRepositories?: SelectedRepository[];
+function triggerOutputFor(entry: AgentWorkflowInput): BlockOutput {
+  if (entry.kind === "pr_trigger") {
+    const { pr } = entry;
+    const output: BlockOutput = {
+      status: "fired",
+      ticketKey: entry.ticketKey,
+      provider: pr.provider,
+      repoPath: pr.repoPath,
+      prNumber: pr.prNumber,
+      prUrl: pr.prUrl,
+      headRef: pr.headRef,
+      headSha: pr.headSha,
+      baseRef: pr.baseRef,
+      title: pr.title,
+      author: pr.author,
+      isDraft: pr.isDraft,
     };
+    if (pr.failedChecks) {
+      output.failedChecks = pr.failedChecks.map((check) => ({
+        name: check.name,
+        conclusion: check.conclusion,
+        ...(check.detailsUrl !== undefined ? { detailsUrl: check.detailsUrl } : {}),
+      }));
+    }
+    if (pr.review) {
+      output.review = {
+        state: pr.review.state,
+        author: pr.review.author,
+        body: pr.review.body,
+      };
+    }
+    return output;
+  }
+  if (entry.kind === "plan_approved") {
+    return {
+      status: "fired",
+      ticketKey: entry.ticketKey,
+      approvedPlan: entry.approvedPlan.markdown,
+      approver: entry.approval.approver,
+      approvedAt: entry.approval.approvedAt,
+    };
+  }
+  return { status: "fired", ticketKey: entry.ticketKey };
+}
 
 // --- Step Functions ---
 
-async function fetchAndValidateTicket(ticketId: string, columnAi: string) {
+async function fetchAndValidateTicket(
+  ticketId: string,
+  columnAi: string,
+  skipColumnCheck: boolean,
+) {
   "use step";
   const { createStepAdapters } = await import("../lib/step-adapters.js");
   const { issueTracker } = createStepAdapters();
   const ticket = await issueTracker.fetchTicket(ticketId);
-  if (ticket.trackerStatus.toLowerCase() !== columnAi.toLowerCase()) return null;
+  if (!skipColumnCheck && ticket.trackerStatus.toLowerCase() !== columnAi.toLowerCase()) {
+    return null;
+  }
   return ticket;
 }
 
@@ -135,15 +179,6 @@ async function fetchAttachments(
 }
 fetchAttachments.maxRetries = 0;
 
-async function runPreSandboxPhaseStep(
-  context: PreSandboxPhaseContext,
-): Promise<PreSandboxPhaseResult> {
-  "use step";
-  const { runPreSandboxPhase } = await import("../pre-sandbox/runner.js");
-  return runPreSandboxPhase(context);
-}
-runPreSandboxPhaseStep.maxRetries = 0;
-
 async function writeAttachments(
   sandboxId: string,
   attachments: DownloadedAttachment[],
@@ -181,136 +216,6 @@ async function writeAttachments(
   log.info({ count: toWrite.length }, "writeAttachments: done");
 }
 writeAttachments.maxRetries = 0;
-
-async function fetchSelectedRepositoryPRContexts(
-  repositories: SelectedRepository[],
-): Promise<SelectedRepositoryPromptContext[]> {
-  "use step";
-  const { createRepositoryVCS } = await import("../lib/vcs-runtime.js");
-
-  return Promise.all(repositories.map(async (repo) => {
-    const pr = repo.workflowOwnedBranch?.pr;
-    if (!pr) {
-      return {
-        repository: repo,
-        prComments: [],
-        checkResults: [],
-        hasConflicts: false,
-      };
-    }
-    const vcs = createRepositoryVCS({
-      provider: repo.provider,
-      repoPath: repo.repoPath,
-      baseBranch: repo.defaultBranch,
-    });
-    const [prComments, checkResults, hasConflicts] = await Promise.all([
-      vcs.getPRComments(pr.id),
-      vcs.getCheckRunResults(pr.id),
-      vcs.getPRConflictStatus(pr.id),
-    ]);
-    return {
-      repository: repo,
-      prComments,
-      checkResults,
-      hasConflicts,
-    };
-  }));
-}
-
-async function ensureArthurTaskForTicket(
-  ticketIdentifier: string,
-): Promise<string | null> {
-  "use step";
-  const { env } = await import("../../env.js");
-  if (!env.GENAI_ENGINE_API_KEY || !env.GENAI_ENGINE_TRACE_ENDPOINT) return null;
-
-  const { logger } = await import("../lib/logger.js");
-  const { ArthurClient } = await import("../sandbox/arthur-client.js");
-  const client = ArthurClient.fromTraceEndpoint(env.GENAI_ENGINE_TRACE_ENDPOINT, env.GENAI_ENGINE_API_KEY);
-  try {
-    const task = await client.ensureTaskForTicket(ticketIdentifier);
-    logger.info({ taskId: task.id, taskName: task.name, ticketIdentifier }, "arthur_task_created");
-    return task.id;
-  } catch (err) {
-    logger.warn(
-      { err: (err as Error).message, ticketIdentifier },
-      "arthur_task_create_failed",
-    );
-    return null;
-  }
-}
-ensureArthurTaskForTicket.maxRetries = 0;
-
-async function provisionSandbox(
-  branchName: string,
-  selectedRepositories: WorkspaceRepositoryInput[],
-  arthurTaskId: string | null,
-  agentKindOverride: AgentKind | null,
-  requiredKinds: AgentKind[],
-): Promise<{ sandboxId: string; agentKind: AgentKind }> {
-  "use step";
-  const { env } = await import("../../env.js");
-  const { SandboxManager } = await import("../sandbox/manager.js");
-  const { createAgentAdapter } = await import("../sandbox/agents/index.js");
-  const { buildSandboxProviderConfigs } = await import("../lib/vcs-runtime.js");
-
-  const arthur =
-    env.GENAI_ENGINE_API_KEY && env.GENAI_ENGINE_TRACE_ENDPOINT && arthurTaskId
-      ? {
-          apiKey: env.GENAI_ENGINE_API_KEY,
-          taskId: arthurTaskId,
-          endpoint: env.GENAI_ENGINE_TRACE_ENDPOINT,
-        }
-      : undefined;
-
-  const agentKind: AgentKind = agentKindOverride ?? env.AGENT_KIND;
-
-  // Validate credentials for every provider a workflow block needs before we
-  // pay for a sandbox. requiredKinds always leads with the run default.
-  for (const kind of requiredKinds) {
-    if (kind === "codex" && !env.CODEX_API_KEY && !env.CODEX_CHATGPT_OAUTH_TOKEN) {
-      throw new Error(
-        "a workflow block requires agent codex, which needs CODEX_API_KEY or CODEX_CHATGPT_OAUTH_TOKEN in the deployed environment",
-      );
-    }
-    if (kind === "claude" && !env.ANTHROPIC_API_KEY) {
-      throw new Error(
-        "a workflow block requires agent claude, which needs ANTHROPIC_API_KEY in the deployed environment",
-      );
-    }
-  }
-
-  const configureOptsFor = (kind: AgentKind) => ({
-    anthropicApiKey: env.ANTHROPIC_API_KEY,
-    codexApiKey: env.CODEX_API_KEY,
-    codexChatGptOauthToken: env.CODEX_CHATGPT_OAUTH_TOKEN,
-    model: kind === "codex" ? env.CODEX_MODEL : env.CLAUDE_MODEL,
-    arthur,
-  });
-
-  const [primaryKind, ...restKinds] = requiredKinds;
-  const additionalAgents = restKinds.map((kind) => ({
-    agent: createAgentAdapter(kind),
-    configureOpts: configureOptsFor(kind),
-  }));
-
-  const manager = new SandboxManager({
-    providers: await buildSandboxProviderConfigs(
-      selectedRepositories.map((repo) => repo.provider),
-    ),
-    jobTimeoutMs: env.JOB_TIMEOUT_MS,
-  });
-
-  const sandbox = await manager.provisionMultiRepo(
-    { branchName, repositories: selectedRepositories },
-    createAgentAdapter(primaryKind),
-    configureOptsFor(primaryKind),
-    additionalAgents,
-  );
-
-  return { sandboxId: sandbox.sandboxId, agentKind };
-}
-provisionSandbox.maxRetries = 0;
 
 async function writeAndStartPhase(
   sandboxId: string,
@@ -527,13 +432,6 @@ async function unregisterRun(ticketIdentifier: string) {
   await runRegistry.unregister(ticketIdentifier);
 }
 
-async function registerTicketSandbox(ticketIdentifier: string, sandboxId: string) {
-  "use step";
-  const { createStepAdapters } = await import("../lib/step-adapters.js");
-  const { runRegistry } = createStepAdapters();
-  await runRegistry.registerSandbox(ticketIdentifier, sandboxId);
-}
-
 async function resolveAgentKindOverride(labels: readonly string[]): Promise<AgentKind | null> {
   "use step";
   const { parseAgentKindOverride } = await import("../sandbox/agents/index.js");
@@ -688,11 +586,12 @@ async function pollUntilDone(
 
 // --- Main Workflow ---
 
-export async function agentWorkflow(
-  ticketId: string,
-  entry?: { triggerNodeId?: string; triggerOutput?: BlockOutput },
-) {
+export async function agentWorkflow(input: string | AgentWorkflowInput) {
   "use workflow";
+
+  const entry: AgentWorkflowInput =
+    typeof input === "string" ? { kind: "ticket", ticketKey: input } : input;
+  const ticketId = entry.ticketKey;
 
   const { workflowRunId } = getWorkflowMetadata();
 
@@ -713,7 +612,7 @@ export async function agentWorkflow(
       ? { name: env.COLUMN_AI_REVIEW, transitionId: env.JIRA_AI_REVIEW_TRANSITION_ID }
       : env.COLUMN_AI_REVIEW;
 
-  const ticket = await fetchAndValidateTicket(ticketId, env.COLUMN_AI);
+  const ticket = await fetchAndValidateTicket(ticketId, env.COLUMN_AI, entry.kind !== "ticket");
   if (!ticket) return;
 
   // Re-picked from backlog after a human answered a clarification: clear the
@@ -727,8 +626,15 @@ export async function agentWorkflow(
   const { loadPrompts } = await import("./prompts-step.js");
   const prompts = await loadPrompts();
 
-  const { loadWorkflowDefinition } = await import("./definition-step.js");
-  const plan = await loadWorkflowDefinition();
+  const { loadWorkflowDefinitionFor } = await import("./definition-step.js");
+  const entryTriggerType = triggerTypeFor(entry);
+  const plan = await loadWorkflowDefinitionFor(entryTriggerType, entry.definitionId);
+  if (!plan) {
+    console.warn(
+      `No runnable workflow definition for trigger ${entryTriggerType}; skipping run for ${ticket.identifier}`,
+    );
+    return;
+  }
 
   const blockStatuses: Record<string, BlockRunState> = Object.fromEntries(
     plan.nodes
@@ -762,8 +668,8 @@ export async function agentWorkflow(
   // and the clarification exits (which complete cleanly) flip it to "success".
   // Every phase failure / timeout / thrown error keeps "failed".
   let runOutcome: "success" | "failed" = "failed";
-  // Seeded with the run default model after provisionSandbox, then set to the
-  // implementation block's model once it runs.
+  // Seeded with the run default model once prepare_workspace provisions the
+  // sandbox, then set to the implementation block's model once it runs.
   let activeModel: string | undefined;
   let priceLookup: ((m: string) => { input: number; cached_input: number; output: number } | null) | undefined;
   // Returns the formatted usage report when any phase has produced usage,
@@ -777,13 +683,11 @@ export async function agentWorkflow(
     await notifyTicket(ticket.identifier, { kind: "started" });
 
     const graph = buildRuntimeGraph({ nodes: plan.nodes, edges: plan.edges });
-    const entryTriggerId =
-      entry?.triggerNodeId ?? plan.nodes.find((node) => isTriggerBlockType(node.type))?.id;
-    if (entryTriggerId === undefined || !graph.nodes.has(entryTriggerId)) {
+    const entryTrigger = plan.nodes.find((node) => node.type === entryTriggerType);
+    if (!entryTrigger || !graph.nodes.has(entryTrigger.id)) {
       throw new Error("workflow definition has no runnable trigger block");
     }
-    const triggerOutput: BlockOutput =
-      entry?.triggerOutput ?? { status: "fired", ticketKey: ticketId };
+    const triggerOutput = triggerOutputFor(entry);
 
     const branchName = branchForTicket(ticket.identifier);
     const downloadedAttachments = await fetchAttachments(ticket.identifier, ticket.attachments);
@@ -797,71 +701,6 @@ export async function agentWorkflow(
       labels: ticket.labels,
     };
 
-    const preSandboxResult = await runPreSandboxPhaseStep({
-      ticket: ticketData,
-      run: {
-        branchName,
-      },
-    });
-
-    const preSandboxAdditions = preSandboxResult.promptAdditions ?? {};
-    if (preSandboxResult.status === "halt") {
-      await unregisterRun(ticket.identifier);
-
-      if (preSandboxResult.outcome === "needs_clarification") {
-        const questions = preSandboxResult.questions?.filter((q) => q.trim().length > 0) ?? [];
-        const commentUrl = await postClarificationAndMoveBack(
-          ticketId,
-          questions.length > 0 ? questions : [preSandboxResult.message],
-          backlogMoveTarget(),
-        );
-        await notifyTicket(ticket.identifier, {
-          kind: "needs_clarification",
-          commentUrl: commentUrl ?? undefined,
-          usageReport: usageReportOrUndefined(),
-        });
-        runOutcome = "success";
-        return;
-      }
-
-      await moveTicket(ticketId, backlogMoveTarget());
-      await notifyTicket(ticket.identifier, {
-        kind: "failed",
-        reason: `pre-sandbox: ${preSandboxResult.message}`,
-        usageReport: usageReportOrUndefined(),
-      });
-      return;
-    }
-
-    const selectedRepositories = preSandboxResult.selectedRepositories ?? [];
-    if (selectedRepositories.length === 0) {
-      await unregisterRun(ticket.identifier);
-      const commentUrl = await postClarificationAndMoveBack(
-        ticketId,
-        ["Which repository should this ticket modify?"],
-        backlogMoveTarget(),
-      );
-      await notifyTicket(ticket.identifier, {
-        kind: "needs_clarification",
-        commentUrl: commentUrl ?? undefined,
-        usageReport: usageReportOrUndefined(),
-      });
-      runOutcome = "success";
-      return;
-    }
-
-    const { prepareSelectedRepositoryBranches } = await import("./repository-prs.js");
-    await prepareSelectedRepositoryBranches(ticket.identifier, branchName, selectedRepositories);
-
-    const repositoryContexts = await fetchSelectedRepositoryPRContexts(selectedRepositories);
-    const workspaceRepositories: WorkspaceRepositoryInput[] = repositoryContexts.map((context) => ({
-      ...context.repository,
-      ...(context.hasConflicts ? { mergeBase: context.repository.defaultBranch } : {}),
-    }));
-
-    // One Arthur task per run: first run = ticket identifier, re-runs = identifier.N
-    const arthurTaskId = await ensureArthurTaskForTicket(ticket.identifier);
-
     // Per-ticket agent override via labels (e.g. `agent:codex`). Falls
     // back to env.AGENT_KIND when the ticket has no override or the labels
     // are ambiguous (multiple distinct kinds).
@@ -869,23 +708,8 @@ export async function agentWorkflow(
     // The run default drives blocks that don't pin a provider, plus the pre-PR
     // fix cycle and push fixes. Per-block overrides layer on top of it.
     const runDefaultKind: AgentKind = agentKindOverride ?? env.AGENT_KIND;
-    const requiredKinds = requiredAgentKinds(plan.nodes, runDefaultKind);
-
-    // Provision sandbox once for all phases; it installs one CLI per required kind.
-    const { sandboxId } = await provisionSandbox(
-      branchName,
-      workspaceRepositories,
-      arthurTaskId,
-      agentKindOverride,
-      requiredKinds,
-    );
-    // Pin the sandboxId to this ticket so cleanup paths (reconcile,
-    // cancelRun, webhook-cancel) can stop it by id instead of doing a
-    // branch scan across every running sandbox.
-    await registerTicketSandbox(ticket.identifier, sandboxId);
 
     const defaultModel = runDefaultKind === "codex" ? env.CODEX_MODEL : env.CLAUDE_MODEL;
-    activeModel = defaultModel;
     const resolveAgent = (params: WorkflowDefinitionNode["params"]) =>
       resolveBlockAgent(params, runDefaultKind, { claude: env.CLAUDE_MODEL, codex: env.CODEX_MODEL });
 
@@ -897,7 +721,9 @@ export async function agentWorkflow(
       if (
         node.type === "planning_agent" ||
         node.type === "implementation_agent" ||
-        node.type === "review_agent"
+        node.type === "review_agent" ||
+        node.type === "fix_agent" ||
+        node.type === "generic_agent"
       ) {
         const resolved = resolveAgent(node.params);
         if (resolved.kind === "codex") codexModels.add(resolved.model);
@@ -913,24 +739,58 @@ export async function agentWorkflow(
       priceLookup = (model) => priceMap.get(model) ?? null;
     }
 
+    const arthurTraceParams = plan.nodes.find((node) => node.type === "arthur_trace")?.params;
+    const arthurTaskNameOverride =
+      typeof arthurTraceParams?.taskName === "string" && arthurTraceParams.taskName.trim().length > 0
+        ? arthurTraceParams.taskName.trim()
+        : undefined;
+
+    const state = {
+      runUnregisteredBeforePr: false,
+      implementationModel: defaultModel,
+      implementationKind: undefined as AgentKind | undefined,
+      attempt: 1,
+    };
+
+    const ctx: EngineCtx = {
+      runId: workflowRunId,
+      definitionId: plan.definitionId,
+      definitionVersion: plan.version,
+      definitionNodes: plan.nodes,
+      entry,
+      ticket,
+      branchName,
+      sandboxId: null,
+      selectedRepositories: [],
+      repositoryContexts: [],
+      preSandboxAdditions: { research: [], implementation: [], review: [] },
+      researchPlanMarkdown: entry.kind === "plan_approved" ? entry.approvedPlan.markdown : "",
+      publication: null,
+      runDefaultKind,
+      defaults: { claude: env.CLAUDE_MODEL, codex: env.CODEX_MODEL },
+      prompts,
+      moveTargets: { backlog: backlogMoveTarget(), aiReview: aiReviewMoveTarget() },
+      arthur: {
+        taskId: null,
+        ...(arthurTaskNameOverride !== undefined ? { taskNameOverride: arthurTaskNameOverride } : {}),
+      },
+      recordUsage: (label, usage, model) => {
+        const key = phaseKey(label, state.attempt);
+        phaseUsages[key] = usage;
+        phaseModels[key] = model;
+      },
+      markLaunched: (label) => {
+        launchedPhases.add(phaseKey(label, state.attempt));
+      },
+      unregisterBeforePr: async () => {
+        if (!state.runUnregisteredBeforePr) {
+          await unregisterRun(ticket.identifier);
+          state.runUnregisteredBeforePr = true;
+        }
+      },
+    };
+
     try {
-      await writeAttachments(sandboxId, downloadedAttachments);
-
-      const ctx: {
-        researchPlanMarkdown: string;
-        publication: WorkspacePublicationResult | null;
-        runUnregisteredBeforePr: boolean;
-        implementationModel: string;
-        implementationKind?: AgentKind;
-        attempt: number;
-      } = {
-        researchPlanMarkdown: "",
-        publication: null,
-        runUnregisteredBeforePr: false,
-        implementationModel: defaultModel,
-        attempt: 1,
-      };
-
       const clarificationExit = async (questions: string[]): Promise<void> => {
         await unregisterRun(ticket.identifier);
         const commentUrl = await postClarificationAndMoveBack(
@@ -955,7 +815,7 @@ export async function agentWorkflow(
         // run as a cancellable orphan). Same reasoning at every terminal
         // path below. open_pr's beforeCreatePullRequests may have already
         // unregistered after the push landed, so dedupe via the flag.
-        if (!ctx.runUnregisteredBeforePr) {
+        if (!state.runUnregisteredBeforePr) {
           await unregisterRun(ticket.identifier);
         }
         await moveTicket(ticketId, backlogMoveTarget());
@@ -972,9 +832,9 @@ export async function agentWorkflow(
         terminalStatus: "waiting_for_human" | "failed" | "skipped" | "done";
         postComment?: string;
       }): Promise<void> => {
-        if (!ctx.runUnregisteredBeforePr) {
+        if (!state.runUnregisteredBeforePr) {
           await unregisterRun(ticket.identifier);
-          ctx.runUnregisteredBeforePr = true;
+          state.runUnregisteredBeforePr = true;
         }
         if (params.terminalStatus === "done" || params.terminalStatus === "skipped") {
           if (params.postComment) {
@@ -1006,10 +866,28 @@ export async function agentWorkflow(
         runOutcome = "failed";
       };
 
-      const executeBlock: BlockExecutor = async (node): Promise<BlockExecutionResult> => {
+      const noWorkspace = (type: WorkflowBlockType): BlockExecutionResult => ({
+        kind: "failed",
+        output: { status: "failed" },
+        reason: `no workspace: connect prepare_workspace before ${type}`,
+      });
+
+      const executeBlock: BlockExecutor = async (node, steps): Promise<BlockExecutionResult> => {
+        const blockExecute = BLOCK_EXECUTORS[node.type];
+        if (blockExecute) {
+          const result = await blockExecute(node, steps, ctx);
+          if (node.type === "prepare_workspace" && result.kind === "next" && ctx.sandboxId) {
+            activeModel ??= defaultModel;
+            await writeAttachments(ctx.sandboxId, downloadedAttachments);
+          }
+          return result;
+        }
+
         switch (node.type) {
           case "planning_agent": {
-            const researchPhase = phaseKey("Research", ctx.attempt);
+            if (!ctx.sandboxId) return noWorkspace(node.type);
+            const sandboxId = ctx.sandboxId;
+            const researchPhase = phaseKey("Research", state.attempt);
             const { kind, model } = resolveAgent(node.params);
             phaseModels[researchPhase] = model;
             await setCommitGuardStep(sandboxId, kind, false);
@@ -1021,8 +899,8 @@ export async function agentWorkflow(
               prompt: prompts.research,
               branchName,
               attachments: downloadedAttachments,
-              preSandboxAdditions: preSandboxAdditions.research,
-              repositoryContexts,
+              preSandboxAdditions: ctx.preSandboxAdditions.research,
+              repositoryContexts: ctx.repositoryContexts,
             });
 
             await writeAndStartPhase(
@@ -1063,11 +941,13 @@ export async function agentWorkflow(
           }
 
           case "implementation_agent": {
-            const implPhase = phaseKey("Impl", ctx.attempt);
+            if (!ctx.sandboxId) return noWorkspace(node.type);
+            const sandboxId = ctx.sandboxId;
+            const implPhase = phaseKey("Impl", state.attempt);
             const { kind, model } = resolveAgent(node.params);
             phaseModels[implPhase] = model;
-            ctx.implementationModel = model;
-            ctx.implementationKind = kind;
+            state.implementationModel = model;
+            state.implementationKind = kind;
             // Mixed-run telemetry: the run's headline model is the impl block's.
             activeModel = model;
             await setCommitGuardStep(sandboxId, kind, true);
@@ -1079,8 +959,8 @@ export async function agentWorkflow(
               prompt: prompts.implement,
               researchPlanMarkdown: ctx.researchPlanMarkdown,
               attachments: downloadedAttachments,
-              preSandboxAdditions: preSandboxAdditions.implementation,
-              selectedRepositories: workspaceRepositories,
+              preSandboxAdditions: ctx.preSandboxAdditions.implementation,
+              selectedRepositories: ctx.selectedRepositories,
             });
 
             await writeAndStartPhase(
@@ -1120,7 +1000,9 @@ export async function agentWorkflow(
           }
 
           case "review_agent": {
-            const reviewPhase = phaseKey("Review", ctx.attempt);
+            if (!ctx.sandboxId) return noWorkspace(node.type);
+            const sandboxId = ctx.sandboxId;
+            const reviewPhase = phaseKey("Review", state.attempt);
             const { kind, model } = resolveAgent(node.params);
             phaseModels[reviewPhase] = model;
             // Install the review provider's commit guard: in a mixed run it may
@@ -1133,8 +1015,8 @@ export async function agentWorkflow(
               prompt: prompts.review,
               researchPlanMarkdown: ctx.researchPlanMarkdown,
               attachments: downloadedAttachments,
-              preSandboxAdditions: preSandboxAdditions.review,
-              selectedRepositories: workspaceRepositories,
+              preSandboxAdditions: ctx.preSandboxAdditions.review,
+              selectedRepositories: ctx.selectedRepositories,
             });
 
             await writeAndStartPhase(
@@ -1172,12 +1054,13 @@ export async function agentWorkflow(
           }
 
           case "run_pre_pr_checks": {
+            if (!ctx.sandboxId) return noWorkspace(node.type);
             const maxFixCycles =
               typeof node.params.maxFixCycles === "number" ? node.params.maxFixCycles : undefined;
             const prePrChecks = await runPrePrChecksStep(
-              sandboxId,
-              ctx.implementationKind ?? runDefaultKind,
-              ctx.implementationModel,
+              ctx.sandboxId,
+              state.implementationKind ?? runDefaultKind,
+              state.implementationModel,
               maxFixCycles,
             );
             if (!prePrChecks.passed) {
@@ -1205,27 +1088,25 @@ export async function agentWorkflow(
           }
 
           case "open_pr": {
-            ctx.runUnregisteredBeforePr = false;
+            if (!ctx.sandboxId) return noWorkspace(node.type);
+            state.runUnregisteredBeforePr = false;
             const publication = await publishWorkspaceChanges({
-              sandboxId,
+              sandboxId: ctx.sandboxId,
               ticketKey: ticket.identifier,
               branchName,
-              repositories: workspaceRepositories,
+              repositories: ctx.selectedRepositories,
               title: ticket.title,
-              agentKind: ctx.implementationKind ?? runDefaultKind,
-              model: ctx.implementationModel,
+              agentKind: state.implementationKind ?? runDefaultKind,
+              model: state.implementationModel,
               beforeCreatePullRequests: async () => {
-                // Push has landed — agent work is durable. Unregister BEFORE any
-                // downstream step that can trigger a Jira webhook: opening a PR can
-                // transition the linked issue (GitHub-for-Jira / Jira automation),
-                // and our own moveTicket fires a webhook for the AI → AI Review move.
-                // Either webhook, if it sees a still-registered run, will call
-                // cancelRun and emit a spurious "canceled" notification on top of
-                // "pr_ready". Clearing the registry here closes that window.
-                if (!ctx.runUnregisteredBeforePr) {
-                  await unregisterRun(ticket.identifier);
-                  ctx.runUnregisteredBeforePr = true;
-                }
+                // Push has landed. Unregister BEFORE any downstream step that can
+                // trigger a Jira webhook: opening a PR can transition the linked
+                // issue (GitHub-for-Jira / Jira automation), and our own moveTicket
+                // fires a webhook for the AI -> AI Review move. Either webhook, if
+                // it sees a still-registered run, will call cancelRun and emit a
+                // spurious "canceled" notification on top of "pr_ready". Clearing
+                // the registry here closes that window.
+                await ctx.unregisterBeforePr();
               },
             });
             ctx.publication = publication;
@@ -1233,7 +1114,7 @@ export async function agentWorkflow(
             if (publication.status === "failed") {
               // The terminal unregister/move/notify runs in failureExit; keep only
               // the bespoke bookkeeping here. failureExit dedupes the unregister via
-              // ctx.runUnregisteredBeforePr, set above when the push landed.
+              // state.runUnregisteredBeforePr, set above when the push landed.
               if (publication.prs.length > 0) {
                 await postPrLinksComment(
                   ticket.identifier,
@@ -1294,7 +1175,7 @@ export async function agentWorkflow(
       const hooks: ExecuteGraphHooks = {
         async onBlockStart(nodeId, attempt) {
           currentBlockId = nodeId;
-          ctx.attempt = attempt;
+          state.attempt = attempt;
           blockStatuses[nodeId] = { status: "running", attempt };
           await writeBlockStatuses();
         },
@@ -1313,7 +1194,7 @@ export async function agentWorkflow(
 
       const walk = await executeGraph({
         graph,
-        entryTriggerId,
+        entryTriggerId: entryTrigger.id,
         triggerOutput,
         executeBlock,
         hooks,
@@ -1324,7 +1205,9 @@ export async function agentWorkflow(
         runOutcome = "success";
       }
     } finally {
-      await teardownSandbox(sandboxId);
+      if (ctx.sandboxId) {
+        await teardownSandbox(ctx.sandboxId);
+      }
     }
   } catch (err) {
     if (currentBlockId) {

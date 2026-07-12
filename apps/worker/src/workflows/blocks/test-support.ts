@@ -56,6 +56,7 @@ export function makeCtx(overrides: Partial<EngineCtx> = {}): EngineCtx {
     sandboxId: "sbx-1",
     selectedRepositories: [],
     repositoryContexts: [],
+    preSandboxAdditions: { research: [], implementation: [], review: [] },
     researchPlanMarkdown: "",
     publication: null,
     runDefaultKind: "claude",

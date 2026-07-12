@@ -21,8 +21,13 @@ vi.mock("../lib/logger.js", () => ({
   },
 }));
 
-import { loadWorkflowDefinition, loadWorkflowDefinitionFor } from "./definition-step.js";
+import {
+  loadWorkflowDefinition,
+  loadWorkflowDefinitionFor,
+  normalizeDefinitionForExecution,
+} from "./definition-step.js";
 import { defaultWorkflowDefinition } from "../workflow-definition/default.js";
+import type { WorkflowDefinitionEdge, WorkflowDefinitionNode } from "@shared/contracts";
 
 async function setEnv(partial: Record<string, unknown>) {
   const mod = (await import("../../env.js")) as unknown as { env: Record<string, unknown> };
@@ -63,6 +68,7 @@ describe("loadWorkflowDefinition", () => {
     expect(plan.reviewEnabled).toBe(false);
     expect(plan.nodes.map((n) => n.type)).toEqual([
       "trigger_ticket_ai",
+      "prepare_workspace",
       "planning_agent",
       "implementation_agent",
       "run_pre_pr_checks",
@@ -90,6 +96,7 @@ describe("loadWorkflowDefinition", () => {
     expect(plan.reviewEnabled).toBe(true);
     expect(plan.nodes.map((n) => n.type)).toEqual([
       "trigger_ticket_ai",
+      "prepare_workspace",
       "planning_agent",
       "implementation_agent",
       "review_agent",
@@ -172,5 +179,104 @@ describe("loadWorkflowDefinitionFor", () => {
     expect(plan!.version).toBeNull();
     expect(plan!.definitionId).toBeNull();
     expect(plan!.reviewEnabled).toBe(true);
+  });
+});
+
+describe("normalizeDefinitionForExecution", () => {
+  function node(
+    id: string,
+    type: WorkflowDefinitionNode["type"],
+    params: WorkflowDefinitionNode["params"] = {},
+  ): WorkflowDefinitionNode {
+    return { id, type, x: 0, y: 0, params };
+  }
+
+  it("injects a virtual prepare_workspace between the trigger and its successor", () => {
+    const nodes = [node("t", "trigger_ticket_ai"), node("p", "planning_agent")];
+    const edges: WorkflowDefinitionEdge[] = [{ from: "t", to: "p" }];
+
+    const normalized = normalizeDefinitionForExecution(nodes, edges);
+
+    expect(normalized.nodes.map((n) => n.id)).toEqual(["t", "__prepare", "p"]);
+    expect(normalized.nodes[1].type).toBe("prepare_workspace");
+    expect(normalized.nodes[1].params).toEqual({});
+    expect(normalized.edges).toEqual([
+      { from: "t", to: "__prepare" },
+      { from: "__prepare", to: "p" },
+    ]);
+    expect(nodes).toHaveLength(2);
+    expect(edges).toEqual([{ from: "t", to: "p" }]);
+  });
+
+  it("keeps a graph with an explicit prepare_workspace untouched", () => {
+    const nodes = [
+      node("t", "trigger_ticket_ai"),
+      node("n1", "prepare_workspace"),
+      node("n2", "generic_agent", { prompt: "do it" }),
+    ];
+    const edges: WorkflowDefinitionEdge[] = [
+      { from: "t", to: "n2" },
+      { from: "n2", to: "n1" },
+    ];
+
+    const normalized = normalizeDefinitionForExecution(nodes, edges);
+
+    expect(normalized.nodes).toBe(nodes);
+    expect(normalized.edges).toBe(edges);
+  });
+
+  it("suffixes the virtual id when __prepare is already taken", () => {
+    const nodes = [node("t", "trigger_ticket_ai"), node("__prepare", "planning_agent")];
+    const edges: WorkflowDefinitionEdge[] = [{ from: "t", to: "__prepare" }];
+
+    const normalized = normalizeDefinitionForExecution(nodes, edges);
+
+    expect(normalized.nodes.map((n) => n.id)).toEqual(["t", "__prepare_", "__prepare"]);
+    expect(normalized.edges).toEqual([
+      { from: "t", to: "__prepare_" },
+      { from: "__prepare_", to: "__prepare" },
+    ]);
+  });
+
+  it("preserves an explicit fromPort on the rewired trigger edge", () => {
+    const nodes = [node("t", "trigger_ticket_ai"), node("p", "planning_agent")];
+    const edges: WorkflowDefinitionEdge[] = [{ from: "t", to: "p", fromPort: "out" }];
+
+    const normalized = normalizeDefinitionForExecution(nodes, edges);
+
+    expect(normalized.edges).toEqual([
+      { from: "t", to: "__prepare", fromPort: "out" },
+      { from: "__prepare", to: "p" },
+    ]);
+  });
+
+  it("leaves a trigger without a successor alone", () => {
+    const nodes = [node("t", "trigger_ticket_ai")];
+    const normalized = normalizeDefinitionForExecution(nodes, []);
+    expect(normalized.nodes.map((n) => n.id)).toEqual(["t"]);
+    expect(normalized.edges).toEqual([]);
+  });
+
+  it("injects one virtual node per trigger", () => {
+    const nodes = [
+      node("t1", "trigger_ticket_ai"),
+      node("t2", "trigger_pr_created", { providers: ["github"], onlyWorkflowOwned: true }),
+      node("a", "planning_agent"),
+      node("b", "fix_agent"),
+    ];
+    const edges: WorkflowDefinitionEdge[] = [
+      { from: "t1", to: "a" },
+      { from: "t2", to: "b" },
+    ];
+
+    const normalized = normalizeDefinitionForExecution(nodes, edges);
+
+    expect(normalized.nodes.map((n) => n.id)).toEqual(["t1", "__prepare", "t2", "__prepare_", "a", "b"]);
+    expect(normalized.edges).toEqual([
+      { from: "t1", to: "__prepare" },
+      { from: "__prepare", to: "a" },
+      { from: "t2", to: "__prepare_" },
+      { from: "__prepare_", to: "b" },
+    ]);
   });
 });

@@ -9,7 +9,10 @@ import type {
   IssueTrackerMoveTarget,
   TicketContent,
 } from "../../adapters/issue-tracker/types.js";
-import type { SelectedRepositoryPromptContext } from "../../sandbox/context.js";
+import type {
+  PreSandboxPromptAddition,
+  SelectedRepositoryPromptContext,
+} from "../../sandbox/context.js";
 import type { WorkspaceRepositoryInput } from "../../sandbox/repo-workspace.js";
 import type { WorkspacePublicationResult } from "../workspace-publication.js";
 import type { LoadedPrompts } from "../prompts-step.js";
@@ -22,7 +25,7 @@ import type { AgentWorkflowInput } from "../agent-input.js";
  *
  * Mutation contract (executors write back through the shared object):
  * - prepare_workspace sets `sandboxId`, `selectedRepositories`,
- *   `repositoryContexts`, and `arthur.taskId`.
+ *   `repositoryContexts`, `preSandboxAdditions`, and `arthur.taskId`.
  * - fetch_pr_context refreshes `repositoryContexts`.
  * - finalize_workspace sets `publication`.
  * All other fields are read-only from the executors' perspective.
@@ -47,6 +50,15 @@ export interface EngineCtx {
   selectedRepositories: WorkspaceRepositoryInput[];
   /** Per-repository PR context (full comment bodies, check results, conflicts). */
   repositoryContexts: SelectedRepositoryPromptContext[];
+  /**
+   * Pre-sandbox prompt additions grouped by target phase. Empty arrays until
+   * prepare_workspace runs the pre-sandbox phase and populates them.
+   */
+  preSandboxAdditions: {
+    research: PreSandboxPromptAddition[];
+    implementation: PreSandboxPromptAddition[];
+    review: PreSandboxPromptAddition[];
+  };
   /** Markdown plan produced by planning_agent; empty string before it runs. */
   researchPlanMarkdown: string;
   /** Result of finalize_workspace / open_pr; null before publication. */
