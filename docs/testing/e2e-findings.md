@@ -179,6 +179,16 @@ A battery (`scratchpad/api_battery.py`, 20+ cases + CRUD conflict cases) ran liv
 
 ---
 
+## 4b. Tier 0 smoke PASSED live on `blazity/ai-workflow-demo` (with the allowlist)
+
+After deploying `AGENT_ALLOWED_REPOS=Blazity/ai-workflow-demo` + the §1b guard, re-running AWT-1008:
+- ✅ `prepare_workspace` selected **only** `github:Blazity/ai-workflow-demo` (the 4 real repos were filtered out) — allowlist verified live, even though the ticket named no repo.
+- ✅ Full default pipeline succeeded: `planning → implementation → review → checks → open-pr → slack → status`, all blocks `ok`.
+- ✅ Telemetry: `status=success`, `model=gpt-5.4-mini` (codex), **`cost=$0.3472`** (cost tracking works), no error.
+- ✅ PR **#291 on `Blazity/ai-workflow-demo`** — verified diff: the required one-line README append, clean.
+- ⚠️ Finding: the implementation agent also committed a `blazebot/memory/AWT-1008.md` session-memory file, despite the ticket saying "change only README.md". It is bot bookkeeping (harmless) but it does violate an explicit single-file instruction.
+- ⚠️ Workflow limitation: the local gh account is read-only on these repos, so the orchestrator can VERIFY PRs but cannot close them or delete branches. Closing PR #291 + deleting the leftover `blazebot/awt-1008` branches (on the 4 real repos from the first aborted run, and on ai-workflow-demo) needs a write-access account, or grant the test account write on `ai-workflow-demo` so the loop can self-clean.
+
 ## 5. Verified so far (live, on preview)
 
 - ✅ Auth: sign-in 200 from the preview origin (multi-origin fix holds).
