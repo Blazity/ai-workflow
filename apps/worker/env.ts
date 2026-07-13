@@ -140,6 +140,15 @@ export const env = createEnv({
     }),
     BETTER_AUTH_URL: z.string().url(),
     DASHBOARD_ORIGIN: z.string().url(),
+    // Additional origins trusted for dashboard login on top of DASHBOARD_ORIGIN
+    // (e.g. a preview deployment's stable alias). Comma-separated; each must be
+    // a full origin URL. DASHBOARD_ORIGIN stays the single canonical origin used
+    // for building links and SSO redirects.
+    DASHBOARD_TRUSTED_ORIGINS: z
+      .string()
+      .optional()
+      .transform((raw) => (raw ? raw.split(",").map((origin) => origin.trim()).filter(Boolean) : []))
+      .pipe(z.array(z.string().url())),
     DASHBOARD_AUTH_EMAIL: z.string().email(),
     DASHBOARD_AUTH_PASSWORD: z.string().min(8, {
       message: "must be at least 8 characters",
