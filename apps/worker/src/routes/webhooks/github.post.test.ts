@@ -169,6 +169,34 @@ describe("POST /webhooks/github", () => {
     expect(mockDispatchPostPrGateWebhook).not.toHaveBeenCalled();
   });
 
+  it("returns 503 so GitHub redelivers when dispatch is at capacity", async () => {
+    mockDispatchTriggerEvent.mockResolvedValueOnce({ result: "at_capacity" });
+
+    const response = await makeApp()(makeRequest(pullRequestBody("opened")));
+
+    expect(response.status).toBe(503);
+    expect(mockDispatchPostPrGateWebhook).not.toHaveBeenCalled();
+  });
+
+  it("returns 503 so GitHub redelivers when dispatch errors", async () => {
+    mockDispatchTriggerEvent.mockResolvedValueOnce({ result: "error" });
+
+    const response = await makeApp()(makeRequest(pullRequestBody("opened")));
+
+    expect(response.status).toBe(503);
+    expect(mockDispatchPostPrGateWebhook).not.toHaveBeenCalled();
+  });
+
+  it("returns 200 without gating when a live run coalesces the delivery", async () => {
+    mockDispatchTriggerEvent.mockResolvedValueOnce({ result: "coalesced" });
+
+    const response = await makeApp()(makeRequest(pullRequestBody("opened")));
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ status: "ignored", reason: "coalesced" });
+    expect(mockDispatchPostPrGateWebhook).not.toHaveBeenCalled();
+  });
+
   it("ignores unsupported pull_request actions", async () => {
     const response = await makeApp()(makeRequest(pullRequestBody("closed")));
 

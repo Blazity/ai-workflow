@@ -240,6 +240,12 @@ describe("CodexAgentAdapter.buildPhaseScript", () => {
     expect(s).toContain("cat > /tmp/agent-block-1-schema.json");
     expect(s).toContain("/tmp/agent-block-1-exit-code");
   });
+
+  it("single-quotes the model flag so a double-quote breakout is inert", () => {
+    const paths = adapter.artifactPaths("impl");
+    const s = adapter.buildPhaseScript({ phase: "impl", model: `m"; rm -rf / #`, paths });
+    expect(s).toContain(`--model 'm"; rm -rf / #'`);
+  });
 });
 
 describe("CodexAgentAdapter.artifactPaths", () => {
@@ -296,6 +302,22 @@ describe("CodexAgentAdapter.configure", () => {
     expect(shim.content.toString("utf8")).toBe(AGENT_ENV_SHIM);
 
     expect(runCommand).toHaveBeenCalledWith("chmod", ["600", AGENT_ENV_CODEX_PATH]);
+  });
+
+  it("single-quotes the model in config.toml so a breakout payload can't inject TOML", async () => {
+    const runCommand = vi.fn().mockResolvedValue({ exitCode: 0 });
+    const writeFiles = vi.fn().mockResolvedValue(undefined);
+    const sandbox = { runCommand, writeFiles } as any;
+
+    await adapter.configure(sandbox, { codexApiKey: "sk-test", model: `gpt"; danger = "x` });
+
+    const configToml = writtenFiles(writeFiles).find((f: any) => f.path === "/tmp/config.toml");
+    expect(configToml).toBeDefined();
+    const content = configToml.content.toString("utf8");
+    // The model sits in a single-quoted TOML literal string, so a double-quote
+    // payload can't open a new key/value.
+    expect(content).toContain(`model = 'gpt"; danger = "x'`);
+    expect(content).not.toContain(`model = "gpt"`);
   });
 
   it("keeps both providers reachable when both adapters configure one sandbox", async () => {

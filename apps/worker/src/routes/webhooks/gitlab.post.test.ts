@@ -269,6 +269,34 @@ describe("POST /webhooks/gitlab", () => {
     );
   });
 
+  it("returns 503 so GitLab redelivers when dispatch is at capacity", async () => {
+    mockDispatchTriggerEvent.mockResolvedValueOnce({ result: "at_capacity" });
+
+    const response = await makeApp()(makeRequest(validMergeRequestPayload()));
+
+    expect(response.status).toBe(503);
+    expect(mockDispatchPostPrGateWebhook).not.toHaveBeenCalled();
+  });
+
+  it("returns 503 so GitLab redelivers when dispatch errors", async () => {
+    mockDispatchTriggerEvent.mockResolvedValueOnce({ result: "error" });
+
+    const response = await makeApp()(makeRequest(validMergeRequestPayload()));
+
+    expect(response.status).toBe(503);
+    expect(mockDispatchPostPrGateWebhook).not.toHaveBeenCalled();
+  });
+
+  it("returns 200 without gating when a live run coalesces the delivery", async () => {
+    mockDispatchTriggerEvent.mockResolvedValueOnce({ result: "coalesced" });
+
+    const response = await makeApp()(makeRequest(validMergeRequestPayload()));
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ status: "ignored", reason: "coalesced" });
+    expect(mockDispatchPostPrGateWebhook).not.toHaveBeenCalled();
+  });
+
   it("routes a failed pipeline hook to the checks-failed trigger", async () => {
     mockDispatchTriggerEvent.mockResolvedValueOnce({ result: "started", runId: "run_checks" });
 

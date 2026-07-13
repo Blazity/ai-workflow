@@ -111,9 +111,25 @@ describe("generic_agent execute", () => {
       { path: "/tmp/agent-my-agent-requirements.md", content: Buffer.from("Verbatim prompt.") },
       { path: "/tmp/agent-my-agent-wrapper.sh", content: Buffer.from("#!/bin/bash") },
     ]);
-    expect(ctx.markLaunched).toHaveBeenCalledWith("agent-my-agent");
-    expect(ctx.recordUsage).toHaveBeenCalledWith("agent-my-agent", null, "claude-model");
+    expect(ctx.markLaunched).toHaveBeenCalledWith("Agent My Agent");
+    expect(ctx.recordUsage).toHaveBeenCalledWith("Agent My Agent", null, "claude-model");
     expect(result).toEqual({ kind: "next", output: { status: "ok", body: "done" } });
+  });
+
+  it("keeps the telemetry label unique per raw block id while sanitizing the artifact path", async () => {
+    mocks.collectPhase.mockResolvedValue({
+      raw: "",
+      structured: JSON.stringify({ status: "ok", body: "done", questions: null, error: null }),
+    });
+    const ctx = makeCtx();
+
+    // "Blk.One" and "blk-one" both sanitize to "blk-one"; the raw id keeps the
+    // telemetry keys distinct so usage attribution does not collide.
+    await execute(makeNode("generic_agent", { prompt: "p" }, "Blk.One"), {}, ctx);
+
+    expect(mocks.artifactPaths).toHaveBeenCalledWith("agent-blk-one");
+    expect(ctx.markLaunched).toHaveBeenCalledWith("Agent Blk.One");
+    expect(ctx.recordUsage).toHaveBeenCalledWith("Agent Blk.One", null, "claude-model");
   });
 
   it("maps needs_input output to needs_human_input", async () => {

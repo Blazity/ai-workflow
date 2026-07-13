@@ -93,7 +93,7 @@ export class ClaudeAgentAdapter implements AgentAdapter {
   buildPhaseScript(opts: PhaseScriptOpts): string {
     const { paths, jsonSchema, model, phase } = opts;
     const safePhase = sanitizePhase(phase);
-    let claudeFlags = `--print --model '${model}' --dangerously-skip-permissions --output-format json`;
+    let claudeFlags = `--print --model ${shellQuote(model)} --dangerously-skip-permissions --output-format json`;
     if (jsonSchema) {
       const escapedSchema = jsonSchema.replace(/'/g, "'\\''");
       claudeFlags += ` --json-schema '${escapedSchema}'`;

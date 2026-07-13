@@ -33,7 +33,7 @@ const baseNodeFields = {
 const emptyParams = z.object({}).strict();
 const agentParams = z
   .object({
-    model: z.string().trim().max(200).optional(),
+    model: z.string().trim().max(200).regex(/^[A-Za-z0-9._:\/-]+$/).optional(),
     provider: z.enum(["claude", "codex"]).optional(),
   })
   .strict();

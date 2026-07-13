@@ -57,7 +57,7 @@ export class CodexAgentAdapter implements AgentAdapter {
     // shells out to bwrap which requires user-namespace creation that Vercel
     // Sandbox blocks ("bwrap: No permissions to create a new namespace").
     const configToml = [
-      `model = "${opts.model}"`,
+      `model = ${shellQuote(opts.model)}`,
       `approval_policy = "never"`,
       `sandbox_mode = "danger-full-access"`,
       ``,
@@ -112,7 +112,7 @@ export class CodexAgentAdapter implements AgentAdapter {
     // Sandbox because the microVM blocks user-namespace creation. The outer
     // microVM already provides the isolation Codex's inner sandbox would.
     const flags: string[] = [
-      `--model "${model}"`,
+      `--model ${shellQuote(model)}`,
       `--dangerously-bypass-approvals-and-sandbox`,
       `--skip-git-repo-check`,
       `--json`,

@@ -120,5 +120,11 @@ function triggerResponse(result: DispatchTriggerResult) {
   if (result.result === "started") {
     return { status: "dispatched", runId: result.runId };
   }
+  if (result.result === "at_capacity" || result.result === "error") {
+    // PR-trigger webhooks are one-shot: there is no cron re-drive, so a dropped
+    // event is lost. Return 503 so GitHub redelivers this delivery later.
+    logger.info({ reason: result.result }, "trigger_webhook_will_be_redelivered");
+    throw createError({ statusCode: 503, statusMessage: `trigger_${result.result}` });
+  }
   return { status: "ignored", reason: result.result };
 }

@@ -8,7 +8,7 @@ import { sanitizeBlockId, type BlockExecuteFn, type BlockExecutionResult } from 
 export const paramsSchema = z
   .object({
     provider: z.enum(["claude", "codex"]).optional(),
-    model: z.string().trim().max(200).optional(),
+    model: z.string().trim().max(200).regex(/^[A-Za-z0-9._:\/-]+$/).optional(),
     prompt: z.string().min(1),
     outputSchema: z.string().optional(),
   })
@@ -161,7 +161,11 @@ export const execute: BlockExecuteFn = async (block, _steps, ctx): Promise<Block
   }
 
   const { kind, model } = resolveBlockAgent(block.params, ctx.runDefaultKind, ctx.defaults);
+  // Artifact phase must be shell/file-safe (drives /tmp paths); telemetry label
+  // must stay unique per block. Two block ids that sanitize to the same token
+  // would collide and lose usage attribution, so keep the raw id for telemetry.
   const phase = `agent-${sanitizeBlockId(block.id)}`;
+  const usageLabel = `Agent ${block.id}`;
 
   try {
     const { GENERIC_SCHEMA } = await import("../../sandbox/agents/types.js");
@@ -169,7 +173,7 @@ export const execute: BlockExecuteFn = async (block, _steps, ctx): Promise<Block
 
     const { paths, script } = await blockGenericAgentPlanPhaseStep(kind, phase, model, jsonSchema);
     await blockGenericAgentStartPhaseStep(sandboxId, paths.input, prompt, paths.wrapper, script);
-    ctx.markLaunched(phase);
+    ctx.markLaunched(usageLabel);
 
     const done = await pollPhaseUntilDone(sandboxId, paths.sentinel, MAX_MINUTES);
     if (!done) {
@@ -179,7 +183,7 @@ export const execute: BlockExecuteFn = async (block, _steps, ctx): Promise<Block
     const { collectPhase } = await import("../../sandbox/poll-agent.js");
     const { raw, structured } = await collectPhase(sandboxId, paths);
     const { object, usage } = await blockGenericAgentParseStep(kind, raw, structured);
-    ctx.recordUsage(phase, usage, model);
+    ctx.recordUsage(usageLabel, usage, model);
 
     if (customSchema !== undefined) {
       if (object === undefined || object === null) {

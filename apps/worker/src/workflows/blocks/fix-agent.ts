@@ -13,7 +13,7 @@ import { sanitizeBlockId, type BlockExecuteFn, type BlockExecutionResult, type E
 export const paramsSchema = z
   .object({
     provider: z.enum(["claude", "codex"]).optional(),
-    model: z.string().trim().max(200).optional(),
+    model: z.string().trim().max(200).regex(/^[A-Za-z0-9._:\/-]+$/).optional(),
     instructions: z.string().trim().max(4000).optional(),
     maxMinutes: z.number().int().min(5).max(60).default(25),
   })

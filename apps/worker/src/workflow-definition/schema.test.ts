@@ -227,6 +227,19 @@ describe("workflowDefinitionSchema block-executor node types", () => {
     });
   });
 
+  it("allowlists the model param and rejects shell-metacharacter model ids", () => {
+    // Safe ids (alphanumerics + . _ : / -) pass on every agent-ish block.
+    expect(shapeOk([node("n", "planning_agent", { model: "claude-opus-4-6" })])).toBe(true);
+    expect(shapeOk([node("n", "implementation_agent", { model: "us.anthropic.claude:v1/2" })])).toBe(true);
+    expect(shapeOk([node("n", "review_agent", { model: "gpt-5-codex" })])).toBe(true);
+    // Injection payloads are rejected at save time (400).
+    expect(shapeOk([node("n", "planning_agent", { model: "m'; rm -rf /" })])).toBe(false);
+    expect(shapeOk([node("n", "implementation_agent", { model: "$(whoami)" })])).toBe(false);
+    expect(shapeOk([node("n", "generic_agent", { prompt: "p", model: "has space" })])).toBe(false);
+    expect(shapeOk([node("n", "fix_agent", { model: 'gpt"5' })])).toBe(false);
+    expect(shapeOk([node("n", "call_llm", { prompt: "p", model: "back`tick" })])).toBe(false);
+  });
+
   it("bounds fix_agent maxMinutes and requires generic_agent prompt", () => {
     expect(shapeOk([node("n", "fix_agent", { maxMinutes: 4 })])).toBe(false);
     expect(shapeOk([node("n", "fix_agent", { maxMinutes: 61 })])).toBe(false);

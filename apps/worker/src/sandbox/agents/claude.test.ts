@@ -377,6 +377,21 @@ describe("ClaudeAgentAdapter.buildPhaseScript", () => {
     expect(s).toContain("/tmp/agent-block-1-exit-code");
     expect(s).not.toContain("agent-Block_1-exit-code");
   });
+
+  it("neutralizes a model id that tries to break out of the single-quoted flag", () => {
+    const paths = adapter.artifactPaths("research");
+    const s = adapter.buildPhaseScript({ phase: "research", model: "m'; rm -rf / #", paths });
+    // The embedded quote is escaped via '\'' so the payload cannot close the
+    // quote and run as a separate command.
+    expect(s).toContain("--model 'm'\\''; rm -rf / #'");
+    expect(s).not.toContain("--model 'm'; rm -rf");
+  });
+
+  it("keeps a $()-style model id inside single quotes so it can't be substituted", () => {
+    const paths = adapter.artifactPaths("research");
+    const s = adapter.buildPhaseScript({ phase: "research", model: "$(whoami)", paths });
+    expect(s).toContain("--model '$(whoami)'");
+  });
 });
 
 describe("ClaudeAgentAdapter.artifactPaths", () => {

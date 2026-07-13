@@ -5,18 +5,25 @@ const mocks = vi.hoisted(() => ({
   createApprovalRequest: vi.fn(),
   postComment: vi.fn(),
   notifyForTicket: vi.fn(),
+  moveTicket: vi.fn(),
+  updateLabels: vi.fn(),
 }));
 
 vi.mock("../../db/client.js", () => ({ getDb: () => ({}) }));
 vi.mock("../../approvals/store.js", () => ({ createApprovalRequest: mocks.createApprovalRequest }));
 vi.mock("../../lib/step-adapters.js", () => ({
   createStepAdapters: () => ({
-    issueTracker: { postComment: mocks.postComment },
+    issueTracker: {
+      postComment: mocks.postComment,
+      moveTicket: mocks.moveTicket,
+      updateLabels: mocks.updateLabels,
+    },
     messaging: { notifyForTicket: mocks.notifyForTicket },
   }),
 }));
 
 import { execute, paramsSchema } from "./send-plan-approval.js";
+import { AWAITING_APPROVAL_LABEL } from "../../lib/labels.js";
 import { makeCtx, makeNode } from "./test-support.js";
 
 describe("send_plan_approval paramsSchema", () => {
@@ -34,6 +41,8 @@ describe("send_plan_approval execute", () => {
     mocks.createApprovalRequest.mockResolvedValue({ id: "appr-9" });
     mocks.postComment.mockResolvedValue(null);
     mocks.notifyForTicket.mockResolvedValue(undefined);
+    mocks.moveTicket.mockResolvedValue(undefined);
+    mocks.updateLabels.mockResolvedValue(undefined);
   });
 
   it("fails when no plan is available", async () => {
@@ -57,7 +66,7 @@ describe("send_plan_approval execute", () => {
     if (result.kind === "failed") expect(result.reason).toBe("approval requires a stored definition");
   });
 
-  it("stores the plan, mirrors a comment, notifies, unregisters, and ends", async () => {
+  it("stores the plan, mirrors a comment, notifies, unregisters, parks the ticket, and ends", async () => {
     const ctx = makeCtx({ researchPlanMarkdown: "# Research plan" });
     const result = await execute(makeNode("send_plan_approval"), {}, ctx);
 
@@ -74,6 +83,14 @@ describe("send_plan_approval execute", () => {
     );
     expect(mocks.notifyForTicket).toHaveBeenCalledWith("AWT-1", { kind: "plan_approval_requested" });
     expect(ctx.unregisterBeforePr).toHaveBeenCalledOnce();
+    // Parked out of the AI column with an awaiting-approval label so the cron
+    // poll stops re-dispatching it; label add precedes the move, mirroring
+    // clarification, and the move follows the unregister.
+    expect(mocks.updateLabels).toHaveBeenCalledWith("AWT-1", { add: [AWAITING_APPROVAL_LABEL] });
+    expect(mocks.moveTicket).toHaveBeenCalledWith("AWT-1", "Backlog");
+    const unregisterOrder = (ctx.unregisterBeforePr as unknown as { mock: { invocationCallOrder: number[] } })
+      .mock.invocationCallOrder[0];
+    expect(unregisterOrder).toBeLessThan(mocks.moveTicket.mock.invocationCallOrder[0]);
     expect(result).toEqual({
       kind: "ended",
       output: { status: "awaiting_approval", approvalRequestId: "appr-9" },

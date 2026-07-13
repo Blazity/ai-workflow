@@ -429,7 +429,7 @@ describe("executeGraph human input and ended", () => {
     expect(rec.failures).toEqual([]);
   });
 
-  it("ended stops cleanly with a warn finish and no exit hooks", async () => {
+  it("ended reports outcome ended with a warn finish and no exit hooks", async () => {
     const rec = makeRecorder();
     const { executor } = makeExecutor({
       plan: { kind: "ended", output: { status: "waiting_for_human" } },
@@ -441,7 +441,7 @@ describe("executeGraph human input and ended", () => {
       executeBlock: executor,
       hooks: rec.hooks,
     });
-    expect(result.outcome).toBe("stopped");
+    expect(result.outcome).toBe("ended");
     expect(finishStatuses(rec, "plan")).toEqual(["warn"]);
     expect(rec.clarifications).toEqual([]);
     expect(rec.failures).toEqual([]);

@@ -1202,7 +1202,10 @@ export async function agentWorkflow(input: string | AgentWorkflowInput) {
         hooks,
         maxTotalExecutions: 200,
       });
-      if (walk.outcome === "completed") {
+      // "ended" is a clean awaiting stop (e.g. send_plan_approval parked the
+      // run for human approval and already moved the ticket): a success, not a
+      // failure. No ticket move here; the block owns that.
+      if (walk.outcome === "completed" || walk.outcome === "ended") {
         currentBlockId = null;
         runOutcome = "success";
       }

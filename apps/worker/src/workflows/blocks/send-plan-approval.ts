@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { IssueTrackerMoveTarget } from "../../adapters/issue-tracker/types.js";
 import type { BlockExecuteFn, BlockExecutionResult } from "./types.js";
 
 export const paramsSchema = z
@@ -39,12 +40,38 @@ async function notifyPlanApprovalStep(ticketKey: string): Promise<void> {
 }
 notifyPlanApprovalStep.maxRetries = 0;
 
+async function parkForApprovalStep(
+  ticketId: string,
+  backlogTarget: IssueTrackerMoveTarget,
+): Promise<void> {
+  "use step";
+  const { createStepAdapters } = await import("../../lib/step-adapters.js");
+  const { AWAITING_APPROVAL_LABEL } = await import("../../lib/labels.js");
+  const { issueTracker } = createStepAdapters();
+  if (typeof issueTracker.updateLabels === "function") {
+    try {
+      await issueTracker.updateLabels(ticketId, { add: [AWAITING_APPROVAL_LABEL] });
+    } catch (err) {
+      const { logger } = await import("../../lib/logger.js");
+      logger.warn(
+        { ticketId, err: err instanceof Error ? err.message : String(err) },
+        "approval_label_add_failed",
+      );
+    }
+  }
+  await issueTracker.moveTicket(ticketId, backlogTarget);
+}
+parkForApprovalStep.maxRetries = 0;
+
 /**
- * send_plan_approval: file the run's plan for human approval, then end the run
- * without moving the ticket. The plan text comes from the referenced step's
- * output (params.planFromStep) or the run's research plan. unregisterBeforePr
- * only drops the run-registry entry, so the ticket stays in the AI column and a
- * later dashboard approval can start a fresh trigger_plan_approved run.
+ * send_plan_approval: file the run's plan for human approval, then end the run.
+ * The plan text comes from the referenced step's output (params.planFromStep) or
+ * the run's research plan. After unregistering the run it parks the ticket in
+ * the backlog column with an awaiting-approval label, mirroring the
+ * clarification exit: moving the ticket out of the AI column is what stops the
+ * cron poll from re-dispatching it while it waits. A later dashboard approval
+ * starts a fresh trigger_plan_approved run, whose dispatch skips the column
+ * check so the ticket's backlog location does not block it.
  */
 export const execute: BlockExecuteFn = async (block, steps, ctx): Promise<BlockExecutionResult> => {
   const planFromStep =
@@ -96,6 +123,7 @@ export const execute: BlockExecuteFn = async (block, steps, ctx): Promise<BlockE
   await notifyPlanApprovalStep(ctx.ticket.identifier).catch(() => {});
 
   await ctx.unregisterBeforePr();
+  await parkForApprovalStep(ctx.ticket.identifier, ctx.moveTargets.backlog);
 
   return { kind: "ended", output: { status: "awaiting_approval", approvalRequestId } };
 };
