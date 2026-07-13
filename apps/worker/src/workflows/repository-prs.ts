@@ -19,9 +19,13 @@ export async function prepareSelectedRepositoryBranches(
   const { getDb } = await import("../db/client.js");
   const { upsertWorkflowOwnedBranch } = await import("../db/queries/workflow-owned-branches.js");
   const { createRepositoryVCS } = await import("../lib/vcs-runtime.js");
+  const { isRepoAllowed } = await import("../lib/repo-allowlist.js");
   const db = getDb();
 
   for (const repo of repositories) {
+    if (!isRepoAllowed(repo.repoPath)) {
+      throw new Error(`Refusing to branch ${repo.repoPath}: not in AGENT_ALLOWED_REPOS`);
+    }
     if (repo.workflowOwnedBranch) continue;
 
     await createRepositoryVCS({
@@ -50,10 +54,14 @@ export async function createOrUseWorkflowOwnedPullRequestsForRepos(input: {
   const { getDb } = await import("../db/client.js");
   const { upsertWorkflowOwnedBranch } = await import("../db/queries/workflow-owned-branches.js");
   const { createRepositoryVCS } = await import("../lib/vcs-runtime.js");
+  const { isRepoAllowed } = await import("../lib/repo-allowlist.js");
   const db = getDb();
   const prs: WorkflowPrLink[] = [];
 
   for (const repo of input.repositories) {
+    if (!isRepoAllowed(repo.repoPath)) {
+      throw new Error(`Refusing to open a PR on ${repo.repoPath}: not in AGENT_ALLOWED_REPOS`);
+    }
     const existing = repo.workflowOwnedBranch?.pr;
     if (existing) {
       prs.push({

@@ -1,5 +1,6 @@
 import type { VcsConfig, VcsProviderConfig } from "../../../env.js";
 import { buildOctokit } from "../../lib/github-auth.js";
+import { filterAllowedRepositories } from "../../lib/repo-allowlist.js";
 
 const GITLAB_PROJECTS_TIMEOUT_MS = 15_000;
 
@@ -50,18 +51,20 @@ class GitHubRepositoryDirectory implements RepositoryDirectory {
       { per_page: 100 },
     );
 
-    return repositories.map((repo: any) => ({
-      provider: "github" as const,
-      repoPath: repo.full_name,
-      name: repo.name,
-      owner: repo.owner?.login ?? repo.full_name.split("/")[0],
-      defaultBranch: repo.default_branch ?? "main",
-      description: repo.description ?? "",
-      webUrl: repo.html_url,
-      topics: repo.topics ?? [],
-      archived: Boolean(repo.archived),
-      private: Boolean(repo.private),
-    }));
+    return filterAllowedRepositories(
+      repositories.map((repo: any) => ({
+        provider: "github" as const,
+        repoPath: repo.full_name,
+        name: repo.name,
+        owner: repo.owner?.login ?? repo.full_name.split("/")[0],
+        defaultBranch: repo.default_branch ?? "main",
+        description: repo.description ?? "",
+        webUrl: repo.html_url,
+        topics: repo.topics ?? [],
+        archived: Boolean(repo.archived),
+        private: Boolean(repo.private),
+      })),
+    );
   }
 }
 
@@ -95,18 +98,20 @@ class GitLabRepositoryDirectory implements RepositoryDirectory {
       page = response.headers.get("x-next-page") ?? "";
     }
 
-    return projects.map((project) => ({
-      provider: "gitlab" as const,
-      repoPath: project.path_with_namespace,
-      name: project.name,
-      owner: project.namespace?.full_path ?? project.path_with_namespace.split("/")[0],
-      defaultBranch: project.default_branch ?? "main",
-      description: project.description ?? "",
-      webUrl: project.web_url,
-      topics: project.topics ?? project.tag_list ?? [],
-      archived: Boolean(project.archived),
-      private: project.visibility !== "public",
-    }));
+    return filterAllowedRepositories(
+      projects.map((project) => ({
+        provider: "gitlab" as const,
+        repoPath: project.path_with_namespace,
+        name: project.name,
+        owner: project.namespace?.full_path ?? project.path_with_namespace.split("/")[0],
+        defaultBranch: project.default_branch ?? "main",
+        description: project.description ?? "",
+        webUrl: project.web_url,
+        topics: project.topics ?? project.tag_list ?? [],
+        archived: Boolean(project.archived),
+        private: project.visibility !== "public",
+      })),
+    );
   }
 }
 
