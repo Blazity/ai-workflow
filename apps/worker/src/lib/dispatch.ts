@@ -3,6 +3,8 @@ import { env } from "../../env.js";
 import { agentWorkflow } from "../workflows/agent.js";
 import { logger } from "./logger.js";
 import type { Adapters } from "./adapters.js";
+import type { RunKind, RunRegistryAdapter } from "../adapters/run-registry/types.js";
+import type { TicketContent } from "../adapters/issue-tracker/types.js";
 import { stopTicketSandboxes } from "../sandbox/stop-ticket-sandboxes.js";
 
 const CLAIMING_PREFIX = "claiming:";
@@ -42,25 +44,109 @@ export async function dispatchTicket(
   const expectedProjectKey = env.JIRA_PROJECT_KEY.trim().toUpperCase();
   const expectedAiStatus = env.COLUMN_AI.trim().toLowerCase();
   const { issueTracker, runRegistry } = adapters;
-  let stage = "precheck_failed_marker";
-  let claimHeld = false;
-  let claimValue = "";
-  try {
-    logger.info({ ticketKey, maxConcurrentAgents }, "dispatch_attempt");
 
+  logger.info({ ticketKey, maxConcurrentAgents }, "dispatch_attempt");
+
+  try {
     if (await runRegistry.isTicketFailed(ticketKey)) {
       logger.info({ ticketKey }, "dispatch_skipped_previously_failed");
       return { started: false, reason: "previously_failed" };
     }
+  } catch (err) {
+    logger.warn(
+      { ticketKey, stage: "precheck_failed_marker", error: (err as Error).message },
+      "dispatch_error",
+    );
+    return { started: false, reason: "error" };
+  }
 
-    stage = "precheck_capacity";
+  let ticket: TicketContent | null = null;
+  return claimTicketRun(ticketKey, runRegistry, maxConcurrentAgents, {
+    // Runs after the claim + post-claim capacity verify, before start(): the
+    // AI-column and project-key gate specific to ticket dispatch.
+    postClaimGuard: async () => {
+      ticket = await issueTracker.fetchTicket(ticketKey);
+      const ticketStatus = ticket.trackerStatus.trim().toLowerCase();
+      if (ticketStatus !== expectedAiStatus) {
+        logger.info(
+          { ticketKey, ticketStatus: ticket.trackerStatus, expectedStatus: env.COLUMN_AI },
+          "dispatch_skipped_not_in_ai_column",
+        );
+        return { started: false, reason: "not_in_ai_column" };
+      }
+      const ticketProjectKey = extractProjectKey(ticket.identifier);
+      if (!ticketProjectKey || ticketProjectKey !== expectedProjectKey) {
+        logger.info(
+          {
+            ticketKey,
+            ticketIdentifier: ticket.identifier,
+            ticketProjectKey,
+            expectedProjectKey: env.JIRA_PROJECT_KEY,
+          },
+          "dispatch_skipped_wrong_project_key",
+        );
+        return { started: false, reason: "wrong_project_key" };
+      }
+      return null;
+    },
+    startWorkflow: async () => {
+      // Pass the issue key (not the numeric id) so the workflow can build
+      // /browse/{KEY}?focusedCommentId=... deep links in Slack notifications.
+      // Jira's REST API accepts either id or key for fetch/transition/comment.
+      const handle = await start(agentWorkflow, [ticketKey]);
+      logger.info(
+        { ticketId: ticket!.id, identifier: ticket!.identifier, runId: handle.runId },
+        "workflow_started",
+      );
+      return handle.runId;
+    },
+  });
+}
+
+export interface ClaimTicketRunOptions {
+  /**
+   * Run kind persisted with the claim + registration. Defaults to 'ticket',
+   * which keeps the claim/register calls two-arg so classic dispatch behaves
+   * exactly as before.
+   */
+  kind?: RunKind;
+  /**
+   * Runs after the claim + post-claim capacity verify, before start(). Return
+   * a DispatchResult to bail (the claim is released first) or null to proceed.
+   * Throwing bails via the shared error path (claim released, reason 'error').
+   */
+  postClaimGuard?: () => Promise<DispatchResult | null>;
+  /** Starts the workflow and returns its runId. */
+  startWorkflow: () => Promise<string>;
+}
+
+/**
+ * Shared claim/capacity/verify/register sequence around a workflow start.
+ * Factored out of dispatchTicket so PR-trigger dispatch reuses the exact
+ * concurrency fairness, claim sentinel, and post-start verification without
+ * re-implementing them. Behavior for the ticket path is byte-identical.
+ */
+export async function claimTicketRun(
+  ticketKey: string,
+  runRegistry: RunRegistryAdapter,
+  maxConcurrentAgents: number,
+  options: ClaimTicketRunOptions,
+): Promise<DispatchResult> {
+  const kind = options.kind ?? "ticket";
+  let stage = "precheck_capacity";
+  let claimHeld = false;
+  let claimValue = "";
+  try {
     if (await isAtCapacity(maxConcurrentAgents, runRegistry)) {
       return { started: false, reason: "at_capacity" };
     }
 
     stage = "claim_ticket";
     claimValue = `${CLAIMING_PREFIX}${Date.now()}`;
-    const claimed = await runRegistry.claim(ticketKey, claimValue);
+    const claimed =
+      kind === "ticket"
+        ? await runRegistry.claim(ticketKey, claimValue)
+        : await runRegistry.claim(ticketKey, claimValue, kind);
     if (!claimed) {
       logger.info({ ticketKey }, "dispatch_already_claimed");
       return { started: false, reason: "already_claimed" };
@@ -107,42 +193,18 @@ export async function dispatchTicket(
       }
     }
 
-    stage = "fetch_ticket";
-    const ticket = await issueTracker.fetchTicket(ticketKey);
-    const ticketStatus = ticket.trackerStatus.trim().toLowerCase();
-    if (ticketStatus !== expectedAiStatus) {
-      await runRegistry.unregister(ticketKey).catch(() => {});
-      logger.info(
-        { ticketKey, ticketStatus: ticket.trackerStatus, expectedStatus: env.COLUMN_AI },
-        "dispatch_skipped_not_in_ai_column",
-      );
-      return { started: false, reason: "not_in_ai_column" };
-    }
-
-    const ticketProjectKey = extractProjectKey(ticket.identifier);
-    if (!ticketProjectKey || ticketProjectKey !== expectedProjectKey) {
-      await runRegistry.unregister(ticketKey).catch(() => {});
-      logger.info(
-        {
-          ticketKey,
-          ticketIdentifier: ticket.identifier,
-          ticketProjectKey,
-          expectedProjectKey: env.JIRA_PROJECT_KEY,
-        },
-        "dispatch_skipped_wrong_project_key",
-      );
-      return { started: false, reason: "wrong_project_key" };
+    if (options.postClaimGuard) {
+      stage = "postclaim_guard";
+      const bail = await options.postClaimGuard();
+      if (bail) {
+        await runRegistry.unregister(ticketKey).catch(() => {});
+        claimHeld = false;
+        return bail;
+      }
     }
 
     stage = "start_workflow";
-    // Pass the issue key (not the numeric id) so the workflow can build
-    // /browse/{KEY}?focusedCommentId=... deep links in Slack notifications.
-    // Jira's REST API accepts either id or key for fetch/transition/comment.
-    const handle = await start(agentWorkflow, [ticketKey]);
-    logger.info(
-      { ticketId: ticket.id, identifier: ticket.identifier, runId: handle.runId },
-      "workflow_started",
-    );
+    const runId = await options.startWorkflow();
 
     stage = "verify_claim_after_start";
     const claimStillHeld = await verifyClaimNotCancelled(
@@ -151,14 +213,18 @@ export async function dispatchTicket(
       runRegistry,
     );
     if (!claimStillHeld) {
-      await abortWorkflow(handle.runId, ticketKey);
+      await abortWorkflow(runId, ticketKey);
       return { started: false, reason: "already_claimed" };
     }
 
     stage = "register_run";
-    await runRegistry.register(ticketKey, handle.runId);
+    if (kind === "ticket") {
+      await runRegistry.register(ticketKey, runId);
+    } else {
+      await runRegistry.register(ticketKey, runId, kind);
+    }
 
-    return { started: true, runId: handle.runId };
+    return { started: true, runId };
   } catch (err) {
     if (claimHeld) {
       await runRegistry.unregister(ticketKey).catch(() => {});
@@ -185,7 +251,7 @@ export async function dispatchTicket(
  */
 async function isAtCapacity(
   max: number,
-  runRegistry: Adapters["runRegistry"],
+  runRegistry: RunRegistryAdapter,
 ): Promise<boolean> {
   let entries: Awaited<ReturnType<Adapters["runRegistry"]["listAll"]>>;
   try {
@@ -213,7 +279,7 @@ async function isAtCapacity(
 async function verifyClaimNotCancelled(
   ticketKey: string,
   expectedClaimValue: string,
-  runRegistry: Adapters["runRegistry"],
+  runRegistry: RunRegistryAdapter,
 ): Promise<boolean> {
   const currentValue = await runRegistry.getRunId(ticketKey);
   return currentValue === expectedClaimValue;

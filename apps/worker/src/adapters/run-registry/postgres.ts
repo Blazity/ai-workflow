@@ -7,6 +7,7 @@ import {
 } from "../../db/schema.js";
 import type {
   FailedTicketMeta,
+  RunKind,
   RunRegistryAdapter,
   ThreadStore,
 } from "./types.js";
@@ -14,28 +15,28 @@ import type {
 export class PostgresRunRegistry implements RunRegistryAdapter, ThreadStore {
   constructor(private db: Db) {}
 
-  async claim(ticketKey: string, runId: string): Promise<boolean> {
+  async claim(ticketKey: string, runId: string, kind: RunKind = "ticket"): Promise<boolean> {
     // INSERT ... ON CONFLICT DO NOTHING is the HSETNX equivalent: exactly
     // one concurrent claimer gets a row back. created_at defaults to now(),
     // which doubles as the entry timestamp for reconcile's grace period.
     const rows = await this.db
       .insert(activeRuns)
-      .values({ ticketKey, runId })
+      .values({ ticketKey, runId, runKind: kind })
       .onConflictDoNothing({ target: activeRuns.ticketKey })
       .returning({ ticketKey: activeRuns.ticketKey });
     return rows.length > 0;
   }
 
-  async register(ticketKey: string, runId: string): Promise<void> {
+  async register(ticketKey: string, runId: string, kind: RunKind = "ticket"): Promise<void> {
     // Refresh created_at: register() is called both on the claim → runId
     // swap and by external seeders, so it's the authoritative write point
     // for the orphan grace period. sandbox_id is intentionally untouched.
     await this.db
       .insert(activeRuns)
-      .values({ ticketKey, runId })
+      .values({ ticketKey, runId, runKind: kind })
       .onConflictDoUpdate({
         target: activeRuns.ticketKey,
-        set: { runId, createdAt: sql`now()` },
+        set: { runId, runKind: kind, createdAt: sql`now()` },
       });
   }
 
@@ -54,10 +55,15 @@ export class PostgresRunRegistry implements RunRegistryAdapter, ThreadStore {
     await this.db.delete(activeRuns).where(eq(activeRuns.ticketKey, ticketKey));
   }
 
-  async listAll(): Promise<Array<{ ticketKey: string; runId: string }>> {
-    return this.db
-      .select({ ticketKey: activeRuns.ticketKey, runId: activeRuns.runId })
+  async listAll(): Promise<Array<{ ticketKey: string; runId: string; kind: RunKind }>> {
+    const rows = await this.db
+      .select({
+        ticketKey: activeRuns.ticketKey,
+        runId: activeRuns.runId,
+        kind: activeRuns.runKind,
+      })
       .from(activeRuns);
+    return rows.map((row) => ({ ...row, kind: row.kind as RunKind }));
   }
 
   async registerSandbox(ticketKey: string, sandboxId: string): Promise<void> {

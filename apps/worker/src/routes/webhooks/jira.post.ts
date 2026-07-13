@@ -225,6 +225,15 @@ async function cancelTrackedRun(
   const trackedRunId = await runRegistry.getRunId(ticketKey);
   if (!trackedRunId) return false;
 
+  // A pr_trigger run's lifecycle follows the PR, not the ticket column, so a
+  // column move must not cancel it.
+  const entries = await runRegistry.listAll().catch(() => []);
+  const kind = entries.find((entry) => entry.ticketKey === ticketKey)?.kind;
+  if (kind === "pr_trigger") {
+    logger.info({ ticketKey }, "webhook_skip_cancel_pr_trigger_run");
+    return false;
+  }
+
   if (isClaimingSentinel(trackedRunId)) {
     // Sentinel can shadow a real sandbox if dispatch already called
     // start() but crashed before register(). Same gap that reconcile's

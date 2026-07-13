@@ -24,6 +24,9 @@ export const env = createEnv({
 
     // VCS
     VCS_KIND: z.enum(["github", "gitlab"]).optional(),
+    // Login of the bot's own VCS account. When set, PR reviews authored by it
+    // are ignored so the bot does not trigger a run off its own review.
+    VCS_BOT_LOGIN: z.string().min(1).optional(),
     // GitHub VCS — App auth (no PAT). Private key is base64-encoded PEM so it
     // round-trips cleanly through the Vercel env UI without newline-escaping.
     GITHUB_APP_ID: z.coerce.number().int().positive().optional(),

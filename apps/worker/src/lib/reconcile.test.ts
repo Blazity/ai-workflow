@@ -28,7 +28,7 @@ vi.mock("../sandbox/stop-ticket-sandboxes.js", () => ({
 }));
 
 function makeRegistry(
-  runs: Array<{ ticketKey: string; runId: string }> = [],
+  runs: Array<{ ticketKey: string; runId: string; kind?: string }> = [],
   failed: Array<{ ticketKey: string; meta: { runId: string; error: string; failedAt: string } }> = [],
 ): RunRegistryAdapter {
   return {
@@ -393,5 +393,74 @@ describe("reconcileRuns", () => {
     await reconcileRuns(new Set(["PROJ-1"]), registry);
 
     expect(registry.clearFailedMark).not.toHaveBeenCalled();
+  });
+
+  it("does NOT cancel a pr_trigger run when its ticket left the AI column", async () => {
+    const registry = makeRegistry([
+      { ticketKey: "PROJ-1", runId: "run_pr", kind: "pr_trigger" },
+    ]);
+    mockGetRun.mockReturnValue({ status: Promise.resolve("running") });
+    const { reconcileRuns } = await import("./reconcile.js");
+
+    // PROJ-1 is NOT in the AI column, but a pr_trigger run follows the PR.
+    const result = await reconcileRuns(new Set(), registry);
+
+    expect(result).toEqual({ cancelled: 0, cleaned: 0 });
+    expect(mockCancelRun).not.toHaveBeenCalled();
+    expect(registry.unregister).not.toHaveBeenCalled();
+  });
+
+  it("still cancels a ticket-kind run when its ticket left the AI column", async () => {
+    const registry = makeRegistry([
+      { ticketKey: "PROJ-1", runId: "run_stale", kind: "ticket" },
+    ]);
+    mockCancelRun.mockResolvedValue(true);
+    const { reconcileRuns } = await import("./reconcile.js");
+
+    const result = await reconcileRuns(new Set(), registry);
+
+    expect(result).toEqual({ cancelled: 1, cleaned: 0 });
+    expect(mockCancelRun).toHaveBeenCalledWith("PROJ-1", "run_stale", registry);
+  });
+
+  it("sweeps a terminal pr_trigger run even when its ticket is outside the AI column", async () => {
+    const registry = makeRegistry([
+      { ticketKey: "PROJ-1", runId: "run_done", kind: "pr_trigger" },
+    ]);
+    mockGetRun.mockReturnValue({ status: Promise.resolve("completed") });
+    const { reconcileRuns } = await import("./reconcile.js");
+
+    // Not in the AI column, but the dead-run sweep still cleans a finished run.
+    const result = await reconcileRuns(new Set(), registry);
+
+    expect(result).toEqual({ cancelled: 0, cleaned: 1 });
+    expect(registry.unregister).toHaveBeenCalledWith("PROJ-1");
+    expect(mockCancelRun).not.toHaveBeenCalled();
+  });
+
+  it("does NOT cancel a pr_trigger inflight claim when its ticket left the AI column", async () => {
+    const registry = makeRegistry([
+      { ticketKey: "PROJ-1", runId: `claiming:${Date.now()}`, kind: "pr_trigger" },
+    ]);
+    const { reconcileRuns } = await import("./reconcile.js");
+
+    const result = await reconcileRuns(new Set(), registry);
+
+    expect(result).toEqual({ cancelled: 0, cleaned: 0 });
+    expect(registry.unregister).not.toHaveBeenCalled();
+    expect(mockStopTicketSandboxes).not.toHaveBeenCalled();
+  });
+
+  it("still sweeps a stale pr_trigger inflight claim", async () => {
+    const tenMinAgo = Date.now() - 10 * 60 * 1000;
+    const registry = makeRegistry([
+      { ticketKey: "PROJ-1", runId: `claiming:${tenMinAgo}`, kind: "pr_trigger" },
+    ]);
+    const { reconcileRuns } = await import("./reconcile.js");
+
+    const result = await reconcileRuns(new Set(), registry);
+
+    expect(result).toEqual({ cancelled: 0, cleaned: 1 });
+    expect(registry.unregister).toHaveBeenCalledWith("PROJ-1");
   });
 });

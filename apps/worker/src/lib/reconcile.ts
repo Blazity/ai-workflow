@@ -8,7 +8,7 @@ import {
   IssueTrackerNotFoundError,
   type IssueTrackerAdapter,
 } from "../adapters/issue-tracker/types.js";
-import type { RunRegistryAdapter } from "../adapters/run-registry/types.js";
+import type { RunKind, RunRegistryAdapter } from "../adapters/run-registry/types.js";
 
 const TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled"]);
 const STALE_CLAIM_MS = 5 * 60 * 1000;
@@ -45,11 +45,12 @@ export async function reconcileRuns(
   let cancelled = 0;
   let cleaned = 0;
 
-  for (const { ticketKey, runId } of activeRuns) {
+  for (const { ticketKey, runId, kind } of activeRuns) {
     if (isClaimingSentinel(runId)) {
       const result = await reconcileInflightClaim(
         ticketKey,
         runId,
+        kind,
         aiColumnTickets,
         runRegistry,
         issueTracker,
@@ -62,7 +63,10 @@ export async function reconcileRuns(
 
     const ticketStillInAiColumn = aiColumnTickets.has(ticketKey);
 
-    if (ticketStillInAiColumn) {
+    // A pr_trigger run follows the PR, not the ticket column, so it is never
+    // cancelled for leaving the AI column. The terminal/unreachable sweep in
+    // cleanFinishedRun still applies to it, regardless of the column.
+    if (ticketStillInAiColumn || kind === "pr_trigger") {
       cleaned += await cleanFinishedRun(ticketKey, runId, runRegistry);
     } else {
       if (await isWithinGracePeriod(ticketKey, runRegistry)) {
@@ -174,6 +178,7 @@ function getErrorCode(err: unknown): string | undefined {
 async function reconcileInflightClaim(
   ticketKey: string,
   runId: string,
+  kind: RunKind,
   aiColumnTickets: Set<string>,
   runRegistry: RunRegistryAdapter,
   issueTracker?: IssueTrackerAdapter,
@@ -204,6 +209,10 @@ async function reconcileInflightClaim(
   }
 
   if (ticketLeftAiColumn) {
+    if (kind === "pr_trigger") {
+      logger.info({ ticketKey, runId }, "reconcile_kept_pr_trigger_inflight_claim");
+      return { cancelled: 0, cleaned: 0 };
+    }
     const leftAiColumn = await verifyTicketLeftAiColumn(ticketKey, issueTracker);
     if (!leftAiColumn) return { cancelled: 0, cleaned: 0 };
     const sandboxId = await runRegistry

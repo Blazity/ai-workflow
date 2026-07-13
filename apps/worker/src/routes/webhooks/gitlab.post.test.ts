@@ -5,6 +5,7 @@ const mocks = vi.hoisted(() => ({
   env: {
     GITLAB_WEBHOOK_SECRET: "secret",
     GITLAB_PROJECT_ID: undefined as string | undefined,
+    MAX_CONCURRENT_AGENTS: 3,
   },
   getConfiguredVcsProviders: vi.fn(),
   listRepositories: vi.fn(),
@@ -19,6 +20,13 @@ const mockDispatchPostPrGateWebhook = vi.fn();
 vi.mock("../../lib/post-pr-gate-dispatch.js", () => ({
   dispatchPostPrGateWebhook: (...args: any[]) => mockDispatchPostPrGateWebhook(...args),
 }));
+
+const mockDispatchTriggerEvent = vi.fn();
+vi.mock("../../lib/dispatch-trigger.js", () => ({
+  dispatchTriggerEvent: (...args: any[]) => mockDispatchTriggerEvent(...args),
+}));
+
+vi.mock("../../db/client.js", () => ({ getDb: () => ({}) }));
 
 vi.mock("../../adapters/vcs/repository-directory.js", () => ({
   createRepositoryDirectoryForProviders: vi.fn(() => ({
@@ -73,6 +81,7 @@ describe("POST /webhooks/gitlab", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.env.GITLAB_PROJECT_ID = undefined;
+    mockDispatchTriggerEvent.mockResolvedValue({ result: "no_definition" });
     mocks.getConfiguredVcsProviders.mockReturnValue([
       {
         kind: "gitlab",
@@ -214,6 +223,87 @@ describe("POST /webhooks/gitlab", () => {
     const response = await makeApp()(makeRequest(validMergeRequestPayload(), "wrong"));
 
     expect(response.status).toBe(401);
+    expect(mockDispatchPostPrGateWebhook).not.toHaveBeenCalled();
+  });
+
+  it("supersedes the gate when a definition run starts for a bot MR", async () => {
+    mockDispatchTriggerEvent.mockResolvedValueOnce({ result: "started", runId: "run_pr" });
+
+    const response = await makeApp()(makeRequest(validMergeRequestPayload()));
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      status: "dispatched",
+      runId: "run_pr",
+    });
+    expect(mockDispatchTriggerEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ triggerType: "trigger_pr_created" }),
+      expect.anything(),
+    );
+    expect(mockDispatchPostPrGateWebhook).not.toHaveBeenCalled();
+  });
+
+  it("keeps the gate for a non-bot MR that an enabled definition ignores", async () => {
+    mockDispatchTriggerEvent.mockResolvedValueOnce({ result: "ignored_not_workflow_owned" });
+    mockDispatchPostPrGateWebhook.mockResolvedValueOnce({
+      status: "dispatched",
+      runId: "gate_run",
+    });
+
+    const payload = JSON.parse(validMergeRequestPayload());
+    payload.object_attributes.source_branch = "feature/x";
+
+    const response = await makeApp()(makeRequest(JSON.stringify(payload)));
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      status: "dispatched",
+      runId: "gate_run",
+    });
+    expect(mockDispatchTriggerEvent).toHaveBeenCalled();
+    expect(mockDispatchPostPrGateWebhook).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "opened",
+        workflowInput: expect.objectContaining({ headRef: "feature/x" }),
+      }),
+    );
+  });
+
+  it("routes a failed pipeline hook to the checks-failed trigger", async () => {
+    mockDispatchTriggerEvent.mockResolvedValueOnce({ result: "started", runId: "run_checks" });
+
+    const pipelinePayload = JSON.stringify({
+      object_kind: "pipeline",
+      user: { username: "alice" },
+      project: { id: 123, path_with_namespace: "group/demo" },
+      object_attributes: { status: "failed", sha: "sha1" },
+      merge_request: {
+        iid: 42,
+        source_branch: "blazebot/AIW-32",
+        target_branch: "main",
+        title: "AIW-32",
+        url: "https://gitlab.com/group/demo/-/merge_requests/42",
+      },
+      builds: [{ name: "lint", status: "failed" }],
+    });
+
+    const request = new Request("http://localhost/", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-gitlab-token": "secret",
+        "x-gitlab-event": "Pipeline Hook",
+      },
+      body: pipelinePayload,
+    });
+
+    const response = await makeApp()(request);
+
+    expect(response.status).toBe(200);
+    expect(mockDispatchTriggerEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ triggerType: "trigger_pr_checks_failed" }),
+      expect.anything(),
+    );
     expect(mockDispatchPostPrGateWebhook).not.toHaveBeenCalled();
   });
 });
