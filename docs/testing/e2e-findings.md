@@ -69,6 +69,25 @@ This is driver-agnostic (works on both neon-http prod and pglite tests), needs n
 
 ---
 
+## 1b. 🐞 P0 (safety): runs clone/PR EVERY repo the GitHub App can access, not one fixed repo
+
+**Symptom (live).** A Tier-0 smoke ticket (AWT-1008) dispatched a run that, in `prepare_workspace`, cloned **four real Blazity repos** into the sandbox: `Blazity/ai-workflow`, `Blazity/agra-thumbnail-generator`, `Blazity/pre-sales-agent`, `Blazity/ai-workflow-arthur` — none of them a throwaway. The run was aborted (ticket moved out of AI → run `blocked`, `prUrl` null) **before** implementation/PR, so nothing was written. Left to finish it would have opened a PR on one of those real repos.
+
+**Root cause.** Repo selection is driven by the **GitHub App installation scope**, not by `GITHUB_REPO`:
+- `adapters/vcs/repository-directory.ts:49` calls `octokit.apps.listReposAccessibleToInstallation` — every repo the App (id `3632887`) can access becomes a candidate.
+- `pre-sandbox/steps/repo-selection.ts` feeds those candidates to an LLM that picks which repo(s) the ticket touches (`prepare-workspace.ts:186-216`); if none match it asks "Which repository should this ticket modify?".
+- `GITHUB_OWNER`/`GITHUB_REPO` (=`blazity/ai-workflow-demo`) are only the **legacy single-repo fallback** (`env.ts:187,322` `legacyRepoPath`) and do NOT constrain the modern multi-repo path.
+
+**Required fix (config, not code).** Restrict the GitHub App (id `3632887`) installation on the Blazity org to **exactly one throwaway Test repo** (GitHub → Org settings → GitHub Apps → Configure → Repository access → *Only select repositories* → the Test repo). Then `listReposAccessibleToInstallation` returns just that repo and every run clones/PRs only it. Until this is done, **no run may reach an agent/workspace block** — even planning/cloning enumerates and reads real repos. This is the user's GitHub-admin action; the exact Test repo is theirs to name.
+
+**Worse than clone-only — every run writes a remote branch to every accessible repo.** `prepare_workspace` runs `prepareSelectedRepositoryBranches` → `github.ts createBranch` → `octokit.git.createRef` (a REMOTE ref) on each selected repo, in the pre-sandbox phase, before any agent/implementation. AWT-1008 (aborted at planning) still left empty `blazebot/awt-1008` branches on **all 5 repos** (`ai-workflow`, `agra-thumbnail-generator`, `pre-sales-agent`, `ai-workflow-arthur`, `ai-workflow-demo`) — empty (default-HEAD, no commits, no PR) but real artifacts on real repos. Cleanup needs an account with push access (the `sercamembert` gh login has push=false on all of them), e.g. `for r in ai-workflow agra-thumbnail-generator pre-sales-agent ai-workflow-arthur ai-workflow-demo; do gh api -X DELETE repos/Blazity/$r/git/refs/heads/blazebot/awt-1008; done`.
+
+**No repo-free run path exists.** `definition-step.ts:31 normalizeDefinitionForExecution` splices a virtual `prepare_workspace` between every trigger and its successor for any definition lacking one, so EVERY ticket run enumerates + branches the App's repos. There is no way to author a "safe" custom definition that skips repos. Therefore **all run-execution testing is hard-blocked until the GitHub App is scoped to `ai-workflow-demo` only.** A code-level allowlist (reject any repoPath not in an env allowlist, inside `createRepositoryDirectory`/`prepareSelectedRepositoryBranches`) is recommended as defense-in-depth so the app refuses off-list repos regardless of App scope.
+
+**Also found:** `call_llm` uses `lib/llm.ts` which hardcodes `@ai-sdk/anthropic` `anthropic(model)` — it ignores the block's provider and can only ever call Anthropic, so on a codex-only / invalid-Anthropic deployment `call_llm` always fails (design limitation, not just an env gap).
+
+**Validated en route:** T7.3 live — moving a ticket out of the AI column cancels its ticket-kind run (`status: blocked`, no PR). ✅
+
 ## 2. Block registry (28 blocks)
 
 From `@shared/contracts` `BLOCK_TYPE_SPECS` + `BLOCK_PARAM_KEYS` and `schema.ts` params.
