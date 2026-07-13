@@ -200,8 +200,14 @@ Authored a custom definition via API (now that §1 is fixed): `trigger -> call_l
 
 - **PR #291** on `Blazity/ai-workflow-demo` (from AWT-1008): verify + **close** (do not merge), delete its branch.
 - Delete `blazebot/awt-1008` on the **4 real repos** (empty, from the first pre-allowlist aborted run): `ai-workflow`, `agra-thumbnail-generator`, `pre-sales-agent`, `ai-workflow-arthur`.
-- Delete `blazebot/awt-1008` and `blazebot/awt-1009` on `ai-workflow-demo`.
-- One-liner (run as a write-access account): `for r in ai-workflow agra-thumbnail-generator pre-sales-agent ai-workflow-arthur ai-workflow-demo; do for b in awt-1008 awt-1009; do gh api -X DELETE repos/Blazity/$r/git/refs/heads/blazebot/$b; done; done` and `gh pr close 291 --repo Blazity/ai-workflow-demo`.
+- Delete `blazebot/awt-1008`, `blazebot/awt-1009`, `blazebot/awt-1010` on `ai-workflow-demo`.
+- One-liner (run as a write-access account): `for r in ai-workflow agra-thumbnail-generator pre-sales-agent ai-workflow-arthur ai-workflow-demo; do for b in awt-1008 awt-1009 awt-1010; do gh api -X DELETE repos/Blazity/$r/git/refs/heads/blazebot/$b; done; done` and `gh pr close 291 --repo Blazity/ai-workflow-demo`.
+
+## 4g. Live HITL clarification confirmed; plan-approval flow gated by planning agent
+
+Authored a V3 approval definition via API (chain 1: trigger_ticket_ai -> prepare -> planning -> send_plan_approval; chain 2: trigger_plan_approved -> post_ticket_comment -> terminate), enabled it, ran ticket AWT-1010:
+- ✅ **HITL clarification live**: the planning agent returned `needs_human_input`, the run took the clarification exit (block `warn`, run `success`), and the ticket was parked to backlog with a `needs-clarification` label. Confirms the end-and-re-enter HITL path with the real agent.
+- ⚠️ The plan-approval WRITE path (`createApprovalRequest`, one of the P0-transaction-fixed writers) was NOT reached live because `send_plan_approval` only runs after a plan is produced, and this demo's planning agent tends to ask for clarification on any not-fully-specified ticket (also visible on AWT-867). So the approval mechanism is validated at the unit level (approvals store tests in the 1435 suite) and via the identical transaction-removal pattern proven live on definition writes (create/save/enable 500 -> 200), but a full send_plan_approval -> approve -> chain-2 dispatch was not demonstrated live. To show it live, feed a fully-specified ticket the planning agent will not clarify.
 
 ## 4e. Engine regression test suite (214 new deterministic tests)
 
