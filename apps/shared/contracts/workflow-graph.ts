@@ -72,7 +72,7 @@ export const BLOCK_PARAM_KEYS: Record<WorkflowBlockType, readonly string[]> = {
   finalize_workspace: ["requiredChecks"],
   run_pre_pr_checks: ["maxFixCycles"],
   run_checks: ["commands"],
-  call_llm: ["prompt", "system", "model", "outputSchema"],
+  call_llm: ["prompt", "system", "model", "provider", "outputSchema"],
   fetch_pr_context: [],
   open_pr: [],
   update_ticket_status: ["target"],

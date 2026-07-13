@@ -19,6 +19,12 @@ describe("call_llm paramsSchema", () => {
     expect(paramsSchema.safeParse({}).success).toBe(false);
     expect(paramsSchema.safeParse({ prompt: "hi", extra: 1 }).success).toBe(false);
   });
+
+  it("accepts a claude/codex provider and rejects any other value", () => {
+    expect(paramsSchema.safeParse({ prompt: "hi", provider: "codex" }).success).toBe(true);
+    expect(paramsSchema.safeParse({ prompt: "hi", provider: "claude" }).success).toBe(true);
+    expect(paramsSchema.safeParse({ prompt: "hi", provider: "gemini" }).success).toBe(false);
+  });
 });
 
 describe("call_llm execute", () => {
@@ -38,6 +44,7 @@ describe("call_llm execute", () => {
     expect(result.kind).toBe("next");
     expect(result.output).toEqual({ status: "ok", output: "answer" });
     expect(mocks.generateStructured).toHaveBeenCalledWith({
+      provider: "claude",
       model: "claude-haiku-4-5",
       prompt: "hi",
     });
@@ -50,6 +57,43 @@ describe("call_llm execute", () => {
       }),
       "claude-haiku-4-5",
     );
+  });
+
+  it("resolves the codex provider and its default model on a codex deployment", async () => {
+    mocks.generateStructured.mockResolvedValue({
+      text: "answer",
+      usage: { inputTokens: 1, outputTokens: 1, cachedTokens: 0 },
+    });
+    const ctx = makeCtx({ runDefaultKind: "codex" });
+
+    const result = await execute(makeNode("call_llm", { prompt: "hi" }, "llm-2"), {}, ctx);
+
+    expect(result.kind).toBe("next");
+    expect(mocks.generateStructured).toHaveBeenCalledWith({
+      provider: "codex",
+      model: "codex-model",
+      prompt: "hi",
+    });
+    expect(ctx.recordUsage).toHaveBeenCalledWith("LLM llm-2", expect.anything(), "codex-model");
+  });
+
+  it("honors an explicit provider param alongside a model id", async () => {
+    mocks.generateStructured.mockResolvedValue({
+      text: "answer",
+      usage: { inputTokens: 1, outputTokens: 1, cachedTokens: 0 },
+    });
+
+    await execute(
+      makeNode("call_llm", { prompt: "hi", provider: "codex", model: "gpt-5" }),
+      {},
+      makeCtx(),
+    );
+
+    expect(mocks.generateStructured).toHaveBeenCalledWith({
+      provider: "codex",
+      model: "gpt-5",
+      prompt: "hi",
+    });
   });
 
   it("returns the parsed object when an outputSchema is set", async () => {

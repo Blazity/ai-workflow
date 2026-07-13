@@ -5,6 +5,8 @@ const mockGenerateText = vi.fn();
 const mockJsonSchema = vi.fn((s: unknown) => ({ __schema: s }));
 const mockOutputObject = vi.fn((cfg: unknown) => ({ __outputObject: cfg }));
 const mockAnthropic = vi.fn((model: string) => ({ __model: model }));
+const mockOpenAiModel = vi.fn((model: string) => ({ __openaiModel: model }));
+const mockCreateOpenAI = vi.fn((_opts: unknown) => mockOpenAiModel);
 
 vi.mock("ai", () => ({
   generateText: (config: any) => mockGenerateText(config),
@@ -15,6 +17,12 @@ vi.mock("ai", () => ({
 vi.mock("@ai-sdk/anthropic", () => ({
   anthropic: (model: any) => mockAnthropic(model),
 }));
+
+vi.mock("@ai-sdk/openai", () => ({
+  createOpenAI: (opts: any) => mockCreateOpenAI(opts),
+}));
+
+vi.mock("../../env.js", () => ({ env: { CODEX_API_KEY: "test-codex-key" } }));
 
 describe("generateStructured", () => {
   beforeEach(() => {
@@ -85,5 +93,34 @@ describe("generateStructured", () => {
     await expect(generateStructured({ model: "m", prompt: "p" })).rejects.toThrow(
       "model exploded",
     );
+  });
+
+  it("routes to the codex/OpenAI provider (built with CODEX_API_KEY) when provider is codex", async () => {
+    mockGenerateText.mockResolvedValueOnce({ text: "hi", usage: {} });
+
+    await generateStructured({ provider: "codex", model: "gpt-5-codex", prompt: "p" });
+
+    expect(mockCreateOpenAI).toHaveBeenCalledWith({ apiKey: "test-codex-key" });
+    expect(mockOpenAiModel).toHaveBeenCalledWith("gpt-5-codex");
+    expect(mockAnthropic).not.toHaveBeenCalled();
+    expect(mockGenerateText.mock.calls[0][0].model).toEqual({ __openaiModel: "gpt-5-codex" });
+  });
+
+  it("infers the codex provider from a gpt model id when none is passed", async () => {
+    mockGenerateText.mockResolvedValueOnce({ text: "hi", usage: {} });
+
+    await generateStructured({ model: "gpt-5", prompt: "p" });
+
+    expect(mockOpenAiModel).toHaveBeenCalledWith("gpt-5");
+    expect(mockAnthropic).not.toHaveBeenCalled();
+  });
+
+  it("routes to the anthropic provider when provider is claude, overriding the model id", async () => {
+    mockGenerateText.mockResolvedValueOnce({ text: "hi", usage: {} });
+
+    await generateStructured({ provider: "claude", model: "gpt-5", prompt: "p" });
+
+    expect(mockAnthropic).toHaveBeenCalledWith("gpt-5");
+    expect(mockCreateOpenAI).not.toHaveBeenCalled();
   });
 });
