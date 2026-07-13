@@ -1,7 +1,17 @@
 "use client";
 
-import { useEffect, useId, useReducer, useRef } from "react";
+import { useEffect, useId, useLayoutEffect, useReducer, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { keyToEvent, listboxReducer } from "@/lib/listbox";
+
+interface PopupPosition {
+  left: number;
+  width: number;
+  top?: number;
+  bottom?: number;
+  maxHeight: number;
+  openUp: boolean;
+}
 
 export interface ListboxOption {
   value: string;
@@ -22,17 +32,54 @@ export function Listbox({ options, value, onChange, disabled, ariaLabel, classNa
   const [state, dispatch] = useReducer(listboxReducer, { open: false, activeIdx: 0 });
   const { open, activeIdx } = state;
   const rootRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
   const listRef = useRef<HTMLUListElement>(null);
   const listId = useId();
+  const [pos, setPos] = useState<PopupPosition | null>(null);
 
   const selectedIdx = options.findIndex((o) => o.value === value);
   const current = selectedIdx >= 0 ? options[selectedIdx] : undefined;
   const displayLabel = current ? current.label : value !== "" ? value : options[0]?.label ?? "";
 
+  useLayoutEffect(() => {
+    if (!open) {
+      setPos(null);
+      return;
+    }
+    const reposition = () => {
+      const trigger = triggerRef.current;
+      if (!trigger) return;
+      const rect = trigger.getBoundingClientRect();
+      const gap = 6;
+      const estimate = Math.min(360, options.length * 34 + 8);
+      const spaceBelow = window.innerHeight - rect.bottom;
+      const spaceAbove = rect.top;
+      const openUp = spaceBelow < estimate && spaceAbove > spaceBelow;
+      const maxHeight = Math.min(360, (openUp ? spaceAbove : spaceBelow) - 2 * gap);
+      setPos({
+        left: rect.left,
+        width: rect.width,
+        maxHeight,
+        openUp,
+        ...(openUp ? { bottom: window.innerHeight - rect.top + gap } : { top: rect.bottom + gap }),
+      });
+    };
+    reposition();
+    window.addEventListener("scroll", reposition, true);
+    window.addEventListener("resize", reposition);
+    return () => {
+      window.removeEventListener("scroll", reposition, true);
+      window.removeEventListener("resize", reposition);
+    };
+  }, [open, options.length]);
+
   useEffect(() => {
     if (!open) return;
     const onDown = (e: MouseEvent) => {
-      if (rootRef.current && !rootRef.current.contains(e.target as Node)) dispatch({ type: "close" });
+      const target = e.target as Node;
+      if (rootRef.current?.contains(target)) return;
+      if (listRef.current?.contains(target)) return;
+      dispatch({ type: "close" });
     };
     document.addEventListener("mousedown", onDown);
     return () => document.removeEventListener("mousedown", onDown);
@@ -63,6 +110,7 @@ export function Listbox({ options, value, onChange, disabled, ariaLabel, classNa
   return (
     <div ref={rootRef} className={`relative w-full ${className ?? ""}`}>
       <button
+        ref={triggerRef}
         type="button"
         aria-haspopup="listbox"
         aria-expanded={open}
@@ -88,14 +136,23 @@ export function Listbox({ options, value, onChange, disabled, ariaLabel, classNa
         </svg>
       </button>
 
-      {open && (
+      {open && pos && createPortal(
         <ul
           ref={listRef}
           role="listbox"
           aria-label={ariaLabel}
           tabIndex={-1}
           aria-activedescendant={options[activeIdx] ? `${listId}-opt-${activeIdx}` : undefined}
-          className="absolute left-0 top-[calc(100%+6px)] z-50 min-w-full w-max max-w-[min(420px,80vw)] max-h-[min(60vh,360px)] overflow-y-auto py-1 bg-panel border border-neutral-200 rounded-sm shadow-[0_12px_28px_-8px_rgba(24,27,32,0.22),0_2px_6px_rgba(24,27,32,0.08)] origin-top animate-ck-pop motion-reduce:animate-none"
+          style={{
+            position: "fixed",
+            left: pos.left,
+            minWidth: pos.width,
+            maxHeight: pos.maxHeight,
+            ...(pos.openUp ? { bottom: pos.bottom } : { top: pos.top }),
+          }}
+          className={`z-[100] w-max max-w-[min(420px,80vw)] overflow-y-auto py-1 bg-panel border border-neutral-200 rounded-sm shadow-[0_12px_28px_-8px_rgba(24,27,32,0.22),0_2px_6px_rgba(24,27,32,0.08)] animate-ck-pop motion-reduce:animate-none ${
+            pos.openUp ? "origin-bottom" : "origin-top"
+          }`}
         >
           {options.map((opt, i) => {
             const selected = i === selectedIdx;
@@ -145,7 +202,8 @@ export function Listbox({ options, value, onChange, disabled, ariaLabel, classNa
               </li>
             );
           })}
-        </ul>
+        </ul>,
+        document.body,
       )}
     </div>
   );
