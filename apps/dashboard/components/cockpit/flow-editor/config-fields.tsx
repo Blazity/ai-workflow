@@ -501,6 +501,34 @@ export function ConfigFields({
           />
         </ConfigField>
       );
+    case "send_plan_approval":
+      return (
+        <>
+          <ConfigField label="Plan from step">
+            <TextInput
+              value={str(node.params.planFromStep)}
+              disabled={!canEdit}
+              placeholder="block-id"
+              onChange={(v) => onChange("params.planFromStep", v)}
+            />
+          </ConfigField>
+          <ConfigField label="Mirror comment">
+            <label className="flex items-center gap-2 font-body text-xs text-coal">
+              <input
+                type="checkbox"
+                checked={node.params.mirrorComment !== false}
+                disabled={!canEdit}
+                onChange={(e) => onChange("params.mirrorComment", e.target.checked)}
+                className="w-3.5 h-3.5 accent-mariner"
+              />
+              Mirror the plan as a ticket comment
+            </label>
+          </ConfigField>
+          <ConfigNote>
+            The run ends here and resumes from the Plan approved trigger once an approver accepts.
+          </ConfigNote>
+        </>
+      );
     case "arthur_injection_check":
       return (
         <>

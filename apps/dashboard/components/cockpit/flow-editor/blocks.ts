@@ -26,6 +26,7 @@ export const NODE_CATEGORIES: Record<
   post_ticket_comment:    { color: "#2367b8", soft: "#E9F0F8", label: "Ticket comment",       glyph: "❝", group: "ticket" },
   post_pr_comment:        { color: "#4b50bf", soft: "#EDEEF9", label: "PR comment",           glyph: "❞", group: "vcs" },
   send_slack_message:     { color: "#64748B", soft: "#EEF1F5", label: "Slack message",        glyph: "✉", group: "utility" },
+  send_plan_approval:     { color: "#b06a14", soft: "#F7F0E7", label: "Plan approval",         glyph: "☑", group: "human" },
   human_question:         { color: "#b06a14", soft: "#F7F0E7", label: "Human question",       glyph: "?", group: "human" },
   arthur_injection_check: { color: "#8b6f8f", soft: "#F3F0F4", label: "Injection check",      glyph: "◬", group: "arthur" },
   arthur_trace:           { color: "#8b6f8f", soft: "#F3F0F4", label: "Arthur trace",         glyph: "∿", group: "arthur" },
@@ -121,6 +122,10 @@ export function nodeSummary(node: FlowNodeDef, options: WorkflowEditorOptions): 
     case "run_pre_pr_checks": {
       const cycles = node.params.maxFixCycles;
       return typeof cycles === "number" ? `${cycles} fix cycles` : null;
+    }
+    case "send_plan_approval": {
+      const from = str(node.params.planFromStep);
+      return from !== "" ? from : "awaits approval";
     }
     default:
       return null;

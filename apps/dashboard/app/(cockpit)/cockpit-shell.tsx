@@ -38,6 +38,7 @@ const screenForPath = (path: string) => {
 const TITLE_FOR_SCREEN: Record<string, string> = {
   overview: "Overview",
   runs: "Workflow runs",
+  approvals: "Approvals",
   prompts: "Prompts",
   evals: "Arthur evals",
   cost: "Cost & usage",

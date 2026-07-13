@@ -30,6 +30,7 @@ const PARAM_KEYS: Record<WorkflowBlockType, string[]> = {
   post_ticket_comment: ["body"],
   post_pr_comment: ["body", "target"],
   send_slack_message: ["message"],
+  send_plan_approval: ["planFromStep", "mirrorComment"],
   human_question: ["questions"],
   arthur_injection_check: ["contentFromStep"],
   arthur_trace: ["taskName"],
