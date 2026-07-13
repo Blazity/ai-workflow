@@ -6,6 +6,11 @@ export function defaultPort(type: WorkflowBlockType): string {
   return BLOCK_TYPE_SPECS[type].ports[0] ?? DEFAULT_OUT_PORT;
 }
 
+export function canOmitFromPort(type: WorkflowBlockType, port: string): boolean {
+  const ports = BLOCK_TYPE_SPECS[type].ports;
+  return ports.length === 1 && port === ports[0];
+}
+
 export function resolvedPort(edge: FlowEdgeDef, sourceType: WorkflowBlockType): string {
   return edge.fromPort ?? defaultPort(sourceType);
 }
@@ -34,7 +39,7 @@ export function upsertEdge(
 ): FlowEdgeDef[] {
   if (from === to) return [...edges];
   const kept = edges.filter((e) => !(e.from === from && resolvedPort(e, sourceType) === port));
-  const next: FlowEdgeDef = port === defaultPort(sourceType) ? { from, to } : { from, to, fromPort: port };
+  const next: FlowEdgeDef = canOmitFromPort(sourceType, port) ? { from, to } : { from, to, fromPort: port };
   return [...kept, next];
 }
 

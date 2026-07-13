@@ -6,7 +6,7 @@ import type {
   WorkflowParamValue,
 } from "@shared/contracts";
 import type { FlowEdgeDef, FlowNodeDef } from "@/lib/flows";
-import { defaultPort } from "./edges";
+import { canOmitFromPort } from "./edges";
 
 const PARAM_KEYS: Record<WorkflowBlockType, string[]> = {
   trigger_ticket_ai: [],
@@ -45,7 +45,7 @@ function serializeParams(node: FlowNodeDef): Record<string, WorkflowParamValue> 
     const value = node.params[key];
     if (value === undefined) continue;
     if (Array.isArray(value) && value.length === 0) continue;
-    if ((key === "model" || key === "message" || key === "provider") && value === "") continue;
+    if (typeof value === "string" && value.trim() === "") continue;
     out[key] = value;
   }
   return out;
@@ -74,8 +74,7 @@ export function serializeWorkflowDefinition(
       const sourceType = typeById.get(edge.from);
       if (
         edge.fromPort !== undefined &&
-        sourceType !== undefined &&
-        edge.fromPort !== defaultPort(sourceType)
+        !(sourceType !== undefined && canOmitFromPort(sourceType, edge.fromPort))
       ) {
         serialized.fromPort = edge.fromPort;
       }

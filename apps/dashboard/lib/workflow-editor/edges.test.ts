@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
+  canOmitFromPort,
   defaultPort,
   edgeKey,
   isBackEdge,
@@ -56,8 +57,24 @@ test("upsertEdge leaves other ports intact when replacing one", () => {
   const out = upsertEdge(edges, "a", "true", "y", "branch");
   assert.deepEqual(out, [
     { from: "a", to: "x", fromPort: "false" },
-    { from: "a", to: "y" },
+    { from: "a", to: "y", fromPort: "true" },
   ]);
+});
+
+test("upsertEdge keeps fromPort for a multi-port default port", () => {
+  assert.deepEqual(upsertEdge([], "a", "true", "b", "branch"), [
+    { from: "a", to: "b", fromPort: "true" },
+  ]);
+  assert.deepEqual(upsertEdge([], "a", "continue", "b", "loop"), [
+    { from: "a", to: "b", fromPort: "continue" },
+  ]);
+});
+
+test("canOmitFromPort only for the sole port of a single-port source", () => {
+  assert.equal(canOmitFromPort("open_pr", "out"), true);
+  assert.equal(canOmitFromPort("open_pr", "failed"), false);
+  assert.equal(canOmitFromPort("branch", "true"), false);
+  assert.equal(canOmitFromPort("loop", "continue"), false);
 });
 
 test("upsertEdge blocks self-loops", () => {

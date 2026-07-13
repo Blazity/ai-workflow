@@ -119,7 +119,7 @@ test("emits array params and drops empty arrays", () => {
   ]);
 });
 
-test("emits fromPort only when set and not the source type default", () => {
+test("always emits fromPort for multi-port sources and omits it only for the single default port", () => {
   const nodes: FlowNodeDef[] = [
     { id: "branch", type: "branch", x: 0, y: 0, params: { condition: "steps.a.output.ok == true" } },
     { id: "yes", type: "open_pr", x: 0, y: 0, params: {} },
@@ -137,10 +137,53 @@ test("emits fromPort only when set and not the source type default", () => {
 
   const out = serializeWorkflowDefinition(nodes, edges);
   assert.deepEqual(out.edges, [
-    { from: "branch", to: "yes" },
+    { from: "branch", to: "yes", fromPort: "true" },
     { from: "branch", to: "no", fromPort: "false" },
     { from: "agent", to: "done" },
     { from: "agent", to: "recover", fromPort: "failed" },
+  ]);
+});
+
+test("serializes a branch and loop graph with fromPort on every control edge", () => {
+  const nodes: FlowNodeDef[] = [
+    { id: "branch", type: "branch", x: 0, y: 0, params: { condition: "steps.a.output.ok == true" } },
+    { id: "yes", type: "open_pr", x: 0, y: 0, params: {} },
+    { id: "no", type: "terminate", x: 0, y: 0, params: { terminalStatus: "failed" } },
+    { id: "loop", type: "loop", x: 0, y: 0, params: { maxAttempts: 3 } },
+    { id: "body", type: "implementation_agent", x: 0, y: 0, params: {} },
+    { id: "after", type: "open_pr", x: 0, y: 0, params: {} },
+  ];
+  const edges: FlowEdgeDef[] = [
+    { from: "branch", to: "yes", fromPort: "true" },
+    { from: "branch", to: "no", fromPort: "false" },
+    { from: "loop", to: "body", fromPort: "continue" },
+    { from: "loop", to: "after", fromPort: "exhausted" },
+  ];
+
+  const out = serializeWorkflowDefinition(nodes, edges);
+  assert.deepEqual(out.edges, [
+    { from: "branch", to: "yes", fromPort: "true" },
+    { from: "branch", to: "no", fromPort: "false" },
+    { from: "loop", to: "body", fromPort: "continue" },
+    { from: "loop", to: "after", fromPort: "exhausted" },
+  ]);
+  for (const edge of out.edges) {
+    assert.equal(typeof edge.fromPort, "string");
+  }
+});
+
+test("drops cleared, whitespace-only and empty required string params", () => {
+  const nodes: FlowNodeDef[] = [
+    { id: "term", type: "terminate", x: 0, y: 0, params: { terminalStatus: "failed", postComment: "" } },
+    { id: "trace", type: "arthur_trace", x: 0, y: 0, params: { taskName: "   " } },
+    { id: "llm", type: "call_llm", x: 0, y: 0, params: { prompt: "", system: "" } },
+  ];
+
+  const out = serializeWorkflowDefinition(nodes, []);
+  assert.deepEqual(out.nodes, [
+    { id: "term", type: "terminate", x: 0, y: 0, params: { terminalStatus: "failed" } },
+    { id: "trace", type: "arthur_trace", x: 0, y: 0, params: {} },
+    { id: "llm", type: "call_llm", x: 0, y: 0, params: {} },
   ]);
 });
 
