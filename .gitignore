@@ -13,3 +13,6 @@ dist/
 .worktrees/
 .superpowers/
 *.tsbuildinfo
+
+# Compiled internal shared packages
+apps/shared/*/dist

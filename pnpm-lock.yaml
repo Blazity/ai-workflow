@@ -20,6 +20,12 @@ importers:
       '@octokit/request':
         specifier: ^10.0.10
         version: 10.0.10
+      '@shared/conditions':
+        specifier: workspace:*
+        version: link:../shared/conditions
+      '@shared/contracts':
+        specifier: workspace:*
+        version: link:../shared/contracts
       next:
         specifier: ^15.0.0
         version: 15.5.18(@opentelemetry/api@1.9.0)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
@@ -55,6 +61,14 @@ importers:
         specifier: ^5.6.0
         version: 5.9.3
 
+  apps/shared/conditions:
+    dependencies:
+      '@shared/contracts':
+        specifier: workspace:*
+        version: link:../contracts
+
+  apps/shared/contracts: {}
+
   apps/worker:
     dependencies:
       '@ai-sdk/anthropic':
@@ -78,6 +92,12 @@ importers:
       '@octokit/rest':
         specifier: ^22.0.1
         version: 22.0.1
+      '@shared/conditions':
+        specifier: workspace:*
+        version: link:../shared/conditions
+      '@shared/contracts':
+        specifier: workspace:*
+        version: link:../shared/contracts
       '@t3-oss/env-core':
         specifier: ^0.13.10
         version: 0.13.10(typescript@5.9.3)(zod@3.25.76)

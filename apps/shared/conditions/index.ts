@@ -1,4 +1,4 @@
-import type { BlockOutput, JsonValue } from "../contracts/domain.js";
+import type { BlockOutput, JsonValue } from "@shared/contracts";
 
 export type ConditionAst =
   | { kind: "lit"; value: string | number | boolean | null }
