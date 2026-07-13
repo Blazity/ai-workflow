@@ -18,7 +18,8 @@ import type {
   BlockExecutor,
   ExecuteGraphHooks,
 } from "../workflow-definition/interpreter.js";
-import { resolveBlockAgent } from "../workflow-definition/resolve-agent.js";
+import { resolveBlockAgent, resolveRunDefaultKind } from "../workflow-definition/resolve-agent.js";
+import { resolveTicketMoveTarget } from "./ticket-move-target.js";
 import type { AgentWorkflowInput } from "./agent-input.js";
 import type { BlockExecuteFn, EngineCtx } from "./blocks/types.js";
 import { execute as executePrepareWorkspace } from "./blocks/prepare-workspace.js";
@@ -709,7 +710,7 @@ export async function agentWorkflow(input: string | AgentWorkflowInput) {
     const agentKindOverride = await resolveAgentKindOverride(ticket.labels);
     // The run default drives blocks that don't pin a provider, plus the pre-PR
     // fix cycle and push fixes. Per-block overrides layer on top of it.
-    const runDefaultKind: AgentKind = agentKindOverride ?? env.AGENT_KIND;
+    const runDefaultKind: AgentKind = resolveRunDefaultKind(agentKindOverride, env.AGENT_KIND);
 
     const defaultModel = runDefaultKind === "codex" ? env.CODEX_MODEL : env.CLAUDE_MODEL;
     const resolveAgent = (params: WorkflowDefinitionNode["params"]) =>
@@ -1163,7 +1164,7 @@ export async function agentWorkflow(input: string | AgentWorkflowInput) {
           }
 
           case "update_ticket_status": {
-            const targetName = node.params.target === "backlog" ? "backlog" : "ai_review";
+            const targetName = resolveTicketMoveTarget(node.params.target);
             const target = targetName === "backlog" ? backlogMoveTarget() : aiReviewMoveTarget();
             await moveTicket(ticketId, target);
             return { kind: "next", output: { status: "ok", target: targetName } };

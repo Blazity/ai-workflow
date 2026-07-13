@@ -1,7 +1,19 @@
 import { describe, it, expect } from "vitest";
-import { requiredAgentKinds, resolveBlockAgent } from "./resolve-agent.js";
+import { requiredAgentKinds, resolveBlockAgent, resolveRunDefaultKind } from "./resolve-agent.js";
 
 const defaults = { claude: "claude-default", codex: "codex-default" };
+
+describe("resolveRunDefaultKind", () => {
+  it("uses the label override when present", () => {
+    expect(resolveRunDefaultKind("codex", "claude")).toBe("codex");
+    expect(resolveRunDefaultKind("claude", "codex")).toBe("claude");
+  });
+
+  it("falls back to the env kind when no label override", () => {
+    expect(resolveRunDefaultKind(null, "codex")).toBe("codex");
+    expect(resolveRunDefaultKind(null, "claude")).toBe("claude");
+  });
+});
 
 describe("resolveBlockAgent", () => {
   it("uses the block provider over the run default", () => {

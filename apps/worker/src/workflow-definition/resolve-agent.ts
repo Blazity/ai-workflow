@@ -11,6 +11,15 @@ const AGENT_BLOCK_TYPES = new Set([
   "review_agent",
 ]);
 
+// Precedence for the run-wide default agent kind: a per-ticket label override
+// wins, otherwise the env-configured default applies.
+export function resolveRunDefaultKind(
+  labelOverride: AgentKind | null,
+  envAgentKind: AgentKind,
+): AgentKind {
+  return labelOverride ?? envAgentKind;
+}
+
 function resolveKind(
   params: Record<string, unknown> | undefined,
   defaultKind: AgentKind,
