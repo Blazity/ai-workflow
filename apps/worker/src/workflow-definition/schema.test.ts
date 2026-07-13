@@ -7,7 +7,12 @@ import type {
   WorkflowParamValue,
 } from "@shared/contracts";
 import { defaultWorkflowDefinition } from "./default.js";
-import { humanGateLoopDefinition, linearPipelineDefinition } from "./graph-fixtures.js";
+import {
+  humanGateLoopDefinition,
+  linearPipelineDefinition,
+  planApprovalDefinition,
+  prReviewFixDefinition,
+} from "./graph-fixtures.js";
 import { validateWorkflowGraph, workflowDefinitionSchema } from "./schema.js";
 
 function node(
@@ -247,6 +252,18 @@ describe("validateWorkflowGraph fixtures", () => {
 
   it("accepts the human-gate loop fixture", () => {
     const def = humanGateLoopDefinition();
+    expect(workflowDefinitionSchema.safeParse(def).success).toBe(true);
+    expect(validateWorkflowGraph(def)).toEqual([]);
+  });
+
+  it("accepts the plan-approval fixture", () => {
+    const def = planApprovalDefinition();
+    expect(workflowDefinitionSchema.safeParse(def).success).toBe(true);
+    expect(validateWorkflowGraph(def)).toEqual([]);
+  });
+
+  it("accepts the PR-review-fix fixture", () => {
+    const def = prReviewFixDefinition();
     expect(workflowDefinitionSchema.safeParse(def).success).toBe(true);
     expect(validateWorkflowGraph(def)).toEqual([]);
   });

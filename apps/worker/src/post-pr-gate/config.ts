@@ -1,9 +1,18 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { parse } from "yaml";
 import { z } from "zod";
+import { logger } from "../lib/logger.js";
 import { postPrGateStepRegistry, type PostPrGateStepId } from "./steps/index.js";
 import type { PostPrGateConfig } from "./types.js";
+
+const defaultPostPrGateConfig: PostPrGateConfig<PostPrGateStepId> = {
+  postPrGate: {
+    runOn: { botPrsOnly: true, draftPrs: false, baseBranches: [] },
+    steps: [{ uses: "code-hygiene", onFailure: "continue", timeoutMs: 180000 }],
+  },
+};
 
 const postPrGateConfigSchema = z
   .object({
@@ -40,18 +49,22 @@ export function defaultPostPrGateConfigPath(): string {
 export function loadPostPrGateConfig(
   configPath = defaultPostPrGateConfigPath(),
 ): PostPrGateConfig<PostPrGateStepId> {
-  let parsedYaml: unknown;
+  let raw: string;
   try {
-    parsedYaml = parse(readFileSync(configPath, "utf8"));
+    raw = readFileSync(configPath, "utf8");
   } catch (err) {
     if (isNodeErrorWithCode(err, "ENOENT")) {
-      throw new Error(`Missing post-pr-gate config at ${configPath}`);
+      return defaultPostPrGateConfig;
     }
     throw new Error(
       `Failed to read post-pr-gate config at ${configPath}: ${errorMessage(err)}`,
     );
   }
-  return parsePostPrGateConfig(parsedYaml);
+  const config = parsePostPrGateConfig(parse(raw));
+  if (!isDeepStrictEqual(config, defaultPostPrGateConfig)) {
+    logger.warn({ configPath }, "post_pr_gate_yaml_deprecated");
+  }
+  return config;
 }
 
 export function parsePostPrGateConfig(

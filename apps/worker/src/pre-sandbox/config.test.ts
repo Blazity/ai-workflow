@@ -1,10 +1,20 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { afterEach, describe, expect, it } from "vitest";
-import { loadPreSandboxConfig, parsePreSandboxConfig } from "./config.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const warn = vi.hoisted(() => vi.fn());
+vi.mock("../lib/logger.js", () => ({ logger: { warn } }));
+
+const { loadPreSandboxConfig, parsePreSandboxConfig } = await import("./config.js");
 
 const tempDirs: string[] = [];
+
+const defaultConfig = {
+  preSandbox: {
+    steps: [{ uses: "repo-selection", onFailure: "fail", timeoutMs: 60000 }],
+  },
+};
 
 function validConfig(overrides: Record<string, unknown> = {}) {
   return {
@@ -29,6 +39,10 @@ afterEach(() => {
   }
 });
 
+beforeEach(() => {
+  warn.mockClear();
+});
+
 describe("pre-sandbox config", () => {
   it("loads the minimal valid YAML config", () => {
     const configPath = writeTempConfig(`
@@ -39,10 +53,37 @@ preSandbox:
     expect(loadPreSandboxConfig(configPath)).toEqual(validConfig());
   });
 
-  it("fails when the config file is missing", () => {
-    expect(() => loadPreSandboxConfig(join(tmpdir(), "missing-pre-sandbox.yaml"))).toThrow(
-      /Missing pre-sandbox config/,
-    );
+  it("returns the built-in default when the config file is missing", () => {
+    expect(loadPreSandboxConfig(join(tmpdir(), "missing-pre-sandbox.yaml"))).toEqual(defaultConfig);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("does not warn when the file matches the built-in default", () => {
+    const configPath = writeTempConfig(`
+preSandbox:
+  steps:
+    - uses: repo-selection
+      onFailure: fail
+      timeoutMs: 60000
+`);
+
+    expect(loadPreSandboxConfig(configPath)).toEqual(defaultConfig);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("warns once when the file differs from the built-in default", () => {
+    const configPath = writeTempConfig(`
+preSandbox:
+  steps:
+    - uses: repo-selection
+      name: Select repositories
+      onFailure: fail
+      timeoutMs: 60000
+`);
+
+    loadPreSandboxConfig(configPath);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledWith(expect.anything(), "pre_sandbox_yaml_deprecated");
   });
 
   it("rejects a config without the required root key", () => {

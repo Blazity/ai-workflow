@@ -1,9 +1,17 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { parse } from "yaml";
 import { z } from "zod";
+import { logger } from "../lib/logger.js";
 import { preSandboxStepRegistry, type PreSandboxStepId } from "./steps/index.js";
 import type { PreSandboxConfig } from "./types.js";
+
+const defaultPreSandboxConfig: PreSandboxConfig<PreSandboxStepId> = {
+  preSandbox: {
+    steps: [{ uses: "repo-selection", onFailure: "fail", timeoutMs: 60000 }],
+  },
+};
 
 const preSandboxConfigSchema = z
   .object({
@@ -32,19 +40,26 @@ export function defaultPreSandboxConfigPath(): string {
 export function loadPreSandboxConfig(
   configPath = defaultPreSandboxConfigPath(),
 ): PreSandboxConfig<PreSandboxStepId> {
-  let parsedYaml: unknown;
+  let raw: string;
 
   try {
-    parsedYaml = parse(readFileSync(configPath, "utf8"));
+    raw = readFileSync(configPath, "utf8");
   } catch (err) {
     if (isNodeErrorWithCode(err, "ENOENT")) {
-      throw new Error(`Missing pre-sandbox config at ${configPath}`);
+      return defaultPreSandboxConfig;
     }
 
     throw new Error(`Failed to read pre-sandbox config at ${configPath}: ${errorMessage(err)}`);
   }
 
-  return parsePreSandboxConfig(parsedYaml);
+  const config = parsePreSandboxConfig(parse(raw));
+  if (!isDeepStrictEqual(config, defaultPreSandboxConfig)) {
+    logger.warn(
+      { configPath },
+      "pre_sandbox_yaml_deprecated",
+    );
+  }
+  return config;
 }
 
 export function parsePreSandboxConfig(value: unknown): PreSandboxConfig<PreSandboxStepId> {
