@@ -189,6 +189,20 @@ After deploying `AGENT_ALLOWED_REPOS=Blazity/ai-workflow-demo` + the §1b guard,
 - ⚠️ Finding: the implementation agent also committed a `blazebot/memory/AWT-1008.md` session-memory file, despite the ticket saying "change only README.md". It is bot bookkeeping (harmless) but it does violate an explicit single-file instruction.
 - ⚠️ Workflow limitation: the local gh account is read-only on these repos, so the orchestrator can VERIFY PRs but cannot close them or delete branches. Closing PR #291 + deleting the leftover `blazebot/awt-1008` branches (on the 4 real repos from the first aborted run, and on ai-workflow-demo) needs a write-access account, or grant the test account write on `ai-workflow-demo` so the loop can self-clean.
 
+## 4c. Tier 1 partial: call_llm on codex + a reconciler gotcha
+
+Authored a custom definition via API (now that §1 is fixed): `trigger -> call_llm{provider:codex, model:gpt-5.4-mini} -> post_ticket_comment -> update_ticket_status{ai_review} -> terminate{done}`, enabled it (disabling the default), ran ticket AWT-1009:
+- ✅ **`call_llm` succeeded on codex live** (`llm:ok`, model gpt-5.4-mini) — the provider-aware fix works end-to-end, not just in unit tests.
+- ✅ Allowlist double-confirmed: `prepare` selected only `ai-workflow-demo`; a precise ref check shows `blazebot/awt-1009` exists ONLY on `ai-workflow-demo`, never on the 4 real repos.
+- 🐞 **Gotcha:** the run ended `blocked`, not `success`. `update_ticket_status{ai_review}` moved the ticket OUT of the AI column, and the reconciler's "ticket left AI -> cancel ticket-kind run" logic then blocked the run (before `terminate`). So a definition that moves the ticket out of AI via `update_ticket_status` can cancel its own run depending on timing. The default pipeline also ends with a status move yet AWT-1008 reported `success` and stayed visually in the AI column — the success-vs-blocked outcome looks timing-dependent and needs a deterministic fix (e.g. suppress the leave-AI cancel while a run for that ticket is still finalizing, or treat a workflow-driven status move differently from a human one). Follow-up.
+
+## 4d. Cleanup owed (needs a write-access account; orchestrator gh login is read-only)
+
+- **PR #291** on `Blazity/ai-workflow-demo` (from AWT-1008): verify + **close** (do not merge), delete its branch.
+- Delete `blazebot/awt-1008` on the **4 real repos** (empty, from the first pre-allowlist aborted run): `ai-workflow`, `agra-thumbnail-generator`, `pre-sales-agent`, `ai-workflow-arthur`.
+- Delete `blazebot/awt-1008` and `blazebot/awt-1009` on `ai-workflow-demo`.
+- One-liner (run as a write-access account): `for r in ai-workflow agra-thumbnail-generator pre-sales-agent ai-workflow-arthur ai-workflow-demo; do for b in awt-1008 awt-1009; do gh api -X DELETE repos/Blazity/$r/git/refs/heads/blazebot/$b; done; done` and `gh pr close 291 --repo Blazity/ai-workflow-demo`.
+
 ## 5. Verified so far (live, on preview)
 
 - ✅ Auth: sign-in 200 from the preview origin (multi-origin fix holds).
