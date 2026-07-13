@@ -203,6 +203,22 @@ Authored a custom definition via API (now that §1 is fixed): `trigger -> call_l
 - Delete `blazebot/awt-1008` and `blazebot/awt-1009` on `ai-workflow-demo`.
 - One-liner (run as a write-access account): `for r in ai-workflow agra-thumbnail-generator pre-sales-agent ai-workflow-arthur ai-workflow-demo; do for b in awt-1008 awt-1009; do gh api -X DELETE repos/Blazity/$r/git/refs/heads/blazebot/$b; done; done` and `gh pr close 291 --repo Blazity/ai-workflow-demo`.
 
+## 4e. Engine regression test suite (214 new deterministic tests)
+
+Rather than only clicking Jira tickets, the engine now has a real, repeatable, CI-ready regression suite (runs inside `pnpm test`, pglite, no GitHub/Jira/LLM). `executeGraph` is a pure function with an injectable `executeBlock` (fake block outputs) and `hooks` (spy on all side effects/persistence), so the whole engine is testable deterministically. 214 tests added across 7 new files, full suite now **1426/1426 green**, ~44s:
+- `interpreter.edge.test.ts` (26): execution cap (exact N vs N+1), branch (missing/earlier-output/unwired port), loop (NaN/0 maxAttempts, unknown onExhaust, exhausted->branch, continue-not-looping-back), terminate, action ports (unwirable/portless -> engine fail), 500-char truncation, hook ordering + attempt matching, buildRuntimeGraph.
+- `schema.edge.test.ts` (21): every validator rejection message + all V1-V4 fixtures validate clean.
+- `conditions.edge.test.ts` (47): parse/eval precedence, parens, negation, nested paths, strict eq/neq, missing refs, malformed input.
+- `golden-runs.edge.test.ts` (22): each fixture definition (V1-V4) driven end-to-end through executeGraph on each meaningful path — the engine-level e2e anchors.
+- `agent-llm.edge.test.ts` (33): call_llm provider routing (codex vs claude), generic_agent schema, resolve-agent precedence.
+- `io-blocks.edge.test.ts` (40): repo allowlist (filter + throw), post/comment/status/checks/finalize blocks.
+- `loader-triggers.edge.test.ts` (25): virtual-prepare injection, definition resolution, dispatch/gate/coalesce.
+
+**Testability findings (worth a small refactor to make them testable + cleaner):**
+1. `interpreter.ts:146-153` branch eval-error catch is effectively dead: `evaluateCondition` is a fully-guarded pure switch that never throws for a parseable condition. Either drop the catch or document it as defensive.
+2. resolve-agent full precedence (`agent.ts:709-712`, `runDefaultKind = parseAgentKindOverride(labels) ?? env.AGENT_KIND`) is inline and not unit-testable; extract a pure helper.
+3. `update_ticket_status` target mapping is inline in the `agent.ts` executeBlock switch (`agent.ts:1165-1170`, closure-local `aiReviewMoveTarget()`/`backlogMoveTarget()`); extract a pure mapping helper so the ai_review/backlog/default routing can be unit-tested.
+
 ## 5. Verified so far (live, on preview)
 
 - ✅ Auth: sign-in 200 from the preview origin (multi-origin fix holds).
