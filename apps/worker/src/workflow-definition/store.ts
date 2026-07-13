@@ -1,16 +1,12 @@
 import type { WorkflowBlockType, WorkflowDefinition, WorkflowDefinitionVersion } from "@shared/contracts";
 import { isTriggerBlockType } from "@shared/contracts";
-import { and, arrayContains, arrayOverlaps, asc, desc, eq, isNull, max, ne, sql } from "drizzle-orm";
+import { and, arrayContains, arrayOverlaps, asc, desc, eq, isNull, max, ne } from "drizzle-orm";
 import type { Db } from "../db/client.js";
 import { workflowDefinitions, workflowDefinitionVersions } from "../db/schema.js";
 import { canEditWorkflowDefinitions, type DashboardRole } from "../lib/auth/roles.js";
 import { DashboardAuthError } from "../lib/auth/users-read.js";
 
 const VERSION_LIST_LIMIT = 50;
-
-/** Serializes writes so version numbering and the enabled-per-trigger rule stay
- *  race-free; released automatically when the wrapping transaction commits. */
-const ADVISORY_LOCK = sql`select pg_advisory_xact_lock(hashtext('workflow_definitions'))`;
 
 export interface WorkflowDefinitionActor {
   role: DashboardRole;
@@ -197,18 +193,32 @@ export async function getEnabledWorkflowDefinitionForTrigger(
   return { definition: mapDefinitionRow(row), current };
 }
 
-// --- Writes (role-gated; each opens a transaction under the advisory lock) ---
+// --- Writes (role-gated). neon-http (the production driver, also loaded inside
+// Workflow DevKit step bundles) has no interactive transactions, so each write is
+// a single statement or a retry-guarded sequence. The (definition_id, version) PK
+// and the active-name unique index — not a lock — provide the real guarantees. ---
 
-type Tx = Parameters<Parameters<Db["transaction"]>[0]>[0];
+/** Retries an operation on a unique-violation. Used for the version-number insert,
+ *  the one race left now that writes run per-statement instead of under a lock. */
+async function retryOnUniqueViolation<T>(operation: () => Promise<T>, attempts = 3): Promise<T> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await operation();
+    } catch (error) {
+      if (attempt < attempts && isUniqueViolation(error)) continue;
+      throw error;
+    }
+  }
+}
 
 /** 409 if another enabled, non-archived definition already handles any of
  *  `triggerTypes`. Empty `triggerTypes` can never overlap. */
 async function assertNoTriggerOverlap(
-  tx: Tx,
+  db: Db,
   input: { definitionId: number; triggerTypes: WorkflowBlockType[] },
 ): Promise<void> {
   if (input.triggerTypes.length === 0) return;
-  const conflicts = await tx
+  const conflicts = await db
     .select({ name: workflowDefinitions.name })
     .from(workflowDefinitions)
     .where(
@@ -234,31 +244,30 @@ export async function createWorkflowDefinition(
   input: { name: string; seed: WorkflowDefinition | null; actor: WorkflowDefinitionActor },
 ): Promise<{ definition: WorkflowDefinitionRow; current: WorkflowDefinitionVersionRow | null }> {
   requireEditRole(input.actor.role);
-  return db.transaction(async (tx) => {
-    await tx.execute(ADVISORY_LOCK);
-    let created: DefinitionSelect;
-    try {
-      const rows = await tx
-        .insert(workflowDefinitions)
-        .values({
-          name: input.name,
-          enabled: false,
-          triggerTypes: input.seed ? triggerTypesOf(input.seed) : [],
-          createdById: input.actor.id,
-          createdByLabel: input.actor.label,
-        })
-        .returning();
-      created = rows[0]!;
-    } catch (error) {
-      if (isUniqueViolation(error)) {
-        throw new WorkflowDefinitionStoreError(409, "Name already in use");
-      }
-      throw error;
+  let created: DefinitionSelect;
+  try {
+    const rows = await db
+      .insert(workflowDefinitions)
+      .values({
+        name: input.name,
+        enabled: false,
+        triggerTypes: input.seed ? triggerTypesOf(input.seed) : [],
+        createdById: input.actor.id,
+        createdByLabel: input.actor.label,
+      })
+      .returning();
+    created = rows[0]!;
+  } catch (error) {
+    if (isUniqueViolation(error)) {
+      throw new WorkflowDefinitionStoreError(409, "Name already in use");
     }
+    throw error;
+  }
 
-    let current: WorkflowDefinitionVersionRow | null = null;
-    if (input.seed) {
-      const versions = await tx
+  let current: WorkflowDefinitionVersionRow | null = null;
+  if (input.seed) {
+    try {
+      const versions = await db
         .insert(workflowDefinitionVersions)
         .values({
           definitionId: created.id,
@@ -270,9 +279,15 @@ export async function createWorkflowDefinition(
         })
         .returning();
       current = mapVersionRow(versions[0]!);
+    } catch (error) {
+      // No transaction on neon-http: if the seed version fails to insert, remove
+      // the just-created definition so we never leave one without its version
+      // (which would silently fall back to the built-in default graph).
+      await db.delete(workflowDefinitions).where(eq(workflowDefinitions.id, created.id)).catch(() => {});
+      throw error;
     }
-    return { definition: mapDefinitionRow(created), current };
-  });
+  }
+  return { definition: mapDefinitionRow(created), current };
 }
 
 export async function saveWorkflowDefinitionVersion(
@@ -285,33 +300,33 @@ export async function saveWorkflowDefinitionVersion(
   },
 ): Promise<WorkflowDefinitionVersionRow> {
   requireEditRole(input.actor.role);
-  return db.transaction(async (tx) => {
-    await tx.execute(ADVISORY_LOCK);
-    const definitionRows = await tx
-      .select()
-      .from(workflowDefinitions)
-      .where(eq(workflowDefinitions.id, input.definitionId))
-      .limit(1);
-    const definitionRow = definitionRows[0];
-    if (!definitionRow) {
-      throw new WorkflowDefinitionStoreError(404, "Unknown definition");
-    }
-    if (definitionRow.archivedAt) {
-      throw new WorkflowDefinitionStoreError(409, "Definition is archived");
-    }
+  const definitionRows = await db
+    .select()
+    .from(workflowDefinitions)
+    .where(eq(workflowDefinitions.id, input.definitionId))
+    .limit(1);
+  const definitionRow = definitionRows[0];
+  if (!definitionRow) {
+    throw new WorkflowDefinitionStoreError(404, "Unknown definition");
+  }
+  if (definitionRow.archivedAt) {
+    throw new WorkflowDefinitionStoreError(409, "Definition is archived");
+  }
 
-    const triggerTypes = triggerTypesOf(input.definition);
-    if (definitionRow.enabled) {
-      await assertNoTriggerOverlap(tx, { definitionId: input.definitionId, triggerTypes });
-    }
+  const triggerTypes = triggerTypesOf(input.definition);
+  if (definitionRow.enabled) {
+    await assertNoTriggerOverlap(db, { definitionId: input.definitionId, triggerTypes });
+  }
 
-    const [{ maxVersion }] = await tx
+  // Compute-then-insert the next version, retrying if a concurrent save took the
+  // same number (the (definition_id, version) PK rejects the duplicate).
+  const saved = await retryOnUniqueViolation(async () => {
+    const [{ maxVersion }] = await db
       .select({ maxVersion: max(workflowDefinitionVersions.version) })
       .from(workflowDefinitionVersions)
       .where(eq(workflowDefinitionVersions.definitionId, input.definitionId));
     const next = (maxVersion ?? 0) + 1;
-
-    const rows = await tx
+    const rows = await db
       .insert(workflowDefinitionVersions)
       .values({
         definitionId: input.definitionId,
@@ -322,14 +337,15 @@ export async function saveWorkflowDefinitionVersion(
         restoredFromVersion: input.restoredFromVersion ?? null,
       })
       .returning();
-
-    await tx
-      .update(workflowDefinitions)
-      .set({ triggerTypes, updatedAt: new Date() })
-      .where(eq(workflowDefinitions.id, input.definitionId));
-
-    return mapVersionRow(rows[0]!);
+    return rows[0]!;
   });
+
+  await db
+    .update(workflowDefinitions)
+    .set({ triggerTypes, updatedAt: new Date() })
+    .where(eq(workflowDefinitions.id, input.definitionId));
+
+  return mapVersionRow(saved);
 }
 
 export async function updateWorkflowDefinition(
@@ -337,50 +353,47 @@ export async function updateWorkflowDefinition(
   input: { definitionId: number; name?: string; enabled?: boolean; actor: WorkflowDefinitionActor },
 ): Promise<WorkflowDefinitionRow> {
   requireEditRole(input.actor.role);
-  return db.transaction(async (tx) => {
-    await tx.execute(ADVISORY_LOCK);
-    const rows = await tx
-      .select()
-      .from(workflowDefinitions)
+  const rows = await db
+    .select()
+    .from(workflowDefinitions)
+    .where(eq(workflowDefinitions.id, input.definitionId))
+    .limit(1);
+  const current = rows[0];
+  if (!current) {
+    throw new WorkflowDefinitionStoreError(404, "Unknown definition");
+  }
+  if (current.archivedAt) {
+    throw new WorkflowDefinitionStoreError(409, "Definition is archived");
+  }
+
+  const set: { name?: string; enabled?: boolean; updatedAt?: Date } = {};
+  if (input.name !== undefined) set.name = input.name;
+  if (input.enabled !== undefined) set.enabled = input.enabled;
+  if (Object.keys(set).length === 0) return mapDefinitionRow(current);
+
+  if (input.enabled === true) {
+    await assertNoTriggerOverlap(db, {
+      definitionId: current.id,
+      triggerTypes: current.triggerTypes as WorkflowBlockType[],
+    });
+  }
+
+  set.updatedAt = new Date();
+  let updated: DefinitionSelect;
+  try {
+    const res = await db
+      .update(workflowDefinitions)
+      .set(set)
       .where(eq(workflowDefinitions.id, input.definitionId))
-      .limit(1);
-    const current = rows[0];
-    if (!current) {
-      throw new WorkflowDefinitionStoreError(404, "Unknown definition");
+      .returning();
+    updated = res[0]!;
+  } catch (error) {
+    if (isUniqueViolation(error)) {
+      throw new WorkflowDefinitionStoreError(409, "Name already in use");
     }
-    if (current.archivedAt) {
-      throw new WorkflowDefinitionStoreError(409, "Definition is archived");
-    }
-
-    const set: { name?: string; enabled?: boolean; updatedAt?: Date } = {};
-    if (input.name !== undefined) set.name = input.name;
-    if (input.enabled !== undefined) set.enabled = input.enabled;
-    if (Object.keys(set).length === 0) return mapDefinitionRow(current);
-
-    if (input.enabled === true) {
-      await assertNoTriggerOverlap(tx, {
-        definitionId: current.id,
-        triggerTypes: current.triggerTypes as WorkflowBlockType[],
-      });
-    }
-
-    set.updatedAt = new Date();
-    let updated: DefinitionSelect;
-    try {
-      const res = await tx
-        .update(workflowDefinitions)
-        .set(set)
-        .where(eq(workflowDefinitions.id, input.definitionId))
-        .returning();
-      updated = res[0]!;
-    } catch (error) {
-      if (isUniqueViolation(error)) {
-        throw new WorkflowDefinitionStoreError(409, "Name already in use");
-      }
-      throw error;
-    }
-    return mapDefinitionRow(updated);
-  });
+    throw error;
+  }
+  return mapDefinitionRow(updated);
 }
 
 export async function archiveWorkflowDefinition(
@@ -388,37 +401,34 @@ export async function archiveWorkflowDefinition(
   input: { definitionId: number; actor: WorkflowDefinitionActor },
 ): Promise<WorkflowDefinitionRow> {
   requireEditRole(input.actor.role);
-  return db.transaction(async (tx) => {
-    await tx.execute(ADVISORY_LOCK);
-    const rows = await tx
-      .select()
-      .from(workflowDefinitions)
-      .where(eq(workflowDefinitions.id, input.definitionId))
-      .limit(1);
-    const current = rows[0];
-    if (!current) {
-      throw new WorkflowDefinitionStoreError(404, "Unknown definition");
-    }
-    if (current.archivedAt) return mapDefinitionRow(current);
-    if (current.enabled) {
-      throw new WorkflowDefinitionStoreError(409, "Disable the definition before archiving it");
-    }
+  const rows = await db
+    .select()
+    .from(workflowDefinitions)
+    .where(eq(workflowDefinitions.id, input.definitionId))
+    .limit(1);
+  const current = rows[0];
+  if (!current) {
+    throw new WorkflowDefinitionStoreError(404, "Unknown definition");
+  }
+  if (current.archivedAt) return mapDefinitionRow(current);
+  if (current.enabled) {
+    throw new WorkflowDefinitionStoreError(409, "Disable the definition before archiving it");
+  }
 
-    const active = await tx
-      .select({ id: workflowDefinitions.id })
-      .from(workflowDefinitions)
-      .where(isNull(workflowDefinitions.archivedAt));
-    if (active.length <= 1) {
-      throw new WorkflowDefinitionStoreError(409, "Cannot archive the last workflow definition");
-    }
+  const active = await db
+    .select({ id: workflowDefinitions.id })
+    .from(workflowDefinitions)
+    .where(isNull(workflowDefinitions.archivedAt));
+  if (active.length <= 1) {
+    throw new WorkflowDefinitionStoreError(409, "Cannot archive the last workflow definition");
+  }
 
-    const res = await tx
-      .update(workflowDefinitions)
-      .set({ archivedAt: new Date(), updatedAt: new Date() })
-      .where(eq(workflowDefinitions.id, input.definitionId))
-      .returning();
-    return mapDefinitionRow(res[0]!);
-  });
+  const res = await db
+    .update(workflowDefinitions)
+    .set({ archivedAt: new Date(), updatedAt: new Date() })
+    .where(eq(workflowDefinitions.id, input.definitionId))
+    .returning();
+  return mapDefinitionRow(res[0]!);
 }
 
 export async function restoreWorkflowDefinitionVersion(

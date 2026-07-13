@@ -67,30 +67,32 @@ export async function createApprovalRequest(
     requestedBy?: string;
   },
 ): Promise<ApprovalRow> {
-  return db.transaction(async (tx) => {
-    await tx
-      .update(approvalRequests)
-      .set({ status: "superseded" })
-      .where(
-        and(
-          eq(approvalRequests.ticketKey, input.ticketKey),
-          eq(approvalRequests.status, "pending"),
-        ),
-      );
-    const rows = await tx
-      .insert(approvalRequests)
-      .values({
-        id: randomUUID(),
-        ticketKey: input.ticketKey,
-        definitionId: input.definitionId,
-        runId: input.runId,
-        plan: input.plan,
-        assumptions: input.assumptions ?? null,
-        requestedBy: input.requestedBy ?? "workflow",
-      })
-      .returning();
-    return mapRow(rows[0]!);
-  });
+  // neon-http (loaded inside the WDK step that runs this block) has no interactive
+  // transactions. Supersede the current pending row, then insert the new one; the
+  // partial unique index (one pending row per ticket) still guarantees a single
+  // open approval. If the insert fails, the run fails and re-runs a fresh request.
+  await db
+    .update(approvalRequests)
+    .set({ status: "superseded" })
+    .where(
+      and(
+        eq(approvalRequests.ticketKey, input.ticketKey),
+        eq(approvalRequests.status, "pending"),
+      ),
+    );
+  const rows = await db
+    .insert(approvalRequests)
+    .values({
+      id: randomUUID(),
+      ticketKey: input.ticketKey,
+      definitionId: input.definitionId,
+      runId: input.runId,
+      plan: input.plan,
+      assumptions: input.assumptions ?? null,
+      requestedBy: input.requestedBy ?? "workflow",
+    })
+    .returning();
+  return mapRow(rows[0]!);
 }
 
 /** Newest first. `pending` (default) filters to open approvals; `all` returns every row. */
