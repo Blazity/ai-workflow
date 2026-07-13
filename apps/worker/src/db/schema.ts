@@ -24,11 +24,17 @@ import type { PrePrCheckConfig } from "../pre-pr-checks/config.js";
  * the three hashes shared a lifecycle (unregister cleared all three), so
  * they are one table. createdAt backs reconcile's orphan grace period and
  * is REFRESHED on register(), not just set on claim().
+ *
+ * runKind records what started the run: 'ticket' for the classic AI-column
+ * trigger and 'pr_trigger' for PR webhook triggers. Reconcile and the Jira
+ * webhook read it so a 'pr_trigger' run is never cancelled just because its
+ * ticket left the AI column (its lifecycle follows the PR, not the column).
  */
 export const activeRuns = pgTable("active_runs", {
   ticketKey: text("ticket_key").primaryKey(),
   runId: text("run_id").notNull(),
   sandboxId: text("sandbox_id"),
+  runKind: text("run_kind").notNull().default("ticket"),
   createdAt: timestamp("created_at", { withTimezone: true })
     .notNull()
     .defaultNow(),
@@ -286,3 +292,4 @@ export const workflowDefinitionVersions = pgTable(
 
 export * from "./auth-schema.js";
 export * from "./email-delivery-schema.js";
+export * from "./approvals-schema.js";

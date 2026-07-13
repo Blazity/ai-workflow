@@ -18,6 +18,7 @@ import { paramsSchema as postPrCommentParams } from "../workflows/blocks/post-pr
 import { paramsSchema as humanQuestionParams } from "../workflows/blocks/human-question.js";
 import { paramsSchema as arthurInjectionCheckParams } from "../workflows/blocks/arthur-injection-check.js";
 import { paramsSchema as arthurTraceParams } from "../workflows/blocks/arthur-trace.js";
+import { paramsSchema as sendPlanApprovalParams } from "../workflows/blocks/send-plan-approval.js";
 
 const nodeId = z.string().trim().min(1);
 const coordinate = z.number().finite();
@@ -183,6 +184,10 @@ const sendSlackMessageNode = z
   })
   .strict();
 
+const sendPlanApprovalNode = z
+  .object({ ...baseNodeFields, type: z.literal("send_plan_approval"), params: sendPlanApprovalParams })
+  .strict();
+
 const branchNode = z
   .object({
     ...baseNodeFields,
@@ -239,6 +244,7 @@ const nodeSchema = z.discriminatedUnion("type", [
   postTicketCommentNode,
   postPrCommentNode,
   sendSlackMessageNode,
+  sendPlanApprovalNode,
   humanQuestionNode,
   arthurInjectionCheckNode,
   arthurTraceNode,
@@ -433,7 +439,7 @@ export function validateWorkflowGraph(def: WorkflowDefinition): string[] {
 
     const spec = BLOCK_TYPE_SPECS[fromNode.type];
     if (spec.ports.length === 0) {
-      issues.push(`Terminate block "${edge.from}" cannot have outgoing connections.`);
+      issues.push(`Terminal block "${edge.from}" (${fromNode.type}) cannot have outgoing connections.`);
       continue;
     }
     const resolvedPort = edge.fromPort ?? spec.ports[0];

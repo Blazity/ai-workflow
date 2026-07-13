@@ -1,4 +1,5 @@
 import type {
+  ApprovalRequest,
   PrePrCheckConfigVersion,
   PromptDef,
   RepositoryOption,
@@ -224,4 +225,15 @@ export interface WorkflowDefinitionSaveResponse {
 export interface RunBlockStatusesResponse {
   generatedAt: string;
   run: RunBlockStatusSnapshot | null;
+}
+
+export interface ApprovalsResponse {
+  generatedAt: string;
+  approvals: ApprovalRequest[];
+}
+
+export interface ApprovalDecisionResponse {
+  approval: ApprovalRequest;
+  /** Run started on approval; null for a rejection. */
+  runId: string | null;
 }

@@ -227,6 +227,7 @@ export type WorkflowBlockType =
   | "post_ticket_comment"
   | "post_pr_comment"
   | "send_slack_message"
+  | "send_plan_approval"
   | "human_question"
   | "arthur_injection_check"
   | "arthur_trace"
@@ -312,4 +313,29 @@ export interface RunBlockStatusSnapshot {
   blockStatuses: Record<string, BlockRunState>;
   updatedAt: string;
   completedAt: string | null;
+}
+
+// --- Plan-approval queue (human-in-the-loop) ---
+
+export type ApprovalStatus = "pending" | "approved" | "rejected" | "superseded";
+
+/** One plan awaiting (or past) a human decision, as exposed to the dashboard. */
+export interface ApprovalRequest {
+  id: string;
+  ticketKey: string;
+  definitionId: number;
+  /** Run that produced the plan. */
+  runId: string;
+  plan: { markdown: string };
+  assumptions: string[] | null;
+  status: ApprovalStatus;
+  /** ISO timestamp. */
+  requestedAt: string;
+  requestedBy: string;
+  decidedById: string | null;
+  decidedByLabel: string | null;
+  /** ISO timestamp; null while pending. */
+  decidedAt: string | null;
+  /** Run started on approval; null until dispatched. */
+  dispatchedRunId: string | null;
 }

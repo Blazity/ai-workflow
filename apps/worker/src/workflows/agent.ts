@@ -33,6 +33,7 @@ import { execute as executePostPrComment } from "./blocks/post-pr-comment.js";
 import { execute as executeHumanQuestion } from "./blocks/human-question.js";
 import { execute as executeArthurInjectionCheck } from "./blocks/arthur-injection-check.js";
 import { execute as executeArthurTrace } from "./blocks/arthur-trace.js";
+import { execute as executeSendPlanApproval } from "./blocks/send-plan-approval.js";
 import { isTriggerBlockType } from "@shared/contracts";
 import type {
   BlockOutput,
@@ -54,6 +55,7 @@ const BLOCK_EXECUTORS: Partial<Record<WorkflowBlockType, BlockExecuteFn>> = {
   human_question: executeHumanQuestion,
   arthur_injection_check: executeArthurInjectionCheck,
   arthur_trace: executeArthurTrace,
+  send_plan_approval: executeSendPlanApproval,
 };
 
 function triggerTypeFor(entry: AgentWorkflowInput): WorkflowBlockType {

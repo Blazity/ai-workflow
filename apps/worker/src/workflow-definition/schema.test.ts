@@ -356,7 +356,7 @@ describe("validateWorkflowGraph rules", () => {
     );
     expect(
       validateWorkflowGraph(def).some((issue) =>
-        issue.includes('Terminate block "term" cannot have outgoing connections'),
+        issue.includes('Terminal block "term" (terminate) cannot have outgoing connections'),
       ),
     ).toBe(true);
   });
