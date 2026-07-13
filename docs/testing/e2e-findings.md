@@ -219,6 +219,13 @@ Rather than only clicking Jira tickets, the engine now has a real, repeatable, C
 2. resolve-agent full precedence (`agent.ts:709-712`, `runDefaultKind = parseAgentKindOverride(labels) ?? env.AGENT_KIND`) is inline and not unit-testable; extract a pure helper.
 3. `update_ticket_status` target mapping is inline in the `agent.ts` executeBlock switch (`agent.ts:1165-1170`, closure-local `aiReviewMoveTarget()`/`backlogMoveTarget()`); extract a pure mapping helper so the ai_review/backlog/default routing can be unit-tested.
 
+## 4f. Testability refactor + telemetry integration test (agent-built, adversarially verified)
+
+- Extracted two pure helpers so previously-inline logic is unit-testable + cleaner: `resolveRunDefaultKind(labelOverride, envAgentKind)` (resolve-agent.ts) and `resolveTicketMoveTarget(target)` (new ticket-move-target.ts); agent.ts calls them. Documented the defensive branch-eval catch in interpreter.ts. Behavior-preserving (3 adversarial verifiers confirmed), +5 tests.
+- Added `run-telemetry-integration.test.ts` (4 tests): drives the REAL interpreter (buildRuntimeGraph/executeGraph) + REAL telemetry writers (recordBlockStatuses/recordRunUsage) against a REAL pglite DB, asserting persisted block_statuses jsonb + workflow_runs fields (status/model/costUsd/costKnown/tokens/phases/pr) for happy, needs_human_input, and failed (with/without failure edge) runs. A verifier mutation-tested it (breaking the writer's ON CONFLICT made all 4 fail) so it genuinely bites. Known limit: a full `agentWorkflow` run (Target A) is infeasible to fake (WDK use-workflow + real sandbox/Jira/GitHub), so the harness reconstructs agent.ts's orchestration around the real writers rather than importing it; it locks the writers + interpreter, not agent.ts's own use of them. Follow-up: extract agent.ts's hook-wiring into a shared helper so the integration test can import the real thing.
+
+Suite now **1435/1435 green**, deterministic, CI-ready.
+
 ## 5. Verified so far (live, on preview)
 
 - ✅ Auth: sign-in 200 from the preview origin (multi-origin fix holds).
