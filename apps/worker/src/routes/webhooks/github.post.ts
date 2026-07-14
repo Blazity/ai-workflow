@@ -42,7 +42,11 @@ export default defineEventHandler(async (event) => {
   const ownerRepo = `${repo.owner.login}/${repo.name}`;
   if (env.GITHUB_OWNER && env.GITHUB_REPO) {
     const expected = `${env.GITHUB_OWNER}/${env.GITHUB_REPO}`;
-    if (ownerRepo !== expected) {
+    // GitHub owner/repo slugs are case-insensitive, so the payload's
+    // repo.owner.login ("Blazity") can differ in case from the configured
+    // GITHUB_OWNER ("blazity"). Compare case-insensitively or every demo
+    // webhook is silently dropped as other_repo.
+    if (ownerRepo.toLowerCase() !== expected.toLowerCase()) {
       logger.info({ ownerRepo, expected }, "github_webhook_skipped_other_repo");
       return { status: "ignored", reason: "other_repo" };
     }

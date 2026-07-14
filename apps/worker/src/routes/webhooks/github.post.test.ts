@@ -217,4 +217,18 @@ describe("POST /webhooks/github", () => {
     expect(mockDispatchTriggerEvent).not.toHaveBeenCalled();
     expect(mockDispatchPostPrGateWebhook).not.toHaveBeenCalled();
   });
+
+  it("matches the configured repo case-insensitively", async () => {
+    // GitHub org/repo slugs are case-insensitive: payload "acme/app" must match
+    // a configured "Acme/App" instead of dropping as other_repo.
+    mocks.env.GITHUB_OWNER = "Acme";
+    mocks.env.GITHUB_REPO = "App";
+    mockDispatchTriggerEvent.mockResolvedValueOnce({ result: "started", runId: "run-x" });
+
+    const response = await makeApp()(makeRequest(pullRequestBody("opened")));
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ status: "dispatched", runId: "run-x" });
+    expect(mockDispatchTriggerEvent).toHaveBeenCalled();
+  });
 });
