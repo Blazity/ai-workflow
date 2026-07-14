@@ -26,6 +26,13 @@ export const approvalRequests = pgTable(
     id: text("id").primaryKey(),
     ticketKey: text("ticket_key").notNull(),
     definitionId: integer("definition_id").notNull(),
+    /**
+     * Head version of the definition at the moment the plan was filed. Pins the
+     * approval to the exact graph a human reviewed, so approving later runs that
+     * version even if the definition's head has since advanced. Nullable only for
+     * rows written before this column existed (backfilled to the head version).
+     */
+    definitionVersion: integer("definition_version"),
     /** Run that produced the plan (the send_plan_approval block's run). */
     runId: text("run_id").notNull(),
     plan: jsonb("plan").$type<{ markdown: string }>().notNull(),

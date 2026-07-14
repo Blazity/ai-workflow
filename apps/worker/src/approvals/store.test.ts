@@ -16,6 +16,7 @@ function seed(ticketKey = "AWT-1") {
   return {
     ticketKey,
     definitionId: 1,
+    definitionVersion: 4,
     runId: "run-produced",
     plan: { markdown: "# Plan\nDo the thing." },
   };
@@ -30,6 +31,20 @@ describe("createApprovalRequest", () => {
     expect(row.assumptions).toBeNull();
     expect(row.requestedBy).toBe("workflow");
     expect(row.id).toMatch(/[0-9a-f-]{36}/);
+  });
+
+  it("pins the definition version supplied at creation", async () => {
+    const db = await createTestDb();
+    const row = await createApprovalRequest(db, { ...seed(), definitionVersion: 7 });
+    expect(row.definitionVersion).toBe(7);
+    const stored = await getApproval(db, row.id);
+    expect(stored?.definitionVersion).toBe(7);
+  });
+
+  it("tolerates a null pinned version (legacy row)", async () => {
+    const db = await createTestDb();
+    const row = await createApprovalRequest(db, { ...seed(), definitionVersion: null });
+    expect(row.definitionVersion).toBeNull();
   });
 
   it("supersedes an existing pending row for the same ticket", async () => {

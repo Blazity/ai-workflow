@@ -34,9 +34,11 @@ vi.mock("workflow/api", () => ({
 }));
 
 const mockGetCurrentVersion = vi.fn();
+const mockGetVersion = vi.fn();
 const mockGetEnabled = vi.fn();
 vi.mock("../workflow-definition/store.js", () => ({
   getCurrentWorkflowDefinitionVersion: (...args: any[]) => mockGetCurrentVersion(...args),
+  getWorkflowDefinitionVersion: (...args: any[]) => mockGetVersion(...args),
   getEnabledWorkflowDefinitionForTrigger: (...args: any[]) => mockGetEnabled(...args),
 }));
 

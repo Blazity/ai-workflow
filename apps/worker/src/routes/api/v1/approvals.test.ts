@@ -81,6 +81,7 @@ async function seedPending(ticketKey = "AWT-1") {
   return createApprovalRequest(db, {
     ticketKey,
     definitionId: 1,
+    definitionVersion: 1,
     runId: "run-produced",
     plan: { markdown: "# Plan" },
   });
@@ -220,12 +221,14 @@ describe("POST /api/v1/approvals/:id/approve", () => {
     expect((await getApproval(db, row.id))?.dispatchedRunId).toBe("run-other");
   });
 
-  it("409s no_enabled_definition and leaves the row pending", async () => {
+  it("410s and auto-rejects when the definition is gone", async () => {
     const row = await seedPending("AWT-1");
-    mocks.dispatchPlanApproved.mockResolvedValue({ status: "no_enabled_definition" });
+    mocks.dispatchPlanApproved.mockResolvedValue({ status: "definition_gone" });
     const res = await approve(row.id);
-    expect(res.status).toBe(409);
-    expect((await getApproval(db, row.id))?.status).toBe("pending");
+    expect(res.status).toBe(410);
+    const stored = await getApproval(db, row.id);
+    expect(stored?.status).toBe("rejected");
+    expect(stored?.decidedById).toBe("system");
   });
 
   it("409s run_in_flight and leaves the row pending", async () => {

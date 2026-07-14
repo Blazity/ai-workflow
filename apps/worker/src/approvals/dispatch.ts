@@ -3,7 +3,11 @@ import type { Db } from "../db/client.js";
 import type { RunRegistryAdapter } from "../adapters/run-registry/types.js";
 import type { AgentWorkflowInput } from "../workflows/agent-input.js";
 import { agentWorkflow } from "../workflows/agent.js";
-import { getEnabledWorkflowDefinitionForTrigger } from "../workflow-definition/store.js";
+import {
+  getCurrentWorkflowDefinitionVersion,
+  getWorkflowDefinition,
+  getWorkflowDefinitionVersion,
+} from "../workflow-definition/store.js";
 import { logger } from "../lib/logger.js";
 import type { ApprovalRow } from "./store.js";
 
@@ -22,7 +26,7 @@ function getClaimTimestamp(runId: string): number {
 }
 
 export type DispatchPlanApprovedResult =
-  | { status: "no_enabled_definition" }
+  | { status: "definition_gone" }
   | { status: "run_in_flight" }
   | { status: "started"; runId: string };
 
@@ -49,10 +53,28 @@ export async function dispatchPlanApproved(input: {
   const { db, runRegistry, approval, actor, maxConcurrentAgents, onClaimed } = input;
   const ticketKey = approval.ticketKey;
 
-  const enabled = await getEnabledWorkflowDefinitionForTrigger(db, "trigger_plan_approved");
-  if (!enabled) {
-    logger.info({ ticketKey }, "plan_approved_no_enabled_definition");
-    return { status: "no_enabled_definition" };
+  // Resolve the exact definition version the approved plan pins. A human already
+  // approved this plan, so it must run the graph they reviewed regardless of the
+  // definition's current enabled flag: disabling a definition must not strand an
+  // approved plan. Only a genuinely gone definition blocks the run: hard-deleted,
+  // archived (retired), or a pinned version row that no longer exists. That is
+  // surfaced as definition_gone, which the route turns into a clean 410. Legacy
+  // rows with a null pinned version fall back to the current head.
+  const definition = await getWorkflowDefinition(db, approval.definitionId);
+  if (!definition || definition.archivedAt) {
+    logger.info({ ticketKey, definitionId: approval.definitionId }, "plan_approved_definition_gone");
+    return { status: "definition_gone" };
+  }
+  const pinned =
+    approval.definitionVersion != null
+      ? await getWorkflowDefinitionVersion(db, approval.definitionId, approval.definitionVersion)
+      : await getCurrentWorkflowDefinitionVersion(db, approval.definitionId);
+  if (!pinned) {
+    logger.info(
+      { ticketKey, definitionId: approval.definitionId, version: approval.definitionVersion },
+      "plan_approved_definition_gone",
+    );
+    return { status: "definition_gone" };
   }
 
   if (await isAtCapacity(maxConcurrentAgents, runRegistry)) {
@@ -101,6 +123,9 @@ export async function dispatchPlanApproved(input: {
       kind: "plan_approved",
       ticketKey,
       definitionId: approval.definitionId,
+      // Pin the resolved version so the run replays the reviewed graph, never the
+      // head. For a legacy null-version row this is the head captured just above.
+      definitionVersion: pinned.version,
       approvedPlan: {
         markdown: approval.plan.markdown,
         assumptions: approval.assumptions ?? undefined,

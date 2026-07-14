@@ -636,7 +636,10 @@ export async function agentWorkflow(input: string | AgentWorkflowInput) {
 
   const { loadWorkflowDefinitionFor } = await import("./definition-step.js");
   const entryTriggerType = triggerTypeFor(entry);
-  const plan = await loadWorkflowDefinitionFor(entryTriggerType, entry.definitionId);
+  // An approved plan pins the definition version that produced it, so the run
+  // replays the exact graph the human reviewed rather than the current head.
+  const pinnedVersion = entry.kind === "plan_approved" ? entry.definitionVersion : undefined;
+  const plan = await loadWorkflowDefinitionFor(entryTriggerType, entry.definitionId, pinnedVersion);
   if (!plan) {
     console.warn(
       `No runnable workflow definition for trigger ${entryTriggerType}; skipping run for ${ticket.identifier}`,

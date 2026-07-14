@@ -73,6 +73,7 @@ describe("send_plan_approval execute", () => {
     expect(mocks.createApprovalRequest).toHaveBeenCalledWith(expect.anything(), {
       ticketKey: "AWT-1",
       definitionId: 1,
+      definitionVersion: 1,
       runId: "run-1",
       plan: { markdown: "# Research plan" },
       assumptions: null,
@@ -95,6 +96,15 @@ describe("send_plan_approval execute", () => {
       kind: "ended",
       output: { status: "awaiting_approval", approvalRequestId: "appr-9" },
     });
+  });
+
+  it("pins the run's current definition version onto the request", async () => {
+    const ctx = makeCtx({ researchPlanMarkdown: "# Plan", definitionId: 3, definitionVersion: 5 });
+    await execute(makeNode("send_plan_approval"), {}, ctx);
+    expect(mocks.createApprovalRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ definitionId: 3, definitionVersion: 5 }),
+    );
   });
 
   it("prefers a referenced step's plan and string assumptions over the research plan", async () => {

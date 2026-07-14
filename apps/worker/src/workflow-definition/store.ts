@@ -162,6 +162,24 @@ export async function getCurrentWorkflowDefinitionVersion(
   return rows[0] ? mapVersionRow(rows[0]) : null;
 }
 
+export async function getWorkflowDefinitionVersion(
+  db: Db,
+  definitionId: number,
+  version: number,
+): Promise<WorkflowDefinitionVersionRow | null> {
+  const rows = await db
+    .select()
+    .from(workflowDefinitionVersions)
+    .where(
+      and(
+        eq(workflowDefinitionVersions.definitionId, definitionId),
+        eq(workflowDefinitionVersions.version, version),
+      ),
+    )
+    .limit(1);
+  return rows[0] ? mapVersionRow(rows[0]) : null;
+}
+
 export async function listWorkflowDefinitionVersionRows(
   db: Db,
   definitionId: number,

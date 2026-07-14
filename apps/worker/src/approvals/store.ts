@@ -8,6 +8,9 @@ export interface ApprovalRow {
   id: string;
   ticketKey: string;
   definitionId: number;
+  /** Definition head version when the plan was filed; the pinned version.
+   *  Null only for rows predating version pinning. */
+  definitionVersion: number | null;
   runId: string;
   plan: { markdown: string };
   assumptions: string[] | null;
@@ -38,6 +41,7 @@ function mapRow(row: ApprovalSelect): ApprovalRow {
     id: row.id,
     ticketKey: row.ticketKey,
     definitionId: row.definitionId,
+    definitionVersion: row.definitionVersion ?? null,
     runId: row.runId,
     plan: row.plan,
     assumptions: row.assumptions ?? null,
@@ -61,6 +65,7 @@ export async function createApprovalRequest(
   input: {
     ticketKey: string;
     definitionId: number;
+    definitionVersion: number | null;
     runId: string;
     plan: { markdown: string };
     assumptions?: string[] | null;
@@ -86,6 +91,7 @@ export async function createApprovalRequest(
       id: randomUUID(),
       ticketKey: input.ticketKey,
       definitionId: input.definitionId,
+      definitionVersion: input.definitionVersion,
       runId: input.runId,
       plan: input.plan,
       assumptions: input.assumptions ?? null,
@@ -159,6 +165,7 @@ export function serializeApproval(row: ApprovalRow): ApprovalRequest {
     id: row.id,
     ticketKey: row.ticketKey,
     definitionId: row.definitionId,
+    definitionVersion: row.definitionVersion,
     runId: row.runId,
     plan: row.plan,
     assumptions: row.assumptions,

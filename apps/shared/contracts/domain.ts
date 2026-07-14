@@ -323,6 +323,9 @@ export interface ApprovalRequest {
   id: string;
   ticketKey: string;
   definitionId: number;
+  /** Head version of the definition when the plan was filed; the version the
+   *  approval is pinned to. Null only for rows predating version pinning. */
+  definitionVersion: number | null;
   /** Run that produced the plan. */
   runId: string;
   plan: { markdown: string };

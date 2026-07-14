@@ -12,6 +12,7 @@ export const paramsSchema = z
 async function createApprovalRequestStep(input: {
   ticketKey: string;
   definitionId: number;
+  definitionVersion: number | null;
   runId: string;
   plan: { markdown: string };
   assumptions: string[] | null;
@@ -101,6 +102,10 @@ export const execute: BlockExecuteFn = async (block, steps, ctx): Promise<BlockE
     approvalRequestId = await createApprovalRequestStep({
       ticketKey: ctx.ticket.identifier,
       definitionId: ctx.definitionId,
+      // Pin the approval to the version that generated this plan. definitionId is
+      // non-null here (guarded above), so a stored definition loaded and its
+      // version is the concrete head at load time, never null.
+      definitionVersion: ctx.definitionVersion,
       runId: ctx.runId,
       plan: { markdown },
       assumptions: assumptions.length > 0 ? assumptions : null,

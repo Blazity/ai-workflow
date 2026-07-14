@@ -13,10 +13,16 @@ vi.mock("workflow/api", () => ({
 
 vi.mock("../workflows/agent.js", () => ({ agentWorkflow: "agentWorkflow_sentinel" }));
 
-const mockGetEnabled = vi.fn();
+const mockGetDefinition = vi.fn();
+const mockGetVersion = vi.fn();
+const mockGetCurrentVersion = vi.fn();
 vi.mock("../workflow-definition/store.js", () => ({
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  getEnabledWorkflowDefinitionForTrigger: (...args: any[]) => mockGetEnabled(...args),
+  getWorkflowDefinition: (...args: any[]) => mockGetDefinition(...args),
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  getWorkflowDefinitionVersion: (...args: any[]) => mockGetVersion(...args),
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  getCurrentWorkflowDefinitionVersion: (...args: any[]) => mockGetCurrentVersion(...args),
 }));
 
 const { dispatchPlanApproved } = await import("./dispatch.js");
@@ -26,6 +32,7 @@ function makeApproval(overrides: Partial<ApprovalRow> = {}): ApprovalRow {
     id: "appr-1",
     ticketKey: "AWT-1",
     definitionId: 7,
+    definitionVersion: 4,
     runId: "run-produced",
     plan: { markdown: "# Plan" },
     assumptions: null,
@@ -69,13 +76,18 @@ describe("dispatchPlanApproved", () => {
   beforeEach(() => {
     mockStart.mockReset();
     mockGetRun.mockReset();
-    mockGetEnabled.mockReset();
+    mockGetDefinition.mockReset();
+    mockGetVersion.mockReset();
+    mockGetCurrentVersion.mockReset();
     mockStart.mockResolvedValue({ runId: "run-dispatched" });
-    mockGetEnabled.mockResolvedValue({ definition: { id: 7 }, current: null });
+    // Definition present + not archived, pinned version resolves, head has moved on.
+    mockGetDefinition.mockResolvedValue({ id: 7, archivedAt: null, enabled: false });
+    mockGetVersion.mockResolvedValue({ definitionId: 7, version: 4 });
+    mockGetCurrentVersion.mockResolvedValue({ definitionId: 7, version: 9 });
   });
 
-  it("returns no_enabled_definition when no plan_approved definition is enabled", async () => {
-    mockGetEnabled.mockResolvedValue(null);
+  it("returns definition_gone when the definition is archived", async () => {
+    mockGetDefinition.mockResolvedValue({ id: 7, archivedAt: new Date(), enabled: false });
     const registry = makeRegistry();
     const result = await dispatchPlanApproved({
       db,
@@ -84,9 +96,59 @@ describe("dispatchPlanApproved", () => {
       actor: { id: "u1", label: "Alice" },
       maxConcurrentAgents: 3,
     });
-    expect(result).toEqual({ status: "no_enabled_definition" });
+    expect(result).toEqual({ status: "definition_gone" });
     expect(registry.claim).not.toHaveBeenCalled();
     expect(mockStart).not.toHaveBeenCalled();
+  });
+
+  it("returns definition_gone when the pinned version no longer exists", async () => {
+    mockGetVersion.mockResolvedValue(null);
+    const registry = makeRegistry();
+    const result = await dispatchPlanApproved({
+      db,
+      runRegistry: registry,
+      approval: makeApproval(),
+      actor: { id: "u1", label: "Alice" },
+      maxConcurrentAgents: 3,
+    });
+    expect(result).toEqual({ status: "definition_gone" });
+    expect(registry.claim).not.toHaveBeenCalled();
+    expect(mockStart).not.toHaveBeenCalled();
+  });
+
+  it("pins the stored version and runs it even after the head has advanced", async () => {
+    // Core of the bug fix: the approval pins v4; the definition head is now v9.
+    // The run must replay v4 (the version a human approved), never the head.
+    const registry = makeRegistry();
+    const result = await dispatchPlanApproved({
+      db,
+      runRegistry: registry,
+      approval: makeApproval({ definitionVersion: 4 }),
+      actor: { id: "u1", label: "Alice" },
+      maxConcurrentAgents: 3,
+    });
+    expect(result.status).toBe("started");
+    expect(mockGetVersion).toHaveBeenCalledWith(expect.anything(), 7, 4);
+    expect(mockStart).toHaveBeenCalledWith("agentWorkflow_sentinel", [
+      expect.objectContaining({ definitionId: 7, definitionVersion: 4 }),
+    ]);
+  });
+
+  it("falls back to the head version for a legacy null-version approval", async () => {
+    const registry = makeRegistry();
+    const result = await dispatchPlanApproved({
+      db,
+      runRegistry: registry,
+      approval: makeApproval({ definitionVersion: null }),
+      actor: { id: "u1", label: "Alice" },
+      maxConcurrentAgents: 3,
+    });
+    expect(result.status).toBe("started");
+    expect(mockGetVersion).not.toHaveBeenCalled();
+    expect(mockGetCurrentVersion).toHaveBeenCalledWith(expect.anything(), 7);
+    expect(mockStart).toHaveBeenCalledWith("agentWorkflow_sentinel", [
+      expect.objectContaining({ definitionVersion: 9 }),
+    ]);
   });
 
   it("returns run_in_flight when the ticket is already claimed", async () => {
@@ -145,6 +207,7 @@ describe("dispatchPlanApproved", () => {
         kind: "plan_approved",
         ticketKey: "AWT-1",
         definitionId: 7,
+        definitionVersion: 4,
         approvedPlan: { markdown: "# Plan", assumptions: undefined },
         approval: expect.objectContaining({ approvalRequestId: "appr-1", approver: "Alice" }),
       }),

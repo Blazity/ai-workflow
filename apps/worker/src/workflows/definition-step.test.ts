@@ -5,9 +5,11 @@ vi.mock("../../env.js", () => ({ env: { ENABLE_REVIEW_PHASE: false } }));
 vi.mock("../db/client.js", () => ({ getDb: vi.fn(() => ({})) }));
 
 const mockGetCurrentVersion = vi.fn();
+const mockGetVersion = vi.fn();
 const mockGetEnabled = vi.fn();
 vi.mock("../workflow-definition/store.js", () => ({
   getCurrentWorkflowDefinitionVersion: (...args: unknown[]) => mockGetCurrentVersion(...args),
+  getWorkflowDefinitionVersion: (...args: unknown[]) => mockGetVersion(...args),
   getEnabledWorkflowDefinitionForTrigger: (...args: unknown[]) => mockGetEnabled(...args),
 }));
 
@@ -54,6 +56,7 @@ function enabled(definition: WorkflowDefinition, version = 3, definitionId = 1) 
 describe("loadWorkflowDefinition", () => {
   beforeEach(async () => {
     mockGetCurrentVersion.mockReset();
+    mockGetVersion.mockReset();
     mockGetEnabled.mockReset();
     loggerError.mockReset();
     loggerInfo.mockReset();
@@ -150,6 +153,7 @@ describe("loadWorkflowDefinition", () => {
 describe("loadWorkflowDefinitionFor", () => {
   beforeEach(async () => {
     mockGetCurrentVersion.mockReset();
+    mockGetVersion.mockReset();
     mockGetEnabled.mockReset();
     loggerError.mockReset();
     loggerInfo.mockReset();
@@ -164,6 +168,23 @@ describe("loadWorkflowDefinitionFor", () => {
     expect(plan!.definitionId).toBe(55);
     expect(mockGetCurrentVersion).toHaveBeenCalledWith(expect.anything(), 55);
     expect(mockGetEnabled).not.toHaveBeenCalled();
+  });
+
+  it("loads the pinned version when an explicit version is given", async () => {
+    mockGetVersion.mockResolvedValue(row(defaultWorkflowDefinition({ includeReview: true }), 4, 55));
+    const plan = await loadWorkflowDefinitionFor("trigger_plan_approved", 55, 4);
+    expect(plan).not.toBeNull();
+    expect(plan!.version).toBe(4);
+    expect(plan!.definitionId).toBe(55);
+    expect(mockGetVersion).toHaveBeenCalledWith(expect.anything(), 55, 4);
+    expect(mockGetCurrentVersion).not.toHaveBeenCalled();
+  });
+
+  it("returns null when the pinned version is missing for a non-ticket trigger", async () => {
+    mockGetVersion.mockResolvedValue(null);
+    const plan = await loadWorkflowDefinitionFor("trigger_plan_approved", 55, 99);
+    expect(plan).toBeNull();
+    expect(mockGetVersion).toHaveBeenCalledWith(expect.anything(), 55, 99);
   });
 
   it("returns null for a non-ticket trigger with no enabled definition", async () => {

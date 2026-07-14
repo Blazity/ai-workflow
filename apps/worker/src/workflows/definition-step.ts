@@ -70,21 +70,27 @@ export function normalizeDefinitionForExecution(
 }
 
 /**
- * Resolves the runnable plan for a trigger. With an explicit definitionId the
- * pinned definition's head version is loaded; without one the enabled
- * definition for the trigger is used. When nothing valid resolves, the
- * trigger_ticket_ai trigger falls back to the built-in default (definitionId
- * null) — today's semantics — while any other trigger returns null.
+ * Resolves the runnable plan for a trigger. With an explicit definitionId and
+ * version the pinned version is loaded (approved plans replay the exact graph a
+ * human reviewed); with a definitionId alone the definition's head version is
+ * loaded; without either the enabled definition for the trigger is used. When
+ * nothing valid resolves, the trigger_ticket_ai trigger falls back to the
+ * built-in default (definitionId null), today's semantics, while any other
+ * trigger returns null.
  */
 export async function loadWorkflowDefinitionFor(
   triggerType: WorkflowBlockType,
   definitionId?: number,
+  version?: number,
 ): Promise<LoadedWorkflowPlan | null> {
   "use step";
   const { env } = await import("../../env.js");
   const { getDb } = await import("../db/client.js");
-  const { getCurrentWorkflowDefinitionVersion, getEnabledWorkflowDefinitionForTrigger } =
-    await import("../workflow-definition/store.js");
+  const {
+    getCurrentWorkflowDefinitionVersion,
+    getWorkflowDefinitionVersion,
+    getEnabledWorkflowDefinitionForTrigger,
+  } = await import("../workflow-definition/store.js");
   const { workflowDefinitionSchema, validateWorkflowGraph, describeWorkflowDefinitionIssues } =
     await import("../workflow-definition/schema.js");
   const { defaultWorkflowDefinition } = await import("../workflow-definition/default.js");
@@ -112,13 +118,19 @@ export async function loadWorkflowDefinitionFor(
   const db = getDb();
   let row: WorkflowDefinitionVersionRow | null;
   if (definitionId !== undefined) {
-    row = await getCurrentWorkflowDefinitionVersion(db, definitionId);
+    row =
+      version !== undefined
+        ? await getWorkflowDefinitionVersion(db, definitionId, version)
+        : await getCurrentWorkflowDefinitionVersion(db, definitionId);
     if (!row) {
       if (isTicket) {
-        logger.info({ definitionId, reviewEnabled: env.ENABLE_REVIEW_PHASE }, "workflow_definition_default");
+        logger.info(
+          { definitionId, version, reviewEnabled: env.ENABLE_REVIEW_PHASE },
+          "workflow_definition_default",
+        );
         return buildDefault();
       }
-      logger.info({ triggerType, definitionId }, "workflow_definition_none");
+      logger.info({ triggerType, definitionId, version }, "workflow_definition_none");
       return null;
     }
   } else {

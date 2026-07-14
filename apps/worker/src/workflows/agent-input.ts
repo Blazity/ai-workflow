@@ -36,6 +36,9 @@ export type AgentWorkflowInput =
       kind: "plan_approved";
       ticketKey: string;
       definitionId: number;
+      /** Pinned definition version that produced the approved plan. When set, the
+       *  run loads exactly that version instead of the definition's head. */
+      definitionVersion?: number;
       approvedPlan: { markdown: string; assumptions?: string[] };
       approval: { approvalRequestId: string; approver: string; approvedAt: string };
     };

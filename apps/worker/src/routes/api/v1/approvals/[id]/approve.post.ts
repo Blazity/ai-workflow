@@ -83,8 +83,15 @@ export default defineEventHandler(async (event): Promise<ApprovalDecisionRespons
           },
     });
 
-    if (result.status === "no_enabled_definition") {
-      throw createError({ statusCode: 409, statusMessage: "no_enabled_definition" });
+    if (result.status === "definition_gone") {
+      // The definition that produced the plan is archived or gone: the pinned
+      // version can never run, so auto-reject (mirrors ticket_gone) and report it.
+      await decideApproval(db, {
+        id,
+        decision: "rejected",
+        actor: { id: "system", label: "system" },
+      }).catch(() => {});
+      throw createError({ statusCode: 410, statusMessage: "definition_gone" });
     }
     if (result.status === "run_in_flight") {
       throw createError({ statusCode: 409, statusMessage: "run_in_flight" });
