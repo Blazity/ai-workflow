@@ -152,22 +152,22 @@ describe("call_llm execute", () => {
     vi.clearAllMocks();
   });
 
-  it("keeps the schema-default model on a codex deployment so it routes to claude", async () => {
-    // Production feeds schema-parsed params, so model defaults to claude-haiku-4-5
-    // even with no model set; that preempts the codex run default.
+  it("routes a no-model call to the codex default on a codex deployment", async () => {
+    // Schema-parsed params no longer inject a Claude model default, so with no
+    // model set the executor resolves the run default kind (codex) and its model.
     const params = callLlmParams.parse({ prompt: "hi" });
     mockGenerateText.mockResolvedValueOnce({ text: "x", usage: {} });
     const ctx = makeCtx({ runDefaultKind: "codex" });
 
     await callLlmExecute(makeNode("call_llm", params, "llm-1"), {}, ctx);
 
-    expect(mockAnthropic).toHaveBeenCalledWith("claude-haiku-4-5");
-    expect(mockOpenAiModel).not.toHaveBeenCalled();
-    expect(mockCreateOpenAI).not.toHaveBeenCalled();
-    expect(ctx.recordUsage).toHaveBeenCalledWith("LLM llm-1", expect.anything(), "claude-haiku-4-5");
+    expect(mockCreateOpenAI).toHaveBeenCalledWith({ apiKey: "test-codex-key" });
+    expect(mockOpenAiModel).toHaveBeenCalledWith("codex-model");
+    expect(mockAnthropic).not.toHaveBeenCalled();
+    expect(ctx.recordUsage).toHaveBeenCalledWith("LLM llm-1", expect.anything(), "codex-model");
   });
 
-  it("sends the schema-default claude model to the codex endpoint when provider is codex", async () => {
+  it("sends the codex default model to the codex endpoint when provider is codex", async () => {
     const params = callLlmParams.parse({ prompt: "hi", provider: "codex" });
     mockGenerateText.mockResolvedValueOnce({ text: "x", usage: {} });
     const ctx = makeCtx();
@@ -175,9 +175,9 @@ describe("call_llm execute", () => {
     await callLlmExecute(makeNode("call_llm", params, "llm-2"), {}, ctx);
 
     expect(mockCreateOpenAI).toHaveBeenCalledWith({ apiKey: "test-codex-key" });
-    expect(mockOpenAiModel).toHaveBeenCalledWith("claude-haiku-4-5");
+    expect(mockOpenAiModel).toHaveBeenCalledWith("codex-model");
     expect(mockAnthropic).not.toHaveBeenCalled();
-    expect(ctx.recordUsage).toHaveBeenCalledWith("LLM llm-2", expect.anything(), "claude-haiku-4-5");
+    expect(ctx.recordUsage).toHaveBeenCalledWith("LLM llm-2", expect.anything(), "codex-model");
   });
 
   it("falls back to result.text when a schema is set but no object is returned", async () => {

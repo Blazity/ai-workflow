@@ -224,9 +224,10 @@ describe("workflowDefinitionSchema block-executor node types", () => {
 
   it("applies action param defaults", () => {
     expect(parseNode({ type: "fix_agent", params: {} })?.params).toEqual({ maxMinutes: 25 });
+    // call_llm intentionally has NO model default: leaving it unset lets the
+    // executor resolve the model from provider/run default at runtime.
     expect(parseNode({ type: "call_llm", params: { prompt: "p" } })?.params).toEqual({
       prompt: "p",
-      model: "claude-haiku-4-5",
     });
     expect(parseNode({ type: "post_pr_comment", params: { body: "b" } })?.params).toEqual({
       body: "b",

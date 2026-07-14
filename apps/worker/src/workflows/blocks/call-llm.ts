@@ -6,7 +6,7 @@ export const paramsSchema = z
   .object({
     prompt: z.string().min(1),
     system: z.string().optional(),
-    model: z.string().trim().max(200).regex(/^[A-Za-z0-9._:\/-]+$/).default("claude-haiku-4-5"),
+    model: z.string().trim().max(200).regex(/^[A-Za-z0-9._:\/-]+$/).optional(),
     provider: z.enum(["claude", "codex"]).optional(),
     outputSchema: z.string().optional(),
   })

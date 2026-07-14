@@ -34,7 +34,7 @@ import { execute as executePostPrComment } from "./blocks/post-pr-comment.js";
 import { execute as executeHumanQuestion } from "./blocks/human-question.js";
 import { execute as executeArthurInjectionCheck } from "./blocks/arthur-injection-check.js";
 import { execute as executeSendPlanApproval } from "./blocks/send-plan-approval.js";
-import { isTriggerBlockType } from "@shared/contracts";
+import { BLOCK_TYPE_SPECS, isTriggerBlockType } from "@shared/contracts";
 import type {
   BlockOutput,
   BlockRunState,
@@ -56,6 +56,33 @@ const BLOCK_EXECUTORS: Partial<Record<WorkflowBlockType, BlockExecuteFn>> = {
   arthur_injection_check: executeArthurInjectionCheck,
   send_plan_approval: executeSendPlanApproval,
 };
+
+// Action blocks executed by the inline switch inside executeBlock (they need
+// run-scoped closure state, so they can't live in the registry above). Kept in
+// sync with the switch cases; blockTypesMissingExecutor() (asserted in tests)
+// turns any drift into a loud failure instead of a silent no-op.
+const INLINE_EXECUTED_BLOCK_TYPES: readonly WorkflowBlockType[] = [
+  "planning_agent",
+  "implementation_agent",
+  "review_agent",
+  "run_pre_pr_checks",
+  "open_pr",
+  "send_slack_message",
+  "update_ticket_status",
+];
+
+/** Action block types with no executor wired in either BLOCK_EXECUTORS or the
+ *  inline switch. Empty in a correct build: a non-empty result means a
+ *  WorkflowBlockType was added to the contract without an executor. executeBlock
+ *  fails such a run loudly at runtime; this makes the same gap catchable in a test. */
+export function blockTypesMissingExecutor(): WorkflowBlockType[] {
+  return (Object.keys(BLOCK_TYPE_SPECS) as WorkflowBlockType[]).filter(
+    (type) =>
+      BLOCK_TYPE_SPECS[type].category === "action" &&
+      BLOCK_EXECUTORS[type] === undefined &&
+      !INLINE_EXECUTED_BLOCK_TYPES.includes(type),
+  );
+}
 
 function triggerTypeFor(entry: AgentWorkflowInput): WorkflowBlockType {
   if (entry.kind === "pr_trigger") return entry.triggerType;
@@ -1173,7 +1200,13 @@ export async function agentWorkflow(input: string | AgentWorkflowInput) {
           }
 
           default:
-            return { kind: "next", output: { status: "ok" } };
+            // Exhaustiveness guard: every action block must be dispatched by
+            // BLOCK_EXECUTORS or a case above. Reaching here means a
+            // WorkflowBlockType was added without wiring an executor; fail the run
+            // loudly instead of silently succeeding as a no-op.
+            throw new Error(
+              `workflow block type "${node.type}" has no executor registered`,
+            );
         }
       };
 
