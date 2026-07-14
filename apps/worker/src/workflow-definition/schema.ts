@@ -355,6 +355,64 @@ function reachableFrom(seeds: string[], adjacency: Map<string, string[]>): Set<s
   return seen;
 }
 
+/**
+ * Compute the dominator set of every node reachable from a trigger.
+ *
+ * D dominates N when every path from the entry to N passes through D. The
+ * multiple triggers are modelled as a single virtual entry (each trigger's only
+ * predecessor), so a block dominates N only if it lies on every path from *any*
+ * trigger to N. Loop back-edges are left in `predecessors` (they arrive via the
+ * reverse adjacency); the classic iterative fixpoint below handles the resulting
+ * cycles, so a block inside a loop dominates a later node only when it is
+ * unavoidable regardless of how many times the loop iterates.
+ *
+ * Returns a map from node id to its dominators (always including the node
+ * itself). Nodes unreachable from a trigger are omitted.
+ */
+function computeDominators(
+  entries: string[],
+  reachable: Set<string>,
+  predecessors: Map<string, string[]>,
+): Map<string, Set<string>> {
+  const entrySet = new Set(entries.filter((id) => reachable.has(id)));
+  const universe = [...reachable];
+  const dominators = new Map<string, Set<string>>();
+  for (const id of universe) {
+    // An entry is dominated only by itself; every other node starts with the
+    // full universe and is narrowed by intersecting its predecessors' sets.
+    dominators.set(id, entrySet.has(id) ? new Set([id]) : new Set(universe));
+  }
+
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const id of universe) {
+      if (entrySet.has(id)) continue;
+      const preds = (predecessors.get(id) ?? []).filter((pred) => reachable.has(pred));
+      let next: Set<string> | null = null;
+      for (const pred of preds) {
+        const predDom = dominators.get(pred)!;
+        if (next === null) {
+          next = new Set(predDom);
+        } else {
+          for (const candidate of [...next]) {
+            if (!predDom.has(candidate)) next.delete(candidate);
+          }
+        }
+      }
+      if (next === null) next = new Set();
+      next.add(id);
+      const current = dominators.get(id)!;
+      if (next.size !== current.size || [...next].some((entry) => !current.has(entry))) {
+        dominators.set(id, next);
+        changed = true;
+      }
+    }
+  }
+
+  return dominators;
+}
+
 export function validateWorkflowGraph(def: WorkflowDefinition): string[] {
   const issues: string[] = [];
   const { nodes, edges } = def;
@@ -525,6 +583,11 @@ export function validateWorkflowGraph(def: WorkflowDefinition): string[] {
     }
   }
 
+  const dominators = computeDominators(
+    triggerNodes.map((node) => node.id),
+    reachable,
+    reverse,
+  );
   for (const node of nodes) {
     if (node.type !== "branch") continue;
     const condition = node.params.condition;
@@ -534,9 +597,15 @@ export function validateWorkflowGraph(def: WorkflowDefinition): string[] {
       issues.push(`Branch "${node.id}" has an invalid condition: ${parsed.error}.`);
       continue;
     }
-    const ancestors = reachableFrom(reverse.get(node.id) ?? [], reverse);
+    // A referenced block must dominate this branch: every path from a trigger to
+    // the branch has to pass through it, otherwise a run could reach the branch
+    // without the block having produced an output. "An ancestor on some path" is
+    // not enough (that was the bug) -- it has to be a strict dominator.
+    const nodeDominators = dominators.get(node.id);
     for (const ref of parsed.refs) {
-      if (!nodeById.has(ref) || !ancestors.has(ref)) {
+      const dominates =
+        ref !== node.id && nodeById.has(ref) && (nodeDominators?.has(ref) ?? false);
+      if (!dominates) {
         issues.push(
           `Branch "${node.id}" condition references block "${ref}" which does not run before it.`,
         );

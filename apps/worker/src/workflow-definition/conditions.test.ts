@@ -104,11 +104,16 @@ describe("evaluateCondition semantics", () => {
     expect(evalSrc("steps.checks.output.ok", steps({ checks: { status: "ok", ok: false } }))).toBe(false);
   });
 
-  it("resolves missing hops to null", () => {
+  it("resolves missing hops within a present step to null", () => {
     const state = steps({ a: { status: "ok" } });
     expect(evalSrc("steps.a.output.missing == null", state)).toBe(true);
-    expect(evalSrc("steps.missing.output.x == null", state)).toBe(true);
     expect(evalSrc("steps.a.output.missing", state)).toBe(false);
+  });
+
+  it("throws when the referenced step never produced an output", () => {
+    const state = steps({ a: { status: "ok" } });
+    expect(() => evalSrc("steps.missing.output.x == null", state)).toThrow(/block "missing"/);
+    expect(() => evalSrc("steps.missing.output.x", {})).toThrow(/has not produced an output/);
   });
 
   it("returns null when segmenting into a non-object", () => {

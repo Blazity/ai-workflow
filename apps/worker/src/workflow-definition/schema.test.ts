@@ -624,7 +624,40 @@ describe("validateWorkflowGraph rules", () => {
     ).toBe(true);
   });
 
-  it("rule 12: allows a condition referencing a cycle-member ancestor", () => {
+  it("rule 12: flags a condition referencing a block on only one branch (not a dominator)", () => {
+    // "left" runs on the true arm only, so a run reaching "merge" via the false
+    // arm never produces its output. It is an ancestor on one path but does not
+    // dominate the merge, so it must be rejected.
+    const def = graph(
+      [
+        node("t", "trigger_ticket_ai"),
+        node("split", "branch", { condition: "true" }),
+        node("left", "planning_agent"),
+        node("right", "implementation_agent"),
+        node("merge", "branch", { condition: "steps.left.output.ok" }),
+        node("x", "open_pr"),
+        node("y", "send_slack_message"),
+      ],
+      [
+        { from: "t", to: "split" },
+        { from: "split", to: "left", fromPort: "true" },
+        { from: "split", to: "right", fromPort: "false" },
+        { from: "left", to: "merge" },
+        { from: "right", to: "merge" },
+        { from: "merge", to: "x", fromPort: "true" },
+        { from: "merge", to: "y", fromPort: "false" },
+      ],
+    );
+    expect(
+      validateWorkflowGraph(def).some((issue) =>
+        issue.includes('Branch "merge" condition references block "left" which does not run before it'),
+      ),
+    ).toBe(true);
+  });
+
+  it("rule 12: flags a condition referencing a later loop-body block that does not dominate it", () => {
+    // The branch runs before "fix" the first time through, so on that path
+    // "fix" has no output; being a cycle member does not make it a dominator.
     const def = graph(
       [
         node("t", "trigger_ticket_ai"),
@@ -641,6 +674,37 @@ describe("validateWorkflowGraph rules", () => {
         { from: "checks", to: "b" },
         { from: "b", to: "open", fromPort: "true" },
         { from: "b", to: "lp", fromPort: "false" },
+        { from: "lp", to: "fix", fromPort: "continue" },
+        { from: "fix", to: "checks" },
+      ],
+    );
+    expect(
+      validateWorkflowGraph(def).some((issue) =>
+        issue.includes('Branch "b" condition references block "fix" which does not run before it'),
+      ),
+    ).toBe(true);
+  });
+
+  it("rule 12: allows a condition referencing a dominator reached across a loop back-edge", () => {
+    // "checks" is the branch's sole predecessor, so it dominates the branch on
+    // every path, including loop iterations (verdict --false--> loop --> fix -->
+    // checks). The loop back-edge must not break the dominator computation.
+    const def = graph(
+      [
+        node("t", "trigger_ticket_ai"),
+        node("p", "planning_agent"),
+        node("checks", "run_pre_pr_checks"),
+        node("verdict", "branch", { condition: "steps.checks.output.ok" }),
+        node("open", "open_pr"),
+        node("lp", "loop", { maxAttempts: 3, onExhaust: "fail" }),
+        node("fix", "review_agent"),
+      ],
+      [
+        { from: "t", to: "p" },
+        { from: "p", to: "checks" },
+        { from: "checks", to: "verdict" },
+        { from: "verdict", to: "open", fromPort: "true" },
+        { from: "verdict", to: "lp", fromPort: "false" },
         { from: "lp", to: "fix", fromPort: "continue" },
         { from: "fix", to: "checks" },
       ],

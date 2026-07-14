@@ -261,6 +261,28 @@ describe("interpreter edge: branch", () => {
     expect(finishStatuses(rec, "br")).toEqual(["fail"]);
   });
 
+  it("fails via failureExit when the condition references a block that never ran", async () => {
+    const graph = graphFrom(
+      [node("trig", "trigger_ticket_ai"), node("br", "branch", { condition: "steps.ghost.output.ok" })],
+      [{ from: "trig", to: "br" }],
+    );
+    const rec = makeRecorder();
+    const { executor, calls } = makeExecutor();
+    const result = await executeGraph({
+      graph,
+      entryTriggerId: "trig",
+      triggerOutput: { status: "ok" },
+      executeBlock: executor,
+      hooks: rec.hooks,
+    });
+    expect(result.outcome).toBe("stopped");
+    expect(calls).toEqual([]);
+    expect(rec.failures[0].phase).toBe("branch");
+    expect(rec.failures[0].nodeId).toBe("br");
+    expect(rec.failures[0].reason).toMatch(/block "ghost" which has not produced an output/);
+    expect(finishStatuses(rec, "br")).toEqual(["fail"]);
+  });
+
   it("routes on an earlier action block's accumulated output", async () => {
     const graph = graphFrom(
       [

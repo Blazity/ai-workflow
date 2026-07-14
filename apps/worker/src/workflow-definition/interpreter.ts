@@ -144,8 +144,10 @@ export async function executeGraph(opts: {
         if (parsed.ok) {
           try {
             value = evaluateCondition(parsed.ast, steps);
-            // Defensive: evaluateCondition is a total, fully-guarded pure
-            // function and does not throw for a parseable condition. Unreachable.
+            // evaluateCondition throws only when the condition references a block
+            // that never produced an output on this path. The graph validator
+            // rejects such definitions at save time, so at runtime this fails the
+            // run with a clear reason instead of evaluating against null.
           } catch (error) {
             const message = error instanceof Error ? error.message : String(error);
             const output: BlockOutput = { status: "failed", error: message };

@@ -308,7 +308,15 @@ function resolvePath(
   steps: Record<string, { output: BlockOutput }>,
 ): JsonValue {
   const step = steps[node.blockId];
-  if (!step) return null;
+  if (!step) {
+    // A genuinely missing step means the referenced block never ran on this
+    // path. The graph validator requires referenced blocks to dominate the
+    // branch, so this should be impossible; erroring (instead of coercing to
+    // null) surfaces the bug rather than silently evaluating against null.
+    throw new ConditionError(
+      `condition references block "${node.blockId}" which has not produced an output`,
+    );
+  }
   let current: JsonValue = step.output;
   for (const segment of node.segments) {
     if (current === null || typeof current !== "object" || Array.isArray(current)) return null;
