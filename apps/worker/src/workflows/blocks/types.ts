@@ -70,11 +70,10 @@ export interface EngineCtx {
   prompts: LoadedPrompts;
   moveTargets: { backlog: IssueTrackerMoveTarget; aiReview: IssueTrackerMoveTarget };
   /**
-   * Arthur observability wiring. `taskNameOverride` is populated by the C4
-   * pre-scan from an arthur_trace block's taskName param; prepare_workspace
-   * honors it when ensuring the run's Arthur task.
+   * Arthur observability wiring. prepare_workspace ensures the run's Arthur
+   * task (named after the ticket) and writes back the resolved `taskId`.
    */
-  arthur: { taskId: string | null; taskNameOverride?: string };
+  arthur: { taskId: string | null };
   /** Record a phase's parsed usage under a display label for run telemetry. */
   recordUsage(label: string, usage: PhaseUsage | null, model: string): void;
   /**

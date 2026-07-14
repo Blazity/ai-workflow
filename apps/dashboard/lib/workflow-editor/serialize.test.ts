@@ -175,14 +175,14 @@ test("serializes a branch and loop graph with fromPort on every control edge", (
 test("drops cleared, whitespace-only and empty required string params", () => {
   const nodes: FlowNodeDef[] = [
     { id: "term", type: "terminate", x: 0, y: 0, params: { terminalStatus: "failed", postComment: "" } },
-    { id: "trace", type: "arthur_trace", x: 0, y: 0, params: { taskName: "   " } },
+    { id: "cmt", type: "post_ticket_comment", x: 0, y: 0, params: { body: "   " } },
     { id: "llm", type: "call_llm", x: 0, y: 0, params: { prompt: "", system: "" } },
   ];
 
   const out = serializeWorkflowDefinition(nodes, []);
   assert.deepEqual(out.nodes, [
     { id: "term", type: "terminate", x: 0, y: 0, params: { terminalStatus: "failed" } },
-    { id: "trace", type: "arthur_trace", x: 0, y: 0, params: {} },
+    { id: "cmt", type: "post_ticket_comment", x: 0, y: 0, params: {} },
     { id: "llm", type: "call_llm", x: 0, y: 0, params: {} },
   ]);
 });

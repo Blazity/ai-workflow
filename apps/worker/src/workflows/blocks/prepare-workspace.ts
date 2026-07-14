@@ -237,7 +237,7 @@ export const execute: BlockExecuteFn = async (_block, _steps, ctx): Promise<Bloc
     );
 
     const arthurTaskId = await blockPrepareWorkspaceEnsureArthurTaskStep(
-      ctx.arthur.taskNameOverride ?? ctx.ticket.identifier,
+      ctx.ticket.identifier,
     );
     ctx.arthur.taskId = arthurTaskId;
 

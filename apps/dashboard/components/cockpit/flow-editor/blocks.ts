@@ -29,7 +29,6 @@ export const NODE_CATEGORIES: Record<
   send_plan_approval:     { color: "#b06a14", soft: "#F7F0E7", label: "Plan approval",         glyph: "☑", group: "human" },
   human_question:         { color: "#b06a14", soft: "#F7F0E7", label: "Human question",       glyph: "?", group: "human" },
   arthur_injection_check: { color: "#8b6f8f", soft: "#F3F0F4", label: "Injection check",      glyph: "◬", group: "arthur" },
-  arthur_trace:           { color: "#8b6f8f", soft: "#F3F0F4", label: "Arthur trace",         glyph: "∿", group: "arthur" },
   branch:                 { color: "#35823f", soft: "#E9F3EA", label: "Branch",               glyph: "⋔", group: "control" },
   loop:                   { color: "#35823f", soft: "#E9F3EA", label: "Loop",                 glyph: "↻", group: "control" },
   terminate:              { color: "#35823f", soft: "#E9F3EA", label: "Terminate",            glyph: "■", group: "control" },
@@ -102,12 +101,6 @@ export function nodeSummary(node: FlowNodeDef, options: WorkflowEditorOptions): 
       const body = str(node.params.body);
       return body !== "" ? truncate(body) : null;
     }
-    case "trigger_pr_review": {
-      const on = str(node.params.on);
-      return on !== "" ? `on ${on}` : null;
-    }
-    case "trigger_pr_created":
-      return node.params.onlyWorkflowOwned === true ? "workflow-owned only" : null;
     case "update_ticket_status": {
       const target = node.params.target;
       const label = options.ticketStatusTargets.find((t) => t.value === target)?.label;

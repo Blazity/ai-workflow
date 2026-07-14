@@ -134,6 +134,9 @@ export async function loadWorkflowDefinitionFor(
     row = match.current;
   }
 
+  // TODO(merge-to-main): removing block types/params makes older stored graphs
+  // fail this safeParse (a non-ticket trigger then loads nothing). Add a
+  // strip/migration shim here before merging so pre-removal definitions still load.
   const parsed = workflowDefinitionSchema.safeParse(row.definition);
   const graphIssues = parsed.success ? validateWorkflowGraph(parsed.data) : [];
   if (!parsed.success || graphIssues.length > 0) {

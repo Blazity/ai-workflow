@@ -17,7 +17,6 @@ import { paramsSchema as postTicketCommentParams } from "../workflows/blocks/pos
 import { paramsSchema as postPrCommentParams } from "../workflows/blocks/post-pr-comment.js";
 import { paramsSchema as humanQuestionParams } from "../workflows/blocks/human-question.js";
 import { paramsSchema as arthurInjectionCheckParams } from "../workflows/blocks/arthur-injection-check.js";
-import { paramsSchema as arthurTraceParams } from "../workflows/blocks/arthur-trace.js";
 import { paramsSchema as sendPlanApprovalParams } from "../workflows/blocks/send-plan-approval.js";
 
 const nodeId = z.string().trim().min(1);
@@ -38,56 +37,24 @@ const agentParams = z
   })
   .strict();
 
-const vcsProviders = z.enum(["github", "gitlab"]);
-
 const triggerNode = z
   .object({ ...baseNodeFields, type: z.literal("trigger_ticket_ai"), params: emptyParams })
   .strict();
 
 const triggerPlanApprovedNode = z
-  .object({
-    ...baseNodeFields,
-    type: z.literal("trigger_plan_approved"),
-    params: z
-      .object({ source: z.literal("dashboard").default("dashboard") })
-      .strict(),
-  })
+  .object({ ...baseNodeFields, type: z.literal("trigger_plan_approved"), params: emptyParams })
   .strict();
 
 const triggerPrCreatedNode = z
-  .object({
-    ...baseNodeFields,
-    type: z.literal("trigger_pr_created"),
-    params: z
-      .object({
-        providers: z.array(vcsProviders).default(["github", "gitlab"]),
-        onlyWorkflowOwned: z.boolean().default(true),
-      })
-      .strict(),
-  })
+  .object({ ...baseNodeFields, type: z.literal("trigger_pr_created"), params: emptyParams })
   .strict();
 
 const triggerPrChecksFailedNode = z
-  .object({
-    ...baseNodeFields,
-    type: z.literal("trigger_pr_checks_failed"),
-    params: z
-      .object({ providers: z.array(vcsProviders).default(["github", "gitlab"]) })
-      .strict(),
-  })
+  .object({ ...baseNodeFields, type: z.literal("trigger_pr_checks_failed"), params: emptyParams })
   .strict();
 
 const triggerPrReviewNode = z
-  .object({
-    ...baseNodeFields,
-    type: z.literal("trigger_pr_review"),
-    params: z
-      .object({
-        providers: z.array(vcsProviders).default(["github"]),
-        on: z.enum(["changes_requested", "commented"]).default("changes_requested"),
-      })
-      .strict(),
-  })
+  .object({ ...baseNodeFields, type: z.literal("trigger_pr_review"), params: emptyParams })
   .strict();
 
 const planningNode = z
@@ -172,10 +139,6 @@ const arthurInjectionCheckNode = z
   })
   .strict();
 
-const arthurTraceNode = z
-  .object({ ...baseNodeFields, type: z.literal("arthur_trace"), params: arthurTraceParams })
-  .strict();
-
 const sendSlackMessageNode = z
   .object({
     ...baseNodeFields,
@@ -247,7 +210,6 @@ const nodeSchema = z.discriminatedUnion("type", [
   sendPlanApprovalNode,
   humanQuestionNode,
   arthurInjectionCheckNode,
-  arthurTraceNode,
   branchNode,
   loopNode,
   terminateNode,

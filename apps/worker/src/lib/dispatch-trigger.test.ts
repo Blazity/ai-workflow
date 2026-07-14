@@ -40,6 +40,7 @@ function makeRegistry(
       }),
     register: overrides.register ?? vi.fn().mockResolvedValue(undefined),
     unregister: overrides.unregister ?? vi.fn().mockResolvedValue(undefined),
+    unregisterIfRunId: vi.fn().mockResolvedValue(undefined),
     getRunId: overrides.getRunId ?? vi.fn().mockImplementation(async () => claimedValue),
     listAll: overrides.listAll ?? vi.fn().mockResolvedValue([]),
     registerSandbox: vi.fn().mockResolvedValue(undefined),
@@ -52,7 +53,7 @@ function makeRegistry(
   };
 }
 
-function makeEnabledDefinition(onlyWorkflowOwned?: boolean) {
+function makeEnabledDefinition() {
   return {
     definition: { id: 5, name: "PR flow" },
     current: {
@@ -64,7 +65,7 @@ function makeEnabledDefinition(onlyWorkflowOwned?: boolean) {
             type: "trigger_pr_created",
             x: 0,
             y: 0,
-            params: onlyWorkflowOwned === undefined ? {} : { onlyWorkflowOwned },
+            params: {},
           },
         ],
         edges: [],

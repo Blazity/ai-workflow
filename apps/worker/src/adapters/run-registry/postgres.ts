@@ -1,4 +1,4 @@
-import { eq, sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import type { Db } from "../../db/client.js";
 import {
   activeRuns,
@@ -53,6 +53,15 @@ export class PostgresRunRegistry implements RunRegistryAdapter, ThreadStore {
     // detaches the ticket. Thread parents live in their own table and
     // survive (see ThreadStore docs in types.ts).
     await this.db.delete(activeRuns).where(eq(activeRuns.ticketKey, ticketKey));
+  }
+
+  async unregisterIfRunId(ticketKey: string, runId: string): Promise<void> {
+    // Conditional delete: only drop the row when it still holds this runId, so
+    // a finishing run cannot delete a successor run's row that reclaimed the
+    // ticket after this run unregistered before creating its PR.
+    await this.db
+      .delete(activeRuns)
+      .where(and(eq(activeRuns.ticketKey, ticketKey), eq(activeRuns.runId, runId)));
   }
 
   async listAll(): Promise<Array<{ ticketKey: string; runId: string; kind: RunKind }>> {

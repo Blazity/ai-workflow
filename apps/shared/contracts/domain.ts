@@ -230,7 +230,6 @@ export type WorkflowBlockType =
   | "send_plan_approval"
   | "human_question"
   | "arthur_injection_check"
-  | "arthur_trace"
   | "branch"
   | "loop"
   | "terminate";

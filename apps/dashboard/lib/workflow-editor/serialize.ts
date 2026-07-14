@@ -10,10 +10,10 @@ import { canOmitFromPort } from "./edges";
 
 const PARAM_KEYS: Record<WorkflowBlockType, string[]> = {
   trigger_ticket_ai: [],
-  trigger_plan_approved: ["source"],
-  trigger_pr_created: ["providers", "onlyWorkflowOwned"],
-  trigger_pr_checks_failed: ["providers"],
-  trigger_pr_review: ["providers", "on"],
+  trigger_plan_approved: [],
+  trigger_pr_created: [],
+  trigger_pr_checks_failed: [],
+  trigger_pr_review: [],
   planning_agent: ["provider", "model"],
   implementation_agent: ["provider", "model"],
   review_agent: ["provider", "model"],
@@ -33,7 +33,6 @@ const PARAM_KEYS: Record<WorkflowBlockType, string[]> = {
   send_plan_approval: ["planFromStep", "mirrorComment"],
   human_question: ["questions"],
   arthur_injection_check: ["contentFromStep"],
-  arthur_trace: ["taskName"],
   branch: ["condition"],
   loop: ["maxAttempts", "onExhaust"],
   terminate: ["terminalStatus", "postComment"],

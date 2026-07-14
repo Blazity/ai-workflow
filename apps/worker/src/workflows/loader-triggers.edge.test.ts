@@ -161,7 +161,7 @@ describe("normalizeDefinitionForExecution edge cases", () => {
       node("t1", "trigger_ticket_ai"),
       node("prep", "prepare_workspace"),
       node("x", "planning_agent"),
-      node("t2", "trigger_pr_created", { providers: ["github"], onlyWorkflowOwned: true }),
+      node("t2", "trigger_pr_created"),
       node("y", "fix_agent"),
     ];
     const edges: WorkflowDefinitionEdge[] = [
@@ -299,6 +299,7 @@ function makeRegistry(
       }),
     register: overrides.register ?? vi.fn().mockResolvedValue(undefined),
     unregister: overrides.unregister ?? vi.fn().mockResolvedValue(undefined),
+    unregisterIfRunId: vi.fn().mockResolvedValue(undefined),
     getRunId: overrides.getRunId ?? vi.fn().mockImplementation(async () => claimedValue),
     listAll: overrides.listAll ?? vi.fn().mockResolvedValue([]),
     registerSandbox: vi.fn().mockResolvedValue(undefined),
@@ -311,7 +312,7 @@ function makeRegistry(
   };
 }
 
-function makeEnabledDefinition(onlyWorkflowOwned?: boolean) {
+function makeEnabledDefinition() {
   return {
     definition: { id: 5, name: "PR flow" },
     current: {
@@ -323,7 +324,7 @@ function makeEnabledDefinition(onlyWorkflowOwned?: boolean) {
             type: "trigger_pr_created",
             x: 0,
             y: 0,
-            params: onlyWorkflowOwned === undefined ? {} : { onlyWorkflowOwned },
+            params: {},
           },
         ],
         edges: [],
@@ -384,9 +385,8 @@ describe("dispatchTriggerEvent edge cases", () => {
     expect(mockStart).not.toHaveBeenCalled();
   });
 
-  it("still ignores a non-bot branch even when onlyWorkflowOwned is false", async () => {
-    // onlyWorkflowOwned:false is warn-only; it does not rescue a non-bot branch.
-    mockGetEnabled.mockResolvedValue(makeEnabledDefinition(false));
+  it("ignores a non-bot branch (ticket key cannot be derived)", async () => {
+    mockGetEnabled.mockResolvedValue(makeEnabledDefinition());
     const registry = makeRegistry();
     const dispatchTriggerEvent = await loadRealDispatch();
 
@@ -461,6 +461,7 @@ function makeReconcileRegistry(
     register: vi.fn(),
     getRunId: vi.fn(),
     unregister: vi.fn().mockResolvedValue(undefined),
+    unregisterIfRunId: vi.fn().mockResolvedValue(undefined),
     listAll: vi.fn().mockResolvedValue(runs),
     registerSandbox: vi.fn().mockResolvedValue(undefined),
     getSandboxId: vi.fn().mockResolvedValue(null),

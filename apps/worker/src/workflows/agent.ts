@@ -33,7 +33,6 @@ import { execute as executePostTicketComment } from "./blocks/post-ticket-commen
 import { execute as executePostPrComment } from "./blocks/post-pr-comment.js";
 import { execute as executeHumanQuestion } from "./blocks/human-question.js";
 import { execute as executeArthurInjectionCheck } from "./blocks/arthur-injection-check.js";
-import { execute as executeArthurTrace } from "./blocks/arthur-trace.js";
 import { execute as executeSendPlanApproval } from "./blocks/send-plan-approval.js";
 import { isTriggerBlockType } from "@shared/contracts";
 import type {
@@ -55,7 +54,6 @@ const BLOCK_EXECUTORS: Partial<Record<WorkflowBlockType, BlockExecuteFn>> = {
   post_pr_comment: executePostPrComment,
   human_question: executeHumanQuestion,
   arthur_injection_check: executeArthurInjectionCheck,
-  arthur_trace: executeArthurTrace,
   send_plan_approval: executeSendPlanApproval,
 };
 
@@ -435,6 +433,13 @@ async function unregisterRun(ticketIdentifier: string) {
   await runRegistry.unregister(ticketIdentifier);
 }
 
+async function unregisterRunIfCurrent(ticketIdentifier: string, runId: string) {
+  "use step";
+  const { createStepAdapters } = await import("../lib/step-adapters.js");
+  const { runRegistry } = createStepAdapters();
+  await runRegistry.unregisterIfRunId(ticketIdentifier, runId);
+}
+
 async function resolveAgentKindOverride(labels: readonly string[]): Promise<AgentKind | null> {
   "use step";
   const { parseAgentKindOverride } = await import("../sandbox/agents/index.js");
@@ -742,12 +747,6 @@ export async function agentWorkflow(input: string | AgentWorkflowInput) {
       priceLookup = (model) => priceMap.get(model) ?? null;
     }
 
-    const arthurTraceParams = plan.nodes.find((node) => node.type === "arthur_trace")?.params;
-    const arthurTaskNameOverride =
-      typeof arthurTraceParams?.taskName === "string" && arthurTraceParams.taskName.trim().length > 0
-        ? arthurTraceParams.taskName.trim()
-        : undefined;
-
     const state = {
       runUnregisteredBeforePr: false,
       implementationModel: defaultModel,
@@ -775,7 +774,6 @@ export async function agentWorkflow(input: string | AgentWorkflowInput) {
       moveTargets: { backlog: backlogMoveTarget(), aiReview: aiReviewMoveTarget() },
       arthur: {
         taskId: null,
-        ...(arthurTaskNameOverride !== undefined ? { taskNameOverride: arthurTaskNameOverride } : {}),
       },
       recordUsage: (label, usage, model) => {
         const key = phaseKey(label, state.attempt);
@@ -1228,7 +1226,9 @@ export async function agentWorkflow(input: string | AgentWorkflowInput) {
     // fire a duplicate "canceled" notification on top of the "failed" one.
     // If the move then fails, markTicketFailed re-records a marker that
     // dispatch.isTicketFailed checks to keep the ticket from being re-picked.
-    await unregisterRun(ticket.identifier).catch(() => {});
+    // runId-scoped: only clears this run's own row, so an uncaught throw after
+    // open_pr freed the slot can't stomp a successor pr_trigger that claimed it.
+    await unregisterRunIfCurrent(ticket.identifier, workflowRunId).catch(() => {});
     const moved = await moveTicket(ticketId, backlogMoveTarget()).then(() => true).catch(() => false);
     await notifyTicket(ticket.identifier, {
       kind: "failed",
@@ -1246,6 +1246,21 @@ export async function agentWorkflow(input: string | AgentWorkflowInput) {
     for (const phase of launchedPhases) {
       if (!(phase in phaseUsages)) phaseUsages[phase] = null;
     }
+    // Free the ticket's active_runs slot on every terminal exit. Most paths
+    // (open_pr, finalize_workspace, send_plan_approval, terminate, clarification,
+    // failure) already unregister mid-run, but a graph that completes without any
+    // of them (e.g. a PR-review flow that only posts a comment) would otherwise
+    // leave a stale row registered until reconcile's cron sweeps it — and that
+    // row coalesces the ticket's NEXT pr_trigger at claim() (a PR legitimately
+    // gets both a checks-failed and a review).
+    //
+    // Scope the release to THIS run's id: a run that unregistered mid-flight
+    // (open_pr/finalize before creating the PR) can have its ticket reclaimed by
+    // a successor pr_trigger run that PR creation dispatches. A bare unregister
+    // deletes by ticketKey and would stomp that successor's still-live row,
+    // yielding two concurrent runs for one ticket. unregisterIfRunId only deletes
+    // when the row still holds workflowRunId, so a stomp is a harmless no-op.
+    await unregisterRunIfCurrent(ticket.identifier, workflowRunId).catch(() => {});
     // Durable cost/usage telemetry, recorded on every exit path (success,
     // clarification, or failure). Best-effort: the step never retries and we
     // swallow errors so telemetry can't break or delay the run — but we LOG

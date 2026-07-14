@@ -85,6 +85,7 @@ function makeAdapters(
         }),
       register: overrides.register ?? vi.fn().mockResolvedValue(undefined),
       unregister: overrides.unregister ?? vi.fn().mockResolvedValue(undefined),
+      unregisterIfRunId: vi.fn().mockResolvedValue(undefined),
       getRunId:
         overrides.getRunId ??
         vi.fn().mockImplementation(async () => claimedValue),
@@ -436,6 +437,7 @@ describe("failed-ticket safeguard full loop", () => {
       register: vi.fn().mockResolvedValue(undefined),
       getRunId: vi.fn().mockImplementation(async () => claimedValue),
       unregister: vi.fn().mockResolvedValue(undefined),
+      unregisterIfRunId: vi.fn().mockResolvedValue(undefined),
       listAll: vi.fn().mockResolvedValue([]),
       registerSandbox: vi.fn().mockResolvedValue(undefined),
       getSandboxId: vi.fn().mockResolvedValue(null),

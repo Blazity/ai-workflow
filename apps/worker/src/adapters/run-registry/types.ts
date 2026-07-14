@@ -20,6 +20,14 @@ export interface RunRegistryAdapter {
   getRunId(ticketKey: string): Promise<string | null>;
   /** Remove the ticket -> runId mapping (also clears any linked sandboxId). */
   unregister(ticketKey: string): Promise<void>;
+  /**
+   * Compare-and-delete: remove the ticket -> runId mapping ONLY if it still
+   * holds this exact runId. A run that unregistered mid-flight (before opening
+   * its PR) can have its ticket reclaimed by a successor run; this lets the
+   * original run release its slot on teardown without stomping the successor's
+   * still-live row (a bare unregister deletes by ticketKey regardless of owner).
+   */
+  unregisterIfRunId(ticketKey: string, runId: string): Promise<void>;
   /** Get all tracked ticket -> runId pairs. */
   listAll(): Promise<Array<{ ticketKey: string; runId: string; kind: RunKind }>>;
 

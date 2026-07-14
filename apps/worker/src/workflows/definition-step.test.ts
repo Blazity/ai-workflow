@@ -260,7 +260,7 @@ describe("normalizeDefinitionForExecution", () => {
   it("injects one virtual node per trigger", () => {
     const nodes = [
       node("t1", "trigger_ticket_ai"),
-      node("t2", "trigger_pr_created", { providers: ["github"], onlyWorkflowOwned: true }),
+      node("t2", "trigger_pr_created"),
       node("a", "planning_agent"),
       node("b", "fix_agent"),
     ];

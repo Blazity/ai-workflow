@@ -42,16 +42,6 @@ export async function dispatchTriggerEvent(
     return { result: "ignored_not_workflow_owned" };
   }
 
-  const triggerNode = enabled.current.definition.nodes.find(
-    (node) => node.type === evt.triggerType,
-  );
-  if (triggerNode && triggerNode.params.onlyWorkflowOwned === false) {
-    logger.warn(
-      { triggerType: evt.triggerType, definitionId: enabled.definition.id },
-      "trigger_only_workflow_owned_false_not_honored",
-    );
-  }
-
   const definitionId = enabled.definition.id;
   const input: AgentWorkflowInput = {
     kind: "pr_trigger",

@@ -98,6 +98,28 @@ describe("unregister", () => {
   });
 });
 
+describe("unregisterIfRunId", () => {
+  it("removes the row when it still holds the given runId", async () => {
+    await registry.register("PROJ-1", "run_a");
+    await registry.unregisterIfRunId("PROJ-1", "run_a");
+    expect(await registry.getRunId("PROJ-1")).toBeNull();
+  });
+
+  it("leaves a successor's row intact when the runId no longer matches", async () => {
+    await registry.register("PROJ-1", "run_a");
+    // Successor reclaimed the ticket with a different runId.
+    await registry.register("PROJ-1", "run_b");
+    // The original run's scoped release must be a no-op.
+    await registry.unregisterIfRunId("PROJ-1", "run_a");
+    expect(await registry.getRunId("PROJ-1")).toBe("run_b");
+  });
+
+  it("is a no-op when no row exists", async () => {
+    await registry.unregisterIfRunId("PROJ-99", "run_a");
+    expect(await registry.getRunId("PROJ-99")).toBeNull();
+  });
+});
+
 describe("listAll", () => {
   it("returns all ticket -> runId pairs", async () => {
     await registry.claim("PROJ-1", "run_abc");

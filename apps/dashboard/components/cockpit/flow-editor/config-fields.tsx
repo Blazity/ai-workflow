@@ -321,38 +321,9 @@ export function ConfigFields({
     case "trigger_pr_checks_failed":
       return <ConfigNote>Fires when a pull request&apos;s checks report a failure.</ConfigNote>;
     case "trigger_pr_created":
-      return (
-        <>
-          <ConfigField label="Scope">
-            <label className="flex items-center gap-2 font-body text-xs text-coal">
-              <input
-                type="checkbox"
-                checked={node.params.onlyWorkflowOwned === true}
-                disabled={!canEdit}
-                onChange={(e) => onChange("params.onlyWorkflowOwned", e.target.checked)}
-                className="w-3.5 h-3.5 accent-mariner"
-              />
-              Only PRs opened by this workflow
-            </label>
-          </ConfigField>
-          <ConfigNote>Providers are configured in the VCS integration settings.</ConfigNote>
-        </>
-      );
+      return <ConfigNote>Fires when a pull request is opened on a workflow-owned branch.</ConfigNote>;
     case "trigger_pr_review":
-      return (
-        <ConfigField label="On review">
-          <Listbox
-            options={[
-              { value: "changes_requested", label: "Changes requested" },
-              { value: "commented", label: "Commented" },
-            ]}
-            value={str(node.params.on) || "changes_requested"}
-            disabled={!canEdit}
-            ariaLabel="On review"
-            onChange={(v) => onChange("params.on", v)}
-          />
-        </ConfigField>
-      );
+      return <ConfigNote>Fires when a human submits a review on a workflow-owned pull request.</ConfigNote>;
     case "planning_agent":
     case "implementation_agent":
     case "review_agent":
@@ -542,12 +513,6 @@ export function ConfigFields({
           </ConfigField>
           <ConfigNote>Scans the referenced step output for prompt-injection attempts.</ConfigNote>
         </>
-      );
-    case "arthur_trace":
-      return (
-        <ConfigField label="Task name">
-          <TextInput value={str(node.params.taskName)} disabled={!canEdit} onChange={(v) => onChange("params.taskName", v)} />
-        </ConfigField>
       );
     case "branch": {
       const condition = str(node.params.condition);

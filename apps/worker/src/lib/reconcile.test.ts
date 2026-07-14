@@ -36,6 +36,7 @@ function makeRegistry(
     register: vi.fn(),
     getRunId: vi.fn(),
     unregister: vi.fn().mockResolvedValue(undefined),
+    unregisterIfRunId: vi.fn().mockResolvedValue(undefined),
     listAll: vi.fn().mockResolvedValue(runs),
     registerSandbox: vi.fn().mockResolvedValue(undefined),
     getSandboxId: vi.fn().mockResolvedValue(null),
