@@ -64,8 +64,10 @@ In the GitLab project, open **Project Settings -> Webhooks** and add:
 
 - URL: `https://<worker-deployment>/webhooks/gitlab`
 - Secret token: the same value as `GITLAB_WEBHOOK_SECRET`
-- Trigger: **Merge request events**
+- Trigger: **Merge request events** and **Pipeline events**
 - SSL verification: enabled
+
+**Merge request events** deliver the **Merge Request Hook**, which drives PR/MR creation and reuse. **Pipeline events** deliver the **Pipeline Hook**, which drives the `trigger_pr_checks_failed` workflow trigger (re-run the fix flow when a bot MR's pipeline fails). Without Pipeline events, that trigger never fires.
 
 Use GitLab's **Secret token** field for now, not the newer **Signing token**
 flow. The worker currently verifies the `X-Gitlab-Token` header.
