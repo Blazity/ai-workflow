@@ -31,9 +31,11 @@ const STATUS_LABEL: Record<ApprovalStatus, string> = {
 
 export function ApprovalsScreen({
   approvals,
+  error = null,
   canEdit,
 }: {
   approvals: ApprovalRequest[];
+  error?: string | null;
   canEdit: boolean;
 }) {
   const router = useRouter();
@@ -104,7 +106,14 @@ export function ApprovalsScreen({
       </div>
 
       <CkCard pad={0}>
-        {filtered.length === 0 ? (
+        {error ? (
+          <div className="flex flex-col items-center gap-3 px-4 py-10 text-center">
+            <span className="font-body text-[13px] text-fail-fg">{error}</span>
+            <GhostButton type="button" onClick={() => router.refresh()}>
+              Retry
+            </GhostButton>
+          </div>
+        ) : filtered.length === 0 ? (
           <div className="px-4 py-10 text-center font-body text-[13px] text-neutral-500">
             {filter === "pending" ? "No pending approvals." : "No approvals yet."}
           </div>
