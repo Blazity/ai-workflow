@@ -2,7 +2,11 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { eq } from "drizzle-orm";
 import type { WorkflowBlockType, WorkflowDefinition } from "@shared/contracts";
 import type { Db } from "../db/client.js";
-import { workflowDefinitions, workflowDefinitionVersions } from "../db/schema.js";
+import {
+  workflowDefinitions,
+  workflowDefinitionTriggers,
+  workflowDefinitionVersions,
+} from "../db/schema.js";
 import { createTestDb } from "../db/test-db.js";
 import { DashboardAuthError } from "../lib/auth/users-read.js";
 import {
@@ -208,6 +212,96 @@ describe("enabled-per-trigger overlap", () => {
 
     await restoreWorkflowDefinitionVersion(db, { definitionId: e.id, version: 1, actor: ADMIN });
     expect(await triggerTypesOf(db, e.id)).toEqual(["trigger_ticket_ai"]);
+  });
+});
+
+describe("atomic trigger bindings (one-enabled-per-trigger race, #2)", () => {
+  async function bindingsFor(triggerType: WorkflowBlockType) {
+    return db
+      .select()
+      .from(workflowDefinitionTriggers)
+      .where(eq(workflowDefinitionTriggers.triggerType, triggerType));
+  }
+
+  it("rejects a second enabled binding for the same trigger at the DB level", async () => {
+    // The seeded default already owns trigger_ticket_ai; a raw duplicate binding
+    // must fail on the trigger_type primary key — the guarantee behind the 409.
+    await expect(
+      db
+        .insert(workflowDefinitionTriggers)
+        .values({ triggerType: "trigger_ticket_ai", definitionId: SEEDED_DEFAULT_ID }),
+    ).rejects.toBeDefined();
+  });
+
+  it("lets only one of two concurrent enables win the same trigger", async () => {
+    const c = (await createWorkflowDefinition(db, { name: "C", seed: def(["trigger_pr_created"]), actor: ADMIN })).definition;
+    const d = (await createWorkflowDefinition(db, { name: "D", seed: def(["trigger_pr_created"]), actor: ADMIN })).definition;
+
+    const results = await Promise.allSettled([
+      updateWorkflowDefinition(db, { definitionId: c.id, enabled: true, actor: ADMIN }),
+      updateWorkflowDefinition(db, { definitionId: d.id, enabled: true, actor: ADMIN }),
+    ]);
+
+    expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
+    const rejected = results.filter((r) => r.status === "rejected") as PromiseRejectedResult[];
+    expect(rejected).toHaveLength(1);
+    expect(rejected[0].reason).toMatchObject({ statusCode: 409 });
+
+    // Exactly one enabled definition ends up owning the trigger.
+    expect(await bindingsFor("trigger_pr_created")).toHaveLength(1);
+    const hit = await getEnabledWorkflowDefinitionForTrigger(db, "trigger_pr_created");
+    expect(hit?.definition.enabled).toBe(true);
+  });
+
+  it("releases the trigger binding when a definition is disabled", async () => {
+    const r = (await createWorkflowDefinition(db, { name: "Rel", seed: def(["trigger_pr_review"]), actor: ADMIN })).definition;
+    await updateWorkflowDefinition(db, { definitionId: r.id, enabled: true, actor: ADMIN });
+    expect(await getEnabledWorkflowDefinitionForTrigger(db, "trigger_pr_review")).not.toBeNull();
+
+    await updateWorkflowDefinition(db, { definitionId: r.id, enabled: false, actor: ADMIN });
+    expect(await getEnabledWorkflowDefinitionForTrigger(db, "trigger_pr_review")).toBeNull();
+    expect(await bindingsFor("trigger_pr_review")).toHaveLength(0);
+  });
+
+  it("re-syncs bindings when an enabled definition's new version swaps its trigger", async () => {
+    const s = (await createWorkflowDefinition(db, { name: "Swap", seed: def(["trigger_pr_review"]), actor: ADMIN })).definition;
+    await updateWorkflowDefinition(db, { definitionId: s.id, enabled: true, actor: ADMIN });
+
+    await saveWorkflowDefinitionVersion(db, { definitionId: s.id, definition: def(["trigger_pr_created"]), actor: ADMIN });
+
+    expect(await getEnabledWorkflowDefinitionForTrigger(db, "trigger_pr_review")).toBeNull();
+    expect((await getEnabledWorkflowDefinitionForTrigger(db, "trigger_pr_created"))?.definition.id).toBe(s.id);
+  });
+});
+
+describe("dispatch derives from the head version, not the stored column (#3)", () => {
+  it("routes by the head graph even when trigger_types drifts from a crashed save", async () => {
+    const p = (await createWorkflowDefinition(db, { name: "Drift", seed: def(["trigger_pr_created"]), actor: ADMIN })).definition;
+    await updateWorkflowDefinition(db, { definitionId: p.id, enabled: true, actor: ADMIN });
+
+    // Simulate a save that stored the version but crashed before refreshing the
+    // denormalized trigger_types column: the head graph still declares the trigger.
+    await db.update(workflowDefinitions).set({ triggerTypes: [] }).where(eq(workflowDefinitions.id, p.id));
+
+    const hit = await getEnabledWorkflowDefinitionForTrigger(db, "trigger_pr_created");
+    expect(hit?.definition.id).toBe(p.id);
+  });
+
+  it("repairs a stale binding on read when the head graph no longer declares the trigger", async () => {
+    // An enabled definition whose head has NO trigger, plus an injected stale
+    // binding (as a crashed write might leave): the read must ignore and drop it.
+    const q = (await createWorkflowDefinition(db, { name: "Stale", seed: def([]), actor: ADMIN })).definition;
+    await updateWorkflowDefinition(db, { definitionId: q.id, enabled: true, actor: ADMIN });
+    await db
+      .insert(workflowDefinitionTriggers)
+      .values({ triggerType: "trigger_pr_created", definitionId: q.id });
+
+    expect(await getEnabledWorkflowDefinitionForTrigger(db, "trigger_pr_created")).toBeNull();
+    const rows = await db
+      .select()
+      .from(workflowDefinitionTriggers)
+      .where(eq(workflowDefinitionTriggers.triggerType, "trigger_pr_created"));
+    expect(rows).toHaveLength(0);
   });
 });
 

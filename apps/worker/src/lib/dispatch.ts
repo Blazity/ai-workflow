@@ -136,6 +136,7 @@ export async function claimTicketRun(
   let stage = "precheck_capacity";
   let claimHeld = false;
   let claimValue = "";
+  let startedRunId: string | null = null;
   try {
     if (await isAtCapacity(maxConcurrentAgents, runRegistry)) {
       return { started: false, reason: "at_capacity" };
@@ -205,6 +206,7 @@ export async function claimTicketRun(
 
     stage = "start_workflow";
     const runId = await options.startWorkflow();
+    startedRunId = runId;
 
     stage = "verify_claim_after_start";
     const claimStillHeld = await verifyClaimNotCancelled(
@@ -218,15 +220,17 @@ export async function claimTicketRun(
     }
 
     stage = "register_run";
-    if (kind === "ticket") {
-      await runRegistry.register(ticketKey, runId);
-    } else {
-      await runRegistry.register(ticketKey, runId, kind);
-    }
+    await registerRunWithRetry(runRegistry, ticketKey, runId, kind);
 
     return { started: true, runId };
   } catch (err) {
-    if (claimHeld) {
+    if (startedRunId) {
+      // The workflow started but we could not verify or register it. Abort the
+      // just-started run and KEEP the claim: leaving our sentinel in place stops
+      // a retry from launching a second concurrent run for the same ticket, and
+      // reconcile's stale-claim sweep releases it once the horizon passes.
+      await abortWorkflow(startedRunId, ticketKey);
+    } else if (claimHeld) {
       await runRegistry.unregister(ticketKey).catch(() => {});
     }
     logger.warn(
@@ -235,6 +239,35 @@ export async function claimTicketRun(
     );
     return { started: false, reason: "error" };
   }
+}
+
+/**
+ * Idempotent register with a short retry. register() is an ON CONFLICT DO UPDATE
+ * upsert on active_runs, so re-issuing it is safe; retrying a transient failure
+ * avoids aborting a healthy run over a momentary registry blip. If every attempt
+ * fails the caller's catch aborts the started workflow and keeps the claim so no
+ * duplicate run can be dispatched.
+ */
+async function registerRunWithRetry(
+  runRegistry: RunRegistryAdapter,
+  ticketKey: string,
+  runId: string,
+  kind: RunKind,
+): Promise<void> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      if (kind === "ticket") {
+        await runRegistry.register(ticketKey, runId);
+      } else {
+        await runRegistry.register(ticketKey, runId, kind);
+      }
+      return;
+    } catch (err) {
+      lastError = err;
+    }
+  }
+  throw lastError;
 }
 
 /**

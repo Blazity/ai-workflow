@@ -66,6 +66,7 @@ export async function dispatchPlanApproved(input: {
     return { status: "run_in_flight" };
   }
   let claimHeld = true;
+  let startedRunId: string | null = null;
 
   try {
     // Post-claim fairness re-check (mirrors lib/dispatch.ts): the precheck is
@@ -111,6 +112,7 @@ export async function dispatchPlanApproved(input: {
       },
     };
     const handle = await start(agentWorkflow, [entry]);
+    startedRunId = handle.runId;
     logger.info({ ticketKey, runId: handle.runId }, "plan_approved_workflow_started");
 
     const stillHeld = (await runRegistry.getRunId(ticketKey)) === claimValue;
@@ -120,15 +122,44 @@ export async function dispatchPlanApproved(input: {
       return { status: "run_in_flight" };
     }
 
-    await runRegistry.register(ticketKey, handle.runId);
+    await registerWithRetry(runRegistry, ticketKey, handle.runId);
     claimHeld = false;
     return { status: "started", runId: handle.runId };
   } catch (err) {
-    if (claimHeld) {
+    if (startedRunId) {
+      // The workflow started but we could not verify or register it. Abort the
+      // just-started run and KEEP the claim: leaving our sentinel in place stops
+      // a retry from launching a second run for the same ticket, and reconcile's
+      // stale-claim sweep releases it once the horizon passes.
+      await abortWorkflow(startedRunId);
+    } else if (claimHeld) {
       await runRegistry.unregister(ticketKey).catch(() => {});
     }
     throw err;
   }
+}
+
+/**
+ * Idempotent register with a short retry — register() is an ON CONFLICT DO UPDATE
+ * upsert on active_runs, so retrying a transient failure is safe and avoids
+ * aborting a healthy run. If every attempt fails the caller aborts the started
+ * run and keeps the claim so no duplicate run can be dispatched.
+ */
+async function registerWithRetry(
+  runRegistry: RunRegistryAdapter,
+  ticketKey: string,
+  runId: string,
+): Promise<void> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      await runRegistry.register(ticketKey, runId);
+      return;
+    } catch (err) {
+      lastError = err;
+    }
+  }
+  throw lastError;
 }
 
 /**

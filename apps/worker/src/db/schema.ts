@@ -290,6 +290,30 @@ export const workflowDefinitionVersions = pgTable(
   (t) => [primaryKey({ columns: [t.definitionId, t.version] })],
 );
 
+/**
+ * Enabled trigger bindings — the DB-level guarantee behind "at most one enabled
+ * definition per trigger type". One row per trigger_type currently owned by an
+ * enabled, non-archived definition. trigger_type is the PRIMARY KEY, so a second
+ * definition trying to claim the same trigger fails with a unique violation
+ * (surfaced as the 409 "already handled" path) instead of racing past a
+ * read-then-write overlap check.
+ *
+ * Rows exist ONLY while the owning definition is enabled, so their presence IS
+ * the "enabled = true" predicate — a plain PK on trigger_type is equivalent to a
+ * partial unique index on trigger_type WHERE enabled. A definition with several
+ * trigger nodes gets several rows; enabling inserts them, disabling/archiving
+ * deletes them, saving a new version re-syncs them to the head graph, and
+ * getEnabledWorkflowDefinitionForTrigger repairs any drift (from a crashed
+ * write) on read. ON DELETE CASCADE keeps a binding subordinate to its
+ * definition.
+ */
+export const workflowDefinitionTriggers = pgTable("workflow_definition_triggers", {
+  triggerType: text("trigger_type").primaryKey(),
+  definitionId: integer("definition_id")
+    .notNull()
+    .references(() => workflowDefinitions.id, { onDelete: "cascade" }),
+});
+
 export * from "./auth-schema.js";
 export * from "./email-delivery-schema.js";
 export * from "./approvals-schema.js";

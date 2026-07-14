@@ -188,4 +188,29 @@ describe("dispatchPlanApproved", () => {
     expect(registry.unregister).toHaveBeenCalledWith("AWT-1");
     expect(registry.register).not.toHaveBeenCalled();
   });
+
+  it("aborts the started run and keeps the claim when register fails after start", async () => {
+    // start() succeeded, so a failed post-start register must abort the run and
+    // NOT release the claim, or a retry could launch a second run for the ticket.
+    const mockCancel = vi.fn().mockResolvedValue(undefined);
+    mockGetRun.mockReturnValue({ cancel: mockCancel });
+    const register = vi.fn().mockRejectedValue(new Error("registry write failed"));
+    const registry = makeRegistry({ register });
+
+    await expect(
+      dispatchPlanApproved({
+        db,
+        runRegistry: registry,
+        approval: makeApproval(),
+        actor: { id: "u1", label: "Alice" },
+        maxConcurrentAgents: 3,
+      }),
+    ).rejects.toThrow("registry write failed");
+
+    expect(mockStart).toHaveBeenCalled();
+    expect(register).toHaveBeenCalledTimes(3); // idempotent retry before giving up
+    expect(mockGetRun).toHaveBeenCalledWith("run-dispatched");
+    expect(mockCancel).toHaveBeenCalled(); // started run aborted
+    expect(registry.unregister).not.toHaveBeenCalled(); // claim kept → no duplicate
+  });
 });

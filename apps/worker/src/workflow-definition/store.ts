@@ -1,8 +1,12 @@
 import type { WorkflowBlockType, WorkflowDefinition, WorkflowDefinitionVersion } from "@shared/contracts";
 import { isTriggerBlockType } from "@shared/contracts";
-import { and, arrayContains, arrayOverlaps, asc, desc, eq, isNull, max, ne } from "drizzle-orm";
+import { and, arrayContains, arrayOverlaps, asc, desc, eq, inArray, isNull, max, ne } from "drizzle-orm";
 import type { Db } from "../db/client.js";
-import { workflowDefinitions, workflowDefinitionVersions } from "../db/schema.js";
+import {
+  workflowDefinitions,
+  workflowDefinitionTriggers,
+  workflowDefinitionVersions,
+} from "../db/schema.js";
 import { canEditWorkflowDefinitions, type DashboardRole } from "../lib/auth/roles.js";
 import { DashboardAuthError } from "../lib/auth/users-read.js";
 
@@ -175,22 +179,54 @@ export async function getEnabledWorkflowDefinitionForTrigger(
   db: Db,
   triggerType: WorkflowBlockType,
 ): Promise<{ definition: WorkflowDefinitionRow; current: WorkflowDefinitionVersionRow | null } | null> {
-  const rows = await db
+  // Route via the enabled trigger binding (its trigger_type PK guarantees at
+  // most one owner), then reconcile against the head graph. A crashed
+  // enable/disable/save can leave a binding pointing at a definition that is no
+  // longer enabled, is archived, or whose head version no longer declares this
+  // trigger; repair such drift by dropping the stale binding and reporting no
+  // match. Deriving the trigger set from the stored version keeps dispatch
+  // consistent with the graph head even when the denormalized trigger_types
+  // column drifts (a write that crashed between the version insert and the
+  // column update).
+  const bindingRows = await db
+    .select({ definitionId: workflowDefinitionTriggers.definitionId })
+    .from(workflowDefinitionTriggers)
+    .where(eq(workflowDefinitionTriggers.triggerType, triggerType))
+    .limit(1);
+  const binding = bindingRows[0];
+  if (!binding) return null;
+
+  const defRows = await db
     .select()
     .from(workflowDefinitions)
-    .where(
-      and(
-        eq(workflowDefinitions.enabled, true),
-        isNull(workflowDefinitions.archivedAt),
-        arrayContains(workflowDefinitions.triggerTypes, [triggerType]),
-      ),
-    )
-    .orderBy(asc(workflowDefinitions.id))
+    .where(eq(workflowDefinitions.id, binding.definitionId))
     .limit(1);
-  const row = rows[0];
-  if (!row) return null;
-  const current = await getCurrentWorkflowDefinitionVersion(db, row.id);
-  return { definition: mapDefinitionRow(row), current };
+  const defRow = defRows[0];
+  const current = defRow ? await getCurrentWorkflowDefinitionVersion(db, defRow.id) : null;
+
+  // A definition with no versions falls back to the built-in default, whose
+  // trigger_types column is fixed at seed time and cannot drift from a version.
+  const actualTriggers: WorkflowBlockType[] = current
+    ? triggerTypesOf(current.definition)
+    : ((defRow?.triggerTypes as WorkflowBlockType[]) ?? []);
+  const stale =
+    !defRow ||
+    !defRow.enabled ||
+    defRow.archivedAt != null ||
+    !actualTriggers.includes(triggerType);
+  if (stale) {
+    await db
+      .delete(workflowDefinitionTriggers)
+      .where(
+        and(
+          eq(workflowDefinitionTriggers.triggerType, triggerType),
+          eq(workflowDefinitionTriggers.definitionId, binding.definitionId),
+        ),
+      )
+      .catch(() => {});
+    return null;
+  }
+  return { definition: mapDefinitionRow(defRow!), current };
 }
 
 // --- Writes (role-gated). neon-http (the production driver, also loaded inside
@@ -236,6 +272,77 @@ async function assertNoTriggerOverlap(
       409,
       `Its trigger is already handled by the enabled definition "${conflict.name}"`,
     );
+  }
+}
+
+/** 409 message the DB-level bindings raise when another enabled definition
+ *  already owns one of the triggers (the race the friendly precheck can miss). */
+const TRIGGER_TAKEN_MESSAGE = "Its trigger is already handled by another enabled definition";
+
+/** Claims the enabled trigger bindings for `triggerTypes` under `definitionId`,
+ *  mapping the trigger_type unique violation (another enabled definition already
+ *  owns one) to the 409 the routes surface. Clears this definition's own rows
+ *  first so a retry after a crashed enable can't self-conflict. No-op for an
+ *  empty trigger set (a definition with no trigger can still be enabled). */
+async function claimEnabledTriggers(
+  db: Db,
+  definitionId: number,
+  triggerTypes: WorkflowBlockType[],
+): Promise<void> {
+  await db
+    .delete(workflowDefinitionTriggers)
+    .where(eq(workflowDefinitionTriggers.definitionId, definitionId));
+  if (triggerTypes.length === 0) return;
+  try {
+    await db
+      .insert(workflowDefinitionTriggers)
+      .values(triggerTypes.map((triggerType) => ({ triggerType, definitionId })));
+  } catch (error) {
+    if (isUniqueViolation(error)) {
+      throw new WorkflowDefinitionStoreError(409, TRIGGER_TAKEN_MESSAGE);
+    }
+    throw error;
+  }
+}
+
+/** Reconciles an ENABLED definition's trigger bindings to `newTriggers` after a
+ *  new version changed its trigger set: drops the ones it no longer declares and
+ *  inserts the newly added ones, mapping a collision on an added trigger to the
+ *  409. A disabled definition owns no bindings, so its caller skips this. */
+async function syncEnabledTriggersOnSave(
+  db: Db,
+  definitionId: number,
+  newTriggers: WorkflowBlockType[],
+): Promise<void> {
+  const existingRows = await db
+    .select({ triggerType: workflowDefinitionTriggers.triggerType })
+    .from(workflowDefinitionTriggers)
+    .where(eq(workflowDefinitionTriggers.definitionId, definitionId));
+  const existing = new Set(existingRows.map((r) => r.triggerType));
+  const next = new Set<string>(newTriggers);
+  const toRemove = [...existing].filter((t) => !next.has(t));
+  const toAdd = newTriggers.filter((t) => !existing.has(t));
+  if (toRemove.length > 0) {
+    await db
+      .delete(workflowDefinitionTriggers)
+      .where(
+        and(
+          eq(workflowDefinitionTriggers.definitionId, definitionId),
+          inArray(workflowDefinitionTriggers.triggerType, toRemove),
+        ),
+      );
+  }
+  if (toAdd.length > 0) {
+    try {
+      await db
+        .insert(workflowDefinitionTriggers)
+        .values(toAdd.map((triggerType) => ({ triggerType, definitionId })));
+    } catch (error) {
+      if (isUniqueViolation(error)) {
+        throw new WorkflowDefinitionStoreError(409, TRIGGER_TAKEN_MESSAGE);
+      }
+      throw error;
+    }
   }
 }
 
@@ -340,6 +447,16 @@ export async function saveWorkflowDefinitionVersion(
     return rows[0]!;
   });
 
+  // Safe order: the version is the source of truth, the enabled trigger bindings
+  // are the dispatch metadata derived from it, and trigger_types is a display
+  // copy. Sync the bindings to the new head (only an enabled definition owns any)
+  // before refreshing the display copy, so a crash never leaves the bindings
+  // promising a trigger the head graph dropped. getEnabledWorkflowDefinitionForTrigger
+  // reconciles any residual drift on read.
+  if (definitionRow.enabled) {
+    await syncEnabledTriggersOnSave(db, input.definitionId, triggerTypes);
+  }
+
   await db
     .update(workflowDefinitions)
     .set({ triggerTypes, updatedAt: new Date() })
@@ -372,10 +489,17 @@ export async function updateWorkflowDefinition(
   if (Object.keys(set).length === 0) return mapDefinitionRow(current);
 
   if (input.enabled === true) {
+    // Friendly precheck (names the conflicting definition) followed by the
+    // atomic guard: claiming the trigger bindings trips the trigger_type PK if
+    // another enabled definition already owns one, closing the read-then-write
+    // race two concurrent enables would otherwise both slip through. Claimed
+    // before the row flips so the binding — not the enabled flag — is the point
+    // that serializes; a crash after this heals via reconcile-on-read.
     await assertNoTriggerOverlap(db, {
       definitionId: current.id,
       triggerTypes: current.triggerTypes as WorkflowBlockType[],
     });
+    await claimEnabledTriggers(db, current.id, current.triggerTypes as WorkflowBlockType[]);
   }
 
   set.updatedAt = new Date();
@@ -392,6 +516,14 @@ export async function updateWorkflowDefinition(
       throw new WorkflowDefinitionStoreError(409, "Name already in use");
     }
     throw error;
+  }
+
+  if (input.enabled === false) {
+    // Release the bindings only after the row is disabled, so the trigger is
+    // never briefly free while this definition still reads as enabled.
+    await db
+      .delete(workflowDefinitionTriggers)
+      .where(eq(workflowDefinitionTriggers.definitionId, current.id));
   }
   return mapDefinitionRow(updated);
 }
@@ -428,6 +560,11 @@ export async function archiveWorkflowDefinition(
     .set({ archivedAt: new Date(), updatedAt: new Date() })
     .where(eq(workflowDefinitions.id, input.definitionId))
     .returning();
+  // Defensive: a disabled definition owns no bindings, but drop any a crashed
+  // disable left behind so an archived definition never keeps a trigger.
+  await db
+    .delete(workflowDefinitionTriggers)
+    .where(eq(workflowDefinitionTriggers.definitionId, input.definitionId));
   return mapDefinitionRow(res[0]!);
 }
 
