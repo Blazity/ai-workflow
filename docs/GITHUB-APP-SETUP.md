@@ -84,11 +84,15 @@ Leave everything on **No access**.
 
 ## 5. Subscribe to events
 
-Under **Subscribe to events**, enable exactly one:
+Under **Subscribe to events**, enable these three:
 
-- **Pull request** — fires the `pull_request` event on `opened` / `synchronize` / `reopened` / `closed`. The deployment filters to the actions it cares about; subscribing to the umbrella event is required.
+- **Pull request**: fires the `pull_request` event on `opened` / `synchronize` / `reopened` / `closed`. Drives the `trigger_pr_created` workflow trigger and the post-PR gate. The deployment filters to the actions it cares about; subscribing to the umbrella event is required.
+- **Check run**: fires the `check_run` event when a CI check completes. Drives the `trigger_pr_checks_failed` workflow trigger (re-run the fix flow when a bot PR's checks fail). Needs the `Checks` permission, which is already read & write from step 4.
+- **Pull request review**: fires the `pull_request_review` event when a human submits a review. Drives the `trigger_pr_review` workflow trigger (react to "request changes" reviews on a bot PR). Needs the `Pull requests` permission, which is already read & write from step 4.
 
 Leave every other event unchecked.
+
+> Adding **Check run** and **Pull request review** needs no permission change: `Checks` and `Pull requests` are already read & write (step 4). Event-only changes do not require re-accepting the installation; if GitHub still flags the install as "pending" (step 9), a repo admin accepts it before the new events start delivering.
 
 ## 6. Choose installation scope
 
