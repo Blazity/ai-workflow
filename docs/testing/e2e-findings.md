@@ -209,7 +209,7 @@ Authored a custom definition via API (now that §1 is fixed): `trigger -> call_l
 Authored a stress definition (`trigger -> prepare -> generic_agent -> run_checks -> branch(steps.generic.output.status == 'ok') -> [true] post_ticket_comment -> terminate(done)`), ran AWT-1011:
 - ✅ **generic_agent** ok on codex (produced JSON), **run_checks** ok (ran `ls`/`echo`, report-only), **branch** ok with `path=true` (evaluated the condition on the real agent output and took the true port). Three blocks not previously exercised live, plus the headline control-flow branch, all green in one run; run `success` (ended on `terminate`, so no reconciler status-move gotcha). Allowlist held (only `ai-workflow-demo`).
 
-### Live-exercised blocks so far (18 of 28)
+### Live-exercised blocks so far (15 of 28)
 prepare_workspace, planning_agent, implementation_agent, review_agent, run_pre_pr_checks, open_pr, send_slack_message, update_ticket_status (Tier 0); call_llm, post_ticket_comment, terminate (def run); planning->needs_human_input clarification park (HITL); trigger_ticket_ai; generic_agent, run_checks, branch (stress). NOT yet live (deterministically covered): loop, human_question, finalize_workspace, fix_agent, post_pr_comment, fetch_pr_context, send_plan_approval, trigger_plan_approved, the 3 PR triggers, arthur_injection_check, arthur_trace — these need a real PR webhook (PR flow), a configured Arthur, or a plan-producing agent (approval), so they stay deterministic-only until that integration is wired. Full per-block matrix: `docs/testing/block-reference.md`.
 
 ## 4g. Live HITL clarification confirmed; plan-approval flow gated by planning agent
