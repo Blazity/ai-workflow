@@ -1,7 +1,37 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { BLOCK_PARAM_KEYS } from "@shared/contracts";
 import { serializeWorkflowDefinition } from "./serialize.ts";
 import type { FlowEdgeDef, FlowNodeDef } from "../flows.ts";
+
+test("call_llm allows its provider key (no dashboard/shared drift)", () => {
+  // Guards the drift that dropped call_llm.provider on save: the serializer now
+  // derives its key allowlist from the shared BLOCK_PARAM_KEYS.
+  assert.equal(BLOCK_PARAM_KEYS.call_llm.includes("provider"), true);
+});
+
+test("round-trips call_llm provider through serialization without loss", () => {
+  const nodes: FlowNodeDef[] = [
+    {
+      id: "llm",
+      type: "call_llm",
+      x: 0,
+      y: 0,
+      params: { prompt: "summarize", system: "be terse", model: "gpt-5-codex", provider: "codex" },
+    },
+  ];
+
+  const out = serializeWorkflowDefinition(nodes, []);
+  assert.deepEqual(out.nodes, [
+    {
+      id: "llm",
+      type: "call_llm",
+      x: 0,
+      y: 0,
+      params: { prompt: "summarize", system: "be terse", model: "gpt-5-codex", provider: "codex" },
+    },
+  ]);
+});
 
 test("emits only contract fields and rounds coordinates", () => {
   const nodes: FlowNodeDef[] = [
