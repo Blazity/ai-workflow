@@ -258,3 +258,67 @@ Suite now **1435/1435 green**, deterministic, CI-ready.
 2. ⛔ **Connect the Claude-in-Chrome extension** (user) → the only thing blocking the run-execution tiers (Tier 0-5: agents run, PRs on `blazity/ai-workflow-demo`, cost/telemetry, HITL, plan-approval, PR triggers). Real runs need real AWT tickets, created via Chrome per the goal.
 3. Once connected, run the tiers from `e2e-workflow-test-plan.md` (cheap models; env-pinned to `blazity/ai-workflow-demo`). Custom definitions (branch/loop/HITL/approval) can now be authored via API since §1 is fixed.
 4. Optional hardening: apply the same de-transaction fix to `lib/auth/invites.ts` + `invite-acceptance.ts` before relying on invites on a neon-http deploy.
+
+---
+
+## 7. Full live block coverage (2026-07-14) — 28/28 exercised
+
+Every one of the 28 workflow block types has now been triggered on a real run on the
+`ai-workflow-demo` preview, verified via `GET /runs/block-statuses` (pending → running → ok)
+and each run's `__prepare.repositories == [github:Blazity/ai-workflow-demo]` (allowlist held).
+All runs used codex `gpt-5.4-mini` and stayed on the demo repo only.
+
+Representative run evidence (definition id → run):
+- Default pipeline + agents (Tier 0, 9 blocks): prior AWT-1008..1012 runs.
+- `loop`: def 10, run `…XABZHCV9` (AWT-1014) — `retry` block iterated maxAttempts:2 (`run_checks` ran twice, attempt counter 1→2), then took the `exhausted` edge → comment → terminate.
+- `send_plan_approval` + `trigger_plan_approved`: def 11 — chain1 run `…23E3T3` parked with `awaiting_approval` + wrote an `approval_requests` row; `POST /approvals/{id}/approve` dispatched chain2 run `…0PCSXC` (comment + terminate).
+- `implementation_agent` → `finalize_workspace`: def 13, run `…1R11SG` (AWT-1017) — opened bot PR #292.
+- `trigger_pr_created` + `fetch_pr_context` + `post_pr_comment`: def 12, run `…38JYEQ` (`source: live`, pr_trigger) — fired on PR #292 reopen, commented on the PR.
+- `trigger_pr_checks_failed`: def 14, run `…F9J0GZ` (AWT-1018, PR #293) — fired by a synthetic failing check_run.
+- `trigger_pr_review`: def 15, run `…XVHB9M` (AWT-1019, PR #294) — fired by a human "request changes" review.
+- `fix_agent`: block executed `ok` ("implemented") in a ticket flow (def 13 v2); its downstream `finalize_workspace` needs a real committed diff (see finding 7c).
+
+### 7a. BUG (fixed + deployed): case-sensitive webhook repo guard
+
+`routes/webhooks/github.post.ts` compared `${repo.owner.login}/${repo.name}` against
+`${GITHUB_OWNER}/${GITHUB_REPO}` with `!==`. GitHub delivers `owner.login` as `Blazity`
+(capital) while the demo env sets `GITHUB_OWNER=blazity` (lowercase), so **every** github
+webhook for the demo repo was dropped as `other_repo` — silently disabling all three PR
+triggers (`trigger_pr_created`, `trigger_pr_checks_failed`, `trigger_pr_review`) and the
+post-PR gate. GitHub owner/repo slugs are case-insensitive. Fixed to compare
+`.toLowerCase()` both sides (+ regression test in `github.post.test.ts`), commit `f4bc39a`,
+deployed to the demo. Verified live: the same reopen event that returned `other_repo` before
+the deploy dispatched a run after it.
+
+### 7b. FINDING (open): only the first PR trigger per ticket dispatches; the rest coalesce
+
+A ticket's **first** PR-trigger run dispatches, but a **second** PR-trigger for the same
+ticket (same `blazebot/awt-<n>` branch) returns `{"status":"ignored","reason":"coalesced"}`
+even with an empty `active_runs` registry. Root cause is the `verify_claim_after_start` path
+in `claimTicketRun` (`lib/dispatch.ts`): after `start()` the re-read `getRunId(ticketKey)`
+no longer equals the claim sentinel, so the run is aborted as `already_claimed`. Reproduced
+6× on AWT-1017 after its `trigger_pr_created` run; avoided by testing each PR trigger on a
+**fresh** ticket/PR so it is that ticket's first PR trigger. Worth hardening (a PR can
+legitimately get a checks-failed and a review over its lifetime).
+
+### 7c. Note: `fix_agent` + `finalize_workspace` in a ticket flow
+
+In a ticket-triggered flow, `fix_agent` created the requested file but did not `git commit`
+(agents don't always commit; the commit-guard Stop hook did not force it), so
+`finalize_workspace` failed with "Agent reported success but made no commits" (`preAgentSha`
+unchanged → nothing to push). `implementation_agent` commits reliably, so
+`implementation_agent → finalize_workspace` publishes a PR cleanly (def 13, PR #292).
+`fix_agent`'s designed home is the PR-fix flow where `fetch_pr_context` supplies a real diff
+to act on.
+
+### 7d. Config note: `VCS_BOT_LOGIN` is set on the demo
+
+The bot's own reviews are correctly filtered (`trigger_pr_review` ignored a
+`blazity-ai-workflow[bot]` review as `event_pull_request_review`); a human (non-bot) review
+is required to fire the trigger — confirmed with an `outof-place` review on PR #294.
+
+### 7e. GitHub App change (documented per team request)
+
+Added **Check run** + **Pull request review** event subscriptions to the org App
+`blazity-ai-workflow` (webhook → demo worker only; no permission change, repo access left at
+`all`). Documented in `docs/GITHUB-APP-SETUP.md §5` (commit `81bede4`).
