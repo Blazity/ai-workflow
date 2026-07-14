@@ -24,8 +24,10 @@ vi.mock("../../post-pr-gate/config.js", () => ({
 vi.mock("../../db/client.js", () => ({ getDb: () => ({}) }));
 
 const mockDispatchTriggerEvent = vi.fn();
+const mockResolveEnabledReviewStates = vi.fn();
 vi.mock("../../lib/dispatch-trigger.js", () => ({
   dispatchTriggerEvent: (...args: any[]) => mockDispatchTriggerEvent(...args),
+  resolveEnabledReviewStates: (...args: any[]) => mockResolveEnabledReviewStates(...args),
 }));
 
 const mockDispatchPostPrGateWebhook = vi.fn();
@@ -81,6 +83,56 @@ describe("POST /webhooks/github", () => {
     mocks.env.GITHUB_REPO = undefined;
     mockDispatchPostPrGateWebhook.mockResolvedValue({ status: "dispatched", runId: "gate_run" });
     mockDispatchTriggerEvent.mockResolvedValue({ result: "no_definition" });
+    mockResolveEnabledReviewStates.mockResolvedValue(["changes_requested"]);
+  });
+
+  function reviewBody(state: string, headRef = "blazebot/aiw-1") {
+    return {
+      action: "submitted",
+      repository: repo(),
+      pull_request: {
+        number: 7,
+        html_url: "https://github.com/acme/app/pull/7",
+        head: { ref: headRef, sha: "abc123" },
+        base: { ref: "main" },
+        title: "Fix",
+        body: "desc",
+        user: { login: "human" },
+        draft: false,
+      },
+      review: { state, user: { login: "human" }, body: "please fix" },
+    };
+  }
+
+  it("drops a commented review when the definition only allows changes_requested", async () => {
+    mockResolveEnabledReviewStates.mockResolvedValueOnce(["changes_requested"]);
+
+    const response = await makeApp()(
+      makeRequest(reviewBody("commented"), "pull_request_review"),
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      status: "ignored",
+      reason: "event_pull_request_review",
+    });
+    expect(mockDispatchTriggerEvent).not.toHaveBeenCalled();
+  });
+
+  it("dispatches a commented review when the definition opts into commented", async () => {
+    mockResolveEnabledReviewStates.mockResolvedValueOnce(["changes_requested", "commented"]);
+    mockDispatchTriggerEvent.mockResolvedValueOnce({ result: "started", runId: "run_rv" });
+
+    const response = await makeApp()(
+      makeRequest(reviewBody("commented"), "pull_request_review"),
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ status: "dispatched", runId: "run_rv" });
+    expect(mockDispatchTriggerEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ triggerType: "trigger_pr_review" }),
+      expect.anything(),
+    );
   });
 
   it("starts a definition run and supersedes the gate for a bot PR", async () => {

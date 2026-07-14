@@ -196,12 +196,30 @@ describe("workflowDefinitionSchema block-executor node types", () => {
     expect(shapeOk([node("n", "post_pr_comment", { body: "b", bogus: 1 })])).toBe(false);
   });
 
-  it("accepts empty params on every trigger and rejects unknown keys", () => {
+  it("applies PR-trigger param defaults and rejects unknown keys", () => {
     expect(parseNode({ type: "trigger_plan_approved", params: {} })?.params).toEqual({});
-    expect(parseNode({ type: "trigger_pr_created", params: {} })?.params).toEqual({});
-    expect(parseNode({ type: "trigger_pr_checks_failed", params: {} })?.params).toEqual({});
-    expect(parseNode({ type: "trigger_pr_review", params: {} })?.params).toEqual({});
-    expect(parseNode({ type: "trigger_pr_created", params: { providers: ["github"] } })).toBeNull();
+    expect(parseNode({ type: "trigger_pr_created", params: {} })?.params).toEqual({
+      providers: ["github", "gitlab"],
+      onlyWorkflowOwned: true,
+    });
+    expect(parseNode({ type: "trigger_pr_checks_failed", params: {} })?.params).toEqual({
+      providers: ["github", "gitlab"],
+    });
+    expect(parseNode({ type: "trigger_pr_review", params: {} })?.params).toEqual({
+      providers: ["github"],
+      on: ["changes_requested"],
+    });
+    // Restored params round-trip.
+    expect(
+      parseNode({ type: "trigger_pr_created", params: { onlyWorkflowOwned: false } })?.params,
+    ).toEqual({ providers: ["github", "gitlab"], onlyWorkflowOwned: false });
+    expect(
+      parseNode({ type: "trigger_pr_review", params: { on: ["changes_requested", "commented"] } })
+        ?.params,
+    ).toEqual({ providers: ["github"], on: ["changes_requested", "commented"] });
+    // Unknown keys and out-of-enum values are still rejected (strict).
+    expect(parseNode({ type: "trigger_pr_created", params: { bogus: 1 } })).toBeNull();
+    expect(parseNode({ type: "trigger_pr_review", params: { on: ["approved"] } })).toBeNull();
   });
 
   it("applies action param defaults", () => {
@@ -710,5 +728,99 @@ describe("validateWorkflowGraph rules", () => {
       ],
     );
     expect(validateWorkflowGraph(def)).toEqual([]);
+  });
+
+  it("rule 13: allows planFromStep referencing a block that dominates the approval", () => {
+    const def = graph(
+      [
+        node("t", "trigger_ticket_ai"),
+        node("plan", "planning_agent"),
+        node("approve", "send_plan_approval", { planFromStep: "plan" }),
+      ],
+      [
+        { from: "t", to: "plan" },
+        { from: "plan", to: "approve" },
+      ],
+    );
+    expect(validateWorkflowGraph(def)).toEqual([]);
+  });
+
+  it("rule 13: flags planFromStep referencing an unknown block", () => {
+    const def = graph(
+      [
+        node("t", "trigger_ticket_ai"),
+        node("plan", "planning_agent"),
+        node("approve", "send_plan_approval", { planFromStep: "ghost" }),
+      ],
+      [
+        { from: "t", to: "plan" },
+        { from: "plan", to: "approve" },
+      ],
+    );
+    expect(
+      validateWorkflowGraph(def).some((issue) =>
+        issue.includes('Block "approve" references unknown block "ghost" in planFromStep'),
+      ),
+    ).toBe(true);
+  });
+
+  it("rule 13: flags planFromStep referencing a block on only one branch arm", () => {
+    // "left" runs on the true arm only, so a run reaching "approve" via the false
+    // arm never produced its plan output. It does not dominate the approval.
+    const def = graph(
+      [
+        node("t", "trigger_ticket_ai"),
+        node("split", "branch", { condition: "true" }),
+        node("left", "planning_agent"),
+        node("right", "implementation_agent"),
+        node("approve", "send_plan_approval", { planFromStep: "left" }),
+      ],
+      [
+        { from: "t", to: "split" },
+        { from: "split", to: "left", fromPort: "true" },
+        { from: "split", to: "right", fromPort: "false" },
+        { from: "left", to: "approve" },
+        { from: "right", to: "approve" },
+      ],
+    );
+    expect(
+      validateWorkflowGraph(def).some((issue) =>
+        issue.includes('Block "approve" planFromStep references block "left" which does not run before it'),
+      ),
+    ).toBe(true);
+  });
+
+  it("rule 13: allows contentFromStep referencing a dominator and flags an unknown one", () => {
+    const valid = graph(
+      [
+        node("t", "trigger_ticket_ai"),
+        node("plan", "planning_agent"),
+        node("check", "arthur_injection_check", { contentFromStep: "plan" }),
+        node("done", "open_pr"),
+      ],
+      [
+        { from: "t", to: "plan" },
+        { from: "plan", to: "check" },
+        { from: "check", to: "done" },
+      ],
+    );
+    expect(validateWorkflowGraph(valid)).toEqual([]);
+
+    const invalid = graph(
+      [
+        node("t", "trigger_ticket_ai"),
+        node("check", "arthur_injection_check", { contentFromStep: "ghost" }),
+        node("done", "open_pr"),
+      ],
+      [
+        { from: "t", to: "check" },
+        { from: "check", to: "done" },
+      ],
+    );
+    expect(
+      validateWorkflowGraph(invalid).some((issue) =>
+        issue.includes('Block "check" references unknown block "ghost" in contentFromStep'),
+      ),
+    ).toBe(true);
   });
 });

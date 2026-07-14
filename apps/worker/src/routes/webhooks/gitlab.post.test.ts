@@ -202,21 +202,20 @@ describe("POST /webhooks/gitlab", () => {
     expect(mockDispatchPostPrGateWebhook).not.toHaveBeenCalled();
   });
 
-  it("continues processing when repository scope lookup fails open", async () => {
+  it("denies the event when repository scope lookup fails (fail closed)", async () => {
+    // A failed scope/permission lookup must not let an unverified project through
+    // to dispatch or the gate: fail closed by ignoring the event.
     mocks.listRepositories.mockRejectedValueOnce(new Error("GitLab unavailable"));
-    mockDispatchPostPrGateWebhook.mockResolvedValueOnce({
-      status: "dispatched",
-      runId: "run_123",
-    });
 
     const response = await makeApp()(makeRequest(validMergeRequestPayload()));
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({
-      status: "dispatched",
-      runId: "run_123",
+      status: "ignored",
+      reason: "other_project",
     });
-    expect(mockDispatchPostPrGateWebhook).toHaveBeenCalled();
+    expect(mockDispatchTriggerEvent).not.toHaveBeenCalled();
+    expect(mockDispatchPostPrGateWebhook).not.toHaveBeenCalled();
   });
 
   it("rejects invalid GitLab webhook tokens before dispatch", async () => {

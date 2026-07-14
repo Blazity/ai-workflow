@@ -192,7 +192,24 @@ describe("normalizeGitHubEvent", () => {
     });
   });
 
-  it("maps a commented review to trigger_pr_review", () => {
+  it("drops a commented review by default (untrusted body needs opt-in)", () => {
+    // Default reviewStates is ["changes_requested"] only: a drive-by "commented"
+    // review carries an untrusted body that must not reach fix_agent unless an
+    // operator explicitly opts in.
+    const evt = normalizeGitHubEvent(
+      "pull_request_review",
+      {
+        action: "submitted",
+        repository: githubRepo(),
+        pull_request: githubPr(),
+        review: { state: "commented", user: { login: "human" }, body: "drive-by" },
+      },
+      options,
+    );
+    expect(evt).toBeNull();
+  });
+
+  it("maps a commented review when reviewStates opts into it", () => {
     const evt = normalizeGitHubEvent(
       "pull_request_review",
       {
@@ -201,9 +218,23 @@ describe("normalizeGitHubEvent", () => {
         pull_request: githubPr(),
         review: { state: "commented", user: { login: "human" }, body: "" },
       },
-      options,
+      { ...options, reviewStates: ["changes_requested", "commented"] },
     );
     expect(evt?.pr.review?.state).toBe("commented");
+  });
+
+  it("drops a changes_requested review when reviewStates excludes it", () => {
+    const evt = normalizeGitHubEvent(
+      "pull_request_review",
+      {
+        action: "submitted",
+        repository: githubRepo(),
+        pull_request: githubPr(),
+        review: { state: "changes_requested", user: { login: "human" }, body: "x" },
+      },
+      { ...options, reviewStates: ["commented"] },
+    );
+    expect(evt).toBeNull();
   });
 
   it("ignores an approved review", () => {

@@ -3,7 +3,11 @@ import { env } from "../../../env.js";
 import { PostgresRunRegistry } from "../../adapters/run-registry/postgres.js";
 import { getDb } from "../../db/client.js";
 import { ticketKeyFromBranch } from "../../lib/branch-prefix.js";
-import { dispatchTriggerEvent, type DispatchTriggerResult } from "../../lib/dispatch-trigger.js";
+import {
+  dispatchTriggerEvent,
+  resolveEnabledReviewStates,
+  type DispatchTriggerResult,
+} from "../../lib/dispatch-trigger.js";
 import { verifyGitHubWebhookSignature } from "../../lib/github-webhook-sig.js";
 import { logger } from "../../lib/logger.js";
 import { dispatchPostPrGateWebhook } from "../../lib/post-pr-gate-dispatch.js";
@@ -56,9 +60,16 @@ export default defineEventHandler(async (event) => {
   const gateCheckNames = config.postPrGate.steps.map(
     (step) => `blazebot / ${step.name ?? step.uses}`,
   );
+  // For review events, resolve the enabled definition's `on` set so normalize
+  // drops states the operator has not opted into (default: changes_requested).
+  const reviewStates =
+    ghEvent === "pull_request_review"
+      ? await resolveEnabledReviewStates(getDb())
+      : undefined;
   const evt = normalizeGitHubEvent(ghEvent, body, {
     gateCheckNames,
     botLogin: env.VCS_BOT_LOGIN,
+    ...(reviewStates ? { reviewStates } : {}),
   });
 
   if (evt) {
@@ -74,7 +85,9 @@ export default defineEventHandler(async (event) => {
     // ignores (ignored_not_workflow_owned).
     if (
       ghEvent === "pull_request" &&
-      (result.result === "no_definition" || result.result === "ignored_not_workflow_owned")
+      (result.result === "no_definition" ||
+        result.result === "ignored_not_workflow_owned" ||
+        result.result === "ignored_provider")
     ) {
       return dispatchPostPrGateWebhook(buildGateInput(body, ownerRepo));
     }

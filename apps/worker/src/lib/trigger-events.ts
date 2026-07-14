@@ -13,14 +13,18 @@ export interface TriggerEvent {
 export interface NormalizeGitHubOptions {
   gateCheckNames: readonly string[];
   botLogin?: string;
+  /**
+   * Review states (from the enabled trigger_pr_review node's `on` param) that
+   * may fire a run. Defaults to the safe ["changes_requested"] only: a
+   * "commented" review carries an untrusted body that fix_agent would hand to a
+   * full-permission agent, so it must be opted into explicitly.
+   */
+  reviewStates?: readonly string[];
 }
 
 export const GATE_CHECK_NAME_PREFIX = "blazebot / ";
 
-const GITHUB_REVIEW_STATES: ReadonlySet<string> = new Set([
-  "changes_requested",
-  "commented",
-]);
+export const DEFAULT_REVIEW_STATES: readonly string[] = ["changes_requested"];
 
 const GITHUB_FAILED_CONCLUSIONS: ReadonlySet<string> = new Set([
   "failure",
@@ -82,7 +86,8 @@ export function normalizeGitHubEvent(
     const review = body?.review;
     const pr = body?.pull_request;
     if (!review || !pr) return null;
-    if (!GITHUB_REVIEW_STATES.has(review.state)) return null;
+    const allowedStates = options.reviewStates ?? DEFAULT_REVIEW_STATES;
+    if (!allowedStates.includes(review.state)) return null;
     if (options.botLogin && review.user?.login === options.botLogin) return null;
     return {
       triggerType: "trigger_pr_review",

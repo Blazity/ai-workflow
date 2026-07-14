@@ -53,7 +53,7 @@ function makeRegistry(
   };
 }
 
-function makeEnabledDefinition() {
+function makeEnabledDefinition(params: Record<string, unknown> = {}) {
   return {
     definition: { id: 5, name: "PR flow" },
     current: {
@@ -65,7 +65,7 @@ function makeEnabledDefinition() {
             type: "trigger_pr_created",
             x: 0,
             y: 0,
-            params: {},
+            params,
           },
         ],
         edges: [],
@@ -199,5 +199,75 @@ describe("dispatchTriggerEvent", () => {
       },
     ]);
     expect(registry.register).toHaveBeenCalledWith("AIW-1", "run_pr", "pr_trigger");
+  });
+
+  it("ignores an event whose provider is not in the configured providers list", async () => {
+    mockGetEnabled.mockResolvedValue(makeEnabledDefinition({ providers: ["gitlab"] }));
+    const registry = makeRegistry();
+    const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
+
+    // prEvent() has provider "github", which is excluded by the gitlab-only list.
+    const result = await dispatchTriggerEvent(prEvent(), {
+      db: {} as any,
+      runRegistry: registry,
+      maxConcurrentAgents: 3,
+    });
+
+    expect(result).toEqual({ result: "ignored_provider" });
+    expect(registry.claim).not.toHaveBeenCalled();
+    expect(mockStart).not.toHaveBeenCalled();
+  });
+
+  it("dispatches when the event provider is in the configured providers list", async () => {
+    mockGetEnabled.mockResolvedValue(makeEnabledDefinition({ providers: ["github", "gitlab"] }));
+    const registry = makeRegistry();
+    const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
+
+    const result = await dispatchTriggerEvent(prEvent(), {
+      db: {} as any,
+      runRegistry: registry,
+      maxConcurrentAgents: 3,
+    });
+
+    expect(result).toEqual({ result: "started", runId: "run_pr" });
+  });
+
+  it("enforces workflow-owned by default: ignores a non-blazebot branch", async () => {
+    mockGetEnabled.mockResolvedValue(makeEnabledDefinition({ onlyWorkflowOwned: true }));
+    const registry = makeRegistry();
+    const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
+
+    const result = await dispatchTriggerEvent(prEvent("feature/x"), {
+      db: {} as any,
+      runRegistry: registry,
+      maxConcurrentAgents: 3,
+    });
+
+    expect(result).toEqual({ result: "ignored_not_workflow_owned" });
+    expect(registry.claim).not.toHaveBeenCalled();
+    expect(mockStart).not.toHaveBeenCalled();
+  });
+
+  it("allows a non-workflow-owned PR under a synthetic key when onlyWorkflowOwned is false", async () => {
+    mockGetEnabled.mockResolvedValue(makeEnabledDefinition({ onlyWorkflowOwned: false }));
+    const registry = makeRegistry();
+    const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
+
+    const result = await dispatchTriggerEvent(prEvent("feature/x"), {
+      db: {} as any,
+      runRegistry: registry,
+      maxConcurrentAgents: 3,
+    });
+
+    expect(result).toEqual({ result: "started", runId: "run_pr" });
+    // Non-workflow-owned PRs have no ticket key, so the run is keyed by PR identity.
+    expect(registry.claim).toHaveBeenCalledWith(
+      "pr:github:acme/app:7",
+      expect.stringMatching(/^claiming:\d+$/),
+      "pr_trigger",
+    );
+    expect(mockStart).toHaveBeenCalledWith("agentWorkflow_sentinel", [
+      expect.objectContaining({ kind: "pr_trigger", ticketKey: "pr:github:acme/app:7" }),
+    ]);
   });
 });

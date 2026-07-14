@@ -37,6 +37,9 @@ const agentParams = z
   })
   .strict();
 
+const vcsProviders = z.enum(["github", "gitlab"]);
+const reviewStates = z.enum(["changes_requested", "commented"]);
+
 const triggerNode = z
   .object({ ...baseNodeFields, type: z.literal("trigger_ticket_ai"), params: emptyParams })
   .strict();
@@ -46,15 +49,43 @@ const triggerPlanApprovedNode = z
   .strict();
 
 const triggerPrCreatedNode = z
-  .object({ ...baseNodeFields, type: z.literal("trigger_pr_created"), params: emptyParams })
+  .object({
+    ...baseNodeFields,
+    type: z.literal("trigger_pr_created"),
+    params: z
+      .object({
+        providers: z.array(vcsProviders).default(["github", "gitlab"]),
+        onlyWorkflowOwned: z.boolean().default(true),
+      })
+      .strict(),
+  })
   .strict();
 
 const triggerPrChecksFailedNode = z
-  .object({ ...baseNodeFields, type: z.literal("trigger_pr_checks_failed"), params: emptyParams })
+  .object({
+    ...baseNodeFields,
+    type: z.literal("trigger_pr_checks_failed"),
+    params: z
+      .object({ providers: z.array(vcsProviders).default(["github", "gitlab"]) })
+      .strict(),
+  })
   .strict();
 
+// on: which submitted review states may trigger a run. Defaults to
+// ["changes_requested"] only — a "commented" review carries an untrusted body
+// that fix_agent would feed to a full-permission agent, so operators must opt in
+// to "commented" explicitly.
 const triggerPrReviewNode = z
-  .object({ ...baseNodeFields, type: z.literal("trigger_pr_review"), params: emptyParams })
+  .object({
+    ...baseNodeFields,
+    type: z.literal("trigger_pr_review"),
+    params: z
+      .object({
+        providers: z.array(vcsProviders).default(["github"]),
+        on: z.array(reviewStates).default(["changes_requested"]),
+      })
+      .strict(),
+  })
   .strict();
 
 const planningNode = z
@@ -610,6 +641,37 @@ export function validateWorkflowGraph(def: WorkflowDefinition): string[] {
           `Branch "${node.id}" condition references block "${ref}" which does not run before it.`,
         );
       }
+    }
+  }
+
+  // Step-reference params (send_plan_approval.planFromStep,
+  // arthur_injection_check.contentFromStep) must name a block that exists and
+  // that dominates the referencing block, so the referenced output is always
+  // produced before it is read. Reuses the same dominator set as branches.
+  const stepRefParams: Partial<Record<WorkflowBlockType, string>> = {
+    send_plan_approval: "planFromStep",
+    arthur_injection_check: "contentFromStep",
+  };
+  for (const node of nodes) {
+    const paramKey = stepRefParams[node.type];
+    if (!paramKey) continue;
+    if (!reachable.has(node.id)) continue;
+    const raw = node.params[paramKey];
+    if (typeof raw !== "string") continue;
+    const ref = raw.trim();
+    if (ref === "") continue;
+    if (ref === node.id) {
+      issues.push(`Block "${node.id}" cannot reference itself in ${paramKey}.`);
+      continue;
+    }
+    if (!nodeById.has(ref)) {
+      issues.push(`Block "${node.id}" references unknown block "${ref}" in ${paramKey}.`);
+      continue;
+    }
+    if (!(dominators.get(node.id)?.has(ref) ?? false)) {
+      issues.push(
+        `Block "${node.id}" ${paramKey} references block "${ref}" which does not run before it.`,
+      );
     }
   }
 

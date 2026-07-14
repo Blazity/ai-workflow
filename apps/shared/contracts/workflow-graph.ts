@@ -59,9 +59,9 @@ export function isTriggerBlockType(type: WorkflowBlockType): boolean {
 export const BLOCK_PARAM_KEYS: Record<WorkflowBlockType, readonly string[]> = {
   trigger_ticket_ai: [],
   trigger_plan_approved: [],
-  trigger_pr_created: [],
-  trigger_pr_checks_failed: [],
-  trigger_pr_review: [],
+  trigger_pr_created: ["providers", "onlyWorkflowOwned"],
+  trigger_pr_checks_failed: ["providers"],
+  trigger_pr_review: ["providers", "on"],
   planning_agent: ["provider", "model"],
   implementation_agent: ["provider", "model"],
   review_agent: ["provider", "model"],

@@ -56,7 +56,9 @@ export default defineEventHandler(async (event) => {
     // ignores (ignored_not_workflow_owned).
     if (
       gitLabEvent === "Merge Request Hook" &&
-      (result.result === "no_definition" || result.result === "ignored_not_workflow_owned")
+      (result.result === "no_definition" ||
+        result.result === "ignored_not_workflow_owned" ||
+        result.result === "ignored_provider")
     ) {
       return dispatchMergeRequestGate(body, true);
     }
@@ -135,10 +137,12 @@ async function gitLabProjectIsAllowed(project: GitLabProject): Promise<boolean> 
       (repo) => repo.provider === "gitlab" && repo.repoPath === project.path_with_namespace,
     );
   } catch (err) {
+    // Fail closed: if we cannot confirm the project is in scope, deny the event
+    // rather than letting an unverified project through to dispatch/gate.
     logger.warn(
       { err: (err as Error).message, project },
-      "post_pr_gate_gitlab_webhook_scope_check_failed_open",
+      "post_pr_gate_gitlab_webhook_scope_check_failed_closed",
     );
-    return true;
+    return false;
   }
 }

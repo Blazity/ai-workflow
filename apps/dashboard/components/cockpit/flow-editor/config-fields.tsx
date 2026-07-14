@@ -16,6 +16,35 @@ function str(value: WorkflowParamValue | undefined): string {
   return typeof value === "string" ? value : "";
 }
 
+function arr(value: WorkflowParamValue | undefined): string[] {
+  return Array.isArray(value) ? value.filter((v): v is string => typeof v === "string") : [];
+}
+
+function CheckboxRow({
+  label,
+  checked,
+  disabled,
+  onChange,
+}: {
+  label: string;
+  checked: boolean;
+  disabled: boolean;
+  onChange: (v: boolean) => void;
+}) {
+  return (
+    <label className="flex items-center gap-2 font-body text-xs text-coal">
+      <input
+        type="checkbox"
+        checked={checked}
+        disabled={disabled}
+        onChange={(e) => onChange(e.target.checked)}
+        className="w-3.5 h-3.5 accent-mariner"
+      />
+      {label}
+    </label>
+  );
+}
+
 function ConfigField({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="flex flex-col gap-1 py-2.5 px-[14px] border-b border-neutral-200">
@@ -321,9 +350,47 @@ export function ConfigFields({
     case "trigger_pr_checks_failed":
       return <ConfigNote>Fires when a pull request&apos;s checks report a failure.</ConfigNote>;
     case "trigger_pr_created":
-      return <ConfigNote>Fires when a pull request is opened on a workflow-owned branch.</ConfigNote>;
-    case "trigger_pr_review":
-      return <ConfigNote>Fires when a human submits a review on a workflow-owned pull request.</ConfigNote>;
+      return (
+        <>
+          <ConfigField label="Scope">
+            <CheckboxRow
+              label="Only PRs opened by this workflow"
+              checked={node.params.onlyWorkflowOwned !== false}
+              disabled={!canEdit}
+              onChange={(v) => onChange("params.onlyWorkflowOwned", v)}
+            />
+          </ConfigField>
+          <ConfigNote>Providers are configured in the VCS integration settings.</ConfigNote>
+        </>
+      );
+    case "trigger_pr_review": {
+      const onStates = arr(node.params.on);
+      const effective = onStates.length > 0 ? onStates : ["changes_requested"];
+      const toggle = (value: string) => (checked: boolean) => {
+        const next = checked
+          ? [...new Set([...effective, value])]
+          : effective.filter((s) => s !== value);
+        onChange("params.on", next);
+      };
+      return (
+        <ConfigField label="On review">
+          <div className="flex flex-col gap-1.5">
+            <CheckboxRow
+              label="Changes requested"
+              checked={effective.includes("changes_requested")}
+              disabled={!canEdit}
+              onChange={toggle("changes_requested")}
+            />
+            <CheckboxRow
+              label="Commented (untrusted body, opt-in)"
+              checked={effective.includes("commented")}
+              disabled={!canEdit}
+              onChange={toggle("commented")}
+            />
+          </div>
+        </ConfigField>
+      );
+    }
     case "planning_agent":
     case "implementation_agent":
     case "review_agent":

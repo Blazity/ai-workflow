@@ -52,6 +52,12 @@ function agentModelSummary(node: FlowNodeDef): string | null {
 
 export function nodeSummary(node: FlowNodeDef, options: WorkflowEditorOptions): string | null {
   switch (node.type) {
+    case "trigger_pr_created":
+      return node.params.onlyWorkflowOwned === false ? "any PR" : "workflow-owned only";
+    case "trigger_pr_review": {
+      const on = node.params.on;
+      return Array.isArray(on) && on.length > 0 ? `on ${on.join(", ")}` : null;
+    }
     case "planning_agent":
     case "implementation_agent":
     case "review_agent":
