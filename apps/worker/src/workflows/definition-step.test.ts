@@ -229,11 +229,32 @@ describe("normalizeDefinitionForExecution", () => {
     expect(edges).toEqual([{ from: "t", to: "p" }]);
   });
 
-  it("keeps a graph with an explicit prepare_workspace untouched", () => {
+  it("keeps a graph whose explicit prepare_workspace precedes the sandbox block untouched", () => {
     const nodes = [
       node("t", "trigger_ticket_ai"),
       node("n1", "prepare_workspace"),
       node("n2", "generic_agent", { prompt: "do it" }),
+    ];
+    const edges: WorkflowDefinitionEdge[] = [
+      { from: "t", to: "n1" },
+      { from: "n1", to: "n2" },
+    ];
+
+    const normalized = normalizeDefinitionForExecution(nodes, edges);
+
+    expect(normalized.nodes).toBe(nodes);
+    expect(normalized.edges).toBe(edges);
+  });
+
+  it("injects when an explicit prepare_workspace sits AFTER the sandbox block", () => {
+    // trigger -> generic_agent -> prepare_workspace: the agent would run with no
+    // workspace, so a virtual prepare must still be spliced in before it. A
+    // global "any prepare_workspace exists" check would (wrongly) leave this
+    // graph untouched.
+    const nodes = [
+      node("t", "trigger_ticket_ai"),
+      node("n2", "generic_agent", { prompt: "do it" }),
+      node("n1", "prepare_workspace"),
     ];
     const edges: WorkflowDefinitionEdge[] = [
       { from: "t", to: "n2" },
@@ -242,8 +263,42 @@ describe("normalizeDefinitionForExecution", () => {
 
     const normalized = normalizeDefinitionForExecution(nodes, edges);
 
-    expect(normalized.nodes).toBe(nodes);
-    expect(normalized.edges).toBe(edges);
+    expect(normalized.nodes.map((n) => n.id)).toEqual(["t", "__prepare", "n2", "n1"]);
+    expect(normalized.edges).toEqual([
+      { from: "t", to: "__prepare" },
+      { from: "__prepare", to: "n2" },
+      { from: "n2", to: "n1" },
+    ]);
+  });
+
+  it("auto-prepares a trigger whose chain lacks prepare_workspace even when another trigger's chain has one", () => {
+    // Chain A already prepares before its agent; chain B has a sandbox block with
+    // no prepare. Only B may be auto-prepared; A must be left untouched.
+    const nodes = [
+      node("ta", "trigger_ticket_ai"),
+      node("pa", "prepare_workspace"),
+      node("ga", "generic_agent", { prompt: "do it" }),
+      node("tb", "trigger_plan_approved"),
+      node("impl", "implementation_agent"),
+    ];
+    const edges: WorkflowDefinitionEdge[] = [
+      { from: "ta", to: "pa" },
+      { from: "pa", to: "ga" },
+      { from: "tb", to: "impl" },
+    ];
+
+    const normalized = normalizeDefinitionForExecution(nodes, edges);
+
+    const prepares = normalized.nodes.filter((n) => n.type === "prepare_workspace");
+    expect(prepares.map((n) => n.id).sort()).toEqual(["__prepare", "pa"]);
+    // Chain B gets the virtual prepare spliced between tb and impl.
+    expect(normalized.edges).toContainEqual({ from: "tb", to: "__prepare" });
+    expect(normalized.edges).toContainEqual({ from: "__prepare", to: "impl" });
+    // Chain A's edges are unchanged.
+    expect(normalized.edges).toContainEqual({ from: "ta", to: "pa" });
+    expect(normalized.edges).toContainEqual({ from: "pa", to: "ga" });
+    // No virtual prepare was added to chain A.
+    expect(normalized.edges).not.toContainEqual({ from: "ta", to: "__prepare" });
   });
 
   it("suffixes the virtual id when __prepare is already taken", () => {

@@ -255,6 +255,10 @@ export const execute: BlockExecuteFn = async (_block, _steps, ctx): Promise<Bloc
     await blockPrepareWorkspaceRegisterSandboxStep(ctx.ticket.identifier, sandboxId);
 
     ctx.sandboxId = sandboxId;
+    // Track every provisioned sandbox so a prepare_workspace inside a loop does
+    // not leak the sandboxes from earlier iterations: the engine tears down all
+    // of ctx.sandboxIds on exit, not just the latest ctx.sandboxId.
+    ctx.sandboxIds.add(sandboxId);
     ctx.selectedRepositories = workspaceRepositories;
     ctx.repositoryContexts = repositoryContexts;
 

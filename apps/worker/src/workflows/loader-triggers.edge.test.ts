@@ -156,9 +156,11 @@ describe("normalizeDefinitionForExecution edge cases", () => {
     ]);
   });
 
-  it("short-circuits the whole graph when ANY branch already has a prepare block", () => {
-    // Documents current behavior: nodes.some(prepare) returns the graph
-    // untouched, so t2's branch runs without a prepare_workspace.
+  it("decides per-trigger: leaves the prepared chain alone but injects into the other trigger's chain", () => {
+    // t1 already prepares before its sandbox block; t2's chain has a sandbox
+    // block with no prepare. A global "any prepare exists" short-circuit would
+    // (wrongly) leave t2 running without a workspace; the per-trigger decision
+    // injects a prepare only into t2's chain.
     const nodes = [
       node("t1", "trigger_ticket_ai"),
       node("prep", "prepare_workspace"),
@@ -174,11 +176,17 @@ describe("normalizeDefinitionForExecution edge cases", () => {
 
     const normalized = normalizeDefinitionForExecution(nodes, edges);
 
-    expect(normalized.nodes).toBe(nodes);
-    expect(normalized.edges).toBe(edges);
-    expect(normalized.nodes.filter((n) => n.type === "prepare_workspace")).toHaveLength(1);
-    // t2's successor is still the original, no injected prepare between them.
-    expect(normalized.edges).toContainEqual({ from: "t2", to: "y" });
+    expect(normalized.nodes.filter((n) => n.type === "prepare_workspace").map((n) => n.id)).toEqual([
+      "prep",
+      "__prepare",
+    ]);
+    // t2's chain gets a virtual prepare spliced in; its direct t2->y edge is gone.
+    expect(normalized.edges).toContainEqual({ from: "t2", to: "__prepare" });
+    expect(normalized.edges).toContainEqual({ from: "__prepare", to: "y" });
+    expect(normalized.edges).not.toContainEqual({ from: "t2", to: "y" });
+    // t1's already-prepared chain is untouched.
+    expect(normalized.edges).toContainEqual({ from: "t1", to: "prep" });
+    expect(normalized.edges).toContainEqual({ from: "prep", to: "x" });
   });
 
   it("leaves an explicit toPort on the first segment, dropping it from prepare->successor", () => {

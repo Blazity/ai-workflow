@@ -45,6 +45,7 @@ vi.mock("../../lib/step-adapters.js", () => ({
 
 import type { SelectedRepository } from "../../adapters/vcs/repository-directory.js";
 import { execute, paramsSchema } from "./prepare-workspace.js";
+import { teardownSandboxes } from "../../sandbox/poll-agent.js";
 import { makeCtx, makeNode, makePrPayload } from "./test-support.js";
 
 const repo: SelectedRepository = {
@@ -142,6 +143,32 @@ describe("prepare_workspace execute", () => {
     const kinds = mocks.createAgentAdapter.mock.calls.map((call) => call[0]);
     expect(kinds).toContain("claude");
     expect(kinds).toContain("codex");
+  });
+
+  it("accumulates every provisioned sandbox on ctx.sandboxIds across loop iterations, and teardown covers all", async () => {
+    // A prepare_workspace inside a loop runs once per iteration, provisioning a
+    // fresh sandbox each time and overwriting ctx.sandboxId. All of them must be
+    // tracked so the run tears them all down, not just the last.
+    mocks.runPreSandboxPhase.mockResolvedValue({ status: "continue", selectedRepositories: [repo] });
+    mocks.blockFetchPrContextsStep.mockResolvedValue(contextsFor(repo));
+    mocks.provisionMultiRepo
+      .mockResolvedValueOnce({ sandboxId: "sbx-a" })
+      .mockResolvedValueOnce({ sandboxId: "sbx-b" });
+
+    const ctx = makeCtx({ sandboxId: null, sandboxIds: new Set<string>() });
+
+    await execute(makeNode("prepare_workspace"), {}, ctx);
+    await execute(makeNode("prepare_workspace"), {}, ctx);
+
+    expect(ctx.sandboxId).toBe("sbx-b");
+    expect([...ctx.sandboxIds]).toEqual(["sbx-a", "sbx-b"]);
+
+    const teardown = vi.fn().mockResolvedValue(undefined);
+    await teardownSandboxes(ctx.sandboxIds, teardown);
+
+    expect(teardown).toHaveBeenCalledTimes(2);
+    expect(teardown).toHaveBeenCalledWith("sbx-a");
+    expect(teardown).toHaveBeenCalledWith("sbx-b");
   });
 
   it("maps a pre-sandbox clarification halt to needs_human_input", async () => {

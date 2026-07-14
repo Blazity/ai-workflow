@@ -606,7 +606,7 @@ export async function agentWorkflow(input: string | AgentWorkflowInput) {
   const { env } = await import("../../env.js");
   const { assembleResearchPlanContext, assembleImplementationContext, assembleReviewContext } =
     await import("../sandbox/context.js");
-  const { collectPhase, teardownSandbox } =
+  const { collectPhase, teardownSandboxes } =
     await import("../sandbox/poll-agent.js");
   const { publishWorkspaceChanges } = await import("./workspace-publication.js");
   const { formatUsageReport } = await import("../sandbox/usage.js");
@@ -766,6 +766,7 @@ export async function agentWorkflow(input: string | AgentWorkflowInput) {
       ticket,
       branchName,
       sandboxId: null,
+      sandboxIds: new Set<string>(),
       selectedRepositories: [],
       repositoryContexts: [],
       preSandboxAdditions: { research: [], implementation: [], review: [] },
@@ -1212,9 +1213,10 @@ export async function agentWorkflow(input: string | AgentWorkflowInput) {
         runOutcome = "success";
       }
     } finally {
-      if (ctx.sandboxId) {
-        await teardownSandbox(ctx.sandboxId);
-      }
+      // Tear down EVERY sandbox the run created, not just the latest
+      // ctx.sandboxId: a prepare_workspace inside a loop provisions a fresh
+      // sandbox each iteration, and all but the last would otherwise leak.
+      await teardownSandboxes(ctx.sandboxIds);
     }
   } catch (err) {
     if (currentBlockId) {

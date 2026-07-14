@@ -54,6 +54,7 @@ export function makeCtx(overrides: Partial<EngineCtx> = {}): EngineCtx {
     },
     branchName: "blazebot/awt-1",
     sandboxId: "sbx-1",
+    sandboxIds: new Set<string>(),
     selectedRepositories: [],
     repositoryContexts: [],
     preSandboxAdditions: { research: [], implementation: [], review: [] },

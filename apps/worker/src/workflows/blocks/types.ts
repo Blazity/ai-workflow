@@ -24,8 +24,9 @@ import type { AgentWorkflowInput } from "../agent-input.js";
  * run and passes the same object to every executor.
  *
  * Mutation contract (executors write back through the shared object):
- * - prepare_workspace sets `sandboxId`, `selectedRepositories`,
- *   `repositoryContexts`, `preSandboxAdditions`, and `arthur.taskId`.
+ * - prepare_workspace sets `sandboxId` (and appends to `sandboxIds`),
+ *   `selectedRepositories`, `repositoryContexts`, `preSandboxAdditions`, and
+ *   `arthur.taskId`.
  * - fetch_pr_context refreshes `repositoryContexts`.
  * - finalize_workspace sets `publication`.
  * All other fields are read-only from the executors' perspective.
@@ -46,6 +47,14 @@ export interface EngineCtx {
   branchName: string;
   /** Null until prepare_workspace provisions a sandbox. */
   sandboxId: string | null;
+  /**
+   * Every sandbox id provisioned during the run, in creation order. A
+   * prepare_workspace inside a loop provisions a fresh sandbox per iteration and
+   * overwrites `sandboxId`; the engine tears down all of these on exit so the
+   * earlier ones do not leak. prepare_workspace adds each id here as it sets
+   * `sandboxId`.
+   */
+  sandboxIds: Set<string>;
   /** Empty until prepare_workspace selects repositories. */
   selectedRepositories: WorkspaceRepositoryInput[];
   /** Per-repository PR context (full comment bodies, check results, conflicts). */

@@ -369,3 +369,22 @@ export async function teardownSandbox(sandboxId: string): Promise<void> {
     // Teardown failures are non-critical (sandbox may have already stopped)
   }
 }
+
+/**
+ * Tears down every provided sandbox id, de-duplicated and best-effort: one
+ * failing teardown never skips the rest. Used to clean up all sandboxes a run
+ * created (a prepare_workspace inside a loop makes a fresh one per iteration),
+ * not just the most recent. `teardown` is injectable for tests.
+ */
+export async function teardownSandboxes(
+  sandboxIds: Iterable<string>,
+  teardown: (sandboxId: string) => Promise<void> = teardownSandbox,
+): Promise<void> {
+  for (const sandboxId of new Set(sandboxIds)) {
+    try {
+      await teardown(sandboxId);
+    } catch {
+      // Best-effort: keep tearing down the remaining sandboxes.
+    }
+  }
+}
