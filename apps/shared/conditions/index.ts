@@ -29,6 +29,9 @@ type Token =
 
 class ConditionError extends Error {}
 
+/** Thrown when a sub-expression used in a boolean position evaluates to a non-boolean. */
+export class ConditionTypeError extends Error {}
+
 function isDigit(ch: string): boolean {
   return ch >= "0" && ch <= "9";
 }
@@ -294,8 +297,27 @@ function isArrayOrObject(value: JsonValue): boolean {
   return value !== null && typeof value === "object";
 }
 
-function truthy(value: JsonValue): boolean {
-  return value === true;
+function typeNameOf(value: JsonValue): string {
+  if (value === null) return "null";
+  if (Array.isArray(value)) return "array";
+  return typeof value;
+}
+
+// Only `lit` and `path` can produce a non-boolean here; every other node kind
+// returns a boolean by construction, so those need no rendering.
+function describeNode(node: ConditionAst): string {
+  if (node.kind === "path") return ["steps", node.blockId, "output", ...node.segments].join(".");
+  if (node.kind === "lit") return JSON.stringify(node.value);
+  return node.kind;
+}
+
+function truthy(value: JsonValue, node: ConditionAst): boolean {
+  if (typeof value !== "boolean") {
+    throw new ConditionTypeError(
+      `${describeNode(node)}: expected boolean, got ${typeNameOf(value)}`,
+    );
+  }
+  return value;
 }
 
 function strictEquals(left: JsonValue, right: JsonValue): boolean {
@@ -333,11 +355,17 @@ function evalNode(node: ConditionAst, steps: Record<string, { output: BlockOutpu
     case "path":
       return resolvePath(node, steps);
     case "not":
-      return !truthy(evalNode(node.operand, steps));
+      return !truthy(evalNode(node.operand, steps), node.operand);
     case "and":
-      return truthy(evalNode(node.left, steps)) && truthy(evalNode(node.right, steps));
+      return (
+        truthy(evalNode(node.left, steps), node.left) &&
+        truthy(evalNode(node.right, steps), node.right)
+      );
     case "or":
-      return truthy(evalNode(node.left, steps)) || truthy(evalNode(node.right, steps));
+      return (
+        truthy(evalNode(node.left, steps), node.left) ||
+        truthy(evalNode(node.right, steps), node.right)
+      );
     case "eq":
       return strictEquals(evalNode(node.left, steps), evalNode(node.right, steps));
     case "neq":
@@ -345,10 +373,15 @@ function evalNode(node: ConditionAst, steps: Record<string, { output: BlockOutpu
   }
 }
 
-/** Evaluate a parsed condition against block outputs, coercing the result to a boolean. */
+/**
+ * Evaluate a parsed condition against block outputs.
+ * Throws ConditionTypeError when a boolean position holds a non-boolean, rather
+ * than coercing: silently treating e.g. a `failures` array as false would route
+ * the branch down the wrong port with no signal to the operator.
+ */
 export function evaluateCondition(
   ast: ConditionAst,
   steps: Record<string, { output: BlockOutput }>,
 ): boolean {
-  return truthy(evalNode(ast, steps));
+  return truthy(evalNode(ast, steps), ast);
 }

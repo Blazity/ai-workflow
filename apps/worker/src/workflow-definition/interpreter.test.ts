@@ -217,6 +217,28 @@ describe("executeGraph branch", () => {
     expect(result.steps.br.output.path).toBe("false");
   });
 
+  it("fails via failureExit when the condition yields a non-boolean, taking neither port", async () => {
+    const rec = makeRecorder();
+    const { executor, calls } = makeExecutor();
+    const result = await executeGraph({
+      graph: branchGraph("!steps.trig.output.failures"),
+      entryTriggerId: "trig",
+      triggerOutput: { status: "ok", ok: false, failures: ["lint"] },
+      executeBlock: executor,
+      hooks: rec.hooks,
+    });
+    expect(result.outcome).toBe("stopped");
+    expect(calls).toEqual([]);
+    expect(rec.failures).toHaveLength(1);
+    expect(rec.failures[0].phase).toBe("branch");
+    expect(rec.failures[0].nodeId).toBe("br");
+    expect(rec.failures[0].reason).toBe(
+      "steps.trig.output.failures: expected boolean, got array",
+    );
+    expect(finishStatuses(rec, "br")).toEqual(["fail"]);
+    expect(result.steps.br).toBeUndefined();
+  });
+
   it("fails via failureExit on a condition parse error", async () => {
     const rec = makeRecorder();
     const { executor, calls } = makeExecutor();

@@ -144,10 +144,10 @@ export async function executeGraph(opts: {
         if (parsed.ok) {
           try {
             value = evaluateCondition(parsed.ast, steps);
-            // evaluateCondition throws only when the condition references a block
-            // that never produced an output on this path. The graph validator
-            // rejects such definitions at save time, so at runtime this fails the
-            // run with a clear reason instead of evaluating against null.
+            // evaluateCondition throws when the condition references a block that
+            // never produced an output on this path, or when a boolean position
+            // holds a non-boolean (ConditionTypeError). Neither is coerced: the
+            // run fails here with the reason rather than taking an arbitrary port.
           } catch (error) {
             const message = error instanceof Error ? error.message : String(error);
             const output: BlockOutput = { status: "failed", error: message };

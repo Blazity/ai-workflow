@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { evaluateCondition, parseCondition } from "@shared/conditions";
+import { ConditionTypeError, evaluateCondition, parseCondition } from "@shared/conditions";
 import type { ConditionAst } from "@shared/conditions";
-import type { BlockOutput } from "@shared/contracts";
+import type { BlockOutput, JsonValue } from "@shared/contracts";
 
 function parseOk(src: string): { ast: ConditionAst; refs: string[] } {
   const result = parseCondition(src);
@@ -171,7 +171,9 @@ describe("evaluateCondition semantics (edge cases)", () => {
     const state = steps({ a: { status: "ok" } });
     expect(evalSrc("steps.a.output != null", state)).toBe(true);
     expect(evalSrc("steps.a.output == null", state)).toBe(false);
-    expect(evalSrc("steps.a.output", state)).toBe(false);
+    expect(() => evalSrc("steps.a.output", state)).toThrow(
+      "steps.a.output: expected boolean, got object",
+    );
   });
 
   it("distinguishes an explicit null field", () => {
@@ -187,10 +189,10 @@ describe("evaluateCondition semantics (edge cases)", () => {
     expect(evalSrc("steps.a.output.constructor == null", state)).toBe(true);
   });
 
-  it("coerces a bare non-boolean literal to false", () => {
-    expect(evalSrc("42")).toBe(false);
-    expect(evalSrc('"hi"')).toBe(false);
-    expect(evalSrc("null")).toBe(false);
+  it("rejects a bare non-boolean literal", () => {
+    expect(() => evalSrc("42")).toThrow(ConditionTypeError);
+    expect(() => evalSrc('"hi"')).toThrow(ConditionTypeError);
+    expect(() => evalSrc("null")).toThrow(ConditionTypeError);
   });
 });
 
@@ -199,9 +201,61 @@ describe("evaluateCondition boolean contract", () => {
     expect(typeof evaluateCondition(parseOk('steps.a.output.status == "x"').ast, steps({ a: { status: "y" } }))).toBe(
       "boolean",
     );
-    expect(typeof evaluateCondition(parseOk("steps.a.output.n").ast, steps({ a: { status: "ok", n: 5 } }))).toBe(
+    expect(typeof evaluateCondition(parseOk("steps.a.output.n").ast, steps({ a: { status: "ok", n: true } }))).toBe(
       "boolean",
     );
     expect(typeof evaluateCondition(parseOk("true && false").ast, {})).toBe("boolean");
+  });
+});
+
+describe("evaluateCondition boolean position type errors (edge cases)", () => {
+  const withValue = (value: JsonValue) =>
+    steps({ a: { status: "ok", v: value }, b: { status: "ok", flag: true } });
+
+  const values: [string, JsonValue][] = [
+    ["array", []],
+    ["object", {}],
+    ["string", ""],
+    ["number", 0],
+    ["null", null],
+  ];
+
+  it.each(values)("rejects a %s on the left of '&&'", (typeName, value) => {
+    expect(() => evalSrc("steps.a.output.v && steps.b.output.flag", withValue(value))).toThrow(
+      `steps.a.output.v: expected boolean, got ${typeName}`,
+    );
+  });
+
+  it.each(values)("rejects a %s on the right of '&&'", (typeName, value) => {
+    expect(() => evalSrc("steps.b.output.flag && steps.a.output.v", withValue(value))).toThrow(
+      `steps.a.output.v: expected boolean, got ${typeName}`,
+    );
+  });
+
+  it.each(values)("rejects a %s on the left of '||'", (typeName, value) => {
+    expect(() => evalSrc("steps.a.output.v || steps.b.output.flag", withValue(value))).toThrow(
+      `steps.a.output.v: expected boolean, got ${typeName}`,
+    );
+  });
+
+  it.each(values)("rejects a %s on the right of '||'", (typeName, value) => {
+    expect(() => evalSrc("false || steps.a.output.v", withValue(value))).toThrow(
+      `steps.a.output.v: expected boolean, got ${typeName}`,
+    );
+  });
+
+  it("only type-checks the operands it actually evaluates, preserving short-circuit", () => {
+    const state = withValue([1]);
+    // '&&' never reaches the right operand once the left is false, and '||'
+    // never reaches it once the left is true, so neither sees the array.
+    expect(evalSrc("false && steps.a.output.v", state)).toBe(false);
+    expect(evalSrc("true || steps.a.output.v", state)).toBe(true);
+  });
+
+  it("keeps comparisons boolean inside every boolean position", () => {
+    const state = steps({ a: { status: "ok", n: 1, s: "ok" } });
+    expect(evalSrc('!(steps.a.output.s == "ok")', state)).toBe(false);
+    expect(evalSrc('steps.a.output.n == 1 && steps.a.output.s == "ok"', state)).toBe(true);
+    expect(evalSrc('steps.a.output.n == 2 || steps.a.output.s == "no"', state)).toBe(false);
   });
 });

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { evaluateCondition, parseCondition } from "@shared/conditions";
+import { ConditionTypeError, evaluateCondition, parseCondition } from "@shared/conditions";
 import type { ConditionAst } from "@shared/conditions";
 import {
   BLOCK_PARAM_KEYS,
@@ -107,7 +107,7 @@ describe("evaluateCondition semantics", () => {
   it("resolves missing hops within a present step to null", () => {
     const state = steps({ a: { status: "ok" } });
     expect(evalSrc("steps.a.output.missing == null", state)).toBe(true);
-    expect(evalSrc("steps.a.output.missing", state)).toBe(false);
+    expect(() => evalSrc("steps.a.output.missing", state)).toThrow(ConditionTypeError);
   });
 
   it("throws when the referenced step never produced an output", () => {
@@ -154,15 +154,55 @@ describe("evaluateCondition semantics", () => {
     expect(evalSrc("(true || false) && false")).toBe(false);
   });
 
-  it("coerces only the exact boolean true as truthy", () => {
+  it("accepts real booleans in a boolean position", () => {
     expect(evalSrc("true")).toBe(true);
     expect(evalSrc("false")).toBe(false);
     const withValue = (value: JsonValue) => steps({ a: { status: "ok", v: value } });
     expect(evalSrc("steps.a.output.v", withValue(true))).toBe(true);
-    expect(evalSrc("steps.a.output.v", withValue("true"))).toBe(false);
-    expect(evalSrc("steps.a.output.v", withValue(1))).toBe(false);
-    expect(evalSrc("steps.a.output.v", withValue({}))).toBe(false);
-    expect(evalSrc("steps.a.output.v", withValue("nonempty"))).toBe(false);
+    expect(evalSrc("steps.a.output.v", withValue(false))).toBe(false);
+  });
+});
+
+describe("evaluateCondition boolean position type errors", () => {
+  const withValue = (value: JsonValue) => steps({ a: { status: "ok", v: value } });
+
+  const values: [string, JsonValue][] = [
+    ["array", [1, 2]],
+    ["object", { x: 1 }],
+    ["string", "true"],
+    ["number", 1],
+    ["null", null],
+  ];
+
+  it.each(values)("rejects a top-level %s, naming the path and the actual type", (typeName, value) => {
+    expect(() => evalSrc("steps.a.output.v", withValue(value))).toThrow(ConditionTypeError);
+    expect(() => evalSrc("steps.a.output.v", withValue(value))).toThrow(
+      `steps.a.output.v: expected boolean, got ${typeName}`,
+    );
+  });
+
+  it.each(values)("rejects a %s under '!'", (typeName, value) => {
+    expect(() => evalSrc("!steps.a.output.v", withValue(value))).toThrow(
+      `steps.a.output.v: expected boolean, got ${typeName}`,
+    );
+  });
+
+  it("rejects a non-boolean literal in a boolean position", () => {
+    expect(() => evalSrc("42")).toThrow('42: expected boolean, got number');
+    expect(() => evalSrc('"hi"')).toThrow('"hi": expected boolean, got string');
+    expect(() => evalSrc("null")).toThrow("null: expected boolean, got null");
+  });
+
+  it("fails the run_checks failures array instead of silently taking the true port", () => {
+    // The regression this guards: `!failures` used to evaluate to true even when
+    // checks had failed, because a non-empty array was silently falsy.
+    const state = steps({ checks: { status: "ok", ok: false, failures: ["lint", "types"] } });
+    expect(() => evalSrc("!steps.checks.output.failures", state)).toThrow(
+      "steps.checks.output.failures: expected boolean, got array",
+    );
+    // The boolean sibling keeps working.
+    expect(evalSrc("!steps.checks.output.ok", state)).toBe(true);
+    expect(evalSrc("steps.checks.output.ok", state)).toBe(false);
   });
 });
 
