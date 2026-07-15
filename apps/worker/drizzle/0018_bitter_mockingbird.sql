@@ -1,0 +1,1 @@
+CREATE INDEX "workflow_runs_definition_id_idx" ON "workflow_runs" USING btree ("definition_id");

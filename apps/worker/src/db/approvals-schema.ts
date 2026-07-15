@@ -15,10 +15,13 @@ import {
  * row and ends its run; the dashboard lists pending rows and approves/rejects
  * them, and an approval dispatches a fresh trigger_plan_approved run.
  *
- * The partial unique index keeps at most one pending row per ticket:
- * createApprovalRequest supersedes any existing pending row in the same
- * transaction before inserting, so a re-run of the same ticket can never leave
- * two live approvals competing for one implementation.
+ * The partial unique index keeps at most one pending row per ticket, and it is
+ * the only thing that can: this deployment uses the neon-http driver, which has
+ * no interactive transactions, so createApprovalRequest supersedes the current
+ * pending row and then inserts the new one as two separate statements. The index
+ * is what still guarantees a re-run of the same ticket can never leave two live
+ * approvals competing for one implementation. Do not "restore" a transaction
+ * here: it passes the pglite tests and fails in production.
  */
 export const approvalRequests = pgTable(
   "approval_requests",

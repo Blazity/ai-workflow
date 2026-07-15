@@ -194,10 +194,11 @@ export const workflowRuns = pgTable("workflow_runs", {
     .defaultNow(),
 }, (t) => [
   // Built for querying: active-count by status, time-window stats by startedAt,
-  // per-ticket run history by ticketKey.
+  // per-ticket run history by ticketKey, editor block-status poll by definitionId.
   index("workflow_runs_status_idx").on(t.status),
   index("workflow_runs_started_at_idx").on(t.startedAt),
   index("workflow_runs_ticket_key_idx").on(t.ticketKey),
+  index("workflow_runs_definition_id_idx").on(t.definitionId),
 ]);
 
 export const workflowOwnedBranches = pgTable(
