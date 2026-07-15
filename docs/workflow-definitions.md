@@ -6,6 +6,27 @@ This document describes the four canonical definitions that ship as fixtures in 
 
 Notation: `A -> B` is a default-port edge. `A --port--> B` names the source port (branch `true`/`false`, loop `continue`/`exhausted`). Blocks list only the params they set; everything else uses schema defaults.
 
+## Branch conditions must yield a boolean
+
+A `branch` condition is evaluated against the outputs of blocks that already ran. It must produce
+a real boolean, and anything else fails the run instead of being coerced. Both of these are fine:
+
+- `steps.checks.output.ok` : the field is genuinely a boolean.
+- `steps.planning.output.status == "needs_human_input"` : a comparison always yields a boolean.
+
+This is not fine, and it is the mistake worth knowing about:
+
+- `!steps.checks.output.failures` : `failures` is an **array**, not a boolean. The run fails with
+  `steps.checks.output.failures: expected boolean, got array`.
+
+Coercing instead would be worse than the error. `run_checks` emits `{status, ok, failures}`, so
+under JS truthiness an empty `failures` array is truthy and `!failures` is false, while under
+"only `true` is true" any array is false and `!failures` is true. Either way the branch silently
+takes a port the author did not intend. Failing loud is the only option that cannot lie.
+
+A missing field resolves to null, which is also not a boolean, so test for absence explicitly with
+`steps.a.output.maybe == null` rather than relying on it being falsy.
+
 ---
 
 ## V1 - Standard delivery (linear default)

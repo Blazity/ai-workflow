@@ -9,11 +9,17 @@ unexpected errors.
 **Repository the agent operated on:** `Blazity/ai-workflow-demo` only (hard-enforced, see below).
 **Date:** 2026-07-14.
 
-**Headline result:** all **28** block types were exercised on real runs. Every block reached
-its expected outcome (`ok`, or the intentional `awaiting_input` / `warn` for the
-human-in-the-loop and approval steps, or a deliberate `fail` where we forced a failure).
-Every run stayed on the demo repository. Two real bugs were found and one is fixed and
-deployed; a third finding is documented for follow-up.
+**Headline result:** all **28** block types that existed on 2026-07-14 were exercised on real
+runs. Every block reached its expected outcome (`ok`, or the intentional `awaiting_input` /
+`warn` for the human-in-the-loop and approval steps, or a deliberate `fail` where we forced a
+failure). Every run stayed on the demo repository. Two real bugs were found, and both are now
+fixed and deployed.
+
+> **Update (later on 2026-07-14).** After this report was written, commit `2d0912a` removed the
+> `arthur_trace` block, so the engine now has **27** block types. `arthur_trace` was genuinely
+> exercised here (see section 2) before it was removed; its row is retained below as the record.
+> The coverage claim in current terms is **27/27**. The second bug (4b) has since been fixed too:
+> see the update in that section.
 
 ---
 
@@ -44,7 +50,7 @@ The bot cannot branch, push, or open a PR anywhere else — an allowlist
 
 ---
 
-## 2. Per-block results (28/28)
+## 2. Per-block results (28/28 at the time; 27/27 in current terms)
 
 Result legend: **ok** = ran and completed; **parked (by design)** = intentionally pauses for a
 human (approval / question); **fail (forced)** = we deliberately made it fail to prove the
@@ -105,6 +111,9 @@ error path. "Vehicle" is the test workflow that exercised the block.
 | `arthur_injection_check` | Arthur def — ran a real prompt-injection scan | ok (`status: ok`) | Arthur run |
 | `arthur_trace` | Arthur def (task naming) | ok | Arthur run |
 
+`arthur_trace` ran `ok` here and was **removed later the same day** by `2d0912a`; the row records
+a real result for a block that no longer exists. The other 27 rows are all current blocks.
+
 ---
 
 ## 3. The live "agent is in this step" view
@@ -139,12 +148,18 @@ dropped dispatched a run correctly.
 
 ![PR #293: the failing check `e2e-fail-1018` that fired `trigger_pr_checks_failed`, and the bot's `post_pr_comment` result ("trigger_pr_checks_failed + fetch_pr_context + post_pr_comment verified").](evidence/08-pr-checks-failed.png)
 
-### 4b. Open finding — only the first PR trigger per ticket dispatches
+### 4b. Fixed + deployed: only the first PR trigger per ticket dispatched
 A pull request can legitimately produce more than one trigger over its life (a failing check,
-then a review). Today only the **first** PR trigger for a given ticket dispatches; a second one
-is coalesced away by a claim/verify race in the dispatcher. We worked around it by testing each
-PR trigger on a fresh ticket/PR, and filed it for a proper fix. Details in
-`e2e-findings.md §7b`.
+then a review). At the time of this report only the **first** PR trigger for a given ticket
+dispatched; later ones were coalesced away. During testing we suspected a claim/verify race in
+the dispatcher and worked around it by testing each PR trigger on a fresh ticket/PR.
+
+**That workaround is obsolete, and the suspected cause was wrong.** The real root cause was that
+a run which finished *without* traversing a block that unregisters (`open_pr`, `finalize_workspace`,
+`send_plan_approval`, `terminate`, clarification or failure) left its `active_runs` row behind, so
+the ticket's next PR trigger aborted at `claim()` and reported `coalesced`. `agentWorkflow`'s outer
+`finally` now releases the row on every terminal exit. Fixed in `2d0912a`. Details and the
+regression test in `e2e-findings.md §7b`.
 
 ### 4c. Note — `fix_agent` + `finalize_workspace` in a ticket-only flow
 `fix_agent` runs and reports success, but agents don't always `git commit`, so in a ticket-only
@@ -188,16 +203,18 @@ per run** on codex `gpt-5.4-mini`. Cost is attributed per workflow and per run i
    for `pending → running → ok`, and read `GET /api/v1/runs` for status / model / cost / PR.
 4. Confirm the run's workspace selected only `github:Blazity/ai-workflow-demo`.
 
-For the PR triggers specifically: use a fresh ticket per trigger (finding 4b), and note that a
-`trigger_pr_review` run requires a **human** review — the bot's own reviews are correctly
-filtered out.
+For the PR triggers specifically: note that a `trigger_pr_review` run requires a **human** review,
+the bot's own reviews are correctly filtered out. The "use a fresh ticket per trigger" step this
+report originally required is **no longer needed** now that 4b is fixed: one ticket can take
+several PR triggers over its life.
 
 ---
 
 ## 8. What is not covered live, and why
 
-Nothing is uncovered: all 28 block types ran on real workflows. The two intentional
-"pauses" (`human_question`, `send_plan_approval`) are shown parking as designed, and the one
-`fail` (`finalize_workspace` with no committed changes) is an intentional error-path check, not
-a defect. The open dispatcher finding (4b) did not block coverage — every PR trigger was proven
-on a fresh ticket.
+Nothing is uncovered: all 28 block types that existed at the time ran on real workflows (27 in
+current terms, after `arthur_trace` was removed). The two intentional "pauses" (`human_question`,
+`send_plan_approval`) are shown parking as designed, and the one `fail` (`finalize_workspace` with
+no committed changes) is an intentional error-path check, not a defect. The dispatcher finding (4b)
+did not block coverage: every PR trigger was proven on a fresh ticket, and that finding has since
+been fixed.

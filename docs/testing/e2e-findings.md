@@ -88,9 +88,11 @@ This is driver-agnostic (works on both neon-http prod and pglite tests), needs n
 
 **Validated en route:** T7.3 live — moving a ticket out of the AI column cancels its ticket-kind run (`status: blocked`, no PR). ✅
 
-## 2. Block registry (28 blocks)
+## 2. Block registry (28 blocks at the time; 27 today)
 
-From `@shared/contracts` `BLOCK_TYPE_SPECS` + `BLOCK_PARAM_KEYS` and `schema.ts` params.
+From `@shared/contracts` `BLOCK_TYPE_SPECS` + `BLOCK_PARAM_KEYS` and `schema.ts` params. The
+`arthur_trace` row below was removed from the engine by `2d0912a`; the current list is the other
+27 (`apps/shared/contracts/domain.ts`, `WorkflowBlockType`).
 
 | Block | Category | Ports (+failure) | Params |
 |---|---|---|---|
@@ -129,7 +131,7 @@ From `@shared/contracts` `BLOCK_TYPE_SPECS` + `BLOCK_PARAM_KEYS` and `schema.ts`
 
 Not defects; candidates to drop for a leaner tool depending on which flows are in scope.
 
-- **arthur_injection_check, arthur_trace** — Arthur-specific security tracing. Dead weight unless Arthur is actually wired for the demo/customer. Strongest removal candidates if Arthur is out of scope.
+- **arthur_injection_check, arthur_trace** — Arthur-specific security tracing. Dead weight unless Arthur is actually wired for the demo/customer. Strongest removal candidates if Arthur is out of scope. **Acted on:** `arthur_trace` was removed in `2d0912a` (its only effect was a static pre-scan that did not need the node to be reached); `arthur_injection_check` was kept, and it does real work when Arthur is provisioned (§7 ran a real prompt-injection scan through it).
 - **The 3 PR triggers + fetch_pr_context** — only used by PR-driven flows (auto-fix on failed checks / review). If the product is ticket→PR only, these five (`trigger_pr_created/checks_failed/review`, `fetch_pr_context`, arguably `post_pr_comment`) are optional.
 - **run_checks vs run_pre_pr_checks** — overlap. `run_pre_pr_checks` runs checks + agent fix-cycles; `run_checks` is report-only. Could consolidate to one block with a "fix cycles" param.
 - **send_slack_message** — the runtime already auto-sends Slack notifications (`notifyTicket`: started/needs_clarification/pr_ready/failed/…). The explicit block only adds custom ad-hoc messages; redundant if custom copy isn't needed.
@@ -209,14 +211,18 @@ Authored a custom definition via API (now that §1 is fixed): `trigger -> call_l
 Authored a stress definition (`trigger -> prepare -> generic_agent -> run_checks -> branch(steps.generic.output.status == 'ok') -> [true] post_ticket_comment -> terminate(done)`), ran AWT-1011:
 - ✅ **generic_agent** ok on codex (produced JSON), **run_checks** ok (ran `ls`/`echo`, report-only), **branch** ok with `path=true` (evaluated the condition on the real agent output and took the true port). Three blocks not previously exercised live, plus the headline control-flow branch, all green in one run; run `success` (ended on `terminate`, so no reconciler status-move gotcha). Allowlist held (only `ai-workflow-demo`).
 
-### Live-exercised blocks so far (15 of 28)
-prepare_workspace, planning_agent, implementation_agent, review_agent, run_pre_pr_checks, open_pr, send_slack_message, update_ticket_status (Tier 0); call_llm, post_ticket_comment, terminate (def run); planning->needs_human_input clarification park (HITL); trigger_ticket_ai; generic_agent, run_checks, branch (stress). NOT yet live (deterministically covered): loop, human_question, finalize_workspace, fix_agent, post_pr_comment, fetch_pr_context, send_plan_approval, trigger_plan_approved, the 3 PR triggers, arthur_injection_check, arthur_trace — these need a real PR webhook (PR flow), a configured Arthur, or a plan-producing agent (approval), so they stay deterministic-only until that integration is wired. Full per-block matrix: `docs/testing/block-reference.md`.
+### Live-exercised blocks so far (15 of 28): superseded, see §7
+
+**Snapshot taken mid-campaign; §7 below closed this gap to 28/28 the same day (27/27 after
+`arthur_trace` was removed).** Kept as the progress record.
+
+prepare_workspace, planning_agent, implementation_agent, review_agent, run_pre_pr_checks, open_pr, send_slack_message, update_ticket_status (Tier 0); call_llm, post_ticket_comment, terminate (def run); planning->needs_human_input clarification park (HITL); trigger_ticket_ai; generic_agent, run_checks, branch (stress). Not yet live at this point (deterministically covered): loop, human_question, finalize_workspace, fix_agent, post_pr_comment, fetch_pr_context, send_plan_approval, trigger_plan_approved, the 3 PR triggers, arthur_injection_check, arthur_trace: these needed a real PR webhook (PR flow), a configured Arthur, or a plan-producing agent (approval); all of that was wired later the same day (§7). Full per-block matrix: `docs/testing/block-reference.md`.
 
 ## 4g. Live HITL clarification confirmed; plan-approval flow gated by planning agent
 
 Authored a V3 approval definition via API (chain 1: trigger_ticket_ai -> prepare -> planning -> send_plan_approval; chain 2: trigger_plan_approved -> post_ticket_comment -> terminate), enabled it, ran ticket AWT-1010:
 - ✅ **HITL clarification live**: the planning agent returned `needs_human_input`, the run took the clarification exit (block `warn`, run `success`), and the ticket was parked to backlog with a `needs-clarification` label. Confirms the end-and-re-enter HITL path with the real agent.
-- ⚠️ The plan-approval WRITE path (`createApprovalRequest`, one of the P0-transaction-fixed writers) was NOT reached live because `send_plan_approval` only runs after a plan is produced, and this demo's planning agent tends to ask for clarification on any not-fully-specified ticket (also visible on AWT-867). So the approval mechanism is validated at the unit level (approvals store tests in the 1435 suite) and via the identical transaction-removal pattern proven live on definition writes (create/save/enable 500 -> 200), but a full send_plan_approval -> approve -> chain-2 dispatch was not demonstrated live. To show it live, feed a fully-specified ticket the planning agent will not clarify.
+- ⚠️ The plan-approval WRITE path (`createApprovalRequest`, one of the P0-transaction-fixed writers) was NOT reached live because `send_plan_approval` only runs after a plan is produced, and this demo's planning agent tends to ask for clarification on any not-fully-specified ticket (also visible on AWT-867). So the approval mechanism is validated at the unit level (approvals store tests in the deterministic suite) and via the identical transaction-removal pattern proven live on definition writes (create/save/enable 500 -> 200), but a full send_plan_approval -> approve -> chain-2 dispatch was not demonstrated live *at this point*. To show it live, feed a fully-specified ticket the planning agent will not clarify. **Superseded: §7 did exactly that** and demonstrated the full chain live (def 11: chain1 run `…23E3T3` parked with `awaiting_approval` and wrote an `approval_requests` row; approving it dispatched chain2 run `…0PCSXC`).
 
 ## 4e. Engine regression test suite (214 new deterministic tests)
 
@@ -239,7 +245,9 @@ Rather than only clicking Jira tickets, the engine now has a real, repeatable, C
 - Extracted two pure helpers so previously-inline logic is unit-testable + cleaner: `resolveRunDefaultKind(labelOverride, envAgentKind)` (resolve-agent.ts) and `resolveTicketMoveTarget(target)` (new ticket-move-target.ts); agent.ts calls them. Documented the defensive branch-eval catch in interpreter.ts. Behavior-preserving (3 adversarial verifiers confirmed), +5 tests.
 - Added `run-telemetry-integration.test.ts` (4 tests): drives the REAL interpreter (buildRuntimeGraph/executeGraph) + REAL telemetry writers (recordBlockStatuses/recordRunUsage) against a REAL pglite DB, asserting persisted block_statuses jsonb + workflow_runs fields (status/model/costUsd/costKnown/tokens/phases/pr) for happy, needs_human_input, and failed (with/without failure edge) runs. A verifier mutation-tested it (breaking the writer's ON CONFLICT made all 4 fail) so it genuinely bites. Known limit: a full `agentWorkflow` run (Target A) is infeasible to fake (WDK use-workflow + real sandbox/Jira/GitHub), so the harness reconstructs agent.ts's orchestration around the real writers rather than importing it; it locks the writers + interpreter, not agent.ts's own use of them. Follow-up: extract agent.ts's hook-wiring into a shared helper so the integration test can import the real thing.
 
-Suite now **1435/1435 green**, deterministic, CI-ready.
+Suite was **1435/1435 green** at this point, deterministic, CI-ready. (Current as of 2026-07-15:
+worker **1536 passed across 132 files**, dashboard **118 passed**, 0 failed; the counts above are
+the record at each step.)
 
 ## 5. Verified so far (live, on preview)
 
@@ -261,12 +269,16 @@ Suite now **1435/1435 green**, deterministic, CI-ready.
 
 ---
 
-## 7. Full live block coverage (2026-07-14) — 28/28 exercised
+## 7. Full live block coverage (2026-07-14) — 28/28 exercised (27/27 in current terms)
 
-Every one of the 28 workflow block types has now been triggered on a real run on the
-`ai-workflow-demo` preview, verified via `GET /runs/block-statuses` (pending → running → ok)
+Every one of the 28 workflow block types that existed on 2026-07-14 was triggered on a real run on
+the `ai-workflow-demo` preview, verified via `GET /runs/block-statuses` (pending → running → ok)
 and each run's `__prepare.repositories == [github:Blazity/ai-workflow-demo]` (allowlist held).
 All runs used codex `gpt-5.4-mini` and stayed on the demo repo only.
+
+> **Update:** later on 2026-07-14, commit `2d0912a` removed the `arthur_trace` block, leaving **27**
+> block types. `arthur_trace` was really exercised (Arthur def, `ok`) before removal; coverage in
+> current terms is **27/27**. The evidence below is unchanged.
 
 Representative run evidence (definition id → run):
 - Default pipeline + agents (Tier 0, 9 blocks): prior AWT-1008..1012 runs.
@@ -290,16 +302,48 @@ post-PR gate. GitHub owner/repo slugs are case-insensitive. Fixed to compare
 deployed to the demo. Verified live: the same reopen event that returned `other_repo` before
 the deploy dispatched a run after it.
 
-### 7b. FINDING (open): only the first PR trigger per ticket dispatches; the rest coalesce
+### 7b. BUG (fixed): only the first PR trigger per ticket dispatched; the rest coalesced
 
-A ticket's **first** PR-trigger run dispatches, but a **second** PR-trigger for the same
-ticket (same `blazebot/awt-<n>` branch) returns `{"status":"ignored","reason":"coalesced"}`
-even with an empty `active_runs` registry. Root cause is the `verify_claim_after_start` path
-in `claimTicketRun` (`lib/dispatch.ts`): after `start()` the re-read `getRunId(ticketKey)`
-no longer equals the claim sentinel, so the run is aborted as `already_claimed`. Reproduced
-6× on AWT-1017 after its `trigger_pr_created` run; avoided by testing each PR trigger on a
-**fresh** ticket/PR so it is that ticket's first PR trigger. Worth hardening (a PR can
-legitimately get a checks-failed and a review over its lifetime).
+**Symptom (as observed).** A ticket's **first** PR-trigger run dispatched, but a **second**
+PR-trigger for the same ticket (same `blazebot/awt-<n>` branch) returned
+`{"status":"ignored","reason":"coalesced"}`. Reproduced 6× on AWT-1017 after its
+`trigger_pr_created` run. This matters because a PR legitimately gets both a checks-failed and a
+review over its lifetime.
+
+**Root cause (confirmed).** A run that completes **without traversing a block that unregisters**
+(`open_pr` / `finalize_workspace` / `send_plan_approval` / `terminate` / clarification / failure)
+left its `active_runs` row registered. A PR-review flow that only posts a comment is exactly such a
+graph. The stale row then made the ticket's **next** `pr_trigger` abort at `claim()`
+(`INSERT … ON CONFLICT DO NOTHING` returns false → `already_claimed` → `coalesced`), until
+reconcile's cron eventually swept it.
+
+**The originally suspected cause was wrong.** This finding first blamed the
+`verify_claim_after_start` path in `claimTicketRun` (`lib/dispatch.ts`). That is **not** it:
+`verify_claim_after_start` passes on a clean registry, and there is now a test asserting exactly
+that, to keep the disproved theory from coming back
+(`lib/dispatch-pr-trigger-coalesce.test.ts:128`, "verify_claim_after_start passes on a clean
+registry (disproves the suspected cause)"). The original report also stated the registry was empty
+at the time; that cannot have been the state `claim()` saw, given the confirmed cause. Exactly how
+that observation was made (wrong ticket, or read after reconcile had already swept the row) was
+never established, and is not worth re-establishing now that the behavior is fixed and covered.
+
+**Fix (`2d0912a`).** `agentWorkflow`'s outer `finally` now releases the slot on every terminal
+exit: `unregisterRunIfCurrent(ticket.identifier, workflowRunId)`
+(`workflows/agent.ts:1301`), backed by the compare-and-delete `unregisterIfRunId`
+(`adapters/run-registry/postgres.ts:58`), which deletes only when the row still holds this run's
+id.
+
+**Why the release is runId-scoped and must stay that way.** A run can unregister mid-flight
+(`open_pr` / `finalize_workspace` release the slot *before* creating the PR), and that PR creation
+can dispatch a successor `pr_trigger` run which reclaims the ticket. A bare delete-by-`ticketKey`
+in the `finally` would then stomp the successor's still-live row, yielding **two concurrent runs
+for one ticket**, a worse bug than the one being fixed. Scoping to `workflowRunId` makes that case
+a harmless no-op. Anyone simplifying this to a plain `unregister(ticketKey)` reintroduces it.
+
+**The old workaround is obsolete.** "Test each PR trigger on a fresh ticket/PR" is no longer
+necessary; one ticket now takes successive PR triggers. Regression coverage:
+`lib/dispatch-pr-trigger-coalesce.test.ts` (faithful in-memory model of `PostgresRunRegistry`) plus
+`adapters/run-registry/postgres.test.ts` for the compare-and-delete itself.
 
 ### 7c. Note: `fix_agent` + `finalize_workspace` in a ticket flow
 

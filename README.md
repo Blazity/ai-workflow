@@ -108,6 +108,30 @@ flowchart TD
     R -.-> R4["Stale failed-ticket markers"]
 ```
 
+## Workflow Definitions
+
+The pipeline above is a **workflow definition**: a graph of typed blocks stored in Postgres, not a hardcoded sequence. The built-in default definition reproduces exactly the research → implementation → checks → PR flow described above, so a fresh install behaves as documented with nothing to author. Editing it is optional.
+
+The dashboard ships a drag-and-drop **workflow editor** that authors that graph: drop blocks onto a canvas, wire their ports, set per-block params, choose a provider/model per agent block, and save. Definitions are versioned with history and one-click restore, validated on save (a graph that could not run is rejected with a precise error instead of failing mid-run), and each run renders **live** on the canvas, with blocks lighting up as the agent reaches them.
+
+**27 block types** are available, in the palette's nine groups:
+
+| Group | Blocks | What it adds |
+|-------|--------|-------------|
+| Triggers | `trigger_ticket_ai`, `trigger_plan_approved`, `trigger_pr_created`, `trigger_pr_checks_failed`, `trigger_pr_review` | Entry points: a ticket entering the AI column, an approved plan, or a PR/MR event on a workflow-owned branch |
+| Agents | `planning_agent`, `implementation_agent`, `review_agent`, `fix_agent`, `generic_agent` | Coding-agent phases in the sandbox, each with its own provider/model |
+| Workspace | `prepare_workspace`, `finalize_workspace` | Repository selection, branches, sandbox provisioning; publish + PR |
+| Control | `branch`, `loop`, `terminate` | Conditional routing on any earlier block's output, bounded retry, explicit terminal status |
+| Human | `send_plan_approval`, `human_question` | Park the run for a human decision and resume when it arrives |
+| Ticket | `update_ticket_status`, `post_ticket_comment` | Ticket side effects |
+| Version control | `open_pr`, `post_pr_comment`, `fetch_pr_context` | PR/MR side effects and read-back |
+| Utility | `run_pre_pr_checks`, `run_checks`, `call_llm`, `send_slack_message` | Checks, a single in-process LLM call, notifications |
+| Arthur | `arthur_injection_check` | Optional prompt-injection screen (requires Arthur) |
+
+This expresses flows the fixed two-phase pipeline could not: **PR triggers** (a failing check or a human "request changes" review starts an automated fix run), **plan approval** (the run parks until a human approves the plan, then re-enters straight into implementation), branching on a check result, and bounded retry loops.
+
+**See [docs/workflow-definitions.md](./docs/workflow-definitions.md)** for the definition format, the full block catalog, trigger routing and precedence, and the deprecation of the in-repo YAML pipelines.
+
 ## Tech Stack
 
 | Component | Technology | Purpose |
@@ -139,6 +163,8 @@ VCS setup guides:
 ### One workflow, two phases
 
 There is a single durable workflow — `agentWorkflow` in [`apps/worker/src/workflows/agent.ts`](./apps/worker/src/workflows/agent.ts) — that handles both fresh tickets and review-fix re-runs. The branching happens at *context-assembly* time, not at the workflow level: if an open PR for `blazebot/{ticket-key}` already exists, its comments, check results, and conflict status are folded into the agent's input.
+
+> The step table below walks the **default definition**'s shape, which is the two-phase pipeline most runs take. The phases are blocks in a graph, not a hardcoded sequence: a saved definition can add, remove, or reorder them, and can enter from a PR event or a plan approval instead of a ticket. See [Workflow Definitions](#workflow-definitions) above and [docs/workflow-definitions.md](./docs/workflow-definitions.md). `agentWorkflow` is the durable host in every case, so the sandbox, registry, and teardown mechanics described here apply to any definition.
 
 | Step | What happens |
 |------|-------------|
@@ -241,6 +267,8 @@ The sandbox is **always destroyed** after each run (in a `finally` block), wheth
 ### Post-PR Gate
 
 PR creation isn't the end of the pipeline. A separate durable workflow — `postPrGateWorkflow` in [`apps/worker/src/workflows/post-pr-gate.ts`](./apps/worker/src/workflows/post-pr-gate.ts) — is triggered by GitHub/GitLab webhooks on workflow-owned `blazebot/*` branches and runs configurable checks against the PR, surfacing each step as a check run / commit status on the head SHA. Steps are configured via `post-pr-gate.yaml` (v1 ships `pr-title-format` and `code-hygiene`); locking, dedupe, and force-push handling live in the Postgres gate tables. See [docs/post-pr-gate-spec.md](./docs/post-pr-gate-spec.md).
+
+> **`post-pr-gate.yaml` is deprecated.** PR-trigger definitions now absorb the gate: on a bot PR, a matched enabled definition supersedes it (gate precedence). The file is optional, and when absent the loader returns a built-in default equal to the previously shipped YAML. A present file whose content differs from that default still loads, but logs a `post_pr_gate_yaml_deprecated` warning. The gate itself still runs for non-bot PRs and for PRs with no matching definition. See [docs/workflow-definitions.md](./docs/workflow-definitions.md).
 
 ### Run Registry and Reconciliation
 

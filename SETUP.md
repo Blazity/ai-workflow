@@ -298,8 +298,24 @@ This is enough for password-only dashboard login. SSO and Resend are optional wo
 | `SSO_ISSUER`, `SSO_ALLOWED_DOMAIN`, `SSO_CLIENT_ID`, `SSO_CLIENT_SECRET` | unset | Optional SSO config. Set all four together, or leave all four unset for password-only login. |
 | `RESEND_API_KEY`, `RESEND_FROM_EMAIL`         | unset                                                                                                                                                       | Optional email delivery config. `RESEND_API_KEY` requires `RESEND_FROM_EMAIL`.                                                    |
 | `RESEND_WEBHOOK_SECRET`                       | unset                                                                                                                                                       | Optional Resend webhook signing secret. Requires `RESEND_API_KEY`.                                                               |
+| `AGENT_ALLOWED_REPOS`                         | empty (**unrestricted**, see below)                                                                                                                         | Comma-separated `owner/repo` allowlist of every repository the agent may read, branch, or open a PR on (case-insensitive, exactly one slash per entry). **Fails open when empty.**  |
+| `DASHBOARD_TRUSTED_ORIGINS`                   | empty (only `DASHBOARD_ORIGIN` is trusted)                                                                                                                  | Extra origins trusted for dashboard login on top of `DASHBOARD_ORIGIN`, e.g. a preview deployment's stable alias. Comma-separated; each entry must be a full origin URL (scheme included) or startup validation fails. `DASHBOARD_ORIGIN` remains the canonical origin for links and SSO redirects. |
+| `VCS_BOT_LOGIN`                               | unset (the bot's own reviews are not filtered)                                                                                                              | Login of the bot's own VCS account. When set, PR reviews authored by it are ignored so the bot cannot trigger a run off its own review (`trigger_pr_review`). For a GitHub App this is usually `<app-slug>[bot]`. |
 
 `env.ts` cross-validates at startup — missing required vars or wrong combinations (e.g. `VCS_KIND=github` without `GITHUB_OWNER`) crash the process with a precise error.
+
+#### `AGENT_ALLOWED_REPOS` fails open: read this before your first run
+
+`AGENT_ALLOWED_REPOS` is the hard guard on which repositories the agent may ever touch. It both filters repository discovery and hard-guards branch/PR creation, so an off-list repo fails the run with `Refusing to branch <repo>: not in AGENT_ALLOWED_REPOS` rather than being silently skipped.
+
+**When it is empty or unset, there is no restriction: the agent may act on _any_ repository your VCS App installation can reach.** That is the intended default for the multi-repo product, but it is a fail-open default, so decide deliberately rather than inheriting it:
+
+- **Set it** to pin runs to an explicit list. Strongly recommended for a first deploy, a demo, or any environment whose App installation is scoped to more than the repos you want touched. Example: `AGENT_ALLOWED_REPOS=your-org/your-repo,your-org/another-repo`.
+- **Leave it empty** only when you genuinely intend every installed repository to be in scope. Restrict the App installation itself as well: the allowlist is defense-in-depth, not a substitute for installation scope.
+
+Both failure modes are logged rather than silent: an empty effective allowlist logs a one-time `warn` on startup, and any entry that is not a valid `owner/repo` path logs an `error` naming it. Malformed entries are ignored **individually**, so a single typo cannot silently widen the allowlist to "all" as long as one valid entry remains.
+
+Unlike most variables here, `AGENT_ALLOWED_REPOS` is read from `process.env` directly (in `apps/worker/src/lib/repo-allowlist.ts`) rather than through the validated `env.ts` singleton, so it is deliberately absent from `env.ts` and a malformed value will not crash startup.
 
 Pre-PR checks (per-repo commands run before push/PR creation) are configured in the dashboard:
 **Pre-PR checks** in the cockpit sidebar. Admins and owners can edit; changes are versioned with

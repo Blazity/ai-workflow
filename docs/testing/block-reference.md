@@ -1,58 +1,59 @@
 # Workflow engine block reference
 
-Per-block reference for the workflow engine's **28 block types**, grouped into **9 groups**. Sourced from a multi-agent audit of the block executors, schemas, and test suites.
+Per-block reference for the workflow engine's **27 block types**, grouped into **9 groups**. Sourced from a multi-agent audit of the block executors, schemas, and test suites.
+
+> **Coverage note (updated after the 2026-07-14 e2e campaign).** This document was first written at 08:26 on 2026-07-14, while live coverage was still being closed out. Its original body recorded 9 live-exercised blocks and a mid-campaign update recorded 15. The campaign finished that afternoon at **28/28 live-exercised**, block by block with per-run evidence (`e2e-test-report.md` section 2). Later that day, commit `2d0912a` removed the `arthur_trace` block, leaving **27** block types, all 27 of them live-exercised. The 9 / 15 / 28 figures were each true when written; they are progressive snapshots of one campaign, not competing claims. Live-coverage statements below now reflect the final 27/27 state.
 
 ## Engine model
 
 - The engine is **`executeGraph`** (`interpreter.ts`): a pure walker over the workflow graph. It takes an **injectable `executeBlock`** and a set of **hooks** (`terminate`, `clarificationExit`, `failureExit`, `notify`, Jira/Slack side effects), so the graph logic is testable in isolation from real integrations.
-- Blocks are dispatched three ways: **control blocks** (`branch`, `loop`, `terminate`) are walked **inline** by the interpreter and never go through `executeBlock`; **registry blocks** are looked up in `BLOCK_EXECUTORS` (`agent.ts:46-60`) and run their own `blocks/*.ts` `execute`; **inline switch blocks** (`open_pr`, `run_pre_pr_checks`, `update_ticket_status`, `send_slack_message`, and the agent phases) are handled by a `case` in `agent.ts`'s `executeBlock` after the registry lookup misses.
+- Blocks are dispatched three ways: **control blocks** (`branch`, `loop`, `terminate`) are walked **inline** by the interpreter and never go through `executeBlock`; **registry blocks** are looked up in `BLOCK_EXECUTORS` (`agent.ts:45-57`) and run their own `blocks/*.ts` `execute`; **inline switch blocks** (`open_pr`, `run_pre_pr_checks`, `update_ticket_status`, `send_slack_message`, and the agent phases) are handled by a `case` in `agent.ts`'s `executeBlock` after the registry lookup misses.
 - **Triggers** are never executed. `agent.ts` seeds the trigger's output into `steps[triggerId]` before the walk starts (`interpreter.ts:106`); `triggerTypeFor()` maps the entry kind to the trigger type (`agent.ts:64-65`).
-- **Validation is deterministic.** Param bounds (zod, per-block `.strict()` schemas) and graph rules (`validateWorkflowGraph`, `schema.ts`) are enforced at **save** time and are exhaustively covered by the repo's **1435-test suite** (`schema.test.ts`, `schema.edge.test.ts`, `interpreter.test.ts`, `interpreter.edge.test.ts`, `golden-runs.edge.test.ts`, `io-blocks.edge.test.ts`, and the per-block `*.test.ts` files). "Live-exercised" below means the block runs on a real agent run of the Tier 0 pipeline, not just in the deterministic suite.
+- **Validation is deterministic.** Param bounds (zod, per-block `.strict()` schemas) and graph rules (`validateWorkflowGraph`, `schema.ts`) are enforced at **save** time, inside the store rather than only in the routes, and are exhaustively covered by the repo's **1536-test worker suite** (132 files, 0 failing, as of 2026-07-15) (`schema.test.ts`, `schema.edge.test.ts`, `interpreter.test.ts`, `interpreter.edge.test.ts`, `golden-runs.edge.test.ts`, `io-blocks.edge.test.ts`, and the per-block `*.test.ts` files). "Live-exercised" below means the block runs on a real agent run, either the Tier 0 pipeline or a purpose-built definition, not just in the deterministic suite.
 
 ## Summary table
 
 Legend for **Test coverage**: three symbols = happy / failure / missing-input, evaluated against the deterministic suite.
 `checkmark` real block body covered, `~` covered only indirectly (mock/stub/helper, block glue not run), `-` not covered, `n/a` not applicable.
-Legend for **Live**: `checkmark` exercised on a real run, `-` not.
+Legend for **Live**: `checkmark` exercised on a real run, `-` not. Every current block is `checkmark` as of the 2026-07-14 campaign; the column is kept so a future block added without live coverage is visible as a `-`.
 
 | Block | Group | Ports | Necessity | Live | Coverage (happy/fail/missing) |
 |---|---|---|---|---|---|
 | trigger_ticket_ai | Triggers | out | core | checkmark | checkmark / n/a / n/a |
-| trigger_plan_approved | Triggers | out | niche | - | checkmark / checkmark / n/a |
-| trigger_pr_created | Triggers | out | niche | - | checkmark / checkmark / checkmark |
-| trigger_pr_checks_failed | Triggers | out | niche | - | checkmark / checkmark / checkmark |
-| trigger_pr_review | Triggers | out | niche | - | checkmark / checkmark / - |
+| trigger_plan_approved | Triggers | out | niche | checkmark | checkmark / checkmark / n/a |
+| trigger_pr_created | Triggers | out | niche | checkmark | checkmark / checkmark / checkmark |
+| trigger_pr_checks_failed | Triggers | out | niche | checkmark | checkmark / checkmark / checkmark |
+| trigger_pr_review | Triggers | out | niche | checkmark | checkmark / checkmark / - |
 | prepare_workspace | Workspace | out, failed | core | checkmark | checkmark / checkmark / checkmark |
-| finalize_workspace | Workspace | out, failed | redundant | - | checkmark / checkmark / checkmark |
+| finalize_workspace | Workspace | out, failed | redundant | checkmark | checkmark / checkmark / checkmark |
 | planning_agent | Agent phases | out, failed | core | checkmark | ~ / ~ / ~ |
 | implementation_agent | Agent phases | out, failed | core | checkmark | ~ / ~ / ~ |
 | review_agent | Agent phases | out, failed | niche | checkmark | ~ / ~ / ~ |
-| fix_agent | Agent phases | out, failed | niche | - | checkmark / checkmark / checkmark |
-| generic_agent | Agent phases | out, failed | niche | - | checkmark / checkmark / checkmark |
-| branch | Control | true, false | core | - | checkmark / checkmark / checkmark |
-| loop | Control | continue, exhausted | core | - | checkmark / checkmark / checkmark |
-| terminate | Control | none (terminal) | core | - | checkmark / checkmark / checkmark |
-| send_plan_approval | HITL / approvals | none (terminal) | core | - | checkmark / checkmark / checkmark |
-| human_question | HITL / approvals | out (dead), failed | niche | - | checkmark / checkmark / checkmark |
-| post_ticket_comment | Ticket | out, failed | core | - | checkmark / checkmark / checkmark |
+| fix_agent | Agent phases | out, failed | niche | checkmark | checkmark / checkmark / checkmark |
+| generic_agent | Agent phases | out, failed | niche | checkmark | checkmark / checkmark / checkmark |
+| branch | Control | true, false | core | checkmark | checkmark / checkmark / checkmark |
+| loop | Control | continue, exhausted | core | checkmark | checkmark / checkmark / checkmark |
+| terminate | Control | none (terminal) | core | checkmark | checkmark / checkmark / checkmark |
+| send_plan_approval | HITL / approvals | none (terminal) | core | checkmark (parked by design) | checkmark / checkmark / checkmark |
+| human_question | HITL / approvals | out (dead), failed | niche | checkmark (parked by design) | checkmark / checkmark / checkmark |
+| post_ticket_comment | Ticket | out, failed | core | checkmark | checkmark / checkmark / checkmark |
 | update_ticket_status | Ticket | out, failed | core | checkmark | ~ / - / checkmark |
 | open_pr | PR-flow | out, failed | core | checkmark | ~ / ~ / - |
-| post_pr_comment | PR-flow | out, failed | niche | - | checkmark / checkmark / checkmark |
-| fetch_pr_context | PR-flow | out, failed | niche | - | checkmark / checkmark / checkmark |
+| post_pr_comment | PR-flow | out, failed | niche | checkmark | checkmark / checkmark / checkmark |
+| fetch_pr_context | PR-flow | out, failed | niche | checkmark | checkmark / checkmark / checkmark |
 | run_pre_pr_checks | Checks / LLM / Slack | out, failed | core | checkmark | ~ / ~ / ~ |
-| run_checks | Checks / LLM / Slack | out, failed | niche | - | checkmark / checkmark / checkmark |
-| call_llm | Checks / LLM / Slack | out, failed | core | - | checkmark / checkmark / checkmark |
+| run_checks | Checks / LLM / Slack | out, failed | niche | checkmark | checkmark / checkmark / checkmark |
+| call_llm | Checks / LLM / Slack | out, failed | core | checkmark | checkmark / checkmark / checkmark |
 | send_slack_message | Checks / LLM / Slack | out | niche | checkmark | - / - / - |
-| arthur_injection_check | Arthur | out (failed dead) | niche | - | checkmark / checkmark / checkmark |
-| arthur_trace | Arthur | out (failed dead) | removable | - | checkmark / n/a / checkmark |
+| arthur_injection_check | Arthur | out (failed dead) | niche | checkmark | checkmark / checkmark / checkmark |
 
-Ports notes: a `failed` port only matters when `allowsFailurePort` is true and the block actually returns `kind:"failed"`. Several ports are declared but unreachable: `human_question`'s `out` (execute never returns `next`), `arthur_injection_check`/`arthur_trace`'s `failed` (execute never returns `failed`). Triggers have a single `out` and no failure port.
+Ports notes: a `failed` port only matters when `allowsFailurePort` is true and the block actually returns `kind:"failed"`. Several ports are declared but unreachable: `human_question`'s `out` (execute never returns `next`), `arthur_injection_check`'s `failed` (execute never returns `failed`). Triggers have a single `out` and no failure port.
 
-Live-coverage update (post-audit): beyond the Tier 0 rows marked `checkmark` above, follow-up runs also exercised **call_llm, post_ticket_comment, terminate** (a custom LLM definition) and **generic_agent, run_checks, branch** (the stress definition `trigger -> prepare -> generic_agent -> run_checks -> branch(true) -> post_ticket_comment -> terminate`, run AWT-1011, all green). That brings live coverage to **15 of 28**. The remaining 13 stay deterministic-only because they need a real PR/CI/review webhook (fix_agent, post_pr_comment, fetch_pr_context, finalize_workspace, the 3 PR triggers), a provisioned Arthur (arthur_injection_check, arthur_trace), or a plan-producing planning agent that will not clarify (send_plan_approval, trigger_plan_approved) - the demo planning agent tends to ask for clarification. loop and human_question are feasible via a ticket-triggered definition and are the easiest remaining live additions.
+Live-coverage history: this table's `Live` column was first filled during the audit, when 9 blocks had run live; a mid-campaign update took it to 15 (adding **call_llm, post_ticket_comment, terminate** on a custom LLM definition and **generic_agent, run_checks, branch** on the stress definition `trigger -> prepare -> generic_agent -> run_checks -> branch(true) -> post_ticket_comment -> terminate`, run AWT-1011, all green). The campaign then closed the remaining gap the same day by provisioning what each block needed: real PR/CI/review webhooks (fix_agent, post_pr_comment, fetch_pr_context, finalize_workspace, the 3 PR triggers), a provisioned Arthur (arthur_injection_check), and a fully-specified ticket the planning agent would not clarify (send_plan_approval, trigger_plan_approved). Final state: **28 of 28** live-exercised, per-block vehicles and evidence in `e2e-test-report.md` section 2. After `2d0912a` removed `arthur_trace`, that is **27 of 27** today.
 
 ## Necessity verdicts
 
-Grouped by verdict so you can see at a glance which blocks may be unnecessary. Tally: **core 13, niche 13, redundant 1, removable 1**.
+Grouped by verdict so you can see at a glance which blocks may be unnecessary. Tally: **core 13, niche 13, redundant 1** = 27. The audit's fourth verdict, **removable 1** (`arthur_trace`), has since been acted on: the block was removed in `2d0912a`, which is why the tally is 27 and not 28.
 
 ### core (13)
 
@@ -90,9 +91,9 @@ Grouped by verdict so you can see at a glance which blocks may be unnecessary. T
 
 - **finalize_workspace** - the publish half is a near-verbatim duplicate of the inline `open_pr` case (`agent.ts:1093-1140`); the default pipeline uses open_pr, and its sole value-add is the `requiredChecks` gate (otherwise expressible as a branch on run_checks output). Carries a latent divergence: it pushes with the run-default kind/model for the push-fix retry instead of the implementation agent's.
 
-### removable (1)
+### removable (1) - acted on, block removed
 
-- **arthur_trace** - a pure marker whose only effect (renaming the Arthur observability task) is achieved by a **static pre-scan** (`agent.ts:745`) that does not even require the node to be reached; its `execute()` is a literal no-op. The same override could live as a prepare_workspace param or a run-level setting, and its one real effect is untested end-to-end.
+- **arthur_trace** - **removed in `2d0912a`** (2026-07-14 13:36), after this audit recommended it. The verdict at the time: a pure marker whose only effect (renaming the Arthur observability task) was achieved by a **static pre-scan** that did not even require the node to be reached; its `execute()` was a literal no-op. The same override could live as a prepare_workspace param or a run-level setting, and its one real effect was untested end-to-end. Kept here as the record of why the block is gone; see the `arthur_trace` entry under Group 9 for what it did.
 
 ### Concrete dead-config and overlap findings
 
@@ -109,37 +110,35 @@ These are the specific "this config does nothing" and "these two blocks overlap"
 - **update_ticket_status.target** - typed as a free string (`min(1).max(100)`) but only `'backlog'` is special-cased; **every other value** (including `'done'`, capitalized `'Backlog'`, typos) silently maps to `ai_review` (`ticket-move-target.ts:5`). A foot-gun; a 2-value enum would be safer. The editor hides this by offering only two values.
 - **ctx.moveTargets.aiReview** - dead (`agent.ts:775`): never read; only `ctx.moveTargets.backlog` is consumed (by `send-plan-approval.ts:126`).
 
-## Live coverage gaps
+## What each block needs to run live
 
-19 of 28 blocks are **not** exercised on a live run. Grouped by *why*:
+**There are no live-coverage gaps left.** All 27 current block types were exercised on real runs during the 2026-07-14 campaign (`e2e-test-report.md` section 2 lists the vehicle and evidence per block). This section was originally the gap list; it is kept as the standing reference for **what infrastructure each block needs before it can run live**, which is still accurate and is what a future block author or a fresh environment has to satisfy. Each group notes how the campaign satisfied it.
 
 **Need Arthur provisioned** (`GENAI_ENGINE_API_KEY` + `GENAI_ENGINE_TRACE_ENDPOINT`, both optional in `env.ts:88-89`, plus prepare_workspace ensuring the task):
 
-- **arthur_injection_check**, **arthur_trace** - both are inert unless Arthur is wired; arthur_injection_check additionally needs `ctx.arthur.taskId` (only set when prepare_workspace ran with Arthur configured), and arthur_trace's only effect is a static pre-scan that is never verified end-to-end.
+- **arthur_injection_check** - inert unless Arthur is wired; additionally needs `ctx.arthur.taskId` (only set when prepare_workspace ran with Arthur configured). Closed by the campaign's Arthur definition: ran a real prompt-injection scan, `status: ok`.
 
-**Need a real PR / CI / review webhook** (a `pr_trigger` entry or a published workspace):
+**Need a real PR / CI / review webhook** (a `pr_trigger` entry or a published workspace). Closed by opening real bot PRs (#292/#293/#294) on the demo repo and firing real events at them, after the case-sensitive webhook bug (7a) was fixed:
 
 - **fix_agent** - only runs on `trigger_pr_checks_failed` / `trigger_pr_review` entries; its `pr_trigger` branch and `ctx.repositoryContexts` never populate in the standard ticket to PR pipeline.
-- **trigger_pr_created**, **trigger_pr_checks_failed**, **trigger_pr_review** - dead unless VCS webhooks are wired and a PR-triggered definition is enabled.
+- **trigger_pr_created**, **trigger_pr_checks_failed**, **trigger_pr_review** - need VCS webhooks wired and a PR-triggered definition enabled.
 - **post_pr_comment** - needs a published workspace (`ctx.publication`) or a `pr_trigger` entry to have a PR in scope.
 - **fetch_pr_context** - needs `selectedRepositories` with a workflow-owned PR, or a `pr_trigger` entry; returns empty context otherwise.
-- **finalize_workspace** - only appears in the `prReviewFixDefinition` fixture; the default pipeline publishes via open_pr, so finalize's real push path is never run live.
+- **finalize_workspace** - the default pipeline publishes via open_pr, so finalize's real push path needs a definition that places it. Closed via `implementation_agent -> finalize_workspace` (def 13), which opened PR #292; note that it needs a **committed** diff (see `e2e-findings.md` 7c).
 
-**Need the HITL approval infra** (dashboard approve/reject routes + a stored studio definition):
+**Need the HITL approval infra** (dashboard approve/reject routes + a stored studio definition). Closed by the campaign's approval definition (def 11):
 
-- **send_plan_approval** - needs `ctx.definitionId` (a persisted studio definition) plus the dashboard approve/reject routes and the `trigger_plan_approved` chain deployed.
-- **trigger_plan_approved** - only dispatched by the approvals API on grant; no default fallback, so it is dead until the approval loop is wired.
+- **send_plan_approval** - needs `ctx.definitionId` (a persisted studio definition) plus the dashboard approve/reject routes and the `trigger_plan_approved` chain deployed. Parks with `awaiting_approval` by design, which is its success state.
+- **trigger_plan_approved** - only dispatched by the approvals API on grant; no default fallback, so it needs the approval loop wired. Fired by approving the parked plan.
 
-**Feasible via a ticket-triggered custom definition** (these run on the standard ticket sandbox, no external webhook / Arthur / approval infra needed, only the baseline Jira / LLM integrations). To close their live gap, author a custom definition on a `trigger_ticket_ai` entry that places these nodes:
+**Feasible via a ticket-triggered custom definition** (these run on the standard ticket sandbox, no external webhook / Arthur / approval infra needed, only the baseline Jira / LLM integrations). Closed by the LLM, loop, HITL and stress definitions:
 
 - **branch**, **loop**, **terminate** - control primitives; a custom ticket definition with these nodes exercises them live (terminate's real Jira-move / Slack-notify hooks additionally need those integrations, but the block itself runs).
-- **human_question** - produces needs_human_input; the engine posts the questions to the ticket. Runs live on any ticket definition (Jira baseline).
+- **human_question** - produces needs_human_input; the engine posts the questions to the ticket. Runs live on any ticket definition (Jira baseline). Parks the ticket by design, which is its success state.
 - **post_ticket_comment** - runs live on any ticket definition (Jira baseline).
 - **run_checks** - runs in the sandbox on any ticket definition.
 - **call_llm** - runs in-process on any ticket definition (needs an LLM API key, which is baseline).
 - **generic_agent** - runs the coding agent in the sandbox on any ticket definition (baseline sandbox).
-
-The 9 blocks that **are** live-exercised today: trigger_ticket_ai, prepare_workspace, planning_agent, implementation_agent, review_agent, update_ticket_status, open_pr, run_pre_pr_checks, send_slack_message.
 
 ---
 
@@ -264,7 +263,7 @@ The 9 blocks that **are** live-exercised today: trigger_ticket_ai, prepare_works
 #### branch
 
 - **What it does:** Conditional two-way router: evaluates a boolean condition over prior block outputs and forwards the walk down its `true` or `false` port.
-- **How it works:** Walked **inline** (category `control`, `workflow-graph.ts:40`; dispatch `interpreter.ts:139-140`), never through the BlockExecutor. `interpreter.ts:141` reads `String(node.params.condition ?? '')`, `:142` `parseCondition` (`@shared/conditions/index.ts:280`, tokenize + recursive-descent), `:146` `evaluateCondition(ast, steps)` (walks the AST against accumulated outputs; strict `==` never equal for objects/arrays, only literal boolean `true` is truthy, missing hops resolve to null, `conditions/index.ts:297-319`). `:164` `path = value ? 'true' : 'false'`; `:165` output `{status:'ok', path, reason:conditionSrc}`; `:168` `next = outEdges.get(id).get(path)`. If the taken port is unwired, the walk completes with no downstream call. The runtime re-parses even though `validateWorkflowGraph` parsed at save (`schema.ts:570`), a defensive double-check. The evaluateCondition try/catch (`:147-155`) is documented unreachable.
+- **How it works:** Walked **inline** (category `control`, `workflow-graph.ts:40`; dispatch `interpreter.ts:139-140`), never through the BlockExecutor. `interpreter.ts:141` reads `String(node.params.condition ?? '')`, `:142` `parseCondition` (`@shared/conditions/index.ts:280`, tokenize + recursive-descent), `:146` `evaluateCondition(ast, steps)` (walks the AST against accumulated outputs; strict `==` never equal for objects/arrays). A boolean position holding a non-boolean throws `ConditionTypeError` rather than coercing: silently treating e.g. a `failures` array as false routed the branch down the wrong port with no signal to the operator. This makes a missing hop (which resolves to null) an error too, so test for absence with `== null` instead. `:164` `path = value ? 'true' : 'false'`; `:165` output `{status:'ok', path, reason:conditionSrc}`; `:168` `next = outEdges.get(id).get(path)`. If the taken port is unwired, the walk completes with no downstream call. The runtime re-parses even though `validateWorkflowGraph` parsed at save (`schema.ts:570`), a defensive double-check. The evaluateCondition try/catch (`:147-155`) is the reachable failure path for both a bad parse and a condition type error: it takes neither port and stops the run.
 - **Params:** `{ condition: z.string().trim().min(1).max(1000) }` strict, **required** (`schema.ts:191-197`; `BLOCK_PARAM_KEYS ['condition']`, `workflow-graph.ts:86`). Ports `['true','false']`, `allowsFailurePort:false`.
 - **Output shape:** Success `{ status:'ok', path:'true'|'false', reason:<raw condition> }`. Validation-bypassed parse failure `{ status:'failed', error }` then `failureExit('branch',...)` and outcome `stopped`.
 - **Failure / missing input:** Missing/empty condition is rejected at **save** by zod (min(1)) and an unparseable condition by `validateWorkflowGraph` (`schema.ts:571-573`). At runtime still defensive: missing condition coerces to `''`, fails to parse, to onBlockFinish `fail` + `failureExit` + outcome `stopped`. Graph rules enforce both ports wired, that a multi-port branch edge names its port, and that every `steps.<id>` ref in the condition is a real block that runs before the branch.
@@ -406,11 +405,13 @@ The 9 blocks that **are** live-exercised today: trigger_ticket_ai, prepare_works
 - **Failure / missing input:** No required param, so no missing-required-param path. zod rejects empty-string `contentFromStep` and unknown keys at **save**. All under-specification is a soft runtime **skip**, never a hard fail and never needs_human_input: Arthur unconfigured to skipped/arthur_not_configured; no Arthur task to skipped/arthur_task_missing; contentFromStep points at a block that did not run to skipped/`no output from block "X"`; Arthur API error to skipped/reason. A ticket that under-specifies never trips this block; the run continues on `out` with a skipped status a downstream branch may or may not inspect.
 - **Test coverage:** Own unit suite `arthur-injection-check.test.ts` covers all three axes: params accept `{}`/`contentFromStep`, reject `""`/extra (:24-31); referenced-block-missing to skipped (:110-119); ok with ticket content incl. exact validatePrompt args (:57-70), flagged findings (:72-92), contentFromStep uses JSON.stringify (:94-108); not configured (:40-46), no task (:48-55), client error to skipped not thrown (:121-133). `schema.test.ts` covers zod at definition level (:169,190). **Not referenced by any deterministic `*.edge` suite** (grep found zero arthur refs), so the end-to-end path through prepare_workspace to ctx.arthur.taskId to this block is unexercised by the golden/edge harness. The internal env-throw is dead in practice (execute already guards env, catch would downgrade to skipped).
 
-#### arthur_trace
+#### arthur_trace (REMOVED in `2d0912a`)
 
-- **What it does:** Declarative marker with no runtime behavior of its own. Its `taskName` param renames the run's Arthur observability task; the block's own `execute()` is a pure no-op that returns status "ok".
-- **How it works:** The block's execute (`arthur-trace.ts:18-20`) does nothing but return `status:"ok"`. The load-bearing effect is a **static pre-scan** in agent.ts, independent of graph execution: before any block runs, `plan.nodes.find(n => n.type==="arthur_trace")?.params` reads the **first** arthur_trace node's `taskName` (`agent.ts:745`); if a non-empty trimmed string it becomes `arthurTaskNameOverride` and is written into `ctx.arthur.taskNameOverride` (`agent.ts:776-778`). prepare_workspace's ensure-task step then names the Arthur task via `ctx.arthur.taskNameOverride ?? ctx.ticket.identifier` (`prepare-workspace.ts:240`) to `ArthurClient.ensureTaskForTicket` (resolve-or-creates, appends `.1`/`.2` suffixes on re-runs). Key consequences: (a) the block need never be reached during execution for its effect to apply; position and edges are irrelevant; (b) only the first arthur_trace node wins, extras are silently ignored; (c) executing the block is decorative. Registered in dispatch map at `agent.ts:36,58`.
-- **Params:** `taskName?: string` (`z.string().trim().min(1).max(200).optional()`, strict) (`arthur-trace.ts:4-8`; schema `schema.ts:175-177`; `BLOCK_PARAM_KEYS ['taskName']`, `workflow-graph.ts:85`). Only param, optional.
-- **Output shape:** Always `{ kind:"next", output:{ status:"ok" } }`. Spec category `action`, ports `["out"]`, `allowsFailurePort true`, but execute can never fail, so the `failed` port is **unreachable**.
-- **Failure / missing input:** `taskName` optional. Absent, or empty/whitespace (rejected at save by min(1); also guarded by `trim().length>0` at `agent.ts:747`) to no override to the Arthur task falls back to `ticket.identifier`; a bare arthur_trace with no taskName is a pure no-op with **zero** observable effect (identical to the block not existing). Never fails, never needs_human_input; only zod max(200)/empty-string/unknown-key reject at save. Under-specification footgun: two arthur_trace nodes with different taskNames to the first by plan.nodes order silently wins; not validated against.
-- **Test coverage:** Own unit suite `arthur-trace.test.ts` covers only the inert surface: params accept `{}`/`taskName`, reject `""`/extra (:5-12); execute no-op returns `{kind:"next",output:{status:"ok"}}` (:14-22). `schema.test.ts` covers zod at definition level (:170,191). **Critical gap:** the block's only real behavior, the `agent.ts:745` pre-scan copying taskName into `ctx.arthur.taskNameOverride` and its consumption at `prepare-workspace.ts:240`, is **not tested anywhere**. No deterministic `*.edge` suite exercises the override path (grep: zero arthur refs in edge suites). So happy-path/failure/missing-input are covered only for the no-op+schema, while the load-bearing override is entirely unverified end-to-end.
+> **This block no longer exists.** It was live-exercised during the 2026-07-14 campaign (`e2e-test-report.md` records it as `ok` on the Arthur definition), and removed later the same day at 13:36 by `2d0912a` ("refactor(worker): drop dead blocks/params..."), acting on this audit's **removable** verdict. `blocks/arthur-trace.ts`, `blocks/arthur-trace.test.ts`, the `agent.ts` pre-scan, and the `WorkflowBlockType` member are all gone; the `taskName` override no longer exists in any form, and the Arthur task now always takes its name from `ticket.identifier`. The description below is the pre-removal record and its `file:line` citations refer to deleted code. It is kept so the removal rationale stays auditable, not as current API. Nothing needs to be done about it.
+
+- **What it did:** Declarative marker with no runtime behavior of its own. Its `taskName` param renamed the run's Arthur observability task; the block's own `execute()` was a pure no-op that returned status "ok".
+- **How it worked:** The block's execute did nothing but return `status:"ok"`. The load-bearing effect was a **static pre-scan** in agent.ts, independent of graph execution: before any block ran, `plan.nodes.find(n => n.type==="arthur_trace")?.params` read the **first** arthur_trace node's `taskName`; if a non-empty trimmed string it became `arthurTaskNameOverride` and was written into `ctx.arthur.taskNameOverride`. prepare_workspace's ensure-task step then named the Arthur task via `ctx.arthur.taskNameOverride ?? ctx.ticket.identifier` to `ArthurClient.ensureTaskForTicket` (resolve-or-creates, appends `.1`/`.2` suffixes on re-runs). Key consequences: (a) the block never needed to be reached during execution for its effect to apply; position and edges were irrelevant; (b) only the first arthur_trace node won, extras were silently ignored; (c) executing the block was decorative. This gap between "what the node looks like it does" and "what actually does it" is what made it removable.
+- **Params:** `taskName?: string` (`z.string().trim().min(1).max(200).optional()`, strict). Only param, optional.
+- **Output shape:** Always `{ kind:"next", output:{ status:"ok" } }`. Spec category `action`, ports `["out"]`, `allowsFailurePort true`, but execute could never fail, so the `failed` port was **unreachable**.
+- **Failure / missing input:** `taskName` optional. Absent, or empty/whitespace (rejected at save by min(1)) meant no override, so the Arthur task fell back to `ticket.identifier`; a bare arthur_trace with no taskName was a pure no-op with **zero** observable effect (identical to the block not existing). Never failed, never needs_human_input; only zod max(200)/empty-string/unknown-key rejected at save. Under-specification footgun: two arthur_trace nodes with different taskNames meant the first by plan.nodes order silently won; not validated against.
+- **Test coverage (at removal):** Own unit suite `arthur-trace.test.ts` covered only the inert surface: params accept `{}`/`taskName`, reject `""`/extra; execute no-op returns `{kind:"next",output:{status:"ok"}}`. `schema.test.ts` covered zod at definition level. **Critical gap that motivated removal:** the block's only real behavior, the pre-scan copying taskName into `ctx.arthur.taskNameOverride` and its consumption in prepare_workspace, was **not tested anywhere**. So happy-path/failure/missing-input were covered only for the no-op + schema, while the load-bearing override was entirely unverified end-to-end. `2d0912a` deleted the unit suite along with the block.

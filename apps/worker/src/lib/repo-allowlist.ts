@@ -1,7 +1,7 @@
 import { logger } from "./logger.js";
 
 /**
- * Temporary hard allowlist of "owner/repo" paths the agent may ever read, branch,
+ * Hard allowlist of "owner/repo" paths the agent may ever read, branch,
  * or PR. Set via the AGENT_ALLOWED_REPOS env var (comma-separated, case-insensitive);
  * empty/unset = no restriction (all installed repos allowed). Reads process.env
  * directly rather than the validated env singleton so importing it never triggers
