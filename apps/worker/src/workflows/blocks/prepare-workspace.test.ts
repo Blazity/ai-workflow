@@ -171,6 +171,27 @@ describe("prepare_workspace execute", () => {
     expect(teardown).toHaveBeenCalledWith("sbx-b");
   });
 
+  it("tracks the sandbox for teardown even when registering it throws", async () => {
+    // The microVM exists the moment provisioning returns. If the register step
+    // throws, the run registry never learned the id, so the engine's teardown of
+    // ctx.sandboxIds is the ONLY cleanup left: the id must already be in there.
+    mocks.runPreSandboxPhase.mockResolvedValue({ status: "continue", selectedRepositories: [repo] });
+    mocks.blockFetchPrContextsStep.mockResolvedValue(contextsFor(repo));
+    mocks.registerSandbox.mockRejectedValueOnce(new Error("registry write failed"));
+
+    const ctx = makeCtx({ sandboxId: null, sandboxIds: new Set<string>() });
+    const result = await execute(makeNode("prepare_workspace"), {}, ctx);
+
+    expect(result.kind).toBe("failed");
+    if (result.kind === "failed") expect(result.reason).toBe("registry write failed");
+    expect(ctx.sandboxId).toBe("sbx-9");
+    expect([...ctx.sandboxIds]).toEqual(["sbx-9"]);
+
+    const teardown = vi.fn().mockResolvedValue(undefined);
+    await teardownSandboxes(ctx.sandboxIds, teardown);
+    expect(teardown).toHaveBeenCalledWith("sbx-9");
+  });
+
   it("maps a pre-sandbox clarification halt to needs_human_input", async () => {
     mocks.runPreSandboxPhase.mockResolvedValue({
       status: "halt",

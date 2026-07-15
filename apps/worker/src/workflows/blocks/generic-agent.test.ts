@@ -4,6 +4,7 @@ const mocks = vi.hoisted(() => ({
   sleep: vi.fn().mockResolvedValue(undefined),
   checkPhaseDone: vi.fn(),
   collectPhase: vi.fn(),
+  setCommitGuard: vi.fn(),
   artifactPaths: vi.fn(),
   buildPhaseScript: vi.fn(),
   extractUsage: vi.fn(),
@@ -21,6 +22,7 @@ vi.mock("../../sandbox/credentials.js", () => ({ getSandboxCredentials: () => ({
 vi.mock("@vercel/sandbox", () => ({ Sandbox: { get: mocks.sandboxGet } }));
 vi.mock("../../sandbox/agents/index.js", () => ({
   createAgentAdapter: vi.fn(() => ({
+    setCommitGuard: mocks.setCommitGuard,
     artifactPaths: mocks.artifactPaths,
     buildPhaseScript: mocks.buildPhaseScript,
     extractUsage: mocks.extractUsage,
@@ -104,6 +106,8 @@ describe("generic_agent execute", () => {
     );
 
     expect(mocks.artifactPaths).toHaveBeenCalledWith("agent-my-agent");
+    // Explicit, not inherited from whatever agent block ran before this one.
+    expect(mocks.setCommitGuard).toHaveBeenCalledWith(expect.anything(), true);
     expect(mocks.buildPhaseScript).toHaveBeenCalledWith(
       expect.objectContaining({ jsonSchema: GENERIC_SCHEMA }),
     );

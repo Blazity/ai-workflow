@@ -3,6 +3,7 @@ import type { JsonValue } from "@shared/contracts";
 import type { AgentKind } from "../../sandbox/agents/index.js";
 import type { PhaseArtifactPaths, PhaseUsage } from "../../sandbox/agents/types.js";
 import { resolveBlockAgent } from "../../workflow-definition/resolve-agent.js";
+import { pollPhaseUntilDone } from "./poll-phase.js";
 import { sanitizeBlockId, type BlockExecuteFn, type BlockExecutionResult } from "./types.js";
 
 export const paramsSchema = z
@@ -53,6 +54,21 @@ function extractStructuredObject(raw: string, structured: string | null): unknow
     }
   }
   return undefined;
+}
+
+async function blockGenericAgentCommitGuardStep(
+  sandboxId: string,
+  agentKind: AgentKind,
+  enabled: boolean,
+): Promise<void> {
+  "use step";
+  const { Sandbox } = await import("@vercel/sandbox");
+  const { getSandboxCredentials } = await import("../../sandbox/credentials.js");
+  const { createAgentAdapter } = await import("../../sandbox/agents/index.js");
+
+  const sandbox = await Sandbox.get({ sandboxId, ...getSandboxCredentials() });
+  const agent = createAgentAdapter(agentKind);
+  await agent.setCommitGuard(sandbox, enabled);
 }
 
 async function blockGenericAgentPlanPhaseStep(
@@ -109,23 +125,6 @@ async function blockGenericAgentParseStep(
   };
 }
 
-async function pollPhaseUntilDone(
-  sandboxId: string,
-  sentinelFile: string,
-  maxMinutes: number,
-): Promise<boolean> {
-  const { sleep } = await import("workflow");
-  const { checkPhaseDone } = await import("../../sandbox/poll-agent.js");
-  const maxPolls = Math.ceil((maxMinutes * 60) / 30);
-  for (let poll = 0; poll < maxPolls; poll++) {
-    await sleep("30s");
-    const status = await checkPhaseDone(sandboxId, sentinelFile);
-    if (status === true) return true;
-    if (status === "stopped") return false;
-  }
-  return false;
-}
-
 /**
  * generic_agent: run a free-form agent phase on the attached workspace. The
  * prompt param is written verbatim as the phase input file. Without an
@@ -171,6 +170,12 @@ export const execute: BlockExecuteFn = async (block, _steps, ctx): Promise<Block
     const { GENERIC_SCHEMA } = await import("../../sandbox/agents/types.js");
     const jsonSchema = customSchema ?? GENERIC_SCHEMA;
 
+    // Install this provider's commit guard explicitly. Without it the phase
+    // inherits whatever the previous agent block left (planning_agent disables
+    // it), so the same graph would commit or not depending on block order. Only
+    // committed work is pushed, so an unguarded agent's changes are dropped
+    // silently; the guard is a no-op when the agent leaves a clean tree.
+    await blockGenericAgentCommitGuardStep(sandboxId, kind, true);
     const { paths, script } = await blockGenericAgentPlanPhaseStep(kind, phase, model, jsonSchema);
     await blockGenericAgentStartPhaseStep(sandboxId, paths.input, prompt, paths.wrapper, script);
     ctx.markLaunched(usageLabel);

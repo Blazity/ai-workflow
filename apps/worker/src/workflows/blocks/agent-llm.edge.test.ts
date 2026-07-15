@@ -27,6 +27,7 @@ const mocks = vi.hoisted(() => ({
   sleep: vi.fn().mockResolvedValue(undefined),
   checkPhaseDone: vi.fn(),
   collectPhase: vi.fn(),
+  setCommitGuard: vi.fn(),
   artifactPaths: vi.fn(),
   buildPhaseScript: vi.fn(),
   extractUsage: vi.fn(),
@@ -227,6 +228,7 @@ describe("generic_agent execute output branches", () => {
     mocks.extractUsage.mockReturnValue(null);
     mocks.sleep.mockResolvedValue(undefined);
     mocks.createAgentAdapter.mockReturnValue({
+      setCommitGuard: mocks.setCommitGuard,
       artifactPaths: mocks.artifactPaths,
       buildPhaseScript: mocks.buildPhaseScript,
       extractUsage: mocks.extractUsage,
@@ -394,6 +396,7 @@ describe("generic_agent extractStructuredObject via execute", () => {
     mocks.extractUsage.mockReturnValue(null);
     mocks.sleep.mockResolvedValue(undefined);
     mocks.createAgentAdapter.mockReturnValue({
+      setCommitGuard: mocks.setCommitGuard,
       artifactPaths: mocks.artifactPaths,
       buildPhaseScript: mocks.buildPhaseScript,
       extractUsage: mocks.extractUsage,

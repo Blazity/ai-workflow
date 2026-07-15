@@ -6,6 +6,20 @@ import { env } from "../../env.js";
 
 export type LlmProvider = "claude" | "codex";
 
+/**
+ * Hard bound on a single provider call, mirroring the agent blocks' MAX_MINUTES
+ * phase cap (generic-agent.ts): a module-level default, not a block param. The
+ * callers set maxRetries = 0, so without this a hung provider has no bound at
+ * all. Generous against real latency (a slow reasoning call is well under it)
+ * and far below the 25-minute agent phase cap.
+ *
+ * Must stay under the platform's function timeout (300s by default, and this
+ * project sets no maxDuration). At exactly 300s the platform kill races the
+ * abort, so the block would surface an opaque platform error instead of the
+ * clean call_llm failure this bound exists to produce.
+ */
+const LLM_TIMEOUT_MS = 4 * 60 * 1000;
+
 export interface GenerateStructuredInput {
   model: string;
   /**
@@ -64,6 +78,7 @@ export async function generateStructured(
     model: resolveModel(effectiveProvider, model),
     ...(system !== undefined ? { system } : {}),
     prompt,
+    abortSignal: AbortSignal.timeout(LLM_TIMEOUT_MS),
   };
 
   if (schema) {

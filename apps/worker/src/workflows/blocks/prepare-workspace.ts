@@ -252,13 +252,18 @@ export const execute: BlockExecuteFn = async (_block, _steps, ctx): Promise<Bloc
       arthurTaskId,
       requiredKinds,
     );
-    await blockPrepareWorkspaceRegisterSandboxStep(ctx.ticket.identifier, sandboxId);
-
+    // Track the sandbox the instant it exists, BEFORE registering it: if the
+    // register step throws, the catch below fails the block and the engine's
+    // teardown of ctx.sandboxIds is the only cleanup left (the registry never
+    // recorded the id, so the reconcile sweep cannot see it either).
     ctx.sandboxId = sandboxId;
     // Track every provisioned sandbox so a prepare_workspace inside a loop does
     // not leak the sandboxes from earlier iterations: the engine tears down all
     // of ctx.sandboxIds on exit, not just the latest ctx.sandboxId.
     ctx.sandboxIds.add(sandboxId);
+
+    await blockPrepareWorkspaceRegisterSandboxStep(ctx.ticket.identifier, sandboxId);
+
     ctx.selectedRepositories = workspaceRepositories;
     ctx.repositoryContexts = repositoryContexts;
 

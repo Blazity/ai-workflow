@@ -87,6 +87,18 @@ describe("generateStructured", () => {
     expect(result.usage).toEqual({ inputTokens: 0, outputTokens: 0, cachedTokens: 0 });
   });
 
+  it("bounds every call with an abort signal on both the text and schema paths", async () => {
+    // The block executors set maxRetries = 0, so this signal is the only bound
+    // on a hung provider.
+    mockGenerateText.mockResolvedValueOnce({ text: "x", usage: {} });
+    await generateStructured({ model: "m", prompt: "p" });
+    expect(mockGenerateText.mock.calls[0][0].abortSignal).toBeInstanceOf(AbortSignal);
+
+    mockGenerateText.mockResolvedValueOnce({ text: "{}", output: {}, usage: {} });
+    await generateStructured({ model: "m", prompt: "p", schema: '{"type":"object"}' });
+    expect(mockGenerateText.mock.calls[1][0].abortSignal).toBeInstanceOf(AbortSignal);
+  });
+
   it("propagates errors from the underlying model call", async () => {
     mockGenerateText.mockRejectedValueOnce(new Error("model exploded"));
 

@@ -8,6 +8,7 @@ import type {
 } from "../../sandbox/agents/types.js";
 import type { CheckRunResult, PRComment } from "../../adapters/vcs/types.js";
 import { resolveBlockAgent } from "../../workflow-definition/resolve-agent.js";
+import { pollPhaseUntilDone } from "./poll-phase.js";
 import { sanitizeBlockId, type BlockExecuteFn, type BlockExecutionResult, type EngineCtx } from "./types.js";
 
 export const paramsSchema = z
@@ -89,23 +90,6 @@ async function blockFixAgentParseStep(
     output: adapter.parseAgentOutput(raw, structured),
     usage: adapter.extractUsage(raw, structured),
   };
-}
-
-async function pollPhaseUntilDone(
-  sandboxId: string,
-  sentinelFile: string,
-  maxMinutes: number,
-): Promise<boolean> {
-  const { sleep } = await import("workflow");
-  const { checkPhaseDone } = await import("../../sandbox/poll-agent.js");
-  const maxPolls = Math.ceil((maxMinutes * 60) / 30);
-  for (let poll = 0; poll < maxPolls; poll++) {
-    await sleep("30s");
-    const status = await checkPhaseDone(sandboxId, sentinelFile);
-    if (status === true) return true;
-    if (status === "stopped") return false;
-  }
-  return false;
 }
 
 async function buildFixInput(block: WorkflowDefinitionNode, ctx: EngineCtx): Promise<string> {

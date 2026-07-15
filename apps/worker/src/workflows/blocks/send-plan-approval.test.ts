@@ -7,8 +7,10 @@ const mocks = vi.hoisted(() => ({
   notifyForTicket: vi.fn(),
   moveTicket: vi.fn(),
   updateLabels: vi.fn(),
+  warn: vi.fn(),
 }));
 
+vi.mock("../../lib/logger.js", () => ({ logger: { warn: mocks.warn } }));
 vi.mock("../../db/client.js", () => ({ getDb: () => ({}) }));
 vi.mock("../../approvals/store.js", () => ({ createApprovalRequest: mocks.createApprovalRequest }));
 vi.mock("../../lib/step-adapters.js", () => ({
@@ -116,6 +118,51 @@ describe("send_plan_approval execute", () => {
     expect(mocks.createApprovalRequest).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({ plan: { markdown: "# Step plan" }, assumptions: ["db is seeded"] }),
+    );
+  });
+
+  it("fails loud when planFromStep points at a block whose output has no plan", async () => {
+    // call_llm emits `.output`, generic_agent `.body`/`.data`; neither has a
+    // plan. Falling back to the research plan here would put a plan in front of
+    // a human that the referenced block never produced.
+    const ctx = makeCtx({ researchPlanMarkdown: "# Research plan" });
+    const steps: StepsRecord = { llm: { output: { status: "ok", output: "some text" } } };
+
+    const result = await execute(makeNode("send_plan_approval", { planFromStep: "llm" }), steps, ctx);
+
+    expect(result.kind).toBe("failed");
+    if (result.kind === "failed") {
+      expect(result.reason).toContain('"llm"');
+      expect(result.reason).toContain("no plan field");
+    }
+    expect(mocks.createApprovalRequest).not.toHaveBeenCalled();
+  });
+
+  it("fails loud when planFromStep references a block that produced no output", async () => {
+    const ctx = makeCtx({ researchPlanMarkdown: "# Research plan" });
+
+    const result = await execute(makeNode("send_plan_approval", { planFromStep: "ghost" }), {}, ctx);
+
+    expect(result.kind).toBe("failed");
+    if (result.kind === "failed") expect(result.reason).toContain('"ghost"');
+    expect(mocks.createApprovalRequest).not.toHaveBeenCalled();
+  });
+
+  it("still ends awaiting_approval when parking the ticket fails", async () => {
+    // The approval row is committed before the park; a tracker move failure must
+    // not be reported as a failed run when the plan is filed and pending.
+    mocks.moveTicket.mockRejectedValue(new Error("tracker down"));
+    const ctx = makeCtx({ researchPlanMarkdown: "# Plan" });
+
+    const result = await execute(makeNode("send_plan_approval"), {}, ctx);
+
+    expect(result).toEqual({
+      kind: "ended",
+      output: { status: "awaiting_approval", approvalRequestId: "appr-9" },
+    });
+    expect(mocks.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ ticketId: "AWT-1", err: "tracker down" }),
+      "approval_park_failed",
     );
   });
 
