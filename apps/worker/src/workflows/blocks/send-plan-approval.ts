@@ -60,7 +60,21 @@ async function parkForApprovalStep(
       );
     }
   }
-  await issueTracker.moveTicket(ticketId, backlogTarget);
+  // The approval row is already committed by the time we park, so a failed move must not
+  // fail the block: the plan is filed and pending in the dashboard either way, and letting
+  // this throw would report the whole run as failed while the operator sees a pending plan.
+  // Log it, because an unparked ticket stays in the AI column and the cron poll can
+  // re-dispatch it. Swallowing here rather than in the caller keeps pino inside the step:
+  // workflow scope forbids Node modules.
+  try {
+    await issueTracker.moveTicket(ticketId, backlogTarget);
+  } catch (err) {
+    const { logger } = await import("../../lib/logger.js");
+    logger.warn(
+      { ticketId, err: err instanceof Error ? err.message : String(err) },
+      "approval_park_failed",
+    );
+  }
 }
 parkForApprovalStep.maxRetries = 0;
 
@@ -152,21 +166,7 @@ export const execute: BlockExecuteFn = async (block, steps, ctx): Promise<BlockE
   await notifyPlanApprovalStep(ctx.ticket.identifier).catch(() => {});
 
   await ctx.unregisterBeforePr();
-  // The approval row is already committed, so a failed park must not report the
-  // run as failed: the plan is filed and pending in the dashboard either way.
-  // Log it, because an unparked ticket stays in the AI column and the cron poll
-  // can re-dispatch it.
-  await parkForApprovalStep(ctx.ticket.identifier, ctx.moveTargets.backlog).catch(async (err) => {
-    const { logger } = await import("../../lib/logger.js");
-    logger.warn(
-      {
-        ticketId: ctx.ticket.identifier,
-        approvalRequestId,
-        err: err instanceof Error ? err.message : String(err),
-      },
-      "approval_park_failed",
-    );
-  });
+  await parkForApprovalStep(ctx.ticket.identifier, ctx.moveTargets.backlog);
 
   return { kind: "ended", output: { status: "awaiting_approval", approvalRequestId } };
 };
