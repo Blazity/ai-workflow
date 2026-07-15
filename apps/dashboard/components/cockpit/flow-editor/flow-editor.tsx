@@ -61,6 +61,7 @@ const FlowNode = React.memo(function FlowNode({
   const cat = NODE_CATEGORIES[node.type];
   const summary = nodeSummary(node, options);
   const portCount = outPorts.length;
+  const running = runStatus === "running";
 
   return (
     <div
@@ -69,9 +70,11 @@ const FlowNode = React.memo(function FlowNode({
       className={`absolute rounded-sm select-none transition-[box-shadow,border-color] duration-[120ms] bg-panel ${
         canEdit ? "cursor-grab" : "cursor-pointer"
       } ${
-        selected
-          ? "border-2 border-mariner shadow-[0_0_0_4px_rgba(60,67,231,0.12),0_4px_12px_rgba(24,27,32,0.08)] z-[3]"
-          : "border border-neutral-200 shadow-[0_1px_2px_rgba(24,27,32,0.05)] z-[2]"
+        running
+          ? "border-2 border-mariner z-[4] animate-ck-glow"
+          : selected
+            ? "border-2 border-mariner shadow-[0_0_0_4px_rgba(60,67,231,0.12),0_4px_12px_rgba(24,27,32,0.08)] z-[3]"
+            : "border border-neutral-200 shadow-[0_1px_2px_rgba(24,27,32,0.05)] z-[2]"
       }`}
       style={{
         left: node.x, top: node.y,
