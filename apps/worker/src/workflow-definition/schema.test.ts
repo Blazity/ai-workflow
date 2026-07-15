@@ -255,12 +255,27 @@ describe("workflowDefinitionSchema block-executor node types", () => {
     expect(shapeOk([node("n", "generic_agent", { prompt: "" })])).toBe(false);
   });
 
-  it("generalizes update_ticket_status target to any bounded string", () => {
+  it("restricts update_ticket_status target to the two domain values", () => {
     expect(shapeOk([node("n", "update_ticket_status", { target: "ai_review" })])).toBe(true);
     expect(shapeOk([node("n", "update_ticket_status", { target: "backlog" })])).toBe(true);
-    expect(shapeOk([node("n", "update_ticket_status", { target: "Code Review" })])).toBe(true);
+    // A column label or a near-miss typo used to save clean and then silently
+    // resolve to ai_review at run time (resolveTicketMoveTarget's fallback).
+    expect(shapeOk([node("n", "update_ticket_status", { target: "Code Review" })])).toBe(false);
+    expect(shapeOk([node("n", "update_ticket_status", { target: "Backlog" })])).toBe(false);
     expect(shapeOk([node("n", "update_ticket_status", { target: "" })])).toBe(false);
-    expect(shapeOk([node("n", "update_ticket_status", { target: "x".repeat(101) })])).toBe(false);
+  });
+
+  it("caps the graph size", () => {
+    const trigger = node("t", "trigger_ticket_ai");
+    const filler = (count: number) =>
+      Array.from({ length: count }, (_, i) => node(`n${i}`, "open_pr"));
+    expect(shapeOk([trigger, ...filler(199)])).toBe(true);
+    expect(shapeOk([trigger, ...filler(200)])).toBe(false);
+
+    const edges = (count: number) =>
+      Array.from({ length: count }, (_, i) => ({ from: "t", to: `n${i}` }));
+    expect(shapeOk([trigger, ...filler(199)], edges(400))).toBe(true);
+    expect(shapeOk([trigger, ...filler(199)], edges(401))).toBe(false);
   });
 });
 

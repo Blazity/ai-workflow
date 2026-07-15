@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type {
+  TicketStatusTarget,
   WorkflowBlockType,
   WorkflowDefinition,
   WorkflowDefinitionNode,
@@ -39,6 +40,15 @@ const agentParams = z
 
 const vcsProviders = z.enum(["github", "gitlab"]);
 const reviewStates = z.enum(["changes_requested", "commented"]);
+
+// Mirrors TicketStatusTarget: the Record makes a domain value added or dropped a
+// build error here, so the accepted targets cannot drift from the ones the
+// editor offers (buildWorkflowEditorOptions) or the runtime honours
+// (resolveTicketMoveTarget).
+const ticketStatusTargets = {
+  ai_review: "ai_review",
+  backlog: "backlog",
+} as const satisfies Record<TicketStatusTarget, TicketStatusTarget>;
 
 const triggerNode = z
   .object({ ...baseNodeFields, type: z.literal("trigger_ticket_ai"), params: emptyParams })
@@ -118,7 +128,7 @@ const updateTicketStatusNode = z
   .object({
     ...baseNodeFields,
     type: z.literal("update_ticket_status"),
-    params: z.object({ target: z.string().trim().min(1).max(100) }).strict(),
+    params: z.object({ target: z.nativeEnum(ticketStatusTargets) }).strict(),
   })
   .strict();
 
@@ -254,11 +264,19 @@ const edgeSchema = z
   })
   .strict();
 
+// Sized far above any hand-drawn workflow (the built-in default is 8 blocks/7
+// connections) but low enough to bound validateWorkflowGraph, whose dominator
+// fixpoint is O(N^2*E) and copies the node universe per node.
+const MAX_NODES = 200;
+const MAX_EDGES = 400;
+
 export const workflowDefinitionSchema = z
   .object({
     schemaVersion: z.literal(1),
-    nodes: z.array(nodeSchema),
-    edges: z.array(edgeSchema),
+    nodes: z.array(nodeSchema).max(MAX_NODES, `Workflow cannot have more than ${MAX_NODES} blocks.`),
+    edges: z
+      .array(edgeSchema)
+      .max(MAX_EDGES, `Workflow cannot have more than ${MAX_EDGES} connections.`),
   })
   .strict();
 
@@ -510,8 +528,8 @@ export function validateWorkflowGraph(def: WorkflowDefinition): string[] {
   const exactSeen = new Set<string>();
   const portTargets = new Map<string, Set<string>>();
   for (const edge of graphEdges) {
-    const portKey = `${edge.from} ${edge.port}`;
-    const exactKey = `${portKey} ${edge.to}`;
+    const portKey = `${edge.from}\0${edge.port}`;
+    const exactKey = `${portKey}\0${edge.to}`;
     if (exactSeen.has(exactKey)) {
       issues.push(`Duplicate connection from "${edge.from}" to "${edge.to}".`);
       continue;

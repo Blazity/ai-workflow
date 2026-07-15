@@ -13,8 +13,10 @@ import {
   archiveWorkflowDefinition,
   createWorkflowDefinition,
   getCurrentWorkflowDefinition,
+  getCurrentWorkflowDefinitionVersion,
   getEnabledWorkflowDefinitionForTrigger,
   getWorkflowDefinition,
+  getWorkflowDefinitionVersion,
   listWorkflowDefinitions,
   listWorkflowDefinitionVersionRows,
   listWorkflowDefinitionVersions,
@@ -31,12 +33,27 @@ import {
 const ADMIN: WorkflowDefinitionActor = { role: "admin", id: "u_admin", label: "Admin" };
 const MEMBER: WorkflowDefinitionActor = { role: "member", id: "u_member", label: "Member" };
 
-/** Minimal definition; the store never validates the graph, only reads node
- *  types to derive trigger_types. Pass [] for a definition with no trigger. */
+/** Minimal definition the store's write validation accepts: a bare trigger is a
+ *  complete graph. The store reads node types to derive trigger_types. A
+ *  trigger-less graph is not valid, so a definition with no trigger is made with
+ *  `seed: null` (no version) instead. */
 function def(triggers: WorkflowBlockType[] = ["trigger_ticket_ai"]): WorkflowDefinition {
   return {
     schemaVersion: 1,
     nodes: triggers.map((type, i) => ({ id: `n${i}`, type, x: 0, y: 0, params: {} })),
+    edges: [],
+  };
+}
+
+/** A graph that is well-shaped but structurally invalid (an unreachable block),
+ *  standing in for a version stored before a schema/rule tightened. */
+function invalidDef(): WorkflowDefinition {
+  return {
+    schemaVersion: 1,
+    nodes: [
+      { id: "t", type: "trigger_ticket_ai", x: 0, y: 0, params: {} },
+      { id: "orphan", type: "open_pr", x: 0, y: 0, params: {} },
+    ],
     edges: [],
   };
 }
@@ -94,7 +111,7 @@ describe("per-definition version numbering", () => {
     const a = (await createWorkflowDefinition(db, { name: "A", seed: null, actor: ADMIN })).definition;
     const b = (await createWorkflowDefinition(db, { name: "B", seed: null, actor: ADMIN })).definition;
 
-    const save = (id: number) => saveWorkflowDefinitionVersion(db, { definitionId: id, definition: def([]), actor: ADMIN });
+    const save = (id: number) => saveWorkflowDefinitionVersion(db, { definitionId: id, definition: def(), actor: ADMIN });
     expect((await save(a.id)).version).toBe(1);
     expect((await save(b.id)).version).toBe(1);
     expect((await save(a.id)).version).toBe(2);
@@ -113,7 +130,7 @@ describe("restoreWorkflowDefinitionVersion", () => {
   it("appends a copy of an earlier version with restoredFromVersion set", async () => {
     const d = (await createWorkflowDefinition(db, { name: "R", seed: null, actor: ADMIN })).definition;
     await saveWorkflowDefinitionVersion(db, { definitionId: d.id, definition: def(["trigger_ticket_ai"]), actor: ADMIN });
-    await saveWorkflowDefinitionVersion(db, { definitionId: d.id, definition: def([]), actor: ADMIN });
+    await saveWorkflowDefinitionVersion(db, { definitionId: d.id, definition: def(["trigger_pr_created"]), actor: ADMIN });
 
     const restored = await restoreWorkflowDefinitionVersion(db, { definitionId: d.id, version: 1, actor: ADMIN });
     expect(restored.version).toBe(3);
@@ -131,7 +148,7 @@ describe("restoreWorkflowDefinitionVersion", () => {
   it("does not see another definition's versions", async () => {
     const a = (await createWorkflowDefinition(db, { name: "RA", seed: null, actor: ADMIN })).definition;
     const b = (await createWorkflowDefinition(db, { name: "RB", seed: null, actor: ADMIN })).definition;
-    await saveWorkflowDefinitionVersion(db, { definitionId: a.id, definition: def([]), actor: ADMIN });
+    await saveWorkflowDefinitionVersion(db, { definitionId: a.id, definition: def(), actor: ADMIN });
     await expect(
       restoreWorkflowDefinitionVersion(db, { definitionId: b.id, version: 1, actor: ADMIN }),
     ).rejects.toMatchObject({ statusCode: 404 });
@@ -142,7 +159,7 @@ describe("VERSION_LIST_LIMIT", () => {
   it("returns at most 50 versions per definition, newest first", async () => {
     const d = (await createWorkflowDefinition(db, { name: "Many", seed: null, actor: ADMIN })).definition;
     for (let i = 0; i < 55; i++) {
-      await saveWorkflowDefinitionVersion(db, { definitionId: d.id, definition: def([]), actor: ADMIN });
+      await saveWorkflowDefinitionVersion(db, { definitionId: d.id, definition: def(), actor: ADMIN });
     }
     const versions = await listWorkflowDefinitionVersionRows(db, d.id);
     expect(versions).toHaveLength(50);
@@ -187,7 +204,7 @@ describe("enabled-per-trigger overlap", () => {
 
   it("allows two definitions with disjoint triggers to both be enabled", async () => {
     // default handles trigger_ticket_ai; C has no trigger, so no overlap.
-    const c = (await createWorkflowDefinition(db, { name: "C", seed: def([]), actor: ADMIN })).definition;
+    const c = (await createWorkflowDefinition(db, { name: "C", seed: null, actor: ADMIN })).definition;
     const enabled = await updateWorkflowDefinition(db, { definitionId: c.id, enabled: true, actor: ADMIN });
     expect(enabled.enabled).toBe(true);
     const defaultRow = await getWorkflowDefinition(db, SEEDED_DEFAULT_ID);
@@ -195,7 +212,7 @@ describe("enabled-per-trigger overlap", () => {
   });
 
   it("409s when a save adds an overlapping trigger to an already-enabled definition", async () => {
-    const d = (await createWorkflowDefinition(db, { name: "D", seed: def([]), actor: ADMIN })).definition;
+    const d = (await createWorkflowDefinition(db, { name: "D", seed: null, actor: ADMIN })).definition;
     await updateWorkflowDefinition(db, { definitionId: d.id, enabled: true, actor: ADMIN }); // no trigger, ok
     await expect(
       saveWorkflowDefinitionVersion(db, { definitionId: d.id, definition: def(["trigger_ticket_ai"]), actor: ADMIN }),
@@ -207,8 +224,8 @@ describe("enabled-per-trigger overlap", () => {
     await saveWorkflowDefinitionVersion(db, { definitionId: e.id, definition: def(["trigger_ticket_ai"]), actor: ADMIN });
     expect(await triggerTypesOf(db, e.id)).toEqual(["trigger_ticket_ai"]);
 
-    await saveWorkflowDefinitionVersion(db, { definitionId: e.id, definition: def([]), actor: ADMIN });
-    expect(await triggerTypesOf(db, e.id)).toEqual([]);
+    await saveWorkflowDefinitionVersion(db, { definitionId: e.id, definition: def(["trigger_pr_created"]), actor: ADMIN });
+    expect(await triggerTypesOf(db, e.id)).toEqual(["trigger_pr_created"]);
 
     await restoreWorkflowDefinitionVersion(db, { definitionId: e.id, version: 1, actor: ADMIN });
     expect(await triggerTypesOf(db, e.id)).toEqual(["trigger_ticket_ai"]);
@@ -288,9 +305,10 @@ describe("dispatch derives from the head version, not the stored column (#3)", (
   });
 
   it("repairs a stale binding on read when the head graph no longer declares the trigger", async () => {
-    // An enabled definition whose head has NO trigger, plus an injected stale
-    // binding (as a crashed write might leave): the read must ignore and drop it.
-    const q = (await createWorkflowDefinition(db, { name: "Stale", seed: def([]), actor: ADMIN })).definition;
+    // An enabled definition whose head does NOT declare trigger_pr_created, plus
+    // an injected stale binding (as a crashed write might leave): the read must
+    // ignore and drop it.
+    const q = (await createWorkflowDefinition(db, { name: "Stale", seed: def(["trigger_pr_review"]), actor: ADMIN })).definition;
     await updateWorkflowDefinition(db, { definitionId: q.id, enabled: true, actor: ADMIN });
     await db
       .insert(workflowDefinitionTriggers)
@@ -340,12 +358,12 @@ describe("archived definition write guards", () => {
   it("409s a save of a new version to an archived definition", async () => {
     const id = await archived("Arch save");
     await expect(
-      saveWorkflowDefinitionVersion(db, { definitionId: id, definition: def([]), actor: ADMIN }),
+      saveWorkflowDefinitionVersion(db, { definitionId: id, definition: def(), actor: ADMIN }),
     ).rejects.toMatchObject({ statusCode: 409, message: "Definition is archived" });
   });
 
   it("409s a restore into an archived definition", async () => {
-    const id = await archived("Arch restore", def([]));
+    const id = await archived("Arch restore", def());
     await expect(
       restoreWorkflowDefinitionVersion(db, { definitionId: id, version: 1, actor: ADMIN }),
     ).rejects.toMatchObject({ statusCode: 409, message: "Definition is archived" });
@@ -362,6 +380,75 @@ describe("archived definition write guards", () => {
   });
 });
 
+describe("write-path validation", () => {
+  it("400s a save whose graph fails the schema or the structural rules", async () => {
+    await expect(
+      saveWorkflowDefinitionVersion(db, {
+        definitionId: SEEDED_DEFAULT_ID,
+        // A param the strict schema does not know.
+        definition: { schemaVersion: 1, nodes: [{ id: "t", type: "trigger_ticket_ai", x: 0, y: 0, params: { nope: 1 } }], edges: [] } as unknown as WorkflowDefinition,
+        actor: ADMIN,
+      }),
+    ).rejects.toMatchObject({ statusCode: 400, message: /^Invalid definition:/ });
+
+    await expect(
+      saveWorkflowDefinitionVersion(db, { definitionId: SEEDED_DEFAULT_ID, definition: invalidDef(), actor: ADMIN }),
+    ).rejects.toMatchObject({ statusCode: 400, message: /^Invalid workflow:/ });
+  });
+
+  it("400s a create whose seed is invalid, leaving no definition behind", async () => {
+    await expect(
+      createWorkflowDefinition(db, { name: "Bad seed", seed: invalidDef(), actor: ADMIN }),
+    ).rejects.toMatchObject({ statusCode: 400, message: /^Invalid workflow:/ });
+    expect((await listWorkflowDefinitions(db)).map((d) => d.name)).not.toContain("Bad seed");
+  });
+
+  it("400s a restore of a stored version that no longer validates, keeping the head intact", async () => {
+    const d = (await createWorkflowDefinition(db, { name: "Legacy", seed: def(), actor: ADMIN })).definition;
+    // Inject an invalid v2 the way a version stored before a rule tightened would
+    // look, then make a valid v3 the head.
+    await db.insert(workflowDefinitionVersions).values({
+      definitionId: d.id,
+      version: 2,
+      definition: invalidDef(),
+      createdById: "u_admin",
+      createdByLabel: "Admin",
+      restoredFromVersion: null,
+    });
+    await saveWorkflowDefinitionVersion(db, { definitionId: d.id, definition: def(), actor: ADMIN });
+
+    await expect(
+      restoreWorkflowDefinitionVersion(db, { definitionId: d.id, version: 2, actor: ADMIN }),
+    ).rejects.toMatchObject({ statusCode: 400, message: /^Invalid workflow:/ });
+    // No new head: the operator gets the 400 instead of an unloadable head.
+    const head = await getCurrentWorkflowDefinitionVersion(db, d.id);
+    expect(head?.version).toBe(3);
+    expect(head?.definition).toEqual(def());
+  });
+
+  it("still reads a legacy invalid row (validation is write-only)", async () => {
+    const d = (await createWorkflowDefinition(db, { name: "Readable", seed: def(), actor: ADMIN })).definition;
+    await db.insert(workflowDefinitionVersions).values({
+      definitionId: d.id,
+      version: 2,
+      definition: invalidDef(),
+      createdById: "u_admin",
+      createdByLabel: "Admin",
+      restoredFromVersion: null,
+    });
+    const head = await getCurrentWorkflowDefinitionVersion(db, d.id);
+    expect(head?.definition).toEqual(invalidDef());
+    expect(await getWorkflowDefinitionVersion(db, d.id, 2)).not.toBeNull();
+    expect((await listWorkflowDefinitionVersionRows(db, d.id)).map((v) => v.version)).toEqual([2, 1]);
+  });
+
+  it("checks the role before the graph, so a member never learns the graph is invalid", async () => {
+    await expect(
+      saveWorkflowDefinitionVersion(db, { definitionId: SEEDED_DEFAULT_ID, definition: invalidDef(), actor: MEMBER }),
+    ).rejects.toMatchObject({ statusCode: 403 });
+  });
+});
+
 describe("role gating", () => {
   it("rejects a member on every write with 403", async () => {
     const d = (await createWorkflowDefinition(db, { name: "H", seed: null, actor: ADMIN })).definition;
@@ -370,7 +457,7 @@ describe("role gating", () => {
       createWorkflowDefinition(db, { name: "Nope", seed: null, actor: MEMBER }),
     ).rejects.toBeInstanceOf(DashboardAuthError);
     await expect(
-      saveWorkflowDefinitionVersion(db, { definitionId: d.id, definition: def([]), actor: MEMBER }),
+      saveWorkflowDefinitionVersion(db, { definitionId: d.id, definition: def(), actor: MEMBER }),
     ).rejects.toBeInstanceOf(DashboardAuthError);
     await expect(
       updateWorkflowDefinition(db, { definitionId: d.id, name: "X", actor: MEMBER }),
@@ -432,7 +519,7 @@ describe("back-compat wrappers on a single-definition db", () => {
 
   it("restores a version against the default and appends restoredFromVersion", async () => {
     await saveWorkflowDefinition(db, { ...FLAT, definition: def(["trigger_ticket_ai"]) });
-    await saveWorkflowDefinition(db, { ...FLAT, definition: def([]) });
+    await saveWorkflowDefinition(db, { ...FLAT, definition: def(["trigger_pr_created"]) });
     const restored = await restoreWorkflowDefinition(db, { ...FLAT, version: 1 });
     expect(restored.version).toBe(3);
     expect(restored.restoredFromVersion).toBe(1);

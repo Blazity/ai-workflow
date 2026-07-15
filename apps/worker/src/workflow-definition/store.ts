@@ -9,6 +9,11 @@ import {
 } from "../db/schema.js";
 import { canEditWorkflowDefinitions, type DashboardRole } from "../lib/auth/roles.js";
 import { DashboardAuthError } from "../lib/auth/users-read.js";
+import {
+  describeWorkflowDefinitionIssues,
+  validateWorkflowGraph,
+  workflowDefinitionSchema,
+} from "./schema.js";
 
 const VERSION_LIST_LIMIT = 50;
 
@@ -95,6 +100,26 @@ function triggerTypesOf(definition: WorkflowDefinition): WorkflowBlockType[] {
 function requireEditRole(role: DashboardRole): void {
   if (!canEditWorkflowDefinitions(role)) {
     throw new DashboardAuthError(403, "Forbidden");
+  }
+}
+
+/** Gate every write on a loadable graph. The PUT routes validate first and shape
+ *  their own 400s, so this never fires for them; it exists for the paths that
+ *  feed a stored blob straight back in (restore, duplicate-create), where an
+ *  older version can fail today's schema and would install a head the runtime
+ *  silently replaces with the built-in default. Message text matches the routes'.
+ *  Reads are deliberately ungated so a legacy invalid row stays readable. */
+function assertValidDefinition(definition: WorkflowDefinition): void {
+  const parsed = workflowDefinitionSchema.safeParse(definition);
+  if (!parsed.success) {
+    throw new WorkflowDefinitionStoreError(
+      400,
+      `Invalid definition: ${describeWorkflowDefinitionIssues(parsed.error)}`,
+    );
+  }
+  const issues = validateWorkflowGraph(parsed.data);
+  if (issues.length > 0) {
+    throw new WorkflowDefinitionStoreError(400, `Invalid workflow: ${issues.join("; ")}`);
   }
 }
 
@@ -369,6 +394,7 @@ export async function createWorkflowDefinition(
   input: { name: string; seed: WorkflowDefinition | null; actor: WorkflowDefinitionActor },
 ): Promise<{ definition: WorkflowDefinitionRow; current: WorkflowDefinitionVersionRow | null }> {
   requireEditRole(input.actor.role);
+  if (input.seed) assertValidDefinition(input.seed);
   let created: DefinitionSelect;
   try {
     const rows = await db
@@ -425,6 +451,7 @@ export async function saveWorkflowDefinitionVersion(
   },
 ): Promise<WorkflowDefinitionVersionRow> {
   requireEditRole(input.actor.role);
+  assertValidDefinition(input.definition);
   const definitionRows = await db
     .select()
     .from(workflowDefinitions)
