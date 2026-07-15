@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import {
   isTriggerBlockType,
   type RunBlockStatusesResponse,
@@ -87,6 +87,18 @@ export function WorkflowEditorScreen({
     JSON.stringify(serializeWorkflowDefinition(baseline.nodes, baseline.edges));
   const canSave = (dirty || current === null) && nodesValid(nodes);
 
+  useEffect(() => {
+    if (!dirty) return;
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      // Legacy prompt trigger, still required by Chrome/Edge before 119. An empty string
+      // does not count as set, so this has to be truthy.
+      e.returnValue = true;
+    };
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => window.removeEventListener("beforeunload", onBeforeUnload);
+  }, [dirty]);
+
   const run = liveBlocks.run;
   const derived = deriveRunStatuses(run, {
     definitionId: selectedId,
@@ -152,6 +164,8 @@ export function WorkflowEditorScreen({
         return;
       }
       applySave((await res.json()) as WorkflowDefinitionSaveResponse, false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to save changes");
     } finally {
       setBusy(null);
     }
@@ -172,6 +186,8 @@ export function WorkflowEditorScreen({
       }
       applySave((await res.json()) as WorkflowDefinitionSaveResponse, true);
       setConfirmRestore(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to restore version");
     } finally {
       setBusy(null);
     }
@@ -195,6 +211,8 @@ export function WorkflowEditorScreen({
       setEdges(structuredClone(def.edges));
       setConfirmRestore(null);
       setFitSignal((s) => s + 1);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to load definition");
     } finally {
       setBusy(null);
     }
@@ -232,6 +250,8 @@ export function WorkflowEditorScreen({
       }
       const meta = (await res.json()) as WorkflowDefinitionMeta;
       setMetas((prev) => prev.map((m) => (m.id === meta.id ? meta : m)));
+    } catch (err) {
+      setRowError({ id, message: err instanceof Error ? err.message : "Unable to update definition" });
     } finally {
       setBusy(null);
     }
@@ -250,6 +270,8 @@ export function WorkflowEditorScreen({
       setMetas(remaining);
       setConfirmDelete(null);
       if (id === selectedId && remaining[0]) await applySwitch(remaining[0].id);
+    } catch (err) {
+      setRowError({ id, message: err instanceof Error ? err.message : "Unable to delete definition" });
     } finally {
       setBusy(null);
     }
@@ -279,6 +301,8 @@ export function WorkflowEditorScreen({
       setNewName("");
       setNewSource("default");
       await requestSwitch(detail.meta.id);
+    } catch (err) {
+      setCreateError(err instanceof Error ? err.message : "Unable to create definition");
     } finally {
       setBusy(null);
     }

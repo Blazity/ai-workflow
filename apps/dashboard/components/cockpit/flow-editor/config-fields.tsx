@@ -5,7 +5,7 @@ import Link from "next/link";
 import type { FlowNodeDef } from "@/lib/flows";
 import type { WorkflowEditorOptions, WorkflowParamValue } from "@shared/contracts";
 import { parseCondition } from "@shared/conditions";
-import { arrayToLines, linesToArray } from "@/lib/workflow-editor/params";
+import { arrayToLines, linesToArray, textMatchesLines } from "@/lib/workflow-editor/params";
 import { Listbox } from "@/components/cockpit/listbox";
 
 const inputCls = "h-[26px] px-2 bg-off-white border border-neutral-200 rounded-xs font-mono text-xs text-coal outline-none disabled:opacity-60";
@@ -153,6 +153,14 @@ function ArrayTextarea({
   onChange: (v: string[] | undefined) => void;
 }) {
   const [text, setText] = useState(() => arrayToLines(value));
+  const [seed, setSeed] = useState(value);
+  // A restore swaps params under a node whose id never changes, so the key cannot remount
+  // us. Re-seed whenever the param is replaced by a value the textarea did not produce;
+  // without the text check every keystroke would re-seed and eat the newline being typed.
+  if (value !== seed) {
+    setSeed(value);
+    if (!textMatchesLines(text, value)) setText(arrayToLines(value));
+  }
   return (
     <textarea
       value={text}
@@ -488,6 +496,7 @@ export function ConfigFields({
       return (
         <ConfigField label="Target status">
           <TicketStatusField
+            key={node.id}
             value={str(node.params.target)}
             targets={options.ticketStatusTargets.map((t) => ({ value: t.value, label: t.label }))}
             disabled={!canEdit}

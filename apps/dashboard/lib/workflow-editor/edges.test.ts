@@ -52,6 +52,41 @@ test("upsertEdge replaces the existing edge from the same port", () => {
   assert.deepEqual(out, [{ from: "a", to: "c" }]);
 });
 
+test("upsertEdge keeps the array position when replacing an existing edge", () => {
+  const edges: FlowEdgeDef[] = [
+    { from: "a", to: "b" },
+    { from: "c", to: "d" },
+    { from: "e", to: "f" },
+  ];
+  assert.deepEqual(upsertEdge(edges, "a", "out", "z", "open_pr"), [
+    { from: "a", to: "z" },
+    { from: "c", to: "d" },
+    { from: "e", to: "f" },
+  ]);
+});
+
+test("upsertEdge re-upserting the same connection is byte-identical", () => {
+  const edges: FlowEdgeDef[] = [
+    { from: "a", to: "b", fromPort: "false" },
+    { from: "a", to: "c", fromPort: "true" },
+    { from: "c", to: "d" },
+  ];
+  assert.deepEqual(upsertEdge(edges, "a", "false", "b", "branch"), edges);
+  assert.equal(JSON.stringify(upsertEdge(edges, "a", "false", "b", "branch")), JSON.stringify(edges));
+});
+
+test("upsertEdge drops stray duplicates from the same port", () => {
+  const edges: FlowEdgeDef[] = [
+    { from: "a", to: "b" },
+    { from: "c", to: "d" },
+    { from: "a", to: "x" },
+  ];
+  assert.deepEqual(upsertEdge(edges, "a", "out", "z", "open_pr"), [
+    { from: "a", to: "z" },
+    { from: "c", to: "d" },
+  ]);
+});
+
 test("upsertEdge leaves other ports intact when replacing one", () => {
   const edges: FlowEdgeDef[] = [{ from: "a", to: "x", fromPort: "false" }];
   const out = upsertEdge(edges, "a", "true", "y", "branch");

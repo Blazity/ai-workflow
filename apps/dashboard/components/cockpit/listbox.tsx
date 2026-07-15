@@ -112,8 +112,12 @@ export function Listbox({ options, value, onChange, disabled, ariaLabel, classNa
       <button
         ref={triggerRef}
         type="button"
+        role="combobox"
         aria-haspopup="listbox"
         aria-expanded={open}
+        aria-controls={listId}
+        // Focus never leaves the trigger, so the active option has to be announced from here.
+        aria-activedescendant={open && options[activeIdx] ? `${listId}-opt-${activeIdx}` : undefined}
         aria-label={ariaLabel}
         disabled={disabled}
         data-open={open}
@@ -139,10 +143,10 @@ export function Listbox({ options, value, onChange, disabled, ariaLabel, classNa
       {open && pos && createPortal(
         <ul
           ref={listRef}
+          id={listId}
           role="listbox"
           aria-label={ariaLabel}
           tabIndex={-1}
-          aria-activedescendant={options[activeIdx] ? `${listId}-opt-${activeIdx}` : undefined}
           style={{
             position: "fixed",
             left: pos.left,

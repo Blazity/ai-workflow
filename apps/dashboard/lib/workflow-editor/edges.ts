@@ -38,9 +38,13 @@ export function upsertEdge(
   sourceType: WorkflowBlockType,
 ): FlowEdgeDef[] {
   if (from === to) return [...edges];
-  const kept = edges.filter((e) => !(e.from === from && resolvedPort(e, sourceType) === port));
   const next: FlowEdgeDef = canOmitFromPort(sourceType, port) ? { from, to } : { from, to, fromPort: port };
-  return [...kept, next];
+  const occupies = (e: FlowEdgeDef) => e.from === from && resolvedPort(e, sourceType) === port;
+  const idx = edges.findIndex(occupies);
+  if (idx === -1) return [...edges, next];
+  // Replace in place. Re-dragging a connection to the same target must not reorder
+  // the array, or the JSON dirty check flips on a semantically identical graph.
+  return edges.filter((e, i) => i === idx || !occupies(e)).map((e, i) => (i === idx ? next : e));
 }
 
 export function isBackEdge(edges: readonly FlowEdgeDef[], edge: FlowEdgeDef): boolean {
