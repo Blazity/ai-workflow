@@ -11,8 +11,10 @@ import {
   getClarificationForRun,
   getPendingForTicket,
   listAnsweredForTicket,
+  recordDispatchedRun,
   serializeClarification,
   setDispatchedRunId,
+  supersedeClarification,
   supersedePendingForTicket,
 } from "./store.js";
 
@@ -191,6 +193,27 @@ describe("supersedePendingForTicket", () => {
   });
 });
 
+describe("supersedeClarification", () => {
+  it("supersedes an answered, undispatched row by id", async () => {
+    const db = await createTestDb();
+    const row = await createClarificationRequest(db, seed());
+    await answerClarification(db, { id: row.id, answer: "a", actor: { id: "u", label: "U" } });
+    const count = await supersedeClarification(db, row.id);
+    expect(count).toBe(1);
+    expect((await getClarification(db, row.id))?.status).toBe("superseded");
+  });
+
+  it("refuses to supersede a row that already dispatched a resume run", async () => {
+    const db = await createTestDb();
+    const row = await createClarificationRequest(db, seed());
+    await answerClarification(db, { id: row.id, answer: "a", actor: { id: "u", label: "U" } });
+    await setDispatchedRunId(db, row.id, "run-resumed");
+    const count = await supersedeClarification(db, row.id);
+    expect(count).toBe(0);
+    expect((await getClarification(db, row.id))?.status).toBe("answered");
+  });
+});
+
 describe("setDispatchedRunId", () => {
   it("records the dispatched resume run", async () => {
     const db = await createTestDb();
@@ -198,6 +221,25 @@ describe("setDispatchedRunId", () => {
     await setDispatchedRunId(db, row.id, "run-resumed");
     const after = await getClarification(db, row.id);
     expect(after?.dispatchedRunId).toBe("run-resumed");
+  });
+});
+
+describe("recordDispatchedRun", () => {
+  it("records the resume run when none is set", async () => {
+    const db = await createTestDb();
+    const row = await createClarificationRequest(db, seed());
+    const wrote = await recordDispatchedRun(db, row.id, "run-self-heal");
+    expect(wrote).toBe(true);
+    expect((await getClarification(db, row.id))?.dispatchedRunId).toBe("run-self-heal");
+  });
+
+  it("does not overwrite an existing dispatched run", async () => {
+    const db = await createTestDb();
+    const row = await createClarificationRequest(db, seed());
+    await setDispatchedRunId(db, row.id, "run-endpoint");
+    const wrote = await recordDispatchedRun(db, row.id, "run-self-heal");
+    expect(wrote).toBe(false);
+    expect((await getClarification(db, row.id))?.dispatchedRunId).toBe("run-endpoint");
   });
 });
 

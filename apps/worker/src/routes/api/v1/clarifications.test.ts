@@ -174,8 +174,21 @@ describe("POST /api/v1/clarifications/:id/answer", () => {
     expect((await getClarification(db, row.id))?.dispatchedRunId).toBe("run-retry");
   });
 
-  it("410s and supersedes the row when the ticket is gone", async () => {
+  it("410s, supersedes the row, and flips the asking run off awaiting when the ticket is gone", async () => {
     const row = await seedPending("AWT-1");
+    mocks.fetchTicket.mockRejectedValue(new IssueTrackerNotFoundError("Issue", "AWT-1"));
+    const res = await answer(row.id);
+    expect(res.status).toBe(410);
+    expect((await getClarification(db, row.id))?.status).toBe("superseded");
+    expect(mocks.resolveAwaitingRun).toHaveBeenCalledWith(expect.anything(), "run-asked");
+    expect(mocks.dispatchClarificationAnswered).not.toHaveBeenCalled();
+  });
+
+  it("410s and supersedes an answered retry-state row when the ticket is gone", async () => {
+    const row = await seedPending("AWT-1");
+    // Retry state: answered but no dispatched run. The ticket-wide pending
+    // supersede misses it, so the by-id supersede must catch it.
+    await answerClarification(db, { id: row.id, answer: "prior", actor: { id: "u", label: "U" } });
     mocks.fetchTicket.mockRejectedValue(new IssueTrackerNotFoundError("Issue", "AWT-1"));
     const res = await answer(row.id);
     expect(res.status).toBe(410);

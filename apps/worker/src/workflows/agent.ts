@@ -85,6 +85,16 @@ export function blockTypesMissingExecutor(): WorkflowBlockType[] {
   );
 }
 
+/** Entry kinds that own the ticket's main work thread and may run the re-pickup
+ *  clarification housekeeping (label strip, pending supersede, awaiting flip). A
+ *  pr_trigger / plan_approved run is a PR/plan follow-up that does not own the
+ *  ticket's clarification state, so it must be excluded: superseding a live
+ *  pending question or flipping the parked asking run to success would silently
+ *  strand the human's question with nothing left to re-pick the ticket up. */
+export function entryOwnsClarificationThread(kind: AgentWorkflowInput["kind"]): boolean {
+  return kind === "ticket" || kind === "clarification_answered";
+}
+
 function triggerTypeFor(entry: AgentWorkflowInput): WorkflowBlockType {
   if (entry.kind === "pr_trigger") return entry.triggerType;
   if (entry.kind === "plan_approved") return "trigger_plan_approved";
@@ -428,10 +438,24 @@ createClarificationRequestStep.maxRetries = 0;
 async function parkForClarificationStep(
   ticketId: string,
   backlogTarget: IssueTrackerMoveTarget,
-): Promise<void> {
+  clarificationRequestId: string,
+): Promise<boolean> {
   "use step";
+  const { getDb } = await import("../db/client.js");
+  const { getClarification } = await import("../clarifications/store.js");
   const { createStepAdapters } = await import("../lib/step-adapters.js");
   const { NEEDS_CLARIFICATION_LABEL } = await import("../lib/labels.js");
+  // The pending row is answerable the moment it exists, so a user can answer
+  // (claiming the ticket into the AI column and starting the resume run) before
+  // this park runs. Re-read the row first: if it is no longer pending the answer
+  // already owns the ticket, so skip the label add and backlog move that would
+  // otherwise yank the ticket back and get the resume run cancelled. Return
+  // false so the caller sends no notify and records the run as done, not
+  // awaiting.
+  const row = await getClarification(getDb(), clarificationRequestId);
+  if (!row || row.status !== "pending") {
+    return false;
+  }
   const { issueTracker } = createStepAdapters();
   // No Jira comment: the questions live durably in the clarification store and
   // the overview reads awaiting state from the DB. The label is ticket-status
@@ -451,22 +475,28 @@ async function parkForClarificationStep(
     }
   }
   await issueTracker.moveTicket(ticketId, backlogTarget);
+  return true;
 }
 
 async function reconcileClarificationsOnPickup(
   ticketKey: string,
   currentRunId: string,
+  answeredClarificationId: string | null,
 ): Promise<void> {
   "use step";
   const { getDb } = await import("../db/client.js");
   const { createStepAdapters } = await import("../lib/step-adapters.js");
   const { NEEDS_CLARIFICATION_LABEL } = await import("../lib/labels.js");
-  const { supersedePendingForTicket } = await import("../clarifications/store.js");
+  const { recordDispatchedRun, supersedePendingForTicket } = await import("../clarifications/store.js");
   const { resolveAwaitingRunsForTicket } = await import("../lib/telemetry/run-telemetry.js");
   const { issueTracker } = createStepAdapters();
   // Re-pickup housekeeping, all idempotent so default step retries are safe:
   //  - drop the awaiting-input label (best-effort; a label error must not fail
   //    the fresh run),
+  //  - self-heal a lost endpoint setDispatchedRunId (clarification_answered
+  //    resumes only): record this run id on the answered clarification so the
+  //    row never stays permanently retryable. Guarded so it never overwrites the
+  //    endpoint's own write.
   //  - supersede any still-pending clarification (a no-op for a
   //    clarification_answered entry whose row was already answered),
   //  - flip parked predecessor runs off "awaiting" so they don't linger.
@@ -484,6 +514,9 @@ async function reconcileClarificationsOnPickup(
     }
   }
   const db = getDb();
+  if (answeredClarificationId) {
+    await recordDispatchedRun(db, answeredClarificationId, currentRunId);
+  }
   await supersedePendingForTicket(db, ticketKey);
   await resolveAwaitingRunsForTicket(db, ticketKey, currentRunId);
 }
@@ -629,6 +662,7 @@ async function recordRunTelemetryStep(payload: {
   model: string | null;
   totals: UsageTotals;
   pr: { url: string; number: number } | null;
+  awaitingClarificationId?: string | null;
 }) {
   "use step";
   const { getDb } = await import("../db/client.js");
@@ -642,6 +676,18 @@ async function recordRunTelemetryStep(payload: {
     payload.runId,
   );
   const { totals } = payload;
+  // Deterministically close the answer-before-finally window: a run parking on a
+  // clarification records "awaiting", but if the answer already landed (row no
+  // longer pending) that would be a phantom the cron freeze preserves forever.
+  // Re-check the row on the awaiting path only and record "success" instead.
+  let status = payload.status;
+  if (status === "awaiting" && payload.awaitingClarificationId) {
+    const { getClarification } = await import("../clarifications/store.js");
+    const row = await getClarification(getDb(), payload.awaitingClarificationId);
+    if (row && row.status !== "pending") {
+      status = "success";
+    }
+  }
   await recordRunUsage(getDb(), {
     runId: payload.runId,
     // This is the agent workflow — its canonical identity (mirrors
@@ -649,7 +695,7 @@ async function recordRunTelemetryStep(payload: {
     // so the run is attributed even when no cron snapshot ever observes it.
     workflowId: "wf_agent",
     workflowName: "Agent",
-    status: payload.status,
+    status,
     ticketKey: payload.ticketKey,
     ticketTitle: payload.ticketTitle,
     ticketUrl: payload.ticketUrl,
@@ -736,11 +782,20 @@ export async function agentWorkflow(input: string | AgentWorkflowInput) {
   const ticket = await fetchAndValidateTicket(ticketId, env.COLUMN_AI, entry.kind !== "ticket");
   if (!ticket) return;
 
-  // Re-pickup housekeeping, unconditional: strip the awaiting-input label,
-  // supersede any pending clarification, and flip parked predecessor runs off
-  // "awaiting". All three are idempotent, so this is a safe no-op on a first
-  // pickup too.
-  await reconcileClarificationsOnPickup(ticket.identifier, workflowRunId);
+  // Re-pickup housekeeping (strip the awaiting-input label, supersede any pending
+  // clarification, flip parked predecessor runs off "awaiting"). Gated to the
+  // entry kinds that own the ticket's main work thread: a plain "ticket" pickup
+  // and a "clarification_answered" resume. A pr_trigger / plan_approved run is a
+  // PR/plan follow-up that must NOT touch the ticket's clarification state, so it
+  // skips the whole step, including the label removal. All operations inside are
+  // idempotent, so this is a safe no-op on a first pickup too.
+  if (entryOwnsClarificationThread(entry.kind)) {
+    await reconcileClarificationsOnPickup(
+      ticket.identifier,
+      workflowRunId,
+      entry.kind === "clarification_answered" ? entry.clarificationRequestId : null,
+    );
+  }
 
   // First pickup only: post exactly one dashboard link comment so a human can
   // follow progress and answer questions. The link itself is the idempotency
@@ -801,6 +856,11 @@ export async function agentWorkflow(input: string | AgentWorkflowInput) {
   // flips it to success). Every phase failure / timeout / thrown error keeps
   // "failed".
   let runOutcome: "success" | "failed" | "awaiting" = "failed";
+  // The clarification this run parked on, set only on the awaiting path. Threaded
+  // into the terminal telemetry write so it can re-check the row and record
+  // "success" instead of a phantom "awaiting" when the answer landed after the
+  // park but before this finally.
+  let awaitingClarificationId: string | null = null;
   // Seeded with the run default model once prepare_workspace provisions the
   // sandbox, then set to the implementation block's model once it runs.
   let activeModel: string | undefined;
@@ -905,6 +965,9 @@ export async function agentWorkflow(input: string | AgentWorkflowInput) {
       definitionNodes: plan.nodes,
       entry,
       ticket,
+      ...(clarificationHistory && clarificationHistory.length > 0
+        ? { clarifications: clarificationHistory }
+        : {}),
       branchName,
       sandboxId: null,
       sandboxIds: new Set<string>(),
@@ -948,7 +1011,7 @@ export async function agentWorkflow(input: string | AgentWorkflowInput) {
         // in backlog like any other failure. Order after it mirrors every
         // terminal path: unregister BEFORE moveTicket (see failureExit's race
         // note), and park posts no Jira comment.
-        await createClarificationRequestStep({
+        const clarificationId = await createClarificationRequestStep({
           ticketKey: ticket.identifier,
           runId: workflowRunId,
           blockId: nodeId ?? null,
@@ -958,12 +1021,20 @@ export async function agentWorkflow(input: string | AgentWorkflowInput) {
           suggestedAnswers: suggestedAnswers ?? null,
         });
         await unregisterRun(ticket.identifier);
-        await parkForClarificationStep(ticketId, backlogMoveTarget());
+        const parked = await parkForClarificationStep(ticketId, backlogMoveTarget(), clarificationId);
+        if (!parked) {
+          // The answer raced ahead of the park and already owns the ticket (moved
+          // to the AI column, resume run started). No clarification is pending, so
+          // send no notify and record this run as done, not awaiting.
+          runOutcome = "success";
+          return;
+        }
         await notifyTicket(ticket.identifier, {
           kind: "needs_clarification",
           dashboardUrl: ticketRunUrl(env.DASHBOARD_ORIGIN, ticket.identifier, workflowRunId),
           usageReport: usageReportOrUndefined(),
         });
+        awaitingClarificationId = clarificationId;
         runOutcome = "awaiting";
       };
 
@@ -1001,7 +1072,7 @@ export async function agentWorkflow(input: string | AgentWorkflowInput) {
           // (before any unregister/move), then unregister -> park -> notify.
           // maxRetries = 0, so a throw fails the run and the outer catch parks
           // the ticket like any failure. No Jira comment.
-          await createClarificationRequestStep({
+          const clarificationId = await createClarificationRequestStep({
             ticketKey: ticket.identifier,
             runId: workflowRunId,
             blockId: nodeId ?? null,
@@ -1016,12 +1087,19 @@ export async function agentWorkflow(input: string | AgentWorkflowInput) {
             await unregisterRun(ticket.identifier);
             state.runUnregisteredBeforePr = true;
           }
-          await parkForClarificationStep(ticketId, backlogMoveTarget());
+          const parked = await parkForClarificationStep(ticketId, backlogMoveTarget(), clarificationId);
+          if (!parked) {
+            // The answer raced ahead of the park and already owns the ticket. No
+            // clarification is pending, so send no notify and record success.
+            runOutcome = "success";
+            return;
+          }
           await notifyTicket(ticket.identifier, {
             kind: "needs_clarification",
             dashboardUrl: ticketRunUrl(env.DASHBOARD_ORIGIN, ticket.identifier, workflowRunId),
             usageReport: usageReportOrUndefined(),
           });
+          awaitingClarificationId = clarificationId;
           runOutcome = "awaiting";
           return;
         }
@@ -1484,6 +1562,7 @@ export async function agentWorkflow(input: string | AgentWorkflowInput) {
       model: activeModel ?? null,
       totals: computeUsageTotals(phaseUsages, priceLookup, activeModel, phaseModels),
       pr: prForTelemetry,
+      awaitingClarificationId,
     }).catch((err) => {
       console.error(
         `Run telemetry failed to persist for ${ticket.identifier} (run ${workflowRunId}):`,

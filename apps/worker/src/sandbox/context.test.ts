@@ -622,7 +622,46 @@ describe("clarifications section", () => {
     expect(empty).not.toContain("## Clarifications (Q&A)");
   });
 
-  it("caps the section and appends a truncation note", () => {
+  it("keeps the newest rounds within budget, dropping the oldest first with a note", () => {
+    // Three ~7k-char rounds: two fit under the 16000 cap, the oldest does not.
+    const round = (n: number) => ({
+      questions: [`Round ${n} question?`],
+      answer: "y".repeat(7000),
+      answeredBy: `user${n}`,
+    });
+    const result = assembleResearchPlanContext({
+      ticket: { ...baseTicket, clarifications: [round(1), round(2), round(3)] },
+      prompt: "p",
+      branchName: "b",
+    });
+
+    expect(result).toContain("## Clarifications (Q&A)");
+    expect(result).toContain("[Older clarification rounds omitted to fit the prompt budget.]");
+    // Newest rounds always present, oldest dropped first.
+    expect(result).toContain("Round 3 question?");
+    expect(result).toContain("Round 2 question?");
+    expect(result).not.toContain("Round 1 question?");
+  });
+
+  it("emits no truncation note when every round fits", () => {
+    const result = assembleResearchPlanContext({
+      ticket: {
+        ...baseTicket,
+        clarifications: [
+          { questions: ["Q1?"], answer: "A1", answeredBy: "a" },
+          { questions: ["Q2?"], answer: "A2", answeredBy: "b" },
+        ],
+      },
+      prompt: "p",
+      branchName: "b",
+    });
+
+    expect(result).toContain("Q1?");
+    expect(result).toContain("Q2?");
+    expect(result).not.toContain("[Older clarification rounds omitted to fit the prompt budget.]");
+  });
+
+  it("hard-truncates a single oversized round rather than dropping the newest", () => {
     const result = assembleResearchPlanContext({
       ticket: {
         ...baseTicket,
@@ -633,7 +672,9 @@ describe("clarifications section", () => {
     });
 
     expect(result).toContain("## Clarifications (Q&A)");
-    expect(result).toContain("[Clarifications truncated to fit the prompt budget.]");
+    expect(result).toContain("[Older clarification rounds omitted to fit the prompt budget.]");
+    // The newest round is still present (partially), never dropped entirely.
+    expect(result).toContain("### Round 1");
     // The oversized answer must not survive in full.
     expect(result).not.toContain("x".repeat(30000));
   });

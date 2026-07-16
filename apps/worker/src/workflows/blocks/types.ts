@@ -44,6 +44,14 @@ export interface EngineCtx {
   /** What started this run. */
   entry: AgentWorkflowInput;
   ticket: TicketContent;
+  /** Answered Q&A history for the ticket, injected into fix-phase context so a
+   *  resumed run sees what a human already answered; absent when there is none. */
+  clarifications?: Array<{
+    questions: string[];
+    answer: string;
+    answeredBy?: string;
+    answeredAt?: string;
+  }>;
   branchName: string;
   /** Null until prepare_workspace provisions a sandbox. */
   sandboxId: string | null;

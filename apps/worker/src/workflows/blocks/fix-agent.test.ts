@@ -141,6 +141,27 @@ describe("fix_agent execute", () => {
     expect(input.prComments).toEqual([{ author: "bob", body: "rename this", liked: false }]);
   });
 
+  it("threads clarification history from ctx into the fix context", async () => {
+    mocks.parseAgentOutput.mockReturnValue({ result: "implemented" });
+    const clarifications = [
+      { questions: ["Which env?"], answer: "staging", answeredBy: "alice" },
+    ];
+
+    await execute(makeNode("fix_agent"), {}, makeCtx({ clarifications }));
+
+    const input = mocks.assembleFixContext.mock.calls[0][0];
+    expect(input.ticket.clarifications).toEqual(clarifications);
+  });
+
+  it("omits clarifications from the fix context when ctx has none", async () => {
+    mocks.parseAgentOutput.mockReturnValue({ result: "implemented" });
+
+    await execute(makeNode("fix_agent"), {}, makeCtx());
+
+    const input = mocks.assembleFixContext.mock.calls[0][0];
+    expect(input.ticket.clarifications).toBeUndefined();
+  });
+
   it("maps clarification_needed to needs_human_input", async () => {
     mocks.parseAgentOutput.mockReturnValue({
       result: "clarification_needed",

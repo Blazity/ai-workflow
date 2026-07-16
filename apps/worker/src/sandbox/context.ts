@@ -224,7 +224,7 @@ function formatComments(
 // rest of the prompt, so the whole rendered section is capped and truncated.
 const CLARIFICATIONS_MAX_LENGTH = 16000;
 const CLARIFICATIONS_TRUNCATION_NOTE =
-  "\n\n[Clarifications truncated to fit the prompt budget.]\n";
+  "[Older clarification rounds omitted to fit the prompt budget.]\n\n";
 
 function renderClarificationsSection(
   clarifications: TicketData["clarifications"],
@@ -245,14 +245,32 @@ function renderClarificationsSection(
     return `### Round ${index + 1}\n\n${numberedQuestions}\n\n${answerLabel}: ${round.answer}`;
   });
 
-  const section = `\n## Clarifications (Q&A)\n\n${rounds.join("\n\n")}\n`;
-  if (section.length > CLARIFICATIONS_MAX_LENGTH) {
-    return (
-      section.slice(0, CLARIFICATIONS_MAX_LENGTH - CLARIFICATIONS_TRUNCATION_NOTE.length) +
-      CLARIFICATIONS_TRUNCATION_NOTE
-    );
+  const header = "\n## Clarifications (Q&A)\n\n";
+  const footer = "\n";
+  const separator = "\n\n";
+
+  const fullSection = `${header}${rounds.join(separator)}${footer}`;
+  if (fullSection.length <= CLARIFICATIONS_MAX_LENGTH) return fullSection;
+
+  // Over budget: keep WHOLE rounds newest-first so the freshest answer (the one
+  // a resume exists to consume) always survives; the oldest rounds are dropped
+  // first. Reserve room for the note that flags the omission.
+  const bodyBudget =
+    CLARIFICATIONS_MAX_LENGTH - header.length - footer.length - CLARIFICATIONS_TRUNCATION_NOTE.length;
+  const kept: string[] = [];
+  let used = 0;
+  for (let i = rounds.length - 1; i >= 0; i--) {
+    const cost = rounds[i]!.length + (kept.length > 0 ? separator.length : 0);
+    if (used + cost > bodyBudget) break;
+    kept.unshift(rounds[i]!);
+    used += cost;
   }
-  return section;
+  if (kept.length === 0) {
+    // Even the newest round alone exceeds the budget: hard-truncate it (tail of
+    // the round is dropped) rather than emit an empty section.
+    kept.push(rounds[rounds.length - 1]!.slice(0, Math.max(0, bodyBudget)));
+  }
+  return `${header}${CLARIFICATIONS_TRUNCATION_NOTE}${kept.join(separator)}${footer}`;
 }
 
 function formatPRComments(comments: PRComment[]): string {

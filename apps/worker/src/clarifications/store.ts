@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { and, asc, desc, eq } from "drizzle-orm";
+import { and, asc, desc, eq, isNull } from "drizzle-orm";
 import type { ClarificationRequest, ClarificationStatus } from "@shared/contracts";
 import type { Db } from "../db/client.js";
 import { clarificationRequests } from "../db/schema.js";
@@ -203,11 +203,55 @@ export async function supersedePendingForTicket(db: Db, ticketKey: string): Prom
   return rows.length;
 }
 
+/**
+ * Terminal dead-end for a clarification whose ticket disappeared: supersede the
+ * row by id regardless of its current status (pending or answered-without-run),
+ * so the dashboard stops re-rendering an answer/retry form for a ticket that can
+ * never resume. Guarded on dispatched_run_id IS NULL so a clarification that
+ * already started a resume run keeps its answered history intact. Returns the
+ * number of rows superseded.
+ */
+export async function supersedeClarification(db: Db, id: string): Promise<number> {
+  const rows = await db
+    .update(clarificationRequests)
+    .set({ status: "superseded" })
+    .where(
+      and(
+        eq(clarificationRequests.id, id),
+        isNull(clarificationRequests.dispatchedRunId),
+      ),
+    )
+    .returning({ id: clarificationRequests.id });
+  return rows.length;
+}
+
 export async function setDispatchedRunId(db: Db, id: string, runId: string): Promise<void> {
   await db
     .update(clarificationRequests)
     .set({ dispatchedRunId: runId })
     .where(eq(clarificationRequests.id, id));
+}
+
+/**
+ * Resume run's self-heal for a lost endpoint write. The answer endpoint records
+ * the dispatched run best-effort; if that single write is lost the answered row
+ * would stay dispatched_run_id=null forever and read as retryable, spawning a
+ * duplicate resume run. The resume run itself calls this on pickup. Guarded on
+ * dispatched_run_id IS NULL so it never overwrites an id the endpoint already
+ * set. Returns whether a row was written.
+ */
+export async function recordDispatchedRun(db: Db, id: string, runId: string): Promise<boolean> {
+  const rows = await db
+    .update(clarificationRequests)
+    .set({ dispatchedRunId: runId })
+    .where(
+      and(
+        eq(clarificationRequests.id, id),
+        isNull(clarificationRequests.dispatchedRunId),
+      ),
+    )
+    .returning({ id: clarificationRequests.id });
+  return rows.length > 0;
 }
 
 export function serializeClarification(row: ClarificationRow): ClarificationRequest {

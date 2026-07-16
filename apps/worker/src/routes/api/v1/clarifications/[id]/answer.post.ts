@@ -12,6 +12,7 @@ import {
   getClarification,
   serializeClarification,
   setDispatchedRunId,
+  supersedeClarification,
   supersedePendingForTicket,
 } from "../../../../../clarifications/store.js";
 import { resolveAwaitingRun } from "../../../../../lib/telemetry/run-telemetry.js";
@@ -66,6 +67,14 @@ export default defineEventHandler(async (event): Promise<ClarificationAnswerResp
     } catch (err) {
       if (err instanceof IssueTrackerNotFoundError) {
         await supersedePendingForTicket(db, row.ticketKey).catch(() => {});
+        // Also supersede THIS row by id: on the retry path it is already
+        // "answered" (not pending), so the ticket-wide pending supersede above
+        // misses it and the dashboard would re-render the retry form forever on
+        // a deleted ticket. The store guards this on an undispatched row.
+        await supersedeClarification(db, row.id).catch(() => {});
+        // A deleted ticket can never be re-picked, so the asking run would stay
+        // "awaiting" forever. Flip it off awaiting on the way out.
+        await resolveAwaitingRun(db, row.runId).catch(() => {});
         throw createError({ statusCode: 410, statusMessage: "ticket_gone" });
       }
       throw err;

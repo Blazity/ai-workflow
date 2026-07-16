@@ -8,6 +8,7 @@ import {
   type ExecuteGraphHooks,
 } from "../workflow-definition/interpreter.js";
 import { recordBlockStatuses, recordRunUsage } from "../lib/telemetry/run-telemetry.js";
+import { entryOwnsClarificationThread } from "./agent.js";
 import { computeUsageTotals, type PhaseUsage, type PriceLookup } from "../sandbox/usage.js";
 import { createTestDb } from "../db/test-db.js";
 import type { Db } from "../db/client.js";
@@ -250,6 +251,19 @@ const runRow = (runId: string) =>
     .from(workflowRuns)
     .where(eq(workflowRuns.runId, runId))
     .then((r) => r[0]);
+
+describe("re-pickup clarification housekeeping gate", () => {
+  // The housekeeping (label strip, pending supersede, awaiting flip) only runs
+  // for entry kinds that own the ticket's main work thread. A pr_trigger /
+  // plan_approved follow-up must skip it so it can't strand a live pending
+  // question or flip the parked asking run to success.
+  it("runs only for ticket and clarification_answered pickups", () => {
+    expect(entryOwnsClarificationThread("ticket")).toBe(true);
+    expect(entryOwnsClarificationThread("clarification_answered")).toBe(true);
+    expect(entryOwnsClarificationThread("pr_trigger")).toBe(false);
+    expect(entryOwnsClarificationThread("plan_approved")).toBe(false);
+  });
+});
 
 describe("run telemetry integration (executeGraph -> pglite)", () => {
   it("happy multi-block run: all blocks ok, run success, cost + model persisted", async () => {

@@ -126,7 +126,7 @@ async function buildFixInput(block: WorkflowDefinitionNode, ctx: EngineCtx): Pro
       : undefined;
 
   return assembleFixContext({
-    ticket: ctx.ticket,
+    ticket: { ...ctx.ticket, ...(ctx.clarifications ? { clarifications: ctx.clarifications } : {}) },
     prComments,
     failedChecks,
     ...(conflictRepos.length > 0
