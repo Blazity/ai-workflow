@@ -17,7 +17,10 @@ import { coerceStatus } from "./runs-read.js";
 
 const PHASE_ORDER = ["Setup", "Research", "Implementation", "Review", "Finalize", "Run"];
 
-const TERMINAL = new Set(["success", "failed", "blocked"]);
+// "awaiting" is a settled state for trace purposes: a parked run has stopped
+// executing steps, so its persisted waterfall must be normalized like a finished
+// run's, otherwise the mid-flight telemetry step shows as "running" forever.
+const TERMINAL = new Set(["success", "failed", "blocked", "awaiting"]);
 
 /**
  * A finished run's persisted waterfall may contain the telemetry step itself,

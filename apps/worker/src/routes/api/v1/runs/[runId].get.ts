@@ -5,6 +5,11 @@ import { env } from "../../../../../env.js";
 import { getDb } from "../../../../db/client.js";
 import { fetchRunDetailFromDb, fetchRunRefs } from "../../../../db/queries/run-detail-read.js";
 import {
+  getClarificationForRun,
+  serializeClarification,
+} from "../../../../clarifications/store.js";
+import { requireDashboardActor, toHttpError } from "../../../../lib/auth/request-context.js";
+import {
   collectRunDetail,
   type RunDetailSource,
 } from "../../../../lib/overview/collect-run-detail.js";
@@ -27,6 +32,19 @@ export default defineEventHandler(async (event): Promise<RunDetailResponse> => {
   const generatedAt = new Date().toISOString();
   const runId = getRouterParam(event, "runId");
   if (!runId) return { generatedAt, ...EMPTY };
+
+  try {
+    // Guarded: the detail payload now carries the parked run's clarification Q&A.
+    await requireDashboardActor(event);
+  } catch (error) {
+    toHttpError(error);
+  }
+
+  // Best-effort: the run detail must never 500 because the clarification lookup
+  // hiccuped, so a lookup error degrades to no clarification rather than failing.
+  const clarification = await getClarificationForRun(getDb(), runId)
+    .then((row) => (row ? serializeClarification(row) : null))
+    .catch(() => null);
 
   try {
     const model =
@@ -66,7 +84,13 @@ export default defineEventHandler(async (event): Promise<RunDetailResponse> => {
     });
 
     if (!result) return { generatedAt, ...EMPTY };
-    return { generatedAt, available: true, run: result.run, steps: result.steps };
+    return {
+      generatedAt,
+      available: true,
+      run: result.run,
+      steps: result.steps,
+      clarification,
+    };
   } catch (err) {
     // World unavailable (local dev), or the run aged out of the ~24h step
     // window (an expired-run lookup throws). Fall back to the durable
@@ -83,7 +107,13 @@ export default defineEventHandler(async (event): Promise<RunDetailResponse> => {
         modelFallback: model,
       });
       if (fallback) {
-        return { generatedAt, available: true, run: fallback.run, steps: fallback.steps };
+        return {
+          generatedAt,
+          available: true,
+          run: fallback.run,
+          steps: fallback.steps,
+          clarification,
+        };
       }
     } catch (dbErr) {
       logger.warn({ err: errorMessage(dbErr), runId }, "run_detail_db_fallback_failed");
