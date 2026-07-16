@@ -1,5 +1,6 @@
 import type {
   ApprovalRequest,
+  ClarificationRequest,
   PrePrCheckConfigVersion,
   PromptDef,
   RepositoryOption,
@@ -150,6 +151,7 @@ export interface RunDetailResponse {
   available: boolean;
   run: RunDetail | null;
   steps: RunStep[];
+  clarification?: ClarificationRequest | null;
 }
 
 export interface WorkflowRow extends Pick<Workflow, "id" | "name" | "blurb" | "gateway"> {
@@ -235,5 +237,12 @@ export interface ApprovalsResponse {
 export interface ApprovalDecisionResponse {
   approval: ApprovalRequest;
   /** Run started on approval; null for a rejection. */
+  runId: string | null;
+}
+
+export interface ClarificationAnswerResponse {
+  clarification: ClarificationRequest;
+  /** Resume run started on the answer; null when the answer was recorded but
+   *  dispatch will be retried. */
   runId: string | null;
 }

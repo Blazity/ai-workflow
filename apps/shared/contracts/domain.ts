@@ -341,3 +341,34 @@ export interface ApprovalRequest {
   /** Run started on approval; null until dispatched. */
   dispatchedRunId: string | null;
 }
+
+// --- Clarification queue (human-in-the-loop input) ---
+
+export type ClarificationStatus = "pending" | "answered" | "superseded";
+
+/** One set of questions a run parked on awaiting a human answer, as exposed to
+ *  the dashboard. */
+export interface ClarificationRequest {
+  id: string;
+  ticketKey: string;
+  /** Run that asked the questions. */
+  runId: string;
+  /** Graph node that raised the questions; null for the built-in default graph. */
+  blockId: string | null;
+  /** Definition the asking run belonged to; null for the built-in default. */
+  definitionId: number | null;
+  /** Head version of that definition when the questions were filed. */
+  definitionVersion: number | null;
+  questions: string[];
+  suggestedAnswers: string[] | null;
+  status: ClarificationStatus;
+  /** ISO timestamp. */
+  askedAt: string;
+  answer: string | null;
+  answeredById: string | null;
+  answeredByLabel: string | null;
+  /** ISO timestamp; null while pending. */
+  answeredAt: string | null;
+  /** Resume run started on answer; null until dispatched. */
+  dispatchedRunId: string | null;
+}
