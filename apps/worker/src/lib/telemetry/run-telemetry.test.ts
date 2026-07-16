@@ -8,6 +8,7 @@ import {
   recordRunUsage,
   recordBlockStatuses,
   resolveAwaitingRun,
+  resolveAwaitingRunsForTicket,
   type RunSnapshot,
   type RunUsage,
   type RunBlockStatusWrite,
@@ -369,5 +370,23 @@ describe("awaiting (clarification park)", () => {
 
   it("resolveAwaitingRun is a no-op for a missing run", async () => {
     expect(await resolveAwaitingRun(db, "wrun_missing")).toBe(false);
+  });
+
+  it("resolveAwaitingRunsForTicket flips other awaiting runs for the ticket, excluding the current run", async () => {
+    await recordRunUsage(db, usage({ runId: "wrun_old", status: "awaiting" }));
+    await recordRunUsage(db, usage({ runId: "wrun_new", status: "awaiting" }));
+    const flipped = await resolveAwaitingRunsForTicket(db, "PROJ-1", "wrun_new");
+    expect(flipped).toBe(1);
+    expect((await row("wrun_old")).status).toBe("success");
+    expect((await row("wrun_new")).status).toBe("awaiting");
+  });
+
+  it("resolveAwaitingRunsForTicket ignores other tickets and non-awaiting rows", async () => {
+    await recordRunUsage(db, usage({ runId: "wrun_other_ticket", status: "awaiting", ticketKey: "PROJ-2" }));
+    await recordRunUsage(db, usage({ runId: "wrun_done", status: "success" }));
+    const flipped = await resolveAwaitingRunsForTicket(db, "PROJ-1", "wrun_current");
+    expect(flipped).toBe(0);
+    expect((await row("wrun_other_ticket")).status).toBe("awaiting");
+    expect((await row("wrun_done")).status).toBe("success");
   });
 });

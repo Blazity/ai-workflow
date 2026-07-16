@@ -84,7 +84,7 @@ interface RunFixture {
 
 interface RunResult {
   outcome: "completed" | "stopped" | "ended";
-  runOutcome: "success" | "failed";
+  runOutcome: "success" | "failed" | "awaiting";
   /** block_statuses read back from the DB after every persisted write. */
   persistedSnapshots: Array<Record<string, BlockRunState>>;
 }
@@ -147,7 +147,7 @@ async function runWorkflowAgainstDb(db: Db, fx: RunFixture): Promise<RunResult> 
     activeModel: string | undefined;
     pr: { url: string; number: number } | null;
   } = { activeModel: undefined, pr: null };
-  let runOutcome: "success" | "failed" = "failed";
+  let runOutcome: "success" | "failed" | "awaiting" = "failed";
 
   const executeBlock: BlockExecutor = async (blockNode) => {
     const script = scripts[blockNode.id];
@@ -173,15 +173,20 @@ async function runWorkflowAgainstDb(db: Db, fx: RunFixture): Promise<RunResult> 
       blockStatuses[nodeId] = guarded;
       await writeBlockStatuses();
     },
-    // A clarification is a clean success exit in agent.ts.
+    // A clarification parks the run: awaiting, not success. The answer endpoint
+    // (or re-pickup housekeeping) flips it to success later.
     async clarificationExit() {
-      runOutcome = "success";
+      runOutcome = "awaiting";
     },
     // failureExit leaves runOutcome at its default "failed".
     async failureExit() {},
     async terminate(params) {
       runOutcome =
-        params.terminalStatus === "failed" ? "failed" : "success";
+        params.terminalStatus === "failed"
+          ? "failed"
+          : params.terminalStatus === "waiting_for_human"
+            ? "awaiting"
+            : "success";
     },
   };
 
@@ -198,7 +203,13 @@ async function runWorkflowAgainstDb(db: Db, fx: RunFixture): Promise<RunResult> 
       maxTotalExecutions: 200,
     });
     outcome = walk.outcome;
-    if (walk.outcome === "completed" || walk.outcome === "ended") {
+    // Mirror agent.ts: never promote a clarification park (awaiting) to success.
+    // `as string` because TS narrows runOutcome to its "failed" initializer (it
+    // can't see the hook closures writing it).
+    if (
+      (walk.outcome === "completed" || walk.outcome === "ended") &&
+      (runOutcome as string) !== "awaiting"
+    ) {
       runOutcome = "success";
     }
   } finally {
@@ -328,7 +339,7 @@ describe("run telemetry integration (executeGraph -> pglite)", () => {
     expect(r.completedAt).not.toBeNull();
   });
 
-  it("needs_human_input block: warn persisted, downstream stays pending, run recorded as success with cost", async () => {
+  it("needs_human_input block: warn persisted, downstream stays pending, run recorded as awaiting with cost", async () => {
     const nodes = [
       node("trig", "trigger_ticket_ai"),
       node("prep", "prepare_workspace"),
@@ -360,7 +371,7 @@ describe("run telemetry integration (executeGraph -> pglite)", () => {
     });
 
     expect(result.outcome).toBe("stopped");
-    expect(result.runOutcome).toBe("success");
+    expect(result.runOutcome).toBe("awaiting");
 
     const r = await runRow("wrun_clarify");
     expect(r.blockStatuses).toEqual({
@@ -375,14 +386,44 @@ describe("run telemetry integration (executeGraph -> pglite)", () => {
       impl: { status: "pending" },
     });
 
-    // Clarification is a clean success, and cost is still recorded.
-    expect(r.status).toBe("success");
+    // Clarification parks the run (awaiting, not success), and cost is still recorded.
+    expect(r.status).toBe("awaiting");
     expect(r.model).toBe("claude-default");
     expect(r.costUsd).toBeCloseTo(0.5);
     expect(r.costKnown).toBe(true);
     expect(r.tokensInput).toBe(1000);
     expect(Object.keys(r.phases as Record<string, unknown>)).toEqual(["Research"]);
     expect(r.prNumber).toBeNull();
+  });
+
+  it("terminate waiting_for_human parks the run: awaiting persists to the run row, not clobbered to success", async () => {
+    // A terminate(waiting_for_human) node sets runOutcome = awaiting. The walk
+    // returns "stopped", so the post-walk success promotion is skipped, and the
+    // guard (runOutcome !== "awaiting") is the belt-and-suspenders that keeps a
+    // completed/ended walk from ever overriding awaiting.
+    const nodes = [
+      node("trig", "trigger_ticket_ai"),
+      node("prep", "prepare_workspace"),
+      node("wait", "terminate", { terminalStatus: "waiting_for_human", postComment: "Need input" }),
+    ];
+    const edges: WorkflowDefinitionEdge[] = [
+      { from: "trig", to: "prep" },
+      { from: "prep", to: "wait" },
+    ];
+
+    const result = await runWorkflowAgainstDb(db, {
+      runId: "wrun_wait",
+      nodes,
+      edges,
+      entryTriggerType: "trigger_ticket_ai",
+      scripts: {
+        prep: { result: { kind: "next", output: { status: "ok" } }, activeModel: "claude-default" },
+      },
+    });
+
+    expect(result.outcome).toBe("stopped");
+    expect(result.runOutcome).toBe("awaiting");
+    expect((await runRow("wrun_wait")).status).toBe("awaiting");
   });
 
   it("failed block with no failure edge: fail persisted, run recorded as failed, cost still captured", async () => {

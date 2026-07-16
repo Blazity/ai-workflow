@@ -1,4 +1,4 @@
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, ne, sql } from "drizzle-orm";
 import type { Db } from "../../db/client.js";
 import { workflowRuns } from "../../db/schema.js";
 import type { BlockRunState, RunStep } from "@shared/contracts";
@@ -274,4 +274,30 @@ export async function resolveAwaitingRun(db: Db, runId: string): Promise<boolean
     .where(and(eq(workflowRuns.runId, runId), eq(workflowRuns.status, "awaiting")))
     .returning({ runId: workflowRuns.runId });
   return rows.length > 0;
+}
+
+/**
+ * Re-pickup housekeeping: flips every OTHER awaiting run for a ticket from
+ * "awaiting" to "success", excluding the run doing the pickup. A fresh run
+ * supersedes its parked predecessors, so those must not stay "awaiting"
+ * forever. Guarded on status='awaiting' and run_id <> exclude, so it is a
+ * tolerant no-op when nothing is parked. Returns the number of rows flipped.
+ */
+export async function resolveAwaitingRunsForTicket(
+  db: Db,
+  ticketKey: string,
+  excludeRunId: string,
+): Promise<number> {
+  const rows = await db
+    .update(workflowRuns)
+    .set({ status: "success", updatedAt: sql`now()` })
+    .where(
+      and(
+        eq(workflowRuns.ticketKey, ticketKey),
+        eq(workflowRuns.status, "awaiting"),
+        ne(workflowRuns.runId, excludeRunId),
+      ),
+    )
+    .returning({ runId: workflowRuns.runId });
+  return rows.length;
 }

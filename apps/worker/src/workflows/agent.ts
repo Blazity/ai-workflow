@@ -1,5 +1,6 @@
 import { sleep, getWorkflowMetadata } from "workflow";
 import { branchForTicket } from "../lib/branch-prefix.js";
+import { ticketRunUrl, ticketPageUrl, hasDashboardLinkComment } from "../lib/dashboard-links.js";
 import { computeUsageTotals, type UsageTotals } from "../sandbox/usage.js";
 import type {
   AgentOutput, PhaseUsage, PhaseKind, PhaseArtifactPaths, ResearchResult, ReviewOutput,
@@ -404,18 +405,38 @@ async function logPhaseFailure(
 }
 logPhaseFailure.maxRetries = 0;
 
-async function postClarificationAndMoveBack(
+async function createClarificationRequestStep(input: {
+  ticketKey: string;
+  runId: string;
+  blockId: string | null;
+  definitionId: number | null;
+  definitionVersion: number | null;
+  questions: string[];
+  suggestedAnswers: string[] | null;
+}): Promise<string> {
+  "use step";
+  const { getDb } = await import("../db/client.js");
+  const { createClarificationRequest } = await import("../clarifications/store.js");
+  const row = await createClarificationRequest(getDb(), input);
+  return row.id;
+}
+// maxRetries = 0 (mirrors createApprovalRequestStep): the questions are filed
+// durably before any ticket movement, so a thrown insert must fail the run
+// visibly rather than retry into an inconsistent state.
+createClarificationRequestStep.maxRetries = 0;
+
+async function parkForClarificationStep(
   ticketId: string,
-  questions: string[],
   backlogTarget: IssueTrackerMoveTarget,
-): Promise<string | null> {
+): Promise<void> {
   "use step";
   const { createStepAdapters } = await import("../lib/step-adapters.js");
   const { NEEDS_CLARIFICATION_LABEL } = await import("../lib/labels.js");
   const { issueTracker } = createStepAdapters();
-  const comment = questions.map((q, i) => `${i + 1}. ${q}`).join("\n");
-  const commentUrl = await issueTracker.postComment(ticketId, comment);
-  // Tag the ticket so the overview's awaiting-input scan can find it cheaply.
+  // No Jira comment: the questions live durably in the clarification store and
+  // the overview reads awaiting state from the DB. The label is ticket-status
+  // truth only now (it no longer drives any Jira scan). Best-effort, so a label
+  // failure never blocks the park.
   if (typeof issueTracker.updateLabels === "function") {
     try {
       await issueTracker.updateLabels(ticketId, {
@@ -430,28 +451,93 @@ async function postClarificationAndMoveBack(
     }
   }
   await issueTracker.moveTicket(ticketId, backlogTarget);
-  return commentUrl;
 }
 
-async function clearClarificationLabel(ticketId: string) {
+async function reconcileClarificationsOnPickup(
+  ticketKey: string,
+  currentRunId: string,
+): Promise<void> {
   "use step";
+  const { getDb } = await import("../db/client.js");
   const { createStepAdapters } = await import("../lib/step-adapters.js");
   const { NEEDS_CLARIFICATION_LABEL } = await import("../lib/labels.js");
+  const { supersedePendingForTicket } = await import("../clarifications/store.js");
+  const { resolveAwaitingRunsForTicket } = await import("../lib/telemetry/run-telemetry.js");
   const { issueTracker } = createStepAdapters();
+  // Re-pickup housekeeping, all idempotent so default step retries are safe:
+  //  - drop the awaiting-input label (best-effort; a label error must not fail
+  //    the fresh run),
+  //  - supersede any still-pending clarification (a no-op for a
+  //    clarification_answered entry whose row was already answered),
+  //  - flip parked predecessor runs off "awaiting" so they don't linger.
   if (typeof issueTracker.updateLabels === "function") {
     try {
-      await issueTracker.updateLabels(ticketId, {
+      await issueTracker.updateLabels(ticketKey, {
         remove: [NEEDS_CLARIFICATION_LABEL],
       });
     } catch (err) {
       const { logger } = await import("../lib/logger.js");
       logger.warn(
-        { ticketId, err: errorMessage(err) },
+        { ticketKey, err: errorMessage(err) },
         "clarification_label_remove_failed",
       );
     }
   }
+  const db = getDb();
+  await supersedePendingForTicket(db, ticketKey);
+  await resolveAwaitingRunsForTicket(db, ticketKey, currentRunId);
 }
+
+async function postPickupCommentStep(ticketKey: string): Promise<void> {
+  "use step";
+  const { createStepAdapters } = await import("../lib/step-adapters.js");
+  const { env } = await import("../../env.js");
+  const { issueTracker } = createStepAdapters();
+  // No run param: the ticket view auto-selects the newest run. The link doubles
+  // as the idempotency marker (hasDashboardLinkComment), so this must post at
+  // most once per ticket. Best-effort: a post failure must not fail the run.
+  const url = ticketPageUrl(env.DASHBOARD_ORIGIN, ticketKey);
+  try {
+    await issueTracker.postComment(
+      ticketKey,
+      `AI workflow picked this ticket up. Follow progress and answer questions in the dashboard: ${url}`,
+    );
+  } catch (err) {
+    const { logger } = await import("../lib/logger.js");
+    logger.warn(
+      { ticketKey, err: errorMessage(err) },
+      "pickup_comment_failed",
+    );
+  }
+}
+postPickupCommentStep.maxRetries = 0;
+
+async function loadClarificationHistoryStep(
+  ticketKey: string,
+): Promise<Array<{ questions: string[]; answer: string; answeredBy?: string; answeredAt?: string }>> {
+  "use step";
+  const { getDb } = await import("../db/client.js");
+  const { listAnsweredForTicket } = await import("../clarifications/store.js");
+  const rows = await listAnsweredForTicket(getDb(), ticketKey);
+  return rows
+    .filter((r) => r.answer !== null)
+    .map((r) => ({
+      questions: r.questions,
+      answer: r.answer as string,
+      ...(r.answeredByLabel ? { answeredBy: r.answeredByLabel } : {}),
+      ...(r.answeredAt ? { answeredAt: r.answeredAt.toISOString() } : {}),
+    }));
+}
+
+async function logClarificationHistoryFailure(ticketKey: string, reason: string): Promise<void> {
+  "use step";
+  const { logger } = await import("../lib/logger.js");
+  logger.warn(
+    { ticketKey, reason: reason.slice(0, 1_000) },
+    "clarification_history_load_failed",
+  );
+}
+logClarificationHistoryFailure.maxRetries = 0;
 
 async function unregisterRun(ticketIdentifier: string) {
   "use step";
@@ -536,7 +622,7 @@ function phaseKey(base: string, attempt: number): string {
  */
 async function recordRunTelemetryStep(payload: {
   runId: string;
-  status: "success" | "failed";
+  status: "success" | "failed" | "awaiting";
   ticketKey: string;
   ticketTitle: string;
   ticketUrl: string;
@@ -650,12 +736,19 @@ export async function agentWorkflow(input: string | AgentWorkflowInput) {
   const ticket = await fetchAndValidateTicket(ticketId, env.COLUMN_AI, entry.kind !== "ticket");
   if (!ticket) return;
 
-  // Re-picked from backlog after a human answered a clarification: clear the
-  // awaiting-input marker so the overview stops listing it (and a later failure
-  // back to backlog can't resurface it as "awaiting").
-  const { NEEDS_CLARIFICATION_LABEL } = await import("../lib/labels.js");
-  if (ticket.labels.includes(NEEDS_CLARIFICATION_LABEL)) {
-    await clearClarificationLabel(ticket.identifier);
+  // Re-pickup housekeeping, unconditional: strip the awaiting-input label,
+  // supersede any pending clarification, and flip parked predecessor runs off
+  // "awaiting". All three are idempotent, so this is a safe no-op on a first
+  // pickup too.
+  await reconcileClarificationsOnPickup(ticket.identifier, workflowRunId);
+
+  // First pickup only: post exactly one dashboard link comment so a human can
+  // follow progress and answer questions. The link itself is the idempotency
+  // marker (hasDashboardLinkComment), so a re-picked ticket that already has it
+  // posts nothing. Ticket-triggered runs only: pr_trigger and plan_approved
+  // runs are follow-ups on a ticket the bot already commented on.
+  if (entry.kind === "ticket" && !hasDashboardLinkComment(ticket.comments, ticket.identifier)) {
+    await postPickupCommentStep(ticket.identifier);
   }
 
   const { loadPrompts } = await import("./prompts-step.js");
@@ -702,10 +795,12 @@ export async function agentWorkflow(input: string | AgentWorkflowInput) {
   // Captured on the success path; written as run telemetry in the finally.
   let prForTelemetry: { url: string; number: number } | null = null;
   // Authoritative terminal status for telemetry, written in the finally on
-  // every exit path. Defaults to "failed"; only the genuine PR-opened success
-  // and the clarification exits (which complete cleanly) flip it to "success".
-  // Every phase failure / timeout / thrown error keeps "failed".
-  let runOutcome: "success" | "failed" = "failed";
+  // every exit path. Defaults to "failed". The genuine PR-opened success flips
+  // it to "success"; the clarification exits record "awaiting" (the run is
+  // parked, not done: the answer endpoint or the re-pickup housekeeping later
+  // flips it to success). Every phase failure / timeout / thrown error keeps
+  // "failed".
+  let runOutcome: "success" | "failed" | "awaiting" = "failed";
   // Seeded with the run default model once prepare_workspace provisions the
   // sandbox, then set to the implementation block's model once it runs.
   let activeModel: string | undefined;
@@ -730,6 +825,22 @@ export async function agentWorkflow(input: string | AgentWorkflowInput) {
     const branchName = branchForTicket(ticket.identifier);
     const downloadedAttachments = await fetchAttachments(ticket.identifier, ticket.attachments);
 
+    // Answered Q&A history for this ticket, injected into every prompt so a
+    // resumed / re-picked run sees what a human already answered. Loaded for
+    // every entry kind (a recovery or manual re-pickup is a plain "ticket" run,
+    // and the answers live only in the DB). Best-effort: the step retries on a
+    // transient DB error, but a persistent failure must degrade to no history
+    // (a warn, not a dead run), so we log and continue with undefined.
+    let clarificationHistory:
+      | Array<{ questions: string[]; answer: string; answeredBy?: string; answeredAt?: string }>
+      | undefined;
+    try {
+      clarificationHistory = await loadClarificationHistoryStep(ticket.identifier);
+    } catch (err) {
+      await logClarificationHistoryFailure(ticket.identifier, errorMessage(err));
+      clarificationHistory = undefined;
+    }
+
     const ticketData = {
       identifier: ticket.identifier,
       title: ticket.title,
@@ -737,6 +848,9 @@ export async function agentWorkflow(input: string | AgentWorkflowInput) {
       acceptanceCriteria: ticket.acceptanceCriteria,
       comments: ticket.comments,
       labels: ticket.labels,
+      ...(clarificationHistory && clarificationHistory.length > 0
+        ? { clarifications: clarificationHistory }
+        : {}),
     };
 
     // Per-ticket agent override via labels (e.g. `agent:codex`). Falls
@@ -823,19 +937,34 @@ export async function agentWorkflow(input: string | AgentWorkflowInput) {
     };
 
     try {
-      const clarificationExit = async (questions: string[]): Promise<void> => {
-        await unregisterRun(ticket.identifier);
-        const commentUrl = await postClarificationAndMoveBack(
-          ticketId,
+      const clarificationExit = async (
+        questions: string[],
+        nodeId?: string,
+        suggestedAnswers?: string[],
+      ): Promise<void> => {
+        // Crash safety: with question comments gone, the questions must exist
+        // durably BEFORE any ticket movement. This insert (maxRetries = 0)
+        // throwing fails the run visibly; the outer catch then parks the ticket
+        // in backlog like any other failure. Order after it mirrors every
+        // terminal path: unregister BEFORE moveTicket (see failureExit's race
+        // note), and park posts no Jira comment.
+        await createClarificationRequestStep({
+          ticketKey: ticket.identifier,
+          runId: workflowRunId,
+          blockId: nodeId ?? null,
+          definitionId: plan.definitionId,
+          definitionVersion: plan.version,
           questions,
-          backlogMoveTarget(),
-        );
+          suggestedAnswers: suggestedAnswers ?? null,
+        });
+        await unregisterRun(ticket.identifier);
+        await parkForClarificationStep(ticketId, backlogMoveTarget());
         await notifyTicket(ticket.identifier, {
           kind: "needs_clarification",
-          commentUrl: commentUrl ?? undefined,
+          dashboardUrl: ticketRunUrl(env.DASHBOARD_ORIGIN, ticket.identifier, workflowRunId),
           usageReport: usageReportOrUndefined(),
         });
-        runOutcome = "success";
+        runOutcome = "awaiting";
       };
 
       const failureExit = async (phase: string, reason: string): Promise<void> => {
@@ -860,10 +989,44 @@ export async function agentWorkflow(input: string | AgentWorkflowInput) {
         });
       };
 
-      const terminate = async (params: {
-        terminalStatus: "waiting_for_human" | "failed" | "skipped" | "done";
-        postComment?: string;
-      }): Promise<void> => {
+      const terminate = async (
+        params: {
+          terminalStatus: "waiting_for_human" | "failed" | "skipped" | "done";
+          postComment?: string;
+        },
+        nodeId?: string,
+      ): Promise<void> => {
+        if (params.terminalStatus === "waiting_for_human") {
+          // Same rework as clarificationExit: file the question durably FIRST
+          // (before any unregister/move), then unregister -> park -> notify.
+          // maxRetries = 0, so a throw fails the run and the outer catch parks
+          // the ticket like any failure. No Jira comment.
+          await createClarificationRequestStep({
+            ticketKey: ticket.identifier,
+            runId: workflowRunId,
+            blockId: nodeId ?? null,
+            definitionId: plan.definitionId,
+            definitionVersion: plan.version,
+            questions: [params.postComment ?? "Waiting for human input."],
+            suggestedAnswers: null,
+          });
+          // Unregister BEFORE the park's moveTicket (dedupe via the flag), so the
+          // move's Jira webhook can't race ahead and fire a duplicate "canceled".
+          if (!state.runUnregisteredBeforePr) {
+            await unregisterRun(ticket.identifier);
+            state.runUnregisteredBeforePr = true;
+          }
+          await parkForClarificationStep(ticketId, backlogMoveTarget());
+          await notifyTicket(ticket.identifier, {
+            kind: "needs_clarification",
+            dashboardUrl: ticketRunUrl(env.DASHBOARD_ORIGIN, ticket.identifier, workflowRunId),
+            usageReport: usageReportOrUndefined(),
+          });
+          runOutcome = "awaiting";
+          return;
+        }
+        // Non-clarification terminal statuses: unregister first (dedupe via the
+        // flag), same race rationale as failureExit.
         if (!state.runUnregisteredBeforePr) {
           await unregisterRun(ticket.identifier);
           state.runUnregisteredBeforePr = true;
@@ -872,20 +1035,6 @@ export async function agentWorkflow(input: string | AgentWorkflowInput) {
           if (params.postComment) {
             await postTicketComment(ticket.identifier, params.postComment);
           }
-          runOutcome = "success";
-          return;
-        }
-        if (params.terminalStatus === "waiting_for_human") {
-          const commentUrl = await postClarificationAndMoveBack(
-            ticketId,
-            [params.postComment ?? "Waiting for human input."],
-            backlogMoveTarget(),
-          );
-          await notifyTicket(ticket.identifier, {
-            kind: "needs_clarification",
-            commentUrl: commentUrl ?? undefined,
-            usageReport: usageReportOrUndefined(),
-          });
           runOutcome = "success";
           return;
         }
@@ -954,12 +1103,22 @@ export async function agentWorkflow(input: string | AgentWorkflowInput) {
             phaseUsages[researchPhase] = researchUsage;
 
             if (research.status === "clarification_needed") {
-              const parsed = research.body.split("\n").filter((l) => /^\d+\./.test(l.trim()));
-              const questions = parsed.length > 0 ? parsed : [research.body];
+              // Prefer the structured questions the parser now folds out; fall
+              // back to the legacy regex split of the freeform body for older
+              // agent outputs that only populate research.body.
+              let questions: string[];
+              if (research.questions && research.questions.length > 0) {
+                questions = research.questions;
+              } else {
+                const parsed = research.body.split("\n").filter((l) => /^\d+\./.test(l.trim()));
+                questions = parsed.length > 0 ? parsed : [research.body];
+              }
+              const suggestedAnswers = research.suggestedAnswers;
               return {
                 kind: "needs_human_input",
                 output: { status: "needs_human_input", questions },
                 questions,
+                ...(suggestedAnswers && suggestedAnswers.length > 0 ? { suggestedAnswers } : {}),
               };
             }
 
@@ -1016,10 +1175,12 @@ export async function agentWorkflow(input: string | AgentWorkflowInput) {
 
             if (implOutput.result === "clarification_needed") {
               const questions = implOutput.questions ?? [];
+              const suggestedAnswers = implOutput.suggestedAnswers;
               return {
                 kind: "needs_human_input",
                 output: { status: "needs_human_input", questions },
                 questions,
+                ...(suggestedAnswers && suggestedAnswers.length > 0 ? { suggestedAnswers } : {}),
               };
             }
 
@@ -1241,7 +1402,16 @@ export async function agentWorkflow(input: string | AgentWorkflowInput) {
       // "ended" is a clean awaiting stop (e.g. send_plan_approval parked the
       // run for human approval and already moved the ticket): a success, not a
       // failure. No ticket move here; the block owns that.
-      if (walk.outcome === "completed" || walk.outcome === "ended") {
+      // Constraint: never promote a clarification park to success here. The
+      // terminate/clarification paths set runOutcome = "awaiting" and own it
+      // (the answer endpoint flips it later), so a completed/ended walk that
+      // left "awaiting" set must keep it. The `as string` read is needed
+      // because TS can't see the hook closures writing runOutcome and narrows
+      // it to its "failed" initializer.
+      if (
+        (walk.outcome === "completed" || walk.outcome === "ended") &&
+        (runOutcome as string) !== "awaiting"
+      ) {
         currentBlockId = null;
         runOutcome = "success";
       }
