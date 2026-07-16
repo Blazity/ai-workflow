@@ -7,6 +7,7 @@ import {
   upsertRunSnapshots,
   recordRunUsage,
   recordBlockStatuses,
+  resolveAwaitingRun,
   type RunSnapshot,
   type RunUsage,
   type RunBlockStatusWrite,
@@ -335,5 +336,38 @@ describe("recordBlockStatuses", () => {
     expect(r.status).toBe("running");
     expect(r.ticketTitle).toBe("Add login");
     expect(r.sandboxId).toBe("sbx_1");
+  });
+});
+
+describe("awaiting (clarification park)", () => {
+  it("recordRunUsage writes status 'awaiting'", async () => {
+    await recordRunUsage(db, usage({ status: "awaiting" }));
+    expect((await row("wrun_1")).status).toBe("awaiting");
+  });
+
+  it("a later world-derived 'success' snapshot must not flip an awaiting row", async () => {
+    // The world reports a parked run as completed→success; the cron must leave
+    // awaiting alone so the answer endpoint owns the transition.
+    await recordRunUsage(db, usage({ status: "awaiting" }));
+    await upsertRunSnapshots(db, [snapshot({ status: "success" })]);
+    expect((await row("wrun_1")).status).toBe("awaiting");
+  });
+
+  it("resolveAwaitingRun flips awaiting → success and returns true", async () => {
+    await recordRunUsage(db, usage({ status: "awaiting" }));
+    const flipped = await resolveAwaitingRun(db, "wrun_1");
+    expect(flipped).toBe(true);
+    expect((await row("wrun_1")).status).toBe("success");
+  });
+
+  it("resolveAwaitingRun is a no-op on a non-awaiting row", async () => {
+    await recordRunUsage(db, usage({ status: "success" }));
+    const flipped = await resolveAwaitingRun(db, "wrun_1");
+    expect(flipped).toBe(false);
+    expect((await row("wrun_1")).status).toBe("success");
+  });
+
+  it("resolveAwaitingRun is a no-op for a missing run", async () => {
+    expect(await resolveAwaitingRun(db, "wrun_missing")).toBe(false);
   });
 });

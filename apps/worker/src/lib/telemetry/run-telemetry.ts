@@ -1,4 +1,4 @@
-import { sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import type { Db } from "../../db/client.js";
 import { workflowRuns } from "../../db/schema.js";
 import type { BlockRunState, RunStep } from "@shared/contracts";
@@ -45,16 +45,18 @@ export interface RunUsage {
   workflowId: string;
   workflowName: string;
   /**
-   * Terminal status the run reached on this exit path: "success" (PR opened, or
-   * a clarification that completed cleanly) or "failed" (any phase failure,
-   * timeout, or thrown error). This is the run's OWN authoritative status,
+   * Status the run reached on this exit path: "success" (PR opened, or a
+   * clarification that completed cleanly), "failed" (any phase failure,
+   * timeout, or thrown error), or "awaiting" (parked on a clarification the run
+   * filed, not terminal: the answer endpoint owns the later transition to
+   * success). This is the run's OWN authoritative status,
    * written by the workflow on completion — it no longer depends on a later
    * cron snapshot re-observing the run in the Workflow world, which never
    * happens on deployments where the scheduled cron doesn't fire (and which
    * mis-reports a failed-but-returned run as "success" even when it does).
    * "blocked" (external cancellation) stays cron-driven.
    */
-  status: "success" | "failed";
+  status: "success" | "failed" | "awaiting";
   ticketKey: string | null;
   ticketTitle: string | null;
   ticketUrl: string | null;
@@ -120,9 +122,13 @@ export async function upsertRunSnapshots(
         // snapshot re-deriving status from the world must not clobber it — the
         // world reports a failed-but-returned run as "completed" → "success",
         // and there's a brief post-completion window where it still reads
-        // "running". Only advance a row that hasn't reached a terminal state.
+        // "running". The workflow also records "awaiting" for a run parked on a
+        // clarification, and the world reports that parked run "completed" →
+        // "success", so the cron must never flip awaiting to success: the answer
+        // endpoint owns that transition. Only advance a row that hasn't reached
+        // a frozen state.
         status: sql`case
-          when ${workflowRuns.status} in ('success', 'failed', 'blocked') then ${workflowRuns.status}
+          when ${workflowRuns.status} in ('success', 'failed', 'blocked', 'awaiting') then ${workflowRuns.status}
           else excluded.status
         end`,
         ticketKey: keepIfNull(workflowRuns.ticketKey, workflowRuns.ticketKey),
@@ -252,4 +258,20 @@ export async function recordBlockStatuses(
         updatedAt: sql`now()`,
       },
     });
+}
+
+/**
+ * Flips a run parked on a clarification from "awaiting" to "success". Called
+ * when the clarification is answered (or superseded by a re-pickup) so parked
+ * runs don't stay "awaiting" forever. Guarded on status='awaiting', so it is a
+ * tolerant no-op when the run is missing or already moved on. Returns whether a
+ * row actually flipped.
+ */
+export async function resolveAwaitingRun(db: Db, runId: string): Promise<boolean> {
+  const rows = await db
+    .update(workflowRuns)
+    .set({ status: "success", updatedAt: sql`now()` })
+    .where(and(eq(workflowRuns.runId, runId), eq(workflowRuns.status, "awaiting")))
+    .returning({ runId: workflowRuns.runId });
+  return rows.length > 0;
 }
