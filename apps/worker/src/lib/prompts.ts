@@ -105,7 +105,9 @@ If any answer is NO, return \`status: "clarification_needed"\` with precise ques
 
 ## Prior Sessions
 - Brief summary of prior sessions (if memory file existed)
-\`\`\``;
+\`\`\`
+
+The file may contain a \`Human decisions\` section (between \`<!-- human-decisions:start -->\` and \`<!-- human-decisions:end -->\`) that is maintained automatically. Preserve it exactly: do not edit or remove it.`;
 
 const implementPrompt = `# Instructions
 
@@ -161,6 +163,8 @@ Return \`clarification_needed\` only if the plan is genuinely unexecutable. Exha
 ## Prior Sessions
 - Brief summary of prior sessions (if memory file existed)
 \`\`\`
+
+The file may contain a \`Human decisions\` section (between \`<!-- human-decisions:start -->\` and \`<!-- human-decisions:end -->\`) that is maintained automatically. Preserve it exactly: do not edit or remove it.
 
 ## Output
 

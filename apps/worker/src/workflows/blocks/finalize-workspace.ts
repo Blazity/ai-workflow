@@ -67,6 +67,7 @@ export const execute: BlockExecuteFn = async (block, steps, ctx): Promise<BlockE
       title: ctx.ticket.title,
       agentKind: ctx.runDefaultKind,
       model: ctx.defaults[ctx.runDefaultKind],
+      clarifications: ctx.clarifications,
       beforeCreatePullRequests: async () => {
         await ctx.unregisterBeforePr();
       },

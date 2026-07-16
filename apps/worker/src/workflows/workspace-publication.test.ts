@@ -5,11 +5,16 @@ const mocks = vi.hoisted(() => ({
   pushWorkspaceFromSandbox: vi.fn(),
   fixAndRetryWorkspacePush: vi.fn(),
   createOrUseWorkflowOwnedPullRequestsForRepos: vi.fn(),
+  writeHumanDecisionsMemory: vi.fn(),
 }));
 
 vi.mock("../sandbox/poll-agent.js", () => ({
   pushWorkspaceFromSandbox: mocks.pushWorkspaceFromSandbox,
   fixAndRetryWorkspacePush: mocks.fixAndRetryWorkspacePush,
+}));
+
+vi.mock("../sandbox/write-human-decisions-memory.js", () => ({
+  writeHumanDecisionsMemory: mocks.writeHumanDecisionsMemory,
 }));
 
 vi.mock("./repository-prs.js", () => ({
@@ -173,5 +178,87 @@ describe("publishWorkspaceChanges", () => {
         }),
       ],
     });
+  });
+
+  it("writes the human decisions memory before pushing when clarifications exist", async () => {
+    mocks.pushWorkspaceFromSandbox.mockResolvedValueOnce({
+      pushed: true,
+      repositories: [
+        {
+          provider: "github",
+          repoPath: "acme/web",
+          branchName: "blazebot/aiw-45",
+          changed: true,
+          pushed: true,
+        },
+      ],
+    });
+    mocks.createOrUseWorkflowOwnedPullRequestsForRepos.mockResolvedValueOnce([
+      {
+        provider: "github",
+        repoPath: "acme/web",
+        id: 12,
+        url: "https://github.com/acme/web/pull/12",
+        branch: "blazebot/aiw-45",
+        isNew: true,
+      },
+    ]);
+
+    const clarifications = [
+      { questions: ["Which flavor?"], answer: "vanilla", answeredBy: "Jane Doe" },
+    ];
+
+    await publishWorkspaceChanges({
+      sandboxId: "sbx-1",
+      ticketKey: "AIW-45",
+      branchName: "blazebot/aiw-45",
+      repositories: selectedRepositories,
+      title: "Mixed provider task",
+      agentKind: "claude",
+      model: "claude-sonnet-4-20250514",
+      clarifications,
+    });
+
+    expect(mocks.writeHumanDecisionsMemory).toHaveBeenCalledWith("sbx-1", "AIW-45", clarifications);
+    expect(mocks.writeHumanDecisionsMemory.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.pushWorkspaceFromSandbox.mock.invocationCallOrder[0],
+    );
+  });
+
+  it("skips the human decisions memory step when there are no clarifications", async () => {
+    mocks.pushWorkspaceFromSandbox.mockResolvedValueOnce({
+      pushed: true,
+      repositories: [
+        {
+          provider: "github",
+          repoPath: "acme/web",
+          branchName: "blazebot/aiw-45",
+          changed: true,
+          pushed: true,
+        },
+      ],
+    });
+    mocks.createOrUseWorkflowOwnedPullRequestsForRepos.mockResolvedValueOnce([
+      {
+        provider: "github",
+        repoPath: "acme/web",
+        id: 12,
+        url: "https://github.com/acme/web/pull/12",
+        branch: "blazebot/aiw-45",
+        isNew: true,
+      },
+    ]);
+
+    await publishWorkspaceChanges({
+      sandboxId: "sbx-1",
+      ticketKey: "AIW-45",
+      branchName: "blazebot/aiw-45",
+      repositories: selectedRepositories,
+      title: "Mixed provider task",
+      agentKind: "claude",
+      model: "claude-sonnet-4-20250514",
+    });
+
+    expect(mocks.writeHumanDecisionsMemory).not.toHaveBeenCalled();
   });
 });

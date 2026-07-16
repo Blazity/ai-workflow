@@ -1369,6 +1369,7 @@ export async function agentWorkflow(input: string | AgentWorkflowInput) {
               title: ticket.title,
               agentKind: state.implementationKind ?? runDefaultKind,
               model: state.implementationModel,
+              clarifications: ticketData.clarifications,
               beforeCreatePullRequests: async () => {
                 // Push has landed. Unregister BEFORE any downstream step that can
                 // trigger a Jira webhook: opening a PR can transition the linked

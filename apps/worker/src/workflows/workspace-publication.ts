@@ -1,9 +1,11 @@
 import type { SelectedRepository } from "../adapters/vcs/repository-directory.js";
+import type { HumanDecision } from "../lib/human-decisions-memory.js";
 import {
   fixAndRetryWorkspacePush,
   pushWorkspaceFromSandbox,
   type WorkspacePushResult,
 } from "../sandbox/poll-agent.js";
+import { writeHumanDecisionsMemory } from "../sandbox/write-human-decisions-memory.js";
 import {
   createOrUseWorkflowOwnedPullRequestsForRepos,
   type WorkflowPrLink,
@@ -30,8 +32,15 @@ export async function publishWorkspaceChanges(input: {
   title: string;
   agentKind: "claude" | "codex";
   model: string;
+  clarifications?: HumanDecision[];
   beforeCreatePullRequests?: () => Promise<void>;
 }): Promise<WorkspacePublicationResult> {
+  // Deterministically write the human Q&A into every repo's session-memory file
+  // BEFORE the push so it always ships in the PR, independent of the model.
+  if (input.clarifications && input.clarifications.length > 0) {
+    await writeHumanDecisionsMemory(input.sandboxId, input.ticketKey, input.clarifications);
+  }
+
   let pushResult = await pushWorkspaceFromSandbox(input.sandboxId);
   if (hasPushFailures(pushResult)) {
     pushResult = await fixAndRetryWorkspacePush(
