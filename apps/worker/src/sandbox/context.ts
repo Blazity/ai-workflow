@@ -10,6 +10,12 @@ interface TicketData {
   description: string;
   acceptanceCriteria: string;
   comments: Array<{ author: string; body: string; createdAt?: string }>;
+  clarifications?: Array<{
+    questions: string[];
+    answer: string;
+    answeredBy?: string;
+    answeredAt?: string;
+  }>;
 }
 
 export type PreSandboxPromptTarget = "research" | "implementation" | "review";
@@ -62,6 +68,7 @@ export function assembleResearchPlanContext(input: ResearchPlanContextInput): st
   const preSandboxSection = renderPreSandboxAdditions(preSandboxAdditions);
   const selectedRepositoriesSection = renderSelectedRepositories(selectedRepositories);
   const repositoryContextSection = renderRepositoryContexts(repositoryContexts);
+  const clarificationsSection = renderClarificationsSection(ticket.clarifications);
 
   let md = `# Requirements
 
@@ -84,7 +91,7 @@ ${ticket.acceptanceCriteria || "None specified."}
 ## Comments
 
 ${formatComments(ticket.comments)}
-
+${clarificationsSection}
 ## Branch
 
 ${branchName}
@@ -103,6 +110,7 @@ export function assembleImplementationContext(input: ImplementationContextInput)
   const attachmentsSection = renderAttachmentsSection(attachments);
   const preSandboxSection = renderPreSandboxAdditions(preSandboxAdditions);
   const selectedRepositoriesSection = renderSelectedRepositories(selectedRepositories);
+  const clarificationsSection = renderClarificationsSection(ticket.clarifications);
   return `# Requirements
 
 ## Ticket ID
@@ -116,7 +124,7 @@ ${attachmentsSection}
 ## Acceptance Criteria
 
 ${ticket.acceptanceCriteria || "None specified."}
-
+${clarificationsSection}
 ## Research & Plan
 
 ${researchPlanMarkdown}
@@ -134,6 +142,7 @@ export function assembleReviewContext(input: ReviewContextInput): string {
   const attachmentsSection = renderAttachmentsSection(attachments);
   const preSandboxSection = renderPreSandboxAdditions(preSandboxAdditions);
   const selectedRepositoriesSection = renderSelectedRepositories(selectedRepositories);
+  const clarificationsSection = renderClarificationsSection(ticket.clarifications);
   return `# Requirements
 
 ## Ticket ID
@@ -147,7 +156,7 @@ ${attachmentsSection}
 ## Acceptance Criteria
 
 ${ticket.acceptanceCriteria || "None specified."}
-
+${clarificationsSection}
 ## Research & Plan
 
 ${researchPlanMarkdown}
@@ -184,6 +193,7 @@ export function assembleFixContext(input: FixContextInput): string {
   const conflictSection = conflictNotes ? `\n## Merge Conflicts\n\n${conflictNotes}\n` : "";
   const selectedRepositoriesSection = renderSelectedRepositories(repositories);
   const instructionsSection = instructions ? `\n## Fix Instructions\n\n${instructions}\n` : "";
+  const clarificationsSection = renderClarificationsSection(ticket.clarifications);
 
   return `# Fix Requirements
 
@@ -198,7 +208,7 @@ ${ticket.title}
 ## Acceptance Criteria
 
 ${ticket.acceptanceCriteria || "None specified."}
-${prFeedbackSection}${failedChecksSection}${conflictSection}${selectedRepositoriesSection}${instructionsSection}`;
+${clarificationsSection}${prFeedbackSection}${failedChecksSection}${conflictSection}${selectedRepositoriesSection}${instructionsSection}`;
 }
 
 function formatComments(
@@ -208,6 +218,41 @@ function formatComments(
   return comments
     .map((c) => `${c.author}: ${c.body}`)
     .join("\n\n");
+}
+
+// Prompt-budget protection: a long clarification history must not crowd out the
+// rest of the prompt, so the whole rendered section is capped and truncated.
+const CLARIFICATIONS_MAX_LENGTH = 16000;
+const CLARIFICATIONS_TRUNCATION_NOTE =
+  "\n\n[Clarifications truncated to fit the prompt budget.]\n";
+
+function renderClarificationsSection(
+  clarifications: TicketData["clarifications"],
+): string {
+  if (!clarifications || clarifications.length === 0) return "";
+
+  const rounds = clarifications.map((round, index) => {
+    const numberedQuestions = round.questions
+      .map((q, i) => `${i + 1}. ${q}`)
+      .join("\n");
+    const meta = [
+      round.answeredBy ? `by ${round.answeredBy}` : "",
+      round.answeredAt ?? "",
+    ]
+      .filter(Boolean)
+      .join(", ");
+    const answerLabel = meta ? `Answer (${meta})` : "Answer";
+    return `### Round ${index + 1}\n\n${numberedQuestions}\n\n${answerLabel}: ${round.answer}`;
+  });
+
+  const section = `\n## Clarifications (Q&A)\n\n${rounds.join("\n\n")}\n`;
+  if (section.length > CLARIFICATIONS_MAX_LENGTH) {
+    return (
+      section.slice(0, CLARIFICATIONS_MAX_LENGTH - CLARIFICATIONS_TRUNCATION_NOTE.length) +
+      CLARIFICATIONS_TRUNCATION_NOTE
+    );
+  }
+  return section;
 }
 
 function formatPRComments(comments: PRComment[]): string {

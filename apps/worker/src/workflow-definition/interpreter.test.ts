@@ -36,7 +36,7 @@ interface Recorder {
   hooks: ExecuteGraphHooks;
   starts: Array<{ nodeId: string; attempt: number }>;
   finishes: Array<{ nodeId: string; state: BlockRunState }>;
-  clarifications: Array<{ questions: string[]; nodeId: string }>;
+  clarifications: Array<{ questions: string[]; nodeId: string; suggestedAnswers?: string[] }>;
   failures: Array<{ phase: string; reason: string; nodeId: string }>;
   terminations: Array<{
     params: { terminalStatus: string; postComment?: string };
@@ -57,8 +57,8 @@ function makeRecorder(): Recorder {
     async onBlockFinish(nodeId, state) {
       finishes.push({ nodeId, state });
     },
-    async clarificationExit(questions, nodeId) {
-      clarifications.push({ questions, nodeId });
+    async clarificationExit(questions, nodeId, suggestedAnswers) {
+      clarifications.push({ questions, nodeId, suggestedAnswers });
     },
     async failureExit(phase, reason, nodeId) {
       failures.push({ phase, reason, nodeId });
@@ -446,9 +446,33 @@ describe("executeGraph human input and ended", () => {
     });
     expect(result.outcome).toBe("stopped");
     expect(rec.clarifications).toEqual([{ questions: ["Q1", "Q2"], nodeId: "plan" }]);
+    expect(rec.clarifications[0].suggestedAnswers).toBeUndefined();
     expect(finishStatuses(rec, "plan")).toEqual(["warn"]);
     expect(rec.finishes[0].state.error).toBe("Q1; Q2");
     expect(rec.failures).toEqual([]);
+  });
+
+  it("forwards suggestedAnswers to clarificationExit when the result carries them", async () => {
+    const rec = makeRecorder();
+    const { executor } = makeExecutor({
+      plan: {
+        kind: "needs_human_input",
+        output: { status: "blocked" },
+        questions: ["Which database?"],
+        suggestedAnswers: ["Postgres", "MySQL"],
+      },
+    });
+    const result = await executeGraph({
+      graph: simple(),
+      entryTriggerId: "trig",
+      triggerOutput: { status: "ok" },
+      executeBlock: executor,
+      hooks: rec.hooks,
+    });
+    expect(result.outcome).toBe("stopped");
+    expect(rec.clarifications).toEqual([
+      { questions: ["Which database?"], nodeId: "plan", suggestedAnswers: ["Postgres", "MySQL"] },
+    ]);
   });
 
   it("ended reports outcome ended with a warn finish and no exit hooks", async () => {

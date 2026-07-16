@@ -4,6 +4,7 @@ import type { BlockExecuteFn, BlockExecutionResult } from "./types.js";
 export const paramsSchema = z
   .object({
     questions: z.array(z.string().trim().min(1)).optional(),
+    suggestedAnswers: z.array(z.string().trim().min(1)).optional(),
   })
   .strict();
 
@@ -21,6 +22,15 @@ export const execute: BlockExecuteFn = async (block, steps, _ctx): Promise<Block
       )
     : [];
 
+  // Params-provided suggestions win. Upstream suggestions only fill in when the
+  // questions themselves fall back to upstream and the params carried none,
+  // mirroring how questions fall back.
+  let suggestedAnswers = Array.isArray(block.params.suggestedAnswers)
+    ? block.params.suggestedAnswers.filter(
+        (s): s is string => typeof s === "string" && s.trim().length > 0,
+      )
+    : [];
+
   if (questions.length === 0) {
     const entries = Object.values(steps);
     for (let i = entries.length - 1; i >= 0; i--) {
@@ -31,6 +41,14 @@ export const execute: BlockExecuteFn = async (block, steps, _ctx): Promise<Block
         );
         if (derived.length > 0) {
           questions = derived;
+          if (suggestedAnswers.length === 0) {
+            const upstream = entries[i].output.suggestedAnswers;
+            if (Array.isArray(upstream)) {
+              suggestedAnswers = upstream.filter(
+                (s): s is string => typeof s === "string" && s.trim().length > 0,
+              );
+            }
+          }
           break;
         }
       }
@@ -48,7 +66,12 @@ export const execute: BlockExecuteFn = async (block, steps, _ctx): Promise<Block
 
   return {
     kind: "needs_human_input",
-    output: { status: "needs_human_input", questions },
+    output: {
+      status: "needs_human_input",
+      questions,
+      ...(suggestedAnswers.length > 0 ? { suggestedAnswers } : {}),
+    },
     questions,
+    ...(suggestedAnswers.length > 0 ? { suggestedAnswers } : {}),
   };
 };

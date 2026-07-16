@@ -181,10 +181,18 @@ export const execute: BlockExecuteFn = async (block, _steps, ctx): Promise<Block
 
     if (output.result === "clarification_needed") {
       const questions = (output.questions ?? []).filter((q) => q.trim().length > 0);
+      const suggestedAnswers = (output.suggestedAnswers ?? []).filter(
+        (s) => s.trim().length > 0,
+      );
       return {
         kind: "needs_human_input",
-        output: { status: "needs_human_input", questions },
+        output: {
+          status: "needs_human_input",
+          questions,
+          ...(suggestedAnswers.length > 0 ? { suggestedAnswers } : {}),
+        },
         questions,
+        ...(suggestedAnswers.length > 0 ? { suggestedAnswers } : {}),
       };
     }
     if (output.result === "failed") {

@@ -242,12 +242,12 @@ describe("schema constants", () => {
   });
   it("RESEARCH_SCHEMA is valid JSON with the expected fields", () => {
     const s = JSON.parse(RESEARCH_SCHEMA);
-    expect(s.required).toEqual(["status", "plan", "questions", "error"]);
+    expect(s.required).toEqual(["status", "plan", "questions", "suggestedAnswers", "error"]);
     expect(s.properties.status.enum).toEqual(["completed", "clarification_needed", "failed"]);
   });
   it("GENERIC_SCHEMA is valid JSON with the expected fields", () => {
     const s = JSON.parse(GENERIC_SCHEMA);
-    expect(s.required).toEqual(["status", "body", "questions", "error"]);
+    expect(s.required).toEqual(["status", "body", "questions", "suggestedAnswers", "error"]);
     expect(s.properties.status.enum).toEqual(["ok", "needs_input", "failed"]);
     expect(s.additionalProperties).toBe(false);
   });
