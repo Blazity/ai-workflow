@@ -1,13 +1,22 @@
 "use client";
 
 import React from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 
 import { FlameGraph } from "@/components/flame-graph";
 import { CkCard, CkKPI, CkChip, CkStatusPill } from "@/components/ui";
+import { readErrorMessage } from "@/lib/api/error-message";
+import { runHref } from "@/lib/run-href";
 import { SPAN_KIND_COLOR } from "@/lib/theme";
 import type { Span, SpanKind, SpanStatus } from "@/lib/types";
-import type { RunDetailResponse, RunStep, StepStatus } from "@shared/contracts";
+import type {
+  ClarificationAnswerResponse,
+  ClarificationRequest,
+  RunDetailResponse,
+  RunStep,
+  StepStatus,
+} from "@shared/contracts";
 
 /* ───────────────────── RUN TRACE ───────────────────── */
 
@@ -150,7 +159,10 @@ export function TraceDetail({
   // this screen no longer polls on its own.
   const isRunning =
     !run ||
-    (run.status !== "success" && run.status !== "failed" && run.status !== "blocked");
+    (run.status !== "success" &&
+      run.status !== "failed" &&
+      run.status !== "blocked" &&
+      run.status !== "awaiting");
 
   // Wall-clock offset of "now" from run start — sizes bars for running steps.
   const runStartMs = run ? Date.parse(run.startedAt ?? run.createdAt) : 0;
@@ -323,6 +335,10 @@ export function TraceDetail({
         </CkCard>
       )}
 
+      {data.clarification && (
+        <AnswerPanel clarification={data.clarification} ticket={run.ticket} />
+      )}
+
       <CkCard
         eyebrow="Vercel Workflow · steps.list"
         title="Step timeline · phases"
@@ -443,6 +459,186 @@ export function TraceDetail({
         </div>
       )}
     </div>
+  );
+}
+
+/**
+ * Answer panel for a run parked on a clarification question. Rendered purely
+ * from `data.clarification` (never `run.status`) so an answered-but-undispatched
+ * clarification still shows on a run whose status already flipped. Old workers
+ * that never send the field simply omit the panel.
+ */
+function AnswerPanel({
+  clarification,
+  ticket,
+}: {
+  clarification: ClarificationRequest;
+  ticket: string;
+}) {
+  const router = useRouter();
+  const [answer, setAnswer] = React.useState(clarification.answer ?? "");
+  const [busy, setBusy] = React.useState(false);
+  const [error, setError] = React.useState<string | null>(null);
+  const [result, setResult] = React.useState<ClarificationAnswerResponse | null>(
+    null,
+  );
+
+  if (clarification.status === "superseded") return null;
+
+  async function submit() {
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await fetch(
+        `/api/clarifications/${encodeURIComponent(clarification.id)}/answer`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ answer: answer.trim() }),
+        },
+      );
+      if (!res.ok) {
+        setError(await readErrorMessage(res));
+        if (res.status === 409 || res.status === 410) router.refresh();
+        return;
+      }
+      setResult((await res.json()) as ClarificationAnswerResponse);
+      router.refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to submit answer");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const answered = clarification.status === "answered";
+  const dispatchedRunId = clarification.dispatchedRunId ?? result?.runId ?? null;
+  // Answer saved but the resume run never started; this is the endpoint retry path.
+  const pendingDispatch =
+    dispatchedRunId === null &&
+    ((answered && clarification.dispatchedRunId === null) || result !== null);
+  const showForm =
+    dispatchedRunId === null && (clarification.status === "pending" || pendingDispatch);
+
+  return (
+    <CkCard
+      eyebrow="Human-in-the-loop"
+      title="Input needed"
+      style={{ background: "#FFFCFA", borderColor: "#FFE4D6" }}
+    >
+      <div className="flex flex-col gap-4">
+        <ol className="m-0 flex list-decimal flex-col gap-1.5 pl-5 font-body text-[13px] leading-[1.55] text-neutral-800">
+          {clarification.questions.map((q, i) => (
+            <li key={i}>{q}</li>
+          ))}
+        </ol>
+
+        {answered && (
+          <div className="flex flex-col gap-1.5">
+            <span className="font-mono text-[9px] uppercase tracking-[0.06em] text-neutral-700">
+              Answer
+            </span>
+            <p className="m-0 whitespace-pre-wrap break-words rounded-[3px] border border-neutral-200 bg-off-white p-3 font-body text-[13px] leading-[1.5] text-coal">
+              {clarification.answer}
+            </p>
+            {clarification.answeredAt && (
+              <span className="font-mono text-[11px] text-neutral-500">
+                Answered by{" "}
+                {clarification.answeredByLabel ??
+                  clarification.answeredById ??
+                  "unknown"}{" "}
+                · {fmtClock(clarification.answeredAt)}
+              </span>
+            )}
+          </div>
+        )}
+
+        {dispatchedRunId && (
+          <div className="font-mono text-[11px] text-success-fg">
+            Resumed as{" "}
+            <Link
+              href={runHref({ id: dispatchedRunId, ticket })}
+              className="text-mariner underline-offset-2 hover:underline"
+            >
+              run {dispatchedRunId}
+            </Link>
+          </div>
+        )}
+
+        {showForm && (
+          <>
+            {pendingDispatch && (
+              <div className="font-body text-[12px] leading-snug text-neutral-700">
+                The answer was saved, but the resume run has not started yet.
+                Resubmit to retry starting it.
+              </div>
+            )}
+
+            {!answered &&
+            clarification.suggestedAnswers &&
+            clarification.suggestedAnswers.length > 0 ? (
+              <div className="flex flex-wrap items-center gap-1.5">
+                {clarification.suggestedAnswers.map((a, j) => (
+                  <button
+                    key={j}
+                    type="button"
+                    disabled={busy}
+                    onClick={() => setAnswer(a)}
+                    className="appearance-none border border-neutral-200 bg-panel px-2.5 py-[5px] rounded-[3px] cursor-pointer font-body text-xs text-neutral-900 transition-all duration-100 hover:bg-coal hover:text-white disabled:cursor-default disabled:opacity-40"
+                  >
+                    {a}
+                  </button>
+                ))}
+              </div>
+            ) : null}
+
+            <textarea
+              value={answer}
+              onChange={(e) => setAnswer(e.target.value)}
+              disabled={busy}
+              rows={4}
+              placeholder="Type your answer…"
+              className="w-full resize-y rounded-[3px] border border-neutral-200 bg-panel p-3 font-body text-[13px] leading-[1.5] text-coal placeholder:text-neutral-400 focus-visible:outline focus-visible:outline-2 focus-visible:outline-mariner focus-visible:outline-offset-[-1px] disabled:opacity-60"
+            />
+
+            {error ? <InlineError>{error}</InlineError> : null}
+
+            <div className="flex items-center gap-2">
+              <DarkButton
+                type="button"
+                disabled={busy || answer.trim().length === 0}
+                onClick={submit}
+              >
+                {busy
+                  ? "Submitting…"
+                  : pendingDispatch
+                    ? "Retry resume run"
+                    : "Submit answer"}
+              </DarkButton>
+            </div>
+          </>
+        )}
+      </div>
+    </CkCard>
+  );
+}
+
+function InlineError({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="rounded-[3px] border border-fail-bg bg-fail-bg px-3 py-2 text-[13px] text-fail-fg">
+      {children}
+    </div>
+  );
+}
+
+function DarkButton({ children, ...props }: React.ButtonHTMLAttributes<HTMLButtonElement>) {
+  return (
+    <button
+      {...props}
+      className="inline-flex items-center justify-center whitespace-nowrap rounded-[3px] border border-neutral-900 bg-neutral-900 px-3.5 py-[5px] font-mono text-[11px] font-medium uppercase tracking-[0.04em] text-white transition hover:bg-neutral-800 disabled:cursor-default disabled:opacity-40"
+    >
+      {children}
+    </button>
   );
 }
 
