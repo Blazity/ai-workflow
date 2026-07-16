@@ -74,8 +74,7 @@ export function formatTicketEvent(
 
     case "needs_clarification": {
       // Prefer the dashboard link (styled like plan_approval_requested's tail),
-      // fall back to a Jira comment link, then plain. Parenthesized rather than
-      // dash-separated: the repo forbids em dashes in changed lines.
+      // fall back to a Jira comment link, then plain.
       const tail = event.dashboardUrl
         ? ` (<${event.dashboardUrl}|answer in dashboard>)`
         : event.commentUrl

@@ -101,7 +101,7 @@ describe("formatTicketEvent", () => {
     ).toBe(`:question: Task ${LINK} needs clarification`);
   });
 
-  it("needs_clarification — links to the dashboard when dashboardUrl is provided", () => {
+  it("needs_clarification: links to the dashboard when dashboardUrl is provided", () => {
     expect(
       formatTicketEvent(
         {
@@ -116,7 +116,7 @@ describe("formatTicketEvent", () => {
     );
   });
 
-  it("needs_clarification — dashboardUrl takes priority over commentUrl", () => {
+  it("needs_clarification: dashboardUrl takes priority over commentUrl", () => {
     expect(
       formatTicketEvent(
         {
@@ -132,7 +132,7 @@ describe("formatTicketEvent", () => {
     );
   });
 
-  it("needs_clarification — links to the Jira comment when only commentUrl is provided", () => {
+  it("needs_clarification: links to the Jira comment when only commentUrl is provided", () => {
     expect(
       formatTicketEvent(
         {
@@ -157,7 +157,7 @@ describe("formatTicketEvent", () => {
     ).toBe(`:question: Task ${LINK} needs clarification\nPhase A: $0.10`);
   });
 
-  it("needs_clarification — combines dashboard link and usage report", () => {
+  it("needs_clarification: combines dashboard link and usage report", () => {
     const dashboardUrl = "https://app/ticket/AWT-42?run=wrun_9";
     expect(
       formatTicketEvent(
