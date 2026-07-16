@@ -485,16 +485,31 @@ function AnswerPanel({
 
   if (clarification.status === "superseded") return null;
 
+  const answered = clarification.status === "answered";
+  const dispatchedRunId = clarification.dispatchedRunId ?? result?.runId ?? null;
+  // Answer saved but the resume run never started; this is the endpoint retry path.
+  const pendingDispatch =
+    dispatchedRunId === null &&
+    ((answered && clarification.dispatchedRunId === null) || result !== null);
+  const showForm =
+    dispatchedRunId === null && (clarification.status === "pending" || pendingDispatch);
+
   async function submit() {
     setBusy(true);
     setError(null);
     try {
+      // The worker's retry path deliberately skips the answer CAS (it only
+      // re-verifies and re-dispatches), so any edit would be silently dropped.
+      // Send the SAVED answer on retry; the pending path sends the typed one.
+      const answerToSend = pendingDispatch
+        ? (clarification.answer ?? "").trim()
+        : answer.trim();
       const res = await fetch(
         `/api/clarifications/${encodeURIComponent(clarification.id)}/answer`,
         {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ answer: answer.trim() }),
+          body: JSON.stringify({ answer: answerToSend }),
         },
       );
       if (!res.ok) {
@@ -510,15 +525,6 @@ function AnswerPanel({
       setBusy(false);
     }
   }
-
-  const answered = clarification.status === "answered";
-  const dispatchedRunId = clarification.dispatchedRunId ?? result?.runId ?? null;
-  // Answer saved but the resume run never started; this is the endpoint retry path.
-  const pendingDispatch =
-    dispatchedRunId === null &&
-    ((answered && clarification.dispatchedRunId === null) || result !== null);
-  const showForm =
-    dispatchedRunId === null && (clarification.status === "pending" || pendingDispatch);
 
   return (
     <CkCard
@@ -569,44 +575,50 @@ function AnswerPanel({
           <>
             {pendingDispatch && (
               <div className="font-body text-[12px] leading-snug text-neutral-700">
-                The answer was saved, but the resume run has not started yet.
-                Resubmit to retry starting it.
+                The resume run has not started yet. Retry it with the saved
+                answer above.
               </div>
             )}
 
-            {!answered &&
-            clarification.suggestedAnswers &&
-            clarification.suggestedAnswers.length > 0 ? (
-              <div className="flex flex-wrap items-center gap-1.5">
-                {clarification.suggestedAnswers.map((a, j) => (
-                  <button
-                    key={j}
-                    type="button"
-                    disabled={busy}
-                    onClick={() => setAnswer(a)}
-                    className="appearance-none border border-neutral-200 bg-panel px-2.5 py-[5px] rounded-[3px] cursor-pointer font-body text-xs text-neutral-900 transition-all duration-100 hover:bg-coal hover:text-white disabled:cursor-default disabled:opacity-40"
-                  >
-                    {a}
-                  </button>
-                ))}
-              </div>
-            ) : null}
+            {/* Retry state edits nothing: the worker re-uses the saved answer,
+                so no chips or textarea here - only the read-only Q&A above. */}
+            {!pendingDispatch && (
+              <>
+                {!answered &&
+                clarification.suggestedAnswers &&
+                clarification.suggestedAnswers.length > 0 ? (
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    {clarification.suggestedAnswers.map((a, j) => (
+                      <button
+                        key={j}
+                        type="button"
+                        disabled={busy}
+                        onClick={() => setAnswer(a)}
+                        className="appearance-none border border-neutral-200 bg-panel px-2.5 py-[5px] rounded-[3px] cursor-pointer font-body text-xs text-neutral-900 transition-all duration-100 hover:bg-coal hover:text-white disabled:cursor-default disabled:opacity-40"
+                      >
+                        {a}
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
 
-            <textarea
-              value={answer}
-              onChange={(e) => setAnswer(e.target.value)}
-              disabled={busy}
-              rows={4}
-              placeholder="Type your answer…"
-              className="w-full resize-y rounded-[3px] border border-neutral-200 bg-panel p-3 font-body text-[13px] leading-[1.5] text-coal placeholder:text-neutral-400 focus-visible:outline focus-visible:outline-2 focus-visible:outline-mariner focus-visible:outline-offset-[-1px] disabled:opacity-60"
-            />
+                <textarea
+                  value={answer}
+                  onChange={(e) => setAnswer(e.target.value)}
+                  disabled={busy}
+                  rows={4}
+                  placeholder="Type your answer…"
+                  className="w-full resize-y rounded-[3px] border border-neutral-200 bg-panel p-3 font-body text-[13px] leading-[1.5] text-coal placeholder:text-neutral-400 focus-visible:outline focus-visible:outline-2 focus-visible:outline-mariner focus-visible:outline-offset-[-1px] disabled:opacity-60"
+                />
+              </>
+            )}
 
             {error ? <InlineError>{error}</InlineError> : null}
 
             <div className="flex items-center gap-2">
               <DarkButton
                 type="button"
-                disabled={busy || answer.trim().length === 0}
+                disabled={busy || (!pendingDispatch && answer.trim().length === 0)}
                 onClick={submit}
               >
                 {busy
