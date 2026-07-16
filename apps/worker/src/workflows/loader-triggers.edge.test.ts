@@ -581,8 +581,12 @@ describe("reconcileRuns edge cases", () => {
   });
 
   it("cancels an inflight ticket claim that left AI, verified via the issue tracker", async () => {
+    // Aged past the orphan grace (but not yet stale) so the inflight-claim
+    // cancel path runs: a fresh claim outside AI is now spared for the grace
+    // window (a resume dispatch claims before moving the ticket into AI).
+    const oneMinAgo = Date.now() - 60 * 1000;
     const registry = makeReconcileRegistry([
-      { ticketKey: "PROJ-905", runId: `claiming:${Date.now()}`, kind: "ticket" },
+      { ticketKey: "PROJ-905", runId: `claiming:${oneMinAgo}`, kind: "ticket" },
     ]);
     const issueTracker = makeIssueTracker({
       fetchTicket: vi.fn().mockResolvedValue(ticket("PROJ-905", "Done")),
