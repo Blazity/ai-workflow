@@ -9,10 +9,15 @@ import type { RunsResponse, LiveRunsResponse, RunStatus } from "@shared/contract
 const TERMINAL_STATUSES = new Set<RunStatus>(["success", "failed", "blocked"]);
 
 /**
- * The run store (`/api/v1/runs`) only holds historical/completed runs — in-flight
- * `running`/`awaiting` runs live in the ticket tracker and are exposed via
- * `/api/v1/runs/live`. Merge them so the runs screen's status filters (notably
- * "Awaiting input") reflect live state, matching the overview's Input-needed panel.
+ * The run store (`/api/v1/runs`) holds the durable run rows, but in-flight state
+ * is exposed live via `/api/v1/runs/live`: `running` rows from the run registry,
+ * and `awaiting` rows from the durable run store joined with the pending
+ * clarification (real run ids plus the question payload). The former synthetic
+ * Jira scan, which fabricated `awaiting:<ticketKey>` rows, is gone.
+ *
+ * Merge them so the runs screen's status filters (notably "Awaiting input")
+ * reflect live state, matching the overview's Input-needed panel. Live rows carry
+ * the same real run id as their store copy, so they intentionally override it by id.
  */
 export function mergeLiveRuns(
   runs: RunsResponse,
@@ -32,8 +37,10 @@ export function mergeLiveRuns(
   const freshLive = liveRows.filter((r) => !terminalIds.has(r.id));
 
   const liveIds = new Set(freshLive.map((r) => r.id));
-  // Live rows are the current truth for genuinely in-flight runs; drop any stale
-  // run-store copy with the same id, then list live runs first (most recent activity on top).
+  // Live rows are the current truth for genuinely in-flight runs (running and
+  // awaiting). An awaiting live row carries the same real run id as its bare store
+  // copy plus the enriched question payload, so drop the store copy with that id
+  // and list live runs first (most recent activity on top).
   const rows = [...freshLive, ...runs.rows.filter((r) => !liveIds.has(r.id))];
 
   const counts = { success: 0, running: 0, awaiting: 0, failed: 0, blocked: 0 };
