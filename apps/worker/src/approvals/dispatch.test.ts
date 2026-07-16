@@ -1,6 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { IssueTrackerAdapter } from "../adapters/issue-tracker/types.js";
 import type { RunRegistryAdapter } from "../adapters/run-registry/types.js";
 import type { ApprovalRow } from "./store.js";
+
+vi.mock("../../env.js", () => ({ env: { COLUMN_AI: "AI" } }));
 
 const mockStart = vi.fn();
 const mockGetRun = vi.fn();
@@ -72,6 +75,19 @@ function makeRegistry(overrides: Partial<Record<keyof RunRegistryAdapter, Return
 
 const db = {} as never;
 
+function makeIssueTracker(overrides: Partial<IssueTrackerAdapter> = {}): IssueTrackerAdapter {
+  return {
+    fetchTicket: vi.fn(),
+    moveTicket: vi.fn().mockResolvedValue(undefined),
+    postComment: vi.fn().mockResolvedValue(null),
+    searchTickets: vi.fn(),
+    updateLabels: vi.fn().mockResolvedValue(undefined),
+    ...overrides,
+  } as IssueTrackerAdapter;
+}
+
+let issueTracker: IssueTrackerAdapter;
+
 describe("dispatchPlanApproved", () => {
   beforeEach(() => {
     mockStart.mockReset();
@@ -79,6 +95,7 @@ describe("dispatchPlanApproved", () => {
     mockGetDefinition.mockReset();
     mockGetVersion.mockReset();
     mockGetCurrentVersion.mockReset();
+    issueTracker = makeIssueTracker();
     mockStart.mockResolvedValue({ runId: "run-dispatched" });
     // Definition present + not archived, pinned version resolves, head has moved on.
     mockGetDefinition.mockResolvedValue({ id: 7, archivedAt: null, enabled: false });
@@ -92,6 +109,7 @@ describe("dispatchPlanApproved", () => {
     const result = await dispatchPlanApproved({
       db,
       runRegistry: registry,
+      issueTracker,
       approval: makeApproval(),
       actor: { id: "u1", label: "Alice" },
       maxConcurrentAgents: 3,
@@ -107,6 +125,7 @@ describe("dispatchPlanApproved", () => {
     const result = await dispatchPlanApproved({
       db,
       runRegistry: registry,
+      issueTracker,
       approval: makeApproval(),
       actor: { id: "u1", label: "Alice" },
       maxConcurrentAgents: 3,
@@ -123,6 +142,7 @@ describe("dispatchPlanApproved", () => {
     const result = await dispatchPlanApproved({
       db,
       runRegistry: registry,
+      issueTracker,
       approval: makeApproval({ definitionVersion: 4 }),
       actor: { id: "u1", label: "Alice" },
       maxConcurrentAgents: 3,
@@ -139,6 +159,7 @@ describe("dispatchPlanApproved", () => {
     const result = await dispatchPlanApproved({
       db,
       runRegistry: registry,
+      issueTracker,
       approval: makeApproval({ definitionVersion: null }),
       actor: { id: "u1", label: "Alice" },
       maxConcurrentAgents: 3,
@@ -156,6 +177,7 @@ describe("dispatchPlanApproved", () => {
     const result = await dispatchPlanApproved({
       db,
       runRegistry: registry,
+      issueTracker,
       approval: makeApproval(),
       actor: { id: "u1", label: "Alice" },
       maxConcurrentAgents: 3,
@@ -174,6 +196,7 @@ describe("dispatchPlanApproved", () => {
     const result = await dispatchPlanApproved({
       db,
       runRegistry: registry,
+      issueTracker,
       approval: makeApproval(),
       actor: { id: "u1", label: "Alice" },
       maxConcurrentAgents: 2,
@@ -192,6 +215,7 @@ describe("dispatchPlanApproved", () => {
     const result = await dispatchPlanApproved({
       db,
       runRegistry: registry,
+      issueTracker,
       approval: makeApproval(),
       actor: { id: "u1", label: "Alice" },
       maxConcurrentAgents: 3,
@@ -221,6 +245,7 @@ describe("dispatchPlanApproved", () => {
       dispatchPlanApproved({
         db,
         runRegistry: registry,
+        issueTracker,
         approval: makeApproval(),
         actor: { id: "u1", label: "Alice" },
         maxConcurrentAgents: 3,
@@ -241,6 +266,7 @@ describe("dispatchPlanApproved", () => {
       dispatchPlanApproved({
         db,
         runRegistry: registry,
+        issueTracker,
         approval: makeApproval(),
         actor: { id: "u1", label: "Alice" },
         maxConcurrentAgents: 3,
@@ -264,6 +290,7 @@ describe("dispatchPlanApproved", () => {
       dispatchPlanApproved({
         db,
         runRegistry: registry,
+        issueTracker,
         approval: makeApproval(),
         actor: { id: "u1", label: "Alice" },
         maxConcurrentAgents: 3,
@@ -275,5 +302,81 @@ describe("dispatchPlanApproved", () => {
     expect(mockGetRun).toHaveBeenCalledWith("run-dispatched");
     expect(mockCancel).toHaveBeenCalled(); // started run aborted
     expect(registry.unregister).not.toHaveBeenCalled(); // claim kept → no duplicate
+  });
+
+  it("moves the ticket into the AI column under the claim, before start", async () => {
+    const registry = makeRegistry();
+    const order: string[] = [];
+    const moveTicket = vi.fn().mockImplementation(async () => {
+      order.push("move");
+    });
+    const updateLabels = vi.fn().mockImplementation(async () => {
+      order.push("label");
+    });
+    issueTracker = makeIssueTracker({ moveTicket, updateLabels });
+    mockStart.mockImplementation(async () => {
+      order.push("start");
+      return { runId: "run-dispatched" };
+    });
+
+    const result = await dispatchPlanApproved({
+      db,
+      runRegistry: registry,
+      issueTracker,
+      approval: makeApproval(),
+      actor: { id: "u1", label: "Alice" },
+      maxConcurrentAgents: 3,
+      onClaimed: async () => {
+        order.push("commit");
+      },
+    });
+
+    expect(result).toEqual({ status: "started", runId: "run-dispatched" });
+    // Under the claim: decision (commit) -> move -> label -> start.
+    expect(order).toEqual(["commit", "move", "label", "start"]);
+    expect(moveTicket).toHaveBeenCalledWith("AWT-1", "AI");
+    expect(updateLabels).toHaveBeenCalledWith("AWT-1", { remove: ["awaiting-approval"] });
+  });
+
+  it("propagates a move failure, starts no run, and releases the claim (retryable)", async () => {
+    const registry = makeRegistry();
+    const moveTicket = vi.fn().mockRejectedValue(new Error("jira move failed"));
+    issueTracker = makeIssueTracker({ moveTicket });
+
+    await expect(
+      dispatchPlanApproved({
+        db,
+        runRegistry: registry,
+        issueTracker,
+        approval: makeApproval(),
+        actor: { id: "u1", label: "Alice" },
+        maxConcurrentAgents: 3,
+        onClaimed: vi.fn().mockResolvedValue(undefined),
+      }),
+    ).rejects.toThrow("jira move failed");
+
+    expect(mockStart).not.toHaveBeenCalled();
+    expect(registry.unregister).toHaveBeenCalledWith("AWT-1"); // claim released
+    expect(registry.register).not.toHaveBeenCalled();
+  });
+
+  it("does not fail the dispatch when the post-move label removal fails", async () => {
+    const registry = makeRegistry();
+    const moveTicket = vi.fn().mockResolvedValue(undefined);
+    const updateLabels = vi.fn().mockRejectedValue(new Error("label boom"));
+    issueTracker = makeIssueTracker({ moveTicket, updateLabels });
+
+    const result = await dispatchPlanApproved({
+      db,
+      runRegistry: registry,
+      issueTracker,
+      approval: makeApproval(),
+      actor: { id: "u1", label: "Alice" },
+      maxConcurrentAgents: 3,
+    });
+
+    expect(result).toEqual({ status: "started", runId: "run-dispatched" });
+    expect(moveTicket).toHaveBeenCalledWith("AWT-1", "AI");
+    expect(mockStart).toHaveBeenCalled();
   });
 });
