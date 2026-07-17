@@ -69,7 +69,7 @@ Acceptance:
 
 ## Task 3 — AIW-97: provider envelope, subject identity, durable dedupe, and pending events
 
-Database migration `0021`:
+Database migration `0022`:
 
 - Change `active_runs` to primary `subject_key` with nullable `ticket_key`, an owner token/reservation, nullable bound run ID, state, and timestamps.
 - Add durable normalized trigger deliveries with unique provider delivery identity.
@@ -120,6 +120,10 @@ Acceptance:
 
 ## Task 6 — AIW-102: active duration, token, and cost budgets
 
+Database migration `0021`:
+
+- Add the structured terminal budget failure to run telemetry. Budget limits remain part of the immutable workflow definition snapshot.
+
 Steps:
 
 1. Add failing schema tests for omitted/partial budgets and invalid values. Duration defaults to `JOB_TIMEOUT_MS`; token/cost stay unset.
@@ -143,7 +147,7 @@ Capability gate:
 3. Snapshot with seven-day expiration, verify the source stops, restore from only the serializable snapshot ID, verify files/index, inject fresh credentials, then delete.
 4. If the real plan cannot do this, leave AIW-96 In Progress with evidence; do not ship a replay/lossy substitute.
 
-Database migration `0022` after the gate passes:
+Database migration `0023` after the gate passes:
 
 - Extend clarification checkpoints with subject, pinned definition/version, waiting node, trigger payload, safe prior outputs, cumulative budget state, workspace manifest/source head, snapshot metadata/expiry, cleanup state, and successor reservation.
 
@@ -162,7 +166,7 @@ Acceptance:
 
 ## Task 8 — AIW-100: exact-head, clean-tree, durable publication
 
-Database migration `0023`:
+Database migration `0024`:
 
 - Add durable publication attempts with run/block, overall status, and per-repository expected head, pushed head, PR result, and failure.
 
@@ -181,7 +185,7 @@ Acceptance:
 
 ## Task 9 — AIW-101: merged trigger and self-safe ticket transitions
 
-Database migration `0024`:
+Database migration `0025`:
 
 - Add short-lived workflow transition intents keyed by ticket/run/destination with consume/expiry state.
 
