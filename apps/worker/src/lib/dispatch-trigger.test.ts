@@ -1,59 +1,52 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import type { RunRegistryAdapter } from "../adapters/run-registry/types.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { Db } from "../db/client.js";
+import {
+  workflowDefinitions,
+  workflowDefinitionVersions,
+} from "../db/schema.js";
+import { createTestDb } from "../db/test-db.js";
+import { upsertWorkflowOwnedBranch } from "../db/queries/workflow-owned-branches.js";
+import { PostgresRunRegistry } from "../adapters/run-registry/postgres.js";
 import type { TriggerEvent } from "./trigger-events.js";
+import {
+  deletePendingTrigger,
+  getPendingTrigger,
+  getTriggerDelivery,
+} from "./trigger-delivery-store.js";
 
-vi.mock("../../env.js", () => ({
-  env: { JIRA_PROJECT_KEY: "AIW", COLUMN_AI: "AI" },
-}));
-
+vi.mock("../../env.js", () => ({ env: { JIRA_PROJECT_KEY: "AIW", COLUMN_AI: "AI" } }));
 const mockStart = vi.fn();
-const mockGetRun = vi.fn();
-vi.mock("workflow/api", () => ({
-  start: (...args: any[]) => mockStart(...args),
-  getRun: (...args: any[]) => mockGetRun(...args),
-}));
-
-vi.mock("../workflows/agent.js", () => ({
-  agentWorkflow: "agentWorkflow_sentinel",
-}));
-
-const mockStopTicketSandboxes = vi.fn();
-vi.mock("../sandbox/stop-ticket-sandboxes.js", () => ({
-  stopTicketSandboxes: (...args: any[]) => mockStopTicketSandboxes(...args),
-}));
-
+vi.mock("workflow/api", () => ({ start: (...args: any[]) => mockStart(...args) }));
+vi.mock("../workflows/agent.js", () => ({ agentWorkflow: "agentWorkflow_sentinel" }));
 const mockGetEnabled = vi.fn();
 vi.mock("../workflow-definition/store.js", () => ({
   getEnabledWorkflowDefinitionForTrigger: (...args: any[]) => mockGetEnabled(...args),
 }));
 
-function makeRegistry(
-  overrides: Partial<Record<keyof RunRegistryAdapter, ReturnType<typeof vi.fn>>> = {},
-): RunRegistryAdapter {
-  let claimedValue: string | undefined;
-  return {
-    claim:
-      overrides.claim ??
-      vi.fn().mockImplementation(async (_key: string, value: string) => {
-        claimedValue = value;
-        return true;
-      }),
-    register: overrides.register ?? vi.fn().mockResolvedValue(undefined),
-    unregister: overrides.unregister ?? vi.fn().mockResolvedValue(undefined),
-    unregisterIfRunId: vi.fn().mockResolvedValue(undefined),
-    getRunId: overrides.getRunId ?? vi.fn().mockImplementation(async () => claimedValue),
-    listAll: overrides.listAll ?? vi.fn().mockResolvedValue([]),
-    registerSandbox: vi.fn().mockResolvedValue(undefined),
-    getSandboxId: vi.fn().mockResolvedValue(null),
-    getEntryCreatedAt: vi.fn().mockResolvedValue(null),
-    markFailed: vi.fn().mockResolvedValue(undefined),
-    isTicketFailed: vi.fn().mockResolvedValue(false),
-    listAllFailed: vi.fn().mockResolvedValue([]),
-    clearFailedMark: vi.fn().mockResolvedValue(undefined),
-  };
-}
+let db: Db;
+let registry: PostgresRunRegistry;
 
-function makeEnabledDefinition(params: Record<string, unknown> = {}) {
+beforeEach(async () => {
+  db = await createTestDb();
+  await db.insert(workflowDefinitions).values({
+    id: 5,
+    name: "PR flow",
+    createdById: "test",
+    createdByLabel: "Test",
+  });
+  await db.insert(workflowDefinitionVersions).values({
+    definitionId: 5,
+    version: 12,
+    definition: {},
+    createdById: "test",
+    createdByLabel: "Test",
+  });
+  registry = new PostgresRunRegistry(db);
+  mockStart.mockReset().mockResolvedValue({ runId: "run-pr" });
+  mockGetEnabled.mockReset();
+});
+
+function enabled(params: Record<string, unknown> = { scope: "workflow_owned" }) {
   return {
     definition: { id: 5, name: "PR flow" },
     current: {
@@ -62,13 +55,7 @@ function makeEnabledDefinition(params: Record<string, unknown> = {}) {
       definition: {
         schemaVersion: 1,
         nodes: [
-          {
-            id: "t1",
-            type: "trigger_pr_created",
-            x: 0,
-            y: 0,
-            params,
-          },
+          { id: "trigger", type: "trigger_pr_created", x: 0, y: 0, params, inputs: {} },
         ],
         edges: [],
       },
@@ -76,201 +63,237 @@ function makeEnabledDefinition(params: Record<string, unknown> = {}) {
   };
 }
 
-function prEvent(headRef = "blazebot/aiw-1"): TriggerEvent {
+function event(overrides: Partial<TriggerEvent> = {}): TriggerEvent {
   return {
+    delivery: { provider: "github", producer: "alice", deliveryId: "delivery-1" },
     triggerType: "trigger_pr_created",
     pr: {
       provider: "github",
       repoPath: "acme/app",
       prNumber: 7,
       prUrl: "https://github.com/acme/app/pull/7",
-      headRef,
+      headRef: "feature/owned",
       headSha: "abc123",
       baseRef: "main",
       title: "Fix",
-      author: "blazebot[bot]",
+      author: "alice",
       isDraft: false,
     },
+    ...overrides,
   };
 }
 
-describe("dispatchTriggerEvent", () => {
-  beforeEach(() => {
-    mockStart.mockReset();
-    mockGetRun.mockReset();
-    mockGetEnabled.mockReset();
-    mockStopTicketSandboxes.mockReset();
-    mockStart.mockResolvedValue({ runId: "run_pr" });
-    mockStopTicketSandboxes.mockResolvedValue(0);
+function deps(overrides: Record<string, unknown> = {}) {
+  return {
+    db,
+    runRegistry: registry,
+    maxConcurrentAgents: 3,
+    getCurrentHead: vi.fn().mockResolvedValue("abc123"),
+    issueTracker: {
+      fetchTicket: vi.fn().mockResolvedValue({ identifier: "AIW-1" }),
+    },
+    ...overrides,
+  } as any;
+}
+
+async function correlate() {
+  await upsertWorkflowOwnedBranch(db, {
+    ticketKey: "AIW-1",
+    provider: "github",
+    repoPath: "acme/app",
+    branchName: "feature/owned",
+    pr: {
+      id: 7,
+      url: "https://github.com/acme/app/pull/7",
+      branch: "feature/owned",
+    },
+  });
+}
+
+describe("dispatchTriggerEvent durable envelope", () => {
+  it("rejects a missing provider delivery identity before definition lookup", async () => {
+    const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
+    const malformed = event({
+      delivery: { provider: "github", producer: "alice", deliveryId: "" },
+    });
+    expect(await dispatchTriggerEvent(malformed, deps())).toEqual({
+      result: "ignored_malformed_delivery",
+    });
+    expect(mockGetEnabled).not.toHaveBeenCalled();
   });
 
-  it("returns no_definition when no enabled definition matches the trigger", async () => {
+  it("returns no_definition without persisting a delivery", async () => {
     mockGetEnabled.mockResolvedValue(null);
-    const registry = makeRegistry();
     const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
+    expect(await dispatchTriggerEvent(event(), deps())).toEqual({ result: "no_definition" });
+    expect(await getTriggerDelivery(db, "github", "delivery-1")).toBeNull();
+  });
 
-    const result = await dispatchTriggerEvent(prEvent(), {
-      db: {} as any,
-      runRegistry: registry,
-      maxConcurrentAgents: 3,
-    });
-
-    expect(result).toEqual({ result: "no_definition" });
-    expect(registry.claim).not.toHaveBeenCalled();
+  it("re-reads and rejects a stale head before durable acceptance", async () => {
+    mockGetEnabled.mockResolvedValue(enabled({ scope: "any" }));
+    const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
+    expect(
+      await dispatchTriggerEvent(event(), deps({ getCurrentHead: vi.fn().mockResolvedValue("new") })),
+    ).toEqual({ result: "ignored_stale_head" });
+    expect(await getTriggerDelivery(db, "github", "delivery-1")).toBeNull();
     expect(mockStart).not.toHaveBeenCalled();
   });
 
-  it("ignores a PR on a non-blazebot branch", async () => {
-    mockGetEnabled.mockResolvedValue(makeEnabledDefinition());
-    const registry = makeRegistry();
+  it("never treats a ticket-looking branch prefix as workflow ownership", async () => {
+    mockGetEnabled.mockResolvedValue(enabled());
     const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
-
-    const result = await dispatchTriggerEvent(prEvent("feature/foo"), {
-      db: {} as any,
-      runRegistry: registry,
-      maxConcurrentAgents: 3,
+    const prefixed = event({ pr: { ...event().pr, headRef: "blazebot/aiw-1" } });
+    expect(await dispatchTriggerEvent(prefixed, deps())).toEqual({
+      result: "ignored_not_workflow_owned",
     });
-
-    expect(result).toEqual({ result: "ignored_not_workflow_owned" });
-    expect(registry.claim).not.toHaveBeenCalled();
     expect(mockStart).not.toHaveBeenCalled();
   });
 
-  it("coalesces when the ticket is already claimed", async () => {
-    mockGetEnabled.mockResolvedValue(makeEnabledDefinition());
-    const registry = makeRegistry({ claim: vi.fn().mockResolvedValue(false) });
+  it("requires durable correlation plus a valid ticket and starts under the ticket subject", async () => {
+    await correlate();
+    mockGetEnabled.mockResolvedValue(enabled());
     const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
-
-    const result = await dispatchTriggerEvent(prEvent(), {
-      db: {} as any,
-      runRegistry: registry,
-      maxConcurrentAgents: 3,
+    expect(await dispatchTriggerEvent(event(), deps())).toEqual({
+      result: "started",
+      runId: "run-pr",
     });
-
-    expect(result).toEqual({ result: "coalesced" });
-    expect(mockStart).not.toHaveBeenCalled();
-  });
-
-  it("returns at_capacity when the run registry is full", async () => {
-    mockGetEnabled.mockResolvedValue(makeEnabledDefinition());
-    const registry = makeRegistry({
-      listAll: vi.fn().mockResolvedValue([
-        { ticketKey: "AIW-1", runId: "run_a", kind: "ticket" },
-        { ticketKey: "AIW-2", runId: "run_b", kind: "ticket" },
-        { ticketKey: "AIW-3", runId: "run_c", kind: "ticket" },
-      ]),
-    });
-    const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
-
-    const result = await dispatchTriggerEvent(prEvent(), {
-      db: {} as any,
-      runRegistry: registry,
-      maxConcurrentAgents: 3,
-    });
-
-    expect(result).toEqual({ result: "at_capacity" });
-    expect(registry.claim).not.toHaveBeenCalled();
-    expect(mockStart).not.toHaveBeenCalled();
-  });
-
-  it("starts the agent workflow and registers with kind pr_trigger", async () => {
-    mockGetEnabled.mockResolvedValue(makeEnabledDefinition());
-    const registry = makeRegistry();
-    const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
-
-    const evt = prEvent();
-    const result = await dispatchTriggerEvent(evt, {
-      db: {} as any,
-      runRegistry: registry,
-      maxConcurrentAgents: 3,
-    });
-
-    expect(result).toEqual({ result: "started", runId: "run_pr" });
-    expect(registry.claim).toHaveBeenCalledWith(
-      "AIW-1",
-      expect.stringMatching(/^claiming:\d+$/),
-      "pr_trigger",
-    );
     expect(mockStart).toHaveBeenCalledWith("agentWorkflow_sentinel", [
-      {
+      expect.objectContaining({
         kind: "pr_trigger",
-        triggerType: "trigger_pr_created",
+        subjectKey: "ticket:jira:AIW-1",
         ticketKey: "AIW-1",
+        ownerToken: expect.stringMatching(/^owner:/),
         definitionId: 5,
         definitionVersion: 12,
-        pr: evt.pr,
-      },
+        scope: "workflow_owned",
+      }),
     ]);
-    expect(registry.register).toHaveBeenCalledWith("AIW-1", "run_pr", "pr_trigger");
+    expect(await registry.get("ticket:jira:AIW-1")).toMatchObject({
+      state: "reserved",
+      runId: null,
+    });
   });
 
-  it("ignores an event whose provider is not in the configured providers list", async () => {
-    mockGetEnabled.mockResolvedValue(makeEnabledDefinition({ providers: ["gitlab"] }));
-    const registry = makeRegistry();
+  it("rejects a durable correlation whose ticket lookup is invalid", async () => {
+    await correlate();
+    mockGetEnabled.mockResolvedValue(enabled());
+    const issueTracker = { fetchTicket: vi.fn().mockRejectedValue(new Error("not found")) };
     const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
-
-    // prEvent() has provider "github", which is excluded by the gitlab-only list.
-    const result = await dispatchTriggerEvent(prEvent(), {
-      db: {} as any,
-      runRegistry: registry,
-      maxConcurrentAgents: 3,
+    expect(await dispatchTriggerEvent(event(), deps({ issueTracker }))).toEqual({
+      result: "ignored_not_workflow_owned",
     });
-
-    expect(result).toEqual({ result: "ignored_provider" });
-    expect(registry.claim).not.toHaveBeenCalled();
     expect(mockStart).not.toHaveBeenCalled();
   });
 
-  it("dispatches when the event provider is in the configured providers list", async () => {
-    mockGetEnabled.mockResolvedValue(makeEnabledDefinition({ providers: ["github", "gitlab"] }));
-    const registry = makeRegistry();
+  it("scope:any uses a stable synthetic subject and never calls Jira", async () => {
+    mockGetEnabled.mockResolvedValue(enabled({ scope: "any", providers: ["github"] }));
+    const issueTracker = { fetchTicket: vi.fn() };
     const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
-
-    const result = await dispatchTriggerEvent(prEvent(), {
-      db: {} as any,
-      runRegistry: registry,
-      maxConcurrentAgents: 3,
+    expect(await dispatchTriggerEvent(event(), deps({ issueTracker }))).toEqual({
+      result: "started",
+      runId: "run-pr",
     });
-
-    expect(result).toEqual({ result: "started", runId: "run_pr" });
-  });
-
-  it("enforces workflow-owned by default: ignores a non-blazebot branch", async () => {
-    mockGetEnabled.mockResolvedValue(makeEnabledDefinition({ onlyWorkflowOwned: true }));
-    const registry = makeRegistry();
-    const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
-
-    const result = await dispatchTriggerEvent(prEvent("feature/x"), {
-      db: {} as any,
-      runRegistry: registry,
-      maxConcurrentAgents: 3,
-    });
-
-    expect(result).toEqual({ result: "ignored_not_workflow_owned" });
-    expect(registry.claim).not.toHaveBeenCalled();
-    expect(mockStart).not.toHaveBeenCalled();
-  });
-
-  it("allows a non-workflow-owned PR under a synthetic key when onlyWorkflowOwned is false", async () => {
-    mockGetEnabled.mockResolvedValue(makeEnabledDefinition({ onlyWorkflowOwned: false }));
-    const registry = makeRegistry();
-    const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
-
-    const result = await dispatchTriggerEvent(prEvent("feature/x"), {
-      db: {} as any,
-      runRegistry: registry,
-      maxConcurrentAgents: 3,
-    });
-
-    expect(result).toEqual({ result: "started", runId: "run_pr" });
-    // Non-workflow-owned PRs have no ticket key, so the run is keyed by PR identity.
-    expect(registry.claim).toHaveBeenCalledWith(
-      "pr:github:acme/app:7",
-      expect.stringMatching(/^claiming:\d+$/),
-      "pr_trigger",
-    );
+    expect(issueTracker.fetchTicket).not.toHaveBeenCalled();
     expect(mockStart).toHaveBeenCalledWith("agentWorkflow_sentinel", [
-      expect.objectContaining({ kind: "pr_trigger", ticketKey: "pr:github:acme/app:7" }),
+      expect.objectContaining({
+        subjectKey: "pr:github:acme/app#7",
+        scope: "any",
+      }),
     ]);
+    expect(Object.hasOwn(mockStart.mock.calls[0][1][0], "ticketKey")).toBe(false);
+  });
+
+  it("redelivery returns the stored result and never starts twice", async () => {
+    mockGetEnabled.mockResolvedValue(enabled({ scope: "any" }));
+    const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
+    expect(await dispatchTriggerEvent(event(), deps())).toEqual({ result: "started", runId: "run-pr" });
+    expect(await dispatchTriggerEvent(event(), deps())).toEqual({ result: "started", runId: "run-pr" });
+    expect(mockStart).toHaveBeenCalledTimes(1);
+  });
+
+  it("redelivery returns the original result without re-evaluating changed head or definition", async () => {
+    mockGetEnabled.mockResolvedValueOnce(enabled({ scope: "any" })).mockResolvedValueOnce(null);
+    const getCurrentHead = vi.fn().mockResolvedValueOnce("abc123").mockResolvedValueOnce("new-head");
+    const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
+    expect(await dispatchTriggerEvent(event(), deps({ getCurrentHead }))).toEqual({
+      result: "started",
+      runId: "run-pr",
+    });
+    expect(await dispatchTriggerEvent(event(), deps({ getCurrentHead }))).toEqual({
+      result: "started",
+      runId: "run-pr",
+    });
+    expect(mockGetEnabled).toHaveBeenCalledTimes(1);
+    expect(getCurrentHead).toHaveBeenCalledTimes(1);
+    expect(mockStart).toHaveBeenCalledTimes(1);
+  });
+
+  it("durably coalesces when another owner already holds the subject", async () => {
+    mockGetEnabled.mockResolvedValue(enabled({ scope: "any" }));
+    await registry.reserve({
+      subjectKey: "pr:github:acme/app#7",
+      ticketKey: null,
+      ownerToken: "existing-owner",
+      kind: "pr_trigger",
+    });
+    const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
+    expect(await dispatchTriggerEvent(event(), deps())).toEqual({ result: "coalesced" });
+    expect(
+      await getPendingTrigger(
+        db,
+        "pr:github:acme/app#7",
+        "abc123",
+        "trigger_pr_created",
+      ),
+    ).toMatchObject({ definitionVersion: 12 });
+    expect(mockStart).not.toHaveBeenCalled();
+  });
+
+  it("does not re-launch when start succeeds but dispatcher pending deletion fails", async () => {
+    mockGetEnabled.mockResolvedValue(enabled({ scope: "any" }));
+    await registry.reserve({
+      subjectKey: "pr:github:acme/app#7",
+      ticketKey: null,
+      ownerToken: "blocking-owner",
+      kind: "pr_trigger",
+    });
+    const { dispatchTriggerEvent, drainOldestPendingTrigger } = await import("./dispatch-trigger.js");
+    expect(await dispatchTriggerEvent(event(), deps())).toEqual({ result: "coalesced" });
+    expect(
+      await registry.releaseReservation("pr:github:acme/app#7", "blocking-owner"),
+    ).toBe(true);
+
+    mockStart.mockImplementationOnce(async (_workflow, [input]) => {
+      expect(input.pendingEvent).toEqual({
+        headSha: "abc123",
+        triggerType: "trigger_pr_created",
+      });
+      expect(await registry.bindRun(input.subjectKey, input.ownerToken, "run-pr")).toBe(true);
+      await deletePendingTrigger(db, {
+        subjectKey: input.subjectKey,
+        triggerType: input.pendingEvent.triggerType,
+        pr: input.pr,
+      });
+      return { runId: "run-pr" };
+    });
+    const dispatcherDelete = vi.fn().mockRejectedValue(new Error("delete failed after start"));
+    expect(
+      await drainOldestPendingTrigger(
+        "pr:github:acme/app#7",
+        deps({ deletePending: dispatcherDelete }),
+      ),
+    ).toEqual({ result: "started", runId: "run-pr" });
+    expect(dispatcherDelete).toHaveBeenCalledOnce();
+    expect(
+      await registry.release(
+        "pr:github:acme/app#7",
+        (await registry.get("pr:github:acme/app#7"))!.ownerToken,
+        "run-pr",
+      ),
+    ).toBe(true);
+    expect(
+      await drainOldestPendingTrigger("pr:github:acme/app#7", deps()),
+    ).toBeNull();
+    expect(mockStart).toHaveBeenCalledTimes(1);
   });
 });

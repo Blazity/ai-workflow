@@ -30,6 +30,10 @@ export default defineEventHandler(async (event) => {
   }
 
   const ghEvent = getHeader(event, "x-github-event") ?? "";
+  const deliveryId = getHeader(event, "x-github-delivery")?.trim() ?? "";
+  if (!deliveryId) {
+    return { status: "ignored", reason: "missing_delivery_id" };
+  }
 
   let body;
   try {
@@ -68,6 +72,7 @@ export default defineEventHandler(async (event) => {
       : undefined;
   const evt = normalizeGitHubEvent(ghEvent, body, {
     gateCheckNames,
+    deliveryId,
     botLogin: env.VCS_BOT_LOGIN,
     ...(reviewStates ? { reviewStates } : {}),
   });

@@ -1,18 +1,35 @@
 import { start } from "workflow/api";
 import type { Db } from "../db/client.js";
+import type { IssueTrackerAdapter } from "../adapters/issue-tracker/types.js";
 import type { RunRegistryAdapter } from "../adapters/run-registry/types.js";
-import type { AgentWorkflowInput } from "../workflows/agent-input.js";
+import type { AgentWorkflowInput, PrTriggerPayload } from "../workflows/agent-input.js";
 import { agentWorkflow } from "../workflows/agent.js";
+import { findWorkflowOwnedPullRequest } from "../db/queries/workflow-owned-branches.js";
 import { getEnabledWorkflowDefinitionForTrigger } from "../workflow-definition/store.js";
-import { ticketKeyFromBranch } from "./branch-prefix.js";
-import { claimTicketRun } from "./dispatch.js";
+import { createAdapters } from "./adapters.js";
+import { claimSubjectRun } from "./dispatch.js";
 import { logger } from "./logger.js";
+import { prSubjectKey, ticketSubjectKey } from "./subject-key.js";
+import {
+  acceptTriggerDelivery,
+  coalescePendingTrigger,
+  completeTriggerDelivery,
+  deletePendingTrigger,
+  getTriggerDelivery,
+  listPendingTriggersForSubject,
+  type AcceptedTriggerDelivery,
+  type StoredTriggerResult,
+  type TriggerScope,
+} from "./trigger-delivery-store.js";
 import type { TriggerEvent } from "./trigger-events.js";
+import { createRepositoryVCS } from "./vcs-runtime.js";
 
 export type DispatchTriggerResult =
   | { result: "no_definition" }
   | { result: "ignored_not_workflow_owned" }
   | { result: "ignored_provider" }
+  | { result: "ignored_stale_head" }
+  | { result: "ignored_malformed_delivery" }
   | { result: "coalesced" }
   | { result: "at_capacity" }
   | { result: "error" }
@@ -22,120 +39,246 @@ export interface DispatchTriggerDeps {
   db: Db;
   runRegistry: RunRegistryAdapter;
   maxConcurrentAgents: number;
+  issueTracker?: IssueTrackerAdapter;
+  getCurrentHead?: (pr: PrTriggerPayload) => Promise<string>;
+  /** Failure-injection seam; production uses deletePendingTrigger. */
+  deletePending?: typeof deletePendingTrigger;
 }
 
-/** Trigger-node params for a given trigger type in an enabled definition, or {}. */
 function triggerNodeParams(
   definition: { nodes: { type: string; params: Record<string, unknown> }[] },
   triggerType: string,
 ): Record<string, unknown> {
-  const node = definition.nodes.find((n) => n.type === triggerType);
-  return node?.params ?? {};
+  return definition.nodes.find((node) => node.type === triggerType)?.params ?? {};
 }
 
-/**
- * Resolve the review states that may fire trigger_pr_review, from the enabled
- * definition's node config. Falls back to the safe default (["changes_requested"])
- * when no definition is enabled or the param is unset — a "commented" review
- * carries an untrusted body and must be opted into explicitly. Used by the GitHub
- * webhook route to gate review events in normalizeGitHubEvent before dispatch.
- */
 export async function resolveEnabledReviewStates(db: Db): Promise<string[]> {
   const enabled = await getEnabledWorkflowDefinitionForTrigger(db, "trigger_pr_review");
   if (!enabled?.current) return ["changes_requested"];
   const on = triggerNodeParams(enabled.current.definition, "trigger_pr_review").on;
-  if (Array.isArray(on) && on.length > 0) {
-    return on.filter((s): s is string => typeof s === "string");
-  }
-  return ["changes_requested"];
+  return Array.isArray(on) && on.length > 0
+    ? on.filter((state): state is string => typeof state === "string")
+    : ["changes_requested"];
 }
 
 export async function dispatchTriggerEvent(
-  evt: TriggerEvent,
+  event: TriggerEvent,
   deps: DispatchTriggerDeps,
 ): Promise<DispatchTriggerResult> {
-  const enabled = await getEnabledWorkflowDefinitionForTrigger(deps.db, evt.triggerType);
-  if (!enabled || !enabled.current) {
-    logger.info({ triggerType: evt.triggerType }, "trigger_no_enabled_definition");
-    return { result: "no_definition" };
+  if (
+    !event.delivery?.deliveryId ||
+    event.delivery.provider !== event.pr.provider ||
+    event.delivery.deliveryId.trim().length === 0
+  ) {
+    return { result: "ignored_malformed_delivery" };
   }
 
-  const params = triggerNodeParams(enabled.current.definition, evt.triggerType);
+  // Delivery identity is immutable. A retry must return the first attempt's
+  // durable result without consulting mutable definition/head/correlation state.
+  const existing = await getTriggerDelivery(
+    deps.db,
+    event.delivery.provider,
+    event.delivery.deliveryId,
+  );
+  if (existing) return storedResultToDispatch(existing.result);
 
-  // providers gate: dispatch only when the event's provider is in the configured
-  // list. An empty/unset list means "all providers" (back-compat).
+  const enabled = await getEnabledWorkflowDefinitionForTrigger(deps.db, event.triggerType);
+  if (!enabled?.current) return { result: "no_definition" };
+
+  const params = triggerNodeParams(enabled.current.definition, event.triggerType);
   const providers = params.providers;
-  if (
-    Array.isArray(providers) &&
-    providers.length > 0 &&
-    !providers.includes(evt.pr.provider)
-  ) {
-    logger.info(
-      { triggerType: evt.triggerType, provider: evt.pr.provider, providers },
-      "trigger_ignored_provider",
-    );
+  if (Array.isArray(providers) && providers.length > 0 && !providers.includes(event.pr.provider)) {
     return { result: "ignored_provider" };
   }
 
-  // onlyWorkflowOwned gate (default true): only workflow-owned PRs (branch
-  // resolves to a ticket key via the blazebot/ prefix) may dispatch. When an
-  // operator explicitly opts out (false), a non-workflow-owned PR is allowed
-  // through under a synthetic run key derived from the PR identity.
-  const onlyWorkflowOwned = params.onlyWorkflowOwned !== false;
-  const ticketKey = ticketKeyFromBranch(evt.pr.headRef);
-  let runKey: string;
-  if (ticketKey) {
-    runKey = ticketKey;
-  } else if (onlyWorkflowOwned) {
+  const currentHead = await readCurrentHead(event.pr, deps);
+  if (!currentHead || currentHead !== event.pr.headSha) {
     logger.info(
-      { triggerType: evt.triggerType, headRef: evt.pr.headRef },
-      "trigger_ignored_not_workflow_owned",
+      { subject: event.pr, currentHead },
+      "trigger_ignored_stale_head",
     );
-    return { result: "ignored_not_workflow_owned" };
-  } else {
-    runKey = `pr:${evt.pr.provider}:${evt.pr.repoPath}:${evt.pr.prNumber}`;
-    logger.info(
-      { triggerType: evt.triggerType, headRef: evt.pr.headRef, runKey },
-      "trigger_non_workflow_owned_allowed",
-    );
+    return { result: "ignored_stale_head" };
   }
 
-  const definitionId = enabled.definition.id;
-  const definitionVersion = enabled.current.version;
-  const input: AgentWorkflowInput = {
-    kind: "pr_trigger",
-    triggerType: evt.triggerType,
-    ticketKey: runKey,
-    definitionId,
-    definitionVersion,
-    pr: evt.pr,
+  const scope: TriggerScope = params.scope === "any" ? "any" : "workflow_owned";
+  const identity = await resolveSubjectIdentity(event, scope, deps);
+  if (!identity) return { result: "ignored_not_workflow_owned" };
+
+  const accepted: AcceptedTriggerDelivery = {
+    ...event,
+    scope,
+    subjectKey: identity.subjectKey,
+    ticketKey: identity.ticketKey,
+    definitionId: enabled.definition.id,
+    definitionVersion: enabled.current.version,
   };
 
-  const dispatchResult = await claimTicketRun(
-    runKey,
+  try {
+    const durable = await acceptTriggerDelivery(deps.db, accepted);
+    if (!durable.inserted) return storedResultToDispatch(durable.stored.result);
+    return await dispatchAcceptedTrigger(accepted, deps);
+  } catch (error) {
+    logger.warn(
+      { delivery: event.delivery, error: (error as Error).message },
+      "trigger_delivery_dispatch_failed",
+    );
+    return { result: "error" };
+  }
+}
+
+async function dispatchAcceptedTrigger(
+  accepted: AcceptedTriggerDelivery,
+  deps: DispatchTriggerDeps,
+  pendingEvent?: { headSha: string; triggerType: AcceptedTriggerDelivery["triggerType"] },
+): Promise<DispatchTriggerResult> {
+  const inputBase = {
+    kind: "pr_trigger" as const,
+    triggerType: accepted.triggerType,
+    subjectKey: accepted.subjectKey,
+    ...(accepted.ticketKey ? { ticketKey: accepted.ticketKey } : {}),
+    definitionId: accepted.definitionId,
+    definitionVersion: accepted.definitionVersion,
+    scope: accepted.scope,
+    ...(pendingEvent ? { pendingEvent } : {}),
+    pr: accepted.pr,
+  };
+  const dispatched = await claimSubjectRun(
+    {
+      subjectKey: accepted.subjectKey,
+      ticketKey: accepted.ticketKey,
+      kind: "pr_trigger",
+    },
     deps.runRegistry,
     deps.maxConcurrentAgents,
     {
-      kind: "pr_trigger",
-      startWorkflow: async () => {
+      startWorkflow: async (ownerToken) => {
+        const input: AgentWorkflowInput = { ...inputBase, ownerToken };
         const handle = await start(agentWorkflow, [input]);
-        logger.info(
-          { ticketKey: runKey, definitionId, triggerType: evt.triggerType, runId: handle.runId },
-          "trigger_workflow_started",
-        );
         return handle.runId;
       },
     },
   );
 
-  if (dispatchResult.started) {
-    return { result: "started", runId: dispatchResult.runId! };
+  if (dispatched.started) {
+    const result = { result: "started" as const, runId: dispatched.runId! };
+    await completeAccepted(deps.db, accepted, result);
+    return result;
   }
-  if (dispatchResult.reason === "already_claimed") {
+
+  if (dispatched.reason === "already_claimed" || dispatched.reason === "at_capacity") {
+    await coalescePendingTrigger(deps.db, accepted);
+    await completeAccepted(deps.db, accepted, { result: "coalesced" });
     return { result: "coalesced" };
   }
-  if (dispatchResult.reason === "at_capacity") {
-    return { result: "at_capacity" };
+
+  // A start failure is durable too: retain the accepted semantic event for the
+  // owner/reconciliation drain instead of relying on provider retry timing.
+  await coalescePendingTrigger(deps.db, accepted);
+  await completeAccepted(deps.db, accepted, { result: "coalesced" });
+  return { result: "coalesced" };
+}
+
+/** Called only after an owner-matching terminal release returned true. */
+export async function drainOldestPendingTrigger(
+  subjectKey: string,
+  deps: DispatchTriggerDeps,
+): Promise<DispatchTriggerResult | null> {
+  for (const pending of await listPendingTriggersForSubject(deps.db, subjectKey)) {
+    const currentHead = await readCurrentHead(pending.pr, deps);
+    if (!currentHead || currentHead !== pending.pr.headSha) {
+      await deletePendingTrigger(deps.db, pending);
+      await completeAccepted(deps.db, pending, { result: "ignored_stale_head" });
+      continue;
+    }
+    const result = await dispatchAcceptedTrigger(pending, deps, {
+      headSha: pending.pr.headSha,
+      triggerType: pending.triggerType,
+    });
+    if (result.result === "started") {
+      await (deps.deletePending ?? deletePendingTrigger)(deps.db, pending).catch((error) => {
+        logger.warn(
+          { subjectKey, error: (error as Error).message },
+          "trigger_pending_dispatcher_delete_failed",
+        );
+        return false;
+      });
+    }
+    // Capacity/claim races stay pending. Drain starts at most one successor.
+    return result;
   }
-  return { result: "error" };
+  return null;
+}
+
+async function resolveSubjectIdentity(
+  event: TriggerEvent,
+  scope: TriggerScope,
+  deps: DispatchTriggerDeps,
+): Promise<{ subjectKey: string; ticketKey: string | null } | null> {
+  if (scope === "any") {
+    return {
+      subjectKey: prSubjectKey(event.pr.provider, event.pr.repoPath, event.pr.prNumber),
+      ticketKey: null,
+    };
+  }
+
+  const correlation = await findWorkflowOwnedPullRequest(deps.db, {
+    provider: event.pr.provider,
+    repoPath: event.pr.repoPath,
+    prNumber: event.pr.prNumber,
+    branchName: event.pr.headRef,
+  });
+  if (!correlation) return null;
+
+  try {
+    const issueTracker = deps.issueTracker ?? createAdapters().issueTracker;
+    const ticket = await issueTracker.fetchTicket(correlation.ticketKey);
+    if (ticket.identifier.trim().toUpperCase() !== correlation.ticketKey.trim().toUpperCase()) {
+      return null;
+    }
+    return {
+      subjectKey: ticketSubjectKey("jira", correlation.ticketKey),
+      ticketKey: correlation.ticketKey,
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function readCurrentHead(pr: PrTriggerPayload, deps: DispatchTriggerDeps): Promise<string | null> {
+  try {
+    if (deps.getCurrentHead) return await deps.getCurrentHead(pr);
+    return await createRepositoryVCS({
+      provider: pr.provider,
+      repoPath: pr.repoPath,
+      baseBranch: pr.baseRef,
+    }).getBranchSha(pr.headRef);
+  } catch (error) {
+    logger.warn(
+      { provider: pr.provider, repoPath: pr.repoPath, error: (error as Error).message },
+      "trigger_current_head_lookup_failed_closed",
+    );
+    return null;
+  }
+}
+
+async function completeAccepted(
+  db: Db,
+  accepted: AcceptedTriggerDelivery,
+  result: StoredTriggerResult,
+) {
+  await completeTriggerDelivery(
+    db,
+    accepted.delivery.provider,
+    accepted.delivery.deliveryId,
+    result,
+  );
+}
+
+function storedResultToDispatch(result: StoredTriggerResult | null): DispatchTriggerResult {
+  if (!result) return { result: "coalesced" };
+  if (result.result === "started") return result;
+  if (result.result === "ignored_stale_head") return { result: "ignored_stale_head" };
+  if (result.result === "at_capacity") return { result: "at_capacity" };
+  if (result.result === "error") return { result: "error" };
+  return { result: "coalesced" };
 }

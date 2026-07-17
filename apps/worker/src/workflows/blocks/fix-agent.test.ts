@@ -181,9 +181,12 @@ describe("fix_agent execute", () => {
       entry: {
         kind: "pr_trigger",
         triggerType: "trigger_pr_checks_failed",
+        subjectKey: "ticket:jira:AWT-1",
         ticketKey: "AWT-1",
+        ownerToken: "owner:test",
         definitionId: 1,
         definitionVersion: 1,
+        scope: "workflow_owned",
         pr: makePrPayload({
           failedChecks: [{ name: "ci", conclusion: "failure", detailsUrl: "https://ci" }],
           review: { state: "changes_requested", author: "bob", body: "rename this" },

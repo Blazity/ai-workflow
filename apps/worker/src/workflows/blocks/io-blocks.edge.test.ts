@@ -429,9 +429,12 @@ describe("post_pr_comment edge cases", () => {
         entry: {
           kind: "pr_trigger",
           triggerType: "trigger_pr_checks_failed",
+          subjectKey: "ticket:jira:AWT-1",
+          ownerToken: "owner:test",
           ticketKey: "AWT-1",
           definitionId: 1,
           definitionVersion: 1,
+          scope: "workflow_owned",
           pr: makePrPayload(),
         },
       }),
@@ -455,9 +458,12 @@ describe("post_pr_comment edge cases", () => {
         entry: {
           kind: "pr_trigger",
           triggerType: "trigger_pr_checks_failed",
+          subjectKey: "ticket:jira:AWT-1",
+          ownerToken: "owner:test",
           ticketKey: "AWT-1",
           definitionId: 1,
           definitionVersion: 1,
+          scope: "workflow_owned",
           pr: makePrPayload({ baseRef: "develop" }),
         },
       }),
@@ -761,9 +767,12 @@ describe("fetch_pr_context edge cases", () => {
       entry: {
         kind: "pr_trigger",
         triggerType: "trigger_pr_created",
+        subjectKey: "ticket:jira:AWT-1",
+        ownerToken: "owner:test",
         ticketKey: "AWT-1",
         definitionId: 1,
         definitionVersion: 1,
+        scope: "workflow_owned",
         pr: makePrPayload(),
       },
     });

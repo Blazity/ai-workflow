@@ -1,8 +1,9 @@
-import { describe, it, expect, beforeEach } from "vitest";
-import { sql } from "drizzle-orm";
-import { PostgresRunRegistry } from "./postgres.js";
-import { createTestDb } from "../../db/test-db.js";
+import { beforeEach, describe, expect, it } from "vitest";
 import type { Db } from "../../db/client.js";
+import { activeRunSandboxes } from "../../db/schema.js";
+import { activeRuns } from "../../db/schema.js";
+import { createTestDb } from "../../db/test-db.js";
+import { PostgresRunRegistry } from "./postgres.js";
 
 let db: Db;
 let registry: PostgresRunRegistry;
@@ -12,234 +13,190 @@ beforeEach(async () => {
   registry = new PostgresRunRegistry(db);
 });
 
-describe("claim", () => {
-  it("returns true when the ticket is unclaimed", async () => {
-    expect(await registry.claim("PROJ-1", "claiming")).toBe(true);
-    expect(await registry.getRunId("PROJ-1")).toBe("claiming");
+const subjectKey = "ticket:jira:PROJ-1";
+
+describe("owner-CAS run claims", () => {
+  it("reserves an unclaimed subject without pretending a workflow is bound", async () => {
+    expect(
+      await registry.reserve({
+        subjectKey,
+        ticketKey: "PROJ-1",
+        ownerToken: "owner-a",
+        kind: "ticket",
+      }),
+    ).toBe(true);
+
+    expect(await registry.get(subjectKey)).toMatchObject({
+      subjectKey,
+      ticketKey: "PROJ-1",
+      ownerToken: "owner-a",
+      runId: null,
+      state: "reserved",
+      kind: "ticket",
+    });
   });
 
-  it("returns false when the ticket is already claimed", async () => {
-    await registry.claim("PROJ-1", "claiming");
-    expect(await registry.claim("PROJ-1", "other")).toBe(false);
-    expect(await registry.getRunId("PROJ-1")).toBe("claiming");
+  it("does not let a retry replace an existing owner", async () => {
+    await registry.reserve({ subjectKey, ticketKey: "PROJ-1", ownerToken: "owner-a", kind: "ticket" });
+    expect(
+      await registry.reserve({ subjectKey, ticketKey: "PROJ-1", ownerToken: "owner-b", kind: "ticket" }),
+    ).toBe(false);
+    expect((await registry.get(subjectKey))?.ownerToken).toBe("owner-a");
   });
 
-  it("stamps a creation timestamp", async () => {
-    const before = Date.now();
-    await registry.claim("PROJ-1", "claiming");
-    const ts = await registry.getEntryCreatedAt("PROJ-1");
-    expect(ts).toBeGreaterThanOrEqual(before - 1000);
-    expect(ts).toBeLessThanOrEqual(Date.now() + 1000);
+  it("only lets the reservation owner bind a candidate workflow run", async () => {
+    await registry.reserve({ subjectKey, ticketKey: "PROJ-1", ownerToken: "owner-a", kind: "ticket" });
+
+    expect(await registry.bindRun(subjectKey, "owner-b", "run-loser")).toBe(false);
+    expect(await registry.bindRun(subjectKey, "owner-a", "run-winner")).toBe(true);
+    expect(await registry.bindRun(subjectKey, "owner-a", "run-retry")).toBe(false);
+    expect(await registry.get(subjectKey)).toMatchObject({ state: "bound", runId: "run-winner" });
   });
 
-  it("returns true again after unregister frees the slot", async () => {
-    await registry.claim("PROJ-1", "run_a");
-    await registry.unregister("PROJ-1");
-    expect(await registry.claim("PROJ-1", "run_b")).toBe(true);
-    expect(await registry.getRunId("PROJ-1")).toBe("run_b");
-  });
-});
+  it("returns whether owner-matching terminal release actually deleted", async () => {
+    await registry.reserve({ subjectKey, ticketKey: "PROJ-1", ownerToken: "owner-a", kind: "ticket" });
+    await registry.bindRun(subjectKey, "owner-a", "run-winner");
 
-describe("register", () => {
-  it("overwrites the runId after a claim", async () => {
-    await registry.claim("PROJ-1", "claiming");
-    await registry.register("PROJ-1", "run_abc");
-    expect(await registry.getRunId("PROJ-1")).toBe("run_abc");
+    expect(await registry.release(subjectKey, "owner-b", "run-winner")).toBe(false);
+    expect(await registry.release(subjectKey, "owner-a", "run-other")).toBe(false);
+    expect(await registry.release(subjectKey, "owner-a", "run-winner")).toBe(true);
+    expect(await registry.release(subjectKey, "owner-a", "run-winner")).toBe(false);
   });
 
-  it("inserts when no claim exists (external seeders)", async () => {
-    await registry.register("PROJ-2", "run_xyz");
-    expect(await registry.getRunId("PROJ-2")).toBe("run_xyz");
+  it("cannot terminal-release an unbound reservation and cannot reservation-release a bound run", async () => {
+    await registry.reserve({ subjectKey, ticketKey: "PROJ-1", ownerToken: "owner-a", kind: "ticket" });
+    expect(await registry.release(subjectKey, "owner-a", "run-a")).toBe(false);
+    expect(await registry.bindRun(subjectKey, "owner-a", "run-a")).toBe(true);
+    expect(await registry.releaseReservation(subjectKey, "owner-a")).toBe(false);
+    expect((await registry.get(subjectKey))?.runId).toBe("run-a");
   });
 
-  it("REFRESHES the creation timestamp (authoritative write point — reconcile orphan grace period)", async () => {
-    await registry.claim("PROJ-1", "claiming");
-    // Backdate the entry past any grace window, as if claimed long ago.
-    await db.execute(
-      sql`UPDATE active_runs SET created_at = now() - interval '10 minutes' WHERE ticket_key = 'PROJ-1'`,
-    );
-    const stale = await registry.getEntryCreatedAt("PROJ-1");
-    expect(Date.now() - stale!).toBeGreaterThan(9 * 60 * 1000);
-
-    await registry.register("PROJ-1", "run_abc");
-    const fresh = await registry.getEntryCreatedAt("PROJ-1");
-    expect(Date.now() - fresh!).toBeLessThan(60 * 1000);
+  it("lets only the owner discard an unbound reservation", async () => {
+    await registry.reserve({ subjectKey, ticketKey: "PROJ-1", ownerToken: "owner-a", kind: "ticket" });
+    expect(await registry.releaseReservation(subjectKey, "owner-b")).toBe(false);
+    expect(await registry.releaseReservation(subjectKey, "owner-a")).toBe(true);
+    expect(await registry.get(subjectKey)).toBeNull();
   });
 
-  it("does not clobber a registered sandboxId", async () => {
-    await registry.claim("PROJ-1", "claiming");
-    await registry.registerSandbox("PROJ-1", "sbox_1");
-    await registry.register("PROJ-1", "run_abc");
-    expect(await registry.getSandboxId("PROJ-1")).toBe("sbox_1");
-  });
-});
-
-describe("getRunId", () => {
-  it("returns null when not registered", async () => {
-    expect(await registry.getRunId("PROJ-99")).toBeNull();
-  });
-});
-
-describe("unregister", () => {
-  it("removes run, sandbox, and timestamp together", async () => {
-    await registry.claim("PROJ-1", "run_abc");
-    await registry.registerSandbox("PROJ-1", "sbox_1");
-    await registry.unregister("PROJ-1");
-    expect(await registry.getRunId("PROJ-1")).toBeNull();
-    expect(await registry.getSandboxId("PROJ-1")).toBeNull();
-    expect(await registry.getEntryCreatedAt("PROJ-1")).toBeNull();
-  });
-
-  it("does NOT touch thread parents (they outlive runs)", async () => {
-    await registry.claim("PROJ-1", "run_abc");
-    await registry.setParent("PROJ-1", "1700000000.000123");
-    await registry.unregister("PROJ-1");
-    expect(await registry.getParent("PROJ-1")).toBe("1700000000.000123");
+  it("owner-only reservation handoff never overwrites a bound run", async () => {
+    await registry.reserve({ subjectKey, ticketKey: "PROJ-1", ownerToken: "owner-a", kind: "ticket" });
+    expect(await registry.handoff(subjectKey, "owner-a", "owner-b")).toBe(true);
+    expect((await registry.get(subjectKey))?.ownerToken).toBe("owner-b");
+    await registry.bindRun(subjectKey, "owner-b", "run-b");
+    expect(await registry.handoff(subjectKey, "owner-b", "owner-c")).toBe(false);
+    expect((await registry.get(subjectKey))?.runId).toBe("run-b");
   });
 });
 
-describe("unregisterIfRunId", () => {
-  it("removes the row when it still holds the given runId", async () => {
-    await registry.register("PROJ-1", "run_a");
-    await registry.unregisterIfRunId("PROJ-1", "run_a");
-    expect(await registry.getRunId("PROJ-1")).toBeNull();
-  });
-
-  it("leaves a successor's row intact when the runId no longer matches", async () => {
-    await registry.register("PROJ-1", "run_a");
-    // Successor reclaimed the ticket with a different runId.
-    await registry.register("PROJ-1", "run_b");
-    // The original run's scoped release must be a no-op.
-    await registry.unregisterIfRunId("PROJ-1", "run_a");
-    expect(await registry.getRunId("PROJ-1")).toBe("run_b");
-  });
-
-  it("is a no-op when no row exists", async () => {
-    await registry.unregisterIfRunId("PROJ-99", "run_a");
-    expect(await registry.getRunId("PROJ-99")).toBeNull();
-  });
-});
-
-describe("listAll", () => {
-  it("returns all ticket -> runId pairs", async () => {
-    await registry.claim("PROJ-1", "run_abc");
-    await registry.claim("PROJ-2", "run_def");
-    const all = await registry.listAll();
-    expect(all).toHaveLength(2);
-    expect(all).toContainEqual({ ticketKey: "PROJ-1", runId: "run_abc", kind: "ticket" });
-    expect(all).toContainEqual({ ticketKey: "PROJ-2", runId: "run_def", kind: "ticket" });
-  });
-
-  it("returns empty array when none registered", async () => {
-    expect(await registry.listAll()).toEqual([]);
-  });
-});
-
-describe("run kind", () => {
-  it("defaults to 'ticket' when claim omits kind", async () => {
-    await registry.claim("PROJ-1", "run_abc");
-    const [entry] = await registry.listAll();
-    expect(entry.kind).toBe("ticket");
-  });
-
-  it("round-trips a 'pr_trigger' kind through claim", async () => {
-    await registry.claim("PROJ-1", "claiming", "pr_trigger");
-    const [entry] = await registry.listAll();
-    expect(entry).toEqual({ ticketKey: "PROJ-1", runId: "claiming", kind: "pr_trigger" });
-  });
-
-  it("register carries the kind through the claim -> runId swap", async () => {
-    await registry.claim("PROJ-1", "claiming", "pr_trigger");
-    await registry.register("PROJ-1", "run_abc", "pr_trigger");
-    const [entry] = await registry.listAll();
-    expect(entry).toEqual({ ticketKey: "PROJ-1", runId: "run_abc", kind: "pr_trigger" });
-  });
-
-  it("register defaults to 'ticket' when kind omitted", async () => {
-    await registry.register("PROJ-2", "run_xyz");
-    const [entry] = await registry.listAll();
-    expect(entry.kind).toBe("ticket");
-  });
-});
-
-describe("sandbox", () => {
-  it("registerSandbox/getSandboxId round-trips", async () => {
-    await registry.claim("PROJ-1", "run_abc");
-    await registry.registerSandbox("PROJ-1", "sbox_12345");
-    expect(await registry.getSandboxId("PROJ-1")).toBe("sbox_12345");
-  });
-
-  it("getSandboxId returns null when never registered", async () => {
-    await registry.claim("PROJ-1", "run_abc");
-    expect(await registry.getSandboxId("PROJ-1")).toBeNull();
-  });
-
-  it("registerSandbox throws when there is no active run row", async () => {
-    // A zero-row update means the run was unregistered out from under us;
-    // fail fast so the sandbox isn't silently orphaned (no row links it).
-    await expect(
-      registry.registerSandbox("PROJ-77", "sbox_orphan"),
-    ).rejects.toThrow("no active run for PROJ-77");
-    expect(await registry.getSandboxId("PROJ-77")).toBeNull();
-    expect(await registry.getRunId("PROJ-77")).toBeNull();
-  });
-});
-
-describe("failed tickets", () => {
-  const meta = {
-    runId: "run_abc",
-    error: "Failed to move ticket to backlog: 403 Forbidden",
-    failedAt: "2026-04-02T12:34:56.000Z",
-  };
-
-  it("markFailed/isTicketFailed/listAllFailed round-trips meta exactly", async () => {
-    await registry.markFailed("AWT-42", meta);
-    expect(await registry.isTicketFailed("AWT-42")).toBe(true);
-    expect(await registry.listAllFailed()).toEqual([
-      { ticketKey: "AWT-42", meta },
+describe("subject metadata and capacity listing", () => {
+  it("keeps synthetic PR subjects ticket-free", async () => {
+    await registry.reserve({
+      subjectKey: "pr:github:acme/api#42",
+      ticketKey: null,
+      ownerToken: "owner-pr",
+      kind: "pr_trigger",
+    });
+    expect(await registry.listAll()).toEqual([
+      expect.objectContaining({
+        subjectKey: "pr:github:acme/api#42",
+        ticketKey: null,
+        ownerToken: "owner-pr",
+        runId: null,
+        state: "reserved",
+        kind: "pr_trigger",
+      }),
     ]);
   });
 
-  it("markFailed twice updates rather than throwing", async () => {
-    await registry.markFailed("AWT-42", meta);
-    await registry.markFailed("AWT-42", { ...meta, error: "second" });
-    const [entry] = await registry.listAllFailed();
-    expect(entry.meta.error).toBe("second");
+  it("records reservation and update timestamps", async () => {
+    const before = Date.now();
+    await registry.reserve({ subjectKey, ticketKey: "PROJ-1", ownerToken: "owner-a", kind: "ticket" });
+    const entry = await registry.get(subjectKey);
+    expect(entry?.createdAt).toBeGreaterThanOrEqual(before - 1_000);
+    expect(entry?.updatedAt).toBeGreaterThanOrEqual(before - 1_000);
   });
 
-  it("isTicketFailed returns false / listAllFailed empty when none", async () => {
-    expect(await registry.isTicketFailed("AWT-99")).toBe(false);
-    expect(await registry.listAllFailed()).toEqual([]);
-  });
-
-  it("clearFailedMark removes the marker", async () => {
-    await registry.markFailed("AWT-42", meta);
-    await registry.clearFailedMark("AWT-42");
-    expect(await registry.isTicketFailed("AWT-42")).toBe(false);
+  it("rejects raw rows whose state and run id disagree", async () => {
+    await expect(
+      db.insert(activeRuns).values({
+        subjectKey: "ticket:jira:PROJ-2",
+        ticketKey: "PROJ-2",
+        ownerToken: "owner-b",
+        state: "reserved",
+        runId: "run-should-be-null",
+      }),
+    ).rejects.toThrow();
+    await expect(
+      db.insert(activeRuns).values({
+        subjectKey: "ticket:jira:PROJ-3",
+        ticketKey: "PROJ-3",
+        ownerToken: "owner-c",
+        state: "bound",
+        runId: null,
+      }),
+    ).rejects.toThrow();
   });
 });
 
-describe("ThreadStore", () => {
-  it("setParent/getParent round-trips a Slack ts as a STRING", async () => {
-    await registry.setParent("AWT-42", "1777542341.966359");
-    const result = await registry.getParent("AWT-42");
-    expect(result).toBe("1777542341.966359");
-    expect(typeof result).toBe("string");
+describe("owner-isolated child sandboxes", () => {
+  beforeEach(async () => {
+    await registry.reserve({ subjectKey, ticketKey: "PROJ-1", ownerToken: "owner-a", kind: "ticket" });
+    await registry.bindRun(subjectKey, "owner-a", "run-a");
   });
 
-  it("setParent overwrites a prior value", async () => {
-    await registry.setParent("AWT-42", "111.000");
-    await registry.setParent("AWT-42", "222.000");
-    expect(await registry.getParent("AWT-42")).toBe("222.000");
+  it("registers and lists every scratch/code sandbox for the owner", async () => {
+    await registry.registerSandbox(subjectKey, "owner-a", "sandbox-code");
+    await registry.registerSandbox(subjectKey, "owner-a", "sandbox-scratch");
+    expect(await registry.listSandboxes(subjectKey, "owner-a")).toEqual([
+      "sandbox-code",
+      "sandbox-scratch",
+    ]);
   });
 
-  it("getParent returns null when no entry", async () => {
-    expect(await registry.getParent("AWT-99")).toBeNull();
+  it("rejects sandbox registration by a stale owner", async () => {
+    await expect(
+      registry.registerSandbox(subjectKey, "owner-b", "sandbox-orphan"),
+    ).rejects.toThrow("owner does not hold active run");
+    expect(await registry.listSandboxes(subjectKey, "owner-a")).toEqual([]);
   });
 
-  it("clearParent deletes the entry", async () => {
-    await registry.setParent("AWT-42", "1700000000.000123");
-    await registry.clearParent("AWT-42");
-    expect(await registry.getParent("AWT-42")).toBeNull();
+  it("does not expose one owner's sandboxes through another owner", async () => {
+    await registry.registerSandbox(subjectKey, "owner-a", "sandbox-a");
+    expect(await registry.listSandboxes(subjectKey, "owner-b")).toEqual([]);
+  });
+
+  it("enforces subject plus owner isolation at the database boundary", async () => {
+    await expect(
+      db.insert(activeRunSandboxes).values({
+        subjectKey,
+        ownerToken: "owner-b",
+        sandboxId: "sandbox-b",
+      }),
+    ).rejects.toThrow();
+  });
+
+  it("terminal owner release removes all child sandbox registrations", async () => {
+    await registry.registerSandbox(subjectKey, "owner-a", "sandbox-a");
+    await registry.registerSandbox(subjectKey, "owner-a", "sandbox-b");
+    expect(await registry.release(subjectKey, "owner-a", "run-a")).toBe(true);
+    expect(await registry.listSandboxes(subjectKey, "owner-a")).toEqual([]);
+  });
+});
+
+describe("ticket-only stores", () => {
+  it("round-trips failed ticket and thread metadata independently of subject claims", async () => {
+    const meta = {
+      runId: "run-a",
+      error: "failed",
+      failedAt: "2026-07-17T12:00:00.000Z",
+    };
+    await registry.markFailed("PROJ-1", meta);
+    await registry.setParent("PROJ-1", "1777542341.966359");
+    expect(await registry.listAllFailed()).toEqual([{ ticketKey: "PROJ-1", meta }]);
+    expect(await registry.getParent("PROJ-1")).toBe("1777542341.966359");
+    await registry.clearFailedMark("PROJ-1");
+    await registry.clearParent("PROJ-1");
+    expect(await registry.isTicketFailed("PROJ-1")).toBe(false);
+    expect(await registry.getParent("PROJ-1")).toBeNull();
   });
 });

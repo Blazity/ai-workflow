@@ -25,6 +25,11 @@ export interface SandboxConfig {
   jobTimeoutMs: number;
 }
 
+export interface SandboxLifecycle {
+  /** Called immediately after the external sandbox exists, before any setup. */
+  onCreated?: (sandboxId: string) => Promise<void>;
+}
+
 type SandboxInstance = Awaited<ReturnType<typeof SandboxType.create>>;
 
 export class SandboxManager {
@@ -35,6 +40,7 @@ export class SandboxManager {
     agent: AgentAdapter,
     configureOpts: ConfigureOpts,
     additionalAgents: ReadonlyArray<{ agent: AgentAdapter; configureOpts: ConfigureOpts }> = [],
+    lifecycle: SandboxLifecycle = {},
   ): Promise<SandboxInstance> {
     if (input.repositories.length === 0) {
       throw new Error("Cannot provision sandbox without selected repositories");
@@ -73,6 +79,8 @@ export class SandboxManager {
         runtime: "node24",
         timeout: this.config.jobTimeoutMs,
       });
+
+      await lifecycle.onCreated?.(sandbox.sandboxId);
 
       await sandbox.runCommand("mkdir", ["-p", WORKSPACE_REPOS_DIR]);
 

@@ -6,6 +6,11 @@ export type PrTriggerType =
   | "trigger_pr_review";
 
 export interface TriggerEvent {
+  delivery: {
+    provider: "github" | "gitlab";
+    producer: string;
+    deliveryId: string;
+  };
   triggerType: PrTriggerType;
   pr: PrTriggerPayload;
 }
@@ -13,6 +18,7 @@ export interface TriggerEvent {
 export interface NormalizeGitHubOptions {
   gateCheckNames: readonly string[];
   botLogin?: string;
+  deliveryId?: string;
   /**
    * Review states (from the enabled trigger_pr_review node's `on` param) that
    * may fire a run. Defaults to the safe ["changes_requested"] only: a
@@ -44,7 +50,11 @@ export function normalizeGitHubEvent(
     if (action !== "opened" && action !== "reopened") return null;
     const pr = body?.pull_request;
     if (!pr) return null;
-    return { triggerType: "trigger_pr_created", pr: mapGitHubPullRequest(pr, repo) };
+    return {
+      delivery: githubDelivery(options.deliveryId, body?.sender?.login ?? pr.user?.login),
+      triggerType: "trigger_pr_created",
+      pr: mapGitHubPullRequest(pr, repo),
+    };
   }
 
   if (eventName === "check_run") {
@@ -58,6 +68,10 @@ export function normalizeGitHubEvent(
     const prRef = prs[0];
     const prNumber = prRef.number;
     return {
+      delivery: githubDelivery(
+        options.deliveryId,
+        check.app?.slug ?? body?.sender?.login ?? "unknown",
+      ),
       triggerType: "trigger_pr_checks_failed",
       pr: {
         provider: "github",
@@ -90,6 +104,7 @@ export function normalizeGitHubEvent(
     if (!allowedStates.includes(review.state)) return null;
     if (options.botLogin && review.user?.login === options.botLogin) return null;
     return {
+      delivery: githubDelivery(options.deliveryId, review.user?.login),
       triggerType: "trigger_pr_review",
       pr: {
         ...mapGitHubPullRequest(pr, repo),
@@ -108,7 +123,10 @@ export function normalizeGitHubEvent(
 export function normalizeGitLabEvent(
   eventName: string,
   body: any,
+  options: { deliveryId?: string; botUsername?: string } = {},
 ): TriggerEvent | null {
+  const producer = body?.user?.username ?? body?.user?.name ?? "unknown";
+  if (options.botUsername && producer === options.botUsername) return null;
   if (eventName === "Merge Request Hook") {
     if (body?.object_kind !== "merge_request") return null;
     const attrs = body?.object_attributes;
@@ -117,6 +135,7 @@ export function normalizeGitLabEvent(
     const action = attrs.action;
     if (action !== "open" && action !== "reopen") return null;
     return {
+      delivery: gitLabDelivery(options.deliveryId, producer),
       triggerType: "trigger_pr_created",
       pr: {
         provider: "gitlab",
@@ -151,6 +170,7 @@ export function normalizeGitLabEvent(
           }))
         : [{ name: "pipeline", conclusion: "failed" }];
     return {
+      delivery: gitLabDelivery(options.deliveryId, producer),
       triggerType: "trigger_pr_checks_failed",
       pr: {
         provider: "gitlab",
@@ -169,6 +189,14 @@ export function normalizeGitLabEvent(
   }
 
   return null;
+}
+
+function githubDelivery(deliveryId: string | undefined, producer: string | undefined) {
+  return { provider: "github" as const, producer: producer ?? "unknown", deliveryId: deliveryId ?? "" };
+}
+
+function gitLabDelivery(deliveryId: string | undefined, producer: string) {
+  return { provider: "gitlab" as const, producer, deliveryId: deliveryId ?? "" };
 }
 
 function mapGitHubPullRequest(pr: any, repo: any): PrTriggerPayload {

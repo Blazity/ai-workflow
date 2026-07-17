@@ -4,9 +4,10 @@ import { env } from "../../../env.js";
 import { IssueTrackerNotFoundError } from "../../adapters/issue-tracker/types.js";
 import { createAdapters } from "../../lib/adapters.js";
 import { cancelRun } from "../../lib/cancel-run.js";
-import { dispatchTicket, isClaimingSentinel } from "../../lib/dispatch.js";
+import { dispatchTicket } from "../../lib/dispatch.js";
 import { logger } from "../../lib/logger.js";
-import { stopTicketSandboxes } from "../../sandbox/stop-ticket-sandboxes.js";
+import { ticketSubjectKey } from "../../lib/subject-key.js";
+import { stopSandboxesByIds } from "../../sandbox/stop-ticket-sandboxes.js";
 
 /**
  * Jira webhook handler — triggers the same dispatch logic as the cron poller.
@@ -222,30 +223,28 @@ async function cancelTrackedRun(
   ticketKey: string,
   runRegistry: ReturnType<typeof createAdapters>["runRegistry"],
 ): Promise<boolean> {
-  const trackedRunId = await runRegistry.getRunId(ticketKey);
-  if (!trackedRunId) return false;
+  const subjectKey = ticketSubjectKey("jira", ticketKey);
+  const entry = await runRegistry.get(subjectKey);
+  if (!entry) return false;
 
   // A pr_trigger run's lifecycle follows the PR, not the ticket column, so a
   // column move must not cancel it.
-  const entries = await runRegistry.listAll().catch(() => []);
-  const kind = entries.find((entry) => entry.ticketKey === ticketKey)?.kind;
-  if (kind === "pr_trigger") {
+  if (entry.kind === "pr_trigger") {
     logger.info({ ticketKey }, "webhook_skip_cancel_pr_trigger_run");
     return false;
   }
 
-  if (isClaimingSentinel(trackedRunId)) {
-    // Sentinel can shadow a real sandbox if dispatch already called
-    // start() but crashed before register(). Same gap that reconcile's
-    // stale-claim sweep covers — we catch it here on the faster webhook
-    // path so operators don't have to wait 5 minutes for reconcile.
-    const sandboxId = await runRegistry.getSandboxId(ticketKey).catch(() => null);
-    await stopTicketSandboxes(ticketKey, sandboxId).catch(() => {});
-    await runRegistry.unregister(ticketKey).catch(() => {});
-    return true;
+  if (entry.state === "reserved") {
+    const sandboxIds = await runRegistry
+      .listSandboxes(entry.subjectKey, entry.ownerToken)
+      .catch(() => []);
+    await stopSandboxesByIds(sandboxIds).catch(() => {});
+    return runRegistry
+      .releaseReservation(entry.subjectKey, entry.ownerToken)
+      .catch(() => false);
   }
 
-  return cancelRun(ticketKey, trackedRunId, runRegistry);
+  return entry.runId ? cancelRun(ticketKey, entry.runId, runRegistry) : false;
 }
 
 async function getLiveTicketState(

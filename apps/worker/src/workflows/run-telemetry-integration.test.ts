@@ -132,6 +132,7 @@ async function runWorkflowAgainstDb(db: Db, fx: RunFixture): Promise<RunResult> 
     // REAL persistence: what recordBlockStatusesStep does, minus the DevKit step.
     await recordBlockStatuses(db, {
       runId: fx.runId,
+      subjectKey: `ticket:jira:${TICKET.identifier}`,
       ticketKey: TICKET.identifier,
       ticketTitle: TICKET.title,
       ticketUrl: TICKET.url,
@@ -252,6 +253,7 @@ async function runWorkflowAgainstDb(db: Db, fx: RunFixture): Promise<RunResult> 
     const totals = computeUsageTotals(phaseUsages, fx.priceLookup, captured.activeModel, phaseModels);
     await recordRunUsage(db, {
       runId: fx.runId,
+      subjectKey: `ticket:jira:${TICKET.identifier}`,
       workflowId: "wf_agent",
       workflowName: "Agent",
       status: runOutcome,

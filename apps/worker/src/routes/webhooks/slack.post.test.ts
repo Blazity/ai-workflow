@@ -17,14 +17,15 @@ vi.mock("../../../env.js", () => ({
 
 // Adapters: only runRegistry matters for these tests.
 const runRegistry = {
-  claim: vi.fn(),
-  register: vi.fn(),
-  getRunId: vi.fn(),
-  unregister: vi.fn().mockResolvedValue(undefined),
+  reserve: vi.fn(),
+  bindRun: vi.fn(),
+  handoff: vi.fn(),
+  get: vi.fn(),
+  releaseReservation: vi.fn().mockResolvedValue(true),
+  release: vi.fn(),
   listAll: vi.fn(),
   registerSandbox: vi.fn(),
-  getSandboxId: vi.fn().mockResolvedValue(null),
-  getEntryCreatedAt: vi.fn().mockResolvedValue(null),
+  listSandboxes: vi.fn().mockResolvedValue([]),
   markFailed: vi.fn(),
   isTicketFailed: vi.fn().mockResolvedValue(false),
   listAllFailed: vi.fn().mockResolvedValue([]),
@@ -47,9 +48,9 @@ vi.mock("../../lib/cancel-run.js", () => ({
   cancelRun: (...args: any[]) => cancelRunFn(...args),
 }));
 
-const stopTicketSandboxesFn = vi.fn();
+const stopSandboxesByIdsFn = vi.fn();
 vi.mock("../../sandbox/stop-ticket-sandboxes.js", () => ({
-  stopTicketSandboxes: (...args: any[]) => stopTicketSandboxesFn(...args),
+  stopSandboxesByIds: (...args: any[]) => stopSandboxesByIdsFn(...args),
 }));
 
 let postedToResponseUrl: Array<{ url: string; payload: any }> = [];
@@ -110,8 +111,8 @@ describe("POST /webhooks/slack", () => {
     vi.clearAllMocks();
     postedToResponseUrl = [];
     runRegistry.listAll.mockResolvedValue([]);
-    runRegistry.getRunId.mockResolvedValue(null);
-    runRegistry.getSandboxId.mockResolvedValue(null);
+    runRegistry.get.mockResolvedValue(null);
+    runRegistry.listSandboxes.mockResolvedValue([]);
   });
 
   it("returns 401 on a tampered body", async () => {
@@ -140,8 +141,14 @@ describe("POST /webhooks/slack", () => {
 
   it("acks /ai-workflow list within 200 and posts the formatted list to response_url", async () => {
     runRegistry.listAll.mockResolvedValue([
-      { ticketKey: "AWT-1", runId: "run_real" },
-      { ticketKey: "AWT-2", runId: "claiming:1700000000000" },
+      {
+        subjectKey: "ticket:jira:AWT-1", ticketKey: "AWT-1", ownerToken: "owner-1",
+        runId: "run_real", state: "bound", kind: "ticket", createdAt: 1, updatedAt: 1,
+      },
+      {
+        subjectKey: "ticket:jira:AWT-2", ticketKey: "AWT-2", ownerToken: "owner-2",
+        runId: null, state: "reserved", kind: "ticket", createdAt: 2, updatedAt: 2,
+      },
     ]);
 
     const handler = makeApp();
@@ -192,7 +199,7 @@ describe("POST /webhooks/slack", () => {
   });
 
   it("/ai-workflow cancel AWT-1 with no entry posts 'No active run' to response_url", async () => {
-    runRegistry.getRunId.mockResolvedValue(null);
+    runRegistry.get.mockResolvedValue(null);
     const handler = makeApp();
     const body = form({
       command: "/ai-workflow",
@@ -208,7 +215,16 @@ describe("POST /webhooks/slack", () => {
   });
 
   it("/ai-workflow cancel AWT-1 with a real entry calls cancelRun once with the right args", async () => {
-    runRegistry.getRunId.mockResolvedValue("run_a");
+    runRegistry.get.mockResolvedValue({
+      subjectKey: "ticket:jira:AWT-1",
+      ticketKey: "AWT-1",
+      ownerToken: "owner-1",
+      runId: "run_a",
+      state: "bound",
+      kind: "ticket",
+      createdAt: 1,
+      updatedAt: 1,
+    });
     cancelRunFn.mockResolvedValue(true);
 
     const handler = makeApp();

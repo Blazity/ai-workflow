@@ -4,7 +4,7 @@ import { env } from "../../../env.js";
 import { createAdapters } from "../../lib/adapters.js";
 import { cancelRun } from "../../lib/cancel-run.js";
 import { logger } from "../../lib/logger.js";
-import { stopTicketSandboxes } from "../../sandbox/stop-ticket-sandboxes.js";
+import { stopSandboxesByIds } from "../../sandbox/stop-ticket-sandboxes.js";
 import { parseCommand, type ParsedCommand } from "../../lib/slack/commands.js";
 import { HELP_TEXT } from "../../lib/slack/format.js";
 import {
@@ -166,7 +166,7 @@ async function executeCommand(parsed: ParsedCommand): Promise<string> {
         runRegistry,
         parsed.ticketKey,
         cancelRun,
-        stopTicketSandboxes,
+        stopSandboxesByIds,
         issueTracker,
         backlogMoveTarget,
       );

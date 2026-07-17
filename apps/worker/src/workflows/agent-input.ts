@@ -16,6 +16,7 @@ export interface PrTriggerPayload {
   isDraft: boolean;
   failedChecks?: Array<{ name: string; conclusion: string; detailsUrl?: string }>;
   review?: { state: "changes_requested" | "commented"; author: string; body: string };
+  reviews?: Array<{ state: "changes_requested" | "commented"; author: string; body: string }>;
 }
 
 /** Immutable identity for the built-in fresh-install graph, which has no
@@ -35,21 +36,33 @@ export type WorkflowDefinitionVersionPin =
 export type AgentWorkflowInput =
   | {
       kind: "ticket";
+      subjectKey: string;
       ticketKey: string;
+      ownerToken: string;
       definitionId?: number;
       definitionVersion?: WorkflowDefinitionVersionPin;
     }
   | {
       kind: "pr_trigger";
       triggerType: "trigger_pr_created" | "trigger_pr_checks_failed" | "trigger_pr_review";
-      ticketKey: string;
+      subjectKey: string;
+      ticketKey?: string;
+      ownerToken: string;
       definitionId: number;
       definitionVersion: number;
+      scope: "workflow_owned" | "any";
+      /** Durable pending row this candidate must acknowledge after owner bind. */
+      pendingEvent?: {
+        headSha: string;
+        triggerType: "trigger_pr_created" | "trigger_pr_checks_failed" | "trigger_pr_review";
+      };
       pr: PrTriggerPayload;
     }
   | {
       kind: "plan_approved";
+      subjectKey: string;
       ticketKey: string;
+      ownerToken: string;
       definitionId: number;
       /** Pinned definition version that produced the approved plan. When set, the
        *  run loads exactly that version instead of the definition's head. */
@@ -59,8 +72,11 @@ export type AgentWorkflowInput =
     }
   | {
       kind: "clarification_answered";
+      subjectKey: string;
       ticketKey: string;
+      ownerToken: string;
       definitionId?: number;
+      definitionVersion?: number;
       /** Clarification request whose answer resumes work on the ticket. */
       clarificationRequestId: string;
     };

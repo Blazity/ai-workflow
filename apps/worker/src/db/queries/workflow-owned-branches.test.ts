@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createTestDb } from "../test-db.js";
 import {
+  findWorkflowOwnedPullRequest,
   listWorkflowOwnedBranchesForTicket,
   upsertWorkflowOwnedBranch,
 } from "./workflow-owned-branches.js";
@@ -107,5 +108,53 @@ describe("workflow-owned branch records", () => {
         },
       },
     ]);
+  });
+
+  it("proves ownership only from an exact provider/repository/PR/branch correlation", async () => {
+    const db = await createTestDb();
+    await upsertWorkflowOwnedBranch(db, {
+      ticketKey: "AIW-45",
+      provider: "github",
+      repoPath: "acme/web",
+      branchName: "feature/owned",
+      pr: {
+        id: 42,
+        url: "https://github.com/acme/web/pull/42",
+        branch: "feature/owned",
+      },
+    });
+
+    await expect(
+      findWorkflowOwnedPullRequest(db, {
+        provider: "github",
+        repoPath: "acme/web",
+        prNumber: 42,
+        branchName: "feature/owned",
+      }),
+    ).resolves.toMatchObject({ ticketKey: "AIW-45" });
+    await expect(
+      findWorkflowOwnedPullRequest(db, {
+        provider: "github",
+        repoPath: "acme/web",
+        prNumber: 99,
+        branchName: "feature/owned",
+      }),
+    ).resolves.toBeNull();
+    await expect(
+      findWorkflowOwnedPullRequest(db, {
+        provider: "gitlab",
+        repoPath: "acme/web",
+        prNumber: 42,
+        branchName: "feature/owned",
+      }),
+    ).resolves.toBeNull();
+    await expect(
+      findWorkflowOwnedPullRequest(db, {
+        provider: "github",
+        repoPath: "acme/web",
+        prNumber: 42,
+        branchName: "blazebot/aiw-45",
+      }),
+    ).resolves.toBeNull();
   });
 });

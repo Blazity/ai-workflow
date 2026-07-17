@@ -65,7 +65,12 @@ export function makeCtx(overrides: Partial<EngineCtx> = {}): EngineCtx {
     definitionId: 1,
     definitionVersion: 1,
     definitionNodes: [],
-    entry: { kind: "ticket", ticketKey: "AWT-1" },
+    entry: {
+      kind: "ticket",
+      subjectKey: "ticket:jira:AWT-1",
+      ticketKey: "AWT-1",
+      ownerToken: "owner:test",
+    },
     ticket: {
       id: "1",
       identifier: "AWT-1",
@@ -97,7 +102,6 @@ export function makeCtx(overrides: Partial<EngineCtx> = {}): EngineCtx {
     }),
     recordUsage: vi.fn(),
     markLaunched: vi.fn(),
-    unregisterBeforePr: vi.fn().mockResolvedValue(undefined),
     ...overrides,
   };
 }

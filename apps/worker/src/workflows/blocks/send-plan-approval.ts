@@ -146,7 +146,6 @@ export const execute: BlockExecuteFn = async (
 
   await notifyPlanApprovalStep(ctx.ticket.identifier).catch(() => {});
 
-  await ctx.unregisterBeforePr();
   await parkForApprovalStep(ctx.ticket.identifier, ctx.moveTargets.backlog);
 
   return { kind: "ended", output: { status: "awaiting_approval", approvalRequestId } };

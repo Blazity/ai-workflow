@@ -145,7 +145,7 @@ describe("finalize_workspace execute", () => {
     expect(mocks.publishWorkspaceChanges).not.toHaveBeenCalled();
   });
 
-  it("publishes, sets ctx.publication, comments PR links, and unregisters before PRs", async () => {
+  it("publishes, sets ctx.publication, and comments PR links while retaining ownership", async () => {
     mocks.publishWorkspaceChanges.mockImplementation(
       async (input: { beforeCreatePullRequests?: () => Promise<void> }) => {
         await input.beforeCreatePullRequests?.();
@@ -171,7 +171,6 @@ describe("finalize_workspace execute", () => {
         model: "claude-model",
       }),
     );
-    expect(ctx.unregisterBeforePr).toHaveBeenCalledTimes(1);
     expect(ctx.publication?.status).toBe("published");
     expect(mocks.postComment).toHaveBeenCalledWith(
       "AWT-1",

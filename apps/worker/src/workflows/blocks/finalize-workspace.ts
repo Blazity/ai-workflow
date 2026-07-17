@@ -34,9 +34,8 @@ blockFinalizePrLinksCommentStep.maxRetries = 0;
 /**
  * finalize_workspace: gate on typed `checks.*` status inputs, push the workspace
  * and open or reuse workflow-owned pull requests via publishWorkspaceChanges,
- * comment the PR links on the ticket, and set ctx.publication. The run is
- * unregistered exactly once before PR creation through ctx.unregisterBeforePr
- * (mirrors agent.ts's open_pr semantics).
+ * comment the PR links on the ticket, and set ctx.publication. Subject ownership
+ * remains held until the workflow's terminal release.
  */
 export const execute: BlockExecuteFn = async (
   block,
@@ -88,9 +87,6 @@ export const execute: BlockExecuteFn = async (
       agentKind: ctx.runDefaultKind,
       model: ctx.defaults[ctx.runDefaultKind],
       clarifications: ctx.clarifications,
-      beforeCreatePullRequests: async () => {
-        await ctx.unregisterBeforePr();
-      },
     });
     ctx.publication = publication;
 

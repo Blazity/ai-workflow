@@ -10,11 +10,15 @@ import { getDb } from "../../db/client.js";
 import { collectSnapshots } from "../../lib/telemetry/collect-snapshots.js";
 import { upsertRunSnapshots } from "../../lib/telemetry/run-telemetry.js";
 import type { RunsLister } from "../../lib/overview/collect-runs.js";
+import { drainOldestPendingTrigger } from "../../lib/dispatch-trigger.js";
+import { listPendingSubjectKeys } from "../../lib/trigger-delivery-store.js";
+import { recoverOrphanedPendingTriggers } from "../../lib/pending-trigger-recovery.js";
 
 export default defineEventHandler(async (event) => {
   verifyCronAuth(getHeader(event, "authorization"));
 
   const adapters = createAdapters();
+  const db = getDb();
   const ticketKeys = await discoverAiColumnTickets(adapters);
   const started = await dispatchDiscoveredTickets(ticketKeys, adapters);
   const { cancelled, cleaned } = await reconcileRuns(
@@ -31,11 +35,34 @@ export default defineEventHandler(async (event) => {
         reason: `${detail}.`,
       });
     },
+    async (subjectKey) => {
+      await drainOldestPendingTrigger(subjectKey, {
+        db,
+        runRegistry: adapters.runRegistry,
+        maxConcurrentAgents: env.MAX_CONCURRENT_AGENTS,
+      });
+    },
   );
+
+  const pendingRecovered = await recoverOrphanedPendingTriggers({
+    listSubjects: () => listPendingSubjectKeys(db),
+    getActive: (subjectKey) => adapters.runRegistry.get(subjectKey),
+    drain: (subjectKey) =>
+      drainOldestPendingTrigger(subjectKey, {
+        db,
+        runRegistry: adapters.runRegistry,
+        maxConcurrentAgents: env.MAX_CONCURRENT_AGENTS,
+      }),
+    onError: (subjectKey, error) =>
+      logger.warn(
+        { subjectKey, error: (error as Error).message },
+        "poll_pending_trigger_recovery_failed",
+      ),
+  });
 
   // Housekeeping: physically drop expired gate rows (reads already treat
   // them as absent). Best-effort — a failed purge must not fail the poll.
-  await new GateStore(getDb())
+  await new GateStore(db)
     .purgeExpired()
     .catch((err) => logger.warn({ err: (err as Error).message }, "poll_gate_purge_failed"));
 
@@ -44,7 +71,6 @@ export default defineEventHandler(async (event) => {
   // ~24h observability window. Per-run cost is filled separately by the agent
   // workflow. Best-effort — a failed snapshot must not fail the poll.
   try {
-    const db = getDb();
     const snapshots = await collectSnapshots({
       runsLister: getWorld().runs as RunsLister,
       db,
@@ -60,6 +86,7 @@ export default defineEventHandler(async (event) => {
     started: started.length,
     cancelled,
     cleaned,
+    pendingRecovered,
   };
 });
 

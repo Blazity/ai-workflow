@@ -339,6 +339,32 @@ function AgentProviderModel({
   );
 }
 
+function PrScopeField({
+  node,
+  canEdit,
+  onChange,
+}: {
+  node: FlowNodeDef;
+  canEdit: boolean;
+  onChange: (path: string, value: WorkflowParamValue | undefined) => void;
+}) {
+  const scope = node.params.scope === "any" ? "any" : "workflow_owned";
+  return (
+    <ConfigField label="Scope">
+      <Listbox
+        options={[
+          { value: "workflow_owned", label: "Workflow-owned PRs only" },
+          { value: "any", label: "Any PR" },
+        ]}
+        value={scope}
+        disabled={!canEdit}
+        ariaLabel="Pull request scope"
+        onChange={(value) => onChange("params.scope", value)}
+      />
+    </ConfigField>
+  );
+}
+
 export function ConfigFields({
   node,
   options,
@@ -356,18 +382,16 @@ export function ConfigFields({
     case "trigger_plan_approved":
       return <ConfigNote>Fires when a proposed plan is approved.</ConfigNote>;
     case "trigger_pr_checks_failed":
-      return <ConfigNote>Fires when a pull request&apos;s checks report a failure.</ConfigNote>;
+      return (
+        <>
+          <PrScopeField node={node} canEdit={canEdit} onChange={onChange} />
+          <ConfigNote>Fires when a pull request&apos;s checks report a failure.</ConfigNote>
+        </>
+      );
     case "trigger_pr_created":
       return (
         <>
-          <ConfigField label="Scope">
-            <CheckboxRow
-              label="Only PRs opened by this workflow"
-              checked={node.params.onlyWorkflowOwned !== false}
-              disabled={!canEdit}
-              onChange={(v) => onChange("params.onlyWorkflowOwned", v)}
-            />
-          </ConfigField>
+          <PrScopeField node={node} canEdit={canEdit} onChange={onChange} />
           <ConfigNote>Providers are configured in the VCS integration settings.</ConfigNote>
         </>
       );
@@ -381,22 +405,25 @@ export function ConfigFields({
         onChange("params.on", next);
       };
       return (
-        <ConfigField label="On review">
-          <div className="flex flex-col gap-1.5">
-            <CheckboxRow
-              label="Changes requested"
-              checked={effective.includes("changes_requested")}
-              disabled={!canEdit}
-              onChange={toggle("changes_requested")}
-            />
-            <CheckboxRow
-              label="Commented (untrusted body, opt-in)"
-              checked={effective.includes("commented")}
-              disabled={!canEdit}
-              onChange={toggle("commented")}
-            />
-          </div>
-        </ConfigField>
+        <>
+          <PrScopeField node={node} canEdit={canEdit} onChange={onChange} />
+          <ConfigField label="On review">
+            <div className="flex flex-col gap-1.5">
+              <CheckboxRow
+                label="Changes requested"
+                checked={effective.includes("changes_requested")}
+                disabled={!canEdit}
+                onChange={toggle("changes_requested")}
+              />
+              <CheckboxRow
+                label="Commented (untrusted body, opt-in)"
+                checked={effective.includes("commented")}
+                disabled={!canEdit}
+                onChange={toggle("commented")}
+              />
+            </div>
+          </ConfigField>
+        </>
       );
     }
     case "planning_agent":

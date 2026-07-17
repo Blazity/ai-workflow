@@ -68,7 +68,7 @@ describe("send_plan_approval execute", () => {
     if (result.kind === "failed") expect(result.reason).toBe("approval requires a stored definition");
   });
 
-  it("stores the plan, mirrors a comment, notifies, unregisters, parks the ticket, and ends", async () => {
+  it("stores the plan, mirrors a comment, notifies, parks the ticket, and ends while retaining ownership", async () => {
     const ctx = makeCtx({ researchPlanMarkdown: "# Research plan" });
     const result = await execute(makeNode("send_plan_approval"), {}, ctx);
 
@@ -85,15 +85,11 @@ describe("send_plan_approval execute", () => {
       "Plan awaiting approval in the dashboard.",
     );
     expect(mocks.notifyForTicket).toHaveBeenCalledWith("AWT-1", { kind: "plan_approval_requested" });
-    expect(ctx.unregisterBeforePr).toHaveBeenCalledOnce();
     // Parked out of the AI column with an awaiting-approval label so the cron
     // poll stops re-dispatching it; label add precedes the move, mirroring
-    // clarification, and the move follows the unregister.
+    // clarification. The workflow's terminal finally releases ownership.
     expect(mocks.updateLabels).toHaveBeenCalledWith("AWT-1", { add: [AWAITING_APPROVAL_LABEL] });
     expect(mocks.moveTicket).toHaveBeenCalledWith("AWT-1", "Backlog");
-    const unregisterOrder = (ctx.unregisterBeforePr as unknown as { mock: { invocationCallOrder: number[] } })
-      .mock.invocationCallOrder[0];
-    expect(unregisterOrder).toBeLessThan(mocks.moveTicket.mock.invocationCallOrder[0]);
     expect(result).toEqual({
       kind: "ended",
       output: { status: "awaiting_approval", approvalRequestId: "appr-9" },

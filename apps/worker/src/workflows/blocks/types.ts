@@ -57,15 +57,13 @@ export interface EngineCtx {
   /** Null until prepare_workspace provisions a sandbox. */
   sandboxId: string | null;
   /** Agent-only scratch sandboxes used by planning and workspace-free Generic
-   * blocks. They never contain checked-out repositories and therefore do not
+   *  blocks. They never contain checked-out repositories and therefore do not
    * satisfy modular workspace consumers. */
   agentSandboxIds: Partial<Record<AgentKind, string>>;
   /**
    * Authoritative in-memory terminal-cleanup set for every code and agent-only
-   * scratch sandbox provisioned by this run. The single-slot run registry is
-   * only the primary external-cancellation target; it cannot replace this set.
-   * This collection is not durable yet, so external cancel/reconcile needs the
-   * AIW-99 multi-sandbox persistence follow-up.
+   * scratch sandbox provisioned by this run. Every id is also persisted as a
+   * durable owner child for external cancel/reconcile crash cleanup.
    */
   sandboxIds: Set<string>;
   /** Empty until prepare_workspace selects repositories. */
@@ -105,12 +103,6 @@ export interface EngineCtx {
    * "cost unknown" instead of a misleading zero cost.
    */
   markLaunched(label: string): void;
-  /**
-   * Unregister the run from the run registry exactly once before pull requests
-   * are created (mirrors agent.ts's beforeCreatePullRequests +
-   * runUnregisteredBeforePr dedupe). The engine owns the dedupe flag.
-   */
-  unregisterBeforePr(): Promise<void>;
 }
 
 export type {

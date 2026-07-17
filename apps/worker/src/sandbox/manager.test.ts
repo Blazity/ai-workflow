@@ -84,6 +84,71 @@ describe("SandboxManager.provisionMultiRepo", () => {
     );
   });
 
+  it("durably registers the sandbox immediately after create and before setup", async () => {
+    const order: string[] = [];
+    const onCreated = vi.fn(async (sandboxId: string) => {
+      order.push(`register:${sandboxId}`);
+    });
+    mockRunCommand.mockImplementation(async () => {
+      order.push("setup");
+      return { exitCode: 0, stdout: mockStdout };
+    });
+    const manager = new SandboxManager(baseConfig);
+
+    await manager.provisionMultiRepo(
+      {
+        branchName: "feat/test-branch",
+        repositories: [
+          {
+            provider: "github",
+            repoPath: "test-org/test-repo",
+            defaultBranch: "main",
+            selectedRationale: "only accessible repository",
+          },
+        ],
+      },
+      makeFakeAgent(),
+      { model: "any", anthropicApiKey: "k" },
+      [],
+      { onCreated },
+    );
+
+    expect(onCreated).toHaveBeenCalledWith("sbx-test-123");
+    expect(order[0]).toBe("register:sbx-test-123");
+    expect(order[1]).toBe("setup");
+  });
+
+  it("stops the external sandbox when immediate registration fails", async () => {
+    const manager = new SandboxManager(baseConfig);
+
+    await expect(
+      manager.provisionMultiRepo(
+        {
+          branchName: "feat/test-branch",
+          repositories: [
+            {
+              provider: "github",
+              repoPath: "test-org/test-repo",
+              defaultBranch: "main",
+              selectedRationale: "only accessible repository",
+            },
+          ],
+        },
+        makeFakeAgent(),
+        { model: "any", anthropicApiKey: "k" },
+        [],
+        {
+          onCreated: async () => {
+            throw new Error("registry write failed");
+          },
+        },
+      ),
+    ).rejects.toThrow("registry write failed");
+
+    expect(mockStop).toHaveBeenCalledOnce();
+    expect(mockRunCommand).not.toHaveBeenCalled();
+  });
+
   it("sets git identity to commitAuthor / commitEmail", async () => {
     const manager = new SandboxManager(baseConfig);
     await manager.provisionMultiRepo(

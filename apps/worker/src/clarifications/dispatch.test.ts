@@ -74,7 +74,7 @@ function claimRunsGuard() {
   claim.claimTicketRun.mockImplementation(async (_tk, _reg, _max, opts) => {
     const bail = await opts.postClaimGuard();
     if (bail) return bail;
-    const runId = await opts.startWorkflow();
+    const runId = await opts.startWorkflow("owner:test");
     return { started: true, runId };
   });
 }
@@ -111,10 +111,16 @@ describe("dispatchClarificationAnswered", () => {
     expect(opts.kind).toBe("ticket");
 
     // The start payload leaves definitionId unset (resume loads the head).
-    const runId = await opts.startWorkflow();
+    const runId = await opts.startWorkflow("owner:test");
     expect(runId).toBe("run-x");
     expect(wf.start).toHaveBeenCalledWith("agentWorkflow_sentinel", [
-      { kind: "clarification_answered", ticketKey: "AWT-1", clarificationRequestId: "clar-1" },
+      {
+        kind: "clarification_answered",
+        subjectKey: "ticket:jira:AWT-1",
+        ticketKey: "AWT-1",
+        ownerToken: "owner:test",
+        clarificationRequestId: "clar-1",
+      },
     ]);
   });
 

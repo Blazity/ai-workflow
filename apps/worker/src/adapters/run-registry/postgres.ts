@@ -1,111 +1,153 @@
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, isNull, sql } from "drizzle-orm";
 import type { Db } from "../../db/client.js";
 import {
+  activeRunSandboxes,
   activeRuns,
   failedTickets,
   threadParents,
 } from "../../db/schema.js";
 import type {
+  ActiveRunEntry,
   FailedTicketMeta,
-  RunKind,
   RunRegistryAdapter,
+  RunReservation,
   ThreadStore,
 } from "./types.js";
 
 export class PostgresRunRegistry implements RunRegistryAdapter, ThreadStore {
   constructor(private db: Db) {}
 
-  async claim(ticketKey: string, runId: string, kind: RunKind = "ticket"): Promise<boolean> {
-    // INSERT ... ON CONFLICT DO NOTHING is the HSETNX equivalent: exactly
-    // one concurrent claimer gets a row back. created_at defaults to now(),
-    // which doubles as the entry timestamp for reconcile's grace period.
+  async reserve(reservation: RunReservation): Promise<boolean> {
     const rows = await this.db
       .insert(activeRuns)
-      .values({ ticketKey, runId, runKind: kind })
-      .onConflictDoNothing({ target: activeRuns.ticketKey })
-      .returning({ ticketKey: activeRuns.ticketKey });
+      .values({
+        subjectKey: reservation.subjectKey,
+        ticketKey: reservation.ticketKey,
+        ownerToken: reservation.ownerToken,
+        runKind: reservation.kind,
+        state: "reserved",
+      })
+      .onConflictDoNothing({ target: activeRuns.subjectKey })
+      .returning({ subjectKey: activeRuns.subjectKey });
     return rows.length > 0;
   }
 
-  async register(ticketKey: string, runId: string, kind: RunKind = "ticket"): Promise<void> {
-    // Refresh created_at: register() is called both on the claim → runId
-    // swap and by external seeders, so it's the authoritative write point
-    // for the orphan grace period. sandbox_id is intentionally untouched.
-    await this.db
-      .insert(activeRuns)
-      .values({ ticketKey, runId, runKind: kind })
-      .onConflictDoUpdate({
-        target: activeRuns.ticketKey,
-        set: { runId, runKind: kind, createdAt: sql`now()` },
-      });
-  }
-
-  async getRunId(ticketKey: string): Promise<string | null> {
-    const rows = await this.db
-      .select({ runId: activeRuns.runId })
-      .from(activeRuns)
-      .where(eq(activeRuns.ticketKey, ticketKey));
-    return rows[0]?.runId ?? null;
-  }
-
-  async unregister(ticketKey: string): Promise<void> {
-    // One row holds run, sandbox, and timestamp — deleting it fully
-    // detaches the ticket. Thread parents live in their own table and
-    // survive (see ThreadStore docs in types.ts).
-    await this.db.delete(activeRuns).where(eq(activeRuns.ticketKey, ticketKey));
-  }
-
-  async unregisterIfRunId(ticketKey: string, runId: string): Promise<void> {
-    // Conditional delete: only drop the row when it still holds this runId, so
-    // a finishing run cannot delete a successor run's row that reclaimed the
-    // ticket after this run unregistered before creating its PR.
-    await this.db
-      .delete(activeRuns)
-      .where(and(eq(activeRuns.ticketKey, ticketKey), eq(activeRuns.runId, runId)));
-  }
-
-  async listAll(): Promise<Array<{ ticketKey: string; runId: string; kind: RunKind }>> {
-    const rows = await this.db
-      .select({
-        ticketKey: activeRuns.ticketKey,
-        runId: activeRuns.runId,
-        kind: activeRuns.runKind,
-      })
-      .from(activeRuns);
-    return rows.map((row) => ({ ...row, kind: row.kind as RunKind }));
-  }
-
-  async registerSandbox(ticketKey: string, sandboxId: string): Promise<void> {
-    // Sandboxes are only registered after claim()/register(), so the row
-    // exists; a bare UPDATE keeps run_id NOT NULL without an upsert dance.
-    // A zero-row update means the run was unregistered out from under us (a
-    // cancel webhook racing this step): fail fast so the workflow's error
-    // path tears the sandbox down, rather than silently orphaning it where
-    // cleanup can't find the missing sandbox_id linkage.
+  async bindRun(subjectKey: string, ownerToken: string, runId: string): Promise<boolean> {
     const rows = await this.db
       .update(activeRuns)
-      .set({ sandboxId })
-      .where(eq(activeRuns.ticketKey, ticketKey))
-      .returning({ ticketKey: activeRuns.ticketKey });
-    if (rows.length === 0) {
-      throw new Error(`registerSandbox: no active run for ${ticketKey}`);
+      .set({ runId, state: "bound", updatedAt: sql`now()` })
+      .where(
+        and(
+          eq(activeRuns.subjectKey, subjectKey),
+          eq(activeRuns.ownerToken, ownerToken),
+          eq(activeRuns.state, "reserved"),
+          isNull(activeRuns.runId),
+        ),
+      )
+      .returning({ subjectKey: activeRuns.subjectKey });
+    return rows.length > 0;
+  }
+
+  async handoff(
+    subjectKey: string,
+    currentOwnerToken: string,
+    nextOwnerToken: string,
+  ): Promise<boolean> {
+    const rows = await this.db
+      .update(activeRuns)
+      .set({ ownerToken: nextOwnerToken, updatedAt: sql`now()` })
+      .where(
+        and(
+          eq(activeRuns.subjectKey, subjectKey),
+          eq(activeRuns.ownerToken, currentOwnerToken),
+          eq(activeRuns.state, "reserved"),
+          isNull(activeRuns.runId),
+        ),
+      )
+      .returning({ subjectKey: activeRuns.subjectKey });
+    return rows.length > 0;
+  }
+
+  async get(subjectKey: string): Promise<ActiveRunEntry | null> {
+    const rows = await this.db
+      .select()
+      .from(activeRuns)
+      .where(eq(activeRuns.subjectKey, subjectKey));
+    const row = rows[0];
+    return row ? toEntry(row) : null;
+  }
+
+  async releaseReservation(subjectKey: string, ownerToken: string): Promise<boolean> {
+    const rows = await this.db
+      .delete(activeRuns)
+      .where(
+        and(
+          eq(activeRuns.subjectKey, subjectKey),
+          eq(activeRuns.ownerToken, ownerToken),
+          eq(activeRuns.state, "reserved"),
+          isNull(activeRuns.runId),
+        ),
+      )
+      .returning({ subjectKey: activeRuns.subjectKey });
+    return rows.length > 0;
+  }
+
+  async release(subjectKey: string, ownerToken: string, runId: string): Promise<boolean> {
+    const rows = await this.db
+      .delete(activeRuns)
+      .where(
+        and(
+          eq(activeRuns.subjectKey, subjectKey),
+          eq(activeRuns.ownerToken, ownerToken),
+          eq(activeRuns.runId, runId),
+          eq(activeRuns.state, "bound"),
+        ),
+      )
+      .returning({ subjectKey: activeRuns.subjectKey });
+    return rows.length > 0;
+  }
+
+  async listAll(): Promise<ActiveRunEntry[]> {
+    return (await this.db.select().from(activeRuns)).map(toEntry);
+  }
+
+  async registerSandbox(
+    subjectKey: string,
+    ownerToken: string,
+    sandboxId: string,
+  ): Promise<void> {
+    const held = await this.db
+      .select({ subjectKey: activeRuns.subjectKey })
+      .from(activeRuns)
+      .where(
+        and(
+          eq(activeRuns.subjectKey, subjectKey),
+          eq(activeRuns.ownerToken, ownerToken),
+          eq(activeRuns.state, "bound"),
+        ),
+      );
+    if (held.length === 0) {
+      throw new Error(`registerSandbox: owner does not hold active run for ${subjectKey}`);
     }
+
+    await this.db
+      .insert(activeRunSandboxes)
+      .values({ subjectKey, ownerToken, sandboxId })
+      .onConflictDoNothing();
   }
 
-  async getSandboxId(ticketKey: string): Promise<string | null> {
+  async listSandboxes(subjectKey: string, ownerToken: string): Promise<string[]> {
     const rows = await this.db
-      .select({ sandboxId: activeRuns.sandboxId })
-      .from(activeRuns)
-      .where(eq(activeRuns.ticketKey, ticketKey));
-    return rows[0]?.sandboxId ?? null;
-  }
-
-  async getEntryCreatedAt(ticketKey: string): Promise<number | null> {
-    const rows = await this.db
-      .select({ createdAt: activeRuns.createdAt })
-      .from(activeRuns)
-      .where(eq(activeRuns.ticketKey, ticketKey));
-    return rows[0]?.createdAt?.getTime() ?? null;
+      .select({ sandboxId: activeRunSandboxes.sandboxId })
+      .from(activeRunSandboxes)
+      .where(
+        and(
+          eq(activeRunSandboxes.subjectKey, subjectKey),
+          eq(activeRunSandboxes.ownerToken, ownerToken),
+        ),
+      )
+      .orderBy(activeRunSandboxes.sandboxId);
+    return rows.map(({ sandboxId }) => sandboxId);
   }
 
   async markFailed(ticketKey: string, meta: FailedTicketMeta): Promise<void> {
@@ -126,9 +168,7 @@ export class PostgresRunRegistry implements RunRegistryAdapter, ThreadStore {
     return rows.length > 0;
   }
 
-  async listAllFailed(): Promise<
-    Array<{ ticketKey: string; meta: FailedTicketMeta }>
-  > {
+  async listAllFailed(): Promise<Array<{ ticketKey: string; meta: FailedTicketMeta }>> {
     const rows = await this.db.select().from(failedTickets);
     return rows.map(({ ticketKey, runId, error, failedAt }) => ({
       ticketKey,
@@ -137,9 +177,7 @@ export class PostgresRunRegistry implements RunRegistryAdapter, ThreadStore {
   }
 
   async clearFailedMark(ticketKey: string): Promise<void> {
-    await this.db
-      .delete(failedTickets)
-      .where(eq(failedTickets.ticketKey, ticketKey));
+    await this.db.delete(failedTickets).where(eq(failedTickets.ticketKey, ticketKey));
   }
 
   async getParent(ticketKey: string): Promise<string | null> {
@@ -161,8 +199,19 @@ export class PostgresRunRegistry implements RunRegistryAdapter, ThreadStore {
   }
 
   async clearParent(ticketKey: string): Promise<void> {
-    await this.db
-      .delete(threadParents)
-      .where(eq(threadParents.ticketKey, ticketKey));
+    await this.db.delete(threadParents).where(eq(threadParents.ticketKey, ticketKey));
   }
+}
+
+function toEntry(row: typeof activeRuns.$inferSelect): ActiveRunEntry {
+  return {
+    subjectKey: row.subjectKey,
+    ticketKey: row.ticketKey,
+    ownerToken: row.ownerToken,
+    runId: row.runId,
+    state: row.state as ActiveRunEntry["state"],
+    kind: row.runKind as ActiveRunEntry["kind"],
+    createdAt: row.createdAt.getTime(),
+    updatedAt: row.updatedAt.getTime(),
+  };
 }

@@ -75,7 +75,13 @@ describe("prepare_workspace execute", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.buildSandboxProviderConfigs.mockResolvedValue([]);
-    mocks.provisionMultiRepo.mockResolvedValue({ sandboxId: "sbx-9" });
+    mocks.provisionMultiRepo.mockImplementation(async (...args: unknown[]) => {
+      const lifecycle = args[4] as
+        | { onCreated?: (sandboxId: string) => Promise<void> }
+        | undefined;
+      await lifecycle?.onCreated?.("sbx-9");
+      return { sandboxId: "sbx-9" };
+    });
   });
 
   it("selects repos, provisions the sandbox, registers it, and mutates the ctx", async () => {
@@ -105,7 +111,11 @@ describe("prepare_workspace execute", () => {
       "blazebot/awt-1",
       [repo],
     );
-    expect(mocks.registerSandbox).toHaveBeenCalledWith("AWT-1", "sbx-9");
+    expect(mocks.registerSandbox).toHaveBeenCalledWith(
+      "ticket:jira:AWT-1",
+      "owner:test",
+      "sbx-9",
+    );
     expect(ctx.sandboxId).toBe("sbx-9");
     expect(ctx.selectedRepositories).toEqual([repo]);
     expect(ctx.repositoryContexts).toEqual(contextsFor(repo));
@@ -194,7 +204,11 @@ describe("prepare_workspace execute", () => {
     expect(ctx.sandboxId).toBe("sbx-a");
     expect([...ctx.sandboxIds]).toEqual(["sbx-a"]);
     expect(mocks.provisionMultiRepo).toHaveBeenCalledTimes(1);
-    expect(mocks.registerSandbox).toHaveBeenLastCalledWith("AWT-1", "sbx-a");
+    expect(mocks.registerSandbox).toHaveBeenLastCalledWith(
+      "ticket:jira:AWT-1",
+      "owner:test",
+      "sbx-a",
+    );
     expect(second).toEqual(first);
 
     const teardown = vi.fn().mockResolvedValue(undefined);
@@ -204,7 +218,7 @@ describe("prepare_workspace execute", () => {
     expect(teardown).toHaveBeenCalledWith("sbx-a");
   });
 
-  it("re-registers a reused code workspace as the primary cancellation target", async () => {
+  it("reasserts the durable owner child for a reused code workspace", async () => {
     const ctx = makeCtx({
       sandboxId: "code-1",
       agentSandboxIds: { claude: "scratch-1" },
@@ -214,14 +228,15 @@ describe("prepare_workspace execute", () => {
     const result = await execute(makeNode("prepare_workspace"), {}, ctx);
 
     expect(mocks.provisionMultiRepo).not.toHaveBeenCalled();
-    expect(mocks.registerSandbox).toHaveBeenCalledWith("AWT-1", "code-1");
+    expect(mocks.registerSandbox).toHaveBeenCalledWith(
+      "ticket:jira:AWT-1",
+      "owner:test",
+      "code-1",
+    );
     expect(result.kind).toBe("next");
   });
 
-  it("tracks the sandbox for teardown even when registering it throws", async () => {
-    // The microVM exists the moment provisioning returns. If the register step
-    // throws, the run registry never learned the id, so the engine's teardown of
-    // ctx.sandboxIds is the ONLY cleanup left: the id must already be in there.
+  it("fails closed when immediate durable sandbox registration throws", async () => {
     mocks.runPreSandboxPhase.mockResolvedValue({ status: "continue", selectedRepositories: [repo] });
     mocks.blockFetchPrContextsStep.mockResolvedValue(contextsFor(repo));
     mocks.registerSandbox.mockRejectedValueOnce(new Error("registry write failed"));
@@ -231,12 +246,8 @@ describe("prepare_workspace execute", () => {
 
     expect(result.kind).toBe("failed");
     if (result.kind === "failed") expect(result.reason).toBe("registry write failed");
-    expect(ctx.sandboxId).toBe("sbx-9");
-    expect([...ctx.sandboxIds]).toEqual(["sbx-9"]);
-
-    const teardown = vi.fn().mockResolvedValue(undefined);
-    await teardownSandboxes(ctx.sandboxIds, teardown);
-    expect(teardown).toHaveBeenCalledWith("sbx-9");
+    expect(ctx.sandboxId).toBeNull();
+    expect([...ctx.sandboxIds]).toEqual([]);
   });
 
   it("maps a pre-sandbox clarification halt to needs_human_input", async () => {
@@ -294,9 +305,12 @@ describe("prepare_workspace execute", () => {
       entry: {
         kind: "pr_trigger",
         triggerType: "trigger_pr_created",
+        subjectKey: "ticket:jira:AWT-1",
         ticketKey: "AWT-1",
+        ownerToken: "owner:test",
         definitionId: 1,
         definitionVersion: 1,
+        scope: "workflow_owned",
         pr,
       },
     });

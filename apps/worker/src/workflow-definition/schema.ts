@@ -62,6 +62,7 @@ const agentParams = z
 
 const vcsProviders = z.enum(["github", "gitlab"]);
 const reviewStates = z.enum(["changes_requested", "commented"]);
+const prTriggerScope = z.enum(["workflow_owned", "any"]);
 
 // Mirrors TicketStatusTarget: the Record makes a domain value added or dropped a
 // build error here, so the accepted targets cannot drift from the ones the
@@ -87,7 +88,7 @@ const triggerPrCreatedNode = z
     params: z
       .object({
         providers: z.array(vcsProviders).default(["github", "gitlab"]),
-        onlyWorkflowOwned: z.boolean().default(true),
+        scope: prTriggerScope.default("workflow_owned"),
       })
       .strict(),
   })
@@ -98,7 +99,10 @@ const triggerPrChecksFailedNode = z
     ...baseNodeFields,
     type: z.literal("trigger_pr_checks_failed"),
     params: z
-      .object({ providers: z.array(vcsProviders).default(["github", "gitlab"]) })
+      .object({
+        providers: z.array(vcsProviders).default(["github", "gitlab"]),
+        scope: prTriggerScope.default("workflow_owned"),
+      })
       .strict(),
   })
   .strict();
@@ -115,6 +119,7 @@ const triggerPrReviewNode = z
       .object({
         providers: z.array(vcsProviders).default(["github"]),
         on: z.array(reviewStates).default(["changes_requested"]),
+        scope: prTriggerScope.default("workflow_owned"),
       })
       .strict(),
   })
@@ -385,6 +390,16 @@ export function upgradeStoredWorkflowDefinition(raw: unknown): WorkflowDefinitio
     const inputs = { ...(node.inputs ?? {}) };
     if (node.type === "generic_agent" && params.workspaceMode === undefined) {
       params.workspaceMode = "read_write";
+    }
+    if (
+      node.type === "trigger_pr_created" ||
+      node.type === "trigger_pr_checks_failed" ||
+      node.type === "trigger_pr_review"
+    ) {
+      if (params.scope !== "workflow_owned" && params.scope !== "any") {
+        params.scope = params.onlyWorkflowOwned === false ? "any" : "workflow_owned";
+      }
+      delete params.onlyWorkflowOwned;
     }
     if (node.type === "send_plan_approval") {
       const sourceId = params.planFromStep;
@@ -884,6 +899,7 @@ export function validateWorkflowDefinitionForDeployment(
   const issues = [
     ...validateWorkflowGraph(def, graphContext),
     ...validateWorkflowBindings(def, registryContext, graphContext),
+    ...validateAnyScopeReviewSafety(def),
   ];
   for (const node of def.nodes) {
     if (
@@ -923,4 +939,80 @@ export function validateWorkflowDefinitionForDeployment(
     }
   }
   return [...new Set(issues)];
+}
+
+/**
+ * Arbitrary-provider PR subjects have no trusted ticket or owned workspace.
+ * Keep their reachable graph to PR reads/comments and pure control/LLM blocks.
+ * This same function is called at runtime so definitions deployed before this
+ * rule fail closed instead of gaining mutation privileges.
+ */
+export const ANY_SCOPE_BLOCK_POLICY = {
+  trigger_ticket_ai: "deny",
+  trigger_plan_approved: "deny",
+  trigger_pr_created: "entry",
+  trigger_pr_checks_failed: "entry",
+  trigger_pr_review: "entry",
+  planning_agent: "deny",
+  implementation_agent: "deny",
+  review_agent: "deny",
+  fix_agent: "deny",
+  generic_agent: "deny",
+  prepare_workspace: "deny",
+  finalize_workspace: "deny",
+  run_pre_pr_checks: "deny",
+  run_checks: "deny",
+  call_llm: "safe",
+  fetch_pr_context: "safe",
+  open_pr: "deny",
+  update_ticket_status: "deny",
+  post_ticket_comment: "deny",
+  post_pr_comment: "safe",
+  send_slack_message: "deny",
+  send_plan_approval: "deny",
+  human_question: "deny",
+  // Guardrail classification is explicit: it inspects content and returns a
+  // verdict, but owns no ticket/workspace/branch mutation.
+  arthur_injection_check: "safe",
+  branch: "safe",
+  loop: "safe",
+  terminate: "deny",
+} as const satisfies Record<WorkflowBlockType, "entry" | "safe" | "deny">;
+
+export function validateAnyScopeReviewSafety(def: WorkflowDefinition): string[] {
+  const nodes = new Map(def.nodes.map((node) => [node.id, node]));
+  const outgoing = new Map<string, string[]>();
+  for (const edge of def.edges) {
+    const targets = outgoing.get(edge.from);
+    if (targets) targets.push(edge.to);
+    else outgoing.set(edge.from, [edge.to]);
+  }
+
+  const issues: string[] = [];
+  for (const trigger of def.nodes) {
+    if (
+      (trigger.type !== "trigger_pr_created" &&
+        trigger.type !== "trigger_pr_checks_failed" &&
+        trigger.type !== "trigger_pr_review") ||
+      trigger.params.scope !== "any"
+    ) {
+      continue;
+    }
+    const seen = new Set<string>([trigger.id]);
+    const queue = [...(outgoing.get(trigger.id) ?? [])];
+    for (let index = 0; index < queue.length; index += 1) {
+      const id = queue[index];
+      if (seen.has(id)) continue;
+      seen.add(id);
+      const node = nodes.get(id);
+      if (!node) continue;
+      if (ANY_SCOPE_BLOCK_POLICY[node.type] !== "safe") {
+        issues.push(
+          `scope:any trigger "${trigger.id}" reaches unsafe block "${node.id}" (${node.type}).`,
+        );
+      }
+      queue.push(...(outgoing.get(id) ?? []));
+    }
+  }
+  return issues;
 }

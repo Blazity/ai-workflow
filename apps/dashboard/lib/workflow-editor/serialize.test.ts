@@ -112,6 +112,39 @@ test("round-trips Generic Agent workspace mode without loss", () => {
   assert.deepEqual(out.nodes[0].params, { prompt: "Summarize", workspaceMode: "none" });
 });
 
+test("round-trips explicit ownership scope for every PR trigger", () => {
+  const nodes = flowNodes([
+    { id: "created", type: "trigger_pr_created", x: 0, y: 0, params: { scope: "any" } },
+    { id: "checks", type: "trigger_pr_checks_failed", x: 0, y: 0, params: { scope: "workflow_owned" } },
+    {
+      id: "review",
+      type: "trigger_pr_review",
+      x: 0,
+      y: 0,
+      params: { scope: "any", on: ["changes_requested"] },
+    },
+  ]);
+
+  const out = serializeWorkflowDefinition(nodes, []);
+  assertSerializedNodes(out.nodes, [
+    { id: "created", type: "trigger_pr_created", x: 0, y: 0, params: { scope: "any" } },
+    {
+      id: "checks",
+      type: "trigger_pr_checks_failed",
+      x: 0,
+      y: 0,
+      params: { scope: "workflow_owned" },
+    },
+    {
+      id: "review",
+      type: "trigger_pr_review",
+      x: 0,
+      y: 0,
+      params: { scope: "any", on: ["changes_requested"] },
+    },
+  ]);
+});
+
 test("preserves a non-empty exact input binding map", () => {
   const nodes = flowNodes([
     {

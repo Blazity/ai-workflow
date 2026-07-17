@@ -20,27 +20,114 @@ import type { BlockRunState, WorkflowRunBudgetFailure } from "@shared/contracts"
 import type { GateStatusRef } from "../adapters/vcs/types.js";
 import type { PrePrCheckConfig } from "../pre-pr-checks/config.js";
 
-/**
- * Run registry — replaces the blazebot:active-runs / blazebot:sandboxes /
- * blazebot:entry-timestamps Redis hashes. One row per in-flight ticket;
- * the three hashes shared a lifecycle (unregister cleared all three), so
- * they are one table. createdAt backs reconcile's orphan grace period and
- * is REFRESHED on register(), not just set on claim().
- *
- * runKind records what started the run: 'ticket' for the classic AI-column
- * trigger and 'pr_trigger' for PR webhook triggers. Reconcile and the Jira
- * webhook read it so a 'pr_trigger' run is never cancelled just because its
- * ticket left the AI column (its lifecycle follows the PR, not the column).
- */
-export const activeRuns = pgTable("active_runs", {
-  ticketKey: text("ticket_key").primaryKey(),
-  runId: text("run_id").notNull(),
-  sandboxId: text("sandbox_id"),
-  runKind: text("run_kind").notNull().default("ticket"),
-  createdAt: timestamp("created_at", { withTimezone: true })
-    .notNull()
-    .defaultNow(),
-});
+/** One owner-CAS reservation per provider-neutral workflow subject. */
+export const activeRuns = pgTable(
+  "active_runs",
+  {
+    subjectKey: text("subject_key").primaryKey(),
+    ticketKey: text("ticket_key"),
+    ownerToken: text("owner_token").notNull(),
+    runId: text("run_id"),
+    state: text("state").notNull().default("reserved"),
+    runKind: text("run_kind").notNull().default("ticket"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    check("active_runs_state_check", sql`${t.state} in ('reserved', 'bound')`),
+    check(
+      "active_runs_state_run_id_check",
+      sql`(${t.state} = 'reserved' and ${t.runId} is null) or (${t.state} = 'bound' and ${t.runId} is not null)`,
+    ),
+    index("active_runs_ticket_key_idx").on(t.ticketKey),
+    uniqueIndex("active_runs_subject_owner_idx").on(t.subjectKey, t.ownerToken),
+  ],
+);
+
+/** Every scratch/code sandbox owned by a run, not merely the most recent one. */
+export const activeRunSandboxes = pgTable(
+  "active_run_sandboxes",
+  {
+    subjectKey: text("subject_key")
+      .notNull()
+      .references(() => activeRuns.subjectKey, { onDelete: "cascade" }),
+    ownerToken: text("owner_token").notNull(),
+    sandboxId: text("sandbox_id").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.subjectKey, t.ownerToken, t.sandboxId] }),
+    foreignKey({
+      columns: [t.subjectKey, t.ownerToken],
+      foreignColumns: [activeRuns.subjectKey, activeRuns.ownerToken],
+      name: "active_run_sandboxes_subject_owner_fk",
+    }).onDelete("cascade"),
+  ],
+);
+
+/** Authenticated, normalized provider deliveries. The provider delivery id is idempotent. */
+export const triggerDeliveries = pgTable(
+  "trigger_deliveries",
+  {
+    provider: text("provider").notNull(),
+    deliveryId: text("delivery_id").notNull(),
+    producer: text("producer").notNull(),
+    triggerType: text("trigger_type").notNull(),
+    subjectKey: text("subject_key").notNull(),
+    ticketKey: text("ticket_key"),
+    headSha: text("head_sha").notNull(),
+    definitionId: integer("definition_id").notNull(),
+    definitionVersion: integer("definition_version").notNull(),
+    payload: jsonb("payload").$type<unknown>().notNull(),
+    status: text("status").notNull().default("accepted"),
+    result: jsonb("result").$type<unknown>(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.provider, t.deliveryId] }),
+    foreignKey({
+      columns: [t.definitionId, t.definitionVersion],
+      foreignColumns: [
+        workflowDefinitionVersions.definitionId,
+        workflowDefinitionVersions.version,
+      ],
+      name: "trigger_deliveries_definition_version_fk",
+    }),
+  ],
+);
+
+/** A single durable semantic backlog entry per subject/head/trigger. */
+export const pendingTriggerEvents = pgTable(
+  "pending_trigger_events",
+  {
+    subjectKey: text("subject_key").notNull(),
+    headSha: text("head_sha").notNull(),
+    triggerType: text("trigger_type").notNull(),
+    provider: text("provider").notNull(),
+    deliveryId: text("delivery_id").notNull(),
+    ticketKey: text("ticket_key"),
+    definitionId: integer("definition_id").notNull(),
+    definitionVersion: integer("definition_version").notNull(),
+    payload: jsonb("payload").$type<unknown>().notNull(),
+    failedChecks: jsonb("failed_checks").$type<unknown[]>().notNull().default(sql`'[]'::jsonb`),
+    reviews: jsonb("reviews").$type<unknown[]>().notNull().default(sql`'[]'::jsonb`),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.subjectKey, t.headSha, t.triggerType] }),
+    index("pending_trigger_events_subject_created_idx").on(t.subjectKey, t.createdAt),
+    foreignKey({
+      columns: [t.definitionId, t.definitionVersion],
+      foreignColumns: [
+        workflowDefinitionVersions.definitionId,
+        workflowDefinitionVersions.version,
+      ],
+      name: "pending_trigger_events_definition_version_fk",
+    }),
+  ],
+);
 
 /** Replaces blazebot:failed-tickets — FailedTicketMeta as typed columns. */
 export const failedTickets = pgTable("failed_tickets", {
@@ -153,6 +240,7 @@ export const workflowRuns = pgTable("workflow_runs", {
   workflowId: text("workflow_id"),
   workflowName: text("workflow_name"),
   status: text("status"),
+  subjectKey: text("subject_key"),
   ticketKey: text("ticket_key"),
   ticketTitle: text("ticket_title"),
   ticketUrl: text("ticket_url"),
@@ -201,6 +289,7 @@ export const workflowRuns = pgTable("workflow_runs", {
   // per-ticket run history by ticketKey, editor block-status poll by definitionId.
   index("workflow_runs_status_idx").on(t.status),
   index("workflow_runs_started_at_idx").on(t.startedAt),
+  index("workflow_runs_subject_key_idx").on(t.subjectKey),
   index("workflow_runs_ticket_key_idx").on(t.ticketKey),
   index("workflow_runs_definition_id_idx").on(t.definitionId),
 ]);

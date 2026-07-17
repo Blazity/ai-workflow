@@ -30,6 +30,7 @@ function row(runId: string) {
 
 const snapshot = (over: Partial<RunSnapshot> = {}): RunSnapshot => ({
   runId: "wrun_1",
+  subjectKey: "ticket:jira:PROJ-1",
   workflowId: "wf_agent",
   workflowName: "Agent",
   status: "running",
@@ -48,6 +49,7 @@ const snapshot = (over: Partial<RunSnapshot> = {}): RunSnapshot => ({
 
 const usage = (over: Partial<RunUsage> = {}): RunUsage => ({
   runId: "wrun_1",
+  subjectKey: "ticket:jira:PROJ-1",
   workflowId: "wf_agent",
   workflowName: "Agent",
   status: "success",
@@ -70,6 +72,7 @@ const usage = (over: Partial<RunUsage> = {}): RunUsage => ({
 
 const blockWrite = (over: Partial<RunBlockStatusWrite> = {}): RunBlockStatusWrite => ({
   runId: "wrun_1",
+  subjectKey: "ticket:jira:PROJ-1",
   ticketKey: "PROJ-1",
   ticketTitle: "Add login",
   ticketUrl: "https://jira/browse/PROJ-1",

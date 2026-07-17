@@ -14,11 +14,13 @@ import {
   prReviewFixDefinition,
 } from "./graph-fixtures.js";
 import {
+  ANY_SCOPE_BLOCK_POLICY,
   upgradeStoredWorkflowDefinition,
   validateWorkflowDefinitionForDeployment,
   validateWorkflowGraph,
   workflowDefinitionSchema,
 } from "./schema.js";
+import { BLOCK_TYPE_SPECS } from "@shared/contracts";
 import type { WorkflowBlockRegistryContext } from "./block-registry.js";
 
 const registryContext: WorkflowBlockRegistryContext = {
@@ -575,26 +577,48 @@ describe("workflowDefinitionSchema block-executor node types", () => {
     expect(parseNode({ type: "trigger_plan_approved", params: {} })?.params).toEqual({});
     expect(parseNode({ type: "trigger_pr_created", params: {} })?.params).toEqual({
       providers: ["github", "gitlab"],
-      onlyWorkflowOwned: true,
+      scope: "workflow_owned",
     });
     expect(parseNode({ type: "trigger_pr_checks_failed", params: {} })?.params).toEqual({
       providers: ["github", "gitlab"],
+      scope: "workflow_owned",
     });
     expect(parseNode({ type: "trigger_pr_review", params: {} })?.params).toEqual({
       providers: ["github"],
       on: ["changes_requested"],
+      scope: "workflow_owned",
     });
-    // Restored params round-trip.
+    // Explicit scope round-trips on every PR trigger.
     expect(
-      parseNode({ type: "trigger_pr_created", params: { onlyWorkflowOwned: false } })?.params,
-    ).toEqual({ providers: ["github", "gitlab"], onlyWorkflowOwned: false });
+      parseNode({ type: "trigger_pr_created", params: { scope: "any" } })?.params,
+    ).toEqual({ providers: ["github", "gitlab"], scope: "any" });
     expect(
       parseNode({ type: "trigger_pr_review", params: { on: ["changes_requested", "commented"] } })
         ?.params,
-    ).toEqual({ providers: ["github"], on: ["changes_requested", "commented"] });
+    ).toEqual({
+      providers: ["github"],
+      on: ["changes_requested", "commented"],
+      scope: "workflow_owned",
+    });
     // Unknown keys and out-of-enum values are still rejected (strict).
     expect(parseNode({ type: "trigger_pr_created", params: { bogus: 1 } })).toBeNull();
     expect(parseNode({ type: "trigger_pr_review", params: { on: ["approved"] } })).toBeNull();
+  });
+
+  it("upgrades the legacy onlyWorkflowOwned flag to explicit scope", () => {
+    const upgraded = upgradeStoredWorkflowDefinition(
+      graph(
+        [
+          node("owned", "trigger_pr_created", { onlyWorkflowOwned: true } as any),
+          node("any", "trigger_pr_created", { onlyWorkflowOwned: false } as any),
+        ],
+        [],
+      ),
+    );
+    expect(upgraded.nodes.map(({ params }) => params)).toEqual([
+      { scope: "workflow_owned" },
+      { scope: "any" },
+    ]);
   });
 
   it("applies action param defaults", () => {
@@ -1156,6 +1180,72 @@ describe("validateWorkflowGraph rules", () => {
     expect(validateWorkflowDefinitionForDeployment(def, unavailable)).toEqual(
       expect.arrayContaining([
         'Block "slack" (send_slack_message) is unavailable: Slack messaging is not configured.',
+      ]),
+    );
+  });
+
+  it("allows scope:any only through review-safe, non-mutating blocks", () => {
+    const def = graph(
+      [
+        node("trigger", "trigger_pr_review", {
+          providers: ["github"],
+          on: ["changes_requested"],
+          scope: "any",
+        }),
+        node("context", "fetch_pr_context"),
+        node("comment", "post_pr_comment", { body: "Review noted" }),
+      ],
+      [
+        { from: "trigger", to: "context" },
+        { from: "context", to: "comment" },
+      ],
+    );
+    expect(validateWorkflowDefinitionForDeployment(def, registryContext)).toEqual([]);
+  });
+
+  it("classifies every block type and exposes only an exact positive safe allowlist", () => {
+    expect(Object.keys(ANY_SCOPE_BLOCK_POLICY).sort()).toEqual(
+      Object.keys(BLOCK_TYPE_SPECS).sort(),
+    );
+    expect(
+      Object.entries(ANY_SCOPE_BLOCK_POLICY)
+        .filter(([, policy]) => policy === "safe")
+        .map(([type]) => type)
+        .sort(),
+    ).toEqual(
+      [
+        "arthur_injection_check",
+        "branch",
+        "call_llm",
+        "fetch_pr_context",
+        "loop",
+        "post_pr_comment",
+      ].sort(),
+    );
+  });
+
+  it.each([
+    "post_ticket_comment",
+    "fix_agent",
+    "finalize_workspace",
+    "open_pr",
+    "prepare_workspace",
+    "implementation_agent",
+  ] as const)("rejects scope:any path reaching %s", (unsafeType) => {
+    const params: Record<string, WorkflowParamValue> =
+      unsafeType === "post_ticket_comment" ? { body: "unsafe" } : {};
+    const def = graph(
+      [
+        node("trigger", "trigger_pr_created", { scope: "any" }),
+        node("unsafe", unsafeType, params),
+      ],
+      [{ from: "trigger", to: "unsafe" }],
+    );
+    expect(validateWorkflowDefinitionForDeployment(def, registryContext)).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining(
+          `scope:any trigger "trigger" reaches unsafe block "unsafe" (${unsafeType})`,
+        ),
       ]),
     );
   });

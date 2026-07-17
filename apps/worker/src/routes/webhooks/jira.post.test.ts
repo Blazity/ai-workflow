@@ -20,7 +20,6 @@ vi.mock("../../lib/adapters.js", () => ({
 const mockDispatchTicket = vi.fn();
 vi.mock("../../lib/dispatch.js", () => ({
   dispatchTicket: (...args: any[]) => mockDispatchTicket(...args),
-  isClaimingSentinel: (runId: string) => runId.startsWith("claiming:"),
 }));
 
 const mockCancelRun = vi.fn();
@@ -28,9 +27,9 @@ vi.mock("../../lib/cancel-run.js", () => ({
   cancelRun: (...args: any[]) => mockCancelRun(...args),
 }));
 
-const mockStopTicketSandboxes = vi.fn();
+const mockStopSandboxesByIds = vi.fn();
 vi.mock("../../sandbox/stop-ticket-sandboxes.js", () => ({
-  stopTicketSandboxes: (...args: any[]) => mockStopTicketSandboxes(...args),
+  stopSandboxesByIds: (...args: any[]) => mockStopSandboxesByIds(...args),
 }));
 
 const jiraHandler = (await import("./jira.post.js")).default;
@@ -56,6 +55,18 @@ function makeRequest(): Request {
 }
 
 function makeAdapters(listAll: Array<{ ticketKey: string; runId: string; kind: string }>) {
+  const active = listAll[0]
+    ? {
+        subjectKey: `ticket:jira:${listAll[0].ticketKey}`,
+        ticketKey: listAll[0].ticketKey,
+        ownerToken: "owner-a",
+        runId: listAll[0].runId,
+        state: "bound",
+        kind: listAll[0].kind,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      }
+    : null;
   return {
     issueTracker: {
       fetchTicket: vi.fn().mockResolvedValue({
@@ -65,10 +76,10 @@ function makeAdapters(listAll: Array<{ ticketKey: string; runId: string; kind: s
       }),
     },
     runRegistry: {
-      getRunId: vi.fn().mockResolvedValue(listAll[0]?.runId ?? null),
-      listAll: vi.fn().mockResolvedValue(listAll),
-      getSandboxId: vi.fn().mockResolvedValue(null),
-      unregister: vi.fn().mockResolvedValue(undefined),
+      get: vi.fn().mockResolvedValue(active),
+      listAll: vi.fn().mockResolvedValue(active ? [active] : []),
+      listSandboxes: vi.fn().mockResolvedValue([]),
+      releaseReservation: vi.fn().mockResolvedValue(true),
     },
     messaging: { notifyForTicket: vi.fn().mockResolvedValue(undefined) },
   };
@@ -77,7 +88,7 @@ function makeAdapters(listAll: Array<{ ticketKey: string; runId: string; kind: s
 describe("POST /webhooks/jira cancel guard", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockStopTicketSandboxes.mockResolvedValue(0);
+    mockStopSandboxesByIds.mockResolvedValue(0);
   });
 
   it("does NOT cancel a pr_trigger run when the ticket leaves the AI column", async () => {
@@ -95,7 +106,7 @@ describe("POST /webhooks/jira cancel guard", () => {
       ticketKey: "PROJ-42",
     });
     expect(mockCancelRun).not.toHaveBeenCalled();
-    expect(adapters.runRegistry.unregister).not.toHaveBeenCalled();
+    expect(adapters.runRegistry.releaseReservation).not.toHaveBeenCalled();
     expect(adapters.messaging.notifyForTicket).not.toHaveBeenCalled();
   });
 

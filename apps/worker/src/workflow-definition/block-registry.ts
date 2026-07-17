@@ -172,7 +172,7 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
       "Starts from an allowed pull or merge request creation event.",
       "⎇",
     ),
-    defaults: { providers: ["github", "gitlab"], onlyWorkflowOwned: true },
+    defaults: { providers: ["github", "gitlab"], scope: "workflow_owned" },
     inputs: {},
     output: statusOutput(
       {
@@ -211,7 +211,7 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
       "Starts when external CI reports one or more failed checks.",
       "✗",
     ),
-    defaults: { providers: ["github", "gitlab"] },
+    defaults: { providers: ["github", "gitlab"], scope: "workflow_owned" },
     inputs: {},
     output: statusOutput(
       {
@@ -257,7 +257,11 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
       "Starts from an allowed human pull or merge request review.",
       "✎",
     ),
-    defaults: { providers: ["github"], on: ["changes_requested"] },
+    defaults: {
+      providers: ["github"],
+      on: ["changes_requested"],
+      scope: "workflow_owned",
+    },
     inputs: {},
     output: statusOutput(
       {

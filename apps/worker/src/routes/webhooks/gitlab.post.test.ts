@@ -49,6 +49,7 @@ function makeRequest(body: string, token = "secret"): Request {
       "content-type": "application/json",
       "x-gitlab-token": token,
       "x-gitlab-event": "Merge Request Hook",
+      "x-gitlab-event-uuid": "delivery-test",
     },
     body,
   });
@@ -320,6 +321,7 @@ describe("POST /webhooks/gitlab", () => {
         "content-type": "application/json",
         "x-gitlab-token": "secret",
         "x-gitlab-event": "Pipeline Hook",
+        "x-gitlab-event-uuid": "delivery-pipeline-test",
       },
       body: pipelinePayload,
     });

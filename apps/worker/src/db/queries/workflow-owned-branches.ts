@@ -1,4 +1,4 @@
-import { eq, sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import type { VcsProvider } from "../../adapters/vcs/repository-directory.js";
 import type { Db } from "../client.js";
 import { workflowOwnedBranches } from "../schema.js";
@@ -64,4 +64,37 @@ export async function upsertWorkflowOwnedBranch(
         updatedAt: sql`now()`,
       },
     });
+}
+
+export async function findWorkflowOwnedPullRequest(
+  db: Db,
+  input: {
+    provider: VcsProvider;
+    repoPath: string;
+    prNumber: number;
+    branchName: string;
+  },
+): Promise<WorkflowOwnedBranchRecord | null> {
+  const rows = await db
+    .select()
+    .from(workflowOwnedBranches)
+    .where(
+      and(
+        eq(workflowOwnedBranches.provider, input.provider),
+        eq(workflowOwnedBranches.repoPath, input.repoPath),
+        eq(workflowOwnedBranches.prId, input.prNumber),
+        eq(workflowOwnedBranches.branchName, input.branchName),
+        eq(workflowOwnedBranches.prBranchName, input.branchName),
+      ),
+    )
+    .limit(1);
+  const row = rows[0];
+  if (!row || row.prId === null || !row.prUrl || !row.prBranchName) return null;
+  return {
+    ticketKey: row.ticketKey,
+    provider: row.provider as VcsProvider,
+    repoPath: row.repoPath,
+    branchName: row.branchName,
+    pr: { id: row.prId, url: row.prUrl, branch: row.prBranchName },
+  };
 }

@@ -119,9 +119,12 @@ describe("post_pr_comment execute", () => {
         entry: {
           kind: "pr_trigger",
           triggerType: "trigger_pr_checks_failed",
+          subjectKey: "ticket:jira:AWT-1",
           ticketKey: "AWT-1",
+          ownerToken: "owner:test",
           definitionId: 1,
           definitionVersion: 1,
+          scope: "workflow_owned",
           pr: makePrPayload(),
         },
       }),

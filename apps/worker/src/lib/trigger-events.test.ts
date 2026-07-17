@@ -1,7 +1,11 @@
 import { describe, it, expect } from "vitest";
 import { normalizeGitHubEvent, normalizeGitLabEvent } from "./trigger-events.js";
 
-const options = { gateCheckNames: ["blazebot / code-hygiene"], botLogin: "blazebot[bot]" };
+const options = {
+  gateCheckNames: ["blazebot / code-hygiene"],
+  botLogin: "blazebot[bot]",
+  deliveryId: "github-delivery-1",
+};
 
 function githubRepo() {
   return { owner: { login: "acme" }, name: "app", html_url: "https://github.com/acme/app" };
@@ -28,6 +32,11 @@ describe("normalizeGitHubEvent", () => {
       options,
     );
     expect(evt).toEqual({
+      delivery: {
+        provider: "github",
+        producer: "blazebot[bot]",
+        deliveryId: "github-delivery-1",
+      },
       triggerType: "trigger_pr_created",
       pr: {
         provider: "github",
@@ -90,6 +99,11 @@ describe("normalizeGitHubEvent", () => {
       options,
     );
     expect(evt).toEqual({
+      delivery: {
+        provider: "github",
+        producer: "unknown",
+        deliveryId: "github-delivery-1",
+      },
       triggerType: "trigger_pr_checks_failed",
       pr: {
         provider: "github",
@@ -289,8 +303,15 @@ describe("normalizeGitLabEvent", () => {
   }
 
   it("maps an opened merge request to trigger_pr_created", () => {
-    const evt = normalizeGitLabEvent("Merge Request Hook", mrPayload("open"));
+    const evt = normalizeGitLabEvent("Merge Request Hook", mrPayload("open"), {
+      deliveryId: "gitlab-delivery-1",
+    });
     expect(evt).toEqual({
+      delivery: {
+        provider: "gitlab",
+        producer: "alice",
+        deliveryId: "gitlab-delivery-1",
+      },
       triggerType: "trigger_pr_created",
       pr: {
         provider: "gitlab",

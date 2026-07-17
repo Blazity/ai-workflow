@@ -6,8 +6,8 @@ import type {
   IssueTrackerAdapter,
   IssueTrackerMoveTarget,
 } from "../../adapters/issue-tracker/types.js";
-import { isClaimingSentinel } from "../dispatch.js";
 import { logger } from "../logger.js";
+import { ticketSubjectKey } from "../subject-key.js";
 import {
   formatInspectAll,
   formatInspectTicket,
@@ -21,11 +21,11 @@ export type CancelRunFn = (
   registry: RunRegistryAdapter,
   issueTracker?: IssueTrackerAdapter,
   targetColumn?: IssueTrackerMoveTarget,
+  onReleased?: (subjectKey: string) => Promise<void> | void,
 ) => Promise<boolean>;
 
 export type StopTicketSandboxesFn = (
-  ticketKey: string,
-  sandboxId: string | null,
+  sandboxIds: readonly string[],
 ) => Promise<unknown>;
 
 export async function handleList(
@@ -33,7 +33,11 @@ export async function handleList(
   jiraBaseUrl: string,
 ): Promise<string> {
   const all = await registry.listAll();
-  const live = all.filter((row) => !isClaimingSentinel(row.runId));
+  const live = all.flatMap((row) =>
+    row.state === "bound" && row.runId && row.ticketKey
+      ? [{ ticketKey: row.ticketKey, runId: row.runId }]
+      : [],
+  );
   return formatRunList(live, jiraBaseUrl);
 }
 
@@ -44,10 +48,13 @@ export async function handleStatus(
 ): Promise<string> {
   // Sandbox lookup is best-effort: a missing or transiently-failing sandbox
   // shouldn't blank out the runId we *can* read.
-  const runId = await registry.getRunId(ticketKey);
+  const entry = await registry.get(ticketSubjectKey("jira", ticketKey));
+  const runId = entry?.state === "bound" ? entry.runId : null;
   let sandboxId: string | null = null;
   try {
-    sandboxId = await registry.getSandboxId(ticketKey);
+    sandboxId = entry
+      ? (await registry.listSandboxes(entry.subjectKey, entry.ownerToken))[0] ?? null
+      : null;
   } catch (err) {
     logger.warn(
       { ticketKey, error: (err as Error).message },
@@ -65,17 +72,13 @@ export async function handleCancel(
   issueTracker?: IssueTrackerAdapter,
   targetColumn?: IssueTrackerMoveTarget,
 ): Promise<string> {
-  const runId = await registry.getRunId(ticketKey);
-  if (!runId) return `No active run for ${ticketKey}.`;
+  const entry = await registry.get(ticketSubjectKey("jira", ticketKey));
+  if (!entry) return `No active run for ${ticketKey}.`;
 
-  if (isClaimingSentinel(runId)) {
-    // Mid-dispatch: dispatch.ts has called start() but not yet swapped in the
-    // real runId. We can't cancel a workflow whose id we don't know. Stop any
-    // sandbox that may have leaked and clear the entry so the next dispatch
-    // sees a clean slot — same shape as the jira webhook handles it.
-    let sandboxId: string | null = null;
+  if (entry.state === "reserved") {
+    let sandboxIds: string[] = [];
     try {
-      sandboxId = await registry.getSandboxId(ticketKey);
+      sandboxIds = await registry.listSandboxes(entry.subjectKey, entry.ownerToken);
     } catch (err) {
       logger.warn(
         { ticketKey, error: (err as Error).message },
@@ -85,21 +88,22 @@ export async function handleCancel(
 
     const failures: string[] = [];
     try {
-      await stopSandboxes(ticketKey, sandboxId);
+      await stopSandboxes(sandboxIds);
     } catch (err) {
       failures.push(`stopSandboxes: ${(err as Error).message}`);
       logger.error(
-        { ticketKey, sandboxId, error: (err as Error).message },
+        { ticketKey, sandboxIds, error: (err as Error).message },
         "slack_cancel_stop_sandboxes_failed",
       );
     }
     try {
-      await registry.unregister(ticketKey);
+      const released = await registry.releaseReservation(entry.subjectKey, entry.ownerToken);
+      if (!released) failures.push("reservation owner changed");
     } catch (err) {
-      failures.push(`registry.unregister: ${(err as Error).message}`);
+      failures.push(`registry.releaseReservation: ${(err as Error).message}`);
       logger.error(
         { ticketKey, error: (err as Error).message },
-        "slack_cancel_unregister_failed",
+        "slack_cancel_release_reservation_failed",
       );
     }
 
@@ -109,9 +113,11 @@ export async function handleCancel(
     return `${ticketKey} is mid-dispatch; cleared the claim. Try the cancel again in a moment if a real run shows up.`;
   }
 
+  const runId = entry.runId;
+  if (!runId) return `No active run for ${ticketKey}.`;
   const ok = await cancelRunFn(ticketKey, runId, registry, issueTracker, targetColumn);
   if (ok) return `Cancelled ${ticketKey} (runId \`${runId}\`).`;
-  return `${ticketKey}: could not cancel run \`${runId}\` cleanly — sandbox + registry have been cleaned up.`;
+  return `${ticketKey}: could not cancel run \`${runId}\` cleanly — owned sandboxes + registry were cleaned up.`;
 }
 
 export async function handleInspect(
@@ -119,18 +125,19 @@ export async function handleInspect(
   ticketKey: string,
   jiraBaseUrl: string,
 ): Promise<string> {
-  const [runId, sandboxId, entryCreatedAt, threadParent, isFailed] =
+  const entry = await registry.get(ticketSubjectKey("jira", ticketKey)).catch(() => null);
+  const [sandboxIds, threadParent, isFailed] =
     await Promise.all([
-      registry.getRunId(ticketKey).catch(() => null),
-      registry.getSandboxId(ticketKey).catch(() => null),
-      registry.getEntryCreatedAt(ticketKey).catch(() => null),
+      entry
+        ? registry.listSandboxes(entry.subjectKey, entry.ownerToken).catch(() => [])
+        : Promise.resolve([]),
       registry.getParent(ticketKey).catch(() => null),
       registry.isTicketFailed(ticketKey).catch(() => false),
     ]);
   return formatInspectTicket(ticketKey, jiraBaseUrl, {
-    runId,
-    sandboxId,
-    entryCreatedAt,
+    runId: entry?.runId ?? null,
+    sandboxId: sandboxIds[0] ?? null,
+    entryCreatedAt: entry?.createdAt ?? null,
     threadParent,
     isFailed,
   });
@@ -144,7 +151,15 @@ export async function handleSummary(
     registry.listAll().catch(() => []),
     registry.listAllFailed().catch(() => []),
   ]);
-  return formatInspectAll(active, failed, jiraBaseUrl);
+  return formatInspectAll(
+    active.flatMap((row) =>
+      row.state === "bound" && row.runId && row.ticketKey
+        ? [{ ticketKey: row.ticketKey, runId: row.runId }]
+        : [],
+    ),
+    failed,
+    jiraBaseUrl,
+  );
 }
 
 export async function handleReset(
@@ -155,10 +170,16 @@ export async function handleReset(
   const failures: string[] = [];
 
   try {
-    await registry.unregister(ticketKey);
-    cleared.push("active+sandbox+entry-ts");
+    const entry = await registry.get(ticketSubjectKey("jira", ticketKey));
+    if (entry?.state === "reserved") {
+      const released = await registry.releaseReservation(entry.subjectKey, entry.ownerToken);
+      if (released) cleared.push("reservation+sandboxes");
+      else failures.push("reservation owner changed");
+    } else if (entry?.state === "bound") {
+      failures.push("active run owner requires cancel");
+    }
   } catch (err) {
-    failures.push(`unregister: ${(err as Error).message}`);
+    failures.push(`active lookup/release: ${(err as Error).message}`);
   }
   try {
     await registry.clearFailedMark(ticketKey);

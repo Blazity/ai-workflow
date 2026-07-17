@@ -82,6 +82,8 @@ export async function ensureArthurTask(
 }
 
 async function blockPrepareWorkspaceProvisionStep(
+  subjectKey: string,
+  ownerToken: string,
   branchName: string,
   selectedRepositories: WorkspaceRepositoryInput[],
   arthurTaskId: string | null,
@@ -141,6 +143,16 @@ async function blockPrepareWorkspaceProvisionStep(
     createAgentAdapter(primaryKind),
     configureOptsFor(primaryKind),
     additionalAgents,
+    {
+      onCreated: async (sandboxId) => {
+        const { createStepAdapters } = await import("../../lib/step-adapters.js");
+        await createStepAdapters().runRegistry.registerSandbox(
+          subjectKey,
+          ownerToken,
+          sandboxId,
+        );
+      },
+    },
   );
 
   return { sandboxId: sandbox.sandboxId };
@@ -148,13 +160,14 @@ async function blockPrepareWorkspaceProvisionStep(
 blockPrepareWorkspaceProvisionStep.maxRetries = 0;
 
 async function blockPrepareWorkspaceRegisterSandboxStep(
-  ticketIdentifier: string,
+  subjectKey: string,
+  ownerToken: string,
   sandboxId: string,
 ): Promise<void> {
   "use step";
   const { createStepAdapters } = await import("../../lib/step-adapters.js");
   const { runRegistry } = createStepAdapters();
-  await runRegistry.registerSandbox(ticketIdentifier, sandboxId);
+  await runRegistry.registerSandbox(subjectKey, ownerToken, sandboxId);
 }
 
 const CODE_WORKSPACE_AGENT_BLOCK_TYPES = new Set<string>([
@@ -191,9 +204,12 @@ function requiredKindsForDefinition(
 export async function ensureWorkspace(ctx: Parameters<BlockExecuteFn>[2]): Promise<BlockExecutionResult> {
   if (ctx.sandboxId) {
     try {
-      // Scratch sandboxes share a run but the registry has one cancellation
-      // target. Re-assert the primary code workspace whenever it is reused.
-      await blockPrepareWorkspaceRegisterSandboxStep(ctx.ticket.identifier, ctx.sandboxId);
+      // Re-assert the durable child record when an existing code workspace is reused.
+      await blockPrepareWorkspaceRegisterSandboxStep(
+        ctx.entry.subjectKey,
+        ctx.entry.ownerToken,
+        ctx.sandboxId,
+      );
       const repositories = ctx.selectedRepositories.map(
         (repo) => `${repo.provider}:${repo.repoPath}`,
       );
@@ -281,22 +297,21 @@ export async function ensureWorkspace(ctx: Parameters<BlockExecuteFn>[2]): Promi
       ctx.defaults,
     );
     const { sandboxId } = await blockPrepareWorkspaceProvisionStep(
+      ctx.entry.subjectKey,
+      ctx.entry.ownerToken,
       ctx.branchName,
       workspaceRepositories,
       arthurTaskId,
       requiredKinds,
     );
-    // Track the sandbox the instant it exists, BEFORE registering it: if the
-    // register step throws, the catch below fails the block and the engine's
-    // teardown of ctx.sandboxIds is the only cleanup left (the registry never
-    // recorded the id, so the reconcile sweep cannot see it either).
+    // The manager registered this sandbox immediately after external creation,
+    // before clone/install/configure. Keep the in-workflow set for normal
+    // teardown; the durable child row covers crash/cancel cleanup.
     ctx.sandboxId = sandboxId;
     // Track every provisioned sandbox so a prepare_workspace inside a loop does
     // not leak the sandboxes from earlier iterations: the engine tears down all
     // of ctx.sandboxIds on exit, not just the latest ctx.sandboxId.
     ctx.sandboxIds.add(sandboxId);
-
-    await blockPrepareWorkspaceRegisterSandboxStep(ctx.ticket.identifier, sandboxId);
 
     ctx.selectedRepositories = workspaceRepositories;
     ctx.repositoryContexts = repositoryContexts;

@@ -61,7 +61,11 @@ describe("ensureAgentSandbox", () => {
     );
     expect(ctx.agentSandboxIds.claude).toBe("scratch-1");
     expect([...ctx.sandboxIds]).toEqual(["scratch-1"]);
-    expect(mocks.registerSandbox).toHaveBeenCalledWith("AWT-1", "scratch-1");
+    expect(mocks.registerSandbox).toHaveBeenCalledWith(
+      "ticket:jira:AWT-1",
+      "owner:test",
+      "scratch-1",
+    );
   });
 
   it("tracks a created sandbox before a registry failure", async () => {
@@ -72,11 +76,12 @@ describe("ensureAgentSandbox", () => {
       "registry unavailable",
     );
 
-    expect(ctx.agentSandboxIds.claude).toBe("scratch-1");
-    expect([...ctx.sandboxIds]).toEqual(["scratch-1"]);
+    expect(ctx.agentSandboxIds.claude).toBeUndefined();
+    expect([...ctx.sandboxIds]).toEqual([]);
+    expect(mocks.stop).toHaveBeenCalledOnce();
   });
 
-  it("keeps code and scratch sandboxes in terminal cleanup without replacing the registry slot", async () => {
+  it("durably registers a scratch sandbox even when a code workspace already exists", async () => {
     const ctx = makeCtx({
       sandboxId: "code-1",
       agentSandboxIds: {},
@@ -87,7 +92,11 @@ describe("ensureAgentSandbox", () => {
       "scratch-1",
     );
 
-    expect(mocks.registerSandbox).not.toHaveBeenCalled();
+    expect(mocks.registerSandbox).toHaveBeenCalledWith(
+      "ticket:jira:AWT-1",
+      "owner:test",
+      "scratch-1",
+    );
     expect([...ctx.sandboxIds]).toEqual(["code-1", "scratch-1"]);
 
     const teardown = vi.fn().mockResolvedValue(undefined);

@@ -15,6 +15,7 @@ import type {
  */
 export interface RunSnapshot {
   runId: string;
+  subjectKey: string | null;
   workflowId: string;
   workflowName: string;
   status: string;
@@ -38,6 +39,7 @@ export interface RunSnapshot {
  */
 export interface RunUsage {
   runId: string;
+  subjectKey: string;
   /**
    * The workflow's own identity. Written here too (not just by the cron
    * snapshot) so a run is attributable to its workflow even when the cron never
@@ -123,6 +125,7 @@ export async function upsertRunSnapshots(
       set: {
         workflowId: sql`excluded.workflow_id`,
         workflowName: sql`excluded.workflow_name`,
+        subjectKey: keepIfNull(workflowRuns.subjectKey, workflowRuns.subjectKey),
         // Never downgrade a terminal status. The agent workflow writes the
         // authoritative success/failed on completion (recordRunUsage); a cron
         // snapshot re-deriving status from the world must not clobber it — the
@@ -166,6 +169,7 @@ export async function recordRunUsage(db: Db, usage: RunUsage): Promise<void> {
     .insert(workflowRuns)
     .values({
       runId: usage.runId,
+      subjectKey: usage.subjectKey,
       workflowId: usage.workflowId,
       workflowName: usage.workflowName,
       status: usage.status,
@@ -194,6 +198,7 @@ export async function recordRunUsage(db: Db, usage: RunUsage): Promise<void> {
         status: sql`excluded.status`,
         workflowId: sql`excluded.workflow_id`,
         workflowName: sql`excluded.workflow_name`,
+        subjectKey: sql`excluded.subject_key`,
         completedAt: sql`coalesce(${workflowRuns.completedAt}, now())`,
         durationSec: durationFromStart(),
         ticketKey: keepIfNull(workflowRuns.ticketKey, workflowRuns.ticketKey),
@@ -224,9 +229,10 @@ export async function recordRunUsage(db: Db, usage: RunUsage): Promise<void> {
  */
 export interface RunBlockStatusWrite {
   runId: string;
-  ticketKey: string;
-  ticketTitle: string;
-  ticketUrl: string;
+  subjectKey: string;
+  ticketKey: string | null;
+  ticketTitle: string | null;
+  ticketUrl: string | null;
   definitionVersion: number | null;
   definitionId: number | null;
   blockStatuses: Record<string, BlockRunState>;
@@ -247,6 +253,7 @@ export async function recordBlockStatuses(
     .insert(workflowRuns)
     .values({
       runId: write.runId,
+      subjectKey: write.subjectKey,
       workflowId: "wf_agent",
       workflowName: "Agent",
       status: "running",

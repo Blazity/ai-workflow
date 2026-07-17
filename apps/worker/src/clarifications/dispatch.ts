@@ -9,6 +9,7 @@ import { claimTicketRun } from "../lib/dispatch.js";
 import { aiColumnMoveTarget } from "../lib/move-targets.js";
 import { NEEDS_CLARIFICATION_LABEL } from "../lib/labels.js";
 import { logger } from "../lib/logger.js";
+import { ticketSubjectKey } from "../lib/subject-key.js";
 import {
   answerClarification,
   getClarification,
@@ -30,8 +31,8 @@ export type DispatchClarificationAnsweredResult =
  *
  * Ordering under the claim is load-bearing: CAS (record the answer) -> move the
  * ticket into the AI column -> best-effort remove the needs-clarification label
- * -> start the resume run -> register. The caller records the dispatched run id
- * and resolves the parked run after a started result.
+ * -> start the resume candidate. The candidate owner-binds on entry; the caller
+ * records the dispatched run id and resolves the parked run after a started result.
  */
 export async function dispatchClarificationAnswered(input: {
   db: Db;
@@ -119,12 +120,18 @@ export async function dispatchClarificationAnswered(input: {
 
       return null;
     },
-    startWorkflow: async () => {
-      // Leave definitionId unset: the resume loads the head definition for the
-      // clarification_answered trigger.
+    startWorkflow: async (ownerToken) => {
       const entry: AgentWorkflowInput = {
         kind: "clarification_answered",
+        subjectKey: ticketSubjectKey("jira", ticketKey),
         ticketKey,
+        ownerToken,
+        ...(clarification.definitionId != null
+          ? { definitionId: clarification.definitionId }
+          : {}),
+        ...(clarification.definitionVersion != null
+          ? { definitionVersion: clarification.definitionVersion }
+          : {}),
         clarificationRequestId: clarification.id,
       };
       const handle = await start(agentWorkflow, [entry]);

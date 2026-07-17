@@ -5,7 +5,8 @@ import type {
   IssueTrackerAdapter,
   IssueTrackerMoveTarget,
 } from "../adapters/issue-tracker/types.js";
-import { stopTicketSandboxes } from "../sandbox/stop-ticket-sandboxes.js";
+import { stopSandboxesByIds } from "../sandbox/stop-ticket-sandboxes.js";
+import { ticketSubjectKey } from "./subject-key.js";
 
 /**
  * Cancel a workflow run and unregister it from the registry.
@@ -22,7 +23,12 @@ export async function cancelRun(
   runRegistry: RunRegistryAdapter,
   issueTracker?: IssueTrackerAdapter,
   targetColumn?: IssueTrackerMoveTarget,
+  onReleased?: (subjectKey: string) => Promise<void> | void,
 ): Promise<boolean> {
+  const subjectKey = ticketSubjectKey("jira", ticketKey);
+  const entry = await runRegistry.get(subjectKey).catch(() => null);
+  if (!entry || entry.state !== "bound" || entry.runId !== runId) return false;
+
   let cancelled = false;
   try {
     const run = getRun(runId);
@@ -35,15 +41,16 @@ export async function cancelRun(
     );
   }
 
-  // Look up the sandboxId first so the stop path is O(1) instead of a
-  // branch-scan across every running sandbox. Best-effort — if this
-  // lookup errors or returns null, stopTicketSandboxes falls back to the
-  // parallel branch scan.
-  const sandboxId = await runRegistry.getSandboxId(ticketKey).catch(() => null);
-  await stopTicketSandboxes(ticketKey, sandboxId).catch(() => {});
-  await runRegistry.unregister(ticketKey).catch(() => {});
+  const sandboxIds = await runRegistry
+    .listSandboxes(subjectKey, entry.ownerToken)
+    .catch(() => []);
+  await stopSandboxesByIds(sandboxIds).catch(() => {});
+  const released = await runRegistry
+    .release(subjectKey, entry.ownerToken, runId)
+    .catch(() => false);
+  if (released && onReleased) await onReleased(subjectKey);
 
-  if (issueTracker && targetColumn) {
+  if (released && issueTracker && targetColumn) {
     try {
       await issueTracker.moveTicket(ticketKey, targetColumn);
     } catch (err) {

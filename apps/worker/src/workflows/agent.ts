@@ -299,7 +299,7 @@ function triggerOutputFor(entry: AgentWorkflowInput): BlockOutput {
     const { pr } = entry;
     const output: BlockOutput = {
       status: "fired",
-      ticketKey: entry.ticketKey,
+      ...(entry.ticketKey ? { ticketKey: entry.ticketKey } : {}),
       provider: pr.provider,
       repoPath: pr.repoPath,
       prNumber: pr.prNumber,
@@ -340,21 +340,6 @@ function triggerOutputFor(entry: AgentWorkflowInput): BlockOutput {
 }
 
 // --- Step Functions ---
-
-async function fetchAndValidateTicket(
-  ticketId: string,
-  columnAi: string,
-  skipColumnCheck: boolean,
-) {
-  "use step";
-  const { createStepAdapters } = await import("../lib/step-adapters.js");
-  const { issueTracker } = createStepAdapters();
-  const ticket = await issueTracker.fetchTicket(ticketId);
-  if (!skipColumnCheck && ticket.trackerStatus.toLowerCase() !== columnAi.toLowerCase()) {
-    return null;
-  }
-  return ticket;
-}
 
 async function fetchAttachments(
   ticketIdentifier: string,
@@ -772,19 +757,15 @@ async function logClarificationHistoryFailure(ticketKey: string, reason: string)
 }
 logClarificationHistoryFailure.maxRetries = 0;
 
-async function unregisterRun(ticketIdentifier: string) {
+async function validateReviewSafePlanStep(
+  nodes: WorkflowDefinitionNode[],
+  edges: Array<{ from: string; to: string; fromPort?: string }>,
+): Promise<string[]> {
   "use step";
-  const { createStepAdapters } = await import("../lib/step-adapters.js");
-  const { runRegistry } = createStepAdapters();
-  await runRegistry.unregister(ticketIdentifier);
+  const { validateAnyScopeReviewSafety } = await import("../workflow-definition/schema.js");
+  return validateAnyScopeReviewSafety({ schemaVersion: 1, nodes, edges });
 }
-
-async function unregisterRunIfCurrent(ticketIdentifier: string, runId: string) {
-  "use step";
-  const { createStepAdapters } = await import("../lib/step-adapters.js");
-  const { runRegistry } = createStepAdapters();
-  await runRegistry.unregisterIfRunId(ticketIdentifier, runId);
-}
+validateReviewSafePlanStep.maxRetries = 0;
 
 async function resolveAgentKindOverride(labels: readonly string[]): Promise<AgentKind | null> {
   "use step";
@@ -833,11 +814,10 @@ async function runPrePrChecksStep(
 }
 runPrePrChecksStep.maxRetries = 0;
 
-async function markTicketFailed(ticketIdentifier: string, error: string) {
+async function markTicketFailed(ticketIdentifier: string, runId: string, error: string) {
   "use step";
   const { createStepAdapters } = await import("../lib/step-adapters.js");
   const { runRegistry } = createStepAdapters();
-  const runId = await runRegistry.getRunId(ticketIdentifier) ?? "unknown";
   await runRegistry.markFailed(ticketIdentifier, {
     runId,
     error,
@@ -869,10 +849,11 @@ function phaseKey(base: string, attempt: number): string {
  */
 async function recordRunTelemetryStep(payload: {
   runId: string;
+  subjectKey: string;
   status: "success" | "failed" | "awaiting";
-  ticketKey: string;
-  ticketTitle: string;
-  ticketUrl: string;
+  ticketKey: string | null;
+  ticketTitle: string | null;
+  ticketUrl: string | null;
   model: string | null;
   totals: UsageTotals;
   budgetFailure: RunBudgetFailure | null;
@@ -910,6 +891,7 @@ async function recordRunTelemetryStep(payload: {
     // so the run is attributed even when no cron snapshot ever observes it.
     workflowId: "wf_agent",
     workflowName: "Agent",
+    subjectKey: payload.subjectKey,
     status,
     ticketKey: payload.ticketKey,
     ticketTitle: payload.ticketTitle,
@@ -931,9 +913,10 @@ recordRunTelemetryStep.maxRetries = 0;
 
 async function recordBlockStatusesStep(payload: {
   runId: string;
-  ticketKey: string;
-  ticketTitle: string;
-  ticketUrl: string;
+  subjectKey: string;
+  ticketKey: string | null;
+  ticketTitle: string | null;
+  ticketUrl: string | null;
   definitionVersion: number | null;
   definitionId: number | null;
   blockStatuses: Record<string, BlockRunState>;
@@ -950,12 +933,52 @@ recordBlockStatusesStep.maxRetries = 0;
 export async function agentWorkflow(input: string | AgentWorkflowInput) {
   "use workflow";
 
-  const entry: AgentWorkflowInput =
-    typeof input === "string" ? { kind: "ticket", ticketKey: input } : input;
-  const ticketId = entry.ticketKey;
-
   const { workflowRunId } = getWorkflowMetadata();
+  const legacyInput = typeof input === "string";
+  const entry: AgentWorkflowInput = legacyInput
+    ? {
+        kind: "ticket",
+        subjectKey: `ticket:jira:${input.trim().toUpperCase()}`,
+        ticketKey: input,
+        ownerToken: `legacy:${workflowRunId}`,
+      }
+    : input;
+
+  if (!legacyInput) {
+    const { acknowledgePendingTriggerStep, bindWorkflowCandidateStep } =
+      await import("./run-ownership-steps.js");
+    const bound = await bindWorkflowCandidateStep(
+      entry.subjectKey,
+      entry.ownerToken,
+      workflowRunId,
+    );
+    if (!bound) return;
+    // A drained event is consumed only by the candidate that won owner CAS,
+    // before ticket reads, notifications, sandbox creation, or any block.
+    await acknowledgePendingTriggerStep(entry);
+  }
+
+  let outcome: "success" | "failed" | "awaiting" | undefined;
+  try {
+    outcome = await agentWorkflowBody(entry, workflowRunId);
+  } finally {
+    if (!legacyInput && outcome !== "awaiting") {
+      const { terminalReleaseAndDrainStep } = await import("./run-ownership-steps.js");
+      await terminalReleaseAndDrainStep(
+        entry.subjectKey,
+        entry.ownerToken,
+        workflowRunId,
+      ).catch(() => false);
+    }
+  }
+}
+
+async function agentWorkflowBody(
+  entry: AgentWorkflowInput,
+  workflowRunId: string,
+): Promise<"success" | "failed" | "awaiting" | undefined> {
   const budgetStartedAtMs = await readRunBudgetClockStep();
+  const ticketId = entry.ticketKey ?? entry.subjectKey;
 
   const { env } = await import("../../env.js");
   const { assembleResearchPlanContext, assembleImplementationContext, assembleReviewContext } =
@@ -974,7 +997,8 @@ export async function agentWorkflow(input: string | AgentWorkflowInput) {
       ? { name: env.COLUMN_AI_REVIEW, transitionId: env.JIRA_AI_REVIEW_TRANSITION_ID }
       : env.COLUMN_AI_REVIEW;
 
-  const ticket = await fetchAndValidateTicket(ticketId, env.COLUMN_AI, entry.kind !== "ticket");
+  const { resolveWorkflowTicketStep } = await import("./workflow-ticket.js");
+  const ticket = await resolveWorkflowTicketStep(entry, env.COLUMN_AI);
   if (!ticket) return;
 
   // Re-pickup housekeeping (strip the awaiting-input label, supersede any pending
@@ -1016,6 +1040,12 @@ export async function agentWorkflow(input: string | AgentWorkflowInput) {
     );
     return;
   }
+  if (entry.kind === "pr_trigger" && entry.scope === "any") {
+    const issues = await validateReviewSafePlanStep(plan.nodes, plan.edges);
+    if (issues.length > 0) {
+      throw new Error(`scope:any workflow is not review-safe: ${issues.join("; ")}`);
+    }
+  }
 
   const budgetLimits: RunBudgetLimits = {
     maxDurationMs: plan.budgets?.maxDurationMs ?? env.JOB_TIMEOUT_MS,
@@ -1046,9 +1076,14 @@ export async function agentWorkflow(input: string | AgentWorkflowInput) {
   const writeBlockStatuses = () =>
     recordBlockStatusesStep({
       runId: workflowRunId,
-      ticketKey: ticket.identifier,
+      subjectKey: entry.subjectKey,
+      ticketKey: entry.ticketKey ?? null,
       ticketTitle: ticket.title,
-      ticketUrl: `${env.JIRA_BASE_URL.replace(/\/+$/, "")}/browse/${ticket.identifier}`,
+      ticketUrl: entry.ticketKey
+        ? `${env.JIRA_BASE_URL.replace(/\/+$/, "")}/browse/${ticket.identifier}`
+        : entry.kind === "pr_trigger"
+          ? entry.pr.prUrl
+          : null,
       definitionVersion: plan.version,
       definitionId: plan.definitionId,
       blockStatuses: { ...blockStatuses },
@@ -1096,7 +1131,9 @@ export async function agentWorkflow(input: string | AgentWorkflowInput) {
       : undefined;
 
   try {
-    await notifyTicket(ticket.identifier, { kind: "started" });
+    if (entry.ticketKey) {
+      await notifyTicket(ticket.identifier, { kind: "started" });
+    }
 
     const graph = buildRuntimeGraph({ nodes: plan.nodes, edges: plan.edges });
     const entryTrigger = plan.nodes.find((node) => node.type === entryTriggerType);
@@ -1105,7 +1142,10 @@ export async function agentWorkflow(input: string | AgentWorkflowInput) {
     }
     const triggerOutput = triggerOutputFor(entry);
 
-    const branchName = branchForTicket(ticket.identifier);
+    const branchName =
+      entry.kind === "pr_trigger" && !entry.ticketKey
+        ? entry.pr.headRef
+        : branchForTicket(ticket.identifier);
     const downloadedAttachments = await fetchAttachments(ticket.identifier, ticket.attachments);
 
     // Answered Q&A history for this ticket, injected into every prompt so a
@@ -1117,11 +1157,13 @@ export async function agentWorkflow(input: string | AgentWorkflowInput) {
     let clarificationHistory:
       | Array<{ questions: string[]; answer: string; answeredBy?: string; answeredAt?: string }>
       | undefined;
-    try {
-      clarificationHistory = await loadClarificationHistoryStep(ticket.identifier);
-    } catch (err) {
-      await logClarificationHistoryFailure(ticket.identifier, errorMessage(err));
-      clarificationHistory = undefined;
+    if (entry.ticketKey) {
+      try {
+        clarificationHistory = await loadClarificationHistoryStep(ticket.identifier);
+      } catch (err) {
+        await logClarificationHistoryFailure(ticket.identifier, errorMessage(err));
+        clarificationHistory = undefined;
+      }
     }
 
     const ticketData = {
@@ -1171,7 +1213,6 @@ export async function agentWorkflow(input: string | AgentWorkflowInput) {
     }
 
     const state = {
-      runUnregisteredBeforePr: false,
       implementationModel: defaultModel,
       implementationKind: undefined as AgentKind | undefined,
       attempt: 1,
@@ -1218,12 +1259,6 @@ export async function agentWorkflow(input: string | AgentWorkflowInput) {
       markLaunched: (label) => {
         launchedPhases.add(phaseKey(label, state.attempt));
       },
-      unregisterBeforePr: async () => {
-        if (!state.runUnregisteredBeforePr) {
-          await unregisterRun(ticket.identifier);
-          state.runUnregisteredBeforePr = true;
-        }
-      },
     };
 
     try {
@@ -1232,6 +1267,9 @@ export async function agentWorkflow(input: string | AgentWorkflowInput) {
         nodeId?: string,
         suggestedAnswers?: string[],
       ): Promise<void> => {
+        if (!entry.ticketKey) {
+          throw new Error("PR-only workflows cannot request ticket clarification");
+        }
         // Crash safety: with question comments gone, the questions must exist
         // durably BEFORE any ticket movement. This insert (maxRetries = 0)
         // throwing fails the run visibly; the outer catch then parks the ticket
@@ -1247,7 +1285,6 @@ export async function agentWorkflow(input: string | AgentWorkflowInput) {
           questions,
           suggestedAnswers: suggestedAnswers ?? null,
         });
-        await unregisterRun(ticket.identifier);
         const parked = await parkForClarificationStep(ticketId, backlogMoveTarget(), clarificationId);
         if (!parked) {
           // The answer raced ahead of the park and already owns the ticket (moved
@@ -1267,23 +1304,17 @@ export async function agentWorkflow(input: string | AgentWorkflowInput) {
 
       const failureExit = async (phase: string, reason: string): Promise<void> => {
         const usageReport = usageReportOrUndefined();
-        await logPhaseFailure(ticket.identifier, phase, reason);
-        // Unregister BEFORE moveTicket so the Jira webhook for this move
-        // can't race ahead and fire a duplicate "canceled" notification
-        // (the registry entry is what makes the webhook treat a finishing
-        // run as a cancellable orphan). Same reasoning at every terminal
-        // path below. open_pr's beforeCreatePullRequests may have already
-        // unregistered after the push landed, so dedupe via the flag.
-        if (!state.runUnregisteredBeforePr) {
-          await unregisterRun(ticket.identifier);
-        }
-        await moveTicket(ticketId, backlogMoveTarget());
         const knownPhase = FAILURE_PHASES.has(phase) ? (phase as NotifyPhase) : undefined;
-        await notifyTicket(ticket.identifier, {
-          kind: "failed",
-          ...(knownPhase ? { phase: knownPhase } : {}),
-          reason,
-          usageReport,
+        const { handleWorkflowFailureExit } = await import("./workflow-failure-exit.js");
+        await handleWorkflowFailureExit(entry.ticketKey, {
+          logFailure: () => logPhaseFailure(entry.subjectKey, phase, reason),
+          moveTicket: () => moveTicket(ticketId, backlogMoveTarget()),
+          notifyTicket: () => notifyTicket(ticket.identifier, {
+            kind: "failed",
+            ...(knownPhase ? { phase: knownPhase } : {}),
+            reason,
+            usageReport,
+          }),
         });
       };
 
@@ -1295,6 +1326,9 @@ export async function agentWorkflow(input: string | AgentWorkflowInput) {
         nodeId?: string,
       ): Promise<void> => {
         if (params.terminalStatus === "waiting_for_human") {
+          if (!entry.ticketKey) {
+            throw new Error("PR-only workflows cannot wait on ticket clarification");
+          }
           // Same rework as clarificationExit: file the question durably FIRST
           // (before any unregister/move), then unregister -> park -> notify.
           // maxRetries = 0, so a throw fails the run and the outer catch parks
@@ -1308,12 +1342,6 @@ export async function agentWorkflow(input: string | AgentWorkflowInput) {
             questions: [params.postComment ?? "Waiting for human input."],
             suggestedAnswers: null,
           });
-          // Unregister BEFORE the park's moveTicket (dedupe via the flag), so the
-          // move's Jira webhook can't race ahead and fire a duplicate "canceled".
-          if (!state.runUnregisteredBeforePr) {
-            await unregisterRun(ticket.identifier);
-            state.runUnregisteredBeforePr = true;
-          }
           const parked = await parkForClarificationStep(ticketId, backlogMoveTarget(), clarificationId);
           if (!parked) {
             // The answer raced ahead of the park and already owns the ticket. No
@@ -1330,17 +1358,15 @@ export async function agentWorkflow(input: string | AgentWorkflowInput) {
           runOutcome = "awaiting";
           return;
         }
-        // Non-clarification terminal statuses: unregister first (dedupe via the
-        // flag), same race rationale as failureExit.
-        if (!state.runUnregisteredBeforePr) {
-          await unregisterRun(ticket.identifier);
-          state.runUnregisteredBeforePr = true;
-        }
         if (params.terminalStatus === "done" || params.terminalStatus === "skipped") {
-          if (params.postComment) {
+          if (params.postComment && entry.ticketKey) {
             await postTicketComment(ticket.identifier, params.postComment);
           }
           runOutcome = "success";
+          return;
+        }
+        if (!entry.ticketKey) {
+          runOutcome = "failed";
           return;
         }
         await moveTicket(ticketId, backlogMoveTarget());
@@ -1650,7 +1676,6 @@ export async function agentWorkflow(input: string | AgentWorkflowInput) {
 
           case "open_pr": {
             if (!ctx.sandboxId) return noWorkspace(node.type);
-            state.runUnregisteredBeforePr = false;
             const publication = await publishWorkspaceChanges({
               sandboxId: ctx.sandboxId,
               ticketKey: ticket.identifier,
@@ -1660,23 +1685,10 @@ export async function agentWorkflow(input: string | AgentWorkflowInput) {
               agentKind: state.implementationKind ?? runDefaultKind,
               model: state.implementationModel,
               clarifications: ticketData.clarifications,
-              beforeCreatePullRequests: async () => {
-                // Push has landed. Unregister BEFORE any downstream step that can
-                // trigger a Jira webhook: opening a PR can transition the linked
-                // issue (GitHub-for-Jira / Jira automation), and our own moveTicket
-                // fires a webhook for the AI -> AI Review move. Either webhook, if
-                // it sees a still-registered run, will call cancelRun and emit a
-                // spurious "canceled" notification on top of "pr_ready". Clearing
-                // the registry here closes that window.
-                await ctx.unregisterBeforePr();
-              },
             });
             ctx.publication = publication;
 
             if (publication.status === "failed") {
-              // The terminal unregister/move/notify runs in failureExit; keep only
-              // the bespoke bookkeeping here. failureExit dedupes the unregister via
-              // state.runUnregisteredBeforePr, set above when the push landed.
               if (publication.prs.length > 0) {
                 await postPrLinksComment(
                   ticket.identifier,
@@ -1813,21 +1825,20 @@ export async function agentWorkflow(input: string | AgentWorkflowInput) {
       await writeBlockStatuses();
     }
     console.error(`Workflow failed for ${ticket.identifier}:`, err);
-    // Unregister BEFORE the move so the move's webhook can't race ahead and
-    // fire a duplicate "canceled" notification on top of the "failed" one.
-    // If the move then fails, markTicketFailed re-records a marker that
-    // dispatch.isTicketFailed checks to keep the ticket from being re-picked.
-    // runId-scoped: only clears this run's own row, so an uncaught throw after
-    // open_pr freed the slot can't stomp a successor pr_trigger that claimed it.
-    await unregisterRunIfCurrent(ticket.identifier, workflowRunId).catch(() => {});
-    const moved = await moveTicket(ticketId, backlogMoveTarget()).then(() => true).catch(() => false);
-    await notifyTicket(ticket.identifier, {
-      kind: "failed",
-      reason: (err as Error).message ?? "unknown",
-      usageReport: usageReportOrUndefined(),
-    }).catch(() => {});
-    if (!moved) {
-      await markTicketFailed(ticket.identifier, `Failed to move ticket to backlog: ${(err as Error).message ?? "unknown"}`).catch(() => {});
+    if (entry.ticketKey) {
+      const moved = await moveTicket(ticketId, backlogMoveTarget()).then(() => true).catch(() => false);
+      await notifyTicket(ticket.identifier, {
+        kind: "failed",
+        reason: (err as Error).message ?? "unknown",
+        usageReport: usageReportOrUndefined(),
+      }).catch(() => {});
+      if (!moved) {
+        await markTicketFailed(
+          ticket.identifier,
+          workflowRunId,
+          `Failed to move ticket to backlog: ${(err as Error).message ?? "unknown"}`,
+        ).catch(() => {});
+      }
     }
     throw err;
   } finally {
@@ -1835,21 +1846,6 @@ export async function agentWorkflow(input: string | AgentWorkflowInput) {
     // collect) records as unknown, so computeUsageTotals reports
     // costKnown=false instead of a misleading costUsd=0 / costKnown=true.
     reconcileMissingPhaseUsages();
-    // Free the ticket's active_runs slot on every terminal exit. Most paths
-    // (open_pr, finalize_workspace, send_plan_approval, terminate, clarification,
-    // failure) already unregister mid-run, but a graph that completes without any
-    // of them (e.g. a PR-review flow that only posts a comment) would otherwise
-    // leave a stale row registered until reconcile's cron sweeps it — and that
-    // row coalesces the ticket's NEXT pr_trigger at claim() (a PR legitimately
-    // gets both a checks-failed and a review).
-    //
-    // Scope the release to THIS run's id: a run that unregistered mid-flight
-    // (open_pr/finalize before creating the PR) can have its ticket reclaimed by
-    // a successor pr_trigger run that PR creation dispatches. A bare unregister
-    // deletes by ticketKey and would stomp that successor's still-live row,
-    // yielding two concurrent runs for one ticket. unregisterIfRunId only deletes
-    // when the row still holds workflowRunId, so a stomp is a harmless no-op.
-    await unregisterRunIfCurrent(ticket.identifier, workflowRunId).catch(() => {});
     // Durable cost/usage telemetry, recorded on every exit path (success,
     // clarification, or failure). Best-effort: the step never retries and we
     // swallow errors so telemetry can't break or delay the run — but we LOG
@@ -1858,10 +1854,15 @@ export async function agentWorkflow(input: string | AgentWorkflowInput) {
     // history for days unnoticed.
     await recordRunTelemetryStep({
       runId: workflowRunId,
+      subjectKey: entry.subjectKey,
       status: runOutcome,
-      ticketKey: ticket.identifier,
+      ticketKey: entry.ticketKey ?? null,
       ticketTitle: ticket.title,
-      ticketUrl: `${env.JIRA_BASE_URL.replace(/\/+$/, "")}/browse/${ticket.identifier}`,
+      ticketUrl: entry.ticketKey
+        ? `${env.JIRA_BASE_URL.replace(/\/+$/, "")}/browse/${ticket.identifier}`
+        : entry.kind === "pr_trigger"
+          ? entry.pr.prUrl
+          : null,
       model: activeModel ?? null,
       totals: computeUsageTotals(phaseUsages, priceLookup, activeModel, phaseModels),
       budgetFailure: terminalBudgetFailure,
@@ -1874,4 +1875,5 @@ export async function agentWorkflow(input: string | AgentWorkflowInput) {
       );
     });
   }
+  return runOutcome;
 }

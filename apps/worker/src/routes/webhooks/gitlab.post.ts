@@ -30,6 +30,10 @@ export default defineEventHandler(async (event) => {
   if (gitLabEvent !== "Merge Request Hook" && gitLabEvent !== "Pipeline Hook") {
     return { status: "ignored", reason: "not_supported_event" };
   }
+  const deliveryId = getHeader(event, "x-gitlab-event-uuid")?.trim() ?? "";
+  if (!deliveryId) {
+    return { status: "ignored", reason: "missing_delivery_id" };
+  }
 
   let body;
   try {
@@ -38,7 +42,10 @@ export default defineEventHandler(async (event) => {
     return { status: "ignored", reason: "malformed_payload" };
   }
 
-  const evt = normalizeGitLabEvent(gitLabEvent, body);
+  const evt = normalizeGitLabEvent(gitLabEvent, body, {
+    deliveryId,
+    botUsername: env.VCS_BOT_LOGIN,
+  });
 
   if (evt) {
     const scope = await checkProjectScope(body);

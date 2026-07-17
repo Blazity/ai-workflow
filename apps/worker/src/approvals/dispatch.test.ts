@@ -1,34 +1,28 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { IssueTrackerAdapter } from "../adapters/issue-tracker/types.js";
-import type { RunRegistryAdapter } from "../adapters/run-registry/types.js";
+import type {
+  ActiveRunEntry,
+  RunRegistryAdapter,
+  RunReservation,
+} from "../adapters/run-registry/types.js";
 import type { ApprovalRow } from "./store.js";
 
 vi.mock("../../env.js", () => ({ env: { COLUMN_AI: "AI" } }));
-
 const mockStart = vi.fn();
-const mockGetRun = vi.fn();
-vi.mock("workflow/api", () => ({
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  start: (...args: any[]) => mockStart(...args),
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  getRun: (...args: any[]) => mockGetRun(...args),
-}));
-
+vi.mock("workflow/api", () => ({ start: (...args: any[]) => mockStart(...args) }));
 vi.mock("../workflows/agent.js", () => ({ agentWorkflow: "agentWorkflow_sentinel" }));
 
 const mockGetDefinition = vi.fn();
 const mockGetVersion = vi.fn();
 const mockGetDeployedVersion = vi.fn();
 vi.mock("../workflow-definition/store.js", () => ({
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   getWorkflowDefinition: (...args: any[]) => mockGetDefinition(...args),
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   getWorkflowDefinitionVersion: (...args: any[]) => mockGetVersion(...args),
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   getDeployedWorkflowDefinitionVersion: (...args: any[]) => mockGetDeployedVersion(...args),
 }));
 
 const { dispatchPlanApproved } = await import("./dispatch.js");
+const db = {} as never;
 
 function makeApproval(overrides: Partial<ApprovalRow> = {}): ApprovalRow {
   return {
@@ -50,30 +44,56 @@ function makeApproval(overrides: Partial<ApprovalRow> = {}): ApprovalRow {
   };
 }
 
-function makeRegistry(overrides: Partial<Record<keyof RunRegistryAdapter, ReturnType<typeof vi.fn>>> = {}) {
-  let claimedValue: string | undefined;
+function makeRegistry(options: {
+  reserveResult?: boolean;
+  initial?: ActiveRunEntry[];
+} = {}): RunRegistryAdapter {
+  const rows = [...(options.initial ?? [])];
+  const reserve = vi.fn(async (reservation: RunReservation) => {
+    if (options.reserveResult === false || rows.some((row) => row.subjectKey === reservation.subjectKey)) {
+      return false;
+    }
+    const now = Date.now();
+    rows.push({ ...reservation, runId: null, state: "reserved", createdAt: now, updatedAt: now });
+    return true;
+  });
+  const releaseReservation = vi.fn(async (subjectKey: string, ownerToken: string) => {
+    const index = rows.findIndex(
+      (row) => row.subjectKey === subjectKey && row.ownerToken === ownerToken && row.state === "reserved",
+    );
+    if (index < 0) return false;
+    rows.splice(index, 1);
+    return true;
+  });
   return {
-    claim:
-      overrides.claim ??
-      vi.fn().mockImplementation(async (_key: string, value: string) => {
-        claimedValue = value;
-        return true;
-      }),
-    register: overrides.register ?? vi.fn().mockResolvedValue(undefined),
-    unregister: overrides.unregister ?? vi.fn().mockResolvedValue(undefined),
-    getRunId: overrides.getRunId ?? vi.fn().mockImplementation(async () => claimedValue),
-    listAll: overrides.listAll ?? vi.fn().mockResolvedValue([]),
+    reserve,
+    bindRun: vi.fn(),
+    handoff: vi.fn(),
+    get: vi.fn(),
+    releaseReservation,
+    release: vi.fn(),
+    listAll: vi.fn(async () => [...rows]),
     registerSandbox: vi.fn(),
-    getSandboxId: vi.fn(),
-    getEntryCreatedAt: vi.fn(),
+    listSandboxes: vi.fn(),
     markFailed: vi.fn(),
     isTicketFailed: vi.fn(),
     listAllFailed: vi.fn(),
     clearFailedMark: vi.fn(),
-  } as unknown as RunRegistryAdapter;
+  };
 }
 
-const db = {} as never;
+function active(subjectKey = "ticket:jira:OTHER-1"): ActiveRunEntry {
+  return {
+    subjectKey,
+    ticketKey: "OTHER-1",
+    ownerToken: "owner:existing",
+    runId: "run-existing",
+    state: "bound",
+    kind: "ticket",
+    createdAt: 1,
+    updatedAt: 1,
+  };
+}
 
 function makeIssueTracker(overrides: Partial<IssueTrackerAdapter> = {}): IssueTrackerAdapter {
   return {
@@ -86,71 +106,57 @@ function makeIssueTracker(overrides: Partial<IssueTrackerAdapter> = {}): IssueTr
   } as IssueTrackerAdapter;
 }
 
-let issueTracker: IssueTrackerAdapter;
+function dispatch(registry: RunRegistryAdapter, issueTracker = makeIssueTracker(), extra = {}) {
+  return dispatchPlanApproved({
+    db,
+    runRegistry: registry,
+    issueTracker,
+    approval: makeApproval(),
+    actor: { id: "u1", label: "Alice" },
+    maxConcurrentAgents: 3,
+    ...extra,
+  });
+}
 
-describe("dispatchPlanApproved", () => {
+describe("dispatchPlanApproved owner reservation", () => {
   beforeEach(() => {
     mockStart.mockReset();
-    mockGetRun.mockReset();
     mockGetDefinition.mockReset();
     mockGetVersion.mockReset();
     mockGetDeployedVersion.mockReset();
-    issueTracker = makeIssueTracker();
     mockStart.mockResolvedValue({ runId: "run-dispatched" });
-    // Definition present + not archived, pinned version resolves, head has moved on.
     mockGetDefinition.mockResolvedValue({ id: 7, archivedAt: null, enabled: false });
     mockGetVersion.mockResolvedValue({ definitionId: 7, version: 4 });
     mockGetDeployedVersion.mockResolvedValue({ definitionId: 7, version: 8 });
   });
 
-  it("returns definition_gone when the definition is archived", async () => {
-    mockGetDefinition.mockResolvedValue({ id: 7, archivedAt: new Date(), enabled: false });
+  it("returns definition_gone before reservation for an archived definition", async () => {
+    mockGetDefinition.mockResolvedValue({ id: 7, archivedAt: new Date() });
     const registry = makeRegistry();
-    const result = await dispatchPlanApproved({
-      db,
-      runRegistry: registry,
-      issueTracker,
-      approval: makeApproval(),
-      actor: { id: "u1", label: "Alice" },
-      maxConcurrentAgents: 3,
-    });
-    expect(result).toEqual({ status: "definition_gone" });
-    expect(registry.claim).not.toHaveBeenCalled();
-    expect(mockStart).not.toHaveBeenCalled();
+    expect(await dispatch(registry)).toEqual({ status: "definition_gone" });
+    expect(registry.reserve).not.toHaveBeenCalled();
   });
 
-  it("returns definition_gone when the pinned version no longer exists", async () => {
+  it("returns definition_gone before reservation when the pinned version is unavailable", async () => {
     mockGetVersion.mockResolvedValue(null);
     const registry = makeRegistry();
-    const result = await dispatchPlanApproved({
-      db,
-      runRegistry: registry,
-      issueTracker,
-      approval: makeApproval(),
-      actor: { id: "u1", label: "Alice" },
-      maxConcurrentAgents: 3,
-    });
-    expect(result).toEqual({ status: "definition_gone" });
-    expect(registry.claim).not.toHaveBeenCalled();
+    expect(await dispatch(registry)).toEqual({ status: "definition_gone" });
+    expect(registry.reserve).not.toHaveBeenCalled();
     expect(mockStart).not.toHaveBeenCalled();
   });
 
-  it("pins the stored version and runs it even after the head has advanced", async () => {
-    // Core of the bug fix: the approval pins v4; the definition head is now v9.
-    // The run must replay v4 (the version a human approved), never the head.
+  it("pins the approved version and passes immutable owner identity to the candidate", async () => {
     const registry = makeRegistry();
-    const result = await dispatchPlanApproved({
-      db,
-      runRegistry: registry,
-      issueTracker,
-      approval: makeApproval({ definitionVersion: 4 }),
-      actor: { id: "u1", label: "Alice" },
-      maxConcurrentAgents: 3,
-    });
-    expect(result.status).toBe("started");
-    expect(mockGetVersion).toHaveBeenCalledWith(expect.anything(), 7, 4);
+    expect(await dispatch(registry)).toEqual({ status: "started", runId: "run-dispatched" });
     expect(mockStart).toHaveBeenCalledWith("agentWorkflow_sentinel", [
-      expect.objectContaining({ definitionId: 7, definitionVersion: 4 }),
+      expect.objectContaining({
+        kind: "plan_approved",
+        subjectKey: "ticket:jira:AWT-1",
+        ticketKey: "AWT-1",
+        ownerToken: expect.stringMatching(/^owner:/),
+        definitionId: 7,
+        definitionVersion: 4,
+      }),
     ]);
   });
 
@@ -159,7 +165,7 @@ describe("dispatchPlanApproved", () => {
     const result = await dispatchPlanApproved({
       db,
       runRegistry: registry,
-      issueTracker,
+      issueTracker: makeIssueTracker(),
       approval: makeApproval({ definitionVersion: null }),
       actor: { id: "u1", label: "Alice" },
       maxConcurrentAgents: 3,
@@ -172,211 +178,64 @@ describe("dispatchPlanApproved", () => {
     ]);
   });
 
-  it("returns run_in_flight when the ticket is already claimed", async () => {
-    const registry = makeRegistry({ claim: vi.fn().mockResolvedValue(false) });
-    const result = await dispatchPlanApproved({
-      db,
-      runRegistry: registry,
-      issueTracker,
-      approval: makeApproval(),
-      actor: { id: "u1", label: "Alice" },
-      maxConcurrentAgents: 3,
-    });
-    expect(result).toEqual({ status: "run_in_flight" });
+  it("returns run_in_flight when the ticket subject is already reserved", async () => {
+    const registry = makeRegistry({ reserveResult: false });
+    expect(await dispatch(registry)).toEqual({ status: "run_in_flight" });
     expect(mockStart).not.toHaveBeenCalled();
   });
 
-  it("returns run_in_flight when already at capacity", async () => {
-    const registry = makeRegistry({
-      listAll: vi.fn().mockResolvedValue([
-        { ticketKey: "OTH-1", runId: "run-a" },
-        { ticketKey: "OTH-2", runId: "run-b" },
-      ]),
-    });
-    const result = await dispatchPlanApproved({
-      db,
-      runRegistry: registry,
-      issueTracker,
-      approval: makeApproval(),
-      actor: { id: "u1", label: "Alice" },
-      maxConcurrentAgents: 2,
-    });
-    expect(result).toEqual({ status: "run_in_flight" });
-    expect(registry.claim).not.toHaveBeenCalled();
+  it("returns run_in_flight when capacity is already full", async () => {
+    const registry = makeRegistry({ initial: [active(), active("ticket:jira:OTHER-2"), active("ticket:jira:OTHER-3")] });
+    expect(await dispatch(registry)).toEqual({ status: "run_in_flight" });
+    expect(registry.reserve).not.toHaveBeenCalled();
   });
 
-  it("starts the workflow, verifies the claim, registers, and runs onClaimed first", async () => {
-    const registry = makeRegistry();
+  it("runs decision, move, label, and start under one retained reservation", async () => {
     const order: string[] = [];
+    const issueTracker = makeIssueTracker({
+      moveTicket: vi.fn(async () => { order.push("move"); }),
+      updateLabels: vi.fn(async () => { order.push("label"); }),
+    });
     mockStart.mockImplementation(async () => {
       order.push("start");
       return { runId: "run-dispatched" };
     });
-    const result = await dispatchPlanApproved({
-      db,
-      runRegistry: registry,
-      issueTracker,
-      approval: makeApproval(),
-      actor: { id: "u1", label: "Alice" },
-      maxConcurrentAgents: 3,
-      onClaimed: async () => {
-        order.push("commit");
-      },
+    await dispatch(makeRegistry(), issueTracker, {
+      onClaimed: async () => { order.push("decision"); },
     });
-
-    expect(result).toEqual({ status: "started", runId: "run-dispatched" });
-    expect(order).toEqual(["commit", "start"]);
-    expect(mockStart).toHaveBeenCalledWith("agentWorkflow_sentinel", [
-      expect.objectContaining({
-        kind: "plan_approved",
-        ticketKey: "AWT-1",
-        definitionId: 7,
-        definitionVersion: 4,
-        approvedPlan: { markdown: "# Plan", assumptions: undefined },
-        approval: expect.objectContaining({ approvalRequestId: "appr-1", approver: "Alice" }),
-      }),
-    ]);
-    expect(registry.register).toHaveBeenCalledWith("AWT-1", "run-dispatched");
+    expect(order).toEqual(["decision", "move", "label", "start"]);
   });
 
-  it("releases the claim and rethrows when onClaimed throws", async () => {
+  it("owner-releases the unbound reservation when the protected decision throws", async () => {
     const registry = makeRegistry();
     await expect(
-      dispatchPlanApproved({
-        db,
-        runRegistry: registry,
-        issueTracker,
-        approval: makeApproval(),
-        actor: { id: "u1", label: "Alice" },
-        maxConcurrentAgents: 3,
-        onClaimed: async () => {
-          throw new Error("decision lost");
-        },
+      dispatch(registry, makeIssueTracker(), {
+        onClaimed: async () => { throw new Error("decision lost"); },
       }),
     ).rejects.toThrow("decision lost");
-    expect(registry.unregister).toHaveBeenCalledWith("AWT-1");
-    expect(mockStart).not.toHaveBeenCalled();
+    const reservation = vi.mocked(registry.reserve).mock.calls[0]![0];
+    expect(registry.releaseReservation).toHaveBeenCalledWith(
+      reservation.subjectKey,
+      reservation.ownerToken,
+    );
   });
 
-  it("releases the claim and rethrows when start throws after onClaimed", async () => {
-    const registry = makeRegistry();
+  it("owner-releases the unbound reservation when workflow start throws", async () => {
     mockStart.mockRejectedValue(new Error("start failed"));
-    const onClaimed = vi.fn().mockResolvedValue(undefined);
-    await expect(
-      dispatchPlanApproved({
-        db,
-        runRegistry: registry,
-        issueTracker,
-        approval: makeApproval(),
-        actor: { id: "u1", label: "Alice" },
-        maxConcurrentAgents: 3,
-        onClaimed,
-      }),
-    ).rejects.toThrow("start failed");
-    expect(onClaimed).toHaveBeenCalledOnce();
-    expect(registry.unregister).toHaveBeenCalledWith("AWT-1");
-    expect(registry.register).not.toHaveBeenCalled();
-  });
-
-  it("aborts the started run and keeps the claim when register fails after start", async () => {
-    // start() succeeded, so a failed post-start register must abort the run and
-    // NOT release the claim, or a retry could launch a second run for the ticket.
-    const mockCancel = vi.fn().mockResolvedValue(undefined);
-    mockGetRun.mockReturnValue({ cancel: mockCancel });
-    const register = vi.fn().mockRejectedValue(new Error("registry write failed"));
-    const registry = makeRegistry({ register });
-
-    await expect(
-      dispatchPlanApproved({
-        db,
-        runRegistry: registry,
-        issueTracker,
-        approval: makeApproval(),
-        actor: { id: "u1", label: "Alice" },
-        maxConcurrentAgents: 3,
-      }),
-    ).rejects.toThrow("registry write failed");
-
-    expect(mockStart).toHaveBeenCalled();
-    expect(register).toHaveBeenCalledTimes(3); // idempotent retry before giving up
-    expect(mockGetRun).toHaveBeenCalledWith("run-dispatched");
-    expect(mockCancel).toHaveBeenCalled(); // started run aborted
-    expect(registry.unregister).not.toHaveBeenCalled(); // claim kept → no duplicate
-  });
-
-  it("moves the ticket into the AI column under the claim, before start", async () => {
     const registry = makeRegistry();
-    const order: string[] = [];
-    const moveTicket = vi.fn().mockImplementation(async () => {
-      order.push("move");
-    });
-    const updateLabels = vi.fn().mockImplementation(async () => {
-      order.push("label");
-    });
-    issueTracker = makeIssueTracker({ moveTicket, updateLabels });
-    mockStart.mockImplementation(async () => {
-      order.push("start");
-      return { runId: "run-dispatched" };
-    });
-
-    const result = await dispatchPlanApproved({
-      db,
-      runRegistry: registry,
-      issueTracker,
-      approval: makeApproval(),
-      actor: { id: "u1", label: "Alice" },
-      maxConcurrentAgents: 3,
-      onClaimed: async () => {
-        order.push("commit");
-      },
-    });
-
-    expect(result).toEqual({ status: "started", runId: "run-dispatched" });
-    // Under the claim: decision (commit) -> move -> label -> start.
-    expect(order).toEqual(["commit", "move", "label", "start"]);
-    expect(moveTicket).toHaveBeenCalledWith("AWT-1", "AI");
-    expect(updateLabels).toHaveBeenCalledWith("AWT-1", { remove: ["awaiting-approval"] });
+    await expect(dispatch(registry)).rejects.toThrow("start failed");
+    const reservation = vi.mocked(registry.reserve).mock.calls[0]![0];
+    expect(registry.releaseReservation).toHaveBeenCalledWith(
+      reservation.subjectKey,
+      reservation.ownerToken,
+    );
   });
 
-  it("propagates a move failure, starts no run, and releases the claim (retryable)", async () => {
+  it("propagates a move failure and starts no candidate", async () => {
     const registry = makeRegistry();
-    const moveTicket = vi.fn().mockRejectedValue(new Error("jira move failed"));
-    issueTracker = makeIssueTracker({ moveTicket });
-
     await expect(
-      dispatchPlanApproved({
-        db,
-        runRegistry: registry,
-        issueTracker,
-        approval: makeApproval(),
-        actor: { id: "u1", label: "Alice" },
-        maxConcurrentAgents: 3,
-        onClaimed: vi.fn().mockResolvedValue(undefined),
-      }),
+      dispatch(registry, makeIssueTracker({ moveTicket: vi.fn().mockRejectedValue(new Error("jira move failed")) })),
     ).rejects.toThrow("jira move failed");
-
     expect(mockStart).not.toHaveBeenCalled();
-    expect(registry.unregister).toHaveBeenCalledWith("AWT-1"); // claim released
-    expect(registry.register).not.toHaveBeenCalled();
-  });
-
-  it("does not fail the dispatch when the post-move label removal fails", async () => {
-    const registry = makeRegistry();
-    const moveTicket = vi.fn().mockResolvedValue(undefined);
-    const updateLabels = vi.fn().mockRejectedValue(new Error("label boom"));
-    issueTracker = makeIssueTracker({ moveTicket, updateLabels });
-
-    const result = await dispatchPlanApproved({
-      db,
-      runRegistry: registry,
-      issueTracker,
-      approval: makeApproval(),
-      actor: { id: "u1", label: "Alice" },
-      maxConcurrentAgents: 3,
-    });
-
-    expect(result).toEqual({ status: "started", runId: "run-dispatched" });
-    expect(moveTicket).toHaveBeenCalledWith("AWT-1", "AI");
-    expect(mockStart).toHaveBeenCalled();
   });
 });

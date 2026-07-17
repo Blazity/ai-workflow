@@ -5,9 +5,6 @@ import type {
   WorkflowDefinitionEdge,
   WorkflowDefinitionNode,
 } from "@shared/contracts";
-import type { RunRegistryAdapter } from "../adapters/run-registry/types.js";
-import type { IssueTrackerAdapter } from "../adapters/issue-tracker/types.js";
-import type { TriggerEvent } from "../lib/trigger-events.js";
 
 // One file, four source areas. vi.mock is hoisted and file-scoped, so we mock
 // the union of every dependency once. The env module (apps/worker/env.ts) is
@@ -25,13 +22,6 @@ const H = vi.hoisted(() => ({
   },
 }));
 vi.mock("../../env.js", () => ({ env: H.env }));
-
-const mockStart = vi.fn();
-const mockGetRun = vi.fn();
-vi.mock("workflow/api", () => ({
-  start: (...args: any[]) => mockStart(...args),
-  getRun: (...args: any[]) => mockGetRun(...args),
-}));
 
 const mockGetCurrentVersion = vi.fn();
 const mockGetDeployedVersion = vi.fn();
@@ -55,18 +45,6 @@ vi.mock("../lib/logger.js", () => ({
     warn: (...a: any[]) => loggerWarn(...a),
     error: (...a: any[]) => loggerError(...a),
   },
-}));
-
-vi.mock("./agent.js", () => ({ agentWorkflow: "agentWorkflow_sentinel" }));
-
-const mockStopTicketSandboxes = vi.fn();
-vi.mock("../sandbox/stop-ticket-sandboxes.js", () => ({
-  stopTicketSandboxes: (...args: any[]) => mockStopTicketSandboxes(...args),
-}));
-
-const mockCancelRun = vi.fn();
-vi.mock("../lib/cancel-run.js", () => ({
-  cancelRun: (...args: any[]) => mockCancelRun(...args),
 }));
 
 vi.mock("../db/client.js", () => ({ getDb: vi.fn(() => ({})) }));
@@ -261,329 +239,9 @@ describe("loadWorkflowDefinitionFor edge cases", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Area 3: dispatchTriggerEvent (real module via importActual)
+// Durable trigger dispatch and owner-CAS reconciliation now have dedicated
+// focused suites: lib/dispatch-trigger.test.ts and lib/reconcile.test.ts.
 // ---------------------------------------------------------------------------
-function makeRegistry(
-  overrides: Partial<Record<keyof RunRegistryAdapter, ReturnType<typeof vi.fn>>> = {},
-): RunRegistryAdapter {
-  let claimedValue: string | undefined;
-  return {
-    claim:
-      overrides.claim ??
-      vi.fn().mockImplementation(async (_key: string, value: string) => {
-        claimedValue = value;
-        return true;
-      }),
-    register: overrides.register ?? vi.fn().mockResolvedValue(undefined),
-    unregister: overrides.unregister ?? vi.fn().mockResolvedValue(undefined),
-    unregisterIfRunId: vi.fn().mockResolvedValue(undefined),
-    getRunId: overrides.getRunId ?? vi.fn().mockImplementation(async () => claimedValue),
-    listAll: overrides.listAll ?? vi.fn().mockResolvedValue([]),
-    registerSandbox: vi.fn().mockResolvedValue(undefined),
-    getSandboxId: vi.fn().mockResolvedValue(null),
-    getEntryCreatedAt: vi.fn().mockResolvedValue(null),
-    markFailed: vi.fn().mockResolvedValue(undefined),
-    isTicketFailed: vi.fn().mockResolvedValue(false),
-    listAllFailed: vi.fn().mockResolvedValue([]),
-    clearFailedMark: vi.fn().mockResolvedValue(undefined),
-  };
-}
-
-function makeEnabledDefinition() {
-  return {
-    definition: { id: 5, name: "PR flow" },
-    current: {
-      definition: {
-        schemaVersion: 1,
-        nodes: [
-          {
-            id: "t1",
-            type: "trigger_pr_created",
-            x: 0,
-            y: 0,
-            params: {},
-          },
-        ],
-        edges: [],
-      },
-    },
-  };
-}
-
-function prEvent(headRef = "blazebot/aiw-1"): TriggerEvent {
-  return {
-    triggerType: "trigger_pr_created",
-    pr: {
-      provider: "github",
-      repoPath: "acme/app",
-      prNumber: 7,
-      prUrl: "https://github.com/acme/app/pull/7",
-      headRef,
-      headSha: "abc123",
-      baseRef: "main",
-      title: "Fix",
-      author: "blazebot[bot]",
-      isDraft: false,
-    },
-  };
-}
-
-async function loadRealDispatch() {
-  const mod = await vi.importActual<typeof import("../lib/dispatch-trigger.js")>(
-    "../lib/dispatch-trigger.js",
-  );
-  return mod.dispatchTriggerEvent;
-}
-
-describe("dispatchTriggerEvent edge cases", () => {
-  beforeEach(() => {
-    mockStart.mockReset();
-    mockGetRun.mockReset();
-    mockGetEnabled.mockReset();
-    mockStopTicketSandboxes.mockReset();
-    mockStart.mockResolvedValue({ runId: "run_pr" });
-    mockStopTicketSandboxes.mockResolvedValue(0);
-  });
-
-  it("returns error when the claim throws", async () => {
-    mockGetEnabled.mockResolvedValue(makeEnabledDefinition());
-    const registry = makeRegistry({
-      claim: vi.fn().mockRejectedValue(new Error("db down")),
-    });
-    const dispatchTriggerEvent = await loadRealDispatch();
-
-    const result = await dispatchTriggerEvent(prEvent(), {
-      db: {} as any,
-      runRegistry: registry,
-      maxConcurrentAgents: 3,
-    });
-
-    expect(result).toEqual({ result: "error" });
-    expect(mockStart).not.toHaveBeenCalled();
-  });
-
-  it("ignores a non-bot branch (ticket key cannot be derived)", async () => {
-    mockGetEnabled.mockResolvedValue(makeEnabledDefinition());
-    const registry = makeRegistry();
-    const dispatchTriggerEvent = await loadRealDispatch();
-
-    const result = await dispatchTriggerEvent(prEvent("feature/x"), {
-      db: {} as any,
-      runRegistry: registry,
-      maxConcurrentAgents: 3,
-    });
-
-    expect(result).toEqual({ result: "ignored_not_workflow_owned" });
-    expect(registry.claim).not.toHaveBeenCalled();
-    expect(mockStart).not.toHaveBeenCalled();
-  });
-
-  it("dispatches even when no node matches the event trigger type (triggerNode undefined)", async () => {
-    mockGetEnabled.mockResolvedValue({
-      definition: { id: 5, name: "mismatch" },
-      current: {
-        definition: {
-          schemaVersion: 1,
-          nodes: [{ id: "t1", type: "trigger_ticket_ai", x: 0, y: 0, params: {} }],
-          edges: [],
-        },
-      },
-    });
-    const registry = makeRegistry();
-    const dispatchTriggerEvent = await loadRealDispatch();
-
-    const result = await dispatchTriggerEvent(prEvent(), {
-      db: {} as any,
-      runRegistry: registry,
-      maxConcurrentAgents: 3,
-    });
-
-    expect(result).toEqual({ result: "started", runId: "run_pr" });
-    expect(registry.claim).toHaveBeenCalled();
-    expect(mockStart).toHaveBeenCalled();
-  });
-
-  it("coalesces and aborts the started run when the claim was overwritten after start", async () => {
-    mockGetEnabled.mockResolvedValue(makeEnabledDefinition());
-    const cancelSpy = vi.fn().mockResolvedValue(undefined);
-    mockGetRun.mockReturnValue({ cancel: cancelSpy });
-    const registry = makeRegistry({
-      getRunId: vi.fn().mockResolvedValue("run_other"),
-    });
-    const dispatchTriggerEvent = await loadRealDispatch();
-
-    const result = await dispatchTriggerEvent(prEvent(), {
-      db: {} as any,
-      runRegistry: registry,
-      maxConcurrentAgents: 3,
-    });
-
-    expect(result).toEqual({ result: "coalesced" });
-    expect(mockGetRun).toHaveBeenCalledWith("run_pr");
-    expect(cancelSpy).toHaveBeenCalled();
-    expect(mockStopTicketSandboxes).toHaveBeenCalledWith("AIW-1");
-    expect(registry.register).not.toHaveBeenCalled();
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Area 4: reconcileRuns
-// ---------------------------------------------------------------------------
-function makeReconcileRegistry(
-  runs: Array<{ ticketKey: string; runId: string; kind?: string }> = [],
-  failed: Array<{ ticketKey: string; meta: { runId: string; error: string; failedAt: string } }> = [],
-): RunRegistryAdapter {
-  return {
-    claim: vi.fn(),
-    register: vi.fn(),
-    getRunId: vi.fn(),
-    unregister: vi.fn().mockResolvedValue(undefined),
-    unregisterIfRunId: vi.fn().mockResolvedValue(undefined),
-    listAll: vi.fn().mockResolvedValue(runs),
-    registerSandbox: vi.fn().mockResolvedValue(undefined),
-    getSandboxId: vi.fn().mockResolvedValue(null),
-    getEntryCreatedAt: vi.fn().mockResolvedValue(null),
-    markFailed: vi.fn().mockResolvedValue(undefined),
-    isTicketFailed: vi.fn().mockResolvedValue(false),
-    listAllFailed: vi.fn().mockResolvedValue(failed),
-    clearFailedMark: vi.fn().mockResolvedValue(undefined),
-  };
-}
-
-function makeIssueTracker(overrides: Partial<IssueTrackerAdapter> = {}): IssueTrackerAdapter {
-  return {
-    fetchTicket: vi.fn(),
-    moveTicket: vi.fn(),
-    postComment: vi.fn().mockResolvedValue(null),
-    searchTickets: vi.fn(),
-    ...overrides,
-  };
-}
-
-function ticket(identifier: string, trackerStatus: string, projectKey = "PROJ") {
-  return {
-    id: `id-${identifier}`,
-    identifier,
-    projectKey,
-    title: "x",
-    description: "",
-    acceptanceCriteria: "",
-    comments: [],
-    labels: [],
-    trackerStatus,
-  };
-}
-
-describe("reconcileRuns edge cases", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mockStopTicketSandboxes.mockResolvedValue(0);
-  });
-
-  it("cancels a still-running finalizing ticket run without ever checking its run status", async () => {
-    // GOTCHA: the left-column branch never inspects run status, so a run that
-    // finalized its own update_ticket_status (moving the ticket out of AI) is
-    // killed exactly like an orphan. Documents current behavior; the desired
-    // behavior would be to NOT cancel a run still finalizing its transition.
-    const registry = makeReconcileRegistry([
-      { ticketKey: "PROJ-901", runId: "run_finalizing", kind: "ticket" },
-    ]);
-    mockCancelRun.mockResolvedValue(true);
-    const issueTracker = makeIssueTracker({
-      fetchTicket: vi.fn().mockResolvedValue(ticket("PROJ-901", "Done")),
-    });
-    // If the code ever consulted run status it would use this; assert it does not.
-    mockGetRun.mockReturnValue({ status: Promise.resolve("running") });
-    const { reconcileRuns } = await import("../lib/reconcile.js");
-
-    const result = await reconcileRuns(new Set(), registry, issueTracker);
-
-    expect(result).toEqual({ cancelled: 1, cleaned: 0 });
-    expect(mockCancelRun).toHaveBeenCalledWith("PROJ-901", "run_finalizing", registry);
-    expect(mockGetRun).not.toHaveBeenCalled();
-  });
-
-  it("skips a fresh non-sentinel orphan inside the grace window", async () => {
-    const registry = makeReconcileRegistry([
-      { ticketKey: "PROJ-902", runId: "run_fresh", kind: "ticket" },
-    ]);
-    (registry.getEntryCreatedAt as ReturnType<typeof vi.fn>).mockResolvedValue(Date.now() - 5000);
-    const { reconcileRuns } = await import("../lib/reconcile.js");
-
-    const result = await reconcileRuns(new Set(), registry);
-
-    expect(result).toEqual({ cancelled: 0, cleaned: 0 });
-    expect(mockCancelRun).not.toHaveBeenCalled();
-  });
-
-  it("cancels the same orphan once the grace window has lapsed", async () => {
-    const registry = makeReconcileRegistry([
-      { ticketKey: "PROJ-903", runId: "run_old", kind: "ticket" },
-    ]);
-    (registry.getEntryCreatedAt as ReturnType<typeof vi.fn>).mockResolvedValue(Date.now() - 60_000);
-    mockCancelRun.mockResolvedValue(true);
-    const { reconcileRuns } = await import("../lib/reconcile.js");
-
-    const result = await reconcileRuns(new Set(), registry);
-
-    expect(result).toEqual({ cancelled: 1, cleaned: 0 });
-    expect(mockCancelRun).toHaveBeenCalledWith("PROJ-903", "run_old", registry);
-  });
-
-  it("does not clear a failed marker that is still inside the grace window", async () => {
-    const registry = makeReconcileRegistry(
-      [],
-      [
-        {
-          ticketKey: "PROJ-904",
-          meta: { runId: "run_a", error: "move failed", failedAt: new Date().toISOString() },
-        },
-      ],
-    );
-    const { reconcileRuns } = await import("../lib/reconcile.js");
-
-    await reconcileRuns(new Set(), registry);
-
-    expect(registry.clearFailedMark).not.toHaveBeenCalled();
-  });
-
-  it("cancels an inflight ticket claim that left AI, verified via the issue tracker", async () => {
-    // Aged past the orphan grace (but not yet stale) so the inflight-claim
-    // cancel path runs: a fresh claim outside AI is now spared for the grace
-    // window (a resume dispatch claims before moving the ticket into AI).
-    const oneMinAgo = Date.now() - 60 * 1000;
-    const registry = makeReconcileRegistry([
-      { ticketKey: "PROJ-905", runId: `claiming:${oneMinAgo}`, kind: "ticket" },
-    ]);
-    const issueTracker = makeIssueTracker({
-      fetchTicket: vi.fn().mockResolvedValue(ticket("PROJ-905", "Done")),
-    });
-    const onTicketCancelled = vi.fn().mockResolvedValue(undefined);
-    const { reconcileRuns } = await import("../lib/reconcile.js");
-
-    const result = await reconcileRuns(new Set(), registry, issueTracker, onTicketCancelled);
-
-    expect(result).toEqual({ cancelled: 1, cleaned: 0 });
-    expect(registry.unregister).toHaveBeenCalledWith("PROJ-905");
-    expect(mockStopTicketSandboxes).toHaveBeenCalledWith("PROJ-905", null);
-    expect(onTicketCancelled).toHaveBeenCalledWith("PROJ-905", "inflight_claim");
-  });
-
-  it("swallows a throwing onTicketCancelled callback and still reports the cancellation", async () => {
-    const registry = makeReconcileRegistry([
-      { ticketKey: "PROJ-906", runId: "run_orphan", kind: "ticket" },
-    ]);
-    mockCancelRun.mockResolvedValue(true);
-    const onTicketCancelled = vi.fn().mockRejectedValue(new Error("slack down"));
-    const { reconcileRuns } = await import("../lib/reconcile.js");
-
-    const result = await reconcileRuns(new Set(), registry, undefined, onTicketCancelled);
-
-    expect(result).toEqual({ cancelled: 1, cleaned: 0 });
-    expect(onTicketCancelled).toHaveBeenCalledWith("PROJ-906", "orphaned_run");
-  });
-});
-
 // ---------------------------------------------------------------------------
 // Area 5: POST /webhooks/github route
 // ---------------------------------------------------------------------------
@@ -605,6 +263,7 @@ function rawRequest(rawBody: string, ghEvent = "pull_request"): Request {
       "content-type": "application/json",
       "x-hub-signature-256": "sha256=whatever",
       "x-github-event": ghEvent,
+      "x-github-delivery": "delivery-edge-test",
     },
     body: rawBody,
   });

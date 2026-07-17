@@ -1,4 +1,4 @@
-import { getRun, start } from "workflow/api";
+import { start } from "workflow/api";
 import { env } from "../../env.js";
 import type { Db } from "../db/client.js";
 import type { RunRegistryAdapter } from "../adapters/run-registry/types.js";
@@ -13,21 +13,9 @@ import {
 import { aiColumnMoveTarget } from "../lib/move-targets.js";
 import { AWAITING_APPROVAL_LABEL } from "../lib/labels.js";
 import { logger } from "../lib/logger.js";
+import { claimTicketRun } from "../lib/dispatch.js";
+import { ticketSubjectKey } from "../lib/subject-key.js";
 import type { ApprovalRow } from "./store.js";
-
-// Mirrored from lib/dispatch.ts (kept in sync deliberately, not imported, so
-// this module stays free of the ticket-dispatch import chain): plan_approved
-// runs share the same claiming-sentinel + stale-claim horizon as ticket runs.
-const CLAIMING_PREFIX = "claiming:";
-const STALE_CLAIM_MS = 5 * 60 * 1000;
-
-function isClaimingSentinel(runId: string): boolean {
-  return runId.startsWith(CLAIMING_PREFIX);
-}
-
-function getClaimTimestamp(runId: string): number {
-  return parseInt(runId.slice(CLAIMING_PREFIX.length), 10);
-}
 
 export type DispatchPlanApprovedResult =
   | { status: "definition_gone" }
@@ -35,11 +23,10 @@ export type DispatchPlanApprovedResult =
   | { status: "started"; runId: string };
 
 /**
- * Starts a trigger_plan_approved run for an approved plan. Mirrors the
- * claim + capacity dance in lib/dispatch.ts (claiming sentinel, post-claim
- * fairness re-check) so plan_approved runs count against the same per-app
- * concurrency limit as ticket runs, then registers the run under a plain
- * ticket entry (no run-kind param) so reconcile treats it like any other.
+ * Starts a trigger_plan_approved run for an approved plan. It uses the same
+ * owner-CAS reservation and capacity path as direct ticket dispatch. The
+ * workflow candidate binds its own runtime id on entry; this dispatcher never
+ * overwrites an owner after start.
  *
  * The optional onClaimed gate runs once the ticket is reserved and before the
  * workflow starts; a caller passes the compare-and-set decision there so the
@@ -83,162 +70,63 @@ export async function dispatchPlanApproved(input: {
     return { status: "definition_gone" };
   }
 
-  if (await isAtCapacity(maxConcurrentAgents, runRegistry)) {
-    return { status: "run_in_flight" };
-  }
-
-  const claimValue = `${CLAIMING_PREFIX}${Date.now()}`;
-  const claimed = await runRegistry.claim(ticketKey, claimValue);
-  if (!claimed) {
-    logger.info({ ticketKey }, "plan_approved_already_claimed");
-    return { status: "run_in_flight" };
-  }
-  let claimHeld = true;
-  let startedRunId: string | null = null;
-
-  try {
-    // Post-claim fairness re-check (mirrors lib/dispatch.ts): the precheck is
-    // not atomic with claim(), so re-read with our own claim visible and bail
-    // if we are over the cap.
-    const racers = await runRegistry.listAll();
-    const now = Date.now();
-    const liveRacers = racers.filter(({ runId }) => {
-      if (!isClaimingSentinel(runId)) return true;
-      return now - getClaimTimestamp(runId) <= STALE_CLAIM_MS;
-    });
-    if (liveRacers.length > maxConcurrentAgents) {
-      const sorted = [...liveRacers].sort((a, b) => {
-        const ta = isClaimingSentinel(a.runId) ? getClaimTimestamp(a.runId) : 0;
-        const tb = isClaimingSentinel(b.runId) ? getClaimTimestamp(b.runId) : 0;
-        if (ta !== tb) return ta - tb;
-        return a.ticketKey.localeCompare(b.ticketKey);
-      });
-      const winners = new Set(sorted.slice(0, maxConcurrentAgents).map((e) => e.ticketKey));
-      if (!winners.has(ticketKey)) {
-        await runRegistry.unregister(ticketKey).catch(() => {});
-        claimHeld = false;
-        return { status: "run_in_flight" };
-      }
-    }
-
-    if (onClaimed) {
-      await onClaimed();
-    }
-
-    // Move the ticket INTO the AI column before starting the run: the plan was
-    // filed from the backlog, and reconcile cancels a registered plan_approved
-    // run whose ticket is not in the AI column, so the run must never start with
-    // the ticket still parked. A move failure propagates through the catch below:
-    // the claim is released and the approval stays approved-with-null-dispatched
-    // run id, which the endpoint treats as retryable, and no run is started.
-    await issueTracker.moveTicket(ticketKey, aiColumnMoveTarget(env));
-
-    // Best-effort label removal AFTER the move: removing it while the ticket is
-    // still in the backlog fires a label-change webhook that would see the
-    // backlog status and cancel our own claim.
-    if (typeof issueTracker.updateLabels === "function") {
+  let dispatchError: unknown;
+  const result = await claimTicketRun(ticketKey, runRegistry, maxConcurrentAgents, {
+    kind: "ticket",
+    postClaimGuard: async () => {
       try {
-        await issueTracker.updateLabels(ticketKey, { remove: [AWAITING_APPROVAL_LABEL] });
+        if (onClaimed) await onClaimed();
+
+        await issueTracker.moveTicket(ticketKey, aiColumnMoveTarget(env));
+
+        if (typeof issueTracker.updateLabels === "function") {
+          try {
+            await issueTracker.updateLabels(ticketKey, { remove: [AWAITING_APPROVAL_LABEL] });
+          } catch (err) {
+            logger.warn(
+              { ticketKey, error: (err as Error).message },
+              "plan_approved_label_remove_failed",
+            );
+          }
+        }
+        return null;
       } catch (err) {
-        logger.warn(
-          { ticketKey, error: (err as Error).message },
-          "plan_approved_label_remove_failed",
-        );
+        dispatchError = err;
+        throw err;
       }
-    }
+    },
+    startWorkflow: async (ownerToken) => {
+      try {
+        const entry: AgentWorkflowInput = {
+          kind: "plan_approved",
+          subjectKey: ticketSubjectKey("jira", ticketKey),
+          ticketKey,
+          ownerToken,
+          definitionId: approval.definitionId,
+          definitionVersion: pinned.version,
+          approvedPlan: {
+            markdown: approval.plan.markdown,
+            assumptions: approval.assumptions ?? undefined,
+          },
+          approval: {
+            approvalRequestId: approval.id,
+            approver: actor.label,
+            approvedAt: new Date().toISOString(),
+          },
+        };
+        const handle = await start(agentWorkflow, [entry]);
+        logger.info({ ticketKey, runId: handle.runId }, "plan_approved_workflow_started");
+        return handle.runId;
+      } catch (err) {
+        dispatchError = err;
+        throw err;
+      }
+    },
+  });
 
-    const entry: AgentWorkflowInput = {
-      kind: "plan_approved",
-      ticketKey,
-      definitionId: approval.definitionId,
-      // Pin the resolved version so the run replays the reviewed graph, never the
-      // head. For a legacy null-version row this is the head captured just above.
-      definitionVersion: pinned.version,
-      approvedPlan: {
-        markdown: approval.plan.markdown,
-        assumptions: approval.assumptions ?? undefined,
-      },
-      approval: {
-        approvalRequestId: approval.id,
-        approver: actor.label,
-        approvedAt: new Date().toISOString(),
-      },
-    };
-    const handle = await start(agentWorkflow, [entry]);
-    startedRunId = handle.runId;
-    logger.info({ ticketKey, runId: handle.runId }, "plan_approved_workflow_started");
-
-    const stillHeld = (await runRegistry.getRunId(ticketKey)) === claimValue;
-    if (!stillHeld) {
-      await abortWorkflow(handle.runId);
-      claimHeld = false;
-      return { status: "run_in_flight" };
-    }
-
-    await registerWithRetry(runRegistry, ticketKey, handle.runId);
-    claimHeld = false;
-    return { status: "started", runId: handle.runId };
-  } catch (err) {
-    if (startedRunId) {
-      // The workflow started but we could not verify or register it. Abort the
-      // just-started run and KEEP the claim: leaving our sentinel in place stops
-      // a retry from launching a second run for the same ticket, and reconcile's
-      // stale-claim sweep releases it once the horizon passes.
-      await abortWorkflow(startedRunId);
-    } else if (claimHeld) {
-      await runRegistry.unregister(ticketKey).catch(() => {});
-    }
-    throw err;
+  if (!result.started) {
+    if (result.reason === "error" && dispatchError) throw dispatchError;
+    return { status: "run_in_flight" };
   }
-}
-
-/**
- * Idempotent register with a short retry — register() is an ON CONFLICT DO UPDATE
- * upsert on active_runs, so retrying a transient failure is safe and avoids
- * aborting a healthy run. If every attempt fails the caller aborts the started
- * run and keeps the claim so no duplicate run can be dispatched.
- */
-async function registerWithRetry(
-  runRegistry: RunRegistryAdapter,
-  ticketKey: string,
-  runId: string,
-): Promise<void> {
-  let lastError: unknown;
-  for (let attempt = 1; attempt <= 3; attempt++) {
-    try {
-      await runRegistry.register(ticketKey, runId);
-      return;
-    } catch (err) {
-      lastError = err;
-    }
-  }
-  throw lastError;
-}
-
-/**
- * Counts active runs against the per-app cap, excluding claiming sentinels
- * older than STALE_CLAIM_MS. Fails closed on registry errors so a failed read
- * stalls new dispatches instead of over-allocating.
- */
-async function isAtCapacity(max: number, runRegistry: RunRegistryAdapter): Promise<boolean> {
-  let entries: Awaited<ReturnType<RunRegistryAdapter["listAll"]>>;
-  try {
-    entries = await runRegistry.listAll();
-  } catch (err) {
-    logger.warn({ max, error: (err as Error).message }, "plan_approved_capacity_check_failed_closed");
-    return true;
-  }
-  const now = Date.now();
-  const active = entries.filter(({ runId }) => {
-    if (!isClaimingSentinel(runId)) return true;
-    return now - getClaimTimestamp(runId) <= STALE_CLAIM_MS;
-  }).length;
-  return active >= max;
-}
-
-async function abortWorkflow(runId: string): Promise<void> {
-  try {
-    const run = getRun(runId);
-    await run.cancel();
-  } catch {}
+  return { status: "started", runId: result.runId! };
 }

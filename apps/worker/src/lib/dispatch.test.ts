@@ -1,43 +1,97 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type {
+  ActiveRunEntry,
+  RunRegistryAdapter,
+  RunReservation,
+  ThreadStore,
+} from "../adapters/run-registry/types.js";
 import type { Adapters } from "./adapters.js";
-import type { TicketContent } from "../adapters/issue-tracker/types.js";
 
 vi.mock("../../env.js", () => ({
-  env: {
-    JIRA_PROJECT_KEY: "PROJ",
-    COLUMN_AI: "AI",
-  },
+  env: { JIRA_PROJECT_KEY: "PROJ", COLUMN_AI: "AI" },
 }));
-
 const mockStart = vi.fn();
-const mockGetRun = vi.fn();
-vi.mock("workflow/api", () => ({
-  start: (...args: any[]) => mockStart(...args),
-  getRun: (...args: any[]) => mockGetRun(...args),
-}));
-
-vi.mock("../workflows/agent.js", () => ({
-  agentWorkflow: "agentWorkflow_sentinel",
-}));
+vi.mock("workflow/api", () => ({ start: (...args: any[]) => mockStart(...args) }));
+vi.mock("../workflows/agent.js", () => ({ agentWorkflow: "agentWorkflow_sentinel" }));
 
 vi.mock("../db/client.js", () => ({ getDb: vi.fn(() => ({})) }));
 const mockGetEnabled = vi.fn();
 vi.mock("../workflow-definition/store.js", () => ({
-  getEnabledWorkflowDefinitionForTrigger: (...args: unknown[]) => mockGetEnabled(...args),
+  getEnabledWorkflowDefinitionForTrigger: (...args: any[]) => mockGetEnabled(...args),
 }));
 
-const mockStopTicketSandboxes = vi.fn();
-vi.mock("../sandbox/stop-ticket-sandboxes.js", () => ({
-  stopTicketSandboxes: (...args: any[]) => mockStopTicketSandboxes(...args),
-}));
+const { dispatchTicket, STALE_CLAIM_MS } = await import("./dispatch.js");
 
-function makeTicket(overrides: Partial<TicketContent> = {}): TicketContent {
+function entry(overrides: Partial<ActiveRunEntry> = {}): ActiveRunEntry {
   return {
-    id: "ticket-001",
+    subjectKey: "ticket:jira:OTHER-1",
+    ticketKey: "OTHER-1",
+    ownerToken: "owner:other",
+    runId: "run-other",
+    state: "bound",
+    kind: "ticket",
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+    ...overrides,
+  };
+}
+
+function registry(options: {
+  reserveResult?: boolean;
+  initial?: ActiveRunEntry[];
+  listError?: Error;
+  failed?: boolean;
+  failedError?: Error;
+} = {}): RunRegistryAdapter & ThreadStore {
+  const rows = [...(options.initial ?? [])];
+  return {
+    reserve: vi.fn(async (reservation: RunReservation) => {
+      if (options.reserveResult === false || rows.some((row) => row.subjectKey === reservation.subjectKey)) {
+        return false;
+      }
+      const now = Date.now();
+      rows.push({ ...reservation, runId: null, state: "reserved", createdAt: now, updatedAt: now });
+      return true;
+    }),
+    bindRun: vi.fn(),
+    handoff: vi.fn(),
+    get: vi.fn(async (subjectKey) => rows.find((row) => row.subjectKey === subjectKey) ?? null),
+    releaseReservation: vi.fn(async (subjectKey, ownerToken) => {
+      const index = rows.findIndex(
+        (row) => row.subjectKey === subjectKey && row.ownerToken === ownerToken && row.state === "reserved",
+      );
+      if (index < 0) return false;
+      rows.splice(index, 1);
+      return true;
+    }),
+    release: vi.fn(),
+    listAll: vi.fn(async () => {
+      if (options.listError) throw options.listError;
+      return [...rows];
+    }),
+    registerSandbox: vi.fn(),
+    listSandboxes: vi.fn(),
+    markFailed: vi.fn(),
+    isTicketFailed: vi.fn(async () => {
+      if (options.failedError) throw options.failedError;
+      return options.failed ?? false;
+    }),
+    listAllFailed: vi.fn(),
+    clearFailedMark: vi.fn(),
+    getParent: vi.fn(),
+    setParent: vi.fn(),
+    clearParent: vi.fn(),
+  };
+}
+
+function ticket(overrides: Record<string, unknown> = {}) {
+  return {
+    id: "ticket-id",
     identifier: "PROJ-42",
-    title: "Test ticket",
-    description: "Some description",
-    acceptanceCriteria: "AC here",
+    projectKey: "PROJ",
+    title: "Implement it",
+    description: "",
+    acceptanceCriteria: "",
     comments: [],
     labels: [],
     trackerStatus: "AI",
@@ -46,532 +100,167 @@ function makeTicket(overrides: Partial<TicketContent> = {}): TicketContent {
   };
 }
 
-function makeAdapters(
-  overrides: Partial<{
-    claim: ReturnType<typeof vi.fn>;
-    register: ReturnType<typeof vi.fn>;
-    unregister: ReturnType<typeof vi.fn>;
-    getRunId: ReturnType<typeof vi.fn>;
-    fetchTicket: ReturnType<typeof vi.fn>;
-    findPR: ReturnType<typeof vi.fn>;
-    isTicketFailed: ReturnType<typeof vi.fn>;
-    listAll: ReturnType<typeof vi.fn>;
-  }> = {},
-): Adapters {
-  let claimedValue: string | undefined;
-
+function adapters(runRegistry = registry(), ticketValue = ticket()): Adapters {
   return {
+    runRegistry,
     issueTracker: {
-      fetchTicket:
-        overrides.fetchTicket ?? vi.fn().mockResolvedValue(makeTicket()),
+      fetchTicket: vi.fn().mockResolvedValue(ticketValue),
       moveTicket: vi.fn(),
-      postComment: vi.fn().mockResolvedValue(null),
+      postComment: vi.fn(),
       searchTickets: vi.fn(),
     },
-    vcs: {
-      createBranch: vi.fn(),
-      createPR: vi.fn(),
-      push: vi.fn(),
-      getPRComments: vi.fn(),
-      postPRComment: vi.fn().mockResolvedValue({ url: null }),
-      getCheckRunResults: vi.fn().mockResolvedValue([]),
-      getPRConflictStatus: vi.fn(),
-      findPR: overrides.findPR ?? vi.fn().mockResolvedValue(null),
-      getBranchSha: vi.fn().mockResolvedValue("abc123"),
-    },
-    messaging: {
-      notifyForTicket: vi.fn(),
-    },
-    runRegistry: {
-      claim:
-        overrides.claim ??
-        vi.fn().mockImplementation(async (_key: string, value: string) => {
-          claimedValue = value;
-          return true;
-        }),
-      register: overrides.register ?? vi.fn().mockResolvedValue(undefined),
-      unregister: overrides.unregister ?? vi.fn().mockResolvedValue(undefined),
-      unregisterIfRunId: vi.fn().mockResolvedValue(undefined),
-      getRunId:
-        overrides.getRunId ??
-        vi.fn().mockImplementation(async () => claimedValue),
-      listAll: overrides.listAll ?? vi.fn().mockResolvedValue([]),
-      registerSandbox: vi.fn().mockResolvedValue(undefined),
-      getSandboxId: vi.fn().mockResolvedValue(null),
-      getEntryCreatedAt: vi.fn().mockResolvedValue(null),
-      markFailed: vi.fn().mockResolvedValue(undefined),
-      isTicketFailed: overrides.isTicketFailed ?? vi.fn().mockResolvedValue(false),
-      listAllFailed: vi.fn().mockResolvedValue([]),
-      clearFailedMark: vi.fn().mockResolvedValue(undefined),
-      getParent: vi.fn().mockResolvedValue(null),
-      setParent: vi.fn().mockResolvedValue(undefined),
-      clearParent: vi.fn().mockResolvedValue(undefined),
-    },
+    messaging: {} as never,
+    vcs: {} as never,
   };
 }
 
-describe("dispatchTicket", () => {
+describe("dispatchTicket owner reservation", () => {
   beforeEach(() => {
     mockStart.mockReset();
-    mockGetRun.mockReset();
-    mockStopTicketSandboxes.mockReset();
     mockGetEnabled.mockReset();
-    mockStart.mockResolvedValue({ runId: "run_123" });
-    mockStopTicketSandboxes.mockResolvedValue(0);
+    mockStart.mockResolvedValue({ runId: "run-started" });
     mockGetEnabled.mockResolvedValue({
       definition: { id: 7, builtinFallback: false },
       current: { definitionId: 7, version: 4 },
     });
   });
 
-  it("dispatches agentWorkflow for a ticket in configured project + AI column", async () => {
-    const adapters = makeAdapters();
-    const { dispatchTicket } = await import("./dispatch.js");
+  it("reserves the normalized ticket subject and pins the deployed definition for the candidate", async () => {
+    const runRegistry = registry();
+    const result = await dispatchTicket("proj-42", adapters(runRegistry), 3);
 
-    const result = await dispatchTicket("PROJ-42", adapters, 5);
-
-    expect(result).toEqual({ started: true, runId: "run_123" });
-    expect(adapters.runRegistry.claim).toHaveBeenCalledWith(
-      "PROJ-42",
-      expect.stringMatching(/^claiming:\d+$/),
-    );
-    expect(adapters.issueTracker.fetchTicket).toHaveBeenCalledWith("PROJ-42");
-    expect(mockStart).toHaveBeenCalledWith("agentWorkflow_sentinel", [{
+    expect(result).toEqual({ started: true, runId: "run-started" });
+    expect(runRegistry.reserve).toHaveBeenCalledWith({
+      subjectKey: "ticket:jira:PROJ-42",
+      ticketKey: "proj-42",
+      ownerToken: expect.stringMatching(/^owner:/),
       kind: "ticket",
-      ticketKey: "PROJ-42",
-      definitionId: 7,
-      definitionVersion: 4,
-    }]);
-    expect(adapters.runRegistry.register).toHaveBeenCalledWith(
-      "PROJ-42",
-      "run_123",
-    );
+    });
+    expect(mockStart).toHaveBeenCalledWith("agentWorkflow_sentinel", [
+      expect.objectContaining({
+        kind: "ticket",
+        subjectKey: "ticket:jira:PROJ-42",
+        ticketKey: "proj-42",
+        ownerToken: expect.stringMatching(/^owner:/),
+        definitionId: 7,
+        definitionVersion: 4,
+      }),
+    ]);
   });
 
-  it("pins the exact built-in fallback selection before starting the workflow", async () => {
+  it("pins the built-in fallback selection while retaining owner identity", async () => {
     mockGetEnabled.mockResolvedValue({
       definition: { id: 1, builtinFallback: true },
       current: null,
     });
-    const adapters = makeAdapters();
-    const { dispatchTicket } = await import("./dispatch.js");
+    const runRegistry = registry();
 
-    await dispatchTicket("PROJ-42", adapters, 5);
-
-    expect(mockStart).toHaveBeenCalledWith("agentWorkflow_sentinel", [{
-      kind: "ticket",
-      ticketKey: "PROJ-42",
-      definitionId: 1,
-      definitionVersion: "builtin_fallback",
-    }]);
-  });
-
-  it("skips dispatch when ticket is no longer in AI column", async () => {
-    const unregister = vi.fn().mockResolvedValue(undefined);
-    const adapters = makeAdapters({
-      fetchTicket: vi.fn().mockResolvedValue(makeTicket({ trackerStatus: "Backlog" })),
-      unregister,
+    expect(await dispatchTicket("PROJ-42", adapters(runRegistry), 3)).toEqual({
+      started: true,
+      runId: "run-started",
     });
-    const { dispatchTicket } = await import("./dispatch.js");
-
-    const result = await dispatchTicket("PROJ-42", adapters, 5);
-
-    expect(result).toEqual({ started: false, reason: "not_in_ai_column" });
-    expect(unregister).toHaveBeenCalledWith("PROJ-42");
-    expect(mockStart).not.toHaveBeenCalled();
-  });
-
-  it("skips dispatch when ticket is outside configured Jira project key", async () => {
-    const unregister = vi.fn().mockResolvedValue(undefined);
-    const adapters = makeAdapters({
-      fetchTicket: vi.fn().mockResolvedValue(makeTicket({ identifier: "OTHER-42" })),
-      unregister,
-    });
-    const { dispatchTicket } = await import("./dispatch.js");
-
-    const result = await dispatchTicket("PROJ-42", adapters, 5);
-
-    expect(result).toEqual({ started: false, reason: "wrong_project_key" });
-    expect(unregister).toHaveBeenCalledWith("PROJ-42");
-    expect(mockStart).not.toHaveBeenCalled();
-  });
-
-  it("returns already_claimed when claim fails", async () => {
-    const adapters = makeAdapters({
-      claim: vi.fn().mockResolvedValue(false),
-    });
-    const { dispatchTicket } = await import("./dispatch.js");
-
-    const result = await dispatchTicket("PROJ-42", adapters, 5);
-
-    expect(result).toEqual({ started: false, reason: "already_claimed" });
-    expect(adapters.issueTracker.fetchTicket).not.toHaveBeenCalled();
-    expect(mockStart).not.toHaveBeenCalled();
-  });
-
-  it("returns at_capacity when active run count >= max", async () => {
-    const adapters = makeAdapters({
-      listAll: vi.fn().mockResolvedValue([
-        { ticketKey: "PROJ-1", runId: "run_a" },
-        { ticketKey: "PROJ-2", runId: "run_b" },
-        { ticketKey: "PROJ-3", runId: "run_c" },
-      ]),
-    });
-    const { dispatchTicket } = await import("./dispatch.js");
-
-    const result = await dispatchTicket("PROJ-42", adapters, 3);
-
-    expect(result).toEqual({ started: false, reason: "at_capacity" });
-    expect(adapters.runRegistry.claim).not.toHaveBeenCalled();
-    expect(mockStart).not.toHaveBeenCalled();
-  });
-
-  it("counts fresh claiming sentinels toward capacity", async () => {
-    const freshClaim = `claiming:${Date.now()}`;
-    const adapters = makeAdapters({
-      listAll: vi.fn().mockResolvedValue([
-        { ticketKey: "PROJ-1", runId: "run_a" },
-        { ticketKey: "PROJ-2", runId: "run_b" },
-        { ticketKey: "PROJ-3", runId: freshClaim },
-      ]),
-    });
-    const { dispatchTicket } = await import("./dispatch.js");
-
-    const result = await dispatchTicket("PROJ-42", adapters, 3);
-
-    expect(result).toEqual({ started: false, reason: "at_capacity" });
-    expect(adapters.runRegistry.claim).not.toHaveBeenCalled();
-  });
-
-  it("ignores stale claiming sentinels (older than STALE_CLAIM_MS)", async () => {
-    const { STALE_CLAIM_MS } = await import("./dispatch.js");
-    const staleClaim = `claiming:${Date.now() - STALE_CLAIM_MS - 1_000}`;
-    const adapters = makeAdapters({
-      listAll: vi.fn().mockResolvedValue([
-        { ticketKey: "PROJ-1", runId: "run_a" },
-        { ticketKey: "PROJ-2", runId: "run_b" },
-        { ticketKey: "PROJ-3", runId: staleClaim },
-      ]),
-    });
-    const { dispatchTicket } = await import("./dispatch.js");
-
-    // Only 2 live entries (stale sentinel dropped) → under cap of 3.
-    const result = await dispatchTicket("PROJ-42", adapters, 3);
-
-    expect(result.started).toBe(true);
-    expect(mockStart).toHaveBeenCalled();
-  });
-
-  it("fails closed when the run registry is unreachable", async () => {
-    const adapters = makeAdapters({
-      listAll: vi.fn().mockRejectedValue(new Error("registry unreachable")),
-    });
-    const { dispatchTicket } = await import("./dispatch.js");
-
-    const result = await dispatchTicket("PROJ-42", adapters, 5);
-
-    expect(result).toEqual({ started: false, reason: "at_capacity" });
-    expect(adapters.runRegistry.claim).not.toHaveBeenCalled();
-    expect(mockStart).not.toHaveBeenCalled();
-  });
-
-  it("post-claim verify: latest-timestamp racer bails when cap overshot", async () => {
-    // Cap = 3. Two claims already exist (T1, T2). Three more dispatches
-    // race through concurrently (T3, T4, T5). All three pass the precheck
-    // (they each see 2 entries < 3) and all three claim. After all three
-    // claims land, Redis has 5 entries for cap=3 — the latest two
-    // timestamps must bail. We play the role of T5 and must bail.
-    const T1 = 10_000, T2 = 10_010, T3 = 10_020, T4 = 10_030, T5 = 10_040;
-    const snapshots = [
-      // Call #1 — precheck: 2 pre-existing entries (< 3, passes)
-      [
-        { ticketKey: "PROJ-1", runId: `claiming:${T1}` },
-        { ticketKey: "PROJ-2", runId: `claiming:${T2}` },
-      ],
-      // Call #2 — post-claim: our claim landed, plus two other racers
-      // that also slipped through the precheck window
-      [
-        { ticketKey: "PROJ-1", runId: `claiming:${T1}` },
-        { ticketKey: "PROJ-2", runId: `claiming:${T2}` },
-        { ticketKey: "PROJ-3", runId: `claiming:${T3}` },
-        { ticketKey: "PROJ-4", runId: `claiming:${T4}` },
-        { ticketKey: "PROJ-LATE", runId: `claiming:${T5}` },
-      ],
-    ];
-    let call = 0;
-    const listAll = vi.fn().mockImplementation(async () => snapshots[call++] ?? []);
-    const unregister = vi.fn().mockResolvedValue(undefined);
-
-    const realNow = Date.now;
-    Date.now = () => T5;
-
-    try {
-      const adapters = makeAdapters({ listAll, unregister });
-      const { dispatchTicket } = await import("./dispatch.js");
-      const result = await dispatchTicket("PROJ-LATE", adapters, 3);
-      expect(result).toEqual({ started: false, reason: "at_capacity" });
-      expect(unregister).toHaveBeenCalledWith("PROJ-LATE");
-      expect(mockStart).not.toHaveBeenCalled();
-    } finally {
-      Date.now = realNow;
-    }
-  });
-
-  it("post-claim verify: earlier-timestamp racer wins even when cap overshot", async () => {
-    // Cap = 3. Same race, but our claim is the earliest of the three
-    // racers — we should be one of the three retained.
-    const T1 = 10_000, T2 = 10_010, T3 = 10_020, T4 = 10_030, T5 = 10_040;
-    const snapshots = [
-      // Precheck: 2 entries
-      [
-        { ticketKey: "PROJ-1", runId: `claiming:${T1}` },
-        { ticketKey: "PROJ-2", runId: `claiming:${T2}` },
-      ],
-      // Post-claim: 5 entries, ours at T3 (earliest of the three racers)
-      [
-        { ticketKey: "PROJ-1", runId: `claiming:${T1}` },
-        { ticketKey: "PROJ-2", runId: `claiming:${T2}` },
-        { ticketKey: "PROJ-EARLY", runId: `claiming:${T3}` },
-        { ticketKey: "PROJ-4", runId: `claiming:${T4}` },
-        { ticketKey: "PROJ-5", runId: `claiming:${T5}` },
-      ],
-    ];
-    let call = 0;
-    const listAll = vi.fn().mockImplementation(async () => snapshots[call++] ?? []);
-    const unregister = vi.fn().mockResolvedValue(undefined);
-
-    const realNow = Date.now;
-    Date.now = () => T3;
-
-    try {
-      const adapters = makeAdapters({ listAll, unregister });
-      const { dispatchTicket } = await import("./dispatch.js");
-      const result = await dispatchTicket("PROJ-EARLY", adapters, 3);
-      expect(result.started).toBe(true);
-      expect(mockStart).toHaveBeenCalled();
-      expect(unregister).not.toHaveBeenCalledWith("PROJ-EARLY");
-    } finally {
-      Date.now = realNow;
-    }
-  });
-
-  it("aborts workflow if claim was removed during dispatch", async () => {
-    const mockCancel = vi.fn().mockResolvedValue(undefined);
-    mockGetRun.mockReturnValue({ cancel: mockCancel });
-
-    // getRunId returns null — claim was removed by a cancel while workflow was starting
-    const adapters = makeAdapters({
-      getRunId: vi.fn().mockResolvedValue(null),
-    });
-    const { dispatchTicket } = await import("./dispatch.js");
-
-    const result = await dispatchTicket("PROJ-42", adapters, 5);
-
-    expect(result).toEqual({ started: false, reason: "already_claimed" });
-    expect(mockStart).toHaveBeenCalled();
-    expect(mockGetRun).toHaveBeenCalledWith("run_123");
-    expect(mockCancel).toHaveBeenCalled();
-    expect(mockStopTicketSandboxes).toHaveBeenCalledWith("PROJ-42");
-    expect(adapters.runRegistry.register).not.toHaveBeenCalled();
-  });
-
-  it("aborts the started workflow and keeps the claim when register fails after start", async () => {
-    // The workflow already started; a failed post-start register must abort that
-    // run and NOT release the claim, or a retry could launch a second run.
-    const mockCancel = vi.fn().mockResolvedValue(undefined);
-    mockGetRun.mockReturnValue({ cancel: mockCancel });
-    const unregister = vi.fn().mockResolvedValue(undefined);
-    const register = vi.fn().mockRejectedValue(new Error("registry write failed"));
-    const adapters = makeAdapters({ register, unregister });
-    const { dispatchTicket } = await import("./dispatch.js");
-
-    const result = await dispatchTicket("PROJ-42", adapters, 5);
-
-    expect(result).toEqual({ started: false, reason: "error" });
-    expect(mockStart).toHaveBeenCalled();
-    expect(register).toHaveBeenCalledTimes(3); // idempotent retry before giving up
-    expect(mockGetRun).toHaveBeenCalledWith("run_123");
-    expect(mockCancel).toHaveBeenCalled(); // started run aborted
-    expect(mockStopTicketSandboxes).toHaveBeenCalledWith("PROJ-42");
-    expect(unregister).not.toHaveBeenCalled(); // claim kept → no duplicate dispatch
-  });
-
-  it("aborts the started workflow and keeps the claim when the post-start verify throws", async () => {
-    const mockCancel = vi.fn().mockResolvedValue(undefined);
-    mockGetRun.mockReturnValue({ cancel: mockCancel });
-    const unregister = vi.fn().mockResolvedValue(undefined);
-    const getRunId = vi.fn().mockRejectedValue(new Error("registry read failed"));
-    const adapters = makeAdapters({ getRunId, unregister });
-    const { dispatchTicket } = await import("./dispatch.js");
-
-    const result = await dispatchTicket("PROJ-42", adapters, 5);
-
-    expect(result).toEqual({ started: false, reason: "error" });
-    expect(mockStart).toHaveBeenCalled();
-    expect(mockCancel).toHaveBeenCalled();
-    expect(unregister).not.toHaveBeenCalled();
-    expect(adapters.runRegistry.register).not.toHaveBeenCalled();
-  });
-
-  it("retries a transient register failure and still starts", async () => {
-    let calls = 0;
-    const register = vi.fn().mockImplementation(async () => {
-      calls++;
-      if (calls < 2) throw new Error("transient");
-    });
-    const adapters = makeAdapters({ register });
-    const { dispatchTicket } = await import("./dispatch.js");
-
-    const result = await dispatchTicket("PROJ-42", adapters, 5);
-
-    expect(result).toEqual({ started: true, runId: "run_123" });
-    expect(register).toHaveBeenCalledTimes(2);
-  });
-
-  it("only one concurrent dispatch wins when claim is atomic", async () => {
-    let claimedValue: string | null = null;
-    const claim = vi
-      .fn()
-      .mockImplementation(async (_key: string, value: string) => {
-        if (claimedValue !== null) return false;
-        claimedValue = value;
-        return true;
-      });
-    const getRunId = vi
-      .fn()
-      .mockImplementation(async () => claimedValue);
-
-    const makeAdaptersForRace = () => makeAdapters({ claim, getRunId });
-    const { dispatchTicket } = await import("./dispatch.js");
-
-    const [a, b] = await Promise.all([
-      dispatchTicket("PROJ-42", makeAdaptersForRace(), 5),
-      dispatchTicket("PROJ-42", makeAdaptersForRace(), 5),
+    expect(mockStart).toHaveBeenCalledWith("agentWorkflow_sentinel", [
+      expect.objectContaining({
+        kind: "ticket",
+        subjectKey: "ticket:jira:PROJ-42",
+        ownerToken: expect.stringMatching(/^owner:/),
+        definitionId: 1,
+        definitionVersion: "builtin_fallback",
+      }),
     ]);
-
-    const results = [a, b];
-    const winners = results.filter((r) => r.started);
-    const losers = results.filter((r) => !r.started);
-
-    expect(winners).toHaveLength(1);
-    expect(losers).toHaveLength(1);
-    expect(losers[0].reason).toBe("already_claimed");
   });
 
-  it("unregisters claim and returns error on dispatch failure", async () => {
-    const unregister = vi.fn().mockResolvedValue(undefined);
-    const adapters = makeAdapters({
-      fetchTicket: vi.fn().mockRejectedValue(new Error("Jira is down")),
-      unregister,
+  it("owner-releases the reservation when no deployed definition is available", async () => {
+    mockGetEnabled.mockResolvedValue(null);
+    const runRegistry = registry();
+
+    expect(await dispatchTicket("PROJ-42", adapters(runRegistry), 3)).toEqual({
+      started: false,
+      reason: "no_definition",
     });
-    const { dispatchTicket } = await import("./dispatch.js");
-
-    const result = await dispatchTicket("PROJ-42", adapters, 5);
-
-    expect(result).toEqual({ started: false, reason: "error" });
-    expect(unregister).toHaveBeenCalledWith("PROJ-42");
+    expect(runRegistry.releaseReservation).toHaveBeenCalledOnce();
     expect(mockStart).not.toHaveBeenCalled();
   });
 
-  it("skips dispatch for previously failed tickets", async () => {
-    const adapters = makeAdapters({
-      isTicketFailed: vi.fn().mockResolvedValue(true),
+  it("releases the reservation when the live ticket left the AI column", async () => {
+    const runRegistry = registry();
+    const result = await dispatchTicket(
+      "PROJ-42",
+      adapters(runRegistry, ticket({ trackerStatus: "Backlog" })),
+      3,
+    );
+    expect(result).toEqual({ started: false, reason: "not_in_ai_column" });
+    expect(runRegistry.releaseReservation).toHaveBeenCalledOnce();
+    expect(mockStart).not.toHaveBeenCalled();
+  });
+
+  it("rejects a ticket outside the configured project", async () => {
+    const result = await dispatchTicket(
+      "OTHER-42",
+      adapters(registry(), ticket({ identifier: "OTHER-42", projectKey: "OTHER" })),
+      3,
+    );
+    expect(result).toEqual({ started: false, reason: "wrong_project_key" });
+  });
+
+  it("returns already_claimed when the subject reservation loses", async () => {
+    const result = await dispatchTicket("PROJ-42", adapters(registry({ reserveResult: false })), 3);
+    expect(result).toEqual({ started: false, reason: "already_claimed" });
+  });
+
+  it("returns at_capacity without reserving when bound capacity is full", async () => {
+    const runRegistry = registry({ initial: [entry()] });
+    expect(await dispatchTicket("PROJ-42", adapters(runRegistry), 1)).toEqual({
+      started: false,
+      reason: "at_capacity",
     });
-    const { dispatchTicket } = await import("./dispatch.js");
+    expect(runRegistry.reserve).not.toHaveBeenCalled();
+  });
 
-    const result = await dispatchTicket("PROJ-42", adapters, 5);
+  it("ignores stale unbound reservations in capacity", async () => {
+    const stale = entry({
+      state: "reserved",
+      runId: null,
+      createdAt: Date.now() - STALE_CLAIM_MS - 1,
+      updatedAt: Date.now() - STALE_CLAIM_MS - 1,
+    });
+    const result = await dispatchTicket("PROJ-42", adapters(registry({ initial: [stale] })), 1);
+    expect(result.started).toBe(true);
+  });
 
+  it("fails closed when registry capacity cannot be read", async () => {
+    const result = await dispatchTicket(
+      "PROJ-42",
+      adapters(registry({ listError: new Error("registry unavailable") })),
+      3,
+    );
+    expect(result).toEqual({ started: false, reason: "at_capacity" });
+    expect(mockStart).not.toHaveBeenCalled();
+  });
+
+  it("skips tickets with a durable failed marker", async () => {
+    const result = await dispatchTicket("PROJ-42", adapters(registry({ failed: true })), 3);
     expect(result).toEqual({ started: false, reason: "previously_failed" });
-    expect(adapters.runRegistry.claim).not.toHaveBeenCalled();
-    expect(mockStart).not.toHaveBeenCalled();
   });
 
-  it("returns error when failed-marker precheck throws", async () => {
-    const adapters = makeAdapters({
-      isTicketFailed: vi.fn().mockRejectedValue(new Error("registry unavailable")),
+  it("returns error and owner-releases when the post-reservation ticket read fails", async () => {
+    const runRegistry = registry();
+    const value = adapters(runRegistry);
+    vi.mocked(value.issueTracker.fetchTicket).mockRejectedValue(new Error("jira down"));
+    expect(await dispatchTicket("PROJ-42", value, 3)).toEqual({
+      started: false,
+      reason: "error",
     });
-    const { dispatchTicket } = await import("./dispatch.js");
-
-    const result = await dispatchTicket("PROJ-42", adapters, 5);
-
-    expect(result).toEqual({ started: false, reason: "error" });
-    expect(adapters.runRegistry.claim).not.toHaveBeenCalled();
-    expect(mockStart).not.toHaveBeenCalled();
-  });
-});
-
-describe("failed-ticket safeguard full loop", () => {
-  beforeEach(() => {
-    mockStart.mockReset();
-    mockGetRun.mockReset();
-    mockStopTicketSandboxes.mockReset();
-    mockStart.mockResolvedValue({ runId: "run_123" });
-    mockStopTicketSandboxes.mockResolvedValue(0);
+    expect(runRegistry.releaseReservation).toHaveBeenCalledOnce();
   });
 
-  it("mark → skip → clear → redispatch", async () => {
-    // Shared mutable state simulating Redis
-    const failedMarkers = new Map<string, string>();
-    let claimedValue: string | undefined;
-
-    const registry: Adapters["runRegistry"] = {
-      claim: vi.fn().mockImplementation(async (_key: string, value: string) => {
-        claimedValue = value;
-        return true;
-      }),
-      register: vi.fn().mockResolvedValue(undefined),
-      getRunId: vi.fn().mockImplementation(async () => claimedValue),
-      unregister: vi.fn().mockResolvedValue(undefined),
-      unregisterIfRunId: vi.fn().mockResolvedValue(undefined),
-      listAll: vi.fn().mockResolvedValue([]),
-      registerSandbox: vi.fn().mockResolvedValue(undefined),
-      getSandboxId: vi.fn().mockResolvedValue(null),
-      getEntryCreatedAt: vi.fn().mockResolvedValue(null),
-      markFailed: vi.fn().mockImplementation(async (key: string, meta: any) => {
-        failedMarkers.set(key, JSON.stringify(meta));
-      }),
-      isTicketFailed: vi.fn().mockImplementation(async (key: string) => {
-        return failedMarkers.has(key);
-      }),
-      listAllFailed: vi.fn().mockImplementation(async () => {
-        return [...failedMarkers.entries()].map(([ticketKey, raw]) => ({
-          ticketKey,
-          meta: JSON.parse(raw),
-        }));
-      }),
-      clearFailedMark: vi.fn().mockImplementation(async (key: string) => {
-        failedMarkers.delete(key);
-      }),
-      getParent: vi.fn().mockResolvedValue(null),
-      setParent: vi.fn().mockResolvedValue(undefined),
-      clearParent: vi.fn().mockResolvedValue(undefined),
-    };
-
-    const adapters = makeAdapters();
-    // Replace registry with our stateful mock
-    Object.assign(adapters.runRegistry, registry);
-
-    const { dispatchTicket } = await import("./dispatch.js");
-    const { reconcileRuns } = await import("./reconcile.js");
-
-    // Step 1: Mark ticket as failed (simulates workflow catch block)
-    await registry.markFailed("PROJ-42", {
-      runId: "run_failed",
-      error: "move failed",
-      failedAt: "2026-04-02T10:00:00.000Z",
-    });
-
-    // Step 2: Dispatch is skipped because ticket is marked failed
-    const skip = await dispatchTicket("PROJ-42", adapters, 5);
-    expect(skip).toEqual({ started: false, reason: "previously_failed" });
-
-    // Step 3: Human moves ticket out of AI column → reconcile clears marker
-    await reconcileRuns(new Set(), registry);
-    expect(failedMarkers.has("PROJ-42")).toBe(false);
-
-    // Step 4: Ticket moved back to AI → fresh dispatch succeeds
-    const success = await dispatchTicket("PROJ-42", adapters, 5);
-    expect(success.started).toBe(true);
-    expect(success.runId).toBe("run_123");
+  it("allows only one of two concurrent dispatches to reserve the subject", async () => {
+    const runRegistry = registry();
+    const [first, second] = await Promise.all([
+      dispatchTicket("PROJ-42", adapters(runRegistry), 3),
+      dispatchTicket("PROJ-42", adapters(runRegistry), 3),
+    ]);
+    expect([first.started, second.started].sort()).toEqual([false, true]);
+    expect(mockStart).toHaveBeenCalledOnce();
   });
 });

@@ -3,6 +3,8 @@ import type { EngineCtx } from "./types.js";
 import { ensureArthurTask } from "./prepare-workspace.js";
 
 async function blockProvisionAgentSandboxStep(
+  subjectKey: string,
+  ownerToken: string,
   agentKind: AgentKind,
   model: string,
   arthurTaskId: string | null,
@@ -37,6 +39,12 @@ async function blockProvisionAgentSandboxStep(
   });
 
   try {
+    const { createStepAdapters } = await import("../../lib/step-adapters.js");
+    await createStepAdapters().runRegistry.registerSandbox(
+      subjectKey,
+      ownerToken,
+      sandbox.sandboxId,
+    );
     const adapter = createAgentAdapter(agentKind);
     await adapter.install(sandbox);
     await adapter.configure(sandbox, {
@@ -54,16 +62,6 @@ async function blockProvisionAgentSandboxStep(
 }
 blockProvisionAgentSandboxStep.maxRetries = 0;
 
-async function blockRegisterAgentSandboxStep(
-  ticketIdentifier: string,
-  sandboxId: string,
-): Promise<void> {
-  "use step";
-  const { createStepAdapters } = await import("../../lib/step-adapters.js");
-  const { runRegistry } = createStepAdapters();
-  await runRegistry.registerSandbox(ticketIdentifier, sandboxId);
-}
-
 /**
  * Ensure an agent CLI has a repository-free scratch sandbox. These sandboxes
  * are intentionally separate from ctx.sandboxId, which always means an
@@ -79,17 +77,15 @@ export async function ensureAgentSandbox(
 
   const arthurTaskId = await ensureArthurTask(ctx);
   const { sandboxId } = await blockProvisionAgentSandboxStep(
+    ctx.entry.subjectKey,
+    ctx.entry.ownerToken,
     agentKind,
     model,
     arthurTaskId,
   );
   ctx.agentSandboxIds[agentKind] = sandboxId;
-  // ctx.sandboxIds is the authoritative terminal-cleanup set. The run
-  // registry has one sandbox slot, so scratch may occupy it only until a code
-  // workspace exists; it must never replace that primary cancellation target.
+  // The in-workflow set covers normal teardown; the durable owner-child row
+  // registered immediately after create covers cancel/reconcile crash cleanup.
   ctx.sandboxIds.add(sandboxId);
-  if (!ctx.sandboxId) {
-    await blockRegisterAgentSandboxStep(ctx.ticket.identifier, sandboxId);
-  }
   return sandboxId;
 }

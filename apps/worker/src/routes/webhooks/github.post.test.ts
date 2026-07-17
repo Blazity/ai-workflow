@@ -50,6 +50,7 @@ function makeRequest(body: unknown, ghEvent = "pull_request"): Request {
       "content-type": "application/json",
       "x-hub-signature-256": "sha256=whatever",
       "x-github-event": ghEvent,
+      "x-github-delivery": "delivery-test",
     },
     body: JSON.stringify(body),
   });

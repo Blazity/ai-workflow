@@ -6,16 +6,25 @@ import type { RunRegistryAdapter } from "../../adapters/run-registry/types.js";
 function makeRegistry(
   entries: Array<{ ticketKey: string; runId: string }>,
 ): RunRegistryAdapter {
+  const active = entries.map((entry) => ({
+    ...entry,
+    subjectKey: `ticket:jira:${entry.ticketKey}`,
+    ownerToken: `owner:${entry.runId}`,
+    state: "bound" as const,
+    kind: "ticket" as const,
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+  }));
   return {
-    claim: vi.fn(),
-    register: vi.fn(),
-    getRunId: vi.fn(),
-    unregister: vi.fn(),
-    unregisterIfRunId: vi.fn(),
-    listAll: vi.fn().mockResolvedValue(entries),
+    reserve: vi.fn(),
+    bindRun: vi.fn(),
+    handoff: vi.fn(),
+    get: vi.fn(),
+    releaseReservation: vi.fn(),
+    release: vi.fn(),
+    listAll: vi.fn().mockResolvedValue(active),
     registerSandbox: vi.fn(),
-    getSandboxId: vi.fn(),
-    getEntryCreatedAt: vi.fn(),
+    listSandboxes: vi.fn(),
     markFailed: vi.fn(),
     isTicketFailed: vi.fn(),
     listAllFailed: vi.fn(),
