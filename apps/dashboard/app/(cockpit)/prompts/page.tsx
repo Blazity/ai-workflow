@@ -1,13 +1,13 @@
-// apps/dashboard/app/(cockpit)/prompts/page.tsx — Prompts ("/prompts")
+// apps/dashboard/app/(cockpit)/prompts/page.tsx — Prompt library ("/prompts")
 import { Suspense } from "react";
 
-import { PromptsData } from "@/app/prompts-data";
-import { PromptsSkeleton } from "@/app/prompts-skeleton";
+import { PromptLibraryData } from "@/app/prompt-library-data";
+import { PromptLibrarySkeleton } from "@/app/prompt-library-skeleton";
 
 export default function PromptsPage() {
   return (
-    <Suspense fallback={<PromptsSkeleton />}>
-      <PromptsData />
+    <Suspense fallback={<PromptLibrarySkeleton />}>
+      <PromptLibraryData />
     </Suspense>
   );
 }
