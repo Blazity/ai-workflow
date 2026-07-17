@@ -607,6 +607,7 @@ function AnswerPanel({
                   onChange={(e) => setAnswer(e.target.value)}
                   disabled={busy}
                   rows={4}
+                  aria-label="Answer"
                   placeholder="Type your answer…"
                   className="w-full resize-y rounded-[3px] border border-neutral-200 bg-panel p-3 font-body text-[13px] leading-[1.5] text-coal placeholder:text-neutral-400 focus-visible:outline focus-visible:outline-2 focus-visible:outline-mariner focus-visible:outline-offset-[-1px] disabled:opacity-60"
                 />

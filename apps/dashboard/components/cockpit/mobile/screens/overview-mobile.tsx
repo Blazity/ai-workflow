@@ -88,16 +88,27 @@ export function OverviewMobileScreen({
           <div className="font-mono text-[10px] tracking-[0.06em] uppercase text-[#A2351C] mb-2">Input needed · {awaiting.length}</div>
           <div className="flex flex-col gap-2">
             {awaiting.map((r) => (
-              <button
+              // Anchors are not allowed inside buttons, so the card is a div
+              // with a stretched overlay button as the TicketLink's sibling;
+              // the relative wrapper keeps the link on top and clickable.
+              <div
                 key={r.id}
-                type="button"
-                onClick={() => openRun(r)}
-                className="appearance-none text-left w-full cursor-pointer bg-[#FFFCFA] border border-[#FFE4D6] rounded-sm px-3 py-2.5 active:bg-[#FFF4EC]"
+                className="relative bg-[#FFFCFA] border border-[#FFE4D6] rounded-sm px-3 py-2.5 active:bg-[#FFF4EC]"
               >
+                <button
+                  type="button"
+                  onClick={() => openRun(r)}
+                  aria-label={`Open run: ${r.workflowName}`}
+                  className="appearance-none absolute inset-0 cursor-pointer rounded-sm"
+                />
                 <div className="flex items-center gap-2 flex-wrap">
                   <CkStatusPill status="awaiting" />
                   <span className="font-semibold text-[13px] text-neutral-900">{r.workflowName}</span>
-                  {r.ticket && r.ticketUrl && <TicketLink ticket={r.ticket} url={r.ticketUrl} />}
+                  {r.ticket && r.ticketUrl && (
+                    <span className="relative">
+                      <TicketLink ticket={r.ticket} url={r.ticketUrl} />
+                    </span>
+                  )}
                   {typeof r.askedAtMin === "number" && (
                     <span className="ml-auto font-mono text-[10px] text-neutral-500">{r.askedAtMin}m ago</span>
                   )}
@@ -105,7 +116,7 @@ export function OverviewMobileScreen({
                 {r.question && (
                   <p className="font-body text-[13px] leading-[1.5] text-neutral-800 m-0 mt-2 border-l-2 border-burnt-orange pl-2.5">{r.question}</p>
                 )}
-              </button>
+              </div>
             ))}
           </div>
         </div>
