@@ -12,6 +12,17 @@ export type HumanDecision = {
   answeredAt?: string;
 };
 
+// User text must never be able to terminate the section: a literal marker
+// inside a question or answer would make the next upsert's regex stop early
+// and orphan the rest of the block. Defang by dropping the comment delimiters.
+function defangMarkers(text: string): string {
+  return text
+    .split(START_MARKER)
+    .join("[human-decisions:start]")
+    .split(END_MARKER)
+    .join("[human-decisions:end]");
+}
+
 function renderRound(roundNumber: number, decision: HumanDecision): string {
   const meta: string[] = [];
   if (decision.answeredBy) meta.push(`answered by ${decision.answeredBy}`);
@@ -22,11 +33,11 @@ function renderRound(roundNumber: number, decision: HumanDecision): string {
 
   const lines = [heading];
   for (let i = 0; i < decision.questions.length; i++) {
-    lines.push(`${i + 1}. ${decision.questions[i]}`);
+    lines.push(`${i + 1}. ${defangMarkers(decision.questions[i]!)}`);
   }
   lines.push("");
-  // Keep the answer verbatim, including any embedded newlines.
-  lines.push(`Answer: ${decision.answer}`);
+  // Keep the answer verbatim (embedded newlines included), markers excepted.
+  lines.push(`Answer: ${defangMarkers(decision.answer)}`);
   return lines.join("\n");
 }
 
@@ -54,7 +65,11 @@ export function renderHumanDecisionsSection(clarifications: HumanDecision[]): st
 
 /**
  * Upserts the rendered section into the memory file contents:
- * - existing file WITH markers: replace the marked block in place (idempotent),
+ * - existing file WITH a complete marker pair: replace the block in place
+ *   (idempotent),
+ * - existing file with a LONE start marker (end marker lost): rewrite from the
+ *   marker to the end of file with the fresh complete block, so the current
+ *   Q&A is never silently dropped,
  * - existing file WITHOUT markers: append the block after a blank line,
  * - no existing file (null): create a minimal header plus the block.
  */
@@ -66,8 +81,14 @@ export function upsertHumanDecisionsSection(
   if (existing === null) {
     return `# Session Memory: ${taskId}\n\n${section}\n`;
   }
+  if (SECTION_REGEX.test(existing)) {
+    // Replacer function, not a string: a "$&"-style sequence in the Q&A must
+    // land verbatim instead of being expanded as a replacement pattern.
+    return existing.replace(SECTION_REGEX, () => section);
+  }
   if (existing.includes(START_MARKER)) {
-    return existing.replace(SECTION_REGEX, section);
+    const prefix = existing.slice(0, existing.indexOf(START_MARKER)).replace(/\s+$/, "");
+    return prefix ? `${prefix}\n\n${section}\n` : `${section}\n`;
   }
   return `${existing.replace(/\s+$/, "")}\n\n${section}\n`;
 }

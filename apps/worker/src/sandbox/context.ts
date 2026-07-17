@@ -231,7 +231,9 @@ function renderClarificationsSection(
 ): string {
   if (!clarifications || clarifications.length === 0) return "";
 
-  const rounds = clarifications.map((round, index) => {
+  // Kept as head/answer pairs so the hard-truncation fallback below can trim
+  // the questions and the answer independently.
+  const roundParts = clarifications.map((round, index) => {
     const numberedQuestions = round.questions
       .map((q, i) => `${i + 1}. ${q}`)
       .join("\n");
@@ -242,8 +244,12 @@ function renderClarificationsSection(
       .filter(Boolean)
       .join(", ");
     const answerLabel = meta ? `Answer (${meta})` : "Answer";
-    return `### Round ${index + 1}\n\n${numberedQuestions}\n\n${answerLabel}: ${round.answer}`;
+    return {
+      head: `### Round ${index + 1}\n\n${numberedQuestions}`,
+      answer: `${answerLabel}: ${round.answer}`,
+    };
   });
+  const rounds = roundParts.map((p) => `${p.head}\n\n${p.answer}`);
 
   const header = "\n## Clarifications (Q&A)\n\n";
   const footer = "\n";
@@ -266,9 +272,15 @@ function renderClarificationsSection(
     used += cost;
   }
   if (kept.length === 0) {
-    // Even the newest round alone exceeds the budget: hard-truncate it (tail of
-    // the round is dropped) rather than emit an empty section.
-    kept.push(rounds[rounds.length - 1]!.slice(0, Math.max(0, bodyBudget)));
+    // Even the newest round alone exceeds the budget: truncate its questions
+    // and answer separately, the answer first. The answer is what a resume run
+    // exists to consume, so it must survive even when the questions alone
+    // would eat the whole budget; the questions get whatever room remains.
+    const newest = roundParts[roundParts.length - 1]!;
+    const answerPart = newest.answer.slice(0, Math.max(0, bodyBudget));
+    const headBudget = bodyBudget - answerPart.length - separator.length;
+    const headPart = headBudget > 0 ? newest.head.slice(0, headBudget) : "";
+    kept.push(headPart ? `${headPart}${separator}${answerPart}` : answerPart);
   }
   return `${header}${CLARIFICATIONS_TRUNCATION_NOTE}${kept.join(separator)}${footer}`;
 }

@@ -40,16 +40,25 @@ export async function writeHumanDecisionsMemory(
     const manifest = parseWorkspaceManifest(await manifestResult.stdout());
 
     for (const repo of manifest.repositories) {
-      const memoryDir = `${repo.localPath}/blazebot/memory`;
-      const memoryPath = `${memoryDir}/${ticketKey}.md`;
+      // Per-repository isolation: one repo's read/mkdir/write failure must not
+      // stop the section from landing in the remaining repositories.
+      try {
+        const memoryDir = `${repo.localPath}/blazebot/memory`;
+        const memoryPath = `${memoryDir}/${ticketKey}.md`;
 
-      const readResult = await sandbox.runCommand("cat", [memoryPath]);
-      const existing = readResult.exitCode === 0 ? await readResult.stdout() : null;
-      const next = upsertHumanDecisionsSection(existing, section, ticketKey);
+        const readResult = await sandbox.runCommand("cat", [memoryPath]);
+        const existing = readResult.exitCode === 0 ? await readResult.stdout() : null;
+        const next = upsertHumanDecisionsSection(existing, section, ticketKey);
 
-      // writeFiles does not guarantee mkdir -p semantics.
-      await sandbox.runCommand("mkdir", ["-p", memoryDir]);
-      await sandbox.writeFiles([{ path: memoryPath, content: Buffer.from(next) }]);
+        // writeFiles does not guarantee mkdir -p semantics.
+        await sandbox.runCommand("mkdir", ["-p", memoryDir]);
+        await sandbox.writeFiles([{ path: memoryPath, content: Buffer.from(next) }]);
+      } catch (err) {
+        log.warn(
+          { repo: repo.localPath, err: err instanceof Error ? err.message : String(err) },
+          "human_decisions_memory_repo_write_failed",
+        );
+      }
     }
   } catch (err) {
     log.warn(

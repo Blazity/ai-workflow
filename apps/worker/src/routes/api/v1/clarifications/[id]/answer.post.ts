@@ -14,6 +14,7 @@ import {
   setDispatchedRunId,
   supersedeClarification,
   supersedePendingForTicket,
+  type ClarificationRow,
 } from "../../../../../clarifications/store.js";
 import { resolveAwaitingRun } from "../../../../../lib/telemetry/run-telemetry.js";
 
@@ -106,8 +107,21 @@ export default defineEventHandler(async (event): Promise<ClarificationAnswerResp
     await setDispatchedRunId(db, id, result.runId).catch(() => {});
     await resolveAwaitingRun(db, row.runId).catch(() => {});
 
-    const final = await getClarification(db, id);
-    return { clarification: serializeClarification(final ?? row), runId: result.runId };
+    // Best-effort read-back for the response body: the resume run is already
+    // started, so a read hiccup must not turn the response into an error. The
+    // fallback serializes what this handler knows to be true (answered, with
+    // this answer, actor, and run id) instead of the stale pending row.
+    const final = await getClarification(db, id).catch(() => null);
+    const fallback: ClarificationRow = {
+      ...row,
+      status: "answered",
+      answer,
+      answeredById: answerer.id,
+      answeredByLabel: answerer.label,
+      answeredAt: row.answeredAt ?? new Date(),
+      dispatchedRunId: result.runId,
+    };
+    return { clarification: serializeClarification(final ?? fallback), runId: result.runId };
   } catch (error) {
     toClarificationHttpError(error);
   }

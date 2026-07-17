@@ -673,9 +673,28 @@ describe("clarifications section", () => {
 
     expect(result).toContain("## Clarifications (Q&A)");
     expect(result).toContain("[Older clarification rounds omitted to fit the prompt budget.]");
-    // The newest round is still present (partially), never dropped entirely.
-    expect(result).toContain("### Round 1");
+    // The newest round's answer is still present (partially), never dropped.
+    expect(result).toContain("Answer (by dan): xxx");
     // The oversized answer must not survive in full.
     expect(result).not.toContain("x".repeat(30000));
+  });
+
+  it("keeps the answer when the newest round's questions alone exceed the budget", () => {
+    const result = assembleResearchPlanContext({
+      ticket: {
+        ...baseTicket,
+        clarifications: [
+          { questions: ["q".repeat(30000)], answer: "USE POSTGRES", answeredBy: "dan" },
+        ],
+      },
+      prompt: "p",
+      branchName: "b",
+    });
+
+    // The answer survives in full even though the questions ate the budget.
+    expect(result).toContain("Answer (by dan): USE POSTGRES");
+    // The questions are truncated, not the answer.
+    expect(result).toContain("### Round 1");
+    expect(result).not.toContain("q".repeat(30000));
   });
 });

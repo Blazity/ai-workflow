@@ -76,4 +76,9 @@ describe("hasDashboardLinkComment", () => {
     const comments = [{ body: `see ${ticketRunUrl(ORIGIN, "AWT-42", "wrun_9")}` }];
     expect(hasDashboardLinkComment(comments, "AWT-42")).toBe(true);
   });
+
+  it("matches a key that the URL builders percent-encode", () => {
+    const comments = [{ body: `see ${ticketPageUrl(ORIGIN, "A B/C")}` }];
+    expect(hasDashboardLinkComment(comments, "A B/C")).toBe(true);
+  });
 });

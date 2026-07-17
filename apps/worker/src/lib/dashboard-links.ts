@@ -27,9 +27,11 @@ export function hasDashboardLinkComment(
   comments: Array<{ body: string }>,
   ticketKey: string,
 ): boolean {
-  // Anchored so a key never matches its own prefix (AWT-4 vs /ticket/AWT-42):
-  // the marker must be followed by a query string, whitespace, or the end.
-  const escaped = ticketKey.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  // URI-encode first so the marker matches what ticketRunUrl/ticketPageUrl
+  // actually emit, then regex-escape. Anchored so a key never matches its own
+  // prefix (AWT-4 vs /ticket/AWT-42): the marker must be followed by a query
+  // string, whitespace, or the end.
+  const escaped = encodeURIComponent(ticketKey).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const marker = new RegExp(`/ticket/${escaped}(?![\\w-])`);
   return comments.some((c) => marker.test(c.body));
 }

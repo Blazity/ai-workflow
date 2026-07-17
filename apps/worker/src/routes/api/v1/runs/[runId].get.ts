@@ -23,11 +23,10 @@ const EMPTY: Omit<RunDetailResponse, "generatedAt"> = {
 };
 
 export default defineEventHandler(async (event): Promise<RunDetailResponse> => {
-  setResponseHeader(
-    event,
-    "Cache-Control",
-    "private, max-age=15, stale-while-revalidate=60",
-  );
+  // no-store: the payload carries the clarification Q&A (answer text plus the
+  // responder's identity), which must never be served from a cache. Set before
+  // any await so both the live and the durable-fallback responses carry it.
+  setResponseHeader(event, "Cache-Control", "private, no-store");
 
   const generatedAt = new Date().toISOString();
   const runId = getRouterParam(event, "runId");
