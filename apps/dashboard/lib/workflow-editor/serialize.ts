@@ -40,6 +40,14 @@ export function serializeWorkflowDefinition(
         params: serializeParams(node),
       };
       if (node.name !== undefined) serialized.name = node.name;
+      if (node.promptRefs) {
+        const kept = Object.fromEntries(
+          Object.entries(node.promptRefs).filter(
+            ([key]) => serialized.params[key] !== undefined,
+          ),
+        );
+        if (Object.keys(kept).length > 0) serialized.promptRefs = kept;
+      }
       return serialized;
     }),
     edges: edges.map((edge) => {
