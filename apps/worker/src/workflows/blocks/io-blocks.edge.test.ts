@@ -561,6 +561,7 @@ describe("run_checks edge cases", () => {
       "claude",
       "claude-model",
       0,
+      1_800_000,
     );
   });
 

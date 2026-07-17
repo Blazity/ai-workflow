@@ -16,7 +16,7 @@ import {
   timestamp,
   uniqueIndex,
 } from "drizzle-orm/pg-core";
-import type { BlockRunState } from "@shared/contracts";
+import type { BlockRunState, WorkflowRunBudgetFailure } from "@shared/contracts";
 import type { GateStatusRef } from "../adapters/vcs/types.js";
 import type { PrePrCheckConfig } from "../pre-pr-checks/config.js";
 
@@ -182,6 +182,8 @@ export const workflowRuns = pgTable("workflow_runs", {
   phases: jsonb("phases"),
   /** Full RunStep[] trace waterfall, captured on completion (workflow-owned). */
   steps: jsonb("steps"),
+  /** Structured terminal budget cause; null for non-budget exits. */
+  budgetFailure: jsonb("budget_failure").$type<WorkflowRunBudgetFailure>(),
 
   definitionVersion: integer("definition_version"),
   definitionId: integer("definition_id"),

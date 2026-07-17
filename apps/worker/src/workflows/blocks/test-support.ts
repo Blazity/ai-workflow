@@ -91,6 +91,10 @@ export function makeCtx(overrides: Partial<EngineCtx> = {}): EngineCtx {
     prompts: { research: "r", implement: "i", review: "v" },
     moveTargets: { backlog: "Backlog", aiReview: "AI Review" },
     arthur: { taskId: null },
+    observeBudget: vi.fn().mockResolvedValue({
+      check: { status: "ok" },
+      remainingDurationMs: 30 * 60_000,
+    }),
     recordUsage: vi.fn(),
     markLaunched: vi.fn(),
     unregisterBeforePr: vi.fn().mockResolvedValue(undefined),

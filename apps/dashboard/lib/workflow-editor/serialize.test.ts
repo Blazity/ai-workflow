@@ -340,3 +340,11 @@ test("never emits provider for non-agent node types", () => {
     { id: "slack", type: "send_slack_message", x: 0, y: 0, params: { message: "hi" } },
   ]);
 });
+
+test("preserves execution budgets when saving graph edits", () => {
+  const budgets = { maxDurationMs: 60_000, maxTokens: 5_000, maxCostUsd: 2.5 };
+
+  const out = serializeWorkflowDefinition([], [], budgets);
+
+  assert.deepEqual(out.budgets, budgets);
+});

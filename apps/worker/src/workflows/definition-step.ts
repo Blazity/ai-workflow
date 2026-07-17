@@ -1,4 +1,5 @@
 import type {
+  WorkflowExecutionBudgets,
   WorkflowBlockType,
   WorkflowDefinition,
   WorkflowDefinitionEdge,
@@ -17,6 +18,7 @@ export interface LoadedWorkflowPlan {
   nodes: WorkflowDefinitionNode[];
   edges: WorkflowDefinitionEdge[];
   reviewEnabled: boolean;
+  budgets?: WorkflowExecutionBudgets;
 }
 
 interface ZodLikeError extends Error {
@@ -83,7 +85,11 @@ export async function loadWorkflowDefinitionFor(
   const { logger } = await import("../lib/logger.js");
 
   const toPlan = (
-    def: { nodes: WorkflowDefinitionNode[]; edges: WorkflowDefinitionEdge[] },
+    def: {
+      nodes: WorkflowDefinitionNode[];
+      edges: WorkflowDefinitionEdge[];
+      budgets?: WorkflowExecutionBudgets;
+    },
     version: number | null,
     id: number | null,
   ): LoadedWorkflowPlan => {
@@ -94,6 +100,7 @@ export async function loadWorkflowDefinitionFor(
       nodes: normalized.nodes,
       edges: normalized.edges,
       reviewEnabled: def.nodes.some((node) => node.type === "review_agent"),
+      ...(def.budgets ? { budgets: def.budgets } : {}),
     };
   };
 

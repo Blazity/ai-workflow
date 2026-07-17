@@ -4,6 +4,7 @@ import type { AgentKind } from "../../sandbox/agents/index.js";
 import type { PhaseArtifactPaths, PhaseUsage } from "../../sandbox/agents/types.js";
 import { resolveBlockAgent } from "../../workflow-definition/resolve-agent.js";
 import { ensureAgentSandbox } from "./agent-sandbox.js";
+import { isRunBudgetError } from "../run-budget.js";
 import { pollPhaseUntilDone } from "./poll-phase.js";
 import { sanitizeBlockId, type BlockExecuteFn, type BlockExecutionResult } from "./types.js";
 
@@ -94,7 +95,7 @@ async function blockGenericAgentStartPhaseStep(
   inputContent: string,
   scriptPath: string,
   scriptContent: string,
-): Promise<void> {
+): Promise<string> {
   "use step";
   const { Sandbox } = await import("@vercel/sandbox");
   const { getSandboxCredentials } = await import("../../sandbox/credentials.js");
@@ -105,12 +106,13 @@ async function blockGenericAgentStartPhaseStep(
     { path: scriptPath, content: Buffer.from(scriptContent) },
   ]);
   await sandbox.runCommand("chmod", ["+x", scriptPath]);
-  await sandbox.runCommand({
+  const command = await sandbox.runCommand({
     cmd: "bash",
     args: [scriptPath],
     cwd: "/vercel/sandbox",
     detached: true,
   });
+  return command.cmdId;
 }
 blockGenericAgentStartPhaseStep.maxRetries = 0;
 
@@ -209,10 +211,22 @@ export const execute: BlockExecuteFn = async (
     // silently; the guard is a no-op when the agent leaves a clean tree.
     await blockGenericAgentCommitGuardStep(sandboxId, kind, workspaceMode === "read_write");
     const { paths, script } = await blockGenericAgentPlanPhaseStep(kind, phase, model, jsonSchema);
-    await blockGenericAgentStartPhaseStep(sandboxId, paths.input, prompt, paths.wrapper, script);
+    const commandId = await blockGenericAgentStartPhaseStep(
+      sandboxId,
+      paths.input,
+      prompt,
+      paths.wrapper,
+      script,
+    );
     ctx.markLaunched(usageLabel);
 
-    const done = await pollPhaseUntilDone(sandboxId, paths.sentinel, MAX_MINUTES);
+    const done = await pollPhaseUntilDone(
+      sandboxId,
+      paths.sentinel,
+      MAX_MINUTES,
+      commandId,
+      ctx.observeBudget,
+    );
     if (!done) {
       return { kind: "failed", output: { status: "failed" }, reason: "agent phase timed out" };
     }
@@ -273,6 +287,7 @@ export const execute: BlockExecuteFn = async (
       },
     };
   } catch (err) {
+    if (isRunBudgetError(err)) throw err;
     return {
       kind: "failed",
       output: { status: "failed" },

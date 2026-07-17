@@ -4,6 +4,7 @@ import type {
   WorkflowDefinitionEdge,
   WorkflowDefinitionLayout,
   WorkflowDefinitionNode,
+  WorkflowExecutionBudgets,
   WorkflowParamValue,
 } from "@shared/contracts";
 import type { FlowEdgeDef, FlowNodeDef } from "@/lib/flows";
@@ -28,10 +29,12 @@ function serializeParams(node: FlowNodeDef): Record<string, WorkflowParamValue> 
 export function serializeWorkflowDefinition(
   nodes: readonly FlowNodeDef[],
   edges: readonly FlowEdgeDef[],
+  budgets?: WorkflowExecutionBudgets,
 ): WorkflowDefinition {
   const typeById = new Map(nodes.map((node) => [node.id, node.type]));
   return {
     schemaVersion: 1,
+    ...(budgets ? { budgets: { ...budgets } } : {}),
     nodes: nodes.map((node) => {
       const serialized: WorkflowDefinitionNode = {
         id: node.id,
@@ -62,8 +65,9 @@ export function serializeWorkflowDefinition(
 export function serializeSemanticWorkflowDefinition(
   nodes: readonly FlowNodeDef[],
   edges: readonly FlowEdgeDef[],
+  budgets?: WorkflowExecutionBudgets,
 ): WorkflowDefinition {
-  const definition = serializeWorkflowDefinition(nodes, edges);
+  const definition = serializeWorkflowDefinition(nodes, edges, budgets);
   return {
     ...definition,
     nodes: definition.nodes.map((node) => ({ ...node, x: 0, y: 0 })),

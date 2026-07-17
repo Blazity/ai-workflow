@@ -17,6 +17,7 @@ import type { WorkspaceRepositoryInput } from "../../sandbox/repo-workspace.js";
 import type { WorkspacePublicationResult } from "../workspace-publication.js";
 import type { LoadedPrompts } from "../prompts-step.js";
 import type { AgentWorkflowInput } from "../agent-input.js";
+import type { RunBudgetObservation } from "../run-budget.js";
 
 /**
  * Frozen contract between the graph engine (agent.ts, wired in stage C4) and
@@ -95,6 +96,8 @@ export interface EngineCtx {
    * task (named after the ticket) and writes back the resolved `taskId`.
    */
   arthur: { taskId: string | null };
+  /** Observe and enforce the run budget before further agent work. */
+  observeBudget(): Promise<RunBudgetObservation>;
   /** Record a phase's parsed usage under a display label for run telemetry. */
   recordUsage(label: string, usage: PhaseUsage | null, model: string): void;
   /**

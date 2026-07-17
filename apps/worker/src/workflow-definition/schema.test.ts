@@ -54,6 +54,47 @@ function shapeOk(nodes: unknown[], edges: unknown[] = []): boolean {
 }
 
 describe("workflowDefinitionSchema", () => {
+  it("accepts omitted and partial execution budgets", () => {
+    const omitted = workflowDefinitionSchema.parse({ schemaVersion: 1, nodes: [], edges: [] });
+    expect(omitted.budgets).toBeUndefined();
+
+    const partial = workflowDefinitionSchema.parse({
+      schemaVersion: 1,
+      budgets: { maxTokens: 12_345 },
+      nodes: [],
+      edges: [],
+    });
+    expect(partial.budgets).toEqual({ maxTokens: 12_345 });
+  });
+
+  it.each([
+    { maxDurationMs: 0 },
+    { maxDurationMs: -1 },
+    { maxDurationMs: 1.5 },
+    { maxTokens: 0 },
+    { maxTokens: -1 },
+    { maxTokens: 1.5 },
+    { maxCostUsd: 0 },
+    { maxCostUsd: -1 },
+    { maxCostUsd: Number.POSITIVE_INFINITY },
+    { unexpected: 1 },
+  ])("rejects invalid execution budgets %#", (budgets) => {
+    expect(
+      workflowDefinitionSchema.safeParse({ schemaVersion: 1, budgets, nodes: [], edges: [] }).success,
+    ).toBe(false);
+  });
+
+  it("preserves execution budgets while upgrading a stored definition", () => {
+    expect(
+      upgradeStoredWorkflowDefinition({
+        schemaVersion: 1,
+        budgets: { maxDurationMs: 30_000, maxTokens: 8_000, maxCostUsd: 1.25 },
+        nodes: [],
+        edges: [],
+      }).budgets,
+    ).toEqual({ maxDurationMs: 30_000, maxTokens: 8_000, maxCostUsd: 1.25 });
+  });
+
   it("removes retired arthur_trace and splices only its normal output", () => {
     const upgraded = upgradeStoredWorkflowDefinition({
       schemaVersion: 1,

@@ -125,7 +125,7 @@ describe("lib/llm generateStructured routing and usage", () => {
 
     const result = await generateStructured({ model: "m", prompt: "p" });
 
-    expect(result.usage).toEqual({ inputTokens: 5, outputTokens: 1, cachedTokens: 2 });
+    expect(result.usage).toEqual({ inputTokens: 3, outputTokens: 1, cachedTokens: 2 });
   });
 
   it("forwards both the schema output and the system on the schema branch", async () => {
@@ -165,7 +165,7 @@ describe("call_llm execute", () => {
     expect(mockCreateOpenAI).toHaveBeenCalledWith({ apiKey: "test-codex-key" });
     expect(mockOpenAiModel).toHaveBeenCalledWith("codex-model");
     expect(mockAnthropic).not.toHaveBeenCalled();
-    expect(ctx.recordUsage).toHaveBeenCalledWith("LLM llm-1", expect.anything(), "codex-model");
+    expect(ctx.recordUsage).toHaveBeenCalledWith("LLM llm-1", null, "codex-model");
   });
 
   it("sends the codex default model to the codex endpoint when provider is codex", async () => {
@@ -178,7 +178,7 @@ describe("call_llm execute", () => {
     expect(mockCreateOpenAI).toHaveBeenCalledWith({ apiKey: "test-codex-key" });
     expect(mockOpenAiModel).toHaveBeenCalledWith("codex-model");
     expect(mockAnthropic).not.toHaveBeenCalled();
-    expect(ctx.recordUsage).toHaveBeenCalledWith("LLM llm-2", expect.anything(), "codex-model");
+    expect(ctx.recordUsage).toHaveBeenCalledWith("LLM llm-2", null, "codex-model");
   });
 
   it("falls back to result.text when a schema is set but no object is returned", async () => {

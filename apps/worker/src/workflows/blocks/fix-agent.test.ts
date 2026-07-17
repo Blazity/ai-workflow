@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
   runCommand: vi.fn().mockResolvedValue({ exitCode: 0 }),
   ensureWorkspace: vi.fn(),
   inspectFixWorkspace: vi.fn(),
+  pollPhaseUntilDone: vi.fn().mockResolvedValue(true),
 }));
 
 vi.mock("workflow", () => ({ sleep: mocks.sleep }));
@@ -30,6 +31,7 @@ vi.mock("@vercel/sandbox", () => ({
     get: vi.fn(async () => ({ writeFiles: mocks.writeFiles, runCommand: mocks.runCommand })),
   },
 }));
+vi.mock("./poll-phase.js", () => ({ pollPhaseUntilDone: mocks.pollPhaseUntilDone }));
 vi.mock("../../sandbox/agents/index.js", () => ({
   createAgentAdapter: vi.fn(() => ({
     setCommitGuard: mocks.setCommitGuard,
@@ -109,6 +111,8 @@ describe("fix_agent execute", () => {
       };
     });
     mocks.inspectFixWorkspace.mockResolvedValue({ commits: [], unresolvedConflicts: [] });
+    mocks.runCommand.mockResolvedValue({ cmdId: "cmd-2", exitCode: null });
+    mocks.pollPhaseUntilDone.mockResolvedValue(true);
   });
 
   it("implicitly ensures a workspace when none is attached", async () => {
@@ -149,6 +153,13 @@ describe("fix_agent execute", () => {
       expect.objectContaining({ instructions: "focus on CI" }),
     );
     expect(ctx.markLaunched).toHaveBeenCalledWith("Fix Fix Block!");
+    expect(mocks.pollPhaseUntilDone).toHaveBeenCalledWith(
+      "sbx-1",
+      "/tmp/fix-fix-block--done",
+      25,
+      "cmd-2",
+      ctx.observeBudget,
+    );
     expect(ctx.recordUsage).toHaveBeenCalledWith("Fix Fix Block!", usage, "claude-model");
     expect(result).toEqual({
       kind: "next",
@@ -320,7 +331,7 @@ describe("fix_agent execute", () => {
   });
 
   it("reports the post-termination workspace state when the phase times out", async () => {
-    mocks.checkPhaseDone.mockResolvedValue("stopped");
+    mocks.pollPhaseUntilDone.mockResolvedValue(false);
     const before = {
       commits: [{ provider: "github" as const, repoPath: "acme/api", sha: "before123" }],
       unresolvedConflicts: [

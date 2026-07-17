@@ -1,5 +1,10 @@
 import { z } from "zod";
 import type { AgentKind } from "../../sandbox/agents/index.js";
+import {
+  RunBudgetError,
+  durationBudgetFailure,
+  isDurationAbortError,
+} from "../run-budget.js";
 import type { BlockExecuteFn, BlockExecutionResult } from "./types.js";
 
 export const paramsSchema = z
@@ -18,8 +23,10 @@ interface RunChecksStepResult {
 async function blockRunChecksCommandsStep(
   sandboxId: string,
   commands: string[],
+  timeoutMs: number,
 ): Promise<RunChecksStepResult> {
   "use step";
+  const signal = AbortSignal.timeout(Math.max(1, Math.floor(timeoutMs)));
   const { Sandbox } = await import("@vercel/sandbox");
   const { getSandboxCredentials } = await import("../../sandbox/credentials.js");
   const { parseWorkspaceManifest, WORKSPACE_MANIFEST_PATH } = await import(
@@ -42,6 +49,7 @@ async function blockRunChecksCommandsStep(
         cmd: "bash",
         args: ["-lc", command],
         cwd: repo.localPath,
+        signal,
       });
       results.push({ repo: repoKey, command, exitCode: result.exitCode });
       if (result.exitCode !== 0) {
@@ -64,6 +72,7 @@ async function blockRunChecksConfiguredStep(
   sandboxId: string,
   agentKind: AgentKind,
   model: string,
+  timeoutMs: number,
 ): Promise<RunChecksStepResult & { summary: string }> {
   "use step";
   const { getDb } = await import("../../db/client.js");
@@ -78,6 +87,7 @@ async function blockRunChecksConfiguredStep(
     agentKind,
     model,
     0,
+    timeoutMs,
   );
   const failures = run.failures.map((failure) => ({
     repo: `${failure.provider}:${failure.repoPath}`,
@@ -116,15 +126,19 @@ export const execute: BlockExecuteFn = async (block, _steps, ctx): Promise<Block
   const commands = Array.isArray(block.params.commands)
     ? block.params.commands.filter((c): c is string => typeof c === "string")
     : [];
+  const budget = await ctx.observeBudget();
+  if (budget.check.status !== "ok") throw new RunBudgetError(budget.check);
+  const timeoutMs = Math.max(1, Math.floor(budget.remainingDurationMs));
 
   try {
     const result =
       commands.length > 0
-        ? await blockRunChecksCommandsStep(ctx.sandboxId, commands)
+        ? await blockRunChecksCommandsStep(ctx.sandboxId, commands, timeoutMs)
         : await blockRunChecksConfiguredStep(
             ctx.sandboxId,
             ctx.runDefaultKind,
             ctx.defaults[ctx.runDefaultKind],
+            timeoutMs,
           );
     return {
       kind: "next",
@@ -136,6 +150,12 @@ export const execute: BlockExecuteFn = async (block, _steps, ctx): Promise<Block
       },
     };
   } catch (err) {
+    if (err instanceof RunBudgetError) throw err;
+    const after = await ctx.observeBudget();
+    if (after.check.status !== "ok") throw new RunBudgetError(after.check);
+    if (isDurationAbortError(err)) {
+      throw new RunBudgetError(durationBudgetFailure(after, "Run checks"));
+    }
     return {
       kind: "failed",
       output: { status: "failed" },

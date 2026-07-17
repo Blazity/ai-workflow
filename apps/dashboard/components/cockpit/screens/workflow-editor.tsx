@@ -79,6 +79,7 @@ export function WorkflowEditorScreen({
   const [deployments, setDeployments] = useState<WorkflowDefinitionDeployment[]>(initialDetail.deployments);
   const [deployed, setDeployed] = useState<WorkflowDefinitionVersion | null>(initialDetail.deployed);
   const [baselineDraft, setBaselineDraft] = useState<WorkflowDefinition | null>(initialDetail.draft);
+  const [budgets, setBudgets] = useState(seed.budgets);
   const [layoutBaseline, setLayoutBaseline] = useState(() => JSON.stringify(initialDetail.layout));
   const [nodes, setNodes] = useState<FlowNodeDef[]>(() => toViewNodes(seed.nodes));
   const [edges, setEdges] = useState<FlowEdgeDef[]>(() => structuredClone(seed.edges));
@@ -103,11 +104,12 @@ export function WorkflowEditorScreen({
   const selectedMeta = metas.find((m) => m.id === selectedId);
   const dirty =
     baselineDraft === null ||
-    JSON.stringify(serializeSemanticWorkflowDefinition(nodes, edges)) !==
+    JSON.stringify(serializeSemanticWorkflowDefinition(nodes, edges, budgets)) !==
       JSON.stringify(
         serializeSemanticWorkflowDefinition(
           toViewNodes(baselineDraft.nodes),
           structuredClone(baselineDraft.edges),
+          baselineDraft.budgets,
         ),
       );
   const canSave = dirty && nodesValid(nodes);
@@ -207,6 +209,7 @@ export function WorkflowEditorScreen({
 
   function applySave(res: WorkflowDefinitionSaveResponse, refit: boolean) {
     setBaselineDraft(res.draft);
+    setBudgets(res.draft.budgets);
     setNodes(toViewNodes(res.draft.nodes));
     setEdges(structuredClone(res.draft.edges));
     setMetas((prev) => prev.map((m) => (m.id === res.meta.id ? res.meta : m)));
@@ -222,7 +225,7 @@ export function WorkflowEditorScreen({
           method: "PUT",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({
-            definition: serializeWorkflowDefinition(nodes, edges),
+            definition: serializeWorkflowDefinition(nodes, edges, budgets),
             expectedDraftRevision: selectedMeta?.draftRevision ?? 0,
           }),
         });
@@ -311,6 +314,7 @@ export function WorkflowEditorScreen({
       setBaselineDraft(detail.draft);
       setLayoutBaseline(JSON.stringify(detail.layout));
       const def = detail.draft ?? detail.deployed?.definition ?? defaultDefinition;
+      setBudgets(def.budgets);
       setNodes(toViewNodes(def.nodes));
       setEdges(structuredClone(def.edges));
       setConfirmRestore(null);

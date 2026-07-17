@@ -1,3 +1,5 @@
+import { RunBudgetError, type RunBudgetObservation } from "../run-budget.js";
+
 /**
  * Wait for an agent phase's sentinel file, polling every 30s up to maxMinutes.
  * Returns false when the phase stopped without finishing or the cap ran out.
@@ -8,15 +10,60 @@ export async function pollPhaseUntilDone(
   sandboxId: string,
   sentinelFile: string,
   maxMinutes: number,
+  commandId: string,
+  observeBudget: () => Promise<RunBudgetObservation>,
 ): Promise<boolean> {
   const { sleep } = await import("workflow");
   const { checkPhaseDone } = await import("../../sandbox/poll-agent.js");
-  const maxPolls = Math.ceil((maxMinutes * 60) / 30);
-  for (let poll = 0; poll < maxPolls; poll++) {
-    await sleep("30s");
+  const phaseLimitMs = maxMinutes * 60_000;
+  let phaseElapsedMs = 0;
+  while (phaseElapsedMs < phaseLimitMs) {
+    const before = await observeBudget();
+    if (before.check.status !== "ok") {
+      await killPhaseCommand(sandboxId, commandId);
+      throw new RunBudgetError(before.check);
+    }
+    const sleepMs = Math.min(30_000, phaseLimitMs - phaseElapsedMs, before.remainingDurationMs);
+    if (sleepMs <= 0) {
+      const limit = before.durationLimitMs ?? before.activeElapsedMs ?? 0;
+      const consumed = before.activeElapsedMs ?? limit;
+      await killPhaseCommand(sandboxId, commandId);
+      throw new RunBudgetError({
+        status: "budget_exceeded",
+        metric: "duration",
+        limit,
+        consumed,
+        reason: `budget_exceeded: duration ${consumed} reached limit ${limit} while command is active`,
+      });
+    }
+
+    await sleep(`${Math.ceil(sleepMs)}ms`);
+    phaseElapsedMs += sleepMs;
+
+    const after = await observeBudget();
+    if (after.check.status !== "ok") {
+      await killPhaseCommand(sandboxId, commandId);
+      throw new RunBudgetError(after.check);
+    }
     const status = await checkPhaseDone(sandboxId, sentinelFile);
     if (status === true) return true;
     if (status === "stopped") return false;
   }
+  await killPhaseCommand(sandboxId, commandId);
   return false;
 }
+
+async function killPhaseCommand(sandboxId: string, commandId: string): Promise<void> {
+  "use step";
+  const { Sandbox } = await import("@vercel/sandbox");
+  const { getSandboxCredentials } = await import("../../sandbox/credentials.js");
+  try {
+    const sandbox = await Sandbox.get({ sandboxId, ...getSandboxCredentials() });
+    const command = await sandbox.getCommand(commandId);
+    await command.kill();
+  } catch {
+    // The command or sandbox may already have stopped. Terminal teardown remains
+    // responsible for the sandbox itself; budget handling must stay deterministic.
+  }
+}
+killPhaseCommand.maxRetries = 0;

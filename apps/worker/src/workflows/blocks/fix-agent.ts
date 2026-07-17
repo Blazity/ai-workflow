@@ -8,6 +8,7 @@ import type {
 } from "../../sandbox/agents/types.js";
 import type { CheckRunResult, PRComment } from "../../adapters/vcs/types.js";
 import { resolveBlockAgent } from "../../workflow-definition/resolve-agent.js";
+import { isRunBudgetError } from "../run-budget.js";
 import { pollPhaseUntilDone } from "./poll-phase.js";
 import { ensureWorkspace } from "./prepare-workspace.js";
 import {
@@ -64,7 +65,7 @@ async function blockFixAgentStartPhaseStep(
   inputContent: string,
   scriptPath: string,
   scriptContent: string,
-): Promise<void> {
+): Promise<string> {
   "use step";
   const { Sandbox } = await import("@vercel/sandbox");
   const { getSandboxCredentials } = await import("../../sandbox/credentials.js");
@@ -75,12 +76,13 @@ async function blockFixAgentStartPhaseStep(
     { path: scriptPath, content: Buffer.from(scriptContent) },
   ]);
   await sandbox.runCommand("chmod", ["+x", scriptPath]);
-  await sandbox.runCommand({
+  const command = await sandbox.runCommand({
     cmd: "bash",
     args: [scriptPath],
     cwd: "/vercel/sandbox",
     detached: true,
   });
+  return command.cmdId;
 }
 blockFixAgentStartPhaseStep.maxRetries = 0;
 
@@ -171,10 +173,22 @@ export const execute: BlockExecuteFn = async (block, _steps, ctx): Promise<Block
 
     await blockFixAgentCommitGuardStep(sandboxId, kind, true);
     const { paths, script } = await blockFixAgentPlanPhaseStep(kind, phase, model, AGENT_SCHEMA);
-    await blockFixAgentStartPhaseStep(sandboxId, paths.input, input, paths.wrapper, script);
+    const commandId = await blockFixAgentStartPhaseStep(
+      sandboxId,
+      paths.input,
+      input,
+      paths.wrapper,
+      script,
+    );
     ctx.markLaunched(usageLabel(block.id));
 
-    const done = await pollPhaseUntilDone(sandboxId, paths.sentinel, maxMinutes);
+    const done = await pollPhaseUntilDone(
+      sandboxId,
+      paths.sentinel,
+      maxMinutes,
+      commandId,
+      ctx.observeBudget,
+    );
     if (!done) {
       // The shared poller's timeout contract (implemented with AIW-102) stops
       // the detached command before returning false. Re-read afterward because
@@ -238,6 +252,7 @@ export const execute: BlockExecuteFn = async (block, _steps, ctx): Promise<Block
       },
     };
   } catch (err) {
+    if (isRunBudgetError(err)) throw err;
     return {
       kind: "failed",
       output: {

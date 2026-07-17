@@ -352,8 +352,32 @@ export interface WorkflowDefinitionEdge {
   fromPort?: string;
 }
 
+export interface WorkflowExecutionBudgets {
+  maxDurationMs?: number;
+  maxTokens?: number;
+  maxCostUsd?: number;
+}
+
+/** Structured terminal cause persisted when a workflow run stops on a budget. */
+export type WorkflowRunBudgetFailure =
+  | {
+      status: "budget_exceeded";
+      metric: "duration" | "tokens" | "cost";
+      limit: number;
+      consumed: number;
+      reason: string;
+    }
+  | {
+      status: "budget_unverifiable";
+      metric: "tokens" | "cost";
+      limit: number;
+      consumed: null;
+      reason: string;
+    };
+
 export interface WorkflowDefinition {
   schemaVersion: 1;
+  budgets?: WorkflowExecutionBudgets;
   nodes: WorkflowDefinitionNode[];
   edges: WorkflowDefinitionEdge[];
 }

@@ -1,4 +1,4 @@
-import { sleep, getWorkflowMetadata } from "workflow";
+import { getWorkflowMetadata } from "workflow";
 import { branchForTicket } from "../lib/branch-prefix.js";
 import { ticketRunUrl, ticketPageUrl, hasDashboardLinkComment } from "../lib/dashboard-links.js";
 import { computeUsageTotals, type UsageTotals } from "../sandbox/usage.js";
@@ -31,7 +31,24 @@ import { ensureAgentSandbox } from "./blocks/agent-sandbox.js";
 import { execute as executeFinalizeWorkspace } from "./blocks/finalize-workspace.js";
 import { execute as executeFixAgent } from "./blocks/fix-agent.js";
 import { execute as executeGenericAgent } from "./blocks/generic-agent.js";
-import { execute as executeCallLlm } from "./blocks/call-llm.js";
+import {
+  execute as executeCallLlm,
+  resolveCallLlmTarget,
+} from "./blocks/call-llm.js";
+import { pollPhaseUntilDone } from "./blocks/poll-phase.js";
+import {
+  RunBudgetError,
+  addActiveElapsed,
+  createRunBudgetState,
+  durationBudgetFailure,
+  isDurationAbortError,
+  observeRunBudget,
+  recordBudgetUsage,
+  type RunBudgetLimits,
+  type RunBudgetFailure,
+  type RunBudgetObservation,
+  type RunBudgetState,
+} from "./run-budget.js";
 import { execute as executeFetchPrContext } from "./blocks/fetch-pr-context.js";
 import { execute as executeRunChecks } from "./blocks/run-checks.js";
 import { execute as executePostTicketComment } from "./blocks/post-ticket-comment.js";
@@ -87,6 +104,44 @@ export function blockTypesMissingExecutor(): WorkflowBlockType[] {
       BLOCK_EXECUTORS[type] === undefined &&
       !INLINE_EXECUTED_BLOCK_TYPES.includes(type),
   );
+}
+
+export function modelsRequiringPriceLookup(
+  nodes: WorkflowDefinitionNode[],
+  runDefaultKind: AgentKind,
+  defaults: { claude: string; codex: string },
+): Set<string> {
+  const models = new Set<string>();
+  for (const node of nodes) {
+    if (
+      node.type === "planning_agent" ||
+      node.type === "implementation_agent" ||
+      node.type === "review_agent" ||
+      node.type === "fix_agent" ||
+      node.type === "generic_agent"
+    ) {
+      const resolved = resolveBlockAgent(node.params, runDefaultKind, defaults);
+      if (resolved.kind === "codex") models.add(resolved.model);
+    } else if (node.type === "call_llm") {
+      models.add(resolveCallLlmTarget(node.params, runDefaultKind, defaults).model);
+    }
+  }
+  if (runDefaultKind === "codex") models.add(defaults.codex);
+  return models;
+}
+
+export function recordPrePrFixCycleUsages(
+  ctx: Pick<EngineCtx, "markLaunched" | "recordUsage">,
+  usages: ReadonlyArray<PhaseUsage | null>,
+  model: string,
+  budgetFailure: RunBudgetFailure | null = null,
+): void {
+  usages.forEach((usage, index) => {
+    const label = `Pre-PR Fix ${index + 1}`;
+    ctx.markLaunched(label);
+    ctx.recordUsage(label, usage, model);
+  });
+  if (budgetFailure) throw new RunBudgetError(budgetFailure);
 }
 
 export function resolveSlackMessageInput(
@@ -326,7 +381,7 @@ async function writeAndStartPhase(
   inputContent: string,
   scriptPath: string,
   scriptContent: string,
-): Promise<void> {
+): Promise<string> {
   "use step";
   const { Sandbox } = await import("@vercel/sandbox");
   const { getSandboxCredentials } = await import("../sandbox/credentials.js");
@@ -339,16 +394,17 @@ async function writeAndStartPhase(
   ]);
   await sandbox.runCommand("chmod", ["+x", scriptPath]);
 
-  await sandbox.runCommand({
+  const command = await sandbox.runCommand({
     cmd: "bash",
     args: [scriptPath],
     cwd: "/vercel/sandbox",
     detached: true,
   });
+  return command.cmdId;
 }
 writeAndStartPhase.maxRetries = 0;
 
-async function fetchCodexPriceStep(model: string): Promise<{ input: number; cached_input: number; output: number } | null> {
+async function fetchModelPriceStep(model: string): Promise<{ input: number; cached_input: number; output: number } | null> {
   "use step";
   const { fetchModelPrice } = await import("../sandbox/agents/pricing.js");
   try {
@@ -359,7 +415,13 @@ async function fetchCodexPriceStep(model: string): Promise<{ input: number; cach
     return null;
   }
 }
-fetchCodexPriceStep.maxRetries = 0;
+fetchModelPriceStep.maxRetries = 0;
+
+async function readRunBudgetClockStep(): Promise<number> {
+  "use step";
+  return Date.now();
+}
+readRunBudgetClockStep.maxRetries = 0;
 
 async function setCommitGuardStep(sandboxId: string, agentKind: AgentKind, enabled: boolean): Promise<void> {
   "use step";
@@ -661,7 +723,19 @@ async function runPrePrChecksStep(
   agentKind: AgentKind,
   model: string,
   maxFixCycles?: number,
-): Promise<{ passed: boolean; fixCycles: number; summary: string }> {
+  timeoutMs?: number,
+  budget?: {
+    state: RunBudgetState;
+    limits: RunBudgetLimits;
+    price: { input: number; cached_input: number; output: number } | null;
+  },
+): Promise<{
+  passed: boolean;
+  fixCycles: number;
+  fixCycleUsages: Array<PhaseUsage | null>;
+  budgetFailure: RunBudgetFailure | null;
+  summary: string;
+}> {
   "use step";
   const { getDb } = await import("../db/client.js");
   const { getCurrentPrePrCheckConfig } = await import("../pre-pr-checks/store.js");
@@ -679,6 +753,8 @@ async function runPrePrChecksStep(
     agentKind,
     model,
     maxFixCycles,
+    timeoutMs,
+    budget,
   );
 }
 runPrePrChecksStep.maxRetries = 0;
@@ -725,6 +801,7 @@ async function recordRunTelemetryStep(payload: {
   ticketUrl: string;
   model: string | null;
   totals: UsageTotals;
+  budgetFailure: RunBudgetFailure | null;
   pr: { url: string; number: number } | null;
   awaitingClarificationId?: string | null;
 }) {
@@ -771,6 +848,7 @@ async function recordRunTelemetryStep(payload: {
     tokensOutput: totals.tokensOutput,
     phases: totals.phases,
     steps,
+    budgetFailure: payload.budgetFailure,
     prUrl: payload.pr?.url ?? null,
     prNumber: payload.pr?.number ?? null,
   });
@@ -793,28 +871,6 @@ async function recordBlockStatusesStep(payload: {
 }
 recordBlockStatusesStep.maxRetries = 0;
 
-// --- Polling helper (not a step — called within the workflow) ---
-
-async function pollUntilDone(
-  sandboxId: string,
-  sentinelFile: string,
-  maxPollMinutes: number,
-): Promise<boolean> {
-  const { checkPhaseDone } = await import("../sandbox/poll-agent.js");
-  const POLL_INTERVAL = "30s";
-  const MAX_POLLS = Math.ceil((maxPollMinutes * 60) / 30);
-  let pollCount = 0;
-
-  while (pollCount < MAX_POLLS) {
-    await sleep(POLL_INTERVAL);
-    pollCount++;
-    const status = await checkPhaseDone(sandboxId, sentinelFile);
-    if (status === true) return true;
-    if (status === "stopped") return false;
-  }
-  return false;
-}
-
 // --- Main Workflow ---
 
 export async function agentWorkflow(input: string | AgentWorkflowInput) {
@@ -825,6 +881,7 @@ export async function agentWorkflow(input: string | AgentWorkflowInput) {
   const ticketId = entry.ticketKey;
 
   const { workflowRunId } = getWorkflowMetadata();
+  const budgetStartedAtMs = await readRunBudgetClockStep();
 
   const { env } = await import("../../env.js");
   const { assembleResearchPlanContext, assembleImplementationContext, assembleReviewContext } =
@@ -886,6 +943,26 @@ export async function agentWorkflow(input: string | AgentWorkflowInput) {
     return;
   }
 
+  const budgetLimits: RunBudgetLimits = {
+    maxDurationMs: plan.budgets?.maxDurationMs ?? env.JOB_TIMEOUT_MS,
+    ...(plan.budgets?.maxTokens !== undefined ? { maxTokens: plan.budgets.maxTokens } : {}),
+    ...(plan.budgets?.maxCostUsd !== undefined ? { maxCostUsd: plan.budgets.maxCostUsd } : {}),
+  };
+  let budgetState: RunBudgetState = createRunBudgetState();
+  let lastBudgetClockMs = budgetStartedAtMs;
+  const observeBudgetAtBoundary = async (
+    requireRemainingDuration: boolean,
+  ): Promise<RunBudgetObservation> => {
+    const now = await readRunBudgetClockStep();
+    budgetState = addActiveElapsed(budgetState, now - lastBudgetClockMs);
+    lastBudgetClockMs = Math.max(lastBudgetClockMs, now);
+    return observeRunBudget(budgetState, budgetLimits, requireRemainingDuration);
+  };
+  const enforceBudgetAtBoundary = async (requireRemainingDuration: boolean): Promise<void> => {
+    const observation = await observeBudgetAtBoundary(requireRemainingDuration);
+    if (observation.check.status !== "ok") throw new RunBudgetError(observation.check);
+  };
+
   const blockStatuses: Record<string, BlockRunState> = Object.fromEntries(
     plan.nodes
       .filter((node) => !isTriggerBlockType(node.type))
@@ -911,6 +988,13 @@ export async function agentWorkflow(input: string | AgentWorkflowInput) {
   // any such launched-but-missing phase to null so computeUsageTotals flags
   // costKnown=false instead of reporting a misleading costUsd=0 / costKnown=true.
   const launchedPhases = new Set<string>();
+  const reconcileMissingPhaseUsages = (): void => {
+    for (const phase of launchedPhases) {
+      if (phase in phaseUsages) continue;
+      phaseUsages[phase] = null;
+      budgetState = recordBudgetUsage(budgetState, null, null);
+    }
+  };
   // Captured on the success path; written as run telemetry in the finally.
   let prForTelemetry: { url: string; number: number } | null = null;
   // Authoritative terminal status for telemetry, written in the finally on
@@ -920,6 +1004,7 @@ export async function agentWorkflow(input: string | AgentWorkflowInput) {
   // flips it to success). Every phase failure / timeout / thrown error keeps
   // "failed".
   let runOutcome: "success" | "failed" | "awaiting" = "failed";
+  let terminalBudgetFailure: RunBudgetFailure | null = null;
   // The clarification this run parked on, set only on the awaiting path. Threaded
   // into the terminal telemetry write so it can re-check the row and record
   // "success" instead of a phantom "awaiting" when the answer landed after the
@@ -989,27 +1074,17 @@ export async function agentWorkflow(input: string | AgentWorkflowInput) {
     const resolveAgent = (params: WorkflowDefinitionNode["params"]) =>
       resolveBlockAgent(params, runDefaultKind, { claude: env.CLAUDE_MODEL, codex: env.CODEX_MODEL });
 
-    // Codex phases are priced from tokens, so gather every codex-resolved model
-    // (plus the default codex model when the run default is codex, for fix
-    // cycles). Claude-only runs leave priceLookup undefined.
-    const codexModels = new Set<string>();
-    for (const node of plan.nodes) {
-      if (
-        node.type === "planning_agent" ||
-        node.type === "implementation_agent" ||
-        node.type === "review_agent" ||
-        node.type === "fix_agent" ||
-        node.type === "generic_agent"
-      ) {
-        const resolved = resolveAgent(node.params);
-        if (resolved.kind === "codex") codexModels.add(resolved.model);
-      }
-    }
-    if (runDefaultKind === "codex") codexModels.add(env.CODEX_MODEL);
-    if (codexModels.size > 0) {
+    // Codex agents and every in-process Call LLM need token pricing. Fetch all
+    // resolved models before any block can record usage so configured cost caps
+    // fail closed instead of depending on network timing during execution.
+    const pricedModels = modelsRequiringPriceLookup(plan.nodes, runDefaultKind, {
+      claude: env.CLAUDE_MODEL,
+      codex: env.CODEX_MODEL,
+    });
+    if (pricedModels.size > 0) {
       const priceMap = new Map<string, { input: number; cached_input: number; output: number }>();
-      for (const model of codexModels) {
-        const price = await fetchCodexPriceStep(model);
+      for (const model of pricedModels) {
+        const price = await fetchModelPriceStep(model);
         if (price) priceMap.set(model, price);
       }
       priceLookup = (model) => priceMap.get(model) ?? null;
@@ -1048,10 +1123,16 @@ export async function agentWorkflow(input: string | AgentWorkflowInput) {
       arthur: {
         taskId: null,
       },
+      observeBudget: () => observeBudgetAtBoundary(true),
       recordUsage: (label, usage, model) => {
         const key = phaseKey(label, state.attempt);
         phaseUsages[key] = usage;
         phaseModels[key] = model;
+        budgetState = recordBudgetUsage(
+          budgetState,
+          usage,
+          priceLookup?.(model) ?? null,
+        );
       },
       markLaunched: (label) => {
         launchedPhases.add(phaseKey(label, state.attempt));
@@ -1250,14 +1331,20 @@ export async function agentWorkflow(input: string | AgentWorkflowInput) {
               repositoryContexts: ctx.repositoryContexts,
             });
 
-            await writeAndStartPhase(
+            const researchCommandId = await writeAndStartPhase(
               sandboxId,
               researchPaths.input, researchInput,
               researchPaths.wrapper, researchScript,
             );
             launchedPhases.add(researchPhase);
 
-            const researchDone = await pollUntilDone(sandboxId, researchPaths.sentinel, 20);
+            const researchDone = await pollPhaseUntilDone(
+              sandboxId,
+              researchPaths.sentinel,
+              20,
+              researchCommandId,
+              ctx.observeBudget,
+            );
             if (!researchDone) {
               return { kind: "failed", output: { status: "failed" }, reason: "phase timed out", phase: "research" };
             }
@@ -1266,7 +1353,7 @@ export async function agentWorkflow(input: string | AgentWorkflowInput) {
               await collectPhase(sandboxId, researchPaths);
             const { research, usage: researchUsage } =
               await parseResearchStep(kind, researchRaw, researchStructured);
-            phaseUsages[researchPhase] = researchUsage;
+            ctx.recordUsage("Research", researchUsage, model);
 
             if (research.status === "clarification_needed") {
               // Prefer the structured questions the parser now folds out; fall
@@ -1316,20 +1403,26 @@ export async function agentWorkflow(input: string | AgentWorkflowInput) {
               selectedRepositories: ctx.selectedRepositories,
             });
 
-            await writeAndStartPhase(
+            const implCommandId = await writeAndStartPhase(
               sandboxId,
               implPaths.input, implInput,
               implPaths.wrapper, implScript,
             );
             launchedPhases.add(implPhase);
 
-            const implDone = await pollUntilDone(sandboxId, implPaths.sentinel, 35);
+            const implDone = await pollPhaseUntilDone(
+              sandboxId,
+              implPaths.sentinel,
+              35,
+              implCommandId,
+              ctx.observeBudget,
+            );
             let implOutput: AgentOutput;
 
             if (implDone) {
               const { raw: implRaw, structured: implStructured } = await collectPhase(sandboxId, implPaths);
               const { output, usage: implUsage } = await parseAgentOutputStep(kind, implRaw, implStructured);
-              phaseUsages[implPhase] = implUsage;
+              ctx.recordUsage("Impl", implUsage, model);
               implOutput = output;
             } else {
               implOutput = { result: "failed", error: "Implementation phase timed out" };
@@ -1375,20 +1468,26 @@ export async function agentWorkflow(input: string | AgentWorkflowInput) {
               selectedRepositories: ctx.selectedRepositories,
             });
 
-            await writeAndStartPhase(
+            const reviewCommandId = await writeAndStartPhase(
               sandboxId,
               reviewPaths.input, reviewInput,
               reviewPaths.wrapper, reviewScript,
             );
             launchedPhases.add(reviewPhase);
 
-            const reviewDone = await pollUntilDone(sandboxId, reviewPaths.sentinel, 15);
+            const reviewDone = await pollPhaseUntilDone(
+              sandboxId,
+              reviewPaths.sentinel,
+              15,
+              reviewCommandId,
+              ctx.observeBudget,
+            );
             let reviewOutput: ReviewOutput;
 
             if (reviewDone) {
               const { raw: reviewRaw, structured: reviewStructured } = await collectPhase(sandboxId, reviewPaths);
               const { output, usage: reviewUsage } = await parseReviewStep(kind, reviewRaw, reviewStructured);
-              phaseUsages[reviewPhase] = reviewUsage;
+              ctx.recordUsage("Review", reviewUsage, model);
               reviewOutput = output;
             } else {
               reviewOutput = { result: "failed", feedback: "", issues: [], error: "Review phase timed out" };
@@ -1413,11 +1512,36 @@ export async function agentWorkflow(input: string | AgentWorkflowInput) {
             if (!ctx.sandboxId) return noWorkspace(node.type);
             const maxFixCycles =
               typeof node.params.maxFixCycles === "number" ? node.params.maxFixCycles : undefined;
-            const prePrChecks = await runPrePrChecksStep(
-              ctx.sandboxId,
-              state.implementationKind ?? runDefaultKind,
+            const budget = await ctx.observeBudget();
+            if (budget.check.status !== "ok") throw new RunBudgetError(budget.check);
+            let prePrChecks: Awaited<ReturnType<typeof runPrePrChecksStep>>;
+            try {
+              prePrChecks = await runPrePrChecksStep(
+                ctx.sandboxId,
+                state.implementationKind ?? runDefaultKind,
+                state.implementationModel,
+                maxFixCycles,
+                Math.max(1, Math.floor(budget.remainingDurationMs)),
+                {
+                  state: budgetState,
+                  limits: budgetLimits,
+                  price: priceLookup?.(state.implementationModel) ?? null,
+                },
+              );
+            } catch (err) {
+              if (err instanceof RunBudgetError) throw err;
+              const after = await ctx.observeBudget();
+              if (after.check.status !== "ok") throw new RunBudgetError(after.check);
+              if (isDurationAbortError(err)) {
+                throw new RunBudgetError(durationBudgetFailure(after, "Pre-PR checks"));
+              }
+              throw err;
+            }
+            recordPrePrFixCycleUsages(
+              ctx,
+              prePrChecks.fixCycleUsages,
               state.implementationModel,
-              maxFixCycles,
+              prePrChecks.budgetFailure,
             );
             if (!prePrChecks.passed) {
               return {
@@ -1540,8 +1664,11 @@ export async function agentWorkflow(input: string | AgentWorkflowInput) {
           state.attempt = attempt;
           blockStatuses[nodeId] = { status: "running", attempt };
           await writeBlockStatuses();
+          await enforceBudgetAtBoundary(true);
         },
         async onBlockFinish(nodeId, state) {
+          reconcileMissingPhaseUsages();
+          await enforceBudgetAtBoundary(false);
           let guarded = state;
           if (state.output && JSON.stringify(state.output).length > 8192) {
             guarded = { ...state, output: { status: state.output.status, _truncated: true } };
@@ -1589,7 +1716,14 @@ export async function agentWorkflow(input: string | AgentWorkflowInput) {
       // sandbox each iteration, and all but the last would otherwise leak.
       await teardownSandboxes(ctx.sandboxIds);
     }
-  } catch (err) {
+  } catch (caught) {
+    reconcileMissingPhaseUsages();
+    let err = caught;
+    if (!(err instanceof RunBudgetError)) {
+      const observation = await observeBudgetAtBoundary(false);
+      if (observation.check.status !== "ok") err = new RunBudgetError(observation.check);
+    }
+    if (err instanceof RunBudgetError) terminalBudgetFailure = err.failure;
     if (currentBlockId) {
       blockStatuses[currentBlockId] = {
         status: "fail",
@@ -1619,9 +1753,7 @@ export async function agentWorkflow(input: string | AgentWorkflowInput) {
     // A launched phase with no parsed usage (timed out / errored before
     // collect) records as unknown, so computeUsageTotals reports
     // costKnown=false instead of a misleading costUsd=0 / costKnown=true.
-    for (const phase of launchedPhases) {
-      if (!(phase in phaseUsages)) phaseUsages[phase] = null;
-    }
+    reconcileMissingPhaseUsages();
     // Free the ticket's active_runs slot on every terminal exit. Most paths
     // (open_pr, finalize_workspace, send_plan_approval, terminate, clarification,
     // failure) already unregister mid-run, but a graph that completes without any
@@ -1651,6 +1783,7 @@ export async function agentWorkflow(input: string | AgentWorkflowInput) {
       ticketUrl: `${env.JIRA_BASE_URL.replace(/\/+$/, "")}/browse/${ticket.identifier}`,
       model: activeModel ?? null,
       totals: computeUsageTotals(phaseUsages, priceLookup, activeModel, phaseModels),
+      budgetFailure: terminalBudgetFailure,
       pr: prForTelemetry,
       awaitingClarificationId,
     }).catch((err) => {

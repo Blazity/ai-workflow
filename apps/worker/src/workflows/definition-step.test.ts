@@ -136,6 +136,18 @@ describe("loadWorkflowDefinition", () => {
     expect(loggerError).not.toHaveBeenCalled();
   });
 
+  it("preserves configured execution budgets in the loaded plan", async () => {
+    const definition = {
+      ...defaultWorkflowDefinition({ includeReview: false }),
+      budgets: { maxDurationMs: 12_000, maxTokens: 500, maxCostUsd: 1.25 },
+    };
+    mockGetEnabled.mockResolvedValue(enabled(definition, 8, 4));
+
+    const plan = await loadWorkflowDefinition();
+
+    expect(plan.budgets).toEqual({ maxDurationMs: 12_000, maxTokens: 500, maxCostUsd: 1.25 });
+  });
+
   it("reflects reviewEnabled=false for a valid stored definition without a review block", async () => {
     mockGetEnabled.mockResolvedValue(enabled(defaultWorkflowDefinition({ includeReview: false }), 4, 2));
     const plan = await loadWorkflowDefinition();

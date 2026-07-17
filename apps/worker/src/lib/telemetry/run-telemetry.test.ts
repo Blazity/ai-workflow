@@ -61,6 +61,7 @@ const usage = (over: Partial<RunUsage> = {}): RunUsage => ({
   tokensCached: 200,
   tokensOutput: 500,
   phases: { Research: { costUsd: 0.5, tokens: null, durationMs: 60000, numTurns: 3 } },
+  budgetFailure: null,
   prUrl: "https://github.com/o/r/pull/7",
   prNumber: 7,
   steps: null,
@@ -150,6 +151,20 @@ describe("recordRunUsage", () => {
     await recordRunUsage(db, usage({ status: "failed" }));
     const r = await row("wrun_1");
     expect(r.status).toBe("failed");
+  });
+
+  it("persists structured terminal budget telemetry", async () => {
+    const budgetFailure = {
+      status: "budget_exceeded" as const,
+      metric: "cost" as const,
+      limit: 0.3,
+      consumed: 0.31,
+      reason: "budget_exceeded: cost 0.31 exceeds limit 0.3",
+    };
+
+    await recordRunUsage(db, usage({ status: "failed", budgetFailure }));
+
+    expect((await row("wrun_1")).budgetFailure).toEqual(budgetFailure);
   });
 
   it("records the workflow identity so a cron-less run is attributable to its workflow", async () => {

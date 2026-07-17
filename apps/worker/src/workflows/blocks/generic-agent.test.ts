@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   runCommand: vi.fn().mockResolvedValue({ exitCode: 0 }),
   sandboxGet: vi.fn(),
   ensureAgentSandbox: vi.fn(),
+  pollPhaseUntilDone: vi.fn().mockResolvedValue(true),
 }));
 
 vi.mock("workflow", () => ({ sleep: mocks.sleep }));
@@ -21,6 +22,7 @@ vi.mock("../../sandbox/poll-agent.js", () => ({
 }));
 vi.mock("../../sandbox/credentials.js", () => ({ getSandboxCredentials: () => ({}) }));
 vi.mock("@vercel/sandbox", () => ({ Sandbox: { get: mocks.sandboxGet } }));
+vi.mock("./poll-phase.js", () => ({ pollPhaseUntilDone: mocks.pollPhaseUntilDone }));
 vi.mock("../../sandbox/agents/index.js", () => ({
   createAgentAdapter: vi.fn(() => ({
     setCommitGuard: mocks.setCommitGuard,
@@ -76,6 +78,8 @@ describe("generic_agent execute", () => {
     mocks.checkPhaseDone.mockResolvedValue(true);
     mocks.extractUsage.mockReturnValue(null);
     mocks.ensureAgentSandbox.mockResolvedValue("scratch-new");
+    mocks.runCommand.mockResolvedValue({ cmdId: "cmd-1", exitCode: null });
+    mocks.pollPhaseUntilDone.mockResolvedValue(true);
   });
 
   it("fails on an unparseable outputSchema before touching the sandbox", async () => {
@@ -182,6 +186,13 @@ describe("generic_agent execute", () => {
       { path: "/tmp/agent-my-agent-wrapper.sh", content: Buffer.from("#!/bin/bash") },
     ]);
     expect(ctx.markLaunched).toHaveBeenCalledWith("Agent My Agent");
+    expect(mocks.pollPhaseUntilDone).toHaveBeenCalledWith(
+      "sbx-1",
+      "/tmp/agent-my-agent-done",
+      25,
+      "cmd-1",
+      ctx.observeBudget,
+    );
     expect(ctx.recordUsage).toHaveBeenCalledWith("Agent My Agent", null, "claude-model");
     expect(result).toEqual({ kind: "next", output: { status: "ok", body: "done" } });
   });
@@ -355,7 +366,7 @@ describe("generic_agent execute", () => {
   });
 
   it("fails when the phase times out", async () => {
-    mocks.checkPhaseDone.mockResolvedValue(false);
+    mocks.pollPhaseUntilDone.mockResolvedValue(false);
 
     const result = await execute(makeNode("generic_agent", { prompt: "p" }), {}, makeCtx());
 

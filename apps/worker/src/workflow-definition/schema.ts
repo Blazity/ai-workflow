@@ -291,10 +291,18 @@ const edgeSchema = z
 // fixpoint is O(N^2*E) and copies the node universe per node.
 const MAX_NODES = 200;
 const MAX_EDGES = 400;
+const executionBudgetsSchema = z
+  .object({
+    maxDurationMs: z.number().int().positive().optional(),
+    maxTokens: z.number().int().positive().optional(),
+    maxCostUsd: z.number().finite().positive().optional(),
+  })
+  .strict();
 
 export const workflowDefinitionSchema = z
   .object({
     schemaVersion: z.literal(1),
+    budgets: executionBudgetsSchema.optional(),
     nodes: z.array(nodeSchema).max(MAX_NODES, `Workflow cannot have more than ${MAX_NODES} blocks.`),
     edges: z
       .array(edgeSchema)
@@ -334,6 +342,7 @@ const storedWorkflowNode = z
 const storedWorkflowDefinition = z
   .object({
     schemaVersion: z.literal(1),
+    budgets: executionBudgetsSchema.optional(),
     nodes: z.array(storedWorkflowNode),
     edges: z.array(edgeSchema),
   })
@@ -464,6 +473,7 @@ export function upgradeStoredWorkflowDefinition(raw: unknown): WorkflowDefinitio
 
   return {
     schemaVersion: 1,
+    ...(parsed.budgets === undefined ? {} : { budgets: parsed.budgets }),
     nodes: upgradedNodes,
     edges,
   };
