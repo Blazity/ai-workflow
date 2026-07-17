@@ -71,7 +71,7 @@ function makeExecutor(
   const executor: BlockExecutor = async (block, steps) => {
     calls.push(block.id);
     onCall?.(block, steps);
-    return overrides[block.id] ?? { kind: "next", output: { status: "ok", id: block.id } };
+    return overrides[block.id] ?? defaultResult(block);
   };
   return { executor, calls };
 }
@@ -118,9 +118,22 @@ function makeDynamicExecutor(
     calls.push(block.id);
     const attempt = (perId.get(block.id) ?? 0) + 1;
     perId.set(block.id, attempt);
-    return fn(block, attempt) ?? { kind: "next", output: { status: "ok", id: block.id } };
+    return fn(block, attempt) ?? defaultResult(block);
   };
   return { executor, calls };
+}
+
+function defaultResult(block: WorkflowDefinitionNode): BlockExecutionResult {
+  return block.type === "finalize_workspace"
+    ? {
+        kind: "next",
+        output: {
+          status: "finalized",
+          publicationAttemptId: `attempt-${block.id}`,
+          repositories: [],
+        },
+      }
+    : { kind: "next", output: { status: "ok", id: block.id } };
 }
 
 // Clone the humanGate fixture with overridden retry.params and optional extra edges.
@@ -149,6 +162,7 @@ describe("golden runs: linear pipeline", () => {
       "planning",
       "implementation",
       "checks",
+      "finalize",
       "open-pr",
       "status",
       "slack",
@@ -157,7 +171,7 @@ describe("golden runs: linear pipeline", () => {
     expect(rec.starts.every((s) => s.attempt === 1)).toBe(true);
     expect(rec.finishes.every((f) => f.state.status === "ok")).toBe(true);
     expect(Object.keys(result.steps).sort()).toEqual(
-      ["trigger", "planning", "implementation", "checks", "open-pr", "status", "slack"].sort(),
+      ["trigger", "planning", "implementation", "checks", "finalize", "open-pr", "status", "slack"].sort(),
     );
   });
 
@@ -230,7 +244,7 @@ describe("golden runs: humanGate loop", () => {
       overrides: { checks: CHECKS_PASS },
     });
     expect(result.outcome).toBe("completed");
-    expect(calls).toEqual(["planning", "implementation", "checks", "open-pr"]);
+    expect(calls).toEqual(["planning", "implementation", "checks", "finalize", "open-pr"]);
     expect(result.steps.gate.output.path).toBe("false");
     expect(result.steps.verdict.output.path).toBe("true");
     expect(calls).not.toContain("fix");
@@ -301,7 +315,7 @@ describe("golden runs: humanGate loop", () => {
   it("onExhaust=continue with a wired exhausted edge follows it and completes", async () => {
     const { result, calls, rec } = await runGolden({
       def: humanGateWithRetry({ onExhaust: "continue" }, [
-        { from: "retry", to: "open-pr", fromPort: "exhausted" },
+        { from: "retry", to: "finalize", fromPort: "exhausted" },
       ]),
       entryTriggerType: "trigger_ticket_ai",
       overrides: { checks: CHECKS_FAIL },
@@ -402,7 +416,7 @@ describe("golden runs: planApproval two-chain hand-off", () => {
       entryTriggerType: "trigger_plan_approved",
     });
     expect(result.outcome).toBe("completed");
-    expect(calls).toEqual(["implementation", "open-pr", "status"]);
+    expect(calls).toEqual(["implementation", "finalize", "open-pr", "status"]);
     expect(calls).not.toContain("planning");
     expect(calls).not.toContain("send-approval");
   });

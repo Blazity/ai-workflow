@@ -3,25 +3,56 @@ import type { SelectedRepository } from "../adapters/vcs/repository-directory.js
 
 const mocks = vi.hoisted(() => ({
   pushWorkspaceFromSandbox: vi.fn(),
-  fixAndRetryWorkspacePush: vi.fn(),
-  createOrUseWorkflowOwnedPullRequestsForRepos: vi.fn(),
+  createOrFindWorkflowOwnedPullRequest: vi.fn(),
+  recordWorkflowOwnedPullRequest: vi.fn(),
   writeHumanDecisionsMemory: vi.fn(),
+  createRepositoryVcsRuntime: vi.fn(),
+  getDb: vi.fn(() => ({ db: true })),
+  createOrGetPublicationAttempt: vi.fn(),
+  getPublicationAttempt: vi.fn(),
+  markPublicationAttemptPushing: vi.fn(),
+  markPublicationAttemptFinalized: vi.fn(),
+  markPublicationAttemptCreatingPrs: vi.fn(),
+  markPublicationAttemptPublished: vi.fn(),
+  recordPublicationRepositoryPreflight: vi.fn(),
+  recordPublicationRepositoryPush: vi.fn(),
+  recordPublicationRepositoryFailure: vi.fn(),
+  recordPublicationPullRequest: vi.fn(),
+  failPublicationAttempt: vi.fn(),
 }));
 
 vi.mock("../sandbox/poll-agent.js", () => ({
   pushWorkspaceFromSandbox: mocks.pushWorkspaceFromSandbox,
-  fixAndRetryWorkspacePush: mocks.fixAndRetryWorkspacePush,
 }));
-
 vi.mock("../sandbox/write-human-decisions-memory.js", () => ({
   writeHumanDecisionsMemory: mocks.writeHumanDecisionsMemory,
 }));
-
 vi.mock("./repository-prs.js", () => ({
-  createOrUseWorkflowOwnedPullRequestsForRepos: mocks.createOrUseWorkflowOwnedPullRequestsForRepos,
+  createOrFindWorkflowOwnedPullRequest: mocks.createOrFindWorkflowOwnedPullRequest,
+  recordWorkflowOwnedPullRequest: mocks.recordWorkflowOwnedPullRequest,
+}));
+vi.mock("../lib/vcs-runtime.js", () => ({
+  createRepositoryVcsRuntime: mocks.createRepositoryVcsRuntime,
+}));
+vi.mock("../db/client.js", () => ({ getDb: mocks.getDb }));
+vi.mock("../publication/store.js", () => ({
+  createOrGetPublicationAttempt: mocks.createOrGetPublicationAttempt,
+  getPublicationAttempt: mocks.getPublicationAttempt,
+  markPublicationAttemptPushing: mocks.markPublicationAttemptPushing,
+  markPublicationAttemptFinalized: mocks.markPublicationAttemptFinalized,
+  markPublicationAttemptCreatingPrs: mocks.markPublicationAttemptCreatingPrs,
+  markPublicationAttemptPublished: mocks.markPublicationAttemptPublished,
+  recordPublicationRepositoryPreflight: mocks.recordPublicationRepositoryPreflight,
+  recordPublicationRepositoryPush: mocks.recordPublicationRepositoryPush,
+  recordPublicationRepositoryFailure: mocks.recordPublicationRepositoryFailure,
+  recordPublicationPullRequest: mocks.recordPublicationPullRequest,
+  failPublicationAttempt: mocks.failPublicationAttempt,
 }));
 
-import { publishWorkspaceChanges } from "./workspace-publication.js";
+import {
+  finalizeWorkspacePublication,
+  openPullRequestsForPublication,
+} from "./workspace-publication.js";
 
 const selectedRepositories: SelectedRepository[] = [
   {
@@ -38,227 +69,600 @@ const selectedRepositories: SelectedRepository[] = [
   },
 ];
 
-describe("publishWorkspaceChanges", () => {
+function repository(
+  provider: "github" | "gitlab",
+  repoPath: string,
+  overrides: Record<string, unknown> = {},
+) {
+  return {
+    provider,
+    repoPath,
+    branchName: "blazebot/aiw-100",
+    defaultBranch: "main",
+    changed: true,
+    expectedHead: `${repoPath}-before`,
+    targetHead: `${repoPath}-after`,
+    pushedHead: `${repoPath}-after`,
+    pr: null,
+    failure: null,
+    ...overrides,
+  };
+}
+
+function attempt(overrides: Record<string, unknown> = {}) {
+  return {
+    id: "attempt-1",
+    runId: "run-1",
+    blockId: "finalize",
+    status: "preflighting",
+    failure: null,
+    repositories: [
+      repository("github", "acme/web"),
+      repository("gitlab", "acme/api"),
+    ],
+    ...overrides,
+  };
+}
+
+describe("finalizeWorkspacePublication", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.createOrGetPublicationAttempt.mockResolvedValue({
+      created: true,
+      attempt: attempt({ status: "preflighting" }),
+    });
   });
 
-  it("runs the workspace push repair path before creating PRs", async () => {
-    mocks.pushWorkspaceFromSandbox.mockResolvedValueOnce({
-      pushed: false,
-      repositories: [
-        {
-          provider: "github",
-          repoPath: "acme/web",
-          branchName: "blazebot/aiw-45",
-          changed: true,
-          pushed: false,
-          error: "pre-push hook declined",
-        },
-      ],
-      error: "pre-push hook declined",
+  it("fails a stale triggering PR head before any git push", async () => {
+    mocks.createRepositoryVcsRuntime.mockReturnValue({
+      vcs: { getPRHeadSha: vi.fn().mockResolvedValue("newer-provider-head") },
     });
-    mocks.fixAndRetryWorkspacePush.mockResolvedValueOnce({
-      pushed: true,
-      repositories: [
-        {
-          provider: "github",
-          repoPath: "acme/web",
-          branchName: "blazebot/aiw-45",
-          changed: true,
-          pushed: true,
-        },
-      ],
-    });
-    mocks.createOrUseWorkflowOwnedPullRequestsForRepos.mockResolvedValueOnce([
-      {
+
+    const publication = await finalizeWorkspacePublication({
+      runId: "run-1",
+      blockId: "finalize",
+      sandboxId: "sbx-1",
+      ticketKey: "AIW-100",
+      branchName: "blazebot/aiw-100",
+      repositories: selectedRepositories,
+      sourcePullRequest: {
         provider: "github",
         repoPath: "acme/web",
-        id: 12,
-        url: "https://github.com/acme/web/pull/12",
-        branch: "blazebot/aiw-45",
-        isNew: true,
+        prId: 12,
+        headSha: "trigger-head",
       },
-    ]);
-
-    const result = await publishWorkspaceChanges({
-      sandboxId: "sbx-1",
-      ticketKey: "AIW-45",
-      branchName: "blazebot/aiw-45",
-      repositories: selectedRepositories,
-      title: "Mixed provider task",
-      agentKind: "codex",
-      model: "gpt-5",
     });
 
-    expect(mocks.fixAndRetryWorkspacePush).toHaveBeenCalledWith(
-      "sbx-1",
-      expect.objectContaining({ error: "pre-push hook declined" }),
-      "codex",
-      "gpt-5",
+    expect(publication).toEqual(
+      expect.objectContaining({ status: "failed", attemptId: "attempt-1" }),
     );
-    expect(mocks.createOrUseWorkflowOwnedPullRequestsForRepos).toHaveBeenCalledWith({
-      ticketKey: "AIW-45",
-      branchName: "blazebot/aiw-45",
-      repositories: [selectedRepositories[0]],
-      title: "Mixed provider task",
-    });
-    expect(result).toEqual({
-      status: "published",
-      pushResult: expect.objectContaining({ pushed: true }),
-      prs: [
-        expect.objectContaining({
-          provider: "github",
-          repoPath: "acme/web",
-          id: 12,
-        }),
-      ],
-    });
+    expect(publication.status === "failed" ? publication.reason : "").toContain(
+      "newer-provider-head",
+    );
+    expect(mocks.pushWorkspaceFromSandbox).not.toHaveBeenCalled();
+    expect(mocks.recordPublicationRepositoryFailure).toHaveBeenCalledWith(
+      { db: true },
+      expect.objectContaining({ repoPath: "acme/web", failure: expect.stringContaining("stale") }),
+    );
+    expect(mocks.failPublicationAttempt).toHaveBeenCalled();
   });
 
-  it("creates PRs for repositories pushed before a final partial failure", async () => {
-    const failedPushResult = {
+  it("records a cross-provider partial push durably and creates no PR", async () => {
+    mocks.pushWorkspaceFromSandbox.mockResolvedValue({
       pushed: false,
+      error: "gitlab:acme/api: provider unavailable",
       repositories: [
         {
           provider: "github",
           repoPath: "acme/web",
-          branchName: "blazebot/aiw-45",
+          branchName: "blazebot/aiw-100",
           changed: true,
           pushed: true,
+          expectedHead: "web-before",
+          pushedHead: "web-after",
         },
         {
           provider: "gitlab",
           repoPath: "acme/api",
-          branchName: "blazebot/aiw-45",
+          branchName: "blazebot/aiw-100",
           changed: true,
           pushed: false,
-          error: "protected branch",
+          expectedHead: "api-before",
+          failureKind: "push_failed",
+          error: "provider unavailable",
         },
       ],
-      error: "protected branch",
-    };
-    mocks.pushWorkspaceFromSandbox.mockResolvedValueOnce(failedPushResult);
-    mocks.fixAndRetryWorkspacePush.mockResolvedValueOnce(failedPushResult);
-    mocks.createOrUseWorkflowOwnedPullRequestsForRepos.mockResolvedValueOnce([
-      {
-        provider: "github",
-        repoPath: "acme/web",
-        id: 12,
-        url: "https://github.com/acme/web/pull/12",
-        branch: "blazebot/aiw-45",
-        isNew: true,
-      },
-    ]);
+    });
 
-    const result = await publishWorkspaceChanges({
+    const publication = await finalizeWorkspacePublication({
+      runId: "run-1",
+      blockId: "finalize",
       sandboxId: "sbx-1",
-      ticketKey: "AIW-45",
-      branchName: "blazebot/aiw-45",
+      ticketKey: "AIW-100",
+      branchName: "blazebot/aiw-100",
       repositories: selectedRepositories,
-      title: "Mixed provider task",
-      agentKind: "claude",
-      model: "claude-sonnet-4-20250514",
     });
 
-    expect(mocks.createOrUseWorkflowOwnedPullRequestsForRepos).toHaveBeenCalledWith(
-      expect.objectContaining({
-        repositories: [selectedRepositories[0]],
-      }),
+    expect(publication.status).toBe("failed");
+    expect(mocks.recordPublicationRepositoryPush).toHaveBeenCalledWith(
+      { db: true },
+      expect.objectContaining({ repoPath: "acme/web", pushedHead: "web-after" }),
     );
-    expect(result).toEqual({
-      status: "failed",
-      reason: "protected branch",
-      pushResult: failedPushResult,
-      prs: [
-        expect.objectContaining({
-          provider: "github",
-          repoPath: "acme/web",
-          id: 12,
-        }),
-      ],
-    });
+    expect(mocks.recordPublicationRepositoryPreflight).toHaveBeenCalledWith(
+      { db: true },
+      expect.objectContaining({ repoPath: "acme/api", failure: "provider unavailable" }),
+    );
+    expect(mocks.failPublicationAttempt).toHaveBeenCalledWith(
+      { db: true },
+      "attempt-1",
+      "gitlab:acme/api: provider unavailable",
+    );
+    expect(mocks.createOrFindWorkflowOwnedPullRequest).not.toHaveBeenCalled();
   });
 
-  it("writes the human decisions memory before pushing when clarifications exist", async () => {
-    mocks.pushWorkspaceFromSandbox.mockResolvedValueOnce({
+  it("returns finalized branch metadata without creating PRs", async () => {
+    mocks.pushWorkspaceFromSandbox.mockResolvedValue({
       pushed: true,
       repositories: [
         {
           provider: "github",
           repoPath: "acme/web",
-          branchName: "blazebot/aiw-45",
+          branchName: "blazebot/aiw-100",
           changed: true,
           pushed: true,
+          expectedHead: "web-before",
+          pushedHead: "web-after",
         },
       ],
     });
-    mocks.createOrUseWorkflowOwnedPullRequestsForRepos.mockResolvedValueOnce([
-      {
-        provider: "github",
-        repoPath: "acme/web",
-        id: 12,
-        url: "https://github.com/acme/web/pull/12",
-        branch: "blazebot/aiw-45",
-        isNew: true,
-      },
-    ]);
 
-    const clarifications = [
-      { questions: ["Which flavor?"], answer: "vanilla", answeredBy: "Jane Doe" },
-    ];
-
-    await publishWorkspaceChanges({
+    const publication = await finalizeWorkspacePublication({
+      runId: "run-1",
+      blockId: "finalize",
       sandboxId: "sbx-1",
-      ticketKey: "AIW-45",
-      branchName: "blazebot/aiw-45",
+      ticketKey: "AIW-100",
+      branchName: "blazebot/aiw-100",
       repositories: selectedRepositories,
-      title: "Mixed provider task",
-      agentKind: "claude",
-      model: "claude-sonnet-4-20250514",
+    });
+
+    expect(publication).toEqual({
+      status: "finalized",
+      attemptId: "attempt-1",
+      repositories: [
+        {
+          provider: "github",
+          repoPath: "acme/web",
+          branchName: "blazebot/aiw-100",
+          expectedHead: "web-before",
+          pushedHead: "web-after",
+        },
+      ],
+      prs: [],
+    });
+    expect(mocks.pushWorkspaceFromSandbox).toHaveBeenCalledWith(
+      "sbx-1",
+      [],
+      "attempt-1",
+    );
+    expect(mocks.markPublicationAttemptFinalized).toHaveBeenCalledWith({ db: true }, "attempt-1");
+    expect(mocks.createOrFindWorkflowOwnedPullRequest).not.toHaveBeenCalled();
+  });
+
+  it("does not push again when the run/block attempt already exists", async () => {
+    mocks.createOrGetPublicationAttempt.mockResolvedValue({
+      created: false,
+      attempt: attempt({ status: "finalized" }),
+    });
+
+    const publication = await finalizeWorkspacePublication({
+      runId: "run-1",
+      blockId: "finalize",
+      sandboxId: "sbx-1",
+      ticketKey: "AIW-100",
+      branchName: "blazebot/aiw-100",
+      repositories: selectedRepositories,
+    });
+
+    expect(publication.status).toBe("finalized");
+    expect(mocks.pushWorkspaceFromSandbox).not.toHaveBeenCalled();
+  });
+
+  it("replays Finalize successfully after Open PR has started", async () => {
+    mocks.createOrGetPublicationAttempt.mockResolvedValue({
+      created: false,
+      attempt: attempt({ status: "creating_prs" }),
+    });
+
+    const publication = await finalizeWorkspacePublication({
+      runId: "run-1",
+      blockId: "finalize",
+      sandboxId: "sbx-1",
+      ticketKey: "AIW-100",
+      branchName: "blazebot/aiw-100",
+      repositories: selectedRepositories,
+    });
+
+    expect(publication.status).toBe("finalized");
+    expect(mocks.pushWorkspaceFromSandbox).not.toHaveBeenCalled();
+  });
+
+  it("leaves an indeterminate push error available for replay reconciliation", async () => {
+    mocks.pushWorkspaceFromSandbox.mockRejectedValue(
+      new Error("publication result could not be recorded"),
+    );
+
+    const publication = await finalizeWorkspacePublication({
+      runId: "run-1",
+      blockId: "finalize",
+      sandboxId: "sbx-1",
+      ticketKey: "AIW-100",
+      branchName: "blazebot/aiw-100",
+      repositories: selectedRepositories,
+    });
+
+    expect(publication).toEqual(
+      expect.objectContaining({
+        status: "failed",
+        reason: "publication result could not be recorded",
+      }),
+    );
+    expect(mocks.markPublicationAttemptPushing).toHaveBeenCalledWith(
+      { db: true },
+      "attempt-1",
+    );
+    expect(mocks.failPublicationAttempt).not.toHaveBeenCalled();
+  });
+
+  it("reconciles a push accepted before its pushed head was recorded", async () => {
+    mocks.createOrGetPublicationAttempt.mockResolvedValue({
+      created: false,
+      attempt: attempt({
+        status: "pushing",
+        repositories: [
+          repository("github", "acme/web", { pushedHead: null }),
+        ],
+      }),
+    });
+    mocks.createRepositoryVcsRuntime.mockReturnValue({
+      vcs: { getBranchSha: vi.fn().mockResolvedValue("acme/web-after") },
+    });
+
+    const publication = await finalizeWorkspacePublication({
+      runId: "run-1",
+      blockId: "finalize",
+      sandboxId: "sbx-1",
+      ticketKey: "AIW-100",
+      branchName: "blazebot/aiw-100",
+      repositories: selectedRepositories,
+    });
+
+    expect(publication.status).toBe("finalized");
+    expect(mocks.recordPublicationRepositoryPush).toHaveBeenCalledWith(
+      { db: true },
+      expect.objectContaining({ repoPath: "acme/web", pushedHead: "acme/web-after" }),
+    );
+    expect(mocks.markPublicationAttemptFinalized).toHaveBeenCalledWith(
+      { db: true },
+      "attempt-1",
+    );
+    expect(mocks.pushWorkspaceFromSandbox).not.toHaveBeenCalled();
+  });
+
+  it("records a known non-push when replay reconciliation still sees the expected head", async () => {
+    mocks.createOrGetPublicationAttempt.mockResolvedValue({
+      created: false,
+      attempt: attempt({
+        status: "pushing",
+        repositories: [
+          repository("github", "acme/web", { pushedHead: null }),
+        ],
+      }),
+    });
+    mocks.createRepositoryVcsRuntime.mockReturnValue({
+      vcs: { getBranchSha: vi.fn().mockResolvedValue("acme/web-before") },
+    });
+
+    const publication = await finalizeWorkspacePublication({
+      runId: "run-1",
+      blockId: "finalize",
+      sandboxId: "sbx-1",
+      ticketKey: "AIW-100",
+      branchName: "blazebot/aiw-100",
+      repositories: selectedRepositories,
+    });
+
+    expect(publication.status).toBe("failed");
+    expect(mocks.recordPublicationRepositoryFailure).toHaveBeenCalledWith(
+      { db: true },
+      expect.objectContaining({ repoPath: "acme/web", failure: expect.stringContaining("did not land") }),
+    );
+    expect(mocks.failPublicationAttempt).toHaveBeenCalled();
+    expect(mocks.pushWorkspaceFromSandbox).not.toHaveBeenCalled();
+  });
+
+  it("preserves human-decision memory writing before the push", async () => {
+    mocks.pushWorkspaceFromSandbox.mockResolvedValue({
+      pushed: true,
+      repositories: [
+        {
+          provider: "github",
+          repoPath: "acme/web",
+          branchName: "blazebot/aiw-100",
+          changed: true,
+          pushed: true,
+          expectedHead: "web-before",
+          pushedHead: "web-after",
+        },
+      ],
+    });
+    const clarifications = [{ questions: ["Which flavor?"], answer: "vanilla" }];
+
+    await finalizeWorkspacePublication({
+      runId: "run-1",
+      blockId: "finalize",
+      sandboxId: "sbx-1",
+      ticketKey: "AIW-100",
+      branchName: "blazebot/aiw-100",
+      repositories: selectedRepositories,
       clarifications,
     });
 
-    expect(mocks.writeHumanDecisionsMemory).toHaveBeenCalledWith("sbx-1", "AIW-45", clarifications);
+    expect(mocks.writeHumanDecisionsMemory).toHaveBeenCalledWith(
+      "sbx-1",
+      "AIW-100",
+      clarifications,
+    );
     expect(mocks.writeHumanDecisionsMemory.mock.invocationCallOrder[0]).toBeLessThan(
       mocks.pushWorkspaceFromSandbox.mock.invocationCallOrder[0],
     );
   });
+});
 
-  it("skips the human decisions memory step when there are no clarifications", async () => {
-    mocks.pushWorkspaceFromSandbox.mockResolvedValueOnce({
-      pushed: true,
-      repositories: [
-        {
-          provider: "github",
-          repoPath: "acme/web",
-          branchName: "blazebot/aiw-45",
-          changed: true,
-          pushed: true,
-        },
-      ],
+describe("openPullRequestsForPublication", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.recordPublicationPullRequest.mockReset().mockResolvedValue(undefined);
+    mocks.recordWorkflowOwnedPullRequest.mockReset().mockResolvedValue(undefined);
+    mocks.createRepositoryVcsRuntime.mockImplementation(
+      ({ repoPath }: { repoPath: string }) => ({
+        vcs: { getBranchSha: vi.fn().mockResolvedValue(`${repoPath}-after`) },
+      }),
+    );
+  });
+
+  it("refuses a failed Finalize attempt and never pushes", async () => {
+    mocks.getPublicationAttempt.mockResolvedValue(
+      attempt({ status: "failed", failure: "lease rejected" }),
+    );
+
+    const publication = await openPullRequestsForPublication({
+      attemptId: "attempt-1",
+      runId: "run-1",
+      ticketKey: "AIW-100",
+      title: "Safe publication",
     });
-    mocks.createOrUseWorkflowOwnedPullRequestsForRepos.mockResolvedValueOnce([
-      {
+
+    expect(publication.status).toBe("failed");
+    expect(mocks.pushWorkspaceFromSandbox).not.toHaveBeenCalled();
+    expect(mocks.createOrFindWorkflowOwnedPullRequest).not.toHaveBeenCalled();
+  });
+
+  it("refuses a successful attempt that belongs to another run", async () => {
+    mocks.getPublicationAttempt.mockResolvedValue(
+      attempt({ status: "finalized", runId: "run-other" }),
+    );
+
+    const publication = await openPullRequestsForPublication({
+      attemptId: "attempt-1",
+      runId: "run-1",
+      ticketKey: "AIW-100",
+      title: "Safe publication",
+    });
+
+    expect(publication.status).toBe("failed");
+    expect(publication.status === "failed" ? publication.reason : "").toContain(
+      "belongs to run run-other",
+    );
+    expect(mocks.createOrFindWorkflowOwnedPullRequest).not.toHaveBeenCalled();
+  });
+
+  it("creates PRs only from a successful Finalize attempt and records each result", async () => {
+    const finalized = attempt({ status: "finalized" });
+    mocks.getPublicationAttempt
+      .mockResolvedValueOnce(finalized)
+      .mockResolvedValueOnce({
+        ...finalized,
+        status: "published",
+        repositories: [
+          repository("github", "acme/web", {
+            pr: { id: 12, url: "https://github.com/acme/web/pull/12", isNew: true },
+          }),
+          repository("gitlab", "acme/api", {
+            pr: { id: 13, url: "https://gitlab.com/acme/api/-/merge_requests/13", isNew: true },
+          }),
+        ],
+      });
+    mocks.createOrFindWorkflowOwnedPullRequest
+      .mockResolvedValueOnce({
         provider: "github",
         repoPath: "acme/web",
         id: 12,
         url: "https://github.com/acme/web/pull/12",
-        branch: "blazebot/aiw-45",
+        branch: "blazebot/aiw-100",
         isNew: true,
-      },
-    ]);
+      })
+      .mockResolvedValueOnce({
+        provider: "gitlab",
+        repoPath: "acme/api",
+        id: 13,
+        url: "https://gitlab.com/acme/api/-/merge_requests/13",
+        branch: "blazebot/aiw-100",
+        isNew: true,
+      });
 
-    await publishWorkspaceChanges({
-      sandboxId: "sbx-1",
-      ticketKey: "AIW-45",
-      branchName: "blazebot/aiw-45",
-      repositories: selectedRepositories,
-      title: "Mixed provider task",
-      agentKind: "claude",
-      model: "claude-sonnet-4-20250514",
+    const publication = await openPullRequestsForPublication({
+      attemptId: "attempt-1",
+      runId: "run-1",
+      ticketKey: "AIW-100",
+      title: "Safe publication",
     });
 
-    expect(mocks.writeHumanDecisionsMemory).not.toHaveBeenCalled();
+    expect(publication.status).toBe("published");
+    expect(mocks.pushWorkspaceFromSandbox).not.toHaveBeenCalled();
+    expect(mocks.createOrFindWorkflowOwnedPullRequest).toHaveBeenCalledTimes(2);
+    expect(mocks.recordPublicationPullRequest).toHaveBeenCalledTimes(2);
+    expect(mocks.recordWorkflowOwnedPullRequest).toHaveBeenCalledTimes(2);
+    expect(mocks.recordPublicationPullRequest.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.recordWorkflowOwnedPullRequest.mock.invocationCallOrder[0],
+    );
+    expect(mocks.recordPublicationPullRequest.mock.invocationCallOrder[1]).toBeLessThan(
+      mocks.recordWorkflowOwnedPullRequest.mock.invocationCallOrder[1],
+    );
+    expect(mocks.markPublicationAttemptPublished).toHaveBeenCalledWith({ db: true }, "attempt-1");
+  });
+
+  it("refuses to create a PR when the finalized branch moved", async () => {
+    mocks.getPublicationAttempt.mockResolvedValue(
+      attempt({
+        status: "finalized",
+        repositories: [repository("github", "acme/web")],
+      }),
+    );
+    mocks.createRepositoryVcsRuntime.mockReturnValue({
+      vcs: { getBranchSha: vi.fn().mockResolvedValue("newer-head") },
+    });
+    mocks.createOrFindWorkflowOwnedPullRequest.mockResolvedValue({
+      provider: "github",
+      repoPath: "acme/web",
+      id: 12,
+      url: "https://github.com/acme/web/pull/12",
+      branch: "blazebot/aiw-100",
+      isNew: true,
+    });
+
+    const publication = await openPullRequestsForPublication({
+      attemptId: "attempt-1",
+      runId: "run-1",
+      ticketKey: "AIW-100",
+      title: "Safe publication",
+    });
+
+    expect(publication.status).toBe("failed");
+    expect(publication.status === "failed" ? publication.reason : "").toContain(
+      "finalized branch moved",
+    );
+    expect(mocks.createOrFindWorkflowOwnedPullRequest).not.toHaveBeenCalled();
+    expect(mocks.recordPublicationRepositoryFailure).toHaveBeenCalledWith(
+      { db: true },
+      expect.objectContaining({ repoPath: "acme/web", failure: expect.stringContaining("newer-head") }),
+    );
+    expect(mocks.failPublicationAttempt).not.toHaveBeenCalled();
+  });
+
+  it("replays an already-published attempt without creating duplicate PRs", async () => {
+    mocks.getPublicationAttempt.mockResolvedValue(
+      attempt({
+        status: "published",
+        repositories: [
+          repository("github", "acme/web", {
+            pr: { id: 12, url: "https://github.com/acme/web/pull/12", isNew: true },
+          }),
+        ],
+      }),
+    );
+
+    const publication = await openPullRequestsForPublication({
+      attemptId: "attempt-1",
+      runId: "run-1",
+      ticketKey: "AIW-100",
+      title: "Safe publication",
+    });
+
+    expect(publication.status).toBe("published");
+    expect(publication.prs).toHaveLength(1);
+    expect(mocks.createOrFindWorkflowOwnedPullRequest).not.toHaveBeenCalled();
+  });
+
+  it("retains an earlier PR result if a later provider PR creation fails", async () => {
+    mocks.getPublicationAttempt.mockResolvedValue(attempt({ status: "finalized" }));
+    mocks.createOrFindWorkflowOwnedPullRequest
+      .mockResolvedValueOnce({
+        provider: "github",
+        repoPath: "acme/web",
+        id: 12,
+        url: "https://github.com/acme/web/pull/12",
+        branch: "blazebot/aiw-100",
+        isNew: true,
+      })
+      .mockRejectedValueOnce(new Error("GitLab unavailable"));
+
+    const publication = await openPullRequestsForPublication({
+      attemptId: "attempt-1",
+      runId: "run-1",
+      ticketKey: "AIW-100",
+      title: "Safe publication",
+    });
+
+    expect(publication.status).toBe("failed");
+    expect(publication.prs).toHaveLength(1);
+    expect(mocks.recordPublicationPullRequest).toHaveBeenCalledTimes(1);
+    expect(mocks.recordWorkflowOwnedPullRequest).toHaveBeenCalledTimes(1);
+    expect(mocks.failPublicationAttempt).not.toHaveBeenCalled();
+  });
+
+  it("leaves PR creation resumable when the provider result cannot be recorded", async () => {
+    mocks.getPublicationAttempt.mockResolvedValue(
+      attempt({ status: "creating_prs", repositories: [repository("github", "acme/web")] }),
+    );
+    mocks.createOrFindWorkflowOwnedPullRequest.mockResolvedValue({
+      provider: "github",
+      repoPath: "acme/web",
+      id: 12,
+      url: "https://github.com/acme/web/pull/12",
+      branch: "blazebot/aiw-100",
+      isNew: true,
+    });
+    mocks.recordPublicationPullRequest.mockRejectedValue(new Error("database unavailable"));
+
+    const publication = await openPullRequestsForPublication({
+      attemptId: "attempt-1",
+      runId: "run-1",
+      ticketKey: "AIW-100",
+      title: "Safe publication",
+    });
+
+    expect(publication.status).toBe("failed");
+    expect(publication.prs).toEqual([
+      expect.objectContaining({ repoPath: "acme/web", id: 12 }),
+    ]);
+    expect(mocks.failPublicationAttempt).not.toHaveBeenCalled();
+    expect(mocks.recordWorkflowOwnedPullRequest).not.toHaveBeenCalled();
+  });
+
+  it("repairs workflow-owned branch correlation for an already-recorded PR", async () => {
+    const creating = attempt({
+      status: "creating_prs",
+      repositories: [
+        repository("github", "acme/web", {
+          pr: { id: 12, url: "https://github.com/acme/web/pull/12", isNew: true },
+        }),
+      ],
+    });
+    mocks.getPublicationAttempt
+      .mockResolvedValueOnce(creating)
+      .mockResolvedValueOnce({ ...creating, status: "published" });
+
+    const publication = await openPullRequestsForPublication({
+      attemptId: "attempt-1",
+      runId: "run-1",
+      ticketKey: "AIW-100",
+      title: "Safe publication",
+    });
+
+    expect(publication.status).toBe("published");
+    expect(mocks.createOrFindWorkflowOwnedPullRequest).not.toHaveBeenCalled();
+    expect(mocks.recordWorkflowOwnedPullRequest).toHaveBeenCalledWith(
+      expect.objectContaining({ ticketKey: "AIW-100", pr: expect.objectContaining({ id: 12 }) }),
+    );
   });
 });

@@ -358,6 +358,72 @@ const storedWorkflowDefinition = z
   })
   .passthrough();
 
+function legacyFinalizeIdBase(openPrId: string): string {
+  const safeOpenPrId = openPrId
+    .replace(/[^A-Za-z0-9_-]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return `${safeOpenPrId || "open-pr"}-finalize`;
+}
+
+function insertLegacyOpenPrFinalizers(
+  nodes: WorkflowDefinitionNode[],
+  edges: WorkflowDefinition["edges"],
+): { nodes: WorkflowDefinitionNode[]; edges: WorkflowDefinition["edges"] } {
+  const usedIds = new Set(nodes.map((node) => node.id));
+  const finalizeByOpenPr = new Map<string, string>();
+  const upgradedNodes: WorkflowDefinitionNode[] = [];
+
+  for (const node of nodes) {
+    if (
+      node.type !== "open_pr" ||
+      Object.prototype.hasOwnProperty.call(node.inputs, "publicationAttemptId")
+    ) {
+      upgradedNodes.push(node);
+      continue;
+    }
+
+    const base = legacyFinalizeIdBase(node.id);
+    let finalizeId = base;
+    for (let suffix = 2; usedIds.has(finalizeId); suffix += 1) {
+      finalizeId = `${base}-${suffix}`;
+    }
+    usedIds.add(finalizeId);
+    finalizeByOpenPr.set(node.id, finalizeId);
+    upgradedNodes.push(
+      {
+        id: finalizeId,
+        type: "finalize_workspace",
+        x: node.x - 220,
+        y: node.y,
+        params: {},
+        inputs: {},
+      },
+      {
+        ...node,
+        inputs: {
+          ...node.inputs,
+          publicationAttemptId: `steps.${finalizeId}.output.publicationAttemptId`,
+        },
+      },
+    );
+  }
+
+  if (finalizeByOpenPr.size === 0) return { nodes, edges };
+  return {
+    nodes: upgradedNodes,
+    edges: [
+      ...edges.map((edge) => {
+        const finalizeId = finalizeByOpenPr.get(edge.to);
+        return finalizeId ? { ...edge, to: finalizeId } : edge;
+      }),
+      ...[...finalizeByOpenPr].map(([openPrId, finalizeId]) => ({
+        from: finalizeId,
+        to: openPrId,
+      })),
+    ],
+  };
+}
+
 export function upgradeStoredWorkflowDefinition(raw: unknown): WorkflowDefinition {
   const parsed = storedWorkflowDefinition.parse(raw);
   const storedNodeById = new Map(parsed.nodes.map((node) => [node.id, node]));
@@ -457,9 +523,14 @@ export function upgradeStoredWorkflowDefinition(raw: unknown): WorkflowDefinitio
     });
   }
 
-  const intermediate: WorkflowDefinition = { schemaVersion: 1, nodes, edges };
+  const publicationUpgraded = insertLegacyOpenPrFinalizers(nodes, edges);
+  const intermediate: WorkflowDefinition = {
+    schemaVersion: 1,
+    nodes: publicationUpgraded.nodes,
+    edges: publicationUpgraded.edges,
+  };
   const graphContext = buildWorkflowBindingGraphContext(intermediate);
-  const upgradedNodes = nodes.map((node): WorkflowDefinitionNode => {
+  const upgradedNodes = publicationUpgraded.nodes.map((node): WorkflowDefinitionNode => {
     if (node.type !== "finalize_workspace") return node;
 
     const params = { ...node.params };
@@ -495,7 +566,7 @@ export function upgradeStoredWorkflowDefinition(raw: unknown): WorkflowDefinitio
     schemaVersion: 1,
     ...(parsed.budgets === undefined ? {} : { budgets: parsed.budgets }),
     nodes: upgradedNodes,
-    edges,
+    edges: publicationUpgraded.edges,
   };
 }
 
@@ -846,6 +917,15 @@ export function validateWorkflowGraph(
   for (const component of stronglyConnectedComponents(forward, nodeIds)) {
     if (component.length <= 1) continue;
     const loopCount = component.filter((id) => nodeById.get(id)?.type === "loop").length;
+    if (loopCount > 0) {
+      for (const finalizeId of component.filter(
+        (id) => nodeById.get(id)?.type === "finalize_workspace",
+      )) {
+        issues.push(
+          `Finalize Workspace block "${finalizeId}" cannot execute inside a Loop cycle.`,
+        );
+      }
+    }
     if (loopCount >= 2) {
       const rendered = component.map((id) => `"${id}"`).join(", ");
       issues.push(

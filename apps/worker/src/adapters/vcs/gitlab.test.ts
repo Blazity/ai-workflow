@@ -321,6 +321,15 @@ describe("GitLabAdapter", () => {
     });
   });
 
+  describe("getPRHeadSha", () => {
+    it("returns the provider's current merge request head", async () => {
+      mockMergeRequests.show.mockResolvedValueOnce({ sha: "current-head" });
+
+      await expect(glAdapter().getPRHeadSha(42)).resolves.toBe("current-head");
+      expect(mockMergeRequests.show).toHaveBeenCalledWith("blazity/demo-app", 42);
+    });
+  });
+
   describe("getPRComments", () => {
     it("combines discussion notes and general notes", async () => {
       mockMergeRequestDiscussions.all.mockResolvedValueOnce([

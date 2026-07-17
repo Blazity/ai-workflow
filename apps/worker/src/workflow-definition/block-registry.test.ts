@@ -67,10 +67,16 @@ describe("workflow block registry", () => {
     for (const contract of Object.values(registry)) {
       for (const [name, inputContract] of Object.entries(contract.inputs)) {
         const isBindingOnlyPlan = contract.type === "send_plan_approval" && name === "plan";
-        expect(inputContract.required, `${contract.type}.${name}`).toBe(isBindingOnlyPlan);
+        const isFinalizedPublication =
+          contract.type === "open_pr" && name === "publicationAttemptId";
+        expect(inputContract.required, `${contract.type}.${name}`).toBe(
+          isBindingOnlyPlan || isFinalizedPublication,
+        );
       }
     }
-    expect(registry.open_pr.inputs).toEqual({});
+    expect(registry.open_pr.inputs).toEqual({
+      publicationAttemptId: { required: true, schema: { type: "string" } },
+    });
     expect(registry.implementation_agent.inputs).toEqual({});
     expect(registry.fix_agent.inputs).toEqual({});
     expect(registry.fetch_pr_context.inputs).toEqual({});

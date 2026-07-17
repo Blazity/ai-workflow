@@ -235,9 +235,16 @@ describe("legacy version read normalization", () => {
     const current = await getCurrentWorkflowDefinitionVersion(db, created.definition.id);
     expect(current?.definition.nodes.map((node) => node.type)).toEqual([
       "trigger_ticket_ai",
+      "finalize_workspace",
       "open_pr",
     ]);
-    expect(current?.definition.edges).toEqual([{ from: "trigger", to: "open" }]);
+    expect(current?.definition.nodes.find((node) => node.id === "open")?.inputs).toEqual({
+      publicationAttemptId: "steps.open-finalize.output.publicationAttemptId",
+    });
+    expect(current?.definition.edges).toEqual([
+      { from: "trigger", to: "open-finalize" },
+      { from: "open-finalize", to: "open" },
+    ]);
   });
 });
 
@@ -635,7 +642,24 @@ describe("write-path validation", () => {
     const head = await getCurrentWorkflowDefinitionVersion(db, d.id);
     expect(head?.definition).toEqual({
       ...legacyInvalid,
-      nodes: legacyInvalid.nodes.map((node) => ({ ...node, inputs: {} })),
+      nodes: [
+        { ...legacyInvalid.nodes[0], inputs: {} },
+        {
+          id: "orphan-finalize",
+          type: "finalize_workspace",
+          x: -220,
+          y: 0,
+          params: {},
+          inputs: {},
+        },
+        {
+          ...legacyInvalid.nodes[1],
+          inputs: {
+            publicationAttemptId: "steps.orphan-finalize.output.publicationAttemptId",
+          },
+        },
+      ],
+      edges: [{ from: "orphan-finalize", to: "orphan" }],
     });
     expect(await getWorkflowDefinitionVersion(db, d.id, 2)).not.toBeNull();
     expect((await listWorkflowDefinitionVersionRows(db, d.id)).map((v) => v.version)).toEqual([2, 1]);

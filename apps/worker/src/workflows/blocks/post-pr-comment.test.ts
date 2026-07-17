@@ -15,6 +15,8 @@ import { makeCtx, makeNode, makePrPayload } from "./test-support.js";
 function publication(): WorkspacePublicationResult {
   return {
     status: "published",
+    attemptId: "attempt-1",
+    repositories: [],
     pushResult: { pushed: true, repositories: [] },
     prs: [
       {

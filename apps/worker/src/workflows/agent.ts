@@ -1050,7 +1050,7 @@ async function agentWorkflowBody(
     await import("../sandbox/context.js");
   const { collectPhase, teardownSandboxes } =
     await import("../sandbox/poll-agent.js");
-  const { publishWorkspaceChanges } = await import("./workspace-publication.js");
+  const { openPullRequestsForPublication } = await import("./workspace-publication.js");
   const { formatUsageReport } = await import("../sandbox/usage.js");
   const { AGENT_SCHEMA, RESEARCH_SCHEMA, REVIEW_SCHEMA } = await import("../sandbox/agents/types.js");
   const backlogMoveTarget = (): IssueTrackerMoveTarget =>
@@ -2007,16 +2007,20 @@ async function agentWorkflowBody(
           }
 
           case "open_pr": {
-            if (!ctx.sandboxId) return noWorkspace(node.type);
-            const publication = await publishWorkspaceChanges({
-              sandboxId: ctx.sandboxId,
+            const publicationAttemptId = resolvedInputs.publicationAttemptId;
+            if (typeof publicationAttemptId !== "string" || publicationAttemptId.length === 0) {
+              return {
+                kind: "failed",
+                output: { status: "failed" },
+                reason: "Open PR/MR requires a successful Finalize publication attempt",
+                phase: "open-pr",
+              };
+            }
+            const publication = await openPullRequestsForPublication({
+              attemptId: publicationAttemptId,
+              runId: ctx.runId,
               ticketKey: ticket.identifier,
-              branchName,
-              repositories: ctx.selectedRepositories,
               title: ticket.title,
-              agentKind: state.implementationKind ?? runDefaultKind,
-              model: state.implementationModel,
-              clarifications: ticketData.clarifications,
             });
             ctx.publication = publication;
 
@@ -2032,7 +2036,16 @@ async function agentWorkflowBody(
                 kind: "failed",
                 output: { status: "failed" },
                 reason: publication.reason,
-                phase: "push",
+                phase: "open-pr",
+              };
+            }
+
+            if (publication.status !== "published") {
+              return {
+                kind: "failed",
+                output: { status: "failed" },
+                reason: `Open PR/MR received unexpected publication status: ${publication.status}`,
+                phase: "open-pr",
               };
             }
 

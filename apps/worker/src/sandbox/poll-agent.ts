@@ -13,6 +13,19 @@ export interface WorkspacePushRepoResult {
   branchName: string;
   pushed: boolean;
   changed: boolean;
+  /** Freshly fetched remote head used in the exact lease. */
+  expectedHead?: string;
+  /** Committed local head intended for the remote, persisted before push. */
+  targetHead?: string;
+  /** Local committed head that landed remotely. */
+  pushedHead?: string;
+  failureKind?:
+    | "dirty_worktree"
+    | "merge_conflict"
+    | "remote_drift"
+    | "preflight_failed"
+    | "lease_rejected"
+    | "push_failed";
   error?: string;
   cleanupError?: string;
 }
@@ -25,70 +38,20 @@ export interface WorkspacePushResult {
 
 export async function pushWorkspaceFromSandbox(
   sandboxId: string,
+  sourceHeads: Array<{
+    provider: WorkspaceRepo["provider"];
+    repoPath: string;
+    headSha: string;
+  }> = [],
+  publicationAttemptId?: string,
 ): Promise<WorkspacePushResult> {
   "use step";
   const { Sandbox } = await import("@vercel/sandbox");
   const sandbox = await Sandbox.get({ sandboxId, ...getSandboxCredentials() });
   const manifest = await readWorkspaceManifest(sandbox);
-  return pushWorkspaceRepositories(sandbox, manifest);
+  return pushWorkspaceRepositories(sandbox, manifest, sourceHeads, publicationAttemptId);
 }
-
-export async function fixAndRetryWorkspacePush(
-  sandboxId: string,
-  failedPush: WorkspacePushResult,
-  agentKind: "claude" | "codex",
-  model: string,
-): Promise<WorkspacePushResult> {
-  "use step";
-  const { Sandbox } = await import("@vercel/sandbox");
-  const { logger } = await import("../lib/logger.js");
-  const { createRepositoryVcsRuntime } = await import("../lib/vcs-runtime.js");
-  const sandbox = await Sandbox.get({ sandboxId, ...getSandboxCredentials() });
-  const manifest = await readWorkspaceManifest(sandbox);
-  const failedKeys = failedRepositoryKeys(failedPush);
-
-  for (const repo of manifest.repositories.filter((repo) => failedKeys.has(repositoryKey(repo)))) {
-    const runtime = createRepositoryVcsRuntime({
-      provider: repo.provider,
-      repoPath: repo.repoPath,
-      baseBranch: repo.defaultBranch,
-    });
-    await sandbox.runCommand("git", [
-      "-C",
-      repo.localPath,
-      "remote",
-      "set-url",
-      "origin",
-      buildCloneUrl({ host: runtime.config.host, repoPath: repo.repoPath }),
-    ]);
-  }
-
-  await sandbox.writeFiles([
-    {
-      path: "/tmp/fix-prompt.txt",
-      content: Buffer.from(buildPushFixPrompt(failedPush, manifest)),
-    },
-  ]);
-
-  const cli =
-    agentKind === "codex"
-      ? `codex exec --model "${model}" --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check --json -`
-      : `claude --print --model '${model}' --dangerously-skip-permissions`;
-
-  await sandbox.runCommand("bash", [
-    "-c",
-    `cd /vercel/sandbox || exit 1; if [ -f /tmp/agent-env.sh ]; then source /tmp/agent-env.sh; fi; cat /tmp/fix-prompt.txt | ${cli} > /tmp/fix-stdout.txt 2>/tmp/fix-stderr.txt || true`,
-  ]);
-
-  const fixOut = await sandbox.runCommand("cat", ["/tmp/fix-stdout.txt"]);
-  const fixLog = (await fixOut.stdout()).trim();
-  if (fixLog) {
-    logger.info({ output: fixLog.slice(0, 500) }, "fix_and_retry_workspace_push_output");
-  }
-
-  const retryResult = await pushWorkspaceRepositories(sandbox, manifest, failedKeys);
-  return mergePushRetryResults(failedPush, retryResult, failedKeys);
-}
+pushWorkspaceFromSandbox.maxRetries = 0;
 
 async function readWorkspaceManifest(sandbox: SandboxSession): Promise<WorkspaceManifest> {
   const manifestResult = await sandbox.runCommand("cat", [WORKSPACE_MANIFEST_PATH]);
@@ -101,28 +64,109 @@ async function readWorkspaceManifest(sandbox: SandboxSession): Promise<Workspace
 async function pushWorkspaceRepositories(
   sandbox: SandboxSession,
   manifest: WorkspaceManifest,
-  onlyRepositories?: Set<string>,
+  sourceHeads: Array<{
+    provider: WorkspaceRepo["provider"];
+    repoPath: string;
+    headSha: string;
+  }>,
+  publicationAttemptId?: string,
 ): Promise<WorkspacePushResult> {
   const { createRepositoryVcsRuntime } = await import("../lib/vcs-runtime.js");
-  const repositories: WorkspacePushRepoResult[] = [];
+  const sourceHeadByRepository = new Map(
+    sourceHeads.map((head) => [`${head.provider}:${head.repoPath}`, head.headSha]),
+  );
+  const preflights: Array<{
+    repo: WorkspaceRepo;
+    result: WorkspacePushRepoResult;
+    localHead?: string;
+    authArgs?: string[];
+    cloneUrl?: string;
+  }> = [];
 
   for (const repo of manifest.repositories) {
-    if (onlyRepositories && !onlyRepositories.has(repositoryKey(repo))) continue;
-
-    const headResult = await sandbox.runCommand("git", ["-C", repo.localPath, "rev-parse", "HEAD"]);
-    const headSha = (await headResult.stdout()).trim();
-    const changed = !repo.preAgentSha || repo.preAgentSha !== headSha;
-
-    if (!changed) {
-      repositories.push({
-        provider: repo.provider,
-        repoPath: repo.repoPath,
-        branchName: repo.branchName,
-        changed: false,
-        pushed: false,
+    const base = {
+      provider: repo.provider,
+      repoPath: repo.repoPath,
+      branchName: repo.branchName,
+      pushed: false,
+    };
+    const status = await sandbox.runCommand("git", [
+      "-C",
+      repo.localPath,
+      "status",
+      "--porcelain=v1",
+      "--untracked-files=all",
+    ]);
+    if (status.exitCode !== 0) {
+      preflights.push({
+        repo,
+        result: {
+          ...base,
+          changed: false,
+          failureKind: "preflight_failed",
+          error: `git status failed: ${await commandError(status)}`,
+        },
       });
       continue;
     }
+    const dirty = (await status.stdout()).trim();
+    if (dirty) {
+      preflights.push({
+        repo,
+        result: {
+          ...base,
+          changed: false,
+          failureKind: "dirty_worktree",
+          error: `workspace has uncommitted changes: ${dirty}`,
+        },
+      });
+      continue;
+    }
+
+    const conflicts = await sandbox.runCommand("git", [
+      "-C",
+      repo.localPath,
+      "diff",
+      "--name-only",
+      "--diff-filter=U",
+    ]);
+    const conflictPaths = conflicts.exitCode === 0 ? (await conflicts.stdout()).trim() : "";
+    if (conflicts.exitCode !== 0 || conflictPaths) {
+      preflights.push({
+        repo,
+        result: {
+          ...base,
+          changed: false,
+          failureKind: conflicts.exitCode === 0 ? "merge_conflict" : "preflight_failed",
+          error:
+            conflicts.exitCode === 0
+              ? `workspace has unresolved merge conflicts: ${conflictPaths}`
+              : `conflict check failed: ${await commandError(conflicts)}`,
+        },
+      });
+      continue;
+    }
+
+    const headResult = await sandbox.runCommand("git", [
+      "-C",
+      repo.localPath,
+      "rev-parse",
+      "HEAD",
+    ]);
+    if (headResult.exitCode !== 0) {
+      preflights.push({
+        repo,
+        result: {
+          ...base,
+          changed: false,
+          failureKind: "preflight_failed",
+          error: `git rev-parse failed: ${await commandError(headResult)}`,
+        },
+      });
+      continue;
+    }
+    const headSha = (await headResult.stdout()).trim();
+    const changed = !repo.preAgentSha || repo.preAgentSha !== headSha;
 
     const runtime = createRepositoryVcsRuntime({
       provider: repo.provider,
@@ -133,51 +177,150 @@ async function pushWorkspaceRepositories(
     const urls = buildVcsUrls({ ...runtime.config, repoPath: repo.repoPath });
     const cloneUrl = buildCloneUrl({ host: runtime.config.host, repoPath: repo.repoPath });
     const authArgs = gitAuthArgs(urls.authUser, token);
-    const shallowResult = await sandbox.runCommand("git", ["-C", repo.localPath, "rev-parse", "--is-shallow-repository"]);
-    if ((await shallowResult.stdout()).trim() === "true") {
-      await sandbox.runCommand("git", ["-C", repo.localPath, ...authArgs, "fetch", "--unshallow", "origin"]);
-    }
-    const result = await sandbox.runCommand("git", [
+
+    const fetchResult = await sandbox.runCommand("git", [
       "-C",
       repo.localPath,
       ...authArgs,
-      "push",
-      "--force",
-      "origin",
-      `HEAD:refs/heads/${repo.branchName}`,
+      "fetch",
+      "--no-tags",
+      urls.cloneUrl,
+      `refs/heads/${repo.branchName}`,
     ]);
-
-    if (result.exitCode !== 0) {
-      repositories.push({
-        provider: repo.provider,
-        repoPath: repo.repoPath,
-        branchName: repo.branchName,
-        changed: true,
-        pushed: false,
-        error: await commandError(result),
+    if (fetchResult.exitCode !== 0) {
+      preflights.push({
+        repo,
+        result: {
+          ...base,
+          changed,
+          failureKind: "preflight_failed",
+          error: `remote fetch failed: ${await commandError(fetchResult)}`,
+        },
       });
       continue;
     }
 
-    const resetRemote = await sandbox.runCommand("git", ["-C", repo.localPath, "remote", "set-url", "origin", cloneUrl]);
+    const remoteHeadResult = await sandbox.runCommand("git", [
+      "-C",
+      repo.localPath,
+      "rev-parse",
+      "FETCH_HEAD",
+    ]);
+    if (remoteHeadResult.exitCode !== 0) {
+      preflights.push({
+        repo,
+        result: {
+          ...base,
+          changed,
+          failureKind: "preflight_failed",
+          error: `remote head read failed: ${await commandError(remoteHeadResult)}`,
+        },
+      });
+      continue;
+    }
+    const expectedHead = (await remoteHeadResult.stdout()).trim();
+    const baseline =
+      sourceHeadByRepository.get(`${repo.provider}:${repo.repoPath}`) ??
+      repo.expectedRemoteSha ??
+      repo.preAgentSha;
+    if (!baseline || expectedHead !== baseline) {
+      preflights.push({
+        repo,
+        result: {
+          ...base,
+          changed,
+          expectedHead,
+          failureKind: "remote_drift",
+          error: baseline
+            ? `remote branch moved from ${baseline} to ${expectedHead}`
+            : "workspace has no trusted remote branch baseline",
+        },
+      });
+      continue;
+    }
+
+    preflights.push({
+      repo,
+      localHead: headSha,
+      authArgs,
+      cloneUrl,
+      result: {
+        ...base,
+        changed,
+        expectedHead,
+        targetHead: headSha,
+      },
+    });
+  }
+
+  await persistPublicationPreflights(
+    publicationAttemptId,
+    preflights.map((preflight) => preflight.result),
+  );
+
+  if (preflights.some((preflight) => preflight.result.failureKind)) {
+    return summarizeWorkspacePush(preflights.map((preflight) => preflight.result));
+  }
+
+  for (const preflight of preflights) {
+    if (!preflight.result.changed) continue;
+    const { repo } = preflight;
+    const pushResult = await sandbox.runCommand("git", [
+      "-C",
+      repo.localPath,
+      ...(preflight.authArgs ?? []),
+      "push",
+      `--force-with-lease=refs/heads/${repo.branchName}:${preflight.result.expectedHead}`,
+      "origin",
+      `HEAD:refs/heads/${repo.branchName}`,
+    ]);
+
+    if (pushResult.exitCode !== 0) {
+      const error = await commandError(pushResult);
+      preflight.result = {
+        ...preflight.result,
+        pushed: false,
+        failureKind: isLeaseRejection(error) ? "lease_rejected" : "push_failed",
+        error,
+      };
+      await persistPublicationPushResult(publicationAttemptId, preflight.result);
+      continue;
+    }
+
+    const resetRemote = await sandbox.runCommand("git", [
+      "-C",
+      repo.localPath,
+      "remote",
+      "set-url",
+      "origin",
+      preflight.cloneUrl!,
+    ]);
     const cleanupError = resetRemote.exitCode === 0
       ? undefined
       : `failed to reset origin after push: ${await commandError(resetRemote)}`;
 
-    repositories.push({
-      provider: repo.provider,
-      repoPath: repo.repoPath,
-      branchName: repo.branchName,
-      changed: true,
+    preflight.result = {
+      ...preflight.result,
       pushed: true,
+      pushedHead: preflight.localHead,
       ...(cleanupError ? { cleanupError } : {}),
-    });
+    };
+    await persistPublicationPushResult(publicationAttemptId, preflight.result);
   }
 
-  return summarizeWorkspacePush(repositories);
+  return summarizeWorkspacePush(preflights.map((preflight) => preflight.result));
 }
 
 function summarizeWorkspacePush(repositories: WorkspacePushRepoResult[]): WorkspacePushResult {
+  const explicitFailures = repositories.filter((repo) => repo.failureKind);
+  if (explicitFailures.length > 0) {
+    return {
+      pushed: false,
+      repositories,
+      error: summarizePushFailures(explicitFailures),
+    };
+  }
+
   if (!repositories.some((repo) => repo.changed)) {
     return {
       pushed: false,
@@ -198,37 +341,6 @@ function summarizeWorkspacePush(repositories: WorkspacePushRepoResult[]): Worksp
   return { pushed: true, repositories };
 }
 
-function failedRepositoryKeys(failedPush: WorkspacePushResult): Set<string> {
-  const failedKeys = failedPush.repositories
-    .filter((repo) => repo.changed && !repo.pushed)
-    .map(repositoryKey);
-  return new Set(failedKeys.length > 0
-    ? failedKeys
-    : failedPush.repositories.map(repositoryKey));
-}
-
-function mergePushRetryResults(
-  failedPush: WorkspacePushResult,
-  retryResult: WorkspacePushResult,
-  retryKeys: Set<string>,
-): WorkspacePushResult {
-  const retryByKey = new Map(
-    retryResult.repositories.map((repo) => [repositoryKey(repo), repo]),
-  );
-  const merged = failedPush.repositories.map((repo) => {
-    const key = repositoryKey(repo);
-    return retryKeys.has(key) ? retryByKey.get(key) ?? repo : repo;
-  });
-
-  for (const repo of retryResult.repositories) {
-    if (!failedPush.repositories.some((previous) => repositoryKey(previous) === repositoryKey(repo))) {
-      merged.push(repo);
-    }
-  }
-
-  return summarizeWorkspacePush(merged);
-}
-
 async function commandError(result: SandboxCommandResult): Promise<string> {
   const stdout = (await result.stdout()).trim();
   const stderr = ((await result.stderr?.()) ?? "").trim();
@@ -241,34 +353,57 @@ function summarizePushFailures(failed: WorkspacePushRepoResult[]): string {
     .join("\n");
 }
 
-function buildPushFixPrompt(
-  failedPush: WorkspacePushResult,
-  manifest: WorkspaceManifest,
-): string {
-  const reposByKey = new Map(
-    manifest.repositories.map((repo) => [repositoryKey(repo), repo]),
-  );
-  const failedRepos = failedPush.repositories.filter((repo) => repo.changed && !repo.pushed);
-  const failures = failedRepos.length > 0 ? failedRepos : failedPush.repositories;
-  const details = failures.map((repo) => {
-    const workspaceRepo = reposByKey.get(repositoryKey(repo));
-    return [
-      `- Repository: ${repo.provider}:${repo.repoPath}`,
-      `  Path: ${workspaceRepo?.localPath ?? "(unknown)"}`,
-      `  Branch: ${repo.branchName}`,
-      `  Error: ${repo.error ?? failedPush.error ?? "push failed"}`,
-    ].join("\n");
-  });
-
-  return `The git push failed for one or more Run Workspace repositories.
-
-Fix the issues and commit your fixes. Do not push.
-
-${details.join("\n\n")}`;
+function isLeaseRejection(error: string): boolean {
+  return /stale info|force-with-lease|fetch first|rejected.*stale/i.test(error);
 }
 
-function repositoryKey(repo: Pick<WorkspaceRepo | WorkspacePushRepoResult, "provider" | "repoPath">): string {
-  return `${repo.provider}:${repo.repoPath}`;
+async function persistPublicationPreflights(
+  attemptId: string | undefined,
+  repositories: WorkspacePushRepoResult[],
+): Promise<void> {
+  if (!attemptId) return;
+  const { getDb } = await import("../db/client.js");
+  const { recordPublicationRepositoryPreflight } = await import("../publication/store.js");
+  const db = getDb();
+  for (const repository of repositories) {
+    await recordPublicationRepositoryPreflight(db, {
+      attemptId,
+      provider: repository.provider,
+      repoPath: repository.repoPath,
+      changed: repository.changed,
+      expectedHead: repository.expectedHead ?? null,
+      targetHead: repository.targetHead ?? null,
+      failure: repository.error ?? null,
+    });
+  }
+}
+
+async function persistPublicationPushResult(
+  attemptId: string | undefined,
+  repository: WorkspacePushRepoResult,
+): Promise<void> {
+  if (!attemptId) return;
+  const { getDb } = await import("../db/client.js");
+  const {
+    recordPublicationRepositoryFailure,
+    recordPublicationRepositoryPush,
+  } = await import("../publication/store.js");
+  const db = getDb();
+  if (repository.pushed && repository.pushedHead) {
+    await recordPublicationRepositoryPush(db, {
+      attemptId,
+      provider: repository.provider,
+      repoPath: repository.repoPath,
+      pushedHead: repository.pushedHead,
+    });
+  } else if (repository.error) {
+    await recordPublicationRepositoryFailure(db, {
+      attemptId,
+      provider: repository.provider,
+      repoPath: repository.repoPath,
+      failure: repository.error,
+    });
+  }
 }
 
 interface SandboxCommandResult {
@@ -279,7 +414,6 @@ interface SandboxCommandResult {
 
 interface SandboxSession {
   runCommand: (cmd: string, args: string[]) => Promise<SandboxCommandResult>;
-  writeFiles: (files: Array<{ path: string; content: Buffer }>) => Promise<unknown>;
 }
 
 

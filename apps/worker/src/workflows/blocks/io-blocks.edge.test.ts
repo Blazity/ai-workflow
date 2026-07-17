@@ -10,7 +10,7 @@ const mocks = vi.hoisted(() => ({
   getDb: vi.fn(),
   listWorkflowOwnedBranchesForTicket: vi.fn(),
   upsertWorkflowOwnedBranch: vi.fn(),
-  publishWorkspaceChanges: vi.fn(),
+  finalizeWorkspacePublication: vi.fn(),
   sandboxGet: vi.fn(),
   getCurrentPrePrCheckConfig: vi.fn(),
   runPrePrChecksWithFixes: vi.fn(),
@@ -28,7 +28,7 @@ vi.mock("../../db/queries/workflow-owned-branches.js", () => ({
   upsertWorkflowOwnedBranch: mocks.upsertWorkflowOwnedBranch,
 }));
 vi.mock("../workspace-publication.js", () => ({
-  publishWorkspaceChanges: mocks.publishWorkspaceChanges,
+  finalizeWorkspacePublication: mocks.finalizeWorkspacePublication,
 }));
 vi.mock("@vercel/sandbox", () => ({ Sandbox: { get: mocks.sandboxGet } }));
 vi.mock("../../sandbox/credentials.js", () => ({ getSandboxCredentials: () => ({}) }));
@@ -395,6 +395,8 @@ describe("post_pr_comment edge cases", () => {
   function publication(): WorkspacePublicationResult {
     return {
       status: "published",
+      attemptId: "attempt-1",
+      repositories: [],
       pushResult: { pushed: true, repositories: [] },
       prs: [
         { provider: "github", repoPath: "acme/api", id: 7, url: "u7", branch: "b", isNew: true },
@@ -406,6 +408,8 @@ describe("post_pr_comment edge cases", () => {
   function singlePublication(): WorkspacePublicationResult {
     return {
       status: "published",
+      attemptId: "attempt-1",
+      repositories: [],
       pushResult: { pushed: true, repositories: [] },
       prs: [
         { provider: "github", repoPath: "acme/other", id: 5, url: "u5", branch: "b", isNew: true },
@@ -642,21 +646,12 @@ describe("finalize_workspace edge cases", () => {
     defaultBranch: "main",
     selectedRationale: "selected",
   };
-  const publishedPr = {
-    provider: "github" as const,
-    repoPath: "acme/api",
-    id: 7,
-    url: "https://github.com/acme/api/pull/7",
-    branch: "blazebot/awt-1",
-    isNew: true,
-  };
-
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
   it("maps a thrown publication to kind failed with the push phase", async () => {
-    mocks.publishWorkspaceChanges.mockRejectedValue(new Error("boom"));
+    mocks.finalizeWorkspacePublication.mockRejectedValue(new Error("boom"));
 
     const result = await executeFinalizeWorkspace(
       makeNode("finalize_workspace"),
@@ -672,10 +667,11 @@ describe("finalize_workspace edge cases", () => {
   });
 
   it("does not comment on a failed publication that produced zero PRs", async () => {
-    mocks.publishWorkspaceChanges.mockResolvedValue({
+    mocks.finalizeWorkspacePublication.mockResolvedValue({
       status: "failed",
+      attemptId: "attempt-1",
       reason: "push rejected",
-      pushResult: { pushed: false, repositories: [] },
+      repositories: [],
       prs: [],
     });
 
@@ -689,13 +685,21 @@ describe("finalize_workspace edge cases", () => {
     expect(mocks.postComment).not.toHaveBeenCalled();
   });
 
-  it("swallows a PR-links comment failure and still reports published", async () => {
-    mocks.publishWorkspaceChanges.mockResolvedValue({
-      status: "published",
-      pushResult: { pushed: true, repositories: [] },
-      prs: [publishedPr],
+  it("reports finalized without creating or commenting on PRs", async () => {
+    mocks.finalizeWorkspacePublication.mockResolvedValue({
+      status: "finalized",
+      attemptId: "attempt-1",
+      repositories: [
+        {
+          provider: "github",
+          repoPath: "acme/api",
+          branchName: "blazebot/awt-1",
+          expectedHead: "before",
+          pushedHead: "after",
+        },
+      ],
+      prs: [],
     });
-    mocks.postComment.mockRejectedValue(new Error("jira down"));
 
     const result = await executeFinalizeWorkspace(
       makeNode("finalize_workspace"),
@@ -704,27 +708,7 @@ describe("finalize_workspace edge cases", () => {
     );
 
     expect(result.kind).toBe("next");
-    expect(mocks.postComment).toHaveBeenCalled();
-  });
-
-  it("comments 'ready for review' when at least one PR is new", async () => {
-    mocks.publishWorkspaceChanges.mockResolvedValue({
-      status: "published",
-      pushResult: { pushed: true, repositories: [] },
-      prs: [publishedPr, { ...publishedPr, id: 8, isNew: false }],
-    });
-
-    await executeFinalizeWorkspace(
-      makeNode("finalize_workspace"),
-      {},
-      makeCtx({ selectedRepositories: [repo] }),
-    );
-
-    expect(mocks.postComment).toHaveBeenCalledTimes(1);
-    expect(mocks.postComment).toHaveBeenCalledWith(
-      "AWT-1",
-      expect.stringContaining("Pull requests ready for review:"),
-    );
+    expect(mocks.postComment).not.toHaveBeenCalled();
   });
 });
 

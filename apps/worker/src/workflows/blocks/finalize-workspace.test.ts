@@ -1,21 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const mocks = vi.hoisted(() => ({
-  publishWorkspaceChanges: vi.fn(),
-  postComment: vi.fn(),
-}));
+const mocks = vi.hoisted(() => ({ finalizeWorkspacePublication: vi.fn() }));
 
 vi.mock("../workspace-publication.js", () => ({
-  publishWorkspaceChanges: mocks.publishWorkspaceChanges,
-}));
-
-vi.mock("../../lib/step-adapters.js", () => ({
-  createStepAdapters: () => ({ issueTracker: { postComment: mocks.postComment } }),
+  finalizeWorkspacePublication: mocks.finalizeWorkspacePublication,
 }));
 
 import type { WorkspaceRepositoryInput } from "../../sandbox/repo-workspace.js";
 import { execute, paramsSchema } from "./finalize-workspace.js";
-import { expectOutputConformsToRegistry, makeCtx, makeNode } from "./test-support.js";
+import { expectOutputConformsToRegistry, makeCtx, makeNode, makePrPayload } from "./test-support.js";
 
 const repo: WorkspaceRepositoryInput = {
   provider: "github",
@@ -24,21 +17,25 @@ const repo: WorkspaceRepositoryInput = {
   selectedRationale: "selected",
 };
 
-const publishedPr = {
-  provider: "github" as const,
-  repoPath: "acme/api",
-  id: 7,
-  url: "https://github.com/acme/api/pull/7",
-  branch: "blazebot/awt-1",
-  isNew: true,
+const finalized = {
+  status: "finalized" as const,
+  attemptId: "attempt-1",
+  repositories: [
+    {
+      provider: "github" as const,
+      repoPath: "acme/api",
+      branchName: "blazebot/awt-1",
+      expectedHead: "before",
+      pushedHead: "after",
+    },
+  ],
+  prs: [] as [],
 };
 
 describe("finalize_workspace paramsSchema", () => {
   it("accepts the execution-only legacy marker and rejects retired authoring params", () => {
     expect(paramsSchema.safeParse({}).success).toBe(true);
-    expect(paramsSchema.safeParse({ legacyRequiredChecks: ["checks.with dots"] }).success).toBe(
-      true,
-    );
+    expect(paramsSchema.safeParse({ legacyRequiredChecks: ["checks.with dots"] }).success).toBe(true);
     expect(paramsSchema.safeParse({ requiredChecks: ["checks-1"] }).success).toBe(false);
     expect(paramsSchema.safeParse({ extra: 1 }).success).toBe(false);
   });
@@ -47,49 +44,34 @@ describe("finalize_workspace paramsSchema", () => {
 describe("finalize_workspace execute", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.finalizeWorkspacePublication.mockResolvedValue(finalized);
   });
 
   it("ignores unrelated prior step records", async () => {
-    mocks.publishWorkspaceChanges.mockResolvedValue({
-      status: "published",
-      pushResult: { pushed: true, repositories: [] },
-      prs: [publishedPr],
-    });
-
     const result = await execute(
       makeNode("finalize_workspace"),
       { "checks-1": { output: { status: "failed", ok: false } } },
       makeCtx({ selectedRepositories: [repo] }),
     );
-
     expect(result.kind).toBe("next");
-    expect(mocks.publishWorkspaceChanges).toHaveBeenCalled();
   });
 
-  it("preserves the legacy gate by rejecting any resolved check status that is not ok", async () => {
+  it("rejects any resolved check status that is not ok", async () => {
     const result = await execute(
       makeNode("finalize_workspace"),
       {},
       makeCtx(),
       { "checks.lint": "ok", "checks.test": "failed" },
     );
-
     expect(result).toEqual({
       kind: "failed",
       output: { status: "failed", unmetChecks: ["test"] },
       reason: "required checks not satisfied: test",
     });
-    expectOutputConformsToRegistry("finalize_workspace", result.output);
-    expect(mocks.publishWorkspaceChanges).not.toHaveBeenCalled();
+    expect(mocks.finalizeWorkspacePublication).not.toHaveBeenCalled();
   });
 
   it("publishes when every resolved check status is ok", async () => {
-    mocks.publishWorkspaceChanges.mockResolvedValue({
-      status: "published",
-      pushResult: { pushed: true, repositories: [] },
-      prs: [publishedPr],
-    });
-
     const result = await execute(
       makeNode("finalize_workspace"),
       {},
@@ -98,7 +80,7 @@ describe("finalize_workspace execute", () => {
     );
 
     expect(result.kind).toBe("next");
-    expect(mocks.publishWorkspaceChanges).toHaveBeenCalledOnce();
+    expect(mocks.finalizeWorkspacePublication).toHaveBeenCalledOnce();
   });
 
   it("gates typed and unrepresentable legacy checks without duplicate failures", async () => {
@@ -131,7 +113,7 @@ describe("finalize_workspace execute", () => {
       reason:
         "required checks not satisfied: typed, duplicate, checks.with.dot, missing, constructor",
     });
-    expect(mocks.publishWorkspaceChanges).not.toHaveBeenCalled();
+    expect(mocks.finalizeWorkspacePublication).not.toHaveBeenCalled();
   });
 
   it("fails when no workspace is attached", async () => {
@@ -141,90 +123,83 @@ describe("finalize_workspace execute", () => {
       makeCtx({ sandboxId: null }),
     );
     expect(result.kind).toBe("failed");
-    if (result.kind === "failed") expect(result.reason).toContain("no workspace");
-    expect(mocks.publishWorkspaceChanges).not.toHaveBeenCalled();
+    expect(mocks.finalizeWorkspacePublication).not.toHaveBeenCalled();
   });
 
-  it("publishes, sets ctx.publication, and comments PR links while retaining ownership", async () => {
-    mocks.publishWorkspaceChanges.mockImplementation(
-      async (input: { beforeCreatePullRequests?: () => Promise<void> }) => {
-        await input.beforeCreatePullRequests?.();
-        return {
-          status: "published",
-          pushResult: { pushed: true, repositories: [] },
-          prs: [publishedPr],
-        };
-      },
-    );
+  it("pushes and emits only the durable attempt and finalized branch metadata", async () => {
     const ctx = makeCtx({ selectedRepositories: [repo] });
+    const result = await execute(makeNode("finalize_workspace", {}, "finalize"), {}, ctx);
 
-    const result = await execute(makeNode("finalize_workspace"), {}, ctx);
-
-    expect(mocks.publishWorkspaceChanges).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sandboxId: "sbx-1",
-        ticketKey: "AWT-1",
-        branchName: "blazebot/awt-1",
-        repositories: [repo],
-        title: "Ticket title",
-        agentKind: "claude",
-        model: "claude-model",
-      }),
-    );
-    expect(ctx.publication?.status).toBe("published");
-    expect(mocks.postComment).toHaveBeenCalledWith(
-      "AWT-1",
-      expect.stringContaining("Pull requests ready for review:"),
-    );
+    expect(mocks.finalizeWorkspacePublication).toHaveBeenCalledWith({
+      runId: "run-1",
+      blockId: "finalize",
+      sandboxId: "sbx-1",
+      ticketKey: "AWT-1",
+      branchName: "blazebot/awt-1",
+      repositories: [repo],
+      clarifications: undefined,
+      sourcePullRequest: undefined,
+    });
+    expect(ctx.publication).toEqual(finalized);
     expect(result).toEqual({
       kind: "next",
       output: {
-        status: "published",
-        prs: [
-          {
-            provider: "github",
-            repoPath: "acme/api",
-            id: 7,
-            url: "https://github.com/acme/api/pull/7",
-            isNew: true,
-          },
-        ],
+        status: "finalized",
+        publicationAttemptId: "attempt-1",
+        repositories: finalized.repositories,
       },
     });
+    expectOutputConformsToRegistry("finalize_workspace", result.output);
   });
 
-  it("does not comment when every PR already existed", async () => {
-    mocks.publishWorkspaceChanges.mockResolvedValue({
-      status: "published",
-      pushResult: { pushed: true, repositories: [] },
-      prs: [{ ...publishedPr, isNew: false }],
-    });
-
-    await execute(makeNode("finalize_workspace"), {}, makeCtx({ selectedRepositories: [repo] }));
-
-    expect(mocks.postComment).not.toHaveBeenCalled();
+  it("passes the exact triggering PR/MR source head into publication", async () => {
+    const pr = makePrPayload({ headSha: "trigger-head" });
+    await execute(
+      makeNode("finalize_workspace", {}, "finalize"),
+      {},
+      makeCtx({
+        entry: {
+          kind: "pr_trigger",
+          triggerType: "trigger_pr_review",
+          subjectKey: "pr:github:acme/api#7",
+          ticketKey: "AWT-1",
+          ownerToken: "owner-1",
+          scope: "workflow_owned",
+          definitionId: 1,
+          definitionVersion: 1,
+          pr,
+        },
+        selectedRepositories: [repo],
+      }),
+    );
+    expect(mocks.finalizeWorkspacePublication).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sourcePullRequest: {
+          provider: "github",
+          repoPath: "acme/api",
+          prId: 7,
+          headSha: "trigger-head",
+        },
+      }),
+    );
   });
 
-  it("maps a failed publication to kind failed with the push phase", async () => {
-    mocks.publishWorkspaceChanges.mockResolvedValue({
+  it("maps a failed durable publication to the push phase without PR side effects", async () => {
+    mocks.finalizeWorkspacePublication.mockResolvedValue({
       status: "failed",
-      reason: "push rejected",
-      pushResult: { pushed: false, repositories: [] },
-      prs: [publishedPr],
+      attemptId: "attempt-1",
+      reason: "lease rejected",
+      repositories: [],
+      prs: [],
     });
     const ctx = makeCtx({ selectedRepositories: [repo] });
-
     const result = await execute(makeNode("finalize_workspace"), {}, ctx);
 
-    expect(result.kind).toBe("failed");
-    if (result.kind === "failed") {
-      expect(result.reason).toBe("push rejected");
-      expect(result.phase).toBe("push");
-    }
-    expect(ctx.publication?.status).toBe("failed");
-    expect(mocks.postComment).toHaveBeenCalledWith(
-      "AWT-1",
-      expect.stringContaining("Pull requests created before publication failed:"),
-    );
+    expect(result).toEqual({
+      kind: "failed",
+      output: { status: "failed" },
+      reason: "lease rejected",
+      phase: "push",
+    });
   });
 });

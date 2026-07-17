@@ -91,16 +91,13 @@ const workspaceType = objectType(
   ["id"],
   true,
 );
-const publishedPrType = objectType(
-  {
-    provider: stringType(),
-    repoPath: stringType(),
-    id: numberType(),
-    url: stringType(),
-    isNew: booleanType(),
-  },
-  ["provider", "repoPath", "id", "url", "isNew"],
-);
+const finalizedBranchType = objectType({
+  provider: stringType(),
+  repoPath: stringType(),
+  branchName: stringType(),
+  expectedHead: stringType(),
+  pushedHead: stringType(),
+});
 const commitRefType = objectType({
   provider: stringType(),
   repoPath: stringType(),
@@ -426,11 +423,12 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
       },
     ],
     output: statusOutput({
-      prs: arrayType(publishedPrType),
+      publicationAttemptId: stringType(),
+      repositories: arrayType(finalizedBranchType),
       unmetChecks: arrayType(stringType()),
     }),
-    normalOutputRequired: ["prs"],
-    statusVariants: ["published", "failed"],
+    normalOutputRequired: ["publicationAttemptId", "repositories"],
+    statusVariants: ["finalized", "failed"],
   },
   run_pre_pr_checks: {
     presentation: presentation(
@@ -496,11 +494,11 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
     presentation: presentation(
       "vcs",
       "Open PR/MR",
-      "Publishes the current workspace and creates or reuses pull or merge requests.",
+      "Creates or reuses pull or merge requests from a successful Finalize output.",
       "⇪",
     ),
     defaults: {},
-    inputs: {},
+    inputs: { publicationAttemptId: input(stringType(), true) },
     output: statusOutput({ prUrl: stringType(), prNumber: numberType() }),
     normalOutputRequired: ["prUrl", "prNumber"],
     statusVariants: ["ok", "failed"],

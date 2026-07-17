@@ -10,6 +10,46 @@ export interface WorkflowPrLink {
   isNew: boolean;
 }
 
+/** Provider-only PR phase used by durable publication. Database correlation
+ * is deliberately separate so an accepted provider side effect can be
+ * journaled before any secondary write is attempted. */
+export async function createOrFindWorkflowOwnedPullRequest(input: {
+  branchName: string;
+  repository: SelectedRepository;
+  title: string;
+}): Promise<WorkflowPrLink> {
+  "use step";
+  const { createRepositoryVCS } = await import("../lib/vcs-runtime.js");
+  const { isRepoAllowed } = await import("../lib/repo-allowlist.js");
+  return resolveWorkflowOwnedPullRequest(input, createRepositoryVCS, isRepoAllowed);
+}
+createOrFindWorkflowOwnedPullRequest.maxRetries = 0;
+
+/** Idempotent correlation phase run after the publication ledger contains the
+ * provider PR result. Safe to repeat when a prior branch-record write failed. */
+export async function recordWorkflowOwnedPullRequest(input: {
+  ticketKey: string;
+  pr: WorkflowPrLink;
+}): Promise<void> {
+  "use step";
+  const { getDb } = await import("../db/client.js");
+  const { upsertWorkflowOwnedBranch } = await import(
+    "../db/queries/workflow-owned-branches.js"
+  );
+  await upsertWorkflowOwnedBranch(getDb(), {
+    ticketKey: input.ticketKey,
+    provider: input.pr.provider,
+    repoPath: input.pr.repoPath,
+    branchName: input.pr.branch,
+    pr: {
+      id: input.pr.id,
+      url: input.pr.url,
+      branch: input.pr.branch,
+    },
+  });
+}
+recordWorkflowOwnedPullRequest.maxRetries = 0;
+
 export async function prepareSelectedRepositoryBranches(
   ticketKey: string,
   branchName: string,
@@ -59,55 +99,76 @@ export async function createOrUseWorkflowOwnedPullRequestsForRepos(input: {
   const prs: WorkflowPrLink[] = [];
 
   for (const repo of input.repositories) {
-    if (!isRepoAllowed(repo.repoPath)) {
-      throw new Error(`Refusing to open a PR on ${repo.repoPath}: not in AGENT_ALLOWED_REPOS`);
-    }
-    const existing = repo.workflowOwnedBranch?.pr;
-    if (existing) {
-      prs.push({
-        provider: repo.provider,
-        repoPath: repo.repoPath,
-        id: existing.id,
-        url: existing.url,
-        branch: existing.branch,
-        isNew: false,
-      });
-      continue;
-    }
-
-    const branchName = repo.workflowOwnedBranch?.branchName ?? input.branchName;
-    const vcs = createRepositoryVCS({
-      provider: repo.provider,
-      repoPath: repo.repoPath,
-      baseBranch: repo.defaultBranch,
-    });
-    const { pr, isNew } = await createOrFindPullRequest(vcs, branchName, input.title);
+    const result = await resolveWorkflowOwnedPullRequest(
+      { branchName: input.branchName, repository: repo, title: input.title },
+      createRepositoryVCS,
+      isRepoAllowed,
+    );
 
     await upsertWorkflowOwnedBranch(db, {
       ticketKey: input.ticketKey,
       provider: repo.provider,
       repoPath: repo.repoPath,
-      branchName,
+      branchName: result.branch,
       pr: {
-        id: pr.id,
-        url: pr.url,
-        branch: pr.branch,
+        id: result.id,
+        url: result.url,
+        branch: result.branch,
       },
     });
 
-    prs.push({
-      provider: repo.provider,
-      repoPath: repo.repoPath,
-      id: pr.id,
-      url: pr.url,
-      branch: pr.branch,
-      isNew,
-    });
+    prs.push(result);
   }
 
   return prs;
 }
 createOrUseWorkflowOwnedPullRequestsForRepos.maxRetries = 0;
+
+async function resolveWorkflowOwnedPullRequest(
+  input: {
+    branchName: string;
+    repository: SelectedRepository;
+    title: string;
+  },
+  createVcs: (input: {
+    provider: SelectedRepository["provider"];
+    repoPath: string;
+    baseBranch: string;
+  }) => VCSAdapter,
+  isAllowed: (repoPath: string) => boolean,
+): Promise<WorkflowPrLink> {
+  const repo = input.repository;
+  if (!isAllowed(repo.repoPath)) {
+    throw new Error(`Refusing to open a PR on ${repo.repoPath}: not in AGENT_ALLOWED_REPOS`);
+  }
+  const existing = repo.workflowOwnedBranch?.pr;
+  if (existing) {
+    return {
+      provider: repo.provider,
+      repoPath: repo.repoPath,
+      id: existing.id,
+      url: existing.url,
+      branch: existing.branch,
+      isNew: false,
+    };
+  }
+
+  const branchName = repo.workflowOwnedBranch?.branchName ?? input.branchName;
+  const vcs = createVcs({
+    provider: repo.provider,
+    repoPath: repo.repoPath,
+    baseBranch: repo.defaultBranch,
+  });
+  const { pr, isNew } = await createOrFindPullRequest(vcs, branchName, input.title);
+  return {
+    provider: repo.provider,
+    repoPath: repo.repoPath,
+    id: pr.id,
+    url: pr.url,
+    branch: pr.branch,
+    isNew,
+  };
+}
 
 async function createOrFindPullRequest(
   vcs: VCSAdapter,

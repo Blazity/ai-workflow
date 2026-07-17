@@ -213,6 +213,104 @@ describe("validateWorkflowBindings", () => {
     );
   });
 
+  it("requires Open PR to consume the exact output of a dominating Finalize block", () => {
+    const valid = definition(
+      [
+        node("trigger", "trigger_ticket_ai"),
+        node("finalize", "finalize_workspace"),
+        node("open", "open_pr", {}, {
+          publicationAttemptId: "steps.finalize.output.publicationAttemptId",
+        }),
+      ],
+      [
+        { from: "trigger", to: "finalize" },
+        { from: "finalize", to: "open" },
+      ],
+    );
+    expect(validateWorkflowBindings(valid, registryContext)).toEqual([]);
+
+    const invalid: Array<[string, WorkflowDefinition]> = [
+      [
+        "run value",
+        definition(
+          [
+            node("trigger", "trigger_ticket_ai"),
+            node("open", "open_pr", {}, { publicationAttemptId: "run.branchName" }),
+          ],
+          [{ from: "trigger", to: "open" }],
+        ),
+      ],
+      [
+        "trigger value",
+        definition(
+          [
+            node("trigger", "trigger_ticket_ai"),
+            node("open", "open_pr", {}, { publicationAttemptId: "trigger.ticketKey" }),
+          ],
+          [{ from: "trigger", to: "open" }],
+        ),
+      ],
+      [
+        "generic string",
+        definition(
+          [
+            node("trigger", "trigger_ticket_ai"),
+            node("generic", "generic_agent", { prompt: "reuse an attempt" }),
+            node("open", "open_pr", {}, {
+              publicationAttemptId: "steps.generic.output.body",
+            }),
+          ],
+          [
+            { from: "trigger", to: "generic" },
+            { from: "generic", to: "open" },
+          ],
+        ),
+      ],
+      [
+        "wrong Finalize field",
+        definition(
+          [
+            node("trigger", "trigger_ticket_ai"),
+            node("finalize", "finalize_workspace"),
+            node("open", "open_pr", {}, {
+              publicationAttemptId: "steps.finalize.output.status",
+            }),
+          ],
+          [
+            { from: "trigger", to: "finalize" },
+            { from: "finalize", to: "open" },
+          ],
+        ),
+      ],
+      [
+        "non-dominating Finalize",
+        definition(
+          [
+            node("trigger", "trigger_ticket_ai"),
+            node("branch", "branch", { condition: "true" }),
+            node("finalize", "finalize_workspace"),
+            node("bypass", "run_checks"),
+            node("open", "open_pr", {}, {
+              publicationAttemptId: "steps.finalize.output.publicationAttemptId",
+            }),
+          ],
+          [
+            { from: "trigger", to: "branch" },
+            { from: "branch", to: "finalize", fromPort: "true" },
+            { from: "branch", to: "bypass", fromPort: "false" },
+            { from: "finalize", to: "open" },
+            { from: "bypass", to: "open" },
+          ],
+        ),
+      ],
+    ];
+    const expected =
+      'Block "open" input "publicationAttemptId" must bind exactly to steps.<finalize_workspace_id>.output.publicationAttemptId from a dominating Finalize Workspace block.';
+    for (const [label, def] of invalid) {
+      expect(validateWorkflowBindings(def, registryContext), label).toContain(expected);
+    }
+  });
+
   it("rejects unknown, self, downstream, and non-dominating step sources", () => {
     const cases: Array<[string, WorkflowDefinition]> = [
       [

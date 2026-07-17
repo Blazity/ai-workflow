@@ -110,14 +110,15 @@ const CURRENT_EXECUTOR_OUTPUTS: Record<WorkflowBlockType, BlockOutput[]> = {
   ],
   finalize_workspace: [
     {
-      status: "published",
-      prs: [
+      status: "finalized",
+      publicationAttemptId: "attempt-1",
+      repositories: [
         {
           provider: "github",
           repoPath: "Blazity/ai-workflow",
-          id: 118,
-          url: "https://github.test/pr/118",
-          isNew: true,
+          branchName: "aiw/AIW-100",
+          expectedHead: "before",
+          pushedHead: "after",
         },
       ],
     },

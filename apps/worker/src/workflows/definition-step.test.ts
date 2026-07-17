@@ -128,6 +128,7 @@ describe("loadWorkflowDefinition", () => {
       "implementation_agent",
       "review_agent",
       "run_pre_pr_checks",
+      "finalize_workspace",
       "open_pr",
       "send_slack_message",
       "update_ticket_status",

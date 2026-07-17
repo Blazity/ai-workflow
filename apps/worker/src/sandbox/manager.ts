@@ -32,6 +32,9 @@ export interface SandboxLifecycle {
 
 type SandboxInstance = Awaited<ReturnType<typeof SandboxType.create>>;
 
+const PRIMARY_REPOSITORY_EXCLUDES_PATH = "/tmp/aiw-primary-git-excludes";
+const PRIMARY_REPOSITORY_EXCLUDES = "/aiw-repos.json\n/repos/\n";
+
 export class SandboxManager {
   constructor(private config: SandboxConfig) {}
 
@@ -82,6 +85,28 @@ export class SandboxManager {
 
       await lifecycle.onCreated?.(sandbox.sandboxId);
 
+      // The primary checkout is the sandbox root. Keep the manifest and the
+      // nested secondary checkouts out of its worktree status without adding
+      // repository-owned .gitignore entries. Every secondary checkout is still
+      // preflighted independently before publication.
+      await sandbox.writeFiles([
+        {
+          path: PRIMARY_REPOSITORY_EXCLUDES_PATH,
+          content: Buffer.from(PRIMARY_REPOSITORY_EXCLUDES),
+        },
+      ]);
+      await requireCommand(
+        await sandbox.runCommand("git", [
+          "-C",
+          firstRepo.localPath,
+          "config",
+          "--local",
+          "core.excludesFile",
+          PRIMARY_REPOSITORY_EXCLUDES_PATH,
+        ]),
+        "git runtime excludes configuration failed for the primary repository",
+      );
+
       await sandbox.runCommand("mkdir", ["-p", WORKSPACE_REPOS_DIR]);
 
       for (const [index, repo] of manifest.repositories.entries()) {
@@ -111,6 +136,12 @@ export class SandboxManager {
         await sandbox.runCommand("git", ["-C", repo.localPath, "remote", "set-url", "origin", urls.cloneUrl]);
         await sandbox.runCommand("git", ["-C", repo.localPath, "config", "user.name", provider.commitAuthor]);
         await sandbox.runCommand("git", ["-C", repo.localPath, "config", "user.email", provider.commitEmail]);
+
+        const remoteBaseline = await requireCommand(
+          await sandbox.runCommand("git", ["-C", repo.localPath, "rev-parse", "HEAD"]),
+          `git rev-parse remote baseline failed for ${repo.provider}:${repo.repoPath}`,
+        );
+        repo.expectedRemoteSha = (await remoteBaseline.stdout()).trim();
 
         if (repo.mergeBase) {
           await sandbox.runCommand("git", [

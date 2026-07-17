@@ -19,6 +19,7 @@ interface GitLabMR {
   iid: number;
   web_url: string;
   source_branch: string;
+  sha?: string;
 }
 interface GitLabNotePosition {
   new_path?: string;
@@ -303,6 +304,17 @@ export class GitLabAdapter implements VCSAdapter, GateStatusCapableVCS, PRFilesC
     if (mrs.length === 0) return null;
     const mr = mrs[0];
     return { id: mr.iid, url: mr.web_url, branch: mr.source_branch };
+  }
+
+  async getPRHeadSha(prId: number): Promise<string> {
+    const mr = (await this.gl.MergeRequests.show(
+      this.projectId,
+      prId,
+    )) as unknown as GitLabMR;
+    if (!mr.sha) {
+      throw new Error(`GitLab merge request !${prId} did not include a head SHA`);
+    }
+    return mr.sha;
   }
 
   async listPRFiles(prId: number): Promise<PRFile[]> {

@@ -19,8 +19,10 @@ vi.mock("../db/queries/workflow-owned-branches.js", () => ({
 }));
 
 import {
+  createOrFindWorkflowOwnedPullRequest,
   createOrUseWorkflowOwnedPullRequestsForRepos,
   prepareSelectedRepositoryBranches,
+  recordWorkflowOwnedPullRequest,
 } from "./repository-prs.js";
 
 describe("prepareSelectedRepositoryBranches", () => {
@@ -234,5 +236,66 @@ describe("createOrUseWorkflowOwnedPullRequestsForRepos", () => {
         isNew: false,
       },
     ]);
+  });
+});
+
+describe("durable publication PR phases", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.getDb.mockReturnValue({ db: true });
+  });
+
+  it("returns the provider PR before writing workflow-owned branch correlation", async () => {
+    mocks.createRepositoryVCS.mockReturnValue({
+      createPR: vi.fn().mockResolvedValue({
+        id: 46,
+        url: "https://github.com/acme/api/pull/46",
+        branch: "blazebot/aiw-100",
+      }),
+    });
+
+    const pr = await createOrFindWorkflowOwnedPullRequest({
+      branchName: "blazebot/aiw-100",
+      repository: {
+        provider: "github",
+        repoPath: "acme/api",
+        defaultBranch: "main",
+        selectedRationale: "durable finalized publication",
+        workflowOwnedBranch: { branchName: "blazebot/aiw-100" },
+      },
+      title: "Safe publication",
+    });
+
+    expect(pr).toEqual(expect.objectContaining({ id: 46, repoPath: "acme/api" }));
+    expect(mocks.upsertWorkflowOwnedBranch).not.toHaveBeenCalled();
+  });
+
+  it("records workflow-owned branch correlation as a separate idempotent phase", async () => {
+    await recordWorkflowOwnedPullRequest({
+      ticketKey: "AIW-100",
+      pr: {
+        provider: "github",
+        repoPath: "acme/api",
+        id: 46,
+        url: "https://github.com/acme/api/pull/46",
+        branch: "blazebot/aiw-100",
+        isNew: true,
+      },
+    });
+
+    expect(mocks.upsertWorkflowOwnedBranch).toHaveBeenCalledWith(
+      { db: true },
+      {
+        ticketKey: "AIW-100",
+        provider: "github",
+        repoPath: "acme/api",
+        branchName: "blazebot/aiw-100",
+        pr: {
+          id: 46,
+          url: "https://github.com/acme/api/pull/46",
+          branch: "blazebot/aiw-100",
+        },
+      },
+    );
   });
 });

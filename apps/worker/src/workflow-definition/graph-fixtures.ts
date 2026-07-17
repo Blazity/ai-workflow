@@ -49,7 +49,12 @@ export function linearPipelineDefinition(): WorkflowDefinition {
     { id: "planning", type: "planning_agent" },
     { id: "implementation", type: "implementation_agent" },
     { id: "checks", type: "run_pre_pr_checks" },
-    { id: "open-pr", type: "open_pr" },
+    { id: "finalize", type: "finalize_workspace" },
+    {
+      id: "open-pr",
+      type: "open_pr",
+      inputs: { publicationAttemptId: "steps.finalize.output.publicationAttemptId" },
+    },
     { id: "status", type: "update_ticket_status", params: { target: "ai_review" } },
     { id: "slack", type: "send_slack_message" },
   ]);
@@ -95,7 +100,15 @@ export function humanGateLoopDefinition(options: HumanGateLoopOptions = {}): Wor
     buildNode({ id: "implementation", type: "implementation_agent" }, 3),
     buildNode({ id: "checks", type: "run_pre_pr_checks" }, 4),
     buildNode({ id: "verdict", type: "branch", params: { condition: "steps.checks.output.ok" } }, 5),
-    buildNode({ id: "open-pr", type: "open_pr" }, 6),
+    buildNode({ id: "finalize", type: "finalize_workspace" }, 6),
+    buildNode(
+      {
+        id: "open-pr",
+        type: "open_pr",
+        inputs: { publicationAttemptId: "steps.finalize.output.publicationAttemptId" },
+      },
+      7,
+    ),
     buildNode(
       { id: "retry", type: "loop", params: { maxAttempts: 3, onExhaust: "fail" } },
       6,
@@ -111,7 +124,8 @@ export function humanGateLoopDefinition(options: HumanGateLoopOptions = {}): Wor
     buildEdge("gate", "implementation", "false"),
     buildEdge("implementation", "checks"),
     buildEdge("checks", "verdict"),
-    buildEdge("verdict", "open-pr", "true"),
+    buildEdge("verdict", "finalize", "true"),
+    buildEdge("finalize", "open-pr"),
     buildEdge("verdict", "retry", "false"),
     buildEdge("retry", "fix", "continue"),
     buildEdge("fix", "checks"),
@@ -142,14 +156,24 @@ export function planApprovalDefinition(): WorkflowDefinition {
     ),
     buildNode({ id: "trigger-approved", type: "trigger_plan_approved" }, 0, 1),
     buildNode({ id: "implementation", type: "implementation_agent" }, 1, 1),
-    buildNode({ id: "open-pr", type: "open_pr" }, 2, 1),
-    buildNode({ id: "status", type: "update_ticket_status", params: { target: "ai_review" } }, 3, 1),
+    buildNode({ id: "finalize", type: "finalize_workspace" }, 2, 1),
+    buildNode(
+      {
+        id: "open-pr",
+        type: "open_pr",
+        inputs: { publicationAttemptId: "steps.finalize.output.publicationAttemptId" },
+      },
+      3,
+      1,
+    ),
+    buildNode({ id: "status", type: "update_ticket_status", params: { target: "ai_review" } }, 4, 1),
   ];
   const edges: WorkflowDefinitionEdge[] = [
     buildEdge("trigger-ticket", "planning"),
     buildEdge("planning", "send-approval"),
     buildEdge("trigger-approved", "implementation"),
-    buildEdge("implementation", "open-pr"),
+    buildEdge("implementation", "finalize"),
+    buildEdge("finalize", "open-pr"),
     buildEdge("open-pr", "status"),
   ];
   return { schemaVersion: 1, nodes, edges };

@@ -14,6 +14,9 @@ export const workspaceRepoSchema = z.object({
   branchName: z.string().min(1),
   mergeBase: z.string().min(1).optional(),
   selectedRationale: z.string(),
+  /** Remote branch head observed immediately after checkout, before any local
+   * merge-base preparation. Finalize compares its fresh fetch to this SHA. */
+  expectedRemoteSha: z.string().optional(),
   preAgentSha: z.string().optional(),
   workflowOwnedBranch: z.object({
     branchName: z.string().min(1),

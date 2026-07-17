@@ -318,6 +318,62 @@ export const workflowOwnedBranches = pgTable(
 );
 
 /**
+ * Durable two-phase publication ledger. Finalize Workspace owns the push
+ * phases; Open PR/MR may consume only an attempt that reached `finalized`.
+ * The run/block uniqueness is the replay guard that prevents a Workflow step
+ * replay from pushing the same workspace twice.
+ */
+export const publicationAttempts = pgTable(
+  "publication_attempts",
+  {
+    id: text("id").primaryKey(),
+    runId: text("run_id").notNull(),
+    blockId: text("block_id").notNull(),
+    status: text("status").notNull().default("preflighting"),
+    failure: text("failure"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("publication_attempts_run_block_idx").on(t.runId, t.blockId),
+    check(
+      "publication_attempts_status_check",
+      sql`${t.status} in ('preflighting', 'pushing', 'finalized', 'creating_prs', 'published', 'failed')`,
+    ),
+  ],
+);
+
+/** Per-repository facts retained even when a cross-provider publication is partial. */
+export const publicationAttemptRepositories = pgTable(
+  "publication_attempt_repositories",
+  {
+    attemptId: text("attempt_id")
+      .notNull()
+      .references(() => publicationAttempts.id, { onDelete: "cascade" }),
+    provider: text("provider").notNull(),
+    repoPath: text("repo_path").notNull(),
+    branchName: text("branch_name").notNull(),
+    defaultBranch: text("default_branch").notNull(),
+    changed: boolean("changed").notNull().default(false),
+    expectedHead: text("expected_head"),
+    targetHead: text("target_head"),
+    pushedHead: text("pushed_head"),
+    prId: integer("pr_id"),
+    prUrl: text("pr_url"),
+    prIsNew: boolean("pr_is_new"),
+    failure: text("failure"),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.attemptId, t.provider, t.repoPath] }),
+    check(
+      "publication_attempt_repositories_provider_check",
+      sql`${t.provider} in ('github', 'gitlab')`,
+    ),
+  ],
+);
+
+/**
  * Dashboard-managed pre-PR check configuration, append-only. The current
  * config is the row with the highest version; a rollback appends a copy of
  * an older version with restored_from_version set. No rows = gate disabled.

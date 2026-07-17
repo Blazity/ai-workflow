@@ -10,6 +10,7 @@ interface BlockSpec {
   type: WorkflowBlockType;
   name: string;
   params: Record<string, WorkflowParamValue>;
+  inputs?: WorkflowDefinitionNode["inputs"];
 }
 
 export function defaultWorkflowDefinition({ includeReview }: { includeReview: boolean }): WorkflowDefinition {
@@ -21,7 +22,14 @@ export function defaultWorkflowDefinition({ includeReview }: { includeReview: bo
       ? [{ id: "review", type: "review_agent", name: "Review agent", params: {} } satisfies BlockSpec]
       : []),
     { id: "checks", type: "run_pre_pr_checks", name: "Run pre-PR checks", params: {} },
-    { id: "open-pr", type: "open_pr", name: "Open pull request", params: {} },
+    { id: "finalize", type: "finalize_workspace", name: "Finalize workspace", params: {} },
+    {
+      id: "open-pr",
+      type: "open_pr",
+      name: "Open pull request",
+      params: {},
+      inputs: { publicationAttemptId: "steps.finalize.output.publicationAttemptId" },
+    },
     { id: "slack", type: "send_slack_message", name: "Send Slack message", params: {} },
     { id: "status", type: "update_ticket_status", name: "Update ticket status", params: { target: "ai_review" } },
   ];
@@ -37,7 +45,7 @@ export function defaultWorkflowDefinition({ includeReview }: { includeReview: bo
     x: startX + index * stepX,
     y,
     params: spec.params,
-    inputs: {},
+    inputs: spec.inputs ?? {},
   }));
 
   const edges = nodes.slice(1).map((node, index) => ({ from: nodes[index].id, to: node.id }));

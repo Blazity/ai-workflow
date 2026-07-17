@@ -113,9 +113,17 @@ describe("workflowDefinitionSchema", () => {
       ],
     });
 
-    expect(upgraded.nodes.map((node) => node.type)).toEqual(["branch", "open_pr", "terminate"]);
+    expect(upgraded.nodes.map((node) => node.type)).toEqual([
+      "branch",
+      "finalize_workspace",
+      "open_pr",
+      "terminate",
+    ]);
     expect(upgraded.nodes.every((node) => Object.hasOwn(node, "inputs"))).toBe(true);
-    expect(upgraded.edges).toEqual([{ from: "branch", to: "next", fromPort: "false" }]);
+    expect(upgraded.edges).toEqual([
+      { from: "branch", to: "next-finalize", fromPort: "false" },
+      { from: "next-finalize", to: "next" },
+    ]);
   });
 
   it("still rejects truly unknown stored block types", () => {
@@ -155,6 +163,97 @@ describe("workflowDefinitionSchema", () => {
       runId: "run.id",
     });
     expect(parsed.nodes[1].inputs).toEqual({});
+  });
+
+  it("upgrades the legacy combined Open PR block into Finalize followed by bound Open PR", () => {
+    const legacyDefault = {
+      schemaVersion: 1 as const,
+      nodes: [
+        { id: "trigger", type: "trigger_ticket_ai", x: 0, y: 0, params: {} },
+        { id: "planning", type: "planning_agent", x: 1, y: 0, params: {} },
+        { id: "implementation", type: "implementation_agent", x: 2, y: 0, params: {} },
+        { id: "checks", type: "run_pre_pr_checks", x: 3, y: 0, params: {} },
+        { id: "open-pr", type: "open_pr", x: 4, y: 0, params: {} },
+        { id: "slack", type: "send_slack_message", x: 5, y: 0, params: {} },
+        {
+          id: "status",
+          type: "update_ticket_status",
+          x: 6,
+          y: 0,
+          params: { target: "ai_review" },
+        },
+      ],
+      edges: [
+        { from: "trigger", to: "planning" },
+        { from: "planning", to: "implementation" },
+        { from: "implementation", to: "checks" },
+        { from: "checks", to: "open-pr" },
+        { from: "open-pr", to: "slack" },
+        { from: "slack", to: "status" },
+      ],
+    };
+
+    const upgraded = upgradeStoredWorkflowDefinition(legacyDefault);
+
+    expect(upgraded.nodes.map((entry) => entry.id)).toEqual([
+      "trigger",
+      "planning",
+      "implementation",
+      "checks",
+      "open-pr-finalize",
+      "open-pr",
+      "slack",
+      "status",
+    ]);
+    expect(upgraded.nodes.find((entry) => entry.id === "open-pr-finalize")).toMatchObject({
+      type: "finalize_workspace",
+      params: {},
+      inputs: {},
+    });
+    expect(upgraded.nodes.find((entry) => entry.id === "open-pr")?.inputs).toEqual({
+      publicationAttemptId: "steps.open-pr-finalize.output.publicationAttemptId",
+    });
+    expect(upgraded.edges).toEqual([
+      { from: "trigger", to: "planning" },
+      { from: "planning", to: "implementation" },
+      { from: "implementation", to: "checks" },
+      { from: "checks", to: "open-pr-finalize" },
+      { from: "open-pr", to: "slack" },
+      { from: "slack", to: "status" },
+      { from: "open-pr-finalize", to: "open-pr" },
+    ]);
+    expect(validateWorkflowDefinitionForDeployment(upgraded, registryContext)).toEqual([]);
+    expect(upgradeStoredWorkflowDefinition(upgraded)).toEqual(upgraded);
+  });
+
+  it("chooses a deterministic unused Finalize id and preserves current definitions", () => {
+    const collision = {
+      schemaVersion: 1 as const,
+      nodes: [
+        { id: "trigger", type: "trigger_ticket_ai", x: 0, y: 0, params: {} },
+        { id: "open-pr-finalize", type: "run_checks", x: 1, y: 0, params: {} },
+        { id: "open-pr", type: "open_pr", x: 2, y: 0, params: {} },
+      ],
+      edges: [
+        { from: "trigger", to: "open-pr-finalize" },
+        { from: "open-pr-finalize", to: "open-pr" },
+      ],
+    };
+
+    const upgraded = upgradeStoredWorkflowDefinition(collision);
+    expect(upgraded.nodes.map((entry) => entry.id)).toEqual([
+      "trigger",
+      "open-pr-finalize",
+      "open-pr-finalize-2",
+      "open-pr",
+    ]);
+    expect(upgraded.nodes.find((entry) => entry.id === "open-pr")?.inputs).toEqual({
+      publicationAttemptId: "steps.open-pr-finalize-2.output.publicationAttemptId",
+    });
+    expect(upgradeStoredWorkflowDefinition(upgraded)).toEqual(upgraded);
+
+    const current = defaultWorkflowDefinition({ includeReview: true });
+    expect(upgradeStoredWorkflowDefinition(current)).toEqual(current);
   });
 
   it("upgrades legacy Generic Agent blocks to read_write without changing explicit modes", () => {
@@ -1011,6 +1110,27 @@ describe("validateWorkflowGraph rules", () => {
     expect(
       validateWorkflowGraph(def).some((issue) =>
         issue.includes("form a cycle region with 2 Loop blocks; each cycle region must contain exactly one"),
+      ),
+    ).toBe(true);
+  });
+
+  it("rule 11: rejects Finalize Workspace inside a loop cycle", () => {
+    const def = graph(
+      [
+        node("t", "trigger_ticket_ai"),
+        node("finalize", "finalize_workspace"),
+        node("lp", "loop", { maxAttempts: 3, onExhaust: "fail" }),
+      ],
+      [
+        { from: "t", to: "finalize" },
+        { from: "finalize", to: "lp" },
+        { from: "lp", to: "finalize", fromPort: "continue" },
+      ],
+    );
+
+    expect(
+      validateWorkflowGraph(def).some((issue) =>
+        issue.includes('Finalize Workspace block "finalize" cannot execute inside a Loop cycle'),
       ),
     ).toBe(true);
   });

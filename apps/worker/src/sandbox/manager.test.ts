@@ -426,6 +426,50 @@ describe("SandboxManager.provisionMultiRepo", () => {
     ]);
   });
 
+  it("excludes sandbox-owned metadata and secondary clones from the primary checkout", async () => {
+    const manager = new SandboxManager(baseConfig);
+    await manager.provisionMultiRepo(
+      {
+        branchName: "blazebot/aiw-100",
+        repositories: [
+          {
+            provider: "github",
+            repoPath: "acme/api",
+            defaultBranch: "main",
+            selectedRationale: "ticket mentions api",
+          },
+          {
+            provider: "github",
+            repoPath: "acme/web",
+            defaultBranch: "main",
+            selectedRationale: "ticket mentions web",
+          },
+        ],
+      },
+      makeFakeAgent(),
+      { model: "any", anthropicApiKey: "k" },
+    );
+
+    expect(mockRunCommand).toHaveBeenCalledWith("git", [
+      "-C",
+      "/vercel/sandbox",
+      "config",
+      "--local",
+      "core.excludesFile",
+      "/tmp/aiw-primary-git-excludes",
+    ]);
+    expect(mockWriteFiles).toHaveBeenCalledWith([
+      {
+        path: "/tmp/aiw-primary-git-excludes",
+        content: expect.any(Buffer),
+      },
+    ]);
+    const excludeWrite = mockWriteFiles.mock.calls
+      .flatMap(([files]) => files)
+      .find((file) => file.path === "/tmp/aiw-primary-git-excludes");
+    expect(excludeWrite?.content.toString("utf8")).toBe("/aiw-repos.json\n/repos/\n");
+  });
+
   it("uses the selected repository provider credentials when cloning mixed providers", async () => {
     const manager = new SandboxManager({
       providers: [
@@ -515,6 +559,7 @@ describe("SandboxManager.provisionMultiRepo", () => {
     expect(manifest.repositories[0]).toMatchObject({
       repoPath: "acme/api",
       localPath: "/vercel/sandbox",
+      expectedRemoteSha: "sha-123",
       preAgentSha: "sha-123",
     });
   });
@@ -690,7 +735,7 @@ describe("SandboxManager.provisionMultiRepo", () => {
     expect(mockStop).toHaveBeenCalled();
   });
 
-  it("fails fast when pre-agent SHA capture fails", async () => {
+  it("fails fast when remote-baseline SHA capture fails", async () => {
     mockRunCommand.mockImplementation((cmd, args) => {
       if (cmd === "git" && args[0] === "-C" && args.includes("rev-parse")) {
         return {
@@ -719,8 +764,14 @@ describe("SandboxManager.provisionMultiRepo", () => {
         makeFakeAgent(),
         { model: "any", anthropicApiKey: "k" },
       ),
-    ).rejects.toThrow("git rev-parse failed for github:test-org/api: rev-parse failed");
-    expect(mockWriteFiles).not.toHaveBeenCalled();
+    ).rejects.toThrow(
+      "git rev-parse remote baseline failed for github:test-org/api: rev-parse failed",
+    );
+    expect(
+      mockWriteFiles.mock.calls
+        .flatMap(([files]) => files)
+        .some((file) => file.path === WORKSPACE_MANIFEST_PATH),
+    ).toBe(false);
     expect(mockStop).toHaveBeenCalled();
   });
 });

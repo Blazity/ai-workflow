@@ -136,6 +136,21 @@ describe("GitHubAdapter", () => {
     });
   });
 
+  describe("getPRHeadSha", () => {
+    it("returns the provider's current pull request head", async () => {
+      mockOctokit.pulls.get.mockResolvedValueOnce({
+        data: { head: { sha: "current-head" } },
+      });
+
+      await expect(ghAdapter().getPRHeadSha(42)).resolves.toBe("current-head");
+      expect(mockOctokit.pulls.get).toHaveBeenCalledWith({
+        owner: "test-org",
+        repo: "test-repo",
+        pull_number: 42,
+      });
+    });
+  });
+
   describe("postPRComment", () => {
     it("posts an issue comment and returns its html_url", async () => {
       mockOctokit.issues.createComment.mockResolvedValueOnce({
