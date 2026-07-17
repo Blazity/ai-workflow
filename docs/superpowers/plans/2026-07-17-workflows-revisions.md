@@ -202,17 +202,18 @@ Acceptance:
 
 - A configured merged workflow moves its correlated ticket once and cannot cancel its own still-running workflow.
 
-## Task 10 — AIW-98: configurable GitLab review parity
+## Task 10 — AIW-98: configurable GitLab review events
 
 Steps:
 
-1. Add failing tests for configured MR reviewer states and Note Hook comments, bot/system filtering, wrong project, stale head, duplicate delivery, malformed payload, and retry.
-2. Normalize GitLab events to the same review payload as GitHub and reuse AIW-97 authentication, scope, head verification, dedupe, coalescing, and pending dispatch.
-3. Mirror only selectors the author explicitly configures. Do not broaden the default review-event taxonomy while that product decision remains open.
+1. Add failing tests for configured Note Hook comments, bot/system filtering, wrong project, stale head, duplicate delivery, and malformed payload.
+2. Normalize GitLab comments to the same review payload as GitHub comments and reuse AIW-97 authentication, scope, head verification, dedupe, coalescing, and pending dispatch.
+3. Reject GitLab definitions selecting `changes_requested` with a precise provider-capability reason. GitHub retains `changes_requested`; GitLab reviewer state must not be inferred from the mutable reviewers API.
+4. Require a configured provider-specific bot identity for comment triggers so missing or ambiguous identity configuration fails closed rather than allowing workflow-authored recursion.
 
 Acceptance:
 
-- Equivalent explicitly configured GitHub and GitLab review feedback reaches one trigger contract without workflow-authored recursion.
+- Explicitly configured GitHub/GitLab comments reach one trigger contract without workflow-authored recursion, GitHub changes-requested reviews remain supported, and unsupported GitLab changes-requested definitions fail before deployment.
 
 ## Task 11 — AIW-93: editor auto-validation, availability, and layout-only editing
 
@@ -232,7 +233,7 @@ Acceptance:
 
 ## Task 12 — AIW-103: end-to-end verification and one-PR delivery
 
-1. Add deterministic integration coverage for typed flow; draft/validate/deploy/pin/rollback; subject/dedupe/claim drain; workspace/checkpoint; publication; merged transition; GitHub/GitLab review parity; and every budget outcome.
+1. Add deterministic integration coverage for typed flow; draft/validate/deploy/pin/rollback; subject/dedupe/claim drain; workspace/checkpoint; publication; merged transition; supported GitHub/GitLab review events and provider limitations; and every budget outcome.
 2. Run all focused suites, then fresh full verification:
    - `pnpm run typecheck`
    - `pnpm run test`

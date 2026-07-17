@@ -111,7 +111,7 @@ Clarification is non-terminal: it retains the claim and hands it to its pinned s
 
 ## 7. GitLab reviews and merged ticket transitions
 
-GitLab merge-request reviewer state and note events are normalized into the same review trigger payload as GitHub, with configured state/event filtering and bot-author filtering. The revision adds parity for selectors authors explicitly configure; it does not broaden the default review taxonomy while that product decision remains open. Provider-specific payload parsing stays behind the common trigger contract.
+GitLab merge-request comments are normalized from authenticated Note Hook deliveries into the same review trigger payload as GitHub comments, with configured event and bot-author filtering. GitLab comments only are supported in this revision: GitLab does not expose a reliable changes-requested webhook, and its reviewer API reports mutable current state rather than the state associated with one delivery. Deployment therefore rejects a GitLab `trigger_pr_review` that selects `changes_requested`, while GitHub continues to support both `changes_requested` and `commented`. The editor surfaces the provider limitation instead of advertising an inert selector. Which supported selectors should be enabled by default remains open. Provider-specific payload parsing stays behind the common trigger contract.
 
 GitHub `pull_request.closed` with `merged=true` and GitLab's merged merge-request event normalize to `trigger_pr_merged`. The trigger can feed Update Ticket Status. Editor status choices are fetched from the configured ticket provider/project and deduplicated; configured AI Review/Backlog values are only a fallback when provider discovery fails.
 

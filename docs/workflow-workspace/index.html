@@ -787,7 +787,7 @@
           contract: "out: pr, head_sha, review, comment_refs",
           input: "config {\n  providers: (\"github\" | \"gitlab\")[],\n  scope: \"workflow_owned\" | \"any\",\n  on: ReviewEventSelector[], // Open Decision\n  ignore_workflow_authored: true\n}",
           output: "{\n  pr: PrRef,\n  head_sha: string,\n  review: ReviewRef,\n  comment_refs: ReviewCommentRef[],\n  provider_delivery_id: string,\n  ticket?: TicketContext\n}",
-          note: "Workflow-authored comments and review echoes are filtered by default so the fix summary cannot recursively trigger another remediation run. workflow_owned is proven from durable branch/publication correlation plus a valid ticket lookup. any is review-safe and cannot mutate a branch or ticket in this revision. Human review events remain eligible."
+          note: "GitHub can deliver submitted changes requested reviews and review comments. GitLab supports comments only in this revision because it does not emit a reliable changes-requested webhook; a GitLab definition selecting changes_requested is unavailable and rejected before deployment. Workflow-authored comments and review echoes are filtered by default so the fix summary cannot recursively trigger another remediation run. workflow_owned is proven from durable branch/publication correlation plus a valid ticket lookup. any is review-safe and cannot mutate a branch or ticket in this revision."
         },
         "trig.pr-merged": {
           group: "trigger",
@@ -1254,11 +1254,11 @@
             },
             {
               head: "MVP provider coverage",
-              body: "All original five lifecycle trigger types, the new PR/MR merged trigger, and Plan approval are locked. Remaining: whether ticket lifecycle launches with Jira only or Jira + Linear. PR-created, failed-check, review, and merged triggers support GitHub/GitLab; review remediation must have real GitLab parity rather than advertising an inert provider option."
+              body: "All original five lifecycle trigger types, the new PR/MR merged trigger, and Plan approval are locked. Remaining: whether ticket lifecycle launches with Jira only or Jira + Linear. PR-created, failed-check, review-comment, and merged triggers support GitHub/GitLab. GitLab changes_requested remains unavailable because the provider does not deliver a reliable changes-requested webhook; the editor and deploy validation must say so instead of advertising an inert option."
             },
             {
               head: "Review event scope",
-              body: "Which human-review events are actionable for remediation: changes requested only, ordinary review comments, unresolved inline threads, selected mentions, or some combination? GitHub/GitLab parity and workflow-authored-event filtering are locked."
+              body: "Which supported human-review events should be enabled by default remains open: GitHub changes requested, GitHub review comments, GitLab comments, unresolved inline threads, selected mentions, or some combination? Workflow-authored-event filtering is locked. Provider equivalence is bounded by real webhook capabilities; GitLab changes_requested is unavailable in this revision."
             },
             {
               head: "CI failure granularity",

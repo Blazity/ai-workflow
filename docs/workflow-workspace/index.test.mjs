@@ -12,6 +12,13 @@ const supportingSpec = await readFile(
   ),
   "utf8",
 );
+const revisionSpec = await readFile(
+  new URL(
+    "../superpowers/specs/2026-07-17-workflows-revisions-design.md",
+    import.meta.url,
+  ),
+  "utf8",
+);
 
 function loadCanvasData() {
   const source = html.match(
@@ -229,4 +236,21 @@ test("records that an accepted plan approval cannot be revoked", () => {
   const { BLOCKS } = loadCanvasData();
   assert.match(BLOCKS["trig.plan-approved"].note, /final/i);
   assert.match(BLOCKS["trig.plan-approved"].note, /cannot be revoked/i);
+});
+
+test("states the actionable review events each provider can actually deliver", () => {
+  const { BLOCKS, FRAMES } = loadCanvasData();
+  const reviewTrigger = BLOCKS["trig.pr-review"];
+  const decisions = FRAMES.find(({ slug }) => slug === "decisions");
+  const decisionText = decisions.items
+    .map(({ head, body }) => `${head} ${body}`)
+    .join(" ");
+
+  assert.match(reviewTrigger.note, /GitHub.*changes requested.*comments/is);
+  assert.match(reviewTrigger.note, /GitLab.*comments only/is);
+  assert.match(reviewTrigger.note, /does not emit a reliable.*changes.requested.*webhook/is);
+  assert.match(decisionText, /GitLab.*changes.requested.*unavailable/is);
+  assert.match(revisionSpec, /GitLab.*comments only/is);
+  assert.match(revisionSpec, /rejects.*GitLab.*changes_requested/is);
+  assert.doesNotMatch(revisionSpec, /GitLab merge-request reviewer state.*normalized/is);
 });
