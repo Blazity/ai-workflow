@@ -177,6 +177,27 @@ describe("reconcileRuns owner-CAS recovery", () => {
     expect(mockCancelRun).not.toHaveBeenCalled();
   });
 
+  it("keeps the exact bound predecessor while a durable clarification is pending", async () => {
+    const parked = entry();
+    const runRegistry = registry([parked]);
+    mockGetRun.mockReturnValue({ status: Promise.resolve("completed") });
+    const { reconcileRuns } = await import("./reconcile.js");
+
+    expect(
+      await reconcileRuns(
+        new Set(),
+        runRegistry,
+        issueTracker("Done"),
+        undefined,
+        undefined,
+        new Set([parked.subjectKey]),
+      ),
+    ).toEqual({ cancelled: 0, cleaned: 0 });
+    expect(mockGetRun).not.toHaveBeenCalled();
+    expect(mockCancelRun).not.toHaveBeenCalled();
+    expect(runRegistry.release).not.toHaveBeenCalled();
+  });
+
   it("passes owner-gated drain through cancellation for a ticket that left AI", async () => {
     const bound = entry();
     const runRegistry = registry([bound]);

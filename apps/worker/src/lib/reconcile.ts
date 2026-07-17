@@ -31,12 +31,18 @@ export async function reconcileRuns(
   issueTracker?: IssueTrackerAdapter,
   onTicketCancelled?: TicketCancellationCallback,
   onSubjectReleased?: SubjectReleasedCallback,
+  parkedSubjects?: ReadonlySet<string>,
 ): Promise<{ cancelled: number; cleaned: number }> {
   const entries = await runRegistry.listAll();
   let cancelled = 0;
   let cleaned = 0;
 
   for (const entry of entries) {
+    // A pending durable clarification intentionally keeps its predecessor
+    // bound after the Workflow run has parked and the ticket has left AI. The
+    // answer path needs that exact claim for its owner-CAS successor handoff.
+    if (parkedSubjects?.has(entry.subjectKey)) continue;
+
     if (entry.state === "reserved") {
       cleaned += await recoverStaleReservation(entry, runRegistry, onSubjectReleased);
       continue;

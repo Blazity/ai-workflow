@@ -13,6 +13,14 @@ import type { RunsLister } from "../../lib/overview/collect-runs.js";
 import { drainOldestPendingTrigger } from "../../lib/dispatch-trigger.js";
 import { listPendingSubjectKeys } from "../../lib/trigger-delivery-store.js";
 import { recoverOrphanedPendingTriggers } from "../../lib/pending-trigger-recovery.js";
+import {
+  listPendingClarificationSubjectKeys,
+  reconcileClarificationCheckpoints,
+} from "../../clarifications/store.js";
+import {
+  recoverUndispatchedClarificationSuccessors,
+  startQueuedClarificationSnapshotCleanups,
+} from "../../clarifications/reconciliation.js";
 
 export default defineEventHandler(async (event) => {
   verifyCronAuth(getHeader(event, "authorization"));
@@ -21,6 +29,21 @@ export default defineEventHandler(async (event) => {
   const db = getDb();
   const ticketKeys = await discoverAiColumnTickets(adapters);
   const started = await dispatchDiscoveredTickets(ticketKeys, adapters);
+
+  // Retire expired/orphaned checkpoints before retrying answer crash
+  // boundaries. A failed DB read aborts this poll: running generic cleanup
+  // without knowing which subjects are durably parked could release live work.
+  await reconcileClarificationCheckpoints(db);
+  const clarificationRecovered =
+    await recoverUndispatchedClarificationSuccessors({
+      db,
+      runRegistry: adapters.runRegistry,
+      issueTracker: adapters.issueTracker,
+      maxConcurrentAgents: env.MAX_CONCURRENT_AGENTS,
+    });
+  const parkedSubjects = new Set(
+    await listPendingClarificationSubjectKeys(db),
+  );
   const { cancelled, cleaned } = await reconcileRuns(
     new Set(ticketKeys),
     adapters.runRegistry,
@@ -42,7 +65,11 @@ export default defineEventHandler(async (event) => {
         maxConcurrentAgents: env.MAX_CONCURRENT_AGENTS,
       });
     },
+    parkedSubjects,
   );
+
+  const clarificationCleanupStarted =
+    await startQueuedClarificationSnapshotCleanups({ db });
 
   const pendingRecovered = await recoverOrphanedPendingTriggers({
     listSubjects: () => listPendingSubjectKeys(db),
@@ -87,6 +114,8 @@ export default defineEventHandler(async (event) => {
     cancelled,
     cleaned,
     pendingRecovered,
+    clarificationRecovered,
+    clarificationCleanupStarted,
   };
 });
 

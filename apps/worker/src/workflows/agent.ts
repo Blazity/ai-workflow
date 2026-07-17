@@ -17,6 +17,7 @@ import {
   buildRuntimeGraph,
   executeGraph,
   type RuntimeGraph,
+  type StepsRecord,
 } from "../workflow-definition/interpreter.js";
 import type {
   BlockExecutionResult,
@@ -25,7 +26,11 @@ import type {
 } from "../workflow-definition/interpreter.js";
 import { resolveBlockAgent, resolveRunDefaultKind } from "../workflow-definition/resolve-agent.js";
 import { resolveTicketMoveTarget } from "./ticket-move-target.js";
-import type { AgentWorkflowInput } from "./agent-input.js";
+import {
+  BUILTIN_FALLBACK_DEFINITION_VERSION,
+  type AgentWorkflowInput,
+  type WorkflowDefinitionVersionPin,
+} from "./agent-input.js";
 import type { BlockExecuteFn, EngineCtx } from "./blocks/types.js";
 import {
   ensureWorkspace,
@@ -600,26 +605,6 @@ async function logPhaseFailure(
 }
 logPhaseFailure.maxRetries = 0;
 
-async function createClarificationRequestStep(input: {
-  ticketKey: string;
-  runId: string;
-  blockId: string | null;
-  definitionId: number | null;
-  definitionVersion: number | null;
-  questions: string[];
-  suggestedAnswers: string[] | null;
-}): Promise<string> {
-  "use step";
-  const { getDb } = await import("../db/client.js");
-  const { createClarificationRequest } = await import("../clarifications/store.js");
-  const row = await createClarificationRequest(getDb(), input);
-  return row.id;
-}
-// maxRetries = 0 (mirrors createApprovalRequestStep): the questions are filed
-// durably before any ticket movement, so a thrown insert must fail the run
-// visibly rather than retry into an inconsistent state.
-createClarificationRequestStep.maxRetries = 0;
-
 async function parkForClarificationStep(
   ticketId: string,
   backlogTarget: IssueTrackerMoveTarget,
@@ -1001,6 +986,16 @@ async function agentWorkflowBody(
   const ticket = await resolveWorkflowTicketStep(entry, env.COLUMN_AI);
   if (!ticket) return;
 
+  const { loadClarificationCheckpointStep } =
+    await import("./clarification-checkpoint-steps.js");
+  const resumeCheckpoint =
+    entry.kind === "clarification_answered"
+      ? await loadClarificationCheckpointStep(
+          entry.clarificationRequestId,
+          entry.ownerToken,
+        )
+      : null;
+
   // Re-pickup housekeeping (strip the awaiting-input label, supersede any pending
   // clarification, flip parked predecessor runs off "awaiting"). Gated to the
   // entry kinds that own the ticket's main work thread: a plain "ticket" pickup
@@ -1040,6 +1035,18 @@ async function agentWorkflowBody(
     );
     return;
   }
+  if (resumeCheckpoint) {
+    const loadedPin: WorkflowDefinitionVersionPin =
+      plan.version ?? BUILTIN_FALLBACK_DEFINITION_VERSION;
+    if (
+      plan.definitionId !== resumeCheckpoint.definitionId ||
+      loadedPin !== resumeCheckpoint.definitionVersionPin
+    ) {
+      throw new Error(
+        `clarification checkpoint ${resumeCheckpoint.id} definition pin does not match the loaded workflow`,
+      );
+    }
+  }
   if (entry.kind === "pr_trigger" && entry.scope === "any") {
     const issues = await validateReviewSafePlanStep(plan.nodes, plan.edges);
     if (issues.length > 0) {
@@ -1052,7 +1059,9 @@ async function agentWorkflowBody(
     ...(plan.budgets?.maxTokens !== undefined ? { maxTokens: plan.budgets.maxTokens } : {}),
     ...(plan.budgets?.maxCostUsd !== undefined ? { maxCostUsd: plan.budgets.maxCostUsd } : {}),
   };
-  let budgetState: RunBudgetState = createRunBudgetState();
+  let budgetState: RunBudgetState = resumeCheckpoint
+    ? { ...resumeCheckpoint.budgetState }
+    : createRunBudgetState();
   let lastBudgetClockMs = budgetStartedAtMs;
   const observeBudgetAtBoundary = async (
     requireRemainingDuration: boolean,
@@ -1140,12 +1149,13 @@ async function agentWorkflowBody(
     if (!entryTrigger || !graph.nodes.has(entryTrigger.id)) {
       throw new Error("workflow definition has no runnable trigger block");
     }
-    const triggerOutput = triggerOutputFor(entry);
+    const triggerOutput = resumeCheckpoint?.triggerPayload ?? triggerOutputFor(entry);
 
     const branchName =
-      entry.kind === "pr_trigger" && !entry.ticketKey
+      resumeCheckpoint?.workspaceManifest?.repositories[0]?.branchName ??
+      (entry.kind === "pr_trigger" && !entry.ticketKey
         ? entry.pr.headRef
-        : branchForTicket(ticket.identifier);
+        : branchForTicket(ticket.identifier));
     const downloadedAttachments = await fetchAttachments(ticket.identifier, ticket.attachments);
 
     // Answered Q&A history for this ticket, injected into every prompt so a
@@ -1164,6 +1174,28 @@ async function agentWorkflowBody(
         await logClarificationHistoryFailure(ticket.identifier, errorMessage(err));
         clarificationHistory = undefined;
       }
+    }
+    if (
+      resumeCheckpoint &&
+      !clarificationHistory?.some(
+        (round) =>
+          round.answer === resumeCheckpoint.answer &&
+          round.questions.join("\n") === resumeCheckpoint.questions.join("\n"),
+      )
+    ) {
+      clarificationHistory = [
+        ...(clarificationHistory ?? []),
+        {
+          questions: resumeCheckpoint.questions,
+          answer: resumeCheckpoint.answer,
+          ...(resumeCheckpoint.answeredByLabel
+            ? { answeredBy: resumeCheckpoint.answeredByLabel }
+            : {}),
+          ...(resumeCheckpoint.answeredAt
+            ? { answeredAt: resumeCheckpoint.answeredAt }
+            : {}),
+        },
+      ];
     }
 
     const ticketData = {
@@ -1193,10 +1225,15 @@ async function agentWorkflowBody(
     // Codex agents and every in-process Call LLM need token pricing. Fetch all
     // resolved models before any block can record usage so configured cost caps
     // fail closed instead of depending on network timing during execution.
-    const pricedModels = modelsRequiringPriceLookupForRun(graph, entryTrigger.id, runDefaultKind, {
+    const pricedModels = modelsRequiringPriceLookupForRun(
+      graph,
+      resumeCheckpoint?.waitingNodeId ?? entryTrigger.id,
+      runDefaultKind,
+      {
       claude: env.CLAUDE_MODEL,
       codex: env.CODEX_MODEL,
-    });
+      },
+    );
     if (pricedModels.size > 0) {
       const priceMap = new Map<string, { input: number; cached_input: number; output: number }>();
       for (const model of pricedModels) {
@@ -1218,6 +1255,10 @@ async function agentWorkflowBody(
       attempt: 1,
     };
 
+    const { researchPlanFromCheckpoint, restoreCheckpointSandboxReferences } =
+      await import("../clarifications/checkpoint.js");
+    let resumeSteps = resumeCheckpoint?.priorSteps;
+
     const ctx: EngineCtx = {
       runId: workflowRunId,
       definitionId: plan.definitionId,
@@ -1232,10 +1273,15 @@ async function agentWorkflowBody(
       sandboxId: null,
       agentSandboxIds: {},
       sandboxIds: new Set<string>(),
-      selectedRepositories: [],
+      selectedRepositories: resumeCheckpoint?.workspaceManifest?.repositories ?? [],
       repositoryContexts: [],
       preSandboxAdditions: { research: [], implementation: [], review: [] },
-      researchPlanMarkdown: entry.kind === "plan_approved" ? entry.approvedPlan.markdown : "",
+      researchPlanMarkdown:
+        entry.kind === "plan_approved"
+          ? entry.approvedPlan.markdown
+          : resumeSteps
+            ? researchPlanFromCheckpoint(resumeSteps)
+            : "",
       publication: null,
       runDefaultKind,
       defaults: { claude: env.CLAUDE_MODEL, codex: env.CODEX_MODEL },
@@ -1261,35 +1307,144 @@ async function agentWorkflowBody(
       },
     };
 
+    if (resumeCheckpoint?.snapshotId) {
+      if (!resumeCheckpoint.sourceSandboxId) {
+        throw new Error(
+          `clarification checkpoint ${resumeCheckpoint.id} lost its source sandbox metadata`,
+        );
+      }
+      const { restoreClarificationSandboxStep } =
+        await import("./clarification-snapshot-steps.js");
+      const { ensureArthurTask } = await import("./blocks/prepare-workspace.js");
+      const arthurTaskId = await ensureArthurTask(ctx);
+      const requiredKinds = new Set<AgentKind>([runDefaultKind]);
+      for (const node of plan.nodes) {
+        if (
+          node.type !== "implementation_agent" &&
+          node.type !== "review_agent" &&
+          node.type !== "fix_agent" &&
+          node.type !== "generic_agent"
+        ) {
+          continue;
+        }
+        if (node.type === "generic_agent" && node.params.workspaceMode === "none") continue;
+        requiredKinds.add(resolveAgent(node.params).kind);
+      }
+      const restoreBudget = await observeBudgetAtBoundary(true);
+      if (restoreBudget.check.status !== "ok") {
+        throw new RunBudgetError(restoreBudget.check);
+      }
+      const restored = await restoreClarificationSandboxStep({
+        snapshotId: resumeCheckpoint.snapshotId,
+        subjectKey: entry.subjectKey,
+        ownerToken: entry.ownerToken,
+        timeoutMs: Math.max(1, Math.floor(restoreBudget.remainingDurationMs)),
+        agents: [...requiredKinds].map((kind) => ({
+          kind,
+          model: kind === "codex" ? env.CODEX_MODEL : env.CLAUDE_MODEL,
+        })),
+        arthurTaskId,
+      });
+      ctx.sandboxId = restored.sandboxId;
+      ctx.sandboxIds.add(restored.sandboxId);
+      resumeSteps = restoreCheckpointSandboxReferences(
+        resumeCheckpoint.priorSteps,
+        resumeCheckpoint.sourceSandboxId,
+        restored.sandboxId,
+      );
+    }
+
     try {
-      const clarificationExit = async (
+      const persistAndParkClarification = async (
         questions: string[],
         nodeId?: string,
         suggestedAnswers?: string[],
+        checkpointSteps?: StepsRecord,
       ): Promise<void> => {
         if (!entry.ticketKey) {
           throw new Error("PR-only workflows cannot request ticket clarification");
         }
-        // Crash safety: with question comments gone, the questions must exist
-        // durably BEFORE any ticket movement. This insert (maxRetries = 0)
-        // throwing fails the run visibly; the outer catch then parks the ticket
-        // in backlog like any other failure. Order after it mirrors every
-        // terminal path: unregister BEFORE moveTicket (see failureExit's race
-        // note), and park posts no Jira comment.
-        const clarificationId = await createClarificationRequestStep({
+        if (!nodeId || !checkpointSteps) {
+          throw new Error("clarification checkpoint is missing its waiting node or prior outputs");
+        }
+        const explicitPin =
+          "definitionVersion" in entry ? entry.definitionVersion : undefined;
+        const definitionVersionPin = plan.version ?? explicitPin;
+        if (definitionVersionPin === undefined) {
+          throw new Error(
+            "clarification cannot park an unpinned workflow definition; retry from a pinned ticket dispatch",
+          );
+        }
+
+        const {
+          captureWorkspaceManifestStep,
+          completeClarificationCheckpointStep,
+          createClarificationCheckpointStep,
+          markClarificationSnapshotCleanupFailedBySnapshotIdStep,
+          markClarificationSnapshotDeletedBySnapshotIdStep,
+          newClarificationCheckpointExpiryStep,
+          publishClarificationCheckpointStep,
+        } = await import("./clarification-checkpoint-steps.js");
+        const workspaceManifest = ctx.sandboxId
+          ? await captureWorkspaceManifestStep(ctx.sandboxId)
+          : null;
+        const expiresAt = await newClarificationCheckpointExpiryStep();
+        const clarificationId = await createClarificationCheckpointStep({
           ticketKey: ticket.identifier,
+          subjectKey: entry.subjectKey,
+          ownerToken: entry.ownerToken,
           runId: workflowRunId,
-          blockId: nodeId ?? null,
+          waitingNodeId: nodeId,
           definitionId: plan.definitionId,
-          definitionVersion: plan.version,
+          definitionVersionPin,
+          triggerPayload: triggerOutput,
+          priorSteps: checkpointSteps,
+          budgetState,
+          workspaceManifest,
+          expiresAt,
           questions,
           suggestedAnswers: suggestedAnswers ?? null,
         });
+
+        let snapshot: {
+          snapshotId: string;
+          sourceSandboxId: string;
+          expiresAt: string;
+        } | null = null;
+        if (ctx.sandboxId) {
+          const { snapshotClarificationSandboxStep } =
+            await import("./clarification-snapshot-steps.js");
+          snapshot = await snapshotClarificationSandboxStep({
+            subjectKey: entry.subjectKey,
+            ownerToken: entry.ownerToken,
+            sandboxId: ctx.sandboxId,
+          });
+        }
+        await completeClarificationCheckpointStep(clarificationId, snapshot);
+        const replacedSnapshots = await publishClarificationCheckpointStep(
+          clarificationId,
+        );
+        if (replacedSnapshots.length > 0) {
+          const { deleteClarificationSnapshotStep } =
+            await import("./clarification-snapshot-steps.js");
+          for (const snapshotId of replacedSnapshots) {
+            try {
+              await deleteClarificationSnapshotStep(snapshotId);
+              await markClarificationSnapshotDeletedBySnapshotIdStep(snapshotId);
+            } catch (error) {
+              await markClarificationSnapshotCleanupFailedBySnapshotIdStep(
+                snapshotId,
+                errorMessage(error),
+              );
+            }
+          }
+        }
+
         const parked = await parkForClarificationStep(ticketId, backlogMoveTarget(), clarificationId);
         if (!parked) {
-          // The answer raced ahead of the park and already owns the ticket (moved
-          // to the AI column, resume run started). No clarification is pending, so
-          // send no notify and record this run as done, not awaiting.
+          // An answer may race only after the complete checkpoint and stopped
+          // source are published. Its successor owns the claim, so this loser
+          // performs no further side effect.
           runOutcome = "success";
           return;
         }
@@ -1301,6 +1456,19 @@ async function agentWorkflowBody(
         awaitingClarificationId = clarificationId;
         runOutcome = "awaiting";
       };
+
+      const clarificationExit = async (
+        questions: string[],
+        nodeId?: string,
+        suggestedAnswers?: string[],
+        checkpointSteps?: StepsRecord,
+      ): Promise<void> =>
+        persistAndParkClarification(
+          questions,
+          nodeId,
+          suggestedAnswers,
+          checkpointSteps,
+        );
 
       const failureExit = async (phase: string, reason: string): Promise<void> => {
         const usageReport = usageReportOrUndefined();
@@ -1324,38 +1492,15 @@ async function agentWorkflowBody(
           postComment?: string;
         },
         nodeId?: string,
+        checkpointSteps?: StepsRecord,
       ): Promise<void> => {
         if (params.terminalStatus === "waiting_for_human") {
-          if (!entry.ticketKey) {
-            throw new Error("PR-only workflows cannot wait on ticket clarification");
-          }
-          // Same rework as clarificationExit: file the question durably FIRST
-          // (before any unregister/move), then unregister -> park -> notify.
-          // maxRetries = 0, so a throw fails the run and the outer catch parks
-          // the ticket like any failure. No Jira comment.
-          const clarificationId = await createClarificationRequestStep({
-            ticketKey: ticket.identifier,
-            runId: workflowRunId,
-            blockId: nodeId ?? null,
-            definitionId: plan.definitionId,
-            definitionVersion: plan.version,
-            questions: [params.postComment ?? "Waiting for human input."],
-            suggestedAnswers: null,
-          });
-          const parked = await parkForClarificationStep(ticketId, backlogMoveTarget(), clarificationId);
-          if (!parked) {
-            // The answer raced ahead of the park and already owns the ticket. No
-            // clarification is pending, so send no notify and record success.
-            runOutcome = "success";
-            return;
-          }
-          await notifyTicket(ticket.identifier, {
-            kind: "needs_clarification",
-            dashboardUrl: ticketRunUrl(env.DASHBOARD_ORIGIN, ticket.identifier, workflowRunId),
-            usageReport: usageReportOrUndefined(),
-          });
-          awaitingClarificationId = clarificationId;
-          runOutcome = "awaiting";
+          await persistAndParkClarification(
+            [params.postComment ?? "Waiting for human input."],
+            nodeId,
+            undefined,
+            checkpointSteps,
+          );
           return;
         }
         if (params.terminalStatus === "done" || params.terminalStatus === "skipped") {
@@ -1778,6 +1923,15 @@ async function agentWorkflowBody(
         graph,
         entryTriggerId: entryTrigger.id,
         triggerOutput,
+        ...(resumeCheckpoint && resumeSteps
+          ? {
+              resume: {
+                waitingNodeId: resumeCheckpoint.waitingNodeId,
+                clarificationAnswer: resumeCheckpoint.answer,
+                priorSteps: resumeSteps,
+              },
+            }
+          : {}),
         runValues: {
           id: workflowRunId,
           branchName,
@@ -1846,6 +2000,33 @@ async function agentWorkflowBody(
     // collect) records as unknown, so computeUsageTotals reports
     // costKnown=false instead of a misleading costUsd=0 / costKnown=true.
     reconcileMissingPhaseUsages();
+    if (resumeCheckpoint?.snapshotId) {
+      const {
+        markClarificationSnapshotCleanupFailedStep,
+        markClarificationSnapshotDeletedStep,
+        scheduleClarificationSnapshotCleanupStep,
+      } = await import("./clarification-checkpoint-steps.js");
+      const snapshotId = await scheduleClarificationSnapshotCleanupStep(
+        resumeCheckpoint.id,
+      ).catch(() => null);
+      if (snapshotId) {
+        try {
+          const { deleteClarificationSnapshotStep } =
+            await import("./clarification-snapshot-steps.js");
+          await deleteClarificationSnapshotStep(snapshotId);
+          await markClarificationSnapshotDeletedStep(resumeCheckpoint.id);
+        } catch (error) {
+          await markClarificationSnapshotCleanupFailedStep(
+            resumeCheckpoint.id,
+            errorMessage(error),
+          ).catch(() => undefined);
+          console.error(
+            `Clarification snapshot cleanup failed for ${resumeCheckpoint.id}:`,
+            error,
+          );
+        }
+      }
+    }
     // Durable cost/usage telemetry, recorded on every exit path (success,
     // clarification, or failure). Best-effort: the step never retries and we
     // swallow errors so telemetry can't break or delay the run — but we LOG

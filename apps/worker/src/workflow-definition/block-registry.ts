@@ -585,8 +585,9 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
     output: statusOutput({
       questions: arrayType(stringType()),
       suggestedAnswers: arrayType(stringType()),
+      answer: stringType(),
     }),
-    statusVariants: ["needs_human_input", "failed"],
+    statusVariants: ["needs_human_input", "answered", "failed"],
   },
   arthur_injection_check: {
     presentation: presentation(

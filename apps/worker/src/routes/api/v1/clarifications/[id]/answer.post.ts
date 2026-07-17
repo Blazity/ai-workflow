@@ -92,12 +92,6 @@ export default defineEventHandler(async (event): Promise<ClarificationAnswerResp
       isRetry: isDispatchRetry,
     });
 
-    if (result.status === "at_capacity") {
-      throw createError({ statusCode: 409, statusMessage: "at_capacity" });
-    }
-    if (result.status === "already_claimed") {
-      throw createError({ statusCode: 409, statusMessage: "already_claimed" });
-    }
     if (result.status === "conflict") {
       throw createError({ statusCode: 409, statusMessage: "already_answered" });
     }

@@ -34,6 +34,17 @@ export interface RunRegistryAdapter {
   bindRun(subjectKey: string, ownerToken: string, runId: string): Promise<boolean>;
   /** Owner-only handoff is permitted only while the reservation remains unbound. */
   handoff(subjectKey: string, currentOwnerToken: string, nextOwnerToken: string): Promise<boolean>;
+  /**
+   * Clarification-only CAS: hand one exact parked bound run to an unbound
+   * successor reservation. Implementations clear predecessor sandbox children
+   * before changing owner so stale resources cannot become successor-owned.
+   */
+  handoffBoundRun?(
+    subjectKey: string,
+    currentOwnerToken: string,
+    currentRunId: string,
+    nextOwnerToken: string,
+  ): Promise<boolean>;
   get(subjectKey: string): Promise<ActiveRunEntry | null>;
   /** Discard a reservation only before any workflow candidate has bound it. */
   releaseReservation(subjectKey: string, ownerToken: string): Promise<boolean>;
@@ -43,6 +54,11 @@ export interface RunRegistryAdapter {
 
   /** Register every externally allocated sandbox under the exact active owner. */
   registerSandbox(subjectKey: string, ownerToken: string, sandboxId: string): Promise<void>;
+  unregisterSandbox?(
+    subjectKey: string,
+    ownerToken: string,
+    sandboxId: string,
+  ): Promise<boolean>;
   listSandboxes(subjectKey: string, ownerToken: string): Promise<string[]>;
 
   /** Mark a ticket as failed (moveTicket to backlog failed in catch block). */

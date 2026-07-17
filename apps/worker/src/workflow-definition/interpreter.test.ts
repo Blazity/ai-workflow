@@ -167,6 +167,122 @@ describe("executeGraph linear walk", () => {
     );
     expect(result.steps.trig.output).toEqual({ status: "ok" });
   });
+
+  it("resumes at the waiting node with prior outputs and the human answer", async () => {
+    const graph = graphFrom(
+      [
+        node("trig", "trigger_ticket_ai"),
+        node("before", "prepare_workspace"),
+        node("waiting", "implementation_agent"),
+        node("after", "run_checks"),
+      ],
+      [
+        { from: "trig", to: "before" },
+        { from: "before", to: "waiting" },
+        { from: "waiting", to: "after" },
+      ],
+    );
+    const rec = makeRecorder();
+    const calls: string[] = [];
+    const seenSteps: string[][] = [];
+    const seenAnswers: Array<string | undefined> = [];
+    const executor: BlockExecutor = async (block, steps, _inputs, execution) => {
+      calls.push(block.id);
+      seenSteps.push(Object.keys(steps).sort());
+      seenAnswers.push(execution?.clarificationAnswer);
+      return { kind: "next", output: { status: "ok", id: block.id } };
+    };
+
+    const result = await executeGraph({
+      graph,
+      entryTriggerId: "trig",
+      triggerOutput: { status: "fired", ticketKey: "AIW-96" },
+      resume: {
+        waitingNodeId: "waiting",
+        clarificationAnswer: "Keep both conflict sides and add a regression test.",
+        priorSteps: {
+          trig: { output: { status: "fired", ticketKey: "AIW-96" } },
+          before: { output: { status: "ready", sandboxId: "sbx_source" } },
+        },
+      },
+      executeBlock: executor,
+      hooks: rec.hooks,
+    });
+
+    expect(result.outcome).toBe("completed");
+    expect(calls).toEqual(["waiting", "after"]);
+    expect(seenSteps[0]).toEqual(["before", "trig"]);
+    expect(seenAnswers).toEqual([
+      "Keep both conflict sides and add a regression test.",
+      undefined,
+    ]);
+    expect(result.steps.before.output).toEqual({ status: "ready", sandboxId: "sbx_source" });
+    expect(result.steps.waiting.output).toEqual({ status: "ok", id: "waiting" });
+  });
+
+  it("consumes a human_question answer once and continues downstream", async () => {
+    const graph = graphFrom(
+      [
+        node("trig", "trigger_ticket_ai"),
+        node("waiting", "human_question", { questions: ["Which region?"] }),
+        node("after", "send_slack_message"),
+      ],
+      [
+        { from: "trig", to: "waiting" },
+        { from: "waiting", to: "after" },
+      ],
+    );
+    const rec = makeRecorder();
+    const { executor, calls } = makeExecutor();
+    const result = await executeGraph({
+      graph,
+      entryTriggerId: "trig",
+      triggerOutput: { status: "fired" },
+      resume: {
+        waitingNodeId: "waiting",
+        clarificationAnswer: "eu-central",
+        priorSteps: { trig: { output: { status: "fired" } } },
+      },
+      executeBlock: executor,
+      hooks: rec.hooks,
+    });
+
+    expect(result.outcome).toBe("completed");
+    expect(calls).toEqual(["after"]);
+    expect(result.steps.waiting.output).toEqual({
+      status: "answered",
+      answer: "eu-central",
+    });
+    expect(rec.clarifications).toEqual([]);
+  });
+
+  it("does not park again when resuming a terminate(waiting_for_human) node", async () => {
+    const graph = graphFrom(
+      [
+        node("trig", "trigger_ticket_ai"),
+        node("waiting", "terminate", { terminalStatus: "waiting_for_human" }),
+      ],
+      [{ from: "trig", to: "waiting" }],
+    );
+    const rec = makeRecorder();
+    const { executor } = makeExecutor();
+    const result = await executeGraph({
+      graph,
+      entryTriggerId: "trig",
+      triggerOutput: { status: "fired" },
+      resume: {
+        waitingNodeId: "waiting",
+        clarificationAnswer: "continue",
+        priorSteps: { trig: { output: { status: "fired" } } },
+      },
+      executeBlock: executor,
+      hooks: rec.hooks,
+    });
+
+    expect(result.outcome).toBe("completed");
+    expect(result.steps.waiting.output).toEqual({ status: "done", answer: "continue" });
+    expect(rec.terminations).toEqual([]);
+  });
 });
 
 describe("executeGraph branch", () => {
@@ -454,6 +570,47 @@ describe("executeGraph human input and ended", () => {
     expect(finishStatuses(rec, "plan")).toEqual(["warn"]);
     expect(rec.finishes[0].state.error).toBe("Q1; Q2");
     expect(rec.failures).toEqual([]);
+  });
+
+  it("hands the durable checkpoint hook every safe predecessor output", async () => {
+    const graph = graphFrom(
+      [
+        node("trig", "trigger_ticket_ai"),
+        node("before", "prepare_workspace"),
+        node("waiting", "implementation_agent"),
+      ],
+      [
+        { from: "trig", to: "before" },
+        { from: "before", to: "waiting" },
+      ],
+    );
+    const rec = makeRecorder();
+    let checkpointSteps: StepsRecord | undefined;
+    rec.hooks.clarificationExit = async (_questions, _nodeId, _suggestions, steps) => {
+      checkpointSteps = steps;
+    };
+    const { executor } = makeExecutor({
+      before: { kind: "next", output: { status: "ready", workspace: "kept" } },
+      waiting: {
+        kind: "needs_human_input",
+        output: { status: "needs_human_input" },
+        questions: ["Which side?"],
+      },
+    });
+
+    await executeGraph({
+      graph,
+      entryTriggerId: "trig",
+      triggerOutput: { status: "fired" },
+      executeBlock: executor,
+      hooks: rec.hooks,
+    });
+
+    expect(checkpointSteps).toEqual({
+      trig: { output: { status: "fired" } },
+      before: { output: { status: "ready", workspace: "kept" } },
+      waiting: { output: { status: "needs_human_input" } },
+    });
   });
 
   it("forwards suggestedAnswers to clarificationExit when the result carries them", async () => {

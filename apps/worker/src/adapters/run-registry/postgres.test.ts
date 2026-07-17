@@ -86,6 +86,28 @@ describe("owner-CAS run claims", () => {
     expect(await registry.handoff(subjectKey, "owner-b", "owner-c")).toBe(false);
     expect((await registry.get(subjectKey))?.runId).toBe("run-b");
   });
+
+  it("CAS-hands an exact parked run to one unbound successor reservation", async () => {
+    await registry.reserve({ subjectKey, ticketKey: "PROJ-1", ownerToken: "owner-parked", kind: "ticket" });
+    await registry.bindRun(subjectKey, "owner-parked", "run-parked");
+
+    expect(
+      await registry.handoffBoundRun(subjectKey, "owner-parked", "run-other", "owner-loser"),
+    ).toBe(false);
+    expect(
+      await registry.handoffBoundRun(subjectKey, "owner-parked", "run-parked", "owner-successor"),
+    ).toBe(true);
+    expect(await registry.get(subjectKey)).toMatchObject({
+      ownerToken: "owner-successor",
+      runId: null,
+      state: "reserved",
+    });
+    expect(
+      await registry.handoffBoundRun(subjectKey, "owner-parked", "run-parked", "owner-second"),
+    ).toBe(false);
+    expect(await registry.bindRun(subjectKey, "owner-successor", "run-winner")).toBe(true);
+    expect(await registry.bindRun(subjectKey, "owner-successor", "run-retry-loser")).toBe(false);
+  });
 });
 
 describe("subject metadata and capacity listing", () => {
@@ -163,6 +185,22 @@ describe("owner-isolated child sandboxes", () => {
   it("does not expose one owner's sandboxes through another owner", async () => {
     await registry.registerSandbox(subjectKey, "owner-a", "sandbox-a");
     expect(await registry.listSandboxes(subjectKey, "owner-b")).toEqual([]);
+  });
+
+  it("unregisters one stopped sandbox without releasing the parked owner", async () => {
+    await registry.registerSandbox(subjectKey, "owner-a", "sandbox-code");
+    await registry.registerSandbox(subjectKey, "owner-a", "sandbox-scratch");
+    expect(await registry.unregisterSandbox(subjectKey, "owner-a", "sandbox-code")).toBe(true);
+    expect(await registry.listSandboxes(subjectKey, "owner-a")).toEqual(["sandbox-scratch"]);
+    expect(await registry.get(subjectKey)).toMatchObject({ ownerToken: "owner-a", runId: "run-a" });
+  });
+
+  it("clears predecessor sandbox registrations during bound handoff", async () => {
+    await registry.registerSandbox(subjectKey, "owner-a", "sandbox-a");
+    await registry.registerSandbox(subjectKey, "owner-a", "sandbox-b");
+    expect(await registry.handoffBoundRun(subjectKey, "owner-a", "run-a", "owner-next")).toBe(true);
+    expect(await registry.listSandboxes(subjectKey, "owner-a")).toEqual([]);
+    expect(await registry.listSandboxes(subjectKey, "owner-next")).toEqual([]);
   });
 
   it("enforces subject plus owner isolation at the database boundary", async () => {

@@ -1,17 +1,28 @@
 import { randomUUID } from "node:crypto";
+import { eq } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import type { Db } from "../db/client.js";
-import { clarificationRequests } from "../db/schema.js";
+import { activeRuns, clarificationRequests } from "../db/schema.js";
 import { createTestDb } from "../db/test-db.js";
 import {
   ClarificationStoreError,
   answerClarification,
+  completeClarificationCheckpoint,
+  createClarificationCheckpoint,
   createClarificationRequest,
   getClarification,
   getClarificationForRun,
   getPendingForTicket,
+  claimClarificationSnapshotCleanup,
+  listClarificationSnapshotCleanup,
   listAnsweredForTicket,
+  listPendingClarificationSubjectKeys,
+  listUndispatchedAnsweredClarifications,
+  markClarificationSnapshotCleanupFailed,
+  markClarificationSnapshotDeleted,
+  publishClarificationCheckpoint,
   recordDispatchedRun,
+  reconcileClarificationCheckpoints,
   serializeClarification,
   setDispatchedRunId,
   supersedeClarification,
@@ -28,6 +39,456 @@ function seed(ticketKey = "AWT-1") {
     questions: ["Which environment?", "Ship behind a flag?"],
   };
 }
+
+function checkpointSeed(ticketKey = "AWT-1") {
+  return {
+    ticketKey,
+    subjectKey: `ticket:jira:${ticketKey}`,
+    ownerToken: "owner-parked",
+    runId: "run-asked",
+    waitingNodeId: "implementation",
+    definitionId: 1,
+    definitionVersionPin: 4 as const,
+    triggerPayload: { status: "fired", ticketKey },
+    priorSteps: {
+      trigger: { output: { status: "fired", ticketKey } },
+      prepare: { output: { status: "ready", sandboxId: "sbx-source" } },
+    },
+    budgetState: {
+      activeElapsedMs: 60_000,
+      tokensInput: 100,
+      tokensCached: 10,
+      tokensOutput: 20,
+      tokensKnown: true,
+      costNanos: 500_000_000,
+      costUsd: 0.5,
+      costKnown: true,
+    },
+    workspaceManifest: {
+      version: 1 as const,
+      repositories: [
+        {
+          provider: "github" as const,
+          repoPath: "acme/api",
+          slug: "acme__api",
+          localPath: "/vercel/sandbox",
+          defaultBranch: "main",
+          branchName: "ai/AWT-1",
+          selectedRationale: "ticket scope",
+          preAgentSha: "abc123",
+        },
+      ],
+    },
+    sourceHeads: [{ provider: "github" as const, repoPath: "acme/api", sha: "abc123" }],
+    expiresAt: new Date("2026-07-24T00:00:00.000Z"),
+    questions: ["Which conflict side should win?"],
+    suggestedAnswers: ["ours", "theirs"],
+  };
+}
+
+describe("durable clarification checkpoints", () => {
+  it("keeps a preparing checkpoint unpublished until its snapshot is durable", async () => {
+    const db = await createTestDb();
+    const draft = await createClarificationCheckpoint(db, checkpointSeed());
+
+    expect(draft.status).toBe("superseded");
+    expect(draft.checkpointState).toBe("preparing");
+    expect(draft.subjectKey).toBe("ticket:jira:AWT-1");
+    expect(draft.definitionVersionPin).toBe(4);
+    expect(draft.waitingNodeId).toBe("implementation");
+    expect(draft.priorSteps.prepare.output.sandboxId).toBe("sbx-source");
+    expect(draft.budgetState.activeElapsedMs).toBe(60_000);
+    expect(await getPendingForTicket(db, "AWT-1")).toBeNull();
+
+    await expect(publishClarificationCheckpoint(db, draft.id)).rejects.toMatchObject({
+      statusCode: 409,
+      message: "clarification_checkpoint_not_ready",
+    });
+
+    const ready = await completeClarificationCheckpoint(db, draft.id, {
+      snapshotId: "snap-1",
+      sourceSandboxId: "sbx-source",
+      expiresAt: new Date("2026-07-24T00:00:00.000Z"),
+    });
+    expect(ready.checkpointState).toBe("ready");
+    expect(ready.cleanupState).toBe("retained");
+
+    const published = await publishClarificationCheckpoint(db, draft.id);
+    expect(published.row.status).toBe("pending");
+    expect(published.row.publishedAt).toBeInstanceOf(Date);
+    expect(published.supersededSnapshots).toEqual([]);
+    expect((await getPendingForTicket(db, "AWT-1"))?.id).toBe(draft.id);
+  });
+
+  it("publishes a replacement before scheduling the old snapshot for deletion", async () => {
+    const db = await createTestDb();
+    const first = await createClarificationCheckpoint(db, checkpointSeed());
+    await completeClarificationCheckpoint(db, first.id, {
+      snapshotId: "snap-old",
+      sourceSandboxId: "sbx-old",
+      expiresAt: checkpointSeed().expiresAt,
+    });
+    await publishClarificationCheckpoint(db, first.id);
+
+    const second = await createClarificationCheckpoint(db, {
+      ...checkpointSeed(),
+      runId: "run-second",
+      ownerToken: "owner-second",
+      questions: ["One more detail?"],
+    });
+    await completeClarificationCheckpoint(db, second.id, {
+      snapshotId: "snap-new",
+      sourceSandboxId: "sbx-new",
+      expiresAt: checkpointSeed().expiresAt,
+    });
+    const result = await publishClarificationCheckpoint(db, second.id);
+
+    expect(result.row.status).toBe("pending");
+    expect(result.supersededSnapshots).toEqual(["snap-old"]);
+    expect((await getClarification(db, first.id))?.cleanupState).toBe("delete_pending");
+  });
+
+  it("treats a reconciler-published checkpoint as an idempotent publish retry", async () => {
+    const db = await createTestDb();
+    const checkpoint = await createClarificationCheckpoint(
+      db,
+      checkpointSeed("AWT-12"),
+    );
+    await completeClarificationCheckpoint(db, checkpoint.id, {
+      snapshotId: "snap-current",
+      sourceSandboxId: "sbx-current",
+      expiresAt: checkpointSeed().expiresAt,
+    });
+
+    const first = await publishClarificationCheckpoint(db, checkpoint.id);
+    const retry = await publishClarificationCheckpoint(db, checkpoint.id);
+
+    expect(first.row.status).toBe("pending");
+    expect(retry.supersededSnapshots).toEqual([]);
+    expect(retry.row).toMatchObject({
+      status: "pending",
+      cleanupState: "retained",
+      snapshotId: "snap-current",
+    });
+  });
+
+  it("rejects answers after checkpoint expiry with an actionable recovery error", async () => {
+    const db = await createTestDb();
+    const draft = await createClarificationCheckpoint(db, {
+      ...checkpointSeed(),
+      expiresAt: new Date("2026-07-01T00:00:00.000Z"),
+    });
+    await completeClarificationCheckpoint(db, draft.id, null);
+    await publishClarificationCheckpoint(db, draft.id, new Date("2026-06-30T00:00:00.000Z"));
+
+    await expect(
+      answerClarification(db, {
+        id: draft.id,
+        answer: "ours",
+        actor: { id: "u1", label: "Alice" },
+        successorOwnerToken: "owner-successor",
+        now: new Date("2026-07-02T00:00:00.000Z"),
+      }),
+    ).rejects.toMatchObject({
+      statusCode: 410,
+      message: expect.stringContaining("restart the ticket"),
+    });
+  });
+
+  it("rejects an answer when the retained workspace snapshot has expired", async () => {
+    const db = await createTestDb();
+    const checkpoint = await createClarificationCheckpoint(
+      db,
+      checkpointSeed("AWT-14"),
+    );
+    await completeClarificationCheckpoint(db, checkpoint.id, {
+      snapshotId: "snap-expired-before-checkpoint",
+      sourceSandboxId: "sbx-source",
+      expiresAt: new Date("2026-07-18T00:00:00.000Z"),
+    });
+    await publishClarificationCheckpoint(
+      db,
+      checkpoint.id,
+      new Date("2026-07-17T00:00:00.000Z"),
+    );
+
+    await expect(
+      answerClarification(db, {
+        id: checkpoint.id,
+        answer: "ours",
+        actor: { id: "u1", label: "Alice" },
+        successorOwnerToken: "owner-successor",
+        now: new Date("2026-07-19T00:00:00.000Z"),
+      }),
+    ).rejects.toMatchObject({
+      statusCode: 410,
+      message: expect.stringContaining("restart the ticket"),
+    });
+  });
+
+  it("expires orphaned parked checkpoints and returns their snapshots for cleanup", async () => {
+    const db = await createTestDb();
+    const liveInput = checkpointSeed("AWT-2");
+    await db.insert(activeRuns).values({
+      subjectKey: liveInput.subjectKey,
+      ticketKey: liveInput.ticketKey,
+      ownerToken: liveInput.ownerToken,
+      runId: liveInput.runId,
+      state: "bound",
+    });
+    const live = await createClarificationCheckpoint(db, liveInput);
+    await completeClarificationCheckpoint(db, live.id, {
+      snapshotId: "snap-live",
+      sourceSandboxId: "sbx-live",
+      expiresAt: liveInput.expiresAt,
+    });
+    await publishClarificationCheckpoint(db, live.id);
+
+    const orphan = await createClarificationCheckpoint(db, checkpointSeed("AWT-3"));
+    await completeClarificationCheckpoint(db, orphan.id, {
+      snapshotId: "snap-orphan",
+      sourceSandboxId: "sbx-orphan",
+      expiresAt: checkpointSeed().expiresAt,
+    });
+    await publishClarificationCheckpoint(db, orphan.id);
+
+    const work = await reconcileClarificationCheckpoints(
+      db,
+      new Date("2026-07-18T00:00:00.000Z"),
+    );
+
+    expect(work).toEqual([
+      { clarificationId: orphan.id, snapshotId: "snap-orphan", reason: "orphaned" },
+    ]);
+    expect((await getClarification(db, orphan.id))?.checkpointState).toBe("orphaned");
+    expect((await getClarification(db, orphan.id))?.status).toBe("superseded");
+    expect((await getClarification(db, live.id))?.status).toBe("pending");
+  });
+
+  it("repairs a ready unpublished checkpoint while its exact predecessor is still bound", async () => {
+    const db = await createTestDb();
+    const input = checkpointSeed("AWT-9");
+    await db.insert(activeRuns).values({
+      subjectKey: input.subjectKey,
+      ticketKey: input.ticketKey,
+      ownerToken: input.ownerToken,
+      runId: input.runId,
+      state: "bound",
+    });
+    const checkpoint = await createClarificationCheckpoint(db, input);
+    await completeClarificationCheckpoint(db, checkpoint.id, null);
+
+    expect(await reconcileClarificationCheckpoints(
+      db,
+      new Date("2026-07-18T00:00:00.000Z"),
+    )).toEqual([]);
+    expect(await getClarification(db, checkpoint.id)).toMatchObject({
+      status: "pending",
+      checkpointState: "ready",
+      publishedAt: expect.any(Date),
+    });
+  });
+
+  it("retires a ready unpublished checkpoint whose predecessor disappeared", async () => {
+    const db = await createTestDb();
+    const checkpoint = await createClarificationCheckpoint(
+      db,
+      checkpointSeed("AWT-10"),
+    );
+    await completeClarificationCheckpoint(db, checkpoint.id, {
+      snapshotId: "snap-unpublished",
+      sourceSandboxId: "sbx-unpublished",
+      expiresAt: checkpointSeed().expiresAt,
+    });
+
+    expect(await reconcileClarificationCheckpoints(
+      db,
+      new Date("2026-07-18T00:00:00.000Z"),
+    )).toEqual([
+      {
+        clarificationId: checkpoint.id,
+        snapshotId: "snap-unpublished",
+        reason: "orphaned",
+      },
+    ]);
+    expect(await getClarification(db, checkpoint.id)).toMatchObject({
+      status: "superseded",
+      checkpointState: "orphaned",
+      cleanupState: "delete_pending",
+    });
+  });
+
+  it("retires an abandoned preparing row instead of leaving stale application state", async () => {
+    const db = await createTestDb();
+    const checkpoint = await createClarificationCheckpoint(
+      db,
+      checkpointSeed("AWT-11"),
+    );
+
+    expect(await reconcileClarificationCheckpoints(
+      db,
+      new Date("2026-07-18T00:00:00.000Z"),
+    )).toEqual([]);
+    expect(await getClarification(db, checkpoint.id)).toMatchObject({
+      status: "superseded",
+      checkpointState: "orphaned",
+      cleanupState: "deleted",
+    });
+  });
+
+  it("lists only durable pending subjects for generic run reconciliation protection", async () => {
+    const db = await createTestDb();
+    const input = checkpointSeed("AWT-4");
+    const durable = await createClarificationCheckpoint(db, input);
+    await completeClarificationCheckpoint(db, durable.id, null);
+    await publishClarificationCheckpoint(db, durable.id);
+    await createClarificationRequest(db, seed("AWT-5"));
+
+    expect(await listPendingClarificationSubjectKeys(db)).toEqual([
+      input.subjectKey,
+    ]);
+  });
+
+  it("lists unexpired answered checkpoints that still need successor dispatch", async () => {
+    const db = await createTestDb();
+    const input = {
+      ...checkpointSeed("AWT-6"),
+      workspaceManifest: null,
+      sourceHeads: [],
+    };
+    const checkpoint = await createClarificationCheckpoint(db, input);
+    await completeClarificationCheckpoint(db, checkpoint.id, null);
+    await publishClarificationCheckpoint(
+      db,
+      checkpoint.id,
+      new Date("2026-07-17T00:00:00.000Z"),
+    );
+    await answerClarification(db, {
+      id: checkpoint.id,
+      answer: "ours",
+      actor: { id: "u1", label: "Alice" },
+      successorOwnerToken: "owner-successor",
+      now: new Date("2026-07-17T01:00:00.000Z"),
+    });
+
+    expect(
+      await listUndispatchedAnsweredClarifications(
+        db,
+        new Date("2026-07-18T00:00:00.000Z"),
+      ),
+    ).toMatchObject([{ id: checkpoint.id, successorOwnerToken: "owner-successor" }]);
+
+    await setDispatchedRunId(db, checkpoint.id, "run-resumed");
+    expect(
+      await listUndispatchedAnsweredClarifications(
+        db,
+        new Date("2026-07-18T00:00:00.000Z"),
+      ),
+    ).toEqual([]);
+  });
+
+  it("expires an answered checkpoint before successor recovery and queues its snapshot", async () => {
+    const db = await createTestDb();
+    const input = {
+      ...checkpointSeed("AWT-7"),
+      expiresAt: new Date("2026-07-18T00:00:00.000Z"),
+    };
+    const checkpoint = await createClarificationCheckpoint(db, input);
+    await completeClarificationCheckpoint(db, checkpoint.id, {
+      snapshotId: "snap-expired",
+      sourceSandboxId: "sbx-expired",
+      expiresAt: input.expiresAt,
+    });
+    await publishClarificationCheckpoint(
+      db,
+      checkpoint.id,
+      new Date("2026-07-17T00:00:00.000Z"),
+    );
+    await answerClarification(db, {
+      id: checkpoint.id,
+      answer: "ours",
+      actor: { id: "u1", label: "Alice" },
+      successorOwnerToken: "owner-successor",
+      now: new Date("2026-07-17T01:00:00.000Z"),
+    });
+
+    expect(
+      await reconcileClarificationCheckpoints(
+        db,
+        new Date("2026-07-19T00:00:00.000Z"),
+      ),
+    ).toEqual([
+      {
+        clarificationId: checkpoint.id,
+        snapshotId: "snap-expired",
+        reason: "expired",
+      },
+    ]);
+    expect(await listUndispatchedAnsweredClarifications(db)).toEqual([]);
+    expect(await getClarification(db, checkpoint.id)).toMatchObject({
+      status: "superseded",
+      checkpointState: "expired",
+      cleanupState: "delete_pending",
+    });
+  });
+
+  it("claims each queued snapshot cleanup once and permits failed cleanup retry", async () => {
+    const db = await createTestDb();
+    const checkpoint = await createClarificationCheckpoint(
+      db,
+      checkpointSeed("AWT-8"),
+    );
+    await completeClarificationCheckpoint(db, checkpoint.id, {
+      snapshotId: "snap-cleanup",
+      sourceSandboxId: "sbx-cleanup",
+      expiresAt: checkpointSeed().expiresAt,
+    });
+    await publishClarificationCheckpoint(db, checkpoint.id);
+    await supersedeClarification(db, checkpoint.id);
+
+    expect(await listClarificationSnapshotCleanup(db)).toEqual([
+      { clarificationId: checkpoint.id, snapshotId: "snap-cleanup" },
+    ]);
+    expect(await claimClarificationSnapshotCleanup(db, checkpoint.id)).toBe(true);
+    expect(await claimClarificationSnapshotCleanup(db, checkpoint.id)).toBe(false);
+    expect(await listClarificationSnapshotCleanup(db)).toEqual([]);
+
+    await markClarificationSnapshotCleanupFailed(db, checkpoint.id, "delete failed");
+    expect(await listClarificationSnapshotCleanup(db)).toEqual([
+      { clarificationId: checkpoint.id, snapshotId: "snap-cleanup" },
+    ]);
+    expect(await claimClarificationSnapshotCleanup(db, checkpoint.id)).toBe(true);
+    expect(await markClarificationSnapshotDeleted(db, checkpoint.id)).toBe(true);
+    expect(await listClarificationSnapshotCleanup(db)).toEqual([]);
+  });
+
+  it("converges concurrent cleanup success and failure bookkeeping on deleted", async () => {
+    const db = await createTestDb();
+    const checkpoint = await createClarificationCheckpoint(
+      db,
+      checkpointSeed("AWT-13"),
+    );
+    await completeClarificationCheckpoint(db, checkpoint.id, {
+      snapshotId: "snap-race",
+      sourceSandboxId: "sbx-race",
+      expiresAt: checkpointSeed().expiresAt,
+    });
+    await publishClarificationCheckpoint(db, checkpoint.id);
+    await supersedeClarification(db, checkpoint.id);
+    await claimClarificationSnapshotCleanup(db, checkpoint.id);
+
+    expect(await markClarificationSnapshotDeleted(db, checkpoint.id)).toBe(true);
+    await markClarificationSnapshotCleanupFailed(db, checkpoint.id, "late loser");
+    expect((await getClarification(db, checkpoint.id))?.cleanupState).toBe("deleted");
+
+    await db
+      .update(clarificationRequests)
+      .set({ cleanupState: "failed" })
+      .where(eq(clarificationRequests.id, checkpoint.id));
+    expect(await markClarificationSnapshotDeleted(db, checkpoint.id)).toBe(true);
+    expect((await getClarification(db, checkpoint.id))?.cleanupState).toBe("deleted");
+  });
+});
 
 describe("createClarificationRequest", () => {
   it("inserts a pending row with the supplied questions and defaults", async () => {

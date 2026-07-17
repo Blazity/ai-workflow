@@ -76,7 +76,7 @@ export type AgentWorkflowInput =
       ticketKey: string;
       ownerToken: string;
       definitionId?: number;
-      definitionVersion?: number;
+      definitionVersion?: WorkflowDefinitionVersionPin;
       /** Clarification request whose answer resumes work on the ticket. */
       clarificationRequestId: string;
     };

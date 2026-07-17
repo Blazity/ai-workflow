@@ -68,6 +68,57 @@ export class PostgresRunRegistry implements RunRegistryAdapter, ThreadStore {
     return rows.length > 0;
   }
 
+  async handoffBoundRun(
+    subjectKey: string,
+    currentOwnerToken: string,
+    currentRunId: string,
+    nextOwnerToken: string,
+  ): Promise<boolean> {
+    const held = await this.db
+      .select({ subjectKey: activeRuns.subjectKey })
+      .from(activeRuns)
+      .where(
+        and(
+          eq(activeRuns.subjectKey, subjectKey),
+          eq(activeRuns.ownerToken, currentOwnerToken),
+          eq(activeRuns.runId, currentRunId),
+          eq(activeRuns.state, "bound"),
+        ),
+      );
+    if (held.length === 0) return false;
+
+    // The predecessor has exited before an answer can be published. Clear its
+    // stopped/snapshotted children first so changing owner cannot violate the
+    // composite FK or accidentally transfer stale sandboxes to the successor.
+    await this.db
+      .delete(activeRunSandboxes)
+      .where(
+        and(
+          eq(activeRunSandboxes.subjectKey, subjectKey),
+          eq(activeRunSandboxes.ownerToken, currentOwnerToken),
+        ),
+      );
+
+    const rows = await this.db
+      .update(activeRuns)
+      .set({
+        ownerToken: nextOwnerToken,
+        runId: null,
+        state: "reserved",
+        updatedAt: sql`now()`,
+      })
+      .where(
+        and(
+          eq(activeRuns.subjectKey, subjectKey),
+          eq(activeRuns.ownerToken, currentOwnerToken),
+          eq(activeRuns.runId, currentRunId),
+          eq(activeRuns.state, "bound"),
+        ),
+      )
+      .returning({ subjectKey: activeRuns.subjectKey });
+    return rows.length > 0;
+  }
+
   async get(subjectKey: string): Promise<ActiveRunEntry | null> {
     const rows = await this.db
       .select()
@@ -148,6 +199,24 @@ export class PostgresRunRegistry implements RunRegistryAdapter, ThreadStore {
       )
       .orderBy(activeRunSandboxes.sandboxId);
     return rows.map(({ sandboxId }) => sandboxId);
+  }
+
+  async unregisterSandbox(
+    subjectKey: string,
+    ownerToken: string,
+    sandboxId: string,
+  ): Promise<boolean> {
+    const rows = await this.db
+      .delete(activeRunSandboxes)
+      .where(
+        and(
+          eq(activeRunSandboxes.subjectKey, subjectKey),
+          eq(activeRunSandboxes.ownerToken, ownerToken),
+          eq(activeRunSandboxes.sandboxId, sandboxId),
+        ),
+      )
+      .returning({ sandboxId: activeRunSandboxes.sandboxId });
+    return rows.length > 0;
   }
 
   async markFailed(ticketKey: string, meta: FailedTicketMeta): Promise<void> {
