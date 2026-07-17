@@ -23,11 +23,20 @@ import { paramsSchema as sendPlanApprovalParams } from "../workflows/blocks/send
 const nodeId = z.string().trim().min(1);
 const coordinate = z.number().finite();
 
+const promptSourceRefSchema = z
+  .object({
+    promptId: z.number().int().positive(),
+    version: z.number().int().positive(),
+    insertedHash: z.string().max(16).optional(),
+  })
+  .strict();
+
 const baseNodeFields = {
   id: nodeId,
   name: z.string().optional(),
   x: coordinate,
   y: coordinate,
+  promptRefs: z.record(z.string().min(1).max(64), promptSourceRefSchema).optional(),
 };
 
 const emptyParams = z.object({}).strict();
@@ -35,6 +44,7 @@ const agentParams = z
   .object({
     model: z.string().trim().max(200).regex(/^[A-Za-z0-9._:\/-]+$/).optional(),
     provider: z.enum(["claude", "codex"]).optional(),
+    prompt: z.string().trim().min(1).max(32000).optional(),
   })
   .strict();
 
