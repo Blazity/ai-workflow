@@ -86,6 +86,31 @@ export async function acknowledgeApprovalDispatchStep(
   await setDispatchedRunId(getDb(), entry.approval.approvalRequestId, workflowRunId);
 }
 
+/** Close the dispatcher crash window from inside the winning workflow. The
+ * delivery result and exact pending-snapshot deletion commit atomically. */
+export async function acknowledgePrTriggerDispatchStep(
+  entry: import("./agent-input.js").AgentWorkflowInput,
+  workflowRunId: string,
+): Promise<void> {
+  "use step";
+  if (entry.kind !== "pr_trigger" || !entry.delivery) return;
+  const { getDb } = await import("../db/client.js");
+  const { acknowledgeStartedTriggerDelivery } = await import(
+    "../lib/trigger-delivery-store.js"
+  );
+  await acknowledgeStartedTriggerDelivery(
+    getDb(),
+    {
+      subjectKey: entry.subjectKey,
+      triggerType: entry.triggerType,
+      delivery: entry.delivery,
+      pr: entry.pr,
+    },
+    workflowRunId,
+  );
+}
+acknowledgePrTriggerDispatchStep.maxRetries = 0;
+
 export async function terminalReleaseAndDrainStep(
   subjectKey: string,
   ownerToken: string,
@@ -121,7 +146,7 @@ export async function acknowledgePendingTriggerStep(
 ): Promise<void> {
   "use step";
   if ("continuation" in entry && entry.continuation?.kind === "clarification") return;
-  if (entry.kind !== "pr_trigger" || !entry.pendingEvent) return;
+  if (entry.kind !== "pr_trigger" || !entry.pendingEvent || entry.delivery) return;
   const { getDb } = await import("../db/client.js");
   const { deletePendingTrigger } = await import("../lib/trigger-delivery-store.js");
   await deletePendingTrigger(getDb(), {

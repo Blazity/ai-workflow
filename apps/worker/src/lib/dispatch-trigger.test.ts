@@ -11,6 +11,7 @@ import type { TriggerEvent } from "./trigger-events.js";
 import {
   acceptTriggerDelivery,
   coalescePendingTrigger,
+  completeTriggerDelivery,
   deletePendingTrigger,
   getPendingTrigger,
   getTriggerDelivery,
@@ -323,6 +324,56 @@ describe("dispatchTriggerEvent durable envelope", () => {
     expect(await getTriggerDelivery(db, "github", "accepted-stale")).toMatchObject({
       result: { result: "ignored_stale_head" },
     });
+  });
+
+  it("does not queue a duplicate when the winning workflow records started during recovery", async () => {
+    const accepted = {
+      ...event({
+        delivery: { provider: "github", producer: "alice", deliveryId: "accepted-race" },
+      }),
+      scope: "any" as const,
+      subjectKey: "pr:github:acme/app#7",
+      ticketKey: null,
+      definitionId: 5,
+      definitionVersion: 12,
+    };
+    await acceptTriggerDelivery(db, accepted);
+    await registry.reserve({
+      subjectKey: accepted.subjectKey,
+      ticketKey: null,
+      ownerToken: "owner-original",
+      kind: "pr_trigger",
+    });
+    await registry.bindRun(accepted.subjectKey, "owner-original", "run-original");
+
+    const racingRegistry = {
+      listAll: () => registry.listAll(),
+      reserve: async () => {
+        await completeTriggerDelivery(db, "github", "accepted-race", {
+          result: "started",
+          runId: "run-original",
+        });
+        return false;
+      },
+    };
+    const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
+
+    expect(
+      await dispatchTriggerEvent(
+        event({
+          delivery: { provider: "github", producer: "alice", deliveryId: "accepted-race" },
+        }),
+        deps({ runRegistry: racingRegistry }),
+      ),
+    ).toEqual({ result: "started", runId: "run-original" });
+    expect(
+      await getPendingTrigger(
+        db,
+        accepted.subjectKey,
+        accepted.pr.headSha,
+        accepted.triggerType,
+      ),
+    ).toBeNull();
   });
 
   it("redelivery returns the original result without re-evaluating changed head or definition", async () => {

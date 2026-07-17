@@ -981,7 +981,7 @@ export async function agentWorkflow(input: string | AgentWorkflowInput) {
         ticketKey: input,
         ownerToken: `legacy:${workflowRunId}`,
       }
-      : input;
+    : input;
   let clarificationWinnerRecorded = false;
   let bound = false;
   let outcome: "success" | "failed" | "awaiting" | undefined;
@@ -990,6 +990,7 @@ export async function agentWorkflow(input: string | AgentWorkflowInput) {
       const {
         acknowledgeApprovalDispatchStep,
         acknowledgePendingTriggerStep,
+        acknowledgePrTriggerDispatchStep,
         bindWorkflowCandidateStep,
         recordClarificationDispatchWinnerStep,
       } = await import("./run-ownership-steps.js");
@@ -1000,6 +1001,7 @@ export async function agentWorkflow(input: string | AgentWorkflowInput) {
       );
       if (!bound) return;
       await acknowledgeApprovalDispatchStep(entry, workflowRunId);
+      await acknowledgePrTriggerDispatchStep(entry, workflowRunId);
       if (entry.kind === "clarification_answered") {
         clarificationWinnerRecorded = await recordClarificationDispatchWinnerStep(
           entry.clarificationRequestId,

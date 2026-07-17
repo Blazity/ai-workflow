@@ -8,6 +8,7 @@ import { createTestDb } from "../db/test-db.js";
 import type { AcceptedTriggerDelivery } from "./trigger-delivery-store.js";
 import {
   acceptTriggerDelivery,
+  acknowledgeStartedTriggerDelivery,
   completeTriggerDelivery,
   coalescePendingTrigger,
   deletePendingTrigger,
@@ -123,6 +124,27 @@ describe("durable trigger deliveries", () => {
     expect(await getTriggerDelivery(db, "github", "d-1")).toMatchObject({
       result: { result: "started", runId: "run-1" },
     });
+  });
+
+  it("atomically records the winning run and consumes only its pending snapshot", async () => {
+    const accepted = delivery();
+    await acceptTriggerDelivery(db, accepted);
+    await coalescePendingTrigger(db, accepted);
+
+    await acknowledgeStartedTriggerDelivery(db, accepted, "run-winning");
+
+    expect(await getTriggerDelivery(db, "github", "d-1")).toMatchObject({
+      status: "completed",
+      result: { result: "started", runId: "run-winning" },
+    });
+    expect(
+      await getPendingTrigger(
+        db,
+        accepted.subjectKey,
+        accepted.pr.headSha,
+        accepted.triggerType,
+      ),
+    ).toBeNull();
   });
 });
 

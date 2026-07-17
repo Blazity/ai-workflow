@@ -182,6 +182,7 @@ async function dispatchAcceptedTrigger(
     definitionId: accepted.definitionId,
     definitionVersion: accepted.definitionVersion,
     scope: accepted.scope,
+    delivery: accepted.delivery,
     ...(pendingEvent ? { pendingEvent } : {}),
     pr: accepted.pr,
   };
@@ -209,15 +210,34 @@ async function dispatchAcceptedTrigger(
   }
 
   if (dispatched.reason === "already_claimed" || dispatched.reason === "at_capacity") {
-    await coalescePendingTrigger(deps.db, accepted);
-    await completeAccepted(deps.db, accepted, { result: "coalesced" });
-    return { result: "coalesced" };
+    return coalesceOrRecoverStarted(accepted, deps.db);
   }
 
   // A start failure is durable too: retain the accepted semantic event for the
   // owner/reconciliation drain instead of relying on provider retry timing.
-  await coalescePendingTrigger(deps.db, accepted);
-  await completeAccepted(deps.db, accepted, { result: "coalesced" });
+  return coalesceOrRecoverStarted(accepted, deps.db);
+}
+
+async function coalesceOrRecoverStarted(
+  accepted: AcceptedTriggerDelivery,
+  db: Db,
+): Promise<DispatchTriggerResult> {
+  await coalescePendingTrigger(db, accepted);
+  await completeAccepted(db, accepted, { result: "coalesced" });
+
+  // The winning workflow may have bound and self-recorded `started` after this
+  // recovery read began. Preserve that stronger result and remove only this
+  // delivery's pending snapshot; a newer merged delivery has a different CAS
+  // token and remains queued.
+  const stored = await getTriggerDelivery(
+    db,
+    accepted.delivery.provider,
+    accepted.delivery.deliveryId,
+  );
+  if (stored?.result?.result === "started") {
+    await deletePendingTrigger(db, accepted);
+    return stored.result;
+  }
   return { result: "coalesced" };
 }
 

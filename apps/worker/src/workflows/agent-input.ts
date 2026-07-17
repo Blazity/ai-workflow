@@ -58,6 +58,13 @@ export type AgentWorkflowInput =
       definitionId: number;
       definitionVersion: number;
       scope: "workflow_owned" | "any";
+      /** Authenticated provider delivery that launched this candidate. Optional
+       * only for workflow inputs serialized before durable delivery tracking. */
+      delivery?: {
+        provider: "github" | "gitlab";
+        producer: string;
+        deliveryId: string;
+      };
       /** Durable pending row this candidate must acknowledge after owner bind. */
       pendingEvent?: {
         headSha: string;

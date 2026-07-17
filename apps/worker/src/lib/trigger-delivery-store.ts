@@ -208,6 +208,28 @@ export async function deletePendingTrigger(
   return rows.length > 0;
 }
 
+/** Commit the winning workflow correlation and consumption of its pending
+ * snapshot together. If the step is interrupted, neither half is visible; a
+ * replay is idempotent. */
+export async function acknowledgeStartedTriggerDelivery(
+  db: Db,
+  accepted: Pick<
+    AcceptedTriggerDelivery,
+    "subjectKey" | "triggerType" | "pr" | "delivery"
+  >,
+  runId: string,
+): Promise<void> {
+  await db.transaction(async (tx) => {
+    await completeTriggerDelivery(
+      tx,
+      accepted.delivery.provider,
+      accepted.delivery.deliveryId,
+      { result: "started", runId },
+    );
+    await deletePendingTrigger(tx, accepted);
+  });
+}
+
 function mergeJsonArrays(
   column: typeof pendingTriggerEvents.failedChecks | typeof pendingTriggerEvents.reviews,
   excludedName: string,

@@ -9,6 +9,7 @@ const clearDispatched = vi.fn();
 const getClarification = vi.fn();
 const markConsumed = vi.fn();
 const resolveAwaitingRun = vi.fn();
+const acknowledgeStartedDelivery = vi.fn();
 const setApprovalRun = vi.fn();
 const listSandboxes = vi.fn();
 const stopSandboxes = vi.fn();
@@ -22,6 +23,7 @@ vi.mock("../lib/dispatch-trigger.js", () => ({
 }));
 vi.mock("../lib/trigger-delivery-store.js", () => ({
   deletePendingTrigger: (...args: any[]) => deletePending(...args),
+  acknowledgeStartedTriggerDelivery: (...args: any[]) => acknowledgeStartedDelivery(...args),
 }));
 vi.mock("../clarifications/store.js", () => ({
   recordDispatchedRun: (...args: unknown[]) => recordDispatched(...args),
@@ -50,6 +52,7 @@ describe("workflow owner steps", () => {
     getClarification.mockReset();
     markConsumed.mockReset();
     resolveAwaitingRun.mockReset();
+    acknowledgeStartedDelivery.mockReset();
     setApprovalRun.mockReset();
     listSandboxes.mockReset().mockResolvedValue([]);
     stopSandboxes.mockReset().mockResolvedValue(0);
@@ -117,6 +120,39 @@ describe("workflow owner steps", () => {
       pr: { provider: "github", headSha: "sha" } as any,
     });
     expect(deletePending).not.toHaveBeenCalled();
+  });
+
+  it("records the winning PR-trigger run and removes only its exact pending snapshot", async () => {
+    acknowledgeStartedDelivery.mockResolvedValue(undefined);
+    const { acknowledgePrTriggerDispatchStep } = await import("./run-ownership-steps.js");
+    const entry = {
+      kind: "pr_trigger" as const,
+      triggerType: "trigger_pr_checks_failed" as const,
+      subjectKey: "pr:github:acme/api#7",
+      ownerToken: "owner",
+      definitionId: 1,
+      definitionVersion: 2,
+      scope: "any" as const,
+      delivery: {
+        provider: "github" as const,
+        producer: "github-actions",
+        deliveryId: "delivery-direct",
+      },
+      pr: { provider: "github" as const, headSha: "sha" } as any,
+    };
+
+    await acknowledgePrTriggerDispatchStep(entry, "run-winning");
+
+    expect(acknowledgeStartedDelivery).toHaveBeenCalledWith(
+      { db: true },
+      expect.objectContaining({
+        subjectKey: entry.subjectKey,
+        triggerType: entry.triggerType,
+        delivery: entry.delivery,
+        pr: entry.pr,
+      }),
+      "run-winning",
+    );
   });
 
   it("lets only the candidate that CAS-binds continue", async () => {
