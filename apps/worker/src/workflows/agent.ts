@@ -13,7 +13,11 @@ import type {
 import type { TicketEvent } from "../adapters/messaging/types.js";
 import type { DownloadedAttachment } from "../sandbox/attachments.js";
 import type { SelectedRepository } from "../adapters/vcs/repository-directory.js";
-import { buildRuntimeGraph, executeGraph } from "../workflow-definition/interpreter.js";
+import {
+  buildRuntimeGraph,
+  executeGraph,
+  type RuntimeGraph,
+} from "../workflow-definition/interpreter.js";
 import type {
   BlockExecutionResult,
   BlockExecutor,
@@ -127,8 +131,77 @@ export function modelsRequiringPriceLookup(
       models.add(resolveCallLlmTarget(node.params, runDefaultKind, defaults).model);
     }
   }
-  if (runDefaultKind === "codex") models.add(defaults.codex);
   return models;
+}
+
+export function modelsRequiringPriceLookupForRun(
+  graph: RuntimeGraph,
+  entryTriggerId: string,
+  runDefaultKind: AgentKind,
+  defaults: { claude: string; codex: string },
+): Set<string> {
+  const reachable: WorkflowDefinitionNode[] = [];
+  const pending = [entryTriggerId];
+  const seen = new Set<string>();
+
+  while (pending.length > 0) {
+    const id = pending.pop()!;
+    if (seen.has(id)) continue;
+    seen.add(id);
+
+    const node = graph.nodes.get(id);
+    if (!node) continue;
+    reachable.push(node);
+    for (const target of graph.outEdges.get(id)?.values() ?? []) pending.push(target);
+  }
+
+  const models = modelsRequiringPriceLookup(reachable, runDefaultKind, defaults);
+  const defaultModelCanLaunch = compatibilityPathCanLaunchDefaultModel(
+    graph,
+    entryTriggerId,
+    runDefaultKind,
+    defaults,
+  );
+  if (runDefaultKind === "codex" && defaultModelCanLaunch) models.add(defaults.codex);
+  return models;
+}
+
+function compatibilityPathCanLaunchDefaultModel(
+  graph: RuntimeGraph,
+  entryTriggerId: string,
+  runDefaultKind: AgentKind,
+  defaults: { claude: string; codex: string },
+): boolean {
+  if (runDefaultKind !== "codex") return false;
+
+  const pending = [{ id: entryTriggerId, implementationUsesDefault: true }];
+  const seen = new Set<string>();
+  while (pending.length > 0) {
+    const current = pending.pop()!;
+    const stateKey = `${current.id}:${current.implementationUsesDefault}`;
+    if (seen.has(stateKey)) continue;
+    seen.add(stateKey);
+
+    const node = graph.nodes.get(current.id);
+    if (!node) continue;
+    if (node.type === "finalize_workspace") return true;
+    if (
+      current.implementationUsesDefault &&
+      (node.type === "run_pre_pr_checks" || node.type === "open_pr")
+    ) {
+      return true;
+    }
+
+    let implementationUsesDefault = current.implementationUsesDefault;
+    if (node.type === "implementation_agent") {
+      const resolved = resolveBlockAgent(node.params, runDefaultKind, defaults);
+      implementationUsesDefault = resolved.kind === "codex" && resolved.model === defaults.codex;
+    }
+    for (const target of graph.outEdges.get(current.id)?.values() ?? []) {
+      pending.push({ id: target, implementationUsesDefault });
+    }
+  }
+  return false;
 }
 
 export function recordPrePrFixCycleUsages(
@@ -1078,7 +1151,7 @@ export async function agentWorkflow(input: string | AgentWorkflowInput) {
     // Codex agents and every in-process Call LLM need token pricing. Fetch all
     // resolved models before any block can record usage so configured cost caps
     // fail closed instead of depending on network timing during execution.
-    const pricedModels = modelsRequiringPriceLookup(plan.nodes, runDefaultKind, {
+    const pricedModels = modelsRequiringPriceLookupForRun(graph, entryTrigger.id, runDefaultKind, {
       claude: env.CLAUDE_MODEL,
       codex: env.CODEX_MODEL,
     });

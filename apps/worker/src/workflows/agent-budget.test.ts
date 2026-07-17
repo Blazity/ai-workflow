@@ -3,8 +3,10 @@ import type { WorkflowDefinitionNode } from "@shared/contracts";
 import type { PhaseUsage } from "../sandbox/agents/types.js";
 import {
   modelsRequiringPriceLookup,
+  modelsRequiringPriceLookupForRun,
   recordPrePrFixCycleUsages,
 } from "./agent.js";
+import { buildRuntimeGraph } from "../workflow-definition/interpreter.js";
 import {
   checkRunBudget,
   createRunBudgetState,
@@ -35,6 +37,76 @@ describe("agent workflow budget integration", () => {
     );
 
     expect(models).toEqual(new Set(["gpt-agent", "claude-haiku", "codex-default"]));
+  });
+
+  it("prices only nodes reachable from the selected trigger", () => {
+    const ticketTrigger = node("ticket", "trigger_ticket_ai", {});
+    const prTrigger = node("pr", "trigger_pr_review", {});
+    const ticketAgent = node("ticket-agent", "generic_agent", {
+      prompt: "implement",
+      provider: "codex",
+      model: "gpt-ticket-only",
+    });
+    const prComment = node("pr-comment", "post_pr_comment", { body: "review received" });
+    const graph = buildRuntimeGraph({
+      nodes: [ticketTrigger, prTrigger, ticketAgent, prComment],
+      edges: [
+        { from: "ticket", to: "ticket-agent" },
+        { from: "pr", to: "pr-comment" },
+      ],
+    });
+
+    expect(
+      modelsRequiringPriceLookupForRun(
+        graph,
+        "pr",
+        "codex",
+        { claude: "claude-default", codex: "codex-default" },
+      ),
+    ).toEqual(new Set());
+  });
+
+  it("prices the default Codex model only for reachable compatibility blocks that can launch it", () => {
+    const trigger = node("ticket", "trigger_ticket_ai", {});
+    const finalize = node("finalize", "finalize_workspace", {});
+    const graph = buildRuntimeGraph({
+      nodes: [trigger, finalize],
+      edges: [{ from: "ticket", to: "finalize" }],
+    });
+
+    expect(
+      modelsRequiringPriceLookupForRun(
+        graph,
+        "ticket",
+        "codex",
+        { claude: "claude-default", codex: "codex-default" },
+      ),
+    ).toEqual(new Set(["codex-default"]));
+  });
+
+  it("does not price the run default when a different implementation model replaces it on every path", () => {
+    const trigger = node("ticket", "trigger_ticket_ai", {});
+    const implementation = node("implementation", "implementation_agent", {
+      provider: "claude",
+      model: "claude-implementation",
+    });
+    const checks = node("checks", "run_pre_pr_checks", {});
+    const graph = buildRuntimeGraph({
+      nodes: [trigger, implementation, checks],
+      edges: [
+        { from: "ticket", to: "implementation" },
+        { from: "implementation", to: "checks" },
+      ],
+    });
+
+    expect(
+      modelsRequiringPriceLookupForRun(
+        graph,
+        "ticket",
+        "codex",
+        { claude: "claude-default", codex: "codex-default" },
+      ),
+    ).toEqual(new Set());
   });
 
   it("fails a configured cost budget before a required unpriced model can launch", () => {
