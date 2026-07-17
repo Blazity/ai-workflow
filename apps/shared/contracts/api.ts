@@ -2,7 +2,6 @@ import type {
   ApprovalRequest,
   ClarificationRequest,
   PrePrCheckConfigVersion,
-  PromptDef,
   RepositoryOption,
   Run,
   RunBlockStatusSnapshot,
@@ -91,26 +90,6 @@ export interface CostResponse {
   byWorkflow: CostByWorkflowEntry[];
   /** Per-day spend, oldest→newest, bucketed by trace start_time. */
   daily: { date: string; cost: number; tokens: number }[];
-}
-
-export interface PromptsResponse {
-  generatedAt: string;
-  /** `false` when the worker can't resolve prompts (degrades to empty list). */
-  available: boolean;
-  /**
-   * Whether Arthur is configured (key + endpoint + task id all set). When
-   * false, every prompt's `source` is "fallback" and `versions` is empty.
-   */
-  arthurEnabled: boolean;
-  rows: PromptDef[];
-  total: number;
-}
-
-/** On-demand body for a single historical Arthur version. */
-export interface PromptVersionBodyResponse {
-  generatedAt: string;
-  available: boolean;
-  body: string | null;
 }
 
 export interface LiveRunsResponse {
@@ -247,8 +226,7 @@ export interface ClarificationAnswerResponse {
   runId: string | null;
 }
 
-// --- Prompt library (dashboard-authored reusable prompts; distinct from the
-// --- read-only Arthur prompt registry in PromptsResponse) ---
+// --- Prompt library (dashboard-authored reusable prompts) ---
 
 export interface PromptLibraryEntryMeta {
   id: number;

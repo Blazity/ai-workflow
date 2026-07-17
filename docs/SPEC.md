@@ -63,7 +63,7 @@ Important boundary:
 - Design for self-hosting — users provide their own API keys (issue tracker, VCS, messaging, AI
   model) and deploy onto their own Vercel account. The project is intended to be open source.
 - Provide an observability dashboard (separate Next.js app) with runs, KPIs, cost & usage, eval
-  health, prompt versions, and user administration, authenticated against the worker.
+  health, the prompt library, and user administration, authenticated against the worker.
 
 ### 2.2 Non-Goals
 
@@ -161,7 +161,7 @@ All paths below are relative to `apps/worker/src/` unless stated otherwise.
 - Vercel Workflows (durable orchestration), Vercel Sandbox (isolated execution), Vercel Cron.
 - Neon Postgres (Vercel Marketplace integration; one branch per environment) — **required**.
 - Anthropic API (Claude Code) and/or OpenAI (Codex CLI).
-- Optional: Arthur GenAI Engine (tracing/evals/prompt versioning), Resend (dashboard email).
+- Optional: Arthur GenAI Engine (tracing/evals/prompt-injection check), Resend (dashboard email).
 
 Deferred: Linear, Teams, Docker sandbox provider (self-hosted without Vercel).
 
@@ -196,11 +196,10 @@ Tables:
 Prompts are **not** files in the client repo. There are three named prompts — `research-plan`,
 `implement`, and `review` — with fallback bodies hardcoded in `apps/worker/src/lib/prompts.ts`.
 
-Resolution order at run time (`workflows/prompts-step.ts` → `lib/overview/collect-prompts.ts`):
-
-1. Versioned prompt from Arthur (GenAI Engine), when `GENAI_ENGINE_*` is configured. Prompts are
-   viewable/editable per version through the dashboard.
-2. Otherwise the hardcoded fallback body.
+Resolution at run time (`workflows/prompts-step.ts`): the in-code default body for each named
+prompt is used directly (the bodies are the single source of truth in `@shared/contracts`,
+re-exported through `apps/worker/src/lib/prompts.ts`). Per-block prompt overrides authored in the
+dashboard prompt library are applied elsewhere in the graph.
 
 The resolved prompt body is appended to the assembled per-phase context (Section 12) and written
 into the sandbox as that phase's input file. The agent also picks up repo-level instruction files
@@ -245,8 +244,7 @@ per-variable reference lives in `SETUP.md`; the groups are:
   built-in default workflow definition, the review phase itself is gated by the `review_agent`
   block in the active definition). Pre-PR check commands are dashboard-managed (Section 9.3),
   not env config.
-- **Arthur (optional):** `GENAI_ENGINE_API_KEY`, `GENAI_ENGINE_TRACE_ENDPOINT`,
-  `GENAI_ENGINE_PROMPT_TASK_ID`.
+- **Arthur (optional):** `GENAI_ENGINE_API_KEY`, `GENAI_ENGINE_TRACE_ENDPOINT`.
 - **Database:** `DATABASE_URL` (required; Neon via Vercel Marketplace).
 - **Vercel / cron:** `VERCEL_TOKEN` / `VERCEL_TEAM_ID` / `VERCEL_PROJECT_ID` (local dev only —
   OIDC on Vercel), `CRON_SECRET`.
@@ -593,8 +591,9 @@ PRs **after** creation. Full spec: `docs/post-pr-gate-spec.md`.
 ## 17. Dashboard and Auth
 
 `apps/dashboard` is a Next.js "cockpit", deployed as a separate Vercel project. Sections: Overview
-(KPIs, eval health), Workflow runs (+ live view, run trace, ticket detail), Prompts (versioned,
-Arthur-backed), Arthur evals, Cost & usage, Workflow editor, and Users (invites, roles).
+(KPIs, eval health), Workflow runs (+ live view, run trace, ticket detail), Prompt library
+(dashboard-authored reusable prompts, versioned), Arthur evals, Cost & usage, Workflow editor,
+and Users (invites, roles).
 
 - **The worker is the auth authority** (Better Auth at `/api/auth/**`; dashboard data API under
   `/api/v1/*` gated by session middleware). The dashboard is a thin BFF: it stores the
@@ -626,7 +625,7 @@ Arthur-backed), Arthur evals, Cost & usage, Workflow editor, and Users (invites,
   agent fix cycles before push/PR creation.
 - Post-PR gate workflow with check-run reporting.
 - Dashboard with Better Auth (password + optional SSO), invites/roles, Resend email.
-- Arthur tracing, eval health, prompt versioning (optional).
+- Arthur tracing, eval health, prompt-injection check (optional).
 - Token/cost usage tracking per run (including live Codex pricing).
 - pnpm monorepo (`apps/worker`, `apps/dashboard`, `apps/shared` type contracts).
 

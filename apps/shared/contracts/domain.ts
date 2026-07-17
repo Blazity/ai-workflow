@@ -136,39 +136,6 @@ export interface HourPoint {
   errors: number;
 }
 
-/** One Arthur version of a named prompt (metadata; body fetched on demand). */
-export interface PromptVersion {
-  /** Arthur integer version number. */
-  version: number;
-  /** ISO timestamp the version was created. */
-  createdAt: string;
-  /** Real Arthur tags on this version, e.g. ["production"]. */
-  tags: string[];
-  modelProvider: string;
-  modelName: string;
-  numMessages: number;
-  numTools: number;
-  /** Body text. Present only for the production version (eager); other
-   *  versions are fetched on demand via the by-version endpoint. */
-  body?: string;
-}
-
-/** A workflow phase prompt as resolved by the worker at runtime. */
-export interface PromptDef {
-  /** Stable Arthur/fallback key: "research-plan" | "implement" | "review". */
-  name: string;
-  /** Human label for the workflow phase, e.g. "Research & Plan". */
-  phase: string;
-  /** Resolved production prompt body (Arthur production tag, or in-code fallback). */
-  body: string;
-  /** Where the resolved `body` came from. */
-  source: "arthur" | "fallback";
-  /** Model the agent runs this prompt with (env-derived). */
-  model: string;
-  /** Real Arthur version history, newest first. Empty when source is "fallback". */
-  versions: PromptVersion[];
-}
-
 // --- Pre-PR checks (dashboard-managed gate config) ---
 
 export type VcsProviderKind = "github" | "gitlab";
