@@ -13,6 +13,7 @@ import {
   type WorkflowEditorOptions,
 } from "@shared/contracts";
 import { FlowEditor } from "@/components/cockpit/flow-editor/flow-editor";
+import { PromptLibraryProvider } from "@/components/cockpit/flow-editor/prompt-library-context";
 import { Listbox } from "@/components/cockpit/listbox";
 import type { FlowEdgeDef, FlowNodeDef } from "@/lib/flows";
 import { readErrorMessage } from "@/lib/api/error-message";
@@ -314,6 +315,7 @@ export function WorkflowEditorScreen({
     }`;
 
   return (
+    <PromptLibraryProvider>
     <div className="flex flex-col h-full min-h-0">
       {current === null && (
         <div className="px-6 py-2 border-b border-neutral-200 bg-app-bg font-body text-[12px] text-neutral-600">
@@ -582,5 +584,6 @@ export function WorkflowEditorScreen({
         )}
       </div>
     </div>
+    </PromptLibraryProvider>
   );
 }
