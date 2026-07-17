@@ -14,7 +14,7 @@ function node(
   type: WorkflowBlockType,
   params: Record<string, WorkflowParamValue> = {},
 ): WorkflowDefinitionNode {
-  return { id, type, x: 0, y: 0, params };
+  return { id, type, x: 0, y: 0, params, inputs: {} };
 }
 
 function graph(

@@ -11,6 +11,7 @@ import { canEditWorkflowDefinitions, type DashboardRole } from "../lib/auth/role
 import { DashboardAuthError } from "../lib/auth/users-read.js";
 import {
   describeWorkflowDefinitionIssues,
+  upgradeStoredWorkflowDefinition,
   validateWorkflowGraph,
   workflowDefinitionSchema,
 } from "./schema.js";
@@ -81,7 +82,7 @@ function mapVersionRow(row: VersionSelect): WorkflowDefinitionVersionRow {
   return {
     definitionId: row.definitionId,
     version: row.version,
-    definition: row.definition,
+    definition: upgradeStoredWorkflowDefinition(row.definition),
     createdAt: row.createdAt,
     createdById: row.createdById,
     createdByLabel: row.createdByLabel,
@@ -634,7 +635,7 @@ export async function restoreWorkflowDefinitionVersion(
   }
   return saveWorkflowDefinitionVersion(db, {
     definitionId: input.definitionId,
-    definition: source.definition,
+    definition: mapVersionRow(source).definition,
     restoredFromVersion: source.version,
     actor: input.actor,
   });

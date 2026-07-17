@@ -15,7 +15,7 @@ vi.mock("../../lib/step-adapters.js", () => ({
 
 import type { WorkspaceRepositoryInput } from "../../sandbox/repo-workspace.js";
 import { execute, paramsSchema } from "./finalize-workspace.js";
-import { makeCtx, makeNode } from "./test-support.js";
+import { expectOutputConformsToRegistry, makeCtx, makeNode } from "./test-support.js";
 
 const repo: WorkspaceRepositoryInput = {
   provider: "github",
@@ -58,6 +58,7 @@ describe("finalize_workspace execute", () => {
     if (result.kind === "failed") {
       expect(result.reason).toContain("missing");
       expect(result.output.unmetChecks).toEqual(["missing"]);
+      expectOutputConformsToRegistry("finalize_workspace", result.output);
     }
     expect(mocks.publishWorkspaceChanges).not.toHaveBeenCalled();
   });

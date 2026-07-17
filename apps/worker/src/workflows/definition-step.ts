@@ -132,6 +132,7 @@ export function normalizeDefinitionForExecution(
       x: node.x,
       y: node.y,
       params: {},
+      inputs: {},
     });
     nextEdges = [
       ...nextEdges.slice(0, outIndex),

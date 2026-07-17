@@ -37,6 +37,7 @@ export function defaultWorkflowDefinition({ includeReview }: { includeReview: bo
     x: startX + index * stepX,
     y,
     params: spec.params,
+    inputs: {},
   }));
 
   const edges = nodes.slice(1).map((node, index) => ({ from: nodes[index].id, to: node.id }));

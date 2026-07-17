@@ -1,11 +1,35 @@
-import { vi } from "vitest";
+import { expect, vi } from "vitest";
 import type {
+  BlockOutput,
   WorkflowBlockType,
   WorkflowDefinitionNode,
   WorkflowParamValue,
 } from "@shared/contracts";
+import {
+  resolveWorkflowBlockContract,
+  validateBlockOutputAgainstContract,
+  type WorkflowBlockRegistryContext,
+} from "../../workflow-definition/block-registry.js";
 import type { PrTriggerPayload } from "../agent-input.js";
 import type { EngineCtx } from "./types.js";
+
+const registryContext: WorkflowBlockRegistryContext = {
+  agentProviders: { claude: true, codex: true },
+  defaultAgent: { provider: "claude", model: "claude-model" },
+  vcsProviders: ["github", "gitlab"],
+  slackConfigured: true,
+  arthurConfigured: true,
+};
+
+/** Keep an executor assertion coupled to the editor-visible registry contract. */
+export function expectOutputConformsToRegistry(
+  type: WorkflowBlockType,
+  output: BlockOutput,
+  params: Record<string, WorkflowParamValue> = {},
+): void {
+  const contract = resolveWorkflowBlockContract(type, params, registryContext);
+  expect(validateBlockOutputAgainstContract(contract, output), type).toEqual([]);
+}
 
 /** Build a definition node for executor tests. */
 export function makeNode(
@@ -13,7 +37,7 @@ export function makeNode(
   params: Record<string, WorkflowParamValue> = {},
   id = "blk",
 ): WorkflowDefinitionNode {
-  return { id, type, x: 0, y: 0, params };
+  return { id, type, x: 0, y: 0, params, inputs: {} };
 }
 
 /** Build a PR trigger payload for executor tests. */

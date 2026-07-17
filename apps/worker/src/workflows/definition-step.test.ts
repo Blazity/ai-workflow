@@ -136,8 +136,8 @@ describe("loadWorkflowDefinition", () => {
     const invalidGraph: WorkflowDefinition = {
       schemaVersion: 1,
       nodes: [
-        { id: "t", type: "trigger_ticket_ai", x: 0, y: 0, params: {} },
-        { id: "p", type: "planning_agent", x: 0, y: 0, params: {} },
+        { id: "t", type: "trigger_ticket_ai", x: 0, y: 0, params: {}, inputs: {} },
+        { id: "p", type: "planning_agent", x: 0, y: 0, params: {}, inputs: {} },
       ],
       edges: [],
     };
@@ -209,7 +209,7 @@ describe("normalizeDefinitionForExecution", () => {
     type: WorkflowDefinitionNode["type"],
     params: WorkflowDefinitionNode["params"] = {},
   ): WorkflowDefinitionNode {
-    return { id, type, x: 0, y: 0, params };
+    return { id, type, x: 0, y: 0, params, inputs: {} };
   }
 
   it("injects a virtual prepare_workspace between the trigger and its successor", () => {

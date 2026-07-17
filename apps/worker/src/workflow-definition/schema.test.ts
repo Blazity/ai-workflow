@@ -13,14 +13,18 @@ import {
   planApprovalDefinition,
   prReviewFixDefinition,
 } from "./graph-fixtures.js";
-import { validateWorkflowGraph, workflowDefinitionSchema } from "./schema.js";
+import {
+  upgradeStoredWorkflowDefinition,
+  validateWorkflowGraph,
+  workflowDefinitionSchema,
+} from "./schema.js";
 
 function node(
   id: string,
   type: WorkflowBlockType,
   params: Record<string, WorkflowParamValue> = {},
 ): WorkflowDefinitionNode {
-  return { id, type, x: 0, y: 0, params };
+  return { id, type, x: 0, y: 0, params, inputs: {} };
 }
 
 function graph(
@@ -39,6 +43,87 @@ function shapeOk(nodes: unknown[], edges: unknown[] = []): boolean {
 }
 
 describe("workflowDefinitionSchema", () => {
+  it("removes retired arthur_trace and splices only its normal output", () => {
+    const upgraded = upgradeStoredWorkflowDefinition({
+      schemaVersion: 1,
+      nodes: [
+        { id: "branch", type: "branch", x: 0, y: 0, params: { condition: "true" } },
+        { id: "trace", type: "arthur_trace", x: 1, y: 0, params: {} },
+        { id: "next", type: "open_pr", x: 2, y: 0, params: {} },
+        { id: "impossible", type: "terminate", x: 2, y: 1, params: { terminalStatus: "failed" } },
+      ],
+      edges: [
+        { from: "branch", to: "trace", fromPort: "false" },
+        { from: "trace", to: "next", fromPort: "out" },
+        { from: "trace", to: "impossible", fromPort: "failed" },
+      ],
+    });
+
+    expect(upgraded.nodes.map((node) => node.type)).toEqual(["branch", "open_pr", "terminate"]);
+    expect(upgraded.nodes.every((node) => Object.hasOwn(node, "inputs"))).toBe(true);
+    expect(upgraded.edges).toEqual([{ from: "branch", to: "next", fromPort: "false" }]);
+  });
+
+  it("still rejects truly unknown stored block types", () => {
+    expect(() =>
+      upgradeStoredWorkflowDefinition({
+        schemaVersion: 1,
+        nodes: [{ id: "unknown", type: "retired_elsewhere", x: 0, y: 0, params: {} }],
+        edges: [],
+      }),
+    ).toThrow(/Unknown workflow block type/);
+  });
+
+  it("preserves exact input binding source paths and defaults legacy nodes to no bindings", () => {
+    const parsed = workflowDefinitionSchema.parse({
+      schemaVersion: 1,
+      nodes: [
+        {
+          id: "llm",
+          type: "call_llm",
+          x: 0,
+          y: 0,
+          params: { prompt: "summarize" },
+          inputs: {
+            prompt: "steps.plan.output.plan",
+            context: "trigger.ticket.description",
+            runId: "run.id",
+          },
+        },
+        { id: "legacy", type: "open_pr", x: 0, y: 0, params: {} },
+      ],
+      edges: [],
+    });
+
+    expect(parsed.nodes[0].inputs).toEqual({
+      prompt: "steps.plan.output.plan",
+      context: "trigger.ticket.description",
+      runId: "run.id",
+    });
+    expect(parsed.nodes[1].inputs).toEqual({});
+  });
+
+  it("rejects blank or non-string input binding sources", () => {
+    const base = { id: "n", type: "call_llm", x: 0, y: 0, params: { prompt: "p" } };
+    expect(shapeOk([{ ...base, inputs: { prompt: "" } }])).toBe(false);
+    expect(shapeOk([{ ...base, inputs: { prompt: 42 } }])).toBe(false);
+  });
+
+  it("rejects binding sources outside the three persisted source roots", () => {
+    const base = { id: "n", type: "call_llm", x: 0, y: 0, params: { prompt: "p" } };
+    for (const source of [
+      "banana",
+      "trigger.",
+      "run.",
+      "steps..output.plan",
+      "steps.self.output",
+      "steps.self.output.",
+      "steps.self.plan",
+    ]) {
+      expect(shapeOk([{ ...base, inputs: { prompt: source } }]), source).toBe(false);
+    }
+  });
+
   it("accepts the default definition (with and without review) and graph validates", () => {
     for (const includeReview of [true, false]) {
       const def = defaultWorkflowDefinition({ includeReview });

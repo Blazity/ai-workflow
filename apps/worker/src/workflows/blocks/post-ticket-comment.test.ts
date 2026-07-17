@@ -9,7 +9,7 @@ vi.mock("../../lib/step-adapters.js", () => ({
 }));
 
 import { execute, paramsSchema } from "./post-ticket-comment.js";
-import { makeCtx, makeNode } from "./test-support.js";
+import { expectOutputConformsToRegistry, makeCtx, makeNode } from "./test-support.js";
 
 describe("post_ticket_comment paramsSchema", () => {
   it("requires a non-empty body within limits", () => {
@@ -49,6 +49,19 @@ describe("post_ticket_comment execute", () => {
     const result = await execute(makeNode("post_ticket_comment"), {}, makeCtx());
     expect(result.kind).toBe("failed");
     expect(mocks.postComment).not.toHaveBeenCalled();
+  });
+
+  it("accepts a null comment URL when the tracker has no deep link", async () => {
+    mocks.postComment.mockResolvedValue(null);
+
+    const result = await execute(
+      makeNode("post_ticket_comment", { body: "Done." }),
+      {},
+      makeCtx(),
+    );
+
+    expect(result).toEqual({ kind: "next", output: { status: "ok", commentUrl: null } });
+    expectOutputConformsToRegistry("post_ticket_comment", result.output);
   });
 
   it("maps tracker errors to a failed result", async () => {

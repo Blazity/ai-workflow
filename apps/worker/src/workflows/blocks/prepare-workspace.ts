@@ -266,15 +266,17 @@ export const execute: BlockExecuteFn = async (_block, _steps, ctx): Promise<Bloc
 
     ctx.selectedRepositories = workspaceRepositories;
     ctx.repositoryContexts = repositoryContexts;
+    const repositories = workspaceRepositories.map(
+      (repo) => `${repo.provider}:${repo.repoPath}`,
+    );
 
     return {
       kind: "next",
       output: {
         status: "ok",
         sandboxId,
-        repositories: workspaceRepositories.map(
-          (repo) => `${repo.provider}:${repo.repoPath}`,
-        ),
+        repositories,
+        workspace: { id: sandboxId, repositories },
       },
     };
   } catch (err) {

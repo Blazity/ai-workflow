@@ -40,7 +40,7 @@ const MEMBER: WorkflowDefinitionActor = { role: "member", id: "u_member", label:
 function def(triggers: WorkflowBlockType[] = ["trigger_ticket_ai"]): WorkflowDefinition {
   return {
     schemaVersion: 1,
-    nodes: triggers.map((type, i) => ({ id: `n${i}`, type, x: 0, y: 0, params: {} })),
+    nodes: triggers.map((type, i) => ({ id: `n${i}`, type, x: 0, y: 0, params: {}, inputs: {} })),
     edges: [],
   };
 }
@@ -51,8 +51,8 @@ function invalidDef(): WorkflowDefinition {
   return {
     schemaVersion: 1,
     nodes: [
-      { id: "t", type: "trigger_ticket_ai", x: 0, y: 0, params: {} },
-      { id: "orphan", type: "open_pr", x: 0, y: 0, params: {} },
+      { id: "t", type: "trigger_ticket_ai", x: 0, y: 0, params: {}, inputs: {} },
+      { id: "orphan", type: "open_pr", x: 0, y: 0, params: {}, inputs: {} },
     ],
     edges: [],
   };
@@ -123,6 +123,63 @@ describe("per-definition version numbering", () => {
     expect(aVersions.map((v) => v.version)).toEqual([3, 2, 1]);
     expect(bVersions.map((v) => v.version)).toEqual([2, 1]);
     expect(aVersions.every((v) => v.definitionId === a.id)).toBe(true);
+  });
+});
+
+describe("legacy version read normalization", () => {
+  it("returns canonical inputs from current, exact-version, and list reads", async () => {
+    const created = await createWorkflowDefinition(db, { name: "Legacy inputs", seed: null, actor: ADMIN });
+    const legacyDefinition = {
+      schemaVersion: 1,
+      nodes: [{ id: "t", type: "trigger_ticket_ai", x: 0, y: 0, params: {} }],
+      edges: [],
+    };
+    await db.insert(workflowDefinitionVersions).values({
+      definitionId: created.definition.id,
+      version: 1,
+      definition: legacyDefinition,
+      createdById: "legacy",
+      createdByLabel: "Legacy",
+      restoredFromVersion: null,
+    });
+
+    const current = await getCurrentWorkflowDefinitionVersion(db, created.definition.id);
+    const exact = await getWorkflowDefinitionVersion(db, created.definition.id, 1);
+    const listed = await listWorkflowDefinitionVersionRows(db, created.definition.id);
+
+    expect(current?.definition.nodes[0].inputs).toEqual({});
+    expect(exact?.definition.nodes[0].inputs).toEqual({});
+    expect(listed[0]?.definition.nodes[0].inputs).toEqual({});
+  });
+
+  it("removes a retired arthur_trace block and preserves the surrounding path", async () => {
+    const created = await createWorkflowDefinition(db, { name: "Legacy trace", seed: null, actor: ADMIN });
+    await db.insert(workflowDefinitionVersions).values({
+      definitionId: created.definition.id,
+      version: 1,
+      definition: {
+        schemaVersion: 1,
+        nodes: [
+          { id: "trigger", type: "trigger_ticket_ai", x: 0, y: 0, params: {} },
+          { id: "trace", type: "arthur_trace", x: 1, y: 0, params: {} },
+          { id: "open", type: "open_pr", x: 2, y: 0, params: {} },
+        ],
+        edges: [
+          { from: "trigger", to: "trace" },
+          { from: "trace", to: "open", fromPort: "out" },
+        ],
+      },
+      createdById: "legacy",
+      createdByLabel: "Legacy",
+      restoredFromVersion: null,
+    });
+
+    const current = await getCurrentWorkflowDefinitionVersion(db, created.definition.id);
+    expect(current?.definition.nodes.map((node) => node.type)).toEqual([
+      "trigger_ticket_ai",
+      "open_pr",
+    ]);
+    expect(current?.definition.edges).toEqual([{ from: "trigger", to: "open" }]);
   });
 });
 
@@ -428,16 +485,27 @@ describe("write-path validation", () => {
 
   it("still reads a legacy invalid row (validation is write-only)", async () => {
     const d = (await createWorkflowDefinition(db, { name: "Readable", seed: def(), actor: ADMIN })).definition;
+    const legacyInvalid = {
+      schemaVersion: 1,
+      nodes: [
+        { id: "t", type: "trigger_ticket_ai", x: 0, y: 0, params: {} },
+        { id: "orphan", type: "open_pr", x: 0, y: 0, params: {} },
+      ],
+      edges: [],
+    };
     await db.insert(workflowDefinitionVersions).values({
       definitionId: d.id,
       version: 2,
-      definition: invalidDef(),
+      definition: legacyInvalid,
       createdById: "u_admin",
       createdByLabel: "Admin",
       restoredFromVersion: null,
     });
     const head = await getCurrentWorkflowDefinitionVersion(db, d.id);
-    expect(head?.definition).toEqual(invalidDef());
+    expect(head?.definition).toEqual({
+      ...legacyInvalid,
+      nodes: legacyInvalid.nodes.map((node) => ({ ...node, inputs: {} })),
+    });
     expect(await getWorkflowDefinitionVersion(db, d.id, 2)).not.toBeNull();
     expect((await listWorkflowDefinitionVersionRows(db, d.id)).map((v) => v.version)).toEqual([2, 1]);
   });

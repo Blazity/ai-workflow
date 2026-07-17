@@ -85,6 +85,26 @@ export function blockTypesMissingExecutor(): WorkflowBlockType[] {
   );
 }
 
+/** Build the planning clarification envelope once so persisted step output and
+ * the interpreter-facing fields cannot drift apart. */
+export function planningClarificationResult(
+  questions: string[],
+  suggestedAnswers?: string[],
+): Extract<BlockExecutionResult, { kind: "needs_human_input" }> {
+  const suggestions =
+    suggestedAnswers && suggestedAnswers.length > 0 ? suggestedAnswers : undefined;
+  return {
+    kind: "needs_human_input",
+    output: {
+      status: "needs_human_input",
+      questions,
+      ...(suggestions ? { suggestedAnswers: suggestions } : {}),
+    },
+    questions,
+    ...(suggestions ? { suggestedAnswers: suggestions } : {}),
+  };
+}
+
 /** Entry kinds that own the ticket's main work thread and may run the re-pickup
  *  clarification housekeeping (label strip, pending supersede, awaiting flip). A
  *  pr_trigger / plan_approved run is a PR/plan follow-up that does not own the
@@ -1192,12 +1212,7 @@ export async function agentWorkflow(input: string | AgentWorkflowInput) {
                 questions = parsed.length > 0 ? parsed : [research.body];
               }
               const suggestedAnswers = research.suggestedAnswers;
-              return {
-                kind: "needs_human_input",
-                output: { status: "needs_human_input", questions },
-                questions,
-                ...(suggestedAnswers && suggestedAnswers.length > 0 ? { suggestedAnswers } : {}),
-              };
+              return planningClarificationResult(questions, suggestedAnswers);
             }
 
             if (research.status === "failed") {

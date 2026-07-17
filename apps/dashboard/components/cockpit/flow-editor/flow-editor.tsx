@@ -665,7 +665,10 @@ export function FlowEditor({
       x = (nodes.length ? Math.max(...nodes.map(n => n.x)) : 200) + 60;
       y = nodes.length ? Math.round(nodes.reduce((s, n) => s + n.y, 0) / nodes.length) : 280;
     }
-    onNodesChange(prev => [...prev, { id, type: item.type, name: item.name, x, y, params: { ...item.params } }]);
+    onNodesChange(prev => [
+      ...prev,
+      { id, type: item.type, name: item.name, x, y, params: { ...item.params }, inputs: {} },
+    ]);
     setSelectedId(id);
   };
 

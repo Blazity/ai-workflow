@@ -46,7 +46,12 @@ vi.mock("../../lib/step-adapters.js", () => ({
 import type { SelectedRepository } from "../../adapters/vcs/repository-directory.js";
 import { execute, paramsSchema } from "./prepare-workspace.js";
 import { teardownSandboxes } from "../../sandbox/poll-agent.js";
-import { makeCtx, makeNode, makePrPayload } from "./test-support.js";
+import {
+  expectOutputConformsToRegistry,
+  makeCtx,
+  makeNode,
+  makePrPayload,
+} from "./test-support.js";
 
 const repo: SelectedRepository = {
   provider: "github",
@@ -107,8 +112,14 @@ describe("prepare_workspace execute", () => {
     expect(ctx.preSandboxAdditions).toEqual(promptAdditions);
     expect(result).toEqual({
       kind: "next",
-      output: { status: "ok", sandboxId: "sbx-9", repositories: ["github:acme/api"] },
+      output: {
+        status: "ok",
+        sandboxId: "sbx-9",
+        repositories: ["github:acme/api"],
+        workspace: { id: "sbx-9", repositories: ["github:acme/api"] },
+      },
     });
+    expectOutputConformsToRegistry("prepare_workspace", result.output);
   });
 
   it("marks conflicted repositories with a mergeBase", async () => {

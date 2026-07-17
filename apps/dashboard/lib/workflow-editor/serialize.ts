@@ -38,6 +38,7 @@ export function serializeWorkflowDefinition(
         x: Math.round(node.x),
         y: Math.round(node.y),
         params: serializeParams(node),
+        inputs: { ...node.inputs },
       };
       if (node.name !== undefined) serialized.name = node.name;
       return serialized;

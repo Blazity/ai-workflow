@@ -14,7 +14,7 @@ import {
   timestamp,
   uniqueIndex,
 } from "drizzle-orm/pg-core";
-import type { BlockRunState, WorkflowDefinition } from "@shared/contracts";
+import type { BlockRunState } from "@shared/contracts";
 import type { GateStatusRef } from "../adapters/vcs/types.js";
 import type { PrePrCheckConfig } from "../pre-pr-checks/config.js";
 
@@ -282,7 +282,9 @@ export const workflowDefinitionVersions = pgTable(
       .notNull()
       .references(() => workflowDefinitions.id),
     version: integer("version").notNull(),
-    definition: jsonb("definition").$type<WorkflowDefinition>().notNull(),
+    // Stored rows may predate required normalized node fields. Reads parse and
+    // upgrade this raw JSON before exposing the canonical WorkflowDefinition.
+    definition: jsonb("definition").$type<unknown>().notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     createdById: text("created_by_id").notNull(),
     createdByLabel: text("created_by_label").notNull(),

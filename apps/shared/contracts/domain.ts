@@ -254,6 +254,76 @@ export type TicketStatusTarget = "ai_review" | "backlog";
 
 export type WorkflowParamValue = string | number | boolean | string[];
 
+/** Exact persisted source path for one block input. Syntax and graph safety are
+ * validated by the worker; the template union keeps authored definitions on
+ * the three supported roots without embedding graph semantics in this package. */
+export type WorkflowBindingSource =
+  | `trigger.${string}`
+  | `steps.${string}.output.${string}`
+  | `run.${string}`;
+
+export type WorkflowInputBindings = Record<string, WorkflowBindingSource>;
+
+/** Small JSON-shaped type language used by block input/output contracts. */
+export type WorkflowValueSchema =
+  | { type: "string" }
+  | { type: "number" }
+  | { type: "boolean" }
+  | { type: "null" }
+  | { type: "unknown" }
+  | { type: "nullable"; value: WorkflowValueSchema }
+  | { type: "array"; items: WorkflowValueSchema }
+  | {
+      type: "object";
+      properties: Record<string, WorkflowValueSchema>;
+      required: string[];
+      additionalProperties: boolean;
+    };
+
+export type WorkflowBlockGroup =
+  | "trigger"
+  | "agents"
+  | "workspace"
+  | "control"
+  | "ticket"
+  | "vcs"
+  | "human"
+  | "utility"
+  | "arthur";
+
+export interface WorkflowBlockPresentation {
+  label: string;
+  description: string;
+  group: WorkflowBlockGroup;
+  color: string;
+  softColor: string;
+  glyph: string;
+}
+
+export interface WorkflowBlockInputContract {
+  required: boolean;
+  schema: WorkflowValueSchema;
+}
+
+export type WorkflowBlockAvailability =
+  | { available: true; unavailableReason: null }
+  | { available: false; unavailableReason: string };
+
+/** Serializable contract returned by the worker-owned block registry. */
+export interface WorkflowBlockContract {
+  type: WorkflowBlockType;
+  presentation: WorkflowBlockPresentation;
+  defaults: Record<string, WorkflowParamValue>;
+  ports: string[];
+  allowsFailurePort: boolean;
+  inputs: Record<string, WorkflowBlockInputContract>;
+  output: {
+    schema: WorkflowValueSchema;
+    statusVariants: string[];
+  };
+  availability: WorkflowBlockAvailability;
+}
+
 export interface WorkflowDefinitionNode {
   id: string;
   type: WorkflowBlockType;
@@ -261,6 +331,7 @@ export interface WorkflowDefinitionNode {
   x: number;
   y: number;
   params: Record<string, WorkflowParamValue>;
+  inputs: WorkflowInputBindings;
 }
 
 export interface WorkflowDefinitionEdge {

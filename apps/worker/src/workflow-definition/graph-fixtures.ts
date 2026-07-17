@@ -22,6 +22,7 @@ export function buildNode(spec: BlockSpec, column: number, row = 0): WorkflowDef
     x: 40 + column * 220,
     y: 160 + row * 180,
     params: spec.params ?? {},
+    inputs: {},
   };
 }
 

@@ -103,7 +103,7 @@ describe("normalizeDefinitionForExecution edge cases", () => {
     type: WorkflowDefinitionNode["type"],
     params: WorkflowDefinitionNode["params"] = {},
   ): WorkflowDefinitionNode {
-    return { id, type, x: 0, y: 0, params };
+    return { id, type, x: 0, y: 0, params, inputs: {} };
   }
 
   it("appends a second underscore when both __prepare and __prepare_ are taken", () => {
@@ -272,8 +272,8 @@ describe("loadWorkflowDefinitionFor edge cases", () => {
     const validNoPrepare: WorkflowDefinition = {
       schemaVersion: 1,
       nodes: [
-        { id: "t", type: "trigger_ticket_ai", x: 0, y: 0, params: {} },
-        { id: "planning", type: "planning_agent", x: 100, y: 0, params: {} },
+        { id: "t", type: "trigger_ticket_ai", x: 0, y: 0, params: {}, inputs: {} },
+        { id: "planning", type: "planning_agent", x: 100, y: 0, params: {}, inputs: {} },
       ],
       edges: [{ from: "t", to: "planning" }],
     };

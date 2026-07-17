@@ -49,7 +49,7 @@ function node(
   params: Record<string, WorkflowParamValue> = {},
   name?: string,
 ): WorkflowDefinitionNode {
-  return { id, type, x: 0, y: 0, params, name };
+  return { id, type, x: 0, y: 0, params, inputs: {}, name };
 }
 
 /** Claude-shaped phase usage: cost reported directly, tokens also present. */

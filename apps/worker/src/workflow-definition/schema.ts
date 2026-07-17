@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type {
   TicketStatusTarget,
+  WorkflowBindingSource,
   WorkflowBlockType,
   WorkflowDefinition,
   WorkflowDefinitionNode,
@@ -22,12 +23,26 @@ import { paramsSchema as sendPlanApprovalParams } from "../workflows/blocks/send
 
 const nodeId = z.string().trim().min(1);
 const coordinate = z.number().finite();
+const bindingSegment = String.raw`[^.\s]+`;
+const bindingSourcePattern = new RegExp(
+  String.raw`^(?:(?:trigger|run)\.${bindingSegment}(?:\.${bindingSegment})*|steps\.${bindingSegment}\.output\.${bindingSegment}(?:\.${bindingSegment})*)$`,
+);
+const bindingSource = z
+  .string()
+  .trim()
+  .pipe(
+    z.custom<WorkflowBindingSource>(
+      (source) => typeof source === "string" && bindingSourcePattern.test(source),
+      { message: "Binding source must start with trigger.*, steps.<nodeId>.output.*, or run.*." },
+    ),
+  );
 
 const baseNodeFields = {
   id: nodeId,
   name: z.string().optional(),
   x: coordinate,
   y: coordinate,
+  inputs: z.record(bindingSource).default({}),
 };
 
 const emptyParams = z.object({}).strict();
@@ -279,6 +294,90 @@ export const workflowDefinitionSchema = z
       .max(MAX_EDGES, `Workflow cannot have more than ${MAX_EDGES} connections.`),
   })
   .strict();
+
+// Ordinary version reads deliberately do not apply current block-param or
+// graph rules: operators must be able to open and repair an old invalid graph.
+// This narrower schema validates only the stable persisted envelope and
+// performs deterministic shape upgrades such as adding node.inputs.
+const storedWorkflowParamValue = z.union([
+  z.string(),
+  z.number(),
+  z.boolean(),
+  z.array(z.string()),
+]);
+type StoredWorkflowBlockType = WorkflowBlockType | "arthur_trace";
+
+const storedWorkflowBlockType = z.custom<StoredWorkflowBlockType>(
+  (type) =>
+    type === "arthur_trace" ||
+    (typeof type === "string" && Object.prototype.hasOwnProperty.call(BLOCK_TYPE_SPECS, type)),
+  { message: "Unknown workflow block type." },
+);
+const storedWorkflowNode = z
+  .object({
+    id: nodeId,
+    type: storedWorkflowBlockType,
+    name: z.string().optional(),
+    x: coordinate,
+    y: coordinate,
+    params: z.record(storedWorkflowParamValue),
+    inputs: z.record(bindingSource).optional(),
+  })
+  .passthrough();
+const storedWorkflowDefinition = z
+  .object({
+    schemaVersion: z.literal(1),
+    nodes: z.array(storedWorkflowNode),
+    edges: z.array(edgeSchema),
+  })
+  .passthrough();
+
+export function upgradeStoredWorkflowDefinition(raw: unknown): WorkflowDefinition {
+  const parsed = storedWorkflowDefinition.parse(raw);
+  const retiredNodeIds = new Set(
+    parsed.nodes.filter((node) => node.type === "arthur_trace").map((node) => node.id),
+  );
+
+  const resolveNormalTargets = (nodeId: string, seen: Set<string>): string[] => {
+    if (!retiredNodeIds.has(nodeId)) return [nodeId];
+    if (seen.has(nodeId)) return [];
+
+    const nextSeen = new Set(seen).add(nodeId);
+    return parsed.edges
+      .filter(
+        (edge) =>
+          edge.from === nodeId && (edge.fromPort === undefined || edge.fromPort === "out"),
+      )
+      .flatMap((edge) => resolveNormalTargets(edge.to, nextSeen));
+  };
+
+  const nodes: WorkflowDefinitionNode[] = [];
+  for (const node of parsed.nodes) {
+    if (node.type === "arthur_trace") continue;
+    nodes.push({
+      id: node.id,
+      type: node.type,
+      ...(node.name === undefined ? {} : { name: node.name }),
+      x: node.x,
+      y: node.y,
+      params: node.params,
+      inputs: node.inputs ?? {},
+    });
+  }
+
+  return {
+    schemaVersion: 1,
+    nodes,
+    edges: parsed.edges.flatMap((edge) => {
+      if (retiredNodeIds.has(edge.from)) return [];
+      return resolveNormalTargets(edge.to, new Set()).map((to) => ({
+        from: edge.from,
+        to,
+        ...(edge.fromPort === undefined ? {} : { fromPort: edge.fromPort }),
+      }));
+    }),
+  };
+}
 
 type AssertAssignable<T extends WorkflowDefinition> = T;
 export type WorkflowDefinitionGuard = AssertAssignable<z.infer<typeof workflowDefinitionSchema>>;
