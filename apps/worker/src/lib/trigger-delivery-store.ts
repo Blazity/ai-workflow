@@ -1,6 +1,10 @@
 import { and, asc, eq, sql } from "drizzle-orm";
 import type { Db } from "../db/client.js";
-import { pendingTriggerEvents, triggerDeliveries } from "../db/schema.js";
+import {
+  activeRuns,
+  pendingTriggerEvents,
+  triggerDeliveries,
+} from "../db/schema.js";
 import type { PrTriggerPayload } from "../workflows/agent-input.js";
 import type { PrTriggerType, TriggerEvent } from "./trigger-events.js";
 
@@ -212,22 +216,52 @@ export async function deletePendingTrigger(
  * snapshot together. If the step is interrupted, neither half is visible; a
  * replay is idempotent. */
 export async function acknowledgeStartedTriggerDelivery(
-  db: Db,
+  db: Pick<Db, "execute">,
   accepted: Pick<
     AcceptedTriggerDelivery,
     "subjectKey" | "triggerType" | "pr" | "delivery"
   >,
   runId: string,
 ): Promise<void> {
-  await db.transaction(async (tx) => {
-    await completeTriggerDelivery(
-      tx,
-      accepted.delivery.provider,
-      accepted.delivery.deliveryId,
-      { result: "started", runId },
-    );
-    await deletePendingTrigger(tx, accepted);
-  });
+  const result = JSON.stringify({ result: "started", runId });
+  await db.execute(sql`
+    with started_delivery as (
+      update ${triggerDeliveries}
+      set
+        status = 'completed',
+        result = ${result}::jsonb,
+        updated_at = now()
+      where ${triggerDeliveries.provider} = ${accepted.delivery.provider}
+        and ${triggerDeliveries.deliveryId} = ${accepted.delivery.deliveryId}
+        and ${triggerDeliveries.subjectKey} = ${accepted.subjectKey}
+        and ${triggerDeliveries.headSha} = ${accepted.pr.headSha}
+        and ${triggerDeliveries.triggerType} = ${accepted.triggerType}
+        and exists (
+          select 1
+          from ${activeRuns}
+          where ${activeRuns.subjectKey} = ${accepted.subjectKey}
+            and ${activeRuns.runId} = ${runId}
+            and ${activeRuns.state} = 'bound'
+        )
+        and (
+          ${triggerDeliveries.result}->>'result' is distinct from 'started'
+          or ${triggerDeliveries.result}->>'runId' = ${runId}
+        )
+      returning
+        ${triggerDeliveries.provider},
+        ${triggerDeliveries.deliveryId},
+        ${triggerDeliveries.subjectKey},
+        ${triggerDeliveries.headSha},
+        ${triggerDeliveries.triggerType}
+    )
+    delete from ${pendingTriggerEvents}
+    using started_delivery
+    where ${pendingTriggerEvents.provider} = started_delivery.provider
+      and ${pendingTriggerEvents.deliveryId} = started_delivery.delivery_id
+      and ${pendingTriggerEvents.subjectKey} = started_delivery.subject_key
+      and ${pendingTriggerEvents.headSha} = started_delivery.head_sha
+      and ${pendingTriggerEvents.triggerType} = started_delivery.trigger_type
+  `);
 }
 
 function mergeJsonArrays(

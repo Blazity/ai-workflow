@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import type { Db } from "../db/client.js";
 import {
+  activeRuns,
   workflowDefinitions,
   workflowDefinitionVersions,
 } from "../db/schema.js";
@@ -71,6 +72,20 @@ function delivery(overrides: Partial<AcceptedTriggerDelivery> = {}): AcceptedTri
   };
 }
 
+async function bindRun(
+  accepted: AcceptedTriggerDelivery,
+  runId: string,
+): Promise<void> {
+  await db.insert(activeRuns).values({
+    subjectKey: accepted.subjectKey,
+    ticketKey: accepted.ticketKey,
+    ownerToken: `owner:${runId}`,
+    runId,
+    state: "bound",
+    runKind: "pr_trigger",
+  });
+}
+
 describe("durable trigger deliveries", () => {
   it("accepts one provider delivery identity and returns the stored result on redelivery", async () => {
     const first = await acceptTriggerDelivery(db, delivery());
@@ -126,10 +141,72 @@ describe("durable trigger deliveries", () => {
     });
   });
 
-  it("atomically records the winning run and consumes only its pending snapshot", async () => {
+  it("atomically records the winning run through the production execute-only surface", async () => {
     const accepted = delivery();
     await acceptTriggerDelivery(db, accepted);
     await coalescePendingTrigger(db, accepted);
+    await bindRun(accepted, "run-winning");
+
+    // neon-http supports one data-modifying statement here, not an interactive
+    // transaction callback. Keep this facade limited to that production-safe
+    // surface while executing against the real test database.
+    const executeOnlyDb: Pick<Db, "execute"> = { execute: db.execute.bind(db) };
+
+    await acknowledgeStartedTriggerDelivery(executeOnlyDb, accepted, "run-winning");
+
+    expect(await getTriggerDelivery(db, "github", "d-1")).toMatchObject({
+      status: "completed",
+      result: { result: "started", runId: "run-winning" },
+    });
+    expect(
+      await getPendingTrigger(
+        db,
+        accepted.subjectKey,
+        accepted.pr.headSha,
+        accepted.triggerType,
+      ),
+    ).toBeNull();
+  });
+
+  it("does not let a workflow that lost the subject claim acknowledge the delivery", async () => {
+    const accepted = delivery();
+    await acceptTriggerDelivery(db, accepted);
+    await coalescePendingTrigger(db, accepted);
+    await bindRun(accepted, "run-winning");
+
+    await acknowledgeStartedTriggerDelivery(db, accepted, "run-losing");
+
+    expect(await getTriggerDelivery(db, "github", "d-1")).toMatchObject({
+      status: "accepted",
+      result: null,
+    });
+    expect(
+      await getPendingTrigger(
+        db,
+        accepted.subjectKey,
+        accepted.pr.headSha,
+        accepted.triggerType,
+      ),
+    ).toMatchObject({ delivery: { deliveryId: "d-1" } });
+  });
+
+  it("preserves a newer pending snapshot while acknowledging the claimed delivery", async () => {
+    const accepted = delivery();
+    const newer = delivery({
+      delivery: { ...accepted.delivery, deliveryId: "d-2" },
+      pr: {
+        ...accepted.pr,
+        failedChecks: [
+          ...(accepted.pr.failedChecks ?? []),
+          { name: "test", conclusion: "failure" },
+        ],
+      },
+    });
+    await acceptTriggerDelivery(db, accepted);
+    await acceptTriggerDelivery(db, newer);
+    await coalescePendingTrigger(db, accepted);
+    await coalescePendingTrigger(db, newer);
+    await bindRun(accepted, "run-winning");
 
     await acknowledgeStartedTriggerDelivery(db, accepted, "run-winning");
 
@@ -144,7 +221,35 @@ describe("durable trigger deliveries", () => {
         accepted.pr.headSha,
         accepted.triggerType,
       ),
-    ).toBeNull();
+    ).toMatchObject({ delivery: { deliveryId: "d-2" } });
+  });
+
+  it("does not consume a recovered snapshot after another run already won the delivery", async () => {
+    const accepted = delivery();
+    await acceptTriggerDelivery(db, accepted);
+    await bindRun(accepted, "run-original");
+    await acknowledgeStartedTriggerDelivery(db, accepted, "run-original");
+
+    // Recovery can recreate the semantic snapshot after the original workflow
+    // has recorded its result. A successor claim must not adopt that delivery.
+    await coalescePendingTrigger(db, accepted);
+    await db.delete(activeRuns);
+    await bindRun(accepted, "run-successor");
+
+    await acknowledgeStartedTriggerDelivery(db, accepted, "run-successor");
+
+    expect(await getTriggerDelivery(db, "github", "d-1")).toMatchObject({
+      status: "completed",
+      result: { result: "started", runId: "run-original" },
+    });
+    expect(
+      await getPendingTrigger(
+        db,
+        accepted.subjectKey,
+        accepted.pr.headSha,
+        accepted.triggerType,
+      ),
+    ).toMatchObject({ delivery: { deliveryId: "d-1" } });
   });
 });
 
