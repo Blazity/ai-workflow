@@ -9,6 +9,7 @@ Return a JSON object with these fields:
 - \`status\`: \`"completed"\` if the plan is ready, \`"clarification_needed"\` if you need answers from the user before planning, \`"failed"\` if you cannot proceed.
 - \`plan\`: The implementation plan as a markdown string (when \`status="completed"\`). This is passed as-is to the implementation agent — keep it clean and actionable. \`null\` otherwise.
 - \`questions\`: An array of strings, one question per item (when \`status="clarification_needed"\`). Do NOT prefix items with numbers — the caller numbers them. \`null\` otherwise.
+- \`suggestedAnswers\`: An optional array of short, ready-to-pick answer options for the questions (when \`status="clarification_needed"\`), provided when sensible. \`null\` otherwise.
 - \`error\`: A short failure reason (when \`status="failed"\`). \`null\` otherwise.
 
 ## Process
@@ -104,7 +105,9 @@ If any answer is NO, return \`status: "clarification_needed"\` with precise ques
 
 ## Prior Sessions
 - Brief summary of prior sessions (if memory file existed)
-\`\`\``;
+\`\`\`
+
+The file may contain a \`Human decisions\` section (between \`<!-- human-decisions:start -->\` and \`<!-- human-decisions:end -->\`) that is maintained automatically. Preserve it exactly: do not edit or remove it.`;
 
 const implementPrompt = `# Instructions
 
@@ -161,6 +164,8 @@ Return \`clarification_needed\` only if the plan is genuinely unexecutable. Exha
 - Brief summary of prior sessions (if memory file existed)
 \`\`\`
 
+The file may contain a \`Human decisions\` section (between \`<!-- human-decisions:start -->\` and \`<!-- human-decisions:end -->\`) that is maintained automatically. Preserve it exactly: do not edit or remove it.
+
 ## Output
 
 The JSON object below is your **final report** after you have already edited at least one ticket-relevant file and created at least one git commit. It is not a substitute for doing the work.
@@ -172,6 +177,7 @@ Return a JSON object with:
 - \`result\`: "implemented" if done, "clarification_needed" if you have questions, "failed" if stuck.
 - \`summary\`: Description of work done (when implemented).
 - \`questions\`: List of questions (when clarification_needed).
+- \`suggestedAnswers\`: Optional short, ready-to-pick answer options for the questions (when clarification_needed), provided when sensible.
 - \`error\`: Failure details (when failed).`;
 
 const reviewPrompt = `# Instructions

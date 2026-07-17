@@ -141,6 +141,11 @@ describe("POST /api/v1/approvals/:id/approve", () => {
     expect(body.approval.status).toBe("approved");
     expect(body.approval.dispatchedRunId).toBe("run-x");
     expect(mocks.dispatchPlanApproved).toHaveBeenCalledOnce();
+    // The route wires the issue tracker through so dispatch can move the ticket
+    // into the AI column under the claim before starting the run.
+    expect(mocks.dispatchPlanApproved).toHaveBeenCalledWith(
+      expect.objectContaining({ issueTracker: expect.anything() }),
+    );
     expect(mocks.postComment).toHaveBeenCalledWith(
       "AWT-1",
       "Plan approved by Admin, implementation started.",

@@ -101,7 +101,38 @@ describe("formatTicketEvent", () => {
     ).toBe(`:question: Task ${LINK} needs clarification`);
   });
 
-  it("needs_clarification — links to the Jira comment when commentUrl is provided", () => {
+  it("needs_clarification: links to the dashboard when dashboardUrl is provided", () => {
+    expect(
+      formatTicketEvent(
+        {
+          kind: "needs_clarification",
+          dashboardUrl: "https://app/ticket/AWT-42?run=wrun_9",
+        },
+        KEY,
+        JIRA,
+      ),
+    ).toBe(
+      `:question: Task ${LINK} needs clarification (<https://app/ticket/AWT-42?run=wrun_9|answer in dashboard>)`,
+    );
+  });
+
+  it("needs_clarification: dashboardUrl takes priority over commentUrl", () => {
+    expect(
+      formatTicketEvent(
+        {
+          kind: "needs_clarification",
+          dashboardUrl: "https://app/ticket/AWT-42?run=wrun_9",
+          commentUrl: `${JIRA}/browse/${KEY}?focusedCommentId=1`,
+        },
+        KEY,
+        JIRA,
+      ),
+    ).toBe(
+      `:question: Task ${LINK} needs clarification (<https://app/ticket/AWT-42?run=wrun_9|answer in dashboard>)`,
+    );
+  });
+
+  it("needs_clarification: links to the Jira comment when only commentUrl is provided", () => {
     expect(
       formatTicketEvent(
         {
@@ -112,7 +143,7 @@ describe("formatTicketEvent", () => {
         JIRA,
       ),
     ).toBe(
-      `:question: Task ${LINK} needs clarification — <${JIRA}/browse/${KEY}?focusedCommentId=98765|view questions>`,
+      `:question: Task ${LINK} needs clarification (<${JIRA}/browse/${KEY}?focusedCommentId=98765|view questions>)`,
     );
   });
 
@@ -126,16 +157,16 @@ describe("formatTicketEvent", () => {
     ).toBe(`:question: Task ${LINK} needs clarification\nPhase A: $0.10`);
   });
 
-  it("needs_clarification — combines comment link and usage report", () => {
-    const commentUrl = `${JIRA}/browse/${KEY}?focusedCommentId=1`;
+  it("needs_clarification: combines dashboard link and usage report", () => {
+    const dashboardUrl = "https://app/ticket/AWT-42?run=wrun_9";
     expect(
       formatTicketEvent(
-        { kind: "needs_clarification", commentUrl, usageReport: "u" },
+        { kind: "needs_clarification", dashboardUrl, usageReport: "u" },
         KEY,
         JIRA,
       ),
     ).toBe(
-      `:question: Task ${LINK} needs clarification — <${commentUrl}|view questions>\nu`,
+      `:question: Task ${LINK} needs clarification (<${dashboardUrl}|answer in dashboard>)\nu`,
     );
   });
 

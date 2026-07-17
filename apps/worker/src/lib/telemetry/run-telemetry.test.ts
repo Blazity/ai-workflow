@@ -7,6 +7,8 @@ import {
   upsertRunSnapshots,
   recordRunUsage,
   recordBlockStatuses,
+  resolveAwaitingRun,
+  resolveAwaitingRunsForTicket,
   type RunSnapshot,
   type RunUsage,
   type RunBlockStatusWrite,
@@ -335,5 +337,56 @@ describe("recordBlockStatuses", () => {
     expect(r.status).toBe("running");
     expect(r.ticketTitle).toBe("Add login");
     expect(r.sandboxId).toBe("sbx_1");
+  });
+});
+
+describe("awaiting (clarification park)", () => {
+  it("recordRunUsage writes status 'awaiting'", async () => {
+    await recordRunUsage(db, usage({ status: "awaiting" }));
+    expect((await row("wrun_1")).status).toBe("awaiting");
+  });
+
+  it("a later world-derived 'success' snapshot must not flip an awaiting row", async () => {
+    // The world reports a parked run as completed→success; the cron must leave
+    // awaiting alone so the answer endpoint owns the transition.
+    await recordRunUsage(db, usage({ status: "awaiting" }));
+    await upsertRunSnapshots(db, [snapshot({ status: "success" })]);
+    expect((await row("wrun_1")).status).toBe("awaiting");
+  });
+
+  it("resolveAwaitingRun flips awaiting → success and returns true", async () => {
+    await recordRunUsage(db, usage({ status: "awaiting" }));
+    const flipped = await resolveAwaitingRun(db, "wrun_1");
+    expect(flipped).toBe(true);
+    expect((await row("wrun_1")).status).toBe("success");
+  });
+
+  it("resolveAwaitingRun is a no-op on a non-awaiting row", async () => {
+    await recordRunUsage(db, usage({ status: "success" }));
+    const flipped = await resolveAwaitingRun(db, "wrun_1");
+    expect(flipped).toBe(false);
+    expect((await row("wrun_1")).status).toBe("success");
+  });
+
+  it("resolveAwaitingRun is a no-op for a missing run", async () => {
+    expect(await resolveAwaitingRun(db, "wrun_missing")).toBe(false);
+  });
+
+  it("resolveAwaitingRunsForTicket flips other awaiting runs for the ticket, excluding the current run", async () => {
+    await recordRunUsage(db, usage({ runId: "wrun_old", status: "awaiting" }));
+    await recordRunUsage(db, usage({ runId: "wrun_new", status: "awaiting" }));
+    const flipped = await resolveAwaitingRunsForTicket(db, "PROJ-1", "wrun_new");
+    expect(flipped).toBe(1);
+    expect((await row("wrun_old")).status).toBe("success");
+    expect((await row("wrun_new")).status).toBe("awaiting");
+  });
+
+  it("resolveAwaitingRunsForTicket ignores other tickets and non-awaiting rows", async () => {
+    await recordRunUsage(db, usage({ runId: "wrun_other_ticket", status: "awaiting", ticketKey: "PROJ-2" }));
+    await recordRunUsage(db, usage({ runId: "wrun_done", status: "success" }));
+    const flipped = await resolveAwaitingRunsForTicket(db, "PROJ-1", "wrun_current");
+    expect(flipped).toBe(0);
+    expect((await row("wrun_other_ticket")).status).toBe("awaiting");
+    expect((await row("wrun_done")).status).toBe("success");
   });
 });

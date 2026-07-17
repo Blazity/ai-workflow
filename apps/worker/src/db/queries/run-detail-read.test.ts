@@ -138,6 +138,32 @@ describe("fetchRunDetailFromDb", () => {
     expect(res?.steps[0].durationMs).toBe(10_000);
   });
 
+  it("normalizes a still-running telemetry step in a parked (awaiting) run", async () => {
+    await db.insert(workflowRuns).values({
+      runId: "r1",
+      status: "awaiting",
+      startedAt: new Date("2026-06-16T10:00:00Z"),
+      steps: [
+        {
+          stepId: "s1",
+          name: "recordRunTelemetry",
+          rawName: "step//recordRunTelemetry",
+          status: "running",
+          attempt: 1,
+          createdAt: "2026-06-16T10:04:50Z",
+          startedAt: "2026-06-16T10:04:50Z",
+          completedAt: null,
+          startOffsetMs: 290_000,
+          durationMs: null,
+          error: null,
+        },
+      ],
+    });
+    const res = await fetchRunDetailFromDb({ db, runId: "r1", ...base });
+    expect(res?.run.status).toBe("awaiting");
+    expect(res?.steps[0].status).toBe("completed");
+  });
+
   it("reports hasRealSteps=false when falling back to phase synthesis", async () => {
     await db.insert(workflowRuns).values({
       runId: "r1",

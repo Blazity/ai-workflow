@@ -10,6 +10,11 @@ describe("human_question paramsSchema", () => {
     expect(paramsSchema.safeParse({ questions: [""] }).success).toBe(false);
     expect(paramsSchema.safeParse({ extra: 1 }).success).toBe(false);
   });
+
+  it("accepts an optional suggestedAnswers array of non-empty strings", () => {
+    expect(paramsSchema.safeParse({ suggestedAnswers: ["Yes", "No"] }).success).toBe(true);
+    expect(paramsSchema.safeParse({ suggestedAnswers: [""] }).success).toBe(false);
+  });
 });
 
 describe("human_question execute", () => {
@@ -44,6 +49,65 @@ describe("human_question execute", () => {
     expect(result.kind).toBe("failed");
     if (result.kind === "failed") {
       expect(result.reason).toContain("human_question has no questions");
+    }
+  });
+
+  it("threads params-provided suggestedAnswers", async () => {
+    const result = await execute(
+      makeNode("human_question", { questions: ["Ship it?"], suggestedAnswers: ["Yes", "No", " "] }),
+      {},
+      makeCtx(),
+    );
+    expect(result).toEqual({
+      kind: "needs_human_input",
+      output: {
+        status: "needs_human_input",
+        questions: ["Ship it?"],
+        suggestedAnswers: ["Yes", "No"],
+      },
+      questions: ["Ship it?"],
+      suggestedAnswers: ["Yes", "No"],
+    });
+  });
+
+  it("picks up upstream suggestedAnswers when questions fall back and params provide none", async () => {
+    const steps: StepsRecord = {
+      upstream: {
+        output: {
+          status: "needs_human_input",
+          questions: ["Which region?"],
+          suggestedAnswers: ["us-east-1", "eu-west-1"],
+        },
+      },
+    };
+    const result = await execute(makeNode("human_question"), steps, makeCtx());
+    expect(result.kind).toBe("needs_human_input");
+    if (result.kind === "needs_human_input") {
+      expect(result.questions).toEqual(["Which region?"]);
+      expect(result.suggestedAnswers).toEqual(["us-east-1", "eu-west-1"]);
+    }
+  });
+
+  it("lets params suggestedAnswers win over upstream ones", async () => {
+    const steps: StepsRecord = {
+      upstream: {
+        output: {
+          status: "needs_human_input",
+          questions: ["Which region?"],
+          suggestedAnswers: ["us-east-1"],
+        },
+      },
+    };
+    const result = await execute(
+      makeNode("human_question", { suggestedAnswers: ["custom"] }),
+      steps,
+      makeCtx(),
+    );
+    expect(result.kind).toBe("needs_human_input");
+    if (result.kind === "needs_human_input") {
+      // Questions still fall back to upstream, but the params suggestions win.
+      expect(result.questions).toEqual(["Which region?"]);
+      expect(result.suggestedAnswers).toEqual(["custom"]);
     }
   });
 });

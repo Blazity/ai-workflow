@@ -156,6 +156,32 @@ describe("generic_agent execute", () => {
     });
   });
 
+  it("threads suggestedAnswers through needs_input output", async () => {
+    mocks.collectPhase.mockResolvedValue({
+      raw: "",
+      structured: JSON.stringify({
+        status: "needs_input",
+        body: "",
+        questions: ["Which region?"],
+        suggestedAnswers: ["us-east-1", "eu-west-1"],
+        error: null,
+      }),
+    });
+
+    const result = await execute(makeNode("generic_agent", { prompt: "p" }), {}, makeCtx());
+
+    expect(result).toEqual({
+      kind: "needs_human_input",
+      output: {
+        status: "needs_human_input",
+        questions: ["Which region?"],
+        suggestedAnswers: ["us-east-1", "eu-west-1"],
+      },
+      questions: ["Which region?"],
+      suggestedAnswers: ["us-east-1", "eu-west-1"],
+    });
+  });
+
   it("maps failed output to kind failed with the reported error", async () => {
     mocks.collectPhase.mockResolvedValue({
       raw: "",

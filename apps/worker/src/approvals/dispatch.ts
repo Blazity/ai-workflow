@@ -1,6 +1,8 @@
 import { getRun, start } from "workflow/api";
+import { env } from "../../env.js";
 import type { Db } from "../db/client.js";
 import type { RunRegistryAdapter } from "../adapters/run-registry/types.js";
+import type { IssueTrackerAdapter } from "../adapters/issue-tracker/types.js";
 import type { AgentWorkflowInput } from "../workflows/agent-input.js";
 import { agentWorkflow } from "../workflows/agent.js";
 import {
@@ -8,6 +10,8 @@ import {
   getWorkflowDefinition,
   getWorkflowDefinitionVersion,
 } from "../workflow-definition/store.js";
+import { aiColumnMoveTarget } from "../lib/move-targets.js";
+import { AWAITING_APPROVAL_LABEL } from "../lib/labels.js";
 import { logger } from "../lib/logger.js";
 import type { ApprovalRow } from "./store.js";
 
@@ -45,12 +49,13 @@ export type DispatchPlanApprovedResult =
 export async function dispatchPlanApproved(input: {
   db: Db;
   runRegistry: RunRegistryAdapter;
+  issueTracker: IssueTrackerAdapter;
   approval: ApprovalRow;
   actor: { id: string; label: string };
   maxConcurrentAgents: number;
   onClaimed?: () => Promise<void>;
 }): Promise<DispatchPlanApprovedResult> {
-  const { db, runRegistry, approval, actor, maxConcurrentAgents, onClaimed } = input;
+  const { db, runRegistry, issueTracker, approval, actor, maxConcurrentAgents, onClaimed } = input;
   const ticketKey = approval.ticketKey;
 
   // Resolve the exact definition version the approved plan pins. A human already
@@ -117,6 +122,28 @@ export async function dispatchPlanApproved(input: {
 
     if (onClaimed) {
       await onClaimed();
+    }
+
+    // Move the ticket INTO the AI column before starting the run: the plan was
+    // filed from the backlog, and reconcile cancels a registered plan_approved
+    // run whose ticket is not in the AI column, so the run must never start with
+    // the ticket still parked. A move failure propagates through the catch below:
+    // the claim is released and the approval stays approved-with-null-dispatched
+    // run id, which the endpoint treats as retryable, and no run is started.
+    await issueTracker.moveTicket(ticketKey, aiColumnMoveTarget(env));
+
+    // Best-effort label removal AFTER the move: removing it while the ticket is
+    // still in the backlog fires a label-change webhook that would see the
+    // backlog status and cancel our own claim.
+    if (typeof issueTracker.updateLabels === "function") {
+      try {
+        await issueTracker.updateLabels(ticketKey, { remove: [AWAITING_APPROVAL_LABEL] });
+      } catch (err) {
+        logger.warn(
+          { ticketKey, error: (err as Error).message },
+          "plan_approved_label_remove_failed",
+        );
+      }
     }
 
     const entry: AgentWorkflowInput = {

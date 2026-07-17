@@ -50,7 +50,12 @@ export type StepsRecord = Record<string, { output: BlockOutput }>;
 /** Outcome an action block reports back to the engine. */
 export type BlockExecutionResult =
   | { kind: "next"; output: BlockOutput; port?: string }
-  | { kind: "needs_human_input"; output: BlockOutput; questions: string[] }
+  | {
+      kind: "needs_human_input";
+      output: BlockOutput;
+      questions: string[];
+      suggestedAnswers?: string[];
+    }
   | { kind: "failed"; output: BlockOutput; reason: string; phase?: string }
   | { kind: "ended"; output: BlockOutput };
 
@@ -64,7 +69,11 @@ export type BlockExecutor = (
 export interface ExecuteGraphHooks {
   onBlockStart(nodeId: string, attempt: number): Promise<void>;
   onBlockFinish(nodeId: string, state: BlockRunState): Promise<void>;
-  clarificationExit(questions: string[], nodeId: string): Promise<void>;
+  clarificationExit(
+    questions: string[],
+    nodeId: string,
+    suggestedAnswers?: string[],
+  ): Promise<void>;
   failureExit(phase: string, reason: string, nodeId: string): Promise<void>;
   terminate(
     params: {
@@ -254,7 +263,7 @@ export async function executeGraph(opts: {
       steps[id] = { output };
       const error = truncate(result.questions.join("; "));
       await hooks.onBlockFinish(id, { status: "warn", attempt, output, error });
-      await hooks.clarificationExit(result.questions, id);
+      await hooks.clarificationExit(result.questions, id, result.suggestedAnswers);
       return { outcome: "stopped", steps };
     }
 

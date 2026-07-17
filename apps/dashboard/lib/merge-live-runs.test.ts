@@ -73,3 +73,25 @@ test("an awaiting live run with no store row is preserved", () => {
   assert.equal(merged.rows.find((r) => r.id === "run_awaiting")?.status, "awaiting");
   assert.equal(merged.counts.awaiting, 1);
 });
+
+test("an awaiting live row with a real run id overrides the bare store copy", () => {
+  // The durable store row for a parked run carries status "awaiting" but no
+  // question payload; the live row (same real run id) adds the enriched question.
+  const runs = runsResponse([
+    run({ id: "run_await", status: "awaiting", ticket: "AWT-9" }),
+  ]);
+  const live = liveResponse([
+    run({
+      id: "run_await",
+      status: "awaiting",
+      ticket: "AWT-9",
+      question: "1. Which environment?",
+    }),
+  ]);
+
+  const merged = mergeLiveRuns(runs, live);
+  const row = merged.rows.find((r) => r.id === "run_await");
+  assert.equal(row?.question, "1. Which environment?", "the enriched live row wins");
+  assert.equal(merged.rows.length, 1, "no duplicate row for the same run id");
+  assert.equal(merged.counts.awaiting, 1);
+});

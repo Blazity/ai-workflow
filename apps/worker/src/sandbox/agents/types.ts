@@ -20,6 +20,7 @@ export const agentOutputSchema = z.object({
   result: z.enum(["implemented", "clarification_needed", "failed"]),
   summary: z.string().nullish(),
   questions: z.array(z.string()).nullish(),
+  suggestedAnswers: z.array(z.string()).nullish(),
   error: z.string().nullish(),
 });
 export type AgentOutput = z.infer<typeof agentOutputSchema>;
@@ -38,9 +39,17 @@ export const AGENT_SCHEMA = JSON.stringify({
         { type: "null" },
       ],
     },
+    suggestedAnswers: {
+      anyOf: [
+        { type: "array", items: { type: "string" } },
+        { type: "null" },
+      ],
+      description:
+        "Short ready-to-pick answer options for the questions. Optional.",
+    },
     error: { type: ["string", "null"] },
   },
-  required: ["result", "summary", "questions", "error"],
+  required: ["result", "summary", "questions", "suggestedAnswers", "error"],
   additionalProperties: false,
 });
 
@@ -58,9 +67,17 @@ export const GENERIC_SCHEMA = JSON.stringify({
         { type: "null" },
       ],
     },
+    suggestedAnswers: {
+      anyOf: [
+        { type: "array", items: { type: "string" } },
+        { type: "null" },
+      ],
+      description:
+        "Short ready-to-pick answer options for the questions. Optional.",
+    },
     error: { type: ["string", "null"] },
   },
-  required: ["status", "body", "questions", "error"],
+  required: ["status", "body", "questions", "suggestedAnswers", "error"],
   additionalProperties: false,
 });
 
@@ -101,12 +118,18 @@ export const REVIEW_SCHEMA = JSON.stringify({
 });
 
 export type ResearchStatus = "completed" | "clarification_needed" | "failed";
-export interface ResearchResult { status: ResearchStatus; body: string; }
+export interface ResearchResult {
+  status: ResearchStatus;
+  body: string;
+  questions?: string[];
+  suggestedAnswers?: string[];
+}
 
 export const researchOutputSchema = z.object({
   status: z.enum(["completed", "clarification_needed", "failed"]),
   plan: z.string().nullish(),
   questions: z.array(z.string()).nullish(),
+  suggestedAnswers: z.array(z.string()).nullish(),
   error: z.string().nullish(),
 });
 export type ResearchOutput = z.infer<typeof researchOutputSchema>;
@@ -122,9 +145,17 @@ export const RESEARCH_SCHEMA = JSON.stringify({
         { type: "null" },
       ],
     },
+    suggestedAnswers: {
+      anyOf: [
+        { type: "array", items: { type: "string" } },
+        { type: "null" },
+      ],
+      description:
+        "Short ready-to-pick answer options for the questions. Optional.",
+    },
     error: { type: ["string", "null"] },
   },
-  required: ["status", "plan", "questions", "error"],
+  required: ["status", "plan", "questions", "suggestedAnswers", "error"],
   additionalProperties: false,
 });
 
@@ -133,9 +164,12 @@ export function foldResearchOutput(o: ResearchOutput): ResearchResult {
   if (o.status === "completed") return { status: "completed", body: (o.plan ?? "").trim() };
   if (o.status === "clarification_needed") {
     const qs = (o.questions ?? []).filter((q) => q.trim().length > 0);
+    const suggested = (o.suggestedAnswers ?? []).filter((s) => s.trim().length > 0);
     return {
       status: "clarification_needed",
       body: qs.map((q, i) => `${i + 1}. ${q}`).join("\n"),
+      questions: qs,
+      ...(suggested.length > 0 ? { suggestedAnswers: suggested } : {}),
     };
   }
   return { status: "failed", body: (o.error ?? "").trim() };

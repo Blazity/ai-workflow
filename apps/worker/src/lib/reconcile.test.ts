@@ -97,9 +97,11 @@ describe("reconcileRuns", () => {
   });
 
 
-  it("cancels fresh claiming entries for tickets that left AI column and stops sandboxes", async () => {
+  it("cancels aged claiming entries for tickets that left AI column and stops sandboxes", async () => {
+    // Aged past the orphan grace (but not yet stale) so the cancel path runs.
+    const oneMinAgo = Date.now() - 60 * 1000;
     const registry = makeRegistry([
-      { ticketKey: "PROJ-1", runId: `claiming:${Date.now()}` },
+      { ticketKey: "PROJ-1", runId: `claiming:${oneMinAgo}` },
     ]);
     const { reconcileRuns } = await import("./reconcile.js");
 
@@ -112,33 +114,26 @@ describe("reconcileRuns", () => {
     expect(mockStopTicketSandboxes).toHaveBeenCalledWith("PROJ-1", null);
   });
 
-  it("keeps fresh claiming entry when missing from JQL snapshot but Jira still says AI", async () => {
+  it("spares a fresh claiming entry outside the AI column during the orphan grace", async () => {
+    // A resume dispatch holds the claim while the ticket is still in the backlog
+    // and moves it into AI a beat later; a cron tick in that window must not kill
+    // the claim. It is picked up on a later tick if the ticket really is orphaned.
     const registry = makeRegistry([
       { ticketKey: "PROJ-1", runId: `claiming:${Date.now()}` },
     ]);
-    const issueTracker = makeIssueTracker({
-      fetchTicket: vi.fn().mockResolvedValue({
-        id: "id-1",
-        identifier: "PROJ-1",
-        title: "x",
-        description: "",
-        acceptanceCriteria: "",
-        comments: [],
-        labels: [],
-        trackerStatus: "AI",
-      }),
-    });
     const { reconcileRuns } = await import("./reconcile.js");
 
-    const result = await reconcileRuns(new Set(), registry, issueTracker);
+    const result = await reconcileRuns(new Set(), registry);
 
     expect(result).toEqual({ cancelled: 0, cleaned: 0 });
     expect(registry.unregister).not.toHaveBeenCalled();
+    expect(mockStopTicketSandboxes).not.toHaveBeenCalled();
   });
 
-  it("keeps fresh claiming entry when missing from JQL snapshot but Jira still says AI", async () => {
+  it("keeps aged claiming entry when missing from JQL snapshot but Jira still says AI", async () => {
+    const oneMinAgo = Date.now() - 60 * 1000;
     const registry = makeRegistry([
-      { ticketKey: "PROJ-1", runId: `claiming:${Date.now()}` },
+      { ticketKey: "PROJ-1", runId: `claiming:${oneMinAgo}` },
     ]);
     const issueTracker = makeIssueTracker({
       fetchTicket: vi.fn().mockResolvedValue({

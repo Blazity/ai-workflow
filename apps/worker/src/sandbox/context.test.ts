@@ -535,3 +535,166 @@ describe("assembleFixContext", () => {
     expect(result).not.toContain("## Fix Instructions");
   });
 });
+
+describe("clarifications section", () => {
+  const baseTicket = {
+    identifier: "TEST-42",
+    title: "Ambiguous ticket",
+    description: "d",
+    acceptanceCriteria: "a",
+    comments: [],
+  };
+
+  it("renders Q&A rounds in order with numbered questions and answer metadata", () => {
+    const result = assembleResearchPlanContext({
+      ticket: {
+        ...baseTicket,
+        clarifications: [
+          {
+            questions: ["Which database?", "Which auth provider?"],
+            answer: "Postgres and Auth0",
+            answeredBy: "alice",
+            answeredAt: "2026-07-16",
+          },
+          { questions: ["Deploy target?"], answer: "Vercel", answeredBy: "bob" },
+        ],
+      },
+      prompt: "prompt",
+      branchName: "blazebot/test-42",
+    });
+
+    expect(result).toContain("## Clarifications (Q&A)");
+    expect(result).toContain("1. Which database?");
+    expect(result).toContain("2. Which auth provider?");
+    expect(result).toContain("Answer (by alice, 2026-07-16): Postgres and Auth0");
+    expect(result).toContain("Answer (by bob): Vercel");
+
+    // Rounds appear in order, placed between Comments and Branch.
+    expect(result.indexOf("Postgres and Auth0")).toBeLessThan(result.indexOf("Vercel"));
+    const clarIdx = result.indexOf("## Clarifications (Q&A)");
+    expect(clarIdx).toBeGreaterThan(result.indexOf("## Comments"));
+    expect(clarIdx).toBeLessThan(result.indexOf("## Branch"));
+  });
+
+  it("renders the section in every ticket-based context", () => {
+    const clarifications = [{ questions: ["Q?"], answer: "A", answeredBy: "carol" }];
+    const research = assembleResearchPlanContext({
+      ticket: { ...baseTicket, clarifications },
+      prompt: "p",
+      branchName: "b",
+    });
+    const impl = assembleImplementationContext({
+      ticket: { ...baseTicket, clarifications },
+      prompt: "p",
+      researchPlanMarkdown: "plan",
+    });
+    const review = assembleReviewContext({
+      ticket: { ...baseTicket, clarifications },
+      prompt: "p",
+      researchPlanMarkdown: "plan",
+    });
+    const fix = assembleFixContext({
+      ticket: { ...baseTicket, clarifications },
+      prComments: [],
+      failedChecks: [],
+      repositories: [],
+    });
+
+    for (const out of [research, impl, review, fix]) {
+      expect(out).toContain("## Clarifications (Q&A)");
+      expect(out).toContain("Answer (by carol): A");
+    }
+  });
+
+  it("produces no section when clarifications are absent or empty", () => {
+    const absent = assembleResearchPlanContext({
+      ticket: baseTicket,
+      prompt: "p",
+      branchName: "b",
+    });
+    expect(absent).not.toContain("## Clarifications (Q&A)");
+
+    const empty = assembleImplementationContext({
+      ticket: { ...baseTicket, clarifications: [] },
+      prompt: "p",
+      researchPlanMarkdown: "plan",
+    });
+    expect(empty).not.toContain("## Clarifications (Q&A)");
+  });
+
+  it("keeps the newest rounds within budget, dropping the oldest first with a note", () => {
+    // Three ~7k-char rounds: two fit under the 16000 cap, the oldest does not.
+    const round = (n: number) => ({
+      questions: [`Round ${n} question?`],
+      answer: "y".repeat(7000),
+      answeredBy: `user${n}`,
+    });
+    const result = assembleResearchPlanContext({
+      ticket: { ...baseTicket, clarifications: [round(1), round(2), round(3)] },
+      prompt: "p",
+      branchName: "b",
+    });
+
+    expect(result).toContain("## Clarifications (Q&A)");
+    expect(result).toContain("[Older clarification rounds omitted to fit the prompt budget.]");
+    // Newest rounds always present, oldest dropped first.
+    expect(result).toContain("Round 3 question?");
+    expect(result).toContain("Round 2 question?");
+    expect(result).not.toContain("Round 1 question?");
+  });
+
+  it("emits no truncation note when every round fits", () => {
+    const result = assembleResearchPlanContext({
+      ticket: {
+        ...baseTicket,
+        clarifications: [
+          { questions: ["Q1?"], answer: "A1", answeredBy: "a" },
+          { questions: ["Q2?"], answer: "A2", answeredBy: "b" },
+        ],
+      },
+      prompt: "p",
+      branchName: "b",
+    });
+
+    expect(result).toContain("Q1?");
+    expect(result).toContain("Q2?");
+    expect(result).not.toContain("[Older clarification rounds omitted to fit the prompt budget.]");
+  });
+
+  it("hard-truncates a single oversized round rather than dropping the newest", () => {
+    const result = assembleResearchPlanContext({
+      ticket: {
+        ...baseTicket,
+        clarifications: [{ questions: ["Q?"], answer: "x".repeat(30000), answeredBy: "dan" }],
+      },
+      prompt: "p",
+      branchName: "b",
+    });
+
+    expect(result).toContain("## Clarifications (Q&A)");
+    expect(result).toContain("[Older clarification rounds omitted to fit the prompt budget.]");
+    // The newest round's answer is still present (partially), never dropped.
+    expect(result).toContain("Answer (by dan): xxx");
+    // The oversized answer must not survive in full.
+    expect(result).not.toContain("x".repeat(30000));
+  });
+
+  it("keeps the answer when the newest round's questions alone exceed the budget", () => {
+    const result = assembleResearchPlanContext({
+      ticket: {
+        ...baseTicket,
+        clarifications: [
+          { questions: ["q".repeat(30000)], answer: "USE POSTGRES", answeredBy: "dan" },
+        ],
+      },
+      prompt: "p",
+      branchName: "b",
+    });
+
+    // The answer survives in full even though the questions ate the budget.
+    expect(result).toContain("Answer (by dan): USE POSTGRES");
+    // The questions are truncated, not the answer.
+    expect(result).toContain("### Round 1");
+    expect(result).not.toContain("q".repeat(30000));
+  });
+});

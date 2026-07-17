@@ -21,6 +21,7 @@ const genericOutputSchema = z.object({
   status: z.enum(["ok", "needs_input", "failed"]),
   body: z.string(),
   questions: z.array(z.string()).nullish(),
+  suggestedAnswers: z.array(z.string()).nullish(),
   error: z.string().nullish(),
 });
 
@@ -212,10 +213,18 @@ export const execute: BlockExecuteFn = async (block, _steps, ctx): Promise<Block
     if (parsed.data.status === "needs_input") {
       const listed = (parsed.data.questions ?? []).filter((q) => q.trim().length > 0);
       const questions = listed.length > 0 ? listed : [parsed.data.body];
+      const suggestedAnswers = (parsed.data.suggestedAnswers ?? []).filter(
+        (s) => s.trim().length > 0,
+      );
       return {
         kind: "needs_human_input",
-        output: { status: "needs_human_input", questions },
+        output: {
+          status: "needs_human_input",
+          questions,
+          ...(suggestedAnswers.length > 0 ? { suggestedAnswers } : {}),
+        },
         questions,
+        ...(suggestedAnswers.length > 0 ? { suggestedAnswers } : {}),
       };
     }
     if (parsed.data.status === "failed") {

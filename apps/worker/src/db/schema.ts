@@ -318,3 +318,4 @@ export const workflowDefinitionTriggers = pgTable("workflow_definition_triggers"
 export * from "./auth-schema.js";
 export * from "./email-delivery-schema.js";
 export * from "./approvals-schema.js";
+export * from "./clarifications-schema.js";

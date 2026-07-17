@@ -3,6 +3,7 @@ import {
   createTestTicket,
   moveTicketToColumn,
   getTicketStatus,
+  getTicketLabels,
   getTicketComments,
   deleteTicket,
 } from "../helpers/jira.js";
@@ -17,8 +18,9 @@ import { e2eEnv } from "../env.js";
  * US-5: Unclear ticket triggers clarification
  *
  * When a ticket is too vague/subjective to implement, the agent should
- * return status: "clarification_needed", post numbered questions as a Jira
- * comment, move the ticket to Backlog, and clean up registry/sandbox.
+ * return status: "clarification_needed", park the run as awaiting (questions
+ * live in the dashboard, not in Jira comments), label the ticket
+ * needs-clarification, move it to Backlog, and clean up registry/sandbox.
  */
 describe("US-05: Unclear ticket triggers clarification", () => {
   let ticketKey: string;
@@ -66,15 +68,19 @@ describe("US-05: Unclear ticket triggers clarification", () => {
       },
     );
 
-    // 4. A Jira comment with numbered questions must have been posted.
-    //    The workflow formats questions as "1. ...\n2. ..." via
-    //    postClarificationAndMoveBack.
+    // 4. Questions are no longer posted to Jira: the run parks with the
+    //    needs-clarification label and the questions live in the dashboard.
+    //    The only comment the workflow posts is the one-time pickup link
+    //    to the dashboard ticket view.
     const comments = await getTicketComments(ticketKey);
-    const clarificationComment = comments.find((c) =>
-      /^\s*1\.\s/m.test(c.body),
+    const questionComment = comments.find((c) => /^\s*1\.\s/m.test(c.body));
+    expect(questionComment).toBeUndefined();
+    const pickupComment = comments.find((c) =>
+      c.body.includes(`/ticket/${ticketKey}`),
     );
-    expect(clarificationComment).toBeDefined();
-    expect(clarificationComment!.body).toMatch(/^\s*1\.\s/m);
+    expect(pickupComment).toBeDefined();
+    const labels = await getTicketLabels(ticketKey);
+    expect(labels).toContain("needs-clarification");
 
     // 5. No PR was created — clarification halts before implementation
     const pr = await findPR(branchName);

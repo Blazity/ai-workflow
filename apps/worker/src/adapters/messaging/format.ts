@@ -73,9 +73,13 @@ export function formatTicketEvent(
       return `${head} started`;
 
     case "needs_clarification": {
-      const tail = event.commentUrl
-        ? ` — <${event.commentUrl}|view questions>`
-        : "";
+      // Prefer the dashboard link (styled like plan_approval_requested's tail),
+      // fall back to a Jira comment link, then plain.
+      const tail = event.dashboardUrl
+        ? ` (<${event.dashboardUrl}|answer in dashboard>)`
+        : event.commentUrl
+          ? ` (<${event.commentUrl}|view questions>)`
+          : "";
       return appendUsage(
         `${head} needs clarification${tail}`,
         event.usageReport,

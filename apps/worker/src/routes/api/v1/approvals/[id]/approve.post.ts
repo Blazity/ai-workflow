@@ -68,6 +68,7 @@ export default defineEventHandler(async (event): Promise<ApprovalDecisionRespons
     const result = await dispatchPlanApproved({
       db,
       runRegistry: adapters.runRegistry,
+      issueTracker: adapters.issueTracker,
       approval: row,
       actor: approver,
       maxConcurrentAgents: env.MAX_CONCURRENT_AGENTS,

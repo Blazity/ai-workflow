@@ -213,6 +213,15 @@ async function reconcileInflightClaim(
       logger.info({ ticketKey, runId }, "reconcile_kept_pr_trigger_inflight_claim");
       return { cancelled: 0, cleaned: 0 };
     }
+    // Grace for a freshly claimed ticket: a resume dispatch (clarification /
+    // plan_approved) claims the ticket while it is still in the backlog and only
+    // then moves it into the AI column, so a cron tick landing in that window
+    // would see the claim outside the AI set and kill our own claim. The stale
+    // sweep above still reaps a genuinely crashed claim once STALE_CLAIM_MS passes.
+    if (claimAge < ORPHAN_GRACE_MS) {
+      logger.info({ ticketKey, runId }, "reconcile_skipped_fresh_inflight_claim_in_grace");
+      return { cancelled: 0, cleaned: 0 };
+    }
     const leftAiColumn = await verifyTicketLeftAiColumn(ticketKey, issueTracker);
     if (!leftAiColumn) return { cancelled: 0, cleaned: 0 };
     const sandboxId = await runRegistry

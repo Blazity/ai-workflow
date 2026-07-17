@@ -3,9 +3,15 @@ export type TicketEvent =
   | {
       kind: "needs_clarification";
       /**
-       * Deep link to the posted Jira comment (e.g. `?focusedCommentId=...`).
-       * When present, the Slack message links directly to the questions;
-       * when absent, the formatter falls back to the plain ticket link.
+       * Deep link to the dashboard ticket view where a human answers the
+       * questions. Preferred over commentUrl when present.
+       */
+      dashboardUrl?: string;
+      /**
+       * Deep link to a posted Jira comment (e.g. `?focusedCommentId=...`).
+       * Retained for back-compat; the workflow no longer posts question
+       * comments, so this is no longer sent. Falls back to the plain ticket
+       * link when neither url is present.
        */
       commentUrl?: string;
       usageReport?: string;

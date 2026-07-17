@@ -269,14 +269,23 @@ function AwaitingInputPanel({
                 </p>
               )}
               <div className="flex flex-wrap gap-1.5 items-center">
+                {/* Read-only preview of the suggestions: picking one happens in
+                    the trace screen's answer form, so these are not buttons. */}
                 {r.suggestedAnswers?.map((a, j) => (
-                  <button
+                  <span
                     key={j}
-                    className="appearance-none border border-neutral-200 bg-panel px-2.5 py-[5px] rounded-[3px] cursor-pointer font-body text-xs text-neutral-900 transition-all duration-100 hover:bg-coal hover:text-white"
+                    className="border border-neutral-200 bg-panel px-2.5 py-[5px] rounded-[3px] font-body text-xs text-neutral-700"
                   >
                     {a}
-                  </button>
+                  </span>
                 ))}
+                <button
+                  type="button"
+                  onClick={() => onOpenRun(r)}
+                  className="appearance-none border border-neutral-900 bg-neutral-900 px-3 py-[6px] rounded-[3px] cursor-pointer font-mono text-[10px] font-medium uppercase tracking-[0.04em] text-white transition-all duration-100 hover:bg-neutral-800"
+                >
+                  Answer →
+                </button>
               </div>
             </div>
           ))}

@@ -10,6 +10,12 @@ interface TicketData {
   description: string;
   acceptanceCriteria: string;
   comments: Array<{ author: string; body: string; createdAt?: string }>;
+  clarifications?: Array<{
+    questions: string[];
+    answer: string;
+    answeredBy?: string;
+    answeredAt?: string;
+  }>;
 }
 
 export type PreSandboxPromptTarget = "research" | "implementation" | "review";
@@ -62,6 +68,7 @@ export function assembleResearchPlanContext(input: ResearchPlanContextInput): st
   const preSandboxSection = renderPreSandboxAdditions(preSandboxAdditions);
   const selectedRepositoriesSection = renderSelectedRepositories(selectedRepositories);
   const repositoryContextSection = renderRepositoryContexts(repositoryContexts);
+  const clarificationsSection = renderClarificationsSection(ticket.clarifications);
 
   let md = `# Requirements
 
@@ -84,7 +91,7 @@ ${ticket.acceptanceCriteria || "None specified."}
 ## Comments
 
 ${formatComments(ticket.comments)}
-
+${clarificationsSection}
 ## Branch
 
 ${branchName}
@@ -103,6 +110,7 @@ export function assembleImplementationContext(input: ImplementationContextInput)
   const attachmentsSection = renderAttachmentsSection(attachments);
   const preSandboxSection = renderPreSandboxAdditions(preSandboxAdditions);
   const selectedRepositoriesSection = renderSelectedRepositories(selectedRepositories);
+  const clarificationsSection = renderClarificationsSection(ticket.clarifications);
   return `# Requirements
 
 ## Ticket ID
@@ -116,7 +124,7 @@ ${attachmentsSection}
 ## Acceptance Criteria
 
 ${ticket.acceptanceCriteria || "None specified."}
-
+${clarificationsSection}
 ## Research & Plan
 
 ${researchPlanMarkdown}
@@ -134,6 +142,7 @@ export function assembleReviewContext(input: ReviewContextInput): string {
   const attachmentsSection = renderAttachmentsSection(attachments);
   const preSandboxSection = renderPreSandboxAdditions(preSandboxAdditions);
   const selectedRepositoriesSection = renderSelectedRepositories(selectedRepositories);
+  const clarificationsSection = renderClarificationsSection(ticket.clarifications);
   return `# Requirements
 
 ## Ticket ID
@@ -147,7 +156,7 @@ ${attachmentsSection}
 ## Acceptance Criteria
 
 ${ticket.acceptanceCriteria || "None specified."}
-
+${clarificationsSection}
 ## Research & Plan
 
 ${researchPlanMarkdown}
@@ -184,6 +193,7 @@ export function assembleFixContext(input: FixContextInput): string {
   const conflictSection = conflictNotes ? `\n## Merge Conflicts\n\n${conflictNotes}\n` : "";
   const selectedRepositoriesSection = renderSelectedRepositories(repositories);
   const instructionsSection = instructions ? `\n## Fix Instructions\n\n${instructions}\n` : "";
+  const clarificationsSection = renderClarificationsSection(ticket.clarifications);
 
   return `# Fix Requirements
 
@@ -198,7 +208,7 @@ ${ticket.title}
 ## Acceptance Criteria
 
 ${ticket.acceptanceCriteria || "None specified."}
-${prFeedbackSection}${failedChecksSection}${conflictSection}${selectedRepositoriesSection}${instructionsSection}`;
+${clarificationsSection}${prFeedbackSection}${failedChecksSection}${conflictSection}${selectedRepositoriesSection}${instructionsSection}`;
 }
 
 function formatComments(
@@ -208,6 +218,71 @@ function formatComments(
   return comments
     .map((c) => `${c.author}: ${c.body}`)
     .join("\n\n");
+}
+
+// Prompt-budget protection: a long clarification history must not crowd out the
+// rest of the prompt, so the whole rendered section is capped and truncated.
+const CLARIFICATIONS_MAX_LENGTH = 16000;
+const CLARIFICATIONS_TRUNCATION_NOTE =
+  "[Older clarification rounds omitted to fit the prompt budget.]\n\n";
+
+function renderClarificationsSection(
+  clarifications: TicketData["clarifications"],
+): string {
+  if (!clarifications || clarifications.length === 0) return "";
+
+  // Kept as head/answer pairs so the hard-truncation fallback below can trim
+  // the questions and the answer independently.
+  const roundParts = clarifications.map((round, index) => {
+    const numberedQuestions = round.questions
+      .map((q, i) => `${i + 1}. ${q}`)
+      .join("\n");
+    const meta = [
+      round.answeredBy ? `by ${round.answeredBy}` : "",
+      round.answeredAt ?? "",
+    ]
+      .filter(Boolean)
+      .join(", ");
+    const answerLabel = meta ? `Answer (${meta})` : "Answer";
+    return {
+      head: `### Round ${index + 1}\n\n${numberedQuestions}`,
+      answer: `${answerLabel}: ${round.answer}`,
+    };
+  });
+  const rounds = roundParts.map((p) => `${p.head}\n\n${p.answer}`);
+
+  const header = "\n## Clarifications (Q&A)\n\n";
+  const footer = "\n";
+  const separator = "\n\n";
+
+  const fullSection = `${header}${rounds.join(separator)}${footer}`;
+  if (fullSection.length <= CLARIFICATIONS_MAX_LENGTH) return fullSection;
+
+  // Over budget: keep WHOLE rounds newest-first so the freshest answer (the one
+  // a resume exists to consume) always survives; the oldest rounds are dropped
+  // first. Reserve room for the note that flags the omission.
+  const bodyBudget =
+    CLARIFICATIONS_MAX_LENGTH - header.length - footer.length - CLARIFICATIONS_TRUNCATION_NOTE.length;
+  const kept: string[] = [];
+  let used = 0;
+  for (let i = rounds.length - 1; i >= 0; i--) {
+    const cost = rounds[i]!.length + (kept.length > 0 ? separator.length : 0);
+    if (used + cost > bodyBudget) break;
+    kept.unshift(rounds[i]!);
+    used += cost;
+  }
+  if (kept.length === 0) {
+    // Even the newest round alone exceeds the budget: truncate its questions
+    // and answer separately, the answer first. The answer is what a resume run
+    // exists to consume, so it must survive even when the questions alone
+    // would eat the whole budget; the questions get whatever room remains.
+    const newest = roundParts[roundParts.length - 1]!;
+    const answerPart = newest.answer.slice(0, Math.max(0, bodyBudget));
+    const headBudget = bodyBudget - answerPart.length - separator.length;
+    const headPart = headBudget > 0 ? newest.head.slice(0, headBudget) : "";
+    kept.push(headPart ? `${headPart}${separator}${answerPart}` : answerPart);
+  }
+  return `${header}${CLARIFICATIONS_TRUNCATION_NOTE}${kept.join(separator)}${footer}`;
 }
 
 function formatPRComments(comments: PRComment[]): string {
