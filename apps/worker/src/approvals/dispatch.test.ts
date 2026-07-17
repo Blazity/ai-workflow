@@ -15,10 +15,14 @@ vi.mock("../workflows/agent.js", () => ({ agentWorkflow: "agentWorkflow_sentinel
 const mockGetDefinition = vi.fn();
 const mockGetVersion = vi.fn();
 const mockGetDeployedVersion = vi.fn();
+const mockMoveTicketWithIntent = vi.fn();
 vi.mock("../workflow-definition/store.js", () => ({
   getWorkflowDefinition: (...args: any[]) => mockGetDefinition(...args),
   getWorkflowDefinitionVersion: (...args: any[]) => mockGetVersion(...args),
   getDeployedWorkflowDefinitionVersion: (...args: any[]) => mockGetDeployedVersion(...args),
+}));
+vi.mock("../lib/ticket-transition.js", () => ({
+  moveTicketWithIntent: (...args: any[]) => mockMoveTicketWithIntent(...args),
 }));
 
 const { dispatchPlanApproved } = await import("./dispatch.js");
@@ -124,10 +128,12 @@ describe("dispatchPlanApproved owner reservation", () => {
     mockGetDefinition.mockReset();
     mockGetVersion.mockReset();
     mockGetDeployedVersion.mockReset();
+    mockMoveTicketWithIntent.mockReset();
     mockStart.mockResolvedValue({ runId: "run-dispatched" });
     mockGetDefinition.mockResolvedValue({ id: 7, archivedAt: null, enabled: false });
     mockGetVersion.mockResolvedValue({ definitionId: 7, version: 4 });
     mockGetDeployedVersion.mockResolvedValue({ definitionId: 7, version: 8 });
+    mockMoveTicketWithIntent.mockResolvedValue(undefined);
   });
 
   it("returns definition_gone before reservation for an archived definition", async () => {
@@ -158,6 +164,18 @@ describe("dispatchPlanApproved owner reservation", () => {
         definitionVersion: 4,
       }),
     ]);
+    const reservation = vi.mocked(registry.reserve).mock.calls[0]![0];
+    expect(mockMoveTicketWithIntent).toHaveBeenCalledWith({
+      db,
+      issueTracker: expect.anything(),
+      ticketKey: "AWT-1",
+      target: "AI",
+      owner: {
+        subjectKey: "ticket:jira:AWT-1",
+        ownerToken: reservation.ownerToken,
+        runId: null,
+      },
+    });
   });
 
   it("falls back to the deployed version for a legacy null-version approval", async () => {
@@ -193,9 +211,9 @@ describe("dispatchPlanApproved owner reservation", () => {
   it("runs decision, move, label, and start under one retained reservation", async () => {
     const order: string[] = [];
     const issueTracker = makeIssueTracker({
-      moveTicket: vi.fn(async () => { order.push("move"); }),
       updateLabels: vi.fn(async () => { order.push("label"); }),
     });
+    mockMoveTicketWithIntent.mockImplementation(async () => { order.push("move"); });
     mockStart.mockImplementation(async () => {
       order.push("start");
       return { runId: "run-dispatched" };
@@ -233,9 +251,8 @@ describe("dispatchPlanApproved owner reservation", () => {
 
   it("propagates a move failure and starts no candidate", async () => {
     const registry = makeRegistry();
-    await expect(
-      dispatch(registry, makeIssueTracker({ moveTicket: vi.fn().mockRejectedValue(new Error("jira move failed")) })),
-    ).rejects.toThrow("jira move failed");
+    mockMoveTicketWithIntent.mockRejectedValue(new Error("jira move failed"));
+    await expect(dispatch(registry)).rejects.toThrow("jira move failed");
     expect(mockStart).not.toHaveBeenCalled();
   });
 });

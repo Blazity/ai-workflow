@@ -1,7 +1,6 @@
-import { and, eq, gt, or, sql } from "drizzle-orm";
+import { sql } from "drizzle-orm";
 import type { IssueTrackerMoveTarget } from "../adapters/issue-tracker/types.js";
 import type { Db } from "../db/client.js";
-import { activeRuns, ticketTransitionIntents } from "../db/schema.js";
 
 const DEFAULT_INTENT_TTL_MS = 5 * 60 * 1000;
 
@@ -9,7 +8,7 @@ interface RecordIntentInput {
   ticketKey: string;
   subjectKey: string;
   ownerToken: string;
-  runId: string;
+  runId: string | null;
   target: IssueTrackerMoveTarget;
   ttlMs?: number;
 }
@@ -19,37 +18,40 @@ export async function recordTicketTransitionIntent(
   input: RecordIntentInput,
 ): Promise<number> {
   await deleteExpiredIntents(db);
-  const owner = await db
-    .select({ runId: activeRuns.runId })
-    .from(activeRuns)
-    .where(
-      and(
-        eq(activeRuns.subjectKey, input.subjectKey),
-        eq(activeRuns.ownerToken, input.ownerToken),
-        eq(activeRuns.state, "bound"),
-        eq(activeRuns.runId, input.runId),
-      ),
-    )
-    .limit(1);
-  if (!owner[0]) {
-    throw new Error("Cannot record ticket transition intent without the bound run owner.");
-  }
-
   const target = normalizeTarget(input.target);
-  const rows = await db
-    .insert(ticketTransitionIntents)
-    .values({
-      ticketKey: input.ticketKey,
-      subjectKey: input.subjectKey,
-      ownerToken: input.ownerToken,
-      runId: input.runId,
-      targetStatusId: target.statusId,
-      targetStatusName: target.name,
-      expiresAt: new Date(Date.now() + (input.ttlMs ?? DEFAULT_INTENT_TTL_MS)),
-    })
-    .returning({ id: ticketTransitionIntents.id });
-  if (!rows[0]) throw new Error("Ticket transition intent was not persisted.");
-  return rows[0].id;
+  const ownerState =
+    input.runId === null
+      ? sql`state = 'reserved' AND run_id IS NULL`
+      : sql`state = 'bound' AND run_id = ${input.runId}`;
+  const result = await db.execute(sql`
+    INSERT INTO ticket_transition_intents (
+      ticket_key,
+      subject_key,
+      owner_token,
+      run_id,
+      target_status_id,
+      target_status_name,
+      expires_at
+    )
+    SELECT
+      ${input.ticketKey},
+      ${input.subjectKey},
+      ${input.ownerToken},
+      ${input.runId},
+      ${target.statusId},
+      ${target.name},
+      ${new Date(Date.now() + (input.ttlMs ?? DEFAULT_INTENT_TTL_MS))}
+    FROM active_runs
+    WHERE subject_key = ${input.subjectKey}
+      AND owner_token = ${input.ownerToken}
+      AND ${ownerState}
+    RETURNING id
+  `);
+  const row = rawRows<{ id: number }>(result)[0];
+  if (!row) {
+    throw new Error("Cannot record ticket transition intent without the exact current owner.");
+  }
+  return row.id;
 }
 
 export async function consumeTicketTransitionIntent(
@@ -62,51 +64,38 @@ export async function consumeTicketTransitionIntent(
   const statusName = status.name?.trim() ?? "";
   if (!statusId && !statusName) return false;
 
-  const matches = [];
-  if (statusId) matches.push(eq(ticketTransitionIntents.targetStatusId, statusId));
-  if (statusName) {
-    matches.push(
-      sql`lower(${ticketTransitionIntents.targetStatusName}) = lower(${statusName})`,
-    );
-  }
-
-  const rows = await db
-    .select({ id: ticketTransitionIntents.id })
-    .from(ticketTransitionIntents)
-    .innerJoin(
-      activeRuns,
-      and(
-        eq(activeRuns.subjectKey, ticketTransitionIntents.subjectKey),
-        eq(activeRuns.ownerToken, ticketTransitionIntents.ownerToken),
-        eq(activeRuns.runId, ticketTransitionIntents.runId),
-        eq(activeRuns.state, "bound"),
-      ),
+  const match = statusId && statusName
+    ? sql`(
+        (target_status_id IS NOT NULL AND target_status_id = ${statusId})
+        OR (target_status_id IS NULL AND lower(target_status_name) = lower(${statusName}))
+      )`
+    : statusId
+      ? sql`target_status_id = ${statusId}`
+      : sql`lower(target_status_name) = lower(${statusName})`;
+  const result = await db.execute(sql`
+    WITH candidate AS (
+      SELECT id
+      FROM ticket_transition_intents
+      WHERE ticket_key = ${ticketKey}
+        AND expires_at > now()
+        AND consumed_at IS NULL
+        AND ${match}
+      ORDER BY created_at ASC, id ASC
+      LIMIT 1
+      FOR UPDATE SKIP LOCKED
     )
-    .where(
-      and(
-        eq(ticketTransitionIntents.ticketKey, ticketKey),
-        gt(ticketTransitionIntents.expiresAt, new Date()),
-        or(...matches),
-      ),
-    )
-    .limit(1);
-  if (!rows[0]) return false;
-
-  await db
-    .update(ticketTransitionIntents)
-    .set({ consumedAt: sql`coalesce(${ticketTransitionIntents.consumedAt}, now())` })
-    .where(eq(ticketTransitionIntents.id, rows[0].id));
-  return true;
-}
-
-export async function discardTicketTransitionIntent(db: Db, id: number): Promise<void> {
-  await db.delete(ticketTransitionIntents).where(eq(ticketTransitionIntents.id, id));
+    UPDATE ticket_transition_intents AS intent
+    SET consumed_at = now()
+    FROM candidate
+    WHERE intent.id = candidate.id
+      AND intent.consumed_at IS NULL
+    RETURNING intent.id
+  `);
+  return rawRows<{ id: number }>(result).length > 0;
 }
 
 async function deleteExpiredIntents(db: Db): Promise<void> {
-  await db
-    .delete(ticketTransitionIntents)
-    .where(sql`${ticketTransitionIntents.expiresAt} <= now()`);
+  await db.execute(sql`DELETE FROM ticket_transition_intents WHERE expires_at <= now()`);
 }
 
 function normalizeTarget(target: IssueTrackerMoveTarget): {
@@ -115,4 +104,8 @@ function normalizeTarget(target: IssueTrackerMoveTarget): {
 } {
   if (typeof target === "string") return { name: target, statusId: null };
   return { name: target.name, statusId: target.statusId ?? null };
+}
+
+function rawRows<T>(result: unknown): T[] {
+  return ((result as { rows?: T[] }).rows ?? []) as T[];
 }

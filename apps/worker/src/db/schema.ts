@@ -140,7 +140,9 @@ export const ticketTransitionIntents = pgTable(
     ticketKey: text("ticket_key").notNull(),
     subjectKey: text("subject_key").notNull(),
     ownerToken: text("owner_token").notNull(),
-    runId: text("run_id").notNull(),
+    /** Null while a pre-start reservation owns the transition. Intentionally
+     * no active_runs FK: a provider echo can arrive after release or handoff. */
+    runId: text("run_id"),
     targetStatusId: text("target_status_id"),
     targetStatusName: text("target_status_name").notNull(),
     expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
@@ -148,11 +150,6 @@ export const ticketTransitionIntents = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
-    foreignKey({
-      columns: [t.subjectKey, t.ownerToken],
-      foreignColumns: [activeRuns.subjectKey, activeRuns.ownerToken],
-      name: "ticket_transition_intents_subject_owner_fk",
-    }).onDelete("cascade"),
     index("ticket_transition_intents_ticket_expiry_idx").on(t.ticketKey, t.expiresAt),
   ],
 );

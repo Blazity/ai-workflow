@@ -33,6 +33,8 @@ import {
   type AgentWorkflowInput,
   type WorkflowDefinitionVersionPin,
 } from "./agent-input.js";
+import type { TicketTransitionOwner } from "../lib/ticket-transition.js";
+import { moveTicketWithIntentStep } from "./ticket-transition-step.js";
 import type { BlockExecuteFn, EngineCtx } from "./blocks/types.js";
 import type { ClarificationRuntimeContext } from "../db/clarifications-schema.js";
 import type { HumanDecision } from "../lib/human-decisions-memory.js";
@@ -637,57 +639,6 @@ async function postPrLinksComment(
 }
 postPrLinksComment.maxRetries = 0;
 
-async function moveTicket(ticketId: string, target: IssueTrackerMoveTarget) {
-  "use step";
-  const { createStepAdapters } = await import("../lib/step-adapters.js");
-  const { issueTracker } = createStepAdapters();
-  await issueTracker.moveTicket(ticketId, target);
-}
-
-export async function moveTicketWithIntentStep(
-  ticketId: string,
-  target: IssueTrackerMoveTarget,
-  owner: { subjectKey: string; ownerToken: string; runId: string },
-): Promise<void> {
-  "use step";
-  const { getDb } = await import("../db/client.js");
-  const { createStepAdapters } = await import("../lib/step-adapters.js");
-  const {
-    discardTicketTransitionIntent,
-    recordTicketTransitionIntent,
-  } = await import("../lib/ticket-transition-intent-store.js");
-  const db = getDb();
-  const intentId = await recordTicketTransitionIntent(db, {
-    ticketKey: ticketId,
-    ...owner,
-    target,
-  });
-  const issueTracker = createStepAdapters().issueTracker;
-  try {
-    const current = await issueTracker.fetchTicket(ticketId);
-    if (!ticketAlreadyAtTarget(current, target)) await issueTracker.moveTicket(ticketId, target);
-  } catch (error) {
-    try {
-      const current = await issueTracker.fetchTicket(ticketId);
-      if (ticketAlreadyAtTarget(current, target)) return;
-    } catch {
-      // Preserve the original provider failure after best-effort reconciliation.
-    }
-    await discardTicketTransitionIntent(db, intentId).catch(() => undefined);
-    throw error;
-  }
-}
-
-function ticketAlreadyAtTarget(
-  ticket: { trackerStatus: string; trackerStatusId?: string },
-  target: IssueTrackerMoveTarget,
-): boolean {
-  return typeof target === "string"
-    ? ticket.trackerStatus.toLowerCase() === target.toLowerCase()
-    : (target.statusId !== undefined && ticket.trackerStatusId === target.statusId) ||
-        ticket.trackerStatus.toLowerCase() === target.name.toLowerCase();
-}
-
 async function postTicketComment(ticketId: string, comment: string): Promise<void> {
   "use step";
   const { createStepAdapters } = await import("../lib/step-adapters.js");
@@ -720,6 +671,7 @@ async function parkForClarificationStep(
   ticketId: string,
   backlogTarget: IssueTrackerMoveTarget,
   clarificationRequestId: string,
+  owner: TicketTransitionOwner,
 ): Promise<boolean> {
   "use step";
   const { getDb } = await import("../db/client.js");
@@ -733,7 +685,8 @@ async function parkForClarificationStep(
   // otherwise yank the ticket back and get the resume run cancelled. Return
   // false so the caller sends no notify and records the run as done, not
   // awaiting.
-  const row = await getClarification(getDb(), clarificationRequestId);
+  const db = getDb();
+  const row = await getClarification(db, clarificationRequestId);
   if (!row || row.status !== "pending") {
     return false;
   }
@@ -755,7 +708,14 @@ async function parkForClarificationStep(
       );
     }
   }
-  await issueTracker.moveTicket(ticketId, backlogTarget);
+  const { moveTicketWithIntent } = await import("../lib/ticket-transition.js");
+  await moveTicketWithIntent({
+    db,
+    issueTracker,
+    ticketKey: ticketId,
+    target: backlogTarget,
+    owner,
+  });
   return true;
 }
 
@@ -1136,6 +1096,11 @@ async function agentWorkflowBody(
     resumeCheckpoint?.runtimeContext,
   );
   const ticketId = entry.ticketKey ?? entry.subjectKey;
+  const transitionOwner: TicketTransitionOwner = {
+    subjectKey: entry.subjectKey,
+    ownerToken: entry.ownerToken,
+    runId: workflowRunId,
+  };
 
   const { resolveWorkflowTicketStep } = await import("./workflow-ticket.js");
   const ticket = await resolveWorkflowTicketStep(entry, env.COLUMN_AI);
@@ -1674,6 +1639,7 @@ async function agentWorkflowBody(
             ticketId,
             backlogMoveTarget(),
             clarificationId,
+            transitionOwner,
           ).catch((error) => {
             console.error(
               `Clarification ticket parking failed for ${clarificationId}:`,
@@ -1721,7 +1687,8 @@ async function agentWorkflowBody(
         const { handleWorkflowFailureExit } = await import("./workflow-failure-exit.js");
         await handleWorkflowFailureExit(entry.ticketKey ?? undefined, {
           logFailure: () => logPhaseFailure(entry.subjectKey, phase, reason),
-          moveTicket: () => moveTicket(ticketId, backlogMoveTarget()),
+          moveTicket: () =>
+            moveTicketWithIntentStep(ticketId, backlogMoveTarget(), transitionOwner),
           notifyTicket: () => notifyTicket(ticket.identifier, {
             kind: "failed",
             ...(knownPhase ? { phase: knownPhase } : {}),
@@ -1761,7 +1728,7 @@ async function agentWorkflowBody(
           runOutcome = "failed";
           return;
         }
-        await moveTicket(ticketId, backlogMoveTarget());
+        await moveTicketWithIntentStep(ticketId, backlogMoveTarget(), transitionOwner);
         await notifyTicket(ticket.identifier, {
           kind: "failed",
           reason: params.postComment ?? "Terminated by workflow.",
@@ -2158,11 +2125,7 @@ async function agentWorkflowBody(
             if (!entry.ticketKey) {
               throw new Error("Update Ticket Status requires a correlated ticket.");
             }
-            await moveTicketWithIntentStep(entry.ticketKey, target, {
-              subjectKey: entry.subjectKey,
-              ownerToken: entry.ownerToken,
-              runId: workflowRunId,
-            });
+            await moveTicketWithIntentStep(entry.ticketKey, target, transitionOwner);
             return { kind: "next", output: { status: "ok", target: targetName } };
           }
 
@@ -2276,7 +2239,11 @@ async function agentWorkflowBody(
     }
     console.error(`Workflow failed for ${ticket.identifier}:`, err);
     if (entry.ticketKey) {
-      const moved = await moveTicket(ticketId, backlogMoveTarget()).then(() => true).catch(() => false);
+      const moved = await moveTicketWithIntentStep(
+        ticketId,
+        backlogMoveTarget(),
+        transitionOwner,
+      ).then(() => true).catch(() => false);
       await notifyTicket(ticket.identifier, {
         kind: "failed",
         reason: (err as Error).message ?? "unknown",

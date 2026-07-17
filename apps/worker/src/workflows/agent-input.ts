@@ -113,7 +113,11 @@ export type ClarificationOriginEntry =
   | { kind: "ticket"; ticketKey: string; definitionId?: number; definitionVersion?: WorkflowDefinitionVersionPin }
   | {
       kind: "pr_trigger";
-      triggerType: "trigger_pr_created" | "trigger_pr_checks_failed" | "trigger_pr_review";
+      triggerType:
+        | "trigger_pr_created"
+        | "trigger_pr_checks_failed"
+        | "trigger_pr_review"
+        | "trigger_pr_merged";
       ticketKey?: string;
       definitionId: number;
       definitionVersion: number;

@@ -19,10 +19,14 @@ const stores = vi.hoisted(() => {
   };
 });
 const wf = vi.hoisted(() => ({ start: vi.fn() }));
+const transition = vi.hoisted(() => ({ moveTicketWithIntent: vi.fn() }));
 
 vi.mock("../../env.js", () => ({ env: { COLUMN_AI: "AI" } }));
 vi.mock("workflow/api", () => ({ start: (...a: any[]) => wf.start(...a) }));
 vi.mock("../workflows/agent.js", () => ({ agentWorkflow: "agentWorkflow_sentinel" }));
+vi.mock("../lib/ticket-transition.js", () => ({
+  moveTicketWithIntent: (...args: any[]) => transition.moveTicketWithIntent(...args),
+}));
 vi.mock("./store.js", () => ({
   ClarificationStoreError: stores.ClarificationStoreError,
   answerClarification: (...a: any[]) => stores.answerClarification(...a),
@@ -131,6 +135,7 @@ describe("dispatchClarificationAnswered", () => {
     vi.clearAllMocks();
     stores.assertClarificationCheckpointAvailable.mockReturnValue(undefined);
     wf.start.mockResolvedValue({ runId: "run-x" });
+    transition.moveTicketWithIntent.mockResolvedValue(undefined);
     stores.answerClarification.mockResolvedValue(
       makeClarification({
         status: "answered",
@@ -203,6 +208,7 @@ describe("dispatchClarificationAnswered", () => {
       runId: "run-x",
     });
     expect(issueTracker.moveTicket).not.toHaveBeenCalled();
+    expect(transition.moveTicketWithIntent).not.toHaveBeenCalled();
     expect(issueTracker.updateLabels).not.toHaveBeenCalled();
     expect(wf.start).toHaveBeenCalledWith("agentWorkflow_sentinel", [
       expect.objectContaining({
@@ -226,9 +232,9 @@ describe("dispatchClarificationAnswered", () => {
       }),
     });
     const issueTracker = makeIssueTracker({
-      moveTicket: vi.fn().mockImplementation(async () => order.push("move")),
       updateLabels: vi.fn().mockImplementation(async () => order.push("label")),
     });
+    transition.moveTicketWithIntent.mockImplementation(async () => order.push("move"));
     wf.start.mockImplementation(async () => {
       order.push("start");
       return { runId: "run-x" };
@@ -240,6 +246,17 @@ describe("dispatchClarificationAnswered", () => {
     expect(stores.answerClarification).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
       successorOwnerToken: "owner-successor",
     }));
+    expect(transition.moveTicketWithIntent).toHaveBeenCalledWith({
+      db: expect.anything(),
+      issueTracker,
+      ticketKey: "AWT-1",
+      target: "AI",
+      owner: {
+        subjectKey: "ticket:jira:AWT-1",
+        ownerToken: "owner-successor",
+        runId: null,
+      },
+    });
   });
 
   it("lets a concurrent answer loser exit before handoff or side effects", async () => {
@@ -254,6 +271,7 @@ describe("dispatchClarificationAnswered", () => {
     );
     expect(runRegistry.handoffBoundRun).not.toHaveBeenCalled();
     expect(issueTracker.moveTicket).not.toHaveBeenCalled();
+    expect(transition.moveTicketWithIntent).not.toHaveBeenCalled();
     expect(wf.start).not.toHaveBeenCalled();
   });
 
@@ -271,6 +289,7 @@ describe("dispatchClarificationAnswered", () => {
 
     expect(await dispatch({ runRegistry, issueTracker })).toEqual({ status: "conflict" });
     expect(issueTracker.moveTicket).not.toHaveBeenCalled();
+    expect(transition.moveTicketWithIntent).not.toHaveBeenCalled();
     expect(wf.start).not.toHaveBeenCalled();
   });
 
@@ -456,9 +475,8 @@ describe("dispatchClarificationAnswered", () => {
   });
 
   it("keeps the successor reservation retryable when moving the ticket fails", async () => {
-    const issueTracker = makeIssueTracker({
-      moveTicket: vi.fn().mockRejectedValue(new Error("jira move failed")),
-    });
+    const issueTracker = makeIssueTracker();
+    transition.moveTicketWithIntent.mockRejectedValue(new Error("jira move failed"));
     await expect(dispatch({ issueTracker })).rejects.toThrow("jira move failed");
     expect(wf.start).not.toHaveBeenCalled();
   });
@@ -468,5 +486,6 @@ describe("dispatchClarificationAnswered", () => {
       updateLabels: vi.fn().mockRejectedValue(new Error("label boom")),
     });
     await expect(dispatch({ issueTracker })).resolves.toEqual({ status: "started", runId: "run-x" });
+    expect(transition.moveTicketWithIntent).toHaveBeenCalled();
   });
 });

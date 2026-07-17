@@ -1,0 +1,56 @@
+import type {
+  IssueTrackerAdapter,
+  IssueTrackerMoveTarget,
+  TicketContent,
+} from "../adapters/issue-tracker/types.js";
+import type { Db } from "../db/client.js";
+import { recordTicketTransitionIntent } from "./ticket-transition-intent-store.js";
+
+export interface TicketTransitionOwner {
+  subjectKey: string;
+  ownerToken: string;
+  runId: string | null;
+}
+
+export async function moveTicketWithIntent(input: {
+  db: Db;
+  issueTracker: IssueTrackerAdapter;
+  ticketKey: string;
+  target: IssueTrackerMoveTarget;
+  owner: TicketTransitionOwner;
+}): Promise<void> {
+  const { db, issueTracker, ticketKey, target, owner } = input;
+  const current = await issueTracker.fetchTicket(ticketKey);
+  if (ticketAlreadyAtTarget(current, target)) return;
+
+  await recordTicketTransitionIntent(db, {
+    ticketKey,
+    target,
+    ...owner,
+  });
+
+  try {
+    await issueTracker.moveTicket(ticketKey, target);
+  } catch (error) {
+    try {
+      const afterError = await issueTracker.fetchTicket(ticketKey);
+      if (ticketAlreadyAtTarget(afterError, target)) return;
+    } catch {
+      // The original move error is the useful failure. Its intent remains
+      // available because the provider may still have accepted the request.
+    }
+    throw error;
+  }
+}
+
+function ticketAlreadyAtTarget(
+  ticket: Pick<TicketContent, "trackerStatus" | "trackerStatusId">,
+  target: IssueTrackerMoveTarget,
+): boolean {
+  const currentName = ticket.trackerStatus.trim().toLowerCase();
+  if (typeof target === "string") return currentName === target.trim().toLowerCase();
+  if (target.statusId !== undefined && ticket.trackerStatusId !== undefined) {
+    return ticket.trackerStatusId === target.statusId;
+  }
+  return currentName === target.name.trim().toLowerCase();
+}

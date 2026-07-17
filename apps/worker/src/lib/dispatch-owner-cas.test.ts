@@ -79,6 +79,7 @@ describe("claimSubjectRun", () => {
   it("releases only its unbound reservation when a post-reservation guard bails", async () => {
     const { claimSubjectRun } = await import("./dispatch.js");
     const runRegistry = registry();
+    let guardedOwnerToken: string | null = null;
     const result = await claimSubjectRun(
       {
         subjectKey: "ticket:jira:PROJ-1",
@@ -88,15 +89,19 @@ describe("claimSubjectRun", () => {
       runRegistry,
       2,
       {
-        postClaimGuard: async () => ({ started: false, reason: "not_in_ai_column" }),
+        postClaimGuard: async (ownerToken) => {
+          guardedOwnerToken = ownerToken;
+          return { started: false, reason: "not_in_ai_column" };
+        },
         startWorkflow: vi.fn(),
       },
     );
 
     expect(result).toEqual({ started: false, reason: "not_in_ai_column" });
+    expect(guardedOwnerToken).toMatch(/^owner:/);
     expect(runRegistry.releaseReservation).toHaveBeenCalledWith(
       "ticket:jira:PROJ-1",
-      expect.stringMatching(/^owner:/),
+      guardedOwnerToken,
     );
   });
 

@@ -15,6 +15,7 @@ import { AWAITING_APPROVAL_LABEL } from "../lib/labels.js";
 import { logger } from "../lib/logger.js";
 import { claimTicketRun } from "../lib/dispatch.js";
 import { ticketSubjectKey } from "../lib/subject-key.js";
+import { moveTicketWithIntent } from "../lib/ticket-transition.js";
 import type { ApprovalRow } from "./store.js";
 
 export type DispatchPlanApprovedResult =
@@ -44,6 +45,7 @@ export async function dispatchPlanApproved(input: {
 }): Promise<DispatchPlanApprovedResult> {
   const { db, runRegistry, issueTracker, approval, actor, maxConcurrentAgents, onClaimed } = input;
   const ticketKey = approval.ticketKey;
+  const subjectKey = ticketSubjectKey("jira", ticketKey);
 
   // Resolve the exact definition version the approved plan pins. A human already
   // approved this plan, so it must run the graph they reviewed regardless of the
@@ -73,11 +75,17 @@ export async function dispatchPlanApproved(input: {
   let dispatchError: unknown;
   const result = await claimTicketRun(ticketKey, runRegistry, maxConcurrentAgents, {
     kind: "ticket",
-    postClaimGuard: async () => {
+    postClaimGuard: async (ownerToken) => {
       try {
         if (onClaimed) await onClaimed();
 
-        await issueTracker.moveTicket(ticketKey, aiColumnMoveTarget(env));
+        await moveTicketWithIntent({
+          db,
+          issueTracker,
+          ticketKey,
+          target: aiColumnMoveTarget(env),
+          owner: { subjectKey, ownerToken, runId: null },
+        });
 
         if (typeof issueTracker.updateLabels === "function") {
           try {
@@ -99,7 +107,7 @@ export async function dispatchPlanApproved(input: {
       try {
         const entry: AgentWorkflowInput = {
           kind: "plan_approved",
-          subjectKey: ticketSubjectKey("jira", ticketKey),
+          subjectKey,
           ticketKey,
           ownerToken,
           definitionId: approval.definitionId,

@@ -37,7 +37,7 @@ export interface ClaimSubject {
 }
 
 export interface ClaimSubjectRunOptions {
-  postClaimGuard?: () => Promise<DispatchResult | null>;
+  postClaimGuard?: (ownerToken: string) => Promise<DispatchResult | null>;
   startWorkflow: (ownerToken: string) => Promise<string>;
 }
 
@@ -139,7 +139,7 @@ export async function claimSubjectRun(
     }
 
     if (options.postClaimGuard) {
-      const bail = await options.postClaimGuard();
+      const bail = await options.postClaimGuard(ownerToken);
       if (bail) {
         await runRegistry.releaseReservation(subject.subjectKey, ownerToken).catch(() => false);
         ownerToken = null;

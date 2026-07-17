@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { IssueTrackerMoveTarget } from "../../adapters/issue-tracker/types.js";
+import type { TicketTransitionOwner } from "../../lib/ticket-transition.js";
 import type { BlockExecuteFn, BlockExecutionResult } from "./types.js";
 
 export const paramsSchema = z
@@ -43,10 +44,13 @@ notifyPlanApprovalStep.maxRetries = 0;
 async function parkForApprovalStep(
   ticketId: string,
   backlogTarget: IssueTrackerMoveTarget,
+  owner: TicketTransitionOwner,
 ): Promise<void> {
   "use step";
+  const { getDb } = await import("../../db/client.js");
   const { createStepAdapters } = await import("../../lib/step-adapters.js");
   const { AWAITING_APPROVAL_LABEL } = await import("../../lib/labels.js");
+  const { moveTicketWithIntent } = await import("../../lib/ticket-transition.js");
   const { issueTracker } = createStepAdapters();
   if (typeof issueTracker.updateLabels === "function") {
     try {
@@ -66,7 +70,13 @@ async function parkForApprovalStep(
   // re-dispatch it. Swallowing here rather than in the caller keeps pino inside the step:
   // workflow scope forbids Node modules.
   try {
-    await issueTracker.moveTicket(ticketId, backlogTarget);
+    await moveTicketWithIntent({
+      db: getDb(),
+      issueTracker,
+      ticketKey: ticketId,
+      target: backlogTarget,
+      owner,
+    });
   } catch (err) {
     const { logger } = await import("../../lib/logger.js");
     logger.warn(
@@ -146,7 +156,11 @@ export const execute: BlockExecuteFn = async (
 
   await notifyPlanApprovalStep(ctx.ticket.identifier).catch(() => {});
 
-  await parkForApprovalStep(ctx.ticket.identifier, ctx.moveTargets.backlog);
+  await parkForApprovalStep(ctx.ticket.identifier, ctx.moveTargets.backlog, {
+    subjectKey: ctx.entry.subjectKey,
+    ownerToken: ctx.entry.ownerToken,
+    runId: ctx.runId,
+  });
 
   return { kind: "ended", output: { status: "awaiting_approval", approvalRequestId } };
 };

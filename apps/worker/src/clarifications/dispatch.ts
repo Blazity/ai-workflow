@@ -9,6 +9,7 @@ import { agentWorkflow } from "../workflows/agent.js";
 import { aiColumnMoveTarget } from "../lib/move-targets.js";
 import { NEEDS_CLARIFICATION_LABEL } from "../lib/labels.js";
 import { logger } from "../lib/logger.js";
+import { moveTicketWithIntent } from "../lib/ticket-transition.js";
 import {
   answerClarification,
   assertClarificationCheckpointAvailable,
@@ -135,7 +136,17 @@ export async function dispatchClarificationAnswered(input: {
     // Move first: reconciliation cancels a ticket run parked outside the AI
     // column. If this throws, the answered row and successor reservation remain
     // durable and the endpoint can retry from this exact boundary.
-    await issueTracker.moveTicket(checkpoint.ticketKey, aiColumnMoveTarget(env));
+    await moveTicketWithIntent({
+      db,
+      issueTracker,
+      ticketKey: checkpoint.ticketKey,
+      target: aiColumnMoveTarget(env),
+      owner: {
+        subjectKey: checkpoint.subjectKey,
+        ownerToken: successorOwnerToken,
+        runId: null,
+      },
+    });
     if (typeof issueTracker.updateLabels === "function") {
       try {
         await issueTracker.updateLabels(checkpoint.ticketKey, {

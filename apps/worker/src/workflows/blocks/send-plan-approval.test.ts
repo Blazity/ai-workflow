@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   moveTicket: vi.fn(),
   updateLabels: vi.fn(),
   warn: vi.fn(),
+  moveTicketWithIntent: vi.fn(),
 }));
 
 vi.mock("../../lib/logger.js", () => ({ logger: { warn: mocks.warn } }));
@@ -22,6 +23,9 @@ vi.mock("../../lib/step-adapters.js", () => ({
     },
     messaging: { notifyForTicket: mocks.notifyForTicket },
   }),
+}));
+vi.mock("../../lib/ticket-transition.js", () => ({
+  moveTicketWithIntent: (...args: any[]) => mocks.moveTicketWithIntent(...args),
 }));
 
 import { execute, paramsSchema } from "./send-plan-approval.js";
@@ -44,6 +48,7 @@ describe("send_plan_approval execute", () => {
     mocks.postComment.mockResolvedValue(null);
     mocks.notifyForTicket.mockResolvedValue(undefined);
     mocks.moveTicket.mockResolvedValue(undefined);
+    mocks.moveTicketWithIntent.mockResolvedValue(undefined);
     mocks.updateLabels.mockResolvedValue(undefined);
   });
 
@@ -89,7 +94,17 @@ describe("send_plan_approval execute", () => {
     // poll stops re-dispatching it; label add precedes the move, mirroring
     // clarification. The workflow's terminal finally releases ownership.
     expect(mocks.updateLabels).toHaveBeenCalledWith("AWT-1", { add: [AWAITING_APPROVAL_LABEL] });
-    expect(mocks.moveTicket).toHaveBeenCalledWith("AWT-1", "Backlog");
+    expect(mocks.moveTicketWithIntent).toHaveBeenCalledWith({
+      db: expect.anything(),
+      issueTracker: expect.anything(),
+      ticketKey: "AWT-1",
+      target: "Backlog",
+      owner: {
+        subjectKey: "ticket:jira:AWT-1",
+        ownerToken: "owner:test",
+        runId: "run-1",
+      },
+    });
     expect(result).toEqual({
       kind: "ended",
       output: { status: "awaiting_approval", approvalRequestId: "appr-9" },
@@ -120,7 +135,7 @@ describe("send_plan_approval execute", () => {
   it("still ends awaiting_approval when parking the ticket fails", async () => {
     // The approval row is committed before the park; a tracker move failure must
     // not be reported as a failed run when the plan is filed and pending.
-    mocks.moveTicket.mockRejectedValue(new Error("tracker down"));
+    mocks.moveTicketWithIntent.mockRejectedValue(new Error("tracker down"));
     const ctx = makeCtx({ researchPlanMarkdown: "# Plan" });
 
     const result = await execute(makeNode("send_plan_approval"), {}, ctx);
