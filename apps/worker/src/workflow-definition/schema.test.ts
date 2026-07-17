@@ -15,9 +15,20 @@ import {
 } from "./graph-fixtures.js";
 import {
   upgradeStoredWorkflowDefinition,
+  validateWorkflowDefinitionForDeployment,
   validateWorkflowGraph,
   workflowDefinitionSchema,
 } from "./schema.js";
+import type { WorkflowBlockRegistryContext } from "./block-registry.js";
+
+const registryContext: WorkflowBlockRegistryContext = {
+  agentProviders: { claude: true, codex: true },
+  llmProviders: { claude: true, codex: true },
+  defaultAgent: { provider: "claude", model: "claude-test" },
+  vcsProviders: ["github", "gitlab"],
+  slackConfigured: true,
+  arthurConfigured: true,
+};
 
 function node(
   id: string,
@@ -103,6 +114,194 @@ describe("workflowDefinitionSchema", () => {
     expect(parsed.nodes[1].inputs).toEqual({});
   });
 
+  it("upgrades bespoke step params and preserves requiredChecks as typed inputs", () => {
+    const upgraded = upgradeStoredWorkflowDefinition({
+      schemaVersion: 1,
+      nodes: [
+        { id: "trigger", type: "trigger_ticket_ai", x: 0, y: 0, params: {} },
+        { id: "plan", type: "planning_agent", x: 0, y: 0, params: {} },
+        { id: "checks", type: "run_checks", x: 0, y: 0, params: {} },
+        {
+          id: "approval",
+          type: "send_plan_approval",
+          x: 1,
+          y: 0,
+          params: { planFromStep: "plan", mirrorComment: false },
+        },
+        {
+          id: "explicit",
+          type: "send_plan_approval",
+          x: 1,
+          y: 1,
+          params: { planFromStep: "plan" },
+          inputs: { plan: "run.branchName" },
+        },
+        {
+          id: "finalize",
+          type: "finalize_workspace",
+          x: 2,
+          y: 0,
+          params: { requiredChecks: ["checks"] },
+        },
+      ],
+      edges: [
+        { from: "trigger", to: "checks" },
+        { from: "checks", to: "finalize" },
+      ],
+    });
+
+    expect(upgraded.nodes.find((entry) => entry.id === "approval")).toMatchObject({
+      params: { mirrorComment: false },
+      inputs: {
+        plan: "steps.plan.output.plan",
+      },
+    });
+    expect(upgraded.nodes.find((entry) => entry.id === "explicit")).toMatchObject({
+      params: {},
+      inputs: {
+        plan: "run.branchName",
+      },
+    });
+    expect(upgraded.nodes.find((entry) => entry.id === "finalize")).toMatchObject({
+      params: {},
+      inputs: { "checks.checks": "steps.checks.output.status" },
+    });
+  });
+
+  it("preserves unrepresentable, missing, and non-dominating legacy Finalize gates", () => {
+    const raw = {
+      schemaVersion: 1 as const,
+      nodes: [
+        { id: "trigger", type: "trigger_ticket_ai", x: 0, y: 0, params: {} },
+        { id: "safe", type: "run_checks", x: 0, y: 0, params: {} },
+        { id: "side", type: "run_checks", x: 0, y: 1, params: {} },
+        { id: "checks.with.dot", type: "run_checks", x: 0, y: 2, params: {} },
+        { id: "checks space", type: "run_checks", x: 0, y: 3, params: {} },
+        {
+          id: "finalize",
+          type: "finalize_workspace",
+          x: 1,
+          y: 0,
+          params: {
+            requiredChecks: [
+              "safe",
+              "checks.with.dot",
+              "checks space",
+              "missing",
+              "side",
+              "safe",
+            ],
+          },
+        },
+      ],
+      edges: [
+        { from: "trigger", to: "safe" },
+        { from: "safe", to: "finalize" },
+        { from: "trigger", to: "side" },
+      ],
+    };
+
+    const upgraded = upgradeStoredWorkflowDefinition(raw);
+    expect(upgraded.nodes.find((entry) => entry.id === "finalize")).toMatchObject({
+      inputs: { "checks.safe": "steps.safe.output.status" },
+      params: {
+        legacyRequiredChecks: ["checks.with.dot", "checks space", "missing", "side"],
+      },
+    });
+    expect(upgradeStoredWorkflowDefinition(upgraded)).toEqual(upgraded);
+  });
+
+  it("upgrades default Arthur content producers and preserves dynamic or unknown producers for repair", () => {
+    const upgraded = upgradeStoredWorkflowDefinition({
+      schemaVersion: 1,
+      nodes: [
+        { id: "plan", type: "planning_agent", x: 0, y: 0, params: {} },
+        { id: "generic", type: "generic_agent", x: 0, y: 1, params: { prompt: "p" } },
+        { id: "llm", type: "call_llm", x: 0, y: 2, params: { prompt: "p" } },
+        {
+          id: "generic-dynamic",
+          type: "generic_agent",
+          x: 0,
+          y: 3,
+          params: { prompt: "p", outputSchema: '{"type":"string"}' },
+        },
+        {
+          id: "llm-dynamic",
+          type: "call_llm",
+          x: 0,
+          y: 4,
+          params: { prompt: "p", outputSchema: '{"type":"string"}' },
+        },
+        { id: "fix", type: "fix_agent", x: 0, y: 5, params: {} },
+        {
+          id: "check-plan",
+          type: "arthur_injection_check",
+          x: 1,
+          y: 0,
+          params: { contentFromStep: "plan" },
+        },
+        {
+          id: "check-generic",
+          type: "arthur_injection_check",
+          x: 1,
+          y: 1,
+          params: { contentFromStep: "generic" },
+        },
+        {
+          id: "check-llm",
+          type: "arthur_injection_check",
+          x: 1,
+          y: 2,
+          params: { contentFromStep: "llm" },
+        },
+        {
+          id: "check-generic-dynamic",
+          type: "arthur_injection_check",
+          x: 1,
+          y: 3,
+          params: { contentFromStep: "generic-dynamic" },
+        },
+        {
+          id: "check-llm-dynamic",
+          type: "arthur_injection_check",
+          x: 1,
+          y: 4,
+          params: { contentFromStep: "llm-dynamic" },
+        },
+        {
+          id: "check-unknown",
+          type: "arthur_injection_check",
+          x: 1,
+          y: 5,
+          params: { contentFromStep: "fix" },
+        },
+      ],
+      edges: [],
+    });
+
+    expect(upgraded.nodes.find((entry) => entry.id === "check-plan")?.inputs.content).toBe(
+      "steps.plan.output.plan",
+    );
+    expect(upgraded.nodes.find((entry) => entry.id === "check-generic")?.inputs.content).toBe(
+      "steps.generic.output.body",
+    );
+    expect(upgraded.nodes.find((entry) => entry.id === "check-llm")?.inputs.content).toBe(
+      "steps.llm.output.output",
+    );
+    expect(upgraded.nodes.find((entry) => entry.id === "check-generic-dynamic")).toMatchObject({
+      params: { legacyContentFromStep: "generic-dynamic" },
+      inputs: {},
+    });
+    expect(upgraded.nodes.find((entry) => entry.id === "check-llm-dynamic")).toMatchObject({
+      params: { legacyContentFromStep: "llm-dynamic" },
+      inputs: {},
+    });
+    expect(upgraded.nodes.find((entry) => entry.id === "check-unknown")).toMatchObject({
+      params: { legacyContentFromStep: "fix" },
+      inputs: {},
+    });
+  });
+
   it("rejects blank or non-string input binding sources", () => {
     const base = { id: "n", type: "call_llm", x: 0, y: 0, params: { prompt: "p" } };
     expect(shapeOk([{ ...base, inputs: { prompt: "" } }])).toBe(false);
@@ -121,6 +320,34 @@ describe("workflowDefinitionSchema", () => {
       "steps.self.plan",
     ]) {
       expect(shapeOk([{ ...base, inputs: { prompt: source } }]), source).toBe(false);
+    }
+  });
+
+  it("rejects whitespace-normalized and prototype-bearing binding sources", () => {
+    const base = { id: "n", type: "call_llm", x: 0, y: 0, params: { prompt: "p" } };
+    for (const source of [
+      " trigger.ticketKey",
+      "trigger.ticketKey ",
+      "run.constructor.name",
+      "steps.plan.output.__proto__.value",
+    ]) {
+      expect(shapeOk([{ ...base, inputs: { prompt: source } }]), source).toBe(false);
+    }
+  });
+
+  it("rejects unsafe dynamic input names before validation", () => {
+    const base = {
+      id: "n",
+      type: "finalize_workspace",
+      x: 0,
+      y: 0,
+      params: {},
+    };
+    for (const name of ["constructor", "checks.constructor", "checks.__proto__", "checks..lint"]) {
+      expect(
+        shapeOk([{ ...base, inputs: { [name]: "steps.lint.output.status" } }]),
+        name,
+      ).toBe(false);
     }
   });
 
@@ -242,7 +469,7 @@ describe("workflowDefinitionSchema block-executor node types", () => {
       ["trigger_pr_checks_failed", {}],
       ["trigger_pr_review", {}],
       ["prepare_workspace", {}],
-      ["finalize_workspace", { requiredChecks: ["checks-1"] }],
+      ["finalize_workspace", {}],
       ["fix_agent", { provider: "codex", model: "gpt-5", instructions: "focus", maxMinutes: 30 }],
       ["generic_agent", { provider: "claude", prompt: "do it", outputSchema: "{}" }],
       ["call_llm", { prompt: "summarize", system: "be terse", model: "claude-haiku-4-5" }],
@@ -251,7 +478,7 @@ describe("workflowDefinitionSchema block-executor node types", () => {
       ["post_ticket_comment", { body: "done" }],
       ["post_pr_comment", { body: "done", target: "all" }],
       ["human_question", { questions: ["Which env?"] }],
-      ["arthur_injection_check", { contentFromStep: "step-1" }],
+      ["arthur_injection_check", {}],
     ];
     for (const [type, params] of valid) {
       expect(shapeOk([node("n", type, params)]), type).toBe(true);
@@ -831,97 +1058,106 @@ describe("validateWorkflowGraph rules", () => {
     expect(validateWorkflowGraph(def)).toEqual([]);
   });
 
-  it("rule 13: allows planFromStep referencing a block that dominates the approval", () => {
+  it("keeps structural draft validation separate from deploy-grade binding validation", () => {
     const def = graph(
       [
         node("t", "trigger_ticket_ai"),
-        node("plan", "planning_agent"),
-        node("approve", "send_plan_approval", { planFromStep: "plan" }),
+        {
+          ...node("approve", "send_plan_approval"),
+          inputs: { plan: "steps.ghost.output.plan" },
+        },
       ],
-      [
-        { from: "t", to: "plan" },
-        { from: "plan", to: "approve" },
-      ],
+      [{ from: "t", to: "approve" }],
     );
+
     expect(validateWorkflowGraph(def)).toEqual([]);
+    expect(validateWorkflowDefinitionForDeployment(def, registryContext)).toEqual(
+      expect.arrayContaining([expect.stringContaining('references unknown block "ghost"')]),
+    );
   });
 
-  it("rule 13: flags planFromStep referencing an unknown block", () => {
+  it("rejects environmentally unavailable blocks only at deployment validation", () => {
+    const def = graph(
+      [node("t", "trigger_ticket_ai"), node("slack", "send_slack_message")],
+      [{ from: "t", to: "slack" }],
+    );
+    const unavailable = { ...registryContext, slackConfigured: false };
+
+    expect(validateWorkflowGraph(def)).toEqual([]);
+    expect(validateWorkflowDefinitionForDeployment(def, unavailable)).toEqual(
+      expect.arrayContaining([
+        'Block "slack" (send_slack_message) is unavailable: Slack messaging is not configured.',
+      ]),
+    );
+  });
+
+  it("rejects malformed declared output schemas even when environment checks are skipped", () => {
     const def = graph(
       [
         node("t", "trigger_ticket_ai"),
-        node("plan", "planning_agent"),
-        node("approve", "send_plan_approval", { planFromStep: "ghost" }),
+        node("generate", "generic_agent", {
+          prompt: "generate",
+          outputSchema: '{"type":"made-up"}',
+        }),
       ],
-      [
-        { from: "t", to: "plan" },
-        { from: "plan", to: "approve" },
-      ],
+      [{ from: "t", to: "generate" }],
     );
+
     expect(
-      validateWorkflowGraph(def).some((issue) =>
-        issue.includes('Block "approve" references unknown block "ghost" in planFromStep'),
-      ),
-    ).toBe(true);
+      validateWorkflowDefinitionForDeployment(def, registryContext, {
+        checkEnvironmentAvailability: false,
+      }),
+    ).toEqual(
+      expect.arrayContaining([
+        'Block "generate" (generic_agent) is unavailable: outputSchema has unsupported type "made-up".',
+      ]),
+    );
   });
 
-  it("rule 13: flags planFromStep referencing a block on only one branch arm", () => {
-    // "left" runs on the true arm only, so a run reaching "approve" via the false
-    // arm never produced its plan output. It does not dominate the approval.
+  it("explains how to repair a legacy Arthur whole-output reference before deployment", () => {
     const def = graph(
       [
         node("t", "trigger_ticket_ai"),
-        node("split", "branch", { condition: "true" }),
-        node("left", "planning_agent"),
-        node("right", "implementation_agent"),
-        node("approve", "send_plan_approval", { planFromStep: "left" }),
+        node("fix", "fix_agent"),
+        node("check", "arthur_injection_check", { legacyContentFromStep: "fix" }),
       ],
       [
-        { from: "t", to: "split" },
-        { from: "split", to: "left", fromPort: "true" },
-        { from: "split", to: "right", fromPort: "false" },
-        { from: "left", to: "approve" },
-        { from: "right", to: "approve" },
+        { from: "t", to: "fix" },
+        { from: "fix", to: "check" },
       ],
     );
-    expect(
-      validateWorkflowGraph(def).some((issue) =>
-        issue.includes('Block "approve" planFromStep references block "left" which does not run before it'),
-      ),
-    ).toBe(true);
+
+    expect(workflowDefinitionSchema.safeParse(def).success).toBe(true);
+    expect(validateWorkflowDefinitionForDeployment(def, registryContext)).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining('Block "check" must replace legacy contentFromStep "fix"'),
+      ]),
+    );
   });
 
-  it("rule 13: allows contentFromStep referencing a dominator and flags an unknown one", () => {
-    const valid = graph(
+  it("loads but will not redeploy an execution-only legacy Finalize gate", () => {
+    const def = graph(
       [
         node("t", "trigger_ticket_ai"),
-        node("plan", "planning_agent"),
-        node("check", "arthur_injection_check", { contentFromStep: "plan" }),
-        node("done", "open_pr"),
+        node("finalize", "finalize_workspace", {
+          legacyRequiredChecks: ["checks.with.dot", "missing"],
+        }),
       ],
-      [
-        { from: "t", to: "plan" },
-        { from: "plan", to: "check" },
-        { from: "check", to: "done" },
-      ],
+      [{ from: "t", to: "finalize" }],
     );
-    expect(validateWorkflowGraph(valid)).toEqual([]);
 
-    const invalid = graph(
-      [
-        node("t", "trigger_ticket_ai"),
-        node("check", "arthur_injection_check", { contentFromStep: "ghost" }),
-        node("done", "open_pr"),
-      ],
-      [
-        { from: "t", to: "check" },
-        { from: "check", to: "done" },
-      ],
+    expect(workflowDefinitionSchema.safeParse(def).success).toBe(true);
+    expect(validateWorkflowDefinitionForDeployment(def, registryContext)).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining(
+          'Block "finalize" must replace legacy requiredChecks "checks.with.dot, missing"',
+        ),
+      ]),
     );
     expect(
-      validateWorkflowGraph(invalid).some((issue) =>
-        issue.includes('Block "check" references unknown block "ghost" in contentFromStep'),
-      ),
-    ).toBe(true);
+      validateWorkflowDefinitionForDeployment(def, registryContext, {
+        allowLegacyCompatibility: true,
+      }),
+    ).toEqual([]);
   });
 });

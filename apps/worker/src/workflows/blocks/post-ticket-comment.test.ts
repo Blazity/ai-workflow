@@ -45,6 +45,19 @@ describe("post_ticket_comment execute", () => {
     });
   });
 
+  it("prefers a resolved body over the static param", async () => {
+    mocks.postComment.mockResolvedValue(null);
+
+    await execute(
+      makeNode("post_ticket_comment", { body: "Static" }),
+      {},
+      makeCtx(),
+      { body: " Bound " },
+    );
+
+    expect(mocks.postComment).toHaveBeenCalledWith("AWT-1", "Bound");
+  });
+
   it("fails when the body param is missing", async () => {
     const result = await execute(makeNode("post_ticket_comment"), {}, makeCtx());
     expect(result.kind).toBe("failed");

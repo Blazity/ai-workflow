@@ -68,7 +68,9 @@ export const BLOCK_PARAM_KEYS: Record<WorkflowBlockType, readonly string[]> = {
   fix_agent: ["provider", "model", "instructions", "maxMinutes"],
   generic_agent: ["provider", "model", "prompt", "outputSchema"],
   prepare_workspace: [],
-  finalize_workspace: ["requiredChecks"],
+  // Internal compatibility marker is preserved by serialization so a legacy
+  // graph cannot silently drop its gate; the editor exposes no authoring field.
+  finalize_workspace: ["legacyRequiredChecks"],
   run_pre_pr_checks: ["maxFixCycles"],
   run_checks: ["commands"],
   call_llm: ["prompt", "system", "model", "provider", "outputSchema"],
@@ -78,9 +80,9 @@ export const BLOCK_PARAM_KEYS: Record<WorkflowBlockType, readonly string[]> = {
   post_ticket_comment: ["body"],
   post_pr_comment: ["body", "target"],
   send_slack_message: ["message"],
-  send_plan_approval: ["planFromStep", "mirrorComment"],
+  send_plan_approval: ["mirrorComment"],
   human_question: ["questions"],
-  arthur_injection_check: ["contentFromStep"],
+  arthur_injection_check: ["legacyContentFromStep"],
   branch: ["condition"],
   loop: ["maxAttempts", "onExhaust"],
   terminate: ["terminalStatus", "postComment"],

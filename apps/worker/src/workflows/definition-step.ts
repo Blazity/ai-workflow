@@ -1,6 +1,7 @@
 import { isTriggerBlockType } from "@shared/contracts";
 import type {
   WorkflowBlockType,
+  WorkflowDefinition,
   WorkflowDefinitionEdge,
   WorkflowDefinitionNode,
 } from "@shared/contracts";
@@ -13,6 +14,24 @@ export interface LoadedWorkflowPlan {
   nodes: WorkflowDefinitionNode[];
   edges: WorkflowDefinitionEdge[];
   reviewEnabled: boolean;
+}
+
+interface ZodLikeError extends Error {
+  issues: Array<{ path: PropertyKey[]; message: string }>;
+}
+
+function isZodLikeError(error: unknown): error is ZodLikeError {
+  return (
+    error instanceof Error &&
+    error.name === "ZodError" &&
+    Array.isArray((error as { issues?: unknown }).issues)
+  );
+}
+
+function describeZodLikeError(error: ZodLikeError): string {
+  return error.issues
+    .map((issue) => `${issue.path.length > 0 ? issue.path.join(".") : "root"}: ${issue.message}`)
+    .join("; ");
 }
 
 // Block types whose executor requires ctx.sandboxId and fails with a
@@ -167,8 +186,14 @@ export async function loadWorkflowDefinitionFor(
     getWorkflowDefinitionVersion,
     getEnabledWorkflowDefinitionForTrigger,
   } = await import("../workflow-definition/store.js");
-  const { workflowDefinitionSchema, validateWorkflowGraph, describeWorkflowDefinitionIssues } =
-    await import("../workflow-definition/schema.js");
+  const {
+    workflowDefinitionSchema,
+    upgradeStoredWorkflowDefinition,
+    validateWorkflowDefinitionForDeployment,
+    describeWorkflowDefinitionIssues,
+  } = await import("../workflow-definition/schema.js");
+  const { workflowBlockRegistryContextFromEnv } =
+    await import("../workflow-definition/models.js");
   const { defaultWorkflowDefinition } = await import("../workflow-definition/default.js");
   const { logger } = await import("../lib/logger.js");
 
@@ -193,40 +218,74 @@ export async function loadWorkflowDefinitionFor(
 
   const db = getDb();
   let row: WorkflowDefinitionVersionRow | null;
-  if (definitionId !== undefined) {
-    row =
-      version !== undefined
-        ? await getWorkflowDefinitionVersion(db, definitionId, version)
-        : await getCurrentWorkflowDefinitionVersion(db, definitionId);
-    if (!row) {
-      if (isTicket) {
-        logger.info(
-          { definitionId, version, reviewEnabled: env.ENABLE_REVIEW_PHASE },
-          "workflow_definition_default",
-        );
-        return buildDefault();
+  try {
+    if (definitionId !== undefined) {
+      row =
+        version !== undefined
+          ? await getWorkflowDefinitionVersion(db, definitionId, version)
+          : await getCurrentWorkflowDefinitionVersion(db, definitionId);
+      if (!row) {
+        if (isTicket) {
+          logger.info(
+            { definitionId, version, reviewEnabled: env.ENABLE_REVIEW_PHASE },
+            "workflow_definition_default",
+          );
+          return buildDefault();
+        }
+        logger.info({ triggerType, definitionId, version }, "workflow_definition_none");
+        return null;
       }
-      logger.info({ triggerType, definitionId, version }, "workflow_definition_none");
-      return null;
-    }
-  } else {
-    const match = await getEnabledWorkflowDefinitionForTrigger(db, triggerType);
-    if (!match || !match.current) {
-      if (isTicket) {
-        logger.info({ reviewEnabled: env.ENABLE_REVIEW_PHASE }, "workflow_definition_default");
-        return buildDefault();
+    } else {
+      const match = await getEnabledWorkflowDefinitionForTrigger(db, triggerType);
+      if (!match || !match.current) {
+        if (isTicket) {
+          logger.info({ reviewEnabled: env.ENABLE_REVIEW_PHASE }, "workflow_definition_default");
+          return buildDefault();
+        }
+        logger.info({ triggerType }, "workflow_definition_none");
+        return null;
       }
-      logger.info({ triggerType }, "workflow_definition_none");
-      return null;
+      row = match.current;
     }
-    row = match.current;
+  } catch (error) {
+    if (!isZodLikeError(error)) throw error;
+    logger.error(
+      { definitionId, version, triggerType, issues: describeZodLikeError(error) },
+      "workflow_definition_invalid",
+    );
+    if (isTicket) {
+      return buildDefault();
+    }
+    return null;
   }
 
-  // TODO(merge-to-main): removing block types/params makes older stored graphs
-  // fail this safeParse (a non-ticket trigger then loads nothing). Add a
-  // strip/migration shim here before merging so pre-removal definitions still load.
-  const parsed = workflowDefinitionSchema.safeParse(row.definition);
-  const graphIssues = parsed.success ? validateWorkflowGraph(parsed.data) : [];
+  let upgraded: WorkflowDefinition;
+  try {
+    upgraded = upgradeStoredWorkflowDefinition(row.definition);
+  } catch (error) {
+    if (!isZodLikeError(error)) throw error;
+    logger.error(
+      {
+        definitionId: row.definitionId,
+        version: row.version,
+        issues: describeZodLikeError(error),
+      },
+      "workflow_definition_invalid",
+    );
+    if (isTicket) return buildDefault();
+    return null;
+  }
+  const parsed = workflowDefinitionSchema.safeParse(upgraded);
+  const graphIssues = parsed.success
+    ? validateWorkflowDefinitionForDeployment(
+        parsed.data,
+        workflowBlockRegistryContextFromEnv(),
+        {
+          allowLegacyCompatibility: true,
+          checkEnvironmentAvailability: false,
+        },
+      )
+    : [];
   if (!parsed.success || graphIssues.length > 0) {
     const issues = parsed.success
       ? graphIssues.join("; ")

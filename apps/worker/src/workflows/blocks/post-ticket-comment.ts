@@ -22,8 +22,18 @@ blockPostTicketCommentStep.maxRetries = 0;
  * post_ticket_comment: post the body param as a comment on the run's ticket.
  * Returns the deep-linkable comment URL when the tracker exposes one.
  */
-export const execute: BlockExecuteFn = async (block, _steps, ctx): Promise<BlockExecutionResult> => {
-  const body = typeof block.params.body === "string" ? block.params.body.trim() : "";
+export const execute: BlockExecuteFn = async (
+  block,
+  _steps,
+  ctx,
+  resolvedInputs = {},
+): Promise<BlockExecutionResult> => {
+  const body =
+    typeof resolvedInputs.body === "string"
+      ? resolvedInputs.body.trim()
+      : typeof block.params.body === "string"
+        ? block.params.body.trim()
+        : "";
   if (body.length === 0) {
     return {
       kind: "failed",

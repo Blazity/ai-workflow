@@ -51,7 +51,12 @@ blockCallLlmGenerateStep.maxRetries = 0;
  * codex. With an outputSchema the parsed object is returned, otherwise plain
  * text. Usage is recorded under the "LLM <blockId>" label.
  */
-export const execute: BlockExecuteFn = async (block, _steps, ctx): Promise<BlockExecutionResult> => {
+export const execute: BlockExecuteFn = async (
+  block,
+  _steps,
+  ctx,
+  resolvedInputs = {},
+): Promise<BlockExecutionResult> => {
   const schema =
     typeof block.params.outputSchema === "string" && block.params.outputSchema.trim().length > 0
       ? block.params.outputSchema
@@ -64,7 +69,12 @@ export const execute: BlockExecuteFn = async (block, _steps, ctx): Promise<Block
     }
   }
 
-  const prompt = typeof block.params.prompt === "string" ? block.params.prompt : "";
+  const prompt =
+    typeof resolvedInputs.prompt === "string"
+      ? resolvedInputs.prompt
+      : typeof block.params.prompt === "string"
+        ? block.params.prompt
+        : "";
   if (prompt.length === 0) {
     return { kind: "failed", output: { status: "failed" }, reason: "call_llm requires a prompt" };
   }
@@ -87,7 +97,12 @@ export const execute: BlockExecuteFn = async (block, _steps, ctx): Promise<Block
     provider = explicitProvider ?? ctx.runDefaultKind;
     model = provider === "codex" ? ctx.defaults.codex : DEFAULT_MODEL;
   }
-  const system = typeof block.params.system === "string" ? block.params.system : undefined;
+  const system =
+    typeof resolvedInputs.system === "string"
+      ? resolvedInputs.system
+      : typeof block.params.system === "string"
+        ? block.params.system
+        : undefined;
 
   try {
     const result = await blockCallLlmGenerateStep({

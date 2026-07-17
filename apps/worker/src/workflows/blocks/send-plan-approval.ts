@@ -4,7 +4,6 @@ import type { BlockExecuteFn, BlockExecutionResult } from "./types.js";
 
 export const paramsSchema = z
   .object({
-    planFromStep: z.string().trim().min(1).optional(),
     mirrorComment: z.boolean().default(true),
   })
   .strict();
@@ -80,9 +79,9 @@ parkForApprovalStep.maxRetries = 0;
 
 /**
  * send_plan_approval: file the run's plan for human approval, then end the run.
- * The plan text comes from the referenced step's output (params.planFromStep),
- * which must resolve to a `.plan` or the block fails, and falls back to the
- * run's research plan only when no step is referenced. After unregistering the
+ * The plan text comes from the block's resolved `plan` input. The run's
+ * research plan remains a compatibility fallback for stored definitions that
+ * predate typed inputs. After unregistering the
  * run it parks the ticket in the backlog column with an awaiting-approval
  * label, mirroring the clarification exit: moving the ticket out of the AI
  * column is what stops the cron poll from re-dispatching it while it waits. A
@@ -90,34 +89,16 @@ parkForApprovalStep.maxRetries = 0;
  * dispatch skips the column check so the ticket's backlog location does not
  * block it.
  */
-export const execute: BlockExecuteFn = async (block, steps, ctx): Promise<BlockExecutionResult> => {
-  const planFromStep =
-    typeof block.params.planFromStep === "string" ? block.params.planFromStep.trim() : "";
-  const planStep = planFromStep ? steps[planFromStep] : undefined;
-  // Only planning_agent emits `.plan`. A planFromStep pointing anywhere else
-  // must fail loud: silently approving ctx.researchPlanMarkdown would put a plan
-  // in front of a human that the referenced block did not produce. The fallback
-  // is for the no-reference case only.
-  let markdown: string;
-  if (planFromStep) {
-    if (!planStep) {
-      return {
-        kind: "failed",
-        output: { status: "failed" },
-        reason: `planFromStep references block "${planFromStep}", which produced no output before this block ran`,
-      };
-    }
-    if (typeof planStep.output.plan !== "string") {
-      return {
-        kind: "failed",
-        output: { status: "failed" },
-        reason: `planFromStep references block "${planFromStep}", whose output has no plan field; only a planning_agent block emits one`,
-      };
-    }
-    markdown = planStep.output.plan;
-  } else {
-    markdown = ctx.researchPlanMarkdown;
-  }
+export const execute: BlockExecuteFn = async (
+  block,
+  _steps,
+  ctx,
+  resolvedInputs,
+): Promise<BlockExecutionResult> => {
+  const markdown =
+    typeof resolvedInputs?.plan === "string"
+      ? resolvedInputs.plan
+      : ctx.researchPlanMarkdown;
   if (markdown.trim().length === 0) {
     return { kind: "failed", output: { status: "failed" }, reason: "no plan available" };
   }
@@ -130,7 +111,7 @@ export const execute: BlockExecuteFn = async (block, steps, ctx): Promise<BlockE
     };
   }
 
-  const rawAssumptions = planStep?.output.assumptions;
+  const rawAssumptions = resolvedInputs?.assumptions;
   const assumptions = Array.isArray(rawAssumptions)
     ? rawAssumptions.filter((a): a is string => typeof a === "string")
     : [];

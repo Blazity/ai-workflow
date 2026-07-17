@@ -31,6 +31,23 @@ describe("human_question execute", () => {
     });
   });
 
+  it("prefers resolved questions and suggestions over static params", async () => {
+    const result = await execute(
+      makeNode("human_question", {
+        questions: ["Static?"],
+        suggestedAnswers: ["Static"],
+      }),
+      {},
+      makeCtx(),
+      { questions: ["Bound?"], suggestedAnswers: ["Bound"] },
+    );
+
+    expect(result).toMatchObject({
+      questions: ["Bound?"],
+      suggestedAnswers: ["Bound"],
+    });
+  });
+
   it("derives questions from the most recent upstream output", async () => {
     const steps: StepsRecord = {
       older: { output: { status: "needs_human_input", questions: ["Old?"] } },

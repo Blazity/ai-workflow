@@ -11,6 +11,10 @@ import type {
   WorkflowDefinitionNode,
 } from "@shared/contracts";
 import { evaluateCondition, parseCondition } from "@shared/conditions";
+import {
+  resolveWorkflowInputBindings,
+  type WorkflowRunBindingValues,
+} from "./bindings.js";
 
 /** Resolved graph shape the walker consumes: node lookup, per-port targets, and triggers. */
 export interface RuntimeGraph {
@@ -63,6 +67,7 @@ export type BlockExecutionResult =
 export type BlockExecutor = (
   block: WorkflowDefinitionNode,
   steps: StepsRecord,
+  resolvedInputs: Record<string, unknown>,
 ) => Promise<BlockExecutionResult>;
 
 /** Side-effect callbacks the engine invokes as it walks; all persistence lives here. */
@@ -100,6 +105,7 @@ export async function executeGraph(opts: {
   graph: RuntimeGraph;
   entryTriggerId: string;
   triggerOutput: BlockOutput;
+  runValues?: WorkflowRunBindingValues;
   executeBlock: BlockExecutor;
   hooks: ExecuteGraphHooks;
   maxTotalExecutions?: number;
@@ -239,7 +245,29 @@ export async function executeGraph(opts: {
       }
     }
 
-    const result = await executeBlock(node, steps);
+    let resolvedInputs: Record<string, unknown>;
+    try {
+      resolvedInputs = resolveWorkflowInputBindings(
+        node.inputs,
+        triggerOutput,
+        steps,
+        opts.runValues,
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const output: BlockOutput = { status: "failed", error: message };
+      steps[id] = { output };
+      await hooks.onBlockFinish(id, {
+        status: "fail",
+        attempt,
+        output,
+        error: truncate(message),
+      });
+      await hooks.failureExit("bindings", truncate(message), id);
+      return { outcome: "stopped", steps };
+    }
+
+    const result = await executeBlock(node, steps, resolvedInputs);
 
     if (result.kind === "next") {
       const output = result.output;

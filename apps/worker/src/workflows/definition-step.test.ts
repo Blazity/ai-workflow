@@ -1,7 +1,23 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { WorkflowDefinition } from "@shared/contracts";
 
-vi.mock("../../env.js", () => ({ env: { ENABLE_REVIEW_PHASE: false } }));
+vi.mock("../../env.js", () => ({
+  env: {
+    ENABLE_REVIEW_PHASE: false,
+    AGENT_KIND: "claude",
+    CLAUDE_MODEL: "claude-test",
+    CODEX_MODEL: "codex-test",
+    ANTHROPIC_API_KEY: "sk-ant-test",
+    CODEX_API_KEY: "sk-codex-test",
+    GITHUB_APP_ID: 1,
+    GITHUB_APP_PRIVATE_KEY: "private-key",
+    GITHUB_INSTALLATION_ID: 2,
+    CHAT_SDK_SLACK_TOKEN: "slack-token",
+    CHAT_SDK_CHANNEL_ID: "channel",
+    GENAI_ENGINE_API_KEY: "arthur-key",
+    GENAI_ENGINE_TRACE_ENDPOINT: "https://arthur.example/traces",
+  },
+}));
 vi.mock("../db/client.js", () => ({ getDb: vi.fn(() => ({})) }));
 
 const mockGetCurrentVersion = vi.fn();
@@ -36,6 +52,24 @@ async function setEnv(partial: Record<string, unknown>) {
   mod.env = { ...mod.env, ...partial };
 }
 
+async function resetEnv(enableReviewPhase: boolean) {
+  await setEnv({
+    ENABLE_REVIEW_PHASE: enableReviewPhase,
+    AGENT_KIND: "claude",
+    CLAUDE_MODEL: "claude-test",
+    CODEX_MODEL: "codex-test",
+    ANTHROPIC_API_KEY: "sk-ant-test",
+    CODEX_API_KEY: "sk-codex-test",
+    GITHUB_APP_ID: 1,
+    GITHUB_APP_PRIVATE_KEY: "private-key",
+    GITHUB_INSTALLATION_ID: 2,
+    CHAT_SDK_SLACK_TOKEN: "slack-token",
+    CHAT_SDK_CHANNEL_ID: "channel",
+    GENAI_ENGINE_API_KEY: "arthur-key",
+    GENAI_ENGINE_TRACE_ENDPOINT: "https://arthur.example/traces",
+  });
+}
+
 function row(definition: WorkflowDefinition, version = 3, definitionId = 1) {
   return {
     definitionId,
@@ -60,7 +94,7 @@ describe("loadWorkflowDefinition", () => {
     mockGetEnabled.mockReset();
     loggerError.mockReset();
     loggerInfo.mockReset();
-    await setEnv({ ENABLE_REVIEW_PHASE: false });
+    await resetEnv(false);
   });
 
   it("falls back to the default nodes (no review) when there is no enabled definition", async () => {
@@ -132,6 +166,29 @@ describe("loadWorkflowDefinition", () => {
     expect(loggerError.mock.calls[0][0]).toMatchObject({ version: 9, definitionId: 5 });
   });
 
+  it("falls back when an eager store upgrade raises a deterministic Zod error", async () => {
+    mockGetEnabled.mockRejectedValue(
+      Object.assign(new Error("invalid stored definition"), {
+        name: "ZodError",
+        issues: [{ path: ["nodes", 0, "type"], message: "Unknown workflow block type." }],
+      }),
+    );
+
+    const plan = await loadWorkflowDefinition();
+
+    expect(plan.definitionId).toBeNull();
+    expect(loggerError).toHaveBeenCalledWith(
+      expect.objectContaining({ issues: expect.stringContaining("Unknown workflow block type") }),
+      "workflow_definition_invalid",
+    );
+  });
+
+  it("does not swallow database or network read failures", async () => {
+    mockGetEnabled.mockRejectedValue(new Error("database unavailable"));
+
+    await expect(loadWorkflowDefinition()).rejects.toThrow("database unavailable");
+  });
+
   it("falls back to the default and logs an error when the graph is invalid", async () => {
     const invalidGraph: WorkflowDefinition = {
       schemaVersion: 1,
@@ -148,6 +205,103 @@ describe("loadWorkflowDefinition", () => {
     expect(loggerError).toHaveBeenCalledTimes(1);
     expect(loggerError.mock.calls[0][0]).toMatchObject({ version: 12, definitionId: 6 });
   });
+
+  it("falls back and logs when a stored graph has invalid typed bindings", async () => {
+    const invalidBinding: WorkflowDefinition = {
+      schemaVersion: 1,
+      nodes: [
+        { id: "t", type: "trigger_ticket_ai", x: 0, y: 0, params: {}, inputs: {} },
+        { id: "approval", type: "send_plan_approval", x: 0, y: 0, params: {}, inputs: {} },
+      ],
+      edges: [{ from: "t", to: "approval" }],
+    };
+    mockGetEnabled.mockResolvedValue(enabled(invalidBinding, 13, 7));
+
+    const plan = await loadWorkflowDefinition();
+
+    expect(plan.definitionId).toBeNull();
+    expect(loggerError).toHaveBeenCalledTimes(1);
+    expect(loggerError.mock.calls[0][0].issues).toContain('missing required input "plan"');
+  });
+
+  it("keeps an already-deployed explicit legacy Arthur compatibility path loadable", async () => {
+    const legacyCompatible: WorkflowDefinition = {
+      schemaVersion: 1,
+      nodes: [
+        { id: "t", type: "trigger_ticket_ai", x: 0, y: 0, params: {}, inputs: {} },
+        { id: "fix", type: "fix_agent", x: 0, y: 0, params: {}, inputs: {} },
+        {
+          id: "check",
+          type: "arthur_injection_check",
+          x: 0,
+          y: 0,
+          params: { legacyContentFromStep: "fix" },
+          inputs: {},
+        },
+      ],
+      edges: [
+        { from: "t", to: "fix" },
+        { from: "fix", to: "check" },
+      ],
+    };
+    mockGetEnabled.mockResolvedValue(enabled(legacyCompatible, 14, 8));
+
+    const plan = await loadWorkflowDefinition();
+
+    expect(plan.definitionId).toBe(8);
+    expect(plan.nodes.find((node) => node.id === "check")?.params).toEqual({
+      legacyContentFromStep: "fix",
+    });
+    expect(loggerError).not.toHaveBeenCalled();
+  });
+
+  it("upgrades and loads an execution-only legacy Finalize gate", async () => {
+    const legacyCompatible: WorkflowDefinition = {
+      schemaVersion: 1,
+      nodes: [
+        { id: "t", type: "trigger_ticket_ai", x: 0, y: 0, params: {}, inputs: {} },
+        {
+          id: "finalize",
+          type: "finalize_workspace",
+          x: 0,
+          y: 0,
+          params: { requiredChecks: ["missing legacy check"] },
+          inputs: {},
+        },
+      ],
+      edges: [{ from: "t", to: "finalize" }],
+    };
+    mockGetEnabled.mockResolvedValue(enabled(legacyCompatible, 15, 9));
+
+    const plan = await loadWorkflowDefinition();
+
+    expect(plan.definitionId).toBe(9);
+    expect(plan.nodes.find((node) => node.id === "finalize")?.params).toEqual({
+      legacyRequiredChecks: ["missing legacy check"],
+    });
+    expect(loggerError).not.toHaveBeenCalled();
+  });
+
+  it("keeps a deployed definition pinned when current credentials become unavailable", async () => {
+    mockGetEnabled.mockResolvedValue(
+      enabled(defaultWorkflowDefinition({ includeReview: false }), 16, 10),
+    );
+    await setEnv({
+      ANTHROPIC_API_KEY: undefined,
+      CODEX_API_KEY: undefined,
+      GITHUB_APP_ID: undefined,
+      GITHUB_APP_PRIVATE_KEY: undefined,
+      GITHUB_INSTALLATION_ID: undefined,
+      CHAT_SDK_SLACK_TOKEN: undefined,
+      CHAT_SDK_CHANNEL_ID: undefined,
+    });
+
+    const plan = await loadWorkflowDefinition();
+
+    expect(plan.definitionId).toBe(10);
+    expect(plan.version).toBe(16);
+    expect(loggerError).not.toHaveBeenCalled();
+  });
 });
 
 describe("loadWorkflowDefinitionFor", () => {
@@ -157,7 +311,7 @@ describe("loadWorkflowDefinitionFor", () => {
     mockGetEnabled.mockReset();
     loggerError.mockReset();
     loggerInfo.mockReset();
-    await setEnv({ ENABLE_REVIEW_PHASE: true });
+    await resetEnv(true);
   });
 
   it("loads a pinned definition by id", async () => {
@@ -191,6 +345,97 @@ describe("loadWorkflowDefinitionFor", () => {
     mockGetEnabled.mockResolvedValue(null);
     const plan = await loadWorkflowDefinitionFor("planning_agent");
     expect(plan).toBeNull();
+  });
+
+  it("loads PR #118-style static-valued PR and ticket chains without redundant bindings", async () => {
+    const staticDefinition: WorkflowDefinition = {
+      schemaVersion: 1,
+      nodes: [
+        { id: "ticket", type: "trigger_ticket_ai", x: 0, y: 0, params: {}, inputs: {} },
+        {
+          id: "generic",
+          type: "generic_agent",
+          x: 1,
+          y: 0,
+          params: { prompt: "Summarize the ticket" },
+          inputs: {},
+        },
+        {
+          id: "llm",
+          type: "call_llm",
+          x: 2,
+          y: 0,
+          params: { prompt: "Write a status", system: "Be concise" },
+          inputs: {},
+        },
+        {
+          id: "ticket-comment",
+          type: "post_ticket_comment",
+          x: 3,
+          y: 0,
+          params: { body: "Work started" },
+          inputs: {},
+        },
+        {
+          id: "ticket-status",
+          type: "update_ticket_status",
+          x: 4,
+          y: 0,
+          params: { target: "ai_review" },
+          inputs: {},
+        },
+        {
+          id: "slack",
+          type: "send_slack_message",
+          x: 5,
+          y: 0,
+          params: { message: "" },
+          inputs: {},
+        },
+        {
+          id: "pr",
+          type: "trigger_pr_created",
+          x: 0,
+          y: 1,
+          params: { providers: ["github"], onlyWorkflowOwned: true },
+          inputs: {},
+        },
+        {
+          id: "pr-comment",
+          type: "post_pr_comment",
+          x: 1,
+          y: 1,
+          params: { body: "Review started", target: "primary" },
+          inputs: {},
+        },
+      ],
+      edges: [
+        { from: "ticket", to: "generic" },
+        { from: "generic", to: "llm" },
+        { from: "llm", to: "ticket-comment" },
+        { from: "ticket-comment", to: "ticket-status" },
+        { from: "ticket-status", to: "slack" },
+        { from: "pr", to: "pr-comment" },
+      ],
+    };
+    mockGetEnabled.mockResolvedValue(enabled(staticDefinition, 17, 11));
+
+    const plan = await loadWorkflowDefinitionFor("trigger_pr_created");
+
+    expect(plan).not.toBeNull();
+    expect(plan?.definitionId).toBe(11);
+    expect(plan?.version).toBe(17);
+    for (const id of [
+      "generic",
+      "llm",
+      "ticket-comment",
+      "ticket-status",
+      "slack",
+      "pr-comment",
+    ]) {
+      expect(plan?.nodes.find((node) => node.id === id)?.inputs, id).toEqual({});
+    }
+    expect(loggerError).not.toHaveBeenCalled();
   });
 
   it("falls back to the built-in default for the ticket trigger when the pinned id is missing", async () => {

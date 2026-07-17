@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { BLOCK_TYPE_SPECS } from "@shared/contracts";
 import type { WorkflowBlockType } from "@shared/contracts";
-import { blockTypesMissingExecutor, planningClarificationResult } from "./agent.js";
+import {
+  blockTypesMissingExecutor,
+  planningClarificationResult,
+  resolveSlackMessageInput,
+  resolveTicketStatusInput,
+} from "./agent.js";
 
 // Exhaustiveness guard for the block dispatch in agent.ts. If a new action-category
 // WorkflowBlockType is added to the contract without wiring an executor (registry
@@ -33,5 +38,14 @@ describe("block executor exhaustiveness", () => {
       questions: ["Which database?"],
       suggestedAnswers: ["Postgres", "MySQL"],
     });
+  });
+
+  it("prefers resolved Slack messages and ticket targets over static params", () => {
+    expect(resolveSlackMessageInput({ message: " static " }, { message: " bound " })).toBe(
+      "bound",
+    );
+    expect(resolveTicketStatusInput({ target: "ai_review" }, { target: "backlog" })).toBe(
+      "backlog",
+    );
   });
 });

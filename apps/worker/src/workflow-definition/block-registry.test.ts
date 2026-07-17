@@ -8,6 +8,7 @@ import {
 
 const context: WorkflowBlockRegistryContext = {
   agentProviders: { claude: true, codex: false },
+  llmProviders: { claude: true, codex: false },
   defaultAgent: { provider: "claude", model: "claude-test" },
   vcsProviders: ["github"],
   slackConfigured: false,
@@ -32,33 +33,57 @@ describe("workflow block registry", () => {
         BLOCK_TYPE_SPECS[type].allowsFailurePort,
       );
       expect(contract.inputs, `${type} inputs`).toBeTypeOf("object");
+      expect(contract.additionalInputs, `${type} additional inputs`).toBeInstanceOf(Array);
       expect(contract.output.schema, `${type} output`).toBeTypeOf("object");
+      expect(contract.output.bindingSchema, `${type} binding output`).toBeTypeOf("object");
       expect(contract.output.statusVariants.length, `${type} statuses`).toBeGreaterThan(0);
     }
   });
 
-  it("does not require bindings that current executors source from context or params", () => {
+  it("declares safe variadic Finalize check inputs", () => {
+    const contract = buildWorkflowBlockRegistry(context).finalize_workspace;
+    expect(contract.additionalInputs).toEqual([
+      {
+        keyPattern: "^checks\\.[A-Za-z0-9_-]+$",
+        schema: { type: "string" },
+      },
+    ]);
+  });
+
+  it("separates the full output envelope from fields guaranteed on normal output", () => {
+    const registry = buildWorkflowBlockRegistry(context);
+    expect(registry.planning_agent.output.schema).toMatchObject({ required: ["status"] });
+    expect(registry.planning_agent.output.bindingSchema).toMatchObject({
+      required: ["status", "plan"],
+    });
+    expect(registry.review_agent.output.bindingSchema).toMatchObject({
+      required: ["status"],
+    });
+  });
+
+  it("advertises only inputs current executors actually consume", () => {
     const registry = buildWorkflowBlockRegistry(context);
 
     for (const contract of Object.values(registry)) {
       for (const [name, inputContract] of Object.entries(contract.inputs)) {
-        expect(inputContract.required, `${contract.type}.${name}`).toBe(false);
+        const isBindingOnlyPlan = contract.type === "send_plan_approval" && name === "plan";
+        expect(inputContract.required, `${contract.type}.${name}`).toBe(isBindingOnlyPlan);
       }
     }
-    expect(registry.open_pr.inputs).toEqual({
-      workspace: {
-        required: false,
-        schema: {
-          type: "object",
-          properties: {
-            id: { type: "string" },
-            repositories: { type: "array", items: { type: "string" } },
-          },
-          required: ["id"],
-          additionalProperties: true,
-        },
-      },
-    });
+    expect(registry.open_pr.inputs).toEqual({});
+    expect(registry.implementation_agent.inputs).toEqual({});
+    expect(registry.fix_agent.inputs).toEqual({});
+    expect(registry.fetch_pr_context.inputs).toEqual({});
+    expect(Object.keys(registry.generic_agent.inputs)).toEqual(["prompt"]);
+    expect(Object.keys(registry.call_llm.inputs)).toEqual(["prompt", "system"]);
+    expect(Object.keys(registry.update_ticket_status.inputs)).toEqual(["target"]);
+    expect(Object.keys(registry.post_ticket_comment.inputs)).toEqual(["body"]);
+    expect(Object.keys(registry.post_pr_comment.inputs)).toEqual(["body"]);
+    expect(Object.keys(registry.send_slack_message.inputs)).toEqual(["message"]);
+    expect(Object.keys(registry.human_question.inputs)).toEqual([
+      "questions",
+      "suggestedAnswers",
+    ]);
     expect(registry.trigger_ticket_ai.output.schema).not.toMatchObject({
       properties: { ticket: expect.anything() },
     });
@@ -163,6 +188,25 @@ describe("workflow block registry", () => {
     });
   });
 
+  it.each([
+    ["42", "outputSchema must be a JSON Schema object."],
+    ['{"type":"made-up"}', 'outputSchema has unsupported type "made-up".'],
+    [
+      '{"type":"object","properties":{"nested":{"type":"made-up"}}}',
+      'outputSchema.properties.nested has unsupported type "made-up".',
+    ],
+  ])("disables valid JSON that is not a supported recursive schema", (outputSchema, reason) => {
+    const contract = resolveWorkflowBlockContract(
+      "call_llm",
+      { prompt: "work", outputSchema },
+      context,
+    );
+    expect(contract.availability).toMatchObject({
+      available: false,
+      unavailableReason: reason,
+    });
+  });
+
   it("treats a blank outputSchema as the block's unstructured default", () => {
     const registry = buildWorkflowBlockRegistry(context);
     const generic = resolveWorkflowBlockContract(
@@ -190,6 +234,56 @@ describe("workflow block registry", () => {
       available: false,
       unavailableReason: "Codex credentials are not configured.",
     });
+  });
+
+  it("distinguishes OAuth-capable Codex agents from API-key-only Call LLM", () => {
+    const oauthOnly: WorkflowBlockRegistryContext = {
+      ...context,
+      agentProviders: { claude: false, codex: true },
+      llmProviders: { claude: false, codex: false },
+      defaultAgent: { provider: "codex", model: "gpt-5-codex" },
+    };
+
+    expect(
+      resolveWorkflowBlockContract("generic_agent", { prompt: "work" }, oauthOnly).availability,
+    ).toEqual({ available: true, unavailableReason: null });
+    expect(
+      resolveWorkflowBlockContract("call_llm", { prompt: "work" }, oauthOnly).availability,
+    ).toEqual({
+      available: false,
+      unavailableReason: "Codex API credentials are not configured for Call LLM.",
+    });
+  });
+
+  it("uses runtime model inference for Call LLM across a different run default", () => {
+    const claudeDefault: WorkflowBlockRegistryContext = {
+      ...context,
+      llmProviders: { claude: true, codex: false },
+      defaultAgent: { provider: "claude", model: "claude-test" },
+    };
+    expect(
+      resolveWorkflowBlockContract(
+        "call_llm",
+        { prompt: "work", model: "gpt-5" },
+        claudeDefault,
+      ).availability,
+    ).toEqual({
+      available: false,
+      unavailableReason: "Codex API credentials are not configured for Call LLM.",
+    });
+
+    const codexDefault: WorkflowBlockRegistryContext = {
+      ...context,
+      llmProviders: { claude: true, codex: false },
+      defaultAgent: { provider: "codex", model: "gpt-5-codex" },
+    };
+    expect(
+      resolveWorkflowBlockContract(
+        "call_llm",
+        { prompt: "work", model: "claude-haiku-4-5" },
+        codexDefault,
+      ).availability,
+    ).toEqual({ available: true, unavailableReason: null });
   });
 
   it("marks a VCS trigger unavailable when none of its selected providers are installed", () => {

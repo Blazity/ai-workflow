@@ -31,7 +31,7 @@ vi.mock("../../sandbox/agents/index.js", () => ({
 
 import { GENERIC_SCHEMA } from "../../sandbox/agents/types.js";
 import { execute, paramsSchema } from "./generic-agent.js";
-import { makeCtx, makeNode } from "./test-support.js";
+import { expectOutputConformsToRegistry, makeCtx, makeNode } from "./test-support.js";
 
 function pathsFor(phase: string) {
   return {
@@ -118,6 +118,37 @@ describe("generic_agent execute", () => {
     expect(ctx.markLaunched).toHaveBeenCalledWith("Agent My Agent");
     expect(ctx.recordUsage).toHaveBeenCalledWith("Agent My Agent", null, "claude-model");
     expect(result).toEqual({ kind: "next", output: { status: "ok", body: "done" } });
+  });
+
+  it("emits the guaranteed body field when an unstructured success body is empty", async () => {
+    mocks.collectPhase.mockResolvedValue({
+      raw: "",
+      structured: JSON.stringify({ status: "ok", body: "", questions: null, error: null }),
+    });
+
+    const result = await execute(makeNode("generic_agent", { prompt: "p" }), {}, makeCtx());
+
+    expect(result).toEqual({ kind: "next", output: { status: "ok", body: "" } });
+  });
+
+  it("prefers a resolved prompt over the static param", async () => {
+    mocks.collectPhase.mockResolvedValue({
+      raw: "",
+      structured: JSON.stringify({ status: "ok", body: "done", questions: null, error: null }),
+    });
+
+    await execute(
+      makeNode("generic_agent", { prompt: "static" }),
+      {},
+      makeCtx(),
+      { prompt: "bound" },
+    );
+
+    expect(mocks.writeFiles).toHaveBeenCalledWith(
+      expect.arrayContaining([
+        expect.objectContaining({ content: Buffer.from("bound") }),
+      ]),
+    );
   });
 
   it("keeps the telemetry label unique per raw block id while sanitizing the artifact path", async () => {
@@ -210,6 +241,19 @@ describe("generic_agent execute", () => {
       expect.objectContaining({ jsonSchema: '{"type":"object"}' }),
     );
     expect(result).toEqual({ kind: "next", output: { status: "ok", data: { answer: 42 } } });
+  });
+
+  it("accepts null when the declared custom schema requires null", async () => {
+    mocks.collectPhase.mockResolvedValue({ raw: "", structured: "null" });
+    const node = makeNode("generic_agent", {
+      prompt: "p",
+      outputSchema: '{"type":"null"}',
+    });
+
+    const result = await execute(node, {}, makeCtx());
+
+    expect(result).toEqual({ kind: "next", output: { status: "ok", data: null } });
+    expectOutputConformsToRegistry("generic_agent", result.output, node.params);
   });
 
   it("fails when custom-schema output is unparseable", async () => {

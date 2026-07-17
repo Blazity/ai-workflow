@@ -29,10 +29,10 @@ import { AWAITING_APPROVAL_LABEL } from "../../lib/labels.js";
 import { makeCtx, makeNode } from "./test-support.js";
 
 describe("send_plan_approval paramsSchema", () => {
-  it("defaults mirrorComment to true and allows an optional planFromStep", () => {
+  it("defaults mirrorComment to true and rejects the retired planFromStep param", () => {
     expect(paramsSchema.parse({})).toEqual({ mirrorComment: true });
-    expect(paramsSchema.safeParse({ planFromStep: "plan", mirrorComment: false }).success).toBe(true);
-    expect(paramsSchema.safeParse({ planFromStep: "" }).success).toBe(false);
+    expect(paramsSchema.safeParse({ mirrorComment: false }).success).toBe(true);
+    expect(paramsSchema.safeParse({ planFromStep: "plan" }).success).toBe(false);
     expect(paramsSchema.safeParse({ extra: 1 }).success).toBe(false);
   });
 });
@@ -109,43 +109,16 @@ describe("send_plan_approval execute", () => {
     );
   });
 
-  it("prefers a referenced step's plan and string assumptions over the research plan", async () => {
+  it("prefers bound plan and string assumptions over the compatibility research plan", async () => {
     const ctx = makeCtx({ researchPlanMarkdown: "# Research plan" });
-    const steps: StepsRecord = {
-      planner: { output: { status: "ready", plan: "# Step plan", assumptions: ["db is seeded", 3] } },
-    };
-    await execute(makeNode("send_plan_approval", { planFromStep: "planner" }), steps, ctx);
+    await execute(makeNode("send_plan_approval"), {}, ctx, {
+      plan: "# Step plan",
+      assumptions: ["db is seeded", 3],
+    });
     expect(mocks.createApprovalRequest).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({ plan: { markdown: "# Step plan" }, assumptions: ["db is seeded"] }),
     );
-  });
-
-  it("fails loud when planFromStep points at a block whose output has no plan", async () => {
-    // call_llm emits `.output`, generic_agent `.body`/`.data`; neither has a
-    // plan. Falling back to the research plan here would put a plan in front of
-    // a human that the referenced block never produced.
-    const ctx = makeCtx({ researchPlanMarkdown: "# Research plan" });
-    const steps: StepsRecord = { llm: { output: { status: "ok", output: "some text" } } };
-
-    const result = await execute(makeNode("send_plan_approval", { planFromStep: "llm" }), steps, ctx);
-
-    expect(result.kind).toBe("failed");
-    if (result.kind === "failed") {
-      expect(result.reason).toContain('"llm"');
-      expect(result.reason).toContain("no plan field");
-    }
-    expect(mocks.createApprovalRequest).not.toHaveBeenCalled();
-  });
-
-  it("fails loud when planFromStep references a block that produced no output", async () => {
-    const ctx = makeCtx({ researchPlanMarkdown: "# Research plan" });
-
-    const result = await execute(makeNode("send_plan_approval", { planFromStep: "ghost" }), {}, ctx);
-
-    expect(result.kind).toBe("failed");
-    if (result.kind === "failed") expect(result.reason).toContain('"ghost"');
-    expect(mocks.createApprovalRequest).not.toHaveBeenCalled();
   });
 
   it("still ends awaiting_approval when parking the ticket fails", async () => {

@@ -123,8 +123,7 @@ export function nodeSummary(node: FlowNodeDef, options: WorkflowEditorOptions): 
       return typeof cycles === "number" ? `${cycles} fix cycles` : null;
     }
     case "send_plan_approval": {
-      const from = str(node.params.planFromStep);
-      return from !== "" ? from : "awaits approval";
+      return "awaits approval";
     }
     default:
       return null;

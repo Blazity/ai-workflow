@@ -134,7 +134,12 @@ async function blockGenericAgentParseStep(
  * wrapped as { status: "ok", data }. The outputSchema string is validated with
  * JSON.parse before anything reaches the agent CLI.
  */
-export const execute: BlockExecuteFn = async (block, _steps, ctx): Promise<BlockExecutionResult> => {
+export const execute: BlockExecuteFn = async (
+  block,
+  _steps,
+  ctx,
+  resolvedInputs = {},
+): Promise<BlockExecutionResult> => {
   const customSchema =
     typeof block.params.outputSchema === "string" && block.params.outputSchema.trim().length > 0
       ? block.params.outputSchema
@@ -155,7 +160,12 @@ export const execute: BlockExecuteFn = async (block, _steps, ctx): Promise<Block
     };
   }
   const sandboxId = ctx.sandboxId;
-  const prompt = typeof block.params.prompt === "string" ? block.params.prompt : "";
+  const prompt =
+    typeof resolvedInputs.prompt === "string"
+      ? resolvedInputs.prompt
+      : typeof block.params.prompt === "string"
+        ? block.params.prompt
+        : "";
   if (prompt.length === 0) {
     return { kind: "failed", output: { status: "failed" }, reason: "generic_agent requires a prompt" };
   }
@@ -192,7 +202,7 @@ export const execute: BlockExecuteFn = async (block, _steps, ctx): Promise<Block
     ctx.recordUsage(usageLabel, usage, model);
 
     if (customSchema !== undefined) {
-      if (object === undefined || object === null) {
+      if (object === undefined) {
         return {
           kind: "failed",
           output: { status: "failed" },
@@ -238,7 +248,7 @@ export const execute: BlockExecuteFn = async (block, _steps, ctx): Promise<Block
       kind: "next",
       output: {
         status: "ok",
-        ...(parsed.data.body ? { body: parsed.data.body.slice(0, 4000) } : {}),
+        body: parsed.data.body.slice(0, 4000),
       },
     };
   } catch (err) {

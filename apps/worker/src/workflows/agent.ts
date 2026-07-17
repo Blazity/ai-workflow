@@ -85,6 +85,26 @@ export function blockTypesMissingExecutor(): WorkflowBlockType[] {
   );
 }
 
+export function resolveSlackMessageInput(
+  params: Record<string, unknown>,
+  resolvedInputs: Record<string, unknown>,
+): string {
+  return typeof resolvedInputs.message === "string"
+    ? resolvedInputs.message.trim()
+    : typeof params.message === "string"
+      ? params.message.trim()
+      : "";
+}
+
+export function resolveTicketStatusInput(
+  params: Record<string, unknown>,
+  resolvedInputs: Record<string, unknown>,
+): "ai_review" | "backlog" {
+  return resolveTicketMoveTarget(
+    typeof resolvedInputs.target === "string" ? resolvedInputs.target : params.target,
+  );
+}
+
 /** Build the planning clarification envelope once so persisted step output and
  * the interpreter-facing fields cannot drift apart. */
 export function planningClarificationResult(
@@ -1151,10 +1171,14 @@ export async function agentWorkflow(input: string | AgentWorkflowInput) {
         reason: `no workspace: connect prepare_workspace before ${type}`,
       });
 
-      const executeBlock: BlockExecutor = async (node, steps): Promise<BlockExecutionResult> => {
+      const executeBlock: BlockExecutor = async (
+        node,
+        steps,
+        resolvedInputs,
+      ): Promise<BlockExecutionResult> => {
         const blockExecute = BLOCK_EXECUTORS[node.type];
         if (blockExecute) {
-          const result = await blockExecute(node, steps, ctx);
+          const result = await blockExecute(node, steps, ctx, resolvedInputs);
           if (node.type === "prepare_workspace" && result.kind === "next" && ctx.sandboxId) {
             activeModel ??= defaultModel;
             await writeAttachments(ctx.sandboxId, downloadedAttachments);
@@ -1434,8 +1458,7 @@ export async function agentWorkflow(input: string | AgentWorkflowInput) {
             if (publication?.status === "published") {
               const primaryPr = publication.prs[0]!;
               const usageReport = formatUsageReport(phaseUsages, priceLookup, activeModel, phaseModels);
-              const message =
-                typeof node.params.message === "string" ? node.params.message.trim() : "";
+              const message = resolveSlackMessageInput(node.params, resolvedInputs);
               await notifyTicket(ticket.identifier, {
                 kind: "pr_ready",
                 pr: { url: primaryPr.url, number: primaryPr.id },
@@ -1448,7 +1471,7 @@ export async function agentWorkflow(input: string | AgentWorkflowInput) {
           }
 
           case "update_ticket_status": {
-            const targetName = resolveTicketMoveTarget(node.params.target);
+            const targetName = resolveTicketStatusInput(node.params, resolvedInputs);
             const target = targetName === "backlog" ? backlogMoveTarget() : aiReviewMoveTarget();
             await moveTicket(ticketId, target);
             return { kind: "next", output: { status: "ok", target: targetName } };
@@ -1489,6 +1512,11 @@ export async function agentWorkflow(input: string | AgentWorkflowInput) {
         graph,
         entryTriggerId: entryTrigger.id,
         triggerOutput,
+        runValues: {
+          id: workflowRunId,
+          branchName,
+          defaultAgent: { provider: runDefaultKind, model: defaultModel },
+        },
         executeBlock,
         hooks,
         maxTotalExecutions: 200,

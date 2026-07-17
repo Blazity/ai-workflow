@@ -1,7 +1,25 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { eq } from "drizzle-orm";
 import type { WorkflowBlockType, WorkflowDefinition } from "@shared/contracts";
 import type { Db } from "../db/client.js";
+
+vi.mock("../../env.js", () => ({
+  env: {
+    AGENT_KIND: "claude",
+    CLAUDE_MODEL: "claude-test",
+    CODEX_MODEL: "codex-test",
+    ANTHROPIC_API_KEY: "sk-ant-test",
+    CODEX_API_KEY: "sk-codex-test",
+    GITHUB_APP_ID: 1,
+    GITHUB_APP_PRIVATE_KEY: "private-key",
+    GITHUB_INSTALLATION_ID: 2,
+    GITLAB_TOKEN: "gitlab-token",
+    CHAT_SDK_SLACK_TOKEN: "slack-token",
+    CHAT_SDK_CHANNEL_ID: "channel",
+    GENAI_ENGINE_API_KEY: "arthur-key",
+    GENAI_ENGINE_TRACE_ENDPOINT: "https://arthur.example/traces",
+  },
+}));
 import {
   workflowDefinitions,
   workflowDefinitionTriggers,
@@ -58,6 +76,17 @@ function invalidDef(): WorkflowDefinition {
   };
 }
 
+function invalidBindingDef(): WorkflowDefinition {
+  return {
+    schemaVersion: 1,
+    nodes: [
+      { id: "t", type: "trigger_ticket_ai", x: 0, y: 0, params: {}, inputs: {} },
+      { id: "approval", type: "send_plan_approval", x: 0, y: 0, params: {}, inputs: {} },
+    ],
+    edges: [{ from: "t", to: "approval" }],
+  };
+}
+
 /** The definition the 0013 migration seeds. */
 const SEEDED_DEFAULT_ID = 1;
 
@@ -89,6 +118,12 @@ describe("migration seed", () => {
 });
 
 describe("createWorkflowDefinition", () => {
+  it("rejects a structurally valid seed with invalid typed bindings", async () => {
+    await expect(
+      createWorkflowDefinition(db, { name: "Invalid bindings", seed: invalidBindingDef(), actor: ADMIN }),
+    ).rejects.toMatchObject({ statusCode: 400 });
+  });
+
   it("creates a disabled definition with an optional v1 and derived trigger_types", async () => {
     const created = await createWorkflowDefinition(db, {
       name: "With seed",

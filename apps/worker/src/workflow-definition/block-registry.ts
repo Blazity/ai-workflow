@@ -3,6 +3,7 @@ import {
   type BlockOutput,
   type VcsProviderKind,
   type WorkflowBlockAvailability,
+  type WorkflowBlockAdditionalInputContract,
   type WorkflowBlockContract,
   type WorkflowBlockGroup,
   type WorkflowBlockInputContract,
@@ -11,9 +12,11 @@ import {
   type WorkflowParamValue,
   type WorkflowValueSchema,
 } from "@shared/contracts";
+import { resolveLlmProvider, type LlmProvider } from "../lib/llm-provider.js";
 
 export interface WorkflowBlockRegistryContext {
   agentProviders: { claude: boolean; codex: boolean };
+  llmProviders: { claude: boolean; codex: boolean };
   defaultAgent: { provider: "claude" | "codex"; model: string };
   vcsProviders: VcsProviderKind[];
   slackConfigured: boolean;
@@ -24,7 +27,11 @@ interface ContractDefinition {
   presentation: WorkflowBlockPresentation;
   defaults: Record<string, WorkflowParamValue>;
   inputs: Record<string, WorkflowBlockInputContract>;
+  additionalInputs?: WorkflowBlockAdditionalInputContract[];
   output: WorkflowValueSchema;
+  /** Top-level fields guaranteed whenever the block advances through a normal
+   * output port. Nested guarantees remain declared by their own schemas. */
+  normalOutputRequired?: string[];
   statusVariants: string[];
 }
 
@@ -57,32 +64,30 @@ const statusOutput = (
 ): WorkflowValueSchema =>
   objectType({ status: stringType(), ...properties }, ["status", ...required]);
 
-const ticketType = objectType(
-  {
-    key: stringType(),
-    title: stringType(),
-    description: stringType(),
-  },
-  ["key"],
-  true,
-);
+function withRequiredFields(
+  schema: WorkflowValueSchema,
+  required: readonly string[],
+): WorkflowValueSchema {
+  if (schema.type !== "object") return schema;
+  return {
+    ...schema,
+    required: [
+      ...new Set([
+        ...schema.required,
+        ...required.filter((key) =>
+          Object.prototype.hasOwnProperty.call(schema.properties, key),
+        ),
+      ]),
+    ],
+  };
+}
+
 const workspaceType = objectType(
   {
     id: stringType(),
     repositories: arrayType(stringType()),
   },
   ["id"],
-  true,
-);
-const prType = objectType(
-  {
-    provider: stringType(),
-    repoPath: stringType(),
-    number: numberType(),
-    url: stringType(),
-    headSha: stringType(),
-  },
-  ["provider", "repoPath", "number", "url"],
   true,
 );
 const publishedPrType = objectType(
@@ -287,7 +292,7 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
       "✦",
     ),
     defaults: {},
-    inputs: { ticket: input(ticketType) },
+    inputs: {},
     output: statusOutput(
       {
         plan: stringType(),
@@ -296,6 +301,7 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
       },
       [],
     ),
+    normalOutputRequired: ["plan"],
     statusVariants: ["ready", "needs_human_input", "failed"],
   },
   implementation_agent: {
@@ -306,11 +312,7 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
       "⌨",
     ),
     defaults: {},
-    inputs: {
-      ticket: input(ticketType),
-      plan: input(stringType()),
-      workspace: input(workspaceType, false),
-    },
+    inputs: {},
     output: statusOutput({ questions: arrayType(stringType()) }),
     statusVariants: ["implemented", "needs_human_input", "failed"],
   },
@@ -322,7 +324,7 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
       "☰",
     ),
     defaults: {},
-    inputs: { ticket: input(ticketType), workspace: input(workspaceType) },
+    inputs: {},
     output: statusOutput({ feedback: stringType() }),
     statusVariants: ["ok", "failed"],
   },
@@ -334,11 +336,7 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
       "✚",
     ),
     defaults: { maxMinutes: 25 },
-    inputs: {
-      ticket: input(ticketType, false),
-      remediationContext: input(arrayType(unknownType())),
-      workspace: input(workspaceType, false),
-    },
+    inputs: {},
     output: statusOutput({
       summary: stringType(),
       questions: arrayType(stringType()),
@@ -356,7 +354,6 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
     defaults: { prompt: "" },
     inputs: {
       prompt: input(stringType()),
-      workspace: input(workspaceType, false),
     },
     output: statusOutput(
       {
@@ -366,6 +363,7 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
       },
       [],
     ),
+    normalOutputRequired: ["body"],
     statusVariants: ["ok", "needs_human_input", "failed"],
   },
   prepare_workspace: {
@@ -376,13 +374,14 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
       "⊞",
     ),
     defaults: {},
-    inputs: { ticket: input(ticketType) },
+    inputs: {},
     output: statusOutput({
       sandboxId: stringType(),
       repositories: arrayType(stringType()),
       workspace: workspaceType,
       questions: arrayType(stringType()),
     }),
+    normalOutputRequired: ["sandboxId", "repositories", "workspace"],
     statusVariants: ["ok", "needs_human_input", "failed"],
   },
   finalize_workspace: {
@@ -392,15 +391,19 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
       "Preflights and publishes committed workspace changes.",
       "⇉",
     ),
-    defaults: { requiredChecks: [] },
-    inputs: {
-      workspace: input(workspaceType),
-      checks: input(arrayType(unknownType()), false),
-    },
+    defaults: {},
+    inputs: {},
+    additionalInputs: [
+      {
+        keyPattern: "^checks\\.[A-Za-z0-9_-]+$",
+        schema: stringType(),
+      },
+    ],
     output: statusOutput({
       prs: arrayType(publishedPrType),
       unmetChecks: arrayType(stringType()),
     }),
+    normalOutputRequired: ["prs"],
     statusVariants: ["published", "failed"],
   },
   run_pre_pr_checks: {
@@ -411,12 +414,13 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
       "✓",
     ),
     defaults: { maxFixCycles: 3 },
-    inputs: { workspace: input(workspaceType) },
+    inputs: {},
     output: statusOutput({
       ok: booleanType(),
       fixCycles: numberType(),
       summary: stringType(),
     }),
+    normalOutputRequired: ["ok", "fixCycles", "summary"],
     statusVariants: ["ok", "failed"],
   },
   run_checks: {
@@ -427,12 +431,13 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
       "✓",
     ),
     defaults: { commands: [] },
-    inputs: { workspace: input(workspaceType) },
+    inputs: {},
     output: statusOutput({
       ok: booleanType(),
       results: arrayType(unknownType()),
       failures: arrayType(unknownType()),
     }),
+    normalOutputRequired: ["ok", "results", "failures"],
     statusVariants: ["ok", "failed"],
   },
   call_llm: {
@@ -445,6 +450,7 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
     defaults: { prompt: "" },
     inputs: { prompt: input(stringType()), system: input(stringType(), false) },
     output: statusOutput({ output: stringType() }),
+    normalOutputRequired: ["output"],
     statusVariants: ["ok", "failed"],
   },
   fetch_pr_context: {
@@ -455,8 +461,9 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
       "⇊",
     ),
     defaults: {},
-    inputs: { pr: input(prType) },
+    inputs: {},
     output: statusOutput({ contexts: arrayType(unknownType()) }),
+    normalOutputRequired: ["contexts"],
     statusVariants: ["ok", "failed"],
   },
   open_pr: {
@@ -467,8 +474,9 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
       "⇪",
     ),
     defaults: {},
-    inputs: { workspace: input(workspaceType) },
+    inputs: {},
     output: statusOutput({ prUrl: stringType(), prNumber: numberType() }),
+    normalOutputRequired: ["prUrl", "prNumber"],
     statusVariants: ["ok", "failed"],
   },
   update_ticket_status: {
@@ -479,7 +487,7 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
       "▤",
     ),
     defaults: { target: "ai_review" },
-    inputs: { ticket: input(ticketType), target: input(stringType()) },
+    inputs: { target: input(stringType()) },
     output: statusOutput({ target: stringType() }, ["target"]),
     statusVariants: ["ok"],
   },
@@ -491,8 +499,9 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
       "❝",
     ),
     defaults: { body: "" },
-    inputs: { ticket: input(ticketType), body: input(stringType()) },
+    inputs: { body: input(stringType()) },
     output: statusOutput({ commentUrl: nullableType(stringType()) }),
+    normalOutputRequired: ["commentUrl"],
     statusVariants: ["ok", "failed"],
   },
   post_pr_comment: {
@@ -503,8 +512,9 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
       "❞",
     ),
     defaults: { body: "", target: "all" },
-    inputs: { pr: input(prType), body: input(stringType()) },
+    inputs: { body: input(stringType()) },
     output: statusOutput({ comments: arrayType(unknownType()) }),
+    normalOutputRequired: ["comments"],
     statusVariants: ["ok", "failed"],
   },
   send_slack_message: {
@@ -515,7 +525,7 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
       "✉",
     ),
     defaults: { message: "" },
-    inputs: { message: input(stringType()), context: input(unknownType(), false) },
+    inputs: { message: input(stringType()) },
     output: statusOutput(),
     statusVariants: ["ok", "skipped"],
   },
@@ -528,11 +538,11 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
     ),
     defaults: { mirrorComment: true },
     inputs: {
-      ticket: input(ticketType),
-      plan: input(stringType()),
+      plan: input(stringType(), true),
       assumptions: input(arrayType(stringType()), false),
     },
     output: statusOutput({ approvalRequestId: stringType() }),
+    normalOutputRequired: ["approvalRequestId"],
     statusVariants: ["awaiting_approval", "failed"],
   },
   human_question: {
@@ -544,7 +554,6 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
     ),
     defaults: { questions: [] },
     inputs: {
-      ticket: input(ticketType),
       questions: input(arrayType(stringType())),
       suggestedAnswers: input(arrayType(stringType()), false),
     },
@@ -623,7 +632,6 @@ const agentBlocks = new Set<WorkflowBlockType>([
   "review_agent",
   "fix_agent",
   "generic_agent",
-  "call_llm",
 ]);
 
 const available: WorkflowBlockAvailability = { available: true, unavailableReason: null };
@@ -637,17 +645,8 @@ function availabilityFor(
   params: Record<string, WorkflowParamValue>,
   context: WorkflowBlockRegistryContext,
 ): WorkflowBlockAvailability {
-  if (
-    (type === "generic_agent" || type === "call_llm") &&
-    typeof params.outputSchema === "string" &&
-    params.outputSchema.trim() !== ""
-  ) {
-    try {
-      JSON.parse(params.outputSchema);
-    } catch {
-      return unavailable("outputSchema is not valid JSON.");
-    }
-  }
+  const definitionIssue = workflowBlockDefinitionIssue(type, params);
+  if (definitionIssue) return unavailable(definitionIssue);
   if (type === "send_slack_message" && !context.slackConfigured) {
     return unavailable("Slack messaging is not configured.");
   }
@@ -670,6 +669,31 @@ function availabilityFor(
       );
     }
   }
+  if (type === "call_llm") {
+    const explicitProvider: LlmProvider | undefined =
+      params.provider === "claude" || params.provider === "codex"
+        ? params.provider
+        : undefined;
+    const explicitModel =
+      typeof params.model === "string" && params.model.trim() !== ""
+        ? params.model.trim()
+        : undefined;
+    const runtimeProvider =
+      explicitModel === undefined
+        ? (explicitProvider ?? context.defaultAgent.provider)
+        : explicitProvider;
+    const requested = resolveLlmProvider(
+      explicitModel ?? context.defaultAgent.model,
+      runtimeProvider,
+    );
+    if (!context.llmProviders[requested]) {
+      return unavailable(
+        requested === "codex"
+          ? "Codex API credentials are not configured for Call LLM."
+          : "Claude API credentials are not configured for Call LLM.",
+      );
+    }
+  }
   if (agentBlocks.has(type)) {
     const requested =
       params.provider === "claude" || params.provider === "codex"
@@ -686,57 +710,124 @@ function availabilityFor(
   return available;
 }
 
-function valueSchemaFromJsonSchema(raw: unknown, depth = 0): WorkflowValueSchema {
-  if (depth > 32 || raw === null || typeof raw !== "object" || Array.isArray(raw)) {
-    return unknownType();
+type ParsedDeclaredSchema =
+  | { ok: true; schema: WorkflowValueSchema }
+  | { ok: false; reason: string };
+
+const unsafeSchemaKeys = new Set(["__proto__", "prototype", "constructor"]);
+
+function parseJsonValueSchema(
+  raw: unknown,
+  path: string,
+  depth = 0,
+): ParsedDeclaredSchema {
+  if (depth > 32) return { ok: false, reason: `${path} is nested too deeply.` };
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+    return {
+      ok: false,
+      reason:
+        path === "outputSchema"
+          ? "outputSchema must be a JSON Schema object."
+          : `${path} must be a JSON Schema object.`,
+    };
   }
+
   const schema = raw as Record<string, unknown>;
   switch (schema.type) {
     case "string":
-      return stringType();
+      return { ok: true, schema: stringType() };
     case "number":
     case "integer":
-      return numberType();
+      return { ok: true, schema: numberType() };
     case "boolean":
-      return booleanType();
+      return { ok: true, schema: booleanType() };
     case "null":
-      return { type: "null" };
-    case "array":
-      return arrayType(valueSchemaFromJsonSchema(schema.items, depth + 1));
+      return { ok: true, schema: { type: "null" } };
+    case "array": {
+      const items = parseJsonValueSchema(schema.items, `${path}.items`, depth + 1);
+      return items.ok ? { ok: true, schema: arrayType(items.schema) } : items;
+    }
     case "object": {
-      const rawProperties =
-        schema.properties !== null &&
-        typeof schema.properties === "object" &&
-        !Array.isArray(schema.properties)
-          ? (schema.properties as Record<string, unknown>)
-          : {};
-      const properties = Object.fromEntries(
-        Object.entries(rawProperties).map(([key, value]) => [
-          key,
-          valueSchemaFromJsonSchema(value, depth + 1),
-        ]),
-      );
-      const required = Array.isArray(schema.required)
-        ? schema.required.filter(
-            (key): key is string =>
-              typeof key === "string" && Object.prototype.hasOwnProperty.call(properties, key),
-          )
-        : [];
-      return objectType(properties, required, schema.additionalProperties !== false);
+      if (
+        schema.properties !== undefined &&
+        (schema.properties === null ||
+          typeof schema.properties !== "object" ||
+          Array.isArray(schema.properties))
+      ) {
+        return { ok: false, reason: `${path}.properties must be an object.` };
+      }
+      const rawProperties = (schema.properties ?? {}) as Record<string, unknown>;
+      const properties: Record<string, WorkflowValueSchema> = {};
+      for (const [key, childRaw] of Object.entries(rawProperties)) {
+        if (unsafeSchemaKeys.has(key)) {
+          return { ok: false, reason: `${path}.properties.${key} is not a safe field name.` };
+        }
+        const child = parseJsonValueSchema(childRaw, `${path}.properties.${key}`, depth + 1);
+        if (!child.ok) return child;
+        properties[key] = child.schema;
+      }
+      if (
+        schema.required !== undefined &&
+        (!Array.isArray(schema.required) ||
+          schema.required.some(
+            (key) =>
+              typeof key !== "string" ||
+              !Object.prototype.hasOwnProperty.call(properties, key),
+          ))
+      ) {
+        return {
+          ok: false,
+          reason: `${path}.required must contain only declared property names.`,
+        };
+      }
+      if (
+        schema.additionalProperties !== undefined &&
+        typeof schema.additionalProperties !== "boolean"
+      ) {
+        return { ok: false, reason: `${path}.additionalProperties must be a boolean.` };
+      }
+      return {
+        ok: true,
+        schema: objectType(
+          properties,
+          (schema.required as string[] | undefined) ?? [],
+          schema.additionalProperties !== false,
+        ),
+      };
     }
     default:
-      return unknownType();
+      return {
+        ok: false,
+        reason:
+          typeof schema.type === "string"
+            ? `${path} has unsupported type "${schema.type}".`
+            : `${path} must declare a supported type.`,
+      };
   }
 }
 
-function declaredOutputSchema(params: Record<string, WorkflowParamValue>): WorkflowValueSchema {
+function declaredOutputSchema(
+  params: Record<string, WorkflowParamValue>,
+): ParsedDeclaredSchema | null {
   const raw = params.outputSchema;
-  if (typeof raw !== "string" || raw.trim() === "") return unknownType();
+  if (typeof raw !== "string" || raw.trim() === "") return null;
   try {
-    return valueSchemaFromJsonSchema(JSON.parse(raw));
+    return parseJsonValueSchema(JSON.parse(raw), "outputSchema");
   } catch {
-    return unknownType();
+    return { ok: false, reason: "outputSchema is not valid JSON." };
   }
+}
+
+/** Definition-local registry issue, separate from environment availability so
+ * pinned deployed definitions can execute after credentials/configuration
+ * change while malformed authored contracts still fail closed. */
+export function workflowBlockDefinitionIssue(
+  type: WorkflowBlockType,
+  params: Record<string, WorkflowParamValue>,
+): string | null {
+  if (type !== "generic_agent" && type !== "call_llm") return null;
+  const result = declaredOutputSchema(params);
+  return result && !result.ok ? result.reason : null;
 }
 
 function resolvedOutput(
@@ -744,21 +835,34 @@ function resolvedOutput(
   params: Record<string, WorkflowParamValue>,
   fallback: WorkflowValueSchema,
 ): WorkflowValueSchema {
-  if (
-    type === "generic_agent" &&
-    typeof params.outputSchema === "string" &&
-    params.outputSchema.trim() !== ""
-  ) {
-    return statusOutput({ data: declaredOutputSchema(params) });
+  const declared = declaredOutputSchema(params);
+  if (type === "generic_agent" && declared !== null) {
+    return statusOutput({ data: declared.ok ? declared.schema : unknownType() });
   }
-  if (
-    type === "call_llm" &&
-    typeof params.outputSchema === "string" &&
-    params.outputSchema.trim() !== ""
-  ) {
-    return statusOutput({ output: declaredOutputSchema(params) });
+  if (type === "call_llm" && declared !== null) {
+    return statusOutput({ output: declared.ok ? declared.schema : unknownType() });
   }
   return fallback;
+}
+
+function resolvedBindingOutput(
+  type: WorkflowBlockType,
+  params: Record<string, WorkflowParamValue>,
+  definition: ContractDefinition,
+  output: WorkflowValueSchema,
+): WorkflowValueSchema {
+  const dynamicField =
+    declaredOutputSchema(params)?.ok === true
+      ? type === "generic_agent"
+        ? "data"
+        : type === "call_llm"
+          ? "output"
+          : null
+      : null;
+  return withRequiredFields(output, [
+    ...(definition.normalOutputRequired ?? []),
+    ...(dynamicField === null ? [] : [dynamicField]),
+  ]);
 }
 
 function validateValueAgainstSchema(
@@ -830,6 +934,7 @@ export function resolveWorkflowBlockContract(
 ): WorkflowBlockContract {
   const definition = definitions[type];
   const spec = BLOCK_TYPE_SPECS[type];
+  const output = resolvedOutput(type, params, definition.output);
   return {
     type,
     presentation: definition.presentation,
@@ -842,8 +947,10 @@ export function resolveWorkflowBlockContract(
     ports: [...spec.ports],
     allowsFailurePort: spec.allowsFailurePort,
     inputs: definition.inputs,
+    additionalInputs: definition.additionalInputs ?? [],
     output: {
-      schema: resolvedOutput(type, params, definition.output),
+      schema: output,
+      bindingSchema: resolvedBindingOutput(type, params, definition, output),
       statusVariants: [...definition.statusVariants],
     },
     availability: availabilityFor(type, params, context),

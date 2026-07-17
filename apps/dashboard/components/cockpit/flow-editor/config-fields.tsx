@@ -448,21 +448,9 @@ export function ConfigFields({
       return <ConfigNote>Provisions a fresh sandbox and checks out the ticket branch.</ConfigNote>;
     case "finalize_workspace":
       return (
-        <>
-          <ConfigField label="Required checks">
-            <ArrayTextarea
-              key={`${node.id}:requiredChecks`}
-              value={node.params.requiredChecks}
-              disabled={!canEdit}
-              mono
-              placeholder="block-id"
-              onChange={(v) => onChange("params.requiredChecks", v)}
-            />
-          </ConfigField>
-          <ConfigNote>
-            Lists upstream block ids that must have completed; to gate on CHECK RESULTS route a branch on steps.&lt;id&gt;.output.ok instead.
-          </ConfigNote>
-        </>
+        <ConfigNote>
+          To gate publication on check results, route a Branch using steps.&lt;id&gt;.output.ok.
+        </ConfigNote>
       );
     case "run_pre_pr_checks":
       return (
@@ -551,14 +539,6 @@ export function ConfigFields({
     case "send_plan_approval":
       return (
         <>
-          <ConfigField label="Plan from step">
-            <TextInput
-              value={str(node.params.planFromStep)}
-              disabled={!canEdit}
-              placeholder="block-id"
-              onChange={(v) => onChange("params.planFromStep", v)}
-            />
-          </ConfigField>
           <ConfigField label="Mirror comment">
             <label className="flex items-center gap-2 font-body text-xs text-coal">
               <input
@@ -572,24 +552,12 @@ export function ConfigFields({
             </label>
           </ConfigField>
           <ConfigNote>
-            The run ends here and resumes from the Plan approved trigger once an approver accepts.
+            Bind the plan input to an upstream output. The run resumes from the Plan approved trigger after approval.
           </ConfigNote>
         </>
       );
     case "arthur_injection_check":
-      return (
-        <>
-          <ConfigField label="Content from step">
-            <TextInput
-              value={str(node.params.contentFromStep)}
-              disabled={!canEdit}
-              placeholder="block-id"
-              onChange={(v) => onChange("params.contentFromStep", v)}
-            />
-          </ConfigField>
-          <ConfigNote>Scans the referenced step output for prompt-injection attempts.</ConfigNote>
-        </>
-      );
+      return <ConfigNote>Bind content to the string output that Arthur should scan.</ConfigNote>;
     case "branch": {
       const condition = str(node.params.condition);
       const parsed = condition.trim() !== "" ? parseCondition(condition) : null;

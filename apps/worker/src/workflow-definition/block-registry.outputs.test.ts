@@ -9,6 +9,7 @@ import {
 
 const context: WorkflowBlockRegistryContext = {
   agentProviders: { claude: true, codex: true },
+  llmProviders: { claude: true, codex: true },
   defaultAgent: { provider: "claude", model: "claude-test" },
   vcsProviders: ["github", "gitlab"],
   slackConfigured: true,

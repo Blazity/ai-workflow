@@ -4,7 +4,9 @@ import type { BlockExecuteFn, BlockExecutionResult } from "./types.js";
 
 export const paramsSchema = z
   .object({
-    requiredChecks: z.array(z.string().trim().min(1)).optional(),
+    /** Execution-only compatibility marker produced by stored-definition
+     * upgrades. The dashboard never authors this field. */
+    legacyRequiredChecks: z.array(z.string().min(1)).optional(),
   })
   .strict();
 
@@ -30,18 +32,36 @@ async function blockFinalizePrLinksCommentStep(
 blockFinalizePrLinksCommentStep.maxRetries = 0;
 
 /**
- * finalize_workspace: gate on requiredChecks (steps-record outputs whose status
- * must be "ok"), push the workspace and open or reuse workflow-owned pull
- * requests via publishWorkspaceChanges, comment the PR links on the ticket, and
- * set ctx.publication. The run is unregistered exactly once before PR creation
- * through ctx.unregisterBeforePr (mirrors agent.ts's open_pr semantics).
+ * finalize_workspace: gate on typed `checks.*` status inputs, push the workspace
+ * and open or reuse workflow-owned pull requests via publishWorkspaceChanges,
+ * comment the PR links on the ticket, and set ctx.publication. The run is
+ * unregistered exactly once before PR creation through ctx.unregisterBeforePr
+ * (mirrors agent.ts's open_pr semantics).
  */
-export const execute: BlockExecuteFn = async (block, steps, ctx): Promise<BlockExecutionResult> => {
-  const requiredChecks = Array.isArray(block.params.requiredChecks)
-    ? block.params.requiredChecks.filter((id): id is string => typeof id === "string")
+export const execute: BlockExecuteFn = async (
+  block,
+  steps,
+  ctx,
+  resolvedInputs = {},
+): Promise<BlockExecutionResult> => {
+  const unmetChecks = new Set(
+    Object.entries(resolvedInputs)
+      .filter(([name, status]) => name.startsWith("checks.") && status !== "ok")
+      .map(([name]) => name.slice("checks.".length)),
+  );
+  const legacyRequiredChecks = Array.isArray(block.params.legacyRequiredChecks)
+    ? block.params.legacyRequiredChecks.filter(
+        (id): id is string => typeof id === "string" && id.length > 0,
+      )
     : [];
-  const unmet = requiredChecks.filter((id) => steps[id]?.output.status !== "ok");
-  if (unmet.length > 0) {
+  for (const id of legacyRequiredChecks) {
+    const status = Object.prototype.hasOwnProperty.call(steps, id)
+      ? steps[id]?.output.status
+      : undefined;
+    if (status !== "ok") unmetChecks.add(id);
+  }
+  if (unmetChecks.size > 0) {
+    const unmet = [...unmetChecks];
     return {
       kind: "failed",
       output: { status: "failed", unmetChecks: unmet },

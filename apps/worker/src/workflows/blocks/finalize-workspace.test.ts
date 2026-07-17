@@ -34,10 +34,12 @@ const publishedPr = {
 };
 
 describe("finalize_workspace paramsSchema", () => {
-  it("accepts empty params and a requiredChecks array", () => {
+  it("accepts the execution-only legacy marker and rejects retired authoring params", () => {
     expect(paramsSchema.safeParse({}).success).toBe(true);
-    expect(paramsSchema.safeParse({ requiredChecks: ["checks-1"] }).success).toBe(true);
-    expect(paramsSchema.safeParse({ requiredChecks: [""] }).success).toBe(false);
+    expect(paramsSchema.safeParse({ legacyRequiredChecks: ["checks.with dots"] }).success).toBe(
+      true,
+    );
+    expect(paramsSchema.safeParse({ requiredChecks: ["checks-1"] }).success).toBe(false);
     expect(paramsSchema.safeParse({ extra: 1 }).success).toBe(false);
   });
 });
@@ -47,23 +49,7 @@ describe("finalize_workspace execute", () => {
     vi.clearAllMocks();
   });
 
-  it("fails before pushing when a required check is not ok", async () => {
-    const result = await execute(
-      makeNode("finalize_workspace", { requiredChecks: ["checks-1", "missing"] }),
-      { "checks-1": { output: { status: "ok", ok: false } } },
-      makeCtx(),
-    );
-
-    expect(result.kind).toBe("failed");
-    if (result.kind === "failed") {
-      expect(result.reason).toContain("missing");
-      expect(result.output.unmetChecks).toEqual(["missing"]);
-      expectOutputConformsToRegistry("finalize_workspace", result.output);
-    }
-    expect(mocks.publishWorkspaceChanges).not.toHaveBeenCalled();
-  });
-
-  it("passes the gate when required check outputs report status ok", async () => {
+  it("ignores unrelated prior step records", async () => {
     mocks.publishWorkspaceChanges.mockResolvedValue({
       status: "published",
       pushResult: { pushed: true, repositories: [] },
@@ -71,13 +57,81 @@ describe("finalize_workspace execute", () => {
     });
 
     const result = await execute(
-      makeNode("finalize_workspace", { requiredChecks: ["checks-1"] }),
-      { "checks-1": { output: { status: "ok", ok: true } } },
+      makeNode("finalize_workspace"),
+      { "checks-1": { output: { status: "failed", ok: false } } },
       makeCtx({ selectedRepositories: [repo] }),
     );
 
     expect(result.kind).toBe("next");
     expect(mocks.publishWorkspaceChanges).toHaveBeenCalled();
+  });
+
+  it("preserves the legacy gate by rejecting any resolved check status that is not ok", async () => {
+    const result = await execute(
+      makeNode("finalize_workspace"),
+      {},
+      makeCtx(),
+      { "checks.lint": "ok", "checks.test": "failed" },
+    );
+
+    expect(result).toEqual({
+      kind: "failed",
+      output: { status: "failed", unmetChecks: ["test"] },
+      reason: "required checks not satisfied: test",
+    });
+    expectOutputConformsToRegistry("finalize_workspace", result.output);
+    expect(mocks.publishWorkspaceChanges).not.toHaveBeenCalled();
+  });
+
+  it("publishes when every resolved check status is ok", async () => {
+    mocks.publishWorkspaceChanges.mockResolvedValue({
+      status: "published",
+      pushResult: { pushed: true, repositories: [] },
+      prs: [publishedPr],
+    });
+
+    const result = await execute(
+      makeNode("finalize_workspace"),
+      {},
+      makeCtx({ selectedRepositories: [repo] }),
+      { "checks.lint": "ok", "checks.test": "ok" },
+    );
+
+    expect(result.kind).toBe("next");
+    expect(mocks.publishWorkspaceChanges).toHaveBeenCalledOnce();
+  });
+
+  it("gates typed and unrepresentable legacy checks without duplicate failures", async () => {
+    const result = await execute(
+      makeNode("finalize_workspace", {
+        legacyRequiredChecks: [
+          "duplicate",
+          "checks.with.dot",
+          "checks space",
+          "missing",
+          "constructor",
+          "duplicate",
+        ],
+      }),
+      {
+        duplicate: { output: { status: "failed" } },
+        "checks.with.dot": { output: { status: "failed" } },
+        "checks space": { output: { status: "ok" } },
+      },
+      makeCtx(),
+      { "checks.typed": "failed", "checks.duplicate": "failed" },
+    );
+
+    expect(result).toEqual({
+      kind: "failed",
+      output: {
+        status: "failed",
+        unmetChecks: ["typed", "duplicate", "checks.with.dot", "missing", "constructor"],
+      },
+      reason:
+        "required checks not satisfied: typed, duplicate, checks.with.dot, missing, constructor",
+    });
+    expect(mocks.publishWorkspaceChanges).not.toHaveBeenCalled();
   });
 
   it("fails when no workspace is attached", async () => {

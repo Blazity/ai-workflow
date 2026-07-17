@@ -61,6 +61,24 @@ describe("call_llm execute", () => {
     );
   });
 
+  it("prefers resolved prompt and system inputs over static params", async () => {
+    mocks.generateStructured.mockResolvedValue({
+      text: "answer",
+      usage: { inputTokens: 1, outputTokens: 1, cachedTokens: 0 },
+    });
+
+    await execute(
+      makeNode("call_llm", { prompt: "static", system: "static system" }),
+      {},
+      makeCtx(),
+      { prompt: "bound", system: "bound system" },
+    );
+
+    expect(mocks.generateStructured).toHaveBeenCalledWith(
+      expect.objectContaining({ prompt: "bound", system: "bound system" }),
+    );
+  });
+
   it("resolves the codex provider and its default model on a codex deployment", async () => {
     mocks.generateStructured.mockResolvedValue({
       text: "answer",
@@ -123,6 +141,22 @@ describe("call_llm execute", () => {
       system: "be terse",
       schema: '{"type":"object"}',
     });
+  });
+
+  it("preserves null when the declared output schema requires null", async () => {
+    mocks.generateStructured.mockResolvedValue({
+      object: null,
+      text: "null",
+      usage: { inputTokens: 1, outputTokens: 1, cachedTokens: 0 },
+    });
+
+    const result = await execute(
+      makeNode("call_llm", { prompt: "p", outputSchema: '{"type":"null"}' }),
+      {},
+      makeCtx(),
+    );
+
+    expect(result).toEqual({ kind: "next", output: { status: "ok", output: null } });
   });
 
   it("fails on an unparseable outputSchema without calling the LLM", async () => {

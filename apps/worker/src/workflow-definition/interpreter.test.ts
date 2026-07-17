@@ -72,12 +72,16 @@ function makeRecorder(): Recorder {
 
 function makeExecutor(
   overrides: Record<string, BlockExecutionResult> = {},
-  onCall?: (block: WorkflowDefinitionNode, steps: StepsRecord) => void,
+  onCall?: (
+    block: WorkflowDefinitionNode,
+    steps: StepsRecord,
+    resolvedInputs: Record<string, unknown>,
+  ) => void,
 ): { executor: BlockExecutor; calls: string[] } {
   const calls: string[] = [];
-  const executor: BlockExecutor = async (block, steps) => {
+  const executor: BlockExecutor = async (block, steps, resolvedInputs) => {
     calls.push(block.id);
-    onCall?.(block, steps);
+    onCall?.(block, steps, resolvedInputs);
     return overrides[block.id] ?? { kind: "next", output: { status: "ok", id: block.id } };
   };
   return { executor, calls };
@@ -593,6 +597,136 @@ describe("executeGraph execution cap", () => {
 });
 
 describe("executeGraph steps propagation", () => {
+  it("resolves trigger, step, and run bindings before invoking an executor", async () => {
+    const target = node("target", "send_slack_message");
+    target.inputs = {
+      fromTrigger: "trigger.review.body",
+      fromStep: "steps.source.output.data.summary",
+      fromRun: "run.defaultAgent.model",
+    };
+    const graph = graphFrom(
+      [node("trig", "trigger_pr_review"), node("source", "generic_agent"), target],
+      [
+        { from: "trig", to: "source" },
+        { from: "source", to: "target" },
+      ],
+    );
+    const rec = makeRecorder();
+    let received: Record<string, unknown> | undefined;
+    const { executor } = makeExecutor(
+      { source: { kind: "next", output: { status: "ok", data: { summary: "ready" } } } },
+      (block, _steps, resolvedInputs) => {
+        if (block.id === "target") received = resolvedInputs;
+      },
+    );
+
+    const result = await executeGraph({
+      graph,
+      entryTriggerId: "trig",
+      triggerOutput: { status: "fired", review: { body: "please fix" } },
+      runValues: {
+        id: "run-1",
+        branchName: "ai-workflow/AIW-92",
+        defaultAgent: { provider: "codex", model: "gpt-5-codex" },
+      },
+      executeBlock: executor,
+      hooks: rec.hooks,
+    });
+
+    expect(result.outcome).toBe("completed");
+    expect(received).toEqual({
+      fromTrigger: "please fix",
+      fromStep: "ready",
+      fromRun: "gpt-5-codex",
+    });
+  });
+
+  it("fails closed in the bindings phase without invoking the executor", async () => {
+    const target = node("target", "send_slack_message");
+    target.inputs = { message: "trigger.missing" };
+    const graph = graphFrom(
+      [node("trig", "trigger_ticket_ai"), target],
+      [{ from: "trig", to: "target" }],
+    );
+    const rec = makeRecorder();
+    const { executor, calls } = makeExecutor();
+
+    const result = await executeGraph({
+      graph,
+      entryTriggerId: "trig",
+      triggerOutput: { status: "fired" },
+      runValues: {
+        id: "run-1",
+        branchName: "branch",
+        defaultAgent: { provider: "claude", model: "model" },
+      },
+      executeBlock: executor,
+      hooks: rec.hooks,
+    });
+
+    expect(result.outcome).toBe("stopped");
+    expect(calls).toEqual([]);
+    expect(rec.failures).toEqual([
+      {
+        phase: "bindings",
+        reason: 'binding "trigger.missing" could not be resolved',
+        nodeId: "target",
+      },
+    ]);
+    expect(finishStatuses(rec, "target")).toEqual(["fail"]);
+  });
+
+  it("resolves loop bindings from the latest step output on every iteration", async () => {
+    const consumer = node("consumer", "send_slack_message");
+    consumer.inputs = { message: "steps.producer.output.value" };
+    const graph = graphFrom(
+      [
+        node("trig", "trigger_ticket_ai"),
+        node("loop", "loop", { maxAttempts: 2, onExhaust: "continue" }),
+        node("producer", "generic_agent"),
+        consumer,
+        node("done", "terminate", { terminalStatus: "done" }),
+      ],
+      [
+        { from: "trig", to: "loop" },
+        { from: "loop", to: "producer", fromPort: "continue" },
+        { from: "producer", to: "consumer" },
+        { from: "consumer", to: "loop" },
+        { from: "loop", to: "done", fromPort: "exhausted" },
+      ],
+    );
+    const rec = makeRecorder();
+    const seen: unknown[] = [];
+    let producerAttempt = 0;
+    const executor: BlockExecutor = async (
+      block,
+      _steps,
+      resolvedInputs,
+    ): Promise<BlockExecutionResult> => {
+      if (block.id === "producer") {
+        producerAttempt += 1;
+        return { kind: "next", output: { status: "ok", value: producerAttempt } };
+      }
+      if (block.id === "consumer") seen.push(resolvedInputs.message);
+      return { kind: "next", output: { status: "ok" } };
+    };
+
+    await executeGraph({
+      graph,
+      entryTriggerId: "trig",
+      triggerOutput: { status: "fired" },
+      runValues: {
+        id: "run-1",
+        branchName: "branch",
+        defaultAgent: { provider: "claude", model: "model" },
+      },
+      executeBlock: executor,
+      hooks: rec.hooks,
+    });
+
+    expect(seen).toEqual([1, 2]);
+  });
+
   it("lets later blocks read earlier outputs and increments loop attempts", async () => {
     const graph = graphFrom(
       [

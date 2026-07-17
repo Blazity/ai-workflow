@@ -165,14 +165,31 @@ test("emits provider for agent nodes when set and drops it when empty", () => {
   ]);
 });
 
-test("emits array params and drops empty arrays", () => {
+test("drops retired bespoke reference params while retaining supported arrays", () => {
   const nodes = flowNodes([
     {
       id: "fin",
       type: "finalize_workspace",
       x: 0,
       y: 0,
-      params: { requiredChecks: ["checks-1", "checks-2"] },
+      params: {
+        requiredChecks: ["checks-1", "checks-2"],
+        legacyRequiredChecks: ["checks.with.dot"],
+      },
+    },
+    {
+      id: "approval",
+      type: "send_plan_approval",
+      x: 0,
+      y: 0,
+      params: { planFromStep: "plan" },
+    },
+    {
+      id: "arthur",
+      type: "arthur_injection_check",
+      x: 0,
+      y: 0,
+      params: { contentFromStep: "plan" },
     },
     { id: "rc", type: "run_checks", x: 0, y: 0, params: { commands: [] } },
   ]);
@@ -184,8 +201,10 @@ test("emits array params and drops empty arrays", () => {
       type: "finalize_workspace",
       x: 0,
       y: 0,
-      params: { requiredChecks: ["checks-1", "checks-2"] },
+      params: { legacyRequiredChecks: ["checks.with.dot"] },
     },
+    { id: "approval", type: "send_plan_approval", x: 0, y: 0, params: {} },
+    { id: "arthur", type: "arthur_injection_check", x: 0, y: 0, params: {} },
     { id: "rc", type: "run_checks", x: 0, y: 0, params: {} },
   ]);
 });

@@ -12,9 +12,10 @@ import { DashboardAuthError } from "../lib/auth/users-read.js";
 import {
   describeWorkflowDefinitionIssues,
   upgradeStoredWorkflowDefinition,
-  validateWorkflowGraph,
+  validateWorkflowDefinitionForDeployment,
   workflowDefinitionSchema,
 } from "./schema.js";
+import { workflowBlockRegistryContextFromEnv } from "./models.js";
 
 const VERSION_LIST_LIMIT = 50;
 
@@ -109,7 +110,9 @@ function requireEditRole(role: DashboardRole): void {
  *  feed a stored blob straight back in (restore, duplicate-create), where an
  *  older version can fail today's schema and would install a head the runtime
  *  silently replaces with the built-in default. Message text matches the routes'.
- *  Reads are deliberately ungated so a legacy invalid row stays readable. */
+ * Reads skip current deploy rules, but still pass through deterministic stored
+ * shape upgrades. Known retired shapes remain readable; truly unknown block
+ * types stay rejected instead of being guessed or silently discarded. */
 function assertValidDefinition(definition: WorkflowDefinition): void {
   const parsed = workflowDefinitionSchema.safeParse(definition);
   if (!parsed.success) {
@@ -118,7 +121,10 @@ function assertValidDefinition(definition: WorkflowDefinition): void {
       `Invalid definition: ${describeWorkflowDefinitionIssues(parsed.error)}`,
     );
   }
-  const issues = validateWorkflowGraph(parsed.data);
+  const issues = validateWorkflowDefinitionForDeployment(
+    parsed.data,
+    workflowBlockRegistryContextFromEnv(),
+  );
   if (issues.length > 0) {
     throw new WorkflowDefinitionStoreError(400, `Invalid workflow: ${issues.join("; ")}`);
   }

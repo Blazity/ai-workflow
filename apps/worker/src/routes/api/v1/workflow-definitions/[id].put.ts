@@ -5,9 +5,10 @@ import { requireDashboardActor } from "../../../../lib/auth/request-context.js";
 import { dashboardUserLabel } from "../../../../pre-pr-checks/store.js";
 import {
   describeWorkflowDefinitionIssues,
-  validateWorkflowGraph,
+  validateWorkflowDefinitionForDeployment,
   workflowDefinitionSchema,
 } from "../../../../workflow-definition/schema.js";
+import { workflowBlockRegistryContextFromEnv } from "../../../../workflow-definition/models.js";
 import {
   getWorkflowDefinition,
   saveWorkflowDefinitionVersion,
@@ -32,7 +33,10 @@ export default defineEventHandler(
           statusMessage: `Invalid definition: ${describeWorkflowDefinitionIssues(parsed.error)}`,
         });
       }
-      const issues = validateWorkflowGraph(parsed.data);
+      const issues = validateWorkflowDefinitionForDeployment(
+        parsed.data,
+        workflowBlockRegistryContextFromEnv(),
+      );
       if (issues.length > 0) {
         throw createError({
           statusCode: 400,

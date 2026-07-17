@@ -20,29 +20,36 @@ import { paramsSchema as postPrCommentParams } from "../workflows/blocks/post-pr
 import { paramsSchema as humanQuestionParams } from "../workflows/blocks/human-question.js";
 import { paramsSchema as arthurInjectionCheckParams } from "../workflows/blocks/arthur-injection-check.js";
 import { paramsSchema as sendPlanApprovalParams } from "../workflows/blocks/send-plan-approval.js";
+import {
+  buildWorkflowBindingGraphContext,
+  isSafeWorkflowInputName,
+  isWorkflowBindingSource,
+  validateWorkflowBindings,
+  type WorkflowBindingGraphContext,
+} from "./bindings.js";
+import {
+  resolveWorkflowBlockContract,
+  workflowBlockDefinitionIssue,
+  type WorkflowBlockRegistryContext,
+} from "./block-registry.js";
 
 const nodeId = z.string().trim().min(1);
 const coordinate = z.number().finite();
-const bindingSegment = String.raw`[^.\s]+`;
-const bindingSourcePattern = new RegExp(
-  String.raw`^(?:(?:trigger|run)\.${bindingSegment}(?:\.${bindingSegment})*|steps\.${bindingSegment}\.output\.${bindingSegment}(?:\.${bindingSegment})*)$`,
+const bindingSource = z.custom<WorkflowBindingSource>(
+  (source) => typeof source === "string" && isWorkflowBindingSource(source),
+  { message: "Binding source must start with trigger.*, steps.<nodeId>.output.*, or run.*." },
 );
-const bindingSource = z
-  .string()
-  .trim()
-  .pipe(
-    z.custom<WorkflowBindingSource>(
-      (source) => typeof source === "string" && bindingSourcePattern.test(source),
-      { message: "Binding source must start with trigger.*, steps.<nodeId>.output.*, or run.*." },
-    ),
-  );
+const bindingInputName = z.custom<string>(
+  (name) => typeof name === "string" && isSafeWorkflowInputName(name),
+  { message: "Input name contains an empty or unsafe path segment." },
+);
 
 const baseNodeFields = {
   id: nodeId,
   name: z.string().optional(),
   x: coordinate,
   y: coordinate,
-  inputs: z.record(bindingSource).default({}),
+  inputs: z.record(bindingInputName, bindingSource).default({}),
 };
 
 const emptyParams = z.object({}).strict();
@@ -321,7 +328,7 @@ const storedWorkflowNode = z
     x: coordinate,
     y: coordinate,
     params: z.record(storedWorkflowParamValue),
-    inputs: z.record(bindingSource).optional(),
+    inputs: z.record(bindingInputName, bindingSource).optional(),
   })
   .passthrough();
 const storedWorkflowDefinition = z
@@ -334,6 +341,7 @@ const storedWorkflowDefinition = z
 
 export function upgradeStoredWorkflowDefinition(raw: unknown): WorkflowDefinition {
   const parsed = storedWorkflowDefinition.parse(raw);
+  const storedNodeById = new Map(parsed.nodes.map((node) => [node.id, node]));
   const retiredNodeIds = new Set(
     parsed.nodes.filter((node) => node.type === "arthur_trace").map((node) => node.id),
   );
@@ -351,31 +359,110 @@ export function upgradeStoredWorkflowDefinition(raw: unknown): WorkflowDefinitio
       .flatMap((edge) => resolveNormalTargets(edge.to, nextSeen));
   };
 
+  const edges = parsed.edges.flatMap((edge) => {
+    if (retiredNodeIds.has(edge.from)) return [];
+    return resolveNormalTargets(edge.to, new Set()).map((to) => ({
+      from: edge.from,
+      to,
+      ...(edge.fromPort === undefined ? {} : { fromPort: edge.fromPort }),
+    }));
+  });
+
   const nodes: WorkflowDefinitionNode[] = [];
+  const requiredChecksByFinalize = new Map<string, string[]>();
   for (const node of parsed.nodes) {
     if (node.type === "arthur_trace") continue;
+    const params = { ...node.params };
+    const inputs = { ...(node.inputs ?? {}) };
+    if (node.type === "send_plan_approval") {
+      const sourceId = params.planFromStep;
+      if (typeof sourceId === "string" && sourceId.length > 0) {
+        inputs.plan ??= `steps.${sourceId}.output.plan`;
+      }
+      delete params.planFromStep;
+    }
+    if (node.type === "arthur_injection_check") {
+      const sourceId = params.contentFromStep;
+      if (typeof sourceId === "string" && sourceId.length > 0 && inputs.content === undefined) {
+        const sourceNode = storedNodeById.get(sourceId);
+        const sourceType = sourceNode?.type;
+        const declaredOutputSchema = sourceNode?.params.outputSchema;
+        const usesDeclaredOutputSchema =
+          (sourceType === "generic_agent" || sourceType === "call_llm") &&
+          typeof declaredOutputSchema === "string" &&
+          declaredOutputSchema.trim().length > 0;
+        const field =
+          sourceType === "planning_agent"
+            ? "plan"
+            : sourceType === "generic_agent" && !usesDeclaredOutputSchema
+              ? "body"
+              : sourceType === "call_llm" && !usesDeclaredOutputSchema
+                ? "output"
+                : null;
+        if (field) {
+          inputs.content = `steps.${sourceId}.output.${field}`;
+        } else {
+          params.legacyContentFromStep = sourceId;
+        }
+      }
+      delete params.contentFromStep;
+    }
+    if (node.type === "finalize_workspace") {
+      const requiredChecks = params.requiredChecks;
+      if (Array.isArray(requiredChecks)) {
+        requiredChecksByFinalize.set(node.id, requiredChecks);
+      }
+      delete params.requiredChecks;
+    }
     nodes.push({
       id: node.id,
       type: node.type,
       ...(node.name === undefined ? {} : { name: node.name }),
       x: node.x,
       y: node.y,
-      params: node.params,
-      inputs: node.inputs ?? {},
+      params,
+      inputs,
     });
   }
 
+  const intermediate: WorkflowDefinition = { schemaVersion: 1, nodes, edges };
+  const graphContext = buildWorkflowBindingGraphContext(intermediate);
+  const upgradedNodes = nodes.map((node): WorkflowDefinitionNode => {
+    if (node.type !== "finalize_workspace") return node;
+
+    const params = { ...node.params };
+    const inputs = { ...node.inputs };
+    const legacy = new Set<string>();
+    if (Array.isArray(params.legacyRequiredChecks)) {
+      for (const id of params.legacyRequiredChecks) legacy.add(id);
+    }
+    delete params.legacyRequiredChecks;
+
+    for (const sourceId of requiredChecksByFinalize.get(node.id) ?? []) {
+      const inputName = `checks.${sourceId}`;
+      const source = `steps.${sourceId}.output.status`;
+      const canBind =
+        sourceId !== node.id &&
+        graphContext.nodeById.has(sourceId) &&
+        (graphContext.dominators.get(node.id)?.has(sourceId) ?? false) &&
+        isSafeWorkflowInputName(inputName) &&
+        isWorkflowBindingSource(source) &&
+        (inputs[inputName] === undefined || inputs[inputName] === source);
+      if (canBind) {
+        inputs[inputName] ??= source;
+      } else {
+        legacy.add(sourceId);
+      }
+    }
+
+    if (legacy.size > 0) params.legacyRequiredChecks = [...legacy];
+    return { ...node, params, inputs };
+  });
+
   return {
     schemaVersion: 1,
-    nodes,
-    edges: parsed.edges.flatMap((edge) => {
-      if (retiredNodeIds.has(edge.from)) return [];
-      return resolveNormalTargets(edge.to, new Set()).map((to) => ({
-        from: edge.from,
-        to,
-        ...(edge.fromPort === undefined ? {} : { fromPort: edge.fromPort }),
-      }));
-    }),
+    nodes: upgradedNodes,
+    edges,
   };
 }
 
@@ -561,7 +648,10 @@ function computeDominators(
   return dominators;
 }
 
-export function validateWorkflowGraph(def: WorkflowDefinition): string[] {
+export function validateWorkflowGraph(
+  def: WorkflowDefinition,
+  bindingGraphContext?: WorkflowBindingGraphContext,
+): string[] {
   const issues: string[] = [];
   const { nodes, edges } = def;
 
@@ -731,11 +821,13 @@ export function validateWorkflowGraph(def: WorkflowDefinition): string[] {
     }
   }
 
-  const dominators = computeDominators(
-    triggerNodes.map((node) => node.id),
-    reachable,
-    reverse,
-  );
+  const dominators =
+    bindingGraphContext?.dominators ??
+    computeDominators(
+      triggerNodes.map((node) => node.id),
+      reachable,
+      reverse,
+    );
   for (const node of nodes) {
     if (node.type !== "branch") continue;
     const condition = node.params.condition;
@@ -761,36 +853,61 @@ export function validateWorkflowGraph(def: WorkflowDefinition): string[] {
     }
   }
 
-  // Step-reference params (send_plan_approval.planFromStep,
-  // arthur_injection_check.contentFromStep) must name a block that exists and
-  // that dominates the referencing block, so the referenced output is always
-  // produced before it is read. Reuses the same dominator set as branches.
-  const stepRefParams: Partial<Record<WorkflowBlockType, string>> = {
-    send_plan_approval: "planFromStep",
-    arthur_injection_check: "contentFromStep",
-  };
-  for (const node of nodes) {
-    const paramKey = stepRefParams[node.type];
-    if (!paramKey) continue;
-    if (!reachable.has(node.id)) continue;
-    const raw = node.params[paramKey];
-    if (typeof raw !== "string") continue;
-    const ref = raw.trim();
-    if (ref === "") continue;
-    if (ref === node.id) {
-      issues.push(`Block "${node.id}" cannot reference itself in ${paramKey}.`);
-      continue;
-    }
-    if (!nodeById.has(ref)) {
-      issues.push(`Block "${node.id}" references unknown block "${ref}" in ${paramKey}.`);
-      continue;
-    }
-    if (!(dominators.get(node.id)?.has(ref) ?? false)) {
+  return issues;
+}
+
+/** Validation required before a definition may become executable. Draft saves
+ * use `workflowDefinitionSchema` plus `validateWorkflowGraph` only so an
+ * operator can keep editing a structurally sound but incomplete graph. */
+export function validateWorkflowDefinitionForDeployment(
+  def: WorkflowDefinition,
+  registryContext: WorkflowBlockRegistryContext,
+  options: {
+    allowLegacyCompatibility?: boolean;
+    checkEnvironmentAvailability?: boolean;
+  } = {},
+): string[] {
+  const graphContext = buildWorkflowBindingGraphContext(def);
+  const issues = [
+    ...validateWorkflowGraph(def, graphContext),
+    ...validateWorkflowBindings(def, registryContext, graphContext),
+  ];
+  for (const node of def.nodes) {
+    if (
+      !options.allowLegacyCompatibility &&
+      node.type === "finalize_workspace" &&
+      Array.isArray(node.params.legacyRequiredChecks)
+    ) {
       issues.push(
-        `Block "${node.id}" ${paramKey} references block "${ref}" which does not run before it.`,
+        `Block "${node.id}" must replace legacy requiredChecks "${node.params.legacyRequiredChecks.join(", ")}" with explicit checks.* status input bindings before deployment.`,
       );
     }
+    if (
+      !options.allowLegacyCompatibility &&
+      node.type === "arthur_injection_check" &&
+      typeof node.params.legacyContentFromStep === "string"
+    ) {
+      issues.push(
+        `Block "${node.id}" must replace legacy contentFromStep "${node.params.legacyContentFromStep}" with an explicit string input binding before deployment.`,
+      );
+    }
+    const definitionIssue = workflowBlockDefinitionIssue(node.type, node.params);
+    if (definitionIssue) {
+      issues.push(
+        `Block "${node.id}" (${node.type}) is unavailable: ${definitionIssue}`,
+      );
+    } else if (options.checkEnvironmentAvailability !== false) {
+      const availability = resolveWorkflowBlockContract(
+        node.type,
+        node.params,
+        registryContext,
+      ).availability;
+      if (!availability.available) {
+        issues.push(
+          `Block "${node.id}" (${node.type}) is unavailable: ${availability.unavailableReason}`,
+        );
+      }
+    }
   }
-
-  return issues;
+  return [...new Set(issues)];
 }

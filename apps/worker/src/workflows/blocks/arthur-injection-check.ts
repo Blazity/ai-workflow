@@ -2,9 +2,7 @@ import { z } from "zod";
 import type { BlockExecuteFn, BlockExecutionResult } from "./types.js";
 
 export const paramsSchema = z
-  .object({
-    contentFromStep: z.string().trim().min(1).optional(),
-  })
+  .object({ legacyContentFromStep: z.string().trim().min(1).optional() })
   .strict();
 
 interface InjectionCheckFinding {
@@ -33,12 +31,17 @@ blockArthurValidatePromptStep.maxRetries = 0;
 
 /**
  * arthur_injection_check: report-only prompt-injection screen via Arthur's
- * validate_prompt. Content is either the referenced block's output (JSON
- * stringified) or the ticket description plus comments. Every outcome is a
+ * validate_prompt. Content is either the resolved `content` input or the
+ * ticket description plus comments. Every outcome is a
  * kind "next" output so graphs can branch on it: "ok", "flagged" (with
  * findings), or "skipped" (Arthur unconfigured, no task, or a client error).
  */
-export const execute: BlockExecuteFn = async (block, steps, ctx): Promise<BlockExecutionResult> => {
+export const execute: BlockExecuteFn = async (
+  block,
+  steps,
+  ctx,
+  resolvedInputs,
+): Promise<BlockExecutionResult> => {
   const { env } = await import("../../../env.js");
   if (!env.GENAI_ENGINE_API_KEY || !env.GENAI_ENGINE_TRACE_ENDPOINT) {
     return { kind: "next", output: { status: "skipped", reason: "arthur_not_configured" } };
@@ -47,18 +50,21 @@ export const execute: BlockExecuteFn = async (block, steps, ctx): Promise<BlockE
     return { kind: "next", output: { status: "skipped", reason: "arthur_task_missing" } };
   }
 
-  const contentFromStep =
-    typeof block.params.contentFromStep === "string" ? block.params.contentFromStep.trim() : "";
   let content: string;
-  if (contentFromStep.length > 0) {
-    const source = steps[contentFromStep];
-    if (!source) {
+  if (typeof resolvedInputs?.content === "string") {
+    content = resolvedInputs.content;
+  } else if (typeof block.params.legacyContentFromStep === "string") {
+    const legacy = steps[block.params.legacyContentFromStep];
+    if (!legacy) {
       return {
         kind: "next",
-        output: { status: "skipped", reason: `no output from block "${contentFromStep}"` },
+        output: {
+          status: "skipped",
+          reason: `no output from block "${block.params.legacyContentFromStep}"`,
+        },
       };
     }
-    content = JSON.stringify(source.output);
+    content = JSON.stringify(legacy.output);
   } else {
     content = [
       ctx.ticket.description,

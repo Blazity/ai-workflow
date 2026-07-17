@@ -10,6 +10,7 @@ export interface BlockSpec {
   id: string;
   type: WorkflowBlockType;
   params?: Record<string, WorkflowParamValue>;
+  inputs?: WorkflowDefinitionNode["inputs"];
   name?: string;
 }
 
@@ -22,7 +23,7 @@ export function buildNode(spec: BlockSpec, column: number, row = 0): WorkflowDef
     x: 40 + column * 220,
     y: 160 + row * 180,
     params: spec.params ?? {},
-    inputs: {},
+    inputs: spec.inputs ?? {},
   };
 }
 
@@ -129,7 +130,16 @@ export function planApprovalDefinition(): WorkflowDefinition {
   const nodes: WorkflowDefinitionNode[] = [
     buildNode({ id: "trigger-ticket", type: "trigger_ticket_ai" }, 0),
     buildNode({ id: "planning", type: "planning_agent" }, 1),
-    buildNode({ id: "send-approval", type: "send_plan_approval" }, 2),
+    buildNode(
+      {
+        id: "send-approval",
+        type: "send_plan_approval",
+        inputs: {
+          plan: "steps.planning.output.plan",
+        },
+      },
+      2,
+    ),
     buildNode({ id: "trigger-approved", type: "trigger_plan_approved" }, 0, 1),
     buildNode({ id: "implementation", type: "implementation_agent" }, 1, 1),
     buildNode({ id: "open-pr", type: "open_pr" }, 2, 1),

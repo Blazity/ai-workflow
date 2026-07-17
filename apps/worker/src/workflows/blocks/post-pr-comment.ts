@@ -70,8 +70,18 @@ function defaultBranchFor(ctx: EngineCtx, provider: VcsProvider, repoPath: strin
  * "all" comments every PR. Partial failures return kind "failed" with the
  * comments that did land in the output.
  */
-export const execute: BlockExecuteFn = async (block, _steps, ctx): Promise<BlockExecutionResult> => {
-  const body = typeof block.params.body === "string" ? block.params.body.trim() : "";
+export const execute: BlockExecuteFn = async (
+  block,
+  _steps,
+  ctx,
+  resolvedInputs = {},
+): Promise<BlockExecutionResult> => {
+  const body =
+    typeof resolvedInputs.body === "string"
+      ? resolvedInputs.body.trim()
+      : typeof block.params.body === "string"
+        ? block.params.body.trim()
+        : "";
   if (body.length === 0) {
     return {
       kind: "failed",

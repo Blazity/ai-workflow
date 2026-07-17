@@ -1,5 +1,10 @@
 import type { WorkflowEditorOptions } from "@shared/contracts";
 import { env } from "../../env.js";
+import {
+  buildWorkflowBlockRegistry,
+  type WorkflowBlockRegistryContext,
+} from "./block-registry.js";
+import { RUN_BINDING_SCHEMA } from "./bindings.js";
 
 export const FALLBACK_MODELS = {
   claude: ["claude-fable-5", "claude-opus-4-8", "claude-sonnet-5", "claude-haiku-4-5"],
@@ -86,6 +91,35 @@ export function buildWorkflowEditorOptions(models: AvailableModels): WorkflowEdi
       { value: "ai_review", label: env.COLUMN_AI_REVIEW },
       { value: "backlog", label: env.COLUMN_BACKLOG },
     ],
+    blockRegistry: buildWorkflowBlockRegistry(workflowBlockRegistryContextFromEnv()),
+    runBindingSchema: RUN_BINDING_SCHEMA,
+  };
+}
+
+export function workflowBlockRegistryContextFromEnv(): WorkflowBlockRegistryContext {
+  const vcsProviders: WorkflowBlockRegistryContext["vcsProviders"] = [];
+  if (env.GITHUB_APP_ID && env.GITHUB_APP_PRIVATE_KEY && env.GITHUB_INSTALLATION_ID) {
+    vcsProviders.push("github");
+  }
+  if (env.GITLAB_TOKEN) vcsProviders.push("gitlab");
+  return {
+    agentProviders: {
+      claude: Boolean(env.ANTHROPIC_API_KEY),
+      codex: Boolean(env.CODEX_API_KEY || env.CODEX_CHATGPT_OAUTH_TOKEN),
+    },
+    llmProviders: {
+      claude: Boolean(
+        env.ANTHROPIC_API_KEY && !env.ANTHROPIC_API_KEY.startsWith("sk-ant-oat"),
+      ),
+      codex: Boolean(env.CODEX_API_KEY),
+    },
+    defaultAgent: {
+      provider: env.AGENT_KIND,
+      model: env.AGENT_KIND === "codex" ? env.CODEX_MODEL : env.CLAUDE_MODEL,
+    },
+    vcsProviders,
+    slackConfigured: Boolean(env.CHAT_SDK_SLACK_TOKEN && env.CHAT_SDK_CHANNEL_ID),
+    arthurConfigured: Boolean(env.GENAI_ENGINE_API_KEY && env.GENAI_ENGINE_TRACE_ENDPOINT),
   };
 }
 

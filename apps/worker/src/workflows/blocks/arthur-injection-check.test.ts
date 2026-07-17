@@ -22,10 +22,9 @@ function configureArthur() {
 }
 
 describe("arthur_injection_check paramsSchema", () => {
-  it("accepts empty params and an optional contentFromStep", () => {
+  it("accepts empty params and rejects the retired contentFromStep param", () => {
     expect(paramsSchema.safeParse({}).success).toBe(true);
-    expect(paramsSchema.safeParse({ contentFromStep: "step-1" }).success).toBe(true);
-    expect(paramsSchema.safeParse({ contentFromStep: "" }).success).toBe(false);
+    expect(paramsSchema.safeParse({ contentFromStep: "step-1" }).success).toBe(false);
     expect(paramsSchema.safeParse({ extra: 1 }).success).toBe(false);
   });
 });
@@ -91,31 +90,34 @@ describe("arthur_injection_check execute", () => {
     });
   });
 
-  it("uses the referenced block output as content", async () => {
+  it("uses bound content when provided", async () => {
     configureArthur();
     mocks.validatePrompt.mockResolvedValue({ ok: true, findings: [] });
 
     await execute(
-      makeNode("arthur_injection_check", { contentFromStep: "src" }),
-      { src: { output: { status: "ok", body: "text" } } },
+      makeNode("arthur_injection_check"),
+      {},
+      makeCtx({ arthur: { taskId: "task-1" } }),
+      { content: "text" },
+    );
+
+    expect(mocks.validatePrompt).toHaveBeenCalledWith("task-1", "text");
+  });
+
+  it("keeps the explicit legacy whole-output compatibility path readable", async () => {
+    configureArthur();
+    mocks.validatePrompt.mockResolvedValue({ ok: true, findings: [] });
+
+    await execute(
+      makeNode("arthur_injection_check", { legacyContentFromStep: "fix" }),
+      { fix: { output: { status: "implemented", summary: "done" } } },
       makeCtx({ arthur: { taskId: "task-1" } }),
     );
 
     expect(mocks.validatePrompt).toHaveBeenCalledWith(
       "task-1",
-      JSON.stringify({ status: "ok", body: "text" }),
+      JSON.stringify({ status: "implemented", summary: "done" }),
     );
-  });
-
-  it("skips when the referenced block has no output", async () => {
-    configureArthur();
-    const result = await execute(
-      makeNode("arthur_injection_check", { contentFromStep: "ghost" }),
-      {},
-      makeCtx({ arthur: { taskId: "task-1" } }),
-    );
-    expect(result.output.status).toBe("skipped");
-    expect(mocks.validatePrompt).not.toHaveBeenCalled();
   });
 
   it("skips on client errors instead of failing the run", async () => {

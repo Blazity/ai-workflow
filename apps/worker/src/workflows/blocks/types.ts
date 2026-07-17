@@ -116,6 +116,7 @@ export type BlockExecuteFn = (
   block: WorkflowDefinitionNode,
   steps: StepsRecord,
   ctx: EngineCtx,
+  resolvedInputs?: Record<string, unknown>,
 ) => Promise<BlockExecutionResult>;
 
 /**

@@ -15,6 +15,7 @@ import type { EngineCtx } from "./types.js";
 
 const registryContext: WorkflowBlockRegistryContext = {
   agentProviders: { claude: true, codex: true },
+  llmProviders: { claude: true, codex: true },
   defaultAgent: { provider: "claude", model: "claude-model" },
   vcsProviders: ["github", "gitlab"],
   slackConfigured: true,

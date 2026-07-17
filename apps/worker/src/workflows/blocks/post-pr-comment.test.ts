@@ -77,6 +77,20 @@ describe("post_pr_comment execute", () => {
     });
   });
 
+  it("prefers a resolved body over the static param", async () => {
+    const postPRComment = vi.fn().mockResolvedValue({ url: null });
+    mocks.createRepositoryVCS.mockReturnValue({ postPRComment });
+
+    await execute(
+      makeNode("post_pr_comment", { body: "Static" }),
+      {},
+      makeCtx({ publication: publication() }),
+      { body: " Bound " },
+    );
+
+    expect(postPRComment).toHaveBeenCalledWith(7, "Bound");
+  });
+
   it("comments every PR when target is all", async () => {
     const postPRComment = vi.fn().mockResolvedValue({ url: null });
     mocks.createRepositoryVCS.mockReturnValue({ postPRComment });

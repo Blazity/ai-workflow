@@ -305,6 +305,14 @@ export interface WorkflowBlockInputContract {
   schema: WorkflowValueSchema;
 }
 
+/** A safe, registry-owned family of additional named inputs. The worker still
+ * validates every concrete input name against `keyPattern`; this is only the
+ * serializable contract the editor uses to offer those inputs. */
+export interface WorkflowBlockAdditionalInputContract {
+  keyPattern: string;
+  schema: WorkflowValueSchema;
+}
+
 export type WorkflowBlockAvailability =
   | { available: true; unavailableReason: null }
   | { available: false; unavailableReason: string };
@@ -317,8 +325,12 @@ export interface WorkflowBlockContract {
   ports: string[];
   allowsFailurePort: boolean;
   inputs: Record<string, WorkflowBlockInputContract>;
+  additionalInputs: WorkflowBlockAdditionalInputContract[];
   output: {
+    /** Complete executor envelope, including failure and clarification output. */
     schema: WorkflowValueSchema;
+    /** Fields guaranteed when execution continues through a normal output port. */
+    bindingSchema: WorkflowValueSchema;
     statusVariants: string[];
   };
   availability: WorkflowBlockAvailability;
@@ -362,6 +374,8 @@ export interface WorkflowEditorOptions {
   defaultModels: { claude: string; codex: string };
   models: { claude: string[]; codex: string[] };
   ticketStatusTargets: { value: TicketStatusTarget; label: string }[];
+  blockRegistry: Record<WorkflowBlockType, WorkflowBlockContract>;
+  runBindingSchema: WorkflowValueSchema;
 }
 
 export type BlockRunStatus = "pending" | "running" | "ok" | "warn" | "fail";

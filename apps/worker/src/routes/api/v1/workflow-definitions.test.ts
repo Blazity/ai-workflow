@@ -18,6 +18,13 @@ const state = vi.hoisted(() => ({
     CODEX_MODEL: "gpt-5-codex",
     COLUMN_AI_REVIEW: "AI Review",
     COLUMN_BACKLOG: "Backlog",
+    ANTHROPIC_API_KEY: "sk-ant-test",
+    CODEX_API_KEY: "sk-codex-test",
+    GITHUB_APP_ID: 1,
+    GITHUB_APP_PRIVATE_KEY: "private-key",
+    GITHUB_INSTALLATION_ID: 2,
+    CHAT_SDK_SLACK_TOKEN: "slack-token",
+    CHAT_SDK_CHANNEL_ID: "channel",
   },
 }));
 
@@ -107,6 +114,17 @@ function withUnreachableNode(def: WorkflowDefinition): WorkflowDefinition {
   };
 }
 
+function withInvalidBinding(def: WorkflowDefinition): WorkflowDefinition {
+  return {
+    ...def,
+    nodes: def.nodes.map((node) =>
+      node.type === "update_ticket_status"
+        ? { ...node, inputs: { target: "steps.ghost.output.target" } }
+        : node,
+    ),
+  };
+}
+
 beforeEach(async () => {
   vi.clearAllMocks();
   state.sessionUserId = "user_admin";
@@ -143,6 +161,9 @@ describe("GET /api/v1/workflow-definitions", () => {
     expect(body.defaultDefinition.schemaVersion).toBe(1);
     expect(body.options.agentKind).toBe("claude");
     expect(body.options.defaultModel).toBe("claude-test-default");
+    expect(body.options.blockRegistry.trigger_ticket_ai.type).toBe("trigger_ticket_ai");
+    expect(body.options.blockRegistry.arthur_injection_check.availability.unavailableReason).toBeTruthy();
+    expect(body.options.runBindingSchema.properties.defaultAgent.type).toBe("object");
   });
 
   it("reports currentVersion once a version exists", async () => {
@@ -263,6 +284,14 @@ describe("PUT /api/v1/workflow-definitions/:id", () => {
     body = await res.json();
     expect(body.version.version).toBe(2);
     expect(body.meta.currentVersion).toBe(2);
+  });
+
+  it("rejects a structurally valid definition with invalid typed bindings", async () => {
+    const res = await put(
+      jsonRequest("PUT", { definition: withInvalidBinding(VALID_DEFINITION) }, "http://worker.test/d/1"),
+    );
+    expect(res.status).toBe(400);
+    expect(res.statusText).toContain("unknown block");
   });
 
   it("rejects members with 403", async () => {
@@ -447,6 +476,14 @@ describe("PUT /api/v1/workflow-definition (shim)", () => {
     const getBody = await getRes.json();
     expect(getBody.current.version).toBe(2);
     expect(getBody.versions.map((v: { version: number }) => v.version)).toEqual([2, 1]);
+  });
+
+  it("rejects a structurally valid definition with invalid typed bindings", async () => {
+    const res = await handlerFor(shimPut)(
+      jsonRequest("PUT", { definition: withInvalidBinding(VALID_DEFINITION) }),
+    );
+    expect(res.status).toBe(400);
+    expect(res.statusText).toContain("unknown block");
   });
 
   it("accepts and round-trips a provider on an agent node", async () => {
