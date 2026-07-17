@@ -246,3 +246,78 @@ export interface ClarificationAnswerResponse {
    *  dispatch will be retried. */
   runId: string | null;
 }
+
+// --- Prompt library (dashboard-authored reusable prompts; distinct from the
+// --- read-only Arthur prompt registry in PromptsResponse) ---
+
+export interface PromptLibraryEntryMeta {
+  id: number;
+  name: string;
+  description: string | null;
+  tags: string[];
+  /** Head version number; always >= 1 (create seeds version 1). */
+  currentVersion: number;
+  /** Non-null when the prompt is archived (soft delete). */
+  archivedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+  createdByLabel: string;
+}
+
+export interface PromptLibraryVersion {
+  promptId: number;
+  version: number;
+  body: string;
+  createdAt: string;
+  createdById: string;
+  createdByLabel: string;
+  restoredFromVersion: number | null;
+}
+
+/** List row = meta + head body, so the editor's insert picker and the drift
+ *  check need no per-prompt fetch. */
+export interface PromptLibraryListRowDto extends PromptLibraryEntryMeta {
+  body: string;
+}
+
+export interface PromptLibraryListResponse {
+  prompts: PromptLibraryListRowDto[];
+  /** Distinct tags across returned prompts, sorted, for the filter chips. */
+  tags: string[];
+}
+
+export interface PromptLibraryDetailResponse {
+  meta: PromptLibraryEntryMeta;
+  current: PromptLibraryVersion;
+  /** Newest first, capped at 50. */
+  versions: PromptLibraryVersion[];
+}
+
+export interface PromptLibrarySaveResponse {
+  meta: PromptLibraryEntryMeta;
+  version: PromptLibraryVersion;
+  /** false when the submitted body equaled the head and nothing was appended. */
+  changed: boolean;
+}
+
+export interface PromptLibraryVersionResponse {
+  version: PromptLibraryVersion;
+}
+
+/** One workflow-definition block param that carries text copied from a
+ *  library prompt, with its sync state against the library. */
+export interface PromptLibraryUsageRow {
+  definitionId: number;
+  definitionName: string;
+  nodeId: string;
+  nodeName: string | null;
+  blockType: WorkflowBlockType;
+  paramKey: string;
+  /** Library version recorded at insert time. */
+  version: number;
+  state: "current" | "behind" | "modified";
+}
+
+export interface PromptLibraryUsageResponse {
+  rows: PromptLibraryUsageRow[];
+}

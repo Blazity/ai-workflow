@@ -254,6 +254,19 @@ export type TicketStatusTarget = "ai_review" | "backlog";
 
 export type WorkflowParamValue = string | number | boolean | string[];
 
+/** Provenance of a prompt param copied from the prompt library. Purely
+ *  informational: the runtime never reads it; the editor uses it to render
+ *  "from library: Name vN" and to detect drift against the library head. */
+export interface PromptSourceRef {
+  /** prompt_library.id the text was copied from. */
+  promptId: number;
+  /** prompt_library_versions.version whose body was copied. */
+  version: number;
+  /** fnv1a hex of the inserted text, set by the editor at insert time so a
+   *  later manual edit of the field can be detected as "edited". */
+  insertedHash?: string;
+}
+
 export interface WorkflowDefinitionNode {
   id: string;
   type: WorkflowBlockType;
@@ -261,6 +274,9 @@ export interface WorkflowDefinitionNode {
   x: number;
   y: number;
   params: Record<string, WorkflowParamValue>;
+  /** Keyed by the param key the text was inserted into (e.g. "prompt",
+   *  "system", "body", "instructions", "message"). */
+  promptRefs?: Record<string, PromptSourceRef>;
 }
 
 export interface WorkflowDefinitionEdge {
