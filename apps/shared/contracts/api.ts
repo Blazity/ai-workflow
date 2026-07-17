@@ -9,6 +9,7 @@ import type {
   RunDetail,
   RunStep,
   Workflow,
+  WorkflowBlockContract,
   WorkflowBlockType,
   WorkflowDefinition,
   WorkflowDefinitionDeployment,
@@ -251,7 +252,15 @@ export interface WorkflowDefinitionDeploymentResponse {
 
 export interface WorkflowDefinitionValidationResponse {
   valid: boolean;
-  issues: string[];
+  issues: WorkflowDefinitionValidationIssue[];
+  /** Parameter-resolved contracts for the exact candidate graph. */
+  nodeContracts: Record<string, WorkflowBlockContract>;
+}
+
+export interface WorkflowDefinitionValidationIssue {
+  code: "schema" | "deployment";
+  nodeId: string | null;
+  message: string;
 }
 
 export interface RunBlockStatusesResponse {

@@ -166,3 +166,28 @@ for (const [name, handler, method] of [
     assert.equal(res.status, 200);
   });
 }
+
+for (const workerResponse of [
+  Response.json({ statusMessage: "Invalid workflow graph" }, { status: 400 }),
+  new Response("Draft changed; reload before saving", {
+    status: 409,
+    headers: { "content-type": "text/plain; charset=utf-8" },
+  }),
+  Response.json({ error: "Validation service unavailable" }, { status: 500 }),
+]) {
+  test(`validation preserves worker ${workerResponse.status} status and message`, async () => {
+    const expectedBody = await workerResponse.clone().text();
+    const res = await handleDefinitionValidate(
+      new Request("https://dashboard.example.com/api/workflow-definitions/12/validate", {
+        method: "POST",
+        body: JSON.stringify({ definition: { schemaVersion: 1, nodes: [], edges: [] } }),
+      }),
+      idParams("12"),
+      async () => workerResponse,
+    );
+
+    assert.equal(res.status, workerResponse.status);
+    assert.equal(res.headers.get("content-type"), workerResponse.headers.get("content-type"));
+    assert.equal(await res.text(), expectedBody);
+  });
+}

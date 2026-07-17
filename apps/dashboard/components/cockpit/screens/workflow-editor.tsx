@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   isTriggerBlockType,
   type RunBlockStatusesResponse,
@@ -12,7 +12,9 @@ import {
   type WorkflowDefinitionMeta,
   type WorkflowDefinitionNode,
   type WorkflowDefinitionSaveResponse,
+  type WorkflowDefinitionValidationResponse,
   type WorkflowDefinitionVersion,
+  type WorkflowExecutionBudgets,
   type WorkflowEditorOptions,
 } from "@shared/contracts";
 import { FlowEditor } from "@/components/cockpit/flow-editor/flow-editor";
@@ -34,6 +36,18 @@ import {
   createPendingLayoutSave,
   type PendingLayoutSave,
 } from "@/lib/workflow-editor/layout-save";
+import {
+  createWorkflowValidationController,
+  type WorkflowValidationController,
+  type WorkflowValidationState,
+} from "@/lib/workflow-editor/validation-controller";
+import { workflowEditorActions } from "@/lib/workflow-editor/editor-actions";
+import { executionLimitsFromDefinition } from "@/lib/workflow-editor/execution-limits";
+
+interface ValidationRequest {
+  definitionId: number;
+  definition: WorkflowDefinition;
+}
 
 function toViewNodes(nodes: WorkflowDefinitionNode[]): FlowNodeDef[] {
   return structuredClone(nodes).map((node) => ({
@@ -79,7 +93,9 @@ export function WorkflowEditorScreen({
   const [deployments, setDeployments] = useState<WorkflowDefinitionDeployment[]>(initialDetail.deployments);
   const [deployed, setDeployed] = useState<WorkflowDefinitionVersion | null>(initialDetail.deployed);
   const [baselineDraft, setBaselineDraft] = useState<WorkflowDefinition | null>(initialDetail.draft);
-  const [budgets, setBudgets] = useState(seed.budgets);
+  const [budgets, setBudgets] = useState<WorkflowExecutionBudgets>(() =>
+    executionLimitsFromDefinition(seed),
+  );
   const [layoutBaseline, setLayoutBaseline] = useState(() => JSON.stringify(initialDetail.layout));
   const [nodes, setNodes] = useState<FlowNodeDef[]>(() => toViewNodes(seed.nodes));
   const [edges, setEdges] = useState<FlowEdgeDef[]>(() => structuredClone(seed.edges));
@@ -95,25 +111,67 @@ export function WorkflowEditorScreen({
   const [createError, setCreateError] = useState<string | null>(null);
   const [newName, setNewName] = useState("");
   const [newSource, setNewSource] = useState("default");
+  const [validation, setValidation] = useState<{
+    key: string | null;
+    state: WorkflowValidationState;
+  }>({
+    key: null,
+    state: { status: "checking", issues: [], nodeContracts: {} },
+  });
   const pendingLayoutSaveRef = useRef<PendingLayoutSave | null>(null);
   if (pendingLayoutSaveRef.current === null) {
     pendingLayoutSaveRef.current = createPendingLayoutSave();
   }
   const pendingLayoutSave = pendingLayoutSaveRef.current;
+  const validationKeyRef = useRef<string | null>(null);
+  const validationControllerRef = useRef<WorkflowValidationController<ValidationRequest> | null>(
+    null,
+  );
+  if (validationControllerRef.current === null) {
+    validationControllerRef.current = createWorkflowValidationController<ValidationRequest>({
+      validate: async ({ definitionId, definition }, signal) => {
+        const res = await fetch(`/api/workflow-definitions/${definitionId}/validate`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ definition }),
+          signal,
+        });
+        if (!res.ok) throw new Error(await readErrorMessage(res));
+        return (await res.json()) as WorkflowDefinitionValidationResponse;
+      },
+      onState: (state) => setValidation({ key: validationKeyRef.current, state }),
+    });
+  }
+  const validationController = validationControllerRef.current;
 
   const selectedMeta = metas.find((m) => m.id === selectedId);
-  const dirty =
-    baselineDraft === null ||
-    JSON.stringify(serializeSemanticWorkflowDefinition(nodes, edges, budgets)) !==
-      JSON.stringify(
-        serializeSemanticWorkflowDefinition(
-          toViewNodes(baselineDraft.nodes),
-          structuredClone(baselineDraft.edges),
-          baselineDraft.budgets,
-        ),
-      );
-  const canSave = dirty && nodesValid(nodes);
-  const canDeploy = !dirty && baselineDraft !== null && nodesValid(nodes);
+  const semanticDefinition = useMemo(
+    () => serializeSemanticWorkflowDefinition(nodes, edges, budgets),
+    [budgets, edges, nodes],
+  );
+  const semanticDefinitionRef = useRef(semanticDefinition);
+  semanticDefinitionRef.current = semanticDefinition;
+  const semanticKey = JSON.stringify(semanticDefinition);
+  const baselineSemanticKey =
+    baselineDraft === null
+      ? null
+      : JSON.stringify(
+          serializeSemanticWorkflowDefinition(
+            toViewNodes(baselineDraft.nodes),
+            structuredClone(baselineDraft.edges),
+            executionLimitsFromDefinition(baselineDraft),
+          ),
+        );
+  const dirty = baselineSemanticKey === null || semanticKey !== baselineSemanticKey;
+  const validationTargetKey = `${selectedId}:${semanticKey}`;
+  const validationIsCurrent = validation.key === validationTargetKey;
+  const { canSave, canDeploy } = workflowEditorActions({
+    dirty,
+    structurallyValid: nodesValid(nodes),
+    hasDraft: baselineDraft !== null,
+    validationStatus: validation.state.status,
+    validationIsCurrent,
+  });
 
   useEffect(() => {
     if (!dirty) return;
@@ -126,6 +184,16 @@ export function WorkflowEditorScreen({
     window.addEventListener("beforeunload", onBeforeUnload);
     return () => window.removeEventListener("beforeunload", onBeforeUnload);
   }, [dirty]);
+
+  useEffect(() => {
+    validationKeyRef.current = validationTargetKey;
+    validationController.schedule({
+      definitionId: selectedId,
+      definition: semanticDefinitionRef.current,
+    });
+  }, [selectedId, validationController, validationTargetKey]);
+
+  useEffect(() => () => validationController.dispose(), [validationController]);
 
   useEffect(() => {
     if (!canEdit || !selectedMeta) {
@@ -209,7 +277,7 @@ export function WorkflowEditorScreen({
 
   function applySave(res: WorkflowDefinitionSaveResponse, refit: boolean) {
     setBaselineDraft(res.draft);
-    setBudgets(res.draft.budgets);
+    setBudgets(executionLimitsFromDefinition(res.draft));
     setNodes(toViewNodes(res.draft.nodes));
     setEdges(structuredClone(res.draft.edges));
     setMetas((prev) => prev.map((m) => (m.id === res.meta.id ? res.meta : m)));
@@ -314,7 +382,7 @@ export function WorkflowEditorScreen({
       setBaselineDraft(detail.draft);
       setLayoutBaseline(JSON.stringify(detail.layout));
       const def = detail.draft ?? detail.deployed?.definition ?? defaultDefinition;
-      setBudgets(def.budgets);
+      setBudgets(executionLimitsFromDefinition(def));
       setNodes(toViewNodes(def.nodes));
       setEdges(structuredClone(def.edges));
       setConfirmRestore(null);
@@ -453,9 +521,11 @@ export function WorkflowEditorScreen({
       {statusBar}
       <div className="relative flex-1 min-h-0">
         <FlowEditor
-        key={selectedId}
+          key={selectedId}
           nodes={nodes}
           edges={edges}
+          limits={budgets}
+          onLimitsChange={setBudgets}
           onNodesChange={setNodes}
           onEdgesChange={setEdges}
           canEdit={canEdit}
@@ -463,6 +533,11 @@ export function WorkflowEditorScreen({
           saveEnabled={canSave}
           saving={busy === "save"}
           error={error}
+          validation={
+            validationIsCurrent
+              ? validation.state
+              : { status: "checking", issues: [], nodeContracts: {} }
+          }
           onSave={save}
           saveLabel="Save draft"
           headerTitle={selectedMeta?.name ?? "Workflow"}

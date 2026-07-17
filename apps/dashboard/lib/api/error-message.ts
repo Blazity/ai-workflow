@@ -16,7 +16,15 @@ export function messageFromErrorPayload(payload: unknown): string {
 }
 
 export async function readErrorMessage(res: Response): Promise<string> {
-  return messageFromErrorPayload(await res.json().catch(() => ({})));
+  const text = await res.text();
+  if (res.headers.get("content-type")?.includes("json")) {
+    try {
+      return messageFromErrorPayload(JSON.parse(text));
+    } catch {
+      return "Request failed";
+    }
+  }
+  return text.trim() || res.statusText.trim() || "Request failed";
 }
 
 function stringValue(value: unknown): string | null {

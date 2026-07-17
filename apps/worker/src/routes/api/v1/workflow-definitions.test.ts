@@ -338,16 +338,24 @@ describe("PUT /api/v1/workflow-definitions/:id", () => {
   const put = paramHandler("put", "/d/:id", detailPut);
 
   it("saves semantic drafts without manufacturing deployment versions", async () => {
+    const limitedDefinition: WorkflowDefinition = {
+      ...VALID_DEFINITION,
+      budgets: {
+        maxDurationMs: 120_000,
+        maxTokens: 25_000,
+        maxCostUsd: 4.5,
+      },
+    };
     let res = await put(
       jsonRequest(
         "PUT",
-        { definition: VALID_DEFINITION, expectedDraftRevision: 0 },
+        { definition: limitedDefinition, expectedDraftRevision: 0 },
         "http://worker.test/d/1",
       ),
     );
     expect(res.status).toBe(200);
     let body = await res.json();
-    expect(body.draft).toEqual(semantic(VALID_DEFINITION));
+    expect(body.draft).toEqual(semantic(limitedDefinition));
     expect(body.meta).toMatchObject({
       id: 1,
       currentVersion: null,
@@ -463,7 +471,21 @@ describe("POST /api/v1/workflow-definitions/:id/validate", () => {
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.valid).toBe(false);
-    expect(body.issues.join(" ")).toContain("unknown block");
+    expect(body.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "deployment",
+          nodeId: expect.any(String),
+          message: expect.stringContaining("unknown block"),
+        }),
+      ]),
+    );
+    expect(body.nodeContracts).toMatchObject({
+      [invalid.nodes.find((node) => node.type === "update_ticket_status")!.id]: {
+        type: "update_ticket_status",
+        availability: { available: true, unavailableReason: null },
+      },
+    });
   });
 
   it("accepts a deployable graph", async () => {
@@ -471,7 +493,43 @@ describe("POST /api/v1/workflow-definitions/:id/validate", () => {
       jsonRequest("POST", { definition: VALID_DEFINITION }, "http://worker.test/d/1/validate"),
     );
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ valid: true, issues: [] });
+    expect(await res.json()).toMatchObject({
+      valid: true,
+      issues: [],
+      nodeContracts: {
+        [VALID_DEFINITION.nodes[0]!.id]: {
+          type: VALID_DEFINITION.nodes[0]!.type,
+        },
+      },
+    });
+  });
+
+  it("returns structured schema issues without mutating the saved draft", async () => {
+    await saveDraft(VALID_DEFINITION, 0);
+    const res = await validate(
+      jsonRequest(
+        "POST",
+        { definition: { schemaVersion: 2, nodes: [], edges: [] } },
+        "http://worker.test/d/1/validate",
+      ),
+    );
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      valid: false,
+      issues: [
+        {
+          code: "schema",
+          nodeId: null,
+          message: expect.stringContaining("Invalid definition"),
+        },
+      ],
+      nodeContracts: {},
+    });
+
+    const detail = await paramHandler("get", "/d/:id", detailGet)(
+      new Request("http://worker.test/d/1"),
+    );
+    expect((await detail.json()).meta.draftRevision).toBe(1);
   });
 });
 

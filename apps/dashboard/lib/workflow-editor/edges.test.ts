@@ -5,6 +5,7 @@ import {
   defaultPort,
   edgeKey,
   isBackEdge,
+  removeEdge,
   resolvedPort,
   upsertEdge,
   visibleOutPorts,
@@ -26,6 +27,18 @@ test("resolvedPort falls back to the type default when fromPort absent", () => {
 test("edgeKey encodes from, port and to", () => {
   assert.equal(edgeKey({ from: "a", to: "b" }), "a||b");
   assert.equal(edgeKey({ from: "a", to: "b", fromPort: "failed" }), "a|failed|b");
+});
+
+test("connection deletion removes only the exact edge", () => {
+  const edges: FlowEdgeDef[] = [
+    { from: "a", to: "b", fromPort: "true" },
+    { from: "a", to: "b", fromPort: "false" },
+    { from: "b", to: "c" },
+  ];
+  assert.deepEqual(removeEdge(edges, edges[1]), [
+    { from: "a", to: "b", fromPort: "true" },
+    { from: "b", to: "c" },
+  ]);
 });
 
 test("visibleOutPorts appends failed only when allowed and used or revealed", () => {

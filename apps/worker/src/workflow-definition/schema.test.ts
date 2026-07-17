@@ -56,7 +56,7 @@ function shapeOk(nodes: unknown[], edges: unknown[] = []): boolean {
 describe("workflowDefinitionSchema", () => {
   it("accepts omitted and partial execution budgets", () => {
     const omitted = workflowDefinitionSchema.parse({ schemaVersion: 1, nodes: [], edges: [] });
-    expect(omitted.budgets).toBeUndefined();
+    expect(omitted).toEqual({ schemaVersion: 1, nodes: [], edges: [] });
 
     const partial = workflowDefinitionSchema.parse({
       schemaVersion: 1,

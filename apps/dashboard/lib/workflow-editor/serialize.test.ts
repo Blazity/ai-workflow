@@ -44,6 +44,34 @@ test("moving a block changes layout but not the semantic definition", () => {
   assert.notDeepEqual(serializeWorkflowLayout(after), serializeWorkflowLayout(before));
 });
 
+test("execution limits are optional, serializable, clearable, and semantic", () => {
+  const nodes = flowNodes([
+    { id: "trigger", type: "trigger_ticket_ai", x: 10, y: 20, params: {} },
+  ]);
+
+  const unset = serializeSemanticWorkflowDefinition(nodes, [], {});
+  const limited = serializeSemanticWorkflowDefinition(nodes, [], {
+    maxDurationMs: 120_000,
+    maxTokens: 25_000,
+    maxCostUsd: 4.5,
+  });
+  const changed = serializeSemanticWorkflowDefinition(nodes, [], {
+    maxDurationMs: 180_000,
+    maxTokens: 25_000,
+    maxCostUsd: 4.5,
+  });
+  const cleared = serializeSemanticWorkflowDefinition(nodes, [], {});
+
+  assert.equal("budgets" in unset, false);
+  assert.deepEqual(limited.budgets, {
+    maxDurationMs: 120_000,
+    maxTokens: 25_000,
+    maxCostUsd: 4.5,
+  });
+  assert.notDeepEqual(changed, limited);
+  assert.deepEqual(cleared, unset);
+});
+
 test("round-trips call_llm provider through serialization without loss", () => {
   const nodes = flowNodes([
     {

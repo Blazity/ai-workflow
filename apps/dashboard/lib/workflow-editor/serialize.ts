@@ -29,12 +29,13 @@ function serializeParams(node: FlowNodeDef): Record<string, WorkflowParamValue> 
 export function serializeWorkflowDefinition(
   nodes: readonly FlowNodeDef[],
   edges: readonly FlowEdgeDef[],
-  budgets?: WorkflowExecutionBudgets,
+  budgets: WorkflowExecutionBudgets = {},
 ): WorkflowDefinition {
   const typeById = new Map(nodes.map((node) => [node.id, node.type]));
+  const hasBudgets = Object.values(budgets).some((value) => value !== undefined);
   return {
     schemaVersion: 1,
-    ...(budgets ? { budgets: { ...budgets } } : {}),
+    ...(hasBudgets ? { budgets: { ...budgets } } : {}),
     nodes: nodes.map((node) => {
       const serialized: WorkflowDefinitionNode = {
         id: node.id,
@@ -65,7 +66,7 @@ export function serializeWorkflowDefinition(
 export function serializeSemanticWorkflowDefinition(
   nodes: readonly FlowNodeDef[],
   edges: readonly FlowEdgeDef[],
-  budgets?: WorkflowExecutionBudgets,
+  budgets: WorkflowExecutionBudgets = {},
 ): WorkflowDefinition {
   const definition = serializeWorkflowDefinition(nodes, edges, budgets);
   return {

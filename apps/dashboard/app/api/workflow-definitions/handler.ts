@@ -119,7 +119,14 @@ async function definitionPath(params: Promise<{ id: string }>): Promise<string> 
 async function forward(workerProxy: WorkerProxy, path: string, init: RequestInit) {
   try {
     const res = await workerProxy(path, init);
-    return NextResponse.json(await res.json().catch(() => ({})), { status: res.status });
+    const headers = new Headers();
+    const contentType = res.headers.get("content-type");
+    if (contentType) headers.set("content-type", contentType);
+    return new NextResponse(res.body, {
+      status: res.status,
+      statusText: res.statusText,
+      headers,
+    });
   } catch (error) {
     if (isWorkerTimeoutError(error)) {
       return NextResponse.json({ error: "Worker request timed out" }, { status: 504 });

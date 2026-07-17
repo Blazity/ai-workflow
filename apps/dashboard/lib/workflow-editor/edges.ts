@@ -19,6 +19,14 @@ export function edgeKey(edge: FlowEdgeDef): string {
   return `${edge.from}|${edge.fromPort ?? ""}|${edge.to}`;
 }
 
+export function removeEdge(
+  edges: readonly FlowEdgeDef[],
+  edge: FlowEdgeDef,
+): FlowEdgeDef[] {
+  const key = edgeKey(edge);
+  return edges.filter((candidate) => edgeKey(candidate) !== key);
+}
+
 export function visibleOutPorts(
   type: WorkflowBlockType,
   failureUsed: boolean,
