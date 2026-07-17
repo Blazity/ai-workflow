@@ -1,4 +1,5 @@
 import { start } from "workflow/api";
+import type { VcsProviderKind } from "@shared/contracts";
 import type { Db } from "../db/client.js";
 import type { IssueTrackerAdapter } from "../adapters/issue-tracker/types.js";
 import type { RunRegistryAdapter } from "../adapters/run-registry/types.js";
@@ -53,13 +54,24 @@ function triggerNodeParams(
   return definition.nodes.find((node) => node.type === triggerType)?.params ?? {};
 }
 
-export async function resolveEnabledReviewStates(db: Db): Promise<string[]> {
+export async function resolveEnabledReviewStates(
+  db: Db,
+  provider: VcsProviderKind,
+  botLogin: string | undefined,
+): Promise<string[]> {
   const enabled = await getEnabledWorkflowDefinitionForTrigger(db, "trigger_pr_review");
-  if (!enabled?.current) return ["changes_requested"];
-  const on = triggerNodeParams(enabled.current.definition, "trigger_pr_review").on;
-  return Array.isArray(on) && on.length > 0
-    ? on.filter((state): state is string => typeof state === "string")
-    : ["changes_requested"];
+  if (!enabled?.current) return provider === "github" ? ["changes_requested"] : [];
+  const params = triggerNodeParams(enabled.current.definition, "trigger_pr_review");
+  const providers = Array.isArray(params.providers) ? params.providers : ["github"];
+  if (!providers.includes(provider)) return [];
+
+  const configuredStates =
+    Array.isArray(params.on) && params.on.length > 0 ? params.on : ["changes_requested"];
+  return configuredStates.filter(
+    (state): state is string =>
+      (state === "changes_requested" && provider === "github") ||
+      (state === "commented" && Boolean(botLogin)),
+  );
 }
 
 export async function dispatchTriggerEvent(

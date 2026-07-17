@@ -105,7 +105,7 @@ const triggerPrChecksFailedNode = z
   })
   .strict();
 
-// on: which submitted review states may trigger a run. Defaults to
+// on: which submitted review states may trigger a run. Defaults to GitHub
 // ["changes_requested"] only — a "commented" review carries an untrusted body
 // that fix_agent would feed to a full-permission agent, so operators must opt in
 // to "commented" explicitly.
@@ -115,7 +115,7 @@ const triggerPrReviewNode = z
     type: z.literal("trigger_pr_review"),
     params: z
       .object({
-        providers: vcsProviderSelection.default(["github", "gitlab"]),
+        providers: vcsProviderSelection.default(["github"]),
         on: z.array(reviewStates).default(["changes_requested"]),
         scope: prTriggerScope.default("workflow_owned"),
       })

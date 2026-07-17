@@ -11,6 +11,7 @@ const context: WorkflowBlockRegistryContext = {
   llmProviders: { claude: true, codex: false },
   defaultAgent: { provider: "claude", model: "claude-test" },
   vcsProviders: ["github"],
+  vcsBotIdentities: [],
   slackConfigured: false,
   arthurConfigured: false,
 };
@@ -321,7 +322,7 @@ describe("workflow block registry", () => {
   it("marks a VCS trigger unavailable when none of its selected providers are installed", () => {
     const gitlabOnly = resolveWorkflowBlockContract(
       "trigger_pr_review",
-      { providers: ["gitlab"], on: ["changes_requested"] },
+      { providers: ["gitlab"], on: ["commented"] },
       context,
     );
     expect(gitlabOnly.availability).toEqual({
@@ -332,6 +333,46 @@ describe("workflow block registry", () => {
     expect(buildWorkflowBlockRegistry(context).trigger_pr_review.availability).toEqual({
       available: true,
       unavailableReason: null,
+    });
+  });
+
+  it("rejects GitLab review triggers that omit the only reliable Note Hook state", () => {
+    const gitlab = resolveWorkflowBlockContract(
+      "trigger_pr_review",
+      { providers: ["gitlab"], on: ["changes_requested"] },
+      { ...context, vcsProviders: ["gitlab"], vcsBotIdentities: ["gitlab"] },
+    );
+
+    expect(gitlab.availability).toEqual({
+      available: false,
+      unavailableReason:
+        'GitLab review triggers must include "commented"; GitLab does not emit a reliable changes-requested review event.',
+    });
+
+    expect(
+      resolveWorkflowBlockContract(
+        "trigger_pr_review",
+        { providers: ["github"], on: ["changes_requested"] },
+        context,
+      ).availability,
+    ).toEqual({ available: true, unavailableReason: null });
+  });
+
+  it("requires bot identities for every configured provider selected by a commented trigger", () => {
+    const mixed = resolveWorkflowBlockContract(
+      "trigger_pr_review",
+      { providers: ["github", "gitlab"], on: ["changes_requested", "commented"] },
+      {
+        ...context,
+        vcsProviders: ["github", "gitlab"],
+        vcsBotIdentities: ["github"],
+      },
+    );
+
+    expect(mixed.availability).toEqual({
+      available: false,
+      unavailableReason:
+        "Commented review triggers require a configured GITLAB_BOT_LOGIN to prevent recursive bot reviews.",
     });
   });
 

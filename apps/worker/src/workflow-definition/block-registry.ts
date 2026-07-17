@@ -20,6 +20,7 @@ export interface WorkflowBlockRegistryContext {
   llmProviders: { claude: boolean; codex: boolean };
   defaultAgent: { provider: "claude" | "codex"; model: string };
   vcsProviders: VcsProviderKind[];
+  vcsBotIdentities: VcsProviderKind[];
   slackConfigured: boolean;
   arthurConfigured: boolean;
 }
@@ -260,7 +261,7 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
       "✎",
     ),
     defaults: {
-      providers: ["github", "gitlab"],
+      providers: ["github"],
       on: ["changes_requested"],
       scope: "workflow_owned",
     },
@@ -724,20 +725,53 @@ function availabilityFor(
   if (type === "arthur_injection_check" && !context.arthurConfigured) {
     return unavailable("Arthur Engine is not configured.");
   }
+  const selectedProviders = Array.isArray(params.providers)
+    ? params.providers.filter(
+      (provider): provider is VcsProviderKind => provider === "github" || provider === "gitlab",
+    )
+    : [];
+  if (
+    type === "trigger_pr_review" &&
+    selectedProviders.includes("gitlab") &&
+    !(Array.isArray(params.on) && params.on.includes("commented"))
+  ) {
+    return unavailable(
+      'GitLab review triggers must include "commented"; GitLab does not emit a reliable changes-requested review event.',
+    );
+  }
   if (vcsBlocks.has(type) && context.vcsProviders.length === 0) {
     return unavailable("No version-control provider is configured.");
   }
-  if (vcsBlocks.has(type) && Array.isArray(params.providers)) {
-    const selectedProviders = params.providers.filter(
-      (provider): provider is VcsProviderKind => provider === "github" || provider === "gitlab",
-    );
+  if (vcsBlocks.has(type) && selectedProviders.length > 0) {
     if (
-      selectedProviders.length > 0 &&
       !selectedProviders.some((provider) => context.vcsProviders.includes(provider))
     ) {
       return unavailable(
         `Selected VCS providers are not configured: ${selectedProviders.join(", ")}.`,
       );
+    }
+  }
+  if (type === "trigger_pr_review") {
+    const states = Array.isArray(params.on) ? params.on : [];
+    if (states.includes("commented")) {
+      const missingBotIdentities = selectedProviders.filter(
+        (provider) =>
+          context.vcsProviders.includes(provider) &&
+          !context.vcsBotIdentities.includes(provider),
+      );
+      if (missingBotIdentities.length > 0) {
+        const variables = missingBotIdentities.map((provider) =>
+          provider === "github" ? "GITHUB_BOT_LOGIN" : "GITLAB_BOT_LOGIN",
+        );
+        const label = missingBotIdentities[0] === "github" ? "GitHub" : "GitLab";
+        return unavailable(
+          context.vcsProviders.length === 1
+            ? `Commented ${label} review triggers require ${variables[0]} (or VCS_BOT_LOGIN in a single-provider deployment) to prevent recursive bot reviews.`
+            : missingBotIdentities.length === 1
+              ? `Commented review triggers require a configured ${variables[0]} to prevent recursive bot reviews.`
+              : `Commented review triggers require configured ${variables.join(" and ")} values to prevent recursive bot reviews.`,
+        );
+      }
     }
   }
   if (type === "call_llm") {

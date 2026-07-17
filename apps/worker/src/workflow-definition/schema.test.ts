@@ -28,6 +28,7 @@ const registryContext: WorkflowBlockRegistryContext = {
   llmProviders: { claude: true, codex: true },
   defaultAgent: { provider: "claude", model: "claude-test" },
   vcsProviders: ["github", "gitlab"],
+  vcsBotIdentities: ["github", "gitlab"],
   slackConfigured: true,
   arthurConfigured: true,
 };
@@ -686,7 +687,7 @@ describe("workflowDefinitionSchema block-executor node types", () => {
       scope: "workflow_owned",
     });
     expect(parseNode({ type: "trigger_pr_review", params: {} })?.params).toEqual({
-      providers: ["github", "gitlab"],
+      providers: ["github"],
       on: ["changes_requested"],
       scope: "workflow_owned",
     });
@@ -702,7 +703,7 @@ describe("workflowDefinitionSchema block-executor node types", () => {
       parseNode({ type: "trigger_pr_review", params: { on: ["changes_requested", "commented"] } })
         ?.params,
     ).toEqual({
-      providers: ["github", "gitlab"],
+      providers: ["github"],
       on: ["changes_requested", "commented"],
       scope: "workflow_owned",
     });
@@ -1315,6 +1316,41 @@ describe("validateWorkflowGraph rules", () => {
       expect.arrayContaining([
         'Block "slack" (send_slack_message) is unavailable: Slack messaging is not configured.',
       ]),
+    );
+  });
+
+  it("rejects unsupported GitLab review states and missing commented-review bot identities", () => {
+    const unsupported = graph(
+      [
+        node("review", "trigger_pr_review", {
+          providers: ["gitlab"],
+          on: ["changes_requested"],
+          scope: "workflow_owned",
+        }),
+      ],
+      [],
+    );
+    expect(validateWorkflowDefinitionForDeployment(unsupported, registryContext)).toContain(
+      'Block "review" (trigger_pr_review) is unavailable: GitLab review triggers must include "commented"; GitLab does not emit a reliable changes-requested review event.',
+    );
+
+    const commented = graph(
+      [
+        node("review", "trigger_pr_review", {
+          providers: ["github", "gitlab"],
+          on: ["changes_requested", "commented"],
+          scope: "workflow_owned",
+        }),
+      ],
+      [],
+    );
+    expect(
+      validateWorkflowDefinitionForDeployment(commented, {
+        ...registryContext,
+        vcsBotIdentities: ["github"],
+      }),
+    ).toContain(
+      'Block "review" (trigger_pr_review) is unavailable: Commented review triggers require a configured GITLAB_BOT_LOGIN to prevent recursive bot reviews.',
     );
   });
 

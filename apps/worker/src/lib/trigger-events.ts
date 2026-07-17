@@ -140,7 +140,6 @@ export function normalizeGitLabEvent(
     deliveryId?: string;
     botUsername?: string;
     reviewStates?: readonly string[];
-    noteReviewerState?: string;
   } = {},
 ): TriggerEvent | null {
   const producer = body?.user?.username ?? body?.user?.name ?? "unknown";
@@ -194,21 +193,14 @@ export function normalizeGitLabEvent(
       return null;
     }
     const allowedStates = options.reviewStates ?? DEFAULT_REVIEW_STATES;
-    const state =
-      options.noteReviewerState === "requested_changes" &&
-      allowedStates.includes("changes_requested")
-        ? "changes_requested"
-        : allowedStates.includes("commented")
-          ? "commented"
-          : null;
-    if (!state) return null;
+    if (!allowedStates.includes("commented")) return null;
     return {
       delivery: gitLabDelivery(options.deliveryId, producer),
       triggerType: "trigger_pr_review",
       pr: {
         ...mapGitLabMergeRequest(mr, project),
         review: {
-          state,
+          state: "commented",
           author: producer,
           body: typeof attrs.note === "string" ? attrs.note : "",
         },

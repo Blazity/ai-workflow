@@ -10,9 +10,13 @@ const mocks = vi.hoisted(() => ({
     VCS_BOT_LOGIN: undefined as string | undefined,
     GITHUB_BOT_LOGIN: undefined as string | undefined,
   },
+  getVcsBotLogin: vi.fn(),
 }));
 
-vi.mock("../../../env.js", () => ({ env: mocks.env }));
+vi.mock("../../../env.js", () => ({
+  env: mocks.env,
+  getVcsBotLogin: mocks.getVcsBotLogin,
+}));
 
 vi.mock("../../lib/github-webhook-sig.js", () => ({
   verifyGitHubWebhookSignature: vi.fn(),
@@ -85,6 +89,7 @@ describe("POST /webhooks/github", () => {
     mocks.env.GITHUB_REPO = undefined;
     mocks.env.VCS_BOT_LOGIN = undefined;
     mocks.env.GITHUB_BOT_LOGIN = undefined;
+    mocks.getVcsBotLogin.mockReturnValue("github-app[bot]");
     mockDispatchPostPrGateWebhook.mockResolvedValue({ status: "dispatched", runId: "gate_run" });
     mockDispatchTriggerEvent.mockResolvedValue({ result: "no_definition" });
     mockResolveEnabledReviewStates.mockResolvedValue(["changes_requested"]);
@@ -137,11 +142,17 @@ describe("POST /webhooks/github", () => {
       expect.objectContaining({ triggerType: "trigger_pr_review" }),
       expect.anything(),
     );
+    expect(mockResolveEnabledReviewStates).toHaveBeenCalledWith(
+      expect.anything(),
+      "github",
+      "github-app[bot]",
+    );
   });
 
   it("filters reviews using the GitHub-specific bot login", async () => {
     mocks.env.VCS_BOT_LOGIN = "legacy-bot";
     mocks.env.GITHUB_BOT_LOGIN = "github-app[bot]";
+    mocks.getVcsBotLogin.mockReturnValueOnce("github-app[bot]");
 
     const response = await makeApp()(
       makeRequest(
@@ -156,6 +167,7 @@ describe("POST /webhooks/github", () => {
 
   it("falls back to the legacy VCS bot login for GitHub reviews", async () => {
     mocks.env.VCS_BOT_LOGIN = "legacy-bot";
+    mocks.getVcsBotLogin.mockReturnValueOnce("legacy-bot");
 
     const response = await makeApp()(
       makeRequest(
@@ -165,6 +177,23 @@ describe("POST /webhooks/github", () => {
     );
 
     expect(response.status).toBe(200);
+    expect(mockDispatchTriggerEvent).not.toHaveBeenCalled();
+  });
+
+  it("fails closed for commented reviews when the bot identity is unset", async () => {
+    mocks.getVcsBotLogin.mockReturnValueOnce(undefined);
+    mockResolveEnabledReviewStates.mockResolvedValueOnce([]);
+
+    const response = await makeApp()(
+      makeRequest(reviewBody("commented"), "pull_request_review"),
+    );
+
+    expect(response.status).toBe(200);
+    expect(mockResolveEnabledReviewStates).toHaveBeenCalledWith(
+      expect.anything(),
+      "github",
+      undefined,
+    );
     expect(mockDispatchTriggerEvent).not.toHaveBeenCalled();
   });
 
@@ -285,7 +314,7 @@ describe("POST /webhooks/github", () => {
     expect(mockDispatchPostPrGateWebhook).not.toHaveBeenCalled();
   });
 
-  it("returns 503 so GitHub redelivers when dispatch is at capacity", async () => {
+  it("returns a retryable 503 when dispatch is at capacity", async () => {
     mockDispatchTriggerEvent.mockResolvedValueOnce({ result: "at_capacity" });
 
     const response = await makeApp()(makeRequest(pullRequestBody("opened")));
@@ -294,7 +323,7 @@ describe("POST /webhooks/github", () => {
     expect(mockDispatchPostPrGateWebhook).not.toHaveBeenCalled();
   });
 
-  it("returns 503 so GitHub redelivers when dispatch errors", async () => {
+  it("returns a retryable 503 when dispatch errors", async () => {
     mockDispatchTriggerEvent.mockResolvedValueOnce({ result: "error" });
 
     const response = await makeApp()(makeRequest(pullRequestBody("opened")));

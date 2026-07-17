@@ -439,11 +439,10 @@ describe("normalizeGitLabEvent", () => {
     });
   });
 
-  it("maps an enriched GitLab requested-changes note to the common review trigger", () => {
+  it("never infers requested changes from a GitLab merge-request note", () => {
     const evt = normalizeGitLabEvent("Note Hook", notePayload(), {
       deliveryId: "gitlab-review-1",
-      reviewStates: ["changes_requested"],
-      noteReviewerState: "requested_changes",
+      reviewStates: ["changes_requested", "commented"],
     });
 
     expect(evt?.triggerType).toBe("trigger_pr_review");
@@ -452,10 +451,19 @@ describe("normalizeGitLabEvent", () => {
       author: "8",
     });
     expect(evt?.pr.review).toEqual({
-      state: "changes_requested",
+      state: "commented",
       author: "alice",
       body: "Please add a test",
     });
+  });
+
+  it("does not map a GitLab note when only changes_requested is configured", () => {
+    expect(
+      normalizeGitLabEvent("Note Hook", notePayload(), {
+        deliveryId: "gitlab-review-unsupported",
+        reviewStates: ["changes_requested"],
+      }),
+    ).toBeNull();
   });
 
   it("maps an opted-in GitLab merge-request note to a commented review", () => {

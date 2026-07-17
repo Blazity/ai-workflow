@@ -1,6 +1,7 @@
 import { createEnv } from "@t3-oss/env-core";
 import { z } from "zod";
 import type { GitHubAppAuth } from "./src/lib/github-auth.js";
+import { resolveVcsBotLogin } from "./src/lib/vcs-bot-identity.js";
 
 export const env = createEnv({
   onValidationError: (issues) => {
@@ -341,6 +342,20 @@ export function getConfiguredVcsProviders(): VcsProviderConfig[] {
   }
 
   return providers;
+}
+
+/** Resolve the automation account used to suppress recursive review triggers.
+ * The legacy shared value is safe only when exactly one provider is configured. */
+export function getVcsBotLogin(kind: VcsProviderKind): string | undefined {
+  return resolveVcsBotLogin(
+    kind,
+    getConfiguredVcsProviders().map((provider) => provider.kind),
+    {
+      github: env.GITHUB_BOT_LOGIN,
+      gitlab: env.GITLAB_BOT_LOGIN,
+      legacy: env.VCS_BOT_LOGIN,
+    },
+  );
 }
 
 export function getVcsProviderConfig(kind: VcsProviderKind): VcsProviderConfig {

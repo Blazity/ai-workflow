@@ -12,6 +12,7 @@ const context: WorkflowBlockRegistryContext = {
   llmProviders: { claude: true, codex: true },
   defaultAgent: { provider: "claude", model: "claude-test" },
   vcsProviders: ["github", "gitlab"],
+  vcsBotIdentities: ["github", "gitlab"],
   slackConfigured: true,
   arthurConfigured: true,
 };

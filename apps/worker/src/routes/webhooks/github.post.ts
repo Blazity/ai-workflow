@@ -1,5 +1,5 @@
 import { defineEventHandler, readRawBody, getHeader, createError } from "h3";
-import { env } from "../../../env.js";
+import { env, getVcsBotLogin } from "../../../env.js";
 import { PostgresRunRegistry } from "../../adapters/run-registry/postgres.js";
 import { getDb } from "../../db/client.js";
 import { ticketKeyFromBranch } from "../../lib/branch-prefix.js";
@@ -66,14 +66,15 @@ export default defineEventHandler(async (event) => {
   );
   // For review events, resolve the enabled definition's `on` set so normalize
   // drops states the operator has not opted into (default: changes_requested).
+  const botLogin = getVcsBotLogin("github");
   const reviewStates =
     ghEvent === "pull_request_review"
-      ? await resolveEnabledReviewStates(getDb())
+      ? await resolveEnabledReviewStates(getDb(), "github", botLogin)
       : undefined;
   const evt = normalizeGitHubEvent(ghEvent, body, {
     gateCheckNames,
     deliveryId,
-    botLogin: env.GITHUB_BOT_LOGIN ?? env.VCS_BOT_LOGIN,
+    botLogin,
     ...(reviewStates ? { reviewStates } : {}),
   });
 
@@ -143,9 +144,9 @@ function triggerResponse(result: DispatchTriggerResult) {
     return { status: "dispatched", runId: result.runId };
   }
   if (result.result === "at_capacity" || result.result === "error") {
-    // PR-trigger webhooks are one-shot: there is no cron re-drive, so a dropped
-    // event is lost. Return 503 so GitHub redelivers this delivery later.
-    logger.info({ reason: result.result }, "trigger_webhook_will_be_redelivered");
+    // Surface a retryable HTTP failure. Recovery still depends on provider
+    // configuration because the worker has no local re-drive for this event.
+    logger.info({ reason: result.result }, "trigger_webhook_retryable_failure");
     throw createError({ statusCode: 503, statusMessage: `trigger_${result.result}` });
   }
   return { status: "ignored", reason: result.result };

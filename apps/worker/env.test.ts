@@ -207,6 +207,45 @@ describe("env", () => {
     expect(() => getVcsConfig()).toThrow("legacy VCS config requires exactly one selected provider");
   });
 
+  it("leaves bot identity unset when no review bot login is configured", async () => {
+    Object.assign(process.env, VALID_ENV);
+    delete process.env.VCS_BOT_LOGIN;
+    delete process.env.GITHUB_BOT_LOGIN;
+    delete process.env.GITLAB_BOT_LOGIN;
+
+    const { getVcsBotLogin } = await import("./env.js");
+
+    expect(getVcsBotLogin("github")).toBeUndefined();
+    expect(getVcsBotLogin("gitlab")).toBeUndefined();
+  });
+
+  it("uses the legacy bot login only for an unambiguous single provider", async () => {
+    Object.assign(process.env, { ...VALID_ENV, VCS_BOT_LOGIN: "legacy-bot" });
+    delete process.env.GITHUB_BOT_LOGIN;
+    delete process.env.GITLAB_BOT_LOGIN;
+
+    const { getVcsBotLogin } = await import("./env.js");
+
+    expect(getVcsBotLogin("github")).toBe("legacy-bot");
+    expect(getVcsBotLogin("gitlab")).toBeUndefined();
+  });
+
+  it("requires provider-specific bot identities in a mixed-provider deployment", async () => {
+    Object.assign(process.env, {
+      ...VALID_ENV,
+      GITLAB_TOKEN: "glpat-test",
+      GITLAB_WEBHOOK_SECRET: "gitlab-webhook-secret",
+      VCS_BOT_LOGIN: "ambiguous-legacy-bot",
+      GITHUB_BOT_LOGIN: "github-app[bot]",
+    });
+    delete process.env.GITLAB_BOT_LOGIN;
+
+    const { getVcsBotLogin } = await import("./env.js");
+
+    expect(getVcsBotLogin("github")).toBe("github-app[bot]");
+    expect(getVcsBotLogin("gitlab")).toBeUndefined();
+  });
+
   it("honors GITLAB_HOST for self-hosted instances", async () => {
     const gitlabEnv = { ...VALID_ENV };
     gitlabEnv.VCS_KIND = "gitlab";

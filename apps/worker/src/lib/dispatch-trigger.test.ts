@@ -80,6 +80,12 @@ function enabled(
   };
 }
 
+function enabledReview(params: Record<string, unknown>) {
+  const result = enabled(params);
+  result.current.definition.nodes[0]!.type = "trigger_pr_review";
+  return result;
+}
+
 function event(overrides: Partial<TriggerEvent> = {}): TriggerEvent {
   return {
     delivery: { provider: "github", producer: "alice", deliveryId: "delivery-1" },
@@ -127,6 +133,43 @@ async function correlate(publishedHeadSha = "abc123") {
     },
   });
 }
+
+describe("resolveEnabledReviewStates", () => {
+  it("keeps GitHub changes requested support without a bot identity", async () => {
+    mockGetEnabled.mockResolvedValue(
+      enabledReview({
+        providers: ["github"],
+        on: ["changes_requested", "commented"],
+      }),
+    );
+    const { resolveEnabledReviewStates } = await import("./dispatch-trigger.js");
+
+    await expect(resolveEnabledReviewStates(db, "github", undefined)).resolves.toEqual([
+      "changes_requested",
+    ]);
+  });
+
+  it("fails closed for legacy GitLab changes-requested definitions", async () => {
+    mockGetEnabled.mockResolvedValue(
+      enabledReview({ providers: ["gitlab"], on: ["changes_requested"] }),
+    );
+    const { resolveEnabledReviewStates } = await import("./dispatch-trigger.js");
+
+    await expect(resolveEnabledReviewStates(db, "gitlab", "gitlab-bot")).resolves.toEqual([]);
+  });
+
+  it("fails closed for legacy commented definitions without a provider bot identity", async () => {
+    mockGetEnabled.mockResolvedValue(
+      enabledReview({ providers: ["github", "gitlab"], on: ["commented"] }),
+    );
+    const { resolveEnabledReviewStates } = await import("./dispatch-trigger.js");
+
+    await expect(resolveEnabledReviewStates(db, "gitlab", undefined)).resolves.toEqual([]);
+    await expect(resolveEnabledReviewStates(db, "gitlab", "gitlab-bot")).resolves.toEqual([
+      "commented",
+    ]);
+  });
+});
 
 describe("dispatchTriggerEvent durable envelope", () => {
   it("rejects a missing provider delivery identity before definition lookup", async () => {

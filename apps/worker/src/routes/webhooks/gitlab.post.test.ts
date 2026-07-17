@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
     GITLAB_BOT_LOGIN: undefined as string | undefined,
   },
   getConfiguredVcsProviders: vi.fn(),
+  getVcsBotLogin: vi.fn(),
   listRepositories: vi.fn(),
   fetch: vi.fn(),
 }));
@@ -19,6 +20,7 @@ global.fetch = mocks.fetch;
 vi.mock("../../../env.js", () => ({
   env: mocks.env,
   getConfiguredVcsProviders: mocks.getConfiguredVcsProviders,
+  getVcsBotLogin: mocks.getVcsBotLogin,
 }));
 
 const mockDispatchPostPrGateWebhook = vi.fn();
@@ -124,6 +126,7 @@ describe("POST /webhooks/gitlab", () => {
     vi.clearAllMocks();
     mocks.env.GITLAB_PROJECT_ID = undefined;
     mocks.env.GITLAB_BOT_LOGIN = undefined;
+    mocks.getVcsBotLogin.mockReturnValue("blazebot");
     mockDispatchTriggerEvent.mockResolvedValue({ result: "no_definition" });
     mockResolveEnabledReviewStates.mockResolvedValue(["changes_requested"]);
     mocks.getConfiguredVcsProviders.mockReturnValue([
@@ -312,7 +315,7 @@ describe("POST /webhooks/gitlab", () => {
     );
   });
 
-  it("returns 503 so GitLab redelivers when dispatch is at capacity", async () => {
+  it("returns a retryable 503 when dispatch is at capacity", async () => {
     mockDispatchTriggerEvent.mockResolvedValueOnce({ result: "at_capacity" });
 
     const response = await makeApp()(makeRequest(validMergeRequestPayload()));
@@ -321,7 +324,7 @@ describe("POST /webhooks/gitlab", () => {
     expect(mockDispatchPostPrGateWebhook).not.toHaveBeenCalled();
   });
 
-  it("returns 503 so GitLab redelivers when dispatch errors", async () => {
+  it("returns a retryable 503 when dispatch errors", async () => {
     mockDispatchTriggerEvent.mockResolvedValueOnce({ result: "error" });
 
     const response = await makeApp()(makeRequest(validMergeRequestPayload()));
@@ -418,6 +421,11 @@ describe("POST /webhooks/gitlab", () => {
 
     expect(response.status).toBe(200);
     expect(mockResolveEnabledReviewStates).toHaveBeenCalled();
+    expect(mockResolveEnabledReviewStates).toHaveBeenCalledWith(
+      expect.anything(),
+      "gitlab",
+      "blazebot",
+    );
     expect(mockDispatchTriggerEvent).toHaveBeenCalledWith(
       expect.objectContaining({
         triggerType: "trigger_pr_review",
@@ -432,32 +440,20 @@ describe("POST /webhooks/gitlab", () => {
     expect(mocks.fetch).not.toHaveBeenCalled();
   });
 
-  it("enriches an eligible note with the actor's requested-changes reviewer state", async () => {
+  it("always treats an eligible GitLab note as commented without reviewer enrichment", async () => {
     mockResolveEnabledReviewStates.mockResolvedValueOnce(["changes_requested", "commented"]);
     mockDispatchTriggerEvent.mockResolvedValueOnce({ result: "started", runId: "run_changes" });
-    mocks.fetch.mockResolvedValueOnce({
-      ok: true,
-      json: async () => [
-        { user: { id: 1, username: "alice" }, state: "requested_changes" },
-      ],
-    });
 
     const response = await makeApp()(makeRequest(validNotePayload(), "secret", "Note Hook"));
 
     expect(response.status).toBe(200);
-    expect(mocks.fetch).toHaveBeenCalledWith(
-      "https://gitlab.example.com/api/v4/projects/5/merge_requests/42/reviewers",
-      expect.objectContaining({
-        headers: { "PRIVATE-TOKEN": "glpat" },
-        signal: expect.any(AbortSignal),
-      }),
-    );
+    expect(mocks.fetch).not.toHaveBeenCalled();
     expect(mockDispatchTriggerEvent).toHaveBeenCalledWith(
       expect.objectContaining({
         triggerType: "trigger_pr_review",
         pr: expect.objectContaining({
           review: {
-            state: "changes_requested",
+            state: "commented",
             author: "alice",
             body: "Please add coverage",
           },
@@ -467,18 +463,21 @@ describe("POST /webhooks/gitlab", () => {
     );
   });
 
-  it("returns 503 when requested-changes reviewer enrichment fails transiently", async () => {
-    mockResolveEnabledReviewStates.mockResolvedValueOnce(["changes_requested"]);
+  it("has no reviewer API dependency for GitLab notes", async () => {
+    mockResolveEnabledReviewStates.mockResolvedValueOnce(["commented"]);
     mocks.fetch.mockRejectedValueOnce(new Error("GitLab unavailable"));
+    mockDispatchTriggerEvent.mockResolvedValueOnce({ result: "started", runId: "run_note" });
 
     const response = await makeApp()(makeRequest(validNotePayload(), "secret", "Note Hook"));
 
-    expect(response.status).toBe(503);
-    expect(mockDispatchTriggerEvent).not.toHaveBeenCalled();
+    expect(response.status).toBe(200);
+    expect(mocks.fetch).not.toHaveBeenCalled();
+    expect(mockDispatchTriggerEvent).toHaveBeenCalled();
   });
 
-  it("filters notes using the GitLab-specific bot login before enrichment", async () => {
+  it("filters notes using the GitLab-specific bot login", async () => {
     mocks.env.GITLAB_BOT_LOGIN = "gitlab-automation";
+    mocks.getVcsBotLogin.mockReturnValueOnce("gitlab-automation");
     mockResolveEnabledReviewStates.mockResolvedValueOnce(["commented"]);
     const note = JSON.parse(validNotePayload());
     note.user = { id: 9, username: "gitlab-automation" };
@@ -491,6 +490,7 @@ describe("POST /webhooks/gitlab", () => {
   });
 
   it("falls back to the legacy VCS bot login for GitLab notes", async () => {
+    mocks.getVcsBotLogin.mockReturnValueOnce("blazebot");
     mockResolveEnabledReviewStates.mockResolvedValueOnce(["commented"]);
     const note = JSON.parse(validNotePayload());
     note.user = { id: 9, username: "blazebot" };
@@ -503,11 +503,6 @@ describe("POST /webhooks/gitlab", () => {
   });
 
   it("ignores a merge-request note when commented reviews are not configured", async () => {
-    mocks.fetch.mockResolvedValueOnce({
-      ok: true,
-      json: async () => [{ user: { id: 1, username: "alice" }, state: "reviewed" }],
-    });
-
     const response = await makeApp()(makeRequest(validNotePayload(), "secret", "Note Hook"));
 
     expect(response.status).toBe(200);
@@ -515,6 +510,7 @@ describe("POST /webhooks/gitlab", () => {
       status: "ignored",
       reason: "note_ignored",
     });
+    expect(mocks.fetch).not.toHaveBeenCalled();
     expect(mockDispatchTriggerEvent).not.toHaveBeenCalled();
   });
 });

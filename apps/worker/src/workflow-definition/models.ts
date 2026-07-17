@@ -1,6 +1,7 @@
 import type { WorkflowEditorOptions } from "@shared/contracts";
 import type { IssueTrackerAdapter } from "../adapters/issue-tracker/types.js";
 import { env } from "../../env.js";
+import { resolveVcsBotLogin } from "../lib/vcs-bot-identity.js";
 import {
   buildWorkflowBlockRegistry,
   type WorkflowBlockRegistryContext,
@@ -158,6 +159,15 @@ export function workflowBlockRegistryContextFromEnv(): WorkflowBlockRegistryCont
       model: env.AGENT_KIND === "codex" ? env.CODEX_MODEL : env.CLAUDE_MODEL,
     },
     vcsProviders,
+    vcsBotIdentities: vcsProviders.filter((provider) =>
+      Boolean(
+        resolveVcsBotLogin(provider, vcsProviders, {
+          github: env.GITHUB_BOT_LOGIN,
+          gitlab: env.GITLAB_BOT_LOGIN,
+          legacy: env.VCS_BOT_LOGIN,
+        }),
+      ),
+    ),
     slackConfigured: Boolean(env.CHAT_SDK_SLACK_TOKEN && env.CHAT_SDK_CHANNEL_ID),
     arthurConfigured: Boolean(env.GENAI_ENGINE_API_KEY && env.GENAI_ENGINE_TRACE_ENDPOINT),
   };
