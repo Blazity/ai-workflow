@@ -29,6 +29,8 @@ type JiraTransition = {
   };
 };
 
+const STATUS_DISCOVERY_TIMEOUT_MS = 5000;
+
 export class JiraAdapter implements IssueTrackerAdapter {
   private tenantOrigin: string;
   private authHeader: string;
@@ -161,6 +163,7 @@ export class JiraAdapter implements IssueTrackerAdapter {
   async listStatuses(): Promise<Array<{ id: string; name: string }>> {
     const groups = await this.request(
       `/rest/api/3/project/${encodeURIComponent(this.projectKey)}/statuses`,
+      { signal: AbortSignal.timeout(STATUS_DISCOVERY_TIMEOUT_MS) },
     );
     const seen = new Set<string>();
     const statuses: Array<{ id: string; name: string }> = [];

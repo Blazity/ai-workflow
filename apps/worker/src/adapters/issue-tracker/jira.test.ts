@@ -446,6 +446,7 @@ describe("JiraAdapter", () => {
         { id: "3", name: "Done" },
       ]);
       expect(mockFetch.mock.calls[0][0]).toBe(`${API_BASE}/rest/api/3/project/PROJ/statuses`);
+      expect(mockFetch.mock.calls[0][1].signal).toBeInstanceOf(AbortSignal);
     });
   });
 
