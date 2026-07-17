@@ -23,6 +23,7 @@ import { resolveBlockAgent, resolveRunDefaultKind } from "../workflow-definition
 import { resolveTicketMoveTarget } from "./ticket-move-target.js";
 import type { AgentWorkflowInput } from "./agent-input.js";
 import type { BlockExecuteFn, EngineCtx } from "./blocks/types.js";
+import { buildPromptVariables, substituteNodePromptParams } from "./prompt-vars.js";
 import { execute as executePrepareWorkspace } from "./blocks/prepare-workspace.js";
 import { execute as executeFinalizeWorkspace } from "./blocks/finalize-workspace.js";
 import { execute as executeFixAgent } from "./blocks/fix-agent.js";
@@ -42,6 +43,14 @@ import type {
   WorkflowBlockType,
   WorkflowDefinitionNode,
 } from "@shared/contracts";
+
+/** The agent-block prompt override: a non-empty `prompt` param replaces the
+ *  built-in phase template. Empty / whitespace / non-string falls through to the
+ *  built-in prompt. */
+const promptOverride = (node: WorkflowDefinitionNode): string | undefined => {
+  const raw = node.params.prompt;
+  return typeof raw === "string" && raw.trim().length > 0 ? raw : undefined;
+};
 
 const BLOCK_EXECUTORS: Partial<Record<WorkflowBlockType, BlockExecuteFn>> = {
   prepare_workspace: executePrepareWorkspace,
@@ -1131,7 +1140,11 @@ export async function agentWorkflow(input: string | AgentWorkflowInput) {
         reason: `no workspace: connect prepare_workspace before ${type}`,
       });
 
-      const executeBlock: BlockExecutor = async (node, steps): Promise<BlockExecutionResult> => {
+      const executeBlock: BlockExecutor = async (rawNode, steps): Promise<BlockExecutionResult> => {
+        // Substitute {{variables}} into prompt-bearing params per execution: the
+        // run context (research plan, publication, selected repos) mutates
+        // mid-run, so each block sees the values current at its turn.
+        const node = substituteNodePromptParams(rawNode, buildPromptVariables(ctx));
         const blockExecute = BLOCK_EXECUTORS[node.type];
         if (blockExecute) {
           const result = await blockExecute(node, steps, ctx);
@@ -1155,7 +1168,7 @@ export async function agentWorkflow(input: string | AgentWorkflowInput) {
               await planPhaseStep(kind, "research", model, RESEARCH_SCHEMA);
             const researchInput = assembleResearchPlanContext({
               ticket: ticketData,
-              prompt: prompts.research,
+              prompt: promptOverride(node) ?? prompts.research,
               branchName,
               attachments: downloadedAttachments,
               preSandboxAdditions: ctx.preSandboxAdditions.research,
@@ -1225,7 +1238,7 @@ export async function agentWorkflow(input: string | AgentWorkflowInput) {
               await planPhaseStep(kind, "impl", model, AGENT_SCHEMA);
             const implInput = assembleImplementationContext({
               ticket: ticketData,
-              prompt: prompts.implement,
+              prompt: promptOverride(node) ?? prompts.implement,
               researchPlanMarkdown: ctx.researchPlanMarkdown,
               attachments: downloadedAttachments,
               preSandboxAdditions: ctx.preSandboxAdditions.implementation,
@@ -1283,7 +1296,7 @@ export async function agentWorkflow(input: string | AgentWorkflowInput) {
               await planPhaseStep(kind, "review", model, REVIEW_SCHEMA);
             const reviewInput = assembleReviewContext({
               ticket: ticketData,
-              prompt: prompts.review,
+              prompt: promptOverride(node) ?? prompts.review,
               researchPlanMarkdown: ctx.researchPlanMarkdown,
               attachments: downloadedAttachments,
               preSandboxAdditions: ctx.preSandboxAdditions.review,
