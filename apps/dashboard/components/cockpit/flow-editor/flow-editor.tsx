@@ -610,6 +610,7 @@ export function FlowEditor({
   saving,
   error,
   onSave,
+  saveLabel = "Save changes",
   headerTitle,
   headerVersionBadge,
   headerExtra,
@@ -628,6 +629,7 @@ export function FlowEditor({
   saving: boolean;
   error: string | null;
   onSave: () => void;
+  saveLabel?: string;
   headerTitle: string;
   headerVersionBadge: string;
   headerExtra?: React.ReactNode;
@@ -725,7 +727,7 @@ export function FlowEditor({
               onClick={onSave}
               disabled={!saveEnabled || saving}
               className="appearance-none cursor-pointer border border-mariner bg-mariner text-white py-1.5 px-3.5 rounded-[3px] font-mono text-[11px] tracking-[0.04em] uppercase disabled:opacity-40 disabled:cursor-default"
-            >{saving ? "Saving…" : "Save changes"}</button>
+            >{saving ? "Saving…" : saveLabel}</button>
           )}
         </div>
       </div>

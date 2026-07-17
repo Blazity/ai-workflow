@@ -18,6 +18,13 @@ export interface PrTriggerPayload {
   review?: { state: "changes_requested" | "commented"; author: string; body: string };
 }
 
+/** Immutable identity for the built-in fresh-install graph, which has no
+ * workflow_definition_versions row to pin by number. */
+export const BUILTIN_FALLBACK_DEFINITION_VERSION = "builtin_fallback" as const;
+export type WorkflowDefinitionVersionPin =
+  | number
+  | typeof BUILTIN_FALLBACK_DEFINITION_VERSION;
+
 /**
  * Entry describing what started an agent workflow run. "ticket" is the classic
  * ticket-column trigger, "pr_trigger" covers the PR webhook triggers,
@@ -26,12 +33,18 @@ export interface PrTriggerPayload {
  * questions the agent parked on.
  */
 export type AgentWorkflowInput =
-  | { kind: "ticket"; ticketKey: string; definitionId?: number }
+  | {
+      kind: "ticket";
+      ticketKey: string;
+      definitionId?: number;
+      definitionVersion?: WorkflowDefinitionVersionPin;
+    }
   | {
       kind: "pr_trigger";
       triggerType: "trigger_pr_created" | "trigger_pr_checks_failed" | "trigger_pr_review";
       ticketKey: string;
       definitionId: number;
+      definitionVersion: number;
       pr: PrTriggerPayload;
     }
   | {

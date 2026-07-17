@@ -26,6 +26,9 @@ export function serializeDefinitionMeta(
     enabled: row.enabled,
     triggerTypes: row.triggerTypes,
     currentVersion,
+    draftRevision: row.draftRevision,
+    layoutRevision: row.layoutRevision,
+    deployedVersion: row.deployedVersion,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
   };

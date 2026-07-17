@@ -34,10 +34,14 @@ vi.mock("workflow/api", () => ({
 }));
 
 const mockGetCurrentVersion = vi.fn();
+const mockGetDeployedVersion = vi.fn();
+const mockGetDefinition = vi.fn();
 const mockGetVersion = vi.fn();
 const mockGetEnabled = vi.fn();
 vi.mock("../workflow-definition/store.js", () => ({
   getCurrentWorkflowDefinitionVersion: (...args: any[]) => mockGetCurrentVersion(...args),
+  getDeployedWorkflowDefinitionVersion: (...args: any[]) => mockGetDeployedVersion(...args),
+  getWorkflowDefinition: (...args: any[]) => mockGetDefinition(...args),
   getWorkflowDefinitionVersion: (...args: any[]) => mockGetVersion(...args),
   getEnabledWorkflowDefinitionForTrigger: (...args: any[]) => mockGetEnabled(...args),
 }));
@@ -228,6 +232,8 @@ function enabled(definition: WorkflowDefinition, version = 3, definitionId = 1) 
 describe("loadWorkflowDefinitionFor edge cases", () => {
   beforeEach(() => {
     mockGetCurrentVersion.mockReset();
+    mockGetDeployedVersion.mockReset();
+    mockGetDefinition.mockReset();
     mockGetEnabled.mockReset();
     loggerError.mockReset();
     loggerInfo.mockReset();
@@ -235,7 +241,8 @@ describe("loadWorkflowDefinitionFor edge cases", () => {
   });
 
   it("returns null for a non-ticket trigger when the pinned definition row is missing", async () => {
-    mockGetCurrentVersion.mockResolvedValue(null);
+    mockGetDeployedVersion.mockResolvedValue(null);
+    mockGetDefinition.mockResolvedValue(null);
 
     const plan = await loadWorkflowDefinitionFor("trigger_pr_created", 999);
 
@@ -256,7 +263,7 @@ describe("loadWorkflowDefinitionFor edge cases", () => {
   });
 
   it("treats a matched enabled record with a null current version as no definition", async () => {
-    mockGetEnabled.mockResolvedValue({ definition: { id: 1 }, current: null });
+    mockGetEnabled.mockResolvedValue({ definition: { id: 1, builtinFallback: true }, current: null });
 
     // Ticket trigger falls back to the built-in default...
     const ticketPlan = await loadWorkflowDefinitionFor("trigger_ticket_ai");

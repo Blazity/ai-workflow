@@ -431,6 +431,7 @@ describe("post_pr_comment edge cases", () => {
           triggerType: "trigger_pr_checks_failed",
           ticketKey: "AWT-1",
           definitionId: 1,
+          definitionVersion: 1,
           pr: makePrPayload(),
         },
       }),
@@ -456,6 +457,7 @@ describe("post_pr_comment edge cases", () => {
           triggerType: "trigger_pr_checks_failed",
           ticketKey: "AWT-1",
           definitionId: 1,
+          definitionVersion: 1,
           pr: makePrPayload({ baseRef: "develop" }),
         },
       }),
@@ -760,6 +762,7 @@ describe("fetch_pr_context edge cases", () => {
         triggerType: "trigger_pr_created",
         ticketKey: "AWT-1",
         definitionId: 1,
+        definitionVersion: 1,
         pr: makePrPayload(),
       },
     });

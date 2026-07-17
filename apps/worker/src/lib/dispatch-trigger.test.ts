@@ -57,6 +57,8 @@ function makeEnabledDefinition(params: Record<string, unknown> = {}) {
   return {
     definition: { id: 5, name: "PR flow" },
     current: {
+      definitionId: 5,
+      version: 12,
       definition: {
         schemaVersion: 1,
         nodes: [
@@ -195,6 +197,7 @@ describe("dispatchTriggerEvent", () => {
         triggerType: "trigger_pr_created",
         ticketKey: "AIW-1",
         definitionId: 5,
+        definitionVersion: 12,
         pr: evt.pr,
       },
     ]);

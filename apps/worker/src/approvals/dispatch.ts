@@ -6,7 +6,7 @@ import type { IssueTrackerAdapter } from "../adapters/issue-tracker/types.js";
 import type { AgentWorkflowInput } from "../workflows/agent-input.js";
 import { agentWorkflow } from "../workflows/agent.js";
 import {
-  getCurrentWorkflowDefinitionVersion,
+  getDeployedWorkflowDefinitionVersion,
   getWorkflowDefinition,
   getWorkflowDefinitionVersion,
 } from "../workflow-definition/store.js";
@@ -64,7 +64,8 @@ export async function dispatchPlanApproved(input: {
   // approved plan. Only a genuinely gone definition blocks the run: hard-deleted,
   // archived (retired), or a pinned version row that no longer exists. That is
   // surfaced as definition_gone, which the route turns into a clean 410. Legacy
-  // rows with a null pinned version fall back to the current head.
+  // rows with a null pinned version fall back to the selected deployed version,
+  // never an undeployed draft snapshot.
   const definition = await getWorkflowDefinition(db, approval.definitionId);
   if (!definition || definition.archivedAt) {
     logger.info({ ticketKey, definitionId: approval.definitionId }, "plan_approved_definition_gone");
@@ -73,7 +74,7 @@ export async function dispatchPlanApproved(input: {
   const pinned =
     approval.definitionVersion != null
       ? await getWorkflowDefinitionVersion(db, approval.definitionId, approval.definitionVersion)
-      : await getCurrentWorkflowDefinitionVersion(db, approval.definitionId);
+      : await getDeployedWorkflowDefinitionVersion(db, approval.definitionId);
   if (!pinned) {
     logger.info(
       { ticketKey, definitionId: approval.definitionId, version: approval.definitionVersion },

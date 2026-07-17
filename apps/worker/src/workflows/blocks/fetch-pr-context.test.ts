@@ -107,6 +107,7 @@ describe("fetch_pr_context execute", () => {
         triggerType: "trigger_pr_created",
         ticketKey: "AWT-1",
         definitionId: 1,
+        definitionVersion: 1,
         pr: makePrPayload(),
       },
     });

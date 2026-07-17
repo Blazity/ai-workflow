@@ -6,6 +6,12 @@ import type { Adapters } from "./adapters.js";
 import type { RunKind, RunRegistryAdapter } from "../adapters/run-registry/types.js";
 import type { TicketContent } from "../adapters/issue-tracker/types.js";
 import { stopTicketSandboxes } from "../sandbox/stop-ticket-sandboxes.js";
+import { getDb } from "../db/client.js";
+import { getEnabledWorkflowDefinitionForTrigger } from "../workflow-definition/store.js";
+import {
+  BUILTIN_FALLBACK_DEFINITION_VERSION,
+  type AgentWorkflowInput,
+} from "../workflows/agent-input.js";
 
 const CLAIMING_PREFIX = "claiming:";
 /**
@@ -33,7 +39,8 @@ export interface DispatchResult {
     | "error"
     | "previously_failed"
     | "not_in_ai_column"
-    | "wrong_project_key";
+    | "wrong_project_key"
+    | "no_definition";
 }
 
 export async function dispatchTicket(
@@ -61,6 +68,7 @@ export async function dispatchTicket(
   }
 
   let ticket: TicketContent | null = null;
+  let workflowInput: AgentWorkflowInput | null = null;
   return claimTicketRun(ticketKey, runRegistry, maxConcurrentAgents, {
     // Runs after the claim + post-claim capacity verify, before start(): the
     // AI-column and project-key gate specific to ticket dispatch.
@@ -87,13 +95,34 @@ export async function dispatchTicket(
         );
         return { started: false, reason: "wrong_project_key" };
       }
+      const enabled = await getEnabledWorkflowDefinitionForTrigger(
+        getDb(),
+        "trigger_ticket_ai",
+      );
+      if (!enabled) {
+        logger.info({ ticketKey }, "dispatch_skipped_no_definition");
+        return { started: false, reason: "no_definition" };
+      }
+      workflowInput = enabled.current
+        ? {
+            kind: "ticket",
+            ticketKey,
+            definitionId: enabled.definition.id,
+            definitionVersion: enabled.current.version,
+          }
+        : {
+            kind: "ticket",
+            ticketKey,
+            definitionId: enabled.definition.id,
+            definitionVersion: BUILTIN_FALLBACK_DEFINITION_VERSION,
+          };
       return null;
     },
     startWorkflow: async () => {
       // Pass the issue key (not the numeric id) so the workflow can build
       // /browse/{KEY}?focusedCommentId=... deep links in Slack notifications.
       // Jira's REST API accepts either id or key for fetch/transition/comment.
-      const handle = await start(agentWorkflow, [ticketKey]);
+      const handle = await start(agentWorkflow, [workflowInput!]);
       logger.info(
         { ticketId: ticket!.id, identifier: ticket!.identifier, runId: handle.runId },
         "workflow_started",

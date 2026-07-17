@@ -1,8 +1,10 @@
 import { sql } from "drizzle-orm";
 import {
+  type AnyPgColumn,
   bigint,
   boolean,
   check,
+  foreignKey,
   index,
   integer,
   jsonb,
@@ -239,6 +241,29 @@ export const prePrCheckConfigVersions = pgTable("pre_pr_check_config_versions", 
 });
 
 /**
+ * Dashboard-managed workflow definition versions, append-only per definition.
+ * Declared before workflowDefinitions so that table can express its composite
+ * deployed pointer. The typed lazy reference keeps the reverse FK cycle safe.
+ */
+export const workflowDefinitionVersions = pgTable(
+  "workflow_definition_versions",
+  {
+    definitionId: integer("definition_id")
+      .notNull()
+      .references((): AnyPgColumn => workflowDefinitions.id),
+    version: integer("version").notNull(),
+    // Stored rows may predate required normalized node fields. Reads parse and
+    // upgrade this raw JSON before exposing the canonical WorkflowDefinition.
+    definition: jsonb("definition").$type<unknown>().notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    createdById: text("created_by_id").notNull(),
+    createdByLabel: text("created_by_label").notNull(),
+    restoredFromVersion: integer("restored_from_version"),
+  },
+  (t) => [primaryKey({ columns: [t.definitionId, t.version] })],
+);
+
+/**
  * Named workflow definitions: one row per definition the dashboard manages.
  * trigger_types is denormalized from the head version, kept in sync by
  * save/restore, and backs the one-enabled-definition-per-trigger rule so the
@@ -252,10 +277,23 @@ export const workflowDefinitions = pgTable(
     id: serial("id").primaryKey(),
     name: text("name").notNull(),
     enabled: boolean("enabled").notNull().default(false),
+    /** Explicit identity for the one fresh-install built-in ticket fallback. */
+    builtinFallback: boolean("builtin_fallback").notNull().default(false),
     triggerTypes: text("trigger_types")
       .array()
       .notNull()
       .default(sql`'{}'::text[]`),
+    /** Mutable, layout-free authoring graph. Deployment snapshots are separate. */
+    draft: jsonb("draft").$type<unknown>(),
+    draftRevision: integer("draft_revision").notNull().default(0),
+    /** Node coordinates are CAS-patched independently from semantic edits. */
+    layout: jsonb("layout")
+      .$type<{ nodes: Record<string, { x: number; y: number }> }>()
+      .notNull()
+      .default(sql`'{"nodes":{}}'::jsonb`),
+    layoutRevision: integer("layout_revision").notNull().default(0),
+    /** Exact immutable snapshot selected for new dispatches. */
+    deployedVersion: integer("deployed_version"),
     archivedAt: timestamp("archived_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
@@ -266,31 +304,51 @@ export const workflowDefinitions = pgTable(
     uniqueIndex("workflow_definitions_name_active_idx")
       .on(t.name)
       .where(sql`${t.archivedAt} is null`),
+    uniqueIndex("workflow_definitions_single_builtin_fallback_idx")
+      .on(t.builtinFallback)
+      .where(sql`${t.builtinFallback} = true`),
+    foreignKey({
+      columns: [t.id, t.deployedVersion],
+      foreignColumns: [
+        workflowDefinitionVersions.definitionId,
+        workflowDefinitionVersions.version,
+      ],
+      name: "workflow_definitions_deployed_version_fk",
+    }),
   ],
 );
 
 /**
- * Dashboard-managed workflow definition versions, append-only per definition.
- * Each row belongs to a workflow_definitions row; a definition's head is its
- * highest version, and a rollback appends a copy of an older version with
- * restored_from_version set. No versions for a definition = built-in default.
+ * Append-only audit log of deployment selections. A rollback selects an
+ * existing immutable snapshot and records where it rolled back from; it does
+ * not manufacture a duplicate snapshot.
  */
-export const workflowDefinitionVersions = pgTable(
-  "workflow_definition_versions",
+export const workflowDefinitionDeployments = pgTable(
+  "workflow_definition_deployments",
   {
+    id: serial("id").primaryKey(),
     definitionId: integer("definition_id")
       .notNull()
-      .references(() => workflowDefinitions.id),
-    version: integer("version").notNull(),
-    // Stored rows may predate required normalized node fields. Reads parse and
-    // upgrade this raw JSON before exposing the canonical WorkflowDefinition.
-    definition: jsonb("definition").$type<unknown>().notNull(),
+      .references(() => workflowDefinitions.id, { onDelete: "cascade" }),
+    selectedVersion: integer("selected_version").notNull(),
+    previousVersion: integer("previous_version"),
+    action: text("action").notNull(),
+    rollbackFromVersion: integer("rollback_from_version"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     createdById: text("created_by_id").notNull(),
     createdByLabel: text("created_by_label").notNull(),
-    restoredFromVersion: integer("restored_from_version"),
   },
-  (t) => [primaryKey({ columns: [t.definitionId, t.version] })],
+  (t) => [
+    check(
+      "workflow_definition_deployments_action_check",
+      sql`${t.action} in ('deploy', 'rollback', 'migration')`,
+    ),
+    foreignKey({
+      columns: [t.definitionId, t.selectedVersion],
+      foreignColumns: [workflowDefinitionVersions.definitionId, workflowDefinitionVersions.version],
+      name: "workflow_definition_deployments_selected_version_fk",
+    }),
+  ],
 );
 
 /**

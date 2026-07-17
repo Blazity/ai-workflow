@@ -11,6 +11,8 @@ import type {
   Workflow,
   WorkflowBlockType,
   WorkflowDefinition,
+  WorkflowDefinitionDeployment,
+  WorkflowDefinitionLayout,
   WorkflowDefinitionVersion,
   WorkflowEditorOptions,
 } from "./domain.js";
@@ -194,6 +196,12 @@ export interface WorkflowDefinitionMeta {
   enabled: boolean;
   triggerTypes: WorkflowBlockType[];
   currentVersion: number | null;
+  /** Mutable semantic authoring revision. */
+  draftRevision: number;
+  /** Independently persisted presentation revision. */
+  layoutRevision: number;
+  /** Exact immutable version selected for new runs. */
+  deployedVersion: number | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -206,6 +214,12 @@ export interface WorkflowDefinitionsResponse {
 
 export interface WorkflowDefinitionDetailResponse {
   meta: WorkflowDefinitionMeta;
+  /** Semantic draft with the latest layout overlaid for editing. */
+  draft: WorkflowDefinition | null;
+  layout: WorkflowDefinitionLayout;
+  deployed: WorkflowDefinitionVersion | null;
+  deployments: WorkflowDefinitionDeployment[];
+  /** @deprecated Use `deployed`. */
   current: WorkflowDefinitionVersion | null;
   versions: WorkflowDefinitionVersion[];
 }
@@ -221,7 +235,23 @@ export interface WorkflowDefinitionResponse {
 
 export interface WorkflowDefinitionSaveResponse {
   meta: WorkflowDefinitionMeta;
-  version: WorkflowDefinitionVersion;
+  draft: WorkflowDefinition;
+}
+
+export interface WorkflowDefinitionLayoutResponse {
+  meta: WorkflowDefinitionMeta;
+  layout: WorkflowDefinitionLayout;
+}
+
+export interface WorkflowDefinitionDeploymentResponse {
+  meta: WorkflowDefinitionMeta;
+  deployed: WorkflowDefinitionVersion;
+  deployment: WorkflowDefinitionDeployment;
+}
+
+export interface WorkflowDefinitionValidationResponse {
+  valid: boolean;
+  issues: string[];
 }
 
 export interface RunBlockStatusesResponse {

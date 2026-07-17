@@ -3,10 +3,7 @@ import type { WorkflowDefinitionMeta } from "@shared/contracts";
 import { getDb } from "../../../../db/client.js";
 import { requireDashboardActor } from "../../../../lib/auth/request-context.js";
 import { dashboardUserLabel } from "../../../../pre-pr-checks/store.js";
-import {
-  getCurrentWorkflowDefinitionVersion,
-  updateWorkflowDefinition,
-} from "../../../../workflow-definition/store.js";
+import { updateWorkflowDefinition } from "../../../../workflow-definition/store.js";
 import {
   parseDefinitionId,
   serializeDefinitionMeta,
@@ -51,8 +48,7 @@ export default defineEventHandler(
           label: await dashboardUserLabel(dbHandle, actor.userId),
         },
       });
-      const head = await getCurrentWorkflowDefinitionVersion(dbHandle, id);
-      return serializeDefinitionMeta(updated, head?.version ?? null);
+      return serializeDefinitionMeta(updated, updated.deployedVersion);
     } catch (error) {
       toWorkflowDefinitionHttpError(error);
     }

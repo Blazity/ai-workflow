@@ -125,6 +125,7 @@ describe("fix_agent execute", () => {
         triggerType: "trigger_pr_checks_failed",
         ticketKey: "AWT-1",
         definitionId: 1,
+        definitionVersion: 1,
         pr: makePrPayload({
           failedChecks: [{ name: "ci", conclusion: "failure", detailsUrl: "https://ci" }],
           review: { state: "changes_requested", author: "bob", body: "rename this" },

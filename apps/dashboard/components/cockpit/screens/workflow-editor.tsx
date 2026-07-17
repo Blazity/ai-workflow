@@ -1,11 +1,14 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
   isTriggerBlockType,
   type RunBlockStatusesResponse,
   type WorkflowDefinition,
+  type WorkflowDefinitionDeployment,
+  type WorkflowDefinitionDeploymentResponse,
   type WorkflowDefinitionDetailResponse,
+  type WorkflowDefinitionLayoutResponse,
   type WorkflowDefinitionMeta,
   type WorkflowDefinitionNode,
   type WorkflowDefinitionSaveResponse,
@@ -16,12 +19,21 @@ import { FlowEditor } from "@/components/cockpit/flow-editor/flow-editor";
 import { Listbox } from "@/components/cockpit/listbox";
 import type { FlowEdgeDef, FlowNodeDef } from "@/lib/flows";
 import { readErrorMessage } from "@/lib/api/error-message";
-import { serializeWorkflowDefinition } from "@/lib/workflow-editor/serialize";
+import {
+  serializeSemanticWorkflowDefinition,
+  serializeWorkflowDefinition,
+  serializeWorkflowLayout,
+} from "@/lib/workflow-editor/serialize";
 import { deriveRunStatuses } from "@/lib/workflow-editor/run-statuses";
 import {
   reduceDefinitionSwitch,
   type DefinitionSwitchState,
 } from "@/lib/workflow-editor/definition-switch";
+import {
+  afterPendingLayoutSave,
+  createPendingLayoutSave,
+  type PendingLayoutSave,
+} from "@/lib/workflow-editor/layout-save";
 
 function toViewNodes(nodes: WorkflowDefinitionNode[]): FlowNodeDef[] {
   return structuredClone(nodes).map((node) => ({
@@ -60,10 +72,14 @@ export function WorkflowEditorScreen({
   liveBlocks: RunBlockStatusesResponse;
   canEdit: boolean;
 }) {
-  const seed = initialDetail.current?.definition ?? defaultDefinition;
+  const seed = initialDetail.draft ?? initialDetail.deployed?.definition ?? defaultDefinition;
   const [metas, setMetas] = useState<WorkflowDefinitionMeta[]>(definitions);
   const [selectedId, setSelectedId] = useState(initialDetail.meta.id);
   const [versions, setVersions] = useState<WorkflowDefinitionVersion[]>(initialDetail.versions);
+  const [deployments, setDeployments] = useState<WorkflowDefinitionDeployment[]>(initialDetail.deployments);
+  const [deployed, setDeployed] = useState<WorkflowDefinitionVersion | null>(initialDetail.deployed);
+  const [baselineDraft, setBaselineDraft] = useState<WorkflowDefinition | null>(initialDetail.draft);
+  const [layoutBaseline, setLayoutBaseline] = useState(() => JSON.stringify(initialDetail.layout));
   const [nodes, setNodes] = useState<FlowNodeDef[]>(() => toViewNodes(seed.nodes));
   const [edges, setEdges] = useState<FlowEdgeDef[]>(() => structuredClone(seed.edges));
   const [busy, setBusy] = useState<string | null>(null);
@@ -78,14 +94,24 @@ export function WorkflowEditorScreen({
   const [createError, setCreateError] = useState<string | null>(null);
   const [newName, setNewName] = useState("");
   const [newSource, setNewSource] = useState("default");
+  const pendingLayoutSaveRef = useRef<PendingLayoutSave | null>(null);
+  if (pendingLayoutSaveRef.current === null) {
+    pendingLayoutSaveRef.current = createPendingLayoutSave();
+  }
+  const pendingLayoutSave = pendingLayoutSaveRef.current;
 
   const selectedMeta = metas.find((m) => m.id === selectedId);
-  const current = versions[0] ?? null;
-  const baseline = current?.definition ?? defaultDefinition;
   const dirty =
-    JSON.stringify(serializeWorkflowDefinition(nodes, edges)) !==
-    JSON.stringify(serializeWorkflowDefinition(baseline.nodes, baseline.edges));
-  const canSave = (dirty || current === null) && nodesValid(nodes);
+    baselineDraft === null ||
+    JSON.stringify(serializeSemanticWorkflowDefinition(nodes, edges)) !==
+      JSON.stringify(
+        serializeSemanticWorkflowDefinition(
+          toViewNodes(baselineDraft.nodes),
+          structuredClone(baselineDraft.edges),
+        ),
+      );
+  const canSave = dirty && nodesValid(nodes);
+  const canDeploy = !dirty && baselineDraft !== null && nodesValid(nodes);
 
   useEffect(() => {
     if (!dirty) return;
@@ -99,10 +125,47 @@ export function WorkflowEditorScreen({
     return () => window.removeEventListener("beforeunload", onBeforeUnload);
   }, [dirty]);
 
+  useEffect(() => {
+    if (!canEdit || !selectedMeta) {
+      pendingLayoutSave.discard();
+      return;
+    }
+    const layout = serializeWorkflowLayout(nodes);
+    const serialized = JSON.stringify(layout);
+    if (serialized === layoutBaseline) {
+      pendingLayoutSave.discard();
+      return;
+    }
+    const definitionId = selectedId;
+    const expectedLayoutRevision = selectedMeta.layoutRevision;
+    pendingLayoutSave.schedule(async () => {
+      try {
+        const res = await fetch(`/api/workflow-definitions/${definitionId}/layout`, {
+          method: "PATCH",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ layout, expectedLayoutRevision }),
+        });
+        if (!res.ok) {
+          setError(await readErrorMessage(res));
+          return false;
+        }
+        const body = (await res.json()) as WorkflowDefinitionLayoutResponse;
+        setMetas((prev) => prev.map((meta) => (meta.id === body.meta.id ? body.meta : meta)));
+        setLayoutBaseline(JSON.stringify(body.layout));
+        return true;
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Unable to save layout");
+        return false;
+      }
+    });
+  }, [canEdit, layoutBaseline, nodes, pendingLayoutSave, selectedId, selectedMeta]);
+
+  useEffect(() => () => pendingLayoutSave.discard(), [pendingLayoutSave]);
+
   const run = liveBlocks.run;
   const derived = deriveRunStatuses(run, {
     definitionId: selectedId,
-    version: current?.version ?? null,
+    version: deployed?.version ?? null,
   });
 
   let statusBar: React.ReactNode = null;
@@ -143,9 +206,9 @@ export function WorkflowEditorScreen({
   }
 
   function applySave(res: WorkflowDefinitionSaveResponse, refit: boolean) {
-    setVersions((prev) => [res.version, ...prev]);
-    setNodes(toViewNodes(res.version.definition.nodes));
-    setEdges(structuredClone(res.version.definition.edges));
+    setBaselineDraft(res.draft);
+    setNodes(toViewNodes(res.draft.nodes));
+    setEdges(structuredClone(res.draft.edges));
     setMetas((prev) => prev.map((m) => (m.id === res.meta.id ? res.meta : m)));
     if (refit) setFitSignal((s) => s + 1);
   }
@@ -154,16 +217,21 @@ export function WorkflowEditorScreen({
     setBusy("save");
     setError(null);
     try {
-      const res = await fetch(`/api/workflow-definitions/${selectedId}`, {
-        method: "PUT",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ definition: serializeWorkflowDefinition(nodes, edges) }),
+      await afterPendingLayoutSave(pendingLayoutSave, async () => {
+        const res = await fetch(`/api/workflow-definitions/${selectedId}`, {
+          method: "PUT",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            definition: serializeWorkflowDefinition(nodes, edges),
+            expectedDraftRevision: selectedMeta?.draftRevision ?? 0,
+          }),
+        });
+        if (!res.ok) {
+          setError(await readErrorMessage(res));
+          return;
+        }
+        applySave((await res.json()) as WorkflowDefinitionSaveResponse, false);
       });
-      if (!res.ok) {
-        setError(await readErrorMessage(res));
-        return;
-      }
-      applySave((await res.json()) as WorkflowDefinitionSaveResponse, false);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unable to save changes");
     } finally {
@@ -171,23 +239,55 @@ export function WorkflowEditorScreen({
     }
   }
 
-  async function restore(version: number) {
-    setBusy(`restore-${version}`);
+  async function deploy() {
+    if (!selectedMeta) return;
+    setBusy("deploy");
     setError(null);
     try {
-      const res = await fetch(`/api/workflow-definitions/${selectedId}/restore`, {
+      const res = await fetch(`/api/workflow-definitions/${selectedId}/deploy`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ version }),
+        body: JSON.stringify({
+          expectedDraftRevision: selectedMeta.draftRevision,
+          expectedDeployedVersion: selectedMeta.deployedVersion,
+        }),
       });
       if (!res.ok) {
         setError(await readErrorMessage(res));
         return;
       }
-      applySave((await res.json()) as WorkflowDefinitionSaveResponse, true);
+      const body = (await res.json()) as WorkflowDefinitionDeploymentResponse;
+      setDeployed(body.deployed);
+      setVersions((prev) => [body.deployed, ...prev.filter((item) => item.version !== body.deployed.version)]);
+      setDeployments((prev) => [body.deployment, ...prev]);
+      setMetas((prev) => prev.map((meta) => (meta.id === body.meta.id ? body.meta : meta)));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to deploy draft");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function rollback(version: number) {
+    setBusy(`rollback-${version}`);
+    setError(null);
+    try {
+      const res = await fetch(`/api/workflow-definitions/${selectedId}/rollback`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ version, expectedDeployedVersion: selectedMeta?.deployedVersion ?? null }),
+      });
+      if (!res.ok) {
+        setError(await readErrorMessage(res));
+        return;
+      }
+      const body = (await res.json()) as WorkflowDefinitionDeploymentResponse;
+      setDeployed(body.deployed);
+      setDeployments((prev) => [body.deployment, ...prev]);
+      setMetas((prev) => prev.map((meta) => (meta.id === body.meta.id ? body.meta : meta)));
       setConfirmRestore(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Unable to restore version");
+      setError(err instanceof Error ? err.message : "Unable to roll back version");
     } finally {
       setBusy(null);
     }
@@ -206,7 +306,11 @@ export function WorkflowEditorScreen({
       setSelectedId(detail.meta.id);
       setMetas((prev) => prev.map((m) => (m.id === detail.meta.id ? detail.meta : m)));
       setVersions(detail.versions);
-      const def = detail.current?.definition ?? defaultDefinition;
+      setDeployments(detail.deployments);
+      setDeployed(detail.deployed);
+      setBaselineDraft(detail.draft);
+      setLayoutBaseline(JSON.stringify(detail.layout));
+      const def = detail.draft ?? detail.deployed?.definition ?? defaultDefinition;
       setNodes(toViewNodes(def.nodes));
       setEdges(structuredClone(def.edges));
       setConfirmRestore(null);
@@ -222,13 +326,17 @@ export function WorkflowEditorScreen({
     if (targetId === selectedId) return;
     const t = reduceDefinitionSwitch(switchState, { type: "request", targetId, dirty });
     setSwitchState(t.state);
-    if (t.switchTo !== null) await applySwitch(t.switchTo);
+    if (t.switchTo !== null) {
+      await afterPendingLayoutSave(pendingLayoutSave, () => applySwitch(t.switchTo!));
+    }
   }
 
   async function confirmSwitch() {
     const t = reduceDefinitionSwitch(switchState, { type: "confirm" });
     setSwitchState(t.state);
-    if (t.switchTo !== null) await applySwitch(t.switchTo);
+    if (t.switchTo !== null) {
+      await afterPendingLayoutSave(pendingLayoutSave, () => applySwitch(t.switchTo!));
+    }
   }
 
   function cancelSwitch() {
@@ -315,9 +423,9 @@ export function WorkflowEditorScreen({
 
   return (
     <div className="flex flex-col h-full min-h-0">
-      {current === null && (
+      {deployed === null && (
         <div className="px-6 py-2 border-b border-neutral-200 bg-app-bg font-body text-[12px] text-neutral-600">
-          Built-in default, save to create v1.
+          No deployed version selected. Save a draft, then deploy it when it is ready.
         </div>
       )}
       {switchState.kind === "confirming" && (
@@ -352,10 +460,20 @@ export function WorkflowEditorScreen({
           saving={busy === "save"}
           error={error}
           onSave={save}
+          saveLabel="Save draft"
           headerTitle={selectedMeta?.name ?? "Workflow"}
-          headerVersionBadge={current ? `v${current.version}` : "default"}
+          headerVersionBadge={deployed ? `deployed v${deployed.version}` : "not deployed"}
           headerExtra={
             <>
+              {canEdit && (
+                <button
+                  onClick={() => void deploy()}
+                  disabled={!canDeploy || busy !== null}
+                  className="appearance-none cursor-pointer border border-emerald-600 bg-emerald-600 text-white py-1.5 px-3 rounded-[3px] font-mono text-[11px] tracking-[0.04em] uppercase disabled:opacity-40 disabled:cursor-default"
+                >
+                  {busy === "deploy" ? "Deploying…" : "Deploy"}
+                </button>
+              )}
               <div className="w-[190px]">
                 <Listbox
                   options={metas.map((m) => ({
@@ -385,7 +503,7 @@ export function WorkflowEditorScreen({
                 }}
                 className={headerButtonClass}
               >
-                History ({versions.length})
+                History ({deployments.length})
               </button>
             </>
           }
@@ -535,12 +653,37 @@ export function WorkflowEditorScreen({
             {versions.length === 0 && (
               <div className="font-body text-[12px] text-neutral-500">No versions yet.</div>
             )}
+            {deployments.map((deployment) => (
+              <div
+                key={deployment.id}
+                className="flex items-center gap-2 border-b border-neutral-100 py-2 font-body text-[11px] text-neutral-600"
+              >
+                <span className="font-mono uppercase">{deployment.action}</span>
+                <span>v{deployment.selectedVersion}</span>
+                {deployment.previousVersion !== null && (
+                  <span className="text-neutral-400">from v{deployment.previousVersion}</span>
+                )}
+                <span className="ml-auto text-neutral-400">
+                  {new Date(deployment.createdAt).toLocaleString()}
+                </span>
+              </div>
+            ))}
+            {versions.length > 0 && (
+              <div className="mt-3 font-mono text-[10px] uppercase tracking-[0.05em] text-neutral-500">
+                Snapshots
+              </div>
+            )}
             {versions.map((v) => (
               <div
                 key={v.version}
                 className="flex items-center gap-3 border-b border-neutral-100 py-2 font-body text-[12px] text-neutral-700"
               >
                 <span className="font-mono text-neutral-900">v{v.version}</span>
+                {v.version === deployed?.version && (
+                  <span className="rounded-[3px] bg-emerald-50 px-[6px] py-[2px] font-mono text-[10px] text-emerald-700">
+                    deployed
+                  </span>
+                )}
                 <span>{v.createdByLabel}</span>
                 <span className="text-neutral-400">{new Date(v.createdAt).toLocaleString()}</span>
                 {v.restoredFromVersion !== null && (
@@ -548,16 +691,16 @@ export function WorkflowEditorScreen({
                     restored from v{v.restoredFromVersion}
                   </span>
                 )}
-                {canEdit && v.version !== versions[0]?.version && (
+                {canEdit && v.version !== deployed?.version && (
                   <span className="ml-auto">
                     {confirmRestore === v.version ? (
                       <>
                         <button
-                          onClick={() => restore(v.version)}
+                          onClick={() => rollback(v.version)}
                           disabled={busy !== null}
                           className="appearance-none border-none bg-transparent font-body text-[12px] font-semibold text-red-600 cursor-pointer disabled:opacity-40"
                         >
-                          {busy === `restore-${v.version}` ? "Restoring…" : "Confirm restore"}
+                          {busy === `rollback-${v.version}` ? "Rolling back…" : "Confirm rollback"}
                         </button>
                         <button
                           onClick={() => setConfirmRestore(null)}
@@ -571,7 +714,7 @@ export function WorkflowEditorScreen({
                         onClick={() => setConfirmRestore(v.version)}
                         className="appearance-none border-none bg-transparent font-body text-[12px] text-mariner cursor-pointer"
                       >
-                        Restore
+                        Roll back
                       </button>
                     )}
                   </span>

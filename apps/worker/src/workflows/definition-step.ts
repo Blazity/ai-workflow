@@ -6,10 +6,14 @@ import type {
   WorkflowDefinitionNode,
 } from "@shared/contracts";
 import type { WorkflowDefinitionVersionRow } from "../workflow-definition/store.js";
+import {
+  BUILTIN_FALLBACK_DEFINITION_VERSION,
+  type WorkflowDefinitionVersionPin,
+} from "./agent-input.js";
 
 export interface LoadedWorkflowPlan {
   version: number | null;
-  /** Definition the plan came from; null when it is the built-in fallback. */
+  /** Definition selected for dispatch; legacy unpinned fallback loads use null. */
   definitionId: number | null;
   nodes: WorkflowDefinitionNode[];
   edges: WorkflowDefinitionEdge[];
@@ -166,23 +170,23 @@ export function normalizeDefinitionForExecution(
 
 /**
  * Resolves the runnable plan for a trigger. With an explicit definitionId and
- * version the pinned version is loaded (approved plans replay the exact graph a
- * human reviewed); with a definitionId alone the definition's head version is
- * loaded; without either the enabled definition for the trigger is used. When
- * nothing valid resolves, the trigger_ticket_ai trigger falls back to the
- * built-in default (definitionId null), today's semantics, while any other
- * trigger returns null.
+ * version the exact immutable snapshot is loaded. Legacy callers with an id but
+ * no version resolve only that definition's deployed pointer. Without either,
+ * the enabled trigger binding is used. The built-in graph is returned only for
+ * the explicit fresh-install fallback row; missing or invalid stored versions
+ * fail closed instead of silently switching execution paths.
  */
 export async function loadWorkflowDefinitionFor(
   triggerType: WorkflowBlockType,
   definitionId?: number,
-  version?: number,
+  version?: WorkflowDefinitionVersionPin,
 ): Promise<LoadedWorkflowPlan | null> {
   "use step";
   const { env } = await import("../../env.js");
   const { getDb } = await import("../db/client.js");
   const {
-    getCurrentWorkflowDefinitionVersion,
+    getDeployedWorkflowDefinitionVersion,
+    getWorkflowDefinition,
     getWorkflowDefinitionVersion,
     getEnabledWorkflowDefinitionForTrigger,
   } = await import("../workflow-definition/store.js");
@@ -213,19 +217,39 @@ export async function loadWorkflowDefinitionFor(
   };
 
   const isTicket = triggerType === "trigger_ticket_ai";
-  const buildDefault = (): LoadedWorkflowPlan =>
-    toPlan(defaultWorkflowDefinition({ includeReview: env.ENABLE_REVIEW_PHASE }), null, null);
+  const buildDefault = (selectedDefinitionId: number | null = null): LoadedWorkflowPlan =>
+    toPlan(
+      defaultWorkflowDefinition({ includeReview: env.ENABLE_REVIEW_PHASE }),
+      null,
+      selectedDefinitionId,
+    );
+
+  // The fresh-install fallback has no immutable version row. Dispatch therefore
+  // carries this explicit sentinel; honor it without consulting the row's later
+  // deployed pointer, which may have changed after start().
+  if (version === BUILTIN_FALLBACK_DEFINITION_VERSION) {
+    if (!isTicket || definitionId === undefined) {
+      logger.info({ triggerType, definitionId, version }, "workflow_definition_none");
+      return null;
+    }
+    logger.info(
+      { definitionId, version, reviewEnabled: env.ENABLE_REVIEW_PHASE },
+      "workflow_definition_default",
+    );
+    return buildDefault(definitionId);
+  }
 
   const db = getDb();
   let row: WorkflowDefinitionVersionRow | null;
   try {
     if (definitionId !== undefined) {
-      row =
-        version !== undefined
-          ? await getWorkflowDefinitionVersion(db, definitionId, version)
-          : await getCurrentWorkflowDefinitionVersion(db, definitionId);
+      row = version !== undefined
+        ? await getWorkflowDefinitionVersion(db, definitionId, version)
+        : await getDeployedWorkflowDefinitionVersion(db, definitionId);
       if (!row) {
-        if (isTicket) {
+        const definition =
+          version === undefined ? await getWorkflowDefinition(db, definitionId) : null;
+        if (isTicket && definition?.builtinFallback === true) {
           logger.info(
             { definitionId, version, reviewEnabled: env.ENABLE_REVIEW_PHASE },
             "workflow_definition_default",
@@ -238,7 +262,7 @@ export async function loadWorkflowDefinitionFor(
     } else {
       const match = await getEnabledWorkflowDefinitionForTrigger(db, triggerType);
       if (!match || !match.current) {
-        if (isTicket) {
+        if (isTicket && match?.definition.builtinFallback === true) {
           logger.info({ reviewEnabled: env.ENABLE_REVIEW_PHASE }, "workflow_definition_default");
           return buildDefault();
         }
@@ -253,9 +277,6 @@ export async function loadWorkflowDefinitionFor(
       { definitionId, version, triggerType, issues: describeZodLikeError(error) },
       "workflow_definition_invalid",
     );
-    if (isTicket) {
-      return buildDefault();
-    }
     return null;
   }
 
@@ -272,7 +293,6 @@ export async function loadWorkflowDefinitionFor(
       },
       "workflow_definition_invalid",
     );
-    if (isTicket) return buildDefault();
     return null;
   }
   const parsed = workflowDefinitionSchema.safeParse(upgraded);
@@ -294,7 +314,6 @@ export async function loadWorkflowDefinitionFor(
       { definitionId: row.definitionId, version: row.version, issues },
       "workflow_definition_invalid",
     );
-    if (isTicket) return buildDefault();
     return null;
   }
 

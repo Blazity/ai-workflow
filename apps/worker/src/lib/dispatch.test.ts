@@ -20,6 +20,12 @@ vi.mock("../workflows/agent.js", () => ({
   agentWorkflow: "agentWorkflow_sentinel",
 }));
 
+vi.mock("../db/client.js", () => ({ getDb: vi.fn(() => ({})) }));
+const mockGetEnabled = vi.fn();
+vi.mock("../workflow-definition/store.js", () => ({
+  getEnabledWorkflowDefinitionForTrigger: (...args: unknown[]) => mockGetEnabled(...args),
+}));
+
 const mockStopTicketSandboxes = vi.fn();
 vi.mock("../sandbox/stop-ticket-sandboxes.js", () => ({
   stopTicketSandboxes: (...args: any[]) => mockStopTicketSandboxes(...args),
@@ -109,8 +115,13 @@ describe("dispatchTicket", () => {
     mockStart.mockReset();
     mockGetRun.mockReset();
     mockStopTicketSandboxes.mockReset();
+    mockGetEnabled.mockReset();
     mockStart.mockResolvedValue({ runId: "run_123" });
     mockStopTicketSandboxes.mockResolvedValue(0);
+    mockGetEnabled.mockResolvedValue({
+      definition: { id: 7, builtinFallback: false },
+      current: { definitionId: 7, version: 4 },
+    });
   });
 
   it("dispatches agentWorkflow for a ticket in configured project + AI column", async () => {
@@ -125,13 +136,34 @@ describe("dispatchTicket", () => {
       expect.stringMatching(/^claiming:\d+$/),
     );
     expect(adapters.issueTracker.fetchTicket).toHaveBeenCalledWith("PROJ-42");
-    expect(mockStart).toHaveBeenCalledWith("agentWorkflow_sentinel", [
-      "PROJ-42",
-    ]);
+    expect(mockStart).toHaveBeenCalledWith("agentWorkflow_sentinel", [{
+      kind: "ticket",
+      ticketKey: "PROJ-42",
+      definitionId: 7,
+      definitionVersion: 4,
+    }]);
     expect(adapters.runRegistry.register).toHaveBeenCalledWith(
       "PROJ-42",
       "run_123",
     );
+  });
+
+  it("pins the exact built-in fallback selection before starting the workflow", async () => {
+    mockGetEnabled.mockResolvedValue({
+      definition: { id: 1, builtinFallback: true },
+      current: null,
+    });
+    const adapters = makeAdapters();
+    const { dispatchTicket } = await import("./dispatch.js");
+
+    await dispatchTicket("PROJ-42", adapters, 5);
+
+    expect(mockStart).toHaveBeenCalledWith("agentWorkflow_sentinel", [{
+      kind: "ticket",
+      ticketKey: "PROJ-42",
+      definitionId: 1,
+      definitionVersion: "builtin_fallback",
+    }]);
   });
 
   it("skips dispatch when ticket is no longer in AI column", async () => {

@@ -65,6 +65,52 @@ export async function handleDefinitionRestore(
   });
 }
 
+export async function handleDefinitionDeploy(
+  req: Request,
+  context: IdRouteContext,
+  workerProxy: WorkerProxy,
+) {
+  return forwardJsonAction(req, context, workerProxy, "deploy", "POST");
+}
+
+export async function handleDefinitionRollback(
+  req: Request,
+  context: IdRouteContext,
+  workerProxy: WorkerProxy,
+) {
+  return forwardJsonAction(req, context, workerProxy, "rollback", "POST");
+}
+
+export async function handleDefinitionValidate(
+  req: Request,
+  context: IdRouteContext,
+  workerProxy: WorkerProxy,
+) {
+  return forwardJsonAction(req, context, workerProxy, "validate", "POST");
+}
+
+export async function handleDefinitionLayout(
+  req: Request,
+  context: IdRouteContext,
+  workerProxy: WorkerProxy,
+) {
+  return forwardJsonAction(req, context, workerProxy, "layout", "PATCH");
+}
+
+async function forwardJsonAction(
+  req: Request,
+  { params }: IdRouteContext,
+  workerProxy: WorkerProxy,
+  action: string,
+  method: "POST" | "PATCH",
+) {
+  return forward(workerProxy, `${await definitionPath(params)}/${action}`, {
+    method,
+    headers: { "content-type": "application/json" },
+    body: await req.text(),
+  });
+}
+
 async function definitionPath(params: Promise<{ id: string }>): Promise<string> {
   const { id } = await params;
   return `/api/v1/workflow-definitions/${encodeURIComponent(id)}`;

@@ -358,6 +358,11 @@ export interface WorkflowDefinition {
   edges: WorkflowDefinitionEdge[];
 }
 
+/** Presentation-only node coordinates, persisted independently from a draft. */
+export interface WorkflowDefinitionLayout {
+  nodes: Record<string, { x: number; y: number }>;
+}
+
 export interface WorkflowDefinitionVersion {
   version: number;
   definitionId: number;
@@ -366,6 +371,20 @@ export interface WorkflowDefinitionVersion {
   createdById: string;
   createdByLabel: string;
   restoredFromVersion: number | null;
+}
+
+export type WorkflowDefinitionDeploymentAction = "deploy" | "rollback" | "migration";
+
+export interface WorkflowDefinitionDeployment {
+  id: number;
+  definitionId: number;
+  selectedVersion: number;
+  previousVersion: number | null;
+  action: WorkflowDefinitionDeploymentAction;
+  rollbackFromVersion: number | null;
+  createdAt: string;
+  createdById: string;
+  createdByLabel: string;
 }
 
 export interface WorkflowEditorOptions {

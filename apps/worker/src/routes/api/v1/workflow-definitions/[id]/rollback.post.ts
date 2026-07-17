@@ -1,30 +1,31 @@
 import { createError, defineEventHandler, readBody } from "h3";
 import type { WorkflowDefinitionDeploymentResponse } from "@shared/contracts";
-import { getDb } from "../../../../db/client.js";
-import { requireDashboardActor } from "../../../../lib/auth/request-context.js";
-import { dashboardUserLabel } from "../../../../pre-pr-checks/store.js";
+import { getDb } from "../../../../../db/client.js";
+import { requireDashboardActor } from "../../../../../lib/auth/request-context.js";
+import { dashboardUserLabel } from "../../../../../pre-pr-checks/store.js";
 import {
-  resolveDefaultDefinitionId,
   rollbackWorkflowDefinition,
   serializeWorkflowDefinitionDeployment,
   serializeWorkflowDefinitionVersion,
-} from "../../../../workflow-definition/store.js";
+} from "../../../../../workflow-definition/store.js";
 import {
+  parseDefinitionId,
   serializeDefinitionMeta,
   toWorkflowDefinitionHttpError,
-} from "../workflow-definitions.get.js";
+} from "../../workflow-definitions.get.js";
 
-/**
- * Legacy single-definition shim, removed once the dashboard moves to the
- * multi-definition routes. Delegates to the store's default-definition wrapper
- * so a single-definition install behaves exactly as before.
- */
+interface RollbackBody {
+  version?: unknown;
+  expectedDeployedVersion?: unknown;
+}
+
 export default defineEventHandler(
   async (event): Promise<WorkflowDefinitionDeploymentResponse | undefined> => {
     try {
       const actor = await requireDashboardActor(event);
-      const body = (await readBody<{ version?: unknown; expectedDeployedVersion?: unknown }>(event).catch(() => null)) ?? {};
-      if (typeof body.version !== "number" || !Number.isInteger(body.version)) {
+      const id = parseDefinitionId(event);
+      const body = (await readBody<RollbackBody>(event).catch(() => null)) ?? {};
+      if (typeof body.version !== "number" || !Number.isInteger(body.version) || body.version <= 0) {
         throw createError({ statusCode: 400, statusMessage: "Invalid version" });
       }
       if (
@@ -35,10 +36,10 @@ export default defineEventHandler(
       ) {
         throw createError({ statusCode: 400, statusMessage: "Invalid deployed version" });
       }
+
       const dbHandle = getDb();
-      const definitionId = await resolveDefaultDefinitionId(dbHandle);
-      const restored = await rollbackWorkflowDefinition(dbHandle, {
-        definitionId,
+      const selected = await rollbackWorkflowDefinition(dbHandle, {
+        definitionId: id,
         version: body.version,
         expectedDeployedVersion: body.expectedDeployedVersion,
         actor: {
@@ -48,9 +49,9 @@ export default defineEventHandler(
         },
       });
       return {
-        meta: serializeDefinitionMeta(restored.definition, restored.version.version),
-        deployed: serializeWorkflowDefinitionVersion(restored.version),
-        deployment: serializeWorkflowDefinitionDeployment(restored.deployment),
+        meta: serializeDefinitionMeta(selected.definition, selected.version.version),
+        deployed: serializeWorkflowDefinitionVersion(selected.version),
+        deployment: serializeWorkflowDefinitionDeployment(selected.deployment),
       };
     } catch (error) {
       toWorkflowDefinitionHttpError(error);

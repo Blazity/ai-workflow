@@ -1,7 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { BLOCK_PARAM_KEYS } from "@shared/contracts";
-import { serializeWorkflowDefinition } from "./serialize.ts";
+import {
+  serializeSemanticWorkflowDefinition,
+  serializeWorkflowDefinition,
+  serializeWorkflowLayout,
+} from "./serialize.ts";
 import type { FlowEdgeDef, FlowNodeDef } from "../flows.ts";
 
 type TestFlowNode = Omit<FlowNodeDef, "inputs"> & Partial<Pick<FlowNodeDef, "inputs">>;
@@ -25,6 +29,19 @@ test("call_llm allows its provider key (no dashboard/shared drift)", () => {
   // Guards the drift that dropped call_llm.provider on save: the serializer now
   // derives its key allowlist from the shared BLOCK_PARAM_KEYS.
   assert.equal(BLOCK_PARAM_KEYS.call_llm.includes("provider"), true);
+});
+
+test("moving a block changes layout but not the semantic definition", () => {
+  const before = flowNodes([
+    { id: "trigger", type: "trigger_ticket_ai", x: 10, y: 20, params: {} },
+  ]);
+  const after = before.map((node) => ({ ...node, x: 90, y: 120 }));
+
+  assert.deepEqual(
+    serializeSemanticWorkflowDefinition(after, []),
+    serializeSemanticWorkflowDefinition(before, []),
+  );
+  assert.notDeepEqual(serializeWorkflowLayout(after), serializeWorkflowLayout(before));
 });
 
 test("round-trips call_llm provider through serialization without loss", () => {

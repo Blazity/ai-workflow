@@ -101,11 +101,13 @@ export async function dispatchTriggerEvent(
   }
 
   const definitionId = enabled.definition.id;
+  const definitionVersion = enabled.current.version;
   const input: AgentWorkflowInput = {
     kind: "pr_trigger",
     triggerType: evt.triggerType,
     ticketKey: runKey,
     definitionId,
+    definitionVersion,
     pr: evt.pr,
   };
 

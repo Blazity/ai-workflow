@@ -2,6 +2,7 @@ import { BLOCK_PARAM_KEYS } from "@shared/contracts";
 import type {
   WorkflowDefinition,
   WorkflowDefinitionEdge,
+  WorkflowDefinitionLayout,
   WorkflowDefinitionNode,
   WorkflowParamValue,
 } from "@shared/contracts";
@@ -54,5 +55,27 @@ export function serializeWorkflowDefinition(
       }
       return serialized;
     }),
+  };
+}
+
+/** Semantic comparison/storage form: node movement is deliberately ignored. */
+export function serializeSemanticWorkflowDefinition(
+  nodes: readonly FlowNodeDef[],
+  edges: readonly FlowEdgeDef[],
+): WorkflowDefinition {
+  const definition = serializeWorkflowDefinition(nodes, edges);
+  return {
+    ...definition,
+    nodes: definition.nodes.map((node) => ({ ...node, x: 0, y: 0 })),
+  };
+}
+
+export function serializeWorkflowLayout(
+  nodes: readonly FlowNodeDef[],
+): WorkflowDefinitionLayout {
+  return {
+    nodes: Object.fromEntries(
+      nodes.map((node) => [node.id, { x: Math.round(node.x), y: Math.round(node.y) }]),
+    ),
   };
 }

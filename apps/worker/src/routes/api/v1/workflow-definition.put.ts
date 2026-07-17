@@ -1,20 +1,17 @@
 import { createError, defineEventHandler, readBody } from "h3";
 import type { WorkflowDefinitionSaveResponse } from "@shared/contracts";
 import { getDb } from "../../../db/client.js";
-import { requireDashboardActor, toHttpError } from "../../../lib/auth/request-context.js";
+import { requireDashboardActor } from "../../../lib/auth/request-context.js";
 import { dashboardUserLabel } from "../../../pre-pr-checks/store.js";
+import { describeWorkflowDefinitionIssues, workflowDefinitionSchema } from "../../../workflow-definition/schema.js";
 import {
-  describeWorkflowDefinitionIssues,
-  validateWorkflowDefinitionForDeployment,
-  workflowDefinitionSchema,
-} from "../../../workflow-definition/schema.js";
-import { workflowBlockRegistryContextFromEnv } from "../../../workflow-definition/models.js";
-import {
-  getWorkflowDefinition,
-  saveWorkflowDefinition,
-  serializeWorkflowDefinitionVersion,
+  resolveDefaultDefinitionId,
+  saveWorkflowDefinitionDraft,
 } from "../../../workflow-definition/store.js";
-import { serializeDefinitionMeta } from "./workflow-definitions.get.js";
+import {
+  serializeDefinitionMeta,
+  toWorkflowDefinitionHttpError,
+} from "./workflow-definitions.get.js";
 
 /**
  * Legacy single-definition shim, removed once the dashboard moves to the
@@ -25,7 +22,7 @@ export default defineEventHandler(
   async (event): Promise<WorkflowDefinitionSaveResponse | undefined> => {
     try {
       const actor = await requireDashboardActor(event);
-      const body = (await readBody<{ definition?: unknown }>(event).catch(() => null)) ?? {};
+      const body = (await readBody<{ definition?: unknown; expectedDraftRevision?: unknown }>(event).catch(() => null)) ?? {};
       const parsed = workflowDefinitionSchema.safeParse(body.definition);
       if (!parsed.success) {
         throw createError({
@@ -33,30 +30,31 @@ export default defineEventHandler(
           statusMessage: `Invalid definition: ${describeWorkflowDefinitionIssues(parsed.error)}`,
         });
       }
-      const issues = validateWorkflowDefinitionForDeployment(
-        parsed.data,
-        workflowBlockRegistryContextFromEnv(),
-      );
-      if (issues.length > 0) {
-        throw createError({
-          statusCode: 400,
-          statusMessage: `Invalid workflow: ${issues.join("; ")}`,
-        });
+      if (
+        typeof body.expectedDraftRevision !== "number" ||
+        !Number.isInteger(body.expectedDraftRevision) ||
+        body.expectedDraftRevision < 0
+      ) {
+        throw createError({ statusCode: 400, statusMessage: "Invalid draft revision" });
       }
       const dbHandle = getDb();
-      const saved = await saveWorkflowDefinition(dbHandle, {
-        actorRole: actor.role,
-        actorId: actor.userId,
-        actorLabel: await dashboardUserLabel(dbHandle, actor.userId),
+      const definitionId = await resolveDefaultDefinitionId(dbHandle);
+      const saved = await saveWorkflowDefinitionDraft(dbHandle, {
+        definitionId,
         definition: parsed.data,
+        expectedDraftRevision: body.expectedDraftRevision,
+        actor: {
+          role: actor.role,
+          id: actor.userId,
+          label: await dashboardUserLabel(dbHandle, actor.userId),
+        },
       });
-      const row = await getWorkflowDefinition(dbHandle, saved.definitionId);
       return {
-        meta: serializeDefinitionMeta(row!, saved.version),
-        version: serializeWorkflowDefinitionVersion(saved),
+        meta: serializeDefinitionMeta(saved.definition, saved.definition.deployedVersion),
+        draft: saved.draft,
       };
     } catch (error) {
-      toHttpError(error);
+      toWorkflowDefinitionHttpError(error);
     }
   },
 );

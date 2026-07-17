@@ -121,6 +121,7 @@ describe("post_pr_comment execute", () => {
           triggerType: "trigger_pr_checks_failed",
           ticketKey: "AWT-1",
           definitionId: 1,
+          definitionVersion: 1,
           pr: makePrPayload(),
         },
       }),

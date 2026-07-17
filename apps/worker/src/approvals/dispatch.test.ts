@@ -18,14 +18,14 @@ vi.mock("../workflows/agent.js", () => ({ agentWorkflow: "agentWorkflow_sentinel
 
 const mockGetDefinition = vi.fn();
 const mockGetVersion = vi.fn();
-const mockGetCurrentVersion = vi.fn();
+const mockGetDeployedVersion = vi.fn();
 vi.mock("../workflow-definition/store.js", () => ({
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   getWorkflowDefinition: (...args: any[]) => mockGetDefinition(...args),
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   getWorkflowDefinitionVersion: (...args: any[]) => mockGetVersion(...args),
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  getCurrentWorkflowDefinitionVersion: (...args: any[]) => mockGetCurrentVersion(...args),
+  getDeployedWorkflowDefinitionVersion: (...args: any[]) => mockGetDeployedVersion(...args),
 }));
 
 const { dispatchPlanApproved } = await import("./dispatch.js");
@@ -94,13 +94,13 @@ describe("dispatchPlanApproved", () => {
     mockGetRun.mockReset();
     mockGetDefinition.mockReset();
     mockGetVersion.mockReset();
-    mockGetCurrentVersion.mockReset();
+    mockGetDeployedVersion.mockReset();
     issueTracker = makeIssueTracker();
     mockStart.mockResolvedValue({ runId: "run-dispatched" });
     // Definition present + not archived, pinned version resolves, head has moved on.
     mockGetDefinition.mockResolvedValue({ id: 7, archivedAt: null, enabled: false });
     mockGetVersion.mockResolvedValue({ definitionId: 7, version: 4 });
-    mockGetCurrentVersion.mockResolvedValue({ definitionId: 7, version: 9 });
+    mockGetDeployedVersion.mockResolvedValue({ definitionId: 7, version: 8 });
   });
 
   it("returns definition_gone when the definition is archived", async () => {
@@ -154,7 +154,7 @@ describe("dispatchPlanApproved", () => {
     ]);
   });
 
-  it("falls back to the head version for a legacy null-version approval", async () => {
+  it("falls back to the deployed version for a legacy null-version approval", async () => {
     const registry = makeRegistry();
     const result = await dispatchPlanApproved({
       db,
@@ -166,9 +166,9 @@ describe("dispatchPlanApproved", () => {
     });
     expect(result.status).toBe("started");
     expect(mockGetVersion).not.toHaveBeenCalled();
-    expect(mockGetCurrentVersion).toHaveBeenCalledWith(expect.anything(), 7);
+    expect(mockGetDeployedVersion).toHaveBeenCalledWith(expect.anything(), 7);
     expect(mockStart).toHaveBeenCalledWith("agentWorkflow_sentinel", [
-      expect.objectContaining({ definitionVersion: 9 }),
+      expect.objectContaining({ definitionVersion: 8 }),
     ]);
   });
 

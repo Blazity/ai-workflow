@@ -6,10 +6,10 @@ import { requireDashboardActor } from "../../../lib/auth/request-context.js";
 import { dashboardUserLabel } from "../../../pre-pr-checks/store.js";
 import { defaultWorkflowDefinition } from "../../../workflow-definition/default.js";
 import {
-  createWorkflowDefinition,
-  getCurrentWorkflowDefinitionVersion,
+  createWorkflowDefinitionDraft,
+  getDeployedWorkflowDefinitionVersion,
   getWorkflowDefinition,
-  serializeWorkflowDefinitionVersion,
+  getWorkflowDefinitionDraft,
 } from "../../../workflow-definition/store.js";
 import {
   serializeDefinitionMeta,
@@ -56,13 +56,14 @@ export default defineEventHandler(
         if (!sourceRow || sourceRow.archivedAt) {
           throw createError({ statusCode: 404, statusMessage: "Unknown definition" });
         }
-        const head = await getCurrentWorkflowDefinitionVersion(dbHandle, source.definitionId);
-        seed = head?.definition ?? defaultWorkflowDefinition({ includeReview: env.ENABLE_REVIEW_PHASE });
+        const draft = await getWorkflowDefinitionDraft(dbHandle, source.definitionId);
+        const deployed = await getDeployedWorkflowDefinitionVersion(dbHandle, source.definitionId);
+        seed = draft?.draft ?? deployed?.definition ?? defaultWorkflowDefinition({ includeReview: env.ENABLE_REVIEW_PHASE });
       } else {
         seed = defaultWorkflowDefinition({ includeReview: env.ENABLE_REVIEW_PHASE });
       }
 
-      const { definition, current } = await createWorkflowDefinition(dbHandle, {
+      const created = await createWorkflowDefinitionDraft(dbHandle, {
         name,
         seed,
         actor: {
@@ -73,9 +74,13 @@ export default defineEventHandler(
       });
 
       return {
-        meta: serializeDefinitionMeta(definition, current?.version ?? null),
-        current: current ? serializeWorkflowDefinitionVersion(current) : null,
-        versions: current ? [serializeWorkflowDefinitionVersion(current)] : [],
+        meta: serializeDefinitionMeta(created.definition, null),
+        draft: created.draft,
+        layout: created.definition.layout,
+        deployed: null,
+        deployments: [],
+        current: null,
+        versions: [],
       };
     } catch (error) {
       toWorkflowDefinitionHttpError(error);

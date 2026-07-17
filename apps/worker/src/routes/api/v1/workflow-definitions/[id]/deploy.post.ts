@@ -4,7 +4,7 @@ import { getDb } from "../../../../../db/client.js";
 import { requireDashboardActor } from "../../../../../lib/auth/request-context.js";
 import { dashboardUserLabel } from "../../../../../pre-pr-checks/store.js";
 import {
-  rollbackWorkflowDefinition,
+  deployWorkflowDefinition,
   serializeWorkflowDefinitionDeployment,
   serializeWorkflowDefinitionVersion,
 } from "../../../../../workflow-definition/store.js";
@@ -14,18 +14,23 @@ import {
   toWorkflowDefinitionHttpError,
 } from "../../workflow-definitions.get.js";
 
+interface DeployBody {
+  expectedDraftRevision?: unknown;
+  expectedDeployedVersion?: unknown;
+}
+
 export default defineEventHandler(
   async (event): Promise<WorkflowDefinitionDeploymentResponse | undefined> => {
     try {
       const actor = await requireDashboardActor(event);
       const id = parseDefinitionId(event);
-      const body = (await readBody<{ version?: unknown; expectedDeployedVersion?: unknown }>(event).catch(() => null)) ?? {};
+      const body = (await readBody<DeployBody>(event).catch(() => null)) ?? {};
       if (
-        typeof body.version !== "number" ||
-        !Number.isInteger(body.version) ||
-        body.version <= 0
+        typeof body.expectedDraftRevision !== "number" ||
+        !Number.isInteger(body.expectedDraftRevision) ||
+        body.expectedDraftRevision < 0
       ) {
-        throw createError({ statusCode: 400, statusMessage: "Invalid version" });
+        throw createError({ statusCode: 400, statusMessage: "Invalid draft revision" });
       }
       if (
         body.expectedDeployedVersion !== null &&
@@ -37,9 +42,9 @@ export default defineEventHandler(
       }
 
       const dbHandle = getDb();
-      const restored = await rollbackWorkflowDefinition(dbHandle, {
+      const selected = await deployWorkflowDefinition(dbHandle, {
         definitionId: id,
-        version: body.version,
+        expectedDraftRevision: body.expectedDraftRevision,
         expectedDeployedVersion: body.expectedDeployedVersion,
         actor: {
           role: actor.role,
@@ -48,9 +53,9 @@ export default defineEventHandler(
         },
       });
       return {
-        meta: serializeDefinitionMeta(restored.definition, restored.version.version),
-        deployed: serializeWorkflowDefinitionVersion(restored.version),
-        deployment: serializeWorkflowDefinitionDeployment(restored.deployment),
+        meta: serializeDefinitionMeta(selected.definition, selected.version.version),
+        deployed: serializeWorkflowDefinitionVersion(selected.version),
+        deployment: serializeWorkflowDefinitionDeployment(selected.deployment),
       };
     } catch (error) {
       toWorkflowDefinitionHttpError(error);

@@ -853,7 +853,7 @@ export async function agentWorkflow(input: string | AgentWorkflowInput) {
   const entryTriggerType = triggerTypeFor(entry);
   // An approved plan pins the definition version that produced it, so the run
   // replays the exact graph the human reviewed rather than the current head.
-  const pinnedVersion = entry.kind === "plan_approved" ? entry.definitionVersion : undefined;
+  const pinnedVersion = "definitionVersion" in entry ? entry.definitionVersion : undefined;
   const plan = await loadWorkflowDefinitionFor(entryTriggerType, entry.definitionId, pinnedVersion);
   if (!plan) {
     console.warn(
