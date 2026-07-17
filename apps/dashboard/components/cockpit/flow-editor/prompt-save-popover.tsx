@@ -36,14 +36,17 @@ export function PromptSavePopover({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const nameRef = useRef<HTMLInputElement>(null);
+  const restoreFocus = useRef<HTMLElement | null>(null);
 
   useEffect(() => setMounted(true), []);
 
-  // On open: seed the fields from the current selection/body, lock body scroll,
-  // focus the name input, and dismiss on Escape (capture + stopImmediatePropagation
-  // so the editor's own window Escape handlers stay quiet, matching the insert popup).
+  // On open: capture the previously focused element, seed the fields from the
+  // current selection/body, lock body scroll, focus the name input, and dismiss on
+  // Escape (capture + stopImmediatePropagation so the editor's own window Escape
+  // handlers stay quiet, matching the insert popup). Restore focus to the opener on close.
   useEffect(() => {
     if (!open) return;
+    restoreFocus.current = document.activeElement as HTMLElement | null;
     setName("");
     setTags("");
     setBody(initialBody);
@@ -64,6 +67,7 @@ export function PromptSavePopover({
       cancelAnimationFrame(raf);
       window.removeEventListener("keydown", onEsc, { capture: true });
       document.body.style.overflow = prevOverflow;
+      restoreFocus.current?.focus?.();
     };
   }, [open, initialBody, onClose]);
 

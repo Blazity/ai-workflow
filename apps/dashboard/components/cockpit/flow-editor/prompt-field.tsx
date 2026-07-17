@@ -128,6 +128,17 @@ export function PromptField({
   let provenance: React.ReactNode = null;
   if (ref && status === "loading") {
     provenance = <CkChip tone="neutral">❡ v{ref.version}</CkChip>;
+  } else if (ref && status === "error") {
+    // Library failed to load: drift is unknown, so show a neutral version chip and
+    // keep Detach reachable instead of hiding the provenance entirely.
+    provenance = (
+      <div className="flex items-center gap-2 flex-wrap">
+        <span title="Library unavailable">
+          <CkChip tone="neutral">❡ v{ref.version}</CkChip>
+        </span>
+        {detachButton}
+      </div>
+    );
   } else if (ref && drift) {
     if (drift.kind === "current") {
       provenance = (
@@ -316,11 +327,19 @@ function TemplateModal({
   body: string;
 }) {
   const [mounted, setMounted] = useState(false);
+  const closeRef = useRef<HTMLButtonElement>(null);
+  const restoreFocus = useRef<HTMLElement | null>(null);
   useEffect(() => setMounted(true), []);
+  // On open: capture the previously focused element, lock body scroll, move focus
+  // to the Close button so aria-modal has a focus target, and dismiss on Escape
+  // (capture + stopImmediatePropagation so the editor's own window Escape handlers
+  // stay quiet, matching the insert popup). Restore focus to the opener on close.
   useEffect(() => {
     if (!open) return;
+    restoreFocus.current = document.activeElement as HTMLElement | null;
     const prevOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
+    const raf = requestAnimationFrame(() => closeRef.current?.focus());
     const onEsc = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         e.preventDefault();
@@ -330,8 +349,10 @@ function TemplateModal({
     };
     window.addEventListener("keydown", onEsc, { capture: true });
     return () => {
+      cancelAnimationFrame(raf);
       window.removeEventListener("keydown", onEsc, { capture: true });
       document.body.style.overflow = prevOverflow;
+      restoreFocus.current?.focus?.();
     };
   }, [open, onClose]);
 
@@ -353,6 +374,7 @@ function TemplateModal({
         <div className="flex items-center gap-2 px-4 py-3 border-b border-neutral-200 shrink-0">
           <h3 className="m-0 font-display text-[15px] font-semibold text-neutral-900">{name}</h3>
           <button
+            ref={closeRef}
             type="button"
             onClick={onClose}
             className="ml-auto appearance-none cursor-pointer border border-neutral-200 bg-panel text-coal py-1 px-2.5 rounded-[3px] font-mono text-[11px] tracking-[0.04em] uppercase hover:bg-app-bg"

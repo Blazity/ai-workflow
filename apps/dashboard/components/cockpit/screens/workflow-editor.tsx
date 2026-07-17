@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
   isTriggerBlockType,
   type RunBlockStatusesResponse,
@@ -81,6 +81,14 @@ export function WorkflowEditorScreen({
   const [createError, setCreateError] = useState<string | null>(null);
   const [newName, setNewName] = useState("");
   const [newSource, setNewSource] = useState("default");
+
+  // Deep-link preselect is first-load only. FlowEditor is remounted on definition
+  // switch (key={selectedId}), so hold the node id in a ref and clear it after the
+  // first render consumes it; later definitions must not re-apply the deep link.
+  const deepLinkNodeId = useRef(initialNodeId);
+  useEffect(() => {
+    deepLinkNodeId.current = undefined;
+  }, []);
 
   const selectedMeta = metas.find((m) => m.id === selectedId);
   const current = versions[0] ?? null;
@@ -397,7 +405,7 @@ export function WorkflowEditorScreen({
           runStatuses={derived?.statuses}
           runErrors={derived?.errors}
           fitSignal={fitSignal}
-          initialSelectedId={initialNodeId}
+          initialSelectedId={deepLinkNodeId.current}
         />
         {defsOpen && (
           <div className="absolute right-4 top-[56px] z-[60] w-[420px] max-h-[60vh] overflow-y-auto bg-panel border border-neutral-200 rounded-[4px] shadow-[0_12px_28px_-8px_rgba(24,27,32,0.22),0_2px_6px_rgba(24,27,32,0.08)] px-4 py-3">
