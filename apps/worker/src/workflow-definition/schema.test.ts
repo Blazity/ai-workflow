@@ -709,6 +709,14 @@ describe("workflowDefinitionSchema block-executor node types", () => {
     // Unknown keys and out-of-enum values are still rejected (strict).
     expect(parseNode({ type: "trigger_pr_created", params: { bogus: 1 } })).toBeNull();
     expect(parseNode({ type: "trigger_pr_review", params: { on: ["approved"] } })).toBeNull();
+    for (const type of [
+      "trigger_pr_created",
+      "trigger_pr_checks_failed",
+      "trigger_pr_review",
+      "trigger_pr_merged",
+    ] as const) {
+      expect(parseNode({ type, params: { providers: [] } }), type).toBeNull();
+    }
   });
 
   it("upgrades the legacy onlyWorkflowOwned flag to explicit scope", () => {

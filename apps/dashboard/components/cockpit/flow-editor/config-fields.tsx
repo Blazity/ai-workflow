@@ -5,7 +5,12 @@ import Link from "next/link";
 import type { FlowNodeDef } from "@/lib/flows";
 import type { WorkflowEditorOptions, WorkflowParamValue } from "@shared/contracts";
 import { parseCondition } from "@shared/conditions";
-import { arrayToLines, linesToArray, textMatchesLines } from "@/lib/workflow-editor/params";
+import {
+  arrayToLines,
+  linesToArray,
+  textMatchesLines,
+  toggleRequiredArrayValue,
+} from "@/lib/workflow-editor/params";
 import { Listbox } from "@/components/cockpit/listbox";
 
 const inputCls = "h-[26px] px-2 bg-off-white border border-neutral-200 rounded-xs font-mono text-xs text-coal outline-none disabled:opacity-60";
@@ -365,6 +370,46 @@ function PrScopeField({
   );
 }
 
+function PrProvidersField({
+  node,
+  canEdit,
+  onChange,
+}: {
+  node: FlowNodeDef;
+  canEdit: boolean;
+  onChange: (path: string, value: WorkflowParamValue | undefined) => void;
+}) {
+  const configured = arr(node.params.providers).filter(
+    (provider) => provider === "github" || provider === "gitlab",
+  );
+  const effective = configured.length > 0 ? configured : ["github", "gitlab"];
+  const toggle = (provider: "github" | "gitlab") => (checked: boolean) => {
+    onChange(
+      "params.providers",
+      toggleRequiredArrayValue(effective, provider, checked),
+    );
+  };
+
+  return (
+    <ConfigField label="Providers">
+      <div className="flex flex-col gap-1.5">
+        {(["github", "gitlab"] as const).map((provider) => {
+          const checked = effective.includes(provider);
+          return (
+            <CheckboxRow
+              key={provider}
+              label={provider === "github" ? "GitHub" : "GitLab"}
+              checked={checked}
+              disabled={!canEdit || (checked && effective.length === 1)}
+              onChange={toggle(provider)}
+            />
+          );
+        })}
+      </div>
+    </ConfigField>
+  );
+}
+
 export function ConfigFields({
   node,
   options,
@@ -384,6 +429,7 @@ export function ConfigFields({
     case "trigger_pr_checks_failed":
       return (
         <>
+          <PrProvidersField node={node} canEdit={canEdit} onChange={onChange} />
           <PrScopeField node={node} canEdit={canEdit} onChange={onChange} />
           <ConfigNote>Fires when a pull request&apos;s checks report a failure.</ConfigNote>
         </>
@@ -391,13 +437,15 @@ export function ConfigFields({
     case "trigger_pr_created":
       return (
         <>
+          <PrProvidersField node={node} canEdit={canEdit} onChange={onChange} />
           <PrScopeField node={node} canEdit={canEdit} onChange={onChange} />
-          <ConfigNote>Providers are configured in the VCS integration settings.</ConfigNote>
+          <ConfigNote>Only configured VCS integrations can receive these events.</ConfigNote>
         </>
       );
     case "trigger_pr_merged":
       return (
         <>
+          <PrProvidersField node={node} canEdit={canEdit} onChange={onChange} />
           <PrScopeField node={node} canEdit={canEdit} onChange={onChange} />
           <ConfigNote>Fires after a pull or merge request is merged.</ConfigNote>
         </>
@@ -413,6 +461,7 @@ export function ConfigFields({
       };
       return (
         <>
+          <PrProvidersField node={node} canEdit={canEdit} onChange={onChange} />
           <PrScopeField node={node} canEdit={canEdit} onChange={onChange} />
           <ConfigField label="On review">
             <div className="flex flex-col gap-1.5">

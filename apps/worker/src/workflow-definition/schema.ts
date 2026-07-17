@@ -65,6 +65,7 @@ const agentParams = z
   .strict();
 
 const vcsProviders = z.enum(["github", "gitlab"]);
+const vcsProviderSelection = z.array(vcsProviders).min(1);
 const reviewStates = z.enum(["changes_requested", "commented"]);
 const prTriggerScope = z.enum(["workflow_owned", "any"]);
 const ciProducer = z.string().trim().min(1).max(100).regex(/^[A-Za-z0-9._-]+$/);
@@ -83,7 +84,7 @@ const triggerPrCreatedNode = z
     type: z.literal("trigger_pr_created"),
     params: z
       .object({
-        providers: z.array(vcsProviders).default(["github", "gitlab"]),
+        providers: vcsProviderSelection.default(["github", "gitlab"]),
         scope: prTriggerScope.default("workflow_owned"),
       })
       .strict(),
@@ -96,7 +97,7 @@ const triggerPrChecksFailedNode = z
     type: z.literal("trigger_pr_checks_failed"),
     params: z
       .object({
-        providers: z.array(vcsProviders).default(["github", "gitlab"]),
+        providers: vcsProviderSelection.default(["github", "gitlab"]),
         producers: z.array(ciProducer).default(["github-actions", "gitlab-ci"]),
         scope: prTriggerScope.default("workflow_owned"),
       })
@@ -114,7 +115,7 @@ const triggerPrReviewNode = z
     type: z.literal("trigger_pr_review"),
     params: z
       .object({
-        providers: z.array(vcsProviders).default(["github", "gitlab"]),
+        providers: vcsProviderSelection.default(["github", "gitlab"]),
         on: z.array(reviewStates).default(["changes_requested"]),
         scope: prTriggerScope.default("workflow_owned"),
       })
@@ -128,7 +129,7 @@ const triggerPrMergedNode = z
     type: z.literal("trigger_pr_merged"),
     params: z
       .object({
-        providers: z.array(vcsProviders).default(["github", "gitlab"]),
+        providers: vcsProviderSelection.default(["github", "gitlab"]),
         scope: prTriggerScope.default("workflow_owned"),
       })
       .strict(),
