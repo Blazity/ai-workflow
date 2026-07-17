@@ -164,6 +164,22 @@ describe("reconcileRuns owner-CAS recovery", () => {
     expect(onReleased).not.toHaveBeenCalled();
   });
 
+  it("retains a terminal owner when owned sandbox cleanup is unconfirmed", async () => {
+    const bound = entry({ kind: "pr_trigger" });
+    const runRegistry = registry([bound]);
+    mockGetRun.mockReturnValue({ status: Promise.resolve("completed") });
+    mockStopSandboxesByIds.mockRejectedValue(new Error("sandbox API unavailable"));
+    const onReleased = vi.fn();
+    const { reconcileRuns } = await import("./reconcile.js");
+
+    expect(await reconcileRuns(new Set(), runRegistry, undefined, undefined, onReleased)).toEqual({
+      cancelled: 0,
+      cleaned: 0,
+    });
+    expect(runRegistry.release).not.toHaveBeenCalled();
+    expect(onReleased).not.toHaveBeenCalled();
+  });
+
   it("keeps a bound run when Jira confirms it is still in the AI column", async () => {
     const bound = entry();
     const runRegistry = registry([bound]);
@@ -223,7 +239,7 @@ describe("reconcileRuns owner-CAS recovery", () => {
     expect(onReleased).toHaveBeenCalledWith(bound.subjectKey);
   });
 
-  it("requires three unreachable probes before owner release", async () => {
+  it("never releases an owner solely because the Workflow status API is unreachable", async () => {
     const bound = entry({ subjectKey: "pr:github:acme/app#8", ticketKey: null, kind: "pr_trigger" });
     const runRegistry = registry([bound]);
     mockGetRun.mockImplementation(() => {
@@ -234,14 +250,31 @@ describe("reconcileRuns owner-CAS recovery", () => {
 
     await reconcileRuns(new Set(), runRegistry, undefined, undefined, onReleased);
     await reconcileRuns(new Set(), runRegistry, undefined, undefined, onReleased);
-    expect(runRegistry.release).not.toHaveBeenCalled();
+    await reconcileRuns(new Set(), runRegistry, undefined, undefined, onReleased);
     await reconcileRuns(new Set(), runRegistry, undefined, undefined, onReleased);
 
-    expect(runRegistry.release).toHaveBeenCalledWith(
-      bound.subjectKey,
-      bound.ownerToken,
-      bound.runId,
-    );
-    expect(onReleased).toHaveBeenCalledOnce();
+    expect(runRegistry.release).not.toHaveBeenCalled();
+    expect(onReleased).not.toHaveBeenCalled();
+  });
+
+  it("does not report or drain an orphan when Workflow cancellation was not confirmed", async () => {
+    const bound = entry();
+    const runRegistry = registry([bound]);
+    mockCancelRun.mockResolvedValue(false);
+    const onCancelled = vi.fn();
+    const onReleased = vi.fn();
+    const { reconcileRuns } = await import("./reconcile.js");
+
+    expect(
+      await reconcileRuns(
+        new Set(),
+        runRegistry,
+        issueTracker("Done"),
+        onCancelled,
+        onReleased,
+      ),
+    ).toEqual({ cancelled: 0, cleaned: 0 });
+    expect(onCancelled).not.toHaveBeenCalled();
+    expect(onReleased).not.toHaveBeenCalled();
   });
 });

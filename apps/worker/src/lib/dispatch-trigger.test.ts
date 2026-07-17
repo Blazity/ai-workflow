@@ -9,6 +9,8 @@ import { upsertWorkflowOwnedBranch } from "../db/queries/workflow-owned-branches
 import { PostgresRunRegistry } from "../adapters/run-registry/postgres.js";
 import type { TriggerEvent } from "./trigger-events.js";
 import {
+  acceptTriggerDelivery,
+  coalescePendingTrigger,
   deletePendingTrigger,
   getPendingTrigger,
   getTriggerDelivery,
@@ -46,7 +48,10 @@ beforeEach(async () => {
   mockGetEnabled.mockReset();
 });
 
-function enabled(params: Record<string, unknown> = { scope: "workflow_owned" }) {
+function enabled(
+  params: Record<string, unknown> = { scope: "workflow_owned" },
+  triggerType: TriggerEvent["triggerType"] = "trigger_pr_created",
+) {
   return {
     definition: { id: 5, name: "PR flow" },
     current: {
@@ -55,7 +60,7 @@ function enabled(params: Record<string, unknown> = { scope: "workflow_owned" }) 
       definition: {
         schemaVersion: 1,
         nodes: [
-          { id: "trigger", type: "trigger_pr_created", x: 0, y: 0, params, inputs: {} },
+          { id: "trigger", type: triggerType, x: 0, y: 0, params, inputs: {} },
         ],
         edges: [],
       },
@@ -96,12 +101,13 @@ function deps(overrides: Record<string, unknown> = {}) {
   } as any;
 }
 
-async function correlate() {
+async function correlate(publishedHeadSha = "abc123") {
   await upsertWorkflowOwnedBranch(db, {
     ticketKey: "AIW-1",
     provider: "github",
     repoPath: "acme/app",
     branchName: "feature/owned",
+    publishedHeadSha,
     pr: {
       id: 7,
       url: "https://github.com/acme/app/pull/7",
@@ -139,6 +145,51 @@ describe("dispatchTriggerEvent durable envelope", () => {
     expect(mockStart).not.toHaveBeenCalled();
   });
 
+  it("returns a retryable error when the provider head cannot be read", async () => {
+    mockGetEnabled.mockResolvedValue(enabled({ scope: "any" }));
+    const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
+
+    expect(
+      await dispatchTriggerEvent(
+        event(),
+        deps({ getCurrentHead: vi.fn().mockRejectedValue(new Error("provider unavailable")) }),
+      ),
+    ).toEqual({ result: "error" });
+    expect(await getTriggerDelivery(db, "github", "delivery-1")).toBeNull();
+    expect(mockStart).not.toHaveBeenCalled();
+  });
+
+  it("accepts only allowlisted CI producers for failed-check triggers", async () => {
+    const ciEvent = event({
+      triggerType: "trigger_pr_checks_failed",
+      delivery: { provider: "github", producer: "untrusted-ci", deliveryId: "ci-untrusted" },
+      pr: {
+        ...event().pr,
+        failedChecks: [{ name: "build", conclusion: "failure" }],
+      },
+    });
+    mockGetEnabled.mockResolvedValue(
+      enabled(
+        { scope: "any", producers: ["github-actions", "gitlab-ci"] },
+        "trigger_pr_checks_failed",
+      ),
+    );
+    const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
+
+    expect(await dispatchTriggerEvent(ciEvent, deps())).toEqual({ result: "ignored_producer" });
+    expect(await getTriggerDelivery(db, "github", "ci-untrusted")).toBeNull();
+    expect(mockStart).not.toHaveBeenCalled();
+
+    const trusted = {
+      ...ciEvent,
+      delivery: { ...ciEvent.delivery, producer: "github-actions", deliveryId: "ci-trusted" },
+    };
+    expect(await dispatchTriggerEvent(trusted, deps())).toEqual({
+      result: "started",
+      runId: "run-pr",
+    });
+  });
+
   it("never treats a ticket-looking branch prefix as workflow ownership", async () => {
     mockGetEnabled.mockResolvedValue(enabled());
     const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
@@ -172,6 +223,21 @@ describe("dispatchTriggerEvent durable envelope", () => {
       state: "reserved",
       runId: null,
     });
+  });
+
+  it("rejects workflow ownership after a human advances the correlated branch", async () => {
+    await correlate("abc123");
+    mockGetEnabled.mockResolvedValue(enabled());
+    const pushedByHuman = event({ pr: { ...event().pr, headSha: "human456" } });
+    const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
+
+    expect(
+      await dispatchTriggerEvent(
+        pushedByHuman,
+        deps({ getCurrentHead: vi.fn().mockResolvedValue("human456") }),
+      ),
+    ).toEqual({ result: "ignored_not_workflow_owned" });
+    expect(mockStart).not.toHaveBeenCalled();
   });
 
   it("rejects a durable correlation whose ticket lookup is invalid", async () => {
@@ -209,6 +275,54 @@ describe("dispatchTriggerEvent durable envelope", () => {
     expect(await dispatchTriggerEvent(event(), deps())).toEqual({ result: "started", runId: "run-pr" });
     expect(await dispatchTriggerEvent(event(), deps())).toEqual({ result: "started", runId: "run-pr" });
     expect(mockStart).toHaveBeenCalledTimes(1);
+  });
+
+  it("resumes an accepted delivery whose result was not stored before a crash", async () => {
+    mockGetEnabled.mockResolvedValue(enabled({ scope: "any" }));
+    await acceptTriggerDelivery(db, {
+      ...event(),
+      scope: "any",
+      subjectKey: "pr:github:acme/app#7",
+      ticketKey: null,
+      definitionId: 5,
+      definitionVersion: 12,
+    });
+    const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
+
+    expect(await dispatchTriggerEvent(event(), deps())).toEqual({
+      result: "started",
+      runId: "run-pr",
+    });
+    expect(mockGetEnabled).not.toHaveBeenCalled();
+    expect(mockStart).toHaveBeenCalledOnce();
+  });
+
+  it("revalidates an accepted-but-unfinished delivery before crash recovery", async () => {
+    mockGetEnabled.mockResolvedValue(enabled({ scope: "any" }));
+    await acceptTriggerDelivery(db, {
+      ...event({
+        delivery: { provider: "github", producer: "alice", deliveryId: "accepted-stale" },
+      }),
+      scope: "any",
+      subjectKey: "pr:github:acme/app#7",
+      ticketKey: null,
+      definitionId: 5,
+      definitionVersion: 12,
+    });
+    const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
+
+    expect(
+      await dispatchTriggerEvent(
+        event({
+          delivery: { provider: "github", producer: "alice", deliveryId: "accepted-stale" },
+        }),
+        deps({ getCurrentHead: vi.fn().mockResolvedValue("new-head") }),
+      ),
+    ).toEqual({ result: "ignored_stale_head" });
+    expect(mockStart).not.toHaveBeenCalled();
+    expect(await getTriggerDelivery(db, "github", "accepted-stale")).toMatchObject({
+      result: { result: "ignored_stale_head" },
+    });
   });
 
   it("redelivery returns the original result without re-evaluating changed head or definition", async () => {
@@ -267,11 +381,13 @@ describe("dispatchTriggerEvent durable envelope", () => {
       expect(input.pendingEvent).toEqual({
         headSha: "abc123",
         triggerType: "trigger_pr_created",
+        deliveryId: "delivery-1",
       });
       expect(await registry.bindRun(input.subjectKey, input.ownerToken, "run-pr")).toBe(true);
       await deletePendingTrigger(db, {
         subjectKey: input.subjectKey,
         triggerType: input.pendingEvent.triggerType,
+        delivery: { ...event().delivery, deliveryId: input.pendingEvent.deliveryId },
         pr: input.pr,
       });
       return { runId: "run-pr" };
@@ -295,5 +411,79 @@ describe("dispatchTriggerEvent durable envelope", () => {
       await drainOldestPendingTrigger("pr:github:acme/app#7", deps()),
     ).toBeNull();
     expect(mockStart).toHaveBeenCalledTimes(1);
+  });
+
+  it("retains feedback merged while a pending successor starts", async () => {
+    mockGetEnabled.mockResolvedValue(enabled({ scope: "any" }));
+    await registry.reserve({
+      subjectKey: "pr:github:acme/app#7",
+      ticketKey: null,
+      ownerToken: "blocking-owner",
+      kind: "pr_trigger",
+    });
+    const { dispatchTriggerEvent, drainOldestPendingTrigger } = await import("./dispatch-trigger.js");
+    expect(await dispatchTriggerEvent(event(), deps())).toEqual({ result: "coalesced" });
+    await registry.releaseReservation("pr:github:acme/app#7", "blocking-owner");
+
+    mockStart.mockImplementationOnce(async (_workflow, [input]) => {
+      await coalescePendingTrigger(db, {
+        ...event({
+          delivery: { provider: "github", producer: "github-actions", deliveryId: "delivery-2" },
+          pr: {
+            ...event().pr,
+            failedChecks: [{ name: "test", conclusion: "failure" }],
+          },
+        }),
+        scope: "any",
+        subjectKey: "pr:github:acme/app#7",
+        ticketKey: null,
+        definitionId: 5,
+        definitionVersion: 12,
+      });
+      expect(await registry.bindRun(input.subjectKey, input.ownerToken, "run-pr")).toBe(true);
+      return { runId: "run-pr" };
+    });
+
+    expect(await drainOldestPendingTrigger("pr:github:acme/app#7", deps())).toEqual({
+      result: "started",
+      runId: "run-pr",
+    });
+    expect(
+      await getPendingTrigger(
+        db,
+        "pr:github:acme/app#7",
+        "abc123",
+        "trigger_pr_created",
+      ),
+    ).toMatchObject({ delivery: { deliveryId: "delivery-2" } });
+  });
+
+  it("retains a pending event when its current head cannot be revalidated", async () => {
+    mockGetEnabled.mockResolvedValue(enabled({ scope: "any" }));
+    await registry.reserve({
+      subjectKey: "pr:github:acme/app#7",
+      ticketKey: null,
+      ownerToken: "blocking-owner",
+      kind: "pr_trigger",
+    });
+    const { dispatchTriggerEvent, drainOldestPendingTrigger } = await import("./dispatch-trigger.js");
+    expect(await dispatchTriggerEvent(event(), deps())).toEqual({ result: "coalesced" });
+    await registry.releaseReservation("pr:github:acme/app#7", "blocking-owner");
+
+    expect(
+      await drainOldestPendingTrigger(
+        "pr:github:acme/app#7",
+        deps({ getCurrentHead: vi.fn().mockRejectedValue(new Error("provider unavailable")) }),
+      ),
+    ).toEqual({ result: "error" });
+    expect(
+      await getPendingTrigger(
+        db,
+        "pr:github:acme/app#7",
+        "abc123",
+        "trigger_pr_created",
+      ),
+    ).not.toBeNull();
+    expect(mockStart).not.toHaveBeenCalled();
   });
 });

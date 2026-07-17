@@ -273,6 +273,7 @@ describe("durable publication PR phases", () => {
   it("records workflow-owned branch correlation as a separate idempotent phase", async () => {
     await recordWorkflowOwnedPullRequest({
       ticketKey: "AIW-100",
+      publishedHeadSha: "published-sha",
       pr: {
         provider: "github",
         repoPath: "acme/api",
@@ -290,6 +291,7 @@ describe("durable publication PR phases", () => {
         provider: "github",
         repoPath: "acme/api",
         branchName: "blazebot/aiw-100",
+        publishedHeadSha: "published-sha",
         pr: {
           id: 46,
           url: "https://github.com/acme/api/pull/46",

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, isNull, or } from "drizzle-orm";
 import type { ApprovalRequest, ApprovalStatus } from "@shared/contracts";
 import type { Db } from "../db/client.js";
 import { approvalRequests } from "../db/schema.js";
@@ -154,10 +154,22 @@ export async function decideApproval(
 }
 
 export async function setDispatchedRunId(db: Db, id: string, runId: string): Promise<void> {
-  await db
+  const rows = await db
     .update(approvalRequests)
     .set({ dispatchedRunId: runId })
-    .where(eq(approvalRequests.id, id));
+    .where(
+      and(
+        eq(approvalRequests.id, id),
+        or(
+          isNull(approvalRequests.dispatchedRunId),
+          eq(approvalRequests.dispatchedRunId, runId),
+        ),
+      ),
+    )
+    .returning({ id: approvalRequests.id });
+  if (rows.length === 0) {
+    throw new ApprovalStoreError(409, "dispatch_already_recorded");
+  }
 }
 
 export function serializeApproval(row: ApprovalRow): ApprovalRequest {

@@ -79,7 +79,7 @@ describe("cancelRun", () => {
     expect(registry.release).not.toHaveBeenCalled();
   });
 
-  it("still performs exact cleanup and owner release when workflow cancellation fails", async () => {
+  it("keeps ownership and sandboxes when workflow cancellation is not confirmed", async () => {
     mockGetRun.mockReturnValue({ cancel: vi.fn().mockRejectedValue(new Error("run gone")) });
     const registry = makeRegistry();
 
@@ -87,11 +87,41 @@ describe("cancelRun", () => {
     const result = await cancelRun("PROJ-1", "run_abc", registry);
 
     expect(result).toBe(false);
-    expect(mockStopSandboxesByIds).toHaveBeenCalledWith(["sbx-parent", "sbx-child"]);
+    expect(mockStopSandboxesByIds).not.toHaveBeenCalled();
+    expect(registry.release).not.toHaveBeenCalled();
+  });
+
+  it("retains the owner after cancellation when sandbox cleanup is unconfirmed", async () => {
+    mockGetRun.mockReturnValue({ cancel: vi.fn().mockResolvedValue(undefined) });
+    mockStopSandboxesByIds.mockRejectedValue(new Error("sandbox API unavailable"));
+    const registry = makeRegistry();
+
+    const { cancelRun } = await import("./cancel-run.js");
+    expect(await cancelRun("PROJ-1", "run_abc", registry)).toBe(true);
+    expect(registry.release).not.toHaveBeenCalled();
+  });
+
+  it("cancels a ticketless PR subject by exact subject and run id", async () => {
+    const cancel = vi.fn().mockResolvedValue(undefined);
+    mockGetRun.mockReturnValue({ cancel });
+    const prEntry = active({
+      subjectKey: "pr:github:acme/api#42",
+      ticketKey: null,
+      kind: "pr_trigger",
+      runId: "run_pr",
+    });
+    const registry = makeRegistry(prEntry);
+    const onReleased = vi.fn();
+
+    const { cancelSubjectRun } = await import("./cancel-run.js");
+    expect(
+      await cancelSubjectRun("pr:github:acme/api#42", "run_pr", registry, onReleased),
+    ).toBe(true);
     expect(registry.release).toHaveBeenCalledWith(
-      "ticket:jira:PROJ-1",
+      "pr:github:acme/api#42",
       "owner-a",
-      "run_abc",
+      "run_pr",
     );
+    expect(onReleased).toHaveBeenCalledWith("pr:github:acme/api#42");
   });
 });

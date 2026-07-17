@@ -304,6 +304,7 @@ export const workflowOwnedBranches = pgTable(
     prId: integer("pr_id"),
     prUrl: text("pr_url"),
     prBranchName: text("pr_branch_name"),
+    publishedHeadSha: text("published_head_sha"),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),

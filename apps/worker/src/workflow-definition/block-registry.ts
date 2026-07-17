@@ -209,7 +209,11 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
       "Starts when external CI reports one or more failed checks.",
       "✗",
     ),
-    defaults: { providers: ["github", "gitlab"], scope: "workflow_owned" },
+    defaults: {
+      providers: ["github", "gitlab"],
+      producers: ["github-actions", "gitlab-ci"],
+      scope: "workflow_owned",
+    },
     inputs: {},
     output: statusOutput(
       {
@@ -867,6 +871,18 @@ function resolvedOutput(
   }
   if (type === "call_llm" && declared !== null) {
     return statusOutput({ output: declared.ok ? declared.schema : unknownType() });
+  }
+  if (
+    params.scope === "any" &&
+    (type === "trigger_pr_created" ||
+      type === "trigger_pr_checks_failed" ||
+      type === "trigger_pr_review") &&
+    fallback.type === "object"
+  ) {
+    return {
+      ...fallback,
+      required: fallback.required.filter((field) => field !== "ticketKey"),
+    };
   }
   return fallback;
 }

@@ -237,8 +237,13 @@ async function cancelTrackedRun(
   if (entry.state === "reserved") {
     const sandboxIds = await runRegistry
       .listSandboxes(entry.subjectKey, entry.ownerToken)
-      .catch(() => []);
-    await stopSandboxesByIds(sandboxIds).catch(() => {});
+      .catch(() => null);
+    if (sandboxIds === null) return false;
+    try {
+      await stopSandboxesByIds(sandboxIds);
+    } catch {
+      return false;
+    }
     return runRegistry
       .releaseReservation(entry.subjectKey, entry.ownerToken)
       .catch(() => false);

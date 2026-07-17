@@ -117,6 +117,7 @@ describe("workflow-owned branch records", () => {
       provider: "github",
       repoPath: "acme/web",
       branchName: "feature/owned",
+      publishedHeadSha: "published-sha",
       pr: {
         id: 42,
         url: "https://github.com/acme/web/pull/42",
@@ -130,6 +131,7 @@ describe("workflow-owned branch records", () => {
         repoPath: "acme/web",
         prNumber: 42,
         branchName: "feature/owned",
+        publishedHeadSha: "published-sha",
       }),
     ).resolves.toMatchObject({ ticketKey: "AIW-45" });
     await expect(
@@ -138,6 +140,7 @@ describe("workflow-owned branch records", () => {
         repoPath: "acme/web",
         prNumber: 99,
         branchName: "feature/owned",
+        publishedHeadSha: "published-sha",
       }),
     ).resolves.toBeNull();
     await expect(
@@ -146,6 +149,7 @@ describe("workflow-owned branch records", () => {
         repoPath: "acme/web",
         prNumber: 42,
         branchName: "feature/owned",
+        publishedHeadSha: "published-sha",
       }),
     ).resolves.toBeNull();
     await expect(
@@ -154,6 +158,16 @@ describe("workflow-owned branch records", () => {
         repoPath: "acme/web",
         prNumber: 42,
         branchName: "blazebot/aiw-45",
+        publishedHeadSha: "published-sha",
+      }),
+    ).resolves.toBeNull();
+    await expect(
+      findWorkflowOwnedPullRequest(db, {
+        provider: "github",
+        repoPath: "acme/web",
+        prNumber: 42,
+        branchName: "feature/owned",
+        publishedHeadSha: "human-push",
       }),
     ).resolves.toBeNull();
   });

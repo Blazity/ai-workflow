@@ -28,6 +28,7 @@ export type DispatchTriggerResult =
   | { result: "no_definition" }
   | { result: "ignored_not_workflow_owned" }
   | { result: "ignored_provider" }
+  | { result: "ignored_producer" }
   | { result: "ignored_stale_head" }
   | { result: "ignored_malformed_delivery" }
   | { result: "coalesced" }
@@ -80,7 +81,15 @@ export async function dispatchTriggerEvent(
     event.delivery.provider,
     event.delivery.deliveryId,
   );
-  if (existing) return storedResultToDispatch(existing.result);
+  if (existing) {
+    // The process may have died after durable acceptance but before recording
+    // dispatch. Resume the exact pinned envelope; owner CAS still guarantees
+    // that concurrent redeliveries cannot start two effective runs.
+    if (existing.status === "accepted" && existing.result === null) {
+      return resumeAcceptedTrigger(existing, deps);
+    }
+    return storedResultToDispatch(existing.result);
+  }
 
   const enabled = await getEnabledWorkflowDefinitionForTrigger(deps.db, event.triggerType);
   if (!enabled?.current) return { result: "no_definition" };
@@ -90,11 +99,24 @@ export async function dispatchTriggerEvent(
   if (Array.isArray(providers) && providers.length > 0 && !providers.includes(event.pr.provider)) {
     return { result: "ignored_provider" };
   }
+  if (event.triggerType === "trigger_pr_checks_failed") {
+    const configured = Array.isArray(params.producers)
+      ? params.producers.filter((producer): producer is string => typeof producer === "string")
+      : ["github-actions", "gitlab-ci"];
+    if (!configured.includes(event.delivery.producer)) {
+      logger.info(
+        { provider: event.delivery.provider, producer: event.delivery.producer },
+        "trigger_ignored_untrusted_ci_producer",
+      );
+      return { result: "ignored_producer" };
+    }
+  }
 
   const currentHead = await readCurrentHead(event.pr, deps);
-  if (!currentHead || currentHead !== event.pr.headSha) {
+  if (currentHead.status === "unreachable") return { result: "error" };
+  if (currentHead.headSha !== event.pr.headSha) {
     logger.info(
-      { subject: event.pr, currentHead },
+      { subject: event.pr, currentHead: currentHead.headSha },
       "trigger_ignored_stale_head",
     );
     return { result: "ignored_stale_head" };
@@ -115,7 +137,11 @@ export async function dispatchTriggerEvent(
 
   try {
     const durable = await acceptTriggerDelivery(deps.db, accepted);
-    if (!durable.inserted) return storedResultToDispatch(durable.stored.result);
+    if (!durable.inserted) {
+      return durable.stored.status === "accepted" && durable.stored.result === null
+        ? resumeAcceptedTrigger(durable.stored, deps)
+        : storedResultToDispatch(durable.stored.result);
+    }
     return await dispatchAcceptedTrigger(accepted, deps);
   } catch (error) {
     logger.warn(
@@ -126,10 +152,27 @@ export async function dispatchTriggerEvent(
   }
 }
 
+async function resumeAcceptedTrigger(
+  accepted: AcceptedTriggerDelivery,
+  deps: DispatchTriggerDeps,
+): Promise<DispatchTriggerResult> {
+  const currentHead = await readCurrentHead(accepted.pr, deps);
+  if (currentHead.status === "unreachable") return { result: "error" };
+  if (currentHead.headSha !== accepted.pr.headSha) {
+    await completeAccepted(deps.db, accepted, { result: "ignored_stale_head" });
+    return { result: "ignored_stale_head" };
+  }
+  return dispatchAcceptedTrigger(accepted, deps);
+}
+
 async function dispatchAcceptedTrigger(
   accepted: AcceptedTriggerDelivery,
   deps: DispatchTriggerDeps,
-  pendingEvent?: { headSha: string; triggerType: AcceptedTriggerDelivery["triggerType"] },
+  pendingEvent?: {
+    headSha: string;
+    triggerType: AcceptedTriggerDelivery["triggerType"];
+    deliveryId: string;
+  },
 ): Promise<DispatchTriggerResult> {
   const inputBase = {
     kind: "pr_trigger" as const,
@@ -185,7 +228,8 @@ export async function drainOldestPendingTrigger(
 ): Promise<DispatchTriggerResult | null> {
   for (const pending of await listPendingTriggersForSubject(deps.db, subjectKey)) {
     const currentHead = await readCurrentHead(pending.pr, deps);
-    if (!currentHead || currentHead !== pending.pr.headSha) {
+    if (currentHead.status === "unreachable") return { result: "error" };
+    if (currentHead.headSha !== pending.pr.headSha) {
       await deletePendingTrigger(deps.db, pending);
       await completeAccepted(deps.db, pending, { result: "ignored_stale_head" });
       continue;
@@ -193,6 +237,7 @@ export async function drainOldestPendingTrigger(
     const result = await dispatchAcceptedTrigger(pending, deps, {
       headSha: pending.pr.headSha,
       triggerType: pending.triggerType,
+      deliveryId: pending.delivery.deliveryId,
     });
     if (result.result === "started") {
       await (deps.deletePending ?? deletePendingTrigger)(deps.db, pending).catch((error) => {
@@ -226,6 +271,7 @@ async function resolveSubjectIdentity(
     repoPath: event.pr.repoPath,
     prNumber: event.pr.prNumber,
     branchName: event.pr.headRef,
+    publishedHeadSha: event.pr.headSha,
   });
   if (!correlation) return null;
 
@@ -244,20 +290,25 @@ async function resolveSubjectIdentity(
   }
 }
 
-async function readCurrentHead(pr: PrTriggerPayload, deps: DispatchTriggerDeps): Promise<string | null> {
+async function readCurrentHead(
+  pr: PrTriggerPayload,
+  deps: DispatchTriggerDeps,
+): Promise<{ status: "ok"; headSha: string } | { status: "unreachable" }> {
   try {
-    if (deps.getCurrentHead) return await deps.getCurrentHead(pr);
-    return await createRepositoryVCS({
-      provider: pr.provider,
-      repoPath: pr.repoPath,
-      baseBranch: pr.baseRef,
-    }).getBranchSha(pr.headRef);
+    const headSha = deps.getCurrentHead
+      ? await deps.getCurrentHead(pr)
+      : await createRepositoryVCS({
+          provider: pr.provider,
+          repoPath: pr.repoPath,
+          baseBranch: pr.baseRef,
+        }).getBranchSha(pr.headRef);
+    return { status: "ok", headSha };
   } catch (error) {
     logger.warn(
       { provider: pr.provider, repoPath: pr.repoPath, error: (error as Error).message },
       "trigger_current_head_lookup_failed_closed",
     );
-    return null;
+    return { status: "unreachable" };
   }
 }
 

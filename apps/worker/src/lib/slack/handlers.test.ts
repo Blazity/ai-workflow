@@ -145,6 +145,19 @@ describe("handleCancel", () => {
     expect(cancelRunFn).not.toHaveBeenCalled();
   });
 
+  it("retains a reserved claim when sandbox cleanup is unconfirmed", async () => {
+    const registry = makeRegistry({
+      get: vi.fn().mockResolvedValue(active("AWT-1", { state: "reserved", runId: null })),
+      listSandboxes: vi.fn().mockResolvedValue(["sbx_z"]),
+    });
+    const stopSandboxes = vi.fn().mockRejectedValue(new Error("sandbox API unavailable"));
+
+    const out = await handleCancel(registry, "AWT-1", vi.fn(), stopSandboxes);
+
+    expect(out).toContain("failed to clear the claim");
+    expect(registry.releaseReservation).not.toHaveBeenCalled();
+  });
+
   it("calls cancelRun with ticket key + runId + registry, and reports success", async () => {
     const registry = makeRegistry({
       get: vi.fn().mockResolvedValue(active("AWT-1", { runId: "run_a" })),
@@ -168,7 +181,7 @@ describe("handleCancel", () => {
     expect(out).toContain("AWT-1");
   });
 
-  it("reports cancel-failed-but-cleanup-done when cancelRun returns false", async () => {
+  it("reports that an unconfirmed cancellation retains ownership", async () => {
     const registry = makeRegistry({
       get: vi.fn().mockResolvedValue(active("AWT-1", { runId: "run_a" })),
     });
@@ -176,5 +189,6 @@ describe("handleCancel", () => {
     const out = await handleCancel(registry, "AWT-1", cancelRunFn, vi.fn());
     expect(out).toContain("AWT-1");
     expect(out.toLowerCase()).toContain("could not");
+    expect(out.toLowerCase()).toContain("retained");
   });
 });

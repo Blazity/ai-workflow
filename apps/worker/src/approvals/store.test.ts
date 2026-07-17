@@ -153,6 +153,18 @@ describe("setDispatchedRunId", () => {
     const after = await getApproval(db, row.id);
     expect(after?.dispatchedRunId).toBe("run-dispatched");
   });
+
+  it("is idempotent for the same run and refuses to replace a recorded dispatch", async () => {
+    const db = await createTestDb();
+    const row = await createApprovalRequest(db, seed());
+    await setDispatchedRunId(db, row.id, "run-first");
+    await expect(setDispatchedRunId(db, row.id, "run-first")).resolves.toBeUndefined();
+    await expect(setDispatchedRunId(db, row.id, "run-second")).rejects.toMatchObject({
+      statusCode: 409,
+      message: "dispatch_already_recorded",
+    });
+    expect((await getApproval(db, row.id))?.dispatchedRunId).toBe("run-first");
+  });
 });
 
 async function mkAt(db: Db, ticketKey: string, requestedAt: Date): Promise<string> {

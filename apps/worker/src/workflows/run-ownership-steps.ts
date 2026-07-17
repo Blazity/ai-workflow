@@ -72,6 +72,20 @@ export async function clearClarificationDispatchWinnerStep(
   return clearDispatchedRun(getDb(), clarificationId, ownerToken, workflowRunId);
 }
 
+/** The dashboard starts the run before it can persist the returned run id. The
+ * winning Workflow candidate records the same correlation after owner bind so
+ * a lost route response/write cannot make a later approval retry start twice. */
+export async function acknowledgeApprovalDispatchStep(
+  entry: import("./agent-input.js").AgentWorkflowInput,
+  workflowRunId: string,
+): Promise<void> {
+  "use step";
+  if (entry.kind !== "plan_approved") return;
+  const { getDb } = await import("../db/client.js");
+  const { setDispatchedRunId } = await import("../approvals/store.js");
+  await setDispatchedRunId(getDb(), entry.approval.approvalRequestId, workflowRunId);
+}
+
 export async function terminalReleaseAndDrainStep(
   subjectKey: string,
   ownerToken: string,
@@ -82,7 +96,15 @@ export async function terminalReleaseAndDrainStep(
   const { getDb } = await import("../db/client.js");
   const { createStepAdapters } = await import("../lib/step-adapters.js");
   const { drainOldestPendingTrigger } = await import("../lib/dispatch-trigger.js");
+  const { stopSandboxesByIds } = await import("../sandbox/stop-ticket-sandboxes.js");
   const { runRegistry } = createStepAdapters();
+  const sandboxIds = await runRegistry.listSandboxes(subjectKey, ownerToken).catch(() => null);
+  if (sandboxIds === null) return false;
+  try {
+    await stopSandboxesByIds(sandboxIds);
+  } catch {
+    return false;
+  }
   const released = await runRegistry.release(subjectKey, ownerToken, workflowRunId);
   if (!released) return false;
   await drainOldestPendingTrigger(subjectKey, {
@@ -105,6 +127,11 @@ export async function acknowledgePendingTriggerStep(
   await deletePendingTrigger(getDb(), {
     subjectKey: entry.subjectKey,
     triggerType: entry.pendingEvent.triggerType,
+    delivery: {
+      provider: entry.pr.provider,
+      producer: "pending-snapshot",
+      deliveryId: entry.pendingEvent.deliveryId,
+    },
     pr: { ...entry.pr, headSha: entry.pendingEvent.headSha },
   });
 }

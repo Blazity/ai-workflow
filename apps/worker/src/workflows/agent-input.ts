@@ -62,6 +62,9 @@ export type AgentWorkflowInput =
       pendingEvent?: {
         headSha: string;
         triggerType: "trigger_pr_created" | "trigger_pr_checks_failed" | "trigger_pr_review";
+        /** Provider delivery snapshot consumed by this candidate. A newer
+         * delivery for the same semantic event must remain pending. */
+        deliveryId: string;
       };
       /** Provider delivery identity belongs to dispatcher bookkeeping only. */
       delivery?: {

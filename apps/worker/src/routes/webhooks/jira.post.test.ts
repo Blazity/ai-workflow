@@ -128,4 +128,25 @@ describe("POST /webhooks/jira cancel guard", () => {
     expect(mockCancelRun).toHaveBeenCalledWith("PROJ-42", "run_ticket", adapters.runRegistry);
     expect(adapters.messaging.notifyForTicket).toHaveBeenCalled();
   });
+
+  it("retains a reserved claim when sandbox cleanup is unconfirmed", async () => {
+    const adapters = makeAdapters([
+      { ticketKey: "PROJ-42", runId: "run_ticket", kind: "ticket" },
+    ]);
+    const reserved = {
+      ...(await adapters.runRegistry.get("ticket:jira:PROJ-42")),
+      state: "reserved",
+      runId: null,
+    };
+    adapters.runRegistry.get.mockResolvedValue(reserved);
+    adapters.runRegistry.listSandboxes.mockResolvedValue(["sbx-1"]);
+    mockStopSandboxesByIds.mockRejectedValue(new Error("sandbox API unavailable"));
+    mocks.createAdapters.mockReturnValue(adapters);
+
+    const response = await makeApp()(makeRequest());
+
+    expect(response.status).toBe(200);
+    expect(adapters.runRegistry.releaseReservation).not.toHaveBeenCalled();
+    expect(adapters.messaging.notifyForTicket).not.toHaveBeenCalled();
+  });
 });

@@ -87,6 +87,7 @@ describe("normalizeGitHubEvent", () => {
         action: "completed",
         repository: githubRepo(),
         check_run: {
+          app: { slug: "github-actions" },
           name: "ci / build",
           conclusion: "failure",
           details_url: "https://ci/run/1",
@@ -101,7 +102,7 @@ describe("normalizeGitHubEvent", () => {
     expect(evt).toEqual({
       delivery: {
         provider: "github",
-        producer: "unknown",
+        producer: "github-actions",
         deliveryId: "github-delivery-1",
       },
       triggerType: "trigger_pr_checks_failed",
@@ -328,6 +329,33 @@ describe("normalizeGitLabEvent", () => {
     });
   });
 
+  it("does not drop bot-authored merge requests or pipelines globally", () => {
+    const botMr = mrPayload("open");
+    botMr.user.username = "blazebot";
+    expect(
+      normalizeGitLabEvent("Merge Request Hook", botMr, { botUsername: "blazebot" })
+        ?.triggerType,
+    ).toBe("trigger_pr_created");
+
+    expect(
+      normalizeGitLabEvent(
+        "Pipeline Hook",
+        {
+          object_kind: "pipeline",
+          user: { username: "blazebot" },
+          project: { path_with_namespace: "group/demo" },
+          object_attributes: { status: "failed", sha: "sha1" },
+          merge_request: {
+            iid: 42,
+            source_branch: "blazebot/aiw-3",
+            target_branch: "main",
+          },
+        },
+        { botUsername: "blazebot" },
+      )?.triggerType,
+    ).toBe("trigger_pr_checks_failed");
+  });
+
   it("never routes a merge request update", () => {
     expect(normalizeGitLabEvent("Merge Request Hook", mrPayload("update"))).toBeNull();
   });
@@ -351,6 +379,7 @@ describe("normalizeGitLabEvent", () => {
       ],
     });
     expect(evt?.triggerType).toBe("trigger_pr_checks_failed");
+    expect(evt?.delivery.producer).toBe("gitlab-ci");
     expect(evt?.pr.headRef).toBe("blazebot/aiw-3");
     expect(evt?.pr.failedChecks).toEqual([{ name: "lint", conclusion: "failed" }]);
   });

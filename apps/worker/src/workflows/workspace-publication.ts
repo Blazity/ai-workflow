@@ -205,7 +205,11 @@ export async function openPullRequestsForPublication(input: {
       });
       if (!prs.some((existing) => sameRepository(existing, pr!))) prs.push(pr);
       await recordPullRequestStep(attempt.id, pr);
-      await recordWorkflowOwnedPullRequest({ ticketKey: input.ticketKey, pr });
+      await recordWorkflowOwnedPullRequest({
+        ticketKey: input.ticketKey,
+        pr,
+        publishedHeadSha: repository.pushedHead!,
+      });
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
       await recordRecoverablePublicationFailureStep({

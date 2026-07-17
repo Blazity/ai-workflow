@@ -15,8 +15,6 @@ import type {
 const TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled"]);
 const STALE_RESERVATION_MS = 5 * 60 * 1000;
 const ORPHAN_GRACE_MS = 30 * 1000;
-const UNREACHABLE_STRIKES_LIMIT = 3;
-const unreachableStrikes = new Map<string, number>();
 
 type TicketCancellationReason = "orphaned_run" | "inflight_claim";
 type TicketCancellationCallback = (
@@ -69,7 +67,7 @@ export async function reconcileRuns(
     }
     if (!(await verifyTicketLeftAiColumn(ticketKey, issueTracker))) continue;
 
-    await cancelRun(
+    const cancellationConfirmed = await cancelRun(
       ticketKey,
       entry.runId,
       runRegistry,
@@ -77,6 +75,10 @@ export async function reconcileRuns(
       undefined,
       onSubjectReleased,
     );
+    if (!cancellationConfirmed) {
+      logger.warn({ ticketKey, runId: entry.runId }, "reconcile_orphan_cancel_unconfirmed");
+      continue;
+    }
     logger.info({ ticketKey, runId: entry.runId }, "reconcile_cancelled_orphaned_run");
     await notifyTicketCancelled(ticketKey, "orphaned_run", onTicketCancelled);
     cancelled++;
@@ -107,7 +109,15 @@ async function recoverStaleReservation(
 ): Promise<number> {
   if (Date.now() - entry.updatedAt <= STALE_RESERVATION_MS) return 0;
 
-  await stopOwnedSandboxes(entry, runRegistry);
+  try {
+    await stopOwnedSandboxes(entry, runRegistry);
+  } catch (error) {
+    logger.warn(
+      { subjectKey: entry.subjectKey, error: (error as Error).message },
+      "reconcile_stale_reservation_cleanup_unconfirmed",
+    );
+    return 0;
+  }
   const released = await runRegistry
     .releaseReservation(entry.subjectKey, entry.ownerToken)
     .catch(() => false);
@@ -127,7 +137,6 @@ async function cleanFinishedRun(
 ): Promise<number> {
   try {
     const status = await getRun(entry.runId).status;
-    unreachableStrikes.delete(entry.subjectKey);
     if (!TERMINAL_STATUSES.has(status)) return 0;
 
     const released = await cleanupAndRelease(entry, runRegistry);
@@ -138,31 +147,18 @@ async function cleanFinishedRun(
       "reconcile_cleaned_finished_run",
     );
     return 1;
-  } catch {
-    const strikes = (unreachableStrikes.get(entry.subjectKey) ?? 0) + 1;
-    unreachableStrikes.set(entry.subjectKey, strikes);
-    if (strikes < UNREACHABLE_STRIKES_LIMIT) {
-      logger.warn(
-        {
-          subjectKey: entry.subjectKey,
-          runId: entry.runId,
-          strikes,
-          limit: UNREACHABLE_STRIKES_LIMIT,
-        },
-        "reconcile_unreachable_strike",
-      );
-      return 0;
-    }
-
-    unreachableStrikes.delete(entry.subjectKey);
-    const released = await cleanupAndRelease(entry, runRegistry);
-    if (!released) return 0;
-    await notifySubjectReleased(entry.subjectKey, onSubjectReleased);
+  } catch (error) {
+    // Reachability is not terminal proof. Retain the exact owner until Workflow
+    // reports a terminal status (or a separately verified cancellation does).
     logger.warn(
-      { subjectKey: entry.subjectKey, runId: entry.runId },
-      "reconcile_cleaned_unreachable_run",
+      {
+        subjectKey: entry.subjectKey,
+        runId: entry.runId,
+        error: error instanceof Error ? error.message : String(error),
+      },
+      "reconcile_run_status_unreachable_owner_retained",
     );
-    return 1;
+    return 0;
   }
 }
 
@@ -170,7 +166,15 @@ async function cleanupAndRelease(
   entry: ActiveRunEntry & { runId: string },
   runRegistry: RunRegistryAdapter,
 ): Promise<boolean> {
-  await stopOwnedSandboxes(entry, runRegistry);
+  try {
+    await stopOwnedSandboxes(entry, runRegistry);
+  } catch (error) {
+    logger.warn(
+      { subjectKey: entry.subjectKey, runId: entry.runId, error: (error as Error).message },
+      "reconcile_terminal_sandbox_cleanup_unconfirmed",
+    );
+    return false;
+  }
   return runRegistry
     .release(entry.subjectKey, entry.ownerToken, entry.runId)
     .catch(() => false);
@@ -181,9 +185,8 @@ async function stopOwnedSandboxes(
   runRegistry: RunRegistryAdapter,
 ): Promise<void> {
   const sandboxIds = await runRegistry
-    .listSandboxes(entry.subjectKey, entry.ownerToken)
-    .catch(() => []);
-  await stopSandboxesByIds(sandboxIds).catch(() => {});
+    .listSandboxes(entry.subjectKey, entry.ownerToken);
+  await stopSandboxesByIds(sandboxIds);
 }
 
 async function verifyTicketLeftAiColumn(

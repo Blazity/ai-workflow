@@ -975,7 +975,7 @@ export async function agentWorkflow(input: string | AgentWorkflowInput) {
   const { workflowRunId } = getWorkflowMetadata();
   const legacyInput = typeof input === "string";
   const entry: AgentWorkflowInput = legacyInput
-    ? {
+      ? {
         kind: "ticket",
         subjectKey: `ticket:jira:${input.trim().toUpperCase()}`,
         ticketKey: input,
@@ -988,6 +988,7 @@ export async function agentWorkflow(input: string | AgentWorkflowInput) {
   try {
     if (!legacyInput) {
       const {
+        acknowledgeApprovalDispatchStep,
         acknowledgePendingTriggerStep,
         bindWorkflowCandidateStep,
         recordClarificationDispatchWinnerStep,
@@ -998,6 +999,7 @@ export async function agentWorkflow(input: string | AgentWorkflowInput) {
         workflowRunId,
       );
       if (!bound) return;
+      await acknowledgeApprovalDispatchStep(entry, workflowRunId);
       if (entry.kind === "clarification_answered") {
         clarificationWinnerRecorded = await recordClarificationDispatchWinnerStep(
           entry.clarificationRequestId,

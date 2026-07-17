@@ -68,6 +68,7 @@ const agentParams = z
 const vcsProviders = z.enum(["github", "gitlab"]);
 const reviewStates = z.enum(["changes_requested", "commented"]);
 const prTriggerScope = z.enum(["workflow_owned", "any"]);
+const ciProducer = z.string().trim().min(1).max(100).regex(/^[A-Za-z0-9._-]+$/);
 
 // Mirrors TicketStatusTarget: the Record makes a domain value added or dropped a
 // build error here, so the accepted targets cannot drift from the ones the
@@ -106,6 +107,7 @@ const triggerPrChecksFailedNode = z
     params: z
       .object({
         providers: z.array(vcsProviders).default(["github", "gitlab"]),
+        producers: z.array(ciProducer).default(["github-actions", "gitlab-ci"]),
         scope: prTriggerScope.default("workflow_owned"),
       })
       .strict(),

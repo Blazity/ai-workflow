@@ -30,6 +30,7 @@ createOrFindWorkflowOwnedPullRequest.maxRetries = 0;
 export async function recordWorkflowOwnedPullRequest(input: {
   ticketKey: string;
   pr: WorkflowPrLink;
+  publishedHeadSha: string;
 }): Promise<void> {
   "use step";
   const { getDb } = await import("../db/client.js");
@@ -41,6 +42,7 @@ export async function recordWorkflowOwnedPullRequest(input: {
     provider: input.pr.provider,
     repoPath: input.pr.repoPath,
     branchName: input.pr.branch,
+    publishedHeadSha: input.publishedHeadSha,
     pr: {
       id: input.pr.id,
       url: input.pr.url,

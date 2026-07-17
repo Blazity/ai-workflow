@@ -9,8 +9,11 @@ const clearDispatched = vi.fn();
 const getClarification = vi.fn();
 const markConsumed = vi.fn();
 const resolveAwaitingRun = vi.fn();
+const setApprovalRun = vi.fn();
+const listSandboxes = vi.fn();
+const stopSandboxes = vi.fn();
 vi.mock("../lib/step-adapters.js", () => ({
-  createStepAdapters: () => ({ runRegistry: { bindRun, release } }),
+  createStepAdapters: () => ({ runRegistry: { bindRun, release, listSandboxes } }),
 }));
 vi.mock("../db/client.js", () => ({ getDb: () => ({ db: true }) }));
 vi.mock("../../env.js", () => ({ env: { MAX_CONCURRENT_AGENTS: 3 } }));
@@ -29,6 +32,12 @@ vi.mock("../clarifications/store.js", () => ({
 vi.mock("../lib/telemetry/run-telemetry.js", () => ({
   resolveAwaitingRun: (...args: unknown[]) => resolveAwaitingRun(...args),
 }));
+vi.mock("../approvals/store.js", () => ({
+  setDispatchedRunId: (...args: any[]) => setApprovalRun(...args),
+}));
+vi.mock("../sandbox/stop-ticket-sandboxes.js", () => ({
+  stopSandboxesByIds: (...args: any[]) => stopSandboxes(...args),
+}));
 
 describe("workflow owner steps", () => {
   beforeEach(() => {
@@ -41,6 +50,22 @@ describe("workflow owner steps", () => {
     getClarification.mockReset();
     markConsumed.mockReset();
     resolveAwaitingRun.mockReset();
+    setApprovalRun.mockReset();
+    listSandboxes.mockReset().mockResolvedValue([]);
+    stopSandboxes.mockReset().mockResolvedValue(0);
+  });
+
+  it("self-records the exact plan-approval workflow after owner bind", async () => {
+    setApprovalRun.mockResolvedValue(undefined);
+    const { acknowledgeApprovalDispatchStep } = await import("./run-ownership-steps.js");
+    const entry = {
+      kind: "plan_approved" as const,
+      approval: { approvalRequestId: "approval-1" },
+    } as any;
+
+    await acknowledgeApprovalDispatchStep(entry, "run-approved");
+
+    expect(setApprovalRun).toHaveBeenCalledWith({ db: true }, "approval-1", "run-approved");
   });
 
   it("acknowledges a drained pending identity after owner bind and before work", async () => {
@@ -54,8 +79,12 @@ describe("workflow owner steps", () => {
       definitionId: 1,
       definitionVersion: 2,
       scope: "any" as const,
-      pendingEvent: { headSha: "sha", triggerType: "trigger_pr_created" as const },
-      pr: { headSha: "sha" } as any,
+      pendingEvent: {
+        headSha: "sha",
+        triggerType: "trigger_pr_created" as const,
+        deliveryId: "delivery-1",
+      },
+      pr: { provider: "github", headSha: "sha" } as any,
     };
     await acknowledgePendingTriggerStep(entry);
     expect(deletePending).toHaveBeenCalledWith(
@@ -63,6 +92,11 @@ describe("workflow owner steps", () => {
       expect.objectContaining({
         subjectKey: "pr:github:acme/api#7",
         triggerType: "trigger_pr_created",
+        delivery: {
+          provider: "github",
+          producer: "pending-snapshot",
+          deliveryId: "delivery-1",
+        },
       }),
     );
   });
@@ -175,5 +209,15 @@ describe("workflow owner steps", () => {
     expect(drain).not.toHaveBeenCalled();
     expect(await terminalReleaseAndDrainStep("subject", "owner", "run-a")).toBe(true);
     expect(drain).toHaveBeenCalledOnce();
+  });
+
+  it("retains terminal ownership when durable sandbox cleanup is unconfirmed", async () => {
+    listSandboxes.mockResolvedValue(["sbx-1"]);
+    stopSandboxes.mockRejectedValue(new Error("sandbox API unavailable"));
+    const { terminalReleaseAndDrainStep } = await import("./run-ownership-steps.js");
+
+    expect(await terminalReleaseAndDrainStep("subject", "owner", "run-a")).toBe(false);
+    expect(release).not.toHaveBeenCalled();
+    expect(drain).not.toHaveBeenCalled();
   });
 });

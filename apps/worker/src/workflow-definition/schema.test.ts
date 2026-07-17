@@ -680,6 +680,7 @@ describe("workflowDefinitionSchema block-executor node types", () => {
     });
     expect(parseNode({ type: "trigger_pr_checks_failed", params: {} })?.params).toEqual({
       providers: ["github", "gitlab"],
+      producers: ["github-actions", "gitlab-ci"],
       scope: "workflow_owned",
     });
     expect(parseNode({ type: "trigger_pr_review", params: {} })?.params).toEqual({

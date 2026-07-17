@@ -229,6 +229,33 @@ describe("workflow registry current executor output parity", () => {
     }
   });
 
+  it.each([
+    ["trigger_pr_created", {}],
+    [
+      "trigger_pr_checks_failed",
+      { failedChecks: [{ name: "test", conclusion: "failure" }] },
+    ],
+    [
+      "trigger_pr_review",
+      { review: { state: "changes_requested", author: "reviewer", body: "Please fix" } },
+    ],
+  ] as const)("allows ticketless %s output only for scope:any", (type, extra) => {
+    const { ticketKey: _ticketKey, ...ticketlessPr } = pr;
+    const output = { status: "fired", ...ticketlessPr, ...extra } as BlockOutput;
+
+    const anyScope = resolveWorkflowBlockContract(type, { scope: "any" }, context);
+    expect(validateBlockOutputAgainstContract(anyScope, output)).toEqual([]);
+
+    const workflowOwned = resolveWorkflowBlockContract(
+      type,
+      { scope: "workflow_owned" },
+      context,
+    );
+    expect(validateBlockOutputAgainstContract(workflowOwned, output)).toEqual([
+      "output.ticketKey is required.",
+    ]);
+  });
+
   it("reports status, nested schema, and undeclared-property mismatches", () => {
     const contract = resolveWorkflowBlockContract(
       "call_llm",

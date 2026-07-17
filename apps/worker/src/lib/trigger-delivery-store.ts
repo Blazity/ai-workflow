@@ -134,6 +134,10 @@ export async function coalescePendingTrigger(
         pendingTriggerEvents.triggerType,
       ],
       set: {
+        // The newest provider delivery id is also the row's immutable snapshot
+        // token. Consumers delete with this value so feedback merged after a
+        // drain snapshot cannot be erased by the older consumer.
+        deliveryId: sql`excluded.delivery_id`,
         failedChecks: mergeJsonArrays(pendingTriggerEvents.failedChecks, "failed_checks"),
         reviews: mergeJsonArrays(pendingTriggerEvents.reviews, "reviews"),
         updatedAt: sql`now()`,
@@ -187,7 +191,7 @@ export async function listPendingSubjectKeys(db: Db): Promise<string[]> {
 
 export async function deletePendingTrigger(
   db: Db,
-  accepted: Pick<AcceptedTriggerDelivery, "subjectKey" | "triggerType" | "pr">,
+  accepted: Pick<AcceptedTriggerDelivery, "subjectKey" | "triggerType" | "pr" | "delivery">,
 ): Promise<boolean> {
   const rows = await db
     .delete(pendingTriggerEvents)
@@ -196,6 +200,8 @@ export async function deletePendingTrigger(
         eq(pendingTriggerEvents.subjectKey, accepted.subjectKey),
         eq(pendingTriggerEvents.headSha, accepted.pr.headSha),
         eq(pendingTriggerEvents.triggerType, accepted.triggerType),
+        eq(pendingTriggerEvents.provider, accepted.delivery.provider),
+        eq(pendingTriggerEvents.deliveryId, accepted.delivery.deliveryId),
       ),
     )
     .returning({ subjectKey: pendingTriggerEvents.subjectKey });
@@ -239,6 +245,11 @@ function mapPending(row: typeof pendingTriggerEvents.$inferSelect): AcceptedTrig
   };
   return {
     ...payload,
+    delivery: {
+      ...payload.delivery,
+      provider: row.provider as AcceptedTriggerDelivery["delivery"]["provider"],
+      deliveryId: row.deliveryId,
+    },
     subjectKey: row.subjectKey,
     ticketKey: row.ticketKey,
     definitionId: row.definitionId,

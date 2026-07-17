@@ -8,6 +8,9 @@ export interface WorkflowOwnedBranchRecord {
   provider: VcsProvider;
   repoPath: string;
   branchName: string;
+  /** Exact branch head most recently published by AI Workflow. A later human
+   * push invalidates workflow-owned remediation for that head. */
+  publishedHeadSha?: string;
   pr?: {
     id: number;
     url: string;
@@ -29,6 +32,7 @@ export async function listWorkflowOwnedBranchesForTicket(
     provider: row.provider as VcsProvider,
     repoPath: row.repoPath,
     branchName: row.branchName,
+    ...(row.publishedHeadSha ? { publishedHeadSha: row.publishedHeadSha } : {}),
     ...(row.prId !== null && row.prUrl && row.prBranchName
       ? { pr: { id: row.prId, url: row.prUrl, branch: row.prBranchName } }
       : {}),
@@ -46,6 +50,7 @@ export async function upsertWorkflowOwnedBranch(
       provider: record.provider,
       repoPath: record.repoPath,
       branchName: record.branchName,
+      publishedHeadSha: record.publishedHeadSha,
       prId: record.pr?.id,
       prUrl: record.pr?.url,
       prBranchName: record.pr?.branch,
@@ -58,6 +63,7 @@ export async function upsertWorkflowOwnedBranch(
       ],
       set: {
         branchName: record.branchName,
+        publishedHeadSha: sql`coalesce(excluded.published_head_sha, ${workflowOwnedBranches.publishedHeadSha})`,
         prId: sql`coalesce(excluded.pr_id, ${workflowOwnedBranches.prId})`,
         prUrl: sql`coalesce(excluded.pr_url, ${workflowOwnedBranches.prUrl})`,
         prBranchName: sql`coalesce(excluded.pr_branch_name, ${workflowOwnedBranches.prBranchName})`,
@@ -73,6 +79,7 @@ export async function findWorkflowOwnedPullRequest(
     repoPath: string;
     prNumber: number;
     branchName: string;
+    publishedHeadSha: string;
   },
 ): Promise<WorkflowOwnedBranchRecord | null> {
   const rows = await db
@@ -85,6 +92,7 @@ export async function findWorkflowOwnedPullRequest(
         eq(workflowOwnedBranches.prId, input.prNumber),
         eq(workflowOwnedBranches.branchName, input.branchName),
         eq(workflowOwnedBranches.prBranchName, input.branchName),
+        eq(workflowOwnedBranches.publishedHeadSha, input.publishedHeadSha),
       ),
     )
     .limit(1);
@@ -95,6 +103,7 @@ export async function findWorkflowOwnedPullRequest(
     provider: row.provider as VcsProvider,
     repoPath: row.repoPath,
     branchName: row.branchName,
+    publishedHeadSha: row.publishedHeadSha ?? undefined,
     pr: { id: row.prId, url: row.prUrl, branch: row.prBranchName },
   };
 }

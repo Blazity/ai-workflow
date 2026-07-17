@@ -10,6 +10,7 @@ import {
   acceptTriggerDelivery,
   completeTriggerDelivery,
   coalescePendingTrigger,
+  deletePendingTrigger,
   getPendingTrigger,
   getTriggerDelivery,
   listPendingSubjectKeys,
@@ -211,5 +212,40 @@ describe("semantic pending coalescing", () => {
         { state: "commented", author: "bob", body: "Consider B" },
       ]),
     );
+  });
+
+  it("deletes only the exact pending delivery snapshot and preserves a concurrent merge", async () => {
+    const first = delivery();
+    const second = delivery({
+      delivery: { provider: "github", producer: "github-actions", deliveryId: "d-2" },
+      pr: {
+        ...delivery().pr,
+        failedChecks: [
+          { name: "lint", conclusion: "failure" },
+          { name: "test", conclusion: "failure" },
+        ],
+      },
+    });
+    await coalescePendingTrigger(db, first);
+    const oldSnapshot = await getPendingTrigger(
+      db,
+      first.subjectKey,
+      first.pr.headSha,
+      first.triggerType,
+    );
+    await coalescePendingTrigger(db, second);
+
+    expect(await deletePendingTrigger(db, oldSnapshot!)).toBe(false);
+    const current = await getPendingTrigger(
+      db,
+      first.subjectKey,
+      first.pr.headSha,
+      first.triggerType,
+    );
+    expect(current).toMatchObject({
+      delivery: { deliveryId: "d-2" },
+      pr: { failedChecks: expect.arrayContaining([{ name: "test", conclusion: "failure" }]) },
+    });
+    expect(await deletePendingTrigger(db, current!)).toBe(true);
   });
 });

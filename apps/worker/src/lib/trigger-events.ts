@@ -126,7 +126,6 @@ export function normalizeGitLabEvent(
   options: { deliveryId?: string; botUsername?: string } = {},
 ): TriggerEvent | null {
   const producer = body?.user?.username ?? body?.user?.name ?? "unknown";
-  if (options.botUsername && producer === options.botUsername) return null;
   if (eventName === "Merge Request Hook") {
     if (body?.object_kind !== "merge_request") return null;
     const attrs = body?.object_attributes;
@@ -170,7 +169,9 @@ export function normalizeGitLabEvent(
           }))
         : [{ name: "pipeline", conclusion: "failed" }];
     return {
-      delivery: gitLabDelivery(options.deliveryId, producer),
+      // The authenticated Pipeline Hook is the GitLab CI producer. body.user
+      // is merely the human/bot that initiated it and must not define trust.
+      delivery: gitLabDelivery(options.deliveryId, "gitlab-ci"),
       triggerType: "trigger_pr_checks_failed",
       pr: {
         provider: "gitlab",

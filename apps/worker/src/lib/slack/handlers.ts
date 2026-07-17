@@ -77,9 +77,11 @@ export async function handleCancel(
 
   if (entry.state === "reserved") {
     let sandboxIds: string[] = [];
+    let sandboxLookupFailed = false;
     try {
       sandboxIds = await registry.listSandboxes(entry.subjectKey, entry.ownerToken);
     } catch (err) {
+      sandboxLookupFailed = true;
       logger.warn(
         { ticketKey, error: (err as Error).message },
         "slack_cancel_sandbox_lookup_failed",
@@ -87,24 +89,30 @@ export async function handleCancel(
     }
 
     const failures: string[] = [];
-    try {
-      await stopSandboxes(sandboxIds);
-    } catch (err) {
-      failures.push(`stopSandboxes: ${(err as Error).message}`);
-      logger.error(
-        { ticketKey, sandboxIds, error: (err as Error).message },
-        "slack_cancel_stop_sandboxes_failed",
-      );
+    if (sandboxLookupFailed) {
+      failures.push("sandbox registry lookup failed");
+    } else {
+      try {
+        await stopSandboxes(sandboxIds);
+      } catch (err) {
+        failures.push(`stopSandboxes: ${(err as Error).message}`);
+        logger.error(
+          { ticketKey, sandboxIds, error: (err as Error).message },
+          "slack_cancel_stop_sandboxes_failed",
+        );
+      }
     }
-    try {
-      const released = await registry.releaseReservation(entry.subjectKey, entry.ownerToken);
-      if (!released) failures.push("reservation owner changed");
-    } catch (err) {
-      failures.push(`registry.releaseReservation: ${(err as Error).message}`);
-      logger.error(
-        { ticketKey, error: (err as Error).message },
-        "slack_cancel_release_reservation_failed",
-      );
+    if (failures.length === 0) {
+      try {
+        const released = await registry.releaseReservation(entry.subjectKey, entry.ownerToken);
+        if (!released) failures.push("reservation owner changed");
+      } catch (err) {
+        failures.push(`registry.releaseReservation: ${(err as Error).message}`);
+        logger.error(
+          { ticketKey, error: (err as Error).message },
+          "slack_cancel_release_reservation_failed",
+        );
+      }
     }
 
     if (failures.length > 0) {
@@ -117,7 +125,7 @@ export async function handleCancel(
   if (!runId) return `No active run for ${ticketKey}.`;
   const ok = await cancelRunFn(ticketKey, runId, registry, issueTracker, targetColumn);
   if (ok) return `Cancelled ${ticketKey} (runId \`${runId}\`).`;
-  return `${ticketKey}: could not cancel run \`${runId}\` cleanly — owned sandboxes + registry were cleaned up.`;
+  return `${ticketKey}: could not confirm cancellation for run \`${runId}\`; ownership was retained for a safe retry.`;
 }
 
 export async function handleInspect(

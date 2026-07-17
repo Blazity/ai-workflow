@@ -39,4 +39,20 @@ describe("stopSandboxesByIds", () => {
     expect(first.stop).toHaveBeenCalledOnce();
     expect(second.stop).toHaveBeenCalledOnce();
   });
+
+  it("tries every sandbox but rejects while any stop outcome is unconfirmed", async () => {
+    const first = makeSandbox();
+    const second = makeSandbox();
+    first.stop.mockRejectedValue(new Error("provider unavailable"));
+    mockGet.mockImplementation(async ({ sandboxId }: { sandboxId: string }) =>
+      sandboxId === "sbx-child-1" ? first : second,
+    );
+
+    const { stopSandboxesByIds } = await import("./stop-ticket-sandboxes.js");
+    await expect(
+      stopSandboxesByIds(["sbx-child-1", "sbx-child-2"]),
+    ).rejects.toThrow("sbx-child-1");
+    expect(first.stop).toHaveBeenCalledOnce();
+    expect(second.stop).toHaveBeenCalledOnce();
+  });
 });
