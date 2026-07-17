@@ -299,6 +299,13 @@ describe("re-pickup clarification housekeeping gate", () => {
     expect(entryOwnsClarificationThread("clarification_answered")).toBe(true);
     expect(entryOwnsClarificationThread("pr_trigger")).toBe(false);
     expect(entryOwnsClarificationThread("plan_approved")).toBe(false);
+    expect(entryOwnsClarificationThread({
+      kind: "ticket",
+      subjectKey: "ticket:jira:AIW-96",
+      ticketKey: "AIW-96",
+      ownerToken: "owner-successor",
+      continuation: { kind: "clarification", clarificationRequestId: "clar-1" },
+    })).toBe(false);
   });
 });
 

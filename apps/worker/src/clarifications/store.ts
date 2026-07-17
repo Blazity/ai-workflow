@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   and,
   asc,
@@ -7,6 +7,7 @@ import {
   inArray,
   isNotNull,
   isNull,
+  lt,
   ne,
   or,
   sql,
@@ -14,15 +15,27 @@ import {
 import type { BlockOutput, ClarificationRequest, ClarificationStatus } from "@shared/contracts";
 import type { Db } from "../db/client.js";
 import { activeRuns, clarificationRequests } from "../db/schema.js";
-import type { ClarificationSourceHead } from "../db/clarifications-schema.js";
+import type {
+  ClarificationRuntimeContext,
+  ClarificationSourceHead,
+} from "../db/clarifications-schema.js";
 import type { WorkspaceManifest } from "../sandbox/repo-workspace.js";
-import type { StepsRecord } from "../workflow-definition/interpreter.js";
-import type { WorkflowDefinitionVersionPin } from "../workflows/agent-input.js";
-import type { RunBudgetState } from "../workflows/run-budget.js";
+import type {
+  InterpreterControlState,
+  StepsRecord,
+} from "../workflow-definition/interpreter.js";
+import type {
+  ClarificationOriginEntry,
+  WorkflowDefinitionVersionPin,
+} from "../workflows/agent-input.js";
+import type { WorkflowBlockType } from "@shared/contracts";
+import type { RunBudgetFailure, RunBudgetState } from "../workflows/run-budget.js";
 
 export type ClarificationCheckpointState =
   | "preparing"
   | "ready"
+  | "consumed"
+  | "budget_exhausted"
   | "expired"
   | "orphaned";
 
@@ -36,7 +49,7 @@ export type ClarificationCleanupState =
 
 export interface ClarificationRow {
   id: string;
-  ticketKey: string;
+  ticketKey: string | null;
   runId: string;
   blockId: string | null;
   definitionId: number | null;
@@ -54,18 +67,25 @@ export interface ClarificationRow {
   ownerToken: string;
   waitingNodeId: string | null;
   definitionVersionPin: WorkflowDefinitionVersionPin | null;
+  originEntry: ClarificationOriginEntry;
+  originTriggerNodeId: string;
+  originTriggerType: WorkflowBlockType;
   triggerPayload: BlockOutput;
   priorSteps: StepsRecord;
+  interpreterState: InterpreterControlState;
   budgetState: RunBudgetState;
+  runtimeContext: ClarificationRuntimeContext;
   workspaceManifest: WorkspaceManifest | null;
   sourceHeads: ClarificationSourceHead[];
   checkpointState: ClarificationCheckpointState | null;
   expiresAt: Date | null;
   snapshotId: string | null;
   sourceSandboxId: string | null;
+  snapshotRequestedAt: Date | null;
   snapshotExpiresAt: Date | null;
   cleanupState: ClarificationCleanupState;
   cleanupError: string | null;
+  cleanupClaimedAt: Date | null;
   successorOwnerToken: string | null;
   successorReservedAt: Date | null;
   publishedAt: Date | null;
@@ -85,6 +105,7 @@ export class ClarificationStoreError extends Error {
 type ClarificationSelect = typeof clarificationRequests.$inferSelect;
 
 function mapRow(row: ClarificationSelect): ClarificationRow {
+  const fallbackTicketKey = row.ticketKey ?? row.subjectKey ?? row.id;
   return {
     id: row.id,
     ticketKey: row.ticketKey,
@@ -101,26 +122,42 @@ function mapRow(row: ClarificationSelect): ClarificationRow {
     answeredByLabel: row.answeredByLabel,
     answeredAt: row.answeredAt,
     dispatchedRunId: row.dispatchedRunId,
-    subjectKey: row.subjectKey ?? `ticket:jira:${row.ticketKey}`,
+    subjectKey: row.subjectKey ?? `ticket:jira:${fallbackTicketKey}`,
     ownerToken: row.ownerToken ?? `legacy:${row.runId}`,
     waitingNodeId: row.waitingNodeId ?? row.blockId ?? null,
     definitionVersionPin:
       row.definitionVersionPin ?? row.definitionVersion ?? null,
-    triggerPayload: row.triggerPayload ?? { status: "legacy", ticketKey: row.ticketKey },
+    originEntry: row.originEntry ?? { kind: "ticket", ticketKey: fallbackTicketKey },
+    originTriggerNodeId: row.originTriggerNodeId ?? row.waitingNodeId ?? row.blockId ?? "trigger",
+    originTriggerType: row.originTriggerType ?? "trigger_ticket_ai",
+    triggerPayload: row.triggerPayload ?? {
+      status: "legacy",
+      ...(row.ticketKey ? { ticketKey: row.ticketKey } : {}),
+    },
     priorSteps: row.priorSteps ?? {},
+    interpreterState: row.interpreterState ?? { attempts: {}, executions: 0 },
     budgetState: row.budgetState ?? emptyBudgetState(),
+    runtimeContext: row.runtimeContext ?? emptyRuntimeContext(),
     workspaceManifest: row.workspaceManifest ?? null,
     sourceHeads: row.sourceHeads ?? [],
     checkpointState: (row.checkpointState as ClarificationCheckpointState | null) ?? null,
     expiresAt: row.expiresAt ?? null,
     snapshotId: row.snapshotId ?? null,
     sourceSandboxId: row.sourceSandboxId ?? null,
+    snapshotRequestedAt: row.snapshotRequestedAt ?? null,
     snapshotExpiresAt: row.snapshotExpiresAt ?? null,
     cleanupState: row.cleanupState as ClarificationCleanupState,
     cleanupError: row.cleanupError ?? null,
+    cleanupClaimedAt: row.cleanupClaimedAt ?? null,
     successorOwnerToken: row.successorOwnerToken ?? null,
     successorReservedAt: row.successorReservedAt ?? null,
     publishedAt: row.publishedAt ?? null,
+  };
+}
+
+function emptyRuntimeContext(): ClarificationRuntimeContext {
+  return {
+    preSandboxAdditions: { research: [], implementation: [], review: [] },
   };
 }
 
@@ -138,18 +175,25 @@ function emptyBudgetState(): RunBudgetState {
 }
 
 export interface CreateClarificationCheckpointInput {
-  ticketKey: string;
+  ticketKey: string | null;
   subjectKey: string;
   ownerToken: string;
   runId: string;
   waitingNodeId: string;
   definitionId: number | null;
   definitionVersionPin: WorkflowDefinitionVersionPin;
+  originEntry: ClarificationOriginEntry;
+  originTriggerNodeId: string;
+  originTriggerType: WorkflowBlockType;
   triggerPayload: BlockOutput;
   priorSteps: StepsRecord;
+  interpreterState: InterpreterControlState;
   budgetState: RunBudgetState;
+  runtimeContext: ClarificationRuntimeContext;
   workspaceManifest: WorkspaceManifest | null;
   sourceHeads: ClarificationSourceHead[];
+  sourceSandboxId: string | null;
+  snapshotRequestedAt: Date | null;
   expiresAt: Date;
   questions: string[];
   suggestedAnswers?: string[] | null;
@@ -164,10 +208,13 @@ export async function createClarificationCheckpoint(
   db: Db,
   input: CreateClarificationCheckpointInput,
 ): Promise<ClarificationRow> {
+  const id = `clarification:${createHash("sha256")
+    .update(`${input.subjectKey}\0${input.runId}\0${input.waitingNodeId}`)
+    .digest("hex")}`;
   const rows = await db
     .insert(clarificationRequests)
     .values({
-      id: randomUUID(),
+      id,
       ticketKey: input.ticketKey,
       subjectKey: input.subjectKey,
       ownerToken: input.ownerToken,
@@ -180,11 +227,18 @@ export async function createClarificationCheckpoint(
           ? input.definitionVersionPin
           : null,
       definitionVersionPin: input.definitionVersionPin,
+      originEntry: input.originEntry,
+      originTriggerNodeId: input.originTriggerNodeId,
+      originTriggerType: input.originTriggerType,
       triggerPayload: input.triggerPayload,
       priorSteps: input.priorSteps,
+      interpreterState: input.interpreterState,
       budgetState: input.budgetState,
+      runtimeContext: input.runtimeContext,
       workspaceManifest: input.workspaceManifest,
       sourceHeads: input.sourceHeads,
+      sourceSandboxId: input.sourceSandboxId,
+      snapshotRequestedAt: input.snapshotRequestedAt,
       expiresAt: input.expiresAt,
       questions: input.questions,
       suggestedAnswers: input.suggestedAnswers ?? null,
@@ -192,8 +246,20 @@ export async function createClarificationCheckpoint(
       checkpointState: "preparing",
       cleanupState: "none",
     })
+    .onConflictDoNothing({ target: clarificationRequests.id })
     .returning();
-  return mapRow(rows[0]!);
+  if (rows[0]) return mapRow(rows[0]);
+  const existing = await getClarification(db, id);
+  if (
+    !existing ||
+    existing.subjectKey !== input.subjectKey ||
+    existing.ownerToken !== input.ownerToken ||
+    existing.runId !== input.runId ||
+    existing.waitingNodeId !== input.waitingNodeId
+  ) {
+    throw new ClarificationStoreError(409, "clarification_checkpoint_identity_conflict");
+  }
+  return existing;
 }
 
 export interface ClarificationSnapshotMetadata {
@@ -208,12 +274,32 @@ export async function completeClarificationCheckpoint(
   id: string,
   snapshot: ClarificationSnapshotMetadata | null,
 ): Promise<ClarificationRow> {
+  const current = await getClarification(db, id);
+  if (!current) {
+    throw new ClarificationStoreError(409, "clarification_checkpoint_not_preparing");
+  }
+  if (current.checkpointState === "ready") {
+    const sameSnapshot = snapshot
+      ? current.snapshotId === snapshot.snapshotId &&
+        current.sourceSandboxId === snapshot.sourceSandboxId &&
+        current.snapshotExpiresAt?.getTime() === snapshot.expiresAt.getTime()
+      : current.snapshotId === null;
+    if (sameSnapshot) return current;
+    throw new ClarificationStoreError(409, "clarification_checkpoint_snapshot_conflict");
+  }
+  if (
+    snapshot &&
+    current.sourceSandboxId !== null &&
+    current.sourceSandboxId !== snapshot.sourceSandboxId
+  ) {
+    throw new ClarificationStoreError(409, "clarification_checkpoint_source_conflict");
+  }
   const rows = await db
     .update(clarificationRequests)
     .set({
       checkpointState: "ready",
       snapshotId: snapshot?.snapshotId ?? null,
-      sourceSandboxId: snapshot?.sourceSandboxId ?? null,
+      sourceSandboxId: snapshot?.sourceSandboxId ?? current.sourceSandboxId,
       snapshotExpiresAt: snapshot?.expiresAt ?? null,
       cleanupState: snapshot ? "retained" : "none",
       cleanupError: null,
@@ -229,6 +315,36 @@ export async function completeClarificationCheckpoint(
     throw new ClarificationStoreError(409, "clarification_checkpoint_not_preparing");
   }
   return mapRow(rows[0]);
+}
+
+export async function updateClarificationCheckpointBudget(
+  db: Db,
+  id: string,
+  budgetState: RunBudgetState,
+  budgetFailure: RunBudgetFailure | null = null,
+): Promise<void> {
+  const rows = await db
+    .update(clarificationRequests)
+    .set({
+      budgetState,
+      ...(budgetFailure
+        ? {
+            status: "superseded",
+            checkpointState: "budget_exhausted",
+            cleanupState: cleanupStateAfterRetirement(),
+          }
+        : {}),
+    })
+    .where(
+      and(
+        eq(clarificationRequests.id, id),
+        inArray(clarificationRequests.checkpointState, ["preparing", "ready"]),
+      ),
+    )
+    .returning({ id: clarificationRequests.id });
+  if (!rows[0]) {
+    throw new ClarificationStoreError(409, "clarification_checkpoint_not_active");
+  }
 }
 
 /**
@@ -264,7 +380,7 @@ export async function publishClarificationCheckpoint(
     })
     .where(
       and(
-        eq(clarificationRequests.ticketKey, checkpoint.ticketKey),
+        eq(clarificationRequests.subjectKey, checkpoint.subjectKey),
         eq(clarificationRequests.status, "pending"),
         ne(clarificationRequests.id, checkpoint.id),
       ),
@@ -310,6 +426,7 @@ export async function createClarificationRequest(
     suggestedAnswers?: string[] | null;
   },
 ): Promise<ClarificationRow> {
+  const subjectKey = `ticket:jira:${input.ticketKey.trim().toUpperCase()}`;
   // neon-http (loaded inside the WDK step that runs this block) has no interactive
   // transactions. Supersede the current pending row, then insert the new one; the
   // partial unique index (one pending row per ticket) still guarantees a single
@@ -319,7 +436,7 @@ export async function createClarificationRequest(
     .set({ status: "superseded", cleanupState: cleanupStateAfterRetirement() })
     .where(
       and(
-        eq(clarificationRequests.ticketKey, input.ticketKey),
+        eq(clarificationRequests.subjectKey, subjectKey),
         eq(clarificationRequests.status, "pending"),
       ),
     );
@@ -328,6 +445,7 @@ export async function createClarificationRequest(
     .values({
       id: randomUUID(),
       ticketKey: input.ticketKey,
+      subjectKey,
       runId: input.runId,
       blockId: input.blockId ?? null,
       definitionId: input.definitionId ?? null,
@@ -372,6 +490,23 @@ export async function getPendingForTicket(
     .where(
       and(
         eq(clarificationRequests.ticketKey, ticketKey),
+        eq(clarificationRequests.status, "pending"),
+      ),
+    )
+    .limit(1);
+  return rows[0] ? mapRow(rows[0]) : null;
+}
+
+export async function getPendingForSubject(
+  db: Db,
+  subjectKey: string,
+): Promise<ClarificationRow | null> {
+  const rows = await db
+    .select()
+    .from(clarificationRequests)
+    .where(
+      and(
+        eq(clarificationRequests.subjectKey, subjectKey),
         eq(clarificationRequests.status, "pending"),
       ),
     )
@@ -550,10 +685,7 @@ export async function reconcileClarificationCheckpoints(
         inArray(clarificationRequests.checkpointState, ["preparing", "ready"]),
         or(
           eq(clarificationRequests.status, "pending"),
-          and(
-            eq(clarificationRequests.status, "answered"),
-            isNull(clarificationRequests.dispatchedRunId),
-          ),
+          eq(clarificationRequests.status, "answered"),
           and(
             eq(clarificationRequests.status, "superseded"),
             isNull(clarificationRequests.publishedAt),
@@ -573,6 +705,42 @@ export async function reconcileClarificationCheckpoints(
           row.snapshotExpiresAt.getTime() <= now.getTime()));
     const pending = row.status === "pending";
     const unpublished = row.status === "superseded" && row.publishedAt === null;
+    const hasExactSuccessor = owners.some(
+      (owner) =>
+        owner.subjectKey === row.subjectKey &&
+        owner.ownerToken === row.successorOwnerToken &&
+        owner.runId === row.dispatchedRunId &&
+        owner.state === "bound",
+    );
+    if (
+      row.status === "answered" &&
+      row.checkpointState === "ready" &&
+      row.dispatchedRunId !== null &&
+      !hasExactSuccessor
+    ) {
+      await db
+        .update(clarificationRequests)
+        .set({ dispatchedRunId: null })
+        .where(
+          and(
+            eq(clarificationRequests.id, row.id),
+            eq(clarificationRequests.status, "answered"),
+            eq(clarificationRequests.checkpointState, "ready"),
+            eq(clarificationRequests.dispatchedRunId, row.dispatchedRunId),
+          ),
+        );
+      continue;
+    }
+    if (!expired && unpublished && row.checkpointState === "ready") {
+      try {
+        await publishClarificationCheckpoint(db, row.id, now);
+      } catch (error) {
+        if (!(error instanceof ClarificationStoreError) || error.statusCode !== 409) {
+          throw error;
+        }
+      }
+      continue;
+    }
     const hasExactPredecessor = owners.some(
       (owner) =>
         owner.subjectKey === row.subjectKey &&
@@ -585,18 +753,7 @@ export async function reconcileClarificationCheckpoints(
       : (pending || unpublished) && !hasExactPredecessor
         ? "orphaned"
         : null;
-    if (!reason) {
-      if (unpublished && row.checkpointState === "ready") {
-        try {
-          await publishClarificationCheckpoint(db, row.id, now);
-        } catch (error) {
-          if (!(error instanceof ClarificationStoreError) || error.statusCode !== 409) {
-            throw error;
-          }
-        }
-      }
-      continue;
-    }
+    if (!reason) continue;
 
     const cleanupState = row.snapshotId ? "delete_pending" : "deleted";
     const changed = await db
@@ -628,7 +785,7 @@ export async function reconcileClarificationCheckpoints(
 export async function markClarificationSnapshotDeleted(db: Db, id: string): Promise<boolean> {
   const rows = await db
     .update(clarificationRequests)
-    .set({ cleanupState: "deleted", cleanupError: null })
+    .set({ cleanupState: "deleted", cleanupError: null, cleanupClaimedAt: null })
     .where(
       and(
         eq(clarificationRequests.id, id),
@@ -649,7 +806,7 @@ export async function markClarificationSnapshotDeletedBySnapshotId(
 ): Promise<boolean> {
   const rows = await db
     .update(clarificationRequests)
-    .set({ cleanupState: "deleted", cleanupError: null })
+    .set({ cleanupState: "deleted", cleanupError: null, cleanupClaimedAt: null })
     .where(
       and(
         eq(clarificationRequests.snapshotId, snapshotId),
@@ -671,7 +828,7 @@ export async function scheduleClarificationSnapshotCleanup(
 ): Promise<string | null> {
   const rows = await db
     .update(clarificationRequests)
-    .set({ cleanupState: "delete_pending", cleanupError: null })
+    .set({ cleanupState: "delete_pending", cleanupError: null, cleanupClaimedAt: null })
     .where(
       and(
         eq(clarificationRequests.id, id),
@@ -690,7 +847,9 @@ export interface ClarificationSnapshotCleanupCandidate {
 /** Failed deletes remain visible and are retried by the next reconciliation poll. */
 export async function listClarificationSnapshotCleanup(
   db: Db,
+  now = new Date(),
 ): Promise<ClarificationSnapshotCleanupCandidate[]> {
+  const staleBefore = new Date(now.getTime() - 5 * 60 * 1_000);
   const rows = await db
     .select({
       clarificationId: clarificationRequests.id,
@@ -699,7 +858,16 @@ export async function listClarificationSnapshotCleanup(
     .from(clarificationRequests)
     .where(
       and(
-        inArray(clarificationRequests.cleanupState, ["delete_pending", "failed"]),
+        or(
+          inArray(clarificationRequests.cleanupState, ["delete_pending", "failed"]),
+          and(
+            eq(clarificationRequests.cleanupState, "deleting"),
+            or(
+              isNull(clarificationRequests.cleanupClaimedAt),
+              lt(clarificationRequests.cleanupClaimedAt, staleBefore),
+            ),
+          ),
+        ),
         isNotNull(clarificationRequests.snapshotId),
       ),
     )
@@ -713,14 +881,25 @@ export async function listClarificationSnapshotCleanup(
 export async function claimClarificationSnapshotCleanup(
   db: Db,
   id: string,
+  now = new Date(),
 ): Promise<boolean> {
+  const staleBefore = new Date(now.getTime() - 5 * 60 * 1_000);
   const rows = await db
     .update(clarificationRequests)
-    .set({ cleanupState: "deleting", cleanupError: null })
+    .set({ cleanupState: "deleting", cleanupError: null, cleanupClaimedAt: now })
     .where(
       and(
         eq(clarificationRequests.id, id),
-        inArray(clarificationRequests.cleanupState, ["delete_pending", "failed"]),
+        or(
+          inArray(clarificationRequests.cleanupState, ["delete_pending", "failed"]),
+          and(
+            eq(clarificationRequests.cleanupState, "deleting"),
+            or(
+              isNull(clarificationRequests.cleanupClaimedAt),
+              lt(clarificationRequests.cleanupClaimedAt, staleBefore),
+            ),
+          ),
+        ),
         isNotNull(clarificationRequests.snapshotId),
       ),
     )
@@ -735,7 +914,11 @@ export async function markClarificationSnapshotCleanupFailed(
 ): Promise<void> {
   await db
     .update(clarificationRequests)
-    .set({ cleanupState: "failed", cleanupError: error.slice(0, 1_000) })
+    .set({
+      cleanupState: "failed",
+      cleanupError: error.slice(0, 1_000),
+      cleanupClaimedAt: null,
+    })
     .where(
       and(
         eq(clarificationRequests.id, id),
@@ -755,7 +938,11 @@ export async function markClarificationSnapshotCleanupFailedBySnapshotId(
 ): Promise<void> {
   await db
     .update(clarificationRequests)
-    .set({ cleanupState: "failed", cleanupError: error.slice(0, 1_000) })
+    .set({
+      cleanupState: "failed",
+      cleanupError: error.slice(0, 1_000),
+      cleanupClaimedAt: null,
+    })
     .where(
       and(
         eq(clarificationRequests.snapshotId, snapshotId),
@@ -809,29 +996,130 @@ function cleanupStateAfterRetirement() {
   return sql`case when ${clarificationRequests.snapshotId} is not null then 'delete_pending' else ${clarificationRequests.cleanupState} end`;
 }
 
-export async function setDispatchedRunId(db: Db, id: string, runId: string): Promise<void> {
-  await db
-    .update(clarificationRequests)
-    .set({ dispatchedRunId: runId })
-    .where(eq(clarificationRequests.id, id));
-}
-
 /**
- * Resume run's self-heal for a lost endpoint write. The answer endpoint records
- * the dispatched run best-effort; if that single write is lost the answered row
- * would stay dispatched_run_id=null forever and read as retryable, spawning a
- * duplicate resume run. The resume run itself calls this on pickup. Guarded on
- * dispatched_run_id IS NULL so it never overwrites an id the endpoint already
- * set. Returns whether a row was written.
+ * Records only the successor that won the exact active-run owner bind. A retry
+ * by that same winner is idempotently accepted so the enclosing Workflow step
+ * can finish winner-bound ancillary work after a process interruption.
  */
-export async function recordDispatchedRun(db: Db, id: string, runId: string): Promise<boolean> {
+export async function recordDispatchedRun(
+  db: Db,
+  id: string,
+  ownerToken: string,
+  runId: string,
+): Promise<boolean> {
   const rows = await db
     .update(clarificationRequests)
     .set({ dispatchedRunId: runId })
     .where(
       and(
         eq(clarificationRequests.id, id),
+        eq(clarificationRequests.status, "answered"),
+        eq(clarificationRequests.successorOwnerToken, ownerToken),
         isNull(clarificationRequests.dispatchedRunId),
+        sql`exists (
+          select 1 from ${activeRuns}
+          where ${activeRuns.subjectKey} = ${clarificationRequests.subjectKey}
+            and ${activeRuns.ownerToken} = ${ownerToken}
+            and ${activeRuns.runId} = ${runId}
+            and ${activeRuns.state} = 'bound'
+        )`,
+      ),
+    )
+    .returning({ id: clarificationRequests.id });
+  if (rows.length > 0) return true;
+
+  const existing = await db
+    .select({ id: clarificationRequests.id })
+    .from(clarificationRequests)
+    .where(
+      and(
+        eq(clarificationRequests.id, id),
+        eq(clarificationRequests.status, "answered"),
+        eq(clarificationRequests.successorOwnerToken, ownerToken),
+        eq(clarificationRequests.dispatchedRunId, runId),
+        sql`exists (
+          select 1 from ${activeRuns}
+          where ${activeRuns.subjectKey} = ${clarificationRequests.subjectKey}
+            and ${activeRuns.ownerToken} = ${ownerToken}
+            and ${activeRuns.runId} = ${runId}
+            and ${activeRuns.state} = 'bound'
+        )`,
+      ),
+    )
+    .limit(1);
+  return existing.length > 0;
+}
+
+/**
+ * Crosses the replay boundary after the waiting block has successfully
+ * consumed the human answer. Once consumed, later downstream failures must not
+ * clear the winner and rerun already-completed side effects.
+ */
+export async function markClarificationCheckpointConsumed(
+  db: Db,
+  id: string,
+  ownerToken: string,
+  runId: string,
+): Promise<boolean> {
+  const rows = await db
+    .update(clarificationRequests)
+    .set({
+      checkpointState: "consumed",
+      cleanupState: sql`case when ${clarificationRequests.snapshotId} is not null then 'delete_pending' else ${clarificationRequests.cleanupState} end`,
+      cleanupError: null,
+      cleanupClaimedAt: null,
+    })
+    .where(
+      and(
+        eq(clarificationRequests.id, id),
+        eq(clarificationRequests.status, "answered"),
+        eq(clarificationRequests.checkpointState, "ready"),
+        eq(clarificationRequests.successorOwnerToken, ownerToken),
+        eq(clarificationRequests.dispatchedRunId, runId),
+        sql`exists (
+          select 1 from ${activeRuns}
+          where ${activeRuns.subjectKey} = ${clarificationRequests.subjectKey}
+            and ${activeRuns.ownerToken} = ${ownerToken}
+            and ${activeRuns.runId} = ${runId}
+            and ${activeRuns.state} = 'bound'
+        )`,
+      ),
+    )
+    .returning({ id: clarificationRequests.id });
+  if (rows.length > 0) return true;
+
+  const existing = await db
+    .select({ id: clarificationRequests.id })
+    .from(clarificationRequests)
+    .where(
+      and(
+        eq(clarificationRequests.id, id),
+        eq(clarificationRequests.status, "answered"),
+        eq(clarificationRequests.checkpointState, "consumed"),
+        eq(clarificationRequests.successorOwnerToken, ownerToken),
+        eq(clarificationRequests.dispatchedRunId, runId),
+      ),
+    )
+    .limit(1);
+  return existing.length > 0;
+}
+
+export async function clearDispatchedRun(
+  db: Db,
+  id: string,
+  ownerToken: string,
+  runId: string,
+): Promise<boolean> {
+  const rows = await db
+    .update(clarificationRequests)
+    .set({ dispatchedRunId: null })
+    .where(
+      and(
+        eq(clarificationRequests.id, id),
+        eq(clarificationRequests.status, "answered"),
+        eq(clarificationRequests.checkpointState, "ready"),
+        eq(clarificationRequests.successorOwnerToken, ownerToken),
+        eq(clarificationRequests.dispatchedRunId, runId),
       ),
     )
     .returning({ id: clarificationRequests.id });

@@ -1,15 +1,24 @@
-import type { BlockOutput } from "@shared/contracts";
-import type { ClarificationSourceHead } from "../db/clarifications-schema.js";
+import type { BlockOutput, WorkflowBlockType } from "@shared/contracts";
+import type {
+  ClarificationRuntimeContext,
+  ClarificationSourceHead,
+} from "../db/clarifications-schema.js";
 import type { WorkspaceManifest } from "../sandbox/repo-workspace.js";
-import type { StepsRecord } from "../workflow-definition/interpreter.js";
-import type { WorkflowDefinitionVersionPin } from "./agent-input.js";
-import type { RunBudgetState } from "./run-budget.js";
+import type {
+  InterpreterControlState,
+  StepsRecord,
+} from "../workflow-definition/interpreter.js";
+import type {
+  ClarificationOriginEntry,
+  WorkflowDefinitionVersionPin,
+} from "./agent-input.js";
+import type { RunBudgetFailure, RunBudgetState } from "./run-budget.js";
 
 const CHECKPOINT_RETENTION_MS = 7 * 24 * 60 * 60 * 1_000;
 
 export interface SerializableClarificationCheckpoint {
   id: string;
-  ticketKey: string;
+  ticketKey: string | null;
   subjectKey: string;
   predecessorOwnerToken: string;
   predecessorRunId: string;
@@ -17,9 +26,14 @@ export interface SerializableClarificationCheckpoint {
   waitingNodeId: string;
   definitionId: number | null;
   definitionVersionPin: WorkflowDefinitionVersionPin;
+  originEntry: ClarificationOriginEntry;
+  originTriggerNodeId: string;
+  originTriggerType: WorkflowBlockType;
   triggerPayload: BlockOutput;
   priorSteps: StepsRecord;
+  interpreterState: InterpreterControlState;
   budgetState: RunBudgetState;
+  runtimeContext: ClarificationRuntimeContext;
   workspaceManifest: WorkspaceManifest | null;
   sourceHeads: ClarificationSourceHead[];
   questions: string[];
@@ -28,6 +42,7 @@ export interface SerializableClarificationCheckpoint {
   answeredAt: string | null;
   snapshotId: string | null;
   sourceSandboxId: string | null;
+  snapshotRequestedAt: string | null;
   snapshotExpiresAt: string | null;
   expiresAt: string;
 }
@@ -56,21 +71,27 @@ export async function captureWorkspaceManifestStep(
 captureWorkspaceManifestStep.maxRetries = 0;
 
 export async function createClarificationCheckpointStep(input: {
-  ticketKey: string;
+  ticketKey: string | null;
   subjectKey: string;
   ownerToken: string;
   runId: string;
   waitingNodeId: string;
   definitionId: number | null;
   definitionVersionPin: WorkflowDefinitionVersionPin;
+  originEntry: ClarificationOriginEntry;
+  originTriggerNodeId: string;
+  originTriggerType: WorkflowBlockType;
   triggerPayload: BlockOutput;
   priorSteps: StepsRecord;
+  interpreterState: InterpreterControlState;
   budgetState: RunBudgetState;
+  runtimeContext: ClarificationRuntimeContext;
   workspaceManifest: WorkspaceManifest | null;
+  sourceSandboxId: string | null;
   expiresAt: string;
   questions: string[];
   suggestedAnswers: string[] | null;
-}): Promise<string> {
+}): Promise<{ id: string; snapshotRequestedAt: string | null }> {
   "use step";
   const { getDb } = await import("../db/client.js");
   const { createClarificationCheckpoint } = await import("../clarifications/store.js");
@@ -82,11 +103,14 @@ export async function createClarificationCheckpointStep(input: {
     sourceHeads: input.workspaceManifest
       ? checkpointSourceHeads(input.workspaceManifest)
       : [],
+    snapshotRequestedAt: input.sourceSandboxId ? new Date() : null,
     expiresAt: new Date(input.expiresAt),
   });
-  return row.id;
+  return {
+    id: row.id,
+    snapshotRequestedAt: row.snapshotRequestedAt?.toISOString() ?? null,
+  };
 }
-createClarificationCheckpointStep.maxRetries = 0;
 
 export async function completeClarificationCheckpointStep(
   clarificationId: string,
@@ -105,7 +129,24 @@ export async function completeClarificationCheckpointStep(
     snapshot ? { ...snapshot, expiresAt: new Date(snapshot.expiresAt) } : null,
   );
 }
-completeClarificationCheckpointStep.maxRetries = 0;
+
+export async function updateClarificationCheckpointBudgetStep(
+  clarificationId: string,
+  budgetState: RunBudgetState,
+  budgetFailure: RunBudgetFailure | null = null,
+): Promise<void> {
+  "use step";
+  const { getDb } = await import("../db/client.js");
+  const { updateClarificationCheckpointBudget } = await import(
+    "../clarifications/store.js"
+  );
+  await updateClarificationCheckpointBudget(
+    getDb(),
+    clarificationId,
+    budgetState,
+    budgetFailure,
+  );
+}
 
 export async function publishClarificationCheckpointStep(
   clarificationId: string,
@@ -116,7 +157,6 @@ export async function publishClarificationCheckpointStep(
   const result = await publishClarificationCheckpoint(getDb(), clarificationId);
   return result.supersededSnapshots;
 }
-publishClarificationCheckpointStep.maxRetries = 0;
 
 export async function loadClarificationCheckpointStep(
   clarificationId: string,
@@ -170,9 +210,14 @@ export async function loadClarificationCheckpointStep(
     waitingNodeId: row.waitingNodeId,
     definitionId: row.definitionId,
     definitionVersionPin: row.definitionVersionPin,
+    originEntry: row.originEntry,
+    originTriggerNodeId: row.originTriggerNodeId,
+    originTriggerType: row.originTriggerType,
     triggerPayload: row.triggerPayload,
     priorSteps: row.priorSteps,
+    interpreterState: row.interpreterState,
     budgetState: row.budgetState,
+    runtimeContext: row.runtimeContext,
     workspaceManifest: row.workspaceManifest,
     sourceHeads: row.sourceHeads,
     questions: row.questions,
@@ -181,6 +226,7 @@ export async function loadClarificationCheckpointStep(
     answeredAt: row.answeredAt?.toISOString() ?? null,
     snapshotId: row.snapshotId,
     sourceSandboxId: row.sourceSandboxId,
+    snapshotRequestedAt: row.snapshotRequestedAt?.toISOString() ?? null,
     snapshotExpiresAt: row.snapshotExpiresAt?.toISOString() ?? null,
     expiresAt: row.expiresAt.toISOString(),
   };

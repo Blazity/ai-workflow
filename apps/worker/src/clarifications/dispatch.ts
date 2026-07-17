@@ -84,7 +84,7 @@ export async function dispatchClarificationAnswered(input: {
       subjectKey: checkpoint.subjectKey,
       ticketKey: checkpoint.ticketKey,
       ownerToken: successorOwnerToken,
-      kind: "ticket",
+      kind: checkpoint.ticketKey ? "ticket" : "pr_trigger",
     });
     if (!recreatedSuccessorReservation) {
       active = await runRegistry.get(checkpoint.subjectKey);
@@ -129,20 +129,22 @@ export async function dispatchClarificationAnswered(input: {
     }
   }
 
-  // Move first: reconciliation cancels a ticket run parked outside the AI
-  // column. If this throws, the answered row and successor reservation remain
-  // durable and the endpoint can retry from this exact boundary.
-  await issueTracker.moveTicket(checkpoint.ticketKey, aiColumnMoveTarget(env));
-  if (typeof issueTracker.updateLabels === "function") {
-    try {
-      await issueTracker.updateLabels(checkpoint.ticketKey, {
-        remove: [NEEDS_CLARIFICATION_LABEL],
-      });
-    } catch (error) {
-      logger.warn(
-        { ticketKey: checkpoint.ticketKey, error: (error as Error).message },
-        "clarification_answered_label_remove_failed",
-      );
+  if (checkpoint.ticketKey) {
+    // Move first: reconciliation cancels a ticket run parked outside the AI
+    // column. If this throws, the answered row and successor reservation remain
+    // durable and the endpoint can retry from this exact boundary.
+    await issueTracker.moveTicket(checkpoint.ticketKey, aiColumnMoveTarget(env));
+    if (typeof issueTracker.updateLabels === "function") {
+      try {
+        await issueTracker.updateLabels(checkpoint.ticketKey, {
+          remove: [NEEDS_CLARIFICATION_LABEL],
+        });
+      } catch (error) {
+        logger.warn(
+          { ticketKey: checkpoint.ticketKey, error: (error as Error).message },
+          "clarification_answered_label_remove_failed",
+        );
+      }
     }
   }
 

@@ -622,7 +622,7 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
     ),
     defaults: { maxAttempts: 3, onExhaust: "fail" },
     inputs: {},
-    output: statusOutput({ attempt: numberType() }, ["attempt"]),
+    output: statusOutput({ attempt: numberType(), answer: stringType() }, ["attempt"]),
     statusVariants: ["ok", "exhausted"],
   },
   terminate: {

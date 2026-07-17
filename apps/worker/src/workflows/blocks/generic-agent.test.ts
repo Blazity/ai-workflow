@@ -126,6 +126,30 @@ describe("generic_agent execute", () => {
     expect(result).toEqual({ kind: "next", output: { status: "ok", body: "planned" } });
   });
 
+  it("adds the clarification answer to the rerun prompt", async () => {
+    mocks.collectPhase.mockResolvedValue({
+      raw: "",
+      structured: JSON.stringify({ status: "ok", body: "continued", questions: null, error: null }),
+    });
+    const ctx = makeCtx({
+      sandboxId: null,
+      agentSandboxIds: { claude: "scratch-1" },
+    } as never);
+
+    await (execute as any)(
+      makeNode("generic_agent", { prompt: "Choose a cache", workspaceMode: "none" }),
+      {},
+      ctx,
+      {},
+      { clarificationAnswer: "Use Redis" },
+    );
+
+    const inputWrite = mocks.writeFiles.mock.calls
+      .flatMap(([files]) => files)
+      .find((file: { path: string }) => file.path.endsWith("requirements.md"));
+    expect(inputWrite.content.toString("utf8")).toContain("Human clarification answer:\nUse Redis");
+  });
+
   it("provisions agent-only scratch on demand in none mode", async () => {
     mocks.collectPhase.mockResolvedValue({
       raw: "",

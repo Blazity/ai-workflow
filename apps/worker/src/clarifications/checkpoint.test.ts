@@ -7,35 +7,17 @@ import {
 } from "./checkpoint.js";
 
 describe("clarification checkpoint payload safety", () => {
-  it("preserves binding outputs while redacting credential-shaped fields", () => {
-    const persisted = checkpointStepsForPersistence({
-      trigger: { output: { status: "fired", ticketKey: "AIW-96" } },
-      prepare: {
-        output: {
-          status: "ready",
-          sandboxId: "sbx-source",
-          nested: {
-            API_KEY: "secret",
-            authorization: "Bearer secret",
-            accessToken: "secret",
-            clientSecret: "secret",
-            value: "safe",
+  it("fails visibly instead of silently changing a secret-shaped binding output", () => {
+    expect(() =>
+      checkpointStepsForPersistence({
+        source: {
+          output: {
+            status: "ok",
+            continuation_token: "opaque-value",
           },
         },
-      },
-    });
-
-    expect(persisted.prepare.output).toEqual({
-      status: "ready",
-      sandboxId: "sbx-source",
-      nested: {
-        API_KEY: "[redacted]",
-        authorization: "[redacted]",
-        accessToken: "[redacted]",
-        clientSecret: "[redacted]",
-        value: "safe",
-      },
-    });
+      }),
+    ).toThrow(/cannot persist secret-like output.*source\.output\.continuation_token/i);
   });
 
   it("fails visibly instead of truncating outputs needed by downstream bindings", () => {

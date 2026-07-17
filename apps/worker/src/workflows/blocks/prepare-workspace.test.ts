@@ -132,6 +132,36 @@ describe("prepare_workspace execute", () => {
     expectOutputConformsToRegistry("prepare_workspace", result.output);
   });
 
+  it("passes the clarification answer back into pre-sandbox repository selection", async () => {
+    mocks.runPreSandboxPhase.mockResolvedValue({
+      status: "continue",
+      promptAdditions: { research: [], implementation: [], review: [] },
+      selectedRepositories: [repo],
+    });
+    mocks.blockFetchPrContextsStep.mockResolvedValue(contextsFor(repo));
+
+    await (execute as any)(
+      makeNode("prepare_workspace"),
+      {},
+      makeCtx({ sandboxId: null }),
+      {},
+      { clarificationAnswer: "Use github:acme/api" },
+    );
+
+    expect(mocks.runPreSandboxPhase).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ticket: expect.objectContaining({
+          comments: expect.arrayContaining([
+            expect.objectContaining({
+              author: "Human clarification",
+              body: "Use github:acme/api",
+            }),
+          ]),
+        }),
+      }),
+    );
+  });
+
   it("marks conflicted repositories with a mergeBase", async () => {
     mocks.runPreSandboxPhase.mockResolvedValue({
       status: "continue",

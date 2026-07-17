@@ -80,6 +80,12 @@ export interface ClarificationResume {
   waitingNodeId: string;
   clarificationAnswer: string;
   priorSteps: StepsRecord;
+  controlState?: InterpreterControlState;
+}
+
+export interface InterpreterControlState {
+  attempts: Record<string, number>;
+  executions: number;
 }
 
 /** Side-effect callbacks the engine invokes as it walks; all persistence lives here. */
@@ -91,6 +97,7 @@ export interface ExecuteGraphHooks {
     nodeId: string,
     suggestedAnswers?: string[],
     steps?: StepsRecord,
+    controlState?: InterpreterControlState,
   ): Promise<void>;
   failureExit(phase: string, reason: string, nodeId: string): Promise<void>;
   terminate(
@@ -100,6 +107,7 @@ export interface ExecuteGraphHooks {
     },
     nodeId: string,
     steps?: StepsRecord,
+    controlState?: InterpreterControlState,
   ): Promise<void>;
 }
 
@@ -143,9 +151,15 @@ export async function executeGraph(opts: {
   const steps: StepsRecord = resume
     ? { ...resume.priorSteps, [entryTriggerId]: { output: triggerOutput } }
     : { [entryTriggerId]: { output: triggerOutput } };
-  const attempts = new Map<string, number>();
-  let executions = 0;
+  const attempts = new Map<string, number>(
+    Object.entries(resume?.controlState?.attempts ?? {}),
+  );
+  let executions = resume?.controlState?.executions ?? 0;
   let resumeAnswerPending = resume !== undefined;
+  const controlState = (): InterpreterControlState => ({
+    attempts: Object.fromEntries(attempts),
+    executions,
+  });
 
   const entryPort = defaultPortOf(entry);
   let current = resume?.waitingNodeId ??
@@ -170,13 +184,34 @@ export async function executeGraph(opts: {
       return { outcome: "stopped", steps };
     }
 
+    const resumingWaitingNode =
+      resumeAnswerPending && id === resume?.waitingNodeId;
+
+    if (
+      resumingWaitingNode &&
+      node.type === "loop" &&
+      node.params.onExhaust === "human"
+    ) {
+      const maxAttempts = Number(node.params.maxAttempts);
+      const attempt = attempts.get(id) ?? maxAttempts + 1;
+      await hooks.onBlockStart(id, attempt);
+      const output: BlockOutput = {
+        status: "exhausted",
+        attempt: maxAttempts,
+        answer: resume.clarificationAnswer,
+      };
+      steps[id] = { output };
+      await hooks.onBlockFinish(id, { status: "ok", attempt, output });
+      resumeAnswerPending = false;
+      current = graph.outEdges.get(id)?.get("exhausted");
+      continue;
+    }
+
     const attempt = (attempts.get(id) ?? 0) + 1;
     attempts.set(id, attempt);
     await hooks.onBlockStart(id, attempt);
 
     const category = BLOCK_TYPE_SPECS[node.type].category;
-    const resumingWaitingNode =
-      resumeAnswerPending && id === resume?.waitingNodeId;
 
     if (
       resumingWaitingNode &&
@@ -255,7 +290,7 @@ export async function executeGraph(opts: {
           const label = node.name ?? id;
           const message = `Loop "${label}" exhausted after ${maxAttempts} attempts. How should we proceed?`;
           await hooks.onBlockFinish(id, { status: "warn", attempt, error: message, output });
-          await hooks.clarificationExit([message], id, undefined, steps);
+          await hooks.clarificationExit([message], id, undefined, steps, controlState());
           return { outcome: "stopped", steps };
         }
 
@@ -283,7 +318,7 @@ export async function executeGraph(opts: {
         const finishStatus =
           terminalStatus === "failed" ? "fail" : terminalStatus === "waiting_for_human" ? "warn" : "ok";
         await hooks.onBlockFinish(id, { status: finishStatus, attempt, output });
-        await hooks.terminate({ terminalStatus, postComment }, id, steps);
+        await hooks.terminate({ terminalStatus, postComment }, id, steps, controlState());
         return { outcome: "stopped", steps };
       }
     }
@@ -338,7 +373,13 @@ export async function executeGraph(opts: {
       steps[id] = { output };
       const error = truncate(result.questions.join("; "));
       await hooks.onBlockFinish(id, { status: "warn", attempt, output, error });
-      await hooks.clarificationExit(result.questions, id, result.suggestedAnswers, steps);
+      await hooks.clarificationExit(
+        result.questions,
+        id,
+        result.suggestedAnswers,
+        steps,
+        controlState(),
+      );
       return { outcome: "stopped", steps };
     }
 

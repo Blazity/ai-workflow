@@ -53,8 +53,12 @@ function makeClarification(overrides: Partial<ClarificationRow> = {}): Clarifica
     definitionId: 7,
     definitionVersion: 4,
     definitionVersionPin: 4,
+    originEntry: { kind: "ticket", ticketKey: "AWT-1" },
+    originTriggerNodeId: "trigger",
+    originTriggerType: "trigger_ticket_ai",
     triggerPayload: { status: "fired", ticketKey: "AWT-1" },
     priorSteps: {},
+    interpreterState: { attempts: {}, executions: 0 },
     budgetState: {
       activeElapsedMs: 0,
       tokensInput: 0,
@@ -66,14 +70,19 @@ function makeClarification(overrides: Partial<ClarificationRow> = {}): Clarifica
       costKnown: true,
     },
     workspaceManifest: null,
+    runtimeContext: {
+      preSandboxAdditions: { research: [], implementation: [], review: [] },
+    },
     sourceHeads: [],
     checkpointState: "ready",
     expiresAt: new Date("2099-01-01T00:00:00.000Z"),
     snapshotId: null,
     sourceSandboxId: null,
+    snapshotRequestedAt: null,
     snapshotExpiresAt: null,
     cleanupState: "none",
     cleanupError: null,
+    cleanupClaimedAt: null,
     successorOwnerToken: null,
     successorReservedAt: null,
     publishedAt: new Date(),
@@ -148,6 +157,55 @@ describe("dispatchClarificationAnswered", () => {
         definitionVersion: 4,
         clarificationRequestId: "clar-1",
       },
+    ]);
+  });
+
+  it("starts a ticketless scope:any continuation without Jira mutations", async () => {
+    const clarification = makeClarification({
+      ticketKey: null,
+      subjectKey: "pr:github:acme/api:42",
+      originEntry: {
+        kind: "pr_trigger",
+        triggerType: "trigger_pr_review",
+        definitionId: 7,
+        definitionVersion: 4,
+        scope: "any",
+        pr: {
+          provider: "github",
+          repoPath: "acme/api",
+          prNumber: 42,
+          prUrl: "https://github.com/acme/api/pull/42",
+          headRef: "feature/42",
+          headSha: "deadbeef",
+          baseRef: "main",
+          title: "Review me",
+          author: "alice",
+          isDraft: false,
+        },
+      },
+      originTriggerNodeId: "review-trigger",
+      originTriggerType: "trigger_pr_review",
+    });
+    stores.answerClarification.mockResolvedValue({
+      ...clarification,
+      status: "answered",
+      answer: "Apply the review suggestion",
+      successorOwnerToken: "owner-successor",
+    });
+    const issueTracker = makeIssueTracker();
+
+    await expect(dispatch({ clarification, issueTracker })).resolves.toEqual({
+      status: "started",
+      runId: "run-x",
+    });
+    expect(issueTracker.moveTicket).not.toHaveBeenCalled();
+    expect(issueTracker.updateLabels).not.toHaveBeenCalled();
+    expect(wf.start).toHaveBeenCalledWith("agentWorkflow_sentinel", [
+      expect.objectContaining({
+        kind: "clarification_answered",
+        subjectKey: "pr:github:acme/api:42",
+        ticketKey: null,
+      }),
     ]);
   });
 

@@ -3,7 +3,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   listUndispatched: vi.fn(),
   dispatchAnswered: vi.fn(),
-  setDispatchedRunId: vi.fn(),
   resolveAwaitingRun: vi.fn(),
   listCleanup: vi.fn(),
   claimCleanup: vi.fn(),
@@ -14,7 +13,6 @@ const mocks = vi.hoisted(() => ({
 vi.mock("./store.js", () => ({
   listUndispatchedAnsweredClarifications: (...args: unknown[]) =>
     mocks.listUndispatched(...args),
-  setDispatchedRunId: (...args: unknown[]) => mocks.setDispatchedRunId(...args),
   listClarificationSnapshotCleanup: (...args: unknown[]) => mocks.listCleanup(...args),
   claimClarificationSnapshotCleanup: (...args: unknown[]) => mocks.claimCleanup(...args),
   markClarificationSnapshotCleanupFailed: (...args: unknown[]) =>
@@ -53,7 +51,6 @@ describe("clarification reconciliation", () => {
     mocks.listCleanup.mockResolvedValue([]);
     mocks.claimCleanup.mockResolvedValue(true);
     mocks.markCleanupFailed.mockResolvedValue(undefined);
-    mocks.setDispatchedRunId.mockResolvedValue(undefined);
     mocks.resolveAwaitingRun.mockResolvedValue(true);
     mocks.start.mockResolvedValue({ runId: "cleanup-run" });
   });
@@ -85,8 +82,7 @@ describe("clarification reconciliation", () => {
         isRetry: true,
       }),
     );
-    expect(mocks.setDispatchedRunId).toHaveBeenCalledWith(db, "clar-1", "run-next");
-    expect(mocks.resolveAwaitingRun).toHaveBeenCalledWith(db, "run-parked");
+    expect(mocks.resolveAwaitingRun).not.toHaveBeenCalled();
   });
 
   it("starts a durable workflow that owns cleanup claiming internally", async () => {

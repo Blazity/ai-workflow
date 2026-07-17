@@ -26,6 +26,11 @@ export type WorkflowDefinitionVersionPin =
   | number
   | typeof BUILTIN_FALLBACK_DEFINITION_VERSION;
 
+export interface ClarificationContinuationMarker {
+  kind: "clarification";
+  clarificationRequestId: string;
+}
+
 /**
  * Entry describing what started an agent workflow run. "ticket" is the classic
  * ticket-column trigger, "pr_trigger" covers the PR webhook triggers,
@@ -39,6 +44,7 @@ export type AgentWorkflowInput =
       subjectKey: string;
       ticketKey: string;
       ownerToken: string;
+      continuation?: ClarificationContinuationMarker;
       definitionId?: number;
       definitionVersion?: WorkflowDefinitionVersionPin;
     }
@@ -48,6 +54,7 @@ export type AgentWorkflowInput =
       subjectKey: string;
       ticketKey?: string;
       ownerToken: string;
+      continuation?: ClarificationContinuationMarker;
       definitionId: number;
       definitionVersion: number;
       scope: "workflow_owned" | "any";
@@ -56,6 +63,12 @@ export type AgentWorkflowInput =
         headSha: string;
         triggerType: "trigger_pr_created" | "trigger_pr_checks_failed" | "trigger_pr_review";
       };
+      /** Provider delivery identity belongs to dispatcher bookkeeping only. */
+      delivery?: {
+        provider: "github" | "gitlab";
+        producer: string;
+        deliveryId: string;
+      };
       pr: PrTriggerPayload;
     }
   | {
@@ -63,6 +76,7 @@ export type AgentWorkflowInput =
       subjectKey: string;
       ticketKey: string;
       ownerToken: string;
+      continuation?: ClarificationContinuationMarker;
       definitionId: number;
       /** Pinned definition version that produced the approved plan. When set, the
        *  run loads exactly that version instead of the definition's head. */
@@ -73,10 +87,92 @@ export type AgentWorkflowInput =
   | {
       kind: "clarification_answered";
       subjectKey: string;
-      ticketKey: string;
+      ticketKey: string | null;
       ownerToken: string;
       definitionId?: number;
       definitionVersion?: WorkflowDefinitionVersionPin;
       /** Clarification request whose answer resumes work on the ticket. */
       clarificationRequestId: string;
     };
+
+export type ClarificationOriginEntry =
+  | { kind: "ticket"; ticketKey: string; definitionId?: number; definitionVersion?: WorkflowDefinitionVersionPin }
+  | {
+      kind: "pr_trigger";
+      triggerType: "trigger_pr_created" | "trigger_pr_checks_failed" | "trigger_pr_review";
+      ticketKey?: string;
+      definitionId: number;
+      definitionVersion: number;
+      scope: "workflow_owned" | "any";
+      pr: PrTriggerPayload;
+    }
+  | {
+      kind: "plan_approved";
+      ticketKey: string;
+      definitionId: number;
+      definitionVersion?: number;
+      approvedPlan: { markdown: string; assumptions?: string[] };
+      approval: { approvalRequestId: string; approver: string; approvedAt: string };
+    };
+
+export type ClarificationRuntimeEntry = Exclude<
+  AgentWorkflowInput,
+  { kind: "clarification_answered" }
+>;
+
+/** Strip dispatcher and predecessor identity while preserving block-facing trigger facts. */
+export function normalizeClarificationOrigin(
+  entry: ClarificationRuntimeEntry,
+): ClarificationOriginEntry {
+  if (entry.kind === "ticket") {
+    return {
+      kind: "ticket",
+      ticketKey: entry.ticketKey,
+      ...(entry.definitionId !== undefined ? { definitionId: entry.definitionId } : {}),
+      ...(entry.definitionVersion !== undefined
+        ? { definitionVersion: entry.definitionVersion }
+        : {}),
+    };
+  }
+  if (entry.kind === "pr_trigger") {
+    return {
+      kind: "pr_trigger",
+      triggerType: entry.triggerType,
+      ...(entry.ticketKey !== undefined ? { ticketKey: entry.ticketKey } : {}),
+      definitionId: entry.definitionId,
+      definitionVersion: entry.definitionVersion,
+      scope: entry.scope,
+      pr: entry.pr,
+    };
+  }
+  return {
+    kind: "plan_approved",
+    ticketKey: entry.ticketKey,
+    definitionId: entry.definitionId,
+    ...(entry.definitionVersion !== undefined
+      ? { definitionVersion: entry.definitionVersion }
+      : {}),
+    approvedPlan: entry.approvedPlan,
+    approval: entry.approval,
+  };
+}
+
+/** Rehydrate original trigger semantics under the bound successor identity. */
+export function restoreClarificationOrigin(
+  origin: ClarificationOriginEntry,
+  identity: {
+    subjectKey: string;
+    ownerToken: string;
+    clarificationRequestId: string;
+  },
+): ClarificationRuntimeEntry {
+  return {
+    ...origin,
+    subjectKey: identity.subjectKey,
+    ownerToken: identity.ownerToken,
+    continuation: {
+      kind: "clarification",
+      clarificationRequestId: identity.clarificationRequestId,
+    },
+  } as ClarificationRuntimeEntry;
+}

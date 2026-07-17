@@ -1,5 +1,6 @@
 import type { WorkflowDefinitionNode } from "@shared/contracts";
 import type {
+  BlockExecutionContext,
   BlockExecutionResult,
   StepsRecord,
 } from "../../workflow-definition/interpreter.js";
@@ -116,6 +117,7 @@ export type BlockExecuteFn = (
   steps: StepsRecord,
   ctx: EngineCtx,
   resolvedInputs?: Record<string, unknown>,
+  execution?: BlockExecutionContext,
 ) => Promise<BlockExecutionResult>;
 
 /**

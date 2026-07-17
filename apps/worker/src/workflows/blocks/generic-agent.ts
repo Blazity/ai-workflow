@@ -143,6 +143,7 @@ export const execute: BlockExecuteFn = async (
   _steps,
   ctx,
   resolvedInputs = {},
+  execution,
 ): Promise<BlockExecutionResult> => {
   const customSchema =
     typeof block.params.outputSchema === "string" && block.params.outputSchema.trim().length > 0
@@ -184,12 +185,15 @@ export const execute: BlockExecuteFn = async (
           : "could not provision an agent-only sandbox for generic_agent",
     };
   }
-  const prompt =
+  const basePrompt =
     typeof resolvedInputs.prompt === "string"
       ? resolvedInputs.prompt
       : typeof block.params.prompt === "string"
         ? block.params.prompt
         : "";
+  const prompt = execution?.clarificationAnswer
+    ? `${basePrompt}\n\nHuman clarification answer:\n${execution.clarificationAnswer}`
+    : basePrompt;
   if (prompt.length === 0) {
     return { kind: "failed", output: { status: "failed" }, reason: "generic_agent requires a prompt" };
   }

@@ -3,14 +3,12 @@ import type { IssueTrackerAdapter } from "../adapters/issue-tracker/types.js";
 import type { RunRegistryAdapter } from "../adapters/run-registry/types.js";
 import type { Db } from "../db/client.js";
 import { logger } from "../lib/logger.js";
-import { resolveAwaitingRun } from "../lib/telemetry/run-telemetry.js";
 import { clarificationSnapshotCleanupWorkflow } from "../workflows/clarification-snapshot-cleanup.js";
 import { dispatchClarificationAnswered } from "./dispatch.js";
 import {
   listClarificationSnapshotCleanup,
   listUndispatchedAnsweredClarifications,
   markClarificationSnapshotCleanupFailed,
-  setDispatchedRunId,
 } from "./store.js";
 
 export async function recoverUndispatchedClarificationSuccessors(input: {
@@ -36,27 +34,6 @@ export async function recoverUndispatchedClarificationSuccessors(input: {
       });
       if (result.status !== "started") continue;
 
-      await setDispatchedRunId(input.db, checkpoint.id, result.runId).catch(
-        (error) =>
-          logger.warn(
-            {
-              clarificationId: checkpoint.id,
-              runId: result.runId,
-              error: (error as Error).message,
-            },
-            "clarification_reconciliation_dispatch_record_failed",
-          ),
-      );
-      await resolveAwaitingRun(input.db, checkpoint.runId).catch((error) =>
-        logger.warn(
-          {
-            clarificationId: checkpoint.id,
-            runId: checkpoint.runId,
-            error: (error as Error).message,
-          },
-          "clarification_reconciliation_awaiting_resolution_failed",
-        ),
-      );
       recovered++;
     } catch (error) {
       logger.warn(

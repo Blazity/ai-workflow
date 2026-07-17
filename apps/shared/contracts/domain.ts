@@ -478,7 +478,7 @@ export type ClarificationStatus = "pending" | "answered" | "superseded";
  *  the dashboard. */
 export interface ClarificationRequest {
   id: string;
-  ticketKey: string;
+  ticketKey: string | null;
   /** Run that asked the questions. */
   runId: string;
   /** Graph node that raised the questions; null for the built-in default graph. */

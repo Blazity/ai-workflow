@@ -181,7 +181,10 @@ const CURRENT_EXECUTOR_OUTPUTS: Record<WorkflowBlockType, BlockOutput[]> = {
     { status: "ok", path: "true", reason: "steps.checks.output.ok" },
     { status: "failed", error: "Missing step output" },
   ],
-  loop: [{ status: "ok", attempt: 1 }, { status: "exhausted", attempt: 3 }],
+  loop: [
+    { status: "ok", attempt: 1 },
+    { status: "exhausted", attempt: 3, answer: "Continue downstream" },
+  ],
   terminate: [
     { status: "waiting_for_human" },
     { status: "failed" },

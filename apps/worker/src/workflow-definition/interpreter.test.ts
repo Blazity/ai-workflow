@@ -493,6 +493,103 @@ describe("executeGraph loop", () => {
     expect(finishStatuses(rec, "loop")).toEqual(["ok", "ok", "warn"]);
     expect(rec.failures).toEqual([]);
   });
+
+  it("resumes an exhausted human loop on its exhausted edge without replaying its body", async () => {
+    const graph = loopGraph({
+      maxAttempts: 2,
+      onExhaust: "human",
+      wireExhausted: true,
+      loopName: "Retry loop",
+    });
+    const first = makeRecorder();
+    const firstCalls: string[] = [];
+    let checkpoint:
+      | { steps: StepsRecord; controlState: { attempts: Record<string, number>; executions: number } }
+      | undefined;
+    (first.hooks as any).clarificationExit = async (
+      _questions: string[],
+      _nodeId: string,
+      _suggestions: string[] | undefined,
+      steps: StepsRecord,
+      controlState: { attempts: Record<string, number>; executions: number },
+    ) => {
+      checkpoint = { steps, controlState };
+    };
+
+    await executeGraph({
+      graph,
+      entryTriggerId: "trig",
+      triggerOutput: { status: "ok" },
+      executeBlock: async (block) => {
+        firstCalls.push(block.id);
+        return { kind: "next", output: { status: "ok" } };
+      },
+      hooks: first.hooks,
+      maxTotalExecutions: 20,
+    });
+    expect(firstCalls.filter((id) => id === "body")).toHaveLength(2);
+    expect(checkpoint).toBeDefined();
+
+    const resumed = makeRecorder();
+    const resumedCalls: string[] = [];
+    const result = await executeGraph({
+      graph,
+      entryTriggerId: "trig",
+      triggerOutput: { status: "ok" },
+      resume: {
+        waitingNodeId: "loop",
+        clarificationAnswer: "Continue downstream",
+        priorSteps: checkpoint!.steps,
+        controlState: checkpoint!.controlState,
+      } as never,
+      executeBlock: async (block) => {
+        resumedCalls.push(block.id);
+        return { kind: "next", output: { status: "ok" } };
+      },
+      hooks: resumed.hooks,
+      maxTotalExecutions: 20,
+    });
+
+    expect(result.outcome).toBe("completed");
+    expect(resumedCalls).toEqual(["end"]);
+    expect(result.steps.loop.output).toMatchObject({
+      status: "exhausted",
+      attempt: 2,
+      answer: "Continue downstream",
+    });
+  });
+
+  it("carries the total execution cap across a clarification continuation", async () => {
+    const graph = graphFrom(
+      [
+        node("trig", "trigger_ticket_ai"),
+        node("waiting", "implementation_agent"),
+        node("after", "open_pr"),
+      ],
+      [
+        { from: "trig", to: "waiting" },
+        { from: "waiting", to: "after" },
+      ],
+    );
+    const rec = makeRecorder();
+    const result = await executeGraph({
+      graph,
+      entryTriggerId: "trig",
+      triggerOutput: { status: "ok" },
+      resume: {
+        waitingNodeId: "waiting",
+        clarificationAnswer: "go",
+        priorSteps: { trig: { output: { status: "ok" } } },
+        controlState: { attempts: { waiting: 1 }, executions: 2 },
+      } as never,
+      executeBlock: async () => ({ kind: "next", output: { status: "ok" } }),
+      hooks: rec.hooks,
+      maxTotalExecutions: 2,
+    });
+
+    expect(result.outcome).toBe("stopped");
+    expect(rec.failures[0]?.reason).toMatch(/maximum of 2 block executions/);
+  });
 });
 
 describe("executeGraph failure port override", () => {

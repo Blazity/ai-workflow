@@ -1,13 +1,13 @@
 import { createApp, createRouter, toWebHandler } from "h3";
+import { eq } from "drizzle-orm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Db } from "../../../db/client.js";
-import { member, organization, user } from "../../../db/schema.js";
+import { clarificationRequests, member, organization, user } from "../../../db/schema.js";
 import { createTestDb } from "../../../db/test-db.js";
 import {
   answerClarification,
   createClarificationRequest,
   getClarification,
-  setDispatchedRunId,
 } from "../../../clarifications/store.js";
 import { IssueTrackerNotFoundError } from "../../../adapters/issue-tracker/types.js";
 
@@ -73,6 +73,13 @@ async function seedPending(ticketKey = "AWT-1") {
   });
 }
 
+async function forceDispatchedRun(id: string, runId: string) {
+  await db
+    .update(clarificationRequests)
+    .set({ dispatchedRunId: runId })
+    .where(eq(clarificationRequests.id, id));
+}
+
 /** Happy-path dispatch stand-in: runs the real answer CAS (as the real dispatch
  *  would under the claim), then reports a started resume run. */
 function dispatchStarts(runId = "run-x") {
@@ -131,6 +138,34 @@ describe("POST /api/v1/clarifications/:id/answer", () => {
     expect(res.status).toBe(200);
   });
 
+  it("answers a ticketless scope:any clarification without calling Jira", async () => {
+    await db.insert(clarificationRequests).values({
+      id: "clar-ticketless",
+      ticketKey: null,
+      subjectKey: "pr:github:acme/api:42",
+      ownerToken: "owner-parked",
+      runId: "run-ticketless",
+      questions: ["Which fix should be applied?"],
+      status: "pending",
+      checkpointState: "ready",
+      expiresAt: new Date("2099-01-01T00:00:00.000Z"),
+      cleanupState: "none",
+    });
+    dispatchStarts("run-ticketless-resume");
+
+    const res = await answer("clar-ticketless");
+    expect(res.status).toBe(200);
+    expect(mocks.fetchTicket).not.toHaveBeenCalled();
+    expect(mocks.dispatchClarificationAnswered).toHaveBeenCalledWith(
+      expect.objectContaining({
+        clarification: expect.objectContaining({
+          ticketKey: null,
+          subjectKey: "pr:github:acme/api:42",
+        }),
+      }),
+    );
+  });
+
   it("404s on an unknown clarification", async () => {
     const res = await answer("missing");
     expect(res.status).toBe(404);
@@ -153,7 +188,7 @@ describe("POST /api/v1/clarifications/:id/answer", () => {
   it("409s when already answered with a dispatched run", async () => {
     const row = await seedPending("AWT-1");
     await answerClarification(db, { id: row.id, answer: "prior", actor: { id: "u", label: "U" } });
-    await setDispatchedRunId(db, row.id, "run-prior");
+    await forceDispatchedRun(row.id, "run-prior");
     const res = await answer(row.id);
     expect(res.status).toBe(409);
     expect(mocks.dispatchClarificationAnswered).not.toHaveBeenCalled();
@@ -171,7 +206,7 @@ describe("POST /api/v1/clarifications/:id/answer", () => {
     expect(mocks.dispatchClarificationAnswered).toHaveBeenCalledWith(
       expect.objectContaining({ isRetry: true }),
     );
-    expect((await getClarification(db, row.id))?.dispatchedRunId).toBe("run-retry");
+    expect((await getClarification(db, row.id))?.dispatchedRunId).toBeNull();
   });
 
   it("410s, supersedes the row, and flips the asking run off awaiting when the ticket is gone", async () => {
@@ -196,7 +231,7 @@ describe("POST /api/v1/clarifications/:id/answer", () => {
     expect(mocks.dispatchClarificationAnswered).not.toHaveBeenCalled();
   });
 
-  it("answers, dispatches, records the run and resolves the awaiting run on the happy path", async () => {
+  it("answers and starts a candidate but leaves winner acknowledgement to the bound workflow", async () => {
     const row = await seedPending("AWT-1");
     dispatchStarts("run-x");
 
@@ -205,10 +240,10 @@ describe("POST /api/v1/clarifications/:id/answer", () => {
     const body = await res.json();
     expect(body.runId).toBe("run-x");
     expect(body.clarification.status).toBe("answered");
-    expect(body.clarification.dispatchedRunId).toBe("run-x");
+    expect(body.clarification.dispatchedRunId).toBeNull();
     expect(body.clarification.answer).toBe("Use Next.js");
-    expect(mocks.resolveAwaitingRun).toHaveBeenCalledWith(expect.anything(), "run-asked");
+    expect(mocks.resolveAwaitingRun).not.toHaveBeenCalled();
     const stored = await getClarification(db, row.id);
-    expect(stored?.dispatchedRunId).toBe("run-x");
+    expect(stored?.dispatchedRunId).toBeNull();
   });
 });

@@ -7,6 +7,7 @@ import type { WorkspaceRepositoryInput } from "../../sandbox/repo-workspace.js";
 import { resolveBlockAgent } from "../../workflow-definition/resolve-agent.js";
 import { blockFetchPrContextsStep, blockPrTriggerRepositoriesStep } from "./fetch-pr-context.js";
 import type { BlockExecuteFn, BlockExecutionResult } from "./types.js";
+import type { BlockExecutionContext } from "../../workflow-definition/interpreter.js";
 
 export const paramsSchema = z.object({}).strict();
 
@@ -201,7 +202,10 @@ function requiredKindsForDefinition(
  * ctx.preSandboxAdditions, and ctx.arthur.taskId (see the EngineCtx mutation
  * contract).
  */
-export async function ensureWorkspace(ctx: Parameters<BlockExecuteFn>[2]): Promise<BlockExecutionResult> {
+export async function ensureWorkspace(
+  ctx: Parameters<BlockExecuteFn>[2],
+  execution?: BlockExecutionContext,
+): Promise<BlockExecutionResult> {
   if (ctx.sandboxId) {
     try {
       // Re-assert the durable child record when an existing code workspace is reused.
@@ -242,7 +246,12 @@ export async function ensureWorkspace(ctx: Parameters<BlockExecuteFn>[2]): Promi
           title: ctx.ticket.title,
           description: ctx.ticket.description,
           acceptanceCriteria: ctx.ticket.acceptanceCriteria,
-          comments: ctx.ticket.comments,
+          comments: execution?.clarificationAnswer
+            ? [
+                ...ctx.ticket.comments,
+                { author: "Human clarification", body: execution.clarificationAnswer },
+              ]
+            : ctx.ticket.comments,
           labels: ctx.ticket.labels,
         },
         run: { branchName: ctx.branchName },
@@ -339,4 +348,5 @@ export async function ensureWorkspace(ctx: Parameters<BlockExecuteFn>[2]): Promi
 
 /** Explicit Prepare is the author-controlled spelling of the same idempotent
  * operation specialized code agents invoke implicitly. */
-export const execute: BlockExecuteFn = async (_block, _steps, ctx) => ensureWorkspace(ctx);
+export const execute: BlockExecuteFn = async (_block, _steps, ctx, _inputs, execution) =>
+  ensureWorkspace(ctx, execution);

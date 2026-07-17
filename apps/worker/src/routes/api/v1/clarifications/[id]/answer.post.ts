@@ -11,7 +11,6 @@ import {
   ClarificationStoreError,
   getClarification,
   serializeClarification,
-  setDispatchedRunId,
   supersedeClarification,
   supersedePendingForTicket,
   type ClarificationRow,
@@ -61,12 +60,13 @@ export default defineEventHandler(async (event): Promise<ClarificationAnswerResp
       : { id: actor.userId, label };
     const adapters = createStepAdapters();
 
-    // Cheap existence check before reserving anything: a deleted ticket can
-    // never resume, so supersede the pending row and tell the caller it is gone.
-    try {
-      await adapters.issueTracker.fetchTicket(row.ticketKey);
-    } catch (err) {
-      if (err instanceof IssueTrackerNotFoundError) {
+    // Ticketless scope:any continuations have no Jira lifecycle. Ticket-backed
+    // checkpoints still fail early when their ticket has been deleted.
+    if (row.ticketKey) {
+      try {
+        await adapters.issueTracker.fetchTicket(row.ticketKey);
+      } catch (err) {
+        if (!(err instanceof IssueTrackerNotFoundError)) throw err;
         await supersedePendingForTicket(db, row.ticketKey).catch(() => {});
         // Also supersede THIS row by id: on the retry path it is already
         // "answered" (not pending), so the ticket-wide pending supersede above
@@ -78,7 +78,6 @@ export default defineEventHandler(async (event): Promise<ClarificationAnswerResp
         await resolveAwaitingRun(db, row.runId).catch(() => {});
         throw createError({ statusCode: 410, statusMessage: "ticket_gone" });
       }
-      throw err;
     }
 
     const result = await dispatchClarificationAnswered({
@@ -96,11 +95,6 @@ export default defineEventHandler(async (event): Promise<ClarificationAnswerResp
       throw createError({ statusCode: 409, statusMessage: "already_answered" });
     }
 
-    // Ordered best-effort writes after a started run: record the resume run on
-    // the clarification, then flip the parked asking run awaiting -> success.
-    await setDispatchedRunId(db, id, result.runId).catch(() => {});
-    await resolveAwaitingRun(db, row.runId).catch(() => {});
-
     // Best-effort read-back for the response body: the resume run is already
     // started, so a read hiccup must not turn the response into an error. The
     // fallback serializes what this handler knows to be true (answered, with
@@ -113,7 +107,7 @@ export default defineEventHandler(async (event): Promise<ClarificationAnswerResp
       answeredById: answerer.id,
       answeredByLabel: answerer.label,
       answeredAt: row.answeredAt ?? new Date(),
-      dispatchedRunId: result.runId,
+      dispatchedRunId: null,
     };
     return { clarification: serializeClarification(final ?? fallback), runId: result.runId };
   } catch (error) {

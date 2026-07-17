@@ -12,14 +12,15 @@ const SECRET_KEY =
  * replaying predecessors is never used as a fallback.
  */
 export function checkpointStepsForPersistence(steps: StepsRecord): StepsRecord {
-  const safe = redactSecrets(steps) as StepsRecord;
-  const bytes = Buffer.byteLength(JSON.stringify(safe), "utf8");
+  assertNoSecretLikeKeys(steps);
+  const serialized = JSON.stringify(steps);
+  const bytes = Buffer.byteLength(serialized, "utf8");
   if (bytes > MAX_CHECKPOINT_STEPS_BYTES) {
     throw new Error(
       `clarification checkpoint outputs exceed ${MAX_CHECKPOINT_STEPS_BYTES} bytes; reduce block output size before retrying`,
     );
   }
-  return safe;
+  return JSON.parse(serialized) as StepsRecord;
 }
 
 /** Replace structured references to the stopped source, never arbitrary prose. */
@@ -58,17 +59,22 @@ export function researchPlanFromCheckpoint(steps: StepsRecord): string {
   return "";
 }
 
-function redactSecrets(value: unknown, key = ""): unknown {
+function assertNoSecretLikeKeys(value: unknown, path: string[] = []): void {
+  const key = path[path.length - 1] ?? "";
   const normalizedKey = key.replace(/([a-z0-9])([A-Z])/g, "$1_$2");
-  if (SECRET_KEY.test(normalizedKey)) return "[redacted]";
-  if (Array.isArray(value)) return value.map((item) => redactSecrets(item));
-  if (value === null || typeof value !== "object") return value;
-
-  const out: Record<string, unknown> = {};
-  for (const [childKey, child] of Object.entries(value as Record<string, unknown>)) {
-    out[childKey] = redactSecrets(child, childKey);
+  if (SECRET_KEY.test(normalizedKey)) {
+    throw new Error(
+      `clarification checkpoint cannot persist secret-like output at ${path.join(".")}; remove the sensitive value before requesting human input`,
+    );
   }
-  return out;
+  if (Array.isArray(value)) {
+    value.forEach((item, index) => assertNoSecretLikeKeys(item, [...path, String(index)]));
+    return;
+  }
+  if (value === null || typeof value !== "object") return;
+  for (const [childKey, child] of Object.entries(value as Record<string, unknown>)) {
+    assertNoSecretLikeKeys(child, [...path, childKey]);
+  }
 }
 
 function rewriteSandboxReferences(

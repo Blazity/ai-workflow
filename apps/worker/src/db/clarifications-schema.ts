@@ -8,16 +8,27 @@ import {
   timestamp,
   uniqueIndex,
 } from "drizzle-orm/pg-core";
-import type { BlockOutput } from "@shared/contracts";
-import type { StepsRecord } from "../workflow-definition/interpreter.js";
-import type { WorkflowDefinitionVersionPin } from "../workflows/agent-input.js";
+import type { BlockOutput, WorkflowBlockType } from "@shared/contracts";
+import type {
+  InterpreterControlState,
+  StepsRecord,
+} from "../workflow-definition/interpreter.js";
+import type {
+  ClarificationOriginEntry,
+  WorkflowDefinitionVersionPin,
+} from "../workflows/agent-input.js";
 import type { RunBudgetState } from "../workflows/run-budget.js";
 import type { WorkspaceManifest } from "../sandbox/repo-workspace.js";
+import type { PreSandboxPromptAdditionsByTarget } from "../pre-sandbox/types.js";
 
 export interface ClarificationSourceHead {
   provider: "github" | "gitlab";
   repoPath: string;
   sha: string;
+}
+
+export interface ClarificationRuntimeContext {
+  preSandboxAdditions: PreSandboxPromptAdditionsByTarget;
 }
 
 /**
@@ -26,7 +37,7 @@ export interface ClarificationSourceHead {
  * "awaiting" and inserts a pending row; the dashboard lists pending rows and
  * posts an answer, which dispatches a fresh clarification_answered resume run.
  *
- * The partial unique index keeps at most one pending row per ticket, and it is
+ * The partial unique index keeps at most one pending row per subject, and it is
  * the only thing that can: this deployment uses the neon-http driver, which has
  * no interactive transactions, so createClarificationRequest supersedes the
  * current pending row and then inserts the new one as two separate statements.
@@ -38,7 +49,7 @@ export const clarificationRequests = pgTable(
   "clarification_requests",
   {
     id: text("id").primaryKey(),
-    ticketKey: text("ticket_key").notNull(),
+    ticketKey: text("ticket_key"),
     /** Run that asked the questions. */
     runId: text("run_id").notNull(),
     /** Graph node that raised the questions; null for the built-in default graph. */
@@ -70,9 +81,14 @@ export const clarificationRequests = pgTable(
     waitingNodeId: text("waiting_node_id"),
     /** Includes the built-in fallback sentinel, which cannot fit the legacy integer column. */
     definitionVersionPin: jsonb("definition_version_pin").$type<WorkflowDefinitionVersionPin>(),
+    originEntry: jsonb("origin_entry").$type<ClarificationOriginEntry>(),
+    originTriggerNodeId: text("origin_trigger_node_id"),
+    originTriggerType: text("origin_trigger_type").$type<WorkflowBlockType>(),
     triggerPayload: jsonb("trigger_payload").$type<BlockOutput>(),
     priorSteps: jsonb("prior_steps").$type<StepsRecord>(),
+    interpreterState: jsonb("interpreter_state").$type<InterpreterControlState>(),
     budgetState: jsonb("budget_state").$type<RunBudgetState>(),
+    runtimeContext: jsonb("runtime_context").$type<ClarificationRuntimeContext>(),
     workspaceManifest: jsonb("workspace_manifest").$type<WorkspaceManifest>(),
     sourceHeads: jsonb("source_heads").$type<ClarificationSourceHead[]>(),
     /** preparing -> ready -> expired/orphaned; status remains the public answer lifecycle. */
@@ -80,9 +96,11 @@ export const clarificationRequests = pgTable(
     expiresAt: timestamp("expires_at", { withTimezone: true }),
     snapshotId: text("snapshot_id"),
     sourceSandboxId: text("source_sandbox_id"),
+    snapshotRequestedAt: timestamp("snapshot_requested_at", { withTimezone: true }),
     snapshotExpiresAt: timestamp("snapshot_expires_at", { withTimezone: true }),
     cleanupState: text("cleanup_state").notNull().default("none"),
     cleanupError: text("cleanup_error"),
+    cleanupClaimedAt: timestamp("cleanup_claimed_at", { withTimezone: true }),
     successorOwnerToken: text("successor_owner_token"),
     successorReservedAt: timestamp("successor_reserved_at", { withTimezone: true }),
     publishedAt: timestamp("published_at", { withTimezone: true }),
@@ -93,8 +111,8 @@ export const clarificationRequests = pgTable(
     index("clarification_requests_run_id_idx").on(t.runId),
     index("clarification_requests_checkpoint_expiry_idx").on(t.checkpointState, t.expiresAt),
     index("clarification_requests_cleanup_idx").on(t.cleanupState),
-    uniqueIndex("clarification_requests_pending_ticket_idx")
-      .on(t.ticketKey)
+    uniqueIndex("clarification_requests_pending_subject_idx")
+      .on(t.subjectKey)
       .where(sql`${t.status} = 'pending'`),
   ],
 );
