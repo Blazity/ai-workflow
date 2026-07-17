@@ -23,7 +23,11 @@ import { resolveBlockAgent, resolveRunDefaultKind } from "../workflow-definition
 import { resolveTicketMoveTarget } from "./ticket-move-target.js";
 import type { AgentWorkflowInput } from "./agent-input.js";
 import type { BlockExecuteFn, EngineCtx } from "./blocks/types.js";
-import { execute as executePrepareWorkspace } from "./blocks/prepare-workspace.js";
+import {
+  ensureWorkspace,
+  execute as executePrepareWorkspace,
+} from "./blocks/prepare-workspace.js";
+import { ensureAgentSandbox } from "./blocks/agent-sandbox.js";
 import { execute as executeFinalizeWorkspace } from "./blocks/finalize-workspace.js";
 import { execute as executeFixAgent } from "./blocks/fix-agent.js";
 import { execute as executeGenericAgent } from "./blocks/generic-agent.js";
@@ -123,6 +127,26 @@ export function planningClarificationResult(
     questions,
     ...(suggestions ? { suggestedAnswers: suggestions } : {}),
   };
+}
+
+export async function ensurePlanningAgentSandboxForBlock(
+  ctx: EngineCtx,
+  kind: AgentKind,
+  model: string,
+): Promise<
+  | { kind: "ready"; sandboxId: string }
+  | Extract<BlockExecutionResult, { kind: "failed" }>
+> {
+  try {
+    return { kind: "ready", sandboxId: await ensureAgentSandbox(ctx, kind, model) };
+  } catch (error) {
+    return {
+      kind: "failed",
+      output: { status: "failed" },
+      reason: error instanceof Error ? error.message : String(error),
+      phase: "research",
+    };
+  }
 }
 
 /** Entry kinds that own the ticket's main work thread and may run the re-pickup
@@ -1010,6 +1034,7 @@ export async function agentWorkflow(input: string | AgentWorkflowInput) {
         : {}),
       branchName,
       sandboxId: null,
+      agentSandboxIds: {},
       sandboxIds: new Set<string>(),
       selectedRepositories: [],
       repositoryContexts: [],
@@ -1171,6 +1196,23 @@ export async function agentWorkflow(input: string | AgentWorkflowInput) {
         reason: `no workspace: connect prepare_workspace before ${type}`,
       });
 
+      const attachmentSandboxIds = new Set<string>();
+      const writeAttachmentsOnce = async (sandboxId: string): Promise<void> => {
+        if (attachmentSandboxIds.has(sandboxId)) return;
+        await writeAttachments(sandboxId, downloadedAttachments);
+        attachmentSandboxIds.add(sandboxId);
+      };
+      const ensureCodeWorkspace = async (): Promise<
+        | { kind: "ready"; sandboxId: string }
+        | { kind: "exit"; result: BlockExecutionResult }
+      > => {
+        const result = await ensureWorkspace(ctx);
+        if (result.kind !== "next") return { kind: "exit", result };
+        if (!ctx.sandboxId) return { kind: "exit", result: noWorkspace("prepare_workspace") };
+        await writeAttachmentsOnce(ctx.sandboxId);
+        return { kind: "ready", sandboxId: ctx.sandboxId };
+      };
+
       const executeBlock: BlockExecutor = async (
         node,
         steps,
@@ -1181,17 +1223,19 @@ export async function agentWorkflow(input: string | AgentWorkflowInput) {
           const result = await blockExecute(node, steps, ctx, resolvedInputs);
           if (node.type === "prepare_workspace" && result.kind === "next" && ctx.sandboxId) {
             activeModel ??= defaultModel;
-            await writeAttachments(ctx.sandboxId, downloadedAttachments);
+            await writeAttachmentsOnce(ctx.sandboxId);
           }
           return result;
         }
 
         switch (node.type) {
           case "planning_agent": {
-            if (!ctx.sandboxId) return noWorkspace(node.type);
-            const sandboxId = ctx.sandboxId;
             const researchPhase = phaseKey("Research", state.attempt);
             const { kind, model } = resolveAgent(node.params);
+            const provisioned = await ensurePlanningAgentSandboxForBlock(ctx, kind, model);
+            if (provisioned.kind === "failed") return provisioned;
+            const sandboxId = provisioned.sandboxId;
+            await writeAttachmentsOnce(sandboxId);
             phaseModels[researchPhase] = model;
             await setCommitGuardStep(sandboxId, kind, false);
 
@@ -1249,8 +1293,9 @@ export async function agentWorkflow(input: string | AgentWorkflowInput) {
           }
 
           case "implementation_agent": {
-            if (!ctx.sandboxId) return noWorkspace(node.type);
-            const sandboxId = ctx.sandboxId;
+            const workspace = await ensureCodeWorkspace();
+            if (workspace.kind === "exit") return workspace.result;
+            const sandboxId = workspace.sandboxId;
             const implPhase = phaseKey("Impl", state.attempt);
             const { kind, model } = resolveAgent(node.params);
             phaseModels[implPhase] = model;
@@ -1310,8 +1355,9 @@ export async function agentWorkflow(input: string | AgentWorkflowInput) {
           }
 
           case "review_agent": {
-            if (!ctx.sandboxId) return noWorkspace(node.type);
-            const sandboxId = ctx.sandboxId;
+            const workspace = await ensureCodeWorkspace();
+            if (workspace.kind === "exit") return workspace.result;
+            const sandboxId = workspace.sandboxId;
             const reviewPhase = phaseKey("Review", state.attempt);
             const { kind, model } = resolveAgent(node.params);
             phaseModels[reviewPhase] = model;

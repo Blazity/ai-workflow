@@ -282,7 +282,7 @@ describe("generic_agent execute output branches", () => {
     if (result.kind === "failed") expect(result.reason).toBe("X".repeat(500));
   });
 
-  it("omits the body key when ok output has an empty body", async () => {
+  it("keeps the registry-required body key when ok output is empty", async () => {
     mocks.collectPhase.mockResolvedValue({
       raw: "",
       structured: JSON.stringify({ status: "ok", body: "", questions: null, error: null }),
@@ -290,7 +290,7 @@ describe("generic_agent execute output branches", () => {
 
     const result = await genericExecute(makeNode("generic_agent", { prompt: "p" }), {}, makeCtx());
 
-    expect(result).toEqual({ kind: "next", output: { status: "ok" } });
+    expect(result).toEqual({ kind: "next", output: { status: "ok", body: "" } });
   });
 
   it("truncates an ok body longer than 4000 chars", async () => {
@@ -305,17 +305,16 @@ describe("generic_agent execute output branches", () => {
     else throw new Error("expected next");
   });
 
-  it("fails a custom schema when the output parses to literal null", async () => {
+  it("preserves literal null as valid custom-schema JSON output", async () => {
     mocks.collectPhase.mockResolvedValue({ raw: "", structured: "null" });
 
     const result = await genericExecute(
-      makeNode("generic_agent", { prompt: "p", outputSchema: '{"type":"object"}' }),
+      makeNode("generic_agent", { prompt: "p", outputSchema: '{"type":"null"}' }),
       {},
       makeCtx(),
     );
 
-    expect(result.kind).toBe("failed");
-    if (result.kind === "failed") expect(result.reason).toBe("agent output did not match the requested schema");
+    expect(result).toEqual({ kind: "next", output: { status: "ok", data: null } });
   });
 
   it("fails when a default-schema object has the wrong shape", async () => {

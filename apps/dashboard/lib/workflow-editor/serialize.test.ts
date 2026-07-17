@@ -67,6 +67,23 @@ test("round-trips call_llm provider through serialization without loss", () => {
   ]);
 });
 
+test("round-trips Generic Agent workspace mode without loss", () => {
+  assert.equal(BLOCK_PARAM_KEYS.generic_agent.includes("workspaceMode"), true);
+  const nodes = flowNodes([
+    {
+      id: "agent",
+      type: "generic_agent",
+      x: 0,
+      y: 0,
+      params: { prompt: "Summarize", workspaceMode: "none" },
+    },
+  ]);
+
+  const out = serializeWorkflowDefinition(nodes, []);
+
+  assert.deepEqual(out.nodes[0].params, { prompt: "Summarize", workspaceMode: "none" });
+});
+
 test("preserves a non-empty exact input binding map", () => {
   const nodes = flowNodes([
     {

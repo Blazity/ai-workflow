@@ -55,12 +55,16 @@ export interface EngineCtx {
   branchName: string;
   /** Null until prepare_workspace provisions a sandbox. */
   sandboxId: string | null;
+  /** Agent-only scratch sandboxes used by planning and workspace-free Generic
+   * blocks. They never contain checked-out repositories and therefore do not
+   * satisfy modular workspace consumers. */
+  agentSandboxIds: Partial<Record<AgentKind, string>>;
   /**
-   * Every sandbox id provisioned during the run, in creation order. A
-   * prepare_workspace inside a loop provisions a fresh sandbox per iteration and
-   * overwrites `sandboxId`; the engine tears down all of these on exit so the
-   * earlier ones do not leak. prepare_workspace adds each id here as it sets
-   * `sandboxId`.
+   * Authoritative in-memory terminal-cleanup set for every code and agent-only
+   * scratch sandbox provisioned by this run. The single-slot run registry is
+   * only the primary external-cancellation target; it cannot replace this set.
+   * This collection is not durable yet, so external cancel/reconcile needs the
+   * AIW-99 multi-sandbox persistence follow-up.
    */
   sandboxIds: Set<string>;
   /** Empty until prepare_workspace selects repositories. */

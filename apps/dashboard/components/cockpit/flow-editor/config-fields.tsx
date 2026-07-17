@@ -419,6 +419,18 @@ export function ConfigFields({
       return (
         <>
           <AgentProviderModel node={node} options={options} canEdit={canEdit} onChange={onChange} />
+          <ConfigField label="Workspace access">
+            <Listbox
+              options={[
+                { value: "none", label: "No code workspace" },
+                { value: "read_write", label: "Attached code workspace (read/write)" },
+              ]}
+              value={str(node.params.workspaceMode) || "none"}
+              disabled={!canEdit}
+              ariaLabel="Workspace access"
+              onChange={(v) => onChange("params.workspaceMode", v)}
+            />
+          </ConfigField>
           <ConfigField label="Prompt">
             <TextArea value={str(node.params.prompt)} disabled={!canEdit} onChange={(v) => onChange("params.prompt", v)} />
           </ConfigField>
@@ -445,7 +457,7 @@ export function ConfigFields({
         </>
       );
     case "prepare_workspace":
-      return <ConfigNote>Provisions a fresh sandbox and checks out the ticket branch.</ConfigNote>;
+      return <ConfigNote>Creates or reuses a managed code workspace for modular blocks.</ConfigNote>;
     case "finalize_workspace":
       return (
         <ConfigNote>

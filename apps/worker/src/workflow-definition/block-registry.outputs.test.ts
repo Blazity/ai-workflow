@@ -75,8 +75,22 @@ const CURRENT_EXECUTOR_OUTPUTS: Record<WorkflowBlockType, BlockOutput[]> = {
   ],
   review_agent: [{ status: "ok", feedback: "Looks good" }, { status: "failed" }],
   fix_agent: [
-    { status: "implemented", summary: "Fixed the review" },
-    { status: "needs_human_input", questions: ["Resolve which side?"] },
+    {
+      status: "fixed",
+      workspaceId: "sb_1",
+      commits: [{ provider: "github", repoPath: "Blazity/ai-workflow", sha: "abc123" }],
+      resolvedConflicts: [],
+      unresolvedConflicts: [],
+      summary: "Fixed the review",
+    },
+    {
+      status: "needs_human_input",
+      workspaceId: "sb_1",
+      commits: [],
+      resolvedConflicts: [],
+      unresolvedConflicts: [],
+      questions: ["Resolve which side?"],
+    },
     { status: "failed" },
   ],
   generic_agent: [

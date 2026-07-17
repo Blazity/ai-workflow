@@ -70,6 +70,17 @@ async function blockPrepareWorkspaceEnsureArthurTaskStep(
 }
 blockPrepareWorkspaceEnsureArthurTaskStep.maxRetries = 0;
 
+/** Ensure all sandboxes created by the run share its Arthur task when tracing
+ * is configured, including repository-free Planning/Generic sandboxes. */
+export async function ensureArthurTask(
+  ctx: Parameters<BlockExecuteFn>[2],
+): Promise<string | null> {
+  if (ctx.arthur.taskId) return ctx.arthur.taskId;
+  const taskId = await blockPrepareWorkspaceEnsureArthurTaskStep(ctx.ticket.identifier);
+  ctx.arthur.taskId = taskId;
+  return taskId;
+}
+
 async function blockPrepareWorkspaceProvisionStep(
   branchName: string,
   selectedRepositories: WorkspaceRepositoryInput[],
@@ -146,8 +157,7 @@ async function blockPrepareWorkspaceRegisterSandboxStep(
   await runRegistry.registerSandbox(ticketIdentifier, sandboxId);
 }
 
-const AGENT_BLOCK_TYPES = new Set<string>([
-  "planning_agent",
+const CODE_WORKSPACE_AGENT_BLOCK_TYPES = new Set<string>([
   "implementation_agent",
   "review_agent",
   "fix_agent",
@@ -161,7 +171,8 @@ function requiredKindsForDefinition(
 ): AgentKind[] {
   const kinds: AgentKind[] = [defaultKind];
   for (const node of nodes) {
-    if (!AGENT_BLOCK_TYPES.has(node.type)) continue;
+    if (!CODE_WORKSPACE_AGENT_BLOCK_TYPES.has(node.type)) continue;
+    if (node.type === "generic_agent" && node.params.workspaceMode === "none") continue;
     const resolved = resolveBlockAgent(node.params, defaultKind, defaults);
     if (!kinds.includes(resolved.kind)) kinds.push(resolved.kind);
   }
@@ -177,7 +188,33 @@ function requiredKindsForDefinition(
  * ctx.preSandboxAdditions, and ctx.arthur.taskId (see the EngineCtx mutation
  * contract).
  */
-export const execute: BlockExecuteFn = async (_block, _steps, ctx): Promise<BlockExecutionResult> => {
+export async function ensureWorkspace(ctx: Parameters<BlockExecuteFn>[2]): Promise<BlockExecutionResult> {
+  if (ctx.sandboxId) {
+    try {
+      // Scratch sandboxes share a run but the registry has one cancellation
+      // target. Re-assert the primary code workspace whenever it is reused.
+      await blockPrepareWorkspaceRegisterSandboxStep(ctx.ticket.identifier, ctx.sandboxId);
+      const repositories = ctx.selectedRepositories.map(
+        (repo) => `${repo.provider}:${repo.repoPath}`,
+      );
+      return {
+        kind: "next",
+        output: {
+          status: "ok",
+          sandboxId: ctx.sandboxId,
+          repositories,
+          workspace: { id: ctx.sandboxId, repositories },
+        },
+      };
+    } catch (err) {
+      return {
+        kind: "failed",
+        output: { status: "failed" },
+        reason: err instanceof Error ? err.message : String(err),
+      };
+    }
+  }
+
   try {
     let selected: SelectedRepository[];
     if (ctx.entry.kind === "pr_trigger") {
@@ -236,10 +273,7 @@ export const execute: BlockExecuteFn = async (_block, _steps, ctx): Promise<Bloc
       }),
     );
 
-    const arthurTaskId = await blockPrepareWorkspaceEnsureArthurTaskStep(
-      ctx.ticket.identifier,
-    );
-    ctx.arthur.taskId = arthurTaskId;
+    const arthurTaskId = await ensureArthurTask(ctx);
 
     const requiredKinds = requiredKindsForDefinition(
       ctx.definitionNodes,
@@ -286,4 +320,8 @@ export const execute: BlockExecuteFn = async (_block, _steps, ctx): Promise<Bloc
       reason: err instanceof Error ? err.message : String(err),
     };
   }
-};
+}
+
+/** Explicit Prepare is the author-controlled spelling of the same idempotent
+ * operation specialized code agents invoke implicitly. */
+export const execute: BlockExecuteFn = async (_block, _steps, ctx) => ensureWorkspace(ctx);

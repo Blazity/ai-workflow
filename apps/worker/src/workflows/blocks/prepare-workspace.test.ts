@@ -156,30 +156,66 @@ describe("prepare_workspace execute", () => {
     expect(kinds).toContain("codex");
   });
 
-  it("accumulates every provisioned sandbox on ctx.sandboxIds across loop iterations, and teardown covers all", async () => {
-    // A prepare_workspace inside a loop runs once per iteration, provisioning a
-    // fresh sandbox each time and overwriting ctx.sandboxId. All of them must be
-    // tracked so the run tears them all down, not just the last.
+  it("does not install planning or workspace-free Generic providers into the code workspace", async () => {
+    mocks.runPreSandboxPhase.mockResolvedValue({
+      status: "continue",
+      selectedRepositories: [repo],
+    });
+    mocks.blockFetchPrContextsStep.mockResolvedValue(contextsFor(repo));
+    const ctx = makeCtx({
+      sandboxId: null,
+      definitionNodes: [
+        makeNode("planning_agent", { provider: "codex" }, "plan-1"),
+        makeNode(
+          "generic_agent",
+          { provider: "codex", prompt: "Summarize", workspaceMode: "none" },
+          "generic-1",
+        ),
+        makeNode("implementation_agent", { provider: "claude" }, "impl-1"),
+      ],
+    });
+
+    await execute(makeNode("prepare_workspace"), {}, ctx);
+
+    expect(mocks.createAgentAdapter).not.toHaveBeenCalledWith("codex");
+    expect(mocks.createAgentAdapter).toHaveBeenCalledWith("claude");
+  });
+
+  it("is idempotent and reuses an already attached workspace", async () => {
     mocks.runPreSandboxPhase.mockResolvedValue({ status: "continue", selectedRepositories: [repo] });
     mocks.blockFetchPrContextsStep.mockResolvedValue(contextsFor(repo));
-    mocks.provisionMultiRepo
-      .mockResolvedValueOnce({ sandboxId: "sbx-a" })
-      .mockResolvedValueOnce({ sandboxId: "sbx-b" });
+    mocks.provisionMultiRepo.mockResolvedValueOnce({ sandboxId: "sbx-a" });
 
     const ctx = makeCtx({ sandboxId: null, sandboxIds: new Set<string>() });
 
-    await execute(makeNode("prepare_workspace"), {}, ctx);
-    await execute(makeNode("prepare_workspace"), {}, ctx);
+    const first = await execute(makeNode("prepare_workspace"), {}, ctx);
+    const second = await execute(makeNode("prepare_workspace"), {}, ctx);
 
-    expect(ctx.sandboxId).toBe("sbx-b");
-    expect([...ctx.sandboxIds]).toEqual(["sbx-a", "sbx-b"]);
+    expect(ctx.sandboxId).toBe("sbx-a");
+    expect([...ctx.sandboxIds]).toEqual(["sbx-a"]);
+    expect(mocks.provisionMultiRepo).toHaveBeenCalledTimes(1);
+    expect(mocks.registerSandbox).toHaveBeenLastCalledWith("AWT-1", "sbx-a");
+    expect(second).toEqual(first);
 
     const teardown = vi.fn().mockResolvedValue(undefined);
     await teardownSandboxes(ctx.sandboxIds, teardown);
 
-    expect(teardown).toHaveBeenCalledTimes(2);
+    expect(teardown).toHaveBeenCalledTimes(1);
     expect(teardown).toHaveBeenCalledWith("sbx-a");
-    expect(teardown).toHaveBeenCalledWith("sbx-b");
+  });
+
+  it("re-registers a reused code workspace as the primary cancellation target", async () => {
+    const ctx = makeCtx({
+      sandboxId: "code-1",
+      agentSandboxIds: { claude: "scratch-1" },
+      sandboxIds: new Set(["scratch-1", "code-1"]),
+    });
+
+    const result = await execute(makeNode("prepare_workspace"), {}, ctx);
+
+    expect(mocks.provisionMultiRepo).not.toHaveBeenCalled();
+    expect(mocks.registerSandbox).toHaveBeenCalledWith("AWT-1", "code-1");
+    expect(result.kind).toBe("next");
   });
 
   it("tracks the sandbox for teardown even when registering it throws", async () => {

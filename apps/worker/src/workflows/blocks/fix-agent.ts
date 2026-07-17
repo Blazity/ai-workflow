@@ -9,6 +9,12 @@ import type {
 import type { CheckRunResult, PRComment } from "../../adapters/vcs/types.js";
 import { resolveBlockAgent } from "../../workflow-definition/resolve-agent.js";
 import { pollPhaseUntilDone } from "./poll-phase.js";
+import { ensureWorkspace } from "./prepare-workspace.js";
+import {
+  inspectFixWorkspace,
+  resolvedFixConflicts,
+  type FixWorkspaceState,
+} from "./fix-workspace-state.js";
 import { sanitizeBlockId, type BlockExecuteFn, type BlockExecutionResult, type EngineCtx } from "./types.js";
 
 export const paramsSchema = z
@@ -147,12 +153,10 @@ async function buildFixInput(block: WorkflowDefinitionNode, ctx: EngineCtx): Pro
  * id so artifact paths stay unique per block.
  */
 export const execute: BlockExecuteFn = async (block, _steps, ctx): Promise<BlockExecutionResult> => {
+  const workspace = await ensureWorkspace(ctx);
+  if (workspace.kind !== "next") return workspace;
   if (!ctx.sandboxId) {
-    return {
-      kind: "failed",
-      output: { status: "failed" },
-      reason: "no workspace: connect prepare_workspace before fix_agent",
-    };
+    return { kind: "failed", output: { status: "failed" }, reason: "workspace was not attached" };
   }
   const sandboxId = ctx.sandboxId;
   const { kind, model } = resolveBlockAgent(block.params, ctx.runDefaultKind, ctx.defaults);
@@ -161,6 +165,7 @@ export const execute: BlockExecuteFn = async (block, _steps, ctx): Promise<Block
   const phase = `fix-${sanitizeBlockId(block.id)}`;
 
   try {
+    const before = await inspectFixWorkspace(sandboxId);
     const input = await buildFixInput(block, ctx);
     const { AGENT_SCHEMA } = await import("../../sandbox/agents/types.js");
 
@@ -171,13 +176,22 @@ export const execute: BlockExecuteFn = async (block, _steps, ctx): Promise<Block
 
     const done = await pollPhaseUntilDone(sandboxId, paths.sentinel, maxMinutes);
     if (!done) {
-      return { kind: "failed", output: { status: "failed" }, reason: "fix phase timed out" };
+      // The shared poller's timeout contract (implemented with AIW-102) stops
+      // the detached command before returning false. Re-read afterward because
+      // the phase may still have committed work or partially resolved conflicts.
+      const after = await inspectFixWorkspace(sandboxId);
+      return {
+        kind: "failed",
+        output: workspaceStateOutput("failed", sandboxId, before, after),
+        reason: "fix phase timed out",
+      };
     }
 
     const { collectPhase } = await import("../../sandbox/poll-agent.js");
     const { raw, structured } = await collectPhase(sandboxId, paths);
     const { output, usage } = await blockFixAgentParseStep(kind, raw, structured);
     ctx.recordUsage(usageLabel(block.id), usage, model);
+    const after = await inspectFixWorkspace(sandboxId);
 
     if (output.result === "clarification_needed") {
       const questions = (output.questions ?? []).filter((q) => q.trim().length > 0);
@@ -188,6 +202,7 @@ export const execute: BlockExecuteFn = async (block, _steps, ctx): Promise<Block
         kind: "needs_human_input",
         output: {
           status: "needs_human_input",
+          ...workspaceStateFields(sandboxId, before, after),
           questions,
           ...(suggestedAnswers.length > 0 ? { suggestedAnswers } : {}),
         },
@@ -198,22 +213,76 @@ export const execute: BlockExecuteFn = async (block, _steps, ctx): Promise<Block
     if (output.result === "failed") {
       return {
         kind: "failed",
-        output: { status: "failed" },
+        output: workspaceStateOutput("failed", sandboxId, before, after),
         reason: output.error ?? "unknown",
+      };
+    }
+    if (after.unresolvedConflicts.length > 0) {
+      const questions = [formatUnresolvedConflictQuestion(after)];
+      return {
+        kind: "needs_human_input",
+        output: {
+          status: "needs_human_input",
+          ...workspaceStateFields(sandboxId, before, after),
+          questions,
+        },
+        questions,
       };
     }
     return {
       kind: "next",
       output: {
-        status: "implemented",
-        ...(output.summary ? { summary: output.summary.slice(0, 2000) } : {}),
+        status: "fixed",
+        ...workspaceStateFields(sandboxId, before, after),
+        summary: output.summary?.slice(0, 2000) ?? "",
       },
     };
   } catch (err) {
     return {
       kind: "failed",
-      output: { status: "failed" },
+      output: {
+        status: "failed",
+        workspaceId: sandboxId,
+        commits: [],
+        resolvedConflicts: [],
+        unresolvedConflicts: [],
+      },
       reason: err instanceof Error ? err.message : String(err),
     };
   }
 };
+
+function workspaceStateFields(
+  sandboxId: string,
+  before: FixWorkspaceState,
+  after: FixWorkspaceState,
+) {
+  return {
+    workspaceId: sandboxId,
+    // Cumulative workspace commits since each repository's preAgentSha, not
+    // merely commits created by this one Fix invocation. Downstream Finalize
+    // therefore receives the complete unpublished publication set.
+    commits: after.commits,
+    resolvedConflicts: resolvedFixConflicts(before, after),
+    unresolvedConflicts: after.unresolvedConflicts,
+  };
+}
+
+function workspaceStateOutput(
+  status: "fixed" | "failed",
+  sandboxId: string,
+  before: FixWorkspaceState,
+  after: FixWorkspaceState,
+) {
+  return {
+    status,
+    ...workspaceStateFields(sandboxId, before, after),
+  };
+}
+
+function formatUnresolvedConflictQuestion(state: FixWorkspaceState): string {
+  const details = state.unresolvedConflicts
+    .map((repo) => `${repo.provider}:${repo.repoPath} (${repo.files.join(", ")})`)
+    .join("; ");
+  return `Merge conflicts remain in ${details}. How should they be resolved before publication?`;
+}

@@ -110,7 +110,7 @@ describe("normalizeDefinitionForExecution edge cases", () => {
     return { id, type, x: 0, y: 0, params, inputs: {} };
   }
 
-  it("appends a second underscore when both __prepare and __prepare_ are taken", () => {
+  it("preserves ids that previously collided with virtual Prepare ids", () => {
     const nodes = [
       node("t", "trigger_ticket_ai"),
       node("__prepare", "planning_agent"),
@@ -121,24 +121,11 @@ describe("normalizeDefinitionForExecution edge cases", () => {
 
     const normalized = normalizeDefinitionForExecution(nodes, edges);
 
-    expect(normalized.nodes[1].id).toBe("__prepare__");
-    expect(normalized.nodes[1].type).toBe("prepare_workspace");
-    expect(normalized.nodes.map((n) => n.id)).toEqual([
-      "t",
-      "__prepare__",
-      "__prepare",
-      "__prepare_",
-      "x",
-    ]);
-    expect(normalized.edges).toEqual([
-      { from: "t", to: "__prepare__" },
-      { from: "__prepare__", to: "x" },
-    ]);
+    expect(normalized.nodes).toBe(nodes);
+    expect(normalized.edges).toBe(edges);
   });
 
-  it("only rewires the FIRST out-edge of a fan-out trigger (2nd successor bypasses prepare)", () => {
-    // Documents current behavior: findIndex takes a single out-edge, so t->b
-    // stays direct and never runs prepare_workspace on that branch.
+  it("preserves every edge of a fan-out trigger", () => {
     const nodes = [
       node("t", "trigger_ticket_ai"),
       node("a", "planning_agent"),
@@ -151,20 +138,11 @@ describe("normalizeDefinitionForExecution edge cases", () => {
 
     const normalized = normalizeDefinitionForExecution(nodes, edges);
 
-    const prepares = normalized.nodes.filter((n) => n.type === "prepare_workspace");
-    expect(prepares).toHaveLength(1);
-    expect(normalized.edges).toEqual([
-      { from: "t", to: "__prepare" },
-      { from: "__prepare", to: "a" },
-      { from: "t", to: "b" },
-    ]);
+    expect(normalized.nodes).toBe(nodes);
+    expect(normalized.edges).toBe(edges);
   });
 
-  it("decides per-trigger: leaves the prepared chain alone but injects into the other trigger's chain", () => {
-    // t1 already prepares before its sandbox block; t2's chain has a sandbox
-    // block with no prepare. A global "any prepare exists" short-circuit would
-    // (wrongly) leave t2 running without a workspace; the per-trigger decision
-    // injects a prepare only into t2's chain.
+  it("preserves mixed explicit-Prepare and implicit-workspace chains", () => {
     const nodes = [
       node("t1", "trigger_ticket_ai"),
       node("prep", "prepare_workspace"),
@@ -180,22 +158,11 @@ describe("normalizeDefinitionForExecution edge cases", () => {
 
     const normalized = normalizeDefinitionForExecution(nodes, edges);
 
-    expect(normalized.nodes.filter((n) => n.type === "prepare_workspace").map((n) => n.id)).toEqual([
-      "prep",
-      "__prepare",
-    ]);
-    // t2's chain gets a virtual prepare spliced in; its direct t2->y edge is gone.
-    expect(normalized.edges).toContainEqual({ from: "t2", to: "__prepare" });
-    expect(normalized.edges).toContainEqual({ from: "__prepare", to: "y" });
-    expect(normalized.edges).not.toContainEqual({ from: "t2", to: "y" });
-    // t1's already-prepared chain is untouched.
-    expect(normalized.edges).toContainEqual({ from: "t1", to: "prep" });
-    expect(normalized.edges).toContainEqual({ from: "prep", to: "x" });
+    expect(normalized.nodes).toBe(nodes);
+    expect(normalized.edges).toBe(edges);
   });
 
-  it("leaves an explicit toPort on the first segment, dropping it from prepare->successor", () => {
-    // Mirror of the fromPort test for the trailing segment: the port meant for
-    // p now sits on t->__prepare, so p's intended input port is misrouted.
+  it("preserves an explicit toPort", () => {
     const nodes = [node("t", "trigger_ticket_ai"), node("p", "planning_agent")];
     const edges: WorkflowDefinitionEdge[] = [
       { from: "t", to: "p", toPort: "in2" } as WorkflowDefinitionEdge,
@@ -203,10 +170,7 @@ describe("normalizeDefinitionForExecution edge cases", () => {
 
     const normalized = normalizeDefinitionForExecution(nodes, edges);
 
-    expect(normalized.edges).toEqual([
-      { from: "t", to: "__prepare", toPort: "in2" },
-      { from: "__prepare", to: "p" },
-    ]);
+    expect(normalized.edges).toBe(edges);
   });
 });
 
@@ -275,7 +239,7 @@ describe("loadWorkflowDefinitionFor edge cases", () => {
     expect(otherPlan).toBeNull();
   });
 
-  it("injects a virtual prepare_workspace into a valid stored ticket definition without one", async () => {
+  it("loads a valid stored ticket definition without injecting Prepare", async () => {
     const validNoPrepare: WorkflowDefinition = {
       schemaVersion: 1,
       nodes: [
@@ -291,11 +255,7 @@ describe("loadWorkflowDefinitionFor edge cases", () => {
     expect(plan).not.toBeNull();
     expect(plan!.version).toBe(8);
     expect(plan!.definitionId).toBe(4);
-    expect(plan!.nodes.map((n) => n.type)).toEqual([
-      "trigger_ticket_ai",
-      "prepare_workspace",
-      "planning_agent",
-    ]);
+    expect(plan!.nodes.map((n) => n.type)).toEqual(["trigger_ticket_ai", "planning_agent"]);
     expect(loggerError).not.toHaveBeenCalled();
   });
 });

@@ -114,6 +114,28 @@ describe("workflowDefinitionSchema", () => {
     expect(parsed.nodes[1].inputs).toEqual({});
   });
 
+  it("upgrades legacy Generic Agent blocks to read_write without changing explicit modes", () => {
+    const upgraded = upgradeStoredWorkflowDefinition({
+      schemaVersion: 1,
+      nodes: [
+        { id: "legacy", type: "generic_agent", x: 0, y: 0, params: { prompt: "edit" } },
+        {
+          id: "new",
+          type: "generic_agent",
+          x: 1,
+          y: 0,
+          params: { prompt: "plan", workspaceMode: "none" },
+        },
+      ],
+      edges: [],
+    });
+
+    expect(upgraded.nodes.find((node) => node.id === "legacy")?.params.workspaceMode).toBe(
+      "read_write",
+    );
+    expect(upgraded.nodes.find((node) => node.id === "new")?.params.workspaceMode).toBe("none");
+  });
+
   it("upgrades bespoke step params and preserves requiredChecks as typed inputs", () => {
     const upgraded = upgradeStoredWorkflowDefinition({
       schemaVersion: 1,
@@ -614,6 +636,12 @@ describe("validateWorkflowGraph fixtures", () => {
     const def = prReviewFixDefinition();
     expect(workflowDefinitionSchema.safeParse(def).success).toBe(true);
     expect(validateWorkflowGraph(def)).toEqual([]);
+  });
+
+  it("keeps canonical V4 free of an explicit Prepare block", () => {
+    const def = prReviewFixDefinition();
+    expect(def.nodes.some((node) => node.type === "prepare_workspace")).toBe(false);
+    expect(def.edges).toContainEqual({ from: "fetch-context", to: "fix" });
   });
 });
 

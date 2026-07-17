@@ -66,7 +66,7 @@ export const BLOCK_PARAM_KEYS: Record<WorkflowBlockType, readonly string[]> = {
   implementation_agent: ["provider", "model"],
   review_agent: ["provider", "model"],
   fix_agent: ["provider", "model", "instructions", "maxMinutes"],
-  generic_agent: ["provider", "model", "prompt", "outputSchema"],
+  generic_agent: ["provider", "model", "prompt", "outputSchema", "workspaceMode"],
   prepare_workspace: [],
   // Internal compatibility marker is preserved by serialization so a legacy
   // graph cannot silently drop its gate; the editor exposes no authoring field.

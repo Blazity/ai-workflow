@@ -168,6 +168,7 @@ const GROUP_META: Record<string, { label: string; color: string }> = {
 };
 
 function seedParams(type: WorkflowBlockType, defaultModel: string): Record<string, WorkflowParamValue> {
+  if (type === "generic_agent") return { model: defaultModel, workspaceMode: "none" };
   if (NODE_CATEGORIES[type].group === "agents") return { model: defaultModel };
   if (type === "loop") return { maxAttempts: 3, onExhaust: "fail" };
   if (type === "terminate") return { terminalStatus: "done" };

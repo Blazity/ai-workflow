@@ -374,6 +374,9 @@ export function upgradeStoredWorkflowDefinition(raw: unknown): WorkflowDefinitio
     if (node.type === "arthur_trace") continue;
     const params = { ...node.params };
     const inputs = { ...(node.inputs ?? {}) };
+    if (node.type === "generic_agent" && params.workspaceMode === undefined) {
+      params.workspaceMode = "read_write";
+    }
     if (node.type === "send_plan_approval") {
       const sourceId = params.planFromStep;
       if (typeof sourceId === "string" && sourceId.length > 0) {

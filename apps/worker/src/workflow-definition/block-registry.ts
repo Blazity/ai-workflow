@@ -100,6 +100,16 @@ const publishedPrType = objectType(
   },
   ["provider", "repoPath", "id", "url", "isNew"],
 );
+const commitRefType = objectType({
+  provider: stringType(),
+  repoPath: stringType(),
+  sha: stringType(),
+});
+const resolvedConflictType = objectType({
+  provider: stringType(),
+  repoPath: stringType(),
+  files: arrayType(stringType()),
+});
 
 const colors: Record<WorkflowBlockGroup, { color: string; softColor: string }> = {
   trigger: { color: "#D14343", softColor: "#FBECEC" },
@@ -338,11 +348,22 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
     defaults: { maxMinutes: 25 },
     inputs: {},
     output: statusOutput({
+      workspaceId: stringType(),
+      commits: arrayType(commitRefType),
+      resolvedConflicts: arrayType(resolvedConflictType),
+      unresolvedConflicts: arrayType(resolvedConflictType),
       summary: stringType(),
       questions: arrayType(stringType()),
       suggestedAnswers: arrayType(stringType()),
     }),
-    statusVariants: ["implemented", "needs_human_input", "failed"],
+    normalOutputRequired: [
+      "workspaceId",
+      "commits",
+      "resolvedConflicts",
+      "unresolvedConflicts",
+      "summary",
+    ],
+    statusVariants: ["fixed", "needs_human_input", "failed"],
   },
   generic_agent: {
     presentation: presentation(
@@ -351,7 +372,7 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
       "Runs a configurable agent prompt with an optional declared output schema.",
       "❖",
     ),
-    defaults: { prompt: "" },
+    defaults: { prompt: "", workspaceMode: "none" },
     inputs: {
       prompt: input(stringType()),
     },

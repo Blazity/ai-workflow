@@ -3,6 +3,7 @@ import type { JsonValue } from "@shared/contracts";
 import type { AgentKind } from "../../sandbox/agents/index.js";
 import type { PhaseArtifactPaths, PhaseUsage } from "../../sandbox/agents/types.js";
 import { resolveBlockAgent } from "../../workflow-definition/resolve-agent.js";
+import { ensureAgentSandbox } from "./agent-sandbox.js";
 import { pollPhaseUntilDone } from "./poll-phase.js";
 import { sanitizeBlockId, type BlockExecuteFn, type BlockExecutionResult } from "./types.js";
 
@@ -12,6 +13,7 @@ export const paramsSchema = z
     model: z.string().trim().max(200).regex(/^[A-Za-z0-9._:\/-]+$/).optional(),
     prompt: z.string().min(1),
     outputSchema: z.string().optional(),
+    workspaceMode: z.enum(["none", "read_write"]).default("none"),
   })
   .strict();
 
@@ -152,14 +154,34 @@ export const execute: BlockExecuteFn = async (
     }
   }
 
-  if (!ctx.sandboxId) {
+  const { kind, model } = resolveBlockAgent(block.params, ctx.runDefaultKind, ctx.defaults);
+  // Missing workspaceMode is a deployed PR #118 definition and deliberately
+  // retains its old code-workspace behavior. New blocks receive `none` from
+  // the registry/schema defaults.
+  const workspaceMode = block.params.workspaceMode === "none" ? "none" : "read_write";
+  let sandboxId: string | null;
+  try {
+    sandboxId =
+      workspaceMode === "none"
+        ? ctx.agentSandboxIds[kind] ?? (await ensureAgentSandbox(ctx, kind, model))
+        : ctx.sandboxId;
+  } catch (err) {
     return {
       kind: "failed",
       output: { status: "failed" },
-      reason: "no workspace: connect prepare_workspace before generic_agent",
+      reason: err instanceof Error ? err.message : String(err),
     };
   }
-  const sandboxId = ctx.sandboxId;
+  if (!sandboxId) {
+    return {
+      kind: "failed",
+      output: { status: "failed" },
+      reason:
+        workspaceMode === "read_write"
+          ? "no workspace: connect prepare_workspace before generic_agent"
+          : "could not provision an agent-only sandbox for generic_agent",
+    };
+  }
   const prompt =
     typeof resolvedInputs.prompt === "string"
       ? resolvedInputs.prompt
@@ -170,7 +192,6 @@ export const execute: BlockExecuteFn = async (
     return { kind: "failed", output: { status: "failed" }, reason: "generic_agent requires a prompt" };
   }
 
-  const { kind, model } = resolveBlockAgent(block.params, ctx.runDefaultKind, ctx.defaults);
   // Artifact phase must be shell/file-safe (drives /tmp paths); telemetry label
   // must stay unique per block. Two block ids that sanitize to the same token
   // would collide and lose usage attribution, so keep the raw id for telemetry.
@@ -186,7 +207,7 @@ export const execute: BlockExecuteFn = async (
     // it), so the same graph would commit or not depending on block order. Only
     // committed work is pushed, so an unguarded agent's changes are dropped
     // silently; the guard is a no-op when the agent leaves a clean tree.
-    await blockGenericAgentCommitGuardStep(sandboxId, kind, true);
+    await blockGenericAgentCommitGuardStep(sandboxId, kind, workspaceMode === "read_write");
     const { paths, script } = await blockGenericAgentPlanPhaseStep(kind, phase, model, jsonSchema);
     await blockGenericAgentStartPhaseStep(sandboxId, paths.input, prompt, paths.wrapper, script);
     ctx.markLaunched(usageLabel);

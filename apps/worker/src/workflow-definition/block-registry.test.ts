@@ -89,6 +89,32 @@ describe("workflow block registry", () => {
     });
   });
 
+  it("advertises the canonical Fix classification and workspace state", () => {
+    const registry = buildWorkflowBlockRegistry(context);
+
+    expect(registry.fix_agent.output.statusVariants).toEqual([
+      "fixed",
+      "needs_human_input",
+      "failed",
+    ]);
+    expect(registry.fix_agent.output.bindingSchema).toMatchObject({
+      required: [
+        "status",
+        "workspaceId",
+        "commits",
+        "resolvedConflicts",
+        "unresolvedConflicts",
+        "summary",
+      ],
+    });
+  });
+
+  it("defaults newly authored Generic Agent blocks to workspace-free mode", () => {
+    expect(buildWorkflowBlockRegistry(context).generic_agent.defaults).toMatchObject({
+      workspaceMode: "none",
+    });
+  });
+
   it("always explains why an environmentally unavailable block is disabled", () => {
     const registry = buildWorkflowBlockRegistry(context);
     expect(registry.send_slack_message.availability).toEqual({

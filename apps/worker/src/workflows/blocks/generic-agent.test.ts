@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   writeFiles: vi.fn(),
   runCommand: vi.fn().mockResolvedValue({ exitCode: 0 }),
   sandboxGet: vi.fn(),
+  ensureAgentSandbox: vi.fn(),
 }));
 
 vi.mock("workflow", () => ({ sleep: mocks.sleep }));
@@ -27,6 +28,9 @@ vi.mock("../../sandbox/agents/index.js", () => ({
     buildPhaseScript: mocks.buildPhaseScript,
     extractUsage: mocks.extractUsage,
   })),
+}));
+vi.mock("./agent-sandbox.js", () => ({
+  ensureAgentSandbox: mocks.ensureAgentSandbox,
 }));
 
 import { GENERIC_SCHEMA } from "../../sandbox/agents/types.js";
@@ -46,7 +50,10 @@ function pathsFor(phase: string) {
 
 describe("generic_agent paramsSchema", () => {
   it("requires a prompt and rejects unknown keys", () => {
-    expect(paramsSchema.safeParse({ prompt: "do things" }).success).toBe(true);
+    expect(paramsSchema.parse({ prompt: "do things" })).toMatchObject({
+      prompt: "do things",
+      workspaceMode: "none",
+    });
     expect(paramsSchema.safeParse({ prompt: "" }).success).toBe(false);
     expect(paramsSchema.safeParse({}).success).toBe(false);
     expect(
@@ -68,6 +75,7 @@ describe("generic_agent execute", () => {
     mocks.buildPhaseScript.mockReturnValue("#!/bin/bash");
     mocks.checkPhaseDone.mockResolvedValue(true);
     mocks.extractUsage.mockReturnValue(null);
+    mocks.ensureAgentSandbox.mockResolvedValue("scratch-new");
   });
 
   it("fails on an unparseable outputSchema before touching the sandbox", async () => {
@@ -82,14 +90,72 @@ describe("generic_agent execute", () => {
     expect(mocks.sandboxGet).not.toHaveBeenCalled();
   });
 
-  it("fails without a workspace", async () => {
+  it("fails without a workspace in read_write mode", async () => {
     const result = await execute(
-      makeNode("generic_agent", { prompt: "p" }),
+      makeNode("generic_agent", { prompt: "p", workspaceMode: "read_write" }),
       {},
       makeCtx({ sandboxId: null }),
     );
     expect(result.kind).toBe("failed");
     if (result.kind === "failed") expect(result.reason).toContain("no workspace");
+  });
+
+  it("uses an agent-only scratch sandbox in none mode", async () => {
+    mocks.collectPhase.mockResolvedValue({
+      raw: "",
+      structured: JSON.stringify({ status: "ok", body: "planned", questions: null, error: null }),
+    });
+    const ctx = makeCtx({
+      sandboxId: null,
+      agentSandboxIds: { claude: "scratch-1" },
+    } as never);
+
+    const result = await execute(
+      makeNode("generic_agent", { prompt: "Plan only", workspaceMode: "none" }),
+      {},
+      ctx,
+    );
+
+    expect(mocks.sandboxGet).toHaveBeenCalledWith(
+      expect.objectContaining({ sandboxId: "scratch-1" }),
+    );
+    expect(result).toEqual({ kind: "next", output: { status: "ok", body: "planned" } });
+  });
+
+  it("provisions agent-only scratch on demand in none mode", async () => {
+    mocks.collectPhase.mockResolvedValue({
+      raw: "",
+      structured: JSON.stringify({ status: "ok", body: "planned", questions: null, error: null }),
+    });
+    const ctx = makeCtx({ sandboxId: null, agentSandboxIds: {} } as never);
+
+    const result = await execute(
+      makeNode("generic_agent", { prompt: "Plan only", workspaceMode: "none" }),
+      {},
+      ctx,
+    );
+
+    expect(mocks.ensureAgentSandbox).toHaveBeenCalledWith(ctx, "claude", "claude-model");
+    expect(mocks.sandboxGet).toHaveBeenCalledWith(
+      expect.objectContaining({ sandboxId: "scratch-new" }),
+    );
+    expect(result.kind).toBe("next");
+  });
+
+  it("maps agent-only scratch provisioning failures to a failed block", async () => {
+    mocks.ensureAgentSandbox.mockRejectedValueOnce(new Error("sandbox unavailable"));
+
+    const result = await execute(
+      makeNode("generic_agent", { prompt: "Plan only", workspaceMode: "none" }),
+      {},
+      makeCtx({ sandboxId: null, agentSandboxIds: {} } as never),
+    );
+
+    expect(result).toEqual({
+      kind: "failed",
+      output: { status: "failed" },
+      reason: "sandbox unavailable",
+    });
   });
 
   it("writes the prompt verbatim, uses GENERIC_SCHEMA, and maps ok output", async () => {

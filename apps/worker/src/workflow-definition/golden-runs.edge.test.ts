@@ -139,14 +139,13 @@ const CHECKS_FAIL: BlockExecutionResult = { kind: "next", output: { status: "ok"
 const CHECKS_PASS: BlockExecutionResult = { kind: "next", output: { status: "ok", ok: true } };
 
 describe("golden runs: linear pipeline", () => {
-  it("completes the full chain in visit order with __prepare injected first", async () => {
+  it("completes the authored full chain in visit order", async () => {
     const { result, calls, rec } = await runGolden({
       def: linearPipelineDefinition(),
       entryTriggerType: "trigger_ticket_ai",
     });
     expect(result.outcome).toBe("completed");
     expect(calls).toEqual([
-      "__prepare",
       "planning",
       "implementation",
       "checks",
@@ -158,18 +157,17 @@ describe("golden runs: linear pipeline", () => {
     expect(rec.starts.every((s) => s.attempt === 1)).toBe(true);
     expect(rec.finishes.every((f) => f.state.status === "ok")).toBe(true);
     expect(Object.keys(result.steps).sort()).toEqual(
-      ["trigger", "__prepare", "planning", "implementation", "checks", "open-pr", "status", "slack"].sort(),
+      ["trigger", "planning", "implementation", "checks", "open-pr", "status", "slack"].sort(),
     );
   });
 
-  it("visits the injected virtual __prepare first (trigger -> __prepare -> planning)", async () => {
+  it("visits planning first without injecting a virtual Prepare", async () => {
     const { calls, normalized } = await runGolden({
       def: linearPipelineDefinition(),
       entryTriggerType: "trigger_ticket_ai",
     });
-    expect(calls[0]).toBe("__prepare");
-    expect(normalized.nodes[1].type).toBe("prepare_workspace");
-    expect(normalized.nodes[1].id).toBe("__prepare");
+    expect(calls[0]).toBe("planning");
+    expect(normalized.nodes.some((node) => node.type === "prepare_workspace")).toBe(false);
   });
 
   it("does not execute the entry trigger but seeds it into steps with triggerOutput", async () => {
@@ -181,7 +179,7 @@ describe("golden runs: linear pipeline", () => {
     });
     expect(calls).not.toContain("trigger");
     expect(rec.starts.some((s) => s.nodeId === "trigger")).toBe(false);
-    expect(rec.starts[0].nodeId).toBe("__prepare");
+    expect(rec.starts[0].nodeId).toBe("planning");
     expect(result.steps.trigger.output).toBe(triggerOutput);
   });
 
@@ -199,7 +197,7 @@ describe("golden runs: linear pipeline", () => {
       },
     });
     expect(result.outcome).toBe("stopped");
-    expect(calls).toEqual(["__prepare", "planning", "implementation"]);
+    expect(calls).toEqual(["planning", "implementation"]);
     expect(rec.failures).toEqual([
       { phase: "implementation", reason: "boom", nodeId: "implementation" },
     ]);
@@ -215,7 +213,7 @@ describe("golden runs: humanGate loop", () => {
       overrides: { planning: { kind: "next", output: { status: "needs_human_input" } } },
     });
     expect(result.outcome).toBe("stopped");
-    expect(calls).toEqual(["__prepare", "planning", "notify"]);
+    expect(calls).toEqual(["planning", "notify"]);
     expect(result.steps.gate.output.path).toBe("true");
     expect(finishStatuses(rec, "halt")).toEqual(["warn"]);
     expect(rec.terminations).toEqual([
@@ -232,7 +230,7 @@ describe("golden runs: humanGate loop", () => {
       overrides: { checks: CHECKS_PASS },
     });
     expect(result.outcome).toBe("completed");
-    expect(calls).toEqual(["__prepare", "planning", "implementation", "checks", "open-pr"]);
+    expect(calls).toEqual(["planning", "implementation", "checks", "open-pr"]);
     expect(result.steps.gate.output.path).toBe("false");
     expect(result.steps.verdict.output.path).toBe("true");
     expect(calls).not.toContain("fix");
@@ -247,7 +245,6 @@ describe("golden runs: humanGate loop", () => {
     });
     expect(result.outcome).toBe("stopped");
     expect(calls).toEqual([
-      "__prepare",
       "planning",
       "implementation",
       "checks",
@@ -283,7 +280,7 @@ describe("golden runs: humanGate loop", () => {
       overrides: { checks: CHECKS_FAIL },
     });
     expect(Object.keys(result.steps).sort()).toEqual(
-      ["trigger", "__prepare", "planning", "gate", "implementation", "checks", "verdict", "retry", "fix"].sort(),
+      ["trigger", "planning", "gate", "implementation", "checks", "verdict", "retry", "fix"].sort(),
     );
   });
 
@@ -344,36 +341,38 @@ describe("golden runs: humanGate loop", () => {
 });
 
 describe("golden runs: planApproval two-chain hand-off", () => {
-  it("normalize injects one virtual prepare per trigger (__prepare and __prepare_)", async () => {
+  it("normalization preserves both authored trigger chains", async () => {
     const normalized = normalizeDefinitionForExecution(
       planApprovalDefinition().nodes,
       planApprovalDefinition().edges,
     );
-    const prepares = normalized.nodes.filter((n) => n.type === "prepare_workspace");
-    expect(prepares.map((n) => n.id).sort()).toEqual(["__prepare", "__prepare_"]);
+    expect(normalized.nodes.some((n) => n.type === "prepare_workspace")).toBe(false);
 
     const first = await runGolden({
       def: planApprovalDefinition(),
       entryTriggerType: "trigger_ticket_ai",
       overrides: { "send-approval": { kind: "ended", output: { status: "waiting_for_human" } } },
     });
-    expect(first.calls[0]).toBe("__prepare");
+    expect(first.calls[0]).toBe("planning");
 
     const second = await runGolden({
       def: planApprovalDefinition(),
       entryTriggerType: "trigger_plan_approved",
     });
-    expect(second.calls[0]).toBe("__prepare_");
+    expect(second.calls[0]).toBe("implementation");
   });
 
   it("first chain parks cleanly at send_plan_approval with outcome 'ended'", async () => {
     const { result, calls, rec } = await runGolden({
       def: planApprovalDefinition(),
       entryTriggerType: "trigger_ticket_ai",
-      overrides: { "send-approval": { kind: "ended", output: { status: "waiting_for_human" } } },
+      overrides: {
+        planning: { kind: "next", output: { status: "planned", plan: "Ship it" } },
+        "send-approval": { kind: "ended", output: { status: "waiting_for_human" } },
+      },
     });
     expect(result.outcome).toBe("ended");
-    expect(calls).toEqual(["__prepare", "planning", "send-approval"]);
+    expect(calls).toEqual(["planning", "send-approval"]);
     expect(finishStatuses(rec, "send-approval")).toEqual(["warn"]);
     expect(rec.terminations).toEqual([]);
     expect(rec.clarifications).toEqual([]);
@@ -387,28 +386,30 @@ describe("golden runs: planApproval two-chain hand-off", () => {
     const { result, rec } = await runGolden({
       def: planApprovalDefinition(),
       entryTriggerType: "trigger_ticket_ai",
-      overrides: { "send-approval": { kind: "next", output: { status: "ok" } } },
+      overrides: {
+        planning: { kind: "next", output: { status: "planned", plan: "Ship it" } },
+        "send-approval": { kind: "next", output: { status: "ok" } },
+      },
     });
     expect(result.outcome).toBe("stopped");
     expect(rec.failures[0].phase).toBe("engine");
     expect(rec.failures[0].reason).toContain("unknown port");
   });
 
-  it("second chain (trigger_plan_approved) delivers and completes via __prepare_", async () => {
+  it("second chain (trigger_plan_approved) delivers and completes directly", async () => {
     const { result, calls } = await runGolden({
       def: planApprovalDefinition(),
       entryTriggerType: "trigger_plan_approved",
     });
     expect(result.outcome).toBe("completed");
-    expect(calls).toEqual(["__prepare_", "implementation", "open-pr", "status"]);
-    expect(calls).not.toContain("__prepare");
+    expect(calls).toEqual(["implementation", "open-pr", "status"]);
     expect(calls).not.toContain("planning");
     expect(calls).not.toContain("send-approval");
   });
 });
 
 describe("golden runs: prReviewFix fan-in", () => {
-  it("normalize is a no-op because the fixture already has a prepare_workspace block", async () => {
+  it("normalize is a no-op for the canonical workspace-aware Fix flow", async () => {
     const def = prReviewFixDefinition();
     const normalized = normalizeDefinitionForExecution(def.nodes, def.edges);
     expect(normalized.nodes.some((n) => n.id.startsWith("__prepare"))).toBe(false);
@@ -432,7 +433,7 @@ describe("golden runs: prReviewFix fan-in", () => {
       entryTriggerType: "trigger_pr_checks_failed",
     });
     expect(result.outcome).toBe("completed");
-    expect(calls).toEqual(["fetch-context", "prepare", "fix", "finalize", "comment"]);
+    expect(calls).toEqual(["fetch-context", "fix", "finalize", "comment"]);
     expect(Object.keys(result.steps)).toContain("trigger-checks-failed");
     expect(Object.keys(result.steps)).not.toContain("trigger-review");
   });
@@ -443,7 +444,7 @@ describe("golden runs: prReviewFix fan-in", () => {
       entryTriggerType: "trigger_pr_review",
     });
     expect(result.outcome).toBe("completed");
-    expect(calls).toEqual(["fetch-context", "prepare", "fix", "finalize", "comment"]);
+    expect(calls).toEqual(["fetch-context", "fix", "finalize", "comment"]);
   });
 });
 

@@ -161,27 +161,25 @@ export function planApprovalDefinition(): WorkflowDefinition {
  * fetch_pr_context node (the validator allows unbounded in-degree), which then
  * runs a linear fix-and-comment chain.
  *   trigger_pr_checks_failed \
- *                             -> fetch_pr_context -> prepare_workspace
- *   trigger_pr_review        /      -> fix_agent -> finalize_workspace -> post_pr_comment
+ *                             -> fetch_pr_context -> fix_agent
+ *   trigger_pr_review        /      -> finalize_workspace -> post_pr_comment
  */
 export function prReviewFixDefinition(): WorkflowDefinition {
   const nodes: WorkflowDefinitionNode[] = [
     buildNode({ id: "trigger-checks-failed", type: "trigger_pr_checks_failed" }, 0, 0),
     buildNode({ id: "trigger-review", type: "trigger_pr_review" }, 0, 1),
     buildNode({ id: "fetch-context", type: "fetch_pr_context" }, 1),
-    buildNode({ id: "prepare", type: "prepare_workspace" }, 2),
-    buildNode({ id: "fix", type: "fix_agent" }, 3),
-    buildNode({ id: "finalize", type: "finalize_workspace" }, 4),
+    buildNode({ id: "fix", type: "fix_agent" }, 2),
+    buildNode({ id: "finalize", type: "finalize_workspace" }, 3),
     buildNode(
       { id: "comment", type: "post_pr_comment", params: { body: "Automated fix pushed. Please re-review." } },
-      5,
+      4,
     ),
   ];
   const edges: WorkflowDefinitionEdge[] = [
     buildEdge("trigger-checks-failed", "fetch-context"),
     buildEdge("trigger-review", "fetch-context"),
-    buildEdge("fetch-context", "prepare"),
-    buildEdge("prepare", "fix"),
+    buildEdge("fetch-context", "fix"),
     buildEdge("fix", "finalize"),
     buildEdge("finalize", "comment"),
   ];
