@@ -147,26 +147,6 @@
         color: var(--muted);
       }
 
-      .frame-nav {
-        display: flex;
-        gap: 6px;
-        padding: 8px 10px;
-        border-top: 1px solid var(--faint);
-      }
-
-      .frame-nav button {
-        flex: 1;
-        padding: 7px 10px;
-        border: 1px solid var(--hairline);
-        border-radius: 8px;
-        background: var(--panel);
-        color: var(--ink);
-        font: 700 11.5px/1 var(--sans);
-        cursor: pointer;
-      }
-
-      .frame-nav button:hover { background: rgba(35, 40, 47, 0.07); }
-
       .sidebar-foot {
         padding: 12px 16px 14px;
         border-top: 1px solid var(--faint);
@@ -717,12 +697,8 @@
         <p>Clean-slate block taxonomy and workflow variants for the orchestration MVP. Content lives in this file — the canvas is a viewer.</p>
       </div>
       <div class="frame-list" id="frame-list"></div>
-      <div class="frame-nav">
-        <button id="frame-prev" type="button" aria-label="Previous frame">‹ Prev</button>
-        <button id="frame-next" type="button" aria-label="Next frame">Next ›</button>
-      </div>
       <div class="sidebar-foot">
-        <div><kbd>1</kbd>–<kbd>7</kbd> jump to frame &nbsp; <kbd>0</kbd> fit all</div>
+        <div><kbd>1</kbd>–<kbd>8</kbd> jump to frame &nbsp; <kbd>0</kbd> fit all</div>
         <div><kbd>+</kbd> / <kbd>−</kbd> zoom &nbsp; <kbd>esc</kbd> close details</div>
         <div>Scroll pans · pinch or <kbd>⌘</kbd>+scroll zooms · click a block for its contract</div>
       </div>
@@ -771,7 +747,7 @@
         "trig.ticket-impl": {
           group: "trigger",
           title: "Ticket implementation started/resumed",
-          blurb: "Jira/Linear lifecycle trigger. One entry point for every way work starts or resumes.",
+          blurb: "Ticket lifecycle trigger. One entry point for every way work starts or resumes; Jira-only versus Jira + Linear launch coverage is open.",
           contract: "out: ticket, comments, resume_reason",
           input: "config {\n  providers: (\"jira\" | \"linear\")[],\n  board_column?: string\n}",
           output: "{\n  ticket: TicketContext,\n  comments: CommentContext[],\n  attachments: AttachmentRef[],\n  resume_reason: \"new_ticket\" | \"moved_to_ai\"\n    | \"clarification_answered\" | \"comment_added\",\n  prior_run?: RunRef\n}",
@@ -780,35 +756,47 @@
         "trig.plan-approved": {
           group: "trigger",
           title: "Plan approved",
-          blurb: "Human approval event that resumes a suspended workflow with the approved plan.",
+          blurb: "Human approval event that starts the pinned implementation path with the approved plan.",
           contract: "out: ticket, approved_plan, approval",
           input: "config {\n  source: \"dashboard\" | \"ticket_comment\"\n}",
-          output: "{\n  ticket: TicketContext,\n  approved_plan: string,\n  approval: {\n    approver: UserRef,\n    approved_at: ISODateTime\n  }\n}"
+          output: "{\n  ticket: TicketContext,\n  approved_plan: string,\n  approval: {\n    approver: UserRef,\n    approved_at: ISODateTime\n  }\n}",
+          note: "Approval is final: accepting it immediately enqueues implementation, consumes the approval item, and cannot be revoked from the approval UI. Stopping an implementation run, if ever needed, is a separate operational action — not an approval state."
         },
         "trig.pr-created": {
           group: "trigger",
           title: "PR created",
-          blurb: "Fires when a pull/merge request is opened; starts standalone review workflows.",
+          blurb: "Fires when a pull/merge request is opened; its relationship to any default review workflow or post-PR gate is still open.",
           contract: "out: pr, diff, commits",
-          input: "config {\n  providers: (\"github\" | \"gitlab\")[],\n  only_workflow_owned?: boolean\n}",
-          output: "{\n  pr: PrRef,\n  diff: DiffSummary,\n  commits: CommitRef[],\n  ticket?: TicketContext\n}"
+          input: "config {\n  providers: (\"github\" | \"gitlab\")[],\n  scope: \"workflow_owned\" | \"any\"\n}",
+          output: "{\n  pr: PrRef,\n  diff: DiffSummary,\n  commits: CommitRef[],\n  ticket?: TicketContext\n}",
+          note: "workflow_owned is proven from durable branch/publication correlation plus a valid ticket lookup; a prefix alone is insufficient. any is review-safe in this revision and cannot reach workspace-mutating or ticket-action blocks."
         },
         "trig.pr-checks-failed": {
           group: "trigger",
           title: "PR checks failed",
-          blurb: "Fires when CI checks fail on a workflow-owned PR/MR.",
-          contract: "out: pr, failed_checks, logs",
-          input: "config {\n  providers: (\"github\" | \"gitlab\")[]\n}",
-          output: "{\n  pr: PrRef,\n  failed_checks: CheckResult[],\n  logs: string,\n  ticket?: TicketContext\n}",
-          note: "Events coalesce per ticket: one active run per ticket at a time, so simultaneous check failures across a ticket's PRs feed a single fix run rather than racing each other."
+          blurb: "Starts remediation from an actionable GitHub Actions or GitLab CI failure on an eligible PR/MR; ownership scope is open.",
+          contract: "out: pr, head_sha, failed_checks, log_refs",
+          input: "config {\n  providers: (\"github_actions\"\n    | \"gitlab_ci\")[],\n  event_source: \"check_run\" | \"workflow_run\"\n    | \"check_suite\" | \"pipeline\",\n  granularity: \"first_actionable_failure\"\n    | \"terminal_aggregate\",\n  check_names: string[],  // allowlist\n  actionable_outcomes: CiOutcome[],\n  scope: \"workflow_owned\" | \"any\"\n  // source/granularity/outcomes: Open Decision\n}",
+          output: "{\n  pr: PrRef,\n  head_sha: string,\n  failed_checks: ProviderCheckRef[],\n  log_refs: ProviderLogRef[],\n  provider_delivery_id: string,\n  producer: \"github_actions\" | \"gitlab_ci\",\n  ticket?: TicketContext\n}",
+          note: "This trigger consumes allowlisted provider failures; it does not run checks itself. workflow_owned is proven from durable branch/publication correlation plus a valid ticket lookup; a prefix alone is insufficient. any is review-safe in this revision and cannot reach Fix, Finalize, Open PR/MR, or ticket actions. Exact GitHub event source, first-failure versus aggregate timing, and non-code failure outcomes are Open Decisions. Events coalesce by subject and exact source head so simultaneous failures feed one remediation run rather than racing. Passing, cancelled, superseded, neutral, skipped, and stale-head results are ignored."
         },
         "trig.pr-review": {
           group: "trigger",
           title: "PR review submitted",
-          blurb: "Fires when a human submits review feedback on a workflow-owned PR/MR.",
-          contract: "out: pr, review, comments",
-          input: "config {\n  providers: (\"github\" | \"gitlab\")[],\n  on: (\"changes_requested\" | \"commented\")[]\n}",
-          output: "{\n  pr: PrRef,\n  review: ReviewRef,\n  comments: ReviewComment[],\n  ticket?: TicketContext\n}"
+          blurb: "Fires on selected human review feedback for an eligible PR/MR; ownership and actionable review scope are open.",
+          contract: "out: pr, head_sha, review, comment_refs",
+          input: "config {\n  providers: (\"github\" | \"gitlab\")[],\n  scope: \"workflow_owned\" | \"any\",\n  on: ReviewEventSelector[], // Open Decision\n  ignore_workflow_authored: true\n}",
+          output: "{\n  pr: PrRef,\n  head_sha: string,\n  review: ReviewRef,\n  comment_refs: ReviewCommentRef[],\n  provider_delivery_id: string,\n  ticket?: TicketContext\n}",
+          note: "Workflow-authored comments and review echoes are filtered by default so the fix summary cannot recursively trigger another remediation run. workflow_owned is proven from durable branch/publication correlation plus a valid ticket lookup. any is review-safe and cannot mutate a branch or ticket in this revision. Human review events remain eligible."
+        },
+        "trig.pr-merged": {
+          group: "trigger",
+          title: "PR/MR merged",
+          blurb: "Fires after a pull/merge request is merged; workflow-owned scope guarantees correlated ticket context for post-merge ticket movement.",
+          contract: "out: pr, merge_sha, ticket?",
+          input: "config {\n  providers: (\"github\" | \"gitlab\")[],\n  scope: \"workflow_owned\" | \"any\"\n}",
+          output: "{\n  pr: PrRef,\n  head_sha: string,\n  merge_sha: string,\n  merged_at: ISODateTime,\n  ticket?: TicketContext\n}",
+          note: "workflow_owned is proven from durable branch/publication correlation plus a valid ticket lookup; a branch prefix alone is insufficient. Use it when connecting this trigger to ticket actions. any has no guaranteed ticket and is review-safe only. A workflow-authored ticket transition records an intent so its Jira webhook echo cannot cancel the still-running workflow."
         },
 
         "agent.planning": {
@@ -818,7 +806,7 @@
           contract: "out: plan | questions",
           input: "{\n  ticket: TicketContext,\n  comments: CommentContext[],\n  prior_answers?: HumanAnswer[]\n}",
           output: "{\n  status: \"ready\" | \"needs_human_input\",\n  plan?: string,\n  questions?: string[],\n  assumptions?: string[]\n}",
-          note: "On needs_human_input the runtime posts the questions, suspends, and the lifecycle trigger's resume path re-enters — the clarification loop is not something a workflow author wires up."
+          note: "On needs_human_input the runtime stops the agent, preserves a durable checkpoint, and targets a snapshot-backed pinned successor that reruns only the waiting agent before following downstream edges. This path ships only after the real Vercel snapshot/restore/expiry probe passes; it is not something a workflow author wires up."
         },
         "agent.implementation": {
           group: "agent",
@@ -840,10 +828,11 @@
         "agent.fix": {
           group: "agent",
           title: "Fix Agent",
-          blurb: "Repair pass scoped to structured failures: per-repo check results or review feedback.",
-          contract: "in: failures · out: commits, status",
-          input: "{\n  workspace_id: string,\n  failures: RepoCheckFailure[]\n    | ReviewFeedback,\n  plan?: string\n}",
-          output: "{\n  status: \"fixed\" | \"needs_human_input\"\n    | \"failed\",\n  commits: CommitRef[],\n  summary: string\n}"
+          blurb: "Repair pass scoped to structured failures, review feedback, or current merge conflicts.",
+          contract: "in: failures · out: workspace_id, commits, status",
+          input: "{\n  target: PrRef | TicketContext,\n  workspace_id?: string,\n  workspace_policy?: WorkspacePolicy,\n  source_head_sha?: string,\n  failures: RemediationItem[],\n  plan?: string\n}",
+          output: "{\n  status: \"fixed\" | \"needs_human_input\"\n    | \"failed\",\n  workspace_id: string,\n  commits: CommitRef[],\n  resolved_conflicts?: MergeConflictRef[],\n  questions?: string[],\n  summary: string\n}",
+          note: "Reuses an upstream prepared workspace when supplied; otherwise prepares or resumes the target workspace automatically. source_head_sha is optional for pre-PR repair and required for existing-PR remediation. status: fixed is the specialized agent's built-in readiness classification and continues to Finalize workspace; it is not a CI verdict or permission to bypass publication guards. needs_human_input creates the runtime clarification checkpoint; failed follows default failure policy. Use Generic Agent + Branch for a custom classification. Merge conflicts are auto-resolved only when the agent can produce a clean committed tree. Before publication, the runtime re-reads the PR head and refuses to overwrite a SHA other than source_head_sha; provider CI remains authoritative for correctness."
         },
         "agent.generic": {
           group: "agent",
@@ -852,7 +841,7 @@
           contract: "out: declared schema + status",
           input: "{\n  prompt: string,\n  workspace_id?: string,\n  output_schema: JsonSchema\n}",
           output: "{\n  status: \"completed\" | \"needs_human_input\"\n    | \"failed\",\n  ...declared_schema\n}",
-          note: "The escape hatch: everything the specialized agents do can be rebuilt from Generic Agent + workspace + control blocks."
+          note: "The escape hatch: everything the specialized agents do can be rebuilt from Generic Agent + workspace + control blocks. Non-code uses such as planning need no workspace; repository-reading or mutating configurations require an upstream Prepare workspace binding. For custom routing, use a declared classification field in the output schema and evaluate it with Branch; the runtime status remains reserved for completed, needs_human_input, and failed."
         },
 
         "ws.prepare": {
@@ -860,24 +849,24 @@
           title: "Prepare workspace",
           blurb: "Materializes the ticket's durable workspace: create, resume warm from snapshot, or rebuild cold from branch records.",
           contract: "out: workspace_id, repos, materialization",
-          input: "{\n  ticket: TicketContext,\n  repo_selection_policy: RepoSelectionPolicy,\n  branch_policy: BranchPolicy,\n  persistence_policy?: PersistencePolicy\n}",
+          input: "{\n  target: PrRef | TicketContext,\n  repo_selection_policy: RepoSelectionPolicy,\n  branch_policy: BranchPolicy,\n  persistence_policy?: PersistencePolicy\n}",
           output: "{\n  workspace_id: string,\n  repos: SelectedRepo[],\n  branches: BranchRef[],\n    // BranchRef = {provider, repo_path, branch}\n  materialization: \"created\"\n    | \"resumed_warm\" | \"rebuilt_cold\"\n}",
-          note: "Two-tier model: the workspace is a durable identity (ticket → repos + branches + manifest) in our DB. Warm path: a persistent named sandbox resumes from its auto-snapshot (Vercel Sandbox v2 persistence). Cold path: a fresh sandbox re-clones the workflow-owned branches. Snapshot expiry degrades warm to cold — it never fails the run, and the cold path is what on-prem deployments use."
+          note: "Optional for specialized agents, which prepare or resume their workspace automatically. Use this block explicitly in modular/custom workflows to control repository selection, branch policy, or persistence. Snapshot-backed clarification continuation is the selected target and is gated on a real Vercel capability probe; longer-term warm/cold workspace lifecycle, TTL, and retention policy remain open."
         },
         "ws.finalize": {
           group: "workspace",
           title: "Finalize workspace",
-          blurb: "Deterministic end gate: clean git state, commits exist, push changed branches, capture artifacts, park or destroy the sandbox.",
-          contract: "out: status, pushed_branches, workspace_state",
+          blurb: "Deterministic publication and workspace gate: verify the write, push changed branches, capture artifacts, then apply the selected retention policy.",
+          contract: "out: status, publication, pushed_branches",
           input: "{\n  workspace_id: string,\n  required_checks?: string[]\n}",
-          output: "{\n  status: \"clean\" | \"failed\",\n  commits: CommitRef[],\n  pushed_branches: BranchRef[],\n  verification: VerificationResult,\n  artifacts: ArtifactRef[],\n  workspace_state: \"parked\" | \"destroyed\"\n}",
-          note: "Non-terminal ends (awaiting approval, review rounds expected) park the workspace — snapshot and stop. Terminal statuses destroy it; the snapshot expires per retention policy."
+          output: "{\n  status: \"clean\" | \"failed\",\n  publication_attempt_id: string,\n  commits: CommitRef[],\n  pushed_branches: FinalizedBranchRef[],\n  verification: VerificationResult,\n  artifacts: ArtifactRef[],\n  workspace_state: \"parked\" | \"destroyed\"\n}",
+          note: "This is the sole push boundary. It preflights every repository before the first push, records exact expected and pushed heads durably, and emits usable output only when the complete publication succeeds. It does not terminate the workflow or release its active-run claim; the claim remains held through every downstream block. It does not open PRs."
         },
 
         "ctl.branch": {
           group: "control",
           title: "Branch",
-          blurb: "Routes by one expression over prior step outputs. Single condition language everywhere.",
+          blurb: "Routes by one restricted, parsed JavaScript-style expression over prior step outputs.",
           contract: "out: path, reason",
           input: "config {\n  condition: Expression\n  // e.g. steps.checks.output.ok\n}",
           output: "{\n  path: \"true\" | \"false\",\n  reason: string\n}"
@@ -922,7 +911,7 @@
           title: "Open PR/MR",
           blurb: "Opens one pull/merge request per changed repo from the finalized workspace.",
           contract: "out: prs (one per changed repo)",
-          input: "{\n  source: { workspace_id: string }\n        | { branches: BranchRef[] },\n  title: string,\n  body: string\n}",
+          input: "{\n  publication_attempt_id: string,\n  branches: FinalizedBranchRef[],\n  title: string,\n  body: string\n}",
           output: "{ prs: PrRef[] }"
         },
         "vcs.pr-comment": {
@@ -937,19 +926,19 @@
           group: "vcs",
           title: "Fetch PR context",
           blurb: "Loads review comments, check results, and conflict status for a PR or ticket.",
-          contract: "out: comments, check_results, conflicts",
+          contract: "out: comments, check_results, conflicts, remediation_context",
           input: "{\n  target: { pr: PrRef }\n        | { ticket: TicketContext }\n}",
-          output: "{\n  comments: ReviewComment[],\n  check_results: CheckResult[],\n  conflict_status: ConflictStatus\n}"
+          output: "{\n  comments: ReviewComment[],\n  check_results: CheckResult[],\n  conflict_status: ConflictStatus,\n  remediation_context: RemediationItem[]\n    // normalized failures, reviews, conflicts\n}"
         },
 
         "hitl.plan-approval": {
           group: "human",
           title: "Send plan for approval",
-          blurb: "Creates a dashboard approval item and mirrors the plan to the ticket, then suspends.",
-          contract: "out: approval_request_id · suspends",
+          blurb: "Creates a dashboard approval item and mirrors the plan to the ticket, then ends this path.",
+          contract: "out: approval_request_id · ends path",
           input: "{\n  ticket: TicketContext,\n  plan: string,\n  assumptions: string[],\n  reviewers: UserRef[]\n}",
           output: "{\n  approval_request_id: string,\n  dashboard_url: string\n}",
-          note: "The workflow suspends here durably. The matching \"Plan approved\" trigger re-enters with the approved plan."
+          note: "No workflow instance remains suspended here. The matching \"Plan approved\" trigger starts the pinned implementation path with the approved plan."
         },
         "hitl.question": {
           group: "human",
@@ -1006,7 +995,7 @@
       };
 
       const DEFERRED_NOTE =
-        "Nested reusable workflow blocks · MCP editing surface for agents · granular low-level triggers · generic (non-delivery) automation blocks. The JS-step question is on the Open Decisions frame, not silently resolved.";
+        "Nested reusable workflow blocks · MCP editing surface for agents · granular low-level triggers · generic (non-delivery) automation blocks · arbitrary JavaScript/code steps. JavaScript execution is not part of the MVP.";
 
       const NODE_W = 250;
 
@@ -1031,27 +1020,31 @@
           items: [
             {
               head: "Clarification cannot be forgotten",
-              body: "Human-in-the-loop is a runtime capability, not a block. Any agent may return <code>status: \"needs_human_input\"</code>; the runtime posts the questions, suspends durably, and the lifecycle trigger's resume path re-enters. No workflow can deadlock because someone forgot a clarification block."
+              body: "Human-in-the-loop is a runtime capability, not a block. Any agent may return <code>status: \"needs_human_input\"</code>; the runtime stops the agent, stores its exact definition/version and prior safe outputs, snapshots any unpublished workspace, and hands the owner claim to a pinned successor that reruns only the waiting agent. This selected path ships only after the real Vercel snapshot/restore/expiry probe passes. No workflow can deadlock because someone forgot a clarification block."
             },
             {
               head: "Every output is typed",
-              body: "Each block emits a discriminated schema — a <code>status</code> plus typed payload — so Branch conditions and Loop exits always operate on structured data. One condition language everywhere: a single expression form over <code>steps.*.output</code> across Branch, Loop, and Terminate."
+              body: "Each block emits a discriminated schema — a <code>status</code> plus typed payload — so Branch conditions and Loop exits always operate on structured data. Branch uses PR #118's restricted, parsed JavaScript-style expression syntax over <code>steps.*.output</code>; it never evaluates arbitrary JavaScript and boolean positions require real booleans. Block inputs persist explicit typed paths from <code>trigger.*</code>, <code>steps.*.output.*</code>, or <code>run.*</code>; the editor may suggest compatible paths but does not save implicit shape-based wiring."
             },
             {
-              head: "The workspace is runtime-owned",
-              body: "The workspace is a durable identity (ticket → repos, branches, manifest) materialized into an ephemeral sandbox — warm from a persistent-sandbox snapshot, or cold from the workflow-owned branches. It is threaded via <code>workspace_id</code> and always finalized. Specialized agents attach implicitly; generic workflows compose Prepare / Finalize explicitly. LLM steps may <em>propose</em> values — the runtime <em>enforces</em> policy on anything it uses."
+              head: "Workspace state survives continuation",
+              body: "Unpublished work, repository/branch identity, untracked files, and conflict index state survive clarification in the capability-gated snapshot restored by the pinned successor. Snapshot steps carry only serializable IDs, scrub old credentials, and inject fresh credentials after restore. Specialized code agents attach implicitly; workspace-mutating generic workflows compose Prepare / Finalize explicitly."
             },
             {
               head: "Failure has a default path",
               body: "Any block can end <code>status: \"failed\"</code>. Unless an explicit failure edge overrides it, the runtime applies the default policy: terminate the run, move the ticket to the configured column, notify the channel. Graphs draw the happy path — no <code>if err != nil</code> ladders."
             },
             {
-              head: "Runs serialize per ticket",
-              body: "One active run per ticket, enforced by the claim registry. Triggers that fire mid-run coalesce into the resume path instead of spawning parallel runs, and a ticket leaving the AI column cancels its active run. Multi-repo stays inside blocks: outputs carry per-repo collections plus aggregates for conditions to branch on."
+              head: "Runs serialize per subject",
+              body: "One active run per durable subject, enforced by owner-matching claims. Ticket workflows and durably correlated workflow-owned PRs use <code>ticket:&lt;provider&gt;:&lt;ticketKey&gt;</code>; arbitrary PR-only workflows use <code>pr:&lt;provider&gt;:&lt;repo&gt;#&lt;number&gt;</code> without sending it to Jira. Triggers that fire mid-run coalesce into a pending event and start only after terminal release."
             },
             {
-              head: "One configuration surface",
-              body: "Workflow definitions are the single source of truth for run behavior. The in-repo <code>pre-sandbox.yaml</code> and <code>post-pr-gate.yaml</code> pipelines are deprecated: their steps (repo selection, complexity check, injection check, PR gates) become blocks inside these workflows."
+              head: "Budgets bound active execution",
+              body: "Definitions may set <code>maxDurationMs</code>, <code>maxTokens</code>, and <code>maxCostUsd</code>. Duration defaults to the existing job timeout; token and cost are unset until authored. Human wait time is excluded. Duration can interrupt polling, while current harnesses expose authoritative token/cost only after a phase, so one phase may overrun; no later block starts. Configured token/cost limits fail closed when usage or pricing is unavailable."
+            },
+            {
+              head: "Keep post-PR mechanisms distinct",
+              body: "Workflow definitions are the source of truth for AI-run behavior, while provider CI results and human reviews remain authoritative inputs to remediation. The existing product-owned <code>post-pr-gate</code>, a possible <code>PR created → Review Agent</code> workflow, and CI/review-triggered remediation are three separate mechanisms. Which review mechanism to keep, replace, or retire is an Open Decision."
             }
           ]
         },
@@ -1064,24 +1057,26 @@
           badge: "recommended default",
           nodes: [
             { id: "t",    type: "trig.ticket-impl", x: 30, y: 140,
-              body: "New ticket · moved to AI column · clarification answered · comment added. Jira and Linear feed the same entry." },
+              body: "New ticket · moved to AI column · clarification answered · comment added. Configured ticket providers feed the same entry; launch coverage is open." },
             { id: "plan", type: "agent.planning", x: 340, y: 140 },
             { id: "impl", type: "agent.implementation", x: 650, y: 140 },
-            { id: "pr",   type: "vcs.open-pr", x: 960, y: 140 },
-            { id: "tstat", type: "tk.status", x: 1270, y: 60, body: "Move to “AI Review”." },
-            { id: "slack", type: "util.slack", x: 1270, y: 300 }
+            { id: "final", type: "ws.finalize", x: 960, y: 140 },
+            { id: "pr",   type: "vcs.open-pr", x: 1270, y: 140 },
+            { id: "tstat", type: "tk.status", x: 1580, y: 60, body: "Move to “AI Review”." },
+            { id: "slack", type: "util.slack", x: 1580, y: 300 }
           ],
           edges: [
             { from: "t", to: "plan" },
             { from: "plan", to: "impl" },
-            { from: "impl", to: "pr" },
+            { from: "impl", to: "final" },
+            { from: "final", to: "pr" },
             { from: "pr", to: "tstat" },
             { from: "pr", to: "slack" }
           ],
           notes: [
             { x: 340, y: 460, w: 620,
               head: "What the specialized agents absorb",
-              body: "Planning: the clarification loop and human-question protocol. Implementation: workspace prepare/resume, branch policy, commit enforcement, pre-PR verification. The runtime suspends and resumes around <code>needs_human_input</code> automatically — this five-block graph is the whole default workflow." }
+              body: "Planning: the clarification loop and human-question protocol. Implementation: workspace prepare/resume, branch policy, commit enforcement, pre-PR verification. Finalize is the sole push boundary; Open PR only consumes its successful output. The runtime handles the durable checkpoint and continuation around <code>needs_human_input</code> automatically; the exact snapshot-backed successor model remains gated on Vercel feasibility." }
           ]
         },
         {
@@ -1145,14 +1140,16 @@
             { id: "m3", type: "hitl.plan-approval", x: 650, y: 130 },
             { id: "m4", type: "trig.plan-approved", x: 30, y: 470 },
             { id: "m5", type: "agent.implementation", x: 340, y: 470 },
-            { id: "m6", type: "vcs.open-pr", x: 650, y: 470 }
+            { id: "m6", type: "ws.finalize", x: 650, y: 470 },
+            { id: "m7", type: "vcs.open-pr", x: 960, y: 470 }
           ],
           edges: [
             { from: "m1", to: "m2" },
             { from: "m2", to: "m3" },
-            { from: "m3", to: "m4", dashed: true, label: "suspends · resumes on approval" },
+            { from: "m3", to: "m4", dashed: true, label: "ends path · Plan approved re-entry" },
             { from: "m4", to: "m5" },
-            { from: "m5", to: "m6" }
+            { from: "m5", to: "m6" },
+            { from: "m6", to: "m7" }
           ],
           notes: [
             { x: 970, y: 130, w: 420,
@@ -1169,26 +1166,65 @@
           title: "V4 · Review & fix after PR",
           short: "V4 · Review & fix after PR",
           tag: "Variant",
-          badge: "post-PR loop",
+          badge: "1 workflow · event-driven remediation",
           nodes: [
-            { id: "p1", type: "trig.pr-checks-failed", x: 30, y: 100 },
-            { id: "p2", type: "trig.pr-review", x: 30, y: 340 },
-            { id: "p3", type: "vcs.fetch-context", x: 340, y: 220 },
-            { id: "p4", type: "agent.fix", x: 650, y: 220 },
-            { id: "p5", type: "ws.finalize", x: 960, y: 220 },
-            { id: "p6", type: "vcs.pr-comment", x: 1270, y: 220 }
+            { id: "p1", type: "trig.pr-checks-failed", x: 30, y: 190 },
+            { id: "p2", type: "trig.pr-review", x: 30, y: 430 },
+            { id: "p3", type: "vcs.fetch-context", x: 340, y: 310 },
+            { id: "p4", type: "agent.fix", x: 650, y: 310 },
+            { id: "p5", type: "ws.finalize", x: 960, y: 190 },
+            { id: "p6", type: "vcs.pr-comment", x: 1270, y: 190 },
+            { id: "e3", type: "trig.pr-checks-failed", x: 1580, y: 760 }
           ],
           edges: [
             { from: "p1", to: "p3" },
             { from: "p2", to: "p3" },
             { from: "p3", to: "p4" },
-            { from: "p4", to: "p5", label: "push fixes" },
-            { from: "p5", to: "p6" }
+            { from: "p4", to: "p5", label: "status: fixed" },
+            { from: "p5", to: "p6" },
+            { from: "p5", to: "e3", dashed: true, boundary: "event",
+              label: "outside workflow · GitHub Actions · failure → fresh remediation run" }
           ],
           notes: [
-            { x: 650, y: 500, w: 620,
-              head: "Same workspace, bounded rounds",
-              body: "The Fix Agent re-materializes the ticket's workspace — warm from its parked snapshot when available, cold from the workflow-owned branches otherwise. Check failures across a ticket's PRs coalesce into one run. A <code>Loop</code> policy bounds the rounds; exhaustion escalates to a <code>Human question</code>. This workflow subsumes the deprecated <code>post-pr-gate.yaml</code> pipeline." }
+            { x: 30, y: 30, w: 850,
+              head: "External events drive this remediation flow",
+              body: "V4 consumes authenticated GitHub Actions / GitLab CI failures and actionable human-review events; GitHub Actions and GitLab CI remain the source of truth for check outcomes. The default remediation workflow does not start when a PR is opened or updated, and it does not run tests or publish check statuses. This does not decide whether AI Workflow separately keeps the existing product-owned <code>post-pr-gate</code> or offers a separately deployed PR-created workflow with an optional standalone Review Agent. Current handlers still accept only PR/MR head events for the legacy gate; without provider CI-completion and reviewer-triggered remediation subscriptions and normalizers, V4 cannot run." },
+            { x: 960, y: 30, w: 850,
+              head: "One workflow · fresh run per actionable event",
+              body: "A failed CI result or human review starts one remediation run for the exact head SHA. The run fixes, pushes, comments, and ends — it does not wait for CI. Repository CI runs normally on the new SHA: passing CI starts nothing, while another failure or later review starts a fresh remediation run." },
+            { x: 30, y: 690, w: 1050,
+              head: "Event safety and coalescing",
+              body: "Authenticate the provider webhook, allowlist workflow/check names, apply the selected PR-ownership policy, deduplicate by <code>provider + repo + PR/MR + head SHA + delivery</code>, ignore stale heads, and coalesce simultaneous failures/reviews per subject. If a push starts CI while downstream workflow blocks are still running, an actionable event is stored as pending and starts only after the current workflow terminates and releases its claim. Passing, cancelled, superseded, neutral, and skipped results are ignored. Workflow-authored events such as remediation comments are ignored so the summary cannot trigger itself. Missed webhooks need provider redelivery or reconciliation."
+            },
+            { x: 1130, y: 760, w: 650,
+              head: "Publish safety is not validation",
+              body: "The specialized Fix Agent initializes its workspace when necessary and classifies its result. <code>fixed</code> continues directly to Finalize workspace; <code>needs_human_input</code> creates the runtime checkpoint and <code>failed</code> follows default failure policy. Authors who need custom classification declare it through Generic Agent and route it with control blocks. Finalization only protects the write: current source SHA, clean committed tree, and a branch allowed by the selected PR-ownership policy. It does not decide whether the PR passes. The Fix Agent may safely resolve a merge conflict; unresolved conflicts create a human checkpoint. In a multi-repository failure, successfully pushed repos must be recorded as a partial publication and cannot be reported as overall success. Per-PR versus ticket-wide remediation, partial-publication recovery, and park/destroy retention rules remain Open Decisions."
+            }
+          ]
+        },
+        {
+          slug: "v5-merged-ticket",
+          kind: "flow",
+          title: "V5 · Move ticket after merge",
+          short: "V5 · Move ticket after merge",
+          tag: "Variant",
+          badge: "post-merge lifecycle",
+          nodes: [
+            { id: "g1", type: "trig.pr-merged", x: 30, y: 170,
+              body: "scope: workflow_owned · GitHub or GitLab" },
+            { id: "g2", type: "tk.status", x: 360, y: 170,
+              body: "Choose a discovered provider status, for example Done." },
+            { id: "g3", type: "util.slack", x: 690, y: 170,
+              body: "Optional merged notification after the ticket move succeeds." }
+          ],
+          edges: [
+            { from: "g1", to: "g2" },
+            { from: "g2", to: "g3" }
+          ],
+          notes: [
+            { x: 30, y: 450, w: 930,
+              head: "Why workflow-owned scope matters",
+              body: "A merged provider event always has a PR/MR subject but only workflow-owned branches guarantee a real correlated ticket. Deployment therefore permits the ticket action only in <code>scope: workflow_owned</code>. Before moving the ticket, the runtime records a transition intent; the matching Jira webhook consumes that intent without cancelling this run, while unrelated human ticket moves keep the existing cancellation behavior." }
           ]
         },
         {
@@ -1201,36 +1237,48 @@
           width: 760,
           items: [
             {
-              head: "Condition language",
-              body: "CEL-style expressions vs a restricted JS subset — one language across Branch, Loop, and Terminate. Decides how conditions are validated and rendered in the editor."
+              head: "Post-PR review ownership",
+              body: "Keep, replace, or retire the existing product-owned <code>post-pr-gate</code>. If AI Workflow retains an internal AI review, should it remain detached YAML, become editable workflow blocks / Review Agent, or move into repository CI or an external reviewer? Also decide whether it publishes a provider status or only comments, and whether it runs on PR open, head updates, or both. External ownership is the current preference, not a locked choice."
             },
             {
-              head: "JS step code: editable or illustrative?",
-              body: "Is per-step code editable execution logic, or a read-only visualization of what the block does? Changes the runtime contract and the editor's save path."
+              head: "PR-created review vs remediation",
+              body: "The <code>PR created</code> trigger type is locked, but its default topology is not. Decide whether <code>PR created → Review Agent</code> replaces the legacy gate, ships as an optional or default workflow, or is deferred. If it replaces a gate that also runs on head updates, decide whether this trigger expands to updates or a separate event path is needed. Keep review distinct from remediation triggered by failed external CI or human feedback."
             },
             {
-              head: "Persistent workspace rollout",
-              body: "The two-tier model is decided (durable identity; warm/cold materialization). Remaining: migrate the worker to Sandbox SDK v2 named sandboxes (getOrCreate), snapshot TTL and keep-last policy, park-vs-destroy rules per terminal status, and storage-cost guardrails."
+              head: "Workflow-owned vs arbitrary PRs",
+              body: "All PR/MR triggers expose <code>scope: workflow_owned | any</code>. Workflow ownership requires durable branch/publication correlation plus a valid ticket lookup; a prefix is not proof. <code>any</code> is review-safe only in this revision and cannot reach workspace mutation or ticket actions. Whether a later explicit policy may modify arbitrary human-authored branches remains open."
             },
             {
-              head: "MVP trigger list",
-              body: "Which of the five lifecycle triggers ship first-class in MVP, and which providers (Jira/Linear × GitHub/GitLab) each supports at launch."
+              head: "Persistent workspace lifecycle",
+              body: "Snapshot-backed clarification continuation is the selected implementation target, gated on a real Vercel snapshot/restore/expiry and git-index probe. Remaining: the general named-Sandbox versus run-local model, cold rebuild policy, TTL/keep-last limits beyond the pending clarification, and park/destroy retention."
             },
             {
-              head: "Plan approval: MVP or fast-follow?",
-              body: "V3 needs the dashboard approval queue and the Plan approved trigger. In MVP, or immediately after?"
+              head: "MVP provider coverage",
+              body: "All original five lifecycle trigger types, the new PR/MR merged trigger, and Plan approval are locked. Remaining: whether ticket lifecycle launches with Jira only or Jira + Linear. PR-created, failed-check, review, and merged triggers support GitHub/GitLab; review remediation must have real GitLab parity rather than advertising an inert provider option."
             },
             {
-              head: "Review ownership",
-              body: "How much PR review the product owns (V4 + Review Agent) versus delegates to tools like CodeRabbit. Affects whether Review Agent is MVP."
+              head: "Review event scope",
+              body: "Which human-review events are actionable for remediation: changes requested only, ordinary review comments, unresolved inline threads, selected mentions, or some combination? GitHub/GitLab parity and workflow-authored-event filtering are locked."
             },
             {
-              head: "Suspend vs end-and-re-enter",
-              body: "Approval and clarification waits: durably suspend the workflow instance, or terminate and re-enter via a trigger carrying the state (what V3 draws). Affects definition versioning mid-wait and zombie-instance risk."
+              head: "CI failure granularity",
+              body: "Choose GitHub <code>check_run</code>, <code>workflow_run</code>, or <code>check_suite</code>; define sibling-failure accumulation, first-failure opt-in, actionable timeout/infrastructure outcomes, and whether allowlists name jobs, workflows, suites, or pipelines. GitLab uses terminal pipelines."
             },
             {
-              head: "Input binding mechanism",
-              body: "How block inputs bind to prior outputs: auto-wiring by shape, or explicit template expressions like ${steps.checks.output.failures} in block config — same language as conditions either way."
+              head: "Trigger deployment scope",
+              body: "Definition lifecycle is locked: mutable Save Draft, independent layout, explicit immutable Deploy, rollback by deployed version, and exact-version dispatch pinning. The fresh seeded ticket workflow is the only no-deployment fallback. Remaining: whether one definition globally owns a trigger type or repository/provider/environment-scoped deployments may share it."
+            },
+            {
+              head: "Missed-event recovery",
+              body: "Does MVP rely on provider webhook redelivery alone, or also poll/reconcile for CI and review events that were never delivered? Durable deduplication, coalescing, and pending-event handling after receipt are already locked."
+            },
+            {
+              head: "Multi-repository remediation",
+              body: "Decide per-PR/head versus ticket-wide remediation, whether successful repositories may publish while another remains unresolved, what ticket status represents a partial result, and how events from multiple PRs under one ticket interact with the active-run claim."
+            },
+            {
+              head: "Arthur tracing policy",
+              body: "Core run/block telemetry is automatic. Decide whether Arthur prompt/tool tracing is also automatic whenever configured, a workflow-level opt-in, or represented by the passive <code>Trace run</code> block."
             }
           ]
         }
@@ -1504,8 +1552,7 @@
         for (const frame of FRAMES) {
           const w = frame.width;
           const h = frame.el.offsetHeight;
-          const ownRow = frame.kind === "registry";
-          if (x > 0 && (ownRow || x + w > MAX_ROW_W)) {
+          if (x > 0 && x + w > MAX_ROW_W) {
             x = 0;
             y += rowH + BOARD_GAP;
             rowH = 0;
@@ -1513,14 +1560,8 @@
           frame.pos = { x, y, w, h };
           frame.el.style.left = `${x}px`;
           frame.el.style.top = `${y}px`;
-          if (ownRow) {
-            x = 0;
-            y += h + BOARD_GAP;
-            rowH = 0;
-          } else {
-            x += w + BOARD_GAP;
-            rowH = Math.max(rowH, h);
-          }
+          x += w + BOARD_GAP;
+          rowH = Math.max(rowH, h);
         }
       }
 
@@ -1639,20 +1680,6 @@
           btn.addEventListener("click", () => focusFrame(frame.slug));
           frameListEl.appendChild(btn);
         });
-      }
-
-      function currentFrameIndex() {
-        const active = frameListEl.querySelector("button.active");
-        if (!active) return -1;
-        return FRAMES.findIndex((f) => f.slug === active.dataset.slug);
-      }
-
-      function stepFrame(delta) {
-        const cur = currentFrameIndex();
-        const next = cur < 0
-          ? (delta > 0 ? 0 : FRAMES.length - 1)
-          : (cur + delta + FRAMES.length) % FRAMES.length;
-        focusFrame(FRAMES[next].slug);
       }
 
       /* ---------- detail panel ---------- */
@@ -1822,8 +1849,6 @@
         document.getElementById("zoom-in").addEventListener("click", () => zoomAt(view.scale * 1.2));
         document.getElementById("zoom-out").addEventListener("click", () => zoomAt(view.scale / 1.2));
         document.getElementById("fit-all").addEventListener("click", () => fitAll());
-        document.getElementById("frame-prev").addEventListener("click", () => stepFrame(-1));
-        document.getElementById("frame-next").addEventListener("click", () => stepFrame(1));
 
         addEventListener("hashchange", () => {
           const slug = location.hash.slice(1);
