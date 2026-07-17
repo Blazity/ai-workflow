@@ -12,6 +12,7 @@ import {
   canAddAdditionalInput,
   paramsAfterBindingRepair,
   removeLegacyRequiredCheck,
+  validatedBindingInputsByNode,
   validatedBindingInputNames,
 } from "./binding-options.ts";
 
@@ -280,6 +281,105 @@ test("only graph- and type-valid replacement bindings are eligible to retire leg
       options: repairOptions,
     }),
     ["checks.check"],
+  );
+});
+
+test("compatibility repair waits for complete current server-resolved contracts", () => {
+  const dynamicDefinition: WorkflowDefinition = {
+    schemaVersion: 1,
+    nodes: [
+      { id: "trigger", type: "trigger_ticket_ai", x: 0, y: 0, params: {}, inputs: {} },
+      {
+        id: "dynamic",
+        type: "call_llm",
+        x: 1,
+        y: 0,
+        params: { outputSchema: '{"type":"number"}' },
+        inputs: { prompt: "trigger.ticketKey" },
+      },
+      {
+        id: "arthur",
+        type: "arthur_injection_check",
+        x: 2,
+        y: 0,
+        params: { legacyContentFromStep: "dynamic" },
+        inputs: { content: "steps.dynamic.output.output" },
+      },
+    ],
+    edges: [
+      { from: "trigger", to: "dynamic" },
+      { from: "dynamic", to: "arthur" },
+    ],
+  };
+  const dynamicOptions = {
+    ...options,
+    blockRegistry: {
+      ...registry,
+      arthur_injection_check: contract(
+        "arthur_injection_check",
+        objectSchema({ status: stringSchema }),
+        { content: { required: true, schema: stringSchema } },
+      ),
+    },
+  } as WorkflowEditorOptions;
+  const resolvedContracts = {
+    trigger: dynamicOptions.blockRegistry.trigger_ticket_ai,
+    dynamic: {
+      ...dynamicOptions.blockRegistry.call_llm,
+      output: {
+        schema: objectSchema({ output: numberSchema }),
+        bindingSchema: objectSchema({ output: numberSchema }),
+        statusVariants: ["ok"],
+      },
+    },
+    arthur: dynamicOptions.blockRegistry.arthur_injection_check,
+  } satisfies Record<string, WorkflowBlockContract>;
+
+  assert.deepEqual(
+    validatedBindingInputsByNode({
+      definition: dynamicDefinition,
+      options: dynamicOptions,
+      validationIsCurrent: true,
+      validationStatus: "checking",
+      nodeContracts: {},
+    }),
+    {},
+  );
+  assert.deepEqual(
+    validatedBindingInputsByNode({
+      definition: dynamicDefinition,
+      options: dynamicOptions,
+      validationIsCurrent: true,
+      validationStatus: "invalid",
+      nodeContracts: resolvedContracts,
+    }).arthur,
+    [],
+  );
+  const stringContracts = {
+    ...resolvedContracts,
+    dynamic: dynamicOptions.blockRegistry.call_llm,
+  };
+  assert.deepEqual(
+    validatedBindingInputsByNode({
+      definition: dynamicDefinition,
+      options: dynamicOptions,
+      validationIsCurrent: true,
+      // The overall candidate is still invalid because the compatibility
+      // marker remains until Save Draft performs this proven repair.
+      validationStatus: "invalid",
+      nodeContracts: stringContracts,
+    }).arthur,
+    ["content"],
+  );
+  assert.deepEqual(
+    validatedBindingInputsByNode({
+      definition: dynamicDefinition,
+      options: dynamicOptions,
+      validationIsCurrent: false,
+      validationStatus: "invalid",
+      nodeContracts: resolvedContracts,
+    }),
+    {},
   );
 });
 

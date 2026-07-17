@@ -351,6 +351,36 @@ export function validatedBindingInputNames(input: BindingEditorInput): string[] 
     .map((row) => row.name);
 }
 
+export function validatedBindingInputsByNode(input: {
+  definition: WorkflowDefinition;
+  options: WorkflowEditorOptions;
+  validationIsCurrent: boolean;
+  validationStatus: "checking" | "valid" | "invalid" | "error";
+  nodeContracts: Record<string, WorkflowBlockContract>;
+}): Record<string, string[]> {
+  if (
+    !input.validationIsCurrent ||
+    (input.validationStatus !== "valid" && input.validationStatus !== "invalid") ||
+    input.definition.nodes.some(
+      (node) => !Object.prototype.hasOwnProperty.call(input.nodeContracts, node.id),
+    )
+  ) {
+    return {};
+  }
+
+  return Object.fromEntries(
+    input.definition.nodes.map((node) => [
+      node.id,
+      validatedBindingInputNames({
+        definition: input.definition,
+        consumerId: node.id,
+        options: input.options,
+        nodeContracts: input.nodeContracts,
+      }),
+    ]),
+  );
+}
+
 export function canAddAdditionalInput(
   name: string,
   rows: readonly Pick<BindingEditorRow, "name">[],

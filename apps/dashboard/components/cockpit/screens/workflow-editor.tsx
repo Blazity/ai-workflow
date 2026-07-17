@@ -43,7 +43,7 @@ import {
 } from "@/lib/workflow-editor/validation-controller";
 import { workflowEditorActions } from "@/lib/workflow-editor/editor-actions";
 import { executionLimitsFromDefinition } from "@/lib/workflow-editor/execution-limits";
-import { validatedBindingInputNames } from "@/lib/workflow-editor/binding-options";
+import { validatedBindingInputsByNode } from "@/lib/workflow-editor/binding-options";
 
 interface ValidationRequest {
   definitionId: number;
@@ -165,19 +165,13 @@ export function WorkflowEditorScreen({
         );
   const validationTargetKey = `${selectedId}:${semanticKey}`;
   const validationIsCurrent = validation.key === validationTargetKey;
-  const repairedInputsByNode = validationIsCurrent
-    ? Object.fromEntries(
-        semanticDefinition.nodes.map((node) => [
-          node.id,
-          validatedBindingInputNames({
-            definition: semanticDefinition,
-            consumerId: node.id,
-            options,
-            nodeContracts: validation.state.nodeContracts,
-          }),
-        ]),
-      )
-    : {};
+  const repairedInputsByNode = validatedBindingInputsByNode({
+    definition: semanticDefinition,
+    options,
+    validationIsCurrent,
+    validationStatus: validation.state.status,
+    nodeContracts: validation.state.nodeContracts,
+  });
   const compatibilityRepairPending =
     validationIsCurrent &&
     JSON.stringify(
