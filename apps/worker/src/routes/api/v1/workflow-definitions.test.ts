@@ -51,6 +51,10 @@ vi.mock("../../../workflow-definition/models.js", async (importOriginal) => {
       claude: ["claude-opus-4-8", "claude-sonnet-5"],
       codex: ["gpt-5-codex", "gpt-5"],
     })),
+    fetchTicketStatuses: vi.fn(async () => [
+      { id: "10010", name: "AI Review" },
+      { id: "10011", name: "Done" },
+    ]),
   };
 });
 
@@ -805,8 +809,8 @@ describe("GET /api/v1/workflow-definition (shim)", () => {
     ]);
     expect(body.options.models.codex).toEqual(["gpt-5-codex", "gpt-5"]);
     expect(body.options.ticketStatusTargets).toEqual([
-      { value: "ai_review", label: "AI Review" },
-      { value: "backlog", label: "Backlog" },
+      { value: "10010", label: "AI Review" },
+      { value: "10011", label: "Done" },
     ]);
   });
 

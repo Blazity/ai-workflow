@@ -632,6 +632,7 @@ describe("workflowDefinitionSchema block-executor node types", () => {
       ["trigger_pr_created", {}],
       ["trigger_pr_checks_failed", {}],
       ["trigger_pr_review", {}],
+      ["trigger_pr_merged", {}],
       ["prepare_workspace", {}],
       ["finalize_workspace", {}],
       ["fix_agent", { provider: "codex", model: "gpt-5", instructions: "focus", maxMinutes: 30 }],
@@ -655,6 +656,7 @@ describe("workflowDefinitionSchema block-executor node types", () => {
       "trigger_pr_created",
       "trigger_pr_checks_failed",
       "trigger_pr_review",
+      "trigger_pr_merged",
       "prepare_workspace",
       "finalize_workspace",
       "fix_agent",
@@ -684,8 +686,12 @@ describe("workflowDefinitionSchema block-executor node types", () => {
       scope: "workflow_owned",
     });
     expect(parseNode({ type: "trigger_pr_review", params: {} })?.params).toEqual({
-      providers: ["github"],
+      providers: ["github", "gitlab"],
       on: ["changes_requested"],
+      scope: "workflow_owned",
+    });
+    expect(parseNode({ type: "trigger_pr_merged", params: {} })?.params).toEqual({
+      providers: ["github", "gitlab"],
       scope: "workflow_owned",
     });
     // Explicit scope round-trips on every PR trigger.
@@ -696,7 +702,7 @@ describe("workflowDefinitionSchema block-executor node types", () => {
       parseNode({ type: "trigger_pr_review", params: { on: ["changes_requested", "commented"] } })
         ?.params,
     ).toEqual({
-      providers: ["github"],
+      providers: ["github", "gitlab"],
       on: ["changes_requested", "commented"],
       scope: "workflow_owned",
     });
@@ -754,14 +760,13 @@ describe("workflowDefinitionSchema block-executor node types", () => {
     expect(shapeOk([node("n", "generic_agent", { prompt: "" })])).toBe(false);
   });
 
-  it("restricts update_ticket_status target to the two domain values", () => {
+  it("accepts provider status ids and rejects blank update_ticket_status targets", () => {
     expect(shapeOk([node("n", "update_ticket_status", { target: "ai_review" })])).toBe(true);
     expect(shapeOk([node("n", "update_ticket_status", { target: "backlog" })])).toBe(true);
-    // A column label or a near-miss typo used to save clean and then silently
-    // resolve to ai_review at run time (resolveTicketMoveTarget's fallback).
-    expect(shapeOk([node("n", "update_ticket_status", { target: "Code Review" })])).toBe(false);
-    expect(shapeOk([node("n", "update_ticket_status", { target: "Backlog" })])).toBe(false);
+    expect(shapeOk([node("n", "update_ticket_status", { target: "10042" })])).toBe(true);
+    expect(shapeOk([node("n", "update_ticket_status", { target: "Code Review" })])).toBe(true);
     expect(shapeOk([node("n", "update_ticket_status", { target: "" })])).toBe(false);
+    expect(shapeOk([node("n", "update_ticket_status", { target: "   " })])).toBe(false);
   });
 
   it("caps the graph size", () => {
@@ -1368,6 +1373,28 @@ describe("validateWorkflowGraph rules", () => {
           `scope:any trigger "trigger" reaches unsafe block "unsafe" (${unsafeType})`,
         ),
       ]),
+    );
+  });
+
+  it("allows only workflow-owned merged triggers to reach ticket transitions", () => {
+    const owned = graph(
+      [
+        node("merged", "trigger_pr_merged", { scope: "workflow_owned" }),
+        node("status", "update_ticket_status", { target: "10042" }),
+      ],
+      [{ from: "merged", to: "status" }],
+    );
+    const arbitrary = graph(
+      [
+        node("merged", "trigger_pr_merged", { scope: "any" }),
+        node("status", "update_ticket_status", { target: "10042" }),
+      ],
+      [{ from: "merged", to: "status" }],
+    );
+
+    expect(validateWorkflowDefinitionForDeployment(owned, registryContext)).toEqual([]);
+    expect(validateWorkflowDefinitionForDeployment(arbitrary, registryContext)).toContain(
+      'scope:any trigger "merged" reaches unsafe block "status" (update_ticket_status).',
     );
   });
 

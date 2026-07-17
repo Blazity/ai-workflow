@@ -1,12 +1,14 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { defineEventHandler, readRawBody, getHeader, createError } from "h3";
 import { env } from "../../../env.js";
+import { getDb } from "../../db/client.js";
 import { IssueTrackerNotFoundError } from "../../adapters/issue-tracker/types.js";
 import { createAdapters } from "../../lib/adapters.js";
 import { cancelRun } from "../../lib/cancel-run.js";
 import { dispatchTicket } from "../../lib/dispatch.js";
 import { logger } from "../../lib/logger.js";
 import { ticketSubjectKey } from "../../lib/subject-key.js";
+import { consumeTicketTransitionIntent } from "../../lib/ticket-transition-intent-store.js";
 import { stopSandboxesByIds } from "../../sandbox/stop-ticket-sandboxes.js";
 
 /**
@@ -49,6 +51,7 @@ export default defineEventHandler(async (event) => {
   const adapters = createAdapters();
   const webhookEvent = typeof body?.webhookEvent === "string" ? body.webhookEvent : null;
   const ticketStatus = extractTicketStatus(body);
+  const ticketStatusId = extractTicketStatusId(body);
   logger.info(
     {
       ticketKey,
@@ -58,6 +61,24 @@ export default defineEventHandler(async (event) => {
     },
     "webhook_payload_parsed",
   );
+
+  if (
+    ticketStatus &&
+    (await consumeTicketTransitionIntent(getDb(), ticketKey, {
+      id: ticketStatusId,
+      name: ticketStatus,
+    }))
+  ) {
+    logger.info(
+      { ticketKey, ticketStatusId, ticketStatus },
+      "webhook_consumed_workflow_transition_intent",
+    );
+    return {
+      status: "ignored",
+      reason: "workflow_transition_intent",
+      ticketKey,
+    };
+  }
 
   if (!ticketStatus) {
     logger.info({ ticketKey }, "webhook_missing_payload_status_dispatching_anyway");
@@ -215,6 +236,10 @@ function extractTicketStatus(body: any): string | null {
   return body?.issue?.fields?.status?.name ?? null;
 }
 
+function extractTicketStatusId(body: any): string | null {
+  return body?.issue?.fields?.status?.id ?? null;
+}
+
 function isAiColumnStatus(status: string): boolean {
   return status.trim().toLowerCase() === env.COLUMN_AI.trim().toLowerCase();
 }
@@ -226,13 +251,6 @@ async function cancelTrackedRun(
   const subjectKey = ticketSubjectKey("jira", ticketKey);
   const entry = await runRegistry.get(subjectKey);
   if (!entry) return false;
-
-  // A pr_trigger run's lifecycle follows the PR, not the ticket column, so a
-  // column move must not cancel it.
-  if (entry.kind === "pr_trigger") {
-    logger.info({ ticketKey }, "webhook_skip_cancel_pr_trigger_run");
-    return false;
-  }
 
   if (entry.state === "reserved") {
     const sandboxIds = await runRegistry

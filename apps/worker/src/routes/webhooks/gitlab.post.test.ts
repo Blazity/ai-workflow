@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
     GITLAB_WEBHOOK_SECRET: "secret",
     GITLAB_PROJECT_ID: undefined as string | undefined,
     MAX_CONCURRENT_AGENTS: 3,
+    VCS_BOT_LOGIN: "blazebot",
   },
   getConfiguredVcsProviders: vi.fn(),
   listRepositories: vi.fn(),
@@ -22,8 +23,10 @@ vi.mock("../../lib/post-pr-gate-dispatch.js", () => ({
 }));
 
 const mockDispatchTriggerEvent = vi.fn();
+const mockResolveEnabledReviewStates = vi.fn();
 vi.mock("../../lib/dispatch-trigger.js", () => ({
   dispatchTriggerEvent: (...args: any[]) => mockDispatchTriggerEvent(...args),
+  resolveEnabledReviewStates: (...args: any[]) => mockResolveEnabledReviewStates(...args),
 }));
 
 vi.mock("../../db/client.js", () => ({ getDb: () => ({}) }));
@@ -42,13 +45,17 @@ function makeApp() {
   return toWebHandler(app);
 }
 
-function makeRequest(body: string, token = "secret"): Request {
+function makeRequest(
+  body: string,
+  token = "secret",
+  eventName = "Merge Request Hook",
+): Request {
   return new Request("http://localhost/", {
     method: "POST",
     headers: {
       "content-type": "application/json",
       "x-gitlab-token": token,
-      "x-gitlab-event": "Merge Request Hook",
+      "x-gitlab-event": eventName,
       "x-gitlab-event-uuid": "delivery-test",
     },
     body,
@@ -83,6 +90,7 @@ describe("POST /webhooks/gitlab", () => {
     vi.clearAllMocks();
     mocks.env.GITLAB_PROJECT_ID = undefined;
     mockDispatchTriggerEvent.mockResolvedValue({ result: "no_definition" });
+    mockResolveEnabledReviewStates.mockResolvedValue(["changes_requested"]);
     mocks.getConfiguredVcsProviders.mockReturnValue([
       {
         kind: "gitlab",
@@ -334,5 +342,93 @@ describe("POST /webhooks/gitlab", () => {
       expect.anything(),
     );
     expect(mockDispatchPostPrGateWebhook).not.toHaveBeenCalled();
+  });
+
+  it("routes a merged merge request to the merged trigger without invoking the legacy gate", async () => {
+    mockDispatchTriggerEvent.mockResolvedValueOnce({ result: "started", runId: "run_merged" });
+    const payload = JSON.parse(validMergeRequestPayload());
+    payload.object_attributes.action = "merge";
+    payload.object_attributes.merge_commit_sha = "merge-sha";
+
+    const response = await makeApp()(makeRequest(JSON.stringify(payload)));
+
+    expect(response.status).toBe(200);
+    expect(mockDispatchTriggerEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        triggerType: "trigger_pr_merged",
+        pr: expect.objectContaining({ mergeSha: "merge-sha" }),
+      }),
+      expect.anything(),
+    );
+    expect(mockDispatchPostPrGateWebhook).not.toHaveBeenCalled();
+  });
+
+  it("does not invoke the legacy gate when no definition handles a merged merge request", async () => {
+    const payload = JSON.parse(validMergeRequestPayload());
+    payload.object_attributes.action = "merge";
+    payload.object_attributes.merge_commit_sha = "merge-sha";
+
+    const response = await makeApp()(makeRequest(JSON.stringify(payload)));
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ status: "ignored", reason: "no_definition" });
+    expect(mockDispatchPostPrGateWebhook).not.toHaveBeenCalled();
+  });
+
+  it("routes an opted-in merge-request note through the common review trigger", async () => {
+    mockResolveEnabledReviewStates.mockResolvedValueOnce(["changes_requested", "commented"]);
+    mockDispatchTriggerEvent.mockResolvedValueOnce({ result: "started", runId: "run_note" });
+    const base = JSON.parse(validMergeRequestPayload());
+    const note = {
+      object_kind: "note",
+      user: { username: "alice" },
+      project: base.project,
+      object_attributes: {
+        action: "create",
+        noteable_type: "MergeRequest",
+        note: "Please add coverage",
+        system: false,
+      },
+      merge_request: base.object_attributes,
+    };
+
+    const response = await makeApp()(makeRequest(JSON.stringify(note), "secret", "Note Hook"));
+
+    expect(response.status).toBe(200);
+    expect(mockResolveEnabledReviewStates).toHaveBeenCalled();
+    expect(mockDispatchTriggerEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        triggerType: "trigger_pr_review",
+        pr: expect.objectContaining({
+          review: { state: "commented", author: "alice", body: "Please add coverage" },
+        }),
+      }),
+      expect.anything(),
+    );
+  });
+
+  it("ignores a merge-request note when commented reviews are not configured", async () => {
+    const base = JSON.parse(validMergeRequestPayload());
+    const note = {
+      object_kind: "note",
+      user: { username: "alice" },
+      project: base.project,
+      object_attributes: {
+        action: "create",
+        noteable_type: "MergeRequest",
+        note: "drive by",
+        system: false,
+      },
+      merge_request: base.object_attributes,
+    };
+
+    const response = await makeApp()(makeRequest(JSON.stringify(note), "secret", "Note Hook"));
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      status: "ignored",
+      reason: "note_ignored",
+    });
+    expect(mockDispatchTriggerEvent).not.toHaveBeenCalled();
   });
 });

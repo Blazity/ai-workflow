@@ -334,4 +334,22 @@ describe("workflow block registry", () => {
       unavailableReason: null,
     });
   });
+
+  it("requires ticketKey only for workflow-owned PR trigger contracts", () => {
+    const owned = resolveWorkflowBlockContract(
+      "trigger_pr_merged",
+      { scope: "workflow_owned", providers: ["github"] },
+      context,
+    );
+    const arbitrary = resolveWorkflowBlockContract(
+      "trigger_pr_merged",
+      { scope: "any", providers: ["github"] },
+      context,
+    );
+
+    expect(owned.output.schema).toMatchObject({ required: expect.arrayContaining(["ticketKey"]) });
+    expect(arbitrary.output.schema).toMatchObject({
+      required: expect.not.arrayContaining(["ticketKey"]),
+    });
+  });
 });

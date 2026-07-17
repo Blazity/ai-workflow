@@ -14,6 +14,8 @@ export interface PrTriggerPayload {
   title: string;
   author: string;
   isDraft: boolean;
+  mergeSha?: string;
+  mergedAt?: string;
   failedChecks?: Array<{ name: string; conclusion: string; detailsUrl?: string }>;
   review?: { state: "changes_requested" | "commented"; author: string; body: string };
   reviews?: Array<{ state: "changes_requested" | "commented"; author: string; body: string }>;
@@ -50,7 +52,11 @@ export type AgentWorkflowInput =
     }
   | {
       kind: "pr_trigger";
-      triggerType: "trigger_pr_created" | "trigger_pr_checks_failed" | "trigger_pr_review";
+      triggerType:
+        | "trigger_pr_created"
+        | "trigger_pr_checks_failed"
+        | "trigger_pr_review"
+        | "trigger_pr_merged";
       subjectKey: string;
       ticketKey?: string;
       ownerToken: string;
@@ -68,7 +74,11 @@ export type AgentWorkflowInput =
       /** Durable pending row this candidate must acknowledge after owner bind. */
       pendingEvent?: {
         headSha: string;
-        triggerType: "trigger_pr_created" | "trigger_pr_checks_failed" | "trigger_pr_review";
+        triggerType:
+          | "trigger_pr_created"
+          | "trigger_pr_checks_failed"
+          | "trigger_pr_review"
+          | "trigger_pr_merged";
         /** Provider delivery snapshot consumed by this candidate. A newer
          * delivery for the same semantic event must remain pending. */
         deliveryId: string;

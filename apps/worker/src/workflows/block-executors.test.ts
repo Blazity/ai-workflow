@@ -47,5 +47,6 @@ describe("block executor exhaustiveness", () => {
     expect(resolveTicketStatusInput({ target: "ai_review" }, { target: "backlog" })).toBe(
       "backlog",
     );
+    expect(resolveTicketStatusInput({ target: "10042" }, {})).toBe("10042");
   });
 });

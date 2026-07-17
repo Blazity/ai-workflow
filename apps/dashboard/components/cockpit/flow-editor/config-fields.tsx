@@ -395,6 +395,13 @@ export function ConfigFields({
           <ConfigNote>Providers are configured in the VCS integration settings.</ConfigNote>
         </>
       );
+    case "trigger_pr_merged":
+      return (
+        <>
+          <PrScopeField node={node} canEdit={canEdit} onChange={onChange} />
+          <ConfigNote>Fires after a pull or merge request is merged.</ConfigNote>
+        </>
+      );
     case "trigger_pr_review": {
       const onStates = arr(node.params.on);
       const effective = onStates.length > 0 ? onStates : ["changes_requested"];

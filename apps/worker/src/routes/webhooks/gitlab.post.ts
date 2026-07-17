@@ -4,7 +4,11 @@ import { PostgresRunRegistry } from "../../adapters/run-registry/postgres.js";
 import { createRepositoryDirectoryForProviders } from "../../adapters/vcs/repository-directory.js";
 import { getDb } from "../../db/client.js";
 import { ticketKeyFromBranch } from "../../lib/branch-prefix.js";
-import { dispatchTriggerEvent, type DispatchTriggerResult } from "../../lib/dispatch-trigger.js";
+import {
+  dispatchTriggerEvent,
+  resolveEnabledReviewStates,
+  type DispatchTriggerResult,
+} from "../../lib/dispatch-trigger.js";
 import {
   type GitLabProject,
   normalizeGitLabMergeRequestEvent,
@@ -27,7 +31,11 @@ export default defineEventHandler(async (event) => {
   }
 
   const gitLabEvent = getHeader(event, "x-gitlab-event");
-  if (gitLabEvent !== "Merge Request Hook" && gitLabEvent !== "Pipeline Hook") {
+  if (
+    gitLabEvent !== "Merge Request Hook" &&
+    gitLabEvent !== "Pipeline Hook" &&
+    gitLabEvent !== "Note Hook"
+  ) {
     return { status: "ignored", reason: "not_supported_event" };
   }
   const deliveryId = getHeader(event, "x-gitlab-event-uuid")?.trim() ?? "";
@@ -42,9 +50,16 @@ export default defineEventHandler(async (event) => {
     return { status: "ignored", reason: "malformed_payload" };
   }
 
+  const needsReviewFilter =
+    gitLabEvent === "Note Hook" ||
+    (gitLabEvent === "Merge Request Hook" && body?.object_attributes?.action === "update");
+  const reviewStates = needsReviewFilter
+    ? await resolveEnabledReviewStates(getDb())
+    : undefined;
   const evt = normalizeGitLabEvent(gitLabEvent, body, {
     deliveryId,
     botUsername: env.VCS_BOT_LOGIN,
+    ...(reviewStates ? { reviewStates } : {}),
   });
 
   if (evt) {
@@ -62,14 +77,14 @@ export default defineEventHandler(async (event) => {
     // claim this MR: no enabled definition, or a non-bot MR the definition
     // ignores (ignored_not_workflow_owned).
     if (
-      gitLabEvent === "Merge Request Hook" &&
+      evt.triggerType === "trigger_pr_created" &&
       (result.result === "no_definition" ||
         result.result === "ignored_not_workflow_owned" ||
         result.result === "ignored_provider")
     ) {
       return dispatchMergeRequestGate(body, true);
     }
-    if (gitLabEvent === "Merge Request Hook" && ticketKeyFromBranch(evt.pr.headRef)) {
+    if (evt.triggerType === "trigger_pr_created" && ticketKeyFromBranch(evt.pr.headRef)) {
       logger.info(
         { headRef: evt.pr.headRef, triggerType: evt.triggerType },
         "post_pr_gate_superseded_by_definition",
@@ -80,6 +95,9 @@ export default defineEventHandler(async (event) => {
 
   if (gitLabEvent === "Merge Request Hook") {
     return dispatchMergeRequestGate(body, false);
+  }
+  if (gitLabEvent === "Note Hook") {
+    return { status: "ignored", reason: "note_ignored" };
   }
   return { status: "ignored", reason: "pipeline_ignored" };
 });

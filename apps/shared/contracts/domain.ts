@@ -211,6 +211,7 @@ export type WorkflowBlockType =
   | "trigger_pr_created"
   | "trigger_pr_checks_failed"
   | "trigger_pr_review"
+  | "trigger_pr_merged"
   | "planning_agent"
   | "implementation_agent"
   | "review_agent"
@@ -250,7 +251,9 @@ export interface BlockOutput {
   [key: string]: JsonValue;
 }
 
-export type TicketStatusTarget = "ai_review" | "backlog";
+/** Provider status identifier persisted by Update Ticket Status. Legacy
+ * `ai_review` / `backlog` values remain valid for existing definitions. */
+export type TicketStatusTarget = string;
 
 export type WorkflowParamValue = string | number | boolean | string[];
 

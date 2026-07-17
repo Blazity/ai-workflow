@@ -62,6 +62,39 @@ describe("normalizeGitHubEvent", () => {
     expect(evt?.triggerType).toBe("trigger_pr_created");
   });
 
+  it("maps a merged pull request to trigger_pr_merged with merge metadata", () => {
+    const evt = normalizeGitHubEvent(
+      "pull_request",
+      {
+        action: "closed",
+        repository: githubRepo(),
+        pull_request: githubPr({
+          merged: true,
+          merge_commit_sha: "merge123",
+          merged_at: "2026-07-17T10:00:00Z",
+        }),
+      },
+      options,
+    );
+
+    expect(evt?.triggerType).toBe("trigger_pr_merged");
+    expect(evt?.pr).toMatchObject({
+      headSha: "abc123",
+      mergeSha: "merge123",
+      mergedAt: "2026-07-17T10:00:00Z",
+    });
+  });
+
+  it("ignores a closed pull request that was not merged", () => {
+    expect(
+      normalizeGitHubEvent(
+        "pull_request",
+        { action: "closed", repository: githubRepo(), pull_request: githubPr({ merged: false }) },
+        options,
+      ),
+    ).toBeNull();
+  });
+
   it("never routes synchronize (stays gate-only)", () => {
     const evt = normalizeGitHubEvent(
       "pull_request",
@@ -286,7 +319,7 @@ describe("normalizeGitHubEvent", () => {
 });
 
 describe("normalizeGitLabEvent", () => {
-  function mrPayload(action: string) {
+  function mrPayload(action: string): any {
     return {
       object_kind: "merge_request",
       user: { username: "alice" },
@@ -360,6 +393,114 @@ describe("normalizeGitLabEvent", () => {
     expect(normalizeGitLabEvent("Merge Request Hook", mrPayload("update"))).toBeNull();
   });
 
+  it("maps a merged merge request to trigger_pr_merged", () => {
+    const payload = mrPayload("merge");
+    payload.object_attributes.merge_commit_sha = "merge-sha";
+    payload.object_attributes.actioned_at = "2026-07-17T10:00:00Z";
+    payload.object_attributes.updated_at = "2026-07-17T09:59:00Z";
+
+    const evt = normalizeGitLabEvent("Merge Request Hook", payload, {
+      deliveryId: "gitlab-merge-1",
+    });
+
+    expect(evt?.triggerType).toBe("trigger_pr_merged");
+    expect(evt?.pr).toMatchObject({
+      headSha: "sha1",
+      mergeSha: "merge-sha",
+      mergedAt: "2026-07-17T10:00:00Z",
+    });
+  });
+
+  it("maps a configured GitLab requested-changes reviewer state to the common review trigger", () => {
+    const payload = mrPayload("update");
+    payload.reviewers = [
+      { username: "alice", state: "requested_changes" },
+    ];
+    payload.changes = {
+      reviewers: [
+        [{ username: "alice", state: "reviewed" }],
+        [{ username: "alice", state: "requested_changes" }],
+      ],
+    };
+
+    const evt = normalizeGitLabEvent("Merge Request Hook", payload, {
+      deliveryId: "gitlab-review-1",
+      reviewStates: ["changes_requested"],
+    });
+
+    expect(evt?.triggerType).toBe("trigger_pr_review");
+    expect(evt?.pr.review).toEqual({
+      state: "changes_requested",
+      author: "alice",
+      body: "",
+    });
+  });
+
+  it("maps an opted-in GitLab merge-request note to a commented review", () => {
+    const evt = normalizeGitLabEvent(
+      "Note Hook",
+      {
+        object_kind: "note",
+        user: { username: "alice" },
+        project: { id: 1, path_with_namespace: "group/demo" },
+        object_attributes: {
+          action: "create",
+          noteable_type: "MergeRequest",
+          note: "Please add a test",
+          system: false,
+        },
+        merge_request: mrPayload("update").object_attributes,
+      },
+      { deliveryId: "gitlab-note-1", reviewStates: ["commented"] },
+    );
+
+    expect(evt?.triggerType).toBe("trigger_pr_review");
+    expect(evt?.pr.review).toEqual({
+      state: "commented",
+      author: "alice",
+      body: "Please add a test",
+    });
+  });
+
+  it("filters GitLab system notes, bot notes, and review states that were not configured", () => {
+    const note = {
+      object_kind: "note",
+      user: { username: "blazebot" },
+      project: { id: 1, path_with_namespace: "group/demo" },
+      object_attributes: {
+        action: "create",
+        noteable_type: "MergeRequest",
+        note: "self",
+        system: false,
+      },
+      merge_request: mrPayload("update").object_attributes,
+    };
+    expect(
+      normalizeGitLabEvent("Note Hook", note, {
+        botUsername: "blazebot",
+        reviewStates: ["commented"],
+      }),
+    ).toBeNull();
+    expect(
+      normalizeGitLabEvent(
+        "Note Hook",
+        {
+          ...note,
+          user: { username: "alice" },
+          object_attributes: { ...note.object_attributes, system: true },
+        },
+        { reviewStates: ["commented"] },
+      ),
+    ).toBeNull();
+    expect(
+      normalizeGitLabEvent(
+        "Note Hook",
+        { ...note, user: { username: "alice" } },
+        { reviewStates: ["changes_requested"] },
+      ),
+    ).toBeNull();
+  });
+
   it("maps a failed pipeline with a merge request to trigger_pr_checks_failed", () => {
     const evt = normalizeGitLabEvent("Pipeline Hook", {
       object_kind: "pipeline",
@@ -382,6 +523,29 @@ describe("normalizeGitLabEvent", () => {
     expect(evt?.delivery.producer).toBe("gitlab-ci");
     expect(evt?.pr.headRef).toBe("blazebot/aiw-3");
     expect(evt?.pr.failedChecks).toEqual([{ name: "lint", conclusion: "failed" }]);
+  });
+
+  it("does not filter bot-created merge requests or external pipeline outcomes", () => {
+    const created = normalizeGitLabEvent("Merge Request Hook", {
+      ...mrPayload("open"),
+      user: { username: "blazebot" },
+    }, { botUsername: "blazebot" });
+    expect(created?.triggerType).toBe("trigger_pr_created");
+
+    const checks = normalizeGitLabEvent("Pipeline Hook", {
+      object_kind: "pipeline",
+      user: { username: "blazebot" },
+      project: { id: 1, path_with_namespace: "group/demo" },
+      object_attributes: { status: "failed", sha: "sha1" },
+      merge_request: {
+        iid: 42,
+        source_branch: "blazebot/aiw-3",
+        target_branch: "main",
+        title: "AIW-3",
+        url: "https://gitlab.com/group/demo/-/merge_requests/42",
+      },
+    }, { botUsername: "blazebot" });
+    expect(checks?.triggerType).toBe("trigger_pr_checks_failed");
   });
 
   it("ignores a passing pipeline", () => {

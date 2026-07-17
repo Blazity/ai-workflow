@@ -22,6 +22,14 @@ vi.mock("../../lib/dispatch.js", () => ({
   dispatchTicket: (...args: any[]) => mockDispatchTicket(...args),
 }));
 
+vi.mock("../../db/client.js", () => ({ getDb: () => ({}) }));
+
+const mockConsumeTicketTransitionIntent = vi.fn();
+vi.mock("../../lib/ticket-transition-intent-store.js", () => ({
+  consumeTicketTransitionIntent: (...args: any[]) =>
+    mockConsumeTicketTransitionIntent(...args),
+}));
+
 const mockCancelRun = vi.fn();
 vi.mock("../../lib/cancel-run.js", () => ({
   cancelRun: (...args: any[]) => mockCancelRun(...args),
@@ -48,7 +56,7 @@ function makeRequest(): Request {
       webhookEvent: "jira:issue_updated",
       issue: {
         key: "PROJ-42",
-        fields: { project: { key: "PROJ" }, status: { name: "Backlog" } },
+        fields: { project: { key: "PROJ" }, status: { id: "10001", name: "Backlog" } },
       },
     }),
   });
@@ -89,25 +97,50 @@ describe("POST /webhooks/jira cancel guard", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockStopSandboxesByIds.mockResolvedValue(0);
+    mockConsumeTicketTransitionIntent.mockResolvedValue(false);
   });
 
-  it("does NOT cancel a pr_trigger run when the ticket leaves the AI column", async () => {
+  it("cancels a pr_trigger run when an unmatched human move takes the ticket out of AI", async () => {
     const adapters = makeAdapters([
       { ticketKey: "PROJ-42", runId: "run_pr", kind: "pr_trigger" },
     ]);
     mocks.createAdapters.mockReturnValue(adapters);
+    mockCancelRun.mockResolvedValue(true);
+
+    const response = await makeApp()(makeRequest());
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      status: "cancelled",
+      reason: "left_ai_column",
+      ticketKey: "PROJ-42",
+    });
+    expect(mockCancelRun).toHaveBeenCalledWith("PROJ-42", "run_pr", adapters.runRegistry);
+    expect(adapters.messaging.notifyForTicket).toHaveBeenCalled();
+  });
+
+  it("consumes a matching workflow transition echo without cancelling or dispatching", async () => {
+    const adapters = makeAdapters([
+      { ticketKey: "PROJ-42", runId: "run_pr", kind: "pr_trigger" },
+    ]);
+    mocks.createAdapters.mockReturnValue(adapters);
+    mockConsumeTicketTransitionIntent.mockResolvedValueOnce(true);
 
     const response = await makeApp()(makeRequest());
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({
       status: "ignored",
-      reason: "left_ai_column",
+      reason: "workflow_transition_intent",
       ticketKey: "PROJ-42",
     });
+    expect(mockConsumeTicketTransitionIntent).toHaveBeenCalledWith(
+      {},
+      "PROJ-42",
+      { id: "10001", name: "Backlog" },
+    );
     expect(mockCancelRun).not.toHaveBeenCalled();
-    expect(adapters.runRegistry.releaseReservation).not.toHaveBeenCalled();
-    expect(adapters.messaging.notifyForTicket).not.toHaveBeenCalled();
+    expect(mockDispatchTicket).not.toHaveBeenCalled();
   });
 
   it("still cancels a ticket-kind run when the ticket leaves the AI column", async () => {

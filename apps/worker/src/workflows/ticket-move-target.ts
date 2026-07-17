@@ -1,6 +1,21 @@
-// Maps an update_ticket_status block's `target` param to its move destination.
-// "backlog" moves to the backlog; every other value (including "ai_review",
-// unknown strings, empty, or undefined) moves to AI review.
-export function resolveTicketMoveTarget(target: unknown): "ai_review" | "backlog" {
-  return target === "backlog" ? "backlog" : "ai_review";
+import type { IssueTrackerMoveTarget } from "../adapters/issue-tracker/types.js";
+
+interface ConfiguredMoveTargets {
+  backlog: IssueTrackerMoveTarget;
+  aiReview: IssueTrackerMoveTarget;
+}
+
+/** Preserve provider status ids selected by workflow authors. The two legacy
+ * symbolic values still resolve through environment-configured destinations. */
+export function resolveTicketMoveTarget(
+  target: unknown,
+  configured: ConfiguredMoveTargets,
+): IssueTrackerMoveTarget {
+  if (target === "backlog") return configured.backlog;
+  if (target === "ai_review") return configured.aiReview;
+  if (typeof target !== "string" || target.trim() === "") {
+    throw new Error("Update Ticket Status requires a non-empty status target.");
+  }
+  const statusId = target.trim();
+  return { name: statusId, statusId };
 }

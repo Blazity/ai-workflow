@@ -59,6 +59,14 @@ const CURRENT_EXECUTOR_OUTPUTS: Record<WorkflowBlockType, BlockOutput[]> = {
       review: { state: "changes_requested", author: "reviewer", body: "Please fix" },
     },
   ],
+  trigger_pr_merged: [
+    {
+      status: "fired",
+      ...pr,
+      mergeSha: "merge123",
+      mergedAt: "2026-07-17T12:00:00.000Z",
+    },
+  ],
   planning_agent: [
     { status: "ready", plan: "Plan" },
     {

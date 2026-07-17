@@ -34,6 +34,7 @@ export function nodeSummary(node: FlowNodeDef, options: WorkflowEditorOptions): 
   switch (node.type) {
     case "trigger_pr_created":
     case "trigger_pr_checks_failed":
+    case "trigger_pr_merged":
       return node.params.scope === "any" ? "any PR" : "workflow-owned only";
     case "trigger_pr_review": {
       const on = node.params.on;

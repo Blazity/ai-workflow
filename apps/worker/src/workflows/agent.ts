@@ -242,10 +242,12 @@ export function resolveSlackMessageInput(
 export function resolveTicketStatusInput(
   params: Record<string, unknown>,
   resolvedInputs: Record<string, unknown>,
-): "ai_review" | "backlog" {
-  return resolveTicketMoveTarget(
-    typeof resolvedInputs.target === "string" ? resolvedInputs.target : params.target,
-  );
+): string {
+  const target = typeof resolvedInputs.target === "string" ? resolvedInputs.target : params.target;
+  if (typeof target !== "string" || target.trim() === "") {
+    throw new Error("Update Ticket Status requires a non-empty status target.");
+  }
+  return target.trim();
 }
 
 function publicationPrForTelemetry(
@@ -393,6 +395,8 @@ function triggerOutputFor(entry: AgentWorkflowInput): BlockOutput {
         body: pr.review.body,
       };
     }
+    if (pr.mergeSha) output.mergeSha = pr.mergeSha;
+    if (pr.mergedAt) output.mergedAt = pr.mergedAt;
     return output;
   }
   if (entry.kind === "plan_approved") {
@@ -638,6 +642,50 @@ async function moveTicket(ticketId: string, target: IssueTrackerMoveTarget) {
   const { createStepAdapters } = await import("../lib/step-adapters.js");
   const { issueTracker } = createStepAdapters();
   await issueTracker.moveTicket(ticketId, target);
+}
+
+export async function moveTicketWithIntentStep(
+  ticketId: string,
+  target: IssueTrackerMoveTarget,
+  owner: { subjectKey: string; ownerToken: string; runId: string },
+): Promise<void> {
+  "use step";
+  const { getDb } = await import("../db/client.js");
+  const { createStepAdapters } = await import("../lib/step-adapters.js");
+  const {
+    discardTicketTransitionIntent,
+    recordTicketTransitionIntent,
+  } = await import("../lib/ticket-transition-intent-store.js");
+  const db = getDb();
+  const intentId = await recordTicketTransitionIntent(db, {
+    ticketKey: ticketId,
+    ...owner,
+    target,
+  });
+  const issueTracker = createStepAdapters().issueTracker;
+  try {
+    const current = await issueTracker.fetchTicket(ticketId);
+    if (!ticketAlreadyAtTarget(current, target)) await issueTracker.moveTicket(ticketId, target);
+  } catch (error) {
+    try {
+      const current = await issueTracker.fetchTicket(ticketId);
+      if (ticketAlreadyAtTarget(current, target)) return;
+    } catch {
+      // Preserve the original provider failure after best-effort reconciliation.
+    }
+    await discardTicketTransitionIntent(db, intentId).catch(() => undefined);
+    throw error;
+  }
+}
+
+function ticketAlreadyAtTarget(
+  ticket: { trackerStatus: string; trackerStatusId?: string },
+  target: IssueTrackerMoveTarget,
+): boolean {
+  return typeof target === "string"
+    ? ticket.trackerStatus.toLowerCase() === target.toLowerCase()
+    : (target.statusId !== undefined && ticket.trackerStatusId === target.statusId) ||
+        ticket.trackerStatus.toLowerCase() === target.name.toLowerCase();
 }
 
 async function postTicketComment(ticketId: string, comment: string): Promise<void> {
@@ -2103,8 +2151,18 @@ async function agentWorkflowBody(
 
           case "update_ticket_status": {
             const targetName = resolveTicketStatusInput(node.params, resolvedInputs);
-            const target = targetName === "backlog" ? backlogMoveTarget() : aiReviewMoveTarget();
-            await moveTicket(ticketId, target);
+            const target = resolveTicketMoveTarget(targetName, {
+              backlog: backlogMoveTarget(),
+              aiReview: aiReviewMoveTarget(),
+            });
+            if (!entry.ticketKey) {
+              throw new Error("Update Ticket Status requires a correlated ticket.");
+            }
+            await moveTicketWithIntentStep(entry.ticketKey, target, {
+              subjectKey: entry.subjectKey,
+              ownerToken: entry.ownerToken,
+              runId: workflowRunId,
+            });
             return { kind: "next", output: { status: "ok", target: targetName } };
           }
 

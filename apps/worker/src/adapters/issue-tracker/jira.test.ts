@@ -38,7 +38,7 @@ describe("JiraAdapter", () => {
               ],
             },
             labels: ["frontend"],
-            status: { name: "AI" },
+            status: { id: "10000", name: "AI" },
             attachment: [],
           },
         }),
@@ -52,6 +52,7 @@ describe("JiraAdapter", () => {
       expect(ticket.title).toBe("Add login page");
       expect(ticket.comments).toHaveLength(1);
       expect(ticket.trackerStatus).toBe("AI");
+      expect(ticket.trackerStatusId).toBe("10000");
       expect(ticket.attachments).toEqual([]);
     });
   });
@@ -415,6 +416,39 @@ describe("JiraAdapter", () => {
     });
   });
 
+  describe("listStatuses", () => {
+    it("flattens and deduplicates statuses configured for the Jira project", async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => [
+          {
+            id: "10001",
+            name: "Task",
+            statuses: [
+              { id: "1", name: "To Do" },
+              { id: 2, name: "In Progress" },
+            ],
+          },
+          {
+            id: "10002",
+            name: "Bug",
+            statuses: [
+              { id: "1", name: "To Do" },
+              { id: "3", name: "Done" },
+            ],
+          },
+        ],
+      });
+
+      await expect(jiraAdapter().listStatuses()).resolves.toEqual([
+        { id: "1", name: "To Do" },
+        { id: "2", name: "In Progress" },
+        { id: "3", name: "Done" },
+      ]);
+      expect(mockFetch.mock.calls[0][0]).toBe(`${API_BASE}/rest/api/3/project/PROJ/statuses`);
+    });
+  });
+
   describe("moveTicket", () => {
     it("fetches transitions then posts the matching one", async () => {
       mockFetch
@@ -470,6 +504,45 @@ describe("JiraAdapter", () => {
       const transitionCall = mockFetch.mock.calls[1];
       expect(JSON.parse(transitionCall[1].body)).toEqual({
         transition: { id: "11" },
+      });
+    });
+
+    it("resolves a provider status id against the currently valid transitions", async () => {
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            transitions: [
+              { id: "31", name: "Finish", to: { id: "10042", name: "Done" } },
+            ],
+          }),
+        })
+        .mockResolvedValueOnce({ ok: true, json: async () => ({}) });
+
+      await jiraAdapter().moveTicket("10001", { name: "10042", statusId: "10042" });
+
+      expect(JSON.parse(mockFetch.mock.calls[1][1].body)).toEqual({
+        transition: { id: "31" },
+      });
+    });
+
+    it("falls back to an exact destination name when a custom value is not a status id", async () => {
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            transitions: [{ id: "31", name: "Code Review", to: { id: "10042" } }],
+          }),
+        })
+        .mockResolvedValueOnce({ ok: true, json: async () => ({}) });
+
+      await jiraAdapter().moveTicket("10001", {
+        name: "Code Review",
+        statusId: "Code Review",
+      });
+
+      expect(JSON.parse(mockFetch.mock.calls[1][1].body)).toEqual({
+        transition: { id: "31" },
       });
     });
   });

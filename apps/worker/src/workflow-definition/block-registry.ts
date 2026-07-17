@@ -260,7 +260,7 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
       "✎",
     ),
     defaults: {
-      providers: ["github"],
+      providers: ["github", "gitlab"],
       on: ["changes_requested"],
       scope: "workflow_owned",
     },
@@ -296,6 +296,47 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
         "author",
         "isDraft",
         "review",
+      ],
+    ),
+    statusVariants: ["fired"],
+  },
+  trigger_pr_merged: {
+    presentation: presentation(
+      "trigger",
+      "PR merged",
+      "Starts when an allowed pull or merge request is merged.",
+      "◆",
+    ),
+    defaults: { providers: ["github", "gitlab"], scope: "workflow_owned" },
+    inputs: {},
+    output: statusOutput(
+      {
+        ticketKey: stringType(),
+        provider: stringType(),
+        repoPath: stringType(),
+        prNumber: numberType(),
+        prUrl: stringType(),
+        headRef: stringType(),
+        headSha: stringType(),
+        mergeSha: stringType(),
+        mergedAt: stringType(),
+        baseRef: stringType(),
+        title: stringType(),
+        author: stringType(),
+        isDraft: booleanType(),
+      },
+      [
+        "ticketKey",
+        "provider",
+        "repoPath",
+        "prNumber",
+        "prUrl",
+        "headRef",
+        "headSha",
+        "baseRef",
+        "title",
+        "author",
+        "isDraft",
       ],
     ),
     statusVariants: ["fired"],
@@ -646,6 +687,7 @@ const vcsBlocks = new Set<WorkflowBlockType>([
   "trigger_pr_created",
   "trigger_pr_checks_failed",
   "trigger_pr_review",
+  "trigger_pr_merged",
   "prepare_workspace",
   "finalize_workspace",
   "run_pre_pr_checks",
@@ -876,7 +918,8 @@ function resolvedOutput(
     params.scope === "any" &&
     (type === "trigger_pr_created" ||
       type === "trigger_pr_checks_failed" ||
-      type === "trigger_pr_review") &&
+      type === "trigger_pr_review" ||
+      type === "trigger_pr_merged") &&
     fallback.type === "object"
   ) {
     return {

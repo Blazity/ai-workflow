@@ -105,6 +105,24 @@ describe("fetchAvailableModels", () => {
   });
 });
 
+describe("fetchTicketStatuses", () => {
+  it("returns provider statuses and fails closed to the configured fallback path", async () => {
+    const { fetchTicketStatuses } = await import("./models.js");
+    await expect(
+      fetchTicketStatuses({
+        listStatuses: vi.fn(async () => [{ id: "1", name: "To Do" }]),
+      } as any),
+    ).resolves.toEqual([{ id: "1", name: "To Do" }]);
+    await expect(
+      fetchTicketStatuses({
+        listStatuses: vi.fn(async () => {
+          throw new Error("Jira unavailable");
+        }),
+      } as any),
+    ).resolves.toEqual([]);
+  });
+});
+
 describe("buildWorkflowEditorOptions", () => {
   it("dedupes the default model already present in the active kind list", async () => {
     state.env.AGENT_KIND = "claude";
@@ -121,6 +139,23 @@ describe("buildWorkflowEditorOptions", () => {
     expect(options.ticketStatusTargets).toEqual([
       { value: "ai_review", label: "AI Review" },
       { value: "backlog", label: "Backlog" },
+    ]);
+  });
+
+  it("uses deduplicated provider-backed ticket statuses when discovery succeeds", async () => {
+    const { buildWorkflowEditorOptions } = await import("./models.js");
+    const options = buildWorkflowEditorOptions(
+      { claude: [], codex: [] },
+      [
+        { id: "3", name: "Done" },
+        { id: "2", name: "In Progress" },
+        { id: "3", name: "Done duplicate" },
+      ],
+    );
+
+    expect(options.ticketStatusTargets).toEqual([
+      { value: "3", label: "Done" },
+      { value: "2", label: "In Progress" },
     ]);
   });
 
@@ -173,7 +208,7 @@ describe("buildWorkflowEditorOptions", () => {
       available: false,
       unavailableReason: "Arthur Engine is not configured.",
     });
-    expect(Object.keys(options.blockRegistry)).toHaveLength(27);
+    expect(Object.keys(options.blockRegistry)).toHaveLength(28);
     expect(options.runBindingSchema).toMatchObject({
       type: "object",
       properties: {

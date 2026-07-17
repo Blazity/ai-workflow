@@ -1,4 +1,5 @@
 import type { WorkflowEditorOptions } from "@shared/contracts";
+import type { IssueTrackerAdapter } from "../adapters/issue-tracker/types.js";
 import { env } from "../../env.js";
 import {
   buildWorkflowBlockRegistry,
@@ -32,6 +33,20 @@ export async function fetchAvailableModels(): Promise<AvailableModels> {
   const value: AvailableModels = { claude, codex };
   cache = { value, expiresAt: now + CACHE_TTL_MS };
   return value;
+}
+
+export async function fetchTicketStatuses(
+  issueTracker?: IssueTrackerAdapter,
+): Promise<Array<{ id: string; name: string }>> {
+  try {
+    const adapter =
+      issueTracker ?? (await import("../lib/adapters.js")).createAdapters().issueTracker;
+    return (await adapter.listStatuses?.()) ?? [];
+  } catch {
+    // The editor remains usable during provider outages. Passing an empty list
+    // makes buildWorkflowEditorOptions expose the configured legacy targets.
+    return [];
+  }
 }
 
 async function fetchClaudeModels(): Promise<string[]> {
@@ -76,9 +91,13 @@ async function fetchCodexModels(): Promise<string[]> {
   }
 }
 
-export function buildWorkflowEditorOptions(models: AvailableModels): WorkflowEditorOptions {
+export function buildWorkflowEditorOptions(
+  models: AvailableModels,
+  discoveredTicketStatuses: Array<{ id: string; name: string }> = [],
+): WorkflowEditorOptions {
   const agentKind = env.AGENT_KIND;
   const defaultModel = agentKind === "codex" ? env.CODEX_MODEL : env.CLAUDE_MODEL;
+  const ticketStatuses = dedupeTicketStatuses(discoveredTicketStatuses);
   return {
     agentKind,
     defaultModel,
@@ -87,13 +106,34 @@ export function buildWorkflowEditorOptions(models: AvailableModels): WorkflowEdi
       claude: dedupePrepend(env.CLAUDE_MODEL, models.claude),
       codex: dedupePrepend(env.CODEX_MODEL, models.codex),
     },
-    ticketStatusTargets: [
-      { value: "ai_review", label: env.COLUMN_AI_REVIEW },
-      { value: "backlog", label: env.COLUMN_BACKLOG },
-    ],
+    ticketStatusTargets:
+      ticketStatuses.length > 0
+        ? ticketStatuses.map((status) => ({
+            value: status.id,
+            label: status.name,
+          }))
+        : [
+            { value: "ai_review", label: env.COLUMN_AI_REVIEW },
+            { value: "backlog", label: env.COLUMN_BACKLOG },
+          ],
     blockRegistry: buildWorkflowBlockRegistry(workflowBlockRegistryContextFromEnv()),
     runBindingSchema: RUN_BINDING_SCHEMA,
   };
+}
+
+function dedupeTicketStatuses(
+  statuses: Array<{ id: string; name: string }>,
+): Array<{ id: string; name: string }> {
+  const seen = new Set<string>();
+  const result: Array<{ id: string; name: string }> = [];
+  for (const status of statuses) {
+    const id = status.id.trim();
+    const name = status.name.trim();
+    if (!id || !name || seen.has(id)) continue;
+    seen.add(id);
+    result.push({ id, name });
+  }
+  return result;
 }
 
 export function workflowBlockRegistryContextFromEnv(): WorkflowBlockRegistryContext {

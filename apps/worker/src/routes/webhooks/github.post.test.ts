@@ -60,7 +60,7 @@ function repo() {
   return { owner: { login: "acme" }, name: "app", html_url: "https://github.com/acme/app" };
 }
 
-function pullRequestBody(action: string, headRef = "blazebot/aiw-1") {
+function pullRequestBody(action: string, headRef = "blazebot/aiw-1"): any {
   return {
     action,
     repository: repo(),
@@ -219,6 +219,37 @@ describe("POST /webhooks/github", () => {
       expect.objectContaining({ triggerType: "trigger_pr_checks_failed" }),
       expect.anything(),
     );
+    expect(mockDispatchPostPrGateWebhook).not.toHaveBeenCalled();
+  });
+
+  it("dispatches a merged pull request through the merged trigger", async () => {
+    mockDispatchTriggerEvent.mockResolvedValueOnce({ result: "started", runId: "run_merge" });
+    const body = pullRequestBody("closed");
+    body.pull_request.merged = true;
+    body.pull_request.merge_commit_sha = "merge-sha";
+    body.pull_request.merged_at = "2026-07-17T10:00:00Z";
+
+    const response = await makeApp()(makeRequest(body));
+
+    expect(response.status).toBe(200);
+    expect(mockDispatchTriggerEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        triggerType: "trigger_pr_merged",
+        pr: expect.objectContaining({ mergeSha: "merge-sha" }),
+      }),
+      expect.anything(),
+    );
+    expect(mockDispatchPostPrGateWebhook).not.toHaveBeenCalled();
+  });
+
+  it("does not invoke the legacy gate when no definition handles a merged pull request", async () => {
+    const body = pullRequestBody("closed");
+    body.pull_request.merged = true;
+
+    const response = await makeApp()(makeRequest(body));
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ status: "ignored", reason: "no_definition" });
     expect(mockDispatchPostPrGateWebhook).not.toHaveBeenCalled();
   });
 

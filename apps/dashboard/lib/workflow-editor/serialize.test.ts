@@ -145,6 +145,7 @@ test("round-trips explicit ownership scope for every PR trigger", () => {
       y: 0,
       params: { scope: "any", on: ["changes_requested"] },
     },
+    { id: "merged", type: "trigger_pr_merged", x: 0, y: 0, params: { scope: "workflow_owned" } },
   ]);
 
   const out = serializeWorkflowDefinition(nodes, []);
@@ -163,6 +164,13 @@ test("round-trips explicit ownership scope for every PR trigger", () => {
       x: 0,
       y: 0,
       params: { scope: "any", on: ["changes_requested"] },
+    },
+    {
+      id: "merged",
+      type: "trigger_pr_merged",
+      x: 0,
+      y: 0,
+      params: { scope: "workflow_owned" },
     },
   ]);
 });

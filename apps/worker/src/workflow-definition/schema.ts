@@ -1,6 +1,5 @@
 import { z } from "zod";
 import type {
-  TicketStatusTarget,
   WorkflowBindingSource,
   WorkflowBlockType,
   WorkflowDefinition,
@@ -70,15 +69,6 @@ const reviewStates = z.enum(["changes_requested", "commented"]);
 const prTriggerScope = z.enum(["workflow_owned", "any"]);
 const ciProducer = z.string().trim().min(1).max(100).regex(/^[A-Za-z0-9._-]+$/);
 
-// Mirrors TicketStatusTarget: the Record makes a domain value added or dropped a
-// build error here, so the accepted targets cannot drift from the ones the
-// editor offers (buildWorkflowEditorOptions) or the runtime honours
-// (resolveTicketMoveTarget).
-const ticketStatusTargets = {
-  ai_review: "ai_review",
-  backlog: "backlog",
-} as const satisfies Record<TicketStatusTarget, TicketStatusTarget>;
-
 const triggerNode = z
   .object({ ...baseNodeFields, type: z.literal("trigger_ticket_ai"), params: emptyParams })
   .strict();
@@ -124,8 +114,21 @@ const triggerPrReviewNode = z
     type: z.literal("trigger_pr_review"),
     params: z
       .object({
-        providers: z.array(vcsProviders).default(["github"]),
+        providers: z.array(vcsProviders).default(["github", "gitlab"]),
         on: z.array(reviewStates).default(["changes_requested"]),
+        scope: prTriggerScope.default("workflow_owned"),
+      })
+      .strict(),
+  })
+  .strict();
+
+const triggerPrMergedNode = z
+  .object({
+    ...baseNodeFields,
+    type: z.literal("trigger_pr_merged"),
+    params: z
+      .object({
+        providers: z.array(vcsProviders).default(["github", "gitlab"]),
         scope: prTriggerScope.default("workflow_owned"),
       })
       .strict(),
@@ -162,7 +165,7 @@ const updateTicketStatusNode = z
   .object({
     ...baseNodeFields,
     type: z.literal("update_ticket_status"),
-    params: z.object({ target: z.nativeEnum(ticketStatusTargets) }).strict(),
+    params: z.object({ target: z.string().trim().min(1).max(200) }).strict(),
   })
   .strict();
 
@@ -266,6 +269,7 @@ const nodeSchema = z.discriminatedUnion("type", [
   triggerPrCreatedNode,
   triggerPrChecksFailedNode,
   triggerPrReviewNode,
+  triggerPrMergedNode,
   planningNode,
   implementationNode,
   reviewNode,
@@ -467,7 +471,8 @@ export function upgradeStoredWorkflowDefinition(raw: unknown): WorkflowDefinitio
     if (
       node.type === "trigger_pr_created" ||
       node.type === "trigger_pr_checks_failed" ||
-      node.type === "trigger_pr_review"
+      node.type === "trigger_pr_review" ||
+      node.type === "trigger_pr_merged"
     ) {
       if (params.scope !== "workflow_owned" && params.scope !== "any") {
         params.scope = params.onlyWorkflowOwned === false ? "any" : "workflow_owned";
@@ -1045,6 +1050,7 @@ export const ANY_SCOPE_BLOCK_POLICY = {
   trigger_pr_created: "entry",
   trigger_pr_checks_failed: "entry",
   trigger_pr_review: "entry",
+  trigger_pr_merged: "entry",
   planning_agent: "deny",
   implementation_agent: "deny",
   review_agent: "deny",
@@ -1085,7 +1091,8 @@ export function validateAnyScopeReviewSafety(def: WorkflowDefinition): string[] 
     if (
       (trigger.type !== "trigger_pr_created" &&
         trigger.type !== "trigger_pr_checks_failed" &&
-        trigger.type !== "trigger_pr_review") ||
+        trigger.type !== "trigger_pr_review" &&
+        trigger.type !== "trigger_pr_merged") ||
       trigger.params.scope !== "any"
     ) {
       continue;

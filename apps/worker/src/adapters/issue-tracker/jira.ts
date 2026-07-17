@@ -21,6 +21,8 @@ type JiraTransition = {
   id: string;
   name?: string;
   to?: {
+    id?: string;
+    name?: string;
     statusCategory?: {
       key?: string;
     };
@@ -32,11 +34,13 @@ export class JiraAdapter implements IssueTrackerAdapter {
   private authHeader: string;
   private cloudIdPromise: Promise<string> | null;
   private selfAccountIdPromise: Promise<string> | null = null;
+  private projectKey: string;
 
   constructor(config: JiraConfig) {
     const trimmed = config.baseUrl.replace(/\/$/, "");
     this.tenantOrigin = new URL(trimmed).origin;
     this.authHeader = `Bearer ${config.apiToken}`;
+    this.projectKey = config.projectKey;
     this.cloudIdPromise = config.cloudId
       ? Promise.resolve(config.cloudId)
       : null;
@@ -119,6 +123,8 @@ export class JiraAdapter implements IssueTrackerAdapter {
       ),
       labels: data.fields.labels ?? [],
       trackerStatus: data.fields.status?.name ?? "",
+      trackerStatusId:
+        data.fields.status?.id == null ? undefined : String(data.fields.status.id),
       attachments: (data.fields.attachment ?? []).map((a: any): TicketAttachment => {
         const contentUrl =
           a.content == null ? undefined : String(a.content).trim();
@@ -150,6 +156,24 @@ export class JiraAdapter implements IssueTrackerAdapter {
       method: "POST",
       body: JSON.stringify({ transition: { id: transition.id } }),
     });
+  }
+
+  async listStatuses(): Promise<Array<{ id: string; name: string }>> {
+    const groups = await this.request(
+      `/rest/api/3/project/${encodeURIComponent(this.projectKey)}/statuses`,
+    );
+    const seen = new Set<string>();
+    const statuses: Array<{ id: string; name: string }> = [];
+    for (const group of Array.isArray(groups) ? groups : []) {
+      for (const status of Array.isArray(group?.statuses) ? group.statuses : []) {
+        const id = status?.id == null ? "" : String(status.id).trim();
+        const name = typeof status?.name === "string" ? status.name.trim() : "";
+        if (!id || !name || seen.has(id)) continue;
+        seen.add(id);
+        statuses.push({ id, name });
+      }
+    }
+    return statuses;
   }
 
   async postComment(id: string, comment: string): Promise<string | null> {
@@ -287,6 +311,13 @@ function findTransition(
     return transitions.find(
       (transition) => String(transition.id) === target.transitionId,
     );
+  }
+
+  if (target.statusId) {
+    const statusTransition = transitions.find(
+      (transition) => String(transition.to?.id ?? "") === target.statusId,
+    );
+    if (statusTransition) return statusTransition;
   }
 
   const normalizedColumn = target.name.toLowerCase();

@@ -89,14 +89,14 @@ export default defineEventHandler(async (event) => {
     // claim this PR: no enabled definition, or a non-bot PR the definition
     // ignores (ignored_not_workflow_owned).
     if (
-      ghEvent === "pull_request" &&
+      evt.triggerType === "trigger_pr_created" &&
       (result.result === "no_definition" ||
         result.result === "ignored_not_workflow_owned" ||
         result.result === "ignored_provider")
     ) {
       return dispatchPostPrGateWebhook(buildGateInput(body, ownerRepo));
     }
-    if (ghEvent === "pull_request" && ticketKeyFromBranch(evt.pr.headRef)) {
+    if (evt.triggerType === "trigger_pr_created" && ticketKeyFromBranch(evt.pr.headRef)) {
       logger.info(
         { prNumber: evt.pr.prNumber, headRef: evt.pr.headRef, triggerType: evt.triggerType },
         "post_pr_gate_superseded_by_definition",

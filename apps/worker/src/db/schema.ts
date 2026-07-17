@@ -130,6 +130,33 @@ export const pendingTriggerEvents = pgTable(
   ],
 );
 
+/** Short-lived proof that a workflow, not a human, initiated a ticket status
+ * change. Jira webhook echoes consume this record instead of cancelling or
+ * dispatching the owning run. */
+export const ticketTransitionIntents = pgTable(
+  "ticket_transition_intents",
+  {
+    id: serial("id").primaryKey(),
+    ticketKey: text("ticket_key").notNull(),
+    subjectKey: text("subject_key").notNull(),
+    ownerToken: text("owner_token").notNull(),
+    runId: text("run_id").notNull(),
+    targetStatusId: text("target_status_id"),
+    targetStatusName: text("target_status_name").notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    consumedAt: timestamp("consumed_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    foreignKey({
+      columns: [t.subjectKey, t.ownerToken],
+      foreignColumns: [activeRuns.subjectKey, activeRuns.ownerToken],
+      name: "ticket_transition_intents_subject_owner_fk",
+    }).onDelete("cascade"),
+    index("ticket_transition_intents_ticket_expiry_idx").on(t.ticketKey, t.expiresAt),
+  ],
+);
+
 /** Replaces blazebot:failed-tickets — FailedTicketMeta as typed columns. */
 export const failedTickets = pgTable("failed_tickets", {
   ticketKey: text("ticket_key").primaryKey(),
