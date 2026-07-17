@@ -5,7 +5,9 @@ import {
   type WorkflowBlockContract,
   type WorkflowBlockInputContract,
   type WorkflowDefinition,
+  type WorkflowDefinitionNode,
   type WorkflowEditorOptions,
+  type WorkflowParamValue,
   type WorkflowValueSchema,
 } from "@shared/contracts";
 
@@ -18,6 +20,30 @@ export interface BindingEditorRow {
   legacy: boolean;
   value: string;
   suggestions: WorkflowBindingSource[];
+}
+
+export function paramsAfterBindingRepair(
+  node: Pick<WorkflowDefinitionNode, "type" | "params">,
+  inputName: string,
+  value: string | undefined,
+): Record<string, WorkflowParamValue> {
+  if (!value || value.trim() === "") return node.params;
+
+  const params = { ...node.params };
+  if (node.type === "arthur_injection_check" && inputName === "content") {
+    delete params.legacyContentFromStep;
+  }
+  if (
+    node.type === "finalize_workspace" &&
+    inputName.startsWith("checks.") &&
+    Array.isArray(params.legacyRequiredChecks)
+  ) {
+    const sourceId = inputName.slice("checks.".length);
+    const remaining = params.legacyRequiredChecks.filter((id) => id !== sourceId);
+    if (remaining.length === 0) delete params.legacyRequiredChecks;
+    else params.legacyRequiredChecks = remaining;
+  }
+  return params;
 }
 
 interface BindingEditorInput {

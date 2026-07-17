@@ -10,6 +10,7 @@ import type {
 import {
   buildBindingEditorRows,
   canAddAdditionalInput,
+  paramsAfterBindingRepair,
 } from "./binding-options.ts";
 
 const stringSchema = { type: "string" } as const;
@@ -188,4 +189,38 @@ test("does not suggest a field that can reach the consumer through a failure pat
   });
 
   assert.equal(rows[0]?.suggestions.includes("steps.plan.output.plan"), false);
+});
+
+test("authoring a replacement binding clears the matching Arthur compatibility marker", () => {
+  const node = {
+    id: "arthur",
+    type: "arthur_injection_check" as const,
+    x: 0,
+    y: 0,
+    params: { legacyContentFromStep: "dynamic" },
+    inputs: {},
+  };
+
+  assert.deepEqual(paramsAfterBindingRepair(node, "content", "steps.dynamic.output.value"), {});
+  assert.deepEqual(paramsAfterBindingRepair(node, "content", ""), node.params);
+  assert.deepEqual(paramsAfterBindingRepair(node, "other", "steps.dynamic.output.value"), node.params);
+});
+
+test("authoring checks bindings clears Finalize compatibility markers one at a time", () => {
+  const node = {
+    id: "finalize",
+    type: "finalize_workspace" as const,
+    x: 0,
+    y: 0,
+    params: { legacyRequiredChecks: ["lint", "tests"] },
+    inputs: {},
+  };
+
+  const afterLint = paramsAfterBindingRepair(node, "checks.lint", "steps.lint.output.status");
+  assert.deepEqual(afterLint, { legacyRequiredChecks: ["tests"] });
+  assert.deepEqual(
+    paramsAfterBindingRepair({ ...node, params: afterLint }, "checks.tests", "steps.tests.output.status"),
+    {},
+  );
+  assert.deepEqual(paramsAfterBindingRepair(node, "checks.lint", ""), node.params);
 });

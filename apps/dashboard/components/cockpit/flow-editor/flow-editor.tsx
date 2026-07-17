@@ -32,6 +32,7 @@ import type { Point } from "./ports";
 import { NodePalette, MobilePaletteList } from "./palette";
 import { ConfigFields } from "./config-fields";
 import { BindingFields, updateInputBindings } from "./binding-fields";
+import { paramsAfterBindingRepair } from "@/lib/workflow-editor/binding-options";
 import type { WorkflowValidationState } from "@/lib/workflow-editor/validation-controller";
 import { removeNodeFromGraph } from "@/lib/workflow-editor/graph-edit";
 import {
@@ -796,12 +797,14 @@ export function FlowEditor({
       }
       if (path.startsWith("inputs.")) {
         const name = path.slice(7);
+        const bindingValue = typeof value === "string" ? value : undefined;
         return {
           ...n,
+          params: paramsAfterBindingRepair(n, name, bindingValue),
           inputs: updateInputBindings(
             n.inputs,
             name,
-            typeof value === "string" ? value : undefined,
+            bindingValue,
           ),
         };
       }
