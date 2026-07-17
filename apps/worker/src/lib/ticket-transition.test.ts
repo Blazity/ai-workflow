@@ -1,9 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { IssueTrackerAdapter } from "../adapters/issue-tracker/types.js";
 
-const mocks = vi.hoisted(() => ({ record: vi.fn() }));
+const mocks = vi.hoisted(() => ({ discard: vi.fn(), record: vi.fn() }));
 
 vi.mock("./ticket-transition-intent-store.js", () => ({
+  discardTicketTransitionIntent: (...args: any[]) => mocks.discard(...args),
   recordTicketTransitionIntent: (...args: any[]) => mocks.record(...args),
 }));
 
@@ -31,6 +32,7 @@ function tracker(input: {
 describe("moveTicketWithIntent", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.discard.mockResolvedValue(true);
     mocks.record.mockResolvedValue(7);
   });
 
@@ -100,7 +102,7 @@ describe("moveTicketWithIntent", () => {
     });
   });
 
-  it("retains intent and the original error when a failed call did not reach target", async () => {
+  it("discards the exact intent when a post-error read proves the ticket did not move", async () => {
     const original = new Error("connection reset after request");
     const issueTracker = tracker({
       fetchTicket: vi
@@ -119,6 +121,31 @@ describe("moveTicketWithIntent", () => {
       }),
     ).rejects.toBe(original);
     expect(mocks.record).toHaveBeenCalledOnce();
+    expect(mocks.discard).toHaveBeenCalledWith(db, 7);
+    expect(issueTracker.fetchTicket).toHaveBeenCalledTimes(2);
+  });
+
+  it("retains intent and the original error when the post-error read is unavailable", async () => {
+    const original = new Error("connection reset after request");
+    const issueTracker = tracker({
+      fetchTicket: vi
+        .fn()
+        .mockResolvedValueOnce({ trackerStatus: "In Progress", trackerStatusId: "3" })
+        .mockRejectedValueOnce(new Error("Jira unavailable")),
+      moveTicket: vi.fn().mockRejectedValue(original),
+    });
+
+    await expect(
+      moveTicketWithIntent({
+        db,
+        issueTracker,
+        ticketKey: "AIW-101",
+        target: "Done",
+        owner,
+      }),
+    ).rejects.toBe(original);
+    expect(mocks.record).toHaveBeenCalledOnce();
+    expect(mocks.discard).not.toHaveBeenCalled();
     expect(issueTracker.fetchTicket).toHaveBeenCalledTimes(2);
   });
 
@@ -141,6 +168,7 @@ describe("moveTicketWithIntent", () => {
       }),
     ).resolves.toBeUndefined();
     expect(mocks.record).toHaveBeenCalledOnce();
+    expect(mocks.discard).not.toHaveBeenCalled();
   });
 
   it("does not reconcile a failed move from a same-name, different-id post-read", async () => {
@@ -163,6 +191,7 @@ describe("moveTicketWithIntent", () => {
       }),
     ).rejects.toBe(original);
     expect(mocks.record).toHaveBeenCalledOnce();
+    expect(mocks.discard).toHaveBeenCalledWith(db, 7);
   });
 
   it("does not record or move when the required pre-read fails", async () => {

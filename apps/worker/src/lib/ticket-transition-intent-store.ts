@@ -94,6 +94,18 @@ export async function consumeTicketTransitionIntent(
   return rawRows<{ id: number }>(result).length > 0;
 }
 
+export async function discardTicketTransitionIntent(
+  db: Db,
+  intentId: number,
+): Promise<boolean> {
+  const result = await db.execute(sql`
+    DELETE FROM ticket_transition_intents
+    WHERE id = ${intentId}
+    RETURNING id
+  `);
+  return rawRows<{ id: number }>(result).length > 0;
+}
+
 async function deleteExpiredIntents(db: Db): Promise<void> {
   await db.execute(sql`DELETE FROM ticket_transition_intents WHERE expires_at <= now()`);
 }

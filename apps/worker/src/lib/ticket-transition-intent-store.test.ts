@@ -5,6 +5,7 @@ import { activeRuns, ticketTransitionIntents } from "../db/schema.js";
 import { createTestDb } from "../db/test-db.js";
 import {
   consumeTicketTransitionIntent,
+  discardTicketTransitionIntent,
   recordTicketTransitionIntent,
 } from "./ticket-transition-intent-store.js";
 
@@ -167,6 +168,24 @@ describe("ticket transition intents", () => {
       .orderBy(ticketTransitionIntents.id);
     expect(rows.find(({ id }) => id === olderId)?.consumedAt).toBeInstanceOf(Date);
     expect(rows.find(({ id }) => id === newerId)?.consumedAt).toBeNull();
+  });
+
+  it("discards only the intent with the exact id", async () => {
+    await insertOwner({ ownerToken: "owner-bound", runId: "run-1", state: "bound" });
+    const discardedId = await recordTicketTransitionIntent(db, {
+      ...intentOwner("owner-bound", "run-1"),
+      target: "AI Review",
+    });
+    const retainedId = await recordTicketTransitionIntent(db, {
+      ...intentOwner("owner-bound", "run-1"),
+      target: "AI Review",
+    });
+
+    await expect(discardTicketTransitionIntent(db, discardedId)).resolves.toBe(true);
+    await expect(discardTicketTransitionIntent(db, discardedId)).resolves.toBe(false);
+    expect(await db.select().from(ticketTransitionIntents)).toEqual([
+      expect.objectContaining({ id: retainedId }),
+    ]);
   });
 
   it("matches a legacy configured destination by status name", async () => {

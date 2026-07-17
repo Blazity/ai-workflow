@@ -4,7 +4,10 @@ import type {
   TicketContent,
 } from "../adapters/issue-tracker/types.js";
 import type { Db } from "../db/client.js";
-import { recordTicketTransitionIntent } from "./ticket-transition-intent-store.js";
+import {
+  discardTicketTransitionIntent,
+  recordTicketTransitionIntent,
+} from "./ticket-transition-intent-store.js";
 
 export interface TicketTransitionOwner {
   subjectKey: string;
@@ -23,7 +26,7 @@ export async function moveTicketWithIntent(input: {
   const current = await issueTracker.fetchTicket(ticketKey);
   if (ticketAlreadyAtTarget(current, target)) return;
 
-  await recordTicketTransitionIntent(db, {
+  const intentId = await recordTicketTransitionIntent(db, {
     ticketKey,
     target,
     ...owner,
@@ -32,13 +35,16 @@ export async function moveTicketWithIntent(input: {
   try {
     await issueTracker.moveTicket(ticketKey, target);
   } catch (error) {
+    let afterError: Pick<TicketContent, "trackerStatus" | "trackerStatusId">;
     try {
-      const afterError = await issueTracker.fetchTicket(ticketKey);
-      if (ticketAlreadyAtTarget(afterError, target)) return;
+      afterError = await issueTracker.fetchTicket(ticketKey);
     } catch {
       // The original move error is the useful failure. Its intent remains
       // available because the provider may still have accepted the request.
+      throw error;
     }
+    if (ticketAlreadyAtTarget(afterError, target)) return;
+    await discardTicketTransitionIntent(db, intentId);
     throw error;
   }
 }
