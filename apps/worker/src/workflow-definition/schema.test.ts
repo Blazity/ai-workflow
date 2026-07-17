@@ -40,8 +40,9 @@ function node(
   id: string,
   type: WorkflowBlockType,
   params: Record<string, WorkflowParamValue> = {},
+  inputs: WorkflowDefinitionNode["inputs"] = {},
 ): WorkflowDefinitionNode {
-  return { id, type, x: 0, y: 0, params, inputs: {} };
+  return { id, type, x: 0, y: 0, params, inputs };
 }
 
 function graph(
@@ -1386,6 +1387,30 @@ describe("validateWorkflowGraph rules", () => {
       ],
     );
     expect(validateWorkflowDefinitionForDeployment(def, registryContext)).toEqual([]);
+  });
+
+  it.each([
+    "trigger_pr_created",
+    "trigger_pr_checks_failed",
+    "trigger_pr_review",
+    "trigger_pr_merged",
+  ] as const)("rejects a ticketKey binding from scope:any %s", (type) => {
+    const params: Record<string, WorkflowParamValue> = {
+      providers: ["github"],
+      scope: "any",
+      ...(type === "trigger_pr_review" ? { on: ["changes_requested"] } : {}),
+    };
+    const def = graph(
+      [
+        node("trigger", type, params),
+        node("comment", "post_pr_comment", {}, { body: "trigger.ticketKey" }),
+      ],
+      [{ from: "trigger", to: "comment" }],
+    );
+
+    expect(validateWorkflowDefinitionForDeployment(def, registryContext)).toContain(
+      'Block "comment" input "body" references missing field "trigger.ticketKey" for trigger "trigger".',
+    );
   });
 
   it("classifies every block type and exposes only an exact positive safe allowlist", () => {

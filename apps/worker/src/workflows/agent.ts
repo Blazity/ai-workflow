@@ -366,12 +366,14 @@ function triggerTypeFor(entry: AgentWorkflowInput): WorkflowBlockType {
   return "trigger_ticket_ai";
 }
 
-function triggerOutputFor(entry: AgentWorkflowInput): BlockOutput {
+export function triggerOutputFor(entry: AgentWorkflowInput): BlockOutput {
   if (entry.kind === "pr_trigger") {
     const { pr } = entry;
     const output: BlockOutput = {
       status: "fired",
-      ...(entry.ticketKey ? { ticketKey: entry.ticketKey } : {}),
+      ...(entry.scope === "workflow_owned" && entry.ticketKey
+        ? { ticketKey: entry.ticketKey }
+        : {}),
       provider: pr.provider,
       repoPath: pr.repoPath,
       prNumber: pr.prNumber,

@@ -391,21 +391,34 @@ describe("workflow block registry", () => {
     });
   });
 
-  it("requires ticketKey only for workflow-owned PR trigger contracts", () => {
+  it.each([
+    "trigger_pr_created",
+    "trigger_pr_checks_failed",
+    "trigger_pr_review",
+    "trigger_pr_merged",
+  ] as const)("declares ticketKey only for workflow-owned %s contracts", (type) => {
     const owned = resolveWorkflowBlockContract(
-      "trigger_pr_merged",
+      type,
       { scope: "workflow_owned", providers: ["github"] },
       context,
     );
     const arbitrary = resolveWorkflowBlockContract(
-      "trigger_pr_merged",
+      type,
       { scope: "any", providers: ["github"] },
       context,
     );
 
-    expect(owned.output.schema).toMatchObject({ required: expect.arrayContaining(["ticketKey"]) });
-    expect(arbitrary.output.schema).toMatchObject({
-      required: expect.not.arrayContaining(["ticketKey"]),
-    });
+    for (const schema of [owned.output.schema, owned.output.bindingSchema]) {
+      expect(schema).toMatchObject({
+        properties: { ticketKey: { type: "string" } },
+        required: expect.arrayContaining(["ticketKey"]),
+      });
+    }
+    for (const schema of [arbitrary.output.schema, arbitrary.output.bindingSchema]) {
+      expect(schema).toMatchObject({
+        required: expect.not.arrayContaining(["ticketKey"]),
+      });
+      expect(schema).not.toHaveProperty("properties.ticketKey");
+    }
   });
 });

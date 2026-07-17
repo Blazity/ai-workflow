@@ -956,8 +956,11 @@ function resolvedOutput(
       type === "trigger_pr_merged") &&
     fallback.type === "object"
   ) {
+    const properties = { ...fallback.properties };
+    delete properties.ticketKey;
     return {
       ...fallback,
+      properties,
       required: fallback.required.filter((field) => field !== "ticketKey"),
     };
   }
