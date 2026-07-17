@@ -134,6 +134,8 @@ Acceptance:
 
 ## Task 7 — AIW-96: preserved clarification and merge-conflict work
 
+Capability gate result (2026-07-17): passed against the configured Vercel project. A seven-day snapshot preserved the committed tree, an untracked file, `UU` conflict status, and all three unresolved Git index stages after restoration from only a JSON-serialized snapshot ID. Scrubbed Codex, Claude, Arthur, tracer, and `/tmp/agent-env*.sh` credentials stayed absent; fresh credentials could be injected after restore. All probe sandboxes were stopped and snapshots deleted. `sandbox.snapshot()` can return while the source still reports `snapshotting`, so production must poll `Sandbox.get()` until `stopped` before publishing the checkpoint.
+
 Capability gate:
 
 1. Against the configured Vercel environment, create a Sandbox with committed, untracked, and unresolved-index fixtures.
