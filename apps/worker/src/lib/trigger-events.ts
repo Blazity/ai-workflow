@@ -1,4 +1,5 @@
 import type { PrTriggerPayload } from "../workflows/agent-input.js";
+import { vcsLoginsMatch } from "./vcs-bot-identity.js";
 
 export type PrTriggerType =
   | "trigger_pr_created"
@@ -115,7 +116,7 @@ export function normalizeGitHubEvent(
     if (!review || !pr) return null;
     const allowedStates = options.reviewStates ?? DEFAULT_REVIEW_STATES;
     if (!allowedStates.includes(review.state)) return null;
-    if (options.botLogin && review.user?.login === options.botLogin) return null;
+    if (vcsLoginsMatch(review.user?.login, options.botLogin)) return null;
     return {
       delivery: githubDelivery(options.deliveryId, review.user?.login),
       triggerType: "trigger_pr_review",
@@ -185,7 +186,7 @@ export function normalizeGitLabEvent(
     const project = body?.project;
     if (!attrs || !mr || !project) return null;
     if (
-      (options.botUsername && producer === options.botUsername) ||
+      vcsLoginsMatch(producer, options.botUsername) ||
       attrs.action !== "create" ||
       attrs.noteable_type !== "MergeRequest" ||
       attrs.system === true

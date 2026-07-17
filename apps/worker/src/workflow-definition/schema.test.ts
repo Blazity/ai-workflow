@@ -21,7 +21,10 @@ import {
   workflowDefinitionSchema,
 } from "./schema.js";
 import { BLOCK_TYPE_SPECS } from "@shared/contracts";
-import type { WorkflowBlockRegistryContext } from "./block-registry.js";
+import {
+  buildWorkflowBlockRegistry,
+  type WorkflowBlockRegistryContext,
+} from "./block-registry.js";
 
 const registryContext: WorkflowBlockRegistryContext = {
   agentProviders: { claude: true, codex: true },
@@ -1352,6 +1355,18 @@ describe("validateWorkflowGraph rules", () => {
     ).toContain(
       'Block "review" (trigger_pr_review) is unavailable: Commented review triggers require a configured GITLAB_BOT_LOGIN to prevent recursive bot reviews.',
     );
+  });
+
+  it("deploys the PR review trigger authored by a GitLab-only registry", () => {
+    const gitlabOnlyContext: WorkflowBlockRegistryContext = {
+      ...registryContext,
+      vcsProviders: ["gitlab"],
+      vcsBotIdentities: ["gitlab"],
+    };
+    const defaults = buildWorkflowBlockRegistry(gitlabOnlyContext).trigger_pr_review.defaults;
+    const definition = graph([node("review", "trigger_pr_review", defaults)], []);
+
+    expect(validateWorkflowDefinitionForDeployment(definition, gitlabOnlyContext)).toEqual([]);
   });
 
   it("allows scope:any only through review-safe, non-mutating blocks", () => {

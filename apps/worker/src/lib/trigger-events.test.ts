@@ -313,6 +313,20 @@ describe("normalizeGitHubEvent", () => {
     expect(evt).toBeNull();
   });
 
+  it("matches GitHub bot identities after trimming and case normalization", () => {
+    const evt = normalizeGitHubEvent(
+      "pull_request_review",
+      {
+        action: "submitted",
+        repository: githubRepo(),
+        pull_request: githubPr(),
+        review: { state: "changes_requested", user: { login: "github-app[bot]" }, body: "self" },
+      },
+      { ...options, botLogin: "  GitHub-App[Bot]  " },
+    );
+    expect(evt).toBeNull();
+  });
+
   it("ignores unrelated events", () => {
     expect(normalizeGitHubEvent("push", { repository: githubRepo() }, options)).toBeNull();
   });
@@ -514,6 +528,20 @@ describe("normalizeGitLabEvent", () => {
         { ...note, user: { username: "alice" } },
         { reviewStates: ["changes_requested"] },
       ),
+    ).toBeNull();
+  });
+
+  it("matches GitLab bot identities after trimming and case normalization", () => {
+    const note = {
+      ...notePayload(),
+      user: { username: "gitlab-bot" },
+      object_attributes: { ...notePayload().object_attributes, note: "self" },
+    };
+    expect(
+      normalizeGitLabEvent("Note Hook", note, {
+        botUsername: "  GitLab-Bot  ",
+        reviewStates: ["commented"],
+      }),
     ).toBeNull();
   });
 

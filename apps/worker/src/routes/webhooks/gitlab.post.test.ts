@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   getVcsBotLogin: vi.fn(),
   listRepositories: vi.fn(),
   fetch: vi.fn(),
+  isRepoAllowed: vi.fn(),
 }));
 
 global.fetch = mocks.fetch;
@@ -36,6 +37,9 @@ vi.mock("../../lib/dispatch-trigger.js", () => ({
 }));
 
 vi.mock("../../db/client.js", () => ({ getDb: () => ({}) }));
+vi.mock("../../lib/repo-allowlist.js", () => ({
+  isRepoAllowed: (...args: any[]) => mocks.isRepoAllowed(...args),
+}));
 
 vi.mock("../../adapters/vcs/repository-directory.js", () => ({
   createRepositoryDirectoryForProviders: vi.fn(() => ({
@@ -127,6 +131,7 @@ describe("POST /webhooks/gitlab", () => {
     mocks.env.GITLAB_PROJECT_ID = undefined;
     mocks.env.GITLAB_BOT_LOGIN = undefined;
     mocks.getVcsBotLogin.mockReturnValue("blazebot");
+    mocks.isRepoAllowed.mockReturnValue(true);
     mockDispatchTriggerEvent.mockResolvedValue({ result: "no_definition" });
     mockResolveEnabledReviewStates.mockResolvedValue(["changes_requested"]);
     mocks.getConfiguredVcsProviders.mockReturnValue([
@@ -205,6 +210,23 @@ describe("POST /webhooks/gitlab", () => {
       status: "ignored",
       reason: "other_project",
     });
+    expect(mockDispatchPostPrGateWebhook).not.toHaveBeenCalled();
+  });
+
+  it("does not let a matching legacy project id bypass the hard repository allowlist", async () => {
+    mocks.env.GITLAB_PROJECT_ID = "123";
+    mocks.isRepoAllowed.mockReturnValueOnce(false);
+
+    const response = await makeApp()(makeRequest(validMergeRequestPayload()));
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      status: "ignored",
+      reason: "other_project",
+    });
+    expect(mocks.isRepoAllowed).toHaveBeenCalledWith("group/demo");
+    expect(mocks.listRepositories).not.toHaveBeenCalled();
+    expect(mockDispatchTriggerEvent).not.toHaveBeenCalled();
     expect(mockDispatchPostPrGateWebhook).not.toHaveBeenCalled();
   });
 

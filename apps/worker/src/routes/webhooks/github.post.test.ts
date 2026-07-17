@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
     GITHUB_BOT_LOGIN: undefined as string | undefined,
   },
   getVcsBotLogin: vi.fn(),
+  isRepoAllowed: vi.fn(),
 }));
 
 vi.mock("../../../env.js", () => ({
@@ -20,6 +21,9 @@ vi.mock("../../../env.js", () => ({
 
 vi.mock("../../lib/github-webhook-sig.js", () => ({
   verifyGitHubWebhookSignature: vi.fn(),
+}));
+vi.mock("../../lib/repo-allowlist.js", () => ({
+  isRepoAllowed: (...args: any[]) => mocks.isRepoAllowed(...args),
 }));
 
 vi.mock("../../post-pr-gate/config.js", () => ({
@@ -90,6 +94,7 @@ describe("POST /webhooks/github", () => {
     mocks.env.VCS_BOT_LOGIN = undefined;
     mocks.env.GITHUB_BOT_LOGIN = undefined;
     mocks.getVcsBotLogin.mockReturnValue("github-app[bot]");
+    mocks.isRepoAllowed.mockReturnValue(true);
     mockDispatchPostPrGateWebhook.mockResolvedValue({ status: "dispatched", runId: "gate_run" });
     mockDispatchTriggerEvent.mockResolvedValue({ result: "no_definition" });
     mockResolveEnabledReviewStates.mockResolvedValue(["changes_requested"]);
@@ -112,6 +117,22 @@ describe("POST /webhooks/github", () => {
       review: { state, user: { login: reviewer }, body: "please fix" },
     };
   }
+
+  it("rejects an off-allowlist repository before definition dispatch or gate work", async () => {
+    mocks.isRepoAllowed.mockReturnValueOnce(false);
+
+    const response = await makeApp()(makeRequest(pullRequestBody("opened", "external-branch")));
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      status: "ignored",
+      reason: "other_repo",
+    });
+    expect(mocks.isRepoAllowed).toHaveBeenCalledWith("acme/app");
+    expect(mockResolveEnabledReviewStates).not.toHaveBeenCalled();
+    expect(mockDispatchTriggerEvent).not.toHaveBeenCalled();
+    expect(mockDispatchPostPrGateWebhook).not.toHaveBeenCalled();
+  });
 
   it("drops a commented review when the definition only allows changes_requested", async () => {
     mockResolveEnabledReviewStates.mockResolvedValueOnce(["changes_requested"]);

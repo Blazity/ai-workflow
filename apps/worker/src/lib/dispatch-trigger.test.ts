@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Db } from "../db/client.js";
 import {
   workflowDefinitions,
@@ -58,6 +58,10 @@ beforeEach(async () => {
   mockGetEnabled.mockReset();
   mockGetPRHeadSha.mockReset().mockResolvedValue("abc123");
   mockGetBranchSha.mockReset().mockResolvedValue("abc123");
+});
+
+afterEach(() => {
+  vi.unstubAllEnvs();
 });
 
 function enabled(
@@ -168,6 +172,16 @@ describe("resolveEnabledReviewStates", () => {
     await expect(resolveEnabledReviewStates(db, "gitlab", "gitlab-bot")).resolves.toEqual([
       "commented",
     ]);
+  });
+
+  it("fails closed for commented definitions with a whitespace-only bot identity", async () => {
+    mockGetEnabled.mockResolvedValue(
+      enabledReview({ providers: ["github", "gitlab"], on: ["commented"] }),
+    );
+    const { resolveEnabledReviewStates } = await import("./dispatch-trigger.js");
+
+    await expect(resolveEnabledReviewStates(db, "github", "   ")).resolves.toEqual([]);
+    await expect(resolveEnabledReviewStates(db, "gitlab", "   ")).resolves.toEqual([]);
   });
 });
 
@@ -338,6 +352,20 @@ describe("dispatchTriggerEvent durable envelope", () => {
       }),
     ]);
     expect(Object.hasOwn(mockStart.mock.calls[0][1][0], "ticketKey")).toBe(false);
+  });
+
+  it("rejects an off-allowlist scope:any event before current-head reads or persistence", async () => {
+    vi.stubEnv("AGENT_ALLOWED_REPOS", "acme/allowed");
+    mockGetEnabled.mockResolvedValue(enabled({ scope: "any", providers: ["github"] }));
+    const getCurrentHead = vi.fn().mockResolvedValue("abc123");
+    const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
+
+    expect(await dispatchTriggerEvent(event(), deps({ getCurrentHead }))).toEqual({
+      result: "ignored_provider",
+    });
+    expect(getCurrentHead).not.toHaveBeenCalled();
+    expect(await getTriggerDelivery(db, "github", "delivery-1")).toBeNull();
+    expect(mockStart).not.toHaveBeenCalled();
   });
 
   it("redelivery returns the stored result and never starts twice", async () => {

@@ -1052,6 +1052,7 @@ export function resolveWorkflowBlockContract(
   context: WorkflowBlockRegistryContext,
 ): WorkflowBlockContract {
   const definition = definitions[type];
+  const defaults = defaultsForContext(type, definition.defaults, context);
   const spec = BLOCK_TYPE_SPECS[type];
   const output = resolvedOutput(type, params, definition.output);
   return {
@@ -1061,7 +1062,7 @@ export function resolveWorkflowBlockContract(
       ...(agentBlocks.has(type)
         ? { provider: context.defaultAgent.provider, model: context.defaultAgent.model }
         : {}),
-      ...definition.defaults,
+      ...defaults,
     },
     ports: [...spec.ports],
     allowsFailurePort: spec.allowsFailurePort,
@@ -1082,7 +1083,26 @@ export function buildWorkflowBlockRegistry(
   return Object.fromEntries(
     (Object.keys(definitions) as WorkflowBlockType[]).map((type) => [
       type,
-      resolveWorkflowBlockContract(type, definitions[type].defaults, context),
+      resolveWorkflowBlockContract(
+        type,
+        defaultsForContext(type, definitions[type].defaults, context),
+        context,
+      ),
     ]),
   ) as Record<WorkflowBlockType, WorkflowBlockContract>;
+}
+
+function defaultsForContext(
+  type: WorkflowBlockType,
+  defaults: Record<string, WorkflowParamValue>,
+  context: WorkflowBlockRegistryContext,
+): Record<string, WorkflowParamValue> {
+  if (
+    type === "trigger_pr_review" &&
+    !context.vcsProviders.includes("github") &&
+    context.vcsProviders.includes("gitlab")
+  ) {
+    return { ...defaults, providers: ["gitlab"], on: ["commented"] };
+  }
+  return defaults;
 }

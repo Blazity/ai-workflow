@@ -336,6 +336,21 @@ describe("workflow block registry", () => {
     });
   });
 
+  it("authors a usable PR review trigger by default in a GitLab-only deployment", () => {
+    const review = buildWorkflowBlockRegistry({
+      ...context,
+      vcsProviders: ["gitlab"],
+      vcsBotIdentities: ["gitlab"],
+    }).trigger_pr_review;
+
+    expect(review.defaults).toMatchObject({
+      providers: ["gitlab"],
+      on: ["commented"],
+      scope: "workflow_owned",
+    });
+    expect(review.availability).toEqual({ available: true, unavailableReason: null });
+  });
+
   it("rejects GitLab review triggers that omit the only reliable Note Hook state", () => {
     const gitlab = resolveWorkflowBlockContract(
       "trigger_pr_review",

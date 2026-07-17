@@ -17,7 +17,9 @@ import {
 } from "../../lib/gitlab-webhook.js";
 import { logger } from "../../lib/logger.js";
 import { dispatchPostPrGateWebhook } from "../../lib/post-pr-gate-dispatch.js";
+import { isRepoAllowed } from "../../lib/repo-allowlist.js";
 import { normalizeGitLabEvent } from "../../lib/trigger-events.js";
+import { vcsLoginsMatch } from "../../lib/vcs-bot-identity.js";
 
 const ALLOWED_ACTIONS = new Set(["opened", "update", "reopened"]);
 
@@ -153,7 +155,7 @@ function isEligibleMergeRequestNote(body: any, botUsername: string | undefined):
       attrs.action === "create" &&
       attrs.noteable_type === "MergeRequest" &&
       attrs.system !== true &&
-      (!botUsername || producer !== botUsername),
+      !vcsLoginsMatch(producer, botUsername),
   );
 }
 
@@ -171,12 +173,15 @@ function triggerResponse(result: DispatchTriggerResult) {
 }
 
 async function gitLabProjectIsAllowed(project: GitLabProject): Promise<boolean> {
+  if (!project.path_with_namespace || !isRepoAllowed(project.path_with_namespace)) {
+    return false;
+  }
   if (env.GITLAB_PROJECT_ID) {
     return projectMatchesConfiguredId(project, env.GITLAB_PROJECT_ID);
   }
 
   const gitLabProviders = getConfiguredVcsProviders().filter((provider) => provider.kind === "gitlab");
-  if (gitLabProviders.length === 0 || !project.path_with_namespace) return false;
+  if (gitLabProviders.length === 0) return false;
 
   try {
     const repositories = await createRepositoryDirectoryForProviders(gitLabProviders).listRepositories();

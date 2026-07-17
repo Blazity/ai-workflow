@@ -11,6 +11,7 @@ import {
 import { verifyGitHubWebhookSignature } from "../../lib/github-webhook-sig.js";
 import { logger } from "../../lib/logger.js";
 import { dispatchPostPrGateWebhook } from "../../lib/post-pr-gate-dispatch.js";
+import { isRepoAllowed } from "../../lib/repo-allowlist.js";
 import { normalizeGitHubEvent } from "../../lib/trigger-events.js";
 import { loadPostPrGateConfig } from "../../post-pr-gate/config.js";
 
@@ -48,6 +49,10 @@ export default defineEventHandler(async (event) => {
   }
 
   const ownerRepo = `${repo.owner.login}/${repo.name}`;
+  if (!isRepoAllowed(ownerRepo)) {
+    logger.info({ ownerRepo }, "github_webhook_skipped_repo_not_allowed");
+    return { status: "ignored", reason: "other_repo" };
+  }
   if (env.GITHUB_OWNER && env.GITHUB_REPO) {
     const expected = `${env.GITHUB_OWNER}/${env.GITHUB_REPO}`;
     // GitHub owner/repo slugs are case-insensitive, so the payload's

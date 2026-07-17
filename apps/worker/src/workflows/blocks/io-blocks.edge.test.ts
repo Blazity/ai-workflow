@@ -421,6 +421,22 @@ describe("post_pr_comment edge cases", () => {
     vi.clearAllMocks();
   });
 
+  it("refuses to comment on an off-allowlist PR without creating a provider client", async () => {
+    setAllowlist("acme/allowed");
+
+    const result = await executePostPrComment(
+      makeNode("post_pr_comment", { body: "LGTM" }),
+      {},
+      makeCtx({ publication: singlePublication() }),
+    );
+
+    expect(result.kind).toBe("failed");
+    if (result.kind === "failed") {
+      expect(result.reason).toContain("not in AGENT_ALLOWED_REPOS");
+    }
+    expect(mocks.createRepositoryVCS).not.toHaveBeenCalled();
+  });
+
   it("prefers publication PRs over the pr_trigger payload", async () => {
     const postPRComment = vi.fn().mockResolvedValue({ url: null });
     mocks.createRepositoryVCS.mockReturnValue({ postPRComment });
@@ -730,6 +746,22 @@ describe("fetch_pr_context edge cases", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.getDb.mockReturnValue({ db: true });
+  });
+
+  it("refuses to read an off-allowlist PR without creating a provider client", async () => {
+    setAllowlist("acme/allowed");
+
+    const result = await executeFetchPrContext(
+      makeNode("fetch_pr_context"),
+      {},
+      makeCtx({ selectedRepositories: [repoWithPr] }),
+    );
+
+    expect(result.kind).toBe("failed");
+    if (result.kind === "failed") {
+      expect(result.reason).toContain("not in AGENT_ALLOWED_REPOS");
+    }
+    expect(mocks.createRepositoryVCS).not.toHaveBeenCalled();
   });
 
   it("prefers an existing owned-branch record over the pr_trigger payload defaults", async () => {

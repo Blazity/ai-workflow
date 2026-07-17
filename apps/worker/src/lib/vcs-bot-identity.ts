@@ -11,9 +11,25 @@ export function resolveVcsBotLogin(
   configuredProviders: readonly VcsProviderKind[],
   logins: VcsBotLoginConfig,
 ): string | undefined {
-  const providerSpecific = kind === "github" ? logins.github : logins.gitlab;
+  const providerSpecific = normalizeVcsLogin(
+    kind === "github" ? logins.github : logins.gitlab,
+  );
   if (providerSpecific) return providerSpecific;
   return configuredProviders.length === 1 && configuredProviders[0] === kind
-    ? logins.legacy
+    ? normalizeVcsLogin(logins.legacy)
     : undefined;
+}
+
+export function vcsLoginsMatch(
+  producer: string | null | undefined,
+  configuredBot: string | null | undefined,
+): boolean {
+  const normalizedProducer = normalizeVcsLogin(producer);
+  const normalizedBot = normalizeVcsLogin(configuredBot);
+  return normalizedProducer !== undefined && normalizedProducer === normalizedBot;
+}
+
+export function normalizeVcsLogin(login: string | null | undefined): string | undefined {
+  const normalized = login?.trim().toLowerCase();
+  return normalized ? normalized : undefined;
 }

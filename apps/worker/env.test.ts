@@ -219,6 +219,27 @@ describe("env", () => {
     expect(getVcsBotLogin("gitlab")).toBeUndefined();
   });
 
+  it.each(["VCS_BOT_LOGIN", "GITHUB_BOT_LOGIN", "GITLAB_BOT_LOGIN"])(
+    "rejects a whitespace-only %s",
+    async (name) => {
+      Object.assign(process.env, VALID_ENV, { [name]: "   " });
+
+      await expect(import("./env.js")).rejects.toThrow();
+    },
+  );
+
+  it("trims and case-normalizes the resolved provider bot login", async () => {
+    Object.assign(process.env, {
+      ...VALID_ENV,
+      GITHUB_BOT_LOGIN: "  GitHub-App[Bot]  ",
+    });
+
+    const { env, getVcsBotLogin } = await import("./env.js");
+
+    expect(env.GITHUB_BOT_LOGIN).toBe("GitHub-App[Bot]");
+    expect(getVcsBotLogin("github")).toBe("github-app[bot]");
+  });
+
   it("uses the legacy bot login only for an unambiguous single provider", async () => {
     Object.assign(process.env, { ...VALID_ENV, VCS_BOT_LOGIN: "legacy-bot" });
     delete process.env.GITHUB_BOT_LOGIN;

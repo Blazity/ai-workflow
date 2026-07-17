@@ -46,9 +46,13 @@ export async function blockFetchPrContextsStep(
 ): Promise<SelectedRepositoryPromptContext[]> {
   "use step";
   const { createRepositoryVCS } = await import("../../lib/vcs-runtime.js");
+  const { isRepoAllowed } = await import("../../lib/repo-allowlist.js");
 
   return Promise.all(
     repositories.map(async (repo) => {
+      if (!isRepoAllowed(repo.repoPath)) {
+        throw new Error(`Refusing to read PR context for ${repo.repoPath}: not in AGENT_ALLOWED_REPOS`);
+      }
       const pr = repo.workflowOwnedBranch?.pr;
       if (!pr) {
         return {

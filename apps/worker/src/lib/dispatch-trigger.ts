@@ -10,6 +10,7 @@ import { getEnabledWorkflowDefinitionForTrigger } from "../workflow-definition/s
 import { createAdapters } from "./adapters.js";
 import { claimSubjectRun } from "./dispatch.js";
 import { logger } from "./logger.js";
+import { isRepoAllowed } from "./repo-allowlist.js";
 import { prSubjectKey, ticketSubjectKey } from "./subject-key.js";
 import {
   acceptTriggerDelivery,
@@ -24,6 +25,7 @@ import {
 } from "./trigger-delivery-store.js";
 import type { TriggerEvent } from "./trigger-events.js";
 import { createRepositoryVCS } from "./vcs-runtime.js";
+import { normalizeVcsLogin } from "./vcs-bot-identity.js";
 
 export type DispatchTriggerResult =
   | { result: "no_definition" }
@@ -70,7 +72,7 @@ export async function resolveEnabledReviewStates(
   return configuredStates.filter(
     (state): state is string =>
       (state === "changes_requested" && provider === "github") ||
-      (state === "commented" && Boolean(botLogin)),
+      (state === "commented" && Boolean(normalizeVcsLogin(botLogin))),
   );
 }
 
@@ -124,6 +126,15 @@ export async function dispatchTriggerEvent(
     }
   }
 
+  const scope: TriggerScope = params.scope === "any" ? "any" : "workflow_owned";
+  if (scope === "any" && !isRepoAllowed(event.pr.repoPath)) {
+    logger.info(
+      { provider: event.pr.provider, repoPath: event.pr.repoPath },
+      "trigger_repo_not_allowed",
+    );
+    return { result: "ignored_provider" };
+  }
+
   const currentHead = await readCurrentHead(event.pr, deps);
   if (currentHead.status === "unreachable") return { result: "error" };
   if (currentHead.headSha !== event.pr.headSha) {
@@ -134,7 +145,6 @@ export async function dispatchTriggerEvent(
     return { result: "ignored_stale_head" };
   }
 
-  const scope: TriggerScope = params.scope === "any" ? "any" : "workflow_owned";
   const identity = await resolveSubjectIdentity(event, scope, deps);
   if (!identity) return { result: "ignored_not_workflow_owned" };
 

@@ -27,11 +27,15 @@ async function blockPostPrCommentStep(
 ): Promise<PostPrCommentsResult> {
   "use step";
   const { createRepositoryVCS } = await import("../../lib/vcs-runtime.js");
+  const { isRepoAllowed } = await import("../../lib/repo-allowlist.js");
   const comments: PostPrCommentsResult["comments"] = [];
   const errors: string[] = [];
 
   for (const target of targets) {
     try {
+      if (!isRepoAllowed(target.repoPath)) {
+        throw new Error(`Refusing to comment on ${target.repoPath}: not in AGENT_ALLOWED_REPOS`);
+      }
       const vcs = createRepositoryVCS({
         provider: target.provider,
         repoPath: target.repoPath,
