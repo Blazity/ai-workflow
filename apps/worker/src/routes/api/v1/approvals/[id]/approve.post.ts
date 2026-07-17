@@ -12,7 +12,6 @@ import {
   decideApproval,
   getApproval,
   serializeApproval,
-  setDispatchedRunId,
 } from "../../../../../approvals/store.js";
 import { toApprovalHttpError } from "../../approvals.get.js";
 
@@ -98,7 +97,6 @@ export default defineEventHandler(async (event): Promise<ApprovalDecisionRespons
       throw createError({ statusCode: 409, statusMessage: "run_in_flight" });
     }
 
-    await setDispatchedRunId(db, id, result.runId);
     await adapters.issueTracker
       .postComment(row.ticketKey, `Plan approved by ${approver.label}, implementation started.`)
       .catch(() => {});
