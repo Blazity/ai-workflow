@@ -8,6 +8,7 @@ import {
 import {
   checkRunBudget,
   createRunBudgetState,
+  missingRequiredPriceFailure,
   recordBudgetUsage,
 } from "./run-budget.js";
 
@@ -34,6 +35,28 @@ describe("agent workflow budget integration", () => {
     );
 
     expect(models).toEqual(new Set(["gpt-agent", "claude-haiku", "codex-default"]));
+  });
+
+  it("fails a configured cost budget before a required unpriced model can launch", () => {
+    const prices = new Map([
+      ["gpt-priced", { input: 0.001, cached_input: 0.0001, output: 0.002 }],
+    ]);
+
+    expect(
+      missingRequiredPriceFailure(
+        2,
+        new Set(["gpt-unpriced", "gpt-priced"]),
+        prices,
+      ),
+    ).toEqual({
+      status: "budget_unverifiable",
+      metric: "cost",
+      limit: 2,
+      consumed: null,
+      reason: "budget_unverifiable: pricing is unavailable for required model gpt-unpriced",
+    });
+    expect(missingRequiredPriceFailure(undefined, new Set(["gpt-unpriced"]), prices)).toBeNull();
+    expect(missingRequiredPriceFailure(2, new Set(["gpt-priced"]), prices)).toBeNull();
   });
 
   it("marks and records every pre-PR fix cycle, failing closed on missing usage", () => {

@@ -48,6 +48,54 @@ describe("pollPhaseUntilDone", () => {
 
     expect(mocks.sleep).toHaveBeenCalledWith("12345ms");
     expect(mocks.checkPhaseDone).toHaveBeenCalledWith("sbx-1", "/tmp/done");
+    expect(observeBudget.mock.calls).toEqual([[true], [false]]);
+  });
+
+  it("accepts a phase that writes its sentinel exactly at the duration limit", async () => {
+    const observeBudget = vi
+      .fn()
+      .mockResolvedValueOnce(ok(5_000))
+      .mockResolvedValueOnce({
+        check: { status: "ok" },
+        remainingDurationMs: 0,
+        durationLimitMs: 5_000,
+        activeElapsedMs: 5_000,
+      });
+    mocks.checkPhaseDone.mockResolvedValue(true);
+
+    await expect(
+      pollPhaseUntilDone("sbx-1", "/tmp/done", 25, "cmd-exact", observeBudget),
+    ).resolves.toBe(true);
+
+    expect(observeBudget.mock.calls).toEqual([[true], [false]]);
+    expect(mocks.kill).not.toHaveBeenCalled();
+  });
+
+  it("kills a phase that remains active exactly at the duration limit", async () => {
+    const observeBudget = vi
+      .fn()
+      .mockResolvedValueOnce(ok(5_000))
+      .mockResolvedValueOnce({
+        check: { status: "ok" },
+        remainingDurationMs: 0,
+        durationLimitMs: 5_000,
+        activeElapsedMs: 5_000,
+      });
+    mocks.checkPhaseDone.mockResolvedValue(false);
+
+    await expect(
+      pollPhaseUntilDone("sbx-1", "/tmp/done", 25, "cmd-exact-active", observeBudget),
+    ).rejects.toMatchObject({
+      name: "RunBudgetError",
+      failure: {
+        status: "budget_exceeded",
+        metric: "duration",
+        limit: 5_000,
+        consumed: 5_000,
+      },
+    });
+
+    expect(mocks.kill).toHaveBeenCalledOnce();
   });
 
   it("kills the detached command and throws the deterministic budget failure on expiry", async () => {
@@ -67,7 +115,7 @@ describe("pollPhaseUntilDone", () => {
     expect(mocks.sandboxGet).toHaveBeenCalledWith({ sandboxId: "sbx-1" });
     expect(mocks.getCommand).toHaveBeenCalledWith("cmd-9");
     expect(mocks.kill).toHaveBeenCalledOnce();
-    expect(mocks.checkPhaseDone).not.toHaveBeenCalled();
+    expect(mocks.checkPhaseDone).toHaveBeenCalledWith("sbx-1", "/tmp/done");
   });
 
   it("kills the detached command when no active duration remains before sleeping", async () => {

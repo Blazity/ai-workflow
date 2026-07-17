@@ -97,7 +97,7 @@ export interface EngineCtx {
    */
   arthur: { taskId: string | null };
   /** Observe and enforce the run budget before further agent work. */
-  observeBudget(): Promise<RunBudgetObservation>;
+  observeBudget(requireRemainingDuration?: boolean): Promise<RunBudgetObservation>;
   /** Record a phase's parsed usage under a display label for run telemetry. */
   recordUsage(label: string, usage: PhaseUsage | null, model: string): void;
   /**

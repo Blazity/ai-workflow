@@ -174,6 +174,26 @@ export function checkRunBudget(
   return { status: "ok" };
 }
 
+export function missingRequiredPriceFailure(
+  maxCostUsd: number | undefined,
+  requiredModels: ReadonlySet<string>,
+  prices: ReadonlyMap<string, TokenPrice>,
+): RunBudgetFailure | null {
+  if (maxCostUsd === undefined) return null;
+
+  const missing = [...requiredModels].filter((model) => !prices.has(model)).sort();
+  if (missing.length === 0) return null;
+
+  const label = missing.length === 1 ? "required model" : "required models";
+  return {
+    status: "budget_unverifiable",
+    metric: "cost",
+    limit: maxCostUsd,
+    consumed: null,
+    reason: `budget_unverifiable: pricing is unavailable for ${label} ${missing.join(", ")}`,
+  };
+}
+
 const USD_NANOS = 1_000_000_000;
 
 function usdToNanos(value: number): number | null {

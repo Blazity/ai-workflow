@@ -11,14 +11,14 @@ export async function pollPhaseUntilDone(
   sentinelFile: string,
   maxMinutes: number,
   commandId: string,
-  observeBudget: () => Promise<RunBudgetObservation>,
+  observeBudget: (requireRemainingDuration?: boolean) => Promise<RunBudgetObservation>,
 ): Promise<boolean> {
   const { sleep } = await import("workflow");
   const { checkPhaseDone } = await import("../../sandbox/poll-agent.js");
   const phaseLimitMs = maxMinutes * 60_000;
   let phaseElapsedMs = 0;
   while (phaseElapsedMs < phaseLimitMs) {
-    const before = await observeBudget();
+    const before = await observeBudget(true);
     if (before.check.status !== "ok") {
       await killPhaseCommand(sandboxId, commandId);
       throw new RunBudgetError(before.check);
@@ -40,14 +40,26 @@ export async function pollPhaseUntilDone(
     await sleep(`${Math.ceil(sleepMs)}ms`);
     phaseElapsedMs += sleepMs;
 
-    const after = await observeBudget();
+    const after = await observeBudget(false);
+    const status = await checkPhaseDone(sandboxId, sentinelFile);
+    if (status === true) return true;
     if (after.check.status !== "ok") {
       await killPhaseCommand(sandboxId, commandId);
       throw new RunBudgetError(after.check);
     }
-    const status = await checkPhaseDone(sandboxId, sentinelFile);
-    if (status === true) return true;
     if (status === "stopped") return false;
+    if (after.remainingDurationMs === 0) {
+      const limit = after.durationLimitMs ?? after.activeElapsedMs ?? 0;
+      const consumed = after.activeElapsedMs ?? limit;
+      await killPhaseCommand(sandboxId, commandId);
+      throw new RunBudgetError({
+        status: "budget_exceeded",
+        metric: "duration",
+        limit,
+        consumed,
+        reason: `budget_exceeded: duration ${consumed} reached limit ${limit} while command is active`,
+      });
+    }
   }
   await killPhaseCommand(sandboxId, commandId);
   return false;

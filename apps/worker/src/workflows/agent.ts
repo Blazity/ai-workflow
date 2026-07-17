@@ -42,6 +42,7 @@ import {
   createRunBudgetState,
   durationBudgetFailure,
   isDurationAbortError,
+  missingRequiredPriceFailure,
   observeRunBudget,
   recordBudgetUsage,
   type RunBudgetLimits,
@@ -1087,6 +1088,12 @@ export async function agentWorkflow(input: string | AgentWorkflowInput) {
         const price = await fetchModelPriceStep(model);
         if (price) priceMap.set(model, price);
       }
+      const missingPriceFailure = missingRequiredPriceFailure(
+        budgetLimits.maxCostUsd,
+        pricedModels,
+        priceMap,
+      );
+      if (missingPriceFailure) throw new RunBudgetError(missingPriceFailure);
       priceLookup = (model) => priceMap.get(model) ?? null;
     }
 
@@ -1123,7 +1130,8 @@ export async function agentWorkflow(input: string | AgentWorkflowInput) {
       arthur: {
         taskId: null,
       },
-      observeBudget: () => observeBudgetAtBoundary(true),
+      observeBudget: (requireRemainingDuration = true) =>
+        observeBudgetAtBoundary(requireRemainingDuration),
       recordUsage: (label, usage, model) => {
         const key = phaseKey(label, state.attempt);
         phaseUsages[key] = usage;
