@@ -152,7 +152,9 @@ describe("durable trigger deliveries", () => {
     // surface while executing against the real test database.
     const executeOnlyDb: Pick<Db, "execute"> = { execute: db.execute.bind(db) };
 
-    await acknowledgeStartedTriggerDelivery(executeOnlyDb, accepted, "run-winning");
+    await expect(
+      acknowledgeStartedTriggerDelivery(executeOnlyDb, accepted, "run-winning"),
+    ).resolves.toBe(true);
 
     expect(await getTriggerDelivery(db, "github", "d-1")).toMatchObject({
       status: "completed",
@@ -174,7 +176,9 @@ describe("durable trigger deliveries", () => {
     await coalescePendingTrigger(db, accepted);
     await bindRun(accepted, "run-winning");
 
-    await acknowledgeStartedTriggerDelivery(db, accepted, "run-losing");
+    await expect(
+      acknowledgeStartedTriggerDelivery(db, accepted, "run-losing"),
+    ).resolves.toBe(false);
 
     expect(await getTriggerDelivery(db, "github", "d-1")).toMatchObject({
       status: "accepted",
@@ -301,6 +305,47 @@ describe("semantic pending coalescing", () => {
       { name: "lint", conclusion: "failure" },
       { name: "test", conclusion: "timed_out", detailsUrl: "https://ci/test" },
     ]);
+  });
+
+  it("keeps provider, delivery, producer, and payload coherent when providers coalesce", async () => {
+    const github = delivery({
+      scope: "workflow_owned",
+      subjectKey: "ticket:jira:AIW-1",
+      ticketKey: "AIW-1",
+    });
+    const gitlab = delivery({
+      delivery: { provider: "gitlab", producer: "gitlab-ci", deliveryId: "gl-2" },
+      scope: "any",
+      subjectKey: github.subjectKey,
+      ticketKey: github.ticketKey,
+      definitionVersion: 12,
+      pr: {
+        ...github.pr,
+        provider: "gitlab",
+        repoPath: "acme/gitlab-api",
+        prUrl: "https://gitlab.com/acme/gitlab-api/-/merge_requests/42",
+      },
+    });
+
+    await coalescePendingTrigger(db, github);
+    await coalescePendingTrigger(db, gitlab);
+
+    const pending = await getPendingTrigger(
+      db,
+      github.subjectKey,
+      github.pr.headSha,
+      github.triggerType,
+    );
+    expect(pending).toMatchObject({
+      scope: github.scope,
+      delivery: gitlab.delivery,
+      pr: {
+        provider: "gitlab",
+        repoPath: "acme/gitlab-api",
+      },
+      definitionId: github.definitionId,
+      definitionVersion: github.definitionVersion,
+    });
   });
 
   it("retains distinct review identities and deduplicates the same review", async () => {

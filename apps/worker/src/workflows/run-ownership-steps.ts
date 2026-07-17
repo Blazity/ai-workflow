@@ -91,14 +91,14 @@ export async function acknowledgeApprovalDispatchStep(
 export async function acknowledgePrTriggerDispatchStep(
   entry: import("./agent-input.js").AgentWorkflowInput,
   workflowRunId: string,
-): Promise<void> {
+): Promise<boolean> {
   "use step";
-  if (entry.kind !== "pr_trigger" || !entry.delivery) return;
+  if (entry.kind !== "pr_trigger" || !entry.delivery) return true;
   const { getDb } = await import("../db/client.js");
   const { acknowledgeStartedTriggerDelivery } = await import(
     "../lib/trigger-delivery-store.js"
   );
-  await acknowledgeStartedTriggerDelivery(
+  return acknowledgeStartedTriggerDelivery(
     getDb(),
     {
       subjectKey: entry.subjectKey,

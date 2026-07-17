@@ -123,7 +123,7 @@ describe("workflow owner steps", () => {
   });
 
   it("records the winning PR-trigger run and removes only its exact pending snapshot", async () => {
-    acknowledgeStartedDelivery.mockResolvedValue(undefined);
+    acknowledgeStartedDelivery.mockResolvedValue(true);
     const { acknowledgePrTriggerDispatchStep } = await import("./run-ownership-steps.js");
     const entry = {
       kind: "pr_trigger" as const,
@@ -141,7 +141,7 @@ describe("workflow owner steps", () => {
       pr: { provider: "github" as const, headSha: "sha" } as any,
     };
 
-    await acknowledgePrTriggerDispatchStep(entry, "run-winning");
+    await expect(acknowledgePrTriggerDispatchStep(entry, "run-winning")).resolves.toBe(true);
 
     expect(acknowledgeStartedDelivery).toHaveBeenCalledWith(
       { db: true },
@@ -153,6 +153,24 @@ describe("workflow owner steps", () => {
       }),
       "run-winning",
     );
+  });
+
+  it("rejects a PR-trigger candidate whose delivery belongs to another winner", async () => {
+    acknowledgeStartedDelivery.mockResolvedValue(false);
+    const { acknowledgePrTriggerDispatchStep } = await import("./run-ownership-steps.js");
+    const entry = {
+      kind: "pr_trigger" as const,
+      triggerType: "trigger_pr_review" as const,
+      subjectKey: "ticket:jira:AIW-1",
+      delivery: {
+        provider: "github" as const,
+        producer: "alice",
+        deliveryId: "delivery-stale",
+      },
+      pr: { provider: "github" as const, headSha: "sha" } as any,
+    } as any;
+
+    await expect(acknowledgePrTriggerDispatchStep(entry, "run-loser")).resolves.toBe(false);
   });
 
   it("lets only the candidate that CAS-binds continue", async () => {

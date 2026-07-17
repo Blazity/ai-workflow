@@ -205,7 +205,6 @@ async function dispatchAcceptedTrigger(
 
   if (dispatched.started) {
     const result = { result: "started" as const, runId: dispatched.runId! };
-    await completeAccepted(deps.db, accepted, result);
     return result;
   }
 
@@ -247,6 +246,22 @@ export async function drainOldestPendingTrigger(
   deps: DispatchTriggerDeps,
 ): Promise<DispatchTriggerResult | null> {
   for (const pending of await listPendingTriggersForSubject(deps.db, subjectKey)) {
+    const stored = await getTriggerDelivery(
+      deps.db,
+      pending.delivery.provider,
+      pending.delivery.deliveryId,
+    );
+    if (stored?.result?.result === "started") {
+      await (deps.deletePending ?? deletePendingTrigger)(deps.db, pending).catch((error) => {
+        logger.warn(
+          { subjectKey, error: (error as Error).message },
+          "trigger_stale_started_pending_delete_failed",
+        );
+        return false;
+      });
+      continue;
+    }
+
     const currentHead = await readCurrentHead(pending.pr, deps);
     if (currentHead.status === "unreachable") return { result: "error" };
     if (currentHead.headSha !== pending.pr.headSha) {
@@ -259,15 +274,6 @@ export async function drainOldestPendingTrigger(
       triggerType: pending.triggerType,
       deliveryId: pending.delivery.deliveryId,
     });
-    if (result.result === "started") {
-      await (deps.deletePending ?? deletePendingTrigger)(deps.db, pending).catch((error) => {
-        logger.warn(
-          { subjectKey, error: (error as Error).message },
-          "trigger_pending_dispatcher_delete_failed",
-        );
-        return false;
-      });
-    }
     // Capacity/claim races stay pending. Drain starts at most one successor.
     return result;
   }

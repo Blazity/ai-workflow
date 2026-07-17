@@ -141,7 +141,21 @@ export async function coalescePendingTrigger(
         // The newest provider delivery id is also the row's immutable snapshot
         // token. Consumers delete with this value so feedback merged after a
         // drain snapshot cannot be erased by the older consumer.
+        provider: sql`excluded.provider`,
         deliveryId: sql`excluded.delivery_id`,
+        // Preserve the first event's scope/pin while keeping the newest
+        // provider delivery identity and PR snapshot internally coherent.
+        payload: sql`jsonb_set(
+          jsonb_set(
+            ${pendingTriggerEvents.payload},
+            '{delivery}',
+            excluded.payload->'delivery',
+            true
+          ),
+          '{pr}',
+          excluded.payload->'pr',
+          true
+        )`,
         failedChecks: mergeJsonArrays(pendingTriggerEvents.failedChecks, "failed_checks"),
         reviews: mergeJsonArrays(pendingTriggerEvents.reviews, "reviews"),
         updatedAt: sql`now()`,
@@ -222,9 +236,9 @@ export async function acknowledgeStartedTriggerDelivery(
     "subjectKey" | "triggerType" | "pr" | "delivery"
   >,
   runId: string,
-): Promise<void> {
+): Promise<boolean> {
   const result = JSON.stringify({ result: "started", runId });
-  await db.execute(sql`
+  const acknowledged = await db.execute(sql`
     with started_delivery as (
       update ${triggerDeliveries}
       set
@@ -253,15 +267,19 @@ export async function acknowledgeStartedTriggerDelivery(
         ${triggerDeliveries.subjectKey},
         ${triggerDeliveries.headSha},
         ${triggerDeliveries.triggerType}
+    ), deleted_pending as (
+      delete from ${pendingTriggerEvents}
+      using started_delivery
+      where ${pendingTriggerEvents.provider} = started_delivery.provider
+        and ${pendingTriggerEvents.deliveryId} = started_delivery.delivery_id
+        and ${pendingTriggerEvents.subjectKey} = started_delivery.subject_key
+        and ${pendingTriggerEvents.headSha} = started_delivery.head_sha
+        and ${pendingTriggerEvents.triggerType} = started_delivery.trigger_type
+      returning ${pendingTriggerEvents.subjectKey}
     )
-    delete from ${pendingTriggerEvents}
-    using started_delivery
-    where ${pendingTriggerEvents.provider} = started_delivery.provider
-      and ${pendingTriggerEvents.deliveryId} = started_delivery.delivery_id
-      and ${pendingTriggerEvents.subjectKey} = started_delivery.subject_key
-      and ${pendingTriggerEvents.headSha} = started_delivery.head_sha
-      and ${pendingTriggerEvents.triggerType} = started_delivery.trigger_type
+    select exists(select 1 from started_delivery) as acknowledged
   `);
+  return rawRows<{ acknowledged: boolean }>(acknowledged)[0]?.acknowledged === true;
 }
 
 function mergeJsonArrays(
@@ -277,6 +295,10 @@ function mergeJsonArrays(
       )
     ) as merged
   )`;
+}
+
+function rawRows<T>(result: unknown): T[] {
+  return ((result as { rows?: T[] }).rows ?? []) as T[];
 }
 
 function mapDelivery(row: typeof triggerDeliveries.$inferSelect): StoredTriggerDelivery {

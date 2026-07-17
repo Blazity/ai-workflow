@@ -10,6 +10,7 @@ import { PostgresRunRegistry } from "../adapters/run-registry/postgres.js";
 import type { TriggerEvent } from "./trigger-events.js";
 import {
   acceptTriggerDelivery,
+  acknowledgeStartedTriggerDelivery,
   coalescePendingTrigger,
   completeTriggerDelivery,
   deletePendingTrigger,
@@ -274,8 +275,25 @@ describe("dispatchTriggerEvent durable envelope", () => {
     mockGetEnabled.mockResolvedValue(enabled({ scope: "any" }));
     const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
     expect(await dispatchTriggerEvent(event(), deps())).toEqual({ result: "started", runId: "run-pr" });
+    const input = mockStart.mock.calls[0]![1][0];
+    expect(await registry.bindRun(input.subjectKey, input.ownerToken, "run-pr")).toBe(true);
+    expect(await acknowledgeStartedTriggerDelivery(db, input, "run-pr")).toBe(true);
     expect(await dispatchTriggerEvent(event(), deps())).toEqual({ result: "started", runId: "run-pr" });
     expect(mockStart).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not acknowledge a started delivery before the workflow candidate binds", async () => {
+    mockGetEnabled.mockResolvedValue(enabled({ scope: "any" }));
+    const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
+
+    await expect(dispatchTriggerEvent(event(), deps())).resolves.toEqual({
+      result: "started",
+      runId: "run-pr",
+    });
+    await expect(getTriggerDelivery(db, "github", "delivery-1")).resolves.toMatchObject({
+      status: "accepted",
+      result: null,
+    });
   });
 
   it("resumes an accepted delivery whose result was not stored before a crash", async () => {
@@ -384,6 +402,9 @@ describe("dispatchTriggerEvent durable envelope", () => {
       result: "started",
       runId: "run-pr",
     });
+    const input = mockStart.mock.calls[0]![1][0];
+    expect(await registry.bindRun(input.subjectKey, input.ownerToken, "run-pr")).toBe(true);
+    expect(await acknowledgeStartedTriggerDelivery(db, input, "run-pr")).toBe(true);
     expect(await dispatchTriggerEvent(event(), deps({ getCurrentHead }))).toEqual({
       result: "started",
       runId: "run-pr",
@@ -414,7 +435,7 @@ describe("dispatchTriggerEvent durable envelope", () => {
     expect(mockStart).not.toHaveBeenCalled();
   });
 
-  it("does not re-launch when start succeeds but dispatcher pending deletion fails", async () => {
+  it("lets the winning workflow consume pending without a dispatcher-side delete", async () => {
     mockGetEnabled.mockResolvedValue(enabled({ scope: "any" }));
     await registry.reserve({
       subjectKey: "pr:github:acme/app#7",
@@ -435,22 +456,17 @@ describe("dispatchTriggerEvent durable envelope", () => {
         deliveryId: "delivery-1",
       });
       expect(await registry.bindRun(input.subjectKey, input.ownerToken, "run-pr")).toBe(true);
-      await deletePendingTrigger(db, {
-        subjectKey: input.subjectKey,
-        triggerType: input.pendingEvent.triggerType,
-        delivery: { ...event().delivery, deliveryId: input.pendingEvent.deliveryId },
-        pr: input.pr,
-      });
+      expect(await acknowledgeStartedTriggerDelivery(db, input, "run-pr")).toBe(true);
       return { runId: "run-pr" };
     });
-    const dispatcherDelete = vi.fn().mockRejectedValue(new Error("delete failed after start"));
+    const dispatcherDelete = vi.fn();
     expect(
       await drainOldestPendingTrigger(
         "pr:github:acme/app#7",
         deps({ deletePending: dispatcherDelete }),
       ),
     ).toEqual({ result: "started", runId: "run-pr" });
-    expect(dispatcherDelete).toHaveBeenCalledOnce();
+    expect(dispatcherDelete).not.toHaveBeenCalled();
     expect(
       await registry.release(
         "pr:github:acme/app#7",
@@ -462,6 +478,65 @@ describe("dispatchTriggerEvent durable envelope", () => {
       await drainOldestPendingTrigger("pr:github:acme/app#7", deps()),
     ).toBeNull();
     expect(mockStart).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves a started pending snapshot for the bound workflow to acknowledge", async () => {
+    mockGetEnabled.mockResolvedValue(enabled({ scope: "any" }));
+    await registry.reserve({
+      subjectKey: "pr:github:acme/app#7",
+      ticketKey: null,
+      ownerToken: "blocking-owner",
+      kind: "pr_trigger",
+    });
+    const { dispatchTriggerEvent, drainOldestPendingTrigger } = await import("./dispatch-trigger.js");
+    await dispatchTriggerEvent(event(), deps());
+    await registry.releaseReservation("pr:github:acme/app#7", "blocking-owner");
+
+    await expect(drainOldestPendingTrigger("pr:github:acme/app#7", deps())).resolves.toEqual({
+      result: "started",
+      runId: "run-pr",
+    });
+    await expect(
+      getPendingTrigger(
+        db,
+        "pr:github:acme/app#7",
+        "abc123",
+        "trigger_pr_created",
+      ),
+    ).resolves.not.toBeNull();
+    await expect(getTriggerDelivery(db, "github", "delivery-1")).resolves.toMatchObject({
+      result: { result: "coalesced" },
+    });
+  });
+
+  it("drops an already-started stale pending snapshot without launching a successor", async () => {
+    mockGetEnabled.mockResolvedValue(enabled({ scope: "any" }));
+    const accepted = {
+      ...event(),
+      scope: "any" as const,
+      subjectKey: "pr:github:acme/app#7",
+      ticketKey: null,
+      definitionId: 5,
+      definitionVersion: 12,
+    };
+    await acceptTriggerDelivery(db, accepted);
+    await registry.reserve({
+      subjectKey: accepted.subjectKey,
+      ticketKey: null,
+      ownerToken: "owner-original",
+      kind: "pr_trigger",
+    });
+    await registry.bindRun(accepted.subjectKey, "owner-original", "run-original");
+    await acknowledgeStartedTriggerDelivery(db, accepted, "run-original");
+    await coalescePendingTrigger(db, accepted);
+    await registry.release(accepted.subjectKey, "owner-original", "run-original");
+
+    const { drainOldestPendingTrigger } = await import("./dispatch-trigger.js");
+    await expect(drainOldestPendingTrigger(accepted.subjectKey, deps())).resolves.toBeNull();
+    expect(mockStart).not.toHaveBeenCalled();
+    await expect(
+      getPendingTrigger(db, accepted.subjectKey, accepted.pr.headSha, accepted.triggerType),
+    ).resolves.toBeNull();
   });
 
   it("retains feedback merged while a pending successor starts", async () => {

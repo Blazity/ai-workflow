@@ -1001,7 +1001,7 @@ export async function agentWorkflow(input: string | AgentWorkflowInput) {
       );
       if (!bound) return;
       await acknowledgeApprovalDispatchStep(entry, workflowRunId);
-      await acknowledgePrTriggerDispatchStep(entry, workflowRunId);
+      if (!(await acknowledgePrTriggerDispatchStep(entry, workflowRunId))) return;
       if (entry.kind === "clarification_answered") {
         clarificationWinnerRecorded = await recordClarificationDispatchWinnerStep(
           entry.clarificationRequestId,
