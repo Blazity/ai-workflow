@@ -10,6 +10,7 @@ import type {
 import {
   buildBindingEditorRows,
   canAddAdditionalInput,
+  removeLegacyRequiredCheck,
 } from "@/lib/workflow-editor/binding-options";
 
 const inputClass =
@@ -22,6 +23,7 @@ export function BindingFields({
   nodeContracts,
   canEdit,
   onChange,
+  onLegacyParamsChange,
 }: {
   definition: WorkflowDefinition;
   nodeId: string;
@@ -29,6 +31,7 @@ export function BindingFields({
   nodeContracts: Record<string, WorkflowBlockContract>;
   canEdit: boolean;
   onChange: (name: string, value: string | undefined) => void;
+  onLegacyParamsChange: (params: WorkflowDefinition["nodes"][number]["params"]) => void;
 }) {
   const [newInputName, setNewInputName] = useState("");
   const rows = useMemo(
@@ -39,6 +42,10 @@ export function BindingFields({
   const contract = node
     ? nodeContracts[node.id] ?? options.blockRegistry[node.type]
     : null;
+  const legacyRequiredChecks =
+    node?.type === "finalize_workspace" && Array.isArray(node.params.legacyRequiredChecks)
+      ? node.params.legacyRequiredChecks
+      : [];
   if (!node || !contract || (rows.length === 0 && contract.additionalInputs.length === 0)) {
     return null;
   }
@@ -111,6 +118,44 @@ export function BindingFields({
           </div>
         );
       })}
+      {legacyRequiredChecks.length > 0 && (
+        <div className="border-b border-amber-300 bg-amber-50">
+          <div className="py-2 px-[14px] border-b border-amber-200 font-mono text-[9px] font-semibold tracking-[0.05em] uppercase text-amber-900">
+            Legacy required checks
+          </div>
+          {legacyRequiredChecks.map((sourceId) => {
+            const replacement = node.inputs[`checks.${sourceId}`];
+            const replacementBound =
+              typeof replacement === "string" && replacement.trim() !== "";
+            return (
+              <div
+                key={sourceId}
+                className="flex items-center gap-2 py-2.5 px-[14px] border-b border-amber-200 last:border-b-0"
+              >
+                <div className="min-w-0 flex-1">
+                  <div className="font-mono text-[10px] text-amber-950 break-all">{sourceId}</div>
+                  <div className="mt-0.5 font-body text-[10px] leading-[1.35] text-amber-800">
+                    {replacementBound
+                      ? "Replacement binding is set; Save Draft completes this migration."
+                      : "Add a checks.* replacement, or explicitly remove this legacy requirement."}
+                  </div>
+                </div>
+                {!replacementBound && canEdit && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      onLegacyParamsChange(removeLegacyRequiredCheck(node.params, sourceId))
+                    }
+                    className="appearance-none cursor-pointer border border-amber-400 bg-panel px-2 py-1 rounded-xs font-mono text-[9px] uppercase tracking-[0.04em] text-amber-900"
+                  >
+                    Remove requirement
+                  </button>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
       {contract.additionalInputs.length > 0 && canEdit && (
         <div className="py-2.5 px-[14px] border-b border-neutral-200">
           <div className="font-mono text-[9px] text-neutral-700 tracking-[0.04em] mb-1">

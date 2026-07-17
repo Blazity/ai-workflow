@@ -32,7 +32,6 @@ import type { Point } from "./ports";
 import { NodePalette, MobilePaletteList } from "./palette";
 import { ConfigFields } from "./config-fields";
 import { BindingFields, updateInputBindings } from "./binding-fields";
-import { paramsAfterBindingRepair } from "@/lib/workflow-editor/binding-options";
 import type { WorkflowValidationState } from "@/lib/workflow-editor/validation-controller";
 import { removeNodeFromGraph } from "@/lib/workflow-editor/graph-edit";
 import {
@@ -800,7 +799,6 @@ export function FlowEditor({
         const bindingValue = typeof value === "string" ? value : undefined;
         return {
           ...n,
-          params: paramsAfterBindingRepair(n, name, bindingValue),
           inputs: updateInputBindings(
             n.inputs,
             name,
@@ -1013,6 +1011,9 @@ function NodeConfig({
           nodeContracts={nodeContracts}
           canEdit={canEdit}
           onChange={(name, value) => onChange(`inputs.${name}`, value)}
+          onLegacyParamsChange={(params) =>
+            onChange("params.legacyRequiredChecks", params.legacyRequiredChecks)
+          }
         />
         {!contract.availability.available && (
           <div className="py-2.5 px-[14px] border-b border-amber-300 bg-amber-50 font-body text-xs leading-[1.5] text-amber-900">

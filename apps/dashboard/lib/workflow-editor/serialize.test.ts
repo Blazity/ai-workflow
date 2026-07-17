@@ -271,6 +271,39 @@ test("drops retired bespoke reference params while retaining supported arrays", 
   ]);
 });
 
+test("derives compatibility-marker cleanup from the complete replacement binding map", () => {
+  const nodes = flowNodes([
+    {
+      id: "finalize",
+      type: "finalize_workspace",
+      x: 0,
+      y: 0,
+      params: { legacyRequiredChecks: ["lint"] },
+      inputs: { "checks.lint": "steps.lint.output.status" },
+    },
+    {
+      id: "arthur",
+      type: "arthur_injection_check",
+      x: 0,
+      y: 1,
+      params: { legacyContentFromStep: "dynamic" },
+      inputs: { content: "steps.dynamic.output.value" },
+    },
+  ]);
+
+  const repaired = serializeWorkflowDefinition(nodes, []);
+  assert.deepEqual(repaired.nodes.map((node) => node.params), [{}, {}]);
+
+  const bindingsRemoved = serializeWorkflowDefinition(
+    nodes.map((node) => ({ ...node, inputs: {} })),
+    [],
+  );
+  assert.deepEqual(bindingsRemoved.nodes.map((node) => node.params), [
+    { legacyRequiredChecks: ["lint"] },
+    { legacyContentFromStep: "dynamic" },
+  ]);
+});
+
 test("always emits fromPort for multi-port sources and omits it only for the single default port", () => {
   const nodes = flowNodes([
     { id: "branch", type: "branch", x: 0, y: 0, params: { condition: "steps.a.output.ok == true" } },

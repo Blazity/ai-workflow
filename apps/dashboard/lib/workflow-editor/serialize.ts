@@ -9,6 +9,7 @@ import type {
 } from "@shared/contracts";
 import type { FlowEdgeDef, FlowNodeDef } from "@/lib/flows";
 import { canOmitFromPort } from "./edges";
+import { paramsAfterBindingRepair } from "./binding-options";
 
 // The canonical param-key allowlist lives in @shared/contracts (BLOCK_PARAM_KEYS).
 // Import it rather than keeping a dashboard copy so the two can never drift (a
@@ -23,7 +24,7 @@ function serializeParams(node: FlowNodeDef): Record<string, WorkflowParamValue> 
     if (typeof value === "string" && value.trim() === "") continue;
     out[key] = value;
   }
-  return out;
+  return paramsAfterBindingRepair({ ...node, params: out });
 }
 
 export function serializeWorkflowDefinition(

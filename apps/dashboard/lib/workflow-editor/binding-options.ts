@@ -23,27 +23,40 @@ export interface BindingEditorRow {
 }
 
 export function paramsAfterBindingRepair(
-  node: Pick<WorkflowDefinitionNode, "type" | "params">,
-  inputName: string,
-  value: string | undefined,
+  node: Pick<WorkflowDefinitionNode, "type" | "params" | "inputs">,
 ): Record<string, WorkflowParamValue> {
-  if (!value || value.trim() === "") return node.params;
-
   const params = { ...node.params };
-  if (node.type === "arthur_injection_check" && inputName === "content") {
+  if (
+    node.type === "arthur_injection_check" &&
+    typeof node.inputs.content === "string" &&
+    node.inputs.content.trim() !== ""
+  ) {
     delete params.legacyContentFromStep;
   }
   if (
     node.type === "finalize_workspace" &&
-    inputName.startsWith("checks.") &&
     Array.isArray(params.legacyRequiredChecks)
   ) {
-    const sourceId = inputName.slice("checks.".length);
-    const remaining = params.legacyRequiredChecks.filter((id) => id !== sourceId);
+    const remaining = params.legacyRequiredChecks.filter((sourceId) => {
+      const value = node.inputs[`checks.${sourceId}`];
+      return typeof value !== "string" || value.trim() === "";
+    });
     if (remaining.length === 0) delete params.legacyRequiredChecks;
     else params.legacyRequiredChecks = remaining;
   }
   return params;
+}
+
+export function removeLegacyRequiredCheck(
+  params: Record<string, WorkflowParamValue>,
+  sourceId: string,
+): Record<string, WorkflowParamValue> {
+  if (!Array.isArray(params.legacyRequiredChecks)) return params;
+  const next = { ...params };
+  const remaining = params.legacyRequiredChecks.filter((id) => id !== sourceId);
+  if (remaining.length === 0) delete next.legacyRequiredChecks;
+  else next.legacyRequiredChecks = remaining;
+  return next;
 }
 
 interface BindingEditorInput {

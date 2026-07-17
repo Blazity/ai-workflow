@@ -11,6 +11,7 @@ import {
   buildBindingEditorRows,
   canAddAdditionalInput,
   paramsAfterBindingRepair,
+  removeLegacyRequiredCheck,
 } from "./binding-options.ts";
 
 const stringSchema = { type: "string" } as const;
@@ -198,29 +199,46 @@ test("authoring a replacement binding clears the matching Arthur compatibility m
     x: 0,
     y: 0,
     params: { legacyContentFromStep: "dynamic" },
-    inputs: {},
+    inputs: { content: "steps.dynamic.output.value" as const },
   };
 
-  assert.deepEqual(paramsAfterBindingRepair(node, "content", "steps.dynamic.output.value"), {});
-  assert.deepEqual(paramsAfterBindingRepair(node, "content", ""), node.params);
-  assert.deepEqual(paramsAfterBindingRepair(node, "other", "steps.dynamic.output.value"), node.params);
+  assert.deepEqual(paramsAfterBindingRepair(node), {});
+  assert.deepEqual(paramsAfterBindingRepair({ ...node, inputs: {} }), node.params);
 });
 
-test("authoring checks bindings clears Finalize compatibility markers one at a time", () => {
+test("Finalize marker cleanup is derived from the complete binding map and is reversible", () => {
   const node = {
     id: "finalize",
     type: "finalize_workspace" as const,
     x: 0,
     y: 0,
     params: { legacyRequiredChecks: ["lint", "tests"] },
-    inputs: {},
+    inputs: { "checks.lint": "steps.lint.output.status" as const },
   };
 
-  const afterLint = paramsAfterBindingRepair(node, "checks.lint", "steps.lint.output.status");
+  const afterLint = paramsAfterBindingRepair(node);
   assert.deepEqual(afterLint, { legacyRequiredChecks: ["tests"] });
   assert.deepEqual(
-    paramsAfterBindingRepair({ ...node, params: afterLint }, "checks.tests", "steps.tests.output.status"),
+    paramsAfterBindingRepair({
+      ...node,
+      inputs: {
+        "checks.lint": "steps.lint.output.status" as const,
+        "checks.tests": "steps.tests.output.status" as const,
+      },
+    }),
     {},
   );
-  assert.deepEqual(paramsAfterBindingRepair(node, "checks.lint", ""), node.params);
+  assert.deepEqual(paramsAfterBindingRepair({ ...node, inputs: {} }), node.params);
+});
+
+test("an unrepresentable legacy check has an explicit removal path", () => {
+  const params = { legacyRequiredChecks: ["checks.with.dot", "checks space"] };
+
+  assert.deepEqual(removeLegacyRequiredCheck(params, "checks space"), {
+    legacyRequiredChecks: ["checks.with.dot"],
+  });
+  assert.deepEqual(removeLegacyRequiredCheck(params, "checks.with.dot"), {
+    legacyRequiredChecks: ["checks space"],
+  });
+  assert.deepEqual(removeLegacyRequiredCheck({ legacyRequiredChecks: ["only"] }, "only"), {});
 });
