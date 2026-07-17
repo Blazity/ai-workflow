@@ -53,6 +53,7 @@ export function WorkflowEditorScreen({
   options,
   liveBlocks,
   canEdit,
+  initialNodeId,
 }: {
   definitions: WorkflowDefinitionMeta[];
   initialDetail: WorkflowDefinitionDetailResponse;
@@ -60,6 +61,7 @@ export function WorkflowEditorScreen({
   options: WorkflowEditorOptions;
   liveBlocks: RunBlockStatusesResponse;
   canEdit: boolean;
+  initialNodeId?: string;
 }) {
   const seed = initialDetail.current?.definition ?? defaultDefinition;
   const [metas, setMetas] = useState<WorkflowDefinitionMeta[]>(definitions);
@@ -395,6 +397,7 @@ export function WorkflowEditorScreen({
           runStatuses={derived?.statuses}
           runErrors={derived?.errors}
           fitSignal={fitSignal}
+          initialSelectedId={initialNodeId}
         />
         {defsOpen && (
           <div className="absolute right-4 top-[56px] z-[60] w-[420px] max-h-[60vh] overflow-y-auto bg-panel border border-neutral-200 rounded-[4px] shadow-[0_12px_28px_-8px_rgba(24,27,32,0.22),0_2px_6px_rgba(24,27,32,0.08)] px-4 py-3">

@@ -3,14 +3,43 @@
 import { useState, useMemo } from "react";
 import Link from "next/link";
 import type { FlowNodeDef } from "@/lib/flows";
-import type { WorkflowEditorOptions, WorkflowParamValue } from "@shared/contracts";
+import type {
+  PromptSourceRef,
+  WorkflowBlockType,
+  WorkflowEditorOptions,
+  WorkflowParamValue,
+} from "@shared/contracts";
+import { DEFAULT_AGENT_PROMPTS } from "@shared/contracts";
 import { parseCondition } from "@shared/conditions";
 import { arrayToLines, linesToArray, textMatchesLines } from "@/lib/workflow-editor/params";
 import { Listbox } from "@/components/cockpit/listbox";
+import { PromptField } from "./prompt-field";
 
-const inputCls = "h-[26px] px-2 bg-off-white border border-neutral-200 rounded-xs font-mono text-xs text-coal outline-none disabled:opacity-60";
-const textareaCls = "min-h-[64px] px-2 py-1.5 bg-off-white border border-neutral-200 rounded-xs font-body text-xs leading-[1.5] text-coal outline-none resize-y disabled:opacity-60";
-const monoTextareaCls = "min-h-[64px] px-2 py-1.5 bg-off-white border border-neutral-200 rounded-xs font-mono text-xs leading-[1.5] text-coal outline-none resize-y disabled:opacity-60";
+/** The inspector change callback. Widened past WorkflowParamValue so PromptField
+ *  can set/clear provenance refs under `promptRefs.<paramKey>` paths too. */
+type ConfigChange = (path: string, value: WorkflowParamValue | PromptSourceRef | undefined) => void;
+
+export const inputCls = "h-[26px] px-2 bg-off-white border border-neutral-200 rounded-xs font-mono text-xs text-coal outline-none disabled:opacity-60";
+export const textareaCls = "min-h-[64px] px-2 py-1.5 bg-off-white border border-neutral-200 rounded-xs font-body text-xs leading-[1.5] text-coal outline-none resize-y disabled:opacity-60";
+export const monoTextareaCls = "min-h-[64px] px-2 py-1.5 bg-off-white border border-neutral-200 rounded-xs font-mono text-xs leading-[1.5] text-coal outline-none resize-y disabled:opacity-60";
+
+/** Per-agent built-in prompt template name + inspector placeholder copy. */
+const AGENT_PROMPT_META: Partial<
+  Record<WorkflowBlockType, { templateName: keyof typeof DEFAULT_AGENT_PROMPTS; placeholder: string }>
+> = {
+  planning_agent: {
+    templateName: "research-plan",
+    placeholder: "Uses the built-in research-plan template. Type or insert a prompt to replace it.",
+  },
+  implementation_agent: {
+    templateName: "implement",
+    placeholder: "Uses the built-in implement template. Type or insert a prompt to replace it.",
+  },
+  review_agent: {
+    templateName: "review",
+    placeholder: "Uses the built-in review template. Type or insert a prompt to replace it.",
+  },
+};
 
 function str(value: WorkflowParamValue | undefined): string {
   return typeof value === "string" ? value : "";
@@ -45,10 +74,25 @@ function CheckboxRow({
   );
 }
 
-function ConfigField({ label, children }: { label: string; children: React.ReactNode }) {
+export function ConfigField({
+  label,
+  action,
+  children,
+}: {
+  label: string;
+  action?: React.ReactNode;
+  children: React.ReactNode;
+}) {
   return (
     <div className="flex flex-col gap-1 py-2.5 px-[14px] border-b border-neutral-200">
-      <label className="font-mono text-[9px] text-neutral-700 tracking-[0.06em] uppercase">{label}</label>
+      {action ? (
+        <div className="flex items-center gap-2">
+          <label className="font-mono text-[9px] text-neutral-700 tracking-[0.06em] uppercase">{label}</label>
+          <div className="ml-auto flex items-center gap-1">{action}</div>
+        </div>
+      ) : (
+        <label className="font-mono text-[9px] text-neutral-700 tracking-[0.06em] uppercase">{label}</label>
+      )}
       {children}
     </div>
   );
@@ -309,7 +353,7 @@ function AgentProviderModel({
   node: FlowNodeDef;
   options: WorkflowEditorOptions;
   canEdit: boolean;
-  onChange: (path: string, value: WorkflowParamValue | undefined) => void;
+  onChange: ConfigChange;
 }) {
   const provider = str(node.params.provider);
   return (
@@ -348,7 +392,7 @@ export function ConfigFields({
   node: FlowNodeDef;
   options: WorkflowEditorOptions;
   canEdit: boolean;
-  onChange: (path: string, value: WorkflowParamValue | undefined) => void;
+  onChange: ConfigChange;
 }) {
   switch (node.type) {
     case "trigger_ticket_ai":
@@ -401,15 +445,36 @@ export function ConfigFields({
     }
     case "planning_agent":
     case "implementation_agent":
-    case "review_agent":
-      return <AgentProviderModel node={node} options={options} canEdit={canEdit} onChange={onChange} />;
+    case "review_agent": {
+      const meta = AGENT_PROMPT_META[node.type]!;
+      return (
+        <>
+          <AgentProviderModel node={node} options={options} canEdit={canEdit} onChange={onChange} />
+          <PromptField
+            label="Prompt"
+            paramKey="prompt"
+            node={node}
+            disabled={!canEdit}
+            mono
+            placeholder={meta.placeholder}
+            helper="Leave empty to keep the built-in template."
+            builtInTemplate={{ name: meta.templateName, body: DEFAULT_AGENT_PROMPTS[meta.templateName] }}
+            onChange={onChange}
+          />
+        </>
+      );
+    }
     case "fix_agent":
       return (
         <>
           <AgentProviderModel node={node} options={options} canEdit={canEdit} onChange={onChange} />
-          <ConfigField label="Instructions">
-            <TextArea value={str(node.params.instructions)} disabled={!canEdit} onChange={(v) => onChange("params.instructions", v)} />
-          </ConfigField>
+          <PromptField
+            label="Instructions"
+            paramKey="instructions"
+            node={node}
+            disabled={!canEdit}
+            onChange={onChange}
+          />
           <ConfigField label="Max minutes">
             <NumberField value={node.params.maxMinutes} min={5} max={60} disabled={!canEdit} onChange={(v) => onChange("params.maxMinutes", v)} />
           </ConfigField>
@@ -419,9 +484,13 @@ export function ConfigFields({
       return (
         <>
           <AgentProviderModel node={node} options={options} canEdit={canEdit} onChange={onChange} />
-          <ConfigField label="Prompt">
-            <TextArea value={str(node.params.prompt)} disabled={!canEdit} onChange={(v) => onChange("params.prompt", v)} />
-          </ConfigField>
+          <PromptField
+            label="Prompt"
+            paramKey="prompt"
+            node={node}
+            disabled={!canEdit}
+            onChange={onChange}
+          />
           <ConfigField label="Output schema">
             <TextArea value={str(node.params.outputSchema)} disabled={!canEdit} mono onChange={(v) => onChange("params.outputSchema", v)} />
           </ConfigField>
@@ -430,12 +499,20 @@ export function ConfigFields({
     case "call_llm":
       return (
         <>
-          <ConfigField label="Prompt">
-            <TextArea value={str(node.params.prompt)} disabled={!canEdit} onChange={(v) => onChange("params.prompt", v)} />
-          </ConfigField>
-          <ConfigField label="System">
-            <TextArea value={str(node.params.system)} disabled={!canEdit} onChange={(v) => onChange("params.system", v)} />
-          </ConfigField>
+          <PromptField
+            label="Prompt"
+            paramKey="prompt"
+            node={node}
+            disabled={!canEdit}
+            onChange={onChange}
+          />
+          <PromptField
+            label="System"
+            paramKey="system"
+            node={node}
+            disabled={!canEdit}
+            onChange={onChange}
+          />
           <ConfigField label="Model">
             <TextInput value={str(node.params.model)} disabled={!canEdit} onChange={(v) => onChange("params.model", v)} />
           </ConfigField>
