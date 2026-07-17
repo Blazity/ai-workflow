@@ -44,6 +44,10 @@ import {
 import { workflowEditorActions } from "@/lib/workflow-editor/editor-actions";
 import { executionLimitsFromDefinition } from "@/lib/workflow-editor/execution-limits";
 import { validatedBindingInputsByNode } from "@/lib/workflow-editor/binding-options";
+import {
+  createEditorResponseGuard,
+  type EditorResponseGuard,
+} from "@/lib/workflow-editor/response-guard";
 
 interface ValidationRequest {
   definitionId: number;
@@ -124,6 +128,11 @@ export function WorkflowEditorScreen({
     pendingLayoutSaveRef.current = createPendingLayoutSave();
   }
   const pendingLayoutSave = pendingLayoutSaveRef.current;
+  const editorResponseGuardRef = useRef<EditorResponseGuard | null>(null);
+  if (editorResponseGuardRef.current === null) {
+    editorResponseGuardRef.current = createEditorResponseGuard();
+  }
+  const editorResponseGuard = editorResponseGuardRef.current;
   const validationKeyRef = useRef<string | null>(null);
   const validationControllerRef = useRef<WorkflowValidationController<ValidationRequest> | null>(
     null,
@@ -293,16 +302,23 @@ export function WorkflowEditorScreen({
     );
   }
 
-  function applySave(res: WorkflowDefinitionSaveResponse, refit: boolean) {
+  function applySave(
+    res: WorkflowDefinitionSaveResponse,
+    refit: boolean,
+    replaceEditorState = true,
+  ) {
     setBaselineDraft(res.draft);
-    setBudgets(executionLimitsFromDefinition(res.draft));
-    setNodes(toViewNodes(res.draft.nodes));
-    setEdges(structuredClone(res.draft.edges));
+    if (replaceEditorState) {
+      setBudgets(executionLimitsFromDefinition(res.draft));
+      setNodes(toViewNodes(res.draft.nodes));
+      setEdges(structuredClone(res.draft.edges));
+    }
     setMetas((prev) => prev.map((m) => (m.id === res.meta.id ? res.meta : m)));
-    if (refit) setFitSignal((s) => s + 1);
+    if (refit && replaceEditorState) setFitSignal((s) => s + 1);
   }
 
   async function save() {
+    const requestRevision = editorResponseGuard.capture();
     setBusy("save");
     setError(null);
     try {
@@ -321,7 +337,11 @@ export function WorkflowEditorScreen({
           setError(await readErrorMessage(res));
           return;
         }
-        applySave((await res.json()) as WorkflowDefinitionSaveResponse, false);
+        applySave(
+          (await res.json()) as WorkflowDefinitionSaveResponse,
+          false,
+          editorResponseGuard.isCurrent(requestRevision),
+        );
       });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unable to save changes");
@@ -384,7 +404,7 @@ export function WorkflowEditorScreen({
     }
   }
 
-  async function applySwitch(targetId: number) {
+  async function applySwitch(targetId: number, requestRevision: number) {
     setBusy("switch");
     setError(null);
     try {
@@ -394,6 +414,12 @@ export function WorkflowEditorScreen({
         return;
       }
       const detail = (await res.json()) as WorkflowDefinitionDetailResponse;
+      if (!editorResponseGuard.isCurrent(requestRevision)) {
+        setError(
+          "The workflow changed while the definition was loading. Switch again to discard the newer edits.",
+        );
+        return;
+      }
       setSelectedId(detail.meta.id);
       setMetas((prev) => prev.map((m) => (m.id === detail.meta.id ? detail.meta : m)));
       setVersions(detail.versions);
@@ -419,7 +445,10 @@ export function WorkflowEditorScreen({
     const t = reduceDefinitionSwitch(switchState, { type: "request", targetId, dirty });
     setSwitchState(t.state);
     if (t.switchTo !== null) {
-      await afterPendingLayoutSave(pendingLayoutSave, () => applySwitch(t.switchTo!));
+      const requestRevision = editorResponseGuard.capture();
+      await afterPendingLayoutSave(pendingLayoutSave, () =>
+        applySwitch(t.switchTo!, requestRevision),
+      );
     }
   }
 
@@ -427,7 +456,10 @@ export function WorkflowEditorScreen({
     const t = reduceDefinitionSwitch(switchState, { type: "confirm" });
     setSwitchState(t.state);
     if (t.switchTo !== null) {
-      await afterPendingLayoutSave(pendingLayoutSave, () => applySwitch(t.switchTo!));
+      const requestRevision = editorResponseGuard.capture();
+      await afterPendingLayoutSave(pendingLayoutSave, () =>
+        applySwitch(t.switchTo!, requestRevision),
+      );
     }
   }
 
@@ -469,7 +501,9 @@ export function WorkflowEditorScreen({
       const remaining = metas.filter((m) => m.id !== id);
       setMetas(remaining);
       setConfirmDelete(null);
-      if (id === selectedId && remaining[0]) await applySwitch(remaining[0].id);
+      if (id === selectedId && remaining[0]) {
+        await applySwitch(remaining[0].id, editorResponseGuard.capture());
+      }
     } catch (err) {
       setRowError({ id, message: err instanceof Error ? err.message : "Unable to delete definition" });
     } finally {
@@ -545,9 +579,18 @@ export function WorkflowEditorScreen({
           nodes={nodes}
           edges={edges}
           limits={budgets}
-          onLimitsChange={setBudgets}
-          onNodesChange={setNodes}
-          onEdgesChange={setEdges}
+          onLimitsChange={(next) => {
+            editorResponseGuard.invalidate();
+            setBudgets(next);
+          }}
+          onNodesChange={(next) => {
+            editorResponseGuard.invalidate();
+            setNodes(next);
+          }}
+          onEdgesChange={(next) => {
+            editorResponseGuard.invalidate();
+            setEdges(next);
+          }}
           canEdit={canEdit}
           dirty={dirty}
           saveEnabled={canSave}
