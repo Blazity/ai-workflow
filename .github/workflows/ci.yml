@@ -18,7 +18,9 @@ jobs:
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          # Node 24 to match local dev and the Vercel runtime: the dashboard
+          # test script relies on node --test glob patterns (Node 21+).
+          node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm run typecheck
