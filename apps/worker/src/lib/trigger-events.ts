@@ -1,0 +1,204 @@
+import type { PrTriggerPayload } from "../workflows/agent-input.js";
+
+export type PrTriggerType =
+  | "trigger_pr_created"
+  | "trigger_pr_checks_failed"
+  | "trigger_pr_review";
+
+export interface TriggerEvent {
+  triggerType: PrTriggerType;
+  pr: PrTriggerPayload;
+}
+
+export interface NormalizeGitHubOptions {
+  gateCheckNames: readonly string[];
+  botLogin?: string;
+  /**
+   * Review states (from the enabled trigger_pr_review node's `on` param) that
+   * may fire a run. Defaults to the safe ["changes_requested"] only: a
+   * "commented" review carries an untrusted body that fix_agent would hand to a
+   * full-permission agent, so it must be opted into explicitly.
+   */
+  reviewStates?: readonly string[];
+}
+
+export const GATE_CHECK_NAME_PREFIX = "blazebot / ";
+
+export const DEFAULT_REVIEW_STATES: readonly string[] = ["changes_requested"];
+
+const GITHUB_FAILED_CONCLUSIONS: ReadonlySet<string> = new Set([
+  "failure",
+  "timed_out",
+]);
+
+export function normalizeGitHubEvent(
+  eventName: string,
+  body: any,
+  options: NormalizeGitHubOptions,
+): TriggerEvent | null {
+  const repo = body?.repository;
+  if (!repo) return null;
+
+  if (eventName === "pull_request") {
+    const action = body?.action;
+    if (action !== "opened" && action !== "reopened") return null;
+    const pr = body?.pull_request;
+    if (!pr) return null;
+    return { triggerType: "trigger_pr_created", pr: mapGitHubPullRequest(pr, repo) };
+  }
+
+  if (eventName === "check_run") {
+    if (body?.action !== "completed") return null;
+    const check = body?.check_run;
+    if (!check) return null;
+    if (!GITHUB_FAILED_CONCLUSIONS.has(check.conclusion)) return null;
+    if (isGateCheckName(check.name, options.gateCheckNames)) return null;
+    const prs = check.pull_requests;
+    if (!Array.isArray(prs) || prs.length === 0) return null;
+    const prRef = prs[0];
+    const prNumber = prRef.number;
+    return {
+      triggerType: "trigger_pr_checks_failed",
+      pr: {
+        provider: "github",
+        repoPath: `${repo.owner.login}/${repo.name}`,
+        prNumber,
+        prUrl: `${repo.html_url}/pull/${prNumber}`,
+        headRef: prRef.head?.ref ?? "",
+        headSha: prRef.head?.sha ?? check.head_sha ?? "",
+        baseRef: prRef.base?.ref ?? "",
+        title: "",
+        author: "unknown",
+        isDraft: false,
+        failedChecks: [
+          {
+            name: check.name,
+            conclusion: check.conclusion,
+            ...(check.details_url ? { detailsUrl: check.details_url } : {}),
+          },
+        ],
+      },
+    };
+  }
+
+  if (eventName === "pull_request_review") {
+    if (body?.action !== "submitted") return null;
+    const review = body?.review;
+    const pr = body?.pull_request;
+    if (!review || !pr) return null;
+    const allowedStates = options.reviewStates ?? DEFAULT_REVIEW_STATES;
+    if (!allowedStates.includes(review.state)) return null;
+    if (options.botLogin && review.user?.login === options.botLogin) return null;
+    return {
+      triggerType: "trigger_pr_review",
+      pr: {
+        ...mapGitHubPullRequest(pr, repo),
+        review: {
+          state: review.state as "changes_requested" | "commented",
+          author: review.user?.login ?? "unknown",
+          body: review.body ?? "",
+        },
+      },
+    };
+  }
+
+  return null;
+}
+
+export function normalizeGitLabEvent(
+  eventName: string,
+  body: any,
+): TriggerEvent | null {
+  if (eventName === "Merge Request Hook") {
+    if (body?.object_kind !== "merge_request") return null;
+    const attrs = body?.object_attributes;
+    const project = body?.project;
+    if (!attrs || !project) return null;
+    const action = attrs.action;
+    if (action !== "open" && action !== "reopen") return null;
+    return {
+      triggerType: "trigger_pr_created",
+      pr: {
+        provider: "gitlab",
+        repoPath: project.path_with_namespace ?? "",
+        prNumber: attrs.iid,
+        prUrl: attrs.url ?? "",
+        headRef: attrs.source_branch ?? "",
+        headSha: attrs.last_commit?.id ?? "",
+        baseRef: attrs.target_branch ?? "",
+        title: attrs.title ?? "",
+        author: body?.user?.username ?? body?.user?.name ?? "unknown",
+        isDraft: isGitLabDraft(attrs),
+      },
+    };
+  }
+
+  if (eventName === "Pipeline Hook") {
+    if (body?.object_kind !== "pipeline") return null;
+    const attrs = body?.object_attributes;
+    const mr = body?.merge_request;
+    const project = body?.project;
+    if (!attrs || !mr || !project) return null;
+    if (attrs.status !== "failed") return null;
+    const failedBuilds = Array.isArray(body?.builds)
+      ? body.builds.filter((build: any) => build?.status === "failed")
+      : [];
+    const failedChecks =
+      failedBuilds.length > 0
+        ? failedBuilds.map((build: any) => ({
+            name: build.name,
+            conclusion: build.status,
+          }))
+        : [{ name: "pipeline", conclusion: "failed" }];
+    return {
+      triggerType: "trigger_pr_checks_failed",
+      pr: {
+        provider: "gitlab",
+        repoPath: project.path_with_namespace ?? "",
+        prNumber: mr.iid,
+        prUrl: mr.url ?? "",
+        headRef: mr.source_branch ?? "",
+        headSha: attrs.sha ?? mr.last_commit?.id ?? "",
+        baseRef: mr.target_branch ?? "",
+        title: mr.title ?? "",
+        author: body?.user?.username ?? body?.user?.name ?? "unknown",
+        isDraft: false,
+        failedChecks,
+      },
+    };
+  }
+
+  return null;
+}
+
+function mapGitHubPullRequest(pr: any, repo: any): PrTriggerPayload {
+  return {
+    provider: "github",
+    repoPath: `${repo.owner.login}/${repo.name}`,
+    prNumber: pr.number,
+    prUrl: pr.html_url,
+    headRef: pr.head?.ref ?? "",
+    headSha: pr.head?.sha ?? "",
+    baseRef: pr.base?.ref ?? "",
+    title: pr.title ?? "",
+    author: pr.user?.login ?? "unknown",
+    isDraft: !!pr.draft,
+  };
+}
+
+function isGateCheckName(
+  name: string,
+  gateCheckNames: readonly string[],
+): boolean {
+  if (typeof name !== "string") return false;
+  if (gateCheckNames.includes(name)) return true;
+  return name.startsWith(GATE_CHECK_NAME_PREFIX);
+}
+
+function isGitLabDraft(attrs: any): boolean {
+  return (
+    attrs.draft === true ||
+    attrs.work_in_progress === true ||
+    /^(draft|wip):/i.test(attrs.title ?? "")
+  );
+}

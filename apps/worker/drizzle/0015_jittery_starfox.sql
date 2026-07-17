@@ -1,0 +1,1 @@
+ALTER TABLE "active_runs" ADD COLUMN "run_kind" text DEFAULT 'ticket' NOT NULL;

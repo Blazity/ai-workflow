@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { ClaudeAgentAdapter } from "./claude.js";
-import { AGENT_SCHEMA, RESEARCH_SCHEMA, REVIEW_SCHEMA } from "./types.js";
+import { AGENT_ENV_CLAUDE_PATH, AGENT_ENV_PATH, AGENT_ENV_SHIM } from "./shared.js";
+import { AGENT_SCHEMA, GENERIC_SCHEMA, RESEARCH_SCHEMA, REVIEW_SCHEMA } from "./types.js";
 
 const adapter = new ClaudeAgentAdapter();
 
@@ -244,6 +245,12 @@ describe("schema constants", () => {
     expect(s.required).toEqual(["status", "plan", "questions", "error"]);
     expect(s.properties.status.enum).toEqual(["completed", "clarification_needed", "failed"]);
   });
+  it("GENERIC_SCHEMA is valid JSON with the expected fields", () => {
+    const s = JSON.parse(GENERIC_SCHEMA);
+    expect(s.required).toEqual(["status", "body", "questions", "error"]);
+    expect(s.properties.status.enum).toEqual(["ok", "needs_input", "failed"]);
+    expect(s.additionalProperties).toBe(false);
+  });
 });
 
 describe("ClaudeAgentAdapter.extractUsage", () => {
@@ -291,6 +298,8 @@ describe("ClaudeAgentAdapter.buildPhaseScript", () => {
     const paths = adapter.artifactPaths("research");
     const s = adapter.buildPhaseScript({ phase: "research", model: "claude-opus-4-6", paths });
     expect(s).toContain("#!/bin/bash");
+    // Consumers still source the shim path unchanged; the env-file split is transparent.
+    expect(s).toContain("source /tmp/agent-env.sh");
     expect(s).toContain("claude");
     expect(s).toContain("--model 'claude-opus-4-6'");
     expect(s).toContain("--output-format json");
@@ -361,6 +370,28 @@ describe("ClaudeAgentAdapter.buildPhaseScript", () => {
     expect(s).not.toContain("it's\"}");
     expect(s).toContain("it'\\''s");
   });
+
+  it("sanitizes the phase label in the exit-code path", () => {
+    const paths = adapter.artifactPaths("agent-Block_1");
+    const s = adapter.buildPhaseScript({ phase: "agent-Block_1", model: "claude-opus-4-6", paths });
+    expect(s).toContain("/tmp/agent-block-1-exit-code");
+    expect(s).not.toContain("agent-Block_1-exit-code");
+  });
+
+  it("neutralizes a model id that tries to break out of the single-quoted flag", () => {
+    const paths = adapter.artifactPaths("research");
+    const s = adapter.buildPhaseScript({ phase: "research", model: "m'; rm -rf / #", paths });
+    // The embedded quote is escaped via '\'' so the payload cannot close the
+    // quote and run as a separate command.
+    expect(s).toContain("--model 'm'\\''; rm -rf / #'");
+    expect(s).not.toContain("--model 'm'; rm -rf");
+  });
+
+  it("keeps a $()-style model id inside single quotes so it can't be substituted", () => {
+    const paths = adapter.artifactPaths("research");
+    const s = adapter.buildPhaseScript({ phase: "research", model: "$(whoami)", paths });
+    expect(s).toContain("--model '$(whoami)'");
+  });
 });
 
 describe("ClaudeAgentAdapter.artifactPaths", () => {
@@ -373,6 +404,59 @@ describe("ClaudeAgentAdapter.artifactPaths", () => {
       sentinel: "/tmp/research-done",
       structuredOutput: null,
     });
+  });
+
+  it("leaves the three built-in phases byte-identical", () => {
+    for (const phase of ["research", "impl", "review"] as const) {
+      expect(adapter.artifactPaths(phase).sentinel).toBe(`/tmp/${phase}-done`);
+    }
+  });
+
+  it("sanitizes an arbitrary phase label to a shell-safe token", () => {
+    expect(adapter.artifactPaths("agent-Block_1")).toEqual({
+      wrapper: "/tmp/agent-block-1-wrapper.sh",
+      input: "/tmp/agent-block-1-requirements.md",
+      stdout: "/tmp/agent-block-1-stdout.txt",
+      stderr: "/tmp/agent-block-1-stderr.txt",
+      sentinel: "/tmp/agent-block-1-done",
+      structuredOutput: null,
+    });
+  });
+});
+
+describe("ClaudeAgentAdapter.configure", () => {
+  const writtenFiles = (writeFiles: any) =>
+    writeFiles.mock.calls.flatMap(([files]: [any[]]) => files);
+
+  it("writes the claude per-provider env file plus the shared shim", async () => {
+    const runCommand = vi.fn().mockResolvedValue({ exitCode: 0 });
+    const writeFiles = vi.fn().mockResolvedValue(undefined);
+    const sandbox = { runCommand, writeFiles } as any;
+
+    await adapter.configure(sandbox, { model: "claude-opus-4-6", anthropicApiKey: "sk-ant-test" });
+
+    const files = writtenFiles(writeFiles);
+    const claudeEnv = files.find((f: any) => f.path === AGENT_ENV_CLAUDE_PATH);
+    expect(claudeEnv).toBeDefined();
+    expect(claudeEnv.content.toString("utf8")).toContain("ANTHROPIC_API_KEY");
+
+    const shim = files.find((f: any) => f.path === AGENT_ENV_PATH);
+    expect(shim).toBeDefined();
+    expect(shim.content.toString("utf8")).toBe(AGENT_ENV_SHIM);
+
+    // chmod 600 the secret-bearing per-provider file, not the shim.
+    expect(runCommand).toHaveBeenCalledWith("chmod", ["600", AGENT_ENV_CLAUDE_PATH]);
+  });
+
+  it("routes an OAuth token to CLAUDE_CODE_OAUTH_TOKEN in the per-provider file", async () => {
+    const runCommand = vi.fn().mockResolvedValue({ exitCode: 0 });
+    const writeFiles = vi.fn().mockResolvedValue(undefined);
+    const sandbox = { runCommand, writeFiles } as any;
+
+    await adapter.configure(sandbox, { model: "claude-opus-4-6", anthropicApiKey: "sk-ant-oat-xyz" });
+
+    const claudeEnv = writtenFiles(writeFiles).find((f: any) => f.path === AGENT_ENV_CLAUDE_PATH);
+    expect(claudeEnv.content.toString("utf8")).toContain("CLAUDE_CODE_OAUTH_TOKEN");
   });
 });
 

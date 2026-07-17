@@ -202,3 +202,142 @@ export interface RepositoryOption {
   private: boolean;
   archived: boolean;
 }
+
+// --- Workflow definition (dashboard-managed run graph) ---
+
+export type WorkflowBlockType =
+  | "trigger_ticket_ai"
+  | "trigger_plan_approved"
+  | "trigger_pr_created"
+  | "trigger_pr_checks_failed"
+  | "trigger_pr_review"
+  | "planning_agent"
+  | "implementation_agent"
+  | "review_agent"
+  | "fix_agent"
+  | "generic_agent"
+  | "prepare_workspace"
+  | "finalize_workspace"
+  | "run_pre_pr_checks"
+  | "run_checks"
+  | "call_llm"
+  | "fetch_pr_context"
+  | "open_pr"
+  | "update_ticket_status"
+  | "post_ticket_comment"
+  | "post_pr_comment"
+  | "send_slack_message"
+  | "send_plan_approval"
+  | "human_question"
+  | "arthur_injection_check"
+  | "branch"
+  | "loop"
+  | "terminate";
+
+/** Any value expressible in JSON, used for block outputs and condition operands. */
+export type JsonValue =
+  | string
+  | number
+  | boolean
+  | null
+  | JsonValue[]
+  | { [key: string]: JsonValue };
+
+/** Structured result a block reports on completion. `status` is always present;
+ *  the remaining keys are block-specific JSON the graph engine can read. */
+export interface BlockOutput {
+  status: string;
+  [key: string]: JsonValue;
+}
+
+export type TicketStatusTarget = "ai_review" | "backlog";
+
+export type WorkflowParamValue = string | number | boolean | string[];
+
+export interface WorkflowDefinitionNode {
+  id: string;
+  type: WorkflowBlockType;
+  name?: string;
+  x: number;
+  y: number;
+  params: Record<string, WorkflowParamValue>;
+}
+
+export interface WorkflowDefinitionEdge {
+  from: string;
+  to: string;
+  fromPort?: string;
+}
+
+export interface WorkflowDefinition {
+  schemaVersion: 1;
+  nodes: WorkflowDefinitionNode[];
+  edges: WorkflowDefinitionEdge[];
+}
+
+export interface WorkflowDefinitionVersion {
+  version: number;
+  definitionId: number;
+  definition: WorkflowDefinition;
+  createdAt: string;
+  createdById: string;
+  createdByLabel: string;
+  restoredFromVersion: number | null;
+}
+
+export interface WorkflowEditorOptions {
+  agentKind: "claude" | "codex";
+  defaultModel: string;
+  defaultModels: { claude: string; codex: string };
+  models: { claude: string[]; codex: string[] };
+  ticketStatusTargets: { value: TicketStatusTarget; label: string }[];
+}
+
+export type BlockRunStatus = "pending" | "running" | "ok" | "warn" | "fail";
+
+export interface BlockRunState {
+  status: BlockRunStatus;
+  error?: string;
+  attempt?: number;
+  output?: BlockOutput;
+}
+
+export interface RunBlockStatusSnapshot {
+  runId: string;
+  ticketKey: string | null;
+  source: "live" | "last";
+  status: RunStatus;
+  definitionVersion: number | null;
+  definitionId: number | null;
+  blockStatuses: Record<string, BlockRunState>;
+  updatedAt: string;
+  completedAt: string | null;
+}
+
+// --- Plan-approval queue (human-in-the-loop) ---
+
+export type ApprovalStatus = "pending" | "approved" | "rejected" | "superseded";
+
+/** One plan awaiting (or past) a human decision, as exposed to the dashboard. */
+export interface ApprovalRequest {
+  id: string;
+  ticketKey: string;
+  definitionId: number;
+  /** Head version of the definition when the plan was filed; the version the
+   *  approval is pinned to. Null only for rows predating version pinning. */
+  definitionVersion: number | null;
+  /** Run that produced the plan. */
+  runId: string;
+  plan: { markdown: string };
+  assumptions: string[] | null;
+  status: ApprovalStatus;
+  /** ISO timestamp. */
+  requestedAt: string;
+  requestedBy: string;
+  decidedById: string | null;
+  decidedByLabel: string | null;
+  /** ISO timestamp; null while pending. */
+  decidedAt: string | null;
+  /** Run started on approval; null until dispatched. */
+  dispatchedRunId: string | null;
+}

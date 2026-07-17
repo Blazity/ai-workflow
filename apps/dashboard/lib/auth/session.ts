@@ -9,6 +9,7 @@ export type DashboardSession = {
   role: "owner" | "admin" | "member";
   canManageUsers: boolean;
   canEditChecks: boolean;
+  canEditWorkflows: boolean;
 };
 
 function isDashboardSession(value: unknown): value is DashboardSession {
@@ -21,7 +22,8 @@ function isDashboardSession(value: unknown): value is DashboardSession {
       session.role === "admin" ||
       session.role === "member") &&
     typeof session.canManageUsers === "boolean" &&
-    typeof session.canEditChecks === "boolean"
+    typeof session.canEditChecks === "boolean" &&
+    typeof session.canEditWorkflows === "boolean"
   );
 }
 

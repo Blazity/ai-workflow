@@ -29,6 +29,7 @@ export interface VCSAdapter {
     options?: { mergeParentSha?: string; message?: string },
   ): Promise<void>;
   getPRComments(prId: number): Promise<PRComment[]>;
+  postPRComment(prId: number, body: string): Promise<{ url: string | null }>;
   getCheckRunResults(prId: number): Promise<CheckRunResult[]>;
   getPRConflictStatus(prId: number): Promise<boolean>;
   findPR(branch: string): Promise<PullRequest | null>;

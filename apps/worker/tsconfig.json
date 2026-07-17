@@ -8,9 +8,6 @@
     "skipLibCheck": true,
     "outDir": "dist",
     "baseUrl": ".",
-    "paths": {
-      "@shared/*": ["../shared/*"]
-    },
     "types": ["vitest/globals"]
   },
   "include": [

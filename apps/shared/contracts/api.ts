@@ -1,11 +1,17 @@
 import type {
+  ApprovalRequest,
   PrePrCheckConfigVersion,
   PromptDef,
   RepositoryOption,
   Run,
+  RunBlockStatusSnapshot,
   RunDetail,
   RunStep,
   Workflow,
+  WorkflowBlockType,
+  WorkflowDefinition,
+  WorkflowDefinitionVersion,
+  WorkflowEditorOptions,
 } from "./domain.js";
 
 export interface ErrorEnvelope {
@@ -178,4 +184,56 @@ export interface PrePrCheckSaveResponse {
 
 export interface RepositoriesResponse {
   repositories: RepositoryOption[];
+}
+
+export interface WorkflowDefinitionMeta {
+  id: number;
+  name: string;
+  enabled: boolean;
+  triggerTypes: WorkflowBlockType[];
+  currentVersion: number | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface WorkflowDefinitionsResponse {
+  definitions: WorkflowDefinitionMeta[];
+  defaultDefinition: WorkflowDefinition;
+  options: WorkflowEditorOptions;
+}
+
+export interface WorkflowDefinitionDetailResponse {
+  meta: WorkflowDefinitionMeta;
+  current: WorkflowDefinitionVersion | null;
+  versions: WorkflowDefinitionVersion[];
+}
+
+/** Legacy single-definition GET shim response; removed once the dashboard
+ *  switches to the multi-definition routes. */
+export interface WorkflowDefinitionResponse {
+  current: WorkflowDefinitionVersion | null;
+  versions: WorkflowDefinitionVersion[];
+  defaultDefinition: WorkflowDefinition;
+  options: WorkflowEditorOptions;
+}
+
+export interface WorkflowDefinitionSaveResponse {
+  meta: WorkflowDefinitionMeta;
+  version: WorkflowDefinitionVersion;
+}
+
+export interface RunBlockStatusesResponse {
+  generatedAt: string;
+  run: RunBlockStatusSnapshot | null;
+}
+
+export interface ApprovalsResponse {
+  generatedAt: string;
+  approvals: ApprovalRequest[];
+}
+
+export interface ApprovalDecisionResponse {
+  approval: ApprovalRequest;
+  /** Run started on approval; null for a rejection. */
+  runId: string | null;
 }

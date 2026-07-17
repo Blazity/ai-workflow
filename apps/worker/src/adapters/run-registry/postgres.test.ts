@@ -98,18 +98,67 @@ describe("unregister", () => {
   });
 });
 
+describe("unregisterIfRunId", () => {
+  it("removes the row when it still holds the given runId", async () => {
+    await registry.register("PROJ-1", "run_a");
+    await registry.unregisterIfRunId("PROJ-1", "run_a");
+    expect(await registry.getRunId("PROJ-1")).toBeNull();
+  });
+
+  it("leaves a successor's row intact when the runId no longer matches", async () => {
+    await registry.register("PROJ-1", "run_a");
+    // Successor reclaimed the ticket with a different runId.
+    await registry.register("PROJ-1", "run_b");
+    // The original run's scoped release must be a no-op.
+    await registry.unregisterIfRunId("PROJ-1", "run_a");
+    expect(await registry.getRunId("PROJ-1")).toBe("run_b");
+  });
+
+  it("is a no-op when no row exists", async () => {
+    await registry.unregisterIfRunId("PROJ-99", "run_a");
+    expect(await registry.getRunId("PROJ-99")).toBeNull();
+  });
+});
+
 describe("listAll", () => {
   it("returns all ticket -> runId pairs", async () => {
     await registry.claim("PROJ-1", "run_abc");
     await registry.claim("PROJ-2", "run_def");
     const all = await registry.listAll();
     expect(all).toHaveLength(2);
-    expect(all).toContainEqual({ ticketKey: "PROJ-1", runId: "run_abc" });
-    expect(all).toContainEqual({ ticketKey: "PROJ-2", runId: "run_def" });
+    expect(all).toContainEqual({ ticketKey: "PROJ-1", runId: "run_abc", kind: "ticket" });
+    expect(all).toContainEqual({ ticketKey: "PROJ-2", runId: "run_def", kind: "ticket" });
   });
 
   it("returns empty array when none registered", async () => {
     expect(await registry.listAll()).toEqual([]);
+  });
+});
+
+describe("run kind", () => {
+  it("defaults to 'ticket' when claim omits kind", async () => {
+    await registry.claim("PROJ-1", "run_abc");
+    const [entry] = await registry.listAll();
+    expect(entry.kind).toBe("ticket");
+  });
+
+  it("round-trips a 'pr_trigger' kind through claim", async () => {
+    await registry.claim("PROJ-1", "claiming", "pr_trigger");
+    const [entry] = await registry.listAll();
+    expect(entry).toEqual({ ticketKey: "PROJ-1", runId: "claiming", kind: "pr_trigger" });
+  });
+
+  it("register carries the kind through the claim -> runId swap", async () => {
+    await registry.claim("PROJ-1", "claiming", "pr_trigger");
+    await registry.register("PROJ-1", "run_abc", "pr_trigger");
+    const [entry] = await registry.listAll();
+    expect(entry).toEqual({ ticketKey: "PROJ-1", runId: "run_abc", kind: "pr_trigger" });
+  });
+
+  it("register defaults to 'ticket' when kind omitted", async () => {
+    await registry.register("PROJ-2", "run_xyz");
+    const [entry] = await registry.listAll();
+    expect(entry.kind).toBe("ticket");
   });
 });
 

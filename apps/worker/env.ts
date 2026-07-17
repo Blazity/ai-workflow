@@ -24,6 +24,9 @@ export const env = createEnv({
 
     // VCS
     VCS_KIND: z.enum(["github", "gitlab"]).optional(),
+    // Login of the bot's own VCS account. When set, PR reviews authored by it
+    // are ignored so the bot does not trigger a run off its own review.
+    VCS_BOT_LOGIN: z.string().min(1).optional(),
     // GitHub VCS — App auth (no PAT). Private key is base64-encoded PEM so it
     // round-trips cleanly through the Vercel env UI without newline-escaping.
     GITHUB_APP_ID: z.coerce.number().int().positive().optional(),
@@ -99,8 +102,11 @@ export const env = createEnv({
     // Polling
     POLL_INTERVAL_MS: z.coerce.number().int().positive().default(300_000),
 
-    // Phase 3 (Review) — agent self-reviews diff and fixes issues before push.
+    // Review phase: agent self-reviews its diff and fixes issues before push.
     // Off by default so existing deployments keep current two-phase behavior.
+    // This flag no longer gates execution directly; it only shapes the built-in
+    // default workflow definition (the includeReview input). Once a definition
+    // is saved via the dashboard, a review_agent block's presence drives it.
     ENABLE_REVIEW_PHASE: z
       .enum(["true", "false"])
       .default("false")
@@ -134,6 +140,15 @@ export const env = createEnv({
     }),
     BETTER_AUTH_URL: z.string().url(),
     DASHBOARD_ORIGIN: z.string().url(),
+    // Additional origins trusted for dashboard login on top of DASHBOARD_ORIGIN
+    // (e.g. a preview deployment's stable alias). Comma-separated; each must be
+    // a full origin URL. DASHBOARD_ORIGIN stays the single canonical origin used
+    // for building links and SSO redirects.
+    DASHBOARD_TRUSTED_ORIGINS: z
+      .string()
+      .optional()
+      .transform((raw) => (raw ? raw.split(",").map((origin) => origin.trim()).filter(Boolean) : []))
+      .pipe(z.array(z.string().url())),
     DASHBOARD_AUTH_EMAIL: z.string().email(),
     DASHBOARD_AUTH_PASSWORD: z.string().min(8, {
       message: "must be at least 8 characters",

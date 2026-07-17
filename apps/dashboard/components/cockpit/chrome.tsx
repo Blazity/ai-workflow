@@ -6,6 +6,7 @@ import { BlazityLogo } from "@/components/ui";
 const NAV = [
   { id: "overview", label: "Overview", glyph: "◇", group: "obs" },
   { id: "runs", label: "Workflow runs", glyph: "≡", group: "obs" },
+  { id: "approvals", label: "Approvals", glyph: "⚖", group: "obs" },
   { id: "prompts", label: "Prompts", glyph: "❡", group: "obs" },
   { id: "evals", label: "Arthur evals", glyph: "✓", group: "obs" },
   { id: "cost", label: "Cost & usage", glyph: "$", group: "obs" },
@@ -20,7 +21,7 @@ const NAV_GROUPS = [
   { id: "team", label: "Users" },
 ];
 
-export const MOBILE_MORE_NAV_IDS = ["prompts", "evals", "cost", "checks", "users"] as const;
+export const MOBILE_MORE_NAV_IDS = ["approvals", "prompts", "evals", "cost", "checks", "users"] as const;
 
 export function isMobileMoreNavItem(id: string): boolean {
   return (MOBILE_MORE_NAV_IDS as readonly string[]).includes(id);

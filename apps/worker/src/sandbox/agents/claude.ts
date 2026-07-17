@@ -3,7 +3,12 @@ import type {
   PhaseScriptOpts, PhaseUsage, ResearchResult, ReviewOutput, RunnableSandbox,
 } from "./types.js";
 import { agentOutputSchema, foldResearchOutput, researchOutputSchema, reviewOutputSchema } from "./types.js";
-import { installSkillsToAgentsDir } from "./shared.js";
+import {
+  AGENT_ENV_CLAUDE_PATH,
+  AGENT_ENV_PATH,
+  AGENT_ENV_SHIM,
+  installSkillsToAgentsDir,
+} from "./shared.js";
 import { ARTHUR_TRACER_PY_BASE64 } from "../arthur-tracer.js";
 import { buildCommitGuardCheckScript } from "./commit-guard.js";
 import { WORKSPACE_MANIFEST_PATH } from "../repo-workspace.js";
@@ -44,9 +49,10 @@ export class ClaudeAgentAdapter implements AgentAdapter {
         : `export ANTHROPIC_API_KEY=${shellQuote(opts.anthropicApiKey)}`,
     ];
     await sandbox.writeFiles([
-      { path: "/tmp/agent-env.sh", content: Buffer.from(envLines.join("\n") + "\n") },
+      { path: AGENT_ENV_CLAUDE_PATH, content: Buffer.from(envLines.join("\n") + "\n") },
+      { path: AGENT_ENV_PATH, content: Buffer.from(AGENT_ENV_SHIM) },
     ]);
-    await sandbox.runCommand("chmod", ["600", "/tmp/agent-env.sh"]);
+    await sandbox.runCommand("chmod", ["600", AGENT_ENV_CLAUDE_PATH]);
 
     // Skills: installer writes to ~/.claude/skills and ~/.agents/skills directly.
     await installSkillsToAgentsDir(sandbox);
@@ -86,7 +92,8 @@ export class ClaudeAgentAdapter implements AgentAdapter {
 
   buildPhaseScript(opts: PhaseScriptOpts): string {
     const { paths, jsonSchema, model, phase } = opts;
-    let claudeFlags = `--print --model '${model}' --dangerously-skip-permissions --output-format json`;
+    const safePhase = sanitizePhase(phase);
+    let claudeFlags = `--print --model ${shellQuote(model)} --dangerously-skip-permissions --output-format json`;
     if (jsonSchema) {
       const escapedSchema = jsonSchema.replace(/'/g, "'\\''");
       claudeFlags += ` --json-schema '${escapedSchema}'`;
@@ -99,10 +106,10 @@ rm -f ${paths.sentinel} ${paths.stdout} ${paths.stderr}
 # --- Source auth env vars ---
 [ -f /tmp/agent-env.sh ] && source /tmp/agent-env.sh
 
-# --- Phase: ${phase} ---
+# --- Phase: ${safePhase} ---
 cat ${paths.input} | claude \\
   ${claudeFlags} \\
-  > ${paths.stdout} 2>${paths.stderr}; echo $? > /tmp/${phase}-exit-code || true
+  > ${paths.stdout} 2>${paths.stderr}; echo $? > /tmp/${safePhase}-exit-code || true
 
 # --- Cleanup ---
 cd /vercel/sandbox
@@ -115,12 +122,13 @@ touch ${paths.sentinel}
   }
 
   artifactPaths(phase: PhaseKind): PhaseArtifactPaths {
+    const p = sanitizePhase(phase);
     return {
-      wrapper: `/tmp/${phase}-wrapper.sh`,
-      input: `/tmp/${phase}-requirements.md`,
-      stdout: `/tmp/${phase}-stdout.txt`,
-      stderr: `/tmp/${phase}-stderr.txt`,
-      sentinel: `/tmp/${phase}-done`,
+      wrapper: `/tmp/${p}-wrapper.sh`,
+      input: `/tmp/${p}-requirements.md`,
+      stdout: `/tmp/${p}-stdout.txt`,
+      stderr: `/tmp/${p}-stderr.txt`,
+      sentinel: `/tmp/${p}-done`,
       structuredOutput: null,
     };
   }
@@ -329,6 +337,11 @@ touch ${paths.sentinel}
 
 function shellQuote(val: string): string {
   return `'${val.replace(/'/g, "'\\''")}'`;
+}
+
+/** Collapse an arbitrary phase label to a shell/file-safe token ([a-z0-9-]). */
+function sanitizePhase(phase: string): string {
+  return phase.toLowerCase().replace(/[^a-z0-9-]/g, "-");
 }
 
 function findResultEnvelope(raw: string): Record<string, unknown> | null {

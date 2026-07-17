@@ -155,6 +155,47 @@ describe("runPrePrChecksWithFixes", () => {
     expect(result.fixCycles).toBe(3);
     expect(result.summary).toContain("still failing");
   });
+
+  it("caps fix cycles at a caller-supplied maxFixCycles", async () => {
+    mockRunCommand.mockImplementation((cmd, args) => {
+      if (cmd === "cat" && args[0] === WORKSPACE_MANIFEST_PATH) {
+        return commandResult(0, JSON.stringify(manifest));
+      }
+      if (cmd === "git" && args[0] === "-C" && args[2] === "rev-parse") {
+        return commandResult(0, "web-head");
+      }
+      if (isConfiguredCheck(cmd)) {
+        return commandResult(1, "", "still failing");
+      }
+      return commandResult(0, "");
+    });
+
+    const result = await runPrePrChecksWithFixes("sbx-test-123", config, "codex", "gpt-5", 1);
+
+    expect(result.passed).toBe(false);
+    expect(result.fixCycles).toBe(1);
+  });
+
+  it("runs no fix cycles when maxFixCycles is 0", async () => {
+    mockRunCommand.mockImplementation((cmd, args) => {
+      if (cmd === "cat" && args[0] === WORKSPACE_MANIFEST_PATH) {
+        return commandResult(0, JSON.stringify(manifest));
+      }
+      if (cmd === "git" && args[0] === "-C" && args[2] === "rev-parse") {
+        return commandResult(0, "web-head");
+      }
+      if (isConfiguredCheck(cmd)) {
+        return commandResult(1, "", "still failing");
+      }
+      return commandResult(0, "");
+    });
+
+    const result = await runPrePrChecksWithFixes("sbx-test-123", config, "codex", "gpt-5", 0);
+
+    expect(result.passed).toBe(false);
+    expect(result.fixCycles).toBe(0);
+    expect(mockWriteFiles).not.toHaveBeenCalled();
+  });
 });
 
 function commandResult(exitCode: number, stdout = "", stderr = "") {

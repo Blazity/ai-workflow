@@ -86,6 +86,7 @@ import {
   pushWorkspaceFromSandbox,
   fixAndRetryWorkspacePush,
   teardownSandbox,
+  teardownSandboxes,
   checkPhaseDone,
   collectPhaseOutput,
   collectPhase,
@@ -584,6 +585,39 @@ describe("teardownSandbox", () => {
     (Sandbox.get as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error("gone"));
 
     await expect(teardownSandbox("sbx-test-123")).resolves.not.toThrow();
+  });
+});
+
+describe("teardownSandboxes", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("tears down every distinct id once, de-duplicated", async () => {
+    const teardown = vi.fn().mockResolvedValue(undefined);
+
+    await teardownSandboxes(["sbx-a", "sbx-b", "sbx-a"], teardown);
+
+    expect(teardown).toHaveBeenCalledTimes(2);
+    expect(teardown).toHaveBeenCalledWith("sbx-a");
+    expect(teardown).toHaveBeenCalledWith("sbx-b");
+  });
+
+  it("keeps tearing down the rest when one teardown fails (best-effort)", async () => {
+    const teardown = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("gone"))
+      .mockResolvedValue(undefined);
+
+    await expect(teardownSandboxes(["sbx-a", "sbx-b", "sbx-c"], teardown)).resolves.not.toThrow();
+
+    expect(teardown).toHaveBeenCalledTimes(3);
+    expect(teardown).toHaveBeenCalledWith("sbx-a");
+    expect(teardown).toHaveBeenCalledWith("sbx-b");
+    expect(teardown).toHaveBeenCalledWith("sbx-c");
+  });
+
+  it("defaults to the real teardownSandbox when no teardown is injected", async () => {
+    await teardownSandboxes(["sbx-test-123"]);
+    expect(mockStop).toHaveBeenCalledTimes(1);
   });
 });
 

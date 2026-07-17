@@ -114,7 +114,7 @@ ai-workflow authenticates to GitHub via a **GitHub App**. The App scopes the bot
 
    Leave every other permission at **No access**.
 
-4. Under **Subscribe to events**, enable **Pull request** (drives the post-PR gate on `opened` / `synchronize` / `reopened`). Leave everything else unchecked.
+4. Under **Subscribe to events**, enable **Pull request** (drives the post-PR gate on `opened` / `synchronize` / `reopened`), **Check run** (drives the `trigger_pr_checks_failed` workflow trigger), and **Pull request review** (drives the `trigger_pr_review` workflow trigger). The last two need no extra permission grant: `Checks` and `Pull requests` are already **Read & write** from step 3. Leave everything else unchecked. See [`docs/GITHUB-APP-SETUP.md` §5](./docs/GITHUB-APP-SETUP.md#5-subscribe-to-events) for the full rationale per event.
 5. Choose **Only on this account** for installation scope, create the app, then **Install App** on the target repo's owner and select that one repo. If you change permissions later, every installed repo will need a one-click re-acceptance from a repo admin.
 6. From the app settings page, capture:
    - **App ID** → `GITHUB_APP_ID`
@@ -298,8 +298,24 @@ This is enough for password-only dashboard login. SSO and Resend are optional wo
 | `SSO_ISSUER`, `SSO_ALLOWED_DOMAIN`, `SSO_CLIENT_ID`, `SSO_CLIENT_SECRET` | unset | Optional SSO config. Set all four together, or leave all four unset for password-only login. |
 | `RESEND_API_KEY`, `RESEND_FROM_EMAIL`         | unset                                                                                                                                                       | Optional email delivery config. `RESEND_API_KEY` requires `RESEND_FROM_EMAIL`.                                                    |
 | `RESEND_WEBHOOK_SECRET`                       | unset                                                                                                                                                       | Optional Resend webhook signing secret. Requires `RESEND_API_KEY`.                                                               |
+| `AGENT_ALLOWED_REPOS`                         | empty (**unrestricted**, see below)                                                                                                                         | Comma-separated `owner/repo` allowlist of every repository the agent may read, branch, or open a PR on (case-insensitive, exactly one slash per entry). **Fails open when empty.**  |
+| `DASHBOARD_TRUSTED_ORIGINS`                   | empty (only `DASHBOARD_ORIGIN` is trusted)                                                                                                                  | Extra origins trusted for dashboard login on top of `DASHBOARD_ORIGIN`, e.g. a preview deployment's stable alias. Comma-separated; each entry must be a full origin URL (scheme included) or startup validation fails. `DASHBOARD_ORIGIN` remains the canonical origin for links and SSO redirects. |
+| `VCS_BOT_LOGIN`                               | unset (the bot's own reviews are not filtered)                                                                                                              | Login of the bot's own VCS account. When set, PR reviews authored by it are ignored so the bot cannot trigger a run off its own review (`trigger_pr_review`). For a GitHub App this is usually `<app-slug>[bot]`. |
 
 `env.ts` cross-validates at startup — missing required vars or wrong combinations (e.g. `VCS_KIND=github` without `GITHUB_OWNER`) crash the process with a precise error.
+
+#### `AGENT_ALLOWED_REPOS` fails open: read this before your first run
+
+`AGENT_ALLOWED_REPOS` is the hard guard on which repositories the agent may ever touch. It both filters repository discovery and hard-guards branch/PR creation, so an off-list repo fails the run with `Refusing to branch <repo>: not in AGENT_ALLOWED_REPOS` rather than being silently skipped.
+
+**When it is empty or unset, there is no restriction: the agent may act on _any_ repository your VCS App installation can reach.** That is the intended default for the multi-repo product, but it is a fail-open default, so decide deliberately rather than inheriting it:
+
+- **Set it** to pin runs to an explicit list. Strongly recommended for a first deploy, a demo, or any environment whose App installation is scoped to more than the repos you want touched. Example: `AGENT_ALLOWED_REPOS=your-org/your-repo,your-org/another-repo`.
+- **Leave it empty** only when you genuinely intend every installed repository to be in scope. Restrict the App installation itself as well: the allowlist is defense-in-depth, not a substitute for installation scope.
+
+Both failure modes are logged rather than silent: an empty effective allowlist logs a one-time `warn` on startup, and any entry that is not a valid `owner/repo` path logs an `error` naming it. Malformed entries are ignored **individually**, so a single typo cannot silently widen the allowlist to "all" as long as one valid entry remains.
+
+Unlike most variables here, `AGENT_ALLOWED_REPOS` is read from `process.env` directly (in `apps/worker/src/lib/repo-allowlist.ts`) rather than through the validated `env.ts` singleton, so it is deliberately absent from `env.ts` and a malformed value will not crash startup.
 
 Pre-PR checks (per-repo commands run before push/PR creation) are configured in the dashboard:
 **Pre-PR checks** in the cockpit sidebar. Admins and owners can edit; changes are versioned with
@@ -363,13 +379,13 @@ If you followed [`docs/GITHUB-APP-SETUP.md`](./docs/GITHUB-APP-SETUP.md) in step
 
 1. **Update the webhook URL** if you used a placeholder during App creation. In the App settings (`https://github.com/settings/apps/<your-app>` or via the org's developer settings), set **Webhook URL** to `https://<your-vercel-domain>/webhooks/github`.
 2. **Confirm the App has the right permissions and event subscription:**
-   - Repository permissions → **Checks: Read & write**
-   - Subscribe to events → **Pull request** (checked)
+   - Repository permissions → **Checks: Read & write**, **Pull requests: Read & write**
+   - Subscribe to events → **Pull request**, **Check run**, **Pull request review** (all checked). See [`docs/GITHUB-APP-SETUP.md` §5](./docs/GITHUB-APP-SETUP.md#5-subscribe-to-events). Without **Check run** and **Pull request review**, the `trigger_pr_checks_failed` and `trigger_pr_review` workflow triggers never fire.
 3. **Re-accept on every installed repo** if you changed permissions or events after the initial install. A repo admin opens `https://github.com/organizations/<ORG>/settings/installations/<INSTALLATION_ID>` and clicks "Review request" → "Accept". Until accepted, the new permissions and events are inert and the gate webhook stays silent.
 4. **Confirm `GITHUB_WEBHOOK_SECRET`** is set in Vercel (step 5) and matches the value pasted into the App's webhook config. A mismatch returns 401 on every delivery — visible in the App's **Advanced → Recent Deliveries** tab.
 5. **Tune `post-pr-gate.yaml`** at the repo root if the defaults don't fit. The default config runs on `blazebot/*` branches only, skips drafts, and runs a single `code-hygiene` step as advisory (`onFailure: continue`). Steps are defined in `apps/worker/src/post-pr-gate/steps/`.
 
-For GitLab.com, configure the project webhook instead: see [`docs/GITLAB-SETUP.md`](./docs/GITLAB-SETUP.md). The webhook URL is `https://<your-vercel-domain>/webhooks/gitlab`, the **Secret token** field must match `GITLAB_WEBHOOK_SECRET`, and only **Merge request events** are required. Do not use GitLab's newer **Signing token** flow until the worker implements signing-token verification.
+For GitLab.com, configure the project webhook instead: see [`docs/GITLAB-SETUP.md`](./docs/GITLAB-SETUP.md). The webhook URL is `https://<your-vercel-domain>/webhooks/gitlab`, the **Secret token** field must match `GITLAB_WEBHOOK_SECRET`, and both **Merge request events** and **Pipeline events** (the **Pipeline Hook**) are required. Pipeline events drive the `trigger_pr_checks_failed` workflow trigger (re-run the fix flow when a bot MR's pipeline fails) and are easy to miss since only Merge request events are needed for PR creation itself. Do not use GitLab's newer **Signing token** flow until the worker implements signing-token verification.
 
 For GitHub, verify by opening a manual PR titled `feat: smoke check` against the target repo (any `blazebot/*` branch — or set `botPrsOnly: false` in `post-pr-gate.yaml` to test from any branch). Within a few seconds you should see a `blazebot / code-hygiene` check run appear on the PR's head SHA and resolve.
 

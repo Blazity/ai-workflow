@@ -4,17 +4,32 @@ export interface FailedTicketMeta {
   failedAt: string;
 }
 
+/**
+ * What started a run: 'ticket' is the classic AI-column trigger, 'pr_trigger'
+ * covers the PR webhook triggers. Stored on active_runs.run_kind (default
+ * 'ticket'); reconcile and the Jira webhook branch on it.
+ */
+export type RunKind = "ticket" | "pr_trigger";
+
 export interface RunRegistryAdapter {
   /** Atomically claim a ticket key if not already taken. Returns true if claimed. */
-  claim(ticketKey: string, runId: string): Promise<boolean>;
+  claim(ticketKey: string, runId: string, kind?: RunKind): Promise<boolean>;
   /** Overwrite the mapping for a ticket (use after claim to update with real runId). */
-  register(ticketKey: string, runId: string): Promise<void>;
+  register(ticketKey: string, runId: string, kind?: RunKind): Promise<void>;
   /** Get the runId for a ticket, or null if none registered. */
   getRunId(ticketKey: string): Promise<string | null>;
   /** Remove the ticket -> runId mapping (also clears any linked sandboxId). */
   unregister(ticketKey: string): Promise<void>;
+  /**
+   * Compare-and-delete: remove the ticket -> runId mapping ONLY if it still
+   * holds this exact runId. A run that unregistered mid-flight (before opening
+   * its PR) can have its ticket reclaimed by a successor run; this lets the
+   * original run release its slot on teardown without stomping the successor's
+   * still-live row (a bare unregister deletes by ticketKey regardless of owner).
+   */
+  unregisterIfRunId(ticketKey: string, runId: string): Promise<void>;
   /** Get all tracked ticket -> runId pairs. */
-  listAll(): Promise<Array<{ ticketKey: string; runId: string }>>;
+  listAll(): Promise<Array<{ ticketKey: string; runId: string; kind: RunKind }>>;
 
   /**
    * Record the sandboxId that backs this ticket's workflow. Lets cleanup

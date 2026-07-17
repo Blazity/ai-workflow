@@ -173,6 +173,69 @@ describe("SandboxManager.provisionMultiRepo", () => {
     );
   });
 
+  it("installs then configures each adapter in order for a mixed run", async () => {
+    const primary = makeFakeAgent();
+    const secondary = makeFakeAgent();
+    (secondary as any).kind = "codex";
+    const order: string[] = [];
+    for (const [agent, label] of [
+      [primary, "primary"],
+      [secondary, "secondary"],
+    ] as const) {
+      (agent.install as any).mockImplementation(async () => order.push(`${label}:install`));
+      (agent.configure as any).mockImplementation(async () => order.push(`${label}:configure`));
+    }
+
+    const manager = new SandboxManager(baseConfig);
+    await manager.provisionMultiRepo(
+      {
+        branchName: "feat/test-branch",
+        repositories: [
+          {
+            provider: "github",
+            repoPath: "test-org/test-repo",
+            defaultBranch: "main",
+            selectedRationale: "only accessible repository",
+          },
+        ],
+      },
+      primary,
+      { model: "claude-default", anthropicApiKey: "k" },
+      [{ agent: secondary, configureOpts: { model: "codex-default", codexApiKey: "c" } }],
+    );
+
+    expect(order).toEqual([
+      "primary:install",
+      "primary:configure",
+      "secondary:install",
+      "secondary:configure",
+    ]);
+    expect((secondary.configure as any).mock.calls[0][1]).toEqual(
+      expect.objectContaining({ model: "codex-default", codexApiKey: "c" }),
+    );
+  });
+
+  it("leaves the single-adapter sequence unchanged (no additional agents)", async () => {
+    const agent = makeFakeAgent();
+    const manager = new SandboxManager(baseConfig);
+    await manager.provisionMultiRepo(
+      {
+        branchName: "feat/test-branch",
+        repositories: [
+          {
+            provider: "github",
+            repoPath: "test-org/test-repo",
+            defaultBranch: "main",
+            selectedRationale: "only accessible repository",
+          },
+        ],
+      },
+      agent,
+      { model: "claude-default", anthropicApiKey: "k" },
+    );
+    expect((agent as any).calls.map((c: any) => c.op)).toEqual(["install", "configure"]);
+  });
+
   it("fetches and merges only repositories with a repository mergeBase", async () => {
     const manager = new SandboxManager(baseConfig);
     await manager.provisionMultiRepo(

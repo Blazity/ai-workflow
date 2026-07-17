@@ -44,6 +44,7 @@ export async function runPrePrChecksWithFixes(
   config: PrePrCheckConfig,
   agentKind: "claude" | "codex",
   model: string,
+  maxFixCycles: number = MAX_PRE_PR_FIX_CYCLES,
 ): Promise<PrePrCheckRunResult> {
   if (config.repositories.length === 0) {
     return {
@@ -60,7 +61,7 @@ export async function runPrePrChecksWithFixes(
   let result = await runConfiguredPrePrChecks(sandbox, config, 0);
   let fixCycles = 0;
 
-  while (!result.passed && fixCycles < MAX_PRE_PR_FIX_CYCLES) {
+  while (!result.passed && fixCycles < maxFixCycles) {
     fixCycles++;
     await runFixAgent(sandbox, result, agentKind, model);
     result = await runConfiguredPrePrChecks(sandbox, config, fixCycles);

@@ -36,26 +36,30 @@ export default defineNitroConfig({
     // ensures the Vercel preset's own `compiled` hook still runs.
     (nitro) => {
       nitro.hooks.hook("compiled", async () => {
-        const requiredYamlFiles = ["pre-sandbox.yaml", "post-pr-gate.yaml"];
-        // Optional: shipped only when present, so tier2 deployments can opt in
-        // by committing the file alongside the required ones.
-        const optionalYamlFiles = ["post-pr-gate.test.yaml"];
+        // All YAML configs are optional: runtime code falls back to built-in
+        // defaults when a file is absent, and pre-sandbox.yaml / post-pr-gate.yaml
+        // are deprecated. Ship whichever ones are committed, so an absent file
+        // never fails the build.
+        const optionalYamlFiles = [
+          "pre-sandbox.yaml",
+          "post-pr-gate.yaml",
+          "post-pr-gate.test.yaml",
+        ];
         const funcDirs = await findFuncDirs(
           resolve(nitro.options.output.dir, "functions"),
         );
-        const presentOptional: string[] = [];
+        const presentYamlFiles: string[] = [];
         for (const name of optionalYamlFiles) {
           try {
             await stat(resolve(nitro.options.rootDir, name));
-            presentOptional.push(name);
+            presentYamlFiles.push(name);
           } catch (err) {
             if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
           }
         }
-        const yamlFiles = [...requiredYamlFiles, ...presentOptional];
         await Promise.all(
           funcDirs.flatMap((dir) =>
-            yamlFiles.map((name) =>
+            presentYamlFiles.map((name) =>
               copyFile(resolve(nitro.options.rootDir, name), join(dir, name)),
             ),
           ),

@@ -147,6 +147,26 @@
         color: var(--muted);
       }
 
+      .frame-nav {
+        display: flex;
+        gap: 6px;
+        padding: 8px 10px;
+        border-top: 1px solid var(--faint);
+      }
+
+      .frame-nav button {
+        flex: 1;
+        padding: 7px 10px;
+        border: 1px solid var(--hairline);
+        border-radius: 8px;
+        background: var(--panel);
+        color: var(--ink);
+        font: 700 11.5px/1 var(--sans);
+        cursor: pointer;
+      }
+
+      .frame-nav button:hover { background: rgba(35, 40, 47, 0.07); }
+
       .sidebar-foot {
         padding: 12px 16px 14px;
         border-top: 1px solid var(--faint);
@@ -697,6 +717,10 @@
         <p>Clean-slate block taxonomy and workflow variants for the orchestration MVP. Content lives in this file — the canvas is a viewer.</p>
       </div>
       <div class="frame-list" id="frame-list"></div>
+      <div class="frame-nav">
+        <button id="frame-prev" type="button" aria-label="Previous frame">‹ Prev</button>
+        <button id="frame-next" type="button" aria-label="Next frame">Next ›</button>
+      </div>
       <div class="sidebar-foot">
         <div><kbd>1</kbd>–<kbd>7</kbd> jump to frame &nbsp; <kbd>0</kbd> fit all</div>
         <div><kbd>+</kbd> / <kbd>−</kbd> zoom &nbsp; <kbd>esc</kbd> close details</div>
@@ -1480,7 +1504,8 @@
         for (const frame of FRAMES) {
           const w = frame.width;
           const h = frame.el.offsetHeight;
-          if (x > 0 && x + w > MAX_ROW_W) {
+          const ownRow = frame.kind === "registry";
+          if (x > 0 && (ownRow || x + w > MAX_ROW_W)) {
             x = 0;
             y += rowH + BOARD_GAP;
             rowH = 0;
@@ -1488,8 +1513,14 @@
           frame.pos = { x, y, w, h };
           frame.el.style.left = `${x}px`;
           frame.el.style.top = `${y}px`;
-          x += w + BOARD_GAP;
-          rowH = Math.max(rowH, h);
+          if (ownRow) {
+            x = 0;
+            y += h + BOARD_GAP;
+            rowH = 0;
+          } else {
+            x += w + BOARD_GAP;
+            rowH = Math.max(rowH, h);
+          }
         }
       }
 
@@ -1608,6 +1639,20 @@
           btn.addEventListener("click", () => focusFrame(frame.slug));
           frameListEl.appendChild(btn);
         });
+      }
+
+      function currentFrameIndex() {
+        const active = frameListEl.querySelector("button.active");
+        if (!active) return -1;
+        return FRAMES.findIndex((f) => f.slug === active.dataset.slug);
+      }
+
+      function stepFrame(delta) {
+        const cur = currentFrameIndex();
+        const next = cur < 0
+          ? (delta > 0 ? 0 : FRAMES.length - 1)
+          : (cur + delta + FRAMES.length) % FRAMES.length;
+        focusFrame(FRAMES[next].slug);
       }
 
       /* ---------- detail panel ---------- */
@@ -1777,6 +1822,8 @@
         document.getElementById("zoom-in").addEventListener("click", () => zoomAt(view.scale * 1.2));
         document.getElementById("zoom-out").addEventListener("click", () => zoomAt(view.scale / 1.2));
         document.getElementById("fit-all").addEventListener("click", () => fitAll());
+        document.getElementById("frame-prev").addEventListener("click", () => stepFrame(-1));
+        document.getElementById("frame-next").addEventListener("click", () => stepFrame(1));
 
         addEventListener("hashchange", () => {
           const slug = location.hash.slice(1);

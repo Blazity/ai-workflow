@@ -1,14 +1,22 @@
 import { start, getRun } from "workflow/api";
+import type { WorkflowBlockType } from "@shared/contracts";
 import { hasGateStatusCapability } from "../adapters/vcs/types.js";
-import { getDb } from "../db/client.js";
+import { getDb, type Db } from "../db/client.js";
 import { createAdapters } from "./adapters.js";
 import { logger } from "./logger.js";
 import { GateStore, type CurrentGateRun } from "../post-pr-gate/gate-store.js";
 import { loadPostPrGateConfig } from "../post-pr-gate/config.js";
+import { getEnabledWorkflowDefinitionForTrigger } from "../workflow-definition/store.js";
 import {
   postPrGateWorkflow,
   type PostPrGateWorkflowInput,
 } from "../workflows/post-pr-gate.js";
+
+const PR_TRIGGER_TYPES: WorkflowBlockType[] = [
+  "trigger_pr_created",
+  "trigger_pr_checks_failed",
+  "trigger_pr_review",
+];
 
 interface DispatchPostPrGateWebhookInput {
   action: string;
@@ -85,9 +93,22 @@ export async function dispatchPostPrGateWebhook({
       { ownerRepo, prNumber, headSha, runId: handle.runId },
       "post_pr_gate_started",
     );
+    await warnIfSupersededByDefinition(getDb());
     return { status: "dispatched", runId: handle.runId };
   } finally {
     await gateStore.releaseLock(ownerRepo, prNumber, lockToken);
+  }
+}
+
+async function warnIfSupersededByDefinition(db: Db): Promise<void> {
+  for (const triggerType of PR_TRIGGER_TYPES) {
+    const enabled = await getEnabledWorkflowDefinitionForTrigger(db, triggerType).catch(
+      () => null,
+    );
+    if (enabled) {
+      logger.warn({ triggerType }, "post_pr_gate_deprecated");
+      return;
+    }
   }
 }
 

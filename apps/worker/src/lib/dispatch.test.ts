@@ -67,6 +67,7 @@ function makeAdapters(
       createPR: vi.fn(),
       push: vi.fn(),
       getPRComments: vi.fn(),
+      postPRComment: vi.fn().mockResolvedValue({ url: null }),
       getCheckRunResults: vi.fn().mockResolvedValue([]),
       getPRConflictStatus: vi.fn(),
       findPR: overrides.findPR ?? vi.fn().mockResolvedValue(null),
@@ -84,6 +85,7 @@ function makeAdapters(
         }),
       register: overrides.register ?? vi.fn().mockResolvedValue(undefined),
       unregister: overrides.unregister ?? vi.fn().mockResolvedValue(undefined),
+      unregisterIfRunId: vi.fn().mockResolvedValue(undefined),
       getRunId:
         overrides.getRunId ??
         vi.fn().mockImplementation(async () => claimedValue),
@@ -341,6 +343,59 @@ describe("dispatchTicket", () => {
     expect(adapters.runRegistry.register).not.toHaveBeenCalled();
   });
 
+  it("aborts the started workflow and keeps the claim when register fails after start", async () => {
+    // The workflow already started; a failed post-start register must abort that
+    // run and NOT release the claim, or a retry could launch a second run.
+    const mockCancel = vi.fn().mockResolvedValue(undefined);
+    mockGetRun.mockReturnValue({ cancel: mockCancel });
+    const unregister = vi.fn().mockResolvedValue(undefined);
+    const register = vi.fn().mockRejectedValue(new Error("registry write failed"));
+    const adapters = makeAdapters({ register, unregister });
+    const { dispatchTicket } = await import("./dispatch.js");
+
+    const result = await dispatchTicket("PROJ-42", adapters, 5);
+
+    expect(result).toEqual({ started: false, reason: "error" });
+    expect(mockStart).toHaveBeenCalled();
+    expect(register).toHaveBeenCalledTimes(3); // idempotent retry before giving up
+    expect(mockGetRun).toHaveBeenCalledWith("run_123");
+    expect(mockCancel).toHaveBeenCalled(); // started run aborted
+    expect(mockStopTicketSandboxes).toHaveBeenCalledWith("PROJ-42");
+    expect(unregister).not.toHaveBeenCalled(); // claim kept → no duplicate dispatch
+  });
+
+  it("aborts the started workflow and keeps the claim when the post-start verify throws", async () => {
+    const mockCancel = vi.fn().mockResolvedValue(undefined);
+    mockGetRun.mockReturnValue({ cancel: mockCancel });
+    const unregister = vi.fn().mockResolvedValue(undefined);
+    const getRunId = vi.fn().mockRejectedValue(new Error("registry read failed"));
+    const adapters = makeAdapters({ getRunId, unregister });
+    const { dispatchTicket } = await import("./dispatch.js");
+
+    const result = await dispatchTicket("PROJ-42", adapters, 5);
+
+    expect(result).toEqual({ started: false, reason: "error" });
+    expect(mockStart).toHaveBeenCalled();
+    expect(mockCancel).toHaveBeenCalled();
+    expect(unregister).not.toHaveBeenCalled();
+    expect(adapters.runRegistry.register).not.toHaveBeenCalled();
+  });
+
+  it("retries a transient register failure and still starts", async () => {
+    let calls = 0;
+    const register = vi.fn().mockImplementation(async () => {
+      calls++;
+      if (calls < 2) throw new Error("transient");
+    });
+    const adapters = makeAdapters({ register });
+    const { dispatchTicket } = await import("./dispatch.js");
+
+    const result = await dispatchTicket("PROJ-42", adapters, 5);
+
+    expect(result).toEqual({ started: true, runId: "run_123" });
+    expect(register).toHaveBeenCalledTimes(2);
+  });
+
   it("only one concurrent dispatch wins when claim is atomic", async () => {
     let claimedValue: string | null = null;
     const claim = vi
@@ -435,6 +490,7 @@ describe("failed-ticket safeguard full loop", () => {
       register: vi.fn().mockResolvedValue(undefined),
       getRunId: vi.fn().mockImplementation(async () => claimedValue),
       unregister: vi.fn().mockResolvedValue(undefined),
+      unregisterIfRunId: vi.fn().mockResolvedValue(undefined),
       listAll: vi.fn().mockResolvedValue([]),
       registerSandbox: vi.fn().mockResolvedValue(undefined),
       getSandboxId: vi.fn().mockResolvedValue(null),

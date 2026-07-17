@@ -34,6 +34,7 @@ export class SandboxManager {
     input: { branchName: string; repositories: WorkspaceRepositoryInput[] },
     agent: AgentAdapter,
     configureOpts: ConfigureOpts,
+    additionalAgents: ReadonlyArray<{ agent: AgentAdapter; configureOpts: ConfigureOpts }> = [],
   ): Promise<SandboxInstance> {
     if (input.repositories.length === 0) {
       throw new Error("Cannot provision sandbox without selected repositories");
@@ -139,6 +140,10 @@ export class SandboxManager {
 
       await agent.install(sandbox);
       await agent.configure(sandbox, configureOpts);
+      for (const extra of additionalAgents) {
+        await extra.agent.install(sandbox);
+        await extra.agent.configure(sandbox, extra.configureOpts);
+      }
 
       return sandbox;
     } catch (err) {

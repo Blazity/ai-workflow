@@ -1,10 +1,20 @@
 import { defineEventHandler, readRawBody, getHeader, createError } from "h3";
 import { env } from "../../../env.js";
+import { PostgresRunRegistry } from "../../adapters/run-registry/postgres.js";
+import { getDb } from "../../db/client.js";
+import { ticketKeyFromBranch } from "../../lib/branch-prefix.js";
+import {
+  dispatchTriggerEvent,
+  resolveEnabledReviewStates,
+  type DispatchTriggerResult,
+} from "../../lib/dispatch-trigger.js";
 import { verifyGitHubWebhookSignature } from "../../lib/github-webhook-sig.js";
 import { logger } from "../../lib/logger.js";
 import { dispatchPostPrGateWebhook } from "../../lib/post-pr-gate-dispatch.js";
+import { normalizeGitHubEvent } from "../../lib/trigger-events.js";
+import { loadPostPrGateConfig } from "../../post-pr-gate/config.js";
 
-const ALLOWED_ACTIONS = new Set(["opened", "synchronize", "reopened"]);
+const GATE_ACTIONS = new Set(["opened", "synchronize", "reopened"]);
 
 export default defineEventHandler(async (event) => {
   const rawBody = (await readRawBody(event, "utf8")) ?? "";
@@ -19,42 +29,98 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 401, statusMessage: (err as Error).message });
   }
 
-  const ghEvent = getHeader(event, "x-github-event");
-  if (ghEvent !== "pull_request") {
-    return { status: "ignored", reason: "not_pull_request_event" };
-  }
+  const ghEvent = getHeader(event, "x-github-event") ?? "";
 
-  const body = rawBody ? JSON.parse(rawBody) : {};
-  const action = body?.action;
-  const pr = body?.pull_request;
-  const repo = body?.repository;
-  if (!pr || !repo) {
+  let body;
+  try {
+    body = rawBody ? JSON.parse(rawBody) : {};
+  } catch {
     return { status: "ignored", reason: "malformed_payload" };
   }
-  if (!ALLOWED_ACTIONS.has(action)) {
-    return { status: "ignored", reason: `action_${action}` };
+
+  const repo = body?.repository;
+  if (!repo) {
+    return { status: "ignored", reason: "malformed_payload" };
   }
 
   const ownerRepo = `${repo.owner.login}/${repo.name}`;
-
   if (env.GITHUB_OWNER && env.GITHUB_REPO) {
     const expected = `${env.GITHUB_OWNER}/${env.GITHUB_REPO}`;
-    if (ownerRepo !== expected) {
-      logger.info({ ownerRepo, expected }, "post_pr_gate_webhook_skipped_other_repo");
+    // GitHub owner/repo slugs are case-insensitive, so the payload's
+    // repo.owner.login ("Blazity") can differ in case from the configured
+    // GITHUB_OWNER ("blazity"). Compare case-insensitively or every demo
+    // webhook is silently dropped as other_repo.
+    if (ownerRepo.toLowerCase() !== expected.toLowerCase()) {
+      logger.info({ ownerRepo, expected }, "github_webhook_skipped_other_repo");
       return { status: "ignored", reason: "other_repo" };
     }
   }
 
-  const prNumber = pr.number;
-  const headSha = pr.head.sha;
-  const headRef = pr.head.ref;
+  const config = loadPostPrGateConfig();
+  const gateCheckNames = config.postPrGate.steps.map(
+    (step) => `blazebot / ${step.name ?? step.uses}`,
+  );
+  // For review events, resolve the enabled definition's `on` set so normalize
+  // drops states the operator has not opted into (default: changes_requested).
+  const reviewStates =
+    ghEvent === "pull_request_review"
+      ? await resolveEnabledReviewStates(getDb())
+      : undefined;
+  const evt = normalizeGitHubEvent(ghEvent, body, {
+    gateCheckNames,
+    botLogin: env.VCS_BOT_LOGIN,
+    ...(reviewStates ? { reviewStates } : {}),
+  });
 
-  return dispatchPostPrGateWebhook({
-    action,
+  if (evt) {
+    const db = getDb();
+    const result = await dispatchTriggerEvent(evt, {
+      db,
+      runRegistry: new PostgresRunRegistry(db),
+      maxConcurrentAgents: env.MAX_CONCURRENT_AGENTS,
+    });
+
+    // The gate keeps running exactly as today whenever the definition did not
+    // claim this PR: no enabled definition, or a non-bot PR the definition
+    // ignores (ignored_not_workflow_owned).
+    if (
+      ghEvent === "pull_request" &&
+      (result.result === "no_definition" ||
+        result.result === "ignored_not_workflow_owned" ||
+        result.result === "ignored_provider")
+    ) {
+      return dispatchPostPrGateWebhook(buildGateInput(body, ownerRepo));
+    }
+    if (ghEvent === "pull_request" && ticketKeyFromBranch(evt.pr.headRef)) {
+      logger.info(
+        { prNumber: evt.pr.prNumber, headRef: evt.pr.headRef, triggerType: evt.triggerType },
+        "post_pr_gate_superseded_by_definition",
+      );
+    }
+    return triggerResponse(result);
+  }
+
+  if (ghEvent === "pull_request") {
+    if (!body?.pull_request) {
+      return { status: "ignored", reason: "malformed_payload" };
+    }
+    if (!GATE_ACTIONS.has(body.action)) {
+      return { status: "ignored", reason: `action_${body.action}` };
+    }
+    return dispatchPostPrGateWebhook(buildGateInput(body, ownerRepo));
+  }
+
+  return { status: "ignored", reason: `event_${ghEvent}` };
+});
+
+function buildGateInput(body: any, ownerRepo: string) {
+  const pr = body.pull_request;
+  return {
+    action: body.action,
     workflowInput: {
-      prNumber,
-      headSha,
-      headRef,
+      prNumber: pr.number,
+      headSha: pr.head.sha,
+      headRef: pr.head.ref,
       baseRef: pr.base.ref,
       title: pr.title,
       body: pr.body ?? "",
@@ -62,7 +128,20 @@ export default defineEventHandler(async (event) => {
       isDraft: !!pr.draft,
       url: pr.html_url,
       ownerRepo,
-      provider: "github",
+      provider: "github" as const,
     },
-  });
-});
+  };
+}
+
+function triggerResponse(result: DispatchTriggerResult) {
+  if (result.result === "started") {
+    return { status: "dispatched", runId: result.runId };
+  }
+  if (result.result === "at_capacity" || result.result === "error") {
+    // PR-trigger webhooks are one-shot: there is no cron re-drive, so a dropped
+    // event is lost. Return 503 so GitHub redelivers this delivery later.
+    logger.info({ reason: result.result }, "trigger_webhook_will_be_redelivered");
+    throw createError({ statusCode: 503, statusMessage: `trigger_${result.result}` });
+  }
+  return { status: "ignored", reason: result.result };
+}

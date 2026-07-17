@@ -160,6 +160,47 @@ ${prompt}
 `;
 }
 
+export interface FixContextInput {
+  ticket: TicketData;
+  prComments: PRComment[];
+  failedChecks: CheckRunResult[];
+  conflictNotes?: string;
+  instructions?: string;
+  repositories: SelectedRepository[];
+}
+
+/**
+ * Assemble the fix-phase prompt context. Mirrors {@link assembleImplementationContext}
+ * but frames the work as addressing review feedback and failing checks on an
+ * existing PR rather than implementing a plan from scratch. Optional sections are
+ * omitted when their inputs are empty so the prompt stays focused on the fix.
+ */
+export function assembleFixContext(input: FixContextInput): string {
+  const { ticket, prComments, failedChecks, conflictNotes, instructions, repositories } = input;
+  const prFeedbackSection =
+    prComments.length > 0 ? `\n## PR Review Feedback\n\n${formatPRComments(prComments)}\n` : "";
+  const failedChecksSection =
+    failedChecks.length > 0 ? `\n## CI/CD Check Results\n\n${formatCheckResults(failedChecks)}\n` : "";
+  const conflictSection = conflictNotes ? `\n## Merge Conflicts\n\n${conflictNotes}\n` : "";
+  const selectedRepositoriesSection = renderSelectedRepositories(repositories);
+  const instructionsSection = instructions ? `\n## Fix Instructions\n\n${instructions}\n` : "";
+
+  return `# Fix Requirements
+
+## Ticket ID
+
+${ticket.identifier}
+
+## Ticket
+
+${ticket.title}
+
+## Acceptance Criteria
+
+${ticket.acceptanceCriteria || "None specified."}
+${prFeedbackSection}${failedChecksSection}${conflictSection}${selectedRepositoriesSection}${instructionsSection}`;
+}
+
 function formatComments(
   comments: Array<{ author: string; body: string; createdAt?: string }>,
 ): string {

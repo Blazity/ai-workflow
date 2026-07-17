@@ -13,6 +13,7 @@ function makeRegistry(overrides: Partial<RunRegistryAdapter> = {}): RunRegistryA
     register: vi.fn(),
     getRunId: overrides.getRunId ?? vi.fn().mockResolvedValue(null),
     unregister: vi.fn().mockResolvedValue(undefined),
+    unregisterIfRunId: vi.fn().mockResolvedValue(undefined),
     listAll: overrides.listAll ?? vi.fn().mockResolvedValue([]),
     registerSandbox: vi.fn().mockResolvedValue(undefined),
     getSandboxId: overrides.getSandboxId ?? vi.fn().mockResolvedValue(null),

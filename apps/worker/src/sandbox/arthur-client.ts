@@ -60,6 +60,21 @@ interface AgenticPromptVersionListResponse {
   versions: ArthurPromptVersion[];
 }
 
+/** One rule outcome from `validate_prompt`, coerced to a stable minimal shape. */
+export interface PromptValidationFinding {
+  rule: string;
+  result: string;
+  details?: string;
+}
+
+export interface PromptValidationResult {
+  ok: boolean;
+  findings: PromptValidationFinding[];
+}
+
+/** Max characters kept from a rule's details payload. */
+const VALIDATION_DETAILS_MAX_CHARS = 500;
+
 /** Split `items` into consecutive chunks of at most `size`. */
 function chunk<T>(items: T[], size: number): T[][] {
   const out: T[][] = [];
@@ -184,6 +199,38 @@ export class ArthurClient {
       method: "POST",
       body: JSON.stringify({ name, is_agentic: true }),
     });
+  }
+
+  /**
+   * Run the task's prompt rules against `content` via `validate_prompt`.
+   * The raw Arthur response contract is intentionally not load-bearing:
+   * entries are coerced defensively, and a response without an array
+   * `rule_results` throws so callers can treat the check as skipped.
+   * `ok` is true only when every rule result is exactly "Pass" (Arthur's
+   * enum is "Pass"/"Fail", case-sensitive).
+   */
+  async validatePrompt(taskId: string, content: string): Promise<PromptValidationResult> {
+    const response = await this.request<{ rule_results?: unknown }>(
+      `/api/v2/tasks/${encodeURIComponent(taskId)}/validate_prompt`,
+      { method: "POST", body: JSON.stringify({ prompt: content }) },
+    );
+    const raw = response?.rule_results;
+    if (!Array.isArray(raw)) {
+      throw new Error("unexpected validate_prompt response shape");
+    }
+    const findings: PromptValidationFinding[] = raw.map((entry) => {
+      const e = (entry ?? {}) as Record<string, unknown>;
+      const finding: PromptValidationFinding = {
+        rule: String(e.name ?? e.id ?? "unknown"),
+        result: String(e.result ?? "Unavailable"),
+      };
+      if (e.details != null) {
+        const text = typeof e.details === "string" ? e.details : JSON.stringify(e.details);
+        finding.details = text.slice(0, VALIDATION_DETAILS_MAX_CHARS);
+      }
+      return finding;
+    });
+    return { ok: findings.every((f) => f.result === "Pass"), findings };
   }
 
   /** Fetch a tagged prompt version. Returns the first message's content, or null if 404. */

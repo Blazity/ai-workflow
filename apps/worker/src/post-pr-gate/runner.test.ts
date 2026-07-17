@@ -44,6 +44,7 @@ function vcsAdapter(methods: Partial<GateStatusCapableVCS & RichGateStatusCapabl
     createPR: vi.fn(),
     push: vi.fn(),
     getPRComments: vi.fn(),
+    postPRComment: vi.fn(),
     getCheckRunResults: vi.fn(),
     getPRConflictStatus: vi.fn(),
     findPR: vi.fn(),

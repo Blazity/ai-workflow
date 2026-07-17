@@ -1,7 +1,10 @@
 import type { Sandbox as SandboxType } from "@vercel/sandbox";
 import { z } from "zod";
 
-export type PhaseKind = "research" | "impl" | "review";
+// Open union: "research" | "impl" | "review" remain the built-in phases, but
+// new block executors label phases freely (e.g. "fix", "agent-<blockId>").
+// Phase strings that reach shell paths are sanitized in the adapters.
+export type PhaseKind = string;
 
 type SandboxInstance = Awaited<ReturnType<typeof SandboxType.create>>;
 
@@ -38,6 +41,26 @@ export const AGENT_SCHEMA = JSON.stringify({
     error: { type: ["string", "null"] },
   },
   required: ["result", "summary", "questions", "error"],
+  additionalProperties: false,
+});
+
+// Output contract for the generic agent block: a free-form phase that reports a
+// status, a body, and optional follow-up questions or an error. Mirrors the
+// strict-mode conventions of AGENT_SCHEMA (all keys required; optionals nullable).
+export const GENERIC_SCHEMA = JSON.stringify({
+  type: "object",
+  properties: {
+    status: { type: "string", enum: ["ok", "needs_input", "failed"] },
+    body: { type: "string" },
+    questions: {
+      anyOf: [
+        { type: "array", items: { type: "string" } },
+        { type: "null" },
+      ],
+    },
+    error: { type: ["string", "null"] },
+  },
+  required: ["status", "body", "questions", "error"],
   additionalProperties: false,
 });
 

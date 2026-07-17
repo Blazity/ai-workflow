@@ -1,5 +1,12 @@
-import { describe, expect, it } from "vitest";
-import { parsePostPrGateConfig } from "./config.js";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const warn = vi.hoisted(() => vi.fn());
+vi.mock("../lib/logger.js", () => ({ logger: { warn } }));
+
+const { loadPostPrGateConfig, parsePostPrGateConfig } = await import("./config.js");
 
 const valid = {
   postPrGate: {
@@ -9,6 +16,33 @@ const valid = {
     ],
   },
 };
+
+const defaultConfig = {
+  postPrGate: {
+    runOn: { botPrsOnly: true, draftPrs: false, baseBranches: [] },
+    steps: [{ uses: "code-hygiene", onFailure: "continue", timeoutMs: 180000 }],
+  },
+};
+
+const tempDirs: string[] = [];
+
+function writeTempConfig(contents: string): string {
+  const dir = mkdtempSync(join(tmpdir(), "post-pr-gate-config-"));
+  tempDirs.push(dir);
+  const filePath = join(dir, "post-pr-gate.yaml");
+  writeFileSync(filePath, contents);
+  return filePath;
+}
+
+afterEach(() => {
+  while (tempDirs.length > 0) {
+    rmSync(tempDirs.pop()!, { force: true, recursive: true });
+  }
+});
+
+beforeEach(() => {
+  warn.mockClear();
+});
 
 describe("parsePostPrGateConfig", () => {
   it("accepts a minimal valid config", () => {
@@ -53,5 +87,50 @@ describe("parsePostPrGateConfig", () => {
         },
       }),
     ).toThrow();
+  });
+});
+
+describe("loadPostPrGateConfig", () => {
+  it("returns the built-in default when the config file is missing", () => {
+    expect(loadPostPrGateConfig(join(tmpdir(), "missing-post-pr-gate.yaml"))).toEqual(
+      defaultConfig,
+    );
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("does not warn when the file matches the built-in default", () => {
+    const configPath = writeTempConfig(`
+postPrGate:
+  runOn:
+    botPrsOnly: true
+    draftPrs: false
+    baseBranches: []
+  steps:
+    - uses: code-hygiene
+      onFailure: continue
+      timeoutMs: 180000
+`);
+
+    expect(loadPostPrGateConfig(configPath)).toEqual(defaultConfig);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("warns once when the file differs from the built-in default", () => {
+    const configPath = writeTempConfig(`
+postPrGate:
+  runOn:
+    botPrsOnly: true
+    draftPrs: false
+    baseBranches: []
+  steps:
+    - uses: code-hygiene
+      name: code-hygiene
+      onFailure: continue
+      timeoutMs: 180000
+`);
+
+    loadPostPrGateConfig(configPath);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledWith(expect.anything(), "post_pr_gate_yaml_deprecated");
   });
 });

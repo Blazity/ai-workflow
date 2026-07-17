@@ -1,5 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { CodexAgentAdapter } from "./codex.js";
+import { ClaudeAgentAdapter } from "./claude.js";
+import { AGENT_ENV_CLAUDE_PATH, AGENT_ENV_CODEX_PATH, AGENT_ENV_PATH, AGENT_ENV_SHIM } from "./shared.js";
 
 const adapter = new CodexAgentAdapter();
 
@@ -173,6 +175,8 @@ describe("CodexAgentAdapter.buildPhaseScript", () => {
     const paths = adapter.artifactPaths("research");
     const baseScript = adapter.buildPhaseScript({ phase: "research", model: "gpt-5-codex", paths });
     expect(baseScript).toContain("codex exec");
+    // Consumers still source the shim path unchanged; the env-file split is transparent.
+    expect(baseScript).toContain("source /tmp/agent-env.sh");
     // We bypass Codex's inner sandbox because Vercel Sandbox (outer microVM)
     // already provides isolation and blocks bwrap's user-namespace syscall.
     expect(baseScript).toContain("--dangerously-bypass-approvals-and-sandbox");
@@ -223,15 +227,49 @@ describe("CodexAgentAdapter.buildPhaseScript", () => {
     expect(s).toContain("END_MS=$(date +%s%3N)");
     expect(s).toContain('\\"type\\":\\"phase.duration\\"');
   });
+
+  it("sanitizes the phase label in schema and exit-code paths", () => {
+    const paths = adapter.artifactPaths("agent-Block_1");
+    const s = adapter.buildPhaseScript({
+      phase: "agent-Block_1",
+      model: "gpt-5-codex",
+      paths,
+      jsonSchema: '{"type":"object"}',
+    });
+    expect(s).toContain("--output-schema /tmp/agent-block-1-schema.json");
+    expect(s).toContain("cat > /tmp/agent-block-1-schema.json");
+    expect(s).toContain("/tmp/agent-block-1-exit-code");
+  });
+
+  it("single-quotes the model flag so a double-quote breakout is inert", () => {
+    const paths = adapter.artifactPaths("impl");
+    const s = adapter.buildPhaseScript({ phase: "impl", model: `m"; rm -rf / #`, paths });
+    expect(s).toContain(`--model 'm"; rm -rf / #'`);
+  });
 });
 
 describe("CodexAgentAdapter.artifactPaths", () => {
   it("includes structuredOutput pointing at -o file", () => {
     expect(adapter.artifactPaths("impl").structuredOutput).toBe("/tmp/impl-result.json");
   });
+
+  it("leaves the three built-in phases byte-identical", () => {
+    for (const phase of ["research", "impl", "review"] as const) {
+      expect(adapter.artifactPaths(phase).structuredOutput).toBe(`/tmp/${phase}-result.json`);
+    }
+  });
+
+  it("sanitizes an arbitrary phase label in artifact paths", () => {
+    expect(adapter.artifactPaths("agent-Block_1").structuredOutput).toBe(
+      "/tmp/agent-block-1-result.json",
+    );
+  });
 });
 
 describe("CodexAgentAdapter.configure", () => {
+  const writtenFiles = (writeFiles: any) =>
+    writeFiles.mock.calls.flatMap(([files]: [any[]]) => files);
+
   it("adds .codex/ to .git/info/exclude so the agent never sees session pollution", async () => {
     const runCommand = vi.fn().mockResolvedValue({ exitCode: 0 });
     const writeFiles = vi.fn().mockResolvedValue(undefined);
@@ -245,6 +283,62 @@ describe("CodexAgentAdapter.configure", () => {
     );
     expect(excludeCall).toBeDefined();
     expect(excludeCall![1][1]).toContain(".codex/");
+  });
+
+  it("writes the codex per-provider env file plus the shared shim", async () => {
+    const runCommand = vi.fn().mockResolvedValue({ exitCode: 0 });
+    const writeFiles = vi.fn().mockResolvedValue(undefined);
+    const sandbox = { runCommand, writeFiles } as any;
+
+    await adapter.configure(sandbox, { codexApiKey: "sk-test", model: "gpt-5-codex" });
+
+    const files = writtenFiles(writeFiles);
+    const codexEnv = files.find((f: any) => f.path === AGENT_ENV_CODEX_PATH);
+    expect(codexEnv).toBeDefined();
+    expect(codexEnv.content.toString("utf8")).toContain("OPENAI_API_KEY");
+
+    const shim = files.find((f: any) => f.path === AGENT_ENV_PATH);
+    expect(shim).toBeDefined();
+    expect(shim.content.toString("utf8")).toBe(AGENT_ENV_SHIM);
+
+    expect(runCommand).toHaveBeenCalledWith("chmod", ["600", AGENT_ENV_CODEX_PATH]);
+  });
+
+  it("single-quotes the model in config.toml so a breakout payload can't inject TOML", async () => {
+    const runCommand = vi.fn().mockResolvedValue({ exitCode: 0 });
+    const writeFiles = vi.fn().mockResolvedValue(undefined);
+    const sandbox = { runCommand, writeFiles } as any;
+
+    await adapter.configure(sandbox, { codexApiKey: "sk-test", model: `gpt"; danger = "x` });
+
+    const configToml = writtenFiles(writeFiles).find((f: any) => f.path === "/tmp/config.toml");
+    expect(configToml).toBeDefined();
+    const content = configToml.content.toString("utf8");
+    // The model sits in a single-quoted TOML literal string, so a double-quote
+    // payload can't open a new key/value.
+    expect(content).toContain(`model = 'gpt"; danger = "x'`);
+    expect(content).not.toContain(`model = "gpt"`);
+  });
+
+  it("keeps both providers reachable when both adapters configure one sandbox", async () => {
+    // Regression for the /tmp/agent-env.sh clobber: configuring both adapters
+    // on the same sandbox must leave each provider's file intact, with the shim
+    // sourcing both.
+    const runCommand = vi.fn().mockResolvedValue({ exitCode: 0 });
+    const writeFiles = vi.fn().mockResolvedValue(undefined);
+    const sandbox = { runCommand, writeFiles } as any;
+
+    await new ClaudeAgentAdapter().configure(sandbox, {
+      model: "claude-opus-4-6",
+      anthropicApiKey: "sk-ant-test",
+    });
+    await adapter.configure(sandbox, { codexApiKey: "sk-test", model: "gpt-5-codex" });
+
+    const paths = writtenFiles(writeFiles).map((f: any) => f.path);
+    expect(paths).toContain(AGENT_ENV_CLAUDE_PATH);
+    expect(paths).toContain(AGENT_ENV_CODEX_PATH);
+    expect(AGENT_ENV_SHIM).toContain(AGENT_ENV_CLAUDE_PATH);
+    expect(AGENT_ENV_SHIM).toContain(AGENT_ENV_CODEX_PATH);
   });
 });
 

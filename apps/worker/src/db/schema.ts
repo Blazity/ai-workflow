@@ -12,7 +12,9 @@ import {
   serial,
   text,
   timestamp,
+  uniqueIndex,
 } from "drizzle-orm/pg-core";
+import type { BlockRunState, WorkflowDefinition } from "@shared/contracts";
 import type { GateStatusRef } from "../adapters/vcs/types.js";
 import type { PrePrCheckConfig } from "../pre-pr-checks/config.js";
 
@@ -22,11 +24,17 @@ import type { PrePrCheckConfig } from "../pre-pr-checks/config.js";
  * the three hashes shared a lifecycle (unregister cleared all three), so
  * they are one table. createdAt backs reconcile's orphan grace period and
  * is REFRESHED on register(), not just set on claim().
+ *
+ * runKind records what started the run: 'ticket' for the classic AI-column
+ * trigger and 'pr_trigger' for PR webhook triggers. Reconcile and the Jira
+ * webhook read it so a 'pr_trigger' run is never cancelled just because its
+ * ticket left the AI column (its lifecycle follows the PR, not the column).
  */
 export const activeRuns = pgTable("active_runs", {
   ticketKey: text("ticket_key").primaryKey(),
   runId: text("run_id").notNull(),
   sandboxId: text("sandbox_id"),
+  runKind: text("run_kind").notNull().default("ticket"),
   createdAt: timestamp("created_at", { withTimezone: true })
     .notNull()
     .defaultNow(),
@@ -123,14 +131,17 @@ export const envMarker = pgTable("env_marker", {
  * far longer than Vercel's ~24h observability window so run history, active
  * counts, and per-run cost stay queryable with plain SQL.
  *
- * Written by two upserters that own disjoint columns:
+ * Written by three upserters that own disjoint columns:
  * - The poll cron snapshots lifecycle/status/ticket/PR(gate) from the
  *   Workflow world + the run registry (see lib/telemetry/collect-snapshots).
  * - The agent workflow records cost/tokens/per-phase usage + the agent PR on
  *   completion — data that only exists inside the run (see recordRunUsage).
+ * - The mid-run block-status writer owns exactly block_statuses,
+ *   definition_version and definition_id (plus updated_at), streaming
+ *   per-block progress as the run advances through the stored definition.
  *
- * Both use ON CONFLICT (run_id) DO UPDATE setting only their own columns, so
- * whichever writes first inserts the row and the other fills in the rest,
+ * All use ON CONFLICT (run_id) DO UPDATE setting only their own columns, so
+ * whichever writes first inserts the row and the others fill in the rest,
  * regardless of order.
  */
 export const workflowRuns = pgTable("workflow_runs", {
@@ -170,6 +181,10 @@ export const workflowRuns = pgTable("workflow_runs", {
   /** Full RunStep[] trace waterfall, captured on completion (workflow-owned). */
   steps: jsonb("steps"),
 
+  definitionVersion: integer("definition_version"),
+  definitionId: integer("definition_id"),
+  blockStatuses: jsonb("block_statuses").$type<Record<string, BlockRunState>>(),
+
   // Bookkeeping.
   firstSeenAt: timestamp("first_seen_at", { withTimezone: true })
     .notNull()
@@ -179,10 +194,11 @@ export const workflowRuns = pgTable("workflow_runs", {
     .defaultNow(),
 }, (t) => [
   // Built for querying: active-count by status, time-window stats by startedAt,
-  // per-ticket run history by ticketKey.
+  // per-ticket run history by ticketKey, editor block-status poll by definitionId.
   index("workflow_runs_status_idx").on(t.status),
   index("workflow_runs_started_at_idx").on(t.startedAt),
   index("workflow_runs_ticket_key_idx").on(t.ticketKey),
+  index("workflow_runs_definition_id_idx").on(t.definitionId),
 ]);
 
 export const workflowOwnedBranches = pgTable(
@@ -222,5 +238,83 @@ export const prePrCheckConfigVersions = pgTable("pre_pr_check_config_versions", 
   restoredFromVersion: integer("restored_from_version"),
 });
 
+/**
+ * Named workflow definitions: one row per definition the dashboard manages.
+ * trigger_types is denormalized from the head version, kept in sync by
+ * save/restore, and backs the one-enabled-definition-per-trigger rule so the
+ * overlap check is a plain array-overlap query instead of re-parsing every
+ * head version's graph. A definition is archived (soft-deleted) via
+ * archived_at; the partial unique index frees its name for reuse once archived.
+ */
+export const workflowDefinitions = pgTable(
+  "workflow_definitions",
+  {
+    id: serial("id").primaryKey(),
+    name: text("name").notNull(),
+    enabled: boolean("enabled").notNull().default(false),
+    triggerTypes: text("trigger_types")
+      .array()
+      .notNull()
+      .default(sql`'{}'::text[]`),
+    archivedAt: timestamp("archived_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+    createdById: text("created_by_id").notNull(),
+    createdByLabel: text("created_by_label").notNull(),
+  },
+  (t) => [
+    uniqueIndex("workflow_definitions_name_active_idx")
+      .on(t.name)
+      .where(sql`${t.archivedAt} is null`),
+  ],
+);
+
+/**
+ * Dashboard-managed workflow definition versions, append-only per definition.
+ * Each row belongs to a workflow_definitions row; a definition's head is its
+ * highest version, and a rollback appends a copy of an older version with
+ * restored_from_version set. No versions for a definition = built-in default.
+ */
+export const workflowDefinitionVersions = pgTable(
+  "workflow_definition_versions",
+  {
+    definitionId: integer("definition_id")
+      .notNull()
+      .references(() => workflowDefinitions.id),
+    version: integer("version").notNull(),
+    definition: jsonb("definition").$type<WorkflowDefinition>().notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    createdById: text("created_by_id").notNull(),
+    createdByLabel: text("created_by_label").notNull(),
+    restoredFromVersion: integer("restored_from_version"),
+  },
+  (t) => [primaryKey({ columns: [t.definitionId, t.version] })],
+);
+
+/**
+ * Enabled trigger bindings — the DB-level guarantee behind "at most one enabled
+ * definition per trigger type". One row per trigger_type currently owned by an
+ * enabled, non-archived definition. trigger_type is the PRIMARY KEY, so a second
+ * definition trying to claim the same trigger fails with a unique violation
+ * (surfaced as the 409 "already handled" path) instead of racing past a
+ * read-then-write overlap check.
+ *
+ * Rows exist ONLY while the owning definition is enabled, so their presence IS
+ * the "enabled = true" predicate — a plain PK on trigger_type is equivalent to a
+ * partial unique index on trigger_type WHERE enabled. A definition with several
+ * trigger nodes gets several rows; enabling inserts them, disabling/archiving
+ * deletes them, saving a new version re-syncs them to the head graph, and
+ * getEnabledWorkflowDefinitionForTrigger repairs any drift (from a crashed
+ * write) on read. ON DELETE CASCADE keeps a binding subordinate to its
+ * definition.
+ */
+export const workflowDefinitionTriggers = pgTable("workflow_definition_triggers", {
+  triggerType: text("trigger_type").primaryKey(),
+  definitionId: integer("definition_id")
+    .notNull()
+    .references(() => workflowDefinitions.id, { onDelete: "cascade" }),
+});
+
 export * from "./auth-schema.js";
 export * from "./email-delivery-schema.js";
+export * from "./approvals-schema.js";

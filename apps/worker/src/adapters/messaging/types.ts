@@ -14,12 +14,20 @@ export type TicketEvent =
       kind: "pr_ready";
       pr: { url: string; number: number };
       usageReport: string;
+      extraText?: string;
     }
   | {
       kind: "failed";
       phase?: "research" | "impl" | "review" | "pre-pr-checks" | "push";
       reason?: string;
       usageReport?: string;
+    }
+  | {
+      kind: "plan_approval_requested";
+      /** Deep link to the dashboard view where a human approves the plan. */
+      dashboardUrl?: string;
+      /** Short excerpt of the proposed plan. Not rendered in the Slack copy. */
+      planPreview?: string;
     }
   | { kind: "canceled"; reason: string };
 

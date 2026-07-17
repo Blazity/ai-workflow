@@ -17,6 +17,7 @@ const mockOctokit = {
   },
   issues: {
     listComments: vi.fn(),
+    createComment: vi.fn(),
   },
   checks: {
     create: vi.fn(),
@@ -132,6 +133,27 @@ describe("GitHubAdapter", () => {
       const pr = await adapter.findPR("feat/test");
       expect(pr).not.toBeNull();
       expect(pr!.id).toBe(42);
+    });
+  });
+
+  describe("postPRComment", () => {
+    it("posts an issue comment and returns its html_url", async () => {
+      mockOctokit.issues.createComment.mockResolvedValueOnce({
+        data: { html_url: "https://github.com/test-org/test-repo/pull/42#issuecomment-1" },
+      });
+
+      const adapter = ghAdapter();
+      const result = await adapter.postPRComment(42, "Looks good");
+
+      expect(mockOctokit.issues.createComment).toHaveBeenCalledWith({
+        owner: "test-org",
+        repo: "test-repo",
+        issue_number: 42,
+        body: "Looks good",
+      });
+      expect(result).toEqual({
+        url: "https://github.com/test-org/test-repo/pull/42#issuecomment-1",
+      });
     });
   });
 

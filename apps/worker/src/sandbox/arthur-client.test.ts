@@ -154,6 +154,81 @@ describe("ArthurClient", () => {
     });
   });
 
+  describe("validatePrompt", () => {
+    it("POSTs the prompt and returns ok=true when every rule passes", async () => {
+      mockFetch.mockResolvedValueOnce(jsonResponse({
+        inference_id: "inf-1",
+        rule_results: [
+          { id: "r1", name: "PII Leak", result: "Pass" },
+          { id: "r2", name: "Prompt Injection", result: "Pass" },
+        ],
+      }));
+
+      const client = new ArthurClient("http://host", "secret");
+      const result = await client.validatePrompt("task-uuid", "the prompt");
+
+      expect(result).toEqual({
+        ok: true,
+        findings: [
+          { rule: "PII Leak", result: "Pass" },
+          { rule: "Prompt Injection", result: "Pass" },
+        ],
+      });
+      const [url, init] = mockFetch.mock.calls[0];
+      expect(url).toBe("http://host/api/v2/tasks/task-uuid/validate_prompt");
+      expect(init.method).toBe("POST");
+      expect(init.headers.Authorization).toBe("Bearer secret");
+      expect(JSON.parse(init.body)).toEqual({ prompt: "the prompt" });
+    });
+
+    it("returns ok=false with findings when a rule fails", async () => {
+      mockFetch.mockResolvedValueOnce(jsonResponse({
+        inference_id: "inf-2",
+        rule_results: [
+          { id: "r1", name: "PII Leak", result: "Pass" },
+          { id: "r2", name: "Prompt Injection", result: "Fail", details: "injection detected" },
+          { id: "r3", result: "Unavailable" },
+        ],
+      }));
+
+      const client = new ArthurClient("http://host", "k");
+      const result = await client.validatePrompt("t", "content");
+
+      expect(result.ok).toBe(false);
+      expect(result.findings).toEqual([
+        { rule: "PII Leak", result: "Pass" },
+        { rule: "Prompt Injection", result: "Fail", details: "injection detected" },
+        // No name → falls back to the rule id.
+        { rule: "r3", result: "Unavailable" },
+      ]);
+    });
+
+    it("throws when rule_results is not an array", async () => {
+      mockFetch.mockResolvedValueOnce(jsonResponse({ inference_id: "inf-3" }));
+
+      const client = new ArthurClient("http://host", "k");
+      await expect(client.validatePrompt("t", "content")).rejects.toThrow(
+        "unexpected validate_prompt response shape",
+      );
+    });
+
+    it("stringifies object details and truncates them to 500 chars", async () => {
+      const bigDetails = { message: "x".repeat(600) };
+      mockFetch.mockResolvedValueOnce(jsonResponse({
+        rule_results: [
+          { id: "r1", name: "Toxicity", result: "Fail", details: bigDetails },
+        ],
+      }));
+
+      const client = new ArthurClient("http://host", "k");
+      const result = await client.validatePrompt("t", "content");
+
+      const details = result.findings[0].details!;
+      expect(details).toHaveLength(500);
+      expect(details).toBe(JSON.stringify(bigDetails).slice(0, 500));
+    });
+  });
+
   describe("error handling", () => {
     it("throws on non-2xx responses", async () => {
       mockFetch.mockResolvedValueOnce(

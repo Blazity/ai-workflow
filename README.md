@@ -13,7 +13,7 @@ ai-workflow/
 ├── apps/
 │   ├── worker/      # The bot — Nitro HTTP server + Vercel Workflows + Sandbox orchestration
 │   ├── dashboard/   # The cockpit — Next.js observability and admin UI
-│   └── shared/      # Type-only contracts shared between worker and dashboard
+│   └── shared/      # Built packages (@shared/contracts, @shared/conditions) shared between worker and dashboard
 ├── docs/            # Specs, plans, and integration guides
 ├── pnpm-workspace.yaml
 └── package.json     # Root scripts that fan out across the workspace
@@ -23,12 +23,12 @@ ai-workflow/
 |---------|------|-----------|
 | `apps/worker` | `worker` | The actual automation service: Nitro server, durable workflow, sandbox lifecycle, Jira/VCS/Slack adapters. This is what you deploy to run the bot. Everything in the [Workflow Deep-dive](#workflow-deep-dive) below lives here, under `apps/worker/src/`. |
 | `apps/dashboard` | `ai-workflow-dashboard` | A Next.js "cockpit" that visualizes runs, KPIs, cost & usage, Arthur eval health, prompt versions, and dashboard user administration. It proxies worker APIs server-side and stores only the worker-issued dashboard session cookie. Optional: the bot runs fine without it. |
-| `apps/shared` | _(no package — see below)_ | Shared TypeScript contracts (`domain.ts`, `api.ts`) describing the worker's API responses, so the dashboard and worker stay in sync at the type level. |
+| `apps/shared` | `@shared/contracts`, `@shared/conditions` | Built workspace packages: `contracts` holds the shared TypeScript types (`domain.ts`, `api.ts`, `workflow-graph.ts`) describing the worker's API responses and workflow block graph, so the dashboard and worker stay in sync at the type level; `conditions` holds the branch-condition parser/evaluator both apps use. |
 
 ### How the packages connect
 
-- **`@shared/*` is a path alias, not an npm package.** `apps/shared` has no `package.json` and emits nothing (`noEmit: true`). Both apps map `@shared/*` → `../shared/*` in their `tsconfig.json` and import the contracts directly from source (`import type { RunsResponse } from "@shared/contracts"`). It's a type-only seam — no build step, no version to bump.
-- **The dashboard talks to the worker over HTTP.** The worker exposes the dashboard API under `/api/v1/*` (`apps/worker/src/routes/api/v1/`), gated by [`apps/worker/src/middleware/api-auth.ts`](./apps/worker/src/middleware/api-auth.ts) on a valid **Better Auth session**. Human login lives on the worker (`/api/auth/**`, `apps/worker/src/auth.ts`); the dashboard is a thin BFF that stores the worker-issued session token in a first-party `httpOnly` cookie. Browser requests go to the dashboard, and the Next server forwards the session to the worker as `Authorization: Bearer <token>`. The two apps deploy as **separate Vercel projects** and share only the `@shared/contracts` types.
+- **`@shared/contracts` and `@shared/conditions` are built workspace packages, not path aliases.** Each lives under `apps/shared/*` with its own `package.json`, compiles with `tsc -p tsconfig.build.json` to `dist/`, and is declared as a `workspace:*` dependency in `apps/worker/package.json` and `apps/dashboard/package.json`. Both apps run `pnpm build:shared` (`pnpm --filter @shared/contracts build && pnpm --filter @shared/conditions build`) before `dev`/`build`/`test`/`typecheck`, then import the compiled output normally (`import type { RunsResponse } from "@shared/contracts"`), resolved through pnpm's workspace `node_modules` symlinks and each package's own `dist/index.d.ts`, no tsconfig path alias needed.
+- **The dashboard talks to the worker over HTTP.** The worker exposes the dashboard API under `/api/v1/*` (`apps/worker/src/routes/api/v1/`), gated by [`apps/worker/src/middleware/api-auth.ts`](./apps/worker/src/middleware/api-auth.ts) on a valid **Better Auth session**. Human login lives on the worker (`/api/auth/**`, `apps/worker/src/auth.ts`); the dashboard is a thin BFF that stores the worker-issued session token in a first-party `httpOnly` cookie. Browser requests go to the dashboard, and the Next server forwards the session to the worker as `Authorization: Bearer <token>`. The two apps deploy as **separate Vercel projects** and share only the `@shared/contracts` and `@shared/conditions` packages.
 
 ### Dashboard auth configuration
 
@@ -108,6 +108,30 @@ flowchart TD
     R -.-> R4["Stale failed-ticket markers"]
 ```
 
+## Workflow Definitions
+
+The pipeline above is a **workflow definition**: a graph of typed blocks stored in Postgres, not a hardcoded sequence. The built-in default definition reproduces exactly the research → implementation → checks → PR flow described above, so a fresh install behaves as documented with nothing to author. Editing it is optional.
+
+The dashboard ships a drag-and-drop **workflow editor** that authors that graph: drop blocks onto a canvas, wire their ports, set per-block params, choose a provider/model per agent block, and save. Definitions are versioned with history and one-click restore, validated on save (a graph that could not run is rejected with a precise error instead of failing mid-run), and each run renders **live** on the canvas, with blocks lighting up as the agent reaches them.
+
+**27 block types** are available, in the palette's nine groups:
+
+| Group | Blocks | What it adds |
+|-------|--------|-------------|
+| Triggers | `trigger_ticket_ai`, `trigger_plan_approved`, `trigger_pr_created`, `trigger_pr_checks_failed`, `trigger_pr_review` | Entry points: a ticket entering the AI column, an approved plan, or a PR/MR event on a workflow-owned branch |
+| Agents | `planning_agent`, `implementation_agent`, `review_agent`, `fix_agent`, `generic_agent` | Coding-agent phases in the sandbox, each with its own provider/model |
+| Workspace | `prepare_workspace`, `finalize_workspace` | Repository selection, branches, sandbox provisioning; publish + PR |
+| Control | `branch`, `loop`, `terminate` | Conditional routing on any earlier block's output, bounded retry, explicit terminal status |
+| Human | `send_plan_approval`, `human_question` | Park the run for a human decision and resume when it arrives |
+| Ticket | `update_ticket_status`, `post_ticket_comment` | Ticket side effects |
+| Version control | `open_pr`, `post_pr_comment`, `fetch_pr_context` | PR/MR side effects and read-back |
+| Utility | `run_pre_pr_checks`, `run_checks`, `call_llm`, `send_slack_message` | Checks, a single in-process LLM call, notifications |
+| Arthur | `arthur_injection_check` | Optional prompt-injection screen (requires Arthur) |
+
+This expresses flows the fixed two-phase pipeline could not: **PR triggers** (a failing check or a human "request changes" review starts an automated fix run), **plan approval** (the run parks until a human approves the plan, then re-enters straight into implementation), branching on a check result, and bounded retry loops.
+
+**See [docs/workflow-definitions.md](./docs/workflow-definitions.md)** for the definition format, the full block catalog, trigger routing and precedence, and the deprecation of the in-repo YAML pipelines.
+
 ## Tech Stack
 
 | Component | Technology | Purpose |
@@ -140,6 +164,8 @@ VCS setup guides:
 
 There is a single durable workflow — `agentWorkflow` in [`apps/worker/src/workflows/agent.ts`](./apps/worker/src/workflows/agent.ts) — that handles both fresh tickets and review-fix re-runs. The branching happens at *context-assembly* time, not at the workflow level: if an open PR for `blazebot/{ticket-key}` already exists, its comments, check results, and conflict status are folded into the agent's input.
 
+> The step table below walks the **default definition**'s shape, which is the two-phase pipeline most runs take. The phases are blocks in a graph, not a hardcoded sequence: a saved definition can add, remove, or reorder them, and can enter from a PR event or a plan approval instead of a ticket. See [Workflow Definitions](#workflow-definitions) above and [docs/workflow-definitions.md](./docs/workflow-definitions.md). `agentWorkflow` is the durable host in every case, so the sandbox, registry, and teardown mechanics described here apply to any definition.
+
 | Step | What happens |
 |------|-------------|
 | `fetchAndValidateTicket` | Fetches the ticket from Jira; aborts if it's no longer in the AI column |
@@ -163,7 +189,7 @@ There is a single durable workflow — `agentWorkflow` in [`apps/worker/src/work
 
 If either phase returns `clarification_needed`, the workflow posts numbered questions as a Jira comment, moves the ticket to Backlog, and emits a `needs_clarification` Slack event. If a phase fails or times out, the ticket is moved to Backlog with a `failed` event.
 
-> A third "Review" phase is implemented in `agent.ts` but gated behind `ENABLE_REVIEW_PHASE` (default `false`). When enabled, it runs after Phase 2 — the agent self-reviews its diff and fixes issues before push (15 min poll cap, `REVIEW_SCHEMA` for structured output).
+> A third "Review" phase is implemented in `agent.ts` and runs when the active workflow definition contains a `review_agent` block. `ENABLE_REVIEW_PHASE` (default `false`) only controls whether the built-in default definition includes that block; once a definition is saved from the dashboard, the flag has no runtime effect. When the block runs, the agent self-reviews its diff and fixes issues before push (15 min poll cap, `REVIEW_SCHEMA` for structured output).
 
 ### Sandbox Lifecycle
 
@@ -241,6 +267,8 @@ The sandbox is **always destroyed** after each run (in a `finally` block), wheth
 ### Post-PR Gate
 
 PR creation isn't the end of the pipeline. A separate durable workflow — `postPrGateWorkflow` in [`apps/worker/src/workflows/post-pr-gate.ts`](./apps/worker/src/workflows/post-pr-gate.ts) — is triggered by GitHub/GitLab webhooks on workflow-owned `blazebot/*` branches and runs configurable checks against the PR, surfacing each step as a check run / commit status on the head SHA. Steps are configured via `post-pr-gate.yaml` (v1 ships `pr-title-format` and `code-hygiene`); locking, dedupe, and force-push handling live in the Postgres gate tables. See [docs/post-pr-gate-spec.md](./docs/post-pr-gate-spec.md).
+
+> **`post-pr-gate.yaml` is deprecated.** PR-trigger definitions now absorb the gate: on a bot PR, a matched enabled definition supersedes it (gate precedence). The file is optional, and when absent the loader returns a built-in default equal to the previously shipped YAML. A present file whose content differs from that default still loads, but logs a `post_pr_gate_yaml_deprecated` warning. The gate itself still runs for non-bot PRs and for PRs with no matching definition. See [docs/workflow-definitions.md](./docs/workflow-definitions.md).
 
 ### Run Registry and Reconciliation
 
