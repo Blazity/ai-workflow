@@ -219,11 +219,12 @@ Steps:
 3. Add serializer tests proving coordinate-only changes are non-semantic; persist layout through its independent CAS endpoint.
 4. Add validation-state tests for debounce, stale-success clearing, abort, and response ordering; Save Draft stays available while invalid and Deploy waits for current successful validation.
 5. Consume the server registry in palette/inspector. Unavailable blocks remain visible with non-empty reasons.
-6. Retain right-click node deletion, connection deletion, and connected-card clipping with focused regressions.
+6. Add registry-driven input-binding controls in the inspector. Authors can select compatible `trigger.*`, dominating `steps.<id>.output.*`, and `run.*` sources (including safe variadic inputs), edit an existing exact path, and repair a migrated legacy binding without hand-editing JSON.
+7. Retain right-click node deletion, connection deletion, and connected-card clipping with focused regressions.
 
 Acceptance:
 
-- Semantic edits auto-validate without stale results, movement never dirties the draft, and every unavailable/error state explains itself.
+- Semantic edits auto-validate without stale results, movement never dirties the draft, every declared input can be authored in the UI, and every unavailable/error state explains itself.
 
 ## Task 12 — AIW-103: end-to-end verification and one-PR delivery
 
