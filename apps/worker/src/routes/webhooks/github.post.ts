@@ -73,7 +73,7 @@ export default defineEventHandler(async (event) => {
   const evt = normalizeGitHubEvent(ghEvent, body, {
     gateCheckNames,
     deliveryId,
-    botLogin: env.VCS_BOT_LOGIN,
+    botLogin: env.GITHUB_BOT_LOGIN ?? env.VCS_BOT_LOGIN,
     ...(reviewStates ? { reviewStates } : {}),
   });
 

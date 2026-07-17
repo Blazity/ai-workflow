@@ -7,10 +7,14 @@ const mocks = vi.hoisted(() => ({
     GITLAB_PROJECT_ID: undefined as string | undefined,
     MAX_CONCURRENT_AGENTS: 3,
     VCS_BOT_LOGIN: "blazebot",
+    GITLAB_BOT_LOGIN: undefined as string | undefined,
   },
   getConfiguredVcsProviders: vi.fn(),
   listRepositories: vi.fn(),
+  fetch: vi.fn(),
 }));
+
+global.fetch = mocks.fetch;
 
 vi.mock("../../../env.js", () => ({
   env: mocks.env,
@@ -85,10 +89,41 @@ function validMergeRequestPayload(): string {
   });
 }
 
+function validNotePayload(overrides: Record<string, any> = {}): string {
+  return JSON.stringify({
+    object_kind: "note",
+    event_type: "note",
+    user: { id: 1, username: "alice" },
+    project: {
+      id: 5,
+      path_with_namespace: "group/demo",
+      web_url: "https://gitlab.example.com/group/demo",
+    },
+    object_attributes: {
+      action: "create",
+      noteable_type: "MergeRequest",
+      note: "Please add coverage",
+      system: false,
+    },
+    merge_request: {
+      id: 7,
+      iid: 42,
+      author_id: 8,
+      source_branch: "blazebot/AIW-32",
+      target_branch: "main",
+      title: "AIW-32 GitLab parity",
+      last_commit: { id: "sha1" },
+      draft: false,
+    },
+    ...overrides,
+  });
+}
+
 describe("POST /webhooks/gitlab", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.env.GITLAB_PROJECT_ID = undefined;
+    mocks.env.GITLAB_BOT_LOGIN = undefined;
     mockDispatchTriggerEvent.mockResolvedValue({ result: "no_definition" });
     mockResolveEnabledReviewStates.mockResolvedValue(["changes_requested"]);
     mocks.getConfiguredVcsProviders.mockReturnValue([
@@ -376,23 +411,10 @@ describe("POST /webhooks/gitlab", () => {
   });
 
   it("routes an opted-in merge-request note through the common review trigger", async () => {
-    mockResolveEnabledReviewStates.mockResolvedValueOnce(["changes_requested", "commented"]);
+    mockResolveEnabledReviewStates.mockResolvedValueOnce(["commented"]);
     mockDispatchTriggerEvent.mockResolvedValueOnce({ result: "started", runId: "run_note" });
-    const base = JSON.parse(validMergeRequestPayload());
-    const note = {
-      object_kind: "note",
-      user: { username: "alice" },
-      project: base.project,
-      object_attributes: {
-        action: "create",
-        noteable_type: "MergeRequest",
-        note: "Please add coverage",
-        system: false,
-      },
-      merge_request: base.object_attributes,
-    };
 
-    const response = await makeApp()(makeRequest(JSON.stringify(note), "secret", "Note Hook"));
+    const response = await makeApp()(makeRequest(validNotePayload(), "secret", "Note Hook"));
 
     expect(response.status).toBe(200);
     expect(mockResolveEnabledReviewStates).toHaveBeenCalled();
@@ -400,29 +422,93 @@ describe("POST /webhooks/gitlab", () => {
       expect.objectContaining({
         triggerType: "trigger_pr_review",
         pr: expect.objectContaining({
+          prUrl: "https://gitlab.example.com/group/demo/-/merge_requests/42",
+          author: "8",
           review: { state: "commented", author: "alice", body: "Please add coverage" },
+        }),
+      }),
+      expect.anything(),
+    );
+    expect(mocks.fetch).not.toHaveBeenCalled();
+  });
+
+  it("enriches an eligible note with the actor's requested-changes reviewer state", async () => {
+    mockResolveEnabledReviewStates.mockResolvedValueOnce(["changes_requested", "commented"]);
+    mockDispatchTriggerEvent.mockResolvedValueOnce({ result: "started", runId: "run_changes" });
+    mocks.fetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => [
+        { user: { id: 1, username: "alice" }, state: "requested_changes" },
+      ],
+    });
+
+    const response = await makeApp()(makeRequest(validNotePayload(), "secret", "Note Hook"));
+
+    expect(response.status).toBe(200);
+    expect(mocks.fetch).toHaveBeenCalledWith(
+      "https://gitlab.example.com/api/v4/projects/5/merge_requests/42/reviewers",
+      expect.objectContaining({
+        headers: { "PRIVATE-TOKEN": "glpat" },
+        signal: expect.any(AbortSignal),
+      }),
+    );
+    expect(mockDispatchTriggerEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        triggerType: "trigger_pr_review",
+        pr: expect.objectContaining({
+          review: {
+            state: "changes_requested",
+            author: "alice",
+            body: "Please add coverage",
+          },
         }),
       }),
       expect.anything(),
     );
   });
 
-  it("ignores a merge-request note when commented reviews are not configured", async () => {
-    const base = JSON.parse(validMergeRequestPayload());
-    const note = {
-      object_kind: "note",
-      user: { username: "alice" },
-      project: base.project,
-      object_attributes: {
-        action: "create",
-        noteable_type: "MergeRequest",
-        note: "drive by",
-        system: false,
-      },
-      merge_request: base.object_attributes,
-    };
+  it("returns 503 when requested-changes reviewer enrichment fails transiently", async () => {
+    mockResolveEnabledReviewStates.mockResolvedValueOnce(["changes_requested"]);
+    mocks.fetch.mockRejectedValueOnce(new Error("GitLab unavailable"));
+
+    const response = await makeApp()(makeRequest(validNotePayload(), "secret", "Note Hook"));
+
+    expect(response.status).toBe(503);
+    expect(mockDispatchTriggerEvent).not.toHaveBeenCalled();
+  });
+
+  it("filters notes using the GitLab-specific bot login before enrichment", async () => {
+    mocks.env.GITLAB_BOT_LOGIN = "gitlab-automation";
+    mockResolveEnabledReviewStates.mockResolvedValueOnce(["commented"]);
+    const note = JSON.parse(validNotePayload());
+    note.user = { id: 9, username: "gitlab-automation" };
 
     const response = await makeApp()(makeRequest(JSON.stringify(note), "secret", "Note Hook"));
+
+    expect(response.status).toBe(200);
+    expect(mocks.fetch).not.toHaveBeenCalled();
+    expect(mockDispatchTriggerEvent).not.toHaveBeenCalled();
+  });
+
+  it("falls back to the legacy VCS bot login for GitLab notes", async () => {
+    mockResolveEnabledReviewStates.mockResolvedValueOnce(["commented"]);
+    const note = JSON.parse(validNotePayload());
+    note.user = { id: 9, username: "blazebot" };
+
+    const response = await makeApp()(makeRequest(JSON.stringify(note), "secret", "Note Hook"));
+
+    expect(response.status).toBe(200);
+    expect(mocks.fetch).not.toHaveBeenCalled();
+    expect(mockDispatchTriggerEvent).not.toHaveBeenCalled();
+  });
+
+  it("ignores a merge-request note when commented reviews are not configured", async () => {
+    mocks.fetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => [{ user: { id: 1, username: "alice" }, state: "reviewed" }],
+    });
+
+    const response = await makeApp()(makeRequest(validNotePayload(), "secret", "Note Hook"));
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({

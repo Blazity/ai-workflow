@@ -17,6 +17,14 @@ function jiraAdapter() {
   });
 }
 
+function jiraAdapterWithDiscovery() {
+  return new JiraAdapter({
+    baseUrl: "https://test.atlassian.net",
+    apiToken: "token",
+    projectKey: "PROJ",
+  });
+}
+
 describe("JiraAdapter", () => {
   beforeEach(() => {
     mockFetch.mockReset();
@@ -447,6 +455,47 @@ describe("JiraAdapter", () => {
       ]);
       expect(mockFetch.mock.calls[0][0]).toBe(`${API_BASE}/rest/api/3/project/PROJ/statuses`);
       expect(mockFetch.mock.calls[0][1].signal).toBeInstanceOf(AbortSignal);
+    });
+
+    it("times out cloud-id discovery and retries with a clean cache", async () => {
+      const controller = new AbortController();
+      const retryController = new AbortController();
+      const timeout = vi
+        .spyOn(AbortSignal, "timeout")
+        .mockReturnValueOnce(controller.signal)
+        .mockReturnValue(retryController.signal);
+      mockFetch.mockImplementationOnce((_url, init) =>
+        new Promise((_resolve, reject) => {
+          if (init?.signal) {
+            init.signal.addEventListener("abort", () => reject(init.signal?.reason), { once: true });
+          } else {
+            queueMicrotask(() => reject(new Error("cloud-id discovery fetch was not abortable")));
+          }
+        }),
+      );
+      const adapter = jiraAdapterWithDiscovery();
+
+      try {
+        const firstAttempt = adapter.listStatuses().catch((error) => error);
+        await vi.waitFor(() => expect(mockFetch).toHaveBeenCalledTimes(1));
+        controller.abort(new DOMException("timed out", "TimeoutError"));
+        await expect(firstAttempt).resolves.toMatchObject({ name: "TimeoutError" });
+
+        mockFetch
+          .mockResolvedValueOnce({
+            ok: true,
+            json: async () => ({ cloudId: CLOUD_ID }),
+          })
+          .mockResolvedValueOnce({
+            ok: true,
+            json: async () => [],
+          });
+
+        await expect(adapter.listStatuses()).resolves.toEqual([]);
+        expect(mockFetch.mock.calls[1][0]).toBe("https://test.atlassian.net/_edge/tenant_info");
+      } finally {
+        timeout.mockRestore();
+      }
     });
   });
 

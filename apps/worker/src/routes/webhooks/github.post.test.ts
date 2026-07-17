@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
     GITHUB_REPO: undefined as string | undefined,
     MAX_CONCURRENT_AGENTS: 3,
     VCS_BOT_LOGIN: undefined as string | undefined,
+    GITHUB_BOT_LOGIN: undefined as string | undefined,
   },
 }));
 
@@ -82,12 +83,14 @@ describe("POST /webhooks/github", () => {
     vi.clearAllMocks();
     mocks.env.GITHUB_OWNER = undefined;
     mocks.env.GITHUB_REPO = undefined;
+    mocks.env.VCS_BOT_LOGIN = undefined;
+    mocks.env.GITHUB_BOT_LOGIN = undefined;
     mockDispatchPostPrGateWebhook.mockResolvedValue({ status: "dispatched", runId: "gate_run" });
     mockDispatchTriggerEvent.mockResolvedValue({ result: "no_definition" });
     mockResolveEnabledReviewStates.mockResolvedValue(["changes_requested"]);
   });
 
-  function reviewBody(state: string, headRef = "blazebot/aiw-1") {
+  function reviewBody(state: string, headRef = "blazebot/aiw-1", reviewer = "human") {
     return {
       action: "submitted",
       repository: repo(),
@@ -101,7 +104,7 @@ describe("POST /webhooks/github", () => {
         user: { login: "human" },
         draft: false,
       },
-      review: { state, user: { login: "human" }, body: "please fix" },
+      review: { state, user: { login: reviewer }, body: "please fix" },
     };
   }
 
@@ -134,6 +137,35 @@ describe("POST /webhooks/github", () => {
       expect.objectContaining({ triggerType: "trigger_pr_review" }),
       expect.anything(),
     );
+  });
+
+  it("filters reviews using the GitHub-specific bot login", async () => {
+    mocks.env.VCS_BOT_LOGIN = "legacy-bot";
+    mocks.env.GITHUB_BOT_LOGIN = "github-app[bot]";
+
+    const response = await makeApp()(
+      makeRequest(
+        reviewBody("changes_requested", "blazebot/aiw-1", "github-app[bot]"),
+        "pull_request_review",
+      ),
+    );
+
+    expect(response.status).toBe(200);
+    expect(mockDispatchTriggerEvent).not.toHaveBeenCalled();
+  });
+
+  it("falls back to the legacy VCS bot login for GitHub reviews", async () => {
+    mocks.env.VCS_BOT_LOGIN = "legacy-bot";
+
+    const response = await makeApp()(
+      makeRequest(
+        reviewBody("changes_requested", "blazebot/aiw-1", "legacy-bot"),
+        "pull_request_review",
+      ),
+    );
+
+    expect(response.status).toBe(200);
+    expect(mockDispatchTriggerEvent).not.toHaveBeenCalled();
   });
 
   it("starts a definition run and supersedes the gate for a bot PR", async () => {

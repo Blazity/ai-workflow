@@ -20,6 +20,7 @@ import { dispatchPostPrGateWebhook } from "../../lib/post-pr-gate-dispatch.js";
 import { normalizeGitLabEvent } from "../../lib/trigger-events.js";
 
 const ALLOWED_ACTIONS = new Set(["opened", "update", "reopened"]);
+const REVIEWER_STATE_TIMEOUT_MS = 10_000;
 
 export default defineEventHandler(async (event) => {
   const rawBody = (await readRawBody(event, "utf8")) ?? "";
@@ -50,21 +51,44 @@ export default defineEventHandler(async (event) => {
     return { status: "ignored", reason: "malformed_payload" };
   }
 
-  const needsReviewFilter =
-    gitLabEvent === "Note Hook" ||
-    (gitLabEvent === "Merge Request Hook" && body?.object_attributes?.action === "update");
+  const needsReviewFilter = gitLabEvent === "Note Hook";
   const reviewStates = needsReviewFilter
     ? await resolveEnabledReviewStates(getDb())
     : undefined;
+  const botUsername = env.GITLAB_BOT_LOGIN ?? env.VCS_BOT_LOGIN;
+  let noteReviewerState: string | undefined;
+  let projectChecked = false;
+  if (gitLabEvent === "Note Hook" && isEligibleMergeRequestNote(body, botUsername)) {
+    const scope = await checkProjectScope(body);
+    if (scope) return scope;
+    projectChecked = true;
+    if (reviewStates?.includes("changes_requested")) {
+      try {
+        noteReviewerState = await fetchNoteActorReviewerState(body);
+      } catch (err) {
+        logger.warn(
+          { err: (err as Error).message, project: body?.project, mergeRequest: body?.merge_request?.iid },
+          "gitlab_note_reviewer_state_enrichment_failed",
+        );
+        throw createError({
+          statusCode: 503,
+          statusMessage: "gitlab_reviewer_state_unavailable",
+        });
+      }
+    }
+  }
   const evt = normalizeGitLabEvent(gitLabEvent, body, {
     deliveryId,
-    botUsername: env.VCS_BOT_LOGIN,
+    botUsername,
     ...(reviewStates ? { reviewStates } : {}),
+    ...(noteReviewerState ? { noteReviewerState } : {}),
   });
 
   if (evt) {
-    const scope = await checkProjectScope(body);
-    if (scope) return scope;
+    if (!projectChecked) {
+      const scope = await checkProjectScope(body);
+      if (scope) return scope;
+    }
 
     const db = getDb();
     const result = await dispatchTriggerEvent(evt, {
@@ -133,6 +157,57 @@ async function checkProjectScope(
     return { status: "ignored", reason: "other_project" };
   }
   return null;
+}
+
+function isEligibleMergeRequestNote(body: any, botUsername: string | undefined): boolean {
+  const attrs = body?.object_attributes;
+  const producer = body?.user?.username ?? body?.user?.name;
+  return Boolean(
+    body?.object_kind === "note" &&
+      attrs &&
+      body?.merge_request &&
+      body?.project &&
+      attrs.action === "create" &&
+      attrs.noteable_type === "MergeRequest" &&
+      attrs.system !== true &&
+      (!botUsername || producer !== botUsername),
+  );
+}
+
+async function fetchNoteActorReviewerState(body: any): Promise<string | undefined> {
+  const provider = getConfiguredVcsProviders().find((candidate) => candidate.kind === "gitlab");
+  if (!provider) throw new Error("GitLab provider is not configured");
+  const projectId = body?.project?.id ?? body?.project?.path_with_namespace;
+  const mergeRequestIid = body?.merge_request?.iid;
+  if (projectId == null || mergeRequestIid == null) {
+    throw new Error("GitLab note is missing project or merge request identity");
+  }
+
+  const url =
+    `${provider.host.replace(/\/+$/, "")}/api/v4/projects/${encodeURIComponent(String(projectId))}` +
+    `/merge_requests/${encodeURIComponent(String(mergeRequestIid))}/reviewers`;
+  const response = await fetch(url, {
+    headers: { "PRIVATE-TOKEN": provider.token },
+    signal: AbortSignal.timeout(REVIEWER_STATE_TIMEOUT_MS),
+  });
+  if (!response.ok) {
+    throw new Error(
+      `GitLab reviewer state failed: ${response.status} ${response.statusText}`,
+    );
+  }
+  const reviewers = await response.json();
+  if (!Array.isArray(reviewers)) throw new Error("GitLab reviewer state response is malformed");
+
+  const actorId = body?.user?.id;
+  const actorUsername = body?.user?.username;
+  const actor = reviewers.find((reviewer: any) => {
+    const user = reviewer?.user;
+    return (
+      (actorId != null && user?.id === actorId) ||
+      (actorUsername && user?.username === actorUsername)
+    );
+  });
+  return typeof actor?.state === "string" ? actor.state : undefined;
 }
 
 function triggerResponse(result: DispatchTriggerResult) {

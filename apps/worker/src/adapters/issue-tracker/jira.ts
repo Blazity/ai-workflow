@@ -34,7 +34,7 @@ const STATUS_DISCOVERY_TIMEOUT_MS = 5000;
 export class JiraAdapter implements IssueTrackerAdapter {
   private tenantOrigin: string;
   private authHeader: string;
-  private cloudIdPromise: Promise<string> | null;
+  private cloudId: string | null;
   private selfAccountIdPromise: Promise<string> | null = null;
   private projectKey: string;
 
@@ -43,24 +43,19 @@ export class JiraAdapter implements IssueTrackerAdapter {
     this.tenantOrigin = new URL(trimmed).origin;
     this.authHeader = `Bearer ${config.apiToken}`;
     this.projectKey = config.projectKey;
-    this.cloudIdPromise = config.cloudId
-      ? Promise.resolve(config.cloudId)
-      : null;
+    this.cloudId = config.cloudId ?? null;
   }
 
-  private getCloudId(): Promise<string> {
-    if (this.cloudIdPromise) return this.cloudIdPromise;
-    const pending = this.discoverCloudId();
-    this.cloudIdPromise = pending.catch((err) => {
-      this.cloudIdPromise = null;
-      throw err;
-    });
-    return this.cloudIdPromise;
+  private async getCloudId(signal?: AbortSignal | null): Promise<string> {
+    if (this.cloudId) return this.cloudId;
+    const cloudId = await this.discoverCloudId(signal);
+    this.cloudId = cloudId;
+    return cloudId;
   }
 
-  private async discoverCloudId(): Promise<string> {
+  private async discoverCloudId(signal?: AbortSignal | null): Promise<string> {
     const url = `${this.tenantOrigin}/_edge/tenant_info`;
-    const res = await fetch(url);
+    const res = await fetch(url, { signal });
     if (!res.ok) {
       throw new Error(
         `Jira cloudId discovery failed: ${res.status} ${res.statusText} on ${url}`,
@@ -75,13 +70,13 @@ export class JiraAdapter implements IssueTrackerAdapter {
     return data.cloudId;
   }
 
-  private async apiUrl(path: string): Promise<string> {
-    const cloudId = await this.getCloudId();
+  private async apiUrl(path: string, signal?: AbortSignal | null): Promise<string> {
+    const cloudId = await this.getCloudId(signal);
     return `${ATLASSIAN_API_ORIGIN}/ex/jira/${cloudId}${path}`;
   }
 
   private async request(path: string, options?: RequestInit) {
-    const url = await this.apiUrl(path);
+    const url = await this.apiUrl(path, options?.signal);
     const res = await fetch(url, {
       ...options,
       headers: {

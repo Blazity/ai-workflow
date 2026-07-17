@@ -140,6 +140,7 @@ export function normalizeGitLabEvent(
     deliveryId?: string;
     botUsername?: string;
     reviewStates?: readonly string[];
+    noteReviewerState?: string;
   } = {},
 ): TriggerEvent | null {
   const producer = body?.user?.username ?? body?.user?.name ?? "unknown";
@@ -155,7 +156,7 @@ export function normalizeGitLabEvent(
         delivery: gitLabDelivery(options.deliveryId, producer),
         triggerType: "trigger_pr_merged",
         pr: {
-          ...mapGitLabMergeRequest(attrs, project, body?.user),
+          ...mapGitLabMergeRequest(attrs, project),
           ...(typeof attrs.merge_commit_sha === "string"
             ? { mergeSha: attrs.merge_commit_sha }
             : {}),
@@ -169,22 +170,7 @@ export function normalizeGitLabEvent(
         },
       };
     }
-    if (action === "update") {
-      if (options.botUsername && producer === options.botUsername) return null;
-      const allowedStates = options.reviewStates ?? DEFAULT_REVIEW_STATES;
-      const reviewer = changedGitLabReviewer(body?.reviewers, body?.changes?.reviewers, body?.user);
-      if (reviewer?.state === "requested_changes" && allowedStates.includes("changes_requested")) {
-        return {
-          delivery: gitLabDelivery(options.deliveryId, producer),
-          triggerType: "trigger_pr_review",
-          pr: {
-            ...mapGitLabMergeRequest(attrs, project, body?.user),
-            review: { state: "changes_requested", author: producer, body: "" },
-          },
-        };
-      }
-      return null;
-    }
+    if (action === "update") return null;
     if (action !== "open" && action !== "reopen") return null;
     return {
       delivery: gitLabDelivery(options.deliveryId, producer),
@@ -203,18 +189,26 @@ export function normalizeGitLabEvent(
       (options.botUsername && producer === options.botUsername) ||
       attrs.action !== "create" ||
       attrs.noteable_type !== "MergeRequest" ||
-      attrs.system === true ||
-      !(options.reviewStates ?? DEFAULT_REVIEW_STATES).includes("commented")
+      attrs.system === true
     ) {
       return null;
     }
+    const allowedStates = options.reviewStates ?? DEFAULT_REVIEW_STATES;
+    const state =
+      options.noteReviewerState === "requested_changes" &&
+      allowedStates.includes("changes_requested")
+        ? "changes_requested"
+        : allowedStates.includes("commented")
+          ? "commented"
+          : null;
+    if (!state) return null;
     return {
       delivery: gitLabDelivery(options.deliveryId, producer),
       triggerType: "trigger_pr_review",
       pr: {
-        ...mapGitLabMergeRequest(mr, project, body?.user),
+        ...mapGitLabMergeRequest(mr, project),
         review: {
-          state: "commented",
+          state,
           author: producer,
           body: typeof attrs.note === "string" ? attrs.note : "",
         },
@@ -286,54 +280,39 @@ function mapGitHubPullRequest(pr: any, repo: any): PrTriggerPayload {
   };
 }
 
-function mapGitLabMergeRequest(attrs: any, project: any, user: any): PrTriggerPayload {
+function mapGitLabMergeRequest(attrs: any, project: any, fallbackAuthor?: any): PrTriggerPayload {
   return {
     provider: "gitlab",
     repoPath: project.path_with_namespace ?? "",
     prNumber: attrs.iid,
-    prUrl: attrs.url ?? "",
+    prUrl: gitLabMergeRequestUrl(attrs, project),
     headRef: attrs.source_branch ?? "",
     headSha: attrs.last_commit?.id ?? attrs.diff_head_sha ?? "",
     baseRef: attrs.target_branch ?? "",
     title: attrs.title ?? "",
-    author: user?.username ?? user?.name ?? "unknown",
+    author: gitLabMergeRequestAuthor(attrs, fallbackAuthor),
     isDraft: isGitLabDraft(attrs),
   };
 }
 
-function matchingGitLabReviewer(reviewers: unknown, user: any): any | null {
-  if (!Array.isArray(reviewers)) return null;
-  const username = user?.username;
-  const userId = user?.id;
-  return (
-    reviewers.find(
-      (reviewer: any) =>
-        (username && reviewer?.username === username) ||
-        (userId != null && reviewer?.id === userId),
-    ) ?? null
-  );
+function gitLabMergeRequestUrl(attrs: any, project: any): string {
+  const direct = attrs.url ?? attrs.web_url;
+  if (typeof direct === "string" && direct.trim()) return direct;
+  const projectUrl = typeof project.web_url === "string" ? project.web_url.replace(/\/+$/, "") : "";
+  return projectUrl && attrs.iid != null
+    ? `${projectUrl}/-/merge_requests/${attrs.iid}`
+    : "";
 }
 
-function changedGitLabReviewer(reviewers: unknown, changes: unknown, user: any): any | null {
-  const current = matchingGitLabReviewer(reviewers, user);
-  if (!current || current.state !== "requested_changes") return null;
-
-  let previousReviewers: unknown;
-  let currentReviewers: unknown;
-  if (Array.isArray(changes) && changes.length === 2) {
-    [previousReviewers, currentReviewers] = changes;
-  } else if (changes && typeof changes === "object") {
-    previousReviewers = (changes as any).previous;
-    currentReviewers = (changes as any).current;
-  } else {
-    return null;
+function gitLabMergeRequestAuthor(attrs: any, fallback?: any): string {
+  const author = attrs.author;
+  if (typeof author?.username === "string" && author.username) return author.username;
+  if (typeof author?.name === "string" && author.name) return author.name;
+  if (typeof attrs.author_username === "string" && attrs.author_username) {
+    return attrs.author_username;
   }
-  const changedCurrent = matchingGitLabReviewer(currentReviewers, user);
-  const changedPrevious = matchingGitLabReviewer(previousReviewers, user);
-  return changedCurrent?.state === "requested_changes" &&
-    changedPrevious?.state !== "requested_changes"
-    ? current
-    : null;
+  if (attrs.author_id != null) return String(attrs.author_id);
+  return fallback?.username ?? fallback?.name ?? "unknown";
 }
 
 function isGateCheckName(

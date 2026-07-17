@@ -336,6 +336,34 @@ describe("normalizeGitLabEvent", () => {
     };
   }
 
+  function notePayload(): any {
+    return {
+      object_kind: "note",
+      user: { id: 1, username: "alice" },
+      project: {
+        id: 5,
+        path_with_namespace: "group/demo",
+        web_url: "https://gitlab.example.com/group/demo",
+      },
+      object_attributes: {
+        action: "create",
+        noteable_type: "MergeRequest",
+        note: "Please add a test",
+        system: false,
+      },
+      merge_request: {
+        id: 7,
+        iid: 42,
+        author_id: 8,
+        source_branch: "blazebot/aiw-3",
+        target_branch: "main",
+        title: "AIW-3",
+        last_commit: { id: "sha1" },
+        draft: false,
+      },
+    };
+  }
+
   it("maps an opened merge request to trigger_pr_created", () => {
     const evt = normalizeGitLabEvent("Merge Request Hook", mrPayload("open"), {
       deliveryId: "gitlab-delivery-1",
@@ -411,50 +439,37 @@ describe("normalizeGitLabEvent", () => {
     });
   });
 
-  it("maps a configured GitLab requested-changes reviewer state to the common review trigger", () => {
-    const payload = mrPayload("update");
-    payload.reviewers = [
-      { username: "alice", state: "requested_changes" },
-    ];
-    payload.changes = {
-      reviewers: [
-        [{ username: "alice", state: "reviewed" }],
-        [{ username: "alice", state: "requested_changes" }],
-      ],
-    };
-
-    const evt = normalizeGitLabEvent("Merge Request Hook", payload, {
+  it("maps an enriched GitLab requested-changes note to the common review trigger", () => {
+    const evt = normalizeGitLabEvent("Note Hook", notePayload(), {
       deliveryId: "gitlab-review-1",
       reviewStates: ["changes_requested"],
+      noteReviewerState: "requested_changes",
     });
 
     expect(evt?.triggerType).toBe("trigger_pr_review");
+    expect(evt?.pr).toMatchObject({
+      prUrl: "https://gitlab.example.com/group/demo/-/merge_requests/42",
+      author: "8",
+    });
     expect(evt?.pr.review).toEqual({
       state: "changes_requested",
       author: "alice",
-      body: "",
+      body: "Please add a test",
     });
   });
 
   it("maps an opted-in GitLab merge-request note to a commented review", () => {
     const evt = normalizeGitLabEvent(
       "Note Hook",
-      {
-        object_kind: "note",
-        user: { username: "alice" },
-        project: { id: 1, path_with_namespace: "group/demo" },
-        object_attributes: {
-          action: "create",
-          noteable_type: "MergeRequest",
-          note: "Please add a test",
-          system: false,
-        },
-        merge_request: mrPayload("update").object_attributes,
-      },
+      notePayload(),
       { deliveryId: "gitlab-note-1", reviewStates: ["commented"] },
     );
 
     expect(evt?.triggerType).toBe("trigger_pr_review");
+    expect(evt?.pr).toMatchObject({
+      prUrl: "https://gitlab.example.com/group/demo/-/merge_requests/42",
+      author: "8",
+    });
     expect(evt?.pr.review).toEqual({
       state: "commented",
       author: "alice",
@@ -464,16 +479,9 @@ describe("normalizeGitLabEvent", () => {
 
   it("filters GitLab system notes, bot notes, and review states that were not configured", () => {
     const note = {
-      object_kind: "note",
+      ...notePayload(),
       user: { username: "blazebot" },
-      project: { id: 1, path_with_namespace: "group/demo" },
-      object_attributes: {
-        action: "create",
-        noteable_type: "MergeRequest",
-        note: "self",
-        system: false,
-      },
-      merge_request: mrPayload("update").object_attributes,
+      object_attributes: { ...notePayload().object_attributes, note: "self" },
     };
     expect(
       normalizeGitLabEvent("Note Hook", note, {

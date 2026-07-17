@@ -19,6 +19,14 @@ GITLAB_BASE_BRANCH=main
 VCS_KIND=gitlab
 ```
 
+Optional bot-loop filter:
+
+```bash
+GITLAB_BOT_LOGIN=<token account username>
+```
+
+`GITLAB_BOT_LOGIN` prevents review notes authored by the automation account from triggering `trigger_pr_review`. The legacy `VCS_BOT_LOGIN` value remains a shared fallback when the provider-specific variable is unset.
+
 `GITLAB_PROJECT_ID` is no longer required for multi-repo runs. When it is omitted, ai-workflow lists all projects visible to `GITLAB_TOKEN` and accepts GitLab merge request webhooks after token verification. When it is set, the webhook route keeps the old single-project filter.
 
 You can configure GitHub and GitLab in the same deployment. Provider credentials are additive.
@@ -64,10 +72,12 @@ In the GitLab project, open **Project Settings -> Webhooks** and add:
 
 - URL: `https://<worker-deployment>/webhooks/gitlab`
 - Secret token: the same value as `GITLAB_WEBHOOK_SECRET`
-- Trigger: **Merge request events** and **Pipeline events**
+- Trigger: **Merge request events**, **Pipeline events**, and **Comments**
 - SSL verification: enabled
 
 **Merge request events** deliver the **Merge Request Hook**, which drives PR/MR creation and reuse. **Pipeline events** deliver the **Pipeline Hook**, which drives the `trigger_pr_checks_failed` workflow trigger (re-run the fix flow when a bot MR's pipeline fails). Without Pipeline events, that trigger never fires.
+
+**Comments** deliver the **Note Hook** used by `trigger_pr_review`. For a review submitted with a summary note, the worker looks up the note author's current reviewer state and maps `requested_changes` to the workflow event. GitLab does not emit a Note Hook when a reviewer requests changes without writing a summary, so a summaryless request cannot trigger this workflow. If the reviewer-state lookup is temporarily unavailable, the webhook returns 503 instead of misclassifying the review as a comment.
 
 Use GitLab's **Secret token** field for now, not the newer **Signing token**
 flow. The worker currently verifies the `X-Gitlab-Token` header.
@@ -83,6 +93,8 @@ After deployment, verify:
 - The merge request shows `blazebot / ...` commit statuses on the head commit.
 - Force-pushing the branch cancels or replaces stale statuses for the previous head commit.
 - Changed files are read from GitLab merge request diffs.
+- A merge request comment dispatches `trigger_pr_review` when that event is enabled.
+- Requesting changes with a review summary dispatches the requested-changes variant; requesting changes without a summary does not.
 
 ## Official references
 
