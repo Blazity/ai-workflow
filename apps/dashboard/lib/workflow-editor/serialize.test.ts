@@ -271,7 +271,7 @@ test("drops retired bespoke reference params while retaining supported arrays", 
   ]);
 });
 
-test("derives compatibility-marker cleanup from the complete replacement binding map", () => {
+test("cleans compatibility markers only for server-validated replacement bindings", () => {
   const nodes = flowNodes([
     {
       id: "finalize",
@@ -291,8 +291,27 @@ test("derives compatibility-marker cleanup from the complete replacement binding
     },
   ]);
 
-  const repaired = serializeWorkflowDefinition(nodes, []);
+  const unrepaired = serializeWorkflowDefinition(nodes, []);
+  assert.deepEqual(unrepaired.nodes.map((node) => node.params), [
+    { legacyRequiredChecks: ["lint"] },
+    { legacyContentFromStep: "dynamic" },
+  ]);
+
+  const repaired = serializeWorkflowDefinition(nodes, [], undefined, {
+    repairedInputsByNode: {
+      finalize: ["checks.lint"],
+      arthur: ["content"],
+    },
+  });
   assert.deepEqual(repaired.nodes.map((node) => node.params), [{}, {}]);
+
+  const invalidReplacement = serializeWorkflowDefinition(nodes, [], undefined, {
+    repairedInputsByNode: { finalize: [] },
+  });
+  assert.deepEqual(invalidReplacement.nodes.map((node) => node.params), [
+    { legacyRequiredChecks: ["lint"] },
+    { legacyContentFromStep: "dynamic" },
+  ]);
 
   const bindingsRemoved = serializeWorkflowDefinition(
     nodes.map((node) => ({ ...node, inputs: {} })),

@@ -24,10 +24,12 @@ export interface BindingEditorRow {
 
 export function paramsAfterBindingRepair(
   node: Pick<WorkflowDefinitionNode, "type" | "params" | "inputs">,
+  validatedInputNames: ReadonlySet<string>,
 ): Record<string, WorkflowParamValue> {
   const params = { ...node.params };
   if (
     node.type === "arthur_injection_check" &&
+    validatedInputNames.has("content") &&
     typeof node.inputs.content === "string" &&
     node.inputs.content.trim() !== ""
   ) {
@@ -38,6 +40,7 @@ export function paramsAfterBindingRepair(
     Array.isArray(params.legacyRequiredChecks)
   ) {
     const remaining = params.legacyRequiredChecks.filter((sourceId) => {
+      if (!validatedInputNames.has(`checks.${sourceId}`)) return true;
       const value = node.inputs[`checks.${sourceId}`];
       return typeof value !== "string" || value.trim() === "";
     });
@@ -59,7 +62,7 @@ export function removeLegacyRequiredCheck(
   return next;
 }
 
-interface BindingEditorInput {
+export interface BindingEditorInput {
   definition: WorkflowDefinition;
   consumerId: string;
   options: WorkflowEditorOptions;
@@ -331,6 +334,21 @@ export function buildBindingEditorRows(input: BindingEditorInput): BindingEditor
       suggestions: bindingSuggestions(input, resolved.input.schema),
     };
   });
+}
+
+/** Returns only current bindings that the authoring model can prove valid with
+ * the server-resolved contracts for this exact graph. Drafts may contain
+ * invalid bindings, so mere presence is never enough to retire a compatibility
+ * marker. */
+export function validatedBindingInputNames(input: BindingEditorInput): string[] {
+  return buildBindingEditorRows(input)
+    .filter(
+      (row) =>
+        !row.legacy &&
+        row.value !== "" &&
+        row.suggestions.some((suggestion) => suggestion === row.value),
+    )
+    .map((row) => row.name);
 }
 
 export function canAddAdditionalInput(

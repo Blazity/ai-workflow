@@ -43,6 +43,7 @@ import {
 } from "@/lib/workflow-editor/validation-controller";
 import { workflowEditorActions } from "@/lib/workflow-editor/editor-actions";
 import { executionLimitsFromDefinition } from "@/lib/workflow-editor/execution-limits";
+import { validatedBindingInputNames } from "@/lib/workflow-editor/binding-options";
 
 interface ValidationRequest {
   definitionId: number;
@@ -162,9 +163,32 @@ export function WorkflowEditorScreen({
             executionLimitsFromDefinition(baselineDraft),
           ),
         );
-  const dirty = baselineSemanticKey === null || semanticKey !== baselineSemanticKey;
   const validationTargetKey = `${selectedId}:${semanticKey}`;
   const validationIsCurrent = validation.key === validationTargetKey;
+  const repairedInputsByNode = validationIsCurrent
+    ? Object.fromEntries(
+        semanticDefinition.nodes.map((node) => [
+          node.id,
+          validatedBindingInputNames({
+            definition: semanticDefinition,
+            consumerId: node.id,
+            options,
+            nodeContracts: validation.state.nodeContracts,
+          }),
+        ]),
+      )
+    : {};
+  const compatibilityRepairPending =
+    validationIsCurrent &&
+    JSON.stringify(
+      serializeSemanticWorkflowDefinition(nodes, edges, budgets, {
+        repairedInputsByNode,
+      }),
+    ) !== semanticKey;
+  const dirty =
+    baselineSemanticKey === null ||
+    semanticKey !== baselineSemanticKey ||
+    compatibilityRepairPending;
   const { canSave, canDeploy } = workflowEditorActions({
     dirty,
     structurallyValid: nodesValid(nodes),
@@ -293,7 +317,9 @@ export function WorkflowEditorScreen({
           method: "PUT",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({
-            definition: serializeWorkflowDefinition(nodes, edges, budgets),
+            definition: serializeWorkflowDefinition(nodes, edges, budgets, {
+              repairedInputsByNode,
+            }),
             expectedDraftRevision: selectedMeta?.draftRevision ?? 0,
           }),
         });

@@ -15,7 +15,14 @@ import { paramsAfterBindingRepair } from "./binding-options";
 // Import it rather than keeping a dashboard copy so the two can never drift (a
 // stale copy previously stripped call_llm's `provider` on save).
 
-function serializeParams(node: FlowNodeDef): Record<string, WorkflowParamValue> {
+export interface WorkflowSerializationOptions {
+  repairedInputsByNode?: Readonly<Record<string, readonly string[]>>;
+}
+
+function serializeParams(
+  node: FlowNodeDef,
+  repairedInputNames: readonly string[],
+): Record<string, WorkflowParamValue> {
   const out: Record<string, WorkflowParamValue> = {};
   for (const key of BLOCK_PARAM_KEYS[node.type]) {
     const value = node.params[key];
@@ -24,13 +31,14 @@ function serializeParams(node: FlowNodeDef): Record<string, WorkflowParamValue> 
     if (typeof value === "string" && value.trim() === "") continue;
     out[key] = value;
   }
-  return paramsAfterBindingRepair({ ...node, params: out });
+  return paramsAfterBindingRepair({ ...node, params: out }, new Set(repairedInputNames));
 }
 
 export function serializeWorkflowDefinition(
   nodes: readonly FlowNodeDef[],
   edges: readonly FlowEdgeDef[],
   budgets: WorkflowExecutionBudgets = {},
+  options: WorkflowSerializationOptions = {},
 ): WorkflowDefinition {
   const typeById = new Map(nodes.map((node) => [node.id, node.type]));
   const hasBudgets = Object.values(budgets).some((value) => value !== undefined);
@@ -43,7 +51,7 @@ export function serializeWorkflowDefinition(
         type: node.type,
         x: Math.round(node.x),
         y: Math.round(node.y),
-        params: serializeParams(node),
+        params: serializeParams(node, options.repairedInputsByNode?.[node.id] ?? []),
         inputs: { ...node.inputs },
       };
       if (node.name !== undefined) serialized.name = node.name;
@@ -68,8 +76,9 @@ export function serializeSemanticWorkflowDefinition(
   nodes: readonly FlowNodeDef[],
   edges: readonly FlowEdgeDef[],
   budgets: WorkflowExecutionBudgets = {},
+  options: WorkflowSerializationOptions = {},
 ): WorkflowDefinition {
-  const definition = serializeWorkflowDefinition(nodes, edges, budgets);
+  const definition = serializeWorkflowDefinition(nodes, edges, budgets, options);
   return {
     ...definition,
     nodes: definition.nodes.map((node) => ({ ...node, x: 0, y: 0 })),

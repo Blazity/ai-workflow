@@ -12,6 +12,7 @@ import {
   canAddAdditionalInput,
   paramsAfterBindingRepair,
   removeLegacyRequiredCheck,
+  validatedBindingInputNames,
 } from "./binding-options.ts";
 
 const stringSchema = { type: "string" } as const;
@@ -202,8 +203,8 @@ test("authoring a replacement binding clears the matching Arthur compatibility m
     inputs: { content: "steps.dynamic.output.value" as const },
   };
 
-  assert.deepEqual(paramsAfterBindingRepair(node), {});
-  assert.deepEqual(paramsAfterBindingRepair({ ...node, inputs: {} }), node.params);
+  assert.deepEqual(paramsAfterBindingRepair(node, new Set(["content"])), {});
+  assert.deepEqual(paramsAfterBindingRepair(node, new Set()), node.params);
 });
 
 test("Finalize marker cleanup is derived from the complete binding map and is reversible", () => {
@@ -216,19 +217,70 @@ test("Finalize marker cleanup is derived from the complete binding map and is re
     inputs: { "checks.lint": "steps.lint.output.status" as const },
   };
 
-  const afterLint = paramsAfterBindingRepair(node);
+  const afterLint = paramsAfterBindingRepair(node, new Set(["checks.lint"]));
   assert.deepEqual(afterLint, { legacyRequiredChecks: ["tests"] });
   assert.deepEqual(
-    paramsAfterBindingRepair({
-      ...node,
-      inputs: {
-        "checks.lint": "steps.lint.output.status" as const,
-        "checks.tests": "steps.tests.output.status" as const,
+    paramsAfterBindingRepair(
+      {
+        ...node,
+        inputs: {
+          "checks.lint": "steps.lint.output.status" as const,
+          "checks.tests": "steps.tests.output.status" as const,
+        },
       },
-    }),
+      new Set(["checks.lint", "checks.tests"]),
+    ),
     {},
   );
-  assert.deepEqual(paramsAfterBindingRepair({ ...node, inputs: {} }), node.params);
+  assert.deepEqual(paramsAfterBindingRepair(node, new Set()), node.params);
+});
+
+test("only graph- and type-valid replacement bindings are eligible to retire legacy markers", () => {
+  const repairDefinition: WorkflowDefinition = {
+    schemaVersion: 1,
+    nodes: [
+      { id: "trigger", type: "trigger_ticket_ai", x: 0, y: 0, params: {}, inputs: {} },
+      { id: "check", type: "run_checks", x: 1, y: 0, params: {}, inputs: {} },
+      {
+        id: "finalize",
+        type: "finalize_workspace",
+        x: 2,
+        y: 0,
+        params: { legacyRequiredChecks: ["check", "missing", "unsupported.dot"] },
+        inputs: {
+          "checks.check": "steps.check.output.status",
+          "checks.missing": "steps.missing.output.status",
+          "checks.unsupported.dot": "steps.check.output.status",
+        },
+      },
+    ],
+    edges: [
+      { from: "trigger", to: "check" },
+      { from: "check", to: "finalize" },
+    ],
+  };
+  const repairOptions = {
+    ...options,
+    blockRegistry: {
+      ...registry,
+      run_checks: contract("run_checks", objectSchema({ status: stringSchema })),
+      finalize_workspace: contract(
+        "finalize_workspace",
+        objectSchema({ status: stringSchema }),
+        {},
+        [{ keyPattern: "^checks\\.[A-Za-z0-9_-]+$", schema: stringSchema }],
+      ),
+    },
+  } as WorkflowEditorOptions;
+
+  assert.deepEqual(
+    validatedBindingInputNames({
+      definition: repairDefinition,
+      consumerId: "finalize",
+      options: repairOptions,
+    }),
+    ["checks.check"],
+  );
 });
 
 test("an unrepresentable legacy check has an explicit removal path", () => {

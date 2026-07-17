@@ -125,8 +125,13 @@ export function BindingFields({
           </div>
           {legacyRequiredChecks.map((sourceId) => {
             const replacement = node.inputs[`checks.${sourceId}`];
-            const replacementBound =
+            const replacementPresent =
               typeof replacement === "string" && replacement.trim() !== "";
+            const replacementRow = rows.find((row) => row.name === `checks.${sourceId}`);
+            const replacementValidated =
+              replacementPresent &&
+              replacementRow?.legacy === false &&
+              replacementRow.suggestions.some((suggestion) => suggestion === replacement);
             return (
               <div
                 key={sourceId}
@@ -135,12 +140,14 @@ export function BindingFields({
                 <div className="min-w-0 flex-1">
                   <div className="font-mono text-[10px] text-amber-950 break-all">{sourceId}</div>
                   <div className="mt-0.5 font-body text-[10px] leading-[1.35] text-amber-800">
-                    {replacementBound
+                    {replacementValidated
                       ? "Replacement binding is set; Save Draft completes this migration."
-                      : "Add a checks.* replacement, or explicitly remove this legacy requirement."}
+                      : replacementPresent
+                        ? "This replacement is not valid for the current graph; correct it or explicitly remove the legacy requirement."
+                        : "Add a checks.* replacement, or explicitly remove this legacy requirement."}
                   </div>
                 </div>
-                {!replacementBound && canEdit && (
+                {!replacementValidated && canEdit && (
                   <button
                     type="button"
                     onClick={() =>
