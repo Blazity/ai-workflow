@@ -266,11 +266,12 @@ export async function openPullRequestsForPublication(input: {
       });
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
-      await recordRecoverablePublicationFailureStep({
+      const concurrent = await failPublicationStep({
         attemptId: attempt.id,
         reason,
         repository: { provider: repository.provider, repoPath: repository.repoPath },
-      }).catch(() => {});
+      });
+      if (concurrent?.status === "published") return publishedResult(concurrent);
       return failedResult(attempt.id, reason, attempt.repositories, prs);
     }
   }
@@ -281,7 +282,14 @@ export async function openPullRequestsForPublication(input: {
     return failedResult(attempt.id, reason, attempt.repositories, []);
   }
 
-  await markPublicationPublishedStep(attempt.id);
+  try {
+    await markPublicationPublishedStep(attempt.id);
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    const concurrent = await failPublicationStep({ attemptId: attempt.id, reason });
+    if (concurrent?.status === "published") return publishedResult(concurrent);
+    return failedResult(attempt.id, reason, attempt.repositories, prs);
+  }
   attempt = (await loadPublicationAttemptStep(attempt.id)) ?? attempt;
   return attempt.status === "published"
     ? publishedResult(attempt)
@@ -325,7 +333,7 @@ async function verifyPullRequestHeadStep(input: {
     );
   }
 }
-verifyPullRequestHeadStep.maxRetries = 0;
+verifyPullRequestHeadStep.maxRetries = 3;
 
 async function markPublicationPushingStep(attemptId: string): Promise<void> {
   "use step";
@@ -511,7 +519,7 @@ async function verifyFinalizedBranchHeadStep(
     );
   }
 }
-verifyFinalizedBranchHeadStep.maxRetries = 0;
+verifyFinalizedBranchHeadStep.maxRetries = 3;
 
 async function markPublicationCreatingPrsStep(attemptId: string): Promise<void> {
   "use step";
@@ -519,7 +527,7 @@ async function markPublicationCreatingPrsStep(attemptId: string): Promise<void> 
   const { markPublicationAttemptCreatingPrs } = await import("../publication/store.js");
   await markPublicationAttemptCreatingPrs(getDb(), attemptId);
 }
-markPublicationCreatingPrsStep.maxRetries = 0;
+markPublicationCreatingPrsStep.maxRetries = 3;
 
 async function recordPullRequestStep(attemptId: string, pr: WorkflowPrLink): Promise<void> {
   "use step";
@@ -532,7 +540,7 @@ async function recordPullRequestStep(attemptId: string, pr: WorkflowPrLink): Pro
     pr: { id: pr.id, url: pr.url, isNew: pr.isNew },
   });
 }
-recordPullRequestStep.maxRetries = 0;
+recordPullRequestStep.maxRetries = 3;
 
 async function markPublicationPublishedStep(attemptId: string): Promise<void> {
   "use step";
@@ -540,7 +548,7 @@ async function markPublicationPublishedStep(attemptId: string): Promise<void> {
   const { markPublicationAttemptPublished } = await import("../publication/store.js");
   await markPublicationAttemptPublished(getDb(), attemptId);
 }
-markPublicationPublishedStep.maxRetries = 0;
+markPublicationPublishedStep.maxRetries = 3;
 
 async function failPublicationStep(input: {
   attemptId: string;
@@ -566,22 +574,6 @@ async function failPublicationStep(input: {
   return failed === false ? getPublicationAttempt(db, input.attemptId) : null;
 }
 failPublicationStep.maxRetries = 3;
-
-async function recordRecoverablePublicationFailureStep(input: {
-  attemptId: string;
-  reason: string;
-  repository: { provider: SelectedRepository["provider"]; repoPath: string };
-}): Promise<void> {
-  "use step";
-  const { getDb } = await import("../db/client.js");
-  const { recordPublicationRepositoryFailure } = await import("../publication/store.js");
-  await recordPublicationRepositoryFailure(getDb(), {
-    attemptId: input.attemptId,
-    ...input.repository,
-    failure: input.reason,
-  });
-}
-recordRecoverablePublicationFailureStep.maxRetries = 0;
 
 function replayedFinalizeResult(attempt: PublicationAttemptRecord): WorkspacePublicationResult {
   if (

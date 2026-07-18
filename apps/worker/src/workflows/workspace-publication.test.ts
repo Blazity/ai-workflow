@@ -891,7 +891,11 @@ describe("openPullRequestsForPublication", () => {
       { db: true },
       expect.objectContaining({ repoPath: "acme/web", failure: expect.stringContaining("newer-head") }),
     );
-    expect(mocks.failPublicationAttempt).not.toHaveBeenCalled();
+    expect(mocks.failPublicationAttempt).toHaveBeenCalledWith(
+      { db: true },
+      "attempt-1",
+      expect.stringContaining("newer-head"),
+    );
   });
 
   it("refuses to record a newly-created PR whose authoritative head moved", async () => {
@@ -956,7 +960,7 @@ describe("openPullRequestsForPublication", () => {
     expect(mocks.createOrFindWorkflowOwnedPullRequest).not.toHaveBeenCalled();
   });
 
-  it("retains an earlier PR result if a later provider PR creation fails", async () => {
+  it("retains an earlier PR result and terminally records exhausted later PR creation", async () => {
     mocks.getPublicationAttempt.mockResolvedValue(attempt({ status: "finalized" }));
     mocks.createOrFindWorkflowOwnedPullRequest
       .mockResolvedValueOnce({
@@ -980,10 +984,14 @@ describe("openPullRequestsForPublication", () => {
     expect(publication.prs).toHaveLength(1);
     expect(mocks.recordPublicationPullRequest).toHaveBeenCalledTimes(1);
     expect(mocks.recordWorkflowOwnedPullRequest).toHaveBeenCalledTimes(1);
-    expect(mocks.failPublicationAttempt).not.toHaveBeenCalled();
+    expect(mocks.failPublicationAttempt).toHaveBeenCalledWith(
+      { db: true },
+      "attempt-1",
+      "GitLab unavailable",
+    );
   });
 
-  it("leaves PR creation resumable when the provider result cannot be recorded", async () => {
+  it("terminally records PR creation when the provider result cannot be recorded after retries", async () => {
     mocks.getPublicationAttempt.mockResolvedValue(
       attempt({ status: "creating_prs", repositories: [repository("github", "acme/web")] }),
     );
@@ -1008,7 +1016,11 @@ describe("openPullRequestsForPublication", () => {
     expect(publication.prs).toEqual([
       expect.objectContaining({ repoPath: "acme/web", id: 12 }),
     ]);
-    expect(mocks.failPublicationAttempt).not.toHaveBeenCalled();
+    expect(mocks.failPublicationAttempt).toHaveBeenCalledWith(
+      { db: true },
+      "attempt-1",
+      "database unavailable",
+    );
     expect(mocks.recordWorkflowOwnedPullRequest).not.toHaveBeenCalled();
   });
 
@@ -1036,6 +1048,36 @@ describe("openPullRequestsForPublication", () => {
     expect(mocks.createOrFindWorkflowOwnedPullRequest).not.toHaveBeenCalled();
     expect(mocks.recordWorkflowOwnedPullRequest).toHaveBeenCalledWith(
       expect.objectContaining({ ticketKey: "AIW-100", pr: expect.objectContaining({ id: 12 }) }),
+    );
+  });
+
+  it("terminally records publication when the final published ledger write exhausts retries", async () => {
+    const creating = attempt({
+      status: "creating_prs",
+      repositories: [
+        repository("github", "acme/web", {
+          pr: { id: 12, url: "https://github.com/acme/web/pull/12", isNew: true },
+        }),
+      ],
+    });
+    mocks.getPublicationAttempt.mockResolvedValue(creating);
+    mocks.markPublicationAttemptPublished.mockRejectedValue(new Error("database unavailable"));
+
+    const publication = await openPullRequestsForPublication({
+      attemptId: "attempt-1",
+      runId: "run-1",
+      ticketKey: "AIW-100",
+      title: "Safe publication",
+    });
+
+    expect(publication.status).toBe("failed");
+    expect(publication.status === "failed" ? publication.reason : "").toContain(
+      "database unavailable",
+    );
+    expect(mocks.failPublicationAttempt).toHaveBeenCalledWith(
+      { db: true },
+      "attempt-1",
+      "database unavailable",
     );
   });
 

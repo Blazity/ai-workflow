@@ -23,7 +23,7 @@ export async function createOrFindWorkflowOwnedPullRequest(input: {
   const { isRepoAllowed } = await import("../lib/repo-allowlist.js");
   return resolveWorkflowOwnedPullRequest(input, createRepositoryVCS, isRepoAllowed);
 }
-createOrFindWorkflowOwnedPullRequest.maxRetries = 0;
+createOrFindWorkflowOwnedPullRequest.maxRetries = 3;
 
 /** Idempotent correlation phase run after the publication ledger contains the
  * provider PR result. Safe to repeat when a prior branch-record write failed. */
@@ -50,7 +50,7 @@ export async function recordWorkflowOwnedPullRequest(input: {
     },
   });
 }
-recordWorkflowOwnedPullRequest.maxRetries = 0;
+recordWorkflowOwnedPullRequest.maxRetries = 3;
 
 export async function prepareSelectedRepositoryBranches(
   ticketKey: string,
