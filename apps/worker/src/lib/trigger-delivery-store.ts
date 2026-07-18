@@ -21,7 +21,14 @@ export interface AcceptedTriggerDelivery extends TriggerEvent {
 export type StoredTriggerResult =
   | { result: "started"; runId: string }
   | { result: "candidate_started"; runId: string }
-  | { result: "coalesced" | "at_capacity" | "error" | "ignored_stale_head" };
+  | {
+      result:
+        | "coalesced"
+        | "at_capacity"
+        | "error"
+        | "ignored_stale_head"
+        | "ignored_not_workflow_owned";
+    };
 
 export interface StoredTriggerDelivery extends AcceptedTriggerDelivery {
   status: string;

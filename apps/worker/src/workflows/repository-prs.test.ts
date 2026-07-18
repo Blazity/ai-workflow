@@ -23,6 +23,7 @@ import {
   createOrUseWorkflowOwnedPullRequestsForRepos,
   prepareSelectedRepositoryBranches,
   recordWorkflowOwnedPullRequest,
+  recordWorkflowOwnedPullRequestIntent,
 } from "./repository-prs.js";
 
 describe("prepareSelectedRepositoryBranches", () => {
@@ -268,6 +269,27 @@ describe("durable publication PR phases", () => {
 
     expect(pr).toEqual(expect.objectContaining({ id: 46, repoPath: "acme/api" }));
     expect(mocks.upsertWorkflowOwnedBranch).not.toHaveBeenCalled();
+  });
+
+  it("records an exact branch/head intent before the provider PR id is known", async () => {
+    await recordWorkflowOwnedPullRequestIntent({
+      ticketKey: "AIW-100",
+      provider: "github",
+      repoPath: "acme/api",
+      branchName: "blazebot/aiw-100",
+      publishedHeadSha: "published-sha",
+    });
+
+    expect(mocks.upsertWorkflowOwnedBranch).toHaveBeenCalledWith(
+      { db: true },
+      {
+        ticketKey: "AIW-100",
+        provider: "github",
+        repoPath: "acme/api",
+        branchName: "blazebot/aiw-100",
+        publishedHeadSha: "published-sha",
+      },
+    );
   });
 
   it("records workflow-owned branch correlation as a separate idempotent phase", async () => {

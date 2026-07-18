@@ -1,7 +1,10 @@
 import { start } from "workflow/api";
 import type { VcsProviderKind } from "@shared/contracts";
 import type { Db } from "../db/client.js";
-import type { IssueTrackerAdapter } from "../adapters/issue-tracker/types.js";
+import {
+  IssueTrackerNotFoundError,
+  type IssueTrackerAdapter,
+} from "../adapters/issue-tracker/types.js";
 import type { RunRegistryAdapter } from "../adapters/run-registry/types.js";
 import type {
   LatestCheckRun,
@@ -10,7 +13,10 @@ import type {
 } from "../adapters/vcs/types.js";
 import type { AgentWorkflowInput, PrTriggerPayload } from "../workflows/agent-input.js";
 import { agentWorkflow } from "../workflows/agent.js";
-import { findWorkflowOwnedPullRequest } from "../db/queries/workflow-owned-branches.js";
+import {
+  findWorkflowOwnedPullRequest,
+  findWorkflowOwnedPullRequestIntent,
+} from "../db/queries/workflow-owned-branches.js";
 import { getEnabledWorkflowDefinitionForTrigger } from "../workflow-definition/store.js";
 import { createAdapters } from "./adapters.js";
 import { claimSubjectRun } from "./dispatch.js";
@@ -146,7 +152,8 @@ export async function dispatchTriggerEvent(
   }
 
   const identity = await resolveSubjectIdentity(currentEvent, scope, deps);
-  if (!identity) return { result: "ignored_not_workflow_owned" };
+  if (identity.status === "ignored") return { result: "ignored_not_workflow_owned" };
+  if (identity.status === "retryable_error") return { result: "error" };
 
   const accepted: AcceptedTriggerDelivery = {
     ...currentEvent,
@@ -164,6 +171,7 @@ export async function dispatchTriggerEvent(
         ? resumeAcceptedTrigger(durable.stored, deps)
         : storedResultToDispatch(durable.stored.result);
     }
+    if (identity.status === "pending_correlation") return { result: "error" };
     return await dispatchAcceptedTrigger(accepted, deps);
   } catch (error) {
     logger.warn(
@@ -184,6 +192,22 @@ async function resumeAcceptedTrigger(
   if (!currentAccepted) {
     await completeAccepted(deps.db, accepted, { result: "ignored_stale_head" });
     return { result: "ignored_stale_head" };
+  }
+  if (currentAccepted.scope === "workflow_owned") {
+    const identity = await resolveSubjectIdentity(currentAccepted, currentAccepted.scope, deps);
+    if (identity.status === "pending_correlation" || identity.status === "retryable_error") {
+      return { result: "error" };
+    }
+    if (
+      identity.status === "ignored" ||
+      identity.subjectKey !== currentAccepted.subjectKey ||
+      identity.ticketKey !== currentAccepted.ticketKey
+    ) {
+      await completeAccepted(deps.db, currentAccepted, {
+        result: "ignored_not_workflow_owned",
+      });
+      return { result: "ignored_not_workflow_owned" };
+    }
   }
   return dispatchAcceptedTrigger(currentAccepted, deps);
 }
@@ -375,9 +399,18 @@ async function resolveSubjectIdentity(
   event: TriggerEvent,
   scope: TriggerScope,
   deps: DispatchTriggerDeps,
-): Promise<{ subjectKey: string; ticketKey: string | null } | null> {
+): Promise<
+  | {
+      status: "resolved" | "pending_correlation";
+      subjectKey: string;
+      ticketKey: string | null;
+    }
+  | { status: "ignored" }
+  | { status: "retryable_error" }
+> {
   if (scope === "any") {
     return {
+      status: "resolved",
       subjectKey: prSubjectKey(event.pr.provider, event.pr.repoPath, event.pr.prNumber),
       ticketKey: null,
     };
@@ -390,20 +423,51 @@ async function resolveSubjectIdentity(
     branchName: event.pr.headRef,
     publishedHeadSha: event.pr.headSha,
   });
-  if (!correlation) return null;
+  if (correlation) {
+    return resolveTicketIdentity(correlation.ticketKey, "resolved", deps);
+  }
 
+  const intent = await findWorkflowOwnedPullRequestIntent(deps.db, {
+    provider: event.pr.provider,
+    repoPath: event.pr.repoPath,
+    branchName: event.pr.headRef,
+    publishedHeadSha: event.pr.headSha,
+  });
+  if (!intent || intent.pr) return { status: "ignored" };
+  return resolveTicketIdentity(intent.ticketKey, "pending_correlation", deps);
+}
+
+async function resolveTicketIdentity(
+  ticketKey: string,
+  status: "resolved" | "pending_correlation",
+  deps: DispatchTriggerDeps,
+): Promise<
+  | {
+      status: "resolved" | "pending_correlation";
+      subjectKey: string;
+      ticketKey: string;
+    }
+  | { status: "ignored" }
+  | { status: "retryable_error" }
+> {
   try {
     const issueTracker = deps.issueTracker ?? createAdapters().issueTracker;
-    const ticket = await issueTracker.fetchTicket(correlation.ticketKey);
-    if (ticket.identifier.trim().toUpperCase() !== correlation.ticketKey.trim().toUpperCase()) {
-      return null;
+    const ticket = await issueTracker.fetchTicket(ticketKey);
+    if (ticket.identifier.trim().toUpperCase() !== ticketKey.trim().toUpperCase()) {
+      return { status: "ignored" };
     }
     return {
-      subjectKey: ticketSubjectKey("jira", correlation.ticketKey),
-      ticketKey: correlation.ticketKey,
+      status,
+      subjectKey: ticketSubjectKey("jira", ticketKey),
+      ticketKey,
     };
-  } catch {
-    return null;
+  } catch (error) {
+    if (error instanceof IssueTrackerNotFoundError) return { status: "ignored" };
+    logger.warn(
+      { ticketKey, error: (error as Error).message },
+      "trigger_ticket_identity_lookup_retryable_failure",
+    );
+    return { status: "retryable_error" };
   }
 }
 
@@ -498,6 +562,9 @@ function storedResultToDispatch(result: StoredTriggerResult | null): DispatchTri
     return { result: "started", runId: result.runId };
   }
   if (result.result === "ignored_stale_head") return { result: "ignored_stale_head" };
+  if (result.result === "ignored_not_workflow_owned") {
+    return { result: "ignored_not_workflow_owned" };
+  }
   if (result.result === "at_capacity") return { result: "at_capacity" };
   if (result.result === "error") return { result: "error" };
   return { result: "coalesced" };

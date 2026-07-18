@@ -13,6 +13,7 @@ import type {
 import {
   createOrFindWorkflowOwnedPullRequest,
   recordWorkflowOwnedPullRequest,
+  recordWorkflowOwnedPullRequestIntent,
   type WorkflowPrLink,
 } from "./repository-prs.js";
 
@@ -246,6 +247,13 @@ export async function openPullRequestsForPublication(input: {
     let pr = repository.pr ? prLinkFromRepository(repository) : null;
     try {
       await verifyFinalizedBranchHeadStep(repository);
+      await recordWorkflowOwnedPullRequestIntent({
+        ticketKey: input.ticketKey,
+        provider: repository.provider,
+        repoPath: repository.repoPath,
+        branchName: repository.branchName,
+        publishedHeadSha: repository.pushedHead!,
+      });
       pr ??= await createOrFindWorkflowOwnedPullRequest({
         branchName: repository.branchName,
         repository: selectedRepositoryFromAttempt(repository),

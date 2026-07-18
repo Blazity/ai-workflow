@@ -7,6 +7,7 @@ import {
 import { createTestDb } from "../db/test-db.js";
 import { upsertWorkflowOwnedBranch } from "../db/queries/workflow-owned-branches.js";
 import { PostgresRunRegistry } from "../adapters/run-registry/postgres.js";
+import { IssueTrackerNotFoundError } from "../adapters/issue-tracker/types.js";
 import type { TriggerEvent } from "./trigger-events.js";
 import {
   acceptTriggerDelivery,
@@ -661,13 +662,105 @@ describe("dispatchTriggerEvent durable envelope", () => {
     expect(mockStart).not.toHaveBeenCalled();
   });
 
-  it("rejects a durable correlation whose ticket lookup is invalid", async () => {
+  it("rejects a durable correlation whose ticket no longer exists", async () => {
     await correlate();
     mockGetEnabled.mockResolvedValue(enabled());
-    const issueTracker = { fetchTicket: vi.fn().mockRejectedValue(new Error("not found")) };
+    const issueTracker = {
+      fetchTicket: vi.fn().mockRejectedValue(new IssueTrackerNotFoundError("ticket", "AIW-1")),
+    };
     const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
     expect(await dispatchTriggerEvent(event(), deps({ issueTracker }))).toEqual({
       result: "ignored_not_workflow_owned",
+    });
+    expect(mockStart).not.toHaveBeenCalled();
+  });
+
+  it("returns a retryable error when the correlated ticket lookup is temporarily unavailable", async () => {
+    await correlate();
+    mockGetEnabled.mockResolvedValue(enabled());
+    const issueTracker = {
+      fetchTicket: vi.fn().mockRejectedValue(new Error("Jira unavailable")),
+    };
+    const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
+
+    expect(await dispatchTriggerEvent(event(), deps({ issueTracker }))).toEqual({
+      result: "error",
+    });
+    expect(await getTriggerDelivery(db, "github", "delivery-1")).toBeNull();
+    expect(mockStart).not.toHaveBeenCalled();
+  });
+
+  it("holds a PR-created delivery until its exact provider PR correlation is durable", async () => {
+    await upsertWorkflowOwnedBranch(db, {
+      ticketKey: "AIW-1",
+      provider: "github",
+      repoPath: "acme/app",
+      branchName: "feature/owned",
+      publishedHeadSha: "abc123",
+    });
+    mockGetEnabled.mockResolvedValue(enabled());
+    const { dispatchTriggerEvent, recoverAcceptedTriggerDelivery } = await import(
+      "./dispatch-trigger.js"
+    );
+
+    await expect(dispatchTriggerEvent(event(), deps())).resolves.toEqual({ result: "error" });
+    await expect(getTriggerDelivery(db, "github", "delivery-1")).resolves.toMatchObject({
+      status: "accepted",
+      result: null,
+      subjectKey: "ticket:jira:AIW-1",
+      ticketKey: "AIW-1",
+      pr: expect.objectContaining({ prNumber: 7, headSha: "abc123" }),
+    });
+    expect(mockStart).not.toHaveBeenCalled();
+
+    await correlate();
+
+    const metrics = await recoverAcceptedTriggerDeliveries({
+      listDeliveries: () =>
+        listRecoverableAcceptedTriggerDeliveries(db, new Date(Date.now() + 60_000)),
+      getActive: (subjectKey) => registry.get(subjectKey),
+      resume: (stored) => recoverAcceptedTriggerDelivery(stored, deps()),
+    });
+
+    expect(metrics).toMatchObject({ scanned: 1, attempted: 1, started: 1, errors: 0 });
+    expect(mockStart).toHaveBeenCalledOnce();
+  });
+
+  it("never dispatches a held PR-created delivery for a different provider PR id", async () => {
+    await upsertWorkflowOwnedBranch(db, {
+      ticketKey: "AIW-1",
+      provider: "github",
+      repoPath: "acme/app",
+      branchName: "feature/owned",
+      publishedHeadSha: "abc123",
+    });
+    mockGetEnabled.mockResolvedValue(enabled());
+    const { dispatchTriggerEvent, recoverAcceptedTriggerDelivery } = await import(
+      "./dispatch-trigger.js"
+    );
+    await expect(dispatchTriggerEvent(event(), deps())).resolves.toEqual({ result: "error" });
+
+    await upsertWorkflowOwnedBranch(db, {
+      ticketKey: "AIW-1",
+      provider: "github",
+      repoPath: "acme/app",
+      branchName: "feature/owned",
+      publishedHeadSha: "abc123",
+      pr: {
+        id: 8,
+        url: "https://github.com/acme/app/pull/8",
+        branch: "feature/owned",
+      },
+    });
+    const held = await getTriggerDelivery(db, "github", "delivery-1");
+    expect(held).not.toBeNull();
+
+    await expect(recoverAcceptedTriggerDelivery(held!, deps())).resolves.toEqual({
+      result: "ignored_not_workflow_owned",
+    });
+    await expect(getTriggerDelivery(db, "github", "delivery-1")).resolves.toMatchObject({
+      status: "completed",
+      result: { result: "ignored_not_workflow_owned" },
     });
     expect(mockStart).not.toHaveBeenCalled();
   });

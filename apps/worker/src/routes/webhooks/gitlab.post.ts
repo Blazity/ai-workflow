@@ -200,21 +200,23 @@ async function gitLabProjectIsAllowed(project: GitLabProject): Promise<boolean> 
     return projectMatchesConfiguredId(project, env.GITLAB_PROJECT_ID);
   }
 
-  const gitLabProviders = getConfiguredVcsProviders().filter((provider) => provider.kind === "gitlab");
-  if (gitLabProviders.length === 0) return false;
-
   try {
+    const gitLabProviders = getConfiguredVcsProviders().filter(
+      (provider) => provider.kind === "gitlab",
+    );
+    if (gitLabProviders.length === 0) return false;
     const repositories = await createRepositoryDirectoryForProviders(gitLabProviders).listRepositories();
     return repositories.some(
       (repo) => repo.provider === "gitlab" && repo.repoPath === project.path_with_namespace,
     );
   } catch (err) {
-    // Fail closed: if we cannot confirm the project is in scope, deny the event
-    // rather than letting an unverified project through to dispatch/gate.
     logger.warn(
       { err: (err as Error).message, project },
       "post_pr_gate_gitlab_webhook_scope_check_failed_closed",
     );
-    return false;
+    throw createError({
+      statusCode: 503,
+      statusMessage: "gitlab_repository_scope_unavailable",
+    });
   }
 }

@@ -107,3 +107,44 @@ export async function findWorkflowOwnedPullRequest(
     pr: { id: row.prId, url: row.prUrl, branch: row.prBranchName },
   };
 }
+
+/**
+ * Find the exact workflow-owned branch/head that may be about to receive a PR.
+ * PR identity is intentionally not part of this lookup: callers must treat a
+ * row without matching PR metadata as an intent only, never as authorization
+ * to dispatch.
+ */
+export async function findWorkflowOwnedPullRequestIntent(
+  db: Db,
+  input: {
+    provider: VcsProvider;
+    repoPath: string;
+    branchName: string;
+    publishedHeadSha: string;
+  },
+): Promise<WorkflowOwnedBranchRecord | null> {
+  const rows = await db
+    .select()
+    .from(workflowOwnedBranches)
+    .where(
+      and(
+        eq(workflowOwnedBranches.provider, input.provider),
+        eq(workflowOwnedBranches.repoPath, input.repoPath),
+        eq(workflowOwnedBranches.branchName, input.branchName),
+        eq(workflowOwnedBranches.publishedHeadSha, input.publishedHeadSha),
+      ),
+    )
+    .limit(1);
+  const row = rows[0];
+  if (!row) return null;
+  return {
+    ticketKey: row.ticketKey,
+    provider: row.provider as VcsProvider,
+    repoPath: row.repoPath,
+    branchName: row.branchName,
+    publishedHeadSha: row.publishedHeadSha ?? undefined,
+    ...(row.prId !== null && row.prUrl && row.prBranchName
+      ? { pr: { id: row.prId, url: row.prUrl, branch: row.prBranchName } }
+      : {}),
+  };
+}

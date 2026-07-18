@@ -52,6 +52,25 @@ export async function recordWorkflowOwnedPullRequest(input: {
 }
 recordWorkflowOwnedPullRequest.maxRetries = 3;
 
+/** Persist the exact trusted branch/head before asking the provider to create
+ * a PR. A concurrent PR-created webhook can then be held durably until the
+ * provider-assigned PR id is correlated by recordWorkflowOwnedPullRequest. */
+export async function recordWorkflowOwnedPullRequestIntent(input: {
+  ticketKey: string;
+  provider: SelectedRepository["provider"];
+  repoPath: string;
+  branchName: string;
+  publishedHeadSha: string;
+}): Promise<void> {
+  "use step";
+  const { getDb } = await import("../db/client.js");
+  const { upsertWorkflowOwnedBranch } = await import(
+    "../db/queries/workflow-owned-branches.js"
+  );
+  await upsertWorkflowOwnedBranch(getDb(), input);
+}
+recordWorkflowOwnedPullRequestIntent.maxRetries = 0;
+
 export async function prepareSelectedRepositoryBranches(
   ticketKey: string,
   branchName: string,

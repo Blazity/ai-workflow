@@ -5,6 +5,7 @@ import type { WorkspaceManifest } from "../sandbox/repo-workspace.js";
 const mocks = vi.hoisted(() => ({
   publishTrustedWorkspaceFromSandbox: vi.fn(),
   createOrFindWorkflowOwnedPullRequest: vi.fn(),
+  recordWorkflowOwnedPullRequestIntent: vi.fn(),
   recordWorkflowOwnedPullRequest: vi.fn(),
   writeHumanDecisionsMemory: vi.fn(),
   createRepositoryVcsRuntime: vi.fn(),
@@ -30,6 +31,7 @@ vi.mock("../sandbox/write-human-decisions-memory.js", () => ({
 }));
 vi.mock("./repository-prs.js", () => ({
   createOrFindWorkflowOwnedPullRequest: mocks.createOrFindWorkflowOwnedPullRequest,
+  recordWorkflowOwnedPullRequestIntent: mocks.recordWorkflowOwnedPullRequestIntent,
   recordWorkflowOwnedPullRequest: mocks.recordWorkflowOwnedPullRequest,
 }));
 vi.mock("../lib/vcs-runtime.js", () => ({
@@ -844,6 +846,7 @@ describe("openPullRequestsForPublication", () => {
 
     expect(publication.status).toBe("published");
     expect(mocks.publishTrustedWorkspaceFromSandbox).not.toHaveBeenCalled();
+    expect(mocks.recordWorkflowOwnedPullRequestIntent).toHaveBeenCalledTimes(2);
     expect(mocks.createOrFindWorkflowOwnedPullRequest).toHaveBeenCalledTimes(2);
     expect(mocks.recordPublicationPullRequest).toHaveBeenCalledTimes(2);
     expect(mocks.recordWorkflowOwnedPullRequest).toHaveBeenCalledTimes(2);
@@ -853,6 +856,16 @@ describe("openPullRequestsForPublication", () => {
     expect(mocks.recordPublicationPullRequest.mock.invocationCallOrder[1]).toBeLessThan(
       mocks.recordWorkflowOwnedPullRequest.mock.invocationCallOrder[1],
     );
+    expect(mocks.recordWorkflowOwnedPullRequestIntent.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.createOrFindWorkflowOwnedPullRequest.mock.invocationCallOrder[0],
+    );
+    expect(mocks.recordWorkflowOwnedPullRequestIntent).toHaveBeenNthCalledWith(1, {
+      ticketKey: "AIW-100",
+      provider: "github",
+      repoPath: "acme/web",
+      branchName: "blazebot/aiw-100",
+      publishedHeadSha: "acme/web-after",
+    });
     expect(mocks.markPublicationAttemptPublished).toHaveBeenCalledWith({ db: true }, "attempt-1");
   });
 
