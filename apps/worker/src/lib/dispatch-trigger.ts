@@ -63,6 +63,7 @@ export interface DispatchTriggerDeps {
   getCurrentHead?: (pr: PrTriggerPayload) => Promise<string>;
   getCurrentPullRequest?: (pr: PrTriggerPayload) => Promise<PullRequestHead>;
   getLatestCheckRuns?: (pr: PrTriggerPayload) => Promise<LatestCheckRun[]>;
+  isRepositoryConfigured?: (pr: PrTriggerPayload) => Promise<boolean>;
   /** Failure-injection seam; production uses deletePendingTrigger. */
   deletePending?: typeof deletePendingTrigger;
 }
@@ -177,6 +178,11 @@ async function enrichReceivedTrigger(
   deps: DispatchTriggerDeps,
 ): Promise<DispatchTriggerResult> {
   const event = triggerEventFromStored(received);
+  const repositoryScope = await readRepositoryScope(event.pr, deps);
+  if (repositoryScope.status === "unreachable") return { result: "error" };
+  if (!repositoryScope.configured) {
+    return completeReceivedDelivery(received, { result: "ignored_provider" }, deps);
+  }
   const currentResult = await readCurrentPullRequest(event.pr, deps);
   if (currentResult.status === "unreachable") return { result: "error" };
   const currentEvent = bindCurrentPullRequest(event, currentResult.current);
@@ -216,6 +222,49 @@ async function enrichReceivedTrigger(
   }
   if (identity.status === "pending_correlation") return { result: "error" };
   return dispatchAcceptedTrigger(accepted, deps);
+}
+
+async function readRepositoryScope(
+  pr: PrTriggerPayload,
+  deps: DispatchTriggerDeps,
+): Promise<{ status: "ok"; configured: boolean } | { status: "unreachable" }> {
+  try {
+    const configured = deps.isRepositoryConfigured
+      ? await deps.isRepositoryConfigured(pr)
+      : await isConfiguredTriggerRepository(pr);
+    return { status: "ok", configured };
+  } catch (error) {
+    logger.warn(
+      { provider: pr.provider, repoPath: pr.repoPath, error: (error as Error).message },
+      "trigger_repository_scope_lookup_failed_closed",
+    );
+    return { status: "unreachable" };
+  }
+}
+
+async function isConfiguredTriggerRepository(pr: PrTriggerPayload): Promise<boolean> {
+  if (pr.provider !== "gitlab") return true;
+  const { env, getConfiguredVcsProviders } = await import("../../env.js");
+  if (env.GITLAB_PROJECT_ID) {
+    return (
+      pr.repoPath === env.GITLAB_PROJECT_ID ||
+      String(pr.providerProjectId ?? "") === env.GITLAB_PROJECT_ID
+    );
+  }
+  const { createRepositoryDirectoryForProviders } = await import(
+    "../adapters/vcs/repository-directory.js"
+  );
+  const providers = getConfiguredVcsProviders().filter(
+    (provider) => provider.kind === "gitlab",
+  );
+  if (providers.length === 0) return false;
+  const repositories = await createRepositoryDirectoryForProviders(
+    providers,
+  ).listRepositories();
+  return repositories.some(
+    (repository) =>
+      repository.provider === "gitlab" && repository.repoPath === pr.repoPath,
+  );
 }
 
 async function completeReceivedDelivery(
@@ -649,6 +698,7 @@ function storedResultToDispatch(result: StoredTriggerResult | null): DispatchTri
   if (result.result === "ignored_not_workflow_owned") {
     return { result: "ignored_not_workflow_owned" };
   }
+  if (result.result === "ignored_provider") return { result: "ignored_provider" };
   if (result.result === "at_capacity") return { result: "at_capacity" };
   if (result.result === "error") return { result: "error" };
   return { result: "coalesced" };

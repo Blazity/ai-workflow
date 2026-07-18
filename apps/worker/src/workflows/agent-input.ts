@@ -6,6 +6,8 @@
 export interface PrTriggerPayload {
   provider: "github" | "gitlab";
   repoPath: string;
+  /** GitLab project identity retained so deferred scope checks can be replayed. */
+  providerProjectId?: number | string;
   prNumber: number;
   prUrl: string;
   headRef: string;

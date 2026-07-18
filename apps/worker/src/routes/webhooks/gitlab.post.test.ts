@@ -131,7 +131,7 @@ function validNotePayload(overrides: Record<string, any> = {}): string {
 
 describe("POST /webhooks/gitlab", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
     mocks.env.GITLAB_PROJECT_ID = undefined;
     mocks.env.GITLAB_BOT_LOGIN = undefined;
     mocks.getVcsBotLogin.mockReturnValue("blazebot");
@@ -361,8 +361,33 @@ describe("POST /webhooks/gitlab", () => {
     const response = await makeApp()(makeRequest(validMergeRequestPayload()));
 
     expect(response.status).toBe(503);
-    expect(mockDispatchTriggerEvent).not.toHaveBeenCalled();
+    expect(mockDispatchTriggerEvent).toHaveBeenCalledOnce();
     expect(mockDispatchPostPrGateWebhook).not.toHaveBeenCalled();
+  });
+
+  it("hands an authenticated normalized trigger to durable dispatch before installed-repo lookup", async () => {
+    const payload = JSON.parse(validMergeRequestPayload());
+    payload.object_attributes.action = "merge";
+    mocks.listRepositories.mockRejectedValueOnce(new Error("GitLab unavailable"));
+    mockDispatchTriggerEvent.mockResolvedValueOnce({ result: "started", runId: "run_merge" });
+
+    const response = await makeApp()(makeRequest(JSON.stringify(payload)));
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      status: "dispatched",
+      runId: "run_merge",
+    });
+    expect(mockDispatchTriggerEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pr: expect.objectContaining({
+          repoPath: "group/demo",
+          providerProjectId: 123,
+        }),
+      }),
+      expect.anything(),
+    );
+    expect(mocks.listRepositories).not.toHaveBeenCalled();
   });
 
   it("returns a retryable failure when configured GitLab providers cannot be resolved", async () => {
@@ -374,7 +399,7 @@ describe("POST /webhooks/gitlab", () => {
 
     expect(response.status).toBe(503);
     expect(mocks.listRepositories).not.toHaveBeenCalled();
-    expect(mockDispatchTriggerEvent).not.toHaveBeenCalled();
+    expect(mockDispatchTriggerEvent).toHaveBeenCalledOnce();
     expect(mockDispatchPostPrGateWebhook).not.toHaveBeenCalled();
   });
 

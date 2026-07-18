@@ -32,6 +32,7 @@ export type StoredTriggerResult =
         | "coalesced"
         | "at_capacity"
         | "error"
+        | "ignored_provider"
         | "ignored_stale_head"
         | "ignored_not_workflow_owned";
     };

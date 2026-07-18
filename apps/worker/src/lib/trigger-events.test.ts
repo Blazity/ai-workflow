@@ -399,6 +399,7 @@ describe("normalizeGitLabEvent", () => {
       pr: {
         provider: "gitlab",
         repoPath: "group/demo",
+        providerProjectId: 1,
         prNumber: 42,
         prUrl: "https://gitlab.com/group/demo/-/merge_requests/42",
         headRef: "blazebot/aiw-3",

@@ -20,7 +20,6 @@ import { logger } from "../../lib/logger.js";
 import { dispatchPostPrGateWebhook } from "../../lib/post-pr-gate-dispatch.js";
 import { isRepoAllowed } from "../../lib/repo-allowlist.js";
 import { normalizeGitLabEvent } from "../../lib/trigger-events.js";
-import { vcsLoginsMatch } from "../../lib/vcs-bot-identity.js";
 
 const ALLOWED_ACTIONS = new Set(["opened", "update", "reopened"]);
 
@@ -57,17 +56,14 @@ export default defineEventHandler(async (event) => {
     return { status: "ignored", reason: "note_ignored" };
   }
 
+  const localScope = checkLocalProjectScope(body);
+  if (localScope) return localScope;
+
   const needsReviewFilter = gitLabEvent === "Note Hook";
   const botUsername = getVcsBotLogin("gitlab");
   const reviewStates = needsReviewFilter
     ? await resolveEnabledReviewStates(getDb(), "gitlab", botUsername)
     : undefined;
-  let projectChecked = false;
-  if (gitLabEvent === "Note Hook" && isEligibleMergeRequestNote(body, botUsername)) {
-    const scope = await checkProjectScope(body);
-    if (scope) return scope;
-    projectChecked = true;
-  }
   const evt = normalizeGitLabEvent(gitLabEvent, body, {
     deliveryId,
     botUsername,
@@ -75,11 +71,6 @@ export default defineEventHandler(async (event) => {
   });
 
   if (evt) {
-    if (!projectChecked) {
-      const scope = await checkProjectScope(body);
-      if (scope) return scope;
-    }
-
     const db = getDb();
     const result = await dispatchTriggerEvent(evt, {
       db,
@@ -96,7 +87,7 @@ export default defineEventHandler(async (event) => {
         result.result === "ignored_not_workflow_owned" ||
         result.result === "ignored_provider")
     ) {
-      return dispatchMergeRequestGate(body, true);
+      return dispatchMergeRequestGate(body);
     }
     if (evt.triggerType === "trigger_pr_created" && ticketKeyFromBranch(evt.pr.headRef)) {
       logger.info(
@@ -108,7 +99,7 @@ export default defineEventHandler(async (event) => {
   }
 
   if (gitLabEvent === "Merge Request Hook") {
-    return dispatchMergeRequestGate(body, false);
+    return dispatchMergeRequestGate(body);
   }
   if (gitLabEvent === "Note Hook") {
     return { status: "ignored", reason: "note_ignored" };
@@ -116,7 +107,7 @@ export default defineEventHandler(async (event) => {
   return { status: "ignored", reason: "pipeline_ignored" };
 });
 
-async function dispatchMergeRequestGate(body: any, projectChecked: boolean) {
+async function dispatchMergeRequestGate(body: any) {
   let normalized;
   try {
     normalized = normalizeGitLabMergeRequestEvent(body);
@@ -128,10 +119,8 @@ async function dispatchMergeRequestGate(body: any, projectChecked: boolean) {
     return { status: "ignored", reason: `action_${normalized.action}` };
   }
 
-  if (!projectChecked) {
-    const scope = await checkProjectScope(body);
-    if (scope) return scope;
-  }
+  const scope = await checkProjectScope(body);
+  if (scope) return scope;
 
   return dispatchPostPrGateWebhook(normalized);
 }
@@ -149,20 +138,24 @@ async function checkProjectScope(
   return null;
 }
 
-function isEligibleMergeRequestNote(body: any, botUsername: string | undefined): boolean {
-  const attrs = body?.object_attributes;
-  const producer = body?.user?.username ?? body?.user?.name;
-  return Boolean(
-    body?.object_kind === "note" &&
-      attrs &&
-      body?.merge_request &&
-      body?.project &&
-      attrs.action === "create" &&
-      attrs.noteable_type === "MergeRequest" &&
-      attrs.system !== true &&
-      attrs.internal !== true &&
-      !vcsLoginsMatch(producer, botUsername),
+function checkLocalProjectScope(
+  body: any,
+): { status: "ignored"; reason: "other_project" } | null {
+  const project = body?.project as GitLabProject | undefined;
+  if (!project) return null;
+  const projectPath = project.path_with_namespace;
+  const allowed =
+    typeof projectPath === "string" &&
+    projectPath.length > 0 &&
+    isRepoAllowed(projectPath) &&
+    (!env.GITLAB_PROJECT_ID ||
+      projectMatchesConfiguredId(project, env.GITLAB_PROJECT_ID));
+  if (allowed) return null;
+  logger.info(
+    { project, expected: env.GITLAB_PROJECT_ID ?? "AGENT_ALLOWED_REPOS" },
+    "post_pr_gate_gitlab_webhook_skipped_other_project",
   );
+  return { status: "ignored", reason: "other_project" };
 }
 
 function resolveGitLabDeliveryId(event: Parameters<typeof getHeader>[0], rawBody: string): string {

@@ -16,6 +16,11 @@ import {
   recordWorkflowOwnedPullRequestIntent,
   type WorkflowPrLink,
 } from "./repository-prs.js";
+import {
+  durationBudgetFailure,
+  RunBudgetError,
+  type RunBudgetObservation,
+} from "./run-budget.js";
 
 export interface FinalizedBranch {
   provider: SelectedRepository["provider"];
@@ -48,6 +53,22 @@ export type WorkspacePublicationResult =
       prs: WorkflowPrLink[];
       pushResult?: TrustedWorkspacePushResult;
     };
+
+type RecoverablePublicationResult = {
+  status: "recoverable";
+  attemptId: string;
+  reason: string;
+  repositories: FinalizedBranch[];
+  prs: WorkflowPrLink[];
+};
+
+type OpenPullRequestsAttemptResult =
+  | WorkspacePublicationResult
+  | RecoverablePublicationResult;
+
+export interface PublicationRecoveryOptions {
+  observeBudget?: () => Promise<RunBudgetObservation>;
+}
 
 export async function finalizeWorkspacePublication(input: {
   runId: string;
@@ -209,13 +230,40 @@ function exhaustedPublicationReason(error: unknown, priorReason?: string): strin
  * Phase two: consume a durable successful Finalize attempt. There is no
  * sandbox id and no push call in this API by construction.
  */
-export async function openPullRequestsForPublication(input: {
+export async function openPullRequestsForPublication(
+  input: {
+    attemptId: string;
+    runId: string;
+    ticketKey: string;
+    title: string;
+  },
+  options: PublicationRecoveryOptions = {},
+): Promise<WorkspacePublicationResult> {
+  let retryIndex = 0;
+  for (;;) {
+    const result = await openPullRequestsForPublicationOnce(input);
+    if (result.status !== "recoverable") return result;
+    await waitForPublicationRecovery(retryIndex++, options.observeBudget);
+  }
+}
+
+async function openPullRequestsForPublicationOnce(input: {
   attemptId: string;
   runId: string;
   ticketKey: string;
   title: string;
-}): Promise<WorkspacePublicationResult> {
-  let attempt = await loadPublicationAttemptStep(input.attemptId);
+}): Promise<OpenPullRequestsAttemptResult> {
+  let attempt: PublicationAttemptRecord | null;
+  try {
+    attempt = await loadPublicationAttemptStep(input.attemptId);
+  } catch (error) {
+    return recoverableResult(
+      input.attemptId,
+      error instanceof Error ? error.message : String(error),
+      [],
+      [],
+    );
+  }
   if (!attempt) {
     return failedResult(input.attemptId, "publication attempt not found", [], []);
   }
@@ -238,7 +286,16 @@ export async function openPullRequestsForPublication(input: {
   }
 
   if (attempt.status === "finalized") {
-    await markPublicationCreatingPrsStep(attempt.id);
+    try {
+      await markPublicationCreatingPrsStep(attempt.id);
+    } catch (error) {
+      return recoverableResult(
+        attempt.id,
+        error instanceof Error ? error.message : String(error),
+        attempt.repositories,
+        prLinksFromAttempt(attempt),
+      );
+    }
   }
 
   const prs = prLinksFromAttempt(attempt);
@@ -251,9 +308,7 @@ export async function openPullRequestsForPublication(input: {
       currentBranchHead = await verifyFinalizedBranchHeadStep(repository);
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
-      return pr
-        ? recoverableOpenPullRequestFailure(attempt, repository, reason, prs)
-        : terminalOpenPullRequestFailure(attempt, repository, reason, prs);
+      return recoverableOpenPullRequestFailure(attempt, repository, reason, prs);
     }
 
     try {
@@ -263,19 +318,19 @@ export async function openPullRequestsForPublication(input: {
       return terminalOpenPullRequestFailure(attempt, repository, reason, prs);
     }
 
-    try {
-      await recordWorkflowOwnedPullRequestIntent({
-        ticketKey: input.ticketKey,
-        provider: repository.provider,
-        repoPath: repository.repoPath,
-        branchName: repository.branchName,
-        publishedHeadSha: repository.pushedHead!,
-      });
-    } catch (err) {
-      const reason = err instanceof Error ? err.message : String(err);
-      return pr
-        ? recoverableOpenPullRequestFailure(attempt, repository, reason, prs)
-        : terminalOpenPullRequestFailure(attempt, repository, reason, prs);
+    if (!pr) {
+      try {
+        await recordWorkflowOwnedPullRequestIntent({
+          ticketKey: input.ticketKey,
+          provider: repository.provider,
+          repoPath: repository.repoPath,
+          branchName: repository.branchName,
+          publishedHeadSha: repository.pushedHead!,
+        });
+      } catch (err) {
+        const reason = err instanceof Error ? err.message : String(err);
+        return recoverableOpenPullRequestFailure(attempt, repository, reason, prs);
+      }
     }
 
     try {
@@ -286,7 +341,9 @@ export async function openPullRequestsForPublication(input: {
       });
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
-      return terminalOpenPullRequestFailure(attempt, repository, reason, prs);
+      return isDeterministicPullRequestFailure(err)
+        ? terminalOpenPullRequestFailure(attempt, repository, reason, prs)
+        : recoverableOpenPullRequestFailure(attempt, repository, reason, prs);
     }
 
     if (!prs.some((existing) => sameRepository(existing, pr))) prs.push(pr);
@@ -341,11 +398,19 @@ export async function openPullRequestsForPublication(input: {
     await markPublicationPublishedStep(attempt.id);
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
-    const concurrent = await failPublicationStep({ attemptId: attempt.id, reason });
-    if (concurrent?.status === "published") return publishedResult(concurrent);
-    return failedResult(attempt.id, reason, attempt.repositories, prs);
+    return recoverableResult(attempt.id, reason, attempt.repositories, prs);
   }
-  const reloaded = await loadPublicationAttemptStep(attempt.id);
+  let reloaded: PublicationAttemptRecord | null;
+  try {
+    reloaded = await loadPublicationAttemptStep(attempt.id);
+  } catch (error) {
+    return recoverableResult(
+      attempt.id,
+      error instanceof Error ? error.message : String(error),
+      attempt.repositories,
+      prs,
+    );
+  }
   if (!reloaded) {
     return failedResult(
       attempt.id,
@@ -355,11 +420,31 @@ export async function openPullRequestsForPublication(input: {
     );
   }
   if (reloaded.status === "published") return publishedResult(reloaded);
+  if (reloaded.status === "creating_prs" || reloaded.status === "finalized") {
+    return recoverableResult(
+      reloaded.id,
+      `publication attempt is ${reloaded.status}, not published`,
+      reloaded.repositories,
+      prs,
+    );
+  }
   return failedResult(
     reloaded.id,
     reloaded.failure ?? `publication attempt is ${reloaded.status}, not published`,
     reloaded.repositories,
     prs,
+  );
+}
+
+function isDeterministicPullRequestFailure(error: unknown): boolean {
+  const name =
+    typeof error === "object" && error !== null && "name" in error
+      ? String(error.name)
+      : "";
+  const message = error instanceof Error ? error.message : String(error);
+  return (
+    name === "FatalError" ||
+    /Refusing to open a PR .*AGENT_ALLOWED_REPOS/i.test(message)
   );
 }
 
@@ -675,13 +760,13 @@ async function recoverableOpenPullRequestFailure(
   repository: PublicationRepositoryRecord,
   reason: string,
   prs: WorkflowPrLink[],
-): Promise<WorkspacePublicationResult> {
+): Promise<RecoverablePublicationResult> {
   await recordRecoverablePublicationFailureStep({
     attemptId: attempt.id,
     reason,
     repository: { provider: repository.provider, repoPath: repository.repoPath },
   }).catch(() => {});
-  return failedResult(attempt.id, reason, attempt.repositories, prs);
+  return recoverableResult(attempt.id, reason, attempt.repositories, prs);
 }
 
 async function terminalOpenPullRequestFailure(
@@ -734,6 +819,43 @@ function failedResult(
     repositories: finalizedBranches(repositories),
     prs,
   };
+}
+
+function recoverableResult(
+  attemptId: string,
+  reason: string,
+  repositories: PublicationRepositoryRecord[],
+  prs: WorkflowPrLink[],
+): RecoverablePublicationResult {
+  return {
+    status: "recoverable",
+    attemptId,
+    reason,
+    repositories: finalizedBranches(repositories),
+    prs,
+  };
+}
+
+async function waitForPublicationRecovery(
+  retryIndex: number,
+  observeBudget?: () => Promise<RunBudgetObservation>,
+): Promise<void> {
+  const delaySeconds = Math.min(5 * 2 ** Math.min(retryIndex, 6), 300);
+  if (observeBudget) {
+    const before = await observeBudget();
+    if (before.check.status !== "ok") throw new RunBudgetError(before.check);
+    if (before.remainingDurationMs < delaySeconds * 1_000) {
+      throw new RunBudgetError(
+        durationBudgetFailure(before, "publication recovery backoff"),
+      );
+    }
+  }
+  const { sleep } = await import("workflow");
+  await sleep(`${delaySeconds}s`);
+  if (observeBudget) {
+    const after = await observeBudget();
+    if (after.check.status !== "ok") throw new RunBudgetError(after.check);
+  }
 }
 
 function publishedResult(attempt: PublicationAttemptRecord): WorkspacePublicationResult {

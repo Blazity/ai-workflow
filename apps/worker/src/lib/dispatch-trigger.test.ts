@@ -25,7 +25,15 @@ import {
   recoverOrphanedPendingTriggers,
 } from "./pending-trigger-recovery.js";
 
-vi.mock("../../env.js", () => ({ env: { JIRA_PROJECT_KEY: "AIW", COLUMN_AI: "AI" } }));
+const testEnv = vi.hoisted(() => ({
+  JIRA_PROJECT_KEY: "AIW",
+  COLUMN_AI: "AI",
+  GITLAB_PROJECT_ID: undefined as string | undefined,
+}));
+vi.mock("../../env.js", () => ({
+  env: testEnv,
+  getConfiguredVcsProviders: vi.fn(() => []),
+}));
 const mockStart = vi.fn();
 vi.mock("workflow/api", () => ({ start: (...args: any[]) => mockStart(...args) }));
 vi.mock("../workflows/agent.js", () => ({ agentWorkflow: "agentWorkflow_sentinel" }));
@@ -65,6 +73,7 @@ beforeEach(async () => {
   mockGetEnabled.mockReset();
   mockGetPRHead.mockReset().mockResolvedValue({ headSha: "abc123" });
   mockGetBranchSha.mockReset().mockResolvedValue("abc123");
+  testEnv.GITLAB_PROJECT_ID = undefined;
 });
 
 afterEach(() => {
@@ -164,6 +173,7 @@ function deps(overrides: Record<string, unknown> = {}) {
     issueTracker: {
       fetchTicket: vi.fn().mockResolvedValue({ identifier: "AIW-1" }),
     },
+    isRepositoryConfigured: vi.fn().mockResolvedValue(true),
     ...overrides,
   } as any;
 }
@@ -336,6 +346,7 @@ describe("dispatchTriggerEvent durable envelope", () => {
         ...event().pr,
         provider: "gitlab",
         repoPath: "group/app",
+        providerProjectId: 5,
         prUrl: "https://gitlab.com/group/app/-/merge_requests/7",
         headSha: "source-head-sha",
         pipelineId: 901,
@@ -359,6 +370,107 @@ describe("dispatchTriggerEvent durable envelope", () => {
       result: { result: "ignored_stale_head" },
     });
     expect(mockStart).not.toHaveBeenCalled();
+  });
+
+  it("persists GitLab delivery before installed-repository lookup and poll-recovers it", async () => {
+    testEnv.GITLAB_PROJECT_ID = "5";
+    mockGetEnabled.mockResolvedValue(
+      enabledTrigger("trigger_pr_created", { scope: "any", providers: ["gitlab"] }),
+    );
+    const gitlabEvent = event({
+      delivery: {
+        provider: "gitlab",
+        producer: "alice",
+        deliveryId: "gitlab-scope-recovery",
+      },
+      pr: {
+        ...event().pr,
+        provider: "gitlab",
+        repoPath: "group/app",
+        providerProjectId: 5,
+        prUrl: "https://gitlab.com/group/app/-/merge_requests/7",
+      },
+    });
+    const isRepositoryConfigured = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("GitLab unavailable"));
+    const getCurrentPullRequest = vi.fn().mockResolvedValue({ headSha: "abc123" });
+    const { dispatchTriggerEvent, recoverAcceptedTriggerDelivery } = await import(
+      "./dispatch-trigger.js"
+    );
+
+    await expect(
+      dispatchTriggerEvent(
+        gitlabEvent,
+        deps({ isRepositoryConfigured, getCurrentPullRequest }),
+      ),
+    ).resolves.toEqual({ result: "error" });
+    await expect(
+      getTriggerDelivery(db, "gitlab", "gitlab-scope-recovery"),
+    ).resolves.toMatchObject({
+      status: "received",
+      subjectKey: null,
+      result: null,
+      pr: { providerProjectId: 5, repoPath: "group/app" },
+    });
+    expect(getCurrentPullRequest).not.toHaveBeenCalled();
+
+    const metrics = await recoverAcceptedTriggerDeliveries({
+      listDeliveries: () =>
+        listRecoverableAcceptedTriggerDeliveries(
+          db,
+          new Date(Date.now() + 60_000),
+        ),
+      getActive: (subjectKey) => registry.get(subjectKey),
+      resume: (stored) =>
+        recoverAcceptedTriggerDelivery(
+          stored,
+          deps({ isRepositoryConfigured: undefined, getCurrentPullRequest }),
+        ),
+    });
+
+    expect(metrics).toMatchObject({ scanned: 1, attempted: 1, started: 1, errors: 0 });
+    expect(isRepositoryConfigured).toHaveBeenCalledOnce();
+    expect(getCurrentPullRequest).toHaveBeenCalledOnce();
+  });
+
+  it("terminally ignores a durably received GitLab delivery denied by repository scope", async () => {
+    mockGetEnabled.mockResolvedValue(
+      enabledTrigger("trigger_pr_created", { scope: "any", providers: ["gitlab"] }),
+    );
+    const denied = event({
+      delivery: {
+        provider: "gitlab",
+        producer: "alice",
+        deliveryId: "gitlab-scope-denied",
+      },
+      pr: {
+        ...event().pr,
+        provider: "gitlab",
+        repoPath: "group/denied",
+        providerProjectId: 9,
+      },
+    });
+    const getCurrentPullRequest = vi.fn();
+    const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
+
+    await expect(
+      dispatchTriggerEvent(
+        denied,
+        deps({
+          isRepositoryConfigured: vi.fn().mockResolvedValue(false),
+          getCurrentPullRequest,
+        }),
+      ),
+    ).resolves.toEqual({ result: "ignored_provider" });
+    await expect(
+      getTriggerDelivery(db, "gitlab", "gitlab-scope-denied"),
+    ).resolves.toMatchObject({
+      status: "completed",
+      subjectKey: null,
+      result: { result: "ignored_provider" },
+    });
+    expect(getCurrentPullRequest).not.toHaveBeenCalled();
   });
 
   it("binds a documented GitLab pipeline hook to the authoritative MR source head", async () => {

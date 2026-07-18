@@ -2157,6 +2157,8 @@ async function agentWorkflowBody(
               runId: ctx.runId,
               ticketKey: ticket.identifier,
               title: ticket.title,
+            }, {
+              observeBudget: () => ctx.observeBudget(),
             });
             ctx.publication = publication;
 

@@ -86,7 +86,10 @@ describe("createOrUseWorkflowOwnedPullRequestsForRepos", () => {
 
   it("reuses existing workflow-owned PR metadata", async () => {
     const createPR = vi.fn();
-    mocks.createRepositoryVCS.mockReturnValue({ createPR });
+    mocks.createRepositoryVCS.mockReturnValue({
+      createPR,
+      findPR: vi.fn().mockResolvedValue(null),
+    });
 
     const prs = await createOrUseWorkflowOwnedPullRequestsForRepos({
       ticketKey: "AIW-45",
@@ -123,7 +126,10 @@ describe("createOrUseWorkflowOwnedPullRequestsForRepos", () => {
       url: "https://github.com/acme/api/pull/43",
       branch: "blazebot/aiw-45",
     });
-    mocks.createRepositoryVCS.mockReturnValue({ createPR });
+    mocks.createRepositoryVCS.mockReturnValue({
+      createPR,
+      findPR: vi.fn().mockResolvedValue(null),
+    });
 
     const prs = await createOrUseWorkflowOwnedPullRequestsForRepos({
       ticketKey: "AIW-45",
@@ -170,7 +176,10 @@ describe("createOrUseWorkflowOwnedPullRequestsForRepos", () => {
       url: "https://gitlab.example.com/acme/api/-/merge_requests/44",
       branch: "blazebot/aiw-45",
     });
-    mocks.createRepositoryVCS.mockReturnValue({ createPR });
+    mocks.createRepositoryVCS.mockReturnValue({
+      createPR,
+      findPR: vi.fn().mockResolvedValue(null),
+    });
 
     await createOrUseWorkflowOwnedPullRequestsForRepos({
       ticketKey: "AIW-45",
@@ -248,6 +257,7 @@ describe("durable publication PR phases", () => {
 
   it("returns the provider PR before writing workflow-owned branch correlation", async () => {
     mocks.createRepositoryVCS.mockReturnValue({
+      findPR: vi.fn().mockResolvedValue(null),
       createPR: vi.fn().mockResolvedValue({
         id: 46,
         url: "https://github.com/acme/api/pull/46",
@@ -269,6 +279,43 @@ describe("durable publication PR phases", () => {
 
     expect(pr).toEqual(expect.objectContaining({ id: 46, repoPath: "acme/api" }));
     expect(mocks.upsertWorkflowOwnedBranch).not.toHaveBeenCalled();
+  });
+
+  it("reconciles a PR created remotely before an ambiguous timeout", async () => {
+    const existing = {
+      id: 47,
+      url: "https://github.com/acme/api/pull/47",
+      branch: "blazebot/aiw-100",
+    };
+    const findPR = vi
+      .fn()
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(existing);
+    const createPR = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("request timed out after provider accepted it"));
+    mocks.createRepositoryVCS.mockReturnValue({ findPR, createPR });
+
+    await expect(
+      createOrFindWorkflowOwnedPullRequest({
+        branchName: "blazebot/aiw-100",
+        repository: {
+          provider: "github",
+          repoPath: "acme/api",
+          defaultBranch: "main",
+          selectedRationale: "durable finalized publication",
+          workflowOwnedBranch: { branchName: "blazebot/aiw-100" },
+        },
+        title: "Safe publication",
+      }),
+    ).resolves.toEqual({
+      provider: "github",
+      repoPath: "acme/api",
+      ...existing,
+      isNew: false,
+    });
+    expect(findPR).toHaveBeenCalledTimes(2);
+    expect(createPR).toHaveBeenCalledOnce();
   });
 
   it("records an exact branch/head intent before the provider PR id is known", async () => {

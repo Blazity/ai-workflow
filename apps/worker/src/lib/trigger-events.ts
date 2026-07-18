@@ -241,6 +241,7 @@ export function normalizeGitLabEvent(
       pr: {
         provider: "gitlab",
         repoPath: project.path_with_namespace ?? "",
+        ...(project.id !== undefined ? { providerProjectId: project.id } : {}),
         prNumber: mr.iid,
         prUrl: mr.url ?? "",
         headRef: mr.source_branch ?? "",
@@ -287,6 +288,7 @@ function mapGitLabMergeRequest(attrs: any, project: any, fallbackAuthor?: any): 
   return {
     provider: "gitlab",
     repoPath: project.path_with_namespace ?? "",
+    ...(project.id !== undefined ? { providerProjectId: project.id } : {}),
     prNumber: attrs.iid,
     prUrl: gitLabMergeRequestUrl(attrs, project),
     headRef: attrs.source_branch ?? "",

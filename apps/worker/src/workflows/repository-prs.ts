@@ -196,17 +196,17 @@ async function createOrFindPullRequest(
   branchName: string,
   title: string,
 ): Promise<{ pr: PullRequest; isNew: boolean }> {
+  const beforeCreate = await vcs.findPR(branchName);
+  if (beforeCreate) return { pr: beforeCreate, isNew: false };
+
   try {
     return { pr: await vcs.createPR(branchName, title, ""), isNew: true };
   } catch (err) {
-    if (!isAlreadyOpenPullRequestError(err)) throw err;
-    const existing = await vcs.findPR(branchName);
-    if (!existing) throw err;
-    return { pr: existing, isNew: false };
+    // Creation can succeed remotely and still time out before the response
+    // reaches us. Reconcile every error before surfacing it to the durable
+    // publication retry loop so a replay never creates a duplicate PR/MR.
+    const afterCreate = await vcs.findPR(branchName);
+    if (afterCreate) return { pr: afterCreate, isNew: false };
+    throw err;
   }
-}
-
-function isAlreadyOpenPullRequestError(err: unknown): boolean {
-  const message = err instanceof Error ? err.message : String(err);
-  return /already (exists|open)|pull request already exists|merge request already exists/i.test(message);
 }

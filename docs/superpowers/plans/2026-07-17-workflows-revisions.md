@@ -178,6 +178,7 @@ Steps:
 4. Replace `--force` with exact `--force-with-lease`; classify lease rejection as terminal stale/concurrent and never auto-retry.
 5. Split current combined publication: Finalize alone pushes and records the durable attempt; Open PR/MR accepts only successful Finalize output and only creates PRs/MRs.
 6. Record provider/network partial publication durably, create no PRs, and report no success.
+7. Reconcile PR/MR existence before creation and after ambiguous errors. Keep transient Open PR/MR failures in `creating_prs` and retry inside the owning workflow with capped durable backoff bounded by run duration/cancellation; only deterministic safety failures become terminal.
 
 Acceptance:
 
