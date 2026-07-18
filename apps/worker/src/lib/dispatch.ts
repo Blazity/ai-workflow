@@ -41,6 +41,11 @@ export interface ClaimSubjectRunOptions {
   startWorkflow: (ownerToken: string) => Promise<string>;
 }
 
+export type SubjectReservationResult =
+  | "reserved"
+  | "already_claimed"
+  | "at_capacity";
+
 export async function dispatchTicket(
   ticketKey: string,
   adapters: Adapters,
@@ -124,18 +129,16 @@ export async function claimSubjectRun(
   let ownerToken: string | null = null;
   let started = false;
   try {
-    if (await isAtCapacity(maxConcurrentAgents, runRegistry)) {
-      return { started: false, reason: "at_capacity" };
-    }
-
     ownerToken = `owner:${randomUUID()}`;
-    const reserved = await runRegistry.reserve({ ...subject, ownerToken });
-    if (!reserved) return { started: false, reason: "already_claimed" };
-
-    if (!(await winsPostReservationCapacity(subject.subjectKey, maxConcurrentAgents, runRegistry))) {
-      await runRegistry.releaseReservation(subject.subjectKey, ownerToken).catch(() => false);
+    const reservation = await reserveSubjectWithinCapacity(
+      subject,
+      ownerToken,
+      runRegistry,
+      maxConcurrentAgents,
+    );
+    if (reservation !== "reserved") {
       ownerToken = null;
-      return { started: false, reason: "at_capacity" };
+      return { started: false, reason: reservation };
     }
 
     if (options.postClaimGuard) {
@@ -162,6 +165,43 @@ export async function claimSubjectRun(
     );
     return { started: false, reason: "error" };
   }
+}
+
+/**
+ * Atomically participates in the same capacity/fairness protocol as a normal
+ * workflow claim while retaining a caller-owned durable token. Clarification
+ * recovery uses this only when its predecessor/successor owner is genuinely
+ * missing; an in-place bound-owner handoff already occupies one slot and must
+ * remain capacity-neutral.
+ */
+export async function reserveSubjectWithinCapacity(
+  subject: ClaimSubject,
+  ownerToken: string,
+  runRegistry: RunRegistryAdapter,
+  maxConcurrentAgents: number,
+): Promise<SubjectReservationResult> {
+  if (await isAtCapacity(maxConcurrentAgents, runRegistry)) return "at_capacity";
+
+  const reserved = await runRegistry.reserve({ ...subject, ownerToken });
+  if (!reserved) return "already_claimed";
+
+  try {
+    if (
+      await winsPostReservationCapacity(
+        subject.subjectKey,
+        maxConcurrentAgents,
+        runRegistry,
+      )
+    ) {
+      return "reserved";
+    }
+  } catch (error) {
+    await runRegistry.releaseReservation(subject.subjectKey, ownerToken).catch(() => false);
+    throw error;
+  }
+
+  await runRegistry.releaseReservation(subject.subjectKey, ownerToken).catch(() => false);
+  return "at_capacity";
 }
 
 /** Ticket-only compatibility wrapper used by approval/clarification dispatch. */

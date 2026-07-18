@@ -109,6 +109,8 @@ function makeClarification(overrides: Partial<ClarificationRow> = {}): Clarifica
 function makeRunRegistry(overrides: Record<string, unknown> = {}): RunRegistryAdapter {
   return {
     reserve: vi.fn().mockResolvedValue(true),
+    releaseReservation: vi.fn().mockResolvedValue(true),
+    listAll: vi.fn().mockResolvedValue([]),
     handoffBoundRun: vi.fn().mockResolvedValue(true),
     get: vi.fn().mockResolvedValue(null),
     ...overrides,
@@ -376,6 +378,133 @@ describe("dispatchClarificationAnswered", () => {
       ownerToken: "owner-successor",
       kind: "ticket",
     });
+  });
+
+  it("does not recreate a missing successor reservation while agent capacity is full", async () => {
+    const answered = makeClarification({
+      status: "answered",
+      answer: "Use Next.js",
+      successorOwnerToken: "owner-successor",
+    });
+    stores.getClarification.mockResolvedValue(answered);
+    const reserve = vi.fn().mockResolvedValue(true);
+    const runRegistry = makeRunRegistry({
+      reserve,
+      get: vi.fn().mockResolvedValue(null),
+      listAll: vi.fn().mockResolvedValue([
+        {
+          subjectKey: "ticket:jira:AWT-OTHER",
+          ticketKey: "AWT-OTHER",
+          ownerToken: "owner-other",
+          runId: "run-other",
+          state: "bound",
+          kind: "ticket",
+          createdAt: 1,
+          updatedAt: 1,
+        },
+      ]),
+      releaseReservation: vi.fn(),
+    });
+
+    expect(
+      await dispatch({
+        clarification: answered,
+        runRegistry,
+        isRetry: true,
+        maxConcurrentAgents: 1,
+      }),
+    ).toEqual({ status: "at_capacity" });
+    expect(reserve).not.toHaveBeenCalled();
+    expect(wf.start).not.toHaveBeenCalled();
+  });
+
+  it("releases a recreated successor that loses the post-reservation capacity race", async () => {
+    const answered = makeClarification({
+      status: "answered",
+      answer: "Use Next.js",
+      successorOwnerToken: "owner-successor",
+    });
+    stores.getClarification.mockResolvedValue(answered);
+    const reservation = {
+      subjectKey: answered.subjectKey,
+      ticketKey: answered.ticketKey,
+      ownerToken: "owner-successor",
+      runId: null,
+      state: "reserved" as const,
+      kind: "ticket" as const,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+    const releaseReservation = vi.fn().mockResolvedValue(true);
+    const runRegistry = makeRunRegistry({
+      reserve: vi.fn().mockResolvedValue(true),
+      get: vi.fn().mockResolvedValue(null),
+      listAll: vi
+        .fn()
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([
+          {
+            ...reservation,
+            subjectKey: "ticket:jira:AWT-WINNER",
+            ticketKey: "AWT-WINNER",
+            ownerToken: "owner-winner",
+            createdAt: Date.now() - 1,
+            updatedAt: Date.now() - 1,
+          },
+          reservation,
+        ]),
+      releaseReservation,
+    });
+
+    expect(
+      await dispatch({
+        clarification: answered,
+        runRegistry,
+        isRetry: true,
+        maxConcurrentAgents: 1,
+      }),
+    ).toEqual({ status: "at_capacity" });
+    expect(releaseReservation).toHaveBeenCalledWith(
+      answered.subjectKey,
+      "owner-successor",
+    );
+    expect(wf.start).not.toHaveBeenCalled();
+  });
+
+  it("keeps a bound-owner handoff capacity-neutral", async () => {
+    const answered = makeClarification({
+      status: "answered",
+      answer: "Use Next.js",
+      successorOwnerToken: "owner-successor",
+    });
+    stores.getClarification.mockResolvedValue(answered);
+    const handoffBoundRun = vi.fn().mockResolvedValue(true);
+    const listAll = vi.fn().mockRejectedValue(new Error("capacity must not be read"));
+    const runRegistry = makeRunRegistry({
+      handoffBoundRun,
+      get: vi.fn().mockResolvedValue({
+        subjectKey: answered.subjectKey,
+        ticketKey: answered.ticketKey,
+        ownerToken: answered.ownerToken,
+        runId: answered.runId,
+        state: "bound",
+        kind: "ticket",
+        createdAt: 1,
+        updatedAt: 1,
+      }),
+      listAll,
+    });
+
+    expect(
+      await dispatch({
+        clarification: answered,
+        runRegistry,
+        isRetry: true,
+        maxConcurrentAgents: 0,
+      }),
+    ).toEqual({ status: "started", runId: "run-x" });
+    expect(handoffBoundRun).toHaveBeenCalled();
+    expect(listAll).not.toHaveBeenCalled();
   });
 
   it("recreates a ticket-linked PR continuation as a PR run", async () => {

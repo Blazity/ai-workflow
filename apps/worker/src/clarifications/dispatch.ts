@@ -10,6 +10,7 @@ import { aiColumnMoveTarget } from "../lib/move-targets.js";
 import { NEEDS_CLARIFICATION_LABEL } from "../lib/labels.js";
 import { logger } from "../lib/logger.js";
 import { moveTicketWithIntent } from "../lib/ticket-transition.js";
+import { reserveSubjectWithinCapacity } from "../lib/dispatch.js";
 import {
   answerClarification,
   assertClarificationCheckpointAvailable,
@@ -19,6 +20,7 @@ import {
 
 export type DispatchClarificationAnsweredResult =
   | { status: "conflict" }
+  | { status: "at_capacity" }
   | { status: "started"; runId: string };
 
 /**
@@ -83,13 +85,19 @@ export async function dispatchClarificationAnswered(input: {
   let active = await runRegistry.get(checkpoint.subjectKey);
   let recreatedSuccessorReservation = false;
   if (isRetry && active === null) {
-    recreatedSuccessorReservation = await runRegistry.reserve({
-      subjectKey: checkpoint.subjectKey,
-      ticketKey: checkpoint.ticketKey,
-      ownerToken: successorOwnerToken,
-      kind: checkpoint.originEntry.kind === "pr_trigger" ? "pr_trigger" : "ticket",
-    });
-    if (!recreatedSuccessorReservation) {
+    const reservation = await reserveSubjectWithinCapacity(
+      {
+        subjectKey: checkpoint.subjectKey,
+        ticketKey: checkpoint.ticketKey,
+        kind: checkpoint.originEntry.kind === "pr_trigger" ? "pr_trigger" : "ticket",
+      },
+      successorOwnerToken,
+      runRegistry,
+      input.maxConcurrentAgents,
+    );
+    if (reservation === "at_capacity") return { status: "at_capacity" };
+    recreatedSuccessorReservation = reservation === "reserved";
+    if (reservation === "already_claimed") {
       active = await runRegistry.get(checkpoint.subjectKey);
     }
   }

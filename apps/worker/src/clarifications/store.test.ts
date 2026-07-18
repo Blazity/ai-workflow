@@ -18,7 +18,7 @@ import {
   clearDispatchedRun,
   listClarificationSnapshotCleanup,
   listAnsweredForTicket,
-  listPendingClarificationSubjectKeys,
+  listProtectedClarificationSubjectKeys,
   listUndispatchedAnsweredClarifications,
   markClarificationCheckpointConsumed,
   markClarificationSnapshotCleanupFailed,
@@ -29,6 +29,7 @@ import {
   serializeClarification,
   supersedeClarification,
   supersedePendingForTicket,
+  tombstoneClarificationCancellation,
   updateClarificationCheckpointBudget,
   type ClarificationRow,
 } from "./store.js";
@@ -628,7 +629,7 @@ describe("durable clarification checkpoints", () => {
     });
   });
 
-  it("lists only durable pending subjects for generic run reconciliation protection", async () => {
+  it("lists durable pending and answered-ready subjects for generic dispatch protection", async () => {
     const db = await createTestDb();
     const input = checkpointSeed("AWT-4");
     const durable = await createClarificationCheckpoint(db, input);
@@ -636,9 +637,24 @@ describe("durable clarification checkpoints", () => {
     await publishBoundCheckpoint(db, durable.id);
     await createClarificationRequest(db, seed("AWT-5"));
 
-    expect(await listPendingClarificationSubjectKeys(db)).toEqual([
-      input.subjectKey,
-    ]);
+    const answeredInput = {
+      ...checkpointSeed("AWT-6-PROTECTED"),
+      workspaceManifest: null,
+      sourceHeads: [],
+    };
+    const answered = await createClarificationCheckpoint(db, answeredInput);
+    await completeClarificationCheckpoint(db, answered.id, null);
+    await publishBoundCheckpoint(db, answered.id);
+    await answerClarification(db, {
+      id: answered.id,
+      answer: "Proceed",
+      actor: { id: "u1", label: "Alice" },
+      successorOwnerToken: "owner-successor",
+    });
+
+    expect((await listProtectedClarificationSubjectKeys(db)).sort()).toEqual(
+      [input.subjectKey, answeredInput.subjectKey].sort(),
+    );
   });
 
   it("lists unexpired answered checkpoints that still need successor dispatch", async () => {
@@ -1324,6 +1340,55 @@ describe("recordDispatchedRun", () => {
     });
     expect(await listUndispatchedAnsweredClarifications(db)).toMatchObject([
       { id: row.id, successorOwnerToken: "owner-successor" },
+    ]);
+  });
+
+  it("keeps an explicitly cancelled restore run terminal after its owner is released", async () => {
+    const db = await createTestDb();
+    const input = checkpointSeed("AWT-RESTORE-CANCELLED");
+    const checkpoint = await createClarificationCheckpoint(db, input);
+    await completeClarificationCheckpoint(db, checkpoint.id, {
+      snapshotId: "snap-cancelled",
+      sourceSandboxId: "sbx-source",
+      expiresAt: input.expiresAt,
+    });
+    await publishBoundCheckpoint(db, checkpoint.id);
+    const answered = await answerClarification(db, {
+      id: checkpoint.id,
+      answer: "Proceed",
+      actor: { id: "u1", label: "Alice" },
+      successorOwnerToken: "owner-successor",
+    });
+    await bindCheckpointOwner(db, {
+      ...answered,
+      ownerToken: "owner-successor",
+      runId: "run-restore-cancelled",
+    });
+    await recordDispatchedRun(
+      db,
+      answered.id,
+      "owner-successor",
+      "run-restore-cancelled",
+    );
+
+    expect(
+      await tombstoneClarificationCancellation(db, {
+        subjectKey: answered.subjectKey,
+        ownerToken: "owner-successor",
+        runId: "run-restore-cancelled",
+      }),
+    ).toBe(true);
+    await db.delete(activeRuns).where(eq(activeRuns.subjectKey, answered.subjectKey));
+    await reconcileClarificationCheckpoints(db, new Date("2026-07-18T00:00:00.000Z"));
+
+    expect(await getClarification(db, answered.id)).toMatchObject({
+      checkpointState: "cancelled",
+      dispatchedRunId: "run-restore-cancelled",
+      cleanupState: "delete_pending",
+    });
+    expect(await listUndispatchedAnsweredClarifications(db)).toEqual([]);
+    expect(await listClarificationSnapshotCleanup(db)).toEqual([
+      { clarificationId: answered.id, snapshotId: "snap-cancelled" },
     ]);
   });
 });

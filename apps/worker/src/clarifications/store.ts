@@ -35,6 +35,7 @@ export type ClarificationCheckpointState =
   | "preparing"
   | "ready"
   | "consumed"
+  | "cancelled"
   | "budget_exhausted"
   | "expired"
   | "orphaned";
@@ -599,14 +600,18 @@ export async function getPendingForSubject(
   return rows[0] ? mapRow(rows[0]) : null;
 }
 
-/** Durable parked subjects that generic run reconciliation must not release. */
-export async function listPendingClarificationSubjectKeys(db: Db): Promise<string[]> {
+/**
+ * Durable clarification subjects that generic ticket dispatch/reconciliation
+ * must not take over. Answered-ready rows stay protected across the route/start
+ * crash window even when their exact successor owner has to be recreated.
+ */
+export async function listProtectedClarificationSubjectKeys(db: Db): Promise<string[]> {
   const rows = await db
     .select({ subjectKey: clarificationRequests.subjectKey })
     .from(clarificationRequests)
     .where(
       and(
-        eq(clarificationRequests.status, "pending"),
+        inArray(clarificationRequests.status, ["pending", "answered"]),
         eq(clarificationRequests.checkpointState, "ready"),
         isNotNull(clarificationRequests.subjectKey),
       ),
@@ -1272,6 +1277,47 @@ export async function clearDispatchedRun(
             and published_successor.published_at is not null
             and published_successor.id <> ${clarificationRequests.id}
         )`,
+      ),
+    )
+    .returning({ id: clarificationRequests.id });
+  return rows.length > 0;
+}
+
+/**
+ * Persists an operator cancellation before its exact active owner is released.
+ * A ready answered checkpoint normally treats a missing successor owner as a
+ * crash and clears `dispatchedRunId` for retry. The cancelled tombstone keeps
+ * that crash recovery behavior for genuine disappearances while making an
+ * intentional cancellation terminal. Snapshot cleanup is queued in the same
+ * write so no retained workspace is leaked.
+ */
+export async function tombstoneClarificationCancellation(
+  db: Db,
+  input: {
+    subjectKey: string;
+    ownerToken: string;
+    runId: string;
+  },
+): Promise<boolean> {
+  const rows = await db
+    .update(clarificationRequests)
+    .set({
+      checkpointState: "cancelled",
+      dispatchedRunId: input.runId,
+      cleanupState: cleanupStateAfterRetirement(),
+      cleanupError: null,
+      cleanupClaimedAt: null,
+    })
+    .where(
+      and(
+        eq(clarificationRequests.subjectKey, input.subjectKey),
+        eq(clarificationRequests.status, "answered"),
+        inArray(clarificationRequests.checkpointState, ["ready", "cancelled"]),
+        eq(clarificationRequests.successorOwnerToken, input.ownerToken),
+        or(
+          isNull(clarificationRequests.dispatchedRunId),
+          eq(clarificationRequests.dispatchedRunId, input.runId),
+        ),
       ),
     )
     .returning({ id: clarificationRequests.id });

@@ -75,6 +75,29 @@ async function cancelOwnedSubject(
     return { cancelled: false, released: false };
   }
 
+  // A clarification continuation is deliberately recoverable when its owner
+  // disappears after a crash. Record an explicit cancellation before removing
+  // that owner so reconciliation can distinguish the operator action from a
+  // recoverable disappearance. DB failure is fail-closed: the cancelled
+  // Workflow remains owned until this durable boundary can be retried.
+  try {
+    const [{ getDb }, { tombstoneClarificationCancellation }] = await Promise.all([
+      import("../db/client.js"),
+      import("../clarifications/store.js"),
+    ]);
+    await tombstoneClarificationCancellation(getDb(), {
+      subjectKey,
+      ownerToken: entry.ownerToken,
+      runId,
+    });
+  } catch (err) {
+    logger.warn(
+      { subjectKey, runId, error: (err as Error).message },
+      "cancel_run_clarification_tombstone_unconfirmed",
+    );
+    return { cancelled: true, released: false };
+  }
+
   const sandboxIds = await runRegistry
     .listSandboxes(subjectKey, entry.ownerToken)
     .catch(() => null);

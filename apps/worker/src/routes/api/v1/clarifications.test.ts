@@ -209,6 +209,21 @@ describe("POST /api/v1/clarifications/:id/answer", () => {
     expect((await getClarification(db, row.id))?.dispatchedRunId).toBeNull();
   });
 
+  it("returns a retryable response when missing-owner recovery is at capacity", async () => {
+    const row = await seedPending("AWT-1");
+    await answerClarification(db, {
+      id: row.id,
+      answer: "prior",
+      actor: { id: "u", label: "U" },
+    });
+    mocks.dispatchClarificationAnswered.mockResolvedValue({ status: "at_capacity" });
+
+    const res = await answer(row.id);
+
+    expect(res.status).toBe(503);
+    expect((await getClarification(db, row.id))?.dispatchedRunId).toBeNull();
+  });
+
   it("410s, supersedes the row, and flips the asking run off awaiting when the ticket is gone", async () => {
     const row = await seedPending("AWT-1");
     mocks.fetchTicket.mockRejectedValue(new IssueTrackerNotFoundError("Issue", "AWT-1"));

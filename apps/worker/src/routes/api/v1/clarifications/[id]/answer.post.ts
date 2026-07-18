@@ -94,6 +94,9 @@ export default defineEventHandler(async (event): Promise<ClarificationAnswerResp
     if (result.status === "conflict") {
       throw createError({ statusCode: 409, statusMessage: "already_answered" });
     }
+    if (result.status === "at_capacity") {
+      throw createError({ statusCode: 503, statusMessage: "agent_capacity_reached" });
+    }
 
     // Best-effort read-back for the response body: the resume run is already
     // started, so a read hiccup must not turn the response into an error. The

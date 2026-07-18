@@ -14,9 +14,10 @@ import { drainOldestPendingTrigger } from "../../lib/dispatch-trigger.js";
 import { listPendingSubjectKeys } from "../../lib/trigger-delivery-store.js";
 import { recoverOrphanedPendingTriggers } from "../../lib/pending-trigger-recovery.js";
 import {
-  listPendingClarificationSubjectKeys,
+  listProtectedClarificationSubjectKeys,
   reconcileClarificationCheckpoints,
 } from "../../clarifications/store.js";
+import { ticketSubjectKey } from "../../lib/subject-key.js";
 import {
   recoverUndispatchedClarificationSuccessors,
   startQueuedClarificationSnapshotCleanups,
@@ -27,8 +28,6 @@ export default defineEventHandler(async (event) => {
 
   const adapters = createAdapters();
   const db = getDb();
-  const ticketKeys = await discoverAiColumnTickets(adapters);
-  const started = await dispatchDiscoveredTickets(ticketKeys, adapters);
 
   // Retire expired/orphaned checkpoints before retrying answer crash
   // boundaries. A failed DB read aborts this poll: running generic cleanup
@@ -41,9 +40,21 @@ export default defineEventHandler(async (event) => {
       issueTracker: adapters.issueTracker,
       maxConcurrentAgents: env.MAX_CONCURRENT_AGENTS,
     });
-  const parkedSubjects = new Set(
-    await listPendingClarificationSubjectKeys(db),
+  const protectedClarificationSubjects = new Set(
+    await listProtectedClarificationSubjectKeys(db),
   );
+
+  // Durable clarification recovery owns its subject before generic AI-column
+  // discovery. Even when capacity prevents a missing successor reservation
+  // from being recreated on this tick, the answered checkpoint remains
+  // protected and cannot be replaced by a fresh ticket workflow.
+  const ticketKeys = await discoverAiColumnTickets(adapters);
+  const started = await dispatchDiscoveredTickets(
+    ticketKeys,
+    adapters,
+    protectedClarificationSubjects,
+  );
+
   const { cancelled, cleaned } = await reconcileRuns(
     new Set(ticketKeys),
     adapters.runRegistry,
@@ -65,7 +76,7 @@ export default defineEventHandler(async (event) => {
         maxConcurrentAgents: env.MAX_CONCURRENT_AGENTS,
       });
     },
-    parkedSubjects,
+    protectedClarificationSubjects,
   );
 
   const clarificationCleanupStarted =
@@ -151,6 +162,7 @@ async function discoverAiColumnTickets(
 async function dispatchDiscoveredTickets(
   ticketKeys: string[],
   adapters: ReturnType<typeof createAdapters>,
+  protectedSubjects: ReadonlySet<string>,
 ): Promise<string[]> {
   // Dispatch in parallel. dispatchTicket is internally atomic — the
   // post-claim fairness check in src/lib/dispatch.ts caps started
@@ -158,6 +170,9 @@ async function dispatchDiscoveredTickets(
   // so excess parallel dispatches safely return `at_capacity`.
   const results = await Promise.all(
     ticketKeys.map(async (key) => {
+      if (protectedSubjects.has(ticketSubjectKey("jira", key))) {
+        return { key, started: false };
+      }
       try {
         const result = await dispatchTicket(
           key,
