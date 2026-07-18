@@ -95,11 +95,16 @@ export async function createClarificationCheckpointStep(input: {
   "use step";
   const { getDb } = await import("../db/client.js");
   const { createClarificationCheckpoint } = await import("../clarifications/store.js");
-  const { checkpointSourceHeads, checkpointStepsForPersistence } =
+  const {
+    checkpointRuntimeContextForPersistence,
+    checkpointSourceHeads,
+    checkpointStepsForPersistence,
+  } =
     await import("../clarifications/checkpoint.js");
   const row = await createClarificationCheckpoint(getDb(), {
     ...input,
     priorSteps: checkpointStepsForPersistence(input.priorSteps),
+    runtimeContext: checkpointRuntimeContextForPersistence(input.runtimeContext),
     sourceHeads: input.workspaceManifest
       ? checkpointSourceHeads(input.workspaceManifest)
       : [],

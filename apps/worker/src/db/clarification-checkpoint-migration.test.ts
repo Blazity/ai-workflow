@@ -17,11 +17,14 @@ async function migrateThrough(lastPrefix: string): Promise<PGlite> {
 }
 
 describe("0023 durable clarification checkpoint migration", () => {
-  it("deliberately retires legacy pending rows and adds indexed checkpoint lifecycle metadata", async () => {
+  it("deliberately retires every legacy row that lacks a recoverable checkpoint", async () => {
     const client = await migrateThrough("0022");
     await client.exec(`
-      INSERT INTO clarification_requests (id, ticket_key, run_id, questions)
-      VALUES ('clar-legacy', 'PROJ-1', 'run-1', '["Question?"]'::jsonb)
+      INSERT INTO clarification_requests (
+        id, ticket_key, run_id, questions, status, answer, answered_at
+      ) VALUES
+        ('clar-pending', 'PROJ-1', 'run-1', '["Question?"]'::jsonb, 'pending', null, null),
+        ('clar-answered', 'PROJ-2', 'run-2', '["Question?"]'::jsonb, 'answered', 'Proceed', now())
     `);
 
     await client.exec(
@@ -38,10 +41,19 @@ describe("0023 durable clarification checkpoint migration", () => {
     }>(`
       SELECT id, subject_key, checkpoint_state, cleanup_state, status, cleanup_error
       FROM clarification_requests
+      ORDER BY id
     `);
     expect(rows.rows).toEqual([
       {
-        id: "clar-legacy",
+        id: "clar-answered",
+        subject_key: "ticket:jira:PROJ-2",
+        checkpoint_state: "orphaned",
+        cleanup_state: "deleted",
+        status: "superseded",
+        cleanup_error: "Legacy clarification cannot be resumed; restart the ticket to rebuild the workflow checkpoint.",
+      },
+      {
+        id: "clar-pending",
         subject_key: "ticket:jira:PROJ-1",
         checkpoint_state: "orphaned",
         cleanup_state: "deleted",

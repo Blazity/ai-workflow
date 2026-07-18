@@ -33,6 +33,9 @@ import {
   type WorkflowDefinitionVersionPin,
 } from "./agent-input.js";
 import type { BlockExecuteFn, EngineCtx } from "./blocks/types.js";
+import type { ClarificationRuntimeContext } from "../db/clarifications-schema.js";
+import type { HumanDecision } from "../lib/human-decisions-memory.js";
+import type { WorkspacePublicationResult } from "./workspace-publication.js";
 import {
   ensureWorkspace,
   execute as executePrepareWorkspace,
@@ -242,6 +245,54 @@ export function resolveTicketStatusInput(
   return resolveTicketMoveTarget(
     typeof resolvedInputs.target === "string" ? resolvedInputs.target : params.target,
   );
+}
+
+function publicationPrForTelemetry(
+  publication: WorkspacePublicationResult | null | undefined,
+): { url: string; number: number } | null {
+  if (publication?.status !== "published") return null;
+  const primary = publication.prs[0];
+  return primary ? { url: primary.url, number: primary.id } : null;
+}
+
+/** Rehydrate only predecessor state that later blocks or terminal telemetry consume. */
+export function restoreClarificationRuntimeState(
+  context: ClarificationRuntimeContext | null | undefined,
+) {
+  const publication = context?.publication ?? null;
+  return {
+    implementationKind: context?.implementationKind ?? undefined,
+    implementationModel: context?.implementationModel ?? undefined,
+    publication,
+    clarifications: context?.clarifications
+      ? context.clarifications.map((round) => ({
+          ...round,
+          questions: [...round.questions],
+        }))
+      : undefined,
+    phaseUsages: { ...(context?.phaseUsages ?? {}) },
+    phaseModels: { ...(context?.phaseModels ?? {}) },
+    activeModel: context?.activeModel ?? context?.implementationModel ?? undefined,
+    prForTelemetry:
+      context?.prForTelemetry ?? publicationPrForTelemetry(publication),
+  };
+}
+
+/** Append one durable answer round without duplicating a retry of the same answer. */
+export function appendClarificationRound(
+  history: HumanDecision[] | undefined,
+  round: HumanDecision,
+): HumanDecision[] {
+  if (
+    history?.some(
+      (existing) =>
+        existing.answer === round.answer &&
+        existing.questions.join("\n") === round.questions.join("\n"),
+    )
+  ) {
+    return history;
+  }
+  return [...(history ?? []), round];
 }
 
 /** Build the planning clarification envelope once so persisted step output and
@@ -1028,6 +1079,9 @@ async function agentWorkflowBody(
         clarificationRequestId: resumeCheckpoint.id,
       })
     : deliveryEntry;
+  const restoredRuntime = restoreClarificationRuntimeState(
+    resumeCheckpoint?.runtimeContext,
+  );
   const ticketId = entry.ticketKey ?? entry.subjectKey;
 
   const { resolveWorkflowTicketStep } = await import("./workflow-ticket.js");
@@ -1140,8 +1194,17 @@ async function agentWorkflowBody(
     }).catch(() => {});
   await writeBlockStatuses();
 
-  const phaseUsages: Record<string, PhaseUsage | null> = {};
-  const phaseModels: Record<string, string> = {};
+  const phaseUsages: Record<string, PhaseUsage | null> = {
+    ...restoredRuntime.phaseUsages,
+  };
+  const phaseModels: Record<string, string> = {
+    ...restoredRuntime.phaseModels,
+  };
+  // The cumulative maps feed downstream notifications and the next checkpoint.
+  // Run-local maps keep per-run telemetry additive instead of charging restored
+  // predecessor usage a second time.
+  const runPhaseUsages: Record<string, PhaseUsage | null> = {};
+  const runPhaseModels: Record<string, string> = {};
   // Phases whose agent was launched. A phase that times out or exits before
   // its usage is parsed never gets a phaseUsages entry; the finally reconciles
   // any such launched-but-missing phase to null so computeUsageTotals flags
@@ -1151,11 +1214,13 @@ async function agentWorkflowBody(
     for (const phase of launchedPhases) {
       if (phase in phaseUsages) continue;
       phaseUsages[phase] = null;
+      runPhaseUsages[phase] = null;
       budgetState = recordBudgetUsage(budgetState, null, null);
     }
   };
   // Captured on the success path; written as run telemetry in the finally.
-  let prForTelemetry: { url: string; number: number } | null = null;
+  let prForTelemetry: { url: string; number: number } | null =
+    restoredRuntime.prForTelemetry;
   // Authoritative terminal status for telemetry, written in the finally on
   // every exit path. Defaults to "failed". The genuine PR-opened success flips
   // it to "success"; the clarification exits record "awaiting" (the run is
@@ -1171,7 +1236,7 @@ async function agentWorkflowBody(
   let awaitingClarificationId: string | null = null;
   // Seeded with the run default model once prepare_workspace provisions the
   // sandbox, then set to the implementation block's model once it runs.
-  let activeModel: string | undefined;
+  let activeModel: string | undefined = restoredRuntime.activeModel;
   let priceLookup: ((m: string) => { input: number; cached_input: number; output: number } | null) | undefined;
   // Returns the formatted usage report when any phase has produced usage,
   // otherwise undefined so the messaging formatter can omit the trailing block.
@@ -1205,44 +1270,32 @@ async function agentWorkflowBody(
         : branchForTicket(ticket.identifier));
     const downloadedAttachments = await fetchAttachments(ticket.identifier, ticket.attachments);
 
-    // Answered Q&A history for this ticket, injected into every prompt so a
-    // resumed / re-picked run sees what a human already answered. Loaded for
-    // every entry kind (a recovery or manual re-pickup is a plain "ticket" run,
-    // and the answers live only in the DB). Best-effort: the step retries on a
-    // transient DB error, but a persistent failure must degrade to no history
-    // (a warn, not a dead run), so we log and continue with undefined.
+    // Ticket-backed history is reloaded from the DB. Ticketless continuations
+    // retain prior rounds in the checkpoint itself because there is no Jira key
+    // to query; either source is then extended with the current answer.
     let clarificationHistory:
       | Array<{ questions: string[]; answer: string; answeredBy?: string; answeredAt?: string }>
-      | undefined;
+      | undefined = restoredRuntime.clarifications;
     if (entry.ticketKey) {
       try {
-        clarificationHistory = await loadClarificationHistoryStep(ticket.identifier);
+        for (const round of await loadClarificationHistoryStep(ticket.identifier)) {
+          clarificationHistory = appendClarificationRound(clarificationHistory, round);
+        }
       } catch (err) {
         await logClarificationHistoryFailure(ticket.identifier, errorMessage(err));
-        clarificationHistory = undefined;
       }
     }
-    if (
-      resumeCheckpoint &&
-      !clarificationHistory?.some(
-        (round) =>
-          round.answer === resumeCheckpoint.answer &&
-          round.questions.join("\n") === resumeCheckpoint.questions.join("\n"),
-      )
-    ) {
-      clarificationHistory = [
-        ...(clarificationHistory ?? []),
-        {
-          questions: resumeCheckpoint.questions,
-          answer: resumeCheckpoint.answer,
-          ...(resumeCheckpoint.answeredByLabel
-            ? { answeredBy: resumeCheckpoint.answeredByLabel }
-            : {}),
-          ...(resumeCheckpoint.answeredAt
-            ? { answeredAt: resumeCheckpoint.answeredAt }
-            : {}),
-        },
-      ];
+    if (resumeCheckpoint) {
+      clarificationHistory = appendClarificationRound(clarificationHistory, {
+        questions: resumeCheckpoint.questions,
+        answer: resumeCheckpoint.answer,
+        ...(resumeCheckpoint.answeredByLabel
+          ? { answeredBy: resumeCheckpoint.answeredByLabel }
+          : {}),
+        ...(resumeCheckpoint.answeredAt
+          ? { answeredAt: resumeCheckpoint.answeredAt }
+          : {}),
+      });
     }
 
     const ticketData = {
@@ -1281,6 +1334,10 @@ async function agentWorkflowBody(
       codex: env.CODEX_MODEL,
       },
     );
+    for (const [phase, usage] of Object.entries(phaseUsages)) {
+      const model = phaseModels[phase];
+      if (usage?.tokens && model) pricedModels.add(model);
+    }
     if (pricedModels.size > 0) {
       const priceMap = new Map<string, { input: number; cached_input: number; output: number }>();
       for (const model of pricedModels) {
@@ -1297,8 +1354,8 @@ async function agentWorkflowBody(
     }
 
     const state = {
-      implementationModel: defaultModel,
-      implementationKind: undefined as AgentKind | undefined,
+      implementationModel: restoredRuntime.implementationModel ?? defaultModel,
+      implementationKind: restoredRuntime.implementationKind,
       attempt: 1,
     };
 
@@ -1333,7 +1390,7 @@ async function agentWorkflowBody(
           : resumeSteps
             ? researchPlanFromCheckpoint(resumeSteps)
             : "",
-      publication: null,
+      publication: restoredRuntime.publication,
       runDefaultKind,
       defaults: { claude: env.CLAUDE_MODEL, codex: env.CODEX_MODEL },
       prompts,
@@ -1347,6 +1404,8 @@ async function agentWorkflowBody(
         const key = phaseKey(label, state.attempt);
         phaseUsages[key] = usage;
         phaseModels[key] = model;
+        runPhaseUsages[key] = usage;
+        runPhaseModels[key] = model;
         budgetState = recordBudgetUsage(
           budgetState,
           usage,
@@ -1468,6 +1527,15 @@ async function agentWorkflowBody(
           budgetState,
           runtimeContext: {
             preSandboxAdditions: ctx.preSandboxAdditions,
+            implementationKind: state.implementationKind ?? null,
+            implementationModel: state.implementationModel,
+            publication: ctx.publication,
+            clarifications: ctx.clarifications ?? [],
+            phaseUsages,
+            phaseModels,
+            activeModel: activeModel ?? null,
+            prForTelemetry:
+              prForTelemetry ?? publicationPrForTelemetry(ctx.publication),
           },
           workspaceManifest,
           sourceSandboxId: ctx.sandboxId,
@@ -1673,6 +1741,7 @@ async function agentWorkflowBody(
             activeModel ??= defaultModel;
             await writeAttachmentsOnce(ctx.sandboxId);
           }
+          prForTelemetry ??= publicationPrForTelemetry(ctx.publication);
           return result;
         }
 
@@ -1685,6 +1754,7 @@ async function agentWorkflowBody(
             const sandboxId = provisioned.sandboxId;
             await writeAttachmentsOnce(sandboxId);
             phaseModels[researchPhase] = model;
+            runPhaseModels[researchPhase] = model;
             await setCommitGuardStep(sandboxId, kind, false);
 
             const { paths: researchPaths, script: researchScript } =
@@ -1753,6 +1823,7 @@ async function agentWorkflowBody(
             const implPhase = phaseKey("Impl", state.attempt);
             const { kind, model } = resolveAgent(node.params);
             phaseModels[implPhase] = model;
+            runPhaseModels[implPhase] = model;
             state.implementationModel = model;
             state.implementationKind = kind;
             // Mixed-run telemetry: the run's headline model is the impl block's.
@@ -1821,6 +1892,7 @@ async function agentWorkflowBody(
             const reviewPhase = phaseKey("Review", state.attempt);
             const { kind, model } = resolveAgent(node.params);
             phaseModels[reviewPhase] = model;
+            runPhaseModels[reviewPhase] = model;
             // Install the review provider's commit guard: in a mixed run it may
             // differ from impl's provider, so its guard was never set up.
             await setCommitGuardStep(sandboxId, kind, true);
@@ -2178,7 +2250,12 @@ async function agentWorkflowBody(
           ? entry.pr.prUrl
           : null,
       model: activeModel ?? null,
-      totals: computeUsageTotals(phaseUsages, priceLookup, activeModel, phaseModels),
+      totals: computeUsageTotals(
+        runPhaseUsages,
+        priceLookup,
+        activeModel,
+        runPhaseModels,
+      ),
       budgetFailure: terminalBudgetFailure,
       pr: prForTelemetry,
       awaitingClarificationId,

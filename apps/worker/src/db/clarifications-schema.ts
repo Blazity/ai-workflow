@@ -19,7 +19,11 @@ import type {
 } from "../workflows/agent-input.js";
 import type { RunBudgetState } from "../workflows/run-budget.js";
 import type { WorkspaceManifest } from "../sandbox/repo-workspace.js";
+import type { AgentKind } from "../sandbox/agents/index.js";
+import type { PhaseUsage } from "../sandbox/agents/types.js";
+import type { HumanDecision } from "../lib/human-decisions-memory.js";
 import type { PreSandboxPromptAdditionsByTarget } from "../pre-sandbox/types.js";
+import type { WorkspacePublicationResult } from "../workflows/workspace-publication.js";
 
 export interface ClarificationSourceHead {
   provider: "github" | "gitlab";
@@ -29,6 +33,15 @@ export interface ClarificationSourceHead {
 
 export interface ClarificationRuntimeContext {
   preSandboxAdditions: PreSandboxPromptAdditionsByTarget;
+  /** Optional for checkpoints written before durable continuation state expanded. */
+  implementationKind?: AgentKind | null;
+  implementationModel?: string | null;
+  publication?: WorkspacePublicationResult | null;
+  clarifications?: HumanDecision[];
+  phaseUsages?: Record<string, PhaseUsage | null>;
+  phaseModels?: Record<string, string>;
+  activeModel?: string | null;
+  prForTelemetry?: { url: string; number: number } | null;
 }
 
 /**

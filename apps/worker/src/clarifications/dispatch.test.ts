@@ -14,6 +14,7 @@ const stores = vi.hoisted(() => {
   return {
     ClarificationStoreError,
     answerClarification: vi.fn(),
+    assertClarificationCheckpointAvailable: vi.fn(),
     getClarification: vi.fn(),
   };
 });
@@ -25,6 +26,8 @@ vi.mock("../workflows/agent.js", () => ({ agentWorkflow: "agentWorkflow_sentinel
 vi.mock("./store.js", () => ({
   ClarificationStoreError: stores.ClarificationStoreError,
   answerClarification: (...a: any[]) => stores.answerClarification(...a),
+  assertClarificationCheckpointAvailable: (...a: any[]) =>
+    stores.assertClarificationCheckpointAvailable(...a),
   getClarification: (...a: any[]) => stores.getClarification(...a),
 }));
 
@@ -126,6 +129,7 @@ function dispatch(overrides: Partial<Parameters<typeof dispatchClarificationAnsw
 describe("dispatchClarificationAnswered", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    stores.assertClarificationCheckpointAvailable.mockReturnValue(undefined);
     wf.start.mockResolvedValue({ runId: "run-x" });
     stores.answerClarification.mockResolvedValue(
       makeClarification({
@@ -353,6 +357,79 @@ describe("dispatchClarificationAnswered", () => {
       ownerToken: "owner-successor",
       kind: "ticket",
     });
+  });
+
+  it("recreates a ticket-linked PR continuation as a PR run", async () => {
+    const answered = makeClarification({
+      status: "answered",
+      answer: "Apply the review suggestion",
+      successorOwnerToken: "owner-successor",
+      originEntry: {
+        kind: "pr_trigger",
+        triggerType: "trigger_pr_review",
+        ticketKey: "AWT-1",
+        definitionId: 7,
+        definitionVersion: 4,
+        scope: "workflow_owned",
+        pr: {
+          provider: "github",
+          repoPath: "acme/api",
+          prNumber: 42,
+          prUrl: "https://github.com/acme/api/pull/42",
+          headRef: "codex/awt-1",
+          headSha: "deadbeef",
+          baseRef: "main",
+          title: "Review me",
+          author: "alice",
+          isDraft: false,
+        },
+      },
+    });
+    stores.getClarification.mockResolvedValue(answered);
+    const reserve = vi.fn().mockResolvedValue(true);
+    const runRegistry = makeRunRegistry({
+      reserve,
+      get: vi.fn().mockResolvedValue(null),
+    });
+
+    await dispatch({ clarification: answered, runRegistry, isRetry: true });
+
+    expect(reserve).toHaveBeenCalledWith({
+      subjectKey: answered.subjectKey,
+      ticketKey: answered.ticketKey,
+      ownerToken: "owner-successor",
+      kind: "pr_trigger",
+    });
+  });
+
+  it("rejects an expired manual retry before ownership or Jira side effects", async () => {
+    const answered = makeClarification({
+      status: "answered",
+      answer: "Use Next.js",
+      successorOwnerToken: "owner-successor",
+      expiresAt: new Date("2026-07-17T00:00:00.000Z"),
+    });
+    stores.getClarification.mockResolvedValue(answered);
+    stores.assertClarificationCheckpointAvailable.mockImplementation(() => {
+      throw new stores.ClarificationStoreError(
+        410,
+        "clarification_checkpoint_expired: restart the ticket to rebuild the workspace",
+      );
+    });
+    const runRegistry = makeRunRegistry();
+    const issueTracker = makeIssueTracker();
+
+    await expect(dispatch({
+      clarification: answered,
+      runRegistry,
+      issueTracker,
+      isRetry: true,
+    })).rejects.toMatchObject({ statusCode: 410 });
+    expect(runRegistry.get).not.toHaveBeenCalled();
+    expect(runRegistry.reserve).not.toHaveBeenCalled();
+    expect(runRegistry.handoffBoundRun).not.toHaveBeenCalled();
+    expect(issueTracker.moveTicket).not.toHaveBeenCalled();
+    expect(wf.start).not.toHaveBeenCalled();
   });
 
   it("returns an already-bound winner instead of starting a duplicate candidate", async () => {

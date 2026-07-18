@@ -1,8 +1,12 @@
-import type { ClarificationSourceHead } from "../db/clarifications-schema.js";
+import type {
+  ClarificationRuntimeContext,
+  ClarificationSourceHead,
+} from "../db/clarifications-schema.js";
 import type { WorkspaceManifest } from "../sandbox/repo-workspace.js";
 import type { StepsRecord } from "../workflow-definition/interpreter.js";
 
 const MAX_CHECKPOINT_STEPS_BYTES = 256 * 1024;
+const MAX_CHECKPOINT_RUNTIME_BYTES = 256 * 1024;
 const SECRET_KEY =
   /(?:^|[_-])(api[_-]?key|authorization|credential|oauth|password|secret|token|cookie)(?:$|[_-])/i;
 
@@ -21,6 +25,21 @@ export function checkpointStepsForPersistence(steps: StepsRecord): StepsRecord {
     );
   }
   return JSON.parse(serialized) as StepsRecord;
+}
+
+/** Persist only the typed, JSON-safe continuation state and fail instead of truncating it. */
+export function checkpointRuntimeContextForPersistence(
+  context: ClarificationRuntimeContext,
+): ClarificationRuntimeContext {
+  assertNoSecretLikeKeys(context);
+  const serialized = JSON.stringify(context);
+  const bytes = Buffer.byteLength(serialized, "utf8");
+  if (bytes > MAX_CHECKPOINT_RUNTIME_BYTES) {
+    throw new Error(
+      `clarification checkpoint runtime context exceeds ${MAX_CHECKPOINT_RUNTIME_BYTES} bytes; reduce clarification history or prompt context before retrying`,
+    );
+  }
+  return JSON.parse(serialized) as ClarificationRuntimeContext;
 }
 
 /** Replace structured references to the stopped source, never arbitrary prose. */
@@ -86,7 +105,9 @@ function rewriteSandboxReferences(
 ): unknown {
   if (
     value === sourceSandboxId &&
-    (key === "sandboxId" || (key === "id" && parentKey === "workspace"))
+    (key === "sandboxId" ||
+      key === "workspaceId" ||
+      (key === "id" && parentKey === "workspace"))
   ) {
     return restoredSandboxId;
   }

@@ -30,6 +30,7 @@ import {
   supersedeClarification,
   supersedePendingForTicket,
   updateClarificationCheckpointBudget,
+  type ClarificationRow,
 } from "./store.js";
 
 function seed(ticketKey = "AWT-1") {
@@ -113,6 +114,31 @@ function checkpointSeed(ticketKey = "AWT-1") {
   };
 }
 
+async function bindCheckpointOwner(
+  db: Db,
+  checkpoint: Pick<ClarificationRow, "subjectKey" | "ticketKey" | "ownerToken" | "runId">,
+): Promise<void> {
+  await db.delete(activeRuns).where(eq(activeRuns.subjectKey, checkpoint.subjectKey));
+  await db.insert(activeRuns).values({
+    subjectKey: checkpoint.subjectKey,
+    ticketKey: checkpoint.ticketKey,
+    ownerToken: checkpoint.ownerToken,
+    runId: checkpoint.runId,
+    state: "bound",
+  });
+}
+
+async function publishBoundCheckpoint(
+  db: Db,
+  id: string,
+  now?: Date,
+): ReturnType<typeof publishClarificationCheckpoint> {
+  const checkpoint = await getClarification(db, id);
+  if (!checkpoint) throw new Error(`missing checkpoint ${id}`);
+  await bindCheckpointOwner(db, checkpoint);
+  return publishClarificationCheckpoint(db, id, now);
+}
+
 describe("durable clarification checkpoints", () => {
   it("keeps a preparing checkpoint unpublished until its snapshot is durable", async () => {
     const db = await createTestDb();
@@ -156,7 +182,7 @@ describe("durable clarification checkpoints", () => {
     expect(ready.checkpointState).toBe("ready");
     expect(ready.cleanupState).toBe("retained");
 
-    const published = await publishClarificationCheckpoint(db, draft.id);
+    const published = await publishBoundCheckpoint(db, draft.id);
     expect(published.row.status).toBe("pending");
     expect(published.row.publishedAt).toBeInstanceOf(Date);
     expect(published.supersededSnapshots).toEqual([]);
@@ -237,7 +263,7 @@ describe("durable clarification checkpoints", () => {
       sourceSandboxId: "sbx-source",
       expiresAt: checkpointSeed().expiresAt,
     });
-    await publishClarificationCheckpoint(db, first.id);
+    await publishBoundCheckpoint(db, first.id);
 
     const second = await createClarificationCheckpoint(db, {
       ...checkpointSeed(),
@@ -250,7 +276,7 @@ describe("durable clarification checkpoints", () => {
       sourceSandboxId: "sbx-source",
       expiresAt: checkpointSeed().expiresAt,
     });
-    const result = await publishClarificationCheckpoint(db, second.id);
+    const result = await publishBoundCheckpoint(db, second.id);
 
     expect(result.row.status).toBe("pending");
     expect(result.supersededSnapshots).toEqual(["snap-old"]);
@@ -291,7 +317,7 @@ describe("durable clarification checkpoints", () => {
     };
     const first = await createClarificationCheckpoint(db, firstInput);
     await completeClarificationCheckpoint(db, first.id, null);
-    await publishClarificationCheckpoint(db, first.id);
+    await publishBoundCheckpoint(db, first.id);
 
     const other = await createClarificationCheckpoint(db, {
       ...firstInput,
@@ -299,7 +325,7 @@ describe("durable clarification checkpoints", () => {
       runId: "run-other-subject",
     });
     await completeClarificationCheckpoint(db, other.id, null);
-    await publishClarificationCheckpoint(db, other.id);
+    await publishBoundCheckpoint(db, other.id);
 
     const replacement = await createClarificationCheckpoint(db, {
       ...firstInput,
@@ -307,7 +333,7 @@ describe("durable clarification checkpoints", () => {
       ownerToken: "owner-replacement",
     });
     await completeClarificationCheckpoint(db, replacement.id, null);
-    await publishClarificationCheckpoint(db, replacement.id);
+    await publishBoundCheckpoint(db, replacement.id);
 
     expect((await getClarification(db, first.id))?.status).toBe("superseded");
     expect((await getPendingForSubject(db, firstInput.subjectKey))?.id).toBe(replacement.id);
@@ -327,7 +353,7 @@ describe("durable clarification checkpoints", () => {
       expiresAt: checkpointSeed().expiresAt,
     });
 
-    const first = await publishClarificationCheckpoint(db, checkpoint.id);
+    const first = await publishBoundCheckpoint(db, checkpoint.id);
     const retry = await publishClarificationCheckpoint(db, checkpoint.id);
 
     expect(first.row.status).toBe("pending");
@@ -346,7 +372,7 @@ describe("durable clarification checkpoints", () => {
       expiresAt: new Date("2026-07-01T00:00:00.000Z"),
     });
     await completeClarificationCheckpoint(db, draft.id, null);
-    await publishClarificationCheckpoint(db, draft.id, new Date("2026-06-30T00:00:00.000Z"));
+    await publishBoundCheckpoint(db, draft.id, new Date("2026-06-30T00:00:00.000Z"));
 
     await expect(
       answerClarification(db, {
@@ -373,7 +399,7 @@ describe("durable clarification checkpoints", () => {
       sourceSandboxId: "sbx-source",
       expiresAt: new Date("2026-07-18T00:00:00.000Z"),
     });
-    await publishClarificationCheckpoint(
+    await publishBoundCheckpoint(
       db,
       checkpoint.id,
       new Date("2026-07-17T00:00:00.000Z"),
@@ -409,7 +435,7 @@ describe("durable clarification checkpoints", () => {
       sourceSandboxId: "sbx-source",
       expiresAt: liveInput.expiresAt,
     });
-    await publishClarificationCheckpoint(db, live.id);
+    await publishBoundCheckpoint(db, live.id);
 
     const orphan = await createClarificationCheckpoint(db, checkpointSeed("AWT-3"));
     await completeClarificationCheckpoint(db, orphan.id, {
@@ -417,7 +443,8 @@ describe("durable clarification checkpoints", () => {
       sourceSandboxId: "sbx-source",
       expiresAt: checkpointSeed().expiresAt,
     });
-    await publishClarificationCheckpoint(db, orphan.id);
+    await publishBoundCheckpoint(db, orphan.id);
+    await db.delete(activeRuns).where(eq(activeRuns.subjectKey, orphan.subjectKey));
 
     const work = await reconcileClarificationCheckpoints(
       db,
@@ -456,7 +483,104 @@ describe("durable clarification checkpoints", () => {
     });
   });
 
-  it("publishes a ready checkpoint after a crash even when the predecessor disappeared", async () => {
+  it("rejects stale publication without superseding the current owner's pending checkpoint", async () => {
+    const db = await createTestDb();
+    const stale = await createClarificationCheckpoint(
+      db,
+      checkpointSeed("AWT-STALE-PUBLISH"),
+    );
+    await completeClarificationCheckpoint(db, stale.id, null);
+
+    const current = await createClarificationCheckpoint(db, {
+      ...checkpointSeed("AWT-STALE-PUBLISH"),
+      ownerToken: "owner-current",
+      runId: "run-current",
+      questions: ["Current question?"],
+      workspaceManifest: null,
+      sourceHeads: [],
+      sourceSandboxId: null,
+      snapshotRequestedAt: null,
+    });
+    await completeClarificationCheckpoint(db, current.id, null);
+    await publishBoundCheckpoint(db, current.id);
+
+    await expect(publishClarificationCheckpoint(db, stale.id)).rejects.toMatchObject({
+      statusCode: 409,
+      message: "clarification_checkpoint_predecessor_not_bound",
+    });
+    expect((await getPendingForSubject(db, current.subjectKey))?.id).toBe(current.id);
+    expect((await getClarification(db, stale.id))?.publishedAt).toBeNull();
+  });
+
+  it("proves exact ownership again at the atomic publication boundary", async () => {
+    const db = await createTestDb();
+    const stale = await createClarificationCheckpoint(
+      db,
+      checkpointSeed("AWT-OWNER-HANDOFF"),
+    );
+    await completeClarificationCheckpoint(db, stale.id, null);
+
+    const current = await createClarificationCheckpoint(db, {
+      ...checkpointSeed("AWT-OWNER-HANDOFF"),
+      ownerToken: "owner-current",
+      runId: "run-current",
+      questions: ["Current question?"],
+      workspaceManifest: null,
+      sourceHeads: [],
+      sourceSandboxId: null,
+      snapshotRequestedAt: null,
+    });
+    await completeClarificationCheckpoint(db, current.id, null);
+    await publishBoundCheckpoint(db, current.id);
+
+    // The stale predecessor owns the subject when publication starts. Simulate
+    // a handoff after its checkpoint read but immediately before the mutation.
+    await bindCheckpointOwner(db, stale);
+    const originalExecute = db.execute.bind(db);
+    db.execute = (async (...args: Parameters<Db["execute"]>) => {
+      await bindCheckpointOwner(db, current);
+      return originalExecute(...args);
+    }) as Db["execute"];
+
+    await expect(publishClarificationCheckpoint(db, stale.id)).rejects.toMatchObject({
+      statusCode: 409,
+      message: "clarification_checkpoint_predecessor_not_bound",
+    });
+    expect((await getPendingForSubject(db, current.subjectKey))?.id).toBe(current.id);
+    expect((await getClarification(db, stale.id))?.publishedAt).toBeNull();
+  });
+
+  it("orphans stale unpublished work without replacing a newer owner's question", async () => {
+    const db = await createTestDb();
+    const stale = await createClarificationCheckpoint(
+      db,
+      checkpointSeed("AWT-STALE-RECONCILE"),
+    );
+    await completeClarificationCheckpoint(db, stale.id, null);
+
+    const current = await createClarificationCheckpoint(db, {
+      ...checkpointSeed("AWT-STALE-RECONCILE"),
+      ownerToken: "owner-current",
+      runId: "run-current",
+      questions: ["Current question?"],
+      workspaceManifest: null,
+      sourceHeads: [],
+      sourceSandboxId: null,
+      snapshotRequestedAt: null,
+    });
+    await completeClarificationCheckpoint(db, current.id, null);
+    await publishBoundCheckpoint(db, current.id);
+
+    expect(await reconcileClarificationCheckpoints(db)).toEqual([]);
+    expect(await getClarification(db, stale.id)).toMatchObject({
+      status: "superseded",
+      checkpointState: "orphaned",
+      publishedAt: null,
+    });
+    expect((await getPendingForSubject(db, current.subjectKey))?.id).toBe(current.id);
+  });
+
+  it("orphans a ready unpublished checkpoint after its exact predecessor disappeared", async () => {
     const db = await createTestDb();
     const checkpoint = await createClarificationCheckpoint(
       db,
@@ -471,12 +595,18 @@ describe("durable clarification checkpoints", () => {
     expect(await reconcileClarificationCheckpoints(
       db,
       new Date("2026-07-18T00:00:00.000Z"),
-    )).toEqual([]);
+    )).toEqual([
+      {
+        clarificationId: checkpoint.id,
+        snapshotId: "snap-unpublished",
+        reason: "orphaned",
+      },
+    ]);
     expect(await getClarification(db, checkpoint.id)).toMatchObject({
-      status: "pending",
-      checkpointState: "ready",
-      cleanupState: "retained",
-      publishedAt: expect.any(Date),
+      status: "superseded",
+      checkpointState: "orphaned",
+      cleanupState: "delete_pending",
+      publishedAt: null,
     });
   });
 
@@ -503,7 +633,7 @@ describe("durable clarification checkpoints", () => {
     const input = checkpointSeed("AWT-4");
     const durable = await createClarificationCheckpoint(db, input);
     await completeClarificationCheckpoint(db, durable.id, null);
-    await publishClarificationCheckpoint(db, durable.id);
+    await publishBoundCheckpoint(db, durable.id);
     await createClarificationRequest(db, seed("AWT-5"));
 
     expect(await listPendingClarificationSubjectKeys(db)).toEqual([
@@ -520,7 +650,7 @@ describe("durable clarification checkpoints", () => {
     };
     const checkpoint = await createClarificationCheckpoint(db, input);
     await completeClarificationCheckpoint(db, checkpoint.id, null);
-    await publishClarificationCheckpoint(
+    await publishBoundCheckpoint(
       db,
       checkpoint.id,
       new Date("2026-07-17T00:00:00.000Z"),
@@ -561,7 +691,7 @@ describe("durable clarification checkpoints", () => {
       sourceSandboxId: "sbx-source",
       expiresAt: input.expiresAt,
     });
-    await publishClarificationCheckpoint(
+    await publishBoundCheckpoint(
       db,
       checkpoint.id,
       new Date("2026-07-17T00:00:00.000Z"),
@@ -605,7 +735,7 @@ describe("durable clarification checkpoints", () => {
       sourceSandboxId: "sbx-source",
       expiresAt: checkpointSeed().expiresAt,
     });
-    await publishClarificationCheckpoint(db, checkpoint.id);
+    await publishBoundCheckpoint(db, checkpoint.id);
     await supersedeClarification(db, checkpoint.id);
 
     expect(await listClarificationSnapshotCleanup(db)).toEqual([
@@ -635,7 +765,7 @@ describe("durable clarification checkpoints", () => {
       sourceSandboxId: "sbx-source",
       expiresAt: checkpointSeed().expiresAt,
     });
-    await publishClarificationCheckpoint(db, checkpoint.id);
+    await publishBoundCheckpoint(db, checkpoint.id);
     await supersedeClarification(db, checkpoint.id);
 
     const claimedAt = new Date("2026-07-18T00:00:00.000Z");
@@ -668,7 +798,7 @@ describe("durable clarification checkpoints", () => {
       sourceSandboxId: "sbx-source",
       expiresAt: checkpointSeed().expiresAt,
     });
-    await publishClarificationCheckpoint(db, checkpoint.id);
+    await publishBoundCheckpoint(db, checkpoint.id);
     await supersedeClarification(db, checkpoint.id);
     await claimClarificationSnapshotCleanup(db, checkpoint.id);
 
@@ -882,19 +1012,17 @@ describe("recordDispatchedRun", () => {
       snapshotRequestedAt: null,
     });
     await completeClarificationCheckpoint(db, checkpoint.id, null);
-    await publishClarificationCheckpoint(db, checkpoint.id);
+    await publishBoundCheckpoint(db, checkpoint.id);
     const row = await answerClarification(db, {
       id: checkpoint.id,
       answer: "Proceed",
       actor: { id: "u1", label: "Alice" },
       successorOwnerToken: "owner-successor",
     });
-    await db.insert(activeRuns).values({
-      subjectKey: row.subjectKey,
-      ticketKey: row.ticketKey,
+    await bindCheckpointOwner(db, {
+      ...row,
       ownerToken: "owner-successor",
       runId: "run-winner",
-      state: "bound",
     });
 
     expect(await recordDispatchedRun(
@@ -943,7 +1071,7 @@ describe("recordDispatchedRun", () => {
       snapshotRequestedAt: null,
     });
     await completeClarificationCheckpoint(db, checkpoint.id, null);
-    await publishClarificationCheckpoint(db, checkpoint.id);
+    await publishBoundCheckpoint(db, checkpoint.id);
     const row = await answerClarification(db, {
       id: checkpoint.id,
       answer: "Proceed",
@@ -967,19 +1095,17 @@ describe("recordDispatchedRun", () => {
       snapshotRequestedAt: null,
     });
     await completeClarificationCheckpoint(db, checkpoint.id, null);
-    await publishClarificationCheckpoint(db, checkpoint.id);
+    await publishBoundCheckpoint(db, checkpoint.id);
     const row = await answerClarification(db, {
       id: checkpoint.id,
       answer: "Proceed",
       actor: { id: "u1", label: "Alice" },
       successorOwnerToken: "owner-successor",
     });
-    await db.insert(activeRuns).values({
-      subjectKey: row.subjectKey,
-      ticketKey: row.ticketKey,
+    await bindCheckpointOwner(db, {
+      ...row,
       ownerToken: "owner-successor",
       runId: "run-winner",
-      state: "bound",
     });
     expect(await recordDispatchedRun(
       db,
@@ -1010,6 +1136,154 @@ describe("recordDispatchedRun", () => {
     expect(await listUndispatchedAnsweredClarifications(db)).toEqual([]);
   });
 
+  it("does not resurrect an earlier answer after its successor publishes another clarification", async () => {
+    const db = await createTestDb();
+    const first = await createClarificationCheckpoint(db, {
+      ...checkpointSeed("AWT-REPEATED"),
+      workspaceManifest: null,
+      sourceHeads: [],
+      sourceSandboxId: null,
+      snapshotRequestedAt: null,
+    });
+    await completeClarificationCheckpoint(db, first.id, null);
+    await publishBoundCheckpoint(db, first.id);
+    const answeredFirst = await answerClarification(db, {
+      id: first.id,
+      answer: "First answer",
+      actor: { id: "u1", label: "Alice" },
+      successorOwnerToken: "owner-second",
+    });
+    await bindCheckpointOwner(db, {
+      ...answeredFirst,
+      ownerToken: "owner-second",
+      runId: "run-second",
+    });
+    expect(await recordDispatchedRun(
+      db,
+      first.id,
+      "owner-second",
+      "run-second",
+    )).toBe(true);
+
+    const second = await createClarificationCheckpoint(db, {
+      ...checkpointSeed("AWT-REPEATED"),
+      ownerToken: "owner-second",
+      runId: "run-second",
+      questions: ["Second question?"],
+      workspaceManifest: null,
+      sourceHeads: [],
+      sourceSandboxId: null,
+      snapshotRequestedAt: null,
+    });
+    await completeClarificationCheckpoint(db, second.id, null);
+    await publishBoundCheckpoint(db, second.id);
+
+    // Simulate the crash boundary after B was published but before publication
+    // acknowledged that B's run had consumed A.
+    await db
+      .update(clarificationRequests)
+      .set({ checkpointState: "ready", cleanupState: "none" })
+      .where(eq(clarificationRequests.id, first.id));
+    expect(await clearDispatchedRun(
+      db,
+      first.id,
+      "owner-second",
+      "run-second",
+    )).toBe(false);
+
+    const answeredSecond = await answerClarification(db, {
+      id: second.id,
+      answer: "Second answer",
+      actor: { id: "u1", label: "Alice" },
+      successorOwnerToken: "owner-third",
+    });
+    await bindCheckpointOwner(db, {
+      ...answeredSecond,
+      ownerToken: "owner-third",
+      runId: "run-third",
+    });
+    expect(await recordDispatchedRun(
+      db,
+      second.id,
+      "owner-third",
+      "run-third",
+    )).toBe(true);
+
+    await reconcileClarificationCheckpoints(db);
+
+    expect(await getClarification(db, first.id)).toMatchObject({
+      checkpointState: "consumed",
+      dispatchedRunId: "run-second",
+    });
+    expect(await listUndispatchedAnsweredClarifications(db)).toEqual([]);
+  });
+
+  it("consumes the earlier answer in the same boundary that publishes its successor", async () => {
+    const db = await createTestDb();
+    const first = await createClarificationCheckpoint(db, {
+      ...checkpointSeed("AWT-ATOMIC-CONSUME"),
+      workspaceManifest: null,
+      sourceHeads: [],
+      sourceSandboxId: null,
+      snapshotRequestedAt: null,
+    });
+    await completeClarificationCheckpoint(db, first.id, null);
+    await publishBoundCheckpoint(db, first.id);
+    const answeredFirst = await answerClarification(db, {
+      id: first.id,
+      answer: "First answer",
+      actor: { id: "u1", label: "Alice" },
+      successorOwnerToken: "owner-second",
+    });
+    await bindCheckpointOwner(db, {
+      ...answeredFirst,
+      ownerToken: "owner-second",
+      runId: "run-second",
+    });
+    expect(await recordDispatchedRun(
+      db,
+      first.id,
+      "owner-second",
+      "run-second",
+    )).toBe(true);
+
+    const second = await createClarificationCheckpoint(db, {
+      ...checkpointSeed("AWT-ATOMIC-CONSUME"),
+      ownerToken: "owner-second",
+      runId: "run-second",
+      questions: ["Second question?"],
+      workspaceManifest: null,
+      sourceHeads: [],
+      sourceSandboxId: null,
+      snapshotRequestedAt: null,
+    });
+    await completeClarificationCheckpoint(db, second.id, null);
+
+    // Run failure cleanup at the first possible boundary after publication SQL.
+    // It must already be too late to clear and reopen the predecessor answer.
+    const originalExecute = db.execute.bind(db);
+    let clearedPredecessor: boolean | undefined;
+    db.execute = (async (...args: Parameters<Db["execute"]>) => {
+      const result = await originalExecute(...args);
+      clearedPredecessor = await clearDispatchedRun(
+        db,
+        first.id,
+        "owner-second",
+        "run-second",
+      );
+      return result;
+    }) as Db["execute"];
+
+    await publishBoundCheckpoint(db, second.id);
+
+    expect(clearedPredecessor).toBe(false);
+    expect(await getClarification(db, first.id)).toMatchObject({
+      checkpointState: "consumed",
+      dispatchedRunId: "run-second",
+    });
+    expect((await getPendingForSubject(db, second.subjectKey))?.id).toBe(second.id);
+  });
+
   it("reopens a ready checkpoint when its bound restore run disappears before consuming the answer", async () => {
     const db = await createTestDb();
     const checkpoint = await createClarificationCheckpoint(db, {
@@ -1020,19 +1294,17 @@ describe("recordDispatchedRun", () => {
       snapshotRequestedAt: null,
     });
     await completeClarificationCheckpoint(db, checkpoint.id, null);
-    await publishClarificationCheckpoint(db, checkpoint.id);
+    await publishBoundCheckpoint(db, checkpoint.id);
     const row = await answerClarification(db, {
       id: checkpoint.id,
       answer: "Proceed",
       actor: { id: "u1", label: "Alice" },
       successorOwnerToken: "owner-successor",
     });
-    await db.insert(activeRuns).values({
-      subjectKey: row.subjectKey,
-      ticketKey: row.ticketKey,
+    await bindCheckpointOwner(db, {
+      ...row,
       ownerToken: "owner-successor",
       runId: "run-restore-crashed",
-      state: "bound",
     });
     await recordDispatchedRun(
       db,

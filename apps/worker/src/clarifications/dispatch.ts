@@ -11,6 +11,7 @@ import { NEEDS_CLARIFICATION_LABEL } from "../lib/labels.js";
 import { logger } from "../lib/logger.js";
 import {
   answerClarification,
+  assertClarificationCheckpointAvailable,
   getClarification,
   type ClarificationRow,
 } from "./store.js";
@@ -73,6 +74,7 @@ export async function dispatchClarificationAnswered(input: {
         "clarification successor reservation is missing; restart the ticket to rebuild the workspace",
       );
     }
+    assertClarificationCheckpointAvailable(fresh);
     checkpoint = fresh;
     successorOwnerToken = fresh.successorOwnerToken;
   }
@@ -84,7 +86,7 @@ export async function dispatchClarificationAnswered(input: {
       subjectKey: checkpoint.subjectKey,
       ticketKey: checkpoint.ticketKey,
       ownerToken: successorOwnerToken,
-      kind: checkpoint.ticketKey ? "ticket" : "pr_trigger",
+      kind: checkpoint.originEntry.kind === "pr_trigger" ? "pr_trigger" : "ticket",
     });
     if (!recreatedSuccessorReservation) {
       active = await runRegistry.get(checkpoint.subjectKey);

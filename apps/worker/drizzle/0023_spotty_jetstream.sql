@@ -32,7 +32,10 @@ SET
   "cleanup_state" = 'deleted',
   "cleanup_error" = 'Legacy clarification cannot be resumed; restart the ticket to rebuild the workflow checkpoint.',
   "status" = 'superseded'
-WHERE "status" = 'pending' AND "checkpoint_state" IS NULL;--> statement-breakpoint
+WHERE (
+  "status" = 'pending'
+  OR ("status" = 'answered' AND "dispatched_run_id" IS NULL)
+) AND "checkpoint_state" IS NULL;--> statement-breakpoint
 DROP INDEX IF EXISTS "clarification_requests_pending_ticket_idx";--> statement-breakpoint
 ALTER TABLE "clarification_requests" ALTER COLUMN "ticket_key" DROP NOT NULL;--> statement-breakpoint
 CREATE UNIQUE INDEX "clarification_requests_pending_subject_idx" ON "clarification_requests" USING btree ("subject_key") WHERE "clarification_requests"."status" = 'pending';--> statement-breakpoint

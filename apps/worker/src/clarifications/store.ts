@@ -174,6 +174,10 @@ function emptyBudgetState(): RunBudgetState {
   };
 }
 
+function rawRows<T>(result: unknown): T[] {
+  return ((result as { rows?: T[] }).rows ?? []) as T[];
+}
+
 export interface CreateClarificationCheckpointInput {
   ticketKey: string | null;
   subjectKey: string;
@@ -348,10 +352,9 @@ export async function updateClarificationCheckpointBudget(
 }
 
 /**
- * Makes a ready checkpoint answerable. Replacement is intentionally ordered:
- * the new durable row already exists, the old pending row is retired, then the
- * new row is published. A crash between the last two writes leaves a ready row
- * that reconciliation/retry can safely publish; it never loses the checkpoint.
+ * Makes a ready checkpoint answerable. Exact owner proof, old-question
+ * retirement, and publication share one SQL statement so an owner handoff can
+ * never land between authorization and mutation.
  */
 export async function publishClarificationCheckpoint(
   db: Db,
@@ -369,44 +372,126 @@ export async function publishClarificationCheckpoint(
     );
   }
   if (checkpoint.status === "pending") {
+    await consumeAnsweredPredecessor(db, checkpoint);
     return { row: checkpoint, supersededSnapshots: [] };
   }
 
-  const replaced = await db
+  const result = await db.execute(sql`
+    WITH exact_owner AS MATERIALIZED (
+      SELECT 1
+      FROM active_runs
+      WHERE subject_key = ${checkpoint.subjectKey}
+        AND owner_token = ${checkpoint.ownerToken}
+        AND run_id = ${checkpoint.runId}
+        AND state = 'bound'
+      FOR UPDATE
+    ), candidate AS MATERIALIZED (
+      SELECT id
+      FROM clarification_requests
+      WHERE id = ${id}
+        AND status = 'superseded'
+        AND checkpoint_state = 'ready'
+        AND (expires_at IS NULL OR expires_at > ${now})
+        AND EXISTS (SELECT 1 FROM exact_owner)
+      FOR UPDATE
+    ), retired AS (
+      UPDATE clarification_requests AS previous
+      SET status = 'superseded',
+          cleanup_state = CASE
+            WHEN previous.snapshot_id IS NOT NULL THEN 'delete_pending'
+            ELSE previous.cleanup_state
+          END
+      WHERE previous.subject_key = ${checkpoint.subjectKey}
+        AND previous.status = 'pending'
+        AND previous.id <> ${id}
+        AND EXISTS (SELECT 1 FROM candidate)
+      RETURNING previous.snapshot_id
+    ), published AS (
+      UPDATE clarification_requests AS target
+      SET status = 'pending', published_at = ${now}
+      FROM candidate
+      CROSS JOIN (SELECT count(*) FROM retired) AS retirement_barrier
+      WHERE target.id = candidate.id
+      RETURNING target.id
+    ), consumed_predecessor AS (
+      UPDATE clarification_requests AS predecessor
+      SET checkpoint_state = 'consumed',
+          cleanup_state = CASE
+            WHEN predecessor.snapshot_id IS NOT NULL THEN 'delete_pending'
+            ELSE predecessor.cleanup_state
+          END,
+          cleanup_error = NULL,
+          cleanup_claimed_at = NULL
+      WHERE predecessor.subject_key = ${checkpoint.subjectKey}
+        AND predecessor.status = 'answered'
+        AND predecessor.checkpoint_state = 'ready'
+        AND predecessor.successor_owner_token = ${checkpoint.ownerToken}
+        AND predecessor.dispatched_run_id = ${checkpoint.runId}
+        AND predecessor.id <> ${id}
+        AND EXISTS (SELECT 1 FROM published)
+      RETURNING predecessor.id
+    )
+    SELECT
+      (SELECT count(*)::integer FROM exact_owner) AS exact_owner_count,
+      (SELECT id FROM published) AS published_id,
+      (SELECT count(*)::integer FROM consumed_predecessor) AS consumed_predecessor_count,
+      COALESCE(
+        (SELECT jsonb_agg(snapshot_id) FILTER (WHERE snapshot_id IS NOT NULL) FROM retired),
+        '[]'::jsonb
+      ) AS superseded_snapshots
+  `);
+  const outcome = rawRows<{
+    exact_owner_count: number;
+    published_id: string | null;
+    consumed_predecessor_count: number;
+    superseded_snapshots: unknown;
+  }>(result)[0];
+  if (!outcome?.published_id) {
+    if (Number(outcome?.exact_owner_count ?? 0) === 0) {
+      throw new ClarificationStoreError(
+        409,
+        "clarification_checkpoint_predecessor_not_bound",
+      );
+    }
+    throw new ClarificationStoreError(409, "clarification_checkpoint_publish_conflict");
+  }
+  const published = await getClarification(db, outcome.published_id);
+  if (!published) {
+    throw new ClarificationStoreError(500, "clarification_checkpoint_publish_not_readable");
+  }
+  return {
+    row: published,
+    supersededSnapshots: Array.isArray(outcome.superseded_snapshots)
+      ? outcome.superseded_snapshots.filter(
+          (snapshotId): snapshotId is string => typeof snapshotId === "string",
+        )
+      : [],
+  };
+}
+
+/** A published follow-up checkpoint proves its run consumed the prior answer. */
+async function consumeAnsweredPredecessor(
+  db: Db,
+  checkpoint: Pick<ClarificationRow, "id" | "subjectKey" | "ownerToken" | "runId">,
+): Promise<void> {
+  await db
     .update(clarificationRequests)
     .set({
-      status: "superseded",
+      checkpointState: "consumed",
       cleanupState: cleanupStateAfterRetirement(),
+      cleanupError: null,
+      cleanupClaimedAt: null,
     })
     .where(
       and(
         eq(clarificationRequests.subjectKey, checkpoint.subjectKey),
-        eq(clarificationRequests.status, "pending"),
+        eq(clarificationRequests.status, "answered"),
+        eq(clarificationRequests.checkpointState, "ready"),
+        eq(clarificationRequests.successorOwnerToken, checkpoint.ownerToken),
+        eq(clarificationRequests.dispatchedRunId, checkpoint.runId),
         ne(clarificationRequests.id, checkpoint.id),
       ),
-    )
-    .returning({ snapshotId: clarificationRequests.snapshotId });
-
-  const rows = await db
-    .update(clarificationRequests)
-    .set({ status: "pending", publishedAt: now })
-    .where(
-      and(
-        eq(clarificationRequests.id, id),
-        eq(clarificationRequests.status, "superseded"),
-        eq(clarificationRequests.checkpointState, "ready"),
-      ),
-    )
-    .returning();
-  if (!rows[0]) {
-    throw new ClarificationStoreError(409, "clarification_checkpoint_publish_conflict");
-  }
-  return {
-    row: mapRow(rows[0]),
-    supersededSnapshots: replaced
-      .map((row) => row.snapshotId)
-      .filter((snapshotId): snapshotId is string => snapshotId !== null),
-  };
+    );
 }
 
 /**
@@ -595,6 +680,39 @@ export async function answerClarification(
     throw new ClarificationStoreError(409, "already_answered");
   }
   const now = input.now ?? new Date();
+  assertClarificationCheckpointAvailable(current, now);
+
+  const rows = await db
+    .update(clarificationRequests)
+    .set({
+      status: "answered",
+      answer: input.answer,
+      answeredById: input.actor.id,
+      answeredByLabel: input.actor.label,
+      answeredAt: now,
+      ...(input.successorOwnerToken
+        ? {
+            successorOwnerToken: input.successorOwnerToken,
+            successorReservedAt: now,
+          }
+        : {}),
+    })
+    .where(
+      and(eq(clarificationRequests.id, input.id), eq(clarificationRequests.status, "pending")),
+    )
+    .returning();
+  const row = rows[0];
+  if (!row) {
+    throw new ClarificationStoreError(409, "already_answered");
+  }
+  return mapRow(row);
+}
+
+/** Shared availability gate for the initial answer and answered-row dispatch retries. */
+export function assertClarificationCheckpointAvailable(
+  current: ClarificationRow,
+  now = new Date(),
+): void {
   if (
     current.checkpointState === "expired" ||
     (current.expiresAt !== null && current.expiresAt.getTime() <= now.getTime())
@@ -635,31 +753,6 @@ export async function answerClarification(
       "clarification_snapshot_unavailable: restart the ticket to rebuild the workspace",
     );
   }
-
-  const rows = await db
-    .update(clarificationRequests)
-    .set({
-      status: "answered",
-      answer: input.answer,
-      answeredById: input.actor.id,
-      answeredByLabel: input.actor.label,
-      answeredAt: now,
-      ...(input.successorOwnerToken
-        ? {
-            successorOwnerToken: input.successorOwnerToken,
-            successorReservedAt: now,
-          }
-        : {}),
-    })
-    .where(
-      and(eq(clarificationRequests.id, input.id), eq(clarificationRequests.status, "pending")),
-    )
-    .returning();
-  const row = rows[0];
-  if (!row) {
-    throw new ClarificationStoreError(409, "already_answered");
-  }
-  return mapRow(row);
 }
 
 export interface ClarificationCleanupWork {
@@ -705,6 +798,13 @@ export async function reconcileClarificationCheckpoints(
           row.snapshotExpiresAt.getTime() <= now.getTime()));
     const pending = row.status === "pending";
     const unpublished = row.status === "superseded" && row.publishedAt === null;
+    const hasExactPredecessor = owners.some(
+      (owner) =>
+        owner.subjectKey === row.subjectKey &&
+        owner.ownerToken === row.ownerToken &&
+        owner.runId === row.runId &&
+        owner.state === "bound",
+    );
     const hasExactSuccessor = owners.some(
       (owner) =>
         owner.subjectKey === row.subjectKey &&
@@ -718,6 +818,10 @@ export async function reconcileClarificationCheckpoints(
       row.dispatchedRunId !== null &&
       !hasExactSuccessor
     ) {
+      if (await hasPublishedSuccessorCheckpoint(db, row)) {
+        await consumeAnsweredCheckpoint(db, row);
+        continue;
+      }
       await db
         .update(clarificationRequests)
         .set({ dispatchedRunId: null })
@@ -731,7 +835,12 @@ export async function reconcileClarificationCheckpoints(
         );
       continue;
     }
-    if (!expired && unpublished && row.checkpointState === "ready") {
+    if (
+      !expired &&
+      unpublished &&
+      row.checkpointState === "ready" &&
+      hasExactPredecessor
+    ) {
       try {
         await publishClarificationCheckpoint(db, row.id, now);
       } catch (error) {
@@ -741,13 +850,6 @@ export async function reconcileClarificationCheckpoints(
       }
       continue;
     }
-    const hasExactPredecessor = owners.some(
-      (owner) =>
-        owner.subjectKey === row.subjectKey &&
-        owner.ownerToken === row.ownerToken &&
-        owner.runId === row.runId &&
-        owner.state === "bound",
-    );
     const reason = expired
       ? "expired"
       : (pending || unpublished) && !hasExactPredecessor
@@ -780,6 +882,47 @@ export async function reconcileClarificationCheckpoints(
   }
 
   return work;
+}
+
+async function hasPublishedSuccessorCheckpoint(
+  db: Db,
+  row: ClarificationRow,
+): Promise<boolean> {
+  if (!row.successorOwnerToken || !row.dispatchedRunId) return false;
+  const successors = await db
+    .select({ id: clarificationRequests.id })
+    .from(clarificationRequests)
+    .where(
+      and(
+        eq(clarificationRequests.subjectKey, row.subjectKey),
+        eq(clarificationRequests.ownerToken, row.successorOwnerToken),
+        eq(clarificationRequests.runId, row.dispatchedRunId),
+        isNotNull(clarificationRequests.publishedAt),
+        ne(clarificationRequests.id, row.id),
+      ),
+    )
+    .limit(1);
+  return successors.length > 0;
+}
+
+async function consumeAnsweredCheckpoint(db: Db, row: ClarificationRow): Promise<void> {
+  await db
+    .update(clarificationRequests)
+    .set({
+      checkpointState: "consumed",
+      cleanupState: cleanupStateAfterRetirement(),
+      cleanupError: null,
+      cleanupClaimedAt: null,
+    })
+    .where(
+      and(
+        eq(clarificationRequests.id, row.id),
+        eq(clarificationRequests.status, "answered"),
+        eq(clarificationRequests.checkpointState, "ready"),
+        eq(clarificationRequests.successorOwnerToken, row.successorOwnerToken!),
+        eq(clarificationRequests.dispatchedRunId, row.dispatchedRunId!),
+      ),
+    );
 }
 
 export async function markClarificationSnapshotDeleted(db: Db, id: string): Promise<boolean> {
@@ -1120,6 +1263,15 @@ export async function clearDispatchedRun(
         eq(clarificationRequests.checkpointState, "ready"),
         eq(clarificationRequests.successorOwnerToken, ownerToken),
         eq(clarificationRequests.dispatchedRunId, runId),
+        sql`not exists (
+          select 1
+          from clarification_requests as published_successor
+          where published_successor.subject_key = ${clarificationRequests.subjectKey}
+            and published_successor.owner_token = ${clarificationRequests.successorOwnerToken}
+            and published_successor.run_id = ${clarificationRequests.dispatchedRunId}
+            and published_successor.published_at is not null
+            and published_successor.id <> ${clarificationRequests.id}
+        )`,
       ),
     )
     .returning({ id: clarificationRequests.id });
