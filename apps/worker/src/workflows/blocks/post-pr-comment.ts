@@ -4,7 +4,7 @@ import type { BlockExecuteFn, BlockExecutionResult, EngineCtx } from "./types.js
 
 export const paramsSchema = z
   .object({
-    body: z.string().trim().min(1).max(16000),
+    body: z.string().trim().max(16000).optional(),
     target: z.enum(["primary", "all"]).default("primary"),
   })
   .strict();

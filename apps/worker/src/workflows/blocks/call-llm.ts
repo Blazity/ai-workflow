@@ -1,11 +1,12 @@
 import { z } from "zod";
 import type { JsonValue } from "@shared/contracts";
+import { validateBlockOutputForDefinition } from "../../workflow-definition/block-registry.js";
 import { RunBudgetError } from "../run-budget.js";
 import type { BlockExecuteFn, BlockExecutionResult } from "./types.js";
 
 export const paramsSchema = z
   .object({
-    prompt: z.string().min(1),
+    prompt: z.string().optional(),
     system: z.string().optional(),
     model: z.string().trim().max(200).regex(/^[A-Za-z0-9._:\/-]+$/).optional(),
     provider: z.enum(["claude", "codex"]).optional(),
@@ -148,9 +149,25 @@ export const execute: BlockExecuteFn = async (
       model,
     );
 
-    const output =
-      schema !== undefined && result.hasObject ? (result.object as JsonValue) : result.text;
-    return { kind: "next", output: { status: "ok", output } };
+    if (schema !== undefined) {
+      if (!result.hasObject) {
+        return {
+          kind: "failed",
+          output: { status: "failed" },
+          reason: "LLM output did not match the requested schema",
+        };
+      }
+      const output = { status: "ok", output: result.object as JsonValue } as const;
+      if (validateBlockOutputForDefinition(block.type, block.params, output).length > 0) {
+        return {
+          kind: "failed",
+          output: { status: "failed" },
+          reason: "LLM output did not match the requested schema",
+        };
+      }
+      return { kind: "next", output };
+    }
+    return { kind: "next", output: { status: "ok", output: result.text } };
   } catch (err) {
     ctx.recordUsage(usageLabel, null, model);
     const after = await ctx.observeBudget();

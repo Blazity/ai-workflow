@@ -12,11 +12,11 @@ import { execute, paramsSchema } from "./post-ticket-comment.js";
 import { expectOutputConformsToRegistry, makeCtx, makeNode } from "./test-support.js";
 
 describe("post_ticket_comment paramsSchema", () => {
-  it("requires a non-empty body within limits", () => {
+  it("allows a binding-only body and enforces the static-body limit", () => {
     expect(paramsSchema.safeParse({ body: "hello" }).success).toBe(true);
-    expect(paramsSchema.safeParse({ body: "" }).success).toBe(false);
+    expect(paramsSchema.safeParse({ body: "" }).success).toBe(true);
     expect(paramsSchema.safeParse({ body: "x".repeat(8001) }).success).toBe(false);
-    expect(paramsSchema.safeParse({}).success).toBe(false);
+    expect(paramsSchema.safeParse({}).success).toBe(true);
     expect(paramsSchema.safeParse({ body: "hi", extra: 1 }).success).toBe(false);
   });
 });

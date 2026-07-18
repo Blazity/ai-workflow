@@ -65,8 +65,8 @@ describe("workflowDefinitionSchema edge cases (ZOD shape)", () => {
     expect(shapeOk([node("n", "update_ticket_status", {})])).toBe(false);
   });
 
-  it("rejects call_llm missing its required prompt", () => {
-    expect(shapeOk([node("n", "call_llm", {})])).toBe(false);
+  it("accepts call_llm without a static prompt so a draft can bind one", () => {
+    expect(shapeOk([node("n", "call_llm", {})])).toBe(true);
   });
 
   it("rejects an edge missing 'from'", () => {

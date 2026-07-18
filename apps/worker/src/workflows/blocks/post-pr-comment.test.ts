@@ -40,11 +40,12 @@ function publication(): WorkspacePublicationResult {
 }
 
 describe("post_pr_comment paramsSchema", () => {
-  it("requires a body, defaults target to primary, and rejects unknown keys", () => {
+  it("allows a binding-only body, defaults target to primary, and rejects unknown keys", () => {
     const parsed = paramsSchema.safeParse({ body: "hi" });
     expect(parsed.success).toBe(true);
     if (parsed.success) expect(parsed.data.target).toBe("primary");
-    expect(paramsSchema.safeParse({ body: "" }).success).toBe(false);
+    expect(paramsSchema.safeParse({ body: "" }).success).toBe(true);
+    expect(paramsSchema.safeParse({}).success).toBe(true);
     expect(paramsSchema.safeParse({ body: "x".repeat(16001) }).success).toBe(false);
     expect(paramsSchema.safeParse({ body: "hi", target: "some" }).success).toBe(false);
     expect(paramsSchema.safeParse({ body: "hi", extra: 1 }).success).toBe(false);

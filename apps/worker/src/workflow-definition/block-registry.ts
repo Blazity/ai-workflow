@@ -1050,11 +1050,42 @@ export function validateBlockOutputAgainstContract(
   contract: WorkflowBlockContract,
   output: BlockOutput,
 ): string[] {
-  const issues = contract.output.statusVariants.includes(output.status)
+  return validateBlockOutputShape(
+    contract.output.statusVariants,
+    contract.output.schema,
+    output,
+  );
+}
+
+function validateBlockOutputShape(
+  statusVariants: readonly string[],
+  schema: WorkflowValueSchema,
+  output: BlockOutput,
+): string[] {
+  const issues = statusVariants.includes(output.status)
     ? []
-    : [`output.status must be one of: ${contract.output.statusVariants.join(", ")}.`];
-  issues.push(...validateValueAgainstSchema(contract.output.schema, output, "output"));
+    : [`output.status must be one of: ${statusVariants.join(", ")}.`];
+  issues.push(...validateValueAgainstSchema(schema, output, "output"));
   return issues;
+}
+
+/** Runtime validation for a block whose output contract depends on authored
+ * params. This resolves the same dynamic schema exposed by the registry, but
+ * deliberately does not require an environment context because availability
+ * is unrelated to validating an already-produced value. */
+export function validateBlockOutputForDefinition(
+  type: WorkflowBlockType,
+  params: Record<string, WorkflowParamValue>,
+  output: BlockOutput,
+): string[] {
+  const definitionIssue = workflowBlockDefinitionIssue(type, params);
+  if (definitionIssue) return [`output contract is invalid: ${definitionIssue}`];
+  const definition = definitions[type];
+  return validateBlockOutputShape(
+    definition.statusVariants,
+    resolvedOutput(type, params, definition.output),
+    output,
+  );
 }
 
 export function resolveWorkflowBlockContract(

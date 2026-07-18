@@ -794,11 +794,23 @@ describe("workflowDefinitionSchema block-executor node types", () => {
     expect(shapeOk([node("n", "call_llm", { prompt: "p", model: "back`tick" })])).toBe(false);
   });
 
-  it("bounds fix_agent maxMinutes and requires generic_agent prompt", () => {
+  it("bounds fix_agent maxMinutes", () => {
     expect(shapeOk([node("n", "fix_agent", { maxMinutes: 4 })])).toBe(false);
     expect(shapeOk([node("n", "fix_agent", { maxMinutes: 61 })])).toBe(false);
-    expect(shapeOk([node("n", "generic_agent", {})])).toBe(false);
-    expect(shapeOk([node("n", "generic_agent", { prompt: "" })])).toBe(false);
+  });
+
+  it.each([
+    ["call_llm", "prompt"],
+    ["generic_agent", "prompt"],
+    ["post_ticket_comment", "body"],
+    ["post_pr_comment", "body"],
+  ] as const)("accepts a binding-only %s draft through its typed %s input", (type, inputName) => {
+    expect(
+      shapeOk([
+        node("source", "planning_agent"),
+        node("consumer", type, {}, { [inputName]: "steps.source.output.plan" }),
+      ]),
+    ).toBe(true);
   });
 
   it("accepts provider status ids and rejects blank update_ticket_status targets", () => {
@@ -1334,6 +1346,134 @@ describe("validateWorkflowGraph rules", () => {
     expect(validateWorkflowDefinitionForDeployment(def, registryContext)).toEqual(
       expect.arrayContaining([expect.stringContaining('references unknown block "ghost"')]),
     );
+  });
+
+  it.each([
+    ["call_llm", "prompt"],
+    ["generic_agent", "prompt"],
+    ["post_ticket_comment", "body"],
+    ["post_pr_comment", "body"],
+  ] as const)(
+    "deploys %s with a compatible bound %s and rejects the block when both sources are absent",
+    (type, inputName) => {
+      const bound = graph(
+        [
+          node("trigger", "trigger_ticket_ai"),
+          node("source", "planning_agent"),
+          node("consumer", type, {}, { [inputName]: "steps.source.output.plan" }),
+        ],
+        [
+          { from: "trigger", to: "source" },
+          { from: "source", to: "consumer" },
+        ],
+      );
+      const parsed = workflowDefinitionSchema.safeParse(bound);
+      expect(parsed.success).toBe(true);
+      if (!parsed.success) return;
+      expect(validateWorkflowDefinitionForDeployment(parsed.data, registryContext)).toEqual([]);
+
+      const missing = graph(
+        [node("trigger", "trigger_ticket_ai"), node("consumer", type)],
+        [{ from: "trigger", to: "consumer" }],
+      );
+      const missingParsed = workflowDefinitionSchema.safeParse(missing);
+      expect(missingParsed.success).toBe(true);
+      if (!missingParsed.success) return;
+      expect(validateWorkflowDefinitionForDeployment(missingParsed.data, registryContext)).toContain(
+        `Block "consumer" (${type}) requires either a non-empty "${inputName}" parameter or a compatible "${inputName}" input binding.`,
+      );
+    },
+  );
+
+  describe("workspace capability validation", () => {
+    it.each([
+      ["trigger", []],
+      ["planning agent", [node("before", "planning_agent")]],
+      [
+        "agent-only Generic Agent",
+        [node("before", "generic_agent", { prompt: "plan", workspaceMode: "none" })],
+      ],
+      [
+        "workspace-mode Generic Agent without a producer",
+        [node("before", "generic_agent", { prompt: "edit", workspaceMode: "read_write" })],
+      ],
+    ] as const)("rejects Run Checks after %s", (_label, predecessors) => {
+      const nodes = [
+        node("trigger", "trigger_ticket_ai"),
+        ...predecessors,
+        node("checks", "run_checks"),
+      ];
+      const chain = nodes.slice(0, -1).map((current, index) => ({
+        from: current.id,
+        to: nodes[index + 1]!.id,
+      }));
+
+      expect(validateWorkflowDefinitionForDeployment(graph(nodes, chain), registryContext)).toContain(
+        'Block "checks" (run_checks) requires a workspace-producing block to run before it on every path.',
+      );
+    });
+
+    it.each([
+      ["Prepare Workspace", "prepare_workspace"],
+      ["Implementation Agent", "implementation_agent"],
+      ["Review Agent", "review_agent"],
+      ["Fix Agent", "fix_agent"],
+    ] as const)("accepts Run Checks after a dominating %s", (_label, producerType) => {
+      const def = graph(
+        [
+          node("trigger", "trigger_ticket_ai"),
+          node("producer", producerType),
+          node("checks", "run_checks"),
+        ],
+        [
+          { from: "trigger", to: "producer" },
+          { from: "producer", to: "checks" },
+        ],
+      );
+
+      expect(validateWorkflowDefinitionForDeployment(def, registryContext)).toEqual([]);
+    });
+
+    it("rejects a workspace producer that runs on only one path to Run Checks", () => {
+      const def = graph(
+        [
+          node("trigger", "trigger_ticket_ai"),
+          node("branch", "branch", { condition: "true" }),
+          node("prepare", "prepare_workspace"),
+          node("bypass", "send_slack_message", { message: "skip preparation" }),
+          node("checks", "run_checks"),
+        ],
+        [
+          { from: "trigger", to: "branch" },
+          { from: "branch", to: "prepare", fromPort: "true" },
+          { from: "branch", to: "bypass", fromPort: "false" },
+          { from: "prepare", to: "checks" },
+          { from: "bypass", to: "checks" },
+        ],
+      );
+
+      expect(validateWorkflowDefinitionForDeployment(def, registryContext)).toContain(
+        'Block "checks" (run_checks) requires a workspace-producing block to run before it on every path.',
+      );
+    });
+
+    it("does not treat a workspace producer's failure path as a guaranteed workspace", () => {
+      const def = graph(
+        [
+          node("trigger", "trigger_ticket_ai"),
+          node("implementation", "implementation_agent"),
+          node("checks", "run_checks"),
+        ],
+        [
+          { from: "trigger", to: "implementation" },
+          { from: "implementation", to: "checks", fromPort: "failed" },
+        ],
+      );
+
+      expect(validateWorkflowDefinitionForDeployment(def, registryContext)).toContain(
+        'Block "checks" (run_checks) requires a workspace-producing block to run before it on every path.',
+      );
+    });
   });
 
   it("rejects environmentally unavailable blocks only at deployment validation", () => {

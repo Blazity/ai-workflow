@@ -141,6 +141,11 @@ describe("lib/llm generateStructured routing and usage", () => {
 });
 
 describe("call_llm paramsSchema", () => {
+  it("allows the static prompt to be omitted when a typed binding will supply it", () => {
+    expect(callLlmParams.safeParse({}).success).toBe(true);
+    expect(callLlmParams.safeParse({ prompt: "" }).success).toBe(true);
+  });
+
   it("rejects a model with illegal chars or longer than 200 chars", () => {
     expect(callLlmParams.safeParse({ prompt: "p", model: "bad model!" }).success).toBe(false);
     expect(callLlmParams.safeParse({ prompt: "p", model: "a".repeat(201) }).success).toBe(false);
@@ -181,7 +186,7 @@ describe("call_llm execute", () => {
     expect(ctx.recordUsage).toHaveBeenCalledWith("LLM llm-2", null, "codex-model");
   });
 
-  it("falls back to result.text when a schema is set but no object is returned", async () => {
+  it("fails when a schema is set but the provider returns no structured object", async () => {
     mockGenerateText.mockResolvedValueOnce({ text: "fallback", usage: {} });
 
     const result = await callLlmExecute(
@@ -190,7 +195,41 @@ describe("call_llm execute", () => {
       makeCtx(),
     );
 
-    expect(result.output).toEqual({ status: "ok", output: "fallback" });
+    expect(result.kind).toBe("failed");
+    if (result.kind === "failed") {
+      expect(result.reason).toBe("LLM output did not match the requested schema");
+    }
+  });
+
+  it("accepts a Call LLM value that conforms to its declared schema", async () => {
+    mockGenerateText.mockResolvedValueOnce({ text: "", output: { answer: 42 }, usage: {} });
+    const outputSchema =
+      '{"type":"object","properties":{"answer":{"type":"number"}},"required":["answer"],"additionalProperties":false}';
+
+    const result = await callLlmExecute(
+      makeNode("call_llm", { prompt: "hi", outputSchema }),
+      {},
+      makeCtx(),
+    );
+
+    expect(result).toEqual({ kind: "next", output: { status: "ok", output: { answer: 42 } } });
+  });
+
+  it("fails when a Call LLM value has the wrong declared shape", async () => {
+    mockGenerateText.mockResolvedValueOnce({ text: "", output: { answer: "forty-two" }, usage: {} });
+    const outputSchema =
+      '{"type":"object","properties":{"answer":{"type":"number"}},"required":["answer"],"additionalProperties":false}';
+
+    const result = await callLlmExecute(
+      makeNode("call_llm", { prompt: "hi", outputSchema }),
+      {},
+      makeCtx(),
+    );
+
+    expect(result.kind).toBe("failed");
+    if (result.kind === "failed") {
+      expect(result.reason).toBe("LLM output did not match the requested schema");
+    }
   });
 
   it("treats a whitespace-only outputSchema as no schema", async () => {

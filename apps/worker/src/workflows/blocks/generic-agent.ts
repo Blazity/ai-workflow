@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { JsonValue } from "@shared/contracts";
 import type { AgentKind } from "../../sandbox/agents/index.js";
 import type { PhaseArtifactPaths, PhaseUsage } from "../../sandbox/agents/types.js";
+import { validateBlockOutputForDefinition } from "../../workflow-definition/block-registry.js";
 import { resolveBlockAgent } from "../../workflow-definition/resolve-agent.js";
 import { ensureAgentSandbox } from "./agent-sandbox.js";
 import { isRunBudgetError } from "../run-budget.js";
@@ -12,7 +13,7 @@ export const paramsSchema = z
   .object({
     provider: z.enum(["claude", "codex"]).optional(),
     model: z.string().trim().max(200).regex(/^[A-Za-z0-9._:\/-]+$/).optional(),
-    prompt: z.string().min(1),
+    prompt: z.string().optional(),
     outputSchema: z.string().optional(),
     workspaceMode: z.enum(["none", "read_write"]).default("none"),
   })
@@ -248,7 +249,15 @@ export const execute: BlockExecuteFn = async (
           reason: "agent output did not match the requested schema",
         };
       }
-      return { kind: "next", output: { status: "ok", data: object as JsonValue } };
+      const output = { status: "ok", data: object as JsonValue } as const;
+      if (validateBlockOutputForDefinition(block.type, block.params, output).length > 0) {
+        return {
+          kind: "failed",
+          output: { status: "failed" },
+          reason: "agent output did not match the requested schema",
+        };
+      }
+      return { kind: "next", output };
     }
 
     const parsed = genericOutputSchema.safeParse(object);

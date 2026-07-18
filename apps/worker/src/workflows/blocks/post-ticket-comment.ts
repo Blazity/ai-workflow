@@ -3,7 +3,7 @@ import type { BlockExecuteFn, BlockExecutionResult } from "./types.js";
 
 export const paramsSchema = z
   .object({
-    body: z.string().trim().min(1).max(8000),
+    body: z.string().trim().max(8000).optional(),
   })
   .strict();
 

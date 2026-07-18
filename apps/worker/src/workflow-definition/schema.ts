@@ -7,6 +7,7 @@ import type {
 } from "@shared/contracts";
 import {
   BLOCK_TYPE_SPECS,
+  FAILURE_PORT,
   isTriggerBlockType,
   isWorkflowAddressablePathSegment,
   wirablePorts,
@@ -1008,6 +1009,8 @@ export function validateWorkflowDefinitionForDeployment(
   const issues = [
     ...validateWorkflowGraph(def, graphContext),
     ...validateWorkflowBindings(def, registryContext, graphContext),
+    ...validateStaticFallbackInputs(def),
+    ...validateWorkspaceCapabilities(def, graphContext),
     ...validateAnyScopeReviewSafety(def),
   ];
   for (const node of def.nodes) {
@@ -1053,6 +1056,61 @@ export function validateWorkflowDefinitionForDeployment(
     }
   }
   return [...new Set(issues)];
+}
+
+const STATIC_FALLBACK_INPUTS = {
+  call_llm: "prompt",
+  generic_agent: "prompt",
+  post_ticket_comment: "body",
+  post_pr_comment: "body",
+} as const satisfies Partial<Record<WorkflowBlockType, string>>;
+
+function validateStaticFallbackInputs(def: WorkflowDefinition): string[] {
+  const issues: string[] = [];
+  for (const node of def.nodes) {
+    const inputName = STATIC_FALLBACK_INPUTS[node.type as keyof typeof STATIC_FALLBACK_INPUTS];
+    if (inputName === undefined) continue;
+    const staticValue = node.params[inputName];
+    const hasStaticValue = typeof staticValue === "string" && staticValue.trim().length > 0;
+    const hasBinding = Object.prototype.hasOwnProperty.call(node.inputs, inputName);
+    if (!hasStaticValue && !hasBinding) {
+      issues.push(
+        `Block "${node.id}" (${node.type}) requires either a non-empty "${inputName}" parameter or a compatible "${inputName}" input binding.`,
+      );
+    }
+  }
+  return issues;
+}
+
+const WORKSPACE_PRODUCERS = new Set<WorkflowBlockType>([
+  "prepare_workspace",
+  "implementation_agent",
+  "review_agent",
+  "fix_agent",
+]);
+
+function validateWorkspaceCapabilities(
+  def: WorkflowDefinition,
+  graphContext: WorkflowBindingGraphContext,
+): string[] {
+  const issues: string[] = [];
+  for (const consumer of def.nodes) {
+    if (consumer.type !== "run_checks") continue;
+    const dominators = graphContext.dominators.get(consumer.id);
+    const hasGuaranteedProducer = def.nodes.some((producer) => {
+      if (!WORKSPACE_PRODUCERS.has(producer.type) || !dominators?.has(producer.id)) return false;
+      const pathsToConsumer = (graphContext.outgoing.get(producer.id) ?? []).filter(({ to }) =>
+        graphContext.reachableFromNode.get(to)?.has(consumer.id),
+      );
+      return pathsToConsumer.length > 0 && pathsToConsumer.every(({ port }) => port !== FAILURE_PORT);
+    });
+    if (!hasGuaranteedProducer) {
+      issues.push(
+        `Block "${consumer.id}" (run_checks) requires a workspace-producing block to run before it on every path.`,
+      );
+    }
+  }
+  return issues;
 }
 
 /**

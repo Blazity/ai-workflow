@@ -51,13 +51,13 @@ function pathsFor(phase: string) {
 }
 
 describe("generic_agent paramsSchema", () => {
-  it("requires a prompt and rejects unknown keys", () => {
+  it("allows a binding-only prompt and rejects unknown keys", () => {
     expect(paramsSchema.parse({ prompt: "do things" })).toMatchObject({
       prompt: "do things",
       workspaceMode: "none",
     });
-    expect(paramsSchema.safeParse({ prompt: "" }).success).toBe(false);
-    expect(paramsSchema.safeParse({}).success).toBe(false);
+    expect(paramsSchema.safeParse({ prompt: "" }).success).toBe(true);
+    expect(paramsSchema.safeParse({}).success).toBe(true);
     expect(
       paramsSchema.safeParse({ prompt: "p", provider: "codex", model: "m", outputSchema: "{}" })
         .success,
@@ -331,17 +331,39 @@ describe("generic_agent execute", () => {
       raw: "",
       structured: JSON.stringify({ answer: 42 }),
     });
+    const outputSchema =
+      '{"type":"object","properties":{"answer":{"type":"number"}},"required":["answer"],"additionalProperties":false}';
 
     const result = await execute(
-      makeNode("generic_agent", { prompt: "p", outputSchema: '{"type":"object"}' }),
+      makeNode("generic_agent", { prompt: "p", outputSchema }),
       {},
       makeCtx(),
     );
 
     expect(mocks.buildPhaseScript).toHaveBeenCalledWith(
-      expect.objectContaining({ jsonSchema: '{"type":"object"}' }),
+      expect.objectContaining({ jsonSchema: outputSchema }),
     );
     expect(result).toEqual({ kind: "next", output: { status: "ok", data: { answer: 42 } } });
+  });
+
+  it("fails when custom-schema output has the wrong declared shape", async () => {
+    mocks.collectPhase.mockResolvedValue({
+      raw: "",
+      structured: JSON.stringify({ answer: "forty-two" }),
+    });
+    const outputSchema =
+      '{"type":"object","properties":{"answer":{"type":"number"}},"required":["answer"],"additionalProperties":false}';
+
+    const result = await execute(
+      makeNode("generic_agent", { prompt: "p", outputSchema }),
+      {},
+      makeCtx(),
+    );
+
+    expect(result.kind).toBe("failed");
+    if (result.kind === "failed") {
+      expect(result.reason).toBe("agent output did not match the requested schema");
+    }
   });
 
   it("accepts null when the declared custom schema requires null", async () => {

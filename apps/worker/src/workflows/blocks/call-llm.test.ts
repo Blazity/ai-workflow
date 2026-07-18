@@ -12,13 +12,13 @@ import { execute, paramsSchema, resolveCallLlmTarget } from "./call-llm.js";
 import { makeCtx, makeNode } from "./test-support.js";
 
 describe("call_llm paramsSchema", () => {
-  it("requires a prompt, leaves the model unset by default, and rejects unknown keys", () => {
+  it("allows a binding-only prompt, leaves the model unset by default, and rejects unknown keys", () => {
     const parsed = paramsSchema.safeParse({ prompt: "hi" });
     expect(parsed.success).toBe(true);
     // No baked model default: the executor resolves it from provider/run default,
     // so a codex-only deployment never falls back to a Claude model.
     if (parsed.success) expect(parsed.data.model).toBeUndefined();
-    expect(paramsSchema.safeParse({}).success).toBe(false);
+    expect(paramsSchema.safeParse({}).success).toBe(true);
     expect(paramsSchema.safeParse({ prompt: "hi", extra: 1 }).success).toBe(false);
   });
 
