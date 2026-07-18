@@ -16,6 +16,10 @@ function makeRegistry(overrides: Partial<RunRegistryAdapter> = {}): RunRegistryA
     bindRun: vi.fn(),
     handoff: vi.fn(),
     get: overrides.get ?? vi.fn().mockResolvedValue(null),
+    beginCancellation:
+      overrides.beginCancellation ?? vi.fn().mockResolvedValue(true),
+    releaseCancellation:
+      overrides.releaseCancellation ?? vi.fn().mockResolvedValue(true),
     releaseReservation: overrides.releaseReservation ?? vi.fn().mockResolvedValue(true),
     release: vi.fn(),
     listAll: overrides.listAll ?? vi.fn().mockResolvedValue([]),
@@ -110,52 +114,47 @@ describe("handleCancel", () => {
   it("returns 'no active run' when registry has no entry", async () => {
     const registry = makeRegistry({ get: vi.fn().mockResolvedValue(null) });
     const cancelRunFn = vi.fn();
-    const stopSandboxes = vi.fn();
     const out = await handleCancel(
       registry,
       "AWT-1",
       cancelRunFn,
-      stopSandboxes,
     );
     expect(out).toContain("No active run");
     expect(out).toContain("AWT-1");
     expect(cancelRunFn).not.toHaveBeenCalled();
-    expect(stopSandboxes).not.toHaveBeenCalled();
   });
 
-  it("warns the user when the entry is reserved and stops every owned sandbox", async () => {
+  it("routes a reserved successor through durable cancellation before clearing it", async () => {
     const registry = makeRegistry({
       get: vi.fn().mockResolvedValue(active("AWT-1", { state: "reserved", runId: null })),
       listSandboxes: vi.fn().mockResolvedValue(["sbx_z", "sbx_child"]),
     });
-    const cancelRunFn = vi.fn();
-    const stopSandboxes = vi.fn().mockResolvedValue(1);
+    const cancelRunFn = vi.fn().mockResolvedValue(true);
     const out = await handleCancel(
       registry,
       "AWT-1",
       cancelRunFn,
-      stopSandboxes,
     );
     expect(out).toContain("mid-dispatch");
-    expect(stopSandboxes).toHaveBeenCalledWith(["sbx_z", "sbx_child"]);
-    expect(registry.releaseReservation).toHaveBeenCalledWith(
-      "ticket:jira:AWT-1",
-      "owner:AWT-1",
+    expect(cancelRunFn).toHaveBeenCalledWith(
+      "AWT-1",
+      { ownerToken: "owner:AWT-1", runId: null },
+      registry,
+      undefined,
+      undefined,
     );
-    expect(cancelRunFn).not.toHaveBeenCalled();
   });
 
-  it("retains a reserved claim when sandbox cleanup is unconfirmed", async () => {
+  it("reports retryable failure when reserved cancellation is unconfirmed", async () => {
     const registry = makeRegistry({
       get: vi.fn().mockResolvedValue(active("AWT-1", { state: "reserved", runId: null })),
-      listSandboxes: vi.fn().mockResolvedValue(["sbx_z"]),
     });
-    const stopSandboxes = vi.fn().mockRejectedValue(new Error("sandbox API unavailable"));
+    const cancelRunFn = vi.fn().mockResolvedValue(false);
 
-    const out = await handleCancel(registry, "AWT-1", vi.fn(), stopSandboxes);
+    const out = await handleCancel(registry, "AWT-1", cancelRunFn);
 
     expect(out).toContain("failed to clear the claim");
-    expect(registry.releaseReservation).not.toHaveBeenCalled();
+    expect(out).toContain("retry");
   });
 
   it("calls cancelRun with ticket key + runId + registry, and reports success", async () => {
@@ -163,16 +162,14 @@ describe("handleCancel", () => {
       get: vi.fn().mockResolvedValue(active("AWT-1", { runId: "run_a" })),
     });
     const cancelRunFn = vi.fn().mockResolvedValue(true);
-    const stopSandboxes = vi.fn();
     const out = await handleCancel(
       registry,
       "AWT-1",
       cancelRunFn,
-      stopSandboxes,
     );
     expect(cancelRunFn).toHaveBeenCalledWith(
       "AWT-1",
-      "run_a",
+      { ownerToken: "owner:AWT-1", runId: "run_a" },
       registry,
       undefined,
       undefined,
@@ -186,7 +183,7 @@ describe("handleCancel", () => {
       get: vi.fn().mockResolvedValue(active("AWT-1", { runId: "run_a" })),
     });
     const cancelRunFn = vi.fn().mockResolvedValue(false);
-    const out = await handleCancel(registry, "AWT-1", cancelRunFn, vi.fn());
+    const out = await handleCancel(registry, "AWT-1", cancelRunFn);
     expect(out).toContain("AWT-1");
     expect(out.toLowerCase()).toContain("could not");
     expect(out.toLowerCase()).toContain("retained");

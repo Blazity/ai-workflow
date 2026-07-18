@@ -28,6 +28,8 @@ function registry(): RunRegistryAdapter {
     bindRun: vi.fn(async () => false),
     handoff: vi.fn(async () => false),
     get: vi.fn(async (key) => entries.get(key) ?? null),
+    beginCancellation: vi.fn(async () => false),
+    releaseCancellation: vi.fn(async () => false),
     releaseReservation: vi.fn(async (key, owner) => {
       const entry = entries.get(key);
       if (!entry || entry.ownerToken !== owner || entry.state !== "reserved") return false;

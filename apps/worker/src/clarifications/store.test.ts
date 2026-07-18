@@ -24,8 +24,10 @@ import {
   markClarificationSnapshotCleanupFailed,
   markClarificationSnapshotDeleted,
   publishClarificationCheckpoint,
+  recordClarificationSnapshotMetadata,
   recordDispatchedRun,
   reconcileClarificationCheckpoints,
+  reserveClarificationSuccessor,
   serializeClarification,
   supersedeClarification,
   supersedePendingForTicket,
@@ -202,9 +204,52 @@ describe("durable clarification checkpoints", () => {
       sourceSandboxId: "sbx-source",
       expiresAt: input.expiresAt,
     };
+    await recordClarificationSnapshotMetadata(db, first.id, snapshot);
+    await expect(
+      completeClarificationCheckpoint(db, first.id, null),
+    ).rejects.toMatchObject({
+      statusCode: 409,
+      message: "clarification_checkpoint_snapshot_conflict",
+    });
     const ready = await completeClarificationCheckpoint(db, first.id, snapshot);
     const readyRetry = await completeClarificationCheckpoint(db, first.id, snapshot);
     expect(readyRetry).toEqual(ready);
+  });
+
+  it("adopts snapshot cleanup identity before completion and cancellation queues it", async () => {
+    const db = await createTestDb();
+    const input = checkpointSeed("AWT-SNAPSHOT-ADOPTED");
+    const checkpoint = await createClarificationCheckpoint(db, input);
+    const snapshot = {
+      snapshotId: "snap-adopted-before-poll",
+      sourceSandboxId: "sbx-source",
+      expiresAt: input.expiresAt,
+    };
+
+    const adopted = await recordClarificationSnapshotMetadata(db, checkpoint.id, snapshot);
+    expect(adopted).toMatchObject({
+      checkpointState: "preparing",
+      snapshotId: "snap-adopted-before-poll",
+      cleanupState: "retained",
+    });
+    expect(await recordClarificationSnapshotMetadata(db, checkpoint.id, snapshot)).toEqual(
+      adopted,
+    );
+
+    await tombstoneClarificationCancellation(db, {
+      subjectKey: checkpoint.subjectKey,
+      ownerToken: checkpoint.ownerToken,
+      runId: checkpoint.runId,
+    });
+    expect(await getClarification(db, checkpoint.id)).toMatchObject({
+      checkpointState: "cancelled",
+      snapshotId: "snap-adopted-before-poll",
+      cleanupState: "delete_pending",
+    });
+    expect(await listClarificationSnapshotCleanup(db)).toContainEqual({
+      clarificationId: checkpoint.id,
+      snapshotId: "snap-adopted-before-poll",
+    });
   });
 
   it("persists active duration observed after snapshot creation", async () => {
@@ -654,6 +699,56 @@ describe("durable clarification checkpoints", () => {
 
     expect((await listProtectedClarificationSubjectKeys(db)).sort()).toEqual(
       [input.subjectKey, answeredInput.subjectKey].sort(),
+    );
+  });
+
+  it("protects a consumed clarification while its exact successor run is active", async () => {
+    const db = await createTestDb();
+    const input = {
+      ...checkpointSeed("AWT-CONTINUING"),
+      workspaceManifest: null,
+      sourceHeads: [],
+    };
+    const checkpoint = await createClarificationCheckpoint(db, input);
+    await completeClarificationCheckpoint(db, checkpoint.id, null);
+    await publishBoundCheckpoint(db, checkpoint.id);
+    const answered = await answerClarification(db, {
+      id: checkpoint.id,
+      answer: "Proceed",
+      actor: { id: "u1", label: "Alice" },
+      successorOwnerToken: "owner-successor",
+    });
+    await db
+      .update(activeRuns)
+      .set({
+        ownerToken: "owner-successor",
+        runId: "run-successor",
+        state: "bound",
+      })
+      .where(eq(activeRuns.subjectKey, answered.subjectKey));
+    expect(
+      await recordDispatchedRun(
+        db,
+        answered.id,
+        "owner-successor",
+        "run-successor",
+      ),
+    ).toBe(true);
+    expect(
+      await markClarificationCheckpointConsumed(
+        db,
+        answered.id,
+        "owner-successor",
+        "run-successor",
+      ),
+    ).toBe(true);
+
+    expect(await listProtectedClarificationSubjectKeys(db)).toContain(
+      answered.subjectKey,
+    );
+    await db.delete(activeRuns).where(eq(activeRuns.subjectKey, answered.subjectKey));
+    expect(await listProtectedClarificationSubjectKeys(db)).not.toContain(
+      answered.subjectKey,
     );
   });
 
@@ -1377,7 +1472,18 @@ describe("recordDispatchedRun", () => {
         ownerToken: "owner-successor",
         runId: "run-restore-cancelled",
       }),
-    ).toBe(true);
+    ).toMatchObject({
+      matched: true,
+      successorOwnerToken: "owner-successor",
+    });
+    expect(
+      await recordDispatchedRun(
+        db,
+        answered.id,
+        "owner-successor",
+        "run-restore-cancelled",
+      ),
+    ).toBe(false);
     await db.delete(activeRuns).where(eq(activeRuns.subjectKey, answered.subjectKey));
     await reconcileClarificationCheckpoints(db, new Date("2026-07-18T00:00:00.000Z"));
 
@@ -1390,6 +1496,196 @@ describe("recordDispatchedRun", () => {
     expect(await listClarificationSnapshotCleanup(db)).toEqual([
       { clarificationId: answered.id, snapshotId: "snap-cancelled" },
     ]);
+  });
+
+  it("cancels a pending checkpoint before a racing answer can reserve a successor", async () => {
+    const db = await createTestDb();
+    const input = checkpointSeed("AWT-PENDING-CANCELLED");
+    const checkpoint = await createClarificationCheckpoint(db, input);
+    await completeClarificationCheckpoint(db, checkpoint.id, null);
+    await publishBoundCheckpoint(db, checkpoint.id);
+
+    expect(
+      await tombstoneClarificationCancellation(db, {
+        subjectKey: checkpoint.subjectKey,
+        ownerToken: checkpoint.ownerToken,
+        runId: checkpoint.runId,
+      }),
+    ).toMatchObject({
+      matched: true,
+      successorOwnerToken: null,
+    });
+    await expect(
+      answerClarification(db, {
+        id: checkpoint.id,
+        answer: "This answer lost the cancellation race",
+        actor: { id: "u1", label: "Alice" },
+        successorOwnerToken: "owner-must-not-start",
+      }),
+    ).rejects.toMatchObject({ statusCode: 409, message: "already_answered" });
+    expect(await getClarification(db, checkpoint.id)).toMatchObject({
+      status: "superseded",
+      checkpointState: "cancelled",
+    });
+    expect(await listUndispatchedAnsweredClarifications(db)).toEqual([]);
+  });
+
+  it("cancels snapshot preparation before it can publish a question", async () => {
+    const db = await createTestDb();
+    const input = checkpointSeed("AWT-PREPARING-CANCELLED");
+    const checkpoint = await createClarificationCheckpoint(db, input);
+    await bindCheckpointOwner(db, checkpoint);
+
+    expect(
+      await tombstoneClarificationCancellation(db, {
+        subjectKey: checkpoint.subjectKey,
+        ownerToken: checkpoint.ownerToken,
+        runId: checkpoint.runId,
+      }),
+    ).toMatchObject({ matched: true });
+    await expect(
+      recordClarificationSnapshotMetadata(db, checkpoint.id, {
+        snapshotId: "snap-too-late",
+        sourceSandboxId: "sbx-source",
+        expiresAt: input.expiresAt,
+      }),
+    ).rejects.toMatchObject({
+      statusCode: 409,
+      message: "clarification_checkpoint_cancelled",
+    });
+    expect(await getClarification(db, checkpoint.id)).toMatchObject({
+      status: "superseded",
+      checkpointState: "cancelled",
+      snapshotId: "snap-too-late",
+      sourceSandboxId: "sbx-source",
+      cleanupState: "delete_pending",
+    });
+    expect(await listClarificationSnapshotCleanup(db)).toContainEqual({
+      clarificationId: checkpoint.id,
+      snapshotId: "snap-too-late",
+    });
+    await expect(
+      completeClarificationCheckpoint(db, checkpoint.id, {
+        snapshotId: "snap-conflicting-late",
+        sourceSandboxId: "sbx-source",
+        expiresAt: input.expiresAt,
+      }),
+    ).rejects.toMatchObject({
+      statusCode: 409,
+      message: "clarification_checkpoint_snapshot_conflict",
+    });
+    await expect(
+      completeClarificationCheckpoint(db, checkpoint.id, {
+        snapshotId: "snap-too-late",
+        sourceSandboxId: "sbx-wrong-source",
+        expiresAt: input.expiresAt,
+      }),
+    ).rejects.toMatchObject({
+      statusCode: 409,
+      message: "clarification_checkpoint_source_conflict",
+    });
+  });
+
+  it("cancels the predecessor after an answer reserved its successor but before handoff", async () => {
+    const db = await createTestDb();
+    const input = checkpointSeed("AWT-HANDOFF-CANCELLED");
+    const checkpoint = await createClarificationCheckpoint(db, input);
+    await completeClarificationCheckpoint(db, checkpoint.id, {
+      snapshotId: "snap-handoff-cancelled",
+      sourceSandboxId: "sbx-source",
+      expiresAt: input.expiresAt,
+    });
+    await publishBoundCheckpoint(db, checkpoint.id);
+    const answered = await answerClarification(db, {
+      id: checkpoint.id,
+      answer: "Proceed",
+      actor: { id: "u1", label: "Alice" },
+      successorOwnerToken: "owner-successor",
+    });
+
+    expect(
+      await tombstoneClarificationCancellation(db, {
+        subjectKey: answered.subjectKey,
+        ownerToken: answered.ownerToken,
+        runId: answered.runId,
+      }),
+    ).toMatchObject({
+      matched: true,
+      successorOwnerToken: "owner-successor",
+    });
+
+    // The handoff statement may already have been waiting on the row lock when
+    // cancellation committed. Even if it wins afterwards, the durable
+    // checkpoint state must prevent reconciliation from recreating this owner.
+    await db
+      .update(activeRuns)
+      .set({
+        ownerToken: "owner-successor",
+        runId: null,
+        state: "reserved",
+      })
+      .where(eq(activeRuns.subjectKey, answered.subjectKey));
+    await db.delete(activeRuns).where(eq(activeRuns.subjectKey, answered.subjectKey));
+    await reconcileClarificationCheckpoints(db);
+
+    expect(await getClarification(db, answered.id)).toMatchObject({
+      checkpointState: "cancelled",
+      successorOwnerToken: "owner-successor",
+      dispatchedRunId: null,
+    });
+    expect(await listUndispatchedAnsweredClarifications(db)).toEqual([]);
+  });
+
+  it("atomically recreates only a successor whose checkpoint is still ready", async () => {
+    const db = await createTestDb();
+    const checkpoint = await createClarificationCheckpoint(db, {
+      ...checkpointSeed("AWT-ATOMIC-RECOVERY"),
+      workspaceManifest: null,
+      sourceHeads: [],
+      sourceSandboxId: null,
+      snapshotRequestedAt: null,
+      expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1_000),
+    });
+    await completeClarificationCheckpoint(db, checkpoint.id, null);
+    await publishBoundCheckpoint(db, checkpoint.id);
+    const answered = await answerClarification(db, {
+      id: checkpoint.id,
+      answer: "Proceed",
+      actor: { id: "u1", label: "Alice" },
+      successorOwnerToken: "owner-successor",
+    });
+    await db.delete(activeRuns).where(eq(activeRuns.subjectKey, answered.subjectKey));
+
+    expect(
+      await reserveClarificationSuccessor(db, {
+        clarificationId: answered.id,
+        ownerToken: "owner-successor",
+        kind: "ticket",
+      }),
+    ).toBe(true);
+    expect(await db.select().from(activeRuns)).toEqual([
+      expect.objectContaining({
+        subjectKey: answered.subjectKey,
+        ownerToken: "owner-successor",
+        runId: null,
+        state: "reserved",
+      }),
+    ]);
+
+    await db.delete(activeRuns).where(eq(activeRuns.subjectKey, answered.subjectKey));
+    await tombstoneClarificationCancellation(db, {
+      subjectKey: answered.subjectKey,
+      ownerToken: "owner-successor",
+      runId: null,
+    });
+    expect(
+      await reserveClarificationSuccessor(db, {
+        clarificationId: answered.id,
+        ownerToken: "owner-successor",
+        kind: "ticket",
+      }),
+    ).toBe(false);
+    expect(await db.select().from(activeRuns)).toEqual([]);
   });
 });
 

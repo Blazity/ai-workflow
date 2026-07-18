@@ -38,6 +38,43 @@ export async function recordClarificationDispatchWinnerStep(
   return true;
 }
 
+/**
+ * Revalidates the continuation only after its candidate has bound and durably
+ * recorded itself against a still-ready checkpoint. The clarification event is
+ * already a complete trigger; keeping the ticket in its human-selected column
+ * avoids an external Jira move that could land after cancellation. Generic
+ * reconciliation protects this exact active successor until terminal release.
+ */
+export async function prepareClarificationContinuationStep(
+  entry: import("./agent-input.js").AgentWorkflowInput,
+  workflowRunId: string,
+): Promise<boolean> {
+  "use step";
+  if (entry.kind !== "clarification_answered") return true;
+
+  const { getDb } = await import("../db/client.js");
+  const { assertClarificationCheckpointAvailable, getClarification } =
+    await import("../clarifications/store.js");
+  const db = getDb();
+  const checkpoint = await getClarification(db, entry.clarificationRequestId);
+  if (
+    !checkpoint ||
+    checkpoint.status !== "answered" ||
+    checkpoint.checkpointState !== "ready" ||
+    checkpoint.subjectKey !== entry.subjectKey ||
+    checkpoint.successorOwnerToken !== entry.ownerToken ||
+    checkpoint.dispatchedRunId !== workflowRunId
+  ) {
+    return false;
+  }
+  try {
+    assertClarificationCheckpointAvailable(checkpoint);
+  } catch {
+    return false;
+  }
+  return true;
+}
+
 export async function consumeClarificationCheckpointStep(
   clarificationId: string,
   ownerToken: string,
@@ -166,9 +203,9 @@ export async function acknowledgePendingTriggerStep(
 }
 acknowledgePendingTriggerStep.maxRetries = 0;
 
-/** Repair the best-effort label removal performed while dispatching a
- * clarification continuation. This step deliberately does no pending-row or
- * telemetry housekeeping: replaying it cannot supersede a newer question. */
+/** Remove the clarification label only from the bound continuation. This step
+ * deliberately does no pending-row or telemetry housekeeping: replaying it
+ * cannot supersede a newer question. */
 export async function repairClarificationLabelStep(ticketKey: string): Promise<void> {
   "use step";
   const { createStepAdapters } = await import("../lib/step-adapters.js");

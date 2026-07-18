@@ -132,7 +132,11 @@ describe("POST /webhooks/jira cancel guard", () => {
       reason: "left_ai_column",
       ticketKey: "PROJ-42",
     });
-    expect(mockCancelRun).toHaveBeenCalledWith("PROJ-42", "run_pr", adapters.runRegistry);
+    expect(mockCancelRun).toHaveBeenCalledWith(
+      "PROJ-42",
+      { ownerToken: "owner-a", runId: "run_pr" },
+      adapters.runRegistry,
+    );
     expect(adapters.messaging.notifyForTicket).toHaveBeenCalled();
   });
 
@@ -219,11 +223,30 @@ describe("POST /webhooks/jira cancel guard", () => {
       reason: "left_ai_column",
       ticketKey: "PROJ-42",
     });
-    expect(mockCancelRun).toHaveBeenCalledWith("PROJ-42", "run_ticket", adapters.runRegistry);
+    expect(mockCancelRun).toHaveBeenCalledWith(
+      "PROJ-42",
+      { ownerToken: "owner-a", runId: "run_ticket" },
+      adapters.runRegistry,
+    );
     expect(adapters.messaging.notifyForTicket).toHaveBeenCalled();
   });
 
-  it("retains a reserved claim when sandbox cleanup is unconfirmed", async () => {
+  it("acknowledges an outside-column webhook when no active claim exists", async () => {
+    const adapters = makeAdapters([]);
+    mocks.createAdapters.mockReturnValue(adapters);
+
+    const response = await makeApp()(makeRequest());
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      status: "ignored",
+      reason: "left_ai_column",
+      ticketKey: "PROJ-42",
+    });
+    expect(mockCancelRun).not.toHaveBeenCalled();
+  });
+
+  it("returns a retryable provider failure when reserved cancellation is unconfirmed", async () => {
     const adapters = makeAdapters([
       { ticketKey: "PROJ-42", runId: "run_ticket", kind: "ticket" },
     ]);
@@ -233,14 +256,17 @@ describe("POST /webhooks/jira cancel guard", () => {
       runId: null,
     };
     adapters.runRegistry.get.mockResolvedValue(reserved);
-    adapters.runRegistry.listSandboxes.mockResolvedValue(["sbx-1"]);
-    mockStopSandboxesByIds.mockRejectedValue(new Error("sandbox API unavailable"));
+    mockCancelRun.mockResolvedValue(false);
     mocks.createAdapters.mockReturnValue(adapters);
 
     const response = await makeApp()(makeRequest());
 
-    expect(response.status).toBe(200);
-    expect(adapters.runRegistry.releaseReservation).not.toHaveBeenCalled();
+    expect(response.status).toBe(503);
+    expect(mockCancelRun).toHaveBeenCalledWith(
+      "PROJ-42",
+      { ownerToken: "owner-a", runId: null },
+      adapters.runRegistry,
+    );
     expect(adapters.messaging.notifyForTicket).not.toHaveBeenCalled();
   });
 });

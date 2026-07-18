@@ -9,7 +9,6 @@ import { dispatchTicket } from "../../lib/dispatch.js";
 import { logger } from "../../lib/logger.js";
 import { ticketSubjectKey } from "../../lib/subject-key.js";
 import { consumeTicketTransitionIntent } from "../../lib/ticket-transition-intent-store.js";
-import { stopSandboxesByIds } from "../../sandbox/stop-ticket-sandboxes.js";
 
 /**
  * Jira webhook handler — triggers the same dispatch logic as the cron poller.
@@ -140,7 +139,23 @@ export default defineEventHandler(async (event) => {
       };
     }
 
-    const cancelled = await cancelTrackedRun(ticketKey, adapters.runRegistry);
+    const cancellation = await cancelTrackedRun(ticketKey, adapters.runRegistry);
+    if (cancellation === "unconfirmed") {
+      logger.warn(
+        {
+          ticketKey,
+          payloadStatus: ticketStatus,
+          liveStatus: liveTicketState.status,
+          liveProjectKey: liveTicketState.projectKey,
+        },
+        "webhook_ticket_cancel_unconfirmed",
+      );
+      throw createError({
+        statusCode: 503,
+        statusMessage: "Cancellation not confirmed",
+      });
+    }
+    const cancelled = cancellation === "cancelled";
     if (cancelled) {
       await adapters.messaging.notifyForTicket(ticketKey, {
         kind: "canceled",
@@ -276,27 +291,27 @@ function isAiColumnStatus(status: string): boolean {
 async function cancelTrackedRun(
   ticketKey: string,
   runRegistry: ReturnType<typeof createAdapters>["runRegistry"],
-): Promise<boolean> {
+): Promise<"cancelled" | "not_active" | "unconfirmed"> {
   const subjectKey = ticketSubjectKey("jira", ticketKey);
   const entry = await runRegistry.get(subjectKey);
-  if (!entry) return false;
+  if (!entry) return "not_active";
 
-  if (entry.state === "reserved") {
-    const sandboxIds = await runRegistry
-      .listSandboxes(entry.subjectKey, entry.ownerToken)
-      .catch(() => null);
-    if (sandboxIds === null) return false;
-    try {
-      await stopSandboxesByIds(sandboxIds);
-    } catch {
-      return false;
-    }
-    return runRegistry
-      .releaseReservation(entry.subjectKey, entry.ownerToken)
-      .catch(() => false);
+  if (entry.runId === null) {
+    const cancelled = await cancelRun(
+      ticketKey,
+      { ownerToken: entry.ownerToken, runId: null },
+      runRegistry,
+    );
+    return cancelled ? "cancelled" : "unconfirmed";
   }
 
-  return entry.runId ? cancelRun(ticketKey, entry.runId, runRegistry) : false;
+  if (!entry.runId) return "unconfirmed";
+  const cancelled = await cancelRun(
+    ticketKey,
+    { ownerToken: entry.ownerToken, runId: entry.runId },
+    runRegistry,
+  );
+  return cancelled ? "cancelled" : "unconfirmed";
 }
 
 async function getLiveTicketState(

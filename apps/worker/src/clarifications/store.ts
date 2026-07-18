@@ -13,6 +13,7 @@ import {
   sql,
 } from "drizzle-orm";
 import type { BlockOutput, ClarificationRequest, ClarificationStatus } from "@shared/contracts";
+import type { RunKind } from "../adapters/run-registry/types.js";
 import type { Db } from "../db/client.js";
 import { activeRuns, clarificationRequests } from "../db/schema.js";
 import type {
@@ -273,6 +274,86 @@ export interface ClarificationSnapshotMetadata {
   expiresAt: Date;
 }
 
+/**
+ * Adopts an externally-created snapshot before any later provider polling.
+ * This is deliberately separate from checkpoint completion: a snapshot ID is
+ * cleanup-critical as soon as the provider returns it, while the question must
+ * not become answerable until the source sandbox is confirmed stopped.
+ */
+export async function recordClarificationSnapshotMetadata(
+  db: Db,
+  id: string,
+  snapshot: ClarificationSnapshotMetadata,
+): Promise<ClarificationRow> {
+  const current = await getClarification(db, id);
+  if (!current) {
+    throw new ClarificationStoreError(409, "clarification_checkpoint_not_preparing");
+  }
+  assertSnapshotIdentity(current, snapshot);
+  if (current.checkpointState === "cancelled") {
+    await attachLateCancelledSnapshot(db, id, snapshot);
+    throw new ClarificationStoreError(409, "clarification_checkpoint_cancelled");
+  }
+  if (current.checkpointState === "ready") {
+    if (isSameSnapshotIdentity(current, snapshot)) return current;
+    throw new ClarificationStoreError(409, "clarification_checkpoint_snapshot_conflict");
+  }
+  if (current.checkpointState !== "preparing") {
+    throw new ClarificationStoreError(409, "clarification_checkpoint_not_preparing");
+  }
+
+  const rows = await db
+    .update(clarificationRequests)
+    .set({
+      snapshotId: snapshot.snapshotId,
+      sourceSandboxId: snapshot.sourceSandboxId,
+      snapshotExpiresAt: snapshot.expiresAt,
+      cleanupState: "retained",
+      cleanupError: null,
+      cleanupClaimedAt: null,
+    })
+    .where(
+      and(
+        eq(clarificationRequests.id, id),
+        eq(clarificationRequests.checkpointState, "preparing"),
+        or(
+          isNull(clarificationRequests.snapshotId),
+          eq(clarificationRequests.snapshotId, snapshot.snapshotId),
+        ),
+        or(
+          isNull(clarificationRequests.sourceSandboxId),
+          eq(clarificationRequests.sourceSandboxId, snapshot.sourceSandboxId),
+        ),
+        or(
+          isNull(clarificationRequests.snapshotExpiresAt),
+          eq(clarificationRequests.snapshotExpiresAt, snapshot.expiresAt),
+        ),
+      ),
+    )
+    .returning();
+  if (rows[0]) return mapRow(rows[0]);
+
+  // Cancellation and replay can both win after the initial read. Re-read once
+  // so a cancelled row adopts the cleanup ID, while the same persisted ID is
+  // idempotent and conflicting provider objects are rejected explicitly.
+  const refreshed = await getClarification(db, id);
+  if (!refreshed) {
+    throw new ClarificationStoreError(409, "clarification_checkpoint_not_preparing");
+  }
+  assertSnapshotIdentity(refreshed, snapshot);
+  if (refreshed.checkpointState === "cancelled") {
+    await attachLateCancelledSnapshot(db, id, snapshot);
+    throw new ClarificationStoreError(409, "clarification_checkpoint_cancelled");
+  }
+  if (
+    (refreshed.checkpointState === "preparing" || refreshed.checkpointState === "ready") &&
+    isSameSnapshotIdentity(refreshed, snapshot)
+  ) {
+    return refreshed;
+  }
+  throw new ClarificationStoreError(409, "clarification_checkpoint_not_preparing");
+}
+
 /** Marks the checkpoint restorable. A null snapshot is valid for workspace-free runs. */
 export async function completeClarificationCheckpoint(
   db: Db,
@@ -283,6 +364,14 @@ export async function completeClarificationCheckpoint(
   if (!current) {
     throw new ClarificationStoreError(409, "clarification_checkpoint_not_preparing");
   }
+  if (snapshot) assertSnapshotIdentity(current, snapshot);
+  if (!snapshot && current.snapshotId !== null) {
+    throw new ClarificationStoreError(409, "clarification_checkpoint_snapshot_conflict");
+  }
+  if (current.checkpointState === "cancelled") {
+    if (snapshot) await attachLateCancelledSnapshot(db, id, snapshot);
+    throw new ClarificationStoreError(409, "clarification_checkpoint_cancelled");
+  }
   if (current.checkpointState === "ready") {
     const sameSnapshot = snapshot
       ? current.snapshotId === snapshot.snapshotId &&
@@ -291,13 +380,6 @@ export async function completeClarificationCheckpoint(
       : current.snapshotId === null;
     if (sameSnapshot) return current;
     throw new ClarificationStoreError(409, "clarification_checkpoint_snapshot_conflict");
-  }
-  if (
-    snapshot &&
-    current.sourceSandboxId !== null &&
-    current.sourceSandboxId !== snapshot.sourceSandboxId
-  ) {
-    throw new ClarificationStoreError(409, "clarification_checkpoint_source_conflict");
   }
   const rows = await db
     .update(clarificationRequests)
@@ -317,9 +399,86 @@ export async function completeClarificationCheckpoint(
     )
     .returning();
   if (!rows[0]) {
+    if (snapshot && await attachLateCancelledSnapshot(db, id, snapshot)) {
+      throw new ClarificationStoreError(409, "clarification_checkpoint_cancelled");
+    }
     throw new ClarificationStoreError(409, "clarification_checkpoint_not_preparing");
   }
   return mapRow(rows[0]);
+}
+
+function assertSnapshotIdentity(
+  current: ClarificationRow,
+  snapshot: ClarificationSnapshotMetadata,
+): void {
+  if (
+    current.sourceSandboxId !== null &&
+    current.sourceSandboxId !== snapshot.sourceSandboxId
+  ) {
+    throw new ClarificationStoreError(409, "clarification_checkpoint_source_conflict");
+  }
+  if (
+    current.snapshotId !== null &&
+    (current.snapshotId !== snapshot.snapshotId ||
+      (current.snapshotExpiresAt !== null &&
+        current.snapshotExpiresAt.getTime() !== snapshot.expiresAt.getTime()))
+  ) {
+    throw new ClarificationStoreError(409, "clarification_checkpoint_snapshot_conflict");
+  }
+}
+
+function isSameSnapshotIdentity(
+  current: ClarificationRow,
+  snapshot: ClarificationSnapshotMetadata,
+): boolean {
+  return (
+    current.snapshotId === snapshot.snapshotId &&
+    current.sourceSandboxId === snapshot.sourceSandboxId &&
+    current.snapshotExpiresAt?.getTime() === snapshot.expiresAt.getTime()
+  );
+}
+
+/** Snapshot creation is external and cannot share the checkpoint transaction.
+ * If cancellation wins after creation, retain the late ID on the terminal row
+ * and queue deletion before surfacing the cancelled completion boundary. */
+async function attachLateCancelledSnapshot(
+  db: Db,
+  id: string,
+  snapshot: ClarificationSnapshotMetadata,
+): Promise<boolean> {
+  const terminal = await getClarification(db, id);
+  if (!terminal || terminal.checkpointState !== "cancelled") return false;
+  assertSnapshotIdentity(terminal, snapshot);
+  const rows = await db
+    .update(clarificationRequests)
+    .set({
+      snapshotId: snapshot.snapshotId,
+      sourceSandboxId: snapshot.sourceSandboxId,
+      snapshotExpiresAt: snapshot.expiresAt,
+      cleanupState: "delete_pending",
+      cleanupError: null,
+      cleanupClaimedAt: null,
+    })
+    .where(
+      and(
+        eq(clarificationRequests.id, id),
+        eq(clarificationRequests.checkpointState, "cancelled"),
+        or(
+          isNull(clarificationRequests.snapshotId),
+          eq(clarificationRequests.snapshotId, snapshot.snapshotId),
+        ),
+      ),
+    )
+    .returning({ id: clarificationRequests.id });
+  if (rows.length > 0) return true;
+
+  // A concurrent late completion may have filled the same terminal metadata.
+  // Re-read once so the same snapshot is idempotent and a different one fails
+  // as an explicit conflict instead of becoming an untracked provider object.
+  const refreshed = await getClarification(db, id);
+  if (!refreshed || refreshed.checkpointState !== "cancelled") return false;
+  assertSnapshotIdentity(refreshed, snapshot);
+  return refreshed.snapshotId === snapshot.snapshotId;
 }
 
 export async function updateClarificationCheckpointBudget(
@@ -603,7 +762,10 @@ export async function getPendingForSubject(
 /**
  * Durable clarification subjects that generic ticket dispatch/reconciliation
  * must not take over. Answered-ready rows stay protected across the route/start
- * crash window even when their exact successor owner has to be recreated.
+ * crash window even when their exact successor owner has to be recreated. A
+ * consumed checkpoint protects only its exact active continuation; this lets a
+ * clarification resume outside AI without a racy provider pickup move, while a
+ * later independent AI-column pickup remains possible after terminal release.
  */
 export async function listProtectedClarificationSubjectKeys(db: Db): Promise<string[]> {
   const rows = await db
@@ -611,9 +773,26 @@ export async function listProtectedClarificationSubjectKeys(db: Db): Promise<str
     .from(clarificationRequests)
     .where(
       and(
-        inArray(clarificationRequests.status, ["pending", "answered"]),
-        eq(clarificationRequests.checkpointState, "ready"),
         isNotNull(clarificationRequests.subjectKey),
+        or(
+          and(
+            inArray(clarificationRequests.status, ["pending", "answered"]),
+            eq(clarificationRequests.checkpointState, "ready"),
+          ),
+          and(
+            eq(clarificationRequests.status, "answered"),
+            eq(clarificationRequests.checkpointState, "consumed"),
+            isNotNull(clarificationRequests.successorOwnerToken),
+            isNotNull(clarificationRequests.dispatchedRunId),
+            sql`exists (
+              select 1 from ${activeRuns}
+              where ${activeRuns.subjectKey} = ${clarificationRequests.subjectKey}
+                and ${activeRuns.ownerToken} = ${clarificationRequests.successorOwnerToken}
+                and ${activeRuns.runId} = ${clarificationRequests.dispatchedRunId}
+                and ${activeRuns.state} = 'bound'
+            )`,
+          ),
+        ),
       ),
     );
   return rows
@@ -645,6 +824,62 @@ export async function listUndispatchedAnsweredClarifications(
         row.answer !== null &&
         (row.expiresAt === null || row.expiresAt.getTime() > now.getTime()),
     );
+}
+
+/**
+ * Recreates a missing clarification successor only while the durable
+ * checkpoint is still dispatchable. Keeping this predicate in the same SQL
+ * statement as the active-run insert prevents a cancellation that wins after
+ * reconciliation's read from being undone by a stale recovery candidate. The
+ * row lock linearizes this insert with the cancellation tombstone update.
+ */
+export async function reserveClarificationSuccessor(
+  db: Db,
+  input: {
+    clarificationId: string;
+    ownerToken: string;
+    kind: RunKind;
+  },
+): Promise<boolean> {
+  const result = await db.execute(sql`
+    insert into active_runs (
+      subject_key,
+      ticket_key,
+      owner_token,
+      run_id,
+      state,
+      run_kind,
+      created_at,
+      updated_at
+    )
+    select
+      clarification.subject_key,
+      clarification.ticket_key,
+      clarification.successor_owner_token,
+      null,
+      'reserved',
+      ${input.kind},
+      now(),
+      now()
+    from clarification_requests as clarification
+    where clarification.id = ${input.clarificationId}
+      and clarification.status = 'answered'
+      and clarification.checkpoint_state = 'ready'
+      and clarification.successor_owner_token = ${input.ownerToken}
+      and clarification.dispatched_run_id is null
+      and (clarification.expires_at is null or clarification.expires_at > now())
+      and (
+        clarification.snapshot_id is null
+        or (
+          clarification.snapshot_expires_at > now()
+          and clarification.cleanup_state = 'retained'
+        )
+      )
+    for update of clarification
+    on conflict (subject_key) do nothing
+    returning subject_key
+  `);
+  return rawRows<{ subject_key: string }>(result).length > 0;
 }
 
 /** Answered Q&A history for a ticket, oldest first; injected into resume prompts. */
@@ -1162,6 +1397,7 @@ export async function recordDispatchedRun(
       and(
         eq(clarificationRequests.id, id),
         eq(clarificationRequests.status, "answered"),
+        eq(clarificationRequests.checkpointState, "ready"),
         eq(clarificationRequests.successorOwnerToken, ownerToken),
         isNull(clarificationRequests.dispatchedRunId),
         sql`exists (
@@ -1183,6 +1419,7 @@ export async function recordDispatchedRun(
       and(
         eq(clarificationRequests.id, id),
         eq(clarificationRequests.status, "answered"),
+        eq(clarificationRequests.checkpointState, "ready"),
         eq(clarificationRequests.successorOwnerToken, ownerToken),
         eq(clarificationRequests.dispatchedRunId, runId),
         sql`exists (
@@ -1284,26 +1521,37 @@ export async function clearDispatchedRun(
 }
 
 /**
- * Persists an operator cancellation before its exact active owner is released.
- * A ready answered checkpoint normally treats a missing successor owner as a
- * crash and clears `dispatchedRunId` for retry. The cancelled tombstone keeps
- * that crash recovery behavior for genuine disappearances while making an
- * intentional cancellation terminal. Snapshot cleanup is queued in the same
- * write so no retained workspace is leaked.
+ * Persists an operator cancellation before its exact active owner is changed.
+ * It retires a pending question before a racing answer can win and also follows
+ * the predecessor identity after an answer minted its successor token. The
+ * cancelled tombstone keeps reconciliation from recreating that successor.
+ * Snapshot cleanup is queued in the same write so no retained workspace leaks.
  */
 export async function tombstoneClarificationCancellation(
   db: Db,
   input: {
     subjectKey: string;
     ownerToken: string;
-    runId: string;
+    runId: string | null;
   },
-): Promise<boolean> {
+): Promise<{ matched: boolean; successorOwnerToken: string | null }> {
+  const cancelledDispatchedRun =
+    input.runId === null
+      ? sql`${clarificationRequests.dispatchedRunId}`
+      : sql`case
+          when ${clarificationRequests.successorOwnerToken} = ${input.ownerToken}
+          then coalesce(${clarificationRequests.dispatchedRunId}, ${input.runId})
+          else ${clarificationRequests.dispatchedRunId}
+        end`;
   const rows = await db
     .update(clarificationRequests)
     .set({
+      status: sql`case
+        when ${clarificationRequests.status} = 'pending' then 'superseded'
+        else ${clarificationRequests.status}
+      end`,
       checkpointState: "cancelled",
-      dispatchedRunId: input.runId,
+      dispatchedRunId: cancelledDispatchedRun,
       cleanupState: cleanupStateAfterRetirement(),
       cleanupError: null,
       cleanupClaimedAt: null,
@@ -1311,17 +1559,35 @@ export async function tombstoneClarificationCancellation(
     .where(
       and(
         eq(clarificationRequests.subjectKey, input.subjectKey),
-        eq(clarificationRequests.status, "answered"),
-        inArray(clarificationRequests.checkpointState, ["ready", "cancelled"]),
-        eq(clarificationRequests.successorOwnerToken, input.ownerToken),
+        inArray(clarificationRequests.status, ["pending", "answered", "superseded"]),
+        inArray(clarificationRequests.checkpointState, [
+          "preparing",
+          "ready",
+          "cancelled",
+        ]),
         or(
-          isNull(clarificationRequests.dispatchedRunId),
-          eq(clarificationRequests.dispatchedRunId, input.runId),
+          input.runId === null
+            ? eq(clarificationRequests.successorOwnerToken, input.ownerToken)
+            : and(
+                eq(clarificationRequests.ownerToken, input.ownerToken),
+                eq(clarificationRequests.runId, input.runId),
+              ),
+          and(
+            eq(clarificationRequests.successorOwnerToken, input.ownerToken),
+            or(
+              isNull(clarificationRequests.dispatchedRunId),
+              ...(input.runId === null
+                ? []
+                : [eq(clarificationRequests.dispatchedRunId, input.runId)]),
+            ),
+          ),
         ),
       ),
     )
-    .returning({ id: clarificationRequests.id });
-  return rows.length > 0;
+    .returning({ successorOwnerToken: clarificationRequests.successorOwnerToken });
+  return rows[0]
+    ? { matched: true, successorOwnerToken: rows[0].successorOwnerToken ?? null }
+    : { matched: false, successorOwnerToken: null };
 }
 
 export function serializeClarification(row: ClarificationRow): ClarificationRequest {

@@ -20,6 +20,8 @@ function makeRegistry(
     bindRun: vi.fn(),
     handoff: vi.fn(),
     get: vi.fn(),
+    beginCancellation: vi.fn(),
+    releaseCancellation: vi.fn(),
     releaseReservation: vi.fn(),
     release: vi.fn(),
     listAll: vi.fn().mockResolvedValue(active),

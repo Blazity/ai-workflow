@@ -18,7 +18,9 @@ export default defineEventHandler(async (event) => {
 
     const adapters = createAdapters();
     const entry = (await adapters.runRegistry.listAll()).find(
-      (candidate) => candidate.state === "bound" && candidate.runId === runId,
+      (candidate) =>
+        (candidate.state === "bound" || candidate.state === "cancelling") &&
+        candidate.runId === runId,
     );
     if (!entry) throw createError({ statusCode: 404, statusMessage: "Active run not found" });
 
@@ -32,7 +34,7 @@ export default defineEventHandler(async (event) => {
     const cancelled = entry.ticketKey
       ? await cancelRun(
           entry.ticketKey,
-          runId,
+          { ownerToken: entry.ownerToken, runId },
           adapters.runRegistry,
           adapters.issueTracker,
           env.JIRA_BACKLOG_TRANSITION_ID
@@ -40,7 +42,12 @@ export default defineEventHandler(async (event) => {
             : env.COLUMN_BACKLOG,
           onReleased,
         )
-      : await cancelSubjectRun(entry.subjectKey, runId, adapters.runRegistry, onReleased);
+      : await cancelSubjectRun(
+          entry.subjectKey,
+          { ownerToken: entry.ownerToken, runId },
+          adapters.runRegistry,
+          onReleased,
+        );
     if (!cancelled) {
       throw createError({ statusCode: 503, statusMessage: "Cancellation not confirmed" });
     }

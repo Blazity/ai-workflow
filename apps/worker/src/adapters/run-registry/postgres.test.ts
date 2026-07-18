@@ -1,3 +1,4 @@
+import { eq } from "drizzle-orm";
 import { beforeEach, describe, expect, it } from "vitest";
 import type { Db } from "../../db/client.js";
 import { activeRunSandboxes } from "../../db/schema.js";
@@ -63,6 +64,52 @@ describe("owner-CAS run claims", () => {
     expect(await registry.release(subjectKey, "owner-a", "run-winner")).toBe(false);
   });
 
+  it("closes an exact owner before cancellation cleanup and releases only that closed claim", async () => {
+    await registry.reserve({
+      subjectKey,
+      ticketKey: "PROJ-1",
+      ownerToken: "owner-a",
+      kind: "ticket",
+    });
+    await registry.bindRun(subjectKey, "owner-a", "run-winner");
+
+    expect(
+      await registry.beginCancellation(subjectKey, "owner-a", "run-other"),
+    ).toBe(false);
+    expect(
+      await registry.beginCancellation(subjectKey, "owner-a", "run-winner"),
+    ).toBe(true);
+    expect(await registry.get(subjectKey)).toMatchObject({
+      ownerToken: "owner-a",
+      runId: "run-winner",
+      state: "cancelling",
+    });
+    expect(
+      await registry.releaseCancellation(subjectKey, "owner-a", "run-other"),
+    ).toBe(false);
+    expect(
+      await registry.releaseCancellation(subjectKey, "owner-a", "run-winner"),
+    ).toBe(true);
+    expect(await registry.get(subjectKey)).toBeNull();
+  });
+
+  it("closes and releases an unbound reservation without allowing it to bind", async () => {
+    await registry.reserve({
+      subjectKey,
+      ticketKey: "PROJ-1",
+      ownerToken: "owner-a",
+      kind: "ticket",
+    });
+
+    expect(await registry.beginCancellation(subjectKey, "owner-a", null)).toBe(true);
+    expect(await registry.bindRun(subjectKey, "owner-a", "run-too-late")).toBe(false);
+    expect(await registry.get(subjectKey)).toMatchObject({
+      runId: null,
+      state: "cancelling",
+    });
+    expect(await registry.releaseCancellation(subjectKey, "owner-a", null)).toBe(true);
+  });
+
   it("cannot terminal-release an unbound reservation and cannot reservation-release a bound run", async () => {
     await registry.reserve({ subjectKey, ticketKey: "PROJ-1", ownerToken: "owner-a", kind: "ticket" });
     expect(await registry.release(subjectKey, "owner-a", "run-a")).toBe(false);
@@ -107,6 +154,33 @@ describe("owner-CAS run claims", () => {
     ).toBe(false);
     expect(await registry.bindRun(subjectKey, "owner-successor", "run-winner")).toBe(true);
     expect(await registry.bindRun(subjectKey, "owner-successor", "run-retry-loser")).toBe(false);
+  });
+
+  it("refreshes reservation freshness when a parked run hands off", async () => {
+    await registry.reserve({
+      subjectKey,
+      ticketKey: "PROJ-1",
+      ownerToken: "owner-parked",
+      kind: "ticket",
+    });
+    await registry.bindRun(subjectKey, "owner-parked", "run-parked");
+    await db
+      .update(activeRuns)
+      .set({ updatedAt: new Date("2026-01-01T00:00:00.000Z") })
+      .where(eq(activeRuns.subjectKey, subjectKey));
+    const before = Date.now();
+
+    expect(
+      await registry.handoffBoundRun(
+        subjectKey,
+        "owner-parked",
+        "run-parked",
+        "owner-successor",
+      ),
+    ).toBe(true);
+    expect((await registry.get(subjectKey))?.updatedAt).toBeGreaterThanOrEqual(
+      before - 1_000,
+    );
   });
 });
 
@@ -180,6 +254,18 @@ describe("owner-isolated child sandboxes", () => {
       registry.registerSandbox(subjectKey, "owner-b", "sandbox-orphan"),
     ).rejects.toThrow("owner does not hold active run");
     expect(await registry.listSandboxes(subjectKey, "owner-a")).toEqual([]);
+  });
+
+  it("prevents every new sandbox registration once cancellation closes the owner", async () => {
+    await registry.registerSandbox(subjectKey, "owner-a", "sandbox-before-close");
+    expect(await registry.beginCancellation(subjectKey, "owner-a", "run-a")).toBe(true);
+
+    await expect(
+      registry.registerSandbox(subjectKey, "owner-a", "sandbox-after-close"),
+    ).rejects.toThrow("owner does not hold active run");
+    expect(await registry.listSandboxes(subjectKey, "owner-a")).toEqual([
+      "sandbox-before-close",
+    ]);
   });
 
   it("does not expose one owner's sandboxes through another owner", async () => {

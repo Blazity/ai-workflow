@@ -11,7 +11,7 @@ export interface FailedTicketMeta {
  */
 export type RunKind = "ticket" | "pr_trigger";
 
-export type RunClaimState = "reserved" | "bound";
+export type RunClaimState = "reserved" | "bound" | "cancelling";
 
 export interface RunReservation {
   subjectKey: string;
@@ -46,6 +46,19 @@ export interface RunRegistryAdapter {
     nextOwnerToken: string,
   ): Promise<boolean>;
   get(subjectKey: string): Promise<ActiveRunEntry | null>;
+  /** Atomically closes an exact owner to new binds, handoffs, and sandbox
+   * registrations before cancellation enumerates its external resources. */
+  beginCancellation(
+    subjectKey: string,
+    ownerToken: string,
+    runId: string | null,
+  ): Promise<boolean>;
+  /** Exact compare-and-delete for a claim already closed by beginCancellation. */
+  releaseCancellation(
+    subjectKey: string,
+    ownerToken: string,
+    runId: string | null,
+  ): Promise<boolean>;
   /** Discard a reservation only before any workflow candidate has bound it. */
   releaseReservation(subjectKey: string, ownerToken: string): Promise<boolean>;
   /** Owner/run matching terminal compare-and-delete. The boolean gates pending drain. */

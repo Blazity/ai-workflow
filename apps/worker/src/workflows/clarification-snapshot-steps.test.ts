@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   registerSandbox: vi.fn(),
   unregisterSandbox: vi.fn(),
   configure: vi.fn(),
+  recordSnapshot: vi.fn(),
   completeCheckpoint: vi.fn(),
 }));
 
@@ -40,6 +41,8 @@ vi.mock("../../env.js", () => ({
 }));
 vi.mock("../db/client.js", () => ({ getDb: () => "db-sentinel" }));
 vi.mock("../clarifications/store.js", () => ({
+  recordClarificationSnapshotMetadata: (...args: unknown[]) =>
+    mocks.recordSnapshot(...args),
   completeClarificationCheckpoint: (...args: unknown[]) =>
     mocks.completeCheckpoint(...args),
 }));
@@ -60,6 +63,7 @@ describe("clarification sandbox snapshot Workflow steps", () => {
         pagination: { count: 0, next: null, prev: null },
       },
     });
+    mocks.recordSnapshot.mockResolvedValue(undefined);
     mocks.completeCheckpoint.mockResolvedValue(undefined);
   });
 
@@ -233,6 +237,52 @@ describe("clarification sandbox snapshot Workflow steps", () => {
         pollIntervalMs: 0,
       }),
     ).resolves.toMatchObject({ snapshotId: "snap-durable" });
+  });
+
+  it("persists a created snapshot before source-stop polling can fail", async () => {
+    const events: string[] = [];
+    const runCommand = vi.fn().mockResolvedValue({
+      exitCode: 0,
+      stdout: async () => "",
+      stderr: async () => "",
+    });
+    const snapshot = vi.fn().mockResolvedValue({
+      snapshotId: "snap-before-poll",
+      sourceSandboxId: "sbx-source",
+      expiresAt: new Date("2026-07-24T00:00:00.000Z"),
+      status: "created",
+    });
+    mocks.recordSnapshot.mockImplementation(async () => {
+      events.push("record");
+    });
+    mocks.get
+      .mockResolvedValueOnce({ runCommand, snapshot })
+      .mockImplementationOnce(async () => {
+        events.push("poll");
+        throw new Error("source lookup unavailable");
+      });
+
+    await expect(snapshotClarificationSandboxStep({
+      subjectKey: "ticket:jira:AIW-96",
+      ownerToken: "owner-parked",
+      clarificationId: "clar-before-poll",
+      sandboxId: "sbx-source",
+      snapshotRequestedAt: "2026-07-17T00:00:00.000Z",
+      timeoutMs: 10_000,
+      pollIntervalMs: 0,
+    })).rejects.toThrow("source lookup unavailable");
+
+    expect(mocks.recordSnapshot).toHaveBeenCalledWith(
+      "db-sentinel",
+      "clar-before-poll",
+      {
+        snapshotId: "snap-before-poll",
+        sourceSandboxId: "sbx-source",
+        expiresAt: new Date("2026-07-24T00:00:00.000Z"),
+      },
+    );
+    expect(events).toEqual(["record", "poll"]);
+    expect(mocks.completeCheckpoint).not.toHaveBeenCalled();
   });
 
   it("treats an already absent snapshot as successful idempotent cleanup", async () => {

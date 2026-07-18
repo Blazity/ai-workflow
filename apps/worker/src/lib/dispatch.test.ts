@@ -56,6 +56,8 @@ function registry(options: {
     bindRun: vi.fn(),
     handoff: vi.fn(),
     get: vi.fn(async (subjectKey) => rows.find((row) => row.subjectKey === subjectKey) ?? null),
+    beginCancellation: vi.fn(),
+    releaseCancellation: vi.fn(),
     releaseReservation: vi.fn(async (subjectKey, ownerToken) => {
       const index = rows.findIndex(
         (row) => row.subjectKey === subjectKey && row.ownerToken === ownerToken && row.state === "reserved",
@@ -226,6 +228,66 @@ describe("dispatchTicket owner reservation", () => {
     });
     const result = await dispatchTicket("PROJ-42", adapters(registry({ initial: [stale] })), 1);
     expect(result.started).toBe(true);
+  });
+
+  it("counts a freshly handed-off reservation by its refreshed timestamp", async () => {
+    const handedOff = entry({
+      state: "reserved",
+      runId: null,
+      ownerToken: "owner:clarification-successor",
+      createdAt: Date.now() - STALE_CLAIM_MS - 1,
+      updatedAt: Date.now(),
+    });
+    const runRegistry = registry({ initial: [handedOff] });
+
+    expect(await dispatchTicket("PROJ-42", adapters(runRegistry), 1)).toEqual({
+      started: false,
+      reason: "at_capacity",
+    });
+    expect(runRegistry.reserve).not.toHaveBeenCalled();
+  });
+
+  it("counts a cancelling claim even when cleanup has been pending past the stale threshold", async () => {
+    const cancelling = entry({
+      state: "cancelling",
+      createdAt: Date.now() - STALE_CLAIM_MS - 1,
+      updatedAt: Date.now() - STALE_CLAIM_MS - 1,
+    });
+    const runRegistry = registry({ initial: [cancelling] });
+
+    expect(await dispatchTicket("PROJ-42", adapters(runRegistry), 1)).toEqual({
+      started: false,
+      reason: "at_capacity",
+    });
+    expect(runRegistry.reserve).not.toHaveBeenCalled();
+  });
+
+  it("does not let a new reservation outrank a claim that starts cancelling during arbitration", async () => {
+    const runRegistry = registry();
+    const cancelling = entry({
+      state: "cancelling",
+      createdAt: Date.now() - STALE_CLAIM_MS - 1,
+      updatedAt: Date.now(),
+    });
+    vi.mocked(runRegistry.listAll)
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        entry({
+          subjectKey: "ticket:jira:PROJ-42",
+          ticketKey: "PROJ-42",
+          ownerToken: "owner:candidate",
+          runId: null,
+          state: "reserved",
+        }),
+        cancelling,
+      ]);
+
+    expect(await dispatchTicket("PROJ-42", adapters(runRegistry), 1)).toEqual({
+      started: false,
+      reason: "at_capacity",
+    });
+    expect(runRegistry.releaseReservation).toHaveBeenCalledOnce();
+    expect(mockStart).not.toHaveBeenCalled();
   });
 
   it("fails closed when registry capacity cannot be read", async () => {

@@ -82,7 +82,7 @@ describe("POST /api/v1/runs/:runId/cancel", () => {
     });
     expect(mocks.cancelSubjectRun).toHaveBeenCalledWith(
       "pr:github:acme/api#42",
-      "run-pr",
+      { ownerToken: "owner-pr", runId: "run-pr" },
       expect.anything(),
       expect.any(Function),
     );
@@ -109,7 +109,7 @@ describe("POST /api/v1/runs/:runId/cancel", () => {
     expect((await cancel("run-ticket")).status).toBe(200);
     expect(mocks.cancelRun).toHaveBeenCalledWith(
       "AIW-1",
-      "run-ticket",
+      { ownerToken: "owner-ticket", runId: "run-ticket" },
       expect.anything(),
       expect.anything(),
       "Backlog",
@@ -141,5 +141,28 @@ describe("POST /api/v1/runs/:runId/cancel", () => {
     mocks.cancelSubjectRun.mockResolvedValue(false);
 
     expect((await cancel()).status).toBe(503);
+  });
+
+  it("lets the same API request retry a run whose owner is already closing", async () => {
+    mocks.listAll.mockResolvedValue([
+      {
+        subjectKey: "ticket:jira:AIW-1",
+        ticketKey: "AIW-1",
+        ownerToken: "owner-ticket",
+        runId: "run-ticket",
+        state: "cancelling",
+        kind: "ticket",
+      },
+    ]);
+
+    expect((await cancel("run-ticket")).status).toBe(200);
+    expect(mocks.cancelRun).toHaveBeenCalledWith(
+      "AIW-1",
+      { ownerToken: "owner-ticket", runId: "run-ticket" },
+      expect.anything(),
+      expect.anything(),
+      "Backlog",
+      expect.any(Function),
+    );
   });
 });

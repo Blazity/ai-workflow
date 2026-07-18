@@ -179,10 +179,13 @@ export async function reserveSubjectWithinCapacity(
   ownerToken: string,
   runRegistry: RunRegistryAdapter,
   maxConcurrentAgents: number,
+  reserve: (() => Promise<boolean>) | null = null,
 ): Promise<SubjectReservationResult> {
   if (await isAtCapacity(maxConcurrentAgents, runRegistry)) return "at_capacity";
 
-  const reserved = await runRegistry.reserve({ ...subject, ownerToken });
+  const reserved = await (reserve
+    ? reserve()
+    : runRegistry.reserve({ ...subject, ownerToken }));
   if (!reserved) return "already_claimed";
 
   try {
@@ -241,7 +244,9 @@ async function winsPostReservationCapacity(
   if (entries.length <= max) return true;
   const winners = [...entries]
     .sort((a, b) => {
-      if (a.state !== b.state) return a.state === "bound" ? -1 : 1;
+      const aIsReservation = a.state === "reserved";
+      const bIsReservation = b.state === "reserved";
+      if (aIsReservation !== bIsReservation) return aIsReservation ? 1 : -1;
       if (a.createdAt !== b.createdAt) return a.createdAt - b.createdAt;
       return a.subjectKey.localeCompare(b.subjectKey);
     })
@@ -252,7 +257,7 @@ async function winsPostReservationCapacity(
 
 function liveEntries(entries: Awaited<ReturnType<RunRegistryAdapter["listAll"]>>) {
   const staleBefore = Date.now() - STALE_CLAIM_MS;
-  return entries.filter((entry) => entry.state === "bound" || entry.createdAt >= staleBefore);
+  return entries.filter((entry) => entry.state !== "reserved" || entry.updatedAt >= staleBefore);
 }
 
 function extractProjectKey(ticketIdentifier: string): string | null {

@@ -1070,6 +1070,7 @@ export async function agentWorkflow(input: string | AgentWorkflowInput) {
         acknowledgePendingTriggerStep,
         acknowledgePrTriggerDispatchStep,
         bindWorkflowCandidateStep,
+        prepareClarificationContinuationStep,
         recordClarificationDispatchWinnerStep,
       } = await import("./run-ownership-steps.js");
       bound = await bindWorkflowCandidateStep(
@@ -1087,6 +1088,9 @@ export async function agentWorkflow(input: string | AgentWorkflowInput) {
           workflowRunId,
         );
         if (!clarificationWinnerRecorded) return;
+        if (!(await prepareClarificationContinuationStep(entry, workflowRunId))) {
+          return;
+        }
       }
       // A drained event is consumed only by the candidate that won owner CAS,
       // before ticket reads, notifications, sandbox creation, or any block.
@@ -1176,8 +1180,8 @@ async function agentWorkflowBody(
   if (!ticket) return;
 
   // A clarification continuation intentionally skips broad re-pickup
-  // housekeeping because superseding pending rows is unsafe on replay. Repair
-  // only the idempotent label removal that may have failed during dispatch.
+  // housekeeping because superseding pending rows is unsafe on replay. After
+  // winner validation, perform only the idempotent clarification-label removal.
   if (resumeCheckpoint && entry.ticketKey) {
     const { repairClarificationLabelStep } = await import("./run-ownership-steps.js");
     await repairClarificationLabelStep(ticket.identifier).catch((error) => {

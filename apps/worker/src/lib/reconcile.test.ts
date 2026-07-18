@@ -7,14 +7,23 @@ import type {
 import type { IssueTrackerAdapter } from "../adapters/issue-tracker/types.js";
 
 vi.mock("../../env.js", () => ({
-  env: { JIRA_PROJECT_KEY: "PROJ", COLUMN_AI: "AI" },
+  env: {
+    JIRA_PROJECT_KEY: "PROJ",
+    COLUMN_AI: "AI",
+    COLUMN_BACKLOG: "Backlog",
+    JIRA_BACKLOG_TRANSITION_ID: undefined,
+  },
 }));
 
 const mockGetRun = vi.fn();
 const mockCancelRun = vi.fn();
+const mockCancelSubjectRun = vi.fn();
 const mockStopSandboxesByIds = vi.fn();
 vi.mock("workflow/api", () => ({ getRun: (...args: any[]) => mockGetRun(...args) }));
-vi.mock("./cancel-run.js", () => ({ cancelRun: (...args: any[]) => mockCancelRun(...args) }));
+vi.mock("./cancel-run.js", () => ({
+  cancelRun: (...args: any[]) => mockCancelRun(...args),
+  cancelSubjectRun: (...args: any[]) => mockCancelSubjectRun(...args),
+}));
 vi.mock("../sandbox/stop-ticket-sandboxes.js", () => ({
   stopSandboxesByIds: (...args: any[]) => mockStopSandboxesByIds(...args),
 }));
@@ -42,6 +51,8 @@ function registry(
     bindRun: vi.fn(),
     handoff: vi.fn(),
     get: vi.fn(async (subjectKey) => entries.find((row) => row.subjectKey === subjectKey) ?? null),
+    beginCancellation: vi.fn().mockResolvedValue(true),
+    releaseCancellation: vi.fn().mockResolvedValue(true),
     releaseReservation: vi.fn().mockResolvedValue(true),
     release: vi.fn().mockResolvedValue(true),
     listAll: vi.fn().mockResolvedValue(entries),
@@ -212,6 +223,63 @@ describe("reconcileRuns owner-CAS recovery", () => {
     expect(mockGetRun).not.toHaveBeenCalled();
     expect(mockCancelRun).not.toHaveBeenCalled();
     expect(runRegistry.release).not.toHaveBeenCalled();
+  });
+
+  it("retries a closing ticket claim and confirms Backlog before it can be released", async () => {
+    const closing = entry({ state: "cancelling" });
+    const runRegistry = registry([closing]);
+    const tracker = issueTracker("AI");
+    mockCancelRun.mockResolvedValue(true);
+    const onReleased = vi.fn();
+    const { reconcileRuns } = await import("./reconcile.js");
+
+    expect(
+      await reconcileRuns(
+        new Set(["PROJ-1"]),
+        runRegistry,
+        tracker,
+        undefined,
+        onReleased,
+        new Set([closing.subjectKey]),
+      ),
+    ).toEqual({ cancelled: 1, cleaned: 0 });
+    expect(mockCancelRun).toHaveBeenCalledWith(
+      "PROJ-1",
+      { ownerToken: "owner-a", runId: "run-1" },
+      runRegistry,
+      tracker,
+      "Backlog",
+      onReleased,
+    );
+  });
+
+  it("retries a closing ticketless claim without Jira mutation", async () => {
+    const closing = entry({
+      subjectKey: "pr:github:acme/app#9",
+      ticketKey: null,
+      kind: "pr_trigger",
+      state: "cancelling",
+    });
+    const runRegistry = registry([closing]);
+    mockCancelSubjectRun.mockResolvedValue(true);
+    const onReleased = vi.fn();
+    const { reconcileRuns } = await import("./reconcile.js");
+
+    expect(
+      await reconcileRuns(
+        new Set(),
+        runRegistry,
+        undefined,
+        undefined,
+        onReleased,
+      ),
+    ).toEqual({ cancelled: 1, cleaned: 0 });
+    expect(mockCancelSubjectRun).toHaveBeenCalledWith(
+      closing.subjectKey,
+      { ownerToken: "owner-a", runId: "run-1" },
+      runRegistry,
+      onReleased,
+    );
   });
 
   it("passes owner-gated drain through cancellation for a ticket that left AI", async () => {

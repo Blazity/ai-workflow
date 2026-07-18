@@ -1,6 +1,6 @@
 import { getRun } from "workflow/api";
 import { env } from "../../env.js";
-import { cancelRun } from "./cancel-run.js";
+import { cancelRun, cancelSubjectRun } from "./cancel-run.js";
 import { logger } from "./logger.js";
 import { stopSandboxesByIds } from "../sandbox/stop-ticket-sandboxes.js";
 import {
@@ -36,6 +36,28 @@ export async function reconcileRuns(
   let cleaned = 0;
 
   for (const entry of entries) {
+    // Cancellation failures deliberately retain a dispatch-blocking closing
+    // claim. Retry that durable intent before any parked/terminal/orphan logic;
+    // a clarification tombstone may have made a previously parked subject
+    // closing, and it must not be skipped by the old protection snapshot.
+    if (entry.state === "cancelling") {
+      const confirmed = await retryCancellingClaim(
+        entry,
+        runRegistry,
+        issueTracker,
+        onSubjectReleased,
+      );
+      if (confirmed) {
+        await notifyTicketCancelled(
+          entry.ticketKey ?? "",
+          entry.runId ? "orphaned_run" : "inflight_claim",
+          entry.ticketKey ? onTicketCancelled : undefined,
+        );
+        cancelled++;
+      }
+      continue;
+    }
+
     // A pending durable clarification intentionally keeps its predecessor
     // bound after the Workflow run has parked and the ticket has left AI. The
     // answer path needs that exact claim for its owner-CAS successor handoff.
@@ -100,6 +122,66 @@ export async function reconcileRuns(
   }
 
   return { cancelled, cleaned };
+}
+
+async function retryCancellingClaim(
+  entry: ActiveRunEntry,
+  runRegistry: RunRegistryAdapter,
+  issueTracker?: IssueTrackerAdapter,
+  onSubjectReleased?: SubjectReleasedCallback,
+): Promise<boolean> {
+  const target = { ownerToken: entry.ownerToken, runId: entry.runId };
+  if (!entry.ticketKey) {
+    return cancelSubjectRun(
+      entry.subjectKey,
+      target,
+      runRegistry,
+      onSubjectReleased,
+    );
+  }
+
+  const inAiColumn = await readLiveTicketInAiColumn(entry.ticketKey, issueTracker);
+  if (inAiColumn === null) {
+    logger.warn(
+      { ticketKey: entry.ticketKey, runId: entry.runId },
+      "reconcile_closing_ticket_state_unconfirmed",
+    );
+    return false;
+  }
+  const backlogTarget = env.JIRA_BACKLOG_TRANSITION_ID
+    ? { name: env.COLUMN_BACKLOG, transitionId: env.JIRA_BACKLOG_TRANSITION_ID }
+    : env.COLUMN_BACKLOG;
+  return cancelRun(
+    entry.ticketKey,
+    target,
+    runRegistry,
+    inAiColumn ? issueTracker : undefined,
+    inAiColumn ? backlogTarget : undefined,
+    onSubjectReleased,
+  );
+}
+
+async function readLiveTicketInAiColumn(
+  ticketKey: string,
+  issueTracker?: IssueTrackerAdapter,
+): Promise<boolean | null> {
+  if (!issueTracker) return null;
+  try {
+    const ticket = await issueTracker.fetchTicket(ticketKey);
+    return (
+      ticket.trackerStatus.trim().toLowerCase() === env.COLUMN_AI.trim().toLowerCase() &&
+      resolveTicketProjectKey(ticket) === env.JIRA_PROJECT_KEY.trim().toUpperCase()
+    );
+  } catch (error) {
+    if (error instanceof IssueTrackerNotFoundError || getErrorCode(error) === "NOT_FOUND") {
+      return false;
+    }
+    logger.warn(
+      { ticketKey, error: (error as Error).message },
+      "reconcile_closing_ticket_lookup_failed",
+    );
+    return null;
+  }
 }
 
 async function recoverStaleReservation(

@@ -33,6 +33,8 @@ function registry(): RunRegistryAdapter {
     }),
     handoff: vi.fn(),
     get: vi.fn(async (subjectKey) => rows.get(subjectKey) ?? null),
+    beginCancellation: vi.fn(async () => false),
+    releaseCancellation: vi.fn(async () => false),
     releaseReservation: vi.fn(async (subjectKey, ownerToken) => {
       const current = rows.get(subjectKey);
       if (!current || current.state !== "reserved" || current.ownerToken !== ownerToken) return false;

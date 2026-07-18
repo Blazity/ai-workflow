@@ -35,10 +35,13 @@ export const activeRuns = pgTable(
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
-    check("active_runs_state_check", sql`${t.state} in ('reserved', 'bound')`),
+    check(
+      "active_runs_state_check",
+      sql`${t.state} in ('reserved', 'bound', 'cancelling')`,
+    ),
     check(
       "active_runs_state_run_id_check",
-      sql`(${t.state} = 'reserved' and ${t.runId} is null) or (${t.state} = 'bound' and ${t.runId} is not null)`,
+      sql`(${t.state} = 'reserved' and ${t.runId} is null) or (${t.state} = 'bound' and ${t.runId} is not null) or ${t.state} = 'cancelling'`,
     ),
     index("active_runs_ticket_key_idx").on(t.ticketKey),
     uniqueIndex("active_runs_subject_owner_idx").on(t.subjectKey, t.ownerToken),

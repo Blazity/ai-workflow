@@ -240,7 +240,7 @@ describe("POST /webhooks/slack", () => {
     expect(cancelRunFn).toHaveBeenCalledTimes(1);
     expect(cancelRunFn).toHaveBeenCalledWith(
       "AWT-1",
-      "run_a",
+      { ownerToken: "owner-1", runId: "run_a" },
       runRegistry,
       expect.anything(),
       "Backlog",

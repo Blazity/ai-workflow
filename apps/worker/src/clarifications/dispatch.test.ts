@@ -16,6 +16,7 @@ const stores = vi.hoisted(() => {
     answerClarification: vi.fn(),
     assertClarificationCheckpointAvailable: vi.fn(),
     getClarification: vi.fn(),
+    reserveClarificationSuccessor: vi.fn(),
   };
 });
 const wf = vi.hoisted(() => ({ start: vi.fn() }));
@@ -33,6 +34,8 @@ vi.mock("./store.js", () => ({
   assertClarificationCheckpointAvailable: (...a: any[]) =>
     stores.assertClarificationCheckpointAvailable(...a),
   getClarification: (...a: any[]) => stores.getClarification(...a),
+  reserveClarificationSuccessor: (...a: any[]) =>
+    stores.reserveClarificationSuccessor(...a),
 }));
 
 const { dispatchClarificationAnswered } = await import("./dispatch.js");
@@ -136,6 +139,7 @@ describe("dispatchClarificationAnswered", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     stores.assertClarificationCheckpointAvailable.mockReturnValue(undefined);
+    stores.reserveClarificationSuccessor.mockResolvedValue(true);
     wf.start.mockResolvedValue({ runId: "run-x" });
     transition.moveTicketWithIntent.mockResolvedValue(undefined);
     stores.answerClarification.mockResolvedValue(
@@ -221,7 +225,7 @@ describe("dispatchClarificationAnswered", () => {
     ]);
   });
 
-  it("orders answer CAS, owner handoff, ticket move, label removal, then start", async () => {
+  it("orders answer CAS and owner handoff before starting the winner candidate", async () => {
     const order: string[] = [];
     stores.answerClarification.mockImplementation(async () => {
       order.push("answer");
@@ -244,21 +248,12 @@ describe("dispatchClarificationAnswered", () => {
 
     await dispatch({ runRegistry, issueTracker });
 
-    expect(order).toEqual(["answer", "handoff", "move", "label", "start"]);
+    expect(order).toEqual(["answer", "handoff", "start"]);
     expect(stores.answerClarification).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
       successorOwnerToken: "owner-successor",
     }));
-    expect(transition.moveTicketWithIntent).toHaveBeenCalledWith({
-      db: expect.anything(),
-      issueTracker,
-      ticketKey: "AWT-1",
-      target: "AI",
-      owner: {
-        subjectKey: "ticket:jira:AWT-1",
-        ownerToken: "owner-successor",
-        runId: null,
-      },
-    });
+    expect(transition.moveTicketWithIntent).not.toHaveBeenCalled();
+    expect(issueTracker.updateLabels).not.toHaveBeenCalled();
   });
 
   it("lets a concurrent answer loser exit before handoff or side effects", async () => {
@@ -372,12 +367,50 @@ describe("dispatchClarificationAnswered", () => {
       status: "started",
       runId: "run-x",
     });
-    expect(reserve).toHaveBeenCalledWith({
-      subjectKey: answered.subjectKey,
-      ticketKey: answered.ticketKey,
-      ownerToken: "owner-successor",
-      kind: "ticket",
+    expect(stores.reserveClarificationSuccessor).toHaveBeenCalledWith(
+      expect.anything(),
+      {
+        clarificationId: answered.id,
+        ownerToken: "owner-successor",
+        kind: "ticket",
+      },
+    );
+    expect(reserve).not.toHaveBeenCalled();
+  });
+
+  it("does not recreate a successor when cancellation wins after the recovery read", async () => {
+    const answered = makeClarification({
+      status: "answered",
+      answer: "Use Next.js",
+      successorOwnerToken: "owner-successor",
     });
+    stores.getClarification.mockResolvedValue(answered);
+    stores.reserveClarificationSuccessor.mockResolvedValue(false);
+    const runRegistry = makeRunRegistry({
+      get: vi.fn().mockResolvedValue(null),
+      listAll: vi.fn().mockResolvedValue([]),
+    });
+    const issueTracker = makeIssueTracker();
+
+    expect(
+      await dispatch({
+        clarification: answered,
+        runRegistry,
+        issueTracker,
+        isRetry: true,
+      }),
+    ).toEqual({ status: "conflict" });
+    expect(stores.reserveClarificationSuccessor).toHaveBeenCalledWith(
+      expect.anything(),
+      {
+        clarificationId: answered.id,
+        ownerToken: "owner-successor",
+        kind: "ticket",
+      },
+    );
+    expect(runRegistry.reserve).not.toHaveBeenCalled();
+    expect(transition.moveTicketWithIntent).not.toHaveBeenCalled();
+    expect(wf.start).not.toHaveBeenCalled();
   });
 
   it("does not recreate a missing successor reservation while agent capacity is full", async () => {
@@ -425,6 +458,7 @@ describe("dispatchClarificationAnswered", () => {
       successorOwnerToken: "owner-successor",
     });
     stores.getClarification.mockResolvedValue(answered);
+    const activeAt = Date.now();
     const reservation = {
       subjectKey: answered.subjectKey,
       ticketKey: answered.ticketKey,
@@ -432,8 +466,8 @@ describe("dispatchClarificationAnswered", () => {
       runId: null,
       state: "reserved" as const,
       kind: "ticket" as const,
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
+      createdAt: activeAt,
+      updatedAt: activeAt,
     };
     const releaseReservation = vi.fn().mockResolvedValue(true);
     const runRegistry = makeRunRegistry({
@@ -448,8 +482,8 @@ describe("dispatchClarificationAnswered", () => {
             subjectKey: "ticket:jira:AWT-WINNER",
             ticketKey: "AWT-WINNER",
             ownerToken: "owner-winner",
-            createdAt: Date.now() - 1,
-            updatedAt: Date.now() - 1,
+            createdAt: activeAt - 1_000,
+            updatedAt: activeAt,
           },
           reservation,
         ]),
@@ -542,12 +576,15 @@ describe("dispatchClarificationAnswered", () => {
 
     await dispatch({ clarification: answered, runRegistry, isRetry: true });
 
-    expect(reserve).toHaveBeenCalledWith({
-      subjectKey: answered.subjectKey,
-      ticketKey: answered.ticketKey,
-      ownerToken: "owner-successor",
-      kind: "pr_trigger",
-    });
+    expect(stores.reserveClarificationSuccessor).toHaveBeenCalledWith(
+      expect.anything(),
+      {
+        clarificationId: answered.id,
+        ownerToken: "owner-successor",
+        kind: "pr_trigger",
+      },
+    );
+    expect(reserve).not.toHaveBeenCalled();
   });
 
   it("rejects an expired manual retry before ownership or Jira side effects", async () => {
@@ -603,18 +640,21 @@ describe("dispatchClarificationAnswered", () => {
     expect(wf.start).not.toHaveBeenCalled();
   });
 
-  it("keeps the successor reservation retryable when moving the ticket fails", async () => {
+  it("leaves ticket mutation to the bound workflow winner", async () => {
     const issueTracker = makeIssueTracker();
     transition.moveTicketWithIntent.mockRejectedValue(new Error("jira move failed"));
-    await expect(dispatch({ issueTracker })).rejects.toThrow("jira move failed");
-    expect(wf.start).not.toHaveBeenCalled();
+    await expect(dispatch({ issueTracker })).resolves.toEqual({
+      status: "started",
+      runId: "run-x",
+    });
+    expect(transition.moveTicketWithIntent).not.toHaveBeenCalled();
   });
 
-  it("does not fail after handoff when best-effort label removal fails", async () => {
+  it("does not mutate labels before the workflow winner binds", async () => {
     const issueTracker = makeIssueTracker({
       updateLabels: vi.fn().mockRejectedValue(new Error("label boom")),
     });
     await expect(dispatch({ issueTracker })).resolves.toEqual({ status: "started", runId: "run-x" });
-    expect(transition.moveTicketWithIntent).toHaveBeenCalled();
+    expect(issueTracker.updateLabels).not.toHaveBeenCalled();
   });
 });

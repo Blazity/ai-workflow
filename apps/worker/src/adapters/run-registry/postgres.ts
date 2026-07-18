@@ -128,6 +128,51 @@ export class PostgresRunRegistry implements RunRegistryAdapter, ThreadStore {
     return row ? toEntry(row) : null;
   }
 
+  async beginCancellation(
+    subjectKey: string,
+    ownerToken: string,
+    runId: string | null,
+  ): Promise<boolean> {
+    const runIdentity = runId === null
+      ? sql`${activeRuns.runId} is null`
+      : eq(activeRuns.runId, runId);
+    const rows = await this.db
+      .update(activeRuns)
+      .set({ state: "cancelling", updatedAt: sql`now()` })
+      .where(
+        and(
+          eq(activeRuns.subjectKey, subjectKey),
+          eq(activeRuns.ownerToken, ownerToken),
+          runIdentity,
+          sql`${activeRuns.state} in ('reserved', 'bound', 'cancelling')`,
+        ),
+      )
+      .returning({ subjectKey: activeRuns.subjectKey });
+    return rows.length > 0;
+  }
+
+  async releaseCancellation(
+    subjectKey: string,
+    ownerToken: string,
+    runId: string | null,
+  ): Promise<boolean> {
+    const runIdentity = runId === null
+      ? sql`${activeRuns.runId} is null`
+      : eq(activeRuns.runId, runId);
+    const rows = await this.db
+      .delete(activeRuns)
+      .where(
+        and(
+          eq(activeRuns.subjectKey, subjectKey),
+          eq(activeRuns.ownerToken, ownerToken),
+          eq(activeRuns.state, "cancelling"),
+          runIdentity,
+        ),
+      )
+      .returning({ subjectKey: activeRuns.subjectKey });
+    return rows.length > 0;
+  }
+
   async releaseReservation(subjectKey: string, ownerToken: string): Promise<boolean> {
     const rows = await this.db
       .delete(activeRuns)
@@ -167,24 +212,34 @@ export class PostgresRunRegistry implements RunRegistryAdapter, ThreadStore {
     ownerToken: string,
     sandboxId: string,
   ): Promise<void> {
-    const held = await this.db
-      .select({ subjectKey: activeRuns.subjectKey })
-      .from(activeRuns)
-      .where(
-        and(
-          eq(activeRuns.subjectKey, subjectKey),
-          eq(activeRuns.ownerToken, ownerToken),
-          eq(activeRuns.state, "bound"),
-        ),
-      );
-    if (held.length === 0) {
+    // Lock the owner and register its child in one statement. Cancellation's
+    // state update must therefore order either before this statement (which
+    // rejects the registration) or after it (so its later enumeration sees
+    // the child). There is no successful registration between close and list.
+    const result = await this.db.execute(sql`
+      with exact_owner as materialized (
+        select subject_key, owner_token
+        from active_runs
+        where subject_key = ${subjectKey}
+          and owner_token = ${ownerToken}
+          and state = 'bound'
+        for update
+      ), registered as (
+        insert into active_run_sandboxes (subject_key, owner_token, sandbox_id)
+        select subject_key, owner_token, ${sandboxId}
+        from exact_owner
+        on conflict do nothing
+        returning sandbox_id
+      )
+      select count(*)::integer as owner_count from exact_owner
+    `);
+    const ownerCount = Number(
+      ((result as { rows?: Array<{ owner_count: number | string }> }).rows ?? [])[0]
+        ?.owner_count ?? 0,
+    );
+    if (ownerCount === 0) {
       throw new Error(`registerSandbox: owner does not hold active run for ${subjectKey}`);
     }
-
-    await this.db
-      .insert(activeRunSandboxes)
-      .values({ subjectKey, ownerToken, sandboxId })
-      .onConflictDoNothing();
   }
 
   async listSandboxes(subjectKey: string, ownerToken: string): Promise<string[]> {

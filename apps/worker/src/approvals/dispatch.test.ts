@@ -74,6 +74,8 @@ function makeRegistry(options: {
     bindRun: vi.fn(),
     handoff: vi.fn(),
     get: vi.fn(),
+    beginCancellation: vi.fn(),
+    releaseCancellation: vi.fn(),
     releaseReservation,
     release: vi.fn(),
     listAll: vi.fn(async () => [...rows]),

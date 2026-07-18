@@ -7,6 +7,7 @@ const deletePending = vi.fn();
 const recordDispatched = vi.fn();
 const clearDispatched = vi.fn();
 const getClarification = vi.fn();
+const assertClarificationCheckpointAvailable = vi.fn();
 const markConsumed = vi.fn();
 const resolveAwaitingRun = vi.fn();
 const acknowledgeStartedDelivery = vi.fn();
@@ -14,6 +15,7 @@ const setApprovalRun = vi.fn();
 const listSandboxes = vi.fn();
 const stopSandboxes = vi.fn();
 const updateLabels = vi.fn();
+const moveTicketWithIntent = vi.fn();
 vi.mock("../lib/step-adapters.js", () => ({
   createStepAdapters: () => ({
     runRegistry: { bindRun, release, listSandboxes },
@@ -21,7 +23,9 @@ vi.mock("../lib/step-adapters.js", () => ({
   }),
 }));
 vi.mock("../db/client.js", () => ({ getDb: () => ({ db: true }) }));
-vi.mock("../../env.js", () => ({ env: { MAX_CONCURRENT_AGENTS: 3 } }));
+vi.mock("../../env.js", () => ({
+  env: { MAX_CONCURRENT_AGENTS: 3, COLUMN_AI: "AI" },
+}));
 vi.mock("../lib/dispatch-trigger.js", () => ({
   drainOldestPendingTrigger: (...args: any[]) => drain(...args),
 }));
@@ -30,6 +34,8 @@ vi.mock("../lib/trigger-delivery-store.js", () => ({
   acknowledgeStartedTriggerDelivery: (...args: any[]) => acknowledgeStartedDelivery(...args),
 }));
 vi.mock("../clarifications/store.js", () => ({
+  assertClarificationCheckpointAvailable: (...args: unknown[]) =>
+    assertClarificationCheckpointAvailable(...args),
   recordDispatchedRun: (...args: unknown[]) => recordDispatched(...args),
   clearDispatchedRun: (...args: unknown[]) => clearDispatched(...args),
   getClarification: (...args: unknown[]) => getClarification(...args),
@@ -44,6 +50,9 @@ vi.mock("../approvals/store.js", () => ({
 vi.mock("../sandbox/stop-ticket-sandboxes.js", () => ({
   stopSandboxesByIds: (...args: any[]) => stopSandboxes(...args),
 }));
+vi.mock("../lib/ticket-transition.js", () => ({
+  moveTicketWithIntent: (...args: any[]) => moveTicketWithIntent(...args),
+}));
 
 describe("workflow owner steps", () => {
   beforeEach(() => {
@@ -54,6 +63,7 @@ describe("workflow owner steps", () => {
     recordDispatched.mockReset();
     clearDispatched.mockReset();
     getClarification.mockReset();
+    assertClarificationCheckpointAvailable.mockReset();
     markConsumed.mockReset();
     resolveAwaitingRun.mockReset();
     acknowledgeStartedDelivery.mockReset();
@@ -61,6 +71,7 @@ describe("workflow owner steps", () => {
     listSandboxes.mockReset().mockResolvedValue([]);
     stopSandboxes.mockReset().mockResolvedValue(0);
     updateLabels.mockReset();
+    moveTicketWithIntent.mockReset().mockResolvedValue(undefined);
   });
 
   it("self-records the exact plan-approval workflow after owner bind", async () => {
@@ -226,6 +237,64 @@ describe("workflow owner steps", () => {
       "owner-successor",
       "run-winner",
     );
+  });
+
+  it("validates the bound clarification winner without a post-bind Jira pickup move", async () => {
+    getClarification.mockResolvedValue({
+      id: "clar-1",
+      status: "answered",
+      checkpointState: "ready",
+      subjectKey: "ticket:jira:AWT-1",
+      ticketKey: "AWT-1",
+      successorOwnerToken: "owner-successor",
+      dispatchedRunId: "run-winner",
+    });
+    const { prepareClarificationContinuationStep } = await import(
+      "./run-ownership-steps.js"
+    );
+
+    await expect(
+      prepareClarificationContinuationStep(
+        {
+          kind: "clarification_answered",
+          subjectKey: "ticket:jira:AWT-1",
+          ticketKey: "AWT-1",
+          ownerToken: "owner-successor",
+          clarificationRequestId: "clar-1",
+        } as any,
+        "run-winner",
+      ),
+    ).resolves.toBe(true);
+    expect(moveTicketWithIntent).not.toHaveBeenCalled();
+  });
+
+  it("does not move a clarification ticket after cancellation retires the winner", async () => {
+    getClarification.mockResolvedValue({
+      id: "clar-1",
+      status: "answered",
+      checkpointState: "cancelled",
+      subjectKey: "ticket:jira:AWT-1",
+      ticketKey: "AWT-1",
+      successorOwnerToken: "owner-successor",
+      dispatchedRunId: "run-winner",
+    });
+    const { prepareClarificationContinuationStep } = await import(
+      "./run-ownership-steps.js"
+    );
+
+    await expect(
+      prepareClarificationContinuationStep(
+        {
+          kind: "clarification_answered",
+          subjectKey: "ticket:jira:AWT-1",
+          ticketKey: "AWT-1",
+          ownerToken: "owner-successor",
+          clarificationRequestId: "clar-1",
+        } as any,
+        "run-winner",
+      ),
+    ).resolves.toBe(false);
+    expect(moveTicketWithIntent).not.toHaveBeenCalled();
   });
 
   it("durably consumes the checkpoint before downstream side effects can run", async () => {

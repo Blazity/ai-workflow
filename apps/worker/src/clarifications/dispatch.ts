@@ -1,20 +1,17 @@
 import { randomUUID } from "node:crypto";
 import { start } from "workflow/api";
-import { env } from "../../env.js";
 import type { Db } from "../db/client.js";
 import type { RunRegistryAdapter } from "../adapters/run-registry/types.js";
 import type { IssueTrackerAdapter } from "../adapters/issue-tracker/types.js";
 import type { AgentWorkflowInput } from "../workflows/agent-input.js";
 import { agentWorkflow } from "../workflows/agent.js";
-import { aiColumnMoveTarget } from "../lib/move-targets.js";
-import { NEEDS_CLARIFICATION_LABEL } from "../lib/labels.js";
 import { logger } from "../lib/logger.js";
-import { moveTicketWithIntent } from "../lib/ticket-transition.js";
 import { reserveSubjectWithinCapacity } from "../lib/dispatch.js";
 import {
   answerClarification,
   assertClarificationCheckpointAvailable,
   getClarification,
+  reserveClarificationSuccessor,
   type ClarificationRow,
 } from "./store.js";
 
@@ -45,7 +42,6 @@ export async function dispatchClarificationAnswered(input: {
   const {
     db,
     runRegistry,
-    issueTracker,
     clarification,
     answer,
     actor,
@@ -94,11 +90,21 @@ export async function dispatchClarificationAnswered(input: {
       successorOwnerToken,
       runRegistry,
       input.maxConcurrentAgents,
+      () =>
+        reserveClarificationSuccessor(db, {
+          clarificationId: checkpoint.id,
+          ownerToken: successorOwnerToken,
+          kind:
+            checkpoint.originEntry.kind === "pr_trigger"
+              ? "pr_trigger"
+              : "ticket",
+        }),
     );
     if (reservation === "at_capacity") return { status: "at_capacity" };
     recreatedSuccessorReservation = reservation === "reserved";
     if (reservation === "already_claimed") {
       active = await runRegistry.get(checkpoint.subjectKey);
+      if (active === null) return { status: "conflict" };
     }
   }
   if (
@@ -136,35 +142,6 @@ export async function dispatchClarificationAnswered(input: {
         after.runId !== null
       ) {
         return { status: "conflict" };
-      }
-    }
-  }
-
-  if (checkpoint.ticketKey) {
-    // Move first: reconciliation cancels a ticket run parked outside the AI
-    // column. If this throws, the answered row and successor reservation remain
-    // durable and the endpoint can retry from this exact boundary.
-    await moveTicketWithIntent({
-      db,
-      issueTracker,
-      ticketKey: checkpoint.ticketKey,
-      target: aiColumnMoveTarget(env),
-      owner: {
-        subjectKey: checkpoint.subjectKey,
-        ownerToken: successorOwnerToken,
-        runId: null,
-      },
-    });
-    if (typeof issueTracker.updateLabels === "function") {
-      try {
-        await issueTracker.updateLabels(checkpoint.ticketKey, {
-          remove: [NEEDS_CLARIFICATION_LABEL],
-        });
-      } catch (error) {
-        logger.warn(
-          { ticketKey: checkpoint.ticketKey, error: (error as Error).message },
-          "clarification_answered_label_remove_failed",
-        );
       }
     }
   }

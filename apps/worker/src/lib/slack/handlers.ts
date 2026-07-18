@@ -6,6 +6,7 @@ import type {
   IssueTrackerAdapter,
   IssueTrackerMoveTarget,
 } from "../../adapters/issue-tracker/types.js";
+import type { CancelRunTarget } from "../cancel-run.js";
 import { logger } from "../logger.js";
 import { ticketSubjectKey } from "../subject-key.js";
 import {
@@ -17,16 +18,12 @@ import {
 
 export type CancelRunFn = (
   ticketKey: string,
-  runId: string,
+  target: CancelRunTarget,
   registry: RunRegistryAdapter,
   issueTracker?: IssueTrackerAdapter,
   targetColumn?: IssueTrackerMoveTarget,
   onReleased?: (subjectKey: string) => Promise<void> | void,
 ) => Promise<boolean>;
-
-export type StopTicketSandboxesFn = (
-  sandboxIds: readonly string[],
-) => Promise<unknown>;
 
 export async function handleList(
   registry: RunRegistryAdapter,
@@ -68,62 +65,34 @@ export async function handleCancel(
   registry: RunRegistryAdapter,
   ticketKey: string,
   cancelRunFn: CancelRunFn,
-  stopSandboxes: StopTicketSandboxesFn,
   issueTracker?: IssueTrackerAdapter,
   targetColumn?: IssueTrackerMoveTarget,
 ): Promise<string> {
   const entry = await registry.get(ticketSubjectKey("jira", ticketKey));
   if (!entry) return `No active run for ${ticketKey}.`;
 
-  if (entry.state === "reserved") {
-    let sandboxIds: string[] = [];
-    let sandboxLookupFailed = false;
-    try {
-      sandboxIds = await registry.listSandboxes(entry.subjectKey, entry.ownerToken);
-    } catch (err) {
-      sandboxLookupFailed = true;
-      logger.warn(
-        { ticketKey, error: (err as Error).message },
-        "slack_cancel_sandbox_lookup_failed",
-      );
-    }
-
-    const failures: string[] = [];
-    if (sandboxLookupFailed) {
-      failures.push("sandbox registry lookup failed");
-    } else {
-      try {
-        await stopSandboxes(sandboxIds);
-      } catch (err) {
-        failures.push(`stopSandboxes: ${(err as Error).message}`);
-        logger.error(
-          { ticketKey, sandboxIds, error: (err as Error).message },
-          "slack_cancel_stop_sandboxes_failed",
-        );
-      }
-    }
-    if (failures.length === 0) {
-      try {
-        const released = await registry.releaseReservation(entry.subjectKey, entry.ownerToken);
-        if (!released) failures.push("reservation owner changed");
-      } catch (err) {
-        failures.push(`registry.releaseReservation: ${(err as Error).message}`);
-        logger.error(
-          { ticketKey, error: (err as Error).message },
-          "slack_cancel_release_reservation_failed",
-        );
-      }
-    }
-
-    if (failures.length > 0) {
-      return `${ticketKey} is mid-dispatch; failed to clear the claim (${failures.join("; ")}). Check logs and retry.`;
-    }
-    return `${ticketKey} is mid-dispatch; cleared the claim. Try the cancel again in a moment if a real run shows up.`;
+  if (entry.runId === null) {
+    const ok = await cancelRunFn(
+      ticketKey,
+      { ownerToken: entry.ownerToken, runId: null },
+      registry,
+      issueTracker,
+      targetColumn,
+    );
+    return ok
+      ? `${ticketKey} is mid-dispatch; durably cancelled and cleared the claim.`
+      : `${ticketKey} is mid-dispatch; failed to clear the claim safely. Ownership was retained; check logs and retry.`;
   }
 
   const runId = entry.runId;
   if (!runId) return `No active run for ${ticketKey}.`;
-  const ok = await cancelRunFn(ticketKey, runId, registry, issueTracker, targetColumn);
+  const ok = await cancelRunFn(
+    ticketKey,
+    { ownerToken: entry.ownerToken, runId },
+    registry,
+    issueTracker,
+    targetColumn,
+  );
   if (ok) return `Cancelled ${ticketKey} (runId \`${runId}\`).`;
   return `${ticketKey}: could not confirm cancellation for run \`${runId}\`; ownership was retained for a safe retry.`;
 }
