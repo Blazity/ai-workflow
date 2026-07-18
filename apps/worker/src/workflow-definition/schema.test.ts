@@ -1474,6 +1474,54 @@ describe("validateWorkflowGraph rules", () => {
         'Block "checks" (run_checks) requires a workspace-producing block to run before it on every path.',
       );
     });
+
+    it.each([
+      ["Run Checks", "run_checks", {}],
+      ["Pre-PR checks", "run_pre_pr_checks", {}],
+      ["Finalize workspace", "finalize_workspace", {}],
+      ["workspace-mode Generic Agent", "generic_agent", { prompt: "edit", workspaceMode: "read_write" }],
+    ] as const)("rejects %s without a dominating workspace producer", (_label, type, params) => {
+      const def = graph(
+        [node("trigger", "trigger_ticket_ai"), node("consumer", type, params)],
+        [{ from: "trigger", to: "consumer" }],
+      );
+
+      expect(validateWorkflowDefinitionForDeployment(def, registryContext)).toContain(
+        `Block "consumer" (${type}) requires a workspace-producing block to run before it on every path.`,
+      );
+    });
+
+    it("allows an agent-only Generic Agent without a workspace producer", () => {
+      const def = graph(
+        [
+          node("trigger", "trigger_ticket_ai"),
+          node("consumer", "generic_agent", { prompt: "classify", workspaceMode: "none" }),
+        ],
+        [{ from: "trigger", to: "consumer" }],
+      );
+
+      expect(validateWorkflowDefinitionForDeployment(def, registryContext)).toEqual([]);
+    });
+  });
+
+  it("requires an exact check selector only when deploying a failed-check trigger", () => {
+    const def = graph(
+      [
+        node("checks", "trigger_pr_checks_failed", {
+          providers: ["github"],
+          scope: "workflow_owned",
+          checkNames: [],
+          githubAppSlugs: ["github-actions"],
+          gitlabPipelineSources: ["merge_request_event"],
+        }),
+      ],
+      [],
+    );
+
+    expect(validateWorkflowGraph(def)).toEqual([]);
+    expect(validateWorkflowDefinitionForDeployment(def, registryContext)).toContain(
+      'Block "checks" (trigger_pr_checks_failed) must configure at least one exact CI check name before deployment.',
+    );
   });
 
   it("rejects environmentally unavailable blocks only at deployment validation", () => {
@@ -1743,11 +1791,15 @@ describe("validateWorkflowGraph rules", () => {
     const def = graph(
       [
         node("t", "trigger_ticket_ai"),
+        node("prepare", "prepare_workspace"),
         node("finalize", "finalize_workspace", {
           legacyRequiredChecks: ["checks.with.dot", "missing"],
         }),
       ],
-      [{ from: "t", to: "finalize" }],
+      [
+        { from: "t", to: "prepare" },
+        { from: "prepare", to: "finalize" },
+      ],
     );
 
     expect(workflowDefinitionSchema.safeParse(def).success).toBe(true);

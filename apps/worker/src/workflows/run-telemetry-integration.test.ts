@@ -227,6 +227,7 @@ async function runWorkflowAgainstDb(db: Db, fx: RunFixture): Promise<RunResult> 
       executeBlock,
       hooks,
       maxTotalExecutions: 200,
+      outputValidator: () => [],
     });
     outcome = walk.outcome;
     // Mirror agent.ts: never promote a clarification park (awaiting) to success.

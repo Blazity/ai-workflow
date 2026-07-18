@@ -273,6 +273,7 @@ describe("revised Workflows lifecycle", () => {
     );
     expect(pinnedPlan).not.toBeNull();
     const calls: string[] = [];
+    const postedBodies: unknown[] = [];
     const engineContext = makeCtx({
       runId: "run-1",
       definitionId: 1,
@@ -307,31 +308,48 @@ describe("revised Workflows lifecycle", () => {
         },
       ],
     });
+    const triggerEvent = reviewEvent("unused");
     const execution = await executeGraph({
       graph: buildRuntimeGraph(pinnedPlan!),
       entryTriggerId: "trigger-review",
-      triggerOutput: { status: "fired", review: reviewEvent("unused").pr.review! },
+      triggerOutput: {
+        status: "fired",
+        ticketKey: "AIW-103",
+        ...triggerEvent.pr,
+      },
       executeBlock: async (block, steps, resolvedInputs) => {
         calls.push(block.id);
         if (block.type === "fetch_pr_context") {
-          return { kind: "next", output: { status: "ok", headSha: "head-103" } };
+          return { kind: "next", output: { status: "ok", contexts: [] } };
         }
         if (block.type === "fix_agent") {
-          return { kind: "next", output: { status: "fixed" } };
+          return {
+            kind: "next",
+            output: {
+              status: "fixed",
+              workspaceId: "sandbox-103",
+              commits: [
+                { provider: "github", repoPath: "acme/app", sha: "fixed-head-103" },
+              ],
+              resolvedConflicts: [],
+              unresolvedConflicts: [],
+              summary: "Applied the requested remediation.",
+            },
+          };
         }
         if (block.type === "finalize_workspace") {
           return executeFinalizeWorkspace(block, steps, engineContext, resolvedInputs);
         }
-        return {
-          kind: "next",
-          output: { status: "ok", body: block.params.body },
-        };
+        postedBodies.push(resolvedInputs.body ?? block.params.body);
+        return { kind: "next", output: { status: "ok", comments: [] } };
       },
       hooks: {
         onBlockStart: async () => {},
         onBlockFinish: async () => {},
         clarificationExit: async () => {},
-        failureExit: async () => {},
+        failureExit: async (phase, reason) => {
+          throw new Error(`${phase}: ${reason}`);
+        },
         terminate: async () => {},
       },
     });
@@ -351,9 +369,7 @@ describe("revised Workflows lifecycle", () => {
         },
       }),
     );
-    expect(execution.steps.comment.output).toMatchObject({
-      body: "Version one remediation complete.",
-    });
+    expect(postedBodies).toEqual(["Version one remediation complete."]);
 
     const deployedTwo = await deploy(
       jsonRequest(

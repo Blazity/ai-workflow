@@ -10,12 +10,13 @@ import type {
 } from "@shared/contracts";
 import {
   buildRuntimeGraph,
-  executeGraph,
+  executeGraph as executeGraphWithContractValidation,
   type BlockExecutionResult,
   type BlockExecutor,
   type ExecuteGraphHooks,
   type StepsRecord,
 } from "./interpreter.js";
+
 import {
   humanGateLoopDefinition,
   linearPipelineDefinition,
@@ -23,6 +24,12 @@ import {
   prReviewFixDefinition,
 } from "./graph-fixtures.js";
 import { normalizeDefinitionForExecution } from "../workflows/definition-step.js";
+
+type ExecuteGraphOptions = Parameters<typeof executeGraphWithContractValidation>[0];
+
+function executeGraph(opts: ExecuteGraphOptions) {
+  return executeGraphWithContractValidation({ ...opts, outputValidator: () => [] });
+}
 
 // Helpers reused verbatim from interpreter.test.ts.
 interface Recorder {

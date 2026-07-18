@@ -58,7 +58,7 @@ describe("workflow block registry", () => {
       required: ["status", "plan"],
     });
     expect(registry.review_agent.output.bindingSchema).toMatchObject({
-      required: ["status"],
+      required: ["status", "findings", "decision"],
     });
   });
 
@@ -140,7 +140,7 @@ describe("workflow block registry", () => {
     }
   });
 
-  it("derives Generic Agent's nested data schema from outputSchema", () => {
+  it("derives Generic Agent's top-level fields and compatibility data alias from outputSchema", () => {
     const contract = resolveWorkflowBlockContract(
       "generic_agent",
       {
@@ -169,6 +169,14 @@ describe("workflow block registry", () => {
       type: "object",
       properties: {
         status: { type: "string" },
+        summary: { type: "string" },
+        stats: {
+          type: "object",
+          properties: { passed: { type: "number" } },
+          required: ["passed"],
+          additionalProperties: false,
+        },
+        tags: { type: "array", items: { type: "string" } },
         data: {
           type: "object",
           properties: {
@@ -187,6 +195,9 @@ describe("workflow block registry", () => {
       },
       required: ["status"],
       additionalProperties: false,
+    });
+    expect(contract.output.bindingSchema).toMatchObject({
+      required: ["status", "summary", "stats", "data"],
     });
   });
 
@@ -221,9 +232,42 @@ describe("workflow block registry", () => {
     });
   });
 
+  it.each(["status", "data"])(
+    "rejects Generic Agent outputSchema property %s because the runtime owns it",
+    (reserved) => {
+      const contract = resolveWorkflowBlockContract(
+        "generic_agent",
+        {
+          prompt: "work",
+          outputSchema: JSON.stringify({
+            type: "object",
+            properties: { [reserved]: { type: "string" } },
+            required: [reserved],
+            additionalProperties: false,
+          }),
+        },
+        context,
+      );
+
+      expect(contract.availability).toEqual({
+        available: false,
+        unavailableReason: `outputSchema property "${reserved}" is reserved by Generic Agent.`,
+      });
+    },
+  );
+
   it.each([
     ["42", "outputSchema must be a JSON Schema object."],
     ['{"type":"made-up"}', 'outputSchema has unsupported type "made-up".'],
+    ['{"type":"integer"}', 'outputSchema has unsupported type "integer".'],
+    [
+      '{"type":"string","pattern":"^[A-Z]+$"}',
+      'outputSchema uses unsupported validation keyword "pattern".',
+    ],
+    [
+      '{"type":"object","properties":{"state":{"type":"string","enum":["ready"]}}}',
+      'outputSchema.properties.state uses unsupported validation keyword "enum".',
+    ],
     [
       '{"type":"object","properties":{"nested":{"type":"made-up"}}}',
       'outputSchema.properties.nested has unsupported type "made-up".',
@@ -391,7 +435,7 @@ describe("workflow block registry", () => {
     });
   });
 
-  it("fails closed until a checks trigger has at least one exact check name", () => {
+  it("keeps an incomplete checks trigger editable until deployment validation", () => {
     expect(
       resolveWorkflowBlockContract(
         "trigger_pr_checks_failed",
@@ -404,10 +448,7 @@ describe("workflow block registry", () => {
         },
         context,
       ).availability,
-    ).toEqual({
-      available: false,
-      unavailableReason: "Configure at least one exact CI check name.",
-    });
+    ).toEqual({ available: true, unavailableReason: null });
 
     expect(
       resolveWorkflowBlockContract(

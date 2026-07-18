@@ -2,7 +2,10 @@ import { z } from "zod";
 import type { JsonValue } from "@shared/contracts";
 import type { AgentKind } from "../../sandbox/agents/index.js";
 import type { PhaseArtifactPaths, PhaseUsage } from "../../sandbox/agents/types.js";
-import { validateBlockOutputForDefinition } from "../../workflow-definition/block-registry.js";
+import {
+  validateBlockOutputForDefinition,
+  workflowBlockDefinitionIssue,
+} from "../../workflow-definition/block-registry.js";
 import { resolveBlockAgent } from "../../workflow-definition/resolve-agent.js";
 import { ensureAgentSandbox } from "./agent-sandbox.js";
 import { isRunBudgetError } from "../run-budget.js";
@@ -136,8 +139,9 @@ async function blockGenericAgentParseStep(
  * prompt param is written verbatim as the phase input file. Without an
  * outputSchema param the phase uses GENERIC_SCHEMA and its status maps to
  * next / needs_human_input / failed; with a custom schema the parsed object is
- * wrapped as { status: "ok", data }. The outputSchema string is validated with
- * JSON.parse before anything reaches the agent CLI.
+ * returned at the top level with the reserved runtime status plus a compatibility
+ * `data` alias. The outputSchema string is validated before anything reaches
+ * the agent CLI.
  */
 export const execute: BlockExecuteFn = async (
   block,
@@ -155,6 +159,14 @@ export const execute: BlockExecuteFn = async (
       JSON.parse(customSchema);
     } catch {
       return { kind: "failed", output: { status: "failed" }, reason: "invalid outputSchema" };
+    }
+    const definitionIssue = workflowBlockDefinitionIssue(block.type, block.params);
+    if (definitionIssue) {
+      return {
+        kind: "failed",
+        output: { status: "failed" },
+        reason: `invalid outputSchema: ${definitionIssue}`,
+      };
     }
   }
 
@@ -249,8 +261,20 @@ export const execute: BlockExecuteFn = async (
           reason: "agent output did not match the requested schema",
         };
       }
-      const output = { status: "ok", data: object as JsonValue } as const;
-      if (validateBlockOutputForDefinition(block.type, block.params, output).length > 0) {
+      if (object === null || typeof object !== "object" || Array.isArray(object)) {
+        return {
+          kind: "failed",
+          output: { status: "failed" },
+          reason: "agent output did not match the requested schema",
+        };
+      }
+      const data = object as Record<string, JsonValue>;
+      const output = { ...data, status: "completed", data } as const;
+      if (
+        validateBlockOutputForDefinition(block.type, block.params, output, {
+          requireNormalOutput: true,
+        }).length > 0
+      ) {
         return {
           kind: "failed",
           output: { status: "failed" },
@@ -295,7 +319,7 @@ export const execute: BlockExecuteFn = async (
     return {
       kind: "next",
       output: {
-        status: "ok",
+        status: "completed",
         body: parsed.data.body.slice(0, 4000),
       },
     };

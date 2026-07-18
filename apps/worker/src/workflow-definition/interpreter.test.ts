@@ -8,13 +8,19 @@ import type {
 } from "@shared/contracts";
 import {
   buildRuntimeGraph,
-  executeGraph,
+  executeGraph as executeGraphWithContractValidation,
   type BlockExecutionResult,
   type BlockExecutor,
   type ExecuteGraphHooks,
   type RuntimeGraph,
   type StepsRecord,
 } from "./interpreter.js";
+
+type ExecuteGraphOptions = Parameters<typeof executeGraphWithContractValidation>[0];
+
+function executeGraph(opts: ExecuteGraphOptions) {
+  return executeGraphWithContractValidation({ ...opts, outputValidator: () => [] });
+}
 
 function node(
   id: string,
@@ -128,6 +134,132 @@ describe("buildRuntimeGraph", () => {
       [],
     );
     expect(graph.triggers.map((t) => t.id).sort()).toEqual(["a", "b"]);
+  });
+});
+
+describe("executeGraph output contracts", () => {
+  it("rejects an invalid trigger output before starting downstream execution", async () => {
+    const graph = graphFrom(
+      [node("trig", "trigger_ticket_ai"), node("after", "send_slack_message")],
+      [{ from: "trig", to: "after" }],
+    );
+    const rec = makeRecorder();
+    const { executor, calls } = makeExecutor();
+
+    const result = await executeGraphWithContractValidation({
+      graph,
+      entryTriggerId: "trig",
+      triggerOutput: { status: "ok" },
+      executeBlock: executor,
+      hooks: rec.hooks,
+    });
+
+    expect(result.outcome).toBe("stopped");
+    expect(calls).toEqual([]);
+    expect(result.steps.trig).toBeUndefined();
+    expect(rec.failures).toEqual([
+      expect.objectContaining({ phase: "contract", nodeId: "trig" }),
+    ]);
+  });
+
+  it.each([
+    ["next", { kind: "next", output: { status: "sent" } }],
+    [
+      "needs_human_input",
+      {
+        kind: "needs_human_input",
+        output: { status: "needs_human_input" },
+        questions: ["continue?"],
+      },
+    ],
+    ["failed", { kind: "failed", output: { status: "failed" }, reason: "failed" }],
+    ["ended", { kind: "ended", output: { status: "waiting" } }],
+  ] as const)("rejects an invalid %s executor output before recording or routing", async (_kind, invalid) => {
+    const graph = graphFrom(
+      [
+        node("trig", "trigger_ticket_ai"),
+        node("action", "send_slack_message"),
+        node("after", "send_slack_message"),
+      ],
+      [
+        { from: "trig", to: "action" },
+        { from: "action", to: "after" },
+        { from: "action", to: "after", fromPort: "failed" },
+      ],
+    );
+    const rec = makeRecorder();
+    const { executor, calls } = makeExecutor({ action: invalid as BlockExecutionResult });
+
+    const result = await executeGraphWithContractValidation({
+      graph,
+      entryTriggerId: "trig",
+      triggerOutput: { status: "fired", ticketKey: "AIW-103" },
+      executeBlock: executor,
+      hooks: rec.hooks,
+    });
+
+    expect(result.outcome).toBe("stopped");
+    expect(calls).toEqual(["action"]);
+    expect(result.steps.action).toBeUndefined();
+    expect(rec.finishes).toHaveLength(1);
+    expect(rec.finishes[0]).toMatchObject({
+      nodeId: "action",
+      state: { status: "fail" },
+    });
+    expect(rec.finishes[0]?.state.output).toBeUndefined();
+    expect(rec.failures).toEqual([
+      expect.objectContaining({ phase: "contract", nodeId: "action" }),
+    ]);
+    expect(rec.clarifications).toEqual([]);
+  });
+
+  it("requires fields guaranteed by a normal output contract", async () => {
+    const graph = graphFrom(
+      [node("trig", "trigger_ticket_ai"), node("comment", "post_pr_comment", { body: "done" })],
+      [{ from: "trig", to: "comment" }],
+    );
+    const rec = makeRecorder();
+
+    const result = await executeGraphWithContractValidation({
+      graph,
+      entryTriggerId: "trig",
+      triggerOutput: { status: "fired", ticketKey: "AIW-103" },
+      executeBlock: async () => ({ kind: "next", output: { status: "ok" } }),
+      hooks: rec.hooks,
+    });
+
+    expect(result.outcome).toBe("stopped");
+    expect(rec.failures[0]).toMatchObject({ phase: "contract", nodeId: "comment" });
+    expect(rec.failures[0]?.reason).toContain("output.comments is required");
+  });
+
+  it("does not require normal-only fields from an authored failure output", async () => {
+    const graph = graphFrom(
+      [
+        node("trig", "trigger_ticket_ai"),
+        node("comment", "post_pr_comment", { body: "done" }),
+        node("recover", "send_slack_message", { message: "failed" }),
+      ],
+      [
+        { from: "trig", to: "comment" },
+        { from: "comment", to: "recover", fromPort: "failed" },
+      ],
+    );
+    const rec = makeRecorder();
+
+    const result = await executeGraphWithContractValidation({
+      graph,
+      entryTriggerId: "trig",
+      triggerOutput: { status: "fired", ticketKey: "AIW-103" },
+      executeBlock: async (block) =>
+        block.id === "comment"
+          ? { kind: "failed", output: { status: "failed" }, reason: "provider rejected" }
+          : { kind: "next", output: { status: "ok" } },
+      hooks: rec.hooks,
+    });
+
+    expect(result.outcome).toBe("completed");
+    expect(rec.failures).toEqual([]);
   });
 });
 

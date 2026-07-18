@@ -8,13 +8,19 @@ import type {
 } from "@shared/contracts";
 import {
   buildRuntimeGraph,
-  executeGraph,
+  executeGraph as executeGraphWithContractValidation,
   type BlockExecutionResult,
   type BlockExecutor,
   type ExecuteGraphHooks,
   type RuntimeGraph,
   type StepsRecord,
 } from "./interpreter.js";
+
+type ExecuteGraphOptions = Parameters<typeof executeGraphWithContractValidation>[0];
+
+function executeGraph(opts: ExecuteGraphOptions) {
+  return executeGraphWithContractValidation({ ...opts, outputValidator: () => [] });
+}
 
 function node(
   id: string,

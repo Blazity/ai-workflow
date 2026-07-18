@@ -39,6 +39,7 @@ import type { BlockExecuteFn, EngineCtx } from "./blocks/types.js";
 import type { ClarificationRuntimeContext } from "../db/clarifications-schema.js";
 import type { HumanDecision } from "../lib/human-decisions-memory.js";
 import type { WorkspacePublicationResult } from "./workspace-publication.js";
+import type { WorkspaceManifest } from "../sandbox/repo-workspace.js";
 import {
   ensureWorkspace,
   execute as executePrepareWorkspace,
@@ -121,6 +122,72 @@ export function blockTypesMissingExecutor(): WorkflowBlockType[] {
       BLOCK_EXECUTORS[type] === undefined &&
       !INLINE_EXECUTED_BLOCK_TYPES.includes(type),
   );
+}
+
+export function buildImplementationAgentSuccessOutput(input: {
+  workspaceId: string;
+  workspaceManifest: WorkspaceManifest;
+  commits: Array<{ provider: "github" | "gitlab"; repoPath: string; sha: string }>;
+  summary?: string | null;
+  verification?: BlockOutput["verification"];
+}): BlockOutput {
+  const changedRepositories = new Set(
+    input.commits.map((commit) => `${commit.provider}:${commit.repoPath}`),
+  );
+  return {
+    status: "implemented",
+    workspaceId: input.workspaceId,
+    branches: input.workspaceManifest.repositories
+      .filter((repository) =>
+        changedRepositories.has(`${repository.provider}:${repository.repoPath}`),
+      )
+      .map((repository) => ({
+        provider: repository.provider,
+        repoPath: repository.repoPath,
+        branch: repository.branchName,
+      })),
+    commits: input.commits.map((commit) => ({ ...commit })),
+    ...(input.verification === undefined ? {} : { verification: input.verification }),
+    summary: input.summary?.trim() || "Implementation completed.",
+  };
+}
+
+export function buildReviewAgentSuccessOutput(
+  review: Pick<ReviewOutput, "feedback" | "issues">,
+): BlockOutput {
+  const feedback = review.feedback.trim();
+  return {
+    status: "reviewed",
+    findings: review.issues.map((finding) => ({ ...finding })),
+    decision: review.issues.some((finding) => finding.severity === "critical")
+      ? "request_changes"
+      : "approve",
+    ...(feedback ? { feedback } : {}),
+  };
+}
+
+type PublishedPullRequests = Extract<
+  WorkspacePublicationResult,
+  { status: "published" }
+>["prs"];
+
+export function buildOpenPrSuccessOutput(prs: PublishedPullRequests): BlockOutput {
+  const primary = prs[0];
+  if (!primary) throw new Error("published workspace has no pull requests");
+  return {
+    status: "ok",
+    prs: prs.map((pr) => ({
+      provider: pr.provider,
+      repoPath: pr.repoPath,
+      id: pr.id,
+      url: pr.url,
+      branch: pr.branch,
+      isNew: pr.isNew,
+    })),
+    // Kept for dashboard telemetry and bindings authored against PR #118.
+    prUrl: primary.url,
+    prNumber: primary.id,
+  };
 }
 
 export function modelsRequiringPriceLookup(
@@ -1922,7 +1989,34 @@ async function agentWorkflowBody(
               return { kind: "failed", output: { status: "failed" }, reason, phase: "impl" };
             }
 
-            return { kind: "next", output: { status: "implemented" } };
+            if (!ctx.workspaceManifest) {
+              return {
+                kind: "failed",
+                output: { status: "failed" },
+                reason: "implementation workspace manifest is unavailable",
+                phase: "impl",
+              };
+            }
+            try {
+              const { inspectFixWorkspace } = await import("./blocks/fix-workspace-state.js");
+              const workspaceState = await inspectFixWorkspace(sandboxId);
+              return {
+                kind: "next",
+                output: buildImplementationAgentSuccessOutput({
+                  workspaceId: sandboxId,
+                  workspaceManifest: ctx.workspaceManifest,
+                  commits: workspaceState.commits,
+                  summary: implOutput.summary,
+                }),
+              };
+            } catch (error) {
+              return {
+                kind: "failed",
+                output: { status: "failed" },
+                reason: `could not inspect implementation workspace: ${errorMessage(error)}`,
+                phase: "impl",
+              };
+            }
           }
 
           case "review_agent": {
@@ -1983,8 +2077,10 @@ async function agentWorkflowBody(
               };
             }
 
-            const feedback = reviewOutput.feedback.trim();
-            return { kind: "next", output: { status: "ok", ...(feedback ? { feedback } : {}) } };
+            return {
+              kind: "next",
+              output: buildReviewAgentSuccessOutput(reviewOutput),
+            };
           }
 
           case "run_pre_pr_checks": {
@@ -2095,10 +2191,7 @@ async function agentWorkflowBody(
 
             const primaryPr = publication.prs[0]!;
             prForTelemetry = { url: primaryPr.url, number: primaryPr.id };
-            return {
-              kind: "next",
-              output: { status: "ok", prUrl: primaryPr.url, prNumber: primaryPr.id },
-            };
+            return { kind: "next", output: buildOpenPrSuccessOutput(publication.prs) };
           }
 
           case "send_slack_message": {

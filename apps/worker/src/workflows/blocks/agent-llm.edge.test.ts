@@ -329,7 +329,7 @@ describe("generic_agent execute output branches", () => {
 
     const result = await genericExecute(makeNode("generic_agent", { prompt: "p" }), {}, makeCtx());
 
-    expect(result).toEqual({ kind: "next", output: { status: "ok", body: "" } });
+    expect(result).toEqual({ kind: "next", output: { status: "completed", body: "" } });
   });
 
   it("truncates an ok body longer than 4000 chars", async () => {
@@ -344,7 +344,7 @@ describe("generic_agent execute output branches", () => {
     else throw new Error("expected next");
   });
 
-  it("preserves literal null as valid custom-schema JSON output", async () => {
+  it("rejects literal null because Generic Agent declares top-level object fields", async () => {
     mocks.collectPhase.mockResolvedValue({ raw: "", structured: "null" });
 
     const result = await genericExecute(
@@ -353,7 +353,11 @@ describe("generic_agent execute output branches", () => {
       makeCtx(),
     );
 
-    expect(result).toEqual({ kind: "next", output: { status: "ok", data: null } });
+    expect(result).toEqual({
+      kind: "failed",
+      output: { status: "failed" },
+      reason: "invalid outputSchema: outputSchema must declare an object for Generic Agent.",
+    });
   });
 
   it("fails when a default-schema object has the wrong shape", async () => {
@@ -449,7 +453,7 @@ describe("generic_agent extractStructuredObject via execute", () => {
 
     const result = await genericExecute(makeNode("generic_agent", { prompt: "p" }), {}, makeCtx());
 
-    expect(result).toEqual({ kind: "next", output: { status: "ok", body: "b" } });
+    expect(result).toEqual({ kind: "next", output: { status: "completed", body: "b" } });
   });
 
   it("skips an envelope with null structured_output and a non-string result", async () => {
@@ -459,7 +463,7 @@ describe("generic_agent extractStructuredObject via execute", () => {
 
     const result = await genericExecute(makeNode("generic_agent", { prompt: "p" }), {}, makeCtx());
 
-    expect(result).toEqual({ kind: "next", output: { status: "ok", body: "later" } });
+    expect(result).toEqual({ kind: "next", output: { status: "completed", body: "later" } });
   });
 
   it("chooses the last valid JSON line from multiline raw output", async () => {
@@ -468,7 +472,7 @@ describe("generic_agent extractStructuredObject via execute", () => {
 
     const result = await genericExecute(makeNode("generic_agent", { prompt: "p" }), {}, makeCtx());
 
-    expect(result).toEqual({ kind: "next", output: { status: "ok", body: "last" } });
+    expect(result).toEqual({ kind: "next", output: { status: "completed", body: "last" } });
   });
 
   it("returns a plain non-envelope object as-is", async () => {
@@ -479,7 +483,7 @@ describe("generic_agent extractStructuredObject via execute", () => {
 
     const result = await genericExecute(makeNode("generic_agent", { prompt: "p" }), {}, makeCtx());
 
-    expect(result).toEqual({ kind: "next", output: { status: "ok", body: "plain" } });
+    expect(result).toEqual({ kind: "next", output: { status: "completed", body: "plain" } });
   });
 });
 

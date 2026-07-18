@@ -78,11 +78,22 @@ const CURRENT_EXECUTOR_OUTPUTS: Record<WorkflowBlockType, BlockOutput[]> = {
     { status: "failed" },
   ],
   implementation_agent: [
-    { status: "implemented" },
+    {
+      status: "implemented",
+      workspaceId: "sb_1",
+      branches: [
+        { provider: "github", repoPath: "Blazity/ai-workflow", branch: "aiw/AIW-1" },
+      ],
+      commits: [{ provider: "github", repoPath: "Blazity/ai-workflow", sha: "abc123" }],
+      summary: "Implemented the workflow",
+    },
     { status: "needs_human_input", questions: ["Which option?"] },
     { status: "failed" },
   ],
-  review_agent: [{ status: "ok", feedback: "Looks good" }, { status: "failed" }],
+  review_agent: [
+    { status: "reviewed", findings: [], decision: "approve", feedback: "Looks good" },
+    { status: "failed" },
+  ],
   fix_agent: [
     {
       status: "fixed",
@@ -103,7 +114,7 @@ const CURRENT_EXECUTOR_OUTPUTS: Record<WorkflowBlockType, BlockOutput[]> = {
     { status: "failed" },
   ],
   generic_agent: [
-    { status: "ok", body: "Done" },
+    { status: "completed", body: "Done" },
     { status: "needs_human_input", questions: ["Clarify"] },
     { status: "failed" },
   ],
@@ -159,7 +170,21 @@ const CURRENT_EXECUTOR_OUTPUTS: Record<WorkflowBlockType, BlockOutput[]> = {
     { status: "failed" },
   ],
   open_pr: [
-    { status: "ok", prUrl: "https://github.test/pr/118", prNumber: 118 },
+    {
+      status: "ok",
+      prs: [
+        {
+          provider: "github",
+          repoPath: "Blazity/ai-workflow",
+          id: 118,
+          url: "https://github.test/pr/118",
+          branch: "aiw/AIW-1",
+          isNew: true,
+        },
+      ],
+      prUrl: "https://github.test/pr/118",
+      prNumber: 118,
+    },
     { status: "failed" },
   ],
   update_ticket_status: [{ status: "ok", target: "ai_review" }],
@@ -231,7 +256,7 @@ describe("workflow registry current executor output parity", () => {
       );
       const output: BlockOutput =
         type === "generic_agent"
-          ? { status: "ok", data: { answer: 42 } }
+          ? { status: "completed", answer: 42, data: { answer: 42 } }
           : { status: "ok", output: { answer: 42 } };
       expect(validateBlockOutputAgainstContract(contract, output)).toEqual([]);
       expect(validateBlockOutputAgainstContract(contract, { status: "failed" })).toEqual([]);

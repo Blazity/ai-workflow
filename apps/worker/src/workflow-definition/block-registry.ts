@@ -109,6 +109,24 @@ const resolvedConflictType = objectType({
   repoPath: stringType(),
   files: arrayType(stringType()),
 });
+const branchRefType = objectType({
+  provider: stringType(),
+  repoPath: stringType(),
+  branch: stringType(),
+});
+const reviewFindingType = objectType({
+  file: stringType(),
+  description: stringType(),
+  severity: stringType(),
+});
+const workflowPrRefType = objectType({
+  provider: stringType(),
+  repoPath: stringType(),
+  id: numberType(),
+  url: stringType(),
+  branch: stringType(),
+  isNew: booleanType(),
+});
 
 const colors: Record<WorkflowBlockGroup, { color: string; softColor: string }> = {
   trigger: { color: "#D14343", softColor: "#FBECEC" },
@@ -373,7 +391,16 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
     ),
     defaults: {},
     inputs: {},
-    output: statusOutput({ questions: arrayType(stringType()) }),
+    output: statusOutput({
+      workspaceId: stringType(),
+      branches: arrayType(branchRefType),
+      commits: arrayType(commitRefType),
+      verification: unknownType(),
+      summary: stringType(),
+      questions: arrayType(stringType()),
+      suggestedAnswers: arrayType(stringType()),
+    }),
+    normalOutputRequired: ["workspaceId", "branches", "commits", "summary"],
     statusVariants: ["implemented", "needs_human_input", "failed"],
   },
   review_agent: {
@@ -385,8 +412,13 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
     ),
     defaults: {},
     inputs: {},
-    output: statusOutput({ feedback: stringType() }),
-    statusVariants: ["ok", "failed"],
+    output: statusOutput({
+      findings: arrayType(reviewFindingType),
+      decision: stringType(),
+      feedback: stringType(),
+    }),
+    normalOutputRequired: ["findings", "decision"],
+    statusVariants: ["reviewed", "failed"],
   },
   fix_agent: {
     presentation: presentation(
@@ -435,7 +467,7 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
       [],
     ),
     normalOutputRequired: ["body"],
-    statusVariants: ["ok", "needs_human_input", "failed"],
+    statusVariants: ["completed", "needs_human_input", "failed"],
   },
   prepare_workspace: {
     presentation: presentation(
@@ -547,8 +579,12 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
     ),
     defaults: {},
     inputs: { publicationAttemptId: input(stringType(), true) },
-    output: statusOutput({ prUrl: stringType(), prNumber: numberType() }),
-    normalOutputRequired: ["prUrl", "prNumber"],
+    output: statusOutput({
+      prs: arrayType(workflowPrRefType),
+      prUrl: stringType(),
+      prNumber: numberType(),
+    }),
+    normalOutputRequired: ["prs"],
     statusVariants: ["ok", "failed"],
   },
   update_ticket_status: {
@@ -727,12 +763,6 @@ function availabilityFor(
   if (type === "arthur_injection_check" && !context.arthurConfigured) {
     return unavailable("Arthur Engine is not configured.");
   }
-  if (
-    type === "trigger_pr_checks_failed" &&
-    !(Array.isArray(params.checkNames) && params.checkNames.length > 0)
-  ) {
-    return unavailable("Configure at least one exact CI check name.");
-  }
   const selectedProviders = Array.isArray(params.providers)
     ? params.providers.filter(
       (provider): provider is VcsProviderKind => provider === "github" || provider === "gitlab",
@@ -827,6 +857,45 @@ type ParsedDeclaredSchema =
   | { ok: true; schema: WorkflowValueSchema }
   | { ok: false; reason: string };
 
+const unsupportedJsonSchemaValidationKeywords = new Set([
+  "$defs",
+  "$ref",
+  "allOf",
+  "anyOf",
+  "const",
+  "contains",
+  "dependentRequired",
+  "dependencies",
+  "definitions",
+  "else",
+  "enum",
+  "exclusiveMaximum",
+  "exclusiveMinimum",
+  "format",
+  "if",
+  "maxContains",
+  "maxItems",
+  "maxLength",
+  "maxProperties",
+  "maximum",
+  "minContains",
+  "minItems",
+  "minLength",
+  "minProperties",
+  "minimum",
+  "multipleOf",
+  "not",
+  "oneOf",
+  "pattern",
+  "patternProperties",
+  "prefixItems",
+  "propertyNames",
+  "then",
+  "uniqueItems",
+  "unevaluatedItems",
+  "unevaluatedProperties",
+]);
+
 function parseJsonValueSchema(
   raw: unknown,
   path: string,
@@ -844,11 +913,22 @@ function parseJsonValueSchema(
   }
 
   const schema = raw as Record<string, unknown>;
+  if (schema.type === "integer") {
+    return { ok: false, reason: `${path} has unsupported type "integer".` };
+  }
+  const unsupportedKeyword = Object.keys(schema).find((key) =>
+    unsupportedJsonSchemaValidationKeywords.has(key),
+  );
+  if (unsupportedKeyword) {
+    return {
+      ok: false,
+      reason: `${path} uses unsupported validation keyword "${unsupportedKeyword}".`,
+    };
+  }
   switch (schema.type) {
     case "string":
       return { ok: true, schema: stringType() };
     case "number":
-    case "integer":
       return { ok: true, schema: numberType() };
     case "boolean":
       return { ok: true, schema: booleanType() };
@@ -941,7 +1021,18 @@ export function workflowBlockDefinitionIssue(
 ): string | null {
   if (type !== "generic_agent" && type !== "call_llm") return null;
   const result = declaredOutputSchema(params);
-  return result && !result.ok ? result.reason : null;
+  if (result && !result.ok) return result.reason;
+  if (type === "generic_agent" && result?.ok) {
+    if (result.schema.type !== "object") {
+      return "outputSchema must declare an object for Generic Agent.";
+    }
+    for (const reserved of ["status", "data"] as const) {
+      if (Object.prototype.hasOwnProperty.call(result.schema.properties, reserved)) {
+        return `outputSchema property "${reserved}" is reserved by Generic Agent.`;
+      }
+    }
+  }
+  return null;
 }
 
 function resolvedOutput(
@@ -951,7 +1042,20 @@ function resolvedOutput(
 ): WorkflowValueSchema {
   const declared = declaredOutputSchema(params);
   if (type === "generic_agent" && declared !== null) {
-    return statusOutput({ data: declared.ok ? declared.schema : unknownType() });
+    if (declared.ok && declared.schema.type === "object") {
+      return objectType(
+        {
+          status: stringType(),
+          ...declared.schema.properties,
+          // Compatibility alias for definitions authored against PR #118's
+          // nested shape. New bindings address declared fields at top level.
+          data: declared.schema,
+        },
+        ["status"],
+        declared.schema.additionalProperties,
+      );
+    }
+    return statusOutput({ data: unknownType() });
   }
   if (type === "call_llm" && declared !== null) {
     return statusOutput({ output: declared.ok ? declared.schema : unknownType() });
@@ -981,16 +1085,22 @@ function resolvedBindingOutput(
   definition: ContractDefinition,
   output: WorkflowValueSchema,
 ): WorkflowValueSchema {
+  const declared = declaredOutputSchema(params);
   const dynamicField =
-    declaredOutputSchema(params)?.ok === true
+    declared?.ok === true
       ? type === "generic_agent"
         ? "data"
         : type === "call_llm"
           ? "output"
           : null
       : null;
+  const declaredRequiredFields =
+    type === "generic_agent" && declared?.ok === true && declared.schema.type === "object"
+      ? declared.schema.required
+      : [];
   return withRequiredFields(output, [
     ...(definition.normalOutputRequired ?? []),
+    ...declaredRequiredFields,
     ...(dynamicField === null ? [] : [dynamicField]),
   ]);
 }
@@ -1077,13 +1187,17 @@ export function validateBlockOutputForDefinition(
   type: WorkflowBlockType,
   params: Record<string, WorkflowParamValue>,
   output: BlockOutput,
+  options: { requireNormalOutput?: boolean } = {},
 ): string[] {
   const definitionIssue = workflowBlockDefinitionIssue(type, params);
   if (definitionIssue) return [`output contract is invalid: ${definitionIssue}`];
   const definition = definitions[type];
+  const resolved = resolvedOutput(type, params, definition.output);
   return validateBlockOutputShape(
     definition.statusVariants,
-    resolvedOutput(type, params, definition.output),
+    options.requireNormalOutput
+      ? resolvedBindingOutput(type, params, definition, resolved)
+      : resolved,
     output,
   );
 }

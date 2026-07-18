@@ -1037,6 +1037,14 @@ export function validateWorkflowDefinitionForDeployment(
         `Block "${node.id}" must replace legacy contentFromStep "${node.params.legacyContentFromStep}" with an explicit string input binding before deployment.`,
       );
     }
+    if (
+      node.type === "trigger_pr_checks_failed" &&
+      !(Array.isArray(node.params.checkNames) && node.params.checkNames.length > 0)
+    ) {
+      issues.push(
+        `Block "${node.id}" (trigger_pr_checks_failed) must configure at least one exact CI check name before deployment.`,
+      );
+    }
     const definitionIssue = workflowBlockDefinitionIssue(node.type, node.params);
     if (definitionIssue) {
       issues.push(
@@ -1089,13 +1097,22 @@ const WORKSPACE_PRODUCERS = new Set<WorkflowBlockType>([
   "fix_agent",
 ]);
 
+function requiresWorkspaceProducer(node: WorkflowDefinitionNode): boolean {
+  return (
+    node.type === "run_checks" ||
+    node.type === "run_pre_pr_checks" ||
+    node.type === "finalize_workspace" ||
+    (node.type === "generic_agent" && node.params.workspaceMode !== "none")
+  );
+}
+
 function validateWorkspaceCapabilities(
   def: WorkflowDefinition,
   graphContext: WorkflowBindingGraphContext,
 ): string[] {
   const issues: string[] = [];
   for (const consumer of def.nodes) {
-    if (consumer.type !== "run_checks") continue;
+    if (!requiresWorkspaceProducer(consumer)) continue;
     const dominators = graphContext.dominators.get(consumer.id);
     const hasGuaranteedProducer = def.nodes.some((producer) => {
       if (!WORKSPACE_PRODUCERS.has(producer.type) || !dominators?.has(producer.id)) return false;
@@ -1106,7 +1123,7 @@ function validateWorkspaceCapabilities(
     });
     if (!hasGuaranteedProducer) {
       issues.push(
-        `Block "${consumer.id}" (run_checks) requires a workspace-producing block to run before it on every path.`,
+        `Block "${consumer.id}" (${consumer.type}) requires a workspace-producing block to run before it on every path.`,
       );
     }
   }

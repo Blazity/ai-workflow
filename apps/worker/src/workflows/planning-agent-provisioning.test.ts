@@ -75,6 +75,7 @@ describe("planning agent scratch provisioning", () => {
       triggerOutput: { status: "ok" },
       executeBlock: executor,
       hooks,
+      outputValidator: () => [],
     });
 
     expect(result.outcome).toBe("completed");

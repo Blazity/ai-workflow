@@ -158,7 +158,11 @@ export const execute: BlockExecuteFn = async (
         };
       }
       const output = { status: "ok", output: result.object as JsonValue } as const;
-      if (validateBlockOutputForDefinition(block.type, block.params, output).length > 0) {
+      if (
+        validateBlockOutputForDefinition(block.type, block.params, output, {
+          requireNormalOutput: true,
+        }).length > 0
+      ) {
         return {
           kind: "failed",
           output: { status: "failed" },

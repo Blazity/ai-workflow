@@ -15,6 +15,7 @@ import {
   resolveWorkflowInputBindings,
   type WorkflowRunBindingValues,
 } from "./bindings.js";
+import { validateBlockOutputForDefinition } from "./block-registry.js";
 
 /** Resolved graph shape the walker consumes: node lookup, per-port targets, and triggers. */
 export interface RuntimeGraph {
@@ -88,6 +89,12 @@ export interface InterpreterControlState {
   executions: number;
 }
 
+export type BlockOutputValidator = (
+  block: WorkflowDefinitionNode,
+  output: BlockOutput,
+  requireNormalOutput: boolean,
+) => string[];
+
 /** Side-effect callbacks the engine invokes as it walks; all persistence lives here. */
 export interface ExecuteGraphHooks {
   onBlockStart(nodeId: string, attempt: number): Promise<void>;
@@ -122,6 +129,22 @@ function defaultPortOf(node: WorkflowDefinitionNode): string | undefined {
   return BLOCK_TYPE_SPECS[node.type].ports[0];
 }
 
+function defaultOutputValidator(
+  block: WorkflowDefinitionNode,
+  output: BlockOutput,
+  requireNormalOutput: boolean,
+): string[] {
+  return validateBlockOutputForDefinition(block.type, block.params, output, {
+    requireNormalOutput,
+  });
+}
+
+function contractViolation(node: WorkflowDefinitionNode, issues: string[]): string {
+  return truncate(
+    `block "${node.id}" (${node.type}) returned output that violates its contract: ${issues.join("; ")}`,
+  );
+}
+
 /** Walk the graph from a trigger, driving action blocks through `executeBlock` and control blocks inline. */
 export async function executeGraph(opts: {
   graph: RuntimeGraph;
@@ -132,6 +155,9 @@ export async function executeGraph(opts: {
   hooks: ExecuteGraphHooks;
   maxTotalExecutions?: number;
   resume?: ClarificationResume;
+  /** Dependency seam for focused interpreter tests. Production callers use
+   * the registry-backed validator by omitting this option. */
+  outputValidator?: BlockOutputValidator;
 }): Promise<{ outcome: "completed" | "stopped" | "ended"; steps: StepsRecord }> {
   const { graph, entryTriggerId, triggerOutput, executeBlock, hooks } = opts;
   const maxTotalExecutions = opts.maxTotalExecutions ?? DEFAULT_MAX_TOTAL_EXECUTIONS;
@@ -151,6 +177,12 @@ export async function executeGraph(opts: {
   const steps: StepsRecord = Object.create(null) as StepsRecord;
   for (const [nodeId, state] of Object.entries(resume?.priorSteps ?? {})) {
     steps[nodeId] = state;
+  }
+  const outputValidator = opts.outputValidator ?? defaultOutputValidator;
+  const triggerIssues = outputValidator(entry, triggerOutput, true);
+  if (triggerIssues.length > 0) {
+    await hooks.failureExit("contract", contractViolation(entry, triggerIssues), entryTriggerId);
+    return { outcome: "stopped", steps };
   }
   steps[entryTriggerId] = { output: triggerOutput };
   const attempts = new Map<string, number>(
@@ -352,6 +384,18 @@ export async function executeGraph(opts: {
       : undefined;
     resumeAnswerPending = false;
     const result = await executeBlock(node, steps, resolvedInputs, execution);
+
+    const requireNormalOutput =
+      result.kind === "ended" ||
+      (result.kind === "next" &&
+        (result.port ?? defaultPortOf(node)) !== FAILURE_PORT);
+    const outputIssues = outputValidator(node, result.output, requireNormalOutput);
+    if (outputIssues.length > 0) {
+      const message = contractViolation(node, outputIssues);
+      await hooks.onBlockFinish(id, { status: "fail", attempt, error: message });
+      await hooks.failureExit("contract", message, id);
+      return { outcome: "stopped", steps };
+    }
 
     if (result.kind === "next") {
       const output = result.output;

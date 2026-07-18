@@ -379,7 +379,7 @@ describe("validateWorkflowBindings", () => {
     }
   });
 
-  it("accepts a nested dynamic output from a strict dominator", () => {
+  it("accepts a top-level declared Generic Agent output from a strict dominator", () => {
     const outputSchema = JSON.stringify({
       type: "object",
       properties: {
@@ -398,7 +398,7 @@ describe("validateWorkflowBindings", () => {
         node("trigger", "trigger_ticket_ai"),
         node("generate", "generic_agent", { prompt: "generate", outputSchema }),
         node("approval", "send_plan_approval", {}, {
-          plan: "steps.generate.output.data.summary.title",
+          plan: "steps.generate.output.summary.title",
         }),
       ],
       [

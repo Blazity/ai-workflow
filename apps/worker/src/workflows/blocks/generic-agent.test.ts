@@ -37,7 +37,7 @@ vi.mock("./agent-sandbox.js", () => ({
 
 import { GENERIC_SCHEMA } from "../../sandbox/agents/types.js";
 import { execute, paramsSchema } from "./generic-agent.js";
-import { expectOutputConformsToRegistry, makeCtx, makeNode } from "./test-support.js";
+import { makeCtx, makeNode } from "./test-support.js";
 
 function pathsFor(phase: string) {
   return {
@@ -123,7 +123,7 @@ describe("generic_agent execute", () => {
     expect(mocks.sandboxGet).toHaveBeenCalledWith(
       expect.objectContaining({ sandboxId: "scratch-1" }),
     );
-    expect(result).toEqual({ kind: "next", output: { status: "ok", body: "planned" } });
+    expect(result).toEqual({ kind: "next", output: { status: "completed", body: "planned" } });
   });
 
   it("adds the clarification answer to the rerun prompt", async () => {
@@ -218,7 +218,7 @@ describe("generic_agent execute", () => {
       ctx.observeBudget,
     );
     expect(ctx.recordUsage).toHaveBeenCalledWith("Agent My Agent", null, "claude-model");
-    expect(result).toEqual({ kind: "next", output: { status: "ok", body: "done" } });
+    expect(result).toEqual({ kind: "next", output: { status: "completed", body: "done" } });
   });
 
   it("emits the guaranteed body field when an unstructured success body is empty", async () => {
@@ -229,7 +229,7 @@ describe("generic_agent execute", () => {
 
     const result = await execute(makeNode("generic_agent", { prompt: "p" }), {}, makeCtx());
 
-    expect(result).toEqual({ kind: "next", output: { status: "ok", body: "" } });
+    expect(result).toEqual({ kind: "next", output: { status: "completed", body: "" } });
   });
 
   it("prefers a resolved prompt over the static param", async () => {
@@ -326,7 +326,7 @@ describe("generic_agent execute", () => {
     if (result.kind === "failed") expect(result.reason).toBe("broke");
   });
 
-  it("wraps custom-schema output as ok data", async () => {
+  it("returns custom-schema fields at the top level with a compatibility data alias", async () => {
     mocks.collectPhase.mockResolvedValue({
       raw: "",
       structured: JSON.stringify({ answer: 42 }),
@@ -343,7 +343,10 @@ describe("generic_agent execute", () => {
     expect(mocks.buildPhaseScript).toHaveBeenCalledWith(
       expect.objectContaining({ jsonSchema: outputSchema }),
     );
-    expect(result).toEqual({ kind: "next", output: { status: "ok", data: { answer: 42 } } });
+    expect(result).toEqual({
+      kind: "next",
+      output: { status: "completed", answer: 42, data: { answer: 42 } },
+    });
   });
 
   it("fails when custom-schema output has the wrong declared shape", async () => {
@@ -366,7 +369,7 @@ describe("generic_agent execute", () => {
     }
   });
 
-  it("accepts null when the declared custom schema requires null", async () => {
+  it("rejects a non-object custom schema because declared fields are top-level", async () => {
     mocks.collectPhase.mockResolvedValue({ raw: "", structured: "null" });
     const node = makeNode("generic_agent", {
       prompt: "p",
@@ -375,8 +378,11 @@ describe("generic_agent execute", () => {
 
     const result = await execute(node, {}, makeCtx());
 
-    expect(result).toEqual({ kind: "next", output: { status: "ok", data: null } });
-    expectOutputConformsToRegistry("generic_agent", result.output, node.params);
+    expect(result).toEqual({
+      kind: "failed",
+      output: { status: "failed" },
+      reason: "invalid outputSchema: outputSchema must declare an object for Generic Agent.",
+    });
   });
 
   it("fails when custom-schema output is unparseable", async () => {
@@ -407,7 +413,7 @@ describe("generic_agent execute", () => {
 
     expect(result).toEqual({
       kind: "next",
-      output: { status: "ok", body: "from envelope" },
+      output: { status: "completed", body: "from envelope" },
     });
   });
 
