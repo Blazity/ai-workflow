@@ -5,6 +5,7 @@ import {
   serializeSemanticWorkflowDefinition,
   serializeWorkflowDefinition,
   serializeWorkflowLayout,
+  serializeWorkflowLayoutWithBaseline,
 } from "./serialize.ts";
 import type { FlowEdgeDef, FlowNodeDef } from "../flows.ts";
 
@@ -42,6 +43,29 @@ test("moving a block changes layout but not the semantic definition", () => {
     serializeSemanticWorkflowDefinition(before, []),
   );
   assert.notDeepEqual(serializeWorkflowLayout(after), serializeWorkflowLayout(before));
+});
+
+test("layout autosave preserves entries for semantically deleted nodes", () => {
+  const current = flowNodes([
+    { id: "kept", type: "trigger_ticket_ai", x: 90, y: 120, params: {} },
+    { id: "new", type: "post_ticket_comment", x: 300, y: 400, params: { body: "Hi" } },
+  ]);
+
+  assert.deepEqual(
+    serializeWorkflowLayoutWithBaseline(current, {
+      nodes: {
+        kept: { x: 10, y: 20 },
+        deleted: { x: 30, y: 40 },
+      },
+    }),
+    {
+      nodes: {
+        kept: { x: 90, y: 120 },
+        deleted: { x: 30, y: 40 },
+        new: { x: 300, y: 400 },
+      },
+    },
+  );
 });
 
 test("execution limits are optional, serializable, clearable, and semantic", () => {

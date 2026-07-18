@@ -94,3 +94,17 @@ export function serializeWorkflowLayout(
     ),
   };
 }
+
+/**
+ * Layout is intentionally independent from semantic draft edits. Preserve
+ * persisted entries for nodes that are temporarily absent from the editor so
+ * an unsaved deletion cannot erase their saved position. Extra entries for
+ * unsaved additions are harmless and preserve their position if later saved.
+ */
+export function serializeWorkflowLayoutWithBaseline(
+  nodes: readonly FlowNodeDef[],
+  baseline: WorkflowDefinitionLayout,
+): WorkflowDefinitionLayout {
+  const current = serializeWorkflowLayout(nodes);
+  return { nodes: { ...baseline.nodes, ...current.nodes } };
+}

@@ -24,7 +24,7 @@ import { readErrorMessage } from "@/lib/api/error-message";
 import {
   serializeSemanticWorkflowDefinition,
   serializeWorkflowDefinition,
-  serializeWorkflowLayout,
+  serializeWorkflowLayoutWithBaseline,
 } from "@/lib/workflow-editor/serialize";
 import { deriveRunStatuses } from "@/lib/workflow-editor/run-statuses";
 import {
@@ -227,7 +227,10 @@ export function WorkflowEditorScreen({
       pendingLayoutSave.discard();
       return;
     }
-    const layout = serializeWorkflowLayout(nodes);
+    const layout = serializeWorkflowLayoutWithBaseline(
+      nodes,
+      JSON.parse(layoutBaseline) as WorkflowDefinitionLayoutResponse["layout"],
+    );
     const serialized = JSON.stringify(layout);
     if (serialized === layoutBaseline) {
       pendingLayoutSave.discard();
