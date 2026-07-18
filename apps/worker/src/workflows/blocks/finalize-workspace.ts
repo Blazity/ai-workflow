@@ -54,6 +54,14 @@ export const execute: BlockExecuteFn = async (
     };
   }
 
+  if (!ctx.workspaceManifest) {
+    return {
+      kind: "failed",
+      output: { status: "failed" },
+      reason: "workspace has no manager-authored trusted manifest",
+    };
+  }
+
   try {
     const { finalizeWorkspacePublication } = await import("../workspace-publication.js");
     const publication = await finalizeWorkspacePublication({
@@ -61,8 +69,7 @@ export const execute: BlockExecuteFn = async (
       blockId: block.id,
       sandboxId: ctx.sandboxId,
       ticketKey: ctx.ticket.identifier,
-      branchName: ctx.branchName,
-      repositories: ctx.selectedRepositories,
+      workspaceManifest: ctx.workspaceManifest,
       clarifications: ctx.clarifications,
       sourcePullRequest:
         ctx.entry.kind === "pr_trigger"

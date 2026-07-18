@@ -19,6 +19,7 @@ import {
 import type { BlockRunState, WorkflowRunBudgetFailure } from "@shared/contracts";
 import type { GateStatusRef } from "../adapters/vcs/types.js";
 import type { PrePrCheckConfig } from "../pre-pr-checks/config.js";
+import type { WorkspaceManifest } from "../sandbox/repo-workspace.js";
 
 /** One owner-CAS reservation per provider-neutral workflow subject. */
 export const activeRuns = pgTable(
@@ -330,6 +331,7 @@ export const publicationAttempts = pgTable(
     id: text("id").primaryKey(),
     runId: text("run_id").notNull(),
     blockId: text("block_id").notNull(),
+    workspaceManifest: jsonb("workspace_manifest").$type<WorkspaceManifest>().notNull(),
     status: text("status").notNull().default("preflighting"),
     failure: text("failure"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),

@@ -1,8 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SelectedRepository } from "../adapters/vcs/repository-directory.js";
+import type { WorkspaceManifest } from "../sandbox/repo-workspace.js";
 
 const mocks = vi.hoisted(() => ({
-  pushWorkspaceFromSandbox: vi.fn(),
+  publishTrustedWorkspaceFromSandbox: vi.fn(),
   createOrFindWorkflowOwnedPullRequest: vi.fn(),
   recordWorkflowOwnedPullRequest: vi.fn(),
   writeHumanDecisionsMemory: vi.fn(),
@@ -21,8 +22,8 @@ const mocks = vi.hoisted(() => ({
   failPublicationAttempt: vi.fn(),
 }));
 
-vi.mock("../sandbox/poll-agent.js", () => ({
-  pushWorkspaceFromSandbox: mocks.pushWorkspaceFromSandbox,
+vi.mock("../sandbox/trusted-workspace-publisher.js", () => ({
+  publishTrustedWorkspaceFromSandbox: mocks.publishTrustedWorkspaceFromSandbox,
 }));
 vi.mock("../sandbox/write-human-decisions-memory.js", () => ({
   writeHumanDecisionsMemory: mocks.writeHumanDecisionsMemory,
@@ -69,6 +70,18 @@ const selectedRepositories: SelectedRepository[] = [
   },
 ];
 
+const workspaceManifest: WorkspaceManifest = {
+  version: 1,
+  repositories: selectedRepositories.map((repository, index) => ({
+    ...repository,
+    slug: repository.repoPath.replace("/", "__"),
+    localPath: index === 0 ? "/vercel/sandbox" : `/vercel/sandbox/repos/repo-${index}`,
+    branchName: "blazebot/aiw-100",
+    expectedRemoteSha: `${repository.repoPath}-before`,
+    preAgentSha: `${repository.repoPath}-before`,
+  })),
+};
+
 function repository(
   provider: "github" | "gitlab",
   repoPath: string,
@@ -96,6 +109,7 @@ function attempt(overrides: Record<string, unknown> = {}) {
     blockId: "finalize",
     status: "preflighting",
     failure: null,
+    workspaceManifest,
     repositories: [
       repository("github", "acme/web"),
       repository("gitlab", "acme/api"),
@@ -123,8 +137,7 @@ describe("finalizeWorkspacePublication", () => {
       blockId: "finalize",
       sandboxId: "sbx-1",
       ticketKey: "AIW-100",
-      branchName: "blazebot/aiw-100",
-      repositories: selectedRepositories,
+      workspaceManifest,
       sourcePullRequest: {
         provider: "github",
         repoPath: "acme/web",
@@ -139,7 +152,7 @@ describe("finalizeWorkspacePublication", () => {
     expect(publication.status === "failed" ? publication.reason : "").toContain(
       "newer-provider-head",
     );
-    expect(mocks.pushWorkspaceFromSandbox).not.toHaveBeenCalled();
+    expect(mocks.publishTrustedWorkspaceFromSandbox).not.toHaveBeenCalled();
     expect(mocks.recordPublicationRepositoryFailure).toHaveBeenCalledWith(
       { db: true },
       expect.objectContaining({ repoPath: "acme/web", failure: expect.stringContaining("stale") }),
@@ -148,7 +161,7 @@ describe("finalizeWorkspacePublication", () => {
   });
 
   it("records a cross-provider partial push durably and creates no PR", async () => {
-    mocks.pushWorkspaceFromSandbox.mockResolvedValue({
+    mocks.publishTrustedWorkspaceFromSandbox.mockResolvedValue({
       pushed: false,
       error: "gitlab:acme/api: provider unavailable",
       repositories: [
@@ -179,8 +192,7 @@ describe("finalizeWorkspacePublication", () => {
       blockId: "finalize",
       sandboxId: "sbx-1",
       ticketKey: "AIW-100",
-      branchName: "blazebot/aiw-100",
-      repositories: selectedRepositories,
+      workspaceManifest,
     });
 
     expect(publication.status).toBe("failed");
@@ -201,7 +213,7 @@ describe("finalizeWorkspacePublication", () => {
   });
 
   it("returns finalized branch metadata without creating PRs", async () => {
-    mocks.pushWorkspaceFromSandbox.mockResolvedValue({
+    mocks.publishTrustedWorkspaceFromSandbox.mockResolvedValue({
       pushed: true,
       repositories: [
         {
@@ -221,8 +233,7 @@ describe("finalizeWorkspacePublication", () => {
       blockId: "finalize",
       sandboxId: "sbx-1",
       ticketKey: "AIW-100",
-      branchName: "blazebot/aiw-100",
-      repositories: selectedRepositories,
+      workspaceManifest,
     });
 
     expect(publication).toEqual({
@@ -239,10 +250,12 @@ describe("finalizeWorkspacePublication", () => {
       ],
       prs: [],
     });
-    expect(mocks.pushWorkspaceFromSandbox).toHaveBeenCalledWith(
-      "sbx-1",
-      [],
-      "attempt-1",
+    expect(mocks.publishTrustedWorkspaceFromSandbox).toHaveBeenCalledWith(
+      {
+        sourceSandboxId: "sbx-1",
+        publicationAttemptId: "attempt-1",
+        workspaceManifest,
+      },
     );
     expect(mocks.markPublicationAttemptFinalized).toHaveBeenCalledWith({ db: true }, "attempt-1");
     expect(mocks.createOrFindWorkflowOwnedPullRequest).not.toHaveBeenCalled();
@@ -259,12 +272,11 @@ describe("finalizeWorkspacePublication", () => {
       blockId: "finalize",
       sandboxId: "sbx-1",
       ticketKey: "AIW-100",
-      branchName: "blazebot/aiw-100",
-      repositories: selectedRepositories,
+      workspaceManifest,
     });
 
     expect(publication.status).toBe("finalized");
-    expect(mocks.pushWorkspaceFromSandbox).not.toHaveBeenCalled();
+    expect(mocks.publishTrustedWorkspaceFromSandbox).not.toHaveBeenCalled();
   });
 
   it("resumes an existing preflighting attempt instead of stranding it", async () => {
@@ -272,7 +284,7 @@ describe("finalizeWorkspacePublication", () => {
       created: false,
       attempt: attempt({ status: "preflighting" }),
     });
-    mocks.pushWorkspaceFromSandbox.mockResolvedValue({
+    mocks.publishTrustedWorkspaceFromSandbox.mockResolvedValue({
       pushed: true,
       repositories: [
         {
@@ -293,8 +305,7 @@ describe("finalizeWorkspacePublication", () => {
       blockId: "finalize",
       sandboxId: "sbx-1",
       ticketKey: "AIW-100",
-      branchName: "blazebot/aiw-100",
-      repositories: selectedRepositories,
+      workspaceManifest,
     });
 
     expect(publication.status).toBe("finalized");
@@ -302,10 +313,12 @@ describe("finalizeWorkspacePublication", () => {
       { db: true },
       "attempt-1",
     );
-    expect(mocks.pushWorkspaceFromSandbox).toHaveBeenCalledWith(
-      "sbx-1",
-      [],
-      "attempt-1",
+    expect(mocks.publishTrustedWorkspaceFromSandbox).toHaveBeenCalledWith(
+      {
+        sourceSandboxId: "sbx-1",
+        publicationAttemptId: "attempt-1",
+        workspaceManifest,
+      },
     );
   });
 
@@ -320,16 +333,15 @@ describe("finalizeWorkspacePublication", () => {
       blockId: "finalize",
       sandboxId: "sbx-1",
       ticketKey: "AIW-100",
-      branchName: "blazebot/aiw-100",
-      repositories: selectedRepositories,
+      workspaceManifest,
     });
 
     expect(publication.status).toBe("finalized");
-    expect(mocks.pushWorkspaceFromSandbox).not.toHaveBeenCalled();
+    expect(mocks.publishTrustedWorkspaceFromSandbox).not.toHaveBeenCalled();
   });
 
   it("leaves an indeterminate push error available for replay reconciliation", async () => {
-    mocks.pushWorkspaceFromSandbox.mockRejectedValue(
+    mocks.publishTrustedWorkspaceFromSandbox.mockRejectedValue(
       new Error("publication result could not be recorded"),
     );
 
@@ -338,8 +350,7 @@ describe("finalizeWorkspacePublication", () => {
       blockId: "finalize",
       sandboxId: "sbx-1",
       ticketKey: "AIW-100",
-      branchName: "blazebot/aiw-100",
-      repositories: selectedRepositories,
+      workspaceManifest,
     });
 
     expect(publication).toEqual(
@@ -356,7 +367,7 @@ describe("finalizeWorkspacePublication", () => {
   });
 
   it("finalizes when reconciliation proves an interrupted push step already landed", async () => {
-    mocks.pushWorkspaceFromSandbox.mockRejectedValue(
+    mocks.publishTrustedWorkspaceFromSandbox.mockRejectedValue(
       new Error("publication result could not be recorded"),
     );
     mocks.getPublicationAttempt.mockResolvedValue(
@@ -374,8 +385,7 @@ describe("finalizeWorkspacePublication", () => {
       blockId: "finalize",
       sandboxId: "sbx-1",
       ticketKey: "AIW-100",
-      branchName: "blazebot/aiw-100",
-      repositories: selectedRepositories,
+      workspaceManifest,
     });
 
     expect(publication.status).toBe("finalized");
@@ -409,8 +419,7 @@ describe("finalizeWorkspacePublication", () => {
       blockId: "finalize",
       sandboxId: "sbx-1",
       ticketKey: "AIW-100",
-      branchName: "blazebot/aiw-100",
-      repositories: selectedRepositories,
+      workspaceManifest,
     });
 
     expect(publication.status).toBe("finalized");
@@ -422,7 +431,7 @@ describe("finalizeWorkspacePublication", () => {
       { db: true },
       "attempt-1",
     );
-    expect(mocks.pushWorkspaceFromSandbox).not.toHaveBeenCalled();
+    expect(mocks.publishTrustedWorkspaceFromSandbox).not.toHaveBeenCalled();
   });
 
   it("resumes a durable push when replay reconciliation still sees the expected head", async () => {
@@ -438,7 +447,7 @@ describe("finalizeWorkspacePublication", () => {
     mocks.createRepositoryVcsRuntime.mockReturnValue({
       vcs: { getBranchSha: vi.fn().mockResolvedValue("acme/web-before") },
     });
-    mocks.pushWorkspaceFromSandbox.mockResolvedValue({
+    mocks.publishTrustedWorkspaceFromSandbox.mockResolvedValue({
       pushed: true,
       repositories: [
         {
@@ -459,15 +468,16 @@ describe("finalizeWorkspacePublication", () => {
       blockId: "finalize",
       sandboxId: "sbx-1",
       ticketKey: "AIW-100",
-      branchName: "blazebot/aiw-100",
-      repositories: selectedRepositories,
+      workspaceManifest,
     });
 
     expect(publication.status).toBe("finalized");
-    expect(mocks.pushWorkspaceFromSandbox).toHaveBeenCalledWith(
-      "sbx-1",
-      [],
-      "attempt-1",
+    expect(mocks.publishTrustedWorkspaceFromSandbox).toHaveBeenCalledWith(
+      {
+        sourceSandboxId: "sbx-1",
+        publicationAttemptId: "attempt-1",
+        workspaceManifest,
+      },
     );
     expect(mocks.failPublicationAttempt).not.toHaveBeenCalled();
   });
@@ -492,7 +502,7 @@ describe("finalizeWorkspacePublication", () => {
         },
       }),
     );
-    mocks.pushWorkspaceFromSandbox.mockResolvedValue({
+    mocks.publishTrustedWorkspaceFromSandbox.mockResolvedValue({
       pushed: true,
       repositories: [
         {
@@ -523,12 +533,11 @@ describe("finalizeWorkspacePublication", () => {
       blockId: "finalize",
       sandboxId: "sbx-1",
       ticketKey: "AIW-100",
-      branchName: "blazebot/aiw-100",
-      repositories: selectedRepositories,
+      workspaceManifest,
     });
 
     expect(publication.status).toBe("finalized");
-    expect(mocks.pushWorkspaceFromSandbox).toHaveBeenCalledTimes(1);
+    expect(mocks.publishTrustedWorkspaceFromSandbox).toHaveBeenCalledTimes(1);
     expect(mocks.recordPublicationRepositoryPush).toHaveBeenCalledWith(
       { db: true },
       expect.objectContaining({ repoPath: "acme/web", pushedHead: "acme/web-after" }),
@@ -562,21 +571,20 @@ describe("finalizeWorkspacePublication", () => {
       blockId: "finalize",
       sandboxId: "sbx-1",
       ticketKey: "AIW-100",
-      branchName: "blazebot/aiw-100",
-      repositories: selectedRepositories,
+      workspaceManifest,
     });
 
     expect(publication.status).toBe("failed");
     expect(publication.status === "failed" ? publication.reason : "").toContain(
       "provider unavailable",
     );
-    expect(mocks.pushWorkspaceFromSandbox).not.toHaveBeenCalled();
+    expect(mocks.publishTrustedWorkspaceFromSandbox).not.toHaveBeenCalled();
     expect(mocks.failPublicationAttempt).not.toHaveBeenCalled();
     expect(mocks.markPublicationAttemptFinalized).not.toHaveBeenCalled();
   });
 
   it("preserves human-decision memory writing before the push", async () => {
-    mocks.pushWorkspaceFromSandbox.mockResolvedValue({
+    mocks.publishTrustedWorkspaceFromSandbox.mockResolvedValue({
       pushed: true,
       repositories: [
         {
@@ -597,8 +605,7 @@ describe("finalizeWorkspacePublication", () => {
       blockId: "finalize",
       sandboxId: "sbx-1",
       ticketKey: "AIW-100",
-      branchName: "blazebot/aiw-100",
-      repositories: selectedRepositories,
+      workspaceManifest,
       clarifications,
     });
 
@@ -608,7 +615,7 @@ describe("finalizeWorkspacePublication", () => {
       clarifications,
     );
     expect(mocks.writeHumanDecisionsMemory.mock.invocationCallOrder[0]).toBeLessThan(
-      mocks.pushWorkspaceFromSandbox.mock.invocationCallOrder[0],
+      mocks.publishTrustedWorkspaceFromSandbox.mock.invocationCallOrder[0],
     );
   });
 });
@@ -641,7 +648,7 @@ describe("openPullRequestsForPublication", () => {
     });
 
     expect(publication.status).toBe("failed");
-    expect(mocks.pushWorkspaceFromSandbox).not.toHaveBeenCalled();
+    expect(mocks.publishTrustedWorkspaceFromSandbox).not.toHaveBeenCalled();
     expect(mocks.createOrFindWorkflowOwnedPullRequest).not.toHaveBeenCalled();
   });
 
@@ -706,7 +713,7 @@ describe("openPullRequestsForPublication", () => {
     });
 
     expect(publication.status).toBe("published");
-    expect(mocks.pushWorkspaceFromSandbox).not.toHaveBeenCalled();
+    expect(mocks.publishTrustedWorkspaceFromSandbox).not.toHaveBeenCalled();
     expect(mocks.createOrFindWorkflowOwnedPullRequest).toHaveBeenCalledTimes(2);
     expect(mocks.recordPublicationPullRequest).toHaveBeenCalledTimes(2);
     expect(mocks.recordWorkflowOwnedPullRequest).toHaveBeenCalledTimes(2);

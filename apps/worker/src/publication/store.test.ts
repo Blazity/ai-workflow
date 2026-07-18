@@ -10,9 +10,48 @@ import {
   markPublicationAttemptPushing,
   markPublicationAttemptPublished,
   recordPublicationPullRequest,
+  recordPublicationRepositoryFailure,
   recordPublicationRepositoryPreflight,
   recordPublicationRepositoryPush,
 } from "./store.js";
+import type { WorkspaceManifest, WorkspaceRepo } from "../sandbox/repo-workspace.js";
+
+const trustedManifest = {
+  version: 1 as const,
+  repositories: [{
+    provider: "github" as const,
+    repoPath: "acme/api",
+    slug: "acme__api",
+    localPath: "/vercel/sandbox",
+    defaultBranch: "main",
+    branchName: "aiw/AWT-1",
+    selectedRationale: "selected",
+    expectedRemoteSha: "remote-before",
+    preAgentSha: "pre-agent",
+  }],
+};
+
+function manifestFor(
+  repositories: Array<
+    Pick<WorkspaceRepo, "provider" | "repoPath" | "branchName" | "defaultBranch"> &
+      Partial<WorkspaceRepo>
+  >,
+): WorkspaceManifest {
+  return {
+    version: 1,
+    repositories: repositories.map((repository, index) => ({
+      provider: repository.provider,
+      repoPath: repository.repoPath,
+      slug: repository.slug ?? `repo-${index}`,
+      localPath: repository.localPath ?? `/vercel/sandbox/repo-${index}`,
+      defaultBranch: repository.defaultBranch,
+      branchName: repository.branchName,
+      selectedRationale: repository.selectedRationale ?? "selected",
+      expectedRemoteSha: repository.expectedRemoteSha ?? `remote-${index}`,
+      preAgentSha: repository.preAgentSha ?? `pre-agent-${index}`,
+    })),
+  };
+}
 
 describe("publication attempt store", () => {
   let db: Db;
@@ -25,14 +64,14 @@ describe("publication attempt store", () => {
     const input = {
       runId: "run-1",
       blockId: "finalize",
-      repositories: [
+      workspaceManifest: manifestFor([
         {
           provider: "github" as const,
           repoPath: "acme/api",
           branchName: "aiw/AWT-1",
           defaultBranch: "main",
         },
-      ],
+      ]),
     };
 
     const first = await createOrGetPublicationAttempt(db, input);
@@ -100,10 +139,10 @@ describe("publication attempt store", () => {
     const { attempt } = await createOrGetPublicationAttempt(db, {
       runId: "run-2",
       blockId: "finalize",
-      repositories: [
+      workspaceManifest: manifestFor([
         { provider: "github", repoPath: "acme/web", branchName: "aiw/AWT-2", defaultBranch: "main" },
         { provider: "gitlab", repoPath: "acme/api", branchName: "aiw/AWT-2", defaultBranch: "main" },
-      ],
+      ]),
     });
     await recordPublicationRepositoryPreflight(db, {
       attemptId: attempt.id,
@@ -150,14 +189,14 @@ describe("publication attempt store", () => {
       createOrGetPublicationAttempt(db, {
         runId: "run-3",
         blockId: "finalize",
-        repositories: [{ ...repository, provider: "invalid" as "github" }],
-      }),
+        workspaceManifest: manifestFor([{ ...repository, provider: "invalid" as "github" }]),
+      } as Parameters<typeof createOrGetPublicationAttempt>[1]),
     ).rejects.toThrow();
 
     const retry = await createOrGetPublicationAttempt(db, {
       runId: "run-3",
       blockId: "finalize",
-      repositories: [repository],
+      workspaceManifest: manifestFor([repository]),
     });
     expect(retry.created).toBe(true);
     expect(retry.attempt.repositories).toHaveLength(1);
@@ -167,7 +206,7 @@ describe("publication attempt store", () => {
     const { attempt } = await createOrGetPublicationAttempt(db, {
       runId: "run-published",
       blockId: "finalize",
-      repositories: [],
+      workspaceManifest: manifestFor([]),
     });
     await markPublicationAttemptPushing(db, attempt.id);
     await markPublicationAttemptFinalized(db, attempt.id);
@@ -187,7 +226,7 @@ describe("publication attempt store", () => {
     const { attempt } = await createOrGetPublicationAttempt(db, {
       runId: "run-cas",
       blockId: "finalize",
-      repositories: [],
+      workspaceManifest: manifestFor([]),
     });
 
     await markPublicationAttemptPublished(db, attempt.id);
@@ -203,5 +242,34 @@ describe("publication attempt store", () => {
       status: "failed",
       failure: "known push failure",
     });
+  });
+
+  it("rejects a replay whose trusted manifest no longer exactly matches the ledger", async () => {
+    const input = {
+      runId: "run-trusted",
+      blockId: "finalize",
+      workspaceManifest: trustedManifest,
+    };
+    await createOrGetPublicationAttempt(db, input);
+
+    await expect(createOrGetPublicationAttempt(db, {
+      ...input,
+      workspaceManifest: {
+        ...trustedManifest,
+        repositories: [{ ...trustedManifest.repositories[0], branchName: "main" }],
+      },
+    })).rejects.toThrow(/trusted workspace manifest/i);
+  });
+
+  it("fails loudly instead of silently updating a missing attempt or repository", async () => {
+    await expect(markPublicationAttemptPushing(db, "missing-attempt")).rejects.toThrow(
+      /missing-attempt/,
+    );
+    await expect(recordPublicationRepositoryFailure(db, {
+      attemptId: "missing-attempt",
+      provider: "github",
+      repoPath: "acme/api",
+      failure: "boom",
+    })).rejects.toThrow(/missing-attempt.*github:acme\/api/);
   });
 });

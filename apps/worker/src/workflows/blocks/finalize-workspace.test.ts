@@ -6,7 +6,10 @@ vi.mock("../workspace-publication.js", () => ({
   finalizeWorkspacePublication: mocks.finalizeWorkspacePublication,
 }));
 
-import type { WorkspaceRepositoryInput } from "../../sandbox/repo-workspace.js";
+import type {
+  WorkspaceManifest,
+  WorkspaceRepositoryInput,
+} from "../../sandbox/repo-workspace.js";
 import { execute, paramsSchema } from "./finalize-workspace.js";
 import { expectOutputConformsToRegistry, makeCtx, makeNode, makePrPayload } from "./test-support.js";
 
@@ -15,6 +18,18 @@ const repo: WorkspaceRepositoryInput = {
   repoPath: "acme/api",
   defaultBranch: "main",
   selectedRationale: "selected",
+};
+
+const trustedManifest: WorkspaceManifest = {
+  version: 1,
+  repositories: [{
+    ...repo,
+    slug: "acme__api",
+    localPath: "/vercel/sandbox",
+    branchName: "blazebot/awt-1",
+    expectedRemoteSha: "before",
+    preAgentSha: "before",
+  }],
 };
 
 const finalized = {
@@ -51,7 +66,7 @@ describe("finalize_workspace execute", () => {
     const result = await execute(
       makeNode("finalize_workspace"),
       { "checks-1": { output: { status: "failed", ok: false } } },
-      makeCtx({ selectedRepositories: [repo] }),
+      makeCtx({ selectedRepositories: [repo], workspaceManifest: trustedManifest }),
     );
     expect(result.kind).toBe("next");
   });
@@ -75,7 +90,7 @@ describe("finalize_workspace execute", () => {
     const result = await execute(
       makeNode("finalize_workspace"),
       {},
-      makeCtx({ selectedRepositories: [repo] }),
+      makeCtx({ selectedRepositories: [repo], workspaceManifest: trustedManifest }),
       { "checks.lint": "ok", "checks.test": "ok" },
     );
 
@@ -126,8 +141,40 @@ describe("finalize_workspace execute", () => {
     expect(mocks.finalizeWorkspacePublication).not.toHaveBeenCalled();
   });
 
+  it("fails closed when the workspace has no manager-authored trusted manifest", async () => {
+    const result = await execute(
+      makeNode("finalize_workspace"),
+      {},
+      makeCtx({ sandboxId: "sbx-1", workspaceManifest: null }),
+    );
+
+    expect(result).toEqual(expect.objectContaining({
+      kind: "failed",
+      reason: expect.stringContaining("trusted"),
+    }));
+    expect(mocks.finalizeWorkspacePublication).not.toHaveBeenCalled();
+  });
+
+  it("passes the manager-authored manifest as the publication authority", async () => {
+    await execute(
+      makeNode("finalize_workspace", {}, "finalize"),
+      {},
+      makeCtx({
+        selectedRepositories: [repo],
+        workspaceManifest: trustedManifest,
+      }),
+    );
+
+    expect(mocks.finalizeWorkspacePublication).toHaveBeenCalledWith(
+      expect.objectContaining({ workspaceManifest: trustedManifest }),
+    );
+  });
+
   it("pushes and emits only the durable attempt and finalized branch metadata", async () => {
-    const ctx = makeCtx({ selectedRepositories: [repo] });
+    const ctx = makeCtx({
+      selectedRepositories: [repo],
+      workspaceManifest: trustedManifest,
+    });
     const result = await execute(makeNode("finalize_workspace", {}, "finalize"), {}, ctx);
 
     expect(mocks.finalizeWorkspacePublication).toHaveBeenCalledWith({
@@ -135,8 +182,7 @@ describe("finalize_workspace execute", () => {
       blockId: "finalize",
       sandboxId: "sbx-1",
       ticketKey: "AWT-1",
-      branchName: "blazebot/awt-1",
-      repositories: [repo],
+      workspaceManifest: trustedManifest,
       clarifications: undefined,
       sourcePullRequest: undefined,
     });
@@ -170,6 +216,7 @@ describe("finalize_workspace execute", () => {
           pr,
         },
         selectedRepositories: [repo],
+        workspaceManifest: trustedManifest,
       }),
     );
     expect(mocks.finalizeWorkspacePublication).toHaveBeenCalledWith(
@@ -192,7 +239,10 @@ describe("finalize_workspace execute", () => {
       repositories: [],
       prs: [],
     });
-    const ctx = makeCtx({ selectedRepositories: [repo] });
+    const ctx = makeCtx({
+      selectedRepositories: [repo],
+      workspaceManifest: trustedManifest,
+    });
     const result = await execute(makeNode("finalize_workspace"), {}, ctx);
 
     expect(result).toEqual({

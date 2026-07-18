@@ -1,6 +1,6 @@
 {
-  "id": "ee97b611-8c47-41d2-a581-44fe095b41ed",
-  "prevId": "767ac060-6b95-4749-b4d6-83758a19a9c2",
+  "id": "8a0139a4-f5b8-43b7-bd0a-85619fa40e60",
+  "prevId": "8e567ca0-c505-4fec-861d-c731950274c5",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -759,6 +759,12 @@
         "block_id": {
           "name": "block_id",
           "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "workspace_manifest": {
+          "name": "workspace_manifest",
+          "type": "jsonb",
           "primaryKey": false,
           "notNull": true
         },
@@ -2812,7 +2818,7 @@
           "name": "ticket_key",
           "type": "text",
           "primaryKey": false,
-          "notNull": true
+          "notNull": false
         },
         "run_id": {
           "name": "run_id",
@@ -2893,6 +2899,163 @@
           "type": "text",
           "primaryKey": false,
           "notNull": false
+        },
+        "subject_key": {
+          "name": "subject_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "owner_token": {
+          "name": "owner_token",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "waiting_node_id": {
+          "name": "waiting_node_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "definition_version_pin": {
+          "name": "definition_version_pin",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "origin_entry": {
+          "name": "origin_entry",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "origin_trigger_node_id": {
+          "name": "origin_trigger_node_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "origin_trigger_type": {
+          "name": "origin_trigger_type",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "trigger_payload": {
+          "name": "trigger_payload",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "prior_steps": {
+          "name": "prior_steps",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "interpreter_state": {
+          "name": "interpreter_state",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "budget_state": {
+          "name": "budget_state",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "runtime_context": {
+          "name": "runtime_context",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "workspace_manifest": {
+          "name": "workspace_manifest",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "source_heads": {
+          "name": "source_heads",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "checkpoint_state": {
+          "name": "checkpoint_state",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "expires_at": {
+          "name": "expires_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "snapshot_id": {
+          "name": "snapshot_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "source_sandbox_id": {
+          "name": "source_sandbox_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "snapshot_requested_at": {
+          "name": "snapshot_requested_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "snapshot_expires_at": {
+          "name": "snapshot_expires_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "cleanup_state": {
+          "name": "cleanup_state",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'none'"
+        },
+        "cleanup_error": {
+          "name": "cleanup_error",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "cleanup_claimed_at": {
+          "name": "cleanup_claimed_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "successor_owner_token": {
+          "name": "successor_owner_token",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "successor_reserved_at": {
+          "name": "successor_reserved_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "published_at": {
+          "name": "published_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
         }
       },
       "indexes": {
@@ -2941,11 +3104,47 @@
           "method": "btree",
           "with": {}
         },
-        "clarification_requests_pending_ticket_idx": {
-          "name": "clarification_requests_pending_ticket_idx",
+        "clarification_requests_checkpoint_expiry_idx": {
+          "name": "clarification_requests_checkpoint_expiry_idx",
           "columns": [
             {
-              "expression": "ticket_key",
+              "expression": "checkpoint_state",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "expires_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "clarification_requests_cleanup_idx": {
+          "name": "clarification_requests_cleanup_idx",
+          "columns": [
+            {
+              "expression": "cleanup_state",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "clarification_requests_pending_subject_idx": {
+          "name": "clarification_requests_pending_subject_idx",
+          "columns": [
+            {
+              "expression": "subject_key",
               "isExpression": false,
               "asc": true,
               "nulls": "last"

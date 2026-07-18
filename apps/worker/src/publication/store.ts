@@ -3,6 +3,10 @@ import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import type { VcsProvider } from "../adapters/vcs/repository-directory.js";
 import type { Db } from "../db/client.js";
 import {
+  parseVerifiedWorkspaceManifest,
+  type WorkspaceManifest,
+} from "../sandbox/repo-workspace.js";
+import {
   publicationAttemptRepositories,
   publicationAttempts,
 } from "../db/schema.js";
@@ -34,6 +38,7 @@ export interface PublicationAttemptRecord {
   blockId: string;
   status: PublicationAttemptStatus;
   failure: string | null;
+  workspaceManifest: WorkspaceManifest;
   repositories: PublicationRepositoryRecord[];
 }
 
@@ -42,18 +47,13 @@ export async function createOrGetPublicationAttempt(
   input: {
     runId: string;
     blockId: string;
-    repositories: Array<{
-      provider: VcsProvider;
-      repoPath: string;
-      branchName: string;
-      defaultBranch: string;
-    }>;
+    workspaceManifest: WorkspaceManifest;
   },
 ): Promise<{ attempt: PublicationAttemptRecord; created: boolean }> {
   const id = randomUUID();
-  const repositoryInput = input.repositories.length
+  const repositoryInput = input.workspaceManifest.repositories.length
     ? sql`VALUES ${sql.join(
-        input.repositories.map(
+        input.workspaceManifest.repositories.map(
           (repository) =>
             sql`(${repository.provider}, ${repository.repoPath}, ${repository.branchName}, ${repository.defaultBranch})`,
         ),
@@ -66,8 +66,13 @@ export async function createOrGetPublicationAttempt(
   // PostgreSQL while remaining supported by both Neon and PGlite.
   const initialized = await db.execute(sql`
     WITH inserted_attempt AS (
-      INSERT INTO publication_attempts (id, run_id, block_id)
-      VALUES (${id}, ${input.runId}, ${input.blockId})
+      INSERT INTO publication_attempts (id, run_id, block_id, workspace_manifest)
+      VALUES (
+        ${id},
+        ${input.runId},
+        ${input.blockId},
+        ${JSON.stringify(input.workspaceManifest)}::jsonb
+      )
       ON CONFLICT (run_id, block_id) DO NOTHING
       RETURNING id
     ), selected_attempt AS (
@@ -102,6 +107,7 @@ export async function createOrGetPublicationAttempt(
     ? await getPublicationAttempt(db, selected.id)
     : await getPublicationAttemptForRunBlock(db, input.runId, input.blockId);
   if (!attempt) throw new Error("publication attempt was not persisted");
+  assertAttemptMatchesTrustedManifest(attempt, input.workspaceManifest);
   return { attempt, created };
 }
 
@@ -162,7 +168,7 @@ export async function recordPublicationRepositoryPreflight(
     failure?: string | null;
   },
 ): Promise<void> {
-  await db
+  const updated = await db
     .update(publicationAttemptRepositories)
     .set({
       changed: input.changed,
@@ -171,7 +177,9 @@ export async function recordPublicationRepositoryPreflight(
       ...(input.failure !== undefined ? { failure: input.failure } : {}),
       updatedAt: sql`now()`,
     })
-    .where(repositoryWhere(input));
+    .where(repositoryWhere(input))
+    .returning({ attemptId: publicationAttemptRepositories.attemptId });
+  assertRepositoryUpdated(updated, input);
 }
 
 export async function recordPublicationRepositoryPush(
@@ -183,10 +191,12 @@ export async function recordPublicationRepositoryPush(
     pushedHead: string;
   },
 ): Promise<void> {
-  await db
+  const updated = await db
     .update(publicationAttemptRepositories)
     .set({ pushedHead: input.pushedHead, failure: null, updatedAt: sql`now()` })
-    .where(repositoryWhere(input));
+    .where(repositoryWhere(input))
+    .returning({ attemptId: publicationAttemptRepositories.attemptId });
+  assertRepositoryUpdated(updated, input);
 }
 
 export async function recordPublicationPullRequest(
@@ -198,7 +208,7 @@ export async function recordPublicationPullRequest(
     pr: { id: number; url: string; isNew: boolean };
   },
 ): Promise<void> {
-  await db
+  const updated = await db
     .update(publicationAttemptRepositories)
     .set({
       prId: input.pr.id,
@@ -207,7 +217,9 @@ export async function recordPublicationPullRequest(
       failure: null,
       updatedAt: sql`now()`,
     })
-    .where(repositoryWhere(input));
+    .where(repositoryWhere(input))
+    .returning({ attemptId: publicationAttemptRepositories.attemptId });
+  assertRepositoryUpdated(updated, input);
 }
 
 export async function recordPublicationRepositoryFailure(
@@ -219,10 +231,12 @@ export async function recordPublicationRepositoryFailure(
     failure: string;
   },
 ): Promise<void> {
-  await db
+  const updated = await db
     .update(publicationAttemptRepositories)
     .set({ failure: input.failure, updatedAt: sql`now()` })
-    .where(repositoryWhere(input));
+    .where(repositoryWhere(input))
+    .returning({ attemptId: publicationAttemptRepositories.attemptId });
+  assertRepositoryUpdated(updated, input);
 }
 
 export async function markPublicationAttemptPushing(db: Db, attemptId: string): Promise<void> {
@@ -246,7 +260,7 @@ export async function failPublicationAttempt(
   attemptId: string,
   failure: string,
 ): Promise<void> {
-  await db
+  const updated = await db
     .update(publicationAttempts)
     .set({ status: "failed", failure, updatedAt: sql`now()` })
     .where(
@@ -258,7 +272,9 @@ export async function failPublicationAttempt(
           "creating_prs",
         ]),
       ),
-    );
+    )
+    .returning({ id: publicationAttempts.id });
+  if (updated.length === 0) await assertAttemptExists(db, attemptId);
 }
 
 async function setAttemptStatus(
@@ -267,7 +283,7 @@ async function setAttemptStatus(
   expectedStatus: PublicationAttemptStatus,
   status: PublicationAttemptStatus,
 ): Promise<void> {
-  await db
+  const updated = await db
     .update(publicationAttempts)
     .set({ status, failure: null, updatedAt: sql`now()` })
     .where(
@@ -275,7 +291,65 @@ async function setAttemptStatus(
         eq(publicationAttempts.id, attemptId),
         eq(publicationAttempts.status, expectedStatus),
       ),
+    )
+    .returning({ id: publicationAttempts.id });
+  if (updated.length === 0) await assertAttemptExists(db, attemptId);
+}
+
+async function assertAttemptExists(db: Db, attemptId: string): Promise<void> {
+  const existing = await db
+    .select({ id: publicationAttempts.id })
+    .from(publicationAttempts)
+    .where(eq(publicationAttempts.id, attemptId))
+    .limit(1);
+  if (!existing[0]) throw new Error(`publication ledger attempt ${attemptId} is missing`);
+}
+
+function assertRepositoryUpdated(
+  updated: Array<{ attemptId: string }>,
+  input: { attemptId: string; provider: VcsProvider; repoPath: string },
+): void {
+  if (updated.length !== 1) {
+    throw new Error(
+      `publication ledger row ${input.attemptId} ${input.provider}:${input.repoPath} is missing`,
     );
+  }
+}
+
+function assertAttemptMatchesTrustedManifest(
+  attempt: PublicationAttemptRecord,
+  trusted: WorkspaceManifest,
+): void {
+  try {
+    parseVerifiedWorkspaceManifest(JSON.stringify(attempt.workspaceManifest), trusted);
+  } catch {
+    throw new Error(
+      `publication attempt ${attempt.id} does not match the trusted workspace manifest`,
+    );
+  }
+  if (attempt.repositories.length !== trusted.repositories.length) {
+    throw new Error(
+      `publication attempt ${attempt.id} does not match the trusted workspace manifest cardinality`,
+    );
+  }
+  const rows = new Map(
+    attempt.repositories.map((repo) => [`${repo.provider}:${repo.repoPath}`, repo]),
+  );
+  if (rows.size !== attempt.repositories.length) {
+    throw new Error(`publication attempt ${attempt.id} contains duplicate repository rows`);
+  }
+  for (const repo of trusted.repositories) {
+    const row = rows.get(`${repo.provider}:${repo.repoPath}`);
+    if (
+      !row ||
+      row.branchName !== repo.branchName ||
+      row.defaultBranch !== repo.defaultBranch
+    ) {
+      throw new Error(
+        `publication attempt ${attempt.id} does not match the trusted workspace manifest fields`,
+      );
+    }
+  }
 }
 
 function repositoryWhere(input: {
@@ -303,6 +377,7 @@ function mapAttempt(
     blockId: attempt.blockId,
     status: attempt.status as PublicationAttemptStatus,
     failure: attempt.failure,
+    workspaceManifest: attempt.workspaceManifest,
     repositories: repositories.map((repo) => ({
       provider: repo.provider as VcsProvider,
       repoPath: repo.repoPath,

@@ -1,9 +1,10 @@
 import type { SelectedRepository } from "../adapters/vcs/repository-directory.js";
 import type { HumanDecision } from "../lib/human-decisions-memory.js";
 import {
-  pushWorkspaceFromSandbox,
-  type WorkspacePushResult,
-} from "../sandbox/poll-agent.js";
+  publishTrustedWorkspaceFromSandbox,
+  type TrustedWorkspacePushResult,
+} from "../sandbox/trusted-workspace-publisher.js";
+import type { WorkspaceManifest } from "../sandbox/repo-workspace.js";
 import { writeHumanDecisionsMemory } from "../sandbox/write-human-decisions-memory.js";
 import type {
   PublicationAttemptRecord,
@@ -29,14 +30,14 @@ export type WorkspacePublicationResult =
       attemptId: string;
       repositories: FinalizedBranch[];
       prs: [];
-      pushResult?: WorkspacePushResult;
+      pushResult?: TrustedWorkspacePushResult;
     }
   | {
       status: "published";
       attemptId: string;
       repositories: FinalizedBranch[];
       prs: WorkflowPrLink[];
-      pushResult?: WorkspacePushResult;
+      pushResult?: TrustedWorkspacePushResult;
     }
   | {
       status: "failed";
@@ -44,7 +45,7 @@ export type WorkspacePublicationResult =
       reason: string;
       repositories: FinalizedBranch[];
       prs: WorkflowPrLink[];
-      pushResult?: WorkspacePushResult;
+      pushResult?: TrustedWorkspacePushResult;
     };
 
 export async function finalizeWorkspacePublication(input: {
@@ -52,8 +53,7 @@ export async function finalizeWorkspacePublication(input: {
   blockId: string;
   sandboxId: string;
   ticketKey: string;
-  branchName: string;
-  repositories: SelectedRepository[];
+  workspaceManifest: WorkspaceManifest;
   clarifications?: HumanDecision[];
   sourcePullRequest?: {
     provider: SelectedRepository["provider"];
@@ -65,12 +65,7 @@ export async function finalizeWorkspacePublication(input: {
   const creation = await createPublicationAttemptStep({
     runId: input.runId,
     blockId: input.blockId,
-    repositories: input.repositories.map((repo) => ({
-      provider: repo.provider,
-      repoPath: repo.repoPath,
-      defaultBranch: repo.defaultBranch,
-      branchName: repo.workflowOwnedBranch?.branchName ?? input.branchName,
-    })),
+    workspaceManifest: input.workspaceManifest,
   });
 
   let resumingPush = false;
@@ -120,21 +115,13 @@ export async function finalizeWorkspacePublication(input: {
     await markPublicationPushingStep(attemptId);
   }
 
-  let pushResult: WorkspacePushResult;
+  let pushResult: TrustedWorkspacePushResult;
   try {
-    pushResult = await pushWorkspaceFromSandbox(
-      input.sandboxId,
-      input.sourcePullRequest
-        ? [
-            {
-              provider: input.sourcePullRequest.provider,
-              repoPath: input.sourcePullRequest.repoPath,
-              headSha: input.sourcePullRequest.headSha,
-            },
-          ]
-        : [],
-      attemptId,
-    );
+    pushResult = await publishTrustedWorkspaceFromSandbox({
+      sourceSandboxId: input.sandboxId,
+      publicationAttemptId: attemptId,
+      workspaceManifest: input.workspaceManifest,
+    });
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
     const latest = await loadPublicationAttemptStep(attemptId).catch(() => null);
@@ -261,12 +248,7 @@ export async function openPullRequestsForPublication(input: {
 async function createPublicationAttemptStep(input: {
   runId: string;
   blockId: string;
-  repositories: Array<{
-    provider: SelectedRepository["provider"];
-    repoPath: string;
-    branchName: string;
-    defaultBranch: string;
-  }>;
+  workspaceManifest: WorkspaceManifest;
 }) {
   "use step";
   const { getDb } = await import("../db/client.js");
@@ -307,7 +289,7 @@ markPublicationPushingStep.maxRetries = 0;
 
 async function recordPushOutcomeStep(
   attemptId: string,
-  pushResult: WorkspacePushResult,
+  pushResult: TrustedWorkspacePushResult,
 ): Promise<void> {
   "use step";
   const { getDb } = await import("../db/client.js");
@@ -614,7 +596,7 @@ function finalizedBranches(repositories: PublicationRepositoryRecord[]): Finaliz
   );
 }
 
-function finalizedBranchesFromPush(pushResult: WorkspacePushResult): FinalizedBranch[] {
+function finalizedBranchesFromPush(pushResult: TrustedWorkspacePushResult): FinalizedBranch[] {
   return pushResult.repositories.flatMap((repository) =>
     repository.changed && repository.pushed && repository.expectedHead && repository.pushedHead
       ? [
@@ -630,7 +612,7 @@ function finalizedBranchesFromPush(pushResult: WorkspacePushResult): FinalizedBr
   );
 }
 
-function recordsFromPush(pushResult: WorkspacePushResult): PublicationRepositoryRecord[] {
+function recordsFromPush(pushResult: TrustedWorkspacePushResult): PublicationRepositoryRecord[] {
   return pushResult.repositories.map((repository) => ({
     provider: repository.provider,
     repoPath: repository.repoPath,
