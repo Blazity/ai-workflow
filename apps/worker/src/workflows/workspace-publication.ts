@@ -106,7 +106,8 @@ export async function finalizeWorkspacePublication(input: {
 
     if (input.sourcePullRequest) {
       try {
-        await verifyPullRequestHeadStep(input.sourcePullRequest);
+        const currentHead = await verifyPullRequestHeadStep(input.sourcePullRequest);
+        assertPullRequestHead(input.sourcePullRequest, currentHead);
       } catch (err) {
         const reason = err instanceof Error ? err.message : String(err);
         await failPublicationStep({
@@ -245,8 +246,24 @@ export async function openPullRequestsForPublication(input: {
     (repo) => repo.changed && repo.pushedHead !== null,
   )) {
     let pr = repository.pr ? prLinkFromRepository(repository) : null;
+    let currentBranchHead: string;
     try {
-      await verifyFinalizedBranchHeadStep(repository);
+      currentBranchHead = await verifyFinalizedBranchHeadStep(repository);
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      return pr
+        ? recoverableOpenPullRequestFailure(attempt, repository, reason, prs)
+        : terminalOpenPullRequestFailure(attempt, repository, reason, prs);
+    }
+
+    try {
+      assertFinalizedBranchHead(repository, currentBranchHead);
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      return terminalOpenPullRequestFailure(attempt, repository, reason, prs);
+    }
+
+    try {
       await recordWorkflowOwnedPullRequestIntent({
         ticketKey: input.ticketKey,
         provider: repository.provider,
@@ -254,18 +271,54 @@ export async function openPullRequestsForPublication(input: {
         branchName: repository.branchName,
         publishedHeadSha: repository.pushedHead!,
       });
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      return pr
+        ? recoverableOpenPullRequestFailure(attempt, repository, reason, prs)
+        : terminalOpenPullRequestFailure(attempt, repository, reason, prs);
+    }
+
+    try {
       pr ??= await createOrFindWorkflowOwnedPullRequest({
         branchName: repository.branchName,
         repository: selectedRepositoryFromAttempt(repository),
         title: input.title,
       });
-      await verifyPullRequestHeadStep({
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      return terminalOpenPullRequestFailure(attempt, repository, reason, prs);
+    }
+
+    if (!prs.some((existing) => sameRepository(existing, pr))) prs.push(pr);
+    let currentPrHead: string;
+    try {
+      currentPrHead = await verifyPullRequestHeadStep({
         provider: repository.provider,
         repoPath: repository.repoPath,
         prId: pr.id,
         headSha: repository.pushedHead!,
       });
-      if (!prs.some((existing) => sameRepository(existing, pr!))) prs.push(pr);
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      return recoverableOpenPullRequestFailure(attempt, repository, reason, prs);
+    }
+
+    try {
+      assertPullRequestHead(
+        {
+          provider: repository.provider,
+          repoPath: repository.repoPath,
+          prId: pr.id,
+          headSha: repository.pushedHead!,
+        },
+        currentPrHead,
+      );
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      return terminalOpenPullRequestFailure(attempt, repository, reason, prs);
+    }
+
+    try {
       await recordPullRequestStep(attempt.id, pr);
       await recordWorkflowOwnedPullRequest({
         ticketKey: input.ticketKey,
@@ -274,13 +327,7 @@ export async function openPullRequestsForPublication(input: {
       });
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
-      const concurrent = await failPublicationStep({
-        attemptId: attempt.id,
-        reason,
-        repository: { provider: repository.provider, repoPath: repository.repoPath },
-      });
-      if (concurrent?.status === "published") return publishedResult(concurrent);
-      return failedResult(attempt.id, reason, attempt.repositories, prs);
+      return recoverableOpenPullRequestFailure(attempt, repository, reason, prs);
     }
   }
 
@@ -298,15 +345,22 @@ export async function openPullRequestsForPublication(input: {
     if (concurrent?.status === "published") return publishedResult(concurrent);
     return failedResult(attempt.id, reason, attempt.repositories, prs);
   }
-  attempt = (await loadPublicationAttemptStep(attempt.id)) ?? attempt;
-  return attempt.status === "published"
-    ? publishedResult(attempt)
-    : {
-        status: "published",
-        attemptId: attempt.id,
-        repositories: finalizedBranches(attempt.repositories),
-        prs,
-      };
+  const reloaded = await loadPublicationAttemptStep(attempt.id);
+  if (!reloaded) {
+    return failedResult(
+      attempt.id,
+      "publication attempt disappeared after the published transition",
+      attempt.repositories,
+      prs,
+    );
+  }
+  if (reloaded.status === "published") return publishedResult(reloaded);
+  return failedResult(
+    reloaded.id,
+    reloaded.failure ?? `publication attempt is ${reloaded.status}, not published`,
+    reloaded.repositories,
+    prs,
+  );
 }
 
 async function createPublicationAttemptStep(input: {
@@ -326,7 +380,7 @@ async function verifyPullRequestHeadStep(input: {
   repoPath: string;
   prId: number;
   headSha: string;
-}): Promise<void> {
+}): Promise<string> {
   "use step";
   const { createRepositoryVcsRuntime } = await import("../lib/vcs-runtime.js");
   const currentHead = await createRepositoryVcsRuntime({
@@ -334,14 +388,25 @@ async function verifyPullRequestHeadStep(input: {
     repoPath: input.repoPath,
     baseBranch: "main",
   }).vcs.getPRHeadSha(input.prId);
-  if (currentHead !== input.headSha) {
-    throw new Error(
-      `stale PR/MR head for ${input.provider}:${input.repoPath} #${input.prId}: ` +
-        `triggered at ${input.headSha}, current head is ${currentHead}`,
-    );
-  }
+  return currentHead;
 }
 verifyPullRequestHeadStep.maxRetries = 3;
+
+function assertPullRequestHead(
+  input: {
+    provider: SelectedRepository["provider"];
+    repoPath: string;
+    prId: number;
+    headSha: string;
+  },
+  currentHead: string,
+): void {
+  if (currentHead === input.headSha) return;
+  throw new Error(
+    `stale PR/MR head for ${input.provider}:${input.repoPath} #${input.prId}: ` +
+      `triggered at ${input.headSha}, current head is ${currentHead}`,
+  );
+}
 
 async function markPublicationPushingStep(attemptId: string): Promise<void> {
   "use step";
@@ -507,7 +572,7 @@ loadPublicationAttemptStep.maxRetries = 3;
 
 async function verifyFinalizedBranchHeadStep(
   repository: PublicationRepositoryRecord,
-): Promise<void> {
+): Promise<string> {
   "use step";
   if (!repository.pushedHead) {
     throw new Error(
@@ -520,14 +585,20 @@ async function verifyFinalizedBranchHeadStep(
     repoPath: repository.repoPath,
     baseBranch: repository.defaultBranch,
   }).vcs.getBranchSha(repository.branchName);
-  if (currentHead !== repository.pushedHead) {
-    throw new Error(
-      `finalized branch moved for ${repository.provider}:${repository.repoPath}: ` +
-        `expected ${repository.pushedHead}, current head is ${currentHead}`,
-    );
-  }
+  return currentHead;
 }
 verifyFinalizedBranchHeadStep.maxRetries = 3;
+
+function assertFinalizedBranchHead(
+  repository: PublicationRepositoryRecord,
+  currentHead: string,
+): void {
+  if (currentHead === repository.pushedHead) return;
+  throw new Error(
+    `finalized branch moved for ${repository.provider}:${repository.repoPath}: ` +
+      `expected ${repository.pushedHead}, current head is ${currentHead}`,
+  );
+}
 
 async function markPublicationCreatingPrsStep(attemptId: string): Promise<void> {
   "use step";
@@ -582,6 +653,52 @@ async function failPublicationStep(input: {
   return failed === false ? getPublicationAttempt(db, input.attemptId) : null;
 }
 failPublicationStep.maxRetries = 3;
+
+async function recordRecoverablePublicationFailureStep(input: {
+  attemptId: string;
+  reason: string;
+  repository: { provider: SelectedRepository["provider"]; repoPath: string };
+}): Promise<void> {
+  "use step";
+  const { getDb } = await import("../db/client.js");
+  const { recordPublicationRepositoryFailure } = await import("../publication/store.js");
+  await recordPublicationRepositoryFailure(getDb(), {
+    attemptId: input.attemptId,
+    ...input.repository,
+    failure: input.reason,
+  });
+}
+recordRecoverablePublicationFailureStep.maxRetries = 3;
+
+async function recoverableOpenPullRequestFailure(
+  attempt: PublicationAttemptRecord,
+  repository: PublicationRepositoryRecord,
+  reason: string,
+  prs: WorkflowPrLink[],
+): Promise<WorkspacePublicationResult> {
+  await recordRecoverablePublicationFailureStep({
+    attemptId: attempt.id,
+    reason,
+    repository: { provider: repository.provider, repoPath: repository.repoPath },
+  }).catch(() => {});
+  return failedResult(attempt.id, reason, attempt.repositories, prs);
+}
+
+async function terminalOpenPullRequestFailure(
+  attempt: PublicationAttemptRecord,
+  repository: PublicationRepositoryRecord,
+  reason: string,
+  prs: WorkflowPrLink[],
+): Promise<WorkspacePublicationResult> {
+  const concurrent = await failPublicationStep({
+    attemptId: attempt.id,
+    reason,
+    repository: { provider: repository.provider, repoPath: repository.repoPath },
+  });
+  return concurrent?.status === "published"
+    ? publishedResult(concurrent)
+    : failedResult(attempt.id, reason, attempt.repositories, prs);
+}
 
 function replayedFinalizeResult(attempt: PublicationAttemptRecord): WorkspacePublicationResult {
   if (

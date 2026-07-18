@@ -130,6 +130,28 @@ describe("recoverAcceptedTriggerDeliveries", () => {
     expect(resume).toHaveBeenCalledWith(accepted);
   });
 
+  it("resumes received deliveries before a subject has been enriched", async () => {
+    const received = { ...accepted, status: "received", subjectKey: null };
+    const getActive = vi.fn();
+    const resume = vi.fn().mockResolvedValue({ result: "started", runId: "run-next" });
+
+    const recovered = await recoverAcceptedTriggerDeliveries({
+      listDeliveries: vi.fn().mockResolvedValue([received]),
+      getActive,
+      resume,
+    });
+
+    expect(recovered).toEqual({
+      scanned: 1,
+      blocked: 0,
+      attempted: 1,
+      started: 1,
+      errors: 0,
+    });
+    expect(getActive).not.toHaveBeenCalled();
+    expect(resume).toHaveBeenCalledWith(received);
+  });
+
   it("counts a retryable resume result as a recovery error", async () => {
     const recovered = await recoverAcceptedTriggerDeliveries({
       listDeliveries: vi.fn().mockResolvedValue([accepted]),

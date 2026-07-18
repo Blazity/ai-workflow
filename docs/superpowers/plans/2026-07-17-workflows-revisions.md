@@ -81,13 +81,13 @@ Steps:
 1. Add failing normalization tests for provider, producer, delivery, repository, PR/MR, exact head, explicit `scope: workflow_owned | any`, actionable outcomes, bot filtering, allowlists, and current-head mismatch.
 2. Add provider-neutral input with stable `subjectKey` and optional real `ticketKey`. Ticket triggers and durably correlated workflow-owned PRs use `ticket:<ticketProvider>:<ticketKey>`; arbitrary PRs use `pr:<vcsProvider>:<repoPath>#<prNumber>`. Remove unconditional Jira fetches from PR-only runs.
 3. Add failing store tests for delivery uniqueness and semantic coalescing with merged failed checks and distinct review identities.
-4. Prove `workflow_owned` through durable branch/publication correlation matching provider/repository/PR/branch/current head plus a valid ticket lookup; never trust a prefix. Authenticate first, re-read the current head, persist normalized delivery with its pinned deployed definition/version, then dispatch; redelivery returns its stored result.
+4. Authenticate first, then persist a normalized `received` delivery with its pinned deployed definition/version before external enrichment. Prove `workflow_owned` through durable branch/publication correlation matching provider/repository/PR/branch/current head plus a valid ticket lookup; never trust a prefix. Advance the delivery to `accepted` only after re-reading the current head and completing enrichment; local recovery resumes transient failures, and redelivery returns the stored state/result.
 5. Make `any` review-safe: deploy validation rejects ticket actions, Fix, Finalize, Open PR/MR, and all other branch-mutating paths. Old violating definitions fail closed at runtime.
 6. Add focused webhook, workflow, store, and telemetry tests.
 
 Acceptance:
 
-- Synthetic subjects never reach Jira, stale/non-actionable events start nothing, and accepted deliveries are durable/idempotent.
+- Synthetic subjects never reach Jira, stale/non-actionable events start nothing, and authenticated locally eligible deliveries are durable/idempotent before external enrichment.
 
 ## Task 4 — AIW-99: owner-CAS claims, terminal release, and pending drain
 

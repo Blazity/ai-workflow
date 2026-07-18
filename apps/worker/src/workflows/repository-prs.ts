@@ -67,7 +67,7 @@ export async function recordWorkflowOwnedPullRequestIntent(input: {
   const { upsertWorkflowOwnedBranch } = await import(
     "../db/queries/workflow-owned-branches.js"
   );
-  await upsertWorkflowOwnedBranch(getDb(), input);
+  await upsertWorkflowOwnedBranch(getDb(), input, { replacePullRequest: true });
 }
 recordWorkflowOwnedPullRequestIntent.maxRetries = 0;
 

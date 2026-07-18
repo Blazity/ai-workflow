@@ -42,6 +42,7 @@ export async function listWorkflowOwnedBranchesForTicket(
 export async function upsertWorkflowOwnedBranch(
   db: Db,
   record: WorkflowOwnedBranchRecord,
+  options: { replacePullRequest?: boolean } = {},
 ): Promise<void> {
   await db
     .insert(workflowOwnedBranches)
@@ -64,9 +65,15 @@ export async function upsertWorkflowOwnedBranch(
       set: {
         branchName: record.branchName,
         publishedHeadSha: sql`coalesce(excluded.published_head_sha, ${workflowOwnedBranches.publishedHeadSha})`,
-        prId: sql`coalesce(excluded.pr_id, ${workflowOwnedBranches.prId})`,
-        prUrl: sql`coalesce(excluded.pr_url, ${workflowOwnedBranches.prUrl})`,
-        prBranchName: sql`coalesce(excluded.pr_branch_name, ${workflowOwnedBranches.prBranchName})`,
+        prId: options.replacePullRequest
+          ? (record.pr?.id ?? null)
+          : sql`coalesce(excluded.pr_id, ${workflowOwnedBranches.prId})`,
+        prUrl: options.replacePullRequest
+          ? (record.pr?.url ?? null)
+          : sql`coalesce(excluded.pr_url, ${workflowOwnedBranches.prUrl})`,
+        prBranchName: options.replacePullRequest
+          ? (record.pr?.branch ?? null)
+          : sql`coalesce(excluded.pr_branch_name, ${workflowOwnedBranches.prBranchName})`,
         updatedAt: sql`now()`,
       },
     });

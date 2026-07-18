@@ -6,10 +6,15 @@ import {
   workflowDefinitionVersions,
 } from "../db/schema.js";
 import { createTestDb } from "../db/test-db.js";
-import type { AcceptedTriggerDelivery } from "./trigger-delivery-store.js";
+import type {
+  AcceptedTriggerDelivery,
+  ReceivedTriggerDelivery,
+} from "./trigger-delivery-store.js";
 import {
+  acceptReceivedTriggerDelivery,
   acceptTriggerDelivery,
   acknowledgeStartedTriggerDelivery,
+  completeReceivedTriggerDelivery,
   completeTriggerDelivery,
   coalescePendingTrigger,
   deletePendingTrigger,
@@ -18,6 +23,7 @@ import {
   listRecoverableAcceptedTriggerDeliveries,
   listPendingTriggersForSubject,
   listPendingSubjectKeys,
+  receiveTriggerDelivery,
 } from "./trigger-delivery-store.js";
 
 let db: Db;
@@ -74,6 +80,21 @@ function delivery(overrides: Partial<AcceptedTriggerDelivery> = {}): AcceptedTri
   };
 }
 
+function receivedDelivery(
+  overrides: Partial<ReceivedTriggerDelivery> = {},
+): ReceivedTriggerDelivery {
+  const accepted = delivery();
+  return {
+    delivery: accepted.delivery,
+    triggerType: accepted.triggerType,
+    pr: accepted.pr,
+    scope: accepted.scope,
+    definitionId: accepted.definitionId,
+    definitionVersion: accepted.definitionVersion,
+    ...overrides,
+  };
+}
+
 async function bindRun(
   accepted: AcceptedTriggerDelivery,
   runId: string,
@@ -89,6 +110,67 @@ async function bindRun(
 }
 
 describe("durable trigger deliveries", () => {
+  it("enriches one received delivery exactly once under concurrent acceptance", async () => {
+    const received = receivedDelivery();
+    await expect(receiveTriggerDelivery(db, received)).resolves.toMatchObject({
+      inserted: true,
+      stored: { status: "received", subjectKey: null, result: null },
+    });
+
+    const [left, right] = await Promise.all([
+      acceptReceivedTriggerDelivery(db, delivery()),
+      acceptReceivedTriggerDelivery(db, delivery()),
+    ]);
+
+    expect([left.enriched, right.enriched].filter(Boolean)).toHaveLength(1);
+    expect(left.stored).toMatchObject({
+      status: "accepted",
+      subjectKey: "pr:github:acme/api#42",
+      definitionId: 7,
+      definitionVersion: 11,
+    });
+    expect(right.stored).toMatchObject({
+      status: "accepted",
+      subjectKey: "pr:github:acme/api#42",
+      definitionId: 7,
+      definitionVersion: 11,
+    });
+
+    await expect(receiveTriggerDelivery(db, received)).resolves.toMatchObject({
+      inserted: false,
+      stored: { status: "accepted", subjectKey: "pr:github:acme/api#42" },
+    });
+  });
+
+  it("terminally records a pre-enrichment ignore decision without inventing a subject", async () => {
+    await receiveTriggerDelivery(db, receivedDelivery());
+    await completeTriggerDelivery(db, "github", "d-1", {
+      result: "ignored_stale_head",
+    });
+
+    await expect(getTriggerDelivery(db, "github", "d-1")).resolves.toMatchObject({
+      status: "completed",
+      subjectKey: null,
+      result: { result: "ignored_stale_head" },
+    });
+  });
+
+  it("does not let a stale enrichment decision overwrite a concurrent acceptance", async () => {
+    await receiveTriggerDelivery(db, receivedDelivery());
+    await acceptReceivedTriggerDelivery(db, delivery());
+
+    await expect(
+      completeReceivedTriggerDelivery(db, "github", "d-1", {
+        result: "ignored_stale_head",
+      }),
+    ).resolves.toBe(false);
+    await expect(getTriggerDelivery(db, "github", "d-1")).resolves.toMatchObject({
+      status: "accepted",
+      subjectKey: "pr:github:acme/api#42",
+      result: null,
+    });
+  });
+
   it("accepts one provider delivery identity and returns the stored result on redelivery", async () => {
     const first = await acceptTriggerDelivery(db, delivery());
     expect(first.inserted).toBe(true);
@@ -206,6 +288,24 @@ describe("durable trigger deliveries", () => {
         definitionId: 7,
         definitionVersion: 11,
         status: "accepted",
+        result: null,
+      }),
+    ]);
+  });
+
+  it("lists unfinished received deliveries for enrichment recovery", async () => {
+    await receiveTriggerDelivery(db, receivedDelivery());
+
+    await expect(
+      listRecoverableAcceptedTriggerDeliveries(
+        db,
+        new Date(Date.now() + 60_000),
+      ),
+    ).resolves.toEqual([
+      expect.objectContaining({
+        delivery: expect.objectContaining({ deliveryId: "d-1" }),
+        status: "received",
+        subjectKey: null,
         result: null,
       }),
     ]);

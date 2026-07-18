@@ -74,7 +74,7 @@ export const triggerDeliveries = pgTable(
     deliveryId: text("delivery_id").notNull(),
     producer: text("producer").notNull(),
     triggerType: text("trigger_type").notNull(),
-    subjectKey: text("subject_key").notNull(),
+    subjectKey: text("subject_key"),
     ticketKey: text("ticket_key"),
     headSha: text("head_sha").notNull(),
     definitionId: integer("definition_id").notNull(),
@@ -87,6 +87,14 @@ export const triggerDeliveries = pgTable(
   },
   (t) => [
     primaryKey({ columns: [t.provider, t.deliveryId] }),
+    check(
+      "trigger_deliveries_state_check",
+      sql`(
+        (${t.status} = 'received' and ${t.subjectKey} is null and ${t.result} is null)
+        or (${t.status} = 'accepted' and ${t.subjectKey} is not null and ${t.result} is null)
+        or (${t.status} = 'completed' and ${t.result} is not null)
+      )`,
+    ),
     foreignKey({
       columns: [t.definitionId, t.definitionVersion],
       foreignColumns: [

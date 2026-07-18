@@ -66,9 +66,9 @@ export async function recoverOrphanedPendingTriggers(
 }
 
 /**
- * Poll-side recovery for the acceptance-before-queue crash window. The active
- * read avoids needless work; resume re-reads the delivery and the dispatcher
- * still acquires the authoritative subject reservation.
+ * Poll-side recovery for receipt/enrichment/queue crash windows. The active
+ * read avoids needless work once a subject is known; resume re-reads the
+ * delivery and the dispatcher still acquires the authoritative reservation.
  */
 export async function recoverAcceptedTriggerDeliveries(
   deps: AcceptedTriggerRecoveryDeps,
@@ -92,7 +92,7 @@ export async function recoverAcceptedTriggerDeliveries(
   metrics.scanned = deliveries.length;
   for (const delivery of deliveries) {
     try {
-      if (await deps.getActive(delivery.subjectKey)) {
+      if (delivery.subjectKey !== null && (await deps.getActive(delivery.subjectKey))) {
         metrics.blocked++;
         continue;
       }

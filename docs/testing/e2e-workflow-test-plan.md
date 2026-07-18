@@ -120,7 +120,7 @@ Setup: first produce a bot-owned PR whose head branch encodes an AWT ticket key 
 
 **T4.3 coalescing** - two PR-review webhooks for the same branch while the first run is active -> second returns `coalesced`/`already_claimed`; only one run row.
 
-**T4.4 at-capacity -> 503 redelivery** - saturate `MAX_CONCURRENT_AGENTS`, fire a PR webhook -> HTTP **503** `trigger_at_capacity`; provider redelivers; no lost event.
+**T4.4 at-capacity -> durable recovery** - saturate `MAX_CONCURRENT_AGENTS`, fire a PR webhook -> HTTP **503** `trigger_at_capacity`; the durable accepted delivery remains recoverable and the local poller dispatches it after capacity returns. Provider redelivery is idempotent but is not required; no lost event.
 
 **T4.5 pr_trigger run not cancelled on AI-column move** - with a `pr_trigger` run active, move its ticket out of the AI column -> run NOT cancelled (run_kind exempt), contrast T7.3.
 

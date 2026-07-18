@@ -24,13 +24,16 @@ import { logger } from "./logger.js";
 import { isRepoAllowed } from "./repo-allowlist.js";
 import { prSubjectKey, ticketSubjectKey } from "./subject-key.js";
 import {
-  acceptTriggerDelivery,
+  acceptReceivedTriggerDelivery,
   coalescePendingTrigger,
+  completeReceivedTriggerDelivery,
   completeTriggerDelivery,
   deletePendingTrigger,
   getTriggerDelivery,
   listPendingTriggersForSubject,
+  receiveTriggerDelivery,
   type AcceptedTriggerDelivery,
+  type ReceivedTriggerDelivery,
   type StoredTriggerDelivery,
   type StoredTriggerResult,
   type TriggerScope,
@@ -103,21 +106,16 @@ export async function dispatchTriggerEvent(
     return { result: "ignored_malformed_delivery" };
   }
 
-  // Delivery identity is immutable. A retry must return the first attempt's
-  // durable result without consulting mutable definition/head/correlation state.
+  // Delivery identity and pinned definition are immutable. An unfinished retry
+  // resumes the durable envelope through enrichment or dispatch; a completed
+  // retry returns its stored result.
   const existing = await getTriggerDelivery(
     deps.db,
     event.delivery.provider,
     event.delivery.deliveryId,
   );
   if (existing) {
-    // The process may have died after durable acceptance but before recording
-    // dispatch. Resume the exact pinned envelope; owner CAS still guarantees
-    // that concurrent redeliveries cannot start two effective runs.
-    if (existing.status === "accepted" && existing.result === null) {
-      return resumeAcceptedTrigger(existing, deps);
-    }
-    return storedResultToDispatch(existing.result);
+    return resumeStoredTriggerDelivery(existing, deps);
   }
 
   const enabled = await getEnabledWorkflowDefinitionForTrigger(deps.db, event.triggerType);
@@ -140,39 +138,16 @@ export async function dispatchTriggerEvent(
   const eligibleEvent = selectEligibleEvent(event, params);
   if (!eligibleEvent) return { result: "ignored_untrusted_event" };
 
-  const currentResult = await readCurrentPullRequest(eligibleEvent.pr, deps);
-  if (currentResult.status === "unreachable") return { result: "error" };
-  const currentEvent = bindCurrentPullRequest(eligibleEvent, currentResult.current);
-  if (!currentEvent) {
-    logger.info(
-      { subject: eligibleEvent.pr, current: currentResult.current },
-      "trigger_ignored_stale_head",
-    );
-    return { result: "ignored_stale_head" };
-  }
-
-  const identity = await resolveSubjectIdentity(currentEvent, scope, deps);
-  if (identity.status === "ignored") return { result: "ignored_not_workflow_owned" };
-  if (identity.status === "retryable_error") return { result: "error" };
-
-  const accepted: AcceptedTriggerDelivery = {
-    ...currentEvent,
+  const received: ReceivedTriggerDelivery = {
+    ...eligibleEvent,
     scope,
-    subjectKey: identity.subjectKey,
-    ticketKey: identity.ticketKey,
     definitionId: enabled.definition.id,
     definitionVersion: enabled.current.version,
   };
 
   try {
-    const durable = await acceptTriggerDelivery(deps.db, accepted);
-    if (!durable.inserted) {
-      return durable.stored.status === "accepted" && durable.stored.result === null
-        ? resumeAcceptedTrigger(durable.stored, deps)
-        : storedResultToDispatch(durable.stored.result);
-    }
-    if (identity.status === "pending_correlation") return { result: "error" };
-    return await dispatchAcceptedTrigger(accepted, deps);
+    const durable = await receiveTriggerDelivery(deps.db, received);
+    return await resumeStoredTriggerDelivery(durable.stored, deps);
   } catch (error) {
     logger.warn(
       { delivery: event.delivery, error: (error as Error).message },
@@ -180,6 +155,111 @@ export async function dispatchTriggerEvent(
     );
     return { result: "error" };
   }
+}
+
+async function resumeStoredTriggerDelivery(
+  stored: StoredTriggerDelivery,
+  deps: DispatchTriggerDeps,
+): Promise<DispatchTriggerResult> {
+  if (stored.status === "received" && stored.result === null) {
+    return enrichReceivedTrigger(stored, deps);
+  }
+  if (stored.status === "accepted" && stored.result === null) {
+    const accepted = acceptedFromStored(stored);
+    if (!accepted) return { result: "error" };
+    return resumeAcceptedTrigger(accepted, deps);
+  }
+  return storedResultToDispatch(stored.result);
+}
+
+async function enrichReceivedTrigger(
+  received: StoredTriggerDelivery,
+  deps: DispatchTriggerDeps,
+): Promise<DispatchTriggerResult> {
+  const event = triggerEventFromStored(received);
+  const currentResult = await readCurrentPullRequest(event.pr, deps);
+  if (currentResult.status === "unreachable") return { result: "error" };
+  const currentEvent = bindCurrentPullRequest(event, currentResult.current);
+  if (!currentEvent) {
+    logger.info(
+      { subject: event.pr, current: currentResult.current },
+      "trigger_ignored_stale_head",
+    );
+    return completeReceivedDelivery(
+      received,
+      { result: "ignored_stale_head" },
+      deps,
+    );
+  }
+
+  const identity = await resolveSubjectIdentity(currentEvent, received.scope, deps);
+  if (identity.status === "ignored") {
+    return completeReceivedDelivery(
+      received,
+      { result: "ignored_not_workflow_owned" },
+      deps,
+    );
+  }
+  if (identity.status === "retryable_error") return { result: "error" };
+
+  const accepted: AcceptedTriggerDelivery = {
+    ...currentEvent,
+    scope: received.scope,
+    subjectKey: identity.subjectKey,
+    ticketKey: identity.ticketKey,
+    definitionId: received.definitionId,
+    definitionVersion: received.definitionVersion,
+  };
+  const enrichment = await acceptReceivedTriggerDelivery(deps.db, accepted);
+  if (!enrichment.enriched) {
+    return resumeStoredTriggerDelivery(enrichment.stored, deps);
+  }
+  if (identity.status === "pending_correlation") return { result: "error" };
+  return dispatchAcceptedTrigger(accepted, deps);
+}
+
+async function completeReceivedDelivery(
+  received: StoredTriggerDelivery,
+  result: StoredTriggerResult,
+  deps: DispatchTriggerDeps,
+): Promise<DispatchTriggerResult> {
+  const completed = await completeReceivedTriggerDelivery(
+    deps.db,
+    received.delivery.provider,
+    received.delivery.deliveryId,
+    result,
+  );
+  if (completed) return storedResultToDispatch(result);
+
+  const current = await getTriggerDelivery(
+    deps.db,
+    received.delivery.provider,
+    received.delivery.deliveryId,
+  );
+  if (!current || (current.status === "received" && current.result === null)) {
+    return { result: "error" };
+  }
+  return resumeStoredTriggerDelivery(current, deps);
+}
+
+function triggerEventFromStored(stored: StoredTriggerDelivery): TriggerEvent {
+  return {
+    delivery: stored.delivery,
+    triggerType: stored.triggerType,
+    pr: stored.pr,
+  };
+}
+
+function acceptedFromStored(stored: StoredTriggerDelivery): AcceptedTriggerDelivery | null {
+  if (stored.subjectKey === null) return null;
+  return {
+    ...triggerEventFromStored(stored),
+    scope: stored.scope,
+    subjectKey: stored.subjectKey,
+    ticketKey: stored.ticketKey,
+    definitionId: stored.definitionId,
+    definitionVersion: stored.definitionVersion,
+  };
 }
 
 async function resumeAcceptedTrigger(
@@ -190,7 +270,7 @@ async function resumeAcceptedTrigger(
   if (currentResult.status === "unreachable") return { result: "error" };
   const currentAccepted = bindCurrentPullRequest(accepted, currentResult.current);
   if (!currentAccepted) {
-    await completeAccepted(deps.db, accepted, { result: "ignored_stale_head" });
+    await completeDelivery(deps.db, accepted, { result: "ignored_stale_head" });
     return { result: "ignored_stale_head" };
   }
   if (currentAccepted.scope === "workflow_owned") {
@@ -203,7 +283,7 @@ async function resumeAcceptedTrigger(
       identity.subjectKey !== currentAccepted.subjectKey ||
       identity.ticketKey !== currentAccepted.ticketKey
     ) {
-      await completeAccepted(deps.db, currentAccepted, {
+      await completeDelivery(deps.db, currentAccepted, {
         result: "ignored_not_workflow_owned",
       });
       return { result: "ignored_not_workflow_owned" };
@@ -213,9 +293,9 @@ async function resumeAcceptedTrigger(
 }
 
 /**
- * Poll-side recovery for a process death after durable acceptance but before
- * the pending snapshot/result write. Re-read the row so a stale scan cannot
- * replay a delivery that another dispatcher has already completed.
+ * Poll-side recovery for a process death after durable receipt but before
+ * enrichment or the pending snapshot/result write. Re-read the row so a stale
+ * scan cannot replay a delivery that another dispatcher already completed.
  */
 export async function recoverAcceptedTriggerDelivery(
   scanned: StoredTriggerDelivery,
@@ -226,10 +306,14 @@ export async function recoverAcceptedTriggerDelivery(
     scanned.delivery.provider,
     scanned.delivery.deliveryId,
   );
-  if (!current || current.status !== "accepted" || current.result !== null) {
+  if (
+    !current ||
+    (current.status !== "received" && current.status !== "accepted") ||
+    current.result !== null
+  ) {
     return null;
   }
-  return resumeAcceptedTrigger(current, deps);
+  return resumeStoredTriggerDelivery(current, deps);
 }
 
 function selectEligibleEvent(
@@ -310,7 +394,7 @@ async function dispatchAcceptedTrigger(
 
   if (dispatched.started) {
     const result = { result: "started" as const, runId: dispatched.runId! };
-    await completeAccepted(deps.db, accepted, {
+    await completeDelivery(deps.db, accepted, {
       result: "candidate_started",
       runId: dispatched.runId!,
     });
@@ -330,7 +414,7 @@ async function coalesceOrRecoverStarted(
   accepted: AcceptedTriggerDelivery,
   db: Db,
 ): Promise<DispatchTriggerResult> {
-  await completeAccepted(db, accepted, { result: "coalesced" });
+  await completeDelivery(db, accepted, { result: "coalesced" });
 
   // The winning workflow may have bound and self-recorded `started` after this
   // recovery read began. Preserve that stronger result and remove only this
@@ -381,7 +465,7 @@ export async function drainOldestPendingTrigger(
     const currentPending = bindCurrentPullRequest(pending, currentResult.current);
     if (!currentPending) {
       await deletePendingTrigger(deps.db, pending);
-      await completeAccepted(deps.db, pending, { result: "ignored_stale_head" });
+      await completeDelivery(deps.db, pending, { result: "ignored_stale_head" });
       continue;
     }
     const result = await dispatchAcceptedTrigger(currentPending, deps, {
@@ -542,9 +626,9 @@ function bindCurrentPullRequest<T extends TriggerEvent>(
   return { ...event, pr: { ...pr, headSha: current.headSha } };
 }
 
-async function completeAccepted(
+async function completeDelivery(
   db: Db,
-  accepted: AcceptedTriggerDelivery,
+  accepted: Pick<TriggerEvent, "delivery">,
   result: StoredTriggerResult,
 ) {
   await completeTriggerDelivery(

@@ -110,6 +110,44 @@ describe("workflow-owned branch records", () => {
     ]);
   });
 
+  it("explicitly replaces stale PR metadata when recording a new publication intent", async () => {
+    const db = await createTestDb();
+
+    await upsertWorkflowOwnedBranch(db, {
+      ticketKey: "AIW-45",
+      provider: "github",
+      repoPath: "acme/web",
+      branchName: "blazebot/aiw-45",
+      publishedHeadSha: "old-head",
+      pr: {
+        id: 42,
+        url: "https://github.com/acme/web/pull/42",
+        branch: "blazebot/aiw-45",
+      },
+    });
+    await upsertWorkflowOwnedBranch(
+      db,
+      {
+        ticketKey: "AIW-45",
+        provider: "github",
+        repoPath: "acme/web",
+        branchName: "blazebot/aiw-45",
+        publishedHeadSha: "new-head",
+      },
+      { replacePullRequest: true },
+    );
+
+    await expect(listWorkflowOwnedBranchesForTicket(db, "AIW-45")).resolves.toEqual([
+      {
+        ticketKey: "AIW-45",
+        provider: "github",
+        repoPath: "acme/web",
+        branchName: "blazebot/aiw-45",
+        publishedHeadSha: "new-head",
+      },
+    ]);
+  });
+
   it("proves ownership only from an exact provider/repository/PR/branch correlation", async () => {
     const db = await createTestDb();
     await upsertWorkflowOwnedBranch(db, {

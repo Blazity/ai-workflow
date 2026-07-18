@@ -1,4 +1,4 @@
-import { and, asc, eq, isNull, lte, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, lte, sql } from "drizzle-orm";
 import type { Db } from "../db/client.js";
 import {
   activeRuns,
@@ -9,6 +9,12 @@ import type { PrTriggerPayload } from "../workflows/agent-input.js";
 import type { PrTriggerType, TriggerEvent } from "./trigger-events.js";
 
 export type TriggerScope = "workflow_owned" | "any";
+
+export interface ReceivedTriggerDelivery extends TriggerEvent {
+  scope: TriggerScope;
+  definitionId: number;
+  definitionVersion: number;
+}
 
 export interface AcceptedTriggerDelivery extends TriggerEvent {
   scope: TriggerScope;
@@ -30,11 +36,85 @@ export type StoredTriggerResult =
         | "ignored_not_workflow_owned";
     };
 
-export interface StoredTriggerDelivery extends AcceptedTriggerDelivery {
-  status: string;
+export interface StoredTriggerDelivery extends TriggerEvent {
+  scope: TriggerScope;
+  subjectKey: string | null;
+  ticketKey: string | null;
+  definitionId: number;
+  definitionVersion: number;
+  status: "received" | "accepted" | "completed";
   result: StoredTriggerResult | null;
   createdAt: Date;
   updatedAt: Date;
+}
+
+export async function receiveTriggerDelivery(
+  db: Db,
+  received: ReceivedTriggerDelivery,
+): Promise<
+  | { inserted: true; stored: StoredTriggerDelivery }
+  | { inserted: false; stored: StoredTriggerDelivery }
+> {
+  const rows = await db
+    .insert(triggerDeliveries)
+    .values({
+      provider: received.delivery.provider,
+      deliveryId: received.delivery.deliveryId,
+      producer: received.delivery.producer,
+      triggerType: received.triggerType,
+      subjectKey: null,
+      ticketKey: null,
+      headSha: received.pr.headSha,
+      definitionId: received.definitionId,
+      definitionVersion: received.definitionVersion,
+      payload: received,
+      status: "received",
+    })
+    .onConflictDoNothing({
+      target: [triggerDeliveries.provider, triggerDeliveries.deliveryId],
+    })
+    .returning();
+  if (rows[0]) return { inserted: true, stored: mapDelivery(rows[0]) };
+  const stored = await getTriggerDelivery(
+    db,
+    received.delivery.provider,
+    received.delivery.deliveryId,
+  );
+  if (!stored) throw new Error("trigger delivery disappeared after unique conflict");
+  return { inserted: false, stored };
+}
+
+export async function acceptReceivedTriggerDelivery(
+  db: Db,
+  accepted: AcceptedTriggerDelivery,
+): Promise<{ enriched: boolean; stored: StoredTriggerDelivery }> {
+  const rows = await db
+    .update(triggerDeliveries)
+    .set({
+      subjectKey: accepted.subjectKey,
+      ticketKey: accepted.ticketKey,
+      headSha: accepted.pr.headSha,
+      payload: accepted,
+      status: "accepted",
+      updatedAt: sql`now()`,
+    })
+    .where(
+      and(
+        eq(triggerDeliveries.provider, accepted.delivery.provider),
+        eq(triggerDeliveries.deliveryId, accepted.delivery.deliveryId),
+        eq(triggerDeliveries.status, "received"),
+        isNull(triggerDeliveries.result),
+      ),
+    )
+    .returning();
+  if (rows[0]) return { enriched: true, stored: mapDelivery(rows[0]) };
+  const stored = await getTriggerDelivery(
+    db,
+    accepted.delivery.provider,
+    accepted.delivery.deliveryId,
+  );
+  if (!stored) throw new Error("received trigger delivery disappeared before enrichment");
+  return { enriched: false, stored };
 }
 
 export async function acceptTriggerDelivery(
@@ -101,6 +181,31 @@ export async function completeTriggerDelivery(
     );
 }
 
+export async function completeReceivedTriggerDelivery(
+  db: Db,
+  provider: "github" | "gitlab",
+  deliveryId: string,
+  result: StoredTriggerResult,
+): Promise<boolean> {
+  const rows = await db
+    .update(triggerDeliveries)
+    .set({
+      status: "completed",
+      result,
+      updatedAt: sql`now()`,
+    })
+    .where(
+      and(
+        eq(triggerDeliveries.provider, provider),
+        eq(triggerDeliveries.deliveryId, deliveryId),
+        eq(triggerDeliveries.status, "received"),
+        isNull(triggerDeliveries.result),
+      ),
+    )
+    .returning({ deliveryId: triggerDeliveries.deliveryId });
+  return rows.length === 1;
+}
+
 export async function getTriggerDelivery(
   db: Db,
   provider: "github" | "gitlab",
@@ -120,9 +225,10 @@ export async function getTriggerDelivery(
 }
 
 /**
- * Find deliveries whose durable acceptance was never followed by a dispatch
- * result. The grace cutoff keeps the poller away from an in-flight webhook;
- * dispatch still acquires the normal subject reservation as the final CAS.
+ * Find deliveries whose durable receipt or acceptance was never followed by a
+ * terminal result. The grace cutoff keeps the poller away from an in-flight
+ * webhook; dispatch still acquires the normal subject reservation as the final
+ * CAS once enrichment has resolved a subject.
  */
 export async function listRecoverableAcceptedTriggerDeliveries(
   db: Db,
@@ -133,7 +239,7 @@ export async function listRecoverableAcceptedTriggerDeliveries(
     .from(triggerDeliveries)
     .where(
       and(
-        eq(triggerDeliveries.status, "accepted"),
+        inArray(triggerDeliveries.status, ["received", "accepted"]),
         isNull(triggerDeliveries.result),
         lte(triggerDeliveries.updatedAt, updatedBefore),
       ),
@@ -366,12 +472,14 @@ function rawRows<T>(result: unknown): T[] {
 }
 
 function mapDelivery(row: typeof triggerDeliveries.$inferSelect): StoredTriggerDelivery {
-  const payload = row.payload as AcceptedTriggerDelivery;
+  const payload = row.payload as ReceivedTriggerDelivery | AcceptedTriggerDelivery;
   return {
     ...payload,
+    subjectKey: row.subjectKey,
+    ticketKey: row.ticketKey,
     definitionId: row.definitionId,
     definitionVersion: row.definitionVersion,
-    status: row.status,
+    status: row.status as StoredTriggerDelivery["status"],
     result: row.result as StoredTriggerResult | null,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,

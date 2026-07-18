@@ -249,13 +249,17 @@ describe("dispatchTriggerEvent durable envelope", () => {
     expect(await getTriggerDelivery(db, "github", "delivery-1")).toBeNull();
   });
 
-  it("re-reads and rejects a stale head before durable acceptance", async () => {
+  it("durably records a stale-head decision after receiving the authenticated delivery", async () => {
     mockGetEnabled.mockResolvedValue(enabled({ scope: "any" }));
     const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
     expect(
       await dispatchTriggerEvent(event(), deps({ getCurrentHead: vi.fn().mockResolvedValue("new") })),
     ).toEqual({ result: "ignored_stale_head" });
-    expect(await getTriggerDelivery(db, "github", "delivery-1")).toBeNull();
+    expect(await getTriggerDelivery(db, "github", "delivery-1")).toMatchObject({
+      status: "completed",
+      subjectKey: null,
+      result: { result: "ignored_stale_head" },
+    });
     expect(mockStart).not.toHaveBeenCalled();
   });
 
@@ -275,7 +279,7 @@ describe("dispatchTriggerEvent durable envelope", () => {
     expect(mockGetBranchSha).not.toHaveBeenCalled();
   });
 
-  it("returns a retryable error when the provider head cannot be read", async () => {
+  it("durably receives a delivery before a retryable provider-head lookup", async () => {
     mockGetEnabled.mockResolvedValue(enabled({ scope: "any" }));
     const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
 
@@ -285,7 +289,13 @@ describe("dispatchTriggerEvent durable envelope", () => {
         deps({ getCurrentHead: vi.fn().mockRejectedValue(new Error("provider unavailable")) }),
       ),
     ).toEqual({ result: "error" });
-    expect(await getTriggerDelivery(db, "github", "delivery-1")).toBeNull();
+    expect(await getTriggerDelivery(db, "github", "delivery-1")).toMatchObject({
+      status: "received",
+      subjectKey: null,
+      result: null,
+      definitionId: 5,
+      definitionVersion: 12,
+    });
     expect(mockStart).not.toHaveBeenCalled();
   });
 
@@ -341,6 +351,13 @@ describe("dispatchTriggerEvent durable envelope", () => {
     await expect(
       dispatchTriggerEvent(gitlabEvent, deps({ getCurrentPullRequest })),
     ).resolves.toEqual({ result: "ignored_stale_head" });
+    await expect(
+      getTriggerDelivery(db, "gitlab", "gitlab-delivery-1"),
+    ).resolves.toMatchObject({
+      status: "completed",
+      subjectKey: null,
+      result: { result: "ignored_stale_head" },
+    });
     expect(mockStart).not.toHaveBeenCalled();
   });
 
@@ -675,7 +692,7 @@ describe("dispatchTriggerEvent durable envelope", () => {
     expect(mockStart).not.toHaveBeenCalled();
   });
 
-  it("returns a retryable error when the correlated ticket lookup is temporarily unavailable", async () => {
+  it("durably receives a delivery before a retryable correlated-ticket lookup", async () => {
     await correlate();
     mockGetEnabled.mockResolvedValue(enabled());
     const issueTracker = {
@@ -686,8 +703,49 @@ describe("dispatchTriggerEvent durable envelope", () => {
     expect(await dispatchTriggerEvent(event(), deps({ issueTracker }))).toEqual({
       result: "error",
     });
-    expect(await getTriggerDelivery(db, "github", "delivery-1")).toBeNull();
+    expect(await getTriggerDelivery(db, "github", "delivery-1")).toMatchObject({
+      status: "received",
+      subjectKey: null,
+      result: null,
+      definitionId: 5,
+      definitionVersion: 12,
+    });
     expect(mockStart).not.toHaveBeenCalled();
+  });
+
+  it("poll-enriches and dispatches a received delivery after Jira recovers", async () => {
+    await correlate();
+    mockGetEnabled.mockResolvedValue(enabled());
+    const fetchTicket = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("Jira unavailable"))
+      .mockResolvedValue({ identifier: "AIW-1" });
+    const issueTracker = { fetchTicket };
+    const { dispatchTriggerEvent, recoverAcceptedTriggerDelivery } = await import(
+      "./dispatch-trigger.js"
+    );
+
+    await expect(dispatchTriggerEvent(event(), deps({ issueTracker }))).resolves.toEqual({
+      result: "error",
+    });
+
+    const metrics = await recoverAcceptedTriggerDeliveries({
+      listDeliveries: () =>
+        listRecoverableAcceptedTriggerDeliveries(
+          db,
+          new Date(Date.now() + 60_000),
+        ),
+      getActive: (subjectKey) => registry.get(subjectKey),
+      resume: (stored) => recoverAcceptedTriggerDelivery(stored, deps({ issueTracker })),
+    });
+
+    expect(metrics).toMatchObject({ scanned: 1, attempted: 1, started: 1, errors: 0 });
+    expect(mockStart).toHaveBeenCalledOnce();
+    await expect(getTriggerDelivery(db, "github", "delivery-1")).resolves.toMatchObject({
+      status: "completed",
+      subjectKey: "ticket:jira:AIW-1",
+      result: { result: "candidate_started", runId: "run-pr" },
+    });
   });
 
   it("holds a PR-created delivery until its exact provider PR correlation is durable", async () => {

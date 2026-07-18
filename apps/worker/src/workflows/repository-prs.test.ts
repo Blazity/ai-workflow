@@ -289,6 +289,7 @@ describe("durable publication PR phases", () => {
         branchName: "blazebot/aiw-100",
         publishedHeadSha: "published-sha",
       },
+      { replacePullRequest: true },
     );
   });
 

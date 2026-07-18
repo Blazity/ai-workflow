@@ -754,7 +754,8 @@ describe("finalizeWorkspacePublication", () => {
 
 describe("openPullRequestsForPublication", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
+    mocks.getDb.mockReturnValue({ db: true });
     mocks.recordPublicationPullRequest.mockReset().mockResolvedValue(undefined);
     mocks.recordWorkflowOwnedPullRequest.mockReset().mockResolvedValue(undefined);
     mocks.createRepositoryVcsRuntime.mockImplementation(
@@ -1004,7 +1005,7 @@ describe("openPullRequestsForPublication", () => {
     );
   });
 
-  it("terminally records PR creation when the provider result cannot be recorded after retries", async () => {
+  it("keeps PR creation recoverable when the provider result cannot be recorded after retries", async () => {
     mocks.getPublicationAttempt.mockResolvedValue(
       attempt({ status: "creating_prs", repositories: [repository("github", "acme/web")] }),
     );
@@ -1029,12 +1030,52 @@ describe("openPullRequestsForPublication", () => {
     expect(publication.prs).toEqual([
       expect.objectContaining({ repoPath: "acme/web", id: 12 }),
     ]);
-    expect(mocks.failPublicationAttempt).toHaveBeenCalledWith(
+    expect(mocks.recordPublicationRepositoryFailure).toHaveBeenCalledWith(
       { db: true },
-      "attempt-1",
-      "database unavailable",
+      expect.objectContaining({
+        attemptId: "attempt-1",
+        repoPath: "acme/web",
+        failure: "database unavailable",
+      }),
     );
+    expect(mocks.failPublicationAttempt).not.toHaveBeenCalled();
     expect(mocks.recordWorkflowOwnedPullRequest).not.toHaveBeenCalled();
+  });
+
+  it("keeps a ledger-recorded PR recoverable when ownership correlation exhausts retries", async () => {
+    mocks.getPublicationAttempt.mockResolvedValue(
+      attempt({ status: "creating_prs", repositories: [repository("github", "acme/web")] }),
+    );
+    mocks.createOrFindWorkflowOwnedPullRequest.mockResolvedValue({
+      provider: "github",
+      repoPath: "acme/web",
+      id: 12,
+      url: "https://github.com/acme/web/pull/12",
+      branch: "blazebot/aiw-100",
+      isNew: true,
+    });
+    mocks.recordWorkflowOwnedPullRequest.mockRejectedValue(
+      new Error("ownership database unavailable"),
+    );
+
+    const publication = await openPullRequestsForPublication({
+      attemptId: "attempt-1",
+      runId: "run-1",
+      ticketKey: "AIW-100",
+      title: "Safe publication",
+    });
+
+    expect(publication.status).toBe("failed");
+    expect(mocks.recordPublicationPullRequest).toHaveBeenCalledOnce();
+    expect(mocks.recordPublicationRepositoryFailure).toHaveBeenCalledWith(
+      { db: true },
+      expect.objectContaining({
+        attemptId: "attempt-1",
+        repoPath: "acme/web",
+        failure: "ownership database unavailable",
+      }),
+    );
+    expect(mocks.failPublicationAttempt).not.toHaveBeenCalled();
   });
 
   it("repairs workflow-owned branch correlation for an already-recorded PR", async () => {
@@ -1094,6 +1135,36 @@ describe("openPullRequestsForPublication", () => {
     );
   });
 
+  it("never reports published when the reloaded ledger concurrently became failed", async () => {
+    const creating = attempt({
+      status: "creating_prs",
+      repositories: [
+        repository("github", "acme/web", {
+          pr: { id: 12, url: "https://github.com/acme/web/pull/12", isNew: true },
+        }),
+      ],
+    });
+    mocks.getPublicationAttempt
+      .mockResolvedValueOnce(creating)
+      .mockResolvedValueOnce({
+        ...creating,
+        status: "failed",
+        failure: "concurrent publication failed",
+      });
+
+    const publication = await openPullRequestsForPublication({
+      attemptId: "attempt-1",
+      runId: "run-1",
+      ticketKey: "AIW-100",
+      title: "Safe publication",
+    });
+
+    expect(publication).toMatchObject({
+      status: "failed",
+      reason: "concurrent publication failed",
+    });
+  });
+
   it("refuses to correlate a replayed PR whose authoritative head moved", async () => {
     const creating = attempt({
       status: "creating_prs",
@@ -1126,5 +1197,37 @@ describe("openPullRequestsForPublication", () => {
     expect(mocks.recordPublicationPullRequest).not.toHaveBeenCalled();
     expect(mocks.recordWorkflowOwnedPullRequest).not.toHaveBeenCalled();
     expect(mocks.markPublicationAttemptPublished).not.toHaveBeenCalled();
+  });
+
+  it("terminally rejects a replayed PR when its finalized branch moved", async () => {
+    const creating = attempt({
+      status: "creating_prs",
+      repositories: [
+        repository("github", "acme/web", {
+          pr: { id: 12, url: "https://github.com/acme/web/pull/12", isNew: true },
+        }),
+      ],
+    });
+    mocks.getPublicationAttempt.mockResolvedValue(creating);
+    mocks.createRepositoryVcsRuntime.mockReturnValue({
+      vcs: {
+        getBranchSha: vi.fn().mockResolvedValue("newer-branch-head"),
+        getPRHeadSha: vi.fn().mockResolvedValue("acme/web-after"),
+      },
+    });
+
+    const publication = await openPullRequestsForPublication({
+      attemptId: "attempt-1",
+      runId: "run-1",
+      ticketKey: "AIW-100",
+      title: "Safe publication",
+    });
+
+    expect(publication.status).toBe("failed");
+    expect(mocks.failPublicationAttempt).toHaveBeenCalledWith(
+      { db: true },
+      "attempt-1",
+      expect.stringContaining("finalized branch moved"),
+    );
   });
 });
