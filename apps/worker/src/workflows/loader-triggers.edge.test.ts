@@ -299,6 +299,8 @@ function checkRunBody(name: string, conclusion = "failure") {
     action: "completed",
     repository: repo(),
     check_run: {
+      id: 101,
+      app: { slug: "github-actions" },
       name,
       conclusion,
       pull_requests: [
