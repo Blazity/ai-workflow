@@ -383,7 +383,7 @@ describe("semantic pending coalescing", () => {
       scope: "any",
       subjectKey: github.subjectKey,
       ticketKey: github.ticketKey,
-      definitionVersion: 12,
+      definitionVersion: github.definitionVersion,
       pr: {
         ...github.pr,
         provider: "gitlab",
