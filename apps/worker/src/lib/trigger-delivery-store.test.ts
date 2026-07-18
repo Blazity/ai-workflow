@@ -15,6 +15,7 @@ import {
   deletePendingTrigger,
   getPendingTrigger,
   getTriggerDelivery,
+  listRecoverableAcceptedTriggerDeliveries,
   listPendingTriggersForSubject,
   listPendingSubjectKeys,
 } from "./trigger-delivery-store.js";
@@ -140,6 +141,74 @@ describe("durable trigger deliveries", () => {
     expect(await getTriggerDelivery(db, "github", "d-1")).toMatchObject({
       result: { result: "started", runId: "run-1" },
     });
+  });
+
+  it("preserves a live candidate from loser writes but advances a recovered candidate", async () => {
+    await acceptTriggerDelivery(db, delivery());
+    await completeTriggerDelivery(db, "github", "d-1", {
+      result: "candidate_started",
+      runId: "run-crashed",
+    });
+    await completeTriggerDelivery(db, "github", "d-1", { result: "coalesced" });
+    expect(await getTriggerDelivery(db, "github", "d-1")).toMatchObject({
+      result: { result: "candidate_started", runId: "run-crashed" },
+    });
+
+    await completeTriggerDelivery(db, "github", "d-1", {
+      result: "candidate_started",
+      runId: "run-recovered",
+    });
+    expect(await getTriggerDelivery(db, "github", "d-1")).toMatchObject({
+      result: { result: "candidate_started", runId: "run-recovered" },
+    });
+  });
+
+  it("lets freshness validation retire a dead candidate as stale", async () => {
+    await acceptTriggerDelivery(db, delivery());
+    await completeTriggerDelivery(db, "github", "d-1", {
+      result: "candidate_started",
+      runId: "run-crashed",
+    });
+
+    await completeTriggerDelivery(db, "github", "d-1", {
+      result: "ignored_stale_head",
+    });
+
+    expect(await getTriggerDelivery(db, "github", "d-1")).toMatchObject({
+      result: { result: "ignored_stale_head" },
+    });
+  });
+
+  it("lists only unfinished accepted deliveries at or before the recovery cutoff", async () => {
+    const unfinished = delivery();
+    const completed = delivery({
+      delivery: { ...delivery().delivery, deliveryId: "d-completed" },
+    });
+    await acceptTriggerDelivery(db, unfinished);
+    await acceptTriggerDelivery(db, completed);
+    await completeTriggerDelivery(db, "github", "d-completed", {
+      result: "candidate_started",
+      runId: "run-live",
+    });
+
+    await expect(
+      listRecoverableAcceptedTriggerDeliveries(db, new Date(0)),
+    ).resolves.toEqual([]);
+
+    await expect(
+      listRecoverableAcceptedTriggerDeliveries(
+        db,
+        new Date(Date.now() + 60_000),
+      ),
+    ).resolves.toEqual([
+      expect.objectContaining({
+        delivery: expect.objectContaining({ deliveryId: "d-1" }),
+        definitionId: 7,
+        definitionVersion: 11,
+        status: "accepted",
+        result: null,
+      }),
+    ]);
   });
 
   it("atomically records the winning run through the production execute-only surface", async () => {

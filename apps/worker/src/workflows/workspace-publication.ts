@@ -71,13 +71,21 @@ export async function finalizeWorkspacePublication(input: {
   let resumingPush = false;
   if (!creation.created) {
     if (creation.attempt.status === "pushing") {
-      const reconciled = await reconcilePushingPublicationStep(creation.attempt);
+      let reconciled: Awaited<ReturnType<typeof reconcilePushingPublicationStep>>;
+      try {
+        reconciled = await reconcilePushingPublicationStep(creation.attempt);
+      } catch (error) {
+        return terminalPublicationFailure(
+          creation.attempt.id,
+          exhaustedPublicationReason(error),
+          creation.attempt.repositories,
+        );
+      }
       if (reconciled.unresolvedReason) {
-        return failedResult(
+        return terminalPublicationFailure(
           reconciled.attempt.id,
-          reconciled.unresolvedReason,
+          exhaustedPublicationReason(reconciled.unresolvedReason),
           reconciled.attempt.repositories,
-          [],
         );
       }
       if (!reconciled.resumePush) return replayedFinalizeResult(reconciled.attempt);
@@ -122,23 +130,46 @@ export async function finalizeWorkspacePublication(input: {
       publicationAttemptId: attemptId,
       workspaceManifest: input.workspaceManifest,
     });
+    await recordPushOutcomeStep(attemptId, pushResult);
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
-    const latest = await loadPublicationAttemptStep(attemptId).catch(() => null);
+    let latest: PublicationAttemptRecord | null;
+    try {
+      latest = await loadPublicationAttemptStep(attemptId);
+    } catch (loadError) {
+      return terminalPublicationFailure(
+        attemptId,
+        exhaustedPublicationReason(loadError, reason),
+        creation.attempt.repositories,
+      );
+    }
     if (latest?.status === "pushing") {
-      const reconciled = await reconcilePushingPublicationStep(latest);
-      if (!reconciled.unresolvedReason && !reconciled.resumePush) {
-        return replayedFinalizeResult(reconciled.attempt);
+      try {
+        const reconciled = await reconcilePushingPublicationStep(latest);
+        if (!reconciled.unresolvedReason && !reconciled.resumePush) {
+          return replayedFinalizeResult(reconciled.attempt);
+        }
+        return terminalPublicationFailure(
+          attemptId,
+          exhaustedPublicationReason(reconciled.unresolvedReason ?? reason),
+          reconciled.attempt.repositories,
+        );
+      } catch (reconcileError) {
+        return terminalPublicationFailure(
+          attemptId,
+          exhaustedPublicationReason(reconcileError, reason),
+          latest.repositories,
+        );
       }
     }
-    // The push step can fail after the provider accepted a push but before its
-    // result reached the publication ledger. Keep the attempt in `pushing` so
-    // a replay reconciles each durable target head against the provider rather
-    // than terminally recording an outcome we do not know.
-    return failedResult(attemptId, reason, creation.attempt.repositories, []);
+    if (latest) return replayedFinalizeResult(latest);
+    return terminalPublicationFailure(
+      attemptId,
+      exhaustedPublicationReason(reason),
+      creation.attempt.repositories,
+    );
   }
 
-  await recordPushOutcomeStep(attemptId, pushResult);
   if (!pushResult.pushed) {
     const reason = pushResult.error ?? "workspace push failed";
     return {
@@ -153,6 +184,23 @@ export async function finalizeWorkspacePublication(input: {
     repositories: finalizedBranchesFromPush(pushResult),
     prs: [],
   };
+}
+
+async function terminalPublicationFailure(
+  attemptId: string,
+  reason: string,
+  repositories: PublicationRepositoryRecord[],
+): Promise<WorkspacePublicationResult> {
+  const concurrent = await failPublicationStep({ attemptId, reason });
+  return concurrent
+    ? replayedFinalizeResult(concurrent)
+    : failedResult(attemptId, reason, repositories, []);
+}
+
+function exhaustedPublicationReason(error: unknown, priorReason?: string): string {
+  const message = error instanceof Error ? error.message : String(error);
+  const detail = priorReason && priorReason !== message ? `${priorReason}; ${message}` : message;
+  return `publication retries exhausted: ${detail}`;
 }
 
 /**
@@ -325,7 +373,7 @@ async function recordPushOutcomeStep(
     await failPublicationAttempt(db, attemptId, pushResult.error ?? "workspace push failed");
   }
 }
-recordPushOutcomeStep.maxRetries = 0;
+recordPushOutcomeStep.maxRetries = 3;
 
 async function reconcilePushingPublicationStep(
   attempt: PublicationAttemptRecord,
@@ -367,13 +415,10 @@ async function reconcilePushingPublicationStep(
         baseBranch: repository.defaultBranch,
       }).vcs.getBranchSha(repository.branchName);
     } catch (error) {
-      const reason =
+      throw new Error(
         `unable to reconcile ${repository.provider}:${repository.repoPath}: ` +
-        (error instanceof Error ? error.message : String(error));
-      return {
-        attempt: { ...attempt, repositories },
-        unresolvedReason: reason,
-      };
+          (error instanceof Error ? error.message : String(error)),
+      );
     }
 
     if (currentHead === repository.targetHead) {
@@ -432,7 +477,7 @@ async function reconcilePushingPublicationStep(
     },
   };
 }
-reconcilePushingPublicationStep.maxRetries = 0;
+reconcilePushingPublicationStep.maxRetries = 3;
 
 async function loadPublicationAttemptStep(
   attemptId: string,
@@ -442,7 +487,7 @@ async function loadPublicationAttemptStep(
   const { getPublicationAttempt } = await import("../publication/store.js");
   return getPublicationAttempt(getDb(), attemptId);
 }
-loadPublicationAttemptStep.maxRetries = 0;
+loadPublicationAttemptStep.maxRetries = 3;
 
 async function verifyFinalizedBranchHeadStep(
   repository: PublicationRepositoryRecord,
@@ -501,12 +546,14 @@ async function failPublicationStep(input: {
   attemptId: string;
   reason: string;
   repository?: { provider: SelectedRepository["provider"]; repoPath: string };
-}): Promise<void> {
+}): Promise<PublicationAttemptRecord | null> {
   "use step";
   const { getDb } = await import("../db/client.js");
-  const { failPublicationAttempt, recordPublicationRepositoryFailure } = await import(
-    "../publication/store.js"
-  );
+  const {
+    failPublicationAttempt,
+    getPublicationAttempt,
+    recordPublicationRepositoryFailure,
+  } = await import("../publication/store.js");
   const db = getDb();
   if (input.repository) {
     await recordPublicationRepositoryFailure(db, {
@@ -515,9 +562,10 @@ async function failPublicationStep(input: {
       failure: input.reason,
     });
   }
-  await failPublicationAttempt(db, input.attemptId, input.reason);
+  const failed = await failPublicationAttempt(db, input.attemptId, input.reason);
+  return failed === false ? getPublicationAttempt(db, input.attemptId) : null;
 }
-failPublicationStep.maxRetries = 0;
+failPublicationStep.maxRetries = 3;
 
 async function recordRecoverablePublicationFailureStep(input: {
   attemptId: string;

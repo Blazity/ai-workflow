@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   recoverClarifications: vi.fn(),
   listProtectedClarifications: vi.fn(),
   startCleanups: vi.fn(),
+  recoverAccepted: vi.fn(),
   recoverPending: vi.fn(),
 }));
 
@@ -54,12 +55,15 @@ vi.mock("../../clarifications/reconciliation.js", () => ({
 }));
 vi.mock("../../lib/trigger-delivery-store.js", () => ({
   listPendingSubjectKeys: vi.fn().mockResolvedValue([]),
+  listRecoverableAcceptedTriggerDeliveries: vi.fn().mockResolvedValue([]),
 }));
 vi.mock("../../lib/pending-trigger-recovery.js", () => ({
+  recoverAcceptedTriggerDeliveries: (...args: any[]) => mocks.recoverAccepted(...args),
   recoverOrphanedPendingTriggers: (...args: any[]) => mocks.recoverPending(...args),
 }));
 vi.mock("../../lib/dispatch-trigger.js", () => ({
   drainOldestPendingTrigger: vi.fn().mockResolvedValue(null),
+  recoverAcceptedTriggerDelivery: vi.fn().mockResolvedValue(null),
 }));
 vi.mock("../../post-pr-gate/gate-store.js", () => ({
   GateStore: class {
@@ -103,7 +107,17 @@ describe("cron clarification recovery ordering", () => {
     });
     mocks.reconcileRuns.mockResolvedValue({ cancelled: 0, cleaned: 0 });
     mocks.startCleanups.mockResolvedValue(0);
-    mocks.recoverPending.mockResolvedValue(0);
+    mocks.recoverAccepted.mockImplementation(async () => {
+      state.order.push("recover-accepted-triggers");
+      return { scanned: 1, blocked: 0, attempted: 1, started: 1, errors: 0 };
+    });
+    mocks.recoverPending.mockResolvedValue({
+      scanned: 0,
+      blocked: 0,
+      attempted: 0,
+      started: 0,
+      errors: 0,
+    });
   });
 
   it("recovers and protects answered checkpoints before discovering generic ticket work", async () => {
@@ -118,5 +132,12 @@ describe("cron clarification recovery ordering", () => {
     ]);
     expect(state.order).toContain("dispatch:AIW-2");
     expect(state.order).not.toContain("dispatch:AIW-1");
+    expect(state.order).toContain("recover-accepted-triggers");
+    await expect(response.json()).resolves.toMatchObject({
+      pendingRecovered: 1,
+      triggerRecovery: {
+        accepted: { attempted: 1, started: 1, errors: 0 },
+      },
+    });
   });
 });

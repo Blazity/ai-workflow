@@ -25,6 +25,7 @@ import {
   getTriggerDelivery,
   listPendingTriggersForSubject,
   type AcceptedTriggerDelivery,
+  type StoredTriggerDelivery,
   type StoredTriggerResult,
   type TriggerScope,
 } from "./trigger-delivery-store.js";
@@ -187,6 +188,26 @@ async function resumeAcceptedTrigger(
   return dispatchAcceptedTrigger(currentAccepted, deps);
 }
 
+/**
+ * Poll-side recovery for a process death after durable acceptance but before
+ * the pending snapshot/result write. Re-read the row so a stale scan cannot
+ * replay a delivery that another dispatcher has already completed.
+ */
+export async function recoverAcceptedTriggerDelivery(
+  scanned: StoredTriggerDelivery,
+  deps: DispatchTriggerDeps,
+): Promise<DispatchTriggerResult | null> {
+  const current = await getTriggerDelivery(
+    deps.db,
+    scanned.delivery.provider,
+    scanned.delivery.deliveryId,
+  );
+  if (!current || current.status !== "accepted" || current.result !== null) {
+    return null;
+  }
+  return resumeAcceptedTrigger(current, deps);
+}
+
 function selectEligibleEvent(
   event: TriggerEvent,
   params: Record<string, unknown>,
@@ -227,6 +248,13 @@ async function dispatchAcceptedTrigger(
     deliveryId: string;
   },
 ): Promise<DispatchTriggerResult> {
+  // Persist the exact accepted envelope before a Workflow candidate can be
+  // started. The candidate removes this row only after it wins owner CAS and
+  // binds its runtime id. If start returns but that candidate never reaches
+  // bind, stale-owner reconciliation can therefore recover the same pinned
+  // definition and provider snapshot without waiting for a redelivery.
+  await coalescePendingTrigger(deps.db, accepted);
+
   const inputBase = {
     kind: "pr_trigger" as const,
     triggerType: accepted.triggerType,
@@ -258,6 +286,10 @@ async function dispatchAcceptedTrigger(
 
   if (dispatched.started) {
     const result = { result: "started" as const, runId: dispatched.runId! };
+    await completeAccepted(deps.db, accepted, {
+      result: "candidate_started",
+      runId: dispatched.runId!,
+    });
     return result;
   }
 
@@ -274,7 +306,6 @@ async function coalesceOrRecoverStarted(
   accepted: AcceptedTriggerDelivery,
   db: Db,
 ): Promise<DispatchTriggerResult> {
-  await coalescePendingTrigger(db, accepted);
   await completeAccepted(db, accepted, { result: "coalesced" });
 
   // The winning workflow may have bound and self-recorded `started` after this
@@ -289,6 +320,12 @@ async function coalesceOrRecoverStarted(
   if (stored?.result?.result === "started") {
     await deletePendingTrigger(db, accepted);
     return stored.result;
+  }
+  if (stored?.result?.result === "candidate_started") {
+    // This dispatch attempt lost owner CAS to the already-recorded candidate.
+    // Keep the durable pending snapshot for that candidate's bind, but report
+    // no new start so poll recovery metrics do not double-count the same run.
+    return { result: "coalesced" };
   }
   return { result: "coalesced" };
 }
@@ -457,6 +494,9 @@ async function completeAccepted(
 function storedResultToDispatch(result: StoredTriggerResult | null): DispatchTriggerResult {
   if (!result) return { result: "coalesced" };
   if (result.result === "started") return result;
+  if (result.result === "candidate_started") {
+    return { result: "started", runId: result.runId };
+  }
   if (result.result === "ignored_stale_head") return { result: "ignored_stale_head" };
   if (result.result === "at_capacity") return { result: "at_capacity" };
   if (result.result === "error") return { result: "error" };

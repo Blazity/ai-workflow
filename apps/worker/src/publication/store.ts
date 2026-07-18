@@ -259,7 +259,7 @@ export async function failPublicationAttempt(
   db: Db,
   attemptId: string,
   failure: string,
-): Promise<void> {
+): Promise<boolean> {
   const updated = await db
     .update(publicationAttempts)
     .set({ status: "failed", failure, updatedAt: sql`now()` })
@@ -274,7 +274,9 @@ export async function failPublicationAttempt(
       ),
     )
     .returning({ id: publicationAttempts.id });
-  if (updated.length === 0) await assertAttemptExists(db, attemptId);
+  if (updated.length > 0) return true;
+  await assertAttemptExists(db, attemptId);
+  return false;
 }
 
 async function setAttemptStatus(

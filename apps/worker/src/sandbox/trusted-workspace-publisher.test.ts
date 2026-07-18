@@ -136,6 +136,14 @@ describe("trusted workspace publisher", () => {
     installHappyCommands();
   });
 
+  it("configures bounded durable retries for transient publication failures", () => {
+    expect(
+      (publishTrustedWorkspaceFromSandbox as typeof publishTrustedWorkspaceFromSandbox & {
+        maxRetries?: number;
+      }).maxRetries,
+    ).toBe(3);
+  });
+
   it("moves an incremental bundle into a fresh publisher and pushes only the canonical ref", async () => {
     const result = await publishTrustedWorkspaceFromSandbox({
       sourceSandboxId: "source-sandbox",
@@ -310,11 +318,33 @@ describe("trusted workspace publisher", () => {
 
     expect(result.repositories[0]).toEqual(expect.objectContaining({
       pushed: false,
-      failureKind: "push_failed",
+      failureKind: "preflight_failed",
       error: expect.stringContaining("bundle target"),
     }));
     expect(publisherRunCommand.mock.calls.some(([, args]) => args.includes("push"))).toBe(false);
     expect(recordFailure).toHaveBeenCalled();
+    expect(publisherStop).toHaveBeenCalledOnce();
+  });
+
+  it("throws a transient canonical clone failure so the durable step retries", async () => {
+    getBranchSha.mockReset().mockResolvedValue("remote-before");
+    publisherRunCommand.mockImplementation(async (name: string, args: string[]) => {
+      if (name !== "git") return command();
+      if (args.includes("clone")) return command("", "provider unavailable", 1);
+      return command();
+    });
+
+    await expect(
+      publishTrustedWorkspaceFromSandbox({
+        sourceSandboxId: "source-sandbox",
+        publicationAttemptId: "attempt-1",
+        workspaceManifest: trustedManifest,
+      }),
+    ).rejects.toThrow("provider unavailable");
+    expect(recordFailure).toHaveBeenCalledWith(
+      { db: true },
+      expect.objectContaining({ failure: expect.stringContaining("provider unavailable") }),
+    );
     expect(publisherStop).toHaveBeenCalledOnce();
   });
 });

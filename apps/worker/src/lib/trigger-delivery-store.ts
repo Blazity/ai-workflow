@@ -1,4 +1,4 @@
-import { and, asc, eq, sql } from "drizzle-orm";
+import { and, asc, eq, isNull, lte, sql } from "drizzle-orm";
 import type { Db } from "../db/client.js";
 import {
   activeRuns,
@@ -20,6 +20,7 @@ export interface AcceptedTriggerDelivery extends TriggerEvent {
 
 export type StoredTriggerResult =
   | { result: "started"; runId: string }
+  | { result: "candidate_started"; runId: string }
   | { result: "coalesced" | "at_capacity" | "error" | "ignored_stale_head" };
 
 export interface StoredTriggerDelivery extends AcceptedTriggerDelivery {
@@ -76,7 +77,11 @@ export async function completeTriggerDelivery(
     .set({
       status: "completed",
       result: sql`case
-        when ${triggerDeliveries.result}->>'result' = 'started' then ${triggerDeliveries.result}
+        when ${triggerDeliveries.result}->>'result' = 'started'
+          then ${triggerDeliveries.result}
+        when ${triggerDeliveries.result}->>'result' = 'candidate_started'
+          and ${result.result} = 'coalesced'
+          then ${triggerDeliveries.result}
         else ${JSON.stringify(result)}::jsonb
       end`,
       updatedAt: sql`now()`,
@@ -105,6 +110,30 @@ export async function getTriggerDelivery(
     )
     .limit(1);
   return rows[0] ? mapDelivery(rows[0]) : null;
+}
+
+/**
+ * Find deliveries whose durable acceptance was never followed by a dispatch
+ * result. The grace cutoff keeps the poller away from an in-flight webhook;
+ * dispatch still acquires the normal subject reservation as the final CAS.
+ */
+export async function listRecoverableAcceptedTriggerDeliveries(
+  db: Db,
+  updatedBefore: Date,
+): Promise<StoredTriggerDelivery[]> {
+  const rows = await db
+    .select()
+    .from(triggerDeliveries)
+    .where(
+      and(
+        eq(triggerDeliveries.status, "accepted"),
+        isNull(triggerDeliveries.result),
+        lte(triggerDeliveries.updatedAt, updatedBefore),
+      ),
+    )
+    .orderBy(asc(triggerDeliveries.updatedAt))
+    .limit(100);
+  return rows.map(mapDelivery);
 }
 
 export async function coalescePendingTrigger(

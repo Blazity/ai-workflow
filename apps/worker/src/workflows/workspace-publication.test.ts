@@ -120,7 +120,8 @@ function attempt(overrides: Record<string, unknown> = {}) {
 
 describe("finalizeWorkspacePublication", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
+    mocks.getDb.mockReturnValue({ db: true });
     mocks.createOrGetPublicationAttempt.mockResolvedValue({
       created: true,
       attempt: attempt({ status: "preflighting" }),
@@ -340,9 +341,51 @@ describe("finalizeWorkspacePublication", () => {
     expect(mocks.publishTrustedWorkspaceFromSandbox).not.toHaveBeenCalled();
   });
 
-  it("leaves an indeterminate push error available for replay reconciliation", async () => {
+  it("terminally records a publisher error after durable retries and reconciliation are exhausted", async () => {
     mocks.publishTrustedWorkspaceFromSandbox.mockRejectedValue(
       new Error("publication result could not be recorded"),
+    );
+    mocks.getPublicationAttempt.mockResolvedValue(
+      attempt({
+        status: "pushing",
+        repositories: [repository("github", "acme/web", { pushedHead: null })],
+      }),
+    );
+    mocks.createRepositoryVcsRuntime.mockReturnValue({
+      vcs: { getBranchSha: vi.fn().mockResolvedValue("acme/web-before") },
+    });
+
+    const publication = await finalizeWorkspacePublication({
+      runId: "run-1",
+      blockId: "finalize",
+      sandboxId: "sbx-1",
+      ticketKey: "AIW-100",
+      workspaceManifest,
+    });
+
+    expect(publication).toEqual(
+      expect.objectContaining({
+        status: "failed",
+        reason: expect.stringContaining("publication result could not be recorded"),
+      }),
+    );
+    expect(mocks.markPublicationAttemptPushing).toHaveBeenCalledWith(
+      { db: true },
+      "attempt-1",
+    );
+    expect(mocks.failPublicationAttempt).toHaveBeenCalledWith(
+      { db: true },
+      "attempt-1",
+      expect.stringContaining("retries exhausted"),
+    );
+  });
+
+  it("terminally records an exhausted publisher when loading reconciliation state also fails", async () => {
+    mocks.publishTrustedWorkspaceFromSandbox.mockRejectedValue(
+      new Error("publisher unavailable"),
+    );
+    mocks.getPublicationAttempt.mockRejectedValue(
+      new Error("publication ledger unavailable"),
     );
 
     const publication = await finalizeWorkspacePublication({
@@ -356,19 +399,68 @@ describe("finalizeWorkspacePublication", () => {
     expect(publication).toEqual(
       expect.objectContaining({
         status: "failed",
-        reason: "publication result could not be recorded",
+        reason: expect.stringContaining("publication ledger unavailable"),
       }),
     );
-    expect(mocks.markPublicationAttemptPushing).toHaveBeenCalledWith(
+    expect(mocks.failPublicationAttempt).toHaveBeenCalledWith(
+      { db: true },
+      "attempt-1",
+      expect.stringContaining("retries exhausted"),
+    );
+  });
+
+  it("finalizes when reconciliation proves an interrupted push step already landed", async () => {
+    mocks.publishTrustedWorkspaceFromSandbox.mockRejectedValue(
+      new Error("publication result could not be recorded"),
+    );
+    mocks.getPublicationAttempt.mockResolvedValue(
+      attempt({
+        status: "pushing",
+        repositories: [repository("github", "acme/web", { pushedHead: null })],
+      }),
+    );
+    mocks.createRepositoryVcsRuntime.mockReturnValue({
+      vcs: { getBranchSha: vi.fn().mockResolvedValue("acme/web-after") },
+    });
+
+    const publication = await finalizeWorkspacePublication({
+      runId: "run-1",
+      blockId: "finalize",
+      sandboxId: "sbx-1",
+      ticketKey: "AIW-100",
+      workspaceManifest,
+    });
+
+    expect(publication.status).toBe("finalized");
+    expect(mocks.recordPublicationRepositoryPush).toHaveBeenCalledWith(
+      { db: true },
+      expect.objectContaining({ repoPath: "acme/web", pushedHead: "acme/web-after" }),
+    );
+    expect(mocks.markPublicationAttemptFinalized).toHaveBeenCalledWith(
       { db: true },
       "attempt-1",
     );
     expect(mocks.failPublicationAttempt).not.toHaveBeenCalled();
   });
 
-  it("finalizes when reconciliation proves an interrupted push step already landed", async () => {
-    mocks.publishTrustedWorkspaceFromSandbox.mockRejectedValue(
-      new Error("publication result could not be recorded"),
+  it("finalizes when the push landed but recording its outcome exhausted retries", async () => {
+    mocks.publishTrustedWorkspaceFromSandbox.mockResolvedValue({
+      pushed: true,
+      repositories: [
+        {
+          provider: "github",
+          repoPath: "acme/web",
+          branchName: "blazebot/aiw-100",
+          changed: true,
+          pushed: true,
+          expectedHead: "acme/web-before",
+          targetHead: "acme/web-after",
+          pushedHead: "acme/web-after",
+        },
+      ],
+    });
+    mocks.recordPublicationRepositoryPreflight.mockRejectedValue(
+      new Error("publication outcome database unavailable"),
     );
     mocks.getPublicationAttempt.mockResolvedValue(
       attempt({
@@ -554,7 +646,7 @@ describe("finalizeWorkspacePublication", () => {
     );
   });
 
-  it("keeps provider head-read uncertainty retryable instead of failing the attempt", async () => {
+  it("terminally records provider head-read uncertainty after reconciliation retries exhaust", async () => {
     mocks.createOrGetPublicationAttempt.mockResolvedValue({
       created: false,
       attempt: attempt({
@@ -579,8 +671,46 @@ describe("finalizeWorkspacePublication", () => {
       "provider unavailable",
     );
     expect(mocks.publishTrustedWorkspaceFromSandbox).not.toHaveBeenCalled();
-    expect(mocks.failPublicationAttempt).not.toHaveBeenCalled();
+    expect(mocks.failPublicationAttempt).toHaveBeenCalledWith(
+      { db: true },
+      "attempt-1",
+      expect.stringContaining("provider unavailable"),
+    );
     expect(mocks.markPublicationAttemptFinalized).not.toHaveBeenCalled();
+  });
+
+  it("continues Finalize when the durable publisher step returns its recovered success", async () => {
+    mocks.publishTrustedWorkspaceFromSandbox.mockResolvedValue({
+      pushed: true,
+      repositories: [
+        {
+          provider: "github",
+          repoPath: "acme/web",
+          branchName: "blazebot/aiw-100",
+          changed: true,
+          pushed: true,
+          expectedHead: "web-before",
+          targetHead: "web-after",
+          pushedHead: "web-after",
+        },
+      ],
+    });
+
+    const publication = await finalizeWorkspacePublication({
+      runId: "run-1",
+      blockId: "finalize",
+      sandboxId: "sbx-1",
+      ticketKey: "AIW-100",
+      workspaceManifest,
+    });
+
+    expect(publication).toEqual(
+      expect.objectContaining({ status: "finalized", attemptId: "attempt-1" }),
+    );
+    expect(mocks.markPublicationAttemptFinalized).toHaveBeenCalledWith(
+      { db: true },
+      "attempt-1",
+    );
   });
 
   it("preserves human-decision memory writing before the push", async () => {

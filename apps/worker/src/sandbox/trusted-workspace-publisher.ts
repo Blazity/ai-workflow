@@ -233,7 +233,7 @@ export async function publishTrustedWorkspaceFromSandbox(input: {
     });
   }
   if (prepared.some((item) => item.result.failureKind)) {
-    return summarize(prepared.map((item) => item.result));
+    return summarizeStepResult(prepared.map((item) => item.result));
   }
 
   const pending = prepared.filter((item) => item.result.changed && !item.result.pushed);
@@ -245,7 +245,7 @@ export async function publishTrustedWorkspaceFromSandbox(input: {
       pushedHead: item.result.pushedHead!,
     });
   }
-  if (pending.length === 0) return summarize(prepared.map((item) => item.result));
+  if (pending.length === 0) return summarizeStepResult(prepared.map((item) => item.result));
 
   for (const item of pending) {
     const bundlePath = `/tmp/aiw-publication-${randomUUID()}.bundle`;
@@ -293,7 +293,7 @@ export async function publishTrustedWorkspaceFromSandbox(input: {
     item.bundle = bytes;
   }
   if (pending.some((item) => item.result.failureKind)) {
-    return summarize(prepared.map((item) => item.result));
+    return summarizeStepResult(prepared.map((item) => item.result));
   }
 
   const publisher = await Sandbox.create({
@@ -371,6 +371,7 @@ export async function publishTrustedWorkspaceFromSandbox(input: {
         await recordPublisherFailure(
           item,
           `bundle target is ${bundleSha || "unreadable"}, expected ${item.result.targetHead}`,
+          "preflight_failed",
         );
         continue;
       }
@@ -434,7 +435,7 @@ export async function publishTrustedWorkspaceFromSandbox(input: {
     await publisher.stop();
   }
 
-  return summarize(prepared.map((item) => item.result));
+  return summarizeStepResult(prepared.map((item) => item.result));
 
   async function recordPublisherFailure(
     item: PreparedRepository,
@@ -450,7 +451,10 @@ export async function publishTrustedWorkspaceFromSandbox(input: {
     });
   }
 }
-publishTrustedWorkspaceFromSandbox.maxRetries = 0;
+// The step is replay-safe through the publication ledger, exact target-head
+// checks, and force-with-lease. Let Workflow durably retry transient provider
+// or publisher failures while the parent run still owns its source sandbox.
+publishTrustedWorkspaceFromSandbox.maxRetries = 3;
 
 function assertLedgerMatchesTrustedManifest(
   attempt: PublicationAttemptRecord,
@@ -542,6 +546,22 @@ function summarize(
           )
           .join("\n"),
       };
+}
+
+function summarizeStepResult(
+  repositories: TrustedWorkspacePushRepositoryResult[],
+): TrustedWorkspacePushResult {
+  const result = summarize(repositories);
+  // Command/provider failures can be transient. Throwing keeps them inside the
+  // durable step retry boundary; deterministic safety failures are returned so
+  // the orchestration can terminally record them without pointless retries.
+  if (
+    !result.pushed &&
+    result.repositories.some((repository) => repository.failureKind === "push_failed")
+  ) {
+    throw new Error(result.error ?? "transient workspace publication failure");
+  }
+  return result;
 }
 
 function isLeaseRejection(error: string): boolean {

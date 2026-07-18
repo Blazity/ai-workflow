@@ -16,7 +16,13 @@ import {
   deletePendingTrigger,
   getPendingTrigger,
   getTriggerDelivery,
+  listRecoverableAcceptedTriggerDeliveries,
+  listPendingSubjectKeys,
 } from "./trigger-delivery-store.js";
+import {
+  recoverAcceptedTriggerDeliveries,
+  recoverOrphanedPendingTriggers,
+} from "./pending-trigger-recovery.js";
 
 vi.mock("../../env.js", () => ({ env: { JIRA_PROJECT_KEY: "AIW", COLUMN_AI: "AI" } }));
 const mockStart = vi.fn();
@@ -709,7 +715,7 @@ describe("dispatchTriggerEvent durable envelope", () => {
     expect(mockStart).toHaveBeenCalledTimes(1);
   });
 
-  it("does not acknowledge a started delivery before the workflow candidate binds", async () => {
+  it("records a recoverable candidate without acknowledging it as owner-bound", async () => {
     mockGetEnabled.mockResolvedValue(enabled({ scope: "any" }));
     const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
 
@@ -718,9 +724,128 @@ describe("dispatchTriggerEvent durable envelope", () => {
       runId: "run-pr",
     });
     await expect(getTriggerDelivery(db, "github", "delivery-1")).resolves.toMatchObject({
-      status: "accepted",
-      result: null,
+      status: "completed",
+      result: { result: "candidate_started", runId: "run-pr" },
     });
+    await expect(
+      getPendingTrigger(
+        db,
+        "pr:github:acme/app#7",
+        "abc123",
+        "trigger_pr_created",
+      ),
+    ).resolves.toMatchObject({
+      delivery: { deliveryId: "delivery-1" },
+      definitionId: 5,
+      definitionVersion: 12,
+    });
+  });
+
+  it("recovers the exact pinned envelope when a started candidate dies before binding", async () => {
+    mockGetEnabled.mockResolvedValue(enabled({ scope: "any" }));
+    const { dispatchTriggerEvent, drainOldestPendingTrigger } = await import(
+      "./dispatch-trigger.js"
+    );
+
+    await expect(dispatchTriggerEvent(event(), deps())).resolves.toEqual({
+      result: "started",
+      runId: "run-pr",
+    });
+    const crashedInput = mockStart.mock.calls[0]![1][0];
+    expect(
+      await registry.releaseReservation(crashedInput.subjectKey, crashedInput.ownerToken),
+    ).toBe(true);
+
+    mockStart.mockResolvedValueOnce({ runId: "run-recovered" });
+    const metrics = await recoverOrphanedPendingTriggers({
+      listSubjects: () => listPendingSubjectKeys(db),
+      getActive: (subjectKey) => registry.get(subjectKey),
+      drain: (subjectKey) => drainOldestPendingTrigger(subjectKey, deps()),
+    });
+
+    expect(metrics).toEqual({
+      scanned: 1,
+      blocked: 0,
+      attempted: 1,
+      started: 1,
+      errors: 0,
+    });
+    expect(mockStart).toHaveBeenCalledTimes(2);
+    expect(mockStart.mock.calls[1]![1][0]).toEqual(
+      expect.objectContaining({
+        definitionId: 5,
+        definitionVersion: 12,
+        delivery: expect.objectContaining({ deliveryId: "delivery-1" }),
+        pr: expect.objectContaining({ headSha: "abc123" }),
+        pendingEvent: {
+          headSha: "abc123",
+          triggerType: "trigger_pr_created",
+          deliveryId: "delivery-1",
+        },
+      }),
+    );
+    await expect(registry.get("pr:github:acme/app#7")).resolves.toMatchObject({
+      state: "reserved",
+      runId: null,
+    });
+    await expect(getTriggerDelivery(db, "github", "delivery-1")).resolves.toMatchObject({
+      result: { result: "candidate_started", runId: "run-recovered" },
+    });
+  });
+
+  it("lets only one poll recovery candidate win the owner CAS", async () => {
+    mockGetEnabled.mockResolvedValue(enabled({ scope: "any" }));
+    const { dispatchTriggerEvent, drainOldestPendingTrigger } = await import(
+      "./dispatch-trigger.js"
+    );
+    await dispatchTriggerEvent(event(), deps());
+    const crashedInput = mockStart.mock.calls[0]![1][0];
+    await registry.releaseReservation(crashedInput.subjectKey, crashedInput.ownerToken);
+    mockStart.mockResolvedValue({ runId: "run-recovered" });
+
+    const recover = () =>
+      recoverOrphanedPendingTriggers({
+        listSubjects: () => listPendingSubjectKeys(db),
+        getActive: vi.fn().mockResolvedValue(null),
+        drain: (subjectKey) => drainOldestPendingTrigger(subjectKey, deps()),
+      });
+    const [left, right] = await Promise.all([recover(), recover()]);
+
+    expect(left.started + right.started).toBe(1);
+    expect(mockStart).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not let an older accepted redelivery overwrite newer queued feedback", async () => {
+    mockGetEnabled.mockResolvedValue(enabled({ scope: "any" }));
+    const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
+    await dispatchTriggerEvent(event(), deps());
+    await dispatchTriggerEvent(
+      event({
+        delivery: { provider: "github", producer: "alice", deliveryId: "delivery-2" },
+        pr: {
+          ...event().pr,
+          reviews: [{ state: "commented", author: "reviewer", body: "new feedback" }],
+        },
+      }),
+      deps(),
+    );
+
+    await dispatchTriggerEvent(event(), deps());
+
+    await expect(
+      getPendingTrigger(
+        db,
+        "pr:github:acme/app#7",
+        "abc123",
+        "trigger_pr_created",
+      ),
+    ).resolves.toMatchObject({
+      delivery: { deliveryId: "delivery-2" },
+      pr: {
+        reviews: [{ state: "commented", author: "reviewer", body: "new feedback" }],
+      },
+    });
+    expect(mockStart).toHaveBeenCalledTimes(1);
   });
 
   it("resumes an accepted delivery whose result was not stored before a crash", async () => {
@@ -741,6 +866,116 @@ describe("dispatchTriggerEvent durable envelope", () => {
     });
     expect(mockGetEnabled).not.toHaveBeenCalled();
     expect(mockStart).toHaveBeenCalledOnce();
+  });
+
+  it("poll-recovers an exact pinned delivery after a crash between acceptance and queueing", async () => {
+    const accepted = {
+      ...event({
+        delivery: {
+          provider: "github" as const,
+          producer: "alice",
+          deliveryId: "accepted-before-queue",
+        },
+      }),
+      scope: "any" as const,
+      subjectKey: "pr:github:acme/app#7",
+      ticketKey: null,
+      definitionId: 5,
+      definitionVersion: 12,
+    };
+    await acceptTriggerDelivery(db, accepted);
+    await expect(
+      getPendingTrigger(
+        db,
+        accepted.subjectKey,
+        accepted.pr.headSha,
+        accepted.triggerType,
+      ),
+    ).resolves.toBeNull();
+    const { recoverAcceptedTriggerDelivery } = await import("./dispatch-trigger.js");
+
+    const metrics = await recoverAcceptedTriggerDeliveries({
+      listDeliveries: () =>
+        listRecoverableAcceptedTriggerDeliveries(
+          db,
+          new Date(Date.now() + 60_000),
+        ),
+      getActive: (subjectKey) => registry.get(subjectKey),
+      resume: (stored) => recoverAcceptedTriggerDelivery(stored, deps()),
+    });
+
+    expect(metrics).toEqual({
+      scanned: 1,
+      blocked: 0,
+      attempted: 1,
+      started: 1,
+      errors: 0,
+    });
+    expect(mockGetEnabled).not.toHaveBeenCalled();
+    expect(mockStart).toHaveBeenCalledWith("agentWorkflow_sentinel", [
+      expect.objectContaining({
+        definitionId: 5,
+        definitionVersion: 12,
+        delivery: expect.objectContaining({ deliveryId: "accepted-before-queue" }),
+        pr: expect.objectContaining({ headSha: "abc123" }),
+      }),
+    ]);
+    await expect(
+      getPendingTrigger(
+        db,
+        accepted.subjectKey,
+        accepted.pr.headSha,
+        accepted.triggerType,
+      ),
+    ).resolves.toMatchObject({
+      delivery: { deliveryId: "accepted-before-queue" },
+    });
+    await expect(
+      getTriggerDelivery(db, "github", "accepted-before-queue"),
+    ).resolves.toMatchObject({
+      result: { result: "candidate_started", runId: "run-pr" },
+    });
+  });
+
+  it("lets only one concurrent accepted-delivery poller start a candidate", async () => {
+    const accepted = {
+      ...event({
+        delivery: {
+          provider: "github" as const,
+          producer: "alice",
+          deliveryId: "accepted-concurrent-poll",
+        },
+      }),
+      scope: "any" as const,
+      subjectKey: "pr:github:acme/app#7",
+      ticketKey: null,
+      definitionId: 5,
+      definitionVersion: 12,
+    };
+    await acceptTriggerDelivery(db, accepted);
+    const { recoverAcceptedTriggerDelivery } = await import("./dispatch-trigger.js");
+    const recover = () =>
+      recoverAcceptedTriggerDeliveries({
+        listDeliveries: () =>
+          listRecoverableAcceptedTriggerDeliveries(
+            db,
+            new Date(Date.now() + 60_000),
+          ),
+        // Deliberately stale advisory reads: the dispatcher reservation is the
+        // authoritative CAS under concurrent poll invocations.
+        getActive: vi.fn().mockResolvedValue(null),
+        resume: (stored) => recoverAcceptedTriggerDelivery(stored, deps()),
+      });
+
+    const [left, right] = await Promise.all([recover(), recover()]);
+
+    expect(left.started + right.started).toBe(1);
+    expect(mockStart).toHaveBeenCalledOnce();
+    await expect(
+      getTriggerDelivery(db, "github", "accepted-concurrent-poll"),
+    ).resolves.toMatchObject({
+      result: { result: "candidate_started", runId: "run-pr" },
+    });
   });
 
   it("revalidates an accepted-but-unfinished delivery before crash recovery", async () => {
@@ -961,8 +1196,35 @@ describe("dispatchTriggerEvent durable envelope", () => {
       ),
     ).resolves.not.toBeNull();
     await expect(getTriggerDelivery(db, "github", "delivery-1")).resolves.toMatchObject({
-      result: { result: "coalesced" },
+      result: { result: "candidate_started", runId: "run-pr" },
     });
+  });
+
+  it("retires a dead candidate when its queued PR snapshot becomes stale", async () => {
+    mockGetEnabled.mockResolvedValue(enabled({ scope: "any" }));
+    const { dispatchTriggerEvent, drainOldestPendingTrigger } = await import(
+      "./dispatch-trigger.js"
+    );
+    await expect(dispatchTriggerEvent(event(), deps())).resolves.toEqual({
+      result: "started",
+      runId: "run-pr",
+    });
+    const crashedInput = mockStart.mock.calls[0]![1][0];
+    await registry.releaseReservation(crashedInput.subjectKey, crashedInput.ownerToken);
+
+    await expect(
+      drainOldestPendingTrigger(
+        crashedInput.subjectKey,
+        deps({ getCurrentHead: vi.fn().mockResolvedValue("new-head") }),
+      ),
+    ).resolves.toBeNull();
+    await expect(getTriggerDelivery(db, "github", "delivery-1")).resolves.toMatchObject({
+      result: { result: "ignored_stale_head" },
+    });
+    await expect(dispatchTriggerEvent(event(), deps())).resolves.toEqual({
+      result: "ignored_stale_head",
+    });
+    expect(mockStart).toHaveBeenCalledOnce();
   });
 
   it("drops an already-started stale pending snapshot without launching a successor", async () => {

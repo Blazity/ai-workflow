@@ -184,8 +184,8 @@ function triggerResponse(result: DispatchTriggerResult) {
     return { status: "dispatched", runId: result.runId };
   }
   if (result.result === "at_capacity" || result.result === "error") {
-    // Surface a retryable HTTP failure. Recovery still depends on provider
-    // configuration because the worker has no local re-drive for this event.
+    // Surface a retryable HTTP failure. Accepted envelopes also have local poll
+    // recovery; failures before durable acceptance still need provider retry.
     logger.info({ reason: result.result }, "trigger_webhook_retryable_failure");
     throw createError({ statusCode: 503, statusMessage: `trigger_${result.result}` });
   }
