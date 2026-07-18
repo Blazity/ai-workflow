@@ -6,6 +6,7 @@ import {
   type WorkspaceManifest,
   type WorkspaceRepo,
 } from "./repo-workspace.js";
+import type { PublicationRepositoryRecord } from "../publication/store.js";
 
 export interface WorkspacePushRepoResult {
   provider: "github" | "gitlab";
@@ -49,7 +50,14 @@ export async function pushWorkspaceFromSandbox(
   const { Sandbox } = await import("@vercel/sandbox");
   const sandbox = await Sandbox.get({ sandboxId, ...getSandboxCredentials() });
   const manifest = await readWorkspaceManifest(sandbox);
-  return pushWorkspaceRepositories(sandbox, manifest, sourceHeads, publicationAttemptId);
+  const durableRepositories = await loadPublicationRepositories(publicationAttemptId);
+  return pushWorkspaceRepositories(
+    sandbox,
+    manifest,
+    sourceHeads,
+    publicationAttemptId,
+    durableRepositories,
+  );
 }
 pushWorkspaceFromSandbox.maxRetries = 0;
 
@@ -70,10 +78,17 @@ async function pushWorkspaceRepositories(
     headSha: string;
   }>,
   publicationAttemptId?: string,
+  durableRepositories: PublicationRepositoryRecord[] = [],
 ): Promise<WorkspacePushResult> {
   const { createRepositoryVcsRuntime } = await import("../lib/vcs-runtime.js");
   const sourceHeadByRepository = new Map(
     sourceHeads.map((head) => [`${head.provider}:${head.repoPath}`, head.headSha]),
+  );
+  const durableByRepository = new Map(
+    durableRepositories.map((repository) => [
+      `${repository.provider}:${repository.repoPath}`,
+      repository,
+    ]),
   );
   const preflights: Array<{
     repo: WorkspaceRepo;
@@ -166,7 +181,11 @@ async function pushWorkspaceRepositories(
       continue;
     }
     const headSha = (await headResult.stdout()).trim();
-    const changed = !repo.preAgentSha || repo.preAgentSha !== headSha;
+    const durable = durableByRepository.get(`${repo.provider}:${repo.repoPath}`);
+    const isDurableTarget = durable?.targetHead === headSha;
+    const changed = isDurableTarget
+      ? durable.changed
+      : !repo.preAgentSha || repo.preAgentSha !== headSha;
 
     const runtime = createRepositoryVcsRuntime({
       provider: repo.provider,
@@ -219,7 +238,26 @@ async function pushWorkspaceRepositories(
       continue;
     }
     const expectedHead = (await remoteHeadResult.stdout()).trim();
+    if (isDurableTarget && durable.targetHead === expectedHead) {
+      preflights.push({
+        repo,
+        localHead: headSha,
+        authArgs,
+        cloneUrl,
+        result: {
+          ...base,
+          changed,
+          expectedHead:
+            durable.expectedHead ?? repo.expectedRemoteSha ?? repo.preAgentSha ?? expectedHead,
+          targetHead: durable.targetHead,
+          pushed: true,
+          pushedHead: durable.targetHead,
+        },
+      });
+      continue;
+    }
     const baseline =
+      (isDurableTarget ? durable.expectedHead : null) ??
       sourceHeadByRepository.get(`${repo.provider}:${repo.repoPath}`) ??
       repo.expectedRemoteSha ??
       repo.preAgentSha;
@@ -264,6 +302,10 @@ async function pushWorkspaceRepositories(
 
   for (const preflight of preflights) {
     if (!preflight.result.changed) continue;
+    if (preflight.result.pushed) {
+      await persistPublicationPushResult(publicationAttemptId, preflight.result);
+      continue;
+    }
     const { repo } = preflight;
     const pushResult = await sandbox.runCommand("git", [
       "-C",
@@ -277,6 +319,27 @@ async function pushWorkspaceRepositories(
 
     if (pushResult.exitCode !== 0) {
       const error = await commandError(pushResult);
+      const currentHead = await refetchRemoteHead(
+        sandbox,
+        repo,
+        preflight.authArgs ?? [],
+        preflight.cloneUrl!,
+      );
+      if (currentHead === preflight.localHead) {
+        const cleanupError = await resetOriginAfterPush(
+          sandbox,
+          repo,
+          preflight.cloneUrl!,
+        );
+        preflight.result = {
+          ...preflight.result,
+          pushed: true,
+          pushedHead: preflight.localHead,
+          ...(cleanupError ? { cleanupError } : {}),
+        };
+        await persistPublicationPushResult(publicationAttemptId, preflight.result);
+        continue;
+      }
       preflight.result = {
         ...preflight.result,
         pushed: false,
@@ -287,17 +350,7 @@ async function pushWorkspaceRepositories(
       continue;
     }
 
-    const resetRemote = await sandbox.runCommand("git", [
-      "-C",
-      repo.localPath,
-      "remote",
-      "set-url",
-      "origin",
-      preflight.cloneUrl!,
-    ]);
-    const cleanupError = resetRemote.exitCode === 0
-      ? undefined
-      : `failed to reset origin after push: ${await commandError(resetRemote)}`;
+    const cleanupError = await resetOriginAfterPush(sandbox, repo, preflight.cloneUrl!);
 
     preflight.result = {
       ...preflight.result,
@@ -309,6 +362,59 @@ async function pushWorkspaceRepositories(
   }
 
   return summarizeWorkspacePush(preflights.map((preflight) => preflight.result));
+}
+
+async function loadPublicationRepositories(
+  attemptId: string | undefined,
+): Promise<PublicationRepositoryRecord[]> {
+  if (!attemptId) return [];
+  const { getDb } = await import("../db/client.js");
+  const { getPublicationAttempt } = await import("../publication/store.js");
+  return (await getPublicationAttempt(getDb(), attemptId))?.repositories ?? [];
+}
+
+async function refetchRemoteHead(
+  sandbox: SandboxSession,
+  repo: WorkspaceRepo,
+  authArgs: string[],
+  cloneUrl: string,
+): Promise<string | null> {
+  const fetchResult = await sandbox.runCommand("git", [
+    "-C",
+    repo.localPath,
+    ...authArgs,
+    "fetch",
+    "--no-tags",
+    cloneUrl,
+    `refs/heads/${repo.branchName}`,
+  ]);
+  if (fetchResult.exitCode !== 0) return null;
+  const remoteHeadResult = await sandbox.runCommand("git", [
+    "-C",
+    repo.localPath,
+    "rev-parse",
+    "FETCH_HEAD",
+  ]);
+  if (remoteHeadResult.exitCode !== 0) return null;
+  return (await remoteHeadResult.stdout()).trim();
+}
+
+async function resetOriginAfterPush(
+  sandbox: SandboxSession,
+  repo: WorkspaceRepo,
+  cloneUrl: string,
+): Promise<string | undefined> {
+  const resetRemote = await sandbox.runCommand("git", [
+    "-C",
+    repo.localPath,
+    "remote",
+    "set-url",
+    "origin",
+    cloneUrl,
+  ]);
+  return resetRemote.exitCode === 0
+    ? undefined
+    : `failed to reset origin after push: ${await commandError(resetRemote)}`;
 }
 
 function summarizeWorkspacePush(repositories: WorkspacePushRepoResult[]): WorkspacePushResult {

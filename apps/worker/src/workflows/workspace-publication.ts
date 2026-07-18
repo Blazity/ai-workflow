@@ -73,6 +73,7 @@ export async function finalizeWorkspacePublication(input: {
     })),
   });
 
+  let resumingPush = false;
   if (!creation.created) {
     if (creation.attempt.status === "pushing") {
       const reconciled = await reconcilePushingPublicationStep(creation.attempt);
@@ -84,36 +85,41 @@ export async function finalizeWorkspacePublication(input: {
           [],
         );
       }
-      return replayedFinalizeResult(reconciled.attempt);
+      if (!reconciled.resumePush) return replayedFinalizeResult(reconciled.attempt);
+      resumingPush = true;
+    } else if (creation.attempt.status !== "preflighting") {
+      return replayedFinalizeResult(creation.attempt);
     }
-    return replayedFinalizeResult(creation.attempt);
   }
   const attemptId = creation.attempt.id;
 
-  // This pre-existing behavior remains intentionally separate from AIW-100's
-  // publication policy. It still runs before the clean-tree preflight/push.
-  if (input.clarifications && input.clarifications.length > 0) {
-    await writeHumanDecisionsMemory(input.sandboxId, input.ticketKey, input.clarifications);
-  }
-
-  if (input.sourcePullRequest) {
-    try {
-      await verifyPullRequestHeadStep(input.sourcePullRequest);
-    } catch (err) {
-      const reason = err instanceof Error ? err.message : String(err);
-      await failPublicationStep({
-        attemptId,
-        reason,
-        repository: {
-          provider: input.sourcePullRequest.provider,
-          repoPath: input.sourcePullRequest.repoPath,
-        },
-      });
-      return failedResult(attemptId, reason, creation.attempt.repositories, []);
+  if (!resumingPush) {
+    // This pre-existing behavior remains intentionally separate from AIW-100's
+    // publication policy. It still runs before the clean-tree preflight/push.
+    if (input.clarifications && input.clarifications.length > 0) {
+      await writeHumanDecisionsMemory(input.sandboxId, input.ticketKey, input.clarifications);
     }
+
+    if (input.sourcePullRequest) {
+      try {
+        await verifyPullRequestHeadStep(input.sourcePullRequest);
+      } catch (err) {
+        const reason = err instanceof Error ? err.message : String(err);
+        await failPublicationStep({
+          attemptId,
+          reason,
+          repository: {
+            provider: input.sourcePullRequest.provider,
+            repoPath: input.sourcePullRequest.repoPath,
+          },
+        });
+        return failedResult(attemptId, reason, creation.attempt.repositories, []);
+      }
+    }
+
+    await markPublicationPushingStep(attemptId);
   }
 
-  await markPublicationPushingStep(attemptId);
   let pushResult: WorkspacePushResult;
   try {
     pushResult = await pushWorkspaceFromSandbox(
@@ -131,6 +137,13 @@ export async function finalizeWorkspacePublication(input: {
     );
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
+    const latest = await loadPublicationAttemptStep(attemptId).catch(() => null);
+    if (latest?.status === "pushing") {
+      const reconciled = await reconcilePushingPublicationStep(latest);
+      if (!reconciled.unresolvedReason && !reconciled.resumePush) {
+        return replayedFinalizeResult(reconciled.attempt);
+      }
+    }
     // The push step can fail after the provider accepted a push but before its
     // result reached the publication ledger. Keep the attempt in `pushing` so
     // a replay reconciles each durable target head against the provider rather
@@ -328,7 +341,11 @@ recordPushOutcomeStep.maxRetries = 0;
 
 async function reconcilePushingPublicationStep(
   attempt: PublicationAttemptRecord,
-): Promise<{ attempt: PublicationAttemptRecord; unresolvedReason?: string }> {
+): Promise<{
+  attempt: PublicationAttemptRecord;
+  unresolvedReason?: string;
+  resumePush?: true;
+}> {
   "use step";
   const { getDb } = await import("../db/client.js");
   const { createRepositoryVcsRuntime } = await import("../lib/vcs-runtime.js");
@@ -343,23 +360,14 @@ async function reconcilePushingPublicationStep(
   const changed = repositories.filter((repository) => repository.changed);
 
   if (changed.length === 0) {
-    const reason = "Agent reported success but made no commits";
-    await failPublicationAttempt(db, attempt.id, reason);
-    return { attempt: { ...attempt, status: "failed", failure: reason, repositories } };
+    return { attempt: { ...attempt, repositories }, resumePush: true };
   }
 
   let knownFailure: string | null = null;
+  let resumePush = false;
   for (const repository of changed) {
     if (!repository.targetHead) {
-      const reason = `${repository.provider}:${repository.repoPath}: missing durable target head`;
-      repository.failure = reason;
-      knownFailure ??= reason;
-      await recordPublicationRepositoryFailure(db, {
-        attemptId: attempt.id,
-        provider: repository.provider,
-        repoPath: repository.repoPath,
-        failure: reason,
-      });
+      resumePush = true;
       continue;
     }
 
@@ -394,10 +402,12 @@ async function reconcilePushingPublicationStep(
       continue;
     }
 
-    const reason =
-      !repository.pushedHead && currentHead === repository.expectedHead
-        ? `${repository.provider}:${repository.repoPath}: push did not land; remote remains ${currentHead}`
-        : `${repository.provider}:${repository.repoPath}: remote head is ${currentHead}, expected published head ${repository.targetHead}`;
+    if (!repository.pushedHead && currentHead === repository.expectedHead) {
+      resumePush = true;
+      continue;
+    }
+
+    const reason = `${repository.provider}:${repository.repoPath}: remote head is ${currentHead}, expected published head ${repository.targetHead}`;
     repository.failure = reason;
     knownFailure ??= reason;
     await recordPublicationRepositoryFailure(db, {
@@ -418,6 +428,10 @@ async function reconcilePushingPublicationStep(
         repositories,
       },
     };
+  }
+
+  if (resumePush) {
+    return { attempt: { ...attempt, repositories }, resumePush: true };
   }
 
   await markPublicationAttemptFinalized(db, attempt.id);

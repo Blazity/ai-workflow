@@ -5,6 +5,7 @@ const mockStop = vi.fn();
 const mockRecordPublicationRepositoryPreflight = vi.fn();
 const mockRecordPublicationRepositoryPush = vi.fn();
 const mockRecordPublicationRepositoryFailure = vi.fn();
+const mockGetPublicationAttempt = vi.fn();
 
 vi.mock("@vercel/sandbox", () => ({
   Sandbox: {
@@ -20,6 +21,7 @@ vi.mock("@vercel/sandbox", () => ({
 vi.mock("./credentials.js", () => ({ getSandboxCredentials: () => ({}) }));
 vi.mock("../db/client.js", () => ({ getDb: () => ({ db: true }) }));
 vi.mock("../publication/store.js", () => ({
+  getPublicationAttempt: mockGetPublicationAttempt,
   recordPublicationRepositoryPreflight: mockRecordPublicationRepositoryPreflight,
   recordPublicationRepositoryPush: mockRecordPublicationRepositoryPush,
   recordPublicationRepositoryFailure: mockRecordPublicationRepositoryFailure,
@@ -109,6 +111,7 @@ function mockWorkspaceCommands(
     statuses?: Record<string, string>;
     conflicts?: Record<string, string>;
     pushErrors?: Record<string, string>;
+    remoteHeadSequences?: Record<string, string[]>;
   } = {},
 ) {
   const manifest: WorkspaceManifest = { version: 1, repositories };
@@ -128,6 +131,8 @@ function mockWorkspaceCommands(
       return result(options.localHeads?.[repo.repoPath] ?? `${repo.repoPath}-head`);
     }
     if (args.includes("rev-parse") && args.at(-1) === "FETCH_HEAD") {
+      const sequence = options.remoteHeadSequences?.[repo.repoPath];
+      if (sequence?.length) return result(sequence.shift());
       return result(options.remoteHeads?.[repo.repoPath] ?? repo.expectedRemoteSha ?? "");
     }
     if (args.includes("push")) {
@@ -139,7 +144,10 @@ function mockWorkspaceCommands(
 }
 
 describe("pushWorkspaceFromSandbox", () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGetPublicationAttempt.mockResolvedValue(null);
+  });
 
   it.each([
     ["tracked", " M src/tracked.ts\n"],
@@ -246,6 +254,134 @@ describe("pushWorkspaceFromSandbox", () => {
     const pushCallIndex = mockRunCommand.mock.calls.findIndex(([, args]) => args.includes("push"));
     expect(mockRecordPublicationRepositoryPreflight.mock.invocationCallOrder[0]).toBeLessThan(
       mockRunCommand.mock.invocationCallOrder[pushCallIndex]!,
+    );
+  });
+
+  it("recognizes a durable target that already landed and does not push it again", async () => {
+    const repo = workspaceRepo("acme/api");
+    mockWorkspaceCommands([repo], {
+      localHeads: { "acme/api": "local-head" },
+      remoteHeads: { "acme/api": "local-head" },
+    });
+    mockGetPublicationAttempt.mockResolvedValue({
+      id: "attempt-1",
+      status: "pushing",
+      repositories: [
+        {
+          provider: "github",
+          repoPath: "acme/api",
+          changed: true,
+          expectedHead: "acme/api-base",
+          targetHead: "local-head",
+          pushedHead: null,
+        },
+      ],
+    });
+
+    const publication = await pushWorkspaceFromSandbox("sbx-test-123", [], "attempt-1");
+
+    expect(publication).toEqual({
+      pushed: true,
+      repositories: [
+        expect.objectContaining({
+          repoPath: "acme/api",
+          expectedHead: "acme/api-base",
+          targetHead: "local-head",
+          pushedHead: "local-head",
+          pushed: true,
+        }),
+      ],
+    });
+    expect(mockRunCommand.mock.calls.some(([, args]) => args.includes("push"))).toBe(false);
+    expect(mockRecordPublicationRepositoryPush).toHaveBeenCalledWith(
+      { db: true },
+      expect.objectContaining({ pushedHead: "local-head" }),
+    );
+  });
+
+  it("records an already-landed repository and pushes only the remaining durable target", async () => {
+    const web = workspaceRepo("acme/web");
+    const api = workspaceRepo("acme/api");
+    mockWorkspaceCommands([web, api], {
+      localHeads: {
+        "acme/web": "web-target",
+        "acme/api": "api-target",
+      },
+      remoteHeads: {
+        "acme/web": "web-target",
+        "acme/api": "acme/api-base",
+      },
+    });
+    mockGetPublicationAttempt.mockResolvedValue({
+      id: "attempt-1",
+      status: "pushing",
+      repositories: [
+        {
+          provider: "github",
+          repoPath: "acme/web",
+          changed: true,
+          expectedHead: "acme/web-base",
+          targetHead: "web-target",
+          pushedHead: null,
+        },
+        {
+          provider: "github",
+          repoPath: "acme/api",
+          changed: true,
+          expectedHead: "acme/api-base",
+          targetHead: "api-target",
+          pushedHead: null,
+        },
+      ],
+    });
+
+    const publication = await pushWorkspaceFromSandbox("sbx-test-123", [], "attempt-1");
+
+    expect(publication.pushed).toBe(true);
+    expect(publication.repositories).toEqual([
+      expect.objectContaining({ repoPath: "acme/web", pushedHead: "web-target" }),
+      expect.objectContaining({ repoPath: "acme/api", pushedHead: "api-target" }),
+    ]);
+    const pushCalls = mockRunCommand.mock.calls.filter(([, args]) => args.includes("push"));
+    expect(pushCalls).toHaveLength(1);
+    expect(pushCalls[0]?.[1]).toContain(api.localPath);
+    expect(mockRecordPublicationRepositoryPush).toHaveBeenCalledTimes(2);
+    expect(mockRecordPublicationRepositoryPush).toHaveBeenCalledWith(
+      { db: true },
+      expect.objectContaining({ repoPath: "acme/web", pushedHead: "web-target" }),
+    );
+    expect(mockRecordPublicationRepositoryPush).toHaveBeenCalledWith(
+      { db: true },
+      expect.objectContaining({ repoPath: "acme/api", pushedHead: "api-target" }),
+    );
+  });
+
+  it("treats a failed push response as success when a fresh fetch sees the target", async () => {
+    const repo = workspaceRepo("acme/api");
+    mockWorkspaceCommands([repo], {
+      localHeads: { "acme/api": "local-head" },
+      remoteHeadSequences: { "acme/api": ["acme/api-base", "local-head"] },
+      pushErrors: { "acme/api": "connection reset after send" },
+    });
+
+    const publication = await pushWorkspaceFromSandbox("sbx-test-123", [], "attempt-1");
+
+    expect(publication).toEqual({
+      pushed: true,
+      repositories: [
+        expect.objectContaining({
+          repoPath: "acme/api",
+          expectedHead: "acme/api-base",
+          targetHead: "local-head",
+          pushedHead: "local-head",
+          pushed: true,
+        }),
+      ],
+    });
+    expect(mockRunCommand.mock.calls.filter(([, args]) => args.includes("push"))).toHaveLength(1);
+    expect(mockRecordPublicationRepositoryPush).toHaveBeenCalledWith(
+      { db: true },
+      expect.objectContaining({ pushedHead: "local-head" }),
     );
   });
 

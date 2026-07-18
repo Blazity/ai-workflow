@@ -7,6 +7,7 @@ import {
   getPublicationAttempt,
   markPublicationAttemptCreatingPrs,
   markPublicationAttemptFinalized,
+  markPublicationAttemptPushing,
   markPublicationAttemptPublished,
   recordPublicationPullRequest,
   recordPublicationRepositoryPreflight,
@@ -55,6 +56,7 @@ describe("publication attempt store", () => {
       repoPath: "acme/api",
       pushedHead: "local-after",
     });
+    await markPublicationAttemptPushing(db, first.attempt.id);
     await markPublicationAttemptFinalized(db, first.attempt.id);
     await markPublicationAttemptCreatingPrs(db, first.attempt.id);
     await recordPublicationPullRequest(db, {
@@ -159,5 +161,47 @@ describe("publication attempt store", () => {
     });
     expect(retry.created).toBe(true);
     expect(retry.attempt.repositories).toHaveLength(1);
+  });
+
+  it("does not let stale callbacks regress a published attempt", async () => {
+    const { attempt } = await createOrGetPublicationAttempt(db, {
+      runId: "run-published",
+      blockId: "finalize",
+      repositories: [],
+    });
+    await markPublicationAttemptPushing(db, attempt.id);
+    await markPublicationAttemptFinalized(db, attempt.id);
+    await markPublicationAttemptCreatingPrs(db, attempt.id);
+    await markPublicationAttemptPublished(db, attempt.id);
+
+    await markPublicationAttemptCreatingPrs(db, attempt.id);
+    await failPublicationAttempt(db, attempt.id, "late stale failure");
+
+    await expect(getPublicationAttempt(db, attempt.id)).resolves.toMatchObject({
+      status: "published",
+      failure: null,
+    });
+  });
+
+  it("accepts only immediate forward state transitions and keeps failure terminal", async () => {
+    const { attempt } = await createOrGetPublicationAttempt(db, {
+      runId: "run-cas",
+      blockId: "finalize",
+      repositories: [],
+    });
+
+    await markPublicationAttemptPublished(db, attempt.id);
+    await markPublicationAttemptFinalized(db, attempt.id);
+    await expect(getPublicationAttempt(db, attempt.id)).resolves.toMatchObject({
+      status: "preflighting",
+    });
+
+    await markPublicationAttemptPushing(db, attempt.id);
+    await failPublicationAttempt(db, attempt.id, "known push failure");
+    await markPublicationAttemptFinalized(db, attempt.id);
+    await expect(getPublicationAttempt(db, attempt.id)).resolves.toMatchObject({
+      status: "failed",
+      failure: "known push failure",
+    });
   });
 });

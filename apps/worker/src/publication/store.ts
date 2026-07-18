@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { and, asc, eq, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import type { VcsProvider } from "../adapters/vcs/repository-directory.js";
 import type { Db } from "../db/client.js";
 import {
@@ -226,19 +226,19 @@ export async function recordPublicationRepositoryFailure(
 }
 
 export async function markPublicationAttemptPushing(db: Db, attemptId: string): Promise<void> {
-  await setAttemptStatus(db, attemptId, "pushing");
+  await setAttemptStatus(db, attemptId, "preflighting", "pushing");
 }
 
 export async function markPublicationAttemptFinalized(db: Db, attemptId: string): Promise<void> {
-  await setAttemptStatus(db, attemptId, "finalized");
+  await setAttemptStatus(db, attemptId, "pushing", "finalized");
 }
 
 export async function markPublicationAttemptCreatingPrs(db: Db, attemptId: string): Promise<void> {
-  await setAttemptStatus(db, attemptId, "creating_prs");
+  await setAttemptStatus(db, attemptId, "finalized", "creating_prs");
 }
 
 export async function markPublicationAttemptPublished(db: Db, attemptId: string): Promise<void> {
-  await setAttemptStatus(db, attemptId, "published");
+  await setAttemptStatus(db, attemptId, "creating_prs", "published");
 }
 
 export async function failPublicationAttempt(
@@ -249,18 +249,33 @@ export async function failPublicationAttempt(
   await db
     .update(publicationAttempts)
     .set({ status: "failed", failure, updatedAt: sql`now()` })
-    .where(eq(publicationAttempts.id, attemptId));
+    .where(
+      and(
+        eq(publicationAttempts.id, attemptId),
+        inArray(publicationAttempts.status, [
+          "preflighting",
+          "pushing",
+          "creating_prs",
+        ]),
+      ),
+    );
 }
 
 async function setAttemptStatus(
   db: Db,
   attemptId: string,
+  expectedStatus: PublicationAttemptStatus,
   status: PublicationAttemptStatus,
 ): Promise<void> {
   await db
     .update(publicationAttempts)
     .set({ status, failure: null, updatedAt: sql`now()` })
-    .where(eq(publicationAttempts.id, attemptId));
+    .where(
+      and(
+        eq(publicationAttempts.id, attemptId),
+        eq(publicationAttempts.status, expectedStatus),
+      ),
+    );
 }
 
 function repositoryWhere(input: {
