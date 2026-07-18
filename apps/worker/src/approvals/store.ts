@@ -153,6 +153,38 @@ export async function decideApproval(
   return mapRow(row);
 }
 
+/** System-only terminal transition for a plan that can no longer be dispatched.
+ * Unlike the manual decision CAS, this also retires an approved row only while
+ * it has no winning workflow correlation. */
+export async function rejectUndispatchableApproval(db: Db, id: string): Promise<ApprovalRow> {
+  const rows = await db
+    .update(approvalRequests)
+    .set({
+      status: "rejected",
+      decidedById: "system",
+      decidedByLabel: "system",
+      decidedAt: new Date(),
+    })
+    .where(
+      and(
+        eq(approvalRequests.id, id),
+        or(
+          eq(approvalRequests.status, "pending"),
+          and(
+            eq(approvalRequests.status, "approved"),
+            isNull(approvalRequests.dispatchedRunId),
+          ),
+        ),
+      ),
+    )
+    .returning();
+  const row = rows[0];
+  if (!row) {
+    throw new ApprovalStoreError(409, "already_decided");
+  }
+  return mapRow(row);
+}
+
 export async function setDispatchedRunId(db: Db, id: string, runId: string): Promise<void> {
   const rows = await db
     .update(approvalRequests)
@@ -160,6 +192,7 @@ export async function setDispatchedRunId(db: Db, id: string, runId: string): Pro
     .where(
       and(
         eq(approvalRequests.id, id),
+        eq(approvalRequests.status, "approved"),
         or(
           isNull(approvalRequests.dispatchedRunId),
           eq(approvalRequests.dispatchedRunId, runId),

@@ -240,6 +240,24 @@ describe("POST /api/v1/approvals/:id/approve", () => {
     expect(stored?.decidedById).toBe("system");
   });
 
+  it("410s and terminally rejects an approved-undispatched retry when the definition is gone", async () => {
+    const row = await seedPending("AWT-1");
+    await decideApproval(db, {
+      id: row.id,
+      decision: "approved",
+      actor: { id: "user_admin", label: "Admin" },
+    });
+    mocks.dispatchPlanApproved.mockResolvedValue({ status: "definition_gone" });
+
+    const res = await approve(row.id);
+
+    expect(res.status).toBe(410);
+    const stored = await getApproval(db, row.id);
+    expect(stored?.status).toBe("rejected");
+    expect(stored?.decidedById).toBe("system");
+    expect(stored?.dispatchedRunId).toBeNull();
+  });
+
   it("409s run_in_flight and leaves the row pending", async () => {
     const row = await seedPending("AWT-1");
     mocks.dispatchPlanApproved.mockResolvedValue({ status: "run_in_flight" });
@@ -256,6 +274,25 @@ describe("POST /api/v1/approvals/:id/approve", () => {
     const stored = await getApproval(db, row.id);
     expect(stored?.status).toBe("rejected");
     expect(stored?.decidedById).toBe("system");
+    expect(mocks.dispatchPlanApproved).not.toHaveBeenCalled();
+  });
+
+  it("410s and terminally rejects an approved-undispatched retry when the ticket is gone", async () => {
+    const row = await seedPending("AWT-1");
+    await decideApproval(db, {
+      id: row.id,
+      decision: "approved",
+      actor: { id: "user_admin", label: "Admin" },
+    });
+    mocks.fetchTicket.mockRejectedValue(new IssueTrackerNotFoundError("Issue", "AWT-1"));
+
+    const res = await approve(row.id);
+
+    expect(res.status).toBe(410);
+    const stored = await getApproval(db, row.id);
+    expect(stored?.status).toBe("rejected");
+    expect(stored?.decidedById).toBe("system");
+    expect(stored?.dispatchedRunId).toBeNull();
     expect(mocks.dispatchPlanApproved).not.toHaveBeenCalled();
   });
 });

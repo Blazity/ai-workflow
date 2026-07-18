@@ -216,6 +216,12 @@ export async function openPullRequestsForPublication(input: {
         repository: selectedRepositoryFromAttempt(repository),
         title: input.title,
       });
+      await verifyPullRequestHeadStep({
+        provider: repository.provider,
+        repoPath: repository.repoPath,
+        prId: pr.id,
+        headSha: repository.pushedHead!,
+      });
       if (!prs.some((existing) => sameRepository(existing, pr!))) prs.push(pr);
       await recordPullRequestStep(attempt.id, pr);
       await recordWorkflowOwnedPullRequest({

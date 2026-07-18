@@ -11,6 +11,7 @@ import { dispatchPlanApproved } from "../../../../../approvals/dispatch.js";
 import {
   decideApproval,
   getApproval,
+  rejectUndispatchableApproval,
   serializeApproval,
 } from "../../../../../approvals/store.js";
 import { toApprovalHttpError } from "../../approvals.get.js";
@@ -48,11 +49,7 @@ export default defineEventHandler(async (event): Promise<ApprovalDecisionRespons
       await adapters.issueTracker.fetchTicket(row.ticketKey);
     } catch (err) {
       if (err instanceof IssueTrackerNotFoundError) {
-        await decideApproval(db, {
-          id,
-          decision: "rejected",
-          actor: { id: "system", label: "system" },
-        }).catch(() => {});
+        await rejectUndispatchableApproval(db, id);
         throw createError({ statusCode: 410, statusMessage: "ticket_gone" });
       }
       throw err;
@@ -86,11 +83,7 @@ export default defineEventHandler(async (event): Promise<ApprovalDecisionRespons
     if (result.status === "definition_gone") {
       // The definition that produced the plan is archived or gone: the pinned
       // version can never run, so auto-reject (mirrors ticket_gone) and report it.
-      await decideApproval(db, {
-        id,
-        decision: "rejected",
-        actor: { id: "system", label: "system" },
-      }).catch(() => {});
+      await rejectUndispatchableApproval(db, id);
       throw createError({ statusCode: 410, statusMessage: "definition_gone" });
     }
     if (result.status === "run_in_flight") {

@@ -327,7 +327,7 @@ async function readCurrentHead(
           provider: pr.provider,
           repoPath: pr.repoPath,
           baseBranch: pr.baseRef,
-        }).getBranchSha(pr.headRef);
+        }).getPRHeadSha(pr.prNumber);
     return { status: "ok", headSha };
   } catch (error) {
     logger.warn(

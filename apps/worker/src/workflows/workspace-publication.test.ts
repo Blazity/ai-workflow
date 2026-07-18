@@ -620,7 +620,10 @@ describe("openPullRequestsForPublication", () => {
     mocks.recordWorkflowOwnedPullRequest.mockReset().mockResolvedValue(undefined);
     mocks.createRepositoryVcsRuntime.mockImplementation(
       ({ repoPath }: { repoPath: string }) => ({
-        vcs: { getBranchSha: vi.fn().mockResolvedValue(`${repoPath}-after`) },
+        vcs: {
+          getBranchSha: vi.fn().mockResolvedValue(`${repoPath}-after`),
+          getPRHeadSha: vi.fn().mockResolvedValue(`${repoPath}-after`),
+        },
       }),
     );
   });
@@ -754,6 +757,44 @@ describe("openPullRequestsForPublication", () => {
     expect(mocks.failPublicationAttempt).not.toHaveBeenCalled();
   });
 
+  it("refuses to record a newly-created PR whose authoritative head moved", async () => {
+    mocks.getPublicationAttempt.mockResolvedValue(
+      attempt({
+        status: "finalized",
+        repositories: [repository("github", "acme/web")],
+      }),
+    );
+    mocks.createRepositoryVcsRuntime.mockReturnValue({
+      vcs: {
+        getBranchSha: vi.fn().mockResolvedValue("acme/web-after"),
+        getPRHeadSha: vi.fn().mockResolvedValue("newer-pr-head"),
+      },
+    });
+    mocks.createOrFindWorkflowOwnedPullRequest.mockResolvedValue({
+      provider: "github",
+      repoPath: "acme/web",
+      id: 12,
+      url: "https://github.com/acme/web/pull/12",
+      branch: "blazebot/aiw-100",
+      isNew: true,
+    });
+
+    const publication = await openPullRequestsForPublication({
+      attemptId: "attempt-1",
+      runId: "run-1",
+      ticketKey: "AIW-100",
+      title: "Safe publication",
+    });
+
+    expect(publication.status).toBe("failed");
+    expect(publication.status === "failed" ? publication.reason : "").toContain(
+      "newer-pr-head",
+    );
+    expect(mocks.recordPublicationPullRequest).not.toHaveBeenCalled();
+    expect(mocks.recordWorkflowOwnedPullRequest).not.toHaveBeenCalled();
+    expect(mocks.markPublicationAttemptPublished).not.toHaveBeenCalled();
+  });
+
   it("replays an already-published attempt without creating duplicate PRs", async () => {
     mocks.getPublicationAttempt.mockResolvedValue(
       attempt({
@@ -859,5 +900,39 @@ describe("openPullRequestsForPublication", () => {
     expect(mocks.recordWorkflowOwnedPullRequest).toHaveBeenCalledWith(
       expect.objectContaining({ ticketKey: "AIW-100", pr: expect.objectContaining({ id: 12 }) }),
     );
+  });
+
+  it("refuses to correlate a replayed PR whose authoritative head moved", async () => {
+    const creating = attempt({
+      status: "creating_prs",
+      repositories: [
+        repository("github", "acme/web", {
+          pr: { id: 12, url: "https://github.com/acme/web/pull/12", isNew: true },
+        }),
+      ],
+    });
+    mocks.getPublicationAttempt.mockResolvedValue(creating);
+    mocks.createRepositoryVcsRuntime.mockReturnValue({
+      vcs: {
+        getBranchSha: vi.fn().mockResolvedValue("acme/web-after"),
+        getPRHeadSha: vi.fn().mockResolvedValue("newer-pr-head"),
+      },
+    });
+
+    const publication = await openPullRequestsForPublication({
+      attemptId: "attempt-1",
+      runId: "run-1",
+      ticketKey: "AIW-100",
+      title: "Safe publication",
+    });
+
+    expect(publication.status).toBe("failed");
+    expect(publication.status === "failed" ? publication.reason : "").toContain(
+      "newer-pr-head",
+    );
+    expect(mocks.createOrFindWorkflowOwnedPullRequest).not.toHaveBeenCalled();
+    expect(mocks.recordPublicationPullRequest).not.toHaveBeenCalled();
+    expect(mocks.recordWorkflowOwnedPullRequest).not.toHaveBeenCalled();
+    expect(mocks.markPublicationAttemptPublished).not.toHaveBeenCalled();
   });
 });

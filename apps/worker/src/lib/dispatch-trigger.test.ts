@@ -26,6 +26,14 @@ const mockGetEnabled = vi.fn();
 vi.mock("../workflow-definition/store.js", () => ({
   getEnabledWorkflowDefinitionForTrigger: (...args: any[]) => mockGetEnabled(...args),
 }));
+const mockGetPRHeadSha = vi.fn();
+const mockGetBranchSha = vi.fn();
+vi.mock("./vcs-runtime.js", () => ({
+  createRepositoryVCS: vi.fn(() => ({
+    getPRHeadSha: mockGetPRHeadSha,
+    getBranchSha: mockGetBranchSha,
+  })),
+}));
 
 let db: Db;
 let registry: PostgresRunRegistry;
@@ -48,6 +56,8 @@ beforeEach(async () => {
   registry = new PostgresRunRegistry(db);
   mockStart.mockReset().mockResolvedValue({ runId: "run-pr" });
   mockGetEnabled.mockReset();
+  mockGetPRHeadSha.mockReset().mockResolvedValue("abc123");
+  mockGetBranchSha.mockReset().mockResolvedValue("abc123");
 });
 
 function enabled(
@@ -145,6 +155,22 @@ describe("dispatchTriggerEvent durable envelope", () => {
     ).toEqual({ result: "ignored_stale_head" });
     expect(await getTriggerDelivery(db, "github", "delivery-1")).toBeNull();
     expect(mockStart).not.toHaveBeenCalled();
+  });
+
+  it("validates a fork PR by authoritative PR number instead of a same-named base branch", async () => {
+    mockGetEnabled.mockResolvedValue(enabled({ scope: "any" }));
+    mockGetPRHeadSha.mockResolvedValue("abc123");
+    mockGetBranchSha.mockResolvedValue("different-base-branch-head");
+    const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
+
+    const result = await dispatchTriggerEvent(
+      event({ pr: { ...event().pr, headRef: "feature/from-fork" } }),
+      deps({ getCurrentHead: undefined }),
+    );
+
+    expect(result).toEqual({ result: "started", runId: "run-pr" });
+    expect(mockGetPRHeadSha).toHaveBeenCalledWith(7);
+    expect(mockGetBranchSha).not.toHaveBeenCalled();
   });
 
   it("returns a retryable error when the provider head cannot be read", async () => {
@@ -342,6 +368,35 @@ describe("dispatchTriggerEvent durable envelope", () => {
     expect(await getTriggerDelivery(db, "github", "accepted-stale")).toMatchObject({
       result: { result: "ignored_stale_head" },
     });
+  });
+
+  it("revalidates accepted-delivery recovery against the authoritative PR head", async () => {
+    mockGetEnabled.mockResolvedValue(enabled({ scope: "any" }));
+    await acceptTriggerDelivery(db, {
+      ...event({
+        delivery: { provider: "github", producer: "alice", deliveryId: "accepted-fork-stale" },
+      }),
+      scope: "any",
+      subjectKey: "pr:github:acme/app#7",
+      ticketKey: null,
+      definitionId: 5,
+      definitionVersion: 12,
+    });
+    mockGetPRHeadSha.mockResolvedValue("new-pr-head");
+    mockGetBranchSha.mockResolvedValue("abc123");
+    const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
+
+    const result = await dispatchTriggerEvent(
+      event({
+        delivery: { provider: "github", producer: "alice", deliveryId: "accepted-fork-stale" },
+      }),
+      deps({ getCurrentHead: undefined }),
+    );
+
+    expect(result).toEqual({ result: "ignored_stale_head" });
+    expect(mockGetPRHeadSha).toHaveBeenCalledWith(7);
+    expect(mockGetBranchSha).not.toHaveBeenCalled();
+    expect(mockStart).not.toHaveBeenCalled();
   });
 
   it("does not queue a duplicate when the winning workflow records started during recovery", async () => {
@@ -610,6 +665,43 @@ describe("dispatchTriggerEvent durable envelope", () => {
         "trigger_pr_created",
       ),
     ).not.toBeNull();
+    expect(mockStart).not.toHaveBeenCalled();
+  });
+
+  it("drops pending feedback when the authoritative PR head moved despite a matching base branch", async () => {
+    mockGetEnabled.mockResolvedValue(enabled({ scope: "any" }));
+    await registry.reserve({
+      subjectKey: "pr:github:acme/app#7",
+      ticketKey: null,
+      ownerToken: "blocking-owner",
+      kind: "pr_trigger",
+    });
+    const { dispatchTriggerEvent, drainOldestPendingTrigger } = await import("./dispatch-trigger.js");
+    expect(await dispatchTriggerEvent(event(), deps())).toEqual({ result: "coalesced" });
+    await registry.releaseReservation("pr:github:acme/app#7", "blocking-owner");
+    mockGetPRHeadSha.mockResolvedValue("new-pr-head");
+    mockGetBranchSha.mockResolvedValue("abc123");
+
+    await expect(
+      drainOldestPendingTrigger(
+        "pr:github:acme/app#7",
+        deps({ getCurrentHead: undefined }),
+      ),
+    ).resolves.toBeNull();
+
+    expect(mockGetPRHeadSha).toHaveBeenCalledWith(7);
+    expect(mockGetBranchSha).not.toHaveBeenCalled();
+    expect(
+      await getPendingTrigger(
+        db,
+        "pr:github:acme/app#7",
+        "abc123",
+        "trigger_pr_created",
+      ),
+    ).toBeNull();
+    expect(await getTriggerDelivery(db, "github", "delivery-1")).toMatchObject({
+      result: { result: "ignored_stale_head" },
+    });
     expect(mockStart).not.toHaveBeenCalled();
   });
 });

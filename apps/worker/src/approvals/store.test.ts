@@ -9,6 +9,7 @@ import {
   decideApproval,
   getApproval,
   listApprovals,
+  rejectUndispatchableApproval,
   setDispatchedRunId,
 } from "./store.js";
 
@@ -149,6 +150,11 @@ describe("setDispatchedRunId", () => {
   it("records the dispatched run", async () => {
     const db = await createTestDb();
     const row = await createApprovalRequest(db, seed());
+    await decideApproval(db, {
+      id: row.id,
+      decision: "approved",
+      actor: { id: "u1", label: "Alice" },
+    });
     await setDispatchedRunId(db, row.id, "run-dispatched");
     const after = await getApproval(db, row.id);
     expect(after?.dispatchedRunId).toBe("run-dispatched");
@@ -157,6 +163,11 @@ describe("setDispatchedRunId", () => {
   it("is idempotent for the same run and refuses to replace a recorded dispatch", async () => {
     const db = await createTestDb();
     const row = await createApprovalRequest(db, seed());
+    await decideApproval(db, {
+      id: row.id,
+      decision: "approved",
+      actor: { id: "u1", label: "Alice" },
+    });
     await setDispatchedRunId(db, row.id, "run-first");
     await expect(setDispatchedRunId(db, row.id, "run-first")).resolves.toBeUndefined();
     await expect(setDispatchedRunId(db, row.id, "run-second")).rejects.toMatchObject({
@@ -164,6 +175,26 @@ describe("setDispatchedRunId", () => {
       message: "dispatch_already_recorded",
     });
     expect((await getApproval(db, row.id))?.dispatchedRunId).toBe("run-first");
+  });
+
+  it("refuses to attach a run after terminal rejection wins the CAS", async () => {
+    const db = await createTestDb();
+    const row = await createApprovalRequest(db, seed());
+    await decideApproval(db, {
+      id: row.id,
+      decision: "approved",
+      actor: { id: "u1", label: "Alice" },
+    });
+    await rejectUndispatchableApproval(db, row.id);
+
+    await expect(setDispatchedRunId(db, row.id, "run-late")).rejects.toMatchObject({
+      statusCode: 409,
+      message: "dispatch_already_recorded",
+    });
+    expect(await getApproval(db, row.id)).toMatchObject({
+      status: "rejected",
+      dispatchedRunId: null,
+    });
   });
 });
 
