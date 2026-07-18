@@ -285,8 +285,10 @@ describe("POST /webhooks/github", () => {
       action: "completed",
       repository: repo(),
       check_run: {
+        id: 1001,
         name: "ci / build",
         conclusion: "failure",
+        app: { slug: "github-actions" },
         pull_requests: [
           { number: 7, head: { ref: "blazebot/aiw-1", sha: "abc123" }, base: { ref: "main" } },
         ],

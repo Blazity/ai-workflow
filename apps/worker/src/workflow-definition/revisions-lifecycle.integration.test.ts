@@ -87,9 +87,22 @@ function jsonRequest(method: string, body: unknown, url: string): Request {
 function withComment(definition: WorkflowDefinition, body: string): WorkflowDefinition {
   return {
     ...definition,
-    nodes: definition.nodes.map((node) =>
-      node.type === "post_pr_comment" ? { ...node, params: { ...node.params, body } } : node,
-    ),
+    nodes: definition.nodes.map((node) => {
+      if (node.type === "post_pr_comment") {
+        return { ...node, params: { ...node.params, body } };
+      }
+      if (node.type === "trigger_pr_checks_failed") {
+        return {
+          ...node,
+          params: {
+            ...node.params,
+            checkNames: ["ci / build"],
+            githubAppSlugs: ["github-actions"],
+          },
+        };
+      }
+      return node;
+    }),
   };
 }
 
