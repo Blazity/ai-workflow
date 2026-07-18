@@ -1072,39 +1072,45 @@ export async function archiveWorkflowDefinition(
   input: { definitionId: number; actor: WorkflowDefinitionActor },
 ): Promise<WorkflowDefinitionRow> {
   requireEditRole(input.actor.role);
-  const rows = await db
-    .select()
-    .from(workflowDefinitions)
-    .where(eq(workflowDefinitions.id, input.definitionId))
-    .limit(1);
-  const current = rows[0];
+  const result = await db.execute(sql`
+    WITH active AS MATERIALIZED (
+      SELECT id
+      FROM workflow_definitions
+      WHERE archived_at IS NULL
+      ORDER BY id
+      FOR UPDATE
+    ), archived AS (
+      UPDATE workflow_definitions wd
+      SET archived_at = now(),
+          updated_at = now()
+      WHERE wd.id = ${input.definitionId}
+        AND wd.archived_at IS NULL
+        AND wd.enabled = false
+        AND (SELECT count(*) FROM active) > 1
+      RETURNING wd.id
+    ), deleted_claims AS (
+      DELETE FROM workflow_definition_triggers
+      WHERE definition_id IN (SELECT id FROM archived)
+      RETURNING definition_id
+    )
+    SELECT archived.id
+    FROM archived
+    CROSS JOIN (SELECT count(*) FROM deleted_claims) AS claim_barrier
+  `);
+
+  const archivedId = rawRows<{ id: number }>(result)[0]?.id;
+  const current = await getWorkflowDefinition(db, input.definitionId);
   if (!current) {
     throw new WorkflowDefinitionStoreError(404, "Unknown definition");
   }
-  if (current.archivedAt) return mapDefinitionRow(current);
+  if (archivedId !== undefined || current.archivedAt) return current;
   if (current.enabled) {
     throw new WorkflowDefinitionStoreError(409, "Disable the definition before archiving it");
   }
-
-  const active = await db
-    .select({ id: workflowDefinitions.id })
-    .from(workflowDefinitions)
-    .where(isNull(workflowDefinitions.archivedAt));
-  if (active.length <= 1) {
+  if ((await listWorkflowDefinitions(db)).length <= 1) {
     throw new WorkflowDefinitionStoreError(409, "Cannot archive the last workflow definition");
   }
-
-  const res = await db
-    .update(workflowDefinitions)
-    .set({ archivedAt: new Date(), updatedAt: new Date() })
-    .where(eq(workflowDefinitions.id, input.definitionId))
-    .returning();
-  // Defensive: a disabled definition owns no bindings, but drop any a crashed
-  // disable left behind so an archived definition never keeps a trigger.
-  await db
-    .delete(workflowDefinitionTriggers)
-    .where(eq(workflowDefinitionTriggers.definitionId, input.definitionId));
-  return mapDefinitionRow(res[0]!);
+  throw new WorkflowDefinitionStoreError(409, "Definition changed; reload before archiving");
 }
 
 export async function restoreWorkflowDefinitionVersion(

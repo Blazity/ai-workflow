@@ -112,6 +112,28 @@ test("round-trips Generic Agent workspace mode without loss", () => {
   assert.deepEqual(out.nodes[0].params, { prompt: "Summarize", workspaceMode: "none" });
 });
 
+test("round-trips Human Question suggested answers without loss", () => {
+  const nodes = flowNodes([
+    {
+      id: "clarify",
+      type: "human_question",
+      x: 0,
+      y: 0,
+      params: {
+        questions: ["Which environment?"],
+        suggestedAnswers: ["staging", "production"],
+      },
+    },
+  ]);
+
+  const out = serializeWorkflowDefinition(nodes, []);
+
+  assert.deepEqual(out.nodes[0].params, {
+    questions: ["Which environment?"],
+    suggestedAnswers: ["staging", "production"],
+  });
+});
+
 test("round-trips explicit ownership scope for every PR trigger", () => {
   const nodes = flowNodes([
     { id: "created", type: "trigger_pr_created", x: 0, y: 0, params: { scope: "any" } },

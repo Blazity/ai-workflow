@@ -11,6 +11,18 @@ export interface BlockTypeSpec {
 export const DEFAULT_OUT_PORT = "out";
 export const FAILURE_PORT = "failed";
 
+const RESERVED_WORKFLOW_PATH_SEGMENTS = new Set(["__proto__", "prototype", "constructor"]);
+
+/** A block id or declared object field that dot-path bindings and conditions
+ * can address without escaping. Numeric array indexes are handled separately
+ * by the binding resolver and are intentionally not valid authored names. */
+export function isWorkflowAddressablePathSegment(segment: string): boolean {
+  return (
+    /^[A-Za-z_][A-Za-z0-9_-]*$/.test(segment) &&
+    !RESERVED_WORKFLOW_PATH_SEGMENTS.has(segment)
+  );
+}
+
 export const BLOCK_TYPE_SPECS: Record<WorkflowBlockType, BlockTypeSpec> = {
   trigger_ticket_ai: { category: "trigger", ports: [DEFAULT_OUT_PORT], allowsFailurePort: false },
   trigger_plan_approved: { category: "trigger", ports: [DEFAULT_OUT_PORT], allowsFailurePort: false },
@@ -81,7 +93,7 @@ export const BLOCK_PARAM_KEYS: Record<WorkflowBlockType, readonly string[]> = {
   post_pr_comment: ["body", "target"],
   send_slack_message: ["message"],
   send_plan_approval: ["mirrorComment"],
-  human_question: ["questions"],
+  human_question: ["questions", "suggestedAnswers"],
   arthur_injection_check: ["legacyContentFromStep"],
   branch: ["condition"],
   loop: ["maxAttempts", "onExhaust"],

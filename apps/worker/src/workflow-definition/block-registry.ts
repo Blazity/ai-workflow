@@ -1,5 +1,6 @@
 import {
   BLOCK_TYPE_SPECS,
+  isWorkflowAddressablePathSegment,
   type BlockOutput,
   type VcsProviderKind,
   type WorkflowBlockAvailability,
@@ -740,8 +741,6 @@ type ParsedDeclaredSchema =
   | { ok: true; schema: WorkflowValueSchema }
   | { ok: false; reason: string };
 
-const unsafeSchemaKeys = new Set(["__proto__", "prototype", "constructor"]);
-
 function parseJsonValueSchema(
   raw: unknown,
   path: string,
@@ -785,8 +784,11 @@ function parseJsonValueSchema(
       const rawProperties = (schema.properties ?? {}) as Record<string, unknown>;
       const properties: Record<string, WorkflowValueSchema> = {};
       for (const [key, childRaw] of Object.entries(rawProperties)) {
-        if (unsafeSchemaKeys.has(key)) {
-          return { ok: false, reason: `${path}.properties.${key} is not a safe field name.` };
+        if (!isWorkflowAddressablePathSegment(key)) {
+          return {
+            ok: false,
+            reason: `${path} property "${key}" is not addressable.`,
+          };
         }
         const child = parseJsonValueSchema(childRaw, `${path}.properties.${key}`, depth + 1);
         if (!child.ok) return child;

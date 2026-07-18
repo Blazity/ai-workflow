@@ -1273,6 +1273,51 @@ describe("validateWorkflowGraph rules", () => {
     );
   });
 
+  it.each(["contains.dot", "has space", "1leading", "__proto__"])(
+    "keeps stored block id %j loadable but rejects it for deployment",
+    (unsafeId) => {
+      const def = graph(
+        [node("t", "trigger_ticket_ai"), node(unsafeId, "planning_agent")],
+        [{ from: "t", to: unsafeId }],
+      );
+
+      expect(workflowDefinitionSchema.safeParse(def).success).toBe(true);
+      expect(upgradeStoredWorkflowDefinition(def).nodes[1]?.id).toBe(unsafeId);
+      expect(validateWorkflowDefinitionForDeployment(def, registryContext)).toEqual(
+        expect.arrayContaining([
+          expect.stringContaining(`Block id "${unsafeId}" is not addressable`),
+        ]),
+      );
+    },
+  );
+
+  it.each(["release.tag", "release tag", "1release", "__proto__"])(
+    "rejects declared output field %j because bindings cannot address it",
+    (unsafeField) => {
+      const def = graph(
+        [
+          node("t", "trigger_ticket_ai"),
+          node("generate", "generic_agent", {
+            prompt: "generate",
+            outputSchema: JSON.stringify({
+              type: "object",
+              properties: { [unsafeField]: { type: "string" } },
+              required: [unsafeField],
+              additionalProperties: false,
+            }),
+          }),
+        ],
+        [{ from: "t", to: "generate" }],
+      );
+
+      expect(validateWorkflowDefinitionForDeployment(def, registryContext)).toEqual(
+        expect.arrayContaining([
+          expect.stringContaining(`property "${unsafeField}" is not addressable`),
+        ]),
+      );
+    },
+  );
+
   it("explains how to repair a legacy Arthur whole-output reference before deployment", () => {
     const def = graph(
       [

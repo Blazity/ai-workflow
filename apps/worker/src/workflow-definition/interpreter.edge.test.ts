@@ -126,6 +126,29 @@ function loopGraph(opts: {
 }
 
 describe("interpreter edge: entry and dangling targets", () => {
+  it("stores legacy reserved block ids without mutating the steps prototype", async () => {
+    const graph = graphFrom(
+      [node("trig", "trigger_ticket_ai"), node("__proto__", "planning_agent")],
+      [{ from: "trig", to: "__proto__" }],
+    );
+    const rec = makeRecorder();
+
+    const result = await executeGraph({
+      graph,
+      entryTriggerId: "trig",
+      triggerOutput: { status: "ok" },
+      executeBlock: async (block) => ({
+        kind: "next",
+        output: { status: "ok", id: block.id },
+      }),
+      hooks: rec.hooks,
+    });
+
+    expect(Object.getPrototypeOf(result.steps)).toBeNull();
+    expect(Object.hasOwn(result.steps, "__proto__")).toBe(true);
+    expect(result.steps["__proto__"]?.output).toEqual({ status: "ok", id: "__proto__" });
+  });
+
   it("completes immediately when the entry trigger has no outgoing edge", async () => {
     const graph = graphFrom([node("trig", "trigger_ticket_ai")], []);
     const rec = makeRecorder();

@@ -148,9 +148,11 @@ export async function executeGraph(opts: {
     );
   }
 
-  const steps: StepsRecord = resume
-    ? { ...resume.priorSteps, [entryTriggerId]: { output: triggerOutput } }
-    : { [entryTriggerId]: { output: triggerOutput } };
+  const steps: StepsRecord = Object.create(null) as StepsRecord;
+  for (const [nodeId, state] of Object.entries(resume?.priorSteps ?? {})) {
+    steps[nodeId] = state;
+  }
+  steps[entryTriggerId] = { output: triggerOutput };
   const attempts = new Map<string, number>(
     Object.entries(resume?.controlState?.attempts ?? {}),
   );

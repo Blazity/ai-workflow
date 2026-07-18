@@ -6,7 +6,12 @@ import type {
   WorkflowDefinition,
   WorkflowDefinitionNode,
 } from "@shared/contracts";
-import { BLOCK_TYPE_SPECS, isTriggerBlockType, wirablePorts } from "@shared/contracts";
+import {
+  BLOCK_TYPE_SPECS,
+  isTriggerBlockType,
+  isWorkflowAddressablePathSegment,
+  wirablePorts,
+} from "@shared/contracts";
 import { parseCondition } from "@shared/conditions";
 import { paramsSchema as prepareWorkspaceParams } from "../workflows/blocks/prepare-workspace.js";
 import { paramsSchema as finalizeWorkspaceParams } from "../workflows/blocks/finalize-workspace.js";
@@ -902,6 +907,11 @@ export function validateWorkflowDefinitionForDeployment(
     ...validateAnyScopeReviewSafety(def),
   ];
   for (const node of def.nodes) {
+    if (!isWorkflowAddressablePathSegment(node.id)) {
+      issues.push(
+        `Block id "${node.id}" is not addressable; use a letter or underscore followed by letters, numbers, underscores, or hyphens.`,
+      );
+    }
     if (
       !options.allowLegacyCompatibility &&
       node.type === "finalize_workspace" &&

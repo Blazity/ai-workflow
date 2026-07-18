@@ -23,11 +23,13 @@ vi.mock("../../env.js", () => ({
 import { workflowDefinitionVersions } from "../db/schema.js";
 import { createTestDb } from "../db/test-db.js";
 import {
+  archiveWorkflowDefinition,
   createWorkflowDefinition,
   deployWorkflowDefinition,
   getWorkflowDefinition,
   getWorkflowDefinitionDraft,
   getEnabledWorkflowDefinitionForTrigger,
+  listWorkflowDefinitions,
   listWorkflowDefinitionDeployments,
   listWorkflowDefinitionVersionRows,
   rollbackWorkflowDefinition,
@@ -278,5 +280,30 @@ describe("workflow definition lifecycle", () => {
     });
     expect(await getEnabledWorkflowDefinitionForTrigger(db, "trigger_pr_created")).toBeNull();
     expect(await getEnabledWorkflowDefinitionForTrigger(db, "trigger_pr_review")).toBeNull();
+  });
+
+  it("atomically preserves one active definition across concurrent archives", async () => {
+    const second = await createWorkflowDefinition(db, {
+      name: "Second active definition",
+      seed: null,
+      actor: ADMIN,
+    });
+    await updateWorkflowDefinition(db, { definitionId: 1, enabled: false, actor: ADMIN });
+
+    const results = await Promise.allSettled([
+      archiveWorkflowDefinition(db, { definitionId: 1, actor: ADMIN }),
+      archiveWorkflowDefinition(db, { definitionId: second.definition.id, actor: ADMIN }),
+    ]);
+
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    expect(results.filter((result) => result.status === "rejected")).toEqual([
+      expect.objectContaining({
+        reason: expect.objectContaining({
+          statusCode: 409,
+          message: "Cannot archive the last workflow definition",
+        }),
+      }),
+    ]);
+    expect(await listWorkflowDefinitions(db)).toHaveLength(1);
   });
 });

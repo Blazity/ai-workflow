@@ -246,6 +246,26 @@ describe("fix_agent execute", () => {
     });
   });
 
+  it.each([null, [], ["", "   "]])(
+    "supplies an answerable fallback when clarification questions are %j",
+    async (questions) => {
+      mocks.parseAgentOutput.mockReturnValue({
+        result: "clarification_needed",
+        questions,
+      });
+
+      const result = await execute(makeNode("fix_agent"), {}, makeCtx());
+
+      expect(result.kind).toBe("needs_human_input");
+      if (result.kind === "needs_human_input") {
+        expect(result.questions).toEqual([
+          "The Fix Agent needs more information. What should it use to continue?",
+        ]);
+        expect(result.output.questions).toEqual(result.questions);
+      }
+    },
+  );
+
   it("reports cumulative commits since the workspace baseline and conflicts resolved by Fix", async () => {
     mocks.parseAgentOutput.mockReturnValue({ result: "implemented", summary: "resolved" });
     mocks.inspectFixWorkspace

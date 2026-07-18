@@ -208,7 +208,11 @@ export const execute: BlockExecuteFn = async (block, _steps, ctx): Promise<Block
     const after = await inspectFixWorkspace(sandboxId);
 
     if (output.result === "clarification_needed") {
-      const questions = (output.questions ?? []).filter((q) => q.trim().length > 0);
+      const suppliedQuestions = (output.questions ?? []).filter((q) => q.trim().length > 0);
+      const questions =
+        suppliedQuestions.length > 0
+          ? suppliedQuestions
+          : ["The Fix Agent needs more information. What should it use to continue?"];
       const suggestedAnswers = (output.suggestedAnswers ?? []).filter(
         (s) => s.trim().length > 0,
       );
