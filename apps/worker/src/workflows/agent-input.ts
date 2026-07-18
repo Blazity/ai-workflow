@@ -73,12 +73,6 @@ export type AgentWorkflowInput =
          * delivery for the same semantic event must remain pending. */
         deliveryId: string;
       };
-      /** Provider delivery identity belongs to dispatcher bookkeeping only. */
-      delivery?: {
-        provider: "github" | "gitlab";
-        producer: string;
-        deliveryId: string;
-      };
       pr: PrTriggerPayload;
     }
   | {

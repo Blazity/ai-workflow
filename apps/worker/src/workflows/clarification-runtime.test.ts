@@ -9,6 +9,8 @@ describe("clarification continuation runtime state", () => {
   it("restores every predecessor-owned value consumed by downstream blocks and telemetry", () => {
     const publication: WorkspacePublicationResult = {
       status: "published",
+      attemptId: "attempt-96",
+      repositories: [],
       pushResult: { pushed: true, repositories: [] },
       prs: [{
         provider: "github",

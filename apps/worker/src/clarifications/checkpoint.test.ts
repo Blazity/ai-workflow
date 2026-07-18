@@ -62,6 +62,8 @@ describe("clarification checkpoint payload safety", () => {
       implementationModel: "gpt-5-codex",
       publication: {
         status: "published",
+        attemptId: "attempt-96",
+        repositories: [],
         pushResult: { pushed: true, repositories: [] },
         prs: [{
           provider: "github",

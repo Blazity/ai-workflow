@@ -114,7 +114,11 @@ describe("workflow owner steps", () => {
       definitionId: 1,
       definitionVersion: 2,
       scope: "any",
-      pendingEvent: { headSha: "sha", triggerType: "trigger_pr_review" },
+      pendingEvent: {
+        headSha: "sha",
+        triggerType: "trigger_pr_review",
+        deliveryId: "delivery-1",
+      },
       delivery: { provider: "github", producer: "alice", deliveryId: "delivery-1" },
       continuation: { kind: "clarification", clarificationRequestId: "clar-1" },
       pr: { provider: "github", headSha: "sha" } as any,

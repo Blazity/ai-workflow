@@ -15,7 +15,11 @@ describe("clarification origin entries", () => {
       definitionId: 7,
       definitionVersion: 12,
       scope: "any",
-      pendingEvent: { headSha: "deadbeef", triggerType: "trigger_pr_review" },
+      pendingEvent: {
+        headSha: "deadbeef",
+        triggerType: "trigger_pr_review",
+        deliveryId: "delivery-1",
+      },
       delivery: {
         provider: "github",
         producer: "github-actions",
