@@ -3,7 +3,10 @@ import type { WorkflowDefinitionNode } from "@shared/contracts";
 import type { AgentKind } from "../../sandbox/agents/index.js";
 import type { SelectedRepository } from "../../adapters/vcs/repository-directory.js";
 import type { PreSandboxPromptAdditionsByTarget } from "../../pre-sandbox/types.js";
-import type { WorkspaceRepositoryInput } from "../../sandbox/repo-workspace.js";
+import type {
+  WorkspaceManifest,
+  WorkspaceRepositoryInput,
+} from "../../sandbox/repo-workspace.js";
 import { resolveBlockAgent } from "../../workflow-definition/resolve-agent.js";
 import { blockFetchPrContextsStep, blockPrTriggerRepositoriesStep } from "./fetch-pr-context.js";
 import type { BlockExecuteFn, BlockExecutionResult } from "./types.js";
@@ -89,7 +92,7 @@ async function blockPrepareWorkspaceProvisionStep(
   selectedRepositories: WorkspaceRepositoryInput[],
   arthurTaskId: string | null,
   requiredKinds: AgentKind[],
-): Promise<{ sandboxId: string }> {
+): Promise<{ sandboxId: string; workspaceManifest: WorkspaceManifest }> {
   "use step";
   const { env } = await import("../../../env.js");
   const { SandboxManager } = await import("../../sandbox/manager.js");
@@ -139,7 +142,7 @@ async function blockPrepareWorkspaceProvisionStep(
     jobTimeoutMs: env.JOB_TIMEOUT_MS,
   });
 
-  const sandbox = await manager.provisionMultiRepo(
+  const { sandbox, workspaceManifest } = await manager.provisionMultiRepo(
     { branchName, repositories: selectedRepositories },
     createAgentAdapter(primaryKind),
     configureOptsFor(primaryKind),
@@ -156,7 +159,7 @@ async function blockPrepareWorkspaceProvisionStep(
     },
   );
 
-  return { sandboxId: sandbox.sandboxId };
+  return { sandboxId: sandbox.sandboxId, workspaceManifest };
 }
 blockPrepareWorkspaceProvisionStep.maxRetries = 0;
 
@@ -198,9 +201,9 @@ function requiredKindsForDefinition(
  * the PR's repository for pr_trigger entries), prepare workflow-owned branches,
  * fetch PR contexts, ensure the run's Arthur task, provision one sandbox with
  * every agent CLI the definition can need, and register it for cleanup.
- * Mutates ctx.sandboxId, ctx.selectedRepositories, ctx.repositoryContexts,
- * ctx.preSandboxAdditions, and ctx.arthur.taskId (see the EngineCtx mutation
- * contract).
+ * Mutates ctx.sandboxId, ctx.workspaceManifest, ctx.selectedRepositories,
+ * ctx.repositoryContexts, ctx.preSandboxAdditions, and ctx.arthur.taskId (see
+ * the EngineCtx mutation contract).
  */
 export async function ensureWorkspace(
   ctx: Parameters<BlockExecuteFn>[2],
@@ -305,7 +308,7 @@ export async function ensureWorkspace(
       ctx.runDefaultKind,
       ctx.defaults,
     );
-    const { sandboxId } = await blockPrepareWorkspaceProvisionStep(
+    const { sandboxId, workspaceManifest } = await blockPrepareWorkspaceProvisionStep(
       ctx.entry.subjectKey,
       ctx.entry.ownerToken,
       ctx.branchName,
@@ -317,6 +320,7 @@ export async function ensureWorkspace(
     // before clone/install/configure. Keep the in-workflow set for normal
     // teardown; the durable child row covers crash/cancel cleanup.
     ctx.sandboxId = sandboxId;
+    ctx.workspaceManifest = workspaceManifest;
     // Track every provisioned sandbox so a prepare_workspace inside a loop does
     // not leak the sandboxes from earlier iterations: the engine tears down all
     // of ctx.sandboxIds on exit, not just the latest ctx.sandboxId.

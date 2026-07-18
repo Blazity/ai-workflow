@@ -189,7 +189,7 @@ describe("SandboxManager.provisionMultiRepo", () => {
   it("captures pre-agent HEAD SHA for the push step", async () => {
     mockStdout.mockResolvedValue("sha-123\n");
     const manager = new SandboxManager(baseConfig);
-    await manager.provisionMultiRepo(
+    const provisioned = await manager.provisionMultiRepo(
       {
         branchName: "feat/test-branch",
         repositories: [
@@ -208,6 +208,20 @@ describe("SandboxManager.provisionMultiRepo", () => {
       ([cmd, args]) => cmd === "git" && args[0] === "-C" && args.includes("rev-parse"),
     );
     expect(shaCall).toBeDefined();
+    expect(provisioned).toMatchObject({
+      sandbox: { sandboxId: "sbx-test-123" },
+      workspaceManifest: {
+        version: 1,
+        repositories: [
+          expect.objectContaining({
+            provider: "github",
+            repoPath: "test-org/test-repo",
+            branchName: "feat/test-branch",
+            preAgentSha: "sha-123",
+          }),
+        ],
+      },
+    });
   });
 
   it("calls agent.install then agent.configure with the supplied opts", async () => {

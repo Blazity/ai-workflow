@@ -53,22 +53,23 @@ export async function newClarificationCheckpointExpiryStep(): Promise<string> {
 }
 newClarificationCheckpointExpiryStep.maxRetries = 0;
 
-export async function captureWorkspaceManifestStep(
+export async function verifyWorkspaceManifestStep(
   sandboxId: string,
-): Promise<WorkspaceManifest> {
+  trustedManifest: WorkspaceManifest,
+): Promise<void> {
   "use step";
   const { Sandbox } = await import("@vercel/sandbox");
   const { getSandboxCredentials } = await import("../sandbox/credentials.js");
-  const { parseWorkspaceManifest, WORKSPACE_MANIFEST_PATH } =
+  const { parseVerifiedWorkspaceManifest, WORKSPACE_MANIFEST_PATH } =
     await import("../sandbox/repo-workspace.js");
   const sandbox = await Sandbox.get({ sandboxId, ...getSandboxCredentials() });
   const buffer = await sandbox.readFileToBuffer({ path: WORKSPACE_MANIFEST_PATH });
   if (!buffer) {
     throw new Error(`clarification workspace manifest is missing in sandbox ${sandboxId}`);
   }
-  return parseWorkspaceManifest(buffer.toString("utf8"));
+  parseVerifiedWorkspaceManifest(buffer.toString("utf8"), trustedManifest);
 }
-captureWorkspaceManifestStep.maxRetries = 0;
+verifyWorkspaceManifestStep.maxRetries = 0;
 
 export async function createClarificationCheckpointStep(input: {
   ticketKey: string | null;

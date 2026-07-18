@@ -5,6 +5,7 @@ import {
   buildWorkspaceManifest,
   WORKSPACE_MANIFEST_PATH,
   WORKSPACE_REPOS_DIR,
+  type WorkspaceManifest,
   type WorkspaceRepo,
   type WorkspaceRepositoryInput,
 } from "./repo-workspace.js";
@@ -44,7 +45,7 @@ export class SandboxManager {
     configureOpts: ConfigureOpts,
     additionalAgents: ReadonlyArray<{ agent: AgentAdapter; configureOpts: ConfigureOpts }> = [],
     lifecycle: SandboxLifecycle = {},
-  ): Promise<SandboxInstance> {
+  ): Promise<{ sandbox: SandboxInstance; workspaceManifest: WorkspaceManifest }> {
     if (input.repositories.length === 0) {
       throw new Error("Cannot provision sandbox without selected repositories");
     }
@@ -184,7 +185,7 @@ export class SandboxManager {
         await extra.agent.configure(sandbox, extra.configureOpts);
       }
 
-      return sandbox;
+      return { sandbox, workspaceManifest: manifest };
     } catch (err) {
       if (sandbox) await this.teardown(sandbox);
       throw err;

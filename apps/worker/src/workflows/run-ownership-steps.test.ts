@@ -13,8 +13,12 @@ const acknowledgeStartedDelivery = vi.fn();
 const setApprovalRun = vi.fn();
 const listSandboxes = vi.fn();
 const stopSandboxes = vi.fn();
+const updateLabels = vi.fn();
 vi.mock("../lib/step-adapters.js", () => ({
-  createStepAdapters: () => ({ runRegistry: { bindRun, release, listSandboxes } }),
+  createStepAdapters: () => ({
+    runRegistry: { bindRun, release, listSandboxes },
+    issueTracker: { updateLabels },
+  }),
 }));
 vi.mock("../db/client.js", () => ({ getDb: () => ({ db: true }) }));
 vi.mock("../../env.js", () => ({ env: { MAX_CONCURRENT_AGENTS: 3 } }));
@@ -56,6 +60,7 @@ describe("workflow owner steps", () => {
     setApprovalRun.mockReset();
     listSandboxes.mockReset().mockResolvedValue([]);
     stopSandboxes.mockReset().mockResolvedValue(0);
+    updateLabels.mockReset();
   });
 
   it("self-records the exact plan-approval workflow after owner bind", async () => {
@@ -277,5 +282,21 @@ describe("workflow owner steps", () => {
     expect(await terminalReleaseAndDrainStep("subject", "owner", "run-a")).toBe(false);
     expect(release).not.toHaveBeenCalled();
     expect(drain).not.toHaveBeenCalled();
+  });
+
+  it("repairs clarification label removal independently and replay-safely", async () => {
+    updateLabels
+      .mockRejectedValueOnce(new Error("Jira is temporarily unavailable"))
+      .mockResolvedValueOnce(undefined);
+    const { repairClarificationLabelStep } = await import("./run-ownership-steps.js");
+
+    await expect(repairClarificationLabelStep("AWT-1")).rejects.toThrow(
+      "Jira is temporarily unavailable",
+    );
+    await expect(repairClarificationLabelStep("AWT-1")).resolves.toBeUndefined();
+    expect(updateLabels).toHaveBeenCalledTimes(2);
+    expect(updateLabels).toHaveBeenLastCalledWith("AWT-1", {
+      remove: ["needs-clarification"],
+    });
   });
 });

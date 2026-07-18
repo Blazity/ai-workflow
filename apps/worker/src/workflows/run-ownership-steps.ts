@@ -161,3 +161,18 @@ export async function acknowledgePendingTriggerStep(
   });
 }
 acknowledgePendingTriggerStep.maxRetries = 0;
+
+/** Repair the best-effort label removal performed while dispatching a
+ * clarification continuation. This step deliberately does no pending-row or
+ * telemetry housekeeping: replaying it cannot supersede a newer question. */
+export async function repairClarificationLabelStep(ticketKey: string): Promise<void> {
+  "use step";
+  const { createStepAdapters } = await import("../lib/step-adapters.js");
+  const { NEEDS_CLARIFICATION_LABEL } = await import("../lib/labels.js");
+  const { issueTracker } = createStepAdapters();
+  if (typeof issueTracker.updateLabels !== "function") return;
+  await issueTracker.updateLabels(ticketKey, {
+    remove: [NEEDS_CLARIFICATION_LABEL],
+  });
+}
+// Intentionally keep Workflow's default retries: removing a label is idempotent.

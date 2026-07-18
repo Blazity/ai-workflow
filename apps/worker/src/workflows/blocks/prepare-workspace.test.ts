@@ -80,7 +80,19 @@ describe("prepare_workspace execute", () => {
         | { onCreated?: (sandboxId: string) => Promise<void> }
         | undefined;
       await lifecycle?.onCreated?.("sbx-9");
-      return { sandboxId: "sbx-9" };
+      return {
+        sandbox: { sandboxId: "sbx-9" },
+        workspaceManifest: {
+          version: 1,
+          repositories: [{
+            ...repo,
+            slug: "acme__api",
+            localPath: "/vercel/sandbox",
+            branchName: "blazebot/awt-1",
+            preAgentSha: "trusted-sha",
+          }],
+        },
+      };
     });
   });
 
@@ -117,6 +129,14 @@ describe("prepare_workspace execute", () => {
       "sbx-9",
     );
     expect(ctx.sandboxId).toBe("sbx-9");
+    expect(ctx.workspaceManifest).toEqual({
+      version: 1,
+      repositories: [expect.objectContaining({
+        repoPath: "acme/api",
+        branchName: "blazebot/awt-1",
+        preAgentSha: "trusted-sha",
+      })],
+    });
     expect(ctx.selectedRepositories).toEqual([repo]);
     expect(ctx.repositoryContexts).toEqual(contextsFor(repo));
     expect(ctx.preSandboxAdditions).toEqual(promptAdditions);
@@ -224,7 +244,19 @@ describe("prepare_workspace execute", () => {
   it("is idempotent and reuses an already attached workspace", async () => {
     mocks.runPreSandboxPhase.mockResolvedValue({ status: "continue", selectedRepositories: [repo] });
     mocks.blockFetchPrContextsStep.mockResolvedValue(contextsFor(repo));
-    mocks.provisionMultiRepo.mockResolvedValueOnce({ sandboxId: "sbx-a" });
+    mocks.provisionMultiRepo.mockResolvedValueOnce({
+      sandbox: { sandboxId: "sbx-a" },
+      workspaceManifest: {
+        version: 1,
+        repositories: [{
+          ...repo,
+          slug: "acme__api",
+          localPath: "/vercel/sandbox",
+          branchName: "blazebot/awt-1",
+          preAgentSha: "trusted-sha",
+        }],
+      },
+    });
 
     const ctx = makeCtx({ sandboxId: null, sandboxIds: new Set<string>() });
 

@@ -14,7 +14,10 @@ import type {
   PreSandboxPromptAddition,
   SelectedRepositoryPromptContext,
 } from "../../sandbox/context.js";
-import type { WorkspaceRepositoryInput } from "../../sandbox/repo-workspace.js";
+import type {
+  WorkspaceManifest,
+  WorkspaceRepositoryInput,
+} from "../../sandbox/repo-workspace.js";
 import type { WorkspacePublicationResult } from "../workspace-publication.js";
 import type { LoadedPrompts } from "../prompts-step.js";
 import type { AgentWorkflowInput } from "../agent-input.js";
@@ -27,8 +30,8 @@ import type { RunBudgetObservation } from "../run-budget.js";
  *
  * Mutation contract (executors write back through the shared object):
  * - prepare_workspace sets `sandboxId` (and appends to `sandboxIds`),
- *   `selectedRepositories`, `repositoryContexts`, `preSandboxAdditions`, and
- *   `arthur.taskId`.
+ *   `workspaceManifest`, `selectedRepositories`, `repositoryContexts`,
+ *   `preSandboxAdditions`, and `arthur.taskId`.
  * - fetch_pr_context refreshes `repositoryContexts`.
  * - finalize_workspace sets `publication`.
  * All other fields are read-only from the executors' perspective.
@@ -57,6 +60,9 @@ export interface EngineCtx {
   branchName: string;
   /** Null until prepare_workspace provisions a sandbox. */
   sandboxId: string | null;
+  /** Manager-authored repository identity, routing, and baseline metadata.
+   * Never replace this with a manifest read after agent code has run. */
+  workspaceManifest: WorkspaceManifest | null;
   /** Agent-only scratch sandboxes used by planning and workspace-free Generic
    *  blocks. They never contain checked-out repositories and therefore do not
    * satisfy modular workspace consumers. */

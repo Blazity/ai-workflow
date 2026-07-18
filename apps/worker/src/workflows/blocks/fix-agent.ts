@@ -154,8 +154,14 @@ async function buildFixInput(block: WorkflowDefinitionNode, ctx: EngineCtx): Pro
  * plus the pr_trigger entry payload. The phase label embeds the sanitized block
  * id so artifact paths stay unique per block.
  */
-export const execute: BlockExecuteFn = async (block, _steps, ctx): Promise<BlockExecutionResult> => {
-  const workspace = await ensureWorkspace(ctx);
+export const execute: BlockExecuteFn = async (
+  block,
+  _steps,
+  ctx,
+  _resolvedInputs,
+  execution,
+): Promise<BlockExecutionResult> => {
+  const workspace = await ensureWorkspace(ctx, execution);
   if (workspace.kind !== "next") return workspace;
   if (!ctx.sandboxId) {
     return { kind: "failed", output: { status: "failed" }, reason: "workspace was not attached" };

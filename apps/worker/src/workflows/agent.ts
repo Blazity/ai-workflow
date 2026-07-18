@@ -21,6 +21,7 @@ import {
   type StepsRecord,
 } from "../workflow-definition/interpreter.js";
 import type {
+  BlockExecutionContext,
   BlockExecutionResult,
   BlockExecutor,
   ExecuteGraphHooks,
@@ -1092,13 +1093,24 @@ async function agentWorkflowBody(
   const ticket = await resolveWorkflowTicketStep(entry, env.COLUMN_AI);
   if (!ticket) return;
 
+  // A clarification continuation intentionally skips broad re-pickup
+  // housekeeping because superseding pending rows is unsafe on replay. Repair
+  // only the idempotent label removal that may have failed during dispatch.
+  if (resumeCheckpoint && entry.ticketKey) {
+    const { repairClarificationLabelStep } = await import("./run-ownership-steps.js");
+    await repairClarificationLabelStep(ticket.identifier).catch((error) => {
+      console.error("Clarification label repair failed:", error);
+    });
+  }
+
   // Re-pickup housekeeping (strip the awaiting-input label, supersede any pending
   // clarification, flip parked predecessor runs off "awaiting"). Gated to the
   // entry kinds that own the ticket's main work thread: a plain "ticket" pickup
-  // and a "clarification_answered" resume. A pr_trigger / plan_approved run is a
-  // PR/plan follow-up that must NOT touch the ticket's clarification state, so it
-  // skips the whole step, including the label removal. All operations inside are
-  // idempotent, so this is a safe no-op on a first pickup too.
+  // or a clarification answer whose checkpoint could not be restored. A restored
+  // continuation uses only the isolated label repair above. A pr_trigger /
+  // plan_approved run is a PR/plan follow-up that must NOT touch the ticket's
+  // clarification state. All operations inside are idempotent, so this is a safe
+  // no-op on a first pickup too.
   if (entryOwnsClarificationThread(entry)) {
     await reconcileClarificationsOnPickup(
       ticket.identifier,
@@ -1379,6 +1391,7 @@ async function agentWorkflowBody(
         : {}),
       branchName,
       sandboxId: null,
+      workspaceManifest: resumeCheckpoint?.workspaceManifest ?? null,
       agentSandboxIds: {},
       sandboxIds: new Set<string>(),
       selectedRepositories: resumeCheckpoint?.workspaceManifest?.repositories ?? [],
@@ -1500,7 +1513,6 @@ async function agentWorkflowBody(
         }
 
         const {
-          captureWorkspaceManifestStep,
           completeClarificationCheckpointStep,
           createClarificationCheckpointStep,
           markClarificationSnapshotCleanupFailedBySnapshotIdStep,
@@ -1508,11 +1520,18 @@ async function agentWorkflowBody(
           newClarificationCheckpointExpiryStep,
           publishClarificationCheckpointStep,
           updateClarificationCheckpointBudgetStep,
+          verifyWorkspaceManifestStep,
         } = await import("./clarification-checkpoint-steps.js");
         const { normalizeClarificationOrigin } = await import("./agent-input.js");
-        const workspaceManifest = ctx.sandboxId
-          ? await captureWorkspaceManifestStep(ctx.sandboxId)
-          : null;
+        const workspaceManifest = ctx.workspaceManifest;
+        if (ctx.sandboxId) {
+          if (!workspaceManifest) {
+            throw new Error("code workspace is missing its trusted provisioned manifest");
+          }
+          await verifyWorkspaceManifestStep(ctx.sandboxId, workspaceManifest);
+        } else if (workspaceManifest) {
+          throw new Error("trusted workspace manifest exists without a code sandbox");
+        }
         const expiresAt = await newClarificationCheckpointExpiryStep();
         const checkpoint = await createClarificationCheckpointStep({
           ticketKey: entry.ticketKey ?? null,
@@ -1715,11 +1734,11 @@ async function agentWorkflowBody(
         await writeAttachments(sandboxId, downloadedAttachments);
         attachmentSandboxIds.add(sandboxId);
       };
-      const ensureCodeWorkspace = async (): Promise<
+      const ensureCodeWorkspace = async (execution?: BlockExecutionContext): Promise<
         | { kind: "ready"; sandboxId: string }
         | { kind: "exit"; result: BlockExecutionResult }
       > => {
-        const result = await ensureWorkspace(ctx);
+        const result = await ensureWorkspace(ctx, execution);
         if (result.kind !== "next") return { kind: "exit", result };
         if (!ctx.sandboxId) return { kind: "exit", result: noWorkspace("prepare_workspace") };
         await writeAttachmentsOnce(ctx.sandboxId);
@@ -1821,7 +1840,7 @@ async function agentWorkflowBody(
           }
 
           case "implementation_agent": {
-            const workspace = await ensureCodeWorkspace();
+            const workspace = await ensureCodeWorkspace(execution);
             if (workspace.kind === "exit") return workspace.result;
             const sandboxId = workspace.sandboxId;
             const implPhase = phaseKey("Impl", state.attempt);
@@ -1890,7 +1909,7 @@ async function agentWorkflowBody(
           }
 
           case "review_agent": {
-            const workspace = await ensureCodeWorkspace();
+            const workspace = await ensureCodeWorkspace(execution);
             if (workspace.kind === "exit") return workspace.result;
             const sandboxId = workspace.sandboxId;
             const reviewPhase = phaseKey("Review", state.attempt);

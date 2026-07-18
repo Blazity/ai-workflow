@@ -94,3 +94,43 @@ export function buildWorkspaceManifest(input: {
 export function parseWorkspaceManifest(raw: string): WorkspaceManifest {
   return workspaceManifestSchema.parse(JSON.parse(raw));
 }
+
+/** Parse the sandbox copy and prove that it is still exactly the manifest the
+ * manager authored before agent code ran. Arrays remain order-sensitive and
+ * object keys are compared independent of serialization order. */
+export function parseVerifiedWorkspaceManifest(
+  raw: string,
+  trusted: WorkspaceManifest,
+): WorkspaceManifest {
+  const parsedJson: unknown = JSON.parse(raw);
+  const manifest = workspaceManifestSchema.parse(parsedJson);
+  if (!jsonValuesEqual(parsedJson, trusted)) {
+    throw new Error("Workspace manifest does not match the trusted provisioned manifest");
+  }
+  return manifest;
+}
+
+function jsonValuesEqual(left: unknown, right: unknown): boolean {
+  if (left === right) return true;
+  if (Array.isArray(left) || Array.isArray(right)) {
+    return Array.isArray(left) &&
+      Array.isArray(right) &&
+      left.length === right.length &&
+      left.every((value, index) => jsonValuesEqual(value, right[index]));
+  }
+  if (
+    typeof left !== "object" || left === null ||
+    typeof right !== "object" || right === null
+  ) {
+    return false;
+  }
+  const leftRecord = left as Record<string, unknown>;
+  const rightRecord = right as Record<string, unknown>;
+  const leftKeys = Object.keys(leftRecord).filter((key) => leftRecord[key] !== undefined).sort();
+  const rightKeys = Object.keys(rightRecord).filter((key) => rightRecord[key] !== undefined).sort();
+  return leftKeys.length === rightKeys.length &&
+    leftKeys.every(
+      (key, index) =>
+        key === rightKeys[index] && jsonValuesEqual(leftRecord[key], rightRecord[key]),
+    );
+}

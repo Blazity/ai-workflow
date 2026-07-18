@@ -117,9 +117,11 @@ describe("fix_agent execute", () => {
 
   it("implicitly ensures a workspace when none is attached", async () => {
     mocks.parseAgentOutput.mockReturnValue({ result: "implemented", summary: "patched" });
-    const result = await execute(makeNode("fix_agent"), {}, makeCtx({ sandboxId: null }));
+    const ctx = makeCtx({ sandboxId: null });
+    const execution = { clarificationAnswer: "Use github:acme/api" };
+    const result = await execute(makeNode("fix_agent"), {}, ctx, {}, execution);
 
-    expect(mocks.ensureWorkspace).toHaveBeenCalledTimes(1);
+    expect(mocks.ensureWorkspace).toHaveBeenCalledWith(ctx, execution);
     expect(result).toEqual({
       kind: "next",
       output: {
