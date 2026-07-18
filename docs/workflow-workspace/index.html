@@ -806,7 +806,7 @@
           contract: "out: plan | questions",
           input: "{\n  ticket: TicketContext,\n  comments: CommentContext[],\n  prior_answers?: HumanAnswer[]\n}",
           output: "{\n  status: \"ready\" | \"needs_human_input\",\n  plan?: string,\n  questions?: string[],\n  assumptions?: string[]\n}",
-          note: "On needs_human_input the runtime stops the agent, preserves a durable checkpoint, and targets a snapshot-backed pinned successor that reruns only the waiting agent before following downstream edges. This path ships only after the real Vercel snapshot/restore/expiry probe passes; it is not something a workflow author wires up."
+          note: "On needs_human_input the runtime stops the agent, preserves a durable checkpoint, and targets a snapshot-backed pinned successor that reruns only the waiting agent before following downstream edges. The real Vercel snapshot/restore/expiry and git-index probe passed on 2026-07-17; this continuation is a runtime capability, not something a workflow author wires up."
         },
         "agent.implementation": {
           group: "agent",
@@ -851,7 +851,7 @@
           contract: "out: workspace_id, repos, materialization",
           input: "{\n  target: PrRef | TicketContext,\n  repo_selection_policy: RepoSelectionPolicy,\n  branch_policy: BranchPolicy,\n  persistence_policy?: PersistencePolicy\n}",
           output: "{\n  workspace_id: string,\n  repos: SelectedRepo[],\n  branches: BranchRef[],\n    // BranchRef = {provider, repo_path, branch}\n  materialization: \"created\"\n    | \"resumed_warm\" | \"rebuilt_cold\"\n}",
-          note: "Optional for specialized agents, which prepare or resume their workspace automatically. Use this block explicitly in modular/custom workflows to control repository selection, branch policy, or persistence. Snapshot-backed clarification continuation is the selected target and is gated on a real Vercel capability probe; longer-term warm/cold workspace lifecycle, TTL, and retention policy remain open."
+          note: "Optional for specialized agents, which prepare or resume their workspace automatically. Use this block explicitly in modular/custom workflows to control repository selection, branch policy, or persistence. The Vercel snapshot/restore/expiry and git-index capability probe passed on 2026-07-17, so snapshot-backed clarification continuation is implemented; longer-term warm/cold workspace lifecycle, TTL, and retention policy remain open."
         },
         "ws.finalize": {
           group: "workspace",
@@ -912,7 +912,8 @@
           blurb: "Opens one pull/merge request per changed repo from the finalized workspace.",
           contract: "out: prs (one per changed repo)",
           input: "{\n  publication_attempt_id: string,\n  branches: FinalizedBranchRef[],\n  title: string,\n  body: string\n}",
-          output: "{ prs: PrRef[] }"
+          output: "{ prs: PrRef[] }",
+          note: "Consumes the durable publication produced by Finalize workspace and creates or reuses provider PRs/MRs idempotently. It does not push workspace changes; Finalize remains the sole push boundary, and the active-run claim remains held through later ticket and notification blocks."
         },
         "vcs.pr-comment": {
           group: "vcs",
@@ -949,6 +950,15 @@
           output: "{\n  answers: HumanAnswer[],\n  answered_by: UserRef\n}"
         },
 
+        "util.pre-pr-checks": {
+          group: "utility",
+          title: "Pre-PR checks",
+          blurb: "Runs the product's configured pre-publication validation and bounded fix cycle in the workspace.",
+          contract: "out: ok, fix_cycles, summary",
+          input: "{\n  workspace_id: string,\n  max_fix_cycles?: number\n}",
+          output: "{\n  status: \"ok\" | \"failed\",\n  ok: boolean,\n  fix_cycles: number,\n  summary: string\n}",
+          note: "This is the existing pre-PR gate used before Finalize/Open PR. Unlike report-oriented Run checks, it blocks the authored path when configured validation remains failing after the bounded fix cycle. It is separate from post-PR provider CI and reviewer-driven remediation."
+        },
         "util.checks": {
           group: "utility",
           title: "Run checks",
@@ -982,15 +992,7 @@
           contract: "out: ok, findings",
           input: "{ content: string }",
           output: "{\n  ok: boolean,\n  findings: InjectionFinding[]\n}",
-          note: "Add-on group: the core product runs without Arthur Engine. These blocks appear only when Arthur Engine is configured."
-        },
-        "arthur.trace": {
-          group: "arthur",
-          title: "Trace run",
-          blurb: "Passive per-run prompt/tool tracing into Arthur Engine for deeper observability.",
-          contract: "passive — no output consumed",
-          input: "config { task_name?: string }",
-          output: "passive wrapper — adds tracing,\nno downstream output"
+          note: "Add-on group: the core product runs without Arthur Engine. This block is available only when Arthur Engine is configured. Core run/block telemetry is automatic; the retired passive Trace run block is not part of the catalog."
         }
       };
 
@@ -1006,7 +1008,7 @@
           title: "Block Registry",
           short: "Block Registry",
           tag: "Registry",
-          badge: "9 groups · 27 blocks",
+          badge: "9 groups · 28 blocks",
           width: 1720
         },
         {
@@ -1020,7 +1022,7 @@
           items: [
             {
               head: "Clarification cannot be forgotten",
-              body: "Human-in-the-loop is a runtime capability, not a block. Any agent may return <code>status: \"needs_human_input\"</code>; the runtime stops the agent, stores its exact definition/version and prior safe outputs, snapshots any unpublished workspace, and hands the owner claim to a pinned successor that reruns only the waiting agent. This selected path ships only after the real Vercel snapshot/restore/expiry probe passes. No workflow can deadlock because someone forgot a clarification block."
+              body: "Human-in-the-loop is a runtime capability, not a block. Any agent may return <code>status: \"needs_human_input\"</code>; the runtime stops the agent, stores its exact definition/version and prior safe outputs, snapshots any unpublished workspace, and hands the owner claim to a pinned successor that reruns only the waiting agent. The real Vercel snapshot/restore/expiry and git-index probe passed on 2026-07-17. No workflow can deadlock because someone forgot a clarification block."
             },
             {
               head: "Every output is typed",
@@ -1028,7 +1030,7 @@
             },
             {
               head: "Workspace state survives continuation",
-              body: "Unpublished work, repository/branch identity, untracked files, and conflict index state survive clarification in the capability-gated snapshot restored by the pinned successor. Snapshot steps carry only serializable IDs, scrub old credentials, and inject fresh credentials after restore. Specialized code agents attach implicitly; workspace-mutating generic workflows compose Prepare / Finalize explicitly."
+              body: "Unpublished work, repository/branch identity, untracked files, and conflict index state survive clarification in the verified snapshot restored by the pinned successor. Snapshot steps carry only serializable IDs, scrub old credentials, and inject fresh credentials after restore. Specialized code agents attach implicitly; workspace-mutating generic workflows compose Prepare / Finalize explicitly."
             },
             {
               head: "Failure has a default path",
@@ -1076,7 +1078,7 @@
           notes: [
             { x: 340, y: 460, w: 620,
               head: "What the specialized agents absorb",
-              body: "Planning: the clarification loop and human-question protocol. Implementation: workspace prepare/resume, branch policy, commit enforcement, pre-PR verification. Finalize is the sole push boundary; Open PR only consumes its successful output. The runtime handles the durable checkpoint and continuation around <code>needs_human_input</code> automatically; the exact snapshot-backed successor model remains gated on Vercel feasibility." }
+              body: "Planning: the clarification loop and human-question protocol. Implementation: workspace prepare/resume, branch policy, commit enforcement, pre-PR verification. Finalize is the sole push boundary; Open PR only consumes its successful output. The runtime handles the durable checkpoint and pinned successor continuation around <code>needs_human_input</code> automatically; the Vercel snapshot/restore/expiry and git-index feasibility probe passed on 2026-07-17." }
           ]
         },
         {
@@ -1250,7 +1252,7 @@
             },
             {
               head: "Persistent workspace lifecycle",
-              body: "Snapshot-backed clarification continuation is the selected implementation target, gated on a real Vercel snapshot/restore/expiry and git-index probe. Remaining: the general named-Sandbox versus run-local model, cold rebuild policy, TTL/keep-last limits beyond the pending clarification, and park/destroy retention."
+              body: "Snapshot-backed clarification continuation is implemented after the real Vercel snapshot/restore/expiry and git-index probe passed on 2026-07-17. Remaining: the general named-Sandbox versus run-local model, cold rebuild policy, TTL/keep-last limits beyond the pending clarification, and park/destroy retention."
             },
             {
               head: "MVP provider coverage",
@@ -1278,7 +1280,7 @@
             },
             {
               head: "Arthur tracing policy",
-              body: "Core run/block telemetry is automatic. Decide whether Arthur prompt/tool tracing is also automatic whenever configured, a workflow-level opt-in, or represented by the passive <code>Trace run</code> block."
+              body: "Core run/block telemetry is automatic. The passive Trace run block was retired; decide separately whether future Arthur prompt/tool tracing should be automatic whenever configured or a workflow-level opt-in."
             }
           ]
         }

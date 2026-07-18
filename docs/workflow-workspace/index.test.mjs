@@ -215,7 +215,7 @@ test("publishes only through Finalize and models the merged ticket transition", 
   assert.match(merged.notes[0].body, /transition intent/i);
 });
 
-test("records the capability-gated clarification model and execution budgets", () => {
+test("records the verified clarification model and execution budgets", () => {
   const { BLOCKS, FRAMES } = loadCanvasData();
   const guarantees = FRAMES.find(({ slug }) => slug === "guarantees");
   const decisions = FRAMES.find(({ slug }) => slug === "decisions");
@@ -223,7 +223,9 @@ test("records the capability-gated clarification model and execution budgets", (
   const decisionText = decisions.items.map(({ head, body }) => `${head} ${body}`).join(" ");
 
   assert.match(BLOCKS["agent.planning"].note, /snapshot-backed pinned successor/i);
-  assert.match(BLOCKS["agent.planning"].note, /Vercel.*probe/i);
+  assert.match(BLOCKS["agent.planning"].note, /Vercel.*probe.*passed/is);
+  assert.doesNotMatch(guaranteeText, /ships only after.*probe passes/is);
+  assert.doesNotMatch(decisionText, /gated on.*probe/is);
   assert.doesNotMatch(guaranteeText, /same instance or starts a pinned successor/i);
   assert.doesNotMatch(decisionText, /choose true suspension versus a pinned successor/i);
   assert.match(guaranteeText, /maxDurationMs/);
@@ -231,6 +233,19 @@ test("records the capability-gated clarification model and execution budgets", (
   assert.match(guaranteeText, /maxCostUsd/);
   assert.match(guaranteeText, /one phase may overrun/i);
   assert.match(guaranteeText, /fail closed/i);
+});
+
+test("keeps the authoritative block catalog aligned with the implemented registry", () => {
+  const { BLOCKS, FRAMES } = loadCanvasData();
+  const registry = FRAMES.find(({ slug }) => slug === "registry");
+
+  assert.equal(Object.keys(BLOCKS).length, 28);
+  assert.equal(registry.badge, "9 groups · 28 blocks");
+  assert.ok(BLOCKS["util.pre-pr-checks"]);
+  assert.equal(BLOCKS["arthur.trace"], undefined);
+  assert.match(BLOCKS["util.pre-pr-checks"].note, /pre-PR gate/i);
+  assert.match(BLOCKS["ws.finalize"].note, /does not open PRs/i);
+  assert.match(BLOCKS["vcs.open-pr"].note, /does not push workspace changes/i);
 });
 
 test("records that an accepted plan approval cannot be revoked", () => {

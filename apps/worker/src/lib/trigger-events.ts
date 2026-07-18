@@ -193,7 +193,8 @@ export function normalizeGitLabEvent(
       attrs.action !== "create" ||
       attrs.noteable_type !== "MergeRequest" ||
       attrs.system === true ||
-      attrs.internal === true
+      attrs.internal === true ||
+      attrs.confidential === true
     ) {
       return null;
     }

@@ -596,6 +596,24 @@ describe("POST /webhooks/gitlab", () => {
     expect(mocks.listRepositories).not.toHaveBeenCalled();
   });
 
+  it("fails closed on a confidential merge-request note before normalization", async () => {
+    mockResolveEnabledReviewStates.mockResolvedValueOnce(["commented"]);
+    const note = JSON.parse(validNotePayload());
+    note.object_attributes.confidential = true;
+
+    const response = await makeApp()(
+      makeRequest(JSON.stringify(note), "secret", "Note Hook"),
+    );
+
+    await expect(response.json()).resolves.toEqual({
+      status: "ignored",
+      reason: "note_ignored",
+    });
+    expect(mockDispatchTriggerEvent).not.toHaveBeenCalled();
+    expect(mockResolveEnabledReviewStates).not.toHaveBeenCalled();
+    expect(mocks.listRepositories).not.toHaveBeenCalled();
+  });
+
   it("always treats an eligible GitLab note as commented without reviewer enrichment", async () => {
     mockResolveEnabledReviewStates.mockResolvedValueOnce(["changes_requested", "commented"]);
     mockDispatchTriggerEvent.mockResolvedValueOnce({ result: "started", runId: "run_changes" });

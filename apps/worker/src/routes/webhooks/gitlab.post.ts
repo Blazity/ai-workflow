@@ -52,7 +52,11 @@ export default defineEventHandler(async (event) => {
     return { status: "ignored", reason: "malformed_payload" };
   }
 
-  if (gitLabEvent === "Note Hook" && body?.object_attributes?.internal === true) {
+  if (
+    gitLabEvent === "Note Hook" &&
+    (body?.object_attributes?.internal === true ||
+      body?.object_attributes?.confidential === true)
+  ) {
     return { status: "ignored", reason: "note_ignored" };
   }
 

@@ -1010,7 +1010,13 @@ export function validateWorkflowDefinitionForDeployment(
     ...validateWorkflowGraph(def, graphContext),
     ...validateWorkflowBindings(def, registryContext, graphContext),
     ...validateStaticFallbackInputs(def),
-    ...validateWorkspaceCapabilities(def, graphContext),
+    // Existing deployed snapshots predate workspace-capability validation.
+    // Keep those snapshots loadable; the affected executors still fail closed
+    // before side effects when no workspace exists. New deployments retain the
+    // strict producer requirement through the default validation path.
+    ...(options.allowLegacyCompatibility
+      ? []
+      : validateWorkspaceCapabilities(def, graphContext)),
     ...validateAnyScopeReviewSafety(def),
   ];
   for (const node of def.nodes) {

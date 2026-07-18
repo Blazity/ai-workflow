@@ -564,6 +564,17 @@ describe("normalizeGitLabEvent", () => {
     ).toBeNull();
   });
 
+  it("fails closed on GitLab confidential merge-request notes", () => {
+    const note = notePayload();
+    note.object_attributes.confidential = true;
+
+    expect(
+      normalizeGitLabEvent("Note Hook", note, {
+        reviewStates: ["commented"],
+      }),
+    ).toBeNull();
+  });
+
   it("maps a failed pipeline with a merge request to trigger_pr_checks_failed", () => {
     const evt = normalizeGitLabEvent("Pipeline Hook", {
       object_kind: "pipeline",
