@@ -43,7 +43,10 @@ vi.mock("../../lib/logger.js", () => ({
 }));
 vi.mock("../../lib/github-auth.js", () => ({ buildOctokit: mocks.buildOctokit }));
 
-import type { WorkspaceRepositoryInput } from "../../sandbox/repo-workspace.js";
+import type {
+  WorkspaceManifest,
+  WorkspaceRepositoryInput,
+} from "../../sandbox/repo-workspace.js";
 import { emptyPrePrCheckConfig } from "../../pre-pr-checks/config.js";
 import { isRepoAllowed, filterAllowedRepositories } from "../../lib/repo-allowlist.js";
 import {
@@ -662,6 +665,19 @@ describe("finalize_workspace edge cases", () => {
     defaultBranch: "main",
     selectedRationale: "selected",
   };
+  const workspaceManifest: WorkspaceManifest = {
+    version: 1,
+    repositories: [
+      {
+        ...repo,
+        slug: "acme__api",
+        localPath: "/vercel/sandbox",
+        branchName: "blazebot/awt-1",
+        expectedRemoteSha: "before",
+        preAgentSha: "before",
+      },
+    ],
+  };
   beforeEach(() => {
     vi.clearAllMocks();
   });
@@ -672,7 +688,7 @@ describe("finalize_workspace edge cases", () => {
     const result = await executeFinalizeWorkspace(
       makeNode("finalize_workspace"),
       {},
-      makeCtx({ selectedRepositories: [repo] }),
+      makeCtx({ selectedRepositories: [repo], workspaceManifest }),
     );
 
     expect(result.kind).toBe("failed");
@@ -694,7 +710,7 @@ describe("finalize_workspace edge cases", () => {
     const result = await executeFinalizeWorkspace(
       makeNode("finalize_workspace"),
       {},
-      makeCtx({ selectedRepositories: [repo] }),
+      makeCtx({ selectedRepositories: [repo], workspaceManifest }),
     );
 
     expect(result.kind).toBe("failed");
@@ -720,7 +736,7 @@ describe("finalize_workspace edge cases", () => {
     const result = await executeFinalizeWorkspace(
       makeNode("finalize_workspace"),
       {},
-      makeCtx({ selectedRepositories: [repo] }),
+      makeCtx({ selectedRepositories: [repo], workspaceManifest }),
     );
 
     expect(result.kind).toBe("next");
