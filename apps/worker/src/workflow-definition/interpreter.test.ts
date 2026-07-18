@@ -210,6 +210,7 @@ describe("executeGraph linear walk", () => {
     });
 
     expect(result.outcome).toBe("completed");
+    expect(Object.getPrototypeOf(result.steps)).toBeNull();
     expect(calls).toEqual(["waiting", "after"]);
     expect(seenSteps[0]).toEqual(["before", "trig"]);
     expect(seenAnswers).toEqual([
