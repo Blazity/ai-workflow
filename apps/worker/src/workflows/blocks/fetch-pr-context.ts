@@ -11,18 +11,10 @@ export const paramsSchema = z.object({}).strict();
  * enriched with the ticket's workflow-owned branch record when one exists.
  */
 export async function blockPrTriggerRepositoriesStep(
-  ticketKey: string,
+  _ticketKey: string,
   pr: PrTriggerPayload,
 ): Promise<SelectedRepository[]> {
   "use step";
-  const { getDb } = await import("../../db/client.js");
-  const { listWorkflowOwnedBranchesForTicket } = await import(
-    "../../db/queries/workflow-owned-branches.js"
-  );
-  const records = await listWorkflowOwnedBranchesForTicket(getDb(), ticketKey);
-  const owned = records.find(
-    (record) => record.provider === pr.provider && record.repoPath === pr.repoPath,
-  );
   return [
     {
       provider: pr.provider,
@@ -30,8 +22,8 @@ export async function blockPrTriggerRepositoriesStep(
       defaultBranch: pr.baseRef,
       selectedRationale: `PR trigger for ${pr.provider}:${pr.repoPath} #${pr.prNumber}`,
       workflowOwnedBranch: {
-        branchName: owned?.branchName ?? pr.headRef,
-        pr: owned?.pr ?? { id: pr.prNumber, url: pr.prUrl, branch: pr.headRef },
+        branchName: pr.headRef,
+        pr: { id: pr.prNumber, url: pr.prUrl, branch: pr.headRef },
       },
     },
   ];

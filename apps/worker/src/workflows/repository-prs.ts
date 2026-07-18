@@ -10,6 +10,31 @@ export interface WorkflowPrLink {
   isNew: boolean;
 }
 
+/** Find-only reconciliation used before publication safety checks. It lets a
+ * retry journal a provider side effect that succeeded before a prior ledger
+ * write failed, without opening another PR/MR. */
+export async function findWorkflowOwnedPullRequestForBranch(input: {
+  branchName: string;
+  repository: SelectedRepository;
+}): Promise<WorkflowPrLink | null> {
+  "use step";
+  const { createRepositoryVCS } = await import("../lib/vcs-runtime.js");
+  const pr = await createRepositoryVCS({
+    provider: input.repository.provider,
+    repoPath: input.repository.repoPath,
+    baseBranch: input.repository.defaultBranch,
+  }).findPR(input.branchName);
+  return pr
+    ? {
+        provider: input.repository.provider,
+        repoPath: input.repository.repoPath,
+        ...pr,
+        isNew: false,
+      }
+    : null;
+}
+findWorkflowOwnedPullRequestForBranch.maxRetries = 3;
+
 /** Provider-only PR phase used by durable publication. Database correlation
  * is deliberately separate so an accepted provider side effect can be
  * journaled before any secondary write is attempted. */
@@ -31,6 +56,7 @@ export async function recordWorkflowOwnedPullRequest(input: {
   ticketKey: string;
   pr: WorkflowPrLink;
   publishedHeadSha: string;
+  targetBranch: string;
 }): Promise<void> {
   "use step";
   const { getDb } = await import("../db/client.js");
@@ -43,6 +69,7 @@ export async function recordWorkflowOwnedPullRequest(input: {
     repoPath: input.pr.repoPath,
     branchName: input.pr.branch,
     publishedHeadSha: input.publishedHeadSha,
+    targetBranch: input.targetBranch,
     pr: {
       id: input.pr.id,
       url: input.pr.url,
@@ -61,13 +88,17 @@ export async function recordWorkflowOwnedPullRequestIntent(input: {
   repoPath: string;
   branchName: string;
   publishedHeadSha: string;
+  targetBranch: string;
 }): Promise<void> {
   "use step";
   const { getDb } = await import("../db/client.js");
   const { upsertWorkflowOwnedBranch } = await import(
     "../db/queries/workflow-owned-branches.js"
   );
-  await upsertWorkflowOwnedBranch(getDb(), input, { replacePullRequest: true });
+  await upsertWorkflowOwnedBranch(getDb(), {
+    ...input,
+    prCorrelationPending: true,
+  });
 }
 recordWorkflowOwnedPullRequestIntent.maxRetries = 0;
 

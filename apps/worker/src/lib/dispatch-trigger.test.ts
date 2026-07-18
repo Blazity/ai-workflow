@@ -5,7 +5,10 @@ import {
   workflowDefinitionVersions,
 } from "../db/schema.js";
 import { createTestDb } from "../db/test-db.js";
-import { upsertWorkflowOwnedBranch } from "../db/queries/workflow-owned-branches.js";
+import {
+  findWorkflowOwnedPullRequest,
+  upsertWorkflowOwnedBranch,
+} from "../db/queries/workflow-owned-branches.js";
 import { PostgresRunRegistry } from "../adapters/run-registry/postgres.js";
 import { IssueTrackerNotFoundError } from "../adapters/issue-tracker/types.js";
 import type { TriggerEvent } from "./trigger-events.js";
@@ -860,72 +863,123 @@ describe("dispatchTriggerEvent durable envelope", () => {
     });
   });
 
-  it("holds a PR-created delivery until its exact provider PR correlation is durable", async () => {
+  it("atomically binds an exact current PR-created delivery to its durable intent", async () => {
     await upsertWorkflowOwnedBranch(db, {
       ticketKey: "AIW-1",
       provider: "github",
       repoPath: "acme/app",
       branchName: "feature/owned",
       publishedHeadSha: "abc123",
+      targetBranch: "main",
+      pr: {
+        id: 42,
+        url: "https://github.com/acme/app/pull/42",
+        branch: "feature/owned",
+      },
+    });
+    await upsertWorkflowOwnedBranch(db, {
+      ticketKey: "AIW-1",
+      provider: "github",
+      repoPath: "acme/app",
+      branchName: "feature/owned",
+      publishedHeadSha: "abc123",
+      targetBranch: "main",
+      prCorrelationPending: true,
     });
     mockGetEnabled.mockResolvedValue(enabled());
-    const { dispatchTriggerEvent, recoverAcceptedTriggerDelivery } = await import(
-      "./dispatch-trigger.js"
-    );
+    const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
 
-    await expect(dispatchTriggerEvent(event(), deps())).resolves.toEqual({ result: "error" });
+    await expect(dispatchTriggerEvent(event(), deps())).resolves.toEqual({
+      result: "started",
+      runId: "run-pr",
+    });
     await expect(getTriggerDelivery(db, "github", "delivery-1")).resolves.toMatchObject({
-      status: "accepted",
-      result: null,
+      status: "completed",
       subjectKey: "ticket:jira:AIW-1",
       ticketKey: "AIW-1",
       pr: expect.objectContaining({ prNumber: 7, headSha: "abc123" }),
     });
-    expect(mockStart).not.toHaveBeenCalled();
-
-    await correlate();
-
-    const metrics = await recoverAcceptedTriggerDeliveries({
-      listDeliveries: () =>
-        listRecoverableAcceptedTriggerDeliveries(db, new Date(Date.now() + 60_000)),
-      getActive: (subjectKey) => registry.get(subjectKey),
-      resume: (stored) => recoverAcceptedTriggerDelivery(stored, deps()),
-    });
-
-    expect(metrics).toMatchObject({ scanned: 1, attempted: 1, started: 1, errors: 0 });
     expect(mockStart).toHaveBeenCalledOnce();
+    await expect(
+      findWorkflowOwnedPullRequest(db, {
+        provider: "github",
+        repoPath: "acme/app",
+        prNumber: 7,
+        branchName: "feature/owned",
+        publishedHeadSha: "abc123",
+        baseBranch: "main",
+      }),
+    ).resolves.toMatchObject({ ticketKey: "AIW-1", pr: { id: 7 } });
+
+    await expect(
+      dispatchTriggerEvent(
+        event({
+          delivery: { provider: "github", producer: "alice", deliveryId: "delivery-2" },
+          pr: {
+            ...event().pr,
+            prNumber: 8,
+            prUrl: "https://github.com/acme/app/pull/8",
+          },
+        }),
+        deps(),
+      ),
+    ).resolves.toEqual({ result: "ignored_not_workflow_owned" });
   });
 
-  it("never dispatches a held PR-created delivery for a different provider PR id", async () => {
+  it("does not let checks self-bind a pending PR intent", async () => {
     await upsertWorkflowOwnedBranch(db, {
       ticketKey: "AIW-1",
       provider: "github",
       repoPath: "acme/app",
       branchName: "feature/owned",
       publishedHeadSha: "abc123",
+      targetBranch: "main",
+      prCorrelationPending: true,
+    });
+    mockGetEnabled.mockResolvedValue(
+      enabledTrigger("trigger_pr_checks_failed", {
+        scope: "workflow_owned",
+        checkNames: ["ci / build"],
+        githubAppSlugs: ["github-actions"],
+      }),
+    );
+    const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
+
+    await expect(dispatchTriggerEvent(checksEvent(), deps())).resolves.toEqual({
+      result: "error",
+    });
+    await expect(
+      findWorkflowOwnedPullRequest(db, {
+        provider: "github",
+        repoPath: "acme/app",
+        prNumber: 7,
+        branchName: "feature/owned",
+        publishedHeadSha: "abc123",
+        baseBranch: "main",
+      }),
+    ).resolves.toBeNull();
+    expect(mockStart).not.toHaveBeenCalled();
+  });
+
+  it("rejects a PR-created event targeting a different base than the intent", async () => {
+    await upsertWorkflowOwnedBranch(db, {
+      ticketKey: "AIW-1",
+      provider: "github",
+      repoPath: "acme/app",
+      branchName: "feature/owned",
+      publishedHeadSha: "abc123",
+      targetBranch: "main",
+      prCorrelationPending: true,
     });
     mockGetEnabled.mockResolvedValue(enabled());
-    const { dispatchTriggerEvent, recoverAcceptedTriggerDelivery } = await import(
-      "./dispatch-trigger.js"
-    );
-    await expect(dispatchTriggerEvent(event(), deps())).resolves.toEqual({ result: "error" });
+    const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
 
-    await upsertWorkflowOwnedBranch(db, {
-      ticketKey: "AIW-1",
-      provider: "github",
-      repoPath: "acme/app",
-      branchName: "feature/owned",
-      publishedHeadSha: "abc123",
-      pr: {
-        id: 8,
-        url: "https://github.com/acme/app/pull/8",
-        branch: "feature/owned",
-      },
-    });
-    const held = await getTriggerDelivery(db, "github", "delivery-1");
-    expect(held).not.toBeNull();
-
-    await expect(recoverAcceptedTriggerDelivery(held!, deps())).resolves.toEqual({
+    await expect(
+      dispatchTriggerEvent(
+        event({ pr: { ...event().pr, baseRef: "release" } }),
+        deps(),
+      ),
+    ).resolves.toEqual({
       result: "ignored_not_workflow_owned",
     });
     await expect(getTriggerDelivery(db, "github", "delivery-1")).resolves.toMatchObject({

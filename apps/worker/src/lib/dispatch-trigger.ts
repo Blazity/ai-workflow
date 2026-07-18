@@ -14,6 +14,7 @@ import type {
 import type { AgentWorkflowInput, PrTriggerPayload } from "../workflows/agent-input.js";
 import { agentWorkflow } from "../workflows/agent.js";
 import {
+  bindWorkflowOwnedPullRequestIntent,
   findWorkflowOwnedPullRequest,
   findWorkflowOwnedPullRequestIntent,
 } from "../db/queries/workflow-owned-branches.js";
@@ -555,6 +556,7 @@ async function resolveSubjectIdentity(
     prNumber: event.pr.prNumber,
     branchName: event.pr.headRef,
     publishedHeadSha: event.pr.headSha,
+    baseBranch: event.pr.baseRef,
   });
   if (correlation) {
     return resolveTicketIdentity(correlation.ticketKey, "resolved", deps);
@@ -565,9 +567,46 @@ async function resolveSubjectIdentity(
     repoPath: event.pr.repoPath,
     branchName: event.pr.headRef,
     publishedHeadSha: event.pr.headSha,
+    baseBranch: event.pr.baseRef,
   });
-  if (!intent || intent.pr) return { status: "ignored" };
-  return resolveTicketIdentity(intent.ticketKey, "pending_correlation", deps);
+  if (!intent) return { status: "ignored" };
+  if (event.triggerType !== "trigger_pr_created") {
+    return resolveTicketIdentity(intent.ticketKey, "pending_correlation", deps);
+  }
+
+  const bound = await bindWorkflowOwnedPullRequestIntent(deps.db, {
+    ticketKey: intent.ticketKey,
+    provider: event.pr.provider,
+    repoPath: event.pr.repoPath,
+    branchName: event.pr.headRef,
+    publishedHeadSha: event.pr.headSha,
+    baseBranch: event.pr.baseRef,
+    prNumber: event.pr.prNumber,
+    prUrl: event.pr.prUrl,
+  });
+  if (bound) return resolveTicketIdentity(bound.ticketKey, "resolved", deps);
+
+  // The CAS can lose to publication correlation or a newer intent between
+  // lookup and bind. Re-read exact state; never dispatch from the stale
+  // pre-CAS snapshot.
+  const concurrent = await findWorkflowOwnedPullRequest(deps.db, {
+    provider: event.pr.provider,
+    repoPath: event.pr.repoPath,
+    prNumber: event.pr.prNumber,
+    branchName: event.pr.headRef,
+    publishedHeadSha: event.pr.headSha,
+    baseBranch: event.pr.baseRef,
+  });
+  if (concurrent) return resolveTicketIdentity(concurrent.ticketKey, "resolved", deps);
+  const stillPending = await findWorkflowOwnedPullRequestIntent(deps.db, {
+    provider: event.pr.provider,
+    repoPath: event.pr.repoPath,
+    branchName: event.pr.headRef,
+    publishedHeadSha: event.pr.headSha,
+    baseBranch: event.pr.baseRef,
+  });
+  if (!stillPending) return { status: "ignored" };
+  return resolveTicketIdentity(stillPending.ticketKey, "pending_correlation", deps);
 }
 
 async function resolveTicketIdentity(

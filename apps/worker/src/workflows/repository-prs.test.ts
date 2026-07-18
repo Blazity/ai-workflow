@@ -21,6 +21,7 @@ vi.mock("../db/queries/workflow-owned-branches.js", () => ({
 import {
   createOrFindWorkflowOwnedPullRequest,
   createOrUseWorkflowOwnedPullRequestsForRepos,
+  findWorkflowOwnedPullRequestForBranch,
   prepareSelectedRepositoryBranches,
   recordWorkflowOwnedPullRequest,
   recordWorkflowOwnedPullRequestIntent,
@@ -318,6 +319,37 @@ describe("durable publication PR phases", () => {
     expect(createPR).toHaveBeenCalledOnce();
   });
 
+  it("finds an existing provider PR without entering the create phase", async () => {
+    const existing = {
+      id: 48,
+      url: "https://github.com/acme/api/pull/48",
+      branch: "blazebot/aiw-100",
+    };
+    const findPR = vi.fn().mockResolvedValue(existing);
+    const createPR = vi.fn();
+    mocks.createRepositoryVCS.mockReturnValue({ findPR, createPR });
+
+    await expect(
+      findWorkflowOwnedPullRequestForBranch({
+        branchName: "blazebot/aiw-100",
+        repository: {
+          provider: "github",
+          repoPath: "acme/api",
+          defaultBranch: "main",
+          selectedRationale: "durable finalized publication",
+          workflowOwnedBranch: { branchName: "blazebot/aiw-100" },
+        },
+      }),
+    ).resolves.toEqual({
+      provider: "github",
+      repoPath: "acme/api",
+      ...existing,
+      isNew: false,
+    });
+    expect(findPR).toHaveBeenCalledOnce();
+    expect(createPR).not.toHaveBeenCalled();
+  });
+
   it("records an exact branch/head intent before the provider PR id is known", async () => {
     await recordWorkflowOwnedPullRequestIntent({
       ticketKey: "AIW-100",
@@ -325,6 +357,7 @@ describe("durable publication PR phases", () => {
       repoPath: "acme/api",
       branchName: "blazebot/aiw-100",
       publishedHeadSha: "published-sha",
+      targetBranch: "main",
     });
 
     expect(mocks.upsertWorkflowOwnedBranch).toHaveBeenCalledWith(
@@ -335,8 +368,9 @@ describe("durable publication PR phases", () => {
         repoPath: "acme/api",
         branchName: "blazebot/aiw-100",
         publishedHeadSha: "published-sha",
+        targetBranch: "main",
+        prCorrelationPending: true,
       },
-      { replacePullRequest: true },
     );
   });
 
@@ -344,6 +378,7 @@ describe("durable publication PR phases", () => {
     await recordWorkflowOwnedPullRequest({
       ticketKey: "AIW-100",
       publishedHeadSha: "published-sha",
+      targetBranch: "main",
       pr: {
         provider: "github",
         repoPath: "acme/api",
@@ -362,6 +397,7 @@ describe("durable publication PR phases", () => {
         repoPath: "acme/api",
         branchName: "blazebot/aiw-100",
         publishedHeadSha: "published-sha",
+        targetBranch: "main",
         pr: {
           id: 46,
           url: "https://github.com/acme/api/pull/46",

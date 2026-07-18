@@ -178,7 +178,7 @@ Steps:
 4. Replace `--force` with exact `--force-with-lease`; classify lease rejection as terminal stale/concurrent and never auto-retry.
 5. Split current combined publication: Finalize alone pushes and records the durable attempt; Open PR/MR accepts only successful Finalize output and only creates PRs/MRs.
 6. Record provider/network partial publication durably, create no PRs, and report no success.
-7. Reconcile PR/MR existence before creation and after ambiguous errors. Keep transient Open PR/MR failures in `creating_prs` and retry inside the owning workflow with capped durable backoff bounded by run duration/cancellation; only deterministic safety failures become terminal.
+7. Reconcile PR/MR existence before creation and after ambiguous errors. Journal a reconciled or newly created PR before later safety checks, but grant workflow ownership only after exact head validation. Preserve the previous confirmed PR while recording a source-head + target-branch intent; only an authenticated current PR-created event may exact-CAS that intent, never a check/review event. Keep transient Open PR/MR failures in `creating_prs` and retry inside the owning workflow with capped durable backoff bounded by run duration/cancellation; only deterministic safety/provider failures become terminal.
 
 Acceptance:
 

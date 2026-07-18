@@ -780,15 +780,7 @@ describe("fetch_pr_context edge cases", () => {
     expect(mocks.createRepositoryVCS).not.toHaveBeenCalled();
   });
 
-  it("prefers an existing owned-branch record over the pr_trigger payload defaults", async () => {
-    mocks.listWorkflowOwnedBranchesForTicket.mockResolvedValue([
-      {
-        provider: "github",
-        repoPath: "acme/api",
-        branchName: "owned-branch",
-        pr: { id: 99, url: "https://pr/99", branch: "owned-branch" },
-      },
-    ]);
+  it("uses the validated PR event tuple instead of a potentially stale owned-branch row", async () => {
     mocks.createRepositoryVCS.mockReturnValue({
       getPRComments: vi.fn().mockResolvedValue([]),
       getCheckRunResults: vi.fn().mockResolvedValue([]),
@@ -813,8 +805,9 @@ describe("fetch_pr_context edge cases", () => {
 
     expect(result.kind).toBe("next");
     const owned = ctx.repositoryContexts[0].repository.workflowOwnedBranch;
-    expect(owned?.branchName).toBe("owned-branch");
-    expect(owned?.pr?.id).toBe(99);
+    expect(owned?.branchName).toBe("blazebot/awt-1");
+    expect(owned?.pr?.id).toBe(7);
+    expect(mocks.listWorkflowOwnedBranchesForTicket).not.toHaveBeenCalled();
   });
 
   it("maps a rejected VCS call to a failed result", async () => {

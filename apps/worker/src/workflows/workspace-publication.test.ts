@@ -4,6 +4,7 @@ import type { WorkspaceManifest } from "../sandbox/repo-workspace.js";
 
 const mocks = vi.hoisted(() => ({
   publishTrustedWorkspaceFromSandbox: vi.fn(),
+  findWorkflowOwnedPullRequestForBranch: vi.fn(),
   createOrFindWorkflowOwnedPullRequest: vi.fn(),
   recordWorkflowOwnedPullRequestIntent: vi.fn(),
   recordWorkflowOwnedPullRequest: vi.fn(),
@@ -33,6 +34,7 @@ vi.mock("../sandbox/write-human-decisions-memory.js", () => ({
   writeHumanDecisionsMemory: mocks.writeHumanDecisionsMemory,
 }));
 vi.mock("./repository-prs.js", () => ({
+  findWorkflowOwnedPullRequestForBranch: mocks.findWorkflowOwnedPullRequestForBranch,
   createOrFindWorkflowOwnedPullRequest: mocks.createOrFindWorkflowOwnedPullRequest,
   recordWorkflowOwnedPullRequestIntent: mocks.recordWorkflowOwnedPullRequestIntent,
   recordWorkflowOwnedPullRequest: mocks.recordWorkflowOwnedPullRequest,
@@ -763,6 +765,7 @@ describe("openPullRequestsForPublication", () => {
     mocks.sleep.mockResolvedValue(undefined);
     mocks.recordPublicationPullRequest.mockReset().mockResolvedValue(undefined);
     mocks.recordWorkflowOwnedPullRequest.mockReset().mockResolvedValue(undefined);
+    mocks.findWorkflowOwnedPullRequestForBranch.mockResolvedValue(null);
     mocks.createRepositoryVcsRuntime.mockImplementation(
       ({ repoPath }: { repoPath: string }) => ({
         vcs: {
@@ -871,6 +874,7 @@ describe("openPullRequestsForPublication", () => {
       repoPath: "acme/web",
       branchName: "blazebot/aiw-100",
       publishedHeadSha: "acme/web-after",
+      targetBranch: "main",
     });
     expect(mocks.markPublicationAttemptPublished).toHaveBeenCalledWith({ db: true }, "attempt-1");
   });
@@ -950,7 +954,7 @@ describe("openPullRequestsForPublication", () => {
     expect(publication.status === "failed" ? publication.reason : "").toContain(
       "newer-pr-head",
     );
-    expect(mocks.recordPublicationPullRequest).not.toHaveBeenCalled();
+    expect(mocks.recordPublicationPullRequest).toHaveBeenCalledOnce();
     expect(mocks.recordWorkflowOwnedPullRequest).not.toHaveBeenCalled();
     expect(mocks.markPublicationAttemptPublished).not.toHaveBeenCalled();
   });
@@ -1174,6 +1178,232 @@ describe("openPullRequestsForPublication", () => {
     );
   });
 
+  it("terminally records deterministic branch-read failures without backoff", async () => {
+    mocks.getPublicationAttempt.mockResolvedValue(
+      attempt({
+        status: "creating_prs",
+        repositories: [repository("gitlab", "acme/api")],
+      }),
+    );
+    const fatal = new Error("branch not found");
+    fatal.name = "FatalError";
+    mocks.createRepositoryVcsRuntime.mockReturnValue({
+      vcs: { getBranchSha: vi.fn().mockRejectedValue(fatal) },
+    });
+
+    const publication = await openPullRequestsForPublication({
+      attemptId: "attempt-1",
+      runId: "run-1",
+      ticketKey: "AIW-100",
+      title: "Safe publication",
+    });
+
+    expect(publication).toMatchObject({ status: "failed", reason: "branch not found" });
+    expect(mocks.sleep).not.toHaveBeenCalled();
+    expect(mocks.failPublicationAttempt).toHaveBeenCalled();
+  });
+
+  it("terminally records deterministic PR-head failures without backoff", async () => {
+    mocks.getPublicationAttempt.mockResolvedValue(
+      attempt({
+        status: "creating_prs",
+        repositories: [
+          repository("gitlab", "acme/api", {
+            pr: {
+              id: 12,
+              url: "https://gitlab.com/acme/api/-/merge_requests/12",
+              isNew: true,
+            },
+          }),
+        ],
+      }),
+    );
+    const fatal = new Error("merge request not found");
+    fatal.name = "FatalError";
+    mocks.createRepositoryVcsRuntime.mockReturnValue({
+      vcs: {
+        getBranchSha: vi.fn().mockResolvedValue("acme/api-after"),
+        getPRHeadSha: vi.fn().mockRejectedValue(fatal),
+      },
+    });
+
+    const publication = await openPullRequestsForPublication({
+      attemptId: "attempt-1",
+      runId: "run-1",
+      ticketKey: "AIW-100",
+      title: "Safe publication",
+    });
+
+    expect(publication).toMatchObject({
+      status: "failed",
+      reason: "merge request not found",
+    });
+    expect(mocks.sleep).not.toHaveBeenCalled();
+    expect(mocks.failPublicationAttempt).toHaveBeenCalled();
+  });
+
+  it.each([
+    { "retry-after": "60" },
+    { "x-ratelimit-remaining": "0" },
+  ])("keeps a Forbidden GitHub 403 rate-limit response recoverable: %o", async (headers) => {
+    const creating = attempt({
+      status: "creating_prs",
+      repositories: [
+        repository("github", "acme/web", {
+          pr: { id: 12, url: "https://github.com/acme/web/pull/12", isNew: true },
+        }),
+      ],
+    });
+    mocks.getPublicationAttempt
+      .mockResolvedValueOnce(creating)
+      .mockResolvedValueOnce(creating)
+      .mockResolvedValueOnce({ ...creating, status: "published" });
+    const rateLimited = Object.assign(new Error("Forbidden"), {
+      status: 403,
+      response: { headers },
+    });
+    const getBranchSha = vi
+      .fn()
+      .mockRejectedValueOnce(rateLimited)
+      .mockResolvedValueOnce("acme/web-after");
+    mocks.createRepositoryVcsRuntime.mockReturnValue({
+      vcs: {
+        getBranchSha,
+        getPRHeadSha: vi.fn().mockResolvedValue("acme/web-after"),
+      },
+    });
+
+    const publication = await openPullRequestsForPublication({
+      attemptId: "attempt-1",
+      runId: "run-1",
+      ticketKey: "AIW-100",
+      title: "Safe publication",
+    });
+
+    expect(publication.status).toBe("published");
+    expect(mocks.sleep).toHaveBeenCalledWith("5s");
+    expect(mocks.failPublicationAttempt).not.toHaveBeenCalled();
+  });
+
+  it.each([429, 503])("keeps provider %i failures recoverable", async (status) => {
+    const creating = attempt({
+      status: "creating_prs",
+      repositories: [repository("github", "acme/web")],
+    });
+    mocks.getPublicationAttempt
+      .mockResolvedValueOnce(creating)
+      .mockResolvedValueOnce(creating)
+      .mockResolvedValueOnce({
+        ...creating,
+        status: "published",
+        repositories: [
+          repository("github", "acme/web", {
+            pr: { id: 12, url: "https://github.com/acme/web/pull/12", isNew: true },
+          }),
+        ],
+      });
+    const retryable = Object.assign(new Error(`provider ${status}`), { status });
+    mocks.createOrFindWorkflowOwnedPullRequest
+      .mockRejectedValueOnce(retryable)
+      .mockResolvedValueOnce({
+        provider: "github",
+        repoPath: "acme/web",
+        id: 12,
+        url: "https://github.com/acme/web/pull/12",
+        branch: "blazebot/aiw-100",
+        isNew: true,
+      });
+
+    const publication = await openPullRequestsForPublication({
+      attemptId: "attempt-1",
+      runId: "run-1",
+      ticketKey: "AIW-100",
+      title: "Safe publication",
+    });
+
+    expect(publication.status).toBe("published");
+    expect(mocks.sleep).toHaveBeenCalledWith("5s");
+    expect(mocks.failPublicationAttempt).not.toHaveBeenCalled();
+  });
+
+  it("treats an ordinary provider 403 as deterministic", async () => {
+    mocks.getPublicationAttempt.mockResolvedValue(
+      attempt({
+        status: "creating_prs",
+        repositories: [repository("github", "acme/web")],
+      }),
+    );
+    mocks.createOrFindWorkflowOwnedPullRequest.mockRejectedValue(
+      Object.assign(new Error("Forbidden by repository policy"), { status: 403 }),
+    );
+
+    const publication = await openPullRequestsForPublication({
+      attemptId: "attempt-1",
+      runId: "run-1",
+      ticketKey: "AIW-100",
+      title: "Safe publication",
+    });
+
+    expect(publication).toMatchObject({
+      status: "failed",
+      reason: "Forbidden by repository policy",
+    });
+    expect(mocks.sleep).not.toHaveBeenCalled();
+  });
+
+  it("journals a reconciled provider PR before a later branch-move rejection", async () => {
+    const creating = attempt({
+      status: "creating_prs",
+      repositories: [repository("github", "acme/web")],
+    });
+    const providerPr = {
+      provider: "github" as const,
+      repoPath: "acme/web",
+      id: 12,
+      url: "https://github.com/acme/web/pull/12",
+      branch: "blazebot/aiw-100",
+      isNew: false,
+    };
+    mocks.getPublicationAttempt.mockResolvedValue(creating);
+    mocks.findWorkflowOwnedPullRequestForBranch
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(providerPr);
+    mocks.createOrFindWorkflowOwnedPullRequest.mockResolvedValue({
+      ...providerPr,
+      isNew: true,
+    });
+    mocks.recordPublicationPullRequest
+      .mockRejectedValueOnce(new Error("ledger unavailable"))
+      .mockResolvedValueOnce(undefined);
+    const getBranchSha = vi
+      .fn()
+      .mockResolvedValueOnce("acme/web-after")
+      .mockResolvedValueOnce("human-moved-head");
+    mocks.createRepositoryVcsRuntime.mockReturnValue({
+      vcs: { getBranchSha, getPRHeadSha: vi.fn() },
+    });
+
+    const publication = await openPullRequestsForPublication({
+      attemptId: "attempt-1",
+      runId: "run-1",
+      ticketKey: "AIW-100",
+      title: "Safe publication",
+    });
+
+    expect(publication).toMatchObject({
+      status: "failed",
+      reason: expect.stringContaining("finalized branch moved"),
+      prs: [expect.objectContaining({ id: 12, isNew: false })],
+    });
+    expect(mocks.sleep).toHaveBeenCalledWith("5s");
+    expect(mocks.createOrFindWorkflowOwnedPullRequest).toHaveBeenCalledOnce();
+    expect(mocks.recordPublicationPullRequest).toHaveBeenCalledTimes(2);
+    expect(mocks.recordPublicationPullRequest.mock.invocationCallOrder[1]).toBeLessThan(
+      getBranchSha.mock.invocationCallOrder[1],
+    );
+    expect(mocks.recordWorkflowOwnedPullRequest).not.toHaveBeenCalled();
+  });
+
   it("keeps PR creation recoverable when the provider result cannot be recorded after retries", async () => {
     const creating = attempt({
       status: "creating_prs",
@@ -1262,7 +1492,7 @@ describe("openPullRequestsForPublication", () => {
 
     expect(publication.status).toBe("published");
     expect(mocks.sleep).toHaveBeenCalledWith("5s");
-    expect(mocks.recordPublicationPullRequest).toHaveBeenCalledTimes(2);
+    expect(mocks.recordPublicationPullRequest).toHaveBeenCalledOnce();
     expect(mocks.recordPublicationRepositoryFailure).toHaveBeenCalledWith(
       { db: true },
       expect.objectContaining({

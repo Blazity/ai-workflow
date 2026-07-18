@@ -124,7 +124,7 @@ Setup: first produce a bot-owned PR whose head branch encodes an AWT ticket key 
 
 **T4.5 pr_trigger run not cancelled on AI-column move** - with a `pr_trigger` run active, move its ticket out of the AI column -> run NOT cancelled (run_kind exempt), contrast T7.3.
 
-**T4.6 durable Open PR/MR recovery** - inject an ambiguous provider create timeout and transient publication-ledger/ownership failures. The attempt remains `creating_prs`, the owning run and claim remain active through capped backoff, provider reconciliation finds the single PR/MR, downstream blocks continue after `published`, and cancellation or duration-budget exhaustion interrupts recovery without fabricated success.
+**T4.6 durable Open PR/MR recovery** - inject an ambiguous provider create timeout and transient publication-ledger/ownership failures. The attempt remains `creating_prs`, the owning run and claim remain active through capped backoff, provider reconciliation finds and journals the single target-branch PR/MR before later safety checks, downstream blocks continue after `published`, and cancellation or duration-budget exhaustion interrupts recovery without fabricated success. Verify cancellation after intent preserves the prior confirmed PR, an exact authenticated PR-created event can bind the current source-head + target-branch intent, and check/review or wrong-target events cannot.
 
 ### TIER 5 - Providers + cost (needs valid ANTHROPIC_API_KEY for positive claude rows)
 

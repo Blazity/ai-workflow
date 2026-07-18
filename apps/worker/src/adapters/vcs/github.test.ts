@@ -189,6 +189,13 @@ describe("GitHubAdapter", () => {
       const pr = await adapter.findPR("feat/test");
       expect(pr).not.toBeNull();
       expect(pr!.id).toBe(42);
+      expect(mockOctokit.pulls.list).toHaveBeenCalledWith({
+        owner: "test-org",
+        repo: "test-repo",
+        head: "test-org:feat/test",
+        base: "main",
+        state: "open",
+      });
     });
   });
 

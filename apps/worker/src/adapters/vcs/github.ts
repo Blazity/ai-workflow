@@ -335,6 +335,7 @@ export class GitHubAdapter
     const { data } = await this.octokit.pulls.list({
       ...this.ownerRepo,
       head: `${this.config.owner}:${branch}`,
+      base: this.config.baseBranch,
       state: "open",
     });
     if (data.length === 0) return null;

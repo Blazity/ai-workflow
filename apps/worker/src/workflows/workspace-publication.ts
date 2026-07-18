@@ -12,6 +12,7 @@ import type {
 } from "../publication/store.js";
 import {
   createOrFindWorkflowOwnedPullRequest,
+  findWorkflowOwnedPullRequestForBranch,
   recordWorkflowOwnedPullRequest,
   recordWorkflowOwnedPullRequestIntent,
   type WorkflowPrLink,
@@ -303,12 +304,37 @@ async function openPullRequestsForPublicationOnce(input: {
     (repo) => repo.changed && repo.pushedHead !== null,
   )) {
     let pr = repository.pr ? prLinkFromRepository(repository) : null;
+    if (!pr) {
+      try {
+        pr = await findWorkflowOwnedPullRequestForBranch({
+          branchName: repository.branchName,
+          repository: selectedRepositoryFromAttempt(repository),
+        });
+      } catch (err) {
+        const reason = err instanceof Error ? err.message : String(err);
+        return isDeterministicProviderFailure(err)
+          ? terminalOpenPullRequestFailure(attempt, repository, reason, prs)
+          : recoverableOpenPullRequestFailure(attempt, repository, reason, prs);
+      }
+      if (pr) {
+        if (!prs.some((existing) => sameRepository(existing, pr!))) prs.push(pr);
+        try {
+          await recordPullRequestStep(attempt.id, pr);
+        } catch (err) {
+          const reason = err instanceof Error ? err.message : String(err);
+          return recoverableOpenPullRequestFailure(attempt, repository, reason, prs);
+        }
+      }
+    }
+
     let currentBranchHead: string;
     try {
       currentBranchHead = await verifyFinalizedBranchHeadStep(repository);
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
-      return recoverableOpenPullRequestFailure(attempt, repository, reason, prs);
+      return isDeterministicProviderFailure(err)
+        ? terminalOpenPullRequestFailure(attempt, repository, reason, prs)
+        : recoverableOpenPullRequestFailure(attempt, repository, reason, prs);
     }
 
     try {
@@ -326,6 +352,7 @@ async function openPullRequestsForPublicationOnce(input: {
           repoPath: repository.repoPath,
           branchName: repository.branchName,
           publishedHeadSha: repository.pushedHead!,
+          targetBranch: repository.defaultBranch,
         });
       } catch (err) {
         const reason = err instanceof Error ? err.message : String(err);
@@ -341,12 +368,20 @@ async function openPullRequestsForPublicationOnce(input: {
       });
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
-      return isDeterministicPullRequestFailure(err)
+      return isDeterministicProviderFailure(err)
         ? terminalOpenPullRequestFailure(attempt, repository, reason, prs)
         : recoverableOpenPullRequestFailure(attempt, repository, reason, prs);
     }
 
-    if (!prs.some((existing) => sameRepository(existing, pr))) prs.push(pr);
+    if (!prs.some((existing) => sameRepository(existing, pr))) {
+      prs.push(pr);
+      try {
+        await recordPullRequestStep(attempt.id, pr);
+      } catch (err) {
+        const reason = err instanceof Error ? err.message : String(err);
+        return recoverableOpenPullRequestFailure(attempt, repository, reason, prs);
+      }
+    }
     let currentPrHead: string;
     try {
       currentPrHead = await verifyPullRequestHeadStep({
@@ -357,7 +392,9 @@ async function openPullRequestsForPublicationOnce(input: {
       });
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
-      return recoverableOpenPullRequestFailure(attempt, repository, reason, prs);
+      return isDeterministicProviderFailure(err)
+        ? terminalOpenPullRequestFailure(attempt, repository, reason, prs)
+        : recoverableOpenPullRequestFailure(attempt, repository, reason, prs);
     }
 
     try {
@@ -376,11 +413,11 @@ async function openPullRequestsForPublicationOnce(input: {
     }
 
     try {
-      await recordPullRequestStep(attempt.id, pr);
       await recordWorkflowOwnedPullRequest({
         ticketKey: input.ticketKey,
         pr,
         publishedHeadSha: repository.pushedHead!,
+        targetBranch: repository.defaultBranch,
       });
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
@@ -436,15 +473,61 @@ async function openPullRequestsForPublicationOnce(input: {
   );
 }
 
-function isDeterministicPullRequestFailure(error: unknown): boolean {
+function isDeterministicProviderFailure(error: unknown): boolean {
   const name =
     typeof error === "object" && error !== null && "name" in error
       ? String(error.name)
       : "";
   const message = error instanceof Error ? error.message : String(error);
+  const candidate = error as {
+    status?: unknown;
+    statusCode?: unknown;
+    headers?: Headers | Record<string, unknown>;
+    response?: {
+      status?: unknown;
+      statusCode?: unknown;
+      headers?: Headers | Record<string, unknown>;
+    };
+    cause?: { response?: { status?: unknown; statusCode?: unknown } };
+  };
+  const status = [
+    candidate.status,
+    candidate.statusCode,
+    candidate.response?.status,
+    candidate.response?.statusCode,
+    candidate.cause?.response?.status,
+    candidate.cause?.response?.statusCode,
+  ].find((value): value is number => typeof value === "number");
+  const headers = candidate.response?.headers ?? candidate.headers;
+  const header = (name: string): string | undefined => {
+    if (headers instanceof Headers) return headers.get(name) ?? undefined;
+    if (!headers) return undefined;
+    const value = Object.entries(headers).find(
+      ([key]) => key.toLowerCase() === name.toLowerCase(),
+    )?.[1];
+    return value === undefined ? undefined : String(value);
+  };
+  const rateLimited403 =
+    status === 403 &&
+    (/rate limit|secondary rate|abuse detection/i.test(message) ||
+      header("retry-after") !== undefined ||
+      header("x-ratelimit-remaining") === "0");
+  const deterministicClientStatus =
+    status !== undefined &&
+    status >= 400 &&
+    status < 500 &&
+    status !== 408 &&
+    status !== 425 &&
+    status !== 429 &&
+    !rateLimited403;
   return (
     name === "FatalError" ||
-    /Refusing to open a PR .*AGENT_ALLOWED_REPOS/i.test(message)
+    deterministicClientStatus ||
+    /Refusing to open a PR .*AGENT_ALLOWED_REPOS/i.test(message) ||
+    (!rateLimited403 &&
+      /\b(not found|unauthorized|forbidden|validation failed|policy (?:rejected|denied)|permission denied|invalid (?:branch|ref|target|source))\b/i.test(
+        message,
+      ))
   );
 }
 

@@ -93,8 +93,20 @@ describe("fetch_pr_context execute", () => {
     });
   });
 
-  it("builds the repository from the pr_trigger entry when nothing is selected", async () => {
-    mocks.listWorkflowOwnedBranchesForTicket.mockResolvedValue([]);
+  it("uses the validated PR event tuple instead of a divergent current intent row", async () => {
+    mocks.listWorkflowOwnedBranchesForTicket.mockResolvedValue([
+      {
+        ticketKey: "AWT-1",
+        provider: "github",
+        repoPath: "acme/api",
+        branchName: "feature/new-intent",
+        pr: {
+          id: 42,
+          url: "https://github.com/acme/api/pull/42",
+          branch: "feature/old-confirmed",
+        },
+      },
+    ]);
     mocks.createRepositoryVCS.mockReturnValue({
       getPRComments: vi.fn().mockResolvedValue([]),
       getCheckRunResults: vi.fn().mockResolvedValue([]),
@@ -111,20 +123,31 @@ describe("fetch_pr_context execute", () => {
         definitionId: 1,
         definitionVersion: 1,
         scope: "workflow_owned",
-        pr: makePrPayload(),
+        pr: makePrPayload({
+          prNumber: 7,
+          prUrl: "https://github.com/acme/api/pull/7",
+          headRef: "feature/validated-event",
+        }),
       },
     });
 
     const result = await execute(makeNode("fetch_pr_context"), {}, ctx);
 
-    expect(mocks.listWorkflowOwnedBranchesForTicket).toHaveBeenCalledWith({ db: true }, "AWT-1");
+    expect(mocks.listWorkflowOwnedBranchesForTicket).not.toHaveBeenCalled();
     expect(mocks.createRepositoryVCS).toHaveBeenCalledWith({
       provider: "github",
       repoPath: "acme/api",
       baseBranch: "main",
     });
     expect(result.kind).toBe("next");
-    expect(ctx.repositoryContexts[0].repository.workflowOwnedBranch?.pr?.id).toBe(7);
+    expect(ctx.repositoryContexts[0].repository.workflowOwnedBranch).toEqual({
+      branchName: "feature/validated-event",
+      pr: {
+        id: 7,
+        url: "https://github.com/acme/api/pull/7",
+        branch: "feature/validated-event",
+      },
+    });
   });
 
   it("fails when no repositories are in scope", async () => {

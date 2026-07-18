@@ -358,6 +358,14 @@ export const workflowOwnedBranches = pgTable(
     prUrl: text("pr_url"),
     prBranchName: text("pr_branch_name"),
     publishedHeadSha: text("published_head_sha"),
+    /** Intended target branch for the current publication intent. */
+    targetBranch: text("target_branch"),
+    /** Head SHA at which the stored PR identity was last confirmed. */
+    prPublishedHeadSha: text("pr_published_head_sha"),
+    /** Target branch at which the stored PR identity was last confirmed. */
+    prTargetBranch: text("pr_target_branch"),
+    /** A provider PR identity is still expected for the current intent. */
+    prCorrelationPending: boolean("pr_correlation_pending").notNull().default(false),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
