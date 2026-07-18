@@ -269,6 +269,22 @@ describe("revised Workflows lifecycle", () => {
       ticket: await issueTracker.fetchTicket("AIW-103"),
       branchName: "blazebot/aiw-103",
       sandboxId: "sandbox-103",
+      workspaceManifest: {
+        version: 1,
+        repositories: [
+          {
+            provider: "github",
+            repoPath: "acme/app",
+            slug: "acme__app",
+            localPath: "/vercel/sandbox",
+            defaultBranch: "main",
+            branchName: "blazebot/aiw-103",
+            selectedRationale: "workflow-owned remediation target",
+            expectedRemoteSha: "head-103",
+            preAgentSha: "head-103",
+          },
+        ],
+      },
       selectedRepositories: [
         {
           provider: "github",
