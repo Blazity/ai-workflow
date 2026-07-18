@@ -15,6 +15,7 @@ import {
   deletePendingTrigger,
   getPendingTrigger,
   getTriggerDelivery,
+  listPendingTriggersForSubject,
   listPendingSubjectKeys,
 } from "./trigger-delivery-store.js";
 
@@ -258,6 +259,70 @@ describe("durable trigger deliveries", () => {
 });
 
 describe("semantic pending coalescing", () => {
+  it("keeps pending events isolated by immutable workflow version", async () => {
+    const version11 = delivery();
+    const version12 = delivery({
+      delivery: { provider: "github", producer: "github-actions", deliveryId: "d-2" },
+      definitionVersion: 12,
+      pr: {
+        ...delivery().pr,
+        failedChecks: [{ name: "test", conclusion: "failure" }],
+      },
+    });
+
+    await coalescePendingTrigger(db, version11);
+    await coalescePendingTrigger(db, version12);
+
+    const pending = await listPendingTriggersForSubject(db, version11.subjectKey);
+    expect(pending).toHaveLength(2);
+    expect(pending.map((entry) => entry.definitionVersion)).toEqual([11, 12]);
+    expect(pending[0]?.pr.failedChecks).toEqual([{ name: "lint", conclusion: "failure" }]);
+    expect(pending[1]?.pr.failedChecks).toEqual([{ name: "test", conclusion: "failure" }]);
+  });
+
+  it("uses the newest GitLab pipeline as the representative same-version payload", async () => {
+    const pipeline901 = delivery({
+      delivery: {
+        provider: "gitlab",
+        producer: "gitlab-ci",
+        deliveryId: "pipeline-901",
+        source: "merge_request_event",
+      },
+      pr: {
+        ...delivery().pr,
+        provider: "gitlab",
+        pipelineId: 901,
+      },
+    });
+    const pipeline902 = delivery({
+      ...pipeline901,
+      delivery: { ...pipeline901.delivery, deliveryId: "pipeline-902" },
+      pr: {
+        ...pipeline901.pr,
+        pipelineId: 902,
+        failedChecks: [{ name: "test", conclusion: "failed" }],
+      },
+    });
+
+    await coalescePendingTrigger(db, pipeline901);
+    await coalescePendingTrigger(db, pipeline902);
+
+    await expect(
+      getPendingTrigger(
+        db,
+        pipeline901.subjectKey,
+        pipeline901.pr.headSha,
+        pipeline901.triggerType,
+      ),
+    ).resolves.toMatchObject({
+      delivery: { deliveryId: "pipeline-902" },
+      pr: {
+        pipelineId: 902,
+        failedChecks: [{ name: "test", conclusion: "failed" }],
+      },
+    });
+  });
+
   it("lists each pending subject once in oldest-first recovery order", async () => {
     await coalescePendingTrigger(db, delivery());
     await coalescePendingTrigger(db, {
@@ -277,13 +342,13 @@ describe("semantic pending coalescing", () => {
     ]);
   });
 
-  it("merges failed checks while preserving the first pinned deployed version", async () => {
+  it("merges failed checks within the same pinned deployed version", async () => {
     await coalescePendingTrigger(db, delivery());
     await coalescePendingTrigger(
       db,
       delivery({
         delivery: { provider: "github", producer: "github-actions", deliveryId: "d-2" },
-        definitionVersion: 12,
+        definitionVersion: 11,
         pr: {
           ...delivery().pr,
           failedChecks: [

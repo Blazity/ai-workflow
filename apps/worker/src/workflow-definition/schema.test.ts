@@ -759,6 +759,15 @@ describe("workflowDefinitionSchema block-executor node types", () => {
     ]);
   });
 
+  it("normalizes a stored empty PR review state list to its runtime default", () => {
+    const upgraded = upgradeStoredWorkflowDefinition(
+      graph([node("review", "trigger_pr_review", { providers: ["github"], on: [] })], []),
+    );
+
+    expect(upgraded.nodes[0]?.params.on).toEqual(["changes_requested"]);
+    expect(workflowDefinitionSchema.safeParse(upgraded).success).toBe(true);
+  });
+
   it("applies action param defaults", () => {
     expect(parseNode({ type: "fix_agent", params: {} })?.params).toEqual({ maxMinutes: 25 });
     // call_llm intentionally has NO model default: leaving it unset lets the

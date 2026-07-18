@@ -98,7 +98,7 @@ export const triggerDeliveries = pgTable(
   ],
 );
 
-/** A single durable semantic backlog entry per subject/head/trigger. */
+/** A durable semantic backlog entry per subject/head/trigger/deployed version. */
 export const pendingTriggerEvents = pgTable(
   "pending_trigger_events",
   {
@@ -117,7 +117,15 @@ export const pendingTriggerEvents = pgTable(
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
-    primaryKey({ columns: [t.subjectKey, t.headSha, t.triggerType] }),
+    primaryKey({
+      columns: [
+        t.subjectKey,
+        t.headSha,
+        t.triggerType,
+        t.definitionId,
+        t.definitionVersion,
+      ],
+    }),
     index("pending_trigger_events_subject_created_idx").on(t.subjectKey, t.createdAt),
     foreignKey({
       columns: [t.definitionId, t.definitionVersion],

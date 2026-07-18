@@ -79,15 +79,14 @@ export function normalizeGitHubEvent(
     if (!check) return null;
     if (!GITHUB_FAILED_CONCLUSIONS.has(check.conclusion)) return null;
     if (isGateCheckName(check.name, options.gateCheckNames)) return null;
+    if (typeof check.id !== "number") return null;
     const prs = check.pull_requests;
     if (!Array.isArray(prs) || prs.length === 0) return null;
     const prRef = prs[0];
     const prNumber = prRef.number;
+    const appSlug = check.app?.slug ?? body?.sender?.login ?? "unknown";
     return {
-      delivery: githubDelivery(
-        options.deliveryId,
-        check.app?.slug ?? body?.sender?.login ?? "unknown",
-      ),
+      delivery: githubDelivery(options.deliveryId, appSlug),
       triggerType: "trigger_pr_checks_failed",
       pr: {
         provider: "github",
@@ -105,6 +104,8 @@ export function normalizeGitHubEvent(
             name: check.name,
             conclusion: check.conclusion,
             ...(check.details_url ? { detailsUrl: check.details_url } : {}),
+            checkRunId: check.id,
+            appSlug,
           },
         ],
       },
@@ -243,7 +244,9 @@ export function normalizeGitLabEvent(
         prNumber: mr.iid,
         prUrl: mr.url ?? "",
         headRef: mr.source_branch ?? "",
-        headSha: mr.last_commit?.id ?? "",
+        // Pipeline Hook merge_request objects do not carry a source-head SHA.
+        // Dispatch binds it from the authoritative MR read before acceptance.
+        headSha: "",
         baseRef: mr.target_branch ?? "",
         title: mr.title ?? "",
         author: body?.user?.username ?? body?.user?.name ?? "unknown",

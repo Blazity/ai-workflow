@@ -489,6 +489,13 @@ export function upgradeStoredWorkflowDefinition(raw: unknown): WorkflowDefinitio
       }
       delete params.onlyWorkflowOwned;
     }
+    if (
+      node.type === "trigger_pr_review" &&
+      Array.isArray(params.on) &&
+      params.on.length === 0
+    ) {
+      params.on = ["changes_requested"];
+    }
     if (node.type === "send_plan_approval") {
       const sourceId = params.planFromStep;
       if (typeof sourceId === "string" && sourceId.length > 0) {

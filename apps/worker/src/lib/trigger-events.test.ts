@@ -120,6 +120,7 @@ describe("normalizeGitHubEvent", () => {
         action: "completed",
         repository: githubRepo(),
         check_run: {
+          id: 101,
           app: { slug: "github-actions" },
           name: "ci / build",
           conclusion: "failure",
@@ -151,7 +152,13 @@ describe("normalizeGitHubEvent", () => {
         author: "unknown",
         isDraft: false,
         failedChecks: [
-          { name: "ci / build", conclusion: "failure", detailsUrl: "https://ci/run/1" },
+          {
+            name: "ci / build",
+            conclusion: "failure",
+            detailsUrl: "https://ci/run/1",
+            checkRunId: 101,
+            appSlug: "github-actions",
+          },
         ],
       },
     });
@@ -570,7 +577,6 @@ describe("normalizeGitLabEvent", () => {
       merge_request: {
         iid: 42,
         source_branch: "blazebot/aiw-3",
-        last_commit: { id: "source-head-sha" },
         target_branch: "main",
         title: "AIW-3",
         url: "https://gitlab.com/group/demo/-/merge_requests/42",
@@ -583,7 +589,7 @@ describe("normalizeGitLabEvent", () => {
     expect(evt?.triggerType).toBe("trigger_pr_checks_failed");
     expect(evt?.delivery.producer).toBe("gitlab-ci");
     expect(evt?.pr.headRef).toBe("blazebot/aiw-3");
-    expect(evt?.pr.headSha).toBe("source-head-sha");
+    expect(evt?.pr.headSha).toBe("");
     expect(evt?.pr.pipelineId).toBe(901);
     expect(evt?.delivery.source).toBe("merge_request_event");
     expect(evt?.pr.failedChecks).toEqual([{ name: "lint", conclusion: "failed" }]);

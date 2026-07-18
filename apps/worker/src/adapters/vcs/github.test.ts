@@ -22,6 +22,7 @@ const mockOctokit = {
   checks: {
     create: vi.fn(),
     update: vi.fn(),
+    listForRef: vi.fn(),
   },
 };
 
@@ -132,6 +133,41 @@ describe("GitHubAdapter", () => {
         pull_number: 42,
       });
       expect(mockOctokit.git.getRef).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("getLatestCheckRuns", () => {
+    it("returns latest check-run identity and conclusion for an exact head", async () => {
+      mockOctokit.checks.listForRef.mockResolvedValueOnce({
+        data: {
+          check_runs: [
+            {
+              id: 102,
+              name: "ci / build",
+              app: { slug: "github-actions" },
+              status: "completed",
+              conclusion: "success",
+            },
+          ],
+        },
+      });
+
+      await expect(ghAdapter().getLatestCheckRuns("source-head-sha")).resolves.toEqual([
+        {
+          id: 102,
+          name: "ci / build",
+          appSlug: "github-actions",
+          status: "completed",
+          conclusion: "success",
+        },
+      ]);
+      expect(mockOctokit.checks.listForRef).toHaveBeenCalledWith({
+        owner: "test-org",
+        repo: "test-repo",
+        ref: "source-head-sha",
+        filter: "latest",
+        per_page: 100,
+      });
     });
   });
 

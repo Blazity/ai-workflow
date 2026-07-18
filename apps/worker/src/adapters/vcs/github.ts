@@ -199,6 +199,22 @@ export class GitHubAdapter
     return { headSha: data.head.sha };
   }
 
+  async getLatestCheckRuns(headSha: string) {
+    const { data } = await this.octokit.checks.listForRef({
+      ...this.ownerRepo,
+      ref: headSha,
+      filter: "latest",
+      per_page: 100,
+    });
+    return data.check_runs.map((check) => ({
+      id: check.id,
+      name: check.name,
+      appSlug: check.app?.slug ?? "",
+      status: check.status,
+      conclusion: check.conclusion ?? null,
+    }));
+  }
+
   async getPRComments(prId: number): Promise<PRComment[]> {
     const { data: reviewComments } =
       await this.octokit.pulls.listReviewComments({

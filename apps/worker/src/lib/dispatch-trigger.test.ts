@@ -126,7 +126,14 @@ function checksEvent(overrides: Partial<TriggerEvent> = {}): TriggerEvent {
     triggerType: "trigger_pr_checks_failed",
     pr: {
       ...event().pr,
-      failedChecks: [{ name: "ci / build", conclusion: "failure" }],
+      failedChecks: [
+        {
+          name: "ci / build",
+          conclusion: "failure",
+          checkRunId: 101,
+          appSlug: "github-actions",
+        },
+      ],
     },
     ...overrides,
   });
@@ -138,6 +145,15 @@ function deps(overrides: Record<string, unknown> = {}) {
     runRegistry: registry,
     maxConcurrentAgents: 3,
     getCurrentHead: vi.fn().mockResolvedValue("abc123"),
+    getLatestCheckRuns: vi.fn().mockResolvedValue([
+      {
+        id: 101,
+        name: "ci / build",
+        appSlug: "github-actions",
+        status: "completed",
+        conclusion: "failure",
+      },
+    ]),
     issueTracker: {
       fetchTicket: vi.fn().mockResolvedValue({ identifier: "AIW-1" }),
     },
@@ -321,6 +337,52 @@ describe("dispatchTriggerEvent durable envelope", () => {
     expect(mockStart).not.toHaveBeenCalled();
   });
 
+  it("binds a documented GitLab pipeline hook to the authoritative MR source head", async () => {
+    mockGetEnabled.mockResolvedValue(
+      enabledTrigger("trigger_pr_checks_failed", {
+        scope: "any",
+        checkNames: ["lint"],
+        githubAppSlugs: ["github-actions"],
+        gitlabPipelineSources: ["merge_request_event"],
+      }),
+    );
+    const gitlabEvent = event({
+      delivery: {
+        provider: "gitlab",
+        producer: "gitlab-ci",
+        source: "merge_request_event",
+        deliveryId: "gitlab-delivery-documented-payload",
+      },
+      triggerType: "trigger_pr_checks_failed",
+      pr: {
+        ...event().pr,
+        provider: "gitlab",
+        repoPath: "group/app",
+        prUrl: "https://gitlab.com/group/app/-/merge_requests/7",
+        headSha: "",
+        pipelineId: 901,
+        failedChecks: [{ name: "lint", conclusion: "failed" }],
+      },
+    });
+    const getCurrentPullRequest = vi.fn().mockResolvedValue({
+      headSha: "source-head-sha",
+      headPipelineId: 901,
+    });
+    const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
+
+    await expect(
+      dispatchTriggerEvent(gitlabEvent, deps({ getCurrentPullRequest })),
+    ).resolves.toEqual({ result: "started", runId: "run-pr" });
+    expect(mockStart).toHaveBeenCalledWith("agentWorkflow_sentinel", [
+      expect.objectContaining({
+        pr: expect.objectContaining({
+          headSha: "source-head-sha",
+          pipelineId: 901,
+        }),
+      }),
+    ]);
+  });
+
   it("fails closed when a checks trigger has no exact check-name selectors", async () => {
     mockGetEnabled.mockResolvedValue(
       enabledTrigger("trigger_pr_checks_failed", {
@@ -392,8 +454,18 @@ describe("dispatchTriggerEvent durable envelope", () => {
       pr: {
         ...checksEvent().pr,
         failedChecks: [
-          { name: "untrusted / deploy", conclusion: "failure" },
-          { name: "ci / build", conclusion: "failure" },
+          {
+            name: "untrusted / deploy",
+            conclusion: "failure",
+            checkRunId: 201,
+            appSlug: "github-actions",
+          },
+          {
+            name: "ci / build",
+            conclusion: "failure",
+            checkRunId: 101,
+            appSlug: "github-actions",
+          },
         ],
       },
     });
@@ -406,10 +478,90 @@ describe("dispatchTriggerEvent durable envelope", () => {
     expect(mockStart).toHaveBeenCalledWith("agentWorkflow_sentinel", [
       expect.objectContaining({
         pr: expect.objectContaining({
-          failedChecks: [{ name: "ci / build", conclusion: "failure" }],
+          failedChecks: [
+            {
+              name: "ci / build",
+              conclusion: "failure",
+              checkRunId: 101,
+              appSlug: "github-actions",
+            },
+          ],
         }),
       }),
     ]);
+  });
+
+  it("invalidates a queued GitHub failure after a same-head rerun succeeds", async () => {
+    mockGetEnabled.mockResolvedValue(
+      enabledTrigger("trigger_pr_checks_failed", {
+        scope: "any",
+        checkNames: ["ci / build"],
+        githubAppSlugs: ["github-actions"],
+        gitlabPipelineSources: ["merge_request_event"],
+      }),
+    );
+    const failed = checksEvent({
+      delivery: {
+        provider: "github",
+        producer: "github-actions",
+        deliveryId: "checks-failed-run-101",
+      },
+      pr: {
+        ...checksEvent().pr,
+        failedChecks: [
+          {
+            name: "ci / build",
+            conclusion: "failure",
+            checkRunId: 101,
+            appSlug: "github-actions",
+          },
+        ],
+      } as any,
+    });
+    const latestChecks = vi
+      .fn()
+      .mockResolvedValueOnce([
+        {
+          id: 101,
+          name: "ci / build",
+          appSlug: "github-actions",
+          status: "completed",
+          conclusion: "failure",
+        },
+      ])
+      .mockResolvedValueOnce([
+        {
+          id: 102,
+          name: "ci / build",
+          appSlug: "github-actions",
+          status: "completed",
+          conclusion: "success",
+        },
+      ]);
+    await registry.reserve({
+      subjectKey: "pr:github:acme/app#7",
+      ticketKey: null,
+      ownerToken: "blocking-owner",
+      kind: "pr_trigger",
+    });
+    const { dispatchTriggerEvent, drainOldestPendingTrigger } = await import(
+      "./dispatch-trigger.js"
+    );
+
+    await expect(
+      dispatchTriggerEvent(failed, deps({ getLatestCheckRuns: latestChecks })),
+    ).resolves.toEqual({ result: "coalesced" });
+    await registry.releaseReservation("pr:github:acme/app#7", "blocking-owner");
+    await expect(
+      drainOldestPendingTrigger(
+        "pr:github:acme/app#7",
+        deps({ getLatestCheckRuns: latestChecks }),
+      ),
+    ).resolves.toBeNull();
+    expect(mockStart).not.toHaveBeenCalled();
+    await expect(getTriggerDelivery(db, "github", "checks-failed-run-101")).resolves.toMatchObject({
+      result: { result: "ignored_stale_head" },
+    });
   });
 
   it("requires an exact trusted GitLab pipeline source", async () => {

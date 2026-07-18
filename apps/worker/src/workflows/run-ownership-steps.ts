@@ -105,6 +105,8 @@ export async function acknowledgePrTriggerDispatchStep(
       triggerType: entry.triggerType,
       delivery: entry.delivery,
       pr: entry.pr,
+      definitionId: entry.definitionId,
+      definitionVersion: entry.definitionVersion,
     },
     workflowRunId,
   );
@@ -158,6 +160,8 @@ export async function acknowledgePendingTriggerStep(
       deliveryId: entry.pendingEvent.deliveryId,
     },
     pr: { ...entry.pr, headSha: entry.pendingEvent.headSha },
+    definitionId: entry.definitionId,
+    definitionVersion: entry.definitionVersion,
   });
 }
 acknowledgePendingTriggerStep.maxRetries = 0;

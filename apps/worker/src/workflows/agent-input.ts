@@ -18,7 +18,14 @@ export interface PrTriggerPayload {
   mergedAt?: string;
   /** GitLab pipeline event identity used to reject superseded head pipelines. */
   pipelineId?: number;
-  failedChecks?: Array<{ name: string; conclusion: string; detailsUrl?: string }>;
+  failedChecks?: Array<{
+    name: string;
+    conclusion: string;
+    detailsUrl?: string;
+    /** GitHub identity used only by dispatch freshness checks. */
+    checkRunId?: number;
+    appSlug?: string;
+  }>;
   review?: { state: "changes_requested" | "commented"; author: string; body: string };
   reviews?: Array<{ state: "changes_requested" | "commented"; author: string; body: string }>;
 }

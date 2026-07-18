@@ -3,7 +3,11 @@ import type { VcsProviderKind } from "@shared/contracts";
 import type { Db } from "../db/client.js";
 import type { IssueTrackerAdapter } from "../adapters/issue-tracker/types.js";
 import type { RunRegistryAdapter } from "../adapters/run-registry/types.js";
-import type { PullRequestHead } from "../adapters/vcs/types.js";
+import type {
+  LatestCheckRun,
+  PullRequestHead,
+  VCSAdapter,
+} from "../adapters/vcs/types.js";
 import type { AgentWorkflowInput, PrTriggerPayload } from "../workflows/agent-input.js";
 import { agentWorkflow } from "../workflows/agent.js";
 import { findWorkflowOwnedPullRequest } from "../db/queries/workflow-owned-branches.js";
@@ -48,6 +52,7 @@ export interface DispatchTriggerDeps {
   issueTracker?: IssueTrackerAdapter;
   getCurrentHead?: (pr: PrTriggerPayload) => Promise<string>;
   getCurrentPullRequest?: (pr: PrTriggerPayload) => Promise<PullRequestHead>;
+  getLatestCheckRuns?: (pr: PrTriggerPayload) => Promise<LatestCheckRun[]>;
   /** Failure-injection seam; production uses deletePendingTrigger. */
   deletePending?: typeof deletePendingTrigger;
 }
@@ -130,7 +135,8 @@ export async function dispatchTriggerEvent(
 
   const currentResult = await readCurrentPullRequest(eligibleEvent.pr, deps);
   if (currentResult.status === "unreachable") return { result: "error" };
-  if (!matchesCurrentPullRequest(eligibleEvent.pr, currentResult.current)) {
+  const currentEvent = bindCurrentPullRequest(eligibleEvent, currentResult.current);
+  if (!currentEvent) {
     logger.info(
       { subject: eligibleEvent.pr, current: currentResult.current },
       "trigger_ignored_stale_head",
@@ -138,11 +144,11 @@ export async function dispatchTriggerEvent(
     return { result: "ignored_stale_head" };
   }
 
-  const identity = await resolveSubjectIdentity(eligibleEvent, scope, deps);
+  const identity = await resolveSubjectIdentity(currentEvent, scope, deps);
   if (!identity) return { result: "ignored_not_workflow_owned" };
 
   const accepted: AcceptedTriggerDelivery = {
-    ...eligibleEvent,
+    ...currentEvent,
     scope,
     subjectKey: identity.subjectKey,
     ticketKey: identity.ticketKey,
@@ -173,11 +179,12 @@ async function resumeAcceptedTrigger(
 ): Promise<DispatchTriggerResult> {
   const currentResult = await readCurrentPullRequest(accepted.pr, deps);
   if (currentResult.status === "unreachable") return { result: "error" };
-  if (!matchesCurrentPullRequest(accepted.pr, currentResult.current)) {
+  const currentAccepted = bindCurrentPullRequest(accepted, currentResult.current);
+  if (!currentAccepted) {
     await completeAccepted(deps.db, accepted, { result: "ignored_stale_head" });
     return { result: "ignored_stale_head" };
   }
-  return dispatchAcceptedTrigger(accepted, deps);
+  return dispatchAcceptedTrigger(currentAccepted, deps);
 }
 
 function selectEligibleEvent(
@@ -310,12 +317,13 @@ export async function drainOldestPendingTrigger(
 
     const currentResult = await readCurrentPullRequest(pending.pr, deps);
     if (currentResult.status === "unreachable") return { result: "error" };
-    if (!matchesCurrentPullRequest(pending.pr, currentResult.current)) {
+    const currentPending = bindCurrentPullRequest(pending, currentResult.current);
+    if (!currentPending) {
       await deletePendingTrigger(deps.db, pending);
       await completeAccepted(deps.db, pending, { result: "ignored_stale_head" });
       continue;
     }
-    const result = await dispatchAcceptedTrigger(pending, deps, {
+    const result = await dispatchAcceptedTrigger(currentPending, deps, {
       headSha: pending.pr.headSha,
       triggerType: pending.triggerType,
       deliveryId: pending.delivery.deliveryId,
@@ -370,15 +378,31 @@ async function readCurrentPullRequest(
   | { status: "unreachable" }
 > {
   try {
-    const current = deps.getCurrentPullRequest
-      ? await deps.getCurrentPullRequest(pr)
-      : deps.getCurrentHead
-        ? { headSha: await deps.getCurrentHead(pr) }
-        : await createRepositoryVCS({
-            provider: pr.provider,
-            repoPath: pr.repoPath,
-            baseBranch: pr.baseRef,
-          }).getPRHead(pr.prNumber);
+    let adapter: VCSAdapter | undefined;
+    let current: PullRequestHead;
+    if (deps.getCurrentPullRequest) {
+      current = await deps.getCurrentPullRequest(pr);
+    } else if (deps.getCurrentHead) {
+      current = { headSha: await deps.getCurrentHead(pr) };
+    } else {
+      adapter = createRepositoryVCS({
+        provider: pr.provider,
+        repoPath: pr.repoPath,
+        baseBranch: pr.baseRef,
+      });
+      current = await adapter.getPRHead(pr.prNumber);
+    }
+    if (pr.provider === "github" && (pr.failedChecks?.length ?? 0) > 0) {
+      const latestCheckRuns =
+        current.latestCheckRuns ??
+        (deps.getLatestCheckRuns
+          ? await deps.getLatestCheckRuns(pr)
+          : adapter?.getLatestCheckRuns
+            ? await adapter.getLatestCheckRuns(current.headSha)
+            : null);
+      if (!latestCheckRuns) throw new Error("GitHub latest Check Runs are unavailable");
+      current = { ...current, latestCheckRuns };
+    }
     return { status: "ok", current };
   } catch (error) {
     logger.warn(
@@ -389,13 +413,32 @@ async function readCurrentPullRequest(
   }
 }
 
-function matchesCurrentPullRequest(
-  pr: PrTriggerPayload,
+function bindCurrentPullRequest<T extends TriggerEvent>(
+  event: T,
   current: PullRequestHead | null,
-): boolean {
-  if (!current || current.headSha !== pr.headSha) return false;
-  if (pr.provider !== "gitlab" || pr.pipelineId === undefined) return true;
-  return current.headPipelineId === pr.pipelineId;
+): T | null {
+  if (!current) return null;
+  const { pr } = event;
+  if (pr.provider === "github") {
+    if (current.headSha !== pr.headSha) return null;
+    if (event.triggerType !== "trigger_pr_checks_failed") return event;
+    const failedChecks = (pr.failedChecks ?? []).filter((failed) =>
+      current.latestCheckRuns?.some(
+        (latest) =>
+          latest.id === failed.checkRunId &&
+          latest.name === failed.name &&
+          latest.appSlug === failed.appSlug &&
+          latest.status === "completed" &&
+          latest.conclusion === failed.conclusion,
+      ),
+    );
+    if (failedChecks.length === 0) return null;
+    return { ...event, pr: { ...pr, failedChecks } };
+  }
+  if (pr.pipelineId === undefined) return current.headSha === pr.headSha ? event : null;
+  if (current.headPipelineId !== pr.pipelineId) return null;
+  if (pr.headSha && pr.headSha !== current.headSha) return null;
+  return { ...event, pr: { ...pr, headSha: current.headSha } };
 }
 
 async function completeAccepted(

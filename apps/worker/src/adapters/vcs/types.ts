@@ -8,6 +8,16 @@ export interface PullRequestHead {
   headSha: string;
   /** GitLab's current MR head pipeline. Absent for providers without this concept. */
   headPipelineId?: number;
+  /** GitHub's latest run for each check name on this exact head. */
+  latestCheckRuns?: LatestCheckRun[];
+}
+
+export interface LatestCheckRun {
+  id: number;
+  name: string;
+  appSlug: string;
+  status: string;
+  conclusion: string | null;
 }
 
 export interface PRComment {
@@ -43,6 +53,8 @@ export interface VCSAdapter {
   findPR(branch: string): Promise<PullRequest | null>;
   getBranchSha(branch: string): Promise<string>;
   getPRHead(prId: number): Promise<PullRequestHead>;
+  /** Optional because only GitHub exposes Check Run identities. */
+  getLatestCheckRuns?(headSha: string): Promise<LatestCheckRun[]>;
 }
 
 export interface CheckRunAnnotation {

@@ -136,6 +136,8 @@ export async function coalescePendingTrigger(
         pendingTriggerEvents.subjectKey,
         pendingTriggerEvents.headSha,
         pendingTriggerEvents.triggerType,
+        pendingTriggerEvents.definitionId,
+        pendingTriggerEvents.definitionVersion,
       ],
       set: {
         // The newest provider delivery id is also the row's immutable snapshot
@@ -156,7 +158,14 @@ export async function coalescePendingTrigger(
           excluded.payload->'pr',
           true
         )`,
-        failedChecks: mergeJsonArrays(pendingTriggerEvents.failedChecks, "failed_checks"),
+        failedChecks: sql`case
+          when ${pendingTriggerEvents.payload}->'pr'->>'provider' = 'gitlab'
+            and excluded.payload->'pr'->>'provider' = 'gitlab'
+            and ${pendingTriggerEvents.payload}->'pr'->>'pipelineId'
+              is distinct from excluded.payload->'pr'->>'pipelineId'
+          then excluded.failed_checks
+          else ${mergeJsonArrays(pendingTriggerEvents.failedChecks, "failed_checks")}
+        end`,
         reviews: mergeJsonArrays(pendingTriggerEvents.reviews, "reviews"),
         updatedAt: sql`now()`,
       },
@@ -209,7 +218,15 @@ export async function listPendingSubjectKeys(db: Db): Promise<string[]> {
 
 export async function deletePendingTrigger(
   db: Db,
-  accepted: Pick<AcceptedTriggerDelivery, "subjectKey" | "triggerType" | "pr" | "delivery">,
+  accepted: Pick<
+    AcceptedTriggerDelivery,
+    | "subjectKey"
+    | "triggerType"
+    | "pr"
+    | "delivery"
+    | "definitionId"
+    | "definitionVersion"
+  >,
 ): Promise<boolean> {
   const rows = await db
     .delete(pendingTriggerEvents)
@@ -218,6 +235,8 @@ export async function deletePendingTrigger(
         eq(pendingTriggerEvents.subjectKey, accepted.subjectKey),
         eq(pendingTriggerEvents.headSha, accepted.pr.headSha),
         eq(pendingTriggerEvents.triggerType, accepted.triggerType),
+        eq(pendingTriggerEvents.definitionId, accepted.definitionId),
+        eq(pendingTriggerEvents.definitionVersion, accepted.definitionVersion),
         eq(pendingTriggerEvents.provider, accepted.delivery.provider),
         eq(pendingTriggerEvents.deliveryId, accepted.delivery.deliveryId),
       ),
@@ -233,7 +252,12 @@ export async function acknowledgeStartedTriggerDelivery(
   db: Pick<Db, "execute">,
   accepted: Pick<
     AcceptedTriggerDelivery,
-    "subjectKey" | "triggerType" | "pr" | "delivery"
+    | "subjectKey"
+    | "triggerType"
+    | "pr"
+    | "delivery"
+    | "definitionId"
+    | "definitionVersion"
   >,
   runId: string,
 ): Promise<boolean> {
@@ -266,7 +290,9 @@ export async function acknowledgeStartedTriggerDelivery(
         ${triggerDeliveries.deliveryId},
         ${triggerDeliveries.subjectKey},
         ${triggerDeliveries.headSha},
-        ${triggerDeliveries.triggerType}
+        ${triggerDeliveries.triggerType},
+        ${triggerDeliveries.definitionId},
+        ${triggerDeliveries.definitionVersion}
     ), deleted_pending as (
       delete from ${pendingTriggerEvents}
       using started_delivery
@@ -275,6 +301,8 @@ export async function acknowledgeStartedTriggerDelivery(
         and ${pendingTriggerEvents.subjectKey} = started_delivery.subject_key
         and ${pendingTriggerEvents.headSha} = started_delivery.head_sha
         and ${pendingTriggerEvents.triggerType} = started_delivery.trigger_type
+        and ${pendingTriggerEvents.definitionId} = started_delivery.definition_id
+        and ${pendingTriggerEvents.definitionVersion} = started_delivery.definition_version
       returning ${pendingTriggerEvents.subjectKey}
     )
     select exists(select 1 from started_delivery) as acknowledged
