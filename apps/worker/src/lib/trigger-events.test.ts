@@ -545,15 +545,32 @@ describe("normalizeGitLabEvent", () => {
     ).toBeNull();
   });
 
+  it("fails closed on GitLab internal merge-request notes", () => {
+    const note = notePayload();
+    note.object_attributes.internal = true;
+
+    expect(
+      normalizeGitLabEvent("Note Hook", note, {
+        reviewStates: ["commented"],
+      }),
+    ).toBeNull();
+  });
+
   it("maps a failed pipeline with a merge request to trigger_pr_checks_failed", () => {
     const evt = normalizeGitLabEvent("Pipeline Hook", {
       object_kind: "pipeline",
       user: { username: "alice" },
       project: { id: 1, path_with_namespace: "group/demo" },
-      object_attributes: { status: "failed", sha: "sha1" },
+      object_attributes: {
+        id: 901,
+        source: "merge_request_event",
+        status: "failed",
+        sha: "temporary-merged-results-sha",
+      },
       merge_request: {
         iid: 42,
         source_branch: "blazebot/aiw-3",
+        last_commit: { id: "source-head-sha" },
         target_branch: "main",
         title: "AIW-3",
         url: "https://gitlab.com/group/demo/-/merge_requests/42",
@@ -566,6 +583,9 @@ describe("normalizeGitLabEvent", () => {
     expect(evt?.triggerType).toBe("trigger_pr_checks_failed");
     expect(evt?.delivery.producer).toBe("gitlab-ci");
     expect(evt?.pr.headRef).toBe("blazebot/aiw-3");
+    expect(evt?.pr.headSha).toBe("source-head-sha");
+    expect(evt?.pr.pipelineId).toBe(901);
+    expect(evt?.delivery.source).toBe("merge_request_event");
     expect(evt?.pr.failedChecks).toEqual([{ name: "lint", conclusion: "failed" }]);
   });
 

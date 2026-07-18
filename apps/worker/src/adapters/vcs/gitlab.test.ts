@@ -295,6 +295,24 @@ describe("GitLabAdapter", () => {
     });
   });
 
+  describe("getPRHead", () => {
+    it("reads the authoritative MR head and current head-pipeline id", async () => {
+      mockMergeRequests.show.mockResolvedValueOnce({
+        diff_refs: { head_sha: "source-head-sha" },
+        head_pipeline: { id: 901 },
+      });
+
+      const adapter = glAdapter();
+
+      await expect(adapter.getPRHead(42)).resolves.toEqual({
+        headSha: "source-head-sha",
+        headPipelineId: 901,
+      });
+      expect(mockMergeRequests.show).toHaveBeenCalledWith("blazity/demo-app", 42);
+      expect(mockBranches.show).not.toHaveBeenCalled();
+    });
+  });
+
   describe("findPR", () => {
     it("returns null when no MR exists", async () => {
       mockMergeRequests.all.mockResolvedValueOnce([]);

@@ -143,14 +143,23 @@ export const ticketTransitionIntents = pgTable(
     /** Null while a pre-start reservation owns the transition. Intentionally
      * no active_runs FK: a provider echo can arrive after release or handoff. */
     runId: text("run_id"),
+    /** Stable Jira account id for the authenticated workflow actor that
+     * requested the transition. Provider echoes must match it exactly. */
+    actorAccountId: text("actor_account_id").notNull(),
     targetStatusId: text("target_status_id"),
     targetStatusName: text("target_status_name").notNull(),
+    /** Jira preserves this identifier across webhook retries. Once attached
+     * to a consumed intent it makes every retry idempotent. */
+    webhookIdentifier: text("webhook_identifier"),
     expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
     consumedAt: timestamp("consumed_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
     index("ticket_transition_intents_ticket_expiry_idx").on(t.ticketKey, t.expiresAt),
+    uniqueIndex("ticket_transition_intents_webhook_identifier_uidx").on(
+      t.webhookIdentifier,
+    ),
   ],
 );
 

@@ -8,6 +8,7 @@ import type {
   PRFile,
   PRFilesCapableVCS,
   PullRequest,
+  PullRequestHead,
   PRComment,
   CheckRunResult,
 } from "./types.js";
@@ -20,6 +21,11 @@ interface GitLabMR {
   web_url: string;
   source_branch: string;
   sha?: string;
+}
+interface GitLabMRHead {
+  diff_refs?: { head_sha?: string };
+  sha?: string;
+  head_pipeline?: { id?: number } | null;
 }
 interface GitLabNotePosition {
   new_path?: string;
@@ -293,6 +299,20 @@ export class GitLabAdapter implements VCSAdapter, GateStatusCapableVCS, PRFilesC
   async getBranchSha(branch: string): Promise<string> {
     const data = await this.gl.Branches.show(this.projectId, branch);
     return (data.commit as { id: string }).id;
+  }
+
+  async getPRHead(prId: number): Promise<PullRequestHead> {
+    const mr = (await this.gl.MergeRequests.show(
+      this.projectId,
+      prId,
+    )) as unknown as GitLabMRHead;
+    const headSha = mr.diff_refs?.head_sha ?? mr.sha ?? "";
+    if (!headSha) throw new Error(`GitLab MR !${prId} is missing its authoritative head SHA`);
+    const headPipelineId = mr.head_pipeline?.id;
+    return {
+      headSha,
+      ...(typeof headPipelineId === "number" ? { headPipelineId } : {}),
+    };
   }
 
   async findPR(branch: string): Promise<PullRequest | null> {

@@ -3,6 +3,7 @@ import type { VcsProviderKind } from "@shared/contracts";
 import type { Db } from "../db/client.js";
 import type { IssueTrackerAdapter } from "../adapters/issue-tracker/types.js";
 import type { RunRegistryAdapter } from "../adapters/run-registry/types.js";
+import type { PullRequestHead } from "../adapters/vcs/types.js";
 import type { AgentWorkflowInput, PrTriggerPayload } from "../workflows/agent-input.js";
 import { agentWorkflow } from "../workflows/agent.js";
 import { findWorkflowOwnedPullRequest } from "../db/queries/workflow-owned-branches.js";
@@ -33,6 +34,7 @@ export type DispatchTriggerResult =
   | { result: "ignored_provider" }
   | { result: "ignored_producer" }
   | { result: "ignored_stale_head" }
+  | { result: "ignored_untrusted_event" }
   | { result: "ignored_malformed_delivery" }
   | { result: "coalesced" }
   | { result: "at_capacity" }
@@ -45,6 +47,7 @@ export interface DispatchTriggerDeps {
   maxConcurrentAgents: number;
   issueTracker?: IssueTrackerAdapter;
   getCurrentHead?: (pr: PrTriggerPayload) => Promise<string>;
+  getCurrentPullRequest?: (pr: PrTriggerPayload) => Promise<PullRequestHead>;
   /** Failure-injection seam; production uses deletePendingTrigger. */
   deletePending?: typeof deletePendingTrigger;
 }
@@ -113,19 +116,6 @@ export async function dispatchTriggerEvent(
   if (Array.isArray(providers) && providers.length > 0 && !providers.includes(event.pr.provider)) {
     return { result: "ignored_provider" };
   }
-  if (event.triggerType === "trigger_pr_checks_failed") {
-    const configured = Array.isArray(params.producers)
-      ? params.producers.filter((producer): producer is string => typeof producer === "string")
-      : ["github-actions", "gitlab-ci"];
-    if (!configured.includes(event.delivery.producer)) {
-      logger.info(
-        { provider: event.delivery.provider, producer: event.delivery.producer },
-        "trigger_ignored_untrusted_ci_producer",
-      );
-      return { result: "ignored_producer" };
-    }
-  }
-
   const scope: TriggerScope = params.scope === "any" ? "any" : "workflow_owned";
   if (scope === "any" && !isRepoAllowed(event.pr.repoPath)) {
     logger.info(
@@ -135,21 +125,24 @@ export async function dispatchTriggerEvent(
     return { result: "ignored_provider" };
   }
 
-  const currentHead = await readCurrentHead(event.pr, deps);
-  if (currentHead.status === "unreachable") return { result: "error" };
-  if (currentHead.headSha !== event.pr.headSha) {
+  const eligibleEvent = selectEligibleEvent(event, params);
+  if (!eligibleEvent) return { result: "ignored_untrusted_event" };
+
+  const currentResult = await readCurrentPullRequest(eligibleEvent.pr, deps);
+  if (currentResult.status === "unreachable") return { result: "error" };
+  if (!matchesCurrentPullRequest(eligibleEvent.pr, currentResult.current)) {
     logger.info(
-      { subject: event.pr, currentHead: currentHead.headSha },
+      { subject: eligibleEvent.pr, current: currentResult.current },
       "trigger_ignored_stale_head",
     );
     return { result: "ignored_stale_head" };
   }
 
-  const identity = await resolveSubjectIdentity(event, scope, deps);
+  const identity = await resolveSubjectIdentity(eligibleEvent, scope, deps);
   if (!identity) return { result: "ignored_not_workflow_owned" };
 
   const accepted: AcceptedTriggerDelivery = {
-    ...event,
+    ...eligibleEvent,
     scope,
     subjectKey: identity.subjectKey,
     ticketKey: identity.ticketKey,
@@ -178,13 +171,44 @@ async function resumeAcceptedTrigger(
   accepted: AcceptedTriggerDelivery,
   deps: DispatchTriggerDeps,
 ): Promise<DispatchTriggerResult> {
-  const currentHead = await readCurrentHead(accepted.pr, deps);
-  if (currentHead.status === "unreachable") return { result: "error" };
-  if (currentHead.headSha !== accepted.pr.headSha) {
+  const currentResult = await readCurrentPullRequest(accepted.pr, deps);
+  if (currentResult.status === "unreachable") return { result: "error" };
+  if (!matchesCurrentPullRequest(accepted.pr, currentResult.current)) {
     await completeAccepted(deps.db, accepted, { result: "ignored_stale_head" });
     return { result: "ignored_stale_head" };
   }
   return dispatchAcceptedTrigger(accepted, deps);
+}
+
+function selectEligibleEvent(
+  event: TriggerEvent,
+  params: Record<string, unknown>,
+): TriggerEvent | null {
+  if (event.triggerType !== "trigger_pr_checks_failed") return event;
+
+  const checkNames = stringArray(params.checkNames);
+  if (checkNames.length === 0) return null;
+  if (event.pr.provider === "github") {
+    const trustedApps = stringArray(params.githubAppSlugs, ["github-actions"]);
+    if (!trustedApps.includes(event.delivery.producer)) return null;
+  } else {
+    const trustedSources = stringArray(params.gitlabPipelineSources, ["merge_request_event"]);
+    if (!event.delivery.source || !trustedSources.includes(event.delivery.source)) return null;
+  }
+
+  const failedChecks = (event.pr.failedChecks ?? []).filter(
+    (check) => checkNames.includes(check.name),
+  );
+  if (failedChecks.length === 0) return null;
+  return {
+    ...event,
+    pr: { ...event.pr, failedChecks },
+  };
+}
+
+function stringArray(value: unknown, fallback: string[] = []): string[] {
+  if (!Array.isArray(value)) return fallback;
+  return value.filter((item): item is string => typeof item === "string" && item.length > 0);
 }
 
 async function dispatchAcceptedTrigger(
@@ -284,9 +308,9 @@ export async function drainOldestPendingTrigger(
       continue;
     }
 
-    const currentHead = await readCurrentHead(pending.pr, deps);
-    if (currentHead.status === "unreachable") return { result: "error" };
-    if (currentHead.headSha !== pending.pr.headSha) {
+    const currentResult = await readCurrentPullRequest(pending.pr, deps);
+    if (currentResult.status === "unreachable") return { result: "error" };
+    if (!matchesCurrentPullRequest(pending.pr, currentResult.current)) {
       await deletePendingTrigger(deps.db, pending);
       await completeAccepted(deps.db, pending, { result: "ignored_stale_head" });
       continue;
@@ -338,19 +362,24 @@ async function resolveSubjectIdentity(
   }
 }
 
-async function readCurrentHead(
+async function readCurrentPullRequest(
   pr: PrTriggerPayload,
   deps: DispatchTriggerDeps,
-): Promise<{ status: "ok"; headSha: string } | { status: "unreachable" }> {
+): Promise<
+  | { status: "ok"; current: PullRequestHead }
+  | { status: "unreachable" }
+> {
   try {
-    const headSha = deps.getCurrentHead
-      ? await deps.getCurrentHead(pr)
-      : await createRepositoryVCS({
-          provider: pr.provider,
-          repoPath: pr.repoPath,
-          baseBranch: pr.baseRef,
-        }).getPRHeadSha(pr.prNumber);
-    return { status: "ok", headSha };
+    const current = deps.getCurrentPullRequest
+      ? await deps.getCurrentPullRequest(pr)
+      : deps.getCurrentHead
+        ? { headSha: await deps.getCurrentHead(pr) }
+        : await createRepositoryVCS({
+            provider: pr.provider,
+            repoPath: pr.repoPath,
+            baseBranch: pr.baseRef,
+          }).getPRHead(pr.prNumber);
+    return { status: "ok", current };
   } catch (error) {
     logger.warn(
       { provider: pr.provider, repoPath: pr.repoPath, error: (error as Error).message },
@@ -358,6 +387,15 @@ async function readCurrentHead(
     );
     return { status: "unreachable" };
   }
+}
+
+function matchesCurrentPullRequest(
+  pr: PrTriggerPayload,
+  current: PullRequestHead | null,
+): boolean {
+  if (!current || current.headSha !== pr.headSha) return false;
+  if (pr.provider !== "gitlab" || pr.pipelineId === undefined) return true;
+  return current.headPipelineId === pr.pipelineId;
 }
 
 async function completeAccepted(

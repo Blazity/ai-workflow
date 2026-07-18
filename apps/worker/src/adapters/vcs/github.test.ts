@@ -115,6 +115,26 @@ describe("GitHubAdapter", () => {
     });
   });
 
+  describe("getPRHead", () => {
+    it("reads the authoritative pull-request head even when its branch ref is gone", async () => {
+      mockOctokit.pulls.get.mockResolvedValueOnce({
+        data: { head: { sha: "source-head-sha" } },
+      });
+
+      const adapter = ghAdapter();
+
+      await expect(adapter.getPRHead(42)).resolves.toEqual({
+        headSha: "source-head-sha",
+      });
+      expect(mockOctokit.pulls.get).toHaveBeenCalledWith({
+        owner: "test-org",
+        repo: "test-repo",
+        pull_number: 42,
+      });
+      expect(mockOctokit.git.getRef).not.toHaveBeenCalled();
+    });
+  });
+
   describe("findPR", () => {
     it("returns null when no PR exists", async () => {
       mockOctokit.pulls.list.mockResolvedValueOnce({ data: [] });

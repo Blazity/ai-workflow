@@ -115,8 +115,9 @@ test("draws one canonical remediation board driven by external CI and review eve
   assert.match(explanation, /passing CI starts nothing/i);
   assert.match(explanation, /fresh remediation run/i);
   assert.match(explanation, /downstream.*pending.*terminat/is);
-  assert.match(explanation, /Current handlers still accept only PR\/MR head events/i);
-  assert.match(explanation, /without provider CI.*reviewer-triggered remediation/is);
+  assert.match(explanation, /Provider CI-completion and reviewer events are normalized/i);
+  assert.match(explanation, /exact definition selectors/i);
+  assert.match(explanation, /webhook-id.*Idempotency-Key.*event UUID/is);
   assert.match(explanation, /cancelled.*superseded.*ignored/is);
   assert.match(explanation, /successfully pushed repos.*partial/is);
 

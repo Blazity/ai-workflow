@@ -2,13 +2,17 @@ import { sql } from "drizzle-orm";
 import type { IssueTrackerMoveTarget } from "../adapters/issue-tracker/types.js";
 import type { Db } from "../db/client.js";
 
-const DEFAULT_INTENT_TTL_MS = 5 * 60 * 1000;
+// Jira retries failed webhook deliveries up to five times with 5–15 minute
+// backoff. Keep the consumed intent beyond that complete retry window so a
+// delayed retry cannot be mistaken for a human transition.
+const DEFAULT_INTENT_TTL_MS = 2 * 60 * 60 * 1000;
 
 interface RecordIntentInput {
   ticketKey: string;
   subjectKey: string;
   ownerToken: string;
   runId: string | null;
+  actorAccountId: string;
   target: IssueTrackerMoveTarget;
   ttlMs?: number;
 }
@@ -29,6 +33,7 @@ export async function recordTicketTransitionIntent(
       subject_key,
       owner_token,
       run_id,
+      actor_account_id,
       target_status_id,
       target_status_name,
       expires_at
@@ -38,6 +43,7 @@ export async function recordTicketTransitionIntent(
       ${input.subjectKey},
       ${input.ownerToken},
       ${input.runId},
+      ${input.actorAccountId},
       ${target.statusId},
       ${target.name},
       ${new Date(Date.now() + (input.ttlMs ?? DEFAULT_INTENT_TTL_MS))}
@@ -58,11 +64,13 @@ export async function consumeTicketTransitionIntent(
   db: Db,
   ticketKey: string,
   status: { id?: string | null; name?: string | null },
+  echo: { webhookIdentifier: string; actorAccountId: string },
 ): Promise<boolean> {
-  await deleteExpiredIntents(db);
   const statusId = status.id?.trim() ?? "";
   const statusName = status.name?.trim() ?? "";
-  if (!statusId && !statusName) return false;
+  const webhookIdentifier = echo.webhookIdentifier.trim();
+  const actorAccountId = echo.actorAccountId.trim();
+  if ((!statusId && !statusName) || !webhookIdentifier || !actorAccountId) return false;
 
   const match = statusId && statusName
     ? sql`(
@@ -71,24 +79,45 @@ export async function consumeTicketTransitionIntent(
       )`
     : statusId
       ? sql`target_status_id = ${statusId}`
-      : sql`lower(target_status_name) = lower(${statusName})`;
+      : sql`target_status_id IS NULL AND lower(target_status_name) = lower(${statusName})`;
+
+  // This is deliberately one statement: the production neon-http driver does
+  // not provide interactive transactions. Do not skip a locked row. Under
+  // READ COMMITTED, a concurrent delivery waits and PostgreSQL re-evaluates the
+  // candidate predicate against the now-current row: the same stable webhook
+  // id remains eligible, while a different delivery fails closed.
   const result = await db.execute(sql`
-    WITH candidate AS (
+    WITH expired AS (
+      DELETE FROM ticket_transition_intents
+      WHERE expires_at <= now()
+    ), candidate AS (
       SELECT id
       FROM ticket_transition_intents
       WHERE ticket_key = ${ticketKey}
+        AND actor_account_id = ${actorAccountId}
         AND expires_at > now()
-        AND consumed_at IS NULL
         AND ${match}
-      ORDER BY created_at ASC, id ASC
+        AND (
+          (consumed_at IS NULL AND webhook_identifier IS NULL)
+          OR webhook_identifier = ${webhookIdentifier}
+        )
+      ORDER BY
+        CASE WHEN webhook_identifier = ${webhookIdentifier} THEN 0 ELSE 1 END,
+        created_at ASC,
+        id ASC
       LIMIT 1
-      FOR UPDATE SKIP LOCKED
+      FOR UPDATE
     )
     UPDATE ticket_transition_intents AS intent
-    SET consumed_at = now()
+    SET
+      consumed_at = coalesce(intent.consumed_at, now()),
+      webhook_identifier = coalesce(intent.webhook_identifier, ${webhookIdentifier})
     FROM candidate
     WHERE intent.id = candidate.id
-      AND intent.consumed_at IS NULL
+      AND (
+        (intent.consumed_at IS NULL AND intent.webhook_identifier IS NULL)
+        OR intent.webhook_identifier = ${webhookIdentifier}
+      )
     RETURNING intent.id
   `);
   return rawRows<{ id: number }>(result).length > 0;

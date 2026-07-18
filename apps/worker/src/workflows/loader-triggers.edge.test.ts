@@ -21,7 +21,10 @@ const H = vi.hoisted(() => ({
     VCS_BOT_LOGIN: undefined as string | undefined,
   },
 }));
-vi.mock("../../env.js", () => ({ env: H.env }));
+vi.mock("../../env.js", () => ({
+  env: H.env,
+  getVcsBotLogin: () => H.env.VCS_BOT_LOGIN,
+}));
 
 const mockGetCurrentVersion = vi.fn();
 const mockGetDeployedVersion = vi.fn();
@@ -54,6 +57,7 @@ vi.mock("../db/client.js", () => ({ getDb: vi.fn(() => ({})) }));
 const mockDispatchTriggerEvent = vi.fn();
 vi.mock("../lib/dispatch-trigger.js", () => ({
   dispatchTriggerEvent: (...args: any[]) => mockDispatchTriggerEvent(...args),
+  resolveEnabledReviewStates: vi.fn().mockResolvedValue(undefined),
 }));
 
 const mockVerifySig = vi.fn();

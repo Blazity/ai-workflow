@@ -11,6 +11,7 @@ import type {
   PullRequest,
   PRComment,
   CheckRunResult,
+  PullRequestHead,
   RichGateStatusCapableVCS,
   RichGateStatusUpdate,
 } from "./types.js";
@@ -188,6 +189,14 @@ export class GitHubAdapter
       ref: `heads/${branch}`,
     });
     return data.object.sha;
+  }
+
+  async getPRHead(prId: number): Promise<PullRequestHead> {
+    const { data } = await this.octokit.pulls.get({
+      ...this.ownerRepo,
+      pull_number: prId,
+    });
+    return { headSha: data.head.sha };
   }
 
   async getPRComments(prId: number): Promise<PRComment[]> {

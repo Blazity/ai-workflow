@@ -212,8 +212,10 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
     ),
     defaults: {
       providers: ["github", "gitlab"],
-      producers: ["github-actions", "gitlab-ci"],
       scope: "workflow_owned",
+      checkNames: [],
+      githubAppSlugs: ["github-actions"],
+      gitlabPipelineSources: ["merge_request_event"],
     },
     inputs: {},
     output: statusOutput(
@@ -724,6 +726,12 @@ function availabilityFor(
   }
   if (type === "arthur_injection_check" && !context.arthurConfigured) {
     return unavailable("Arthur Engine is not configured.");
+  }
+  if (
+    type === "trigger_pr_checks_failed" &&
+    !(Array.isArray(params.checkNames) && params.checkNames.length > 0)
+  ) {
+    return unavailable("Configure at least one exact CI check name.");
   }
   const selectedProviders = Array.isArray(params.providers)
     ? params.providers.filter(

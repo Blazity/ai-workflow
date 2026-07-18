@@ -391,6 +391,39 @@ describe("workflow block registry", () => {
     });
   });
 
+  it("fails closed until a checks trigger has at least one exact check name", () => {
+    expect(
+      resolveWorkflowBlockContract(
+        "trigger_pr_checks_failed",
+        {
+          providers: ["github"],
+          scope: "workflow_owned",
+          checkNames: [],
+          githubAppSlugs: ["github-actions"],
+          gitlabPipelineSources: ["merge_request_event"],
+        },
+        context,
+      ).availability,
+    ).toEqual({
+      available: false,
+      unavailableReason: "Configure at least one exact CI check name.",
+    });
+
+    expect(
+      resolveWorkflowBlockContract(
+        "trigger_pr_checks_failed",
+        {
+          providers: ["github"],
+          scope: "workflow_owned",
+          checkNames: ["ci / build"],
+          githubAppSlugs: ["github-actions"],
+          gitlabPipelineSources: ["merge_request_event"],
+        },
+        context,
+      ).availability,
+    ).toEqual({ available: true, unavailableReason: null });
+  });
+
   it.each([
     "trigger_pr_created",
     "trigger_pr_checks_failed",

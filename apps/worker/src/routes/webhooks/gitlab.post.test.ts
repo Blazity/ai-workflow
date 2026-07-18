@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { createApp, toWebHandler } from "h3";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -59,6 +60,9 @@ function makeRequest(
   body: string,
   token = "secret",
   eventName = "Merge Request Hook",
+  deliveryHeaders: Record<string, string> = {
+    "x-gitlab-event-uuid": "delivery-test",
+  },
 ): Request {
   return new Request("http://localhost/", {
     method: "POST",
@@ -66,7 +70,7 @@ function makeRequest(
       "content-type": "application/json",
       "x-gitlab-token": token,
       "x-gitlab-event": eventName,
-      "x-gitlab-event-uuid": "delivery-test",
+      ...deliveryHeaders,
     },
     body,
   });
@@ -133,7 +137,7 @@ describe("POST /webhooks/gitlab", () => {
     mocks.getVcsBotLogin.mockReturnValue("blazebot");
     mocks.isRepoAllowed.mockReturnValue(true);
     mockDispatchTriggerEvent.mockResolvedValue({ result: "no_definition" });
-    mockResolveEnabledReviewStates.mockResolvedValue(["changes_requested"]);
+    mockResolveEnabledReviewStates.mockReset().mockResolvedValue(["changes_requested"]);
     mocks.getConfiguredVcsProviders.mockReturnValue([
       {
         kind: "gitlab",
@@ -167,6 +171,86 @@ describe("POST /webhooks/gitlab", () => {
       reason: "malformed_payload",
     });
     expect(mockDispatchPostPrGateWebhook).not.toHaveBeenCalled();
+  });
+
+  it("uses webhook-id ahead of all legacy GitLab delivery headers", async () => {
+    mockDispatchTriggerEvent.mockResolvedValueOnce({ result: "started", runId: "run_merge" });
+    const payload = JSON.parse(validMergeRequestPayload());
+    payload.object_attributes.action = "merge";
+
+    await makeApp()(
+      makeRequest(JSON.stringify(payload), "secret", "Merge Request Hook", {
+        "webhook-id": "message-id",
+        "idempotency-key": "legacy-message-id",
+        "x-gitlab-event-uuid": "recursive-event-id",
+        "x-gitlab-webhook-uuid": "webhook-config-id",
+      }),
+    );
+
+    expect(mockDispatchTriggerEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        delivery: expect.objectContaining({ deliveryId: "message-id" }),
+      }),
+      expect.anything(),
+    );
+  });
+
+  it("uses Idempotency-Key when webhook-id is unavailable", async () => {
+    mockDispatchTriggerEvent.mockResolvedValueOnce({ result: "started", runId: "run_merge" });
+    const payload = JSON.parse(validMergeRequestPayload());
+    payload.object_attributes.action = "merge";
+
+    await makeApp()(
+      makeRequest(JSON.stringify(payload), "secret", "Merge Request Hook", {
+        "idempotency-key": "legacy-message-id",
+        "x-gitlab-event-uuid": "recursive-event-id",
+      }),
+    );
+
+    expect(mockDispatchTriggerEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        delivery: expect.objectContaining({ deliveryId: "legacy-message-id" }),
+      }),
+      expect.anything(),
+    );
+  });
+
+  it("hashes the event UUID and exact raw body for legacy delivery identity", async () => {
+    mockDispatchTriggerEvent.mockResolvedValueOnce({ result: "started", runId: "run_merge" });
+    const payload = JSON.parse(validMergeRequestPayload());
+    payload.object_attributes.action = "merge";
+    const rawBody = JSON.stringify(payload);
+    const expected = createHash("sha256")
+      .update("recursive-event-id\0")
+      .update(rawBody)
+      .digest("hex");
+
+    await makeApp()(
+      makeRequest(rawBody, "secret", "Merge Request Hook", {
+        "x-gitlab-event-uuid": "recursive-event-id",
+      }),
+    );
+
+    expect(mockDispatchTriggerEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        delivery: expect.objectContaining({ deliveryId: expected }),
+      }),
+      expect.anything(),
+    );
+  });
+
+  it("does not use X-Gitlab-Webhook-UUID as a delivery id", async () => {
+    const response = await makeApp()(
+      makeRequest(validMergeRequestPayload(), "secret", "Merge Request Hook", {
+        "x-gitlab-webhook-uuid": "webhook-config-id",
+      }),
+    );
+
+    await expect(response.json()).resolves.toEqual({
+      status: "ignored",
+      reason: "missing_delivery_id",
+    });
+    expect(mockDispatchTriggerEvent).not.toHaveBeenCalled();
   });
 
   it("dispatches a valid merge request webhook", async () => {
@@ -460,6 +544,24 @@ describe("POST /webhooks/gitlab", () => {
       expect.anything(),
     );
     expect(mocks.fetch).not.toHaveBeenCalled();
+  });
+
+  it("fails closed on an internal merge-request note before normalization", async () => {
+    mockResolveEnabledReviewStates.mockResolvedValueOnce(["commented"]);
+    const note = JSON.parse(validNotePayload());
+    note.object_attributes.internal = true;
+
+    const response = await makeApp()(
+      makeRequest(JSON.stringify(note), "secret", "Note Hook"),
+    );
+
+    await expect(response.json()).resolves.toEqual({
+      status: "ignored",
+      reason: "note_ignored",
+    });
+    expect(mockDispatchTriggerEvent).not.toHaveBeenCalled();
+    expect(mockResolveEnabledReviewStates).not.toHaveBeenCalled();
+    expect(mocks.listRepositories).not.toHaveBeenCalled();
   });
 
   it("always treats an eligible GitLab note as commented without reviewer enrichment", async () => {

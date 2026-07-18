@@ -4,6 +4,12 @@ export interface PullRequest {
   branch: string;
 }
 
+export interface PullRequestHead {
+  headSha: string;
+  /** GitLab's current MR head pipeline. Absent for providers without this concept. */
+  headPipelineId?: number;
+}
+
 export interface PRComment {
   author: string;
   body: string;
@@ -36,6 +42,7 @@ export interface VCSAdapter {
   getPRHeadSha(prId: number): Promise<string>;
   findPR(branch: string): Promise<PullRequest | null>;
   getBranchSha(branch: string): Promise<string>;
+  getPRHead(prId: number): Promise<PullRequestHead>;
 }
 
 export interface CheckRunAnnotation {

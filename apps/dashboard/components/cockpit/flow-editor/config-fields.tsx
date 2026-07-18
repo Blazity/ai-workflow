@@ -431,7 +431,40 @@ export function ConfigFields({
         <>
           <PrProvidersField node={node} canEdit={canEdit} onChange={onChange} />
           <PrScopeField node={node} canEdit={canEdit} onChange={onChange} />
-          <ConfigNote>Fires when a pull request&apos;s checks report a failure.</ConfigNote>
+          <ConfigField label="Exact check names">
+            <ArrayTextarea
+              key={`${node.id}:checkNames`}
+              value={node.params.checkNames}
+              disabled={!canEdit}
+              mono
+              placeholder="ci / build"
+              onChange={(value) => onChange("params.checkNames", value ?? [])}
+            />
+          </ConfigField>
+          <ConfigField label="Trusted GitHub App slugs">
+            <ArrayTextarea
+              key={`${node.id}:githubAppSlugs`}
+              value={node.params.githubAppSlugs}
+              disabled={!canEdit}
+              mono
+              placeholder="github-actions"
+              onChange={(value) => onChange("params.githubAppSlugs", value)}
+            />
+          </ConfigField>
+          <ConfigField label="Trusted GitLab pipeline sources">
+            <ArrayTextarea
+              key={`${node.id}:gitlabPipelineSources`}
+              value={node.params.gitlabPipelineSources}
+              disabled={!canEdit}
+              mono
+              placeholder="merge_request_event"
+              onChange={(value) => onChange("params.gitlabPipelineSources", value)}
+            />
+          </ConfigField>
+          <ConfigNote>
+            Events fail closed until an exact check name matches. GitHub defaults to the
+            github-actions App; GitLab defaults to merge-request pipelines.
+          </ConfigNote>
         </>
       );
     case "trigger_pr_created":
@@ -454,10 +487,7 @@ export function ConfigFields({
       const onStates = arr(node.params.on);
       const effective = onStates.length > 0 ? onStates : ["changes_requested"];
       const toggle = (value: string) => (checked: boolean) => {
-        const next = checked
-          ? [...new Set([...effective, value])]
-          : effective.filter((s) => s !== value);
-        onChange("params.on", next);
+        onChange("params.on", toggleRequiredArrayValue(effective, value, checked));
       };
       return (
         <>
@@ -468,13 +498,18 @@ export function ConfigFields({
               <CheckboxRow
                 label="Changes requested"
                 checked={effective.includes("changes_requested")}
-                disabled={!canEdit}
+                disabled={
+                  !canEdit ||
+                  (effective.length === 1 && effective.includes("changes_requested"))
+                }
                 onChange={toggle("changes_requested")}
               />
               <CheckboxRow
                 label="Commented (untrusted body, opt-in)"
                 checked={effective.includes("commented")}
-                disabled={!canEdit}
+                disabled={
+                  !canEdit || (effective.length === 1 && effective.includes("commented"))
+                }
                 onChange={toggle("commented")}
               />
             </div>

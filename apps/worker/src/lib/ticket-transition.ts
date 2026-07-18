@@ -26,9 +26,15 @@ export async function moveTicketWithIntent(input: {
   const current = await issueTracker.fetchTicket(ticketKey);
   if (ticketAlreadyAtTarget(current, target)) return;
 
+  const actorAccountId = (await issueTracker.getCurrentUserAccountId?.())?.trim() ?? "";
+  if (!actorAccountId) {
+    throw new Error("Cannot move Jira ticket without workflow actor account id.");
+  }
+
   const intentId = await recordTicketTransitionIntent(db, {
     ticketKey,
     target,
+    actorAccountId,
     ...owner,
   });
 

@@ -51,26 +51,39 @@ export default defineEventHandler(async (event) => {
   const adapters = createAdapters();
   const webhookEvent = typeof body?.webhookEvent === "string" ? body.webhookEvent : null;
   const ticketStatus = extractTicketStatus(body);
-  const ticketStatusId = extractTicketStatusId(body);
+  const statusChange = extractStatusChange(body);
+  const webhookIdentifier =
+    getHeader(event, "x-atlassian-webhook-identifier")?.trim() ?? "";
+  const actorAccountId =
+    typeof body?.user?.accountId === "string" ? body.user.accountId.trim() : "";
   logger.info(
     {
       ticketKey,
       webhookEvent,
       payloadStatus: ticketStatus,
+      statusChange,
       payloadProjectKey: projectKey,
     },
     "webhook_payload_parsed",
   );
 
   if (
-    ticketStatus &&
-    (await consumeTicketTransitionIntent(getDb(), ticketKey, {
-      id: ticketStatusId,
-      name: ticketStatus,
+    webhookEvent === "jira:issue_updated" &&
+    statusChange &&
+    webhookIdentifier &&
+    actorAccountId &&
+    (await consumeTicketTransitionIntent(getDb(), ticketKey, statusChange, {
+      webhookIdentifier,
+      actorAccountId,
     }))
   ) {
     logger.info(
-      { ticketKey, ticketStatusId, ticketStatus },
+      {
+        ticketKey,
+        webhookIdentifier,
+        actorAccountId,
+        statusChange,
+      },
       "webhook_consumed_workflow_transition_intent",
     );
     return {
@@ -236,8 +249,24 @@ function extractTicketStatus(body: any): string | null {
   return body?.issue?.fields?.status?.name ?? null;
 }
 
-function extractTicketStatusId(body: any): string | null {
-  return body?.issue?.fields?.status?.id ?? null;
+/** The issue snapshot describes current state but not what this webhook
+ * changed. Echo suppression must match Jira's exact status changelog item. */
+function extractStatusChange(
+  body: any,
+): { id?: string; name?: string } | null {
+  const items = Array.isArray(body?.changelog?.items) ? body.changelog.items : [];
+  const change = items.find(
+    (item: any) => typeof item?.field === "string" && item.field.toLowerCase() === "status",
+  );
+  if (!change) return null;
+
+  const id = change.to == null ? "" : String(change.to).trim();
+  const name = typeof change.toString === "string" ? change.toString.trim() : "";
+  if (!id && !name) return null;
+  return {
+    ...(id ? { id } : {}),
+    ...(name ? { name } : {}),
+  };
 }
 
 function isAiColumnStatus(status: string): boolean {

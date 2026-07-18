@@ -774,20 +774,20 @@
         "trig.pr-checks-failed": {
           group: "trigger",
           title: "PR checks failed",
-          blurb: "Starts remediation from an actionable GitHub Actions or GitLab CI failure on an eligible PR/MR; ownership scope is open.",
+          blurb: "Starts remediation from an exact allowlisted GitHub Actions or GitLab CI failure on an eligible PR/MR.",
           contract: "out: pr, head_sha, failed_checks, log_refs",
-          input: "config {\n  providers: (\"github_actions\"\n    | \"gitlab_ci\")[],\n  event_source: \"check_run\" | \"workflow_run\"\n    | \"check_suite\" | \"pipeline\",\n  granularity: \"first_actionable_failure\"\n    | \"terminal_aggregate\",\n  check_names: string[],  // allowlist\n  actionable_outcomes: CiOutcome[],\n  scope: \"workflow_owned\" | \"any\"\n  // source/granularity/outcomes: Open Decision\n}",
+          input: "config {\n  providers: (\"github\" | \"gitlab\")[],\n  checkNames: string[], // at least one exact name\n  githubAppSlugs: string[],\n  gitlabPipelineSources: string[],\n  scope: \"workflow_owned\" | \"any\"\n}",
           output: "{\n  pr: PrRef,\n  head_sha: string,\n  failed_checks: ProviderCheckRef[],\n  log_refs: ProviderLogRef[],\n  provider_delivery_id: string,\n  producer: \"github_actions\" | \"gitlab_ci\",\n  ticket?: TicketContext\n}",
-          note: "This trigger consumes allowlisted provider failures; it does not run checks itself. workflow_owned is proven from durable branch/publication correlation plus a valid ticket lookup; a prefix alone is insufficient. any is review-safe in this revision and cannot reach Fix, Finalize, Open PR/MR, or ticket actions. Exact GitHub event source, first-failure versus aggregate timing, and non-code failure outcomes are Open Decisions. Events coalesce by subject and exact source head so simultaneous failures feed one remediation run rather than racing. Passing, cancelled, superseded, neutral, skipped, and stale-head results are ignored."
+          note: "This trigger consumes allowlisted provider failures; it does not run checks itself. Empty check-name selection is unavailable. Trusted-source defaults are GitHub App github-actions and GitLab source merge_request_event. workflow_owned is proven from durable branch/publication correlation plus a valid ticket lookup; a prefix alone is insufficient. any is review-safe in this revision and cannot reach Fix, Finalize, Open PR/MR, or ticket actions. Before immediate or queued dispatch, the provider API must confirm the current head; GitLab must also confirm the event pipeline is the MR's current head pipeline. Events coalesce by subject and exact source head. Passing, cancelled, superseded, neutral, skipped, and stale-head results are ignored."
         },
         "trig.pr-review": {
           group: "trigger",
           title: "PR review submitted",
           blurb: "Fires on selected human review feedback for an eligible PR/MR; ownership and actionable review scope are open.",
           contract: "out: pr, head_sha, review, comment_refs",
-          input: "config {\n  providers: (\"github\" | \"gitlab\")[],\n  scope: \"workflow_owned\" | \"any\",\n  on: ReviewEventSelector[], // Open Decision\n  ignore_workflow_authored: true\n}",
+          input: "config {\n  providers: (\"github\" | \"gitlab\")[],\n  scope: \"workflow_owned\" | \"any\",\n  on: (\"changes_requested\" | \"commented\")[] // min 1\n}",
           output: "{\n  pr: PrRef,\n  head_sha: string,\n  review: ReviewRef,\n  comment_refs: ReviewCommentRef[],\n  provider_delivery_id: string,\n  ticket?: TicketContext\n}",
-          note: "GitHub can deliver submitted changes requested reviews and review comments. GitLab supports comments only in this revision because it does not emit a reliable changes-requested webhook; a GitLab definition selecting changes_requested is unavailable and rejected before deployment. Workflow-authored comments and review echoes are filtered by default so the fix summary cannot recursively trigger another remediation run. workflow_owned is proven from durable branch/publication correlation plus a valid ticket lookup. any is review-safe and cannot mutate a branch or ticket in this revision."
+          note: "GitHub can deliver submitted changes requested reviews and review comments. GitLab supports external comments only in this revision because it does not emit a reliable changes-requested webhook; a GitLab definition selecting changes_requested is unavailable and rejected before deployment. GitLab internal/confidential notes fail closed at both route and normalization boundaries, and the editor always retains at least one selected review state. Workflow-authored comments and review echoes are filtered by default so the fix summary cannot recursively trigger another remediation run. workflow_owned is proven from durable branch/publication correlation plus a valid ticket lookup. any is review-safe and cannot mutate a branch or ticket in this revision."
         },
         "trig.pr-merged": {
           group: "trigger",
@@ -796,7 +796,7 @@
           contract: "out: pr, merge_sha, ticket?",
           input: "config {\n  providers: (\"github\" | \"gitlab\")[],\n  scope: \"workflow_owned\" | \"any\"\n}",
           output: "{\n  pr: PrRef,\n  head_sha: string,\n  merge_sha: string,\n  merged_at: ISODateTime,\n  ticket?: TicketContext\n}",
-          note: "workflow_owned is proven from durable branch/publication correlation plus a valid ticket lookup; a branch prefix alone is insufficient. Use it when connecting this trigger to ticket actions. any has no guaranteed ticket and is review-safe only. A workflow-authored ticket transition records an intent so its Jira webhook echo cannot cancel the still-running workflow."
+          note: "workflow_owned is proven from durable branch/publication correlation plus a valid ticket lookup; a branch prefix alone is insufficient. Use it when connecting this trigger to ticket actions. any has no guaranteed ticket and is review-safe only. A workflow-authored Jira transition records its exact destination and actor; only the matching status changelog and stable webhook identifier consume it, with retries suppressed for the full retry window."
         },
 
         "agent.planning": {
@@ -1188,13 +1188,13 @@
           notes: [
             { x: 30, y: 30, w: 850,
               head: "External events drive this remediation flow",
-              body: "V4 consumes authenticated GitHub Actions / GitLab CI failures and actionable human-review events; GitHub Actions and GitLab CI remain the source of truth for check outcomes. The default remediation workflow does not start when a PR is opened or updated, and it does not run tests or publish check statuses. This does not decide whether AI Workflow separately keeps the existing product-owned <code>post-pr-gate</code> or offers a separately deployed PR-created workflow with an optional standalone Review Agent. Current handlers still accept only PR/MR head events for the legacy gate; without provider CI-completion and reviewer-triggered remediation subscriptions and normalizers, V4 cannot run." },
+              body: "V4 consumes authenticated GitHub Actions / GitLab CI failures and actionable human-review events; GitHub Actions and GitLab CI remain the source of truth for check outcomes. The default remediation workflow does not start when a PR is opened or updated, and it does not run tests or publish check statuses. This does not decide whether AI Workflow separately keeps the existing product-owned <code>post-pr-gate</code> or offers a separately deployed PR-created workflow with an optional standalone Review Agent. Provider CI-completion and reviewer events are normalized into this trigger contract and then filtered by exact definition selectors." },
             { x: 960, y: 30, w: 850,
               head: "One workflow · fresh run per actionable event",
               body: "A failed CI result or human review starts one remediation run for the exact head SHA. The run fixes, pushes, comments, and ends — it does not wait for CI. Repository CI runs normally on the new SHA: passing CI starts nothing, while another failure or later review starts a fresh remediation run." },
             { x: 30, y: 690, w: 1050,
               head: "Event safety and coalescing",
-              body: "Authenticate the provider webhook, allowlist workflow/check names, apply the selected PR-ownership policy, deduplicate by <code>provider + repo + PR/MR + head SHA + delivery</code>, ignore stale heads, and coalesce simultaneous failures/reviews per subject. If a push starts CI while downstream workflow blocks are still running, an actionable event is stored as pending and starts only after the current workflow terminates and releases its claim. Passing, cancelled, superseded, neutral, and skipped results are ignored. Workflow-authored events such as remediation comments are ignored so the summary cannot trigger itself. Missed webhooks need provider redelivery or reconciliation."
+              body: "Authenticate the provider webhook; require exact check names plus trusted producer/source selectors; apply the selected PR-ownership policy; deduplicate by <code>provider + repo + PR/MR + head SHA + delivery</code>; re-read the provider's current head (and GitLab head-pipeline ID); then coalesce simultaneous failures/reviews per subject. GitLab delivery identity prefers <code>webhook-id</code>, then <code>Idempotency-Key</code>, then a hash of event UUID plus raw body; the webhook-configuration UUID is never a delivery key. If a push starts CI while downstream workflow blocks are still running, an actionable event is stored as pending and revalidated only after the current workflow terminates and releases its claim. Passing, cancelled, superseded, neutral, skipped, stale-head, untrusted-source, internal-note, and other workflow-authored events are ignored. Missed webhooks need provider redelivery or reconciliation."
             },
             { x: 1130, y: 760, w: 650,
               head: "Publish safety is not validation",

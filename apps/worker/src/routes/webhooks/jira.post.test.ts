@@ -48,15 +48,32 @@ function makeApp() {
   return toWebHandler(app);
 }
 
-function makeRequest(): Request {
+function makeRequest(options: {
+  webhookIdentifier?: string | null;
+  actorAccountId?: string;
+  changelogItems?: Array<Record<string, unknown>>;
+} = {}): Request {
+  const webhookIdentifier =
+    options.webhookIdentifier === undefined ? "jira-delivery-1" : options.webhookIdentifier;
   return new Request("http://localhost/", {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: {
+      "content-type": "application/json",
+      ...(webhookIdentifier
+        ? { "x-atlassian-webhook-identifier": webhookIdentifier }
+        : {}),
+    },
     body: JSON.stringify({
       webhookEvent: "jira:issue_updated",
+      user: { accountId: options.actorAccountId ?? "jira-bot-account" },
       issue: {
         key: "PROJ-42",
         fields: { project: { key: "PROJ" }, status: { id: "10001", name: "Backlog" } },
+      },
+      changelog: {
+        items:
+          options.changelogItems ??
+          [{ field: "status", to: "10001", toString: "Backlog" }],
       },
     }),
   });
@@ -97,7 +114,7 @@ describe("POST /webhooks/jira cancel guard", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockStopSandboxesByIds.mockResolvedValue(0);
-    mockConsumeTicketTransitionIntent.mockResolvedValue(false);
+    mockConsumeTicketTransitionIntent.mockReset().mockResolvedValue(false);
   });
 
   it("cancels a pr_trigger run when an unmatched human move takes the ticket out of AI", async () => {
@@ -138,9 +155,53 @@ describe("POST /webhooks/jira cancel guard", () => {
       {},
       "PROJ-42",
       { id: "10001", name: "Backlog" },
+      {
+        actorAccountId: "jira-bot-account",
+        webhookIdentifier: "jira-delivery-1",
+      },
     );
     expect(mockCancelRun).not.toHaveBeenCalled();
     expect(mockDispatchTicket).not.toHaveBeenCalled();
+  });
+
+  it("does not let a non-status update consume an intent from the issue snapshot", async () => {
+    const adapters = makeAdapters([
+      { ticketKey: "PROJ-42", runId: "run_pr", kind: "pr_trigger" },
+    ]);
+    mocks.createAdapters.mockReturnValue(adapters);
+    mockCancelRun.mockResolvedValue(true);
+    mockConsumeTicketTransitionIntent.mockResolvedValueOnce(true);
+
+    const response = await makeApp()(
+      makeRequest({ changelogItems: [{ field: "summary", toString: "New title" }] }),
+    );
+
+    await expect(response.json()).resolves.toEqual({
+      status: "cancelled",
+      reason: "left_ai_column",
+      ticketKey: "PROJ-42",
+    });
+    expect(mockConsumeTicketTransitionIntent).not.toHaveBeenCalled();
+    expect(mockCancelRun).toHaveBeenCalled();
+  });
+
+  it("does not consume an intent without Jira's stable webhook identifier", async () => {
+    const adapters = makeAdapters([
+      { ticketKey: "PROJ-42", runId: "run_pr", kind: "pr_trigger" },
+    ]);
+    mocks.createAdapters.mockReturnValue(adapters);
+    mockCancelRun.mockResolvedValue(true);
+    mockConsumeTicketTransitionIntent.mockResolvedValueOnce(true);
+
+    const response = await makeApp()(makeRequest({ webhookIdentifier: null }));
+
+    await expect(response.json()).resolves.toEqual({
+      status: "cancelled",
+      reason: "left_ai_column",
+      ticketKey: "PROJ-42",
+    });
+    expect(mockConsumeTicketTransitionIntent).not.toHaveBeenCalled();
+    expect(mockCancelRun).toHaveBeenCalled();
   });
 
   it("still cancels a ticket-kind run when the ticket leaves the AI column", async () => {

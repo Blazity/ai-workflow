@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { createError, defineEventHandler, getHeader, readRawBody } from "h3";
 import { env, getConfiguredVcsProviders, getVcsBotLogin } from "../../../env.js";
 import { PostgresRunRegistry } from "../../adapters/run-registry/postgres.js";
@@ -40,7 +41,7 @@ export default defineEventHandler(async (event) => {
   ) {
     return { status: "ignored", reason: "not_supported_event" };
   }
-  const deliveryId = getHeader(event, "x-gitlab-event-uuid")?.trim() ?? "";
+  const deliveryId = resolveGitLabDeliveryId(event, rawBody);
   if (!deliveryId) {
     return { status: "ignored", reason: "missing_delivery_id" };
   }
@@ -50,6 +51,10 @@ export default defineEventHandler(async (event) => {
     body = rawBody ? JSON.parse(rawBody) : {};
   } catch {
     return { status: "ignored", reason: "malformed_payload" };
+  }
+
+  if (gitLabEvent === "Note Hook" && body?.object_attributes?.internal === true) {
+    return { status: "ignored", reason: "note_ignored" };
   }
 
   const needsReviewFilter = gitLabEvent === "Note Hook";
@@ -155,8 +160,23 @@ function isEligibleMergeRequestNote(body: any, botUsername: string | undefined):
       attrs.action === "create" &&
       attrs.noteable_type === "MergeRequest" &&
       attrs.system !== true &&
+      attrs.internal !== true &&
       !vcsLoginsMatch(producer, botUsername),
   );
+}
+
+function resolveGitLabDeliveryId(event: Parameters<typeof getHeader>[0], rawBody: string): string {
+  const messageId =
+    getHeader(event, "webhook-id")?.trim() ||
+    getHeader(event, "idempotency-key")?.trim();
+  if (messageId) return messageId;
+
+  const eventUuid = getHeader(event, "x-gitlab-event-uuid")?.trim();
+  if (!eventUuid) return "";
+  return createHash("sha256")
+    .update(`${eventUuid}\0`)
+    .update(rawBody)
+    .digest("hex");
 }
 
 function triggerResponse(result: DispatchTriggerResult) {

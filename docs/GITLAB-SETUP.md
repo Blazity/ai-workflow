@@ -75,9 +75,11 @@ In the GitLab project, open **Project Settings -> Webhooks** and add:
 - Trigger: **Merge request events**, **Pipeline events**, and **Comments**
 - SSL verification: enabled
 
-**Merge request events** deliver the **Merge Request Hook**, which drives PR/MR creation and reuse. **Pipeline events** deliver the **Pipeline Hook**, which drives the `trigger_pr_checks_failed` workflow trigger (re-run the fix flow when a bot MR's pipeline fails). Without Pipeline events, that trigger never fires.
+**Merge request events** deliver the **Merge Request Hook**, which drives PR/MR creation and reuse. **Pipeline events** deliver the **Pipeline Hook**, which drives `trigger_pr_checks_failed`. That trigger requires at least one exact check name and defaults to the trusted `merge_request_event` pipeline source. Before dispatch, the worker verifies both `merge_request.last_commit.id` and the event pipeline ID against the merge request's current head and head pipeline. Without Pipeline events, the trigger never fires.
 
-**Comments** deliver the **Note Hook** used by `trigger_pr_review`. The worker maps an eligible, non-system merge request note only to `commented`; it does not infer reviewer state from the author's current reviewer record. GitLab does not emit a reliable event that distinguishes a new Request Changes transition, with or without a summary, so GitLab `changes_requested` triggers are unsupported until such an event exists. Any review-trigger configuration that includes GitLab must include `commented`.
+**Comments** deliver the **Note Hook** used by `trigger_pr_review`. The worker maps an eligible, external, non-system merge request note only to `commented`; internal/confidential notes are rejected at both the webhook route and normalizer. It does not infer reviewer state from the author's current reviewer record. GitLab does not emit a reliable event that distinguishes a new Request Changes transition, with or without a summary, so GitLab `changes_requested` triggers are unsupported until such an event exists. Any review-trigger configuration that includes GitLab must include `commented`, and every review trigger must retain at least one selected state.
+
+For webhook redelivery, the worker uses `webhook-id`, then `Idempotency-Key`. If neither header is present, it hashes `X-Gitlab-Event-UUID`, a NUL separator, and the raw request body. `X-Gitlab-Webhook-UUID` identifies the webhook configuration and is deliberately not used as a delivery ID.
 
 Use GitLab's **Secret token** field for now, not the newer **Signing token**
 flow. The worker currently verifies the `X-Gitlab-Token` header.

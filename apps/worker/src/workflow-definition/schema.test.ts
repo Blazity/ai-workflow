@@ -686,8 +686,10 @@ describe("workflowDefinitionSchema block-executor node types", () => {
       scope: "workflow_owned",
     });
     expect(parseNode({ type: "trigger_pr_checks_failed", params: {} })?.params).toEqual({
+      checkNames: [],
+      githubAppSlugs: ["github-actions"],
+      gitlabPipelineSources: ["merge_request_event"],
       providers: ["github", "gitlab"],
-      producers: ["github-actions", "gitlab-ci"],
       scope: "workflow_owned",
     });
     expect(parseNode({ type: "trigger_pr_review", params: {} })?.params).toEqual({
@@ -713,7 +715,24 @@ describe("workflowDefinitionSchema block-executor node types", () => {
     });
     // Unknown keys and out-of-enum values are still rejected (strict).
     expect(parseNode({ type: "trigger_pr_created", params: { bogus: 1 } })).toBeNull();
+    expect(parseNode({ type: "trigger_pr_review", params: { on: [] } })).toBeNull();
     expect(parseNode({ type: "trigger_pr_review", params: { on: ["approved"] } })).toBeNull();
+    expect(
+      parseNode({
+        type: "trigger_pr_checks_failed",
+        params: {
+          checkNames: ["ci / build"],
+          githubAppSlugs: ["github-actions"],
+          gitlabPipelineSources: ["merge_request_event"],
+        },
+      })?.params,
+    ).toEqual({
+      checkNames: ["ci / build"],
+      githubAppSlugs: ["github-actions"],
+      gitlabPipelineSources: ["merge_request_event"],
+      providers: ["github", "gitlab"],
+      scope: "workflow_owned",
+    });
     for (const type of [
       "trigger_pr_created",
       "trigger_pr_checks_failed",

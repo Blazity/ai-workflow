@@ -68,7 +68,6 @@ const vcsProviders = z.enum(["github", "gitlab"]);
 const vcsProviderSelection = z.array(vcsProviders).min(1);
 const reviewStates = z.enum(["changes_requested", "commented"]);
 const prTriggerScope = z.enum(["workflow_owned", "any"]);
-const ciProducer = z.string().trim().min(1).max(100).regex(/^[A-Za-z0-9._-]+$/);
 
 const triggerNode = z
   .object({ ...baseNodeFields, type: z.literal("trigger_ticket_ai"), params: emptyParams })
@@ -98,8 +97,18 @@ const triggerPrChecksFailedNode = z
     params: z
       .object({
         providers: vcsProviderSelection.default(["github", "gitlab"]),
-        producers: z.array(ciProducer).default(["github-actions", "gitlab-ci"]),
         scope: prTriggerScope.default("workflow_owned"),
+        checkNames: z.array(z.string().trim().min(1).max(255)).max(100).default([]),
+        githubAppSlugs: z
+          .array(z.string().trim().min(1).max(100))
+          .min(1)
+          .max(20)
+          .default(["github-actions"]),
+        gitlabPipelineSources: z
+          .array(z.string().trim().min(1).max(100))
+          .min(1)
+          .max(20)
+          .default(["merge_request_event"]),
       })
       .strict(),
   })
@@ -116,7 +125,7 @@ const triggerPrReviewNode = z
     params: z
       .object({
         providers: vcsProviderSelection.default(["github"]),
-        on: z.array(reviewStates).default(["changes_requested"]),
+        on: z.array(reviewStates).min(1).default(["changes_requested"]),
         scope: prTriggerScope.default("workflow_owned"),
       })
       .strict(),

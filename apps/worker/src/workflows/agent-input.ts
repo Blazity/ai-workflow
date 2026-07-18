@@ -16,6 +16,8 @@ export interface PrTriggerPayload {
   isDraft: boolean;
   mergeSha?: string;
   mergedAt?: string;
+  /** GitLab pipeline event identity used to reject superseded head pipelines. */
+  pipelineId?: number;
   failedChecks?: Array<{ name: string; conclusion: string; detailsUrl?: string }>;
   review?: { state: "changes_requested" | "commented"; author: string; body: string };
   reviews?: Array<{ state: "changes_requested" | "commented"; author: string; body: string }>;

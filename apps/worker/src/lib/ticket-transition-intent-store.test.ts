@@ -34,7 +34,17 @@ async function insertOwner(input: {
 }
 
 function intentOwner(ownerToken: string, runId: string | null) {
-  return { ticketKey, subjectKey, ownerToken, runId };
+  return {
+    ticketKey,
+    subjectKey,
+    ownerToken,
+    runId,
+    actorAccountId: "jira-bot-account",
+  };
+}
+
+function echo(webhookIdentifier = "jira-delivery-1", actorAccountId = "jira-bot-account") {
+  return { webhookIdentifier, actorAccountId };
 }
 
 describe("ticket transition intents", () => {
@@ -51,9 +61,23 @@ describe("ticket transition intents", () => {
         subjectKey,
         ownerToken: "owner-reserved",
         runId: null,
+        actorAccountId: "jira-bot-account",
         targetStatusId: "10010",
       }),
     ]);
+  });
+
+  it("retains workflow echoes for at least Jira's full retry window", async () => {
+    await insertOwner({ ownerToken: "owner-bound", runId: "run-1", state: "bound" });
+    const before = Date.now();
+
+    await recordTicketTransitionIntent(db, {
+      ...intentOwner("owner-bound", "run-1"),
+      target: "Done",
+    });
+
+    const [intent] = await db.select().from(ticketTransitionIntents);
+    expect(intent.expiresAt.getTime() - before).toBeGreaterThanOrEqual(75 * 60 * 1000);
   });
 
   it("records intent for the exact bound owner and run", async () => {
@@ -104,7 +128,7 @@ describe("ticket transition intents", () => {
     await db.delete(activeRuns).where(eq(activeRuns.subjectKey, subjectKey));
 
     await expect(
-      consumeTicketTransitionIntent(db, ticketKey, { id: "10042", name: "Done" }),
+      consumeTicketTransitionIntent(db, ticketKey, { id: "10042", name: "Done" }, echo()),
     ).resolves.toBe(true);
   });
 
@@ -120,11 +144,11 @@ describe("ticket transition intents", () => {
       .where(eq(activeRuns.subjectKey, subjectKey));
 
     await expect(
-      consumeTicketTransitionIntent(db, ticketKey, { id: "10010", name: "AI" }),
+      consumeTicketTransitionIntent(db, ticketKey, { id: "10010", name: "AI" }, echo()),
     ).resolves.toBe(true);
   });
 
-  it("claims a concurrent duplicate webhook exactly once", async () => {
+  it("suppresses concurrent retries of the same webhook idempotently", async () => {
     await insertOwner({ ownerToken: "owner-bound", runId: "run-1", state: "bound" });
     await recordTicketTransitionIntent(db, {
       ...intentOwner("owner-bound", "run-1"),
@@ -132,11 +156,71 @@ describe("ticket transition intents", () => {
     });
 
     const results = await Promise.all([
-      consumeTicketTransitionIntent(db, ticketKey, { id: "10042", name: "Done" }),
-      consumeTicketTransitionIntent(db, ticketKey, { id: "10042", name: "Done" }),
+      consumeTicketTransitionIntent(db, ticketKey, { id: "10042", name: "Done" }, echo()),
+      consumeTicketTransitionIntent(db, ticketKey, { id: "10042", name: "Done" }, echo()),
+    ]);
+
+    expect(results).toEqual([true, true]);
+  });
+
+  it("lets only one of two concurrent delivery identities consume the intent", async () => {
+    await insertOwner({ ownerToken: "owner-bound", runId: "run-1", state: "bound" });
+    await recordTicketTransitionIntent(db, {
+      ...intentOwner("owner-bound", "run-1"),
+      target: { name: "Done", statusId: "10042" },
+    });
+
+    const results = await Promise.all([
+      consumeTicketTransitionIntent(
+        db,
+        ticketKey,
+        { id: "10042", name: "Done" },
+        echo("jira-delivery-1"),
+      ),
+      consumeTicketTransitionIntent(
+        db,
+        ticketKey,
+        { id: "10042", name: "Done" },
+        echo("jira-delivery-2"),
+      ),
     ]);
 
     expect(results.sort()).toEqual([false, true]);
+  });
+
+  it("suppresses a later retry after its intent was consumed", async () => {
+    await insertOwner({ ownerToken: "owner-bound", runId: "run-1", state: "bound" });
+    await recordTicketTransitionIntent(db, {
+      ...intentOwner("owner-bound", "run-1"),
+      target: { name: "Done", statusId: "10042" },
+    });
+
+    await expect(
+      consumeTicketTransitionIntent(db, ticketKey, { id: "10042", name: "Done" }, echo()),
+    ).resolves.toBe(true);
+    await expect(
+      consumeTicketTransitionIntent(db, ticketKey, { id: "10042", name: "Done" }, echo()),
+    ).resolves.toBe(true);
+  });
+
+  it("requires the exact workflow actor before consuming an intent", async () => {
+    await insertOwner({ ownerToken: "owner-bound", runId: "run-1", state: "bound" });
+    await recordTicketTransitionIntent(db, {
+      ...intentOwner("owner-bound", "run-1"),
+      target: { name: "Done", statusId: "10042" },
+    });
+
+    await expect(
+      consumeTicketTransitionIntent(
+        db,
+        ticketKey,
+        { id: "10042", name: "Done" },
+        echo("jira-human-delivery", "human-account"),
+      ),
+    ).resolves.toBe(false);
+    await expect(
+      consumeTicketTransitionIntent(db, ticketKey, { id: "10042", name: "Done" }, echo()),
+    ).resolves.toBe(true);
   });
 
   it("consumes the oldest matching unconsumed intent first", async () => {
@@ -159,7 +243,7 @@ describe("ticket transition intents", () => {
       .where(eq(ticketTransitionIntents.id, newerId));
 
     await expect(
-      consumeTicketTransitionIntent(db, ticketKey, { name: "ai review" }),
+      consumeTicketTransitionIntent(db, ticketKey, { name: "ai review" }, echo()),
     ).resolves.toBe(true);
 
     const rows = await db
@@ -196,7 +280,7 @@ describe("ticket transition intents", () => {
     });
 
     await expect(
-      consumeTicketTransitionIntent(db, ticketKey, { id: "10010", name: "AI Review" }),
+      consumeTicketTransitionIntent(db, ticketKey, { id: "10010", name: "AI Review" }, echo()),
     ).resolves.toBe(true);
   });
 
@@ -208,14 +292,14 @@ describe("ticket transition intents", () => {
     });
 
     await expect(
-      consumeTicketTransitionIntent(db, ticketKey, { id: "99999", name: "Done" }),
+      consumeTicketTransitionIntent(db, ticketKey, { id: "99999", name: "Done" }, echo()),
     ).resolves.toBe(false);
     await expect(
-      consumeTicketTransitionIntent(db, ticketKey, { id: "10042", name: "Renamed Done" }),
+      consumeTicketTransitionIntent(db, ticketKey, { id: "10042", name: "Renamed Done" }, echo()),
     ).resolves.toBe(true);
   });
 
-  it("does not consume mismatched, expired, or previously consumed intents", async () => {
+  it("does not consume mismatched or expired intents and replays the same delivery", async () => {
     await insertOwner({ ownerToken: "owner-bound", runId: "run-1", state: "bound" });
     await recordTicketTransitionIntent(db, {
       ...intentOwner("owner-bound", "run-1"),
@@ -223,7 +307,7 @@ describe("ticket transition intents", () => {
       ttlMs: -1,
     });
     await expect(
-      consumeTicketTransitionIntent(db, ticketKey, { id: "10042", name: "Done" }),
+      consumeTicketTransitionIntent(db, ticketKey, { id: "10042", name: "Done" }, echo()),
     ).resolves.toBe(false);
 
     await recordTicketTransitionIntent(db, {
@@ -231,13 +315,13 @@ describe("ticket transition intents", () => {
       target: { name: "Done", statusId: "10042" },
     });
     await expect(
-      consumeTicketTransitionIntent(db, ticketKey, { id: "99999", name: "Backlog" }),
+      consumeTicketTransitionIntent(db, ticketKey, { id: "99999", name: "Backlog" }, echo()),
     ).resolves.toBe(false);
     await expect(
-      consumeTicketTransitionIntent(db, ticketKey, { id: "10042", name: "Done" }),
+      consumeTicketTransitionIntent(db, ticketKey, { id: "10042", name: "Done" }, echo()),
     ).resolves.toBe(true);
     await expect(
-      consumeTicketTransitionIntent(db, ticketKey, { id: "10042", name: "Done" }),
-    ).resolves.toBe(false);
+      consumeTicketTransitionIntent(db, ticketKey, { id: "10042", name: "Done" }, echo()),
+    ).resolves.toBe(true);
   });
 });

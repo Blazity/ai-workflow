@@ -20,12 +20,15 @@ const owner = {
 function tracker(input: {
   fetchTicket?: ReturnType<typeof vi.fn>;
   moveTicket?: ReturnType<typeof vi.fn>;
+  getCurrentUserAccountId?: ReturnType<typeof vi.fn>;
 } = {}): IssueTrackerAdapter {
   return {
     fetchTicket:
       input.fetchTicket ??
       vi.fn().mockResolvedValue({ trackerStatus: "In Progress", trackerStatusId: "3" }),
     moveTicket: input.moveTicket ?? vi.fn().mockResolvedValue(undefined),
+    getCurrentUserAccountId:
+      input.getCurrentUserAccountId ?? vi.fn().mockResolvedValue("jira-bot-account"),
   } as unknown as IssueTrackerAdapter;
 }
 
@@ -96,10 +99,30 @@ describe("moveTicketWithIntent", () => {
 
     expect(order).toEqual(["intent", "move"]);
     expect(mocks.record).toHaveBeenCalledWith(db, {
+      actorAccountId: "jira-bot-account",
       ticketKey: "AIW-101",
       target: "Done",
       ...owner,
     });
+    expect(issueTracker.getCurrentUserAccountId).toHaveBeenCalledOnce();
+  });
+
+  it("fails closed before recording when Jira cannot identify the workflow actor", async () => {
+    const issueTracker = tracker({
+      getCurrentUserAccountId: vi.fn().mockResolvedValue(""),
+    });
+
+    await expect(
+      moveTicketWithIntent({
+        db,
+        issueTracker,
+        ticketKey: "AIW-101",
+        target: "Done",
+        owner,
+      }),
+    ).rejects.toThrow(/workflow actor account id/i);
+    expect(mocks.record).not.toHaveBeenCalled();
+    expect(issueTracker.moveTicket).not.toHaveBeenCalled();
   });
 
   it("discards the exact intent when a post-error read proves the ticket did not move", async () => {

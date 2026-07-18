@@ -11,6 +11,8 @@ export interface TriggerEvent {
   delivery: {
     provider: "github" | "gitlab";
     producer: string;
+    /** Provider event source, such as GitLab's merge_request_event pipeline source. */
+    source?: string;
     deliveryId: string;
   };
   triggerType: PrTriggerType;
@@ -189,7 +191,8 @@ export function normalizeGitLabEvent(
       vcsLoginsMatch(producer, options.botUsername) ||
       attrs.action !== "create" ||
       attrs.noteable_type !== "MergeRequest" ||
-      attrs.system === true
+      attrs.system === true ||
+      attrs.internal === true
     ) {
       return null;
     }
@@ -229,7 +232,10 @@ export function normalizeGitLabEvent(
     return {
       // The authenticated Pipeline Hook is the GitLab CI producer. body.user
       // is merely the human/bot that initiated it and must not define trust.
-      delivery: gitLabDelivery(options.deliveryId, "gitlab-ci"),
+      delivery: {
+        ...gitLabDelivery(options.deliveryId, "gitlab-ci"),
+        ...(typeof attrs.source === "string" ? { source: attrs.source } : {}),
+      },
       triggerType: "trigger_pr_checks_failed",
       pr: {
         provider: "gitlab",
@@ -237,11 +243,12 @@ export function normalizeGitLabEvent(
         prNumber: mr.iid,
         prUrl: mr.url ?? "",
         headRef: mr.source_branch ?? "",
-        headSha: attrs.sha ?? mr.last_commit?.id ?? "",
+        headSha: mr.last_commit?.id ?? "",
         baseRef: mr.target_branch ?? "",
         title: mr.title ?? "",
         author: body?.user?.username ?? body?.user?.name ?? "unknown",
         isDraft: false,
+        ...(typeof attrs.id === "number" ? { pipelineId: attrs.id } : {}),
         failedChecks,
       },
     };
