@@ -405,6 +405,41 @@ describe("prepare_workspace execute", () => {
     expect(result.kind).toBe("next");
   });
 
+  it("prepares a review-only human PR without creating a workflow branch", async () => {
+    const pr = makePrPayload();
+    const reviewRepo: SelectedRepository = {
+      ...repo,
+      workflowOwnedBranch: {
+        branchName: pr.headRef,
+        pr: { id: pr.prNumber, url: pr.prUrl, branch: pr.headRef },
+      },
+    };
+    mocks.blockPrTriggerRepositoriesStep.mockResolvedValue([reviewRepo]);
+    mocks.blockFetchPrContextsStep.mockResolvedValue(contextsFor(reviewRepo));
+    const ctx = makeCtx({
+      sandboxId: null,
+      entry: {
+        kind: "pr_trigger",
+        triggerType: "trigger_pr_review",
+        subjectKey: "pr:github:acme/api#42",
+        ownerToken: "owner:test",
+        definitionId: 1,
+        definitionVersion: 1,
+        scope: "any",
+        pr,
+      },
+    });
+
+    const result = await execute(makeNode("prepare_workspace"), {}, ctx);
+
+    expect(mocks.blockPrTriggerRepositoriesStep).toHaveBeenCalledWith(
+      "pr:github:acme/api#42",
+      pr,
+    );
+    expect(mocks.prepareSelectedRepositoryBranches).not.toHaveBeenCalled();
+    expect(result.kind).toBe("next");
+  });
+
   it("maps provisioning errors to kind failed", async () => {
     mocks.runPreSandboxPhase.mockResolvedValue({
       status: "continue",

@@ -244,7 +244,10 @@ export async function ensureWorkspace(
   try {
     let selected: SelectedRepository[];
     if (ctx.entry.kind === "pr_trigger") {
-      selected = await blockPrTriggerRepositoriesStep(ctx.ticket.identifier, ctx.entry.pr);
+      selected = await blockPrTriggerRepositoriesStep(
+        ctx.entry.ticketKey ?? ctx.entry.subjectKey,
+        ctx.entry.pr,
+      );
     } else {
       const preSandbox = await blockPrepareWorkspacePreSandboxStep({
         ticket: {
@@ -293,17 +296,19 @@ export async function ensureWorkspace(
       };
     }
 
-    const { prepareSelectedRepositoryBranches } = await import("../repository-prs.js");
-    await prepareSelectedRepositoryBranches(
-      ctx.ticket.identifier,
-      ctx.branchName,
-      selected,
-      {
-        subjectKey: ctx.entry.subjectKey,
-        ownerToken: ctx.entry.ownerToken,
-        runId: ctx.runId,
-      },
-    );
+    if (ctx.entry.kind !== "pr_trigger" || ctx.entry.scope === "workflow_owned") {
+      const { prepareSelectedRepositoryBranches } = await import("../repository-prs.js");
+      await prepareSelectedRepositoryBranches(
+        ctx.ticket.identifier,
+        ctx.branchName,
+        selected,
+        {
+          subjectKey: ctx.entry.subjectKey,
+          ownerToken: ctx.entry.ownerToken,
+          runId: ctx.runId,
+        },
+      );
+    }
 
     const repositoryContexts = await blockFetchPrContextsStep(selected);
     const workspaceRepositories: WorkspaceRepositoryInput[] = repositoryContexts.map(

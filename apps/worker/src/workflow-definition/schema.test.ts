@@ -1679,11 +1679,17 @@ describe("validateWorkflowGraph rules", () => {
           scope: "any",
         }),
         node("context", "fetch_pr_context"),
+        node("prepare", "prepare_workspace"),
+        node("reviewer", "review_agent"),
+        node("checks", "run_checks"),
         node("comment", "post_pr_comment", { body: "Review noted" }),
       ],
       [
         { from: "trigger", to: "context" },
-        { from: "context", to: "comment" },
+        { from: "context", to: "prepare" },
+        { from: "prepare", to: "reviewer" },
+        { from: "reviewer", to: "checks" },
+        { from: "checks", to: "comment" },
       ],
     );
     expect(validateWorkflowDefinitionForDeployment(def, registryContext)).toEqual([]);
@@ -1730,6 +1736,9 @@ describe("validateWorkflowGraph rules", () => {
         "fetch_pr_context",
         "loop",
         "post_pr_comment",
+        "prepare_workspace",
+        "review_agent",
+        "run_checks",
       ].sort(),
     );
   });
@@ -1737,13 +1746,18 @@ describe("validateWorkflowGraph rules", () => {
   it.each([
     "post_ticket_comment",
     "fix_agent",
+    "generic_agent",
     "finalize_workspace",
     "open_pr",
-    "prepare_workspace",
+    "run_pre_pr_checks",
     "implementation_agent",
   ] as const)("rejects scope:any path reaching %s", (unsafeType) => {
     const params: Record<string, WorkflowParamValue> =
-      unsafeType === "post_ticket_comment" ? { body: "unsafe" } : {};
+      unsafeType === "post_ticket_comment"
+        ? { body: "unsafe" }
+        : unsafeType === "generic_agent"
+          ? { prompt: "review", workspaceMode: "none" }
+          : {};
     const def = graph(
       [
         node("trigger", "trigger_pr_created", { scope: "any" }),
