@@ -127,6 +127,37 @@ const workflowPrRefType = objectType({
   branch: stringType(),
   isNew: booleanType(),
 });
+const ticketCommentType = objectType(
+  {
+    author: stringType(),
+    body: stringType(),
+    createdAt: stringType(),
+  },
+  ["author", "body", "createdAt"],
+);
+const humanAnswerType = objectType(
+  {
+    questions: arrayType(stringType()),
+    answer: stringType(),
+    answeredBy: stringType(),
+    answeredAt: stringType(),
+  },
+  ["questions", "answer"],
+);
+const ticketContextType = objectType({
+  identifier: stringType(),
+  title: stringType(),
+  description: stringType(),
+  acceptanceCriteria: stringType(),
+  labels: arrayType(stringType()),
+  comments: arrayType(ticketCommentType),
+  priorAnswers: arrayType(humanAnswerType),
+});
+const ticketTriggerOutputFields = {
+  ticket: ticketContextType,
+  comments: arrayType(ticketCommentType),
+  priorAnswers: arrayType(humanAnswerType),
+};
 
 const colors: Record<WorkflowBlockGroup, { color: string; softColor: string }> = {
   trigger: { color: "#D14343", softColor: "#FBECEC" },
@@ -159,7 +190,11 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
     ),
     defaults: {},
     inputs: {},
-    output: statusOutput({ ticketKey: stringType() }, ["ticketKey"]),
+    output: statusOutput(
+      { ticketKey: stringType(), ...ticketTriggerOutputFields },
+      ["ticketKey"],
+    ),
+    normalOutputRequired: ["ticket", "comments", "priorAnswers"],
     statusVariants: ["fired"],
   },
   trigger_plan_approved: {
@@ -177,9 +212,11 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
         approvedPlan: stringType(),
         approver: stringType(),
         approvedAt: stringType(),
+        ...ticketTriggerOutputFields,
       },
       ["ticketKey", "approvedPlan", "approver", "approvedAt"],
     ),
+    normalOutputRequired: ["ticket", "comments", "priorAnswers"],
     statusVariants: ["fired"],
   },
   trigger_pr_created: {
@@ -204,6 +241,7 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
         title: stringType(),
         author: stringType(),
         isDraft: booleanType(),
+        ...ticketTriggerOutputFields,
       },
       [
         "ticketKey",
@@ -219,6 +257,7 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
         "isDraft",
       ],
     ),
+    normalOutputRequired: ["ticket", "comments", "priorAnswers"],
     statusVariants: ["fired"],
   },
   trigger_pr_checks_failed: {
@@ -255,6 +294,7 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
             ["name", "conclusion"],
           ),
         ),
+        ...ticketTriggerOutputFields,
       },
       [
         "ticketKey",
@@ -271,6 +311,7 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
         "failedChecks",
       ],
     ),
+    normalOutputRequired: ["ticket", "comments", "priorAnswers"],
     statusVariants: ["fired"],
   },
   trigger_pr_review: {
@@ -303,6 +344,7 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
           { state: stringType(), author: stringType(), body: stringType() },
           ["state", "author", "body"],
         ),
+        ...ticketTriggerOutputFields,
       },
       [
         "ticketKey",
@@ -319,6 +361,7 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
         "review",
       ],
     ),
+    normalOutputRequired: ["ticket", "comments", "priorAnswers"],
     statusVariants: ["fired"],
   },
   trigger_pr_merged: {
@@ -345,6 +388,7 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
         title: stringType(),
         author: stringType(),
         isDraft: booleanType(),
+        ...ticketTriggerOutputFields,
       },
       [
         "ticketKey",
@@ -360,6 +404,7 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
         "isDraft",
       ],
     ),
+    normalOutputRequired: ["ticket", "comments", "priorAnswers"],
     statusVariants: ["fired"],
   },
   planning_agent: {
@@ -370,7 +415,11 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
       "✦",
     ),
     defaults: {},
-    inputs: {},
+    inputs: {
+      ticket: input(ticketContextType),
+      comments: input(arrayType(ticketCommentType)),
+      priorAnswers: input(arrayType(humanAnswerType)),
+    },
     output: statusOutput(
       {
         plan: stringType(),
@@ -390,7 +439,10 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
       "⌨",
     ),
     defaults: {},
-    inputs: {},
+    inputs: {
+      ticket: input(ticketContextType),
+      plan: input(stringType()),
+    },
     output: statusOutput({
       workspaceId: stringType(),
       branches: arrayType(branchRefType),
@@ -596,8 +648,9 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
     ),
     defaults: { target: "ai_review" },
     inputs: { target: input(stringType()) },
-    output: statusOutput({ target: stringType() }, ["target"]),
-    statusVariants: ["ok"],
+    output: statusOutput({ target: stringType() }),
+    normalOutputRequired: ["target"],
+    statusVariants: ["ok", "failed"],
   },
   post_ticket_comment: {
     presentation: presentation(
@@ -635,7 +688,7 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
     defaults: { message: "" },
     inputs: { message: input(stringType()) },
     output: statusOutput(),
-    statusVariants: ["ok", "skipped"],
+    statusVariants: ["ok", "skipped", "failed"],
   },
   send_plan_approval: {
     presentation: presentation(
@@ -682,7 +735,7 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
     defaults: {},
     inputs: { content: input(stringType()) },
     output: statusOutput({ findings: arrayType(unknownType()), reason: stringType() }),
-    statusVariants: ["ok", "flagged", "skipped"],
+    statusVariants: ["ok", "flagged", "skipped", "failed"],
   },
   branch: {
     presentation: presentation(
@@ -1070,6 +1123,9 @@ function resolvedOutput(
   ) {
     const properties = { ...fallback.properties };
     delete properties.ticketKey;
+    delete properties.ticket;
+    delete properties.comments;
+    delete properties.priorAnswers;
     return {
       ...fallback,
       properties,

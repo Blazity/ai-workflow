@@ -8,6 +8,7 @@ import type {
   WorkspaceRepositoryInput,
 } from "../../sandbox/repo-workspace.js";
 import { resolveBlockAgent } from "../../workflow-definition/resolve-agent.js";
+import { isRunControlError } from "../run-control-error.js";
 import { blockFetchPrContextsStep, blockPrTriggerRepositoriesStep } from "./fetch-pr-context.js";
 import type { BlockExecuteFn, BlockExecutionResult } from "./types.js";
 import type { BlockExecutionContext } from "../../workflow-definition/interpreter.js";
@@ -68,6 +69,7 @@ async function blockPrepareWorkspaceEnsureArthurTaskStep(
     logger.info({ taskId: task.id, taskName: task.name }, "arthur_task_created");
     return task.id;
   } catch (err) {
+    if (isRunControlError(err)) throw err;
     logger.warn({ err: (err as Error).message, taskName }, "arthur_task_create_failed");
     return null;
   }
@@ -230,6 +232,7 @@ export async function ensureWorkspace(
         },
       };
     } catch (err) {
+      if (isRunControlError(err)) throw err;
       return {
         kind: "failed",
         output: { status: "failed" },
@@ -291,7 +294,16 @@ export async function ensureWorkspace(
     }
 
     const { prepareSelectedRepositoryBranches } = await import("../repository-prs.js");
-    await prepareSelectedRepositoryBranches(ctx.ticket.identifier, ctx.branchName, selected);
+    await prepareSelectedRepositoryBranches(
+      ctx.ticket.identifier,
+      ctx.branchName,
+      selected,
+      {
+        subjectKey: ctx.entry.subjectKey,
+        ownerToken: ctx.entry.ownerToken,
+        runId: ctx.runId,
+      },
+    );
 
     const repositoryContexts = await blockFetchPrContextsStep(selected);
     const workspaceRepositories: WorkspaceRepositoryInput[] = repositoryContexts.map(
@@ -342,6 +354,7 @@ export async function ensureWorkspace(
       },
     };
   } catch (err) {
+    if (isRunControlError(err)) throw err;
     return {
       kind: "failed",
       output: { status: "failed" },

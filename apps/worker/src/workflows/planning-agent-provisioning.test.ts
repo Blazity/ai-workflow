@@ -16,7 +16,7 @@ import {
   type ExecuteGraphHooks,
 } from "../workflow-definition/interpreter.js";
 import { ensurePlanningAgentSandboxForBlock } from "./agent.js";
-import { makeCtx } from "./blocks/test-support.js";
+import { makeCtx, runControlErrorCases } from "./blocks/test-support.js";
 
 const node = (id: string, type: WorkflowDefinitionNode["type"]): WorkflowDefinitionNode => ({
   id,
@@ -83,4 +83,19 @@ describe("planning agent scratch provisioning", () => {
     expect(result.steps.plan.output).toEqual({ status: "failed" });
     expect(failures).toEqual([]);
   });
+
+  it.each(runControlErrorCases())(
+    "rethrows %s instead of routing it through the authored failed edge",
+    async (_label, error) => {
+      mocks.ensureAgentSandbox.mockRejectedValueOnce(error);
+
+      await expect(
+        ensurePlanningAgentSandboxForBlock(
+          makeCtx({ sandboxId: null, agentSandboxIds: {}, sandboxIds: new Set() }),
+          "claude",
+          "claude-model",
+        ),
+      ).rejects.toBe(error);
+    },
+  );
 });

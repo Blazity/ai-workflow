@@ -10,6 +10,8 @@ import type {
 } from "../adapters/issue-tracker/types.js";
 import { stopSandboxesByIds } from "../sandbox/stop-ticket-sandboxes.js";
 import { ticketSubjectKey } from "./subject-key.js";
+import type { TicketCancellationReconciliationResult } from "./ticket-cancellation-reconciliation.js";
+import { confirmWorkflowStepsDrained } from "./workflow-step-drain.js";
 
 /** Claim identity observed by a route before it delegates cancellation. Keeping
  * the owner as well as the stage lets cancellation follow an in-flight
@@ -42,8 +44,18 @@ export async function cancelRun(
 ): Promise<boolean> {
   const subjectKey = ticketSubjectKey("jira", ticketKey);
   const confirmTicketMove = issueTracker && targetColumn
-    ? async () => {
-      await issueTracker.moveTicket(ticketKey, targetColumn);
+    ? async (owner: { subjectKey: string; ownerToken: string; runId: string | null }) => {
+      const [{ getDb }, { moveTicketWhileCancelling }] = await Promise.all([
+        import("../db/client.js"),
+        import("./ticket-transition.js"),
+      ]);
+      await moveTicketWhileCancelling({
+        db: getDb(),
+        issueTracker,
+        ticketKey,
+        target: targetColumn,
+        owner,
+      });
     }
     : undefined;
   return (
@@ -53,6 +65,7 @@ export async function cancelRun(
       runRegistry,
       onReleased,
       confirmTicketMove,
+      issueTracker,
     )
   ).cancelled;
 }
@@ -73,7 +86,12 @@ async function cancelOwnedSubject(
   target: CancelRunTarget,
   runRegistry: RunRegistryAdapter,
   onReleased?: (subjectKey: string) => Promise<void> | void,
-  beforeRelease?: () => Promise<void>,
+  beforeRelease?: (owner: {
+    subjectKey: string;
+    ownerToken: string;
+    runId: string | null;
+  }) => Promise<void>,
+  issueTracker?: IssueTrackerAdapter,
 ): Promise<{ cancelled: boolean; released: boolean }> {
   let observed: ObservedRunClaim;
   if (typeof target === "string") {
@@ -81,7 +99,7 @@ async function cancelOwnedSubject(
     if (
       entry === undefined ||
       entry === null ||
-      (entry.state !== "bound" && entry.state !== "cancelling") ||
+      !isCancellableRunState(entry.state) ||
       entry.runId !== target
     ) {
       return { cancelled: false, released: false };
@@ -154,14 +172,36 @@ async function cancelOwnedSubject(
   if (!closed) return { cancelled: false, released: false };
 
   if (closed.runId) {
+    const workflowRun = getRun(closed.runId);
     try {
-      await getRun(closed.runId).cancel();
+      await workflowRun.cancel();
     } catch (err) {
-      logger.warn(
-        { subjectKey, runId: closed.runId, error: (err as Error).message },
-        "cancel_run_error",
+      let status: string;
+      try {
+        status = await workflowRun.status;
+      } catch (statusError) {
+        logger.warn(
+          {
+            subjectKey,
+            runId: closed.runId,
+            error: (err as Error).message,
+            statusError: (statusError as Error).message,
+          },
+          "cancel_run_error",
+        );
+        return { cancelled: false, released: false };
+      }
+      if (status !== "completed" && status !== "failed" && status !== "cancelled") {
+        logger.warn(
+          { subjectKey, runId: closed.runId, status, error: (err as Error).message },
+          "cancel_run_error",
+        );
+        return { cancelled: false, released: false };
+      }
+      logger.info(
+        { subjectKey, runId: closed.runId, status },
+        "cancel_run_already_terminal",
       );
-      return { cancelled: false, released: false };
     }
   }
 
@@ -185,19 +225,134 @@ async function cancelOwnedSubject(
     return { cancelled: false, released: false };
   }
 
-  if (!(await confirmBeforeRelease(subjectKey, closed.runId, beforeRelease))) {
+  if (closed.runId && !(await confirmWorkflowStepsDrained(subjectKey, closed.runId))) {
     return { cancelled: false, released: false };
   }
 
-  const released = await runRegistry
-    .releaseCancellation(subjectKey, closed.ownerToken, closed.runId)
-    .catch(() => false);
+  if (
+    closed.runId &&
+    !(await retirePostDrainContinuations(subjectKey, closed, closed.runId))
+  ) {
+    return { cancelled: false, released: false };
+  }
+
+  let ticketReconciliation: TicketCancellationReconciliationResult | undefined;
+  if (closed.ticketKey) {
+    const reconciled = await reconcilePostDrainTicketMutations(closed, issueTracker);
+    if (!reconciled) return { cancelled: false, released: false };
+    ticketReconciliation = reconciled;
+  }
+
+  if (
+    !ticketReconciliation?.hasHumanFence &&
+    !ticketReconciliation?.ticketMissing &&
+    beforeRelease
+  ) {
+    if (!(await confirmBeforeRelease(subjectKey, closed, beforeRelease))) {
+      return { cancelled: false, released: false };
+    }
+    // The tracked compatibility move increments the mutation version. Run the
+    // fence reconciliation again so a human event that raced that move wins,
+    // and release CASes the exact post-move version.
+    const reconciled = await reconcilePostDrainTicketMutations(closed, issueTracker);
+    if (!reconciled) return { cancelled: false, released: false };
+    ticketReconciliation = reconciled;
+  }
+
+  const releasePromise = ticketReconciliation
+    ? runRegistry.releaseCancellation(
+        subjectKey,
+        closed.ownerToken,
+        closed.runId,
+        {
+          latestFenceId: ticketReconciliation.latestFenceId,
+          mutationVersion: ticketReconciliation.mutationVersion,
+        },
+      )
+    : runRegistry.releaseCancellation(subjectKey, closed.ownerToken, closed.runId);
+  const released = await releasePromise.catch(() => false);
   if (!released) {
     const refreshed = await runRegistry.get(subjectKey).catch(() => undefined);
     if (refreshed !== null) return { cancelled: false, released: false };
   }
   await notifyReleased(subjectKey, onReleased);
   return { cancelled: true, released: true };
+}
+
+async function reconcilePostDrainTicketMutations(
+  closed: ActiveRunEntry,
+  issueTracker?: IssueTrackerAdapter,
+): Promise<TicketCancellationReconciliationResult | null> {
+  try {
+    const [{ getDb }, { reconcileTicketCancellationAfterDrain }] = await Promise.all([
+      import("../db/client.js"),
+      import("./ticket-cancellation-reconciliation.js"),
+    ]);
+    return await reconcileTicketCancellationAfterDrain({
+      db: getDb(),
+      issueTracker,
+      ticketKey: closed.ticketKey!,
+      owner: {
+        subjectKey: closed.subjectKey,
+        ownerToken: closed.ownerToken,
+        runId: closed.runId,
+      },
+    });
+  } catch (error) {
+    logger.warn(
+      {
+        subjectKey: closed.subjectKey,
+        runId: closed.runId,
+        error: (error as Error).message,
+      },
+      "cancel_run_ticket_reconciliation_unconfirmed",
+    );
+    return null;
+  }
+}
+
+/**
+ * A step that was already running when cancellation won can persist a human
+ * continuation after the initial tombstone. Once Workflow confirms every step
+ * has drained, retire the exact run's questions and undispatched approvals one
+ * final time before releasing ownership. No producer can write a later row
+ * after this barrier.
+ */
+async function retirePostDrainContinuations(
+  subjectKey: string,
+  closed: ActiveRunEntry,
+  runId: string,
+): Promise<boolean> {
+  try {
+    const [
+      { getDb },
+      { tombstoneClarificationCancellation },
+      { retireApprovalCancellation },
+    ] = await Promise.all([
+      import("../db/client.js"),
+      import("../clarifications/store.js"),
+      import("../approvals/store.js"),
+    ]);
+    const db = getDb();
+    await tombstoneClarificationCancellation(db, {
+      subjectKey,
+      ownerToken: closed.ownerToken,
+      runId,
+    });
+    if (closed.ticketKey) {
+      await retireApprovalCancellation(db, {
+        ticketKey: closed.ticketKey,
+        runId,
+      });
+    }
+    return true;
+  } catch (error) {
+    logger.warn(
+      { subjectKey, runId, error: (error as Error).message },
+      "cancel_run_post_drain_continuation_cleanup_unconfirmed",
+    );
+    return false;
+  }
 }
 
 function belongsToCancellation(
@@ -210,9 +365,9 @@ function belongsToCancellation(
     // same owner. An observed bound run must retain its exact Workflow id.
     return observed.runId === null
       ? entry.runId === null ||
-          ((entry.state === "bound" || entry.state === "cancelling") &&
+          (isCancellableRunState(entry.state) &&
             entry.runId !== null)
-      : (entry.state === "bound" || entry.state === "cancelling") &&
+      : isCancellableRunState(entry.state) &&
           entry.runId === observed.runId;
   }
   return (
@@ -222,18 +377,30 @@ function belongsToCancellation(
   );
 }
 
+function isCancellableRunState(state: ActiveRunEntry["state"]): boolean {
+  return (
+    state === "bound" ||
+    state === "parking" ||
+    state === "parked" ||
+    state === "cancelling"
+  );
+}
+
 async function confirmBeforeRelease(
   subjectKey: string,
-  runId: string | null,
-  beforeRelease?: () => Promise<void>,
+  owner: { subjectKey: string; ownerToken: string; runId: string | null },
+  beforeRelease: (owner: {
+    subjectKey: string;
+    ownerToken: string;
+    runId: string | null;
+  }) => Promise<void>,
 ): Promise<boolean> {
-  if (!beforeRelease) return true;
   try {
-    await beforeRelease();
+    await beforeRelease(owner);
     return true;
   } catch (error) {
     logger.warn(
-      { subjectKey, runId, error: (error as Error).message },
+      { subjectKey, runId: owner.runId, error: (error as Error).message },
       "cancel_run_ticket_move_unconfirmed",
     );
     return false;

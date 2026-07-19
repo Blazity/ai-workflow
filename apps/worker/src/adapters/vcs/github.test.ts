@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { GitHubAdapter } from "./github.js";
 
 const mockOctokit = {
+  paginate: vi.fn(),
   git: {
     getRef: vi.fn(),
     createRef: vi.fn(),
@@ -117,15 +118,22 @@ describe("GitHubAdapter", () => {
   });
 
   describe("getPRHead", () => {
-    it("reads the authoritative pull-request head even when its branch ref is gone", async () => {
+    it("reads the authoritative open pull-request identity even when its branch ref is gone", async () => {
       mockOctokit.pulls.get.mockResolvedValueOnce({
-        data: { head: { sha: "source-head-sha" } },
+        data: {
+          head: { sha: "source-head-sha" },
+          base: { ref: "release" },
+          state: "open",
+          merged: false,
+        },
       });
 
       const adapter = ghAdapter();
 
       await expect(adapter.getPRHead(42)).resolves.toEqual({
         headSha: "source-head-sha",
+        baseRef: "release",
+        state: "open",
       });
       expect(mockOctokit.pulls.get).toHaveBeenCalledWith({
         owner: "test-org",
@@ -134,23 +142,36 @@ describe("GitHubAdapter", () => {
       });
       expect(mockOctokit.git.getRef).not.toHaveBeenCalled();
     });
+
+    it("distinguishes a merged pull request from a merely closed one", async () => {
+      mockOctokit.pulls.get.mockResolvedValueOnce({
+        data: {
+          head: { sha: "source-head-sha" },
+          base: { ref: "main" },
+          state: "closed",
+          merged: true,
+        },
+      });
+
+      await expect(ghAdapter().getPRHead(42)).resolves.toEqual({
+        headSha: "source-head-sha",
+        baseRef: "main",
+        state: "merged",
+      });
+    });
   });
 
   describe("getLatestCheckRuns", () => {
     it("returns latest check-run identity and conclusion for an exact head", async () => {
-      mockOctokit.checks.listForRef.mockResolvedValueOnce({
-        data: {
-          check_runs: [
-            {
-              id: 102,
-              name: "ci / build",
-              app: { slug: "github-actions" },
-              status: "completed",
-              conclusion: "success",
-            },
-          ],
+      mockOctokit.paginate.mockResolvedValueOnce([
+        {
+          id: 102,
+          name: "ci / build",
+          app: { slug: "github-actions" },
+          status: "completed",
+          conclusion: "success",
         },
-      });
+      ]);
 
       await expect(ghAdapter().getLatestCheckRuns("source-head-sha")).resolves.toEqual([
         {
@@ -161,13 +182,60 @@ describe("GitHubAdapter", () => {
           conclusion: "success",
         },
       ]);
-      expect(mockOctokit.checks.listForRef).toHaveBeenCalledWith({
-        owner: "test-org",
-        repo: "test-repo",
-        ref: "source-head-sha",
-        filter: "latest",
-        per_page: 100,
+      expect(mockOctokit.paginate).toHaveBeenCalledWith(
+        mockOctokit.checks.listForRef,
+        {
+          owner: "test-org",
+          repo: "test-repo",
+          ref: "source-head-sha",
+          filter: "latest",
+          per_page: 100,
+        },
+      );
+    });
+
+    it("keeps a current configured failure that appears after the first 100 Check Runs", async () => {
+      const firstPage = Array.from({ length: 100 }, (_, index) => ({
+        id: index + 1,
+        name: `unrelated-${index + 1}`,
+        app: { slug: "github-actions" },
+        status: "completed",
+        conclusion: "success",
+      }));
+      mockOctokit.checks.listForRef.mockResolvedValueOnce({
+        data: { check_runs: firstPage },
       });
+      mockOctokit.paginate.mockResolvedValueOnce([
+        ...firstPage,
+        {
+          id: 101,
+          name: "required / lint",
+          app: { slug: "github-actions" },
+          status: "completed",
+          conclusion: "failure",
+        },
+      ]);
+
+      const checks = await ghAdapter().getLatestCheckRuns("source-head-sha");
+
+      expect(checks).toHaveLength(101);
+      expect(checks.at(-1)).toEqual({
+        id: 101,
+        name: "required / lint",
+        appSlug: "github-actions",
+        status: "completed",
+        conclusion: "failure",
+      });
+      expect(mockOctokit.paginate).toHaveBeenCalledWith(
+        mockOctokit.checks.listForRef,
+        {
+          owner: "test-org",
+          repo: "test-repo",
+          ref: "source-head-sha",
+          filter: "latest",
+          per_page: 100,
+        },
+      );
     });
   });
 

@@ -8,7 +8,7 @@ import {
 } from "../../workflow-definition/block-registry.js";
 import { resolveBlockAgent } from "../../workflow-definition/resolve-agent.js";
 import { ensureAgentSandbox } from "./agent-sandbox.js";
-import { isRunBudgetError } from "../run-budget.js";
+import { isRunControlError } from "../run-control-error.js";
 import { pollPhaseUntilDone } from "./poll-phase.js";
 import { sanitizeBlockId, type BlockExecuteFn, type BlockExecutionResult } from "./types.js";
 
@@ -182,6 +182,7 @@ export const execute: BlockExecuteFn = async (
         ? ctx.agentSandboxIds[kind] ?? (await ensureAgentSandbox(ctx, kind, model))
         : ctx.sandboxId;
   } catch (err) {
+    if (isRunControlError(err)) throw err;
     return {
       kind: "failed",
       output: { status: "failed" },
@@ -324,7 +325,7 @@ export const execute: BlockExecuteFn = async (
       },
     };
   } catch (err) {
-    if (isRunBudgetError(err)) throw err;
+    if (isRunControlError(err)) throw err;
     return {
       kind: "failed",
       output: { status: "failed" },

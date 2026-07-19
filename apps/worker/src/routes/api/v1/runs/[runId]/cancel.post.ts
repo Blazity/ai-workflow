@@ -19,7 +19,10 @@ export default defineEventHandler(async (event) => {
     const adapters = createAdapters();
     const entry = (await adapters.runRegistry.listAll()).find(
       (candidate) =>
-        (candidate.state === "bound" || candidate.state === "cancelling") &&
+        (candidate.state === "bound" ||
+          candidate.state === "parking" ||
+          candidate.state === "parked" ||
+          candidate.state === "cancelling") &&
         candidate.runId === runId,
     );
     if (!entry) throw createError({ statusCode: 404, statusMessage: "Active run not found" });

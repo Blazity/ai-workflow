@@ -7,7 +7,6 @@ import { getDb } from "../../db/client.js";
 import { ticketKeyFromBranch } from "../../lib/branch-prefix.js";
 import {
   dispatchTriggerEvent,
-  resolveEnabledReviewStates,
   type DispatchTriggerResult,
 } from "../../lib/dispatch-trigger.js";
 import {
@@ -63,10 +62,11 @@ export default defineEventHandler(async (event) => {
   const localScope = checkLocalProjectScope(body);
   if (localScope) return localScope;
 
-  const needsReviewFilter = gitLabEvent === "Note Hook";
   const botUsername = getVcsBotLogin("gitlab");
-  const reviewStates = needsReviewFilter
-    ? await resolveEnabledReviewStates(getDb(), "gitlab", botUsername)
+  // A GitLab note is structurally a `commented` review. The dispatcher applies
+  // the enabled definition's selector from the exact version it pins.
+  const reviewStates = gitLabEvent === "Note Hook"
+    ? ["commented"] as const
     : undefined;
   const evt = normalizeGitLabEvent(gitLabEvent, body, {
     deliveryId,

@@ -33,10 +33,8 @@ vi.mock("../../post-pr-gate/config.js", () => ({
 vi.mock("../../db/client.js", () => ({ getDb: () => ({}) }));
 
 const mockDispatchTriggerEvent = vi.fn();
-const mockResolveEnabledReviewStates = vi.fn();
 vi.mock("../../lib/dispatch-trigger.js", () => ({
   dispatchTriggerEvent: (...args: any[]) => mockDispatchTriggerEvent(...args),
-  resolveEnabledReviewStates: (...args: any[]) => mockResolveEnabledReviewStates(...args),
 }));
 
 const mockDispatchPostPrGateWebhook = vi.fn();
@@ -97,7 +95,6 @@ describe("POST /webhooks/github", () => {
     mocks.isRepoAllowed.mockReturnValue(true);
     mockDispatchPostPrGateWebhook.mockResolvedValue({ status: "dispatched", runId: "gate_run" });
     mockDispatchTriggerEvent.mockResolvedValue({ result: "no_definition" });
-    mockResolveEnabledReviewStates.mockResolvedValue(["changes_requested"]);
   });
 
   function reviewBody(state: string, headRef = "blazebot/aiw-1", reviewer = "human") {
@@ -129,13 +126,12 @@ describe("POST /webhooks/github", () => {
       reason: "other_repo",
     });
     expect(mocks.isRepoAllowed).toHaveBeenCalledWith("acme/app");
-    expect(mockResolveEnabledReviewStates).not.toHaveBeenCalled();
     expect(mockDispatchTriggerEvent).not.toHaveBeenCalled();
     expect(mockDispatchPostPrGateWebhook).not.toHaveBeenCalled();
   });
 
-  it("drops a commented review when the definition only allows changes_requested", async () => {
-    mockResolveEnabledReviewStates.mockResolvedValueOnce(["changes_requested"]);
+  it("passes a commented review to the dispatcher for snapshot-bound selector evaluation", async () => {
+    mockDispatchTriggerEvent.mockResolvedValueOnce({ result: "ignored_untrusted_event" });
 
     const response = await makeApp()(
       makeRequest(reviewBody("commented"), "pull_request_review"),
@@ -144,13 +140,20 @@ describe("POST /webhooks/github", () => {
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({
       status: "ignored",
-      reason: "event_pull_request_review",
+      reason: "ignored_untrusted_event",
     });
-    expect(mockDispatchTriggerEvent).not.toHaveBeenCalled();
+    expect(mockDispatchTriggerEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        triggerType: "trigger_pr_review",
+        pr: expect.objectContaining({
+          review: expect.objectContaining({ state: "commented" }),
+        }),
+      }),
+      expect.anything(),
+    );
   });
 
   it("dispatches a commented review when the definition opts into commented", async () => {
-    mockResolveEnabledReviewStates.mockResolvedValueOnce(["changes_requested", "commented"]);
     mockDispatchTriggerEvent.mockResolvedValueOnce({ result: "started", runId: "run_rv" });
 
     const response = await makeApp()(
@@ -162,11 +165,6 @@ describe("POST /webhooks/github", () => {
     expect(mockDispatchTriggerEvent).toHaveBeenCalledWith(
       expect.objectContaining({ triggerType: "trigger_pr_review" }),
       expect.anything(),
-    );
-    expect(mockResolveEnabledReviewStates).toHaveBeenCalledWith(
-      expect.anything(),
-      "github",
-      "github-app[bot]",
     );
   });
 
@@ -201,21 +199,23 @@ describe("POST /webhooks/github", () => {
     expect(mockDispatchTriggerEvent).not.toHaveBeenCalled();
   });
 
-  it("fails closed for commented reviews when the bot identity is unset", async () => {
+  it("delegates a missing-bot review decision to the snapshot-bound dispatcher", async () => {
     mocks.getVcsBotLogin.mockReturnValueOnce(undefined);
-    mockResolveEnabledReviewStates.mockResolvedValueOnce([]);
+    mockDispatchTriggerEvent.mockResolvedValueOnce({ result: "ignored_untrusted_event" });
 
     const response = await makeApp()(
       makeRequest(reviewBody("commented"), "pull_request_review"),
     );
 
     expect(response.status).toBe(200);
-    expect(mockResolveEnabledReviewStates).toHaveBeenCalledWith(
+    await expect(response.json()).resolves.toEqual({
+      status: "ignored",
+      reason: "ignored_untrusted_event",
+    });
+    expect(mockDispatchTriggerEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ triggerType: "trigger_pr_review" }),
       expect.anything(),
-      "github",
-      undefined,
     );
-    expect(mockDispatchTriggerEvent).not.toHaveBeenCalled();
   });
 
   it("starts a definition run and supersedes the gate for a bot PR", async () => {

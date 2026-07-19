@@ -1,15 +1,25 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
+  assertActiveRunOwner: vi.fn(),
   postComment: vi.fn(),
 }));
 
+vi.mock("../../db/client.js", () => ({ getDb: () => ({ kind: "db" }) }));
+vi.mock("../../lib/active-run-owner.js", () => ({
+  assertActiveRunOwner: (...args: any[]) => mocks.assertActiveRunOwner(...args),
+}));
 vi.mock("../../lib/step-adapters.js", () => ({
   createStepAdapters: () => ({ issueTracker: { postComment: mocks.postComment } }),
 }));
 
 import { execute, paramsSchema } from "./post-ticket-comment.js";
-import { expectOutputConformsToRegistry, makeCtx, makeNode } from "./test-support.js";
+import {
+  expectOutputConformsToRegistry,
+  makeCtx,
+  makeNode,
+  runControlErrorCases,
+} from "./test-support.js";
 
 describe("post_ticket_comment paramsSchema", () => {
   it("allows a binding-only body and enforces the static-body limit", () => {
@@ -24,6 +34,7 @@ describe("post_ticket_comment paramsSchema", () => {
 describe("post_ticket_comment execute", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.assertActiveRunOwner.mockResolvedValue(undefined);
   });
 
   it("posts the body on the ticket and returns the comment url", async () => {
@@ -36,6 +47,10 @@ describe("post_ticket_comment execute", () => {
     );
 
     expect(mocks.postComment).toHaveBeenCalledWith("AWT-1", "Done.");
+    expect(mocks.assertActiveRunOwner).toHaveBeenCalledWith(
+      { kind: "db" },
+      { subjectKey: "ticket:jira:AWT-1", ownerToken: "owner:test", runId: "run-1" },
+    );
     expect(result).toEqual({
       kind: "next",
       output: {
@@ -89,4 +104,21 @@ describe("post_ticket_comment execute", () => {
     expect(result.kind).toBe("failed");
     if (result.kind === "failed") expect(result.reason).toBe("jira down");
   });
+
+  it.each(runControlErrorCases())(
+    "rethrows %s before posting",
+    async (_label, controlError) => {
+      mocks.assertActiveRunOwner.mockRejectedValue(controlError);
+
+      await expect(
+        execute(
+          makeNode("post_ticket_comment", { body: "Done." }),
+          {},
+          makeCtx(),
+        ),
+      ).rejects.toBe(controlError);
+
+      expect(mocks.postComment).not.toHaveBeenCalled();
+    },
+  );
 });

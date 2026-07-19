@@ -1,0 +1,1 @@
+ALTER TABLE "active_runs" ADD COLUMN "ticket_mutation_version" integer DEFAULT 0 NOT NULL;

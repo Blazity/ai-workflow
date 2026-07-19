@@ -50,6 +50,28 @@ describe("recoverOrphanedPendingTriggers", () => {
     expect(drain).toHaveBeenCalledOnce();
   });
 
+  it("does not drain a clarification-protected subject when no owner is active", async () => {
+    const drain = vi.fn();
+    const getActive = vi.fn().mockResolvedValue(null);
+
+    const recovered = await recoverOrphanedPendingTriggers({
+      listSubjects: vi.fn().mockResolvedValue(["ticket:jira:AWAITING-1"]),
+      isProtected: vi.fn().mockReturnValue(true),
+      getActive,
+      drain,
+    });
+
+    expect(recovered).toEqual({
+      scanned: 1,
+      blocked: 1,
+      attempted: 0,
+      started: 0,
+      errors: 0,
+    });
+    expect(getActive).not.toHaveBeenCalled();
+    expect(drain).not.toHaveBeenCalled();
+  });
+
   it("counts a retryable drain result as a recovery error", async () => {
     const recovered = await recoverOrphanedPendingTriggers({
       listSubjects: vi.fn().mockResolvedValue(["pr:github:acme/app#7"]),
@@ -150,6 +172,28 @@ describe("recoverAcceptedTriggerDeliveries", () => {
     });
     expect(getActive).not.toHaveBeenCalled();
     expect(resume).toHaveBeenCalledWith(received);
+  });
+
+  it("does not resume a clarification-protected accepted delivery without an active owner", async () => {
+    const resume = vi.fn();
+    const getActive = vi.fn().mockResolvedValue(null);
+
+    const recovered = await recoverAcceptedTriggerDeliveries({
+      listDeliveries: vi.fn().mockResolvedValue([accepted]),
+      isProtected: vi.fn().mockReturnValue(true),
+      getActive,
+      resume,
+    });
+
+    expect(recovered).toEqual({
+      scanned: 1,
+      blocked: 1,
+      attempted: 0,
+      started: 0,
+      errors: 0,
+    });
+    expect(getActive).not.toHaveBeenCalled();
+    expect(resume).not.toHaveBeenCalled();
   });
 
   it("counts a retryable resume result as a recovery error", async () => {

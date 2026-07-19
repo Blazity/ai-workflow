@@ -2,17 +2,22 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { StepsRecord } from "../../workflow-definition/interpreter.js";
 
 const mocks = vi.hoisted(() => ({
+  assertActiveRunOwner: vi.fn(),
   createApprovalRequest: vi.fn(),
   postComment: vi.fn(),
   notifyForTicket: vi.fn(),
   moveTicket: vi.fn(),
   updateLabels: vi.fn(),
+  updateTicketLabelsWithIntent: vi.fn(),
   warn: vi.fn(),
   moveTicketWithIntent: vi.fn(),
 }));
 
 vi.mock("../../lib/logger.js", () => ({ logger: { warn: mocks.warn } }));
-vi.mock("../../db/client.js", () => ({ getDb: () => ({}) }));
+vi.mock("../../db/client.js", () => ({ getDb: () => ({ kind: "db" }) }));
+vi.mock("../../lib/active-run-owner.js", () => ({
+  assertActiveRunOwner: (...args: any[]) => mocks.assertActiveRunOwner(...args),
+}));
 vi.mock("../../approvals/store.js", () => ({ createApprovalRequest: mocks.createApprovalRequest }));
 vi.mock("../../lib/step-adapters.js", () => ({
   createStepAdapters: () => ({
@@ -27,10 +32,14 @@ vi.mock("../../lib/step-adapters.js", () => ({
 vi.mock("../../lib/ticket-transition.js", () => ({
   moveTicketWithIntent: (...args: any[]) => mocks.moveTicketWithIntent(...args),
 }));
+vi.mock("../../lib/ticket-label-mutation.js", () => ({
+  updateTicketLabelsWithIntent: (...args: any[]) =>
+    mocks.updateTicketLabelsWithIntent(...args),
+}));
 
 import { execute, paramsSchema } from "./send-plan-approval.js";
 import { AWAITING_APPROVAL_LABEL } from "../../lib/labels.js";
-import { makeCtx, makeNode } from "./test-support.js";
+import { makeCtx, makeNode, runControlErrorCases } from "./test-support.js";
 
 describe("send_plan_approval paramsSchema", () => {
   it("defaults mirrorComment to true and rejects the retired planFromStep param", () => {
@@ -44,12 +53,14 @@ describe("send_plan_approval paramsSchema", () => {
 describe("send_plan_approval execute", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.assertActiveRunOwner.mockResolvedValue(undefined);
     mocks.createApprovalRequest.mockResolvedValue({ id: "appr-9" });
     mocks.postComment.mockResolvedValue(null);
     mocks.notifyForTicket.mockResolvedValue(undefined);
     mocks.moveTicket.mockResolvedValue(undefined);
     mocks.moveTicketWithIntent.mockResolvedValue(undefined);
     mocks.updateLabels.mockResolvedValue(undefined);
+    mocks.updateTicketLabelsWithIntent.mockResolvedValue(undefined);
   });
 
   it("fails when no plan is available", async () => {
@@ -90,10 +101,33 @@ describe("send_plan_approval execute", () => {
       "Plan awaiting approval in the dashboard.",
     );
     expect(mocks.notifyForTicket).toHaveBeenCalledWith("AWT-1", { kind: "plan_approval_requested" });
+    expect(mocks.assertActiveRunOwner).toHaveBeenCalledTimes(2);
+    expect(mocks.assertActiveRunOwner).toHaveBeenNthCalledWith(
+      1,
+      { kind: "db" },
+      { subjectKey: "ticket:jira:AWT-1", ownerToken: "owner:test", runId: "run-1" },
+    );
+    expect(mocks.assertActiveRunOwner).toHaveBeenNthCalledWith(
+      2,
+      { kind: "db" },
+      { subjectKey: "ticket:jira:AWT-1", ownerToken: "owner:test", runId: "run-1" },
+    );
     // Parked out of the AI column with an awaiting-approval label so the cron
     // poll stops re-dispatching it; label add precedes the move, mirroring
     // clarification. The workflow's terminal finally releases ownership.
-    expect(mocks.updateLabels).toHaveBeenCalledWith("AWT-1", { add: [AWAITING_APPROVAL_LABEL] });
+    expect(mocks.updateTicketLabelsWithIntent).toHaveBeenCalledWith({
+      db: { kind: "db" },
+      issueTracker: expect.anything(),
+      ticketKey: "AWT-1",
+      owner: {
+        subjectKey: "ticket:jira:AWT-1",
+        ownerToken: "owner:test",
+        runId: "run-1",
+      },
+      requiredOwnerState: "bound",
+      changes: { add: [AWAITING_APPROVAL_LABEL] },
+    });
+    expect(mocks.updateLabels).not.toHaveBeenCalled();
     expect(mocks.moveTicketWithIntent).toHaveBeenCalledWith({
       db: expect.anything(),
       issueTracker: expect.anything(),
@@ -156,4 +190,19 @@ describe("send_plan_approval execute", () => {
     expect(mocks.postComment).not.toHaveBeenCalled();
     expect(mocks.notifyForTicket).toHaveBeenCalledOnce();
   });
+
+  it.each(runControlErrorCases())(
+    "rethrows %s from approval provider boundaries",
+    async (_label, error) => {
+      mocks.assertActiveRunOwner.mockRejectedValue(error);
+      const ctx = makeCtx({ researchPlanMarkdown: "# Plan" });
+
+      await expect(execute(makeNode("send_plan_approval"), {}, ctx)).rejects.toBe(error);
+
+      expect(mocks.assertActiveRunOwner).toHaveBeenCalledOnce();
+      expect(mocks.postComment).not.toHaveBeenCalled();
+      expect(mocks.notifyForTicket).not.toHaveBeenCalled();
+      expect(mocks.updateLabels).not.toHaveBeenCalled();
+    },
+  );
 });

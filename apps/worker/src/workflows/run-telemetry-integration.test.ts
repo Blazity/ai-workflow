@@ -27,9 +27,11 @@ import {
   checkRunBudget,
   createRunBudgetState,
   recordBudgetUsage,
+  runBudgetFailureFromError,
   type RunBudgetFailure,
   type RunBudgetLimits,
 } from "./run-budget.js";
+import { handleUnhandledWorkflowError } from "./workflow-failure-exit.js";
 
 /**
  * Integration target (B): one layer above interpreter.test.ts. It drives the
@@ -183,21 +185,26 @@ async function runWorkflowAgainstDb(db: Db, fx: RunFixture): Promise<RunResult> 
 
   const hooks: ExecuteGraphHooks = {
     async onBlockStart(nodeId, attempt) {
+      if (fx.budgetLimits) {
+        const check = checkRunBudget(budgetState, fx.budgetLimits);
+        if (check.status !== "ok") throw new RunBudgetError(check);
+      }
       currentBlockId = nodeId;
       blockStatuses[nodeId] = { status: "running", attempt };
       await writeBlockStatuses();
     },
     async onBlockFinish(nodeId, state) {
-      if (fx.budgetLimits) {
-        const check = checkRunBudget(budgetState, fx.budgetLimits);
-        if (check.status !== "ok") throw new RunBudgetError(check);
-      }
       let guarded = state;
       if (state.output && JSON.stringify(state.output).length > 8192) {
         guarded = { ...state, output: { status: state.output.status, _truncated: true } };
       }
       blockStatuses[nodeId] = guarded;
       await writeBlockStatuses();
+      currentBlockId = null;
+      if (fx.budgetLimits) {
+        const check = checkRunBudget(budgetState, fx.budgetLimits);
+        if (check.status !== "ok") throw new RunBudgetError(check);
+      }
     },
     // A clarification parks the run: awaiting, not success. The answer endpoint
     // (or re-pickup housekeeping) flips it to success later.
@@ -240,14 +247,18 @@ async function runWorkflowAgainstDb(db: Db, fx: RunFixture): Promise<RunResult> 
       runOutcome = "success";
     }
   } catch (err) {
-    if (err instanceof RunBudgetError) budgetFailure = err.failure;
-    if (currentBlockId) {
-      blockStatuses[currentBlockId] = {
-        status: "fail",
-        error: err instanceof Error ? err.message : String(err),
-      };
-      await writeBlockStatuses();
-    }
+    budgetFailure = runBudgetFailureFromError(err);
+    await handleUnhandledWorkflowError(err, {
+      recordBlockFailure: async (error) => {
+        if (!currentBlockId) return;
+        blockStatuses[currentBlockId] = {
+          status: "fail",
+          error: error instanceof Error ? error.message : String(error),
+        };
+        await writeBlockStatuses();
+      },
+      applyDefaultFailure: async () => {},
+    });
     throw err;
   } finally {
     // REAL run telemetry, recorded on every exit path (agent.ts outer finally).
@@ -642,7 +653,7 @@ describe("run telemetry integration (executeGraph -> pglite)", () => {
       reason: "budget_exceeded: tokens 1700 exceeds limit 1699",
     });
     expect(row.blockStatuses).toMatchObject({
-      llm: { status: "fail", error: expect.stringContaining("budget_exceeded") },
+      llm: { status: "ok", output: { status: "ok" } },
       comment: { status: "pending" },
     });
   });
@@ -700,7 +711,7 @@ describe("run telemetry integration (executeGraph -> pglite)", () => {
       reason: "budget_unverifiable: cost usage or pricing is unavailable",
     });
     expect(row.blockStatuses).toMatchObject({
-      llm: { status: "fail", error: expect.stringContaining("budget_unverifiable") },
+      llm: { status: "ok", output: { status: "ok" } },
       comment: { status: "pending" },
     });
   });

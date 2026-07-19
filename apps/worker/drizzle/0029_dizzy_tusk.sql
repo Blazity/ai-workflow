@@ -1,0 +1,4 @@
+ALTER TABLE "active_runs" DROP CONSTRAINT "active_runs_state_check";--> statement-breakpoint
+ALTER TABLE "active_runs" DROP CONSTRAINT "active_runs_state_run_id_check";--> statement-breakpoint
+ALTER TABLE "active_runs" ADD CONSTRAINT "active_runs_state_check" CHECK ("active_runs"."state" in ('reserved', 'bound', 'parking', 'parked', 'cancelling'));--> statement-breakpoint
+ALTER TABLE "active_runs" ADD CONSTRAINT "active_runs_state_run_id_check" CHECK (("active_runs"."state" = 'reserved' and "active_runs"."run_id" is null) or ("active_runs"."state" in ('bound', 'parking', 'parked') and "active_runs"."run_id" is not null) or "active_runs"."state" = 'cancelling');

@@ -154,6 +154,17 @@ export async function updateClarificationCheckpointBudgetStep(
   );
 }
 
+export async function completeClarificationProviderParkingStep(
+  clarificationId: string,
+): Promise<void> {
+  "use step";
+  const { getDb } = await import("../db/client.js");
+  const { completeClarificationProviderParking } = await import(
+    "../clarifications/store.js"
+  );
+  await completeClarificationProviderParking(getDb(), clarificationId);
+}
+
 export async function publishClarificationCheckpointStep(
   clarificationId: string,
 ): Promise<string[]> {

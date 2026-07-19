@@ -18,7 +18,7 @@ vi.mock("../../pre-pr-checks/runner.js", () => ({
 }));
 
 import { execute, paramsSchema } from "./run-checks.js";
-import { makeCtx, makeNode } from "./test-support.js";
+import { makeCtx, makeNode, runControlErrorCases } from "./test-support.js";
 
 const manifest = JSON.stringify({
   version: 1,
@@ -247,5 +247,17 @@ describe("run_checks execute", () => {
 
     expect(result.kind).toBe("failed");
     if (result.kind === "failed") expect(result.reason).toBe("sandbox gone");
+  });
+
+  it.each(runControlErrorCases())("rethrows %s from checks", async (_label, error) => {
+    mocks.sandboxGet.mockRejectedValue(error);
+
+    await expect(
+      execute(
+        makeNode("run_checks", { commands: ["pnpm lint"] }),
+        {},
+        makeCtx(),
+      ),
+    ).rejects.toBe(error);
   });
 });

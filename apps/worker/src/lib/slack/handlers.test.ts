@@ -14,6 +14,8 @@ function makeRegistry(overrides: Partial<RunRegistryAdapter> = {}): RunRegistryA
   return {
     reserve: vi.fn(),
     bindRun: vi.fn(),
+    beginParking: overrides.beginParking ?? vi.fn(),
+    finishParking: overrides.finishParking ?? vi.fn(),
     handoff: vi.fn(),
     get: overrides.get ?? vi.fn().mockResolvedValue(null),
     beginCancellation:

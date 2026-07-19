@@ -18,7 +18,7 @@ vi.mock("../../db/queries/workflow-owned-branches.js", () => ({
 
 import type { WorkspaceRepositoryInput } from "../../sandbox/repo-workspace.js";
 import { execute, paramsSchema } from "./fetch-pr-context.js";
-import { makeCtx, makeNode, makePrPayload } from "./test-support.js";
+import { makeCtx, makeNode, makePrPayload, runControlErrorCases } from "./test-support.js";
 
 const repoWithPr: WorkspaceRepositoryInput = {
   provider: "github",
@@ -154,5 +154,21 @@ describe("fetch_pr_context execute", () => {
     const result = await execute(makeNode("fetch_pr_context"), {}, makeCtx());
     expect(result.kind).toBe("failed");
     if (result.kind === "failed") expect(result.reason).toContain("no repositories in scope");
+  });
+
+  it.each(runControlErrorCases())("rethrows %s from context loading", async (_label, error) => {
+    mocks.createRepositoryVCS.mockReturnValue({
+      getPRComments: vi.fn().mockRejectedValue(error),
+      getCheckRunResults: vi.fn(),
+      getPRConflictStatus: vi.fn(),
+    });
+
+    await expect(
+      execute(
+        makeNode("fetch_pr_context"),
+        {},
+        makeCtx({ selectedRepositories: [repoWithPr] }),
+      ),
+    ).rejects.toBe(error);
   });
 });

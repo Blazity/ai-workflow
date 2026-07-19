@@ -224,6 +224,27 @@ describe("POST /api/v1/clarifications/:id/answer", () => {
     expect((await getClarification(db, row.id))?.dispatchedRunId).toBeNull();
   });
 
+  it("accepts an answer that is durably queued until its predecessor finishes parking", async () => {
+    const row = await seedPending("AWT-1");
+    mocks.dispatchClarificationAnswered.mockImplementation(async (input) => {
+      await answerClarification(db, {
+        id: input.clarification.id,
+        answer: input.answer,
+        actor: input.actor,
+      });
+      return { status: "recorded" };
+    });
+
+    const res = await answer(row.id);
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual(expect.objectContaining({
+      clarification: expect.objectContaining({ status: "answered", answer: "Use Next.js" }),
+      runId: null,
+    }));
+    expect((await getClarification(db, row.id))?.dispatchedRunId).toBeNull();
+  });
+
   it("410s, supersedes the row, and flips the asking run off awaiting when the ticket is gone", async () => {
     const row = await seedPending("AWT-1");
     mocks.fetchTicket.mockRejectedValue(new IssueTrackerNotFoundError("Issue", "AWT-1"));

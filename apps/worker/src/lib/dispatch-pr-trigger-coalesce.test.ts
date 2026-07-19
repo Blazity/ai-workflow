@@ -31,6 +31,8 @@ function registry(): RunRegistryAdapter {
       rows.set(subjectKey, { ...current, state: "bound", runId, updatedAt: Date.now() });
       return true;
     }),
+    beginParking: vi.fn(async () => false),
+    finishParking: vi.fn(async () => false),
     handoff: vi.fn(),
     get: vi.fn(async (subjectKey) => rows.get(subjectKey) ?? null),
     beginCancellation: vi.fn(async () => false),
@@ -76,7 +78,11 @@ describe("PR trigger coalescing with owner-CAS", () => {
         return "run-1";
       },
     });
-    expect(first).toEqual({ started: true, runId: "run-1" });
+    expect(first).toEqual({
+      started: true,
+      runId: "run-1",
+      ownerToken: firstOwner,
+    });
     expect(await runRegistry.bindRun(subject.subjectKey, firstOwner, "run-1")).toBe(true);
 
     const secondStart = vi.fn();
@@ -90,7 +96,11 @@ describe("PR trigger coalescing with owner-CAS", () => {
       await claimSubjectRun(subject, runRegistry, 3, {
         startWorkflow: async () => "run-2",
       }),
-    ).toEqual({ started: true, runId: "run-2" });
+    ).toEqual({
+      started: true,
+      runId: "run-2",
+      ownerToken: expect.stringMatching(/^owner:/),
+    });
   });
 
   it("a stale predecessor cannot release a successor reservation", async () => {

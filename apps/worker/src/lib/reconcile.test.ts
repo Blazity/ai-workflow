@@ -19,13 +19,29 @@ const mockGetRun = vi.fn();
 const mockCancelRun = vi.fn();
 const mockCancelSubjectRun = vi.fn();
 const mockStopSandboxesByIds = vi.fn();
+const mockReconcileUnfinishedTicketTransitions = vi.fn();
+const mockReconcileUnfinishedTicketLabelMutations = vi.fn();
+const mockListWorkflowSteps = vi.fn();
 vi.mock("workflow/api", () => ({ getRun: (...args: any[]) => mockGetRun(...args) }));
+vi.mock("workflow/runtime", () => ({
+  getWorld: () => ({
+    steps: { list: (...args: any[]) => mockListWorkflowSteps(...args) },
+  }),
+}));
 vi.mock("./cancel-run.js", () => ({
   cancelRun: (...args: any[]) => mockCancelRun(...args),
   cancelSubjectRun: (...args: any[]) => mockCancelSubjectRun(...args),
 }));
 vi.mock("../sandbox/stop-ticket-sandboxes.js", () => ({
   stopSandboxesByIds: (...args: any[]) => mockStopSandboxesByIds(...args),
+}));
+vi.mock("./ticket-transition.js", () => ({
+  reconcileUnfinishedTicketTransitions: (...args: any[]) =>
+    mockReconcileUnfinishedTicketTransitions(...args),
+}));
+vi.mock("./ticket-label-mutation.js", () => ({
+  reconcileUnfinishedTicketLabelMutations: (...args: any[]) =>
+    mockReconcileUnfinishedTicketLabelMutations(...args),
 }));
 
 function entry(overrides: Partial<ActiveRunEntry> = {}): ActiveRunEntry {
@@ -51,6 +67,8 @@ function registry(
     bindRun: vi.fn(),
     handoff: vi.fn(),
     get: vi.fn(async (subjectKey) => entries.find((row) => row.subjectKey === subjectKey) ?? null),
+    beginParking: vi.fn().mockResolvedValue(true),
+    finishParking: vi.fn().mockResolvedValue(true),
     beginCancellation: vi.fn().mockResolvedValue(true),
     releaseCancellation: vi.fn().mockResolvedValue(true),
     releaseReservation: vi.fn().mockResolvedValue(true),
@@ -87,6 +105,21 @@ describe("reconcileRuns owner-CAS recovery", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockStopSandboxesByIds.mockResolvedValue(2);
+    mockReconcileUnfinishedTicketTransitions.mockResolvedValue({
+      settled: true,
+      settledIntentIds: [],
+      pendingIntentIds: [],
+    });
+    mockReconcileUnfinishedTicketLabelMutations.mockResolvedValue({
+      settled: true,
+      settledIntentIds: [],
+      pendingIntentIds: [],
+    });
+    mockListWorkflowSteps.mockResolvedValue({
+      data: [],
+      cursor: null,
+      hasMore: false,
+    });
   });
 
   it("leaves a fresh unbound reservation for its candidate", async () => {
@@ -99,6 +132,75 @@ describe("reconcileRuns owner-CAS recovery", () => {
       cleaned: 0,
     });
     expect(runRegistry.releaseReservation).not.toHaveBeenCalled();
+  });
+
+  it("uses an adapter's atomic expiry decision instead of the process clock", async () => {
+    const reserved = entry({ state: "reserved", runId: null, updatedAt: Date.now() });
+    const runRegistry = registry([reserved]);
+    runRegistry.releaseExpiredReservation = vi.fn().mockResolvedValue(true);
+    const onReleased = vi.fn().mockResolvedValue(undefined);
+    const { reconcileRuns } = await import("./reconcile.js");
+
+    expect(
+      await reconcileRuns(new Set(["PROJ-1"]), runRegistry, undefined, undefined, onReleased),
+    ).toEqual({ cancelled: 0, cleaned: 1 });
+    expect(runRegistry.releaseExpiredReservation).toHaveBeenCalledWith(
+      reserved.subjectKey,
+      reserved.ownerToken,
+    );
+    expect(runRegistry.releaseReservation).not.toHaveBeenCalled();
+    expect(mockStopSandboxesByIds).not.toHaveBeenCalled();
+    expect(onReleased).toHaveBeenCalledWith(reserved.subjectKey);
+  });
+
+  it("settles a reserved owner's ambiguous provider call before expiry release", async () => {
+    const reserved = entry({ state: "reserved", runId: null });
+    const runRegistry = registry([reserved]);
+    runRegistry.releaseExpiredReservation = vi.fn().mockResolvedValue(true);
+    const tracker = issueTracker("AI");
+    const db = { db: true } as never;
+    mockReconcileUnfinishedTicketTransitions.mockResolvedValueOnce({
+      settled: false,
+      settledIntentIds: [],
+      pendingIntentIds: [12],
+    });
+    const { reconcileRuns } = await import("./reconcile.js");
+
+    await expect(
+      reconcileRuns(
+        new Set(["PROJ-1"]),
+        runRegistry,
+        tracker,
+        undefined,
+        undefined,
+        undefined,
+        db,
+      ),
+    ).resolves.toEqual({ cancelled: 0, cleaned: 0 });
+    expect(runRegistry.releaseExpiredReservation).not.toHaveBeenCalled();
+    expect(mockReconcileUnfinishedTicketTransitions).toHaveBeenCalledWith({
+      db,
+      issueTracker: tracker,
+      ticketKey: "PROJ-1",
+      owner: {
+        subjectKey: reserved.subjectKey,
+        ownerToken: reserved.ownerToken,
+        runId: null,
+      },
+    });
+
+    await expect(
+      reconcileRuns(
+        new Set(["PROJ-1"]),
+        runRegistry,
+        tracker,
+        undefined,
+        undefined,
+        undefined,
+        db,
+      ),
+    ).resolves.toEqual({ cancelled: 0, cleaned: 1 });
+    expect(runRegistry.releaseExpiredReservation).toHaveBeenCalledOnce();
   });
 
   it("releases a stale reservation, stops all exact sandboxes, and drains once", async () => {
@@ -162,6 +264,86 @@ describe("reconcileRuns owner-CAS recovery", () => {
     expect(onReleased).toHaveBeenCalledWith(bound.subjectKey);
   });
 
+  it("retains an externally cancelled owner until its Workflow steps drain", async () => {
+    const bound = entry({
+      subjectKey: "pr:github:acme/app#draining",
+      ticketKey: null,
+      kind: "pr_trigger",
+    });
+    const runRegistry = registry([bound]);
+    const onReleased = vi.fn();
+    mockGetRun.mockReturnValue({ status: Promise.resolve("cancelled") });
+    mockListWorkflowSteps
+      .mockResolvedValueOnce({
+        data: [{ status: "running" }],
+        cursor: null,
+        hasMore: false,
+      })
+      .mockResolvedValueOnce({
+        data: [{ status: "completed" }],
+        cursor: null,
+        hasMore: false,
+      });
+    const { reconcileRuns } = await import("./reconcile.js");
+
+    await expect(
+      reconcileRuns(new Set(), runRegistry, undefined, undefined, onReleased),
+    ).resolves.toEqual({ cancelled: 0, cleaned: 0 });
+    expect(runRegistry.release).not.toHaveBeenCalled();
+    expect(mockStopSandboxesByIds).not.toHaveBeenCalled();
+
+    await expect(
+      reconcileRuns(new Set(), runRegistry, undefined, undefined, onReleased),
+    ).resolves.toEqual({ cancelled: 0, cleaned: 1 });
+    expect(runRegistry.release).toHaveBeenCalledOnce();
+    expect(onReleased).toHaveBeenCalledWith(bound.subjectKey);
+  });
+
+  it("retains a terminal ticket owner until its exact provider calls settle", async () => {
+    const bound = entry();
+    const runRegistry = registry([bound]);
+    const tracker = issueTracker("AI");
+    const db = { db: true } as never;
+    mockGetRun.mockReturnValue({ status: Promise.resolve("completed") });
+    mockReconcileUnfinishedTicketTransitions.mockResolvedValueOnce({
+      settled: false,
+      settledIntentIds: [],
+      pendingIntentIds: [17],
+    });
+    const { reconcileRuns } = await import("./reconcile.js");
+
+    await expect(
+      reconcileRuns(
+        new Set(["PROJ-1"]),
+        runRegistry,
+        tracker,
+        undefined,
+        undefined,
+        undefined,
+        db,
+      ),
+    ).resolves.toEqual({ cancelled: 0, cleaned: 0 });
+    expect(runRegistry.release).not.toHaveBeenCalled();
+    expect(mockStopSandboxesByIds).not.toHaveBeenCalled();
+
+    await expect(
+      reconcileRuns(
+        new Set(["PROJ-1"]),
+        runRegistry,
+        tracker,
+        undefined,
+        undefined,
+        undefined,
+        db,
+      ),
+    ).resolves.toEqual({ cancelled: 0, cleaned: 1 });
+    expect(runRegistry.release).toHaveBeenCalledWith(
+      bound.subjectKey,
+      bound.ownerToken,
+      bound.runId,
+    );
+  });
+
   it("never drains after a terminal owner loses compare-and-delete", async () => {
     const bound = entry({ kind: "pr_trigger" });
     const runRegistry = registry([bound]);
@@ -204,7 +386,7 @@ describe("reconcileRuns owner-CAS recovery", () => {
     expect(mockCancelRun).not.toHaveBeenCalled();
   });
 
-  it("keeps the exact bound predecessor while a durable clarification is pending", async () => {
+  it("lets retained clarification protection win over an older terminal successor", async () => {
     const parked = entry();
     const runRegistry = registry([parked]);
     mockGetRun.mockReturnValue({ status: Promise.resolve("completed") });
@@ -218,11 +400,177 @@ describe("reconcileRuns owner-CAS recovery", () => {
         undefined,
         undefined,
         new Set([parked.subjectKey]),
+        undefined,
+        new Set([parked.subjectKey]),
       ),
     ).toEqual({ cancelled: 0, cleaned: 0 });
     expect(mockGetRun).not.toHaveBeenCalled();
     expect(mockCancelRun).not.toHaveBeenCalled();
     expect(runRegistry.release).not.toHaveBeenCalled();
+  });
+
+  it("terminal-cleans a consumed clarification successor instead of retaining it forever", async () => {
+    const successor = entry();
+    const runRegistry = registry([successor]);
+    const tracker = issueTracker("Done");
+    const db = { db: true } as never;
+    const onReleased = vi.fn();
+    mockGetRun.mockReturnValue({ status: Promise.resolve("completed") });
+    const { reconcileRuns } = await import("./reconcile.js");
+
+    await expect(
+      reconcileRuns(
+        new Set(),
+        runRegistry,
+        tracker,
+        undefined,
+        onReleased,
+        new Set(),
+        db,
+        new Set([successor.subjectKey]),
+      ),
+    ).resolves.toEqual({ cancelled: 0, cleaned: 1 });
+    expect(mockCancelRun).not.toHaveBeenCalled();
+    expect(runRegistry.release).toHaveBeenCalledWith(
+      successor.subjectKey,
+      successor.ownerToken,
+      successor.runId,
+    );
+    expect(onReleased).toHaveBeenCalledWith(successor.subjectKey);
+  });
+
+  it("retains a terminal clarification successor until its label calls settle", async () => {
+    const successor = entry();
+    const runRegistry = registry([successor]);
+    const tracker = issueTracker("Done");
+    const db = { db: true } as never;
+    mockGetRun.mockReturnValue({ status: Promise.resolve("completed") });
+    mockReconcileUnfinishedTicketLabelMutations
+      .mockResolvedValueOnce({
+        settled: false,
+        settledIntentIds: [],
+        pendingIntentIds: [23],
+      })
+      .mockResolvedValue({
+        settled: true,
+        settledIntentIds: [23],
+        pendingIntentIds: [],
+      });
+    const { reconcileRuns } = await import("./reconcile.js");
+    const terminalSubjects = new Set([successor.subjectKey]);
+
+    await expect(
+      reconcileRuns(
+        new Set(),
+        runRegistry,
+        tracker,
+        undefined,
+        undefined,
+        new Set(),
+        db,
+        terminalSubjects,
+      ),
+    ).resolves.toEqual({ cancelled: 0, cleaned: 0 });
+    expect(runRegistry.release).not.toHaveBeenCalled();
+
+    await expect(
+      reconcileRuns(
+        new Set(),
+        runRegistry,
+        tracker,
+        undefined,
+        undefined,
+        new Set(),
+        db,
+        terminalSubjects,
+      ),
+    ).resolves.toEqual({ cancelled: 0, cleaned: 1 });
+    expect(mockReconcileUnfinishedTicketLabelMutations).toHaveBeenCalledWith({
+      db,
+      issueTracker: tracker,
+      ticketKey: successor.ticketKey,
+      owner: {
+        subjectKey: successor.subjectKey,
+        ownerToken: successor.ownerToken,
+        runId: successor.runId,
+      },
+    });
+  });
+
+  it("keeps a running consumed clarification successor without orphan-cancelling it outside AI", async () => {
+    const successor = entry();
+    const runRegistry = registry([successor]);
+    const tracker = issueTracker("Done");
+    mockGetRun.mockReturnValue({ status: Promise.resolve("running") });
+    const { reconcileRuns } = await import("./reconcile.js");
+
+    await expect(
+      reconcileRuns(
+        new Set(),
+        runRegistry,
+        tracker,
+        undefined,
+        undefined,
+        new Set(),
+        undefined,
+        new Set([successor.subjectKey]),
+      ),
+    ).resolves.toEqual({ cancelled: 0, cleaned: 0 });
+    expect(mockCancelRun).not.toHaveBeenCalled();
+    expect(runRegistry.release).not.toHaveBeenCalled();
+  });
+
+  it("recovers an interrupted parking drain before protecting the clarification", async () => {
+    const parking = entry({ state: "parking" });
+    const runRegistry = registry([parking]);
+    vi.mocked(runRegistry.finishParking!).mockImplementation(async () => {
+      parking.state = "parked";
+      return true;
+    });
+    const { reconcileRuns } = await import("./reconcile.js");
+
+    expect(
+      await reconcileRuns(
+        new Set(),
+        runRegistry,
+        issueTracker("Done"),
+        undefined,
+        undefined,
+        new Set([parking.subjectKey]),
+      ),
+    ).toEqual({ cancelled: 0, cleaned: 0 });
+    expect(runRegistry.beginParking).toHaveBeenCalledWith(
+      parking.subjectKey,
+      parking.ownerToken,
+      parking.runId,
+    );
+    expect(mockStopSandboxesByIds).toHaveBeenCalledWith(["sbx-parent", "sbx-child"]);
+    expect(runRegistry.finishParking).toHaveBeenCalledWith(
+      parking.subjectKey,
+      parking.ownerToken,
+      parking.runId,
+    );
+    expect(mockCancelRun).not.toHaveBeenCalled();
+  });
+
+  it("does not strand an expired parked clarification owner outside generic cleanup", async () => {
+    const parked = entry({ state: "parked" });
+    const runRegistry = registry([parked]);
+    const tracker = issueTracker("Done");
+    mockCancelRun.mockResolvedValue(true);
+    const { reconcileRuns } = await import("./reconcile.js");
+
+    expect(
+      await reconcileRuns(new Set(), runRegistry, tracker),
+    ).toEqual({ cancelled: 1, cleaned: 0 });
+    expect(mockCancelRun).toHaveBeenCalledWith(
+      "PROJ-1",
+      "run-1",
+      runRegistry,
+      tracker,
+      undefined,
+      undefined,
+    );
   });
 
   it("retries a closing ticket claim and confirms Backlog before it can be released", async () => {
@@ -249,6 +597,27 @@ describe("reconcileRuns owner-CAS recovery", () => {
       runRegistry,
       tracker,
       "Backlog",
+      onReleased,
+    );
+  });
+
+  it("passes Jira to a closing ticket retry outside AI so durable post-drain cleanup can finish", async () => {
+    const closing = entry({ state: "cancelling" });
+    const runRegistry = registry([closing]);
+    const tracker = issueTracker("Done");
+    mockCancelRun.mockResolvedValue(true);
+    const onReleased = vi.fn();
+    const { reconcileRuns } = await import("./reconcile.js");
+
+    expect(
+      await reconcileRuns(new Set(), runRegistry, tracker, undefined, onReleased),
+    ).toEqual({ cancelled: 1, cleaned: 0 });
+    expect(mockCancelRun).toHaveBeenCalledWith(
+      "PROJ-1",
+      { ownerToken: "owner-a", runId: "run-1" },
+      runRegistry,
+      tracker,
+      undefined,
       onReleased,
     );
   });
@@ -285,6 +654,7 @@ describe("reconcileRuns owner-CAS recovery", () => {
   it("passes owner-gated drain through cancellation for a ticket that left AI", async () => {
     const bound = entry();
     const runRegistry = registry([bound]);
+    const tracker = issueTracker("Done");
     const onReleased = vi.fn();
     mockCancelRun.mockImplementation(async (...args: unknown[]) => {
       const releaseCallback = args[5] as (subjectKey: string) => Promise<void>;
@@ -294,13 +664,13 @@ describe("reconcileRuns owner-CAS recovery", () => {
     const { reconcileRuns } = await import("./reconcile.js");
 
     expect(
-      await reconcileRuns(new Set(), runRegistry, issueTracker("Done"), undefined, onReleased),
+      await reconcileRuns(new Set(), runRegistry, tracker, undefined, onReleased),
     ).toEqual({ cancelled: 1, cleaned: 0 });
     expect(mockCancelRun).toHaveBeenCalledWith(
       "PROJ-1",
       "run-1",
       runRegistry,
-      undefined,
+      tracker,
       undefined,
       onReleased,
     );

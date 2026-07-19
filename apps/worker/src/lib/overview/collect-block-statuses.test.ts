@@ -7,13 +7,17 @@ import type { RunRegistryAdapter } from "../../adapters/run-registry/types.js";
 import type { BlockRunState } from "@shared/contracts";
 
 function makeRegistry(
-  entries: Array<{ ticketKey: string; runId: string }>,
+  entries: Array<{
+    ticketKey: string;
+    runId: string;
+    state?: "bound" | "parking" | "parked";
+  }>,
 ): RunRegistryAdapter {
   const active = entries.map((entry) => ({
     ...entry,
     subjectKey: `ticket:jira:${entry.ticketKey}`,
     ownerToken: `owner:${entry.runId}`,
-    state: "bound" as const,
+    state: entry.state ?? ("bound" as const),
     kind: "ticket" as const,
     createdAt: Date.now(),
     updatedAt: Date.now(),
@@ -21,6 +25,8 @@ function makeRegistry(
   return {
     reserve: vi.fn(),
     bindRun: vi.fn(),
+    beginParking: vi.fn(),
+    finishParking: vi.fn(),
     handoff: vi.fn(),
     get: vi.fn(),
     beginCancellation: vi.fn(),
@@ -102,6 +108,25 @@ describe("collectBlockStatuses", () => {
     expect(snap?.runId).toBe("new");
     expect(snap?.source).toBe("live");
   });
+
+  it.each(["parking", "parked"] as const)(
+    "uses block statuses from a %s clarification predecessor",
+    async (state) => {
+      const db = await createTestDb();
+      await insert(db, {
+        runId: `run-${state}`,
+        status: state === "parked" ? "awaiting" : "running",
+        blockStatuses: { question: { status: "warn" } },
+      });
+      const registry = makeRegistry([
+        { ticketKey: "AWT-1", runId: `run-${state}`, state },
+      ]);
+
+      const snapshot = await collectBlockStatuses({ registry, db });
+      expect(snapshot?.runId).toBe(`run-${state}`);
+      expect(snapshot?.source).toBe("live");
+    },
+  );
 
   it("falls back to the latest success/failed row with block statuses", async () => {
     const db = await createTestDb();

@@ -1,5 +1,8 @@
 import { z } from "zod";
 import type { VcsProvider } from "../../adapters/vcs/repository-directory.js";
+import type { PullRequestHead } from "../../adapters/vcs/types.js";
+import type { ActiveRunOwner } from "../../lib/active-run-owner.js";
+import { isRunControlError } from "../run-control-error.js";
 import type { BlockExecuteFn, BlockExecutionResult, EngineCtx } from "./types.js";
 
 export const paramsSchema = z
@@ -14,6 +17,8 @@ interface PrCommentTarget {
   repoPath: string;
   baseBranch: string;
   prId: number;
+  expectedHead: string;
+  expectedState: "open" | "merged";
 }
 
 interface PostPrCommentsResult {
@@ -24,10 +29,14 @@ interface PostPrCommentsResult {
 async function blockPostPrCommentStep(
   targets: PrCommentTarget[],
   body: string,
+  owner: ActiveRunOwner,
 ): Promise<PostPrCommentsResult> {
   "use step";
+  const { getDb } = await import("../../db/client.js");
+  const { assertActiveRunOwner } = await import("../../lib/active-run-owner.js");
   const { createRepositoryVCS } = await import("../../lib/vcs-runtime.js");
   const { isRepoAllowed } = await import("../../lib/repo-allowlist.js");
+  const db = getDb();
   const comments: PostPrCommentsResult["comments"] = [];
   const errors: string[] = [];
 
@@ -41,6 +50,9 @@ async function blockPostPrCommentStep(
         repoPath: target.repoPath,
         baseBranch: target.baseBranch,
       });
+      const current = await vcs.getPRHead(target.prId);
+      assertCurrentPrCommentTarget(target, current);
+      await assertActiveRunOwner(db, owner);
       const { url } = await vcs.postPRComment(target.prId, body);
       comments.push({
         provider: target.provider,
@@ -49,6 +61,7 @@ async function blockPostPrCommentStep(
         url,
       });
     } catch (err) {
+      if (isRunControlError(err)) throw err;
       errors.push(
         `${target.provider}:${target.repoPath}#${target.prId}: ${err instanceof Error ? err.message : String(err)}`,
       );
@@ -58,13 +71,29 @@ async function blockPostPrCommentStep(
 }
 blockPostPrCommentStep.maxRetries = 0;
 
-function defaultBranchFor(ctx: EngineCtx, provider: VcsProvider, repoPath: string): string {
-  const match = ctx.selectedRepositories.find(
-    (repo) => repo.provider === provider && repo.repoPath === repoPath,
-  );
-  if (match) return match.defaultBranch;
-  if (ctx.entry.kind === "pr_trigger") return ctx.entry.pr.baseRef;
-  return "main";
+function assertCurrentPrCommentTarget(
+  target: PrCommentTarget,
+  current: PullRequestHead,
+): void {
+  const identity = `${target.provider}:${target.repoPath} #${target.prId}`;
+  if (current.headSha !== target.expectedHead) {
+    throw new Error(
+      `stale PR/MR head for ${identity}: expected ${target.expectedHead}, ` +
+        `current head is ${current.headSha}`,
+    );
+  }
+  if (current.baseRef !== target.baseBranch) {
+    throw new Error(
+      `stale PR/MR target for ${identity}: expected ${target.baseBranch}, ` +
+        `current target is ${current.baseRef}`,
+    );
+  }
+  if (current.state !== target.expectedState) {
+    throw new Error(
+      `stale PR/MR lifecycle for ${identity}: expected ${target.expectedState}, ` +
+        `current state is ${current.state}`,
+    );
+  }
 }
 
 /**
@@ -96,12 +125,29 @@ export const execute: BlockExecuteFn = async (
 
   let prs: PrCommentTarget[] = [];
   if (ctx.publication && ctx.publication.prs.length > 0) {
-    prs = ctx.publication.prs.map((pr) => ({
-      provider: pr.provider,
-      repoPath: pr.repoPath,
-      baseBranch: defaultBranchFor(ctx, pr.provider, pr.repoPath),
-      prId: pr.id,
-    }));
+    for (const pr of ctx.publication.prs) {
+      const finalized = ctx.publication.repositories.find(
+        (repository) =>
+          repository.provider === pr.provider && repository.repoPath === pr.repoPath,
+      );
+      if (!finalized?.defaultBranch) {
+        return {
+          kind: "failed",
+          output: { status: "failed" },
+          reason:
+            `publication identity is incomplete for ${pr.provider}:${pr.repoPath}#${pr.id}: ` +
+            "missing finalized head or target branch",
+        };
+      }
+      prs.push({
+        provider: pr.provider,
+        repoPath: pr.repoPath,
+        baseBranch: finalized.defaultBranch,
+        prId: pr.id,
+        expectedHead: finalized.pushedHead,
+        expectedState: "open",
+      });
+    }
   } else if (ctx.entry.kind === "pr_trigger") {
     prs = [
       {
@@ -109,6 +155,8 @@ export const execute: BlockExecuteFn = async (
         repoPath: ctx.entry.pr.repoPath,
         baseBranch: ctx.entry.pr.baseRef,
         prId: ctx.entry.pr.prNumber,
+        expectedHead: ctx.entry.pr.headSha,
+        expectedState: ctx.entry.triggerType === "trigger_pr_merged" ? "merged" : "open",
       },
     ];
   }
@@ -124,7 +172,11 @@ export const execute: BlockExecuteFn = async (
   const selected = target === "all" ? prs : prs.slice(0, 1);
 
   try {
-    const { comments, errors } = await blockPostPrCommentStep(selected, body);
+    const { comments, errors } = await blockPostPrCommentStep(selected, body, {
+      subjectKey: ctx.entry.subjectKey,
+      ownerToken: ctx.entry.ownerToken,
+      runId: ctx.runId,
+    });
     if (errors.length > 0) {
       return {
         kind: "failed",
@@ -134,6 +186,7 @@ export const execute: BlockExecuteFn = async (
     }
     return { kind: "next", output: { status: "ok", comments } };
   } catch (err) {
+    if (isRunControlError(err)) throw err;
     return {
       kind: "failed",
       output: { status: "failed" },

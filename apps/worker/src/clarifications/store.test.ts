@@ -7,7 +7,9 @@ import { createTestDb } from "../db/test-db.js";
 import {
   ClarificationStoreError,
   answerClarification,
+  claimClarificationProviderParking,
   completeClarificationCheckpoint,
+  completeClarificationProviderParking,
   createClarificationCheckpoint,
   createClarificationRequest,
   getClarification,
@@ -16,7 +18,10 @@ import {
   getPendingForTicket,
   claimClarificationSnapshotCleanup,
   clearDispatchedRun,
+  classifyProtectedClarificationSubjects,
   listClarificationSnapshotCleanup,
+  listClarificationParkingCandidates,
+  listClarificationProviderParkingCandidates,
   listAnsweredForTicket,
   listProtectedClarificationSubjectKeys,
   listUndispatchedAnsweredClarifications,
@@ -139,6 +144,10 @@ async function publishBoundCheckpoint(
   const checkpoint = await getClarification(db, id);
   if (!checkpoint) throw new Error(`missing checkpoint ${id}`);
   await bindCheckpointOwner(db, checkpoint);
+  if (checkpoint.checkpointState === "provider_parking") {
+    expect(await claimClarificationProviderParking(db, id)).toBe(true);
+    await completeClarificationProviderParking(db, id);
+  }
   return publishClarificationCheckpoint(db, id, now);
 }
 
@@ -177,15 +186,29 @@ describe("durable clarification checkpoints", () => {
       message: "clarification_checkpoint_not_ready",
     });
 
-    const ready = await completeClarificationCheckpoint(db, draft.id, {
+    const providerParking = await completeClarificationCheckpoint(db, draft.id, {
       snapshotId: "snap-1",
       sourceSandboxId: "sbx-source",
       expiresAt: new Date("2026-07-24T00:00:00.000Z"),
     });
-    expect(ready.checkpointState).toBe("ready");
-    expect(ready.cleanupState).toBe("retained");
+    expect(providerParking.checkpointState).toBe("provider_parking");
+    expect(providerParking.cleanupState).toBe("retained");
+    await expect(publishClarificationCheckpoint(db, draft.id)).rejects.toMatchObject({
+      statusCode: 409,
+      message: "clarification_checkpoint_not_ready",
+    });
 
-    const published = await publishBoundCheckpoint(db, draft.id);
+    await bindCheckpointOwner(db, providerParking);
+    expect(await claimClarificationProviderParking(db, draft.id)).toBe(true);
+    expect((await getClarification(db, draft.id))?.checkpointState).toBe(
+      "provider_parking_active",
+    );
+    expect(await getPendingForTicket(db, "AWT-1")).toBeNull();
+    const ready = await completeClarificationProviderParking(db, draft.id);
+    expect(ready.checkpointState).toBe("ready");
+
+    const published = await publishClarificationCheckpoint(db, draft.id);
+    expect(published.publishedNow).toBe(true);
     expect(published.row.status).toBe("pending");
     expect(published.row.publishedAt).toBeInstanceOf(Date);
     expect(published.supersededSnapshots).toEqual([]);
@@ -403,6 +426,8 @@ describe("durable clarification checkpoints", () => {
     const retry = await publishClarificationCheckpoint(db, checkpoint.id);
 
     expect(first.row.status).toBe("pending");
+    expect(first.publishedNow).toBe(true);
+    expect(retry.publishedNow).toBe(false);
     expect(retry.supersededSnapshots).toEqual([]);
     expect(retry.row).toMatchObject({
       status: "pending",
@@ -505,7 +530,37 @@ describe("durable clarification checkpoints", () => {
     expect((await getClarification(db, live.id))?.status).toBe("pending");
   });
 
-  it("repairs a ready unpublished checkpoint while its exact predecessor is still bound", async () => {
+  it.each(["parking", "parked"] as const)(
+    "keeps a checkpoint live while its exact predecessor is %s",
+    async (state) => {
+      const db = await createTestDb();
+      const input = {
+        ...checkpointSeed(`AWT-${state.toUpperCase()}`),
+        workspaceManifest: null,
+        sourceHeads: [],
+        sourceSandboxId: null,
+        snapshotRequestedAt: null,
+      };
+      const checkpoint = await createClarificationCheckpoint(db, input);
+      await completeClarificationCheckpoint(db, checkpoint.id, null);
+      await publishBoundCheckpoint(db, checkpoint.id);
+      await db
+        .update(activeRuns)
+        .set({ state })
+        .where(eq(activeRuns.subjectKey, checkpoint.subjectKey));
+
+      expect(await reconcileClarificationCheckpoints(db)).toEqual([]);
+      expect(await getClarification(db, checkpoint.id)).toMatchObject({
+        status: "pending",
+        checkpointState: "ready",
+      });
+      expect(await listProtectedClarificationSubjectKeys(db)).toContain(
+        checkpoint.subjectKey,
+      );
+    },
+  );
+
+  it("keeps unclaimed provider parking unpublished and protected for durable recovery", async () => {
     const db = await createTestDb();
     const input = checkpointSeed("AWT-9");
     await db.insert(activeRuns).values({
@@ -523,9 +578,97 @@ describe("durable clarification checkpoints", () => {
       new Date("2026-07-18T00:00:00.000Z"),
     )).toEqual([]);
     expect(await getClarification(db, checkpoint.id)).toMatchObject({
-      status: "pending",
+      status: "superseded",
+      checkpointState: "provider_parking",
+      publishedAt: null,
+    });
+    expect(await listProtectedClarificationSubjectKeys(db)).toContain(
+      checkpoint.subjectKey,
+    );
+    expect(await listClarificationProviderParkingCandidates(db)).toEqual([
+      expect.objectContaining({
+        clarificationId: checkpoint.id,
+        ticketKey: input.ticketKey,
+        subjectKey: input.subjectKey,
+        ownerToken: input.ownerToken,
+        runId: input.runId,
+      }),
+    ]);
+  });
+
+  it("does not publish while provider parking is actively mutating the ticket", async () => {
+    const db = await createTestDb();
+    const input = checkpointSeed("AWT-PROVIDER-ACTIVE");
+    await db.insert(activeRuns).values({
+      subjectKey: input.subjectKey,
+      ticketKey: input.ticketKey,
+      ownerToken: input.ownerToken,
+      runId: input.runId,
+      state: "bound",
+    });
+    const checkpoint = await createClarificationCheckpoint(db, input);
+    await completeClarificationCheckpoint(db, checkpoint.id, null);
+    expect(await claimClarificationProviderParking(db, checkpoint.id)).toBe(true);
+
+    expect(await reconcileClarificationCheckpoints(db)).toEqual([]);
+    expect(await getClarification(db, checkpoint.id)).toMatchObject({
+      status: "superseded",
+      checkpointState: "provider_parking_active",
+      publishedAt: null,
+    });
+    expect(await getPendingForTicket(db, input.ticketKey)).toBeNull();
+    expect(await listProtectedClarificationSubjectKeys(db)).toContain(
+      checkpoint.subjectKey,
+    );
+    expect(await listClarificationProviderParkingCandidates(db)).toEqual([
+      expect.objectContaining({ clarificationId: checkpoint.id }),
+    ]);
+  });
+
+  it("publishes a recovered provider checkpoint only for its exact parked predecessor", async () => {
+    const db = await createTestDb();
+    const input = checkpointSeed("AWT-PARKED-PUBLISH");
+    await db.insert(activeRuns).values({
+      subjectKey: input.subjectKey,
+      ticketKey: input.ticketKey,
+      ownerToken: input.ownerToken,
+      runId: input.runId,
+      state: "parked",
+    });
+    const checkpoint = await createClarificationCheckpoint(db, input);
+    await completeClarificationCheckpoint(db, checkpoint.id, null);
+    await claimClarificationProviderParking(db, checkpoint.id);
+    await completeClarificationProviderParking(db, checkpoint.id);
+
+    await expect(publishClarificationCheckpoint(db, checkpoint.id)).resolves.toMatchObject({
+      row: { status: "pending", checkpointState: "ready" },
+    });
+  });
+
+  it("protects a ready unpublished checkpoint while its predecessor finishes parking", async () => {
+    const db = await createTestDb();
+    const input = checkpointSeed("AWT-READY-PARKING");
+    await db.insert(activeRuns).values({
+      subjectKey: input.subjectKey,
+      ticketKey: input.ticketKey,
+      ownerToken: input.ownerToken,
+      runId: input.runId,
+      state: "parking",
+    });
+    const checkpoint = await createClarificationCheckpoint(db, input);
+    await completeClarificationCheckpoint(db, checkpoint.id, null);
+    await claimClarificationProviderParking(db, checkpoint.id);
+    await completeClarificationProviderParking(db, checkpoint.id);
+
+    expect(await reconcileClarificationCheckpoints(db)).toEqual([]);
+    expect(await listProtectedClarificationSubjectKeys(db)).toContain(input.subjectKey);
+    expect(await listClarificationParkingCandidates(db)).toEqual([
+      expect.objectContaining({ clarificationId: checkpoint.id }),
+    ]);
+    expect(await getClarification(db, checkpoint.id)).toMatchObject({
+      status: "superseded",
       checkpointState: "ready",
-      publishedAt: expect.any(Date),
+      publishedAt: null,
     });
   });
 
@@ -536,6 +679,8 @@ describe("durable clarification checkpoints", () => {
       checkpointSeed("AWT-STALE-PUBLISH"),
     );
     await completeClarificationCheckpoint(db, stale.id, null);
+    await claimClarificationProviderParking(db, stale.id);
+    await completeClarificationProviderParking(db, stale.id);
 
     const current = await createClarificationCheckpoint(db, {
       ...checkpointSeed("AWT-STALE-PUBLISH"),
@@ -565,6 +710,8 @@ describe("durable clarification checkpoints", () => {
       checkpointSeed("AWT-OWNER-HANDOFF"),
     );
     await completeClarificationCheckpoint(db, stale.id, null);
+    await claimClarificationProviderParking(db, stale.id);
+    await completeClarificationProviderParking(db, stale.id);
 
     const current = await createClarificationCheckpoint(db, {
       ...checkpointSeed("AWT-OWNER-HANDOFF"),
@@ -700,9 +847,43 @@ describe("durable clarification checkpoints", () => {
     expect((await listProtectedClarificationSubjectKeys(db)).sort()).toEqual(
       [input.subjectKey, answeredInput.subjectKey].sort(),
     );
+    expect(await classifyProtectedClarificationSubjects(db)).toEqual({
+      all: [input.subjectKey, answeredInput.subjectKey].sort(),
+      retained: [input.subjectKey, answeredInput.subjectKey].sort(),
+      terminal: [],
+    });
   });
 
-  it("protects a consumed clarification while its exact successor run is active", async () => {
+  it("lists unpublished provider work and published questions as parking candidates", async () => {
+    const db = await createTestDb();
+    const input = checkpointSeed("AWT-PARKING-CANDIDATE");
+    const checkpoint = await createClarificationCheckpoint(db, input);
+    await completeClarificationCheckpoint(db, checkpoint.id, null);
+    await bindCheckpointOwner(db, checkpoint);
+
+    expect(await listClarificationParkingCandidates(db)).toEqual([
+      {
+        clarificationId: checkpoint.id,
+        subjectKey: input.subjectKey,
+        ownerToken: input.ownerToken,
+        runId: input.runId,
+      },
+    ]);
+
+    await claimClarificationProviderParking(db, checkpoint.id);
+    await completeClarificationProviderParking(db, checkpoint.id);
+    await publishClarificationCheckpoint(db, checkpoint.id);
+    expect(await listClarificationParkingCandidates(db)).toEqual([
+      {
+        clarificationId: checkpoint.id,
+        subjectKey: input.subjectKey,
+        ownerToken: input.ownerToken,
+        runId: input.runId,
+      },
+    ]);
+  });
+
+  it("terminal-reconciles an exact bound successor across every answered handoff window", async () => {
     const db = await createTestDb();
     const input = {
       ...checkpointSeed("AWT-CONTINUING"),
@@ -726,6 +907,17 @@ describe("durable clarification checkpoints", () => {
         state: "bound",
       })
       .where(eq(activeRuns.subjectKey, answered.subjectKey));
+
+    expect(
+      await listProtectedClarificationSubjectKeys(db, "terminal"),
+    ).toContain(answered.subjectKey);
+    expect(await listProtectedClarificationSubjectKeys(db)).toContain(
+      answered.subjectKey,
+    );
+    expect(
+      await listProtectedClarificationSubjectKeys(db, "retained"),
+    ).not.toContain(answered.subjectKey);
+
     expect(
       await recordDispatchedRun(
         db,
@@ -734,6 +926,17 @@ describe("durable clarification checkpoints", () => {
         "run-successor",
       ),
     ).toBe(true);
+
+    expect(
+      await listProtectedClarificationSubjectKeys(db, "terminal"),
+    ).toContain(answered.subjectKey);
+    expect(await listProtectedClarificationSubjectKeys(db)).toContain(
+      answered.subjectKey,
+    );
+    expect(
+      await listProtectedClarificationSubjectKeys(db, "retained"),
+    ).not.toContain(answered.subjectKey);
+
     expect(
       await markClarificationCheckpointConsumed(
         db,
@@ -746,6 +949,12 @@ describe("durable clarification checkpoints", () => {
     expect(await listProtectedClarificationSubjectKeys(db)).toContain(
       answered.subjectKey,
     );
+    expect(
+      await listProtectedClarificationSubjectKeys(db, "terminal"),
+    ).toContain(answered.subjectKey);
+    expect(
+      await listProtectedClarificationSubjectKeys(db, "retained"),
+    ).not.toContain(answered.subjectKey);
     await db.delete(activeRuns).where(eq(activeRuns.subjectKey, answered.subjectKey));
     expect(await listProtectedClarificationSubjectKeys(db)).not.toContain(
       answered.subjectKey,

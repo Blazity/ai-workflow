@@ -121,13 +121,7 @@ export async function findWorkflowOwnedPullRequest(
             eq(workflowOwnedBranches.publishedHeadSha, input.publishedHeadSha),
           ),
         ),
-        or(
-          eq(workflowOwnedBranches.prTargetBranch, input.baseBranch),
-          and(
-            isNull(workflowOwnedBranches.prTargetBranch),
-            isNull(workflowOwnedBranches.targetBranch),
-          ),
-        ),
+        eq(workflowOwnedBranches.prTargetBranch, input.baseBranch),
       ),
     )
     .limit(1);

@@ -311,20 +311,47 @@ describe("GitLabAdapter", () => {
   });
 
   describe("getPRHead", () => {
-    it("reads the authoritative MR head and current head-pipeline id", async () => {
+    it("reads the authoritative open MR identity and current head-pipeline state", async () => {
       mockMergeRequests.show.mockResolvedValueOnce({
         diff_refs: { head_sha: "source-head-sha" },
-        head_pipeline: { id: 901 },
+        target_branch: "release",
+        state: "opened",
+        head_pipeline: { id: 901, status: "failed" },
       });
+      mockJobs.all.mockResolvedValueOnce([
+        { id: 11, name: "lint", status: "success" },
+        { id: 12, name: "test", status: "failed" },
+      ]);
 
       const adapter = glAdapter();
 
       await expect(adapter.getPRHead(42)).resolves.toEqual({
         headSha: "source-head-sha",
+        baseRef: "release",
+        state: "open",
         headPipelineId: 901,
+        headPipelineStatus: "failed",
+        headPipelineFailedChecks: [{ id: 12, name: "test" }],
       });
       expect(mockMergeRequests.show).toHaveBeenCalledWith("blazity/demo-app", 42);
+      expect(mockJobs.all).toHaveBeenCalledWith("blazity/demo-app", {
+        pipelineId: 901,
+      });
       expect(mockBranches.show).not.toHaveBeenCalled();
+    });
+
+    it("normalizes GitLab's merged lifecycle state", async () => {
+      mockMergeRequests.show.mockResolvedValueOnce({
+        diff_refs: { head_sha: "source-head-sha" },
+        target_branch: "main",
+        state: "merged",
+      });
+
+      await expect(glAdapter().getPRHead(42)).resolves.toEqual({
+        headSha: "source-head-sha",
+        baseRef: "main",
+        state: "merged",
+      });
     });
   });
 

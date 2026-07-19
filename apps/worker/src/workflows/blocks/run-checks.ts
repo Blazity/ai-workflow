@@ -5,6 +5,7 @@ import {
   durationBudgetFailure,
   isDurationAbortError,
 } from "../run-budget.js";
+import { isRunControlError } from "../run-control-error.js";
 import type { BlockExecuteFn, BlockExecutionResult } from "./types.js";
 
 export const paramsSchema = z
@@ -150,7 +151,7 @@ export const execute: BlockExecuteFn = async (block, _steps, ctx): Promise<Block
       },
     };
   } catch (err) {
-    if (err instanceof RunBudgetError) throw err;
+    if (isRunControlError(err)) throw err;
     const after = await ctx.observeBudget();
     if (after.check.status !== "ok") throw new RunBudgetError(after.check);
     if (isDurationAbortError(err)) {

@@ -160,17 +160,18 @@ export async function completeTriggerDelivery(
   deliveryId: string,
   result: StoredTriggerResult,
 ): Promise<void> {
+  const serializedResult = JSON.stringify(result);
   await db
     .update(triggerDeliveries)
     .set({
       status: "completed",
       result: sql`case
-        when ${triggerDeliveries.result}->>'result' = 'started'
-          then ${triggerDeliveries.result}
-        when ${triggerDeliveries.result}->>'result' = 'candidate_started'
-          and ${result.result} = 'coalesced'
-          then ${triggerDeliveries.result}
-        else ${JSON.stringify(result)}::jsonb
+        when ${triggerDeliveries.result} is null
+          then ${serializedResult}::jsonb
+        when ${triggerDeliveries.result}->>'result' in ('candidate_started', 'coalesced')
+          and ${result.result} in ('ignored_stale_head', 'ignored_not_workflow_owned')
+          then ${serializedResult}::jsonb
+        else ${triggerDeliveries.result}
       end`,
       updatedAt: sql`now()`,
     })
@@ -180,6 +181,57 @@ export async function completeTriggerDelivery(
         eq(triggerDeliveries.deliveryId, deliveryId),
       ),
     );
+}
+
+/**
+ * Publishes the recoverable start marker only while this exact candidate still
+ * owns the subject. The candidate may already have bound, or it may still be
+ * between start() and its first Workflow step. Terminal delivery outcomes are
+ * immutable; a live recovery owner may replace a dead candidate marker, while
+ * a delayed predecessor without ownership cannot replace the recovery marker.
+ */
+export async function recordCandidateStartedTriggerDelivery(
+  db: Pick<Db, "execute">,
+  accepted: AcceptedTriggerDelivery,
+  ownerToken: string,
+  runId: string,
+): Promise<boolean> {
+  const marker = JSON.stringify({ result: "candidate_started", runId });
+  const updated = await db.execute(sql`
+    update ${triggerDeliveries}
+    set status = 'completed',
+        result = ${marker}::jsonb,
+        updated_at = now()
+    where ${triggerDeliveries.provider} = ${accepted.delivery.provider}
+      and ${triggerDeliveries.deliveryId} = ${accepted.delivery.deliveryId}
+      and ${triggerDeliveries.subjectKey} = ${accepted.subjectKey}
+      and ${triggerDeliveries.headSha} = ${accepted.pr.headSha}
+      and ${triggerDeliveries.triggerType} = ${accepted.triggerType}
+      and ${triggerDeliveries.definitionId} = ${accepted.definitionId}
+      and ${triggerDeliveries.definitionVersion} = ${accepted.definitionVersion}
+      and (
+        ${triggerDeliveries.result} is null
+        or ${triggerDeliveries.result}->>'result' in ('coalesced', 'candidate_started')
+      )
+      and exists (
+        select 1
+        from ${activeRuns}
+        where ${activeRuns.subjectKey} = ${accepted.subjectKey}
+          and ${activeRuns.ownerToken} = ${ownerToken}
+          and (
+            (
+              ${activeRuns.state} = 'reserved'
+              and ${activeRuns.runId} is null
+            )
+            or (
+              ${activeRuns.state} = 'bound'
+              and ${activeRuns.runId} = ${runId}
+            )
+          )
+      )
+    returning ${triggerDeliveries.deliveryId}
+  `);
+  return rawRows<{ deliveryId: string }>(updated).length === 1;
 }
 
 export async function completeReceivedTriggerDelivery(
@@ -417,6 +469,8 @@ export async function acknowledgeStartedTriggerDelivery(
         and ${triggerDeliveries.subjectKey} = ${accepted.subjectKey}
         and ${triggerDeliveries.headSha} = ${accepted.pr.headSha}
         and ${triggerDeliveries.triggerType} = ${accepted.triggerType}
+        and ${triggerDeliveries.definitionId} = ${accepted.definitionId}
+        and ${triggerDeliveries.definitionVersion} = ${accepted.definitionVersion}
         and exists (
           select 1
           from ${activeRuns}
@@ -424,9 +478,16 @@ export async function acknowledgeStartedTriggerDelivery(
             and ${activeRuns.runId} = ${runId}
             and ${activeRuns.state} = 'bound'
         )
+        -- Only an unfinished/recoverable delivery can advance to started.
+        -- Every ignored/error/capacity outcome is terminal for this delivery;
+        -- an exact started replay remains idempotent for Workflow retries.
         and (
-          ${triggerDeliveries.result}->>'result' is distinct from 'started'
-          or ${triggerDeliveries.result}->>'runId' = ${runId}
+          ${triggerDeliveries.result} is null
+          or ${triggerDeliveries.result}->>'result' in ('candidate_started', 'coalesced')
+          or (
+            ${triggerDeliveries.result}->>'result' = 'started'
+            and ${triggerDeliveries.result}->>'runId' = ${runId}
+          )
         )
       returning
         ${triggerDeliveries.provider},

@@ -4,13 +4,17 @@ import type { IssueTrackerAdapter } from "../../adapters/issue-tracker/types.js"
 import type { RunRegistryAdapter } from "../../adapters/run-registry/types.js";
 
 function makeRegistry(
-  entries: Array<{ ticketKey: string; runId: string }>,
+  entries: Array<{
+    ticketKey: string;
+    runId: string;
+    state?: "bound" | "parking" | "parked";
+  }>,
 ): RunRegistryAdapter {
   const active = entries.map((entry) => ({
     ...entry,
     subjectKey: `ticket:jira:${entry.ticketKey}`,
     ownerToken: `owner:${entry.runId}`,
-    state: "bound" as const,
+    state: entry.state ?? ("bound" as const),
     kind: "ticket" as const,
     createdAt: Date.now(),
     updatedAt: Date.now(),
@@ -18,6 +22,8 @@ function makeRegistry(
   return {
     reserve: vi.fn(),
     bindRun: vi.fn(),
+    beginParking: vi.fn(),
+    finishParking: vi.fn(),
     handoff: vi.fn(),
     get: vi.fn(),
     beginCancellation: vi.fn(),
@@ -119,6 +125,23 @@ describe("collectLiveRuns", () => {
       model: "claude-opus-4-7",
     });
     expect(rows).toEqual([]);
+  });
+
+  it("renders parking as running and durable parked state as awaiting", async () => {
+    const rows = await collectLiveRuns({
+      registry: makeRegistry([
+        { ticketKey: "AWT-1", runId: "run-parking", state: "parking" },
+        { ticketKey: "AWT-2", runId: "run-parked", state: "parked" },
+      ]),
+      issueTracker: makeTracker(),
+      jiraBaseUrl: "https://example.atlassian.net",
+      model: "claude-opus-4-7",
+    });
+
+    expect(rows.map(({ id, status }) => ({ id, status }))).toEqual([
+      { id: "run-parking", status: "running" },
+      { id: "run-parked", status: "awaiting" },
+    ]);
   });
 
   it("strips trailing slashes from the Jira base URL when building ticketUrl", async () => {

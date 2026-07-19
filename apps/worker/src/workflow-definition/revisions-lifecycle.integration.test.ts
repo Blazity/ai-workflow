@@ -35,7 +35,10 @@ const state = vi.hoisted(() => ({
   },
 }));
 
-vi.mock("../../env.js", () => ({ env: state.env }));
+vi.mock("../../env.js", () => ({
+  env: state.env,
+  getVcsBotLogin: vi.fn(() => "github-app[bot]"),
+}));
 vi.mock("../db/client.js", () => ({ getDb: () => state.db }));
 vi.mock("../auth-instance.js", () => ({
   auth: {
@@ -223,6 +226,7 @@ describe("revised Workflows lifecycle", () => {
       repoPath: "acme/app",
       branchName: "blazebot/aiw-103",
       publishedHeadSha: "head-103",
+      targetBranch: "main",
       pr: {
         id: 103,
         url: "https://github.com/acme/app/pull/103",
@@ -366,6 +370,7 @@ describe("revised Workflows lifecycle", () => {
           repoPath: "acme/app",
           prId: 103,
           headSha: "head-103",
+          baseRef: "main",
         },
       }),
     );

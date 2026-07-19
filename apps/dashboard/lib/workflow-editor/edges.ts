@@ -16,15 +16,63 @@ export function resolvedPort(edge: FlowEdgeDef, sourceType: WorkflowBlockType): 
 }
 
 export function edgeKey(edge: FlowEdgeDef): string {
-  return `${edge.from}|${edge.fromPort ?? ""}|${edge.to}`;
+  return JSON.stringify([edge.from, edge.fromPort ?? null, edge.to]);
+}
+
+export function edgeInstanceKey(edges: readonly FlowEdgeDef[], index: number): string {
+  const edge = edges[index];
+  if (!edge) return "";
+  const key = edgeKey(edge);
+  let occurrence = 0;
+  for (let i = 0; i < index; i++) {
+    if (edgeKey(edges[i]) === key) occurrence++;
+  }
+  return JSON.stringify([key, occurrence]);
+}
+
+export type EdgeKeyboardAction = "select" | "delete";
+
+export function edgeKeyboardAction(
+  key: string,
+  canEdit: boolean,
+): EdgeKeyboardAction | null {
+  if (key === "Enter" || key === " ") return "select";
+  if (canEdit && (key === "Delete" || key === "Backspace")) return "delete";
+  return null;
+}
+
+export function edgeDeleteActionVisible({
+  canEdit,
+  hovered,
+  selected,
+}: {
+  canEdit: boolean;
+  hovered: boolean;
+  selected: boolean;
+}): boolean {
+  return canEdit && (hovered || selected);
+}
+
+export function edgeDeleteTargetRadius(zoom: number): number {
+  return 22 / zoom;
+}
+
+export function reconcileSelectedEdgeKey(
+  selectedEdgeKey: string | null,
+  edges: readonly FlowEdgeDef[],
+  selectedNodeId: string | null,
+): string | null {
+  if (!selectedEdgeKey || selectedNodeId) return null;
+  return edges.some((_, index) => edgeInstanceKey(edges, index) === selectedEdgeKey)
+    ? selectedEdgeKey
+    : null;
 }
 
 export function removeEdge(
   edges: readonly FlowEdgeDef[],
-  edge: FlowEdgeDef,
+  instanceKey: string,
 ): FlowEdgeDef[] {
-  const key = edgeKey(edge);
-  return edges.filter((candidate) => edgeKey(candidate) !== key);
+  return edges.filter((_, index) => edgeInstanceKey(edges, index) !== instanceKey);
 }
 
 export function visibleOutPorts(

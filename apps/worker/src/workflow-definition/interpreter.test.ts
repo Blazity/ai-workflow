@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { WorkflowRunCancelledError } from "workflow/errors";
 import type {
   BlockRunState,
   WorkflowBlockType,
@@ -15,6 +16,9 @@ import {
   type RuntimeGraph,
   type StepsRecord,
 } from "./interpreter.js";
+import { ActiveRunOwnerError } from "../lib/active-run-owner.js";
+import { RunBudgetError } from "../workflows/run-budget.js";
+import { isRunControlError } from "../workflows/run-control-error.js";
 
 type ExecuteGraphOptions = Parameters<typeof executeGraphWithContractValidation>[0];
 
@@ -172,7 +176,6 @@ describe("executeGraph output contracts", () => {
         questions: ["continue?"],
       },
     ],
-    ["failed", { kind: "failed", output: { status: "failed" }, reason: "failed" }],
     ["ended", { kind: "ended", output: { status: "waiting" } }],
   ] as const)("rejects an invalid %s executor output before recording or routing", async (_kind, invalid) => {
     const graph = graphFrom(
@@ -260,6 +263,118 @@ describe("executeGraph output contracts", () => {
 
     expect(result.outcome).toBe("completed");
     expect(rec.failures).toEqual([]);
+  });
+
+  it("routes a thrown executor error through an authored failure edge", async () => {
+    const graph = graphFrom(
+      [
+        node("trig", "trigger_ticket_ai"),
+        node("comment", "post_ticket_comment", { body: "done" }),
+        node("recover", "send_slack_message", { message: "failed" }),
+      ],
+      [
+        { from: "trig", to: "comment" },
+        { from: "comment", to: "recover", fromPort: "failed" },
+      ],
+    );
+    const rec = makeRecorder();
+    const calls: string[] = [];
+
+    const result = await executeGraphWithContractValidation({
+      graph,
+      entryTriggerId: "trig",
+      triggerOutput: { status: "fired", ticketKey: "AIW-103" },
+      executeBlock: async (block) => {
+        calls.push(block.id);
+        if (block.id === "comment") throw new Error("provider rejected the comment");
+        return { kind: "next", output: { status: "ok" } };
+      },
+      hooks: rec.hooks,
+    });
+
+    expect(result.outcome).toBe("completed");
+    expect(calls).toEqual(["comment", "recover"]);
+    expect(result.steps.comment?.output).toEqual({ status: "failed" });
+    expect(rec.finishes.find((finish) => finish.nodeId === "comment")?.state).toMatchObject({
+      status: "fail",
+      error: "provider rejected the comment",
+    });
+    expect(rec.failures).toEqual([]);
+  });
+
+  it.each([
+    [
+      "budget exhaustion",
+      new RunBudgetError({
+        status: "budget_exceeded",
+        metric: "tokens",
+        limit: 10,
+        consumed: 11,
+        reason: "budget exceeded",
+      }),
+    ],
+    ["exact-owner loss", new ActiveRunOwnerError()],
+    ["Workflow cancellation", new WorkflowRunCancelledError("wrun-1")],
+  ])("does not route %s through an authored failure edge", async (_label, controlError) => {
+    const graph = graphFrom(
+      [
+        node("trig", "trigger_ticket_ai"),
+        node("comment", "post_ticket_comment", { body: "done" }),
+        node("recover", "send_slack_message", { message: "failed" }),
+      ],
+      [
+        { from: "trig", to: "comment" },
+        { from: "comment", to: "recover", fromPort: "failed" },
+      ],
+    );
+    const rec = makeRecorder();
+    const calls: string[] = [];
+
+    await expect(
+      executeGraphWithContractValidation({
+        graph,
+        entryTriggerId: "trig",
+        triggerOutput: { status: "fired", ticketKey: "AIW-103" },
+        executeBlock: async (block) => {
+          calls.push(block.id);
+          throw controlError;
+        },
+        hooks: rec.hooks,
+        shouldRethrowExecutionError: isRunControlError,
+      }),
+    ).rejects.toBe(controlError);
+
+    expect(calls).toEqual(["comment"]);
+    expect(rec.failures).toEqual([]);
+    expect(rec.finishes).toEqual([]);
+  });
+
+  it("applies the default failure exit when a thrown executor error has no failure edge", async () => {
+    const graph = graphFrom(
+      [node("trig", "trigger_ticket_ai"), node("comment", "post_ticket_comment", { body: "done" })],
+      [{ from: "trig", to: "comment" }],
+    );
+    const rec = makeRecorder();
+
+    const result = await executeGraphWithContractValidation({
+      graph,
+      entryTriggerId: "trig",
+      triggerOutput: { status: "fired", ticketKey: "AIW-103" },
+      executeBlock: async () => {
+        throw new Error("provider rejected the comment");
+      },
+      hooks: rec.hooks,
+    });
+
+    expect(result.outcome).toBe("stopped");
+    expect(result.steps.comment?.output).toEqual({ status: "failed" });
+    expect(rec.failures).toEqual([
+      {
+        phase: "post_ticket_comment",
+        reason: "provider rejected the comment",
+        nodeId: "comment",
+      },
+    ]);
   });
 });
 

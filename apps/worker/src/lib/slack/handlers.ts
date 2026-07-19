@@ -31,7 +31,9 @@ export async function handleList(
 ): Promise<string> {
   const all = await registry.listAll();
   const live = all.flatMap((row) =>
-    row.state === "bound" && row.runId && row.ticketKey
+    (row.state === "bound" || row.state === "parking" || row.state === "parked") &&
+    row.runId &&
+    row.ticketKey
       ? [{ ticketKey: row.ticketKey, runId: row.runId }]
       : [],
   );
@@ -46,7 +48,11 @@ export async function handleStatus(
   // Sandbox lookup is best-effort: a missing or transiently-failing sandbox
   // shouldn't blank out the runId we *can* read.
   const entry = await registry.get(ticketSubjectKey("jira", ticketKey));
-  const runId = entry?.state === "bound" ? entry.runId : null;
+  const runId =
+    entry &&
+    (entry.state === "bound" || entry.state === "parking" || entry.state === "parked")
+      ? entry.runId
+      : null;
   let sandboxId: string | null = null;
   try {
     sandboxId = entry
@@ -130,7 +136,9 @@ export async function handleSummary(
   ]);
   return formatInspectAll(
     active.flatMap((row) =>
-      row.state === "bound" && row.runId && row.ticketKey
+      (row.state === "bound" || row.state === "parking" || row.state === "parked") &&
+      row.runId &&
+      row.ticketKey
         ? [{ ticketKey: row.ticketKey, runId: row.runId }]
         : [],
     ),
@@ -152,7 +160,11 @@ export async function handleReset(
       const released = await registry.releaseReservation(entry.subjectKey, entry.ownerToken);
       if (released) cleared.push("reservation+sandboxes");
       else failures.push("reservation owner changed");
-    } else if (entry?.state === "bound") {
+    } else if (
+      entry?.state === "bound" ||
+      entry?.state === "parking" ||
+      entry?.state === "parked"
+    ) {
       failures.push("active run owner requires cancel");
     }
   } catch (err) {

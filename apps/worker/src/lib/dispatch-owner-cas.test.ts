@@ -26,6 +26,8 @@ function registry(): RunRegistryAdapter {
       return true;
     }),
     bindRun: vi.fn(async () => false),
+    beginParking: vi.fn(async () => false),
+    finishParking: vi.fn(async () => false),
     handoff: vi.fn(async () => false),
     get: vi.fn(async (key) => entries.get(key) ?? null),
     beginCancellation: vi.fn(async () => false),
@@ -73,7 +75,11 @@ describe("claimSubjectRun", () => {
       { startWorkflow },
     );
 
-    expect(result).toEqual({ started: true, runId: "run-a" });
+    expect(result).toEqual({
+      started: true,
+      runId: "run-a",
+      ownerToken: expect.stringMatching(/^owner:/),
+    });
     expect(order).toEqual(["reserve", "start"]);
     expect(runRegistry.bindRun).not.toHaveBeenCalled();
   });
@@ -118,7 +124,11 @@ describe("claimSubjectRun", () => {
         2,
         { startWorkflow: firstStart },
       ),
-    ).toEqual({ started: true, runId: "run-a" });
+    ).toEqual({
+      started: true,
+      runId: "run-a",
+      ownerToken: expect.stringMatching(/^owner:/),
+    });
 
     const secondStart = vi.fn(async () => "run-b");
     expect(

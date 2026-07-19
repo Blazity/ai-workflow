@@ -309,7 +309,10 @@ export async function restoreClarificationSandboxStep(
     }
     return { sandboxId: sandbox.sandboxId };
   } catch (error) {
-    await sandbox.stop({ blocking: true }).catch(() => undefined);
+    const { stopSandboxAndConfirm } = await import(
+      "../sandbox/stop-ticket-sandboxes.js"
+    );
+    await stopSandboxAndConfirm(sandbox);
     if (typeof runRegistry.unregisterSandbox === "function") {
       await runRegistry
         .unregisterSandbox(input.subjectKey, input.ownerToken, sandbox.sandboxId)

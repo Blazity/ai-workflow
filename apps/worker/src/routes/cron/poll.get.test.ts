@@ -6,11 +6,18 @@ const mocks = vi.hoisted(() => ({
   dispatchTicket: vi.fn(),
   reconcileRuns: vi.fn(),
   reconcileClarifications: vi.fn(),
+  recoverClarificationParking: vi.fn(),
+  recoverClarificationProviderParking: vi.fn(),
   recoverClarifications: vi.fn(),
+  classifyProtectedClarifications: vi.fn(),
   listProtectedClarifications: vi.fn(),
   startCleanups: vi.fn(),
   recoverAccepted: vi.fn(),
   recoverPending: vi.fn(),
+  listDispatchBlockingApprovals: vi.fn(),
+  getApproval: vi.fn(),
+  rejectUndispatchableApproval: vi.fn(),
+  dispatchPlanApproved: vi.fn(),
 }));
 
 vi.mock("../../../env.js", () => ({
@@ -18,6 +25,9 @@ vi.mock("../../../env.js", () => ({
     CRON_SECRET: undefined,
     JIRA_PROJECT_KEY: "AIW",
     COLUMN_AI: "AI",
+    COLUMN_BACKLOG: "Backlog",
+    JIRA_BACKLOG_TRANSITION_ID: "41",
+    DASHBOARD_ORIGIN: "https://dashboard.example",
     MAX_CONCURRENT_AGENTS: 1,
   },
 }));
@@ -38,16 +48,32 @@ vi.mock("../../lib/adapters.js", () => ({
 vi.mock("../../lib/dispatch.js", () => ({
   dispatchTicket: (...args: any[]) => mocks.dispatchTicket(...args),
 }));
+vi.mock("../../approvals/store.js", () => ({
+  listDispatchBlockingApprovals: (...args: any[]) =>
+    mocks.listDispatchBlockingApprovals(...args),
+  getApproval: (...args: any[]) => mocks.getApproval(...args),
+  rejectUndispatchableApproval: (...args: any[]) =>
+    mocks.rejectUndispatchableApproval(...args),
+}));
+vi.mock("../../approvals/dispatch.js", () => ({
+  dispatchPlanApproved: (...args: any[]) => mocks.dispatchPlanApproved(...args),
+}));
 vi.mock("../../lib/reconcile.js", () => ({
   reconcileRuns: (...args: any[]) => mocks.reconcileRuns(...args),
 }));
 vi.mock("../../clarifications/store.js", () => ({
   reconcileClarificationCheckpoints: (...args: any[]) =>
     mocks.reconcileClarifications(...args),
+  classifyProtectedClarificationSubjects: (...args: any[]) =>
+    mocks.classifyProtectedClarifications(...args),
   listProtectedClarificationSubjectKeys: (...args: any[]) =>
     mocks.listProtectedClarifications(...args),
 }));
 vi.mock("../../clarifications/reconciliation.js", () => ({
+  recoverClarificationProviderParking: (...args: any[]) =>
+    mocks.recoverClarificationProviderParking(...args),
+  recoverInterruptedClarificationParking: (...args: any[]) =>
+    mocks.recoverClarificationParking(...args),
   recoverUndispatchedClarificationSuccessors: (...args: any[]) =>
     mocks.recoverClarifications(...args),
   startQueuedClarificationSnapshotCleanups: (...args: any[]) =>
@@ -97,9 +123,25 @@ describe("cron clarification recovery ordering", () => {
       state.order.push("recover-clarifications");
       return 0;
     });
-    mocks.listProtectedClarifications.mockImplementation(async () => {
+    mocks.recoverClarificationParking.mockImplementation(async () => {
+      state.order.push("recover-clarification-parking");
+      return 0;
+    });
+    mocks.recoverClarificationProviderParking.mockImplementation(async () => {
+      state.order.push("recover-clarification-provider-parking");
+      return 0;
+    });
+    mocks.classifyProtectedClarifications.mockImplementation(async () => {
       state.order.push("protect-clarifications");
-      return ["ticket:jira:AIW-1"];
+      return {
+        all: ["ticket:jira:AIW-1", "ticket:jira:AIW-CONTINUATION"],
+        retained: ["ticket:jira:AIW-1"],
+        terminal: ["ticket:jira:AIW-CONTINUATION"],
+      };
+    });
+    mocks.listProtectedClarifications.mockImplementation(async () => {
+      state.order.push("legacy-protect-clarifications");
+      return [];
     });
     mocks.dispatchTicket.mockImplementation(async (ticketKey: string) => {
       state.order.push(`dispatch:${ticketKey}`);
@@ -118,26 +160,121 @@ describe("cron clarification recovery ordering", () => {
       started: 0,
       errors: 0,
     });
+    mocks.listDispatchBlockingApprovals.mockResolvedValue([]);
+    mocks.getApproval.mockResolvedValue(null);
+    mocks.rejectUndispatchableApproval.mockResolvedValue(undefined);
+    mocks.dispatchPlanApproved.mockResolvedValue({ status: "run_in_flight" });
   });
 
   it("recovers and protects answered checkpoints before discovering generic ticket work", async () => {
     const response = await request();
 
     expect(response.status).toBe(200);
-    expect(state.order.slice(0, 4)).toEqual([
+    expect(state.order.slice(0, 6)).toEqual([
       "reconcile-clarifications",
+      "recover-clarification-parking",
+      "recover-clarification-provider-parking",
       "recover-clarifications",
       "protect-clarifications",
       "discover",
     ]);
+    expect(mocks.classifyProtectedClarifications).toHaveBeenCalledOnce();
+    expect(mocks.listProtectedClarifications).not.toHaveBeenCalled();
+    expect(mocks.recoverClarificationProviderParking).toHaveBeenCalledWith({
+      db: { db: true },
+      runRegistry: expect.anything(),
+      issueTracker: expect.anything(),
+      messaging: expect.anything(),
+      dashboardOrigin: "https://dashboard.example",
+      target: { name: "Backlog", transitionId: "41" },
+    });
     expect(state.order).toContain("dispatch:AIW-2");
     expect(state.order).not.toContain("dispatch:AIW-1");
     expect(state.order).toContain("recover-accepted-triggers");
+    expect(mocks.reconcileRuns).toHaveBeenCalledWith(
+      expect.any(Set),
+      expect.anything(),
+      expect.anything(),
+      expect.any(Function),
+      expect.any(Function),
+      new Set(["ticket:jira:AIW-1"]),
+      { db: true },
+      new Set(["ticket:jira:AIW-CONTINUATION"]),
+    );
+    const acceptedRecoveryDeps = mocks.recoverAccepted.mock.calls[0]![0];
+    const pendingRecoveryDeps = mocks.recoverPending.mock.calls[0]![0];
+    expect(acceptedRecoveryDeps.isProtected("ticket:jira:AIW-1")).toBe(true);
+    expect(acceptedRecoveryDeps.isProtected("ticket:jira:AIW-2")).toBe(false);
+    expect(pendingRecoveryDeps.isProtected("ticket:jira:AIW-1")).toBe(true);
+    expect(pendingRecoveryDeps.isProtected("ticket:jira:AIW-2")).toBe(false);
     await expect(response.json()).resolves.toMatchObject({
       pendingRecovered: 1,
       triggerRecovery: {
         accepted: { attempted: 1, started: 1, errors: 0 },
       },
+    });
+  });
+
+  it("reconciles retained owners, recovers approved plans, and protects approval paths from generic dispatch", async () => {
+    const pending = {
+      id: "approval-pending",
+      ticketKey: "AIW-1",
+      status: "pending",
+      dispatchedRunId: null,
+    };
+    const approved = {
+      id: "approval-approved",
+      ticketKey: "AIW-2",
+      status: "approved",
+      dispatchedRunId: null,
+      decidedById: "user-1",
+      decidedByLabel: "Alice",
+    };
+    mocks.classifyProtectedClarifications.mockResolvedValue({
+      all: [],
+      retained: [],
+      terminal: [],
+    });
+    mocks.listDispatchBlockingApprovals.mockImplementation(async () => {
+      state.order.push("protect-approvals");
+      return [pending, approved];
+    });
+    mocks.getApproval.mockResolvedValue(approved);
+    mocks.dispatchPlanApproved.mockImplementation(async (input) => {
+      state.order.push(`recover-approval:${input.approval.ticketKey}`);
+      await input.onClaimed();
+      return { status: "started", runId: "run-approved" };
+    });
+    mocks.reconcileRuns.mockImplementationOnce(async () => {
+      state.order.push("reconcile-runs");
+      return { cancelled: 0, cleaned: 1 };
+    });
+
+    const response = await request();
+
+    expect(response.status).toBe(200);
+    expect(state.order.indexOf("protect-approvals")).toBeLessThan(
+      state.order.indexOf("discover"),
+    );
+    expect(state.order.indexOf("discover")).toBeLessThan(
+      state.order.indexOf("reconcile-runs"),
+    );
+    expect(state.order.indexOf("reconcile-runs")).toBeLessThan(
+      state.order.indexOf("recover-approval:AIW-2"),
+    );
+    expect(state.order).not.toContain("dispatch:AIW-1");
+    expect(state.order).not.toContain("dispatch:AIW-2");
+    expect(mocks.dispatchPlanApproved).toHaveBeenCalledWith(
+      expect.objectContaining({
+        approval: approved,
+        actor: { id: "user-1", label: "Alice" },
+        issueTracker: expect.anything(),
+        runRegistry: expect.anything(),
+        onClaimed: expect.any(Function),
+      }),
+    );
+    await expect(response.json()).resolves.toMatchObject({
+      approvalRecovery: { scanned: 1, started: 1, blocked: 0, errors: 0 },
     });
   });
 });

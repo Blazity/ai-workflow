@@ -158,6 +158,10 @@ export async function executeGraph(opts: {
   /** Dependency seam for focused interpreter tests. Production callers use
    * the registry-backed validator by omitting this option. */
   outputValidator?: BlockOutputValidator;
+  /** Run-level control errors (for example a hard budget stop) must escape the
+   * block failure graph. Ordinary executor/provider errors are normalized to
+   * the block's failed result so an authored failure edge can handle them. */
+  shouldRethrowExecutionError?: (error: unknown) => boolean;
 }): Promise<{ outcome: "completed" | "stopped" | "ended"; steps: StepsRecord }> {
   const { graph, entryTriggerId, triggerOutput, executeBlock, hooks } = opts;
   const maxTotalExecutions = opts.maxTotalExecutions ?? DEFAULT_MAX_TOTAL_EXECUTIONS;
@@ -179,7 +183,10 @@ export async function executeGraph(opts: {
     steps[nodeId] = state;
   }
   const outputValidator = opts.outputValidator ?? defaultOutputValidator;
-  const triggerIssues = outputValidator(entry, triggerOutput, true);
+  // Stored runs and clarification checkpoints created before typed trigger
+  // inputs may carry the legacy minimal envelope. Validate every field they do
+  // carry, but reserve normal-output guarantees for new authored bindings.
+  const triggerIssues = outputValidator(entry, triggerOutput, false);
   if (triggerIssues.length > 0) {
     await hooks.failureExit("contract", contractViolation(entry, triggerIssues), entryTriggerId);
     return { outcome: "stopped", steps };
@@ -383,7 +390,18 @@ export async function executeGraph(opts: {
       ? { clarificationAnswer: resume.clarificationAnswer }
       : undefined;
     resumeAnswerPending = false;
-    const result = await executeBlock(node, steps, resolvedInputs, execution);
+    let result: BlockExecutionResult;
+    try {
+      result = await executeBlock(node, steps, resolvedInputs, execution);
+    } catch (error) {
+      if (opts.shouldRethrowExecutionError?.(error)) throw error;
+      result = {
+        kind: "failed",
+        output: { status: "failed" },
+        reason: error instanceof Error ? error.message : String(error),
+        phase: node.type,
+      };
+    }
 
     const requireNormalOutput =
       result.kind === "ended" ||

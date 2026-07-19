@@ -2,6 +2,7 @@ import type { StoredTriggerDelivery } from "./trigger-delivery-store.js";
 
 export interface PendingTriggerRecoveryDeps {
   listSubjects(): Promise<string[]>;
+  isProtected?(subjectKey: string): boolean | Promise<boolean>;
   getActive(subjectKey: string): Promise<unknown | null>;
   drain(subjectKey: string): Promise<{ result: string } | null>;
   onError?(subjectKey: string | null, error: unknown): void;
@@ -17,6 +18,7 @@ export interface PendingTriggerRecoveryMetrics {
 
 export interface AcceptedTriggerRecoveryDeps {
   listDeliveries(): Promise<StoredTriggerDelivery[]>;
+  isProtected?(subjectKey: string): boolean | Promise<boolean>;
   getActive(subjectKey: string): Promise<unknown | null>;
   resume(delivery: StoredTriggerDelivery): Promise<{ result: string } | null>;
   onError?(subjectKey: string | null, error: unknown): void;
@@ -49,6 +51,10 @@ export async function recoverOrphanedPendingTriggers(
   metrics.scanned = subjects.length;
   for (const subjectKey of subjects) {
     try {
+      if (await deps.isProtected?.(subjectKey)) {
+        metrics.blocked++;
+        continue;
+      }
       if (await deps.getActive(subjectKey)) {
         metrics.blocked++;
         continue;
@@ -92,9 +98,15 @@ export async function recoverAcceptedTriggerDeliveries(
   metrics.scanned = deliveries.length;
   for (const delivery of deliveries) {
     try {
-      if (delivery.subjectKey !== null && (await deps.getActive(delivery.subjectKey))) {
-        metrics.blocked++;
-        continue;
+      if (delivery.subjectKey !== null) {
+        if (await deps.isProtected?.(delivery.subjectKey)) {
+          metrics.blocked++;
+          continue;
+        }
+        if (await deps.getActive(delivery.subjectKey)) {
+          metrics.blocked++;
+          continue;
+        }
       }
       metrics.attempted++;
       const result = await deps.resume(delivery);

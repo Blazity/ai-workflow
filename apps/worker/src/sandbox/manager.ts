@@ -10,7 +10,9 @@ import {
   type WorkspaceRepositoryInput,
 } from "./repo-workspace.js";
 import type { VcsProviderKind } from "../../env.js";
+import { isActiveRunOwnerError } from "../lib/run-control-errors.js";
 import { buildVcsUrls, gitAuthArgs } from "../lib/vcs-urls.js";
+import { stopSandboxAndConfirm } from "./stop-ticket-sandboxes.js";
 
 export interface SandboxProviderConfig {
   kind: "github" | "gitlab";
@@ -187,13 +189,19 @@ export class SandboxManager {
 
       return { sandbox, workspaceManifest: manifest };
     } catch (err) {
-      if (sandbox) await this.teardown(sandbox);
+      if (sandbox) {
+        try {
+          await this.teardown(sandbox);
+        } catch (cleanupError) {
+          if (!isActiveRunOwnerError(err)) throw cleanupError;
+        }
+      }
       throw err;
     }
   }
 
   async teardown(sandbox: SandboxInstance): Promise<void> {
-    try { await sandbox.stop(); } catch { /* non-critical */ }
+    await stopSandboxAndConfirm(sandbox);
   }
 
   private providerFor(kind: VcsProviderKind | WorkspaceRepo["provider"]): SandboxProviderConfig {

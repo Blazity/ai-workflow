@@ -31,17 +31,32 @@ export const activeRuns = pgTable(
     runId: text("run_id"),
     state: text("state").notNull().default("reserved"),
     runKind: text("run_kind").notNull().default("ticket"),
+    /** Monotonic CAS for ticket-side provider starts and human cancellation
+     * fences. Cancellation may release only the exact version it reconciled. */
+    ticketMutationVersion: integer("ticket_mutation_version").notNull().default(0),
+    /** Exact owner-local provider boundary count. Release and handoff require
+     * zero; a database trigger also accounts for old pods during rollout. */
+    ticketProviderCallsInFlight: integer("ticket_provider_calls_in_flight")
+      .notNull()
+      .default(0),
+    /** NULL is outside the cancellation protocol, -2 is an indeterminate
+     * legacy cancellation, -1 is an opened cancellation awaiting
+     * reconciliation, and a nonnegative value acknowledges the exact
+     * ticketMutationVersion that may be released. */
+    ticketCancellationReconciledVersion: integer(
+      "ticket_cancellation_reconciled_version",
+    ),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
     check(
       "active_runs_state_check",
-      sql`${t.state} in ('reserved', 'bound', 'cancelling')`,
+      sql`${t.state} in ('reserved', 'bound', 'parking', 'parked', 'cancelling')`,
     ),
     check(
       "active_runs_state_run_id_check",
-      sql`(${t.state} = 'reserved' and ${t.runId} is null) or (${t.state} = 'bound' and ${t.runId} is not null) or ${t.state} = 'cancelling'`,
+      sql`(${t.state} = 'reserved' and ${t.runId} is null) or (${t.state} in ('bound', 'parking', 'parked') and ${t.runId} is not null) or ${t.state} = 'cancelling'`,
     ),
     index("active_runs_ticket_key_idx").on(t.ticketKey),
     uniqueIndex("active_runs_subject_owner_idx").on(t.subjectKey, t.ownerToken),
@@ -170,6 +185,13 @@ export const ticketTransitionIntents = pgTable(
     /** Jira preserves this identifier across webhook retries. Once attached
      * to a consumed intent it makes every retry idempotent. */
     webhookIdentifier: text("webhook_identifier"),
+    /** Durable provider-call fence. Cancellation may begin after this marker
+     * but cannot release the owner until the call is reconciled. */
+    /** The default deliberately marks inserts from pre-fence application pods
+     * as potentially started. Current code explicitly writes NULL while it is
+     * only recording an intent, then opens the provider boundary separately. */
+    providerStartedAt: timestamp("provider_started_at", { withTimezone: true }).defaultNow(),
+    providerFinishedAt: timestamp("provider_finished_at", { withTimezone: true }),
     expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
     consumedAt: timestamp("consumed_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
@@ -178,6 +200,74 @@ export const ticketTransitionIntents = pgTable(
     index("ticket_transition_intents_ticket_expiry_idx").on(t.ticketKey, t.expiresAt),
     uniqueIndex("ticket_transition_intents_webhook_identifier_uidx").on(
       t.webhookIdentifier,
+    ),
+  ],
+);
+
+/** Exact-owner fence for Jira label mutations. Label writes have no stable
+ * provider echo, so an ambiguous HTTP result remains unfinished until the
+ * desired live label set is positively observed (or the ticket no longer
+ * exists); expiry alone is never provider proof. */
+export const ticketLabelMutationIntents = pgTable(
+  "ticket_label_mutation_intents",
+  {
+    id: serial("id").primaryKey(),
+    ticketKey: text("ticket_key").notNull(),
+    subjectKey: text("subject_key").notNull(),
+    ownerToken: text("owner_token").notNull(),
+    runId: text("run_id"),
+    addLabels: text("add_labels").array().notNull().default(sql`'{}'::text[]`),
+    removeLabels: text("remove_labels").array().notNull().default(sql`'{}'::text[]`),
+    providerStartedAt: timestamp("provider_started_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    providerFinishedAt: timestamp("provider_finished_at", { withTimezone: true }),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index("ticket_label_mutation_intents_owner_expiry_idx").on(
+      t.subjectKey,
+      t.ownerToken,
+      t.expiresAt,
+    ),
+    check(
+      "ticket_label_mutation_intents_nonempty_check",
+      sql`cardinality(${t.addLabels}) > 0 or cardinality(${t.removeLabels}) > 0`,
+    ),
+    check(
+      "ticket_label_mutation_intents_disjoint_check",
+      sql`not (${t.addLabels} && ${t.removeLabels})`,
+    ),
+  ],
+);
+
+/** Human ticket destinations observed while an exact owner is being closed.
+ * Rows survive owner release so retries and late provider calls can reconcile
+ * against the newest Jira event without relying on process memory. */
+export const ticketCancellationFences = pgTable(
+  "ticket_cancellation_fences",
+  {
+    id: serial("id").primaryKey(),
+    ticketKey: text("ticket_key").notNull(),
+    subjectKey: text("subject_key").notNull(),
+    ownerToken: text("owner_token").notNull(),
+    runId: text("run_id"),
+    targetStatusId: text("target_status_id"),
+    targetStatusName: text("target_status_name").notNull(),
+    webhookIdentifier: text("webhook_identifier").notNull(),
+    occurredAt: timestamp("occurred_at", { withTimezone: true }).notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("ticket_cancellation_fences_webhook_identifier_uidx").on(
+      t.webhookIdentifier,
+    ),
+    index("ticket_cancellation_fences_owner_occurred_idx").on(
+      t.subjectKey,
+      t.ownerToken,
+      t.occurredAt,
     ),
   ],
 );

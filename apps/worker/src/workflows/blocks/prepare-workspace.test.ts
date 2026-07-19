@@ -51,6 +51,7 @@ import {
   makeCtx,
   makeNode,
   makePrPayload,
+  runControlErrorCases,
 } from "./test-support.js";
 
 const repo: SelectedRepository = {
@@ -122,6 +123,11 @@ describe("prepare_workspace execute", () => {
       "AWT-1",
       "blazebot/awt-1",
       [repo],
+      {
+        subjectKey: "ticket:jira:AWT-1",
+        ownerToken: "owner:test",
+        runId: "run-1",
+      },
     );
     expect(mocks.registerSandbox).toHaveBeenCalledWith(
       "ticket:jira:AWT-1",
@@ -298,6 +304,21 @@ describe("prepare_workspace execute", () => {
     expect(result.kind).toBe("next");
   });
 
+  it.each(runControlErrorCases())(
+    "rethrows %s while reasserting a reused workspace owner",
+    async (_label, error) => {
+      mocks.registerSandbox.mockRejectedValueOnce(error);
+
+      await expect(
+        execute(
+          makeNode("prepare_workspace"),
+          {},
+          makeCtx({ sandboxId: "code-1" }),
+        ),
+      ).rejects.toBe(error);
+    },
+  );
+
   it("fails closed when immediate durable sandbox registration throws", async () => {
     mocks.runPreSandboxPhase.mockResolvedValue({ status: "continue", selectedRepositories: [repo] });
     mocks.blockFetchPrContextsStep.mockResolvedValue(contextsFor(repo));
@@ -396,5 +417,18 @@ describe("prepare_workspace execute", () => {
 
     expect(result.kind).toBe("failed");
     if (result.kind === "failed") expect(result.reason).toBe("no capacity");
+  });
+
+  it.each(runControlErrorCases())("rethrows %s from provisioning", async (_label, error) => {
+    mocks.runPreSandboxPhase.mockResolvedValue({
+      status: "continue",
+      selectedRepositories: [repo],
+    });
+    mocks.blockFetchPrContextsStep.mockResolvedValue(contextsFor(repo));
+    mocks.provisionMultiRepo.mockRejectedValue(error);
+
+    await expect(
+      execute(makeNode("prepare_workspace"), {}, makeCtx({ sandboxId: null })),
+    ).rejects.toBe(error);
   });
 });

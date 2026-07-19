@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { JsonValue } from "@shared/contracts";
 import { validateBlockOutputForDefinition } from "../../workflow-definition/block-registry.js";
 import { RunBudgetError } from "../run-budget.js";
+import { isRunControlError } from "../run-control-error.js";
 import type { BlockExecuteFn, BlockExecutionResult } from "./types.js";
 
 export const paramsSchema = z
@@ -173,6 +174,7 @@ export const execute: BlockExecuteFn = async (
     }
     return { kind: "next", output: { status: "ok", output: result.text } };
   } catch (err) {
+    if (isRunControlError(err)) throw err;
     ctx.recordUsage(usageLabel, null, model);
     const after = await ctx.observeBudget();
     if (after.check.status !== "ok") throw new RunBudgetError(after.check);

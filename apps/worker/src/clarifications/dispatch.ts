@@ -6,7 +6,10 @@ import type { IssueTrackerAdapter } from "../adapters/issue-tracker/types.js";
 import type { AgentWorkflowInput } from "../workflows/agent-input.js";
 import { agentWorkflow } from "../workflows/agent.js";
 import { logger } from "../lib/logger.js";
-import { reserveSubjectWithinCapacity } from "../lib/dispatch.js";
+import {
+  reserveSubjectWithinCapacity,
+  winsPostReservationCapacity,
+} from "../lib/dispatch.js";
 import {
   answerClarification,
   assertClarificationCheckpointAvailable,
@@ -18,6 +21,7 @@ import {
 export type DispatchClarificationAnsweredResult =
   | { status: "conflict" }
   | { status: "at_capacity" }
+  | { status: "recorded" }
   | { status: "started"; runId: string };
 
 /**
@@ -33,7 +37,7 @@ export async function dispatchClarificationAnswered(input: {
   clarification: ClarificationRow;
   answer: string;
   actor: { id: string; label: string };
-  /** Retained for route-call compatibility; the parked run already occupies capacity. */
+  /** A parked predecessor owns its subject but does not consume agent capacity. */
   maxConcurrentAgents: number;
   isRetry: boolean;
   /** Deterministic tests may supply it; production generates a fresh durable token. */
@@ -49,6 +53,9 @@ export async function dispatchClarificationAnswered(input: {
   } = input;
   if (typeof runRegistry.handoffBoundRun !== "function") {
     throw new Error("clarification owner handoff is unavailable");
+  }
+  if (typeof runRegistry.restoreParkedRun !== "function") {
+    throw new Error("clarification owner rollback is unavailable");
   }
 
   let checkpoint: ClarificationRow;
@@ -120,14 +127,45 @@ export async function dispatchClarificationAnswered(input: {
     (active?.ownerToken === successorOwnerToken &&
       active.state === "reserved" &&
       active.runId === null);
-  if (!successorAlreadyReserved) {
-    const handedOff = await runRegistry.handoffBoundRun(
+  const restoreParkedPredecessor = () =>
+    runRegistry.restoreParkedRun!(
       checkpoint.subjectKey,
+      successorOwnerToken,
       checkpoint.ownerToken,
       checkpoint.runId,
-      successorOwnerToken,
     );
-    if (!handedOff) {
+  if (successorAlreadyReserved) {
+    if (
+      !(await winsPostReservationCapacity(
+        checkpoint.subjectKey,
+        input.maxConcurrentAgents,
+        runRegistry,
+      ))
+    ) {
+      await restoreParkedPredecessor();
+      return { status: "at_capacity" };
+    }
+  } else {
+    const reservation = await reserveSubjectWithinCapacity(
+      {
+        subjectKey: checkpoint.subjectKey,
+        ticketKey: checkpoint.ticketKey,
+        kind: checkpoint.originEntry.kind === "pr_trigger" ? "pr_trigger" : "ticket",
+      },
+      successorOwnerToken,
+      runRegistry,
+      input.maxConcurrentAgents,
+      () =>
+        runRegistry.handoffBoundRun!(
+          checkpoint.subjectKey,
+          checkpoint.ownerToken,
+          checkpoint.runId,
+          successorOwnerToken,
+        ),
+      restoreParkedPredecessor,
+    );
+    if (reservation === "at_capacity") return { status: "at_capacity" };
+    if (reservation === "already_claimed") {
       const after = await runRegistry.get(checkpoint.subjectKey);
       if (
         after?.ownerToken === successorOwnerToken &&
@@ -137,11 +175,33 @@ export async function dispatchClarificationAnswered(input: {
         return { status: "started", runId: after.runId };
       }
       if (
+        after?.ownerToken === checkpoint.ownerToken &&
+        after.runId === checkpoint.runId &&
+        (after.state === "bound" ||
+          after.state === "parking" ||
+          after.state === "parked")
+      ) {
+        // The answer CAS is durable, but its predecessor has not yet published
+        // the drained `parked` boundary (or the handoff raced that boundary).
+        // Reconciliation retries the same successor token after parking.
+        return { status: "recorded" };
+      }
+      if (
         after?.ownerToken !== successorOwnerToken ||
         after.state !== "reserved" ||
         after.runId !== null
       ) {
         return { status: "conflict" };
+      }
+      if (
+        !(await winsPostReservationCapacity(
+          checkpoint.subjectKey,
+          input.maxConcurrentAgents,
+          runRegistry,
+        ))
+      ) {
+        await restoreParkedPredecessor();
+        return { status: "at_capacity" };
       }
     }
   }

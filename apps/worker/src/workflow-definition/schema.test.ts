@@ -525,7 +525,55 @@ describe("workflowDefinitionSchema", () => {
       const def = defaultWorkflowDefinition({ includeReview });
       expect(workflowDefinitionSchema.safeParse(def).success).toBe(true);
       expect(validateWorkflowGraph(def)).toEqual([]);
+      expect(def.nodes.find((node) => node.id === "planning")?.inputs).toEqual({
+        ticket: "trigger.ticket",
+        comments: "trigger.comments",
+        priorAnswers: "trigger.priorAnswers",
+      });
+      expect(def.nodes.find((node) => node.id === "implementation")?.inputs).toEqual({
+        ticket: "trigger.ticket",
+        plan: "steps.planning.output.plan",
+      });
     }
+  });
+
+  it("upgrades only direct canonical plan producers into explicit implementation bindings", () => {
+    const upgraded = upgradeStoredWorkflowDefinition({
+      schemaVersion: 1,
+      nodes: [
+        { id: "trigger", type: "trigger_ticket_ai", x: 0, y: 0, params: {} },
+        { id: "planning", type: "planning_agent", x: 1, y: 0, params: {} },
+        { id: "implementation", type: "implementation_agent", x: 2, y: 0, params: {} },
+      ],
+      edges: [
+        { from: "trigger", to: "planning" },
+        { from: "planning", to: "implementation" },
+      ],
+    });
+
+    expect(upgraded.nodes.find((node) => node.id === "planning")?.inputs).toEqual({
+      ticket: "trigger.ticket",
+      comments: "trigger.comments",
+      priorAnswers: "trigger.priorAnswers",
+    });
+    expect(upgraded.nodes.find((node) => node.id === "implementation")?.inputs).toEqual({
+      ticket: "trigger.ticket",
+      plan: "steps.planning.output.plan",
+    });
+
+    const custom = upgradeStoredWorkflowDefinition({
+      schemaVersion: 1,
+      nodes: [
+        { id: "trigger", type: "trigger_ticket_ai", x: 0, y: 0, params: {} },
+        { id: "branch", type: "branch", x: 1, y: 0, params: { condition: "true" } },
+        { id: "implementation", type: "implementation_agent", x: 2, y: 0, params: {} },
+      ],
+      edges: [
+        { from: "trigger", to: "branch" },
+        { from: "branch", to: "implementation", fromPort: "true" },
+      ],
+    });
+    expect(custom.nodes.find((node) => node.id === "implementation")?.inputs).toEqual({});
   });
 
   it("rejects an unknown param key", () => {
@@ -1192,6 +1240,42 @@ describe("validateWorkflowGraph rules", () => {
         issue.includes('Finalize Workspace block "finalize" cannot execute inside a Loop cycle'),
       ),
     ).toBe(true);
+  });
+
+  it("rule 11: rejects a path that can execute two Finalize Workspace blocks", () => {
+    const def = graph(
+      [
+        node("t", "trigger_ticket_ai"),
+        node("first", "finalize_workspace"),
+        node("second", "finalize_workspace"),
+      ],
+      [
+        { from: "t", to: "first" },
+        { from: "first", to: "second" },
+      ],
+    );
+
+    expect(validateWorkflowGraph(def)).toContain(
+      'Finalize Workspace block "first" can reach Finalize Workspace block "second"; a workflow path may publish at most once.',
+    );
+  });
+
+  it("rule 11: allows mutually exclusive Finalize Workspace blocks", () => {
+    const def = graph(
+      [
+        node("t", "trigger_ticket_ai"),
+        node("choice", "branch", { condition: "true" }),
+        node("left", "finalize_workspace"),
+        node("right", "finalize_workspace"),
+      ],
+      [
+        { from: "t", to: "choice" },
+        { from: "choice", to: "left", fromPort: "true" },
+        { from: "choice", to: "right", fromPort: "false" },
+      ],
+    );
+
+    expect(validateWorkflowGraph(def)).toEqual([]);
   });
 
   it("rule 12: flags an invalid branch condition", () => {

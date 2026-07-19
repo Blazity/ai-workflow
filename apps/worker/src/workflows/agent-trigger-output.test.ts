@@ -6,7 +6,7 @@ import {
   type WorkflowBlockRegistryContext,
 } from "../workflow-definition/block-registry.js";
 import type { AgentWorkflowInput, PrTriggerPayload } from "./agent-input.js";
-import { triggerOutputFor } from "./agent.js";
+import { triggerOutputFor, triggerOutputWithTicketContext } from "./agent.js";
 
 const context: WorkflowBlockRegistryContext = {
   agentProviders: { claude: true, codex: true },
@@ -79,5 +79,68 @@ describe("scope:any PR trigger output", () => {
 
     expect(output).not.toHaveProperty("ticketKey");
     expect(validateBlockOutputAgainstContract(contract, output)).toEqual([]);
+  });
+
+  it("does not expose ambient ticket context to scope:any PR workflows", () => {
+    const output = triggerOutputWithTicketContext(entryFor("trigger_pr_created"), {
+      identifier: "AIW-1",
+      title: "Secret ticket",
+      description: "Private context",
+      acceptanceCriteria: "None",
+      labels: [],
+      comments: [],
+    });
+
+    expect(output).not.toHaveProperty("ticket");
+    expect(output).not.toHaveProperty("comments");
+    expect(output).not.toHaveProperty("priorAnswers");
+  });
+});
+
+describe("ticket-backed trigger inputs", () => {
+  it("publishes typed ticket, comment, and prior-answer binding values", () => {
+    const entry: AgentWorkflowInput = {
+      kind: "ticket",
+      subjectKey: "AIW-1",
+      ticketKey: "AIW-1",
+      ownerToken: "owner-1",
+    };
+    const output = triggerOutputWithTicketContext(entry, {
+      identifier: "AIW-1",
+      title: "Typed bindings",
+      description: "Expose the ticket explicitly",
+      acceptanceCriteria: "Agents consume resolved values",
+      labels: ["ai"],
+      comments: [
+        {
+          author: "Karol",
+          body: "Please keep compatibility",
+          createdAt: "2026-07-18T00:00:00.000Z",
+        },
+      ],
+      clarifications: [
+        {
+          questions: ["Which plan?"],
+          answer: "The explicit one",
+          answeredBy: "Karol",
+        },
+      ],
+    });
+
+    expect(output).toMatchObject({
+      ticket: {
+        identifier: "AIW-1",
+        comments: [{ body: "Please keep compatibility" }],
+        priorAnswers: [{ answer: "The explicit one" }],
+      },
+      comments: [{ author: "Karol" }],
+      priorAnswers: [{ questions: ["Which plan?"] }],
+    });
+    expect(
+      validateBlockOutputAgainstContract(
+        resolveWorkflowBlockContract("trigger_ticket_ai", {}, context),
+        output,
+      ),
+    ).toEqual([]);
   });
 });

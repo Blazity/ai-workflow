@@ -46,8 +46,20 @@ export function buildLinearChain(specs: BlockSpec[]): WorkflowDefinition {
 export function linearPipelineDefinition(): WorkflowDefinition {
   return buildLinearChain([
     { id: "trigger", type: "trigger_ticket_ai" },
-    { id: "planning", type: "planning_agent" },
-    { id: "implementation", type: "implementation_agent" },
+    {
+      id: "planning",
+      type: "planning_agent",
+      inputs: {
+        ticket: "trigger.ticket",
+        comments: "trigger.comments",
+        priorAnswers: "trigger.priorAnswers",
+      },
+    },
+    {
+      id: "implementation",
+      type: "implementation_agent",
+      inputs: { ticket: "trigger.ticket", plan: "steps.planning.output.plan" },
+    },
     { id: "checks", type: "run_pre_pr_checks" },
     { id: "finalize", type: "finalize_workspace" },
     {
@@ -55,8 +67,8 @@ export function linearPipelineDefinition(): WorkflowDefinition {
       type: "open_pr",
       inputs: { publicationAttemptId: "steps.finalize.output.publicationAttemptId" },
     },
-    { id: "status", type: "update_ticket_status", params: { target: "ai_review" } },
     { id: "slack", type: "send_slack_message" },
+    { id: "status", type: "update_ticket_status", params: { target: "ai_review" } },
   ]);
 }
 
@@ -82,7 +94,18 @@ export function humanGateLoopDefinition(options: HumanGateLoopOptions = {}): Wor
   const fixAgentType = options.fixAgentType ?? "review_agent";
   const nodes: WorkflowDefinitionNode[] = [
     buildNode({ id: "trigger", type: "trigger_ticket_ai" }, 0),
-    buildNode({ id: "planning", type: "planning_agent" }, 1),
+    buildNode(
+      {
+        id: "planning",
+        type: "planning_agent",
+        inputs: {
+          ticket: "trigger.ticket",
+          comments: "trigger.comments",
+          priorAnswers: "trigger.priorAnswers",
+        },
+      },
+      1,
+    ),
     buildNode(
       {
         id: "gate",
@@ -97,7 +120,14 @@ export function humanGateLoopDefinition(options: HumanGateLoopOptions = {}): Wor
       4,
       1,
     ),
-    buildNode({ id: "implementation", type: "implementation_agent" }, 3),
+    buildNode(
+      {
+        id: "implementation",
+        type: "implementation_agent",
+        inputs: { ticket: "trigger.ticket", plan: "steps.planning.output.plan" },
+      },
+      3,
+    ),
     buildNode({ id: "checks", type: "run_pre_pr_checks" }, 4),
     buildNode({ id: "verdict", type: "branch", params: { condition: "steps.checks.output.ok" } }, 5),
     buildNode({ id: "finalize", type: "finalize_workspace" }, 6),
@@ -143,7 +173,18 @@ export function humanGateLoopDefinition(options: HumanGateLoopOptions = {}): Wor
 export function planApprovalDefinition(): WorkflowDefinition {
   const nodes: WorkflowDefinitionNode[] = [
     buildNode({ id: "trigger-ticket", type: "trigger_ticket_ai" }, 0),
-    buildNode({ id: "planning", type: "planning_agent" }, 1),
+    buildNode(
+      {
+        id: "planning",
+        type: "planning_agent",
+        inputs: {
+          ticket: "trigger.ticket",
+          comments: "trigger.comments",
+          priorAnswers: "trigger.priorAnswers",
+        },
+      },
+      1,
+    ),
     buildNode(
       {
         id: "send-approval",
@@ -155,7 +196,15 @@ export function planApprovalDefinition(): WorkflowDefinition {
       2,
     ),
     buildNode({ id: "trigger-approved", type: "trigger_plan_approved" }, 0, 1),
-    buildNode({ id: "implementation", type: "implementation_agent" }, 1, 1),
+    buildNode(
+      {
+        id: "implementation",
+        type: "implementation_agent",
+        inputs: { ticket: "trigger.ticket", plan: "trigger.approvedPlan" },
+      },
+      1,
+      1,
+    ),
     buildNode({ id: "finalize", type: "finalize_workspace" }, 2, 1),
     buildNode(
       {

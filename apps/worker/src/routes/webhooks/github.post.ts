@@ -5,7 +5,6 @@ import { getDb } from "../../db/client.js";
 import { ticketKeyFromBranch } from "../../lib/branch-prefix.js";
 import {
   dispatchTriggerEvent,
-  resolveEnabledReviewStates,
   type DispatchTriggerResult,
 } from "../../lib/dispatch-trigger.js";
 import { verifyGitHubWebhookSignature } from "../../lib/github-webhook-sig.js";
@@ -69,12 +68,13 @@ export default defineEventHandler(async (event) => {
   const gateCheckNames = config.postPrGate.steps.map(
     (step) => `blazebot / ${step.name ?? step.uses}`,
   );
-  // For review events, resolve the enabled definition's `on` set so normalize
-  // drops states the operator has not opted into (default: changes_requested).
+  // Normalize every structurally supported review state here. The dispatcher
+  // applies provider/state selectors from the same immutable definition
+  // snapshot that it pins, avoiding a load-then-deploy race in this route.
   const botLogin = getVcsBotLogin("github");
   const reviewStates =
     ghEvent === "pull_request_review"
-      ? await resolveEnabledReviewStates(getDb(), "github", botLogin)
+      ? ["changes_requested", "commented"] as const
       : undefined;
   const evt = normalizeGitHubEvent(ghEvent, body, {
     gateCheckNames,

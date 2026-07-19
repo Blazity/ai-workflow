@@ -11,6 +11,10 @@ import type {
   ActiveRunEntry,
   RunRegistryAdapter,
 } from "../adapters/run-registry/types.js";
+import type { Db } from "../db/client.js";
+import { reconcileUnfinishedTicketLabelMutations } from "./ticket-label-mutation.js";
+import { reconcileUnfinishedTicketTransitions } from "./ticket-transition.js";
+import { confirmWorkflowStepsDrained } from "./workflow-step-drain.js";
 
 const TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled"]);
 const STALE_RESERVATION_MS = 5 * 60 * 1000;
@@ -30,12 +34,15 @@ export async function reconcileRuns(
   onTicketCancelled?: TicketCancellationCallback,
   onSubjectReleased?: SubjectReleasedCallback,
   parkedSubjects?: ReadonlySet<string>,
+  db?: Db,
+  terminalReconciliationSubjects?: ReadonlySet<string>,
 ): Promise<{ cancelled: number; cleaned: number }> {
   const entries = await runRegistry.listAll();
   let cancelled = 0;
   let cleaned = 0;
 
-  for (const entry of entries) {
+  for (const listedEntry of entries) {
+    let entry = listedEntry;
     // Cancellation failures deliberately retain a dispatch-blocking closing
     // claim. Retry that durable intent before any parked/terminal/orphan logic;
     // a clarification tombstone may have made a previously parked subject
@@ -58,13 +65,42 @@ export async function reconcileRuns(
       continue;
     }
 
+    if (entry.state === "parking") {
+      const recovered = await recoverParkingClaim(entry, runRegistry);
+      if (!recovered) continue;
+      entry = recovered;
+    }
+
     // A pending durable clarification intentionally keeps its predecessor
-    // bound after the Workflow run has parked and the ticket has left AI. The
+    // parked after the Workflow run exits and the ticket has left AI. The
     // answer path needs that exact claim for its owner-CAS successor handoff.
     if (parkedSubjects?.has(entry.subjectKey)) continue;
 
+    // A consumed clarification successor is allowed to run while the ticket is
+    // outside AI, but it is not a retained parked predecessor. Reconcile only
+    // its terminal cleanup so a failed best-effort release cannot leak the
+    // exact bound owner forever.
+    if (terminalReconciliationSubjects?.has(entry.subjectKey)) {
+      if (entry.runId) {
+        cleaned += await cleanFinishedRun(
+          { ...entry, runId: entry.runId },
+          runRegistry,
+          issueTracker,
+          onSubjectReleased,
+          db,
+        );
+      }
+      continue;
+    }
+
     if (entry.state === "reserved") {
-      cleaned += await recoverStaleReservation(entry, runRegistry, onSubjectReleased);
+      cleaned += await recoverStaleReservation(
+        entry,
+        runRegistry,
+        issueTracker,
+        onSubjectReleased,
+        db,
+      );
       continue;
     }
     if (!entry.runId) continue;
@@ -75,7 +111,13 @@ export async function reconcileRuns(
       followsTicketColumn && aiColumnTickets.has(entry.ticketKey as string);
 
     if (!followsTicketColumn || ticketStillInAiColumn) {
-      cleaned += await cleanFinishedRun(boundEntry, runRegistry, onSubjectReleased);
+      cleaned += await cleanFinishedRun(
+        boundEntry,
+        runRegistry,
+        issueTracker,
+        onSubjectReleased,
+        db,
+      );
       continue;
     }
 
@@ -93,7 +135,7 @@ export async function reconcileRuns(
       ticketKey,
       entry.runId,
       runRegistry,
-      undefined,
+      issueTracker,
       undefined,
       onSubjectReleased,
     );
@@ -122,6 +164,57 @@ export async function reconcileRuns(
   }
 
   return { cancelled, cleaned };
+}
+
+async function recoverParkingClaim(
+  entry: ActiveRunEntry,
+  runRegistry: RunRegistryAdapter,
+): Promise<ActiveRunEntry | null> {
+  if (!entry.runId) return null;
+  try {
+    const began = await runRegistry.beginParking(
+      entry.subjectKey,
+      entry.ownerToken,
+      entry.runId,
+    );
+    if (!began) {
+      const current = await runRegistry.get(entry.subjectKey);
+      return isExactParkedClaim(current, entry) ? current : null;
+    }
+    await stopOwnedSandboxes(entry, runRegistry);
+    const finished = await runRegistry.finishParking(
+      entry.subjectKey,
+      entry.ownerToken,
+      entry.runId,
+    );
+    if (!finished) {
+      const current = await runRegistry.get(entry.subjectKey);
+      return isExactParkedClaim(current, entry) ? current : null;
+    }
+    return { ...entry, state: "parked", updatedAt: Date.now() };
+  } catch (error) {
+    logger.warn(
+      {
+        subjectKey: entry.subjectKey,
+        runId: entry.runId,
+        error: error instanceof Error ? error.message : String(error),
+      },
+      "reconcile_clarification_parking_unconfirmed",
+    );
+    return null;
+  }
+}
+
+function isExactParkedClaim(
+  current: ActiveRunEntry | null,
+  expected: ActiveRunEntry,
+): current is ActiveRunEntry {
+  return (
+    current?.subjectKey === expected.subjectKey &&
+    current.ownerToken === expected.ownerToken &&
+    current.runId === expected.runId &&
+    current.state === "parked"
+  );
 }
 
 async function retryCancellingClaim(
@@ -155,7 +248,7 @@ async function retryCancellingClaim(
     entry.ticketKey,
     target,
     runRegistry,
-    inAiColumn ? issueTracker : undefined,
+    issueTracker,
     inAiColumn ? backlogTarget : undefined,
     onSubjectReleased,
   );
@@ -187,8 +280,26 @@ async function readLiveTicketInAiColumn(
 async function recoverStaleReservation(
   entry: ActiveRunEntry,
   runRegistry: RunRegistryAdapter,
+  issueTracker?: IssueTrackerAdapter,
   onSubjectReleased?: SubjectReleasedCallback,
+  db?: Db,
 ): Promise<number> {
+  if (!(await settleTicketProviderCalls(entry, issueTracker, db))) return 0;
+  if (runRegistry.releaseExpiredReservation) {
+    const released = await runRegistry
+      .releaseExpiredReservation(entry.subjectKey, entry.ownerToken)
+      .catch(() => false);
+    if (!released) return 0;
+    // A reservation cannot register a sandbox until its candidate binds, so
+    // the atomic expiry delete has no external child to drain.
+    await notifySubjectReleased(entry.subjectKey, onSubjectReleased);
+    logger.warn(
+      { subjectKey: entry.subjectKey, ownerToken: entry.ownerToken },
+      "reconcile_cleaned_stale_reservation",
+    );
+    return 1;
+  }
+
   if (Date.now() - entry.updatedAt <= STALE_RESERVATION_MS) return 0;
 
   try {
@@ -215,11 +326,15 @@ async function recoverStaleReservation(
 async function cleanFinishedRun(
   entry: ActiveRunEntry & { runId: string },
   runRegistry: RunRegistryAdapter,
+  issueTracker?: IssueTrackerAdapter,
   onSubjectReleased?: SubjectReleasedCallback,
+  db?: Db,
 ): Promise<number> {
   try {
     const status = await getRun(entry.runId).status;
     if (!TERMINAL_STATUSES.has(status)) return 0;
+    if (!(await confirmWorkflowStepsDrained(entry.subjectKey, entry.runId))) return 0;
+    if (!(await settleTicketProviderCalls(entry, issueTracker, db))) return 0;
 
     const released = await cleanupAndRelease(entry, runRegistry);
     if (!released) return 0;
@@ -241,6 +356,55 @@ async function cleanFinishedRun(
       "reconcile_run_status_unreachable_owner_retained",
     );
     return 0;
+  }
+}
+
+async function settleTicketProviderCalls(
+  entry: ActiveRunEntry,
+  issueTracker?: IssueTrackerAdapter,
+  db?: Db,
+): Promise<boolean> {
+  if (!entry.ticketKey || !db) return true;
+  if (!issueTracker) {
+    logger.warn(
+      { subjectKey: entry.subjectKey, ownerToken: entry.ownerToken },
+      "reconcile_ticket_provider_settlement_unavailable",
+    );
+    return false;
+  }
+  try {
+    const transitionSettlement = await reconcileUnfinishedTicketTransitions({
+      db,
+      issueTracker,
+      ticketKey: entry.ticketKey,
+      owner: {
+        subjectKey: entry.subjectKey,
+        ownerToken: entry.ownerToken,
+        runId: entry.runId,
+      },
+    });
+    if (!transitionSettlement.settled) return false;
+    const labelSettlement = await reconcileUnfinishedTicketLabelMutations({
+      db,
+      issueTracker,
+      ticketKey: entry.ticketKey,
+      owner: {
+        subjectKey: entry.subjectKey,
+        ownerToken: entry.ownerToken,
+        runId: entry.runId,
+      },
+    });
+    return labelSettlement.settled;
+  } catch (error) {
+    logger.warn(
+      {
+        subjectKey: entry.subjectKey,
+        ownerToken: entry.ownerToken,
+        error: error instanceof Error ? error.message : String(error),
+      },
+      "reconcile_ticket_provider_settlement_failed",
+    );
+    return false;
   }
 }
 

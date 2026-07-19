@@ -13,8 +13,10 @@ import {
 import { aiColumnMoveTarget } from "../lib/move-targets.js";
 import { AWAITING_APPROVAL_LABEL } from "../lib/labels.js";
 import { logger } from "../lib/logger.js";
+import { isActiveRunOwnerError } from "../lib/run-control-errors.js";
 import { claimTicketRun } from "../lib/dispatch.js";
 import { ticketSubjectKey } from "../lib/subject-key.js";
+import { updateTicketLabelsWithIntent } from "../lib/ticket-label-mutation.js";
 import { moveTicketWithIntent } from "../lib/ticket-transition.js";
 import type { ApprovalRow } from "./store.js";
 
@@ -50,13 +52,14 @@ export async function dispatchPlanApproved(input: {
   // Resolve the exact definition version the approved plan pins. A human already
   // approved this plan, so it must run the graph they reviewed regardless of the
   // definition's current enabled flag: disabling a definition must not strand an
-  // approved plan. Only a genuinely gone definition blocks the run: hard-deleted,
-  // archived (retired), or a pinned version row that no longer exists. That is
-  // surfaced as definition_gone, which the route turns into a clean 410. Legacy
+  // approved plan. Archiving only removes a definition from future selection;
+  // it cannot revoke an already-approved immutable version. Only a genuinely
+  // missing definition or version blocks the run and is surfaced as
+  // definition_gone. Legacy
   // rows with a null pinned version fall back to the selected deployed version,
   // never an undeployed draft snapshot.
   const definition = await getWorkflowDefinition(db, approval.definitionId);
-  if (!definition || definition.archivedAt) {
+  if (!definition) {
     logger.info({ ticketKey, definitionId: approval.definitionId }, "plan_approved_definition_gone");
     return { status: "definition_gone" };
   }
@@ -89,8 +92,16 @@ export async function dispatchPlanApproved(input: {
 
         if (typeof issueTracker.updateLabels === "function") {
           try {
-            await issueTracker.updateLabels(ticketKey, { remove: [AWAITING_APPROVAL_LABEL] });
+            await updateTicketLabelsWithIntent({
+              db,
+              issueTracker,
+              ticketKey,
+              owner: { subjectKey, ownerToken, runId: null },
+              requiredOwnerState: "reserved",
+              changes: { remove: [AWAITING_APPROVAL_LABEL] },
+            });
           } catch (err) {
+            if (isActiveRunOwnerError(err)) throw err;
             logger.warn(
               { ticketKey, error: (err as Error).message },
               "plan_approved_label_remove_failed",

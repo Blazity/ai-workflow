@@ -3,10 +3,29 @@ import {
   buildImplementationAgentSuccessOutput,
   buildOpenPrSuccessOutput,
   buildReviewAgentSuccessOutput,
+  resolveImplementationPlanInput,
 } from "./agent.js";
 import { validateBlockOutputForDefinition } from "../workflow-definition/block-registry.js";
 
 describe("specialized workflow block outputs", () => {
+  it("uses an explicit implementation plan even when ambient legacy state differs", () => {
+    expect(
+      resolveImplementationPlanInput(
+        { plan: "Plan from an alternate explicit producer" },
+        "Legacy planning-agent plan",
+      ),
+    ).toBe("Plan from an alternate explicit producer");
+  });
+
+  it("confines the ambient plan fallback to definitions with no plan binding", () => {
+    expect(resolveImplementationPlanInput({}, "Legacy planning-agent plan")).toBe(
+      "Legacy planning-agent plan",
+    );
+    expect(() => resolveImplementationPlanInput({ plan: 42 }, "legacy")).toThrow(
+      /implementation input "plan" must be a string/i,
+    );
+  });
+
   it("reports the implementation workspace, changed branches, commits, and summary", () => {
     const output = buildImplementationAgentSuccessOutput({
       workspaceId: "sbx-1",

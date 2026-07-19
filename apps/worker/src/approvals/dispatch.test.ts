@@ -6,6 +6,7 @@ import type {
   RunReservation,
 } from "../adapters/run-registry/types.js";
 import type { ApprovalRow } from "./store.js";
+import { ActiveRunOwnerError } from "../lib/run-control-errors.js";
 
 vi.mock("../../env.js", () => ({ env: { COLUMN_AI: "AI" } }));
 const mockStart = vi.fn();
@@ -16,6 +17,7 @@ const mockGetDefinition = vi.fn();
 const mockGetVersion = vi.fn();
 const mockGetDeployedVersion = vi.fn();
 const mockMoveTicketWithIntent = vi.fn();
+const mockUpdateTicketLabelsWithIntent = vi.fn();
 vi.mock("../workflow-definition/store.js", () => ({
   getWorkflowDefinition: (...args: any[]) => mockGetDefinition(...args),
   getWorkflowDefinitionVersion: (...args: any[]) => mockGetVersion(...args),
@@ -23,6 +25,10 @@ vi.mock("../workflow-definition/store.js", () => ({
 }));
 vi.mock("../lib/ticket-transition.js", () => ({
   moveTicketWithIntent: (...args: any[]) => mockMoveTicketWithIntent(...args),
+}));
+vi.mock("../lib/ticket-label-mutation.js", () => ({
+  updateTicketLabelsWithIntent: (...args: any[]) =>
+    mockUpdateTicketLabelsWithIntent(...args),
 }));
 
 const { dispatchPlanApproved } = await import("./dispatch.js");
@@ -72,6 +78,8 @@ function makeRegistry(options: {
   return {
     reserve,
     bindRun: vi.fn(),
+    beginParking: vi.fn(),
+    finishParking: vi.fn(),
     handoff: vi.fn(),
     get: vi.fn(),
     beginCancellation: vi.fn(),
@@ -131,6 +139,7 @@ describe("dispatchPlanApproved owner reservation", () => {
     mockGetVersion.mockReset();
     mockGetDeployedVersion.mockReset();
     mockMoveTicketWithIntent.mockReset();
+    mockUpdateTicketLabelsWithIntent.mockReset().mockResolvedValue(undefined);
     mockStart.mockResolvedValue({ runId: "run-dispatched" });
     mockGetDefinition.mockResolvedValue({ id: 7, archivedAt: null, enabled: false });
     mockGetVersion.mockResolvedValue({ definitionId: 7, version: 4 });
@@ -138,11 +147,15 @@ describe("dispatchPlanApproved owner reservation", () => {
     mockMoveTicketWithIntent.mockResolvedValue(undefined);
   });
 
-  it("returns definition_gone before reservation for an archived definition", async () => {
+  it("runs the exact pinned version even after its definition is archived", async () => {
     mockGetDefinition.mockResolvedValue({ id: 7, archivedAt: new Date() });
     const registry = makeRegistry();
-    expect(await dispatch(registry)).toEqual({ status: "definition_gone" });
-    expect(registry.reserve).not.toHaveBeenCalled();
+    expect(await dispatch(registry)).toEqual({
+      status: "started",
+      runId: "run-dispatched",
+    });
+    expect(mockGetVersion).toHaveBeenCalledWith(expect.anything(), 7, 4);
+    expect(registry.reserve).toHaveBeenCalledOnce();
   });
 
   it("returns definition_gone before reservation when the pinned version is unavailable", async () => {
@@ -212,18 +225,62 @@ describe("dispatchPlanApproved owner reservation", () => {
 
   it("runs decision, move, label, and start under one retained reservation", async () => {
     const order: string[] = [];
-    const issueTracker = makeIssueTracker({
-      updateLabels: vi.fn(async () => { order.push("label"); }),
+    const issueTracker = makeIssueTracker();
+    mockUpdateTicketLabelsWithIntent.mockImplementation(async () => {
+      order.push("label");
     });
     mockMoveTicketWithIntent.mockImplementation(async () => { order.push("move"); });
     mockStart.mockImplementation(async () => {
       order.push("start");
       return { runId: "run-dispatched" };
     });
-    await dispatch(makeRegistry(), issueTracker, {
+    const registry = makeRegistry();
+    await dispatch(registry, issueTracker, {
       onClaimed: async () => { order.push("decision"); },
     });
     expect(order).toEqual(["decision", "move", "label", "start"]);
+    const reservation = vi.mocked(registry.reserve).mock.calls[0]![0];
+    expect(mockUpdateTicketLabelsWithIntent).toHaveBeenCalledWith({
+      db,
+      issueTracker,
+      ticketKey: "AWT-1",
+      owner: {
+        subjectKey: "ticket:jira:AWT-1",
+        ownerToken: reservation.ownerToken,
+        runId: null,
+      },
+      requiredOwnerState: "reserved",
+      changes: { remove: ["awaiting-approval"] },
+    });
+    expect(issueTracker.updateLabels).not.toHaveBeenCalled();
+  });
+
+  it("keeps an ordinary awaiting-approval label failure best-effort", async () => {
+    mockUpdateTicketLabelsWithIntent.mockRejectedValue(
+      new Error("Jira labels are temporarily unavailable"),
+    );
+
+    await expect(dispatch(makeRegistry())).resolves.toEqual({
+      status: "started",
+      runId: "run-dispatched",
+    });
+
+    expect(mockStart).toHaveBeenCalledOnce();
+  });
+
+  it("rethrows reserved-owner loss before workflow start and releases the reservation", async () => {
+    const ownerLoss = new ActiveRunOwnerError();
+    mockUpdateTicketLabelsWithIntent.mockRejectedValue(ownerLoss);
+    const registry = makeRegistry();
+
+    await expect(dispatch(registry)).rejects.toBe(ownerLoss);
+
+    const reservation = vi.mocked(registry.reserve).mock.calls[0]![0];
+    expect(registry.releaseReservation).toHaveBeenCalledWith(
+      reservation.subjectKey,
+      reservation.ownerToken,
+    );
+    expect(mockStart).not.toHaveBeenCalled();
   });
 
   it("owner-releases the unbound reservation when the protected decision throws", async () => {

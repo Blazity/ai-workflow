@@ -16,6 +16,8 @@ import type { BlockOutput, ClarificationRequest, ClarificationStatus } from "@sh
 import type { RunKind } from "../adapters/run-registry/types.js";
 import type { Db } from "../db/client.js";
 import { activeRuns, clarificationRequests } from "../db/schema.js";
+import type { ActiveRunOwner } from "../lib/active-run-owner.js";
+import { ActiveRunOwnerError } from "../lib/run-control-errors.js";
 import type {
   ClarificationRuntimeContext,
   ClarificationSourceHead,
@@ -34,6 +36,8 @@ import type { RunBudgetFailure, RunBudgetState } from "../workflows/run-budget.j
 
 export type ClarificationCheckpointState =
   | "preparing"
+  | "provider_parking"
+  | "provider_parking_active"
   | "ready"
   | "consumed"
   | "cancelled"
@@ -294,7 +298,11 @@ export async function recordClarificationSnapshotMetadata(
     await attachLateCancelledSnapshot(db, id, snapshot);
     throw new ClarificationStoreError(409, "clarification_checkpoint_cancelled");
   }
-  if (current.checkpointState === "ready") {
+  if (
+    current.checkpointState === "provider_parking" ||
+    current.checkpointState === "provider_parking_active" ||
+    current.checkpointState === "ready"
+  ) {
     if (isSameSnapshotIdentity(current, snapshot)) return current;
     throw new ClarificationStoreError(409, "clarification_checkpoint_snapshot_conflict");
   }
@@ -346,7 +354,10 @@ export async function recordClarificationSnapshotMetadata(
     throw new ClarificationStoreError(409, "clarification_checkpoint_cancelled");
   }
   if (
-    (refreshed.checkpointState === "preparing" || refreshed.checkpointState === "ready") &&
+    (refreshed.checkpointState === "preparing" ||
+      refreshed.checkpointState === "provider_parking" ||
+      refreshed.checkpointState === "provider_parking_active" ||
+      refreshed.checkpointState === "ready") &&
     isSameSnapshotIdentity(refreshed, snapshot)
   ) {
     return refreshed;
@@ -372,7 +383,11 @@ export async function completeClarificationCheckpoint(
     if (snapshot) await attachLateCancelledSnapshot(db, id, snapshot);
     throw new ClarificationStoreError(409, "clarification_checkpoint_cancelled");
   }
-  if (current.checkpointState === "ready") {
+  if (
+    current.checkpointState === "provider_parking" ||
+    current.checkpointState === "provider_parking_active" ||
+    current.checkpointState === "ready"
+  ) {
     const sameSnapshot = snapshot
       ? current.snapshotId === snapshot.snapshotId &&
         current.sourceSandboxId === snapshot.sourceSandboxId &&
@@ -384,7 +399,10 @@ export async function completeClarificationCheckpoint(
   const rows = await db
     .update(clarificationRequests)
     .set({
-      checkpointState: "ready",
+      // Ticket provider parking happens before publication. Until that
+      // provider side effect is durably completed, the question is not
+      // answerable, so an early answer cannot race a stale Jira backlog move.
+      checkpointState: current.ticketKey ? "provider_parking" : "ready",
       snapshotId: snapshot?.snapshotId ?? null,
       sourceSandboxId: snapshot?.sourceSandboxId ?? current.sourceSandboxId,
       snapshotExpiresAt: snapshot?.expiresAt ?? null,
@@ -502,13 +520,68 @@ export async function updateClarificationCheckpointBudget(
     .where(
       and(
         eq(clarificationRequests.id, id),
-        inArray(clarificationRequests.checkpointState, ["preparing", "ready"]),
+        inArray(clarificationRequests.checkpointState, [
+          "preparing",
+          "provider_parking",
+          "provider_parking_active",
+          "ready",
+        ]),
       ),
     )
     .returning({ id: clarificationRequests.id });
   if (!rows[0]) {
     throw new ClarificationStoreError(409, "clarification_checkpoint_not_active");
   }
+}
+
+/** Claims the external ticket-provider phase before any Jira mutation. */
+export async function claimClarificationProviderParking(
+  db: Db,
+  id: string,
+): Promise<boolean> {
+  const rows = await db
+    .update(clarificationRequests)
+    .set({ checkpointState: "provider_parking_active" })
+    .where(
+      and(
+        eq(clarificationRequests.id, id),
+        eq(clarificationRequests.status, "superseded"),
+        eq(clarificationRequests.checkpointState, "provider_parking"),
+        isNull(clarificationRequests.publishedAt),
+      ),
+    )
+    .returning({ id: clarificationRequests.id });
+  if (rows[0]) return true;
+  const current = await getClarification(db, id);
+  if (current?.checkpointState === "provider_parking_active") return true;
+  if (current?.checkpointState === "ready") return false;
+  throw new ClarificationStoreError(409, "clarification_provider_parking_not_claimable");
+}
+
+/** Completes an attempted provider phase before publication can make it answerable. */
+export async function completeClarificationProviderParking(
+  db: Db,
+  id: string,
+): Promise<ClarificationRow> {
+  const rows = await db
+    .update(clarificationRequests)
+    .set({ checkpointState: "ready" })
+    .where(
+      and(
+        eq(clarificationRequests.id, id),
+        eq(clarificationRequests.status, "superseded"),
+        inArray(clarificationRequests.checkpointState, [
+          "provider_parking",
+          "provider_parking_active",
+        ]),
+        isNull(clarificationRequests.publishedAt),
+      ),
+    )
+    .returning();
+  if (rows[0]) return mapRow(rows[0]);
+  const current = await getClarification(db, id);
+  if (current?.checkpointState === "ready") return current;
+  throw new ClarificationStoreError(409, "clarification_provider_parking_not_active");
 }
 
 /**
@@ -520,7 +593,11 @@ export async function publishClarificationCheckpoint(
   db: Db,
   id: string,
   now = new Date(),
-): Promise<{ row: ClarificationRow; supersededSnapshots: string[] }> {
+): Promise<{
+  row: ClarificationRow;
+  supersededSnapshots: string[];
+  publishedNow: boolean;
+}> {
   const checkpoint = await getClarification(db, id);
   if (!checkpoint || checkpoint.checkpointState !== "ready") {
     throw new ClarificationStoreError(409, "clarification_checkpoint_not_ready");
@@ -533,7 +610,7 @@ export async function publishClarificationCheckpoint(
   }
   if (checkpoint.status === "pending") {
     await consumeAnsweredPredecessor(db, checkpoint);
-    return { row: checkpoint, supersededSnapshots: [] };
+    return { row: checkpoint, supersededSnapshots: [], publishedNow: false };
   }
 
   const result = await db.execute(sql`
@@ -543,7 +620,7 @@ export async function publishClarificationCheckpoint(
       WHERE subject_key = ${checkpoint.subjectKey}
         AND owner_token = ${checkpoint.ownerToken}
         AND run_id = ${checkpoint.runId}
-        AND state = 'bound'
+        AND state IN ('bound', 'parked')
       FOR UPDATE
     ), candidate AS MATERIALIZED (
       SELECT id
@@ -621,6 +698,7 @@ export async function publishClarificationCheckpoint(
   }
   return {
     row: published,
+    publishedNow: true,
     supersededSnapshots: Array.isArray(outcome.superseded_snapshots)
       ? outcome.superseded_snapshots.filter(
           (snapshotId): snapshotId is string => typeof snapshotId === "string",
@@ -762,42 +840,210 @@ export async function getPendingForSubject(
 /**
  * Durable clarification subjects that generic ticket dispatch/reconciliation
  * must not take over. Answered-ready rows stay protected across the route/start
- * crash window even when their exact successor owner has to be recreated. A
- * consumed checkpoint protects only its exact active continuation; this lets a
- * clarification resume outside AI without a racy provider pickup move, while a
- * later independent AI-column pickup remains possible after terminal release.
+ * crash window even when their exact successor owner has to be recreated. Once
+ * that successor is exactly bound, ready and consumed rows switch to terminal-
+ * only reconciliation: the run may continue outside AI, but a failed terminal
+ * release is retried without orphan cancellation or generic redispatch.
  */
-export async function listProtectedClarificationSubjectKeys(db: Db): Promise<string[]> {
+export async function listProtectedClarificationSubjectKeys(
+  db: Db,
+  scope: "all" | "retained" | "terminal" = "all",
+): Promise<string[]> {
+  const classified = await classifyProtectedClarificationSubjects(db);
+  return classified[scope];
+}
+
+export interface ProtectedClarificationSubjects {
+  all: string[];
+  retained: string[];
+  terminal: string[];
+}
+
+/** Classifies every protected subject from one database snapshot. */
+export async function classifyProtectedClarificationSubjects(
+  db: Db,
+): Promise<ProtectedClarificationSubjects> {
+  const exactBoundSuccessor = sql`exists (
+    select 1 from ${activeRuns}
+    where ${activeRuns.subjectKey} = ${clarificationRequests.subjectKey}
+      and ${activeRuns.ownerToken} = ${clarificationRequests.successorOwnerToken}
+      and ${activeRuns.runId} is not null
+      and (
+        ${clarificationRequests.dispatchedRunId} is null
+        or ${activeRuns.runId} = ${clarificationRequests.dispatchedRunId}
+      )
+      and ${activeRuns.state} = 'bound'
+  )`;
+  const retainedProtection = or(
+    and(
+      eq(clarificationRequests.status, "pending"),
+      eq(clarificationRequests.checkpointState, "ready"),
+    ),
+    and(
+      eq(clarificationRequests.status, "answered"),
+      eq(clarificationRequests.checkpointState, "ready"),
+      sql`not (${exactBoundSuccessor})`,
+    ),
+    and(
+      eq(clarificationRequests.status, "superseded"),
+      inArray(clarificationRequests.checkpointState, [
+        "provider_parking",
+        "provider_parking_active",
+        "ready",
+      ]),
+      isNull(clarificationRequests.publishedAt),
+      sql`exists (
+        select 1 from ${activeRuns}
+        where ${activeRuns.subjectKey} = ${clarificationRequests.subjectKey}
+          and ${activeRuns.ownerToken} = ${clarificationRequests.ownerToken}
+          and ${activeRuns.runId} = ${clarificationRequests.runId}
+          and ${activeRuns.state} in ('bound', 'parking', 'parked')
+      )`,
+    ),
+  );
+  const terminalProtection = and(
+    eq(clarificationRequests.status, "answered"),
+    inArray(clarificationRequests.checkpointState, ["ready", "consumed"]),
+    isNotNull(clarificationRequests.successorOwnerToken),
+    exactBoundSuccessor,
+  );
   const rows = await db
-    .select({ subjectKey: clarificationRequests.subjectKey })
+    .select({
+      subjectKey: clarificationRequests.subjectKey,
+      retained: sql<boolean>`${retainedProtection}`,
+      terminal: sql<boolean>`${terminalProtection}`,
+    })
     .from(clarificationRequests)
     .where(
       and(
         isNotNull(clarificationRequests.subjectKey),
+        or(retainedProtection, terminalProtection),
+      ),
+    );
+  const retained = new Set<string>();
+  const terminal = new Set<string>();
+  for (const row of rows) {
+    if (row.subjectKey === null) continue;
+    if (row.retained) retained.add(row.subjectKey);
+    if (row.terminal) terminal.add(row.subjectKey);
+  }
+  return {
+    all: [...new Set([...retained, ...terminal])].sort(),
+    retained: [...retained].sort(),
+    terminal: [...terminal].sort(),
+  };
+}
+
+export interface ClarificationParkingCandidate {
+  clarificationId: string;
+  subjectKey: string;
+  ownerToken: string;
+  runId: string;
+}
+
+export interface ClarificationProviderParkingCandidate
+  extends ClarificationParkingCandidate {
+  ticketKey: string;
+}
+
+/** Unpublished ticket checkpoints whose exact parked predecessor must finish
+ * the provider move before the question can become answerable. */
+export async function listClarificationProviderParkingCandidates(
+  db: Db,
+  now = new Date(),
+): Promise<ClarificationProviderParkingCandidate[]> {
+  const rows = await db
+    .select({
+      clarificationId: clarificationRequests.id,
+      ticketKey: clarificationRequests.ticketKey,
+      subjectKey: clarificationRequests.subjectKey,
+      ownerToken: clarificationRequests.ownerToken,
+      runId: clarificationRequests.runId,
+      expiresAt: clarificationRequests.expiresAt,
+    })
+    .from(clarificationRequests)
+    .where(
+      and(
+        eq(clarificationRequests.status, "superseded"),
+        inArray(clarificationRequests.checkpointState, [
+          "provider_parking",
+          "provider_parking_active",
+        ]),
+        isNull(clarificationRequests.publishedAt),
+        isNotNull(clarificationRequests.ticketKey),
+      ),
+    );
+  return rows.flatMap((row) => {
+    if (
+      !row.ticketKey ||
+      !row.subjectKey ||
+      !row.ownerToken ||
+      (row.expiresAt !== null && row.expiresAt.getTime() <= now.getTime())
+    ) {
+      return [];
+    }
+    return [{
+      clarificationId: row.clarificationId,
+      ticketKey: row.ticketKey,
+      subjectKey: row.subjectKey,
+      ownerToken: row.ownerToken,
+      runId: row.runId,
+    }];
+  });
+}
+
+/** Checkpoints whose exact predecessor may still need to cross the durable
+ * parking boundary after an orchestration interruption. Provider-active rows
+ * are deliberately included before publication so recovery can safely re-drive
+ * Jira only after the predecessor is terminal and parked. */
+export async function listClarificationParkingCandidates(
+  db: Db,
+  now = new Date(),
+): Promise<ClarificationParkingCandidate[]> {
+  const rows = await db
+    .select({
+      clarificationId: clarificationRequests.id,
+      subjectKey: clarificationRequests.subjectKey,
+      ownerToken: clarificationRequests.ownerToken,
+      runId: clarificationRequests.runId,
+      expiresAt: clarificationRequests.expiresAt,
+    })
+    .from(clarificationRequests)
+    .where(
+      and(
         or(
           and(
             inArray(clarificationRequests.status, ["pending", "answered"]),
             eq(clarificationRequests.checkpointState, "ready"),
+            isNotNull(clarificationRequests.publishedAt),
           ),
           and(
-            eq(clarificationRequests.status, "answered"),
-            eq(clarificationRequests.checkpointState, "consumed"),
-            isNotNull(clarificationRequests.successorOwnerToken),
-            isNotNull(clarificationRequests.dispatchedRunId),
-            sql`exists (
-              select 1 from ${activeRuns}
-              where ${activeRuns.subjectKey} = ${clarificationRequests.subjectKey}
-                and ${activeRuns.ownerToken} = ${clarificationRequests.successorOwnerToken}
-                and ${activeRuns.runId} = ${clarificationRequests.dispatchedRunId}
-                and ${activeRuns.state} = 'bound'
-            )`,
+            eq(clarificationRequests.status, "superseded"),
+            inArray(clarificationRequests.checkpointState, [
+              "provider_parking",
+              "provider_parking_active",
+              "ready",
+            ]),
+            isNull(clarificationRequests.publishedAt),
           ),
         ),
       ),
     );
-  return rows
-    .map((row) => row.subjectKey)
-    .filter((subjectKey): subjectKey is string => subjectKey !== null);
+  return rows.flatMap((row) => {
+    if (
+      !row.subjectKey ||
+      !row.ownerToken ||
+      (row.expiresAt !== null && row.expiresAt.getTime() <= now.getTime())
+    ) {
+      return [];
+    }
+    return [{
+      clarificationId: row.clarificationId,
+      subjectKey: row.subjectKey,
+      ownerToken: row.ownerToken,
+      runId: row.runId,
+    }];
+  });
 }
 
 /** Answer CAS succeeded but endpoint/start bookkeeping did not finish. */
@@ -1003,7 +1249,8 @@ export interface ClarificationCleanupWork {
 
 /**
  * Repairs unpublished rows and retires checkpoints that can no longer resume.
- * A pending row is live only while its exact predecessor owner/run stays bound.
+ * A pending row is live while its exact predecessor owner/run is bound or is
+ * crossing/holding the durable clarification parking boundary.
  * Snapshot deletion is queued for a separate serializable Workflow step.
  */
 export async function reconcileClarificationCheckpoints(
@@ -1015,7 +1262,12 @@ export async function reconcileClarificationCheckpoints(
     .from(clarificationRequests)
     .where(
       and(
-        inArray(clarificationRequests.checkpointState, ["preparing", "ready"]),
+        inArray(clarificationRequests.checkpointState, [
+          "preparing",
+          "provider_parking",
+          "provider_parking_active",
+          "ready",
+        ]),
         or(
           eq(clarificationRequests.status, "pending"),
           eq(clarificationRequests.status, "answered"),
@@ -1043,7 +1295,9 @@ export async function reconcileClarificationCheckpoints(
         owner.subjectKey === row.subjectKey &&
         owner.ownerToken === row.ownerToken &&
         owner.runId === row.runId &&
-        owner.state === "bound",
+        (owner.state === "bound" ||
+          owner.state === "parking" ||
+          owner.state === "parked"),
     );
     const hasExactSuccessor = owners.some(
       (owner) =>
@@ -1354,6 +1608,71 @@ export async function supersedePendingForTicket(db: Db, ticketKey: string): Prom
 }
 
 /**
+ * Performs first-pickup clarification housekeeping only while the exact bound
+ * workflow still owns the subject. The owner row remains locked across both
+ * writes, so cancellation cannot win after authorization but before either the
+ * pending-row retirement or predecessor telemetry update.
+ */
+export async function reconcileClarificationPickupState(
+  db: Db,
+  input: {
+    ticketKey: string;
+    currentRunId: string;
+    owner: ActiveRunOwner;
+  },
+): Promise<{ superseded: number; resolvedAwaiting: number }> {
+  const result = await db.execute(sql`
+    WITH exact_owner AS MATERIALIZED (
+      SELECT active.subject_key
+      FROM active_runs AS active
+      WHERE active.subject_key = ${input.owner.subjectKey}
+        AND active.owner_token = ${input.owner.ownerToken}
+        AND active.run_id = ${input.owner.runId}
+        AND active.state = 'bound'
+      FOR UPDATE
+    ), superseded AS (
+      UPDATE clarification_requests AS clarification
+      SET
+        status = 'superseded',
+        cleanup_state = CASE
+          WHEN clarification.snapshot_id IS NOT NULL THEN 'delete_pending'
+          ELSE clarification.cleanup_state
+        END
+      WHERE clarification.ticket_key = ${input.ticketKey}
+        AND clarification.status = 'pending'
+        AND EXISTS (SELECT 1 FROM exact_owner)
+      RETURNING clarification.id
+    ), resolved_awaiting AS (
+      UPDATE workflow_runs AS run
+      SET status = 'success', updated_at = now()
+      WHERE run.ticket_key = ${input.ticketKey}
+        AND run.status = 'awaiting'
+        AND run.run_id <> ${input.currentRunId}
+        AND EXISTS (SELECT 1 FROM exact_owner)
+      RETURNING run.run_id
+    )
+    SELECT
+      (SELECT count(*)::integer FROM exact_owner) AS owner_count,
+      (SELECT count(*)::integer FROM superseded) AS superseded_count,
+      (SELECT count(*)::integer FROM resolved_awaiting) AS resolved_awaiting_count
+  `);
+  const outcome = rawRows<{
+    owner_count: number | string;
+    superseded_count: number | string;
+    resolved_awaiting_count: number | string;
+  }>(result)[0];
+  if (Number(outcome?.owner_count ?? 0) !== 1) {
+    throw new ActiveRunOwnerError(
+      "Cannot reconcile clarification pickup without the exact bound owner.",
+    );
+  }
+  return {
+    superseded: Number(outcome?.superseded_count ?? 0),
+    resolvedAwaiting: Number(outcome?.resolved_awaiting_count ?? 0),
+  };
+}
+
+/**
  * Terminal dead-end for a clarification whose ticket disappeared: supersede the
  * row by id regardless of its current status (pending or answered-without-run),
  * so the dashboard stops re-rendering an answer/retry form for a ticket that can
@@ -1562,6 +1881,8 @@ export async function tombstoneClarificationCancellation(
         inArray(clarificationRequests.status, ["pending", "answered", "superseded"]),
         inArray(clarificationRequests.checkpointState, [
           "preparing",
+          "provider_parking",
+          "provider_parking_active",
           "ready",
           "cancelled",
         ]),

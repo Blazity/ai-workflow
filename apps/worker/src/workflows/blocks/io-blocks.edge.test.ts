@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
   runPrePrChecksWithFixes: vi.fn(),
   loggerWarn: vi.fn(),
   buildOctokit: vi.fn(),
+  assertActiveRunOwner: vi.fn(),
 }));
 
 vi.mock("../../lib/step-adapters.js", () => ({
@@ -42,6 +43,9 @@ vi.mock("../../lib/logger.js", () => ({
   logger: { warn: mocks.loggerWarn, info: vi.fn(), error: vi.fn(), debug: vi.fn() },
 }));
 vi.mock("../../lib/github-auth.js", () => ({ buildOctokit: mocks.buildOctokit }));
+vi.mock("../../lib/active-run-owner.js", () => ({
+  assertActiveRunOwner: (...args: any[]) => mocks.assertActiveRunOwner(...args),
+}));
 
 import type {
   WorkspaceManifest,
@@ -68,6 +72,11 @@ import { makeCtx, makeNode, makePrPayload } from "./test-support.js";
 // AGENT_ALLOWED_REPOS is unset globally. Restore after every test so a value set
 // by one test never leaks into another (which would break the no-op assumption).
 const ORIGINAL_ALLOWED_REPOS = process.env.AGENT_ALLOWED_REPOS;
+const activeOwner = {
+  subjectKey: "ticket:jira:AWT-1",
+  ownerToken: "owner-1",
+  runId: "run-1",
+};
 
 function setAllowlist(value: string | undefined): void {
   if (value === undefined) delete process.env.AGENT_ALLOWED_REPOS;
@@ -265,6 +274,7 @@ describe("repository-prs allowlist guard", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.getDb.mockReturnValue({ db: true });
+    mocks.assertActiveRunOwner.mockResolvedValue(undefined);
   });
 
   it("refuses to branch an off-list repo without creating a branch", async () => {
@@ -273,9 +283,14 @@ describe("repository-prs allowlist guard", () => {
     mocks.createRepositoryVCS.mockReturnValue({ createBranch });
 
     await expect(
-      prepareSelectedRepositoryBranches("AWT-1", "blazebot/awt-1", [
-        { provider: "github", repoPath: "acme/api", defaultBranch: "main", selectedRationale: "x" },
-      ]),
+      prepareSelectedRepositoryBranches(
+        "AWT-1",
+        "blazebot/awt-1",
+        [
+          { provider: "github", repoPath: "acme/api", defaultBranch: "main", selectedRationale: "x" },
+        ],
+        activeOwner,
+      ),
     ).rejects.toThrow("Refusing to branch acme/api: not in AGENT_ALLOWED_REPOS");
 
     expect(createBranch).not.toHaveBeenCalled();
@@ -287,9 +302,14 @@ describe("repository-prs allowlist guard", () => {
     const createBranch = vi.fn().mockResolvedValue(undefined);
     mocks.createRepositoryVCS.mockReturnValue({ createBranch });
 
-    await prepareSelectedRepositoryBranches("AWT-1", "blazebot/awt-1", [
-      { provider: "github", repoPath: "acme/api", defaultBranch: "main", selectedRationale: "x" },
-    ]);
+    await prepareSelectedRepositoryBranches(
+      "AWT-1",
+      "blazebot/awt-1",
+      [
+        { provider: "github", repoPath: "acme/api", defaultBranch: "main", selectedRationale: "x" },
+      ],
+      activeOwner,
+    );
 
     expect(createBranch).toHaveBeenCalledWith("blazebot/awt-1", "main");
     expect(mocks.upsertWorkflowOwnedBranch).toHaveBeenCalled();
@@ -301,9 +321,14 @@ describe("repository-prs allowlist guard", () => {
     mocks.createRepositoryVCS.mockReturnValue({ createBranch });
 
     await expect(
-      prepareSelectedRepositoryBranches("AWT-1", "blazebot/awt-1", [
-        { provider: "github", repoPath: "Acme/API", defaultBranch: "main", selectedRationale: "x" },
-      ]),
+      prepareSelectedRepositoryBranches(
+        "AWT-1",
+        "blazebot/awt-1",
+        [
+          { provider: "github", repoPath: "Acme/API", defaultBranch: "main", selectedRationale: "x" },
+        ],
+        activeOwner,
+      ),
     ).resolves.toBeUndefined();
 
     expect(createBranch).toHaveBeenCalledTimes(1);
@@ -315,10 +340,15 @@ describe("repository-prs allowlist guard", () => {
     mocks.createRepositoryVCS.mockReturnValue({ createBranch });
 
     await expect(
-      prepareSelectedRepositoryBranches("AWT-1", "blazebot/awt-1", [
-        { provider: "github", repoPath: "acme/api", defaultBranch: "main", selectedRationale: "x" },
-        { provider: "github", repoPath: "acme/web", defaultBranch: "main", selectedRationale: "x" },
-      ]),
+      prepareSelectedRepositoryBranches(
+        "AWT-1",
+        "blazebot/awt-1",
+        [
+          { provider: "github", repoPath: "acme/api", defaultBranch: "main", selectedRationale: "x" },
+          { provider: "github", repoPath: "acme/web", defaultBranch: "main", selectedRationale: "x" },
+        ],
+        activeOwner,
+      ),
     ).rejects.toThrow("Refusing to branch acme/web");
 
     expect(createBranch).toHaveBeenCalledTimes(1);
@@ -334,6 +364,7 @@ describe("repository-prs allowlist guard", () => {
       createOrUseWorkflowOwnedPullRequestsForRepos({
         ticketKey: "AWT-1",
         branchName: "blazebot/awt-1",
+        owner: activeOwner,
         repositories: [
           { provider: "github", repoPath: "acme/api", defaultBranch: "main", selectedRationale: "x" },
         ],
@@ -399,7 +430,24 @@ describe("post_pr_comment edge cases", () => {
     return {
       status: "published",
       attemptId: "attempt-1",
-      repositories: [],
+      repositories: [
+        {
+          provider: "github",
+          repoPath: "acme/api",
+          branchName: "b",
+          defaultBranch: "main",
+          expectedHead: "api-before",
+          pushedHead: "api-head",
+        },
+        {
+          provider: "gitlab",
+          repoPath: "acme/web",
+          branchName: "b",
+          defaultBranch: "main",
+          expectedHead: "web-before",
+          pushedHead: "web-head",
+        },
+      ],
       pushResult: { pushed: true, repositories: [] },
       prs: [
         { provider: "github", repoPath: "acme/api", id: 7, url: "u7", branch: "b", isNew: true },
@@ -412,7 +460,16 @@ describe("post_pr_comment edge cases", () => {
     return {
       status: "published",
       attemptId: "attempt-1",
-      repositories: [],
+      repositories: [
+        {
+          provider: "github",
+          repoPath: "acme/other",
+          branchName: "b",
+          defaultBranch: "main",
+          expectedHead: "other-before",
+          pushedHead: "other-head",
+        },
+      ],
       pushResult: { pushed: true, repositories: [] },
       prs: [
         { provider: "github", repoPath: "acme/other", id: 5, url: "u5", branch: "b", isNew: true },
@@ -442,7 +499,14 @@ describe("post_pr_comment edge cases", () => {
 
   it("prefers publication PRs over the pr_trigger payload", async () => {
     const postPRComment = vi.fn().mockResolvedValue({ url: null });
-    mocks.createRepositoryVCS.mockReturnValue({ postPRComment });
+    mocks.createRepositoryVCS.mockImplementation(({ repoPath }: { repoPath: string }) => ({
+      getPRHead: vi.fn().mockResolvedValue({
+        headSha: repoPath === "acme/web" ? "web-head" : "api-head",
+        baseRef: "main",
+        state: "open",
+      }),
+      postPRComment,
+    }));
 
     const result = await executePostPrComment(
       makeNode("post_pr_comment", { body: "LGTM", target: "all" }),
@@ -469,15 +533,14 @@ describe("post_pr_comment edge cases", () => {
     expect(postPRComment).toHaveBeenCalledWith(9, "LGTM");
   });
 
-  it("falls back to entry.pr.baseRef for a publication repo not in selectedRepositories (pr_trigger)", async () => {
-    const postPRComment = vi.fn().mockResolvedValue({ url: null });
-    mocks.createRepositoryVCS.mockReturnValue({ postPRComment });
+  it("does not infer a missing publication target from the trigger payload", async () => {
+    const incomplete = { ...singlePublication(), repositories: [] };
 
-    await executePostPrComment(
+    const result = await executePostPrComment(
       makeNode("post_pr_comment", { body: "hi" }),
       {},
       makeCtx({
-        publication: singlePublication(),
+        publication: incomplete,
         entry: {
           kind: "pr_trigger",
           triggerType: "trigger_pr_checks_failed",
@@ -492,28 +555,23 @@ describe("post_pr_comment edge cases", () => {
       }),
     );
 
-    expect(mocks.createRepositoryVCS).toHaveBeenCalledWith({
-      provider: "github",
-      repoPath: "acme/other",
-      baseBranch: "develop",
-    });
+    expect(result.kind).toBe("failed");
+    if (result.kind === "failed") expect(result.reason).toContain("identity is incomplete");
+    expect(mocks.createRepositoryVCS).not.toHaveBeenCalled();
   });
 
-  it("falls back to 'main' for a publication repo not in selectedRepositories (ticket)", async () => {
-    const postPRComment = vi.fn().mockResolvedValue({ url: null });
-    mocks.createRepositoryVCS.mockReturnValue({ postPRComment });
+  it("does not infer a missing publication target as main for a ticket run", async () => {
+    const incomplete = { ...singlePublication(), repositories: [] };
 
-    await executePostPrComment(
+    const result = await executePostPrComment(
       makeNode("post_pr_comment", { body: "hi" }),
       {},
-      makeCtx({ publication: singlePublication() }),
+      makeCtx({ publication: incomplete }),
     );
 
-    expect(mocks.createRepositoryVCS).toHaveBeenCalledWith({
-      provider: "github",
-      repoPath: "acme/other",
-      baseBranch: "main",
-    });
+    expect(result.kind).toBe("failed");
+    if (result.kind === "failed") expect(result.reason).toContain("identity is incomplete");
+    expect(mocks.createRepositoryVCS).not.toHaveBeenCalled();
   });
 
   it("fails on a whitespace-only body without touching VCS", async () => {

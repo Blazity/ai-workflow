@@ -2,10 +2,19 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ActiveRunEntry, RunRegistryAdapter } from "../adapters/run-registry/types.js";
 
 const mockGetRun = vi.fn();
+const mockListWorkflowSteps = vi.fn();
 const mockStopSandboxesByIds = vi.fn();
 const mockTombstoneClarificationCancellation = vi.fn();
+const mockRetireApprovalCancellation = vi.fn();
+const mockReconcileTicketCancellationAfterDrain = vi.fn();
+const mockMoveTicketWhileCancelling = vi.fn();
 vi.mock("workflow/api", () => ({
   getRun: (...args: any[]) => mockGetRun(...args),
+}));
+vi.mock("workflow/runtime", () => ({
+  getWorld: () => ({
+    steps: { list: (...args: any[]) => mockListWorkflowSteps(...args) },
+  }),
 }));
 vi.mock("../sandbox/stop-ticket-sandboxes.js", () => ({
   stopSandboxesByIds: (...args: any[]) => mockStopSandboxesByIds(...args),
@@ -14,6 +23,18 @@ vi.mock("../db/client.js", () => ({ getDb: () => ({ db: true }) }));
 vi.mock("../clarifications/store.js", () => ({
   tombstoneClarificationCancellation: (...args: any[]) =>
     mockTombstoneClarificationCancellation(...args),
+}));
+vi.mock("../approvals/store.js", () => ({
+  retireApprovalCancellation: (...args: any[]) =>
+    mockRetireApprovalCancellation(...args),
+}));
+vi.mock("./ticket-cancellation-reconciliation.js", () => ({
+  reconcileTicketCancellationAfterDrain: (...args: any[]) =>
+    mockReconcileTicketCancellationAfterDrain(...args),
+}));
+vi.mock("./ticket-transition.js", () => ({
+  moveTicketWhileCancelling: (...args: any[]) =>
+    mockMoveTicketWhileCancelling(...args),
 }));
 
 function active(overrides: Partial<ActiveRunEntry> = {}): ActiveRunEntry {
@@ -34,6 +55,8 @@ function makeRegistry(entry: ActiveRunEntry | null = active()): RunRegistryAdapt
   return {
     reserve: vi.fn(),
     bindRun: vi.fn(),
+    beginParking: vi.fn(),
+    finishParking: vi.fn(),
     handoff: vi.fn(),
     get: vi.fn().mockResolvedValue(entry),
     beginCancellation: vi.fn().mockResolvedValue(true),
@@ -53,10 +76,22 @@ function makeRegistry(entry: ActiveRunEntry | null = active()): RunRegistryAdapt
 describe("cancelRun", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockListWorkflowSteps.mockResolvedValue({ data: [], cursor: null, hasMore: false });
     mockStopSandboxesByIds.mockResolvedValue(2);
     mockTombstoneClarificationCancellation.mockResolvedValue({
       matched: false,
       successorOwnerToken: null,
+    });
+    mockRetireApprovalCancellation.mockResolvedValue(0);
+    mockMoveTicketWhileCancelling.mockImplementation(
+      async ({ issueTracker, ticketKey, target }) => {
+        await issueTracker.moveTicket(ticketKey, target);
+      },
+    );
+    mockReconcileTicketCancellationAfterDrain.mockResolvedValue({
+      latestFenceId: null,
+      hasHumanFence: false,
+      mutationVersion: 7,
     });
   });
 
@@ -105,6 +140,7 @@ describe("cancelRun", () => {
       "close",
       "cancel",
       "sandboxes",
+      "tombstone",
       "release",
     ]);
   });
@@ -141,8 +177,274 @@ describe("cancelRun", () => {
       "ticket:jira:PROJ-1",
       "owner-a",
       "run_abc",
+      { latestFenceId: null, mutationVersion: 7 },
     );
     expect(onReleased).toHaveBeenCalledWith("ticket:jira:PROJ-1");
+  });
+
+  it.each(["parking", "parked"] as const)(
+    "cancels an exact clarification predecessor in %s state",
+    async (state) => {
+      mockGetRun.mockReturnValue({ cancel: vi.fn().mockResolvedValue(undefined) });
+      const registry = makeRegistry(active({ state }));
+      const { cancelRun } = await import("./cancel-run.js");
+
+      await expect(cancelRun("PROJ-1", "run_abc", registry)).resolves.toBe(true);
+      expect(registry.beginCancellation).toHaveBeenCalledWith(
+        "ticket:jira:PROJ-1",
+        "owner-a",
+        "run_abc",
+      );
+    },
+  );
+
+  it("retains the cancelling owner while an already-running Workflow step drains", async () => {
+    mockGetRun.mockReturnValue({ cancel: vi.fn().mockResolvedValue(undefined) });
+    mockListWorkflowSteps.mockResolvedValue({
+      data: [{ stepId: "step-publish", status: "running" }],
+    });
+    const registry = makeRegistry();
+
+    const { cancelRun } = await import("./cancel-run.js");
+    await expect(cancelRun("PROJ-1", "run_abc", registry)).resolves.toBe(false);
+
+    expect(mockStopSandboxesByIds).toHaveBeenCalledWith(["sbx-parent", "sbx-child"]);
+    expect(mockListWorkflowSteps).toHaveBeenCalledWith({
+      runId: "run_abc",
+      resolveData: "none",
+      pagination: { limit: 100 },
+    });
+    expect(registry.releaseCancellation).not.toHaveBeenCalled();
+  });
+
+  it("releases the cancelling owner on retry after the Workflow step has drained", async () => {
+    mockGetRun.mockReturnValue({ cancel: vi.fn().mockResolvedValue(undefined) });
+    mockListWorkflowSteps
+      .mockResolvedValueOnce({
+        data: [{ stepId: "step-publish", status: "running" }],
+      })
+      .mockResolvedValueOnce({
+        data: [{ stepId: "step-publish", status: "completed" }],
+      });
+    const registry = makeRegistry(active({ state: "cancelling" }));
+
+    const { cancelRun } = await import("./cancel-run.js");
+    await expect(cancelRun("PROJ-1", "run_abc", registry)).resolves.toBe(false);
+    await expect(cancelRun("PROJ-1", "run_abc", registry)).resolves.toBe(true);
+
+    expect(registry.releaseCancellation).toHaveBeenCalledOnce();
+  });
+
+  it("fails closed when the Workflow step fence cannot be inspected", async () => {
+    mockGetRun.mockReturnValue({ cancel: vi.fn().mockResolvedValue(undefined) });
+    mockListWorkflowSteps.mockRejectedValue(new Error("Workflow world unavailable"));
+    const registry = makeRegistry();
+
+    const { cancelRun } = await import("./cancel-run.js");
+    await expect(cancelRun("PROJ-1", "run_abc", registry)).resolves.toBe(false);
+
+    expect(registry.releaseCancellation).not.toHaveBeenCalled();
+  });
+
+  it("checks every Workflow step page before releasing the owner", async () => {
+    mockGetRun.mockReturnValue({ cancel: vi.fn().mockResolvedValue(undefined) });
+    mockListWorkflowSteps
+      .mockResolvedValueOnce({
+        data: [{ stepId: "step-old", status: "completed" }],
+        cursor: "page-2",
+        hasMore: true,
+      })
+      .mockResolvedValueOnce({
+        data: [{ stepId: "step-late", status: "running" }],
+        cursor: null,
+        hasMore: false,
+      });
+    const registry = makeRegistry();
+
+    const { cancelRun } = await import("./cancel-run.js");
+    await expect(cancelRun("PROJ-1", "run_abc", registry)).resolves.toBe(false);
+
+    expect(mockListWorkflowSteps).toHaveBeenNthCalledWith(2, {
+      runId: "run_abc",
+      resolveData: "none",
+      pagination: { limit: 100, cursor: "page-2" },
+    });
+    expect(registry.releaseCancellation).not.toHaveBeenCalled();
+  });
+
+  it("can release when cancellation won before a pending step started", async () => {
+    mockGetRun.mockReturnValue({ cancel: vi.fn().mockResolvedValue(undefined) });
+    mockListWorkflowSteps.mockResolvedValue({
+      data: [{ stepId: "step-never-started", status: "pending" }],
+      cursor: null,
+      hasMore: false,
+    });
+    const registry = makeRegistry();
+
+    const { cancelRun } = await import("./cancel-run.js");
+    await expect(cancelRun("PROJ-1", "run_abc", registry)).resolves.toBe(true);
+
+    expect(registry.releaseCancellation).toHaveBeenCalledOnce();
+  });
+
+  it("retires questions and approvals created by a step that drained after cancellation", async () => {
+    mockGetRun.mockReturnValue({ cancel: vi.fn().mockResolvedValue(undefined) });
+    const registry = makeRegistry();
+
+    const { cancelRun } = await import("./cancel-run.js");
+    await expect(cancelRun("PROJ-1", "run_abc", registry)).resolves.toBe(true);
+
+    expect(mockTombstoneClarificationCancellation).toHaveBeenCalledTimes(2);
+    expect(mockTombstoneClarificationCancellation).toHaveBeenLastCalledWith(
+      { db: true },
+      {
+        subjectKey: "ticket:jira:PROJ-1",
+        ownerToken: "owner-a",
+        runId: "run_abc",
+      },
+    );
+    expect(mockRetireApprovalCancellation).toHaveBeenCalledWith(
+      { db: true },
+      { ticketKey: "PROJ-1", runId: "run_abc" },
+    );
+    expect(registry.releaseCancellation).toHaveBeenCalledOnce();
+  });
+
+  it("reconciles late ticket mutations after Workflow steps drain and before owner release", async () => {
+    const order: string[] = [];
+    mockGetRun.mockReturnValue({ cancel: vi.fn().mockResolvedValue(undefined) });
+    mockReconcileTicketCancellationAfterDrain.mockImplementation(async () => {
+      order.push("reconcile");
+      return { latestFenceId: null, hasHumanFence: false, mutationVersion: 7 };
+    });
+    const registry = makeRegistry();
+    vi.mocked(registry.releaseCancellation).mockImplementation(async () => {
+      order.push("release");
+      return true;
+    });
+    const issueTracker = {} as any;
+
+    const { cancelRun } = await import("./cancel-run.js");
+    await expect(
+      cancelRun("PROJ-1", "run_abc", registry, issueTracker),
+    ).resolves.toBe(true);
+
+    expect(mockReconcileTicketCancellationAfterDrain).toHaveBeenCalledWith({
+      db: { db: true },
+      issueTracker,
+      ticketKey: "PROJ-1",
+      owner: {
+        subjectKey: "ticket:jira:PROJ-1",
+        ownerToken: "owner-a",
+        runId: "run_abc",
+      },
+    });
+    expect(order).toEqual(["reconcile", "release"]);
+  });
+
+  it("retains the cancelling owner when ticket reconciliation is unconfirmed", async () => {
+    mockGetRun.mockReturnValue({ cancel: vi.fn().mockResolvedValue(undefined) });
+    mockReconcileTicketCancellationAfterDrain.mockRejectedValueOnce(
+      new Error("late provider transition still running"),
+    );
+    const registry = makeRegistry();
+
+    const { cancelRun } = await import("./cancel-run.js");
+    await expect(cancelRun("PROJ-1", "run_abc", registry)).resolves.toBe(false);
+
+    expect(registry.releaseCancellation).not.toHaveBeenCalled();
+  });
+
+  it("does not apply the legacy Backlog move over a newer human cancellation destination", async () => {
+    mockGetRun.mockReturnValue({ cancel: vi.fn().mockResolvedValue(undefined) });
+    mockReconcileTicketCancellationAfterDrain.mockResolvedValueOnce({
+      latestFenceId: 11,
+      hasHumanFence: true,
+      mutationVersion: 9,
+    });
+    const registry = makeRegistry(active({ state: "cancelling" }));
+    const issueTracker = { moveTicket: vi.fn() } as any;
+
+    const { cancelRun } = await import("./cancel-run.js");
+    await expect(
+      cancelRun("PROJ-1", "run_abc", registry, issueTracker, "Backlog"),
+    ).resolves.toBe(true);
+
+    expect(issueTracker.moveTicket).not.toHaveBeenCalled();
+    expect(registry.releaseCancellation).toHaveBeenCalledWith(
+      "ticket:jira:PROJ-1",
+      "owner-a",
+      "run_abc",
+      { latestFenceId: 11, mutationVersion: 9 },
+    );
+  });
+
+  it("skips the compatibility move after the provider confirms that the ticket is gone", async () => {
+    mockGetRun.mockReturnValue({ cancel: vi.fn().mockResolvedValue(undefined) });
+    mockReconcileTicketCancellationAfterDrain.mockResolvedValueOnce({
+      latestFenceId: null,
+      hasHumanFence: false,
+      mutationVersion: 9,
+      ticketMissing: true,
+    });
+    const registry = makeRegistry(active({ state: "cancelling" }));
+    const issueTracker = { moveTicket: vi.fn() } as any;
+
+    const { cancelRun } = await import("./cancel-run.js");
+    await expect(
+      cancelRun("PROJ-1", "run_abc", registry, issueTracker, "Backlog"),
+    ).resolves.toBe(true);
+
+    expect(mockMoveTicketWhileCancelling).not.toHaveBeenCalled();
+    expect(mockReconcileTicketCancellationAfterDrain).toHaveBeenCalledOnce();
+    expect(registry.releaseCancellation).toHaveBeenCalledWith(
+      "ticket:jira:PROJ-1",
+      "owner-a",
+      "run_abc",
+      { latestFenceId: null, mutationVersion: 9 },
+    );
+  });
+
+  it("reconciles again when a human fence races the tracked compatibility move", async () => {
+    mockGetRun.mockReturnValue({ cancel: vi.fn().mockResolvedValue(undefined) });
+    mockReconcileTicketCancellationAfterDrain
+      .mockResolvedValueOnce({
+        latestFenceId: null,
+        hasHumanFence: false,
+        mutationVersion: 7,
+      })
+      .mockResolvedValueOnce({
+        latestFenceId: 12,
+        hasHumanFence: true,
+        mutationVersion: 9,
+      });
+    const registry = makeRegistry(active({ state: "cancelling" }));
+    const issueTracker = { moveTicket: vi.fn().mockResolvedValue(undefined) } as any;
+
+    const { cancelRun } = await import("./cancel-run.js");
+    await expect(
+      cancelRun("PROJ-1", "run_abc", registry, issueTracker, "Backlog"),
+    ).resolves.toBe(true);
+
+    expect(mockMoveTicketWhileCancelling).toHaveBeenCalledOnce();
+    expect(mockReconcileTicketCancellationAfterDrain).toHaveBeenCalledTimes(2);
+    expect(registry.releaseCancellation).toHaveBeenCalledWith(
+      "ticket:jira:PROJ-1",
+      "owner-a",
+      "run_abc",
+      { latestFenceId: 12, mutationVersion: 9 },
+    );
+  });
+
+  it("retains the cancelling owner when post-drain continuation retirement is unconfirmed", async () => {
+    mockGetRun.mockReturnValue({ cancel: vi.fn().mockResolvedValue(undefined) });
+    mockRetireApprovalCancellation.mockRejectedValueOnce(new Error("database unavailable"));
+    const registry = makeRegistry();
+
+    const { cancelRun } = await import("./cancel-run.js");
+    await expect(cancelRun("PROJ-1", "run_abc", registry)).resolves.toBe(false);
+
+    expect(registry.releaseCancellation).not.toHaveBeenCalled();
   });
 
   it("cannot cancel or release a different bound owner", async () => {
@@ -155,6 +457,25 @@ describe("cancelRun", () => {
     expect(mockGetRun).not.toHaveBeenCalled();
     expect(registry.listSandboxes).not.toHaveBeenCalled();
     expect(registry.releaseCancellation).not.toHaveBeenCalled();
+  });
+
+  it("finishes cleanup when cancellation races an already-completed Workflow run", async () => {
+    mockGetRun.mockReturnValue({
+      cancel: vi.fn().mockRejectedValue(new Error("run is already completed")),
+      status: Promise.resolve("completed"),
+    });
+    const registry = makeRegistry(active({ state: "cancelling" }));
+
+    const { cancelRun } = await import("./cancel-run.js");
+    await expect(cancelRun("PROJ-1", "run_abc", registry)).resolves.toBe(true);
+
+    expect(mockStopSandboxesByIds).toHaveBeenCalledWith(["sbx-parent", "sbx-child"]);
+    expect(registry.releaseCancellation).toHaveBeenCalledWith(
+      "ticket:jira:PROJ-1",
+      "owner-a",
+      "run_abc",
+      { latestFenceId: null, mutationVersion: 7 },
+    );
   });
 
   it("keeps ownership and sandboxes when workflow cancellation is not confirmed", async () => {
@@ -219,6 +540,7 @@ describe("cancelRun", () => {
       "ticket:jira:PROJ-1",
       "owner-successor",
       null,
+      { latestFenceId: null, mutationVersion: 7 },
     );
   });
 
@@ -314,6 +636,7 @@ describe("cancelRun", () => {
       "ticket:jira:PROJ-1",
       "owner-successor",
       null,
+      { latestFenceId: null, mutationVersion: 7 },
     );
   });
 

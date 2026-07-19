@@ -1,4 +1,5 @@
 import type { SelectedRepository } from "../adapters/vcs/repository-directory.js";
+import type { PullRequestHead } from "../adapters/vcs/types.js";
 import type { HumanDecision } from "../lib/human-decisions-memory.js";
 import {
   publishTrustedWorkspaceFromSandbox,
@@ -22,11 +23,19 @@ import {
   RunBudgetError,
   type RunBudgetObservation,
 } from "./run-budget.js";
+import { isRunControlError } from "./run-control-error.js";
+import {
+  assertOpenSourcePullRequest,
+  isSourcePullRequestRepository,
+  type SourcePullRequestIdentity,
+} from "./source-pull-request.js";
 
 export interface FinalizedBranch {
   provider: SelectedRepository["provider"];
   repoPath: string;
   branchName: string;
+  /** Present for ledger-backed finalized/published results. */
+  defaultBranch?: string;
   expectedHead: string;
   pushedHead: string;
 }
@@ -73,17 +82,14 @@ export interface PublicationRecoveryOptions {
 
 export async function finalizeWorkspacePublication(input: {
   runId: string;
+  subjectKey: string;
+  ownerToken: string;
   blockId: string;
   sandboxId: string;
   ticketKey: string;
   workspaceManifest: WorkspaceManifest;
   clarifications?: HumanDecision[];
-  sourcePullRequest?: {
-    provider: SelectedRepository["provider"];
-    repoPath: string;
-    prId: number;
-    headSha: string;
-  };
+  sourcePullRequest?: SourcePullRequestIdentity;
 }): Promise<WorkspacePublicationResult> {
   const creation = await createPublicationAttemptStep({
     runId: input.runId,
@@ -98,6 +104,7 @@ export async function finalizeWorkspacePublication(input: {
       try {
         reconciled = await reconcilePushingPublicationStep(creation.attempt);
       } catch (error) {
+        if (isRunControlError(error)) throw error;
         return terminalPublicationFailure(
           creation.attempt.id,
           exhaustedPublicationReason(error),
@@ -125,27 +132,31 @@ export async function finalizeWorkspacePublication(input: {
     if (input.clarifications && input.clarifications.length > 0) {
       await writeHumanDecisionsMemory(input.sandboxId, input.ticketKey, input.clarifications);
     }
-
-    if (input.sourcePullRequest) {
-      try {
-        const currentHead = await verifyPullRequestHeadStep(input.sourcePullRequest);
-        assertPullRequestHead(input.sourcePullRequest, currentHead);
-      } catch (err) {
-        const reason = err instanceof Error ? err.message : String(err);
-        await failPublicationStep({
-          attemptId,
-          reason,
-          repository: {
-            provider: input.sourcePullRequest.provider,
-            repoPath: input.sourcePullRequest.repoPath,
-          },
-        });
-        return failedResult(attemptId, reason, creation.attempt.repositories, []);
-      }
-    }
-
-    await markPublicationPushingStep(attemptId);
   }
+
+  // A retry may resume an interrupted partial push long after the triggering
+  // review/check. Re-read all mutable source-PR identity immediately before
+  // every push attempt, including recovery.
+  if (input.sourcePullRequest) {
+    try {
+      const current = await verifySourcePullRequestStep(input.sourcePullRequest);
+      assertOpenSourcePullRequest(input.sourcePullRequest, current);
+    } catch (err) {
+      if (isRunControlError(err)) throw err;
+      const reason = err instanceof Error ? err.message : String(err);
+      await failPublicationStep({
+        attemptId,
+        reason,
+        repository: {
+          provider: input.sourcePullRequest.provider,
+          repoPath: input.sourcePullRequest.repoPath,
+        },
+      });
+      return failedResult(attemptId, reason, creation.attempt.repositories, []);
+    }
+  }
+
+  if (!resumingPush) await markPublicationPushingStep(attemptId);
 
   let pushResult: TrustedWorkspacePushResult;
   try {
@@ -153,14 +164,20 @@ export async function finalizeWorkspacePublication(input: {
       sourceSandboxId: input.sandboxId,
       publicationAttemptId: attemptId,
       workspaceManifest: input.workspaceManifest,
+      subjectKey: input.subjectKey,
+      ownerToken: input.ownerToken,
+      runId: input.runId,
+      ...(input.sourcePullRequest ? { sourcePullRequest: input.sourcePullRequest } : {}),
     });
     await recordPushOutcomeStep(attemptId, pushResult);
   } catch (err) {
+    if (isRunControlError(err)) throw err;
     const reason = err instanceof Error ? err.message : String(err);
     let latest: PublicationAttemptRecord | null;
     try {
       latest = await loadPublicationAttemptStep(attemptId);
     } catch (loadError) {
+      if (isRunControlError(loadError)) throw loadError;
       return terminalPublicationFailure(
         attemptId,
         exhaustedPublicationReason(loadError, reason),
@@ -179,6 +196,7 @@ export async function finalizeWorkspacePublication(input: {
           reconciled.attempt.repositories,
         );
       } catch (reconcileError) {
+        if (isRunControlError(reconcileError)) throw reconcileError;
         return terminalPublicationFailure(
           attemptId,
           exhaustedPublicationReason(reconcileError, reason),
@@ -235,8 +253,11 @@ export async function openPullRequestsForPublication(
   input: {
     attemptId: string;
     runId: string;
+    subjectKey: string;
+    ownerToken: string;
     ticketKey: string;
     title: string;
+    sourcePullRequest?: SourcePullRequestIdentity;
   },
   options: PublicationRecoveryOptions = {},
 ): Promise<WorkspacePublicationResult> {
@@ -251,13 +272,17 @@ export async function openPullRequestsForPublication(
 async function openPullRequestsForPublicationOnce(input: {
   attemptId: string;
   runId: string;
+  subjectKey: string;
+  ownerToken: string;
   ticketKey: string;
   title: string;
+  sourcePullRequest?: SourcePullRequestIdentity;
 }): Promise<OpenPullRequestsAttemptResult> {
   let attempt: PublicationAttemptRecord | null;
   try {
     attempt = await loadPublicationAttemptStep(input.attemptId);
   } catch (error) {
+    if (isRunControlError(error)) throw error;
     return recoverableResult(
       input.attemptId,
       error instanceof Error ? error.message : String(error),
@@ -286,10 +311,44 @@ async function openPullRequestsForPublicationOnce(input: {
     );
   }
 
+  const expectedSource = input.sourcePullRequest
+    ? sourcePullRequestAfterPublication(input.sourcePullRequest, attempt)
+    : null;
+  if (expectedSource) {
+    let currentSource: Awaited<ReturnType<typeof verifySourcePullRequestStep>>;
+    try {
+      currentSource = await verifySourcePullRequestStep(expectedSource);
+    } catch (error) {
+      if (isRunControlError(error)) throw error;
+      const reason = error instanceof Error ? error.message : String(error);
+      if (!isDeterministicProviderFailure(error)) {
+        return recoverableResult(attempt.id, reason, attempt.repositories, prLinksFromAttempt(attempt));
+      }
+      return terminalSourcePullRequestFailure(
+        attempt,
+        expectedSource,
+        reason,
+        prLinksFromAttempt(attempt),
+      );
+    }
+    try {
+      assertOpenSourcePullRequest(expectedSource, currentSource);
+    } catch (error) {
+      if (isRunControlError(error)) throw error;
+      return terminalSourcePullRequestFailure(
+        attempt,
+        expectedSource,
+        error instanceof Error ? error.message : String(error),
+        prLinksFromAttempt(attempt),
+      );
+    }
+  }
+
   if (attempt.status === "finalized") {
     try {
       await markPublicationCreatingPrsStep(attempt.id);
     } catch (error) {
+      if (isRunControlError(error)) throw error;
       return recoverableResult(
         attempt.id,
         error instanceof Error ? error.message : String(error),
@@ -303,6 +362,9 @@ async function openPullRequestsForPublicationOnce(input: {
   for (const repository of attempt.repositories.filter(
     (repo) => repo.changed && repo.pushedHead !== null,
   )) {
+    const isSourceRepository = Boolean(
+      expectedSource && isSourcePullRequestRepository(expectedSource, repository),
+    );
     let pr = repository.pr ? prLinkFromRepository(repository) : null;
     if (!pr) {
       try {
@@ -311,6 +373,7 @@ async function openPullRequestsForPublicationOnce(input: {
           repository: selectedRepositoryFromAttempt(repository),
         });
       } catch (err) {
+        if (isRunControlError(err)) throw err;
         const reason = err instanceof Error ? err.message : String(err);
         return isDeterministicProviderFailure(err)
           ? terminalOpenPullRequestFailure(attempt, repository, reason, prs)
@@ -321,16 +384,28 @@ async function openPullRequestsForPublicationOnce(input: {
         try {
           await recordPullRequestStep(attempt.id, pr);
         } catch (err) {
+          if (isRunControlError(err)) throw err;
           const reason = err instanceof Error ? err.message : String(err);
           return recoverableOpenPullRequestFailure(attempt, repository, reason, prs);
         }
       }
     }
 
+    if (isSourceRepository && (!pr || pr.id !== expectedSource!.prId)) {
+      const observed = pr ? `#${pr.id}` : "no open PR/MR";
+      return terminalSourcePullRequestFailure(
+        attempt,
+        expectedSource!,
+        `exact source PR/MR #${expectedSource!.prId} is unavailable; found ${observed}`,
+        prs,
+      );
+    }
+
     let currentBranchHead: string;
     try {
       currentBranchHead = await verifyFinalizedBranchHeadStep(repository);
     } catch (err) {
+      if (isRunControlError(err)) throw err;
       const reason = err instanceof Error ? err.message : String(err);
       return isDeterministicProviderFailure(err)
         ? terminalOpenPullRequestFailure(attempt, repository, reason, prs)
@@ -340,6 +415,7 @@ async function openPullRequestsForPublicationOnce(input: {
     try {
       assertFinalizedBranchHead(repository, currentBranchHead);
     } catch (err) {
+      if (isRunControlError(err)) throw err;
       const reason = err instanceof Error ? err.message : String(err);
       return terminalOpenPullRequestFailure(attempt, repository, reason, prs);
     }
@@ -355,6 +431,7 @@ async function openPullRequestsForPublicationOnce(input: {
           targetBranch: repository.defaultBranch,
         });
       } catch (err) {
+        if (isRunControlError(err)) throw err;
         const reason = err instanceof Error ? err.message : String(err);
         return recoverableOpenPullRequestFailure(attempt, repository, reason, prs);
       }
@@ -365,8 +442,14 @@ async function openPullRequestsForPublicationOnce(input: {
         branchName: repository.branchName,
         repository: selectedRepositoryFromAttempt(repository),
         title: input.title,
+        owner: {
+          subjectKey: input.subjectKey,
+          ownerToken: input.ownerToken,
+          runId: input.runId,
+        },
       });
     } catch (err) {
+      if (isRunControlError(err)) throw err;
       const reason = err instanceof Error ? err.message : String(err);
       return isDeterministicProviderFailure(err)
         ? terminalOpenPullRequestFailure(attempt, repository, reason, prs)
@@ -378,19 +461,27 @@ async function openPullRequestsForPublicationOnce(input: {
       try {
         await recordPullRequestStep(attempt.id, pr);
       } catch (err) {
+        if (isRunControlError(err)) throw err;
         const reason = err instanceof Error ? err.message : String(err);
         return recoverableOpenPullRequestFailure(attempt, repository, reason, prs);
       }
     }
-    let currentPrHead: string;
+    let currentPr: PullRequestHead;
     try {
-      currentPrHead = await verifyPullRequestHeadStep({
-        provider: repository.provider,
-        repoPath: repository.repoPath,
-        prId: pr.id,
-        headSha: repository.pushedHead!,
-      });
+      if (isSourceRepository) {
+        const currentSource = await verifySourcePullRequestStep(expectedSource!);
+        assertOpenSourcePullRequest(expectedSource!, currentSource);
+        currentPr = currentSource;
+      } else {
+        currentPr = await verifyPullRequestStep({
+          provider: repository.provider,
+          repoPath: repository.repoPath,
+          prId: pr.id,
+          targetBranch: repository.defaultBranch,
+        });
+      }
     } catch (err) {
+      if (isRunControlError(err)) throw err;
       const reason = err instanceof Error ? err.message : String(err);
       return isDeterministicProviderFailure(err)
         ? terminalOpenPullRequestFailure(attempt, repository, reason, prs)
@@ -398,16 +489,18 @@ async function openPullRequestsForPublicationOnce(input: {
     }
 
     try {
-      assertPullRequestHead(
+      assertOpenPublicationPullRequest(
         {
           provider: repository.provider,
           repoPath: repository.repoPath,
           prId: pr.id,
           headSha: repository.pushedHead!,
+          targetBranch: repository.defaultBranch,
         },
-        currentPrHead,
+        currentPr,
       );
     } catch (err) {
+      if (isRunControlError(err)) throw err;
       const reason = err instanceof Error ? err.message : String(err);
       return terminalOpenPullRequestFailure(attempt, repository, reason, prs);
     }
@@ -420,6 +513,7 @@ async function openPullRequestsForPublicationOnce(input: {
         targetBranch: repository.defaultBranch,
       });
     } catch (err) {
+      if (isRunControlError(err)) throw err;
       const reason = err instanceof Error ? err.message : String(err);
       return recoverableOpenPullRequestFailure(attempt, repository, reason, prs);
     }
@@ -434,6 +528,7 @@ async function openPullRequestsForPublicationOnce(input: {
   try {
     await markPublicationPublishedStep(attempt.id);
   } catch (error) {
+    if (isRunControlError(error)) throw error;
     const reason = error instanceof Error ? error.message : String(error);
     return recoverableResult(attempt.id, reason, attempt.repositories, prs);
   }
@@ -441,6 +536,7 @@ async function openPullRequestsForPublicationOnce(input: {
   try {
     reloaded = await loadPublicationAttemptStep(attempt.id);
   } catch (error) {
+    if (isRunControlError(error)) throw error;
     return recoverableResult(
       attempt.id,
       error instanceof Error ? error.message : String(error),
@@ -471,6 +567,39 @@ async function openPullRequestsForPublicationOnce(input: {
     reloaded.repositories,
     prs,
   );
+}
+
+function sourcePullRequestAfterPublication(
+  source: SourcePullRequestIdentity,
+  attempt: PublicationAttemptRecord,
+): SourcePullRequestIdentity {
+  const repository = attempt.repositories.find((candidate) =>
+    isSourcePullRequestRepository(source, candidate),
+  );
+  return {
+    ...source,
+    headSha: repository?.pushedHead ?? source.headSha,
+  };
+}
+
+async function terminalSourcePullRequestFailure(
+  attempt: PublicationAttemptRecord,
+  source: SourcePullRequestIdentity,
+  reason: string,
+  prs: WorkflowPrLink[],
+): Promise<WorkspacePublicationResult> {
+  const repository = attempt.repositories.find((candidate) =>
+    isSourcePullRequestRepository(source, candidate),
+  );
+  if (repository) {
+    return terminalOpenPullRequestFailure(attempt, repository, reason, prs);
+  }
+  await failPublicationStep({
+    attemptId: attempt.id,
+    reason,
+    repository: { provider: source.provider, repoPath: source.repoPath },
+  });
+  return failedResult(attempt.id, reason, attempt.repositories, prs);
 }
 
 function isDeterministicProviderFailure(error: unknown): boolean {
@@ -543,37 +672,61 @@ async function createPublicationAttemptStep(input: {
 }
 createPublicationAttemptStep.maxRetries = 0;
 
-async function verifyPullRequestHeadStep(input: {
+async function verifySourcePullRequestStep(input: SourcePullRequestIdentity) {
+  "use step";
+  const { createRepositoryVcsRuntime } = await import("../lib/vcs-runtime.js");
+  return createRepositoryVcsRuntime({
+    provider: input.provider,
+    repoPath: input.repoPath,
+    baseBranch: input.baseRef,
+  }).vcs.getPRHead(input.prId);
+}
+verifySourcePullRequestStep.maxRetries = 3;
+
+async function verifyPullRequestStep(input: {
   provider: SelectedRepository["provider"];
   repoPath: string;
   prId: number;
-  headSha: string;
-}): Promise<string> {
+  targetBranch: string;
+}): Promise<PullRequestHead> {
   "use step";
   const { createRepositoryVcsRuntime } = await import("../lib/vcs-runtime.js");
-  const currentHead = await createRepositoryVcsRuntime({
+  return createRepositoryVcsRuntime({
     provider: input.provider,
     repoPath: input.repoPath,
-    baseBranch: "main",
-  }).vcs.getPRHeadSha(input.prId);
-  return currentHead;
+    baseBranch: input.targetBranch,
+  }).vcs.getPRHead(input.prId);
 }
-verifyPullRequestHeadStep.maxRetries = 3;
+verifyPullRequestStep.maxRetries = 3;
 
-function assertPullRequestHead(
+function assertOpenPublicationPullRequest(
   input: {
     provider: SelectedRepository["provider"];
     repoPath: string;
     prId: number;
     headSha: string;
+    targetBranch: string;
   },
-  currentHead: string,
+  current: PullRequestHead,
 ): void {
-  if (currentHead === input.headSha) return;
-  throw new Error(
-    `stale PR/MR head for ${input.provider}:${input.repoPath} #${input.prId}: ` +
-      `triggered at ${input.headSha}, current head is ${currentHead}`,
-  );
+  const identity = `${input.provider}:${input.repoPath} #${input.prId}`;
+  if (current.headSha !== input.headSha) {
+    throw new Error(
+      `stale PR/MR head for ${identity}: published at ${input.headSha}, ` +
+        `current head is ${current.headSha}`,
+    );
+  }
+  if (current.baseRef !== input.targetBranch) {
+    throw new Error(
+      `stale PR/MR target for ${identity}: published for ${input.targetBranch}, ` +
+        `current target is ${current.baseRef}`,
+    );
+  }
+  if (current.state !== "open") {
+    throw new Error(
+      `publication PR/MR ${identity} is ${current.state}; publication requires it to be open`,
+    );
+  }
 }
 
 async function markPublicationPushingStep(attemptId: string): Promise<void> {
@@ -664,6 +817,7 @@ async function reconcilePushingPublicationStep(
         baseBranch: repository.defaultBranch,
       }).vcs.getBranchSha(repository.branchName);
     } catch (error) {
+      if (isRunControlError(error)) throw error;
       throw new Error(
         `unable to reconcile ${repository.provider}:${repository.repoPath}: ` +
           (error instanceof Error ? error.message : String(error)),
@@ -848,7 +1002,9 @@ async function recoverableOpenPullRequestFailure(
     attemptId: attempt.id,
     reason,
     repository: { provider: repository.provider, repoPath: repository.repoPath },
-  }).catch(() => {});
+  }).catch((error) => {
+    if (isRunControlError(error)) throw error;
+  });
   return recoverableResult(attempt.id, reason, attempt.repositories, prs);
 }
 
@@ -958,6 +1114,7 @@ function finalizedBranches(repositories: PublicationRepositoryRecord[]): Finaliz
             provider: repository.provider,
             repoPath: repository.repoPath,
             branchName: repository.branchName,
+            defaultBranch: repository.defaultBranch,
             expectedHead: repository.expectedHead,
             pushedHead: repository.pushedHead,
           },

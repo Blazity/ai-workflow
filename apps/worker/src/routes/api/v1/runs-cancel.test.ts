@@ -165,4 +165,23 @@ describe("POST /api/v1/runs/:runId/cancel", () => {
       expect.any(Function),
     );
   });
+
+  it.each(["parking", "parked"])(
+    "finds and cancels a clarification predecessor in %s state",
+    async (state) => {
+      mocks.listAll.mockResolvedValue([
+        {
+          subjectKey: "ticket:jira:AIW-1",
+          ticketKey: "AIW-1",
+          ownerToken: "owner-ticket",
+          runId: "run-ticket",
+          state,
+          kind: "ticket",
+        },
+      ]);
+
+      expect((await cancel("run-ticket")).status).toBe(200);
+      expect(mocks.cancelRun).toHaveBeenCalled();
+    },
+  );
 });

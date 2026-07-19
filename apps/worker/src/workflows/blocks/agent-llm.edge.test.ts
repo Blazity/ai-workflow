@@ -37,7 +37,10 @@ const mocks = vi.hoisted(() => ({
   createAgentAdapter: vi.fn(),
 }));
 
-vi.mock("workflow", () => ({ sleep: mocks.sleep }));
+vi.mock("workflow", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("workflow")>()),
+  sleep: mocks.sleep,
+}));
 vi.mock("../../sandbox/poll-agent.js", () => ({
   checkPhaseDone: mocks.checkPhaseDone,
   collectPhase: mocks.collectPhase,

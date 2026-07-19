@@ -59,6 +59,30 @@ export function makePrPayload(overrides: Partial<PrTriggerPayload> = {}): PrTrig
   };
 }
 
+/** Serialized shapes model errors crossing a Workflow step/VM boundary. */
+export function runControlErrorCases(): Array<[string, Error]> {
+  return [
+    ["budget exhaustion", namedError("RunBudgetError", "budget exceeded")],
+    [
+      "exact-owner loss",
+      namedError(
+        "ActiveRunOwnerError",
+        "Provider mutation requires the exact active run owner.",
+      ),
+    ],
+    [
+      "Workflow cancellation",
+      namedError("WorkflowRunCancelledError", 'Workflow run "wrun-1" cancelled'),
+    ],
+  ];
+}
+
+function namedError(name: string, message: string): Error {
+  const error = new Error(message);
+  error.name = name;
+  return error;
+}
+
 /** Build an EngineCtx with vi.fn() callbacks for executor tests. */
 export function makeCtx(overrides: Partial<EngineCtx> = {}): EngineCtx {
   return {

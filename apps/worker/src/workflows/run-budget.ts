@@ -42,7 +42,54 @@ export class RunBudgetError extends Error {
 }
 
 export function isRunBudgetError(error: unknown): error is RunBudgetError {
-  return error instanceof RunBudgetError;
+  return isRunBudgetControlError(error) && "failure" in error && isRunBudgetFailure(error.failure);
+}
+
+/** Workflow's generic Error rehydration preserves name/message even when an
+ * older deployment did not retain the structured failure. It must still stop
+ * graph execution, but callers may consume metadata only through the stricter
+ * `isRunBudgetError` guard. */
+export function isRunBudgetControlError(error: unknown): error is Error {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "name" in error &&
+    error.name === "RunBudgetError" &&
+    "message" in error &&
+    typeof error.message === "string"
+  );
+}
+
+export function runBudgetFailureFromError(error: unknown): RunBudgetFailure | null {
+  return isRunBudgetError(error) ? error.failure : null;
+}
+
+function isRunBudgetFailure(value: unknown): value is RunBudgetFailure {
+  if (typeof value !== "object" || value === null) return false;
+  const failure = value as Partial<Record<keyof RunBudgetFailure, unknown>>;
+  if (
+    typeof failure.reason !== "string" ||
+    !isNonNegativeFiniteNumber(failure.limit)
+  ) {
+    return false;
+  }
+  if (failure.status === "budget_exceeded") {
+    return (
+      (failure.metric === "duration" ||
+        failure.metric === "tokens" ||
+        failure.metric === "cost") &&
+      isNonNegativeFiniteNumber(failure.consumed)
+    );
+  }
+  return (
+    failure.status === "budget_unverifiable" &&
+    (failure.metric === "tokens" || failure.metric === "cost") &&
+    failure.consumed === null
+  );
+}
+
+function isNonNegativeFiniteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0;
 }
 
 export function createRunBudgetState(): RunBudgetState {

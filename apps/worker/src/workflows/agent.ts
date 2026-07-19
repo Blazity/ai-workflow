@@ -11,6 +11,7 @@ import type {
   TicketAttachment,
 } from "../adapters/issue-tracker/types.js";
 import type { TicketEvent } from "../adapters/messaging/types.js";
+import type { ActiveRunOwner } from "../lib/active-run-owner.js";
 import type { DownloadedAttachment } from "../sandbox/attachments.js";
 import type { SelectedRepository } from "../adapters/vcs/repository-directory.js";
 import {
@@ -62,11 +63,13 @@ import {
   missingRequiredPriceFailure,
   observeRunBudget,
   recordBudgetUsage,
+  runBudgetFailureFromError,
   type RunBudgetLimits,
   type RunBudgetFailure,
   type RunBudgetObservation,
   type RunBudgetState,
 } from "./run-budget.js";
+import { isRunControlError } from "./run-control-error.js";
 import { execute as executeFetchPrContext } from "./blocks/fetch-pr-context.js";
 import { execute as executeRunChecks } from "./blocks/run-checks.js";
 import { execute as executePostTicketComment } from "./blocks/post-ticket-comment.js";
@@ -78,6 +81,7 @@ import { BLOCK_TYPE_SPECS, isTriggerBlockType } from "@shared/contracts";
 import type {
   BlockOutput,
   BlockRunState,
+  JsonValue,
   WorkflowBlockType,
   WorkflowDefinitionNode,
 } from "@shared/contracts";
@@ -398,6 +402,7 @@ export async function ensurePlanningAgentSandboxForBlock(
   try {
     return { kind: "ready", sandboxId: await ensureAgentSandbox(ctx, kind, model) };
   } catch (error) {
+    if (isRunControlError(error)) throw error;
     return {
       kind: "failed",
       output: { status: "failed" },
@@ -434,6 +439,72 @@ function triggerTypeFor(entry: AgentWorkflowInput): WorkflowBlockType {
 }
 
 export function triggerOutputFor(entry: AgentWorkflowInput): BlockOutput {
+  return triggerOutputWithTicketContext(entry);
+}
+
+interface WorkflowTicketInputContext {
+  identifier: string;
+  title: string;
+  description: string;
+  acceptanceCriteria: string;
+  labels: string[];
+  comments: Array<{ author: string; body: string; createdAt?: string }>;
+  priorAnswers?: Array<{
+    questions: string[];
+    answer: string;
+    answeredBy?: string;
+    answeredAt?: string;
+  }>;
+  clarifications?: Array<{
+    questions: string[];
+    answer: string;
+    answeredBy?: string;
+    answeredAt?: string;
+  }>;
+}
+
+function ticketBindingFields(
+  entry: AgentWorkflowInput,
+  ticket: WorkflowTicketInputContext | undefined,
+): Record<string, JsonValue> {
+  if (
+    !ticket ||
+    (entry.kind === "pr_trigger" &&
+      (entry.scope !== "workflow_owned" || entry.ticketKey === undefined))
+  ) {
+    return {};
+  }
+  const comments = ticket.comments.map((comment) => ({
+    author: comment.author,
+    body: comment.body,
+    createdAt: comment.createdAt ?? "",
+  }));
+  const priorAnswers = (ticket.clarifications ?? []).map((answer) => ({
+    questions: answer.questions,
+    answer: answer.answer,
+    ...(answer.answeredBy === undefined ? {} : { answeredBy: answer.answeredBy }),
+    ...(answer.answeredAt === undefined ? {} : { answeredAt: answer.answeredAt }),
+  }));
+  return {
+    ticket: {
+      identifier: ticket.identifier,
+      title: ticket.title,
+      description: ticket.description,
+      acceptanceCriteria: ticket.acceptanceCriteria,
+      labels: ticket.labels,
+      comments,
+      priorAnswers,
+    },
+    comments,
+    priorAnswers,
+  };
+}
+
+export function triggerOutputWithTicketContext(
+  entry: AgentWorkflowInput,
+  ticket?: WorkflowTicketInputContext,
+): BlockOutput {
+  const ticketFields = ticketBindingFields(entry, ticket);
   if (entry.kind === "pr_trigger") {
     const { pr } = entry;
     const output: BlockOutput = {
@@ -451,6 +522,7 @@ export function triggerOutputFor(entry: AgentWorkflowInput): BlockOutput {
       title: pr.title,
       author: pr.author,
       isDraft: pr.isDraft,
+      ...ticketFields,
     };
     if (pr.failedChecks) {
       output.failedChecks = pr.failedChecks.map((check) => ({
@@ -477,9 +549,58 @@ export function triggerOutputFor(entry: AgentWorkflowInput): BlockOutput {
       approvedPlan: entry.approvedPlan.markdown,
       approver: entry.approval.approver,
       approvedAt: entry.approval.approvedAt,
+      ...ticketFields,
     };
   }
-  return { status: "fired", ticketKey: entry.ticketKey };
+  return { status: "fired", ticketKey: entry.ticketKey, ...ticketFields };
+}
+
+export function resolveImplementationPlanInput(
+  resolvedInputs: Record<string, unknown>,
+  legacyPlan: string,
+): string {
+  if (!Object.prototype.hasOwnProperty.call(resolvedInputs, "plan")) return legacyPlan;
+  if (typeof resolvedInputs.plan !== "string") {
+    throw new Error('Implementation input "plan" must be a string.');
+  }
+  return resolvedInputs.plan;
+}
+
+function resolveAgentTicketInput(
+  resolvedInputs: Record<string, unknown>,
+  fallback: WorkflowTicketInputContext,
+): WorkflowTicketInputContext {
+  if (!Object.prototype.hasOwnProperty.call(resolvedInputs, "ticket")) return fallback;
+  if (
+    resolvedInputs.ticket === null ||
+    typeof resolvedInputs.ticket !== "object" ||
+    Array.isArray(resolvedInputs.ticket)
+  ) {
+    throw new Error('Agent input "ticket" must be a ticket context object.');
+  }
+  const ticket = resolvedInputs.ticket as WorkflowTicketInputContext;
+  const comments = Object.prototype.hasOwnProperty.call(resolvedInputs, "comments")
+    ? resolvedInputs.comments
+    : ticket.comments;
+  const priorAnswers = Object.prototype.hasOwnProperty.call(resolvedInputs, "priorAnswers")
+    ? resolvedInputs.priorAnswers
+    : ticket.priorAnswers ?? ticket.clarifications ?? [];
+  if (!Array.isArray(comments)) {
+    throw new Error('Planning input "comments" must be an array.');
+  }
+  if (!Array.isArray(priorAnswers)) {
+    throw new Error('Planning input "priorAnswers" must be an array.');
+  }
+  return {
+    ...ticket,
+    comments: comments as WorkflowTicketInputContext["comments"],
+    ...(priorAnswers.length === 0
+      ? {}
+      : {
+          clarifications:
+            priorAnswers as NonNullable<WorkflowTicketInputContext["clarifications"]>,
+        }),
+  };
 }
 
 // --- Step Functions ---
@@ -687,18 +808,23 @@ async function parseReviewStep(
   return { output: a.parseReviewOutput(raw, structured), usage: a.extractUsage(raw, structured) };
 }
 
-async function postPrLinksComment(
+export async function postPrLinksComment(
   ticketId: string,
   prs: Array<{ provider: SelectedRepository["provider"]; repoPath: string; url: string; id: number }>,
+  owner: ActiveRunOwner,
   heading = "Pull requests ready for review:",
 ): Promise<void> {
   "use step";
+  const { getDb } = await import("../db/client.js");
+  const { assertActiveRunOwner } = await import("../lib/active-run-owner.js");
   const { createStepAdapters } = await import("../lib/step-adapters.js");
   const { issueTracker } = createStepAdapters();
   const lines = prs.map((pr) => `- ${pr.provider}:${pr.repoPath}: #${pr.id} ${pr.url}`);
   try {
+    await assertActiveRunOwner(getDb(), owner);
     await issueTracker.postComment(ticketId, `${heading}\n${lines.join("\n")}`);
   } catch (err) {
+    if (isRunControlError(err)) throw err;
     const { logger } = await import("../lib/logger.js");
     logger.warn(
       { ticketId, prs, err: errorMessage(err) },
@@ -708,18 +834,45 @@ async function postPrLinksComment(
 }
 postPrLinksComment.maxRetries = 0;
 
-async function postTicketComment(ticketId: string, comment: string): Promise<void> {
+export async function postTicketComment(
+  ticketId: string,
+  comment: string,
+  owner: ActiveRunOwner,
+): Promise<void> {
   "use step";
+  const { getDb } = await import("../db/client.js");
+  const { assertActiveRunOwner } = await import("../lib/active-run-owner.js");
   const { createStepAdapters } = await import("../lib/step-adapters.js");
   const { issueTracker } = createStepAdapters();
+  await assertActiveRunOwner(getDb(), owner);
   await issueTracker.postComment(ticketId, comment);
 }
 
-async function notifyTicket(ticketKey: string, event: TicketEvent) {
+export async function notifyTicket(
+  ticketKey: string,
+  event: TicketEvent,
+  owner: ActiveRunOwner,
+) {
   "use step";
+  const { getDb } = await import("../db/client.js");
+  const { assertActiveRunOwner } = await import("../lib/active-run-owner.js");
   const { createStepAdapters } = await import("../lib/step-adapters.js");
   const { messaging } = createStepAdapters();
+  await assertActiveRunOwner(getDb(), owner);
   await messaging.notifyForTicket(ticketKey, event);
+}
+
+export async function notifyTicketBestEffort(
+  ticketKey: string,
+  event: TicketEvent,
+  owner: ActiveRunOwner,
+): Promise<void> {
+  try {
+    await notifyTicket(ticketKey, event, owner);
+  } catch (error) {
+    if (isRunControlError(error)) throw error;
+    console.error(`Ticket notification failed for ${ticketKey}:`, error);
+  }
 }
 
 async function logPhaseFailure(
@@ -736,7 +889,14 @@ async function logPhaseFailure(
 }
 logPhaseFailure.maxRetries = 0;
 
-async function parkForClarificationStep(
+export function clarificationExitDisposition(providerParked: boolean): {
+  outcome: "awaiting";
+  notify: boolean;
+} {
+  return { outcome: "awaiting", notify: providerParked };
+}
+
+export async function parkForClarificationStep(
   ticketId: string,
   backlogTarget: IssueTrackerMoveTarget,
   clarificationRequestId: string,
@@ -744,19 +904,19 @@ async function parkForClarificationStep(
 ): Promise<boolean> {
   "use step";
   const { getDb } = await import("../db/client.js");
-  const { getClarification } = await import("../clarifications/store.js");
+  const { claimClarificationProviderParking } = await import(
+    "../clarifications/store.js"
+  );
   const { createStepAdapters } = await import("../lib/step-adapters.js");
   const { NEEDS_CLARIFICATION_LABEL } = await import("../lib/labels.js");
-  // The pending row is answerable the moment it exists, so a user can answer
-  // (claiming the ticket into the AI column and starting the resume run) before
-  // this park runs. Re-read the row first: if it is no longer pending the answer
-  // already owns the ticket, so skip the label add and backlog move that would
-  // otherwise yank the ticket back and get the resume run cancelled. Return
-  // false so the caller sends no notify and records the run as done, not
-  // awaiting.
+  const { updateTicketLabelsWithIntent } = await import(
+    "../lib/ticket-label-mutation.js"
+  );
   const db = getDb();
-  const row = await getClarification(db, clarificationRequestId);
-  if (!row || row.status !== "pending") {
+  // Claim the unanswerable provider phase before any external mutation. If
+  // recovery already advanced it, skip Jira entirely; if this call wins, the
+  // question cannot publish until the provider phase is completed below.
+  if (!(await claimClarificationProviderParking(db, clarificationRequestId))) {
     return false;
   }
   const { issueTracker } = createStepAdapters();
@@ -766,10 +926,16 @@ async function parkForClarificationStep(
   // failure never blocks the park.
   if (typeof issueTracker.updateLabels === "function") {
     try {
-      await issueTracker.updateLabels(ticketId, {
-        add: [NEEDS_CLARIFICATION_LABEL],
+      await updateTicketLabelsWithIntent({
+        db,
+        issueTracker,
+        ticketKey: ticketId,
+        owner,
+        requiredOwnerState: "bound",
+        changes: { add: [NEEDS_CLARIFICATION_LABEL] },
       });
     } catch (err) {
+      if (isRunControlError(err)) throw err;
       const { logger } = await import("../lib/logger.js");
       logger.warn(
         { ticketId, err: errorMessage(err) },
@@ -788,17 +954,23 @@ async function parkForClarificationStep(
   return true;
 }
 
-async function reconcileClarificationsOnPickup(
+export async function reconcileClarificationsOnPickup(
   ticketKey: string,
   currentRunId: string,
+  owner: ActiveRunOwner,
 ): Promise<void> {
   "use step";
   const { getDb } = await import("../db/client.js");
   const { createStepAdapters } = await import("../lib/step-adapters.js");
   const { NEEDS_CLARIFICATION_LABEL } = await import("../lib/labels.js");
-  const { supersedePendingForTicket } = await import("../clarifications/store.js");
-  const { resolveAwaitingRunsForTicket } = await import("../lib/telemetry/run-telemetry.js");
+  const { updateTicketLabelsWithIntent } = await import(
+    "../lib/ticket-label-mutation.js"
+  );
+  const { reconcileClarificationPickupState } = await import(
+    "../clarifications/store.js"
+  );
   const { issueTracker } = createStepAdapters();
+  const db = getDb();
   // Re-pickup housekeeping, all idempotent so default step retries are safe:
   //  - drop the awaiting-input label (best-effort; a label error must not fail
   //    the fresh run),
@@ -807,10 +979,16 @@ async function reconcileClarificationsOnPickup(
   //  - flip parked predecessor runs off "awaiting" so they don't linger.
   if (typeof issueTracker.updateLabels === "function") {
     try {
-      await issueTracker.updateLabels(ticketKey, {
-        remove: [NEEDS_CLARIFICATION_LABEL],
+      await updateTicketLabelsWithIntent({
+        db,
+        issueTracker,
+        ticketKey,
+        owner,
+        requiredOwnerState: "bound",
+        changes: { remove: [NEEDS_CLARIFICATION_LABEL] },
       });
     } catch (err) {
+      if (isRunControlError(err)) throw err;
       const { logger } = await import("../lib/logger.js");
       logger.warn(
         { ticketKey, err: errorMessage(err) },
@@ -818,13 +996,20 @@ async function reconcileClarificationsOnPickup(
       );
     }
   }
-  const db = getDb();
-  await supersedePendingForTicket(db, ticketKey);
-  await resolveAwaitingRunsForTicket(db, ticketKey, currentRunId);
+  await reconcileClarificationPickupState(db, {
+    ticketKey,
+    currentRunId,
+    owner,
+  });
 }
 
-async function postPickupCommentStep(ticketKey: string): Promise<void> {
+export async function postPickupCommentStep(
+  ticketKey: string,
+  owner: ActiveRunOwner,
+): Promise<void> {
   "use step";
+  const { getDb } = await import("../db/client.js");
+  const { assertActiveRunOwner } = await import("../lib/active-run-owner.js");
   const { createStepAdapters } = await import("../lib/step-adapters.js");
   const { env } = await import("../../env.js");
   const { issueTracker } = createStepAdapters();
@@ -833,11 +1018,13 @@ async function postPickupCommentStep(ticketKey: string): Promise<void> {
   // most once per ticket. Best-effort: a post failure must not fail the run.
   const url = ticketPageUrl(env.DASHBOARD_ORIGIN, ticketKey);
   try {
+    await assertActiveRunOwner(getDb(), owner);
     await issueTracker.postComment(
       ticketKey,
       `AI workflow picked this ticket up. Follow progress and answer questions in the dashboard: ${url}`,
     );
   } catch (err) {
+    if (isRunControlError(err)) throw err;
     const { logger } = await import("../lib/logger.js");
     logger.warn(
       { ticketKey, err: errorMessage(err) },
@@ -931,14 +1118,24 @@ async function runPrePrChecksStep(
 }
 runPrePrChecksStep.maxRetries = 0;
 
-async function markTicketFailed(ticketIdentifier: string, runId: string, error: string) {
+async function markTicketFailed(
+  ticketIdentifier: string,
+  runId: string,
+  error: string,
+  owner: TicketTransitionOwner,
+) {
   "use step";
   const { createStepAdapters } = await import("../lib/step-adapters.js");
   const { runRegistry } = createStepAdapters();
+  if (!owner.runId) throw new Error("Failed-ticket marking requires a bound run owner.");
   await runRegistry.markFailed(ticketIdentifier, {
     runId,
     error,
     failedAt: new Date().toISOString(),
+  }, {
+    subjectKey: owner.subjectKey,
+    ownerToken: owner.ownerToken,
+    runId: owner.runId,
   });
 }
 
@@ -964,7 +1161,7 @@ function phaseKey(base: string, attempt: number): string {
  * exit — success, clarification, or failure. maxRetries = 0 and the caller
  * swallows errors: telemetry must never retry or fail the run.
  */
-async function recordRunTelemetryStep(payload: {
+export async function recordRunTelemetryStep(payload: {
   runId: string;
   subjectKey: string;
   status: "success" | "failed" | "awaiting";
@@ -975,7 +1172,6 @@ async function recordRunTelemetryStep(payload: {
   totals: UsageTotals;
   budgetFailure: RunBudgetFailure | null;
   pr: { url: string; number: number } | null;
-  awaitingClarificationId?: string | null;
 }) {
   "use step";
   const { getDb } = await import("../db/client.js");
@@ -989,18 +1185,6 @@ async function recordRunTelemetryStep(payload: {
     payload.runId,
   );
   const { totals } = payload;
-  // Deterministically close the answer-before-finally window: a run parking on a
-  // clarification records "awaiting", but if the answer already landed (row no
-  // longer pending) that would be a phantom the cron freeze preserves forever.
-  // Re-check the row on the awaiting path only and record "success" instead.
-  let status = payload.status;
-  if (status === "awaiting" && payload.awaitingClarificationId) {
-    const { getClarification } = await import("../clarifications/store.js");
-    const row = await getClarification(getDb(), payload.awaitingClarificationId);
-    if (row && row.status !== "pending") {
-      status = "success";
-    }
-  }
   await recordRunUsage(getDb(), {
     runId: payload.runId,
     // This is the agent workflow — its canonical identity (mirrors
@@ -1009,7 +1193,7 @@ async function recordRunTelemetryStep(payload: {
     workflowId: "wf_agent",
     workflowName: "Agent",
     subjectKey: payload.subjectKey,
-    status,
+    status: payload.status,
     ticketKey: payload.ticketKey,
     ticketTitle: payload.ticketTitle,
     ticketUrl: payload.ticketUrl,
@@ -1061,7 +1245,6 @@ export async function agentWorkflow(input: string | AgentWorkflowInput) {
       }
     : input;
   let clarificationWinnerRecorded = false;
-  let bound = false;
   let outcome: "success" | "failed" | "awaiting" | undefined;
   try {
     if (!legacyInput) {
@@ -1073,7 +1256,7 @@ export async function agentWorkflow(input: string | AgentWorkflowInput) {
         prepareClarificationContinuationStep,
         recordClarificationDispatchWinnerStep,
       } = await import("./run-ownership-steps.js");
-      bound = await bindWorkflowCandidateStep(
+      const bound = await bindWorkflowCandidateStep(
         entry.subjectKey,
         entry.ownerToken,
         workflowRunId,
@@ -1110,14 +1293,6 @@ export async function agentWorkflow(input: string | AgentWorkflowInput) {
       );
       await clearClarificationDispatchWinnerStep(
         entry.clarificationRequestId,
-        entry.ownerToken,
-        workflowRunId,
-      ).catch(() => false);
-    }
-    if (!legacyInput && bound && outcome !== "awaiting") {
-      const { terminalReleaseAndDrainStep } = await import("./run-ownership-steps.js");
-      await terminalReleaseAndDrainStep(
-        entry.subjectKey,
         entry.ownerToken,
         workflowRunId,
       ).catch(() => false);
@@ -1184,7 +1359,8 @@ async function agentWorkflowBody(
   // winner validation, perform only the idempotent clarification-label removal.
   if (resumeCheckpoint && entry.ticketKey) {
     const { repairClarificationLabelStep } = await import("./run-ownership-steps.js");
-    await repairClarificationLabelStep(ticket.identifier).catch((error) => {
+    await repairClarificationLabelStep(ticket.identifier, transitionOwner).catch((error) => {
+      if (isRunControlError(error)) throw error;
       console.error("Clarification label repair failed:", error);
     });
   }
@@ -1201,6 +1377,7 @@ async function agentWorkflowBody(
     await reconcileClarificationsOnPickup(
       ticket.identifier,
       workflowRunId,
+      transitionOwner,
     );
   }
 
@@ -1214,7 +1391,7 @@ async function agentWorkflowBody(
     !("continuation" in entry && entry.continuation) &&
     !hasDashboardLinkComment(ticket.comments, ticket.identifier)
   ) {
-    await postPickupCommentStep(ticket.identifier);
+    await postPickupCommentStep(ticket.identifier, transitionOwner);
   }
 
   const { loadPrompts } = await import("./prompts-step.js");
@@ -1331,10 +1508,8 @@ async function agentWorkflowBody(
   // "failed".
   let runOutcome: "success" | "failed" | "awaiting" = "failed";
   let terminalBudgetFailure: RunBudgetFailure | null = null;
-  // The clarification this run parked on, set only on the awaiting path. Threaded
-  // into the terminal telemetry write so it can re-check the row and record
-  // "success" instead of a phantom "awaiting" when the answer landed after the
-  // park but before this finally.
+  // The clarification this run must cross the durable owner/sandbox parking
+  // boundary for. This state machine, not best-effort telemetry, gates handoff.
   let awaitingClarificationId: string | null = null;
   // Seeded with the run default model once prepare_workspace provisions the
   // sandbox, then set to the implementation block's model once it runs.
@@ -1349,7 +1524,7 @@ async function agentWorkflowBody(
 
   try {
     if (entry.ticketKey) {
-      await notifyTicket(ticket.identifier, { kind: "started" });
+      await notifyTicket(ticket.identifier, { kind: "started" }, transitionOwner);
     }
 
     const graph = buildRuntimeGraph({ nodes: plan.nodes, edges: plan.edges });
@@ -1363,8 +1538,6 @@ async function agentWorkflowBody(
     if (!entryTrigger || !graph.nodes.has(entryTrigger.id)) {
       throw new Error("workflow definition has no runnable trigger block");
     }
-    const triggerOutput = resumeCheckpoint?.triggerPayload ?? triggerOutputFor(entry);
-
     const branchName =
       resumeCheckpoint?.workspaceManifest?.repositories[0]?.branchName ??
       (entry.kind === "pr_trigger" && !entry.ticketKey
@@ -1411,6 +1584,10 @@ async function agentWorkflowBody(
         ? { clarifications: clarificationHistory }
         : {}),
     };
+    const refreshedTriggerOutput = triggerOutputWithTicketContext(entry, ticketData);
+    const triggerOutput: BlockOutput = resumeCheckpoint
+      ? { ...resumeCheckpoint.triggerPayload, ...refreshedTriggerOutput }
+      : refreshedTriggerOutput;
 
     // Per-ticket agent override via labels (e.g. `agent:codex`). Falls
     // back to env.AGENT_KIND when the ticket has no override or the labels
@@ -1600,6 +1777,7 @@ async function agentWorkflowBody(
 
         const {
           completeClarificationCheckpointStep,
+          completeClarificationProviderParkingStep,
           createClarificationCheckpointStep,
           markClarificationSnapshotCleanupFailedBySnapshotIdStep,
           markClarificationSnapshotDeletedBySnapshotIdStep,
@@ -1686,6 +1864,33 @@ async function agentWorkflowBody(
         } else {
           await completeClarificationCheckpointStep(clarificationId, null);
         }
+
+        let providerParked = false;
+        if (entry.ticketKey) {
+          try {
+            providerParked = await parkForClarificationStep(
+              ticketId,
+              backlogMoveTarget(),
+              clarificationId,
+              transitionOwner,
+            );
+          } catch (error) {
+            if (isRunControlError(error)) throw error;
+            console.error(
+              `Clarification ticket parking failed for ${clarificationId}:`,
+              error,
+            );
+            // Keep the question unanswerable until polling settles the
+            // ambiguous provider boundary and re-drives Backlog under the
+            // exact parked predecessor. The outer finally still parks the
+            // owner and preserves its snapshot for that recovery.
+            awaitingClarificationId = clarificationId;
+            runOutcome = "awaiting";
+            return;
+          }
+          await completeClarificationProviderParkingStep(clarificationId);
+        }
+
         const replacedSnapshots = await publishClarificationCheckpointStep(
           clarificationId,
         );
@@ -1708,34 +1913,14 @@ async function agentWorkflowBody(
         }
 
         if (entry.ticketKey) {
-          const parked = await parkForClarificationStep(
-            ticketId,
-            backlogMoveTarget(),
-            clarificationId,
-            transitionOwner,
-          ).catch((error) => {
-            console.error(
-              `Clarification ticket parking failed for ${clarificationId}:`,
-              error,
-            );
-            return true;
-          });
-          if (!parked) {
-            // An answer may race only after the durable publish. The successor
-            // already owns the subject, so the asking run is complete.
-            runOutcome = "success";
-            return;
-          }
-          await notifyTicket(ticket.identifier, {
+          const disposition = clarificationExitDisposition(providerParked);
+          runOutcome = disposition.outcome;
+          if (!disposition.notify) return;
+          await notifyTicketBestEffort(ticket.identifier, {
             kind: "needs_clarification",
             dashboardUrl: ticketRunUrl(env.DASHBOARD_ORIGIN, ticket.identifier, workflowRunId),
             usageReport: usageReportOrUndefined(),
-          }).catch((error) => {
-            console.error(
-              `Clarification notification failed for ${clarificationId}:`,
-              error,
-            );
-          });
+          }, transitionOwner);
         }
       };
 
@@ -1767,7 +1952,7 @@ async function agentWorkflowBody(
             ...(knownPhase ? { phase: knownPhase } : {}),
             reason,
             usageReport,
-          }),
+          }, transitionOwner),
         });
       };
 
@@ -1792,7 +1977,7 @@ async function agentWorkflowBody(
         }
         if (params.terminalStatus === "done" || params.terminalStatus === "skipped") {
           if (params.postComment && entry.ticketKey) {
-            await postTicketComment(ticket.identifier, params.postComment);
+            await postTicketComment(ticket.identifier, params.postComment, transitionOwner);
           }
           runOutcome = "success";
           return;
@@ -1806,7 +1991,7 @@ async function agentWorkflowBody(
           kind: "failed",
           reason: params.postComment ?? "Terminated by workflow.",
           usageReport: usageReportOrUndefined(),
-        });
+        }, transitionOwner);
         runOutcome = "failed";
       };
 
@@ -1871,7 +2056,7 @@ async function agentWorkflowBody(
             const { paths: researchPaths, script: researchScript } =
               await planPhaseStep(kind, "research", model, RESEARCH_SCHEMA);
             const researchInput = assembleResearchPlanContext({
-              ticket: ticketData,
+              ticket: resolveAgentTicketInput(resolvedInputs, ticketData),
               prompt: prompts.research,
               branchName,
               attachments: downloadedAttachments,
@@ -1944,9 +2129,12 @@ async function agentWorkflowBody(
             const { paths: implPaths, script: implScript } =
               await planPhaseStep(kind, "impl", model, AGENT_SCHEMA);
             const implInput = assembleImplementationContext({
-              ticket: ticketData,
+              ticket: resolveAgentTicketInput(resolvedInputs, ticketData),
               prompt: prompts.implement,
-              researchPlanMarkdown: ctx.researchPlanMarkdown,
+              researchPlanMarkdown: resolveImplementationPlanInput(
+                resolvedInputs,
+                ctx.researchPlanMarkdown,
+              ),
               attachments: downloadedAttachments,
               preSandboxAdditions: ctx.preSandboxAdditions.implementation,
               selectedRepositories: ctx.selectedRepositories,
@@ -2014,6 +2202,7 @@ async function agentWorkflowBody(
                 }),
               };
             } catch (error) {
+              if (isRunControlError(error)) throw error;
               return {
                 kind: "failed",
                 output: { status: "failed" },
@@ -2108,7 +2297,7 @@ async function agentWorkflowBody(
                 },
               );
             } catch (err) {
-              if (err instanceof RunBudgetError) throw err;
+              if (isRunControlError(err)) throw err;
               const after = await ctx.observeBudget();
               if (after.check.status !== "ok") throw new RunBudgetError(after.check);
               if (isDurationAbortError(err)) {
@@ -2159,8 +2348,20 @@ async function agentWorkflowBody(
             const publication = await openPullRequestsForPublication({
               attemptId: publicationAttemptId,
               runId: ctx.runId,
+              subjectKey: transitionOwner.subjectKey,
+              ownerToken: transitionOwner.ownerToken,
               ticketKey: ticket.identifier,
               title: ticket.title,
+              sourcePullRequest:
+                ctx.entry.kind === "pr_trigger"
+                  ? {
+                      provider: ctx.entry.pr.provider,
+                      repoPath: ctx.entry.pr.repoPath,
+                      prId: ctx.entry.pr.prNumber,
+                      headSha: ctx.entry.pr.headSha,
+                      baseRef: ctx.entry.pr.baseRef,
+                    }
+                  : undefined,
             }, {
               observeBudget: () => ctx.observeBudget(),
             });
@@ -2171,6 +2372,7 @@ async function agentWorkflowBody(
                 await postPrLinksComment(
                   ticket.identifier,
                   publication.prs,
+                  transitionOwner,
                   "Pull requests created before publication failed:",
                 );
               }
@@ -2192,7 +2394,7 @@ async function agentWorkflowBody(
             }
 
             if (publication.prs.some((pr) => pr.isNew)) {
-              await postPrLinksComment(ticket.identifier, publication.prs);
+              await postPrLinksComment(ticket.identifier, publication.prs, transitionOwner);
             }
 
             const primaryPr = publication.prs[0]!;
@@ -2211,7 +2413,7 @@ async function agentWorkflowBody(
                 pr: { url: primaryPr.url, number: primaryPr.id },
                 usageReport,
                 ...(message ? { extraText: message } : {}),
-              });
+              }, transitionOwner);
               return { kind: "next", output: { status: "ok" } };
             }
             return { kind: "next", output: { status: "skipped" } };
@@ -2243,11 +2445,11 @@ async function agentWorkflowBody(
 
       const hooks: ExecuteGraphHooks = {
         async onBlockStart(nodeId, attempt) {
+          await enforceBudgetAtBoundary(true);
           currentBlockId = nodeId;
           state.attempt = attempt;
           blockStatuses[nodeId] = { status: "running", attempt };
           await writeBlockStatuses();
-          await enforceBudgetAtBoundary(true);
         },
         async onBlockFinish(nodeId, state) {
           if (
@@ -2265,13 +2467,14 @@ async function agentWorkflowBody(
             );
           }
           reconcileMissingPhaseUsages();
-          await enforceBudgetAtBoundary(false);
           let guarded = state;
           if (state.output && JSON.stringify(state.output).length > 8192) {
             guarded = { ...state, output: { status: state.output.status, _truncated: true } };
           }
           blockStatuses[nodeId] = guarded;
           await writeBlockStatuses();
+          currentBlockId = null;
+          await enforceBudgetAtBoundary(false);
         },
         clarificationExit,
         failureExit,
@@ -2299,6 +2502,7 @@ async function agentWorkflowBody(
         },
         executeBlock,
         hooks,
+        shouldRethrowExecutionError: isRunControlError,
         maxTotalExecutions: 200,
       });
       // "ended" is a clean awaiting stop (e.g. send_plan_approval parked the
@@ -2326,38 +2530,57 @@ async function agentWorkflowBody(
   } catch (caught) {
     reconcileMissingPhaseUsages();
     let err = caught;
-    if (!(err instanceof RunBudgetError)) {
+    if (!isRunControlError(err)) {
       const observation = await observeBudgetAtBoundary(false);
       if (observation.check.status !== "ok") err = new RunBudgetError(observation.check);
     }
-    if (err instanceof RunBudgetError) terminalBudgetFailure = err.failure;
-    if (currentBlockId) {
-      blockStatuses[currentBlockId] = {
-        status: "fail",
-        error: truncateError((err as Error).message ?? "unknown"),
-      };
-      await writeBlockStatuses();
-    }
-    console.error(`Workflow failed for ${ticket.identifier}:`, err);
-    if (entry.ticketKey) {
-      const moved = await moveTicketWithIntentStep(
-        ticketId,
-        backlogMoveTarget(),
-        transitionOwner,
-      ).then(() => true).catch(() => false);
-      await notifyTicket(ticket.identifier, {
-        kind: "failed",
-        reason: (err as Error).message ?? "unknown",
-        usageReport: usageReportOrUndefined(),
-      }).catch(() => {});
-      if (!moved) {
-        await markTicketFailed(
-          ticket.identifier,
-          workflowRunId,
-          `Failed to move ticket to backlog: ${(err as Error).message ?? "unknown"}`,
-        ).catch(() => {});
-      }
-    }
+    terminalBudgetFailure = runBudgetFailureFromError(err);
+    const { handleUnhandledWorkflowError } = await import("./workflow-failure-exit.js");
+    await handleUnhandledWorkflowError(err, {
+      recordBlockFailure: async (error) => {
+        if (!currentBlockId) return;
+        blockStatuses[currentBlockId] = {
+          status: "fail",
+          error: truncateError(errorMessage(error)),
+        };
+        await writeBlockStatuses();
+      },
+      applyDefaultFailure: async (error) => {
+        console.error(`Workflow failed for ${ticket.identifier}:`, error);
+        if (!entry.ticketKey) return;
+
+        let moved = false;
+        try {
+          await moveTicketWithIntentStep(
+            ticketId,
+            backlogMoveTarget(),
+            transitionOwner,
+          );
+          moved = true;
+        } catch (moveError) {
+          if (isRunControlError(moveError)) throw moveError;
+        }
+
+        try {
+          await notifyTicket(ticket.identifier, {
+            kind: "failed",
+            reason: errorMessage(error),
+            usageReport: usageReportOrUndefined(),
+          }, transitionOwner);
+        } catch (notifyError) {
+          if (isRunControlError(notifyError)) throw notifyError;
+        }
+
+        if (!moved) {
+          await markTicketFailed(
+            ticket.identifier,
+            workflowRunId,
+            `Failed to move ticket to backlog: ${errorMessage(error)}`,
+            transitionOwner,
+          ).catch(() => {});
+        }
+      },
+    });
     throw err;
   } finally {
     // A launched phase with no parsed usage (timed out / errored before
@@ -2420,13 +2643,27 @@ async function agentWorkflowBody(
       ),
       budgetFailure: terminalBudgetFailure,
       pr: prForTelemetry,
-      awaitingClarificationId,
     }).catch((err) => {
       console.error(
         `Run telemetry failed to persist for ${ticket.identifier} (run ${workflowRunId}):`,
         err,
       );
     });
+    if ((runOutcome as string) === "awaiting" && awaitingClarificationId) {
+      const { parkClarificationOwnerStep } = await import(
+        "./run-ownership-steps.js"
+      );
+      const parked = await parkClarificationOwnerStep(
+        entry.subjectKey,
+        entry.ownerToken,
+        workflowRunId,
+      );
+      if (!parked) {
+        throw new Error(
+          `clarification ${awaitingClarificationId} could not cross its durable parking boundary`,
+        );
+      }
+    }
   }
   return runOutcome;
 }

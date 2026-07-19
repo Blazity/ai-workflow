@@ -9,6 +9,7 @@ dist/
 .vercel
 .env*.local
 .workflow-data/
+.workflow-vitest/
 .env.e2e
 .worktrees/
 .superpowers/

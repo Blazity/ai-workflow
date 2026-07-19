@@ -25,7 +25,9 @@ interface GitLabMR {
 interface GitLabMRHead {
   diff_refs?: { head_sha?: string };
   sha?: string;
-  head_pipeline?: { id?: number } | null;
+  target_branch?: string;
+  state?: string;
+  head_pipeline?: { id?: number; status?: string } | null;
 }
 interface GitLabNotePosition {
   new_path?: string;
@@ -322,10 +324,34 @@ export class GitLabAdapter implements VCSAdapter, GateStatusCapableVCS, PRFilesC
     )) as unknown as GitLabMRHead;
     const headSha = mr.diff_refs?.head_sha ?? mr.sha ?? "";
     if (!headSha) throw new Error(`GitLab MR !${prId} is missing its authoritative head SHA`);
+    const baseRef = mr.target_branch?.trim();
+    if (!baseRef) throw new Error(`GitLab MR !${prId} is missing its target branch`);
+    const state =
+      mr.state === "opened"
+        ? "open"
+        : mr.state === "closed" || mr.state === "merged"
+          ? mr.state
+          : null;
+    if (!state) {
+      throw new Error(`GitLab MR !${prId} has unsupported lifecycle state ${String(mr.state)}`);
+    }
     const headPipelineId = mr.head_pipeline?.id;
+    const headPipelineStatus = mr.head_pipeline?.status;
+    const headPipelineFailedChecks =
+      typeof headPipelineId === "number" && headPipelineStatus === "failed"
+        ? ((await this.gl.Jobs.all(this.projectId, {
+            pipelineId: headPipelineId,
+          })) as unknown as GitLabJob[])
+            .filter((job) => job.status === "failed")
+            .map((job) => ({ id: job.id, name: job.name }))
+        : undefined;
     return {
       headSha,
+      baseRef,
+      state,
       ...(typeof headPipelineId === "number" ? { headPipelineId } : {}),
+      ...(typeof headPipelineStatus === "string" ? { headPipelineStatus } : {}),
+      ...(headPipelineFailedChecks ? { headPipelineFailedChecks } : {}),
     };
   }
 

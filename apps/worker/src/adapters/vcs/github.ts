@@ -196,17 +196,26 @@ export class GitHubAdapter
       ...this.ownerRepo,
       pull_number: prId,
     });
-    return { headSha: data.head.sha };
+    const baseRef = data.base.ref?.trim();
+    if (!baseRef) throw new Error(`GitHub PR #${prId} is missing its target branch`);
+    const state = data.merged === true ? "merged" : data.state;
+    if (state !== "open" && state !== "closed" && state !== "merged") {
+      throw new Error(`GitHub PR #${prId} has unsupported lifecycle state ${String(state)}`);
+    }
+    return { headSha: data.head.sha, baseRef, state };
   }
 
   async getLatestCheckRuns(headSha: string) {
-    const { data } = await this.octokit.checks.listForRef({
-      ...this.ownerRepo,
-      ref: headSha,
-      filter: "latest",
-      per_page: 100,
-    });
-    return data.check_runs.map((check) => ({
+    const checkRuns = await this.octokit.paginate(
+      this.octokit.checks.listForRef,
+      {
+        ...this.ownerRepo,
+        ref: headSha,
+        filter: "latest",
+        per_page: 100,
+      },
+    );
+    return checkRuns.map((check) => ({
       id: check.id,
       name: check.name,
       appSlug: check.app?.slug ?? "",

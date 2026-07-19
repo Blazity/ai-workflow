@@ -1,4 +1,4 @@
-import { createHmac, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import { defineEventHandler, readRawBody, getHeader, createError } from "h3";
 import { env } from "../../../env.js";
 import { getDb } from "../../db/client.js";
@@ -8,7 +8,10 @@ import { cancelRun } from "../../lib/cancel-run.js";
 import { dispatchTicket } from "../../lib/dispatch.js";
 import { logger } from "../../lib/logger.js";
 import { ticketSubjectKey } from "../../lib/subject-key.js";
-import { consumeTicketTransitionIntent } from "../../lib/ticket-transition-intent-store.js";
+import {
+  consumeTicketTransitionIntent,
+  recordTicketCancellationFenceOwner,
+} from "../../lib/ticket-transition-intent-store.js";
 
 /**
  * Jira webhook handler — triggers the same dispatch logic as the cron poller.
@@ -53,6 +56,9 @@ export default defineEventHandler(async (event) => {
   const statusChange = extractStatusChange(body);
   const webhookIdentifier =
     getHeader(event, "x-atlassian-webhook-identifier")?.trim() ?? "";
+  const cancellationFenceIdentifier =
+    webhookIdentifier || `body-sha256:${createHash("sha256").update(rawBody).digest("hex")}`;
+  const webhookOccurredAt = extractWebhookOccurredAt(body);
   const actorAccountId =
     typeof body?.user?.accountId === "string" ? body.user.accountId.trim() : "";
   logger.info(
@@ -92,6 +98,46 @@ export default defineEventHandler(async (event) => {
     };
   }
 
+  // A second human move can arrive while an earlier move is already closing
+  // the owner. Persist that newer destination and finish the same cancellation
+  // instead of dispatching against a claim that is deliberately still held.
+  if (statusChange) {
+    const subjectKey = ticketSubjectKey("jira", ticketKey);
+    const active = await adapters.runRegistry.get(subjectKey);
+    if (active?.state === "cancelling") {
+      const cancellation = await cancelTrackedRun(
+        ticketKey,
+        adapters.runRegistry,
+        adapters.issueTracker,
+        {
+          statusChange,
+          ticketStatus,
+          webhookIdentifier: cancellationFenceIdentifier,
+          occurredAt: webhookOccurredAt,
+        },
+        active,
+      );
+      if (cancellation === "unconfirmed") {
+        throw createError({
+          statusCode: 503,
+          statusMessage: "Cancellation not confirmed",
+        });
+      }
+      const cancelled = cancellation === "cancelled";
+      if (cancelled) {
+        await adapters.messaging.notifyForTicket(ticketKey, {
+          kind: "canceled",
+          reason: "human changed ticket status while cancellation was in progress",
+        });
+      }
+      return {
+        status: cancelled ? "cancelled" : "ignored",
+        reason: "human_status_change_during_cancellation",
+        ticketKey,
+      };
+    }
+  }
+
   if (!ticketStatus) {
     logger.info({ ticketKey }, "webhook_missing_payload_status_dispatching_anyway");
   }
@@ -101,6 +147,22 @@ export default defineEventHandler(async (event) => {
       { ticketKey, payloadStatus: ticketStatus, expectedAiStatus: env.COLUMN_AI },
       "webhook_payload_status_outside_ai_column",
     );
+
+    // The issue snapshot says where the ticket is now, not what this webhook
+    // changed. PR-triggered remediation legitimately runs while the ticket is
+    // outside the AI column, so only an actual status changelog item is
+    // evidence that a human movement should cancel the active owner.
+    if (!statusChange) {
+      logger.info(
+        { ticketKey, payloadStatus: ticketStatus },
+        "webhook_outside_ai_without_status_change_ignored",
+      );
+      return {
+        status: "ignored",
+        reason: "no_status_change",
+        ticketKey,
+      };
+    }
 
     const liveTicketState = await getLiveTicketState(ticketKey, adapters.issueTracker);
     if (liveTicketState.inAiColumn) {
@@ -139,7 +201,17 @@ export default defineEventHandler(async (event) => {
       };
     }
 
-    const cancellation = await cancelTrackedRun(ticketKey, adapters.runRegistry);
+    const cancellation = await cancelTrackedRun(
+      ticketKey,
+      adapters.runRegistry,
+      adapters.issueTracker,
+      {
+        statusChange,
+        ticketStatus,
+        webhookIdentifier: cancellationFenceIdentifier,
+        occurredAt: webhookOccurredAt,
+      },
+    );
     if (cancellation === "unconfirmed") {
       logger.warn(
         {
@@ -212,7 +284,12 @@ function verifyWebhookAuth(
   event: Parameters<typeof getHeader>[0],
   rawBody: string,
 ): void {
-  if (!env.JIRA_WEBHOOK_SECRET) return;
+  if (!env.JIRA_WEBHOOK_SECRET) {
+    throw createError({
+      statusCode: 503,
+      statusMessage: "Jira webhook is not configured",
+    });
+  }
 
   const signatureHeader = getHeader(event, "x-hub-signature");
   if (!signatureHeader) {
@@ -291,27 +368,81 @@ function isAiColumnStatus(status: string): boolean {
 async function cancelTrackedRun(
   ticketKey: string,
   runRegistry: ReturnType<typeof createAdapters>["runRegistry"],
+  issueTracker: ReturnType<typeof createAdapters>["issueTracker"],
+  reconciliation?: {
+    statusChange: { id?: string; name?: string };
+    ticketStatus: string | null;
+    webhookIdentifier: string;
+    occurredAt: Date;
+  },
+  observedEntry?: Awaited<ReturnType<typeof runRegistry.get>>,
 ): Promise<"cancelled" | "not_active" | "unconfirmed"> {
   const subjectKey = ticketSubjectKey("jira", ticketKey);
-  const entry = await runRegistry.get(subjectKey);
+  const entry = observedEntry ?? (await runRegistry.get(subjectKey));
   if (!entry) return "not_active";
+  let cancellationTarget = {
+    ownerToken: entry.ownerToken,
+    runId: entry.runId,
+  };
 
-  if (entry.runId === null) {
+  if (reconciliation) {
+    const fencedOwner = await recordTicketCancellationFenceOwner(getDb(), {
+      ticketKey,
+      subjectKey,
+      ownerToken: entry.ownerToken,
+      runId: entry.runId,
+      target: statusChangeTarget(
+        reconciliation.statusChange,
+        reconciliation.ticketStatus,
+      ),
+      webhookIdentifier: reconciliation.webhookIdentifier,
+      occurredAt: reconciliation.occurredAt,
+    });
+    if (!fencedOwner) {
+      const current = await runRegistry.get(subjectKey);
+      return current?.ownerToken === entry.ownerToken ? "unconfirmed" : "not_active";
+    }
+    cancellationTarget = fencedOwner;
+  }
+
+  if (cancellationTarget.runId === null) {
     const cancelled = await cancelRun(
       ticketKey,
-      { ownerToken: entry.ownerToken, runId: null },
+      cancellationTarget,
       runRegistry,
+      issueTracker,
     );
     return cancelled ? "cancelled" : "unconfirmed";
   }
 
-  if (!entry.runId) return "unconfirmed";
+  if (!cancellationTarget.runId) return "unconfirmed";
   const cancelled = await cancelRun(
     ticketKey,
-    { ownerToken: entry.ownerToken, runId: entry.runId },
+    cancellationTarget,
     runRegistry,
+    issueTracker,
   );
   return cancelled ? "cancelled" : "unconfirmed";
+}
+
+function statusChangeTarget(
+  status: { id?: string; name?: string },
+  ticketStatus: string | null,
+) {
+  const name = status.name?.trim() || ticketStatus?.trim() || status.id?.trim() || "Unknown";
+  const statusId = status.id?.trim();
+  return statusId ? { name, statusId } : name;
+}
+
+function extractWebhookOccurredAt(body: any): Date {
+  const raw = body?.timestamp;
+  const millis =
+    typeof raw === "number"
+      ? raw
+      : typeof raw === "string" && /^\d+$/.test(raw.trim())
+        ? Number(raw)
+        : Date.parse(String(raw ?? ""));
+  return Number.isFinite(millis) ? new Date(millis) : new Date();
 }
 
 async function getLiveTicketState(

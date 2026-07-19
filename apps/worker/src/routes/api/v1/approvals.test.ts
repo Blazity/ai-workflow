@@ -240,7 +240,7 @@ describe("POST /api/v1/approvals/:id/approve", () => {
     expect(stored?.decidedById).toBe("system");
   });
 
-  it("410s and terminally rejects an approved-undispatched retry when the definition is gone", async () => {
+  it("410s but preserves a final approved decision when its pinned definition is unavailable", async () => {
     const row = await seedPending("AWT-1");
     await decideApproval(db, {
       id: row.id,
@@ -253,8 +253,8 @@ describe("POST /api/v1/approvals/:id/approve", () => {
 
     expect(res.status).toBe(410);
     const stored = await getApproval(db, row.id);
-    expect(stored?.status).toBe("rejected");
-    expect(stored?.decidedById).toBe("system");
+    expect(stored?.status).toBe("approved");
+    expect(stored?.decidedById).toBe("user_admin");
     expect(stored?.dispatchedRunId).toBeNull();
   });
 
@@ -277,7 +277,7 @@ describe("POST /api/v1/approvals/:id/approve", () => {
     expect(mocks.dispatchPlanApproved).not.toHaveBeenCalled();
   });
 
-  it("410s and terminally rejects an approved-undispatched retry when the ticket is gone", async () => {
+  it("410s but preserves a final approved decision when the ticket is gone", async () => {
     const row = await seedPending("AWT-1");
     await decideApproval(db, {
       id: row.id,
@@ -290,8 +290,8 @@ describe("POST /api/v1/approvals/:id/approve", () => {
 
     expect(res.status).toBe(410);
     const stored = await getApproval(db, row.id);
-    expect(stored?.status).toBe("rejected");
-    expect(stored?.decidedById).toBe("system");
+    expect(stored?.status).toBe("approved");
+    expect(stored?.decidedById).toBe("user_admin");
     expect(stored?.dispatchedRunId).toBeNull();
     expect(mocks.dispatchPlanApproved).not.toHaveBeenCalled();
   });

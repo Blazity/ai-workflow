@@ -112,7 +112,10 @@ export default defineEventHandler(async (event): Promise<ClarificationAnswerResp
       answeredAt: row.answeredAt ?? new Date(),
       dispatchedRunId: null,
     };
-    return { clarification: serializeClarification(final ?? fallback), runId: result.runId };
+    return {
+      clarification: serializeClarification(final ?? fallback),
+      runId: result.status === "started" ? result.runId : null,
+    };
   } catch (error) {
     toClarificationHttpError(error);
   }

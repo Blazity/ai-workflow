@@ -1,5 +1,7 @@
 import type { SelectedRepository } from "../adapters/vcs/repository-directory.js";
 import type { PullRequest, VCSAdapter } from "../adapters/vcs/types.js";
+import type { ActiveRunOwner } from "../lib/active-run-owner.js";
+import { isRunControlError } from "./run-control-error.js";
 
 export interface WorkflowPrLink {
   provider: SelectedRepository["provider"];
@@ -42,11 +44,19 @@ export async function createOrFindWorkflowOwnedPullRequest(input: {
   branchName: string;
   repository: SelectedRepository;
   title: string;
+  owner: ActiveRunOwner;
 }): Promise<WorkflowPrLink> {
   "use step";
+  const { getDb } = await import("../db/client.js");
+  const { assertActiveRunOwner } = await import("../lib/active-run-owner.js");
   const { createRepositoryVCS } = await import("../lib/vcs-runtime.js");
   const { isRepoAllowed } = await import("../lib/repo-allowlist.js");
-  return resolveWorkflowOwnedPullRequest(input, createRepositoryVCS, isRepoAllowed);
+  return resolveWorkflowOwnedPullRequest(
+    input,
+    createRepositoryVCS,
+    isRepoAllowed,
+    () => assertActiveRunOwner(getDb(), input.owner),
+  );
 }
 createOrFindWorkflowOwnedPullRequest.maxRetries = 3;
 
@@ -106,9 +116,11 @@ export async function prepareSelectedRepositoryBranches(
   ticketKey: string,
   branchName: string,
   repositories: SelectedRepository[],
+  owner: ActiveRunOwner,
 ): Promise<void> {
   "use step";
   const { getDb } = await import("../db/client.js");
+  const { assertActiveRunOwner } = await import("../lib/active-run-owner.js");
   const { upsertWorkflowOwnedBranch } = await import("../db/queries/workflow-owned-branches.js");
   const { createRepositoryVCS } = await import("../lib/vcs-runtime.js");
   const { isRepoAllowed } = await import("../lib/repo-allowlist.js");
@@ -120,11 +132,13 @@ export async function prepareSelectedRepositoryBranches(
     }
     if (repo.workflowOwnedBranch) continue;
 
-    await createRepositoryVCS({
+    const vcs = createRepositoryVCS({
       provider: repo.provider,
       repoPath: repo.repoPath,
       baseBranch: repo.defaultBranch,
-    }).createBranch(branchName, repo.defaultBranch);
+    });
+    await assertActiveRunOwner(db, owner);
+    await vcs.createBranch(branchName, repo.defaultBranch);
 
     await upsertWorkflowOwnedBranch(db, {
       ticketKey,
@@ -141,9 +155,11 @@ export async function createOrUseWorkflowOwnedPullRequestsForRepos(input: {
   branchName: string;
   repositories: SelectedRepository[];
   title: string;
+  owner: ActiveRunOwner;
 }): Promise<WorkflowPrLink[]> {
   "use step";
   const { getDb } = await import("../db/client.js");
+  const { assertActiveRunOwner } = await import("../lib/active-run-owner.js");
   const { upsertWorkflowOwnedBranch } = await import("../db/queries/workflow-owned-branches.js");
   const { createRepositoryVCS } = await import("../lib/vcs-runtime.js");
   const { isRepoAllowed } = await import("../lib/repo-allowlist.js");
@@ -155,6 +171,7 @@ export async function createOrUseWorkflowOwnedPullRequestsForRepos(input: {
       { branchName: input.branchName, repository: repo, title: input.title },
       createRepositoryVCS,
       isRepoAllowed,
+      () => assertActiveRunOwner(db, input.owner),
     );
 
     await upsertWorkflowOwnedBranch(db, {
@@ -188,6 +205,7 @@ async function resolveWorkflowOwnedPullRequest(
     baseBranch: string;
   }) => VCSAdapter,
   isAllowed: (repoPath: string) => boolean,
+  assertProviderMutation?: () => Promise<void>,
 ): Promise<WorkflowPrLink> {
   const repo = input.repository;
   if (!isAllowed(repo.repoPath)) {
@@ -211,7 +229,12 @@ async function resolveWorkflowOwnedPullRequest(
     repoPath: repo.repoPath,
     baseBranch: repo.defaultBranch,
   });
-  const { pr, isNew } = await createOrFindPullRequest(vcs, branchName, input.title);
+  const { pr, isNew } = await createOrFindPullRequest(
+    vcs,
+    branchName,
+    input.title,
+    assertProviderMutation,
+  );
   return {
     provider: repo.provider,
     repoPath: repo.repoPath,
@@ -226,13 +249,16 @@ async function createOrFindPullRequest(
   vcs: VCSAdapter,
   branchName: string,
   title: string,
+  assertProviderMutation?: () => Promise<void>,
 ): Promise<{ pr: PullRequest; isNew: boolean }> {
   const beforeCreate = await vcs.findPR(branchName);
   if (beforeCreate) return { pr: beforeCreate, isNew: false };
 
   try {
+    await assertProviderMutation?.();
     return { pr: await vcs.createPR(branchName, title, ""), isNew: true };
   } catch (err) {
+    if (isRunControlError(err)) throw err;
     // Creation can succeed remotely and still time out before the response
     // reaches us. Reconcile every error before surfacing it to the durable
     // publication retry loop so a replay never creates a duplicate PR/MR.

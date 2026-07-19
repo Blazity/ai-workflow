@@ -23,6 +23,7 @@ import {
   listRecoverableAcceptedTriggerDeliveries,
   listPendingTriggersForSubject,
   listPendingSubjectKeys,
+  recordCandidateStartedTriggerDelivery,
   receiveTriggerDelivery,
 } from "./trigger-delivery-store.js";
 
@@ -225,25 +226,103 @@ describe("durable trigger deliveries", () => {
     });
   });
 
-  it("preserves a live candidate from loser writes but advances a recovered candidate", async () => {
-    await acceptTriggerDelivery(db, delivery());
-    await completeTriggerDelivery(db, "github", "d-1", {
-      result: "candidate_started",
-      runId: "run-crashed",
-    });
-    await completeTriggerDelivery(db, "github", "d-1", { result: "coalesced" });
-    expect(await getTriggerDelivery(db, "github", "d-1")).toMatchObject({
-      result: { result: "candidate_started", runId: "run-crashed" },
-    });
+  it.each([
+    { result: "ignored_stale_head" as const },
+    { result: "ignored_not_workflow_owned" as const },
+    { result: "ignored_provider" as const },
+    { result: "at_capacity" as const },
+    { result: "error" as const },
+  ])(
+    "keeps terminal result $result immutable against a delayed coalescing write",
+    async (terminalResult) => {
+      await acceptTriggerDelivery(db, delivery());
+      await completeTriggerDelivery(db, "github", "d-1", terminalResult);
 
-    await completeTriggerDelivery(db, "github", "d-1", {
-      result: "candidate_started",
-      runId: "run-recovered",
-    });
-    expect(await getTriggerDelivery(db, "github", "d-1")).toMatchObject({
+      await completeTriggerDelivery(db, "github", "d-1", { result: "coalesced" });
+
+      await expect(getTriggerDelivery(db, "github", "d-1")).resolves.toMatchObject({
+        status: "completed",
+        result: terminalResult,
+      });
+    },
+  );
+
+  it("lets a live recovery candidate replace a dead candidate marker", async () => {
+    const accepted = delivery();
+    await acceptTriggerDelivery(db, accepted);
+    await bindRun(accepted, "run-crashed");
+    await expect(
+      recordCandidateStartedTriggerDelivery(
+        db,
+        accepted,
+        "owner:run-crashed",
+        "run-crashed",
+      ),
+    ).resolves.toBe(true);
+    await db.delete(activeRuns);
+    await bindRun(accepted, "run-recovered");
+
+    await expect(
+      recordCandidateStartedTriggerDelivery(
+        db,
+        accepted,
+        "owner:run-recovered",
+        "run-recovered",
+      ),
+    ).resolves.toBe(true);
+    await expect(getTriggerDelivery(db, "github", "d-1")).resolves.toMatchObject({
       result: { result: "candidate_started", runId: "run-recovered" },
     });
   });
+
+  it("does not let candidate A's delayed marker replace newer live candidate B", async () => {
+    const accepted = delivery();
+    await acceptTriggerDelivery(db, accepted);
+    await bindRun(accepted, "run-b");
+    await expect(
+      recordCandidateStartedTriggerDelivery(db, accepted, "owner:run-b", "run-b"),
+    ).resolves.toBe(true);
+
+    await expect(
+      recordCandidateStartedTriggerDelivery(db, accepted, "owner:run-a", "run-a"),
+    ).resolves.toBe(false);
+    await expect(getTriggerDelivery(db, "github", "d-1")).resolves.toMatchObject({
+      result: { result: "candidate_started", runId: "run-b" },
+    });
+  });
+
+  it.each([
+    { result: "ignored_stale_head" as const },
+    { result: "ignored_not_workflow_owned" as const },
+    { result: "ignored_provider" as const },
+    { result: "at_capacity" as const },
+    { result: "error" as const },
+  ])(
+    "does not let a delayed candidate marker overwrite terminal result $result",
+    async (terminalResult) => {
+      const accepted = delivery();
+      await acceptTriggerDelivery(db, accepted);
+      await bindRun(accepted, "run-delayed");
+      // Reproduces the dispatcher/workflow order: start() returns a candidate,
+      // the candidate validates and records a terminal result, then the delayed
+      // dispatcher attempts to publish candidate_started.
+      await completeTriggerDelivery(db, "github", "d-1", terminalResult);
+
+      await expect(
+        recordCandidateStartedTriggerDelivery(
+          db,
+          accepted,
+          "owner:run-delayed",
+          "run-delayed",
+        ),
+      ).resolves.toBe(false);
+
+      await expect(getTriggerDelivery(db, "github", "d-1")).resolves.toMatchObject({
+        status: "completed",
+        result: terminalResult,
+      });
+    },
+  );
 
   it("lets freshness validation retire a dead candidate as stale", async () => {
     await acceptTriggerDelivery(db, delivery());
@@ -260,6 +339,44 @@ describe("durable trigger deliveries", () => {
       result: { result: "ignored_stale_head" },
     });
   });
+
+  it("lets ownership freshness validation retire a candidate", async () => {
+    await acceptTriggerDelivery(db, delivery());
+    await completeTriggerDelivery(db, "github", "d-1", {
+      result: "candidate_started",
+      runId: "run-crashed",
+    });
+
+    await completeTriggerDelivery(db, "github", "d-1", {
+      result: "ignored_not_workflow_owned",
+    });
+
+    await expect(getTriggerDelivery(db, "github", "d-1")).resolves.toMatchObject({
+      result: { result: "ignored_not_workflow_owned" },
+    });
+  });
+
+  it.each([
+    { result: "ignored_provider" as const },
+    { result: "at_capacity" as const },
+    { result: "error" as const },
+    { result: "coalesced" as const },
+  ])(
+    "does not replace candidate_started with non-freshness result $result",
+    async (replacement) => {
+      await acceptTriggerDelivery(db, delivery());
+      await completeTriggerDelivery(db, "github", "d-1", {
+        result: "candidate_started",
+        runId: "run-live",
+      });
+
+      await completeTriggerDelivery(db, "github", "d-1", replacement);
+
+      await expect(getTriggerDelivery(db, "github", "d-1")).resolves.toMatchObject({
+        result: { result: "candidate_started", runId: "run-live" },
+      });
+    },
+  );
 
   it("lists only unfinished accepted deliveries at or before the recovery cutoff", async () => {
     const unfinished = delivery();
@@ -363,6 +480,35 @@ describe("durable trigger deliveries", () => {
       ),
     ).toMatchObject({ delivery: { deliveryId: "d-1" } });
   });
+
+  it.each(["ignored_stale_head", "ignored_not_workflow_owned"] as const)(
+    "does not upgrade a terminal %s delivery when a delayed bound candidate acknowledges",
+    async (terminalResult) => {
+      const accepted = delivery();
+      await acceptTriggerDelivery(db, accepted);
+      await coalescePendingTrigger(db, accepted);
+      await bindRun(accepted, "run-delayed");
+      await completeTriggerDelivery(db, "github", "d-1", {
+        result: terminalResult,
+      });
+
+      await expect(
+        acknowledgeStartedTriggerDelivery(db, accepted, "run-delayed"),
+      ).resolves.toBe(false);
+      await expect(getTriggerDelivery(db, "github", "d-1")).resolves.toMatchObject({
+        status: "completed",
+        result: { result: terminalResult },
+      });
+      await expect(
+        getPendingTrigger(
+          db,
+          accepted.subjectKey,
+          accepted.pr.headSha,
+          accepted.triggerType,
+        ),
+      ).resolves.toMatchObject({ delivery: { deliveryId: "d-1" } });
+    },
+  );
 
   it("preserves a newer pending snapshot while acknowledging the claimed delivery", async () => {
     const accepted = delivery();

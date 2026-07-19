@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Db } from "../db/client.js";
 import {
+  workflowOwnedBranches,
   workflowDefinitions,
   workflowDefinitionVersions,
 } from "../db/schema.js";
@@ -32,10 +33,23 @@ const testEnv = vi.hoisted(() => ({
   JIRA_PROJECT_KEY: "AIW",
   COLUMN_AI: "AI",
   GITLAB_PROJECT_ID: undefined as string | undefined,
+  GITHUB_BOT_LOGIN: "github-app[bot]" as string | undefined,
+  GITLAB_BOT_LOGIN: "gitlab-bot" as string | undefined,
+}));
+const repositoryScopeMocks = vi.hoisted(() => ({
+  getConfiguredVcsProviders: vi.fn(),
+  listRepositories: vi.fn(),
 }));
 vi.mock("../../env.js", () => ({
   env: testEnv,
-  getConfiguredVcsProviders: vi.fn(() => []),
+  getConfiguredVcsProviders: repositoryScopeMocks.getConfiguredVcsProviders,
+  getVcsBotLogin: vi.fn((provider: "github" | "gitlab") =>
+    provider === "github" ? testEnv.GITHUB_BOT_LOGIN : testEnv.GITLAB_BOT_LOGIN),
+}));
+vi.mock("../adapters/vcs/repository-directory.js", () => ({
+  createRepositoryDirectoryForProviders: vi.fn(() => ({
+    listRepositories: repositoryScopeMocks.listRepositories,
+  })),
 }));
 const mockStart = vi.fn();
 vi.mock("workflow/api", () => ({ start: (...args: any[]) => mockStart(...args) }));
@@ -74,9 +88,17 @@ beforeEach(async () => {
   registry = new PostgresRunRegistry(db);
   mockStart.mockReset().mockResolvedValue({ runId: "run-pr" });
   mockGetEnabled.mockReset();
-  mockGetPRHead.mockReset().mockResolvedValue({ headSha: "abc123" });
+  mockGetPRHead.mockReset().mockResolvedValue({
+    headSha: "abc123",
+    baseRef: "main",
+    state: "open",
+  });
   mockGetBranchSha.mockReset().mockResolvedValue("abc123");
+  repositoryScopeMocks.getConfiguredVcsProviders.mockReset().mockReturnValue([]);
+  repositoryScopeMocks.listRepositories.mockReset().mockResolvedValue([]);
   testEnv.GITLAB_PROJECT_ID = undefined;
+  testEnv.GITHUB_BOT_LOGIN = "github-app[bot]";
+  testEnv.GITLAB_BOT_LOGIN = "gitlab-bot";
 });
 
 afterEach(() => {
@@ -158,6 +180,25 @@ function checksEvent(overrides: Partial<TriggerEvent> = {}): TriggerEvent {
   });
 }
 
+function reviewEvent(
+  state: "changes_requested" | "commented",
+  overrides: Partial<TriggerEvent> = {},
+): TriggerEvent {
+  return event({
+    delivery: {
+      provider: "github",
+      producer: "reviewer",
+      deliveryId: `review-${state}`,
+    },
+    triggerType: "trigger_pr_review",
+    pr: {
+      ...event().pr,
+      review: { state, author: "reviewer", body: "Please update this" },
+    },
+    ...overrides,
+  });
+}
+
 function deps(overrides: Record<string, unknown> = {}) {
   return {
     db,
@@ -188,6 +229,7 @@ async function correlate(publishedHeadSha = "abc123") {
     repoPath: "acme/app",
     branchName: "feature/owned",
     publishedHeadSha,
+    targetBranch: "main",
     pr: {
       id: 7,
       url: "https://github.com/acme/app/pull/7",
@@ -262,6 +304,40 @@ describe("dispatchTriggerEvent durable envelope", () => {
     expect(await getTriggerDelivery(db, "github", "delivery-1")).toBeNull();
   });
 
+  it("filters a review with the same deployed definition snapshot that it pins", async () => {
+    mockGetEnabled.mockResolvedValue(
+      enabledReview({
+        scope: "any",
+        providers: ["github"],
+        on: ["changes_requested"],
+      }),
+    );
+    const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
+
+    await expect(
+      dispatchTriggerEvent(reviewEvent("commented"), deps()),
+    ).resolves.toEqual({ result: "ignored_untrusted_event" });
+    expect(await getTriggerDelivery(db, "github", "review-commented")).toBeNull();
+    expect(mockStart).not.toHaveBeenCalled();
+  });
+
+  it("fails closed for a commented review when no provider bot identity is configured", async () => {
+    testEnv.GITHUB_BOT_LOGIN = undefined;
+    mockGetEnabled.mockResolvedValue(
+      enabledReview({
+        scope: "any",
+        providers: ["github"],
+        on: ["commented"],
+      }),
+    );
+    const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
+
+    await expect(
+      dispatchTriggerEvent(reviewEvent("commented"), deps()),
+    ).resolves.toEqual({ result: "ignored_untrusted_event" });
+    expect(mockStart).not.toHaveBeenCalled();
+  });
+
   it("durably records a stale-head decision after receiving the authenticated delivery", async () => {
     mockGetEnabled.mockResolvedValue(enabled({ scope: "any" }));
     const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
@@ -276,9 +352,88 @@ describe("dispatchTriggerEvent durable envelope", () => {
     expect(mockStart).not.toHaveBeenCalled();
   });
 
+  it("rejects a same-head PR after its authoritative target branch changes", async () => {
+    mockGetEnabled.mockResolvedValue(enabled({ scope: "any" }));
+    const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
+
+    await expect(
+      dispatchTriggerEvent(
+        event(),
+        deps({
+          getCurrentPullRequest: vi.fn().mockResolvedValue({
+            headSha: "abc123",
+            baseRef: "release",
+            state: "open",
+          }),
+        }),
+      ),
+    ).resolves.toEqual({ result: "ignored_stale_head" });
+    expect(mockStart).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      name: "created",
+      trigger: () => event(),
+      definition: () => enabledTrigger("trigger_pr_created", { scope: "any" }),
+    },
+    {
+      name: "review",
+      trigger: () => reviewEvent("changes_requested"),
+      definition: () =>
+        enabledReview({ scope: "any", providers: ["github"], on: ["changes_requested"] }),
+    },
+    {
+      name: "checks-failed",
+      trigger: () => checksEvent(),
+      definition: () =>
+        enabledTrigger("trigger_pr_checks_failed", {
+          scope: "any",
+          checkNames: ["ci / build"],
+          githubAppSlugs: ["github-actions"],
+        }),
+    },
+  ])("requires an open PR for a $name trigger", async ({ trigger, definition }) => {
+    mockGetEnabled.mockResolvedValue(definition());
+    const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
+
+    await expect(
+      dispatchTriggerEvent(
+        trigger(),
+        deps({
+          getCurrentPullRequest: vi.fn().mockResolvedValue({
+            headSha: "abc123",
+            baseRef: "main",
+            state: "closed",
+          }),
+        }),
+      ),
+    ).resolves.toEqual({ result: "ignored_stale_head" });
+    expect(mockStart).not.toHaveBeenCalled();
+  });
+
+  it("requires a genuinely merged PR for a merged trigger", async () => {
+    mockGetEnabled.mockResolvedValue(enabledTrigger("trigger_pr_merged", { scope: "any" }));
+    const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
+
+    await expect(
+      dispatchTriggerEvent(
+        event({ triggerType: "trigger_pr_merged" }),
+        deps({
+          getCurrentPullRequest: vi.fn().mockResolvedValue({
+            headSha: "abc123",
+            baseRef: "main",
+            state: "closed",
+          }),
+        }),
+      ),
+    ).resolves.toEqual({ result: "ignored_stale_head" });
+    expect(mockStart).not.toHaveBeenCalled();
+  });
+
   it("validates a fork PR by authoritative PR number instead of a same-named base branch", async () => {
     mockGetEnabled.mockResolvedValue(enabled({ scope: "any" }));
-    mockGetPRHead.mockResolvedValue({ headSha: "abc123" });
+    mockGetPRHead.mockResolvedValue({ headSha: "abc123", baseRef: "main", state: "open" });
     mockGetBranchSha.mockResolvedValue("different-base-branch-head");
     const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
 
@@ -314,7 +469,11 @@ describe("dispatchTriggerEvent durable envelope", () => {
 
   it("uses the provider PR API head for a merged event whose source branch was deleted", async () => {
     mockGetEnabled.mockResolvedValue(enabledTrigger("trigger_pr_merged", { scope: "any" }));
-    const getCurrentPullRequest = vi.fn().mockResolvedValue({ headSha: "abc123" });
+    const getCurrentPullRequest = vi.fn().mockResolvedValue({
+      headSha: "abc123",
+      baseRef: "main",
+      state: "merged",
+    });
     const getCurrentHead = vi.fn().mockRejectedValue(new Error("branch ref not found"));
     const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
 
@@ -358,6 +517,8 @@ describe("dispatchTriggerEvent durable envelope", () => {
     });
     const getCurrentPullRequest = vi.fn().mockResolvedValue({
       headSha: "source-head-sha",
+      baseRef: "main",
+      state: "open",
       headPipelineId: 902,
     });
     const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
@@ -397,7 +558,11 @@ describe("dispatchTriggerEvent durable envelope", () => {
     const isRepositoryConfigured = vi
       .fn()
       .mockRejectedValueOnce(new Error("GitLab unavailable"));
-    const getCurrentPullRequest = vi.fn().mockResolvedValue({ headSha: "abc123" });
+    const getCurrentPullRequest = vi.fn().mockResolvedValue({
+      headSha: "abc123",
+      baseRef: "main",
+      state: "open",
+    });
     const { dispatchTriggerEvent, recoverAcceptedTriggerDelivery } = await import(
       "./dispatch-trigger.js"
     );
@@ -476,6 +641,44 @@ describe("dispatchTriggerEvent durable envelope", () => {
     expect(getCurrentPullRequest).not.toHaveBeenCalled();
   });
 
+  it("does not treat a nonempty GitLab directory as permission for an uninstalled repository", async () => {
+    mockGetEnabled.mockResolvedValue(
+      enabledTrigger("trigger_pr_created", { scope: "any", providers: ["gitlab"] }),
+    );
+    repositoryScopeMocks.getConfiguredVcsProviders.mockReturnValue([
+      { kind: "gitlab", id: "primary" },
+      { kind: "gitlab", id: "secondary" },
+    ]);
+    repositoryScopeMocks.listRepositories.mockResolvedValue([
+      { provider: "gitlab", repoPath: "group/api" },
+      { provider: "gitlab", repoPath: "group/web" },
+    ]);
+    const getCurrentPullRequest = vi.fn();
+    const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
+
+    await expect(
+      dispatchTriggerEvent(
+        event({
+          delivery: {
+            provider: "gitlab",
+            producer: "alice",
+            deliveryId: "gitlab-uninstalled-multi-directory",
+          },
+          pr: {
+            ...event().pr,
+            provider: "gitlab",
+            repoPath: "group/denied",
+            providerProjectId: 999,
+            prUrl: "https://gitlab.com/group/denied/-/merge_requests/7",
+          },
+        }),
+        deps({ isRepositoryConfigured: undefined, getCurrentPullRequest }),
+      ),
+    ).resolves.toEqual({ result: "ignored_provider" });
+    expect(repositoryScopeMocks.listRepositories).toHaveBeenCalledOnce();
+    expect(getCurrentPullRequest).not.toHaveBeenCalled();
+  });
+
   it("binds a documented GitLab pipeline hook to the authoritative MR source head", async () => {
     mockGetEnabled.mockResolvedValue(
       enabledTrigger("trigger_pr_checks_failed", {
@@ -505,7 +708,11 @@ describe("dispatchTriggerEvent durable envelope", () => {
     });
     const getCurrentPullRequest = vi.fn().mockResolvedValue({
       headSha: "source-head-sha",
+      baseRef: "main",
+      state: "open",
       headPipelineId: 901,
+      headPipelineStatus: "failed",
+      headPipelineFailedChecks: [{ id: 11, name: "lint" }],
     });
     const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
 
@@ -520,6 +727,213 @@ describe("dispatchTriggerEvent durable envelope", () => {
         }),
       }),
     ]);
+  });
+
+  it("accepts the explicit pipeline sentinel when a failed GitLab hook omits builds", async () => {
+    mockGetEnabled.mockResolvedValue(
+      enabledTrigger("trigger_pr_checks_failed", {
+        scope: "any",
+        checkNames: ["pipeline"],
+        gitlabPipelineSources: ["merge_request_event"],
+      }),
+    );
+    const gitlabEvent = event({
+      delivery: {
+        provider: "gitlab",
+        producer: "gitlab-ci",
+        source: "merge_request_event",
+        deliveryId: "gitlab-pipeline-no-builds",
+      },
+      triggerType: "trigger_pr_checks_failed",
+      pr: {
+        ...event().pr,
+        provider: "gitlab",
+        repoPath: "group/app",
+        headSha: "",
+        pipelineId: 901,
+        failedChecks: [{ name: "pipeline", conclusion: "failed" }],
+      },
+    });
+    const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
+
+    await expect(
+      dispatchTriggerEvent(
+        gitlabEvent,
+        deps({
+          getCurrentPullRequest: vi.fn().mockResolvedValue({
+            headSha: "source-head-sha",
+            baseRef: "main",
+            state: "open",
+            headPipelineId: 901,
+            headPipelineStatus: "failed",
+            headPipelineFailedChecks: [{ id: 11, name: "lint" }],
+          }),
+        }),
+      ),
+    ).resolves.toEqual({ result: "started", runId: "run-pr" });
+  });
+
+  it("rejects a stale GitLab job failure when another job keeps the same pipeline failed", async () => {
+    mockGetEnabled.mockResolvedValue(
+      enabledTrigger("trigger_pr_checks_failed", {
+        scope: "any",
+        checkNames: ["lint"],
+        githubAppSlugs: ["github-actions"],
+        gitlabPipelineSources: ["merge_request_event"],
+      }),
+    );
+    const gitlabEvent = event({
+      delivery: {
+        provider: "gitlab",
+        producer: "gitlab-ci",
+        source: "merge_request_event",
+        deliveryId: "gitlab-lint-retried-green",
+      },
+      triggerType: "trigger_pr_checks_failed",
+      pr: {
+        ...event().pr,
+        provider: "gitlab",
+        repoPath: "group/app",
+        prUrl: "https://gitlab.com/group/app/-/merge_requests/7",
+        headSha: "source-head-sha",
+        pipelineId: 901,
+        failedChecks: [{ name: "lint", conclusion: "failed" }],
+      },
+    });
+    const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
+
+    await expect(
+      dispatchTriggerEvent(
+        gitlabEvent,
+        deps({
+          getCurrentPullRequest: vi.fn().mockResolvedValue({
+            headSha: "source-head-sha",
+            baseRef: "main",
+            state: "open",
+            headPipelineId: 901,
+            headPipelineStatus: "failed",
+            headPipelineFailedChecks: [{ id: 22, name: "integration" }],
+          }),
+        }),
+      ),
+    ).resolves.toEqual({ result: "ignored_stale_head" });
+    expect(mockStart).not.toHaveBeenCalled();
+  });
+
+  it("rejects a GitLab failure when the same head pipeline has already succeeded", async () => {
+    mockGetEnabled.mockResolvedValue(
+      enabledTrigger("trigger_pr_checks_failed", {
+        scope: "any",
+        checkNames: ["lint"],
+        githubAppSlugs: ["github-actions"],
+        gitlabPipelineSources: ["merge_request_event"],
+      }),
+    );
+    const gitlabEvent = event({
+      delivery: {
+        provider: "gitlab",
+        producer: "gitlab-ci",
+        source: "merge_request_event",
+        deliveryId: "gitlab-pipeline-already-green",
+      },
+      triggerType: "trigger_pr_checks_failed",
+      pr: {
+        ...event().pr,
+        provider: "gitlab",
+        repoPath: "group/app",
+        prUrl: "https://gitlab.com/group/app/-/merge_requests/7",
+        headSha: "source-head-sha",
+        pipelineId: 901,
+        failedChecks: [{ name: "lint", conclusion: "failed" }],
+      },
+    });
+    const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
+
+    await expect(
+      dispatchTriggerEvent(
+        gitlabEvent,
+        deps({
+          getCurrentPullRequest: vi.fn().mockResolvedValue({
+            headSha: "source-head-sha",
+            baseRef: "main",
+            state: "open",
+            headPipelineId: 901,
+            headPipelineStatus: "success",
+          }),
+        }),
+      ),
+    ).resolves.toEqual({ result: "ignored_stale_head" });
+    expect(mockStart).not.toHaveBeenCalled();
+  });
+
+  it("invalidates a queued GitLab failure after the same pipeline succeeds", async () => {
+    mockGetEnabled.mockResolvedValue(
+      enabledTrigger("trigger_pr_checks_failed", {
+        scope: "any",
+        checkNames: ["lint"],
+        githubAppSlugs: ["github-actions"],
+        gitlabPipelineSources: ["merge_request_event"],
+      }),
+    );
+    const failed = event({
+      delivery: {
+        provider: "gitlab",
+        producer: "gitlab-ci",
+        source: "merge_request_event",
+        deliveryId: "gitlab-pipeline-901-failed",
+      },
+      triggerType: "trigger_pr_checks_failed",
+      pr: {
+        ...event().pr,
+        provider: "gitlab",
+        repoPath: "group/app",
+        prUrl: "https://gitlab.com/group/app/-/merge_requests/7",
+        headSha: "source-head-sha",
+        pipelineId: 901,
+        failedChecks: [{ name: "lint", conclusion: "failed" }],
+      },
+    });
+    const getCurrentPullRequest = vi
+      .fn()
+      .mockResolvedValueOnce({
+        headSha: "source-head-sha",
+        baseRef: "main",
+        state: "open",
+        headPipelineId: 901,
+        headPipelineStatus: "failed",
+        headPipelineFailedChecks: [{ id: 11, name: "lint" }],
+      })
+      .mockResolvedValueOnce({
+        headSha: "source-head-sha",
+        baseRef: "main",
+        state: "open",
+        headPipelineId: 901,
+        headPipelineStatus: "success",
+      });
+    await registry.reserve({
+      subjectKey: "pr:gitlab:group/app#7",
+      ticketKey: null,
+      ownerToken: "blocking-owner",
+      kind: "pr_trigger",
+    });
+    const { dispatchTriggerEvent, drainOldestPendingTrigger } = await import(
+      "./dispatch-trigger.js"
+    );
+
+    await expect(
+      dispatchTriggerEvent(failed, deps({ getCurrentPullRequest })),
+    ).resolves.toEqual({ result: "coalesced" });
+    await registry.releaseReservation("pr:gitlab:group/app#7", "blocking-owner");
+    await expect(
+      drainOldestPendingTrigger(
+        "pr:gitlab:group/app#7",
+        deps({ getCurrentPullRequest }),
+      ),
+    ).resolves.toBeNull();
+    expect(mockStart).not.toHaveBeenCalled();
+    await expect(
+      getTriggerDelivery(db, "gitlab", "gitlab-pipeline-901-failed"),
+    ).resolves.toMatchObject({ result: { result: "ignored_stale_head" } });
   });
 
   it("fails closed when a checks trigger has no exact check-name selectors", async () => {
@@ -736,6 +1150,8 @@ describe("dispatchTriggerEvent durable envelope", () => {
         deps({
           getCurrentPullRequest: vi.fn().mockResolvedValue({
             headSha: "source-head-sha",
+            baseRef: "main",
+            state: "open",
             headPipelineId: 901,
           }),
         }),
@@ -751,6 +1167,33 @@ describe("dispatchTriggerEvent durable envelope", () => {
     expect(await dispatchTriggerEvent(prefixed, deps())).toEqual({
       result: "ignored_not_workflow_owned",
     });
+    expect(mockStart).not.toHaveBeenCalled();
+  });
+
+  it("never grants workflow-owned identity from a legacy null PR target", async () => {
+    await db.insert(workflowOwnedBranches).values({
+      ticketKey: "AIW-1",
+      provider: "github",
+      repoPath: "acme/app",
+      branchName: "feature/owned",
+      publishedHeadSha: "abc123",
+      prId: 7,
+      prUrl: "https://github.com/acme/app/pull/7",
+      prBranchName: "feature/owned",
+      prPublishedHeadSha: "abc123",
+      // Migration 0028 cannot infer the original PR target, so it remains
+      // null and must never act as a wildcard for an authenticated webhook.
+    });
+    mockGetEnabled.mockResolvedValue(enabled());
+    const issueTracker = {
+      fetchTicket: vi.fn().mockResolvedValue({ identifier: "AIW-1" }),
+    };
+    const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
+
+    await expect(
+      dispatchTriggerEvent(event(), deps({ issueTracker })),
+    ).resolves.toEqual({ result: "ignored_not_workflow_owned" });
+    expect(issueTracker.fetchTicket).not.toHaveBeenCalled();
     expect(mockStart).not.toHaveBeenCalled();
   });
 
@@ -1058,6 +1501,26 @@ describe("dispatchTriggerEvent durable envelope", () => {
     });
   });
 
+  it("keeps a workflow's terminal freshness result when start returns afterward", async () => {
+    mockGetEnabled.mockResolvedValue(enabled({ scope: "any" }));
+    mockStart.mockImplementationOnce(async () => {
+      // Workflow execution can reach its first validation step before the
+      // dispatcher's start() promise returns.
+      await completeTriggerDelivery(db, "github", "delivery-1", {
+        result: "ignored_stale_head",
+      });
+      return { runId: "run-pr" };
+    });
+    const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
+
+    await expect(dispatchTriggerEvent(event(), deps())).resolves.toEqual({
+      result: "ignored_stale_head",
+    });
+    await expect(getTriggerDelivery(db, "github", "delivery-1")).resolves.toMatchObject({
+      result: { result: "ignored_stale_head" },
+    });
+  });
+
   it("recovers the exact pinned envelope when a started candidate dies before binding", async () => {
     mockGetEnabled.mockResolvedValue(enabled({ scope: "any" }));
     const { dispatchTriggerEvent, drainOldestPendingTrigger } = await import(
@@ -1323,6 +1786,92 @@ describe("dispatchTriggerEvent durable envelope", () => {
     });
   });
 
+  it("revalidates an accepted same-head delivery after the PR closes", async () => {
+    mockGetEnabled.mockResolvedValue(enabled({ scope: "any" }));
+    await acceptTriggerDelivery(db, {
+      ...event({
+        delivery: { provider: "github", producer: "alice", deliveryId: "accepted-closed" },
+      }),
+      scope: "any",
+      subjectKey: "pr:github:acme/app#7",
+      ticketKey: null,
+      definitionId: 5,
+      definitionVersion: 12,
+    });
+    const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
+
+    await expect(
+      dispatchTriggerEvent(
+        event({
+          delivery: { provider: "github", producer: "alice", deliveryId: "accepted-closed" },
+        }),
+        deps({
+          getCurrentPullRequest: vi.fn().mockResolvedValue({
+            headSha: "abc123",
+            baseRef: "main",
+            state: "closed",
+          }),
+        }),
+      ),
+    ).resolves.toEqual({ result: "ignored_stale_head" });
+    expect(mockStart).not.toHaveBeenCalled();
+  });
+
+  it("revalidates an accepted GitLab failure after the same pipeline succeeds", async () => {
+    const failed = event({
+      delivery: {
+        provider: "gitlab",
+        producer: "gitlab-ci",
+        source: "merge_request_event",
+        deliveryId: "accepted-gitlab-pipeline-901",
+      },
+      triggerType: "trigger_pr_checks_failed",
+      pr: {
+        ...event().pr,
+        provider: "gitlab",
+        repoPath: "group/app",
+        prUrl: "https://gitlab.com/group/app/-/merge_requests/7",
+        headSha: "source-head-sha",
+        pipelineId: 901,
+        failedChecks: [{ name: "lint", conclusion: "failed" }],
+      },
+    });
+    await acceptTriggerDelivery(db, {
+      ...failed,
+      scope: "any",
+      subjectKey: "pr:gitlab:group/app#7",
+      ticketKey: null,
+      definitionId: 5,
+      definitionVersion: 12,
+    });
+    const stored = await getTriggerDelivery(
+      db,
+      "gitlab",
+      "accepted-gitlab-pipeline-901",
+    );
+    expect(stored).not.toBeNull();
+    const { recoverAcceptedTriggerDelivery } = await import("./dispatch-trigger.js");
+
+    await expect(
+      recoverAcceptedTriggerDelivery(
+        stored!,
+        deps({
+          getCurrentPullRequest: vi.fn().mockResolvedValue({
+            headSha: "source-head-sha",
+            baseRef: "main",
+            state: "open",
+            headPipelineId: 901,
+            headPipelineStatus: "success",
+          }),
+        }),
+      ),
+    ).resolves.toEqual({ result: "ignored_stale_head" });
+    expect(mockStart).not.toHaveBeenCalled();
+    await expect(
+      getTriggerDelivery(db, "gitlab", "accepted-gitlab-pipeline-901"),
+    ).resolves.toMatchObject({ result: { result: "ignored_stale_head" } });
+  });
+
   it("revalidates accepted-delivery recovery against the authoritative PR head", async () => {
     mockGetEnabled.mockResolvedValue(enabled({ scope: "any" }));
     await acceptTriggerDelivery(db, {
@@ -1335,7 +1884,11 @@ describe("dispatchTriggerEvent durable envelope", () => {
       definitionId: 5,
       definitionVersion: 12,
     });
-    mockGetPRHead.mockResolvedValue({ headSha: "new-pr-head" });
+    mockGetPRHead.mockResolvedValue({
+      headSha: "new-pr-head",
+      baseRef: "main",
+      state: "open",
+    });
     mockGetBranchSha.mockResolvedValue("abc123");
     const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
 
@@ -1659,7 +2212,11 @@ describe("dispatchTriggerEvent durable envelope", () => {
     const { dispatchTriggerEvent, drainOldestPendingTrigger } = await import("./dispatch-trigger.js");
     expect(await dispatchTriggerEvent(event(), deps())).toEqual({ result: "coalesced" });
     await registry.releaseReservation("pr:github:acme/app#7", "blocking-owner");
-    mockGetPRHead.mockResolvedValue({ headSha: "new-pr-head" });
+    mockGetPRHead.mockResolvedValue({
+      headSha: "new-pr-head",
+      baseRef: "main",
+      state: "open",
+    });
     mockGetBranchSha.mockResolvedValue("abc123");
 
     await expect(
@@ -1671,6 +2228,45 @@ describe("dispatchTriggerEvent durable envelope", () => {
 
     expect(mockGetPRHead).toHaveBeenCalledWith(7);
     expect(mockGetBranchSha).not.toHaveBeenCalled();
+    expect(
+      await getPendingTrigger(
+        db,
+        "pr:github:acme/app#7",
+        "abc123",
+        "trigger_pr_created",
+      ),
+    ).toBeNull();
+    expect(await getTriggerDelivery(db, "github", "delivery-1")).toMatchObject({
+      result: { result: "ignored_stale_head" },
+    });
+    expect(mockStart).not.toHaveBeenCalled();
+  });
+
+  it("drops queued same-head feedback after the PR closes", async () => {
+    mockGetEnabled.mockResolvedValue(enabled({ scope: "any" }));
+    await registry.reserve({
+      subjectKey: "pr:github:acme/app#7",
+      ticketKey: null,
+      ownerToken: "blocking-owner",
+      kind: "pr_trigger",
+    });
+    const { dispatchTriggerEvent, drainOldestPendingTrigger } = await import("./dispatch-trigger.js");
+    expect(await dispatchTriggerEvent(event(), deps())).toEqual({ result: "coalesced" });
+    await registry.releaseReservation("pr:github:acme/app#7", "blocking-owner");
+
+    await expect(
+      drainOldestPendingTrigger(
+        "pr:github:acme/app#7",
+        deps({
+          getCurrentPullRequest: vi.fn().mockResolvedValue({
+            headSha: "abc123",
+            baseRef: "main",
+            state: "closed",
+          }),
+        }),
+      ),
+    ).resolves.toBeNull();
+
     expect(
       await getPendingTrigger(
         db,

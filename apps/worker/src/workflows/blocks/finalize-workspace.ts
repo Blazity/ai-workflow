@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { isRunControlError } from "../run-control-error.js";
 import type { BlockExecuteFn, BlockExecutionResult } from "./types.js";
 
 export const paramsSchema = z
@@ -66,6 +67,8 @@ export const execute: BlockExecuteFn = async (
     const { finalizeWorkspacePublication } = await import("../workspace-publication.js");
     const publication = await finalizeWorkspacePublication({
       runId: ctx.runId,
+      subjectKey: ctx.entry.subjectKey,
+      ownerToken: ctx.entry.ownerToken,
       blockId: block.id,
       sandboxId: ctx.sandboxId,
       ticketKey: ctx.ticket.identifier,
@@ -78,6 +81,7 @@ export const execute: BlockExecuteFn = async (
               repoPath: ctx.entry.pr.repoPath,
               prId: ctx.entry.pr.prNumber,
               headSha: ctx.entry.pr.headSha,
+              baseRef: ctx.entry.pr.baseRef,
             }
           : undefined,
     });
@@ -116,6 +120,7 @@ export const execute: BlockExecuteFn = async (
       },
     };
   } catch (err) {
+    if (isRunControlError(err)) throw err;
     return {
       kind: "failed",
       output: { status: "failed" },

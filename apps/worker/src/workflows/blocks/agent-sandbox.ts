@@ -1,4 +1,5 @@
 import type { AgentKind } from "../../sandbox/agents/index.js";
+import { isRunControlError } from "../run-control-error.js";
 import type { EngineCtx } from "./types.js";
 import { ensureArthurTask } from "./prepare-workspace.js";
 
@@ -56,7 +57,14 @@ async function blockProvisionAgentSandboxStep(
     });
     return { sandboxId: sandbox.sandboxId };
   } catch (error) {
-    await sandbox.stop().catch(() => {});
+    const { stopSandboxAndConfirm } = await import(
+      "../../sandbox/stop-ticket-sandboxes.js"
+    );
+    try {
+      await stopSandboxAndConfirm(sandbox);
+    } catch (cleanupError) {
+      if (!isRunControlError(error)) throw cleanupError;
+    }
     throw error;
   }
 }

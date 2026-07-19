@@ -1,5 +1,6 @@
 import { start } from "workflow/api";
 import type { VcsProviderKind } from "@shared/contracts";
+import { getVcsBotLogin } from "../../env.js";
 import type { Db } from "../db/client.js";
 import {
   IssueTrackerNotFoundError,
@@ -9,7 +10,6 @@ import type { RunRegistryAdapter } from "../adapters/run-registry/types.js";
 import type {
   LatestCheckRun,
   PullRequestHead,
-  VCSAdapter,
 } from "../adapters/vcs/types.js";
 import type { AgentWorkflowInput, PrTriggerPayload } from "../workflows/agent-input.js";
 import { agentWorkflow } from "../workflows/agent.js";
@@ -32,6 +32,7 @@ import {
   deletePendingTrigger,
   getTriggerDelivery,
   listPendingTriggersForSubject,
+  recordCandidateStartedTriggerDelivery,
   receiveTriggerDelivery,
   type AcceptedTriggerDelivery,
   type ReceivedTriggerDelivery,
@@ -40,8 +41,11 @@ import {
   type TriggerScope,
 } from "./trigger-delivery-store.js";
 import type { TriggerEvent } from "./trigger-events.js";
-import { createRepositoryVCS } from "./vcs-runtime.js";
-import { normalizeVcsLogin } from "./vcs-bot-identity.js";
+import {
+  bindCurrentPullRequest,
+  readProviderCurrentPullRequest,
+} from "./trigger-current-pull-request.js";
+import { normalizeVcsLogin, vcsLoginsMatch } from "./vcs-bot-identity.js";
 
 export type DispatchTriggerResult =
   | { result: "no_definition" }
@@ -86,14 +90,7 @@ export async function resolveEnabledReviewStates(
   const params = triggerNodeParams(enabled.current.definition, "trigger_pr_review");
   const providers = Array.isArray(params.providers) ? params.providers : ["github"];
   if (!providers.includes(provider)) return [];
-
-  const configuredStates =
-    Array.isArray(params.on) && params.on.length > 0 ? params.on : ["changes_requested"];
-  return configuredStates.filter(
-    (state): state is string =>
-      (state === "changes_requested" && provider === "github") ||
-      (state === "commented" && Boolean(normalizeVcsLogin(botLogin))),
-  );
+  return selectedReviewStates(params, provider, botLogin);
 }
 
 export async function dispatchTriggerEvent(
@@ -184,7 +181,7 @@ async function enrichReceivedTrigger(
   if (!repositoryScope.configured) {
     return completeReceivedDelivery(received, { result: "ignored_provider" }, deps);
   }
-  const currentResult = await readCurrentPullRequest(event.pr, deps);
+  const currentResult = await readCurrentPullRequest(event, deps);
   if (currentResult.status === "unreachable") return { result: "error" };
   const currentEvent = bindCurrentPullRequest(event, currentResult.current);
   if (!currentEvent) {
@@ -316,7 +313,7 @@ async function resumeAcceptedTrigger(
   accepted: AcceptedTriggerDelivery,
   deps: DispatchTriggerDeps,
 ): Promise<DispatchTriggerResult> {
-  const currentResult = await readCurrentPullRequest(accepted.pr, deps);
+  const currentResult = await readCurrentPullRequest(accepted, deps);
   if (currentResult.status === "unreachable") return { result: "error" };
   const currentAccepted = bindCurrentPullRequest(accepted, currentResult.current);
   if (!currentAccepted) {
@@ -370,6 +367,20 @@ function selectEligibleEvent(
   event: TriggerEvent,
   params: Record<string, unknown>,
 ): TriggerEvent | null {
+  if (event.triggerType === "trigger_pr_review") {
+    const review = event.pr.review;
+    if (!review) return null;
+    const botLogin = getVcsBotLogin(event.pr.provider);
+    if (
+      !selectedReviewStates(params, event.pr.provider, botLogin).includes(review.state) ||
+      vcsLoginsMatch(review.author, botLogin) ||
+      vcsLoginsMatch(event.delivery.producer, botLogin)
+    ) {
+      return null;
+    }
+    return event;
+  }
+
   if (event.triggerType !== "trigger_pr_checks_failed") return event;
 
   const checkNames = stringArray(params.checkNames);
@@ -390,6 +401,20 @@ function selectEligibleEvent(
     ...event,
     pr: { ...event.pr, failedChecks },
   };
+}
+
+function selectedReviewStates(
+  params: Record<string, unknown>,
+  provider: VcsProviderKind,
+  botLogin: string | undefined,
+): string[] {
+  const configuredStates =
+    Array.isArray(params.on) && params.on.length > 0 ? params.on : ["changes_requested"];
+  return configuredStates.filter(
+    (state): state is string =>
+      (state === "changes_requested" && provider === "github") ||
+      (state === "commented" && Boolean(normalizeVcsLogin(botLogin))),
+  );
 }
 
 function stringArray(value: unknown, fallback: string[] = []): string[] {
@@ -444,11 +469,23 @@ async function dispatchAcceptedTrigger(
 
   if (dispatched.started) {
     const result = { result: "started" as const, runId: dispatched.runId! };
-    await completeDelivery(deps.db, accepted, {
-      result: "candidate_started",
-      runId: dispatched.runId!,
-    });
-    return result;
+    const recorded = await recordCandidateStartedTriggerDelivery(
+      deps.db,
+      accepted,
+      dispatched.ownerToken!,
+      dispatched.runId!,
+    );
+    if (recorded) return result;
+
+    // The candidate may have completed freshness validation before start()
+    // returned to this dispatcher, or a newer recovery owner may have won.
+    // Report the durable winner instead of acknowledging the stale candidate.
+    const stored = await getTriggerDelivery(
+      deps.db,
+      accepted.delivery.provider,
+      accepted.delivery.deliveryId,
+    );
+    return storedResultToDispatch(stored?.result ?? null);
   }
 
   if (dispatched.reason === "already_claimed" || dispatched.reason === "at_capacity") {
@@ -510,7 +547,7 @@ export async function drainOldestPendingTrigger(
       continue;
     }
 
-    const currentResult = await readCurrentPullRequest(pending.pr, deps);
+    const currentResult = await readCurrentPullRequest(pending, deps);
     if (currentResult.status === "unreachable") return { result: "error" };
     const currentPending = bindCurrentPullRequest(pending, currentResult.current);
     if (!currentPending) {
@@ -644,35 +681,34 @@ async function resolveTicketIdentity(
 }
 
 async function readCurrentPullRequest(
-  pr: PrTriggerPayload,
+  event: Pick<TriggerEvent, "triggerType" | "pr">,
   deps: DispatchTriggerDeps,
 ): Promise<
   | { status: "ok"; current: PullRequestHead }
   | { status: "unreachable" }
 > {
+  const { pr } = event;
   try {
-    let adapter: VCSAdapter | undefined;
     let current: PullRequestHead;
     if (deps.getCurrentPullRequest) {
       current = await deps.getCurrentPullRequest(pr);
     } else if (deps.getCurrentHead) {
-      current = { headSha: await deps.getCurrentHead(pr) };
+      // Legacy test seam: production always uses getPRHead below, which reads
+      // target and lifecycle from the provider together with the head SHA.
+      current = {
+        headSha: await deps.getCurrentHead(pr),
+        baseRef: pr.baseRef,
+        state: event.triggerType === "trigger_pr_merged" ? "merged" : "open",
+      };
     } else {
-      adapter = createRepositoryVCS({
-        provider: pr.provider,
-        repoPath: pr.repoPath,
-        baseBranch: pr.baseRef,
-      });
-      current = await adapter.getPRHead(pr.prNumber);
+      current = await readProviderCurrentPullRequest(event);
     }
     if (pr.provider === "github" && (pr.failedChecks?.length ?? 0) > 0) {
       const latestCheckRuns =
         current.latestCheckRuns ??
         (deps.getLatestCheckRuns
           ? await deps.getLatestCheckRuns(pr)
-          : adapter?.getLatestCheckRuns
-            ? await adapter.getLatestCheckRuns(current.headSha)
-            : null);
+          : null);
       if (!latestCheckRuns) throw new Error("GitHub latest Check Runs are unavailable");
       current = { ...current, latestCheckRuns };
     }
@@ -684,34 +720,6 @@ async function readCurrentPullRequest(
     );
     return { status: "unreachable" };
   }
-}
-
-function bindCurrentPullRequest<T extends TriggerEvent>(
-  event: T,
-  current: PullRequestHead | null,
-): T | null {
-  if (!current) return null;
-  const { pr } = event;
-  if (pr.provider === "github") {
-    if (current.headSha !== pr.headSha) return null;
-    if (event.triggerType !== "trigger_pr_checks_failed") return event;
-    const failedChecks = (pr.failedChecks ?? []).filter((failed) =>
-      current.latestCheckRuns?.some(
-        (latest) =>
-          latest.id === failed.checkRunId &&
-          latest.name === failed.name &&
-          latest.appSlug === failed.appSlug &&
-          latest.status === "completed" &&
-          latest.conclusion === failed.conclusion,
-      ),
-    );
-    if (failedChecks.length === 0) return null;
-    return { ...event, pr: { ...pr, failedChecks } };
-  }
-  if (pr.pipelineId === undefined) return current.headSha === pr.headSha ? event : null;
-  if (current.headPipelineId !== pr.pipelineId) return null;
-  if (pr.headSha && pr.headSha !== current.headSha) return null;
-  return { ...event, pr: { ...pr, headSha: current.headSha } };
 }
 
 async function completeDelivery(

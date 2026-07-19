@@ -14,7 +14,7 @@ vi.mock("../../sandbox/arthur-client.js", () => ({
 }));
 
 import { execute, paramsSchema } from "./arthur-injection-check.js";
-import { makeCtx, makeNode } from "./test-support.js";
+import { makeCtx, makeNode, runControlErrorCases } from "./test-support.js";
 
 function configureArthur() {
   mocks.env.GENAI_ENGINE_API_KEY = "key";
@@ -132,5 +132,18 @@ describe("arthur_injection_check execute", () => {
 
     expect(result.kind).toBe("next");
     expect(result.output).toEqual({ status: "skipped", reason: "arthur 500" });
+  });
+
+  it.each(runControlErrorCases())("rethrows %s from Arthur validation", async (_label, error) => {
+    configureArthur();
+    mocks.validatePrompt.mockRejectedValue(error);
+
+    await expect(
+      execute(
+        makeNode("arthur_injection_check"),
+        {},
+        makeCtx({ arthur: { taskId: "task-1" } }),
+      ),
+    ).rejects.toBe(error);
   });
 });

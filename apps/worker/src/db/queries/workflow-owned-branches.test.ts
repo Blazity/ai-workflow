@@ -10,7 +10,7 @@ import {
 } from "./workflow-owned-branches.js";
 
 describe("workflow-owned branch records", () => {
-  it("never lets a legacy null confirmed head authorize a later human push", async () => {
+  it("never lets a legacy null confirmed target authorize a webhook", async () => {
     const db = await createTestDb();
     await db.insert(workflowOwnedBranches).values({
       ticketKey: "AIW-legacy",
@@ -44,7 +44,7 @@ describe("workflow-owned branch records", () => {
         publishedHeadSha: "workflow-head",
         baseBranch: "main",
       }),
-    ).resolves.toMatchObject({ ticketKey: "AIW-legacy" });
+    ).resolves.toBeNull();
   });
 
   it("does not wildcard a legacy confirmed target after a retarget intent", async () => {
@@ -490,6 +490,7 @@ describe("workflow-owned branch records", () => {
       repoPath: "acme/web",
       branchName: "feature/owned",
       publishedHeadSha: "published-sha",
+      targetBranch: "main",
       pr: {
         id: 42,
         url: "https://github.com/acme/web/pull/42",

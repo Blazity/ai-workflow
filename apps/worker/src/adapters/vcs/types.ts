@@ -6,8 +6,16 @@ export interface PullRequest {
 
 export interface PullRequestHead {
   headSha: string;
+  /** Provider-authoritative target branch (GitHub base / GitLab target). */
+  baseRef: string;
+  /** Provider-neutral current PR/MR lifecycle state. */
+  state: "open" | "closed" | "merged";
   /** GitLab's current MR head pipeline. Absent for providers without this concept. */
   headPipelineId?: number;
+  /** GitLab's provider-authoritative current status for the MR head pipeline. */
+  headPipelineStatus?: string;
+  /** Jobs that are still failed in GitLab's current MR head pipeline. */
+  headPipelineFailedChecks?: Array<{ id: number; name: string }>;
   /** GitHub's latest run for each check name on this exact head. */
   latestCheckRuns?: LatestCheckRun[];
 }

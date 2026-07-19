@@ -29,7 +29,12 @@ export async function collectBlockStatuses(
 
   const entries = await registry.listAll();
   const liveRunIds = entries.flatMap((entry) =>
-    entry.state === "bound" && entry.runId ? [entry.runId] : [],
+    (entry.state === "bound" ||
+      entry.state === "parking" ||
+      entry.state === "parked") &&
+    entry.runId
+      ? [entry.runId]
+      : [],
   );
 
   if (liveRunIds.length > 0) {

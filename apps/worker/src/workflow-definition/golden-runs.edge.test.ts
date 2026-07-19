@@ -105,10 +105,28 @@ async function runGolden(opts: {
   if (!entry) throw new Error(`fixture has no ${opts.entryTriggerType} trigger`);
   const rec = makeRecorder();
   const exec = opts.executor ?? makeExecutor(opts.overrides ?? {});
+  const ticket = {
+    identifier: "AIW-1",
+    title: "Golden run",
+    description: "Typed trigger inputs",
+    acceptanceCriteria: "The graph completes",
+    labels: [],
+    comments: [],
+    priorAnswers: [],
+  };
+  const defaultTriggerOutput: BlockOutput = {
+    status: "ok",
+    ticket,
+    comments: [],
+    priorAnswers: [],
+    ...(opts.entryTriggerType === "trigger_plan_approved"
+      ? { approvedPlan: "Approved golden plan" }
+      : {}),
+  };
   const result = await executeGraph({
     graph,
     entryTriggerId: entry.id,
-    triggerOutput: opts.triggerOutput ?? { status: "ok" },
+    triggerOutput: opts.triggerOutput ?? defaultTriggerOutput,
     executeBlock: exec.executor,
     hooks: rec.hooks,
   });
@@ -131,16 +149,20 @@ function makeDynamicExecutor(
 }
 
 function defaultResult(block: WorkflowDefinitionNode): BlockExecutionResult {
-  return block.type === "finalize_workspace"
-    ? {
-        kind: "next",
-        output: {
-          status: "finalized",
-          publicationAttemptId: `attempt-${block.id}`,
-          repositories: [],
-        },
-      }
-    : { kind: "next", output: { status: "ok", id: block.id } };
+  if (block.type === "planning_agent") {
+    return { kind: "next", output: { status: "ready", plan: "Golden plan" } };
+  }
+  if (block.type === "finalize_workspace") {
+    return {
+      kind: "next",
+      output: {
+        status: "finalized",
+        publicationAttemptId: `attempt-${block.id}`,
+        repositories: [],
+      },
+    };
+  }
+  return { kind: "next", output: { status: "ok", id: block.id } };
 }
 
 // Clone the humanGate fixture with overridden retry.params and optional extra edges.
@@ -171,8 +193,8 @@ describe("golden runs: linear pipeline", () => {
       "checks",
       "finalize",
       "open-pr",
-      "status",
       "slack",
+      "status",
     ]);
     expect(rec.starts.map((s) => s.nodeId)).toEqual(calls);
     expect(rec.starts.every((s) => s.attempt === 1)).toBe(true);
@@ -362,6 +384,16 @@ describe("golden runs: humanGate loop", () => {
 });
 
 describe("golden runs: planApproval two-chain hand-off", () => {
+  it("binds the approved trigger plan into the implementation block explicitly", () => {
+    const implementation = planApprovalDefinition().nodes.find(
+      (node) => node.id === "implementation",
+    );
+    expect(implementation?.inputs).toEqual({
+      ticket: "trigger.ticket",
+      plan: "trigger.approvedPlan",
+    });
+  });
+
   it("normalization preserves both authored trigger chains", async () => {
     const normalized = normalizeDefinitionForExecution(
       planApprovalDefinition().nodes,

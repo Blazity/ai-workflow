@@ -138,25 +138,35 @@ test("keeps specialized Fix Agent workspace preparation and readiness implicit",
   const finalize = BLOCKS["ws.finalize"];
   const fetchContext = BLOCKS["vcs.fetch-context"];
 
-  assert.match(fix.input, /target: PrRef \| TicketContext/);
-  assert.match(fix.input, /workspace_id\?: string/);
-  assert.match(fix.input, /source_head_sha\?: string/);
-  assert.match(fix.input, /failures: RemediationItem\[\]/);
-  assert.match(fix.output, /workspace_id: string/);
+  assert.equal(fix.runtimeType, "fix_agent");
+  assert.deepEqual(Array.from(fix.runtimeContract.requiredInputs), []);
+  assert.deepEqual(Array.from(fix.runtimeContract.optionalInputs), []);
+  assert.match(fix.input, /Bindings — required\n  \(none\)/);
+  assert.match(fix.input, /Bindings — optional\n  \(none\)/);
+  assert.doesNotMatch(fix.input, /target|workspace_id|source_head_sha|failures/);
+  assert.match(fix.output, /workspaceId: string/);
+  assert.match(fix.output, /unresolvedConflicts: object\[\]/);
   assert.match(fix.output, /questions\?: string\[\]/);
   assert.match(fix.note, /prepares|resumes|reuses/i);
+  assert.match(fix.note, /carried by the run/i);
   assert.match(fix.note, /status.*fixed.*finaliz/is);
-  assert.match(prepare.input, /target: PrRef \| TicketContext/);
+  assert.deepEqual(Array.from(prepare.runtimeContract.requiredInputs), []);
+  assert.deepEqual(Array.from(prepare.runtimeContract.optionalInputs), []);
+  assert.match(prepare.output, /sandboxId: string/);
+  assert.match(prepare.output, /workspace\.id: string/);
   assert.match(prepare.note, /optional.*specialized/i);
   assert.match(generic.note, /declared.*classification.*Branch/i);
+  assert.ok(
+    generic.runtimeContract.probes.some(({ name }) => name === "declared-output"),
+  );
   assert.match(finalize.note, /does not terminate.*claim.*downstream/is);
-  assert.match(fetchContext.output, /remediation_context: RemediationItem\[\]/);
+  assert.match(finalize.input, /Additional bindings/);
+  assert.match(finalize.input, /\^checks\\\.\[A-Za-z0-9_-\]\+\$/);
+  assert.match(fetchContext.output, /contexts: unknown\[\]/);
 
-  assert.match(supportingSpec, /Fix Agent.*workspace_id\?/is);
   assert.match(supportingSpec, /status.*fixed.*finaliz/is);
   assert.match(supportingSpec, /Generic Agent.*declared.*classification.*Branch/is);
   assert.match(supportingSpec, /Finalize workspace.*does not terminate.*claim.*downstream/is);
-  assert.match(supportingSpec, /Fetch PR context.*remediation_context/is);
 });
 
 test("keeps the supporting design spec aligned with external check ownership", () => {
@@ -187,24 +197,63 @@ test("publishes only through Finalize and models the merged ticket transition", 
   for (const frame of [standard, approved]) {
     assert.ok(frame);
     const typeById = new Map(frame.nodes.map(({ id, type }) => [id, type]));
-    const implementationId = frame.nodes.find(({ type }) => type === "agent.implementation")?.id;
     const finalizeId = frame.nodes.find(({ type }) => type === "ws.finalize")?.id;
     const openPrId = frame.nodes.find(({ type }) => type === "vcs.open-pr")?.id;
-    assert.ok(frame.edges.some(({ from, to }) => from === implementationId && to === finalizeId));
     assert.ok(frame.edges.some(({ from, to }) => from === finalizeId && to === openPrId));
     assert.equal(typeById.get(finalizeId), "ws.finalize");
   }
 
-  assert.match(BLOCKS["vcs.open-pr"].input, /publication_attempt_id/);
-  assert.doesNotMatch(BLOCKS["vcs.open-pr"].input, /workspace_id/);
-  assert.match(BLOCKS["trig.pr-merged"].input, /scope: "workflow_owned" \| "any"/);
+  const approvedImplementationId = approved.nodes.find(
+    ({ type }) => type === "agent.implementation",
+  )?.id;
+  const approvedFinalizeId = approved.nodes.find(({ type }) => type === "ws.finalize")?.id;
+  assert.ok(
+    approved.edges.some(
+      ({ from, to }) => from === approvedImplementationId && to === approvedFinalizeId,
+    ),
+  );
+
+  assert.deepEqual(
+    Array.from(standard.nodes, ({ type }) => type),
+    [
+      "trig.ticket-impl",
+      "agent.planning",
+      "agent.implementation",
+      "util.pre-pr-checks",
+      "ws.finalize",
+      "vcs.open-pr",
+      "util.slack",
+      "tk.status",
+    ],
+    "the recommended V1 board should match the shipped linear default",
+  );
+  assert.deepEqual(
+    Array.from(standard.edges, ({ from, to }) => [from, to]),
+    Array.from(standard.nodes.slice(1), (node, index) => [
+      standard.nodes[index].id,
+      node.id,
+    ]),
+    "the recommended V1 board must be a deployable fan-out-free chain",
+  );
+
+  assert.match(BLOCKS["vcs.open-pr"].input, /publicationAttemptId: string/);
+  assert.doesNotMatch(BLOCKS["vcs.open-pr"].input, /workspaceId/);
   for (const type of [
     "trig.pr-created",
     "trig.pr-checks-failed",
     "trig.pr-review",
     "trig.pr-merged",
   ]) {
-    assert.match(BLOCKS[type].input, /scope: "workflow_owned" \| "any"/);
+    assert.ok(BLOCKS[type].runtimeContract.params.includes("scope"));
+    const anyProbe = BLOCKS[type].runtimeContract.probes.find(
+      ({ name }) => name === "scope:any",
+    );
+    assert.equal(anyProbe?.params.scope, "any");
+    assert.equal(
+      anyProbe.requiredOutputs.some(({ path }) => path === "ticketKey"),
+      false,
+      `${type} scope:any must not promise ticket context`,
+    );
     assert.match(BLOCKS[type].note, /durable branch\/publication correlation/i);
   }
   assert.match(BLOCKS["trig.pr-checks-failed"].note, /any is review-safe/i);
@@ -233,6 +282,10 @@ test("records the verified clarification model and execution budgets", () => {
   assert.match(guaranteeText, /maxCostUsd/);
   assert.match(guaranteeText, /one phase may overrun/i);
   assert.match(guaranteeText, /fail closed/i);
+  assert.match(guaranteeText, /run-control stops/i);
+  assert.match(guaranteeText, /cannot be routed around by a failure edge/i);
+  assert.match(guaranteeText, /settled every started provider mutation/i);
+  assert.match(guaranteeText, /reconciliation retries a missed release/i);
 });
 
 test("keeps the authoritative block catalog aligned with the implemented registry", () => {
@@ -246,6 +299,16 @@ test("keeps the authoritative block catalog aligned with the implemented registr
   assert.match(BLOCKS["util.pre-pr-checks"].note, /pre-PR gate/i);
   assert.match(BLOCKS["ws.finalize"].note, /does not open PRs/i);
   assert.match(BLOCKS["vcs.open-pr"].note, /does not push workspace changes/i);
+  for (const [id, block] of Object.entries(BLOCKS)) {
+    assert.ok(block.runtimeType, `${id} should identify its runtime block type`);
+    assert.ok(block.runtimeContract, `${id} should carry machine-readable runtime metadata`);
+    assert.match(block.input, /Parameters \(authored configuration; not bindings\)/);
+    assert.match(block.input, /Bindings — required/);
+    assert.match(block.input, /Bindings — optional/);
+    assert.match(block.output, /Output paths/);
+    assert.match(block.status, /^status ∈ /);
+  }
+  assert.match(html, /<h5>Status<\/h5>\s*<pre>\$\{esc\(block\.status\)\}<\/pre>/);
 });
 
 test("records that an accepted plan approval cannot be revoked", () => {

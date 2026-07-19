@@ -8,7 +8,10 @@ const mocks = vi.hoisted(() => ({
   kill: vi.fn().mockResolvedValue(undefined),
 }));
 
-vi.mock("workflow", () => ({ sleep: mocks.sleep }));
+vi.mock("workflow", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("workflow")>()),
+  sleep: mocks.sleep,
+}));
 vi.mock("../../sandbox/poll-agent.js", () => ({ checkPhaseDone: mocks.checkPhaseDone }));
 vi.mock("../../sandbox/credentials.js", () => ({ getSandboxCredentials: () => ({}) }));
 vi.mock("@vercel/sandbox", () => ({ Sandbox: { get: mocks.sandboxGet } }));

@@ -23,14 +23,22 @@ import {
   recoverOrphanedPendingTriggers,
 } from "../../lib/pending-trigger-recovery.js";
 import {
-  listProtectedClarificationSubjectKeys,
+  classifyProtectedClarificationSubjects,
   reconcileClarificationCheckpoints,
 } from "../../clarifications/store.js";
 import { ticketSubjectKey } from "../../lib/subject-key.js";
 import {
+  recoverClarificationProviderParking,
+  recoverInterruptedClarificationParking,
   recoverUndispatchedClarificationSuccessors,
   startQueuedClarificationSnapshotCleanups,
 } from "../../clarifications/reconciliation.js";
+import { dispatchPlanApproved } from "../../approvals/dispatch.js";
+import {
+  getApproval,
+  listDispatchBlockingApprovals,
+  type ApprovalRow,
+} from "../../approvals/store.js";
 
 const ACCEPTED_TRIGGER_RECOVERY_GRACE_MS = 30_000;
 
@@ -44,6 +52,25 @@ export default defineEventHandler(async (event) => {
   // boundaries. A failed DB read aborts this poll: running generic cleanup
   // without knowing which subjects are durably parked could release live work.
   await reconcileClarificationCheckpoints(db);
+  const clarificationParkingRecovered =
+    await recoverInterruptedClarificationParking({
+      db,
+      runRegistry: adapters.runRegistry,
+    });
+  const clarificationProviderParkingRecovered =
+    await recoverClarificationProviderParking({
+      db,
+      runRegistry: adapters.runRegistry,
+      issueTracker: adapters.issueTracker,
+      messaging: adapters.messaging,
+      dashboardOrigin: env.DASHBOARD_ORIGIN,
+      target: env.JIRA_BACKLOG_TRANSITION_ID
+        ? {
+            name: env.COLUMN_BACKLOG,
+            transitionId: env.JIRA_BACKLOG_TRANSITION_ID,
+          }
+        : env.COLUMN_BACKLOG,
+    });
   const clarificationRecovered =
     await recoverUndispatchedClarificationSuccessors({
       db,
@@ -51,20 +78,31 @@ export default defineEventHandler(async (event) => {
       issueTracker: adapters.issueTracker,
       maxConcurrentAgents: env.MAX_CONCURRENT_AGENTS,
     });
-  const protectedClarificationSubjects = new Set(
-    await listProtectedClarificationSubjectKeys(db),
+  const clarificationProtection =
+    await classifyProtectedClarificationSubjects(db);
+  const protectedClarificationSubjects = new Set(clarificationProtection.all);
+  const terminalClarificationSubjects = new Set(
+    clarificationProtection.terminal,
   );
+  const retainedClarificationSubjects = new Set(
+    clarificationProtection.retained,
+  );
+
+  // A persisted approval owns the ticket's next path. Protect both pending
+  // decisions and approved-undispatched continuations for the entire poll
+  // snapshot. Recovery runs after owner reconciliation below, so an exact
+  // reserved owner retained for Jira settlement can be cleared before retry.
+  const blockingApprovals = await listDispatchBlockingApprovals(db);
+  const protectedDiscoverySubjects = new Set(protectedClarificationSubjects);
+  for (const approval of blockingApprovals) {
+    protectedDiscoverySubjects.add(ticketSubjectKey("jira", approval.ticketKey));
+  }
 
   // Durable clarification recovery owns its subject before generic AI-column
   // discovery. Even when capacity prevents a missing successor reservation
   // from being recreated on this tick, the answered checkpoint remains
   // protected and cannot be replaced by a fresh ticket workflow.
   const ticketKeys = await discoverAiColumnTickets(adapters);
-  const started = await dispatchDiscoveredTickets(
-    ticketKeys,
-    adapters,
-    protectedClarificationSubjects,
-  );
 
   const releasedTriggerRecovery = { attempted: 0, started: 0, errors: 0 };
   const { cancelled, cleaned } = await reconcileRuns(
@@ -96,7 +134,20 @@ export default defineEventHandler(async (event) => {
         throw error;
       }
     },
-    protectedClarificationSubjects,
+    retainedClarificationSubjects,
+    db,
+    terminalClarificationSubjects,
+  );
+
+  const approvalRecovery = await recoverApprovedPlanDispatches(
+    blockingApprovals,
+    db,
+    adapters,
+  );
+  const started = await dispatchDiscoveredTickets(
+    ticketKeys,
+    adapters,
+    protectedDiscoverySubjects,
   );
 
   const clarificationCleanupStarted =
@@ -108,6 +159,8 @@ export default defineEventHandler(async (event) => {
         db,
         new Date(Date.now() - ACCEPTED_TRIGGER_RECOVERY_GRACE_MS),
       ),
+    isProtected: (subjectKey) =>
+      protectedClarificationSubjects.has(subjectKey),
     getActive: (subjectKey) => adapters.runRegistry.get(subjectKey),
     resume: (delivery) =>
       recoverAcceptedTriggerDelivery(delivery, {
@@ -124,6 +177,8 @@ export default defineEventHandler(async (event) => {
 
   const orphanedTriggerRecovery = await recoverOrphanedPendingTriggers({
     listSubjects: () => listPendingSubjectKeys(db),
+    isProtected: (subjectKey) =>
+      protectedClarificationSubjects.has(subjectKey),
     getActive: (subjectKey) => adapters.runRegistry.get(subjectKey),
     drain: (subjectKey) =>
       drainOldestPendingTrigger(subjectKey, {
@@ -174,9 +229,65 @@ export default defineEventHandler(async (event) => {
       orphaned: orphanedTriggerRecovery,
     },
     clarificationRecovered,
+    clarificationParkingRecovered,
+    clarificationProviderParkingRecovered,
     clarificationCleanupStarted,
+    approvalRecovery,
   };
 });
+
+async function recoverApprovedPlanDispatches(
+  blockingApprovals: ApprovalRow[],
+  db: ReturnType<typeof getDb>,
+  adapters: ReturnType<typeof createAdapters>,
+): Promise<{ scanned: number; started: number; blocked: number; errors: number }> {
+  const approved = blockingApprovals.filter(
+    (row) => row.status === "approved" && row.dispatchedRunId === null,
+  );
+  const metrics = { scanned: approved.length, started: 0, blocked: 0, errors: 0 };
+
+  await Promise.all(
+    approved.map(async (approval) => {
+      try {
+        const result = await dispatchPlanApproved({
+          db,
+          runRegistry: adapters.runRegistry,
+          issueTracker: adapters.issueTracker,
+          approval,
+          actor: {
+            id: approval.decidedById ?? "system",
+            label: approval.decidedByLabel ?? "system",
+          },
+          maxConcurrentAgents: env.MAX_CONCURRENT_AGENTS,
+          onClaimed: async () => {
+            const fresh = await getApproval(db, approval.id);
+            if (
+              !fresh ||
+              fresh.status !== "approved" ||
+              fresh.dispatchedRunId !== null
+            ) {
+              throw new Error(`approval ${approval.id} is no longer dispatchable`);
+            }
+          },
+        });
+        if (result.status === "started") metrics.started++;
+        else metrics.blocked++;
+      } catch (error) {
+        metrics.errors++;
+        logger.warn(
+          {
+            approvalId: approval.id,
+            ticketKey: approval.ticketKey,
+            error: error instanceof Error ? error.message : String(error),
+          },
+          "poll_approval_recovery_failed",
+        );
+      }
+    }),
+  );
+
+  return metrics;
+}
 
 function verifyCronAuth(authHeader: string | undefined): void {
   if (!env.CRON_SECRET) return;

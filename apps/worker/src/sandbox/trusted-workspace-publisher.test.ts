@@ -8,11 +8,13 @@ const publisherWriteFiles = vi.fn();
 const publisherStop = vi.fn();
 const sandboxCreate = vi.fn();
 const getBranchSha = vi.fn();
+const getPRHead = vi.fn();
 const getToken = vi.fn();
 const getPublicationAttempt = vi.fn();
 const recordPreflight = vi.fn();
 const recordPush = vi.fn();
 const recordFailure = vi.fn();
+const registerSandbox = vi.fn();
 
 vi.mock("@vercel/sandbox", () => ({
   Sandbox: {
@@ -40,10 +42,13 @@ vi.mock("../lib/vcs-runtime.js", () => ({
       auth: { appId: 1, privateKeyBase64: "pem", installationId: 2 },
     },
     getToken,
-    vcs: { getBranchSha },
+    vcs: { getBranchSha, getPRHead },
   })),
 }));
 vi.mock("../../env.js", () => ({ env: { JOB_TIMEOUT_MS: 120_000 } }));
+vi.mock("../lib/step-adapters.js", () => ({
+  createStepAdapters: () => ({ runRegistry: { registerSandbox } }),
+}));
 
 import { publishTrustedWorkspaceFromSandbox } from "./trusted-workspace-publisher.js";
 
@@ -68,6 +73,20 @@ const trustedManifest: WorkspaceManifest = {
     expectedRemoteSha: "remote-before",
     preAgentSha: "pre-agent",
   }],
+};
+
+const publicationOwner = {
+  subjectKey: "ticket:jira:AIW-100",
+  ownerToken: "owner-1",
+  runId: "run-1",
+} as const;
+
+const sourcePullRequest = {
+  provider: "github" as const,
+  repoPath: "acme/api",
+  prId: 7,
+  headSha: "trigger-head",
+  baseRef: "main",
 };
 
 function ledger(overrides: Record<string, unknown> = {}) {
@@ -119,18 +138,26 @@ describe("trusted workspace publisher", () => {
     vi.clearAllMocks();
     sandboxCreate.mockResolvedValue({
       sandboxId: "publisher-sandbox",
+      status: "running",
       runCommand: publisherRunCommand,
       writeFiles: publisherWriteFiles,
       stop: publisherStop,
     });
     publisherWriteFiles.mockResolvedValue(undefined);
-    publisherStop.mockResolvedValue(undefined);
+    publisherStop.mockResolvedValue({ status: "stopped" });
     getToken.mockResolvedValue("ghs_publisher_secret");
     getPublicationAttempt.mockResolvedValue(ledger());
     recordPreflight.mockResolvedValue(undefined);
     recordPush.mockResolvedValue(undefined);
     recordFailure.mockResolvedValue(undefined);
+    registerSandbox.mockReset().mockResolvedValue(undefined);
+    getPRHead.mockReset().mockResolvedValue({
+      headSha: "trigger-head",
+      baseRef: "main",
+      state: "open",
+    });
     getBranchSha
+      .mockReset()
       .mockResolvedValueOnce("remote-before")
       .mockResolvedValueOnce("agent-after");
     installHappyCommands();
@@ -149,6 +176,9 @@ describe("trusted workspace publisher", () => {
       sourceSandboxId: "source-sandbox",
       publicationAttemptId: "attempt-1",
       workspaceManifest: trustedManifest,
+      subjectKey: "ticket:jira:AIW-100",
+      ownerToken: "owner-1",
+      runId: "run-1",
     });
 
     expect(result.pushed).toBe(true);
@@ -184,8 +214,218 @@ describe("trusted workspace publisher", () => {
     expect(publisherRunCommand.mock.calls.flat().join(" ")).not.toContain(
       "https://attacker.example",
     );
-    expect(publisherStop).toHaveBeenCalledOnce();
+    expect(publisherStop).toHaveBeenCalledWith({ blocking: true });
     expect(getBranchSha).toHaveBeenCalledTimes(2);
+    expect(registerSandbox).toHaveBeenCalledWith(
+      "ticket:jira:AIW-100",
+      "owner-1",
+      "publisher-sandbox",
+      "run-1",
+    );
+    expect(registerSandbox.mock.invocationCallOrder[0]).toBeLessThan(
+      publisherWriteFiles.mock.invocationCallOrder[0]!,
+    );
+  });
+
+  it("stops a publisher that cancellation closes before registration", async () => {
+    registerSandbox.mockRejectedValueOnce(new Error("owner is cancelling"));
+
+    await expect(publishTrustedWorkspaceFromSandbox({
+      sourceSandboxId: "source-sandbox",
+      publicationAttemptId: "attempt-1",
+      workspaceManifest: trustedManifest,
+      subjectKey: "ticket:jira:AIW-100",
+      ownerToken: "owner-1",
+      runId: "run-1",
+    })).rejects.toThrow("owner is cancelling");
+
+    expect(publisherStop).toHaveBeenCalledWith({ blocking: true });
+    expect(publisherWriteFiles).not.toHaveBeenCalled();
+    expect(publisherRunCommand).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when pre-registration publisher cleanup is not terminal", async () => {
+    registerSandbox.mockRejectedValueOnce(new Error("owner is cancelling"));
+    publisherStop.mockResolvedValueOnce({ status: "stopping" });
+
+    await expect(publishTrustedWorkspaceFromSandbox({
+      sourceSandboxId: "source-sandbox",
+      publicationAttemptId: "attempt-1",
+      workspaceManifest: trustedManifest,
+      ...publicationOwner,
+    })).rejects.toThrow(/cleanup unconfirmed.*stopping/i);
+
+    expect(publisherStop).toHaveBeenCalledWith({ blocking: true });
+    expect(publisherWriteFiles).not.toHaveBeenCalled();
+    expect(publisherRunCommand).not.toHaveBeenCalled();
+  });
+
+  it("revalidates the exact owner immediately before the credentialed push", async () => {
+    registerSandbox
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error("owner entered cancellation"));
+
+    await expect(publishTrustedWorkspaceFromSandbox({
+      sourceSandboxId: "source-sandbox",
+      publicationAttemptId: "attempt-1",
+      workspaceManifest: trustedManifest,
+      subjectKey: "ticket:jira:AIW-100",
+      ownerToken: "owner-1",
+      runId: "run-1",
+    })).rejects.toThrow("owner entered cancellation");
+
+    expect(registerSandbox).toHaveBeenCalledTimes(2);
+    expect(
+      publisherRunCommand.mock.calls.some(
+        ([name, args]) => name === "git" && (args as string[]).includes("push"),
+      ),
+    ).toBe(false);
+    expect(publisherStop).toHaveBeenCalledOnce();
+  });
+
+  it("rejects a source PR retargeted after preflight at the push boundary", async () => {
+    getPRHead.mockResolvedValueOnce({
+      headSha: "trigger-head",
+      baseRef: "release",
+      state: "open",
+    });
+
+    await expect(publishTrustedWorkspaceFromSandbox({
+      sourceSandboxId: "source-sandbox",
+      publicationAttemptId: "attempt-1",
+      workspaceManifest: trustedManifest,
+      ...publicationOwner,
+      sourcePullRequest,
+    })).rejects.toThrow(/current target is release/i);
+
+    expect(getPRHead).toHaveBeenCalledWith(7);
+    expect(registerSandbox).toHaveBeenCalledTimes(2);
+    expect(registerSandbox.mock.invocationCallOrder[1]).toBeLessThan(
+      getPRHead.mock.invocationCallOrder[0]!,
+    );
+    expect(
+      publisherRunCommand.mock.calls.some(
+        ([name, args]) => name === "git" && (args as string[]).includes("push"),
+      ),
+    ).toBe(false);
+    expect(publisherStop).toHaveBeenCalledOnce();
+  });
+
+  it("advances the expected source head after pushing its repository", async () => {
+    const otherRepository = {
+      ...trustedManifest.repositories[0]!,
+      repoPath: "acme/other",
+      slug: "acme__other",
+      localPath: "/vercel/sandbox/repos/repo-1",
+    };
+    const workspaceManifest: WorkspaceManifest = {
+      version: 1,
+      repositories: [trustedManifest.repositories[0]!, otherRepository],
+    };
+    getPublicationAttempt.mockResolvedValue(ledger({
+      workspaceManifest,
+      repositories: workspaceManifest.repositories.map((repo) => ({
+        provider: repo.provider,
+        repoPath: repo.repoPath,
+        branchName: repo.branchName,
+        defaultBranch: repo.defaultBranch,
+        changed: false,
+        expectedHead: null,
+        targetHead: null,
+        pushedHead: null,
+        pr: null,
+        failure: null,
+      })),
+    }));
+    getBranchSha
+      .mockReset()
+      .mockResolvedValueOnce("remote-before")
+      .mockResolvedValueOnce("remote-before")
+      .mockResolvedValueOnce("agent-after")
+      .mockResolvedValueOnce("agent-after");
+    getPRHead
+      .mockResolvedValueOnce({ headSha: "trigger-head", baseRef: "main", state: "open" })
+      .mockResolvedValueOnce({ headSha: "agent-after", baseRef: "main", state: "open" });
+
+    await expect(publishTrustedWorkspaceFromSandbox({
+      sourceSandboxId: "source-sandbox",
+      publicationAttemptId: "attempt-1",
+      workspaceManifest,
+      ...publicationOwner,
+      sourcePullRequest,
+    })).resolves.toMatchObject({ pushed: true });
+
+    expect(getPRHead).toHaveBeenCalledTimes(2);
+    const pushes = publisherRunCommand.mock.calls.filter(
+      ([name, args]) => name === "git" && (args as string[]).includes("push"),
+    );
+    expect(pushes).toHaveLength(2);
+  });
+
+  it("uses a reconciled source push head before resuming another repository", async () => {
+    const otherRepository = {
+      ...trustedManifest.repositories[0]!,
+      repoPath: "acme/other",
+      slug: "acme__other",
+      localPath: "/vercel/sandbox/repos/repo-1",
+    };
+    const workspaceManifest: WorkspaceManifest = {
+      version: 1,
+      repositories: [trustedManifest.repositories[0]!, otherRepository],
+    };
+    getPublicationAttempt.mockResolvedValue(ledger({
+      workspaceManifest,
+      repositories: [
+        {
+          provider: "github",
+          repoPath: "acme/api",
+          branchName: "blazebot/aiw-100",
+          defaultBranch: "main",
+          changed: true,
+          expectedHead: "remote-before",
+          targetHead: "agent-after",
+          pushedHead: null,
+          pr: null,
+          failure: null,
+        },
+        {
+          provider: "github",
+          repoPath: "acme/other",
+          branchName: "blazebot/aiw-100",
+          defaultBranch: "main",
+          changed: false,
+          expectedHead: null,
+          targetHead: null,
+          pushedHead: null,
+          pr: null,
+          failure: null,
+        },
+      ],
+    }));
+    getBranchSha
+      .mockReset()
+      .mockResolvedValueOnce("agent-after")
+      .mockResolvedValueOnce("remote-before")
+      .mockResolvedValueOnce("agent-after");
+    getPRHead.mockResolvedValueOnce({
+      headSha: "agent-after",
+      baseRef: "main",
+      state: "open",
+    });
+
+    await expect(publishTrustedWorkspaceFromSandbox({
+      sourceSandboxId: "source-sandbox",
+      publicationAttemptId: "attempt-1",
+      workspaceManifest,
+      ...publicationOwner,
+      sourcePullRequest,
+    })).resolves.toMatchObject({ pushed: true });
+
+    expect(getPRHead).toHaveBeenCalledOnce();
+    const pushes = publisherRunCommand.mock.calls.filter(
+      ([name, args]) => name === "git" && (args as string[]).includes("push"),
+    );
+    expect(pushes).toHaveLength(1);
   });
 
   it("never exposes a provider credential to a source-sandbox command", async () => {
@@ -193,6 +433,7 @@ describe("trusted workspace publisher", () => {
       sourceSandboxId: "source-sandbox",
       publicationAttemptId: "attempt-1",
       workspaceManifest: trustedManifest,
+      ...publicationOwner,
     });
 
     const sourceArguments = JSON.stringify(sourceRunCommand.mock.calls);
@@ -217,6 +458,7 @@ describe("trusted workspace publisher", () => {
       sourceSandboxId: "source-sandbox",
       publicationAttemptId: "attempt-1",
       workspaceManifest: trustedManifest,
+      ...publicationOwner,
     })).rejects.toThrow(/ledger.*trusted workspace manifest/i);
 
     expect(sourceRunCommand).not.toHaveBeenCalled();
@@ -233,6 +475,7 @@ describe("trusted workspace publisher", () => {
       sourceSandboxId: "source-sandbox",
       publicationAttemptId: "attempt-1",
       workspaceManifest: tampered,
+      ...publicationOwner,
     })).rejects.toThrow(/ledger.*trusted workspace manifest/i);
 
     expect(sourceRunCommand).not.toHaveBeenCalled();
@@ -252,6 +495,7 @@ describe("trusted workspace publisher", () => {
       sourceSandboxId: "source-sandbox",
       publicationAttemptId: "attempt-1",
       workspaceManifest: trustedManifest,
+      ...publicationOwner,
     });
 
     expect(result.pushed).toBe(false);
@@ -270,6 +514,7 @@ describe("trusted workspace publisher", () => {
       sourceSandboxId: "source-sandbox",
       publicationAttemptId: "attempt-1",
       workspaceManifest: trustedManifest,
+      ...publicationOwner,
     });
 
     expect(result.pushed).toBe(false);
@@ -289,6 +534,7 @@ describe("trusted workspace publisher", () => {
       sourceSandboxId: "source-sandbox",
       publicationAttemptId: "attempt-1",
       workspaceManifest: trustedManifest,
+      ...publicationOwner,
     });
 
     expect(result.repositories[0]).toEqual(expect.objectContaining({
@@ -314,6 +560,7 @@ describe("trusted workspace publisher", () => {
       sourceSandboxId: "source-sandbox",
       publicationAttemptId: "attempt-1",
       workspaceManifest: trustedManifest,
+      ...publicationOwner,
     });
 
     expect(result.repositories[0]).toEqual(expect.objectContaining({
@@ -339,6 +586,7 @@ describe("trusted workspace publisher", () => {
         sourceSandboxId: "source-sandbox",
         publicationAttemptId: "attempt-1",
         workspaceManifest: trustedManifest,
+        ...publicationOwner,
       }),
     ).rejects.toThrow("provider unavailable");
     expect(recordFailure).toHaveBeenCalledWith(

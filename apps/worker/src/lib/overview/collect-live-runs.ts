@@ -16,8 +16,8 @@ export interface CollectLiveRunsOptions {
  * live progress fields (currentSpan, progress, etaSec) are not tracked yet —
  * returned as null or omitted. The dashboard renders `—` for null metrics.
  *
- * `status` defaults to `"running"`; a clarification-detection signal needed to
- * distinguish `"awaiting"` is a follow-up.
+ * Durable owner state distinguishes a clarification that is still draining
+ * (`parking`, rendered running) from one safely awaiting input (`parked`).
  */
 export async function collectLiveRuns(
   opts: CollectLiveRunsOptions,
@@ -26,13 +26,16 @@ export async function collectLiveRuns(
   const entries = await registry.listAll();
   const tenantOrigin = jiraBaseUrl.replace(/\/+$/, "");
 
-  const boundEntries = entries.filter(
+  const liveEntries = entries.filter(
     (entry): entry is typeof entry & { runId: string } =>
-      entry.state === "bound" && entry.runId !== null,
+      (entry.state === "bound" ||
+        entry.state === "parking" ||
+        entry.state === "parked") &&
+      entry.runId !== null,
   );
 
   return Promise.all(
-    boundEntries.map(async ({ subjectKey, ticketKey, runId }): Promise<Run> => {
+    liveEntries.map(async ({ subjectKey, ticketKey, runId, state }): Promise<Run> => {
       let ticketTitle = ticketKey ?? subjectKey;
       if (ticketKey) {
         try {
@@ -48,7 +51,7 @@ export async function collectLiveRuns(
         id: runId,
         workflow: "wf_agent",
         workflowName: "Agent",
-        status: "running",
+        status: state === "parked" ? "awaiting" : "running",
         ticket: displayKey,
         actor: "ai-bot",
         model,

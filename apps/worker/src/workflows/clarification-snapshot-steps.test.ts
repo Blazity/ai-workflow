@@ -186,8 +186,8 @@ describe("clarification sandbox snapshot Workflow steps", () => {
   });
 
   it("stops and unregisters a restored sandbox when credential setup fails", async () => {
-    const stop = vi.fn().mockResolvedValue(undefined);
-    const restored = { sandboxId: "sbx-restore-failed", stop };
+    const stop = vi.fn().mockResolvedValue({ status: "stopped" });
+    const restored = { sandboxId: "sbx-restore-failed", status: "running", stop };
     mocks.create.mockResolvedValue(restored);
     mocks.registerSandbox.mockResolvedValue(undefined);
     mocks.configure.mockRejectedValue(new Error("credential setup failed"));
@@ -207,6 +207,26 @@ describe("clarification sandbox snapshot Workflow steps", () => {
       "owner-successor",
       "sbx-restore-failed",
     );
+  });
+
+  it("keeps the registration when restored-sandbox cleanup is not terminal", async () => {
+    const stop = vi.fn().mockResolvedValue({ status: "stopping" });
+    const restored = { sandboxId: "sbx-restore-live", status: "running", stop };
+    mocks.create.mockResolvedValue(restored);
+    mocks.registerSandbox.mockResolvedValue(undefined);
+    mocks.configure.mockRejectedValue(new Error("credential setup failed"));
+
+    await expect(restoreClarificationSandboxStep({
+      snapshotId: "snap-retained",
+      subjectKey: "ticket:jira:AIW-96",
+      ownerToken: "owner-successor",
+      timeoutMs: 900_000,
+      agents: [{ kind: "codex", model: "gpt-5-codex" }],
+      arthurTaskId: null,
+    })).rejects.toThrow(/cleanup unconfirmed.*stopping/i);
+
+    expect(stop).toHaveBeenCalledWith({ blocking: true });
+    expect(mocks.unregisterSandbox).not.toHaveBeenCalled();
   });
 
   it("does not lose a created snapshot when stopped-sandbox unregistering is transiently unavailable", async () => {

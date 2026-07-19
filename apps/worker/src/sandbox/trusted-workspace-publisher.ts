@@ -10,6 +10,7 @@ import type {
   PublicationAttemptRecord,
   PublicationRepositoryRecord,
 } from "../publication/store.js";
+import { stopSandboxAndConfirm } from "./stop-ticket-sandboxes.js";
 
 export interface TrustedWorkspacePushRepositoryResult {
   provider: WorkspaceRepo["provider"];
@@ -55,11 +56,18 @@ export async function publishTrustedWorkspaceFromSandbox(input: {
   sourceSandboxId: string;
   publicationAttemptId: string;
   workspaceManifest: WorkspaceManifest;
+  subjectKey: string;
+  ownerToken: string;
+  runId: string;
+  sourcePullRequest?: import("../workflows/source-pull-request.js").SourcePullRequestIdentity;
 }): Promise<TrustedWorkspacePushResult> {
   "use step";
   const { Sandbox } = await import("@vercel/sandbox");
   const { env } = await import("../../env.js");
   const { createRepositoryVcsRuntime } = await import("../lib/vcs-runtime.js");
+  const { assertOpenSourcePullRequest, isSourcePullRequestRepository } = await import(
+    "../workflows/source-pull-request.js"
+  );
   const { getDb } = await import("../db/client.js");
   const {
     getPublicationAttempt,
@@ -72,6 +80,11 @@ export async function publishTrustedWorkspaceFromSandbox(input: {
   const attempt = await getPublicationAttempt(db, input.publicationAttemptId);
   if (!attempt) {
     throw new Error(`publication ledger attempt ${input.publicationAttemptId} is missing`);
+  }
+  if (attempt.runId !== input.runId) {
+    throw new Error(
+      `publication ledger attempt ${input.publicationAttemptId} belongs to ${attempt.runId}, not ${input.runId}`,
+    );
   }
   const durableByKey = assertLedgerMatchesTrustedManifest(attempt, input.workspaceManifest);
   const source = await Sandbox.get({
@@ -302,9 +315,33 @@ export async function publishTrustedWorkspaceFromSandbox(input: {
     timeout: env.JOB_TIMEOUT_MS,
   });
   try {
+    const { createStepAdapters } = await import("../lib/step-adapters.js");
+    const { runRegistry } = createStepAdapters();
+    await runRegistry.registerSandbox(
+      input.subjectKey,
+      input.ownerToken,
+      publisher.sandboxId,
+      input.runId,
+    );
     await publisher.writeFiles(
       pending.map((item) => ({ path: item.bundlePath!, content: item.bundle! })),
     );
+    const sourceVcs = input.sourcePullRequest
+      ? createRepositoryVcsRuntime({
+          provider: input.sourcePullRequest.provider,
+          repoPath: input.sourcePullRequest.repoPath,
+          baseBranch: input.sourcePullRequest.baseRef,
+        }).vcs
+      : null;
+    const reconciledSource = input.sourcePullRequest
+      ? prepared.find(
+          (item) =>
+            item.result.pushed &&
+            isSourcePullRequestRepository(input.sourcePullRequest!, item.repo),
+        )
+      : null;
+    let expectedSourceHead =
+      reconciledSource?.result.pushedHead ?? input.sourcePullRequest?.headSha;
     for (const [index, item] of pending.entries()) {
       const runtime = createRepositoryVcsRuntime({
         provider: item.repo.provider,
@@ -398,6 +435,26 @@ export async function publishTrustedWorkspaceFromSandbox(input: {
         await recordPublisherFailure(item, `bundle checkout failed: ${await commandError(checkout)}`);
         continue;
       }
+      // Registration is an idempotent exact-owner CAS. Reassert it at the
+      // irreversible boundary: cancellation either closes the owner first and
+      // this push never starts, or observes/stops this registered publisher and
+      // waits for the running Workflow step to drain before releasing ownership.
+      await runRegistry.registerSandbox(
+        input.subjectKey,
+        input.ownerToken,
+        publisher.sandboxId,
+        input.runId,
+      );
+      if (input.sourcePullRequest && sourceVcs && expectedSourceHead) {
+        const expectedSource = {
+          ...input.sourcePullRequest,
+          headSha: expectedSourceHead,
+        };
+        assertOpenSourcePullRequest(
+          expectedSource,
+          await sourceVcs.getPRHead(input.sourcePullRequest.prId),
+        );
+      }
       const push = await publisher.runCommand("git", [
         "-C",
         checkoutPath,
@@ -430,9 +487,15 @@ export async function publishTrustedWorkspaceFromSandbox(input: {
         repoPath: item.repo.repoPath,
         pushedHead: item.result.targetHead!,
       });
+      if (
+        input.sourcePullRequest &&
+        isSourcePullRequestRepository(input.sourcePullRequest, item.repo)
+      ) {
+        expectedSourceHead = item.result.targetHead;
+      }
     }
   } finally {
-    await publisher.stop();
+    await stopSandboxAndConfirm(publisher);
   }
 
   return summarizeStepResult(prepared.map((item) => item.result));

@@ -11,7 +11,13 @@ import type {
   WorkspaceRepositoryInput,
 } from "../../sandbox/repo-workspace.js";
 import { execute, paramsSchema } from "./finalize-workspace.js";
-import { expectOutputConformsToRegistry, makeCtx, makeNode, makePrPayload } from "./test-support.js";
+import {
+  expectOutputConformsToRegistry,
+  makeCtx,
+  makeNode,
+  makePrPayload,
+  runControlErrorCases,
+} from "./test-support.js";
 
 const repo: WorkspaceRepositoryInput = {
   provider: "github",
@@ -179,6 +185,8 @@ describe("finalize_workspace execute", () => {
 
     expect(mocks.finalizeWorkspacePublication).toHaveBeenCalledWith({
       runId: "run-1",
+      subjectKey: "ticket:jira:AWT-1",
+      ownerToken: "owner:test",
       blockId: "finalize",
       sandboxId: "sbx-1",
       ticketKey: "AWT-1",
@@ -226,6 +234,7 @@ describe("finalize_workspace execute", () => {
           repoPath: "acme/api",
           prId: 7,
           headSha: "trigger-head",
+          baseRef: "main",
         },
       }),
     );
@@ -251,5 +260,17 @@ describe("finalize_workspace execute", () => {
       reason: "lease rejected",
       phase: "push",
     });
+  });
+
+  it.each(runControlErrorCases())("rethrows %s from publication", async (_label, error) => {
+    mocks.finalizeWorkspacePublication.mockRejectedValue(error);
+
+    await expect(
+      execute(
+        makeNode("finalize_workspace"),
+        {},
+        makeCtx({ selectedRepositories: [repo], workspaceManifest: trustedManifest }),
+      ),
+    ).rejects.toBe(error);
   });
 });

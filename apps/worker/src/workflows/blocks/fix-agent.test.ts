@@ -17,7 +17,10 @@ const mocks = vi.hoisted(() => ({
   pollPhaseUntilDone: vi.fn().mockResolvedValue(true),
 }));
 
-vi.mock("workflow", () => ({ sleep: mocks.sleep }));
+vi.mock("workflow", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("workflow")>()),
+  sleep: mocks.sleep,
+}));
 vi.mock("../../sandbox/poll-agent.js", () => ({
   checkPhaseDone: mocks.checkPhaseDone,
   collectPhase: mocks.collectPhase,
@@ -55,6 +58,7 @@ import {
   makeCtx,
   makeNode,
   makePrPayload,
+  runControlErrorCases,
 } from "./test-support.js";
 
 const usage = {
@@ -353,6 +357,12 @@ describe("fix_agent execute", () => {
         unresolvedConflicts: [],
       });
     }
+  });
+
+  it.each(runControlErrorCases())("rethrows %s from Fix execution", async (_label, error) => {
+    mocks.pollPhaseUntilDone.mockRejectedValue(error);
+
+    await expect(execute(makeNode("fix_agent"), {}, makeCtx())).rejects.toBe(error);
   });
 
   it("reports the post-termination workspace state when the phase times out", async () => {

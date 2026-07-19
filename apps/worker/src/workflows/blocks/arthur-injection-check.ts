@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { isRunControlError } from "../run-control-error.js";
 import type { BlockExecuteFn, BlockExecutionResult } from "./types.js";
 
 export const paramsSchema = z
@@ -88,6 +89,7 @@ export const execute: BlockExecuteFn = async (
       },
     };
   } catch (err) {
+    if (isRunControlError(err)) throw err;
     return {
       kind: "next",
       output: {

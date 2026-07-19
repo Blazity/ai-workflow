@@ -1,4 +1,6 @@
 import { z } from "zod";
+import type { ActiveRunOwner } from "../../lib/active-run-owner.js";
+import { isRunControlError } from "../run-control-error.js";
 import type { BlockExecuteFn, BlockExecutionResult } from "./types.js";
 
 export const paramsSchema = z
@@ -10,10 +12,14 @@ export const paramsSchema = z
 async function blockPostTicketCommentStep(
   ticketId: string,
   body: string,
+  owner: ActiveRunOwner,
 ): Promise<string | null> {
   "use step";
+  const { getDb } = await import("../../db/client.js");
+  const { assertActiveRunOwner } = await import("../../lib/active-run-owner.js");
   const { createStepAdapters } = await import("../../lib/step-adapters.js");
   const { issueTracker } = createStepAdapters();
+  await assertActiveRunOwner(getDb(), owner);
   return issueTracker.postComment(ticketId, body);
 }
 blockPostTicketCommentStep.maxRetries = 0;
@@ -43,9 +49,14 @@ export const execute: BlockExecuteFn = async (
   }
 
   try {
-    const commentUrl = await blockPostTicketCommentStep(ctx.ticket.identifier, body);
+    const commentUrl = await blockPostTicketCommentStep(ctx.ticket.identifier, body, {
+      subjectKey: ctx.entry.subjectKey,
+      ownerToken: ctx.entry.ownerToken,
+      runId: ctx.runId,
+    });
     return { kind: "next", output: { status: "ok", commentUrl } };
   } catch (err) {
+    if (isRunControlError(err)) throw err;
     return {
       kind: "failed",
       output: { status: "failed" },

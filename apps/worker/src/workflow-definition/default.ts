@@ -16,8 +16,27 @@ interface BlockSpec {
 export function defaultWorkflowDefinition({ includeReview }: { includeReview: boolean }): WorkflowDefinition {
   const specs: BlockSpec[] = [
     { id: "trigger", type: "trigger_ticket_ai", name: "Ticket assigned to AI", params: {} },
-    { id: "planning", type: "planning_agent", name: "Planning agent", params: {} },
-    { id: "implementation", type: "implementation_agent", name: "Implementation agent", params: {} },
+    {
+      id: "planning",
+      type: "planning_agent",
+      name: "Planning agent",
+      params: {},
+      inputs: {
+        ticket: "trigger.ticket",
+        comments: "trigger.comments",
+        priorAnswers: "trigger.priorAnswers",
+      },
+    },
+    {
+      id: "implementation",
+      type: "implementation_agent",
+      name: "Implementation agent",
+      params: {},
+      inputs: {
+        ticket: "trigger.ticket",
+        plan: "steps.planning.output.plan",
+      },
+    },
     ...(includeReview
       ? [{ id: "review", type: "review_agent", name: "Review agent", params: {} } satisfies BlockSpec]
       : []),

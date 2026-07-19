@@ -9,7 +9,7 @@ vi.mock("../../lib/llm.js", () => ({
 }));
 
 import { execute, paramsSchema, resolveCallLlmTarget } from "./call-llm.js";
-import { makeCtx, makeNode } from "./test-support.js";
+import { makeCtx, makeNode, runControlErrorCases } from "./test-support.js";
 
 describe("call_llm paramsSchema", () => {
   it("allows a binding-only prompt, leaves the model unset by default, and rejects unknown keys", () => {
@@ -255,6 +255,14 @@ describe("call_llm execute", () => {
     if (result.kind === "failed") expect(result.reason).toBe("api down");
     expect(ctx.markLaunched).toHaveBeenCalledWith("LLM blk");
     expect(ctx.recordUsage).toHaveBeenCalledWith("LLM blk", null, "claude-haiku-4-5");
+  });
+
+  it.each(runControlErrorCases())("rethrows %s from the LLM call", async (_label, error) => {
+    mocks.generateStructured.mockRejectedValue(error);
+
+    await expect(
+      execute(makeNode("call_llm", { prompt: "hi" }), {}, makeCtx()),
+    ).rejects.toBe(error);
   });
 
   it("fails closed before a failure edge when a capped provider error has no usage", async () => {

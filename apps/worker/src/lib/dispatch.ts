@@ -1,7 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { start } from "workflow/api";
 import { env } from "../../env.js";
-import type { RunKind, RunRegistryAdapter } from "../adapters/run-registry/types.js";
+import {
+  RESERVATION_BIND_GRACE_MS,
+  type RunKind,
+  type RunRegistryAdapter,
+} from "../adapters/run-registry/types.js";
 import type { TicketContent } from "../adapters/issue-tracker/types.js";
 import { getDb } from "../db/client.js";
 import { getEnabledWorkflowDefinitionForTrigger } from "../workflow-definition/store.js";
@@ -11,15 +15,18 @@ import {
   type WorkflowDefinitionVersionPin,
 } from "../workflows/agent-input.js";
 import { agentWorkflow } from "../workflows/agent.js";
+import { hasDispatchBlockingApprovalForTicket } from "../approvals/store.js";
 import type { Adapters } from "./adapters.js";
 import { logger } from "./logger.js";
 import { ticketSubjectKey } from "./subject-key.js";
 
-export const STALE_CLAIM_MS = 5 * 60 * 1000;
+export const STALE_CLAIM_MS = RESERVATION_BIND_GRACE_MS;
 
 export interface DispatchResult {
   started: boolean;
   runId?: string;
+  /** Exact reservation owner returned only by the low-level claim helper. */
+  ownerToken?: string;
   reason?:
     | "already_claimed"
     | "at_capacity"
@@ -27,7 +34,8 @@ export interface DispatchResult {
     | "previously_failed"
     | "not_in_ai_column"
     | "wrong_project_key"
-    | "no_definition";
+    | "no_definition"
+    | "approval_pending";
 }
 
 export interface ClaimSubject {
@@ -68,12 +76,19 @@ export async function dispatchTicket(
   let definitionId: number | null = null;
   let definitionVersion: WorkflowDefinitionVersionPin | null = null;
   const subjectKey = ticketSubjectKey("jira", ticketKey);
-  return claimSubjectRun(
+  const result = await claimSubjectRun(
     { subjectKey, ticketKey, kind: "ticket" },
     runRegistry,
     maxConcurrentAgents,
     {
       postClaimGuard: async () => {
+        // Query again under the exact reservation instead of trusting the
+        // poller's earlier snapshot. A plan request can be persisted while a
+        // poll is in flight; neither a pending decision nor an approved pinned
+        // continuation may be replaced by generic ticket discovery.
+        if (await hasDispatchBlockingApprovalForTicket(getDb(), ticketKey)) {
+          return { started: false, reason: "approval_pending" };
+        }
         ticket = await issueTracker.fetchTicket(ticketKey);
         if (ticket.trackerStatus.trim().toLowerCase() !== expectedAiStatus) {
           return { started: false, reason: "not_in_ai_column" };
@@ -113,6 +128,11 @@ export async function dispatchTicket(
       },
     },
   );
+  // ownerToken is an internal start-boundary proof used by trigger delivery
+  // persistence. Do not expose it from ordinary ticket dispatch.
+  return result.started
+    ? { started: true, runId: result.runId }
+    : result;
 }
 
 /**
@@ -152,7 +172,7 @@ export async function claimSubjectRun(
 
     const runId = await options.startWorkflow(ownerToken);
     started = true;
-    return { started: true, runId };
+    return { started: true, runId, ownerToken };
   } catch (error) {
     // Once start returns, the candidate may already have bound. A dispatcher
     // must never use reservation cleanup to delete a bound workflow.
@@ -170,9 +190,9 @@ export async function claimSubjectRun(
 /**
  * Atomically participates in the same capacity/fairness protocol as a normal
  * workflow claim while retaining a caller-owned durable token. Clarification
- * recovery uses this only when its predecessor/successor owner is genuinely
- * missing; an in-place bound-owner handoff already occupies one slot and must
- * remain capacity-neutral.
+ * recovery uses this when its predecessor/successor owner is genuinely
+ * missing, and clarification resumption uses a custom reserve/rollback pair
+ * so a parked subject reacquires capacity without ever becoming unclaimed.
  */
 export async function reserveSubjectWithinCapacity(
   subject: ClaimSubject,
@@ -180,6 +200,7 @@ export async function reserveSubjectWithinCapacity(
   runRegistry: RunRegistryAdapter,
   maxConcurrentAgents: number,
   reserve: (() => Promise<boolean>) | null = null,
+  rollback: (() => Promise<boolean>) | null = null,
 ): Promise<SubjectReservationResult> {
   if (await isAtCapacity(maxConcurrentAgents, runRegistry)) return "at_capacity";
 
@@ -199,12 +220,34 @@ export async function reserveSubjectWithinCapacity(
       return "reserved";
     }
   } catch (error) {
-    await runRegistry.releaseReservation(subject.subjectKey, ownerToken).catch(() => false);
+    await rollbackReservation(
+      subject.subjectKey,
+      ownerToken,
+      runRegistry,
+      rollback,
+    );
     throw error;
   }
 
-  await runRegistry.releaseReservation(subject.subjectKey, ownerToken).catch(() => false);
+  await rollbackReservation(
+    subject.subjectKey,
+    ownerToken,
+    runRegistry,
+    rollback,
+  );
   return "at_capacity";
+}
+
+async function rollbackReservation(
+  subjectKey: string,
+  ownerToken: string,
+  runRegistry: RunRegistryAdapter,
+  rollback: (() => Promise<boolean>) | null,
+): Promise<boolean> {
+  return (rollback
+    ? rollback()
+    : runRegistry.releaseReservation(subjectKey, ownerToken)
+  ).catch(() => false);
 }
 
 /** Ticket-only compatibility wrapper used by approval/clarification dispatch. */
@@ -228,19 +271,19 @@ export async function claimTicketRun(
 
 async function isAtCapacity(max: number, runRegistry: RunRegistryAdapter): Promise<boolean> {
   try {
-    return liveEntries(await runRegistry.listAll()).length >= max;
+    return (await capacityEntries(runRegistry)).length >= max;
   } catch (error) {
     logger.warn({ max, error: (error as Error).message }, "dispatch_capacity_check_failed_closed");
     return true;
   }
 }
 
-async function winsPostReservationCapacity(
+export async function winsPostReservationCapacity(
   subjectKey: string,
   max: number,
   runRegistry: RunRegistryAdapter,
 ): Promise<boolean> {
-  const entries = liveEntries(await runRegistry.listAll());
+  const entries = await capacityEntries(runRegistry);
   if (entries.length <= max) return true;
   const winners = [...entries]
     .sort((a, b) => {
@@ -253,6 +296,13 @@ async function winsPostReservationCapacity(
     .slice(0, max)
     .map(({ subjectKey: key }) => key);
   return winners.includes(subjectKey);
+}
+
+async function capacityEntries(runRegistry: RunRegistryAdapter) {
+  if (runRegistry.listCapacityConsumers) {
+    return runRegistry.listCapacityConsumers();
+  }
+  return liveEntries(await runRegistry.listAll());
 }
 
 function liveEntries(entries: Awaited<ReturnType<RunRegistryAdapter["listAll"]>>) {

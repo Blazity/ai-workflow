@@ -31,10 +31,8 @@ vi.mock("../../lib/post-pr-gate-dispatch.js", () => ({
 }));
 
 const mockDispatchTriggerEvent = vi.fn();
-const mockResolveEnabledReviewStates = vi.fn();
 vi.mock("../../lib/dispatch-trigger.js", () => ({
   dispatchTriggerEvent: (...args: any[]) => mockDispatchTriggerEvent(...args),
-  resolveEnabledReviewStates: (...args: any[]) => mockResolveEnabledReviewStates(...args),
 }));
 
 vi.mock("../../db/client.js", () => ({ getDb: () => ({}) }));
@@ -137,7 +135,6 @@ describe("POST /webhooks/gitlab", () => {
     mocks.getVcsBotLogin.mockReturnValue("blazebot");
     mocks.isRepoAllowed.mockReturnValue(true);
     mockDispatchTriggerEvent.mockResolvedValue({ result: "no_definition" });
-    mockResolveEnabledReviewStates.mockReset().mockResolvedValue(["changes_requested"]);
     mocks.getConfiguredVcsProviders.mockReturnValue([
       {
         kind: "gitlab",
@@ -552,18 +549,11 @@ describe("POST /webhooks/gitlab", () => {
   });
 
   it("routes an opted-in merge-request note through the common review trigger", async () => {
-    mockResolveEnabledReviewStates.mockResolvedValueOnce(["commented"]);
     mockDispatchTriggerEvent.mockResolvedValueOnce({ result: "started", runId: "run_note" });
 
     const response = await makeApp()(makeRequest(validNotePayload(), "secret", "Note Hook"));
 
     expect(response.status).toBe(200);
-    expect(mockResolveEnabledReviewStates).toHaveBeenCalled();
-    expect(mockResolveEnabledReviewStates).toHaveBeenCalledWith(
-      expect.anything(),
-      "gitlab",
-      "blazebot",
-    );
     expect(mockDispatchTriggerEvent).toHaveBeenCalledWith(
       expect.objectContaining({
         triggerType: "trigger_pr_review",
@@ -579,7 +569,6 @@ describe("POST /webhooks/gitlab", () => {
   });
 
   it("fails closed on an internal merge-request note before normalization", async () => {
-    mockResolveEnabledReviewStates.mockResolvedValueOnce(["commented"]);
     const note = JSON.parse(validNotePayload());
     note.object_attributes.internal = true;
 
@@ -592,12 +581,10 @@ describe("POST /webhooks/gitlab", () => {
       reason: "note_ignored",
     });
     expect(mockDispatchTriggerEvent).not.toHaveBeenCalled();
-    expect(mockResolveEnabledReviewStates).not.toHaveBeenCalled();
     expect(mocks.listRepositories).not.toHaveBeenCalled();
   });
 
   it("fails closed on a confidential merge-request note before normalization", async () => {
-    mockResolveEnabledReviewStates.mockResolvedValueOnce(["commented"]);
     const note = JSON.parse(validNotePayload());
     note.object_attributes.confidential = true;
 
@@ -610,12 +597,10 @@ describe("POST /webhooks/gitlab", () => {
       reason: "note_ignored",
     });
     expect(mockDispatchTriggerEvent).not.toHaveBeenCalled();
-    expect(mockResolveEnabledReviewStates).not.toHaveBeenCalled();
     expect(mocks.listRepositories).not.toHaveBeenCalled();
   });
 
   it("always treats an eligible GitLab note as commented without reviewer enrichment", async () => {
-    mockResolveEnabledReviewStates.mockResolvedValueOnce(["changes_requested", "commented"]);
     mockDispatchTriggerEvent.mockResolvedValueOnce({ result: "started", runId: "run_changes" });
 
     const response = await makeApp()(makeRequest(validNotePayload(), "secret", "Note Hook"));
@@ -638,7 +623,6 @@ describe("POST /webhooks/gitlab", () => {
   });
 
   it("has no reviewer API dependency for GitLab notes", async () => {
-    mockResolveEnabledReviewStates.mockResolvedValueOnce(["commented"]);
     mocks.fetch.mockRejectedValueOnce(new Error("GitLab unavailable"));
     mockDispatchTriggerEvent.mockResolvedValueOnce({ result: "started", runId: "run_note" });
 
@@ -652,7 +636,6 @@ describe("POST /webhooks/gitlab", () => {
   it("filters notes using the GitLab-specific bot login", async () => {
     mocks.env.GITLAB_BOT_LOGIN = "gitlab-automation";
     mocks.getVcsBotLogin.mockReturnValueOnce("gitlab-automation");
-    mockResolveEnabledReviewStates.mockResolvedValueOnce(["commented"]);
     const note = JSON.parse(validNotePayload());
     note.user = { id: 9, username: "gitlab-automation" };
 
@@ -665,7 +648,6 @@ describe("POST /webhooks/gitlab", () => {
 
   it("falls back to the legacy VCS bot login for GitLab notes", async () => {
     mocks.getVcsBotLogin.mockReturnValueOnce("blazebot");
-    mockResolveEnabledReviewStates.mockResolvedValueOnce(["commented"]);
     const note = JSON.parse(validNotePayload());
     note.user = { id: 9, username: "blazebot" };
 
@@ -676,15 +658,19 @@ describe("POST /webhooks/gitlab", () => {
     expect(mockDispatchTriggerEvent).not.toHaveBeenCalled();
   });
 
-  it("ignores a merge-request note when commented reviews are not configured", async () => {
+  it("forwards a merge-request note for exact snapshot selector evaluation", async () => {
+    mockDispatchTriggerEvent.mockResolvedValueOnce({ result: "ignored_untrusted_event" });
     const response = await makeApp()(makeRequest(validNotePayload(), "secret", "Note Hook"));
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({
       status: "ignored",
-      reason: "note_ignored",
+      reason: "ignored_untrusted_event",
     });
     expect(mocks.fetch).not.toHaveBeenCalled();
-    expect(mockDispatchTriggerEvent).not.toHaveBeenCalled();
+    expect(mockDispatchTriggerEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ triggerType: "trigger_pr_review" }),
+      expect.anything(),
+    );
   });
 });

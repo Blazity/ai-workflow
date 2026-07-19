@@ -1,7 +1,14 @@
+import { isRunControlError } from "./run-control-error.js";
+
 export interface WorkflowFailureExitDeps {
   logFailure(): Promise<void>;
   moveTicket(): Promise<void>;
   notifyTicket(): Promise<void>;
+}
+
+export interface UnhandledWorkflowErrorDeps {
+  recordBlockFailure(error: unknown): Promise<void>;
+  applyDefaultFailure(error: unknown): Promise<void>;
 }
 
 /**
@@ -16,4 +23,18 @@ export async function handleWorkflowFailureExit(
   if (!ticketKey) return;
   await deps.moveTicket();
   await deps.notifyTicket();
+}
+
+/**
+ * Run-control signals stop the run itself. They must not be rewritten as a
+ * failure of whichever authored block happened to be active, nor execute the
+ * ordinary backlog/notification failure policy.
+ */
+export async function handleUnhandledWorkflowError(
+  error: unknown,
+  deps: UnhandledWorkflowErrorDeps,
+): Promise<void> {
+  if (isRunControlError(error)) return;
+  await deps.recordBlockFailure(error);
+  await deps.applyDefaultFailure(error);
 }

@@ -269,6 +269,7 @@ export async function failPublicationAttempt(
         inArray(publicationAttempts.status, [
           "preflighting",
           "pushing",
+          "finalized",
           "creating_prs",
         ]),
       ),

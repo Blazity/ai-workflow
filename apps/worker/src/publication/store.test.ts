@@ -222,6 +222,24 @@ describe("publication attempt store", () => {
     });
   });
 
+  it("durably fails a finalized attempt when Open PR source validation rejects it", async () => {
+    const { attempt } = await createOrGetPublicationAttempt(db, {
+      runId: "run-source-stale",
+      blockId: "finalize",
+      workspaceManifest: manifestFor([]),
+    });
+    await markPublicationAttemptPushing(db, attempt.id);
+    await markPublicationAttemptFinalized(db, attempt.id);
+
+    await expect(
+      failPublicationAttempt(db, attempt.id, "source PR was closed"),
+    ).resolves.toBe(true);
+    await expect(getPublicationAttempt(db, attempt.id)).resolves.toMatchObject({
+      status: "failed",
+      failure: "source PR was closed",
+    });
+  });
+
   it("accepts only immediate forward state transitions and keeps failure terminal", async () => {
     const { attempt } = await createOrGetPublicationAttempt(db, {
       runId: "run-cas",

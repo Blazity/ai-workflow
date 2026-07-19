@@ -13,8 +13,13 @@ import { useIsMobileViewport } from "@/lib/use-media-query";
 import { MobileSheet } from "@/components/cockpit/mobile/mobile-sheet";
 import {
   defaultPort,
+  edgeDeleteActionVisible,
+  edgeDeleteTargetRadius,
+  edgeInstanceKey,
+  edgeKeyboardAction,
   edgeKey,
   isBackEdge,
+  reconcileSelectedEdgeKey,
   removeEdge as removeEdgeFromList,
   resolvedPort,
   upsertEdge,
@@ -274,7 +279,7 @@ function FlowCanvas({
   options: WorkflowEditorOptions;
   onNodesChange: React.Dispatch<React.SetStateAction<FlowNodeDef[]>>;
   onAddEdge: (from: string, fromPort: string, to: string) => void;
-  onRemoveEdge: (edge: FlowEdgeDef) => void;
+  onRemoveEdge: (instanceKey: string) => void;
   onDeleteNode: (nodeId: string) => void;
   onDropNode: (item: PaletteItem, at: Point) => void;
   runStatuses?: RunStatusMap;
@@ -290,6 +295,7 @@ function FlowCanvas({
   const [drag, setDrag] = useState<DragState | null>(null);  // { kind: "node"|"pan", id, ox, oy }
   const [connect, setConnect] = useState<ConnectState | null>(null);
   const [hoverEdge, setHoverEdge] = useState<number | null>(null);
+  const [selectedEdgeKey, setSelectedEdgeKey] = useState<string | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const pointers = useRef<Map<number, Point>>(new Map());
   const pinch = useRef<{ dist: number; cx: number; cy: number } | null>(null);
@@ -300,6 +306,10 @@ function FlowCanvas({
   // Mirror latest pan/zoom for the native wheel listener (attached once).
   const viewRef = useRef({ pan, zoom });
   viewRef.current = { pan, zoom };
+
+  useEffect(() => {
+    setSelectedEdgeKey((current) => reconcileSelectedEdgeKey(current, edges, selectedId));
+  }, [edges, selectedId]);
 
   // Convert a client point into canvas (unscaled) coordinates.
   const toCanvas = useCallback((clientX: number, clientY: number): Point => {
@@ -458,6 +468,7 @@ function FlowCanvas({
       return;
     }
     setSelectedId(null);
+    setSelectedEdgeKey(null);
     e.currentTarget.setPointerCapture?.(e.pointerId);
     setDrag({ kind: "pan", ox: pan.x, oy: pan.y, startX: e.clientX, startY: e.clientY, pointerId: e.pointerId });
   };
@@ -473,6 +484,10 @@ function FlowCanvas({
     if (connect && connect.from !== nodeId) onAddEdge(connect.from, connect.fromPort, nodeId);
     setConnect(null);
   }, [connect, onAddEdge]);
+  const selectNode = useCallback((nodeId: string) => {
+    setSelectedEdgeKey(null);
+    setSelectedId(nodeId);
+  }, [setSelectedId]);
 
   // For edges
   const nodeById = useMemo(() => Object.fromEntries(nodes.map(n => [n.id, n])), [nodes]);
@@ -559,20 +574,33 @@ function FlowCanvas({
           {edges.map((e, i) => {
             const a = nodeById[e.from], b = nodeById[e.to];
             if (!a || !b) return null;
+            const key = edgeInstanceKey(edges, i);
             const ports = portsByNode[a.id] ?? [];
             const port = resolvedPort(e, a.type);
             const idx = ports.indexOf(port);
             const p1 = outPortPos(a, idx < 0 ? 0 : idx, ports.length || 1);
             const p2 = inPortPos(b);
-            const isActive = (selectedId === a.id || selectedId === b.id);
+            const selected = selectedEdgeKey === key;
+            const isActive = selected || selectedId === a.id || selectedId === b.id;
             const stroke = isActive ? "#3C43E7" : "#9EA3AA";
             const hovered = hoverEdge === i;
+            const showDelete = edgeDeleteActionVisible({ canEdit, hovered, selected });
             const mx = (p1.x + p2.x) / 2, my = (p1.y + p2.y) / 2;
             const back = backEdgeKeys.has(edgeKey(e));
             const labelPort = e.fromPort !== undefined && e.fromPort !== defaultPort(a.type) ? e.fromPort : null;
+            const connectionLabel = `Connection ${port} from ${a.name || a.id} to ${b.name || b.id}`;
+            const selectConnection = () => {
+              setSelectedId(null);
+              setSelectedEdgeKey(key);
+            };
+            const deleteConnection = () => {
+              onRemoveEdge(key);
+              setHoverEdge(null);
+              setSelectedEdgeKey(null);
+            };
             return (
               <g
-                key={i}
+                key={key}
                 onMouseEnter={() => { if (canEdit) setHoverEdge(i); }}
                 onMouseLeave={() => setHoverEdge((h) => (h === i ? null : h))}
               >
@@ -586,8 +614,32 @@ function FlowCanvas({
                   className="transition-[stroke] duration-[120ms] pointer-events-none"
                 />
                 {/* Fat transparent hit area so the thin edge is easy to hover */}
-                <path d={bezier(p1, p2)} stroke="transparent" strokeWidth={18} fill="none" style={{ pointerEvents: "stroke" }} />
-                {labelPort && !hovered && (
+                <path
+                  d={bezier(p1, p2)}
+                  stroke="transparent"
+                  strokeWidth={18}
+                  fill="none"
+                  role="button"
+                  tabIndex={0}
+                  aria-label={`Select ${connectionLabel}`}
+                  aria-pressed={selected}
+                  onPointerDown={(ev) => ev.stopPropagation()}
+                  onClick={(ev) => {
+                    ev.stopPropagation();
+                    selectConnection();
+                  }}
+                  onFocus={selectConnection}
+                  onKeyDown={(ev) => {
+                    const action = edgeKeyboardAction(ev.key, canEdit);
+                    if (!action) return;
+                    ev.preventDefault();
+                    ev.stopPropagation();
+                    if (action === "delete") deleteConnection();
+                    else selectConnection();
+                  }}
+                  style={{ pointerEvents: "stroke", cursor: "pointer" }}
+                />
+                {labelPort && !showDelete && (
                   <text
                     x={mx} y={my - 8} textAnchor="middle" fontSize={11} fontWeight={800}
                     fill="#181b20" stroke="#fff" strokeWidth={4} paintOrder="stroke"
@@ -595,17 +647,42 @@ function FlowCanvas({
                     style={{ fontFamily: '"JetBrains Mono", monospace' }}
                   >{labelPort}</text>
                 )}
-                {/* Hover to delete: ✕ badge at the edge midpoint */}
-                {hovered && (
+                {/* Hover or select to reveal the delete action at the edge midpoint. */}
+                {showDelete && (
                   <g
                     transform={`translate(${mx}, ${my})`}
-                    style={{ cursor: "pointer", pointerEvents: "auto" }}
+                    className="group outline-none"
+                    style={{ cursor: "pointer", pointerEvents: "auto", touchAction: "manipulation" }}
+                    role="button"
+                    tabIndex={0}
+                    aria-label={`Delete ${connectionLabel}`}
                     onPointerDown={(ev) => ev.stopPropagation()}
-                    onClick={(ev) => { ev.stopPropagation(); onRemoveEdge(e); setHoverEdge(null); }}
+                    onClick={(ev) => {
+                      ev.stopPropagation();
+                      deleteConnection();
+                    }}
+                    onKeyDown={(ev) => {
+                      if (ev.key !== "Enter" && ev.key !== " ") return;
+                      ev.preventDefault();
+                      ev.stopPropagation();
+                      deleteConnection();
+                    }}
                   >
+                    <circle
+                      r={edgeDeleteTargetRadius(zoom)}
+                      fill="transparent"
+                      pointerEvents="all"
+                    />
                     <circle r={9} fill="#fff" stroke="#D14343" strokeWidth={1.5} />
                     <text x={0} y={3.5} textAnchor="middle" fontSize={12} fontWeight={700} fill="#D14343"
                           style={{ fontFamily: '"JetBrains Mono", monospace' }}>×</text>
+                    <circle
+                      r={edgeDeleteTargetRadius(zoom) + 3 / zoom}
+                      fill="none"
+                      stroke="#3C43E7"
+                      strokeWidth={2 / zoom}
+                      className="pointer-events-none opacity-0 group-focus-visible:opacity-100"
+                    />
                   </g>
                 )}
               </g>
@@ -642,7 +719,7 @@ function FlowCanvas({
             selected={selectedId === n.id}
             locked={isTriggerBlockType(n.type) && triggerCount === 1}
             outPorts={portsByNode[n.id] ?? []}
-            onSelect={setSelectedId}
+            onSelect={selectNode}
             onDelete={onDeleteNode}
             onDragStart={startNodeDrag}
             onPortDown={onPortDown}
@@ -779,8 +856,8 @@ export function FlowEditor({
     onEdgesChange(prev => upsertEdge(prev, from, fromPort, to, source.type));
   };
 
-  const removeEdge = (edge: FlowEdgeDef) => {
-    onEdgesChange(prev => removeEdgeFromList(prev, edge));
+  const removeEdge = (instanceKey: string) => {
+    onEdgesChange(prev => removeEdgeFromList(prev, instanceKey));
   };
 
   const updateSelected = (path: string, value: WorkflowParamValue | undefined) => {

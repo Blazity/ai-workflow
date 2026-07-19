@@ -29,12 +29,17 @@ vi.mock("../../lib/step-adapters.js", () => ({
 
 import { ensureAgentSandbox } from "./agent-sandbox.js";
 import { teardownSandboxes } from "../../sandbox/poll-agent.js";
-import { makeCtx } from "./test-support.js";
+import { makeCtx, runControlErrorCases } from "./test-support.js";
 
 describe("ensureAgentSandbox", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.sandboxCreate.mockResolvedValue({ sandboxId: "scratch-1", stop: mocks.stop });
+    mocks.stop.mockResolvedValue({ status: "stopped" });
+    mocks.sandboxCreate.mockResolvedValue({
+      sandboxId: "scratch-1",
+      status: "running",
+      stop: mocks.stop,
+    });
     mocks.createAgentAdapter.mockReturnValue({
       install: mocks.install,
       configure: mocks.configure,
@@ -78,8 +83,38 @@ describe("ensureAgentSandbox", () => {
 
     expect(ctx.agentSandboxIds.claude).toBeUndefined();
     expect([...ctx.sandboxIds]).toEqual([]);
-    expect(mocks.stop).toHaveBeenCalledOnce();
+    expect(mocks.stop).toHaveBeenCalledWith({ blocking: true });
   });
+
+  it("fails closed when scratch-sandbox registration cleanup is not terminal", async () => {
+    mocks.registerSandbox.mockRejectedValueOnce(new Error("owner entered cancellation"));
+    mocks.stop.mockResolvedValueOnce({ status: "stopping" });
+    const ctx = makeCtx({ sandboxId: null, agentSandboxIds: {}, sandboxIds: new Set() });
+
+    await expect(ensureAgentSandbox(ctx, "claude", "claude-model")).rejects.toThrow(
+      /cleanup unconfirmed.*stopping/i,
+    );
+
+    expect(mocks.stop).toHaveBeenCalledWith({ blocking: true });
+    expect(mocks.install).not.toHaveBeenCalled();
+    expect(mocks.configure).not.toHaveBeenCalled();
+  });
+
+  it.each(runControlErrorCases())(
+    "preserves %s when scratch-sandbox cleanup also fails",
+    async (_label, error) => {
+      mocks.registerSandbox.mockRejectedValueOnce(error);
+      mocks.stop.mockResolvedValueOnce({ status: "stopping" });
+
+      await expect(
+        ensureAgentSandbox(
+          makeCtx({ sandboxId: null, agentSandboxIds: {}, sandboxIds: new Set() }),
+          "claude",
+          "claude-model",
+        ),
+      ).rejects.toBe(error);
+    },
+  );
 
   it("durably registers a scratch sandbox even when a code workspace already exists", async () => {
     const ctx = makeCtx({

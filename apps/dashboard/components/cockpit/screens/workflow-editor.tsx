@@ -32,6 +32,7 @@ import {
   type DefinitionSwitchState,
 } from "@/lib/workflow-editor/definition-switch";
 import {
+  afterInvalidatingLayoutSave,
   afterPendingLayoutSave,
   createPendingLayoutSave,
   type PendingLayoutSave,
@@ -223,6 +224,10 @@ export function WorkflowEditorScreen({
   useEffect(() => () => validationController.dispose(), [validationController]);
 
   useEffect(() => {
+    if (selectedMeta) pendingLayoutSave.reset(selectedMeta.layoutRevision);
+  }, [pendingLayoutSave, selectedId, selectedMeta]);
+
+  useEffect(() => {
     if (!canEdit || !selectedMeta) {
       pendingLayoutSave.discard();
       return;
@@ -237,8 +242,7 @@ export function WorkflowEditorScreen({
       return;
     }
     const definitionId = selectedId;
-    const expectedLayoutRevision = selectedMeta.layoutRevision;
-    pendingLayoutSave.schedule(async () => {
+    pendingLayoutSave.schedule(async (expectedLayoutRevision) => {
       try {
         const res = await fetch(`/api/workflow-definitions/${definitionId}/layout`, {
           method: "PATCH",
@@ -252,7 +256,7 @@ export function WorkflowEditorScreen({
         const body = (await res.json()) as WorkflowDefinitionLayoutResponse;
         setMetas((prev) => prev.map((meta) => (meta.id === body.meta.id ? body.meta : meta)));
         setLayoutBaseline(JSON.stringify(body.layout));
-        return true;
+        return body.meta.layoutRevision;
       } catch (err) {
         setError(err instanceof Error ? err.message : "Unable to save layout");
         return false;
@@ -505,7 +509,9 @@ export function WorkflowEditorScreen({
       setMetas(remaining);
       setConfirmDelete(null);
       if (id === selectedId && remaining[0]) {
-        await applySwitch(remaining[0].id, editorResponseGuard.capture());
+        await afterInvalidatingLayoutSave(pendingLayoutSave, () =>
+          applySwitch(remaining[0].id, editorResponseGuard.capture()),
+        );
       }
     } catch (err) {
       setRowError({ id, message: err instanceof Error ? err.message : "Unable to delete definition" });

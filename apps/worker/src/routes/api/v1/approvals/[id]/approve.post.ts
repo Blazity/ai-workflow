@@ -49,7 +49,11 @@ export default defineEventHandler(async (event): Promise<ApprovalDecisionRespons
       await adapters.issueTracker.fetchTicket(row.ticketKey);
     } catch (err) {
       if (err instanceof IssueTrackerNotFoundError) {
-        await rejectUndispatchableApproval(db, id);
+        // Before the decision wins, a gone ticket makes the request
+        // undispatchable. Once approved, however, the human decision is final:
+        // retain it as a protected operational failure instead of silently
+        // replacing the pinned path with generic ticket discovery.
+        if (!isDispatchRetry) await rejectUndispatchableApproval(db, id);
         throw createError({ statusCode: 410, statusMessage: "ticket_gone" });
       }
       throw err;
@@ -81,9 +85,10 @@ export default defineEventHandler(async (event): Promise<ApprovalDecisionRespons
     });
 
     if (result.status === "definition_gone") {
-      // The definition that produced the plan is archived or gone: the pinned
-      // version can never run, so auto-reject (mirrors ticket_gone) and report it.
-      await rejectUndispatchableApproval(db, id);
+      // A pending request that cannot resolve its version never completed the
+      // approve CAS and may be retired. An already-approved plan is final and
+      // remains protected for operator repair/recovery.
+      if (!isDispatchRetry) await rejectUndispatchableApproval(db, id);
       throw createError({ statusCode: 410, statusMessage: "definition_gone" });
     }
     if (result.status === "run_in_flight") {

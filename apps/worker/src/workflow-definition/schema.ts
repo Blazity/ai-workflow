@@ -548,7 +548,59 @@ export function upgradeStoredWorkflowDefinition(raw: unknown): WorkflowDefinitio
     });
   }
 
-  const publicationUpgraded = insertLegacyOpenPrFinalizers(nodes, edges);
+  const nodeById = new Map(nodes.map((node) => [node.id, node]));
+  const normalPredecessors = new Map<string, string[]>();
+  for (const edge of edges) {
+    if (edge.fromPort !== undefined && edge.fromPort !== "out") continue;
+    const predecessors = normalPredecessors.get(edge.to) ?? [];
+    predecessors.push(edge.from);
+    normalPredecessors.set(edge.to, predecessors);
+  }
+  const onlyNormalPredecessor = (nodeId: string): WorkflowDefinitionNode | undefined => {
+    const predecessors = normalPredecessors.get(nodeId) ?? [];
+    return predecessors.length === 1 ? nodeById.get(predecessors[0]) : undefined;
+  };
+  const canonicalBindingNodes = nodes.map((node): WorkflowDefinitionNode => {
+    const predecessor = onlyNormalPredecessor(node.id);
+    if (node.type === "planning_agent" && predecessor?.type === "trigger_ticket_ai") {
+      return {
+        ...node,
+        inputs: {
+          ticket: "trigger.ticket",
+          comments: "trigger.comments",
+          priorAnswers: "trigger.priorAnswers",
+          ...node.inputs,
+        },
+      };
+    }
+    if (node.type !== "implementation_agent") return node;
+
+    if (predecessor?.type === "trigger_plan_approved") {
+      return {
+        ...node,
+        inputs: {
+          ticket: "trigger.ticket",
+          plan: "trigger.approvedPlan",
+          ...node.inputs,
+        },
+      };
+    }
+    if (predecessor?.type !== "planning_agent") return node;
+
+    const planningTrigger = onlyNormalPredecessor(predecessor.id);
+    return {
+      ...node,
+      inputs: {
+        ...(planningTrigger?.type === "trigger_ticket_ai"
+          ? { ticket: "trigger.ticket" as const }
+          : {}),
+        plan: `steps.${predecessor.id}.output.plan`,
+        ...node.inputs,
+      },
+    };
+  });
+
+  const publicationUpgraded = insertLegacyOpenPrFinalizers(canonicalBindingNodes, edges);
   const intermediate: WorkflowDefinition = {
     schemaVersion: 1,
     nodes: publicationUpgraded.nodes,
@@ -955,6 +1007,17 @@ export function validateWorkflowGraph(
       const rendered = component.map((id) => `"${id}"`).join(", ");
       issues.push(
         `Blocks [${rendered}] form a cycle region with ${loopCount} Loop blocks; each cycle region must contain exactly one.`,
+      );
+    }
+  }
+
+  const finalizeNodes = nodes.filter((node) => node.type === "finalize_workspace");
+  for (const finalize of finalizeNodes) {
+    const downstream = reachableFrom(forward.get(finalize.id) ?? [], forward);
+    for (const laterFinalize of finalizeNodes) {
+      if (laterFinalize.id === finalize.id || !downstream.has(laterFinalize.id)) continue;
+      issues.push(
+        `Finalize Workspace block "${finalize.id}" can reach Finalize Workspace block "${laterFinalize.id}"; a workflow path may publish at most once.`,
       );
     }
   }

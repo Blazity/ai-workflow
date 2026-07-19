@@ -1,6 +1,8 @@
 import { z } from "zod";
 import type { IssueTrackerMoveTarget } from "../../adapters/issue-tracker/types.js";
+import type { ActiveRunOwner } from "../../lib/active-run-owner.js";
 import type { TicketTransitionOwner } from "../../lib/ticket-transition.js";
+import { isRunControlError } from "../run-control-error.js";
 import type { BlockExecuteFn, BlockExecutionResult } from "./types.js";
 
 export const paramsSchema = z
@@ -25,18 +27,31 @@ async function createApprovalRequestStep(input: {
 }
 createApprovalRequestStep.maxRetries = 0;
 
-async function mirrorApprovalCommentStep(ticketId: string, body: string): Promise<void> {
+async function mirrorApprovalCommentStep(
+  ticketId: string,
+  body: string,
+  owner: ActiveRunOwner,
+): Promise<void> {
   "use step";
+  const { getDb } = await import("../../db/client.js");
+  const { assertActiveRunOwner } = await import("../../lib/active-run-owner.js");
   const { createStepAdapters } = await import("../../lib/step-adapters.js");
   const { issueTracker } = createStepAdapters();
+  await assertActiveRunOwner(getDb(), owner);
   await issueTracker.postComment(ticketId, body);
 }
 mirrorApprovalCommentStep.maxRetries = 0;
 
-async function notifyPlanApprovalStep(ticketKey: string): Promise<void> {
+async function notifyPlanApprovalStep(
+  ticketKey: string,
+  owner: ActiveRunOwner,
+): Promise<void> {
   "use step";
+  const { getDb } = await import("../../db/client.js");
+  const { assertActiveRunOwner } = await import("../../lib/active-run-owner.js");
   const { createStepAdapters } = await import("../../lib/step-adapters.js");
   const { messaging } = createStepAdapters();
+  await assertActiveRunOwner(getDb(), owner);
   await messaging.notifyForTicket(ticketKey, { kind: "plan_approval_requested" });
 }
 notifyPlanApprovalStep.maxRetries = 0;
@@ -50,12 +65,24 @@ async function parkForApprovalStep(
   const { getDb } = await import("../../db/client.js");
   const { createStepAdapters } = await import("../../lib/step-adapters.js");
   const { AWAITING_APPROVAL_LABEL } = await import("../../lib/labels.js");
+  const { updateTicketLabelsWithIntent } = await import(
+    "../../lib/ticket-label-mutation.js"
+  );
   const { moveTicketWithIntent } = await import("../../lib/ticket-transition.js");
   const { issueTracker } = createStepAdapters();
+  const db = getDb();
   if (typeof issueTracker.updateLabels === "function") {
     try {
-      await issueTracker.updateLabels(ticketId, { add: [AWAITING_APPROVAL_LABEL] });
+      await updateTicketLabelsWithIntent({
+        db,
+        issueTracker,
+        ticketKey: ticketId,
+        owner,
+        requiredOwnerState: "bound",
+        changes: { add: [AWAITING_APPROVAL_LABEL] },
+      });
     } catch (err) {
+      if (isRunControlError(err)) throw err;
       const { logger } = await import("../../lib/logger.js");
       logger.warn(
         { ticketId, err: err instanceof Error ? err.message : String(err) },
@@ -71,13 +98,14 @@ async function parkForApprovalStep(
   // workflow scope forbids Node modules.
   try {
     await moveTicketWithIntent({
-      db: getDb(),
+      db,
       issueTracker,
       ticketKey: ticketId,
       target: backlogTarget,
       owner,
     });
   } catch (err) {
+    if (isRunControlError(err)) throw err;
     const { logger } = await import("../../lib/logger.js");
     logger.warn(
       { ticketId, err: err instanceof Error ? err.message : String(err) },
@@ -125,6 +153,11 @@ export const execute: BlockExecuteFn = async (
   const assumptions = Array.isArray(rawAssumptions)
     ? rawAssumptions.filter((a): a is string => typeof a === "string")
     : [];
+  const owner: ActiveRunOwner = {
+    subjectKey: ctx.entry.subjectKey,
+    ownerToken: ctx.entry.ownerToken,
+    runId: ctx.runId,
+  };
 
   let approvalRequestId: string;
   try {
@@ -140,6 +173,7 @@ export const execute: BlockExecuteFn = async (
       assumptions: assumptions.length > 0 ? assumptions : null,
     });
   } catch (err) {
+    if (isRunControlError(err)) throw err;
     return {
       kind: "failed",
       output: { status: "failed" },
@@ -151,16 +185,17 @@ export const execute: BlockExecuteFn = async (
     await mirrorApprovalCommentStep(
       ctx.ticket.identifier,
       "Plan awaiting approval in the dashboard.",
-    ).catch(() => {});
+      owner,
+    ).catch((error) => {
+      if (isRunControlError(error)) throw error;
+    });
   }
 
-  await notifyPlanApprovalStep(ctx.ticket.identifier).catch(() => {});
-
-  await parkForApprovalStep(ctx.ticket.identifier, ctx.moveTargets.backlog, {
-    subjectKey: ctx.entry.subjectKey,
-    ownerToken: ctx.entry.ownerToken,
-    runId: ctx.runId,
+  await notifyPlanApprovalStep(ctx.ticket.identifier, owner).catch((error) => {
+    if (isRunControlError(error)) throw error;
   });
+
+  await parkForApprovalStep(ctx.ticket.identifier, ctx.moveTargets.backlog, owner);
 
   return { kind: "ended", output: { status: "awaiting_approval", approvalRequestId } };
 };

@@ -16,8 +16,13 @@ vi.mock("../workflows/agent.js", () => ({ agentWorkflow: "agentWorkflow_sentinel
 
 vi.mock("../db/client.js", () => ({ getDb: vi.fn(() => ({})) }));
 const mockGetEnabled = vi.fn();
+const mockHasBlockingApproval = vi.fn();
 vi.mock("../workflow-definition/store.js", () => ({
   getEnabledWorkflowDefinitionForTrigger: (...args: any[]) => mockGetEnabled(...args),
+}));
+vi.mock("../approvals/store.js", () => ({
+  hasDispatchBlockingApprovalForTicket: (...args: any[]) =>
+    mockHasBlockingApproval(...args),
 }));
 
 const { dispatchTicket, STALE_CLAIM_MS } = await import("./dispatch.js");
@@ -42,6 +47,7 @@ function registry(options: {
   listError?: Error;
   failed?: boolean;
   failedError?: Error;
+  capacityEntries?: ActiveRunEntry[];
 } = {}): RunRegistryAdapter & ThreadStore {
   const rows = [...(options.initial ?? [])];
   return {
@@ -54,6 +60,8 @@ function registry(options: {
       return true;
     }),
     bindRun: vi.fn(),
+    beginParking: vi.fn(),
+    finishParking: vi.fn(),
     handoff: vi.fn(),
     get: vi.fn(async (subjectKey) => rows.find((row) => row.subjectKey === subjectKey) ?? null),
     beginCancellation: vi.fn(),
@@ -71,6 +79,9 @@ function registry(options: {
       if (options.listError) throw options.listError;
       return [...rows];
     }),
+    ...(options.capacityEntries
+      ? { listCapacityConsumers: vi.fn(async () => [...options.capacityEntries!]) }
+      : {}),
     registerSandbox: vi.fn(),
     listSandboxes: vi.fn(),
     markFailed: vi.fn(),
@@ -120,11 +131,26 @@ describe("dispatchTicket owner reservation", () => {
   beforeEach(() => {
     mockStart.mockReset();
     mockGetEnabled.mockReset();
+    mockHasBlockingApproval.mockReset().mockResolvedValue(false);
     mockStart.mockResolvedValue({ runId: "run-started" });
     mockGetEnabled.mockResolvedValue({
       definition: { id: 7, builtinFallback: false },
       current: { definitionId: 7, version: 4 },
     });
+  });
+
+  it("does not replace a pending or approved-undispatched pinned plan", async () => {
+    mockHasBlockingApproval.mockResolvedValue(true);
+    const runRegistry = registry();
+
+    expect(await dispatchTicket("PROJ-42", adapters(runRegistry), 3)).toEqual({
+      started: false,
+      reason: "approval_pending",
+    });
+    expect(mockHasBlockingApproval).toHaveBeenCalledWith(expect.anything(), "PROJ-42");
+    expect(runRegistry.releaseReservation).toHaveBeenCalledOnce();
+    expect(mockGetEnabled).not.toHaveBeenCalled();
+    expect(mockStart).not.toHaveBeenCalled();
   });
 
   it("reserves the normalized ticket subject and pins the deployed definition for the candidate", async () => {
@@ -219,6 +245,22 @@ describe("dispatchTicket owner reservation", () => {
     expect(runRegistry.reserve).not.toHaveBeenCalled();
   });
 
+  it("admits work when the exact parked owner is absent from the capacity view", async () => {
+    const parked = entry({
+      subjectKey: "ticket:jira:PROJ-PARKED",
+      ticketKey: "PROJ-PARKED",
+      ownerToken: "owner-parked",
+      runId: "run-parked",
+    });
+    const runRegistry = registry({ initial: [parked], capacityEntries: [] });
+
+    expect(await dispatchTicket("PROJ-42", adapters(runRegistry), 1)).toEqual({
+      started: true,
+      runId: "run-started",
+    });
+    expect(runRegistry.listCapacityConsumers).toHaveBeenCalled();
+  });
+
   it("ignores stale unbound reservations in capacity", async () => {
     const stale = entry({
       state: "reserved",
@@ -228,6 +270,22 @@ describe("dispatchTicket owner reservation", () => {
     });
     const result = await dispatchTicket("PROJ-42", adapters(registry({ initial: [stale] })), 1);
     expect(result.started).toBe(true);
+  });
+
+  it("trusts an adapter capacity view instead of reapplying the process clock", async () => {
+    const databaseLiveReservation = entry({
+      state: "reserved",
+      runId: null,
+      createdAt: Date.now() - STALE_CLAIM_MS - 1,
+      updatedAt: Date.now() - STALE_CLAIM_MS - 1,
+    });
+    const runRegistry = registry({ capacityEntries: [databaseLiveReservation] });
+
+    expect(await dispatchTicket("PROJ-42", adapters(runRegistry), 1)).toEqual({
+      started: false,
+      reason: "at_capacity",
+    });
+    expect(runRegistry.reserve).not.toHaveBeenCalled();
   });
 
   it("counts a freshly handed-off reservation by its refreshed timestamp", async () => {

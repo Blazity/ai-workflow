@@ -8,7 +8,7 @@ import type {
 } from "../../sandbox/agents/types.js";
 import type { CheckRunResult, PRComment } from "../../adapters/vcs/types.js";
 import { resolveBlockAgent } from "../../workflow-definition/resolve-agent.js";
-import { isRunBudgetError } from "../run-budget.js";
+import { isRunControlError } from "../run-control-error.js";
 import { pollPhaseUntilDone } from "./poll-phase.js";
 import { ensureWorkspace } from "./prepare-workspace.js";
 import {
@@ -262,7 +262,7 @@ export const execute: BlockExecuteFn = async (
       },
     };
   } catch (err) {
-    if (isRunBudgetError(err)) throw err;
+    if (isRunControlError(err)) throw err;
     return {
       kind: "failed",
       output: {

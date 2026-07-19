@@ -15,7 +15,10 @@ const mocks = vi.hoisted(() => ({
   pollPhaseUntilDone: vi.fn().mockResolvedValue(true),
 }));
 
-vi.mock("workflow", () => ({ sleep: mocks.sleep }));
+vi.mock("workflow", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("workflow")>()),
+  sleep: mocks.sleep,
+}));
 vi.mock("../../sandbox/poll-agent.js", () => ({
   checkPhaseDone: mocks.checkPhaseDone,
   collectPhase: mocks.collectPhase,
@@ -37,7 +40,7 @@ vi.mock("./agent-sandbox.js", () => ({
 
 import { GENERIC_SCHEMA } from "../../sandbox/agents/types.js";
 import { execute, paramsSchema } from "./generic-agent.js";
-import { makeCtx, makeNode } from "./test-support.js";
+import { makeCtx, makeNode, runControlErrorCases } from "./test-support.js";
 
 function pathsFor(phase: string) {
   return {
@@ -184,6 +187,29 @@ describe("generic_agent execute", () => {
       output: { status: "failed" },
       reason: "sandbox unavailable",
     });
+  });
+
+  it.each(runControlErrorCases())(
+    "rethrows %s from agent-only scratch provisioning",
+    async (_label, error) => {
+      mocks.ensureAgentSandbox.mockRejectedValueOnce(error);
+
+      await expect(
+        execute(
+          makeNode("generic_agent", { prompt: "Plan only", workspaceMode: "none" }),
+          {},
+          makeCtx({ sandboxId: null, agentSandboxIds: {} } as never),
+        ),
+      ).rejects.toBe(error);
+    },
+  );
+
+  it.each(runControlErrorCases())("rethrows %s from agent execution", async (_label, error) => {
+    mocks.pollPhaseUntilDone.mockRejectedValue(error);
+
+    await expect(
+      execute(makeNode("generic_agent", { prompt: "Plan only" }), {}, makeCtx()),
+    ).rejects.toBe(error);
   });
 
   it("writes the prompt verbatim, uses GENERIC_SCHEMA, and maps ok output", async () => {

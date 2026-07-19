@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { SelectedRepository } from "../../adapters/vcs/repository-directory.js";
 import type { SelectedRepositoryPromptContext } from "../../sandbox/context.js";
 import type { PrTriggerPayload } from "../agent-input.js";
+import { isRunControlError } from "../run-control-error.js";
 import type { BlockExecuteFn, BlockExecutionResult } from "./types.js";
 
 export const paramsSchema = z.object({}).strict();
@@ -108,6 +109,7 @@ export const execute: BlockExecuteFn = async (_block, _steps, ctx): Promise<Bloc
       },
     };
   } catch (err) {
+    if (isRunControlError(err)) throw err;
     return {
       kind: "failed",
       output: { status: "failed" },

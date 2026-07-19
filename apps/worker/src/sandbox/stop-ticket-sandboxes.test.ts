@@ -12,10 +12,22 @@ vi.mock("./credentials.js", () => ({
   getSandboxCredentials: vi.fn(() => ({})),
 }));
 
-function makeSandbox(status: "running" | "stopped" = "running") {
+type SandboxStatus =
+  | "aborted"
+  | "failed"
+  | "pending"
+  | "running"
+  | "snapshotting"
+  | "stopped"
+  | "stopping";
+
+function makeSandbox(
+  status: SandboxStatus = "running",
+  stoppedStatus: SandboxStatus = "stopped",
+) {
   return {
     status,
-    stop: vi.fn().mockResolvedValue(undefined),
+    stop: vi.fn().mockResolvedValue({ status: stoppedStatus }),
   };
 }
 
@@ -36,8 +48,42 @@ describe("stopSandboxesByIds", () => {
 
     expect(stopped).toBe(2);
     expect(mockGet).toHaveBeenCalledTimes(2);
-    expect(first.stop).toHaveBeenCalledOnce();
-    expect(second.stop).toHaveBeenCalledOnce();
+    expect(first.stop).toHaveBeenCalledWith({ blocking: true });
+    expect(second.stop).toHaveBeenCalledWith({ blocking: true });
+  });
+
+  it.each(["pending", "stopping", "snapshotting"] as const)(
+    "blocks until a %s sandbox reaches a terminal state",
+    async (status) => {
+      const sandbox = makeSandbox(status);
+      mockGet.mockResolvedValue(sandbox);
+
+      const { stopSandboxesByIds } = await import("./stop-ticket-sandboxes.js");
+      await expect(stopSandboxesByIds([`sbx-${status}`])).resolves.toBe(1);
+      expect(sandbox.stop).toHaveBeenCalledWith({ blocking: true });
+    },
+  );
+
+  it.each(["stopped", "failed", "aborted"] as const)(
+    "accepts an already terminal %s sandbox without another stop request",
+    async (status) => {
+      const sandbox = makeSandbox(status);
+      mockGet.mockResolvedValue(sandbox);
+
+      const { stopSandboxesByIds } = await import("./stop-ticket-sandboxes.js");
+      await expect(stopSandboxesByIds([`sbx-${status}`])).resolves.toBe(0);
+      expect(sandbox.stop).not.toHaveBeenCalled();
+    },
+  );
+
+  it("rejects when a blocking stop does not confirm a terminal result", async () => {
+    const sandbox = makeSandbox("running", "stopping");
+    mockGet.mockResolvedValue(sandbox);
+
+    const { stopSandboxesByIds } = await import("./stop-ticket-sandboxes.js");
+    await expect(stopSandboxesByIds(["sbx-unconfirmed"])).rejects.toThrow(
+      "sbx-unconfirmed",
+    );
   });
 
   it("tries every sandbox but rejects while any stop outcome is unconfirmed", async () => {
@@ -52,7 +98,7 @@ describe("stopSandboxesByIds", () => {
     await expect(
       stopSandboxesByIds(["sbx-child-1", "sbx-child-2"]),
     ).rejects.toThrow("sbx-child-1");
-    expect(first.stop).toHaveBeenCalledOnce();
-    expect(second.stop).toHaveBeenCalledOnce();
+    expect(first.stop).toHaveBeenCalledWith({ blocking: true });
+    expect(second.stop).toHaveBeenCalledWith({ blocking: true });
   });
 });

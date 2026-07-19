@@ -9,6 +9,7 @@ vi.mock("@vercel/sandbox", () => ({
   Sandbox: {
     create: vi.fn(() => ({
       sandboxId: "sbx-test-123",
+      status: "running",
       runCommand: mockRunCommand,
       writeFiles: mockWriteFiles,
       stop: mockStop,
@@ -43,6 +44,7 @@ describe("SandboxManager.provisionMultiRepo", () => {
     mockRunCommand.mockResolvedValue({ exitCode: 0, stdout: mockStdout });
     mockStdout.mockResolvedValue("");
     mockWriteFiles.mockResolvedValue(undefined);
+    mockStop.mockResolvedValue({ status: "stopped" });
   });
 
   const baseConfig = {
@@ -145,7 +147,73 @@ describe("SandboxManager.provisionMultiRepo", () => {
       ),
     ).rejects.toThrow("registry write failed");
 
-    expect(mockStop).toHaveBeenCalledOnce();
+    expect(mockStop).toHaveBeenCalledWith({ blocking: true });
+    expect(mockRunCommand).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when registration-race cleanup is not terminal", async () => {
+    mockStop.mockResolvedValueOnce({ status: "stopping" });
+    const manager = new SandboxManager(baseConfig);
+
+    await expect(
+      manager.provisionMultiRepo(
+        {
+          branchName: "feat/test-branch",
+          repositories: [
+            {
+              provider: "github",
+              repoPath: "test-org/test-repo",
+              defaultBranch: "main",
+              selectedRationale: "only accessible repository",
+            },
+          ],
+        },
+        makeFakeAgent(),
+        { model: "any", anthropicApiKey: "k" },
+        [],
+        {
+          onCreated: async () => {
+            throw new Error("owner entered cancellation");
+          },
+        },
+      ),
+    ).rejects.toThrow(/cleanup unconfirmed.*stopping/i);
+
+    expect(mockStop).toHaveBeenCalledWith({ blocking: true });
+    expect(mockRunCommand).not.toHaveBeenCalled();
+  });
+
+  it("preserves exact-owner loss when registration cleanup is not terminal", async () => {
+    mockStop.mockResolvedValueOnce({ status: "stopping" });
+    const ownerError = new Error("Provider mutation requires the exact active run owner.");
+    ownerError.name = "ActiveRunOwnerError";
+    const manager = new SandboxManager(baseConfig);
+
+    await expect(
+      manager.provisionMultiRepo(
+        {
+          branchName: "feat/test-branch",
+          repositories: [
+            {
+              provider: "github",
+              repoPath: "test-org/test-repo",
+              defaultBranch: "main",
+              selectedRationale: "only accessible repository",
+            },
+          ],
+        },
+        makeFakeAgent(),
+        { model: "any", anthropicApiKey: "k" },
+        [],
+        {
+          onCreated: async () => {
+            throw ownerError;
+          },
+        },
+      ),
+    ).rejects.toBe(ownerError);
+
+    expect(mockStop).toHaveBeenCalledWith({ blocking: true });
     expect(mockRunCommand).not.toHaveBeenCalled();
   });
 

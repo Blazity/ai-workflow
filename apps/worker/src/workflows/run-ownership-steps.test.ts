@@ -1,8 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { ActiveRunOwnerError } from "../lib/run-control-errors.js";
 
 const bindRun = vi.fn();
-const release = vi.fn();
-const drain = vi.fn();
+const beginParking = vi.fn();
+const finishParking = vi.fn();
+const getRunOwner = vi.fn();
 const deletePending = vi.fn();
 const recordDispatched = vi.fn();
 const clearDispatched = vi.fn();
@@ -11,27 +13,48 @@ const assertClarificationCheckpointAvailable = vi.fn();
 const markConsumed = vi.fn();
 const resolveAwaitingRun = vi.fn();
 const acknowledgeStartedDelivery = vi.fn();
+const completeTriggerDelivery = vi.fn();
+const createRepositoryVcsRuntime = vi.fn();
+const getPRHead = vi.fn();
+const getLatestCheckRuns = vi.fn();
 const setApprovalRun = vi.fn();
 const listSandboxes = vi.fn();
 const stopSandboxes = vi.fn();
 const updateLabels = vi.fn();
+const assertActiveRunOwner = vi.fn();
 const moveTicketWithIntent = vi.fn();
+const fetchTicket = vi.fn();
+const updateTicketLabelsWithIntent = vi.fn();
 vi.mock("../lib/step-adapters.js", () => ({
   createStepAdapters: () => ({
-    runRegistry: { bindRun, release, listSandboxes },
-    issueTracker: { updateLabels },
+    runRegistry: {
+      bindRun,
+      beginParking,
+      finishParking,
+      get: getRunOwner,
+      listSandboxes,
+    },
+    issueTracker: { updateLabels, fetchTicket },
   }),
 }));
 vi.mock("../db/client.js", () => ({ getDb: () => ({ db: true }) }));
-vi.mock("../../env.js", () => ({
-  env: { MAX_CONCURRENT_AGENTS: 3, COLUMN_AI: "AI" },
-}));
-vi.mock("../lib/dispatch-trigger.js", () => ({
-  drainOldestPendingTrigger: (...args: any[]) => drain(...args),
+vi.mock("../lib/active-run-owner.js", () => ({
+  assertActiveRunOwner: (...args: any[]) => assertActiveRunOwner(...args),
 }));
 vi.mock("../lib/trigger-delivery-store.js", () => ({
   deletePendingTrigger: (...args: any[]) => deletePending(...args),
   acknowledgeStartedTriggerDelivery: (...args: any[]) => acknowledgeStartedDelivery(...args),
+  completeTriggerDelivery: (...args: any[]) => completeTriggerDelivery(...args),
+}));
+vi.mock("../lib/vcs-runtime.js", () => ({
+  createRepositoryVCS: (...args: any[]) => {
+    createRepositoryVcsRuntime(...args);
+    return { getPRHead, getLatestCheckRuns };
+  },
+  createRepositoryVcsRuntime: (...args: any[]) => {
+    createRepositoryVcsRuntime(...args);
+    return { vcs: { getPRHead, getLatestCheckRuns } };
+  },
 }));
 vi.mock("../clarifications/store.js", () => ({
   assertClarificationCheckpointAvailable: (...args: unknown[]) =>
@@ -53,12 +76,17 @@ vi.mock("../sandbox/stop-ticket-sandboxes.js", () => ({
 vi.mock("../lib/ticket-transition.js", () => ({
   moveTicketWithIntent: (...args: any[]) => moveTicketWithIntent(...args),
 }));
+vi.mock("../lib/ticket-label-mutation.js", () => ({
+  updateTicketLabelsWithIntent: (...args: any[]) =>
+    updateTicketLabelsWithIntent(...args),
+}));
 
 describe("workflow owner steps", () => {
   beforeEach(() => {
     bindRun.mockReset();
-    release.mockReset();
-    drain.mockReset();
+    beginParking.mockReset().mockResolvedValue(true);
+    finishParking.mockReset().mockResolvedValue(true);
+    getRunOwner.mockReset().mockResolvedValue(null);
     deletePending.mockReset();
     recordDispatched.mockReset();
     clearDispatched.mockReset();
@@ -67,11 +95,30 @@ describe("workflow owner steps", () => {
     markConsumed.mockReset();
     resolveAwaitingRun.mockReset();
     acknowledgeStartedDelivery.mockReset();
+    completeTriggerDelivery.mockReset().mockResolvedValue(undefined);
+    createRepositoryVcsRuntime.mockReset();
+    getPRHead.mockReset().mockResolvedValue({
+      headSha: "sha",
+      baseRef: "main",
+      state: "open",
+    });
+    getLatestCheckRuns.mockReset().mockResolvedValue([
+      {
+        id: 101,
+        name: "ci / build",
+        appSlug: "github-actions",
+        status: "completed",
+        conclusion: "failure",
+      },
+    ]);
     setApprovalRun.mockReset();
     listSandboxes.mockReset().mockResolvedValue([]);
     stopSandboxes.mockReset().mockResolvedValue(0);
     updateLabels.mockReset();
+    assertActiveRunOwner.mockReset().mockResolvedValue(undefined);
     moveTicketWithIntent.mockReset().mockResolvedValue(undefined);
+    fetchTicket.mockReset();
+    updateTicketLabelsWithIntent.mockReset().mockResolvedValue(undefined);
   });
 
   it("self-records the exact plan-approval workflow after owner bind", async () => {
@@ -158,7 +205,19 @@ describe("workflow owner steps", () => {
         producer: "github-actions",
         deliveryId: "delivery-direct",
       },
-      pr: { provider: "github" as const, headSha: "sha" } as any,
+      pr: {
+        provider: "github" as const,
+        repoPath: "acme/api",
+        prNumber: 7,
+        headSha: "sha",
+        baseRef: "main",
+        failedChecks: [{
+          name: "ci / build",
+          appSlug: "github-actions",
+          checkRunId: 101,
+          conclusion: "failure",
+        }],
+      } as any,
     };
 
     await expect(acknowledgePrTriggerDispatchStep(entry, "run-winning")).resolves.toBe(true);
@@ -173,6 +232,12 @@ describe("workflow owner steps", () => {
       }),
       "run-winning",
     );
+    expect(createRepositoryVcsRuntime).toHaveBeenCalledWith({
+      provider: "github",
+      repoPath: "acme/api",
+      baseBranch: "main",
+    });
+    expect(getPRHead).toHaveBeenCalledWith(7);
   });
 
   it("rejects a PR-trigger candidate whose delivery belongs to another winner", async () => {
@@ -187,10 +252,165 @@ describe("workflow owner steps", () => {
         producer: "alice",
         deliveryId: "delivery-stale",
       },
-      pr: { provider: "github" as const, headSha: "sha" } as any,
+      pr: {
+        provider: "github" as const,
+        repoPath: "acme/api",
+        prNumber: 7,
+        headSha: "sha",
+        baseRef: "main",
+      } as any,
     } as any;
 
     await expect(acknowledgePrTriggerDispatchStep(entry, "run-loser")).resolves.toBe(false);
+  });
+
+  it.each([
+    ["head", { headSha: "sha-new", baseRef: "main", state: "open" }],
+    ["base", { headSha: "sha", baseRef: "release", state: "open" }],
+    ["state", { headSha: "sha", baseRef: "main", state: "closed" }],
+  ] as const)(
+    "rejects a bound PR-trigger candidate when the provider %s identity changed",
+    async (_identity, current) => {
+      getPRHead.mockResolvedValue(current);
+      const { acknowledgePrTriggerDispatchStep } = await import(
+        "./run-ownership-steps.js"
+      );
+      const entry = {
+        kind: "pr_trigger" as const,
+        triggerType: "trigger_pr_review" as const,
+        subjectKey: "pr:github:acme/api#7",
+        ownerToken: "owner",
+        definitionId: 1,
+        definitionVersion: 2,
+        scope: "any" as const,
+        delivery: {
+          provider: "github" as const,
+          producer: "alice",
+          deliveryId: "delivery-stale-provider",
+        },
+        pr: {
+          provider: "github" as const,
+          repoPath: "acme/api",
+          prNumber: 7,
+          headSha: "sha",
+          baseRef: "main",
+        } as any,
+      };
+
+      await expect(
+        acknowledgePrTriggerDispatchStep(entry, "run-stale"),
+      ).resolves.toBe(false);
+      expect(acknowledgeStartedDelivery).not.toHaveBeenCalled();
+      expect(completeTriggerDelivery).toHaveBeenCalledWith(
+        { db: true },
+        "github",
+        "delivery-stale-provider",
+        { result: "ignored_stale_head" },
+      );
+    },
+  );
+
+  it("rejects a same-head GitHub checks candidate after its exact Check Run passes", async () => {
+    acknowledgeStartedDelivery.mockResolvedValue(true);
+    getLatestCheckRuns.mockResolvedValue([
+      {
+        id: 101,
+        name: "ci / build",
+        appSlug: "github-actions",
+        status: "completed",
+        conclusion: "success",
+      },
+    ]);
+    const { acknowledgePrTriggerDispatchStep } = await import(
+      "./run-ownership-steps.js"
+    );
+    const entry = {
+      kind: "pr_trigger" as const,
+      triggerType: "trigger_pr_checks_failed" as const,
+      subjectKey: "pr:github:acme/api#7",
+      ownerToken: "owner",
+      definitionId: 1,
+      definitionVersion: 2,
+      scope: "any" as const,
+      delivery: {
+        provider: "github" as const,
+        producer: "github-actions",
+        deliveryId: "delivery-passed-check",
+      },
+      pr: {
+        provider: "github" as const,
+        repoPath: "acme/api",
+        prNumber: 7,
+        headSha: "sha",
+        baseRef: "main",
+        failedChecks: [{
+          name: "ci / build",
+          appSlug: "github-actions",
+          checkRunId: 101,
+          conclusion: "failure",
+        }],
+      } as any,
+    };
+
+    await expect(
+      acknowledgePrTriggerDispatchStep(entry, "run-stale-check"),
+    ).resolves.toBe(false);
+    expect(getLatestCheckRuns).toHaveBeenCalledWith("sha");
+    expect(acknowledgeStartedDelivery).not.toHaveBeenCalled();
+    expect(completeTriggerDelivery).toHaveBeenCalledWith(
+      { db: true },
+      "github",
+      "delivery-passed-check",
+      { result: "ignored_stale_head" },
+    );
+  });
+
+  it("rejects a same-head GitLab checks candidate after its pipeline passes", async () => {
+    acknowledgeStartedDelivery.mockResolvedValue(true);
+    getPRHead.mockResolvedValue({
+      headSha: "sha",
+      baseRef: "main",
+      state: "open",
+      headPipelineId: 901,
+      headPipelineStatus: "success",
+    });
+    const { acknowledgePrTriggerDispatchStep } = await import(
+      "./run-ownership-steps.js"
+    );
+    const entry = {
+      kind: "pr_trigger" as const,
+      triggerType: "trigger_pr_checks_failed" as const,
+      subjectKey: "pr:gitlab:group/api#7",
+      ownerToken: "owner",
+      definitionId: 1,
+      definitionVersion: 2,
+      scope: "any" as const,
+      delivery: {
+        provider: "gitlab" as const,
+        producer: "gitlab-ci",
+        deliveryId: "delivery-passed-pipeline",
+      },
+      pr: {
+        provider: "gitlab" as const,
+        repoPath: "group/api",
+        prNumber: 7,
+        headSha: "sha",
+        baseRef: "main",
+        pipelineId: 901,
+        failedChecks: [{ name: "lint", conclusion: "failed" }],
+      } as any,
+    };
+
+    await expect(
+      acknowledgePrTriggerDispatchStep(entry, "run-stale-pipeline"),
+    ).resolves.toBe(false);
+    expect(acknowledgeStartedDelivery).not.toHaveBeenCalled();
+    expect(completeTriggerDelivery).toHaveBeenCalledWith(
+      { db: true },
+      "gitlab",
+      "delivery-passed-pipeline",
+      { result: "ignored_stale_head" },
+    );
   });
 
   it("lets only the candidate that CAS-binds continue", async () => {
@@ -200,6 +420,110 @@ describe("workflow owner steps", () => {
     expect(await bindWorkflowCandidateStep("subject", "owner", "run-b")).toBe(false);
     expect(bindRun).toHaveBeenNthCalledWith(1, "subject", "owner", "run-a");
   });
+
+  it("crosses the durable parking barrier only after every registered sandbox stop is confirmed", async () => {
+    const order: string[] = [];
+    beginParking.mockImplementation(async () => {
+      order.push("begin");
+      return true;
+    });
+    listSandboxes.mockImplementation(async () => {
+      order.push("list");
+      return ["sbx-code", "sbx-scratch"];
+    });
+    stopSandboxes.mockImplementation(async () => {
+      order.push("stop");
+      return 2;
+    });
+    finishParking.mockImplementation(async () => {
+      order.push("finish");
+      return true;
+    });
+    const { parkClarificationOwnerStep } = await import("./run-ownership-steps.js");
+
+    await expect(
+      parkClarificationOwnerStep("ticket:jira:AWT-1", "owner-a", "run-a"),
+    ).resolves.toBe(true);
+    expect(order).toEqual(["begin", "list", "stop", "finish"]);
+  });
+
+  it("keeps the durable parking claim for reconciliation when sandbox termination is unconfirmed", async () => {
+    listSandboxes.mockResolvedValue(["sbx-code"]);
+    stopSandboxes.mockRejectedValue(new Error("sandbox still running"));
+    const { parkClarificationOwnerStep } = await import("./run-ownership-steps.js");
+
+    await expect(
+      parkClarificationOwnerStep("ticket:jira:AWT-1", "owner-a", "run-a"),
+    ).resolves.toBe(true);
+    expect(finishParking).not.toHaveBeenCalled();
+  });
+
+  it("keeps the published clarification awaiting when beginParking is temporarily unavailable", async () => {
+    beginParking.mockRejectedValue(new Error("database unavailable"));
+    const { parkClarificationOwnerStep } = await import("./run-ownership-steps.js");
+
+    await expect(
+      parkClarificationOwnerStep("ticket:jira:AWT-1", "owner-a", "run-a"),
+    ).resolves.toBe(true);
+    expect(listSandboxes).not.toHaveBeenCalled();
+    expect(finishParking).not.toHaveBeenCalled();
+  });
+
+  it("accepts a concurrent reconciler that already completed parking", async () => {
+    listSandboxes.mockResolvedValue(["sbx-code"]);
+    finishParking.mockResolvedValue(false);
+    getRunOwner.mockResolvedValue({
+      subjectKey: "ticket:jira:AWT-1",
+      ownerToken: "owner-a",
+      runId: "run-a",
+      state: "parked",
+    });
+    const { parkClarificationOwnerStep } = await import("./run-ownership-steps.js");
+
+    await expect(
+      parkClarificationOwnerStep("ticket:jira:AWT-1", "owner-a", "run-a"),
+    ).resolves.toBe(true);
+  });
+
+  it("treats an exact already-parked replay as complete", async () => {
+    beginParking.mockResolvedValue(false);
+    getRunOwner.mockResolvedValue({
+      subjectKey: "ticket:jira:AWT-1",
+      ownerToken: "owner-a",
+      runId: "run-a",
+      state: "parked",
+    });
+    const { parkClarificationOwnerStep } = await import("./run-ownership-steps.js");
+
+    await expect(
+      parkClarificationOwnerStep("ticket:jira:AWT-1", "owner-a", "run-a"),
+    ).resolves.toBe(true);
+    expect(listSandboxes).not.toHaveBeenCalled();
+    expect(finishParking).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["cancelling", "owner-a", "run-a"],
+    ["reserved", "owner-successor", null],
+  ] as const)(
+    "rejects %s ownership instead of reporting a successful clarification park",
+    async (state, ownerToken, runId) => {
+      beginParking.mockResolvedValue(false);
+      getRunOwner.mockResolvedValue({
+        subjectKey: "ticket:jira:AWT-1",
+        ownerToken,
+        runId,
+        state,
+      });
+      const { parkClarificationOwnerStep } = await import("./run-ownership-steps.js");
+
+      await expect(
+        parkClarificationOwnerStep("ticket:jira:AWT-1", "owner-a", "run-a"),
+      ).rejects.toBeInstanceOf(ActiveRunOwnerError);
+      expect(listSandboxes).not.toHaveBeenCalled();
+      expect(finishParking).not.toHaveBeenCalled();
+    },
+  );
 
   it("acknowledges and clears only through the exact clarification winner CAS", async () => {
     recordDispatched.mockResolvedValue(true);
@@ -334,38 +658,47 @@ describe("workflow owner steps", () => {
     )).resolves.toBe(true);
   });
 
-  it("drains only when owner-matching terminal compare-and-delete succeeds", async () => {
-    release.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
-    const { terminalReleaseAndDrainStep } = await import("./run-ownership-steps.js");
-    expect(await terminalReleaseAndDrainStep("subject", "owner", "run-a")).toBe(false);
-    expect(drain).not.toHaveBeenCalled();
-    expect(await terminalReleaseAndDrainStep("subject", "owner", "run-a")).toBe(true);
-    expect(drain).toHaveBeenCalledOnce();
-  });
-
-  it("retains terminal ownership when durable sandbox cleanup is unconfirmed", async () => {
-    listSandboxes.mockResolvedValue(["sbx-1"]);
-    stopSandboxes.mockRejectedValue(new Error("sandbox API unavailable"));
-    const { terminalReleaseAndDrainStep } = await import("./run-ownership-steps.js");
-
-    expect(await terminalReleaseAndDrainStep("subject", "owner", "run-a")).toBe(false);
-    expect(release).not.toHaveBeenCalled();
-    expect(drain).not.toHaveBeenCalled();
-  });
-
   it("repairs clarification label removal independently and replay-safely", async () => {
-    updateLabels
+    updateTicketLabelsWithIntent
       .mockRejectedValueOnce(new Error("Jira is temporarily unavailable"))
       .mockResolvedValueOnce(undefined);
     const { repairClarificationLabelStep } = await import("./run-ownership-steps.js");
 
-    await expect(repairClarificationLabelStep("AWT-1")).rejects.toThrow(
+    const owner = {
+      subjectKey: "ticket:jira:AWT-1",
+      ownerToken: "owner:test",
+      runId: "run-1",
+    };
+    await expect(repairClarificationLabelStep("AWT-1", owner)).rejects.toThrow(
       "Jira is temporarily unavailable",
     );
-    await expect(repairClarificationLabelStep("AWT-1")).resolves.toBeUndefined();
-    expect(updateLabels).toHaveBeenCalledTimes(2);
-    expect(updateLabels).toHaveBeenLastCalledWith("AWT-1", {
-      remove: ["needs-clarification"],
+    await expect(repairClarificationLabelStep("AWT-1", owner)).resolves.toBeUndefined();
+    expect(updateTicketLabelsWithIntent).toHaveBeenCalledTimes(2);
+    expect(updateTicketLabelsWithIntent).toHaveBeenLastCalledWith({
+      db: { db: true },
+      issueTracker: expect.anything(),
+      ticketKey: "AWT-1",
+      owner,
+      requiredOwnerState: "bound",
+      changes: { remove: ["needs-clarification"] },
     });
+    expect(updateLabels).not.toHaveBeenCalled();
+  });
+
+  it("does not remove the clarification label after cancellation closes the owner", async () => {
+    const ownerLoss = new ActiveRunOwnerError();
+    updateTicketLabelsWithIntent.mockRejectedValue(ownerLoss);
+    const { repairClarificationLabelStep } = await import("./run-ownership-steps.js");
+
+    await expect(
+      repairClarificationLabelStep("AWT-1", {
+        subjectKey: "ticket:jira:AWT-1",
+        ownerToken: "owner:test",
+        runId: "run-1",
+      }),
+    ).rejects.toBe(ownerLoss);
+
+    expect(updateTicketLabelsWithIntent).toHaveBeenCalledOnce();
+    expect(updateLabels).not.toHaveBeenCalled();
   });
 });

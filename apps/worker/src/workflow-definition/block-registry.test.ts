@@ -41,6 +41,16 @@ describe("workflow block registry", () => {
     }
   });
 
+  it("accepts the normalized failed envelope for every executable action", () => {
+    const registry = buildWorkflowBlockRegistry(context);
+    for (const [type, spec] of Object.entries(BLOCK_TYPE_SPECS)) {
+      if (spec.category !== "action") continue;
+      expect(registry[type as WorkflowBlockType].output.statusVariants, type).toContain(
+        "failed",
+      );
+    }
+  });
+
   it("declares safe variadic Finalize check inputs", () => {
     const contract = buildWorkflowBlockRegistry(context).finalize_workspace;
     expect(contract.additionalInputs).toEqual([
@@ -78,7 +88,21 @@ describe("workflow block registry", () => {
     expect(registry.open_pr.inputs).toEqual({
       publicationAttemptId: { required: true, schema: { type: "string" } },
     });
-    expect(registry.implementation_agent.inputs).toEqual({});
+    expect(registry.planning_agent.inputs).toEqual({
+      ticket: { required: false, schema: expect.objectContaining({ type: "object" }) },
+      comments: {
+        required: false,
+        schema: expect.objectContaining({ type: "array" }),
+      },
+      priorAnswers: {
+        required: false,
+        schema: expect.objectContaining({ type: "array" }),
+      },
+    });
+    expect(registry.implementation_agent.inputs).toEqual({
+      ticket: { required: false, schema: expect.objectContaining({ type: "object" }) },
+      plan: { required: false, schema: { type: "string" } },
+    });
     expect(registry.fix_agent.inputs).toEqual({});
     expect(registry.fetch_pr_context.inputs).toEqual({});
     expect(Object.keys(registry.generic_agent.inputs)).toEqual(["prompt"]);
@@ -91,8 +115,8 @@ describe("workflow block registry", () => {
       "questions",
       "suggestedAnswers",
     ]);
-    expect(registry.trigger_ticket_ai.output.schema).not.toMatchObject({
-      properties: { ticket: expect.anything() },
+    expect(registry.trigger_ticket_ai.output.bindingSchema).toMatchObject({
+      required: expect.arrayContaining(["ticket", "comments", "priorAnswers"]),
     });
   });
 
