@@ -9,7 +9,7 @@ import type {
   WorkflowEditorOptions,
   WorkflowParamValue,
 } from "@shared/contracts";
-import { DEFAULT_AGENT_PROMPTS } from "@shared/contracts";
+import { DEFAULT_PROMPT_NAME_BY_AGENT } from "@shared/contracts";
 import { parseCondition } from "@shared/conditions";
 import { arrayToLines, linesToArray, textMatchesLines } from "@/lib/workflow-editor/params";
 import { Listbox } from "@/components/cockpit/listbox";
@@ -22,24 +22,6 @@ type ConfigChange = (path: string, value: WorkflowParamValue | PromptSourceRef |
 export const inputCls = "h-[26px] px-2 bg-off-white border border-neutral-200 rounded-xs font-mono text-xs text-coal outline-none disabled:opacity-60";
 export const textareaCls = "min-h-[64px] px-2 py-1.5 bg-off-white border border-neutral-200 rounded-xs font-body text-xs leading-[1.5] text-coal outline-none resize-y disabled:opacity-60";
 export const monoTextareaCls = "min-h-[64px] px-2 py-1.5 bg-off-white border border-neutral-200 rounded-xs font-mono text-xs leading-[1.5] text-coal outline-none resize-y disabled:opacity-60";
-
-/** Per-agent built-in prompt template name + inspector placeholder copy. */
-const AGENT_PROMPT_META: Partial<
-  Record<WorkflowBlockType, { templateName: keyof typeof DEFAULT_AGENT_PROMPTS; placeholder: string }>
-> = {
-  planning_agent: {
-    templateName: "research-plan",
-    placeholder: "Uses the built-in research-plan template. Type or insert a prompt to replace it.",
-  },
-  implementation_agent: {
-    templateName: "implement",
-    placeholder: "Uses the built-in implement template. Type or insert a prompt to replace it.",
-  },
-  review_agent: {
-    templateName: "review",
-    placeholder: "Uses the built-in review template. Type or insert a prompt to replace it.",
-  },
-};
 
 function str(value: WorkflowParamValue | undefined): string {
   return typeof value === "string" ? value : "";
@@ -446,7 +428,6 @@ export function ConfigFields({
     case "planning_agent":
     case "implementation_agent":
     case "review_agent": {
-      const meta = AGENT_PROMPT_META[node.type]!;
       return (
         <>
           <AgentProviderModel node={node} options={options} canEdit={canEdit} onChange={onChange} />
@@ -456,9 +437,7 @@ export function ConfigFields({
             node={node}
             disabled={!canEdit}
             mono
-            placeholder={meta.placeholder}
-            helper="Leave empty to keep the built-in template."
-            builtInTemplate={{ name: meta.templateName, body: DEFAULT_AGENT_PROMPTS[meta.templateName] }}
+            defaultPromptName={DEFAULT_PROMPT_NAME_BY_AGENT[node.type]}
             onChange={onChange}
           />
         </>
