@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { CkCard, CkChip } from "@/components/ui";
 import { filterPrompts } from "@/lib/prompt-library/filter";
 import type { PromptLibraryListRowDto } from "@shared/contracts";
@@ -53,7 +53,12 @@ export function PromptListRail({
 }) {
   const searchRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
-  const filtered = filterPrompts(rows, query, tag, { includeArchived: showArchived });
+  // filterPrompts re-scans every row body, so keep it off the per-keystroke
+  // render path: recompute only when the inputs actually change.
+  const filtered = useMemo(
+    () => filterPrompts(rows, query, tag, { includeArchived: showArchived }),
+    [rows, query, tag, showArchived],
+  );
 
   // "/" focuses the search box unless the user is already typing somewhere.
   useEffect(() => {

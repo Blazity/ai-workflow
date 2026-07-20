@@ -132,6 +132,10 @@ export function PromptInsertPopup({
 
   const activeIndex = entries.length ? Math.min(active, entries.length - 1) : -1;
   const activeRow = activeIndex >= 0 ? entries[activeIndex].row : null;
+  // Split the active body once per row rather than on every render, so arrow-key
+  // navigation and selectionchange re-renders do not re-scan the (large) body.
+  // activeRow is a stable reference for a given prompt, so it captures id/version/body.
+  const previewSections = useMemo(() => (activeRow ? splitSections(activeRow.body) : []), [activeRow]);
 
   // While open: capture focus, lock body scroll, refresh the library, read the
   // recent list, focus the search input, and dismiss on Escape. Escape must use
@@ -352,7 +356,7 @@ export function PromptInsertPopup({
         <VariableChips body={activeRow.body} />
       </div>
       <div ref={previewRef} className="flex-1 min-h-0 overflow-y-auto px-4 py-3 flex flex-col gap-2">
-        {splitSections(activeRow.body).map((section, si) => (
+        {previewSections.map((section, si) => (
           <div
             key={si}
             className="group relative -mx-2 rounded-[3px] border border-transparent px-2 py-1 hover:border-neutral-200"

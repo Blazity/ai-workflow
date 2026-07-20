@@ -67,6 +67,28 @@ export function PromptLibraryScreen({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeId, mode, retryNonce]);
 
+  // If the mounted form stops being dirty (e.g. the user hit the form's own
+  // Cancel, unmounting it), any stashed navigation is moot. Drop it so the
+  // confirm bar cannot linger, and cannot resurface with a stale action once a
+  // later draft turns dirty again.
+  useEffect(() => {
+    if (!formDirty && pendingNav) setPendingNav(null);
+  }, [formDirty, pendingNav]);
+
+  // CockpitShell's live-poll fires router.refresh() every ~5s, re-running the RSC
+  // and handing us a fresh `data` object. Seeding `rows` once via useState would
+  // otherwise drop those refreshes. Reconcile the fresh list into `rows`, but only
+  // when it is safe: view mode with no pending navigation and no in-flight
+  // mutation, so an open edit/create draft or an optimistic update is never
+  // clobbered (view+idle has no local-only rows, so a wholesale replace is
+  // correct). The effect keys solely on the stable `data` reference (new only on
+  // an actual server refresh), so replacing `rows` here cannot loop.
+  useEffect(() => {
+    if (mode !== "view" || pendingNav !== null || busy !== null) return;
+    setRows(data.prompts);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data]);
+
   async function loadDetail(id: number) {
     try {
       const tasks: Promise<void>[] = [];
@@ -287,6 +309,7 @@ export function PromptLibraryScreen({
   if (mode === "create") {
     rightPane = (
       <PromptEditorForm
+        key="create"
         mode="create"
         initialName=""
         initialDescription=""
@@ -302,6 +325,7 @@ export function PromptLibraryScreen({
   } else if (mode === "edit" && activeRow && activeDetail) {
     rightPane = (
       <PromptEditorForm
+        key={`edit-${activeId}`}
         mode="edit"
         initialName={activeDetail.meta.name}
         initialDescription={activeDetail.meta.description ?? ""}
@@ -423,7 +447,7 @@ export function PromptLibraryScreen({
             }}
           />
           <div className="flex flex-col gap-3 min-w-0">
-            {pendingNav && (
+            {pendingNav && formDirty && (
               <span className="flex items-center gap-3 font-body text-[12px] text-neutral-700">
                 <span>Discard draft?</span>
                 <button

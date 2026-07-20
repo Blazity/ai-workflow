@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState, useRef } from "react";
+import { useCallback, useEffect, useMemo, useState, useRef } from "react";
 import { createPortal } from "react-dom";
 import type { FlowNodeDef } from "@/lib/flows";
 import type { PromptLibraryListRowDto, PromptSourceRef, WorkflowParamValue } from "@shared/contracts";
@@ -48,7 +48,13 @@ export function PromptField({
   const value = typeof raw === "string" ? raw : "";
   const ref = getPromptRef(node, paramKey);
   const { status, rows } = usePromptLibrary();
-  const drift = ref && status === "ready" ? driftFor(ref, value, rows) : null;
+  // driftFor hashes the full field value (up to ~50k chars); memoize so an
+  // unrelated re-render (popover toggles, autoOpen, etc.) does not re-hash. The
+  // result is identical, only recomputed when an input actually changes.
+  const drift = useMemo(
+    () => (ref && status === "ready" ? driftFor(ref, value, rows) : null),
+    [ref, status, value, rows],
+  );
 
   const [insertOpen, setInsertOpen] = useState(false);
   const [saveOpen, setSaveOpen] = useState(false);

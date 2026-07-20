@@ -69,3 +69,57 @@ test("an empty body reconstructs to an empty Introduction", () => {
     { title: "Introduction", level: 0, start: 0, end: 0, body: "" },
   ]);
 });
+
+test("a heading inside a fenced code block does not split", () => {
+  const body = "# Real\nlead\n```markdown\n# Session Memory\nnotes\n```\ntail";
+  const sections = splitSections(body);
+  assert.deepEqual(
+    sections.map((s) => ({ title: s.title, level: s.level })),
+    [{ title: "Real", level: 1 }],
+  );
+});
+
+test("fences that close and reopen only gate their own interiors", () => {
+  const body = "# A\n```\n# hidden\n```\n# B\n~~~\n## also hidden\n~~~\n# C";
+  assert.deepEqual(
+    splitSections(body).map((s) => s.title),
+    ["A", "B", "C"],
+  );
+});
+
+test("a ~~~ line inside a ``` fence does not close it", () => {
+  const body = "```\n~~~\n# still fenced\n```\n# Real";
+  assert.deepEqual(
+    splitSections(body).map((s) => ({ title: s.title, level: s.level })),
+    [
+      { title: "Introduction", level: 0 },
+      { title: "Real", level: 1 },
+    ],
+  );
+});
+
+test("real headings outside fences still split with correct levels", () => {
+  const body = "# H1\na\n```\n### fake\n```\n## H2\nb";
+  assert.deepEqual(
+    splitSections(body).map((s) => ({ title: s.title, level: s.level })),
+    [
+      { title: "H1", level: 1 },
+      { title: "H2", level: 2 },
+    ],
+  );
+});
+
+test("reconstruction is exact for bodies containing fenced code blocks", () => {
+  const bodies = [
+    "# Real\nlead\n```markdown\n# Session Memory\nnotes\n```\nafter",
+    "```\n# only in fence\n```",
+    "intro\n~~~python\n# comment\n~~~\n# Heading\nbody",
+    "```\n~~~\n# still fenced\n```\n# Real\ntail\n",
+  ];
+  for (const body of bodies) {
+    const joined = splitSections(body)
+      .map((s) => s.body)
+      .join("");
+    assert.equal(joined, body);
+  }
+});
