@@ -12,8 +12,9 @@ import {
  * verbatim from the dashboard Q&A. Called BEFORE the workspace push so the
  * section always lands in the PR, regardless of what the model wrote.
  *
- * Best-effort: any sandbox or file error is logged with the ticketKey and the
- * publish continues. A memory-write hiccup must never fail a push.
+ * Each changed memory file is committed explicitly so Finalize's clean-tree
+ * invariant remains true. Errors are logged per repository; a partial write or
+ * failed commit remains visible to Finalize's preflight and blocks publication.
  */
 export async function writeHumanDecisionsMemory(
   sandboxId: string,
@@ -53,6 +54,40 @@ export async function writeHumanDecisionsMemory(
         // writeFiles does not guarantee mkdir -p semantics.
         await sandbox.runCommand("mkdir", ["-p", memoryDir]);
         await sandbox.writeFiles([{ path: memoryPath, content: Buffer.from(next) }]);
+
+        const relativeMemoryPath = `blazebot/memory/${ticketKey}.md`;
+        const status = await sandbox.runCommand("git", [
+          "-C",
+          repo.localPath,
+          "status",
+          "--porcelain=v1",
+          "--",
+          relativeMemoryPath,
+        ]);
+        if (status.exitCode !== 0) {
+          throw new Error("human decisions memory status check failed");
+        }
+        if ((await status.stdout()).trim().length === 0) continue;
+
+        const add = await sandbox.runCommand("git", [
+          "-C",
+          repo.localPath,
+          "add",
+          "--",
+          relativeMemoryPath,
+        ]);
+        if (add.exitCode !== 0) throw new Error("human decisions memory staging failed");
+
+        const commit = await sandbox.runCommand("git", [
+          "-C",
+          repo.localPath,
+          "commit",
+          "-m",
+          `Record human decisions for ${ticketKey}`,
+          "--",
+          relativeMemoryPath,
+        ]);
+        if (commit.exitCode !== 0) throw new Error("human decisions memory commit failed");
       } catch (err) {
         log.warn(
           { repo: repo.localPath, err: err instanceof Error ? err.message : String(err) },

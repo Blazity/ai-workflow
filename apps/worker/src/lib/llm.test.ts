@@ -32,7 +32,11 @@ describe("generateStructured", () => {
   it("threads model/system/prompt and maps usage for the no-schema path", async () => {
     mockGenerateText.mockResolvedValueOnce({
       text: "hello world",
-      usage: { inputTokens: 10, outputTokens: 5, inputTokenDetails: { cacheReadTokens: 3 } },
+      usage: {
+        inputTokens: 10,
+        outputTokens: 5,
+        inputTokenDetails: { noCacheTokens: 7, cacheReadTokens: 3 },
+      },
     });
 
     const result = await generateStructured({
@@ -51,7 +55,26 @@ describe("generateStructured", () => {
     expect(callArg.output).toBeUndefined();
     expect(result).toEqual({
       text: "hello world",
-      usage: { inputTokens: 10, outputTokens: 5, cachedTokens: 3 },
+      usage: { inputTokens: 7, outputTokens: 5, cachedTokens: 3 },
+    });
+  });
+
+  it("derives uncached input from total minus cache reads when noCacheTokens is absent", async () => {
+    mockGenerateText.mockResolvedValueOnce({
+      text: "hello",
+      usage: { inputTokens: 10, outputTokens: 2, inputTokenDetails: { cacheReadTokens: 3 } },
+    });
+
+    await expect(generateStructured({ model: "m", prompt: "p" })).resolves.toMatchObject({
+      usage: { inputTokens: 7, outputTokens: 2, cachedTokens: 3 },
+    });
+
+    mockGenerateText.mockResolvedValueOnce({
+      text: "hello",
+      usage: { inputTokens: 2, outputTokens: 1, inputTokenDetails: { cacheReadTokens: 5 } },
+    });
+    await expect(generateStructured({ model: "m", prompt: "p" })).resolves.toMatchObject({
+      usage: { inputTokens: 0, outputTokens: 1, cachedTokens: 5 },
     });
   });
 
@@ -76,15 +99,15 @@ describe("generateStructured", () => {
     expect("system" in callArg).toBe(false);
     expect(result.object).toEqual({ status: "ok" });
     // cachedTokens falls back to the deprecated cachedInputTokens field.
-    expect(result.usage).toEqual({ inputTokens: 1, outputTokens: 2, cachedTokens: 4 });
+    expect(result.usage).toEqual({ inputTokens: 0, outputTokens: 2, cachedTokens: 4 });
   });
 
-  it("defaults every usage field to 0 when the SDK omits them", async () => {
+  it("reports usage as unknown when the SDK omits authoritative token counts", async () => {
     mockGenerateText.mockResolvedValueOnce({ text: "x", usage: {} });
 
     const result = await generateStructured({ model: "m", prompt: "p" });
 
-    expect(result.usage).toEqual({ inputTokens: 0, outputTokens: 0, cachedTokens: 0 });
+    expect(result.usage).toBeNull();
   });
 
   it("bounds every call with an abort signal on both the text and schema paths", async () => {
@@ -97,6 +120,19 @@ describe("generateStructured", () => {
     mockGenerateText.mockResolvedValueOnce({ text: "{}", output: {}, usage: {} });
     await generateStructured({ model: "m", prompt: "p", schema: '{"type":"object"}' });
     expect(mockGenerateText.mock.calls[1][0].abortSignal).toBeInstanceOf(AbortSignal);
+  });
+
+  it("caps the provider abort signal to a smaller remaining run duration", async () => {
+    const timeout = vi.spyOn(AbortSignal, "timeout");
+    mockGenerateText.mockResolvedValueOnce({
+      text: "x",
+      usage: { inputTokens: 1, outputTokens: 1 },
+    });
+
+    await generateStructured({ model: "m", prompt: "p", timeoutMs: 1_234 });
+
+    expect(timeout).toHaveBeenCalledWith(1_234);
+    timeout.mockRestore();
   });
 
   it("propagates errors from the underlying model call", async () => {

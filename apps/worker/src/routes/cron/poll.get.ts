@@ -10,13 +10,53 @@ import { getDb } from "../../db/client.js";
 import { collectSnapshots } from "../../lib/telemetry/collect-snapshots.js";
 import { upsertRunSnapshots } from "../../lib/telemetry/run-telemetry.js";
 import type { RunsLister } from "../../lib/overview/collect-runs.js";
+import { drainOldestPendingTrigger } from "../../lib/dispatch-trigger.js";
+import {
+  classifyProtectedClarificationSubjects,
+} from "../../clarifications/store.js";
+import { ticketSubjectKey } from "../../lib/subject-key.js";
+import { expireHookClarifications } from "../../clarifications/expiry.js";
+import { dispatchPlanApproved } from "../../approvals/dispatch.js";
+import {
+  getApproval,
+  listDispatchBlockingApprovals,
+  type ApprovalRow,
+} from "../../approvals/store.js";
 
 export default defineEventHandler(async (event) => {
   verifyCronAuth(getHeader(event, "authorization"));
 
   const adapters = createAdapters();
+  const db = getDb();
+  const clarificationExpiry = await expireHookClarifications(db);
+
+  const clarificationProtection =
+    await classifyProtectedClarificationSubjects(db);
+  const protectedClarificationSubjects = new Set(clarificationProtection.all);
+  const terminalClarificationSubjects = new Set(
+    clarificationProtection.terminal,
+  );
+  const retainedClarificationSubjects = new Set(
+    clarificationProtection.retained,
+  );
+
+  // A persisted approval owns the ticket's next path. Protect both pending
+  // decisions and approved-undispatched continuations for the entire poll
+  // snapshot. Recovery runs after owner reconciliation below, so an exact
+  // reserved owner retained for Jira settlement can be cleared before retry.
+  const blockingApprovals = await listDispatchBlockingApprovals(db);
+  const protectedDiscoverySubjects = new Set(protectedClarificationSubjects);
+  for (const approval of blockingApprovals) {
+    protectedDiscoverySubjects.add(ticketSubjectKey("jira", approval.ticketKey));
+  }
+
+  // Durable clarification recovery owns its subject before generic AI-column
+  // discovery. Even when capacity prevents a missing successor reservation
+  // from being recreated on this tick, the answered checkpoint remains
+  // protected and cannot be replaced by a fresh ticket workflow.
   const ticketKeys = await discoverAiColumnTickets(adapters);
-  const started = await dispatchDiscoveredTickets(ticketKeys, adapters);
+
+  const releasedTriggerRecovery = { attempted: 0, started: 0, errors: 0 };
   const { cancelled, cleaned } = await reconcileRuns(
     new Set(ticketKeys),
     adapters.runRegistry,
@@ -31,11 +71,40 @@ export default defineEventHandler(async (event) => {
         reason: `${detail}.`,
       });
     },
+    async (subjectKey) => {
+      releasedTriggerRecovery.attempted++;
+      try {
+        const result = await drainOldestPendingTrigger(subjectKey, {
+          db,
+          runRegistry: adapters.runRegistry,
+          maxConcurrentAgents: env.MAX_CONCURRENT_AGENTS,
+        });
+        if (result?.result === "started") releasedTriggerRecovery.started++;
+        if (result?.result === "error") releasedTriggerRecovery.errors++;
+      } catch (error) {
+        releasedTriggerRecovery.errors++;
+        throw error;
+      }
+    },
+    retainedClarificationSubjects,
+    db,
+    terminalClarificationSubjects,
+  );
+
+  const approvalRecovery = await recoverApprovedPlanDispatches(
+    blockingApprovals,
+    db,
+    adapters,
+  );
+  const started = await dispatchDiscoveredTickets(
+    ticketKeys,
+    adapters,
+    protectedDiscoverySubjects,
   );
 
   // Housekeeping: physically drop expired gate rows (reads already treat
   // them as absent). Best-effort — a failed purge must not fail the poll.
-  await new GateStore(getDb())
+  await new GateStore(db)
     .purgeExpired()
     .catch((err) => logger.warn({ err: (err as Error).message }, "poll_gate_purge_failed"));
 
@@ -44,7 +113,6 @@ export default defineEventHandler(async (event) => {
   // ~24h observability window. Per-run cost is filled separately by the agent
   // workflow. Best-effort — a failed snapshot must not fail the poll.
   try {
-    const db = getDb();
     const snapshots = await collectSnapshots({
       runsLister: getWorld().runs as RunsLister,
       db,
@@ -60,8 +128,65 @@ export default defineEventHandler(async (event) => {
     started: started.length,
     cancelled,
     cleaned,
+    pendingRecovered: releasedTriggerRecovery.started,
+    triggerRecovery: { released: releasedTriggerRecovery },
+    clarificationExpiry,
+    approvalRecovery,
   };
 });
+
+async function recoverApprovedPlanDispatches(
+  blockingApprovals: ApprovalRow[],
+  db: ReturnType<typeof getDb>,
+  adapters: ReturnType<typeof createAdapters>,
+): Promise<{ scanned: number; started: number; blocked: number; errors: number }> {
+  const approved = blockingApprovals.filter(
+    (row) => row.status === "approved" && row.dispatchedRunId === null,
+  );
+  const metrics = { scanned: approved.length, started: 0, blocked: 0, errors: 0 };
+
+  await Promise.all(
+    approved.map(async (approval) => {
+      try {
+        const result = await dispatchPlanApproved({
+          db,
+          runRegistry: adapters.runRegistry,
+          issueTracker: adapters.issueTracker,
+          approval,
+          actor: {
+            id: approval.decidedById ?? "system",
+            label: approval.decidedByLabel ?? "system",
+          },
+          maxConcurrentAgents: env.MAX_CONCURRENT_AGENTS,
+          onClaimed: async () => {
+            const fresh = await getApproval(db, approval.id);
+            if (
+              !fresh ||
+              fresh.status !== "approved" ||
+              fresh.dispatchedRunId !== null
+            ) {
+              throw new Error(`approval ${approval.id} is no longer dispatchable`);
+            }
+          },
+        });
+        if (result.status === "started") metrics.started++;
+        else metrics.blocked++;
+      } catch (error) {
+        metrics.errors++;
+        logger.warn(
+          {
+            approvalId: approval.id,
+            ticketKey: approval.ticketKey,
+            error: error instanceof Error ? error.message : String(error),
+          },
+          "poll_approval_recovery_failed",
+        );
+      }
+    }),
+  );
+
+  return metrics;
+}
 
 function verifyCronAuth(authHeader: string | undefined): void {
   if (!env.CRON_SECRET) return;
@@ -95,6 +220,7 @@ async function discoverAiColumnTickets(
 async function dispatchDiscoveredTickets(
   ticketKeys: string[],
   adapters: ReturnType<typeof createAdapters>,
+  protectedSubjects: ReadonlySet<string>,
 ): Promise<string[]> {
   // Dispatch in parallel. dispatchTicket is internally atomic — the
   // post-claim fairness check in src/lib/dispatch.ts caps started
@@ -102,6 +228,9 @@ async function dispatchDiscoveredTickets(
   // so excess parallel dispatches safely return `at_capacity`.
   const results = await Promise.all(
     ticketKeys.map(async (key) => {
+      if (protectedSubjects.has(ticketSubjectKey("jira", key))) {
+        return { key, started: false };
+      }
       try {
         const result = await dispatchTicket(
           key,

@@ -97,4 +97,15 @@ describe("computeUsageTotals", () => {
     expect(totals.phases.Research.model).toBe("phase-model");
     expect(totals.phases.Impl.model).toBe("default-model");
   });
+
+  it("returns null aggregate tokens when any launched phase has unknown usage", () => {
+    const totals = computeUsageTotals({
+      Research: u({ tokens: { input: 10, cached_input: 2, output: 3 } }),
+      Impl: null,
+    });
+
+    expect(totals.tokensInput).toBeNull();
+    expect(totals.tokensCached).toBeNull();
+    expect(totals.tokensOutput).toBeNull();
+  });
 });

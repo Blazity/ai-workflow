@@ -2,7 +2,9 @@ import { BLOCK_PARAM_KEYS } from "@shared/contracts";
 import type {
   WorkflowDefinition,
   WorkflowDefinitionEdge,
+  WorkflowDefinitionLayout,
   WorkflowDefinitionNode,
+  WorkflowExecutionBudgets,
   WorkflowParamValue,
 } from "@shared/contracts";
 import type { FlowEdgeDef, FlowNodeDef } from "@/lib/flows";
@@ -27,10 +29,13 @@ function serializeParams(node: FlowNodeDef): Record<string, WorkflowParamValue> 
 export function serializeWorkflowDefinition(
   nodes: readonly FlowNodeDef[],
   edges: readonly FlowEdgeDef[],
+  budgets: WorkflowExecutionBudgets = {},
 ): WorkflowDefinition {
   const typeById = new Map(nodes.map((node) => [node.id, node.type]));
+  const hasBudgets = Object.values(budgets).some((value) => value !== undefined);
   return {
     schemaVersion: 1,
+    ...(hasBudgets ? { budgets: { ...budgets } } : {}),
     nodes: nodes.map((node) => {
       const serialized: WorkflowDefinitionNode = {
         id: node.id,
@@ -38,6 +43,7 @@ export function serializeWorkflowDefinition(
         x: Math.round(node.x),
         y: Math.round(node.y),
         params: serializeParams(node),
+        inputs: { ...node.inputs },
       };
       if (node.name !== undefined) serialized.name = node.name;
       return serialized;
@@ -54,4 +60,41 @@ export function serializeWorkflowDefinition(
       return serialized;
     }),
   };
+}
+
+/** Semantic comparison/storage form: node movement is deliberately ignored. */
+export function serializeSemanticWorkflowDefinition(
+  nodes: readonly FlowNodeDef[],
+  edges: readonly FlowEdgeDef[],
+  budgets: WorkflowExecutionBudgets = {},
+): WorkflowDefinition {
+  const definition = serializeWorkflowDefinition(nodes, edges, budgets);
+  return {
+    ...definition,
+    nodes: definition.nodes.map((node) => ({ ...node, x: 0, y: 0 })),
+  };
+}
+
+export function serializeWorkflowLayout(
+  nodes: readonly FlowNodeDef[],
+): WorkflowDefinitionLayout {
+  return {
+    nodes: Object.fromEntries(
+      nodes.map((node) => [node.id, { x: Math.round(node.x), y: Math.round(node.y) }]),
+    ),
+  };
+}
+
+/**
+ * Layout is intentionally independent from semantic draft edits. Preserve
+ * persisted entries for nodes that are temporarily absent from the editor so
+ * an unsaved deletion cannot erase their saved position. Extra entries for
+ * unsaved additions are harmless and preserve their position if later saved.
+ */
+export function serializeWorkflowLayoutWithBaseline(
+  nodes: readonly FlowNodeDef[],
+  baseline: WorkflowDefinitionLayout,
+): WorkflowDefinitionLayout {
+  const current = serializeWorkflowLayout(nodes);
+  return { nodes: { ...baseline.nodes, ...current.nodes } };
 }

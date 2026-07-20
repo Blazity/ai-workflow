@@ -1,40 +1,58 @@
-import { start, getRun } from "workflow/api";
+import { randomUUID } from "node:crypto";
+import { start } from "workflow/api";
 import { env } from "../../env.js";
-import { agentWorkflow } from "../workflows/agent.js";
-import { logger } from "./logger.js";
-import type { Adapters } from "./adapters.js";
-import type { RunKind, RunRegistryAdapter } from "../adapters/run-registry/types.js";
+import {
+  RESERVATION_BIND_GRACE_MS,
+  type RunKind,
+  type RunRegistryAdapter,
+} from "../adapters/run-registry/types.js";
 import type { TicketContent } from "../adapters/issue-tracker/types.js";
-import { stopTicketSandboxes } from "../sandbox/stop-ticket-sandboxes.js";
+import { getDb } from "../db/client.js";
+import { getEnabledWorkflowDefinitionForTrigger } from "../workflow-definition/store.js";
+import {
+  BUILTIN_FALLBACK_DEFINITION_VERSION,
+  type AgentWorkflowInput,
+  type WorkflowDefinitionVersionPin,
+} from "../workflows/agent-input.js";
+import { agentWorkflow } from "../workflows/agent.js";
+import { hasDispatchBlockingApprovalForTicket } from "../approvals/store.js";
+import type { Adapters } from "./adapters.js";
+import { logger } from "./logger.js";
+import { ticketSubjectKey } from "./subject-key.js";
 
-const CLAIMING_PREFIX = "claiming:";
-/**
- * Stale-claim horizon — claiming sentinels older than this are ignored
- * when counting active runs for capacity. Matches the reconcile threshold
- * (src/lib/reconcile.ts) so a crashed dispatch can't deadlock capacity
- * for longer than reconcile would take to sweep it anyway.
- */
-export const STALE_CLAIM_MS = 5 * 60 * 1000;
-
-export function isClaimingSentinel(runId: string): boolean {
-  return runId.startsWith(CLAIMING_PREFIX);
-}
-
-export function getClaimTimestamp(runId: string): number {
-  return parseInt(runId.slice(CLAIMING_PREFIX.length), 10);
-}
+export const STALE_CLAIM_MS = RESERVATION_BIND_GRACE_MS;
 
 export interface DispatchResult {
   started: boolean;
   runId?: string;
+  /** Exact reservation owner returned only by the low-level claim helper. */
+  ownerToken?: string;
   reason?:
     | "already_claimed"
     | "at_capacity"
     | "error"
     | "previously_failed"
     | "not_in_ai_column"
-    | "wrong_project_key";
+    | "wrong_project_key"
+    | "no_definition"
+    | "approval_pending";
 }
+
+export interface ClaimSubject {
+  subjectKey: string;
+  ticketKey: string | null;
+  kind: RunKind;
+}
+
+export interface ClaimSubjectRunOptions {
+  postClaimGuard?: (ownerToken: string) => Promise<DispatchResult | null>;
+  startWorkflow: (ownerToken: string) => Promise<string>;
+}
+
+export type SubjectReservationResult =
+  | "reserved"
+  | "already_claimed"
+  | "at_capacity";
 
 export async function dispatchTicket(
   ticketKey: string,
@@ -45,196 +63,124 @@ export async function dispatchTicket(
   const expectedAiStatus = env.COLUMN_AI.trim().toLowerCase();
   const { issueTracker, runRegistry } = adapters;
 
-  logger.info({ ticketKey, maxConcurrentAgents }, "dispatch_attempt");
-
   try {
     if (await runRegistry.isTicketFailed(ticketKey)) {
-      logger.info({ ticketKey }, "dispatch_skipped_previously_failed");
       return { started: false, reason: "previously_failed" };
     }
-  } catch (err) {
-    logger.warn(
-      { ticketKey, stage: "precheck_failed_marker", error: (err as Error).message },
-      "dispatch_error",
-    );
+  } catch (error) {
+    logger.warn({ ticketKey, error: (error as Error).message }, "dispatch_error");
     return { started: false, reason: "error" };
   }
 
   let ticket: TicketContent | null = null;
-  return claimTicketRun(ticketKey, runRegistry, maxConcurrentAgents, {
-    // Runs after the claim + post-claim capacity verify, before start(): the
-    // AI-column and project-key gate specific to ticket dispatch.
-    postClaimGuard: async () => {
-      ticket = await issueTracker.fetchTicket(ticketKey);
-      const ticketStatus = ticket.trackerStatus.trim().toLowerCase();
-      if (ticketStatus !== expectedAiStatus) {
-        logger.info(
-          { ticketKey, ticketStatus: ticket.trackerStatus, expectedStatus: env.COLUMN_AI },
-          "dispatch_skipped_not_in_ai_column",
+  let definitionId: number | null = null;
+  let definitionVersion: WorkflowDefinitionVersionPin | null = null;
+  const subjectKey = ticketSubjectKey("jira", ticketKey);
+  const result = await claimSubjectRun(
+    { subjectKey, ticketKey, kind: "ticket" },
+    runRegistry,
+    maxConcurrentAgents,
+    {
+      postClaimGuard: async () => {
+        // Query again under the exact reservation instead of trusting the
+        // poller's earlier snapshot. A plan request can be persisted while a
+        // poll is in flight; neither a pending decision nor an approved pinned
+        // continuation may be replaced by generic ticket discovery.
+        if (await hasDispatchBlockingApprovalForTicket(getDb(), ticketKey)) {
+          return { started: false, reason: "approval_pending" };
+        }
+        ticket = await issueTracker.fetchTicket(ticketKey);
+        if (ticket.trackerStatus.trim().toLowerCase() !== expectedAiStatus) {
+          return { started: false, reason: "not_in_ai_column" };
+        }
+        if (extractProjectKey(ticket.identifier) !== expectedProjectKey) {
+          return { started: false, reason: "wrong_project_key" };
+        }
+        const enabled = await getEnabledWorkflowDefinitionForTrigger(
+          getDb(),
+          "trigger_ticket_ai",
         );
-        return { started: false, reason: "not_in_ai_column" };
-      }
-      const ticketProjectKey = extractProjectKey(ticket.identifier);
-      if (!ticketProjectKey || ticketProjectKey !== expectedProjectKey) {
+        if (!enabled) {
+          logger.info({ ticketKey }, "dispatch_skipped_no_definition");
+          return { started: false, reason: "no_definition" };
+        }
+        definitionId = enabled.definition.id;
+        definitionVersion = enabled.current
+          ? enabled.current.version
+          : BUILTIN_FALLBACK_DEFINITION_VERSION;
+        return null;
+      },
+      startWorkflow: async (ownerToken) => {
+        const input: AgentWorkflowInput = {
+          kind: "ticket",
+          subjectKey,
+          ticketKey,
+          ownerToken,
+          definitionId: definitionId!,
+          definitionVersion: definitionVersion!,
+        };
+        const handle = await start(agentWorkflow, [input]);
         logger.info(
-          {
-            ticketKey,
-            ticketIdentifier: ticket.identifier,
-            ticketProjectKey,
-            expectedProjectKey: env.JIRA_PROJECT_KEY,
-          },
-          "dispatch_skipped_wrong_project_key",
+          { ticketId: ticket!.id, identifier: ticket!.identifier, runId: handle.runId },
+          "workflow_started",
         );
-        return { started: false, reason: "wrong_project_key" };
-      }
-      return null;
+        return handle.runId;
+      },
     },
-    startWorkflow: async () => {
-      // Pass the issue key (not the numeric id) so the workflow can build
-      // /browse/{KEY}?focusedCommentId=... deep links in Slack notifications.
-      // Jira's REST API accepts either id or key for fetch/transition/comment.
-      const handle = await start(agentWorkflow, [ticketKey]);
-      logger.info(
-        { ticketId: ticket!.id, identifier: ticket!.identifier, runId: handle.runId },
-        "workflow_started",
-      );
-      return handle.runId;
-    },
-  });
-}
-
-export interface ClaimTicketRunOptions {
-  /**
-   * Run kind persisted with the claim + registration. Defaults to 'ticket',
-   * which keeps the claim/register calls two-arg so classic dispatch behaves
-   * exactly as before.
-   */
-  kind?: RunKind;
-  /**
-   * Runs after the claim + post-claim capacity verify, before start(). Return
-   * a DispatchResult to bail (the claim is released first) or null to proceed.
-   * Throwing bails via the shared error path (claim released, reason 'error').
-   */
-  postClaimGuard?: () => Promise<DispatchResult | null>;
-  /** Starts the workflow and returns its runId. */
-  startWorkflow: () => Promise<string>;
+  );
+  // ownerToken is an internal start-boundary proof used by trigger delivery
+  // persistence. Do not expose it from ordinary ticket dispatch.
+  return result.started
+    ? { started: true, runId: result.runId }
+    : result;
 }
 
 /**
- * Shared claim/capacity/verify/register sequence around a workflow start.
- * Factored out of dispatchTicket so PR-trigger dispatch reuses the exact
- * concurrency fairness, claim sentinel, and post-start verification without
- * re-implementing them. Behavior for the ticket path is byte-identical.
+ * Reserve before start. The dispatcher never binds the run: every Workflow
+ * candidate CAS-binds its own runtime id on entry, so retries and duplicate
+ * candidates exit before side effects instead of replacing the winner.
  */
-export async function claimTicketRun(
-  ticketKey: string,
+export async function claimSubjectRun(
+  subject: ClaimSubject,
   runRegistry: RunRegistryAdapter,
   maxConcurrentAgents: number,
-  options: ClaimTicketRunOptions,
+  options: ClaimSubjectRunOptions,
 ): Promise<DispatchResult> {
-  const kind = options.kind ?? "ticket";
-  let stage = "precheck_capacity";
-  let claimHeld = false;
-  let claimValue = "";
-  let startedRunId: string | null = null;
+  let ownerToken: string | null = null;
+  let started = false;
   try {
-    if (await isAtCapacity(maxConcurrentAgents, runRegistry)) {
-      return { started: false, reason: "at_capacity" };
-    }
-
-    stage = "claim_ticket";
-    claimValue = `${CLAIMING_PREFIX}${Date.now()}`;
-    const claimed =
-      kind === "ticket"
-        ? await runRegistry.claim(ticketKey, claimValue)
-        : await runRegistry.claim(ticketKey, claimValue, kind);
-    if (!claimed) {
-      logger.info({ ticketKey }, "dispatch_already_claimed");
-      return { started: false, reason: "already_claimed" };
-    }
-    claimHeld = true;
-
-    // Post-claim capacity verify. The precheck above is not atomic with
-    // claim(), so N concurrent dispatches for *different* tickets can all
-    // pass the precheck and then all claim successfully — pushing the run
-    // registry over the cap. Re-read the registry with our own claim
-    // visible and decide fairly who stays.
-    //
-    // Fairness rule: sort by (claim timestamp ascending, ticketKey
-    // ascending as tie-breaker); the first `max` entries win. Existing
-    // non-sentinel entries (already-running workflows) are treated as
-    // timestamp 0 so they always win over new claims. Every racer
-    // eventually converges on the same ordering once registry writes are
-    // visible to all, so exactly the excess bail.
-    stage = "postclaim_capacity";
-    const racers = await runRegistry.listAll();
-    const now = Date.now();
-    const liveRacers = racers.filter(({ runId }) => {
-      if (!isClaimingSentinel(runId)) return true;
-      return now - getClaimTimestamp(runId) <= STALE_CLAIM_MS;
-    });
-    if (liveRacers.length > maxConcurrentAgents) {
-      const sorted = [...liveRacers].sort((a, b) => {
-        const ta = isClaimingSentinel(a.runId) ? getClaimTimestamp(a.runId) : 0;
-        const tb = isClaimingSentinel(b.runId) ? getClaimTimestamp(b.runId) : 0;
-        if (ta !== tb) return ta - tb;
-        return a.ticketKey.localeCompare(b.ticketKey);
-      });
-      const winners = new Set(
-        sorted.slice(0, maxConcurrentAgents).map((e) => e.ticketKey),
-      );
-      if (!winners.has(ticketKey)) {
-        await runRegistry.unregister(ticketKey).catch(() => {});
-        claimHeld = false;
-        logger.info(
-          { ticketKey, liveRacers: liveRacers.length, max: maxConcurrentAgents },
-          "dispatch_at_capacity_post_claim",
-        );
-        return { started: false, reason: "at_capacity" };
-      }
+    ownerToken = `owner:${randomUUID()}`;
+    const reservation = await reserveSubjectWithinCapacity(
+      subject,
+      ownerToken,
+      runRegistry,
+      maxConcurrentAgents,
+    );
+    if (reservation !== "reserved") {
+      ownerToken = null;
+      return { started: false, reason: reservation };
     }
 
     if (options.postClaimGuard) {
-      stage = "postclaim_guard";
-      const bail = await options.postClaimGuard();
+      const bail = await options.postClaimGuard(ownerToken);
       if (bail) {
-        await runRegistry.unregister(ticketKey).catch(() => {});
-        claimHeld = false;
+        await runRegistry.releaseReservation(subject.subjectKey, ownerToken).catch(() => false);
+        ownerToken = null;
         return bail;
       }
     }
 
-    stage = "start_workflow";
-    const runId = await options.startWorkflow();
-    startedRunId = runId;
-
-    stage = "verify_claim_after_start";
-    const claimStillHeld = await verifyClaimNotCancelled(
-      ticketKey,
-      claimValue,
-      runRegistry,
-    );
-    if (!claimStillHeld) {
-      await abortWorkflow(runId, ticketKey);
-      return { started: false, reason: "already_claimed" };
-    }
-
-    stage = "register_run";
-    await registerRunWithRetry(runRegistry, ticketKey, runId, kind);
-
-    return { started: true, runId };
-  } catch (err) {
-    if (startedRunId) {
-      // The workflow started but we could not verify or register it. Abort the
-      // just-started run and KEEP the claim: leaving our sentinel in place stops
-      // a retry from launching a second concurrent run for the same ticket, and
-      // reconcile's stale-claim sweep releases it once the horizon passes.
-      await abortWorkflow(startedRunId, ticketKey);
-    } else if (claimHeld) {
-      await runRegistry.unregister(ticketKey).catch(() => {});
+    const runId = await options.startWorkflow(ownerToken);
+    started = true;
+    return { started: true, runId, ownerToken };
+  } catch (error) {
+    // Once start returns, the candidate may already have bound. A dispatcher
+    // must never use reservation cleanup to delete a bound workflow.
+    if (!started && ownerToken) {
+      await runRegistry.releaseReservation(subject.subjectKey, ownerToken).catch(() => false);
     }
     logger.warn(
-      { ticketKey, stage, error: (err as Error).message },
+      { subjectKey: subject.subjectKey, error: (error as Error).message },
       "dispatch_error",
     );
     return { started: false, reason: "error" };
@@ -242,95 +188,129 @@ export async function claimTicketRun(
 }
 
 /**
- * Idempotent register with a short retry. register() is an ON CONFLICT DO UPDATE
- * upsert on active_runs, so re-issuing it is safe; retrying a transient failure
- * avoids aborting a healthy run over a momentary registry blip. If every attempt
- * fails the caller's catch aborts the started workflow and keeps the claim so no
- * duplicate run can be dispatched.
+ * Atomically participates in the same capacity/fairness protocol as a normal
+ * workflow claim while retaining a caller-owned durable token. Clarification
+ * recovery uses this when its predecessor/successor owner is genuinely
+ * missing, and clarification resumption uses a custom reserve/rollback pair
+ * so a parked subject reacquires capacity without ever becoming unclaimed.
  */
-async function registerRunWithRetry(
+export async function reserveSubjectWithinCapacity(
+  subject: ClaimSubject,
+  ownerToken: string,
   runRegistry: RunRegistryAdapter,
-  ticketKey: string,
-  runId: string,
-  kind: RunKind,
-): Promise<void> {
-  let lastError: unknown;
-  for (let attempt = 1; attempt <= 3; attempt++) {
-    try {
-      if (kind === "ticket") {
-        await runRegistry.register(ticketKey, runId);
-      } else {
-        await runRegistry.register(ticketKey, runId, kind);
-      }
-      return;
-    } catch (err) {
-      lastError = err;
+  maxConcurrentAgents: number,
+  reserve: (() => Promise<boolean>) | null = null,
+  rollback: (() => Promise<boolean>) | null = null,
+): Promise<SubjectReservationResult> {
+  if (await isAtCapacity(maxConcurrentAgents, runRegistry)) return "at_capacity";
+
+  const reserved = await (reserve
+    ? reserve()
+    : runRegistry.reserve({ ...subject, ownerToken }));
+  if (!reserved) return "already_claimed";
+
+  try {
+    if (
+      await winsPostReservationCapacity(
+        subject.subjectKey,
+        maxConcurrentAgents,
+        runRegistry,
+      )
+    ) {
+      return "reserved";
     }
+  } catch (error) {
+    await rollbackReservation(
+      subject.subjectKey,
+      ownerToken,
+      runRegistry,
+      rollback,
+    );
+    throw error;
   }
-  throw lastError;
+
+  await rollbackReservation(
+    subject.subjectKey,
+    ownerToken,
+    runRegistry,
+    rollback,
+  );
+  return "at_capacity";
 }
 
-/**
- * Capacity check counts active runs in the Postgres registry — this is the
- * per-app concurrency limit for blazebot, not a per-team sandbox quota.
- *
- * We deliberately exclude claiming sentinels older than STALE_CLAIM_MS so
- * a crashed dispatch can't deadlock capacity indefinitely; reconcile will
- * sweep those stale entries on its next run, but the capacity check
- * shouldn't wait for it.
- *
- * Fails closed on registry errors — better to stall new dispatches than
- * to over-allocate if we can't see the current state.
- */
-async function isAtCapacity(
+async function rollbackReservation(
+  subjectKey: string,
+  ownerToken: string,
+  runRegistry: RunRegistryAdapter,
+  rollback: (() => Promise<boolean>) | null,
+): Promise<boolean> {
+  return (rollback
+    ? rollback()
+    : runRegistry.releaseReservation(subjectKey, ownerToken)
+  ).catch(() => false);
+}
+
+/** Ticket-only compatibility wrapper used by approval/clarification dispatch. */
+export async function claimTicketRun(
+  ticketKey: string,
+  runRegistry: RunRegistryAdapter,
+  maxConcurrentAgents: number,
+  options: ClaimSubjectRunOptions & { kind?: RunKind },
+): Promise<DispatchResult> {
+  return claimSubjectRun(
+    {
+      subjectKey: ticketSubjectKey("jira", ticketKey),
+      ticketKey,
+      kind: options.kind ?? "ticket",
+    },
+    runRegistry,
+    maxConcurrentAgents,
+    options,
+  );
+}
+
+async function isAtCapacity(max: number, runRegistry: RunRegistryAdapter): Promise<boolean> {
+  try {
+    return (await capacityEntries(runRegistry)).length >= max;
+  } catch (error) {
+    logger.warn({ max, error: (error as Error).message }, "dispatch_capacity_check_failed_closed");
+    return true;
+  }
+}
+
+export async function winsPostReservationCapacity(
+  subjectKey: string,
   max: number,
   runRegistry: RunRegistryAdapter,
 ): Promise<boolean> {
-  let entries: Awaited<ReturnType<Adapters["runRegistry"]["listAll"]>>;
-  try {
-    entries = await runRegistry.listAll();
-  } catch (err) {
-    logger.warn(
-      { max, error: (err as Error).message },
-      "dispatch_capacity_check_failed_closed",
-    );
-    return true;
+  const entries = await capacityEntries(runRegistry);
+  if (entries.length <= max) return true;
+  const winners = [...entries]
+    .sort((a, b) => {
+      const aIsReservation = a.state === "reserved";
+      const bIsReservation = b.state === "reserved";
+      if (aIsReservation !== bIsReservation) return aIsReservation ? 1 : -1;
+      if (a.createdAt !== b.createdAt) return a.createdAt - b.createdAt;
+      return a.subjectKey.localeCompare(b.subjectKey);
+    })
+    .slice(0, max)
+    .map(({ subjectKey: key }) => key);
+  return winners.includes(subjectKey);
+}
+
+async function capacityEntries(runRegistry: RunRegistryAdapter) {
+  if (runRegistry.listCapacityConsumers) {
+    return runRegistry.listCapacityConsumers();
   }
-
-  const now = Date.now();
-  const active = entries.filter(({ runId }) => {
-    if (!isClaimingSentinel(runId)) return true;
-    return now - getClaimTimestamp(runId) <= STALE_CLAIM_MS;
-  }).length;
-
-  if (active < max) return false;
-
-  logger.info({ active, max }, "dispatch_at_capacity");
-  return true;
+  return liveEntries(await runRegistry.listAll());
 }
 
-async function verifyClaimNotCancelled(
-  ticketKey: string,
-  expectedClaimValue: string,
-  runRegistry: RunRegistryAdapter,
-): Promise<boolean> {
-  const currentValue = await runRegistry.getRunId(ticketKey);
-  return currentValue === expectedClaimValue;
-}
-
-async function abortWorkflow(runId: string, ticketKey: string): Promise<void> {
-  logger.info({ ticketKey, runId }, "dispatch_aborted_claim_cancelled");
-  try {
-    const run = getRun(runId);
-    await run.cancel();
-  } catch {}
-  await stopTicketSandboxes(ticketKey).catch(() => {});
+function liveEntries(entries: Awaited<ReturnType<RunRegistryAdapter["listAll"]>>) {
+  const staleBefore = Date.now() - STALE_CLAIM_MS;
+  return entries.filter((entry) => entry.state !== "reserved" || entry.updatedAt >= staleBefore);
 }
 
 function extractProjectKey(ticketIdentifier: string): string | null {
-  const trimmed = ticketIdentifier.trim();
-  if (!trimmed) return null;
-  const dashIndex = trimmed.indexOf("-");
-  if (dashIndex <= 0) return null;
-  return trimmed.slice(0, dashIndex).toUpperCase();
+  const dashIndex = ticketIdentifier.trim().indexOf("-");
+  return dashIndex <= 0 ? null : ticketIdentifier.trim().slice(0, dashIndex).toUpperCase();
 }

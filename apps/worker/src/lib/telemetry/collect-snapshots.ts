@@ -1,6 +1,6 @@
-import { inArray } from "drizzle-orm";
+import { and, desc, inArray, isNotNull } from "drizzle-orm";
 import type { Db } from "../../db/client.js";
-import { activeRuns, gateCurrent } from "../../db/schema.js";
+import { activeRunSandboxes, activeRuns, gateCurrent } from "../../db/schema.js";
 import {
   STATUS_MAP,
   mapWorkflow,
@@ -40,13 +40,30 @@ export async function collectSnapshots(
 
   const active = await db
     .select({
+      subjectKey: activeRuns.subjectKey,
+      ownerToken: activeRuns.ownerToken,
       runId: activeRuns.runId,
       ticketKey: activeRuns.ticketKey,
-      sandboxId: activeRuns.sandboxId,
     })
     .from(activeRuns)
-    .where(inArray(activeRuns.runId, runIds));
-  const activeByRun = new Map(active.map((a) => [a.runId, a]));
+    .where(and(isNotNull(activeRuns.runId), inArray(activeRuns.runId, runIds)));
+  const boundActive = active.filter(
+    (row): row is typeof row & { runId: string } => row.runId !== null,
+  );
+  const activeByRun = new Map(boundActive.map((row) => [row.runId, row]));
+  const subjectKeys = [...new Set(boundActive.map((row) => row.subjectKey))];
+  const ownedSandboxes = subjectKeys.length === 0
+    ? []
+    : await db
+        .select()
+        .from(activeRunSandboxes)
+        .where(inArray(activeRunSandboxes.subjectKey, subjectKeys))
+        .orderBy(desc(activeRunSandboxes.createdAt));
+  const sandboxByOwner = new Map<string, string>();
+  for (const sandbox of ownedSandboxes) {
+    const key = `${sandbox.subjectKey}\0${sandbox.ownerToken}`;
+    if (!sandboxByOwner.has(key)) sandboxByOwner.set(key, sandbox.sandboxId);
+  }
 
   const gates = await db
     .select({
@@ -73,13 +90,16 @@ export async function collectSnapshots(
 
     return {
       runId: run.runId,
+      subjectKey: a?.subjectKey ?? null,
       workflowId: id,
       workflowName: name,
       status: STATUS_MAP[run.status],
       ticketKey: a?.ticketKey ?? null,
       ticketTitle: null, // workflow-owned
       ticketUrl: null, // workflow-owned
-      sandboxId: a?.sandboxId ?? null,
+      sandboxId: a
+        ? sandboxByOwner.get(`${a.subjectKey}\0${a.ownerToken}`) ?? null
+        : null,
       createdAt: run.createdAt,
       startedAt: run.startedAt ?? null,
       completedAt: run.completedAt ?? null,

@@ -1,5 +1,8 @@
 import { describe, it, expect, vi } from "vitest";
-import type { RunRegistryAdapter } from "../../adapters/run-registry/types.js";
+import type {
+  ActiveRunEntry,
+  RunRegistryAdapter,
+} from "../../adapters/run-registry/types.js";
 
 vi.mock("../../../env.js", () => ({ env: {} }));
 
@@ -9,19 +12,42 @@ const JIRA_BASE_URL = "https://example.atlassian.net";
 
 function makeRegistry(overrides: Partial<RunRegistryAdapter> = {}): RunRegistryAdapter {
   return {
-    claim: vi.fn(),
-    register: vi.fn(),
-    getRunId: overrides.getRunId ?? vi.fn().mockResolvedValue(null),
-    unregister: vi.fn().mockResolvedValue(undefined),
-    unregisterIfRunId: vi.fn().mockResolvedValue(undefined),
+    reserve: vi.fn(),
+    bindRun: vi.fn(),
+    beginParking: overrides.beginParking ?? vi.fn(),
+    finishParking: overrides.finishParking ?? vi.fn(),
+    handoff: vi.fn(),
+    get: overrides.get ?? vi.fn().mockResolvedValue(null),
+    beginCancellation:
+      overrides.beginCancellation ?? vi.fn().mockResolvedValue(true),
+    releaseCancellation:
+      overrides.releaseCancellation ?? vi.fn().mockResolvedValue(true),
+    releaseReservation: overrides.releaseReservation ?? vi.fn().mockResolvedValue(true),
+    release: vi.fn(),
     listAll: overrides.listAll ?? vi.fn().mockResolvedValue([]),
     registerSandbox: vi.fn().mockResolvedValue(undefined),
-    getSandboxId: overrides.getSandboxId ?? vi.fn().mockResolvedValue(null),
-    getEntryCreatedAt: vi.fn().mockResolvedValue(null),
+    listSandboxes: overrides.listSandboxes ?? vi.fn().mockResolvedValue([]),
     markFailed: vi.fn().mockResolvedValue(undefined),
     isTicketFailed: vi.fn().mockResolvedValue(false),
     listAllFailed: vi.fn().mockResolvedValue([]),
     clearFailedMark: vi.fn().mockResolvedValue(undefined),
+    ...overrides,
+  };
+}
+
+function active(
+  ticketKey: string,
+  overrides: Partial<ActiveRunEntry> = {},
+): ActiveRunEntry {
+  return {
+    subjectKey: `ticket:jira:${ticketKey}`,
+    ticketKey,
+    ownerToken: `owner:${ticketKey}`,
+    runId: `run:${ticketKey}`,
+    state: "bound",
+    kind: "ticket",
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
     ...overrides,
   };
 }
@@ -32,11 +58,11 @@ describe("handleList", () => {
     expect(await handleList(registry, JIRA_BASE_URL)).toBe("No active workflows.");
   });
 
-  it("filters out claiming sentinels", async () => {
+  it("filters out unbound reservations", async () => {
     const registry = makeRegistry({
       listAll: vi.fn().mockResolvedValue([
-        { ticketKey: "AWT-1", runId: "run_real" },
-        { ticketKey: "AWT-2", runId: "claiming:1700000000000" },
+        active("AWT-1", { runId: "run_real" }),
+        active("AWT-2", { state: "reserved", runId: null }),
       ]),
     });
     const out = await handleList(registry, JIRA_BASE_URL);
@@ -45,10 +71,10 @@ describe("handleList", () => {
     expect(out).not.toContain("AWT-2");
   });
 
-  it("returns empty-state message when only claiming sentinels exist", async () => {
+  it("returns empty-state message when only reservations exist", async () => {
     const registry = makeRegistry({
       listAll: vi.fn().mockResolvedValue([
-        { ticketKey: "AWT-1", runId: "claiming:1700000000000" },
+        active("AWT-1", { state: "reserved", runId: null }),
       ]),
     });
     expect(await handleList(registry, JIRA_BASE_URL)).toBe("No active workflows.");
@@ -58,7 +84,7 @@ describe("handleList", () => {
 describe("handleStatus", () => {
   it("reports not tracked when no runId", async () => {
     const registry = makeRegistry({
-      getRunId: vi.fn().mockResolvedValue(null),
+      get: vi.fn().mockResolvedValue(null),
     });
     expect(await handleStatus(registry, "AWT-99", JIRA_BASE_URL)).toContain(
       "not tracked",
@@ -67,8 +93,8 @@ describe("handleStatus", () => {
 
   it("reports runId + sandbox: yes when sandbox is registered", async () => {
     const registry = makeRegistry({
-      getRunId: vi.fn().mockResolvedValue("run_a"),
-      getSandboxId: vi.fn().mockResolvedValue("sbx_z"),
+      get: vi.fn().mockResolvedValue(active("AWT-1", { runId: "run_a" })),
+      listSandboxes: vi.fn().mockResolvedValue(["sbx_z"]),
     });
     expect(await handleStatus(registry, "AWT-1", JIRA_BASE_URL)).toContain(
       "runId `run_a`, sandbox: yes",
@@ -77,8 +103,8 @@ describe("handleStatus", () => {
 
   it("reports sandbox: no when no sandbox", async () => {
     const registry = makeRegistry({
-      getRunId: vi.fn().mockResolvedValue("run_a"),
-      getSandboxId: vi.fn().mockResolvedValue(null),
+      get: vi.fn().mockResolvedValue(active("AWT-1", { runId: "run_a" })),
+      listSandboxes: vi.fn().mockResolvedValue([]),
     });
     expect(await handleStatus(registry, "AWT-1", JIRA_BASE_URL)).toContain(
       "sandbox: no",
@@ -88,55 +114,64 @@ describe("handleStatus", () => {
 
 describe("handleCancel", () => {
   it("returns 'no active run' when registry has no entry", async () => {
-    const registry = makeRegistry({ getRunId: vi.fn().mockResolvedValue(null) });
+    const registry = makeRegistry({ get: vi.fn().mockResolvedValue(null) });
     const cancelRunFn = vi.fn();
-    const stopSandboxes = vi.fn();
     const out = await handleCancel(
       registry,
       "AWT-1",
       cancelRunFn,
-      stopSandboxes,
     );
     expect(out).toContain("No active run");
     expect(out).toContain("AWT-1");
     expect(cancelRunFn).not.toHaveBeenCalled();
-    expect(stopSandboxes).not.toHaveBeenCalled();
   });
 
-  it("warns the user when the entry is a claiming sentinel and stops the sandbox", async () => {
+  it("routes a reserved successor through durable cancellation before clearing it", async () => {
     const registry = makeRegistry({
-      getRunId: vi.fn().mockResolvedValue("claiming:1700000000000"),
-      getSandboxId: vi.fn().mockResolvedValue("sbx_z"),
+      get: vi.fn().mockResolvedValue(active("AWT-1", { state: "reserved", runId: null })),
+      listSandboxes: vi.fn().mockResolvedValue(["sbx_z", "sbx_child"]),
     });
-    const cancelRunFn = vi.fn();
-    const stopSandboxes = vi.fn().mockResolvedValue(1);
+    const cancelRunFn = vi.fn().mockResolvedValue(true);
     const out = await handleCancel(
       registry,
       "AWT-1",
       cancelRunFn,
-      stopSandboxes,
     );
     expect(out).toContain("mid-dispatch");
-    expect(stopSandboxes).toHaveBeenCalledWith("AWT-1", "sbx_z");
-    expect(registry.unregister).toHaveBeenCalledWith("AWT-1");
-    expect(cancelRunFn).not.toHaveBeenCalled();
+    expect(cancelRunFn).toHaveBeenCalledWith(
+      "AWT-1",
+      { ownerToken: "owner:AWT-1", runId: null },
+      registry,
+      undefined,
+      undefined,
+    );
+  });
+
+  it("reports retryable failure when reserved cancellation is unconfirmed", async () => {
+    const registry = makeRegistry({
+      get: vi.fn().mockResolvedValue(active("AWT-1", { state: "reserved", runId: null })),
+    });
+    const cancelRunFn = vi.fn().mockResolvedValue(false);
+
+    const out = await handleCancel(registry, "AWT-1", cancelRunFn);
+
+    expect(out).toContain("failed to clear the claim");
+    expect(out).toContain("retry");
   });
 
   it("calls cancelRun with ticket key + runId + registry, and reports success", async () => {
     const registry = makeRegistry({
-      getRunId: vi.fn().mockResolvedValue("run_a"),
+      get: vi.fn().mockResolvedValue(active("AWT-1", { runId: "run_a" })),
     });
     const cancelRunFn = vi.fn().mockResolvedValue(true);
-    const stopSandboxes = vi.fn();
     const out = await handleCancel(
       registry,
       "AWT-1",
       cancelRunFn,
-      stopSandboxes,
     );
     expect(cancelRunFn).toHaveBeenCalledWith(
       "AWT-1",
-      "run_a",
+      { ownerToken: "owner:AWT-1", runId: "run_a" },
       registry,
       undefined,
       undefined,
@@ -145,13 +180,14 @@ describe("handleCancel", () => {
     expect(out).toContain("AWT-1");
   });
 
-  it("reports cancel-failed-but-cleanup-done when cancelRun returns false", async () => {
+  it("reports that an unconfirmed cancellation retains ownership", async () => {
     const registry = makeRegistry({
-      getRunId: vi.fn().mockResolvedValue("run_a"),
+      get: vi.fn().mockResolvedValue(active("AWT-1", { runId: "run_a" })),
     });
     const cancelRunFn = vi.fn().mockResolvedValue(false);
-    const out = await handleCancel(registry, "AWT-1", cancelRunFn, vi.fn());
+    const out = await handleCancel(registry, "AWT-1", cancelRunFn);
     expect(out).toContain("AWT-1");
     expect(out.toLowerCase()).toContain("could not");
+    expect(out.toLowerCase()).toContain("retained");
   });
 });

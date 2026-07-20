@@ -138,7 +138,7 @@ importers:
         specifier: ^1.96.1
         version: 1.96.1
       workflow:
-        specifier: latest
+        specifier: 4.6.0
         version: 4.6.0(@nestjs/common@11.1.17(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@11.1.17(@nestjs/common@11.1.17(reflect-metadata@0.2.2)(rxjs@7.8.2))(reflect-metadata@0.2.2)(rxjs@7.8.2))(@opentelemetry/api@1.9.0)(@swc/cli@0.8.0(@swc/core@1.15.3)(chokidar@5.0.0))(@swc/core@1.15.3)(magicast@0.5.2)(next@15.5.18(@opentelemetry/api@1.9.0)(react-dom@19.2.4(react@19.2.4))(react@19.2.4))(typescript@5.9.3)
       yaml:
         specifier: ^2.9.0
@@ -151,10 +151,10 @@ importers:
         specifier: ^0.5.1
         version: 0.5.1
       '@workflow/vitest':
-        specifier: latest
+        specifier: 4.0.12
         version: 4.0.12(@opentelemetry/api@1.9.0)(vite@7.3.1(@types/node@22.19.15)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.1)(tsx@4.21.0)(yaml@2.9.0))(vitest@3.2.4(@types/debug@4.1.13)(@types/node@22.19.15)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.46.1)(tsx@4.21.0)(yaml@2.9.0))
       '@workflow/world-postgres':
-        specifier: latest
+        specifier: 4.3.0
         version: 4.3.0(@electric-sql/pglite@0.5.1)(@neondatabase/serverless@1.1.0)(@opentelemetry/api@1.9.0)(@types/pg@8.18.0)(@upstash/redis@1.37.0)(kysely@0.29.2)(postgres@3.4.8)(typescript@5.9.3)
       dotenv:
         specifier: ^17.4.2

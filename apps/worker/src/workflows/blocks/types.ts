@@ -1,5 +1,6 @@
 import type { WorkflowDefinitionNode } from "@shared/contracts";
 import type {
+  BlockExecutionContext,
   BlockExecutionResult,
   StepsRecord,
 } from "../../workflow-definition/interpreter.js";
@@ -13,10 +14,14 @@ import type {
   PreSandboxPromptAddition,
   SelectedRepositoryPromptContext,
 } from "../../sandbox/context.js";
-import type { WorkspaceRepositoryInput } from "../../sandbox/repo-workspace.js";
+import type {
+  WorkspaceManifest,
+  WorkspaceRepositoryInput,
+} from "../../sandbox/repo-workspace.js";
 import type { WorkspacePublicationResult } from "../workspace-publication.js";
 import type { LoadedPrompts } from "../prompts-step.js";
 import type { AgentWorkflowInput } from "../agent-input.js";
+import type { RunBudgetObservation } from "../run-budget.js";
 
 /**
  * Frozen contract between the graph engine (agent.ts, wired in stage C4) and
@@ -25,8 +30,8 @@ import type { AgentWorkflowInput } from "../agent-input.js";
  *
  * Mutation contract (executors write back through the shared object):
  * - prepare_workspace sets `sandboxId` (and appends to `sandboxIds`),
- *   `selectedRepositories`, `repositoryContexts`, `preSandboxAdditions`, and
- *   `arthur.taskId`.
+ *   `workspaceManifest`, `selectedRepositories`, `repositoryContexts`,
+ *   `preSandboxAdditions`, and `arthur.taskId`.
  * - fetch_pr_context refreshes `repositoryContexts`.
  * - finalize_workspace sets `publication`.
  * All other fields are read-only from the executors' perspective.
@@ -55,12 +60,17 @@ export interface EngineCtx {
   branchName: string;
   /** Null until prepare_workspace provisions a sandbox. */
   sandboxId: string | null;
+  /** Manager-authored repository identity, routing, and baseline metadata.
+   * Never replace this with a manifest read after agent code has run. */
+  workspaceManifest: WorkspaceManifest | null;
+  /** Agent-only scratch sandboxes used by planning and workspace-free Generic
+   *  blocks. They never contain checked-out repositories and therefore do not
+   * satisfy modular workspace consumers. */
+  agentSandboxIds: Partial<Record<AgentKind, string>>;
   /**
-   * Every sandbox id provisioned during the run, in creation order. A
-   * prepare_workspace inside a loop provisions a fresh sandbox per iteration and
-   * overwrites `sandboxId`; the engine tears down all of these on exit so the
-   * earlier ones do not leak. prepare_workspace adds each id here as it sets
-   * `sandboxId`.
+   * Authoritative in-memory terminal-cleanup set for every code and agent-only
+   * scratch sandbox provisioned by this run. Every id is also persisted as a
+   * durable owner child for external cancel/reconcile crash cleanup.
    */
   sandboxIds: Set<string>;
   /** Empty until prepare_workspace selects repositories. */
@@ -91,6 +101,8 @@ export interface EngineCtx {
    * task (named after the ticket) and writes back the resolved `taskId`.
    */
   arthur: { taskId: string | null };
+  /** Observe and enforce the run budget before further agent work. */
+  observeBudget(requireRemainingDuration?: boolean): Promise<RunBudgetObservation>;
   /** Record a phase's parsed usage under a display label for run telemetry. */
   recordUsage(label: string, usage: PhaseUsage | null, model: string): void;
   /**
@@ -98,12 +110,6 @@ export interface EngineCtx {
    * "cost unknown" instead of a misleading zero cost.
    */
   markLaunched(label: string): void;
-  /**
-   * Unregister the run from the run registry exactly once before pull requests
-   * are created (mirrors agent.ts's beforeCreatePullRequests +
-   * runUnregisteredBeforePr dedupe). The engine owns the dedupe flag.
-   */
-  unregisterBeforePr(): Promise<void>;
 }
 
 export type {
@@ -116,6 +122,8 @@ export type BlockExecuteFn = (
   block: WorkflowDefinitionNode,
   steps: StepsRecord,
   ctx: EngineCtx,
+  resolvedInputs?: Record<string, unknown>,
+  execution?: BlockExecutionContext,
 ) => Promise<BlockExecutionResult>;
 
 /**

@@ -4,9 +4,9 @@ import { env } from "../../../env.js";
 import { IssueTrackerNotFoundError } from "../../adapters/issue-tracker/types.js";
 import { createAdapters } from "../../lib/adapters.js";
 import { cancelRun } from "../../lib/cancel-run.js";
-import { dispatchTicket, isClaimingSentinel } from "../../lib/dispatch.js";
+import { dispatchTicket } from "../../lib/dispatch.js";
 import { logger } from "../../lib/logger.js";
-import { stopTicketSandboxes } from "../../sandbox/stop-ticket-sandboxes.js";
+import { ticketSubjectKey } from "../../lib/subject-key.js";
 
 /**
  * Jira webhook handler — triggers the same dispatch logic as the cron poller.
@@ -48,15 +48,81 @@ export default defineEventHandler(async (event) => {
   const adapters = createAdapters();
   const webhookEvent = typeof body?.webhookEvent === "string" ? body.webhookEvent : null;
   const ticketStatus = extractTicketStatus(body);
+  const statusChange = extractStatusChange(body);
+  const actorAccountId =
+    typeof body?.user?.accountId === "string" ? body.user.accountId.trim() : "";
   logger.info(
     {
       ticketKey,
       webhookEvent,
       payloadStatus: ticketStatus,
+      statusChange,
       payloadProjectKey: projectKey,
     },
     "webhook_payload_parsed",
   );
+
+  let workflowActorAccountId = "";
+  if (webhookEvent === "jira:issue_updated" && statusChange && actorAccountId) {
+    try {
+      workflowActorAccountId =
+        (await adapters.issueTracker.getCurrentUserAccountId?.())?.trim() ?? "";
+    } catch (error) {
+      logger.warn(
+        { ticketKey, error: error instanceof Error ? error.message : String(error) },
+        "webhook_workflow_actor_lookup_failed",
+      );
+    }
+  }
+  if (
+    actorAccountId &&
+    workflowActorAccountId &&
+    actorAccountId === workflowActorAccountId
+  ) {
+    logger.info(
+      { ticketKey, actorAccountId, statusChange },
+      "webhook_ignored_workflow_actor",
+    );
+    return {
+      status: "ignored",
+      reason: "workflow_actor",
+      ticketKey,
+    };
+  }
+
+  // A second human move can arrive while an earlier move is already closing
+  // the owner. Continue that exact cancellation instead of dispatching against
+  // a claim that is deliberately still held.
+  if (statusChange) {
+    const subjectKey = ticketSubjectKey("jira", ticketKey);
+    const active = await adapters.runRegistry.get(subjectKey);
+    if (active?.state === "cancelling") {
+      const cancellation = await cancelTrackedRun(
+        ticketKey,
+        adapters.runRegistry,
+        adapters.issueTracker,
+        active,
+      );
+      if (cancellation === "unconfirmed") {
+        throw createError({
+          statusCode: 503,
+          statusMessage: "Cancellation not confirmed",
+        });
+      }
+      const cancelled = cancellation === "cancelled";
+      if (cancelled) {
+        await adapters.messaging.notifyForTicket(ticketKey, {
+          kind: "canceled",
+          reason: "human changed ticket status while cancellation was in progress",
+        });
+      }
+      return {
+        status: cancelled ? "cancelled" : "ignored",
+        reason: "human_status_change_during_cancellation",
+        ticketKey,
+      };
+    }
+  }
 
   if (!ticketStatus) {
     logger.info({ ticketKey }, "webhook_missing_payload_status_dispatching_anyway");
@@ -67,6 +133,22 @@ export default defineEventHandler(async (event) => {
       { ticketKey, payloadStatus: ticketStatus, expectedAiStatus: env.COLUMN_AI },
       "webhook_payload_status_outside_ai_column",
     );
+
+    // The issue snapshot says where the ticket is now, not what this webhook
+    // changed. PR-triggered remediation legitimately runs while the ticket is
+    // outside the AI column, so only an actual status changelog item is
+    // evidence that a human movement should cancel the active owner.
+    if (!statusChange) {
+      logger.info(
+        { ticketKey, payloadStatus: ticketStatus },
+        "webhook_outside_ai_without_status_change_ignored",
+      );
+      return {
+        status: "ignored",
+        reason: "no_status_change",
+        ticketKey,
+      };
+    }
 
     const liveTicketState = await getLiveTicketState(ticketKey, adapters.issueTracker);
     if (liveTicketState.inAiColumn) {
@@ -105,7 +187,27 @@ export default defineEventHandler(async (event) => {
       };
     }
 
-    const cancelled = await cancelTrackedRun(ticketKey, adapters.runRegistry);
+    const cancellation = await cancelTrackedRun(
+      ticketKey,
+      adapters.runRegistry,
+      adapters.issueTracker,
+    );
+    if (cancellation === "unconfirmed") {
+      logger.warn(
+        {
+          ticketKey,
+          payloadStatus: ticketStatus,
+          liveStatus: liveTicketState.status,
+          liveProjectKey: liveTicketState.projectKey,
+        },
+        "webhook_ticket_cancel_unconfirmed",
+      );
+      throw createError({
+        statusCode: 503,
+        statusMessage: "Cancellation not confirmed",
+      });
+    }
+    const cancelled = cancellation === "cancelled";
     if (cancelled) {
       await adapters.messaging.notifyForTicket(ticketKey, {
         kind: "canceled",
@@ -162,7 +264,12 @@ function verifyWebhookAuth(
   event: Parameters<typeof getHeader>[0],
   rawBody: string,
 ): void {
-  if (!env.JIRA_WEBHOOK_SECRET) return;
+  if (!env.JIRA_WEBHOOK_SECRET) {
+    throw createError({
+      statusCode: 503,
+      statusMessage: "Jira webhook is not configured",
+    });
+  }
 
   const signatureHeader = getHeader(event, "x-hub-signature");
   if (!signatureHeader) {
@@ -214,6 +321,26 @@ function extractTicketStatus(body: any): string | null {
   return body?.issue?.fields?.status?.name ?? null;
 }
 
+/** The issue snapshot describes current state but not what this webhook
+ * changed. Echo suppression must match Jira's exact status changelog item. */
+function extractStatusChange(
+  body: any,
+): { id?: string; name?: string } | null {
+  const items = Array.isArray(body?.changelog?.items) ? body.changelog.items : [];
+  const change = items.find(
+    (item: any) => typeof item?.field === "string" && item.field.toLowerCase() === "status",
+  );
+  if (!change) return null;
+
+  const id = change.to == null ? "" : String(change.to).trim();
+  const name = typeof change.toString === "string" ? change.toString.trim() : "";
+  if (!id && !name) return null;
+  return {
+    ...(id ? { id } : {}),
+    ...(name ? { name } : {}),
+  };
+}
+
 function isAiColumnStatus(status: string): boolean {
   return status.trim().toLowerCase() === env.COLUMN_AI.trim().toLowerCase();
 }
@@ -221,31 +348,35 @@ function isAiColumnStatus(status: string): boolean {
 async function cancelTrackedRun(
   ticketKey: string,
   runRegistry: ReturnType<typeof createAdapters>["runRegistry"],
-): Promise<boolean> {
-  const trackedRunId = await runRegistry.getRunId(ticketKey);
-  if (!trackedRunId) return false;
+  issueTracker: ReturnType<typeof createAdapters>["issueTracker"],
+  observedEntry?: Awaited<ReturnType<typeof runRegistry.get>>,
+): Promise<"cancelled" | "not_active" | "unconfirmed"> {
+  const subjectKey = ticketSubjectKey("jira", ticketKey);
+  const entry = observedEntry ?? (await runRegistry.get(subjectKey));
+  if (!entry) return "not_active";
+  const cancellationTarget = {
+    ownerToken: entry.ownerToken,
+    runId: entry.runId,
+  };
 
-  // A pr_trigger run's lifecycle follows the PR, not the ticket column, so a
-  // column move must not cancel it.
-  const entries = await runRegistry.listAll().catch(() => []);
-  const kind = entries.find((entry) => entry.ticketKey === ticketKey)?.kind;
-  if (kind === "pr_trigger") {
-    logger.info({ ticketKey }, "webhook_skip_cancel_pr_trigger_run");
-    return false;
+  if (cancellationTarget.runId === null) {
+    const cancelled = await cancelRun(
+      ticketKey,
+      cancellationTarget,
+      runRegistry,
+      issueTracker,
+    );
+    return cancelled ? "cancelled" : "unconfirmed";
   }
 
-  if (isClaimingSentinel(trackedRunId)) {
-    // Sentinel can shadow a real sandbox if dispatch already called
-    // start() but crashed before register(). Same gap that reconcile's
-    // stale-claim sweep covers — we catch it here on the faster webhook
-    // path so operators don't have to wait 5 minutes for reconcile.
-    const sandboxId = await runRegistry.getSandboxId(ticketKey).catch(() => null);
-    await stopTicketSandboxes(ticketKey, sandboxId).catch(() => {});
-    await runRegistry.unregister(ticketKey).catch(() => {});
-    return true;
-  }
-
-  return cancelRun(ticketKey, trackedRunId, runRegistry);
+  if (!cancellationTarget.runId) return "unconfirmed";
+  const cancelled = await cancelRun(
+    ticketKey,
+    cancellationTarget,
+    runRegistry,
+    issueTracker,
+  );
+  return cancelled ? "cancelled" : "unconfirmed";
 }
 
 async function getLiveTicketState(

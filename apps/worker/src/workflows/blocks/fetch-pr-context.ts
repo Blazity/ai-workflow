@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { SelectedRepository } from "../../adapters/vcs/repository-directory.js";
 import type { SelectedRepositoryPromptContext } from "../../sandbox/context.js";
 import type { PrTriggerPayload } from "../agent-input.js";
+import { isRunControlError } from "../run-control-error.js";
 import type { BlockExecuteFn, BlockExecutionResult } from "./types.js";
 
 export const paramsSchema = z.object({}).strict();
@@ -11,18 +12,10 @@ export const paramsSchema = z.object({}).strict();
  * enriched with the ticket's workflow-owned branch record when one exists.
  */
 export async function blockPrTriggerRepositoriesStep(
-  ticketKey: string,
+  _ticketKey: string,
   pr: PrTriggerPayload,
 ): Promise<SelectedRepository[]> {
   "use step";
-  const { getDb } = await import("../../db/client.js");
-  const { listWorkflowOwnedBranchesForTicket } = await import(
-    "../../db/queries/workflow-owned-branches.js"
-  );
-  const records = await listWorkflowOwnedBranchesForTicket(getDb(), ticketKey);
-  const owned = records.find(
-    (record) => record.provider === pr.provider && record.repoPath === pr.repoPath,
-  );
   return [
     {
       provider: pr.provider,
@@ -30,8 +23,8 @@ export async function blockPrTriggerRepositoriesStep(
       defaultBranch: pr.baseRef,
       selectedRationale: `PR trigger for ${pr.provider}:${pr.repoPath} #${pr.prNumber}`,
       workflowOwnedBranch: {
-        branchName: owned?.branchName ?? pr.headRef,
-        pr: owned?.pr ?? { id: pr.prNumber, url: pr.prUrl, branch: pr.headRef },
+        branchName: pr.headRef,
+        pr: { id: pr.prNumber, url: pr.prUrl, branch: pr.headRef },
       },
     },
   ];
@@ -46,9 +39,13 @@ export async function blockFetchPrContextsStep(
 ): Promise<SelectedRepositoryPromptContext[]> {
   "use step";
   const { createRepositoryVCS } = await import("../../lib/vcs-runtime.js");
+  const { isRepoAllowed } = await import("../../lib/repo-allowlist.js");
 
   return Promise.all(
     repositories.map(async (repo) => {
+      if (!isRepoAllowed(repo.repoPath)) {
+        throw new Error(`Refusing to read PR context for ${repo.repoPath}: not in AGENT_ALLOWED_REPOS`);
+      }
       const pr = repo.workflowOwnedBranch?.pr;
       if (!pr) {
         return {
@@ -112,6 +109,7 @@ export const execute: BlockExecuteFn = async (_block, _steps, ctx): Promise<Bloc
       },
     };
   } catch (err) {
+    if (isRunControlError(err)) throw err;
     return {
       kind: "failed",
       output: { status: "failed" },

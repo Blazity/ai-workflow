@@ -9,8 +9,10 @@ import type {
   RunDetail,
   RunStep,
   Workflow,
+  WorkflowBlockContract,
   WorkflowBlockType,
   WorkflowDefinition,
+  WorkflowDefinitionLayout,
   WorkflowDefinitionVersion,
   WorkflowEditorOptions,
 } from "./domain.js";
@@ -194,6 +196,12 @@ export interface WorkflowDefinitionMeta {
   enabled: boolean;
   triggerTypes: WorkflowBlockType[];
   currentVersion: number | null;
+  /** Mutable semantic authoring revision. */
+  draftRevision: number;
+  /** Independently persisted presentation revision. */
+  layoutRevision: number;
+  /** Exact immutable version selected for new runs. */
+  deployedVersion: number | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -206,6 +214,11 @@ export interface WorkflowDefinitionsResponse {
 
 export interface WorkflowDefinitionDetailResponse {
   meta: WorkflowDefinitionMeta;
+  /** Semantic draft with the latest layout overlaid for editing. */
+  draft: WorkflowDefinition | null;
+  layout: WorkflowDefinitionLayout;
+  deployed: WorkflowDefinitionVersion | null;
+  /** @deprecated Use `deployed`. */
   current: WorkflowDefinitionVersion | null;
   versions: WorkflowDefinitionVersion[];
 }
@@ -221,7 +234,30 @@ export interface WorkflowDefinitionResponse {
 
 export interface WorkflowDefinitionSaveResponse {
   meta: WorkflowDefinitionMeta;
-  version: WorkflowDefinitionVersion;
+  draft: WorkflowDefinition;
+}
+
+export interface WorkflowDefinitionLayoutResponse {
+  meta: WorkflowDefinitionMeta;
+  layout: WorkflowDefinitionLayout;
+}
+
+export interface WorkflowDefinitionDeploymentResponse {
+  meta: WorkflowDefinitionMeta;
+  deployed: WorkflowDefinitionVersion;
+}
+
+export interface WorkflowDefinitionValidationResponse {
+  valid: boolean;
+  issues: WorkflowDefinitionValidationIssue[];
+  /** Parameter-resolved contracts for the exact candidate graph. */
+  nodeContracts: Record<string, WorkflowBlockContract>;
+}
+
+export interface WorkflowDefinitionValidationIssue {
+  code: "schema" | "deployment";
+  nodeId: string | null;
+  message: string;
 }
 
 export interface RunBlockStatusesResponse {
@@ -242,7 +278,6 @@ export interface ApprovalDecisionResponse {
 
 export interface ClarificationAnswerResponse {
   clarification: ClarificationRequest;
-  /** Resume run started on the answer; null when the answer was recorded but
-   *  dispatch will be retried. */
+  /** The same asking run resumed by the answer. */
   runId: string | null;
 }

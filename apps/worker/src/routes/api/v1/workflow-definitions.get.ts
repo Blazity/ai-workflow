@@ -7,6 +7,7 @@ import { defaultWorkflowDefinition } from "../../../workflow-definition/default.
 import {
   buildWorkflowEditorOptions,
   fetchAvailableModels,
+  fetchTicketStatuses,
 } from "../../../workflow-definition/models.js";
 import {
   listWorkflowDefinitions,
@@ -16,16 +17,16 @@ import {
 
 /** Serializes a definition row into the dashboard-facing meta. Shared with the
  *  detail/save/patch routes and the legacy shims. */
-export function serializeDefinitionMeta(
-  row: WorkflowDefinitionRow,
-  currentVersion: number | null,
-): WorkflowDefinitionMeta {
+export function serializeDefinitionMeta(row: WorkflowDefinitionRow): WorkflowDefinitionMeta {
   return {
     id: row.id,
     name: row.name,
     enabled: row.enabled,
     triggerTypes: row.triggerTypes,
-    currentVersion,
+    currentVersion: row.draftRevision || null,
+    draftRevision: row.draftRevision,
+    layoutRevision: row.layoutRevision,
+    deployedVersion: row.deployedVersion,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
   };
@@ -54,12 +55,16 @@ export default defineEventHandler(
     try {
       await requireDashboardActor(event);
       const definitions = (await listWorkflowDefinitions(getDb())).map((row) =>
-        serializeDefinitionMeta(row, row.currentVersion),
+        serializeDefinitionMeta(row),
       );
+      const [models, ticketStatuses] = await Promise.all([
+        fetchAvailableModels(),
+        fetchTicketStatuses(),
+      ]);
       return {
         definitions,
         defaultDefinition: defaultWorkflowDefinition({ includeReview: env.ENABLE_REVIEW_PHASE }),
-        options: buildWorkflowEditorOptions(await fetchAvailableModels()),
+        options: buildWorkflowEditorOptions(models, ticketStatuses),
       };
     } catch (error) {
       toHttpError(error);

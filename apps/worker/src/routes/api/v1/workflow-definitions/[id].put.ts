@@ -5,13 +5,10 @@ import { requireDashboardActor } from "../../../../lib/auth/request-context.js";
 import { dashboardUserLabel } from "../../../../pre-pr-checks/store.js";
 import {
   describeWorkflowDefinitionIssues,
-  validateWorkflowGraph,
   workflowDefinitionSchema,
 } from "../../../../workflow-definition/schema.js";
 import {
-  getWorkflowDefinition,
-  saveWorkflowDefinitionVersion,
-  serializeWorkflowDefinitionVersion,
+  saveWorkflowDefinitionDraft,
 } from "../../../../workflow-definition/store.js";
 import {
   parseDefinitionId,
@@ -24,7 +21,7 @@ export default defineEventHandler(
     try {
       const actor = await requireDashboardActor(event);
       const id = parseDefinitionId(event);
-      const body = (await readBody<{ definition?: unknown }>(event).catch(() => null)) ?? {};
+      const body = (await readBody<{ definition?: unknown; expectedDraftRevision?: unknown }>(event).catch(() => null)) ?? {};
       const parsed = workflowDefinitionSchema.safeParse(body.definition);
       if (!parsed.success) {
         throw createError({
@@ -32,28 +29,28 @@ export default defineEventHandler(
           statusMessage: `Invalid definition: ${describeWorkflowDefinitionIssues(parsed.error)}`,
         });
       }
-      const issues = validateWorkflowGraph(parsed.data);
-      if (issues.length > 0) {
-        throw createError({
-          statusCode: 400,
-          statusMessage: `Invalid workflow: ${issues.join("; ")}`,
-        });
+      if (
+        typeof body.expectedDraftRevision !== "number" ||
+        !Number.isInteger(body.expectedDraftRevision) ||
+        body.expectedDraftRevision < 0
+      ) {
+        throw createError({ statusCode: 400, statusMessage: "Invalid draft revision" });
       }
 
       const dbHandle = getDb();
-      const saved = await saveWorkflowDefinitionVersion(dbHandle, {
+      const saved = await saveWorkflowDefinitionDraft(dbHandle, {
         definitionId: id,
         definition: parsed.data,
+        expectedDraftRevision: body.expectedDraftRevision,
         actor: {
           role: actor.role,
           id: actor.userId,
           label: await dashboardUserLabel(dbHandle, actor.userId),
         },
       });
-      const row = await getWorkflowDefinition(dbHandle, id);
       return {
-        meta: serializeDefinitionMeta(row!, saved.version),
-        version: serializeWorkflowDefinitionVersion(saved),
+        meta: serializeDefinitionMeta(saved.definition),
+        draft: saved.draft,
       };
     } catch (error) {
       toWorkflowDefinitionHttpError(error);

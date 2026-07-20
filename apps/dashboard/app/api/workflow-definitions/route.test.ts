@@ -3,9 +3,13 @@ import assert from "node:assert/strict";
 
 import {
   handleDefinitionDelete,
+  handleDefinitionDeploy,
   handleDefinitionGet,
   handleDefinitionPatch,
   handleDefinitionPut,
+  handleDefinitionLayout,
+  handleDefinitionRollback,
+  handleDefinitionValidate,
   handleDefinitionRestore,
   handleDefinitionsCreate,
   handleDefinitionsList,
@@ -137,3 +141,53 @@ test("restore maps worker timeouts to 504", async () => {
   assert.equal(res.status, 504);
   assert.deepEqual(await res.json(), { error: "Worker request timed out" });
 });
+
+for (const [name, handler, method] of [
+  ["deploy", handleDefinitionDeploy, "POST"],
+  ["rollback", handleDefinitionRollback, "POST"],
+  ["validate", handleDefinitionValidate, "POST"],
+  ["layout", handleDefinitionLayout, "PATCH"],
+] as const) {
+  test(`${name} forwards its body to the nested worker path`, async () => {
+    const payload = { expectedDraftRevision: 3, expectedDeployedVersion: 2 };
+    const res = await handler(
+      new Request(`https://dashboard.example.com/api/workflow-definitions/12/${name}`, {
+        method,
+        body: JSON.stringify(payload),
+      }),
+      idParams("12"),
+      async (path, init) => {
+        assert.equal(path, `/api/v1/workflow-definitions/12/${name}`);
+        assert.equal(init?.method, method);
+        assert.deepEqual(JSON.parse(String(init?.body)), payload);
+        return Response.json({ ok: true });
+      },
+    );
+    assert.equal(res.status, 200);
+  });
+}
+
+for (const workerResponse of [
+  Response.json({ statusMessage: "Invalid workflow graph" }, { status: 400 }),
+  new Response("Draft changed; reload before saving", {
+    status: 409,
+    headers: { "content-type": "text/plain; charset=utf-8" },
+  }),
+  Response.json({ error: "Validation service unavailable" }, { status: 500 }),
+]) {
+  test(`validation preserves worker ${workerResponse.status} status and message`, async () => {
+    const expectedBody = await workerResponse.clone().text();
+    const res = await handleDefinitionValidate(
+      new Request("https://dashboard.example.com/api/workflow-definitions/12/validate", {
+        method: "POST",
+        body: JSON.stringify({ definition: { schemaVersion: 1, nodes: [], edges: [] } }),
+      }),
+      idParams("12"),
+      async () => workerResponse,
+    );
+
+    assert.equal(res.status, workerResponse.status);
+    assert.equal(res.headers.get("content-type"), workerResponse.headers.get("content-type"));
+    assert.equal(await res.text(), expectedBody);
+  });
+}

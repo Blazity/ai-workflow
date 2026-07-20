@@ -211,6 +211,7 @@ export type WorkflowBlockType =
   | "trigger_pr_created"
   | "trigger_pr_checks_failed"
   | "trigger_pr_review"
+  | "trigger_pr_merged"
   | "planning_agent"
   | "implementation_agent"
   | "review_agent"
@@ -250,9 +251,93 @@ export interface BlockOutput {
   [key: string]: JsonValue;
 }
 
-export type TicketStatusTarget = "ai_review" | "backlog";
+/** Provider status identifier persisted by Update Ticket Status. Legacy
+ * `ai_review` / `backlog` values remain valid for existing definitions. */
+export type TicketStatusTarget = string;
 
 export type WorkflowParamValue = string | number | boolean | string[];
+
+/** Exact persisted source path for one block input. Syntax and graph safety are
+ * validated by the worker; the template union keeps authored definitions on
+ * the three supported roots without embedding graph semantics in this package. */
+export type WorkflowBindingSource =
+  | `trigger.${string}`
+  | `steps.${string}.output.${string}`
+  | `run.${string}`;
+
+export type WorkflowInputBindings = Record<string, WorkflowBindingSource>;
+
+/** Small JSON-shaped type language used by block input/output contracts. */
+export type WorkflowValueSchema =
+  | { type: "string" }
+  | { type: "number" }
+  | { type: "boolean" }
+  | { type: "null" }
+  | { type: "unknown" }
+  | { type: "nullable"; value: WorkflowValueSchema }
+  | { type: "array"; items: WorkflowValueSchema }
+  | {
+      type: "object";
+      properties: Record<string, WorkflowValueSchema>;
+      required: string[];
+      additionalProperties: boolean;
+    };
+
+export type WorkflowBlockGroup =
+  | "trigger"
+  | "agents"
+  | "workspace"
+  | "control"
+  | "ticket"
+  | "vcs"
+  | "human"
+  | "utility"
+  | "arthur";
+
+export interface WorkflowBlockPresentation {
+  label: string;
+  description: string;
+  group: WorkflowBlockGroup;
+  color: string;
+  softColor: string;
+  glyph: string;
+}
+
+export interface WorkflowBlockInputContract {
+  required: boolean;
+  schema: WorkflowValueSchema;
+}
+
+/** A safe, registry-owned family of additional named inputs. The worker still
+ * validates every concrete input name against `keyPattern`; this is only the
+ * serializable contract the editor uses to offer those inputs. */
+export interface WorkflowBlockAdditionalInputContract {
+  keyPattern: string;
+  schema: WorkflowValueSchema;
+}
+
+export type WorkflowBlockAvailability =
+  | { available: true; unavailableReason: null }
+  | { available: false; unavailableReason: string };
+
+/** Serializable contract returned by the worker-owned block registry. */
+export interface WorkflowBlockContract {
+  type: WorkflowBlockType;
+  presentation: WorkflowBlockPresentation;
+  defaults: Record<string, WorkflowParamValue>;
+  ports: string[];
+  allowsFailurePort: boolean;
+  inputs: Record<string, WorkflowBlockInputContract>;
+  additionalInputs: WorkflowBlockAdditionalInputContract[];
+  output: {
+    /** Complete executor envelope, including failure and clarification output. */
+    schema: WorkflowValueSchema;
+    /** Fields guaranteed when execution continues through a normal output port. */
+    bindingSchema: WorkflowValueSchema;
+    statusVariants: string[];
+  };
+  availability: WorkflowBlockAvailability;
+}
 
 export interface WorkflowDefinitionNode {
   id: string;
@@ -261,6 +346,7 @@ export interface WorkflowDefinitionNode {
   x: number;
   y: number;
   params: Record<string, WorkflowParamValue>;
+  inputs: WorkflowInputBindings;
 }
 
 export interface WorkflowDefinitionEdge {
@@ -269,10 +355,39 @@ export interface WorkflowDefinitionEdge {
   fromPort?: string;
 }
 
+export interface WorkflowExecutionBudgets {
+  maxDurationMs?: number;
+  maxTokens?: number;
+  maxCostUsd?: number;
+}
+
+/** Structured terminal cause persisted when a workflow run stops on a budget. */
+export type WorkflowRunBudgetFailure =
+  | {
+      status: "budget_exceeded";
+      metric: "duration" | "tokens" | "cost";
+      limit: number;
+      consumed: number;
+      reason: string;
+    }
+  | {
+      status: "budget_unverifiable";
+      metric: "tokens" | "cost";
+      limit: number;
+      consumed: null;
+      reason: string;
+    };
+
 export interface WorkflowDefinition {
   schemaVersion: 1;
+  budgets?: WorkflowExecutionBudgets;
   nodes: WorkflowDefinitionNode[];
   edges: WorkflowDefinitionEdge[];
+}
+
+/** Presentation-only node coordinates, persisted independently from a draft. */
+export interface WorkflowDefinitionLayout {
+  nodes: Record<string, { x: number; y: number }>;
 }
 
 export interface WorkflowDefinitionVersion {
@@ -291,6 +406,8 @@ export interface WorkflowEditorOptions {
   defaultModels: { claude: string; codex: string };
   models: { claude: string[]; codex: string[] };
   ticketStatusTargets: { value: TicketStatusTarget; label: string }[];
+  blockRegistry: Record<WorkflowBlockType, WorkflowBlockContract>;
+  runBindingSchema: WorkflowValueSchema;
 }
 
 export type BlockRunStatus = "pending" | "running" | "ok" | "warn" | "fail";
@@ -350,7 +467,7 @@ export type ClarificationStatus = "pending" | "answered" | "superseded";
  *  the dashboard. */
 export interface ClarificationRequest {
   id: string;
-  ticketKey: string;
+  ticketKey: string | null;
   /** Run that asked the questions. */
   runId: string;
   /** Graph node that raised the questions; null for the built-in default graph. */
@@ -369,6 +486,6 @@ export interface ClarificationRequest {
   answeredByLabel: string | null;
   /** ISO timestamp; null while pending. */
   answeredAt: string | null;
-  /** Resume run started on answer; null until dispatched. */
+  /** Deprecated: clarification answers now resume the asking run in place. */
   dispatchedRunId: string | null;
 }

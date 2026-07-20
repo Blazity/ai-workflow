@@ -4,94 +4,81 @@ import type { Db } from "../../../db/client.js";
 import { member, organization, user } from "../../../db/schema.js";
 import { createTestDb } from "../../../db/test-db.js";
 import {
-  answerClarification,
-  createClarificationRequest,
-  getClarification,
-  setDispatchedRunId,
-} from "../../../clarifications/store.js";
+  getHookClarification,
+  prepareHookClarification,
+  publishHookClarification,
+} from "../../../clarifications/hook-store.js";
 import { IssueTrackerNotFoundError } from "../../../adapters/issue-tracker/types.js";
 
 const state = vi.hoisted(() => ({
   db: undefined as unknown,
   session: { user: { id: "user_admin" }, session: { id: "session_test" } } as unknown,
-  env: { DASHBOARD_ORG_SLUG: "ai-workflow", MAX_CONCURRENT_AGENTS: 3 },
+  env: { DASHBOARD_ORG_SLUG: "ai-workflow" },
 }));
 
 const mocks = vi.hoisted(() => ({
   fetchTicket: vi.fn(),
-  dispatchClarificationAnswered: vi.fn(),
+  resumeHook: vi.fn(),
+  getHookByToken: vi.fn(),
   resolveAwaitingRun: vi.fn(),
 }));
 
-vi.mock("../../../../env.js", () => ({ env: state.env }));
 vi.mock("../../../db/client.js", () => ({ getDb: () => state.db }));
+vi.mock("../../../../env.js", () => ({ env: state.env }));
 vi.mock("../../../auth-instance.js", () => ({
   auth: { api: { getSession: vi.fn(async () => state.session) } },
 }));
 vi.mock("../../../lib/step-adapters.js", () => ({
-  createStepAdapters: () => ({
-    issueTracker: { fetchTicket: mocks.fetchTicket },
-    runRegistry: {},
-  }),
+  createStepAdapters: () => ({ issueTracker: { fetchTicket: mocks.fetchTicket } }),
 }));
-vi.mock("../../../clarifications/dispatch.js", () => ({
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  dispatchClarificationAnswered: (...args: any[]) => mocks.dispatchClarificationAnswered(...args),
+vi.mock("workflow/api", () => ({
+  resumeHook: (...args: unknown[]) => mocks.resumeHook(...args),
+  getHookByToken: (...args: unknown[]) => mocks.getHookByToken(...args),
 }));
 vi.mock("../../../lib/telemetry/run-telemetry.js", () => ({
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  resolveAwaitingRun: (...args: any[]) => mocks.resolveAwaitingRun(...args),
+  resolveAwaitingRun: (...args: unknown[]) => mocks.resolveAwaitingRun(...args),
 }));
 
 const answerPost = (await import("./clarifications/[id]/answer.post.js")).default;
-
 let db: Db;
 
-function paramHandler(method: "get" | "post", pattern: string, route: unknown) {
+function handler(route: unknown) {
   const app = createApp();
   const router = createRouter();
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  router[method](pattern, route as any);
+  router.post("/api/v1/clarifications/:id/answer", route as any);
   app.use(router);
   return toWebHandler(app);
 }
 
-const answer = (id: string, body: unknown = { answer: "Use Next.js" }) =>
-  paramHandler("post", "/api/v1/clarifications/:id/answer", answerPost)(
+const answer = (id: string, value = "Use Next.js") =>
+  handler(answerPost)(
     new Request(`http://worker.test/api/v1/clarifications/${id}/answer`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify(body),
+      body: JSON.stringify({ answer: value }),
     }),
   );
 
-async function seedPending(ticketKey = "AWT-1") {
-  return createClarificationRequest(db, {
+async function seedPending(ticketKey: string | null = "AWT-1") {
+  const row = await prepareHookClarification(db, {
     ticketKey,
+    subjectKey: ticketKey ? `ticket:jira:${ticketKey}` : "pr:github:acme/api:42",
     runId: "run-asked",
+    blockId: "question",
+    definitionId: 1,
+    definitionVersion: 4,
     questions: ["What framework?"],
   });
-}
-
-/** Happy-path dispatch stand-in: runs the real answer CAS (as the real dispatch
- *  would under the claim), then reports a started resume run. */
-function dispatchStarts(runId = "run-x") {
-  mocks.dispatchClarificationAnswered.mockImplementation(async (input) => {
-    if (!input.isRetry) {
-      await answerClarification(db, {
-        id: input.clarification.id,
-        answer: input.answer,
-        actor: input.actor,
-      });
-    }
-    return { status: "started", runId };
-  });
+  return publishHookClarification(db, row.id);
 }
 
 beforeEach(async () => {
   vi.clearAllMocks();
   state.session = { user: { id: "user_admin" }, session: { id: "session_test" } };
-  mocks.fetchTicket.mockResolvedValue({ identifier: "AWT-1", trackerStatus: "backlog" });
+  mocks.fetchTicket.mockResolvedValue({ identifier: "AWT-1" });
+  mocks.resumeHook.mockResolvedValue({ runId: "run-asked" });
+  mocks.getHookByToken.mockRejectedValue(new Error("hook consumed"));
   mocks.resolveAwaitingRun.mockResolvedValue(true);
   db = await createTestDb();
   state.db = db;
@@ -107,108 +94,71 @@ beforeEach(async () => {
 }, 30_000);
 
 describe("POST /api/v1/clarifications/:id/answer", () => {
-  it("401s when unauthenticated", async () => {
-    const row = await seedPending("AWT-1");
+  it("requires an authenticated organization member", async () => {
+    const row = await seedPending();
     state.session = null;
-    const res = await answer(row.id);
-    expect(res.status).toBe(401);
-    expect(mocks.dispatchClarificationAnswered).not.toHaveBeenCalled();
+    expect((await answer(row.id)).status).toBe(401);
+
+    state.session = { user: { id: "unknown" }, session: { id: "session_test" } };
+    expect((await answer(row.id)).status).toBe(403);
+    expect(mocks.resumeHook).not.toHaveBeenCalled();
   });
 
-  it("403s a non-member", async () => {
-    const row = await seedPending("AWT-1");
-    state.session = { user: { id: "user_nobody" }, session: { id: "session_test" } };
-    const res = await answer(row.id);
-    expect(res.status).toBe(403);
-    expect(mocks.dispatchClarificationAnswered).not.toHaveBeenCalled();
-  });
-
-  it("allows a plain member to answer (no role gate)", async () => {
-    const row = await seedPending("AWT-1");
+  it("records the answer and resumes the asking run", async () => {
+    const row = await seedPending();
     state.session = { user: { id: "user_member" }, session: { id: "session_test" } };
-    dispatchStarts();
-    const res = await answer(row.id);
-    expect(res.status).toBe(200);
-  });
 
-  it("404s on an unknown clarification", async () => {
-    const res = await answer("missing");
-    expect(res.status).toBe(404);
-    expect(mocks.dispatchClarificationAnswered).not.toHaveBeenCalled();
-  });
+    const response = await answer(row.id);
 
-  it("400s on an empty answer", async () => {
-    const row = await seedPending("AWT-1");
-    const res = await answer(row.id, { answer: "   " });
-    expect(res.status).toBe(400);
-    expect(mocks.dispatchClarificationAnswered).not.toHaveBeenCalled();
-  });
-
-  it("400s on an oversized answer", async () => {
-    const row = await seedPending("AWT-1");
-    const res = await answer(row.id, { answer: "x".repeat(10_001) });
-    expect(res.status).toBe(400);
-  });
-
-  it("409s when already answered with a dispatched run", async () => {
-    const row = await seedPending("AWT-1");
-    await answerClarification(db, { id: row.id, answer: "prior", actor: { id: "u", label: "U" } });
-    await setDispatchedRunId(db, row.id, "run-prior");
-    const res = await answer(row.id);
-    expect(res.status).toBe(409);
-    expect(mocks.dispatchClarificationAnswered).not.toHaveBeenCalled();
-  });
-
-  it("re-dispatches an answered-without-run row on retry, skipping the CAS", async () => {
-    const row = await seedPending("AWT-1");
-    await answerClarification(db, { id: row.id, answer: "prior", actor: { id: "u", label: "U" } });
-    mocks.dispatchClarificationAnswered.mockResolvedValue({ status: "started", runId: "run-retry" });
-
-    const res = await answer(row.id);
-    expect(res.status).toBe(200);
-    const body = await res.json();
-    expect(body.runId).toBe("run-retry");
-    expect(mocks.dispatchClarificationAnswered).toHaveBeenCalledWith(
-      expect.objectContaining({ isRetry: true }),
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual(expect.objectContaining({ runId: "run-asked" }));
+    expect(mocks.resumeHook).toHaveBeenCalledWith(
+      row.hookToken,
+      expect.objectContaining({ answer: "Use Next.js", answeredById: "user_member" }),
     );
-    expect((await getClarification(db, row.id))?.dispatchedRunId).toBe("run-retry");
+    expect((await getHookClarification(db, row.id))?.status).toBe("answered");
   });
 
-  it("410s, supersedes the row, and flips the asking run off awaiting when the ticket is gone", async () => {
-    const row = await seedPending("AWT-1");
-    mocks.fetchTicket.mockRejectedValue(new IssueTrackerNotFoundError("Issue", "AWT-1"));
-    const res = await answer(row.id);
-    expect(res.status).toBe(410);
-    expect((await getClarification(db, row.id))?.status).toBe("superseded");
-    expect(mocks.resolveAwaitingRun).toHaveBeenCalledWith(expect.anything(), "run-asked");
-    expect(mocks.dispatchClarificationAnswered).not.toHaveBeenCalled();
+  it("supports ticketless PR review clarifications without calling Jira", async () => {
+    const row = await seedPending(null);
+    expect((await answer(row.id)).status).toBe(200);
+    expect(mocks.fetchTicket).not.toHaveBeenCalled();
   });
 
-  it("410s and supersedes an answered retry-state row when the ticket is gone", async () => {
-    const row = await seedPending("AWT-1");
-    // Retry state: answered but no dispatched run. The ticket-wide pending
-    // supersede misses it, so the by-id supersede must catch it.
-    await answerClarification(db, { id: row.id, answer: "prior", actor: { id: "u", label: "U" } });
-    mocks.fetchTicket.mockRejectedValue(new IssueTrackerNotFoundError("Issue", "AWT-1"));
-    const res = await answer(row.id);
-    expect(res.status).toBe(410);
-    expect((await getClarification(db, row.id))?.status).toBe("superseded");
-    expect(mocks.dispatchClarificationAnswered).not.toHaveBeenCalled();
+  it("accepts an identical retry after the hook was already consumed", async () => {
+    const row = await seedPending();
+    expect((await answer(row.id)).status).toBe(200);
+    mocks.resumeHook.mockRejectedValueOnce(new Error("already consumed"));
+
+    const retry = await answer(row.id);
+
+    expect(retry.status).toBe(200);
+    expect((await retry.json()).runId).toBe("run-asked");
   });
 
-  it("answers, dispatches, records the run and resolves the awaiting run on the happy path", async () => {
-    const row = await seedPending("AWT-1");
-    dispatchStarts("run-x");
+  it("rejects a competing answer", async () => {
+    const row = await seedPending();
+    expect((await answer(row.id, "First answer")).status).toBe(200);
+    expect((await answer(row.id, "Different answer")).status).toBe(409);
+  });
 
-    const res = await answer(row.id);
-    expect(res.status).toBe(200);
-    const body = await res.json();
-    expect(body.runId).toBe("run-x");
-    expect(body.clarification.status).toBe("answered");
-    expect(body.clarification.dispatchedRunId).toBe("run-x");
-    expect(body.clarification.answer).toBe("Use Next.js");
-    expect(mocks.resolveAwaitingRun).toHaveBeenCalledWith(expect.anything(), "run-asked");
-    const stored = await getClarification(db, row.id);
-    expect(stored?.dispatchedRunId).toBe("run-x");
+  it("returns a retryable error when the hook still exists after resume failure", async () => {
+    const row = await seedPending();
+    mocks.resumeHook.mockRejectedValueOnce(new Error("transport failed"));
+    mocks.getHookByToken.mockResolvedValueOnce({ runId: "run-asked" });
+
+    expect((await answer(row.id)).status).toBe(503);
+    expect((await getHookClarification(db, row.id))?.answer).toBe("Use Next.js");
+  });
+
+  it("retires the clarification when its Jira ticket was deleted", async () => {
+    const row = await seedPending();
+    mocks.fetchTicket.mockRejectedValueOnce(
+      new IssueTrackerNotFoundError("AWT-1", "Ticket was deleted"),
+    );
+
+    expect((await answer(row.id)).status).toBe(410);
+    expect((await getHookClarification(db, row.id))?.status).toBe("superseded");
+    expect(mocks.resumeHook).not.toHaveBeenCalled();
   });
 });

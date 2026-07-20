@@ -14,7 +14,7 @@ vi.mock("../../sandbox/arthur-client.js", () => ({
 }));
 
 import { execute, paramsSchema } from "./arthur-injection-check.js";
-import { makeCtx, makeNode } from "./test-support.js";
+import { makeCtx, makeNode, runControlErrorCases } from "./test-support.js";
 
 function configureArthur() {
   mocks.env.GENAI_ENGINE_API_KEY = "key";
@@ -22,10 +22,10 @@ function configureArthur() {
 }
 
 describe("arthur_injection_check paramsSchema", () => {
-  it("accepts empty params and an optional contentFromStep", () => {
+  it("accepts empty params and rejects the retired contentFromStep param", () => {
     expect(paramsSchema.safeParse({}).success).toBe(true);
-    expect(paramsSchema.safeParse({ contentFromStep: "step-1" }).success).toBe(true);
-    expect(paramsSchema.safeParse({ contentFromStep: "" }).success).toBe(false);
+    expect(paramsSchema.safeParse({ contentFromStep: "step-1" }).success).toBe(false);
+    expect(paramsSchema.safeParse({ legacyContentFromStep: "step-1" }).success).toBe(false);
     expect(paramsSchema.safeParse({ extra: 1 }).success).toBe(false);
   });
 });
@@ -91,31 +91,18 @@ describe("arthur_injection_check execute", () => {
     });
   });
 
-  it("uses the referenced block output as content", async () => {
+  it("uses bound content when provided", async () => {
     configureArthur();
     mocks.validatePrompt.mockResolvedValue({ ok: true, findings: [] });
 
     await execute(
-      makeNode("arthur_injection_check", { contentFromStep: "src" }),
-      { src: { output: { status: "ok", body: "text" } } },
-      makeCtx({ arthur: { taskId: "task-1" } }),
-    );
-
-    expect(mocks.validatePrompt).toHaveBeenCalledWith(
-      "task-1",
-      JSON.stringify({ status: "ok", body: "text" }),
-    );
-  });
-
-  it("skips when the referenced block has no output", async () => {
-    configureArthur();
-    const result = await execute(
-      makeNode("arthur_injection_check", { contentFromStep: "ghost" }),
+      makeNode("arthur_injection_check"),
       {},
       makeCtx({ arthur: { taskId: "task-1" } }),
+      { content: "text" },
     );
-    expect(result.output.status).toBe("skipped");
-    expect(mocks.validatePrompt).not.toHaveBeenCalled();
+
+    expect(mocks.validatePrompt).toHaveBeenCalledWith("task-1", "text");
   });
 
   it("skips on client errors instead of failing the run", async () => {
@@ -130,5 +117,18 @@ describe("arthur_injection_check execute", () => {
 
     expect(result.kind).toBe("next");
     expect(result.output).toEqual({ status: "skipped", reason: "arthur 500" });
+  });
+
+  it.each(runControlErrorCases())("rethrows %s from Arthur validation", async (_label, error) => {
+    configureArthur();
+    mocks.validatePrompt.mockRejectedValue(error);
+
+    await expect(
+      execute(
+        makeNode("arthur_injection_check"),
+        {},
+        makeCtx({ arthur: { taskId: "task-1" } }),
+      ),
+    ).rejects.toBe(error);
   });
 });

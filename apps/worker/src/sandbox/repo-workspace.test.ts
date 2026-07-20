@@ -3,6 +3,7 @@ import {
   buildRepoSlug,
   buildWorkspaceManifest,
   parseWorkspaceManifest,
+  parseVerifiedWorkspaceManifest,
 } from "./repo-workspace.js";
 
 describe("repo workspace manifest", () => {
@@ -170,5 +171,31 @@ describe("repo workspace manifest", () => {
     }));
 
     expect(parsed.version).toBe(1);
+  });
+
+  it("accepts only a field-for-field copy of the trusted provisioned manifest", () => {
+    const trusted = {
+      version: 1 as const,
+      repositories: [{
+        provider: "github" as const,
+        repoPath: "acme/api",
+        slug: "acme__api",
+        localPath: "/vercel/sandbox",
+        defaultBranch: "main",
+        branchName: "blazebot/aiw-45",
+        mergeBase: "main",
+        selectedRationale: "ticket mentions api",
+        preAgentSha: "trusted-sha",
+        workflowOwnedBranch: { branchName: "blazebot/aiw-45" },
+      }],
+    };
+
+    expect(parseVerifiedWorkspaceManifest(JSON.stringify(trusted), trusted)).toEqual(trusted);
+
+    const tampered = structuredClone(trusted);
+    tampered.repositories[0].branchName = "attacker/branch";
+    expect(() =>
+      parseVerifiedWorkspaceManifest(JSON.stringify(tampered), trusted),
+    ).toThrow("does not match the trusted provisioned manifest");
   });
 });

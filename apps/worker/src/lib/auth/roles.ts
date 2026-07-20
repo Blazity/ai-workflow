@@ -33,3 +33,7 @@ export function canEditWorkflowDefinitions(role: DashboardRole): boolean {
 export function canApproveWorkflowPlans(role: DashboardRole): boolean {
   return role === "owner" || role === "admin";
 }
+
+export function canCancelWorkflowRuns(role: DashboardRole): boolean {
+  return role === "owner" || role === "admin";
+}

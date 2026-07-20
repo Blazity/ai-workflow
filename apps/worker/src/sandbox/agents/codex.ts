@@ -262,8 +262,11 @@ touch ${paths.sentinel}
           lastTs = ts;
         }
         if (event?.type === "turn.completed" && event.usage) {
-          input  += numOr0(event.usage.input_tokens);
-          cached += numOr0(event.usage.cached_input_tokens);
+          const totalInput = numOr0(event.usage.input_tokens);
+          const cachedInput = numOr0(event.usage.cached_input_tokens);
+          // Codex reports cached input as a subset of input_tokens.
+          input  += Math.max(0, totalInput - cachedInput);
+          cached += cachedInput;
           output += numOr0(event.usage.output_tokens);
           turns  += 1;
         }

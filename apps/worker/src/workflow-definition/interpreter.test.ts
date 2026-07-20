@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { WorkflowRunCancelledError } from "workflow/errors";
 import type {
   BlockRunState,
   WorkflowBlockType,
@@ -8,13 +9,22 @@ import type {
 } from "@shared/contracts";
 import {
   buildRuntimeGraph,
-  executeGraph,
+  executeGraph as executeGraphWithContractValidation,
   type BlockExecutionResult,
   type BlockExecutor,
   type ExecuteGraphHooks,
   type RuntimeGraph,
   type StepsRecord,
 } from "./interpreter.js";
+import { ActiveRunOwnerError } from "../lib/active-run-owner.js";
+import { RunBudgetError } from "../workflows/run-budget.js";
+import { isRunControlError } from "../workflows/run-control-error.js";
+
+type ExecuteGraphOptions = Parameters<typeof executeGraphWithContractValidation>[0];
+
+function executeGraph(opts: ExecuteGraphOptions) {
+  return executeGraphWithContractValidation({ ...opts, outputValidator: () => [] });
+}
 
 function node(
   id: string,
@@ -22,7 +32,7 @@ function node(
   params: Record<string, WorkflowParamValue> = {},
   name?: string,
 ): WorkflowDefinitionNode {
-  return { id, type, x: 0, y: 0, params, name };
+  return { id, type, x: 0, y: 0, params, inputs: {}, name };
 }
 
 function graphFrom(
@@ -72,12 +82,16 @@ function makeRecorder(): Recorder {
 
 function makeExecutor(
   overrides: Record<string, BlockExecutionResult> = {},
-  onCall?: (block: WorkflowDefinitionNode, steps: StepsRecord) => void,
+  onCall?: (
+    block: WorkflowDefinitionNode,
+    steps: StepsRecord,
+    resolvedInputs: Record<string, unknown>,
+  ) => void,
 ): { executor: BlockExecutor; calls: string[] } {
   const calls: string[] = [];
-  const executor: BlockExecutor = async (block, steps) => {
+  const executor: BlockExecutor = async (block, steps, resolvedInputs) => {
     calls.push(block.id);
-    onCall?.(block, steps);
+    onCall?.(block, steps, resolvedInputs);
     return overrides[block.id] ?? { kind: "next", output: { status: "ok", id: block.id } };
   };
   return { executor, calls };
@@ -127,6 +141,243 @@ describe("buildRuntimeGraph", () => {
   });
 });
 
+describe("executeGraph output contracts", () => {
+  it("rejects an invalid trigger output before starting downstream execution", async () => {
+    const graph = graphFrom(
+      [node("trig", "trigger_ticket_ai"), node("after", "send_slack_message")],
+      [{ from: "trig", to: "after" }],
+    );
+    const rec = makeRecorder();
+    const { executor, calls } = makeExecutor();
+
+    const result = await executeGraphWithContractValidation({
+      graph,
+      entryTriggerId: "trig",
+      triggerOutput: { status: "ok" },
+      executeBlock: executor,
+      hooks: rec.hooks,
+    });
+
+    expect(result.outcome).toBe("stopped");
+    expect(calls).toEqual([]);
+    expect(result.steps.trig).toBeUndefined();
+    expect(rec.failures).toEqual([
+      expect.objectContaining({ phase: "contract", nodeId: "trig" }),
+    ]);
+  });
+
+  it.each([
+    ["next", { kind: "next", output: { status: "sent" } }],
+    [
+      "needs_human_input",
+      {
+        kind: "needs_human_input",
+        output: { status: "needs_human_input" },
+        questions: ["continue?"],
+      },
+    ],
+    ["ended", { kind: "ended", output: { status: "waiting" } }],
+  ] as const)("rejects an invalid %s executor output before recording or routing", async (_kind, invalid) => {
+    const graph = graphFrom(
+      [
+        node("trig", "trigger_ticket_ai"),
+        node("action", "send_slack_message"),
+        node("after", "send_slack_message"),
+      ],
+      [
+        { from: "trig", to: "action" },
+        { from: "action", to: "after" },
+        { from: "action", to: "after", fromPort: "failed" },
+      ],
+    );
+    const rec = makeRecorder();
+    const { executor, calls } = makeExecutor({ action: invalid as BlockExecutionResult });
+
+    const result = await executeGraphWithContractValidation({
+      graph,
+      entryTriggerId: "trig",
+      triggerOutput: { status: "fired", ticketKey: "AIW-103" },
+      executeBlock: executor,
+      hooks: rec.hooks,
+    });
+
+    expect(result.outcome).toBe("stopped");
+    expect(calls).toEqual(["action"]);
+    expect(result.steps.action).toBeUndefined();
+    expect(rec.finishes).toHaveLength(1);
+    expect(rec.finishes[0]).toMatchObject({
+      nodeId: "action",
+      state: { status: "fail" },
+    });
+    expect(rec.finishes[0]?.state.output).toBeUndefined();
+    expect(rec.failures).toEqual([
+      expect.objectContaining({ phase: "contract", nodeId: "action" }),
+    ]);
+    expect(rec.clarifications).toEqual([]);
+  });
+
+  it("requires fields guaranteed by a normal output contract", async () => {
+    const graph = graphFrom(
+      [node("trig", "trigger_ticket_ai"), node("comment", "post_pr_comment", { body: "done" })],
+      [{ from: "trig", to: "comment" }],
+    );
+    const rec = makeRecorder();
+
+    const result = await executeGraphWithContractValidation({
+      graph,
+      entryTriggerId: "trig",
+      triggerOutput: { status: "fired", ticketKey: "AIW-103" },
+      executeBlock: async () => ({ kind: "next", output: { status: "ok" } }),
+      hooks: rec.hooks,
+    });
+
+    expect(result.outcome).toBe("stopped");
+    expect(rec.failures[0]).toMatchObject({ phase: "contract", nodeId: "comment" });
+    expect(rec.failures[0]?.reason).toContain("output.comments is required");
+  });
+
+  it("does not require normal-only fields from an authored failure output", async () => {
+    const graph = graphFrom(
+      [
+        node("trig", "trigger_ticket_ai"),
+        node("comment", "post_pr_comment", { body: "done" }),
+        node("recover", "send_slack_message", { message: "failed" }),
+      ],
+      [
+        { from: "trig", to: "comment" },
+        { from: "comment", to: "recover", fromPort: "failed" },
+      ],
+    );
+    const rec = makeRecorder();
+
+    const result = await executeGraphWithContractValidation({
+      graph,
+      entryTriggerId: "trig",
+      triggerOutput: { status: "fired", ticketKey: "AIW-103" },
+      executeBlock: async (block) =>
+        block.id === "comment"
+          ? { kind: "failed", output: { status: "failed" }, reason: "provider rejected" }
+          : { kind: "next", output: { status: "ok" } },
+      hooks: rec.hooks,
+    });
+
+    expect(result.outcome).toBe("completed");
+    expect(rec.failures).toEqual([]);
+  });
+
+  it("routes a thrown executor error through an authored failure edge", async () => {
+    const graph = graphFrom(
+      [
+        node("trig", "trigger_ticket_ai"),
+        node("comment", "post_ticket_comment", { body: "done" }),
+        node("recover", "send_slack_message", { message: "failed" }),
+      ],
+      [
+        { from: "trig", to: "comment" },
+        { from: "comment", to: "recover", fromPort: "failed" },
+      ],
+    );
+    const rec = makeRecorder();
+    const calls: string[] = [];
+
+    const result = await executeGraphWithContractValidation({
+      graph,
+      entryTriggerId: "trig",
+      triggerOutput: { status: "fired", ticketKey: "AIW-103" },
+      executeBlock: async (block) => {
+        calls.push(block.id);
+        if (block.id === "comment") throw new Error("provider rejected the comment");
+        return { kind: "next", output: { status: "ok" } };
+      },
+      hooks: rec.hooks,
+    });
+
+    expect(result.outcome).toBe("completed");
+    expect(calls).toEqual(["comment", "recover"]);
+    expect(result.steps.comment?.output).toEqual({ status: "failed" });
+    expect(rec.finishes.find((finish) => finish.nodeId === "comment")?.state).toMatchObject({
+      status: "fail",
+      error: "provider rejected the comment",
+    });
+    expect(rec.failures).toEqual([]);
+  });
+
+  it.each([
+    [
+      "budget exhaustion",
+      new RunBudgetError({
+        status: "budget_exceeded",
+        metric: "tokens",
+        limit: 10,
+        consumed: 11,
+        reason: "budget exceeded",
+      }),
+    ],
+    ["exact-owner loss", new ActiveRunOwnerError()],
+    ["Workflow cancellation", new WorkflowRunCancelledError("wrun-1")],
+  ])("does not route %s through an authored failure edge", async (_label, controlError) => {
+    const graph = graphFrom(
+      [
+        node("trig", "trigger_ticket_ai"),
+        node("comment", "post_ticket_comment", { body: "done" }),
+        node("recover", "send_slack_message", { message: "failed" }),
+      ],
+      [
+        { from: "trig", to: "comment" },
+        { from: "comment", to: "recover", fromPort: "failed" },
+      ],
+    );
+    const rec = makeRecorder();
+    const calls: string[] = [];
+
+    await expect(
+      executeGraphWithContractValidation({
+        graph,
+        entryTriggerId: "trig",
+        triggerOutput: { status: "fired", ticketKey: "AIW-103" },
+        executeBlock: async (block) => {
+          calls.push(block.id);
+          throw controlError;
+        },
+        hooks: rec.hooks,
+        shouldRethrowExecutionError: isRunControlError,
+      }),
+    ).rejects.toBe(controlError);
+
+    expect(calls).toEqual(["comment"]);
+    expect(rec.failures).toEqual([]);
+    expect(rec.finishes).toEqual([]);
+  });
+
+  it("applies the default failure exit when a thrown executor error has no failure edge", async () => {
+    const graph = graphFrom(
+      [node("trig", "trigger_ticket_ai"), node("comment", "post_ticket_comment", { body: "done" })],
+      [{ from: "trig", to: "comment" }],
+    );
+    const rec = makeRecorder();
+
+    const result = await executeGraphWithContractValidation({
+      graph,
+      entryTriggerId: "trig",
+      triggerOutput: { status: "fired", ticketKey: "AIW-103" },
+      executeBlock: async () => {
+        throw new Error("provider rejected the comment");
+      },
+      hooks: rec.hooks,
+    });
+
+    expect(result.outcome).toBe("stopped");
+    expect(result.steps.comment?.output).toEqual({ status: "failed" });
+    expect(rec.failures).toEqual([
+      {
+        phase: "post_ticket_comment",
+        reason: "provider rejected the comment",
+        nodeId: "comment",
+      },
+    ]);
+  });
+});
+
 describe("executeGraph linear walk", () => {
   it("executes a V1-shaped chain in order and completes", async () => {
     const nodes = [
@@ -162,6 +413,123 @@ describe("executeGraph linear walk", () => {
       ["impl", "pr", "plan", "status", "trig"].sort(),
     );
     expect(result.steps.trig.output).toEqual({ status: "ok" });
+  });
+
+  it("resumes at the waiting node with prior outputs and the human answer", async () => {
+    const graph = graphFrom(
+      [
+        node("trig", "trigger_ticket_ai"),
+        node("before", "prepare_workspace"),
+        node("waiting", "implementation_agent"),
+        node("after", "run_checks"),
+      ],
+      [
+        { from: "trig", to: "before" },
+        { from: "before", to: "waiting" },
+        { from: "waiting", to: "after" },
+      ],
+    );
+    const rec = makeRecorder();
+    const calls: string[] = [];
+    const seenSteps: string[][] = [];
+    const seenAnswers: Array<string | undefined> = [];
+    const executor: BlockExecutor = async (block, steps, _inputs, execution) => {
+      calls.push(block.id);
+      seenSteps.push(Object.keys(steps).sort());
+      seenAnswers.push(execution?.clarificationAnswer);
+      return { kind: "next", output: { status: "ok", id: block.id } };
+    };
+
+    const result = await executeGraph({
+      graph,
+      entryTriggerId: "trig",
+      triggerOutput: { status: "fired", ticketKey: "AIW-96" },
+      resume: {
+        waitingNodeId: "waiting",
+        clarificationAnswer: "Keep both conflict sides and add a regression test.",
+        priorSteps: {
+          trig: { output: { status: "fired", ticketKey: "AIW-96" } },
+          before: { output: { status: "ready", sandboxId: "sbx_source" } },
+        },
+      },
+      executeBlock: executor,
+      hooks: rec.hooks,
+    });
+
+    expect(result.outcome).toBe("completed");
+    expect(Object.getPrototypeOf(result.steps)).toBeNull();
+    expect(calls).toEqual(["waiting", "after"]);
+    expect(seenSteps[0]).toEqual(["before", "trig"]);
+    expect(seenAnswers).toEqual([
+      "Keep both conflict sides and add a regression test.",
+      undefined,
+    ]);
+    expect(result.steps.before.output).toEqual({ status: "ready", sandboxId: "sbx_source" });
+    expect(result.steps.waiting.output).toEqual({ status: "ok", id: "waiting" });
+  });
+
+  it("consumes a human_question answer once and continues downstream", async () => {
+    const graph = graphFrom(
+      [
+        node("trig", "trigger_ticket_ai"),
+        node("waiting", "human_question", { questions: ["Which region?"] }),
+        node("after", "send_slack_message"),
+      ],
+      [
+        { from: "trig", to: "waiting" },
+        { from: "waiting", to: "after" },
+      ],
+    );
+    const rec = makeRecorder();
+    const { executor, calls } = makeExecutor();
+    const result = await executeGraph({
+      graph,
+      entryTriggerId: "trig",
+      triggerOutput: { status: "fired" },
+      resume: {
+        waitingNodeId: "waiting",
+        clarificationAnswer: "eu-central",
+        priorSteps: { trig: { output: { status: "fired" } } },
+      },
+      executeBlock: executor,
+      hooks: rec.hooks,
+    });
+
+    expect(result.outcome).toBe("completed");
+    expect(calls).toEqual(["after"]);
+    expect(result.steps.waiting.output).toEqual({
+      status: "answered",
+      answer: "eu-central",
+    });
+    expect(rec.clarifications).toEqual([]);
+  });
+
+  it("does not park again when resuming a terminate(waiting_for_human) node", async () => {
+    const graph = graphFrom(
+      [
+        node("trig", "trigger_ticket_ai"),
+        node("waiting", "terminate", { terminalStatus: "waiting_for_human" }),
+      ],
+      [{ from: "trig", to: "waiting" }],
+    );
+    const rec = makeRecorder();
+    const { executor } = makeExecutor();
+    const result = await executeGraph({
+      graph,
+      entryTriggerId: "trig",
+      triggerOutput: { status: "fired" },
+      resume: {
+        waitingNodeId: "waiting",
+        clarificationAnswer: "continue",
+        priorSteps: { trig: { output: { status: "fired" } } },
+      },
+      executeBlock: executor,
+      hooks: rec.hooks,
+    });
+
+    expect(result.outcome).toBe("completed");
+    expect(result.steps.waiting.output).toEqual({ status: "done", answer: "continue" });
+    expect(rec.terminations).toEqual([]);
   });
 });
 
@@ -373,6 +741,103 @@ describe("executeGraph loop", () => {
     expect(finishStatuses(rec, "loop")).toEqual(["ok", "ok", "warn"]);
     expect(rec.failures).toEqual([]);
   });
+
+  it("resumes an exhausted human loop on its exhausted edge without replaying its body", async () => {
+    const graph = loopGraph({
+      maxAttempts: 2,
+      onExhaust: "human",
+      wireExhausted: true,
+      loopName: "Retry loop",
+    });
+    const first = makeRecorder();
+    const firstCalls: string[] = [];
+    let checkpoint:
+      | { steps: StepsRecord; controlState: { attempts: Record<string, number>; executions: number } }
+      | undefined;
+    (first.hooks as any).clarificationExit = async (
+      _questions: string[],
+      _nodeId: string,
+      _suggestions: string[] | undefined,
+      steps: StepsRecord,
+      controlState: { attempts: Record<string, number>; executions: number },
+    ) => {
+      checkpoint = { steps, controlState };
+    };
+
+    await executeGraph({
+      graph,
+      entryTriggerId: "trig",
+      triggerOutput: { status: "ok" },
+      executeBlock: async (block) => {
+        firstCalls.push(block.id);
+        return { kind: "next", output: { status: "ok" } };
+      },
+      hooks: first.hooks,
+      maxTotalExecutions: 20,
+    });
+    expect(firstCalls.filter((id) => id === "body")).toHaveLength(2);
+    expect(checkpoint).toBeDefined();
+
+    const resumed = makeRecorder();
+    const resumedCalls: string[] = [];
+    const result = await executeGraph({
+      graph,
+      entryTriggerId: "trig",
+      triggerOutput: { status: "ok" },
+      resume: {
+        waitingNodeId: "loop",
+        clarificationAnswer: "Continue downstream",
+        priorSteps: checkpoint!.steps,
+        controlState: checkpoint!.controlState,
+      } as never,
+      executeBlock: async (block) => {
+        resumedCalls.push(block.id);
+        return { kind: "next", output: { status: "ok" } };
+      },
+      hooks: resumed.hooks,
+      maxTotalExecutions: 20,
+    });
+
+    expect(result.outcome).toBe("completed");
+    expect(resumedCalls).toEqual(["end"]);
+    expect(result.steps.loop.output).toMatchObject({
+      status: "exhausted",
+      attempt: 2,
+      answer: "Continue downstream",
+    });
+  });
+
+  it("carries the total execution cap across a clarification continuation", async () => {
+    const graph = graphFrom(
+      [
+        node("trig", "trigger_ticket_ai"),
+        node("waiting", "implementation_agent"),
+        node("after", "open_pr"),
+      ],
+      [
+        { from: "trig", to: "waiting" },
+        { from: "waiting", to: "after" },
+      ],
+    );
+    const rec = makeRecorder();
+    const result = await executeGraph({
+      graph,
+      entryTriggerId: "trig",
+      triggerOutput: { status: "ok" },
+      resume: {
+        waitingNodeId: "waiting",
+        clarificationAnswer: "go",
+        priorSteps: { trig: { output: { status: "ok" } } },
+        controlState: { attempts: { waiting: 1 }, executions: 2 },
+      } as never,
+      executeBlock: async () => ({ kind: "next", output: { status: "ok" } }),
+      hooks: rec.hooks,
+      maxTotalExecutions: 2,
+    });
+
+    expect(result.outcome).toBe("stopped");
+    expect(rec.failures[0]?.reason).toMatch(/maximum of 2 block executions/);
+  });
 });
 
 describe("executeGraph failure port override", () => {
@@ -450,6 +915,47 @@ describe("executeGraph human input and ended", () => {
     expect(finishStatuses(rec, "plan")).toEqual(["warn"]);
     expect(rec.finishes[0].state.error).toBe("Q1; Q2");
     expect(rec.failures).toEqual([]);
+  });
+
+  it("hands the durable checkpoint hook every safe predecessor output", async () => {
+    const graph = graphFrom(
+      [
+        node("trig", "trigger_ticket_ai"),
+        node("before", "prepare_workspace"),
+        node("waiting", "implementation_agent"),
+      ],
+      [
+        { from: "trig", to: "before" },
+        { from: "before", to: "waiting" },
+      ],
+    );
+    const rec = makeRecorder();
+    let checkpointSteps: StepsRecord | undefined;
+    rec.hooks.clarificationExit = async (_questions, _nodeId, _suggestions, steps) => {
+      checkpointSteps = steps;
+    };
+    const { executor } = makeExecutor({
+      before: { kind: "next", output: { status: "ready", workspace: "kept" } },
+      waiting: {
+        kind: "needs_human_input",
+        output: { status: "needs_human_input" },
+        questions: ["Which side?"],
+      },
+    });
+
+    await executeGraph({
+      graph,
+      entryTriggerId: "trig",
+      triggerOutput: { status: "fired" },
+      executeBlock: executor,
+      hooks: rec.hooks,
+    });
+
+    expect(checkpointSteps).toEqual({
+      trig: { output: { status: "fired" } },
+      before: { output: { status: "ready", workspace: "kept" } },
+      waiting: { output: { status: "needs_human_input" } },
+    });
   });
 
   it("forwards suggestedAnswers to clarificationExit when the result carries them", async () => {
@@ -593,6 +1099,136 @@ describe("executeGraph execution cap", () => {
 });
 
 describe("executeGraph steps propagation", () => {
+  it("resolves trigger, step, and run bindings before invoking an executor", async () => {
+    const target = node("target", "send_slack_message");
+    target.inputs = {
+      fromTrigger: "trigger.review.body",
+      fromStep: "steps.source.output.data.summary",
+      fromRun: "run.defaultAgent.model",
+    };
+    const graph = graphFrom(
+      [node("trig", "trigger_pr_review"), node("source", "generic_agent"), target],
+      [
+        { from: "trig", to: "source" },
+        { from: "source", to: "target" },
+      ],
+    );
+    const rec = makeRecorder();
+    let received: Record<string, unknown> | undefined;
+    const { executor } = makeExecutor(
+      { source: { kind: "next", output: { status: "ok", data: { summary: "ready" } } } },
+      (block, _steps, resolvedInputs) => {
+        if (block.id === "target") received = resolvedInputs;
+      },
+    );
+
+    const result = await executeGraph({
+      graph,
+      entryTriggerId: "trig",
+      triggerOutput: { status: "fired", review: { body: "please fix" } },
+      runValues: {
+        id: "run-1",
+        branchName: "ai-workflow/AIW-92",
+        defaultAgent: { provider: "codex", model: "gpt-5-codex" },
+      },
+      executeBlock: executor,
+      hooks: rec.hooks,
+    });
+
+    expect(result.outcome).toBe("completed");
+    expect(received).toEqual({
+      fromTrigger: "please fix",
+      fromStep: "ready",
+      fromRun: "gpt-5-codex",
+    });
+  });
+
+  it("fails closed in the bindings phase without invoking the executor", async () => {
+    const target = node("target", "send_slack_message");
+    target.inputs = { message: "trigger.missing" };
+    const graph = graphFrom(
+      [node("trig", "trigger_ticket_ai"), target],
+      [{ from: "trig", to: "target" }],
+    );
+    const rec = makeRecorder();
+    const { executor, calls } = makeExecutor();
+
+    const result = await executeGraph({
+      graph,
+      entryTriggerId: "trig",
+      triggerOutput: { status: "fired" },
+      runValues: {
+        id: "run-1",
+        branchName: "branch",
+        defaultAgent: { provider: "claude", model: "model" },
+      },
+      executeBlock: executor,
+      hooks: rec.hooks,
+    });
+
+    expect(result.outcome).toBe("stopped");
+    expect(calls).toEqual([]);
+    expect(rec.failures).toEqual([
+      {
+        phase: "bindings",
+        reason: 'binding "trigger.missing" could not be resolved',
+        nodeId: "target",
+      },
+    ]);
+    expect(finishStatuses(rec, "target")).toEqual(["fail"]);
+  });
+
+  it("resolves loop bindings from the latest step output on every iteration", async () => {
+    const consumer = node("consumer", "send_slack_message");
+    consumer.inputs = { message: "steps.producer.output.value" };
+    const graph = graphFrom(
+      [
+        node("trig", "trigger_ticket_ai"),
+        node("loop", "loop", { maxAttempts: 2, onExhaust: "continue" }),
+        node("producer", "generic_agent"),
+        consumer,
+        node("done", "terminate", { terminalStatus: "done" }),
+      ],
+      [
+        { from: "trig", to: "loop" },
+        { from: "loop", to: "producer", fromPort: "continue" },
+        { from: "producer", to: "consumer" },
+        { from: "consumer", to: "loop" },
+        { from: "loop", to: "done", fromPort: "exhausted" },
+      ],
+    );
+    const rec = makeRecorder();
+    const seen: unknown[] = [];
+    let producerAttempt = 0;
+    const executor: BlockExecutor = async (
+      block,
+      _steps,
+      resolvedInputs,
+    ): Promise<BlockExecutionResult> => {
+      if (block.id === "producer") {
+        producerAttempt += 1;
+        return { kind: "next", output: { status: "ok", value: producerAttempt } };
+      }
+      if (block.id === "consumer") seen.push(resolvedInputs.message);
+      return { kind: "next", output: { status: "ok" } };
+    };
+
+    await executeGraph({
+      graph,
+      entryTriggerId: "trig",
+      triggerOutput: { status: "fired" },
+      runValues: {
+        id: "run-1",
+        branchName: "branch",
+        defaultAgent: { provider: "claude", model: "model" },
+      },
+      executeBlock: executor,
+      hooks: rec.hooks,
+    });
+
+    expect(seen).toEqual([1, 2]);
+  });
+
   it("lets later blocks read earlier outputs and increments loop attempts", async () => {
     const graph = graphFrom(
       [

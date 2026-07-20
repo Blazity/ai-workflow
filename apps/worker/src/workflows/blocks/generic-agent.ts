@@ -2,7 +2,13 @@ import { z } from "zod";
 import type { JsonValue } from "@shared/contracts";
 import type { AgentKind } from "../../sandbox/agents/index.js";
 import type { PhaseArtifactPaths, PhaseUsage } from "../../sandbox/agents/types.js";
+import {
+  validateBlockOutputForDefinition,
+  workflowBlockDefinitionIssue,
+} from "../../workflow-definition/block-registry.js";
 import { resolveBlockAgent } from "../../workflow-definition/resolve-agent.js";
+import { ensureAgentSandbox } from "./agent-sandbox.js";
+import { isRunControlError } from "../run-control-error.js";
 import { pollPhaseUntilDone } from "./poll-phase.js";
 import { sanitizeBlockId, type BlockExecuteFn, type BlockExecutionResult } from "./types.js";
 
@@ -10,8 +16,9 @@ export const paramsSchema = z
   .object({
     provider: z.enum(["claude", "codex"]).optional(),
     model: z.string().trim().max(200).regex(/^[A-Za-z0-9._:\/-]+$/).optional(),
-    prompt: z.string().min(1),
+    prompt: z.string().optional(),
     outputSchema: z.string().optional(),
+    workspaceMode: z.enum(["none", "read_write"]).default("none"),
   })
   .strict();
 
@@ -92,7 +99,7 @@ async function blockGenericAgentStartPhaseStep(
   inputContent: string,
   scriptPath: string,
   scriptContent: string,
-): Promise<void> {
+): Promise<string> {
   "use step";
   const { Sandbox } = await import("@vercel/sandbox");
   const { getSandboxCredentials } = await import("../../sandbox/credentials.js");
@@ -103,12 +110,13 @@ async function blockGenericAgentStartPhaseStep(
     { path: scriptPath, content: Buffer.from(scriptContent) },
   ]);
   await sandbox.runCommand("chmod", ["+x", scriptPath]);
-  await sandbox.runCommand({
+  const command = await sandbox.runCommand({
     cmd: "bash",
     args: [scriptPath],
     cwd: "/vercel/sandbox",
     detached: true,
   });
+  return command.cmdId;
 }
 blockGenericAgentStartPhaseStep.maxRetries = 0;
 
@@ -131,10 +139,17 @@ async function blockGenericAgentParseStep(
  * prompt param is written verbatim as the phase input file. Without an
  * outputSchema param the phase uses GENERIC_SCHEMA and its status maps to
  * next / needs_human_input / failed; with a custom schema the parsed object is
- * wrapped as { status: "ok", data }. The outputSchema string is validated with
- * JSON.parse before anything reaches the agent CLI.
+ * returned at the top level with the reserved runtime status plus a compatibility
+ * `data` alias. The outputSchema string is validated before anything reaches
+ * the agent CLI.
  */
-export const execute: BlockExecuteFn = async (block, _steps, ctx): Promise<BlockExecutionResult> => {
+export const execute: BlockExecuteFn = async (
+  block,
+  _steps,
+  ctx,
+  resolvedInputs = {},
+  execution,
+): Promise<BlockExecutionResult> => {
   const customSchema =
     typeof block.params.outputSchema === "string" && block.params.outputSchema.trim().length > 0
       ? block.params.outputSchema
@@ -145,22 +160,58 @@ export const execute: BlockExecuteFn = async (block, _steps, ctx): Promise<Block
     } catch {
       return { kind: "failed", output: { status: "failed" }, reason: "invalid outputSchema" };
     }
+    const definitionIssue = workflowBlockDefinitionIssue(block.type, block.params);
+    if (definitionIssue) {
+      return {
+        kind: "failed",
+        output: { status: "failed" },
+        reason: `invalid outputSchema: ${definitionIssue}`,
+      };
+    }
   }
 
-  if (!ctx.sandboxId) {
+  const { kind, model } = resolveBlockAgent(block.params, ctx.runDefaultKind, ctx.defaults);
+  // Missing workspaceMode is a deployed PR #118 definition and deliberately
+  // retains its old code-workspace behavior. New blocks receive `none` from
+  // the registry/schema defaults.
+  const workspaceMode = block.params.workspaceMode === "none" ? "none" : "read_write";
+  let sandboxId: string | null;
+  try {
+    sandboxId =
+      workspaceMode === "none"
+        ? ctx.agentSandboxIds[kind] ?? (await ensureAgentSandbox(ctx, kind, model))
+        : ctx.sandboxId;
+  } catch (err) {
+    if (isRunControlError(err)) throw err;
     return {
       kind: "failed",
       output: { status: "failed" },
-      reason: "no workspace: connect prepare_workspace before generic_agent",
+      reason: err instanceof Error ? err.message : String(err),
     };
   }
-  const sandboxId = ctx.sandboxId;
-  const prompt = typeof block.params.prompt === "string" ? block.params.prompt : "";
+  if (!sandboxId) {
+    return {
+      kind: "failed",
+      output: { status: "failed" },
+      reason:
+        workspaceMode === "read_write"
+          ? "no workspace: connect prepare_workspace before generic_agent"
+          : "could not provision an agent-only sandbox for generic_agent",
+    };
+  }
+  const basePrompt =
+    typeof resolvedInputs.prompt === "string"
+      ? resolvedInputs.prompt
+      : typeof block.params.prompt === "string"
+        ? block.params.prompt
+        : "";
+  const prompt = execution?.clarificationAnswer
+    ? `${basePrompt}\n\nHuman clarification answer:\n${execution.clarificationAnswer}`
+    : basePrompt;
   if (prompt.length === 0) {
     return { kind: "failed", output: { status: "failed" }, reason: "generic_agent requires a prompt" };
   }
 
-  const { kind, model } = resolveBlockAgent(block.params, ctx.runDefaultKind, ctx.defaults);
   // Artifact phase must be shell/file-safe (drives /tmp paths); telemetry label
   // must stay unique per block. Two block ids that sanitize to the same token
   // would collide and lose usage attribution, so keep the raw id for telemetry.
@@ -176,12 +227,24 @@ export const execute: BlockExecuteFn = async (block, _steps, ctx): Promise<Block
     // it), so the same graph would commit or not depending on block order. Only
     // committed work is pushed, so an unguarded agent's changes are dropped
     // silently; the guard is a no-op when the agent leaves a clean tree.
-    await blockGenericAgentCommitGuardStep(sandboxId, kind, true);
+    await blockGenericAgentCommitGuardStep(sandboxId, kind, workspaceMode === "read_write");
     const { paths, script } = await blockGenericAgentPlanPhaseStep(kind, phase, model, jsonSchema);
-    await blockGenericAgentStartPhaseStep(sandboxId, paths.input, prompt, paths.wrapper, script);
+    const commandId = await blockGenericAgentStartPhaseStep(
+      sandboxId,
+      paths.input,
+      prompt,
+      paths.wrapper,
+      script,
+    );
     ctx.markLaunched(usageLabel);
 
-    const done = await pollPhaseUntilDone(sandboxId, paths.sentinel, MAX_MINUTES);
+    const done = await pollPhaseUntilDone(
+      sandboxId,
+      paths.sentinel,
+      MAX_MINUTES,
+      commandId,
+      ctx.observeBudget,
+    );
     if (!done) {
       return { kind: "failed", output: { status: "failed" }, reason: "agent phase timed out" };
     }
@@ -192,14 +255,34 @@ export const execute: BlockExecuteFn = async (block, _steps, ctx): Promise<Block
     ctx.recordUsage(usageLabel, usage, model);
 
     if (customSchema !== undefined) {
-      if (object === undefined || object === null) {
+      if (object === undefined) {
         return {
           kind: "failed",
           output: { status: "failed" },
           reason: "agent output did not match the requested schema",
         };
       }
-      return { kind: "next", output: { status: "ok", data: object as JsonValue } };
+      if (object === null || typeof object !== "object" || Array.isArray(object)) {
+        return {
+          kind: "failed",
+          output: { status: "failed" },
+          reason: "agent output did not match the requested schema",
+        };
+      }
+      const data = object as Record<string, JsonValue>;
+      const output = { ...data, status: "completed", data } as const;
+      if (
+        validateBlockOutputForDefinition(block.type, block.params, output, {
+          requireNormalOutput: true,
+        }).length > 0
+      ) {
+        return {
+          kind: "failed",
+          output: { status: "failed" },
+          reason: "agent output did not match the requested schema",
+        };
+      }
+      return { kind: "next", output };
     }
 
     const parsed = genericOutputSchema.safeParse(object);
@@ -237,11 +320,12 @@ export const execute: BlockExecuteFn = async (block, _steps, ctx): Promise<Block
     return {
       kind: "next",
       output: {
-        status: "ok",
-        ...(parsed.data.body ? { body: parsed.data.body.slice(0, 4000) } : {}),
+        status: "completed",
+        body: parsed.data.body.slice(0, 4000),
       },
     };
   } catch (err) {
+    if (isRunControlError(err)) throw err;
     return {
       kind: "failed",
       output: { status: "failed" },

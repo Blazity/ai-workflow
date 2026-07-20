@@ -46,7 +46,13 @@ vi.mock("../../lib/step-adapters.js", () => ({
 import type { SelectedRepository } from "../../adapters/vcs/repository-directory.js";
 import { execute, paramsSchema } from "./prepare-workspace.js";
 import { teardownSandboxes } from "../../sandbox/poll-agent.js";
-import { makeCtx, makeNode, makePrPayload } from "./test-support.js";
+import {
+  expectOutputConformsToRegistry,
+  makeCtx,
+  makeNode,
+  makePrPayload,
+  runControlErrorCases,
+} from "./test-support.js";
 
 const repo: SelectedRepository = {
   provider: "github",
@@ -70,7 +76,25 @@ describe("prepare_workspace execute", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.buildSandboxProviderConfigs.mockResolvedValue([]);
-    mocks.provisionMultiRepo.mockResolvedValue({ sandboxId: "sbx-9" });
+    mocks.provisionMultiRepo.mockImplementation(async (...args: unknown[]) => {
+      const lifecycle = args[4] as
+        | { onCreated?: (sandboxId: string) => Promise<void> }
+        | undefined;
+      await lifecycle?.onCreated?.("sbx-9");
+      return {
+        sandbox: { sandboxId: "sbx-9" },
+        workspaceManifest: {
+          version: 1,
+          repositories: [{
+            ...repo,
+            slug: "acme__api",
+            localPath: "/vercel/sandbox",
+            branchName: "blazebot/awt-1",
+            preAgentSha: "trusted-sha",
+          }],
+        },
+      };
+    });
   });
 
   it("selects repos, provisions the sandbox, registers it, and mutates the ctx", async () => {
@@ -99,16 +123,69 @@ describe("prepare_workspace execute", () => {
       "AWT-1",
       "blazebot/awt-1",
       [repo],
+      {
+        subjectKey: "ticket:jira:AWT-1",
+        ownerToken: "owner:test",
+        runId: "run-1",
+      },
     );
-    expect(mocks.registerSandbox).toHaveBeenCalledWith("AWT-1", "sbx-9");
+    expect(mocks.registerSandbox).toHaveBeenCalledWith(
+      "ticket:jira:AWT-1",
+      "owner:test",
+      "sbx-9",
+    );
     expect(ctx.sandboxId).toBe("sbx-9");
+    expect(ctx.workspaceManifest).toEqual({
+      version: 1,
+      repositories: [expect.objectContaining({
+        repoPath: "acme/api",
+        branchName: "blazebot/awt-1",
+        preAgentSha: "trusted-sha",
+      })],
+    });
     expect(ctx.selectedRepositories).toEqual([repo]);
     expect(ctx.repositoryContexts).toEqual(contextsFor(repo));
     expect(ctx.preSandboxAdditions).toEqual(promptAdditions);
     expect(result).toEqual({
       kind: "next",
-      output: { status: "ok", sandboxId: "sbx-9", repositories: ["github:acme/api"] },
+      output: {
+        status: "ok",
+        sandboxId: "sbx-9",
+        repositories: ["github:acme/api"],
+        workspace: { id: "sbx-9", repositories: ["github:acme/api"] },
+      },
     });
+    expectOutputConformsToRegistry("prepare_workspace", result.output);
+  });
+
+  it("passes the clarification answer back into pre-sandbox repository selection", async () => {
+    mocks.runPreSandboxPhase.mockResolvedValue({
+      status: "continue",
+      promptAdditions: { research: [], implementation: [], review: [] },
+      selectedRepositories: [repo],
+    });
+    mocks.blockFetchPrContextsStep.mockResolvedValue(contextsFor(repo));
+
+    await (execute as any)(
+      makeNode("prepare_workspace"),
+      {},
+      makeCtx({ sandboxId: null }),
+      {},
+      { clarificationAnswer: "Use github:acme/api" },
+    );
+
+    expect(mocks.runPreSandboxPhase).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ticket: expect.objectContaining({
+          comments: expect.arrayContaining([
+            expect.objectContaining({
+              author: "Human clarification",
+              body: "Use github:acme/api",
+            }),
+          ]),
+        }),
+      }),
+    );
   });
 
   it("marks conflicted repositories with a mergeBase", async () => {
@@ -145,36 +222,104 @@ describe("prepare_workspace execute", () => {
     expect(kinds).toContain("codex");
   });
 
-  it("accumulates every provisioned sandbox on ctx.sandboxIds across loop iterations, and teardown covers all", async () => {
-    // A prepare_workspace inside a loop runs once per iteration, provisioning a
-    // fresh sandbox each time and overwriting ctx.sandboxId. All of them must be
-    // tracked so the run tears them all down, not just the last.
+  it("does not install planning or workspace-free Generic providers into the code workspace", async () => {
+    mocks.runPreSandboxPhase.mockResolvedValue({
+      status: "continue",
+      selectedRepositories: [repo],
+    });
+    mocks.blockFetchPrContextsStep.mockResolvedValue(contextsFor(repo));
+    const ctx = makeCtx({
+      sandboxId: null,
+      definitionNodes: [
+        makeNode("planning_agent", { provider: "codex" }, "plan-1"),
+        makeNode(
+          "generic_agent",
+          { provider: "codex", prompt: "Summarize", workspaceMode: "none" },
+          "generic-1",
+        ),
+        makeNode("implementation_agent", { provider: "claude" }, "impl-1"),
+      ],
+    });
+
+    await execute(makeNode("prepare_workspace"), {}, ctx);
+
+    expect(mocks.createAgentAdapter).not.toHaveBeenCalledWith("codex");
+    expect(mocks.createAgentAdapter).toHaveBeenCalledWith("claude");
+  });
+
+  it("is idempotent and reuses an already attached workspace", async () => {
     mocks.runPreSandboxPhase.mockResolvedValue({ status: "continue", selectedRepositories: [repo] });
     mocks.blockFetchPrContextsStep.mockResolvedValue(contextsFor(repo));
-    mocks.provisionMultiRepo
-      .mockResolvedValueOnce({ sandboxId: "sbx-a" })
-      .mockResolvedValueOnce({ sandboxId: "sbx-b" });
+    mocks.provisionMultiRepo.mockResolvedValueOnce({
+      sandbox: { sandboxId: "sbx-a" },
+      workspaceManifest: {
+        version: 1,
+        repositories: [{
+          ...repo,
+          slug: "acme__api",
+          localPath: "/vercel/sandbox",
+          branchName: "blazebot/awt-1",
+          preAgentSha: "trusted-sha",
+        }],
+      },
+    });
 
     const ctx = makeCtx({ sandboxId: null, sandboxIds: new Set<string>() });
 
-    await execute(makeNode("prepare_workspace"), {}, ctx);
-    await execute(makeNode("prepare_workspace"), {}, ctx);
+    const first = await execute(makeNode("prepare_workspace"), {}, ctx);
+    const second = await execute(makeNode("prepare_workspace"), {}, ctx);
 
-    expect(ctx.sandboxId).toBe("sbx-b");
-    expect([...ctx.sandboxIds]).toEqual(["sbx-a", "sbx-b"]);
+    expect(ctx.sandboxId).toBe("sbx-a");
+    expect([...ctx.sandboxIds]).toEqual(["sbx-a"]);
+    expect(mocks.provisionMultiRepo).toHaveBeenCalledTimes(1);
+    expect(mocks.registerSandbox).toHaveBeenLastCalledWith(
+      "ticket:jira:AWT-1",
+      "owner:test",
+      "sbx-a",
+    );
+    expect(second).toEqual(first);
 
     const teardown = vi.fn().mockResolvedValue(undefined);
     await teardownSandboxes(ctx.sandboxIds, teardown);
 
-    expect(teardown).toHaveBeenCalledTimes(2);
+    expect(teardown).toHaveBeenCalledTimes(1);
     expect(teardown).toHaveBeenCalledWith("sbx-a");
-    expect(teardown).toHaveBeenCalledWith("sbx-b");
   });
 
-  it("tracks the sandbox for teardown even when registering it throws", async () => {
-    // The microVM exists the moment provisioning returns. If the register step
-    // throws, the run registry never learned the id, so the engine's teardown of
-    // ctx.sandboxIds is the ONLY cleanup left: the id must already be in there.
+  it("reasserts the durable owner child for a reused code workspace", async () => {
+    const ctx = makeCtx({
+      sandboxId: "code-1",
+      agentSandboxIds: { claude: "scratch-1" },
+      sandboxIds: new Set(["scratch-1", "code-1"]),
+    });
+
+    const result = await execute(makeNode("prepare_workspace"), {}, ctx);
+
+    expect(mocks.provisionMultiRepo).not.toHaveBeenCalled();
+    expect(mocks.registerSandbox).toHaveBeenCalledWith(
+      "ticket:jira:AWT-1",
+      "owner:test",
+      "code-1",
+    );
+    expect(result.kind).toBe("next");
+  });
+
+  it.each(runControlErrorCases())(
+    "rethrows %s while reasserting a reused workspace owner",
+    async (_label, error) => {
+      mocks.registerSandbox.mockRejectedValueOnce(error);
+
+      await expect(
+        execute(
+          makeNode("prepare_workspace"),
+          {},
+          makeCtx({ sandboxId: "code-1" }),
+        ),
+      ).rejects.toBe(error);
+    },
+  );
+
+  it("fails closed when immediate durable sandbox registration throws", async () => {
     mocks.runPreSandboxPhase.mockResolvedValue({ status: "continue", selectedRepositories: [repo] });
     mocks.blockFetchPrContextsStep.mockResolvedValue(contextsFor(repo));
     mocks.registerSandbox.mockRejectedValueOnce(new Error("registry write failed"));
@@ -184,12 +329,8 @@ describe("prepare_workspace execute", () => {
 
     expect(result.kind).toBe("failed");
     if (result.kind === "failed") expect(result.reason).toBe("registry write failed");
-    expect(ctx.sandboxId).toBe("sbx-9");
-    expect([...ctx.sandboxIds]).toEqual(["sbx-9"]);
-
-    const teardown = vi.fn().mockResolvedValue(undefined);
-    await teardownSandboxes(ctx.sandboxIds, teardown);
-    expect(teardown).toHaveBeenCalledWith("sbx-9");
+    expect(ctx.sandboxId).toBeNull();
+    expect([...ctx.sandboxIds]).toEqual([]);
   });
 
   it("maps a pre-sandbox clarification halt to needs_human_input", async () => {
@@ -247,8 +388,12 @@ describe("prepare_workspace execute", () => {
       entry: {
         kind: "pr_trigger",
         triggerType: "trigger_pr_created",
+        subjectKey: "ticket:jira:AWT-1",
         ticketKey: "AWT-1",
+        ownerToken: "owner:test",
         definitionId: 1,
+        definitionVersion: 1,
+        scope: "workflow_owned",
         pr,
       },
     });
@@ -257,6 +402,41 @@ describe("prepare_workspace execute", () => {
 
     expect(mocks.blockPrTriggerRepositoriesStep).toHaveBeenCalledWith("AWT-1", pr);
     expect(mocks.runPreSandboxPhase).not.toHaveBeenCalled();
+    expect(result.kind).toBe("next");
+  });
+
+  it("prepares a review-only human PR without creating a workflow branch", async () => {
+    const pr = makePrPayload();
+    const reviewRepo: SelectedRepository = {
+      ...repo,
+      workflowOwnedBranch: {
+        branchName: pr.headRef,
+        pr: { id: pr.prNumber, url: pr.prUrl, branch: pr.headRef },
+      },
+    };
+    mocks.blockPrTriggerRepositoriesStep.mockResolvedValue([reviewRepo]);
+    mocks.blockFetchPrContextsStep.mockResolvedValue(contextsFor(reviewRepo));
+    const ctx = makeCtx({
+      sandboxId: null,
+      entry: {
+        kind: "pr_trigger",
+        triggerType: "trigger_pr_review",
+        subjectKey: "pr:github:acme/api#42",
+        ownerToken: "owner:test",
+        definitionId: 1,
+        definitionVersion: 1,
+        scope: "any",
+        pr,
+      },
+    });
+
+    const result = await execute(makeNode("prepare_workspace"), {}, ctx);
+
+    expect(mocks.blockPrTriggerRepositoriesStep).toHaveBeenCalledWith(
+      "pr:github:acme/api#42",
+      pr,
+    );
+    expect(mocks.prepareSelectedRepositoryBranches).not.toHaveBeenCalled();
     expect(result.kind).toBe("next");
   });
 
@@ -272,5 +452,18 @@ describe("prepare_workspace execute", () => {
 
     expect(result.kind).toBe("failed");
     if (result.kind === "failed") expect(result.reason).toBe("no capacity");
+  });
+
+  it.each(runControlErrorCases())("rethrows %s from provisioning", async (_label, error) => {
+    mocks.runPreSandboxPhase.mockResolvedValue({
+      status: "continue",
+      selectedRepositories: [repo],
+    });
+    mocks.blockFetchPrContextsStep.mockResolvedValue(contextsFor(repo));
+    mocks.provisionMultiRepo.mockRejectedValue(error);
+
+    await expect(
+      execute(makeNode("prepare_workspace"), {}, makeCtx({ sandboxId: null })),
+    ).rejects.toBe(error);
   });
 });

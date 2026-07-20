@@ -5,7 +5,10 @@ import type { Db } from "../../../db/client.js";
 import { member, organization, user } from "../../../db/schema.js";
 import { createTestDb } from "../../../db/test-db.js";
 import { defaultWorkflowDefinition } from "../../../workflow-definition/default.js";
-import { saveWorkflowDefinition } from "../../../workflow-definition/store.js";
+import {
+  deployWorkflowDefinition,
+  saveWorkflowDefinitionDraft,
+} from "../../../workflow-definition/store.js";
 
 const state = vi.hoisted(() => ({
   db: undefined as unknown,
@@ -18,6 +21,13 @@ const state = vi.hoisted(() => ({
     CODEX_MODEL: "gpt-5-codex",
     COLUMN_AI_REVIEW: "AI Review",
     COLUMN_BACKLOG: "Backlog",
+    ANTHROPIC_API_KEY: "sk-ant-test",
+    CODEX_API_KEY: "sk-codex-test",
+    GITHUB_APP_ID: 1,
+    GITHUB_APP_PRIVATE_KEY: "private-key",
+    GITHUB_INSTALLATION_ID: 2,
+    CHAT_SDK_SLACK_TOKEN: "slack-token",
+    CHAT_SDK_CHANNEL_ID: "channel",
   },
 }));
 
@@ -41,6 +51,10 @@ vi.mock("../../../workflow-definition/models.js", async (importOriginal) => {
       claude: ["claude-opus-4-8", "claude-sonnet-5"],
       codex: ["gpt-5-codex", "gpt-5"],
     })),
+    fetchTicketStatuses: vi.fn(async () => [
+      { id: "10010", name: "AI Review" },
+      { id: "10011", name: "Done" },
+    ]),
   };
 });
 
@@ -51,6 +65,10 @@ const detailPut = (await import("./workflow-definitions/[id].put.js")).default;
 const detailPatch = (await import("./workflow-definitions/[id].patch.js")).default;
 const detailDelete = (await import("./workflow-definitions/[id].delete.js")).default;
 const detailRestore = (await import("./workflow-definitions/[id]/restore.post.js")).default;
+const detailDeploy = (await import("./workflow-definitions/[id]/deploy.post.js")).default;
+const detailRollback = (await import("./workflow-definitions/[id]/rollback.post.js")).default;
+const detailLayout = (await import("./workflow-definitions/[id]/layout.patch.js")).default;
+const detailValidate = (await import("./workflow-definitions/[id]/validate.post.js")).default;
 const shimGet = (await import("./workflow-definition.get.js")).default;
 const shimPut = (await import("./workflow-definition.put.js")).default;
 const shimRestore = (await import("./workflow-definition/restore.post.js")).default;
@@ -58,7 +76,7 @@ const sessionGet = (await import("./session.get.js")).default;
 
 const VALID_DEFINITION = defaultWorkflowDefinition({ includeReview: false });
 const OTHER_DEFINITION = defaultWorkflowDefinition({ includeReview: true });
-const ACTOR = { actorRole: "admin" as const, actorId: "user_admin", actorLabel: "Admin" };
+const STORE_ACTOR = { role: "admin" as const, id: "user_admin", label: "Admin" };
 
 let db: Db;
 
@@ -107,6 +125,60 @@ function withUnreachableNode(def: WorkflowDefinition): WorkflowDefinition {
   };
 }
 
+function withInvalidBinding(def: WorkflowDefinition): WorkflowDefinition {
+  return {
+    ...def,
+    nodes: def.nodes.map((node) =>
+      node.type === "update_ticket_status"
+        ? { ...node, inputs: { target: "steps.ghost.output.target" } }
+        : node,
+    ),
+  };
+}
+
+function semantic(definition: WorkflowDefinition): WorkflowDefinition {
+  return {
+    ...definition,
+    nodes: definition.nodes.map((node) => ({ ...node, x: 0, y: 0 })),
+  };
+}
+
+async function saveDraft(
+  definition: WorkflowDefinition,
+  expectedDraftRevision: number,
+  definitionId = 1,
+) {
+  return saveWorkflowDefinitionDraft(db, {
+    definitionId,
+    definition,
+    expectedDraftRevision,
+    actor: STORE_ACTOR,
+  });
+}
+
+async function deployDraft(
+  expectedDraftRevision: number,
+  expectedDeployedVersion: number | null,
+  definitionId = 1,
+) {
+  return deployWorkflowDefinition(db, {
+    definitionId,
+    expectedDraftRevision,
+    expectedDeployedVersion,
+    actor: STORE_ACTOR,
+  });
+}
+
+async function saveAndDeploy(
+  definition: WorkflowDefinition,
+  expectedDraftRevision: number,
+  expectedDeployedVersion: number | null,
+  definitionId = 1,
+) {
+  const saved = await saveDraft(definition, expectedDraftRevision, definitionId);
+  return deployDraft(saved.draftRevision, expectedDeployedVersion, definitionId);
+}
+
 beforeEach(async () => {
   vi.clearAllMocks();
   state.sessionUserId = "user_admin";
@@ -143,13 +215,16 @@ describe("GET /api/v1/workflow-definitions", () => {
     expect(body.defaultDefinition.schemaVersion).toBe(1);
     expect(body.options.agentKind).toBe("claude");
     expect(body.options.defaultModel).toBe("claude-test-default");
+    expect(body.options.blockRegistry.trigger_ticket_ai.type).toBe("trigger_ticket_ai");
+    expect(body.options.blockRegistry.arthur_injection_check.availability.unavailableReason).toBeTruthy();
+    expect(body.options.runBindingSchema.properties.defaultAgent.type).toBe("object");
   });
 
-  it("reports currentVersion once a version exists", async () => {
-    await saveWorkflowDefinition(db, { ...ACTOR, definition: VALID_DEFINITION });
+  it("reports the latest saved version as currentVersion", async () => {
+    await saveAndDeploy(VALID_DEFINITION, 0, null);
     const res = await handlerFor(definitionsGet)(new Request("http://worker.test/"));
     const body = await res.json();
-    expect(body.definitions[0].currentVersion).toBe(1);
+    expect(body.definitions[0]).toMatchObject({ currentVersion: 1, deployedVersion: 1 });
   });
 });
 
@@ -160,15 +235,24 @@ describe("POST /api/v1/workflow-definitions", () => {
     );
     expect(res.status).toBe(200);
     const body = await res.json();
-    expect(body.meta).toMatchObject({ id: 2, name: "Second flow", enabled: false, currentVersion: 1 });
-    expect(body.current.version).toBe(1);
+    expect(body.meta).toMatchObject({
+      id: 2,
+      name: "Second flow",
+      enabled: false,
+      currentVersion: 1,
+      deployedVersion: null,
+      draftRevision: 1,
+      layoutRevision: 1,
+    });
+    expect(body.current).toBeNull();
+    expect(body.deployed).toBeNull();
     expect(body.versions).toHaveLength(1);
-    expect(body.current.definition.nodes.some((n: { type: string }) => n.type === "review_agent")).toBe(
+    expect(body.draft.nodes.some((n: { type: string }) => n.type === "review_agent")).toBe(
       true,
     );
   });
 
-  it("duplicates the head version of the source definition", async () => {
+  it("duplicates the mutable draft of the source definition", async () => {
     const created = await handlerFor(definitionsPost)(
       jsonRequest("POST", { name: "Source flow", source: { kind: "default" } }),
     );
@@ -179,19 +263,19 @@ describe("POST /api/v1/workflow-definitions", () => {
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.meta.id).toBe(3);
-    expect(body.current.version).toBe(1);
-    expect(body.current.definition).toEqual(createdBody.current.definition);
+    expect(body.deployed).toBeNull();
+    expect(body.draft).toEqual(createdBody.draft);
   });
 
-  it("duplicating a definition with no versions seeds the built-in default", async () => {
+  it("duplicating the fresh built-in fallback seeds an editable default draft", async () => {
     const res = await handlerFor(definitionsPost)(
       jsonRequest("POST", { name: "Copy of seed", source: { kind: "duplicate", definitionId: 1 } }),
     );
     expect(res.status).toBe(200);
     const body = await res.json();
-    expect(body.current.version).toBe(1);
-    expect(body.current.definition.nodes.some((n: { type: string }) => n.type === "trigger_ticket_ai")).toBe(true);
-    expect(body.current.definition.nodes.some((n: { type: string }) => n.type === "implementation_agent")).toBe(true);
+    expect(body.deployed).toBeNull();
+    expect(body.draft.nodes.some((n: { type: string }) => n.type === "trigger_ticket_ai")).toBe(true);
+    expect(body.draft.nodes.some((n: { type: string }) => n.type === "implementation_agent")).toBe(true);
   });
 
   it("rejects an empty name with 400", async () => {
@@ -231,12 +315,18 @@ describe("POST /api/v1/workflow-definitions", () => {
 
 describe("GET /api/v1/workflow-definitions/:id", () => {
   it("returns the detail for a known definition", async () => {
-    await saveWorkflowDefinition(db, { ...ACTOR, definition: VALID_DEFINITION });
+    await saveAndDeploy(VALID_DEFINITION, 0, null);
     const res = await paramHandler("get", "/d/:id", detailGet)(new Request("http://worker.test/d/1"));
     expect(res.status).toBe(200);
     const body = await res.json();
-    expect(body.meta.id).toBe(1);
-    expect(body.meta.currentVersion).toBe(1);
+    expect(body.meta).toMatchObject({
+      id: 1,
+      currentVersion: 1,
+      deployedVersion: 1,
+      draftRevision: 1,
+    });
+    expect(body.draft).toEqual(semantic(VALID_DEFINITION));
+    expect(body.deployed.version).toBe(1);
     expect(body.current.version).toBe(1);
     expect(body.versions).toHaveLength(1);
   });
@@ -250,46 +340,292 @@ describe("GET /api/v1/workflow-definitions/:id", () => {
 describe("PUT /api/v1/workflow-definitions/:id", () => {
   const put = paramHandler("put", "/d/:id", detailPut);
 
-  it("saves a valid definition and returns the reshaped save response", async () => {
-    let res = await put(jsonRequest("PUT", { definition: VALID_DEFINITION }, "http://worker.test/d/1"));
+  it("saves semantic drafts as immutable versions without changing deployment", async () => {
+    const limitedDefinition: WorkflowDefinition = {
+      ...VALID_DEFINITION,
+      budgets: {
+        maxDurationMs: 120_000,
+        maxTokens: 25_000,
+        maxCostUsd: 4.5,
+      },
+    };
+    let res = await put(
+      jsonRequest(
+        "PUT",
+        { definition: limitedDefinition, expectedDraftRevision: 0 },
+        "http://worker.test/d/1",
+      ),
+    );
     expect(res.status).toBe(200);
     let body = await res.json();
-    expect(body.version.version).toBe(1);
-    expect(body.version.definition).toEqual(VALID_DEFINITION);
-    expect(body.version.definitionId).toBe(1);
-    expect(body.meta).toMatchObject({ id: 1, currentVersion: 1 });
+    expect(body.draft).toEqual(semantic(limitedDefinition));
+    expect(body.meta).toMatchObject({
+      id: 1,
+      currentVersion: 1,
+      deployedVersion: null,
+      draftRevision: 1,
+    });
 
-    res = await put(jsonRequest("PUT", { definition: OTHER_DEFINITION }, "http://worker.test/d/1"));
+    res = await put(
+      jsonRequest(
+        "PUT",
+        { definition: OTHER_DEFINITION, expectedDraftRevision: 1 },
+        "http://worker.test/d/1",
+      ),
+    );
     body = await res.json();
-    expect(body.version.version).toBe(2);
-    expect(body.meta.currentVersion).toBe(2);
+    expect(body.draft).toEqual(semantic(OTHER_DEFINITION));
+    expect(body.meta).toMatchObject({ draftRevision: 2, deployedVersion: null });
+
+    const detail = await paramHandler("get", "/d/:id", detailGet)(
+      new Request("http://worker.test/d/1"),
+    );
+    expect((await detail.json()).versions.map((v: { version: number }) => v.version)).toEqual([2, 1]);
+  });
+
+  it("accepts deploy-invalid typed bindings as a draft", async () => {
+    const res = await put(
+      jsonRequest(
+        "PUT",
+        { definition: withInvalidBinding(VALID_DEFINITION), expectedDraftRevision: 0 },
+        "http://worker.test/d/1",
+      ),
+    );
+    expect(res.status).toBe(200);
+    expect((await res.json()).meta.draftRevision).toBe(1);
   });
 
   it("rejects members with 403", async () => {
     state.sessionUserId = "user_member";
-    const res = await put(jsonRequest("PUT", { definition: VALID_DEFINITION }, "http://worker.test/d/1"));
+    const res = await put(
+      jsonRequest(
+        "PUT",
+        { definition: VALID_DEFINITION, expectedDraftRevision: 0 },
+        "http://worker.test/d/1",
+      ),
+    );
     expect(res.status).toBe(403);
   });
 
   it("rejects a definition that fails the schema with 400 Invalid definition", async () => {
     const res = await put(
-      jsonRequest("PUT", { definition: withBadParam(VALID_DEFINITION) }, "http://worker.test/d/1"),
+      jsonRequest(
+        "PUT",
+        { definition: withBadParam(VALID_DEFINITION), expectedDraftRevision: 0 },
+        "http://worker.test/d/1",
+      ),
     );
     expect(res.status).toBe(400);
     expect(res.statusText).toMatch(/^Invalid definition:/);
   });
 
-  it("rejects a structurally invalid graph with 400 Invalid workflow", async () => {
+  it("accepts a structurally valid but unreachable graph as a draft", async () => {
     const res = await put(
-      jsonRequest("PUT", { definition: withUnreachableNode(VALID_DEFINITION) }, "http://worker.test/d/1"),
+      jsonRequest(
+        "PUT",
+        { definition: withUnreachableNode(VALID_DEFINITION), expectedDraftRevision: 0 },
+        "http://worker.test/d/1",
+      ),
+    );
+    expect(res.status).toBe(200);
+  });
+
+  it("404s when the definition is unknown", async () => {
+    const res = await put(
+      jsonRequest(
+        "PUT",
+        { definition: VALID_DEFINITION, expectedDraftRevision: 0 },
+        "http://worker.test/d/999",
+      ),
+    );
+    expect(res.status).toBe(404);
+  });
+
+  it("409s on a stale draft compare-and-set", async () => {
+    await saveDraft(VALID_DEFINITION, 0);
+    const res = await put(
+      jsonRequest(
+        "PUT",
+        { definition: OTHER_DEFINITION, expectedDraftRevision: 0 },
+        "http://worker.test/d/1",
+      ),
+    );
+    expect(res.status).toBe(409);
+  });
+});
+
+describe("POST /api/v1/workflow-definitions/:id/validate", () => {
+  const validate = paramHandler("post", "/d/:id/validate", detailValidate);
+
+  it("reports deployment issues without rejecting the editable draft", async () => {
+    const invalid = withInvalidBinding(VALID_DEFINITION);
+    const save = await paramHandler("put", "/d/:id", detailPut)(
+      jsonRequest(
+        "PUT",
+        { definition: invalid, expectedDraftRevision: 0 },
+        "http://worker.test/d/1",
+      ),
+    );
+    expect(save.status).toBe(200);
+
+    const res = await validate(
+      jsonRequest("POST", { definition: invalid }, "http://worker.test/d/1/validate"),
+    );
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.valid).toBe(false);
+    expect(body.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "deployment",
+          nodeId: expect.any(String),
+          message: expect.stringContaining("unknown block"),
+        }),
+      ]),
+    );
+    expect(body.nodeContracts).toMatchObject({
+      [invalid.nodes.find((node) => node.type === "update_ticket_status")!.id]: {
+        type: "update_ticket_status",
+        availability: { available: true, unavailableReason: null },
+      },
+    });
+  });
+
+  it("accepts a deployable graph", async () => {
+    const res = await validate(
+      jsonRequest("POST", { definition: VALID_DEFINITION }, "http://worker.test/d/1/validate"),
+    );
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({
+      valid: true,
+      issues: [],
+      nodeContracts: {
+        [VALID_DEFINITION.nodes[0]!.id]: {
+          type: VALID_DEFINITION.nodes[0]!.type,
+        },
+      },
+    });
+  });
+
+  it("returns structured schema issues without mutating the saved draft", async () => {
+    await saveDraft(VALID_DEFINITION, 0);
+    const res = await validate(
+      jsonRequest(
+        "POST",
+        { definition: { schemaVersion: 2, nodes: [], edges: [] } },
+        "http://worker.test/d/1/validate",
+      ),
+    );
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      valid: false,
+      issues: [
+        {
+          code: "schema",
+          nodeId: null,
+          message: expect.stringContaining("Invalid definition"),
+        },
+      ],
+      nodeContracts: {},
+    });
+
+    const detail = await paramHandler("get", "/d/:id", detailGet)(
+      new Request("http://worker.test/d/1"),
+    );
+    expect((await detail.json()).meta.draftRevision).toBe(1);
+  });
+});
+
+describe("POST /api/v1/workflow-definitions/:id/deploy", () => {
+  const deploy = paramHandler("post", "/d/:id/deploy", detailDeploy);
+
+  it("deploys one exact saved semantic version", async () => {
+    await saveDraft(VALID_DEFINITION, 0);
+    const res = await deploy(
+      jsonRequest(
+        "POST",
+        { expectedDraftRevision: 1, expectedDeployedVersion: null },
+        "http://worker.test/d/1/deploy",
+      ),
+    );
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.meta).toMatchObject({ currentVersion: 1, deployedVersion: 1, draftRevision: 1 });
+    expect(body.deployed).toMatchObject({ version: 1, definition: semantic(VALID_DEFINITION) });
+  });
+
+  it("rejects a draft that is not deployable", async () => {
+    await saveDraft(withUnreachableNode(VALID_DEFINITION), 0);
+    const res = await deploy(
+      jsonRequest(
+        "POST",
+        { expectedDraftRevision: 1, expectedDeployedVersion: null },
+        "http://worker.test/d/1/deploy",
+      ),
     );
     expect(res.status).toBe(400);
     expect(res.statusText).toMatch(/^Invalid workflow:/);
   });
 
-  it("404s when the definition is unknown", async () => {
-    const res = await put(jsonRequest("PUT", { definition: VALID_DEFINITION }, "http://worker.test/d/999"));
-    expect(res.status).toBe(404);
+  it("409s on stale expected state", async () => {
+    await saveDraft(VALID_DEFINITION, 0);
+    const res = await deploy(
+      jsonRequest(
+        "POST",
+        { expectedDraftRevision: 0, expectedDeployedVersion: null },
+        "http://worker.test/d/1/deploy",
+      ),
+    );
+    expect(res.status).toBe(409);
+  });
+});
+
+describe("PATCH /api/v1/workflow-definitions/:id/layout", () => {
+  const layout = paramHandler("patch", "/d/:id/layout", detailLayout);
+  const nodeId = VALID_DEFINITION.nodes[0]!.id;
+
+  it("persists layout with an independent compare-and-set revision", async () => {
+    await saveDraft(VALID_DEFINITION, 0);
+    const nextLayout = { nodes: { [nodeId]: { x: 140, y: 280 } } };
+    const res = await layout(
+      jsonRequest(
+        "PATCH",
+        { layout: nextLayout, expectedLayoutRevision: 0 },
+        "http://worker.test/d/1/layout",
+      ),
+    );
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.meta).toMatchObject({ draftRevision: 1, layoutRevision: 1 });
+    expect(body.layout).toEqual(nextLayout);
+
+    const detail = await paramHandler("get", "/d/:id", detailGet)(
+      new Request("http://worker.test/d/1"),
+    );
+    const detailBody = await detail.json();
+    expect(detailBody.draft.nodes.find((node: { id: string }) => node.id === nodeId)).toMatchObject({
+      x: 140,
+      y: 280,
+    });
+  });
+
+  it("409s on a stale layout revision", async () => {
+    const nextLayout = { nodes: { [nodeId]: { x: 140, y: 280 } } };
+    await layout(
+      jsonRequest(
+        "PATCH",
+        { layout: nextLayout, expectedLayoutRevision: 0 },
+        "http://worker.test/d/1/layout",
+      ),
+    );
+    const res = await layout(
+      jsonRequest(
+        "PATCH",
+        { layout: nextLayout, expectedLayoutRevision: 0 },
+        "http://worker.test/d/1/layout",
+      ),
+    );
+    expect(res.status).toBe(409);
   });
 });
 
@@ -307,7 +643,8 @@ describe("PATCH /api/v1/workflow-definitions/:id", () => {
     await handlerFor(definitionsPost)(
       jsonRequest("POST", { name: "Second flow", source: { kind: "default" } }),
     );
-    // id 2 carries trigger_ticket_ai and id 1 is enabled with the same trigger.
+    await deployDraft(1, null, 2);
+    // The deployed id 2 snapshot carries trigger_ticket_ai and id 1 owns it.
     const res = await patch(jsonRequest("PATCH", { enabled: true }, "http://worker.test/d/2"));
     expect(res.status).toBe(409);
   });
@@ -316,11 +653,21 @@ describe("PATCH /api/v1/workflow-definitions/:id", () => {
     await handlerFor(definitionsPost)(
       jsonRequest("POST", { name: "Second flow", source: { kind: "default" } }),
     );
+    await deployDraft(1, null, 2);
     let res = await patch(jsonRequest("PATCH", { enabled: false }, "http://worker.test/d/1"));
     expect(res.status).toBe(200);
     res = await patch(jsonRequest("PATCH", { enabled: true }, "http://worker.test/d/2"));
     expect(res.status).toBe(200);
     expect((await res.json()).enabled).toBe(true);
+  });
+
+  it("409s when enabling a draft-only definition", async () => {
+    await handlerFor(definitionsPost)(
+      jsonRequest("POST", { name: "Second flow", source: { kind: "default" } }),
+    );
+    await patch(jsonRequest("PATCH", { enabled: false }, "http://worker.test/d/1"));
+    const res = await patch(jsonRequest("PATCH", { enabled: true }, "http://worker.test/d/2"));
+    expect(res.status).toBe(409);
   });
 
   it("rejects members with 403", async () => {
@@ -360,31 +707,74 @@ describe("DELETE /api/v1/workflow-definitions/:id", () => {
   });
 });
 
-describe("POST /api/v1/workflow-definitions/:id/restore", () => {
-  const restore = paramHandler("post", "/d/:id/restore", detailRestore);
+describe("POST /api/v1/workflow-definitions/:id/rollback", () => {
+  const rollback = paramHandler("post", "/d/:id/rollback", detailRollback);
 
-  it("appends a copy of the requested version", async () => {
-    await saveWorkflowDefinition(db, { ...ACTOR, definition: VALID_DEFINITION });
-    await saveWorkflowDefinition(db, { ...ACTOR, definition: OTHER_DEFINITION });
-    const res = await restore(jsonRequest("POST", { version: 1 }, "http://worker.test/d/1/restore"));
+  it("selects an existing immutable version without copying it", async () => {
+    await saveAndDeploy(VALID_DEFINITION, 0, null);
+    await saveAndDeploy(OTHER_DEFINITION, 1, 1);
+    const res = await rollback(
+      jsonRequest(
+        "POST",
+        { version: 1, expectedDeployedVersion: 2 },
+        "http://worker.test/d/1/rollback",
+      ),
+    );
     expect(res.status).toBe(200);
     const body = await res.json();
-    expect(body.version.version).toBe(3);
-    expect(body.version.definition).toEqual(VALID_DEFINITION);
-    expect(body.version.restoredFromVersion).toBe(1);
-    expect(body.meta.currentVersion).toBe(3);
+    expect(body.deployed).toMatchObject({ version: 1, definition: semantic(VALID_DEFINITION) });
+    expect(body.meta).toMatchObject({ currentVersion: 2, deployedVersion: 1 });
+
+    const detail = await paramHandler("get", "/d/:id", detailGet)(
+      new Request("http://worker.test/d/1"),
+    );
+    expect((await detail.json()).versions.map((version: { version: number }) => version.version)).toEqual([
+      2,
+      1,
+    ]);
   });
 
   it("404s on an unknown version", async () => {
-    const res = await restore(jsonRequest("POST", { version: 42 }, "http://worker.test/d/1/restore"));
+    const res = await rollback(
+      jsonRequest(
+        "POST",
+        { version: 42, expectedDeployedVersion: null },
+        "http://worker.test/d/1/rollback",
+      ),
+    );
     expect(res.status).toBe(404);
   });
 
   it("rejects members with 403", async () => {
-    await saveWorkflowDefinition(db, { ...ACTOR, definition: VALID_DEFINITION });
+    await saveAndDeploy(VALID_DEFINITION, 0, null);
     state.sessionUserId = "user_member";
-    const res = await restore(jsonRequest("POST", { version: 1 }, "http://worker.test/d/1/restore"));
+    const res = await rollback(
+      jsonRequest(
+        "POST",
+        { version: 1, expectedDeployedVersion: 1 },
+        "http://worker.test/d/1/rollback",
+      ),
+    );
     expect(res.status).toBe(403);
+  });
+});
+
+describe("POST /api/v1/workflow-definitions/:id/restore (compatibility alias)", () => {
+  const restore = paramHandler("post", "/d/:id/restore", detailRestore);
+
+  it("uses rollback selection semantics", async () => {
+    await saveAndDeploy(VALID_DEFINITION, 0, null);
+    await saveAndDeploy(OTHER_DEFINITION, 1, 1);
+    const res = await restore(
+      jsonRequest(
+        "POST",
+        { version: 1, expectedDeployedVersion: 2 },
+        "http://worker.test/d/1/restore",
+      ),
+    );
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.deployed.version).toBe(1);
   });
 });
 
@@ -410,8 +800,8 @@ describe("GET /api/v1/workflow-definition (shim)", () => {
     ]);
     expect(body.options.models.codex).toEqual(["gpt-5-codex", "gpt-5"]);
     expect(body.options.ticketStatusTargets).toEqual([
-      { value: "ai_review", label: "AI Review" },
-      { value: "backlog", label: "Backlog" },
+      { value: "10010", label: "AI Review" },
+      { value: "10011", label: "Done" },
     ]);
   });
 
@@ -430,23 +820,36 @@ describe("GET /api/v1/workflow-definition (shim)", () => {
 });
 
 describe("PUT /api/v1/workflow-definition (shim)", () => {
-  it("saves a valid definition against the default definition", async () => {
-    let res = await handlerFor(shimPut)(jsonRequest("PUT", { definition: VALID_DEFINITION }));
+  it("saves mutable drafts against the default definition", async () => {
+    let res = await handlerFor(shimPut)(
+      jsonRequest("PUT", { definition: VALID_DEFINITION, expectedDraftRevision: 0 }),
+    );
     expect(res.status).toBe(200);
     let body = await res.json();
-    expect(body.version.version).toBe(1);
-    expect(body.version.definition).toEqual(VALID_DEFINITION);
-    expect(body.version.createdByLabel).toBe("Admin");
-    expect(body.meta.id).toBe(1);
+    expect(body.draft).toEqual(semantic(VALID_DEFINITION));
+    expect(body.meta).toMatchObject({ id: 1, draftRevision: 1, deployedVersion: null });
 
-    res = await handlerFor(shimPut)(jsonRequest("PUT", { definition: OTHER_DEFINITION }));
+    res = await handlerFor(shimPut)(
+      jsonRequest("PUT", { definition: OTHER_DEFINITION, expectedDraftRevision: 1 }),
+    );
     body = await res.json();
-    expect(body.version.version).toBe(2);
+    expect(body.draft).toEqual(semantic(OTHER_DEFINITION));
+    expect(body.meta.draftRevision).toBe(2);
 
     const getRes = await handlerFor(shimGet)(new Request("http://worker.test/"));
     const getBody = await getRes.json();
     expect(getBody.current.version).toBe(2);
     expect(getBody.versions.map((v: { version: number }) => v.version)).toEqual([2, 1]);
+  });
+
+  it("accepts a deploy-invalid graph as a draft", async () => {
+    const res = await handlerFor(shimPut)(
+      jsonRequest("PUT", {
+        definition: withInvalidBinding(VALID_DEFINITION),
+        expectedDraftRevision: 0,
+      }),
+    );
+    expect(res.status).toBe(200);
   });
 
   it("accepts and round-trips a provider on an agent node", async () => {
@@ -458,56 +861,69 @@ describe("PUT /api/v1/workflow-definition (shim)", () => {
           : node,
       ),
     };
-    const res = await handlerFor(shimPut)(jsonRequest("PUT", { definition: def }));
+    const res = await handlerFor(shimPut)(
+      jsonRequest("PUT", { definition: def, expectedDraftRevision: 0 }),
+    );
     expect(res.status).toBe(200);
     const body = await res.json();
-    expect(body.version.definition).toEqual(def);
+    expect(body.draft).toEqual(semantic(def));
   });
 
   it("rejects members with 403", async () => {
     state.sessionUserId = "user_member";
-    const res = await handlerFor(shimPut)(jsonRequest("PUT", { definition: VALID_DEFINITION }));
+    const res = await handlerFor(shimPut)(
+      jsonRequest("PUT", { definition: VALID_DEFINITION, expectedDraftRevision: 0 }),
+    );
     expect(res.status).toBe(403);
   });
 
   it("rejects a definition that fails the schema with 400 Invalid definition", async () => {
     const res = await handlerFor(shimPut)(
-      jsonRequest("PUT", { definition: withBadParam(VALID_DEFINITION) }),
+      jsonRequest("PUT", {
+        definition: withBadParam(VALID_DEFINITION),
+        expectedDraftRevision: 0,
+      }),
     );
     expect(res.status).toBe(400);
     expect(res.statusText).toMatch(/^Invalid definition:/);
   });
 
-  it("rejects a structurally invalid graph with 400 Invalid workflow", async () => {
+  it("accepts an unreachable graph as a draft", async () => {
     const res = await handlerFor(shimPut)(
-      jsonRequest("PUT", { definition: withUnreachableNode(VALID_DEFINITION) }),
+      jsonRequest("PUT", {
+        definition: withUnreachableNode(VALID_DEFINITION),
+        expectedDraftRevision: 0,
+      }),
     );
-    expect(res.status).toBe(400);
-    expect(res.statusText).toMatch(/^Invalid workflow:/);
+    expect(res.status).toBe(200);
   });
 });
 
 describe("POST /api/v1/workflow-definition/restore (shim)", () => {
-  it("appends a copy of the requested version", async () => {
-    await saveWorkflowDefinition(db, { ...ACTOR, definition: VALID_DEFINITION });
-    await saveWorkflowDefinition(db, { ...ACTOR, definition: OTHER_DEFINITION });
-    const res = await handlerFor(shimRestore)(jsonRequest("POST", { version: 1 }));
+  it("selects the requested immutable version", async () => {
+    await saveAndDeploy(VALID_DEFINITION, 0, null);
+    await saveAndDeploy(OTHER_DEFINITION, 1, 1);
+    const res = await handlerFor(shimRestore)(
+      jsonRequest("POST", { version: 1, expectedDeployedVersion: 2 }),
+    );
     expect(res.status).toBe(200);
     const body = await res.json();
-    expect(body.version.version).toBe(3);
-    expect(body.version.definition).toEqual(VALID_DEFINITION);
-    expect(body.version.restoredFromVersion).toBe(1);
+    expect(body.deployed).toMatchObject({ version: 1, definition: semantic(VALID_DEFINITION) });
   });
 
   it("404s on an unknown version", async () => {
-    const res = await handlerFor(shimRestore)(jsonRequest("POST", { version: 42 }));
+    const res = await handlerFor(shimRestore)(
+      jsonRequest("POST", { version: 42, expectedDeployedVersion: null }),
+    );
     expect(res.status).toBe(404);
   });
 
   it("rejects members with 403", async () => {
-    await saveWorkflowDefinition(db, { ...ACTOR, definition: VALID_DEFINITION });
+    await saveAndDeploy(VALID_DEFINITION, 0, null);
     state.sessionUserId = "user_member";
-    const res = await handlerFor(shimRestore)(jsonRequest("POST", { version: 1 }));
+    const res = await handlerFor(shimRestore)(
+      jsonRequest("POST", { version: 1, expectedDeployedVersion: 1 }),
+    );
     expect(res.status).toBe(403);
   });
 });

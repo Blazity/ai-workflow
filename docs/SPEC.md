@@ -304,8 +304,9 @@ then reconciles (Section 8.5) and snapshots telemetry.
 
 ### 8.2 Jira Webhook
 
-Real-time dispatch/cancellation as described in Section 3.1(2). Signature verification is skipped
-if `JIRA_WEBHOOK_SECRET` is unset (not recommended). Events for other projects and non-status
+Real-time dispatch/cancellation as described in Section 3.1(2). The public route is disabled with
+HTTP 503 when `JIRA_WEBHOOK_SECRET` is unset, leaving cron polling as the only ticket-ingestion
+path. Configured webhooks require a valid signature. Events for other projects and non-status
 changes are ignored.
 
 ### 8.3 Dispatch Logic (`dispatchTicket`)

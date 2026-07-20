@@ -8,13 +8,22 @@ const mocks = vi.hoisted(() => ({
     GITHUB_REPO: undefined as string | undefined,
     MAX_CONCURRENT_AGENTS: 3,
     VCS_BOT_LOGIN: undefined as string | undefined,
+    GITHUB_BOT_LOGIN: undefined as string | undefined,
   },
+  getVcsBotLogin: vi.fn(),
+  isRepoAllowed: vi.fn(),
 }));
 
-vi.mock("../../../env.js", () => ({ env: mocks.env }));
+vi.mock("../../../env.js", () => ({
+  env: mocks.env,
+  getVcsBotLogin: mocks.getVcsBotLogin,
+}));
 
 vi.mock("../../lib/github-webhook-sig.js", () => ({
   verifyGitHubWebhookSignature: vi.fn(),
+}));
+vi.mock("../../lib/repo-allowlist.js", () => ({
+  isRepoAllowed: (...args: any[]) => mocks.isRepoAllowed(...args),
 }));
 
 vi.mock("../../post-pr-gate/config.js", () => ({
@@ -24,10 +33,8 @@ vi.mock("../../post-pr-gate/config.js", () => ({
 vi.mock("../../db/client.js", () => ({ getDb: () => ({}) }));
 
 const mockDispatchTriggerEvent = vi.fn();
-const mockResolveEnabledReviewStates = vi.fn();
 vi.mock("../../lib/dispatch-trigger.js", () => ({
   dispatchTriggerEvent: (...args: any[]) => mockDispatchTriggerEvent(...args),
-  resolveEnabledReviewStates: (...args: any[]) => mockResolveEnabledReviewStates(...args),
 }));
 
 const mockDispatchPostPrGateWebhook = vi.fn();
@@ -50,6 +57,7 @@ function makeRequest(body: unknown, ghEvent = "pull_request"): Request {
       "content-type": "application/json",
       "x-hub-signature-256": "sha256=whatever",
       "x-github-event": ghEvent,
+      "x-github-delivery": "delivery-test",
     },
     body: JSON.stringify(body),
   });
@@ -59,7 +67,7 @@ function repo() {
   return { owner: { login: "acme" }, name: "app", html_url: "https://github.com/acme/app" };
 }
 
-function pullRequestBody(action: string, headRef = "blazebot/aiw-1") {
+function pullRequestBody(action: string, headRef = "blazebot/aiw-1"): any {
   return {
     action,
     repository: repo(),
@@ -81,12 +89,15 @@ describe("POST /webhooks/github", () => {
     vi.clearAllMocks();
     mocks.env.GITHUB_OWNER = undefined;
     mocks.env.GITHUB_REPO = undefined;
+    mocks.env.VCS_BOT_LOGIN = undefined;
+    mocks.env.GITHUB_BOT_LOGIN = undefined;
+    mocks.getVcsBotLogin.mockReturnValue("github-app[bot]");
+    mocks.isRepoAllowed.mockReturnValue(true);
     mockDispatchPostPrGateWebhook.mockResolvedValue({ status: "dispatched", runId: "gate_run" });
     mockDispatchTriggerEvent.mockResolvedValue({ result: "no_definition" });
-    mockResolveEnabledReviewStates.mockResolvedValue(["changes_requested"]);
   });
 
-  function reviewBody(state: string, headRef = "blazebot/aiw-1") {
+  function reviewBody(state: string, headRef = "blazebot/aiw-1", reviewer = "human") {
     return {
       action: "submitted",
       repository: repo(),
@@ -100,12 +111,27 @@ describe("POST /webhooks/github", () => {
         user: { login: "human" },
         draft: false,
       },
-      review: { state, user: { login: "human" }, body: "please fix" },
+      review: { state, user: { login: reviewer }, body: "please fix" },
     };
   }
 
-  it("drops a commented review when the definition only allows changes_requested", async () => {
-    mockResolveEnabledReviewStates.mockResolvedValueOnce(["changes_requested"]);
+  it("rejects an off-allowlist repository before definition dispatch or gate work", async () => {
+    mocks.isRepoAllowed.mockReturnValueOnce(false);
+
+    const response = await makeApp()(makeRequest(pullRequestBody("opened", "external-branch")));
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      status: "ignored",
+      reason: "other_repo",
+    });
+    expect(mocks.isRepoAllowed).toHaveBeenCalledWith("acme/app");
+    expect(mockDispatchTriggerEvent).not.toHaveBeenCalled();
+    expect(mockDispatchPostPrGateWebhook).not.toHaveBeenCalled();
+  });
+
+  it("passes a commented review to the dispatcher for snapshot-bound selector evaluation", async () => {
+    mockDispatchTriggerEvent.mockResolvedValueOnce({ result: "ignored_untrusted_event" });
 
     const response = await makeApp()(
       makeRequest(reviewBody("commented"), "pull_request_review"),
@@ -114,13 +140,20 @@ describe("POST /webhooks/github", () => {
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({
       status: "ignored",
-      reason: "event_pull_request_review",
+      reason: "ignored_untrusted_event",
     });
-    expect(mockDispatchTriggerEvent).not.toHaveBeenCalled();
+    expect(mockDispatchTriggerEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        triggerType: "trigger_pr_review",
+        pr: expect.objectContaining({
+          review: expect.objectContaining({ state: "commented" }),
+        }),
+      }),
+      expect.anything(),
+    );
   });
 
   it("dispatches a commented review when the definition opts into commented", async () => {
-    mockResolveEnabledReviewStates.mockResolvedValueOnce(["changes_requested", "commented"]);
     mockDispatchTriggerEvent.mockResolvedValueOnce({ result: "started", runId: "run_rv" });
 
     const response = await makeApp()(
@@ -129,6 +162,56 @@ describe("POST /webhooks/github", () => {
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({ status: "dispatched", runId: "run_rv" });
+    expect(mockDispatchTriggerEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ triggerType: "trigger_pr_review" }),
+      expect.anything(),
+    );
+  });
+
+  it("filters reviews using the GitHub-specific bot login", async () => {
+    mocks.env.VCS_BOT_LOGIN = "legacy-bot";
+    mocks.env.GITHUB_BOT_LOGIN = "github-app[bot]";
+    mocks.getVcsBotLogin.mockReturnValueOnce("github-app[bot]");
+
+    const response = await makeApp()(
+      makeRequest(
+        reviewBody("changes_requested", "blazebot/aiw-1", "github-app[bot]"),
+        "pull_request_review",
+      ),
+    );
+
+    expect(response.status).toBe(200);
+    expect(mockDispatchTriggerEvent).not.toHaveBeenCalled();
+  });
+
+  it("falls back to the legacy VCS bot login for GitHub reviews", async () => {
+    mocks.env.VCS_BOT_LOGIN = "legacy-bot";
+    mocks.getVcsBotLogin.mockReturnValueOnce("legacy-bot");
+
+    const response = await makeApp()(
+      makeRequest(
+        reviewBody("changes_requested", "blazebot/aiw-1", "legacy-bot"),
+        "pull_request_review",
+      ),
+    );
+
+    expect(response.status).toBe(200);
+    expect(mockDispatchTriggerEvent).not.toHaveBeenCalled();
+  });
+
+  it("delegates a missing-bot review decision to the snapshot-bound dispatcher", async () => {
+    mocks.getVcsBotLogin.mockReturnValueOnce(undefined);
+    mockDispatchTriggerEvent.mockResolvedValueOnce({ result: "ignored_untrusted_event" });
+
+    const response = await makeApp()(
+      makeRequest(reviewBody("commented"), "pull_request_review"),
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      status: "ignored",
+      reason: "ignored_untrusted_event",
+    });
     expect(mockDispatchTriggerEvent).toHaveBeenCalledWith(
       expect.objectContaining({ triggerType: "trigger_pr_review" }),
       expect.anything(),
@@ -202,8 +285,10 @@ describe("POST /webhooks/github", () => {
       action: "completed",
       repository: repo(),
       check_run: {
+        id: 1001,
         name: "ci / build",
         conclusion: "failure",
+        app: { slug: "github-actions" },
         pull_requests: [
           { number: 7, head: { ref: "blazebot/aiw-1", sha: "abc123" }, base: { ref: "main" } },
         ],
@@ -221,7 +306,38 @@ describe("POST /webhooks/github", () => {
     expect(mockDispatchPostPrGateWebhook).not.toHaveBeenCalled();
   });
 
-  it("returns 503 so GitHub redelivers when dispatch is at capacity", async () => {
+  it("dispatches a merged pull request through the merged trigger", async () => {
+    mockDispatchTriggerEvent.mockResolvedValueOnce({ result: "started", runId: "run_merge" });
+    const body = pullRequestBody("closed");
+    body.pull_request.merged = true;
+    body.pull_request.merge_commit_sha = "merge-sha";
+    body.pull_request.merged_at = "2026-07-17T10:00:00Z";
+
+    const response = await makeApp()(makeRequest(body));
+
+    expect(response.status).toBe(200);
+    expect(mockDispatchTriggerEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        triggerType: "trigger_pr_merged",
+        pr: expect.objectContaining({ mergeSha: "merge-sha" }),
+      }),
+      expect.anything(),
+    );
+    expect(mockDispatchPostPrGateWebhook).not.toHaveBeenCalled();
+  });
+
+  it("does not invoke the legacy gate when no definition handles a merged pull request", async () => {
+    const body = pullRequestBody("closed");
+    body.pull_request.merged = true;
+
+    const response = await makeApp()(makeRequest(body));
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ status: "ignored", reason: "no_definition" });
+    expect(mockDispatchPostPrGateWebhook).not.toHaveBeenCalled();
+  });
+
+  it("returns a retryable 503 when dispatch is at capacity", async () => {
     mockDispatchTriggerEvent.mockResolvedValueOnce({ result: "at_capacity" });
 
     const response = await makeApp()(makeRequest(pullRequestBody("opened")));
@@ -230,7 +346,7 @@ describe("POST /webhooks/github", () => {
     expect(mockDispatchPostPrGateWebhook).not.toHaveBeenCalled();
   });
 
-  it("returns 503 so GitHub redelivers when dispatch errors", async () => {
+  it("returns a retryable 503 when dispatch errors", async () => {
     mockDispatchTriggerEvent.mockResolvedValueOnce({ result: "error" });
 
     const response = await makeApp()(makeRequest(pullRequestBody("opened")));

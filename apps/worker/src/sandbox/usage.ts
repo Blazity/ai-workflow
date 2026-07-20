@@ -94,9 +94,10 @@ export interface UsageTotals {
   costUsd: number;
   /** False if any present phase couldn't be priced — costUsd is then a lower bound. */
   costKnown: boolean;
-  tokensInput: number;
-  tokensCached: number;
-  tokensOutput: number;
+  /** Null when any launched phase lacks authoritative token usage. */
+  tokensInput: number | null;
+  tokensCached: number | null;
+  tokensOutput: number | null;
   /** Per-phase breakdown, persisted as the run's `phases` jsonb. */
   phases: Record<string, PhaseTotal>;
 }
@@ -113,6 +114,7 @@ export function computeUsageTotals(
   let tokensInput = 0;
   let tokensCached = 0;
   let tokensOutput = 0;
+  let tokensKnown = true;
   let costKnown = true;
   const breakdown: Record<string, PhaseTotal> = {};
 
@@ -121,6 +123,7 @@ export function computeUsageTotals(
     if (!usage) {
       breakdown[name] = { costUsd: null, tokens: null, durationMs: 0, numTurns: 0, model: phaseModel ?? null };
       costKnown = false;
+      tokensKnown = false;
       continue;
     }
     const { costUsd: c, known } = phaseCostUsd(usage, priceLookup, phaseModel);
@@ -130,6 +133,8 @@ export function computeUsageTotals(
       tokensInput += usage.tokens.input;
       tokensCached += usage.tokens.cached_input;
       tokensOutput += usage.tokens.output;
+    } else {
+      tokensKnown = false;
     }
     breakdown[name] = {
       costUsd: c,
@@ -140,5 +145,12 @@ export function computeUsageTotals(
     };
   }
 
-  return { costUsd, costKnown, tokensInput, tokensCached, tokensOutput, phases: breakdown };
+  return {
+    costUsd,
+    costKnown,
+    tokensInput: tokensKnown ? tokensInput : null,
+    tokensCached: tokensKnown ? tokensCached : null,
+    tokensOutput: tokensKnown ? tokensOutput : null,
+    phases: breakdown,
+  };
 }

@@ -65,6 +65,52 @@ export async function handleDefinitionRestore(
   });
 }
 
+export async function handleDefinitionDeploy(
+  req: Request,
+  context: IdRouteContext,
+  workerProxy: WorkerProxy,
+) {
+  return forwardJsonAction(req, context, workerProxy, "deploy", "POST");
+}
+
+export async function handleDefinitionRollback(
+  req: Request,
+  context: IdRouteContext,
+  workerProxy: WorkerProxy,
+) {
+  return forwardJsonAction(req, context, workerProxy, "rollback", "POST");
+}
+
+export async function handleDefinitionValidate(
+  req: Request,
+  context: IdRouteContext,
+  workerProxy: WorkerProxy,
+) {
+  return forwardJsonAction(req, context, workerProxy, "validate", "POST");
+}
+
+export async function handleDefinitionLayout(
+  req: Request,
+  context: IdRouteContext,
+  workerProxy: WorkerProxy,
+) {
+  return forwardJsonAction(req, context, workerProxy, "layout", "PATCH");
+}
+
+async function forwardJsonAction(
+  req: Request,
+  { params }: IdRouteContext,
+  workerProxy: WorkerProxy,
+  action: string,
+  method: "POST" | "PATCH",
+) {
+  return forward(workerProxy, `${await definitionPath(params)}/${action}`, {
+    method,
+    headers: { "content-type": "application/json" },
+    body: await req.text(),
+  });
+}
+
 async function definitionPath(params: Promise<{ id: string }>): Promise<string> {
   const { id } = await params;
   return `/api/v1/workflow-definitions/${encodeURIComponent(id)}`;
@@ -73,7 +119,14 @@ async function definitionPath(params: Promise<{ id: string }>): Promise<string> 
 async function forward(workerProxy: WorkerProxy, path: string, init: RequestInit) {
   try {
     const res = await workerProxy(path, init);
-    return NextResponse.json(await res.json().catch(() => ({})), { status: res.status });
+    const headers = new Headers();
+    const contentType = res.headers.get("content-type");
+    if (contentType) headers.set("content-type", contentType);
+    return new NextResponse(res.body, {
+      status: res.status,
+      statusText: res.statusText,
+      headers,
+    });
   } catch (error) {
     if (isWorkerTimeoutError(error)) {
       return NextResponse.json({ error: "Worker request timed out" }, { status: 504 });

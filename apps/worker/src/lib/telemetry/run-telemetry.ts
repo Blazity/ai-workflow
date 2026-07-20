@@ -1,7 +1,11 @@
 import { and, eq, ne, sql } from "drizzle-orm";
 import type { Db } from "../../db/client.js";
 import { workflowRuns } from "../../db/schema.js";
-import type { BlockRunState, RunStep } from "@shared/contracts";
+import type {
+  BlockRunState,
+  RunStep,
+  WorkflowRunBudgetFailure,
+} from "@shared/contracts";
 
 /**
  * Lifecycle/status fields the poll cron snapshots from the Workflow world and
@@ -11,6 +15,7 @@ import type { BlockRunState, RunStep } from "@shared/contracts";
  */
 export interface RunSnapshot {
   runId: string;
+  subjectKey: string | null;
   workflowId: string;
   workflowName: string;
   status: string;
@@ -34,6 +39,7 @@ export interface RunSnapshot {
  */
 export interface RunUsage {
   runId: string;
+  subjectKey: string;
   /**
    * The workflow's own identity. Written here too (not just by the cron
    * snapshot) so a run is attributable to its workflow even when the cron never
@@ -70,6 +76,8 @@ export interface RunUsage {
   phases: unknown;
   /** Full step waterfall captured from the world on completion; null if capture failed. */
   steps: RunStep[] | null;
+  /** Structured terminal cause when the run stopped on a configured budget. */
+  budgetFailure: WorkflowRunBudgetFailure | null;
   prUrl: string | null;
   prNumber: number | null;
 }
@@ -117,6 +125,7 @@ export async function upsertRunSnapshots(
       set: {
         workflowId: sql`excluded.workflow_id`,
         workflowName: sql`excluded.workflow_name`,
+        subjectKey: keepIfNull(workflowRuns.subjectKey, workflowRuns.subjectKey),
         // Never downgrade a terminal status. The agent workflow writes the
         // authoritative success/failed on completion (recordRunUsage); a cron
         // snapshot re-deriving status from the world must not clobber it — the
@@ -160,6 +169,7 @@ export async function recordRunUsage(db: Db, usage: RunUsage): Promise<void> {
     .insert(workflowRuns)
     .values({
       runId: usage.runId,
+      subjectKey: usage.subjectKey,
       workflowId: usage.workflowId,
       workflowName: usage.workflowName,
       status: usage.status,
@@ -175,6 +185,7 @@ export async function recordRunUsage(db: Db, usage: RunUsage): Promise<void> {
       tokensOutput: usage.tokensOutput,
       phases: usage.phases,
       steps: usage.steps,
+      budgetFailure: usage.budgetFailure,
       prUrl: usage.prUrl,
       prNumber: usage.prNumber,
     })
@@ -187,6 +198,7 @@ export async function recordRunUsage(db: Db, usage: RunUsage): Promise<void> {
         status: sql`excluded.status`,
         workflowId: sql`excluded.workflow_id`,
         workflowName: sql`excluded.workflow_name`,
+        subjectKey: sql`excluded.subject_key`,
         completedAt: sql`coalesce(${workflowRuns.completedAt}, now())`,
         durationSec: durationFromStart(),
         ticketKey: keepIfNull(workflowRuns.ticketKey, workflowRuns.ticketKey),
@@ -202,6 +214,7 @@ export async function recordRunUsage(db: Db, usage: RunUsage): Promise<void> {
         // Workflow-owned and capture is best-effort: never erase a good
         // waterfall with a later null (a re-record whose world capture failed).
         steps: keepIfNull(workflowRuns.steps, workflowRuns.steps),
+        budgetFailure: sql`excluded.budget_failure`,
         prUrl: keepIfNull(workflowRuns.prUrl, workflowRuns.prUrl),
         prNumber: keepIfNull(workflowRuns.prNumber, workflowRuns.prNumber),
         updatedAt: sql`now()`,
@@ -216,9 +229,10 @@ export async function recordRunUsage(db: Db, usage: RunUsage): Promise<void> {
  */
 export interface RunBlockStatusWrite {
   runId: string;
-  ticketKey: string;
-  ticketTitle: string;
-  ticketUrl: string;
+  subjectKey: string;
+  ticketKey: string | null;
+  ticketTitle: string | null;
+  ticketUrl: string | null;
   definitionVersion: number | null;
   definitionId: number | null;
   blockStatuses: Record<string, BlockRunState>;
@@ -239,6 +253,7 @@ export async function recordBlockStatuses(
     .insert(workflowRuns)
     .values({
       runId: write.runId,
+      subjectKey: write.subjectKey,
       workflowId: "wf_agent",
       workflowName: "Agent",
       status: "running",

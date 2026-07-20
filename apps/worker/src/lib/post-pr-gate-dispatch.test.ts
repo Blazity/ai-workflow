@@ -39,6 +39,10 @@ vi.mock("../post-pr-gate/config.js", () => ({
   loadPostPrGateConfig: vi.fn(() => state.config),
 }));
 
+vi.mock("../workflow-definition/store.js", () => ({
+  getEnabledWorkflowDefinitionForTrigger: vi.fn().mockResolvedValue(null),
+}));
+
 vi.mock("../post-pr-gate/gate-store.js", () => ({
   GateStore: vi.fn(() => ({
     acquireLock: mockAcquireLock,
@@ -53,6 +57,10 @@ vi.mock("../post-pr-gate/gate-store.js", () => ({
 
 vi.mock("./adapters.js", () => ({
   createAdapters: (...args: any[]) => mockCreateAdapters(...args),
+}));
+
+vi.mock("../workflows/post-pr-gate.js", () => ({
+  postPrGateWorkflow: vi.fn(),
 }));
 
 const { dispatchPostPrGateWebhook } = await import("./post-pr-gate-dispatch.js");

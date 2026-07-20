@@ -7,6 +7,7 @@ import { defaultWorkflowDefinition } from "../../../workflow-definition/default.
 import {
   buildWorkflowEditorOptions,
   fetchAvailableModels,
+  fetchTicketStatuses,
 } from "../../../workflow-definition/models.js";
 import {
   listWorkflowDefinitionVersions,
@@ -26,11 +27,15 @@ export default defineEventHandler(
       const versions = (await listWorkflowDefinitionVersions(getDb())).map(
         serializeWorkflowDefinitionVersion,
       );
+      const [models, ticketStatuses] = await Promise.all([
+        fetchAvailableModels(),
+        fetchTicketStatuses(),
+      ]);
       return {
         current: versions[0] ?? null,
         versions,
         defaultDefinition: defaultWorkflowDefinition({ includeReview: env.ENABLE_REVIEW_PHASE }),
-        options: buildWorkflowEditorOptions(await fetchAvailableModels()),
+        options: buildWorkflowEditorOptions(models, ticketStatuses),
       };
     } catch (error) {
       toHttpError(error);

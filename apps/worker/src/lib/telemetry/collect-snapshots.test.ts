@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { createTestDb } from "../../db/test-db.js";
 import type { Db } from "../../db/client.js";
-import { activeRuns, gateCurrent } from "../../db/schema.js";
+import { activeRunSandboxes, activeRuns, gateCurrent } from "../../db/schema.js";
 import type {
   RunsLister,
   WorkflowRunRecord,
@@ -49,9 +49,21 @@ describe("collectSnapshots", () => {
     expect(s.durationSec).toBeNull();
   });
 
-  it("resolves ticketKey + sandboxId from active_runs (no Jira call)", async () => {
-    await db.insert(activeRuns).values({ ticketKey: "PROJ-9", runId: "wrun_1", sandboxId: "sbx_9" });
+  it("resolves subject, ticket, and every-owner sandbox metadata without Jira", async () => {
+    await db.insert(activeRuns).values({
+      subjectKey: "ticket:jira:PROJ-9",
+      ticketKey: "PROJ-9",
+      ownerToken: "owner-9",
+      runId: "wrun_1",
+      state: "bound",
+    });
+    await db.insert(activeRunSandboxes).values({
+      subjectKey: "ticket:jira:PROJ-9",
+      ownerToken: "owner-9",
+      sandboxId: "sbx_9",
+    });
     const [s] = await collectSnapshots({ runsLister: listerOf([run()]), db });
+    expect(s.subjectKey).toBe("ticket:jira:PROJ-9");
     expect(s.ticketKey).toBe("PROJ-9");
     expect(s.sandboxId).toBe("sbx_9");
     expect(s.ticketTitle).toBeNull(); // workflow-owned

@@ -21,3 +21,13 @@ export function textMatchesLines(text: string, value: WorkflowParamValue | undef
   const lines = Array.isArray(value) ? value.filter((v): v is string => typeof v === "string") : [];
   return parsed.length === lines.length && parsed.every((line, i) => line === lines[i]);
 }
+
+export function toggleRequiredArrayValue(
+  values: string[],
+  value: string,
+  checked: boolean,
+): string[] {
+  if (checked) return [...new Set([...values, value])];
+  const next = values.filter((entry) => entry !== value);
+  return next.length > 0 ? next : values;
+}
