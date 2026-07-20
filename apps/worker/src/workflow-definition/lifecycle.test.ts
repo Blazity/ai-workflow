@@ -30,7 +30,6 @@ import {
   getWorkflowDefinitionDraft,
   getEnabledWorkflowDefinitionForTrigger,
   listWorkflowDefinitions,
-  listWorkflowDefinitionDeployments,
   listWorkflowDefinitionVersionRows,
   rollbackWorkflowDefinition,
   saveWorkflowDefinitionDraft,
@@ -68,7 +67,7 @@ describe("workflow definition lifecycle", () => {
 
     expect(saved.draftRevision).toBe(1);
     expect(saved.draft.nodes[0]).toMatchObject({ x: 0, y: 0 });
-    expect(await listWorkflowDefinitionVersionRows(db, created.definition.id)).toEqual([]);
+    expect((await listWorkflowDefinitionVersionRows(db, created.definition.id)).map((v) => v.version)).toEqual([1]);
 
     await expect(
       saveWorkflowDefinitionDraft(db, {
@@ -132,11 +131,7 @@ describe("workflow definition lifecycle", () => {
     });
     expect(rolledBack.version.version).toBe(1);
     expect(await listWorkflowDefinitionVersionRows(db, created.definition.id)).toHaveLength(2);
-    expect((await listWorkflowDefinitionDeployments(db, created.definition.id)).map((item) => item.action)).toEqual([
-      "rollback",
-      "deploy",
-      "deploy",
-    ]);
+    expect((await getWorkflowDefinition(db, created.definition.id))?.deployedVersion).toBe(1);
   });
 
   it("rejects enabling definitions without a deployment but preserves the fresh seed fallback", async () => {
@@ -179,7 +174,7 @@ describe("workflow definition lifecycle", () => {
         actor: ADMIN,
       }),
     ).rejects.toMatchObject({ statusCode: 409 });
-    expect(await db.select().from(workflowDefinitionVersions)).toHaveLength(0);
+    expect(await db.select().from(workflowDefinitionVersions)).toHaveLength(1);
   });
 
   it("keeps enabled dispatch pinned while a new draft and legacy snapshot are saved", async () => {

@@ -25,6 +25,7 @@ describe("arthur_injection_check paramsSchema", () => {
   it("accepts empty params and rejects the retired contentFromStep param", () => {
     expect(paramsSchema.safeParse({}).success).toBe(true);
     expect(paramsSchema.safeParse({ contentFromStep: "step-1" }).success).toBe(false);
+    expect(paramsSchema.safeParse({ legacyContentFromStep: "step-1" }).success).toBe(false);
     expect(paramsSchema.safeParse({ extra: 1 }).success).toBe(false);
   });
 });
@@ -102,22 +103,6 @@ describe("arthur_injection_check execute", () => {
     );
 
     expect(mocks.validatePrompt).toHaveBeenCalledWith("task-1", "text");
-  });
-
-  it("keeps the explicit legacy whole-output compatibility path readable", async () => {
-    configureArthur();
-    mocks.validatePrompt.mockResolvedValue({ ok: true, findings: [] });
-
-    await execute(
-      makeNode("arthur_injection_check", { legacyContentFromStep: "fix" }),
-      { fix: { output: { status: "implemented", summary: "done" } } },
-      makeCtx({ arthur: { taskId: "task-1" } }),
-    );
-
-    expect(mocks.validatePrompt).toHaveBeenCalledWith(
-      "task-1",
-      JSON.stringify({ status: "implemented", summary: "done" }),
-    );
   });
 
   it("skips on client errors instead of failing the run", async () => {

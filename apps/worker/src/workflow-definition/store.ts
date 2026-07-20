@@ -1,8 +1,6 @@
 import type {
   WorkflowBlockType,
   WorkflowDefinition,
-  WorkflowDefinitionDeployment,
-  WorkflowDefinitionDeploymentAction,
   WorkflowDefinitionLayout,
   WorkflowDefinitionVersion,
 } from "@shared/contracts";
@@ -11,7 +9,6 @@ import { and, arrayContains, arrayOverlaps, asc, desc, eq, isNull, max, ne, sql 
 import type { Db } from "../db/client.js";
 import {
   workflowDefinitions,
-  workflowDefinitionDeployments,
   workflowDefinitionTriggers,
   workflowDefinitionVersions,
 } from "../db/schema.js";
@@ -43,8 +40,8 @@ export interface WorkflowDefinitionRow {
   id: number;
   name: string;
   enabled: boolean;
-  builtinFallback: boolean;
   triggerTypes: WorkflowBlockType[];
+  /** Latest saved semantic version; retained as the editor CAS name. */
   draftRevision: number;
   layout: WorkflowDefinitionLayout;
   layoutRevision: number;
@@ -76,18 +73,6 @@ export interface WorkflowDefinitionVersionRow {
   restoredFromVersion: number | null;
 }
 
-export interface WorkflowDefinitionDeploymentRow {
-  id: number;
-  definitionId: number;
-  selectedVersion: number;
-  previousVersion: number | null;
-  action: WorkflowDefinitionDeploymentAction;
-  rollbackFromVersion: number | null;
-  createdAt: Date;
-  createdById: string;
-  createdByLabel: string;
-}
-
 /** Domain-level failure a write raises (409 conflict, 404 not found). Routes map
  *  statusCode onto the HTTP response; distinct from the 403 auth gate. */
 export class WorkflowDefinitionStoreError extends Error {
@@ -101,41 +86,28 @@ export class WorkflowDefinitionStoreError extends Error {
 
 type DefinitionSelect = typeof workflowDefinitions.$inferSelect;
 type VersionSelect = typeof workflowDefinitionVersions.$inferSelect;
-type DeploymentSelect = typeof workflowDefinitionDeployments.$inferSelect;
 
 function normalizeLayout(value: unknown): WorkflowDefinitionLayout {
   if (!value || typeof value !== "object" || !("nodes" in value)) return EMPTY_WORKFLOW_LAYOUT;
   return value as WorkflowDefinitionLayout;
 }
 
-function mapDefinitionRow(row: DefinitionSelect): WorkflowDefinitionRow {
+function mapDefinitionRow(
+  row: DefinitionSelect,
+  draftRevision = 0,
+): WorkflowDefinitionRow {
   return {
     id: row.id,
     name: row.name,
     enabled: row.enabled,
-    builtinFallback: row.builtinFallback,
     triggerTypes: row.triggerTypes as WorkflowBlockType[],
-    draftRevision: row.draftRevision,
+    draftRevision,
     layout: normalizeLayout(row.layout),
     layoutRevision: row.layoutRevision,
     deployedVersion: row.deployedVersion,
     archivedAt: row.archivedAt,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
-    createdById: row.createdById,
-    createdByLabel: row.createdByLabel,
-  };
-}
-
-function mapDeploymentRow(row: DeploymentSelect): WorkflowDefinitionDeploymentRow {
-  return {
-    id: row.id,
-    definitionId: row.definitionId,
-    selectedVersion: row.selectedVersion,
-    previousVersion: row.previousVersion,
-    action: row.action as WorkflowDefinitionDeploymentAction,
-    rollbackFromVersion: row.rollbackFromVersion,
-    createdAt: row.createdAt,
     createdById: row.createdById,
     createdByLabel: row.createdByLabel,
   };
@@ -251,11 +223,19 @@ export async function listWorkflowDefinitions(db: Db): Promise<WorkflowDefinitio
     .from(workflowDefinitions)
     .where(isNull(workflowDefinitions.archivedAt))
     .orderBy(asc(workflowDefinitions.id));
+  if (defs.length === 0) return [];
+
+  const heads = await db
+    .select({
+      definitionId: workflowDefinitionVersions.definitionId,
+      currentVersion: max(workflowDefinitionVersions.version),
+    })
+    .from(workflowDefinitionVersions)
+    .groupBy(workflowDefinitionVersions.definitionId);
+  const headByDefinition = new Map(heads.map((head) => [head.definitionId, head.currentVersion]));
   return defs.map((row) => ({
-    ...mapDefinitionRow(row),
-    // `currentVersion` remains only as a deprecated API alias. It must name
-    // the version selected for execution, never an unselected history head.
-    currentVersion: row.deployedVersion,
+    ...mapDefinitionRow(row, headByDefinition.get(row.id) ?? 0),
+    currentVersion: headByDefinition.get(row.id) ?? null,
   }));
 }
 
@@ -268,25 +248,25 @@ export async function getWorkflowDefinition(
     .from(workflowDefinitions)
     .where(eq(workflowDefinitions.id, id))
     .limit(1);
-  return rows[0] ? mapDefinitionRow(rows[0]) : null;
+  if (!rows[0]) return null;
+  const current = await getCurrentWorkflowDefinitionVersion(db, id);
+  return mapDefinitionRow(rows[0], current?.version ?? 0);
 }
 
 export async function getWorkflowDefinitionDraft(
   db: Db,
   definitionId: number,
 ): Promise<WorkflowDefinitionDraftRow | null> {
-  const rows = await db
-    .select()
-    .from(workflowDefinitions)
-    .where(eq(workflowDefinitions.id, definitionId))
-    .limit(1);
-  const row = rows[0];
-  if (!row?.draft) return null;
-  const semantic = upgradeStoredWorkflowDefinition(row.draft);
+  const [definition, current] = await Promise.all([
+    getWorkflowDefinition(db, definitionId),
+    getCurrentWorkflowDefinitionVersion(db, definitionId),
+  ]);
+  if (!definition || !current) return null;
+  const semantic = upgradeStoredWorkflowDefinition(current.definition);
   return {
-    definition: mapDefinitionRow(row),
-    draft: applyWorkflowDefinitionLayout(semantic, normalizeLayout(row.layout)),
-    draftRevision: row.draftRevision,
+    definition,
+    draft: applyWorkflowDefinitionLayout(semantic, definition.layout),
+    draftRevision: current.version,
   };
 }
 
@@ -347,19 +327,6 @@ export async function listWorkflowDefinitionVersionRows(
   return rows.map(mapVersionRow);
 }
 
-export async function listWorkflowDefinitionDeployments(
-  db: Db,
-  definitionId: number,
-): Promise<WorkflowDefinitionDeploymentRow[]> {
-  const rows = await db
-    .select()
-    .from(workflowDefinitionDeployments)
-    .where(eq(workflowDefinitionDeployments.definitionId, definitionId))
-    .orderBy(desc(workflowDefinitionDeployments.id))
-    .limit(VERSION_LIST_LIMIT);
-  return rows.map(mapDeploymentRow);
-}
-
 export async function getEnabledWorkflowDefinitionForTrigger(
   db: Db,
   triggerType: WorkflowBlockType,
@@ -397,12 +364,9 @@ export async function getEnabledWorkflowDefinitionForTrigger(
 
   // A definition with no versions falls back to the built-in default, whose
   // trigger_types column is fixed at seed time and cannot drift from a version.
-  const isSeedFallback = defRow?.builtinFallback === true && triggerType === "trigger_ticket_ai";
   const actualTriggers: WorkflowBlockType[] = current
     ? triggerTypesOf(current.definition)
-    : isSeedFallback
-      ? (["trigger_ticket_ai"] as WorkflowBlockType[])
-      : [];
+    : ((defRow?.triggerTypes as WorkflowBlockType[]) ?? []);
   const stale =
     !defRow ||
     !defRow.enabled ||
@@ -421,7 +385,6 @@ export async function getEnabledWorkflowDefinitionForTrigger(
             AND ${workflowDefinitions.enabled} = ${defRow.enabled}
             AND ${workflowDefinitions.archivedAt} IS NOT DISTINCT FROM ${defRow.archivedAt}
             AND ${workflowDefinitions.deployedVersion} IS NOT DISTINCT FROM ${defRow.deployedVersion}
-            AND ${workflowDefinitions.builtinFallback} = ${defRow.builtinFallback}
         )`
       : sql`NOT EXISTS (
           SELECT 1
@@ -440,7 +403,7 @@ export async function getEnabledWorkflowDefinitionForTrigger(
       .catch(() => {});
     return null;
   }
-  return { definition: mapDefinitionRow(defRow!), current };
+  return { definition: mapDefinitionRow(defRow!, current?.version ?? 0), current };
 }
 
 // --- Writes (role-gated). neon-http (the production driver, also loaded inside
@@ -495,10 +458,22 @@ const TRIGGER_TAKEN_MESSAGE = "Its trigger is already handled by another enabled
 
 export async function createWorkflowDefinition(
   db: Db,
-  input: { name: string; seed: WorkflowDefinition | null; actor: WorkflowDefinitionActor },
+  input: {
+    name: string;
+    seed: WorkflowDefinition | null;
+    actor: WorkflowDefinitionActor;
+    seedValidation?: "deployment" | "structural";
+  },
 ): Promise<{ definition: WorkflowDefinitionRow; current: WorkflowDefinitionVersionRow | null }> {
   requireEditRole(input.actor.role);
-  if (input.seed) assertValidDefinition(input.seed);
+  if (input.seed && input.seedValidation !== "structural") assertValidDefinition(input.seed);
+  const parsedSeed = input.seed
+    ? input.seedValidation === "structural"
+      ? parseStructuralDefinition(input.seed)
+      : input.seed
+    : null;
+  const semantic = parsedSeed ? canonicalizeWorkflowDefinition(parsedSeed) : null;
+  const layout = input.seed ? extractWorkflowDefinitionLayout(input.seed) : EMPTY_WORKFLOW_LAYOUT;
   let created: DefinitionSelect;
   try {
     const rows = await db
@@ -506,7 +481,9 @@ export async function createWorkflowDefinition(
       .values({
         name: input.name,
         enabled: false,
-        triggerTypes: input.seed ? triggerTypesOf(input.seed) : [],
+        triggerTypes: [],
+        layout,
+        layoutRevision: input.seed ? 1 : 0,
         createdById: input.actor.id,
         createdByLabel: input.actor.label,
       })
@@ -520,14 +497,14 @@ export async function createWorkflowDefinition(
   }
 
   let current: WorkflowDefinitionVersionRow | null = null;
-  if (input.seed) {
+  if (semantic) {
     try {
       const versions = await db
         .insert(workflowDefinitionVersions)
         .values({
           definitionId: created.id,
           version: 1,
-          definition: input.seed,
+          definition: semantic,
           createdById: input.actor.id,
           createdByLabel: input.actor.label,
           restoredFromVersion: null,
@@ -542,7 +519,7 @@ export async function createWorkflowDefinition(
       throw error;
     }
   }
-  return { definition: mapDefinitionRow(created), current };
+  return { definition: mapDefinitionRow(created, current?.version ?? 0), current };
 }
 
 /** Creates an editor-owned semantic draft without manufacturing a deployment. */
@@ -550,38 +527,20 @@ export async function createWorkflowDefinitionDraft(
   db: Db,
   input: { name: string; seed: WorkflowDefinition; actor: WorkflowDefinitionActor },
 ): Promise<WorkflowDefinitionDraftRow> {
-  requireEditRole(input.actor.role);
   const parsed = parseStructuralDefinition(input.seed);
-  const draft = canonicalizeWorkflowDefinition(parsed);
-  const layout = extractWorkflowDefinitionLayout(parsed);
-  try {
-    const rows = await db
-      .insert(workflowDefinitions)
-      .values({
-        name: input.name,
-        enabled: false,
-        triggerTypes: [],
-        draft,
-        draftRevision: 1,
-        layout,
-        layoutRevision: 1,
-        deployedVersion: null,
-        createdById: input.actor.id,
-        createdByLabel: input.actor.label,
-      })
-      .returning();
-    const row = rows[0]!;
-    return {
-      definition: mapDefinitionRow(row),
-      draft: applyWorkflowDefinitionLayout(draft, layout),
-      draftRevision: row.draftRevision,
-    };
-  } catch (error) {
-    if (isUniqueViolation(error)) {
-      throw new WorkflowDefinitionStoreError(409, "Name already in use");
-    }
-    throw error;
+  const created = await createWorkflowDefinition(db, {
+    ...input,
+    seed: parsed,
+    seedValidation: "structural",
+  });
+  if (!created.current) {
+    throw new WorkflowDefinitionStoreError(500, "Created definition version was not readable");
   }
+  return {
+    definition: created.definition,
+    draft: applyWorkflowDefinitionLayout(created.current.definition, created.definition.layout),
+    draftRevision: created.current.version,
+  };
 }
 
 function triggerArraySql(triggerTypes: WorkflowBlockType[]) {
@@ -591,18 +550,6 @@ function triggerArraySql(triggerTypes: WorkflowBlockType[]) {
 
 function rawRows<T>(result: unknown): T[] {
   return ((result as { rows?: T[] }).rows ?? []) as T[];
-}
-
-async function getWorkflowDefinitionDeployment(
-  db: Db,
-  id: number,
-): Promise<WorkflowDefinitionDeploymentRow | null> {
-  const rows = await db
-    .select()
-    .from(workflowDefinitionDeployments)
-    .where(eq(workflowDefinitionDeployments.id, id))
-    .limit(1);
-  return rows[0] ? mapDeploymentRow(rows[0]) : null;
 }
 
 export async function saveWorkflowDefinitionDraft(
@@ -616,32 +563,59 @@ export async function saveWorkflowDefinitionDraft(
 ): Promise<WorkflowDefinitionDraftRow> {
   requireEditRole(input.actor.role);
   const semantic = canonicalizeWorkflowDefinition(parseStructuralDefinition(input.definition));
-  const rows = await db
-    .update(workflowDefinitions)
-    .set({
-      draft: semantic,
-      draftRevision: sql`${workflowDefinitions.draftRevision} + 1`,
-      updatedAt: new Date(),
-    })
-    .where(
-      and(
-        eq(workflowDefinitions.id, input.definitionId),
-        eq(workflowDefinitions.draftRevision, input.expectedDraftRevision),
-        isNull(workflowDefinitions.archivedAt),
-      ),
-    )
-    .returning();
-  const saved = rows[0];
-  if (!saved) {
+  let selected: { id: number; version: number } | undefined;
+  try {
+    const result = await db.execute(sql`
+      WITH candidate AS (
+        SELECT wd.id
+        FROM workflow_definitions wd
+        WHERE wd.id = ${input.definitionId}
+          AND wd.archived_at IS NULL
+          AND COALESCE((
+            SELECT MAX(v.version)
+            FROM workflow_definition_versions v
+            WHERE v.definition_id = wd.id
+          ), 0) = ${input.expectedDraftRevision}
+        FOR UPDATE
+      ), inserted AS (
+        INSERT INTO workflow_definition_versions
+          (definition_id, version, definition, created_by_id, created_by_label, restored_from_version)
+        SELECT c.id, ${input.expectedDraftRevision + 1}, ${JSON.stringify(semantic)}::jsonb,
+          ${input.actor.id}, ${input.actor.label}, NULL
+        FROM candidate c
+        RETURNING definition_id AS id, version
+      ), updated AS (
+        UPDATE workflow_definitions wd
+        SET updated_at = now()
+        FROM inserted i
+        WHERE wd.id = i.id
+        RETURNING wd.id
+      )
+      SELECT i.id, i.version
+      FROM inserted i
+      JOIN updated u ON u.id = i.id
+    `);
+    selected = rawRows<{ id: number; version: number }>(result)[0];
+  } catch (error) {
+    if (!isUniqueViolation(error)) throw error;
+  }
+  if (!selected) {
     const current = await getWorkflowDefinition(db, input.definitionId);
     if (!current) throw new WorkflowDefinitionStoreError(404, "Unknown definition");
     if (current.archivedAt) throw new WorkflowDefinitionStoreError(409, "Definition is archived");
     throw new WorkflowDefinitionStoreError(409, "Draft changed; reload before saving");
   }
+  const [definition, version] = await Promise.all([
+    getWorkflowDefinition(db, selected.id),
+    getWorkflowDefinitionVersion(db, selected.id, selected.version),
+  ]);
+  if (!definition || !version) {
+    throw new WorkflowDefinitionStoreError(500, "Saved definition version was not readable");
+  }
   return {
-    definition: mapDefinitionRow(saved),
-    draft: applyWorkflowDefinitionLayout(semantic, normalizeLayout(saved.layout)),
-    draftRevision: saved.draftRevision,
+    definition,
+    draft: applyWorkflowDefinitionLayout(version.definition, definition.layout),
+    draftRevision: version.version,
   };
 }
 
@@ -678,13 +652,13 @@ export async function saveWorkflowDefinitionLayout(
     if (current.archivedAt) throw new WorkflowDefinitionStoreError(409, "Definition is archived");
     throw new WorkflowDefinitionStoreError(409, "Layout changed; reload before saving");
   }
-  return mapDefinitionRow(saved);
+  const current = await getCurrentWorkflowDefinitionVersion(db, input.definitionId);
+  return mapDefinitionRow(saved, current?.version ?? 0);
 }
 
 export interface WorkflowDefinitionSelectionResult {
   definition: WorkflowDefinitionRow;
   version: WorkflowDefinitionVersionRow;
-  deployment: WorkflowDefinitionDeploymentRow;
 }
 
 export async function deployWorkflowDefinition(
@@ -697,15 +671,12 @@ export async function deployWorkflowDefinition(
   },
 ): Promise<WorkflowDefinitionSelectionResult> {
   requireEditRole(input.actor.role);
-  const rows = await db
-    .select()
-    .from(workflowDefinitions)
-    .where(eq(workflowDefinitions.id, input.definitionId))
-    .limit(1);
-  const current = rows[0];
+  const current = await getWorkflowDefinition(db, input.definitionId);
   if (!current) throw new WorkflowDefinitionStoreError(404, "Unknown definition");
   if (current.archivedAt) throw new WorkflowDefinitionStoreError(409, "Definition is archived");
-  if (!current.draft) throw new WorkflowDefinitionStoreError(409, "Save a draft before deploying");
+  if (current.draftRevision === 0) {
+    throw new WorkflowDefinitionStoreError(409, "Save a draft before deploying");
+  }
   if (
     current.draftRevision !== input.expectedDraftRevision ||
     current.deployedVersion !== input.expectedDeployedVersion
@@ -713,84 +684,68 @@ export async function deployWorkflowDefinition(
     throw new WorkflowDefinitionStoreError(409, "Definition changed; reload before deploying");
   }
 
-  const draft = upgradeStoredWorkflowDefinition(current.draft);
-  assertValidDefinition(draft);
-  const triggerTypes = triggerTypesOf(draft);
+  const target = await getWorkflowDefinitionVersion(
+    db,
+    input.definitionId,
+    input.expectedDraftRevision,
+  );
+  if (!target) throw new WorkflowDefinitionStoreError(409, "Save a draft before deploying");
+  assertValidDefinition(target.definition);
+  const triggerTypes = triggerTypesOf(target.definition);
   const triggerArray = triggerArraySql(triggerTypes);
 
   try {
     const result = await db.execute(sql`
       WITH candidate AS (
-        SELECT id, enabled, deployed_version
-        FROM workflow_definitions
-        WHERE id = ${input.definitionId}
-          AND archived_at IS NULL
-          AND draft_revision = ${input.expectedDraftRevision}
-          AND deployed_version IS NOT DISTINCT FROM ${input.expectedDeployedVersion}
+        SELECT wd.id, wd.enabled
+        FROM workflow_definitions wd
+        WHERE wd.id = ${input.definitionId}
+          AND wd.archived_at IS NULL
+          AND wd.deployed_version IS NOT DISTINCT FROM ${input.expectedDeployedVersion}
+          AND COALESCE((
+            SELECT MAX(v.version)
+            FROM workflow_definition_versions v
+            WHERE v.definition_id = wd.id
+          ), 0) = ${input.expectedDraftRevision}
         FOR UPDATE
-      ), numbered AS (
-        SELECT c.id, c.enabled, c.deployed_version,
-          COALESCE(MAX(v.version), 0)::integer + 1 AS version
-        FROM candidate c
-        LEFT JOIN workflow_definition_versions v ON v.definition_id = c.id
-        GROUP BY c.id, c.enabled, c.deployed_version
-      ), inserted_version AS (
-        INSERT INTO workflow_definition_versions
-          (definition_id, version, definition, created_by_id, created_by_label, restored_from_version)
-        SELECT n.id, n.version, ${JSON.stringify(draft)}::jsonb,
-          ${input.actor.id}, ${input.actor.label}, NULL
-        FROM numbered n
-        RETURNING definition_id, version
       ), deleted_claims AS (
         DELETE FROM workflow_definition_triggers
-        WHERE definition_id IN (SELECT id FROM numbered)
+        WHERE definition_id IN (SELECT id FROM candidate)
         RETURNING trigger_type
       ), inserted_claims AS (
         INSERT INTO workflow_definition_triggers (trigger_type, definition_id)
-        SELECT trigger_type, n.id
-        FROM numbered n
+        SELECT trigger_type, c.id
+        FROM candidate c
         CROSS JOIN LATERAL unnest(${triggerArray}) AS trigger_type
         CROSS JOIN (SELECT count(*) FROM deleted_claims) AS delete_barrier
-        WHERE n.enabled
+        WHERE c.enabled
         RETURNING trigger_type
       ), claim_barrier AS (
         SELECT count(*) AS count FROM inserted_claims
-      ), inserted_history AS (
-        INSERT INTO workflow_definition_deployments
-          (definition_id, selected_version, previous_version, action, rollback_from_version,
-           created_by_id, created_by_label)
-        SELECT n.id, iv.version, n.deployed_version, 'deploy', NULL,
-          ${input.actor.id}, ${input.actor.label}
-        FROM numbered n
-        JOIN inserted_version iv ON iv.definition_id = n.id
-        CROSS JOIN claim_barrier
-        RETURNING id, definition_id, selected_version
       ), updated AS (
         UPDATE workflow_definitions wd
-        SET deployed_version = iv.version,
+        SET deployed_version = ${input.expectedDraftRevision},
             trigger_types = ${triggerArray},
-            builtin_fallback = false,
             updated_at = now()
-        FROM inserted_version iv
-        JOIN inserted_history h ON h.definition_id = iv.definition_id
-        WHERE wd.id = iv.definition_id
-        RETURNING wd.id, iv.version, h.id AS history_id
+        FROM candidate c
+        CROSS JOIN claim_barrier
+        WHERE wd.id = c.id
+        RETURNING wd.id, wd.deployed_version AS version
       )
-      SELECT id, version, history_id FROM updated
+      SELECT id, version FROM updated
     `);
-    const selected = rawRows<{ id: number; version: number; history_id: number }>(result)[0];
+    const selected = rawRows<{ id: number; version: number }>(result)[0];
     if (!selected) {
       throw new WorkflowDefinitionStoreError(409, "Definition changed; reload before deploying");
     }
-    const [definition, version, deployment] = await Promise.all([
+    const [definition, version] = await Promise.all([
       getWorkflowDefinition(db, selected.id),
       getWorkflowDefinitionVersion(db, selected.id, selected.version),
-      getWorkflowDefinitionDeployment(db, selected.history_id),
     ]);
-    if (!definition || !version || !deployment) {
+    if (!definition || !version) {
       throw new WorkflowDefinitionStoreError(500, "Deployment selection was not readable");
     }
-    return { definition, version, deployment };
+    return { definition, version };
   } catch (error) {
     if (error instanceof WorkflowDefinitionStoreError) throw error;
     if (isUniqueViolation(error)) {
@@ -852,40 +807,27 @@ export async function rollbackWorkflowDefinition(
         RETURNING trigger_type
       ), claim_barrier AS (
         SELECT count(*) AS count FROM inserted_claims
-      ), inserted_history AS (
-        INSERT INTO workflow_definition_deployments
-          (definition_id, selected_version, previous_version, action, rollback_from_version,
-           created_by_id, created_by_label)
-        SELECT t.id, t.version, t.deployed_version, 'rollback', t.deployed_version,
-          ${input.actor.id}, ${input.actor.label}
-        FROM target t
-        CROSS JOIN claim_barrier
-        RETURNING id, definition_id, selected_version
       ), updated AS (
         UPDATE workflow_definitions wd
         SET deployed_version = t.version,
             trigger_types = ${triggerArray},
-            builtin_fallback = false,
             updated_at = now()
         FROM target t
-        JOIN inserted_history h ON h.definition_id = t.id
+        CROSS JOIN claim_barrier
         WHERE wd.id = t.id
-        RETURNING wd.id, t.version, h.id AS history_id
+        RETURNING wd.id, t.version
       )
-      SELECT id, version, history_id FROM updated
+      SELECT id, version FROM updated
     `);
-    const selected = rawRows<{ id: number; version: number; history_id: number }>(result)[0];
+    const selected = rawRows<{ id: number; version: number }>(result)[0];
     if (!selected) {
       throw new WorkflowDefinitionStoreError(409, "Definition changed; reload before rolling back");
     }
-    const [definition, deployment] = await Promise.all([
-      getWorkflowDefinition(db, selected.id),
-      getWorkflowDefinitionDeployment(db, selected.history_id),
-    ]);
-    if (!definition || !deployment) {
+    const definition = await getWorkflowDefinition(db, selected.id);
+    if (!definition) {
       throw new WorkflowDefinitionStoreError(500, "Rollback selection was not readable");
     }
-    return { definition, version: target, deployment };
+    return { definition, version: target };
   } catch (error) {
     if (error instanceof WorkflowDefinitionStoreError) throw error;
     if (isUniqueViolation(error)) {
@@ -967,14 +909,13 @@ export async function updateWorkflowDefinition(
 
   const set: { name?: string; updatedAt?: Date } = {};
   if (input.name !== undefined) set.name = input.name;
-  if (Object.keys(set).length === 0 && input.enabled === undefined) return mapDefinitionRow(current);
+  if (Object.keys(set).length === 0 && input.enabled === undefined) {
+    return (await getWorkflowDefinition(db, current.id))!;
+  }
 
   if (input.enabled !== undefined) {
     let triggerTypes: WorkflowBlockType[] = [];
     if (input.enabled) {
-      if (current.deployedVersion == null && !current.builtinFallback) {
-        throw new WorkflowDefinitionStoreError(409, "Deploy a valid draft before enabling");
-      }
       if (current.deployedVersion != null) {
         const deployed = await getWorkflowDefinitionVersion(
           db,
@@ -987,6 +928,14 @@ export async function updateWorkflowDefinition(
         assertValidDefinition(deployed.definition);
         triggerTypes = triggerTypesOf(deployed.definition);
       } else {
+        const latest = await getCurrentWorkflowDefinitionVersion(db, current.id);
+        const isFreshInstallFallback =
+          latest === null &&
+          current.triggerTypes.length === 1 &&
+          current.triggerTypes[0] === "trigger_ticket_ai";
+        if (!isFreshInstallFallback) {
+          throw new WorkflowDefinitionStoreError(409, "Deploy a valid draft before enabling");
+        }
         triggerTypes = ["trigger_ticket_ai"];
       }
       await assertNoTriggerOverlap(db, { definitionId: current.id, triggerTypes });
@@ -1001,7 +950,7 @@ export async function updateWorkflowDefinition(
           WHERE id = ${current.id}
             AND archived_at IS NULL
             AND deployed_version IS NOT DISTINCT FROM ${current.deployedVersion}
-            AND builtin_fallback = ${current.builtinFallback}
+            AND trigger_types = ${triggerArraySql(current.triggerTypes as WorkflowBlockType[])}
           FOR UPDATE
         ), deleted_claims AS (
           DELETE FROM workflow_definition_triggers
@@ -1064,7 +1013,7 @@ export async function updateWorkflowDefinition(
     throw error;
   }
 
-  return mapDefinitionRow(updated);
+  return (await getWorkflowDefinition(db, updated.id))!;
 }
 
 export async function archiveWorkflowDefinition(
@@ -1153,15 +1102,6 @@ export function serializeWorkflowDefinitionVersion(
     createdById: row.createdById,
     createdByLabel: row.createdByLabel,
     restoredFromVersion: row.restoredFromVersion,
-  };
-}
-
-export function serializeWorkflowDefinitionDeployment(
-  row: WorkflowDefinitionDeploymentRow,
-): WorkflowDefinitionDeployment {
-  return {
-    ...row,
-    createdAt: row.createdAt.toISOString(),
   };
 }
 

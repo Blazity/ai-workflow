@@ -50,7 +50,7 @@ export default defineEventHandler(
         },
       });
       return {
-        meta: serializeDefinitionMeta(saved.definition, saved.definition.deployedVersion),
+        meta: serializeDefinitionMeta(saved.definition),
         draft: saved.draft,
       };
     } catch (error) {

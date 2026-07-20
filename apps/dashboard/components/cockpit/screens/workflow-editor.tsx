@@ -5,7 +5,6 @@ import {
   isTriggerBlockType,
   type RunBlockStatusesResponse,
   type WorkflowDefinition,
-  type WorkflowDefinitionDeployment,
   type WorkflowDefinitionDeploymentResponse,
   type WorkflowDefinitionDetailResponse,
   type WorkflowDefinitionLayoutResponse,
@@ -44,7 +43,6 @@ import {
 } from "@/lib/workflow-editor/validation-controller";
 import { workflowEditorActions } from "@/lib/workflow-editor/editor-actions";
 import { executionLimitsFromDefinition } from "@/lib/workflow-editor/execution-limits";
-import { validatedBindingInputsByNode } from "@/lib/workflow-editor/binding-options";
 import {
   createEditorResponseGuard,
   type EditorResponseGuard,
@@ -96,7 +94,6 @@ export function WorkflowEditorScreen({
   const [metas, setMetas] = useState<WorkflowDefinitionMeta[]>(definitions);
   const [selectedId, setSelectedId] = useState(initialDetail.meta.id);
   const [versions, setVersions] = useState<WorkflowDefinitionVersion[]>(initialDetail.versions);
-  const [deployments, setDeployments] = useState<WorkflowDefinitionDeployment[]>(initialDetail.deployments);
   const [deployed, setDeployed] = useState<WorkflowDefinitionVersion | null>(initialDetail.deployed);
   const [baselineDraft, setBaselineDraft] = useState<WorkflowDefinition | null>(initialDetail.draft);
   const [budgets, setBudgets] = useState<WorkflowExecutionBudgets>(() =>
@@ -175,24 +172,9 @@ export function WorkflowEditorScreen({
         );
   const validationTargetKey = `${selectedId}:${semanticKey}`;
   const validationIsCurrent = validation.key === validationTargetKey;
-  const repairedInputsByNode = validatedBindingInputsByNode({
-    definition: semanticDefinition,
-    options,
-    validationIsCurrent,
-    validationStatus: validation.state.status,
-    nodeContracts: validation.state.nodeContracts,
-  });
-  const compatibilityRepairPending =
-    validationIsCurrent &&
-    JSON.stringify(
-      serializeSemanticWorkflowDefinition(nodes, edges, budgets, {
-        repairedInputsByNode,
-      }),
-    ) !== semanticKey;
   const dirty =
     baselineSemanticKey === null ||
-    semanticKey !== baselineSemanticKey ||
-    compatibilityRepairPending;
+    semanticKey !== baselineSemanticKey;
   const { canSave, canDeploy } = workflowEditorActions({
     dirty,
     structurallyValid: nodesValid(nodes),
@@ -334,9 +316,7 @@ export function WorkflowEditorScreen({
           method: "PUT",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({
-            definition: serializeWorkflowDefinition(nodes, edges, budgets, {
-              repairedInputsByNode,
-            }),
+            definition: serializeWorkflowDefinition(nodes, edges, budgets),
             expectedDraftRevision: selectedMeta?.draftRevision ?? 0,
           }),
         });
@@ -377,7 +357,6 @@ export function WorkflowEditorScreen({
       const body = (await res.json()) as WorkflowDefinitionDeploymentResponse;
       setDeployed(body.deployed);
       setVersions((prev) => [body.deployed, ...prev.filter((item) => item.version !== body.deployed.version)]);
-      setDeployments((prev) => [body.deployment, ...prev]);
       setMetas((prev) => prev.map((meta) => (meta.id === body.meta.id ? body.meta : meta)));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unable to deploy draft");
@@ -401,7 +380,6 @@ export function WorkflowEditorScreen({
       }
       const body = (await res.json()) as WorkflowDefinitionDeploymentResponse;
       setDeployed(body.deployed);
-      setDeployments((prev) => [body.deployment, ...prev]);
       setMetas((prev) => prev.map((meta) => (meta.id === body.meta.id ? body.meta : meta)));
       setConfirmRestore(null);
     } catch (err) {
@@ -430,7 +408,6 @@ export function WorkflowEditorScreen({
       setSelectedId(detail.meta.id);
       setMetas((prev) => prev.map((m) => (m.id === detail.meta.id ? detail.meta : m)));
       setVersions(detail.versions);
-      setDeployments(detail.deployments);
       setDeployed(detail.deployed);
       setBaselineDraft(detail.draft);
       setLayoutBaseline(JSON.stringify(detail.layout));
@@ -654,7 +631,7 @@ export function WorkflowEditorScreen({
                 }}
                 className={headerButtonClass}
               >
-                History ({deployments.length})
+                History ({versions.length})
               </button>
             </>
           }
@@ -804,21 +781,6 @@ export function WorkflowEditorScreen({
             {versions.length === 0 && (
               <div className="font-body text-[12px] text-neutral-500">No versions yet.</div>
             )}
-            {deployments.map((deployment) => (
-              <div
-                key={deployment.id}
-                className="flex items-center gap-2 border-b border-neutral-100 py-2 font-body text-[11px] text-neutral-600"
-              >
-                <span className="font-mono uppercase">{deployment.action}</span>
-                <span>v{deployment.selectedVersion}</span>
-                {deployment.previousVersion !== null && (
-                  <span className="text-neutral-400">from v{deployment.previousVersion}</span>
-                )}
-                <span className="ml-auto text-neutral-400">
-                  {new Date(deployment.createdAt).toLocaleString()}
-                </span>
-              </div>
-            ))}
             {versions.length > 0 && (
               <div className="mt-3 font-mono text-[10px] uppercase tracking-[0.05em] text-neutral-500">
                 Snapshots

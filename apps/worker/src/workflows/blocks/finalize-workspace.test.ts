@@ -54,9 +54,9 @@ const finalized = {
 };
 
 describe("finalize_workspace paramsSchema", () => {
-  it("accepts the execution-only legacy marker and rejects retired authoring params", () => {
+  it("accepts empty params and rejects retired authoring params", () => {
     expect(paramsSchema.safeParse({}).success).toBe(true);
-    expect(paramsSchema.safeParse({ legacyRequiredChecks: ["checks.with dots"] }).success).toBe(true);
+    expect(paramsSchema.safeParse({ legacyRequiredChecks: ["checks.with dots"] }).success).toBe(false);
     expect(paramsSchema.safeParse({ requiredChecks: ["checks-1"] }).success).toBe(false);
     expect(paramsSchema.safeParse({ extra: 1 }).success).toBe(false);
   });
@@ -102,39 +102,6 @@ describe("finalize_workspace execute", () => {
 
     expect(result.kind).toBe("next");
     expect(mocks.finalizeWorkspacePublication).toHaveBeenCalledOnce();
-  });
-
-  it("gates typed and unrepresentable legacy checks without duplicate failures", async () => {
-    const result = await execute(
-      makeNode("finalize_workspace", {
-        legacyRequiredChecks: [
-          "duplicate",
-          "checks.with.dot",
-          "checks space",
-          "missing",
-          "constructor",
-          "duplicate",
-        ],
-      }),
-      {
-        duplicate: { output: { status: "failed" } },
-        "checks.with.dot": { output: { status: "failed" } },
-        "checks space": { output: { status: "ok" } },
-      },
-      makeCtx(),
-      { "checks.typed": "failed", "checks.duplicate": "failed" },
-    );
-
-    expect(result).toEqual({
-      kind: "failed",
-      output: {
-        status: "failed",
-        unmetChecks: ["typed", "duplicate", "checks.with.dot", "missing", "constructor"],
-      },
-      reason:
-        "required checks not satisfied: typed, duplicate, checks.with.dot, missing, constructor",
-    });
-    expect(mocks.finalizeWorkspacePublication).not.toHaveBeenCalled();
   });
 
   it("fails when no workspace is attached", async () => {

@@ -134,7 +134,7 @@ describe("dispatchTicket owner reservation", () => {
     mockHasBlockingApproval.mockReset().mockResolvedValue(false);
     mockStart.mockResolvedValue({ runId: "run-started" });
     mockGetEnabled.mockResolvedValue({
-      definition: { id: 7, builtinFallback: false },
+      definition: { id: 7 },
       current: { definitionId: 7, version: 4 },
     });
   });
@@ -178,7 +178,7 @@ describe("dispatchTicket owner reservation", () => {
 
   it("pins the built-in fallback selection while retaining owner identity", async () => {
     mockGetEnabled.mockResolvedValue({
-      definition: { id: 1, builtinFallback: true },
+      definition: { id: 1 },
       current: null,
     });
     const runRegistry = registry();

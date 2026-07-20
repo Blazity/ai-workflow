@@ -350,63 +350,11 @@ test("drops retired bespoke reference params while retaining supported arrays", 
       type: "finalize_workspace",
       x: 0,
       y: 0,
-      params: { legacyRequiredChecks: ["checks.with.dot"] },
+      params: {},
     },
     { id: "approval", type: "send_plan_approval", x: 0, y: 0, params: {} },
     { id: "arthur", type: "arthur_injection_check", x: 0, y: 0, params: {} },
     { id: "rc", type: "run_checks", x: 0, y: 0, params: {} },
-  ]);
-});
-
-test("cleans compatibility markers only for server-validated replacement bindings", () => {
-  const nodes = flowNodes([
-    {
-      id: "finalize",
-      type: "finalize_workspace",
-      x: 0,
-      y: 0,
-      params: { legacyRequiredChecks: ["lint"] },
-      inputs: { "checks.lint": "steps.lint.output.status" },
-    },
-    {
-      id: "arthur",
-      type: "arthur_injection_check",
-      x: 0,
-      y: 1,
-      params: { legacyContentFromStep: "dynamic" },
-      inputs: { content: "steps.dynamic.output.value" },
-    },
-  ]);
-
-  const unrepaired = serializeWorkflowDefinition(nodes, []);
-  assert.deepEqual(unrepaired.nodes.map((node) => node.params), [
-    { legacyRequiredChecks: ["lint"] },
-    { legacyContentFromStep: "dynamic" },
-  ]);
-
-  const repaired = serializeWorkflowDefinition(nodes, [], undefined, {
-    repairedInputsByNode: {
-      finalize: ["checks.lint"],
-      arthur: ["content"],
-    },
-  });
-  assert.deepEqual(repaired.nodes.map((node) => node.params), [{}, {}]);
-
-  const invalidReplacement = serializeWorkflowDefinition(nodes, [], undefined, {
-    repairedInputsByNode: { finalize: [] },
-  });
-  assert.deepEqual(invalidReplacement.nodes.map((node) => node.params), [
-    { legacyRequiredChecks: ["lint"] },
-    { legacyContentFromStep: "dynamic" },
-  ]);
-
-  const bindingsRemoved = serializeWorkflowDefinition(
-    nodes.map((node) => ({ ...node, inputs: {} })),
-    [],
-  );
-  assert.deepEqual(bindingsRemoved.nodes.map((node) => node.params), [
-    { legacyRequiredChecks: ["lint"] },
-    { legacyContentFromStep: "dynamic" },
   ]);
 });
 

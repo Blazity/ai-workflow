@@ -1088,9 +1088,6 @@ function NodeConfig({
           nodeContracts={nodeContracts}
           canEdit={canEdit}
           onChange={(name, value) => onChange(`inputs.${name}`, value)}
-          onLegacyParamsChange={(params) =>
-            onChange("params.legacyRequiredChecks", params.legacyRequiredChecks)
-          }
         />
         {!contract.availability.available && (
           <div className="py-2.5 px-[14px] border-b border-amber-300 bg-amber-50 font-body text-xs leading-[1.5] text-amber-900">

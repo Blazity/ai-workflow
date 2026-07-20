@@ -209,7 +209,7 @@ describe("loadWorkflowDefinitionFor edge cases", () => {
   });
 
   it("treats a matched enabled record with a null current version as no definition", async () => {
-    mockGetEnabled.mockResolvedValue({ definition: { id: 1, builtinFallback: true }, current: null });
+    mockGetEnabled.mockResolvedValue({ definition: { id: 1 }, current: null });
 
     // Ticket trigger falls back to the built-in default...
     const ticketPlan = await loadWorkflowDefinitionFor("trigger_ticket_ai");

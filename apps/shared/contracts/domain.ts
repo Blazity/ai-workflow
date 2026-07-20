@@ -400,20 +400,6 @@ export interface WorkflowDefinitionVersion {
   restoredFromVersion: number | null;
 }
 
-export type WorkflowDefinitionDeploymentAction = "deploy" | "rollback" | "migration";
-
-export interface WorkflowDefinitionDeployment {
-  id: number;
-  definitionId: number;
-  selectedVersion: number;
-  previousVersion: number | null;
-  action: WorkflowDefinitionDeploymentAction;
-  rollbackFromVersion: number | null;
-  createdAt: string;
-  createdById: string;
-  createdByLabel: string;
-}
-
 export interface WorkflowEditorOptions {
   agentKind: "claude" | "codex";
   defaultModel: string;

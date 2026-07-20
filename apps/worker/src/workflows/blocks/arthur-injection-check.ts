@@ -2,9 +2,7 @@ import { z } from "zod";
 import { isRunControlError } from "../run-control-error.js";
 import type { BlockExecuteFn, BlockExecutionResult } from "./types.js";
 
-export const paramsSchema = z
-  .object({ legacyContentFromStep: z.string().trim().min(1).optional() })
-  .strict();
+export const paramsSchema = z.object({}).strict();
 
 interface InjectionCheckFinding {
   rule: string;
@@ -38,8 +36,8 @@ blockArthurValidatePromptStep.maxRetries = 0;
  * findings), or "skipped" (Arthur unconfigured, no task, or a client error).
  */
 export const execute: BlockExecuteFn = async (
-  block,
-  steps,
+  _block,
+  _steps,
   ctx,
   resolvedInputs,
 ): Promise<BlockExecutionResult> => {
@@ -54,18 +52,6 @@ export const execute: BlockExecuteFn = async (
   let content: string;
   if (typeof resolvedInputs?.content === "string") {
     content = resolvedInputs.content;
-  } else if (typeof block.params.legacyContentFromStep === "string") {
-    const legacy = steps[block.params.legacyContentFromStep];
-    if (!legacy) {
-      return {
-        kind: "next",
-        output: {
-          status: "skipped",
-          reason: `no output from block "${block.params.legacyContentFromStep}"`,
-        },
-      };
-    }
-    content = JSON.stringify(legacy.output);
   } else {
     content = [
       ctx.ticket.description,

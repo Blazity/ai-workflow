@@ -2,13 +2,7 @@ import { z } from "zod";
 import { isRunControlError } from "../run-control-error.js";
 import type { BlockExecuteFn, BlockExecutionResult } from "./types.js";
 
-export const paramsSchema = z
-  .object({
-    /** Execution-only compatibility marker produced by stored-definition
-     * upgrades. The dashboard never authors this field. */
-    legacyRequiredChecks: z.array(z.string().min(1)).optional(),
-  })
-  .strict();
+export const paramsSchema = z.object({}).strict();
 
 /**
  * finalize_workspace: gate on typed `checks.*` status inputs, preflight every
@@ -18,7 +12,7 @@ export const paramsSchema = z
  */
 export const execute: BlockExecuteFn = async (
   block,
-  steps,
+  _steps,
   ctx,
   resolvedInputs = {},
 ): Promise<BlockExecutionResult> => {
@@ -27,17 +21,6 @@ export const execute: BlockExecuteFn = async (
       .filter(([name, status]) => name.startsWith("checks.") && status !== "ok")
       .map(([name]) => name.slice("checks.".length)),
   );
-  const legacyRequiredChecks = Array.isArray(block.params.legacyRequiredChecks)
-    ? block.params.legacyRequiredChecks.filter(
-        (id): id is string => typeof id === "string" && id.length > 0,
-      )
-    : [];
-  for (const id of legacyRequiredChecks) {
-    const status = Object.prototype.hasOwnProperty.call(steps, id)
-      ? steps[id]?.output.status
-      : undefined;
-    if (status !== "ok") unmetChecks.add(id);
-  }
   if (unmetChecks.size > 0) {
     const unmet = [...unmetChecks];
     return {

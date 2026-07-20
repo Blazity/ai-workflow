@@ -6,7 +6,6 @@ import { dashboardUserLabel } from "../../../../pre-pr-checks/store.js";
 import {
   resolveDefaultDefinitionId,
   rollbackWorkflowDefinition,
-  serializeWorkflowDefinitionDeployment,
   serializeWorkflowDefinitionVersion,
 } from "../../../../workflow-definition/store.js";
 import {
@@ -48,9 +47,8 @@ export default defineEventHandler(
         },
       });
       return {
-        meta: serializeDefinitionMeta(restored.definition, restored.version.version),
+        meta: serializeDefinitionMeta(restored.definition),
         deployed: serializeWorkflowDefinitionVersion(restored.version),
-        deployment: serializeWorkflowDefinitionDeployment(restored.deployment),
       };
     } catch (error) {
       toWorkflowDefinitionHttpError(error);

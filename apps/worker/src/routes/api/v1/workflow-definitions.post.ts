@@ -7,9 +7,11 @@ import { dashboardUserLabel } from "../../../pre-pr-checks/store.js";
 import { defaultWorkflowDefinition } from "../../../workflow-definition/default.js";
 import {
   createWorkflowDefinitionDraft,
+  getCurrentWorkflowDefinitionVersion,
   getDeployedWorkflowDefinitionVersion,
   getWorkflowDefinition,
   getWorkflowDefinitionDraft,
+  serializeWorkflowDefinitionVersion,
 } from "../../../workflow-definition/store.js";
 import {
   serializeDefinitionMeta,
@@ -72,15 +74,18 @@ export default defineEventHandler(
           label: await dashboardUserLabel(dbHandle, actor.userId),
         },
       });
+      const current = await getCurrentWorkflowDefinitionVersion(
+        dbHandle,
+        created.definition.id,
+      );
 
       return {
-        meta: serializeDefinitionMeta(created.definition, null),
+        meta: serializeDefinitionMeta(created.definition),
         draft: created.draft,
         layout: created.definition.layout,
         deployed: null,
-        deployments: [],
         current: null,
-        versions: [],
+        versions: current ? [serializeWorkflowDefinitionVersion(current)] : [],
       };
     } catch (error) {
       toWorkflowDefinitionHttpError(error);

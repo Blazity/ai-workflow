@@ -9,20 +9,12 @@ import type {
 } from "@shared/contracts";
 import type { FlowEdgeDef, FlowNodeDef } from "@/lib/flows";
 import { canOmitFromPort } from "./edges";
-import { paramsAfterBindingRepair } from "./binding-options";
 
 // The canonical param-key allowlist lives in @shared/contracts (BLOCK_PARAM_KEYS).
 // Import it rather than keeping a dashboard copy so the two can never drift (a
 // stale copy previously stripped call_llm's `provider` on save).
 
-export interface WorkflowSerializationOptions {
-  repairedInputsByNode?: Readonly<Record<string, readonly string[]>>;
-}
-
-function serializeParams(
-  node: FlowNodeDef,
-  repairedInputNames: readonly string[],
-): Record<string, WorkflowParamValue> {
+function serializeParams(node: FlowNodeDef): Record<string, WorkflowParamValue> {
   const out: Record<string, WorkflowParamValue> = {};
   for (const key of BLOCK_PARAM_KEYS[node.type]) {
     const value = node.params[key];
@@ -31,14 +23,13 @@ function serializeParams(
     if (typeof value === "string" && value.trim() === "") continue;
     out[key] = value;
   }
-  return paramsAfterBindingRepair({ ...node, params: out }, new Set(repairedInputNames));
+  return out;
 }
 
 export function serializeWorkflowDefinition(
   nodes: readonly FlowNodeDef[],
   edges: readonly FlowEdgeDef[],
   budgets: WorkflowExecutionBudgets = {},
-  options: WorkflowSerializationOptions = {},
 ): WorkflowDefinition {
   const typeById = new Map(nodes.map((node) => [node.id, node.type]));
   const hasBudgets = Object.values(budgets).some((value) => value !== undefined);
@@ -51,7 +42,7 @@ export function serializeWorkflowDefinition(
         type: node.type,
         x: Math.round(node.x),
         y: Math.round(node.y),
-        params: serializeParams(node, options.repairedInputsByNode?.[node.id] ?? []),
+        params: serializeParams(node),
         inputs: { ...node.inputs },
       };
       if (node.name !== undefined) serialized.name = node.name;
@@ -76,9 +67,8 @@ export function serializeSemanticWorkflowDefinition(
   nodes: readonly FlowNodeDef[],
   edges: readonly FlowEdgeDef[],
   budgets: WorkflowExecutionBudgets = {},
-  options: WorkflowSerializationOptions = {},
 ): WorkflowDefinition {
-  const definition = serializeWorkflowDefinition(nodes, edges, budgets, options);
+  const definition = serializeWorkflowDefinition(nodes, edges, budgets);
   return {
     ...definition,
     nodes: definition.nodes.map((node) => ({ ...node, x: 0, y: 0 })),

@@ -56,8 +56,8 @@ export function normalizeDefinitionForExecution(
  * version the exact immutable snapshot is loaded. Legacy callers with an id but
  * no version resolve only that definition's deployed pointer. Without either,
  * the enabled trigger binding is used. The built-in graph is returned only for
- * the explicit fresh-install fallback row; missing or invalid stored versions
- * fail closed instead of silently switching execution paths.
+ * the fresh-install ticket binding that has no stored version; missing or
+ * invalid stored versions otherwise fail closed.
  */
 export async function loadWorkflowDefinitionFor(
   triggerType: WorkflowBlockType,
@@ -137,7 +137,13 @@ export async function loadWorkflowDefinitionFor(
       if (!row) {
         const definition =
           version === undefined ? await getWorkflowDefinition(db, definitionId) : null;
-        if (isTicket && definition?.builtinFallback === true) {
+        if (
+          isTicket &&
+          definition?.enabled === true &&
+          definition.deployedVersion === null &&
+          definition.draftRevision === 0 &&
+          definition.triggerTypes.includes("trigger_ticket_ai")
+        ) {
           logger.info(
             { definitionId, version, reviewEnabled: env.ENABLE_REVIEW_PHASE },
             "workflow_definition_default",
@@ -150,7 +156,7 @@ export async function loadWorkflowDefinitionFor(
     } else {
       const match = await getEnabledWorkflowDefinitionForTrigger(db, triggerType);
       if (!match || !match.current) {
-        if (isTicket && match?.definition.builtinFallback === true) {
+        if (isTicket && match) {
           logger.info({ reviewEnabled: env.ENABLE_REVIEW_PHASE }, "workflow_definition_default");
           return buildDefault();
         }

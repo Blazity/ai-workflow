@@ -6,9 +6,7 @@ import {
   getWorkflowDefinition,
   getWorkflowDefinitionDraft,
   getDeployedWorkflowDefinitionVersion,
-  listWorkflowDefinitionDeployments,
   listWorkflowDefinitionVersionRows,
-  serializeWorkflowDefinitionDeployment,
   serializeWorkflowDefinitionVersion,
 } from "../../../../workflow-definition/store.js";
 import { parseDefinitionId, serializeDefinitionMeta } from "../workflow-definitions.get.js";
@@ -25,20 +23,18 @@ export default defineEventHandler(
         throw createError({ statusCode: 404, statusMessage: "Unknown definition" });
       }
 
-      const [draft, deployedRow, versionRows, deploymentRows] = await Promise.all([
+      const [draft, deployedRow, versionRows] = await Promise.all([
         getWorkflowDefinitionDraft(dbHandle, id),
         getDeployedWorkflowDefinitionVersion(dbHandle, id),
         listWorkflowDefinitionVersionRows(dbHandle, id),
-        listWorkflowDefinitionDeployments(dbHandle, id),
       ]);
       const versions = versionRows.map(serializeWorkflowDefinitionVersion);
       const deployed = deployedRow ? serializeWorkflowDefinitionVersion(deployedRow) : null;
       return {
-        meta: serializeDefinitionMeta(row, row.deployedVersion),
+        meta: serializeDefinitionMeta(row),
         draft: draft?.draft ?? null,
         layout: row.layout,
         deployed,
-        deployments: deploymentRows.map(serializeWorkflowDefinitionDeployment),
         current: deployed,
         versions,
       };

@@ -44,7 +44,7 @@ export default defineEventHandler(
         },
       });
       return {
-        meta: serializeDefinitionMeta(updated, updated.deployedVersion),
+        meta: serializeDefinitionMeta(updated),
         layout: updated.layout,
       };
     } catch (error) {

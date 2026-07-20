@@ -147,14 +147,14 @@ describe("createWorkflowDefinition", () => {
     ).rejects.toMatchObject({ statusCode: 400 });
   });
 
-  it("creates a disabled definition with an optional v1 and derived trigger_types", async () => {
+  it("creates a disabled definition with an optional v1 without claiming live triggers", async () => {
     const created = await createWorkflowDefinition(db, {
       name: "With seed",
       seed: def(["trigger_ticket_ai"]),
       actor: ADMIN,
     });
     expect(created.definition.enabled).toBe(false);
-    expect(created.definition.triggerTypes).toEqual(["trigger_ticket_ai"]);
+    expect(created.definition.triggerTypes).toEqual([]);
     expect(created.current?.version).toBe(1);
     expect(created.current?.definitionId).toBe(created.definition.id);
 

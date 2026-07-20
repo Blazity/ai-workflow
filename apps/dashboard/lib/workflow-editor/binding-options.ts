@@ -5,9 +5,7 @@ import {
   type WorkflowBlockContract,
   type WorkflowBlockInputContract,
   type WorkflowDefinition,
-  type WorkflowDefinitionNode,
   type WorkflowEditorOptions,
-  type WorkflowParamValue,
   type WorkflowValueSchema,
 } from "@shared/contracts";
 
@@ -20,46 +18,6 @@ export interface BindingEditorRow {
   legacy: boolean;
   value: string;
   suggestions: WorkflowBindingSource[];
-}
-
-export function paramsAfterBindingRepair(
-  node: Pick<WorkflowDefinitionNode, "type" | "params" | "inputs">,
-  validatedInputNames: ReadonlySet<string>,
-): Record<string, WorkflowParamValue> {
-  const params = { ...node.params };
-  if (
-    node.type === "arthur_injection_check" &&
-    validatedInputNames.has("content") &&
-    typeof node.inputs.content === "string" &&
-    node.inputs.content.trim() !== ""
-  ) {
-    delete params.legacyContentFromStep;
-  }
-  if (
-    node.type === "finalize_workspace" &&
-    Array.isArray(params.legacyRequiredChecks)
-  ) {
-    const remaining = params.legacyRequiredChecks.filter((sourceId) => {
-      if (!validatedInputNames.has(`checks.${sourceId}`)) return true;
-      const value = node.inputs[`checks.${sourceId}`];
-      return typeof value !== "string" || value.trim() === "";
-    });
-    if (remaining.length === 0) delete params.legacyRequiredChecks;
-    else params.legacyRequiredChecks = remaining;
-  }
-  return params;
-}
-
-export function removeLegacyRequiredCheck(
-  params: Record<string, WorkflowParamValue>,
-  sourceId: string,
-): Record<string, WorkflowParamValue> {
-  if (!Array.isArray(params.legacyRequiredChecks)) return params;
-  const next = { ...params };
-  const remaining = params.legacyRequiredChecks.filter((id) => id !== sourceId);
-  if (remaining.length === 0) delete next.legacyRequiredChecks;
-  else next.legacyRequiredChecks = remaining;
-  return next;
 }
 
 export interface BindingEditorInput {
@@ -334,51 +292,6 @@ export function buildBindingEditorRows(input: BindingEditorInput): BindingEditor
       suggestions: bindingSuggestions(input, resolved.input.schema),
     };
   });
-}
-
-/** Returns only current bindings that the authoring model can prove valid with
- * the server-resolved contracts for this exact graph. Drafts may contain
- * invalid bindings, so mere presence is never enough to retire a compatibility
- * marker. */
-export function validatedBindingInputNames(input: BindingEditorInput): string[] {
-  return buildBindingEditorRows(input)
-    .filter(
-      (row) =>
-        !row.legacy &&
-        row.value !== "" &&
-        row.suggestions.some((suggestion) => suggestion === row.value),
-    )
-    .map((row) => row.name);
-}
-
-export function validatedBindingInputsByNode(input: {
-  definition: WorkflowDefinition;
-  options: WorkflowEditorOptions;
-  validationIsCurrent: boolean;
-  validationStatus: "checking" | "valid" | "invalid" | "error";
-  nodeContracts: Record<string, WorkflowBlockContract>;
-}): Record<string, string[]> {
-  if (
-    !input.validationIsCurrent ||
-    (input.validationStatus !== "valid" && input.validationStatus !== "invalid") ||
-    input.definition.nodes.some(
-      (node) => !Object.prototype.hasOwnProperty.call(input.nodeContracts, node.id),
-    )
-  ) {
-    return {};
-  }
-
-  return Object.fromEntries(
-    input.definition.nodes.map((node) => [
-      node.id,
-      validatedBindingInputNames({
-        definition: input.definition,
-        consumerId: node.id,
-        options: input.options,
-        nodeContracts: input.nodeContracts,
-      }),
-    ]),
-  );
 }
 
 export function canAddAdditionalInput(

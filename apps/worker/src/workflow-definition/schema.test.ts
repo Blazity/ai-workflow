@@ -337,7 +337,7 @@ describe("workflowDefinitionSchema", () => {
     });
   });
 
-  it("preserves unrepresentable, missing, and non-dominating legacy Finalize gates", () => {
+  it("upgrades representable legacy Finalize gates and discards obsolete references", () => {
     const raw = {
       schemaVersion: 1 as const,
       nodes: [
@@ -373,14 +373,12 @@ describe("workflowDefinitionSchema", () => {
     const upgraded = upgradeStoredWorkflowDefinition(raw);
     expect(upgraded.nodes.find((entry) => entry.id === "finalize")).toMatchObject({
       inputs: { "checks.safe": "steps.safe.output.status" },
-      params: {
-        legacyRequiredChecks: ["checks.with.dot", "checks space", "missing", "side"],
-      },
+      params: {},
     });
     expect(upgradeStoredWorkflowDefinition(upgraded)).toEqual(upgraded);
   });
 
-  it("upgrades default Arthur content producers and preserves dynamic or unknown producers for repair", () => {
+  it("upgrades default Arthur content producers and discards obsolete dynamic references", () => {
     const upgraded = upgradeStoredWorkflowDefinition({
       schemaVersion: 1,
       nodes: [
@@ -458,15 +456,15 @@ describe("workflowDefinitionSchema", () => {
       "steps.llm.output.output",
     );
     expect(upgraded.nodes.find((entry) => entry.id === "check-generic-dynamic")).toMatchObject({
-      params: { legacyContentFromStep: "generic-dynamic" },
+      params: {},
       inputs: {},
     });
     expect(upgraded.nodes.find((entry) => entry.id === "check-llm-dynamic")).toMatchObject({
-      params: { legacyContentFromStep: "llm-dynamic" },
+      params: {},
       inputs: {},
     });
     expect(upgraded.nodes.find((entry) => entry.id === "check-unknown")).toMatchObject({
-      params: { legacyContentFromStep: "fix" },
+      params: {},
       inputs: {},
     });
   });
@@ -1864,54 +1862,4 @@ describe("validateWorkflowGraph rules", () => {
     },
   );
 
-  it("explains how to repair a legacy Arthur whole-output reference before deployment", () => {
-    const def = graph(
-      [
-        node("t", "trigger_ticket_ai"),
-        node("fix", "fix_agent"),
-        node("check", "arthur_injection_check", { legacyContentFromStep: "fix" }),
-      ],
-      [
-        { from: "t", to: "fix" },
-        { from: "fix", to: "check" },
-      ],
-    );
-
-    expect(workflowDefinitionSchema.safeParse(def).success).toBe(true);
-    expect(validateWorkflowDefinitionForDeployment(def, registryContext)).toEqual(
-      expect.arrayContaining([
-        expect.stringContaining('Block "check" must replace legacy contentFromStep "fix"'),
-      ]),
-    );
-  });
-
-  it("loads but will not redeploy an execution-only legacy Finalize gate", () => {
-    const def = graph(
-      [
-        node("t", "trigger_ticket_ai"),
-        node("prepare", "prepare_workspace"),
-        node("finalize", "finalize_workspace", {
-          legacyRequiredChecks: ["checks.with.dot", "missing"],
-        }),
-      ],
-      [
-        { from: "t", to: "prepare" },
-        { from: "prepare", to: "finalize" },
-      ],
-    );
-
-    expect(workflowDefinitionSchema.safeParse(def).success).toBe(true);
-    expect(validateWorkflowDefinitionForDeployment(def, registryContext)).toEqual(
-      expect.arrayContaining([
-        expect.stringContaining(
-          'Block "finalize" must replace legacy requiredChecks "checks.with.dot, missing"',
-        ),
-      ]),
-    );
-    expect(
-      validateWorkflowDefinitionForDeployment(def, registryContext, {
-        allowLegacyCompatibility: true,
-      }),
-    ).toEqual([]);
-  });
 });

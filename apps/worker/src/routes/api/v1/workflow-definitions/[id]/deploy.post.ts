@@ -5,7 +5,6 @@ import { requireDashboardActor } from "../../../../../lib/auth/request-context.j
 import { dashboardUserLabel } from "../../../../../pre-pr-checks/store.js";
 import {
   deployWorkflowDefinition,
-  serializeWorkflowDefinitionDeployment,
   serializeWorkflowDefinitionVersion,
 } from "../../../../../workflow-definition/store.js";
 import {
@@ -53,9 +52,8 @@ export default defineEventHandler(
         },
       });
       return {
-        meta: serializeDefinitionMeta(selected.definition, selected.version.version),
+        meta: serializeDefinitionMeta(selected.definition),
         deployed: serializeWorkflowDefinitionVersion(selected.version),
-        deployment: serializeWorkflowDefinitionDeployment(selected.deployment),
       };
     } catch (error) {
       toWorkflowDefinitionHttpError(error);

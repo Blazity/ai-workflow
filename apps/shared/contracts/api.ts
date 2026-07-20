@@ -12,7 +12,6 @@ import type {
   WorkflowBlockContract,
   WorkflowBlockType,
   WorkflowDefinition,
-  WorkflowDefinitionDeployment,
   WorkflowDefinitionLayout,
   WorkflowDefinitionVersion,
   WorkflowEditorOptions,
@@ -219,7 +218,6 @@ export interface WorkflowDefinitionDetailResponse {
   draft: WorkflowDefinition | null;
   layout: WorkflowDefinitionLayout;
   deployed: WorkflowDefinitionVersion | null;
-  deployments: WorkflowDefinitionDeployment[];
   /** @deprecated Use `deployed`. */
   current: WorkflowDefinitionVersion | null;
   versions: WorkflowDefinitionVersion[];
@@ -247,7 +245,6 @@ export interface WorkflowDefinitionLayoutResponse {
 export interface WorkflowDefinitionDeploymentResponse {
   meta: WorkflowDefinitionMeta;
   deployed: WorkflowDefinitionVersion;
-  deployment: WorkflowDefinitionDeployment;
 }
 
 export interface WorkflowDefinitionValidationResponse {

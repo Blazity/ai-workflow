@@ -505,6 +505,7 @@ export function upgradeStoredWorkflowDefinition(raw: unknown): WorkflowDefinitio
       delete params.planFromStep;
     }
     if (node.type === "arthur_injection_check") {
+      delete params.legacyContentFromStep;
       const sourceId = params.contentFromStep;
       if (typeof sourceId === "string" && sourceId.length > 0 && inputs.content === undefined) {
         const sourceNode = storedNodeById.get(sourceId);
@@ -524,8 +525,6 @@ export function upgradeStoredWorkflowDefinition(raw: unknown): WorkflowDefinitio
                 : null;
         if (field) {
           inputs.content = `steps.${sourceId}.output.${field}`;
-        } else {
-          params.legacyContentFromStep = sourceId;
         }
       }
       delete params.contentFromStep;
@@ -612,10 +611,6 @@ export function upgradeStoredWorkflowDefinition(raw: unknown): WorkflowDefinitio
 
     const params = { ...node.params };
     const inputs = { ...node.inputs };
-    const legacy = new Set<string>();
-    if (Array.isArray(params.legacyRequiredChecks)) {
-      for (const id of params.legacyRequiredChecks) legacy.add(id);
-    }
     delete params.legacyRequiredChecks;
 
     for (const sourceId of requiredChecksByFinalize.get(node.id) ?? []) {
@@ -630,12 +625,9 @@ export function upgradeStoredWorkflowDefinition(raw: unknown): WorkflowDefinitio
         (inputs[inputName] === undefined || inputs[inputName] === source);
       if (canBind) {
         inputs[inputName] ??= source;
-      } else {
-        legacy.add(sourceId);
       }
     }
 
-    if (legacy.size > 0) params.legacyRequiredChecks = [...legacy];
     return { ...node, params, inputs };
   });
 
@@ -1086,24 +1078,6 @@ export function validateWorkflowDefinitionForDeployment(
     if (!isWorkflowAddressablePathSegment(node.id)) {
       issues.push(
         `Block id "${node.id}" is not addressable; use a letter or underscore followed by letters, numbers, underscores, or hyphens.`,
-      );
-    }
-    if (
-      !options.allowLegacyCompatibility &&
-      node.type === "finalize_workspace" &&
-      Array.isArray(node.params.legacyRequiredChecks)
-    ) {
-      issues.push(
-        `Block "${node.id}" must replace legacy requiredChecks "${node.params.legacyRequiredChecks.join(", ")}" with explicit checks.* status input bindings before deployment.`,
-      );
-    }
-    if (
-      !options.allowLegacyCompatibility &&
-      node.type === "arthur_injection_check" &&
-      typeof node.params.legacyContentFromStep === "string"
-    ) {
-      issues.push(
-        `Block "${node.id}" must replace legacy contentFromStep "${node.params.legacyContentFromStep}" with an explicit string input binding before deployment.`,
       );
     }
     if (

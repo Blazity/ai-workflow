@@ -397,12 +397,6 @@ describe("revised Workflows lifecycle", () => {
     expect(await rolledBack.json()).toMatchObject({
       meta: { deployedVersion: 1 },
       deployed: { version: 1 },
-      deployment: {
-        action: "rollback",
-        selectedVersion: 1,
-        previousVersion: 2,
-        rollbackFromVersion: 2,
-      },
     });
     const immutableVersions = await listWorkflowDefinitionVersionRows(db, 1);
     expect(immutableVersions.map((row) => row.version)).toEqual([2, 1]);

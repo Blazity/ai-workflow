@@ -48,7 +48,7 @@ export default defineEventHandler(
           label: await dashboardUserLabel(dbHandle, actor.userId),
         },
       });
-      return serializeDefinitionMeta(updated, updated.deployedVersion);
+      return serializeDefinitionMeta(updated);
     } catch (error) {
       toWorkflowDefinitionHttpError(error);
     }

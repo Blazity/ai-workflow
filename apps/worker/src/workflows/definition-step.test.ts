@@ -224,7 +224,7 @@ describe("loadWorkflowDefinition", () => {
     expect(loggerError.mock.calls[0][0].issues).toContain('missing required input "plan"');
   });
 
-  it("keeps an already-deployed explicit legacy Arthur compatibility path loadable", async () => {
+  it("loads an old Arthur snapshot without persisting its obsolete compatibility marker", async () => {
     const legacyCompatible: WorkflowDefinition = {
       schemaVersion: 1,
       nodes: [
@@ -249,13 +249,11 @@ describe("loadWorkflowDefinition", () => {
     const plan = await loadWorkflowDefinition();
 
     expect(plan.definitionId).toBe(8);
-    expect(plan.nodes.find((node) => node.id === "check")?.params).toEqual({
-      legacyContentFromStep: "fix",
-    });
+    expect(plan.nodes.find((node) => node.id === "check")?.params).toEqual({});
     expect(loggerError).not.toHaveBeenCalled();
   });
 
-  it("upgrades and loads an execution-only legacy Finalize gate", async () => {
+  it("loads an old Finalize snapshot without persisting its obsolete compatibility marker", async () => {
     const legacyCompatible: WorkflowDefinition = {
       schemaVersion: 1,
       nodes: [
@@ -276,9 +274,7 @@ describe("loadWorkflowDefinition", () => {
     const plan = await loadWorkflowDefinition();
 
     expect(plan.definitionId).toBe(9);
-    expect(plan.nodes.find((node) => node.id === "finalize")?.params).toEqual({
-      legacyRequiredChecks: ["missing legacy check"],
-    });
+    expect(plan.nodes.find((node) => node.id === "finalize")?.params).toEqual({});
     expect(loggerError).not.toHaveBeenCalled();
   });
 
@@ -448,7 +444,7 @@ describe("loadWorkflowDefinitionFor", () => {
   });
 
   it("uses the built-in graph only for the explicit fallback row", async () => {
-    mockGetEnabled.mockResolvedValue({ definition: { id: 1, builtinFallback: true }, current: null });
+    mockGetEnabled.mockResolvedValue({ definition: { id: 1 }, current: null });
     const plan = await loadWorkflowDefinitionFor("trigger_ticket_ai");
     expect(plan).toMatchObject({ version: null, definitionId: null, reviewEnabled: true });
   });

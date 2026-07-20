@@ -577,15 +577,10 @@ export const workflowDefinitions = pgTable(
     id: serial("id").primaryKey(),
     name: text("name").notNull(),
     enabled: boolean("enabled").notNull().default(false),
-    /** Explicit identity for the one fresh-install built-in ticket fallback. */
-    builtinFallback: boolean("builtin_fallback").notNull().default(false),
     triggerTypes: text("trigger_types")
       .array()
       .notNull()
       .default(sql`'{}'::text[]`),
-    /** Mutable, layout-free authoring graph. Deployment snapshots are separate. */
-    draft: jsonb("draft").$type<unknown>(),
-    draftRevision: integer("draft_revision").notNull().default(0),
     /** Node coordinates are CAS-patched independently from semantic edits. */
     layout: jsonb("layout")
       .$type<{ nodes: Record<string, { x: number; y: number }> }>()
@@ -604,9 +599,6 @@ export const workflowDefinitions = pgTable(
     uniqueIndex("workflow_definitions_name_active_idx")
       .on(t.name)
       .where(sql`${t.archivedAt} is null`),
-    uniqueIndex("workflow_definitions_single_builtin_fallback_idx")
-      .on(t.builtinFallback)
-      .where(sql`${t.builtinFallback} = true`),
     foreignKey({
       columns: [t.id, t.deployedVersion],
       foreignColumns: [
@@ -614,39 +606,6 @@ export const workflowDefinitions = pgTable(
         workflowDefinitionVersions.version,
       ],
       name: "workflow_definitions_deployed_version_fk",
-    }),
-  ],
-);
-
-/**
- * Append-only audit log of deployment selections. A rollback selects an
- * existing immutable snapshot and records where it rolled back from; it does
- * not manufacture a duplicate snapshot.
- */
-export const workflowDefinitionDeployments = pgTable(
-  "workflow_definition_deployments",
-  {
-    id: serial("id").primaryKey(),
-    definitionId: integer("definition_id")
-      .notNull()
-      .references(() => workflowDefinitions.id, { onDelete: "cascade" }),
-    selectedVersion: integer("selected_version").notNull(),
-    previousVersion: integer("previous_version"),
-    action: text("action").notNull(),
-    rollbackFromVersion: integer("rollback_from_version"),
-    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-    createdById: text("created_by_id").notNull(),
-    createdByLabel: text("created_by_label").notNull(),
-  },
-  (t) => [
-    check(
-      "workflow_definition_deployments_action_check",
-      sql`${t.action} in ('deploy', 'rollback', 'migration')`,
-    ),
-    foreignKey({
-      columns: [t.definitionId, t.selectedVersion],
-      foreignColumns: [workflowDefinitionVersions.definitionId, workflowDefinitionVersions.version],
-      name: "workflow_definition_deployments_selected_version_fk",
     }),
   ],
 );
