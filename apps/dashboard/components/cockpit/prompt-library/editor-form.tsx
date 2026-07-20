@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { CkCard, CkTabs } from "@/components/ui";
 import { PromptPreview } from "@/components/cockpit/prompt-library/prompt-preview";
 import { VariableChips } from "@/components/cockpit/prompt-library/variable-chips";
@@ -30,6 +30,7 @@ export function PromptEditorForm({
   busy,
   onSubmit,
   onCancel,
+  onDirtyChange,
 }: {
   mode: "create" | "edit";
   initialName: string;
@@ -40,6 +41,7 @@ export function PromptEditorForm({
   busy: boolean;
   onSubmit: (draft: PromptDraft) => void;
   onCancel: () => void;
+  onDirtyChange?: (dirty: boolean) => void;
 }) {
   const [name, setName] = useState(initialName);
   const [description, setDescription] = useState(initialDescription);
@@ -64,6 +66,18 @@ export function PromptEditorForm({
     busy ||
     !name.trim() ||
     (mode === "create" ? !body.trim() : !dirty);
+
+  // Surface dirtiness to the parent so it can guard navigation away from an
+  // in-progress draft. The callback is held in a ref so a caller passing a fresh
+  // function each render does not retrigger the effect, which only cares about
+  // the dirty value flipping.
+  const onDirtyChangeRef = useRef(onDirtyChange);
+  onDirtyChangeRef.current = onDirtyChange;
+  useEffect(() => {
+    onDirtyChangeRef.current?.(dirty);
+  }, [dirty]);
+  // On unmount the draft is gone, so report clean.
+  useEffect(() => () => onDirtyChangeRef.current?.(false), []);
 
   function commitTag() {
     const t = tagInput.trim().replace(/,+$/, "").trim();

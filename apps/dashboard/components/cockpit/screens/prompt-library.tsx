@@ -45,6 +45,11 @@ export function PromptLibraryScreen({
   const [showArchived, setShowArchived] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Guarding an in-progress edit/create draft against navigation that would drop
+  // it. `formDirty` mirrors the mounted form's dirtiness; `pendingNav` holds a
+  // navigation the user must confirm before the dirty draft is discarded.
+  const [formDirty, setFormDirty] = useState(false);
+  const [pendingNav, setPendingNav] = useState<(() => void) | null>(null);
   const [detailCache, setDetailCache] = useState<Map<number, PromptLibraryDetailResponse>>(new Map());
   const [usageCache, setUsageCache] = useState<Map<number, PromptLibraryUsageResponse>>(new Map());
   // The prompt id whose lazy detail load failed, so the pane can offer a retry.
@@ -125,11 +130,25 @@ export function PromptLibraryScreen({
     });
   }
 
+  // Run a navigation immediately, unless a dirty draft is open, in which case
+  // stash it so the confirm bar can ask before discarding the draft. A fresh
+  // request while one is pending replaces it.
+  function requestNav(action: () => void) {
+    if (mode !== "view" && formDirty) setPendingNav(() => action);
+    else action();
+  }
+
   function selectRow(id: number) {
-    setActiveId(id);
-    setMode("view");
-    setError(null);
-    setDetailErrorId(null);
+    const go = () => {
+      setActiveId(id);
+      setMode("view");
+      setError(null);
+      setDetailErrorId(null);
+    };
+    // Clicking the already-open prompt in view mode changes nothing, so skip the
+    // guard; any real switch routes through requestNav.
+    if (id === activeId && mode === "view") go();
+    else requestNav(go);
   }
 
   async function createPrompt(draft: PromptDraft) {
@@ -277,6 +296,7 @@ export function PromptLibraryScreen({
         busy={busy === "create"}
         onSubmit={createPrompt}
         onCancel={() => setMode("view")}
+        onDirtyChange={setFormDirty}
       />
     );
   } else if (mode === "edit" && activeRow && activeDetail) {
@@ -291,6 +311,7 @@ export function PromptLibraryScreen({
         busy={busy === "save"}
         onSubmit={saveEdit}
         onCancel={() => setMode("view")}
+        onDirtyChange={setFormDirty}
       />
     );
   } else if (activeRow && activeDetail === undefined && detailErrorId === activeId) {
@@ -346,10 +367,15 @@ export function PromptLibraryScreen({
           </p>
         </div>
         {canEdit && available && !showEmptyState && (
-          <button onClick={() => {
-            setMode("create");
-            setError(null);
-          }} className={primaryButtonClass}>
+          <button
+            onClick={() =>
+              requestNav(() => {
+                setMode("create");
+                setError(null);
+              })
+            }
+            className={primaryButtonClass}
+          >
             New prompt
           </button>
         )}
@@ -396,7 +422,31 @@ export function PromptLibraryScreen({
               setShowArchived(false);
             }}
           />
-          {rightPane}
+          <div className="flex flex-col gap-3 min-w-0">
+            {pendingNav && (
+              <span className="flex items-center gap-3 font-body text-[12px] text-neutral-700">
+                <span>Discard draft?</span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    pendingNav?.();
+                    setPendingNav(null);
+                  }}
+                  className="appearance-none border-none bg-transparent font-body text-[12px] font-semibold text-red-600 cursor-pointer"
+                >
+                  Discard
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPendingNav(null)}
+                  className="appearance-none border-none bg-transparent font-body text-[12px] text-neutral-500 cursor-pointer"
+                >
+                  Keep editing
+                </button>
+              </span>
+            )}
+            {rightPane}
+          </div>
         </div>
       )}
     </div>
