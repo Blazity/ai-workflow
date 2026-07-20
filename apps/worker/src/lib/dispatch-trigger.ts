@@ -25,18 +25,14 @@ import { logger } from "./logger.js";
 import { isRepoAllowed } from "./repo-allowlist.js";
 import { prSubjectKey, ticketSubjectKey } from "./subject-key.js";
 import {
-  acceptReceivedTriggerDelivery,
+  acceptTriggerDelivery,
   coalescePendingTrigger,
-  completeReceivedTriggerDelivery,
   completeTriggerDelivery,
   deletePendingTrigger,
   getTriggerDelivery,
   listPendingTriggersForSubject,
   recordCandidateStartedTriggerDelivery,
-  receiveTriggerDelivery,
   type AcceptedTriggerDelivery,
-  type ReceivedTriggerDelivery,
-  type StoredTriggerDelivery,
   type StoredTriggerResult,
   type TriggerScope,
 } from "./trigger-delivery-store.js";
@@ -105,18 +101,6 @@ export async function dispatchTriggerEvent(
     return { result: "ignored_malformed_delivery" };
   }
 
-  // Delivery identity and pinned definition are immutable. An unfinished retry
-  // resumes the durable envelope through enrichment or dispatch; a completed
-  // retry returns its stored result.
-  const existing = await getTriggerDelivery(
-    deps.db,
-    event.delivery.provider,
-    event.delivery.deliveryId,
-  );
-  if (existing) {
-    return resumeStoredTriggerDelivery(existing, deps);
-  }
-
   const enabled = await getEnabledWorkflowDefinitionForTrigger(deps.db, event.triggerType);
   if (!enabled?.current) return { result: "no_definition" };
 
@@ -137,16 +121,36 @@ export async function dispatchTriggerEvent(
   const eligibleEvent = selectEligibleEvent(event, params);
   if (!eligibleEvent) return { result: "ignored_untrusted_event" };
 
-  const received: ReceivedTriggerDelivery = {
-    ...eligibleEvent,
-    scope,
-    definitionId: enabled.definition.id,
-    definitionVersion: enabled.current.version,
-  };
-
   try {
-    const durable = await receiveTriggerDelivery(deps.db, received);
-    return await resumeStoredTriggerDelivery(durable.stored, deps);
+    const repositoryScope = await readRepositoryScope(eligibleEvent.pr, deps);
+    if (repositoryScope.status === "unreachable") return { result: "error" };
+    if (!repositoryScope.configured) return { result: "ignored_provider" };
+
+    const currentResult = await readCurrentPullRequest(eligibleEvent, deps);
+    if (currentResult.status === "unreachable") return { result: "error" };
+    const currentEvent = bindCurrentPullRequest(eligibleEvent, currentResult.current);
+    if (!currentEvent) return { result: "ignored_stale_head" };
+
+    const identity = await resolveSubjectIdentity(currentEvent, scope, deps);
+    if (identity.status === "ignored") return { result: "ignored_not_workflow_owned" };
+    if (identity.status === "pending_correlation" || identity.status === "retryable_error") {
+      return { result: "error" };
+    }
+
+    const accepted: AcceptedTriggerDelivery = {
+      ...currentEvent,
+      scope,
+      subjectKey: identity.subjectKey,
+      ticketKey: identity.ticketKey,
+      definitionId: enabled.definition.id,
+      definitionVersion: enabled.current.version,
+    };
+    const durable = await acceptTriggerDelivery(deps.db, accepted);
+    if (!durable.inserted) {
+      if (durable.stored.result) return storedResultToDispatch(durable.stored.result);
+      if (durable.stored.pending) return { result: "coalesced" };
+    }
+    return await dispatchAcceptedTrigger(durable.stored, deps);
   } catch (error) {
     logger.warn(
       { delivery: event.delivery, error: (error as Error).message },
@@ -154,72 +158,6 @@ export async function dispatchTriggerEvent(
     );
     return { result: "error" };
   }
-}
-
-async function resumeStoredTriggerDelivery(
-  stored: StoredTriggerDelivery,
-  deps: DispatchTriggerDeps,
-): Promise<DispatchTriggerResult> {
-  if (stored.status === "received" && stored.result === null) {
-    return enrichReceivedTrigger(stored, deps);
-  }
-  if (stored.status === "accepted" && stored.result === null) {
-    const accepted = acceptedFromStored(stored);
-    if (!accepted) return { result: "error" };
-    return resumeAcceptedTrigger(accepted, deps);
-  }
-  return storedResultToDispatch(stored.result);
-}
-
-async function enrichReceivedTrigger(
-  received: StoredTriggerDelivery,
-  deps: DispatchTriggerDeps,
-): Promise<DispatchTriggerResult> {
-  const event = triggerEventFromStored(received);
-  const repositoryScope = await readRepositoryScope(event.pr, deps);
-  if (repositoryScope.status === "unreachable") return { result: "error" };
-  if (!repositoryScope.configured) {
-    return completeReceivedDelivery(received, { result: "ignored_provider" }, deps);
-  }
-  const currentResult = await readCurrentPullRequest(event, deps);
-  if (currentResult.status === "unreachable") return { result: "error" };
-  const currentEvent = bindCurrentPullRequest(event, currentResult.current);
-  if (!currentEvent) {
-    logger.info(
-      { subject: event.pr, current: currentResult.current },
-      "trigger_ignored_stale_head",
-    );
-    return completeReceivedDelivery(
-      received,
-      { result: "ignored_stale_head" },
-      deps,
-    );
-  }
-
-  const identity = await resolveSubjectIdentity(currentEvent, received.scope, deps);
-  if (identity.status === "ignored") {
-    return completeReceivedDelivery(
-      received,
-      { result: "ignored_not_workflow_owned" },
-      deps,
-    );
-  }
-  if (identity.status === "retryable_error") return { result: "error" };
-
-  const accepted: AcceptedTriggerDelivery = {
-    ...currentEvent,
-    scope: received.scope,
-    subjectKey: identity.subjectKey,
-    ticketKey: identity.ticketKey,
-    definitionId: received.definitionId,
-    definitionVersion: received.definitionVersion,
-  };
-  const enrichment = await acceptReceivedTriggerDelivery(deps.db, accepted);
-  if (!enrichment.enriched) {
-    return resumeStoredTriggerDelivery(enrichment.stored, deps);
-  }
-  if (identity.status === "pending_correlation") return { result: "error" };
-  return dispatchAcceptedTrigger(accepted, deps);
 }
 
 async function readRepositoryScope(
@@ -265,103 +203,6 @@ async function isConfiguredTriggerRepository(pr: PrTriggerPayload): Promise<bool
   );
 }
 
-async function completeReceivedDelivery(
-  received: StoredTriggerDelivery,
-  result: StoredTriggerResult,
-  deps: DispatchTriggerDeps,
-): Promise<DispatchTriggerResult> {
-  const completed = await completeReceivedTriggerDelivery(
-    deps.db,
-    received.delivery.provider,
-    received.delivery.deliveryId,
-    result,
-  );
-  if (completed) return storedResultToDispatch(result);
-
-  const current = await getTriggerDelivery(
-    deps.db,
-    received.delivery.provider,
-    received.delivery.deliveryId,
-  );
-  if (!current || (current.status === "received" && current.result === null)) {
-    return { result: "error" };
-  }
-  return resumeStoredTriggerDelivery(current, deps);
-}
-
-function triggerEventFromStored(stored: StoredTriggerDelivery): TriggerEvent {
-  return {
-    delivery: stored.delivery,
-    triggerType: stored.triggerType,
-    pr: stored.pr,
-  };
-}
-
-function acceptedFromStored(stored: StoredTriggerDelivery): AcceptedTriggerDelivery | null {
-  if (stored.subjectKey === null) return null;
-  return {
-    ...triggerEventFromStored(stored),
-    scope: stored.scope,
-    subjectKey: stored.subjectKey,
-    ticketKey: stored.ticketKey,
-    definitionId: stored.definitionId,
-    definitionVersion: stored.definitionVersion,
-  };
-}
-
-async function resumeAcceptedTrigger(
-  accepted: AcceptedTriggerDelivery,
-  deps: DispatchTriggerDeps,
-): Promise<DispatchTriggerResult> {
-  const currentResult = await readCurrentPullRequest(accepted, deps);
-  if (currentResult.status === "unreachable") return { result: "error" };
-  const currentAccepted = bindCurrentPullRequest(accepted, currentResult.current);
-  if (!currentAccepted) {
-    await completeDelivery(deps.db, accepted, { result: "ignored_stale_head" });
-    return { result: "ignored_stale_head" };
-  }
-  if (currentAccepted.scope === "workflow_owned") {
-    const identity = await resolveSubjectIdentity(currentAccepted, currentAccepted.scope, deps);
-    if (identity.status === "pending_correlation" || identity.status === "retryable_error") {
-      return { result: "error" };
-    }
-    if (
-      identity.status === "ignored" ||
-      identity.subjectKey !== currentAccepted.subjectKey ||
-      identity.ticketKey !== currentAccepted.ticketKey
-    ) {
-      await completeDelivery(deps.db, currentAccepted, {
-        result: "ignored_not_workflow_owned",
-      });
-      return { result: "ignored_not_workflow_owned" };
-    }
-  }
-  return dispatchAcceptedTrigger(currentAccepted, deps);
-}
-
-/**
- * Poll-side recovery for a process death after durable receipt but before
- * enrichment or the pending snapshot/result write. Re-read the row so a stale
- * scan cannot replay a delivery that another dispatcher already completed.
- */
-export async function recoverAcceptedTriggerDelivery(
-  scanned: StoredTriggerDelivery,
-  deps: DispatchTriggerDeps,
-): Promise<DispatchTriggerResult | null> {
-  const current = await getTriggerDelivery(
-    deps.db,
-    scanned.delivery.provider,
-    scanned.delivery.deliveryId,
-  );
-  if (
-    !current ||
-    (current.status !== "received" && current.status !== "accepted") ||
-    current.result !== null
-  ) {
-    return null;
-  }
-  return resumeStoredTriggerDelivery(current, deps);
-}
 
 function selectEligibleEvent(
   event: TriggerEvent,
@@ -423,7 +264,7 @@ function stringArray(value: unknown, fallback: string[] = []): string[] {
 }
 
 async function dispatchAcceptedTrigger(
-  accepted: AcceptedTriggerDelivery,
+  acceptedInput: AcceptedTriggerDelivery,
   deps: DispatchTriggerDeps,
   pendingEvent?: {
     headSha: string;
@@ -431,6 +272,14 @@ async function dispatchAcceptedTrigger(
     deliveryId: string;
   },
 ): Promise<DispatchTriggerResult> {
+  const currentResult = await readCurrentPullRequest(acceptedInput, deps);
+  if (currentResult.status === "unreachable") return { result: "error" };
+  const accepted = bindCurrentPullRequest(acceptedInput, currentResult.current);
+  if (!accepted) {
+    await completeDelivery(deps.db, acceptedInput, { result: "ignored_stale_head" });
+    return { result: "ignored_stale_head" };
+  }
+
   // Persist the exact accepted envelope before a Workflow candidate can be
   // started. The candidate removes this row only after it wins owner CAS and
   // binds its runtime id. If start returns but that candidate never reaches

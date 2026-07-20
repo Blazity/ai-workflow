@@ -10,18 +10,7 @@ import { getDb } from "../../db/client.js";
 import { collectSnapshots } from "../../lib/telemetry/collect-snapshots.js";
 import { upsertRunSnapshots } from "../../lib/telemetry/run-telemetry.js";
 import type { RunsLister } from "../../lib/overview/collect-runs.js";
-import {
-  drainOldestPendingTrigger,
-  recoverAcceptedTriggerDelivery,
-} from "../../lib/dispatch-trigger.js";
-import {
-  listPendingSubjectKeys,
-  listRecoverableAcceptedTriggerDeliveries,
-} from "../../lib/trigger-delivery-store.js";
-import {
-  recoverAcceptedTriggerDeliveries,
-  recoverOrphanedPendingTriggers,
-} from "../../lib/pending-trigger-recovery.js";
+import { drainOldestPendingTrigger } from "../../lib/dispatch-trigger.js";
 import {
   classifyProtectedClarificationSubjects,
   reconcileClarificationCheckpoints,
@@ -39,8 +28,6 @@ import {
   listDispatchBlockingApprovals,
   type ApprovalRow,
 } from "../../approvals/store.js";
-
-const ACCEPTED_TRIGGER_RECOVERY_GRACE_MS = 30_000;
 
 export default defineEventHandler(async (event) => {
   verifyCronAuth(getHeader(event, "authorization"));
@@ -153,46 +140,6 @@ export default defineEventHandler(async (event) => {
   const clarificationCleanupStarted =
     await startQueuedClarificationSnapshotCleanups({ db });
 
-  const acceptedTriggerRecovery = await recoverAcceptedTriggerDeliveries({
-    listDeliveries: () =>
-      listRecoverableAcceptedTriggerDeliveries(
-        db,
-        new Date(Date.now() - ACCEPTED_TRIGGER_RECOVERY_GRACE_MS),
-      ),
-    isProtected: (subjectKey) =>
-      protectedClarificationSubjects.has(subjectKey),
-    getActive: (subjectKey) => adapters.runRegistry.get(subjectKey),
-    resume: (delivery) =>
-      recoverAcceptedTriggerDelivery(delivery, {
-        db,
-        runRegistry: adapters.runRegistry,
-        maxConcurrentAgents: env.MAX_CONCURRENT_AGENTS,
-      }),
-    onError: (subjectKey, error) =>
-      logger.warn(
-        { subjectKey, error: (error as Error).message },
-        "poll_accepted_trigger_recovery_failed",
-      ),
-  });
-
-  const orphanedTriggerRecovery = await recoverOrphanedPendingTriggers({
-    listSubjects: () => listPendingSubjectKeys(db),
-    isProtected: (subjectKey) =>
-      protectedClarificationSubjects.has(subjectKey),
-    getActive: (subjectKey) => adapters.runRegistry.get(subjectKey),
-    drain: (subjectKey) =>
-      drainOldestPendingTrigger(subjectKey, {
-        db,
-        runRegistry: adapters.runRegistry,
-        maxConcurrentAgents: env.MAX_CONCURRENT_AGENTS,
-      }),
-    onError: (subjectKey, error) =>
-      logger.warn(
-        { subjectKey, error: (error as Error).message },
-        "poll_pending_trigger_recovery_failed",
-      ),
-  });
-
   // Housekeeping: physically drop expired gate rows (reads already treat
   // them as absent). Best-effort — a failed purge must not fail the poll.
   await new GateStore(db)
@@ -219,15 +166,8 @@ export default defineEventHandler(async (event) => {
     started: started.length,
     cancelled,
     cleaned,
-    pendingRecovered:
-      releasedTriggerRecovery.started +
-      acceptedTriggerRecovery.started +
-      orphanedTriggerRecovery.started,
-    triggerRecovery: {
-      released: releasedTriggerRecovery,
-      accepted: acceptedTriggerRecovery,
-      orphaned: orphanedTriggerRecovery,
-    },
+    pendingRecovered: releasedTriggerRecovery.started,
+    triggerRecovery: { released: releasedTriggerRecovery },
     clarificationRecovered,
     clarificationParkingRecovered,
     clarificationProviderParkingRecovered,

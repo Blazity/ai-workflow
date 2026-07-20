@@ -1,6 +1,4 @@
-ALTER TABLE "trigger_deliveries" ALTER COLUMN "subject_key" DROP NOT NULL;--> statement-breakpoint
-ALTER TABLE "trigger_deliveries" ADD CONSTRAINT "trigger_deliveries_state_check" CHECK ((
-        ("trigger_deliveries"."status" = 'received' and "trigger_deliveries"."subject_key" is null and "trigger_deliveries"."result" is null)
-        or ("trigger_deliveries"."status" = 'accepted' and "trigger_deliveries"."subject_key" is not null and "trigger_deliveries"."result" is null)
-        or ("trigger_deliveries"."status" = 'completed' and "trigger_deliveries"."result" is not null)
-      ));
+DROP TABLE "pending_trigger_events";--> statement-breakpoint
+ALTER TABLE "trigger_deliveries" ADD COLUMN "pending" boolean DEFAULT false NOT NULL;--> statement-breakpoint
+CREATE UNIQUE INDEX "trigger_deliveries_one_pending_per_subject_idx" ON "trigger_deliveries" USING btree ("subject_key") WHERE "trigger_deliveries"."pending" = true;--> statement-breakpoint
+ALTER TABLE "trigger_deliveries" DROP COLUMN "status";

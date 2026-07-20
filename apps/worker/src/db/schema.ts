@@ -84,7 +84,8 @@ export const activeRunSandboxes = pgTable(
   ],
 );
 
-/** Authenticated, normalized provider deliveries. The provider delivery id is idempotent. */
+/** Authenticated, normalized provider-event inbox. Delivery identity is
+ * idempotent; at most one row per subject is retained as pending feedback. */
 export const triggerDeliveries = pgTable(
   "trigger_deliveries",
   {
@@ -92,27 +93,22 @@ export const triggerDeliveries = pgTable(
     deliveryId: text("delivery_id").notNull(),
     producer: text("producer").notNull(),
     triggerType: text("trigger_type").notNull(),
-    subjectKey: text("subject_key"),
+    subjectKey: text("subject_key").notNull(),
     ticketKey: text("ticket_key"),
     headSha: text("head_sha").notNull(),
     definitionId: integer("definition_id").notNull(),
     definitionVersion: integer("definition_version").notNull(),
     payload: jsonb("payload").$type<unknown>().notNull(),
-    status: text("status").notNull().default("accepted"),
+    pending: boolean("pending").notNull().default(false),
     result: jsonb("result").$type<unknown>(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
     primaryKey({ columns: [t.provider, t.deliveryId] }),
-    check(
-      "trigger_deliveries_state_check",
-      sql`(
-        (${t.status} = 'received' and ${t.subjectKey} is null and ${t.result} is null)
-        or (${t.status} = 'accepted' and ${t.subjectKey} is not null and ${t.result} is null)
-        or (${t.status} = 'completed' and ${t.result} is not null)
-      )`,
-    ),
+    uniqueIndex("trigger_deliveries_one_pending_per_subject_idx")
+      .on(t.subjectKey)
+      .where(sql`${t.pending} = true`),
     foreignKey({
       columns: [t.definitionId, t.definitionVersion],
       foreignColumns: [
@@ -120,46 +116,6 @@ export const triggerDeliveries = pgTable(
         workflowDefinitionVersions.version,
       ],
       name: "trigger_deliveries_definition_version_fk",
-    }),
-  ],
-);
-
-/** A durable semantic backlog entry per subject/head/trigger/deployed version. */
-export const pendingTriggerEvents = pgTable(
-  "pending_trigger_events",
-  {
-    subjectKey: text("subject_key").notNull(),
-    headSha: text("head_sha").notNull(),
-    triggerType: text("trigger_type").notNull(),
-    provider: text("provider").notNull(),
-    deliveryId: text("delivery_id").notNull(),
-    ticketKey: text("ticket_key"),
-    definitionId: integer("definition_id").notNull(),
-    definitionVersion: integer("definition_version").notNull(),
-    payload: jsonb("payload").$type<unknown>().notNull(),
-    failedChecks: jsonb("failed_checks").$type<unknown[]>().notNull().default(sql`'[]'::jsonb`),
-    reviews: jsonb("reviews").$type<unknown[]>().notNull().default(sql`'[]'::jsonb`),
-    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
-  },
-  (t) => [
-    primaryKey({
-      columns: [
-        t.subjectKey,
-        t.headSha,
-        t.triggerType,
-        t.definitionId,
-        t.definitionVersion,
-      ],
-    }),
-    index("pending_trigger_events_subject_created_idx").on(t.subjectKey, t.createdAt),
-    foreignKey({
-      columns: [t.definitionId, t.definitionVersion],
-      foreignColumns: [
-        workflowDefinitionVersions.definitionId,
-        workflowDefinitionVersions.version,
-      ],
-      name: "pending_trigger_events_definition_version_fk",
     }),
   ],
 );

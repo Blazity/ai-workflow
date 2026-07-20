@@ -12,8 +12,6 @@ const mocks = vi.hoisted(() => ({
   classifyProtectedClarifications: vi.fn(),
   listProtectedClarifications: vi.fn(),
   startCleanups: vi.fn(),
-  recoverAccepted: vi.fn(),
-  recoverPending: vi.fn(),
   listDispatchBlockingApprovals: vi.fn(),
   getApproval: vi.fn(),
   rejectUndispatchableApproval: vi.fn(),
@@ -79,17 +77,8 @@ vi.mock("../../clarifications/reconciliation.js", () => ({
   startQueuedClarificationSnapshotCleanups: (...args: any[]) =>
     mocks.startCleanups(...args),
 }));
-vi.mock("../../lib/trigger-delivery-store.js", () => ({
-  listPendingSubjectKeys: vi.fn().mockResolvedValue([]),
-  listRecoverableAcceptedTriggerDeliveries: vi.fn().mockResolvedValue([]),
-}));
-vi.mock("../../lib/pending-trigger-recovery.js", () => ({
-  recoverAcceptedTriggerDeliveries: (...args: any[]) => mocks.recoverAccepted(...args),
-  recoverOrphanedPendingTriggers: (...args: any[]) => mocks.recoverPending(...args),
-}));
 vi.mock("../../lib/dispatch-trigger.js", () => ({
   drainOldestPendingTrigger: vi.fn().mockResolvedValue(null),
-  recoverAcceptedTriggerDelivery: vi.fn().mockResolvedValue(null),
 }));
 vi.mock("../../post-pr-gate/gate-store.js", () => ({
   GateStore: class {
@@ -149,17 +138,6 @@ describe("cron clarification recovery ordering", () => {
     });
     mocks.reconcileRuns.mockResolvedValue({ cancelled: 0, cleaned: 0 });
     mocks.startCleanups.mockResolvedValue(0);
-    mocks.recoverAccepted.mockImplementation(async () => {
-      state.order.push("recover-accepted-triggers");
-      return { scanned: 1, blocked: 0, attempted: 1, started: 1, errors: 0 };
-    });
-    mocks.recoverPending.mockResolvedValue({
-      scanned: 0,
-      blocked: 0,
-      attempted: 0,
-      started: 0,
-      errors: 0,
-    });
     mocks.listDispatchBlockingApprovals.mockResolvedValue([]);
     mocks.getApproval.mockResolvedValue(null);
     mocks.rejectUndispatchableApproval.mockResolvedValue(undefined);
@@ -190,7 +168,6 @@ describe("cron clarification recovery ordering", () => {
     });
     expect(state.order).toContain("dispatch:AIW-2");
     expect(state.order).not.toContain("dispatch:AIW-1");
-    expect(state.order).toContain("recover-accepted-triggers");
     expect(mocks.reconcileRuns).toHaveBeenCalledWith(
       expect.any(Set),
       expect.anything(),
@@ -201,16 +178,10 @@ describe("cron clarification recovery ordering", () => {
       { db: true },
       new Set(["ticket:jira:AIW-CONTINUATION"]),
     );
-    const acceptedRecoveryDeps = mocks.recoverAccepted.mock.calls[0]![0];
-    const pendingRecoveryDeps = mocks.recoverPending.mock.calls[0]![0];
-    expect(acceptedRecoveryDeps.isProtected("ticket:jira:AIW-1")).toBe(true);
-    expect(acceptedRecoveryDeps.isProtected("ticket:jira:AIW-2")).toBe(false);
-    expect(pendingRecoveryDeps.isProtected("ticket:jira:AIW-1")).toBe(true);
-    expect(pendingRecoveryDeps.isProtected("ticket:jira:AIW-2")).toBe(false);
     await expect(response.json()).resolves.toMatchObject({
-      pendingRecovered: 1,
+      pendingRecovered: 0,
       triggerRecovery: {
-        accepted: { attempted: 1, started: 1, errors: 0 },
+        released: { attempted: 0, started: 0, errors: 0 },
       },
     });
   });
