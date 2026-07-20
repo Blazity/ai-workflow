@@ -1,5 +1,6 @@
 CREATE TABLE "prompt_library" (
 	"id" serial PRIMARY KEY NOT NULL,
+	"slug" text NOT NULL,
 	"name" text NOT NULL,
 	"description" text,
 	"tags" text[] DEFAULT '{}'::text[] NOT NULL,
@@ -24,8 +25,9 @@ CREATE TABLE "prompt_library_versions" (
 ALTER TABLE "workflow_runs" ADD COLUMN "prompt_manifest" jsonb;--> statement-breakpoint
 ALTER TABLE "prompt_library_versions" ADD CONSTRAINT "prompt_library_versions_prompt_id_prompt_library_id_fk" FOREIGN KEY ("prompt_id") REFERENCES "public"."prompt_library"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 CREATE UNIQUE INDEX "prompt_library_name_active_idx" ON "prompt_library" USING btree ("name") WHERE "prompt_library"."archived_at" is null;--> statement-breakpoint
-INSERT INTO "prompt_library" ("name", "description", "tags", "created_by_id", "created_by_label")
-VALUES ('research-plan', 'Built-in research and planning agent prompt.', '{built-in}', 'system', 'System migration');--> statement-breakpoint
+CREATE UNIQUE INDEX "prompt_library_slug_active_idx" ON "prompt_library" USING btree ("slug") WHERE "prompt_library"."archived_at" is null;--> statement-breakpoint
+INSERT INTO "prompt_library" ("name", "slug", "description", "tags", "created_by_id", "created_by_label")
+VALUES ('research-plan', 'research-plan', 'Built-in research and planning agent prompt.', '{built-in}', 'system', 'System migration');--> statement-breakpoint
 INSERT INTO "prompt_library_versions" ("prompt_id", "version", "body", "created_by_id", "created_by_label")
 VALUES ((SELECT "id" FROM "prompt_library" WHERE "name" = 'research-plan'), 1, '# Instructions
 
@@ -137,8 +139,8 @@ If any answer is NO, return `status: "clarification_needed"` with precise questi
 ```
 
 The file may contain a `Human decisions` section (between `<!-- human-decisions:start -->` and `<!-- human-decisions:end -->`) that is maintained automatically. Preserve it exactly: do not edit or remove it.', 'system', 'System migration');--> statement-breakpoint
-INSERT INTO "prompt_library" ("name", "description", "tags", "created_by_id", "created_by_label")
-VALUES ('implement', 'Built-in implementation agent prompt.', '{built-in}', 'system', 'System migration');--> statement-breakpoint
+INSERT INTO "prompt_library" ("name", "slug", "description", "tags", "created_by_id", "created_by_label")
+VALUES ('implement', 'implement', 'Built-in implementation agent prompt.', '{built-in}', 'system', 'System migration');--> statement-breakpoint
 INSERT INTO "prompt_library_versions" ("prompt_id", "version", "body", "created_by_id", "created_by_label")
 VALUES ((SELECT "id" FROM "prompt_library" WHERE "name" = 'implement'), 1, '# Instructions
 
@@ -210,8 +212,8 @@ Return a JSON object with:
 - `questions`: List of questions (when clarification_needed).
 - `suggestedAnswers`: Optional short, ready-to-pick answer options for the questions (when clarification_needed), provided when sensible.
 - `error`: Failure details (when failed).', 'system', 'System migration');--> statement-breakpoint
-INSERT INTO "prompt_library" ("name", "description", "tags", "created_by_id", "created_by_label")
-VALUES ('review', 'Built-in code review agent prompt.', '{built-in}', 'system', 'System migration');--> statement-breakpoint
+INSERT INTO "prompt_library" ("name", "slug", "description", "tags", "created_by_id", "created_by_label")
+VALUES ('review', 'review', 'Built-in code review agent prompt.', '{built-in}', 'system', 'System migration');--> statement-breakpoint
 INSERT INTO "prompt_library_versions" ("prompt_id", "version", "body", "created_by_id", "created_by_label")
 VALUES ((SELECT "id" FROM "prompt_library" WHERE "name" = 'review'), 1, '# Instructions
 

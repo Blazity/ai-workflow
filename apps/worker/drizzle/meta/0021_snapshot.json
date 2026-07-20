@@ -1,5 +1,5 @@
 {
-  "id": "2ba74f5e-530d-4402-9a5a-d13e59c5c0c0",
+  "id": "836d7d3f-1a6a-4f66-96d6-0f1d3542aabf",
   "prevId": "527c66e4-2a95-4987-8b93-20678beb6314",
   "version": "7",
   "dialect": "postgresql",
@@ -468,6 +468,12 @@
           "primaryKey": true,
           "notNull": true
         },
+        "slug": {
+          "name": "slug",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
         "name": {
           "name": "name",
           "type": "text",
@@ -526,6 +532,22 @@
           "columns": [
             {
               "expression": "name",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "\"prompt_library\".\"archived_at\" is null",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "prompt_library_slug_active_idx": {
+          "name": "prompt_library_slug_active_idx",
+          "columns": [
+            {
+              "expression": "slug",
               "isExpression": false,
               "asc": true,
               "nulls": "last"

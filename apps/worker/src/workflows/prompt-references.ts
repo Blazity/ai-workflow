@@ -1,6 +1,8 @@
 import {
   containsMalformedPromptReference,
   parsePromptReferenceTokens,
+  promptReferenceTargetLabel,
+  type ParsedPromptReference,
   type PromptReferenceSelector,
   type ResolvedPromptReference,
 } from "@shared/contracts";
@@ -13,8 +15,12 @@ export interface LoadedPromptReference {
   body: string;
 }
 
+/** Token target: the slug for current tokens, the numeric library id for
+ *  legacy pre-slug tokens. Exactly one is set. */
+export type PromptReferenceTarget = Pick<ParsedPromptReference, "slug" | "legacyPromptId">;
+
 export type PromptReferenceLoader = (
-  promptId: number,
+  target: PromptReferenceTarget,
   requestedVersion: PromptReferenceSelector,
 ) => Promise<LoadedPromptReference>;
 
@@ -45,7 +51,7 @@ export async function resolvePromptReferences(
 
   const expand = async (input: string, stack: string[]): Promise<string> => {
     if (containsMalformedPromptReference(input)) {
-      throw new Error("Malformed prompt reference; expected {{prompt:<id>}} or {{prompt:<id>@<version>}}");
+      throw new Error("Malformed prompt reference; expected {{prompt:<slug>}} or {{prompt:<slug>@<version>}}");
     }
     const tokens = parsePromptReferenceTokens(input);
     if (tokens.length === 0) {
@@ -61,10 +67,13 @@ export async function resolvePromptReferences(
         throw new Error(`Prompt reference maximum depth ${maxDepth} exceeded`);
       }
 
-      const selectorKey = `${token.promptId}@${token.version}`;
+      const selectorKey = `${promptReferenceTargetLabel(token)}@${token.version}`;
       let reference = loaded.get(selectorKey);
       if (!reference) {
-        reference = await load(token.promptId, token.version);
+        reference = await load(
+          token.slug !== undefined ? { slug: token.slug } : { legacyPromptId: token.legacyPromptId },
+          token.version,
+        );
         loaded.set(selectorKey, reference);
       }
       const resolvedKey = `${reference.promptId}@${reference.resolvedVersion}`;

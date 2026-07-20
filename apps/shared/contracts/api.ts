@@ -273,6 +273,9 @@ export interface ClarificationAnswerResponse {
 
 export interface PromptLibraryEntryMeta {
   id: number;
+  /** Immutable, human-readable reference key ({{prompt:<slug>}}). Assigned at
+   *  create time from the name; renames do not change it. */
+  slug: string;
   name: string;
   description: string | null;
   tags: string[];

@@ -13,8 +13,21 @@ import {
   workflowDefinitions,
   workflowDefinitionVersions,
 } from "../db/schema.js";
+import {
+  DEFAULT_PROMPT_NAME_BY_AGENT,
+  parsePromptReferenceTokens,
+  slugifyPromptName,
+} from "@shared/contracts";
 import { canEditPromptLibrary, type DashboardRole } from "../lib/auth/roles.js";
 import { DashboardAuthError } from "../lib/auth/users-read.js";
+import type { PromptReferenceLoader } from "../workflows/prompt-references.js";
+
+/** Built-in agent defaults are looked up BY NAME at run time (implicit
+ *  materialization); archiving or renaming one would fail every workflow run
+ *  that relies on the default prompt. */
+const BUILTIN_DEFAULT_PROMPT_NAMES = new Set<string>(
+  Object.values(DEFAULT_PROMPT_NAME_BY_AGENT),
+);
 
 /** Minimal structural read of a stored definition for the usage scan. The scan
  *  must surface refs even in definitions today's deploy rules would reject
@@ -45,6 +58,7 @@ export interface PromptLibraryActor {
 
 export interface PromptLibraryRow {
   id: number;
+  slug: string;
   name: string;
   description: string | null;
   tags: string[];
@@ -90,6 +104,7 @@ type PromptVersionSelect = typeof promptLibraryVersions.$inferSelect;
 function mapPromptRow(row: PromptSelect): PromptLibraryRow {
   return {
     id: row.id,
+    slug: row.slug,
     name: row.name,
     description: row.description,
     tags: row.tags,
@@ -299,6 +314,60 @@ export async function getPrompt(db: Db, id: number): Promise<PromptLibraryRow | 
   return rows[0] ? mapPromptRow(rows[0]) : null;
 }
 
+/** Run-time loader behind {{prompt:...}} resolution: maps a token target
+ *  (slug, or legacy numeric id) plus version selector onto a concrete library
+ *  version. Errors are worded for run logs; latest on an archived prompt is
+ *  rejected while pinned versions of archived prompts stay resolvable. */
+export function createPromptReferenceLoader(db: Db): PromptReferenceLoader {
+  const INT4_MAX = 2147483647;
+  return async (target, requestedVersion) => {
+    const label = target.slug ?? `#${target.legacyPromptId}`;
+    // Token digits are unbounded; anything past the int4 columns cannot exist,
+    // so fail with the clean missing-prompt error instead of a driver overflow.
+    if (target.legacyPromptId !== undefined && target.legacyPromptId > INT4_MAX) {
+      throw new Error(`Prompt ${label} does not exist`);
+    }
+    if (requestedVersion !== "latest" && requestedVersion > INT4_MAX) {
+      throw new Error(`Prompt ${label} does not have version ${requestedVersion}`);
+    }
+    const prompt = target.slug !== undefined
+      ? await findPromptBySlug(db, target.slug)
+      : await getPrompt(db, target.legacyPromptId!);
+    if (!prompt) throw new Error(`Prompt ${label} does not exist`);
+    if (requestedVersion === "latest" && prompt.archivedAt !== null) {
+      throw new Error(`Prompt ${label} (${prompt.name}) is archived and cannot follow latest`);
+    }
+    const version = requestedVersion === "latest"
+      ? await getCurrentPromptVersion(db, prompt.id)
+      : await getPromptVersion(db, prompt.id, requestedVersion);
+    if (!version) {
+      const versionLabel = requestedVersion === "latest" ? "a current version" : `version ${requestedVersion}`;
+      throw new Error(`Prompt ${label} (${prompt.name}) does not have ${versionLabel}`);
+    }
+    return {
+      promptId: prompt.id,
+      promptName: prompt.name,
+      requestedVersion,
+      resolvedVersion: version.version,
+      body: version.body,
+    };
+  };
+}
+
+/** Resolves a {{prompt:<slug>}} target. Slugs are unique among active prompts;
+ *  when only archived rows hold the slug, the newest one is returned so pinned
+ *  references to archived prompts keep resolving. */
+export async function findPromptBySlug(db: Db, slug: string): Promise<PromptLibraryRow | null> {
+  const rows = await db
+    .select()
+    .from(promptLibrary)
+    .where(eq(promptLibrary.slug, slug))
+    .orderBy(desc(promptLibrary.id));
+  if (rows.length === 0) return null;
+  const active = rows.find((row) => row.archivedAt === null);
+  return mapPromptRow(active ?? rows[0]!);
+}
+
 export async function getCurrentPromptVersion(
   db: Db,
   promptId: number,
@@ -345,12 +414,19 @@ export async function listPromptVersionRows(
 
 async function insertPromptParent(
   db: Db,
-  input: { name: string; description: string | null; tags: string[]; actor: PromptLibraryActor },
+  input: {
+    name: string;
+    slug: string;
+    description: string | null;
+    tags: string[];
+    actor: PromptLibraryActor;
+  },
 ): Promise<PromptSelect> {
   const rows = await db
     .insert(promptLibrary)
     .values({
       name: input.name,
+      slug: input.slug,
       description: input.description,
       tags: input.tags,
       createdById: input.actor.id,
@@ -395,6 +471,24 @@ async function tryHealOrphanName(db: Db, name: string): Promise<boolean> {
   return deleted.length > 0;
 }
 
+/** Picks the first slug candidate not held by an active prompt: the base, then
+ *  base-2, base-3, ... The active-slug unique index still backstops races. */
+async function nextAvailableSlug(db: Db, base: string): Promise<string> {
+  const taken = new Set(
+    (
+      await db
+        .select({ slug: promptLibrary.slug })
+        .from(promptLibrary)
+        .where(and(isNull(promptLibrary.archivedAt), sql`${promptLibrary.slug} like ${`${base}%`}`))
+    ).map((row) => row.slug),
+  );
+  if (!taken.has(base)) return base;
+  for (let suffix = 2; ; suffix++) {
+    const candidate = `${base}-${suffix}`;
+    if (!taken.has(candidate)) return candidate;
+  }
+}
+
 export async function createPrompt(
   db: Db,
   input: {
@@ -410,22 +504,32 @@ export async function createPrompt(
   const body = validateBody(input.body);
   const description = validateDescription(input.description ?? null);
   const tags = validateTags(input.tags ?? []);
+  const slug = await nextAvailableSlug(db, slugifyPromptName(name));
 
   let created: PromptSelect;
   try {
-    created = await insertPromptParent(db, { name, description, tags, actor: input.actor });
+    created = await insertPromptParent(db, { name, slug, description, tags, actor: input.actor });
   } catch (error) {
     if (!isUniqueViolation(error)) throw error;
-    // The active-name unique index rejected the insert. Heal a zero-version
-    // orphan holding the name and retry the insert once (no transactions on
-    // neon-http, so this is a best-effort sequence). A live prompt keeps the
-    // 409, and a concurrent healer racing us re-triggers 23505 -> also 409.
+    // A unique index rejected the insert: the active-name index, or (after a
+    // race on nextAvailableSlug) the active-slug index. Heal a zero-version
+    // orphan holding the name and retry once with a freshly computed slug (no
+    // transactions on neon-http, so this is a best-effort sequence). A live
+    // prompt keeps the 409, and a concurrent healer racing us re-triggers
+    // 23505 -> also 409.
     const healed = await tryHealOrphanName(db, name);
-    if (!healed) {
+    const retrySlug = await nextAvailableSlug(db, slugifyPromptName(name));
+    if (!healed && retrySlug === slug) {
       throw new PromptLibraryStoreError(409, "Name already in use");
     }
     try {
-      created = await insertPromptParent(db, { name, description, tags, actor: input.actor });
+      created = await insertPromptParent(db, {
+        name,
+        slug: retrySlug,
+        description,
+        tags,
+        actor: input.actor,
+      });
     } catch (retryError) {
       if (isUniqueViolation(retryError)) {
         throw new PromptLibraryStoreError(409, "Name already in use");
@@ -541,6 +645,16 @@ export async function updatePromptMeta(
 
   const set: { name?: string; description?: string | null; tags?: string[]; updatedAt?: Date } = {};
   if (input.name !== undefined) set.name = validateName(input.name);
+  if (
+    set.name !== undefined
+    && set.name !== current.name
+    && BUILTIN_DEFAULT_PROMPT_NAMES.has(current.name)
+  ) {
+    throw new PromptLibraryStoreError(
+      409,
+      `"${current.name}" is a built-in default prompt and cannot be renamed`,
+    );
+  }
   if (input.description !== undefined) set.description = validateDescription(input.description);
   if (input.tags !== undefined) set.tags = validateTags(input.tags);
   if (Object.keys(set).length === 0) return mapPromptRow(current);
@@ -578,6 +692,12 @@ export async function archivePrompt(
     throw new PromptLibraryStoreError(404, "Unknown prompt");
   }
   if (current.archivedAt) return mapPromptRow(current);
+  if (BUILTIN_DEFAULT_PROMPT_NAMES.has(current.name)) {
+    throw new PromptLibraryStoreError(
+      409,
+      `"${current.name}" is a built-in default prompt and cannot be archived`,
+    );
+  }
 
   const res = await db
     .update(promptLibrary)
@@ -656,6 +776,8 @@ export async function findPromptUsage(
   db: Db,
   promptId: number,
 ): Promise<PromptLibraryUsageRow[]> {
+  const promptRow = await getPrompt(db, promptId);
+  if (!promptRow) return [];
   const head = await getCurrentPromptVersion(db, promptId);
   const currentHeadVersion = head?.version ?? 0;
 
@@ -722,8 +844,8 @@ export async function findPromptUsage(
       const parsedNode = usageScanNodeSchema.safeParse(rawNode);
       if (!parsedNode.success) continue;
       const node = parsedNode.data;
-      if (!node.promptRefs) continue;
-      for (const [paramKey, ref] of Object.entries(node.promptRefs)) {
+      const coveredParams = new Set<string>();
+      for (const [paramKey, ref] of Object.entries(node.promptRefs ?? {})) {
         if (ref.promptId !== promptId) continue;
         const paramValue = node.params[paramKey];
         const text = typeof paramValue === "string" ? paramValue : null;
@@ -738,6 +860,7 @@ export async function findPromptUsage(
           state = "current";
         }
 
+        coveredParams.add(paramKey);
         result.push({
           definitionId: def.id,
           definitionName: def.name,
@@ -747,6 +870,37 @@ export async function findPromptUsage(
           paramKey,
           version: ref.version,
           state,
+        });
+      }
+
+      // Live {{prompt:...}} tokens are the default insert mode and carry no
+      // provenance ref; scan raw param text so they count as usage too. One
+      // row per param: text cannot drift, so state is only current/behind.
+      for (const [paramKey, value] of Object.entries(node.params)) {
+        if (coveredParams.has(paramKey)) continue;
+        const texts = typeof value === "string"
+          ? [value]
+          : Array.isArray(value)
+            ? value.filter((item): item is string => typeof item === "string")
+            : [];
+        const token = texts
+          .flatMap((text) => parsePromptReferenceTokens(text))
+          .find((candidate) =>
+            candidate.slug !== undefined
+              ? candidate.slug === promptRow.slug
+              : candidate.legacyPromptId === promptId,
+          );
+        if (!token) continue;
+        const version = token.version === "latest" ? currentHeadVersion : token.version;
+        result.push({
+          definitionId: def.id,
+          definitionName: def.name,
+          nodeId: node.id,
+          nodeName: node.name ?? null,
+          blockType: node.type as WorkflowBlockType,
+          paramKey,
+          version,
+          state: version < currentHeadVersion ? "behind" : "current",
         });
       }
     }
@@ -762,6 +916,7 @@ export function serializePromptMeta(
 ): PromptLibraryEntryMeta {
   return {
     id: row.id,
+    slug: row.slug,
     name: row.name,
     description: row.description,
     tags: row.tags,

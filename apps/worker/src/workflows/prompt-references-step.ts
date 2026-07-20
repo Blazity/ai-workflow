@@ -1,5 +1,4 @@
 import type {
-  PromptReferenceSelector,
   ResolvedPromptReference,
   WorkflowDefinitionNode,
   WorkflowParamValue,
@@ -22,6 +21,7 @@ export interface ResolvedWorkflowPromptReferences {
 
 export interface ImplicitDefaultPromptRow {
   id: number;
+  slug: string;
   name: string;
   archivedAt: Date | null;
 }
@@ -46,7 +46,7 @@ export function materializeImplicitDefaultPromptReferences(
       ...node,
       params: {
         ...node.params,
-        prompt: formatPromptReferenceToken({ promptId: activeRow.id, version: "latest" }),
+        prompt: formatPromptReferenceToken({ slug: activeRow.slug, version: "latest" }),
       },
     };
   });
@@ -57,11 +57,11 @@ export async function resolvePromptReferencesInNodes(
   load: PromptReferenceLoader,
 ): Promise<ResolvedWorkflowPromptReferences> {
   const loadCache = new Map<string, Promise<LoadedPromptReference>>();
-  const cachedLoad: PromptReferenceLoader = (promptId, requestedVersion) => {
-    const key = `${promptId}@${requestedVersion}`;
+  const cachedLoad: PromptReferenceLoader = (target, requestedVersion) => {
+    const key = `${target.slug ?? `#${target.legacyPromptId}`}@${requestedVersion}`;
     let pending = loadCache.get(key);
     if (!pending) {
-      pending = load(promptId, requestedVersion);
+      pending = load(target, requestedVersion);
       loadCache.set(key, pending);
     }
     return pending;
@@ -115,12 +115,8 @@ export async function resolvePromptReferencesForRun(
 ): Promise<ResolvedWorkflowPromptReferences> {
   "use step";
   const { getDb } = await import("../db/client.js");
-  const {
-    findPromptRowsByNames,
-    getCurrentPromptVersion,
-    getPrompt,
-    getPromptVersion,
-  } = await import("../prompt-library/store.js");
+  const { createPromptReferenceLoader, findPromptRowsByNames } =
+    await import("../prompt-library/store.js");
   const db = getDb();
 
   const requiredDefaultNames = [...new Set(
@@ -135,31 +131,6 @@ export async function resolvePromptReferencesForRun(
   const promptRows = await findPromptRowsByNames(db, requiredDefaultNames);
   const materializedNodes = materializeImplicitDefaultPromptReferences(nodes, promptRows);
 
-  const load: PromptReferenceLoader = async (
-    promptId: number,
-    requestedVersion: PromptReferenceSelector,
-  ) => {
-    const prompt = await getPrompt(db, promptId);
-    if (!prompt) throw new Error(`Prompt ${promptId} does not exist`);
-    if (requestedVersion === "latest" && prompt.archivedAt !== null) {
-      throw new Error(`Prompt ${promptId} (${prompt.name}) is archived and cannot follow latest`);
-    }
-    const version = requestedVersion === "latest"
-      ? await getCurrentPromptVersion(db, promptId)
-      : await getPromptVersion(db, promptId, requestedVersion);
-    if (!version) {
-      const label = requestedVersion === "latest" ? "a current version" : `version ${requestedVersion}`;
-      throw new Error(`Prompt ${promptId} (${prompt.name}) does not have ${label}`);
-    }
-    return {
-      promptId,
-      promptName: prompt.name,
-      requestedVersion,
-      resolvedVersion: version.version,
-      body: version.body,
-    };
-  };
-
-  return resolvePromptReferencesInNodes(materializedNodes, load);
+  return resolvePromptReferencesInNodes(materializedNodes, createPromptReferenceLoader(db));
 }
 resolvePromptReferencesForRun.maxRetries = 0;

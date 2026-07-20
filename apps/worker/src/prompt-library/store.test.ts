@@ -137,6 +137,7 @@ describe("createPrompt orphan heal", () => {
     // its compensating delete both failed, leaving the active name locked out.
     await db.insert(promptLibrary).values({
       name: "Ghost",
+      slug: "ghost",
       createdById: "system",
       createdByLabel: "System",
     });
@@ -385,6 +386,7 @@ describe("listPrompts zero-version orphan", () => {
     // compensating delete both failed. It must not crash the list.
     await db.insert(promptLibrary).values({
       name: "Orphan",
+      slug: "orphan",
       createdById: "system",
       createdByLabel: "System",
     });
@@ -590,5 +592,72 @@ describe("findPromptUsage", () => {
     expect(byNode.get("missing")).toMatchObject({ version: 1, state: "modified" });
     expect(byNode.get("nonstring")).toMatchObject({ version: 1, state: "modified" });
     expect(rows).toHaveLength(2);
+  });
+
+  it("counts live {{prompt:...}} token references (slug and legacy id) without provenance refs", async () => {
+    const { prompt } = await createPrompt(db, { name: "Live ref", body: "V1", actor: ADMIN });
+    await savePromptVersion(db, { promptId: prompt.id, body: "V2", actor: ADMIN });
+    // Head is now version 2; slug is "live-ref".
+
+    const definition: WorkflowDefinition = {
+      schemaVersion: 1,
+      nodes: [
+        {
+          id: "latest",
+          type: "planning_agent",
+          x: 0,
+          y: 0,
+          inputs: {},
+          params: { prompt: "Intro\n{{prompt:live-ref}}" },
+        },
+        {
+          id: "pinned",
+          type: "call_llm",
+          x: 0,
+          y: 0,
+          inputs: {},
+          params: { prompt: "{{prompt:live-ref@1}}" },
+        },
+        {
+          id: "legacy",
+          type: "review_agent",
+          x: 0,
+          y: 0,
+          inputs: {},
+          params: { prompt: `{{prompt:${prompt.id}}}` },
+        },
+      ],
+      edges: [],
+    };
+    await db.insert(workflowDefinitionVersions).values({
+      definitionId: 1,
+      version: 1,
+      definition,
+      createdById: "u_admin",
+      createdByLabel: "Admin",
+      restoredFromVersion: null,
+    });
+
+    const rows = await findPromptUsage(db, prompt.id);
+    const byNode = new Map(rows.map((r) => [r.nodeId, r]));
+    expect(byNode.get("latest")).toMatchObject({ version: 2, state: "current" });
+    expect(byNode.get("pinned")).toMatchObject({ version: 1, state: "behind" });
+    expect(byNode.get("legacy")).toMatchObject({ version: 2, state: "current" });
+    expect(rows).toHaveLength(3);
+  });
+});
+
+describe("built-in default prompt guard", () => {
+  it("refuses to archive or rename a built-in default, but allows meta edits", async () => {
+    const [research] = await findPromptRowsByNames(db, ["research-plan"]);
+    await expect(
+      archivePrompt(db, { promptId: research.id, actor: ADMIN }),
+    ).rejects.toMatchObject({ statusCode: 409 });
+    await expect(
+      updatePromptMeta(db, { promptId: research.id, name: "renamed", actor: ADMIN }),
+    ).rejects.toMatchObject({ statusCode: 409 });
+    await expect(
+      updatePromptMeta(db, { promptId: research.id, description: "still fine", actor: ADMIN }),
+    ).resolves.toMatchObject({ description: "still fine" });
   });
 });

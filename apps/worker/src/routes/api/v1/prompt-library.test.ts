@@ -217,7 +217,7 @@ describe("zero-version orphan detail routes", () => {
     // its compensating delete both failed. There is no head to serialize.
     const [orphan] = await db
       .insert(promptLibrary)
-      .values({ name: "Orphan", createdById: "system", createdByLabel: "System" })
+      .values({ name: "Orphan", slug: "orphan", createdById: "system", createdByLabel: "System" })
       .returning();
     const url = `http://worker.test/p/${orphan.id}`;
 

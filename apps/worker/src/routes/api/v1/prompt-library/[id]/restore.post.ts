@@ -17,11 +17,13 @@ export default defineEventHandler(
       const actor = await requireDashboardActor(event);
       const id = parsePromptId(event);
       const body = (await readBody<{ version?: unknown }>(event).catch(() => null)) ?? {};
-      // Reject a value past the int4 max the version column stores, otherwise the
-      // restore query overflows and surfaces as a 500 instead of a clean 400.
+      // Reject values outside the int4 range the version column stores (either
+      // sign overflows the query into a 500 instead of a clean 400); versions
+      // start at 1, so everything below that is invalid anyway.
       if (
         typeof body.version !== "number" ||
         !Number.isInteger(body.version) ||
+        body.version < 1 ||
         body.version > 2147483647
       ) {
         throw createError({ statusCode: 400, statusMessage: "Invalid version" });

@@ -5,7 +5,7 @@ import {
   substituteNodePromptParams,
   VARIABLE_PARAM_KEYS,
 } from "./prompt-vars.js";
-import type { WorkflowDefinitionNode } from "@shared/contracts";
+import { PROMPT_VARIABLES, type WorkflowDefinitionNode } from "@shared/contracts";
 import type { AgentWorkflowInput } from "./agent-input.js";
 import type { WorkspacePublicationResult } from "./workspace-publication.js";
 import type { WorkspaceRepositoryInput } from "../sandbox/repo-workspace.js";
@@ -93,6 +93,14 @@ function makeSource(overrides: Partial<Source> = {}): Source {
 }
 
 describe("buildPromptVariables", () => {
+  it("produces exactly the variables the shared PROMPT_VARIABLES catalog advertises", () => {
+    // PromptVariableValues is Partial, so nothing but this test catches a
+    // variable that the catalog (autocomplete, docs) lists yet the builder
+    // silently stopped producing, or vice versa.
+    const vars = buildPromptVariables(makeSource());
+    expect(Object.keys(vars).sort()).toEqual(PROMPT_VARIABLES.map((v) => v.name).sort());
+  });
+
   it("resolves all twelve variables from a stubbed context", () => {
     const vars = buildPromptVariables(
       makeSource({

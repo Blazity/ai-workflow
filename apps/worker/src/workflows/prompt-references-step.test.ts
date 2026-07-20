@@ -5,6 +5,7 @@ import {
   resolvePromptReferencesInNodes,
 } from "./prompt-references-step.js";
 import { substituteNodePromptParams } from "./prompt-vars.js";
+import type { PromptReferenceTarget } from "./prompt-references.js";
 
 function node(
   type: WorkflowDefinitionNode["type"],
@@ -15,8 +16,8 @@ function node(
 
 describe("resolvePromptReferencesInNodes", () => {
   it("resolves only prompt-bearing params and shares latest snapshots across nodes", async () => {
-    const load = vi.fn(async (promptId: number) => ({
-      promptId,
+    const load = vi.fn(async (target: PromptReferenceTarget) => ({
+      promptId: target.legacyPromptId ?? 0,
       promptName: "Shared",
       requestedVersion: "latest" as const,
       resolvedVersion: 4,
@@ -72,9 +73,9 @@ describe("resolvePromptReferencesInNodes", () => {
 
 describe("materializeImplicitDefaultPromptReferences", () => {
   const activeRows = [
-    { id: 11, name: "research-plan", archivedAt: null },
-    { id: 12, name: "implement", archivedAt: null },
-    { id: 13, name: "review", archivedAt: null },
+    { id: 11, slug: "research-plan", name: "research-plan", archivedAt: null },
+    { id: 12, slug: "implement", name: "implement", archivedAt: null },
+    { id: 13, slug: "review", name: "review", archivedAt: null },
   ];
 
   it("materializes blank first-party defaults without mutating the definition", () => {
@@ -87,8 +88,8 @@ describe("materializeImplicitDefaultPromptReferences", () => {
 
     const result = materializeImplicitDefaultPromptReferences(nodes, activeRows);
 
-    expect(result[0].params.prompt).toBe("{{prompt:11}}");
-    expect(result[1].params.prompt).toBe("{{prompt:12}}");
+    expect(result[0].params.prompt).toBe("{{prompt:research-plan}}");
+    expect(result[1].params.prompt).toBe("{{prompt:implement}}");
     expect(result[2]).toBe(nodes[2]);
     expect(result[3]).toBe(nodes[3]);
     expect(nodes[0].params.prompt).toBeUndefined();
@@ -102,7 +103,7 @@ describe("materializeImplicitDefaultPromptReferences", () => {
 
     expect(() => materializeImplicitDefaultPromptReferences(
       [node("planning_agent", {})],
-      [{ id: 11, name: "research-plan", archivedAt: new Date() }],
+      [{ id: 11, slug: "research-plan", name: "research-plan", archivedAt: new Date() }],
     )).toThrow('Default prompt "research-plan" is archived');
   });
 
@@ -110,11 +111,11 @@ describe("materializeImplicitDefaultPromptReferences", () => {
     const result = materializeImplicitDefaultPromptReferences(
       [node("planning_agent", {})],
       [
-        { id: 2, name: "research-plan", archivedAt: new Date() },
-        { id: 9, name: "research-plan", archivedAt: null },
+        { id: 2, slug: "research-plan", name: "research-plan", archivedAt: new Date() },
+        { id: 9, slug: "research-plan-2", name: "research-plan", archivedAt: null },
       ],
     );
 
-    expect(result[0].params.prompt).toBe("{{prompt:9}}");
+    expect(result[0].params.prompt).toBe("{{prompt:research-plan-2}}");
   });
 });
