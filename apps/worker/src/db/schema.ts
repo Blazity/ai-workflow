@@ -1,8 +1,10 @@
 import { sql } from "drizzle-orm";
 import {
+  type AnyPgColumn,
   bigint,
   boolean,
   check,
+  foreignKey,
   index,
   integer,
   jsonb,
@@ -14,31 +16,96 @@ import {
   timestamp,
   uniqueIndex,
 } from "drizzle-orm/pg-core";
-import type { BlockRunState, ResolvedPromptReference, WorkflowDefinition } from "@shared/contracts";
+import type {
+  BlockRunState,
+  ResolvedPromptReference,
+  WorkflowDefinition,
+  WorkflowRunBudgetFailure,
+} from "@shared/contracts";
 import type { GateStatusRef } from "../adapters/vcs/types.js";
 import type { PrePrCheckConfig } from "../pre-pr-checks/config.js";
 
-/**
- * Run registry — replaces the blazebot:active-runs / blazebot:sandboxes /
- * blazebot:entry-timestamps Redis hashes. One row per in-flight ticket;
- * the three hashes shared a lifecycle (unregister cleared all three), so
- * they are one table. createdAt backs reconcile's orphan grace period and
- * is REFRESHED on register(), not just set on claim().
- *
- * runKind records what started the run: 'ticket' for the classic AI-column
- * trigger and 'pr_trigger' for PR webhook triggers. Reconcile and the Jira
- * webhook read it so a 'pr_trigger' run is never cancelled just because its
- * ticket left the AI column (its lifecycle follows the PR, not the column).
- */
-export const activeRuns = pgTable("active_runs", {
-  ticketKey: text("ticket_key").primaryKey(),
-  runId: text("run_id").notNull(),
-  sandboxId: text("sandbox_id"),
-  runKind: text("run_kind").notNull().default("ticket"),
-  createdAt: timestamp("created_at", { withTimezone: true })
-    .notNull()
-    .defaultNow(),
-});
+/** One owner-CAS reservation per provider-neutral workflow subject. */
+export const activeRuns = pgTable(
+  "active_runs",
+  {
+    subjectKey: text("subject_key").primaryKey(),
+    ticketKey: text("ticket_key"),
+    ownerToken: text("owner_token").notNull(),
+    runId: text("run_id"),
+    state: text("state").notNull().default("reserved"),
+    runKind: text("run_kind").notNull().default("ticket"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    check(
+      "active_runs_state_check",
+      sql`${t.state} in ('reserved', 'bound', 'parking', 'parked', 'cancelling')`,
+    ),
+    check(
+      "active_runs_state_run_id_check",
+      sql`(${t.state} = 'reserved' and ${t.runId} is null) or (${t.state} in ('bound', 'parking', 'parked') and ${t.runId} is not null) or ${t.state} = 'cancelling'`,
+    ),
+    index("active_runs_ticket_key_idx").on(t.ticketKey),
+    uniqueIndex("active_runs_subject_owner_idx").on(t.subjectKey, t.ownerToken),
+  ],
+);
+
+/** Every scratch/code sandbox owned by a run, not merely the most recent one. */
+export const activeRunSandboxes = pgTable(
+  "active_run_sandboxes",
+  {
+    subjectKey: text("subject_key").notNull(),
+    ownerToken: text("owner_token").notNull(),
+    sandboxId: text("sandbox_id").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.subjectKey, t.ownerToken, t.sandboxId] }),
+    foreignKey({
+      columns: [t.subjectKey, t.ownerToken],
+      foreignColumns: [activeRuns.subjectKey, activeRuns.ownerToken],
+      name: "active_run_sandboxes_subject_owner_fk",
+    }).onDelete("cascade"),
+  ],
+);
+
+/** Authenticated, normalized provider-event inbox. Delivery identity is
+ * idempotent; at most one row per subject is retained as pending feedback. */
+export const triggerDeliveries = pgTable(
+  "trigger_deliveries",
+  {
+    provider: text("provider").notNull(),
+    deliveryId: text("delivery_id").notNull(),
+    producer: text("producer").notNull(),
+    triggerType: text("trigger_type").notNull(),
+    subjectKey: text("subject_key").notNull(),
+    ticketKey: text("ticket_key"),
+    headSha: text("head_sha").notNull(),
+    definitionId: integer("definition_id").notNull(),
+    definitionVersion: integer("definition_version").notNull(),
+    payload: jsonb("payload").$type<unknown>().notNull(),
+    pending: boolean("pending").notNull().default(false),
+    result: jsonb("result").$type<unknown>(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.provider, t.deliveryId] }),
+    uniqueIndex("trigger_deliveries_one_pending_per_subject_idx")
+      .on(t.subjectKey)
+      .where(sql`${t.pending} = true`),
+    foreignKey({
+      columns: [t.definitionId, t.definitionVersion],
+      foreignColumns: [
+        workflowDefinitionVersions.definitionId,
+        workflowDefinitionVersions.version,
+      ],
+      name: "trigger_deliveries_definition_version_fk",
+    }),
+  ],
+);
 
 /** Replaces blazebot:failed-tickets — FailedTicketMeta as typed columns. */
 export const failedTickets = pgTable("failed_tickets", {
@@ -151,6 +218,7 @@ export const workflowRuns = pgTable("workflow_runs", {
   workflowId: text("workflow_id"),
   workflowName: text("workflow_name"),
   status: text("status"),
+  subjectKey: text("subject_key"),
   ticketKey: text("ticket_key"),
   ticketTitle: text("ticket_title"),
   ticketUrl: text("ticket_url"),
@@ -180,6 +248,8 @@ export const workflowRuns = pgTable("workflow_runs", {
   phases: jsonb("phases"),
   /** Full RunStep[] trace waterfall, captured on completion (workflow-owned). */
   steps: jsonb("steps"),
+  /** Structured terminal budget cause; null for non-budget exits. */
+  budgetFailure: jsonb("budget_failure").$type<WorkflowRunBudgetFailure>(),
 
   definitionVersion: integer("definition_version"),
   definitionId: integer("definition_id"),
@@ -198,6 +268,7 @@ export const workflowRuns = pgTable("workflow_runs", {
   // per-ticket run history by ticketKey, editor block-status poll by definitionId.
   index("workflow_runs_status_idx").on(t.status),
   index("workflow_runs_started_at_idx").on(t.startedAt),
+  index("workflow_runs_subject_key_idx").on(t.subjectKey),
   index("workflow_runs_ticket_key_idx").on(t.ticketKey),
   index("workflow_runs_definition_id_idx").on(t.definitionId),
 ]);
@@ -212,6 +283,15 @@ export const workflowOwnedBranches = pgTable(
     prId: integer("pr_id"),
     prUrl: text("pr_url"),
     prBranchName: text("pr_branch_name"),
+    publishedHeadSha: text("published_head_sha"),
+    /** Intended target branch for the current publication intent. */
+    targetBranch: text("target_branch"),
+    /** Head SHA at which the stored PR identity was last confirmed. */
+    prPublishedHeadSha: text("pr_published_head_sha"),
+    /** Target branch at which the stored PR identity was last confirmed. */
+    prTargetBranch: text("pr_target_branch"),
+    /** A provider PR identity is still expected for the current intent. */
+    prCorrelationPending: boolean("pr_correlation_pending").notNull().default(false),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
@@ -240,6 +320,29 @@ export const prePrCheckConfigVersions = pgTable("pre_pr_check_config_versions", 
 });
 
 /**
+ * Dashboard-managed workflow definition versions, append-only per definition.
+ * Declared before workflowDefinitions so that table can express its composite
+ * deployed pointer. The typed lazy reference keeps the reverse FK cycle safe.
+ */
+export const workflowDefinitionVersions = pgTable(
+  "workflow_definition_versions",
+  {
+    definitionId: integer("definition_id")
+      .notNull()
+      .references((): AnyPgColumn => workflowDefinitions.id),
+    version: integer("version").notNull(),
+    // Stored rows may predate required normalized node fields. Reads parse and
+    // upgrade this raw JSON before exposing the canonical WorkflowDefinition.
+    definition: jsonb("definition").$type<unknown>().notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    createdById: text("created_by_id").notNull(),
+    createdByLabel: text("created_by_label").notNull(),
+    restoredFromVersion: integer("restored_from_version"),
+  },
+  (t) => [primaryKey({ columns: [t.definitionId, t.version] })],
+);
+
+/**
  * Named workflow definitions: one row per definition the dashboard manages.
  * trigger_types is denormalized from the head version, kept in sync by
  * save/restore, and backs the one-enabled-definition-per-trigger rule so the
@@ -257,6 +360,14 @@ export const workflowDefinitions = pgTable(
       .array()
       .notNull()
       .default(sql`'{}'::text[]`),
+    /** Node coordinates are CAS-patched independently from semantic edits. */
+    layout: jsonb("layout")
+      .$type<{ nodes: Record<string, { x: number; y: number }> }>()
+      .notNull()
+      .default(sql`'{"nodes":{}}'::jsonb`),
+    layoutRevision: integer("layout_revision").notNull().default(0),
+    /** Exact immutable snapshot selected for new dispatches. */
+    deployedVersion: integer("deployed_version"),
     archivedAt: timestamp("archived_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
@@ -267,29 +378,15 @@ export const workflowDefinitions = pgTable(
     uniqueIndex("workflow_definitions_name_active_idx")
       .on(t.name)
       .where(sql`${t.archivedAt} is null`),
+    foreignKey({
+      columns: [t.id, t.deployedVersion],
+      foreignColumns: [
+        workflowDefinitionVersions.definitionId,
+        workflowDefinitionVersions.version,
+      ],
+      name: "workflow_definitions_deployed_version_fk",
+    }),
   ],
-);
-
-/**
- * Dashboard-managed workflow definition versions, append-only per definition.
- * Each row belongs to a workflow_definitions row; a definition's head is its
- * highest version, and a rollback appends a copy of an older version with
- * restored_from_version set. No versions for a definition = built-in default.
- */
-export const workflowDefinitionVersions = pgTable(
-  "workflow_definition_versions",
-  {
-    definitionId: integer("definition_id")
-      .notNull()
-      .references(() => workflowDefinitions.id),
-    version: integer("version").notNull(),
-    definition: jsonb("definition").$type<WorkflowDefinition>().notNull(),
-    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-    createdById: text("created_by_id").notNull(),
-    createdByLabel: text("created_by_label").notNull(),
-    restoredFromVersion: integer("restored_from_version"),
-  },
-  (t) => [primaryKey({ columns: [t.definitionId, t.version] })],
 );
 
 /**

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, isNull, or, sql } from "drizzle-orm";
 import type { ApprovalRequest, ApprovalStatus } from "@shared/contracts";
 import type { Db } from "../db/client.js";
 import { approvalRequests } from "../db/schema.js";
@@ -72,33 +72,66 @@ export async function createApprovalRequest(
     requestedBy?: string;
   },
 ): Promise<ApprovalRow> {
-  // neon-http (loaded inside the WDK step that runs this block) has no interactive
-  // transactions. Supersede the current pending row, then insert the new one; the
-  // partial unique index (one pending row per ticket) still guarantees a single
-  // open approval. If the insert fails, the run fails and re-runs a fresh request.
-  await db
-    .update(approvalRequests)
-    .set({ status: "superseded" })
-    .where(
-      and(
-        eq(approvalRequests.ticketKey, input.ticketKey),
-        eq(approvalRequests.status, "pending"),
-      ),
-    );
-  const rows = await db
-    .insert(approvalRequests)
-    .values({
-      id: randomUUID(),
-      ticketKey: input.ticketKey,
-      definitionId: input.definitionId,
-      definitionVersion: input.definitionVersion,
-      runId: input.runId,
-      plan: input.plan,
-      assumptions: input.assumptions ?? null,
-      requestedBy: input.requestedBy ?? "workflow",
-    })
-    .returning();
-  return mapRow(rows[0]!);
+  // Production uses neon-http and cannot open an interactive transaction. A
+  // single data-modifying CTE gives the supersede+insert replacement one
+  // statement boundary: a definite insert failure rolls the old status back,
+  // while the partial unique index still enforces one pending row per ticket.
+  const id = randomUUID();
+  const plan = JSON.stringify(input.plan);
+  const assumptions =
+    input.assumptions == null ? null : JSON.stringify(input.assumptions);
+  const result = await db.execute(sql`
+    with superseded as (
+      update ${approvalRequests}
+      set status = 'superseded'
+      where ${approvalRequests.ticketKey} = ${input.ticketKey}
+        and ${approvalRequests.status} = 'pending'
+      returning ${approvalRequests.id}
+    ), inserted as (
+      insert into ${approvalRequests} (
+        id,
+        ticket_key,
+        definition_id,
+        definition_version,
+        run_id,
+        plan,
+        assumptions,
+        status,
+        requested_by
+      )
+      select
+        ${id},
+        ${input.ticketKey},
+        ${input.definitionId},
+        ${input.definitionVersion},
+        ${input.runId},
+        ${plan}::jsonb,
+        ${assumptions}::jsonb,
+        'pending',
+        ${input.requestedBy ?? "workflow"}
+      from (select count(*) from superseded) as supersede_barrier
+      returning *
+    )
+    select
+      id,
+      ticket_key as "ticketKey",
+      definition_id as "definitionId",
+      definition_version as "definitionVersion",
+      run_id as "runId",
+      plan,
+      assumptions,
+      status,
+      requested_at as "requestedAt",
+      requested_by as "requestedBy",
+      decided_by_id as "decidedById",
+      decided_by_label as "decidedByLabel",
+      decided_at as "decidedAt",
+      dispatched_run_id as "dispatchedRunId"
+    from inserted
+  `);
+  const row = rawRows<ApprovalSelect>(result)[0];
+  if (!row) throw new Error("approval request insert returned no row");
+  return mapRow(row);
 }
 
 /** Newest first. `pending` (default) filters to open approvals; `all` returns every row. */
@@ -116,6 +149,51 @@ export async function listApprovals(
           .orderBy(desc(approvalRequests.requestedAt))
       : await db.select().from(approvalRequests).orderBy(desc(approvalRequests.requestedAt));
   return rows.map(mapRow);
+}
+
+/**
+ * Decisions that still own the ticket's next workflow path. Pending requests
+ * must wait for a human; approved requests must start their pinned definition
+ * before normal AI-column discovery may launch a replacement ticket run.
+ */
+export async function listDispatchBlockingApprovals(db: Db): Promise<ApprovalRow[]> {
+  const rows = await db
+    .select()
+    .from(approvalRequests)
+    .where(
+      or(
+        eq(approvalRequests.status, "pending"),
+        and(
+          eq(approvalRequests.status, "approved"),
+          isNull(approvalRequests.dispatchedRunId),
+        ),
+      ),
+    )
+    .orderBy(desc(approvalRequests.requestedAt));
+  return rows.map(mapRow);
+}
+
+export async function hasDispatchBlockingApprovalForTicket(
+  db: Db,
+  ticketKey: string,
+): Promise<boolean> {
+  const rows = await db
+    .select({ id: approvalRequests.id })
+    .from(approvalRequests)
+    .where(
+      and(
+        eq(approvalRequests.ticketKey, ticketKey),
+        or(
+          eq(approvalRequests.status, "pending"),
+          and(
+            eq(approvalRequests.status, "approved"),
+            isNull(approvalRequests.dispatchedRunId),
+          ),
+        ),
+      ),
+    )
+    .limit(1);
+  return rows.length > 0;
 }
 
 export async function getApproval(db: Db, id: string): Promise<ApprovalRow | null> {
@@ -153,11 +231,75 @@ export async function decideApproval(
   return mapRow(row);
 }
 
+/** System-only terminal transition for a pending request that cannot be
+ * decided. An approved human decision is final and is never eligible. */
+export async function rejectUndispatchableApproval(db: Db, id: string): Promise<ApprovalRow> {
+  const rows = await db
+    .update(approvalRequests)
+    .set({
+      status: "rejected",
+      decidedById: "system",
+      decidedByLabel: "system",
+      decidedAt: new Date(),
+    })
+    .where(
+      and(
+        eq(approvalRequests.id, id),
+        eq(approvalRequests.status, "pending"),
+      ),
+    )
+    .returning();
+  const row = rows[0];
+  if (!row) {
+    throw new ApprovalStoreError(409, "already_decided");
+  }
+  return mapRow(row);
+}
+
+/**
+ * Terminal cancellation cleanup for a plan produced by an exact workflow run.
+ * A late step may create the request after cancellation's initial barrier, so
+ * cancellation may still retire the exact pending row. Human approval is the
+ * competing final CAS: once it wins, cancellation cannot revoke it and the
+ * pinned continuation remains protected for recovery.
+ */
+export async function retireApprovalCancellation(
+  db: Db,
+  input: { ticketKey: string; runId: string },
+): Promise<number> {
+  const rows = await db
+    .update(approvalRequests)
+    .set({ status: "superseded" })
+    .where(
+      and(
+        eq(approvalRequests.ticketKey, input.ticketKey),
+        eq(approvalRequests.runId, input.runId),
+        isNull(approvalRequests.dispatchedRunId),
+        eq(approvalRequests.status, "pending"),
+      ),
+    )
+    .returning({ id: approvalRequests.id });
+  return rows.length;
+}
+
 export async function setDispatchedRunId(db: Db, id: string, runId: string): Promise<void> {
-  await db
+  const rows = await db
     .update(approvalRequests)
     .set({ dispatchedRunId: runId })
-    .where(eq(approvalRequests.id, id));
+    .where(
+      and(
+        eq(approvalRequests.id, id),
+        eq(approvalRequests.status, "approved"),
+        or(
+          isNull(approvalRequests.dispatchedRunId),
+          eq(approvalRequests.dispatchedRunId, runId),
+        ),
+      ),
+    )
+    .returning({ id: approvalRequests.id });
+  if (rows.length === 0) {
+    throw new ApprovalStoreError(409, "dispatch_already_recorded");
+  }
 }
 
 export function serializeApproval(row: ApprovalRow): ApprovalRequest {
@@ -177,4 +319,8 @@ export function serializeApproval(row: ApprovalRow): ApprovalRequest {
     decidedAt: row.decidedAt ? row.decidedAt.toISOString() : null,
     dispatchedRunId: row.dispatchedRunId,
   };
+}
+
+function rawRows<T>(result: unknown): T[] {
+  return ((result as { rows?: T[] }).rows ?? []) as T[];
 }

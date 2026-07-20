@@ -304,6 +304,7 @@ describe("usage", () => {
           name: "Plan",
           x: 0,
           y: 0,
+          inputs: {},
           params: { prompt: "BODY" },
           promptRefs: { prompt: { promptId: 4, version: 1 } },
         },

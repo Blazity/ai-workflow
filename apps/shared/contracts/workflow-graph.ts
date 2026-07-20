@@ -11,12 +11,25 @@ export interface BlockTypeSpec {
 export const DEFAULT_OUT_PORT = "out";
 export const FAILURE_PORT = "failed";
 
+const RESERVED_WORKFLOW_PATH_SEGMENTS = new Set(["__proto__", "prototype", "constructor"]);
+
+/** A block id or declared object field that dot-path bindings and conditions
+ * can address without escaping. Numeric array indexes are handled separately
+ * by the binding resolver and are intentionally not valid authored names. */
+export function isWorkflowAddressablePathSegment(segment: string): boolean {
+  return (
+    /^[A-Za-z_][A-Za-z0-9_-]*$/.test(segment) &&
+    !RESERVED_WORKFLOW_PATH_SEGMENTS.has(segment)
+  );
+}
+
 export const BLOCK_TYPE_SPECS: Record<WorkflowBlockType, BlockTypeSpec> = {
   trigger_ticket_ai: { category: "trigger", ports: [DEFAULT_OUT_PORT], allowsFailurePort: false },
   trigger_plan_approved: { category: "trigger", ports: [DEFAULT_OUT_PORT], allowsFailurePort: false },
   trigger_pr_created: { category: "trigger", ports: [DEFAULT_OUT_PORT], allowsFailurePort: false },
   trigger_pr_checks_failed: { category: "trigger", ports: [DEFAULT_OUT_PORT], allowsFailurePort: false },
   trigger_pr_review: { category: "trigger", ports: [DEFAULT_OUT_PORT], allowsFailurePort: false },
+  trigger_pr_merged: { category: "trigger", ports: [DEFAULT_OUT_PORT], allowsFailurePort: false },
   planning_agent: { category: "action", ports: [DEFAULT_OUT_PORT], allowsFailurePort: true },
   implementation_agent: { category: "action", ports: [DEFAULT_OUT_PORT], allowsFailurePort: true },
   review_agent: { category: "action", ports: [DEFAULT_OUT_PORT], allowsFailurePort: true },
@@ -59,16 +72,23 @@ export function isTriggerBlockType(type: WorkflowBlockType): boolean {
 export const BLOCK_PARAM_KEYS: Record<WorkflowBlockType, readonly string[]> = {
   trigger_ticket_ai: [],
   trigger_plan_approved: [],
-  trigger_pr_created: ["providers", "onlyWorkflowOwned"],
-  trigger_pr_checks_failed: ["providers"],
-  trigger_pr_review: ["providers", "on"],
+  trigger_pr_created: ["providers", "scope"],
+  trigger_pr_checks_failed: [
+    "providers",
+    "scope",
+    "checkNames",
+    "githubAppSlugs",
+    "gitlabPipelineSources",
+  ],
+  trigger_pr_review: ["providers", "scope", "on"],
+  trigger_pr_merged: ["providers", "scope"],
   planning_agent: ["provider", "model", "prompt"],
   implementation_agent: ["provider", "model", "prompt"],
   review_agent: ["provider", "model", "prompt"],
   fix_agent: ["provider", "model", "instructions", "maxMinutes"],
-  generic_agent: ["provider", "model", "prompt", "outputSchema"],
+  generic_agent: ["provider", "model", "prompt", "outputSchema", "workspaceMode"],
   prepare_workspace: [],
-  finalize_workspace: ["requiredChecks"],
+  finalize_workspace: [],
   run_pre_pr_checks: ["maxFixCycles"],
   run_checks: ["commands"],
   call_llm: ["prompt", "system", "model", "provider", "outputSchema"],
@@ -78,9 +98,9 @@ export const BLOCK_PARAM_KEYS: Record<WorkflowBlockType, readonly string[]> = {
   post_ticket_comment: ["body"],
   post_pr_comment: ["body", "target"],
   send_slack_message: ["message"],
-  send_plan_approval: ["planFromStep", "mirrorComment"],
-  human_question: ["questions"],
-  arthur_injection_check: ["contentFromStep"],
+  send_plan_approval: ["mirrorComment"],
+  human_question: ["questions", "suggestedAnswers"],
+  arthur_injection_check: [],
   branch: ["condition"],
   loop: ["maxAttempts", "onExhaust"],
   terminate: ["terminalStatus", "postComment"],

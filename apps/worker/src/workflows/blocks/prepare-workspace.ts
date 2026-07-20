@@ -3,10 +3,15 @@ import type { WorkflowDefinitionNode } from "@shared/contracts";
 import type { AgentKind } from "../../sandbox/agents/index.js";
 import type { SelectedRepository } from "../../adapters/vcs/repository-directory.js";
 import type { PreSandboxPromptAdditionsByTarget } from "../../pre-sandbox/types.js";
-import type { WorkspaceRepositoryInput } from "../../sandbox/repo-workspace.js";
+import type {
+  WorkspaceManifest,
+  WorkspaceRepositoryInput,
+} from "../../sandbox/repo-workspace.js";
 import { resolveBlockAgent } from "../../workflow-definition/resolve-agent.js";
+import { isRunControlError } from "../run-control-error.js";
 import { blockFetchPrContextsStep, blockPrTriggerRepositoriesStep } from "./fetch-pr-context.js";
 import type { BlockExecuteFn, BlockExecutionResult } from "./types.js";
+import type { BlockExecutionContext } from "../../workflow-definition/interpreter.js";
 
 export const paramsSchema = z.object({}).strict();
 
@@ -64,18 +69,32 @@ async function blockPrepareWorkspaceEnsureArthurTaskStep(
     logger.info({ taskId: task.id, taskName: task.name }, "arthur_task_created");
     return task.id;
   } catch (err) {
+    if (isRunControlError(err)) throw err;
     logger.warn({ err: (err as Error).message, taskName }, "arthur_task_create_failed");
     return null;
   }
 }
 blockPrepareWorkspaceEnsureArthurTaskStep.maxRetries = 0;
 
+/** Ensure all sandboxes created by the run share its Arthur task when tracing
+ * is configured, including repository-free Planning/Generic sandboxes. */
+export async function ensureArthurTask(
+  ctx: Parameters<BlockExecuteFn>[2],
+): Promise<string | null> {
+  if (ctx.arthur.taskId) return ctx.arthur.taskId;
+  const taskId = await blockPrepareWorkspaceEnsureArthurTaskStep(ctx.ticket.identifier);
+  ctx.arthur.taskId = taskId;
+  return taskId;
+}
+
 async function blockPrepareWorkspaceProvisionStep(
+  subjectKey: string,
+  ownerToken: string,
   branchName: string,
   selectedRepositories: WorkspaceRepositoryInput[],
   arthurTaskId: string | null,
   requiredKinds: AgentKind[],
-): Promise<{ sandboxId: string }> {
+): Promise<{ sandboxId: string; workspaceManifest: WorkspaceManifest }> {
   "use step";
   const { env } = await import("../../../env.js");
   const { SandboxManager } = await import("../../sandbox/manager.js");
@@ -125,29 +144,39 @@ async function blockPrepareWorkspaceProvisionStep(
     jobTimeoutMs: env.JOB_TIMEOUT_MS,
   });
 
-  const sandbox = await manager.provisionMultiRepo(
+  const { sandbox, workspaceManifest } = await manager.provisionMultiRepo(
     { branchName, repositories: selectedRepositories },
     createAgentAdapter(primaryKind),
     configureOptsFor(primaryKind),
     additionalAgents,
+    {
+      onCreated: async (sandboxId) => {
+        const { createStepAdapters } = await import("../../lib/step-adapters.js");
+        await createStepAdapters().runRegistry.registerSandbox(
+          subjectKey,
+          ownerToken,
+          sandboxId,
+        );
+      },
+    },
   );
 
-  return { sandboxId: sandbox.sandboxId };
+  return { sandboxId: sandbox.sandboxId, workspaceManifest };
 }
 blockPrepareWorkspaceProvisionStep.maxRetries = 0;
 
 async function blockPrepareWorkspaceRegisterSandboxStep(
-  ticketIdentifier: string,
+  subjectKey: string,
+  ownerToken: string,
   sandboxId: string,
 ): Promise<void> {
   "use step";
   const { createStepAdapters } = await import("../../lib/step-adapters.js");
   const { runRegistry } = createStepAdapters();
-  await runRegistry.registerSandbox(ticketIdentifier, sandboxId);
+  await runRegistry.registerSandbox(subjectKey, ownerToken, sandboxId);
 }
 
-const AGENT_BLOCK_TYPES = new Set<string>([
-  "planning_agent",
+const CODE_WORKSPACE_AGENT_BLOCK_TYPES = new Set<string>([
   "implementation_agent",
   "review_agent",
   "fix_agent",
@@ -161,7 +190,8 @@ function requiredKindsForDefinition(
 ): AgentKind[] {
   const kinds: AgentKind[] = [defaultKind];
   for (const node of nodes) {
-    if (!AGENT_BLOCK_TYPES.has(node.type)) continue;
+    if (!CODE_WORKSPACE_AGENT_BLOCK_TYPES.has(node.type)) continue;
+    if (node.type === "generic_agent" && node.params.workspaceMode === "none") continue;
     const resolved = resolveBlockAgent(node.params, defaultKind, defaults);
     if (!kinds.includes(resolved.kind)) kinds.push(resolved.kind);
   }
@@ -173,15 +203,51 @@ function requiredKindsForDefinition(
  * the PR's repository for pr_trigger entries), prepare workflow-owned branches,
  * fetch PR contexts, ensure the run's Arthur task, provision one sandbox with
  * every agent CLI the definition can need, and register it for cleanup.
- * Mutates ctx.sandboxId, ctx.selectedRepositories, ctx.repositoryContexts,
- * ctx.preSandboxAdditions, and ctx.arthur.taskId (see the EngineCtx mutation
- * contract).
+ * Mutates ctx.sandboxId, ctx.workspaceManifest, ctx.selectedRepositories,
+ * ctx.repositoryContexts, ctx.preSandboxAdditions, and ctx.arthur.taskId (see
+ * the EngineCtx mutation contract).
  */
-export const execute: BlockExecuteFn = async (_block, _steps, ctx): Promise<BlockExecutionResult> => {
+export async function ensureWorkspace(
+  ctx: Parameters<BlockExecuteFn>[2],
+  execution?: BlockExecutionContext,
+): Promise<BlockExecutionResult> {
+  if (ctx.sandboxId) {
+    try {
+      // Re-assert the durable child record when an existing code workspace is reused.
+      await blockPrepareWorkspaceRegisterSandboxStep(
+        ctx.entry.subjectKey,
+        ctx.entry.ownerToken,
+        ctx.sandboxId,
+      );
+      const repositories = ctx.selectedRepositories.map(
+        (repo) => `${repo.provider}:${repo.repoPath}`,
+      );
+      return {
+        kind: "next",
+        output: {
+          status: "ok",
+          sandboxId: ctx.sandboxId,
+          repositories,
+          workspace: { id: ctx.sandboxId, repositories },
+        },
+      };
+    } catch (err) {
+      if (isRunControlError(err)) throw err;
+      return {
+        kind: "failed",
+        output: { status: "failed" },
+        reason: err instanceof Error ? err.message : String(err),
+      };
+    }
+  }
+
   try {
     let selected: SelectedRepository[];
     if (ctx.entry.kind === "pr_trigger") {
-      selected = await blockPrTriggerRepositoriesStep(ctx.ticket.identifier, ctx.entry.pr);
+      selected = await blockPrTriggerRepositoriesStep(
+        ctx.entry.ticketKey ?? ctx.entry.subjectKey,
+        ctx.entry.pr,
+      );
     } else {
       const preSandbox = await blockPrepareWorkspacePreSandboxStep({
         ticket: {
@@ -189,7 +255,12 @@ export const execute: BlockExecuteFn = async (_block, _steps, ctx): Promise<Bloc
           title: ctx.ticket.title,
           description: ctx.ticket.description,
           acceptanceCriteria: ctx.ticket.acceptanceCriteria,
-          comments: ctx.ticket.comments,
+          comments: execution?.clarificationAnswer
+            ? [
+                ...ctx.ticket.comments,
+                { author: "Human clarification", body: execution.clarificationAnswer },
+              ]
+            : ctx.ticket.comments,
           labels: ctx.ticket.labels,
         },
         run: { branchName: ctx.branchName },
@@ -225,8 +296,19 @@ export const execute: BlockExecuteFn = async (_block, _steps, ctx): Promise<Bloc
       };
     }
 
-    const { prepareSelectedRepositoryBranches } = await import("../repository-prs.js");
-    await prepareSelectedRepositoryBranches(ctx.ticket.identifier, ctx.branchName, selected);
+    if (ctx.entry.kind !== "pr_trigger" || ctx.entry.scope === "workflow_owned") {
+      const { prepareSelectedRepositoryBranches } = await import("../repository-prs.js");
+      await prepareSelectedRepositoryBranches(
+        ctx.ticket.identifier,
+        ctx.branchName,
+        selected,
+        {
+          subjectKey: ctx.entry.subjectKey,
+          ownerToken: ctx.entry.ownerToken,
+          runId: ctx.runId,
+        },
+      );
+    }
 
     const repositoryContexts = await blockFetchPrContextsStep(selected);
     const workspaceRepositories: WorkspaceRepositoryInput[] = repositoryContexts.map(
@@ -236,52 +318,57 @@ export const execute: BlockExecuteFn = async (_block, _steps, ctx): Promise<Bloc
       }),
     );
 
-    const arthurTaskId = await blockPrepareWorkspaceEnsureArthurTaskStep(
-      ctx.ticket.identifier,
-    );
-    ctx.arthur.taskId = arthurTaskId;
+    const arthurTaskId = await ensureArthurTask(ctx);
 
     const requiredKinds = requiredKindsForDefinition(
       ctx.definitionNodes,
       ctx.runDefaultKind,
       ctx.defaults,
     );
-    const { sandboxId } = await blockPrepareWorkspaceProvisionStep(
+    const { sandboxId, workspaceManifest } = await blockPrepareWorkspaceProvisionStep(
+      ctx.entry.subjectKey,
+      ctx.entry.ownerToken,
       ctx.branchName,
       workspaceRepositories,
       arthurTaskId,
       requiredKinds,
     );
-    // Track the sandbox the instant it exists, BEFORE registering it: if the
-    // register step throws, the catch below fails the block and the engine's
-    // teardown of ctx.sandboxIds is the only cleanup left (the registry never
-    // recorded the id, so the reconcile sweep cannot see it either).
+    // The manager registered this sandbox immediately after external creation,
+    // before clone/install/configure. Keep the in-workflow set for normal
+    // teardown; the durable child row covers crash/cancel cleanup.
     ctx.sandboxId = sandboxId;
+    ctx.workspaceManifest = workspaceManifest;
     // Track every provisioned sandbox so a prepare_workspace inside a loop does
     // not leak the sandboxes from earlier iterations: the engine tears down all
     // of ctx.sandboxIds on exit, not just the latest ctx.sandboxId.
     ctx.sandboxIds.add(sandboxId);
 
-    await blockPrepareWorkspaceRegisterSandboxStep(ctx.ticket.identifier, sandboxId);
-
     ctx.selectedRepositories = workspaceRepositories;
     ctx.repositoryContexts = repositoryContexts;
+    const repositories = workspaceRepositories.map(
+      (repo) => `${repo.provider}:${repo.repoPath}`,
+    );
 
     return {
       kind: "next",
       output: {
         status: "ok",
         sandboxId,
-        repositories: workspaceRepositories.map(
-          (repo) => `${repo.provider}:${repo.repoPath}`,
-        ),
+        repositories,
+        workspace: { id: sandboxId, repositories },
       },
     };
   } catch (err) {
+    if (isRunControlError(err)) throw err;
     return {
       kind: "failed",
       output: { status: "failed" },
       reason: err instanceof Error ? err.message : String(err),
     };
   }
-};
+}
+
+/** Explicit Prepare is the author-controlled spelling of the same idempotent
+ * operation specialized code agents invoke implicitly. */
+export const execute: BlockExecuteFn = async (_block, _steps, ctx, _inputs, execution) =>
+  ensureWorkspace(ctx, execution);

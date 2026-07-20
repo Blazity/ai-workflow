@@ -1,47 +1,28 @@
 import { z } from "zod";
-import type { SelectedRepository } from "../../adapters/vcs/repository-directory.js";
+import { isRunControlError } from "../run-control-error.js";
 import type { BlockExecuteFn, BlockExecutionResult } from "./types.js";
 
-export const paramsSchema = z
-  .object({
-    requiredChecks: z.array(z.string().trim().min(1)).optional(),
-  })
-  .strict();
-
-async function blockFinalizePrLinksCommentStep(
-  ticketId: string,
-  prs: Array<{ provider: SelectedRepository["provider"]; repoPath: string; url: string; id: number }>,
-  heading: string,
-): Promise<void> {
-  "use step";
-  const { createStepAdapters } = await import("../../lib/step-adapters.js");
-  const { issueTracker } = createStepAdapters();
-  const lines = prs.map((pr) => `- ${pr.provider}:${pr.repoPath}: #${pr.id} ${pr.url}`);
-  try {
-    await issueTracker.postComment(ticketId, `${heading}\n${lines.join("\n")}`);
-  } catch (err) {
-    const { logger } = await import("../../lib/logger.js");
-    logger.warn(
-      { ticketId, prs, err: err instanceof Error ? err.message : String(err) },
-      "pr_links_comment_failed",
-    );
-  }
-}
-blockFinalizePrLinksCommentStep.maxRetries = 0;
+export const paramsSchema = z.object({}).strict();
 
 /**
- * finalize_workspace: gate on requiredChecks (steps-record outputs whose status
- * must be "ok"), push the workspace and open or reuse workflow-owned pull
- * requests via publishWorkspaceChanges, comment the PR links on the ticket, and
- * set ctx.publication. The run is unregistered exactly once before PR creation
- * through ctx.unregisterBeforePr (mirrors agent.ts's open_pr semantics).
+ * finalize_workspace: gate on typed `checks.*` status inputs, preflight every
+ * repository, push with exact leases, and emit finalized branch metadata.
+ * It never creates PRs; subject ownership remains held until the workflow's
+ * terminal release.
  */
-export const execute: BlockExecuteFn = async (block, steps, ctx): Promise<BlockExecutionResult> => {
-  const requiredChecks = Array.isArray(block.params.requiredChecks)
-    ? block.params.requiredChecks.filter((id): id is string => typeof id === "string")
-    : [];
-  const unmet = requiredChecks.filter((id) => steps[id]?.output.status !== "ok");
-  if (unmet.length > 0) {
+export const execute: BlockExecuteFn = async (
+  block,
+  _steps,
+  ctx,
+  resolvedInputs = {},
+): Promise<BlockExecutionResult> => {
+  const unmetChecks = new Set(
+    Object.entries(resolvedInputs)
+      .filter(([name, status]) => name.startsWith("checks.") && status !== "ok")
+      .map(([name]) => name.slice("checks.".length)),
+  );
+  if (unmetChecks.size > 0) {
+    const unmet = [...unmetChecks];
     return {
       kind: "failed",
       output: { status: "failed", unmetChecks: unmet },
@@ -57,31 +38,38 @@ export const execute: BlockExecuteFn = async (block, steps, ctx): Promise<BlockE
     };
   }
 
+  if (!ctx.workspaceManifest) {
+    return {
+      kind: "failed",
+      output: { status: "failed" },
+      reason: "workspace has no manager-authored trusted manifest",
+    };
+  }
+
   try {
-    const { publishWorkspaceChanges } = await import("../workspace-publication.js");
-    const publication = await publishWorkspaceChanges({
+    const { finalizeWorkspacePublication } = await import("../workspace-publication.js");
+    const publication = await finalizeWorkspacePublication({
+      runId: ctx.runId,
+      subjectKey: ctx.entry.subjectKey,
+      ownerToken: ctx.entry.ownerToken,
       sandboxId: ctx.sandboxId,
       ticketKey: ctx.ticket.identifier,
-      branchName: ctx.branchName,
-      repositories: ctx.selectedRepositories,
-      title: ctx.ticket.title,
-      agentKind: ctx.runDefaultKind,
-      model: ctx.defaults[ctx.runDefaultKind],
+      workspaceManifest: ctx.workspaceManifest,
       clarifications: ctx.clarifications,
-      beforeCreatePullRequests: async () => {
-        await ctx.unregisterBeforePr();
-      },
+      sourcePullRequest:
+        ctx.entry.kind === "pr_trigger"
+          ? {
+              provider: ctx.entry.pr.provider,
+              repoPath: ctx.entry.pr.repoPath,
+              prId: ctx.entry.pr.prNumber,
+              headSha: ctx.entry.pr.headSha,
+              baseRef: ctx.entry.pr.baseRef,
+            }
+          : undefined,
     });
     ctx.publication = publication;
 
     if (publication.status === "failed") {
-      if (publication.prs.length > 0) {
-        await blockFinalizePrLinksCommentStep(
-          ctx.ticket.identifier,
-          publication.prs,
-          "Pull requests created before publication failed:",
-        );
-      }
       return {
         kind: "failed",
         output: { status: "failed" },
@@ -90,28 +78,31 @@ export const execute: BlockExecuteFn = async (block, steps, ctx): Promise<BlockE
       };
     }
 
-    if (publication.prs.some((pr) => pr.isNew)) {
-      await blockFinalizePrLinksCommentStep(
-        ctx.ticket.identifier,
-        publication.prs,
-        "Pull requests ready for review:",
-      );
+    if (publication.status !== "finalized") {
+      return {
+        kind: "failed",
+        output: { status: "failed" },
+        reason: `Finalize Workspace received unexpected publication status: ${publication.status}`,
+        phase: "push",
+      };
     }
 
     return {
       kind: "next",
       output: {
-        status: "published",
-        prs: publication.prs.map((pr) => ({
-          provider: pr.provider,
-          repoPath: pr.repoPath,
-          id: pr.id,
-          url: pr.url,
-          isNew: pr.isNew,
+        status: "finalized",
+        repositories: publication.repositories.map((repository) => ({
+          provider: repository.provider,
+          repoPath: repository.repoPath,
+          branchName: repository.branchName,
+          defaultBranch: repository.defaultBranch,
+          expectedHead: repository.expectedHead,
+          pushedHead: repository.pushedHead,
         })),
       },
     };
   } catch (err) {
+    if (isRunControlError(err)) throw err;
     return {
       kind: "failed",
       output: { status: "failed" },

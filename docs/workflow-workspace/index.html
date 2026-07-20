@@ -147,26 +147,6 @@
         color: var(--muted);
       }
 
-      .frame-nav {
-        display: flex;
-        gap: 6px;
-        padding: 8px 10px;
-        border-top: 1px solid var(--faint);
-      }
-
-      .frame-nav button {
-        flex: 1;
-        padding: 7px 10px;
-        border: 1px solid var(--hairline);
-        border-radius: 8px;
-        background: var(--panel);
-        color: var(--ink);
-        font: 700 11.5px/1 var(--sans);
-        cursor: pointer;
-      }
-
-      .frame-nav button:hover { background: rgba(35, 40, 47, 0.07); }
-
       .sidebar-foot {
         padding: 12px 16px 14px;
         border-top: 1px solid var(--faint);
@@ -717,12 +697,8 @@
         <p>Clean-slate block taxonomy and workflow variants for the orchestration MVP. Content lives in this file — the canvas is a viewer.</p>
       </div>
       <div class="frame-list" id="frame-list"></div>
-      <div class="frame-nav">
-        <button id="frame-prev" type="button" aria-label="Previous frame">‹ Prev</button>
-        <button id="frame-next" type="button" aria-label="Next frame">Next ›</button>
-      </div>
       <div class="sidebar-foot">
-        <div><kbd>1</kbd>–<kbd>7</kbd> jump to frame &nbsp; <kbd>0</kbd> fit all</div>
+        <div><kbd>1</kbd>–<kbd>8</kbd> jump to frame &nbsp; <kbd>0</kbd> fit all</div>
         <div><kbd>+</kbd> / <kbd>−</kbd> zoom &nbsp; <kbd>esc</kbd> close details</div>
         <div>Scroll pans · pinch or <kbd>⌘</kbd>+scroll zooms · click a block for its contract</div>
       </div>
@@ -767,246 +743,685 @@
         arthur:    { label: "Arthur Engine",        color: "#8b6f8f", optional: true },
       };
 
+      // Machine-readable source-of-truth block catalog. The worker
+      // contract-sync test evaluates this catalog and fails whenever a
+      // bindable path, status, parameter name, or dynamic contract probe
+      // diverges from the runtime registry.
+      const typedPaths = (type, ...paths) => paths.map((path) => ({ path, type }));
+      const runtimeShape = ({
+        requiredInputs = [],
+        optionalInputs = [],
+        additionalInputs = [],
+        requiredOutputs = [],
+        optionalOutputs = [],
+        statuses,
+      }) => ({
+        requiredInputs,
+        optionalInputs,
+        additionalInputs,
+        requiredOutputs,
+        optionalOutputs,
+        statuses,
+      });
+      const runtimeProbe = (name, params, shape) => ({
+        name,
+        params,
+        ...runtimeShape(shape),
+      });
+      const runtimeContract = (params, shape, probes = []) => ({
+        params,
+        ...runtimeShape(shape),
+        ...(probes.length ? { probes } : {}),
+      });
+
+      const STATUS_OUTPUT = typedPaths("string", "status");
+      const TICKET_OUTPUTS = [
+        ...typedPaths("string", "ticketKey"),
+        ...typedPaths("object", "ticket"),
+        ...typedPaths(
+          "string",
+          "ticket.identifier",
+          "ticket.title",
+          "ticket.description",
+          "ticket.acceptanceCriteria",
+        ),
+        ...typedPaths("string[]", "ticket.labels"),
+        ...typedPaths("object[]", "ticket.comments", "ticket.priorAnswers", "comments", "priorAnswers"),
+      ];
+      const PR_OUTPUTS = [
+        ...typedPaths("string", "provider", "repoPath", "prUrl", "headRef", "headSha", "baseRef", "title", "author"),
+        ...typedPaths("number", "prNumber"),
+        ...typedPaths("boolean", "isDraft"),
+      ];
+      const FIRED = ["fired"];
+      const PR_SCOPE_ANY = (params, extraRequired = [], optionalOutputs = []) =>
+        runtimeProbe("scope:any", params, {
+          requiredOutputs: [...STATUS_OUTPUT, ...PR_OUTPUTS, ...extraRequired],
+          optionalOutputs,
+          statuses: FIRED,
+        });
+
+      const RUNTIME_CONTRACTS = {
+        trigger_ticket_ai: runtimeContract([], {
+          requiredOutputs: [...STATUS_OUTPUT, ...TICKET_OUTPUTS],
+          statuses: FIRED,
+        }),
+        trigger_plan_approved: runtimeContract([], {
+          requiredOutputs: [
+            ...STATUS_OUTPUT,
+            ...typedPaths("string", "ticketKey", "approvedPlan", "approver", "approvedAt"),
+            ...TICKET_OUTPUTS.filter(({ path }) => path !== "ticketKey"),
+          ],
+          statuses: FIRED,
+        }),
+        trigger_pr_created: runtimeContract(
+          ["providers", "scope"],
+          {
+            requiredOutputs: [...STATUS_OUTPUT, ...TICKET_OUTPUTS, ...PR_OUTPUTS],
+            statuses: FIRED,
+          },
+          [PR_SCOPE_ANY({ providers: ["github", "gitlab"], scope: "any" })],
+        ),
+        trigger_pr_checks_failed: runtimeContract(
+          ["providers", "scope", "checkNames", "githubAppSlugs", "gitlabPipelineSources"],
+          {
+            requiredOutputs: [
+              ...STATUS_OUTPUT,
+              ...TICKET_OUTPUTS,
+              ...PR_OUTPUTS,
+              ...typedPaths("object[]", "failedChecks"),
+            ],
+            statuses: FIRED,
+          },
+          [
+            PR_SCOPE_ANY(
+              {
+                providers: ["github", "gitlab"],
+                scope: "any",
+                checkNames: [],
+                githubAppSlugs: ["github-actions"],
+                gitlabPipelineSources: ["merge_request_event"],
+              },
+              typedPaths("object[]", "failedChecks"),
+            ),
+          ],
+        ),
+        trigger_pr_review: runtimeContract(
+          ["providers", "scope", "on"],
+          {
+            requiredOutputs: [
+              ...STATUS_OUTPUT,
+              ...TICKET_OUTPUTS,
+              ...PR_OUTPUTS,
+              ...typedPaths("object", "review"),
+              ...typedPaths("string", "review.state", "review.author", "review.body"),
+            ],
+            statuses: FIRED,
+          },
+          [
+            PR_SCOPE_ANY(
+              { providers: ["github"], on: ["changes_requested"], scope: "any" },
+              [
+                ...typedPaths("object", "review"),
+                ...typedPaths("string", "review.state", "review.author", "review.body"),
+              ],
+            ),
+          ],
+        ),
+        trigger_pr_merged: runtimeContract(
+          ["providers", "scope"],
+          {
+            requiredOutputs: [...STATUS_OUTPUT, ...TICKET_OUTPUTS, ...PR_OUTPUTS],
+            optionalOutputs: typedPaths("string", "mergeSha", "mergedAt"),
+            statuses: FIRED,
+          },
+          [
+            PR_SCOPE_ANY(
+              { providers: ["github", "gitlab"], scope: "any" },
+              [],
+              typedPaths("string", "mergeSha", "mergedAt"),
+            ),
+          ],
+        ),
+        planning_agent: runtimeContract(["provider", "model", "prompt"], {
+          optionalInputs: [
+            ...typedPaths("object", "ticket"),
+            ...typedPaths("object[]", "comments", "priorAnswers"),
+          ],
+          requiredOutputs: [...STATUS_OUTPUT, ...typedPaths("string", "plan")],
+          optionalOutputs: typedPaths("string[]", "questions", "suggestedAnswers"),
+          statuses: ["ready", "needs_human_input", "failed"],
+        }),
+        implementation_agent: runtimeContract(["provider", "model", "prompt"], {
+          optionalInputs: [...typedPaths("object", "ticket"), ...typedPaths("string", "plan")],
+          requiredOutputs: [
+            ...STATUS_OUTPUT,
+            ...typedPaths("string", "workspaceId", "summary"),
+            ...typedPaths("object[]", "branches", "commits"),
+          ],
+          optionalOutputs: [
+            ...typedPaths("unknown", "verification"),
+            ...typedPaths("string[]", "questions", "suggestedAnswers"),
+          ],
+          statuses: ["implemented", "needs_human_input", "failed"],
+        }),
+        review_agent: runtimeContract(["provider", "model", "prompt"], {
+          requiredOutputs: [
+            ...STATUS_OUTPUT,
+            ...typedPaths("object[]", "findings"),
+            ...typedPaths("string", "decision"),
+          ],
+          optionalOutputs: typedPaths("string", "feedback"),
+          statuses: ["reviewed", "failed"],
+        }),
+        fix_agent: runtimeContract(["provider", "model", "instructions", "maxMinutes"], {
+          requiredOutputs: [
+            ...STATUS_OUTPUT,
+            ...typedPaths("string", "workspaceId", "summary"),
+            ...typedPaths("object[]", "commits", "resolvedConflicts", "unresolvedConflicts"),
+          ],
+          optionalOutputs: typedPaths("string[]", "questions", "suggestedAnswers"),
+          statuses: ["fixed", "needs_human_input", "failed"],
+        }),
+        generic_agent: runtimeContract(
+          ["provider", "model", "prompt", "outputSchema", "workspaceMode"],
+          {
+            optionalInputs: typedPaths("string", "prompt"),
+            requiredOutputs: [...STATUS_OUTPUT, ...typedPaths("string", "body")],
+            optionalOutputs: typedPaths("string[]", "questions", "suggestedAnswers"),
+            statuses: ["completed", "needs_human_input", "failed"],
+          },
+          [
+            runtimeProbe(
+              "declared-output",
+              {
+                provider: "claude",
+                model: "claude-test",
+                prompt: "",
+                workspaceMode: "none",
+                outputSchema: "{\"type\":\"object\",\"properties\":{\"classification\":{\"type\":\"string\"},\"confidence\":{\"type\":\"number\"}},\"required\":[\"classification\"]}",
+              },
+              {
+                optionalInputs: typedPaths("string", "prompt"),
+                requiredOutputs: [
+                  ...STATUS_OUTPUT,
+                  ...typedPaths("string", "classification", "data.classification"),
+                  ...typedPaths("object", "data"),
+                ],
+                optionalOutputs: typedPaths("number", "confidence", "data.confidence"),
+                statuses: ["completed", "needs_human_input", "failed"],
+              },
+            ),
+          ],
+        ),
+        prepare_workspace: runtimeContract([], {
+          requiredOutputs: [
+            ...STATUS_OUTPUT,
+            ...typedPaths("string", "sandboxId", "workspace.id"),
+            ...typedPaths("string[]", "repositories"),
+            ...typedPaths("object", "workspace"),
+          ],
+          optionalOutputs: [
+            ...typedPaths("string[]", "workspace.repositories", "questions"),
+          ],
+          statuses: ["ok", "needs_human_input", "failed"],
+        }),
+        finalize_workspace: runtimeContract([], {
+          additionalInputs: [{
+            path: "^checks\\.[A-Za-z0-9_-]+$",
+            keyPattern: "^checks\\.[A-Za-z0-9_-]+$",
+            type: "string",
+          }],
+          requiredOutputs: [
+            ...STATUS_OUTPUT,
+            ...typedPaths("object[]", "repositories"),
+          ],
+          optionalOutputs: typedPaths("string[]", "unmetChecks"),
+          statuses: ["finalized", "failed"],
+        }),
+        run_pre_pr_checks: runtimeContract(["maxFixCycles"], {
+          requiredOutputs: [
+            ...STATUS_OUTPUT,
+            ...typedPaths("boolean", "ok"),
+            ...typedPaths("number", "fixCycles"),
+            ...typedPaths("string", "summary"),
+          ],
+          statuses: ["ok", "failed"],
+        }),
+        run_checks: runtimeContract(["commands"], {
+          requiredOutputs: [
+            ...STATUS_OUTPUT,
+            ...typedPaths("boolean", "ok"),
+            ...typedPaths("unknown[]", "results", "failures"),
+          ],
+          statuses: ["ok", "failed"],
+        }),
+        call_llm: runtimeContract(
+          ["prompt", "system", "model", "provider", "outputSchema"],
+          {
+            optionalInputs: typedPaths("string", "prompt", "system"),
+            requiredOutputs: [...STATUS_OUTPUT, ...typedPaths("string", "output")],
+            statuses: ["ok", "failed"],
+          },
+          [
+            runtimeProbe(
+              "declared-output",
+              {
+                prompt: "",
+                outputSchema: "{\"type\":\"object\",\"properties\":{\"summary\":{\"type\":\"string\"},\"score\":{\"type\":\"number\"}},\"required\":[\"summary\"]}",
+              },
+              {
+                optionalInputs: typedPaths("string", "prompt", "system"),
+                requiredOutputs: [
+                  ...STATUS_OUTPUT,
+                  ...typedPaths("object", "output"),
+                  ...typedPaths("string", "output.summary"),
+                ],
+                optionalOutputs: typedPaths("number", "output.score"),
+                statuses: ["ok", "failed"],
+              },
+            ),
+          ],
+        ),
+        fetch_pr_context: runtimeContract([], {
+          requiredOutputs: [...STATUS_OUTPUT, ...typedPaths("unknown[]", "contexts")],
+          statuses: ["ok", "failed"],
+        }),
+        open_pr: runtimeContract([], {
+          requiredInputs: typedPaths("object[]", "repositories"),
+          requiredOutputs: [...STATUS_OUTPUT, ...typedPaths("object[]", "prs")],
+          optionalOutputs: [
+            ...typedPaths("string", "prUrl"),
+            ...typedPaths("number", "prNumber"),
+          ],
+          statuses: ["ok", "failed"],
+        }),
+        update_ticket_status: runtimeContract(["target"], {
+          optionalInputs: typedPaths("string", "target"),
+          requiredOutputs: [...STATUS_OUTPUT, ...typedPaths("string", "target")],
+          statuses: ["ok", "failed"],
+        }),
+        post_ticket_comment: runtimeContract(["body"], {
+          optionalInputs: typedPaths("string", "body"),
+          requiredOutputs: [
+            ...STATUS_OUTPUT,
+            ...typedPaths("string | null", "commentUrl"),
+          ],
+          statuses: ["ok", "failed"],
+        }),
+        post_pr_comment: runtimeContract(["body", "target"], {
+          optionalInputs: typedPaths("string", "body"),
+          requiredOutputs: [...STATUS_OUTPUT, ...typedPaths("unknown[]", "comments")],
+          statuses: ["ok", "failed"],
+        }),
+        send_slack_message: runtimeContract(["message"], {
+          optionalInputs: typedPaths("string", "message"),
+          requiredOutputs: STATUS_OUTPUT,
+          statuses: ["ok", "skipped", "failed"],
+        }),
+        send_plan_approval: runtimeContract(["mirrorComment"], {
+          requiredInputs: typedPaths("string", "plan"),
+          optionalInputs: typedPaths("string[]", "assumptions"),
+          requiredOutputs: [
+            ...STATUS_OUTPUT,
+            ...typedPaths("string", "approvalRequestId"),
+          ],
+          statuses: ["awaiting_approval", "failed"],
+        }),
+        human_question: runtimeContract(["questions", "suggestedAnswers"], {
+          optionalInputs: typedPaths("string[]", "questions", "suggestedAnswers"),
+          requiredOutputs: STATUS_OUTPUT,
+          optionalOutputs: [
+            ...typedPaths("string[]", "questions", "suggestedAnswers"),
+            ...typedPaths("string", "answer"),
+          ],
+          statuses: ["needs_human_input", "answered", "failed"],
+        }),
+        arthur_injection_check: runtimeContract([], {
+          optionalInputs: typedPaths("string", "content"),
+          requiredOutputs: STATUS_OUTPUT,
+          optionalOutputs: [
+            ...typedPaths("unknown[]", "findings"),
+            ...typedPaths("string", "reason"),
+          ],
+          statuses: ["ok", "flagged", "skipped", "failed"],
+        }),
+        branch: runtimeContract(["condition"], {
+          requiredOutputs: STATUS_OUTPUT,
+          optionalOutputs: typedPaths("string", "path", "reason", "error"),
+          statuses: ["ok", "failed"],
+        }),
+        loop: runtimeContract(["maxAttempts", "onExhaust"], {
+          requiredOutputs: [...STATUS_OUTPUT, ...typedPaths("number", "attempt")],
+          optionalOutputs: typedPaths("string", "answer"),
+          statuses: ["ok", "exhausted"],
+        }),
+        terminate: runtimeContract(["terminalStatus", "postComment"], {
+          requiredOutputs: STATUS_OUTPUT,
+          statuses: ["waiting_for_human", "failed", "skipped", "done"],
+        }),
+      };
+
       const BLOCKS = {
         "trig.ticket-impl": {
+          runtimeType: "trigger_ticket_ai",
+          runtimeContract: RUNTIME_CONTRACTS.trigger_ticket_ai,
           group: "trigger",
           title: "Ticket implementation started/resumed",
-          blurb: "Jira/Linear lifecycle trigger. One entry point for every way work starts or resumes.",
-          contract: "out: ticket, comments, resume_reason",
-          input: "config {\n  providers: (\"jira\" | \"linear\")[],\n  board_column?: string\n}",
-          output: "{\n  ticket: TicketContext,\n  comments: CommentContext[],\n  attachments: AttachmentRef[],\n  resume_reason: \"new_ticket\" | \"moved_to_ai\"\n    | \"clarification_answered\" | \"comment_added\",\n  prior_run?: RunRef\n}",
+          blurb: "Ticket lifecycle trigger. One entry point for every way work starts or resumes; Jira-only versus Jira + Linear launch coverage is open.",
           note: "A workflow may declare multiple triggers feeding the same entry point. Granular low-level triggers (ticket created, comment added, …) are deferred; lifecycle triggers are the MVP surface."
         },
         "trig.plan-approved": {
+          runtimeType: "trigger_plan_approved",
+          runtimeContract: RUNTIME_CONTRACTS.trigger_plan_approved,
           group: "trigger",
           title: "Plan approved",
-          blurb: "Human approval event that resumes a suspended workflow with the approved plan.",
-          contract: "out: ticket, approved_plan, approval",
-          input: "config {\n  source: \"dashboard\" | \"ticket_comment\"\n}",
-          output: "{\n  ticket: TicketContext,\n  approved_plan: string,\n  approval: {\n    approver: UserRef,\n    approved_at: ISODateTime\n  }\n}"
+          blurb: "Human approval event that starts the pinned implementation path with the approved plan.",
+          note: "Approval is final: accepting it immediately enqueues implementation, consumes the approval item, and cannot be revoked from the approval UI. Stopping an implementation run, if ever needed, is a separate operational action — not an approval state."
         },
         "trig.pr-created": {
+          runtimeType: "trigger_pr_created",
+          runtimeContract: RUNTIME_CONTRACTS.trigger_pr_created,
           group: "trigger",
           title: "PR created",
-          blurb: "Fires when a pull/merge request is opened; starts standalone review workflows.",
-          contract: "out: pr, diff, commits",
-          input: "config {\n  providers: (\"github\" | \"gitlab\")[],\n  only_workflow_owned?: boolean\n}",
-          output: "{\n  pr: PrRef,\n  diff: DiffSummary,\n  commits: CommitRef[],\n  ticket?: TicketContext\n}"
+          blurb: "Fires when a pull/merge request is opened; its relationship to any default review workflow or post-PR gate is still open.",
+          note: "workflow_owned is proven from durable branch/publication correlation plus a valid ticket lookup; a prefix alone is insufficient. any is review-safe in this revision and cannot reach workspace-mutating or ticket-action blocks."
         },
         "trig.pr-checks-failed": {
+          runtimeType: "trigger_pr_checks_failed",
+          runtimeContract: RUNTIME_CONTRACTS.trigger_pr_checks_failed,
           group: "trigger",
           title: "PR checks failed",
-          blurb: "Fires when CI checks fail on a workflow-owned PR/MR.",
-          contract: "out: pr, failed_checks, logs",
-          input: "config {\n  providers: (\"github\" | \"gitlab\")[]\n}",
-          output: "{\n  pr: PrRef,\n  failed_checks: CheckResult[],\n  logs: string,\n  ticket?: TicketContext\n}",
-          note: "Events coalesce per ticket: one active run per ticket at a time, so simultaneous check failures across a ticket's PRs feed a single fix run rather than racing each other."
+          blurb: "Starts remediation from an exact allowlisted GitHub Actions or GitLab CI failure on an eligible PR/MR.",
+          note: "This trigger consumes allowlisted provider failures; it does not run checks itself. An empty check-name selection stays editable as a draft but cannot be deployed. Trusted-source defaults are GitHub App github-actions and GitLab source merge_request_event. workflow_owned is proven from durable branch/publication correlation plus a valid ticket lookup; a prefix alone is insufficient. any is review-safe in this revision and cannot reach Fix, Finalize, Open PR/MR, or ticket actions. Before immediate or queued dispatch, the provider API must confirm the current head; GitLab must also confirm the event pipeline is still the MR's current failed head pipeline and that at least one selected event job remains failed. When a GitLab Pipeline Hook omits builds, the explicit check name pipeline selects that exact current failed pipeline as a provider-level fallback. Events coalesce by subject and exact source head. Passing, cancelled, superseded, neutral, skipped, and stale-head results are ignored."
         },
         "trig.pr-review": {
+          runtimeType: "trigger_pr_review",
+          runtimeContract: RUNTIME_CONTRACTS.trigger_pr_review,
           group: "trigger",
           title: "PR review submitted",
-          blurb: "Fires when a human submits review feedback on a workflow-owned PR/MR.",
-          contract: "out: pr, review, comments",
-          input: "config {\n  providers: (\"github\" | \"gitlab\")[],\n  on: (\"changes_requested\" | \"commented\")[]\n}",
-          output: "{\n  pr: PrRef,\n  review: ReviewRef,\n  comments: ReviewComment[],\n  ticket?: TicketContext\n}"
+          blurb: "Fires on selected human review feedback for an eligible PR/MR; ownership and actionable review scope are open.",
+          note: "GitHub can deliver submitted changes requested reviews and review comments. GitLab supports external comments only in this revision because it does not emit a reliable changes-requested webhook; a GitLab definition selecting changes_requested is unavailable and rejected before deployment. GitLab internal/confidential notes fail closed at both route and normalization boundaries, and the editor always retains at least one selected review state. Workflow-authored comments and review echoes are filtered by default so the fix summary cannot recursively trigger another remediation run. workflow_owned is proven from durable branch/publication correlation plus a valid ticket lookup. any is review-safe and cannot mutate a branch or ticket in this revision."
+        },
+        "trig.pr-merged": {
+          runtimeType: "trigger_pr_merged",
+          runtimeContract: RUNTIME_CONTRACTS.trigger_pr_merged,
+          group: "trigger",
+          title: "PR/MR merged",
+          blurb: "Fires after a pull/merge request is merged; workflow-owned scope guarantees correlated ticket context for post-merge ticket movement.",
+          note: "workflow_owned is proven from durable branch/publication correlation plus a valid ticket lookup; a branch prefix alone is insufficient. Use it when connecting this trigger to ticket actions. any has no guaranteed ticket and is review-safe only. Jira status webhooks authored by the configured workflow account are ignored as self-echoes; any different, missing, or unverifiable actor is treated as human input and retains normal cancellation behavior."
         },
 
         "agent.planning": {
+          runtimeType: "planning_agent",
+          runtimeContract: RUNTIME_CONTRACTS.planning_agent,
           group: "agent",
           title: "Planning Agent",
           blurb: "Requirements gathering and plan preparation, clarification loop built in.",
-          contract: "out: plan | questions",
-          input: "{\n  ticket: TicketContext,\n  comments: CommentContext[],\n  prior_answers?: HumanAnswer[]\n}",
-          output: "{\n  status: \"ready\" | \"needs_human_input\",\n  plan?: string,\n  questions?: string[],\n  assumptions?: string[]\n}",
-          note: "On needs_human_input the runtime posts the questions, suspends, and the lifecycle trigger's resume path re-enters — the clarification loop is not something a workflow author wires up."
+          note: "On needs_human_input the runtime stops the agent, preserves a durable checkpoint, and targets a snapshot-backed pinned successor that reruns only the waiting agent before following downstream edges. The real Vercel snapshot/restore/expiry and git-index probe passed on 2026-07-17; this continuation is a runtime capability, not something a workflow author wires up."
         },
         "agent.implementation": {
+          runtimeType: "implementation_agent",
+          runtimeContract: RUNTIME_CONTRACTS.implementation_agent,
           group: "agent",
           title: "Implementation Agent",
           blurb: "Coding agent with workspace, branch policy, commit enforcement, and pre-PR verification built in.",
-          contract: "out: workspace_id, branches, commits",
-          input: "{\n  ticket: TicketContext,\n  plan: string,\n  workspace_policy: WorkspacePolicy,\n  branch_policy: BranchPolicy,\n  verification?: VerificationPolicy\n}",
-          output: "{\n  status: \"implemented\" | \"needs_human_input\"\n    | \"failed\",\n  workspace_id: string,\n  branches: BranchRef[],   // one per changed repo\n  commits: CommitRef[],\n  verification?: VerificationResult,\n  summary: string\n}",
           note: "Prepares or resumes the run workspace implicitly. Multi-repo: repo selection happens in workspace preparation; one branch per changed repo."
         },
         "agent.review": {
+          runtimeType: "review_agent",
+          runtimeContract: RUNTIME_CONTRACTS.review_agent,
           group: "agent",
           title: "Review Agent",
           blurb: "Reviews a diff or PR and produces structured findings plus a decision.",
-          contract: "out: findings, decision",
-          input: "{\n  target: { workspace_id: string }\n        | { pr: PrRef },\n  scope: ReviewScope\n}",
-          output: "{\n  status: \"reviewed\" | \"failed\",\n  findings: Finding[],\n  decision: \"approve\" | \"request_changes\"\n}"
+          note: "The review target and scope come from the run context; the block exposes no bindable input path in the current runtime."
         },
         "agent.fix": {
+          runtimeType: "fix_agent",
+          runtimeContract: RUNTIME_CONTRACTS.fix_agent,
           group: "agent",
           title: "Fix Agent",
-          blurb: "Repair pass scoped to structured failures: per-repo check results or review feedback.",
-          contract: "in: failures · out: commits, status",
-          input: "{\n  workspace_id: string,\n  failures: RepoCheckFailure[]\n    | ReviewFeedback,\n  plan?: string\n}",
-          output: "{\n  status: \"fixed\" | \"needs_human_input\"\n    | \"failed\",\n  commits: CommitRef[],\n  summary: string\n}"
+          blurb: "Repair pass scoped to structured failures, review feedback, or current merge conflicts.",
+          note: "Reuses an upstream prepared workspace when present; otherwise prepares or resumes the target workspace automatically. Accepted PR head, failures, ticket, and workspace context are carried by the run rather than authored as bindings. status: fixed is the specialized agent's built-in readiness classification and continues to Finalize workspace; it is not a CI verdict or permission to bypass publication guards. needs_human_input creates the runtime clarification checkpoint; failed follows default failure policy. Use Generic Agent + Branch for a custom classification. Merge conflicts are auto-resolved only when the agent can produce a clean committed tree. Before publication, the runtime re-reads the accepted PR head and refuses to overwrite a different SHA; provider CI remains authoritative for correctness."
         },
         "agent.generic": {
+          runtimeType: "generic_agent",
+          runtimeContract: RUNTIME_CONTRACTS.generic_agent,
           group: "agent",
           title: "Generic Agent",
           blurb: "Prompted agent with a declared output schema. Must attach a workspace to touch code.",
-          contract: "out: declared schema + status",
-          input: "{\n  prompt: string,\n  workspace_id?: string,\n  output_schema: JsonSchema\n}",
-          output: "{\n  status: \"completed\" | \"needs_human_input\"\n    | \"failed\",\n  ...declared_schema\n}",
-          note: "The escape hatch: everything the specialized agents do can be rebuilt from Generic Agent + workspace + control blocks."
+          note: "The escape hatch: everything the specialized agents do can be rebuilt from Generic Agent + workspace + control blocks. Non-code uses such as planning need no workspace; repository-reading or mutating configurations require an upstream Prepare workspace binding. For custom routing, use a declared classification field in the output schema and evaluate it with Branch; the runtime status remains reserved for completed, needs_human_input, and failed."
         },
 
         "ws.prepare": {
+          runtimeType: "prepare_workspace",
+          runtimeContract: RUNTIME_CONTRACTS.prepare_workspace,
           group: "workspace",
           title: "Prepare workspace",
           blurb: "Materializes the ticket's durable workspace: create, resume warm from snapshot, or rebuild cold from branch records.",
-          contract: "out: workspace_id, repos, materialization",
-          input: "{\n  ticket: TicketContext,\n  repo_selection_policy: RepoSelectionPolicy,\n  branch_policy: BranchPolicy,\n  persistence_policy?: PersistencePolicy\n}",
-          output: "{\n  workspace_id: string,\n  repos: SelectedRepo[],\n  branches: BranchRef[],\n    // BranchRef = {provider, repo_path, branch}\n  materialization: \"created\"\n    | \"resumed_warm\" | \"rebuilt_cold\"\n}",
-          note: "Two-tier model: the workspace is a durable identity (ticket → repos + branches + manifest) in our DB. Warm path: a persistent named sandbox resumes from its auto-snapshot (Vercel Sandbox v2 persistence). Cold path: a fresh sandbox re-clones the workflow-owned branches. Snapshot expiry degrades warm to cold — it never fails the run, and the cold path is what on-prem deployments use."
+          note: "Optional for specialized agents, which prepare or resume their workspace automatically. Use this block explicitly in modular/custom workflows to control repository selection, branch policy, or persistence. The Vercel snapshot/restore/expiry and git-index capability probe passed on 2026-07-17, so snapshot-backed clarification continuation is implemented; longer-term warm/cold workspace lifecycle, TTL, and retention policy remain open."
         },
         "ws.finalize": {
+          runtimeType: "finalize_workspace",
+          runtimeContract: RUNTIME_CONTRACTS.finalize_workspace,
           group: "workspace",
           title: "Finalize workspace",
-          blurb: "Deterministic end gate: clean git state, commits exist, push changed branches, capture artifacts, park or destroy the sandbox.",
-          contract: "out: status, pushed_branches, workspace_state",
-          input: "{\n  workspace_id: string,\n  required_checks?: string[]\n}",
-          output: "{\n  status: \"clean\" | \"failed\",\n  commits: CommitRef[],\n  pushed_branches: BranchRef[],\n  verification: VerificationResult,\n  artifacts: ArtifactRef[],\n  workspace_state: \"parked\" | \"destroyed\"\n}",
-          note: "Non-terminal ends (awaiting approval, review rounds expected) park the workspace — snapshot and stop. Terminal statuses destroy it; the snapshot expires per retention policy."
+          blurb: "Deterministic publication and workspace gate: verify the write, push changed branches, capture artifacts, then apply the selected retention policy.",
+          note: "This is the sole push boundary. It preflights every repository before the first push, records exact expected and pushed heads durably, and emits usable output only when the complete publication succeeds. Deployment rejects any graph path that can execute a second Finalize against the same run; mutually exclusive branches may each contain one. It does not terminate the workflow or release its active-run claim; the claim remains held through every downstream block. It does not open PRs."
         },
 
         "ctl.branch": {
+          runtimeType: "branch",
+          runtimeContract: RUNTIME_CONTRACTS.branch,
           group: "control",
           title: "Branch",
-          blurb: "Routes by one expression over prior step outputs. Single condition language everywhere.",
-          contract: "out: path, reason",
-          input: "config {\n  condition: Expression\n  // e.g. steps.checks.output.ok\n}",
-          output: "{\n  path: \"true\" | \"false\",\n  reason: string\n}"
+          blurb: "Routes by one restricted, parsed JavaScript-style expression over prior step outputs.",
+          note: "Configure condition with the restricted expression syntax, for example steps.checks.output.ok. path, reason, and error are optional diagnostic output paths; routing uses the true and false ports."
         },
         "ctl.loop": {
+          runtimeType: "loop",
+          runtimeContract: RUNTIME_CONTRACTS.loop,
           group: "control",
           title: "Loop",
           blurb: "Bounds a retry cycle. Every cycle in a workflow must pass through exactly one Loop.",
-          contract: "ports: continue | exhausted",
-          input: "config {\n  max_attempts: number,\n  on_exhaust: \"fail\" | \"human\" | \"continue\"\n}",
-          output: "{\n  attempt: number\n}\n// two output ports:\n// continue — run the next attempt\n// exhausted — attempts spent",
           note: "The exhausted port may be left unwired — it then follows the default failure path (runtime guarantee: terminate, move ticket, notify). Wire it explicitly to escalate differently, e.g. into a Human question."
         },
         "ctl.terminate": {
+          runtimeType: "terminate",
+          runtimeContract: RUNTIME_CONTRACTS.terminate,
           group: "control",
           title: "Terminate workflow",
           blurb: "Stops execution early with a typed terminal status.",
-          contract: "config: terminal_status",
-          input: "config {\n  terminal_status: \"waiting_for_human\"\n    | \"failed\" | \"skipped\" | \"done\",\n  post_comment?: string\n}",
-          output: "terminal — no downstream steps"
+          note: "This terminal block has no downstream port. Its output still exposes status for run records and typed inspection."
         },
 
         "tk.comment": {
+          runtimeType: "post_ticket_comment",
+          runtimeContract: RUNTIME_CONTRACTS.post_ticket_comment,
           group: "ticket",
           title: "Post comment",
           blurb: "Writes questions, plans, or status back to the Jira/Linear ticket.",
-          contract: "out: comment_id, posted_at",
-          input: "{\n  ticket: TicketContext,\n  message: string,\n  reason: \"clarifying_questions\"\n    | \"plan_posted\" | \"status_update\"\n}",
-          output: "{\n  comment_id: string,\n  posted_at: ISODateTime\n}"
+          note: "The ticket target comes from run context. Author body as a parameter or bind the optional body input."
         },
         "tk.status": {
+          runtimeType: "update_ticket_status",
+          runtimeContract: RUNTIME_CONTRACTS.update_ticket_status,
           group: "ticket",
           title: "Update ticket status",
           blurb: "Moves the ticket to a configured provider column/state.",
-          contract: "out: update_id",
-          input: "{\n  ticket: TicketContext,\n  target_status: string\n}",
-          output: "{ update_id: string }"
+          note: "The ticket target comes from run context. Author target as a parameter or bind the optional target input."
         },
 
         "vcs.open-pr": {
+          runtimeType: "open_pr",
+          runtimeContract: RUNTIME_CONTRACTS.open_pr,
           group: "vcs",
           title: "Open PR/MR",
           blurb: "Opens one pull/merge request per changed repo from the finalized workspace.",
-          contract: "out: prs (one per changed repo)",
-          input: "{\n  source: { workspace_id: string }\n        | { branches: BranchRef[] },\n  title: string,\n  body: string\n}",
-          output: "{ prs: PrRef[] }"
+          note: "Consumes the exact finalized branch metadata produced by Finalize workspace and creates or reuses provider PRs/MRs idempotently. Each branch is re-read before PR creation, and every recovered or newly created PR/MR must still be open at the exact finalized head and configured target branch before ownership is recorded. It does not push workspace changes; Finalize remains the sole push boundary, and the active-run claim remains held through later ticket and notification blocks."
         },
         "vcs.pr-comment": {
+          runtimeType: "post_pr_comment",
+          runtimeContract: RUNTIME_CONTRACTS.post_pr_comment,
           group: "vcs",
           title: "Post PR comment",
           blurb: "Writes a summary or reply onto the pull/merge request.",
-          contract: "out: comment_id",
-          input: "{\n  pr: PrRef,\n  message: string\n}",
-          output: "{ comment_id: string }"
+          note: "Immediately before each comment, the runtime re-reads the provider PR/MR and requires the exact trigger or durable publication head, target branch, and lifecycle. Review/check/created and publication paths require open; a merged-trigger path requires merged. Stale, retargeted, closed, or otherwise mismatched targets fail closed."
         },
         "vcs.fetch-context": {
+          runtimeType: "fetch_pr_context",
+          runtimeContract: RUNTIME_CONTRACTS.fetch_pr_context,
           group: "vcs",
           title: "Fetch PR context",
           blurb: "Loads review comments, check results, and conflict status for a PR or ticket.",
-          contract: "out: comments, check_results, conflicts",
-          input: "{\n  target: { pr: PrRef }\n        | { ticket: TicketContext }\n}",
-          output: "{\n  comments: ReviewComment[],\n  check_results: CheckResult[],\n  conflict_status: ConflictStatus\n}"
+          note: "The target comes from run context. The current registry exposes its normalized provider payload through the contexts output path."
         },
 
         "hitl.plan-approval": {
+          runtimeType: "send_plan_approval",
+          runtimeContract: RUNTIME_CONTRACTS.send_plan_approval,
           group: "human",
           title: "Send plan for approval",
-          blurb: "Creates a dashboard approval item and mirrors the plan to the ticket, then suspends.",
-          contract: "out: approval_request_id · suspends",
-          input: "{\n  ticket: TicketContext,\n  plan: string,\n  assumptions: string[],\n  reviewers: UserRef[]\n}",
-          output: "{\n  approval_request_id: string,\n  dashboard_url: string\n}",
-          note: "The workflow suspends here durably. The matching \"Plan approved\" trigger re-enters with the approved plan."
+          blurb: "Creates a dashboard approval item and mirrors the plan to the ticket, then ends this path.",
+          note: "The ticket target comes from run context. plan is the one required binding; assumptions is optional, while mirrorComment is an authored parameter. No workflow instance remains suspended here. The matching \"Plan approved\" trigger starts the pinned implementation path with the approved plan."
         },
         "hitl.question": {
+          runtimeType: "human_question",
+          runtimeContract: RUNTIME_CONTRACTS.human_question,
           group: "human",
           title: "Human question",
-          blurb: "User-scoped question routed to the ticket owner via the dashboard.",
-          contract: "out: answers, answered_by",
-          input: "{\n  ticket: TicketContext,\n  questions: string[],\n  scope: \"owner\" | \"team\"\n}",
-          output: "{\n  answers: HumanAnswer[],\n  answered_by: UserRef\n}"
+          blurb: "Question checkpoint routed through the run's human-input surface.",
+          note: "The ticket and recipient come from run context. questions and suggestedAnswers may be authored as parameters or supplied through optional bindings. The answered variant exposes answer; it does not produce an answers collection or answered-by user object."
         },
 
+        "util.pre-pr-checks": {
+          runtimeType: "run_pre_pr_checks",
+          runtimeContract: RUNTIME_CONTRACTS.run_pre_pr_checks,
+          group: "utility",
+          title: "Pre-PR checks",
+          blurb: "Runs the product's configured pre-publication validation and bounded fix cycle in the workspace.",
+          note: "The workspace comes from run context; this block has no workspace binding. maxFixCycles is an authored parameter. This is the existing pre-PR gate used before Finalize/Open PR. Unlike report-oriented Run checks, it blocks the authored path when configured validation remains failing after the bounded fix cycle. It is separate from post-PR provider CI and reviewer-driven remediation."
+        },
         "util.checks": {
+          runtimeType: "run_checks",
+          runtimeContract: RUNTIME_CONTRACTS.run_checks,
           group: "utility",
           title: "Run checks",
           blurb: "Runs each repo's configured validation commands in the workspace; per-repo results plus one aggregate verdict.",
-          contract: "out: ok (all repos), results[], failures[]",
-          input: "{\n  workspace_id: string,\n  scope: \"changed_repos\" | RepoRef[],\n  commands?: PerRepoCommands\n    // defaults to per-repo check config\n}",
-          output: "{\n  ok: boolean,  // every repo passed\n  results: RepoCheckResult[],\n  failures: RepoCheckFailure[]\n    // {provider, repo_path, error, logs}\n}",
-          note: "Collections stay inside blocks: conditions branch on the aggregate (steps.checks.output.ok) while the Fix Agent consumes the per-repo failures[]. No fan-out construct needed in MVP."
+          note: "The workspace and repository scope come from run context; commands is an authored parameter. Collections stay inside blocks: conditions branch on the aggregate (steps.checks.output.ok) while the Fix Agent consumes the per-repo failures[]. No fan-out construct needed in MVP. The registry currently types results and failures as unknown arrays rather than promising a more specific bindable item schema."
         },
         "util.llm": {
+          runtimeType: "call_llm",
+          runtimeContract: RUNTIME_CONTRACTS.call_llm,
           group: "utility",
           title: "Call LLM",
           blurb: "Focused non-agent LLM transform with a declared output schema.",
-          contract: "out: declared schema",
-          input: "{\n  prompt: string,\n  output_schema: JsonSchema\n}",
-          output: "declared schema\n// LLM proposes; the runtime\n// enforces policy on any value it uses"
+          note: "prompt and system may be authored as parameters or supplied through optional bindings. provider, model, and outputSchema are parameters. A declared schema replaces the default string at output with an object whose fields remain nested under output; the runtime enforces the declaration before downstream bindings use it."
         },
         "util.slack": {
+          runtimeType: "send_slack_message",
+          runtimeContract: RUNTIME_CONTRACTS.send_slack_message,
           group: "utility",
           title: "Send Slack message",
           blurb: "Notifies a channel about a workflow milestone.",
-          contract: "out: message_ts",
-          input: "{\n  channel: string,\n  message: string,\n  context?: RunContext\n}",
-          output: "{ message_ts: string }"
+          note: "The destination is configured by the product integration. message may be authored as a parameter or supplied through its optional binding. The current runtime reports status only; it does not expose a message timestamp."
         },
 
         "arthur.injection": {
+          runtimeType: "arthur_injection_check",
+          runtimeContract: RUNTIME_CONTRACTS.arthur_injection_check,
           group: "arthur",
           title: "Prompt injection check",
           blurb: "Optional Arthur Engine scan of ticket/comment content before agents see it.",
-          contract: "out: ok, findings",
-          input: "{ content: string }",
-          output: "{\n  ok: boolean,\n  findings: InjectionFinding[]\n}",
-          note: "Add-on group: the core product runs without Arthur Engine. These blocks appear only when Arthur Engine is configured."
-        },
-        "arthur.trace": {
-          group: "arthur",
-          title: "Trace run",
-          blurb: "Passive per-run prompt/tool tracing into Arthur Engine for deeper observability.",
-          contract: "passive — no output consumed",
-          input: "config { task_name?: string }",
-          output: "passive wrapper — adds tracing,\nno downstream output"
+          note: "content is an optional binding. legacyContentFromStep is retained only as an internal compatibility parameter and is not authorable in a workflow definition. The block reports status plus optional findings or reason; it has no separate ok output. Add-on group: the core product runs without Arthur Engine. This block is available only when Arthur Engine is configured. Core run/block telemetry is automatic; the retired passive Trace run block is not part of the catalog."
         }
       };
 
+      const formatPath = ({ path, type }, optional = false) =>
+        `  ${path}${optional ? "?" : ""}: ${type}`;
+
+      const formatPathSection = (heading, paths, optional = false) => [
+        heading,
+        ...(paths.length ? paths.map((path) => formatPath(path, optional)) : ["  (none)"]),
+      ];
+
+      const formatInputContract = (contract) => {
+        const authorableParams = contract.params.filter((param) => !param.startsWith("legacy"));
+        const compatibilityParams = contract.params.filter((param) => param.startsWith("legacy"));
+        const lines = [
+          ...formatPathSection(
+            "Parameters (authored configuration; not bindings)",
+            authorableParams.map((path) => ({ path, type: "parameter" })),
+          ),
+        ];
+        if (compatibilityParams.length) {
+          lines.push(
+            "",
+            ...formatPathSection(
+              "Internal compatibility parameters (not authorable)",
+              compatibilityParams.map((path) => ({ path, type: "parameter" })),
+            ),
+          );
+        }
+        lines.push(
+          "",
+          ...formatPathSection("Bindings — required", contract.requiredInputs),
+          "",
+          ...formatPathSection("Bindings — optional", contract.optionalInputs, true),
+        );
+        if (contract.additionalInputs.length) {
+          lines.push(
+            "",
+            "Additional bindings",
+            ...contract.additionalInputs.map(({ keyPattern, type }) =>
+              `  ${keyPattern}: ${type}`,
+            ),
+          );
+        }
+        return lines.join("\n");
+      };
+
+      const formatOutputShape = (contract, heading = "Output paths") => [
+        heading,
+        ...formatPathSection("Required", contract.requiredOutputs),
+        ...formatPathSection("Optional", contract.optionalOutputs, true),
+      ];
+
+      const formatOutputContract = (contract) => {
+        const lines = formatOutputShape(contract);
+        for (const probe of contract.probes || []) {
+          lines.push("", ...formatOutputShape(probe, `Variant — ${probe.name}`));
+        }
+        return lines.join("\n");
+      };
+
+      const formatStatusContract = (contract) => {
+        const lines = [`status ∈ ${contract.statuses.map((status) => JSON.stringify(status)).join(" | ")}`];
+        for (const probe of contract.probes || []) {
+          lines.push(
+            `Variant — ${probe.name}: ${probe.statuses.map((status) => JSON.stringify(status)).join(" | ")}`,
+          );
+        }
+        return lines.join("\n");
+      };
+
+      const formatCardContract = (contract) => {
+        const topLevel = contract.requiredOutputs
+          .filter(({ path }) => !path.includes("."))
+          .map(({ path }) => path);
+        const visible = topLevel.slice(0, 4);
+        return `out: ${visible.join(", ")}${topLevel.length > visible.length ? ", …" : ""}`;
+      };
+
+      for (const block of Object.values(BLOCKS)) {
+        block.contract = formatCardContract(block.runtimeContract);
+        block.input = formatInputContract(block.runtimeContract);
+        block.output = formatOutputContract(block.runtimeContract);
+        block.status = formatStatusContract(block.runtimeContract);
+      }
+
       const DEFERRED_NOTE =
-        "Nested reusable workflow blocks · MCP editing surface for agents · granular low-level triggers · generic (non-delivery) automation blocks. The JS-step question is on the Open Decisions frame, not silently resolved.";
+        "Nested reusable workflow blocks · MCP editing surface for agents · granular low-level triggers · generic (non-delivery) automation blocks · arbitrary JavaScript/code steps. JavaScript execution is not part of the MVP.";
 
       const NODE_W = 250;
 
@@ -1017,7 +1432,7 @@
           title: "Block Registry",
           short: "Block Registry",
           tag: "Registry",
-          badge: "9 groups · 27 blocks",
+          badge: "9 groups · 28 blocks",
           width: 1720
         },
         {
@@ -1031,27 +1446,31 @@
           items: [
             {
               head: "Clarification cannot be forgotten",
-              body: "Human-in-the-loop is a runtime capability, not a block. Any agent may return <code>status: \"needs_human_input\"</code>; the runtime posts the questions, suspends durably, and the lifecycle trigger's resume path re-enters. No workflow can deadlock because someone forgot a clarification block."
+              body: "Human-in-the-loop is a runtime capability, not a block. Any agent may return <code>status: \"needs_human_input\"</code>; the runtime stops the agent, stores its exact definition/version and prior safe outputs, snapshots any unpublished workspace, and hands the owner claim to a pinned successor that reruns only the waiting agent. For ticket-backed runs, the checkpoint remains unpublished and unanswerable while the runtime claims and attempts the provider label/status update; recovery may skip only an unclaimed provider phase, never one with an external mutation in flight. Handoff is permitted only after the exact owner crosses a durable parked/drained boundary that terminal-confirms every registered non-snapshotted child sandbox; best-effort run telemetry is never this safety gate. The real Vercel snapshot/restore/expiry and git-index probe passed on 2026-07-17. No workflow can deadlock because someone forgot a clarification block."
             },
             {
               head: "Every output is typed",
-              body: "Each block emits a discriminated schema — a <code>status</code> plus typed payload — so Branch conditions and Loop exits always operate on structured data. One condition language everywhere: a single expression form over <code>steps.*.output</code> across Branch, Loop, and Terminate."
+              body: "Each block emits a discriminated schema — a <code>status</code> plus typed payload — so Branch conditions and Loop exits always operate on structured data. Branch uses PR #118's restricted, parsed JavaScript-style expression syntax over <code>steps.*.output</code>; it never evaluates arbitrary JavaScript and boolean positions require real booleans. Block inputs persist explicit typed paths from <code>trigger.*</code>, <code>steps.*.output.*</code>, or <code>run.*</code>; the editor may suggest compatible paths but does not save implicit shape-based wiring."
             },
             {
-              head: "The workspace is runtime-owned",
-              body: "The workspace is a durable identity (ticket → repos, branches, manifest) materialized into an ephemeral sandbox — warm from a persistent-sandbox snapshot, or cold from the workflow-owned branches. It is threaded via <code>workspace_id</code> and always finalized. Specialized agents attach implicitly; generic workflows compose Prepare / Finalize explicitly. LLM steps may <em>propose</em> values — the runtime <em>enforces</em> policy on anything it uses."
+              head: "Workspace state survives continuation",
+              body: "Unpublished work, repository/branch identity, untracked files, and conflict index state survive clarification in the verified snapshot restored by the pinned successor. Snapshot steps carry only serializable IDs, scrub old credentials, and inject fresh credentials after restore. Specialized code agents attach implicitly; workspace-mutating generic workflows compose Prepare / Finalize explicitly."
             },
             {
               head: "Failure has a default path",
-              body: "Any block can end <code>status: \"failed\"</code>. Unless an explicit failure edge overrides it, the runtime applies the default policy: terminate the run, move the ticket to the configured column, notify the channel. Graphs draw the happy path — no <code>if err != nil</code> ladders."
+              body: "Any block can end <code>status: \"failed\"</code>. Unless an explicit failure edge overrides it, the runtime applies the default policy: terminate the run, move the ticket to the configured column, notify the channel. Run-control stops — cancellation, budget exhaustion, or loss of the exact active owner — are not block failures and cannot be routed around by a failure edge. Graphs draw the happy path — no <code>if err != nil</code> ladders."
             },
             {
-              head: "Runs serialize per ticket",
-              body: "One active run per ticket, enforced by the claim registry. Triggers that fire mid-run coalesce into the resume path instead of spawning parallel runs, and a ticket leaving the AI column cancels its active run. Multi-repo stays inside blocks: outputs carry per-repo collections plus aggregates for conditions to branch on."
+              head: "Runs serialize per subject",
+              body: "One active run per durable subject, enforced by owner-matching claims. Ticket workflows and durably correlated workflow-owned PRs use <code>ticket:&lt;provider&gt;:&lt;ticketKey&gt;</code>; arbitrary PR-only workflows use <code>pr:&lt;provider&gt;:&lt;repo&gt;#&lt;number&gt;</code> without sending it to Jira. The exact owner remains held through downstream blocks and is released only during terminal cleanup; reconciliation retries a missed release. Triggers that fire mid-run coalesce into a pending event and start only after that boundary."
             },
             {
-              head: "One configuration surface",
-              body: "Workflow definitions are the single source of truth for run behavior. The in-repo <code>pre-sandbox.yaml</code> and <code>post-pr-gate.yaml</code> pipelines are deprecated: their steps (repo selection, complexity check, injection check, PR gates) become blocks inside these workflows."
+              head: "Budgets bound active execution",
+              body: "Definitions may set <code>maxDurationMs</code>, <code>maxTokens</code>, and <code>maxCostUsd</code>. Duration defaults to the existing job timeout; token and cost are unset until authored. Human wait time is excluded. Duration can interrupt polling, while current harnesses expose authoritative token/cost only after a phase, so one phase may overrun; no later block starts. Configured token/cost limits fail closed when usage or pricing is unavailable."
+            },
+            {
+              head: "Keep post-PR mechanisms distinct",
+              body: "Workflow definitions are the source of truth for AI-run behavior, while provider CI results and human reviews remain authoritative inputs to remediation. The existing product-owned <code>post-pr-gate</code>, a possible <code>PR created → Review Agent</code> workflow, and CI/review-triggered remediation are three separate mechanisms. Which review mechanism to keep, replace, or retire is an Open Decision."
             }
           ]
         },
@@ -1064,24 +1483,28 @@
           badge: "recommended default",
           nodes: [
             { id: "t",    type: "trig.ticket-impl", x: 30, y: 140,
-              body: "New ticket · moved to AI column · clarification answered · comment added. Jira and Linear feed the same entry." },
+              body: "New ticket · moved to AI column · clarification answered · comment added. Configured ticket providers feed the same entry; launch coverage is open." },
             { id: "plan", type: "agent.planning", x: 340, y: 140 },
             { id: "impl", type: "agent.implementation", x: 650, y: 140 },
-            { id: "pr",   type: "vcs.open-pr", x: 960, y: 140 },
-            { id: "tstat", type: "tk.status", x: 1270, y: 60, body: "Move to “AI Review”." },
-            { id: "slack", type: "util.slack", x: 1270, y: 300 }
+            { id: "checks", type: "util.pre-pr-checks", x: 960, y: 140 },
+            { id: "final", type: "ws.finalize", x: 1270, y: 140 },
+            { id: "pr",   type: "vcs.open-pr", x: 1580, y: 140 },
+            { id: "slack", type: "util.slack", x: 1890, y: 140 },
+            { id: "tstat", type: "tk.status", x: 2200, y: 140, body: "Move to “AI Review”." }
           ],
           edges: [
             { from: "t", to: "plan" },
             { from: "plan", to: "impl" },
-            { from: "impl", to: "pr" },
-            { from: "pr", to: "tstat" },
-            { from: "pr", to: "slack" }
+            { from: "impl", to: "checks" },
+            { from: "checks", to: "final" },
+            { from: "final", to: "pr" },
+            { from: "pr", to: "slack" },
+            { from: "slack", to: "tstat" }
           ],
           notes: [
             { x: 340, y: 460, w: 620,
               head: "What the specialized agents absorb",
-              body: "Planning: the clarification loop and human-question protocol. Implementation: workspace prepare/resume, branch policy, commit enforcement, pre-PR verification. The runtime suspends and resumes around <code>needs_human_input</code> automatically — this five-block graph is the whole default workflow." }
+              body: "Planning: the clarification loop and human-question protocol. Implementation: workspace prepare/resume, branch policy, and commit enforcement. Run pre-PR checks is an explicit deterministic gate. Finalize is the sole push boundary; Open PR only consumes its successful output, then notification and ticket transition run in sequence. The same Workflow run suspends on a durable hook around <code>needs_human_input</code>; its workspace snapshot is restored before execution continues. The Vercel hook/snapshot/restore/expiry and git-index feasibility probes passed on 2026-07-17." }
           ]
         },
         {
@@ -1145,14 +1568,16 @@
             { id: "m3", type: "hitl.plan-approval", x: 650, y: 130 },
             { id: "m4", type: "trig.plan-approved", x: 30, y: 470 },
             { id: "m5", type: "agent.implementation", x: 340, y: 470 },
-            { id: "m6", type: "vcs.open-pr", x: 650, y: 470 }
+            { id: "m6", type: "ws.finalize", x: 650, y: 470 },
+            { id: "m7", type: "vcs.open-pr", x: 960, y: 470 }
           ],
           edges: [
             { from: "m1", to: "m2" },
             { from: "m2", to: "m3" },
-            { from: "m3", to: "m4", dashed: true, label: "suspends · resumes on approval" },
+            { from: "m3", to: "m4", dashed: true, label: "ends path · Plan approved re-entry" },
             { from: "m4", to: "m5" },
-            { from: "m5", to: "m6" }
+            { from: "m5", to: "m6" },
+            { from: "m6", to: "m7" }
           ],
           notes: [
             { x: 970, y: 130, w: 420,
@@ -1169,26 +1594,65 @@
           title: "V4 · Review & fix after PR",
           short: "V4 · Review & fix after PR",
           tag: "Variant",
-          badge: "post-PR loop",
+          badge: "1 workflow · event-driven remediation",
           nodes: [
-            { id: "p1", type: "trig.pr-checks-failed", x: 30, y: 100 },
-            { id: "p2", type: "trig.pr-review", x: 30, y: 340 },
-            { id: "p3", type: "vcs.fetch-context", x: 340, y: 220 },
-            { id: "p4", type: "agent.fix", x: 650, y: 220 },
-            { id: "p5", type: "ws.finalize", x: 960, y: 220 },
-            { id: "p6", type: "vcs.pr-comment", x: 1270, y: 220 }
+            { id: "p1", type: "trig.pr-checks-failed", x: 30, y: 190 },
+            { id: "p2", type: "trig.pr-review", x: 30, y: 430 },
+            { id: "p3", type: "vcs.fetch-context", x: 340, y: 310 },
+            { id: "p4", type: "agent.fix", x: 650, y: 310 },
+            { id: "p5", type: "ws.finalize", x: 960, y: 190 },
+            { id: "p6", type: "vcs.pr-comment", x: 1270, y: 190 },
+            { id: "e3", type: "trig.pr-checks-failed", x: 1580, y: 760 }
           ],
           edges: [
             { from: "p1", to: "p3" },
             { from: "p2", to: "p3" },
             { from: "p3", to: "p4" },
-            { from: "p4", to: "p5", label: "push fixes" },
-            { from: "p5", to: "p6" }
+            { from: "p4", to: "p5", label: "status: fixed" },
+            { from: "p5", to: "p6" },
+            { from: "p5", to: "e3", dashed: true, boundary: "event",
+              label: "outside workflow · GitHub Actions · failure → fresh remediation run" }
           ],
           notes: [
-            { x: 650, y: 500, w: 620,
-              head: "Same workspace, bounded rounds",
-              body: "The Fix Agent re-materializes the ticket's workspace — warm from its parked snapshot when available, cold from the workflow-owned branches otherwise. Check failures across a ticket's PRs coalesce into one run. A <code>Loop</code> policy bounds the rounds; exhaustion escalates to a <code>Human question</code>. This workflow subsumes the deprecated <code>post-pr-gate.yaml</code> pipeline." }
+            { x: 30, y: 30, w: 850,
+              head: "External events drive this remediation flow",
+              body: "V4 consumes authenticated GitHub Actions / GitLab CI failures and actionable human-review events; GitHub Actions and GitLab CI remain the source of truth for check outcomes. The default remediation workflow does not start when a PR is opened or updated, and it does not run tests or publish check statuses. This does not decide whether AI Workflow separately keeps the existing product-owned <code>post-pr-gate</code> or offers a separately deployed PR-created workflow with an optional standalone Review Agent. Provider CI-completion and reviewer events are normalized into this trigger contract and then filtered by exact definition selectors." },
+            { x: 960, y: 30, w: 850,
+              head: "One workflow · fresh run per actionable event",
+              body: "A failed CI result or human review starts one remediation run for the exact head SHA. The run fixes, pushes, comments, and ends — it does not wait for CI. Repository CI runs normally on the new SHA: passing CI starts nothing, while another failure or later review starts a fresh remediation run." },
+            { x: 30, y: 690, w: 1050,
+              head: "Event safety and coalescing",
+              body: "Authenticate the provider webhook; require exact check names plus trusted producer/source selectors; then durably store the delivery as <code>received</code> before any installed-repository, provider-current-head, ownership, or ticket lookup. Enrichment applies the configured repository scope and selected PR-ownership policy, re-reads the provider's current head (and confirms a GitLab event pipeline is still the current failed head pipeline with at least one selected event job still failed), and advances the delivery to <code>accepted</code>; transient enrichment failures remain recoverable by the local poller. Deduplicate by <code>provider + repo + PR/MR + head SHA + delivery</code>, then coalesce simultaneous failures/reviews per subject. GitLab delivery identity prefers <code>webhook-id</code>, then <code>Idempotency-Key</code>, then a hash of event UUID plus raw body; the webhook-configuration UUID is never a delivery key. If a push starts CI while downstream workflow blocks are still running, an actionable event is stored as pending and revalidated only after the current workflow terminates and releases its claim. Passing, cancelled, superseded, neutral, skipped, stale-head, untrusted-source, internal-note, and other workflow-authored events are ignored. A database failure before the received record commits still requires provider redelivery."
+            },
+            { x: 1130, y: 760, w: 650,
+              head: "Publish safety is not validation",
+              body: "The specialized Fix Agent initializes its workspace when necessary and classifies its result. <code>fixed</code> continues directly to Finalize workspace; <code>needs_human_input</code> suspends the same Workflow run on a durable hook and <code>failed</code> follows default failure policy. Authors who need custom classification declare it through Generic Agent and route it with control blocks. Finalization only protects the write: current source SHA, clean committed tree, and a branch allowed by the selected PR-ownership policy. It does not decide whether the PR passes. Finalize preflights every repository, pushes with exact leases, and emits finalized branch metadata directly to Open PR/MR. Workflow owns retries; an exact target already present is a safe replay, while remote drift is terminal. Open PR/MR revalidates the exact branch, source PR, and created or recovered PR before recording ownership. The Fix Agent may safely resolve a merge conflict; unresolved conflicts suspend on the same human-input hook. A multi-repository preflight failure creates no partial push and cannot be reported as success. Terminal cleanup destroys the live sandbox; clarification snapshots are restored by the same run and removed after use or expiry."
+            }
+          ]
+        },
+        {
+          slug: "v5-merged-ticket",
+          kind: "flow",
+          title: "V5 · Move ticket after merge",
+          short: "V5 · Move ticket after merge",
+          tag: "Variant",
+          badge: "post-merge lifecycle",
+          nodes: [
+            { id: "g1", type: "trig.pr-merged", x: 30, y: 170,
+              body: "scope: workflow_owned · GitHub or GitLab" },
+            { id: "g2", type: "tk.status", x: 360, y: 170,
+              body: "Choose a discovered provider status, for example Done." },
+            { id: "g3", type: "util.slack", x: 690, y: 170,
+              body: "Optional merged notification after the ticket move succeeds." }
+          ],
+          edges: [
+            { from: "g1", to: "g2" },
+            { from: "g2", to: "g3" }
+          ],
+          notes: [
+            { x: 30, y: 450, w: 930,
+              head: "Why workflow-owned scope matters",
+              body: "A merged provider event always has a PR/MR subject but only workflow-owned branches guarantee a real correlated ticket. Deployment therefore permits the ticket action only in <code>scope: workflow_owned</code>. Before moving the ticket, runtime verifies the exact active owner. A Jira status webhook authored by the configured workflow account is ignored as a self-echo, while different, missing, or unverifiable actors retain normal human-move cancellation behavior." }
           ]
         },
         {
@@ -1201,36 +1665,48 @@
           width: 760,
           items: [
             {
-              head: "Condition language",
-              body: "CEL-style expressions vs a restricted JS subset — one language across Branch, Loop, and Terminate. Decides how conditions are validated and rendered in the editor."
+              head: "Post-PR review ownership",
+              body: "Keep, replace, or retire the existing product-owned <code>post-pr-gate</code>. If AI Workflow retains an internal AI review, should it remain detached YAML, become editable workflow blocks / Review Agent, or move into repository CI or an external reviewer? Also decide whether it publishes a provider status or only comments, and whether it runs on PR open, head updates, or both. External ownership is the current preference, not a locked choice."
             },
             {
-              head: "JS step code: editable or illustrative?",
-              body: "Is per-step code editable execution logic, or a read-only visualization of what the block does? Changes the runtime contract and the editor's save path."
+              head: "PR-created review vs remediation",
+              body: "The <code>PR created</code> trigger type is locked, but its default topology is not. Decide whether <code>PR created → Review Agent</code> replaces the legacy gate, ships as an optional or default workflow, or is deferred. If it replaces a gate that also runs on head updates, decide whether this trigger expands to updates or a separate event path is needed. Keep review distinct from remediation triggered by failed external CI or human feedback."
             },
             {
-              head: "Persistent workspace rollout",
-              body: "The two-tier model is decided (durable identity; warm/cold materialization). Remaining: migrate the worker to Sandbox SDK v2 named sandboxes (getOrCreate), snapshot TTL and keep-last policy, park-vs-destroy rules per terminal status, and storage-cost guardrails."
+              head: "Workflow-owned vs arbitrary PRs",
+              body: "All PR/MR triggers expose <code>scope: workflow_owned | any</code>. Workflow ownership requires durable provider, repository, PR/MR, source branch, current head, and target-branch correlation plus a valid ticket lookup; a prefix or pending intent is not proof. <code>any</code> is review-safe only in this revision and cannot reach workspace mutation or ticket actions. Whether a later explicit policy may modify arbitrary human-authored branches remains open."
             },
             {
-              head: "MVP trigger list",
-              body: "Which of the five lifecycle triggers ship first-class in MVP, and which providers (Jira/Linear × GitHub/GitLab) each supports at launch."
+              head: "Persistent workspace lifecycle",
+              body: "Snapshot-backed clarification continuation is implemented after the real Vercel snapshot/restore/expiry and git-index probe passed on 2026-07-17. Remaining: the general named-Sandbox versus run-local model, cold rebuild policy, TTL/keep-last limits beyond the pending clarification, and park/destroy retention."
             },
             {
-              head: "Plan approval: MVP or fast-follow?",
-              body: "V3 needs the dashboard approval queue and the Plan approved trigger. In MVP, or immediately after?"
+              head: "MVP provider coverage",
+              body: "All original five lifecycle trigger types, the new PR/MR merged trigger, and Plan approval are locked. Remaining: whether ticket lifecycle launches with Jira only or Jira + Linear. PR-created, failed-check, review-comment, and merged triggers support GitHub/GitLab. GitLab changes_requested remains unavailable because the provider does not deliver a reliable changes-requested webhook; the editor and deploy validation must say so instead of advertising an inert option."
             },
             {
-              head: "Review ownership",
-              body: "How much PR review the product owns (V4 + Review Agent) versus delegates to tools like CodeRabbit. Affects whether Review Agent is MVP."
+              head: "Review event scope",
+              body: "Which supported human-review events should be enabled by default remains open: GitHub changes requested, GitHub review comments, GitLab comments, unresolved inline threads, selected mentions, or some combination? Workflow-authored-event filtering is locked. Provider equivalence is bounded by real webhook capabilities; GitLab changes_requested is unavailable in this revision."
             },
             {
-              head: "Suspend vs end-and-re-enter",
-              body: "Approval and clarification waits: durably suspend the workflow instance, or terminate and re-enter via a trigger carrying the state (what V3 draws). Affects definition versioning mid-wait and zombie-instance risk."
+              head: "CI failure granularity",
+              body: "Choose GitHub <code>check_run</code>, <code>workflow_run</code>, or <code>check_suite</code>; define sibling-failure accumulation, first-failure opt-in, actionable timeout/infrastructure outcomes, and whether allowlists name jobs, workflows, suites, or pipelines. GitLab uses terminal pipelines."
             },
             {
-              head: "Input binding mechanism",
-              body: "How block inputs bind to prior outputs: auto-wiring by shape, or explicit template expressions like ${steps.checks.output.failures} in block config — same language as conditions either way."
+              head: "Trigger deployment scope",
+              body: "Definition lifecycle is locked: mutable Save Draft, independent layout, explicit immutable Deploy, rollback by deployed version, and exact-version dispatch pinning. The fresh seeded ticket workflow is the only no-deployment fallback. Remaining: whether one definition globally owns a trigger type or repository/provider/environment-scoped deployments may share it."
+            },
+            {
+              head: "Missed-event recovery",
+              body: "Does MVP rely on provider webhook redelivery alone, or also poll/reconcile for CI and review events that were never delivered? Durable deduplication, coalescing, and pending-event handling after receipt are already locked."
+            },
+            {
+              head: "Multi-repository remediation",
+              body: "Decide per-PR/head versus ticket-wide remediation, whether successful repositories may publish while another remains unresolved, what ticket status represents a partial result, and how events from multiple PRs under one ticket interact with the active-run claim."
+            },
+            {
+              head: "Arthur tracing policy",
+              body: "Core run/block telemetry is automatic. The passive Trace run block was retired; decide separately whether future Arthur prompt/tool tracing should be automatic whenever configured or a workflow-level opt-in."
             }
           ]
         }
@@ -1504,8 +1980,7 @@
         for (const frame of FRAMES) {
           const w = frame.width;
           const h = frame.el.offsetHeight;
-          const ownRow = frame.kind === "registry";
-          if (x > 0 && (ownRow || x + w > MAX_ROW_W)) {
+          if (x > 0 && x + w > MAX_ROW_W) {
             x = 0;
             y += rowH + BOARD_GAP;
             rowH = 0;
@@ -1513,14 +1988,8 @@
           frame.pos = { x, y, w, h };
           frame.el.style.left = `${x}px`;
           frame.el.style.top = `${y}px`;
-          if (ownRow) {
-            x = 0;
-            y += h + BOARD_GAP;
-            rowH = 0;
-          } else {
-            x += w + BOARD_GAP;
-            rowH = Math.max(rowH, h);
-          }
+          x += w + BOARD_GAP;
+          rowH = Math.max(rowH, h);
         }
       }
 
@@ -1641,20 +2110,6 @@
         });
       }
 
-      function currentFrameIndex() {
-        const active = frameListEl.querySelector("button.active");
-        if (!active) return -1;
-        return FRAMES.findIndex((f) => f.slug === active.dataset.slug);
-      }
-
-      function stepFrame(delta) {
-        const cur = currentFrameIndex();
-        const next = cur < 0
-          ? (delta > 0 ? 0 : FRAMES.length - 1)
-          : (cur + delta + FRAMES.length) % FRAMES.length;
-        focusFrame(FRAMES[next].slug);
-      }
-
       /* ---------- detail panel ---------- */
 
       let detailOpen = false;
@@ -1694,6 +2149,10 @@
           <div class="detail-section">
             <h5>Output</h5>
             <pre>${esc(block.output)}</pre>
+          </div>
+          <div class="detail-section">
+            <h5>Status</h5>
+            <pre>${esc(block.status)}</pre>
           </div>
           ${block.note ? `<div class="detail-section"><h5>Note</h5><div class="ctx">${esc(block.note)}</div></div>` : ""}
         `;
@@ -1822,8 +2281,6 @@
         document.getElementById("zoom-in").addEventListener("click", () => zoomAt(view.scale * 1.2));
         document.getElementById("zoom-out").addEventListener("click", () => zoomAt(view.scale / 1.2));
         document.getElementById("fit-all").addEventListener("click", () => fitAll());
-        document.getElementById("frame-prev").addEventListener("click", () => stepFrame(-1));
-        document.getElementById("frame-next").addEventListener("click", () => stepFrame(1));
 
         addEventListener("hashchange", () => {
           const slug = location.hash.slice(1);

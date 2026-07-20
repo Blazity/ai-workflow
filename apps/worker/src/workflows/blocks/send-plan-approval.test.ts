@@ -2,16 +2,21 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { StepsRecord } from "../../workflow-definition/interpreter.js";
 
 const mocks = vi.hoisted(() => ({
+  assertActiveRunOwner: vi.fn(),
   createApprovalRequest: vi.fn(),
   postComment: vi.fn(),
   notifyForTicket: vi.fn(),
   moveTicket: vi.fn(),
   updateLabels: vi.fn(),
+  updateTicketLabels: vi.fn(),
   warn: vi.fn(),
 }));
 
 vi.mock("../../lib/logger.js", () => ({ logger: { warn: mocks.warn } }));
-vi.mock("../../db/client.js", () => ({ getDb: () => ({}) }));
+vi.mock("../../db/client.js", () => ({ getDb: () => ({ kind: "db" }) }));
+vi.mock("../../lib/active-run-owner.js", () => ({
+  assertActiveRunOwner: (...args: any[]) => mocks.assertActiveRunOwner(...args),
+}));
 vi.mock("../../approvals/store.js", () => ({ createApprovalRequest: mocks.createApprovalRequest }));
 vi.mock("../../lib/step-adapters.js", () => ({
   createStepAdapters: () => ({
@@ -23,16 +28,23 @@ vi.mock("../../lib/step-adapters.js", () => ({
     messaging: { notifyForTicket: mocks.notifyForTicket },
   }),
 }));
+vi.mock("../../lib/ticket-transition.js", () => ({
+  moveTicketForRun: (...args: any[]) => mocks.moveTicket(...args),
+}));
+vi.mock("../../lib/ticket-label-mutation.js", () => ({
+  updateTicketLabelsForRun: (...args: any[]) =>
+    mocks.updateTicketLabels(...args),
+}));
 
 import { execute, paramsSchema } from "./send-plan-approval.js";
 import { AWAITING_APPROVAL_LABEL } from "../../lib/labels.js";
-import { makeCtx, makeNode } from "./test-support.js";
+import { makeCtx, makeNode, runControlErrorCases } from "./test-support.js";
 
 describe("send_plan_approval paramsSchema", () => {
-  it("defaults mirrorComment to true and allows an optional planFromStep", () => {
+  it("defaults mirrorComment to true and rejects the retired planFromStep param", () => {
     expect(paramsSchema.parse({})).toEqual({ mirrorComment: true });
-    expect(paramsSchema.safeParse({ planFromStep: "plan", mirrorComment: false }).success).toBe(true);
-    expect(paramsSchema.safeParse({ planFromStep: "" }).success).toBe(false);
+    expect(paramsSchema.safeParse({ mirrorComment: false }).success).toBe(true);
+    expect(paramsSchema.safeParse({ planFromStep: "plan" }).success).toBe(false);
     expect(paramsSchema.safeParse({ extra: 1 }).success).toBe(false);
   });
 });
@@ -40,11 +52,13 @@ describe("send_plan_approval paramsSchema", () => {
 describe("send_plan_approval execute", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.assertActiveRunOwner.mockResolvedValue(undefined);
     mocks.createApprovalRequest.mockResolvedValue({ id: "appr-9" });
     mocks.postComment.mockResolvedValue(null);
     mocks.notifyForTicket.mockResolvedValue(undefined);
     mocks.moveTicket.mockResolvedValue(undefined);
     mocks.updateLabels.mockResolvedValue(undefined);
+    mocks.updateTicketLabels.mockResolvedValue(undefined);
   });
 
   it("fails when no plan is available", async () => {
@@ -68,7 +82,7 @@ describe("send_plan_approval execute", () => {
     if (result.kind === "failed") expect(result.reason).toBe("approval requires a stored definition");
   });
 
-  it("stores the plan, mirrors a comment, notifies, unregisters, parks the ticket, and ends", async () => {
+  it("stores the plan, mirrors a comment, notifies, parks the ticket, and ends while retaining ownership", async () => {
     const ctx = makeCtx({ researchPlanMarkdown: "# Research plan" });
     const result = await execute(makeNode("send_plan_approval"), {}, ctx);
 
@@ -85,15 +99,44 @@ describe("send_plan_approval execute", () => {
       "Plan awaiting approval in the dashboard.",
     );
     expect(mocks.notifyForTicket).toHaveBeenCalledWith("AWT-1", { kind: "plan_approval_requested" });
-    expect(ctx.unregisterBeforePr).toHaveBeenCalledOnce();
+    expect(mocks.assertActiveRunOwner).toHaveBeenCalledTimes(2);
+    expect(mocks.assertActiveRunOwner).toHaveBeenNthCalledWith(
+      1,
+      { kind: "db" },
+      { subjectKey: "ticket:jira:AWT-1", ownerToken: "owner:test", runId: "run-1" },
+    );
+    expect(mocks.assertActiveRunOwner).toHaveBeenNthCalledWith(
+      2,
+      { kind: "db" },
+      { subjectKey: "ticket:jira:AWT-1", ownerToken: "owner:test", runId: "run-1" },
+    );
     // Parked out of the AI column with an awaiting-approval label so the cron
     // poll stops re-dispatching it; label add precedes the move, mirroring
-    // clarification, and the move follows the unregister.
-    expect(mocks.updateLabels).toHaveBeenCalledWith("AWT-1", { add: [AWAITING_APPROVAL_LABEL] });
-    expect(mocks.moveTicket).toHaveBeenCalledWith("AWT-1", "Backlog");
-    const unregisterOrder = (ctx.unregisterBeforePr as unknown as { mock: { invocationCallOrder: number[] } })
-      .mock.invocationCallOrder[0];
-    expect(unregisterOrder).toBeLessThan(mocks.moveTicket.mock.invocationCallOrder[0]);
+    // clarification. The workflow's terminal finally releases ownership.
+    expect(mocks.updateTicketLabels).toHaveBeenCalledWith({
+      db: { kind: "db" },
+      issueTracker: expect.anything(),
+      ticketKey: "AWT-1",
+      owner: {
+        subjectKey: "ticket:jira:AWT-1",
+        ownerToken: "owner:test",
+        runId: "run-1",
+      },
+      requiredOwnerState: "bound",
+      changes: { add: [AWAITING_APPROVAL_LABEL] },
+    });
+    expect(mocks.updateLabels).not.toHaveBeenCalled();
+    expect(mocks.moveTicket).toHaveBeenCalledWith({
+      db: expect.anything(),
+      issueTracker: expect.anything(),
+      ticketKey: "AWT-1",
+      target: "Backlog",
+      owner: {
+        subjectKey: "ticket:jira:AWT-1",
+        ownerToken: "owner:test",
+        runId: "run-1",
+      },
+    });
     expect(result).toEqual({
       kind: "ended",
       output: { status: "awaiting_approval", approvalRequestId: "appr-9" },
@@ -109,43 +152,16 @@ describe("send_plan_approval execute", () => {
     );
   });
 
-  it("prefers a referenced step's plan and string assumptions over the research plan", async () => {
+  it("prefers bound plan and string assumptions over the compatibility research plan", async () => {
     const ctx = makeCtx({ researchPlanMarkdown: "# Research plan" });
-    const steps: StepsRecord = {
-      planner: { output: { status: "ready", plan: "# Step plan", assumptions: ["db is seeded", 3] } },
-    };
-    await execute(makeNode("send_plan_approval", { planFromStep: "planner" }), steps, ctx);
+    await execute(makeNode("send_plan_approval"), {}, ctx, {
+      plan: "# Step plan",
+      assumptions: ["db is seeded", 3],
+    });
     expect(mocks.createApprovalRequest).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({ plan: { markdown: "# Step plan" }, assumptions: ["db is seeded"] }),
     );
-  });
-
-  it("fails loud when planFromStep points at a block whose output has no plan", async () => {
-    // call_llm emits `.output`, generic_agent `.body`/`.data`; neither has a
-    // plan. Falling back to the research plan here would put a plan in front of
-    // a human that the referenced block never produced.
-    const ctx = makeCtx({ researchPlanMarkdown: "# Research plan" });
-    const steps: StepsRecord = { llm: { output: { status: "ok", output: "some text" } } };
-
-    const result = await execute(makeNode("send_plan_approval", { planFromStep: "llm" }), steps, ctx);
-
-    expect(result.kind).toBe("failed");
-    if (result.kind === "failed") {
-      expect(result.reason).toContain('"llm"');
-      expect(result.reason).toContain("no plan field");
-    }
-    expect(mocks.createApprovalRequest).not.toHaveBeenCalled();
-  });
-
-  it("fails loud when planFromStep references a block that produced no output", async () => {
-    const ctx = makeCtx({ researchPlanMarkdown: "# Research plan" });
-
-    const result = await execute(makeNode("send_plan_approval", { planFromStep: "ghost" }), {}, ctx);
-
-    expect(result.kind).toBe("failed");
-    if (result.kind === "failed") expect(result.reason).toContain('"ghost"');
-    expect(mocks.createApprovalRequest).not.toHaveBeenCalled();
   });
 
   it("still ends awaiting_approval when parking the ticket fails", async () => {
@@ -172,4 +188,19 @@ describe("send_plan_approval execute", () => {
     expect(mocks.postComment).not.toHaveBeenCalled();
     expect(mocks.notifyForTicket).toHaveBeenCalledOnce();
   });
+
+  it.each(runControlErrorCases())(
+    "rethrows %s from approval provider boundaries",
+    async (_label, error) => {
+      mocks.assertActiveRunOwner.mockRejectedValue(error);
+      const ctx = makeCtx({ researchPlanMarkdown: "# Plan" });
+
+      await expect(execute(makeNode("send_plan_approval"), {}, ctx)).rejects.toBe(error);
+
+      expect(mocks.assertActiveRunOwner).toHaveBeenCalledOnce();
+      expect(mocks.postComment).not.toHaveBeenCalled();
+      expect(mocks.notifyForTicket).not.toHaveBeenCalled();
+      expect(mocks.updateLabels).not.toHaveBeenCalled();
+    },
+  );
 });

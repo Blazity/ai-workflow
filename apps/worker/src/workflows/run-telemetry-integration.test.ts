@@ -22,6 +22,16 @@ import type {
   WorkflowDefinitionNode,
   WorkflowParamValue,
 } from "@shared/contracts";
+import {
+  RunBudgetError,
+  checkRunBudget,
+  createRunBudgetState,
+  recordBudgetUsage,
+  runBudgetFailureFromError,
+  type RunBudgetFailure,
+  type RunBudgetLimits,
+} from "./run-budget.js";
+import { handleUnhandledWorkflowError } from "./workflow-failure-exit.js";
 
 /**
  * Integration target (B): one layer above interpreter.test.ts. It drives the
@@ -49,7 +59,7 @@ function node(
   params: Record<string, WorkflowParamValue> = {},
   name?: string,
 ): WorkflowDefinitionNode {
-  return { id, type, x: 0, y: 0, params, name };
+  return { id, type, x: 0, y: 0, params, inputs: {}, name };
 }
 
 /** Claude-shaped phase usage: cost reported directly, tokens also present. */
@@ -66,6 +76,7 @@ function claudeUsage(costUsd: number, durationMs = 60_000): PhaseUsage {
 /** Per-node script standing in for what a real block executor would do. */
 interface NodeScript {
   result: BlockExecutionResult;
+  onExecute?: () => void;
   /** Usage the block records, mirroring ctx.recordUsage in agent.ts. */
   usage?: { phase: string; usage: PhaseUsage | null; model: string };
   /** Run headline model, mirroring activeModel set by prepare/impl blocks. */
@@ -81,6 +92,7 @@ interface RunFixture {
   entryTriggerType: WorkflowBlockType;
   scripts?: Record<string, NodeScript>;
   priceLookup?: PriceLookup;
+  budgetLimits?: RunBudgetLimits;
 }
 
 interface RunResult {
@@ -122,6 +134,7 @@ async function runWorkflowAgainstDb(db: Db, fx: RunFixture): Promise<RunResult> 
     // REAL persistence: what recordBlockStatusesStep does, minus the DevKit step.
     await recordBlockStatuses(db, {
       runId: fx.runId,
+      subjectKey: `ticket:jira:${TICKET.identifier}`,
       ticketKey: TICKET.identifier,
       ticketTitle: TICKET.title,
       ticketUrl: TICKET.url,
@@ -142,6 +155,9 @@ async function runWorkflowAgainstDb(db: Db, fx: RunFixture): Promise<RunResult> 
   // Usage accumulation, mirroring the real ctx captures.
   const phaseUsages: Record<string, PhaseUsage | null> = {};
   const phaseModels: Record<string, string> = {};
+  let budgetState = createRunBudgetState();
+  let budgetFailure: RunBudgetFailure | null = null;
+  let currentBlockId: string | null = null;
   // Holder object so closure mutations survive TS control-flow narrowing
   // (mirrors the `state` holder agent.ts uses for the same reason).
   const captured: {
@@ -152,9 +168,15 @@ async function runWorkflowAgainstDb(db: Db, fx: RunFixture): Promise<RunResult> 
 
   const executeBlock: BlockExecutor = async (blockNode) => {
     const script = scripts[blockNode.id];
+    script?.onExecute?.();
     if (script?.usage) {
       phaseUsages[script.usage.phase] = script.usage.usage;
       phaseModels[script.usage.phase] = script.usage.model;
+      budgetState = recordBudgetUsage(
+        budgetState,
+        script.usage.usage,
+        fx.priceLookup?.(script.usage.model) ?? null,
+      );
     }
     if (script?.activeModel) captured.activeModel = script.activeModel;
     if (script?.pr) captured.pr = script.pr;
@@ -163,6 +185,11 @@ async function runWorkflowAgainstDb(db: Db, fx: RunFixture): Promise<RunResult> 
 
   const hooks: ExecuteGraphHooks = {
     async onBlockStart(nodeId, attempt) {
+      if (fx.budgetLimits) {
+        const check = checkRunBudget(budgetState, fx.budgetLimits);
+        if (check.status !== "ok") throw new RunBudgetError(check);
+      }
+      currentBlockId = nodeId;
       blockStatuses[nodeId] = { status: "running", attempt };
       await writeBlockStatuses();
     },
@@ -173,6 +200,11 @@ async function runWorkflowAgainstDb(db: Db, fx: RunFixture): Promise<RunResult> 
       }
       blockStatuses[nodeId] = guarded;
       await writeBlockStatuses();
+      currentBlockId = null;
+      if (fx.budgetLimits) {
+        const check = checkRunBudget(budgetState, fx.budgetLimits);
+        if (check.status !== "ok") throw new RunBudgetError(check);
+      }
     },
     // A clarification parks the run: awaiting, not success. The answer endpoint
     // (or re-pickup housekeeping) flips it to success later.
@@ -202,6 +234,7 @@ async function runWorkflowAgainstDb(db: Db, fx: RunFixture): Promise<RunResult> 
       executeBlock,
       hooks,
       maxTotalExecutions: 200,
+      outputValidator: () => [],
     });
     outcome = walk.outcome;
     // Mirror agent.ts: never promote a clarification park (awaiting) to success.
@@ -213,11 +246,26 @@ async function runWorkflowAgainstDb(db: Db, fx: RunFixture): Promise<RunResult> 
     ) {
       runOutcome = "success";
     }
+  } catch (err) {
+    budgetFailure = runBudgetFailureFromError(err);
+    await handleUnhandledWorkflowError(err, {
+      recordBlockFailure: async (error) => {
+        if (!currentBlockId) return;
+        blockStatuses[currentBlockId] = {
+          status: "fail",
+          error: error instanceof Error ? error.message : String(error),
+        };
+        await writeBlockStatuses();
+      },
+      applyDefaultFailure: async () => {},
+    });
+    throw err;
   } finally {
     // REAL run telemetry, recorded on every exit path (agent.ts outer finally).
     const totals = computeUsageTotals(phaseUsages, fx.priceLookup, captured.activeModel, phaseModels);
     await recordRunUsage(db, {
       runId: fx.runId,
+      subjectKey: `ticket:jira:${TICKET.identifier}`,
       workflowId: "wf_agent",
       workflowName: "Agent",
       status: runOutcome,
@@ -234,7 +282,8 @@ async function runWorkflowAgainstDb(db: Db, fx: RunFixture): Promise<RunResult> 
       steps: null,
       prUrl: captured.pr?.url ?? null,
       prNumber: captured.pr?.number ?? null,
-    });
+      budgetFailure,
+    } as Parameters<typeof recordRunUsage>[1]);
   }
 
   return { outcome, runOutcome, persistedSnapshots };
@@ -257,11 +306,17 @@ describe("re-pickup clarification housekeeping gate", () => {
   // for entry kinds that own the ticket's main work thread. A pr_trigger /
   // plan_approved follow-up must skip it so it can't strand a live pending
   // question or flip the parked asking run to success.
-  it("runs only for ticket and clarification_answered pickups", () => {
+  it("runs only for ticket pickups", () => {
     expect(entryOwnsClarificationThread("ticket")).toBe(true);
-    expect(entryOwnsClarificationThread("clarification_answered")).toBe(true);
     expect(entryOwnsClarificationThread("pr_trigger")).toBe(false);
     expect(entryOwnsClarificationThread("plan_approved")).toBe(false);
+    expect(entryOwnsClarificationThread({
+      kind: "ticket",
+      subjectKey: "ticket:jira:AIW-96",
+      ticketKey: "AIW-96",
+      ownerToken: "owner-successor",
+      continuation: { kind: "clarification", clarificationRequestId: "clar-1" },
+    })).toBe(false);
   });
 });
 
@@ -544,5 +599,150 @@ describe("run telemetry integration (executeGraph -> pglite)", () => {
 
     // A recovered failure edge leaves the run itself successful.
     expect(r.status).toBe("success");
+  });
+
+  it("persists a budget failure and never executes the downstream side effect", async () => {
+    let downstreamExecuted = false;
+    const nodes = [
+      node("trig", "trigger_ticket_ai"),
+      node("llm", "call_llm", { prompt: "summarize" }),
+      node("comment", "post_ticket_comment", { body: "should not post" }),
+    ];
+    const edges: WorkflowDefinitionEdge[] = [
+      { from: "trig", to: "llm" },
+      { from: "llm", to: "comment" },
+    ];
+
+    await expect(
+      runWorkflowAgainstDb(db, {
+        runId: "wrun_budget",
+        nodes,
+        edges,
+        entryTriggerType: "trigger_ticket_ai",
+        budgetLimits: { maxDurationMs: 60_000, maxTokens: 1_699 },
+        scripts: {
+          llm: {
+            result: { kind: "next", output: { status: "ok" } },
+            usage: { phase: "LLM llm", usage: claudeUsage(0.1), model: "claude-haiku" },
+          },
+          comment: {
+            result: { kind: "next", output: { status: "ok" } },
+            onExecute: () => {
+              downstreamExecuted = true;
+            },
+          },
+        },
+      }),
+    ).rejects.toMatchObject({
+      name: "RunBudgetError",
+      failure: { status: "budget_exceeded", metric: "tokens", consumed: 1_700, limit: 1_699 },
+    });
+
+    expect(downstreamExecuted).toBe(false);
+    const row = await runRow("wrun_budget");
+    expect(row.status).toBe("failed");
+    expect(row.tokensInput).toBe(1_000);
+    expect(
+      (row as unknown as { budgetFailure: unknown }).budgetFailure,
+    ).toEqual({
+      status: "budget_exceeded",
+      metric: "tokens",
+      limit: 1_699,
+      consumed: 1_700,
+      reason: "budget_exceeded: tokens 1700 exceeds limit 1699",
+    });
+    expect(row.blockStatuses).toMatchObject({
+      llm: { status: "ok", output: { status: "ok" } },
+      comment: { status: "pending" },
+    });
+  });
+
+  it("persists budget_unverifiable when configured cost cannot be priced", async () => {
+    let downstreamExecuted = false;
+    const unknownCostUsage: PhaseUsage = {
+      ...claudeUsage(0.1),
+      cost_usd: null,
+    };
+    const nodes = [
+      node("trig", "trigger_ticket_ai"),
+      node("llm", "call_llm", { prompt: "summarize" }),
+      node("comment", "post_ticket_comment", { body: "should not post" }),
+    ];
+
+    await expect(
+      runWorkflowAgainstDb(db, {
+        runId: "wrun_budget_unknown",
+        nodes,
+        edges: [
+          { from: "trig", to: "llm" },
+          { from: "llm", to: "comment" },
+        ],
+        entryTriggerType: "trigger_ticket_ai",
+        budgetLimits: { maxDurationMs: 60_000, maxCostUsd: 2 },
+        scripts: {
+          llm: {
+            result: { kind: "next", output: { status: "ok" } },
+            usage: { phase: "LLM llm", usage: unknownCostUsage, model: "unpriced-model" },
+          },
+          comment: {
+            result: { kind: "next", output: { status: "ok" } },
+            onExecute: () => {
+              downstreamExecuted = true;
+            },
+          },
+        },
+      }),
+    ).rejects.toMatchObject({
+      name: "RunBudgetError",
+      failure: { status: "budget_unverifiable", metric: "cost" },
+    });
+
+    expect(downstreamExecuted).toBe(false);
+    const row = await runRow("wrun_budget_unknown");
+    expect(row.status).toBe("failed");
+    expect(
+      (row as unknown as { budgetFailure: unknown }).budgetFailure,
+    ).toEqual({
+      status: "budget_unverifiable",
+      metric: "cost",
+      limit: 2,
+      consumed: null,
+      reason: "budget_unverifiable: cost usage or pricing is unavailable",
+    });
+    expect(row.blockStatuses).toMatchObject({
+      llm: { status: "ok", output: { status: "ok" } },
+      comment: { status: "pending" },
+    });
+  });
+
+  it("persists null token totals when a launched phase has unknown usage", async () => {
+    const nodes = [
+      node("trig", "trigger_ticket_ai"),
+      node("llm", "call_llm", { prompt: "summarize" }),
+    ];
+
+    await expect(
+      runWorkflowAgainstDb(db, {
+        runId: "wrun_budget_unknown_tokens",
+        nodes,
+        edges: [{ from: "trig", to: "llm" }],
+        entryTriggerType: "trigger_ticket_ai",
+        budgetLimits: { maxDurationMs: 60_000, maxTokens: 2_000 },
+        scripts: {
+          llm: {
+            result: { kind: "next", output: { status: "ok" } },
+            usage: { phase: "LLM llm", usage: null, model: "claude-haiku" },
+          },
+        },
+      }),
+    ).rejects.toMatchObject({
+      name: "RunBudgetError",
+      failure: { status: "budget_unverifiable", metric: "tokens" },
+    });
+
+    const row = await runRow("wrun_budget_unknown_tokens");
+    expect(row.tokensInput).toBeNull();
+    expect(row.tokensCached).toBeNull();
+    expect(row.tokensOutput).toBeNull();
   });
 });

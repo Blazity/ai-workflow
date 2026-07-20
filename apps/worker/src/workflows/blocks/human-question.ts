@@ -15,9 +15,17 @@ export const paramsSchema = z
  * ticket, moves it back, and notifies. Questions come from the params or, when
  * absent, from the most recent upstream output that carried a questions array.
  */
-export const execute: BlockExecuteFn = async (block, steps, _ctx): Promise<BlockExecutionResult> => {
-  let questions = Array.isArray(block.params.questions)
-    ? block.params.questions.filter(
+export const execute: BlockExecuteFn = async (
+  block,
+  steps,
+  _ctx,
+  resolvedInputs = {},
+): Promise<BlockExecutionResult> => {
+  const configuredQuestions = Array.isArray(resolvedInputs.questions)
+    ? resolvedInputs.questions
+    : block.params.questions;
+  let questions = Array.isArray(configuredQuestions)
+    ? configuredQuestions.filter(
         (q): q is string => typeof q === "string" && q.trim().length > 0,
       )
     : [];
@@ -25,8 +33,11 @@ export const execute: BlockExecuteFn = async (block, steps, _ctx): Promise<Block
   // Params-provided suggestions win. Upstream suggestions only fill in when the
   // questions themselves fall back to upstream and the params carried none,
   // mirroring how questions fall back.
-  let suggestedAnswers = Array.isArray(block.params.suggestedAnswers)
-    ? block.params.suggestedAnswers.filter(
+  const configuredSuggestions = Array.isArray(resolvedInputs.suggestedAnswers)
+    ? resolvedInputs.suggestedAnswers
+    : block.params.suggestedAnswers;
+  let suggestedAnswers = Array.isArray(configuredSuggestions)
+    ? configuredSuggestions.filter(
         (s): s is string => typeof s === "string" && s.trim().length > 0,
       )
     : [];

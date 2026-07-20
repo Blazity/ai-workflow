@@ -17,6 +17,14 @@ function jiraAdapter() {
   });
 }
 
+function jiraAdapterWithDiscovery() {
+  return new JiraAdapter({
+    baseUrl: "https://test.atlassian.net",
+    apiToken: "token",
+    projectKey: "PROJ",
+  });
+}
+
 describe("JiraAdapter", () => {
   beforeEach(() => {
     mockFetch.mockReset();
@@ -38,7 +46,7 @@ describe("JiraAdapter", () => {
               ],
             },
             labels: ["frontend"],
-            status: { name: "AI" },
+            status: { id: "10000", name: "AI" },
             attachment: [],
           },
         }),
@@ -52,6 +60,7 @@ describe("JiraAdapter", () => {
       expect(ticket.title).toBe("Add login page");
       expect(ticket.comments).toHaveLength(1);
       expect(ticket.trackerStatus).toBe("AI");
+      expect(ticket.trackerStatusId).toBe("10000");
       expect(ticket.attachments).toEqual([]);
     });
   });
@@ -415,6 +424,81 @@ describe("JiraAdapter", () => {
     });
   });
 
+  describe("listStatuses", () => {
+    it("flattens and deduplicates statuses configured for the Jira project", async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => [
+          {
+            id: "10001",
+            name: "Task",
+            statuses: [
+              { id: "1", name: "To Do" },
+              { id: 2, name: "In Progress" },
+            ],
+          },
+          {
+            id: "10002",
+            name: "Bug",
+            statuses: [
+              { id: "1", name: "To Do" },
+              { id: "3", name: "Done" },
+            ],
+          },
+        ],
+      });
+
+      await expect(jiraAdapter().listStatuses()).resolves.toEqual([
+        { id: "1", name: "To Do" },
+        { id: "2", name: "In Progress" },
+        { id: "3", name: "Done" },
+      ]);
+      expect(mockFetch.mock.calls[0][0]).toBe(`${API_BASE}/rest/api/3/project/PROJ/statuses`);
+      expect(mockFetch.mock.calls[0][1].signal).toBeInstanceOf(AbortSignal);
+    });
+
+    it("times out cloud-id discovery and retries with a clean cache", async () => {
+      const controller = new AbortController();
+      const retryController = new AbortController();
+      const timeout = vi
+        .spyOn(AbortSignal, "timeout")
+        .mockReturnValueOnce(controller.signal)
+        .mockReturnValue(retryController.signal);
+      mockFetch.mockImplementationOnce((_url, init) =>
+        new Promise((_resolve, reject) => {
+          if (init?.signal) {
+            init.signal.addEventListener("abort", () => reject(init.signal?.reason), { once: true });
+          } else {
+            queueMicrotask(() => reject(new Error("cloud-id discovery fetch was not abortable")));
+          }
+        }),
+      );
+      const adapter = jiraAdapterWithDiscovery();
+
+      try {
+        const firstAttempt = adapter.listStatuses().catch((error) => error);
+        await vi.waitFor(() => expect(mockFetch).toHaveBeenCalledTimes(1));
+        controller.abort(new DOMException("timed out", "TimeoutError"));
+        await expect(firstAttempt).resolves.toMatchObject({ name: "TimeoutError" });
+
+        mockFetch
+          .mockResolvedValueOnce({
+            ok: true,
+            json: async () => ({ cloudId: CLOUD_ID }),
+          })
+          .mockResolvedValueOnce({
+            ok: true,
+            json: async () => [],
+          });
+
+        await expect(adapter.listStatuses()).resolves.toEqual([]);
+        expect(mockFetch.mock.calls[1][0]).toBe("https://test.atlassian.net/_edge/tenant_info");
+      } finally {
+        timeout.mockRestore();
+      }
+    });
+  });
+
   describe("moveTicket", () => {
     it("fetches transitions then posts the matching one", async () => {
       mockFetch
@@ -470,6 +554,45 @@ describe("JiraAdapter", () => {
       const transitionCall = mockFetch.mock.calls[1];
       expect(JSON.parse(transitionCall[1].body)).toEqual({
         transition: { id: "11" },
+      });
+    });
+
+    it("resolves a provider status id against the currently valid transitions", async () => {
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            transitions: [
+              { id: "31", name: "Finish", to: { id: "10042", name: "Done" } },
+            ],
+          }),
+        })
+        .mockResolvedValueOnce({ ok: true, json: async () => ({}) });
+
+      await jiraAdapter().moveTicket("10001", { name: "10042", statusId: "10042" });
+
+      expect(JSON.parse(mockFetch.mock.calls[1][1].body)).toEqual({
+        transition: { id: "31" },
+      });
+    });
+
+    it("falls back to an exact destination name when a custom value is not a status id", async () => {
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            transitions: [{ id: "31", name: "Code Review", to: { id: "10042" } }],
+          }),
+        })
+        .mockResolvedValueOnce({ ok: true, json: async () => ({}) });
+
+      await jiraAdapter().moveTicket("10001", {
+        name: "Code Review",
+        statusId: "Code Review",
+      });
+
+      expect(JSON.parse(mockFetch.mock.calls[1][1].body)).toEqual({
+        transition: { id: "31" },
       });
     });
   });

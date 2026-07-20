@@ -26,13 +26,22 @@ const baseTicket = {
   attachments: [],
 };
 
-const ticketEntry: AgentWorkflowInput = { kind: "ticket", ticketKey: "ABC-123" };
+const ticketEntry: AgentWorkflowInput = {
+  kind: "ticket",
+  subjectKey: "jira:ABC-123",
+  ticketKey: "ABC-123",
+  ownerToken: "owner-token",
+};
 
 const prEntry: AgentWorkflowInput = {
   kind: "pr_trigger",
   triggerType: "trigger_pr_review",
+  subjectKey: "github:acme/api#77",
   ticketKey: "ABC-123",
+  ownerToken: "owner-token",
   definitionId: 1,
+  definitionVersion: 1,
+  scope: "workflow_owned",
   pr: {
     provider: "github",
     repoPath: "acme/api",
@@ -178,7 +187,7 @@ describe("substituteNodePromptParams", () => {
   const makeNode = (
     type: WorkflowDefinitionNode["type"],
     params: WorkflowDefinitionNode["params"],
-  ): WorkflowDefinitionNode => ({ id: "n1", type, x: 0, y: 0, params });
+  ): WorkflowDefinitionNode => ({ id: "n1", type, x: 0, y: 0, params, inputs: {} });
 
   it("substitutes into a string param and returns a new node", () => {
     const node = makeNode("planning_agent", { prompt: "Plan {{ticket_title}}" });
@@ -212,6 +221,7 @@ describe("substituteNodePromptParams", () => {
       name: "Plan",
       x: 10,
       y: 20,
+      inputs: {},
       params: { prompt: "{{ticket_title}}" },
       promptRefs: { prompt: { promptId: 3, version: 2 } },
     };

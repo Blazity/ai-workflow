@@ -10,7 +10,7 @@ function node(
   type: WorkflowDefinitionNode["type"],
   params: WorkflowDefinitionNode["params"],
 ): WorkflowDefinitionNode {
-  return { id: `node-${type}`, type, x: 0, y: 0, params };
+  return { id: `node-${type}`, type, x: 0, y: 0, params, inputs: {} };
 }
 
 describe("resolvePromptReferencesInNodes", () => {

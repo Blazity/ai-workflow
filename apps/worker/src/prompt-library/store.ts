@@ -16,6 +16,24 @@ import {
 import { canEditPromptLibrary, type DashboardRole } from "../lib/auth/roles.js";
 import { DashboardAuthError } from "../lib/auth/users-read.js";
 
+/** Minimal structural read of a stored definition for the usage scan. The scan
+ *  must surface refs even in definitions today's deploy rules would reject
+ *  (legacy params, retired blocks), so it deliberately avoids the strict
+ *  workflowDefinitionSchema and only reads the shapes it needs. */
+const usageScanNodeSchema = z.object({
+  id: z.string(),
+  type: z.string(),
+  name: z.string().optional(),
+  params: z.record(z.unknown()).catch({}),
+  promptRefs: z
+    .record(z.object({ promptId: z.number(), version: z.number() }))
+    .optional()
+    .catch(undefined),
+});
+const usageScanDefinitionSchema = z.object({
+  nodes: z.array(z.unknown()).catch([]),
+});
+
 const VERSION_LIST_LIMIT = 50;
 const QUERY_MAX_LENGTH = 100;
 
@@ -696,9 +714,14 @@ export async function findPromptUsage(
 
   const result: PromptLibraryUsageRow[] = [];
   for (const def of defs) {
-    const definition = headByDef.get(def.id);
-    if (!definition) continue;
-    for (const node of definition.nodes) {
+    const raw = headByDef.get(def.id);
+    if (!raw) continue;
+    const parsedDefinition = usageScanDefinitionSchema.safeParse(raw);
+    if (!parsedDefinition.success) continue;
+    for (const rawNode of parsedDefinition.data.nodes) {
+      const parsedNode = usageScanNodeSchema.safeParse(rawNode);
+      if (!parsedNode.success) continue;
+      const node = parsedNode.data;
       if (!node.promptRefs) continue;
       for (const [paramKey, ref] of Object.entries(node.promptRefs)) {
         if (ref.promptId !== promptId) continue;

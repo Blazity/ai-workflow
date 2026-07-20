@@ -1,6 +1,5 @@
 "use client";
 
-import { NODE_CATEGORIES } from "./blocks";
 import type { PaletteGroup, PaletteItem } from "./blocks";
 
 function GroupHeader({ label, color }: { label: string; color: string }) {
@@ -24,26 +23,40 @@ export function NodePalette({ groups, onAdd }: { groups: PaletteGroup[]; onAdd: 
           <div key={grp.group} className="flex flex-col">
             <GroupHeader label={grp.label} color={grp.color} />
             {grp.items.map((it) => {
-              const cat = NODE_CATEGORIES[it.type];
+              const cat = it.presentation;
               return (
                 <button
                   key={it.type}
-                  draggable
+                  draggable={it.available}
+                  disabled={!it.available}
+                  title={it.unavailableReason ?? cat.description}
                   onDragStart={(e) => {
+                    if (!it.available) return;
                     e.dataTransfer.setData("application/x-flow-node", JSON.stringify(it));
                     e.dataTransfer.effectAllowed = "copy";
                   }}
-                  onClick={() => onAdd(it)}
-                  className="appearance-none text-left mx-2 my-px py-2 px-2 border border-neutral-200 rounded-[3px] flex items-center gap-2 cursor-grab active:cursor-grabbing bg-panel transition-colors duration-[120ms]"
-                  onMouseEnter={(e) => (e.currentTarget.style.background = cat.soft)}
+                  onClick={() => {
+                    if (it.available) onAdd(it);
+                  }}
+                  className="appearance-none text-left mx-2 my-px py-2 px-2 border border-neutral-200 rounded-[3px] flex items-start gap-2 cursor-grab active:cursor-grabbing bg-panel transition-colors duration-[120ms] disabled:cursor-not-allowed disabled:opacity-55"
+                  onMouseEnter={(e) => (e.currentTarget.style.background = cat.softColor)}
                   onMouseLeave={(e) => (e.currentTarget.style.background = "#fff")}
                 >
                   <span
                     className="w-[18px] h-[18px] rounded-xs text-white inline-flex items-center justify-center font-mono text-[11px] font-bold flex-[0_0_18px]"
                     style={{ background: cat.color }}
                   >{cat.glyph}</span>
-                  <span className="font-body text-xs text-coal overflow-hidden text-ellipsis whitespace-nowrap">{it.name}</span>
-                  <span className="ml-auto font-mono text-[12px] text-neutral-500 leading-none">+</span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block font-body text-xs text-coal overflow-hidden text-ellipsis whitespace-nowrap">{it.name}</span>
+                    {it.unavailableReason && (
+                      <span className="block mt-0.5 font-body text-[10px] leading-[1.25] text-neutral-500">
+                        {it.unavailableReason}
+                      </span>
+                    )}
+                  </span>
+                  <span className="ml-auto font-mono text-[12px] text-neutral-500 leading-none">
+                    {it.available ? "+" : "–"}
+                  </span>
                 </button>
               );
             })}
@@ -61,18 +74,28 @@ export function MobilePaletteList({ groups, onAdd }: { groups: PaletteGroup[]; o
         <div key={grp.group} className="flex flex-col">
           <GroupHeader label={grp.label} color={grp.color} />
           {grp.items.map((it) => {
-            const cat = NODE_CATEGORIES[it.type];
+            const cat = it.presentation;
             return (
               <button
                 key={it.type}
-                onClick={() => onAdd(it)}
-                className="appearance-none text-left border-none cursor-pointer flex items-center gap-3 px-[18px] py-3 bg-transparent active:bg-app-bg"
+                disabled={!it.available}
+                onClick={() => {
+                  if (it.available) onAdd(it);
+                }}
+                className="appearance-none text-left border-none cursor-pointer flex items-start gap-3 px-[18px] py-3 bg-transparent active:bg-app-bg disabled:cursor-not-allowed disabled:opacity-55"
               >
                 <span
                   className="w-[22px] h-[22px] rounded-xs text-white inline-flex items-center justify-center font-mono text-[12px] font-bold flex-[0_0_22px]"
                   style={{ background: cat.color }}
                 >{cat.glyph}</span>
-                <span className="font-body text-[15px] text-coal">{it.name}</span>
+                <span>
+                  <span className="block font-body text-[15px] text-coal">{it.name}</span>
+                  {it.unavailableReason && (
+                    <span className="block mt-0.5 font-body text-[11px] leading-[1.3] text-neutral-500">
+                      {it.unavailableReason}
+                    </span>
+                  )}
+                </span>
               </button>
             );
           })}

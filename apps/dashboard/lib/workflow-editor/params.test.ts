@@ -1,6 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { arrayToLines, linesToArray, textMatchesLines } from "./params.ts";
+import {
+  arrayToLines,
+  linesToArray,
+  textMatchesLines,
+  toggleRequiredArrayValue,
+} from "./params.ts";
 
 test("linesToArray trims and drops blank lines", () => {
   assert.deepEqual(linesToArray("  pnpm test \n\n  pnpm lint\n"), ["pnpm test", "pnpm lint"]);
@@ -45,4 +50,10 @@ test("textMatchesLines treats a non-array value as no lines", () => {
 
 test("textMatchesLines ignores non-string entries in the value", () => {
   assert.equal(textMatchesLines("pnpm test", ["pnpm test", 3] as never), true);
+});
+
+test("toggleRequiredArrayValue adds and removes values without allowing an empty selection", () => {
+  assert.deepEqual(toggleRequiredArrayValue(["github"], "gitlab", true), ["github", "gitlab"]);
+  assert.deepEqual(toggleRequiredArrayValue(["github", "gitlab"], "github", false), ["gitlab"]);
+  assert.deepEqual(toggleRequiredArrayValue(["github"], "github", false), ["github"]);
 });

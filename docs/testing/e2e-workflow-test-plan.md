@@ -1,181 +1,164 @@
-# End-to-End Test Plan: Graph Workflow Feature
+# End-to-End Test Plan: Workflow Revisions
 
-Branch: `feat/workflow-editor-mvp`. Target: deployed preview **ai-workflow-demo**.
+Scope: AIW-92 through AIW-103 on `codex/workflows-revisions`.
 
-The human creates AWT tickets and moves them; the orchestrator authors/enables definitions in the editor and verifies each run through the deployed worker's `/api/v1/*` endpoints. No local worker runs at any point (reconciler collision on the shared Neon branch).
+This plan verifies the revised workflow editor and runtime without relying on the state of an old preview deployment. Deterministic integration tests are the release gate. A deployed browser/provider smoke complements them after the target environment, credentials, repository, and webhook subscriptions are confirmed.
 
-## Live deploy status (confirmed 2026-07-13)
+## 0. Invariants under test
 
-- Worker deployed to `ai-workflow-demo` env, deployment `ai-workflow-oqdru7bpg`, status Ready.
-- Env alias `ai-workflow-app-env-ai-workflow-demo-blazity.vercel.app`: `GET /api/v1/runs/block-statuses` and `GET /api/v1/runs/live` both return **401** (not 404/500), so the new code is serving, the DB has the new columns (migrations applied), and the compiled `@shared/*` packages resolve at runtime.
-- The compiled-`@shared` architecture builds on Vercel (deploy exit 0), the key deploy risk is cleared.
-- Test repo is pinned by env: `GITHUB_OWNER=blazity`, `GITHUB_REPO=ai-workflow-demo`, `GITHUB_BASE_BRANCH=main`. PRs can only land on **`blazity/ai-workflow-demo`**; substitute that repo everywhere below.
-- Provider: `CLAUDE_MODEL=claude-haiku-4-5`. `ANTHROPIC_API_KEY` is invalid/pending, so claude-pinned blocks fail early (a valid negative test); codex-only tiers are unblocked once `CODEX_API_KEY`/`CODEX_MODEL` are confirmed.
-- GitHub App id `3632887` is configured; verify its installation is scoped so it can only touch `blazity/ai-workflow-demo`.
+- **One execution path.** There is no feature-flagged legacy workflow executor. A saved draft does not affect runs; only an explicitly deployed immutable version can be selected for dispatch.
+- **Draft, layout, and deployment are independent.** Semantic Save Draft advances `draftRevision`; moving blocks advances only `layoutRevision`; Deploy and Rollback select immutable versions using compare-and-set guards.
+- **Dispatch is pinned.** Once accepted, a run executes the exact deployed definition/version it captured even if a newer draft is saved or another version is deployed.
+- **Specialized agents own workspace convenience.** Planning can run without a workspace. Implementation, Review, and Fix prepare or resume one automatically when necessary. Explicit Prepare remains available for modular/custom graphs.
+- **Finalize and Open PR/MR are separate.** Finalize is the only push boundary and returns a durable publication attempt. Open PR/MR consumes that attempt and creates or reuses provider PRs/MRs; it does not push workspace changes.
+- **Clarification is a pinned continuation.** The runtime snapshots unpublished work, stores prior safe outputs and the waiting node, hands the claim to one successor, restores with fresh credentials, and reruns only that waiting agent. It does not restart from the ticket trigger. The real Vercel snapshot/restore/expiry and git-index probe passed on 2026-07-17.
+- **Provider events fail closed.** GitHub/GitLab events are authenticated, filtered by the deployed definition's providers/scope/selectors, checked against the current head, stored durably, deduplicated, and coalesced by subject/head/trigger.
+- **One claim per durable subject.** Correlated workflow-owned PR events share the ticket subject; arbitrary review-safe PR events use a PR subject and never synthesize a Jira ticket key. Claims remain held through the final downstream block.
+- **Execution is bounded.** `maxDurationMs`, `maxTokens`, and `maxCostUsd` are part of the immutable definition. Active duration excludes human wait time; configured usage limits fail closed when usage or pricing is unavailable.
 
-## 0. Ground rules baked into every test
+## 1. Current block catalog
 
-- **Single enabled definition per trigger type** (`store.ts assertNoTriggerOverlap`, 409). Only ONE `trigger_ticket_ai` definition may be enabled at a time. Tiers that need a different ticket-trigger shape must **disable the prior one, then enable the new one**. PR-trigger and plan-approved definitions use different trigger types, so they can be enabled alongside a ticket-trigger definition.
-- **Version guard for live dots** (`apps/dashboard/lib/workflow-editor/run-statuses.ts:14-15`): the canvas shows dots only when the block-status snapshot's `definitionId` AND `definitionVersion` both equal the editor's selected head. **Never save/edit a definition while a run against it is in flight**, a version bump makes the dots vanish (this is itself a Tier 6 test; elsewhere it is a caution).
-- **Agent blocks need a workspace.** `planning_agent`/`implementation_agent`/`review_agent`/`fix_agent` return `no workspace: connect prepare_workspace before <type>` if `ctx.sandboxId` is null (`agent.ts`). The loader injects a virtual `prepare_workspace` only for the V1 linear default. **Every custom definition containing an agent block must include an explicit `prepare_workspace` node** unless it is the untouched linear default.
-- **Every PR-opening definition/ticket must target `blazity/ai-workflow-demo`.** Clarification answers that name a repo must hard-constrain it to the test repo.
-- **Cheap models only** in test definitions: `gpt-5.4-nano` for planning/research, `gpt-5.4-mini` for implementation.
-- **Trigger nodes never appear in `block_statuses`** (seeded from non-trigger nodes only). Gate/post-PR runs never write `block_statuses`, and `blocked` runs are excluded.
+The server-owned registry contains 28 blocks across nine groups:
 
-## 1. Prerequisites checklist
+- Triggers: ticket assigned to AI, plan approved, PR/MR created, checks failed, review submitted, PR/MR merged.
+- Agents: Planning, Implementation, Review, Fix, Generic.
+- Workspace: Prepare, Finalize.
+- Control: Branch, Loop, Terminate.
+- Ticket: Post comment, Update status.
+- VCS: Fetch PR context, Open PR/MR, Post PR comment.
+- Human: Send plan for approval, Human question.
+- Utility: Pre-PR checks, Run checks, Call LLM, Send Slack message.
+- Arthur: Prompt injection check.
 
-### 1a. Environment (Vercel env on ai-workflow-demo)
-| Var | Tier 0-4, 6, 7 (codex) | Tier 5 positive + provider-mix |
+`arthur_trace` is retired and upgraded out of stored legacy definitions. Core run/block telemetry is automatic.
+
+## 2. Prerequisites
+
+### 2.1 Deterministic verification
+
+- Install repository dependencies and use the test database harness; do not point local tests at a shared preview database.
+- Provide no live provider credentials to deterministic suites. Provider, sandbox, Jira, and Slack boundaries are mocked or exercised through adapters.
+- Confirm dashboard tests are discovered by the repository-wide test command.
+
+### 2.2 Optional deployed smoke
+
+- Use a dedicated worker/database environment and a repository to which the configured GitHub App and/or GitLab token are intentionally scoped.
+- Configure a dashboard origin and editor/admin account.
+- Register Jira, GitHub, and GitLab webhooks needed by the selected rows. GitLab review coverage requires Comments/Note Hooks; merged and created coverage requires Merge Request Hooks; failed-check coverage requires Pipeline Hooks.
+- Configure unambiguous bot identities for providers selected by comment-trigger definitions.
+- Use inexpensive models and explicit spending limits for live agent runs.
+
+## 3. Definitions used by the matrix
+
+| Key | Shape | Trigger types |
 |---|---|---|
-| `AGENT_KIND` | `codex` | `codex` (run default), claude via per-block |
-| `CODEX_MODEL` | `gpt-5.4-mini` | same |
-| `CODEX_API_KEY` | valid | valid |
-| `ANTHROPIC_API_KEY` | invalid/pending (enables the fail-early NEGATIVE test) | **must be rotated to valid** before positive claude tests |
-| `CLAUDE_MODEL` | set (`claude-haiku-4-5`) | valid model id |
-| `DATABASE_URL` (Neon) | per-environment branch, **not** shared with local | same |
-| `MAX_CONCURRENT_AGENTS` | known value (needed for at-capacity/503 test) | same |
-| `VCS_BOT_LOGIN` | the bot's login (drives bot-PR gate precedence) | same |
-| Jira | `JIRA_BASE_URL`, `JIRA_PROJECT_KEY`, `COLUMN_AI_REVIEW`, `COLUMN_BACKLOG`, transitions for AWT board | same |
-| Slack | bot token, channel id | same |
-| GitHub App | scoped to `blazity/ai-workflow-demo` only | same |
+| **D-V1 delivery** | ticket -> Planning -> Implementation -> Pre-PR checks -> Finalize -> Open PR -> ticket status -> Slack | `trigger_ticket_ai` |
+| **D-V2 modular** | ticket -> Generic/Branch/Prepare/Generic/Run checks/Loop/Finalize/Open PR | `trigger_ticket_ai` |
+| **D-V3 approval** | ticket -> Planning -> Send approval; plan approved -> Implementation -> Finalize -> Open PR | `trigger_ticket_ai`, `trigger_plan_approved` |
+| **D-V4 remediation** | failed checks/review -> Fetch context -> Fix -> Finalize -> PR comment | `trigger_pr_checks_failed`, `trigger_pr_review` |
+| **D-V5 merged** | PR/MR merged -> Update ticket status -> optional Slack | `trigger_pr_merged` |
 
-### 1b. Registrations / access
-- Dashboard login with **editor/admin** role (required for `workflow-definitions` POST/PUT/PATCH/DELETE and `approvals` approve/reject). Capture the session cookie once; reuse for all `/api/v1` reads and writes.
-- Jira webhook registered so entering the AI column fires `trigger_ticket_ai`.
-- GitHub webhook on `blazity/ai-workflow-demo`, normalized to `trigger_pr_created` / `trigger_pr_checks_failed` / `trigger_pr_review`.
-- `/health` OK on the preview; editor page loads.
+D-V4 is the one canonical remediation flow. It contains no explicit Prepare, readiness Branch, internal post-PR validation, or second explainer topology. Fix returns `fixed | needs_human_input | failed`; only `fixed` follows the normal edge to Finalize.
 
-### 1c. Definitions to author up front (author all; enable per the sequencing column)
-| Key | Shape (fixture analog) | Trigger types | When enabled |
-|---|---|---|---|
-| **D0 Smoke Linear** | V1 `linearPipelineDefinition` (untouched default) | `trigger_ticket_ai` | Tier 0, 1 (block-swaps), 2, negative tests |
-| **D-Ctrl** | V2 `humanGateLoopDefinition` variants | `trigger_ticket_ai` | Tier 2 (swap in for D0) |
-| **D-Approval** | V3 `planApprovalDefinition` | `trigger_ticket_ai` + `trigger_plan_approved` | Tier 3 |
-| **D-PRfix** | V4 `prReviewFixDefinition` | `trigger_pr_checks_failed` + `trigger_pr_review` | Tier 4 (alongside a ticket def) |
-| **D-PRcreated** | `fetch_pr_context -> post_pr_comment` | `trigger_pr_created` | Tier 4 gate-precedence |
+## 4. Acceptance matrix
 
-## 2. Test matrix (simple -> complex)
+### Tier 0 — authoritative contracts and typed data flow
 
-Notation: `A -> B` default port; `A --true--> B` named port. Params in `{}`. Ports are fixed by `BLOCK_TYPE_SPECS`: `branch` = `true`/`false`; `loop` = `continue`/`exhausted`; action blocks = `out` (+ optional `failed` failure port when `allowsFailurePort`); `send_plan_approval` and `terminate` are terminal.
+1. Fetch the registry and assert every catalog block has presentation, defaults, input schema, output schema, status variants, availability, and an unavailable reason when unavailable.
+2. Author explicit bindings from `trigger.*`, `steps.<node>.output.*`, and `run.*`; validate compatible scalar, object, array, optional, and discriminated-status paths.
+3. Reject unknown paths, forward/non-ancestor references, incompatible types, unbound required inputs, and unsafe object keys before deployment.
+4. Execute an accepted graph and assert runtime resolves exactly the paths deployment validation accepted.
+5. Confirm layout coordinates are not part of the semantic definition or deployment snapshot.
 
-Baseline block-status progression to assert on every agent run (poll `GET /api/v1/runs/block-statuses?definitionId=<id>`): each non-trigger node goes `pending -> running -> ok`; `source` is `"live"` while a registry entry exists, then `"last"` after completion; snapshot `status` ends `success`.
+Primary deterministic coverage: `block-registry*.test.ts`, `bindings.test.ts`, `conditions.test.ts`, `schema*.test.ts`, `interpreter*.test.ts`, and `revisions-lifecycle.integration.test.ts`.
 
-### TIER 0 - Smoke (D0 Smoke Linear enabled)
+### Tier 1 — editor and immutable lifecycle
 
-**T0.1 - Trivial ticket end-to-end**
-- Definition: **D0** untouched: `trigger -> planning -> implementation -> checks -> open-pr -> status{target:"ai_review"} -> slack`.
-- Ticket: title "Add greeting line to README"; description "In repo **blazity/ai-workflow-demo**, append the line `Hello from Blazebot smoke test` to the end of README.md. Do not touch any other file."; acceptance "README.md ends with that exact line; PR opened." Move into the AI column.
-- Verify:
-  - `GET /api/v1/runs/live` -> a row for this ticket, `status` running, `model` = `gpt-5.4-mini`.
-  - `GET /api/v1/runs/block-statuses?definitionId=<D0>` -> `pending->running->ok` for `planning, implementation, checks, open-pr, status, slack`; `definitionId`/`definitionVersion` match D0 head; editor canvas shows the moving dot + status bar.
-  - `GET /api/v1/runs/<runId>` -> `available:true`; `phases` has `Research` and `Impl` (and `Review` if enabled) each with `costUsd`,`tokens`,`durationMs`,`numTurns`; `model` = impl model; `costKnown:true`; `costUsd > 0`; `prUrl`/`prNumber` on the test repo.
-  - PR exists with only the README change; ticket moved to `COLUMN_AI_REVIEW`.
-  - Slack: `started` then `pr_ready`.
-  - `GET /api/v1/cost` -> `totals.traceCount >= 1`, cost reflected under the Agent workflow.
+1. Create or duplicate a definition and edit its semantic draft.
+2. After every semantic edit, verify debounced validation replaces stale results; there is no required manual Validate step in the normal editor flow. Direct `POST /api/v1/workflow-definitions/:id/validate` remains a cheap, side-effect-free API.
+3. Verify unavailable palette blocks and rejected actions display their server or local reason.
+4. Right-click a node and delete it; right-click a connection and delete it. Confirm dependent bindings are cleared or reported invalid.
+5. Move one or more nodes. Verify the semantic dirty state does not change and `PATCH /:id/layout` advances only `layoutRevision`.
+6. Save Draft with `expectedDraftRevision`. Verify live dispatch remains on the prior `deployedVersion`.
+7. Deploy with `expectedDraftRevision` and `expectedDeployedVersion`. Verify a new immutable version and deployment audit row are created atomically.
+8. Save another draft while a run is active. Verify the run remains pinned to the captured version.
+9. Roll back with `{version, expectedDeployedVersion}`. Verify rollback selects an existing immutable version and records provenance without rewriting history.
+10. Exercise stale draft/layout/deployment compare-and-set values and trigger-ownership conflicts; each must return an actionable conflict.
 
-### TIER 1 - Per-block + params (sequential edits of a dedicated **D1** ticket-trigger def; disable D0 first; each PUT bumps version)
+Primary deterministic coverage: dashboard `validation-controller`, `graph-edit`, `editor-actions`, `layout-save`, `serialize`, and API proxy tests; worker lifecycle/store/route tests and `revisions-lifecycle.integration.test.ts`.
 
-**T1.1 generic_agent** - `trigger -> prepare_workspace -> generic{prompt:"List the top-level files of the repo as JSON.", outputSchema:'{"type":"object","properties":{"files":{"type":"array"}}}', model:"gpt-5.4-nano"} -> post_ticket_comment{body:"done"}`. Verify generic phase present; block `ok` with `output.status:"ok"`. Invalid-schema variant (`outputSchema:"{"`) -> block `fail`, `error:"invalid outputSchema"`.
+### Tier 2 — canonical delivery, approval, and remediation
 
-**T1.2 call_llm** - `trigger -> call_llm{prompt:"Reply with the single word READY.", model:"gpt-5.4-nano"} -> post_ticket_comment{body:"llm ok"}`. Block `ok`; missing-prompt variant -> `fail` `"call_llm requires a prompt"`.
+1. Run D-V1 and verify specialized agents materialize a workspace without an explicit Prepare node; Planning remains workspace-free.
+2. Verify Pre-PR checks are the bounded internal gate before Finalize, while report-oriented Run checks expose branchable results without owning post-PR CI truth.
+3. Verify Finalize preflights every repository, records expected/pushed heads, and performs the push; Open PR/MR only consumes `publicationAttemptId` and creates/reuses PRs.
+4. Run D-V3. Approval ends the planning path; accepting is final and starts the separately pinned implementation path. Approval is not revocable after dispatch.
+5. Run D-V4 from both a failed-check and review event. Fix reuses or implicitly prepares the workspace and reaches Finalize only on `status: fixed`.
+6. Return `needs_human_input` or `failed` from Fix and verify the built-in runtime paths run without an authored Human Question/readiness Branch.
 
-**T1.3 run_checks (report-only)** - `... implementation -> run_checks{commands:["ls","exit 1"]} -> open_pr ...`. Non-zero command still returns `ok` (report-only) and run continues to open_pr.
+### Tier 3 — clarification, cancellation, and cleanup
 
-**T1.4 post_ticket_comment** - verify `output.commentUrl` present and comment visible on the ticket.
+1. Start an agent with committed, untracked, and unresolved merge-index work, then return `needs_human_input`.
+2. Verify the checkpoint stores subject, owner, definition/version, waiting node, trigger payload, safe prior outputs, cumulative budget state, workspace manifest/source head, snapshot ID/expiry, and cleanup state.
+3. Answer once. Verify one successor wins compare-and-set, restores the snapshot with fresh credentials, seeds prior outputs, reruns only the waiting agent, and follows downstream edges without replaying earlier comments or other side effects.
+4. Retry the answer/dispatch and verify it cannot execute twice. Expired or missing snapshots must produce an actionable recovery failure.
+5. Cancel before dispatch, during an agent, during snapshotting, during publication recovery, and after completion. Verify owner-scoped cancellation is idempotent and cannot cancel a successor/new owner.
+6. Verify terminal completion/cancellation deletes snapshots, stops sandboxes, releases only the matching claim, and leaves no orphan cleanup state. Reconciliation repairs recoverable intermediate rows.
 
-**T1.5 update_ticket_status** - end with `update_ticket_status{target:"backlog"}`; ticket lands in that column; block `ok`.
+Primary deterministic coverage: clarification checkpoint/dispatch/reconciliation/runtime/snapshot suites, cancel-run suites, sandbox cleanup suites, and cancellation migration tests.
 
-**T1.6 prepare/finalize workspace** - `trigger -> prepare_workspace -> implementation -> finalize_workspace{requiredChecks:[]} -> post_pr_comment{...}` (finalize publishes). Both workspace blocks `ok`; a branch/commit pushed.
+### Tier 4 — GitHub/GitLab triggers, selectors, and pending events
 
-**T1.7 fetch_pr_context + post_pr_comment** - deferred to Tier 4 (needs a real PR).
+1. **Created/merged:** accept GitHub opened/reopened/merged PRs and GitLab opened/reopened/merged MRs selected by `providers`; ignore other actions.
+2. **Failed checks:** require at least one exact check name before deployment. Enforce GitHub App slug and GitLab pipeline-source allowlists, current source head, and current GitLab MR head-pipeline ID. Ignore passing, cancelled, skipped, neutral, superseded, stale-head, and untrusted results.
+3. **Review:** GitHub supports selected `changes_requested` and `commented`; GitLab supports external `commented` Note Hooks only. Reject a GitLab definition that selects `changes_requested`. Ignore bot-authored/system/internal/confidential notes and workflow-authored echoes at both route and normalizer boundaries.
+4. **Scope:** `workflow_owned` requires durable provider/repository/PR/source-branch/current-head/target-branch correlation plus a real ticket lookup. A prefix or pending intent is insufficient. `any` has no synthetic ticket and cannot reach branch- or ticket-mutating blocks.
+5. Persist an authenticated locally eligible delivery as `received`, enrich it to `accepted`, and verify provider redelivery is idempotent. Transient enrichment/capacity failures remain recoverable by the local poller.
+6. Fire multiple actionable events while the subject is claimed. Verify failed-check sets merge, distinct reviews remain distinct, stale events are revalidated, and the oldest pending semantic event drains only after owner-matching terminal release.
 
-### TIER 2 - Control flow (enable **D2**; disable D1)
+### Tier 5 — merged ticket movement
 
-**T2.1 branch, both paths on `steps.checks.output.ok`** - `trigger -> prepare_workspace -> implementation -> checks -> verdict(branch{condition:"steps.checks.output.ok"})`; `verdict --true--> open_pr -> terminate{done}`; `verdict --false--> post_ticket_comment{body:"checks failed"} -> terminate{skipped}`. True-path ticket (valid change): `verdict` `ok`, `output.path:"true"`, reaches open_pr. False-path ticket (fails checks): `output.path:"false"`, reaches comment + skipped terminate.
+1. Deploy D-V5 with `scope: workflow_owned` and a discovered Jira destination.
+2. Merge the correlated GitHub PR and GitLab MR variants. Verify the common `trigger_pr_merged` payload carries merge SHA/time and the real ticket.
+3. Before moving the ticket, verify runtime still holds and checks the exact active owner.
+4. Deliver the Jira status webhook with the configured workflow account as actor and verify it is ignored without cancelling the still-running workflow.
+5. Deliver a different actor, a missing actor, and simulate workflow-account lookup failure. Each is treated as human input and retains existing cancellation behavior.
+6. Verify Slack or any later block completes before the active claim is released.
 
-**T2.2 loop, all three onExhaust modes** - base `... verdict --false--> retry(loop{maxAttempts:3}) --continue--> fix(review_agent) -> checks`; `verdict --true--> open_pr`.
-- 2a `onExhaust:"fail"`: checks never pass. `retry.attempt` increments live (1->2), after 3 attempts run fails via `failureExit`; block `fail`.
-- 2b `onExhaust:"human"`: exhaustion -> `clarificationExit` (needs_human_input), ticket parked to backlog, Slack `needs_clarification`, block `warn`.
-- 2c `onExhaust:"continue"`: wire the `exhausted` port -> `post_ticket_comment{body:"gave up gracefully"} -> terminate{done}`. Run continues past the loop, `output.status:"exhausted"`, block `ok`.
+### Tier 6 — publication safety and recovery
 
-**T2.3 terminate, each terminal_status** - four tails after a branch: `done`, `skipped`, `waiting_for_human`, `failed`. `done`/`skipped` -> block `ok`, run `success`, ticket not moved. `waiting_for_human` -> block `warn`, clarification + ticket to backlog, run `success`. `failed` -> block `fail`, ticket to backlog, Slack `failed`, run `failed`.
+1. Refuse Finalize when the remote source head changed, the tree is dirty/uncommitted, a conflict remains unresolved, or a branch is outside the selected ownership policy.
+2. Persist a publication attempt before push. In multi-repository runs, preflight every repository before the first push and record any partial success without reporting overall success.
+3. Inject an ambiguous provider create timeout and transient publication-ledger/ownership failures. Reconcile by exact provider/repository/source head/target branch and journal the single PR/MR before continuing.
+4. Verify only an authenticated current opened/reopened event can exact-CAS a pending PR identity. Check/review and wrong-target events cannot establish ownership.
+5. Keep the owning claim during capped recovery; cancellation or duration exhaustion interrupts recovery without fabricating success or deleting a previously confirmed PR.
 
-**T2.4 failure-edge override** - `... implementation --failed--> post_ticket_comment{body:"impl failed, handled"} -> terminate{skipped}` plus `implementation --out--> open_pr`. Ticket engineered to fail impl. Run routes down `failed` port; `implementation` block `fail` but run reaches comment; run `success` via `skipped`.
+### Tier 7 — budgets and telemetry
 
-### TIER 3 - HITL
+1. Validate positive `maxDurationMs`, `maxTokens`, and `maxCostUsd`; reject invalid limits at deployment.
+2. Verify active duration excludes the clarification wait and carries into the successor. Expiry during polling terminates the sandbox process and starts no later block.
+3. Count input + cached-input + output tokens across agent and Call LLM phases. Exact-limit use passes; measured overage prevents the next block.
+4. Derive cost from authoritative usage/pricing. Configured token/cost limits fail closed with `budget_unverifiable` when required usage or pricing is absent.
+5. Assert run/block telemetry records pinned definition/version, subject, provider/model, cumulative usage, duration, terminal budget reason, and cleanup/drain completion.
 
-**T3.1 clarification loop (end-and-re-enter)** - enable D0/D1. Ambiguous but repo-constrained ticket ("In blazity/ai-workflow-demo, rename the greeting constant, but I haven't decided the new name"). First run: agent block `warn`; run `success` (clarificationExit); Jira shows numbered questions; ticket to `COLUMN_BACKLOG`; Slack `needs_clarification`; `runs/live` shows it under awaiting. Human answers hard-constraining the repo and moves back to AI column -> **new run** (new runId) proceeds to PR.
+### Tier 8 — deployed browser/provider smoke
 
-**T3.2 human_question block** - `trigger -> prepare_workspace -> planning -> human_question{questions:["Confirm the target filename?"]} -> implementation -> ...`. `human_question` returns `needs_human_input` -> park-and-re-enter; block `warn`. Missing-questions-and-no-upstream variant -> block `fail`.
+1. Load the editor and inspect unavailable reasons.
+2. Add/configure/delete a node, add/delete an edge, and observe automatic validation after each semantic edit.
+3. Move blocks and confirm no semantic unsaved-change indicator appears; reload and confirm layout persisted.
+4. Save Draft, Deploy, create another draft, and Rollback. Confirm the displayed draft/deployed revisions and version history are correct.
+5. Execute one pinned D-V1 run, one GitHub or GitLab D-V4 event, one clarification continuation, and one D-V5 merge in the dedicated environment. Capture run IDs, provider delivery IDs, PR/MR URLs, ticket transitions, and terminal telemetry.
 
-**T3.3 plan approval (V3)** - enable **D-Approval** (disable other ticket-trigger defs first). `trigger-ticket -> planning -> send-approval(send_plan_approval{mirrorComment:true})`; `trigger-approved -> implementation -> open-pr -> status{ai_review}`. Chain 1 ends at send-approval with `output.status:"awaiting_approval"` + `approvalRequestId`; block `warn`; run `success`; Slack `plan_approval_requested`; ticket parked + awaiting-approval label; `GET /api/v1/approvals?status=all` lists it pending. Approve on the dashboard -> `POST /api/v1/approvals/<id>/approve` -> **second run** from `trigger_plan_approved`; PR opened; mirror comment posted; approval flips to non-pending.
+## 5. Release verification
 
-### TIER 4 - Triggers (enable **D-PRfix** and **D-PRcreated**; keep a ticket def enabled too, different trigger types)
+Run from a clean worktree after the focused suites pass:
 
-Setup: first produce a bot-owned PR whose head branch encodes an AWT ticket key (run T0.1 to open one).
+```bash
+pnpm run typecheck
+pnpm run test
+pnpm run build
+node --test docs/workflow-workspace/index.test.mjs
+git diff --check
+```
 
-**T4.1 pr_checks_failed / pr_review -> pr_trigger fix run** - D-PRfix: `trigger_pr_checks_failed`/`trigger_pr_review -> fetch_pr_context -> prepare_workspace -> fix_agent -> finalize_workspace -> post_pr_comment{body:"Automated fix pushed. Please re-review."}`. Trigger a failing check (or request changes). `runs/live` shows `run_kind` `pr_trigger`; block-statuses progress; new commit pushed to PR branch; comment posted; webhook `{status:"dispatched", runId}`.
-
-**T4.2 gate precedence** - D-PRcreated enabled; bot PR (branch encodes ticket key) -> definition run supersedes gate (log `post_pr_gate_superseded_by_definition`). Non-bot PR or no matching def -> falls through to the gate.
-
-**T4.3 coalescing** - two PR-review webhooks for the same branch while the first run is active -> second returns `coalesced`/`already_claimed`; only one run row.
-
-**T4.4 at-capacity -> 503 redelivery** - saturate `MAX_CONCURRENT_AGENTS`, fire a PR webhook -> HTTP **503** `trigger_at_capacity`; provider redelivers; no lost event.
-
-**T4.5 pr_trigger run not cancelled on AI-column move** - with a `pr_trigger` run active, move its ticket out of the AI column -> run NOT cancelled (run_kind exempt), contrast T7.3.
-
-### TIER 5 - Providers + cost (needs valid ANTHROPIC_API_KEY for positive claude rows)
-
-**T5.1 codex pricing / costKnown=true** - any Tier 0 codex run: `costKnown:true`, `costUsd>0`, `phases[*].costUsd` present.
-
-**T5.2 costKnown=false** - force a phase timeout so a launched phase records no usage: `costKnown:false`; run still `available`.
-
-**T5.3 per-block provider mixing** - `planning{provider:"claude", model:"claude-haiku-4-5"} -> implementation{provider:"codex", model:"gpt-5.4-mini"}`. Block param wins; `phases` shows Research under claude, Impl under codex; `workflow_runs.model` = impl block's model. Label override: no block provider + label `agent:codex` flips the run default; env `AGENT_KIND` is the final fallback.
-
-**T5.4 "Impl #2" on re-execution** - run a fix-cycle definition; `phases` contains a second key suffixed ` #2`, each with its own model+cost+tokens.
-
-### TIER 6 - Multiple definitions + editor (via `GET/POST/PUT/PATCH/DELETE /api/v1/workflow-definitions`)
-
-**T6.1 create/duplicate/rename/enable/delete** - `POST {name, source:{kind:"default"}}` -> new def, disabled, v1. `POST {source:{kind:"duplicate", definitionId}}` seeds from head. `PATCH {name}` renames. `PATCH {enabled:true}` enables. `DELETE` archives (only when disabled and not the last).
-
-**T6.2 enabled-per-trigger conflict -> 409** - enabling a second `trigger_ticket_ai` def -> 409. Name collision -> 409.
-
-**T6.3 archive edge cases -> 409** - archive an enabled def -> 409; archive the last def -> 409.
-
-**T6.4 version history / restore** - `PUT` several times; `POST /<id>/restore {version:N}` creates a new version with `restoredFromVersion:N`.
-
-**T6.5 live-status version guard** - start a run, `PUT` mid-run (bump version) -> dots disappear; selecting a different definition also blanks them; re-selecting the exact running version restores them.
-
-**T6.6 save-validation errors** - `PUT` invalid graphs rejected: cycle without a loop; branch half-wired (only `true`); loop missing `continue`; `onExhaust:"continue"` missing `exhausted`; model string violating `^[A-Za-z0-9._:\/-]+$`.
-
-### TIER 7 - Negatives / edge
-
-**T7.1 missing provider key fail-early (runs TODAY)** - `planning{provider:"claude"}` while ANTHROPIC key invalid -> phase fails early; run `failed`; block `fail`; Slack `failed`. Unblocks Tier 5 positives once the key is rotated.
-
-**T7.2 invalid graph rejected on save** - multiple triggers of one type; trigger with incoming edge; zero triggers; branch condition referencing a non-ancestor step.
-
-**T7.3 ticket leaving AI column cancels ticket-kind run** - start a normal run, move the ticket out -> run cancelled -> `status:blocked` (contrast T4.5). `blocked` runs excluded from block-statuses.
-
-**T7.4 approval negatives (409)** - duplicate approve; superseded approval; definition disabled at approve time.
-
-**T7.5 execution cap** - a definition that loops enough to exceed 200 block executions -> `failureExit("engine", "workflow exceeded the maximum of 200 block executions")`; run `failed`.
-
-## 3. Observing a run WITHOUT a local poller
-
-The deployed worker persists telemetry from inside the workflow (`recordBlockStatuses`, `recordRunUsage`), independent of the cron, so the orchestrator only polls the deployed worker's `/api/v1/*` (authenticated with the dashboard session cookie). Do NOT start a local worker.
-
-- **Live progression** - poll `GET /api/v1/runs/block-statuses?definitionId=<selected>` every ~5 s. Each node `pending -> running -> ok`; `attempt` increments for loop/fix re-execution; `warn` = HITL/plan-approval park; `fail` = failure; `error` carries the message; `source` `"live"` then `"last"`. Always pass `definitionId`.
-- **Live list / awaiting** - `GET /api/v1/runs/live` (running rows with `model`, plus awaiting rows).
-- **Cost/model per phase** - `GET /api/v1/runs/<runId>`: `run.model` (= impl block model), `costUsd`, `costKnown`, token fields, and `phases` jsonb; loop/fix adds ` #2` keys. `GET /api/v1/cost?window=...` aggregates.
-- **PR + ticket lifecycle** - `runs/<runId>.prUrl`/`prNumber` (confirm on `blazity/ai-workflow-demo`); Jira column transitions; Slack `started`/`needs_clarification`/`pr_ready`/`failed`/`canceled`/`plan_approval_requested`.
-- **Approvals** - `GET /api/v1/approvals?status=all`; approve via `POST /api/v1/approvals/<id>/approve`.
-- **Definitions** - `GET /api/v1/workflow-definitions` and `/<id>` for enabled/trigger/version state.
-- **Webhook responses** - capture the HTTP status/body the provider receives.
-
-## 4. Known blockers before full coverage
-
-1. **ANTHROPIC_API_KEY invalid/pending** - blocks positive Claude tests (Tier 5 provider-mix positive rows, any claude-pinned success path). Workaround: run T7.1 now; rotate the key, then run Tier 5 positives. Codex-only coverage (Tiers 0-4, 6, 7) is unblocked.
-2. **GitHub App scope** - verify installation is locked to `blazity/ai-workflow-demo` only. The worker already only acts on `GITHUB_OWNER`/`GITHUB_REPO`, but confirm the App cannot reach other repos. Blocks PR-opening tiers until confirmed.
-3. **Shared demo DB (Neon branch-sharing)** - direct DB queries are unreliable because the demo DB branch is shared with local. Read state only through the deployed worker's `/api/v1/*`; never run a local worker/poller concurrently.
-4. **Dashboard UI access / auth origin** - the demo worker's Better Auth trusts a single `DASHBOARD_ORIGIN`. To use the editor/Approvals UI against the demo worker, the UI's origin must equal that value. Decide: deploy the dashboard branch to a stable preview alias and point `DASHBOARD_ORIGIN` at it, or drive authoring/verification via the `/api/v1` endpoints directly. This affects a shared env, so it is a setup decision to make before UI-dependent tiers (0 dots, 3 approvals, 6 editor).
-5. **Single-enabled-per-trigger constraint** - not a defect but a sequencing rule: serialize ticket-trigger tiers (disable prior, enable next). PR-trigger and plan-approved defs can run concurrently.
+The release is not accepted from unit coverage alone: confirm dashboard tests are counted and record the Tier 8 browser smoke or an explicit environment blocker. Provider credentials, preview aliases, and historical deployment IDs are environment evidence, not permanent assumptions in this plan.

@@ -1,6 +1,7 @@
 import { createEnv } from "@t3-oss/env-core";
 import { z } from "zod";
 import type { GitHubAppAuth } from "./src/lib/github-auth.js";
+import { resolveVcsBotLogin } from "./src/lib/vcs-bot-identity.js";
 
 export const env = createEnv({
   onValidationError: (issues) => {
@@ -26,8 +27,11 @@ export const env = createEnv({
     // VCS
     VCS_KIND: z.enum(["github", "gitlab"]).optional(),
     // Login of the bot's own VCS account. When set, PR reviews authored by it
-    // are ignored so the bot does not trigger a run off its own review.
-    VCS_BOT_LOGIN: z.string().min(1).optional(),
+    // are ignored so the bot does not trigger a run off its own review. The
+    // provider-specific values take precedence in mixed-provider deployments.
+    VCS_BOT_LOGIN: z.string().trim().min(1).optional(),
+    GITHUB_BOT_LOGIN: z.string().trim().min(1).optional(),
+    GITLAB_BOT_LOGIN: z.string().trim().min(1).optional(),
     // GitHub VCS — App auth (no PAT). Private key is base64-encoded PEM so it
     // round-trips cleanly through the Vercel env UI without newline-escaping.
     GITHUB_APP_ID: z.coerce.number().int().positive().optional(),
@@ -338,6 +342,20 @@ export function getConfiguredVcsProviders(): VcsProviderConfig[] {
   }
 
   return providers;
+}
+
+/** Resolve the automation account used to suppress recursive review triggers.
+ * The legacy shared value is safe only when exactly one provider is configured. */
+export function getVcsBotLogin(kind: VcsProviderKind): string | undefined {
+  return resolveVcsBotLogin(
+    kind,
+    getConfiguredVcsProviders().map((provider) => provider.kind),
+    {
+      github: env.GITHUB_BOT_LOGIN,
+      gitlab: env.GITLAB_BOT_LOGIN,
+      legacy: env.VCS_BOT_LOGIN,
+    },
+  );
 }
 
 export function getVcsProviderConfig(kind: VcsProviderKind): VcsProviderConfig {

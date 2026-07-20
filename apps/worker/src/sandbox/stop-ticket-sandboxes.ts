@@ -1,123 +1,70 @@
+import type { Sandbox } from "@vercel/sandbox";
 import { logger } from "../lib/logger.js";
-import { BRANCH_PREFIX } from "../lib/branch-prefix.js";
 import { getSandboxCredentials } from "./credentials.js";
 
-/**
- * Best-effort cleanup for leaked sandboxes after ticket cancellation.
- *
- * Fast path: if the caller knows the sandboxId (looked up from Postgres via
- * `runRegistry.getSandboxId`), we issue a single `Sandbox.stop()` — no
- * discovery pass at all.
- *
- * Fallback path: scan all running sandboxes and inspect each one's checked-
- * out branch. Used when the caller doesn't have a sandboxId (older registry
- * state, or a crash between `provisionSandbox` and the sandboxId being
- * written). The scan runs in parallel — serial iteration over N sandboxes
- * previously dominated cron's 300s budget when the environment was busy.
- */
-export async function stopTicketSandboxes(
-  ticketKey: string,
-  knownSandboxId?: string | null,
-): Promise<number> {
-  const normalizedTicket = ticketKey.trim().toLowerCase();
-  if (!normalizedTicket) return 0;
+type StoppableSandbox = Pick<Sandbox, "sandboxId" | "status" | "stop">;
 
-  const { Sandbox } = await import("@vercel/sandbox");
-  const credentials = getSandboxCredentials();
+/** Block until one known sandbox is terminal, or fail closed if that cannot be confirmed. */
+export async function stopSandboxAndConfirm(sandbox: StoppableSandbox): Promise<boolean> {
+  if (isTerminalStatus(sandbox.status)) return false;
 
-  if (knownSandboxId) {
-    try {
-      const sandbox = await Sandbox.get({
-        ...credentials,
-        sandboxId: knownSandboxId,
-      });
-      if (sandbox.status === "running") {
-        await sandbox.stop();
-        logger.info(
-          { ticketKey, sandboxId: knownSandboxId },
-          "cancel_run_stopped_known_sandbox",
-        );
-        return 1;
-      }
-      return 0;
-    } catch (err) {
-      logger.warn(
-        { ticketKey, sandboxId: knownSandboxId, error: (err as Error).message },
-        "cancel_run_known_sandbox_stop_failed",
-      );
-      // Fall through to branch scan in case the id is stale.
-    }
-  }
-
-  const expectedBranch = `${BRANCH_PREFIX}${normalizedTicket}`;
-
+  let final: Awaited<ReturnType<StoppableSandbox["stop"]>>;
   try {
-    const { json } = await Sandbox.list({ ...credentials, limit: 100 });
-    const running = json.sandboxes.filter((sandbox) => sandbox.status === "running");
-
-    const results = await Promise.all(
-      running.map(async (entry): Promise<number> => {
-        try {
-          const sandbox = await Sandbox.get({
-            ...credentials,
-            sandboxId: entry.id,
-          });
-          if (sandbox.status !== "running") return 0;
-
-          const branch = await getSandboxBranch(sandbox);
-          if (branch !== expectedBranch) return 0;
-
-          await sandbox.stop();
-          return 1;
-        } catch (err) {
-          logger.warn(
-            {
-              ticketKey,
-              sandboxId: entry.id,
-              error: (err as Error).message,
-            },
-            "cancel_run_sandbox_stop_failed",
-          );
-          return 0;
-        }
-      }),
+    final = await sandbox.stop({ blocking: true });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `sandbox ${sandbox.sandboxId} cleanup unconfirmed: ${message}`,
+      { cause: error },
     );
-
-    const stopped = results.reduce<number>((a, b) => a + b, 0);
-    if (stopped > 0) {
-      logger.info(
-        { ticketKey, expectedBranch, stopped },
-        "cancel_run_stopped_ticket_sandboxes",
-      );
-    }
-    return stopped;
-  } catch (err) {
-    logger.warn(
-      { ticketKey, expectedBranch, error: (err as Error).message },
-      "cancel_run_sandbox_discovery_failed",
-    );
-    return 0;
   }
+  if (!isTerminalStatus(final.status)) {
+    throw new Error(
+      `sandbox ${sandbox.sandboxId} cleanup unconfirmed: provider returned non-terminal status ${final.status}`,
+    );
+  }
+  return true;
 }
 
-async function getSandboxBranch(sandbox: {
-  runCommand: (
-    params: {
-      cmd: string;
-      args: string[];
-      cwd: string;
-    },
-  ) => Promise<{ exitCode: number; stdout: () => Promise<string> }>;
-}): Promise<string | null> {
-  try {
-    const result = await sandbox.runCommand({
-      cmd: "git",
-      args: ["rev-parse", "--abbrev-ref", "HEAD"],
-      cwd: "/vercel/sandbox",
-    });
-    if (result.exitCode !== 0) return null;
-    return (await result.stdout()).trim();
-  } catch {
-    return null;
+/** Stop exactly the sandbox ids recorded for one owner; never discover by branch. */
+export async function stopSandboxesByIds(sandboxIds: readonly string[]): Promise<number> {
+  if (sandboxIds.length === 0) return 0;
+  const { Sandbox } = await import("@vercel/sandbox");
+  const credentials = getSandboxCredentials();
+  const uniqueIds = [...new Set(sandboxIds)];
+  const results = await Promise.all(
+    uniqueIds.map(async (sandboxId): Promise<{ stopped: number; failed: boolean }> => {
+      try {
+        const sandbox = await Sandbox.get({ ...credentials, sandboxId });
+        const stopped = await stopSandboxAndConfirm(sandbox);
+        return { stopped: stopped ? 1 : 0, failed: false };
+      } catch (err) {
+        if (isNotFoundError(err)) return { stopped: 0, failed: false };
+        logger.warn(
+          { sandboxId, error: (err as Error).message },
+          "owned_sandbox_stop_failed",
+        );
+        return { stopped: 0, failed: true };
+      }
+    }),
+  );
+  const failedIds = uniqueIds.filter((_, index) => results[index]?.failed);
+  if (failedIds.length > 0) {
+    throw new Error(`owned sandbox cleanup unconfirmed: ${failedIds.join(", ")}`);
   }
+  return results.reduce((total, result) => total + result.stopped, 0);
+}
+
+function isTerminalStatus(status: unknown): boolean {
+  return status === "stopped" || status === "failed" || status === "aborted";
+}
+
+function isNotFoundError(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const candidate = error as { status?: unknown; statusCode?: unknown; code?: unknown };
+  return (
+    candidate.status === 404 ||
+    candidate.statusCode === 404 ||
+    candidate.code === "NOT_FOUND"
+  );
 }

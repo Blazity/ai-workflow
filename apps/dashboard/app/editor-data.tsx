@@ -38,6 +38,16 @@ export async function EditorData({
     return (
       <WorkflowEditorScreen
         definitions={list.definitions}
+        templates={
+          list.templates ?? [
+            {
+              id: "ticket-workflow",
+              name: "Ticket workflow",
+              description: "The current production delivery workflow.",
+              definition: list.defaultDefinition,
+            },
+          ]
+        }
         initialDetail={initialDetail}
         defaultDefinition={list.defaultDefinition}
         options={list.options}

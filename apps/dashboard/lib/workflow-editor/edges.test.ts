@@ -3,8 +3,14 @@ import assert from "node:assert/strict";
 import {
   canOmitFromPort,
   defaultPort,
+  edgeDeleteActionVisible,
+  edgeDeleteTargetRadius,
+  edgeInstanceKey,
+  edgeKeyboardAction,
   edgeKey,
   isBackEdge,
+  reconcileSelectedEdgeKey,
+  removeEdge,
   resolvedPort,
   upsertEdge,
   visibleOutPorts,
@@ -24,8 +30,77 @@ test("resolvedPort falls back to the type default when fromPort absent", () => {
 });
 
 test("edgeKey encodes from, port and to", () => {
-  assert.equal(edgeKey({ from: "a", to: "b" }), "a||b");
-  assert.equal(edgeKey({ from: "a", to: "b", fromPort: "failed" }), "a|failed|b");
+  assert.equal(edgeKey({ from: "a", to: "b" }), '["a",null,"b"]');
+  assert.equal(edgeKey({ from: "a", to: "b", fromPort: "failed" }), '["a","failed","b"]');
+});
+
+test("edgeKey cannot collide when edge fields contain separators", () => {
+  assert.notEqual(
+    edgeKey({ from: "a|out", to: "b" }),
+    edgeKey({ from: "a", fromPort: "out", to: "|b" }),
+  );
+});
+
+test("edgeInstanceKey distinguishes exact duplicate connections", () => {
+  const edges: FlowEdgeDef[] = [
+    { from: "a", to: "b" },
+    { from: "a", to: "b" },
+  ];
+  assert.notEqual(edgeInstanceKey(edges, 0), edgeInstanceKey(edges, 1));
+});
+
+test("connection deletion removes only the exact edge", () => {
+  const edges: FlowEdgeDef[] = [
+    { from: "a", to: "b", fromPort: "true" },
+    { from: "a", to: "b", fromPort: "false" },
+    { from: "b", to: "c" },
+  ];
+  assert.deepEqual(removeEdge(edges, edgeInstanceKey(edges, 1)), [
+    { from: "a", to: "b", fromPort: "true" },
+    { from: "b", to: "c" },
+  ]);
+});
+
+test("connection deletion removes only one exact duplicate", () => {
+  const edges: FlowEdgeDef[] = [
+    { from: "a", to: "b" },
+    { from: "a", to: "b" },
+    { from: "b", to: "c" },
+  ];
+  assert.deepEqual(removeEdge(edges, edgeInstanceKey(edges, 1)), [
+    { from: "a", to: "b" },
+    { from: "b", to: "c" },
+  ]);
+});
+
+test("a selected connection reveals its delete action without mouse hover", () => {
+  assert.equal(edgeDeleteActionVisible({ canEdit: true, hovered: false, selected: true }), true);
+  assert.equal(edgeDeleteActionVisible({ canEdit: true, hovered: false, selected: false }), false);
+  assert.equal(edgeDeleteActionVisible({ canEdit: false, hovered: true, selected: true }), false);
+});
+
+test("connection keyboard actions support selection and deletion", () => {
+  assert.equal(edgeKeyboardAction("Enter", true), "select");
+  assert.equal(edgeKeyboardAction(" ", true), "select");
+  assert.equal(edgeKeyboardAction("Delete", true), "delete");
+  assert.equal(edgeKeyboardAction("Backspace", true), "delete");
+  assert.equal(edgeKeyboardAction("Delete", false), null);
+  assert.equal(edgeKeyboardAction("ArrowRight", true), null);
+});
+
+test("edge selection clears when a node is selected or the edge disappears", () => {
+  const edges: FlowEdgeDef[] = [{ from: "a", to: "b" }];
+  const selectedEdgeKey = edgeInstanceKey(edges, 0);
+
+  assert.equal(reconcileSelectedEdgeKey(selectedEdgeKey, edges, null), selectedEdgeKey);
+  assert.equal(reconcileSelectedEdgeKey(selectedEdgeKey, edges, "a"), null);
+  assert.equal(reconcileSelectedEdgeKey(selectedEdgeKey, [], null), null);
+});
+
+test("delete target stays 44 screen pixels across canvas zoom levels", () => {
+  assert.equal(edgeDeleteTargetRadius(1) * 2 * 1, 44);
+  assert.equal(edgeDeleteTargetRadius(0.85) * 2 * 0.85, 44);
+  assert.equal(edgeDeleteTargetRadius(0.45) * 2 * 0.45, 44);
 });
 
 test("visibleOutPorts appends failed only when allowed and used or revealed", () => {

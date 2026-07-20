@@ -4,6 +4,8 @@ import { getDb } from "../../../../db/client.js";
 import { requireDashboardActor, toHttpError } from "../../../../lib/auth/request-context.js";
 import {
   getWorkflowDefinition,
+  getWorkflowDefinitionDraft,
+  getDeployedWorkflowDefinitionVersion,
   listWorkflowDefinitionVersionRows,
   serializeWorkflowDefinitionVersion,
 } from "../../../../workflow-definition/store.js";
@@ -21,13 +23,19 @@ export default defineEventHandler(
         throw createError({ statusCode: 404, statusMessage: "Unknown definition" });
       }
 
-      const versions = (await listWorkflowDefinitionVersionRows(dbHandle, id)).map(
-        serializeWorkflowDefinitionVersion,
-      );
-      const current = versions[0] ?? null;
+      const [draft, deployedRow, versionRows] = await Promise.all([
+        getWorkflowDefinitionDraft(dbHandle, id),
+        getDeployedWorkflowDefinitionVersion(dbHandle, id),
+        listWorkflowDefinitionVersionRows(dbHandle, id),
+      ]);
+      const versions = versionRows.map(serializeWorkflowDefinitionVersion);
+      const deployed = deployedRow ? serializeWorkflowDefinitionVersion(deployedRow) : null;
       return {
-        meta: serializeDefinitionMeta(row, current?.version ?? null),
-        current,
+        meta: serializeDefinitionMeta(row),
+        draft: draft?.draft ?? null,
+        layout: row.layout,
+        deployed,
+        current: deployed,
         versions,
       };
     } catch (error) {

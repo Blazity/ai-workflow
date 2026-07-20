@@ -1,11 +1,17 @@
 import { z } from "zod";
 import type {
-  TicketStatusTarget,
+  WorkflowBindingSource,
   WorkflowBlockType,
   WorkflowDefinition,
   WorkflowDefinitionNode,
 } from "@shared/contracts";
-import { BLOCK_TYPE_SPECS, isTriggerBlockType, wirablePorts } from "@shared/contracts";
+import {
+  BLOCK_TYPE_SPECS,
+  FAILURE_PORT,
+  isTriggerBlockType,
+  isWorkflowAddressablePathSegment,
+  wirablePorts,
+} from "@shared/contracts";
 import { parseCondition } from "@shared/conditions";
 import { paramsSchema as prepareWorkspaceParams } from "../workflows/blocks/prepare-workspace.js";
 import { paramsSchema as finalizeWorkspaceParams } from "../workflows/blocks/finalize-workspace.js";
@@ -19,9 +25,29 @@ import { paramsSchema as postPrCommentParams } from "../workflows/blocks/post-pr
 import { paramsSchema as humanQuestionParams } from "../workflows/blocks/human-question.js";
 import { paramsSchema as arthurInjectionCheckParams } from "../workflows/blocks/arthur-injection-check.js";
 import { paramsSchema as sendPlanApprovalParams } from "../workflows/blocks/send-plan-approval.js";
+import {
+  buildWorkflowBindingGraphContext,
+  isSafeWorkflowInputName,
+  isWorkflowBindingSource,
+  validateWorkflowBindings,
+  type WorkflowBindingGraphContext,
+} from "./bindings.js";
+import {
+  resolveWorkflowBlockContract,
+  workflowBlockDefinitionIssue,
+  type WorkflowBlockRegistryContext,
+} from "./block-registry.js";
 
 const nodeId = z.string().trim().min(1);
 const coordinate = z.number().finite();
+const bindingSource = z.custom<WorkflowBindingSource>(
+  (source) => typeof source === "string" && isWorkflowBindingSource(source),
+  { message: "Binding source must start with trigger.*, steps.<nodeId>.output.*, or run.*." },
+);
+const bindingInputName = z.custom<string>(
+  (name) => typeof name === "string" && isSafeWorkflowInputName(name),
+  { message: "Input name contains an empty or unsafe path segment." },
+);
 
 const promptSourceRefSchema = z
   .object({
@@ -37,6 +63,7 @@ const baseNodeFields = {
   x: coordinate,
   y: coordinate,
   promptRefs: z.record(z.string().min(1).max(64), promptSourceRefSchema).optional(),
+  inputs: z.record(bindingInputName, bindingSource).default({}),
 };
 
 const emptyParams = z.object({}).strict();
@@ -49,16 +76,9 @@ const agentParams = z
   .strict();
 
 const vcsProviders = z.enum(["github", "gitlab"]);
+const vcsProviderSelection = z.array(vcsProviders).min(1);
 const reviewStates = z.enum(["changes_requested", "commented"]);
-
-// Mirrors TicketStatusTarget: the Record makes a domain value added or dropped a
-// build error here, so the accepted targets cannot drift from the ones the
-// editor offers (buildWorkflowEditorOptions) or the runtime honours
-// (resolveTicketMoveTarget).
-const ticketStatusTargets = {
-  ai_review: "ai_review",
-  backlog: "backlog",
-} as const satisfies Record<TicketStatusTarget, TicketStatusTarget>;
+const prTriggerScope = z.enum(["workflow_owned", "any"]);
 
 const triggerNode = z
   .object({ ...baseNodeFields, type: z.literal("trigger_ticket_ai"), params: emptyParams })
@@ -74,8 +94,8 @@ const triggerPrCreatedNode = z
     type: z.literal("trigger_pr_created"),
     params: z
       .object({
-        providers: z.array(vcsProviders).default(["github", "gitlab"]),
-        onlyWorkflowOwned: z.boolean().default(true),
+        providers: vcsProviderSelection.default(["github", "gitlab"]),
+        scope: prTriggerScope.default("workflow_owned"),
       })
       .strict(),
   })
@@ -86,12 +106,26 @@ const triggerPrChecksFailedNode = z
     ...baseNodeFields,
     type: z.literal("trigger_pr_checks_failed"),
     params: z
-      .object({ providers: z.array(vcsProviders).default(["github", "gitlab"]) })
+      .object({
+        providers: vcsProviderSelection.default(["github", "gitlab"]),
+        scope: prTriggerScope.default("workflow_owned"),
+        checkNames: z.array(z.string().trim().min(1).max(255)).max(100).default([]),
+        githubAppSlugs: z
+          .array(z.string().trim().min(1).max(100))
+          .min(1)
+          .max(20)
+          .default(["github-actions"]),
+        gitlabPipelineSources: z
+          .array(z.string().trim().min(1).max(100))
+          .min(1)
+          .max(20)
+          .default(["merge_request_event"]),
+      })
       .strict(),
   })
   .strict();
 
-// on: which submitted review states may trigger a run. Defaults to
+// on: which submitted review states may trigger a run. Defaults to GitHub
 // ["changes_requested"] only — a "commented" review carries an untrusted body
 // that fix_agent would feed to a full-permission agent, so operators must opt in
 // to "commented" explicitly.
@@ -101,8 +135,22 @@ const triggerPrReviewNode = z
     type: z.literal("trigger_pr_review"),
     params: z
       .object({
-        providers: z.array(vcsProviders).default(["github"]),
-        on: z.array(reviewStates).default(["changes_requested"]),
+        providers: vcsProviderSelection.default(["github"]),
+        on: z.array(reviewStates).min(1).default(["changes_requested"]),
+        scope: prTriggerScope.default("workflow_owned"),
+      })
+      .strict(),
+  })
+  .strict();
+
+const triggerPrMergedNode = z
+  .object({
+    ...baseNodeFields,
+    type: z.literal("trigger_pr_merged"),
+    params: z
+      .object({
+        providers: vcsProviderSelection.default(["github", "gitlab"]),
+        scope: prTriggerScope.default("workflow_owned"),
       })
       .strict(),
   })
@@ -138,7 +186,7 @@ const updateTicketStatusNode = z
   .object({
     ...baseNodeFields,
     type: z.literal("update_ticket_status"),
-    params: z.object({ target: z.nativeEnum(ticketStatusTargets) }).strict(),
+    params: z.object({ target: z.string().trim().min(1).max(200) }).strict(),
   })
   .strict();
 
@@ -242,6 +290,7 @@ const nodeSchema = z.discriminatedUnion("type", [
   triggerPrCreatedNode,
   triggerPrChecksFailedNode,
   triggerPrReviewNode,
+  triggerPrMergedNode,
   planningNode,
   implementationNode,
   reviewNode,
@@ -279,16 +328,326 @@ const edgeSchema = z
 // fixpoint is O(N^2*E) and copies the node universe per node.
 const MAX_NODES = 200;
 const MAX_EDGES = 400;
+const executionBudgetsSchema = z
+  .object({
+    maxDurationMs: z.number().int().positive().optional(),
+    maxTokens: z.number().int().positive().optional(),
+    maxCostUsd: z.number().finite().positive().optional(),
+  })
+  .strict();
 
 export const workflowDefinitionSchema = z
   .object({
     schemaVersion: z.literal(1),
+    budgets: executionBudgetsSchema.optional(),
     nodes: z.array(nodeSchema).max(MAX_NODES, `Workflow cannot have more than ${MAX_NODES} blocks.`),
     edges: z
       .array(edgeSchema)
       .max(MAX_EDGES, `Workflow cannot have more than ${MAX_EDGES} connections.`),
   })
   .strict();
+
+// Ordinary version reads deliberately do not apply current block-param or
+// graph rules: operators must be able to open and repair an old invalid graph.
+// This narrower schema validates only the stable persisted envelope and
+// performs deterministic shape upgrades such as adding node.inputs.
+const storedWorkflowParamValue = z.union([
+  z.string(),
+  z.number(),
+  z.boolean(),
+  z.array(z.string()),
+]);
+type StoredWorkflowBlockType = WorkflowBlockType | "arthur_trace";
+
+const storedWorkflowBlockType = z.custom<StoredWorkflowBlockType>(
+  (type) =>
+    type === "arthur_trace" ||
+    (typeof type === "string" && Object.prototype.hasOwnProperty.call(BLOCK_TYPE_SPECS, type)),
+  { message: "Unknown workflow block type." },
+);
+const storedWorkflowNode = z
+  .object({
+    id: nodeId,
+    type: storedWorkflowBlockType,
+    name: z.string().optional(),
+    x: coordinate,
+    y: coordinate,
+    params: z.record(storedWorkflowParamValue),
+    inputs: z.record(bindingInputName, bindingSource).optional(),
+  })
+  .passthrough();
+const storedWorkflowDefinition = z
+  .object({
+    schemaVersion: z.literal(1),
+    budgets: executionBudgetsSchema.optional(),
+    nodes: z.array(storedWorkflowNode),
+    edges: z.array(edgeSchema),
+  })
+  .passthrough();
+
+function legacyFinalizeIdBase(openPrId: string): string {
+  const safeOpenPrId = openPrId
+    .replace(/[^A-Za-z0-9_-]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return `${safeOpenPrId || "open-pr"}-finalize`;
+}
+
+function insertLegacyOpenPrFinalizers(
+  nodes: WorkflowDefinitionNode[],
+  edges: WorkflowDefinition["edges"],
+): { nodes: WorkflowDefinitionNode[]; edges: WorkflowDefinition["edges"] } {
+  const usedIds = new Set(nodes.map((node) => node.id));
+  const finalizeByOpenPr = new Map<string, string>();
+  const upgradedNodes: WorkflowDefinitionNode[] = [];
+
+  for (const node of nodes) {
+    if (
+      node.type !== "open_pr" ||
+      Object.prototype.hasOwnProperty.call(node.inputs, "repositories")
+    ) {
+      upgradedNodes.push(node);
+      continue;
+    }
+
+    const base = legacyFinalizeIdBase(node.id);
+    let finalizeId = base;
+    for (let suffix = 2; usedIds.has(finalizeId); suffix += 1) {
+      finalizeId = `${base}-${suffix}`;
+    }
+    usedIds.add(finalizeId);
+    finalizeByOpenPr.set(node.id, finalizeId);
+    upgradedNodes.push(
+      {
+        id: finalizeId,
+        type: "finalize_workspace",
+        x: node.x - 220,
+        y: node.y,
+        params: {},
+        inputs: {},
+      },
+      {
+        ...node,
+        inputs: {
+          ...node.inputs,
+          repositories: `steps.${finalizeId}.output.repositories`,
+        },
+      },
+    );
+  }
+
+  if (finalizeByOpenPr.size === 0) return { nodes, edges };
+  return {
+    nodes: upgradedNodes,
+    edges: [
+      ...edges.map((edge) => {
+        const finalizeId = finalizeByOpenPr.get(edge.to);
+        return finalizeId ? { ...edge, to: finalizeId } : edge;
+      }),
+      ...[...finalizeByOpenPr].map(([openPrId, finalizeId]) => ({
+        from: finalizeId,
+        to: openPrId,
+      })),
+    ],
+  };
+}
+
+export function upgradeStoredWorkflowDefinition(raw: unknown): WorkflowDefinition {
+  const parsed = storedWorkflowDefinition.parse(raw);
+  const storedNodeById = new Map(parsed.nodes.map((node) => [node.id, node]));
+  const retiredNodeIds = new Set(
+    parsed.nodes.filter((node) => node.type === "arthur_trace").map((node) => node.id),
+  );
+
+  const resolveNormalTargets = (nodeId: string, seen: Set<string>): string[] => {
+    if (!retiredNodeIds.has(nodeId)) return [nodeId];
+    if (seen.has(nodeId)) return [];
+
+    const nextSeen = new Set(seen).add(nodeId);
+    return parsed.edges
+      .filter(
+        (edge) =>
+          edge.from === nodeId && (edge.fromPort === undefined || edge.fromPort === "out"),
+      )
+      .flatMap((edge) => resolveNormalTargets(edge.to, nextSeen));
+  };
+
+  const edges = parsed.edges.flatMap((edge) => {
+    if (retiredNodeIds.has(edge.from)) return [];
+    return resolveNormalTargets(edge.to, new Set()).map((to) => ({
+      from: edge.from,
+      to,
+      ...(edge.fromPort === undefined ? {} : { fromPort: edge.fromPort }),
+    }));
+  });
+
+  const nodes: WorkflowDefinitionNode[] = [];
+  const requiredChecksByFinalize = new Map<string, string[]>();
+  for (const node of parsed.nodes) {
+    if (node.type === "arthur_trace") continue;
+    const params = { ...node.params };
+    const inputs = { ...(node.inputs ?? {}) };
+    if (node.type === "generic_agent" && params.workspaceMode === undefined) {
+      params.workspaceMode = "read_write";
+    }
+    if (
+      node.type === "trigger_pr_created" ||
+      node.type === "trigger_pr_checks_failed" ||
+      node.type === "trigger_pr_review" ||
+      node.type === "trigger_pr_merged"
+    ) {
+      if (params.scope !== "workflow_owned" && params.scope !== "any") {
+        params.scope = params.onlyWorkflowOwned === false ? "any" : "workflow_owned";
+      }
+      delete params.onlyWorkflowOwned;
+    }
+    if (
+      node.type === "trigger_pr_review" &&
+      Array.isArray(params.on) &&
+      params.on.length === 0
+    ) {
+      params.on = ["changes_requested"];
+    }
+    if (node.type === "send_plan_approval") {
+      const sourceId = params.planFromStep;
+      if (typeof sourceId === "string" && sourceId.length > 0) {
+        inputs.plan ??= `steps.${sourceId}.output.plan`;
+      }
+      delete params.planFromStep;
+    }
+    if (node.type === "arthur_injection_check") {
+      delete params.legacyContentFromStep;
+      const sourceId = params.contentFromStep;
+      if (typeof sourceId === "string" && sourceId.length > 0 && inputs.content === undefined) {
+        const sourceNode = storedNodeById.get(sourceId);
+        const sourceType = sourceNode?.type;
+        const declaredOutputSchema = sourceNode?.params.outputSchema;
+        const usesDeclaredOutputSchema =
+          (sourceType === "generic_agent" || sourceType === "call_llm") &&
+          typeof declaredOutputSchema === "string" &&
+          declaredOutputSchema.trim().length > 0;
+        const field =
+          sourceType === "planning_agent"
+            ? "plan"
+            : sourceType === "generic_agent" && !usesDeclaredOutputSchema
+              ? "body"
+              : sourceType === "call_llm" && !usesDeclaredOutputSchema
+                ? "output"
+                : null;
+        if (field) {
+          inputs.content = `steps.${sourceId}.output.${field}`;
+        }
+      }
+      delete params.contentFromStep;
+    }
+    if (node.type === "finalize_workspace") {
+      const requiredChecks = params.requiredChecks;
+      if (Array.isArray(requiredChecks)) {
+        requiredChecksByFinalize.set(node.id, requiredChecks);
+      }
+      delete params.requiredChecks;
+    }
+    nodes.push({
+      id: node.id,
+      type: node.type,
+      ...(node.name === undefined ? {} : { name: node.name }),
+      x: node.x,
+      y: node.y,
+      params,
+      inputs,
+    });
+  }
+
+  const nodeById = new Map(nodes.map((node) => [node.id, node]));
+  const normalPredecessors = new Map<string, string[]>();
+  for (const edge of edges) {
+    if (edge.fromPort !== undefined && edge.fromPort !== "out") continue;
+    const predecessors = normalPredecessors.get(edge.to) ?? [];
+    predecessors.push(edge.from);
+    normalPredecessors.set(edge.to, predecessors);
+  }
+  const onlyNormalPredecessor = (nodeId: string): WorkflowDefinitionNode | undefined => {
+    const predecessors = normalPredecessors.get(nodeId) ?? [];
+    return predecessors.length === 1 ? nodeById.get(predecessors[0]) : undefined;
+  };
+  const canonicalBindingNodes = nodes.map((node): WorkflowDefinitionNode => {
+    const predecessor = onlyNormalPredecessor(node.id);
+    if (node.type === "planning_agent" && predecessor?.type === "trigger_ticket_ai") {
+      return {
+        ...node,
+        inputs: {
+          ticket: "trigger.ticket",
+          comments: "trigger.comments",
+          priorAnswers: "trigger.priorAnswers",
+          ...node.inputs,
+        },
+      };
+    }
+    if (node.type !== "implementation_agent") return node;
+
+    if (predecessor?.type === "trigger_plan_approved") {
+      return {
+        ...node,
+        inputs: {
+          ticket: "trigger.ticket",
+          plan: "trigger.approvedPlan",
+          ...node.inputs,
+        },
+      };
+    }
+    if (predecessor?.type !== "planning_agent") return node;
+
+    const planningTrigger = onlyNormalPredecessor(predecessor.id);
+    return {
+      ...node,
+      inputs: {
+        ...(planningTrigger?.type === "trigger_ticket_ai"
+          ? { ticket: "trigger.ticket" as const }
+          : {}),
+        plan: `steps.${predecessor.id}.output.plan`,
+        ...node.inputs,
+      },
+    };
+  });
+
+  const publicationUpgraded = insertLegacyOpenPrFinalizers(canonicalBindingNodes, edges);
+  const intermediate: WorkflowDefinition = {
+    schemaVersion: 1,
+    nodes: publicationUpgraded.nodes,
+    edges: publicationUpgraded.edges,
+  };
+  const graphContext = buildWorkflowBindingGraphContext(intermediate);
+  const upgradedNodes = publicationUpgraded.nodes.map((node): WorkflowDefinitionNode => {
+    if (node.type !== "finalize_workspace") return node;
+
+    const params = { ...node.params };
+    const inputs = { ...node.inputs };
+    delete params.legacyRequiredChecks;
+
+    for (const sourceId of requiredChecksByFinalize.get(node.id) ?? []) {
+      const inputName = `checks.${sourceId}`;
+      const source = `steps.${sourceId}.output.status`;
+      const canBind =
+        sourceId !== node.id &&
+        graphContext.nodeById.has(sourceId) &&
+        (graphContext.dominators.get(node.id)?.has(sourceId) ?? false) &&
+        isSafeWorkflowInputName(inputName) &&
+        isWorkflowBindingSource(source) &&
+        (inputs[inputName] === undefined || inputs[inputName] === source);
+      if (canBind) {
+        inputs[inputName] ??= source;
+      }
+    }
+
+    return { ...node, params, inputs };
+  });
+
+  return {
+    schemaVersion: 1,
+    ...(parsed.budgets === undefined ? {} : { budgets: parsed.budgets }),
+    nodes: upgradedNodes,
+    edges: publicationUpgraded.edges,
+  };
+}
 
 type AssertAssignable<T extends WorkflowDefinition> = T;
 export type WorkflowDefinitionGuard = AssertAssignable<z.infer<typeof workflowDefinitionSchema>>;
@@ -472,7 +831,10 @@ function computeDominators(
   return dominators;
 }
 
-export function validateWorkflowGraph(def: WorkflowDefinition): string[] {
+export function validateWorkflowGraph(
+  def: WorkflowDefinition,
+  bindingGraphContext?: WorkflowBindingGraphContext,
+): string[] {
   const issues: string[] = [];
   const { nodes, edges } = def;
 
@@ -634,6 +996,15 @@ export function validateWorkflowGraph(def: WorkflowDefinition): string[] {
   for (const component of stronglyConnectedComponents(forward, nodeIds)) {
     if (component.length <= 1) continue;
     const loopCount = component.filter((id) => nodeById.get(id)?.type === "loop").length;
+    if (loopCount > 0) {
+      for (const finalizeId of component.filter(
+        (id) => nodeById.get(id)?.type === "finalize_workspace",
+      )) {
+        issues.push(
+          `Finalize Workspace block "${finalizeId}" cannot execute inside a Loop cycle.`,
+        );
+      }
+    }
     if (loopCount >= 2) {
       const rendered = component.map((id) => `"${id}"`).join(", ");
       issues.push(
@@ -642,11 +1013,24 @@ export function validateWorkflowGraph(def: WorkflowDefinition): string[] {
     }
   }
 
-  const dominators = computeDominators(
-    triggerNodes.map((node) => node.id),
-    reachable,
-    reverse,
-  );
+  const finalizeNodes = nodes.filter((node) => node.type === "finalize_workspace");
+  for (const finalize of finalizeNodes) {
+    const downstream = reachableFrom(forward.get(finalize.id) ?? [], forward);
+    for (const laterFinalize of finalizeNodes) {
+      if (laterFinalize.id === finalize.id || !downstream.has(laterFinalize.id)) continue;
+      issues.push(
+        `Finalize Workspace block "${finalize.id}" can reach Finalize Workspace block "${laterFinalize.id}"; a workflow path may publish at most once.`,
+      );
+    }
+  }
+
+  const dominators =
+    bindingGraphContext?.dominators ??
+    computeDominators(
+      triggerNodes.map((node) => node.id),
+      reachable,
+      reverse,
+    );
   for (const node of nodes) {
     if (node.type !== "branch") continue;
     const condition = node.params.condition;
@@ -672,36 +1056,208 @@ export function validateWorkflowGraph(def: WorkflowDefinition): string[] {
     }
   }
 
-  // Step-reference params (send_plan_approval.planFromStep,
-  // arthur_injection_check.contentFromStep) must name a block that exists and
-  // that dominates the referencing block, so the referenced output is always
-  // produced before it is read. Reuses the same dominator set as branches.
-  const stepRefParams: Partial<Record<WorkflowBlockType, string>> = {
-    send_plan_approval: "planFromStep",
-    arthur_injection_check: "contentFromStep",
-  };
-  for (const node of nodes) {
-    const paramKey = stepRefParams[node.type];
-    if (!paramKey) continue;
-    if (!reachable.has(node.id)) continue;
-    const raw = node.params[paramKey];
-    if (typeof raw !== "string") continue;
-    const ref = raw.trim();
-    if (ref === "") continue;
-    if (ref === node.id) {
-      issues.push(`Block "${node.id}" cannot reference itself in ${paramKey}.`);
-      continue;
-    }
-    if (!nodeById.has(ref)) {
-      issues.push(`Block "${node.id}" references unknown block "${ref}" in ${paramKey}.`);
-      continue;
-    }
-    if (!(dominators.get(node.id)?.has(ref) ?? false)) {
+  return issues;
+}
+
+/** Validation required before a definition may become executable. Draft saves
+ * use `workflowDefinitionSchema` plus `validateWorkflowGraph` only so an
+ * operator can keep editing a structurally sound but incomplete graph. */
+export function validateWorkflowDefinitionForDeployment(
+  def: WorkflowDefinition,
+  registryContext: WorkflowBlockRegistryContext,
+  options: {
+    allowLegacyCompatibility?: boolean;
+    checkEnvironmentAvailability?: boolean;
+  } = {},
+): string[] {
+  const graphContext = buildWorkflowBindingGraphContext(def);
+  const issues = [
+    ...validateWorkflowGraph(def, graphContext),
+    ...validateWorkflowBindings(def, registryContext, graphContext),
+    ...validateStaticFallbackInputs(def),
+    // Existing deployed snapshots predate workspace-capability validation.
+    // Keep those snapshots loadable; the affected executors still fail closed
+    // before side effects when no workspace exists. New deployments retain the
+    // strict producer requirement through the default validation path.
+    ...(options.allowLegacyCompatibility
+      ? []
+      : validateWorkspaceCapabilities(def, graphContext)),
+    ...validateAnyScopeReviewSafety(def),
+  ];
+  for (const node of def.nodes) {
+    if (!isWorkflowAddressablePathSegment(node.id)) {
       issues.push(
-        `Block "${node.id}" ${paramKey} references block "${ref}" which does not run before it.`,
+        `Block id "${node.id}" is not addressable; use a letter or underscore followed by letters, numbers, underscores, or hyphens.`,
+      );
+    }
+    if (
+      node.type === "trigger_pr_checks_failed" &&
+      !(Array.isArray(node.params.checkNames) && node.params.checkNames.length > 0)
+    ) {
+      issues.push(
+        `Block "${node.id}" (trigger_pr_checks_failed) must configure at least one exact CI check name before deployment.`,
+      );
+    }
+    const definitionIssue = workflowBlockDefinitionIssue(node.type, node.params);
+    if (definitionIssue) {
+      issues.push(
+        `Block "${node.id}" (${node.type}) is unavailable: ${definitionIssue}`,
+      );
+    } else if (options.checkEnvironmentAvailability !== false) {
+      const availability = resolveWorkflowBlockContract(
+        node.type,
+        node.params,
+        registryContext,
+      ).availability;
+      if (!availability.available) {
+        issues.push(
+          `Block "${node.id}" (${node.type}) is unavailable: ${availability.unavailableReason}`,
+        );
+      }
+    }
+  }
+  return [...new Set(issues)];
+}
+
+const STATIC_FALLBACK_INPUTS = {
+  call_llm: "prompt",
+  generic_agent: "prompt",
+  post_ticket_comment: "body",
+  post_pr_comment: "body",
+} as const satisfies Partial<Record<WorkflowBlockType, string>>;
+
+function validateStaticFallbackInputs(def: WorkflowDefinition): string[] {
+  const issues: string[] = [];
+  for (const node of def.nodes) {
+    const inputName = STATIC_FALLBACK_INPUTS[node.type as keyof typeof STATIC_FALLBACK_INPUTS];
+    if (inputName === undefined) continue;
+    const staticValue = node.params[inputName];
+    const hasStaticValue = typeof staticValue === "string" && staticValue.trim().length > 0;
+    const hasBinding = Object.prototype.hasOwnProperty.call(node.inputs, inputName);
+    if (!hasStaticValue && !hasBinding) {
+      issues.push(
+        `Block "${node.id}" (${node.type}) requires either a non-empty "${inputName}" parameter or a compatible "${inputName}" input binding.`,
       );
     }
   }
+  return issues;
+}
 
+const WORKSPACE_PRODUCERS = new Set<WorkflowBlockType>([
+  "prepare_workspace",
+  "implementation_agent",
+  "review_agent",
+  "fix_agent",
+]);
+
+function requiresWorkspaceProducer(node: WorkflowDefinitionNode): boolean {
+  return (
+    node.type === "run_checks" ||
+    node.type === "run_pre_pr_checks" ||
+    node.type === "finalize_workspace" ||
+    (node.type === "generic_agent" && node.params.workspaceMode !== "none")
+  );
+}
+
+function validateWorkspaceCapabilities(
+  def: WorkflowDefinition,
+  graphContext: WorkflowBindingGraphContext,
+): string[] {
+  const issues: string[] = [];
+  for (const consumer of def.nodes) {
+    if (!requiresWorkspaceProducer(consumer)) continue;
+    const dominators = graphContext.dominators.get(consumer.id);
+    const hasGuaranteedProducer = def.nodes.some((producer) => {
+      if (!WORKSPACE_PRODUCERS.has(producer.type) || !dominators?.has(producer.id)) return false;
+      const pathsToConsumer = (graphContext.outgoing.get(producer.id) ?? []).filter(({ to }) =>
+        graphContext.reachableFromNode.get(to)?.has(consumer.id),
+      );
+      return pathsToConsumer.length > 0 && pathsToConsumer.every(({ port }) => port !== FAILURE_PORT);
+    });
+    if (!hasGuaranteedProducer) {
+      issues.push(
+        `Block "${consumer.id}" (${consumer.type}) requires a workspace-producing block to run before it on every path.`,
+      );
+    }
+  }
+  return issues;
+}
+
+/**
+ * Arbitrary-provider PR subjects have no trusted ticket or owned workspace.
+ * They may materialize a checkout for review, but repository-owned commands
+ * must never run in the credential-bearing agent sandbox.
+ * This same function is called at runtime so definitions deployed before this
+ * rule fail closed instead of gaining mutation privileges.
+ */
+export const ANY_SCOPE_BLOCK_POLICY = {
+  trigger_ticket_ai: "deny",
+  trigger_plan_approved: "deny",
+  trigger_pr_created: "entry",
+  trigger_pr_checks_failed: "entry",
+  trigger_pr_review: "entry",
+  trigger_pr_merged: "entry",
+  planning_agent: "deny",
+  implementation_agent: "deny",
+  review_agent: "safe",
+  fix_agent: "deny",
+  generic_agent: "deny",
+  prepare_workspace: "safe",
+  finalize_workspace: "deny",
+  run_pre_pr_checks: "deny",
+  run_checks: "deny",
+  call_llm: "safe",
+  fetch_pr_context: "safe",
+  open_pr: "deny",
+  update_ticket_status: "deny",
+  post_ticket_comment: "deny",
+  post_pr_comment: "safe",
+  send_slack_message: "deny",
+  send_plan_approval: "deny",
+  human_question: "deny",
+  // Guardrail classification is explicit: it inspects content and returns a
+  // verdict, but owns no ticket/workspace/branch mutation.
+  arthur_injection_check: "safe",
+  branch: "safe",
+  loop: "safe",
+  terminate: "deny",
+} as const satisfies Record<WorkflowBlockType, "entry" | "safe" | "deny">;
+
+export function validateAnyScopeReviewSafety(def: WorkflowDefinition): string[] {
+  const nodes = new Map(def.nodes.map((node) => [node.id, node]));
+  const outgoing = new Map<string, string[]>();
+  for (const edge of def.edges) {
+    const targets = outgoing.get(edge.from);
+    if (targets) targets.push(edge.to);
+    else outgoing.set(edge.from, [edge.to]);
+  }
+
+  const issues: string[] = [];
+  for (const trigger of def.nodes) {
+    if (
+      (trigger.type !== "trigger_pr_created" &&
+        trigger.type !== "trigger_pr_checks_failed" &&
+        trigger.type !== "trigger_pr_review" &&
+        trigger.type !== "trigger_pr_merged") ||
+      trigger.params.scope !== "any"
+    ) {
+      continue;
+    }
+    const seen = new Set<string>([trigger.id]);
+    const queue = [...(outgoing.get(trigger.id) ?? [])];
+    for (let index = 0; index < queue.length; index += 1) {
+      const id = queue[index];
+      if (seen.has(id)) continue;
+      seen.add(id);
+      const node = nodes.get(id);
+      if (!node) continue;
+      if (ANY_SCOPE_BLOCK_POLICY[node.type] !== "safe") {
+        issues.push(
+          `scope:any trigger "${trigger.id}" reaches unsafe block "${node.id}" (${node.type}).`,
+        );
+      }
+      queue.push(...(outgoing.get(id) ?? []));
+    }
+  }
   return issues;
 }

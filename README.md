@@ -243,13 +243,13 @@ A **commit-guard stop hook** (toggled per phase via `setCommitGuardStep`) blocks
 
 ai workflow pushes from **inside the sandbox**, but only after the agent process has exited. The flow in [`apps/worker/src/sandbox/poll-agent.ts`](./apps/worker/src/sandbox/poll-agent.ts):
 
-1. **Read the workspace manifest** — `/vercel/sandbox/aiw-repos.json` lists each selected repository, its local path, branch name, and pre-agent SHA.
-2. **Verify commits exist per repository** — compare each saved `preAgentSha` to that repository's current `HEAD`. Unchanged repositories are skipped; if none changed, the workflow fails the run with "Agent reported success but made no commits."
-3. **Inject the token per push** — the token is passed as an `http.extraHeader` authorization header on the push command itself, never written to the remote URL or disk. The agent process is already dead at this point and never sees the token; after a successful push, `origin` is reset to the token-less clone URL.
-4. **Unshallow if needed** — shallow clones miss shared ancestry with the base branch, which breaks PR/MR creation.
-5. **Push changed repositories** — `git -C <repo> push --force origin HEAD:refs/heads/{branch}`. Force-push is scoped to workflow-owned `blazebot/*` branches.
+1. **Read the workspace manifest** — `/vercel/sandbox/aiw-repos.json` lists each selected repository, its local path, branch name, pre-agent SHA, and the remote head observed when the workspace was prepared.
+2. **Preflight every repository** — require a clean tracked, staged, untracked, and conflict-free worktree, then compare each saved `preAgentSha` to its current `HEAD`. No repository is pushed unless every repository passes.
+3. **Re-read remote state** — fetch each workflow branch, reject source-PR or remote-head drift, and durably record the exact expected remote SHA plus the local target SHA before the first push.
+4. **Inject the token per push** — the token is passed as an `http.extraHeader` authorization header on the push command itself, never written to the remote URL or disk. The agent process is already dead at this point and never sees the token; after a successful push, `origin` is reset to the token-less clone URL.
+5. **Push changed repositories with an exact lease** — `git -C <repo> push --force-with-lease=refs/heads/{branch}:{expectedSha} origin HEAD:refs/heads/{branch}`.
 
-If a push fails, `fixAndRetryWorkspacePush` re-invokes the agent with a fix prompt (fix and commit, no push) and retries the push once.
+Remote drift, lease rejection, and other push failures are terminal; the agent is not asked to rewrite the push. Finalize Workspace emits the exact finalized branch metadata directly to Open PR/MR. Workflow step retries are safe because the publisher recognizes the exact target head and every mutation uses an exact lease; a partial publication creates no PRs and cannot be reported as success.
 
 #### How PRs are created
 

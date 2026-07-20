@@ -15,6 +15,7 @@ test("compact prompt field does not duplicate live reference cards", () => {
     x: 0,
     y: 0,
     params: { prompt: "{{prompt:7}}" },
+    inputs: {},
   };
   const html = renderToStaticMarkup(
     <PromptField

@@ -1,18 +1,56 @@
 import { start } from "workflow/api";
+import type { VcsProviderKind } from "@shared/contracts";
+import { getVcsBotLogin } from "../../env.js";
 import type { Db } from "../db/client.js";
+import {
+  IssueTrackerNotFoundError,
+  type IssueTrackerAdapter,
+} from "../adapters/issue-tracker/types.js";
 import type { RunRegistryAdapter } from "../adapters/run-registry/types.js";
-import type { AgentWorkflowInput } from "../workflows/agent-input.js";
+import type {
+  LatestCheckRun,
+  PullRequestHead,
+} from "../adapters/vcs/types.js";
+import type { AgentWorkflowInput, PrTriggerPayload } from "../workflows/agent-input.js";
 import { agentWorkflow } from "../workflows/agent.js";
+import {
+  bindWorkflowOwnedPullRequestIntent,
+  findWorkflowOwnedPullRequest,
+  findWorkflowOwnedPullRequestIntent,
+} from "../db/queries/workflow-owned-branches.js";
 import { getEnabledWorkflowDefinitionForTrigger } from "../workflow-definition/store.js";
-import { ticketKeyFromBranch } from "./branch-prefix.js";
-import { claimTicketRun } from "./dispatch.js";
+import { createAdapters } from "./adapters.js";
+import { claimSubjectRun } from "./dispatch.js";
 import { logger } from "./logger.js";
+import { isRepoAllowed } from "./repo-allowlist.js";
+import { prSubjectKey, ticketSubjectKey } from "./subject-key.js";
+import {
+  acceptTriggerDelivery,
+  coalescePendingTrigger,
+  completeTriggerDelivery,
+  deletePendingTrigger,
+  getTriggerDelivery,
+  listPendingTriggersForSubject,
+  recordCandidateStartedTriggerDelivery,
+  type AcceptedTriggerDelivery,
+  type StoredTriggerResult,
+  type TriggerScope,
+} from "./trigger-delivery-store.js";
 import type { TriggerEvent } from "./trigger-events.js";
+import {
+  bindCurrentPullRequest,
+  readProviderCurrentPullRequest,
+} from "./trigger-current-pull-request.js";
+import { normalizeVcsLogin, vcsLoginsMatch } from "./vcs-bot-identity.js";
 
 export type DispatchTriggerResult =
   | { result: "no_definition" }
   | { result: "ignored_not_workflow_owned" }
   | { result: "ignored_provider" }
+  | { result: "ignored_producer" }
+  | { result: "ignored_stale_head" }
+  | { result: "ignored_untrusted_event" }
+  | { result: "ignored_malformed_delivery" }
   | { result: "coalesced" }
   | { result: "at_capacity" }
   | { result: "error" }
@@ -22,118 +60,542 @@ export interface DispatchTriggerDeps {
   db: Db;
   runRegistry: RunRegistryAdapter;
   maxConcurrentAgents: number;
+  issueTracker?: IssueTrackerAdapter;
+  getCurrentHead?: (pr: PrTriggerPayload) => Promise<string>;
+  getCurrentPullRequest?: (pr: PrTriggerPayload) => Promise<PullRequestHead>;
+  getLatestCheckRuns?: (pr: PrTriggerPayload) => Promise<LatestCheckRun[]>;
+  isRepositoryConfigured?: (pr: PrTriggerPayload) => Promise<boolean>;
+  /** Failure-injection seam; production uses deletePendingTrigger. */
+  deletePending?: typeof deletePendingTrigger;
 }
 
-/** Trigger-node params for a given trigger type in an enabled definition, or {}. */
 function triggerNodeParams(
   definition: { nodes: { type: string; params: Record<string, unknown> }[] },
   triggerType: string,
 ): Record<string, unknown> {
-  const node = definition.nodes.find((n) => n.type === triggerType);
-  return node?.params ?? {};
+  return definition.nodes.find((node) => node.type === triggerType)?.params ?? {};
 }
 
-/**
- * Resolve the review states that may fire trigger_pr_review, from the enabled
- * definition's node config. Falls back to the safe default (["changes_requested"])
- * when no definition is enabled or the param is unset — a "commented" review
- * carries an untrusted body and must be opted into explicitly. Used by the GitHub
- * webhook route to gate review events in normalizeGitHubEvent before dispatch.
- */
-export async function resolveEnabledReviewStates(db: Db): Promise<string[]> {
+export async function resolveEnabledReviewStates(
+  db: Db,
+  provider: VcsProviderKind,
+  botLogin: string | undefined,
+): Promise<string[]> {
   const enabled = await getEnabledWorkflowDefinitionForTrigger(db, "trigger_pr_review");
-  if (!enabled?.current) return ["changes_requested"];
-  const on = triggerNodeParams(enabled.current.definition, "trigger_pr_review").on;
-  if (Array.isArray(on) && on.length > 0) {
-    return on.filter((s): s is string => typeof s === "string");
-  }
-  return ["changes_requested"];
+  if (!enabled?.current) return provider === "github" ? ["changes_requested"] : [];
+  const params = triggerNodeParams(enabled.current.definition, "trigger_pr_review");
+  const providers = Array.isArray(params.providers) ? params.providers : ["github"];
+  if (!providers.includes(provider)) return [];
+  return selectedReviewStates(params, provider, botLogin);
 }
 
 export async function dispatchTriggerEvent(
-  evt: TriggerEvent,
+  event: TriggerEvent,
   deps: DispatchTriggerDeps,
 ): Promise<DispatchTriggerResult> {
-  const enabled = await getEnabledWorkflowDefinitionForTrigger(deps.db, evt.triggerType);
-  if (!enabled || !enabled.current) {
-    logger.info({ triggerType: evt.triggerType }, "trigger_no_enabled_definition");
-    return { result: "no_definition" };
+  if (
+    !event.delivery?.deliveryId ||
+    event.delivery.provider !== event.pr.provider ||
+    event.delivery.deliveryId.trim().length === 0
+  ) {
+    return { result: "ignored_malformed_delivery" };
   }
 
-  const params = triggerNodeParams(enabled.current.definition, evt.triggerType);
+  const enabled = await getEnabledWorkflowDefinitionForTrigger(deps.db, event.triggerType);
+  if (!enabled?.current) return { result: "no_definition" };
 
-  // providers gate: dispatch only when the event's provider is in the configured
-  // list. An empty/unset list means "all providers" (back-compat).
+  const params = triggerNodeParams(enabled.current.definition, event.triggerType);
   const providers = params.providers;
-  if (
-    Array.isArray(providers) &&
-    providers.length > 0 &&
-    !providers.includes(evt.pr.provider)
-  ) {
+  if (Array.isArray(providers) && providers.length > 0 && !providers.includes(event.pr.provider)) {
+    return { result: "ignored_provider" };
+  }
+  const scope: TriggerScope = params.scope === "any" ? "any" : "workflow_owned";
+  if (scope === "any" && !isRepoAllowed(event.pr.repoPath)) {
     logger.info(
-      { triggerType: evt.triggerType, provider: evt.pr.provider, providers },
-      "trigger_ignored_provider",
+      { provider: event.pr.provider, repoPath: event.pr.repoPath },
+      "trigger_repo_not_allowed",
     );
     return { result: "ignored_provider" };
   }
 
-  // onlyWorkflowOwned gate (default true): only workflow-owned PRs (branch
-  // resolves to a ticket key via the blazebot/ prefix) may dispatch. When an
-  // operator explicitly opts out (false), a non-workflow-owned PR is allowed
-  // through under a synthetic run key derived from the PR identity.
-  const onlyWorkflowOwned = params.onlyWorkflowOwned !== false;
-  const ticketKey = ticketKeyFromBranch(evt.pr.headRef);
-  let runKey: string;
-  if (ticketKey) {
-    runKey = ticketKey;
-  } else if (onlyWorkflowOwned) {
-    logger.info(
-      { triggerType: evt.triggerType, headRef: evt.pr.headRef },
-      "trigger_ignored_not_workflow_owned",
+  const eligibleEvent = selectEligibleEvent(event, params);
+  if (!eligibleEvent) return { result: "ignored_untrusted_event" };
+
+  try {
+    const repositoryScope = await readRepositoryScope(eligibleEvent.pr, deps);
+    if (repositoryScope.status === "unreachable") return { result: "error" };
+    if (!repositoryScope.configured) return { result: "ignored_provider" };
+
+    const currentResult = await readCurrentPullRequest(eligibleEvent, deps);
+    if (currentResult.status === "unreachable") return { result: "error" };
+    const currentEvent = bindCurrentPullRequest(eligibleEvent, currentResult.current);
+    if (!currentEvent) return { result: "ignored_stale_head" };
+
+    const identity = await resolveSubjectIdentity(currentEvent, scope, deps);
+    if (identity.status === "ignored") return { result: "ignored_not_workflow_owned" };
+    if (identity.status === "pending_correlation" || identity.status === "retryable_error") {
+      return { result: "error" };
+    }
+
+    const accepted: AcceptedTriggerDelivery = {
+      ...currentEvent,
+      scope,
+      subjectKey: identity.subjectKey,
+      ticketKey: identity.ticketKey,
+      definitionId: enabled.definition.id,
+      definitionVersion: enabled.current.version,
+    };
+    const durable = await acceptTriggerDelivery(deps.db, accepted);
+    if (!durable.inserted) {
+      if (durable.stored.result) return storedResultToDispatch(durable.stored.result);
+      if (durable.stored.pending) return { result: "coalesced" };
+    }
+    return await dispatchAcceptedTrigger(durable.stored, deps);
+  } catch (error) {
+    logger.warn(
+      { delivery: event.delivery, error: (error as Error).message },
+      "trigger_delivery_dispatch_failed",
     );
-    return { result: "ignored_not_workflow_owned" };
-  } else {
-    runKey = `pr:${evt.pr.provider}:${evt.pr.repoPath}:${evt.pr.prNumber}`;
-    logger.info(
-      { triggerType: evt.triggerType, headRef: evt.pr.headRef, runKey },
-      "trigger_non_workflow_owned_allowed",
+    return { result: "error" };
+  }
+}
+
+async function readRepositoryScope(
+  pr: PrTriggerPayload,
+  deps: DispatchTriggerDeps,
+): Promise<{ status: "ok"; configured: boolean } | { status: "unreachable" }> {
+  try {
+    const configured = deps.isRepositoryConfigured
+      ? await deps.isRepositoryConfigured(pr)
+      : await isConfiguredTriggerRepository(pr);
+    return { status: "ok", configured };
+  } catch (error) {
+    logger.warn(
+      { provider: pr.provider, repoPath: pr.repoPath, error: (error as Error).message },
+      "trigger_repository_scope_lookup_failed_closed",
+    );
+    return { status: "unreachable" };
+  }
+}
+
+async function isConfiguredTriggerRepository(pr: PrTriggerPayload): Promise<boolean> {
+  if (pr.provider !== "gitlab") return true;
+  const { env, getConfiguredVcsProviders } = await import("../../env.js");
+  if (env.GITLAB_PROJECT_ID) {
+    return (
+      pr.repoPath === env.GITLAB_PROJECT_ID ||
+      String(pr.providerProjectId ?? "") === env.GITLAB_PROJECT_ID
     );
   }
+  const { createRepositoryDirectoryForProviders } = await import(
+    "../adapters/vcs/repository-directory.js"
+  );
+  const providers = getConfiguredVcsProviders().filter(
+    (provider) => provider.kind === "gitlab",
+  );
+  if (providers.length === 0) return false;
+  const repositories = await createRepositoryDirectoryForProviders(
+    providers,
+  ).listRepositories();
+  return repositories.some(
+    (repository) =>
+      repository.provider === "gitlab" && repository.repoPath === pr.repoPath,
+  );
+}
 
-  const definitionId = enabled.definition.id;
-  const input: AgentWorkflowInput = {
-    kind: "pr_trigger",
-    triggerType: evt.triggerType,
-    ticketKey: runKey,
-    definitionId,
-    pr: evt.pr,
+
+function selectEligibleEvent(
+  event: TriggerEvent,
+  params: Record<string, unknown>,
+): TriggerEvent | null {
+  if (event.triggerType === "trigger_pr_review") {
+    const review = event.pr.review;
+    if (!review) return null;
+    const botLogin = getVcsBotLogin(event.pr.provider);
+    if (
+      !selectedReviewStates(params, event.pr.provider, botLogin).includes(review.state) ||
+      vcsLoginsMatch(review.author, botLogin) ||
+      vcsLoginsMatch(event.delivery.producer, botLogin)
+    ) {
+      return null;
+    }
+    return event;
+  }
+
+  if (event.triggerType !== "trigger_pr_checks_failed") return event;
+
+  const checkNames = stringArray(params.checkNames);
+  if (checkNames.length === 0) return null;
+  if (event.pr.provider === "github") {
+    const trustedApps = stringArray(params.githubAppSlugs, ["github-actions"]);
+    if (!trustedApps.includes(event.delivery.producer)) return null;
+  } else {
+    const trustedSources = stringArray(params.gitlabPipelineSources, ["merge_request_event"]);
+    if (!event.delivery.source || !trustedSources.includes(event.delivery.source)) return null;
+  }
+
+  const failedChecks = (event.pr.failedChecks ?? []).filter(
+    (check) => checkNames.includes(check.name),
+  );
+  if (failedChecks.length === 0) return null;
+  return {
+    ...event,
+    pr: { ...event.pr, failedChecks },
   };
+}
 
-  const dispatchResult = await claimTicketRun(
-    runKey,
+function selectedReviewStates(
+  params: Record<string, unknown>,
+  provider: VcsProviderKind,
+  botLogin: string | undefined,
+): string[] {
+  const configuredStates =
+    Array.isArray(params.on) && params.on.length > 0 ? params.on : ["changes_requested"];
+  return configuredStates.filter(
+    (state): state is string =>
+      (state === "changes_requested" && provider === "github") ||
+      (state === "commented" && Boolean(normalizeVcsLogin(botLogin))),
+  );
+}
+
+function stringArray(value: unknown, fallback: string[] = []): string[] {
+  if (!Array.isArray(value)) return fallback;
+  return value.filter((item): item is string => typeof item === "string" && item.length > 0);
+}
+
+async function dispatchAcceptedTrigger(
+  acceptedInput: AcceptedTriggerDelivery,
+  deps: DispatchTriggerDeps,
+  pendingEvent?: {
+    headSha: string;
+    triggerType: AcceptedTriggerDelivery["triggerType"];
+    deliveryId: string;
+  },
+): Promise<DispatchTriggerResult> {
+  const currentResult = await readCurrentPullRequest(acceptedInput, deps);
+  if (currentResult.status === "unreachable") return { result: "error" };
+  const accepted = bindCurrentPullRequest(acceptedInput, currentResult.current);
+  if (!accepted) {
+    await completeDelivery(deps.db, acceptedInput, { result: "ignored_stale_head" });
+    return { result: "ignored_stale_head" };
+  }
+
+  // Persist the exact accepted envelope before a Workflow candidate can be
+  // started. The candidate removes this row only after it wins owner CAS and
+  // binds its runtime id. If start returns but that candidate never reaches
+  // bind, stale-owner reconciliation can therefore recover the same pinned
+  // definition and provider snapshot without waiting for a redelivery.
+  await coalescePendingTrigger(deps.db, accepted);
+
+  const inputBase = {
+    kind: "pr_trigger" as const,
+    triggerType: accepted.triggerType,
+    subjectKey: accepted.subjectKey,
+    ...(accepted.ticketKey ? { ticketKey: accepted.ticketKey } : {}),
+    definitionId: accepted.definitionId,
+    definitionVersion: accepted.definitionVersion,
+    scope: accepted.scope,
+    delivery: accepted.delivery,
+    ...(pendingEvent ? { pendingEvent } : {}),
+    pr: accepted.pr,
+  };
+  const dispatched = await claimSubjectRun(
+    {
+      subjectKey: accepted.subjectKey,
+      ticketKey: accepted.ticketKey,
+      kind: "pr_trigger",
+    },
     deps.runRegistry,
     deps.maxConcurrentAgents,
     {
-      kind: "pr_trigger",
-      startWorkflow: async () => {
+      startWorkflow: async (ownerToken) => {
+        const input: AgentWorkflowInput = { ...inputBase, ownerToken };
         const handle = await start(agentWorkflow, [input]);
-        logger.info(
-          { ticketKey: runKey, definitionId, triggerType: evt.triggerType, runId: handle.runId },
-          "trigger_workflow_started",
-        );
         return handle.runId;
       },
     },
   );
 
-  if (dispatchResult.started) {
-    return { result: "started", runId: dispatchResult.runId! };
+  if (dispatched.started) {
+    const result = { result: "started" as const, runId: dispatched.runId! };
+    const recorded = await recordCandidateStartedTriggerDelivery(
+      deps.db,
+      accepted,
+      dispatched.ownerToken!,
+      dispatched.runId!,
+    );
+    if (recorded) return result;
+
+    // The candidate may have completed freshness validation before start()
+    // returned to this dispatcher, or a newer recovery owner may have won.
+    // Report the durable winner instead of acknowledging the stale candidate.
+    const stored = await getTriggerDelivery(
+      deps.db,
+      accepted.delivery.provider,
+      accepted.delivery.deliveryId,
+    );
+    return storedResultToDispatch(stored?.result ?? null);
   }
-  if (dispatchResult.reason === "already_claimed") {
+
+  if (dispatched.reason === "already_claimed" || dispatched.reason === "at_capacity") {
+    return coalesceOrRecoverStarted(accepted, deps.db);
+  }
+
+  // A start failure is durable too: retain the accepted semantic event for the
+  // owner/reconciliation drain instead of relying on provider retry timing.
+  return coalesceOrRecoverStarted(accepted, deps.db);
+}
+
+async function coalesceOrRecoverStarted(
+  accepted: AcceptedTriggerDelivery,
+  db: Db,
+): Promise<DispatchTriggerResult> {
+  await completeDelivery(db, accepted, { result: "coalesced" });
+
+  // The winning workflow may have bound and self-recorded `started` after this
+  // recovery read began. Preserve that stronger result and remove only this
+  // delivery's pending snapshot; a newer merged delivery has a different CAS
+  // token and remains queued.
+  const stored = await getTriggerDelivery(
+    db,
+    accepted.delivery.provider,
+    accepted.delivery.deliveryId,
+  );
+  if (stored?.result?.result === "started") {
+    await deletePendingTrigger(db, accepted);
+    return stored.result;
+  }
+  if (stored?.result?.result === "candidate_started") {
+    // This dispatch attempt lost owner CAS to the already-recorded candidate.
+    // Keep the durable pending snapshot for that candidate's bind, but report
+    // no new start so poll recovery metrics do not double-count the same run.
     return { result: "coalesced" };
   }
-  if (dispatchResult.reason === "at_capacity") {
-    return { result: "at_capacity" };
+  return { result: "coalesced" };
+}
+
+/** Called only after an owner-matching terminal release returned true. */
+export async function drainOldestPendingTrigger(
+  subjectKey: string,
+  deps: DispatchTriggerDeps,
+): Promise<DispatchTriggerResult | null> {
+  for (const pending of await listPendingTriggersForSubject(deps.db, subjectKey)) {
+    const stored = await getTriggerDelivery(
+      deps.db,
+      pending.delivery.provider,
+      pending.delivery.deliveryId,
+    );
+    if (stored?.result?.result === "started") {
+      await (deps.deletePending ?? deletePendingTrigger)(deps.db, pending).catch((error) => {
+        logger.warn(
+          { subjectKey, error: (error as Error).message },
+          "trigger_stale_started_pending_delete_failed",
+        );
+        return false;
+      });
+      continue;
+    }
+
+    const currentResult = await readCurrentPullRequest(pending, deps);
+    if (currentResult.status === "unreachable") return { result: "error" };
+    const currentPending = bindCurrentPullRequest(pending, currentResult.current);
+    if (!currentPending) {
+      await deletePendingTrigger(deps.db, pending);
+      await completeDelivery(deps.db, pending, { result: "ignored_stale_head" });
+      continue;
+    }
+    const result = await dispatchAcceptedTrigger(currentPending, deps, {
+      headSha: pending.pr.headSha,
+      triggerType: pending.triggerType,
+      deliveryId: pending.delivery.deliveryId,
+    });
+    // Capacity/claim races stay pending. Drain starts at most one successor.
+    return result;
   }
-  return { result: "error" };
+  return null;
+}
+
+async function resolveSubjectIdentity(
+  event: TriggerEvent,
+  scope: TriggerScope,
+  deps: DispatchTriggerDeps,
+): Promise<
+  | {
+      status: "resolved" | "pending_correlation";
+      subjectKey: string;
+      ticketKey: string | null;
+    }
+  | { status: "ignored" }
+  | { status: "retryable_error" }
+> {
+  if (scope === "any") {
+    return {
+      status: "resolved",
+      subjectKey: prSubjectKey(event.pr.provider, event.pr.repoPath, event.pr.prNumber),
+      ticketKey: null,
+    };
+  }
+
+  const correlation = await findWorkflowOwnedPullRequest(deps.db, {
+    provider: event.pr.provider,
+    repoPath: event.pr.repoPath,
+    prNumber: event.pr.prNumber,
+    branchName: event.pr.headRef,
+    publishedHeadSha: event.pr.headSha,
+    baseBranch: event.pr.baseRef,
+  });
+  if (correlation) {
+    return resolveTicketIdentity(correlation.ticketKey, "resolved", deps);
+  }
+
+  const intent = await findWorkflowOwnedPullRequestIntent(deps.db, {
+    provider: event.pr.provider,
+    repoPath: event.pr.repoPath,
+    branchName: event.pr.headRef,
+    publishedHeadSha: event.pr.headSha,
+    baseBranch: event.pr.baseRef,
+  });
+  if (!intent) return { status: "ignored" };
+  if (event.triggerType !== "trigger_pr_created") {
+    return resolveTicketIdentity(intent.ticketKey, "pending_correlation", deps);
+  }
+
+  const bound = await bindWorkflowOwnedPullRequestIntent(deps.db, {
+    ticketKey: intent.ticketKey,
+    provider: event.pr.provider,
+    repoPath: event.pr.repoPath,
+    branchName: event.pr.headRef,
+    publishedHeadSha: event.pr.headSha,
+    baseBranch: event.pr.baseRef,
+    prNumber: event.pr.prNumber,
+    prUrl: event.pr.prUrl,
+  });
+  if (bound) return resolveTicketIdentity(bound.ticketKey, "resolved", deps);
+
+  // The CAS can lose to publication correlation or a newer intent between
+  // lookup and bind. Re-read exact state; never dispatch from the stale
+  // pre-CAS snapshot.
+  const concurrent = await findWorkflowOwnedPullRequest(deps.db, {
+    provider: event.pr.provider,
+    repoPath: event.pr.repoPath,
+    prNumber: event.pr.prNumber,
+    branchName: event.pr.headRef,
+    publishedHeadSha: event.pr.headSha,
+    baseBranch: event.pr.baseRef,
+  });
+  if (concurrent) return resolveTicketIdentity(concurrent.ticketKey, "resolved", deps);
+  const stillPending = await findWorkflowOwnedPullRequestIntent(deps.db, {
+    provider: event.pr.provider,
+    repoPath: event.pr.repoPath,
+    branchName: event.pr.headRef,
+    publishedHeadSha: event.pr.headSha,
+    baseBranch: event.pr.baseRef,
+  });
+  if (!stillPending) return { status: "ignored" };
+  return resolveTicketIdentity(stillPending.ticketKey, "pending_correlation", deps);
+}
+
+async function resolveTicketIdentity(
+  ticketKey: string,
+  status: "resolved" | "pending_correlation",
+  deps: DispatchTriggerDeps,
+): Promise<
+  | {
+      status: "resolved" | "pending_correlation";
+      subjectKey: string;
+      ticketKey: string;
+    }
+  | { status: "ignored" }
+  | { status: "retryable_error" }
+> {
+  try {
+    const issueTracker = deps.issueTracker ?? createAdapters().issueTracker;
+    const ticket = await issueTracker.fetchTicket(ticketKey);
+    if (ticket.identifier.trim().toUpperCase() !== ticketKey.trim().toUpperCase()) {
+      return { status: "ignored" };
+    }
+    return {
+      status,
+      subjectKey: ticketSubjectKey("jira", ticketKey),
+      ticketKey,
+    };
+  } catch (error) {
+    if (error instanceof IssueTrackerNotFoundError) return { status: "ignored" };
+    logger.warn(
+      { ticketKey, error: (error as Error).message },
+      "trigger_ticket_identity_lookup_retryable_failure",
+    );
+    return { status: "retryable_error" };
+  }
+}
+
+async function readCurrentPullRequest(
+  event: Pick<TriggerEvent, "triggerType" | "pr">,
+  deps: DispatchTriggerDeps,
+): Promise<
+  | { status: "ok"; current: PullRequestHead }
+  | { status: "unreachable" }
+> {
+  const { pr } = event;
+  try {
+    let current: PullRequestHead;
+    if (deps.getCurrentPullRequest) {
+      current = await deps.getCurrentPullRequest(pr);
+    } else if (deps.getCurrentHead) {
+      // Legacy test seam: production always uses getPRHead below, which reads
+      // target and lifecycle from the provider together with the head SHA.
+      current = {
+        headSha: await deps.getCurrentHead(pr),
+        baseRef: pr.baseRef,
+        state: event.triggerType === "trigger_pr_merged" ? "merged" : "open",
+      };
+    } else {
+      current = await readProviderCurrentPullRequest(event);
+    }
+    if (pr.provider === "github" && (pr.failedChecks?.length ?? 0) > 0) {
+      const latestCheckRuns =
+        current.latestCheckRuns ??
+        (deps.getLatestCheckRuns
+          ? await deps.getLatestCheckRuns(pr)
+          : null);
+      if (!latestCheckRuns) throw new Error("GitHub latest Check Runs are unavailable");
+      current = { ...current, latestCheckRuns };
+    }
+    return { status: "ok", current };
+  } catch (error) {
+    logger.warn(
+      { provider: pr.provider, repoPath: pr.repoPath, error: (error as Error).message },
+      "trigger_current_head_lookup_failed_closed",
+    );
+    return { status: "unreachable" };
+  }
+}
+
+async function completeDelivery(
+  db: Db,
+  accepted: Pick<TriggerEvent, "delivery">,
+  result: StoredTriggerResult,
+) {
+  await completeTriggerDelivery(
+    db,
+    accepted.delivery.provider,
+    accepted.delivery.deliveryId,
+    result,
+  );
+}
+
+function storedResultToDispatch(result: StoredTriggerResult | null): DispatchTriggerResult {
+  if (!result) return { result: "coalesced" };
+  if (result.result === "started") return result;
+  if (result.result === "candidate_started") {
+    return { result: "started", runId: result.runId };
+  }
+  if (result.result === "ignored_stale_head") return { result: "ignored_stale_head" };
+  if (result.result === "ignored_not_workflow_owned") {
+    return { result: "ignored_not_workflow_owned" };
+  }
+  if (result.result === "ignored_provider") return { result: "ignored_provider" };
+  if (result.result === "at_capacity") return { result: "at_capacity" };
+  if (result.result === "error") return { result: "error" };
+  return { result: "coalesced" };
 }
