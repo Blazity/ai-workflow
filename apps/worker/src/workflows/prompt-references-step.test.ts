@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import type { WorkflowDefinitionNode } from "@shared/contracts";
-import { resolvePromptReferencesInNodes } from "./prompt-references-step.js";
+import {
+  materializeImplicitDefaultPromptReferences,
+  resolvePromptReferencesInNodes,
+} from "./prompt-references-step.js";
 import { substituteNodePromptParams } from "./prompt-vars.js";
 
 function node(
@@ -64,5 +67,54 @@ describe("resolvePromptReferencesInNodes", () => {
       branch_name: "feat/live-prompts",
     });
     expect(finalNode.params.prompt).toBe("Instructions: Work on AIW-42 from feat/live-prompts");
+  });
+});
+
+describe("materializeImplicitDefaultPromptReferences", () => {
+  const activeRows = [
+    { id: 11, name: "research-plan", archivedAt: null },
+    { id: 12, name: "implement", archivedAt: null },
+    { id: 13, name: "review", archivedAt: null },
+  ];
+
+  it("materializes blank first-party defaults without mutating the definition", () => {
+    const nodes = [
+      node("planning_agent", {}),
+      node("implementation_agent", { prompt: "   " }),
+      node("review_agent", { prompt: "custom" }),
+      node("generic_agent", { prompt: "generic" }),
+    ];
+
+    const result = materializeImplicitDefaultPromptReferences(nodes, activeRows);
+
+    expect(result[0].params.prompt).toBe("{{prompt:11}}");
+    expect(result[1].params.prompt).toBe("{{prompt:12}}");
+    expect(result[2]).toBe(nodes[2]);
+    expect(result[3]).toBe(nodes[3]);
+    expect(nodes[0].params.prompt).toBeUndefined();
+  });
+
+  it("fails clearly when a required default is missing or archived", () => {
+    expect(() => materializeImplicitDefaultPromptReferences(
+      [node("planning_agent", {})],
+      activeRows.filter((row) => row.name !== "research-plan"),
+    )).toThrow('Default prompt "research-plan" is missing');
+
+    expect(() => materializeImplicitDefaultPromptReferences(
+      [node("planning_agent", {})],
+      [{ id: 11, name: "research-plan", archivedAt: new Date() }],
+    )).toThrow('Default prompt "research-plan" is archived');
+  });
+
+  it("uses the active replacement when an older prompt with the same name is archived", () => {
+    const result = materializeImplicitDefaultPromptReferences(
+      [node("planning_agent", {})],
+      [
+        { id: 2, name: "research-plan", archivedAt: new Date() },
+        { id: 9, name: "research-plan", archivedAt: null },
+      ],
+    );
+
+    expect(result[0].params.prompt).toBe("{{prompt:9}}");
   });
 });

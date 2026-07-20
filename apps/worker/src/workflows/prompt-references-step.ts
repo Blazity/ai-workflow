@@ -4,6 +4,10 @@ import type {
   WorkflowDefinitionNode,
   WorkflowParamValue,
 } from "@shared/contracts";
+import {
+  DEFAULT_PROMPT_NAME_BY_AGENT,
+  formatPromptReferenceToken,
+} from "@shared/contracts";
 import { VARIABLE_PARAM_KEYS } from "./prompt-vars.js";
 import {
   resolvePromptReferences,
@@ -14,6 +18,38 @@ import {
 export interface ResolvedWorkflowPromptReferences {
   nodes: WorkflowDefinitionNode[];
   manifest: ResolvedPromptReference[];
+}
+
+export interface ImplicitDefaultPromptRow {
+  id: number;
+  name: string;
+  archivedAt: Date | null;
+}
+
+export function materializeImplicitDefaultPromptReferences(
+  nodes: readonly WorkflowDefinitionNode[],
+  promptRows: readonly ImplicitDefaultPromptRow[],
+): WorkflowDefinitionNode[] {
+  return nodes.map((node) => {
+    const name = DEFAULT_PROMPT_NAME_BY_AGENT[node.type];
+    if (!name) return node;
+    const current = node.params.prompt;
+    if (typeof current === "string" && current.trim().length > 0) return node;
+
+    const matchingRows = promptRows.filter((candidate) => candidate.name === name);
+    const activeRow = matchingRows.find((candidate) => candidate.archivedAt === null);
+    if (!activeRow) {
+      const state = matchingRows.length > 0 ? "archived" : "missing";
+      throw new Error(`Default prompt "${name}" is ${state}`);
+    }
+    return {
+      ...node,
+      params: {
+        ...node.params,
+        prompt: formatPromptReferenceToken({ promptId: activeRow.id, version: "latest" }),
+      },
+    };
+  });
 }
 
 export async function resolvePromptReferencesInNodes(
@@ -83,8 +119,12 @@ export async function resolvePromptReferencesForRun(
     getCurrentPromptVersion,
     getPrompt,
     getPromptVersion,
+    listPrompts,
   } = await import("../prompt-library/store.js");
   const db = getDb();
+
+  const promptRows = await listPrompts(db, { includeArchived: true });
+  const materializedNodes = materializeImplicitDefaultPromptReferences(nodes, promptRows);
 
   const load: PromptReferenceLoader = async (
     promptId: number,
@@ -111,6 +151,6 @@ export async function resolvePromptReferencesForRun(
     };
   };
 
-  return resolvePromptReferencesInNodes(nodes, load);
+  return resolvePromptReferencesInNodes(materializedNodes, load);
 }
 resolvePromptReferencesForRun.maxRetries = 0;
