@@ -1,7 +1,9 @@
 import type { FlowNodeDef } from "@/lib/flows";
 
-export const NODE_W = 168;
-export const NODE_H = 84;
+// Match the original editor's card footprint. The smaller PR #118 dimensions
+// forced long block labels and ids to wrap inside a fixed-height card.
+export const NODE_W = 190;
+export const NODE_H = 94;
 
 export interface Point { x: number; y: number; }
 

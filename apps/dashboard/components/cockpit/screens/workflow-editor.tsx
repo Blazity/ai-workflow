@@ -10,6 +10,7 @@ import {
   type WorkflowDefinitionLayoutResponse,
   type WorkflowDefinitionMeta,
   type WorkflowDefinitionNode,
+  type WorkflowDefinitionTemplate,
   type WorkflowDefinitionSaveResponse,
   type WorkflowDefinitionValidationResponse,
   type WorkflowDefinitionVersion,
@@ -77,6 +78,7 @@ const headerButtonClass =
 
 export function WorkflowEditorScreen({
   definitions,
+  templates,
   initialDetail,
   defaultDefinition,
   options,
@@ -84,6 +86,7 @@ export function WorkflowEditorScreen({
   canEdit,
 }: {
   definitions: WorkflowDefinitionMeta[];
+  templates: WorkflowDefinitionTemplate[];
   initialDetail: WorkflowDefinitionDetailResponse;
   defaultDefinition: WorkflowDefinition;
   options: WorkflowEditorOptions;
@@ -113,7 +116,7 @@ export function WorkflowEditorScreen({
   const [rowError, setRowError] = useState<{ id: number; message: string } | null>(null);
   const [createError, setCreateError] = useState<string | null>(null);
   const [newName, setNewName] = useState("");
-  const [newSource, setNewSource] = useState("default");
+  const [newSource, setNewSource] = useState(`template:${templates[0]?.id ?? "ticket-workflow"}`);
   const [validation, setValidation] = useState<{
     key: string | null;
     state: WorkflowValidationState;
@@ -504,9 +507,9 @@ export function WorkflowEditorScreen({
     setCreateError(null);
     try {
       const source =
-        newSource === "default"
-          ? { kind: "default" as const }
-          : { kind: "duplicate" as const, definitionId: Number(newSource) };
+        newSource.startsWith("template:")
+          ? { kind: "template" as const, templateId: newSource.slice("template:".length) }
+          : { kind: "duplicate" as const, definitionId: Number(newSource.slice("duplicate:".length)) };
       const res = await fetch("/api/workflow-definitions", {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -519,7 +522,7 @@ export function WorkflowEditorScreen({
       const detail = (await res.json()) as WorkflowDefinitionDetailResponse;
       setMetas((prev) => [...prev, detail.meta]);
       setNewName("");
-      setNewSource("default");
+      setNewSource(`template:${templates[0]?.id ?? "ticket-workflow"}`);
       await requestSwitch(detail.meta.id);
     } catch (err) {
       setCreateError(err instanceof Error ? err.message : "Unable to create definition");
@@ -532,6 +535,9 @@ export function WorkflowEditorScreen({
     `rounded-full border px-2 py-0.5 font-mono text-[10px] font-semibold tracking-[0.04em] uppercase ${
       enabled ? "border-mariner text-mariner" : "border-neutral-200 text-neutral-600"
     }`;
+
+  const triggerLabel = (type: WorkflowDefinitionMeta["triggerTypes"][number]) =>
+    options.blockRegistry[type]?.presentation.label ?? type;
 
   return (
     <div className="flex flex-col h-full min-h-0">
@@ -602,27 +608,16 @@ export function WorkflowEditorScreen({
                   {busy === "deploy" ? "Deploying…" : "Deploy"}
                 </button>
               )}
-              <div className="w-[190px]">
-                <Listbox
-                  options={metas.map((m) => ({
-                    value: String(m.id),
-                    label: m.name,
-                    hint: m.enabled ? "enabled" : "disabled",
-                  }))}
-                  value={String(selectedId)}
-                  onChange={(v) => void requestSwitch(Number(v))}
-                  disabled={busy !== null}
-                  ariaLabel="Workflow definition"
-                />
-              </div>
               <button
                 onClick={() => {
                   setDefsOpen((o) => !o);
                   setHistoryOpen(false);
                 }}
-                className={headerButtonClass}
+                className={`${headerButtonClass} min-w-[190px] max-w-[260px] flex items-center justify-between gap-3 normal-case tracking-normal`}
+                aria-expanded={defsOpen}
               >
-                Definitions ({metas.length})
+                <span className="truncate">{selectedMeta?.name ?? "Workflows"}</span>
+                <span className="text-neutral-500 shrink-0">{metas.length} ▾</span>
               </button>
               <button
                 onClick={() => {
@@ -641,9 +636,14 @@ export function WorkflowEditorScreen({
           fitSignal={fitSignal}
         />
         {defsOpen && (
-          <div className="absolute right-4 top-[56px] z-[60] w-[420px] max-h-[60vh] overflow-y-auto bg-panel border border-neutral-200 rounded-[4px] shadow-[0_12px_28px_-8px_rgba(24,27,32,0.22),0_2px_6px_rgba(24,27,32,0.08)] px-4 py-3">
+          <div className="absolute right-4 top-[56px] z-[60] w-[440px] max-h-[70vh] overflow-y-auto bg-panel border border-neutral-200 rounded-[4px] shadow-[0_12px_28px_-8px_rgba(24,27,32,0.22),0_2px_6px_rgba(24,27,32,0.08)] px-4 py-3">
             <div className="flex items-center justify-between mb-1">
-              <h2 className="font-body text-[14px] font-semibold text-neutral-900">Definitions</h2>
+              <div>
+                <h2 className="font-body text-[14px] font-semibold text-neutral-900">Workflows</h2>
+                <p className="mt-0.5 font-body text-[11px] text-neutral-500">
+                  Switch, activate, rename, or create workflows here.
+                </p>
+              </div>
               <button
                 onClick={() => setDefsOpen(false)}
                 className="appearance-none border-none bg-transparent font-body text-[12px] text-neutral-500 cursor-pointer"
@@ -652,9 +652,58 @@ export function WorkflowEditorScreen({
               </button>
             </div>
             {metas.map((m) => (
-              <div key={m.id} className="border-b border-neutral-100 py-2">
-                <div className="flex items-center gap-3 font-body text-[12px] text-neutral-700">
+              <div
+                key={m.id}
+                className={`border-b border-neutral-100 py-2.5 ${m.id === selectedId ? "bg-app-bg -mx-2 px-2" : ""}`}
+              >
+                <div className="flex items-start gap-3 font-body text-[12px] text-neutral-700">
+                  <button
+                    onClick={() => {
+                      void requestSwitch(m.id);
+                      setDefsOpen(false);
+                    }}
+                    disabled={busy !== null || m.id === selectedId}
+                    className="appearance-none min-w-0 flex-1 border-none bg-transparent p-0 text-left cursor-pointer disabled:cursor-default"
+                  >
+                    <span className="flex items-center gap-2 text-neutral-900 font-semibold">
+                      <span className="truncate">{m.name}</span>
+                      {m.id === selectedId && (
+                        <span className="font-mono text-[9px] uppercase tracking-[0.05em] text-mariner">
+                          Current
+                        </span>
+                      )}
+                    </span>
+                    <span className="mt-1 flex flex-wrap gap-1">
+                      {m.triggerTypes.length === 0 ? (
+                        <span className="text-[11px] text-neutral-500">No active triggers</span>
+                      ) : (
+                        m.triggerTypes.map((trigger) => (
+                          <span
+                            key={trigger}
+                            className="rounded-[3px] border border-neutral-200 px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-[0.04em] text-neutral-600"
+                          >
+                            {triggerLabel(trigger)}
+                          </span>
+                        ))
+                      )}
+                    </span>
+                  </button>
                   {canEdit ? (
+                    <button
+                      onClick={() => void patchDefinition(m.id, { enabled: !m.enabled })}
+                      disabled={busy !== null}
+                      className={`appearance-none cursor-pointer bg-transparent disabled:opacity-40 ${enabledPillClass(m.enabled)}`}
+                    >
+                      {m.enabled ? "Enabled" : "Disabled"}
+                    </button>
+                  ) : (
+                    <span className={enabledPillClass(m.enabled)}>
+                      {m.enabled ? "Enabled" : "Disabled"}
+                    </span>
+                  )}
+                </div>
+                {canEdit && (
+                  <div className="mt-2 flex items-center gap-2 pl-0 font-body text-[12px] text-neutral-700">
                     <input
                       key={`${m.id}-${m.name}`}
                       defaultValue={m.name}
@@ -670,26 +719,9 @@ export function WorkflowEditorScreen({
                           e.currentTarget.value = m.name;
                         }
                       }}
-                      className="w-[150px] border border-neutral-200 bg-panel rounded-[3px] px-1.5 py-0.5 font-body text-[12px] text-neutral-900"
+                      className="flex-1 min-w-0 border border-neutral-200 bg-panel rounded-[3px] px-1.5 py-0.5 font-body text-[12px] text-neutral-900"
                     />
-                  ) : (
-                    <span className="text-neutral-900">{m.name}</span>
-                  )}
-                  {canEdit ? (
-                    <button
-                      onClick={() => void patchDefinition(m.id, { enabled: !m.enabled })}
-                      disabled={busy !== null}
-                      className={`appearance-none cursor-pointer bg-transparent disabled:opacity-40 ${enabledPillClass(m.enabled)}`}
-                    >
-                      {m.enabled ? "Enabled" : "Disabled"}
-                    </button>
-                  ) : (
-                    <span className={enabledPillClass(m.enabled)}>
-                      {m.enabled ? "Enabled" : "Disabled"}
-                    </span>
-                  )}
-                  {canEdit && (
-                    <span className="ml-auto">
+                    <span className="shrink-0">
                       {confirmDelete === m.id ? (
                         <>
                           <button
@@ -717,8 +749,8 @@ export function WorkflowEditorScreen({
                         </button>
                       )}
                     </span>
-                  )}
-                </div>
+                  </div>
+                )}
                 {rowError?.id === m.id && (
                   <div className="mt-1 font-body text-[11px] text-red-600">{rowError.message}</div>
                 )}
@@ -727,29 +759,33 @@ export function WorkflowEditorScreen({
             {canEdit && (
               <div className="pt-3">
                 <div className="font-body text-[12px] font-semibold text-neutral-900 mb-2">
-                  New definition
+                  New workflow
                 </div>
                 <div className="flex items-center gap-2">
                   <input
                     value={newName}
                     onChange={(e) => setNewName(e.target.value)}
                     placeholder="Name"
-                    aria-label="New definition name"
+                    aria-label="New workflow name"
                     className="flex-1 min-w-0 border border-neutral-200 bg-panel rounded-[3px] px-1.5 py-1 font-body text-[12px] text-neutral-900"
                   />
                   <div className="w-[160px]">
                     <Listbox
                       options={[
-                        { value: "default", label: "Built-in default" },
+                        ...templates.map((template) => ({
+                          value: `template:${template.id}`,
+                          label: template.name,
+                          hint: "template",
+                        })),
                         ...metas.map((m) => ({
-                          value: String(m.id),
+                          value: `duplicate:${m.id}`,
                           label: `Duplicate: ${m.name}`,
                         })),
                       ]}
                       value={newSource}
                       onChange={setNewSource}
                       disabled={busy !== null}
-                      ariaLabel="New definition source"
+                      ariaLabel="New workflow source"
                     />
                   </div>
                   <button

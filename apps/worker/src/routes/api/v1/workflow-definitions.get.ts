@@ -4,6 +4,7 @@ import { env } from "../../../../env.js";
 import { getDb } from "../../../db/client.js";
 import { requireDashboardActor, toHttpError } from "../../../lib/auth/request-context.js";
 import { defaultWorkflowDefinition } from "../../../workflow-definition/default.js";
+import { workflowDefinitionTemplates } from "../../../workflow-definition/templates.js";
 import {
   buildWorkflowEditorOptions,
   fetchAvailableModels,
@@ -63,6 +64,7 @@ export default defineEventHandler(
       ]);
       return {
         definitions,
+        templates: workflowDefinitionTemplates({ includeReview: env.ENABLE_REVIEW_PHASE }),
         defaultDefinition: defaultWorkflowDefinition({ includeReview: env.ENABLE_REVIEW_PHASE }),
         options: buildWorkflowEditorOptions(models, ticketStatuses),
       };

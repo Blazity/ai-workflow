@@ -13,6 +13,7 @@ import {
   planApprovalDefinition,
   prReviewFixDefinition,
 } from "./graph-fixtures.js";
+import { workflowDefinitionTemplates } from "./templates.js";
 import {
   ANY_SCOPE_BLOCK_POLICY,
   upgradeStoredWorkflowDefinition,
@@ -883,6 +884,21 @@ describe("workflowDefinitionSchema block-executor node types", () => {
 });
 
 describe("validateWorkflowGraph fixtures", () => {
+  it("ships four deployable starter templates with the production ticket workflow first", () => {
+    const templates = workflowDefinitionTemplates({ includeReview: true });
+    expect(templates.map((template) => template.name)).toEqual([
+      "Ticket workflow",
+      "Human-approved plan",
+      "Review & fix after PR",
+      "Fully modular",
+    ]);
+    expect(templates[0].definition.nodes.some((node) => node.type === "review_agent")).toBe(true);
+    for (const template of templates) {
+      expect(workflowDefinitionSchema.safeParse(template.definition).success).toBe(true);
+      expect(validateWorkflowDefinitionForDeployment(template.definition, registryContext)).toEqual([]);
+    }
+  });
+
   it("accepts the linear pipeline fixture", () => {
     const def = linearPipelineDefinition();
     expect(workflowDefinitionSchema.safeParse(def).success).toBe(true);

@@ -156,7 +156,9 @@ const FlowNode = React.memo(function FlowNode({
         if (canEdit && !locked) onDelete(node.id);
       }}
       onClick={(e) => { e.stopPropagation(); onSelect(node.id); }}
-      className={`absolute rounded-sm select-none transition-[box-shadow,border-color] duration-[120ms] bg-panel ${
+      role="group"
+      aria-label={`${cat.label}: ${node.name || cat.label}`}
+      className={`absolute rounded-[4px] select-none transition-[box-shadow,border-color] duration-[120ms] bg-panel ${
         canEdit ? "cursor-grab" : "cursor-pointer"
       } ${
         running
@@ -171,16 +173,15 @@ const FlowNode = React.memo(function FlowNode({
       }}
     >
       <div
-        className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-t-[3px] font-mono text-[9px] font-semibold tracking-[0.06em] uppercase border-b"
+        className="flex h-8 min-w-0 items-center gap-2 overflow-hidden rounded-t-[3px] border-b px-2.5 font-mono text-[8px] font-semibold uppercase tracking-[0.06em]"
         style={{ background: cat.softColor, borderBottomColor: cat.softColor, color: cat.color }}
       >
         <span
-          className="w-4 h-4 rounded-xs text-white inline-flex items-center justify-center text-[10px] font-bold"
+          className="inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-[2px] text-[9px] font-bold text-white"
           style={{ background: cat.color }}
         >{cat.glyph}</span>
-        {cat.label}
-        <span className="ml-auto font-mono text-[9px] text-neutral-500">{node.id}</span>
-        {locked && <span title="Anchor step, can't be removed" className="text-[9px] leading-none" aria-hidden>🔒</span>}
+        <span className="min-w-0 truncate">{cat.label}</span>
+        {locked && <span title="Anchor step, can't be removed" className="ml-auto shrink-0 text-[9px] leading-none" aria-hidden>🔒</span>}
         {runStatus && (
           <span
             title={
@@ -188,16 +189,14 @@ const FlowNode = React.memo(function FlowNode({
                 ? `last run: ${runStatus} (${runError})`
                 : "last run: " + runStatus
             }
-            className={`w-1.5 h-1.5 rounded-full ${runStatus === "running" ? "animate-pulse" : ""}`}
+            className={`h-1.5 w-1.5 shrink-0 rounded-full ${locked ? "" : "ml-auto"} ${runStatus === "running" ? "animate-pulse" : ""}`}
             style={{ background: RUN_STATUS_COLORS[runStatus] }}
           />
         )}
       </div>
-      <div className="px-2.5 py-2 flex flex-col gap-0.5">
+      <div className="flex min-w-0 flex-col px-2.5 py-2">
         <div className={`font-body text-[13px] font-semibold leading-[1.2] text-coal ${CONNECTED_CARD_TEXT_CLASS}`}>{node.name || cat.label}</div>
-        {summary && (
-          <div className={`font-mono text-[10px] text-neutral-700 ${CONNECTED_CARD_TEXT_CLASS}`}>{summary}</div>
-        )}
+        <div className={`mt-1 font-mono text-[9px] leading-[1.2] text-neutral-500 ${CONNECTED_CARD_TEXT_CLASS}`}>{summary ?? node.id}</div>
       </div>
 
       {!isTriggerBlockType(node.type) && (
