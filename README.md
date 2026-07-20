@@ -14,7 +14,7 @@ AI Workflow is free, open source, and actively being built.
 
 AI Workflow is a platform for building and operating engineering-agent workflows. It turns issues, messages, alerts, webhooks, and schedules into visible multi-step runs that can research, ask for clarification, wait for approval, write code, open pull requests, respond to review, and show the evidence behind every result.
 
-Most coding-agent tools optimize a single prompt or task. Engineering organizations need the layer around the agent: event routing, repeatable workflows, human control, delivery adapters, observability, and a way to improve successful patterns across teams. AI Workflow provides that control plane without replacing the tools your teams already trust.
+Engineering organizations need the layer around the agent: event routing, repeatable workflows, human control, delivery adapters, observability, and a way to improve successful patterns across teams. AI Workflow provides that control plane without replacing the tools your teams already trust.
 
 ## Why AI Workflow
 
@@ -25,16 +25,22 @@ Most coding-agent tools optimize a single prompt or task. Engineering organizati
 | **🔌 Keep your tools** | Connect existing issue trackers, chat, alerts, repositories, and coding agents through adapters. |
 | **📈 Learn as an organization** | Version workflows, govern execution, compare outcomes, and promote what works across teams. |
 
-## From Event to Evidence
+## How It Works
 
 ```mermaid
-flowchart LR
-    A["Event"] --> B["Typed workflow"]
-    B --> C["Claude or Codex agent"]
-    C --> D{"Human checkpoint or checks"}
-    D -->|"clarify or revise"| C
-    D -->|"approved"| E["PR / MR and evidence"]
-    E --> F["Run observability"]
+flowchart TD
+    A["Engineering events<br/>issues · messages · alerts · webhooks · schedules"] --> B["Adapters"]
+    B --> C["Custom, versioned workflow<br/>branches · loops · human steps"]
+    C --> D["Agent harness<br/>context · prompts · tools · policies"]
+    D --> E["Isolated sandbox<br/>Claude or Codex"]
+    E --> F{"Gates<br/>clarification · approval · checks"}
+    F -->|"needs input, revision, or retry"| C
+    F -->|"approved"| G["Delivery<br/>PR / MR · ticket updates"]
+    C --> H["Observability<br/>steps · usage · artifacts · outcomes"]
+    D --> H
+    E --> H
+    F --> H
+    G --> H
 ```
 
 ## Use Cases
@@ -62,8 +68,6 @@ flowchart LR
 
 Legend: ✅ native/current · ◐ partial, adjacent, or tier-dependent · — not publicly documented / not the product focus.
 
-Based on publicly documented capabilities, reviewed July 2026. Availability can vary by plan or deployment.
-
 | Product | Open-source core | Customer-controlled application deployment | Visual multi-step workflow graph | Jira → PR | GitHub + GitLab delivery | Structured human clarification/approval | Per-run step and usage telemetry |
 |---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
 | **AI Workflow** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
@@ -77,29 +81,11 @@ Based on publicly documented capabilities, reviewed July 2026. Availability can 
 | [Swarmia](https://www.swarmia.com/) | — | — | — | — | — | — | ◐ |
 | [Jellyfish](https://jellyfish.co/platform/engineering-management-platform/) | — | — | — | — | — | — | ◐ |
 
-Engineering-intelligence products such as DX, LinearB, Swarmia, and Jellyfish are adjacent: they help teams measure or improve engineering systems, but are not full agent-workflow runtimes.
-
 ## Architecture and Deployment
 
 AI Workflow separates event adapters, typed workflow definitions, durable orchestration, isolated agent execution, delivery adapters, and observability. A run keeps its inputs, step state, human decisions, outputs, usage, and delivery evidence connected from trigger to outcome.
 
-The customer-controlled deployment target uses Vercel for the application and durable workflows, Neon Postgres for workflow and run state, and Vercel Sandbox for isolated agent execution. The open-source dashboard provides workflow authoring, run inspection, usage visibility, and operational controls.
-
-```text
-Issue, message, alert, webhook, schedule
-                    ↓
-             Event adapters
-                    ↓
-        Typed, versioned workflow
-                    ↓
-      Claude / Codex in a sandbox
-                    ↓
-       Human and automated gates
-                    ↓
-       GitHub / GitLab + evidence
-                    ↓
-          Observability dashboard
-```
+Deploy the application, durable orchestration, workflow and run state, credentials, and isolated execution in infrastructure you control. The open-source dashboard provides workflow authoring, run inspection, usage visibility, and operational controls.
 
 See [workflow definitions](./docs/workflow-definitions.md) for the graph model and block catalog.
 
