@@ -223,9 +223,8 @@ Return a JSON object with:
 - \`issues\`: Array of issues found — each with \`file\`, \`description\`, \`severity\` ("critical" or "suggestion"). Include both fixed and unfixable issues.
 - \`error\`: Failure details (when failed).`;
 
-/** Built-in agent prompt templates keyed by their registry names. Single
- *  source of truth: the worker's runtime defaults and the dashboard's
- *  "View built-in template" preview both read from here. */
+/** Built-in agent prompt templates keyed by their registry names. These bodies
+ *  seed the versioned prompt library and preserve the canonical first-party text. */
 export const DEFAULT_AGENT_PROMPTS = {
   "research-plan": DEFAULT_RESEARCH_PLAN_PROMPT,
   implement: DEFAULT_IMPLEMENT_PROMPT,

@@ -8,6 +8,7 @@ import { DashboardAuthError } from "../lib/auth/users-read.js";
 import {
   archivePrompt,
   createPrompt,
+  findPromptRowsByNames,
   findPromptUsage,
   getCurrentPromptVersion,
   getPrompt,
@@ -51,6 +52,18 @@ describe("migration seed", () => {
       const head = await getCurrentPromptVersion(db, row!.id);
       expect(head!.body).toBe(DEFAULT_AGENT_PROMPTS[name]);
     }
+  });
+
+  it("reads only requested prompt metadata and includes archived matches", async () => {
+    const { prompt } = await createPrompt(db, { name: "Archived default", body: "body", actor: ADMIN });
+    await archivePrompt(db, { promptId: prompt.id, actor: ADMIN });
+
+    const rows = await findPromptRowsByNames(db, ["research-plan", "Archived default", "missing"]);
+
+    expect(rows.map((row) => row.name)).toEqual(["research-plan", "Archived default"]);
+    expect(rows[0].archivedAt).toBeNull();
+    expect(rows[1].archivedAt).toBeInstanceOf(Date);
+    expect("body" in rows[0]).toBe(false);
   });
 });
 

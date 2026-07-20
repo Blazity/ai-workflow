@@ -175,6 +175,19 @@ export async function retryOnUniqueViolation<T>(
 
 // --- Reads (no role gate) ---
 
+export async function findPromptRowsByNames(
+  db: Db,
+  names: readonly string[],
+): Promise<PromptLibraryRow[]> {
+  if (names.length === 0) return [];
+  const rows = await db
+    .select()
+    .from(promptLibrary)
+    .where(inArray(promptLibrary.name, [...names]))
+    .orderBy(asc(promptLibrary.id));
+  return rows.map(mapPromptRow);
+}
+
 /** Case-insensitive substring token: trimmed, capped, lower-cased. `%` and `_`
  *  are matched literally because the filter runs in JS, not as a SQL LIKE. */
 function normalizeQuery(q: string | undefined): string | null {

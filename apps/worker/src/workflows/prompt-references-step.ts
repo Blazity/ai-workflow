@@ -116,14 +116,23 @@ export async function resolvePromptReferencesForRun(
   "use step";
   const { getDb } = await import("../db/client.js");
   const {
+    findPromptRowsByNames,
     getCurrentPromptVersion,
     getPrompt,
     getPromptVersion,
-    listPrompts,
   } = await import("../prompt-library/store.js");
   const db = getDb();
 
-  const promptRows = await listPrompts(db, { includeArchived: true });
+  const requiredDefaultNames = [...new Set(
+    nodes
+      .filter((node) => {
+        const current = node.params.prompt;
+        return DEFAULT_PROMPT_NAME_BY_AGENT[node.type]
+          && !(typeof current === "string" && current.trim().length > 0);
+      })
+      .map((node) => DEFAULT_PROMPT_NAME_BY_AGENT[node.type]!),
+  )];
+  const promptRows = await findPromptRowsByNames(db, requiredDefaultNames);
   const materializedNodes = materializeImplicitDefaultPromptReferences(nodes, promptRows);
 
   const load: PromptReferenceLoader = async (
