@@ -6,6 +6,7 @@ import { initialPromptSelection } from "./query-selection";
 function row(id: number, archivedAt: string | null = null): PromptLibraryListRowDto {
   return {
     id,
+    slug: `prompt-${id}`,
     name: `prompt-${id}`,
     description: null,
     tags: [],

@@ -6,6 +6,7 @@ import { promptInspectorSummary } from "./prompt-inspector-summary";
 function row(id: number, name: string, currentVersion: number): PromptLibraryListRowDto {
   return {
     id,
+    slug: name.toLowerCase().replace(/[^a-z0-9]+/g, "-"),
     name,
     description: null,
     tags: [],
@@ -81,7 +82,7 @@ test("keeps an unavailable implicit default visible", () => {
 test("does not disguise an unresolved explicit reference as the implicit default", () => {
   assert.deepEqual(promptInspectorSummary("{{prompt:999}}", "{{prompt:999}}", "research-plan", []), {
     kind: "reference",
-    title: "Missing prompt 999",
+    title: "Missing prompt #999",
     detail: "Latest",
   });
 });

@@ -7,6 +7,7 @@ import { driftFor, getPromptRef, makePromptRef } from "./provenance.ts";
 function row(overrides: Partial<PromptLibraryListRowDto> = {}): PromptLibraryListRowDto {
   return {
     id: 1,
+    slug: "review-prompt",
     name: "Review prompt",
     description: null,
     tags: [],

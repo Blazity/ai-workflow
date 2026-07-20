@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { formatPromptReferenceToken, type PromptLibraryEntryMeta } from "@shared/contracts";
 import { PromptSectionComposer } from "@/components/cockpit/prompt-editor/prompt-section-composer";
 import { useEnterExit } from "@/lib/use-enter-exit";
 import { PromptLibraryRail } from "./prompt-library-rail";
@@ -78,6 +79,21 @@ export function PromptEditorModal({
     setPreviewRequest({ ...target, requestId: previewRequestId.current });
   }, []);
 
+  // After "Save to library" the field's text lives in the library as v1, so the
+  // field itself switches to a live reference immediately: one source of truth
+  // instead of an instantly-drifting copy. "Detach and edit" undoes it.
+  const replaceWithSavedReference = useCallback(
+    (meta: PromptLibraryEntryMeta) => {
+      handleLibraryInsert({
+        text: formatPromptReferenceToken({ slug: meta.slug, version: "latest" }),
+        ref: null,
+        mode: "replace",
+      });
+      closeSave();
+    },
+    [closeSave, handleLibraryInsert],
+  );
+
   // Modal lifetime owns scroll locking and focus restoration. Keep this separate
   // from transient rail/popover state so typing never runs the cleanup and sends
   // focus back to the page behind the dialog.
@@ -145,6 +161,10 @@ export function PromptEditorModal({
     if (!open) return;
     const onEsc = (e: KeyboardEvent) => {
       if (e.key !== "Escape" || saveOpen) return;
+      // Nested popovers (variable picker, editor context menu, reference
+      // actions menu) registered their window capture listeners after this
+      // one, so they only see Escape if we yield here while one is open.
+      if (document.querySelector('[role="menu"], [role="listbox"]')) return;
       e.preventDefault();
       e.stopImmediatePropagation();
       if (libOpen) setLibOpen(false);
@@ -229,7 +249,12 @@ export function PromptEditorModal({
       </div>
 
       {canEdit && (
-        <PromptSavePopover open={saveOpen} onClose={closeSave} initialBody={value} onSaved={closeSave} />
+        <PromptSavePopover
+          open={saveOpen}
+          onClose={closeSave}
+          initialBody={value}
+          onSaved={replaceWithSavedReference}
+        />
       )}
     </div>,
     document.body,

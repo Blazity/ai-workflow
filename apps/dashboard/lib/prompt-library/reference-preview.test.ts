@@ -9,6 +9,7 @@ import { resolveReferencePreview } from "./reference-preview";
 
 const row: PromptLibraryListRowDto = {
   id: 7,
+  slug: "research-plan",
   name: "research-plan",
   description: null,
   tags: [],
@@ -21,7 +22,7 @@ const row: PromptLibraryListRowDto = {
 };
 
 function reference(version: "latest" | number): ParsedPromptReference {
-  return { promptId: 7, version, raw: "{{prompt:7}}", start: 0, end: 12 };
+  return { slug: "research-plan", version, raw: "{{prompt:research-plan}}", start: 0, end: 25 };
 }
 
 const detail: PromptLibraryDetailResponse = {

@@ -1,4 +1,9 @@
-import { parsePromptReferenceTokens, type PromptLibraryListRowDto } from "@shared/contracts";
+import {
+  parsePromptReferenceTokens,
+  promptReferenceMatchesRow,
+  promptReferenceTargetLabel,
+  type PromptLibraryListRowDto,
+} from "@shared/contracts";
 import { parseComposerBlocks } from "./composer";
 
 export type PromptInspectorSummary =
@@ -17,8 +22,8 @@ function promptStructure(value: string, rows: readonly PromptLibraryListRowDto[]
   const titles = blocks.map((block) => {
     if (block.kind !== "reference") return block.title;
     const reference = parsePromptReferenceTokens(block.body)[0];
-    return rows.find((row) => row.id === reference?.promptId)?.name
-      ?? (reference ? `Missing prompt ${reference.promptId}` : block.title);
+    return (reference && rows.find((row) => promptReferenceMatchesRow(reference, row))?.name)
+      ?? (reference ? `Missing prompt ${promptReferenceTargetLabel(reference)}` : block.title);
   });
   return {
     blockCount: blocks.length,
@@ -39,9 +44,9 @@ export function promptInspectorSummary(
   const onlyReference = references.length === 1 && references[0].raw === trimmed;
   if (onlyReference) {
     const reference = references[0];
-    const row = rows.find((candidate) => candidate.id === reference.promptId);
+    const row = rows.find((candidate) => promptReferenceMatchesRow(reference, candidate));
     const explicitReference = value.trim() === trimmed;
-    const missingTitle = `Missing prompt ${reference.promptId}`;
+    const missingTitle = `Missing prompt ${promptReferenceTargetLabel(reference)}`;
     return {
       kind: "reference",
       title: row?.name ?? (explicitReference ? missingTitle : implicitName ?? missingTitle),

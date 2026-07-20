@@ -6,6 +6,7 @@ import { effectiveDefaultPromptValue } from "./effective-default.ts";
 function row(overrides: Partial<PromptLibraryListRowDto> = {}): PromptLibraryListRowDto {
   return {
     id: 7,
+    slug: "research-plan",
     name: "research-plan",
     description: null,
     tags: ["built-in"],
@@ -21,7 +22,7 @@ function row(overrides: Partial<PromptLibraryListRowDto> = {}): PromptLibraryLis
 
 test("derives a latest reference for an empty first-party prompt", () => {
   assert.deepEqual(effectiveDefaultPromptValue("", "research-plan", [row()]), {
-    value: "{{prompt:7}}",
+    value: "{{prompt:research-plan}}",
     implicit: true,
   });
 });

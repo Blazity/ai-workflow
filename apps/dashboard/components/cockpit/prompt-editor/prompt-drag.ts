@@ -1,7 +1,7 @@
 export const PROMPT_DRAG_MIME = "application/x-ai-workflow-prompt-block";
 
 export type PromptDragPayload =
-  | { kind: "library-reference"; promptId: number; label: string }
+  | { kind: "library-reference"; slug: string; label: string }
   | { kind: "library-section"; markdown: string; label: string }
   | { kind: "composer-block"; blockId: string; label: string };
 
@@ -16,7 +16,7 @@ export function readPromptDrag(event: React.DragEvent): PromptDragPayload | null
   if (!raw) return null;
   try {
     const value = JSON.parse(raw) as Partial<PromptDragPayload>;
-    if (value.kind === "library-reference" && typeof value.promptId === "number" && typeof value.label === "string") {
+    if (value.kind === "library-reference" && typeof value.slug === "string" && typeof value.label === "string") {
       return value as PromptDragPayload;
     }
     if (value.kind === "library-section" && typeof value.markdown === "string" && typeof value.label === "string") {

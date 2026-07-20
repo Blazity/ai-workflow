@@ -2,8 +2,12 @@
 
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import type { PromptLibraryDetailResponse } from "@shared/contracts";
+import type { PromptLibraryDetailResponse, PromptLibraryEntryMeta } from "@shared/contracts";
 import { readErrorMessage } from "@/lib/api/error-message";
+import {
+  DIALOG_FOCUSABLE_SELECTOR,
+  trappedDialogTabTarget,
+} from "@/lib/prompt-library/prompt-editor-modal-contract";
 import { usePromptLibrary } from "./prompt-library-context";
 
 const labelCls = "font-mono text-[10px] uppercase tracking-[0.06em] text-neutral-500";
@@ -26,16 +30,16 @@ export function PromptSavePopover({
   open: boolean;
   onClose: () => void;
   initialBody: string;
-  onSaved: (row: { id: number }) => void;
+  onSaved: (meta: PromptLibraryEntryMeta) => void;
 }) {
   const { refresh } = usePromptLibrary();
   const [mounted, setMounted] = useState(false);
   const [name, setName] = useState("");
   const [tags, setTags] = useState("");
-  const [body, setBody] = useState(initialBody);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const nameRef = useRef<HTMLInputElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
   const restoreFocus = useRef<HTMLElement | null>(null);
 
   useEffect(() => setMounted(true), []);
@@ -49,7 +53,6 @@ export function PromptSavePopover({
     restoreFocus.current = document.activeElement as HTMLElement | null;
     setName("");
     setTags("");
-    setBody(initialBody);
     setError(null);
     setBusy(false);
     const prevOverflow = document.body.style.overflow;
@@ -62,10 +65,25 @@ export function PromptSavePopover({
         onClose();
       }
     };
+    // The editor modal suspends its own Tab trap while this dialog is open
+    // (aria-modal without a trap would let Tab walk the suspended modal), so
+    // trap focus here with the same helper.
+    const onTab = (e: KeyboardEvent) => {
+      if (e.key !== "Tab") return;
+      const dialog = dialogRef.current;
+      if (!dialog) return;
+      const focusable = Array.from(dialog.querySelectorAll<HTMLElement>(DIALOG_FOCUSABLE_SELECTOR));
+      const target = trappedDialogTabTarget(focusable, document.activeElement as HTMLElement | null, e.shiftKey);
+      if (!target) return;
+      e.preventDefault();
+      target.focus();
+    };
     window.addEventListener("keydown", onEsc, { capture: true });
+    window.addEventListener("keydown", onTab, { capture: true });
     return () => {
       cancelAnimationFrame(raf);
       window.removeEventListener("keydown", onEsc, { capture: true });
+      window.removeEventListener("keydown", onTab, { capture: true });
       document.body.style.overflow = prevOverflow;
       restoreFocus.current?.focus?.();
     };
@@ -73,7 +91,7 @@ export function PromptSavePopover({
 
   if (!mounted || !open) return null;
 
-  const canSave = name.trim().length > 0 && body.trim().length > 0 && !busy;
+  const canSave = name.trim().length > 0 && initialBody.trim().length > 0 && !busy;
 
   async function save() {
     if (!canSave) return;
@@ -89,7 +107,7 @@ export function PromptSavePopover({
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           name: name.trim(),
-          body,
+          body: initialBody,
           tags: parsedTags.length > 0 ? parsedTags : undefined,
         }),
       });
@@ -111,10 +129,17 @@ export function PromptSavePopover({
   return createPortal(
     <div
       role="presentation"
-      onMouseDown={onClose}
+      onMouseDown={(event) => {
+        // The popover portals to document.body but sits inside the editor
+        // modal's backdrop in the React tree; without stopPropagation this
+        // mousedown would bubble there and close both dialogs at once.
+        event.stopPropagation();
+        onClose();
+      }}
       className="fixed inset-0 z-[100] flex items-start justify-center px-4 pt-[12vh] bg-coal/50 backdrop-blur-[2px]"
     >
       <div
+        ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-label="Save to library"
@@ -160,14 +185,18 @@ export function PromptSavePopover({
         </div>
 
         <div className="flex flex-col gap-1">
-          <label className={labelCls} htmlFor="pl-save-body">
-            Body
-          </label>
+          <div className="flex items-baseline gap-2">
+            <label className={labelCls} htmlFor="pl-save-body">
+              Body
+            </label>
+            <span className="font-body text-[10px] text-neutral-400">read-only, edit in the prompt editor</span>
+          </div>
           <textarea
             id="pl-save-body"
-            value={body}
-            onChange={(e) => setBody(e.target.value)}
-            className="w-full min-h-[200px] max-h-[40vh] resize-y border border-neutral-200 bg-panel rounded-[3px] px-3 py-2 font-mono text-[12px] leading-[1.55] text-neutral-900 outline-none"
+            value={initialBody}
+            readOnly
+            aria-readonly="true"
+            className="w-full min-h-[200px] max-h-[40vh] resize-y border border-neutral-200 bg-off-white rounded-[3px] px-3 py-2 font-mono text-[12px] leading-[1.55] text-neutral-600 outline-none cursor-default"
           />
         </div>
 

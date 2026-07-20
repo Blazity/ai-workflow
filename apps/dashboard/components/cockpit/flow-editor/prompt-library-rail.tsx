@@ -66,6 +66,12 @@ export function PromptLibraryRail({
   const [missingVersion, setMissingVersion] = useState(false);
   const activeIdRef = useRef<number | null>(null);
   const previewPaneRef = useRef<HTMLDivElement>(null);
+  const handledPreviewRequestId = useRef(0);
+  // Read by the row-change effect without being one of its deps: clearing the
+  // request (e.g. the version select's onChange) must never re-run that effect,
+  // or it would reset the version the user just picked back to head.
+  const previewRequestRef = useRef<PromptPreviewRequest | null>(null);
+  previewRequestRef.current = activePreviewRequest;
 
   const nonArchived = useMemo(() => rows.filter((r) => r.archivedAt === null), [rows]);
   const tags = useMemo(() => Array.from(new Set(nonArchived.flatMap((r) => r.tags))).sort(), [nonArchived]);
@@ -74,9 +80,13 @@ export function PromptLibraryRail({
     (activeId !== null ? filtered.find((r) => r.id === activeId) : undefined) ?? filtered[0] ?? null;
 
   useEffect(() => {
-    if (!previewRequest) return;
+    // Apply each request exactly once: without the handled guard, a later rows
+    // refresh would re-run this effect and yank the selection back to the
+    // requested prompt after the user already browsed elsewhere.
+    if (!previewRequest || handledPreviewRequestId.current === previewRequest.requestId) return;
     const row = nonArchived.find((candidate) => candidate.id === previewRequest.promptId);
     if (!row) return;
+    handledPreviewRequestId.current = previewRequest.requestId;
     setQuery("");
     setTag(null);
     setActiveId(row.id);
@@ -87,16 +97,18 @@ export function PromptLibraryRail({
       if (previewPaneRef.current) previewPaneRef.current.scrollTop = 0;
     });
     return () => cancelAnimationFrame(frame);
-  }, [nonArchived, previewRequest?.requestId]);
+  }, [nonArchived, previewRequest]);
 
-  // On active-prompt change: reset the version to head and lazy-load its history
-  // (bodies of older versions) so they can be previewed and inserted.
+  // On active-prompt change ONLY: reset the version to head (or the pending
+  // preview request's version, read via ref) and lazy-load the prompt's history
+  // (bodies of older versions) so they can be previewed and inserted. This must
+  // not depend on activePreviewRequest: clearing it while staying on the same
+  // row (version select onChange) would otherwise clobber the user's pick.
   useEffect(() => {
     const id = activeRow?.id ?? null;
     activeIdRef.current = id;
-    const requestedVersion = activePreviewRequest?.promptId === id
-      ? activePreviewRequest.version
-      : null;
+    const request = previewRequestRef.current;
+    const requestedVersion = request?.promptId === id ? request.version : null;
     setSelectedVersion(activeRow
       ? requestedVersion === "latest"
         ? activeRow.currentVersion
@@ -115,7 +127,7 @@ export function PromptLibraryRail({
       alive = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeRow?.id, activePreviewRequest]);
+  }, [activeRow?.id]);
 
   const detail = activeRow ? detailCache.get(activeRow.id) : undefined;
   const versions = detail?.versions ?? [];
@@ -159,7 +171,7 @@ export function PromptLibraryRail({
   const insertReference = (version: "latest" | number) => {
     if (disabled) return;
     if (activeRow) onInsert({
-      text: formatPromptReferenceToken({ promptId: activeRow.id, version }),
+      text: formatPromptReferenceToken({ slug: activeRow.slug, version }),
       ref: null,
       mode: targetHasContent ? "append" : "replace",
     });
@@ -244,7 +256,7 @@ export function PromptLibraryRail({
                 draggable={!disabled}
                 onDragStart={(event) => writePromptDrag(event, {
                   kind: "library-reference",
-                  promptId: activeRow.id,
+                  slug: activeRow.slug,
                   label: activeRow.name,
                 })}
                 aria-label={`Drag ${activeRow.name} as latest reference`}

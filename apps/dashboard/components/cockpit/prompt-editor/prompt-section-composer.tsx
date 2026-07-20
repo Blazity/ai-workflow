@@ -120,7 +120,7 @@ export function PromptSectionComposer({
       return;
     }
     const markdown = payload.kind === "library-reference"
-      ? formatPromptReferenceToken({ promptId: payload.promptId, version: "latest" })
+      ? formatPromptReferenceToken({ slug: payload.slug, version: "latest" })
       : payload.markdown;
     const next = insertComposerMarkdown(blocks, targetIndex, markdown, makeId);
     commit(next);

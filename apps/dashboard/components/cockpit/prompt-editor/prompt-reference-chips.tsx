@@ -5,6 +5,8 @@ import React, { useMemo, useRef, useState } from "react";
 import {
   formatPromptReferenceToken,
   parsePromptReferenceTokens,
+  promptReferenceMatchesRow,
+  promptReferenceTargetLabel,
   type ParsedPromptReference,
   type PromptLibraryDetailResponse,
   type PromptLibraryListRowDto,
@@ -145,7 +147,7 @@ export function PromptReferenceChipsView({
   return (
     <div className="flex w-full flex-col gap-2" aria-label="Prompt references">
       {references.map((reference, index) => {
-        const row = rows.find((candidate) => candidate.id === reference.promptId);
+        const row = rows.find((candidate) => promptReferenceMatchesRow(reference, candidate));
         const key = `${reference.start}-${reference.raw}`;
         const latest = reference.version === "latest";
         const capabilities = promptReferenceCapabilities(Boolean(row), Boolean(disabled));
@@ -175,7 +177,7 @@ export function PromptReferenceChipsView({
               </span>
               <div className="min-w-0 flex-1">
                 <div className="truncate font-mono text-[11px] font-semibold text-neutral-900">
-                  {row?.name ?? `Missing prompt ${reference.promptId}`}
+                  {row?.name ?? `Missing prompt ${promptReferenceTargetLabel(reference)}`}
                 </div>
                 {row && (
                   <div className="mt-1 flex flex-wrap items-center gap-1.5">
@@ -205,7 +207,7 @@ export function PromptReferenceChipsView({
                 )}
                 {capabilities.canOpenLibrary && (
                   <Link
-                    href={promptLibraryHref(reference.promptId)}
+                    href={promptLibraryHref(row.id)}
                     target="_blank"
                     rel="noreferrer"
                     aria-label={`Open ${row.name} in prompt library (new tab)`}
@@ -303,7 +305,7 @@ export function PromptReferenceChipsView({
                 primaryLabel={latest ? `Pin v${row.currentVersion}` : "Follow latest"}
                 onPrimary={() => {
                   replaceAt(reference, formatPromptReferenceToken({
-                    promptId: reference.promptId,
+                    slug: row.slug,
                     version: latest ? row.currentVersion : "latest",
                   }));
                   closeMenu(true);

@@ -7,6 +7,7 @@ import { PromptReferenceChipsView } from "./prompt-reference-chips";
 
 const row: PromptLibraryListRowDto = {
   id: 7,
+  slug: "research-plan",
   name: "research-plan",
   description: null,
   tags: [],
@@ -61,6 +62,6 @@ test("missing references expose no navigation", () => {
     />,
   );
 
-  assert.match(html, /Missing prompt 99/);
+  assert.match(html, /Missing prompt #99/);
   assert.doesNotMatch(html, /Show content|Open in library|href="\/prompts|More actions/);
 });

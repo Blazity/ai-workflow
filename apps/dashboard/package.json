@@ -9,7 +9,7 @@
     "start": "next start",
     "lint": "next lint",
     "typecheck": "pnpm build:shared && tsc --noEmit",
-    "test": "pnpm build:shared && tsx --test \"**/*.test.ts\"",
+    "test": "pnpm build:shared && tsx --test \"**/*.test.ts\" \"**/*.test.tsx\"",
     "build:shared": "pnpm --filter @shared/contracts build && pnpm --filter @shared/conditions build"
   },
   "dependencies": {

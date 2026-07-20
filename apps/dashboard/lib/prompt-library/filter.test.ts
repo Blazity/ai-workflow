@@ -6,6 +6,7 @@ import { filterPrompts } from "./filter.ts";
 function row(overrides: Partial<PromptLibraryListRowDto> = {}): PromptLibraryListRowDto {
   return {
     id: 1,
+    slug: "plain",
     name: "Plain",
     description: null,
     tags: [],

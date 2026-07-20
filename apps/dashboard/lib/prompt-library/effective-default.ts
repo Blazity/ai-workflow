@@ -14,7 +14,7 @@ export function effectiveDefaultPromptValue(
   );
   return {
     value: row
-      ? formatPromptReferenceToken({ promptId: row.id, version: "latest" })
+      ? formatPromptReferenceToken({ slug: row.slug, version: "latest" })
       : "",
     implicit: true,
   };

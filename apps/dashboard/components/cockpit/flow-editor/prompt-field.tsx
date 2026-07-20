@@ -4,6 +4,7 @@ import { useCallback, useMemo, useState } from "react";
 import type { FlowNodeDef } from "@/lib/flows";
 import {
   parsePromptReferenceTokens,
+  promptReferenceMatchesRow,
   type PromptLibraryListRowDto,
   type PromptSourceRef,
   type WorkflowParamValue,
@@ -60,8 +61,10 @@ export function PromptField({
     const reference = references.length === 1 && effectiveValue.trim() === references[0]?.raw
       ? references[0]
       : null;
-    return reference ? { promptId: reference.promptId, version: reference.version } : null;
-  }, [effectiveValue]);
+    if (!reference) return null;
+    const row = rows.find((candidate) => promptReferenceMatchesRow(reference, candidate));
+    return row ? { promptId: row.id, version: reference.version } : null;
+  }, [effectiveValue, rows]);
   // driftFor hashes the full field value (up to ~50k chars); memoize so an
   // unrelated re-render (popover toggles, autoOpen, etc.) does not re-hash. The
   // result is identical, only recomputed when an input actually changes.
