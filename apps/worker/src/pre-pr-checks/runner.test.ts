@@ -264,7 +264,7 @@ describe("runPrePrChecksWithFixes", () => {
       undefined,
       {
         state: createRunBudgetState(),
-        limits: { maxDurationMs: 60_000, maxTokens: 14 },
+        limits: { maxDurationMs: 60_000, maxTokens: 12 },
         price: { input: 0.001, cached_input: 0.0001, output: 0.002 },
       },
     );
@@ -274,8 +274,8 @@ describe("runPrePrChecksWithFixes", () => {
     expect(result.budgetFailure).toMatchObject({
       status: "budget_exceeded",
       metric: "tokens",
-      limit: 14,
-      consumed: 15,
+      limit: 12,
+      consumed: 13,
     });
     expect(checkRuns).toBe(1);
     expect(mockWriteFiles).toHaveBeenCalledTimes(1);

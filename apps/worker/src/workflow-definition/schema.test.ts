@@ -1679,15 +1679,13 @@ describe("validateWorkflowGraph rules", () => {
         node("context", "fetch_pr_context"),
         node("prepare", "prepare_workspace"),
         node("reviewer", "review_agent"),
-        node("checks", "run_checks"),
         node("comment", "post_pr_comment", { body: "Review noted" }),
       ],
       [
         { from: "trigger", to: "context" },
         { from: "context", to: "prepare" },
         { from: "prepare", to: "reviewer" },
-        { from: "reviewer", to: "checks" },
-        { from: "checks", to: "comment" },
+        { from: "reviewer", to: "comment" },
       ],
     );
     expect(validateWorkflowDefinitionForDeployment(def, registryContext)).toEqual([]);
@@ -1736,7 +1734,6 @@ describe("validateWorkflowGraph rules", () => {
         "post_pr_comment",
         "prepare_workspace",
         "review_agent",
-        "run_checks",
       ].sort(),
     );
   });
@@ -1769,6 +1766,24 @@ describe("validateWorkflowGraph rules", () => {
           `scope:any trigger "trigger" reaches unsafe block "unsafe" (${unsafeType})`,
         ),
       ]),
+    );
+  });
+
+  it("rejects scope:any repository checks even after workspace preparation", () => {
+    const def = graph(
+      [
+        node("trigger", "trigger_pr_created", { scope: "any" }),
+        node("prepare", "prepare_workspace"),
+        node("checks", "run_checks"),
+      ],
+      [
+        { from: "trigger", to: "prepare" },
+        { from: "prepare", to: "checks" },
+      ],
+    );
+
+    expect(validateWorkflowDefinitionForDeployment(def, registryContext)).toContain(
+      'scope:any trigger "trigger" reaches unsafe block "checks" (run_checks).',
     );
   });
 

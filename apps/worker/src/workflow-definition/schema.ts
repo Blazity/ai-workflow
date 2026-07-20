@@ -1175,7 +1175,8 @@ function validateWorkspaceCapabilities(
 
 /**
  * Arbitrary-provider PR subjects have no trusted ticket or owned workspace.
- * Keep their reachable graph to PR reads/comments and pure control/LLM blocks.
+ * They may materialize a checkout for review, but repository-owned commands
+ * must never run in the credential-bearing agent sandbox.
  * This same function is called at runtime so definitions deployed before this
  * rule fail closed instead of gaining mutation privileges.
  */
@@ -1194,7 +1195,7 @@ export const ANY_SCOPE_BLOCK_POLICY = {
   prepare_workspace: "safe",
   finalize_workspace: "deny",
   run_pre_pr_checks: "deny",
-  run_checks: "safe",
+  run_checks: "deny",
   call_llm: "safe",
   fetch_pr_context: "safe",
   open_pr: "deny",

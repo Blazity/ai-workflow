@@ -120,7 +120,7 @@ describe("CodexAgentAdapter.parseReviewOutput", () => {
 });
 
 describe("CodexAgentAdapter.extractUsage", () => {
-  it("sums usage across multiple turn.completed events", () => {
+  it("partitions cached input out of total input across turn.completed events", () => {
     const ndjson = [
       JSON.stringify({ type: "turn.completed", usage: { input_tokens: 100, output_tokens: 200, cached_input_tokens: 10 } }),
       JSON.stringify({ type: "turn.completed", usage: { input_tokens: 50, output_tokens: 75, cached_input_tokens: 5 } }),
@@ -128,7 +128,7 @@ describe("CodexAgentAdapter.extractUsage", () => {
     const u = adapter.extractUsage(ndjson, null);
     expect(u).toMatchObject({
       cost_usd: null,
-      tokens: { input: 150, cached_input: 15, output: 275 },
+      tokens: { input: 135, cached_input: 15, output: 275 },
       duration_api_ms: 0,
       num_turns: 2,
     });
