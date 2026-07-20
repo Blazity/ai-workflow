@@ -14,6 +14,10 @@ import { VariableChips } from "@/components/cockpit/prompt-library/variable-chip
 import { usePromptLibrary } from "./prompt-library-context";
 import type { PromptInsertPayload } from "./prompt-insert-popup";
 import { writePromptDrag } from "@/components/cockpit/prompt-editor/prompt-drag";
+import {
+  resolvePreviewSelection,
+  type PromptPreviewRequest,
+} from "@/lib/prompt-library/reference-navigation";
 
 const pressable = "transition-transform duration-150 ease-standard active:scale-[0.96]";
 const primaryBtn = `flex-1 appearance-none cursor-pointer inline-flex items-center justify-center border border-mariner bg-mariner text-white py-1.5 px-2 rounded-[3px] font-mono text-[10px] tracking-[0.04em] uppercase ${pressable}`;
@@ -45,10 +49,12 @@ export function PromptLibraryRail({
   disabled,
   onInsert,
   targetHasContent,
+  previewRequest,
 }: {
   disabled?: boolean;
   onInsert: (payload: PromptInsertPayload) => void;
   targetHasContent: boolean;
+  previewRequest?: PromptPreviewRequest | null;
 }) {
   const { status, rows } = usePromptLibrary();
   const [query, setQuery] = useState("");
@@ -56,20 +62,47 @@ export function PromptLibraryRail({
   const [activeId, setActiveId] = useState<number | null>(null);
   const [detailCache, setDetailCache] = useState<Map<number, PromptLibraryDetailResponse>>(new Map());
   const [selectedVersion, setSelectedVersion] = useState<number | null>(null);
+  const [activePreviewRequest, setActivePreviewRequest] = useState<PromptPreviewRequest | null>(null);
+  const [missingVersion, setMissingVersion] = useState(false);
   const activeIdRef = useRef<number | null>(null);
+  const previewPaneRef = useRef<HTMLDivElement>(null);
 
   const nonArchived = useMemo(() => rows.filter((r) => r.archivedAt === null), [rows]);
   const tags = useMemo(() => Array.from(new Set(nonArchived.flatMap((r) => r.tags))).sort(), [nonArchived]);
   const filtered = useMemo(() => filterPrompts(rows, query, tag), [rows, query, tag]);
   const activeRow: PromptLibraryListRowDto | null =
-    (activeId !== null ? filtered.find((r) => r.id === activeId) : undefined) ?? filtered[0] ?? null;
+    (activeId !== null ? nonArchived.find((r) => r.id === activeId) : undefined) ?? filtered[0] ?? null;
+
+  useEffect(() => {
+    if (!previewRequest) return;
+    const row = nonArchived.find((candidate) => candidate.id === previewRequest.promptId);
+    if (!row) return;
+    setQuery("");
+    setTag(null);
+    setActiveId(row.id);
+    setActivePreviewRequest(previewRequest);
+    setSelectedVersion(previewRequest.version === "latest" ? row.currentVersion : previewRequest.version);
+    setMissingVersion(false);
+    const frame = requestAnimationFrame(() => {
+      if (previewPaneRef.current) previewPaneRef.current.scrollTop = 0;
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [nonArchived, previewRequest?.requestId]);
 
   // On active-prompt change: reset the version to head and lazy-load its history
   // (bodies of older versions) so they can be previewed and inserted.
   useEffect(() => {
     const id = activeRow?.id ?? null;
     activeIdRef.current = id;
-    setSelectedVersion(activeRow ? activeRow.currentVersion : null);
+    const requestedVersion = activePreviewRequest?.promptId === id
+      ? activePreviewRequest.version
+      : null;
+    setSelectedVersion(activeRow
+      ? requestedVersion === "latest"
+        ? activeRow.currentVersion
+        : requestedVersion ?? activeRow.currentVersion
+      : null);
+    setMissingVersion(false);
     if (id === null || detailCache.has(id)) return;
     let alive = true;
     fetch(`/api/prompt-library/${id}`)
@@ -82,15 +115,35 @@ export function PromptLibraryRail({
       alive = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeRow?.id]);
+  }, [activeRow?.id, activePreviewRequest]);
 
   const detail = activeRow ? detailCache.get(activeRow.id) : undefined;
   const versions = detail?.versions ?? [];
+  useEffect(() => {
+    if (!activeRow || !detail || activePreviewRequest?.promptId !== activeRow.id) return;
+    const selection = resolvePreviewSelection(
+      activePreviewRequest,
+      nonArchived,
+      versions.map((version) => version.version),
+    );
+    if (!selection) return;
+    setSelectedVersion(selection.selectedVersion);
+    setMissingVersion(selection.missingVersion);
+  }, [activePreviewRequest, activeRow, detail, nonArchived, versions]);
+
+  const versionLoading = Boolean(
+    activeRow
+      && activePreviewRequest?.promptId === activeRow.id
+      && activePreviewRequest.version !== "latest"
+      && activePreviewRequest.version !== activeRow.currentVersion
+      && !detail,
+  );
   const activeBody = useMemo(() => {
-    if (!activeRow) return "";
+    if (!activeRow || missingVersion || versionLoading) return "";
     const v = selectedVersion != null ? detail?.versions.find((x) => x.version === selectedVersion) : undefined;
-    return v ? v.body : activeRow.body;
-  }, [activeRow, detail, selectedVersion]);
+    if (v) return v.body;
+    return selectedVersion === activeRow.currentVersion ? activeRow.body : "";
+  }, [activeRow, detail, missingVersion, selectedVersion, versionLoading]);
   const sections = useMemo(() => (activeRow ? splitSections(activeBody) : []), [activeBody, activeRow]);
 
   const copyWhole = () => {
@@ -135,7 +188,11 @@ export function PromptLibraryRail({
         <button
           key={row.id}
           type="button"
-          onClick={() => setActiveId(row.id)}
+          onClick={() => {
+            setActivePreviewRequest(null);
+            setMissingVersion(false);
+            setActiveId(row.id);
+          }}
           className={`relative block w-full appearance-none cursor-pointer border-none pl-3 pr-2.5 py-2 text-left transition-colors duration-150 ${
             isActive ? "bg-off-white" : "bg-panel hover:bg-off-white"
           }`}
@@ -199,10 +256,18 @@ export function PromptLibraryRail({
               <h3 className="m-0 min-w-0 flex-1 truncate font-display text-[13px] font-semibold text-neutral-900">
                 {activeRow.name}
               </h3>
-              {versions.length > 1 ? (
+              {missingVersion ? (
+                <span className="shrink-0 rounded-full border border-yellow-300 bg-[#FFF4CC] px-1.5 py-0.5 font-mono text-[9px] text-neutral-700">
+                  v{selectedVersion} unavailable
+                </span>
+              ) : versions.length > 1 ? (
                 <select
                   value={selectedVersion ?? activeRow.currentVersion}
-                  onChange={(e) => setSelectedVersion(Number(e.target.value))}
+                  onChange={(e) => {
+                    setActivePreviewRequest(null);
+                    setMissingVersion(false);
+                    setSelectedVersion(Number(e.target.value));
+                  }}
                   aria-label="Version"
                   className="shrink-0 cursor-pointer appearance-none rounded-[3px] border border-neutral-200 bg-off-white px-1.5 py-0.5 font-mono text-[10px] text-neutral-700 outline-none focus:border-mariner"
                 >
@@ -224,7 +289,14 @@ export function PromptLibraryRail({
             </div>
           </div>
 
-          <div className="min-h-0 flex-1 overflow-y-auto px-3 py-2">
+          <div ref={previewPaneRef} className="min-h-0 flex-1 overflow-y-auto px-3 py-2">
+            {missingVersion ? (
+              <div className="grid min-h-[160px] place-items-center rounded-[3px] border border-dashed border-yellow-300 bg-[#FFF9E6] px-4 text-center font-body text-[12px] text-neutral-600">
+                Version v{selectedVersion} unavailable.
+              </div>
+            ) : versionLoading ? (
+              <div className="px-2 py-6 font-mono text-[11px] text-neutral-500">Loading version…</div>
+            ) : (
             <div className="flex flex-col gap-1.5">
               {sections.map((section, si) => (
                 <div
@@ -260,9 +332,10 @@ export function PromptLibraryRail({
                 </div>
               ))}
             </div>
+            )}
           </div>
 
-          {!disabled && (
+          {!disabled && !missingVersion && !versionLoading && (
             <div className="flex shrink-0 items-center gap-2 border-t border-neutral-200 bg-off-white px-3 py-2">
               <button type="button" onClick={copyWhole} className={secondaryBtn} title="Insert an editable snapshot">
                 Copy text

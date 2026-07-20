@@ -13,6 +13,7 @@ import {
   promptEditorModalCapabilities,
   trappedDialogTabTarget,
 } from "@/lib/prompt-library/prompt-editor-modal-contract";
+import type { PromptPreviewRequest, PromptPreviewTarget } from "@/lib/prompt-library/reference-navigation";
 
 const headBtn =
   "appearance-none cursor-pointer inline-flex items-center gap-1 border border-neutral-200 bg-panel text-coal py-1 px-2 rounded-[3px] font-mono text-[10px] tracking-[0.04em] uppercase transition-[background-color,color,transform] duration-150 ease-standard hover:bg-app-bg active:scale-[0.96]";
@@ -33,6 +34,7 @@ export function PromptEditorModal({
   onInsert,
   blockName,
   fieldLabel,
+  initialPreviewTarget,
 }: {
   open: boolean;
   disabled: boolean;
@@ -42,14 +44,18 @@ export function PromptEditorModal({
   onInsert: (payload: PromptInsertPayload) => void;
   blockName: string;
   fieldLabel: string;
+  initialPreviewTarget?: PromptPreviewTarget | null;
 }) {
   const { mounted, state } = useEnterExit(open, 180);
   const [libOpen, setLibOpen] = useState(true);
   const [saveOpen, setSaveOpen] = useState(false);
   const [syncRequest, setSyncRequest] = useState<{ id: number; mode: "replace" | "append" } | null>(null);
+  const [previewRequest, setPreviewRequest] = useState<PromptPreviewRequest | null>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
   const restoreFocus = useRef<HTMLElement | null>(null);
   const syncRequestId = useRef(0);
+  const previewRequestId = useRef(0);
+  const handledInitialPreview = useRef(false);
   const onCloseRef = useRef(onClose);
   const closeSave = useCallback(() => setSaveOpen(false), []);
   onCloseRef.current = onClose;
@@ -65,6 +71,12 @@ export function PromptEditorModal({
     },
     [canInsert, onInsert],
   );
+
+  const previewReference = useCallback((target: PromptPreviewTarget) => {
+    previewRequestId.current += 1;
+    setLibOpen(true);
+    setPreviewRequest({ ...target, requestId: previewRequestId.current });
+  }, []);
 
   // Modal lifetime owns scroll locking and focus restoration. Keep this separate
   // from transient rail/popover state so typing never runs the cleanup and sends
@@ -110,8 +122,17 @@ export function PromptEditorModal({
   }, [open, saveOpen]);
 
   useEffect(() => {
-    if (!open) setSyncRequest(null);
-  }, [open]);
+    if (!open) {
+      setSyncRequest(null);
+      setPreviewRequest(null);
+      handledInitialPreview.current = false;
+      return;
+    }
+    if (initialPreviewTarget && !handledInitialPreview.current) {
+      handledInitialPreview.current = true;
+      previewReference(initialPreviewTarget);
+    }
+  }, [initialPreviewTarget, open, previewReference]);
 
   useEffect(() => {
     if (open) setLibOpen(true);
@@ -191,6 +212,7 @@ export function PromptEditorModal({
                 disabled={!canInsert}
                 onInsert={handleLibraryInsert}
                 targetHasContent={hasContent}
+                previewRequest={previewRequest}
               />
             </div>
           </div>
@@ -201,6 +223,7 @@ export function PromptEditorModal({
               onChange={onChange}
               disabled={!canEdit}
               syncRequest={syncRequest}
+              onPreviewReference={previewReference}
             />
           </div>
         </div>

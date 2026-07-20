@@ -14,6 +14,7 @@ import { PromptReferenceChips } from "@/components/cockpit/prompt-editor/prompt-
 import { usePromptLibrary } from "./prompt-library-context";
 import { effectiveDefaultPromptValue } from "@/lib/prompt-library/effective-default";
 import { promptInspectorSummary } from "@/lib/prompt-library/prompt-inspector-summary";
+import type { PromptPreviewTarget } from "@/lib/prompt-library/reference-navigation";
 
 export interface PromptFieldProps {
   label: string;
@@ -61,6 +62,7 @@ export function PromptField({
 
   const [confirmUpdate, setConfirmUpdate] = useState(false);
   const [expandOpen, setExpandOpen] = useState(false);
+  const [initialPreviewTarget, setInitialPreviewTarget] = useState<PromptPreviewTarget | null>(null);
 
   const closeExpandedEditor = useCallback(() => setExpandOpen(false), []);
 
@@ -186,10 +188,21 @@ export function PromptField({
         label={label}
         disabled={disabled}
         summary={summary}
-        onOpen={() => setExpandOpen(true)}
+        onOpen={() => {
+          setInitialPreviewTarget(null);
+          setExpandOpen(true);
+        }}
       />
       {effectiveValue ? (
-        <PromptReferenceChips value={effectiveValue} onChange={setBodyValue} disabled={disabled} />
+        <PromptReferenceChips
+          value={effectiveValue}
+          onChange={setBodyValue}
+          disabled={disabled}
+          onPreview={(target) => {
+            setInitialPreviewTarget(target);
+            setExpandOpen(true);
+          }}
+        />
       ) : effective.implicit ? (
         <CkChip tone="neutral">❡ {defaultPromptName ?? "Default prompt"} · Latest</CkChip>
       ) : null}
@@ -204,6 +217,7 @@ export function PromptField({
         onInsert={(payload) => applyInsertPayload(payload, effectiveValue)}
         blockName={node.name || node.type}
         fieldLabel={label}
+        initialPreviewTarget={initialPreviewTarget}
       />
     </ConfigField>
   );
