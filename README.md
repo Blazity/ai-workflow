@@ -20,10 +20,10 @@ Most coding-agent tools optimize a single prompt or task. Engineering organizati
 
 | Principle | Benefit |
 |---|---|
-| **Inspectable by default** | See and customize every workflow step, prompt, decision, and artifact. No black box. |
-| **Human checkpoints** | Ask for missing context, approve plans, and gate delivery at explicit points. |
-| **Keep your tools** | Connect existing issue trackers, chat, alerts, repositories, and coding agents through adapters. |
-| **Learn as an organization** | Version workflows, govern execution, compare outcomes, and promote what works across teams. |
+| **🔍 Inspectable by default** | See and customize every workflow step, prompt, decision, and artifact. No black box. |
+| **🧭 Human checkpoints** | Ask for missing context, approve plans, and gate delivery at explicit points. |
+| **🔌 Keep your tools** | Connect existing issue trackers, chat, alerts, repositories, and coding agents through adapters. |
+| **📈 Learn as an organization** | Version workflows, govern execution, compare outcomes, and promote what works across teams. |
 
 ## From Event to Evidence
 
@@ -39,12 +39,12 @@ flowchart LR
 
 ## Use Cases
 
-- **Severity response:** classify an alert, gather context, and route the right workflow.
-- **Investigation and research:** inspect code, issues, incidents, and documentation before recommending action.
-- **Clarify and bounce:** pause when requirements are incomplete, ask structured questions, and resume with the answer.
-- **Plan approval:** produce an implementation plan and wait for an explicit human decision.
-- **Draft PR:** implement approved work in an isolated environment and open a pull request with evidence.
-- **Review and fix:** react to checks or review feedback, apply changes, and return the work for review.
+- **🚨 Severity response:** classify an alert, gather context, and route the right workflow.
+- **🔬 Investigation and research:** inspect code, issues, incidents, and documentation before recommending action.
+- **💬 Clarify and bounce:** pause when requirements are incomplete, ask structured questions, and resume with the answer.
+- **✅ Plan approval:** produce an implementation plan and wait for an explicit human decision.
+- **🛠️ Draft PR:** implement approved work in an isolated environment and open a pull request with evidence.
+- **🔁 Review and fix:** react to checks or review feedback, apply changes, and return the work for review.
 
 ## Target Capabilities
 
