@@ -8,7 +8,7 @@
 
 AI Workflow is free, open source, and actively being built.
 
-<div align="center"><video src="VIDEO_ASSET_URL" width="800" controls></video></div>
+<div align="center"><video src="https://github.com/user-attachments/assets/fb636bcb-482a-4d78-a63d-779c22fb1e3c" width="800" controls></video></div>
 
 ## What It Is
 
