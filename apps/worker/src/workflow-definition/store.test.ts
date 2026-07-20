@@ -50,6 +50,7 @@ import {
   WorkflowDefinitionStoreError,
   type WorkflowDefinitionActor,
 } from "./store.js";
+import { seedWorkflowDefinitionTemplates } from "./template-seed.js";
 
 const ADMIN: WorkflowDefinitionActor = { role: "admin", id: "u_admin", label: "Admin" };
 const MEMBER: WorkflowDefinitionActor = { role: "member", id: "u_member", label: "Member" };
@@ -137,6 +138,29 @@ describe("migration seed", () => {
       createdById: "system",
       createdByLabel: "System migration",
     });
+  });
+});
+
+describe("starter template seed", () => {
+  it("adds the three disabled starter workflows exactly once", async () => {
+    await seedWorkflowDefinitionTemplates(db, { includeReview: true });
+    await seedWorkflowDefinitionTemplates(db, { includeReview: true });
+
+    const defs = await listWorkflowDefinitions(db);
+    expect(defs.map((definition) => definition.name)).toEqual([
+      "Ticket workflow",
+      "Human-approved plan",
+      "Review & fix after PR",
+      "Fully modular",
+    ]);
+    expect(defs.map((definition) => definition.enabled)).toEqual([true, false, false, false]);
+    expect(defs.slice(1).map((definition) => definition.draftRevision)).toEqual([1, 1, 1]);
+    expect(defs.slice(1).map((definition) => definition.deployedVersion)).toEqual([1, 1, 1]);
+    expect(defs.slice(1).map((definition) => definition.triggerTypes)).toEqual([
+      ["trigger_ticket_ai", "trigger_plan_approved"],
+      ["trigger_pr_checks_failed", "trigger_pr_review"],
+      ["trigger_ticket_ai"],
+    ]);
   });
 });
 

@@ -206,8 +206,16 @@ export interface WorkflowDefinitionMeta {
   updatedAt: string;
 }
 
+export interface WorkflowDefinitionTemplate {
+  id: string;
+  name: string;
+  description: string;
+  definition: WorkflowDefinition;
+}
+
 export interface WorkflowDefinitionsResponse {
   definitions: WorkflowDefinitionMeta[];
+  templates: WorkflowDefinitionTemplate[];
   defaultDefinition: WorkflowDefinition;
   options: WorkflowEditorOptions;
 }

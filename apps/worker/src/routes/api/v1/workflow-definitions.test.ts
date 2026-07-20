@@ -213,6 +213,12 @@ describe("GET /api/v1/workflow-definitions", () => {
       currentVersion: null,
     });
     expect(body.defaultDefinition.schemaVersion).toBe(1);
+    expect(body.templates.map((template: { name: string }) => template.name)).toEqual([
+      "Ticket workflow",
+      "Human-approved plan",
+      "Review & fix after PR",
+      "Fully modular",
+    ]);
     expect(body.options.agentKind).toBe("claude");
     expect(body.options.defaultModel).toBe("claude-test-default");
     expect(body.options.blockRegistry.trigger_ticket_ai.type).toBe("trigger_ticket_ai");
@@ -229,6 +235,34 @@ describe("GET /api/v1/workflow-definitions", () => {
 });
 
 describe("POST /api/v1/workflow-definitions", () => {
+  it("creates a disabled definition from a named template", async () => {
+    const res = await handlerFor(definitionsPost)(
+      jsonRequest("POST", {
+        name: "Approved delivery",
+        source: { kind: "template", templateId: "human-approved-plan" },
+      }),
+    );
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.meta).toMatchObject({ name: "Approved delivery", enabled: false });
+    expect(body.draft.nodes.some((node: { type: string }) => node.type === "send_plan_approval")).toBe(
+      true,
+    );
+    expect(body.draft.nodes.some((node: { type: string }) => node.type === "review_agent")).toBe(
+      false,
+    );
+  });
+
+  it("rejects an unknown template", async () => {
+    const res = await handlerFor(definitionsPost)(
+      jsonRequest("POST", {
+        name: "Unknown template",
+        source: { kind: "template", templateId: "missing" },
+      }),
+    );
+    expect(res.status).toBe(400);
+  });
+
   it("creates a disabled definition seeded from the built-in default", async () => {
     const res = await handlerFor(definitionsPost)(
       jsonRequest("POST", { name: "Second flow", source: { kind: "default" } }),
