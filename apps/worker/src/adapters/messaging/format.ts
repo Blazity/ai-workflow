@@ -92,7 +92,13 @@ export function formatTicketEvent(
         `${head} PR ready for review — ${prLink}`,
         event.usageReport,
       );
-      return event.extraText ? `${withUsage}\n${event.extraText}` : withUsage;
+      // extraText is user/ticket-derived (a send_slack_message block's message
+      // after {{variable}} substitution), so defang Slack broadcast tokens in it
+      // before it joins our system-built copy. Applied ONLY here, not to the
+      // whole message, so our own <url|label> links are never touched.
+      return event.extraText
+        ? `${withUsage}\n${neutralizeSlackBroadcasts(event.extraText)}`
+        : withUsage;
     }
 
     case "failed": {
@@ -108,6 +114,24 @@ export function formatTicketEvent(
     case "canceled":
       return `${head} canceled: ${event.reason}`;
   }
+}
+
+/**
+ * Defang Slack broadcast tokens in untrusted, ticket-derived text so they
+ * render as literal text instead of pinging the channel.
+ *
+ * A broadcast token (`<!channel>`, `<!here>`, `<!everyone>`, `<!subteam^...>`)
+ * placed in a ticket title or description would otherwise notify everyone once
+ * it is substituted into a Slack message body (Slack sends our strings as raw
+ * mrkdwn, so it interprets these command links). We insert a zero-width space
+ * after the `<` so Slack's parser no longer recognizes the `<!` opener; the text
+ * stays human-readable.
+ *
+ * Legitimate `<@user>` mentions and `<url|label>` links do not start with `<!`,
+ * so they are left untouched.
+ */
+export function neutralizeSlackBroadcasts(text: string): string {
+  return text.replace(/<!(channel|here|everyone|subteam\^[^>]*)>/g, "<\u200b!$1>");
 }
 
 function jiraLink(ticketKey: string, jiraBaseUrl: string): string {

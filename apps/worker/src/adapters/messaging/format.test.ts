@@ -1,5 +1,7 @@
 import { describe, it, expect } from "vitest";
-import { formatTicketEvent, formatTicketStatus } from "./format.js";
+import { formatTicketEvent, formatTicketStatus, neutralizeSlackBroadcasts } from "./format.js";
+
+const ZWSP = "\u200b";
 
 const JIRA = "https://example.atlassian.net";
 const KEY = "AWT-42";
@@ -279,5 +281,56 @@ describe("formatTicketEvent", () => {
     expect(
       formatTicketEvent({ kind: "started" }, KEY, `${JIRA}/`),
     ).toBe(`:hourglass_flowing_sand: Task ${LINK} started`);
+  });
+
+  it("pr_ready: defangs a broadcast token in extraText but keeps our own links", () => {
+    const text = formatTicketEvent(
+      {
+        kind: "pr_ready",
+        pr: { url: "https://github.com/o/r/pull/7", number: 7 },
+        usageReport: "Total: $0.10",
+        extraText: "Ship it <!channel>",
+      },
+      KEY,
+      JIRA,
+    );
+    // Our system-built PR link is untouched; the ticket-derived broadcast token
+    // is neutralized so it renders as literal text instead of pinging everyone.
+    expect(text).toContain("<https://github.com/o/r/pull/7|#7>");
+    expect(text).not.toContain("<!channel>");
+    expect(text).toContain(`Ship it <${ZWSP}!channel>`);
+  });
+});
+
+describe("neutralizeSlackBroadcasts", () => {
+  it("defangs each broadcast token so it renders as literal text", () => {
+    expect(neutralizeSlackBroadcasts("<!channel>")).toBe(`<${ZWSP}!channel>`);
+    expect(neutralizeSlackBroadcasts("<!here>")).toBe(`<${ZWSP}!here>`);
+    expect(neutralizeSlackBroadcasts("<!everyone>")).toBe(`<${ZWSP}!everyone>`);
+    expect(neutralizeSlackBroadcasts("<!subteam^S123|@team>")).toBe(
+      `<${ZWSP}!subteam^S123|@team>`,
+    );
+  });
+
+  it("defangs multiple tokens embedded in a sentence", () => {
+    expect(
+      neutralizeSlackBroadcasts("hey <!here> and <!channel> now"),
+    ).toBe(`hey <${ZWSP}!here> and <${ZWSP}!channel> now`);
+    // None of the original ping tokens survive verbatim.
+    for (const token of ["<!here>", "<!channel>"]) {
+      expect(neutralizeSlackBroadcasts("hey <!here> and <!channel> now")).not.toContain(token);
+    }
+  });
+
+  it("leaves plain text, user mentions, and link labels untouched", () => {
+    for (const text of [
+      "just a normal message",
+      "ping <@U12345> please",
+      "see <https://example.com|the docs>",
+      "channel and here without brackets",
+      "<#C0001|general> heads up",
+    ]) {
+      expect(neutralizeSlackBroadcasts(text)).toBe(text);
+    }
   });
 });

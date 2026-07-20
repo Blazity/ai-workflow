@@ -1,4 +1,4 @@
-import { and, arrayContains, asc, desc, eq, inArray, isNull, max, or } from "drizzle-orm";
+import { and, arrayContains, asc, desc, eq, inArray, isNull, max, notExists, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import type {
   PromptLibraryEntryMeta,
@@ -334,23 +334,34 @@ async function insertPromptParent(
  *  version-1 seed and its compensating delete both failed), delete it so the
  *  caller can retry the insert. Deleting a zero-version row is safe because
  *  nothing references it. Returns true when an orphan was removed; a live prompt
- *  (>= 1 version) is left untouched so the caller keeps the 409. */
+ *  (>= 1 version) is left untouched so the caller keeps the 409.
+ *
+ *  The delete is a single conditional statement (NOT EXISTS guard) rather than a
+ *  read-then-delete, so a row that gains a version between a check and the delete
+ *  can never be removed: the guard is evaluated atomically with the delete.
+ *  Equivalent to:
+ *    DELETE FROM prompt_library
+ *    WHERE name = $name AND archived_at IS NULL
+ *      AND NOT EXISTS (
+ *        SELECT 1 FROM prompt_library_versions WHERE prompt_id = prompt_library.id
+ *      ) */
 async function tryHealOrphanName(db: Db, name: string): Promise<boolean> {
-  const rows = await db
-    .select({ id: promptLibrary.id })
-    .from(promptLibrary)
-    .where(and(eq(promptLibrary.name, name), isNull(promptLibrary.archivedAt)))
-    .limit(1);
-  const conflicting = rows[0];
-  if (!conflicting) return false;
-  const versionRows = await db
-    .select({ version: promptLibraryVersions.version })
-    .from(promptLibraryVersions)
-    .where(eq(promptLibraryVersions.promptId, conflicting.id))
-    .limit(1);
-  if (versionRows.length > 0) return false;
-  await db.delete(promptLibrary).where(eq(promptLibrary.id, conflicting.id));
-  return true;
+  const deleted = await db
+    .delete(promptLibrary)
+    .where(
+      and(
+        eq(promptLibrary.name, name),
+        isNull(promptLibrary.archivedAt),
+        notExists(
+          db
+            .select({ one: sql`1` })
+            .from(promptLibraryVersions)
+            .where(eq(promptLibraryVersions.promptId, promptLibrary.id)),
+        ),
+      ),
+    )
+    .returning({ id: promptLibrary.id });
+  return deleted.length > 0;
 }
 
 export async function createPrompt(

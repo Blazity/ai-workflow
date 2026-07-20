@@ -146,10 +146,18 @@ describe("createPrompt orphan heal", () => {
   });
 
   it("keeps the 409 when the conflicting active name belongs to a real prompt", async () => {
-    await createPrompt(db, { name: "Live", body: "a", actor: ADMIN });
+    const live = await createPrompt(db, { name: "Live", body: "a", actor: ADMIN });
     await expect(
       createPrompt(db, { name: "Live", body: "b", actor: ADMIN }),
     ).rejects.toMatchObject({ statusCode: 409, message: "Name already in use" });
+
+    // The conditional heal must never delete a row that has a version: the live
+    // prompt and its version 1 survive the failed create untouched.
+    expect((await getPrompt(db, live.prompt.id))?.name).toBe("Live");
+    expect((await getCurrentPromptVersion(db, live.prompt.id))?.version).toBe(1);
+    const lives = (await listPrompts(db)).filter((p) => p.name === "Live");
+    expect(lives).toHaveLength(1);
+    expect(lives[0].id).toBe(live.prompt.id);
   });
 });
 
