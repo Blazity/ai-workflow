@@ -32,7 +32,7 @@ describe("assertActiveRunOwner", () => {
 
     await db
       .update(activeRuns)
-      .set({ state: "cancelling", ticketCancellationReconciledVersion: -1 })
+      .set({ state: "cancelling" })
       .where(eq(activeRuns.subjectKey, subjectKey));
     await expect(
       assertActiveRunOwner(db, {
@@ -47,7 +47,6 @@ describe("assertActiveRunOwner", () => {
       .set({
         state: "bound",
         ownerToken: "owner-successor",
-        ticketCancellationReconciledVersion: null,
       })
       .where(eq(activeRuns.subjectKey, subjectKey));
     await expect(
@@ -80,7 +79,7 @@ describe("assertActiveRunOwner", () => {
 
     await db
       .update(activeRuns)
-      .set({ state: "cancelling", ticketCancellationReconciledVersion: -1 })
+      .set({ state: "cancelling" })
       .where(eq(activeRuns.subjectKey, subjectKey));
     await expect(
       assertActiveRunOwner(db, {

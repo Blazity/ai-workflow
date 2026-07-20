@@ -5,9 +5,6 @@ import {
   activeRunSandboxes,
   activeRuns,
   clarificationRequests,
-  ticketCancellationFences,
-  ticketLabelMutationIntents,
-  ticketTransitionIntents,
 } from "../../db/schema.js";
 import { createTestDb } from "../../db/test-db.js";
 import { ActiveRunOwnerError } from "../../lib/run-control-errors.js";
@@ -194,19 +191,10 @@ describe("owner-CAS run claims", () => {
       state: "cancelling",
     });
     expect(
-      (await db.select().from(activeRuns))[0]?.ticketCancellationReconciledVersion,
-    ).toBe(-1);
-    expect(
       await registry.releaseCancellation(subjectKey, "owner-a", "run-other"),
     ).toBe(false);
     expect(
       await registry.releaseCancellation(subjectKey, "owner-a", "run-winner"),
-    ).toBe(false);
-    expect(
-      await registry.releaseCancellation(subjectKey, "owner-a", "run-winner", {
-        latestFenceId: null,
-        mutationVersion: 0,
-      }),
     ).toBe(true);
     expect(await registry.get(subjectKey)).toBeNull();
   });
@@ -499,157 +487,7 @@ describe("owner-CAS run claims", () => {
       runId: null,
       state: "cancelling",
     });
-    expect(await registry.releaseCancellation(subjectKey, "owner-a", null)).toBe(false);
-    expect(
-      await registry.releaseCancellation(subjectKey, "owner-a", null, {
-        latestFenceId: null,
-        mutationVersion: 0,
-      }),
-    ).toBe(true);
-  });
-
-  it("releases only the exact ticket mutation version and newest human fence it reconciled", async () => {
-    await registry.reserve({
-      subjectKey,
-      ticketKey: "PROJ-1",
-      ownerToken: "owner-a",
-      kind: "ticket",
-    });
-    await registry.bindRun(subjectKey, "owner-a", "run-winner");
-    await registry.beginCancellation(subjectKey, "owner-a", "run-winner");
-    const [first] = await db
-      .insert(ticketCancellationFences)
-      .values({
-        ticketKey: "PROJ-1",
-        subjectKey,
-        ownerToken: "owner-a",
-        runId: "run-winner",
-        targetStatusName: "Backlog",
-        webhookIdentifier: "human-fence-a",
-        occurredAt: new Date("2026-07-18T12:00:00Z"),
-        expiresAt: new Date(Date.now() + 60_000),
-      })
-      .returning({ id: ticketCancellationFences.id });
-    const [second] = await db
-      .insert(ticketCancellationFences)
-      .values({
-        ticketKey: "PROJ-1",
-        subjectKey,
-        ownerToken: "owner-a",
-        runId: "run-winner",
-        targetStatusName: "Blocked",
-        webhookIdentifier: "human-fence-b",
-        occurredAt: new Date("2026-07-18T12:00:01Z"),
-        expiresAt: new Date(Date.now() + 60_000),
-      })
-      .returning({ id: ticketCancellationFences.id });
-    await db
-      .update(activeRuns)
-      .set({ ticketMutationVersion: 2 })
-      .where(eq(activeRuns.subjectKey, subjectKey));
-
-    await expect(
-      registry.releaseCancellation(subjectKey, "owner-a", "run-winner", {
-        latestFenceId: first!.id,
-        mutationVersion: 2,
-      }),
-    ).resolves.toBe(false);
-    await expect(
-      registry.releaseCancellation(subjectKey, "owner-a", "run-winner", {
-        latestFenceId: second!.id,
-        mutationVersion: 1,
-      }),
-    ).resolves.toBe(false);
-    await expect(
-      registry.releaseCancellation(subjectKey, "owner-a", "run-winner", {
-        latestFenceId: second!.id,
-        mutationVersion: 2,
-      }),
-    ).resolves.toBe(true);
-  });
-
-  it("retains a cancelling ticket owner while an exact provider call is unresolved", async () => {
-    await registry.reserve({
-      subjectKey,
-      ticketKey: "PROJ-1",
-      ownerToken: "owner-a",
-      kind: "ticket",
-    });
-    await registry.bindRun(subjectKey, "owner-a", "run-winner");
-    await registry.beginCancellation(subjectKey, "owner-a", "run-winner");
-    const [intent] = await db
-      .insert(ticketTransitionIntents)
-      .values({
-        ticketKey: "PROJ-1",
-        subjectKey,
-        ownerToken: "owner-a",
-        runId: "run-winner",
-        actorAccountId: "jira-bot",
-        targetStatusName: "Backlog",
-        providerStartedAt: new Date(),
-        expiresAt: new Date(Date.now() + 60_000),
-      })
-      .returning({ id: ticketTransitionIntents.id });
-    await db
-      .update(activeRuns)
-      .set({ ticketMutationVersion: 1 })
-      .where(eq(activeRuns.subjectKey, subjectKey));
-
-    await expect(
-      registry.releaseCancellation(subjectKey, "owner-a", "run-winner", {
-        latestFenceId: null,
-        mutationVersion: 1,
-      }),
-    ).resolves.toBe(false);
-    await db
-      .update(ticketTransitionIntents)
-      .set({ providerFinishedAt: new Date() })
-      .where(eq(ticketTransitionIntents.id, intent!.id));
-    await expect(
-      registry.releaseCancellation(subjectKey, "owner-a", "run-winner", {
-        latestFenceId: null,
-        mutationVersion: 1,
-      }),
-    ).resolves.toBe(true);
-  });
-
-  it("retains a cancelling ticket owner while an exact label call is unresolved", async () => {
-    await registry.reserve({
-      subjectKey,
-      ticketKey: "PROJ-1",
-      ownerToken: "owner-a",
-      kind: "ticket",
-    });
-    await registry.bindRun(subjectKey, "owner-a", "run-winner");
-    await registry.beginCancellation(subjectKey, "owner-a", "run-winner");
-    const [intent] = await db
-      .insert(ticketLabelMutationIntents)
-      .values({
-        ticketKey: "PROJ-1",
-        subjectKey,
-        ownerToken: "owner-a",
-        runId: "run-winner",
-        removeLabels: ["needs-clarification"],
-        expiresAt: new Date(Date.now() + 60_000),
-      })
-      .returning({ id: ticketLabelMutationIntents.id });
-
-    await expect(
-      registry.releaseCancellation(subjectKey, "owner-a", "run-winner", {
-        latestFenceId: null,
-        mutationVersion: 1,
-      }),
-    ).resolves.toBe(false);
-    await db
-      .update(ticketLabelMutationIntents)
-      .set({ providerFinishedAt: new Date() })
-      .where(eq(ticketLabelMutationIntents.id, intent!.id));
-    await expect(
-      registry.releaseCancellation(subjectKey, "owner-a", "run-winner", {
-        latestFenceId: null,
-        mutationVersion: 1,
-      }),
-    ).resolves.toBe(true);
+    expect(await registry.releaseCancellation(subjectKey, "owner-a", null)).toBe(true);
   });
 
   it.each(["parking", "parked"] as const)(
@@ -685,45 +523,6 @@ describe("owner-CAS run claims", () => {
     expect(await registry.releaseReservation(subjectKey, "owner-b")).toBe(false);
     expect(await registry.releaseReservation(subjectKey, "owner-a")).toBe(true);
     expect(await registry.get(subjectKey)).toBeNull();
-  });
-
-  it("keeps an approval's reserved owner until its ambiguous Jira transition settles", async () => {
-    await registry.reserve({
-      subjectKey,
-      ticketKey: "PROJ-1",
-      ownerToken: "approval-owner",
-      kind: "ticket",
-    });
-    const [intent] = await db
-      .insert(ticketTransitionIntents)
-      .values({
-        ticketKey: "PROJ-1",
-        subjectKey,
-        ownerToken: "approval-owner",
-        runId: null,
-        actorAccountId: "jira-bot",
-        targetStatusName: "AI",
-        expiresAt: new Date(Date.now() + 60_000),
-      })
-      .returning({ id: ticketTransitionIntents.id });
-
-    await expect(
-      registry.bindRun(subjectKey, "approval-owner", "run-too-early"),
-    ).resolves.toBe(false);
-    await expect(
-      registry.handoff(subjectKey, "approval-owner", "replacement-owner"),
-    ).resolves.toBe(false);
-    await expect(
-      registry.releaseReservation(subjectKey, "approval-owner"),
-    ).resolves.toBe(false);
-
-    await db
-      .update(ticketTransitionIntents)
-      .set({ providerFinishedAt: new Date() })
-      .where(eq(ticketTransitionIntents.id, intent!.id));
-    await expect(
-      registry.releaseReservation(subjectKey, "approval-owner"),
-    ).resolves.toBe(true);
   });
 
   it("owner-only reservation handoff never overwrites a bound run", async () => {
@@ -982,7 +781,6 @@ describe("subject metadata and capacity listing", () => {
         ownerToken: "owner-cancelling",
         runId: "run-cancelling",
         state: "cancelling",
-        ticketCancellationReconciledVersion: -1,
       },
       {
         subjectKey: expiredSubject,
@@ -1004,11 +802,9 @@ describe("subject metadata and capacity listing", () => {
         id: "clarification-parked",
         ticketKey: "PROJ-PARKED",
         subjectKey: parkedSubject,
-        ownerToken: "owner-parked",
         runId: "run-parked",
         questions: ["Which implementation?"],
         status: "pending",
-        checkpointState: "ready",
         expiresAt: new Date("2099-01-01T00:00:00.000Z"),
         publishedAt: new Date("2026-01-01T00:00:00.000Z"),
       },
@@ -1016,13 +812,10 @@ describe("subject metadata and capacity listing", () => {
         id: "clarification-answered",
         ticketKey: "PROJ-ANSWERED",
         subjectKey: answeredSubject,
-        ownerToken: "owner-answered",
         runId: "run-answered",
         questions: ["Which implementation?"],
         status: "answered",
         answer: "Use the existing pattern",
-        successorOwnerToken: "owner-successor",
-        checkpointState: "ready",
         expiresAt: new Date("2099-01-01T00:00:00.000Z"),
         publishedAt: new Date("2026-01-01T00:00:00.000Z"),
       },
@@ -1030,11 +823,9 @@ describe("subject metadata and capacity listing", () => {
         id: "clarification-active-mismatch",
         ticketKey: "PROJ-ACTIVE",
         subjectKey: activeSubject,
-        ownerToken: "a-different-owner",
         runId: "run-active",
         questions: ["This must not park the active owner"],
         status: "pending",
-        checkpointState: "ready",
         expiresAt: new Date("2099-01-01T00:00:00.000Z"),
         publishedAt: new Date("2026-01-01T00:00:00.000Z"),
       },
@@ -1042,11 +833,9 @@ describe("subject metadata and capacity listing", () => {
         id: "clarification-cancelling",
         ticketKey: "PROJ-CANCELLING",
         subjectKey: cancellingSubject,
-        ownerToken: "owner-cancelling",
         runId: "run-cancelling",
         questions: ["Cancellation must still occupy capacity"],
         status: "pending",
-        checkpointState: "ready",
         expiresAt: new Date("2099-01-01T00:00:00.000Z"),
         publishedAt: new Date("2026-01-01T00:00:00.000Z"),
       },
@@ -1054,11 +843,9 @@ describe("subject metadata and capacity listing", () => {
         id: "clarification-expired",
         ticketKey: "PROJ-EXPIRED",
         subjectKey: expiredSubject,
-        ownerToken: "owner-expired",
         runId: "run-expired",
         questions: ["Expired checkpoints are not safely parked"],
         status: "pending",
-        checkpointState: "ready",
         expiresAt: new Date("2020-01-01T00:00:00.000Z"),
         publishedAt: new Date("2020-01-01T00:00:00.000Z"),
       },
@@ -1066,11 +853,9 @@ describe("subject metadata and capacity listing", () => {
         id: "clarification-parking",
         ticketKey: "PROJ-PARKING",
         subjectKey: parkingSubject,
-        ownerToken: "owner-parking",
         runId: "run-parking",
         questions: ["Parking must still occupy capacity"],
         status: "pending",
-        checkpointState: "ready",
         expiresAt: new Date("2099-01-01T00:00:00.000Z"),
         publishedAt: new Date("2026-01-01T00:00:00.000Z"),
       },
@@ -1119,15 +904,13 @@ describe("subject metadata and capacity listing", () => {
       })),
     );
     await db.insert(clarificationRequests).values(
-      subjects.map(([subject, ownerToken, runId]) => ({
+      subjects.map(([subject, _ownerToken, runId]) => ({
         id: `clarification-${runId}`,
         ticketKey: subject.slice("ticket:jira:".length),
         subjectKey: subject,
-        ownerToken: subject === wrongOwnerSubject ? "owner-predecessor" : ownerToken,
         runId,
         questions: ["Which implementation?"],
         status: "pending",
-        checkpointState: "ready",
         expiresAt: new Date("2099-01-01T00:00:00.000Z"),
         publishedAt: new Date("2026-01-01T00:00:00.000Z"),
       })),

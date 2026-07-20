@@ -42,14 +42,6 @@ export interface ActiveRunEntry extends RunReservation {
   updatedAt: number;
 }
 
-/** Ticket cancellation release CAS. `null` means reconciliation observed no
- * human status fence; the guarded delete then requires that none appeared
- * before release. */
-export interface TicketCancellationReleaseGuard {
-  latestFenceId: number | null;
-  mutationVersion: number;
-}
-
 export interface RunRegistryAdapter {
   /** Atomically reserve an unclaimed provider-neutral subject. */
   reserve(reservation: RunReservation): Promise<boolean>;
@@ -96,7 +88,6 @@ export interface RunRegistryAdapter {
     subjectKey: string,
     ownerToken: string,
     runId: string | null,
-    ticketGuard?: TicketCancellationReleaseGuard,
   ): Promise<boolean>;
   /** Discard a reservation only before any workflow candidate has bound it. */
   releaseReservation(subjectKey: string, ownerToken: string): Promise<boolean>;
@@ -126,9 +117,7 @@ export interface RunRegistryAdapter {
   ): Promise<boolean>;
   listSandboxes(subjectKey: string, ownerToken: string): Promise<string[]>;
 
-  /** Mark a ticket as failed only while the exact bound run still owns it.
-   * Rolling compatibility for old callers is enforced by the database trigger,
-   * not by weakening this source contract. */
+  /** Mark a ticket as failed only while the exact bound run still owns it. */
   markFailed(
     ticketKey: string,
     meta: FailedTicketMeta,

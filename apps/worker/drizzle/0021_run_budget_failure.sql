@@ -1,1 +1,0 @@
-ALTER TABLE "workflow_runs" ADD COLUMN "budget_failure" jsonb;

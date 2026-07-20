@@ -1,21 +1,21 @@
 {
-  "id": "fec03f53-7ac5-4424-bc7a-d44cdb8bf6b6",
+  "id": "527c66e4-2a95-4987-8b93-20678beb6314",
   "prevId": "21923206-cfab-4bc1-8925-3901d7df92c9",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
-    "public.active_runs": {
-      "name": "active_runs",
+    "public.active_run_sandboxes": {
+      "name": "active_run_sandboxes",
       "schema": "",
       "columns": {
-        "ticket_key": {
-          "name": "ticket_key",
+        "subject_key": {
+          "name": "subject_key",
           "type": "text",
-          "primaryKey": true,
+          "primaryKey": false,
           "notNull": true
         },
-        "run_id": {
-          "name": "run_id",
+        "owner_token": {
+          "name": "owner_token",
           "type": "text",
           "primaryKey": false,
           "notNull": true
@@ -24,7 +24,83 @@
           "name": "sandbox_id",
           "type": "text",
           "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "active_run_sandboxes_subject_owner_fk": {
+          "name": "active_run_sandboxes_subject_owner_fk",
+          "tableFrom": "active_run_sandboxes",
+          "tableTo": "active_runs",
+          "columnsFrom": [
+            "subject_key",
+            "owner_token"
+          ],
+          "columnsTo": [
+            "subject_key",
+            "owner_token"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "active_run_sandboxes_subject_key_owner_token_sandbox_id_pk": {
+          "name": "active_run_sandboxes_subject_key_owner_token_sandbox_id_pk",
+          "columns": [
+            "subject_key",
+            "owner_token",
+            "sandbox_id"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.active_runs": {
+      "name": "active_runs",
+      "schema": "",
+      "columns": {
+        "subject_key": {
+          "name": "subject_key",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "ticket_key": {
+          "name": "ticket_key",
+          "type": "text",
+          "primaryKey": false,
           "notNull": false
+        },
+        "owner_token": {
+          "name": "owner_token",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "run_id": {
+          "name": "run_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "state": {
+          "name": "state",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'reserved'"
         },
         "run_kind": {
           "name": "run_kind",
@@ -39,14 +115,67 @@
           "primaryKey": false,
           "notNull": true,
           "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
         }
       },
-      "indexes": {},
+      "indexes": {
+        "active_runs_ticket_key_idx": {
+          "name": "active_runs_ticket_key_idx",
+          "columns": [
+            {
+              "expression": "ticket_key",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "active_runs_subject_owner_idx": {
+          "name": "active_runs_subject_owner_idx",
+          "columns": [
+            {
+              "expression": "subject_key",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "owner_token",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
       "foreignKeys": {},
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "policies": {},
-      "checkConstraints": {},
+      "checkConstraints": {
+        "active_runs_state_check": {
+          "name": "active_runs_state_check",
+          "value": "\"active_runs\".\"state\" in ('reserved', 'bound', 'parking', 'parked', 'cancelling')"
+        },
+        "active_runs_state_run_id_check": {
+          "name": "active_runs_state_run_id_check",
+          "value": "(\"active_runs\".\"state\" = 'reserved' and \"active_runs\".\"run_id\" is null) or (\"active_runs\".\"state\" in ('bound', 'parking', 'parked') and \"active_runs\".\"run_id\" is not null) or \"active_runs\".\"state\" = 'cancelling'"
+        }
+      },
       "isRLSEnabled": false
     },
     "public.env_marker": {
@@ -354,14 +483,50 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "public.workflow_definition_deployments": {
-      "name": "workflow_definition_deployments",
+    "public.trigger_deliveries": {
+      "name": "trigger_deliveries",
       "schema": "",
       "columns": {
-        "id": {
-          "name": "id",
-          "type": "serial",
-          "primaryKey": true,
+        "provider": {
+          "name": "provider",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "delivery_id": {
+          "name": "delivery_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "producer": {
+          "name": "producer",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "trigger_type": {
+          "name": "trigger_type",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "subject_key": {
+          "name": "subject_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "ticket_key": {
+          "name": "ticket_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "head_sha": {
+          "name": "head_sha",
+          "type": "text",
+          "primaryKey": false,
           "notNull": true
         },
         "definition_id": {
@@ -370,27 +535,28 @@
           "primaryKey": false,
           "notNull": true
         },
-        "selected_version": {
-          "name": "selected_version",
+        "definition_version": {
+          "name": "definition_version",
           "type": "integer",
           "primaryKey": false,
           "notNull": true
         },
-        "previous_version": {
-          "name": "previous_version",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "action": {
-          "name": "action",
-          "type": "text",
+        "payload": {
+          "name": "payload",
+          "type": "jsonb",
           "primaryKey": false,
           "notNull": true
         },
-        "rollback_from_version": {
-          "name": "rollback_from_version",
-          "type": "integer",
+        "pending": {
+          "name": "pending",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
+        },
+        "result": {
+          "name": "result",
+          "type": "jsonb",
           "primaryKey": false,
           "notNull": false
         },
@@ -401,41 +567,40 @@
           "notNull": true,
           "default": "now()"
         },
-        "created_by_id": {
-          "name": "created_by_id",
-          "type": "text",
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
           "primaryKey": false,
-          "notNull": true
-        },
-        "created_by_label": {
-          "name": "created_by_label",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
+          "notNull": true,
+          "default": "now()"
         }
       },
-      "indexes": {},
+      "indexes": {
+        "trigger_deliveries_one_pending_per_subject_idx": {
+          "name": "trigger_deliveries_one_pending_per_subject_idx",
+          "columns": [
+            {
+              "expression": "subject_key",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "\"trigger_deliveries\".\"pending\" = true",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
       "foreignKeys": {
-        "workflow_definition_deployments_definition_id_workflow_definitions_id_fk": {
-          "name": "workflow_definition_deployments_definition_id_workflow_definitions_id_fk",
-          "tableFrom": "workflow_definition_deployments",
-          "tableTo": "workflow_definitions",
-          "columnsFrom": [
-            "definition_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "workflow_definition_deployments_selected_version_fk": {
-          "name": "workflow_definition_deployments_selected_version_fk",
-          "tableFrom": "workflow_definition_deployments",
+        "trigger_deliveries_definition_version_fk": {
+          "name": "trigger_deliveries_definition_version_fk",
+          "tableFrom": "trigger_deliveries",
           "tableTo": "workflow_definition_versions",
           "columnsFrom": [
             "definition_id",
-            "selected_version"
+            "definition_version"
           ],
           "columnsTo": [
             "definition_id",
@@ -445,15 +610,18 @@
           "onUpdate": "no action"
         }
       },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {
-        "workflow_definition_deployments_action_check": {
-          "name": "workflow_definition_deployments_action_check",
-          "value": "\"workflow_definition_deployments\".\"action\" in ('deploy', 'rollback', 'migration')"
+      "compositePrimaryKeys": {
+        "trigger_deliveries_provider_delivery_id_pk": {
+          "name": "trigger_deliveries_provider_delivery_id_pk",
+          "columns": [
+            "provider",
+            "delivery_id"
+          ]
         }
       },
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
       "isRLSEnabled": false
     },
     "public.workflow_definition_triggers": {
@@ -596,32 +764,12 @@
           "notNull": true,
           "default": false
         },
-        "builtin_fallback": {
-          "name": "builtin_fallback",
-          "type": "boolean",
-          "primaryKey": false,
-          "notNull": true,
-          "default": false
-        },
         "trigger_types": {
           "name": "trigger_types",
           "type": "text[]",
           "primaryKey": false,
           "notNull": true,
           "default": "'{}'::text[]"
-        },
-        "draft": {
-          "name": "draft",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "draft_revision": {
-          "name": "draft_revision",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 0
         },
         "layout": {
           "name": "layout",
@@ -689,22 +837,6 @@
           ],
           "isUnique": true,
           "where": "\"workflow_definitions\".\"archived_at\" is null",
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "workflow_definitions_single_builtin_fallback_idx": {
-          "name": "workflow_definitions_single_builtin_fallback_idx",
-          "columns": [
-            {
-              "expression": "builtin_fallback",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "where": "\"workflow_definitions\".\"builtin_fallback\" = true",
           "concurrently": false,
           "method": "btree",
           "with": {}
@@ -779,6 +911,37 @@
           "primaryKey": false,
           "notNull": false
         },
+        "published_head_sha": {
+          "name": "published_head_sha",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "target_branch": {
+          "name": "target_branch",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "pr_published_head_sha": {
+          "name": "pr_published_head_sha",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "pr_target_branch": {
+          "name": "pr_target_branch",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "pr_correlation_pending": {
+          "name": "pr_correlation_pending",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
+        },
         "created_at": {
           "name": "created_at",
           "type": "timestamp with time zone",
@@ -840,6 +1003,12 @@
         },
         "status": {
           "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "subject_key": {
+          "name": "subject_key",
           "type": "text",
           "primaryKey": false,
           "notNull": false
@@ -958,6 +1127,12 @@
           "primaryKey": false,
           "notNull": false
         },
+        "budget_failure": {
+          "name": "budget_failure",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
         "definition_version": {
           "name": "definition_version",
           "type": "integer",
@@ -1012,6 +1187,21 @@
           "columns": [
             {
               "expression": "started_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "workflow_runs_subject_key_idx": {
+          "name": "workflow_runs_subject_key_idx",
+          "columns": [
+            {
+              "expression": "subject_key",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
@@ -2159,7 +2349,13 @@
           "name": "ticket_key",
           "type": "text",
           "primaryKey": false,
-          "notNull": true
+          "notNull": false
+        },
+        "subject_key": {
+          "name": "subject_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
         },
         "run_id": {
           "name": "run_id",
@@ -2202,7 +2398,13 @@
           "type": "text",
           "primaryKey": false,
           "notNull": true,
-          "default": "'pending'"
+          "default": "'preparing'"
+        },
+        "hook_token": {
+          "name": "hook_token",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
         },
         "asked_at": {
           "name": "asked_at",
@@ -2210,6 +2412,18 @@
           "primaryKey": false,
           "notNull": true,
           "default": "now()"
+        },
+        "published_at": {
+          "name": "published_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "expires_at": {
+          "name": "expires_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
         },
         "answer": {
           "name": "answer",
@@ -2235,8 +2449,33 @@
           "primaryKey": false,
           "notNull": false
         },
-        "dispatched_run_id": {
-          "name": "dispatched_run_id",
+        "snapshot_id": {
+          "name": "snapshot_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "source_sandbox_id": {
+          "name": "source_sandbox_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "snapshot_expires_at": {
+          "name": "snapshot_expires_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "cleanup_state": {
+          "name": "cleanup_state",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'none'"
+        },
+        "cleanup_error": {
+          "name": "cleanup_error",
           "type": "text",
           "primaryKey": false,
           "notNull": false
@@ -2288,11 +2527,47 @@
           "method": "btree",
           "with": {}
         },
-        "clarification_requests_pending_ticket_idx": {
-          "name": "clarification_requests_pending_ticket_idx",
+        "clarification_requests_expiry_idx": {
+          "name": "clarification_requests_expiry_idx",
           "columns": [
             {
-              "expression": "ticket_key",
+              "expression": "status",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "expires_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "clarification_requests_hook_token_idx": {
+          "name": "clarification_requests_hook_token_idx",
+          "columns": [
+            {
+              "expression": "hook_token",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "clarification_requests_pending_subject_idx": {
+          "name": "clarification_requests_pending_subject_idx",
+          "columns": [
+            {
+              "expression": "subject_key",
               "isExpression": false,
               "asc": true,
               "nulls": "last"

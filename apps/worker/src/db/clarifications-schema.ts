@@ -36,14 +36,6 @@ export const clarificationRequests = pgTable(
     snapshotExpiresAt: timestamp("snapshot_expires_at", { withTimezone: true }),
     cleanupState: text("cleanup_state").notNull().default("none"),
     cleanupError: text("cleanup_error"),
-    // Transitional read compatibility for rows written by the merged PR 118
-    // checkpoint implementation. No new hook clarification writes these fields;
-    // the migration squash removes them after the compatibility tests are gone.
-    ownerToken: text("owner_token"),
-    checkpointState: text("checkpoint_state"),
-    workspaceManifest: jsonb("workspace_manifest"),
-    successorOwnerToken: text("successor_owner_token"),
-    dispatchedRunId: text("dispatched_run_id"),
   },
   (t) => [
     index("clarification_requests_status_idx").on(t.status),

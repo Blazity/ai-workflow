@@ -14,7 +14,6 @@ import {
   type FailedTicketOwner,
   type RunRegistryAdapter,
   type RunReservation,
-  type TicketCancellationReleaseGuard,
   type ThreadStore,
 } from "./types.js";
 
@@ -46,8 +45,6 @@ export class PostgresRunRegistry implements RunRegistryAdapter, ThreadStore {
           eq(activeRuns.ownerToken, ownerToken),
           eq(activeRuns.state, "reserved"),
           isNull(activeRuns.runId),
-          eq(activeRuns.ticketProviderCallsInFlight, 0),
-          noStartedTicketProviderCall(subjectKey, ownerToken, null),
           sql`${activeRuns.updatedAt} >= now() - (${RESERVATION_BIND_GRACE_MS} * interval '1 millisecond')`,
         ),
       )
@@ -136,8 +133,6 @@ export class PostgresRunRegistry implements RunRegistryAdapter, ThreadStore {
           eq(activeRuns.ownerToken, currentOwnerToken),
           eq(activeRuns.state, "reserved"),
           isNull(activeRuns.runId),
-          eq(activeRuns.ticketProviderCallsInFlight, 0),
-          noStartedTicketProviderCall(subjectKey, currentOwnerToken, null),
         ),
       )
       .returning({ subjectKey: activeRuns.subjectKey });
@@ -164,8 +159,6 @@ export class PostgresRunRegistry implements RunRegistryAdapter, ThreadStore {
           eq(activeRuns.ownerToken, currentOwnerToken),
           eq(activeRuns.runId, currentRunId),
           eq(activeRuns.state, "parked"),
-          eq(activeRuns.ticketProviderCallsInFlight, 0),
-          noStartedTicketProviderCall(subjectKey, currentOwnerToken, currentRunId),
         ),
       )
       .returning({ subjectKey: activeRuns.subjectKey });
@@ -192,8 +185,6 @@ export class PostgresRunRegistry implements RunRegistryAdapter, ThreadStore {
           eq(activeRuns.ownerToken, successorOwnerToken),
           eq(activeRuns.state, "reserved"),
           isNull(activeRuns.runId),
-          eq(activeRuns.ticketProviderCallsInFlight, 0),
-          noStartedTicketProviderCall(subjectKey, successorOwnerToken, null),
         ),
       )
       .returning({ subjectKey: activeRuns.subjectKey });
@@ -215,99 +206,34 @@ export class PostgresRunRegistry implements RunRegistryAdapter, ThreadStore {
     runId: string | null,
   ): Promise<boolean> {
     const result = await this.db.execute(sql`
-      SELECT "begin_active_run_cancellation"(
-        ${subjectKey},
-        ${ownerToken},
-        ${runId}
-      ) AS began
+      WITH closed AS MATERIALIZED (
+        UPDATE active_runs AS active
+        SET state = 'cancelling', updated_at = now()
+        WHERE active.subject_key = ${subjectKey}
+          AND active.owner_token = ${ownerToken}
+          AND active.run_id IS NOT DISTINCT FROM ${runId}
+          AND active.state IN ('reserved', 'bound', 'parking', 'parked', 'cancelling')
+        RETURNING active.ticket_key, active.run_id
+      ), cleared_failure AS (
+        DELETE FROM failed_tickets AS failed
+        USING closed
+        WHERE failed.ticket_key = closed.ticket_key
+          AND failed.run_id = closed.run_id
+      )
+      SELECT count(*)::integer AS closed_count FROM closed
     `);
-    const began = ((result as { rows?: Array<{ began: boolean }> }).rows ?? [])[0]?.began;
-    return began === true;
+    const closedCount = Number(
+      ((result as { rows?: Array<{ closed_count: number | string }> }).rows ?? [])[0]
+        ?.closed_count ?? 0,
+    );
+    return closedCount === 1;
   }
 
   async releaseCancellation(
     subjectKey: string,
     ownerToken: string,
     runId: string | null,
-    ticketGuard?: TicketCancellationReleaseGuard,
   ): Promise<boolean> {
-    const runIdentity =
-      runId === null ? sql`run_id IS NULL` : sql`run_id = ${runId}`;
-    const latestFenceGuard = !ticketGuard
-      ? sql`true`
-      : ticketGuard.latestFenceId === null
-        ? sql`NOT EXISTS (
-            SELECT 1
-            FROM ticket_cancellation_fences AS fence
-            WHERE fence.subject_key = ${subjectKey}
-              AND fence.owner_token = ${ownerToken}
-              AND ${runId === null ? sql`fence.run_id IS NULL` : sql`fence.run_id = ${runId}`}
-          )`
-        : sql`(
-            SELECT fence.id
-            FROM ticket_cancellation_fences AS fence
-            WHERE fence.subject_key = ${subjectKey}
-              AND fence.owner_token = ${ownerToken}
-              AND ${runId === null ? sql`fence.run_id IS NULL` : sql`fence.run_id = ${runId}`}
-            ORDER BY fence.occurred_at DESC, fence.id DESC
-            LIMIT 1
-          ) = ${ticketGuard.latestFenceId}`;
-    const providerDrainGuard = sql`NOT EXISTS (
-          SELECT 1
-          FROM ticket_transition_intents AS intent
-          WHERE intent.subject_key = ${subjectKey}
-            AND intent.owner_token = ${ownerToken}
-            AND ${runId === null ? sql`intent.run_id IS NULL` : sql`intent.run_id = ${runId}`}
-            AND intent.provider_started_at IS NOT NULL
-            AND intent.provider_finished_at IS NULL
-        ) AND NOT EXISTS (
-          SELECT 1
-          FROM ticket_label_mutation_intents AS intent
-          WHERE intent.subject_key = ${subjectKey}
-            AND intent.owner_token = ${ownerToken}
-            AND ${runId === null ? sql`intent.run_id IS NULL` : sql`intent.run_id = ${runId}`}
-            AND intent.provider_started_at IS NOT NULL
-            AND intent.provider_finished_at IS NULL
-        )`;
-    const mutationVersionGuard = !ticketGuard
-      ? sql`true`
-      : sql`ticket_mutation_version = ${ticketGuard.mutationVersion}`;
-    if (ticketGuard) {
-      // Persist the exact reconciled mutation version before delete. This is a
-      // separate durable statement on purpose: PostgreSQL must not UPDATE and
-      // DELETE the same row in one data-modifying CTE. A crash between the two
-      // statements is safe because every later fence/provider start changes
-      // the version and makes the acknowledgement stale.
-      const acknowledgement = await this.db.execute(sql`
-        WITH acknowledged AS (
-          UPDATE active_runs AS active
-          SET
-            ticket_cancellation_reconciled_version = active.ticket_mutation_version,
-            updated_at = now()
-          WHERE active.subject_key = ${subjectKey}
-            AND active.owner_token = ${ownerToken}
-            AND active.state = 'cancelling'
-            AND ${runId === null ? sql`active.run_id IS NULL` : sql`active.run_id = ${runId}`}
-            AND active.ticket_provider_calls_in_flight = 0
-            AND active.ticket_cancellation_reconciled_version >= -1
-            AND ${mutationVersionGuard}
-            AND ${latestFenceGuard}
-            AND ${providerDrainGuard}
-          RETURNING active.subject_key
-        )
-        SELECT count(*)::integer AS acknowledged_count FROM acknowledged
-      `);
-      const acknowledgedCount = Number(
-        ((acknowledgement as {
-          rows?: Array<{ acknowledged_count: number | string }>;
-        }).rows ?? [])[0]?.acknowledged_count ?? 0,
-      );
-      if (acknowledgedCount !== 1) return false;
-    }
-
-    const cancellationProtocolGuard = ticketGuard
-      ? sql`ticket_cancellation_reconciled_version = ticket_mutation_version`
-      : sql`ticket_key IS NULL`;
     const result = await this.db.execute(sql`
       WITH exact_owner AS MATERIALIZED (
         SELECT subject_key
@@ -315,10 +241,7 @@ export class PostgresRunRegistry implements RunRegistryAdapter, ThreadStore {
         WHERE subject_key = ${subjectKey}
           AND owner_token = ${ownerToken}
           AND state = 'cancelling'
-          AND ${runIdentity}
-          AND ticket_provider_calls_in_flight = 0
-          AND ${mutationVersionGuard}
-          AND ${cancellationProtocolGuard}
+          AND run_id IS NOT DISTINCT FROM ${runId}
         FOR UPDATE
       ), released AS (
         DELETE FROM active_runs AS active
@@ -326,9 +249,7 @@ export class PostgresRunRegistry implements RunRegistryAdapter, ThreadStore {
         WHERE active.subject_key = owner.subject_key
           AND active.owner_token = ${ownerToken}
           AND active.state = 'cancelling'
-          AND ${runId === null ? sql`active.run_id IS NULL` : sql`active.run_id = ${runId}`}
-          AND ${latestFenceGuard}
-          AND ${providerDrainGuard}
+          AND active.run_id IS NOT DISTINCT FROM ${runId}
         RETURNING active.subject_key
       )
       SELECT count(*)::integer AS released_count FROM released
@@ -349,8 +270,6 @@ export class PostgresRunRegistry implements RunRegistryAdapter, ThreadStore {
           eq(activeRuns.ownerToken, ownerToken),
           eq(activeRuns.state, "reserved"),
           isNull(activeRuns.runId),
-          eq(activeRuns.ticketProviderCallsInFlight, 0),
-          noStartedTicketProviderCall(subjectKey, ownerToken, null),
         ),
       )
       .returning({ subjectKey: activeRuns.subjectKey });
@@ -369,8 +288,6 @@ export class PostgresRunRegistry implements RunRegistryAdapter, ThreadStore {
           eq(activeRuns.ownerToken, ownerToken),
           eq(activeRuns.state, "reserved"),
           isNull(activeRuns.runId),
-          eq(activeRuns.ticketProviderCallsInFlight, 0),
-          noStartedTicketProviderCall(subjectKey, ownerToken, null),
           sql`${activeRuns.updatedAt} < now() - (${RESERVATION_BIND_GRACE_MS} * interval '1 millisecond')`,
         ),
       )
@@ -386,8 +303,6 @@ export class PostgresRunRegistry implements RunRegistryAdapter, ThreadStore {
           eq(activeRuns.subjectKey, subjectKey),
           eq(activeRuns.ownerToken, ownerToken),
           eq(activeRuns.runId, runId),
-          eq(activeRuns.ticketProviderCallsInFlight, 0),
-          noStartedTicketProviderCall(subjectKey, ownerToken, runId),
           sql`${activeRuns.state} in ('bound', 'parking', 'parked')`,
         ),
       )
@@ -491,15 +406,24 @@ export class PostgresRunRegistry implements RunRegistryAdapter, ThreadStore {
     owner: FailedTicketOwner,
   ): Promise<void> {
     await this.db.execute(sql`
-      SELECT "mark_failed_ticket_if_active"(
-        ${ticketKey},
-        ${meta.runId},
-        ${meta.error},
-        ${meta.failedAt},
-        ${owner.subjectKey},
-        ${owner.ownerToken},
-        ${owner.runId}
+      WITH exact_owner AS MATERIALIZED (
+        SELECT subject_key
+        FROM active_runs
+        WHERE subject_key = ${owner.subjectKey}
+          AND ticket_key = ${ticketKey}
+          AND owner_token = ${owner.ownerToken}
+          AND run_id = ${owner.runId}
+          AND run_id = ${meta.runId}
+          AND state = 'bound'
+        FOR UPDATE
       )
+      INSERT INTO failed_tickets (ticket_key, run_id, error, failed_at)
+      SELECT ${ticketKey}, ${meta.runId}, ${meta.error}, ${meta.failedAt}
+      FROM exact_owner
+      ON CONFLICT (ticket_key) DO UPDATE SET
+        run_id = excluded.run_id,
+        error = excluded.error,
+        failed_at = excluded.failed_at
     `);
   }
 
@@ -544,30 +468,6 @@ export class PostgresRunRegistry implements RunRegistryAdapter, ThreadStore {
   async clearParent(ticketKey: string): Promise<void> {
     await this.db.delete(threadParents).where(eq(threadParents.ticketKey, ticketKey));
   }
-}
-
-function noStartedTicketProviderCall(
-  subjectKey: string,
-  ownerToken: string,
-  runId: string | null,
-) {
-  return sql`NOT EXISTS (
-    SELECT 1
-    FROM ticket_transition_intents AS intent
-    WHERE intent.subject_key = ${subjectKey}
-      AND intent.owner_token = ${ownerToken}
-      AND ${runId === null ? sql`intent.run_id IS NULL` : sql`intent.run_id = ${runId}`}
-      AND intent.provider_started_at IS NOT NULL
-      AND intent.provider_finished_at IS NULL
-  ) AND NOT EXISTS (
-    SELECT 1
-    FROM ticket_label_mutation_intents AS intent
-    WHERE intent.subject_key = ${subjectKey}
-      AND intent.owner_token = ${ownerToken}
-      AND ${runId === null ? sql`intent.run_id IS NULL` : sql`intent.run_id = ${runId}`}
-      AND intent.provider_started_at IS NOT NULL
-      AND intent.provider_finished_at IS NULL
-  )`;
 }
 
 function toEntry(row: typeof activeRuns.$inferSelect): ActiveRunEntry {

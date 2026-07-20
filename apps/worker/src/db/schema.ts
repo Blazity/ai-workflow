@@ -19,7 +19,6 @@ import {
 import type { BlockRunState, WorkflowRunBudgetFailure } from "@shared/contracts";
 import type { GateStatusRef } from "../adapters/vcs/types.js";
 import type { PrePrCheckConfig } from "../pre-pr-checks/config.js";
-import type { WorkspaceManifest } from "../sandbox/repo-workspace.js";
 
 /** One owner-CAS reservation per provider-neutral workflow subject. */
 export const activeRuns = pgTable(
@@ -31,21 +30,6 @@ export const activeRuns = pgTable(
     runId: text("run_id"),
     state: text("state").notNull().default("reserved"),
     runKind: text("run_kind").notNull().default("ticket"),
-    /** Monotonic CAS for ticket-side provider starts and human cancellation
-     * fences. Cancellation may release only the exact version it reconciled. */
-    ticketMutationVersion: integer("ticket_mutation_version").notNull().default(0),
-    /** Exact owner-local provider boundary count. Release and handoff require
-     * zero; a database trigger also accounts for old pods during rollout. */
-    ticketProviderCallsInFlight: integer("ticket_provider_calls_in_flight")
-      .notNull()
-      .default(0),
-    /** NULL is outside the cancellation protocol, -2 is an indeterminate
-     * legacy cancellation, -1 is an opened cancellation awaiting
-     * reconciliation, and a nonnegative value acknowledges the exact
-     * ticketMutationVersion that may be released. */
-    ticketCancellationReconciledVersion: integer(
-      "ticket_cancellation_reconciled_version",
-    ),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
@@ -67,9 +51,7 @@ export const activeRuns = pgTable(
 export const activeRunSandboxes = pgTable(
   "active_run_sandboxes",
   {
-    subjectKey: text("subject_key")
-      .notNull()
-      .references(() => activeRuns.subjectKey, { onDelete: "cascade" }),
+    subjectKey: text("subject_key").notNull(),
     ownerToken: text("owner_token").notNull(),
     sandboxId: text("sandbox_id").notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
@@ -117,114 +99,6 @@ export const triggerDeliveries = pgTable(
       ],
       name: "trigger_deliveries_definition_version_fk",
     }),
-  ],
-);
-
-/** Short-lived proof that a workflow, not a human, initiated a ticket status
- * change. Jira webhook echoes consume this record instead of cancelling or
- * dispatching the owning run. */
-export const ticketTransitionIntents = pgTable(
-  "ticket_transition_intents",
-  {
-    id: serial("id").primaryKey(),
-    ticketKey: text("ticket_key").notNull(),
-    subjectKey: text("subject_key").notNull(),
-    ownerToken: text("owner_token").notNull(),
-    /** Null while a pre-start reservation owns the transition. Intentionally
-     * no active_runs FK: a provider echo can arrive after release or handoff. */
-    runId: text("run_id"),
-    /** Stable Jira account id for the authenticated workflow actor that
-     * requested the transition. Provider echoes must match it exactly. */
-    actorAccountId: text("actor_account_id").notNull(),
-    targetStatusId: text("target_status_id"),
-    targetStatusName: text("target_status_name").notNull(),
-    /** Jira preserves this identifier across webhook retries. Once attached
-     * to a consumed intent it makes every retry idempotent. */
-    webhookIdentifier: text("webhook_identifier"),
-    /** Durable provider-call fence. Cancellation may begin after this marker
-     * but cannot release the owner until the call is reconciled. */
-    /** The default deliberately marks inserts from pre-fence application pods
-     * as potentially started. Current code explicitly writes NULL while it is
-     * only recording an intent, then opens the provider boundary separately. */
-    providerStartedAt: timestamp("provider_started_at", { withTimezone: true }).defaultNow(),
-    providerFinishedAt: timestamp("provider_finished_at", { withTimezone: true }),
-    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
-    consumedAt: timestamp("consumed_at", { withTimezone: true }),
-    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-  },
-  (t) => [
-    index("ticket_transition_intents_ticket_expiry_idx").on(t.ticketKey, t.expiresAt),
-    uniqueIndex("ticket_transition_intents_webhook_identifier_uidx").on(
-      t.webhookIdentifier,
-    ),
-  ],
-);
-
-/** Exact-owner fence for Jira label mutations. Label writes have no stable
- * provider echo, so an ambiguous HTTP result remains unfinished until the
- * desired live label set is positively observed (or the ticket no longer
- * exists); expiry alone is never provider proof. */
-export const ticketLabelMutationIntents = pgTable(
-  "ticket_label_mutation_intents",
-  {
-    id: serial("id").primaryKey(),
-    ticketKey: text("ticket_key").notNull(),
-    subjectKey: text("subject_key").notNull(),
-    ownerToken: text("owner_token").notNull(),
-    runId: text("run_id"),
-    addLabels: text("add_labels").array().notNull().default(sql`'{}'::text[]`),
-    removeLabels: text("remove_labels").array().notNull().default(sql`'{}'::text[]`),
-    providerStartedAt: timestamp("provider_started_at", { withTimezone: true })
-      .notNull()
-      .defaultNow(),
-    providerFinishedAt: timestamp("provider_finished_at", { withTimezone: true }),
-    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
-    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-  },
-  (t) => [
-    index("ticket_label_mutation_intents_owner_expiry_idx").on(
-      t.subjectKey,
-      t.ownerToken,
-      t.expiresAt,
-    ),
-    check(
-      "ticket_label_mutation_intents_nonempty_check",
-      sql`cardinality(${t.addLabels}) > 0 or cardinality(${t.removeLabels}) > 0`,
-    ),
-    check(
-      "ticket_label_mutation_intents_disjoint_check",
-      sql`not (${t.addLabels} && ${t.removeLabels})`,
-    ),
-  ],
-);
-
-/** Human ticket destinations observed while an exact owner is being closed.
- * Rows survive owner release so retries and late provider calls can reconcile
- * against the newest Jira event without relying on process memory. */
-export const ticketCancellationFences = pgTable(
-  "ticket_cancellation_fences",
-  {
-    id: serial("id").primaryKey(),
-    ticketKey: text("ticket_key").notNull(),
-    subjectKey: text("subject_key").notNull(),
-    ownerToken: text("owner_token").notNull(),
-    runId: text("run_id"),
-    targetStatusId: text("target_status_id"),
-    targetStatusName: text("target_status_name").notNull(),
-    webhookIdentifier: text("webhook_identifier").notNull(),
-    occurredAt: timestamp("occurred_at", { withTimezone: true }).notNull(),
-    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
-    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-  },
-  (t) => [
-    uniqueIndex("ticket_cancellation_fences_webhook_identifier_uidx").on(
-      t.webhookIdentifier,
-    ),
-    index("ticket_cancellation_fences_owner_occurred_idx").on(
-      t.subjectKey,
-      t.ownerToken,
-      t.occurredAt,
-    ),
   ],
 );
 
@@ -422,63 +296,6 @@ export const workflowOwnedBranches = pgTable(
   (t) => [
     primaryKey({ columns: [t.ticketKey, t.provider, t.repoPath] }),
     check("workflow_owned_branches_provider_check", sql`${t.provider} in ('github', 'gitlab')`),
-  ],
-);
-
-/**
- * Durable two-phase publication ledger. Finalize Workspace owns the push
- * phases; Open PR/MR may consume only an attempt that reached `finalized`.
- * The run/block uniqueness is the replay guard that prevents a Workflow step
- * replay from pushing the same workspace twice.
- */
-export const publicationAttempts = pgTable(
-  "publication_attempts",
-  {
-    id: text("id").primaryKey(),
-    runId: text("run_id").notNull(),
-    blockId: text("block_id").notNull(),
-    workspaceManifest: jsonb("workspace_manifest").$type<WorkspaceManifest>().notNull(),
-    status: text("status").notNull().default("preflighting"),
-    failure: text("failure"),
-    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
-  },
-  (t) => [
-    uniqueIndex("publication_attempts_run_block_idx").on(t.runId, t.blockId),
-    check(
-      "publication_attempts_status_check",
-      sql`${t.status} in ('preflighting', 'pushing', 'finalized', 'creating_prs', 'published', 'failed')`,
-    ),
-  ],
-);
-
-/** Per-repository facts retained even when a cross-provider publication is partial. */
-export const publicationAttemptRepositories = pgTable(
-  "publication_attempt_repositories",
-  {
-    attemptId: text("attempt_id")
-      .notNull()
-      .references(() => publicationAttempts.id, { onDelete: "cascade" }),
-    provider: text("provider").notNull(),
-    repoPath: text("repo_path").notNull(),
-    branchName: text("branch_name").notNull(),
-    defaultBranch: text("default_branch").notNull(),
-    changed: boolean("changed").notNull().default(false),
-    expectedHead: text("expected_head"),
-    targetHead: text("target_head"),
-    pushedHead: text("pushed_head"),
-    prId: integer("pr_id"),
-    prUrl: text("pr_url"),
-    prIsNew: boolean("pr_is_new"),
-    failure: text("failure"),
-    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
-  },
-  (t) => [
-    primaryKey({ columns: [t.attemptId, t.provider, t.repoPath] }),
-    check(
-      "publication_attempt_repositories_provider_check",
-      sql`${t.provider} in ('github', 'gitlab')`,
-    ),
   ],
 );
 
