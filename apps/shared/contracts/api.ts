@@ -260,7 +260,8 @@ export interface PromptLibraryListRowDto extends PromptLibraryEntryMeta {
 
 export interface PromptLibraryListResponse {
   prompts: PromptLibraryListRowDto[];
-  /** Distinct tags across returned prompts, sorted, for the filter chips. */
+  /** Distinct tags computed across the returned (possibly filtered) prompts,
+   *  not the whole library; sorted, for the filter chips. */
   tags: string[];
 }
 

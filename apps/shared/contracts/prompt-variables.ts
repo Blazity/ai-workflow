@@ -4,8 +4,6 @@
 export interface PromptVariableSpec {
   name: string;
   description: string;
-  /** Variables only populated for PR-triggered runs (empty string otherwise). */
-  prOnly?: boolean;
 }
 
 export const PROMPT_VARIABLES = [
@@ -17,9 +15,9 @@ export const PROMPT_VARIABLES = [
   { name: "branch_name", description: "Work branch for this run." },
   { name: "run_id", description: "Durable workflow run id." },
   { name: "plan_markdown", description: "Plan produced by the planning agent (or the approved plan); empty before planning." },
-  { name: "pr_number", description: "PR number that triggered the run, or the PR opened by it; empty before either exists.", prOnly: true },
-  { name: "pr_url", description: "PR URL that triggered the run, or the PR opened by it; empty before either exists.", prOnly: true },
-  { name: "pr_title", description: "Title of the triggering PR; empty for non-PR runs.", prOnly: true },
+  { name: "pr_number", description: "PR number that triggered the run, or the PR opened by it; empty before either exists." },
+  { name: "pr_url", description: "PR URL that triggered the run, or the PR opened by it; empty before either exists." },
+  { name: "pr_title", description: "Title of the triggering PR; empty for non-PR runs." },
   { name: "repo_path", description: "Repository path (owner/repo) of the triggering PR, else the first selected repository." },
 ] as const satisfies readonly PromptVariableSpec[];
 
