@@ -19,9 +19,11 @@ export function promptInspectorSummary(
   if (onlyReference) {
     const reference = references[0];
     const row = rows.find((candidate) => candidate.id === reference.promptId);
+    const explicitReference = value.trim() === trimmed;
+    const missingTitle = `Missing prompt ${reference.promptId}`;
     return {
       kind: "reference",
-      title: row?.name ?? implicitName ?? `Missing prompt ${reference.promptId}`,
+      title: row?.name ?? (explicitReference ? missingTitle : implicitName ?? missingTitle),
       detail:
         reference.version === "latest"
           ? `Latest${row ? ` · v${row.currentVersion}` : ""}`

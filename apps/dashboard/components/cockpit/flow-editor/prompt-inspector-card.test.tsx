@@ -28,6 +28,8 @@ test("renders a read-only reference card as a dialog trigger", () => {
     />,
   );
   assert.match(html, /View prompt/);
+  assert.match(html, /^<button/);
   assert.match(html, /aria-haspopup="dialog"/);
+  assert.doesNotMatch(html, /disabled/);
   assert.match(html, /research-plan/);
 });

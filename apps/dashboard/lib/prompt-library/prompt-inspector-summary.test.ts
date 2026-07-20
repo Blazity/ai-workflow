@@ -51,3 +51,11 @@ test("keeps an unavailable implicit default visible", () => {
     detail: "Latest",
   });
 });
+
+test("does not disguise an unresolved explicit reference as the implicit default", () => {
+  assert.deepEqual(promptInspectorSummary("{{prompt:999}}", "{{prompt:999}}", "research-plan", []), {
+    kind: "reference",
+    title: "Missing prompt 999",
+    detail: "Latest",
+  });
+});

@@ -7,6 +7,12 @@ import { useEnterExit } from "@/lib/use-enter-exit";
 import { PromptLibraryRail } from "./prompt-library-rail";
 import { PromptSavePopover } from "./prompt-save-popover";
 import type { PromptInsertPayload } from "./prompt-insert-popup";
+import {
+  DIALOG_FOCUSABLE_SELECTOR,
+  initialDialogFocusTarget,
+  promptEditorModalCapabilities,
+  trappedDialogTabTarget,
+} from "@/lib/prompt-library/prompt-editor-modal-contract";
 
 const headBtn =
   "appearance-none cursor-pointer inline-flex items-center gap-1 border border-neutral-200 bg-panel text-coal py-1 px-2 rounded-[3px] font-mono text-[10px] tracking-[0.04em] uppercase transition-[background-color,color,transform] duration-150 ease-standard hover:bg-app-bg active:scale-[0.96]";
@@ -41,20 +47,23 @@ export function PromptEditorModal({
   const [libOpen, setLibOpen] = useState(true);
   const [saveOpen, setSaveOpen] = useState(false);
   const [syncRequest, setSyncRequest] = useState<{ id: number; mode: "replace" | "append" } | null>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
   const restoreFocus = useRef<HTMLElement | null>(null);
   const syncRequestId = useRef(0);
   const onCloseRef = useRef(onClose);
   const closeSave = useCallback(() => setSaveOpen(false), []);
   onCloseRef.current = onClose;
+  const hasContent = value.trim().length > 0;
+  const { canEdit, canInsert, canSave } = promptEditorModalCapabilities(disabled, hasContent);
 
   const handleLibraryInsert = useCallback(
     (payload: PromptInsertPayload) => {
-      if (disabled) return;
+      if (!canInsert) return;
       onInsert(payload);
       syncRequestId.current += 1;
       setSyncRequest({ id: syncRequestId.current, mode: payload.mode });
     },
-    [disabled, onInsert],
+    [canInsert, onInsert],
   );
 
   // Modal lifetime owns scroll locking and focus restoration. Keep this separate
@@ -65,11 +74,40 @@ export function PromptEditorModal({
     restoreFocus.current = document.activeElement as HTMLElement | null;
     const prevOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
+    const frame = requestAnimationFrame(() => {
+      const dialog = dialogRef.current;
+      if (!dialog) return;
+      const focusable = Array.from(dialog.querySelectorAll<HTMLElement>(DIALOG_FOCUSABLE_SELECTOR));
+      const preferred = dialog.querySelector<HTMLElement>("[data-dialog-initial-focus]");
+      initialDialogFocusTarget(preferred, focusable, dialog).focus();
+    });
     return () => {
+      cancelAnimationFrame(frame);
       document.body.style.overflow = prevOverflow;
       restoreFocus.current?.focus?.();
     };
   }, [open]);
+
+  useEffect(() => {
+    if (!open || saveOpen) return;
+    const onTab = (event: KeyboardEvent) => {
+      if (event.key !== "Tab") return;
+      const dialog = dialogRef.current;
+      if (!dialog) return;
+      const focusable = Array.from(dialog.querySelectorAll<HTMLElement>(DIALOG_FOCUSABLE_SELECTOR));
+      if (focusable.length === 0) {
+        event.preventDefault();
+        dialog.focus();
+        return;
+      }
+      const target = trappedDialogTabTarget(focusable, document.activeElement as HTMLElement | null, event.shiftKey);
+      if (!target) return;
+      event.preventDefault();
+      target.focus();
+    };
+    window.addEventListener("keydown", onTab, { capture: true });
+    return () => window.removeEventListener("keydown", onTab, { capture: true });
+  }, [open, saveOpen]);
 
   useEffect(() => {
     if (!open) setSyncRequest(null);
@@ -96,8 +134,6 @@ export function PromptEditorModal({
   }, [open, libOpen, saveOpen]);
 
   if (!mounted) return null;
-  const hasContent = value.trim().length > 0;
-
   return createPortal(
     <div
       role="presentation"
@@ -108,9 +144,11 @@ export function PromptEditorModal({
       }`}
     >
       <div
+        ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-label={`${disabled ? "View" : "Edit"} ${fieldLabel}`}
+        tabIndex={-1}
         data-state={state}
         onMouseDown={(e) => e.stopPropagation()}
         className={`flex h-[90vh] max-h-[90vh] w-[94vw] max-w-[1240px] flex-col overflow-hidden rounded-md bg-panel shadow-[0_24px_64px_-16px_rgba(24,27,32,0.45)] origin-top transition-[opacity,transform] duration-200 ease-standard motion-reduce:transition-none motion-reduce:transform-none ${
@@ -130,12 +168,12 @@ export function PromptEditorModal({
             >
               ❡ Library
             </button>
-            {!disabled && hasContent && (
+            {canSave && (
               <button type="button" aria-haspopup="dialog" onClick={() => setSaveOpen(true)} className={headBtn}>
                 ↥ Save
               </button>
             )}
-            <button type="button" onClick={onClose} className={headBtn}>
+            <button type="button" data-dialog-initial-focus onClick={onClose} className={headBtn}>
               Close
             </button>
           </div>
@@ -150,7 +188,7 @@ export function PromptEditorModal({
           >
             <div className="h-full w-full min-w-0">
               <PromptLibraryRail
-                disabled={disabled}
+                disabled={!canInsert}
                 onInsert={handleLibraryInsert}
                 targetHasContent={hasContent}
               />
@@ -161,14 +199,14 @@ export function PromptEditorModal({
             <PromptSectionComposer
               value={value}
               onChange={onChange}
-              disabled={disabled}
+              disabled={!canEdit}
               syncRequest={syncRequest}
             />
           </div>
         </div>
       </div>
 
-      {!disabled && (
+      {canEdit && (
         <PromptSavePopover open={saveOpen} onClose={closeSave} initialBody={value} onSaved={closeSave} />
       )}
     </div>,
