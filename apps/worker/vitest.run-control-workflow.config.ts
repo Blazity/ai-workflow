@@ -6,7 +6,7 @@ import { defineConfig } from "vitest/config";
 
 const workerRoot = fileURLToPath(new URL("./", import.meta.url));
 const workflowRoot = fileURLToPath(
-  new URL("./workflow-test-fixtures/run-control/", import.meta.url),
+  new URL("./workflow-test-fixtures/", import.meta.url),
 );
 
 // @workflow/vitest's builder and client transform both derive stable function
@@ -24,7 +24,7 @@ export default defineConfig({
   root: workerRoot,
   test: {
     environment: "node",
-    include: ["workflow-sdk-tests/run-control-workflow-sdk.test.ts"],
+    include: ["workflow-sdk-tests/*.test.ts"],
     testTimeout: 30_000,
   },
 });
