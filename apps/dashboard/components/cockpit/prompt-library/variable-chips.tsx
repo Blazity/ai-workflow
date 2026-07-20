@@ -1,10 +1,12 @@
 "use client";
 
-import { useState } from "react";
-import { AVAILABLE_VARIABLES, usedVariables } from "@/lib/prompt-library/variables";
+import { useRef, useState } from "react";
+import { usedVariables } from "@/lib/prompt-library/variables";
+import { VariablePickerPopover } from "./variable-picker-popover";
 
 /** Compact variable summary for a prompt body: a row of chips for the
- *  variables actually used, plus an optional inline picker to insert one. */
+ *  variables actually used, plus an optional inline trigger that opens the
+ *  floating variable picker (a portal popover, so it never pushes layout). */
 export function VariableChips({
   body,
   onInsertToken,
@@ -15,6 +17,7 @@ export function VariableChips({
   disabled?: boolean;
 }) {
   const [open, setOpen] = useState(false);
+  const btnRef = useRef<HTMLButtonElement>(null);
   const used = usedVariables(body);
   const canInsert = onInsertToken != null && !disabled;
 
@@ -41,33 +44,27 @@ export function VariableChips({
       )}
 
       {canInsert && (
-        <div className="flex flex-col gap-1">
+        <>
           <button
+            ref={btnRef}
             type="button"
             onClick={() => setOpen((o) => !o)}
-            className="self-start appearance-none cursor-pointer rounded-xs px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-[0.04em] text-mariner hover:bg-mariner-100"
+            aria-haspopup="listbox"
+            aria-expanded={open}
+            className="self-start appearance-none cursor-pointer rounded-xs px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-[0.04em] text-mariner transition-[background-color,transform] duration-150 ease-standard hover:bg-mariner-100 active:scale-[0.96]"
           >
             + variable
           </button>
-          {open && (
-            <div className="flex flex-col border border-neutral-200 rounded-xs overflow-hidden">
-              {AVAILABLE_VARIABLES.map((spec) => (
-                <button
-                  key={spec.name}
-                  type="button"
-                  onClick={() => {
-                    onInsertToken(`{{${spec.name}}}`);
-                    setOpen(false);
-                  }}
-                  className="block w-full appearance-none cursor-pointer text-left px-2 py-1.5 border-b border-neutral-200 last:border-b-0 bg-panel hover:bg-[#FAFBFC]"
-                >
-                  <div className="font-mono text-[11px] text-neutral-900">{spec.name}</div>
-                  <div className="text-[10px] text-neutral-500">{spec.description}</div>
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
+          <VariablePickerPopover
+            open={open}
+            anchorRef={btnRef}
+            onPick={(token) => {
+              onInsertToken?.(token);
+              setOpen(false);
+            }}
+            onClose={() => setOpen(false)}
+          />
+        </>
       )}
     </div>
   );

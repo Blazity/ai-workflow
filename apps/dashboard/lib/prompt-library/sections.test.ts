@@ -48,6 +48,14 @@ test("each heading section spans up to the next heading", () => {
   assert.equal(sections[1].body, "# Two\nbeta");
 });
 
+test("a selected section body contains only that heading and its content", () => {
+  const body = "# First\nalpha\n\n## Second\nbeta\n\n# Third\ngamma";
+  const sections = splitSections(body);
+  assert.equal(sections[1].title, "Second");
+  assert.equal(sections[1].body, "## Second\nbeta\n\n");
+  assert.equal(sections[1].body.includes("# Third"), false);
+});
+
 test("concatenating section bodies reconstructs the original", () => {
   const bodies = [
     "no headings here at all",

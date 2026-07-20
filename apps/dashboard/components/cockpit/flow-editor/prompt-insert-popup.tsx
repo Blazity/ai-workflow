@@ -2,7 +2,11 @@
 
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import type { PromptLibraryListRowDto, PromptSourceRef } from "@shared/contracts";
+import {
+  formatPromptReferenceToken,
+  type PromptLibraryListRowDto,
+  type PromptSourceRef,
+} from "@shared/contracts";
 import { filterPrompts } from "@/lib/prompt-library/filter";
 import { splitSections } from "@/lib/prompt-library/sections";
 import { makePromptRef } from "@/lib/prompt-library/provenance";
@@ -10,6 +14,7 @@ import { pushRecentPromptId, readRecentPromptIds } from "@/lib/prompt-library/re
 import { PromptPreview } from "@/components/cockpit/prompt-library/prompt-preview";
 import { VariableChips } from "@/components/cockpit/prompt-library/variable-chips";
 import { useIsMobileViewport } from "@/lib/use-media-query";
+import { useEnterExit } from "@/lib/use-enter-exit";
 import { usePromptLibrary } from "./prompt-library-context";
 
 export interface PromptInsertPayload {
@@ -50,12 +55,13 @@ function Kbd({ children }: { children: React.ReactNode }) {
   );
 }
 
+const pressable = "transition-transform duration-150 ease-standard active:scale-[0.96]";
 const primaryBtn =
-  "appearance-none cursor-pointer inline-flex items-center justify-center border border-mariner bg-mariner text-white py-1 px-2.5 rounded-[3px] font-mono text-[11px] tracking-[0.04em] uppercase disabled:opacity-40 min-h-[44px] lg:min-h-0";
+  `appearance-none cursor-pointer inline-flex items-center justify-center border border-mariner bg-mariner text-white py-1 px-2.5 rounded-[3px] font-mono text-[11px] tracking-[0.04em] uppercase disabled:opacity-40 min-h-[44px] lg:min-h-0 ${pressable}`;
 const secondaryBtn =
-  "appearance-none cursor-pointer inline-flex items-center justify-center border border-neutral-200 bg-panel text-coal py-1 px-2.5 rounded-[3px] font-mono text-[11px] tracking-[0.04em] uppercase hover:bg-app-bg min-h-[44px] lg:min-h-0";
+  `appearance-none cursor-pointer inline-flex items-center justify-center border border-neutral-200 bg-panel text-coal py-1 px-2.5 rounded-[3px] font-mono text-[11px] tracking-[0.04em] uppercase hover:bg-app-bg min-h-[44px] lg:min-h-0 ${pressable}`;
 const ghostBtn =
-  "appearance-none cursor-pointer inline-flex items-center border-none bg-transparent py-1 px-1.5 font-mono text-[11px] tracking-[0.04em] uppercase text-neutral-600 hover:text-neutral-900 min-h-[44px] lg:min-h-0";
+  `appearance-none cursor-pointer inline-flex items-center border-none bg-transparent py-1 px-1.5 font-mono text-[11px] tracking-[0.04em] uppercase text-neutral-600 hover:text-neutral-900 min-h-[44px] lg:min-h-0 ${pressable}`;
 
 function TagChip({ label, active, onClick }: { label: string; active: boolean; onClick: () => void }) {
   return (
@@ -92,6 +98,9 @@ export function PromptInsertPopup({
 }: PromptInsertPopupProps) {
   const { status, rows, refresh } = usePromptLibrary();
   const isMobile = useIsMobileViewport();
+  // Drives the enter/exit transition so the palette animates out on close instead
+  // of vanishing. Portal-readiness (`mounted`) is separate, below.
+  const { mounted: present, state: anim } = useEnterExit(open, 180);
 
   const [mounted, setMounted] = useState(false);
   const [query, setQuery] = useState("");
@@ -207,18 +216,23 @@ export function PromptInsertPopup({
     [onInsert],
   );
 
-  const insertWhole = (row: PromptLibraryListRowDto) =>
-    applyInsert(
-      { text: row.body, ref: makePromptRef(row.id, row.currentVersion, row.body), mode: "replace" },
-      row.id,
-    );
-  const appendWhole = (row: PromptLibraryListRowDto) =>
-    applyInsert({ text: row.body, ref: null, mode: "append" }, row.id);
+  const copyWhole = (row: PromptLibraryListRowDto) =>
+    applyInsert({
+      text: row.body,
+      ref: targetHasContent ? null : makePromptRef(row.id, row.currentVersion, row.body),
+      mode: targetHasContent ? "append" : "replace",
+    }, row.id);
+  const insertReference = (row: PromptLibraryListRowDto, version: "latest" | number) =>
+    applyInsert({
+      text: formatPromptReferenceToken({ promptId: row.id, version }),
+      ref: null,
+      mode: targetHasContent ? "append" : "replace",
+    }, row.id);
   const insertPart = (row: PromptLibraryListRowDto, text: string) =>
     applyInsert({ text, ref: null, mode: targetHasContent ? "append" : "replace" }, row.id);
-  // Enter: append into a filled field, otherwise insert into an empty one.
-  const primaryInsert = (row: PromptLibraryListRowDto) =>
-    targetHasContent ? appendWhole(row) : insertWhole(row);
+  // Enter uses the default live reference; Cmd/Ctrl+Enter keeps the legacy
+  // explicit-copy escape hatch.
+  const primaryInsert = (row: PromptLibraryListRowDto) => insertReference(row, "latest");
 
   const onRowActivate = (i: number) => {
     setActive(i);
@@ -235,12 +249,12 @@ export function PromptInsertPopup({
     } else if (e.key === "Enter") {
       e.preventDefault();
       if (!activeRow) return;
-      if (e.metaKey || e.ctrlKey) insertWhole(activeRow);
+      if (e.metaKey || e.ctrlKey) copyWhole(activeRow);
       else primaryInsert(activeRow);
     }
   };
 
-  if (!mounted || !open) return null;
+  if (!mounted || !present) return null;
 
   const canInsertSelection = !isMobile && selectionText.trim().length > 0;
 
@@ -327,13 +341,19 @@ export function PromptInsertPopup({
           type="button"
           onMouseEnter={() => setActive(i)}
           onClick={() => onRowActivate(i)}
-          className={`relative w-full appearance-none border-none cursor-pointer text-left flex flex-col gap-0.5 pl-4 pr-3 py-2 ${
+          // Stagger the first rows in on open (capped so a long list stays snappy);
+          // motion-safe so reduced-motion users get them instantly.
+          style={{ animationDelay: i < 8 ? `${i * 28}ms` : "0ms" }}
+          className={`relative w-full appearance-none border-none cursor-pointer text-left flex flex-col gap-0.5 pl-4 pr-3 py-2 transition-colors duration-150 ease-standard motion-safe:animate-ck-fade-up ${
             isActive ? "bg-off-white" : "bg-panel"
           }`}
         >
-          {isActive && (
-            <span className="absolute left-0 top-1 bottom-1 w-[2px] rounded-full bg-mariner" aria-hidden="true" />
-          )}
+          <span
+            className={`absolute left-0 top-1 bottom-1 w-[2px] rounded-full bg-mariner origin-center transition-[opacity,transform] duration-150 ease-standard ${
+              isActive ? "opacity-100 scale-y-100" : "opacity-0 scale-y-50"
+            }`}
+            aria-hidden="true"
+          />
           <span className="truncate font-mono text-[12px] font-semibold text-neutral-900">{row.name}</span>
           <span className="truncate font-mono text-[10px] text-neutral-500">
             {`v${row.currentVersion}${row.tags.length ? ` · ${row.tags.join(", ")}` : ""}`}
@@ -355,7 +375,7 @@ export function PromptInsertPopup({
         </div>
         <VariableChips body={activeRow.body} />
       </div>
-      <div ref={previewRef} className="flex-1 min-h-0 overflow-y-auto px-4 py-3 flex flex-col gap-2">
+      <div ref={previewRef} className="flex-1 min-h-0 overflow-y-auto px-4 pt-3 pb-5 flex flex-col gap-2">
         {previewSections.map((section, si) => (
           <div
             key={si}
@@ -386,20 +406,15 @@ export function PromptInsertPopup({
           Insert selection
         </button>
       )}
-      {targetHasContent ? (
-        <>
-          <button type="button" onClick={() => insertWhole(activeRow)} className={secondaryBtn}>
-            Replace field
-          </button>
-          <button type="button" onClick={() => appendWhole(activeRow)} className={primaryBtn}>
-            Append
-          </button>
-        </>
-      ) : (
-        <button type="button" onClick={() => insertWhole(activeRow)} className={primaryBtn}>
-          Insert
-        </button>
-      )}
+      <button type="button" onClick={() => copyWhole(activeRow)} className={secondaryBtn} title="Insert an editable snapshot">
+        Copy text
+      </button>
+      <button type="button" onClick={() => insertReference(activeRow, activeRow.currentVersion)} className={secondaryBtn}>
+        Pin v{activeRow.currentVersion}
+      </button>
+      <button type="button" onClick={() => insertReference(activeRow, "latest")} className={primaryBtn}>
+        Use latest
+      </button>
     </>
   ) : null;
 
@@ -410,11 +425,11 @@ export function PromptInsertPopup({
       </span>
       <span aria-hidden="true">·</span>
       <span className="inline-flex items-center gap-1.5">
-        <Kbd>↩</Kbd> {targetHasContent ? "append" : "insert"}
+        <Kbd>↩</Kbd> use latest
       </span>
       <span aria-hidden="true">·</span>
       <span className="inline-flex items-center gap-1.5">
-        <Kbd>⌘↩</Kbd> replace
+        <Kbd>⌘↩</Kbd> copy text
       </span>
       <span aria-hidden="true">·</span>
       <span className="inline-flex items-center gap-1.5">
@@ -430,7 +445,10 @@ export function PromptInsertPopup({
         role="dialog"
         aria-modal="true"
         aria-label="Insert prompt from library"
-        className="fixed inset-0 z-[100] flex flex-col bg-panel animate-ck-pop motion-reduce:animate-none"
+        data-state={anim}
+        className={`fixed inset-0 z-[100] flex flex-col bg-panel transition-[opacity,transform] duration-200 ease-standard motion-reduce:transition-none motion-reduce:transform-none ${
+          anim === "open" ? "opacity-100 translate-y-0" : "opacity-0 translate-y-2"
+        }`}
       >
         {step === 1 ? (
           <>
@@ -480,14 +498,20 @@ export function PromptInsertPopup({
     <div
       role="presentation"
       onMouseDown={onClose}
-      className="fixed inset-0 z-[100] flex items-start justify-center px-4 pt-[12vh] bg-coal/50 backdrop-blur-[2px]"
+      data-state={anim}
+      className={`fixed inset-0 z-[100] flex items-start justify-center px-4 pt-[12vh] bg-coal/50 backdrop-blur-[2px] transition-opacity duration-200 ease-standard motion-reduce:transition-none ${
+        anim === "open" ? "opacity-100" : "opacity-0"
+      }`}
     >
       <div
         role="dialog"
         aria-modal="true"
         aria-label="Insert prompt from library"
+        data-state={anim}
         onMouseDown={(e) => e.stopPropagation()}
-        className="flex w-full max-w-[820px] flex-col overflow-hidden rounded-md bg-panel shadow-[0_24px_64px_-16px_rgba(24,27,32,0.45)] animate-ck-pop motion-reduce:animate-none"
+        className={`flex max-h-[85vh] w-full max-w-[820px] flex-col overflow-hidden rounded-md bg-panel shadow-[0_24px_64px_-16px_rgba(24,27,32,0.45)] origin-top transition-[opacity,transform] duration-200 ease-standard motion-reduce:transition-none motion-reduce:transform-none ${
+          anim === "open" ? "opacity-100 translate-y-0 scale-100" : "opacity-0 -translate-y-2 scale-[0.98]"
+        }`}
       >
         <div className="flex items-center gap-3 px-4 h-[60px] border-b border-neutral-200 shrink-0">
           <SearchGlyph />
@@ -498,7 +522,7 @@ export function PromptInsertPopup({
           <Kbd>esc</Kbd>
         </div>
         {tagChips}
-        <div className="grid grid-cols-[280px_1fr] max-h-[min(60vh,520px)]">
+        <div className="grid grid-cols-[280px_1fr] grid-rows-[minmax(0,1fr)] flex-1 min-h-0 overflow-hidden">
           <div
             id={listId}
             role="listbox"

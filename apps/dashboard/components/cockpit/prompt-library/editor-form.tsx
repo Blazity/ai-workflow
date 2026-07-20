@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { CkCard, CkTabs } from "@/components/ui";
 import { PromptPreview } from "@/components/cockpit/prompt-library/prompt-preview";
 import { VariableChips } from "@/components/cockpit/prompt-library/variable-chips";
+import { PromptEditor } from "@/components/cockpit/prompt-editor/prompt-editor";
 
 export interface PromptDraft {
   name: string;
@@ -50,7 +51,6 @@ export function PromptEditorForm({
   const [body, setBody] = useState(initialBody);
   const [bodyTab, setBodyTab] = useState<"write" | "preview">("write");
   const [confirmDiscard, setConfirmDiscard] = useState(false);
-  const bodyRef = useRef<HTMLTextAreaElement>(null);
 
   const bodyChanged = body !== initialBody;
   const dirty =
@@ -97,19 +97,6 @@ export function PromptEditorForm({
   function handleCancel() {
     if (dirty) setConfirmDiscard(true);
     else onCancel();
-  }
-
-  // setRangeText mutates the DOM value directly; the dispatched input event lets
-  // React's controlled-input tracker pick up the change and keep the caret.
-  function insertToken(token: string) {
-    const el = bodyRef.current;
-    if (!el) {
-      setBody((b) => b + token);
-      return;
-    }
-    el.focus();
-    el.setRangeText(token, el.selectionStart, el.selectionEnd, "end");
-    el.dispatchEvent(new Event("input", { bubbles: true }));
   }
 
   const chars = body.length;
@@ -213,14 +200,8 @@ export function PromptEditorForm({
       >
         {bodyTab === "write" ? (
           <div className="flex flex-col gap-2">
-            <textarea
-              ref={bodyRef}
-              value={body}
-              onChange={(e) => setBody(e.target.value)}
-              placeholder="Write the prompt body. Use {{variable}} tokens for dynamic values."
-              className="w-full min-h-[360px] resize-y border border-neutral-200 bg-panel rounded-[3px] px-3 py-2 font-mono text-[12px] leading-[1.55] text-neutral-900"
-            />
-            <VariableChips body={body} onInsertToken={insertToken} disabled={busy} />
+            <PromptEditor value={body} onChange={setBody} disabled={busy} minHeightClass="min-h-[360px]" />
+            <VariableChips body={body} />
             <div className="font-mono text-[9px] text-neutral-500">
               {chars} chars · ~{Math.ceil(chars / 4)} tokens
             </div>
