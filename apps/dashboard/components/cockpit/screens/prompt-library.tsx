@@ -1,5 +1,6 @@
 "use client";
 
+import { useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { CkCard } from "@/components/ui";
 import { readErrorMessage } from "@/lib/api/error-message";
@@ -14,6 +15,7 @@ import type {
   PromptLibrarySaveResponse,
   PromptLibraryUsageResponse,
 } from "@shared/contracts";
+import { initialPromptSelection } from "@/lib/prompt-library/query-selection";
 
 const primaryButtonClass =
   "appearance-none cursor-pointer border border-mariner bg-mariner text-white py-1.5 px-3.5 rounded-[3px] font-mono text-[11px] tracking-[0.04em] uppercase disabled:opacity-40 disabled:cursor-default";
@@ -35,9 +37,11 @@ export function PromptLibraryScreen({
   canEdit: boolean;
   available: boolean;
 }) {
+  const searchParams = useSearchParams();
+  const requestedPrompt = searchParams.get("prompt");
   const [rows, setRows] = useState<PromptLibraryListRowDto[]>(data.prompts);
-  const [activeId, setActiveId] = useState<number | null>(
-    data.prompts.find((p) => p.archivedAt === null)?.id ?? null,
+  const [activeId, setActiveId] = useState<number | null>(() =>
+    initialPromptSelection(requestedPrompt, data.prompts),
   );
   const [mode, setMode] = useState<"view" | "edit" | "create">("view");
   const [query, setQuery] = useState("");
@@ -57,6 +61,7 @@ export function PromptLibraryScreen({
   const [retryNonce, setRetryNonce] = useState(0);
   // Latest active id, so a slow failed fetch for a since-abandoned id stays quiet.
   const activeIdRef = useRef(activeId);
+  const handledPromptQuery = useRef<string | null>(requestedPrompt);
   activeIdRef.current = activeId;
 
   // Lazily load the selected prompt's detail + usage in parallel and cache both.
@@ -88,6 +93,27 @@ export function PromptLibraryScreen({
     setRows(data.prompts);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data]);
+
+  // A client-side query change is a real navigation request. Handle each query
+  // value once; routine RSC refreshes must not pull the user back to the original
+  // deep-linked prompt. Dirty drafts keep using the existing confirmation guard.
+  useEffect(() => {
+    if (handledPromptQuery.current === requestedPrompt) return;
+    handledPromptQuery.current = requestedPrompt;
+    if (requestedPrompt === null || !/^[1-9]\d*$/.test(requestedPrompt)) return;
+    const requestedId = Number(requestedPrompt);
+    const selection = initialPromptSelection(requestedPrompt, rows);
+    if (!Number.isSafeInteger(requestedId) || selection !== requestedId || selection === activeId) return;
+
+    const go = () => {
+      setActiveId(selection);
+      setMode("view");
+      setError(null);
+      setDetailErrorId(null);
+    };
+    if (mode !== "view" && formDirty) setPendingNav(() => go);
+    else go();
+  }, [activeId, formDirty, mode, requestedPrompt, rows]);
 
   async function loadDetail(id: number) {
     try {
