@@ -15,7 +15,6 @@ import { ConfigField } from "./config-fields";
 import type { PromptInsertPayload } from "./prompt-insert-popup";
 import { PromptEditorModal } from "./prompt-editor-modal";
 import { PromptInspectorCard } from "./prompt-inspector-card";
-import { PromptReferenceChips } from "@/components/cockpit/prompt-editor/prompt-reference-chips";
 import { usePromptLibrary } from "./prompt-library-context";
 import { effectiveDefaultPromptValue } from "@/lib/prompt-library/effective-default";
 import { promptInspectorSummary } from "@/lib/prompt-library/prompt-inspector-summary";
@@ -200,16 +199,6 @@ export function PromptField({
         summary={summary}
         onOpen={() => setExpandOpen(true)}
       />
-      {effectiveValue ? (
-        <PromptReferenceChips
-          value={effectiveValue}
-          onChange={setBodyValue}
-          disabled={disabled}
-        />
-      ) : effective.implicit ? (
-        <CkChip tone="neutral">❡ {defaultPromptName ?? "Default prompt"} · Latest</CkChip>
-      ) : null}
-
       {provenance}
       <PromptEditorModal
         open={expandOpen}

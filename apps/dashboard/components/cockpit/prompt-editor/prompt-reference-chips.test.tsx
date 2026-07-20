@@ -37,6 +37,21 @@ test("resolved read-only references render a responsive expandable card", () => 
   assert.doesNotMatch(html, />Preview</);
 });
 
+test("editable references expose detach as a primary action", () => {
+  const html = renderToStaticMarkup(
+    <PromptReferenceChipsView
+      value="{{prompt:7}}"
+      rows={[row]}
+      onChange={() => {}}
+    />,
+  );
+
+  assert.match(html, />Show content</);
+  assert.match(html, /href="\/prompts\?prompt=7"/);
+  assert.match(html, />Detach and edit</);
+  assert.match(html, /More actions/);
+});
+
 test("missing references expose no navigation", () => {
   const html = renderToStaticMarkup(
     <PromptReferenceChipsView

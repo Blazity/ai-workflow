@@ -216,6 +216,16 @@ export function PromptReferenceChipsView({
                 )}
                 {capabilities.canMutate && (
                   <button
+                    type="button"
+                    disabled={busyKey === key}
+                    onClick={() => void detach(reference, row, key)}
+                    className={`${quietAction} disabled:cursor-default disabled:opacity-50`}
+                  >
+                    {busyKey === key ? "Detaching…" : "Detach and edit"}
+                  </button>
+                )}
+                {capabilities.canMutate && (
+                  <button
                     ref={(node) => {
                       if (node) triggerRefs.current.set(key, node);
                       else triggerRefs.current.delete(key);
@@ -291,17 +301,12 @@ export function PromptReferenceChipsView({
                 position={menuKey === key ? menuPosition : null}
                 trigger={trigger}
                 primaryLabel={latest ? `Pin v${row.currentVersion}` : "Follow latest"}
-                busy={busyKey === key}
                 onPrimary={() => {
                   replaceAt(reference, formatPromptReferenceToken({
                     promptId: reference.promptId,
                     version: latest ? row.currentVersion : "latest",
                   }));
                   closeMenu(true);
-                }}
-                onDetach={() => {
-                  closeMenu(true);
-                  void detach(reference, row, key);
                 }}
                 onClose={closeMenu}
               />

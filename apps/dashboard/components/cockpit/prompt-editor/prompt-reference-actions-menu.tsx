@@ -9,18 +9,14 @@ export function PromptReferenceActionsMenu({
   position,
   trigger,
   primaryLabel,
-  busy,
   onPrimary,
-  onDetach,
   onClose,
 }: {
   open: boolean;
   position: { left: number; top: number } | null;
   trigger: HTMLButtonElement | null;
   primaryLabel: string;
-  busy: boolean;
   onPrimary: () => void;
-  onDetach: () => void;
   onClose: (restoreFocus: boolean) => void;
 }) {
   const { mounted, state } = useEnterExit(open, 140);
@@ -74,16 +70,6 @@ export function PromptReferenceActionsMenu({
     >
       <button type="button" role="menuitem" className={itemClass} onClick={onPrimary}>
         {primaryLabel}
-      </button>
-      <div className="my-1 h-px bg-neutral-100" aria-hidden="true" />
-      <button
-        type="button"
-        role="menuitem"
-        disabled={busy}
-        className={`${itemClass} text-red-700 hover:bg-red-50`}
-        onClick={onDetach}
-      >
-        {busy ? "Detaching…" : "Detach and edit"}
       </button>
     </div>,
     document.body,
