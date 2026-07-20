@@ -36,7 +36,7 @@ Replace migrations `0020` through `0035` with one migration from `0019`.
 - Represent delivery deduplication and one pending semantic event with one compact trigger inbox rather than separate delivery, reservation, and pending protocols.
 - Preserve clarification through a durable Workflow hook and compact sandbox snapshot metadata after verifying deployed hook retention and expiry.
 - Store exact published head and target branch on existing workflow-owned branch state; do not add publication-ledger tables.
-- Use one small expiring Jira transition intent only if actor filtering cannot reliably distinguish the workflow's own status change.
+- Distinguish Jira self-echoes by exact workflow actor identity; treat missing, different, or unverifiable actors as human input.
 - Keep structured budget failure only if existing run telemetry cannot express it without ambiguity.
 
 Do not add deployment history, publication attempt, cancellation fence, or label mutation tables. Do not add active-run counters, reconciliation versions, PostgreSQL functions, or triggers.

@@ -115,7 +115,7 @@ GitLab merge-request Note Hooks normalize only external, non-system notes to the
 
 GitHub `pull_request.closed` with `merged=true` and GitLab's merged merge-request event normalize to `trigger_pr_merged`. The trigger can feed Update Ticket Status. Editor status choices are fetched from the configured ticket provider/project and deduplicated; configured AI Review/Backlog values are only a fallback when provider discovery fails.
 
-The merged event carries a real ticket only when correlation succeeds. Before Update Ticket Status calls the provider, it records a two-hour transition intent containing the ticket, owning run, exact destination, and authenticated workflow actor account ID. Jira echoes are consumed only from an exact status changelog destination with the same actor and stable `X-Atlassian-Webhook-Identifier`; retries with that identifier remain idempotent for the full provider retry window. Missing or mismatched identity fails closed, and unmatched human moves keep the existing cancellation behavior. The active claim remains until all downstream notification blocks finish.
+The merged event carries a real ticket only when correlation succeeds. Update Ticket Status checks the exact active owner immediately before calling the provider. Jira status webhooks authored by the configured workflow account are ignored as self-echoes. A different actor, missing actor, or failed workflow-account lookup is treated as human input and retains the existing cancellation behavior. Provider transition errors are followed by one live status read so a transition accepted despite a lost response is recognized as successful. The active claim remains until all downstream notification blocks finish.
 
 ## 8. Execution budgets
 

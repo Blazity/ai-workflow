@@ -83,7 +83,7 @@ Every PR/MR trigger has `providers: (github | gitlab)[]` and `scope: workflow_ow
 
 GitHub merged `pull_request.closed` and GitLab merged Merge Request Hooks normalize to `trigger_pr_merged`. With `workflow_owned` scope, the output includes the real correlated ticket and may feed Update Ticket Status.
 
-Before the move, runtime records a short-lived transition intent containing the ticket, run, exact destination, and authenticated workflow actor. Only the matching Jira destination/actor/webhook identity consumes it, preventing the workflow's own transition from cancelling the still-running workflow. Provider retries are idempotent; unrelated human moves retain normal cancellation behavior.
+Runtime verifies the exact active owner before moving the ticket. A Jira status webhook authored by the configured workflow account is ignored as a self-echo, preventing the workflow's own transition from cancelling the still-running workflow. A different, missing, or unverifiable actor retains normal human-move cancellation behavior. If the provider accepts a move but loses its response, one live status read recognizes the completed transition.
 
 ### Delivery, claims, and pending events
 
@@ -162,7 +162,7 @@ Client-side rules may add more specific reasons, but they must not replace or hi
 - Claims/cancellation: owner-CAS, pending drain, reconciliation, cancel-run, and active-run migration tests.
 - Clarification/workspaces: checkpoint, dispatch, reconciliation, snapshot, runtime, sandbox cleanup, and merge-conflict state tests.
 - Publication: Finalize, workspace-publication, publication store/recovery, PR correlation, and VCS adapter tests.
-- Merged movement: merged normalizer/route tests plus ticket-transition intent/routing/step tests.
+- Merged movement: merged normalizer/route tests plus actor-filtering and exact-owner transition tests.
 - Budgets/telemetry: run-budget, agent-budget, telemetry integration, and snapshot collection tests.
 
 The full release gate and deployed smoke sequence are maintained in `docs/testing/e2e-workflow-test-plan.md`.

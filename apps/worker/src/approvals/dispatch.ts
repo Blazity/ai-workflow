@@ -16,8 +16,8 @@ import { logger } from "../lib/logger.js";
 import { isActiveRunOwnerError } from "../lib/run-control-errors.js";
 import { claimTicketRun } from "../lib/dispatch.js";
 import { ticketSubjectKey } from "../lib/subject-key.js";
-import { updateTicketLabelsWithIntent } from "../lib/ticket-label-mutation.js";
-import { moveTicketWithIntent } from "../lib/ticket-transition.js";
+import { updateTicketLabelsForRun } from "../lib/ticket-label-mutation.js";
+import { moveTicketForRun } from "../lib/ticket-transition.js";
 import type { ApprovalRow } from "./store.js";
 
 export type DispatchPlanApprovedResult =
@@ -82,7 +82,7 @@ export async function dispatchPlanApproved(input: {
       try {
         if (onClaimed) await onClaimed();
 
-        await moveTicketWithIntent({
+        await moveTicketForRun({
           db,
           issueTracker,
           ticketKey,
@@ -92,7 +92,7 @@ export async function dispatchPlanApproved(input: {
 
         if (typeof issueTracker.updateLabels === "function") {
           try {
-            await updateTicketLabelsWithIntent({
+            await updateTicketLabelsForRun({
               db,
               issueTracker,
               ticketKey,

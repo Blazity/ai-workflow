@@ -1,17 +1,12 @@
-import { createHash, createHmac, timingSafeEqual } from "node:crypto";
+import { createHmac, timingSafeEqual } from "node:crypto";
 import { defineEventHandler, readRawBody, getHeader, createError } from "h3";
 import { env } from "../../../env.js";
-import { getDb } from "../../db/client.js";
 import { IssueTrackerNotFoundError } from "../../adapters/issue-tracker/types.js";
 import { createAdapters } from "../../lib/adapters.js";
 import { cancelRun } from "../../lib/cancel-run.js";
 import { dispatchTicket } from "../../lib/dispatch.js";
 import { logger } from "../../lib/logger.js";
 import { ticketSubjectKey } from "../../lib/subject-key.js";
-import {
-  consumeTicketTransitionIntent,
-  recordTicketCancellationFenceOwner,
-} from "../../lib/ticket-transition-intent-store.js";
 
 /**
  * Jira webhook handler — triggers the same dispatch logic as the cron poller.
@@ -54,11 +49,6 @@ export default defineEventHandler(async (event) => {
   const webhookEvent = typeof body?.webhookEvent === "string" ? body.webhookEvent : null;
   const ticketStatus = extractTicketStatus(body);
   const statusChange = extractStatusChange(body);
-  const webhookIdentifier =
-    getHeader(event, "x-atlassian-webhook-identifier")?.trim() ?? "";
-  const cancellationFenceIdentifier =
-    webhookIdentifier || `body-sha256:${createHash("sha256").update(rawBody).digest("hex")}`;
-  const webhookOccurredAt = extractWebhookOccurredAt(body);
   const actorAccountId =
     typeof body?.user?.accountId === "string" ? body.user.accountId.trim() : "";
   logger.info(
@@ -72,35 +62,37 @@ export default defineEventHandler(async (event) => {
     "webhook_payload_parsed",
   );
 
+  let workflowActorAccountId = "";
+  if (webhookEvent === "jira:issue_updated" && statusChange && actorAccountId) {
+    try {
+      workflowActorAccountId =
+        (await adapters.issueTracker.getCurrentUserAccountId?.())?.trim() ?? "";
+    } catch (error) {
+      logger.warn(
+        { ticketKey, error: error instanceof Error ? error.message : String(error) },
+        "webhook_workflow_actor_lookup_failed",
+      );
+    }
+  }
   if (
-    webhookEvent === "jira:issue_updated" &&
-    statusChange &&
-    webhookIdentifier &&
     actorAccountId &&
-    (await consumeTicketTransitionIntent(getDb(), ticketKey, statusChange, {
-      webhookIdentifier,
-      actorAccountId,
-    }))
+    workflowActorAccountId &&
+    actorAccountId === workflowActorAccountId
   ) {
     logger.info(
-      {
-        ticketKey,
-        webhookIdentifier,
-        actorAccountId,
-        statusChange,
-      },
-      "webhook_consumed_workflow_transition_intent",
+      { ticketKey, actorAccountId, statusChange },
+      "webhook_ignored_workflow_actor",
     );
     return {
       status: "ignored",
-      reason: "workflow_transition_intent",
+      reason: "workflow_actor",
       ticketKey,
     };
   }
 
   // A second human move can arrive while an earlier move is already closing
-  // the owner. Persist that newer destination and finish the same cancellation
-  // instead of dispatching against a claim that is deliberately still held.
+  // the owner. Continue that exact cancellation instead of dispatching against
+  // a claim that is deliberately still held.
   if (statusChange) {
     const subjectKey = ticketSubjectKey("jira", ticketKey);
     const active = await adapters.runRegistry.get(subjectKey);
@@ -109,12 +101,6 @@ export default defineEventHandler(async (event) => {
         ticketKey,
         adapters.runRegistry,
         adapters.issueTracker,
-        {
-          statusChange,
-          ticketStatus,
-          webhookIdentifier: cancellationFenceIdentifier,
-          occurredAt: webhookOccurredAt,
-        },
         active,
       );
       if (cancellation === "unconfirmed") {
@@ -205,12 +191,6 @@ export default defineEventHandler(async (event) => {
       ticketKey,
       adapters.runRegistry,
       adapters.issueTracker,
-      {
-        statusChange,
-        ticketStatus,
-        webhookIdentifier: cancellationFenceIdentifier,
-        occurredAt: webhookOccurredAt,
-      },
     );
     if (cancellation === "unconfirmed") {
       logger.warn(
@@ -369,41 +349,15 @@ async function cancelTrackedRun(
   ticketKey: string,
   runRegistry: ReturnType<typeof createAdapters>["runRegistry"],
   issueTracker: ReturnType<typeof createAdapters>["issueTracker"],
-  reconciliation?: {
-    statusChange: { id?: string; name?: string };
-    ticketStatus: string | null;
-    webhookIdentifier: string;
-    occurredAt: Date;
-  },
   observedEntry?: Awaited<ReturnType<typeof runRegistry.get>>,
 ): Promise<"cancelled" | "not_active" | "unconfirmed"> {
   const subjectKey = ticketSubjectKey("jira", ticketKey);
   const entry = observedEntry ?? (await runRegistry.get(subjectKey));
   if (!entry) return "not_active";
-  let cancellationTarget = {
+  const cancellationTarget = {
     ownerToken: entry.ownerToken,
     runId: entry.runId,
   };
-
-  if (reconciliation) {
-    const fencedOwner = await recordTicketCancellationFenceOwner(getDb(), {
-      ticketKey,
-      subjectKey,
-      ownerToken: entry.ownerToken,
-      runId: entry.runId,
-      target: statusChangeTarget(
-        reconciliation.statusChange,
-        reconciliation.ticketStatus,
-      ),
-      webhookIdentifier: reconciliation.webhookIdentifier,
-      occurredAt: reconciliation.occurredAt,
-    });
-    if (!fencedOwner) {
-      const current = await runRegistry.get(subjectKey);
-      return current?.ownerToken === entry.ownerToken ? "unconfirmed" : "not_active";
-    }
-    cancellationTarget = fencedOwner;
-  }
 
   if (cancellationTarget.runId === null) {
     const cancelled = await cancelRun(
@@ -423,26 +377,6 @@ async function cancelTrackedRun(
     issueTracker,
   );
   return cancelled ? "cancelled" : "unconfirmed";
-}
-
-function statusChangeTarget(
-  status: { id?: string; name?: string },
-  ticketStatus: string | null,
-) {
-  const name = status.name?.trim() || ticketStatus?.trim() || status.id?.trim() || "Unknown";
-  const statusId = status.id?.trim();
-  return statusId ? { name, statusId } : name;
-}
-
-function extractWebhookOccurredAt(body: any): Date {
-  const raw = body?.timestamp;
-  const millis =
-    typeof raw === "number"
-      ? raw
-      : typeof raw === "string" && /^\d+$/.test(raw.trim())
-        ? Number(raw)
-        : Date.parse(String(raw ?? ""));
-  return Number.isFinite(millis) ? new Date(millis) : new Date();
 }
 
 async function getLiveTicketState(

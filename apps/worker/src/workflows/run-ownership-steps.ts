@@ -179,12 +179,12 @@ export async function repairClarificationLabelStep(
   const { getDb } = await import("../db/client.js");
   const { createStepAdapters } = await import("../lib/step-adapters.js");
   const { NEEDS_CLARIFICATION_LABEL } = await import("../lib/labels.js");
-  const { updateTicketLabelsWithIntent } = await import(
+  const { updateTicketLabelsForRun } = await import(
     "../lib/ticket-label-mutation.js"
   );
   const { issueTracker } = createStepAdapters();
   if (typeof issueTracker.updateLabels !== "function") return;
-  await updateTicketLabelsWithIntent({
+  await updateTicketLabelsForRun({
     db: getDb(),
     issueTracker,
     ticketKey,

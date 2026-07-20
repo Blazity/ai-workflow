@@ -22,9 +22,9 @@ const listSandboxes = vi.fn();
 const stopSandboxes = vi.fn();
 const updateLabels = vi.fn();
 const assertActiveRunOwner = vi.fn();
-const moveTicketWithIntent = vi.fn();
+const moveTicket = vi.fn();
 const fetchTicket = vi.fn();
-const updateTicketLabelsWithIntent = vi.fn();
+const updateTicketLabels = vi.fn();
 vi.mock("../lib/step-adapters.js", () => ({
   createStepAdapters: () => ({
     runRegistry: {
@@ -74,11 +74,11 @@ vi.mock("../sandbox/stop-ticket-sandboxes.js", () => ({
   stopSandboxesByIds: (...args: any[]) => stopSandboxes(...args),
 }));
 vi.mock("../lib/ticket-transition.js", () => ({
-  moveTicketWithIntent: (...args: any[]) => moveTicketWithIntent(...args),
+  moveTicketForRun: (...args: any[]) => moveTicket(...args),
 }));
 vi.mock("../lib/ticket-label-mutation.js", () => ({
-  updateTicketLabelsWithIntent: (...args: any[]) =>
-    updateTicketLabelsWithIntent(...args),
+  updateTicketLabelsForRun: (...args: any[]) =>
+    updateTicketLabels(...args),
 }));
 
 describe("workflow owner steps", () => {
@@ -116,9 +116,9 @@ describe("workflow owner steps", () => {
     stopSandboxes.mockReset().mockResolvedValue(0);
     updateLabels.mockReset();
     assertActiveRunOwner.mockReset().mockResolvedValue(undefined);
-    moveTicketWithIntent.mockReset().mockResolvedValue(undefined);
+    moveTicket.mockReset().mockResolvedValue(undefined);
     fetchTicket.mockReset();
-    updateTicketLabelsWithIntent.mockReset().mockResolvedValue(undefined);
+    updateTicketLabels.mockReset().mockResolvedValue(undefined);
   });
 
   it("self-records the exact plan-approval workflow after owner bind", async () => {
@@ -526,7 +526,7 @@ describe("workflow owner steps", () => {
   );
 
   it("repairs clarification label removal independently and replay-safely", async () => {
-    updateTicketLabelsWithIntent
+    updateTicketLabels
       .mockRejectedValueOnce(new Error("Jira is temporarily unavailable"))
       .mockResolvedValueOnce(undefined);
     const { repairClarificationLabelStep } = await import("./run-ownership-steps.js");
@@ -540,8 +540,8 @@ describe("workflow owner steps", () => {
       "Jira is temporarily unavailable",
     );
     await expect(repairClarificationLabelStep("AWT-1", owner)).resolves.toBeUndefined();
-    expect(updateTicketLabelsWithIntent).toHaveBeenCalledTimes(2);
-    expect(updateTicketLabelsWithIntent).toHaveBeenLastCalledWith({
+    expect(updateTicketLabels).toHaveBeenCalledTimes(2);
+    expect(updateTicketLabels).toHaveBeenLastCalledWith({
       db: { db: true },
       issueTracker: expect.anything(),
       ticketKey: "AWT-1",
@@ -554,7 +554,7 @@ describe("workflow owner steps", () => {
 
   it("does not remove the clarification label after cancellation closes the owner", async () => {
     const ownerLoss = new ActiveRunOwnerError();
-    updateTicketLabelsWithIntent.mockRejectedValue(ownerLoss);
+    updateTicketLabels.mockRejectedValue(ownerLoss);
     const { repairClarificationLabelStep } = await import("./run-ownership-steps.js");
 
     await expect(
@@ -565,7 +565,7 @@ describe("workflow owner steps", () => {
       }),
     ).rejects.toBe(ownerLoss);
 
-    expect(updateTicketLabelsWithIntent).toHaveBeenCalledOnce();
+    expect(updateTicketLabels).toHaveBeenCalledOnce();
     expect(updateLabels).not.toHaveBeenCalled();
   });
 });

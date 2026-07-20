@@ -32,7 +32,7 @@ import {
   type AgentWorkflowInput,
 } from "./agent-input.js";
 import type { TicketTransitionOwner } from "../lib/ticket-transition.js";
-import { moveTicketWithIntentStep } from "./ticket-transition-step.js";
+import { moveTicketStep } from "./ticket-transition-step.js";
 import type { BlockExecuteFn, EngineCtx } from "./blocks/types.js";
 import type { HumanDecision } from "../lib/human-decisions-memory.js";
 import type { WorkspacePublicationResult } from "./workspace-publication.js";
@@ -879,7 +879,7 @@ export async function parkForClarificationStep(
   const { getDb } = await import("../db/client.js");
   const { createStepAdapters } = await import("../lib/step-adapters.js");
   const { NEEDS_CLARIFICATION_LABEL } = await import("../lib/labels.js");
-  const { updateTicketLabelsWithIntent } = await import(
+  const { updateTicketLabelsForRun } = await import(
     "../lib/ticket-label-mutation.js"
   );
   const db = getDb();
@@ -890,7 +890,7 @@ export async function parkForClarificationStep(
   // failure never blocks the park.
   if (typeof issueTracker.updateLabels === "function") {
     try {
-      await updateTicketLabelsWithIntent({
+      await updateTicketLabelsForRun({
         db,
         issueTracker,
         ticketKey: ticketId,
@@ -907,8 +907,8 @@ export async function parkForClarificationStep(
       );
     }
   }
-  const { moveTicketWithIntent } = await import("../lib/ticket-transition.js");
-  await moveTicketWithIntent({
+  const { moveTicketForRun } = await import("../lib/ticket-transition.js");
+  await moveTicketForRun({
     db,
     issueTracker,
     ticketKey: ticketId,
@@ -927,7 +927,7 @@ export async function reconcileClarificationsOnPickup(
   const { getDb } = await import("../db/client.js");
   const { createStepAdapters } = await import("../lib/step-adapters.js");
   const { NEEDS_CLARIFICATION_LABEL } = await import("../lib/labels.js");
-  const { updateTicketLabelsWithIntent } = await import(
+  const { updateTicketLabelsForRun } = await import(
     "../lib/ticket-label-mutation.js"
   );
   const { reconcileClarificationPickupState } = await import(
@@ -943,7 +943,7 @@ export async function reconcileClarificationsOnPickup(
   //  - flip parked predecessor runs off "awaiting" so they don't linger.
   if (typeof issueTracker.updateLabels === "function") {
     try {
-      await updateTicketLabelsWithIntent({
+      await updateTicketLabelsForRun({
         db,
         issueTracker,
         ticketKey,
@@ -1754,7 +1754,7 @@ async function agentWorkflowBody(
         await handleWorkflowFailureExit(entry.ticketKey ?? undefined, {
           logFailure: () => logPhaseFailure(entry.subjectKey, phase, reason),
           moveTicket: () =>
-            moveTicketWithIntentStep(ticketId, backlogMoveTarget(), transitionOwner),
+            moveTicketStep(ticketId, backlogMoveTarget(), transitionOwner),
           notifyTicket: () => notifyTicket(ticket.identifier, {
             kind: "failed",
             ...(knownPhase ? { phase: knownPhase } : {}),
@@ -1781,7 +1781,7 @@ async function agentWorkflowBody(
           runOutcome = "failed";
           return;
         }
-        await moveTicketWithIntentStep(ticketId, backlogMoveTarget(), transitionOwner);
+        await moveTicketStep(ticketId, backlogMoveTarget(), transitionOwner);
         await notifyTicket(ticket.identifier, {
           kind: "failed",
           reason: params.postComment ?? "Terminated by workflow.",
@@ -2221,7 +2221,7 @@ async function agentWorkflowBody(
             if (!entry.ticketKey) {
               throw new Error("Update Ticket Status requires a correlated ticket.");
             }
-            await moveTicketWithIntentStep(entry.ticketKey, target, transitionOwner);
+            await moveTicketStep(entry.ticketKey, target, transitionOwner);
             return { kind: "next", output: { status: "ok", target: targetName } };
           }
 
@@ -2320,7 +2320,7 @@ async function agentWorkflowBody(
 
         let moved = false;
         try {
-          await moveTicketWithIntentStep(
+          await moveTicketStep(
             ticketId,
             backlogMoveTarget(),
             transitionOwner,

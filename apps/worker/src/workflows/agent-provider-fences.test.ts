@@ -3,15 +3,13 @@ import { ActiveRunOwnerError } from "../lib/run-control-errors.js";
 
 const mocks = vi.hoisted(() => ({
   assertActiveRunOwner: vi.fn(),
-  claimClarificationProviderParking: vi.fn(),
-  getClarification: vi.fn(),
-  moveTicketWithIntent: vi.fn(),
+  moveTicket: vi.fn(),
   notifyForTicket: vi.fn(),
   postComment: vi.fn(),
   reconcileClarificationPickupState: vi.fn(),
   resolveAwaitingRunsForTicket: vi.fn(),
   supersedePendingForTicket: vi.fn(),
-  updateTicketLabelsWithIntent: vi.fn(),
+  updateTicketLabels: vi.fn(),
   updateLabels: vi.fn(),
   warn: vi.fn(),
 }));
@@ -30,9 +28,6 @@ vi.mock("../lib/step-adapters.js", () => ({
   }),
 }));
 vi.mock("../clarifications/store.js", () => ({
-  claimClarificationProviderParking: (...args: any[]) =>
-    mocks.claimClarificationProviderParking(...args),
-  getClarification: (...args: any[]) => mocks.getClarification(...args),
   reconcileClarificationPickupState: (...args: any[]) =>
     mocks.reconcileClarificationPickupState(...args),
   supersedePendingForTicket: (...args: any[]) => mocks.supersedePendingForTicket(...args),
@@ -42,11 +37,11 @@ vi.mock("../lib/telemetry/run-telemetry.js", () => ({
     mocks.resolveAwaitingRunsForTicket(...args),
 }));
 vi.mock("../lib/ticket-transition.js", () => ({
-  moveTicketWithIntent: (...args: any[]) => mocks.moveTicketWithIntent(...args),
+  moveTicketForRun: (...args: any[]) => mocks.moveTicket(...args),
 }));
 vi.mock("../lib/ticket-label-mutation.js", () => ({
-  updateTicketLabelsWithIntent: (...args: any[]) =>
-    mocks.updateTicketLabelsWithIntent(...args),
+  updateTicketLabelsForRun: (...args: any[]) =>
+    mocks.updateTicketLabels(...args),
 }));
 vi.mock("../lib/logger.js", () => ({ logger: { warn: mocks.warn } }));
 vi.mock("../../env.js", () => ({
@@ -76,9 +71,7 @@ describe("agent provider side-effect fences", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.assertActiveRunOwner.mockResolvedValue(undefined);
-    mocks.claimClarificationProviderParking.mockResolvedValue(true);
-    mocks.getClarification.mockResolvedValue({ status: "pending" });
-    mocks.moveTicketWithIntent.mockResolvedValue(undefined);
+    mocks.moveTicket.mockResolvedValue(undefined);
     mocks.notifyForTicket.mockResolvedValue(undefined);
     mocks.postComment.mockResolvedValue(null);
     mocks.reconcileClarificationPickupState.mockResolvedValue({
@@ -87,7 +80,7 @@ describe("agent provider side-effect fences", () => {
     });
     mocks.resolveAwaitingRunsForTicket.mockResolvedValue(undefined);
     mocks.supersedePendingForTicket.mockResolvedValue(undefined);
-    mocks.updateTicketLabelsWithIntent.mockResolvedValue(undefined);
+    mocks.updateTicketLabels.mockResolvedValue(undefined);
     mocks.updateLabels.mockResolvedValue(undefined);
   });
 
@@ -199,7 +192,7 @@ describe("agent provider side-effect fences", () => {
     mocks.assertActiveRunOwner.mockImplementation(async () => {
       order.push("fence");
     });
-    mocks.updateTicketLabelsWithIntent.mockImplementation(async () => {
+    mocks.updateTicketLabels.mockImplementation(async () => {
       order.push("intent");
     });
     mocks.reconcileClarificationPickupState.mockImplementation(async () => {
@@ -214,7 +207,7 @@ describe("agent provider side-effect fences", () => {
     await reconcileClarificationsOnPickup("AWT-1", "run-1", owner);
 
     expect(order).toEqual(["intent", "intent", "pickup-state"]);
-    expect(mocks.updateTicketLabelsWithIntent).toHaveBeenNthCalledWith(1, {
+    expect(mocks.updateTicketLabels).toHaveBeenNthCalledWith(1, {
       db: { kind: "db" },
       issueTracker: expect.anything(),
       ticketKey: "AWT-1",
@@ -222,7 +215,7 @@ describe("agent provider side-effect fences", () => {
       requiredOwnerState: "bound",
       changes: { add: ["needs-clarification"] },
     });
-    expect(mocks.updateTicketLabelsWithIntent).toHaveBeenNthCalledWith(2, {
+    expect(mocks.updateTicketLabels).toHaveBeenNthCalledWith(2, {
       db: { kind: "db" },
       issueTracker: expect.anything(),
       ticketKey: "AWT-1",
@@ -242,7 +235,7 @@ describe("agent provider side-effect fences", () => {
 
   it("rethrows owner loss before parking, superseding, or telemetry can continue", async () => {
     const ownerLoss = new ActiveRunOwnerError();
-    mocks.updateTicketLabelsWithIntent.mockRejectedValue(ownerLoss);
+    mocks.updateTicketLabels.mockRejectedValue(ownerLoss);
 
     await expect(
       parkForClarificationStep("AWT-1", "Backlog", "clar-1", owner),
@@ -251,9 +244,9 @@ describe("agent provider side-effect fences", () => {
       reconcileClarificationsOnPickup("AWT-1", "run-1", owner),
     ).rejects.toBe(ownerLoss);
 
-    expect(mocks.updateTicketLabelsWithIntent).toHaveBeenCalledTimes(2);
+    expect(mocks.updateTicketLabels).toHaveBeenCalledTimes(2);
     expect(mocks.updateLabels).not.toHaveBeenCalled();
-    expect(mocks.moveTicketWithIntent).not.toHaveBeenCalled();
+    expect(mocks.moveTicket).not.toHaveBeenCalled();
     expect(mocks.reconcileClarificationPickupState).not.toHaveBeenCalled();
     expect(mocks.supersedePendingForTicket).not.toHaveBeenCalled();
     expect(mocks.resolveAwaitingRunsForTicket).not.toHaveBeenCalled();
@@ -267,14 +260,14 @@ describe("agent provider side-effect fences", () => {
       reconcileClarificationsOnPickup("AWT-1", "run-1", owner),
     ).rejects.toBe(ownerLoss);
 
-    expect(mocks.updateTicketLabelsWithIntent).toHaveBeenCalledOnce();
+    expect(mocks.updateTicketLabels).toHaveBeenCalledOnce();
     expect(mocks.reconcileClarificationPickupState).toHaveBeenCalledOnce();
     expect(mocks.supersedePendingForTicket).not.toHaveBeenCalled();
     expect(mocks.resolveAwaitingRunsForTicket).not.toHaveBeenCalled();
   });
 
   it("keeps ordinary label provider failures best-effort", async () => {
-    mocks.updateTicketLabelsWithIntent.mockRejectedValue(
+    mocks.updateTicketLabels.mockRejectedValue(
       new Error("Jira labels are temporarily unavailable"),
     );
 
@@ -285,21 +278,10 @@ describe("agent provider side-effect fences", () => {
       reconcileClarificationsOnPickup("AWT-1", "run-1", owner),
     ).resolves.toBeUndefined();
 
-    expect(mocks.moveTicketWithIntent).toHaveBeenCalledOnce();
+    expect(mocks.moveTicket).toHaveBeenCalledOnce();
     expect(mocks.reconcileClarificationPickupState).toHaveBeenCalledOnce();
     expect(mocks.supersedePendingForTicket).not.toHaveBeenCalled();
     expect(mocks.resolveAwaitingRunsForTicket).not.toHaveBeenCalled();
-  });
-
-  it("skips provider mutations when recovery already made the checkpoint ready", async () => {
-    mocks.claimClarificationProviderParking.mockResolvedValue(false);
-
-    await expect(
-      parkForClarificationStep("AWT-1", "Backlog", "clar-1", owner),
-    ).resolves.toBe(false);
-
-    expect(mocks.updateLabels).not.toHaveBeenCalled();
-    expect(mocks.moveTicketWithIntent).not.toHaveBeenCalled();
   });
 
   it("keeps the asking run awaiting when an early answer skips only provider parking", () => {

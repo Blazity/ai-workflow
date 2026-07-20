@@ -20,15 +20,28 @@ export async function assertActiveRunOwner(
   db: Db,
   owner: ActiveRunOwner,
 ): Promise<void> {
-  const ownerState = owner.runId === null
-    ? sql`state = 'reserved' AND run_id IS NULL`
-    : sql`state = 'bound' AND run_id = ${owner.runId}`;
+  await assertActiveRunOwnerState(
+    db,
+    owner,
+    owner.runId === null ? "reserved" : "bound",
+  );
+}
+
+export async function assertActiveRunOwnerState(
+  db: Db,
+  owner: ActiveRunOwner,
+  state: "reserved" | "bound" | "parked" | "cancelling",
+): Promise<void> {
+  const runMatch = owner.runId === null
+    ? sql`run_id IS NULL`
+    : sql`run_id = ${owner.runId}`;
   const result = await db.execute(sql`
     SELECT 1 AS owner_count
     FROM active_runs
     WHERE subject_key = ${owner.subjectKey}
       AND owner_token = ${owner.ownerToken}
-      AND ${ownerState}
+      AND state = ${state}
+      AND ${runMatch}
     LIMIT 1
   `);
   if (rawRows(result).length === 0) {

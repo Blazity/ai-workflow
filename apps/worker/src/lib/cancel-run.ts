@@ -10,7 +10,6 @@ import type {
 } from "../adapters/issue-tracker/types.js";
 import { stopSandboxesByIds } from "../sandbox/stop-ticket-sandboxes.js";
 import { ticketSubjectKey } from "./subject-key.js";
-import type { TicketCancellationReconciliationResult } from "./ticket-cancellation-reconciliation.js";
 import { confirmWorkflowStepsDrained } from "./workflow-step-drain.js";
 
 /** Claim identity observed by a route before it delegates cancellation. Keeping
@@ -45,16 +44,17 @@ export async function cancelRun(
   const subjectKey = ticketSubjectKey("jira", ticketKey);
   const confirmTicketMove = issueTracker && targetColumn
     ? async (owner: { subjectKey: string; ownerToken: string; runId: string | null }) => {
-      const [{ getDb }, { moveTicketWhileCancelling }] = await Promise.all([
+      const [{ getDb }, { moveTicketForRun }] = await Promise.all([
         import("../db/client.js"),
         import("./ticket-transition.js"),
       ]);
-      await moveTicketWhileCancelling({
+      await moveTicketForRun({
         db: getDb(),
         issueTracker,
         ticketKey,
         target: targetColumn,
         owner,
+        requiredOwnerState: "cancelling",
       });
     }
     : undefined;
@@ -65,7 +65,6 @@ export async function cancelRun(
       runRegistry,
       onReleased,
       confirmTicketMove,
-      issueTracker,
     )
   ).cancelled;
 }
@@ -91,7 +90,6 @@ async function cancelOwnedSubject(
     ownerToken: string;
     runId: string | null;
   }) => Promise<void>,
-  issueTracker?: IssueTrackerAdapter,
 ): Promise<{ cancelled: boolean; released: boolean }> {
   let observed: ObservedRunClaim;
   if (typeof target === "string") {
@@ -236,79 +234,21 @@ async function cancelOwnedSubject(
     return { cancelled: false, released: false };
   }
 
-  let ticketReconciliation: TicketCancellationReconciliationResult | undefined;
-  if (closed.ticketKey) {
-    const reconciled = await reconcilePostDrainTicketMutations(closed, issueTracker);
-    if (!reconciled) return { cancelled: false, released: false };
-    ticketReconciliation = reconciled;
-  }
-
-  if (
-    !ticketReconciliation?.hasHumanFence &&
-    !ticketReconciliation?.ticketMissing &&
-    beforeRelease
-  ) {
+  if (beforeRelease) {
     if (!(await confirmBeforeRelease(subjectKey, closed, beforeRelease))) {
       return { cancelled: false, released: false };
     }
-    // The tracked compatibility move increments the mutation version. Run the
-    // fence reconciliation again so a human event that raced that move wins,
-    // and release CASes the exact post-move version.
-    const reconciled = await reconcilePostDrainTicketMutations(closed, issueTracker);
-    if (!reconciled) return { cancelled: false, released: false };
-    ticketReconciliation = reconciled;
   }
 
-  const releasePromise = ticketReconciliation
-    ? runRegistry.releaseCancellation(
-        subjectKey,
-        closed.ownerToken,
-        closed.runId,
-        {
-          latestFenceId: ticketReconciliation.latestFenceId,
-          mutationVersion: ticketReconciliation.mutationVersion,
-        },
-      )
-    : runRegistry.releaseCancellation(subjectKey, closed.ownerToken, closed.runId);
-  const released = await releasePromise.catch(() => false);
+  const released = await runRegistry
+    .releaseCancellation(subjectKey, closed.ownerToken, closed.runId)
+    .catch(() => false);
   if (!released) {
     const refreshed = await runRegistry.get(subjectKey).catch(() => undefined);
     if (refreshed !== null) return { cancelled: false, released: false };
   }
   await notifyReleased(subjectKey, onReleased);
   return { cancelled: true, released: true };
-}
-
-async function reconcilePostDrainTicketMutations(
-  closed: ActiveRunEntry,
-  issueTracker?: IssueTrackerAdapter,
-): Promise<TicketCancellationReconciliationResult | null> {
-  try {
-    const [{ getDb }, { reconcileTicketCancellationAfterDrain }] = await Promise.all([
-      import("../db/client.js"),
-      import("./ticket-cancellation-reconciliation.js"),
-    ]);
-    return await reconcileTicketCancellationAfterDrain({
-      db: getDb(),
-      issueTracker,
-      ticketKey: closed.ticketKey!,
-      owner: {
-        subjectKey: closed.subjectKey,
-        ownerToken: closed.ownerToken,
-        runId: closed.runId,
-      },
-    });
-  } catch (error) {
-    logger.warn(
-      {
-        subjectKey: closed.subjectKey,
-        runId: closed.runId,
-        error: (error as Error).message,
-      },
-      "cancel_run_ticket_reconciliation_unconfirmed",
-    );
-    return null;
-  }
 }
 
 /**

@@ -1149,7 +1149,7 @@
           group: "trigger",
           title: "PR/MR merged",
           blurb: "Fires after a pull/merge request is merged; workflow-owned scope guarantees correlated ticket context for post-merge ticket movement.",
-          note: "workflow_owned is proven from durable branch/publication correlation plus a valid ticket lookup; a branch prefix alone is insufficient. Use it when connecting this trigger to ticket actions. any has no guaranteed ticket and is review-safe only. A workflow-authored Jira transition records its exact destination and actor; only the matching status changelog and stable webhook identifier consume it, with retries suppressed for the full retry window."
+          note: "workflow_owned is proven from durable branch/publication correlation plus a valid ticket lookup; a branch prefix alone is insufficient. Use it when connecting this trigger to ticket actions. any has no guaranteed ticket and is review-safe only. Jira status webhooks authored by the configured workflow account are ignored as self-echoes; any different, missing, or unverifiable actor is treated as human input and retains normal cancellation behavior."
         },
 
         "agent.planning": {
@@ -1462,7 +1462,7 @@
             },
             {
               head: "Runs serialize per subject",
-              body: "One active run per durable subject, enforced by owner-matching claims. Ticket workflows and durably correlated workflow-owned PRs use <code>ticket:&lt;provider&gt;:&lt;ticketKey&gt;</code>; arbitrary PR-only workflows use <code>pr:&lt;provider&gt;:&lt;repo&gt;#&lt;number&gt;</code> without sending it to Jira. The exact owner remains held until terminal release has settled every started provider mutation; reconciliation retries a missed release. Triggers that fire mid-run coalesce into a pending event and start only after that boundary."
+              body: "One active run per durable subject, enforced by owner-matching claims. Ticket workflows and durably correlated workflow-owned PRs use <code>ticket:&lt;provider&gt;:&lt;ticketKey&gt;</code>; arbitrary PR-only workflows use <code>pr:&lt;provider&gt;:&lt;repo&gt;#&lt;number&gt;</code> without sending it to Jira. The exact owner remains held through downstream blocks and is released only during terminal cleanup; reconciliation retries a missed release. Triggers that fire mid-run coalesce into a pending event and start only after that boundary."
             },
             {
               head: "Budgets bound active execution",
@@ -1652,7 +1652,7 @@
           notes: [
             { x: 30, y: 450, w: 930,
               head: "Why workflow-owned scope matters",
-              body: "A merged provider event always has a PR/MR subject but only workflow-owned branches guarantee a real correlated ticket. Deployment therefore permits the ticket action only in <code>scope: workflow_owned</code>. Before moving the ticket, the runtime records a transition intent; the matching Jira webhook consumes that intent without cancelling this run, while unrelated human ticket moves keep the existing cancellation behavior." }
+              body: "A merged provider event always has a PR/MR subject but only workflow-owned branches guarantee a real correlated ticket. Deployment therefore permits the ticket action only in <code>scope: workflow_owned</code>. Before moving the ticket, runtime verifies the exact active owner. A Jira status webhook authored by the configured workflow account is ignored as a self-echo, while different, missing, or unverifiable actors retain normal human-move cancellation behavior." }
           ]
         },
         {

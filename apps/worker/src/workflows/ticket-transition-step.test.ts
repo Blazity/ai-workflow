@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
-  moveTicketWithIntent: vi.fn(),
+  moveTicket: vi.fn(),
   issueTracker: {},
   db: {},
 }));
@@ -11,15 +11,15 @@ vi.mock("../lib/step-adapters.js", () => ({
   createStepAdapters: () => ({ issueTracker: mocks.issueTracker }),
 }));
 vi.mock("../lib/ticket-transition.js", () => ({
-  moveTicketWithIntent: (...args: any[]) => mocks.moveTicketWithIntent(...args),
+  moveTicketForRun: (...args: any[]) => mocks.moveTicket(...args),
 }));
 
-import { moveTicketWithIntentStep } from "./ticket-transition-step.js";
+import { moveTicketStep } from "./ticket-transition-step.js";
 
-describe("moveTicketWithIntentStep", () => {
+describe("moveTicketStep", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.moveTicketWithIntent.mockResolvedValue(undefined);
+    mocks.moveTicket.mockResolvedValue(undefined);
   });
 
   it("passes serializable arguments into the provider-neutral operation", async () => {
@@ -30,9 +30,9 @@ describe("moveTicketWithIntentStep", () => {
     };
     const target = { name: "AI", statusId: "10010" };
 
-    await moveTicketWithIntentStep("AIW-101", target, owner);
+    await moveTicketStep("AIW-101", target, owner);
 
-    expect(mocks.moveTicketWithIntent).toHaveBeenCalledWith({
+    expect(mocks.moveTicket).toHaveBeenCalledWith({
       db: mocks.db,
       issueTracker: mocks.issueTracker,
       ticketKey: "AIW-101",

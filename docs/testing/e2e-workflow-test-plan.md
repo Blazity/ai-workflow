@@ -120,9 +120,9 @@ Primary deterministic coverage: clarification checkpoint/dispatch/reconciliation
 
 1. Deploy D-V5 with `scope: workflow_owned` and a discovered Jira destination.
 2. Merge the correlated GitHub PR and GitLab MR variants. Verify the common `trigger_pr_merged` payload carries merge SHA/time and the real ticket.
-3. Before moving the ticket, verify a short-lived transition intent records ticket, run, exact destination, and workflow actor.
-4. Deliver the matching Jira changelog/webhook identifier and verify it consumes the intent without cancelling the still-running workflow. Retries remain idempotent for the provider retry window.
-5. Deliver mismatched actor/destination/identifier and unrelated human moves. They must not consume the intent; existing human-move cancellation behavior remains intact.
+3. Before moving the ticket, verify runtime still holds and checks the exact active owner.
+4. Deliver the Jira status webhook with the configured workflow account as actor and verify it is ignored without cancelling the still-running workflow.
+5. Deliver a different actor, a missing actor, and simulate workflow-account lookup failure. Each is treated as human input and retains existing cancellation behavior.
 6. Verify Slack or any later block completes before the active claim is released.
 
 ### Tier 6 — publication safety and recovery

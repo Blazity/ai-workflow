@@ -24,10 +24,10 @@ vi.mock("../workflow-definition/store.js", () => ({
   getDeployedWorkflowDefinitionVersion: (...args: any[]) => mockGetDeployedVersion(...args),
 }));
 vi.mock("../lib/ticket-transition.js", () => ({
-  moveTicketWithIntent: (...args: any[]) => mockMoveTicketWithIntent(...args),
+  moveTicketForRun: (...args: any[]) => mockMoveTicketWithIntent(...args),
 }));
 vi.mock("../lib/ticket-label-mutation.js", () => ({
-  updateTicketLabelsWithIntent: (...args: any[]) =>
+  updateTicketLabelsForRun: (...args: any[]) =>
     mockUpdateTicketLabelsWithIntent(...args),
 }));
 

@@ -4,7 +4,7 @@
 
 **Goal:** Preserve the agreed Workflows revision behavior while reducing PR #120 below 60,000 added lines and removing unapproved durability machinery.
 
-**Architecture:** Reuse PR #118's workflow versions, run ownership, telemetry, and owned-branch records. Add only compact deployed/layout pointers, one provider-event inbox, Workflow-hook clarification metadata, exact publication heads, and a small Jira transition intent. Human-authored PRs remain review-only; mutation requires exact workflow ownership.
+**Architecture:** Reuse PR #118's workflow versions, run ownership, telemetry, and owned-branch records. Add only compact deployed/layout pointers, one provider-event inbox, Workflow-hook clarification metadata, and exact publication heads. Jira self-echoes use exact workflow actor filtering rather than mutation persistence. Human-authored PRs remain review-only; mutation requires exact workflow ownership.
 
 **Tech Stack:** TypeScript, Nitro, Vercel Workflow 4.6, Vercel Sandbox, Drizzle/PostgreSQL, React/Next.js, Vitest, Node test runner.
 
@@ -215,13 +215,13 @@ Commit message: `Simplify safe workflow publication`
 ### Task 7: Reduce Jira transition handling to actor filtering or one self-echo intent
 
 **Files:**
-- Modify: `apps/worker/src/lib/ticket-transition-intent-store.ts`
-- Modify: `apps/worker/src/lib/ticket-transition-intent-store.test.ts`
+- Delete: `apps/worker/src/lib/ticket-transition-intent-store.ts`
+- Delete: `apps/worker/src/lib/ticket-transition-intent-store.test.ts`
 - Modify: `apps/worker/src/lib/ticket-transition.ts`
 - Modify: `apps/worker/src/routes/webhooks/jira.post.ts`
 - Modify: `apps/worker/src/routes/webhooks/jira.post.test.ts`
-- Delete: `apps/worker/src/lib/ticket-label-mutation.ts`
-- Delete: `apps/worker/src/lib/ticket-label-mutation.test.ts`
+- Modify: `apps/worker/src/lib/ticket-label-mutation.ts`
+- Modify: `apps/worker/src/lib/ticket-label-mutation.test.ts`
 - Delete: `apps/worker/src/lib/ticket-cancellation-reconciliation.ts`
 - Delete: `apps/worker/src/routes/api/v1/runs/[runId]/cancel.post.ts`
 - Delete: `apps/dashboard/app/api/runs/[runId]/cancel/route.ts`

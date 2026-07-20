@@ -65,15 +65,15 @@ async function parkForApprovalStep(
   const { getDb } = await import("../../db/client.js");
   const { createStepAdapters } = await import("../../lib/step-adapters.js");
   const { AWAITING_APPROVAL_LABEL } = await import("../../lib/labels.js");
-  const { updateTicketLabelsWithIntent } = await import(
+  const { updateTicketLabelsForRun } = await import(
     "../../lib/ticket-label-mutation.js"
   );
-  const { moveTicketWithIntent } = await import("../../lib/ticket-transition.js");
+  const { moveTicketForRun } = await import("../../lib/ticket-transition.js");
   const { issueTracker } = createStepAdapters();
   const db = getDb();
   if (typeof issueTracker.updateLabels === "function") {
     try {
-      await updateTicketLabelsWithIntent({
+      await updateTicketLabelsForRun({
         db,
         issueTracker,
         ticketKey: ticketId,
@@ -97,7 +97,7 @@ async function parkForApprovalStep(
   // re-dispatch it. Swallowing here rather than in the caller keeps pino inside the step:
   // workflow scope forbids Node modules.
   try {
-    await moveTicketWithIntent({
+    await moveTicketForRun({
       db,
       issueTracker,
       ticketKey: ticketId,

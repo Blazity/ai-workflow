@@ -1,7 +1,7 @@
 import type { IssueTrackerMoveTarget } from "../adapters/issue-tracker/types.js";
 import type { TicketTransitionOwner } from "../lib/ticket-transition.js";
 
-export async function moveTicketWithIntentStep(
+export async function moveTicketStep(
   ticketKey: string,
   target: IssueTrackerMoveTarget,
   owner: TicketTransitionOwner,
@@ -9,8 +9,8 @@ export async function moveTicketWithIntentStep(
   "use step";
   const { getDb } = await import("../db/client.js");
   const { createStepAdapters } = await import("../lib/step-adapters.js");
-  const { moveTicketWithIntent } = await import("../lib/ticket-transition.js");
-  await moveTicketWithIntent({
+  const { moveTicketForRun } = await import("../lib/ticket-transition.js");
+  await moveTicketForRun({
     db: getDb(),
     issueTracker: createStepAdapters().issueTracker,
     ticketKey,

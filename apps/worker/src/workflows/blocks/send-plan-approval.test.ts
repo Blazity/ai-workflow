@@ -8,9 +8,8 @@ const mocks = vi.hoisted(() => ({
   notifyForTicket: vi.fn(),
   moveTicket: vi.fn(),
   updateLabels: vi.fn(),
-  updateTicketLabelsWithIntent: vi.fn(),
+  updateTicketLabels: vi.fn(),
   warn: vi.fn(),
-  moveTicketWithIntent: vi.fn(),
 }));
 
 vi.mock("../../lib/logger.js", () => ({ logger: { warn: mocks.warn } }));
@@ -30,11 +29,11 @@ vi.mock("../../lib/step-adapters.js", () => ({
   }),
 }));
 vi.mock("../../lib/ticket-transition.js", () => ({
-  moveTicketWithIntent: (...args: any[]) => mocks.moveTicketWithIntent(...args),
+  moveTicketForRun: (...args: any[]) => mocks.moveTicket(...args),
 }));
 vi.mock("../../lib/ticket-label-mutation.js", () => ({
-  updateTicketLabelsWithIntent: (...args: any[]) =>
-    mocks.updateTicketLabelsWithIntent(...args),
+  updateTicketLabelsForRun: (...args: any[]) =>
+    mocks.updateTicketLabels(...args),
 }));
 
 import { execute, paramsSchema } from "./send-plan-approval.js";
@@ -58,9 +57,8 @@ describe("send_plan_approval execute", () => {
     mocks.postComment.mockResolvedValue(null);
     mocks.notifyForTicket.mockResolvedValue(undefined);
     mocks.moveTicket.mockResolvedValue(undefined);
-    mocks.moveTicketWithIntent.mockResolvedValue(undefined);
     mocks.updateLabels.mockResolvedValue(undefined);
-    mocks.updateTicketLabelsWithIntent.mockResolvedValue(undefined);
+    mocks.updateTicketLabels.mockResolvedValue(undefined);
   });
 
   it("fails when no plan is available", async () => {
@@ -115,7 +113,7 @@ describe("send_plan_approval execute", () => {
     // Parked out of the AI column with an awaiting-approval label so the cron
     // poll stops re-dispatching it; label add precedes the move, mirroring
     // clarification. The workflow's terminal finally releases ownership.
-    expect(mocks.updateTicketLabelsWithIntent).toHaveBeenCalledWith({
+    expect(mocks.updateTicketLabels).toHaveBeenCalledWith({
       db: { kind: "db" },
       issueTracker: expect.anything(),
       ticketKey: "AWT-1",
@@ -128,7 +126,7 @@ describe("send_plan_approval execute", () => {
       changes: { add: [AWAITING_APPROVAL_LABEL] },
     });
     expect(mocks.updateLabels).not.toHaveBeenCalled();
-    expect(mocks.moveTicketWithIntent).toHaveBeenCalledWith({
+    expect(mocks.moveTicket).toHaveBeenCalledWith({
       db: expect.anything(),
       issueTracker: expect.anything(),
       ticketKey: "AWT-1",
@@ -169,7 +167,7 @@ describe("send_plan_approval execute", () => {
   it("still ends awaiting_approval when parking the ticket fails", async () => {
     // The approval row is committed before the park; a tracker move failure must
     // not be reported as a failed run when the plan is filed and pending.
-    mocks.moveTicketWithIntent.mockRejectedValue(new Error("tracker down"));
+    mocks.moveTicket.mockRejectedValue(new Error("tracker down"));
     const ctx = makeCtx({ researchPlanMarkdown: "# Plan" });
 
     const result = await execute(makeNode("send_plan_approval"), {}, ctx);

@@ -12,8 +12,6 @@ import type {
   RunRegistryAdapter,
 } from "../adapters/run-registry/types.js";
 import type { Db } from "../db/client.js";
-import { reconcileUnfinishedTicketLabelMutations } from "./ticket-label-mutation.js";
-import { reconcileUnfinishedTicketTransitions } from "./ticket-transition.js";
 import { confirmWorkflowStepsDrained } from "./workflow-step-drain.js";
 
 const TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled"]);
@@ -284,7 +282,6 @@ async function recoverStaleReservation(
   onSubjectReleased?: SubjectReleasedCallback,
   db?: Db,
 ): Promise<number> {
-  if (!(await settleTicketProviderCalls(entry, issueTracker, db))) return 0;
   if (runRegistry.releaseExpiredReservation) {
     const released = await runRegistry
       .releaseExpiredReservation(entry.subjectKey, entry.ownerToken)
@@ -334,8 +331,6 @@ async function cleanFinishedRun(
     const status = await getRun(entry.runId).status;
     if (!TERMINAL_STATUSES.has(status)) return 0;
     if (!(await confirmWorkflowStepsDrained(entry.subjectKey, entry.runId))) return 0;
-    if (!(await settleTicketProviderCalls(entry, issueTracker, db))) return 0;
-
     const released = await cleanupAndRelease(entry, runRegistry);
     if (!released) return 0;
     await notifySubjectReleased(entry.subjectKey, onSubjectReleased);
@@ -356,55 +351,6 @@ async function cleanFinishedRun(
       "reconcile_run_status_unreachable_owner_retained",
     );
     return 0;
-  }
-}
-
-async function settleTicketProviderCalls(
-  entry: ActiveRunEntry,
-  issueTracker?: IssueTrackerAdapter,
-  db?: Db,
-): Promise<boolean> {
-  if (!entry.ticketKey || !db) return true;
-  if (!issueTracker) {
-    logger.warn(
-      { subjectKey: entry.subjectKey, ownerToken: entry.ownerToken },
-      "reconcile_ticket_provider_settlement_unavailable",
-    );
-    return false;
-  }
-  try {
-    const transitionSettlement = await reconcileUnfinishedTicketTransitions({
-      db,
-      issueTracker,
-      ticketKey: entry.ticketKey,
-      owner: {
-        subjectKey: entry.subjectKey,
-        ownerToken: entry.ownerToken,
-        runId: entry.runId,
-      },
-    });
-    if (!transitionSettlement.settled) return false;
-    const labelSettlement = await reconcileUnfinishedTicketLabelMutations({
-      db,
-      issueTracker,
-      ticketKey: entry.ticketKey,
-      owner: {
-        subjectKey: entry.subjectKey,
-        ownerToken: entry.ownerToken,
-        runId: entry.runId,
-      },
-    });
-    return labelSettlement.settled;
-  } catch (error) {
-    logger.warn(
-      {
-        subjectKey: entry.subjectKey,
-        ownerToken: entry.ownerToken,
-        error: error instanceof Error ? error.message : String(error),
-      },
-      "reconcile_ticket_provider_settlement_failed",
-    );
-    return false;
   }
 }
 
