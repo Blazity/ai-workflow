@@ -12,7 +12,7 @@ export function filterPrompts(
   opts?: { includeArchived?: boolean },
 ): PromptLibraryListRowDto[] {
   const includeArchived = opts?.includeArchived ?? false;
-  const q = query.toLowerCase();
+  const q = query.trim().toLowerCase();
   return rows.filter((row) => {
     if (row.archivedAt !== null && !includeArchived) return false;
     if (tag !== null && !row.tags.includes(tag)) return false;

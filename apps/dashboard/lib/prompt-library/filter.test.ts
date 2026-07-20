@@ -75,3 +75,11 @@ test("tag and includeArchived combine", () => {
 test("query and tag combine", () => {
   assert.deepEqual(ids(filterPrompts(rows, "retired", "review", { includeArchived: true })), [4]);
 });
+
+test("trailing-space query still matches", () => {
+  assert.deepEqual(ids(filterPrompts(rows, "planning ", null)), [1]);
+});
+
+test("whitespace-only query returns all non-archived rows", () => {
+  assert.deepEqual(ids(filterPrompts(rows, "   ", null)), [1, 2, 3]);
+});

@@ -244,6 +244,7 @@ export function PromptField({
         onKeyDown={(e) => {
           if (e.key === "Escape" && autoOpen) {
             e.preventDefault();
+            e.stopPropagation();
             setAutoOpen(false);
           }
         }}

@@ -294,7 +294,7 @@ export function PromptInsertPopup({
     );
   } else if (entries.length === 0) {
     listContent = (
-      <div className="px-4 py-6 font-body text-[13px] text-neutral-500">No prompts match “{trimmed}”.</div>
+      <div className="px-4 py-6 font-body text-[13px] text-neutral-500">No prompts match "{trimmed}".</div>
     );
   } else {
     const options: React.ReactNode[] = [];
@@ -305,6 +305,7 @@ export function PromptInsertPopup({
         options.push(
           <div
             key={`grp-${entry.group}`}
+            role="presentation"
             className="px-4 pt-3 pb-1 font-mono text-[9px] uppercase tracking-[0.08em] text-neutral-500"
           >
             {entry.group === "recent" ? "Recent" : "All"}

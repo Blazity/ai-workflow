@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { CkCard } from "@/components/ui";
 import { readErrorMessage } from "@/lib/api/error-message";
 import { PromptListRail } from "@/components/cockpit/prompt-library/list-rail";
@@ -47,6 +47,12 @@ export function PromptLibraryScreen({
   const [error, setError] = useState<string | null>(null);
   const [detailCache, setDetailCache] = useState<Map<number, PromptLibraryDetailResponse>>(new Map());
   const [usageCache, setUsageCache] = useState<Map<number, PromptLibraryUsageResponse>>(new Map());
+  // The prompt id whose lazy detail load failed, so the pane can offer a retry.
+  const [detailErrorId, setDetailErrorId] = useState<number | null>(null);
+  const [retryNonce, setRetryNonce] = useState(0);
+  // Latest active id, so a slow failed fetch for a since-abandoned id stays quiet.
+  const activeIdRef = useRef(activeId);
+  activeIdRef.current = activeId;
 
   // Lazily load the selected prompt's detail + usage in parallel and cache both.
   useEffect(() => {
@@ -54,7 +60,7 @@ export function PromptLibraryScreen({
     if (detailCache.has(activeId) && usageCache.has(activeId)) return;
     void loadDetail(activeId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeId, mode]);
+  }, [activeId, mode, retryNonce]);
 
   async function loadDetail(id: number) {
     try {
@@ -64,7 +70,10 @@ export function PromptLibraryScreen({
           (async () => {
             const res = await fetch(`/api/prompt-library/${id}`);
             if (!res.ok) {
-              setError(await readErrorMessage(res));
+              if (activeIdRef.current === id) {
+                setError(await readErrorMessage(res));
+                setDetailErrorId(id);
+              }
               return;
             }
             const detail = (await res.json()) as PromptLibraryDetailResponse;
@@ -75,8 +84,18 @@ export function PromptLibraryScreen({
       if (!usageCache.has(id)) tasks.push(loadUsage(id));
       await Promise.all(tasks);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Unable to load prompt");
+      if (activeIdRef.current === id) {
+        setError(err instanceof Error ? err.message : "Unable to load prompt");
+        setDetailErrorId(id);
+      }
     }
+  }
+
+  function retryDetail() {
+    if (activeId === null) return;
+    setError(null);
+    setDetailErrorId(null);
+    setRetryNonce((n) => n + 1);
   }
 
   // Usage drift depends on the head version, so a version bump must re-fetch it.
@@ -110,6 +129,7 @@ export function PromptLibraryScreen({
     setActiveId(id);
     setMode("view");
     setError(null);
+    setDetailErrorId(null);
   }
 
   async function createPrompt(draft: PromptDraft) {
@@ -236,6 +256,9 @@ export function PromptLibraryScreen({
 
   const activeRow = activeId !== null ? rows.find((r) => r.id === activeId) : undefined;
   const activeDetail = activeId !== null ? detailCache.get(activeId) : undefined;
+  // Derive tag chips from the live rows so tags created mid-session appear, rather
+  // than freezing on the static SSR data.tags snapshot.
+  const tags = useMemo(() => [...new Set(rows.flatMap((r) => r.tags))].sort(), [rows]);
   const noPrompts = rows.length === 0;
   // The empty library shows its own "New prompt" CTA card, so the header button
   // would be a duplicate in that state.
@@ -269,6 +292,23 @@ export function PromptLibraryScreen({
         onSubmit={saveEdit}
         onCancel={() => setMode("view")}
       />
+    );
+  } else if (activeRow && activeDetail === undefined && detailErrorId === activeId) {
+    // A failed lazy load would otherwise strand the pane on the skeleton, and the
+    // effect will not re-run for the same id, so offer an explicit retry.
+    rightPane = (
+      <CkCard style={{ height: "100%" }}>
+        <div className="p-10 text-center font-body text-[13px] text-neutral-600">
+          Could not load this prompt.{" "}
+          <button
+            type="button"
+            onClick={retryDetail}
+            className="appearance-none cursor-pointer border-none bg-transparent p-0 font-body text-[13px] font-semibold text-mariner"
+          >
+            Retry
+          </button>
+        </div>
+      </CkCard>
     );
   } else if (activeRow) {
     rightPane = (
@@ -341,7 +381,7 @@ export function PromptLibraryScreen({
         <div className="flex flex-col lg:grid lg:grid-cols-[340px_1fr] gap-3 lg:min-h-[720px]">
           <PromptListRail
             rows={rows}
-            tags={data.tags}
+            tags={tags}
             activeId={mode === "create" ? null : activeId}
             query={query}
             onQueryChange={setQuery}

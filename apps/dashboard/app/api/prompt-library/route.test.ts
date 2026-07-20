@@ -192,3 +192,29 @@ test("restore maps worker timeouts to 504", async () => {
   assert.equal(res.status, 504);
   assert.deepEqual(await res.json(), { error: "Worker request timed out" });
 });
+
+test("a 204 from the worker passes through with an empty body", async () => {
+  const res = await handlePromptDelete(idParams("12"), async () => new Response(null, { status: 204 }));
+  assert.equal(res.status, 204);
+  assert.equal(await res.text(), "");
+});
+
+test("a non-numeric id is rejected with 404 without forwarding", async () => {
+  let called = false;
+  const res = await handlePromptGet(idParams(".."), async () => {
+    called = true;
+    return Response.json({}, { status: 200 });
+  });
+  assert.equal(res.status, 404);
+  assert.equal(called, false);
+});
+
+test("a non-numeric version is rejected with 404 without forwarding", async () => {
+  let called = false;
+  const res = await handlePromptVersionGet(idVersionParams("12", ".."), async () => {
+    called = true;
+    return Response.json({}, { status: 200 });
+  });
+  assert.equal(res.status, 404);
+  assert.equal(called, false);
+});

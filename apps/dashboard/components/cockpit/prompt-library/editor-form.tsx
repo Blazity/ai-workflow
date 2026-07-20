@@ -53,8 +53,12 @@ export function PromptEditorForm({
   const bodyChanged = body !== initialBody;
   const dirty =
     name !== initialName ||
-    description !== initialDescription ||
+    // Compare trimmed so a whitespace-only description (which saveEdit trims to
+    // null) does not enable a Save that would silently no-op.
+    description.trim() !== initialDescription.trim() ||
     !sameTags(tags, initialTags) ||
+    // Uncommitted tag text still counts: submit() flushes it before saving.
+    tagInput.trim() !== "" ||
     bodyChanged;
   const submitDisabled =
     busy ||
