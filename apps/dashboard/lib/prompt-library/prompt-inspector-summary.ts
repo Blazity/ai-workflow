@@ -1,11 +1,32 @@
 import { parsePromptReferenceTokens, type PromptLibraryListRowDto } from "@shared/contracts";
+import { parseComposerBlocks } from "./composer";
 
-export type PromptInspectorSummary = {
-  kind: "reference" | "custom" | "empty";
-  title: string;
-  detail: string;
-  preview?: string;
-};
+export type PromptInspectorSummary =
+  | { kind: "reference" | "empty"; title: string; detail: string }
+  | {
+      kind: "custom";
+      title: string;
+      detail: string;
+      sectionTitles: string[];
+      remainingSectionCount: number;
+    };
+
+function promptStructure(value: string, rows: readonly PromptLibraryListRowDto[]) {
+  let id = 0;
+  const blocks = parseComposerBlocks(value, () => `summary-${++id}`);
+  const titles = blocks.map((block) => {
+    if (block.kind !== "reference") return block.title;
+    const reference = parsePromptReferenceTokens(block.body)[0];
+    return rows.find((row) => row.id === reference?.promptId)?.name
+      ?? (reference ? `Missing prompt ${reference.promptId}` : block.title);
+  });
+  return {
+    blockCount: blocks.length,
+    referenceCount: blocks.filter((block) => block.kind === "reference").length,
+    sectionTitles: titles.slice(0, 3),
+    remainingSectionCount: Math.max(0, titles.length - 3),
+  };
+}
 
 export function promptInspectorSummary(
   value: string,
@@ -31,11 +52,17 @@ export function promptInspectorSummary(
     };
   }
   if (value.trim()) {
+    const structure = promptStructure(value, rows);
+    const sections = `${structure.blockCount} ${structure.blockCount === 1 ? "section" : "sections"}`;
+    const references = structure.referenceCount > 0
+      ? ` · ${structure.referenceCount} ${structure.referenceCount === 1 ? "live prompt" : "live prompts"}`
+      : "";
     return {
       kind: "custom",
       title: "Custom prompt",
-      detail: `${value.length} chars · ~${Math.ceil(value.length / 4)} tokens`,
-      preview: value.replace(/\s+/g, " ").trim(),
+      detail: `${value.length} chars · ~${Math.ceil(value.length / 4)} tokens · ${sections}${references}`,
+      sectionTitles: structure.sectionTitles,
+      remainingSectionCount: structure.remainingSectionCount,
     };
   }
   if (implicitName) return { kind: "reference", title: implicitName, detail: "Latest" };
