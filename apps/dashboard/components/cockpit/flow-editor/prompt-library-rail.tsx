@@ -71,7 +71,7 @@ export function PromptLibraryRail({
   const tags = useMemo(() => Array.from(new Set(nonArchived.flatMap((r) => r.tags))).sort(), [nonArchived]);
   const filtered = useMemo(() => filterPrompts(rows, query, tag), [rows, query, tag]);
   const activeRow: PromptLibraryListRowDto | null =
-    (activeId !== null ? nonArchived.find((r) => r.id === activeId) : undefined) ?? filtered[0] ?? null;
+    (activeId !== null ? filtered.find((r) => r.id === activeId) : undefined) ?? filtered[0] ?? null;
 
   useEffect(() => {
     if (!previewRequest) return;
