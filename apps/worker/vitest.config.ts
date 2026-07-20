@@ -6,7 +6,5 @@ export default defineConfig({
     environment: "node",
     include: ["src/**/*.test.ts", "*.test.ts"],
     testTimeout: 15_000,
-    // PGlite-backed files contend heavily on two-core CI runners.
-    fileParallelism: process.env.CI ? false : undefined,
   },
 });

@@ -1,8 +1,8 @@
 # Workflow Workspace Redesign — Design Spec
 
 Date: 2026-07-07
-Status: Approved in brainstorming session; revised through 2026-07-12.
-Supports: `docs/workflow-workspace/index.html`, which is the source of truth.
+Status: Approved in brainstorming session; awaiting implementation plan.
+Replaces: `docs/workflow-workspace/index.html` (current sketch canvas, to be rewritten from scratch).
 
 ## Purpose
 
@@ -30,12 +30,11 @@ Grouping principle (from feedback): blocks are **named by provider + capability*
 
 | Block | Output (summary) |
 |---|---|
-| Ticket implementation started/resumed (configured ticket provider; Jira-only vs Jira + Linear launch coverage is open) | `{ticket, comments, attachments, resume_reason: "new_ticket" \| "moved_to_ai" \| "clarification_answered" \| "comment_added", prior_run?}` |
+| Ticket implementation started/resumed (Jira/Linear) | `{ticket, comments, attachments, resume_reason: "new_ticket" \| "moved_to_ai" \| "clarification_answered" \| "comment_added", prior_run?}` |
 | Plan approved | `{ticket, approved_plan, approval: {approver, approved_at}}` |
-| PR created | `{pr, diff, commits, ticket?}` with `scope: workflow_owned \| any`. Workflow-owned is proven by durable branch/publication correlation plus a valid ticket lookup; `any` is review-safe only. |
-| PR checks failed | Allowlisted external GitHub Actions / GitLab CI failure for the current head: `{pr, head_sha, failed_checks, log_refs, provider_delivery_id, producer, ticket?}` with the same scope. Exact event source/granularity remains open. Passing, cancelled, superseded, neutral, skipped, and stale-head results start nothing. |
-| PR review submitted | Selected human-authored review feedback for the current head: `{pr, head_sha, review, comment_refs, provider_delivery_id, ticket?}` with the same scope. Exact review-event taxonomy remains open; workflow-authored comments are filtered. |
-| PR/MR merged | `{pr, head_sha, merge_sha, merged_at, ticket?}`. `scope: workflow_owned` guarantees a correlated ticket and permits ticket actions; `scope: any` remains PR-only/review-safe. |
+| PR created | `{pr, diff, commits, ticket?}` |
+| PR checks failed | `{pr, failed_checks, logs, ticket?}` |
+| PR review submitted | `{pr, review, comments, ticket?}` |
 
 A workflow may declare **multiple triggers** feeding the same entry point. Granular low-level triggers (ticket created, comment added, …) are deferred; lifecycle triggers are the MVP surface.
 
@@ -46,15 +45,15 @@ A workflow may declare **multiple triggers** feeding the same entry point. Granu
 | Planning Agent | in: `{ticket, comments, prior_answers?}` → out: `{status: "ready" \| "needs_human_input", plan?, questions?, assumptions?}`. Clarification loop built in. |
 | Implementation Agent | in: `{ticket, plan, workspace_policy, branch_policy, verification?}` → out: `{status: "implemented" \| "needs_human_input" \| "failed", workspace_id, branches: BranchRef[], commits, verification?, summary}`. Workspace, branch policy, commit enforcement, and optional final verification built in. Multi-repo: one branch per changed repo. |
 | Review Agent | in: `{workspace_id \| pr, scope}` → out: `{status, findings[], decision: "approve" \| "request_changes"}` |
-| Fix Agent | in: `{target: PrRef \| TicketContext, workspace_id?, workspace_policy?, source_head_sha?, failures: RemediationItem[], plan?}` → out: `{status: "fixed" \| "needs_human_input" \| "failed", workspace_id, commits, resolved_conflicts?, questions?, summary}`. Reuses a supplied workspace or prepares/resumes one implicitly. `source_head_sha` is required for existing-PR remediation and optional for pre-PR repair. The built-in `fixed` classification continues to Finalize workspace; it is not a CI verdict or a bypass of deterministic publication guards. |
-| Generic Agent | in: `{prompt, workspace_id?, output_schema}` → out: declared schema + `{status}`. Non-code uses such as planning need no workspace; repository-reading or mutating configurations must attach one. For custom routing, use a declared classification field in its output schema and evaluate it with Branch; runtime `status` remains reserved for execution/HITL outcomes. |
+| Fix Agent | in: `{workspace_id, failures: RepoCheckFailure[] \| ReviewFeedback, plan?}` → out: `{status: "fixed" \| "needs_human_input" \| "failed", commits, summary}` |
+| Generic Agent | in: `{prompt, workspace_id?, output_schema}` → out: declared schema + `{status}`. Must attach a workspace to touch code. |
 
 **3. Workspace** (cyan) — the run-scoped resource
 
 | Block | Contract (summary) |
 |---|---|
-| Prepare workspace | in: `{target: PrRef \| TicketContext, repo_selection_policy, branch_policy, persistence_policy?}` → out: `{workspace_id, repos: SelectedRepo[], branches: BranchRef[], materialization}`. Optional before specialized agents, which auto-prepare when needed; explicit modular/custom flows use it to control selection and policy. `BranchRef = {provider, repo_path, branch}` (mixed-provider). Warm resume versus cold reconstruction is the proposed model; exact persistence semantics remain open. |
-| Finalize workspace | in: `{workspace_id, required_checks?}` → out: `{status: "clean" \| "failed", publication_attempt_id, commits, pushed_branches, verification, artifacts, workspace_state}`. Sole deterministic push boundary: preflight every repo, verify exact source/remote heads and clean committed git state, push with ownership-safe leases, and durably record per-repo results. Finalize does not terminate the workflow or release its active-run claim; that claim remains held through all downstream blocks. It does not create PRs. |
+| Prepare workspace | in: `{ticket, repo_selection_policy, branch_policy, persistence_policy?}` → out: `{workspace_id, repos: SelectedRepo[], branches: BranchRef[], materialization: "created" \| "resumed_warm" \| "rebuilt_cold"}`. Materializes the ticket's durable workspace; owns multi-repo selection. `BranchRef = {provider, repo_path, branch}` (mixed-provider). |
+| Finalize workspace | in: `{workspace_id, required_checks?}` → out: `{status: "clean" \| "failed", commits, pushed_branches, verification, artifacts, workspace_state: "parked" \| "destroyed"}`. Deterministic end gate: clean git state, commits exist, push changed branches, artifact capture; then **park** (snapshot + stop, for non-terminal ends) or **destroy** (terminal statuses). |
 
 **4. Control** (green)
 
@@ -75,15 +74,15 @@ A workflow may declare **multiple triggers** feeding the same entry point. Granu
 
 | Block | Contract (summary) |
 |---|---|
-| Open PR/MR | in: `{publication_attempt_id, branches: FinalizedBranchRef[], title, body}` → out: `{prs: PrRef[]}`. One PR/MR per successfully finalized changed repo; it cannot push or consume a raw workspace. |
+| Open PR/MR | in: `{workspace_id \| branches, title, body}` → out: `{prs: PrRef[]}`. One PR/MR per changed repo. |
 | Post PR comment | in: `{pr, message}` → out: `{comment_id}` |
-| Fetch PR context | in: `{pr \| ticket}` → out: `{comments, check_results, conflict_status, remediation_context: RemediationItem[]}`. The normalized remediation context feeds Fix Agent directly. |
+| Fetch PR context | in: `{pr \| ticket}` → out: `{comments, check_results, conflict_status}` |
 
 **7. Human-in-the-loop** (orange, dashboard-backed)
 
 | Block | Contract (summary) |
 |---|---|
-| Send plan for approval | in: `{ticket, plan, assumptions, reviewers}` → out: `{approval_request_id, dashboard_url}`. Ends this path after persisting the approval item; no workflow instance remains suspended. The `Plan approved` trigger starts the pinned implementation path. |
+| Send plan for approval | in: `{ticket, plan, assumptions, reviewers}` → out: `{approval_request_id, dashboard_url}`. Suspends until the `Plan approved` trigger fires. |
 | Human question | in: `{ticket, questions, scope: "owner" \| "team"}` → out: `{answers, answered_by}`. User-scoped to the ticket owner by default. |
 
 **8. Utility** (slate)
@@ -105,30 +104,28 @@ A workflow may declare **multiple triggers** feeding the same entry point. Granu
 
 Stated once on the board; they apply to every variant:
 
-1. **HITL is a runtime capability, not a block.** Any agent block may return `status: "needs_human_input"`; the runtime stops it, records the exact pinned checkpoint and safe prior outputs, snapshots unpublished workspace state, and hands the owner claim to a pinned successor that reruns only the waiting agent. This selected path ships only after the real Vercel snapshot/restore/expiry and git-index probe passes. Users cannot build a deadlocking workflow by forgetting a clarification block.
-2. **Every block has a precise, discriminated output schema** (`status` discriminant + typed payload), so Branch conditions and Loop exits always operate on structured data. Branch conditions use PR #118's restricted, parsed JavaScript-style expression syntax over `steps.*.output`; arbitrary JavaScript is never evaluated and boolean positions require real booleans. Inputs persist explicit typed paths from `trigger.*`, `steps.<nodeId>.output.*`, or `run.*`; compatible shape matching is editor assistance, not an implicit saved contract.
-3. **Workspace state survives continuation.** Unpublished work, repository/branch identity, untracked files, and unresolved conflict-index state survive in the capability-gated snapshot restored by the pinned successor. Snapshot Workflow steps pass only serializable IDs, scrub old credentials, and inject fresh credentials on restore. General warm/cold workspace retention outside pending clarification remains open.
+1. **HITL is a runtime capability, not a block.** Any agent block may return `status: "needs_human_input"`; the runtime posts the questions, suspends the workflow, and the lifecycle trigger's resume path re-enters it. Users cannot build a deadlocking workflow by forgetting a clarification block.
+2. **Every block has a precise, discriminated output schema** (`status` discriminant + typed payload), so Branch conditions and Loop exits always operate on structured data. One condition language everywhere.
+3. **The workspace is runtime-owned and two-tier**: a durable identity (ticket → repos + branches + manifest, in our DB) materialized into an ephemeral sandbox — **warm** from a persistent-sandbox snapshot (Vercel Sandbox v2 named sandboxes), or **cold** by re-cloning the workflow-owned branches. Snapshot expiry degrades warm to cold, never fails a run; cold is the only path on-prem. Threaded via `workspace_id`, always finalized. Specialized agents prepare/attach implicitly; generic workflows compose the workspace blocks explicitly. LLM steps may *propose* values (e.g. a branch slug); the runtime *enforces* policy (validation, creation, naming).
 4. **Failure has a default path.** Any block can end `status: "failed"`. Unless an explicit failure edge overrides it, the runtime applies the default policy: terminate the run, move the ticket to the configured column, notify. Graphs draw the happy path — no `if err != nil` ladders.
-5. **Runs serialize per subject.** One owner-matching active claim per durable subject. Ticket workflows and durably correlated workflow-owned PRs use `ticket:<provider>:<ticketKey>`; arbitrary PR-only workflows use `pr:<provider>:<repo>#<number>` without sending it to Jira. A branch prefix is never ownership proof. Triggers firing mid-run coalesce into a pending event and start after terminal release.
-6. **Keep post-PR mechanisms distinct.** Workflow definitions are the source of truth for AI-run behavior, while provider CI results and human reviews remain authoritative inputs to remediation. The existing product-owned `post-pr-gate`, a possible `PR created → Review Agent` workflow, and CI/review-triggered remediation are separate mechanisms. Which review mechanism to keep, replace, or retire remains open.
-7. **Budgets bound active execution.** Definitions may set `maxDurationMs`, `maxTokens`, and `maxCostUsd`. Duration defaults to the job timeout; token/cost are unset until authored. Human waits do not count. Duration can interrupt polling, while token/cost are authoritative only after a phase today, so one phase may overrun but no later block starts. Configured token/cost caps fail closed on missing usage/pricing.
+5. **Runs serialize per ticket.** One active run per ticket (claim registry). Triggers firing mid-run coalesce into the resume path instead of spawning parallel runs; a ticket leaving the AI column cancels its active run. Multi-repo collections stay inside blocks: outputs carry per-repo arrays plus aggregates for conditions.
+6. **One configuration surface.** Workflow definitions are the single source of truth for run behavior. The in-repo `pre-sandbox.yaml` and `post-pr-gate.yaml` pipelines are deprecated; their steps (repo selection, complexity check, injection check, PR gates) become blocks inside workflows.
 
 ### Explicitly deferred
 
-Nested reusable workflow blocks, MCP editing surface, granular low-level triggers, generic (non-delivery) automation blocks, and arbitrary JavaScript/code steps. JavaScript execution is not part of the MVP.
+Nested reusable workflow blocks, MCP editing surface, granular low-level triggers, generic (non-delivery) automation blocks. The JS-step question (editable execution logic vs read-only visualization) is an open decision, not silently resolved.
 
 ## Part 2 — Board composition
 
-Eight frames, auto-positioned in reading order (sidebar navigator mirrors this order):
+Seven frames, auto-positioned in reading order (sidebar navigator mirrors this order):
 
 1. **Block Registry** — all groups above, plus the greyed Arthur Engine add-on group and the "explicitly deferred" note.
-2. **Runtime guarantees** — the seven cross-cutting semantics above.
-3. **V1 · Standard delivery workflow** *(recommended default)* — configured ticket lifecycle providers feed one entry → Planning Agent → Implementation Agent → Finalize workspace → Open PR/MR → Update ticket status + Send Slack message. Finalize is the only push boundary; Open PR only creates provider PRs from finalized branches. Jira-only versus Jira + Linear launch coverage remains open.
+2. **Runtime guarantees** — the six cross-cutting semantics above.
+3. **V1 · Standard delivery workflow** *(recommended default)* — multi-trigger (Jira + Linear stacked into one entry) → Planning Agent → Implementation Agent → Open PR/MR → Update ticket status + Send Slack message. Note listing what the specialized agents absorb (clarification loop, workspace, branch policy, commit enforcement, pre-PR verification).
 4. **V2 · Same lifecycle, fully modular** — proof that generic blocks rebuild V1: trigger → Generic Agent (planning) → Branch on `needs_human_input` → (true) Post comment → Terminate (`waiting_for_human`); (false) → Prepare workspace → Generic Agent (implementation) → Run checks → Branch on `ok` → (false) Loop (max 3, on_exhaust: fail) → Fix Agent → back to Run checks; (true) → Finalize workspace → Open PR/MR. Note folding in the old "LLM branch slug" example: Call LLM proposes, runtime enforces.
-5. **V3 · Human-approved plan** — trigger → Planning Agent → Send plan for approval → *persist approval and end this path*; `Plan approved` trigger → Implementation Agent → Finalize workspace → Open PR/MR. **One workflow definition with two entry points**, not two workflows: each trigger starts its own chain, the ticket identity correlates them, and the approval event carries the plan plus exact definition version as payload. No workflow instance remains suspended while approval is pending.
-6. **V4 · Review & fix after PR** — the single canonical remediation board. `PR checks failed` + `PR review submitted` triggers → Fetch PR context → Fix Agent (reuses an explicit workspace or re-materializes one implicitly) → on built-in `status: "fixed"`, Finalize workspace (deterministic push guard) → Post PR comment. `needs_human_input` and `failed` follow runtime policy without explicit Branch/Human Question blocks. External CI failures and human-review outcomes drive this remediation flow; V4 itself does not start on PR open/update. This does not decide whether AI Workflow separately retains the existing post-PR gate or offers a PR-created Review Agent workflow. Each actionable failure starts one remediation run for the exact head SHA. The run pushes and ends; provider CI runs on the new SHA, where success starts nothing and failure starts a fresh remediation run. A failure arriving while V4's downstream tail is still running is stored pending and starts only after the owner terminates. No internal post-PR `Run checks`, explicit Prepare workspace, readiness Branch, or Human Question block is drawn.
-7. **V5 · Move ticket after merge** — `PR/MR merged` configured with `scope: workflow_owned` → Update ticket status → optional Slack message. Workflow-owned scope statically guarantees a real ticket. Jira status webhooks authored by the configured workflow account are ignored so the workflow does not cancel itself; missing, different, or unverifiable actors retain normal human-move cancellation behavior.
-8. **Open Decisions** — live product questions: post-PR review ownership and its relationship to PR-created review; whether a future explicit policy may mutate arbitrary PR branches; general persistent-workspace lifecycle beyond pending clarification; Jira-only vs Jira + Linear launch coverage; actionable review-event scope; CI event source/granularity; deployment ownership scope; missed-event recovery; multi-repository remediation semantics; and Arthur tracing policy. Mutable Save Draft, immutable explicit Deploy/Rollback, exact-version pinning, capability-gated pinned clarification, six provider/ticket lifecycle trigger types, Plan approval, restricted parsed Branch syntax, no JavaScript step, and explicit typed input bindings are locked.
+5. **V3 · Human-approved plan** — trigger → Planning Agent → Send plan for approval → *durable wait*; `Plan approved` trigger → Implementation Agent → Open PR/MR. **One workflow definition with two entry points**, not two workflows: each trigger starts its own chain, the ticket identity correlates them, and the approval event carries the plan as payload.
+6. **V4 · Review & fix after PR** — `PR checks failed` + `PR review submitted` triggers → Fetch PR context → Fix Agent (re-materializes the ticket's workspace: warm from parked snapshot, cold from branches) → Finalize workspace (push) → Post PR comment. Loop policy bounds rounds; check failures coalesce per ticket. Subsumes the deprecated `post-pr-gate.yaml` pipeline.
+7. **Open Decisions** — live product questions: condition language choice; JS step editable vs read-only; persistent workspace rollout (SDK v2 migration, snapshot TTL/keep-last, park-vs-destroy rules, cost guardrails); MVP trigger list; plan approval in MVP or after; how much PR review to own vs delegate (CodeRabbit et al.); suspend vs end-and-re-enter for human waits; input binding mechanism (auto-wire vs template expressions).
 
 ### Node density
 
@@ -143,8 +140,8 @@ Figma conventions:
 - Two-finger scroll / wheel → **pan** (both axes).
 - Pinch or `⌘`/`Ctrl`+wheel → **zoom at cursor**.
 - Left-drag on empty canvas → pan (grab cursor); middle-drag → pan. Nothing is draggable.
-- Keyboard: `0` fit-all, `1`–`8` fly to frame N, `+`/`−` zoom, `Esc` closes detail panel.
-- **Sidebar navigator**: fixed list of the eight frames; click flies there with an animated tween (~350 ms ease). Prev/Next controls included.
+- Keyboard: `0` fit-all, `1`–`7` fly to frame N, `+`/`−` zoom, `Esc` closes detail panel.
+- **Sidebar navigator**: fixed list of the seven frames; click flies there with an animated tween (~350 ms ease). Prev/Next controls included.
 - Double-click a frame header → zoom to fit that frame.
 - **Deep links**: URL hash tracks the focused frame (e.g. `#v3-approved-plan`); on load, a matching hash flies there.
 - View (x, y, scale) persists to localStorage. **Reset view** = animated fit-all (no reload). Zoom clamped to roughly 10%–200%.
@@ -168,7 +165,7 @@ One self-contained `index.html` (no external dependencies, opens from `file://`)
 
 ## Success criteria
 
-- Opens from `file://` with no console errors; renders all eight frames.
+- Opens from `file://` with no console errors; renders all seven frames.
 - Trackpad navigation feels native: scroll pans, pinch zooms at cursor, no modifier keys required to move around.
 - Every node and registry card opens the detail panel with full schemas; `Esc`/click-away closes it.
 - Sidebar, number keys, and hash deep-links all land on the right frame with a smooth tween.
@@ -180,20 +177,14 @@ One self-contained `index.html` (no external dependencies, opens from `file://`)
 
 After an adversarial review against the current runtime (AIW-45 multi-repo/mixed-provider work, pre-sandbox and post-PR gate specs), four decisions were made and folded into this spec and the board:
 
-1. **Persistent workspaces (partially resolved 2026-07-17).** Pending clarification targets a snapshot-backed pinned successor and is gated on a real Vercel snapshot/restore/expiry and git-index probe. General named-sandbox persistence, cold rebuild, TTL/keep-last, and park/destroy policy outside that handoff remain open. (Drives remain private beta and are not load-bearing.)
+1. **Persistent workspaces (two-tier model).** The worker's destroy-in-`finally` behavior dates from Sandbox SDK v1, where ephemeral was the platform default. Vercel Sandbox v2 (docs updated 2026-06) makes **persistence the default**: named sandboxes, auto-snapshot on stop, `getOrCreate` resume, TTL + keep-last retention, ~$0.08/GB-month snapshot storage (32 GB filesystem cap). Decision: workspace = durable identity in our DB; warm materialization = resume the persistent named sandbox; cold materialization = fresh sandbox re-cloned from workflow-owned branches. Cold must always work (snapshot expiry, on-prem); warm is a fast path, never a correctness dependency. (Drives — mountable persistent volumes — remain private beta, single-writer; not load-bearing.) Rollout details are an Open Decision.
 2. **Default failure policy** (guarantee #4): failures route to a built-in terminate/move/notify policy unless an explicit failure edge overrides — keeps graphs happy-path-only.
-3. **Multi-repo collection semantics**: collections stay inside blocks (per-repo arrays + aggregates on outputs, e.g. `Run checks`); runs serialize per subject and triggers coalesce (guarantee #5); `BranchRef`/`PrRef` carry `provider` for mixed-provider deployments; the Loop rule is restated at cycle level.
-4. **AI behavior and post-PR ownership** (guarantee #6, reopened 2026-07-17): this review preferred workflow definitions for AI-run behavior and repository CI / human reviewers for post-PR verdicts. V4 still reacts to external failure/review events and ends after publishing a fix, but whether the internal `post-pr-gate` is retained, replaced by an editable PR-created review workflow, or retired is open again.
+3. **Multi-repo collection semantics**: collections stay inside blocks (per-repo arrays + aggregates on outputs, e.g. `Run checks`); runs serialize per ticket and triggers coalesce (guarantee #5); `BranchRef`/`PrRef` carry `provider` for mixed-provider deployments; the Loop rule is restated at cycle level.
+4. **Workflows are the single source of truth** (guarantee #6): the in-repo `pre-sandbox.yaml` / `post-pr-gate.yaml` pipelines are deprecated; their steps become workflow blocks. V4 subsumes the post-PR gate.
 
-Still open (added to the Open Decisions frame): the general persistent-workspace model/lifecycle beyond the capability-gated clarification handoff. Plan approval separately re-enters through the locked `Plan approved` trigger. Explicit typed input bindings were subsequently locked for the MVP.
+Still open (added to the Open Decisions frame): suspend vs end-and-re-enter for human waits; input binding mechanism; persistent-workspace rollout details.
 
-A second review pass (same day) made four refinements: the agent group is labeled just "Agents" (Generic Agent is not specialized — the distinction is block-level); `Attach workspace` was removed as vestigial (specialized agents implicitly prepare or reuse a supplied `workspace_id`, while modular flows use Prepare workspace); `Loop` gained an explicit `exhausted` output port (unwired, it follows the default failure path); and V3 is explicitly documented as one workflow definition with two entry points, correlated by ticket, with the approval event carrying the plan as payload.
-
-## Revision — 2026-07-12 external validation ownership (reopened 2026-07-17)
-
-This review preferred repository CI and reviewers as the owners of post-PR validation. Under that option, the target architecture would not recreate GitHub Actions / GitLab CI checks, publish competing statuses, or start a validation workflow on PR open/head update. A failed external CI result or actionable human review would start a remediation run for the exact head SHA; the run would push a fix and end. CI would evaluate the new SHA normally: passing CI starts nothing, while another failure starts a fresh remediation run. This matches the original use case in `docs/feedback.md` lines 164–167.
-
-The current runtime still dispatches the product-owned post-PR gate from GitHub/GitLab PR/MR head events. Authenticated CI-completion and human-review subscriptions/normalizers are required for event-driven remediation regardless. The 2026-07-17 review reopened whether the existing gate should then be kept, replaced by editable review workflow blocks, or retired in favor of repository CI / external reviewers.
+A second review pass (same day) made four refinements: the agent group is labeled just "Agents" (Generic Agent is not specialized — the distinction is block-level); `Attach workspace` was removed as vestigial (nothing consumed `workspace_ref`; agents take `workspace_id` directly); `Loop` gained an explicit `exhausted` output port (unwired, it follows the default failure path); and V3 is explicitly documented as one workflow definition with two entry points, correlated by ticket, with the approval event carrying the plan as payload.
 
 ## Sources
 

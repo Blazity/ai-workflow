@@ -187,13 +187,13 @@ describe("agent provider side-effect fences", () => {
     expect(mocks.notifyForTicket).not.toHaveBeenCalled();
   });
 
-  it("routes clarification label changes through durable exact bound-owner intents", async () => {
+  it("routes clarification label changes through exact bound-owner mutations", async () => {
     const order: string[] = [];
     mocks.assertActiveRunOwner.mockImplementation(async () => {
       order.push("fence");
     });
     mocks.updateTicketLabels.mockImplementation(async () => {
-      order.push("intent");
+      order.push("mutation");
     });
     mocks.reconcileClarificationPickupState.mockImplementation(async () => {
       order.push("pickup-state");
@@ -206,7 +206,7 @@ describe("agent provider side-effect fences", () => {
     await parkForClarificationStep("AWT-1", "Backlog", "clar-1", owner);
     await reconcileClarificationsOnPickup("AWT-1", "run-1", owner);
 
-    expect(order).toEqual(["intent", "intent", "pickup-state"]);
+    expect(order).toEqual(["mutation", "mutation", "pickup-state"]);
     expect(mocks.updateTicketLabels).toHaveBeenNthCalledWith(1, {
       db: { kind: "db" },
       issueTracker: expect.anything(),
