@@ -73,7 +73,25 @@ describe("resolvePromptReferences", () => {
       1: { name: "A", archived: false, versions: { 1: "{{prompt:2}}" } },
       2: { name: "B", archived: false, versions: { 1: "{{prompt:1}}" } },
     });
-    await expect(resolvePromptReferences("{{prompt:1}}", load)).rejects.toThrow("1 -> 2 -> 1");
+    await expect(resolvePromptReferences("{{prompt:1}}", load)).rejects.toThrow("1@1 -> 2@1 -> 1@1");
+  });
+
+  it("allows a prompt version to include an older version of the same prompt", async () => {
+    const load = loader({
+      1: { name: "Research", archived: false, versions: { 1: "foundation", 2: "{{prompt:1@1}}\nupdate" } },
+    });
+
+    await expect(resolvePromptReferences("{{prompt:1@2}}", load)).resolves.toMatchObject({
+      text: "foundation\nupdate",
+    });
+  });
+
+  it("detects cycles between versions of the same prompt", async () => {
+    const load = loader({
+      1: { name: "Research", archived: false, versions: { 1: "{{prompt:1@2}}", 2: "{{prompt:1@1}}" } },
+    });
+
+    await expect(resolvePromptReferences("{{prompt:1@2}}", load)).rejects.toThrow("1@2 -> 1@1 -> 1@2");
   });
 
   it("allows pinned archived versions but rejects archived latest", async () => {

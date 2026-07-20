@@ -4,6 +4,7 @@ import {
   type PromptReferenceSelector,
   type ResolvedPromptReference,
 } from "@shared/contracts";
+import { createHash } from "node:crypto";
 
 export interface LoadedPromptReference {
   promptId: number;
@@ -28,13 +29,8 @@ export interface PromptReferenceResolutionOptions {
   maxOutputLength?: number;
 }
 
-function fnv1a(text: string): string {
-  let hash = 0x811c9dc5;
-  for (let index = 0; index < text.length; index += 1) {
-    hash ^= text.charCodeAt(index);
-    hash = Math.imul(hash, 0x01000193);
-  }
-  return (hash >>> 0).toString(16).padStart(8, "0");
+function hashPromptBody(text: string): string {
+  return createHash("sha256").update(text).digest("hex");
 }
 
 export async function resolvePromptReferences(
@@ -47,7 +43,7 @@ export async function resolvePromptReferences(
   const loaded = new Map<string, LoadedPromptReference>();
   const manifest = new Map<string, ResolvedPromptReference>();
 
-  const expand = async (input: string, stack: number[]): Promise<string> => {
+  const expand = async (input: string, stack: string[]): Promise<string> => {
     if (containsMalformedPromptReference(input)) {
       throw new Error("Malformed prompt reference; expected {{prompt:<id>}} or {{prompt:<id>@<version>}}");
     }
@@ -61,9 +57,6 @@ export async function resolvePromptReferences(
     let cursor = 0;
     for (const token of tokens) {
       output += input.slice(cursor, token.start);
-      if (stack.includes(token.promptId)) {
-        throw new Error(`Prompt reference cycle: ${[...stack, token.promptId].join(" -> ")}`);
-      }
       if (stack.length >= maxDepth) {
         throw new Error(`Prompt reference maximum depth ${maxDepth} exceeded`);
       }
@@ -74,17 +67,21 @@ export async function resolvePromptReferences(
         reference = await load(token.promptId, token.version);
         loaded.set(selectorKey, reference);
       }
+      const resolvedKey = `${reference.promptId}@${reference.resolvedVersion}`;
+      if (stack.includes(resolvedKey)) {
+        throw new Error(`Prompt reference cycle: ${[...stack, resolvedKey].join(" -> ")}`);
+      }
       if (!manifest.has(selectorKey)) {
         manifest.set(selectorKey, {
           promptId: reference.promptId,
           promptName: reference.promptName,
           requestedVersion: reference.requestedVersion,
           resolvedVersion: reference.resolvedVersion,
-          bodyHash: fnv1a(reference.body),
+          bodyHash: hashPromptBody(reference.body),
         });
       }
 
-      output += await expand(reference.body, [...stack, token.promptId]);
+      output += await expand(reference.body, [...stack, resolvedKey]);
       if (output.length > maxOutputLength) {
         throw new Error(`Expanded prompt exceeds maximum length ${maxOutputLength}`);
       }
