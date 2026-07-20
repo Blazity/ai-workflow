@@ -2,7 +2,7 @@
   "name": "ai-workflow-dashboard",
   "version": "0.1.0",
   "private": true,
-  "description": "Blazity AI Workflow Cockpit \u2014 observability for Vercel Workflow runs, Arthur Engine evals & traces, and AI Gateway cost.",
+  "description": "Blazity AI Workflow Cockpit — observability for Vercel Workflow runs, Arthur Engine evals & traces, and AI Gateway cost.",
   "scripts": {
     "dev": "pnpm build:shared && next dev -p 3001",
     "build": "pnpm build:shared && next build",
