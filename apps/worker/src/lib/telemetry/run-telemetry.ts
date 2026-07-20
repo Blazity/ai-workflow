@@ -1,7 +1,7 @@
 import { and, eq, ne, sql } from "drizzle-orm";
 import type { Db } from "../../db/client.js";
 import { workflowRuns } from "../../db/schema.js";
-import type { BlockRunState, RunStep } from "@shared/contracts";
+import type { BlockRunState, ResolvedPromptReference, RunStep } from "@shared/contracts";
 
 /**
  * Lifecycle/status fields the poll cron snapshots from the Workflow world and
@@ -222,6 +222,7 @@ export interface RunBlockStatusWrite {
   definitionVersion: number | null;
   definitionId: number | null;
   blockStatuses: Record<string, BlockRunState>;
+  promptManifest?: ResolvedPromptReference[];
 }
 
 /**
@@ -248,6 +249,7 @@ export async function recordBlockStatuses(
       definitionVersion: write.definitionVersion,
       definitionId: write.definitionId,
       blockStatuses: write.blockStatuses,
+      promptManifest: write.promptManifest,
     })
     .onConflictDoUpdate({
       target: workflowRuns.runId,
@@ -255,6 +257,7 @@ export async function recordBlockStatuses(
         blockStatuses: sql`excluded.block_statuses`,
         definitionVersion: sql`excluded.definition_version`,
         definitionId: sql`excluded.definition_id`,
+        promptManifest: keepIfNull(workflowRuns.promptManifest, workflowRuns.promptManifest),
         updatedAt: sql`now()`,
       },
     });

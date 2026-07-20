@@ -44,6 +44,7 @@ import { BLOCK_TYPE_SPECS, isTriggerBlockType } from "@shared/contracts";
 import type {
   BlockOutput,
   BlockRunState,
+  ResolvedPromptReference,
   WorkflowBlockType,
   WorkflowDefinitionNode,
 } from "@shared/contracts";
@@ -734,6 +735,7 @@ async function recordBlockStatusesStep(payload: {
   definitionVersion: number | null;
   definitionId: number | null;
   blockStatuses: Record<string, BlockRunState>;
+  promptManifest?: ResolvedPromptReference[];
 }) {
   "use step";
   const { getDb } = await import("../db/client.js");
@@ -835,6 +837,10 @@ export async function agentWorkflow(input: string | AgentWorkflowInput) {
     return;
   }
 
+  const { resolvePromptReferencesForRun } = await import("./prompt-references-step.js");
+  const resolvedPrompts = await resolvePromptReferencesForRun(plan.nodes);
+  plan.nodes = resolvedPrompts.nodes;
+
   const blockStatuses: Record<string, BlockRunState> = Object.fromEntries(
     plan.nodes
       .filter((node) => !isTriggerBlockType(node.type))
@@ -850,6 +856,7 @@ export async function agentWorkflow(input: string | AgentWorkflowInput) {
       definitionVersion: plan.version,
       definitionId: plan.definitionId,
       blockStatuses: { ...blockStatuses },
+      promptManifest: resolvedPrompts.manifest,
     }).catch(() => {});
   await writeBlockStatuses();
 

@@ -14,7 +14,7 @@ import {
   timestamp,
   uniqueIndex,
 } from "drizzle-orm/pg-core";
-import type { BlockRunState, WorkflowDefinition } from "@shared/contracts";
+import type { BlockRunState, ResolvedPromptReference, WorkflowDefinition } from "@shared/contracts";
 import type { GateStatusRef } from "../adapters/vcs/types.js";
 import type { PrePrCheckConfig } from "../pre-pr-checks/config.js";
 
@@ -184,6 +184,7 @@ export const workflowRuns = pgTable("workflow_runs", {
   definitionVersion: integer("definition_version"),
   definitionId: integer("definition_id"),
   blockStatuses: jsonb("block_statuses").$type<Record<string, BlockRunState>>(),
+  promptManifest: jsonb("prompt_manifest").$type<ResolvedPromptReference[]>(),
 
   // Bookkeeping.
   firstSeenAt: timestamp("first_seen_at", { withTimezone: true })
