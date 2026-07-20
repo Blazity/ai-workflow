@@ -35,17 +35,17 @@ test("missing prompt cannot navigate", () => {
 
 test("read-only references keep navigation but hide mutation", () => {
   assert.deepEqual(promptReferenceCapabilities(true, true), {
-    canPreview: true,
+    canExpand: true,
     canOpenLibrary: true,
     canMutate: false,
   });
   assert.deepEqual(promptReferenceCapabilities(true, false), {
-    canPreview: true,
+    canExpand: true,
     canOpenLibrary: true,
     canMutate: true,
   });
   assert.deepEqual(promptReferenceCapabilities(false, false), {
-    canPreview: false,
+    canExpand: false,
     canOpenLibrary: false,
     canMutate: false,
   });

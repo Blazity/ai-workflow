@@ -18,20 +18,23 @@ const row: PromptLibraryListRowDto = {
   body: "# Research",
 };
 
-test("resolved read-only references keep Preview and the library link", () => {
+test("resolved read-only references render a responsive expandable card", () => {
   const html = renderToStaticMarkup(
     <PromptReferenceChipsView
       value="{{prompt:7}}"
       rows={[row]}
       onChange={() => {}}
-      onPreview={() => {}}
       disabled
     />,
   );
 
-  assert.match(html, />Preview</);
+  assert.match(html, /Live reference/);
+  assert.match(html, />Show content</);
+  assert.match(html, /w-full/);
+  assert.match(html, /flex-wrap/);
   assert.match(html, /href="\/prompts\?prompt=7"/);
   assert.doesNotMatch(html, /More actions|Detach|Pin v3/);
+  assert.doesNotMatch(html, />Preview</);
 });
 
 test("missing references expose no navigation", () => {
@@ -40,10 +43,9 @@ test("missing references expose no navigation", () => {
       value="{{prompt:99}}"
       rows={[row]}
       onChange={() => {}}
-      onPreview={() => {}}
     />,
   );
 
   assert.match(html, /Missing prompt 99/);
-  assert.doesNotMatch(html, /Preview|href="\/prompts/);
+  assert.doesNotMatch(html, /Show content|Open in library|href="\/prompts|More actions/);
 });

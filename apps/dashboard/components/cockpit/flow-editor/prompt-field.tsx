@@ -2,7 +2,12 @@
 
 import { useCallback, useMemo, useState } from "react";
 import type { FlowNodeDef } from "@/lib/flows";
-import type { PromptLibraryListRowDto, PromptSourceRef, WorkflowParamValue } from "@shared/contracts";
+import {
+  parsePromptReferenceTokens,
+  type PromptLibraryListRowDto,
+  type PromptSourceRef,
+  type WorkflowParamValue,
+} from "@shared/contracts";
 import { driftFor, getPromptRef, makePromptRef } from "@/lib/prompt-library/provenance";
 import { DiffView } from "@/components/cockpit/prompt-diff";
 import { CkChip } from "@/components/ui";
@@ -14,7 +19,6 @@ import { PromptReferenceChips } from "@/components/cockpit/prompt-editor/prompt-
 import { usePromptLibrary } from "./prompt-library-context";
 import { effectiveDefaultPromptValue } from "@/lib/prompt-library/effective-default";
 import { promptInspectorSummary } from "@/lib/prompt-library/prompt-inspector-summary";
-import type { PromptPreviewTarget } from "@/lib/prompt-library/reference-navigation";
 
 export interface PromptFieldProps {
   label: string;
@@ -52,6 +56,13 @@ export function PromptField({
     () => promptInspectorSummary(value, effectiveValue, defaultPromptName, rows),
     [defaultPromptName, effectiveValue, rows, value],
   );
+  const initialPreviewTarget = useMemo(() => {
+    const references = parsePromptReferenceTokens(effectiveValue);
+    const reference = references.length === 1 && effectiveValue.trim() === references[0]?.raw
+      ? references[0]
+      : null;
+    return reference ? { promptId: reference.promptId, version: reference.version } : null;
+  }, [effectiveValue]);
   // driftFor hashes the full field value (up to ~50k chars); memoize so an
   // unrelated re-render (popover toggles, autoOpen, etc.) does not re-hash. The
   // result is identical, only recomputed when an input actually changes.
@@ -62,7 +73,6 @@ export function PromptField({
 
   const [confirmUpdate, setConfirmUpdate] = useState(false);
   const [expandOpen, setExpandOpen] = useState(false);
-  const [initialPreviewTarget, setInitialPreviewTarget] = useState<PromptPreviewTarget | null>(null);
 
   const closeExpandedEditor = useCallback(() => setExpandOpen(false), []);
 
@@ -188,20 +198,13 @@ export function PromptField({
         label={label}
         disabled={disabled}
         summary={summary}
-        onOpen={() => {
-          setInitialPreviewTarget(null);
-          setExpandOpen(true);
-        }}
+        onOpen={() => setExpandOpen(true)}
       />
       {effectiveValue ? (
         <PromptReferenceChips
           value={effectiveValue}
           onChange={setBodyValue}
           disabled={disabled}
-          onPreview={(target) => {
-            setInitialPreviewTarget(target);
-            setExpandOpen(true);
-          }}
         />
       ) : effective.implicit ? (
         <CkChip tone="neutral">❡ {defaultPromptName ?? "Default prompt"} · Latest</CkChip>

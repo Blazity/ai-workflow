@@ -223,7 +223,6 @@ export function PromptEditorModal({
               onChange={onChange}
               disabled={!canEdit}
               syncRequest={syncRequest}
-              onPreviewReference={previewReference}
             />
           </div>
         </div>

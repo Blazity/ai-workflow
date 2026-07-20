@@ -14,7 +14,7 @@ export function promptLibraryHref(promptId: number): string {
 
 export function promptReferenceCapabilities(resolved: boolean, disabled: boolean) {
   return {
-    canPreview: resolved,
+    canExpand: resolved,
     canOpenLibrary: resolved,
     canMutate: resolved && !disabled,
   };

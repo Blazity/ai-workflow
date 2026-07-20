@@ -16,7 +16,6 @@ import {
 import { PromptEditor } from "./prompt-editor";
 import { PromptReferenceChips } from "./prompt-reference-chips";
 import { readPromptDrag, writePromptDrag } from "./prompt-drag";
-import type { PromptPreviewTarget } from "@/lib/prompt-library/reference-navigation";
 
 const iconButton =
   "inline-flex size-7 shrink-0 appearance-none items-center justify-center rounded-[3px] border border-transparent bg-transparent font-mono text-[11px] text-neutral-500 transition-colors hover:border-neutral-200 hover:bg-off-white hover:text-mariner disabled:cursor-default disabled:opacity-30";
@@ -59,13 +58,11 @@ export function PromptSectionComposer({
   onChange,
   disabled,
   syncRequest,
-  onPreviewReference,
 }: {
   value: string;
   onChange: (markdown: string) => void;
   disabled?: boolean;
   syncRequest?: { id: number; mode: "replace" | "append" } | null;
-  onPreviewReference?: (target: PromptPreviewTarget) => void;
 }) {
   const nextId = useRef(0);
   const makeId = useCallback(() => `composer-${++nextId.current}`, []);
@@ -245,7 +242,6 @@ export function PromptSectionComposer({
                         value={block.body}
                         onChange={(markdown) => updateBlock(block.id, markdown)}
                         disabled={disabled}
-                        onPreview={onPreviewReference}
                       />
                     </div>
                   ) : active ? (
