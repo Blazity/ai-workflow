@@ -221,6 +221,42 @@ describe("versions/:version", () => {
     const res = await versions(new Request("http://worker.test/p/4/versions/99"));
     expect(res.status).toBe(404);
   });
+
+  it("404s a version past the int4 max instead of overflowing to a 500", async () => {
+    await create({ name: "Overflow", body: "v1" });
+    const res = await versions(new Request("http://worker.test/p/4/versions/2147483648"));
+    expect(res.status).toBe(404);
+  });
+});
+
+describe("restore validation", () => {
+  it("400s a version past the int4 max instead of overflowing to a 500", async () => {
+    await create({ name: "Restore overflow", body: "v1" });
+    const res = await restore(
+      jsonRequest("POST", { version: 2147483648 }, "http://worker.test/p/4/restore"),
+    );
+    expect(res.status).toBe(400);
+  });
+});
+
+describe("conflict mapping", () => {
+  it("409s a create whose name is already in use", async () => {
+    const first = await create({ name: "Dup", body: "v1" });
+    expect(first.status).toBe(200);
+
+    const second = await create({ name: "Dup", body: "v2" });
+    expect(second.status).toBe(409);
+  });
+
+  it("409s a PUT that writes a new version onto an archived prompt", async () => {
+    await create({ name: "Frozen", body: "v1" });
+    await del(new Request("http://worker.test/p/4", { method: "DELETE" }));
+
+    const res = await detail("put", detailPut)(
+      jsonRequest("PUT", { body: "v2" }, "http://worker.test/p/4"),
+    );
+    expect(res.status).toBe(409);
+  });
 });
 
 describe("usage", () => {

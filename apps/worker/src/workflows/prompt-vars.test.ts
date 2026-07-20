@@ -3,6 +3,7 @@ import {
   buildPromptVariables,
   substitutePromptVariables,
   substituteNodePromptParams,
+  VARIABLE_PARAM_KEYS,
 } from "./prompt-vars.js";
 import type { WorkflowDefinitionNode } from "@shared/contracts";
 import type { AgentWorkflowInput } from "./agent-input.js";
@@ -232,5 +233,22 @@ describe("substituteNodePromptParams", () => {
   it("returns the identical node when a variable param has no tokens", () => {
     const node = makeNode("planning_agent", { prompt: "Static prompt, no tokens" });
     expect(substituteNodePromptParams(node, vars)).toBe(node);
+  });
+});
+
+describe("terminate postComment substitution", () => {
+  // The terminate hook in agent.ts is dispatched inline by the interpreter and
+  // never passes through substituteNodePromptParams, so it substitutes the
+  // comment itself via substitutePromptVariables(buildPromptVariables(ctx)).
+  // These cases pin that comment shape and the declaration the hook relies on.
+  it("keeps terminate declared as a postComment variable param", () => {
+    expect(VARIABLE_PARAM_KEYS.terminate).toEqual(["postComment"]);
+  });
+
+  it("resolves {{variables}} in a terminate comment string", () => {
+    const resolved = buildPromptVariables(makeSource());
+    expect(
+      substitutePromptVariables("Parked {{ticket_key}}: {{ticket_title}}", resolved),
+    ).toBe("Parked ABC-123: Add dark mode");
   });
 });

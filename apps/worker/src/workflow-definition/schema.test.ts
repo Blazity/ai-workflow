@@ -861,7 +861,10 @@ describe("workflowDefinitionSchema prompt param and promptRefs", () => {
   it("accepts a prompt param on every agent block and bounds its length", () => {
     for (const type of ["planning_agent", "implementation_agent", "review_agent"] as const) {
       expect(shapeOk([node("n", type, { prompt: "Follow the house style." })]), type).toBe(true);
-      expect(shapeOk([node("n", type, { prompt: "x".repeat(32001) })]), type).toBe(false);
+      // The cap aligns with the prompt library body max so any library prompt
+      // can be inserted as an agent override. 50000 passes post-trim; 50001 fails.
+      expect(shapeOk([node("n", type, { prompt: "x".repeat(50000) })]), type).toBe(true);
+      expect(shapeOk([node("n", type, { prompt: "x".repeat(50001) })]), type).toBe(false);
     }
   });
 

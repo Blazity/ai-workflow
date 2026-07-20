@@ -44,7 +44,7 @@ const agentParams = z
   .object({
     model: z.string().trim().max(200).regex(/^[A-Za-z0-9._:\/-]+$/).optional(),
     provider: z.enum(["claude", "codex"]).optional(),
-    prompt: z.string().trim().min(1).max(32000).optional(),
+    prompt: z.string().trim().min(1).max(50000).optional(),
   })
   .strict();
 

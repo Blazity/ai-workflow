@@ -11,7 +11,9 @@ export default defineEventHandler(
       await requireDashboardActor(event);
       const id = parsePromptId(event);
       const version = Number(getRouterParam(event, "version"));
-      if (!Number.isInteger(version) || version <= 0) {
+      // Postgres version columns are int4; a value past its max would overflow
+      // the query and surface as a 500, so treat it as an unknown version.
+      if (!Number.isInteger(version) || version <= 0 || version > 2147483647) {
         throw createError({ statusCode: 404, statusMessage: "Unknown version" });
       }
 

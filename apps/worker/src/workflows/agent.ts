@@ -23,7 +23,11 @@ import { resolveBlockAgent, resolveRunDefaultKind } from "../workflow-definition
 import { resolveTicketMoveTarget } from "./ticket-move-target.js";
 import type { AgentWorkflowInput } from "./agent-input.js";
 import type { BlockExecuteFn, EngineCtx } from "./blocks/types.js";
-import { buildPromptVariables, substituteNodePromptParams } from "./prompt-vars.js";
+import {
+  buildPromptVariables,
+  substituteNodePromptParams,
+  substitutePromptVariables,
+} from "./prompt-vars.js";
 import { execute as executePrepareWorkspace } from "./blocks/prepare-workspace.js";
 import { execute as executeFinalizeWorkspace } from "./blocks/finalize-workspace.js";
 import { execute as executeFixAgent } from "./blocks/fix-agent.js";
@@ -1076,6 +1080,14 @@ export async function agentWorkflow(input: string | AgentWorkflowInput) {
         },
         nodeId?: string,
       ): Promise<void> => {
+        // terminate is dispatched inline by the interpreter, so it never passes
+        // through executeBlock's substituteNodePromptParams wrapper. Substitute
+        // {{variables}} into the comment here so every terminal read below sees
+        // resolved text.
+        const postComment =
+          typeof params.postComment === "string"
+            ? substitutePromptVariables(params.postComment, buildPromptVariables(ctx))
+            : params.postComment;
         if (params.terminalStatus === "waiting_for_human") {
           // Same rework as clarificationExit: file the question durably FIRST
           // (before any unregister/move), then unregister -> park -> notify.
@@ -1087,7 +1099,7 @@ export async function agentWorkflow(input: string | AgentWorkflowInput) {
             blockId: nodeId ?? null,
             definitionId: plan.definitionId,
             definitionVersion: plan.version,
-            questions: [params.postComment ?? "Waiting for human input."],
+            questions: [postComment ?? "Waiting for human input."],
             suggestedAnswers: null,
           });
           // Unregister BEFORE the park's moveTicket (dedupe via the flag), so the
@@ -1119,8 +1131,8 @@ export async function agentWorkflow(input: string | AgentWorkflowInput) {
           state.runUnregisteredBeforePr = true;
         }
         if (params.terminalStatus === "done" || params.terminalStatus === "skipped") {
-          if (params.postComment) {
-            await postTicketComment(ticket.identifier, params.postComment);
+          if (postComment) {
+            await postTicketComment(ticket.identifier, postComment);
           }
           runOutcome = "success";
           return;
@@ -1128,7 +1140,7 @@ export async function agentWorkflow(input: string | AgentWorkflowInput) {
         await moveTicket(ticketId, backlogMoveTarget());
         await notifyTicket(ticket.identifier, {
           kind: "failed",
-          reason: params.postComment ?? "Terminated by workflow.",
+          reason: postComment ?? "Terminated by workflow.",
           usageReport: usageReportOrUndefined(),
         });
         runOutcome = "failed";
