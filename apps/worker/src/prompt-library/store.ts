@@ -112,15 +112,19 @@ function validateName(name: string): string {
 
 function validateDescription(description: string | null): string | null {
   if (description === null) return null;
-  const parsed = z.string().max(2000).safeParse(description);
+  const parsed = z.string().trim().max(2000).safeParse(description);
   if (!parsed.success) throw new PromptLibraryStoreError(400, "Invalid description");
-  return parsed.data;
+  return parsed.data.length > 0 ? parsed.data : null;
 }
 
 function validateTags(tags: string[]): string[] {
-  const parsed = z.array(z.string().trim().min(1).max(40)).max(15).safeParse(tags);
+  const parsed = z.array(z.string().trim().min(1).max(40)).safeParse(tags);
   if (!parsed.success) throw new PromptLibraryStoreError(400, "Invalid tags");
-  return parsed.data;
+  // De-duplicate (first occurrence wins) and bound the count on the deduped set,
+  // so repeated tags collapse instead of eating into the 15-tag limit.
+  const deduped = [...new Set(parsed.data)];
+  if (deduped.length > 15) throw new PromptLibraryStoreError(400, "Invalid tags");
+  return deduped;
 }
 
 function validateBody(body: string): string {
@@ -186,13 +190,14 @@ export async function listPrompts(
     .orderBy(asc(promptLibrary.id));
   if (prompts.length === 0) return [];
 
-  // Two-query + JS merge: pull every version row for the returned prompts, then
-  // reduce to each prompt's head (max version) and its body.
-  const versionRows = await db
+  // One grouped max(version) per prompt (no bodies), then fetch only the
+  // (promptId, maxVersion) head rows' bodies. Avoids pulling every historical
+  // version body (up to 50k each) just to reduce to the head in JS; same shape
+  // as findPromptUsage's head lookup.
+  const maxRows = await db
     .select({
       promptId: promptLibraryVersions.promptId,
-      version: promptLibraryVersions.version,
-      body: promptLibraryVersions.body,
+      maxVersion: max(promptLibraryVersions.version),
     })
     .from(promptLibraryVersions)
     .where(
@@ -200,23 +205,47 @@ export async function listPrompts(
         promptLibraryVersions.promptId,
         prompts.map((p) => p.id),
       ),
-    );
+    )
+    .groupBy(promptLibraryVersions.promptId);
+
   const headByPrompt = new Map<number, { version: number; body: string }>();
-  for (const row of versionRows) {
-    const existing = headByPrompt.get(row.promptId);
-    if (!existing || row.version > existing.version) {
+  if (maxRows.length > 0) {
+    const headRows = await db
+      .select({
+        promptId: promptLibraryVersions.promptId,
+        version: promptLibraryVersions.version,
+        body: promptLibraryVersions.body,
+      })
+      .from(promptLibraryVersions)
+      .where(
+        or(
+          ...maxRows.map((m) =>
+            and(
+              eq(promptLibraryVersions.promptId, m.promptId),
+              eq(promptLibraryVersions.version, m.maxVersion!),
+            ),
+          ),
+        ),
+      );
+    for (const row of headRows) {
       headByPrompt.set(row.promptId, { version: row.version, body: row.body });
     }
   }
 
-  let rows: PromptLibraryListRow[] = prompts.map((p) => {
-    const head = headByPrompt.get(p.id)!;
-    return { ...mapPromptRow(p), currentVersion: head.version, body: head.body };
-  });
+  // Skip any prompt with no head version: a list row requires body +
+  // currentVersion, and a prompt with zero versions is an orphan (create's
+  // parent insert landed but the version insert and its compensating delete
+  // both failed). Mirrors listWorkflowDefinitions' degrade, but here dropping
+  // the row is correct rather than nulling the version.
+  const rows: PromptLibraryListRow[] = [];
+  for (const p of prompts) {
+    const head = headByPrompt.get(p.id);
+    if (!head) continue;
+    rows.push({ ...mapPromptRow(p), currentVersion: head.version, body: head.body });
+  }
 
   const q = normalizeQuery(filter?.q);
-  if (q) rows = rows.filter((row) => matchesQuery(row, q));
-  return rows;
+  return q ? rows.filter((row) => matchesQuery(row, q)) : rows;
 }
 
 /** Reads archived prompts too (the detail routes gate on archivedAt themselves). */

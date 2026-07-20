@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import type { WorkflowDefinition } from "@shared/contracts";
 import { DEFAULT_AGENT_PROMPTS } from "@shared/contracts";
 import type { Db } from "../db/client.js";
-import { workflowDefinitionVersions } from "../db/schema.js";
+import { promptLibrary, promptLibraryVersions, workflowDefinitionVersions } from "../db/schema.js";
 import { createTestDb } from "../db/test-db.js";
 import { DashboardAuthError } from "../lib/auth/users-read.js";
 import {
@@ -86,7 +86,12 @@ describe("createPrompt", () => {
       createPrompt(db, { name: "ok", body: "", actor: ADMIN }),
     ).rejects.toMatchObject({ statusCode: 400 });
     await expect(
-      createPrompt(db, { name: "ok", body: "y", tags: Array(16).fill("t"), actor: ADMIN }),
+      createPrompt(db, {
+        name: "ok",
+        body: "y",
+        tags: Array.from({ length: 16 }, (_, i) => `t${i}`),
+        actor: ADMIN,
+      }),
     ).rejects.toMatchObject({ statusCode: 400 });
   });
 });
@@ -132,6 +137,27 @@ describe("savePromptVersion", () => {
     await expect(
       savePromptVersion(db, { promptId: 999, body: "x", actor: ADMIN }),
     ).rejects.toMatchObject({ statusCode: 404 });
+  });
+
+  it("recovers onto the next free version number when the max+1 slot is already taken", async () => {
+    const { prompt } = await createPrompt(db, { name: "Race", body: "v1", actor: ADMIN });
+    // A concurrent writer grabbed version 2 (the slot max+1 targets); the
+    // (prompt_id, version) PK is what retryOnUniqueViolation guards against.
+    await db.insert(promptLibraryVersions).values({
+      promptId: prompt.id,
+      version: 2,
+      body: "concurrent",
+      createdById: "u_other",
+      createdByLabel: "Other",
+      restoredFromVersion: null,
+    });
+
+    const saved = await savePromptVersion(db, { promptId: prompt.id, body: "v2", actor: ADMIN });
+    expect(saved.changed).toBe(true);
+    expect(saved.version.version).toBe(3);
+
+    const rows = await listPromptVersionRows(db, prompt.id);
+    expect(rows.map((v) => v.version)).toEqual([3, 2, 1]);
   });
 });
 
@@ -268,6 +294,52 @@ describe("listPrompts filtering", () => {
   });
 });
 
+describe("listPrompts zero-version orphan", () => {
+  it("omits a prompt that has no version rows and still lists the healthy ones", async () => {
+    await createPrompt(db, { name: "Healthy", body: "hi", actor: ADMIN });
+    // Parent row with no version rows: create's version insert and its
+    // compensating delete both failed. It must not crash the list.
+    await db.insert(promptLibrary).values({
+      name: "Orphan",
+      createdById: "system",
+      createdByLabel: "System",
+    });
+
+    const names = (await listPrompts(db)).map((p) => p.name);
+    expect(names).toContain("Healthy");
+    expect(names).not.toContain("Orphan");
+  });
+});
+
+describe("input normalization", () => {
+  it("stores a whitespace-only description as null", async () => {
+    const { prompt } = await createPrompt(db, {
+      name: "WS",
+      body: "b",
+      description: "   ",
+      actor: ADMIN,
+    });
+    expect(prompt.description).toBeNull();
+    expect(serializePromptMeta(prompt, 1).description).toBeNull();
+  });
+
+  it("collapses duplicate tags preserving first-occurrence order", async () => {
+    const { prompt } = await createPrompt(db, {
+      name: "Dupes",
+      body: "b",
+      tags: ["a", "a", "b"],
+      actor: ADMIN,
+    });
+    expect(prompt.tags).toEqual(["a", "b"]);
+  });
+
+  it("accepts 16 raw tags when de-duplication brings the set to <= 15", async () => {
+    const raw = [...Array.from({ length: 15 }, (_, i) => `t${i}`), "t0"]; // 16 raw, 15 unique
+    const { prompt } = await createPrompt(db, { name: "Dedup", body: "b", tags: raw, actor: ADMIN });
+    expect(prompt.tags).toHaveLength(15);
+  });
+});
+
 describe("listPromptVersionRows cap", () => {
   it("returns at most 50 versions, newest first", async () => {
     const { prompt } = await createPrompt(db, { name: "Many", body: "b0", actor: ADMIN });
@@ -384,5 +456,48 @@ describe("findPromptUsage", () => {
     });
 
     expect(await findPromptUsage(db, target.prompt.id)).toHaveLength(0);
+  });
+
+  it("marks a ref as modified when its paramKey is missing or holds a non-string value", async () => {
+    const { prompt } = await createPrompt(db, { name: "Edge", body: "BODY", actor: ADMIN });
+    // Head is version 1 with body "BODY"; both refs point at it, so any
+    // "modified" verdict comes from the param text, not a missing version.
+
+    const definition: WorkflowDefinition = {
+      schemaVersion: 1,
+      nodes: [
+        {
+          id: "missing",
+          type: "planning_agent",
+          x: 0,
+          y: 0,
+          params: {}, // paramKey "prompt" absent entirely
+          promptRefs: { prompt: { promptId: prompt.id, version: 1 } },
+        },
+        {
+          id: "nonstring",
+          type: "implementation_agent",
+          x: 0,
+          y: 0,
+          params: { prompt: 42 }, // present but not a string
+          promptRefs: { prompt: { promptId: prompt.id, version: 1 } },
+        },
+      ],
+      edges: [],
+    };
+    await db.insert(workflowDefinitionVersions).values({
+      definitionId: 1,
+      version: 1,
+      definition,
+      createdById: "u_admin",
+      createdByLabel: "Admin",
+      restoredFromVersion: null,
+    });
+
+    const rows = await findPromptUsage(db, prompt.id);
+    const byNode = new Map(rows.map((r) => [r.nodeId, r]));
+    expect(byNode.get("missing")).toMatchObject({ version: 1, state: "modified" });
+    expect(byNode.get("nonstring")).toMatchObject({ version: 1, state: "modified" });
+    expect(rows).toHaveLength(2);
   });
 });
