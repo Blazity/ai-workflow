@@ -26,7 +26,12 @@ export default defineEventHandler(
       }
 
       const versions = (await listPromptVersionRows(dbHandle, id)).map(serializePromptVersion);
-      const current = versions[0]!;
+      const current = versions[0];
+      if (!current) {
+        // Orphan: the parent row exists but has no version rows, so there is no
+        // head to serialize. Treat it as not found, like a missing id.
+        throw createError({ statusCode: 404, statusMessage: "Unknown prompt" });
+      }
       return {
         meta: serializePromptMeta(row, current.version),
         current,

@@ -35,6 +35,14 @@ export default defineEventHandler(
       }
 
       const dbHandle = getDb();
+      const versions = (await listPromptVersionRows(dbHandle, id)).map(serializePromptVersion);
+      const current = versions[0];
+      if (!current) {
+        // Orphan (or unknown id): no head version to return, so 404 before
+        // mutating the parent meta. Same statusMessage as the missing-id path.
+        throw createError({ statusCode: 404, statusMessage: "Unknown prompt" });
+      }
+
       const updated = await updatePromptMeta(dbHandle, {
         promptId: id,
         name: body.name as string | undefined,
@@ -47,8 +55,6 @@ export default defineEventHandler(
         },
       });
 
-      const versions = (await listPromptVersionRows(dbHandle, id)).map(serializePromptVersion);
-      const current = versions[0]!;
       return {
         meta: serializePromptMeta(updated, current.version),
         current,

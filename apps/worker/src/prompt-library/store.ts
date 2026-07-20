@@ -149,13 +149,25 @@ function isUniqueViolation(error: unknown): boolean {
 
 /** Retries an operation on a unique-violation. Used for the version-number
  *  insert, the one race left now that writes run per-statement (neon-http has
- *  no interactive transactions). The (prompt_id, version) PK rejects the dup. */
-async function retryOnUniqueViolation<T>(operation: () => Promise<T>, attempts = 3): Promise<T> {
+ *  no interactive transactions). The (prompt_id, version) PK rejects the dup.
+ *  Exported so the exhaustion mapping can be unit-tested directly, since a real
+ *  cross-connection race is not forceable on single-connection PGlite. */
+export async function retryOnUniqueViolation<T>(
+  operation: () => Promise<T>,
+  attempts = 3,
+): Promise<T> {
   for (let attempt = 1; ; attempt++) {
     try {
       return await operation();
     } catch (error) {
       if (attempt < attempts && isUniqueViolation(error)) continue;
+      // Attempts exhausted. If we are still colliding on a unique index, a
+      // concurrent writer kept taking our target slot; surface a truthful 409
+      // instead of leaking the raw driver error as a 500. Non-unique errors
+      // pass through unchanged.
+      if (isUniqueViolation(error)) {
+        throw new PromptLibraryStoreError(409, "Concurrent update, please retry");
+      }
       throw error;
     }
   }
@@ -187,7 +199,9 @@ export async function listPrompts(
     .select()
     .from(promptLibrary)
     .where(conditions.length > 0 ? and(...conditions) : undefined)
-    .orderBy(asc(promptLibrary.id));
+    .orderBy(asc(promptLibrary.id))
+    // Protective upper bound for the org-curated library (admin-controlled growth).
+    .limit(500);
   if (prompts.length === 0) return [];
 
   // One grouped max(version) per prompt (no bodies), then fetch only the
@@ -298,6 +312,47 @@ export async function listPromptVersionRows(
 // retry-guarded sequence; the (prompt_id, version) PK and the active-name
 // partial unique index (not a lock) provide the real guarantees. ---
 
+async function insertPromptParent(
+  db: Db,
+  input: { name: string; description: string | null; tags: string[]; actor: PromptLibraryActor },
+): Promise<PromptSelect> {
+  const rows = await db
+    .insert(promptLibrary)
+    .values({
+      name: input.name,
+      description: input.description,
+      tags: input.tags,
+      createdById: input.actor.id,
+      createdByLabel: input.actor.label,
+    })
+    .returning();
+  return rows[0]!;
+}
+
+/** Heal path for createPrompt's active-name conflict: if the row holding the
+ *  name is a zero-version orphan (a parent left behind when an earlier create's
+ *  version-1 seed and its compensating delete both failed), delete it so the
+ *  caller can retry the insert. Deleting a zero-version row is safe because
+ *  nothing references it. Returns true when an orphan was removed; a live prompt
+ *  (>= 1 version) is left untouched so the caller keeps the 409. */
+async function tryHealOrphanName(db: Db, name: string): Promise<boolean> {
+  const rows = await db
+    .select({ id: promptLibrary.id })
+    .from(promptLibrary)
+    .where(and(eq(promptLibrary.name, name), isNull(promptLibrary.archivedAt)))
+    .limit(1);
+  const conflicting = rows[0];
+  if (!conflicting) return false;
+  const versionRows = await db
+    .select({ version: promptLibraryVersions.version })
+    .from(promptLibraryVersions)
+    .where(eq(promptLibraryVersions.promptId, conflicting.id))
+    .limit(1);
+  if (versionRows.length > 0) return false;
+  await db.delete(promptLibrary).where(eq(promptLibrary.id, conflicting.id));
+  return true;
+}
+
 export async function createPrompt(
   db: Db,
   input: {
@@ -316,22 +371,25 @@ export async function createPrompt(
 
   let created: PromptSelect;
   try {
-    const rows = await db
-      .insert(promptLibrary)
-      .values({
-        name,
-        description,
-        tags,
-        createdById: input.actor.id,
-        createdByLabel: input.actor.label,
-      })
-      .returning();
-    created = rows[0]!;
+    created = await insertPromptParent(db, { name, description, tags, actor: input.actor });
   } catch (error) {
-    if (isUniqueViolation(error)) {
+    if (!isUniqueViolation(error)) throw error;
+    // The active-name unique index rejected the insert. Heal a zero-version
+    // orphan holding the name and retry the insert once (no transactions on
+    // neon-http, so this is a best-effort sequence). A live prompt keeps the
+    // 409, and a concurrent healer racing us re-triggers 23505 -> also 409.
+    const healed = await tryHealOrphanName(db, name);
+    if (!healed) {
       throw new PromptLibraryStoreError(409, "Name already in use");
     }
-    throw error;
+    try {
+      created = await insertPromptParent(db, { name, description, tags, actor: input.actor });
+    } catch (retryError) {
+      if (isUniqueViolation(retryError)) {
+        throw new PromptLibraryStoreError(409, "Name already in use");
+      }
+      throw retryError;
+    }
   }
 
   let current: PromptLibraryVersionRow;

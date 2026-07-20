@@ -1,4 +1,4 @@
-import { defineEventHandler } from "h3";
+import { createError, defineEventHandler } from "h3";
 import type { PromptLibraryDetailResponse } from "@shared/contracts";
 import { getDb } from "../../../../db/client.js";
 import { requireDashboardActor } from "../../../../lib/auth/request-context.js";
@@ -17,6 +17,15 @@ export default defineEventHandler(
       const actor = await requireDashboardActor(event);
       const id = parsePromptId(event);
       const dbHandle = getDb();
+      // Orphan guard BEFORE mutating: a prompt with no version rows has no head
+      // to return and must not be archived, so 404 like a missing id. Archiving
+      // touches only the parent meta, so these rows are the response as-is.
+      const versions = (await listPromptVersionRows(dbHandle, id)).map(serializePromptVersion);
+      const current = versions[0];
+      if (!current) {
+        throw createError({ statusCode: 404, statusMessage: "Unknown prompt" });
+      }
+
       const archived = await archivePrompt(dbHandle, {
         promptId: id,
         actor: {
@@ -26,8 +35,6 @@ export default defineEventHandler(
         },
       });
 
-      const versions = (await listPromptVersionRows(dbHandle, id)).map(serializePromptVersion);
-      const current = versions[0]!;
       return {
         meta: serializePromptMeta(archived, current.version),
         current,

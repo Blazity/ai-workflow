@@ -1,8 +1,15 @@
+import { eq } from "drizzle-orm";
 import { createApp, createRouter, toWebHandler } from "h3";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { WorkflowDefinition } from "@shared/contracts";
 import type { Db } from "../../../db/client.js";
-import { member, organization, user, workflowDefinitionVersions } from "../../../db/schema.js";
+import {
+  member,
+  organization,
+  promptLibrary,
+  user,
+  workflowDefinitionVersions,
+} from "../../../db/schema.js";
 import { createTestDb } from "../../../db/test-db.js";
 
 const state = vi.hoisted(() => ({
@@ -201,6 +208,31 @@ describe("bad id", () => {
   it("404s a valid id that never existed", async () => {
     const res = await detail("get", detailGet)(new Request("http://worker.test/p/999"));
     expect(res.status).toBe(404);
+  });
+});
+
+describe("zero-version orphan detail routes", () => {
+  it("404s GET, PATCH, and DELETE on a raw-seeded orphan and never archives it", async () => {
+    // Parent row with no version rows: an earlier create's version-1 seed and
+    // its compensating delete both failed. There is no head to serialize.
+    const [orphan] = await db
+      .insert(promptLibrary)
+      .values({ name: "Orphan", createdById: "system", createdByLabel: "System" })
+      .returning();
+    const url = `http://worker.test/p/${orphan.id}`;
+
+    const getRes = await detail("get", detailGet)(new Request(url));
+    expect(getRes.status).toBe(404);
+
+    const patchRes = await detail("patch", detailPatch)(jsonRequest("PATCH", { name: "Renamed" }, url));
+    expect(patchRes.status).toBe(404);
+
+    const delRes = await del(new Request(url, { method: "DELETE" }));
+    expect(delRes.status).toBe(404);
+
+    // The DELETE 404 must not have archived the orphan.
+    const [after] = await db.select().from(promptLibrary).where(eq(promptLibrary.id, orphan.id));
+    expect(after.archivedAt).toBeNull();
   });
 });
 

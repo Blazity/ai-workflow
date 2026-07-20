@@ -16,6 +16,7 @@ import {
   listPromptVersionRows,
   PromptLibraryStoreError,
   restorePromptVersion,
+  retryOnUniqueViolation,
   savePromptVersion,
   serializePromptMeta,
   updatePromptMeta,
@@ -114,6 +115,68 @@ describe("name uniqueness", () => {
     await expect(
       updatePromptMeta(db, { promptId: a.prompt.id, name: "Two", actor: ADMIN }),
     ).rejects.toMatchObject({ statusCode: 409 });
+  });
+});
+
+describe("createPrompt orphan heal", () => {
+  it("heals a zero-version orphan holding the name and seeds the new prompt at version 1", async () => {
+    // Parent row with no version rows: an earlier create's version-1 seed and
+    // its compensating delete both failed, leaving the active name locked out.
+    await db.insert(promptLibrary).values({
+      name: "Ghost",
+      createdById: "system",
+      createdByLabel: "System",
+    });
+
+    const { prompt, current } = await createPrompt(db, {
+      name: "Ghost",
+      body: "fresh",
+      actor: ADMIN,
+    });
+    expect(prompt.name).toBe("Ghost");
+    expect(current.version).toBe(1);
+    expect(current.body).toBe("fresh");
+
+    // Exactly one active "Ghost" remains, and it is the healed prompt with a
+    // real version 1.
+    const ghosts = (await listPrompts(db)).filter((p) => p.name === "Ghost");
+    expect(ghosts).toHaveLength(1);
+    expect(ghosts[0].id).toBe(prompt.id);
+    expect((await getCurrentPromptVersion(db, prompt.id))!.version).toBe(1);
+  });
+
+  it("keeps the 409 when the conflicting active name belongs to a real prompt", async () => {
+    await createPrompt(db, { name: "Live", body: "a", actor: ADMIN });
+    await expect(
+      createPrompt(db, { name: "Live", body: "b", actor: ADMIN }),
+    ).rejects.toMatchObject({ statusCode: 409, message: "Name already in use" });
+  });
+});
+
+describe("retryOnUniqueViolation exhaustion", () => {
+  // A real cross-connection race is not forceable on single-connection PGlite,
+  // so the exhaustion mapping is exercised directly against the exported helper.
+  it("maps a persistent unique violation to a 409 after exhausting attempts", async () => {
+    let calls = 0;
+    await expect(
+      retryOnUniqueViolation(async () => {
+        calls++;
+        throw { code: "23505" };
+      }, 3),
+    ).rejects.toMatchObject({ statusCode: 409, message: "Concurrent update, please retry" });
+    expect(calls).toBe(3);
+  });
+
+  it("passes a non-unique error through unchanged without retrying", async () => {
+    const boom = new Error("boom");
+    let calls = 0;
+    await expect(
+      retryOnUniqueViolation(async () => {
+        calls++;
+        throw boom;
+      }, 3),
+    ).rejects.toBe(boom);
+    expect(calls).toBe(1);
   });
 });
 
