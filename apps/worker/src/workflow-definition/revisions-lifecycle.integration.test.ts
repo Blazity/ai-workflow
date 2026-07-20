@@ -9,6 +9,7 @@ import { upsertWorkflowOwnedBranch } from "../db/queries/workflow-owned-branches
 import { PostgresRunRegistry } from "../adapters/run-registry/postgres.js";
 import type { TriggerEvent } from "../lib/trigger-events.js";
 import type { AgentWorkflowInput } from "../workflows/agent-input.js";
+import { deletePendingTrigger } from "../lib/trigger-delivery-store.js";
 import { prReviewFixDefinition } from "./graph-fixtures.js";
 
 const state = vi.hoisted(() => ({
@@ -145,12 +146,12 @@ describe("revised Workflows lifecycle", () => {
     }));
     state.finalizeWorkspacePublication.mockResolvedValue({
       status: "finalized",
-      attemptId: "publication-v1",
       repositories: [
         {
           provider: "github",
           repoPath: "acme/app",
           branchName: "blazebot/aiw-103",
+          defaultBranch: "main",
           expectedHead: "head-103",
           pushedHead: "fixed-head-103",
         },
@@ -269,6 +270,21 @@ describe("revised Workflows lifecycle", () => {
     });
     expect(dispatchedEntry.kind).toBe("pr_trigger");
     if (dispatchedEntry.kind !== "pr_trigger") throw new Error("expected PR trigger dispatch");
+    expect(
+      await runRegistry.bindRun(
+        dispatchedEntry.subjectKey,
+        dispatchedEntry.ownerToken,
+        "run-1",
+      ),
+    ).toBe(true);
+    await deletePendingTrigger(db, {
+      subjectKey: dispatchedEntry.subjectKey,
+      triggerType: dispatchedEntry.triggerType,
+      delivery: dispatchedEntry.delivery!,
+      pr: dispatchedEntry.pr,
+      definitionId: dispatchedEntry.definitionId,
+      definitionVersion: dispatchedEntry.definitionVersion,
+    });
 
     const pinnedPlan = await loadWorkflowDefinitionFor(
       "trigger_pr_review",
@@ -362,7 +378,6 @@ describe("revised Workflows lifecycle", () => {
     expect(state.finalizeWorkspacePublication).toHaveBeenCalledWith(
       expect.objectContaining({
         runId: "run-1",
-        blockId: "finalize",
         sandboxId: "sandbox-103",
         ticketKey: "AIW-103",
         sourcePullRequest: {
@@ -407,9 +422,10 @@ describe("revised Workflows lifecycle", () => {
     ).toEqual(["Version two remediation complete.", "Version one remediation complete."]);
 
     expect(
-      await runRegistry.releaseReservation(
+      await runRegistry.release(
         dispatchedEntry.subjectKey,
         dispatchedEntry.ownerToken,
+        "run-1",
       ),
     ).toBe(true);
     expect(

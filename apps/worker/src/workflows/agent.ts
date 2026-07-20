@@ -2131,17 +2131,17 @@ async function agentWorkflowBody(
           }
 
           case "open_pr": {
-            const publicationAttemptId = resolvedInputs.publicationAttemptId;
-            if (typeof publicationAttemptId !== "string" || publicationAttemptId.length === 0) {
+            const repositories = resolvedInputs.repositories;
+            if (!Array.isArray(repositories)) {
               return {
                 kind: "failed",
                 output: { status: "failed" },
-                reason: "Open PR/MR requires a successful Finalize publication attempt",
+                reason: "Open PR/MR requires successful Finalize repository metadata",
                 phase: "open-pr",
               };
             }
             const publication = await openPullRequestsForPublication({
-              attemptId: publicationAttemptId,
+              repositories: repositories as import("./workspace-publication.js").FinalizedBranch[],
               runId: ctx.runId,
               subjectKey: transitionOwner.subjectKey,
               ownerToken: transitionOwner.ownerToken,
@@ -2157,8 +2157,6 @@ async function agentWorkflowBody(
                       baseRef: ctx.entry.pr.baseRef,
                     }
                   : undefined,
-            }, {
-              observeBudget: () => ctx.observeBudget(),
             });
             ctx.publication = publication;
 

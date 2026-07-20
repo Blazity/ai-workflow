@@ -249,7 +249,7 @@ ai workflow pushes from **inside the sandbox**, but only after the agent process
 4. **Inject the token per push** — the token is passed as an `http.extraHeader` authorization header on the push command itself, never written to the remote URL or disk. The agent process is already dead at this point and never sees the token; after a successful push, `origin` is reset to the token-less clone URL.
 5. **Push changed repositories with an exact lease** — `git -C <repo> push --force-with-lease=refs/heads/{branch}:{expectedSha} origin HEAD:refs/heads/{branch}`.
 
-Remote drift, lease rejection, and other push failures are terminal; the agent is not asked to rewrite or retry the push. Finalize Workspace records every per-repository result in a durable publication attempt. Open PR/MR can consume only a successful Finalize result, so a partial publication creates no PRs and cannot be reported as success.
+Remote drift, lease rejection, and other push failures are terminal; the agent is not asked to rewrite the push. Finalize Workspace emits the exact finalized branch metadata directly to Open PR/MR. Workflow step retries are safe because the publisher recognizes the exact target head and every mutation uses an exact lease; a partial publication creates no PRs and cannot be reported as success.
 
 #### How PRs are created
 

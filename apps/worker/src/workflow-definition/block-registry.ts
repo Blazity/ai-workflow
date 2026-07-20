@@ -96,6 +96,7 @@ const finalizedBranchType = objectType({
   provider: stringType(),
   repoPath: stringType(),
   branchName: stringType(),
+  defaultBranch: stringType(),
   expectedHead: stringType(),
   pushedHead: stringType(),
 });
@@ -555,11 +556,10 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
       },
     ],
     output: statusOutput({
-      publicationAttemptId: stringType(),
       repositories: arrayType(finalizedBranchType),
       unmetChecks: arrayType(stringType()),
     }),
-    normalOutputRequired: ["publicationAttemptId", "repositories"],
+    normalOutputRequired: ["repositories"],
     statusVariants: ["finalized", "failed"],
   },
   run_pre_pr_checks: {
@@ -630,7 +630,7 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
       "⇪",
     ),
     defaults: {},
-    inputs: { publicationAttemptId: input(stringType(), true) },
+    inputs: { repositories: input(arrayType(finalizedBranchType), true) },
     output: statusOutput({
       prs: arrayType(workflowPrRefType),
       prUrl: stringType(),

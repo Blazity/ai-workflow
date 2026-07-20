@@ -65,7 +65,7 @@ export function linearPipelineDefinition(): WorkflowDefinition {
     {
       id: "open-pr",
       type: "open_pr",
-      inputs: { publicationAttemptId: "steps.finalize.output.publicationAttemptId" },
+      inputs: { repositories: "steps.finalize.output.repositories" },
     },
     { id: "slack", type: "send_slack_message" },
     { id: "status", type: "update_ticket_status", params: { target: "ai_review" } },
@@ -135,7 +135,7 @@ export function humanGateLoopDefinition(options: HumanGateLoopOptions = {}): Wor
       {
         id: "open-pr",
         type: "open_pr",
-        inputs: { publicationAttemptId: "steps.finalize.output.publicationAttemptId" },
+        inputs: { repositories: "steps.finalize.output.repositories" },
       },
       7,
     ),
@@ -210,7 +210,7 @@ export function planApprovalDefinition(): WorkflowDefinition {
       {
         id: "open-pr",
         type: "open_pr",
-        inputs: { publicationAttemptId: "steps.finalize.output.publicationAttemptId" },
+        inputs: { repositories: "steps.finalize.output.repositories" },
       },
       3,
       1,

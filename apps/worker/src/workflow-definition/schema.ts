@@ -393,7 +393,7 @@ function insertLegacyOpenPrFinalizers(
   for (const node of nodes) {
     if (
       node.type !== "open_pr" ||
-      Object.prototype.hasOwnProperty.call(node.inputs, "publicationAttemptId")
+      Object.prototype.hasOwnProperty.call(node.inputs, "repositories")
     ) {
       upgradedNodes.push(node);
       continue;
@@ -419,7 +419,7 @@ function insertLegacyOpenPrFinalizers(
         ...node,
         inputs: {
           ...node.inputs,
-          publicationAttemptId: `steps.${finalizeId}.output.publicationAttemptId`,
+          repositories: `steps.${finalizeId}.output.repositories`,
         },
       },
     );

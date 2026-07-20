@@ -119,7 +119,8 @@ test("draws one canonical remediation board driven by external CI and review eve
   assert.match(explanation, /exact definition selectors/i);
   assert.match(explanation, /webhook-id.*Idempotency-Key.*event UUID/is);
   assert.match(explanation, /cancelled.*superseded.*ignored/is);
-  assert.match(explanation, /successfully pushed repos.*partial/is);
+  assert.match(explanation, /preflights every repository.*exact leases/is);
+  assert.match(explanation, /exact target already present.*safe replay/is);
 
   const frameIndex = FRAMES.indexOf(frame);
   assert.equal(FRAMES[frameIndex - 1]?.slug, "v3-approved-plan");
@@ -236,7 +237,7 @@ test("publishes only through Finalize and models the merged ticket transition", 
     "the recommended V1 board must be a deployable fan-out-free chain",
   );
 
-  assert.match(BLOCKS["vcs.open-pr"].input, /publicationAttemptId: string/);
+  assert.match(BLOCKS["vcs.open-pr"].input, /repositories: object\[\]/);
   assert.doesNotMatch(BLOCKS["vcs.open-pr"].input, /workspaceId/);
   for (const type of [
     "trig.pr-created",

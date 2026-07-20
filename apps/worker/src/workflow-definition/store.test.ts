@@ -239,7 +239,7 @@ describe("legacy version read normalization", () => {
       "open_pr",
     ]);
     expect(current?.definition.nodes.find((node) => node.id === "open")?.inputs).toEqual({
-      publicationAttemptId: "steps.open-finalize.output.publicationAttemptId",
+      repositories: "steps.open-finalize.output.repositories",
     });
     expect(current?.definition.edges).toEqual([
       { from: "trigger", to: "open-finalize" },
@@ -655,7 +655,7 @@ describe("write-path validation", () => {
         {
           ...legacyInvalid.nodes[1],
           inputs: {
-            publicationAttemptId: "steps.orphan-finalize.output.publicationAttemptId",
+            repositories: "steps.orphan-finalize.output.repositories",
           },
         },
       ],

@@ -37,9 +37,9 @@ export async function findWorkflowOwnedPullRequestForBranch(input: {
 }
 findWorkflowOwnedPullRequestForBranch.maxRetries = 3;
 
-/** Provider-only PR phase used by durable publication. Database correlation
- * is deliberately separate so an accepted provider side effect can be
- * journaled before any secondary write is attempted. */
+/** Provider mutation phase. Find-before-create and lookup-after-error make a
+ * Workflow step replay safe when the provider accepted a request but its
+ * response was lost. */
 export async function createOrFindWorkflowOwnedPullRequest(input: {
   branchName: string;
   repository: SelectedRepository;
@@ -60,8 +60,8 @@ export async function createOrFindWorkflowOwnedPullRequest(input: {
 }
 createOrFindWorkflowOwnedPullRequest.maxRetries = 3;
 
-/** Idempotent correlation phase run after the publication ledger contains the
- * provider PR result. Safe to repeat when a prior branch-record write failed. */
+/** Idempotently correlate a provider PR after its exact head and target have
+ * been verified. */
 export async function recordWorkflowOwnedPullRequest(input: {
   ticketKey: string;
   pr: WorkflowPrLink;

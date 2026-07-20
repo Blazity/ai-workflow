@@ -157,7 +157,6 @@ function defaultResult(block: WorkflowDefinitionNode): BlockExecutionResult {
       kind: "next",
       output: {
         status: "finalized",
-        publicationAttemptId: `attempt-${block.id}`,
         repositories: [],
       },
     };

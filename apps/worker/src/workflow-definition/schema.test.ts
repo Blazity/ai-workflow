@@ -216,7 +216,7 @@ describe("workflowDefinitionSchema", () => {
       inputs: {},
     });
     expect(upgraded.nodes.find((entry) => entry.id === "open-pr")?.inputs).toEqual({
-      publicationAttemptId: "steps.open-pr-finalize.output.publicationAttemptId",
+      repositories: "steps.open-pr-finalize.output.repositories",
     });
     expect(upgraded.edges).toEqual([
       { from: "trigger", to: "planning" },
@@ -253,7 +253,7 @@ describe("workflowDefinitionSchema", () => {
       "open-pr",
     ]);
     expect(upgraded.nodes.find((entry) => entry.id === "open-pr")?.inputs).toEqual({
-      publicationAttemptId: "steps.open-pr-finalize-2.output.publicationAttemptId",
+      repositories: "steps.open-pr-finalize-2.output.repositories",
     });
     expect(upgradeStoredWorkflowDefinition(upgraded)).toEqual(upgraded);
 

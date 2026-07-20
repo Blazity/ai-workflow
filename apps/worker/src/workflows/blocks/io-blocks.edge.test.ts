@@ -429,7 +429,6 @@ describe("post_pr_comment edge cases", () => {
   function publication(): WorkspacePublicationResult {
     return {
       status: "published",
-      attemptId: "attempt-1",
       repositories: [
         {
           provider: "github",
@@ -459,7 +458,6 @@ describe("post_pr_comment edge cases", () => {
   function singlePublication(): WorkspacePublicationResult {
     return {
       status: "published",
-      attemptId: "attempt-1",
       repositories: [
         {
           provider: "github",
@@ -759,7 +757,6 @@ describe("finalize_workspace edge cases", () => {
   it("does not comment on a failed publication that produced zero PRs", async () => {
     mocks.finalizeWorkspacePublication.mockResolvedValue({
       status: "failed",
-      attemptId: "attempt-1",
       reason: "push rejected",
       repositories: [],
       prs: [],
@@ -778,12 +775,12 @@ describe("finalize_workspace edge cases", () => {
   it("reports finalized without creating or commenting on PRs", async () => {
     mocks.finalizeWorkspacePublication.mockResolvedValue({
       status: "finalized",
-      attemptId: "attempt-1",
       repositories: [
         {
           provider: "github",
           repoPath: "acme/api",
           branchName: "blazebot/awt-1",
+          defaultBranch: "main",
           expectedHead: "before",
           pushedHead: "after",
         },

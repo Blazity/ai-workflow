@@ -40,12 +40,12 @@ const trustedManifest: WorkspaceManifest = {
 
 const finalized = {
   status: "finalized" as const,
-  attemptId: "attempt-1",
   repositories: [
     {
       provider: "github" as const,
       repoPath: "acme/api",
       branchName: "blazebot/awt-1",
+      defaultBranch: "main",
       expectedHead: "before",
       pushedHead: "after",
     },
@@ -143,7 +143,7 @@ describe("finalize_workspace execute", () => {
     );
   });
 
-  it("pushes and emits only the durable attempt and finalized branch metadata", async () => {
+  it("pushes and emits finalized branch metadata", async () => {
     const ctx = makeCtx({
       selectedRepositories: [repo],
       workspaceManifest: trustedManifest,
@@ -154,7 +154,6 @@ describe("finalize_workspace execute", () => {
       runId: "run-1",
       subjectKey: "ticket:jira:AWT-1",
       ownerToken: "owner:test",
-      blockId: "finalize",
       sandboxId: "sbx-1",
       ticketKey: "AWT-1",
       workspaceManifest: trustedManifest,
@@ -166,7 +165,6 @@ describe("finalize_workspace execute", () => {
       kind: "next",
       output: {
         status: "finalized",
-        publicationAttemptId: "attempt-1",
         repositories: finalized.repositories,
       },
     });
@@ -210,7 +208,6 @@ describe("finalize_workspace execute", () => {
   it("maps a failed durable publication to the push phase without PR side effects", async () => {
     mocks.finalizeWorkspacePublication.mockResolvedValue({
       status: "failed",
-      attemptId: "attempt-1",
       reason: "lease rejected",
       repositories: [],
       prs: [],

@@ -966,7 +966,7 @@
           ],
           statuses: ["ok", "needs_human_input", "failed"],
         }),
-        finalize_workspace: runtimeContract(["legacyRequiredChecks"], {
+        finalize_workspace: runtimeContract([], {
           additionalInputs: [{
             path: "^checks\\.[A-Za-z0-9_-]+$",
             keyPattern: "^checks\\.[A-Za-z0-9_-]+$",
@@ -974,7 +974,6 @@
           }],
           requiredOutputs: [
             ...STATUS_OUTPUT,
-            ...typedPaths("string", "publicationAttemptId"),
             ...typedPaths("object[]", "repositories"),
           ],
           optionalOutputs: typedPaths("string[]", "unmetChecks"),
@@ -1029,7 +1028,7 @@
           statuses: ["ok", "failed"],
         }),
         open_pr: runtimeContract([], {
-          requiredInputs: typedPaths("string", "publicationAttemptId"),
+          requiredInputs: typedPaths("object[]", "repositories"),
           requiredOutputs: [...STATUS_OUTPUT, ...typedPaths("object[]", "prs")],
           optionalOutputs: [
             ...typedPaths("string", "prUrl"),
@@ -1078,7 +1077,7 @@
           ],
           statuses: ["needs_human_input", "answered", "failed"],
         }),
-        arthur_injection_check: runtimeContract(["legacyContentFromStep"], {
+        arthur_injection_check: runtimeContract([], {
           optionalInputs: typedPaths("string", "content"),
           requiredOutputs: STATUS_OUTPUT,
           optionalOutputs: [
@@ -1259,7 +1258,7 @@
           group: "vcs",
           title: "Open PR/MR",
           blurb: "Opens one pull/merge request per changed repo from the finalized workspace.",
-          note: "Consumes the durable publication produced by Finalize workspace and creates or reuses provider PRs/MRs idempotently. Before publication completes, every recovered or newly created PR/MR is re-read from the provider and must still be open at the exact finalized head and configured target branch; closed, merged, retargeted, or moved PRs/MRs fail the durable attempt. It does not push workspace changes; Finalize remains the sole push boundary, and the active-run claim remains held through later ticket and notification blocks."
+          note: "Consumes the exact finalized branch metadata produced by Finalize workspace and creates or reuses provider PRs/MRs idempotently. Each branch is re-read before PR creation, and every recovered or newly created PR/MR must still be open at the exact finalized head and configured target branch before ownership is recorded. It does not push workspace changes; Finalize remains the sole push boundary, and the active-run claim remains held through later ticket and notification blocks."
         },
         "vcs.pr-comment": {
           runtimeType: "post_pr_comment",
@@ -1505,7 +1504,7 @@
           notes: [
             { x: 340, y: 460, w: 620,
               head: "What the specialized agents absorb",
-              body: "Planning: the clarification loop and human-question protocol. Implementation: workspace prepare/resume, branch policy, and commit enforcement. Run pre-PR checks is an explicit deterministic gate. Finalize is the sole push boundary; Open PR only consumes its successful output, then notification and ticket transition run in sequence. The runtime handles the durable checkpoint and pinned successor continuation around <code>needs_human_input</code> automatically; the Vercel snapshot/restore/expiry and git-index feasibility probe passed on 2026-07-17." }
+              body: "Planning: the clarification loop and human-question protocol. Implementation: workspace prepare/resume, branch policy, and commit enforcement. Run pre-PR checks is an explicit deterministic gate. Finalize is the sole push boundary; Open PR only consumes its successful output, then notification and ticket transition run in sequence. The same Workflow run suspends on a durable hook around <code>needs_human_input</code>; its workspace snapshot is restored before execution continues. The Vercel hook/snapshot/restore/expiry and git-index feasibility probes passed on 2026-07-17." }
           ]
         },
         {
@@ -1627,7 +1626,7 @@
             },
             { x: 1130, y: 760, w: 650,
               head: "Publish safety is not validation",
-              body: "The specialized Fix Agent initializes its workspace when necessary and classifies its result. <code>fixed</code> continues directly to Finalize workspace; <code>needs_human_input</code> creates the runtime checkpoint and <code>failed</code> follows default failure policy. Authors who need custom classification declare it through Generic Agent and route it with control blocks. Finalization only protects the write: current source SHA, clean committed tree, and a branch allowed by the selected PR-ownership policy. It does not decide whether the PR passes. Open PR/MR keeps the owning run active and durably reconciles provider, ledger, and ownership writes with capped backoff until publication succeeds, a deterministic safety mismatch occurs, the run budget expires, or the run is cancelled. It preserves the prior confirmed PR while recording the exact source head and target branch as a pending intent. Recovered or newly created provider PRs are journaled before later safety checks, but ownership is granted only after head validation. Only an authenticated, current opened/reopened event may atomically bind the exact pending intent; check/review and wrong-target events cannot. The Fix Agent may safely resolve a merge conflict; unresolved conflicts create a human checkpoint. In a multi-repository failure, successfully pushed repos must be recorded as a partial publication and cannot be reported as overall success. Per-PR versus ticket-wide remediation, partial-push recovery, and park/destroy retention rules remain Open Decisions."
+              body: "The specialized Fix Agent initializes its workspace when necessary and classifies its result. <code>fixed</code> continues directly to Finalize workspace; <code>needs_human_input</code> suspends the same Workflow run on a durable hook and <code>failed</code> follows default failure policy. Authors who need custom classification declare it through Generic Agent and route it with control blocks. Finalization only protects the write: current source SHA, clean committed tree, and a branch allowed by the selected PR-ownership policy. It does not decide whether the PR passes. Finalize preflights every repository, pushes with exact leases, and emits finalized branch metadata directly to Open PR/MR. Workflow owns retries; an exact target already present is a safe replay, while remote drift is terminal. Open PR/MR revalidates the exact branch, source PR, and created or recovered PR before recording ownership. The Fix Agent may safely resolve a merge conflict; unresolved conflicts suspend on the same human-input hook. A multi-repository preflight failure creates no partial push and cannot be reported as success. Terminal cleanup destroys the live sandbox; clarification snapshots are restored by the same run and removed after use or expiry."
             }
           ]
         },

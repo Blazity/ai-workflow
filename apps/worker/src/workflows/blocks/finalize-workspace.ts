@@ -6,7 +6,7 @@ export const paramsSchema = z.object({}).strict();
 
 /**
  * finalize_workspace: gate on typed `checks.*` status inputs, preflight every
- * repository, push with exact leases, and emit a durable publication attempt.
+ * repository, push with exact leases, and emit finalized branch metadata.
  * It never creates PRs; subject ownership remains held until the workflow's
  * terminal release.
  */
@@ -52,7 +52,6 @@ export const execute: BlockExecuteFn = async (
       runId: ctx.runId,
       subjectKey: ctx.entry.subjectKey,
       ownerToken: ctx.entry.ownerToken,
-      blockId: block.id,
       sandboxId: ctx.sandboxId,
       ticketKey: ctx.ticket.identifier,
       workspaceManifest: ctx.workspaceManifest,
@@ -92,11 +91,11 @@ export const execute: BlockExecuteFn = async (
       kind: "next",
       output: {
         status: "finalized",
-        publicationAttemptId: publication.attemptId,
         repositories: publication.repositories.map((repository) => ({
           provider: repository.provider,
           repoPath: repository.repoPath,
           branchName: repository.branchName,
+          defaultBranch: repository.defaultBranch,
           expectedHead: repository.expectedHead,
           pushedHead: repository.pushedHead,
         })),

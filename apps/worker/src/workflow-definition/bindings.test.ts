@@ -220,7 +220,7 @@ describe("validateWorkflowBindings", () => {
         node("trigger", "trigger_ticket_ai"),
         node("finalize", "finalize_workspace"),
         node("open", "open_pr", {}, {
-          publicationAttemptId: "steps.finalize.output.publicationAttemptId",
+          repositories: "steps.finalize.output.repositories",
         }),
       ],
       [
@@ -236,7 +236,7 @@ describe("validateWorkflowBindings", () => {
         definition(
           [
             node("trigger", "trigger_ticket_ai"),
-            node("open", "open_pr", {}, { publicationAttemptId: "run.branchName" }),
+            node("open", "open_pr", {}, { repositories: "run.branchName" }),
           ],
           [{ from: "trigger", to: "open" }],
         ),
@@ -246,7 +246,7 @@ describe("validateWorkflowBindings", () => {
         definition(
           [
             node("trigger", "trigger_ticket_ai"),
-            node("open", "open_pr", {}, { publicationAttemptId: "trigger.ticketKey" }),
+            node("open", "open_pr", {}, { repositories: "trigger.ticketKey" }),
           ],
           [{ from: "trigger", to: "open" }],
         ),
@@ -258,7 +258,7 @@ describe("validateWorkflowBindings", () => {
             node("trigger", "trigger_ticket_ai"),
             node("generic", "generic_agent", { prompt: "reuse an attempt" }),
             node("open", "open_pr", {}, {
-              publicationAttemptId: "steps.generic.output.body",
+              repositories: "steps.generic.output.body",
             }),
           ],
           [
@@ -274,7 +274,7 @@ describe("validateWorkflowBindings", () => {
             node("trigger", "trigger_ticket_ai"),
             node("finalize", "finalize_workspace"),
             node("open", "open_pr", {}, {
-              publicationAttemptId: "steps.finalize.output.status",
+              repositories: "steps.finalize.output.status",
             }),
           ],
           [
@@ -292,7 +292,7 @@ describe("validateWorkflowBindings", () => {
             node("finalize", "finalize_workspace"),
             node("bypass", "run_checks"),
             node("open", "open_pr", {}, {
-              publicationAttemptId: "steps.finalize.output.publicationAttemptId",
+              repositories: "steps.finalize.output.repositories",
             }),
           ],
           [
@@ -306,7 +306,7 @@ describe("validateWorkflowBindings", () => {
       ],
     ];
     const expected =
-      'Block "open" input "publicationAttemptId" must bind exactly to steps.<finalize_workspace_id>.output.publicationAttemptId from a dominating Finalize Workspace block.';
+      'Block "open" input "repositories" must bind exactly to steps.<finalize_workspace_id>.output.repositories from a dominating Finalize Workspace block.';
     for (const [label, def] of invalid) {
       expect(validateWorkflowBindings(def, registryContext), label).toContain(expected);
     }

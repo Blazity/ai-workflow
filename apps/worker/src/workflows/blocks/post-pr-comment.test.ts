@@ -20,7 +20,6 @@ import { makeCtx, makeNode, makePrPayload, runControlErrorCases } from "./test-s
 function publication(): WorkspacePublicationResult {
   return {
     status: "published",
-    attemptId: "attempt-1",
     repositories: [
       {
         provider: "github",

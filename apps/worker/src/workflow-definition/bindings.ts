@@ -391,17 +391,17 @@ export function validateWorkflowBindings(
         continue;
       }
 
-      if (node.type === "open_pr" && inputName === "publicationAttemptId") {
+      if (node.type === "open_pr" && inputName === "repositories") {
         const sourceNode = parsed.root === "steps" ? nodeById.get(parsed.nodeId) : undefined;
         const isExactFinalizeOutput =
           parsed.root === "steps" &&
           parsed.path.length === 1 &&
-          parsed.path[0] === "publicationAttemptId" &&
+          parsed.path[0] === "repositories" &&
           sourceNode?.type === "finalize_workspace" &&
           (dominators.get(node.id)?.has(parsed.nodeId) ?? false);
         if (!isExactFinalizeOutput) {
           issues.push(
-            `Block "${node.id}" input "publicationAttemptId" must bind exactly to steps.<finalize_workspace_id>.output.publicationAttemptId from a dominating Finalize Workspace block.`,
+            `Block "${node.id}" input "repositories" must bind exactly to steps.<finalize_workspace_id>.output.repositories from a dominating Finalize Workspace block.`,
           );
           continue;
         }

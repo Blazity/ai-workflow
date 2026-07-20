@@ -47,7 +47,7 @@ export function defaultWorkflowDefinition({ includeReview }: { includeReview: bo
       type: "open_pr",
       name: "Open pull request",
       params: {},
-      inputs: { publicationAttemptId: "steps.finalize.output.publicationAttemptId" },
+      inputs: { repositories: "steps.finalize.output.repositories" },
     },
     { id: "slack", type: "send_slack_message", name: "Send Slack message", params: {} },
     { id: "status", type: "update_ticket_status", name: "Update ticket status", params: { target: "ai_review" } },
