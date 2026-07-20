@@ -55,7 +55,12 @@ describe("resolvePromptReferences", () => {
 
     expect(result.text).toBe("Start\nResearch {{ticket_key}}\nBranch {{branch_name}}\nEnd");
     expect(result.manifest).toEqual([
-      expect.objectContaining({ promptId: 1, requestedVersion: "latest", resolvedVersion: 2 }),
+      expect.objectContaining({
+        promptId: 1,
+        requestedVersion: "latest",
+        resolvedVersion: 2,
+        bodyHash: "703d1cba6d52e0ebe61f52b81676151958dbf21c6362353ee9936e5df6b4a2b9",
+      }),
       expect.objectContaining({ promptId: 2, requestedVersion: 1, resolvedVersion: 1 }),
     ]);
   });

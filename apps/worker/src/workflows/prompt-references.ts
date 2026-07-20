@@ -4,7 +4,6 @@ import {
   type PromptReferenceSelector,
   type ResolvedPromptReference,
 } from "@shared/contracts";
-import { createHash } from "node:crypto";
 
 export interface LoadedPromptReference {
   promptId: number;
@@ -29,8 +28,9 @@ export interface PromptReferenceResolutionOptions {
   maxOutputLength?: number;
 }
 
-function hashPromptBody(text: string): string {
-  return createHash("sha256").update(text).digest("hex");
+async function hashPromptBody(text: string): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
 export async function resolvePromptReferences(
@@ -77,7 +77,7 @@ export async function resolvePromptReferences(
           promptName: reference.promptName,
           requestedVersion: reference.requestedVersion,
           resolvedVersion: reference.resolvedVersion,
-          bodyHash: hashPromptBody(reference.body),
+          bodyHash: await hashPromptBody(reference.body),
         });
       }
 
