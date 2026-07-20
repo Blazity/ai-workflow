@@ -13,15 +13,9 @@ import type { RunsLister } from "../../lib/overview/collect-runs.js";
 import { drainOldestPendingTrigger } from "../../lib/dispatch-trigger.js";
 import {
   classifyProtectedClarificationSubjects,
-  reconcileClarificationCheckpoints,
 } from "../../clarifications/store.js";
 import { ticketSubjectKey } from "../../lib/subject-key.js";
-import {
-  recoverClarificationProviderParking,
-  recoverInterruptedClarificationParking,
-  recoverUndispatchedClarificationSuccessors,
-  startQueuedClarificationSnapshotCleanups,
-} from "../../clarifications/reconciliation.js";
+import { expireHookClarifications } from "../../clarifications/expiry.js";
 import { dispatchPlanApproved } from "../../approvals/dispatch.js";
 import {
   getApproval,
@@ -34,37 +28,8 @@ export default defineEventHandler(async (event) => {
 
   const adapters = createAdapters();
   const db = getDb();
+  const clarificationExpiry = await expireHookClarifications(db);
 
-  // Retire expired/orphaned checkpoints before retrying answer crash
-  // boundaries. A failed DB read aborts this poll: running generic cleanup
-  // without knowing which subjects are durably parked could release live work.
-  await reconcileClarificationCheckpoints(db);
-  const clarificationParkingRecovered =
-    await recoverInterruptedClarificationParking({
-      db,
-      runRegistry: adapters.runRegistry,
-    });
-  const clarificationProviderParkingRecovered =
-    await recoverClarificationProviderParking({
-      db,
-      runRegistry: adapters.runRegistry,
-      issueTracker: adapters.issueTracker,
-      messaging: adapters.messaging,
-      dashboardOrigin: env.DASHBOARD_ORIGIN,
-      target: env.JIRA_BACKLOG_TRANSITION_ID
-        ? {
-            name: env.COLUMN_BACKLOG,
-            transitionId: env.JIRA_BACKLOG_TRANSITION_ID,
-          }
-        : env.COLUMN_BACKLOG,
-    });
-  const clarificationRecovered =
-    await recoverUndispatchedClarificationSuccessors({
-      db,
-      runRegistry: adapters.runRegistry,
-      issueTracker: adapters.issueTracker,
-      maxConcurrentAgents: env.MAX_CONCURRENT_AGENTS,
-    });
   const clarificationProtection =
     await classifyProtectedClarificationSubjects(db);
   const protectedClarificationSubjects = new Set(clarificationProtection.all);
@@ -137,9 +102,6 @@ export default defineEventHandler(async (event) => {
     protectedDiscoverySubjects,
   );
 
-  const clarificationCleanupStarted =
-    await startQueuedClarificationSnapshotCleanups({ db });
-
   // Housekeeping: physically drop expired gate rows (reads already treat
   // them as absent). Best-effort — a failed purge must not fail the poll.
   await new GateStore(db)
@@ -168,10 +130,7 @@ export default defineEventHandler(async (event) => {
     cleaned,
     pendingRecovered: releasedTriggerRecovery.started,
     triggerRecovery: { released: releasedTriggerRecovery },
-    clarificationRecovered,
-    clarificationParkingRecovered,
-    clarificationProviderParkingRecovered,
-    clarificationCleanupStarted,
+    clarificationExpiry,
     approvalRecovery,
   };
 });

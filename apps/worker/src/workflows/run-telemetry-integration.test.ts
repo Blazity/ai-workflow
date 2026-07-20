@@ -306,9 +306,8 @@ describe("re-pickup clarification housekeeping gate", () => {
   // for entry kinds that own the ticket's main work thread. A pr_trigger /
   // plan_approved follow-up must skip it so it can't strand a live pending
   // question or flip the parked asking run to success.
-  it("runs only for ticket and clarification_answered pickups", () => {
+  it("runs only for ticket pickups", () => {
     expect(entryOwnsClarificationThread("ticket")).toBe(true);
-    expect(entryOwnsClarificationThread("clarification_answered")).toBe(true);
     expect(entryOwnsClarificationThread("pr_trigger")).toBe(false);
     expect(entryOwnsClarificationThread("plan_approved")).toBe(false);
     expect(entryOwnsClarificationThread({

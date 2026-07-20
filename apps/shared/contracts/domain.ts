@@ -486,6 +486,6 @@ export interface ClarificationRequest {
   answeredByLabel: string | null;
   /** ISO timestamp; null while pending. */
   answeredAt: string | null;
-  /** Resume run started on answer; null until dispatched. */
+  /** Deprecated: clarification answers now resume the asking run in place. */
   dispatchedRunId: string | null;
 }

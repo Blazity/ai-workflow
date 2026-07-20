@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   classifyProtectedClarifications: vi.fn(),
   listProtectedClarifications: vi.fn(),
   startCleanups: vi.fn(),
+  expireClarifications: vi.fn(),
   listDispatchBlockingApprovals: vi.fn(),
   getApproval: vi.fn(),
   rejectUndispatchableApproval: vi.fn(),
@@ -77,6 +78,9 @@ vi.mock("../../clarifications/reconciliation.js", () => ({
   startQueuedClarificationSnapshotCleanups: (...args: any[]) =>
     mocks.startCleanups(...args),
 }));
+vi.mock("../../clarifications/expiry.js", () => ({
+  expireHookClarifications: (...args: any[]) => mocks.expireClarifications(...args),
+}));
 vi.mock("../../lib/dispatch-trigger.js", () => ({
   drainOldestPendingTrigger: vi.fn().mockResolvedValue(null),
 }));
@@ -138,34 +142,21 @@ describe("cron clarification recovery ordering", () => {
     });
     mocks.reconcileRuns.mockResolvedValue({ cancelled: 0, cleaned: 0 });
     mocks.startCleanups.mockResolvedValue(0);
+    mocks.expireClarifications.mockResolvedValue({ expired: 0, retryable: 0, cleanupFailed: 0 });
     mocks.listDispatchBlockingApprovals.mockResolvedValue([]);
     mocks.getApproval.mockResolvedValue(null);
     mocks.rejectUndispatchableApproval.mockResolvedValue(undefined);
     mocks.dispatchPlanApproved.mockResolvedValue({ status: "run_in_flight" });
   });
 
-  it("recovers and protects answered checkpoints before discovering generic ticket work", async () => {
+  it("protects same-run clarifications before discovering generic ticket work", async () => {
     const response = await request();
 
     expect(response.status).toBe(200);
-    expect(state.order.slice(0, 6)).toEqual([
-      "reconcile-clarifications",
-      "recover-clarification-parking",
-      "recover-clarification-provider-parking",
-      "recover-clarifications",
-      "protect-clarifications",
-      "discover",
-    ]);
+    expect(state.order.slice(0, 2)).toEqual(["protect-clarifications", "discover"]);
     expect(mocks.classifyProtectedClarifications).toHaveBeenCalledOnce();
     expect(mocks.listProtectedClarifications).not.toHaveBeenCalled();
-    expect(mocks.recoverClarificationProviderParking).toHaveBeenCalledWith({
-      db: { db: true },
-      runRegistry: expect.anything(),
-      issueTracker: expect.anything(),
-      messaging: expect.anything(),
-      dashboardOrigin: "https://dashboard.example",
-      target: { name: "Backlog", transitionId: "41" },
-    });
+    expect(mocks.recoverClarificationProviderParking).not.toHaveBeenCalled();
     expect(state.order).toContain("dispatch:AIW-2");
     expect(state.order).not.toContain("dispatch:AIW-1");
     expect(mocks.reconcileRuns).toHaveBeenCalledWith(

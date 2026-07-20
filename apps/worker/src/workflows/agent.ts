@@ -1,4 +1,4 @@
-import { getWorkflowMetadata } from "workflow";
+import { createHook, getWorkflowMetadata } from "workflow";
 import { branchForTicket } from "../lib/branch-prefix.js";
 import { ticketRunUrl, ticketPageUrl, hasDashboardLinkComment } from "../lib/dashboard-links.js";
 import { computeUsageTotals, type UsageTotals } from "../sandbox/usage.js";
@@ -17,7 +17,6 @@ import type { SelectedRepository } from "../adapters/vcs/repository-directory.js
 import {
   buildRuntimeGraph,
   executeGraph,
-  type InterpreterControlState,
   type RuntimeGraph,
   type StepsRecord,
 } from "../workflow-definition/interpreter.js";
@@ -30,14 +29,11 @@ import type {
 import { resolveBlockAgent, resolveRunDefaultKind } from "../workflow-definition/resolve-agent.js";
 import { resolveTicketMoveTarget } from "./ticket-move-target.js";
 import {
-  BUILTIN_FALLBACK_DEFINITION_VERSION,
   type AgentWorkflowInput,
-  type WorkflowDefinitionVersionPin,
 } from "./agent-input.js";
 import type { TicketTransitionOwner } from "../lib/ticket-transition.js";
 import { moveTicketWithIntentStep } from "./ticket-transition-step.js";
 import type { BlockExecuteFn, EngineCtx } from "./blocks/types.js";
-import type { ClarificationRuntimeContext } from "../db/clarifications-schema.js";
 import type { HumanDecision } from "../lib/human-decisions-memory.js";
 import type { WorkspacePublicationResult } from "./workspace-publication.js";
 import type { WorkspaceManifest } from "../sandbox/repo-workspace.js";
@@ -331,29 +327,6 @@ function publicationPrForTelemetry(
   return primary ? { url: primary.url, number: primary.id } : null;
 }
 
-/** Rehydrate only predecessor state that later blocks or terminal telemetry consume. */
-export function restoreClarificationRuntimeState(
-  context: ClarificationRuntimeContext | null | undefined,
-) {
-  const publication = context?.publication ?? null;
-  return {
-    implementationKind: context?.implementationKind ?? undefined,
-    implementationModel: context?.implementationModel ?? undefined,
-    publication,
-    clarifications: context?.clarifications
-      ? context.clarifications.map((round) => ({
-          ...round,
-          questions: [...round.questions],
-        }))
-      : undefined,
-    phaseUsages: { ...(context?.phaseUsages ?? {}) },
-    phaseModels: { ...(context?.phaseModels ?? {}) },
-    activeModel: context?.activeModel ?? context?.implementationModel ?? undefined,
-    prForTelemetry:
-      context?.prForTelemetry ?? publicationPrForTelemetry(publication),
-  };
-}
-
 /** Append one durable answer round without duplicating a retry of the same answer. */
 export function appendClarificationRound(
   history: HumanDecision[] | undefined,
@@ -429,7 +402,7 @@ export function entryOwnsClarificationThread(
     return false;
   }
   const kind = typeof entry === "string" ? entry : entry.kind;
-  return kind === "ticket" || kind === "clarification_answered";
+  return kind === "ticket";
 }
 
 function triggerTypeFor(entry: AgentWorkflowInput): WorkflowBlockType {
@@ -899,26 +872,17 @@ export function clarificationExitDisposition(providerParked: boolean): {
 export async function parkForClarificationStep(
   ticketId: string,
   backlogTarget: IssueTrackerMoveTarget,
-  clarificationRequestId: string,
+  _clarificationRequestId: string,
   owner: TicketTransitionOwner,
 ): Promise<boolean> {
   "use step";
   const { getDb } = await import("../db/client.js");
-  const { claimClarificationProviderParking } = await import(
-    "../clarifications/store.js"
-  );
   const { createStepAdapters } = await import("../lib/step-adapters.js");
   const { NEEDS_CLARIFICATION_LABEL } = await import("../lib/labels.js");
   const { updateTicketLabelsWithIntent } = await import(
     "../lib/ticket-label-mutation.js"
   );
   const db = getDb();
-  // Claim the unanswerable provider phase before any external mutation. If
-  // recovery already advanced it, skip Jira entirely; if this call wins, the
-  // question cannot publish until the provider phase is completed below.
-  if (!(await claimClarificationProviderParking(db, clarificationRequestId))) {
-    return false;
-  }
   const { issueTracker } = createStepAdapters();
   // No Jira comment: the questions live durably in the clarification store and
   // the overview reads awaiting state from the DB. The label is ticket-status
@@ -1244,64 +1208,28 @@ export async function agentWorkflow(input: string | AgentWorkflowInput) {
         ownerToken: `legacy:${workflowRunId}`,
       }
     : input;
-  let clarificationWinnerRecorded = false;
-  let outcome: "success" | "failed" | "awaiting" | undefined;
-  try {
-    if (!legacyInput) {
-      const {
-        acknowledgeApprovalDispatchStep,
-        acknowledgePendingTriggerStep,
-        acknowledgePrTriggerDispatchStep,
-        bindWorkflowCandidateStep,
-        prepareClarificationContinuationStep,
-        recordClarificationDispatchWinnerStep,
-      } = await import("./run-ownership-steps.js");
-      const bound = await bindWorkflowCandidateStep(
-        entry.subjectKey,
-        entry.ownerToken,
-        workflowRunId,
-      );
-      if (!bound) return;
-      await acknowledgeApprovalDispatchStep(entry, workflowRunId);
-      if (!(await acknowledgePrTriggerDispatchStep(entry, workflowRunId))) return;
-      if (entry.kind === "clarification_answered") {
-        clarificationWinnerRecorded = await recordClarificationDispatchWinnerStep(
-          entry.clarificationRequestId,
-          entry.ownerToken,
-          workflowRunId,
-        );
-        if (!clarificationWinnerRecorded) return;
-        if (!(await prepareClarificationContinuationStep(entry, workflowRunId))) {
-          return;
-        }
-      }
-      // A drained event is consumed only by the candidate that won owner CAS,
-      // before ticket reads, notifications, sandbox creation, or any block.
-      await acknowledgePendingTriggerStep(entry);
-    }
-
-    outcome = await agentWorkflowBody(entry, workflowRunId);
-  } finally {
-    if (
-      clarificationWinnerRecorded &&
-      entry.kind === "clarification_answered" &&
-      outcome !== "success" &&
-      outcome !== "awaiting"
-    ) {
-      const { clearClarificationDispatchWinnerStep } = await import(
-        "./run-ownership-steps.js"
-      );
-      await clearClarificationDispatchWinnerStep(
-        entry.clarificationRequestId,
-        entry.ownerToken,
-        workflowRunId,
-      ).catch(() => false);
-    }
+  if (!legacyInput) {
+    const {
+      acknowledgeApprovalDispatchStep,
+      acknowledgePendingTriggerStep,
+      acknowledgePrTriggerDispatchStep,
+      bindWorkflowCandidateStep,
+    } = await import("./run-ownership-steps.js");
+    const bound = await bindWorkflowCandidateStep(
+      entry.subjectKey,
+      entry.ownerToken,
+      workflowRunId,
+    );
+    if (!bound) return;
+    await acknowledgeApprovalDispatchStep(entry, workflowRunId);
+    if (!(await acknowledgePrTriggerDispatchStep(entry, workflowRunId))) return;
+    await acknowledgePendingTriggerStep(entry);
   }
+  await agentWorkflowBody(entry, workflowRunId);
 }
 
 async function agentWorkflowBody(
-  deliveryEntry: AgentWorkflowInput,
+  entry: AgentWorkflowInput,
   workflowRunId: string,
 ): Promise<"success" | "failed" | "awaiting" | undefined> {
   const budgetStartedAtMs = await readRunBudgetClockStep();
@@ -1323,26 +1251,6 @@ async function agentWorkflowBody(
       ? { name: env.COLUMN_AI_REVIEW, transitionId: env.JIRA_AI_REVIEW_TRANSITION_ID }
       : env.COLUMN_AI_REVIEW;
 
-  const { loadClarificationCheckpointStep } =
-    await import("./clarification-checkpoint-steps.js");
-  const resumeCheckpoint =
-    deliveryEntry.kind === "clarification_answered"
-      ? await loadClarificationCheckpointStep(
-          deliveryEntry.clarificationRequestId,
-          deliveryEntry.ownerToken,
-        )
-      : null;
-  const { restoreClarificationOrigin } = await import("./agent-input.js");
-  const entry: AgentWorkflowInput = resumeCheckpoint
-    ? restoreClarificationOrigin(resumeCheckpoint.originEntry, {
-        subjectKey: deliveryEntry.subjectKey,
-        ownerToken: deliveryEntry.ownerToken,
-        clarificationRequestId: resumeCheckpoint.id,
-      })
-    : deliveryEntry;
-  const restoredRuntime = restoreClarificationRuntimeState(
-    resumeCheckpoint?.runtimeContext,
-  );
   const ticketId = entry.ticketKey ?? entry.subjectKey;
   const transitionOwner: TicketTransitionOwner = {
     subjectKey: entry.subjectKey,
@@ -1353,17 +1261,6 @@ async function agentWorkflowBody(
   const { resolveWorkflowTicketStep } = await import("./workflow-ticket.js");
   const ticket = await resolveWorkflowTicketStep(entry, env.COLUMN_AI);
   if (!ticket) return;
-
-  // A clarification continuation intentionally skips broad re-pickup
-  // housekeeping because superseding pending rows is unsafe on replay. After
-  // winner validation, perform only the idempotent clarification-label removal.
-  if (resumeCheckpoint && entry.ticketKey) {
-    const { repairClarificationLabelStep } = await import("./run-ownership-steps.js");
-    await repairClarificationLabelStep(ticket.identifier, transitionOwner).catch((error) => {
-      if (isRunControlError(error)) throw error;
-      console.error("Clarification label repair failed:", error);
-    });
-  }
 
   // Re-pickup housekeeping (strip the awaiting-input label, supersede any pending
   // clarification, flip parked predecessor runs off "awaiting"). Gated to the
@@ -1398,7 +1295,7 @@ async function agentWorkflowBody(
   const prompts = await loadPrompts();
 
   const { loadWorkflowDefinitionFor } = await import("./definition-step.js");
-  const entryTriggerType = resumeCheckpoint?.originTriggerType ?? triggerTypeFor(entry);
+  const entryTriggerType = triggerTypeFor(entry);
   // An approved plan pins the definition version that produced it, so the run
   // replays the exact graph the human reviewed rather than the current head.
   const pinnedVersion = "definitionVersion" in entry ? entry.definitionVersion : undefined;
@@ -1408,18 +1305,6 @@ async function agentWorkflowBody(
       `No runnable workflow definition for trigger ${entryTriggerType}; skipping run for ${ticket.identifier}`,
     );
     return;
-  }
-  if (resumeCheckpoint) {
-    const loadedPin: WorkflowDefinitionVersionPin =
-      plan.version ?? BUILTIN_FALLBACK_DEFINITION_VERSION;
-    if (
-      plan.definitionId !== resumeCheckpoint.definitionId ||
-      loadedPin !== resumeCheckpoint.definitionVersionPin
-    ) {
-      throw new Error(
-        `clarification checkpoint ${resumeCheckpoint.id} definition pin does not match the loaded workflow`,
-      );
-    }
   }
   if (entry.kind === "pr_trigger" && entry.scope === "any") {
     const issues = await validateReviewSafePlanStep(plan.nodes, plan.edges);
@@ -1433,9 +1318,7 @@ async function agentWorkflowBody(
     ...(plan.budgets?.maxTokens !== undefined ? { maxTokens: plan.budgets.maxTokens } : {}),
     ...(plan.budgets?.maxCostUsd !== undefined ? { maxCostUsd: plan.budgets.maxCostUsd } : {}),
   };
-  let budgetState: RunBudgetState = resumeCheckpoint
-    ? { ...resumeCheckpoint.budgetState }
-    : createRunBudgetState();
+  let budgetState: RunBudgetState = createRunBudgetState();
   let lastBudgetClockMs = budgetStartedAtMs;
   const observeBudgetAtBoundary = async (
     requireRemainingDuration: boolean,
@@ -1473,12 +1356,8 @@ async function agentWorkflowBody(
     }).catch(() => {});
   await writeBlockStatuses();
 
-  const phaseUsages: Record<string, PhaseUsage | null> = {
-    ...restoredRuntime.phaseUsages,
-  };
-  const phaseModels: Record<string, string> = {
-    ...restoredRuntime.phaseModels,
-  };
+  const phaseUsages: Record<string, PhaseUsage | null> = {};
+  const phaseModels: Record<string, string> = {};
   // The cumulative maps feed downstream notifications and the next checkpoint.
   // Run-local maps keep per-run telemetry additive instead of charging restored
   // predecessor usage a second time.
@@ -1498,8 +1377,7 @@ async function agentWorkflowBody(
     }
   };
   // Captured on the success path; written as run telemetry in the finally.
-  let prForTelemetry: { url: string; number: number } | null =
-    restoredRuntime.prForTelemetry;
+  let prForTelemetry: { url: string; number: number } | null = null;
   // Authoritative terminal status for telemetry, written in the finally on
   // every exit path. Defaults to "failed". The genuine PR-opened success flips
   // it to "success"; the clarification exits record "awaiting" (the run is
@@ -1508,12 +1386,9 @@ async function agentWorkflowBody(
   // "failed".
   let runOutcome: "success" | "failed" | "awaiting" = "failed";
   let terminalBudgetFailure: RunBudgetFailure | null = null;
-  // The clarification this run must cross the durable owner/sandbox parking
-  // boundary for. This state machine, not best-effort telemetry, gates handoff.
-  let awaitingClarificationId: string | null = null;
   // Seeded with the run default model once prepare_workspace provisions the
   // sandbox, then set to the implementation block's model once it runs.
-  let activeModel: string | undefined = restoredRuntime.activeModel;
+  let activeModel: string | undefined;
   let priceLookup: ((m: string) => { input: number; cached_input: number; output: number } | null) | undefined;
   // Returns the formatted usage report when any phase has produced usage,
   // otherwise undefined so the messaging formatter can omit the trailing block.
@@ -1528,29 +1403,21 @@ async function agentWorkflowBody(
     }
 
     const graph = buildRuntimeGraph({ nodes: plan.nodes, edges: plan.edges });
-    const entryTrigger = resumeCheckpoint
-      ? plan.nodes.find(
-          (node) =>
-            node.id === resumeCheckpoint.originTriggerNodeId &&
-            node.type === resumeCheckpoint.originTriggerType,
-        )
-      : plan.nodes.find((node) => node.type === entryTriggerType);
+    const entryTrigger = plan.nodes.find((node) => node.type === entryTriggerType);
     if (!entryTrigger || !graph.nodes.has(entryTrigger.id)) {
       throw new Error("workflow definition has no runnable trigger block");
     }
     const branchName =
-      resumeCheckpoint?.workspaceManifest?.repositories[0]?.branchName ??
-      (entry.kind === "pr_trigger" && !entry.ticketKey
+      entry.kind === "pr_trigger" && !entry.ticketKey
         ? entry.pr.headRef
-        : branchForTicket(ticket.identifier));
+        : branchForTicket(ticket.identifier);
     const downloadedAttachments = await fetchAttachments(ticket.identifier, ticket.attachments);
 
-    // Ticket-backed history is reloaded from the DB. Ticketless continuations
-    // retain prior rounds in the checkpoint itself because there is no Jira key
-    // to query; either source is then extended with the current answer.
+    // Ticket-backed history is reloaded from the DB. Same-run clarification
+    // answers are appended to this local context when their hook resumes.
     let clarificationHistory:
       | Array<{ questions: string[]; answer: string; answeredBy?: string; answeredAt?: string }>
-      | undefined = restoredRuntime.clarifications;
+      | undefined;
     if (entry.ticketKey) {
       try {
         for (const round of await loadClarificationHistoryStep(ticket.identifier)) {
@@ -1559,18 +1426,6 @@ async function agentWorkflowBody(
       } catch (err) {
         await logClarificationHistoryFailure(ticket.identifier, errorMessage(err));
       }
-    }
-    if (resumeCheckpoint) {
-      clarificationHistory = appendClarificationRound(clarificationHistory, {
-        questions: resumeCheckpoint.questions,
-        answer: resumeCheckpoint.answer,
-        ...(resumeCheckpoint.answeredByLabel
-          ? { answeredBy: resumeCheckpoint.answeredByLabel }
-          : {}),
-        ...(resumeCheckpoint.answeredAt
-          ? { answeredAt: resumeCheckpoint.answeredAt }
-          : {}),
-      });
     }
 
     const ticketData = {
@@ -1584,10 +1439,7 @@ async function agentWorkflowBody(
         ? { clarifications: clarificationHistory }
         : {}),
     };
-    const refreshedTriggerOutput = triggerOutputWithTicketContext(entry, ticketData);
-    const triggerOutput: BlockOutput = resumeCheckpoint
-      ? { ...resumeCheckpoint.triggerPayload, ...refreshedTriggerOutput }
-      : refreshedTriggerOutput;
+    const triggerOutput: BlockOutput = triggerOutputWithTicketContext(entry, ticketData);
 
     // Per-ticket agent override via labels (e.g. `agent:codex`). Falls
     // back to env.AGENT_KIND when the ticket has no override or the labels
@@ -1606,7 +1458,7 @@ async function agentWorkflowBody(
     // fail closed instead of depending on network timing during execution.
     const pricedModels = modelsRequiringPriceLookupForRun(
       graph,
-      resumeCheckpoint?.waitingNodeId ?? entryTrigger.id,
+      entryTrigger.id,
       runDefaultKind,
       {
       claude: env.CLAUDE_MODEL,
@@ -1632,15 +1484,15 @@ async function agentWorkflowBody(
       priceLookup = (model) => priceMap.get(model) ?? null;
     }
 
-    const state = {
-      implementationModel: restoredRuntime.implementationModel ?? defaultModel,
-      implementationKind: restoredRuntime.implementationKind,
+    const state: {
+      implementationModel: string;
+      implementationKind: AgentKind | undefined;
+      attempt: number;
+    } = {
+      implementationModel: defaultModel,
+      implementationKind: undefined,
       attempt: 1,
     };
-
-    const { researchPlanFromCheckpoint, restoreCheckpointSandboxReferences } =
-      await import("../clarifications/checkpoint.js");
-    let resumeSteps = resumeCheckpoint?.priorSteps;
 
     const ctx: EngineCtx = {
       runId: workflowRunId,
@@ -1654,12 +1506,12 @@ async function agentWorkflowBody(
         : {}),
       branchName,
       sandboxId: null,
-      workspaceManifest: resumeCheckpoint?.workspaceManifest ?? null,
+      workspaceManifest: null,
       agentSandboxIds: {},
       sandboxIds: new Set<string>(),
-      selectedRepositories: resumeCheckpoint?.workspaceManifest?.repositories ?? [],
+      selectedRepositories: [],
       repositoryContexts: [],
-      preSandboxAdditions: resumeCheckpoint?.runtimeContext.preSandboxAdditions ?? {
+      preSandboxAdditions: {
         research: [],
         implementation: [],
         review: [],
@@ -1667,10 +1519,8 @@ async function agentWorkflowBody(
       researchPlanMarkdown:
         entry.kind === "plan_approved"
           ? entry.approvedPlan.markdown
-          : resumeSteps
-            ? researchPlanFromCheckpoint(resumeSteps)
-            : "",
-      publication: restoredRuntime.publication,
+          : "",
+      publication: null,
       runDefaultKind,
       defaults: { claude: env.CLAUDE_MODEL, codex: env.CODEX_MODEL },
       prompts,
@@ -1697,96 +1547,25 @@ async function agentWorkflowBody(
       },
     };
 
-    if (resumeCheckpoint?.snapshotId) {
-      if (!resumeCheckpoint.sourceSandboxId) {
-        throw new Error(
-          `clarification checkpoint ${resumeCheckpoint.id} lost its source sandbox metadata`,
-        );
-      }
-      const { restoreClarificationSandboxStep } =
-        await import("./clarification-snapshot-steps.js");
-      const { ensureArthurTask } = await import("./blocks/prepare-workspace.js");
-      const arthurTaskId = await ensureArthurTask(ctx);
-      const requiredKinds = new Set<AgentKind>([runDefaultKind]);
-      for (const node of plan.nodes) {
-        if (
-          node.type !== "implementation_agent" &&
-          node.type !== "review_agent" &&
-          node.type !== "fix_agent" &&
-          node.type !== "generic_agent"
-        ) {
-          continue;
-        }
-        if (node.type === "generic_agent" && node.params.workspaceMode === "none") continue;
-        requiredKinds.add(resolveAgent(node.params).kind);
-      }
-      const restoreBudget = await observeBudgetAtBoundary(true);
-      if (restoreBudget.check.status !== "ok") {
-        throw new RunBudgetError(restoreBudget.check);
-      }
-      const restored = await restoreClarificationSandboxStep({
-        snapshotId: resumeCheckpoint.snapshotId,
-        subjectKey: entry.subjectKey,
-        ownerToken: entry.ownerToken,
-        timeoutMs: Math.max(1, Math.floor(restoreBudget.remainingDurationMs)),
-        agents: [...requiredKinds].map((kind) => ({
-          kind,
-          model: kind === "codex" ? env.CODEX_MODEL : env.CLAUDE_MODEL,
-        })),
-        arthurTaskId,
-      });
-      ctx.sandboxId = restored.sandboxId;
-      ctx.sandboxIds.add(restored.sandboxId);
-      resumeSteps = restoreCheckpointSandboxReferences(
-        resumeCheckpoint.priorSteps,
-        resumeCheckpoint.sourceSandboxId,
-        restored.sandboxId,
-      );
-      if (ctx.selectedRepositories.length > 0) {
-        const { blockFetchPrContextsStep } = await import(
-          "./blocks/fetch-pr-context.js"
-        );
-        ctx.repositoryContexts = await blockFetchPrContextsStep(
-          ctx.selectedRepositories,
-        );
-      }
-    }
-
     try {
-      const persistAndParkClarification = async (
+      const awaitClarification = async (
         questions: string[],
         nodeId?: string,
         suggestedAnswers?: string[],
         checkpointSteps?: StepsRecord,
-        interpreterState?: InterpreterControlState,
-      ): Promise<void> => {
+      ): Promise<string> => {
         if (!nodeId || !checkpointSteps) {
-          throw new Error("clarification checkpoint is missing its waiting node or prior outputs");
-        }
-        if (entry.kind === "clarification_answered") {
-          throw new Error("clarification continuation lost its original trigger context");
-        }
-        const explicitPin =
-          "definitionVersion" in entry ? entry.definitionVersion : undefined;
-        const definitionVersionPin = plan.version ?? explicitPin;
-        if (definitionVersionPin === undefined) {
-          throw new Error(
-            "clarification cannot park an unpinned workflow definition; retry from a pinned ticket dispatch",
-          );
+          throw new Error("clarification is missing its waiting block context");
         }
 
         const {
-          completeClarificationCheckpointStep,
-          completeClarificationProviderParkingStep,
-          createClarificationCheckpointStep,
-          markClarificationSnapshotCleanupFailedBySnapshotIdStep,
-          markClarificationSnapshotDeletedBySnapshotIdStep,
-          newClarificationCheckpointExpiryStep,
-          publishClarificationCheckpointStep,
-          updateClarificationCheckpointBudgetStep,
+          markClarificationHookCleanupStep,
+          prepareClarificationHookStep,
+          publishClarificationHookStep,
+          recordClarificationHookSnapshotStep,
+          supersedeClarificationHookStep,
           verifyWorkspaceManifestStep,
-        } = await import("./clarification-checkpoint-steps.js");
-        const { normalizeClarificationOrigin } = await import("./agent-input.js");
+        } = await import("./clarification-hook-steps.js");
         const workspaceManifest = ctx.workspaceManifest;
         if (ctx.sandboxId) {
           if (!workspaceManifest) {
@@ -1796,148 +1575,177 @@ async function agentWorkflowBody(
         } else if (workspaceManifest) {
           throw new Error("trusted workspace manifest exists without a code sandbox");
         }
-        const expiresAt = await newClarificationCheckpointExpiryStep();
-        const checkpoint = await createClarificationCheckpointStep({
+
+        const clarification = await prepareClarificationHookStep({
           ticketKey: entry.ticketKey ?? null,
           subjectKey: entry.subjectKey,
-          ownerToken: entry.ownerToken,
           runId: workflowRunId,
-          waitingNodeId: nodeId,
+          blockId: nodeId,
           definitionId: plan.definitionId,
-          definitionVersionPin,
-          originEntry: normalizeClarificationOrigin(entry),
-          originTriggerNodeId: entryTrigger.id,
-          originTriggerType: entryTrigger.type,
-          triggerPayload: triggerOutput,
-          priorSteps: checkpointSteps,
-          interpreterState: interpreterState ?? { attempts: {}, executions: 0 },
-          budgetState,
-          runtimeContext: {
-            preSandboxAdditions: ctx.preSandboxAdditions,
-            implementationKind: state.implementationKind ?? null,
-            implementationModel: state.implementationModel,
-            publication: ctx.publication,
-            clarifications: ctx.clarifications ?? [],
-            phaseUsages,
-            phaseModels,
-            activeModel: activeModel ?? null,
-            prForTelemetry:
-              prForTelemetry ?? publicationPrForTelemetry(ctx.publication),
-          },
-          workspaceManifest,
-          sourceSandboxId: ctx.sandboxId,
-          expiresAt,
+          definitionVersion: plan.version,
           questions,
           suggestedAnswers: suggestedAnswers ?? null,
         });
-        const clarificationId = checkpoint.id;
-
-        if (ctx.sandboxId) {
-          if (!checkpoint.snapshotRequestedAt) {
+        const hook = createHook<
+          | {
+              answer: string;
+              answeredById: string;
+              answeredByLabel: string;
+              answeredAt: string;
+            }
+          | { expired: true }
+        >({ token: clarification.hookToken });
+        let snapshot:
+          | { snapshotId: string; sourceSandboxId: string; expiresAt: string }
+          | undefined;
+        try {
+          const conflict = await hook.getConflict();
+          if (conflict) {
             throw new Error(
-              `clarification checkpoint ${clarificationId} lost its snapshot attempt boundary`,
+              `clarification hook ${clarification.hookToken} is already owned by run ${conflict.runId}`,
             );
           }
-          const snapshotBudget = await observeBudgetAtBoundary(true);
-          if (snapshotBudget.check.status !== "ok") {
-            throw new RunBudgetError(snapshotBudget.check);
-          }
-          const { snapshotClarificationSandboxStep } =
-            await import("./clarification-snapshot-steps.js");
-          await snapshotClarificationSandboxStep({
-            subjectKey: entry.subjectKey,
-            ownerToken: entry.ownerToken,
-            clarificationId,
-            sandboxId: ctx.sandboxId,
-            snapshotRequestedAt: checkpoint.snapshotRequestedAt,
-            timeoutMs: Math.max(1, Math.floor(snapshotBudget.remainingDurationMs)),
-          });
-          const afterSnapshot = await observeBudgetAtBoundary(false);
-          await updateClarificationCheckpointBudgetStep(
-            clarificationId,
-            budgetState,
-            afterSnapshot.check.status === "ok" ? null : afterSnapshot.check,
-          );
-          if (afterSnapshot.check.status !== "ok") {
-            throw new RunBudgetError(afterSnapshot.check);
-          }
-        } else {
-          await completeClarificationCheckpointStep(clarificationId, null);
-        }
 
-        let providerParked = false;
-        if (entry.ticketKey) {
-          try {
-            providerParked = await parkForClarificationStep(
-              ticketId,
-              backlogMoveTarget(),
-              clarificationId,
-              transitionOwner,
-            );
-          } catch (error) {
-            if (isRunControlError(error)) throw error;
-            console.error(
-              `Clarification ticket parking failed for ${clarificationId}:`,
-              error,
-            );
-            // Keep the question unanswerable until polling settles the
-            // ambiguous provider boundary and re-drives Backlog under the
-            // exact parked predecessor. The outer finally still parks the
-            // owner and preserves its snapshot for that recovery.
-            awaitingClarificationId = clarificationId;
-            runOutcome = "awaiting";
-            return;
-          }
-          await completeClarificationProviderParkingStep(clarificationId);
-        }
-
-        const replacedSnapshots = await publishClarificationCheckpointStep(
-          clarificationId,
-        );
-        awaitingClarificationId = clarificationId;
-        runOutcome = "awaiting";
-        if (replacedSnapshots.length > 0) {
-          const { deleteClarificationSnapshotStep } =
-            await import("./clarification-snapshot-steps.js");
-          for (const snapshotId of replacedSnapshots) {
-            try {
-              await deleteClarificationSnapshotStep(snapshotId);
-              await markClarificationSnapshotDeletedBySnapshotIdStep(snapshotId);
-            } catch (error) {
-              await markClarificationSnapshotCleanupFailedBySnapshotIdStep(
-                snapshotId,
-                errorMessage(error),
-              );
+          if (ctx.sandboxId) {
+            const snapshotBudget = await observeBudgetAtBoundary(true);
+            if (snapshotBudget.check.status !== "ok") {
+              throw new RunBudgetError(snapshotBudget.check);
+            }
+            const { snapshotClarificationSandboxStep } =
+              await import("./clarification-snapshot-steps.js");
+            snapshot = await snapshotClarificationSandboxStep({
+              subjectKey: entry.subjectKey,
+              ownerToken: entry.ownerToken,
+              clarificationId: clarification.id,
+              sandboxId: ctx.sandboxId,
+              snapshotRequestedAt: clarification.snapshotRequestedAt,
+              timeoutMs: Math.max(1, Math.floor(snapshotBudget.remainingDurationMs)),
+            });
+            await recordClarificationHookSnapshotStep(clarification.id, snapshot);
+            const afterSnapshot = await observeBudgetAtBoundary(false);
+            if (afterSnapshot.check.status !== "ok") {
+              throw new RunBudgetError(afterSnapshot.check);
             }
           }
-        }
 
-        if (entry.ticketKey) {
-          const disposition = clarificationExitDisposition(providerParked);
-          runOutcome = disposition.outcome;
-          if (!disposition.notify) return;
-          await notifyTicketBestEffort(ticket.identifier, {
-            kind: "needs_clarification",
-            dashboardUrl: ticketRunUrl(env.DASHBOARD_ORIGIN, ticket.identifier, workflowRunId),
-            usageReport: usageReportOrUndefined(),
-          }, transitionOwner);
+          await publishClarificationHookStep(clarification.id);
+          if (entry.ticketKey) {
+            await parkForClarificationStep(
+              ticketId,
+              backlogMoveTarget(),
+              clarification.id,
+              transitionOwner,
+            ).catch((error) => {
+              if (isRunControlError(error)) throw error;
+              console.error(`Clarification ticket parking failed for ${clarification.id}:`, error);
+              return false;
+            });
+            await notifyTicketBestEffort(ticket.identifier, {
+              kind: "needs_clarification",
+              dashboardUrl: ticketRunUrl(env.DASHBOARD_ORIGIN, ticket.identifier, workflowRunId),
+              usageReport: usageReportOrUndefined(),
+            }, transitionOwner);
+          }
+
+          const answered = await hook;
+          lastBudgetClockMs = await readRunBudgetClockStep();
+          if ("expired" in answered) {
+            throw new Error("clarification expired before it was answered");
+          }
+          // Hook suspension is free wall time; only active work counts against
+          // the run duration budget.
+          if (entry.ticketKey) {
+            const { repairClarificationLabelStep } = await import(
+              "./run-ownership-steps.js"
+            );
+            await repairClarificationLabelStep(ticket.identifier, transitionOwner);
+          }
+
+          if (snapshot) {
+            const { restoreCheckpointSandboxReferences } = await import(
+              "../clarifications/checkpoint.js"
+            );
+            const { restoreClarificationSandboxStep } = await import(
+              "./clarification-snapshot-steps.js"
+            );
+            const { ensureArthurTask } = await import("./blocks/prepare-workspace.js");
+            const requiredKinds = new Set<AgentKind>([runDefaultKind]);
+            for (const definitionNode of plan.nodes) {
+              if (
+                definitionNode.type !== "implementation_agent" &&
+                definitionNode.type !== "review_agent" &&
+                definitionNode.type !== "fix_agent" &&
+                definitionNode.type !== "generic_agent"
+              ) continue;
+              if (
+                definitionNode.type === "generic_agent" &&
+                definitionNode.params.workspaceMode === "none"
+              ) continue;
+              requiredKinds.add(resolveAgent(definitionNode.params).kind);
+            }
+            const restoreBudget = await observeBudgetAtBoundary(true);
+            if (restoreBudget.check.status !== "ok") {
+              throw new RunBudgetError(restoreBudget.check);
+            }
+            const restored = await restoreClarificationSandboxStep({
+              snapshotId: snapshot.snapshotId,
+              subjectKey: entry.subjectKey,
+              ownerToken: entry.ownerToken,
+              timeoutMs: Math.max(1, Math.floor(restoreBudget.remainingDurationMs)),
+              agents: [...requiredKinds].map((kind) => ({
+                kind,
+                model: kind === "codex" ? env.CODEX_MODEL : env.CLAUDE_MODEL,
+              })),
+              arthurTaskId: await ensureArthurTask(ctx),
+            });
+            ctx.sandboxId = restored.sandboxId;
+            ctx.sandboxIds.add(restored.sandboxId);
+            const restoredSteps = restoreCheckpointSandboxReferences(
+              checkpointSteps,
+              snapshot.sourceSandboxId,
+              restored.sandboxId,
+            );
+            for (const key of Object.keys(checkpointSteps)) delete checkpointSteps[key];
+            Object.assign(checkpointSteps, restoredSteps);
+            if (ctx.selectedRepositories.length > 0) {
+              const { blockFetchPrContextsStep } = await import("./blocks/fetch-pr-context.js");
+              ctx.repositoryContexts = await blockFetchPrContextsStep(ctx.selectedRepositories);
+            }
+          }
+
+          const round = {
+            questions,
+            answer: answered.answer,
+            answeredBy: answered.answeredByLabel,
+            answeredAt: answered.answeredAt,
+          };
+          clarificationHistory = appendClarificationRound(clarificationHistory, round);
+          ctx.clarifications = appendClarificationRound(ctx.clarifications, round);
+
+          if (snapshot) {
+            const { deleteClarificationSnapshotStep } = await import(
+              "./clarification-snapshot-steps.js"
+            );
+            try {
+              await deleteClarificationSnapshotStep(snapshot.snapshotId);
+              await markClarificationHookCleanupStep(clarification.id, { status: "deleted" });
+            } catch (error) {
+              await markClarificationHookCleanupStep(clarification.id, {
+                status: "failed",
+                error: errorMessage(error),
+              });
+            }
+          }
+          return answered.answer;
+        } catch (error) {
+          await supersedeClarificationHookStep(clarification.id).catch(() => undefined);
+          throw error;
+        } finally {
+          hook.dispose();
         }
       };
 
-      const clarificationExit = async (
-        questions: string[],
-        nodeId?: string,
-        suggestedAnswers?: string[],
-        checkpointSteps?: StepsRecord,
-        interpreterState?: InterpreterControlState,
-      ): Promise<void> =>
-        persistAndParkClarification(
-          questions,
-          nodeId,
-          suggestedAnswers,
-          checkpointSteps,
-          interpreterState,
-        );
+      const clarificationExit = awaitClarification;
 
       const failureExit = async (phase: string, reason: string): Promise<void> => {
         const usageReport = usageReportOrUndefined();
@@ -1961,20 +1769,7 @@ async function agentWorkflowBody(
           terminalStatus: "waiting_for_human" | "failed" | "skipped" | "done";
           postComment?: string;
         },
-        nodeId?: string,
-        checkpointSteps?: StepsRecord,
-        interpreterState?: InterpreterControlState,
       ): Promise<void> => {
-        if (params.terminalStatus === "waiting_for_human") {
-          await persistAndParkClarification(
-            [params.postComment ?? "Waiting for human input."],
-            nodeId,
-            undefined,
-            checkpointSteps,
-            interpreterState,
-          );
-          return;
-        }
         if (params.terminalStatus === "done" || params.terminalStatus === "skipped") {
           if (params.postComment && entry.ticketKey) {
             await postTicketComment(ticket.identifier, params.postComment, transitionOwner);
@@ -2452,20 +2247,6 @@ async function agentWorkflowBody(
           await writeBlockStatuses();
         },
         async onBlockFinish(nodeId, state) {
-          if (
-            resumeCheckpoint &&
-            nodeId === resumeCheckpoint.waitingNodeId &&
-            state.status === "ok"
-          ) {
-            const { consumeClarificationCheckpointStep } = await import(
-              "./run-ownership-steps.js"
-            );
-            await consumeClarificationCheckpointStep(
-              resumeCheckpoint.id,
-              entry.ownerToken,
-              workflowRunId,
-            );
-          }
           reconcileMissingPhaseUsages();
           let guarded = state;
           if (state.output && JSON.stringify(state.output).length > 8192) {
@@ -2485,16 +2266,6 @@ async function agentWorkflowBody(
         graph,
         entryTriggerId: entryTrigger.id,
         triggerOutput,
-        ...(resumeCheckpoint && resumeSteps
-          ? {
-              resume: {
-                waitingNodeId: resumeCheckpoint.waitingNodeId,
-                clarificationAnswer: resumeCheckpoint.answer,
-                priorSteps: resumeSteps,
-                controlState: resumeCheckpoint.interpreterState,
-              },
-            }
-          : {}),
         runValues: {
           id: workflowRunId,
           branchName,
@@ -2587,36 +2358,6 @@ async function agentWorkflowBody(
     // collect) records as unknown, so computeUsageTotals reports
     // costKnown=false instead of a misleading costUsd=0 / costKnown=true.
     reconcileMissingPhaseUsages();
-    if (
-      resumeCheckpoint?.snapshotId &&
-      ((runOutcome as string) === "success" || (runOutcome as string) === "awaiting")
-    ) {
-      const {
-        markClarificationSnapshotCleanupFailedStep,
-        markClarificationSnapshotDeletedStep,
-        scheduleClarificationSnapshotCleanupStep,
-      } = await import("./clarification-checkpoint-steps.js");
-      const snapshotId = await scheduleClarificationSnapshotCleanupStep(
-        resumeCheckpoint.id,
-      ).catch(() => null);
-      if (snapshotId) {
-        try {
-          const { deleteClarificationSnapshotStep } =
-            await import("./clarification-snapshot-steps.js");
-          await deleteClarificationSnapshotStep(snapshotId);
-          await markClarificationSnapshotDeletedStep(resumeCheckpoint.id);
-        } catch (error) {
-          await markClarificationSnapshotCleanupFailedStep(
-            resumeCheckpoint.id,
-            errorMessage(error),
-          ).catch(() => undefined);
-          console.error(
-            `Clarification snapshot cleanup failed for ${resumeCheckpoint.id}:`,
-            error,
-          );
-        }
-      }
-    }
     // Durable cost/usage telemetry, recorded on every exit path (success,
     // clarification, or failure). Best-effort: the step never retries and we
     // swallow errors so telemetry can't break or delay the run — but we LOG
@@ -2649,21 +2390,6 @@ async function agentWorkflowBody(
         err,
       );
     });
-    if ((runOutcome as string) === "awaiting" && awaitingClarificationId) {
-      const { parkClarificationOwnerStep } = await import(
-        "./run-ownership-steps.js"
-      );
-      const parked = await parkClarificationOwnerStep(
-        entry.subjectKey,
-        entry.ownerToken,
-        workflowRunId,
-      );
-      if (!parked) {
-        throw new Error(
-          `clarification ${awaitingClarificationId} could not cross its durable parking boundary`,
-        );
-      }
-    }
   }
   return runOutcome;
 }

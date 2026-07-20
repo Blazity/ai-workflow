@@ -173,42 +173,6 @@ describe("owner-CAS run claims", () => {
     expect(await registry.get(subjectKey)).toBeNull();
   });
 
-  it("does not terminal-release an exact owner while a retained checkpoint protects it", async () => {
-    await registry.reserve({
-      subjectKey,
-      ticketKey: "PROJ-1",
-      ownerToken: "owner-a",
-      kind: "ticket",
-    });
-    await registry.bindRun(subjectKey, "owner-a", "run-winner");
-    await registry.beginParking(subjectKey, "owner-a", "run-winner");
-    await registry.finishParking(subjectKey, "owner-a", "run-winner");
-    await db.insert(clarificationRequests).values({
-      id: "clarification-terminal-release-guard",
-      ticketKey: "PROJ-1",
-      subjectKey,
-      ownerToken: "owner-a",
-      runId: "run-winner",
-      questions: ["Which implementation?"],
-      status: "pending",
-      checkpointState: "ready",
-      publishedAt: new Date(),
-    });
-
-    expect(await registry.release(subjectKey, "owner-a", "run-winner")).toBe(false);
-    expect(await registry.get(subjectKey)).toMatchObject({
-      ownerToken: "owner-a",
-      runId: "run-winner",
-      state: "parked",
-    });
-
-    await db
-      .update(clarificationRequests)
-      .set({ status: "superseded", checkpointState: "cancelled" })
-      .where(eq(clarificationRequests.id, "clarification-terminal-release-guard"));
-    expect(await registry.release(subjectKey, "owner-a", "run-winner")).toBe(true);
-  });
-
   it("closes an exact owner before cancellation cleanup and releases only that closed claim", async () => {
     await registry.reserve({
       subjectKey,
@@ -983,7 +947,7 @@ describe("subject metadata and capacity listing", () => {
     expect(entry?.updatedAt).toBeGreaterThanOrEqual(before - 1_000);
   });
 
-  it("excludes only exact safely parked clarification owners from agent capacity", async () => {
+  it("counts every live run while same-run clarifications are suspended", async () => {
     const parkedSubject = "ticket:jira:PROJ-PARKED";
     const answeredSubject = "ticket:jira:PROJ-ANSWERED";
     const activeSubject = "ticket:jira:PROJ-ACTIVE";
@@ -1114,7 +1078,14 @@ describe("subject metadata and capacity listing", () => {
 
     expect(
       (await registry.listCapacityConsumers()).map((entry) => entry.subjectKey).sort(),
-    ).toEqual([activeSubject, cancellingSubject, expiredSubject, parkingSubject].sort());
+    ).toEqual([
+      parkedSubject,
+      answeredSubject,
+      activeSubject,
+      cancellingSubject,
+      expiredSubject,
+      parkingSubject,
+    ].sort());
     expect((await registry.listAll()).map((entry) => entry.subjectKey).sort()).toEqual(
       [
         parkedSubject,
@@ -1127,7 +1098,7 @@ describe("subject metadata and capacity listing", () => {
     );
   });
 
-  it("keeps ready checkpoints in capacity until the exact owner is durably parked", async () => {
+  it("does not exempt legacy parked clarification rows from capacity", async () => {
     const boundSubject = "ticket:jira:PROJ-BOUND";
     const parkingSubject = "ticket:jira:PROJ-PARKING";
     const wrongOwnerSubject = "ticket:jira:PROJ-WRONG-OWNER";
@@ -1165,7 +1136,7 @@ describe("subject metadata and capacity listing", () => {
     expect(
       (await registry.listCapacityConsumers()).map((entry) => entry.subjectKey).sort(),
     ).toEqual(
-      [boundSubject, parkingSubject, wrongOwnerSubject].sort(),
+      [boundSubject, parkingSubject, wrongOwnerSubject, parkedSubject].sort(),
     );
   });
 

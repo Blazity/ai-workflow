@@ -4,7 +4,6 @@ import { ActiveRunOwnerError } from "../../lib/run-control-errors.js";
 import {
   activeRunSandboxes,
   activeRuns,
-  clarificationRequests,
   failedTickets,
   threadParents,
 } from "../../db/schema.js";
@@ -389,7 +388,6 @@ export class PostgresRunRegistry implements RunRegistryAdapter, ThreadStore {
           eq(activeRuns.runId, runId),
           eq(activeRuns.ticketProviderCallsInFlight, 0),
           noStartedTicketProviderCall(subjectKey, ownerToken, runId),
-          noRetainedClarificationCheckpoint(subjectKey, ownerToken, runId),
           sql`${activeRuns.state} in ('bound', 'parking', 'parked')`,
         ),
       )
@@ -410,40 +408,6 @@ export class PostgresRunRegistry implements RunRegistryAdapter, ThreadStore {
           sql`(
             ${activeRuns.state} <> 'reserved'
             or ${activeRuns.updatedAt} >= now() - (${RESERVATION_BIND_GRACE_MS} * interval '1 millisecond')
-          )`,
-          sql`not (
-            ${activeRuns.state} = 'parked'
-            and exists (
-              select 1
-              from ${clarificationRequests}
-              where ${clarificationRequests.subjectKey} = ${activeRuns.subjectKey}
-                and ${clarificationRequests.ownerToken} = ${activeRuns.ownerToken}
-                and ${clarificationRequests.runId} = ${activeRuns.runId}
-                and ${clarificationRequests.status} in ('pending', 'answered')
-                and ${clarificationRequests.checkpointState} = 'ready'
-                and ${clarificationRequests.publishedAt} is not null
-                and ${clarificationRequests.expiresAt} > now()
-                and (
-                  (
-                    ${clarificationRequests.workspaceManifest} is null
-                    and ${clarificationRequests.snapshotId} is null
-                  )
-                  or (
-                    ${clarificationRequests.workspaceManifest} is not null
-                    and ${clarificationRequests.snapshotId} is not null
-                    and ${clarificationRequests.sourceSandboxId} is not null
-                    and ${clarificationRequests.snapshotExpiresAt} > now()
-                    and ${clarificationRequests.cleanupState} = 'retained'
-                  )
-                )
-                and (
-                  ${clarificationRequests.status} = 'pending'
-                  or (
-                    ${clarificationRequests.successorOwnerToken} is not null
-                    and ${clarificationRequests.dispatchedRunId} is null
-                  )
-                )
-            )
           )`,
         ),
       );
@@ -603,33 +567,6 @@ function noStartedTicketProviderCall(
       AND ${runId === null ? sql`intent.run_id IS NULL` : sql`intent.run_id = ${runId}`}
       AND intent.provider_started_at IS NOT NULL
       AND intent.provider_finished_at IS NULL
-  )`;
-}
-
-function noRetainedClarificationCheckpoint(
-  subjectKey: string,
-  ownerToken: string,
-  runId: string,
-) {
-  return sql`NOT EXISTS (
-    SELECT 1
-    FROM clarification_requests AS checkpoint
-    WHERE checkpoint.subject_key = ${subjectKey}
-      AND checkpoint.owner_token = ${ownerToken}
-      AND checkpoint.run_id = ${runId}
-      AND (
-        (checkpoint.status = 'pending' AND checkpoint.checkpoint_state = 'ready')
-        OR (checkpoint.status = 'answered' AND checkpoint.checkpoint_state = 'ready')
-        OR (
-          checkpoint.status = 'superseded'
-          AND checkpoint.checkpoint_state IN (
-            'provider_parking',
-            'provider_parking_active',
-            'ready'
-          )
-          AND checkpoint.published_at IS NULL
-        )
-      )
   )`;
 }
 

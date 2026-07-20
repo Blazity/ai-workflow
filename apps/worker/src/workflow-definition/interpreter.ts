@@ -105,7 +105,7 @@ export interface ExecuteGraphHooks {
     suggestedAnswers?: string[],
     steps?: StepsRecord,
     controlState?: InterpreterControlState,
-  ): Promise<void>;
+  ): Promise<string | void>;
   failureExit(phase: string, reason: string, nodeId: string): Promise<void>;
   terminate(
     params: {
@@ -330,9 +330,26 @@ export async function executeGraph(opts: {
         if (onExhaust === "human") {
           const label = node.name ?? id;
           const message = `Loop "${label}" exhausted after ${maxAttempts} attempts. How should we proceed?`;
-          await hooks.onBlockFinish(id, { status: "warn", attempt, error: message, output });
-          await hooks.clarificationExit([message], id, undefined, steps, controlState());
-          return { outcome: "stopped", steps };
+          const answer = await hooks.clarificationExit(
+            [message],
+            id,
+            undefined,
+            steps,
+            controlState(),
+          );
+          if (answer === undefined) {
+            await hooks.onBlockFinish(id, { status: "warn", attempt, error: message, output });
+            return { outcome: "stopped", steps };
+          }
+          const answeredOutput: BlockOutput = {
+            status: "exhausted",
+            attempt: maxAttempts,
+            answer,
+          };
+          steps[id] = { output: answeredOutput };
+          await hooks.onBlockFinish(id, { status: "ok", attempt, output: answeredOutput });
+          current = exhaustedTarget;
+          continue;
         }
 
         if (exhaustedTarget !== undefined) {
@@ -354,10 +371,24 @@ export async function executeGraph(opts: {
           | "done";
         const postComment =
           typeof node.params.postComment === "string" ? node.params.postComment : undefined;
-        const output: BlockOutput = { status: terminalStatus };
+        let output: BlockOutput = { status: terminalStatus };
         steps[id] = { output };
-        const finishStatus =
-          terminalStatus === "failed" ? "fail" : terminalStatus === "waiting_for_human" ? "warn" : "ok";
+        if (terminalStatus === "waiting_for_human") {
+          const answer = await hooks.clarificationExit(
+            [postComment ?? "Waiting for human input."],
+            id,
+            undefined,
+            steps,
+            controlState(),
+          );
+          if (answer !== undefined) {
+            output = { status: "done", answer };
+            steps[id] = { output };
+            await hooks.onBlockFinish(id, { status: "ok", attempt, output });
+            return { outcome: "completed", steps };
+          }
+        }
+        const finishStatus = terminalStatus === "failed" ? "fail" : terminalStatus === "waiting_for_human" ? "warn" : "ok";
         await hooks.onBlockFinish(id, { status: finishStatus, attempt, output });
         await hooks.terminate({ terminalStatus, postComment }, id, steps, controlState());
         return { outcome: "stopped", steps };
@@ -436,15 +467,23 @@ export async function executeGraph(opts: {
       const output = result.output;
       steps[id] = { output };
       const error = truncate(result.questions.join("; "));
-      await hooks.onBlockFinish(id, { status: "warn", attempt, output, error });
-      await hooks.clarificationExit(
+      const answer = await hooks.clarificationExit(
         result.questions,
         id,
         result.suggestedAnswers,
         steps,
         controlState(),
       );
-      return { outcome: "stopped", steps };
+      if (answer === undefined) {
+        await hooks.onBlockFinish(id, { status: "warn", attempt, output, error });
+        return { outcome: "stopped", steps };
+      }
+      const answeredOutput: BlockOutput = { status: "answered", answer };
+      steps[id] = { output: answeredOutput };
+      await hooks.onBlockFinish(id, { status: "ok", attempt, output: answeredOutput });
+      const port = defaultPortOf(node);
+      current = port === undefined ? undefined : graph.outEdges.get(id)?.get(port);
+      continue;
     }
 
     if (result.kind === "failed") {

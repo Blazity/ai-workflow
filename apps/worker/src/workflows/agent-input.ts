@@ -47,9 +47,8 @@ export interface ClarificationContinuationMarker {
 /**
  * Entry describing what started an agent workflow run. "ticket" is the classic
  * ticket-column trigger, "pr_trigger" covers the PR webhook triggers,
- * "plan_approved" resumes a run after a human approved a plan on the dashboard,
- * and "clarification_answered" resumes a run after a human answered the
- * questions the agent parked on.
+ * and "plan_approved" resumes a run after a human approved a plan on the dashboard.
+ * Clarification answers resume the asking run in place through a Workflow hook.
  */
 export type AgentWorkflowInput =
   | {
@@ -109,16 +108,7 @@ export type AgentWorkflowInput =
       approvedPlan: { markdown: string; assumptions?: string[] };
       approval: { approvalRequestId: string; approver: string; approvedAt: string };
     }
-  | {
-      kind: "clarification_answered";
-      subjectKey: string;
-      ticketKey: string | null;
-      ownerToken: string;
-      definitionId?: number;
-      definitionVersion?: WorkflowDefinitionVersionPin;
-      /** Clarification request whose answer resumes work on the ticket. */
-      clarificationRequestId: string;
-    };
+  ;
 
 export type ClarificationOriginEntry =
   | { kind: "ticket"; ticketKey: string; definitionId?: number; definitionVersion?: WorkflowDefinitionVersionPin }
@@ -144,10 +134,7 @@ export type ClarificationOriginEntry =
       approval: { approvalRequestId: string; approver: string; approvedAt: string };
     };
 
-export type ClarificationRuntimeEntry = Exclude<
-  AgentWorkflowInput,
-  { kind: "clarification_answered" }
->;
+export type ClarificationRuntimeEntry = AgentWorkflowInput;
 
 /** Strip dispatcher and predecessor identity while preserving block-facing trigger facts. */
 export function normalizeClarificationOrigin(

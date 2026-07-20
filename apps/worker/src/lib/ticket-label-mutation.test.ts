@@ -279,7 +279,7 @@ describe("updateTicketLabelsWithIntent", () => {
     ).toBe("awaiting");
   });
 
-  it("atomically reconciles pending clarification state and predecessor telemetry for the exact owner", async () => {
+  it("retires an obsolete pending clarification without rewriting run telemetry", async () => {
     await db
       .update(activeRuns)
       .set({ state: "bound", ticketCancellationReconciledVersion: null })
@@ -302,7 +302,7 @@ describe("updateTicketLabelsWithIntent", () => {
         currentRunId: owner.runId,
         owner,
       }),
-    ).resolves.toEqual({ superseded: 1, resolvedAwaiting: 1 });
+    ).resolves.toEqual({ superseded: 1, resolvedAwaiting: 0 });
 
     expect((await getClarification(db, pending.id))?.status).toBe("superseded");
     expect(
@@ -312,7 +312,7 @@ describe("updateTicketLabelsWithIntent", () => {
           .from(workflowRuns)
           .where(eq(workflowRuns.runId, "run-awaiting"))
       )[0]?.status,
-    ).toBe("success");
+    ).toBe("awaiting");
   });
 
   it("throws typed owner loss when handoff wins before a reserved mutation starts", async () => {

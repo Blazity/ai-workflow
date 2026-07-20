@@ -9,7 +9,6 @@ const mocks = vi.hoisted(() => ({
   unregisterSandbox: vi.fn(),
   configure: vi.fn(),
   recordSnapshot: vi.fn(),
-  completeCheckpoint: vi.fn(),
 }));
 
 vi.mock("@vercel/sandbox", () => ({
@@ -40,11 +39,9 @@ vi.mock("../../env.js", () => ({
   },
 }));
 vi.mock("../db/client.js", () => ({ getDb: () => "db-sentinel" }));
-vi.mock("../clarifications/store.js", () => ({
-  recordClarificationSnapshotMetadata: (...args: unknown[]) =>
+vi.mock("../clarifications/hook-store.js", () => ({
+  recordHookClarificationSnapshot: (...args: unknown[]) =>
     mocks.recordSnapshot(...args),
-  completeClarificationCheckpoint: (...args: unknown[]) =>
-    mocks.completeCheckpoint(...args),
 }));
 
 import {
@@ -64,7 +61,6 @@ describe("clarification sandbox snapshot Workflow steps", () => {
       },
     });
     mocks.recordSnapshot.mockResolvedValue(undefined);
-    mocks.completeCheckpoint.mockResolvedValue(undefined);
   });
 
   it("scrubs credentials, snapshots for seven days, and polls until the source stopped", async () => {
@@ -120,7 +116,7 @@ describe("clarification sandbox snapshot Workflow steps", () => {
       ["-lc", expect.any(String)],
       { signal: expect.any(AbortSignal) },
     );
-    expect(mocks.completeCheckpoint).toHaveBeenCalledWith(
+    expect(mocks.recordSnapshot).toHaveBeenCalledWith(
       "db-sentinel",
       "clar-1",
       {
@@ -302,7 +298,6 @@ describe("clarification sandbox snapshot Workflow steps", () => {
       },
     );
     expect(events).toEqual(["record", "poll"]);
-    expect(mocks.completeCheckpoint).not.toHaveBeenCalled();
   });
 
   it("treats an already absent snapshot as successful idempotent cleanup", async () => {
@@ -349,7 +344,7 @@ describe("clarification sandbox snapshot Workflow steps", () => {
       }),
     ).resolves.toMatchObject({ snapshotId: "snap-recovered" });
     expect(mocks.get).toHaveBeenCalledTimes(1);
-    expect(mocks.completeCheckpoint).toHaveBeenCalledWith(
+    expect(mocks.recordSnapshot).toHaveBeenCalledWith(
       "db-sentinel",
       "clar-1",
       expect.objectContaining({ snapshotId: "snap-recovered" }),
@@ -490,6 +485,6 @@ describe("clarification sandbox snapshot Workflow steps", () => {
       timeoutMs: 0,
       pollIntervalMs: 0,
     })).rejects.toThrow("active-duration budget");
-    expect(mocks.completeCheckpoint).not.toHaveBeenCalled();
+    expect(mocks.recordSnapshot).not.toHaveBeenCalled();
   });
 });

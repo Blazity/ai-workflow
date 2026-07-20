@@ -263,7 +263,9 @@ describe("golden runs: humanGate loop", () => {
       { params: { terminalStatus: "waiting_for_human", postComment: undefined }, nodeId: "halt" },
     ]);
     expect(rec.failures).toEqual([]);
-    expect(rec.clarifications).toEqual([]);
+    expect(rec.clarifications).toEqual([
+      { nodeId: "halt", questions: ["Waiting for human input."] },
+    ]);
   });
 
   it("gate=false, verdict=true: checks pass on the first try and open-pr completes", async () => {

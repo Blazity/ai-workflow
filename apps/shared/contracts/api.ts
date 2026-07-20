@@ -278,7 +278,6 @@ export interface ApprovalDecisionResponse {
 
 export interface ClarificationAnswerResponse {
   clarification: ClarificationRequest;
-  /** Resume run started on the answer; null when the answer was recorded but
-   *  dispatch will be retried. */
+  /** The same asking run resumed by the answer. */
   runId: string | null;
 }

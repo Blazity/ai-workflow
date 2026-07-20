@@ -185,23 +185,18 @@ export async function snapshotClarificationSandboxStep(
     };
   }
 
-  // The provider object exists now. Persist its cleanup identity before source
-  // polling so failures after this provider boundary retain a cleanup identity.
+  // Persist the provider cleanup identity before polling the source stop. If a
+  // retry observes an ambiguous stop boundary, the snapshot can still be
+  // deleted from the compact clarification row.
   const { getDb } = await import("../db/client.js");
-  const {
-    completeClarificationCheckpoint,
-    recordClarificationSnapshotMetadata,
-  } = await import("../clarifications/store.js");
-  const durableSnapshot = {
+  const { recordHookClarificationSnapshot } = await import(
+    "../clarifications/hook-store.js"
+  );
+  await recordHookClarificationSnapshot(getDb(), input.clarificationId, {
     snapshotId: snapshotMetadata.snapshotId,
     sourceSandboxId: snapshotMetadata.sourceSandboxId,
     expiresAt: new Date(snapshotMetadata.expiresAt),
-  };
-  await recordClarificationSnapshotMetadata(
-    getDb(),
-    input.clarificationId,
-    durableSnapshot,
-  );
+  });
 
   const pollIntervalMs = input.pollIntervalMs ?? 1_000;
   let stopped = false;
@@ -235,8 +230,6 @@ export async function snapshotClarificationSandboxStep(
       `clarification snapshot source ${input.sandboxId} did not stop within the active-duration budget after snapshot ${snapshotMetadata.snapshotId}`,
     );
   }
-
-  await completeClarificationCheckpoint(getDb(), input.clarificationId, durableSnapshot);
 
   const { createStepAdapters } = await import("../lib/step-adapters.js");
   const { runRegistry } = createStepAdapters();
