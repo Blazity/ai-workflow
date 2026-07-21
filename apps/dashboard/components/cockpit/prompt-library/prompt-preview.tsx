@@ -28,6 +28,17 @@ function InlineRun({ nodes }: { nodes: InlineNode[] }) {
             </mark>
           );
         }
+        if (n.type === "ref") {
+          return (
+            <span
+              key={i}
+              className="inline-flex items-center gap-1 rounded-pill border border-mariner-200 bg-mariner-100 px-1.5 font-mono text-[10px] font-semibold text-mariner"
+            >
+              <span aria-hidden="true">❡</span>
+              {n.label}
+            </span>
+          );
+        }
         return (
           <span key={i} className={n.bold ? "font-semibold text-neutral-900" : undefined}>
             {n.value}

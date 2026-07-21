@@ -71,3 +71,22 @@ test("a paragraph preserves its soft line breaks", () => {
     { type: "paragraph", inline: [{ type: "text", value: "line one\nline two", bold: false }] },
   ]);
 });
+
+test("prompt reference tokens become distinct ref nodes", () => {
+  const blocks = parseMarkdownBlocks("Uses {{prompt:research-plan}} and legacy {{prompt:7}}.");
+  assert.equal(blocks.length, 1);
+  const block = blocks[0];
+  assert.equal(block.type, "paragraph");
+  if (block.type !== "paragraph") return;
+  const refs = block.inline.filter((node) => node.type === "ref");
+  assert.deepEqual(
+    refs.map((node) => (node.type === "ref" ? node.label : "")),
+    ["research-plan", "#7"],
+  );
+  // Variables still work alongside references.
+  const varBlocks = parseMarkdownBlocks("{{ticket_key}} then {{prompt:research-plan}}");
+  const first = varBlocks[0];
+  if (first.type !== "paragraph") return;
+  assert.equal(first.inline.some((node) => node.type === "var"), true);
+  assert.equal(first.inline.some((node) => node.type === "ref"), true);
+});

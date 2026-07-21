@@ -21,6 +21,8 @@ import type {
   PromptLibraryUsageResponse,
 } from "@shared/contracts";
 import { initialPromptSelection } from "@/lib/prompt-library/query-selection";
+import { findReferenceCycle } from "@/lib/prompt-library/reference-cycle";
+import { parsePromptReferenceTokens, promptReferenceMatchesRow } from "@shared/contracts";
 
 const primaryButtonClass =
   "appearance-none cursor-pointer border border-mariner bg-mariner text-white py-1.5 px-3.5 rounded-[3px] font-mono text-[11px] tracking-[0.04em] uppercase disabled:opacity-40 disabled:cursor-default";
@@ -169,7 +171,9 @@ export function PromptLibraryScreen({
     const res = await fetch(`/api/prompt-library/${id}/usage`);
     // Usage is supplementary; on failure cache an empty result so the "Used in"
     // card resolves instead of spinning forever.
-    const usage = res.ok ? ((await res.json()) as PromptLibraryUsageResponse) : { rows: [] };
+    const usage = res.ok
+      ? ((await res.json()) as PromptLibraryUsageResponse)
+      : { rows: [], prompts: [] };
     setUsageCache((m) => new Map(m).set(id, usage));
   }
 
@@ -382,6 +386,25 @@ export function PromptLibraryScreen({
   // The rail decides replace-vs-append from the current content, mirroring the
   // block-field editor; provenance refs do not exist on library prompts.
   function applyEditorInsert(payload: PromptInsertPayload) {
+    // Inserted text may reference other prompts (a reference insert, or a
+    // whole-prompt copy whose body contains tokens). Refuse anything that
+    // would close a reference loop with the edited prompt: the runtime would
+    // fail every run that resolves it.
+    const fromSlug = editor?.mode === "edit" ? editorDetail?.meta.slug : undefined;
+    if (fromSlug) {
+      for (const token of parsePromptReferenceTokens(payload.text)) {
+        const target = rows.find((candidate) => promptReferenceMatchesRow(token, candidate));
+        if (!target) continue;
+        const cycle = findReferenceCycle(rows, fromSlug, target.slug);
+        if (cycle) {
+          setError(
+            `Cannot insert "${target.name}": it would create a reference cycle (${cycle.join(" -> ")})`,
+          );
+          return;
+        }
+      }
+    }
+    setError(null);
     setEditor((prev) => {
       if (!prev) return prev;
       const body = payload.mode === "replace" || prev.draft.body.trim() === ""

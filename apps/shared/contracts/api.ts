@@ -343,6 +343,18 @@ export interface PromptLibraryUsageRow {
   state: "current" | "behind" | "modified";
 }
 
+/** Another library prompt whose head body references this prompt via a
+ *  {{prompt:...}} token (prompt-in-prompt composition). */
+export interface PromptLibraryPromptUsageRow {
+  promptId: number;
+  slug: string;
+  name: string;
+  /** Version the reference resolves to today (latest maps to the current head). */
+  version: number;
+  state: "current" | "behind";
+}
+
 export interface PromptLibraryUsageResponse {
   rows: PromptLibraryUsageRow[];
+  prompts: PromptLibraryPromptUsageRow[];
 }

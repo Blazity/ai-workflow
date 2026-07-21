@@ -5,6 +5,7 @@ import { CkCard, CkChip, CkTabs } from "@/components/ui";
 import { Block } from "@/app/skeleton-block";
 import { DiffView } from "@/components/cockpit/prompt-diff";
 import { PromptBodyBlocks } from "@/components/cockpit/prompt-library/prompt-body-blocks";
+import { promptLibraryHref } from "@/lib/prompt-library/reference-navigation";
 import type {
   PromptLibraryDetailResponse,
   PromptLibraryListRowDto,
@@ -96,6 +97,7 @@ export function PromptDetail({
   const canDiff = prev !== undefined;
   const isHead = shownVersion === meta.currentVersion;
   const canRestore = canEdit && !archived && !isHead;
+  const usageTotal = usage ? usage.rows.length + usage.prompts.length : 0;
 
   async function copyBody() {
     try {
@@ -135,7 +137,12 @@ export function PromptDetail({
       >
         {confirmArchive && (
           <div className="mb-3 flex items-center gap-3 flex-wrap font-body text-[12px] text-neutral-700">
-            <span>Archive this prompt? Blocks that copied it keep their text.</span>
+            <span>
+              Archive this prompt?{" "}
+              {usageTotal > 0
+                ? `${usageTotal} ${usageTotal === 1 ? "place references" : "places reference"} it; live references will stop resolving on latest. Copied text keeps working.`
+                : "Nothing references it."}
+            </span>
             <button
               onClick={onArchive}
               disabled={busy !== null}
@@ -250,15 +257,15 @@ export function PromptDetail({
         </div>
       </CkCard>
 
-      <CkCard eyebrow="Used in" title="Workflow blocks">
+      <CkCard eyebrow="Used in" title="Workflows and prompts">
         {usage === undefined ? (
           <div className="flex flex-col gap-2">
             <Block className="h-8 w-full" />
             <Block className="h-8 w-full" />
           </div>
-        ) : usage.rows.length === 0 ? (
+        ) : usage.rows.length === 0 && usage.prompts.length === 0 ? (
           <div className="font-body text-[12px] text-neutral-500">
-            Not used in any workflow yet.
+            Not used in any workflow or prompt yet.
           </div>
         ) : (
           <div className="flex flex-col">
@@ -281,6 +288,28 @@ export function PromptDetail({
                 </span>
               </a>
             ))}
+            {usage.prompts.length > 0 && (
+              <>
+                <div className="mt-3 mb-1 font-mono text-[9px] uppercase tracking-[0.06em] text-neutral-500">
+                  Prompts
+                </div>
+                {usage.prompts.map((p) => (
+                  <a
+                    key={p.promptId}
+                    href={promptLibraryHref(p.slug)}
+                    className="flex items-center gap-2 flex-wrap py-2 border-b border-neutral-100 last:border-b-0 no-underline hover:bg-[#FAFBFC]"
+                  >
+                    <span className="font-mono text-[12px] font-semibold text-neutral-900">
+                      {p.name}
+                    </span>
+                    <CkChip tone="neutral">❡ {p.slug}</CkChip>
+                    <span className="ml-auto">
+                      <UsageStateChip state={p.state} version={p.version} currentVersion={meta.currentVersion} />
+                    </span>
+                  </a>
+                ))}
+              </>
+            )}
           </div>
         )}
       </CkCard>

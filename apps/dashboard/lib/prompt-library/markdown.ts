@@ -1,3 +1,4 @@
+import { parsePromptReferenceTokens, promptReferenceTargetLabel } from "@shared/contracts";
 import { segmentTemplate } from "./variables";
 
 /** Inline run of a block. `bold` marks emphasized text/variables; inline code is
@@ -5,7 +6,8 @@ import { segmentTemplate } from "./variables";
 export type InlineNode =
   | { type: "text"; value: string; bold: boolean }
   | { type: "code"; value: string }
-  | { type: "var"; name: string; known: boolean; bold: boolean };
+  | { type: "var"; name: string; known: boolean; bold: boolean }
+  | { type: "ref"; label: string; bold: boolean };
 
 export type MarkdownBlock =
   | { type: "heading"; level: 1 | 2 | 3; inline: InlineNode[] }
@@ -22,7 +24,7 @@ const INLINE_RE = /(`[^`\n]+`)|\*\*([^*\n]+)\*\*/g;
 
 // Push plain text (no code/bold) split into text + {{variable}} nodes, reusing
 // the shared segmenter so known/unknown classification matches the rest of the UI.
-function pushPlain(out: InlineNode[], text: string, bold: boolean): void {
+function pushSegments(out: InlineNode[], text: string, bold: boolean): void {
   if (text === "") return;
   for (const seg of segmentTemplate(text)) {
     if (seg.kind === "text") {
@@ -31,6 +33,20 @@ function pushPlain(out: InlineNode[], text: string, bold: boolean): void {
       out.push({ type: "var", name: seg.name, known: seg.known, bold });
     }
   }
+}
+
+// {{prompt:...}} reference tokens are cut out first (the variable segmenter
+// does not know them) and become distinct "ref" nodes, so previews can badge
+// them instead of showing raw braces.
+function pushPlain(out: InlineNode[], text: string, bold: boolean): void {
+  if (text === "") return;
+  let cursor = 0;
+  for (const token of parsePromptReferenceTokens(text)) {
+    pushSegments(out, text.slice(cursor, token.start), bold);
+    out.push({ type: "ref", label: promptReferenceTargetLabel(token), bold });
+    cursor = token.end;
+  }
+  pushSegments(out, text.slice(cursor), bold);
 }
 
 /** Parse a single line's (or paragraph's) inline markup: `code`, **bold**, and

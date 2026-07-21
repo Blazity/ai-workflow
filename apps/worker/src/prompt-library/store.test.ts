@@ -10,6 +10,7 @@ import {
   createPrompt,
   findPromptRowsByNames,
   findPromptUsage,
+  findPromptUsageInPrompts,
   getCurrentPromptVersion,
   getPrompt,
   getPromptVersion,
@@ -643,6 +644,40 @@ describe("findPromptUsage", () => {
     expect(byNode.get("latest")).toMatchObject({ version: 2, state: "current" });
     expect(byNode.get("pinned")).toMatchObject({ version: 1, state: "behind" });
     expect(byNode.get("legacy")).toMatchObject({ version: 2, state: "current" });
+    expect(rows).toHaveLength(3);
+  });
+});
+
+describe("findPromptUsageInPrompts", () => {
+  it("reports active prompts whose head bodies reference this prompt", async () => {
+    const target = await createPrompt(db, { name: "Shared block", body: "S1", actor: ADMIN });
+    await savePromptVersion(db, { promptId: target.prompt.id, body: "S2", actor: ADMIN });
+    // Head is now version 2; slug is "shared-block".
+    await createPrompt(db, {
+      name: "Uses latest",
+      body: "Intro\n{{prompt:shared-block}}",
+      actor: ADMIN,
+    });
+    await createPrompt(db, { name: "Uses pinned", body: "{{prompt:shared-block@1}}", actor: ADMIN });
+    await createPrompt(db, {
+      name: "Uses legacy",
+      body: `{{prompt:${target.prompt.id}}}`,
+      actor: ADMIN,
+    });
+    await createPrompt(db, { name: "Unrelated", body: "none", actor: ADMIN });
+    const gone = await createPrompt(db, {
+      name: "Archived referrer",
+      body: "{{prompt:shared-block}}",
+      actor: ADMIN,
+    });
+    await archivePrompt(db, { promptId: gone.prompt.id, actor: ADMIN });
+
+    const rows = await findPromptUsageInPrompts(db, target.prompt.id);
+    const bySlug = new Map(rows.map((r) => [r.slug, r]));
+    expect(bySlug.get("uses-latest")).toMatchObject({ name: "Uses latest", version: 2, state: "current" });
+    expect(bySlug.get("uses-pinned")).toMatchObject({ version: 1, state: "behind" });
+    expect(bySlug.get("uses-legacy")).toMatchObject({ version: 2, state: "current" });
+    // Archived referrers and unrelated prompts stay out.
     expect(rows).toHaveLength(3);
   });
 });

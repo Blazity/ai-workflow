@@ -2,6 +2,7 @@ import { and, arrayContains, asc, desc, eq, inArray, isNull, max, notExists, or,
 import { z } from "zod";
 import type {
   PromptLibraryEntryMeta,
+  PromptLibraryPromptUsageRow,
   PromptLibraryUsageRow,
   PromptLibraryVersion,
   WorkflowBlockType,
@@ -904,6 +905,40 @@ export async function findPromptUsage(
         });
       }
     }
+  }
+  return result;
+}
+
+/** Prompt-in-prompt usage: which ACTIVE prompts' head bodies reference this
+ *  prompt via {{prompt:...}} tokens (slug, or legacy numeric id). One row per
+ *  referencing prompt; live text cannot drift, so state is current/behind. */
+export async function findPromptUsageInPrompts(
+  db: Db,
+  promptId: number,
+): Promise<PromptLibraryPromptUsageRow[]> {
+  const promptRow = await getPrompt(db, promptId);
+  if (!promptRow) return [];
+  const head = await getCurrentPromptVersion(db, promptId);
+  const currentHeadVersion = head?.version ?? 0;
+
+  const activePrompts = await listPrompts(db);
+  const result: PromptLibraryPromptUsageRow[] = [];
+  for (const row of activePrompts) {
+    if (row.id === promptId) continue;
+    const token = parsePromptReferenceTokens(row.body).find((candidate) =>
+      candidate.slug !== undefined
+        ? candidate.slug === promptRow.slug
+        : candidate.legacyPromptId === promptId,
+    );
+    if (!token) continue;
+    const version = token.version === "latest" ? currentHeadVersion : token.version;
+    result.push({
+      promptId: row.id,
+      slug: row.slug,
+      name: row.name,
+      version,
+      state: version < currentHeadVersion ? "behind" : "current",
+    });
   }
   return result;
 }
