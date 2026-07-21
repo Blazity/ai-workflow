@@ -362,7 +362,10 @@ const storedWorkflowNode = z
     name: z.string().optional(),
     x: coordinate,
     y: coordinate,
-    params: z.record(storedWorkflowParamValue),
+    // Two-arg record: the nitro bundle resolves bare "zod" to zod 4, where a
+    // single-arg record means record(KEY) with an undefined value schema that
+    // only crashes at parse time (500 on every stored-definition read).
+    params: z.record(z.string(), storedWorkflowParamValue),
     inputs: z.record(bindingInputName, bindingSource).optional(),
   })
   .passthrough();
