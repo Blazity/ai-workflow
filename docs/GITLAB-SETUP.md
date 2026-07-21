@@ -19,6 +19,14 @@ GITLAB_BASE_BRANCH=main
 VCS_KIND=gitlab
 ```
 
+Required when an enabled `trigger_pr_review` includes `commented`:
+
+```bash
+GITLAB_BOT_LOGIN=<token account username>
+```
+
+`GITLAB_BOT_LOGIN` prevents review notes authored by the automation account from recursively triggering `trigger_pr_review`. The legacy `VCS_BOT_LOGIN` value is accepted only when GitLab is the sole configured VCS provider. A mixed GitHub/GitLab deployment requires `GITHUB_BOT_LOGIN` and `GITLAB_BOT_LOGIN` for the providers selected by a commented-review trigger.
+
 `GITLAB_PROJECT_ID` is no longer required for multi-repo runs. When it is omitted, ai-workflow lists all projects visible to `GITLAB_TOKEN` and accepts GitLab merge request webhooks after token verification. When it is set, the webhook route keeps the old single-project filter.
 
 You can configure GitHub and GitLab in the same deployment. Provider credentials are additive.
@@ -64,10 +72,14 @@ In the GitLab project, open **Project Settings -> Webhooks** and add:
 
 - URL: `https://<worker-deployment>/webhooks/gitlab`
 - Secret token: the same value as `GITLAB_WEBHOOK_SECRET`
-- Trigger: **Merge request events** and **Pipeline events**
+- Trigger: **Merge request events**, **Pipeline events**, and **Comments**
 - SSL verification: enabled
 
-**Merge request events** deliver the **Merge Request Hook**, which drives PR/MR creation and reuse. **Pipeline events** deliver the **Pipeline Hook**, which drives the `trigger_pr_checks_failed` workflow trigger (re-run the fix flow when a bot MR's pipeline fails). Without Pipeline events, that trigger never fires.
+**Merge request events** deliver the **Merge Request Hook**, which drives PR/MR creation and reuse. **Pipeline events** deliver the **Pipeline Hook**, which drives `trigger_pr_checks_failed`. That trigger requires at least one exact check name and defaults to the trusted `merge_request_event` pipeline source. Before dispatch, the worker verifies both `merge_request.last_commit.id` and the event pipeline ID against the merge request's current head and head pipeline. Without Pipeline events, the trigger never fires.
+
+**Comments** deliver the **Note Hook** used by `trigger_pr_review`. The worker maps an eligible, external, non-system merge request note only to `commented`; internal/confidential notes are rejected at both the webhook route and normalizer. It does not infer reviewer state from the author's current reviewer record. GitLab does not emit a reliable event that distinguishes a new Request Changes transition, with or without a summary, so GitLab `changes_requested` triggers are unsupported until such an event exists. Any review-trigger configuration that includes GitLab must include `commented`, and every review trigger must retain at least one selected state.
+
+For webhook redelivery, the worker uses `webhook-id`, then `Idempotency-Key`. If neither header is present, it hashes `X-Gitlab-Event-UUID`, a NUL separator, and the raw request body. `X-Gitlab-Webhook-UUID` identifies the webhook configuration and is deliberately not used as a delivery ID.
 
 Use GitLab's **Secret token** field for now, not the newer **Signing token**
 flow. The worker currently verifies the `X-Gitlab-Token` header.
@@ -83,6 +95,8 @@ After deployment, verify:
 - The merge request shows `blazebot / ...` commit statuses on the head commit.
 - Force-pushing the branch cancels or replaces stale statuses for the previous head commit.
 - Changed files are read from GitLab merge request diffs.
+- A merge request comment dispatches `trigger_pr_review` when that event is enabled.
+- Request Changes, with or without a summary, does not dispatch a GitLab `changes_requested` review trigger.
 
 ## Official references
 

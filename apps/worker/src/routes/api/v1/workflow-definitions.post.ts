@@ -5,10 +5,13 @@ import { getDb } from "../../../db/client.js";
 import { requireDashboardActor } from "../../../lib/auth/request-context.js";
 import { dashboardUserLabel } from "../../../pre-pr-checks/store.js";
 import { defaultWorkflowDefinition } from "../../../workflow-definition/default.js";
+import { workflowDefinitionTemplate } from "../../../workflow-definition/templates.js";
 import {
-  createWorkflowDefinition,
+  createWorkflowDefinitionDraft,
   getCurrentWorkflowDefinitionVersion,
+  getDeployedWorkflowDefinitionVersion,
   getWorkflowDefinition,
+  getWorkflowDefinitionDraft,
   serializeWorkflowDefinitionVersion,
 } from "../../../workflow-definition/store.js";
 import {
@@ -16,7 +19,10 @@ import {
   toWorkflowDefinitionHttpError,
 } from "./workflow-definitions.get.js";
 
-type CreateSource = { kind: "default" } | { kind: "duplicate"; definitionId: number };
+type CreateSource =
+  | { kind: "default" }
+  | { kind: "template"; templateId: string }
+  | { kind: "duplicate"; definitionId: number };
 
 interface CreateBody {
   name?: unknown;
@@ -27,6 +33,12 @@ function parseSource(source: unknown): CreateSource {
   if (source && typeof source === "object") {
     const kind = (source as { kind?: unknown }).kind;
     if (kind === "default") return { kind: "default" };
+    if (kind === "template") {
+      const templateId = (source as { templateId?: unknown }).templateId;
+      if (typeof templateId === "string" && templateId.length > 0) {
+        return { kind: "template", templateId };
+      }
+    }
     if (kind === "duplicate") {
       const definitionId = (source as { definitionId?: unknown }).definitionId;
       if (typeof definitionId === "number" && Number.isInteger(definitionId) && definitionId > 0) {
@@ -56,13 +68,22 @@ export default defineEventHandler(
         if (!sourceRow || sourceRow.archivedAt) {
           throw createError({ statusCode: 404, statusMessage: "Unknown definition" });
         }
-        const head = await getCurrentWorkflowDefinitionVersion(dbHandle, source.definitionId);
-        seed = head?.definition ?? defaultWorkflowDefinition({ includeReview: env.ENABLE_REVIEW_PHASE });
+        const draft = await getWorkflowDefinitionDraft(dbHandle, source.definitionId);
+        const deployed = await getDeployedWorkflowDefinitionVersion(dbHandle, source.definitionId);
+        seed = draft?.draft ?? deployed?.definition ?? defaultWorkflowDefinition({ includeReview: env.ENABLE_REVIEW_PHASE });
+      } else if (source.kind === "template") {
+        const template = workflowDefinitionTemplate(source.templateId, {
+          includeReview: env.ENABLE_REVIEW_PHASE,
+        });
+        if (!template) {
+          throw createError({ statusCode: 400, statusMessage: "Unknown template" });
+        }
+        seed = template.definition;
       } else {
         seed = defaultWorkflowDefinition({ includeReview: env.ENABLE_REVIEW_PHASE });
       }
 
-      const { definition, current } = await createWorkflowDefinition(dbHandle, {
+      const created = await createWorkflowDefinitionDraft(dbHandle, {
         name,
         seed,
         actor: {
@@ -71,10 +92,17 @@ export default defineEventHandler(
           label: await dashboardUserLabel(dbHandle, actor.userId),
         },
       });
+      const current = await getCurrentWorkflowDefinitionVersion(
+        dbHandle,
+        created.definition.id,
+      );
 
       return {
-        meta: serializeDefinitionMeta(definition, current?.version ?? null),
-        current: current ? serializeWorkflowDefinitionVersion(current) : null,
+        meta: serializeDefinitionMeta(created.definition),
+        draft: created.draft,
+        layout: created.definition.layout,
+        deployed: null,
+        current: null,
         versions: current ? [serializeWorkflowDefinitionVersion(current)] : [],
       };
     } catch (error) {

@@ -7,6 +7,15 @@ import {
   type WorkspaceRepo,
 } from "../sandbox/repo-workspace.js";
 import type { PrePrCheckConfig } from "./config.js";
+import type { PhaseUsage } from "../sandbox/agents/types.js";
+import type { TokenPrice } from "../sandbox/agents/pricing.js";
+import {
+  checkRunBudget,
+  recordBudgetUsage,
+  type RunBudgetFailure,
+  type RunBudgetLimits,
+  type RunBudgetState,
+} from "../workflows/run-budget.js";
 
 export const MAX_PRE_PR_FIX_CYCLES = 3;
 
@@ -22,8 +31,17 @@ export interface PrePrCheckFailure {
 export interface PrePrCheckRunResult {
   passed: boolean;
   fixCycles: number;
+  /** One entry per launched fixer; null means the CLI returned no authoritative usage. */
+  fixCycleUsages: Array<PhaseUsage | null>;
+  budgetFailure: RunBudgetFailure | null;
   failures: PrePrCheckFailure[];
   summary: string;
+}
+
+export interface PrePrFixBudgetContext {
+  state: RunBudgetState;
+  limits: RunBudgetLimits;
+  price: TokenPrice | null;
 }
 
 type SandboxInstance = Awaited<ReturnType<typeof SandboxType.create>>;
@@ -31,7 +49,13 @@ type SandboxCommandResult = Awaited<ReturnType<SandboxInstance["runCommand"]>>;
 
 type RunCommand = {
   (cmd: string, args: string[]): Promise<SandboxCommandResult>;
-  (command: { cmd: string; args: string[]; cwd?: string; detached?: boolean }): Promise<SandboxCommandResult>;
+  (command: {
+    cmd: string;
+    args: string[];
+    cwd?: string;
+    detached?: boolean;
+    signal?: AbortSignal;
+  }): Promise<SandboxCommandResult>;
 };
 
 interface SandboxSession {
@@ -45,11 +69,15 @@ export async function runPrePrChecksWithFixes(
   agentKind: "claude" | "codex",
   model: string,
   maxFixCycles: number = MAX_PRE_PR_FIX_CYCLES,
+  timeoutMs?: number,
+  budget?: PrePrFixBudgetContext,
 ): Promise<PrePrCheckRunResult> {
   if (config.repositories.length === 0) {
     return {
       passed: true,
       fixCycles: 0,
+      fixCycleUsages: [],
+      budgetFailure: null,
       failures: [],
       summary: "No pre-PR checks configured.",
     };
@@ -57,23 +85,37 @@ export async function runPrePrChecksWithFixes(
 
   const { Sandbox } = await import("@vercel/sandbox");
   const sandbox = await Sandbox.get({ sandboxId, ...getSandboxCredentials() });
+  const signal = timeoutMs === undefined
+    ? undefined
+    : AbortSignal.timeout(Math.max(1, Math.floor(timeoutMs)));
 
-  let result = await runConfiguredPrePrChecks(sandbox, config, 0);
+  let result = await runConfiguredPrePrChecks(sandbox, config, 0, signal);
   let fixCycles = 0;
+  const fixCycleUsages: Array<PhaseUsage | null> = [];
+  let budgetState = budget?.state;
 
   while (!result.passed && fixCycles < maxFixCycles) {
     fixCycles++;
-    await runFixAgent(sandbox, result, agentKind, model);
-    result = await runConfiguredPrePrChecks(sandbox, config, fixCycles);
+    const usage = await runFixAgent(sandbox, result, agentKind, model, signal);
+    fixCycleUsages.push(usage);
+    if (budget && budgetState) {
+      budgetState = recordBudgetUsage(budgetState, usage, budget.price);
+      const check = checkRunBudget(budgetState, budget.limits);
+      if (check.status !== "ok") {
+        return { ...result, fixCycles, fixCycleUsages, budgetFailure: check };
+      }
+    }
+    result = await runConfiguredPrePrChecks(sandbox, config, fixCycles, signal);
   }
 
-  return { ...result, fixCycles };
+  return { ...result, fixCycles, fixCycleUsages, budgetFailure: null };
 }
 
 async function runConfiguredPrePrChecks(
   sandbox: SandboxSession,
   config: PrePrCheckConfig,
   fixCycles: number,
+  signal?: AbortSignal,
 ): Promise<PrePrCheckRunResult> {
   const manifest = await readWorkspaceManifest(sandbox);
   const checksByRepo = new Map(
@@ -95,6 +137,7 @@ async function runConfiguredPrePrChecks(
         cmd: "bash",
         args: ["-lc", command],
         cwd: repo.localPath,
+        ...(signal ? { signal } : {}),
       });
       if (result.exitCode !== 0) {
         failures.push({
@@ -112,6 +155,8 @@ async function runConfiguredPrePrChecks(
   return {
     passed: failures.length === 0,
     fixCycles,
+    fixCycleUsages: [],
+    budgetFailure: null,
     failures,
     summary: failures.length > 0
       ? formatPrePrCheckFailures(failures)
@@ -156,7 +201,8 @@ async function runFixAgent(
   failedRun: PrePrCheckRunResult,
   agentKind: "claude" | "codex",
   model: string,
-): Promise<void> {
+  signal?: AbortSignal,
+): Promise<PhaseUsage | null> {
   const { logger } = await import("../lib/logger.js");
   await sandbox.writeFiles([
     {
@@ -168,18 +214,24 @@ async function runFixAgent(
   const cli =
     agentKind === "codex"
       ? `codex exec --model "${model}" --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check --json -`
-      : `claude --print --model '${model}' --dangerously-skip-permissions`;
+      : `claude --print --output-format json --model '${model}' --dangerously-skip-permissions`;
 
-  await sandbox.runCommand("bash", [
-    "-c",
-    `cd /vercel/sandbox || exit 1; if [ -f /tmp/agent-env.sh ]; then source /tmp/agent-env.sh; fi; cat /tmp/pre-pr-checks-fix-prompt.txt | ${cli} > /tmp/pre-pr-checks-fix-stdout.txt 2>/tmp/pre-pr-checks-fix-stderr.txt || true`,
-  ]);
+  await sandbox.runCommand({
+    cmd: "bash",
+    args: [
+      "-c",
+      `cd /vercel/sandbox || exit 1; if [ -f /tmp/agent-env.sh ]; then source /tmp/agent-env.sh; fi; cat /tmp/pre-pr-checks-fix-prompt.txt | ${cli} > /tmp/pre-pr-checks-fix-stdout.txt 2>/tmp/pre-pr-checks-fix-stderr.txt || true`,
+    ],
+    ...(signal ? { signal } : {}),
+  });
 
   const fixOut = await sandbox.runCommand("cat", ["/tmp/pre-pr-checks-fix-stdout.txt"]);
   const fixLog = (await fixOut.stdout()).trim();
   if (fixLog) {
     logger.info({ output: fixLog.slice(0, 500) }, "pre_pr_checks_fix_agent_output");
   }
+  const { createAgentAdapter } = await import("../sandbox/agents/index.js");
+  return createAgentAdapter(agentKind).extractUsage(fixLog, null);
 }
 
 function buildFixPrompt(failedRun: PrePrCheckRunResult): string {

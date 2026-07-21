@@ -12,12 +12,6 @@ export interface ArthurTask {
   is_archived?: boolean;
 }
 
-export interface AgenticPrompt {
-  name: string;
-  version?: number | string;
-  messages: Array<{ role: string; content: string }>;
-}
-
 interface SearchResponse {
   count: number;
   tasks: ArthurTask[];
@@ -41,23 +35,6 @@ export interface TraceRow {
 interface TraceListResponse {
   count: number;
   traces: TraceRow[];
-}
-
-/** One Arthur prompt version's metadata (no message body). */
-export interface ArthurPromptVersion {
-  version: number;
-  created_at: string;
-  deleted_at: string | null;
-  model_provider: string;
-  model_name: string;
-  tags: string[];
-  num_messages: number;
-  num_tools: number;
-}
-
-interface AgenticPromptVersionListResponse {
-  count: number;
-  versions: ArthurPromptVersion[];
 }
 
 /** One rule outcome from `validate_prompt`, coerced to a stable minimal shape. */
@@ -122,20 +99,6 @@ export class ArthurClient {
     return (await res.json()) as T;
   }
 
-  /** GET that treats 404 as "absent" (returns null) instead of throwing — for the prompt read paths. */
-  private async getAllowing404<T>(path: string): Promise<T | null> {
-    const res = await fetch(`${this.baseUrl}${path}`, {
-      method: "GET",
-      headers: { Authorization: `Bearer ${this.apiKey}`, "ngrok-skip-browser-warning": "true" },
-    });
-    if (res.status === 404) return null;
-    if (!res.ok) {
-      const body = await res.text().catch(() => "");
-      throw new Error(`Arthur GET ${path} → ${res.status}: ${body.slice(0, 300)}`);
-    }
-    return (await res.json()) as T;
-  }
-
   /**
    * Return tasks whose name equals `prefix` or matches `^prefix\.\d+$`.
    * Arthur's `task_name` search is substring-based, so we post-filter to
@@ -179,28 +142,6 @@ export class ArthurClient {
     return this.createTask(`${identifier}.${max + 1}`);
   }
 
-  /** Exact-name lookup. Returns the task if found (non-archived), else null. */
-  async findTaskByName(name: string): Promise<ArthurTask | null> {
-    const { tasks } = await this.request<{ count: number; tasks: ArthurTask[] }>(
-      "/api/v2/tasks/search",
-      { method: "POST", body: JSON.stringify({ task_name: name }) },
-    );
-    return tasks.find((t) => t.name === name && !t.is_archived) ?? null;
-  }
-
-  /**
-   * Create a task for non-ticket purposes (e.g. the shared prompt-host task).
-   * Body is identical to `createTask` today — kept as a separate method so
-   * callers signal intent and so the two paths can diverge later without
-   * touching each other's call sites.
-   */
-  async createPlainTask(name: string): Promise<ArthurTask> {
-    return this.request<ArthurTask>("/api/v2/tasks", {
-      method: "POST",
-      body: JSON.stringify({ name, is_agentic: true }),
-    });
-  }
-
   /**
    * Run the task's prompt rules against `content` via `validate_prompt`.
    * The raw Arthur response contract is intentionally not load-bearing:
@@ -231,44 +172,6 @@ export class ArthurClient {
       return finding;
     });
     return { ok: findings.every((f) => f.result === "Pass"), findings };
-  }
-
-  /** Fetch a tagged prompt version. Returns the first message's content, or null if 404. */
-  async getPromptByTag(taskId: string, name: string, tag: string): Promise<string | null> {
-    const path = `/api/v1/tasks/${encodeURIComponent(taskId)}/prompts/${encodeURIComponent(name)}/versions/tags/${encodeURIComponent(tag)}`;
-    const prompt = await this.getAllowing404<AgenticPrompt>(path);
-    return prompt?.messages?.[0]?.content ?? null;
-  }
-
-  /** Create a new version of a named prompt on a task. Content is sent as a single user message. */
-  async createPromptVersion(
-    taskId: string,
-    name: string,
-    content: string,
-    opts: { modelName?: string; modelProvider?: string } = {},
-  ): Promise<AgenticPrompt> {
-    return this.request<AgenticPrompt>(
-      `/api/v1/tasks/${encodeURIComponent(taskId)}/prompts/${encodeURIComponent(name)}`,
-      {
-        method: "POST",
-        body: JSON.stringify({
-          messages: [{ role: "user", content }],
-          model_name: opts.modelName ?? "claude-opus-4-6",
-          model_provider: opts.modelProvider ?? "anthropic",
-        }),
-      },
-    );
-  }
-
-  /** Add a tag (e.g. "production") to a specific version. */
-  async tagPromptVersion(taskId: string, name: string, version: number | string, tag: string): Promise<void> {
-    await this.request<AgenticPrompt>(
-      `/api/v1/tasks/${encodeURIComponent(taskId)}/prompts/${encodeURIComponent(name)}/versions/${encodeURIComponent(String(version))}/tags`,
-      {
-        method: "PUT",
-        body: JSON.stringify({ tag }),
-      },
-    );
   }
 
   /**
@@ -354,23 +257,5 @@ export class ArthurClient {
     if (!("page_size" in extra)) p.set("page_size", String(ArthurClient.PAGE_SIZE));
     for (const [k, v] of Object.entries(extra)) p.set(k, v);
     return p;
-  }
-
-  /** List version metadata for a named prompt (newest first). First page only. Empty on 404. */
-  async listPromptVersions(taskId: string, name: string): Promise<ArthurPromptVersion[]> {
-    const path = `/api/v1/tasks/${encodeURIComponent(taskId)}/prompts/${encodeURIComponent(name)}/versions`;
-    const data = await this.getAllowing404<AgenticPromptVersionListResponse>(path);
-    return [...(data?.versions ?? [])].sort((a, b) => b.version - a.version);
-  }
-
-  /**
-   * Fetch the body of a specific version. `version` accepts an integer,
-   * `"latest"`, an ISO datetime, or a tag. Returns the first message's content,
-   * or null on 404. Generalizes the by-version GET that `getPromptByTag` uses.
-   */
-  async getPromptVersionBody(taskId: string, name: string, version: number | string): Promise<string | null> {
-    const path = `/api/v1/tasks/${encodeURIComponent(taskId)}/prompts/${encodeURIComponent(name)}/versions/${encodeURIComponent(String(version))}`;
-    const prompt = await this.getAllowing404<AgenticPrompt>(path);
-    return prompt?.messages?.[0]?.content ?? null;
   }
 }

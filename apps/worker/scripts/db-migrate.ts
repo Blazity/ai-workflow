@@ -23,6 +23,10 @@ config({ path: [".env.local", ".env"], quiet: true });
 
 import { execSync } from "node:child_process";
 import { neon } from "@neondatabase/serverless";
+import { drizzle } from "drizzle-orm/neon-http";
+import type { Db } from "../src/db/client.js";
+import * as schema from "../src/db/schema.js";
+import { seedWorkflowDefinitionTemplates } from "../src/workflow-definition/template-seed.js";
 
 const url = process.env.DATABASE_URL;
 if (!url) {
@@ -61,4 +65,12 @@ if (marker.endpoint_host !== host) {
   process.exitCode = 1;
 } else {
   console.log(`[db-migrate] OK — branch claimed by '${vercelEnv}'.`);
+}
+
+if (process.exitCode !== 1) {
+  const db = drizzle({ client: sql, schema }) as unknown as Db;
+  await seedWorkflowDefinitionTemplates(db, {
+    includeReview: process.env.ENABLE_REVIEW_PHASE === "true",
+  });
+  console.log("[db-migrate] Workflow templates are ready.");
 }

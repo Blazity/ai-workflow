@@ -136,39 +136,6 @@ export interface HourPoint {
   errors: number;
 }
 
-/** One Arthur version of a named prompt (metadata; body fetched on demand). */
-export interface PromptVersion {
-  /** Arthur integer version number. */
-  version: number;
-  /** ISO timestamp the version was created. */
-  createdAt: string;
-  /** Real Arthur tags on this version, e.g. ["production"]. */
-  tags: string[];
-  modelProvider: string;
-  modelName: string;
-  numMessages: number;
-  numTools: number;
-  /** Body text. Present only for the production version (eager); other
-   *  versions are fetched on demand via the by-version endpoint. */
-  body?: string;
-}
-
-/** A workflow phase prompt as resolved by the worker at runtime. */
-export interface PromptDef {
-  /** Stable Arthur/fallback key: "research-plan" | "implement" | "review". */
-  name: string;
-  /** Human label for the workflow phase, e.g. "Research & Plan". */
-  phase: string;
-  /** Resolved production prompt body (Arthur production tag, or in-code fallback). */
-  body: string;
-  /** Where the resolved `body` came from. */
-  source: "arthur" | "fallback";
-  /** Model the agent runs this prompt with (env-derived). */
-  model: string;
-  /** Real Arthur version history, newest first. Empty when source is "fallback". */
-  versions: PromptVersion[];
-}
-
 // --- Pre-PR checks (dashboard-managed gate config) ---
 
 export type VcsProviderKind = "github" | "gitlab";
@@ -211,6 +178,7 @@ export type WorkflowBlockType =
   | "trigger_pr_created"
   | "trigger_pr_checks_failed"
   | "trigger_pr_review"
+  | "trigger_pr_merged"
   | "planning_agent"
   | "implementation_agent"
   | "review_agent"
@@ -250,9 +218,106 @@ export interface BlockOutput {
   [key: string]: JsonValue;
 }
 
-export type TicketStatusTarget = "ai_review" | "backlog";
+/** Provider status identifier persisted by Update Ticket Status. Legacy
+ * `ai_review` / `backlog` values remain valid for existing definitions. */
+export type TicketStatusTarget = string;
 
 export type WorkflowParamValue = string | number | boolean | string[];
+
+/** Provenance of a prompt param copied from the prompt library. Purely
+ *  informational: the runtime never reads it; the editor uses it to render
+ *  "from library: Name vN" and to detect drift against the library head. */
+export interface PromptSourceRef {
+  /** prompt_library.id the text was copied from. */
+  promptId: number;
+  /** prompt_library_versions.version whose body was copied. */
+  version: number;
+  /** fnv1a hex of the inserted text, set by the editor at insert time so a
+   *  later manual edit of the field can be detected as "edited". */
+  insertedHash?: string;
+}
+
+/** Exact persisted source path for one block input. Syntax and graph safety are
+ * validated by the worker; the template union keeps authored definitions on
+ * the three supported roots without embedding graph semantics in this package. */
+export type WorkflowBindingSource =
+  | `trigger.${string}`
+  | `steps.${string}.output.${string}`
+  | `run.${string}`;
+
+export type WorkflowInputBindings = Record<string, WorkflowBindingSource>;
+
+/** Small JSON-shaped type language used by block input/output contracts. */
+export type WorkflowValueSchema =
+  | { type: "string" }
+  | { type: "number" }
+  | { type: "boolean" }
+  | { type: "null" }
+  | { type: "unknown" }
+  | { type: "nullable"; value: WorkflowValueSchema }
+  | { type: "array"; items: WorkflowValueSchema }
+  | {
+      type: "object";
+      properties: Record<string, WorkflowValueSchema>;
+      required: string[];
+      additionalProperties: boolean;
+    };
+
+export type WorkflowBlockGroup =
+  | "trigger"
+  | "agents"
+  | "workspace"
+  | "control"
+  | "ticket"
+  | "vcs"
+  | "human"
+  | "utility"
+  | "arthur";
+
+export interface WorkflowBlockPresentation {
+  label: string;
+  description: string;
+  group: WorkflowBlockGroup;
+  color: string;
+  softColor: string;
+  glyph: string;
+}
+
+export interface WorkflowBlockInputContract {
+  required: boolean;
+  schema: WorkflowValueSchema;
+}
+
+/** A safe, registry-owned family of additional named inputs. The worker still
+ * validates every concrete input name against `keyPattern`; this is only the
+ * serializable contract the editor uses to offer those inputs. */
+export interface WorkflowBlockAdditionalInputContract {
+  keyPattern: string;
+  schema: WorkflowValueSchema;
+}
+
+export type WorkflowBlockAvailability =
+  | { available: true; unavailableReason: null }
+  | { available: false; unavailableReason: string };
+
+/** Serializable contract returned by the worker-owned block registry. */
+export interface WorkflowBlockContract {
+  type: WorkflowBlockType;
+  presentation: WorkflowBlockPresentation;
+  defaults: Record<string, WorkflowParamValue>;
+  ports: string[];
+  allowsFailurePort: boolean;
+  inputs: Record<string, WorkflowBlockInputContract>;
+  additionalInputs: WorkflowBlockAdditionalInputContract[];
+  output: {
+    /** Complete executor envelope, including failure and clarification output. */
+    schema: WorkflowValueSchema;
+    /** Fields guaranteed when execution continues through a normal output port. */
+    bindingSchema: WorkflowValueSchema;
+    statusVariants: string[];
+  };
+  availability: WorkflowBlockAvailability;
+}
 
 export interface WorkflowDefinitionNode {
   id: string;
@@ -261,6 +326,10 @@ export interface WorkflowDefinitionNode {
   x: number;
   y: number;
   params: Record<string, WorkflowParamValue>;
+  /** Keyed by the param key the text was inserted into (e.g. "prompt",
+   *  "system", "body", "instructions", "message"). */
+  promptRefs?: Record<string, PromptSourceRef>;
+  inputs: WorkflowInputBindings;
 }
 
 export interface WorkflowDefinitionEdge {
@@ -269,10 +338,39 @@ export interface WorkflowDefinitionEdge {
   fromPort?: string;
 }
 
+export interface WorkflowExecutionBudgets {
+  maxDurationMs?: number;
+  maxTokens?: number;
+  maxCostUsd?: number;
+}
+
+/** Structured terminal cause persisted when a workflow run stops on a budget. */
+export type WorkflowRunBudgetFailure =
+  | {
+      status: "budget_exceeded";
+      metric: "duration" | "tokens" | "cost";
+      limit: number;
+      consumed: number;
+      reason: string;
+    }
+  | {
+      status: "budget_unverifiable";
+      metric: "tokens" | "cost";
+      limit: number;
+      consumed: null;
+      reason: string;
+    };
+
 export interface WorkflowDefinition {
   schemaVersion: 1;
+  budgets?: WorkflowExecutionBudgets;
   nodes: WorkflowDefinitionNode[];
   edges: WorkflowDefinitionEdge[];
+}
+
+/** Presentation-only node coordinates, persisted independently from a draft. */
+export interface WorkflowDefinitionLayout {
+  nodes: Record<string, { x: number; y: number }>;
 }
 
 export interface WorkflowDefinitionVersion {
@@ -291,6 +389,8 @@ export interface WorkflowEditorOptions {
   defaultModels: { claude: string; codex: string };
   models: { claude: string[]; codex: string[] };
   ticketStatusTargets: { value: TicketStatusTarget; label: string }[];
+  blockRegistry: Record<WorkflowBlockType, WorkflowBlockContract>;
+  runBindingSchema: WorkflowValueSchema;
 }
 
 export type BlockRunStatus = "pending" | "running" | "ok" | "warn" | "fail";
@@ -350,7 +450,7 @@ export type ClarificationStatus = "pending" | "answered" | "superseded";
  *  the dashboard. */
 export interface ClarificationRequest {
   id: string;
-  ticketKey: string;
+  ticketKey: string | null;
   /** Run that asked the questions. */
   runId: string;
   /** Graph node that raised the questions; null for the built-in default graph. */
@@ -369,6 +469,6 @@ export interface ClarificationRequest {
   answeredByLabel: string | null;
   /** ISO timestamp; null while pending. */
   answeredAt: string | null;
-  /** Resume run started on answer; null until dispatched. */
+  /** Deprecated: clarification answers now resume the asking run in place. */
   dispatchedRunId: string | null;
 }

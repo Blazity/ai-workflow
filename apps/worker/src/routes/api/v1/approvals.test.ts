@@ -139,7 +139,7 @@ describe("POST /api/v1/approvals/:id/approve", () => {
     const body = await res.json();
     expect(body.runId).toBe("run-x");
     expect(body.approval.status).toBe("approved");
-    expect(body.approval.dispatchedRunId).toBe("run-x");
+    expect(body.approval.dispatchedRunId).toBeNull();
     expect(mocks.dispatchPlanApproved).toHaveBeenCalledOnce();
     // The route wires the issue tracker through so dispatch can move the ticket
     // into the AI column under the claim before starting the run.
@@ -152,6 +152,7 @@ describe("POST /api/v1/approvals/:id/approve", () => {
     );
     const stored = await getApproval(db, row.id);
     expect(stored?.status).toBe("approved");
+    expect(stored?.dispatchedRunId).toBeNull();
   });
 
   it("rejects members with 403", async () => {
@@ -198,6 +199,9 @@ describe("POST /api/v1/approvals/:id/approve", () => {
 
     mocks.dispatchPlanApproved.mockImplementationOnce(async (input) => {
       await input.onClaimed();
+      // The workflow candidate records the correlation only after it wins the
+      // owner bind; the route itself must not write it from start()'s handle.
+      await setDispatchedRunId(db, row.id, "run-retry");
       return { status: "started", runId: "run-retry" };
     });
     res = await approve(row.id);
@@ -236,6 +240,24 @@ describe("POST /api/v1/approvals/:id/approve", () => {
     expect(stored?.decidedById).toBe("system");
   });
 
+  it("410s but preserves a final approved decision when its pinned definition is unavailable", async () => {
+    const row = await seedPending("AWT-1");
+    await decideApproval(db, {
+      id: row.id,
+      decision: "approved",
+      actor: { id: "user_admin", label: "Admin" },
+    });
+    mocks.dispatchPlanApproved.mockResolvedValue({ status: "definition_gone" });
+
+    const res = await approve(row.id);
+
+    expect(res.status).toBe(410);
+    const stored = await getApproval(db, row.id);
+    expect(stored?.status).toBe("approved");
+    expect(stored?.decidedById).toBe("user_admin");
+    expect(stored?.dispatchedRunId).toBeNull();
+  });
+
   it("409s run_in_flight and leaves the row pending", async () => {
     const row = await seedPending("AWT-1");
     mocks.dispatchPlanApproved.mockResolvedValue({ status: "run_in_flight" });
@@ -252,6 +274,25 @@ describe("POST /api/v1/approvals/:id/approve", () => {
     const stored = await getApproval(db, row.id);
     expect(stored?.status).toBe("rejected");
     expect(stored?.decidedById).toBe("system");
+    expect(mocks.dispatchPlanApproved).not.toHaveBeenCalled();
+  });
+
+  it("410s but preserves a final approved decision when the ticket is gone", async () => {
+    const row = await seedPending("AWT-1");
+    await decideApproval(db, {
+      id: row.id,
+      decision: "approved",
+      actor: { id: "user_admin", label: "Admin" },
+    });
+    mocks.fetchTicket.mockRejectedValue(new IssueTrackerNotFoundError("Issue", "AWT-1"));
+
+    const res = await approve(row.id);
+
+    expect(res.status).toBe(410);
+    const stored = await getApproval(db, row.id);
+    expect(stored?.status).toBe("approved");
+    expect(stored?.decidedById).toBe("user_admin");
+    expect(stored?.dispatchedRunId).toBeNull();
     expect(mocks.dispatchPlanApproved).not.toHaveBeenCalled();
   });
 });

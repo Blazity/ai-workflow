@@ -202,6 +202,21 @@ describe("GitLabAdapter", () => {
         adapter.createPR("feat/test", "Title", "Body"),
       ).rejects.toThrow("Project not found");
     });
+
+    it.each([400, 422])("throws FatalError on deterministic %i validation failures", async (status) => {
+      const error = new Error("Merge request policy rejected the request") as any;
+      error.cause = { response: { status } };
+      mockMergeRequests.create.mockRejectedValueOnce(error);
+
+      const caught = await glAdapter()
+        .createPR("feat/test", "Title", "Body")
+        .catch((failure) => failure as Error);
+
+      expect(caught).toMatchObject({
+        name: "FatalError",
+        message: "Merge request policy rejected the request",
+      });
+    });
   });
 
   describe("push", () => {
@@ -295,6 +310,51 @@ describe("GitLabAdapter", () => {
     });
   });
 
+  describe("getPRHead", () => {
+    it("reads the authoritative open MR identity and current head-pipeline state", async () => {
+      mockMergeRequests.show.mockResolvedValueOnce({
+        diff_refs: { head_sha: "source-head-sha" },
+        target_branch: "release",
+        state: "opened",
+        head_pipeline: { id: 901, status: "failed" },
+      });
+      mockJobs.all.mockResolvedValueOnce([
+        { id: 11, name: "lint", status: "success" },
+        { id: 12, name: "test", status: "failed" },
+      ]);
+
+      const adapter = glAdapter();
+
+      await expect(adapter.getPRHead(42)).resolves.toEqual({
+        headSha: "source-head-sha",
+        baseRef: "release",
+        state: "open",
+        headPipelineId: 901,
+        headPipelineStatus: "failed",
+        headPipelineFailedChecks: [{ id: 12, name: "test" }],
+      });
+      expect(mockMergeRequests.show).toHaveBeenCalledWith("blazity/demo-app", 42);
+      expect(mockJobs.all).toHaveBeenCalledWith("blazity/demo-app", {
+        pipelineId: 901,
+      });
+      expect(mockBranches.show).not.toHaveBeenCalled();
+    });
+
+    it("normalizes GitLab's merged lifecycle state", async () => {
+      mockMergeRequests.show.mockResolvedValueOnce({
+        diff_refs: { head_sha: "source-head-sha" },
+        target_branch: "main",
+        state: "merged",
+      });
+
+      await expect(glAdapter().getPRHead(42)).resolves.toEqual({
+        headSha: "source-head-sha",
+        baseRef: "main",
+        state: "merged",
+      });
+    });
+  });
+
   describe("findPR", () => {
     it("returns null when no MR exists", async () => {
       mockMergeRequests.all.mockResolvedValueOnce([]);
@@ -318,6 +378,31 @@ describe("GitLabAdapter", () => {
       expect(pr).not.toBeNull();
       expect(pr!.id).toBe(42);
       expect(pr!.branch).toBe("feat/test");
+      expect(mockMergeRequests.all).toHaveBeenCalledWith({
+        projectId: "blazity/demo-app",
+        sourceBranch: "feat/test",
+        targetBranch: "main",
+        state: "opened",
+      });
+    });
+  });
+
+  describe("getPRHeadSha", () => {
+    it("returns the provider's current merge request head", async () => {
+      mockMergeRequests.show.mockResolvedValueOnce({ sha: "current-head" });
+
+      await expect(glAdapter().getPRHeadSha(42)).resolves.toBe("current-head");
+      expect(mockMergeRequests.show).toHaveBeenCalledWith("blazity/demo-app", 42);
+    });
+
+    it("throws FatalError when the merge request is deterministically unavailable", async () => {
+      const error = new Error("Merge request not found") as any;
+      error.cause = { response: { status: 404 } };
+      mockMergeRequests.show.mockRejectedValueOnce(error);
+
+      const caught = await glAdapter().getPRHeadSha(42).catch((failure) => failure as Error);
+
+      expect(caught).toMatchObject({ name: "FatalError", message: "Merge request not found" });
     });
   });
 

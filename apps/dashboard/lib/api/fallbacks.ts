@@ -3,7 +3,6 @@ import type {
   EvalHealthResponse,
   EvalsResponse,
   CostResponse,
-  PromptsResponse,
   RunsResponse,
   RunDetailResponse,
   LiveRunsResponse,
@@ -60,10 +59,6 @@ export function costFallback(now: string): CostResponse {
     byWorkflow: [],
     daily: [],
   };
-}
-
-export function promptsFallback(now: string): PromptsResponse {
-  return { generatedAt: now, available: false, arthurEnabled: false, rows: [], total: 0 };
 }
 
 export function ticketRunsFallback(now: string): TicketRunsResponse {

@@ -8,6 +8,7 @@ export interface TicketContent {
   comments: TicketComment[];
   labels: string[];
   trackerStatus: string;
+  trackerStatusId?: string;
   attachments: TicketAttachment[];
 }
 
@@ -39,6 +40,9 @@ export interface TicketAttachment {
 export interface IssueTrackerTransitionTarget {
   name: string;
   transitionId?: string;
+  /** Provider status id. Resolved against the destination of currently valid
+   * transitions at execution time; distinct from the transition action id. */
+  statusId?: string;
 }
 
 export type IssueTrackerMoveTarget = string | IssueTrackerTransitionTarget;
@@ -50,6 +54,8 @@ export interface IssueTrackerAdapter {
    */
   fetchTicket(id: string): Promise<TicketContent>;
   moveTicket(id: string, target: IssueTrackerMoveTarget): Promise<void>;
+  /** Statuses configured for the adapter's project, for workflow authoring. */
+  listStatuses?(): Promise<Array<{ id: string; name: string }>>;
   /**
    * Post a comment on a ticket.
    *

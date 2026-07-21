@@ -1,10 +1,12 @@
 import { z } from "zod";
 import type { IssueTrackerMoveTarget } from "../../adapters/issue-tracker/types.js";
+import type { ActiveRunOwner } from "../../lib/active-run-owner.js";
+import type { TicketTransitionOwner } from "../../lib/ticket-transition.js";
+import { isRunControlError } from "../run-control-error.js";
 import type { BlockExecuteFn, BlockExecutionResult } from "./types.js";
 
 export const paramsSchema = z
   .object({
-    planFromStep: z.string().trim().min(1).optional(),
     mirrorComment: z.boolean().default(true),
   })
   .strict();
@@ -25,18 +27,31 @@ async function createApprovalRequestStep(input: {
 }
 createApprovalRequestStep.maxRetries = 0;
 
-async function mirrorApprovalCommentStep(ticketId: string, body: string): Promise<void> {
+async function mirrorApprovalCommentStep(
+  ticketId: string,
+  body: string,
+  owner: ActiveRunOwner,
+): Promise<void> {
   "use step";
+  const { getDb } = await import("../../db/client.js");
+  const { assertActiveRunOwner } = await import("../../lib/active-run-owner.js");
   const { createStepAdapters } = await import("../../lib/step-adapters.js");
   const { issueTracker } = createStepAdapters();
+  await assertActiveRunOwner(getDb(), owner);
   await issueTracker.postComment(ticketId, body);
 }
 mirrorApprovalCommentStep.maxRetries = 0;
 
-async function notifyPlanApprovalStep(ticketKey: string): Promise<void> {
+async function notifyPlanApprovalStep(
+  ticketKey: string,
+  owner: ActiveRunOwner,
+): Promise<void> {
   "use step";
+  const { getDb } = await import("../../db/client.js");
+  const { assertActiveRunOwner } = await import("../../lib/active-run-owner.js");
   const { createStepAdapters } = await import("../../lib/step-adapters.js");
   const { messaging } = createStepAdapters();
+  await assertActiveRunOwner(getDb(), owner);
   await messaging.notifyForTicket(ticketKey, { kind: "plan_approval_requested" });
 }
 notifyPlanApprovalStep.maxRetries = 0;
@@ -44,15 +59,30 @@ notifyPlanApprovalStep.maxRetries = 0;
 async function parkForApprovalStep(
   ticketId: string,
   backlogTarget: IssueTrackerMoveTarget,
+  owner: TicketTransitionOwner,
 ): Promise<void> {
   "use step";
+  const { getDb } = await import("../../db/client.js");
   const { createStepAdapters } = await import("../../lib/step-adapters.js");
   const { AWAITING_APPROVAL_LABEL } = await import("../../lib/labels.js");
+  const { updateTicketLabelsForRun } = await import(
+    "../../lib/ticket-label-mutation.js"
+  );
+  const { moveTicketForRun } = await import("../../lib/ticket-transition.js");
   const { issueTracker } = createStepAdapters();
+  const db = getDb();
   if (typeof issueTracker.updateLabels === "function") {
     try {
-      await issueTracker.updateLabels(ticketId, { add: [AWAITING_APPROVAL_LABEL] });
+      await updateTicketLabelsForRun({
+        db,
+        issueTracker,
+        ticketKey: ticketId,
+        owner,
+        requiredOwnerState: "bound",
+        changes: { add: [AWAITING_APPROVAL_LABEL] },
+      });
     } catch (err) {
+      if (isRunControlError(err)) throw err;
       const { logger } = await import("../../lib/logger.js");
       logger.warn(
         { ticketId, err: err instanceof Error ? err.message : String(err) },
@@ -67,8 +97,15 @@ async function parkForApprovalStep(
   // re-dispatch it. Swallowing here rather than in the caller keeps pino inside the step:
   // workflow scope forbids Node modules.
   try {
-    await issueTracker.moveTicket(ticketId, backlogTarget);
+    await moveTicketForRun({
+      db,
+      issueTracker,
+      ticketKey: ticketId,
+      target: backlogTarget,
+      owner,
+    });
   } catch (err) {
+    if (isRunControlError(err)) throw err;
     const { logger } = await import("../../lib/logger.js");
     logger.warn(
       { ticketId, err: err instanceof Error ? err.message : String(err) },
@@ -80,9 +117,9 @@ parkForApprovalStep.maxRetries = 0;
 
 /**
  * send_plan_approval: file the run's plan for human approval, then end the run.
- * The plan text comes from the referenced step's output (params.planFromStep),
- * which must resolve to a `.plan` or the block fails, and falls back to the
- * run's research plan only when no step is referenced. After unregistering the
+ * The plan text comes from the block's resolved `plan` input. The run's
+ * research plan remains a compatibility fallback for stored definitions that
+ * predate typed inputs. After unregistering the
  * run it parks the ticket in the backlog column with an awaiting-approval
  * label, mirroring the clarification exit: moving the ticket out of the AI
  * column is what stops the cron poll from re-dispatching it while it waits. A
@@ -90,34 +127,16 @@ parkForApprovalStep.maxRetries = 0;
  * dispatch skips the column check so the ticket's backlog location does not
  * block it.
  */
-export const execute: BlockExecuteFn = async (block, steps, ctx): Promise<BlockExecutionResult> => {
-  const planFromStep =
-    typeof block.params.planFromStep === "string" ? block.params.planFromStep.trim() : "";
-  const planStep = planFromStep ? steps[planFromStep] : undefined;
-  // Only planning_agent emits `.plan`. A planFromStep pointing anywhere else
-  // must fail loud: silently approving ctx.researchPlanMarkdown would put a plan
-  // in front of a human that the referenced block did not produce. The fallback
-  // is for the no-reference case only.
-  let markdown: string;
-  if (planFromStep) {
-    if (!planStep) {
-      return {
-        kind: "failed",
-        output: { status: "failed" },
-        reason: `planFromStep references block "${planFromStep}", which produced no output before this block ran`,
-      };
-    }
-    if (typeof planStep.output.plan !== "string") {
-      return {
-        kind: "failed",
-        output: { status: "failed" },
-        reason: `planFromStep references block "${planFromStep}", whose output has no plan field; only a planning_agent block emits one`,
-      };
-    }
-    markdown = planStep.output.plan;
-  } else {
-    markdown = ctx.researchPlanMarkdown;
-  }
+export const execute: BlockExecuteFn = async (
+  block,
+  _steps,
+  ctx,
+  resolvedInputs,
+): Promise<BlockExecutionResult> => {
+  const markdown =
+    typeof resolvedInputs?.plan === "string"
+      ? resolvedInputs.plan
+      : ctx.researchPlanMarkdown;
   if (markdown.trim().length === 0) {
     return { kind: "failed", output: { status: "failed" }, reason: "no plan available" };
   }
@@ -130,10 +149,15 @@ export const execute: BlockExecuteFn = async (block, steps, ctx): Promise<BlockE
     };
   }
 
-  const rawAssumptions = planStep?.output.assumptions;
+  const rawAssumptions = resolvedInputs?.assumptions;
   const assumptions = Array.isArray(rawAssumptions)
     ? rawAssumptions.filter((a): a is string => typeof a === "string")
     : [];
+  const owner: ActiveRunOwner = {
+    subjectKey: ctx.entry.subjectKey,
+    ownerToken: ctx.entry.ownerToken,
+    runId: ctx.runId,
+  };
 
   let approvalRequestId: string;
   try {
@@ -149,6 +173,7 @@ export const execute: BlockExecuteFn = async (block, steps, ctx): Promise<BlockE
       assumptions: assumptions.length > 0 ? assumptions : null,
     });
   } catch (err) {
+    if (isRunControlError(err)) throw err;
     return {
       kind: "failed",
       output: { status: "failed" },
@@ -160,13 +185,17 @@ export const execute: BlockExecuteFn = async (block, steps, ctx): Promise<BlockE
     await mirrorApprovalCommentStep(
       ctx.ticket.identifier,
       "Plan awaiting approval in the dashboard.",
-    ).catch(() => {});
+      owner,
+    ).catch((error) => {
+      if (isRunControlError(error)) throw error;
+    });
   }
 
-  await notifyPlanApprovalStep(ctx.ticket.identifier).catch(() => {});
+  await notifyPlanApprovalStep(ctx.ticket.identifier, owner).catch((error) => {
+    if (isRunControlError(error)) throw error;
+  });
 
-  await ctx.unregisterBeforePr();
-  await parkForApprovalStep(ctx.ticket.identifier, ctx.moveTargets.backlog);
+  await parkForApprovalStep(ctx.ticket.identifier, ctx.moveTargets.backlog, owner);
 
   return { kind: "ended", output: { status: "awaiting_approval", approvalRequestId } };
 };

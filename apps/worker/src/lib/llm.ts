@@ -3,8 +3,10 @@ import type { LanguageModel } from "ai";
 import { anthropic } from "@ai-sdk/anthropic";
 import { createOpenAI } from "@ai-sdk/openai";
 import { env } from "../../env.js";
+import { resolveLlmProvider, type LlmProvider } from "./llm-provider.js";
 
-export type LlmProvider = "claude" | "codex";
+export { inferProvider } from "./llm-provider.js";
+export type { LlmProvider } from "./llm-provider.js";
 
 /**
  * Hard bound on a single provider call, mirroring the agent blocks' MAX_MINUTES
@@ -30,19 +32,13 @@ export interface GenerateStructuredInput {
   provider?: LlmProvider;
   system?: string;
   prompt: string;
+  /** Optional caller budget; the module safety timeout remains the upper bound. */
+  timeoutMs?: number;
   /**
    * JSON-schema string describing the desired object. When present the model is
    * asked to return a matching object; when absent, plain text is generated.
    */
   schema?: string;
-}
-
-/** Best-effort provider guess from a model id when none was passed explicitly. */
-export function inferProvider(model: string): LlmProvider | undefined {
-  const id = model.toLowerCase();
-  if (id.startsWith("claude") || id.startsWith("anthropic")) return "claude";
-  if (id.startsWith("gpt") || /^o[0-9]/.test(id) || id.includes("codex")) return "codex";
-  return undefined;
 }
 
 /** Build the AI SDK model object for the resolved provider. */
@@ -60,7 +56,7 @@ export interface GenerateStructuredResult {
   /** Parsed object matching `schema`. Absent when no schema was requested. */
   object?: unknown;
   text: string;
-  usage: { inputTokens: number; outputTokens: number; cachedTokens: number };
+  usage: { inputTokens: number; outputTokens: number; cachedTokens: number } | null;
 }
 
 /**
@@ -73,12 +69,16 @@ export async function generateStructured(
   input: GenerateStructuredInput,
 ): Promise<GenerateStructuredResult> {
   const { model, provider, system, prompt, schema } = input;
-  const effectiveProvider = provider ?? inferProvider(model) ?? "claude";
+  const timeoutMs = Math.min(
+    LLM_TIMEOUT_MS,
+    input.timeoutMs === undefined ? LLM_TIMEOUT_MS : Math.max(1, Math.floor(input.timeoutMs)),
+  );
+  const effectiveProvider = resolveLlmProvider(model, provider);
   const base = {
     model: resolveModel(effectiveProvider, model),
     ...(system !== undefined ? { system } : {}),
     prompt,
-    abortSignal: AbortSignal.timeout(LLM_TIMEOUT_MS),
+    abortSignal: AbortSignal.timeout(timeoutMs),
   };
 
   if (schema) {
@@ -97,11 +97,21 @@ function mapUsage(usage: {
   inputTokens?: number;
   outputTokens?: number;
   cachedInputTokens?: number;
-  inputTokenDetails?: { cacheReadTokens?: number };
+  inputTokenDetails?: { noCacheTokens?: number; cacheReadTokens?: number };
 }): GenerateStructuredResult["usage"] {
+  if (
+    !usage ||
+    typeof usage.inputTokens !== "number" ||
+    typeof usage.outputTokens !== "number"
+  ) {
+    return null;
+  }
+  const cachedTokens = usage.inputTokenDetails?.cacheReadTokens ?? usage.cachedInputTokens ?? 0;
+  const inputTokens = usage.inputTokenDetails?.noCacheTokens
+    ?? Math.max(0, usage.inputTokens - cachedTokens);
   return {
-    inputTokens: usage?.inputTokens ?? 0,
-    outputTokens: usage?.outputTokens ?? 0,
-    cachedTokens: usage?.inputTokenDetails?.cacheReadTokens ?? usage?.cachedInputTokens ?? 0,
+    inputTokens,
+    outputTokens: usage.outputTokens,
+    cachedTokens,
   };
 }

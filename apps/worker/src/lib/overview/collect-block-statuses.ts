@@ -28,7 +28,14 @@ export async function collectBlockStatuses(
     definitionId === undefined ? undefined : eq(workflowRuns.definitionId, definitionId);
 
   const entries = await registry.listAll();
-  const liveRunIds = entries.map((e) => e.runId);
+  const liveRunIds = entries.flatMap((entry) =>
+    (entry.state === "bound" ||
+      entry.state === "parking" ||
+      entry.state === "parked") &&
+    entry.runId
+      ? [entry.runId]
+      : [],
+  );
 
   if (liveRunIds.length > 0) {
     const [row] = await db

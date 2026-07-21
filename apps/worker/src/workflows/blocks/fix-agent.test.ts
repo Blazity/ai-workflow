@@ -12,9 +12,15 @@ const mocks = vi.hoisted(() => ({
   extractUsage: vi.fn(),
   writeFiles: vi.fn(),
   runCommand: vi.fn().mockResolvedValue({ exitCode: 0 }),
+  ensureWorkspace: vi.fn(),
+  inspectFixWorkspace: vi.fn(),
+  pollPhaseUntilDone: vi.fn().mockResolvedValue(true),
 }));
 
-vi.mock("workflow", () => ({ sleep: mocks.sleep }));
+vi.mock("workflow", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("workflow")>()),
+  sleep: mocks.sleep,
+}));
 vi.mock("../../sandbox/poll-agent.js", () => ({
   checkPhaseDone: mocks.checkPhaseDone,
   collectPhase: mocks.collectPhase,
@@ -28,6 +34,7 @@ vi.mock("@vercel/sandbox", () => ({
     get: vi.fn(async () => ({ writeFiles: mocks.writeFiles, runCommand: mocks.runCommand })),
   },
 }));
+vi.mock("./poll-phase.js", () => ({ pollPhaseUntilDone: mocks.pollPhaseUntilDone }));
 vi.mock("../../sandbox/agents/index.js", () => ({
   createAgentAdapter: vi.fn(() => ({
     setCommitGuard: mocks.setCommitGuard,
@@ -37,9 +44,22 @@ vi.mock("../../sandbox/agents/index.js", () => ({
     extractUsage: mocks.extractUsage,
   })),
 }));
+vi.mock("./prepare-workspace.js", () => ({
+  ensureWorkspace: mocks.ensureWorkspace,
+}));
+vi.mock("./fix-workspace-state.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./fix-workspace-state.js")>()),
+  inspectFixWorkspace: mocks.inspectFixWorkspace,
+}));
 
 import { execute, paramsSchema } from "./fix-agent.js";
-import { makeCtx, makeNode, makePrPayload } from "./test-support.js";
+import {
+  expectOutputConformsToRegistry,
+  makeCtx,
+  makeNode,
+  makePrPayload,
+  runControlErrorCases,
+} from "./test-support.js";
 
 const usage = {
   cost_usd: 0.5,
@@ -82,12 +102,41 @@ describe("fix_agent execute", () => {
     mocks.checkPhaseDone.mockResolvedValue(true);
     mocks.collectPhase.mockResolvedValue({ raw: "raw", structured: null });
     mocks.extractUsage.mockReturnValue(usage);
+    mocks.ensureWorkspace.mockImplementation(async (ctx) => {
+      ctx.sandboxId ??= "sbx-auto";
+      return {
+        kind: "next",
+        output: {
+          status: "ok",
+          sandboxId: ctx.sandboxId,
+          repositories: [],
+          workspace: { id: ctx.sandboxId, repositories: [] },
+        },
+      };
+    });
+    mocks.inspectFixWorkspace.mockResolvedValue({ commits: [], unresolvedConflicts: [] });
+    mocks.runCommand.mockResolvedValue({ cmdId: "cmd-2", exitCode: null });
+    mocks.pollPhaseUntilDone.mockResolvedValue(true);
   });
 
-  it("fails without a workspace", async () => {
-    const result = await execute(makeNode("fix_agent"), {}, makeCtx({ sandboxId: null }));
-    expect(result.kind).toBe("failed");
-    if (result.kind === "failed") expect(result.reason).toContain("no workspace");
+  it("implicitly ensures a workspace when none is attached", async () => {
+    mocks.parseAgentOutput.mockReturnValue({ result: "implemented", summary: "patched" });
+    const ctx = makeCtx({ sandboxId: null });
+    const execution = { clarificationAnswer: "Use github:acme/api" };
+    const result = await execute(makeNode("fix_agent"), {}, ctx, {}, execution);
+
+    expect(mocks.ensureWorkspace).toHaveBeenCalledWith(ctx, execution);
+    expect(result).toEqual({
+      kind: "next",
+      output: {
+        status: "fixed",
+        workspaceId: "sbx-auto",
+        commits: [],
+        resolvedConflicts: [],
+        unresolvedConflicts: [],
+        summary: "patched",
+      },
+    });
   });
 
   it("runs the phase with a sanitized block id label and records usage as Fix", async () => {
@@ -110,11 +159,26 @@ describe("fix_agent execute", () => {
       expect.objectContaining({ instructions: "focus on CI" }),
     );
     expect(ctx.markLaunched).toHaveBeenCalledWith("Fix Fix Block!");
+    expect(mocks.pollPhaseUntilDone).toHaveBeenCalledWith(
+      "sbx-1",
+      "/tmp/fix-fix-block--done",
+      25,
+      "cmd-2",
+      ctx.observeBudget,
+    );
     expect(ctx.recordUsage).toHaveBeenCalledWith("Fix Fix Block!", usage, "claude-model");
     expect(result).toEqual({
       kind: "next",
-      output: { status: "implemented", summary: "patched" },
+      output: {
+        status: "fixed",
+        workspaceId: "sbx-1",
+        commits: [],
+        resolvedConflicts: [],
+        unresolvedConflicts: [],
+        summary: "patched",
+      },
     });
+    expectOutputConformsToRegistry("fix_agent", result.output);
   });
 
   it("feeds pr_trigger failed checks and review into the fix context", async () => {
@@ -123,8 +187,12 @@ describe("fix_agent execute", () => {
       entry: {
         kind: "pr_trigger",
         triggerType: "trigger_pr_checks_failed",
+        subjectKey: "ticket:jira:AWT-1",
         ticketKey: "AWT-1",
+        ownerToken: "owner:test",
         definitionId: 1,
+        definitionVersion: 1,
+        scope: "workflow_owned",
         pr: makePrPayload({
           failedChecks: [{ name: "ci", conclusion: "failure", detailsUrl: "https://ci" }],
           review: { state: "changes_requested", author: "bob", body: "rename this" },
@@ -172,8 +240,104 @@ describe("fix_agent execute", () => {
 
     expect(result).toEqual({
       kind: "needs_human_input",
-      output: { status: "needs_human_input", questions: ["Which env?"] },
+      output: {
+        status: "needs_human_input",
+        workspaceId: "sbx-1",
+        commits: [],
+        resolvedConflicts: [],
+        unresolvedConflicts: [],
+        questions: ["Which env?"],
+      },
       questions: ["Which env?"],
+    });
+  });
+
+  it.each([null, [], ["", "   "]])(
+    "supplies an answerable fallback when clarification questions are %j",
+    async (questions) => {
+      mocks.parseAgentOutput.mockReturnValue({
+        result: "clarification_needed",
+        questions,
+      });
+
+      const result = await execute(makeNode("fix_agent"), {}, makeCtx());
+
+      expect(result.kind).toBe("needs_human_input");
+      if (result.kind === "needs_human_input") {
+        expect(result.questions).toEqual([
+          "The Fix Agent needs more information. What should it use to continue?",
+        ]);
+        expect(result.output.questions).toEqual(result.questions);
+      }
+    },
+  );
+
+  it("reports cumulative commits since the workspace baseline and conflicts resolved by Fix", async () => {
+    mocks.parseAgentOutput.mockReturnValue({ result: "implemented", summary: "resolved" });
+    mocks.inspectFixWorkspace
+      .mockResolvedValueOnce({
+        commits: [{ provider: "github", repoPath: "acme/api", sha: "earlier123" }],
+        unresolvedConflicts: [
+          { provider: "github", repoPath: "acme/api", files: ["src/conflict.ts"] },
+        ],
+      })
+      .mockResolvedValueOnce({
+        commits: [
+          { provider: "github", repoPath: "acme/api", sha: "earlier123" },
+          { provider: "github", repoPath: "acme/api", sha: "fix123" },
+        ],
+        unresolvedConflicts: [],
+      });
+
+    const result = await execute(makeNode("fix_agent"), {}, makeCtx());
+
+    expect(result).toEqual({
+      kind: "next",
+      output: {
+        status: "fixed",
+        workspaceId: "sbx-1",
+        commits: [
+          { provider: "github", repoPath: "acme/api", sha: "earlier123" },
+          { provider: "github", repoPath: "acme/api", sha: "fix123" },
+        ],
+        resolvedConflicts: [
+          { provider: "github", repoPath: "acme/api", files: ["src/conflict.ts"] },
+        ],
+        unresolvedConflicts: [],
+        summary: "resolved",
+      },
+    });
+  });
+
+  it("creates a human checkpoint instead of fixed when conflicts remain", async () => {
+    mocks.parseAgentOutput.mockReturnValue({ result: "implemented", summary: "attempted" });
+    const unresolved = [
+      { provider: "github" as const, repoPath: "acme/api", files: ["src/conflict.ts"] },
+    ];
+    mocks.inspectFixWorkspace
+      .mockResolvedValueOnce({ commits: [], unresolvedConflicts: unresolved })
+      .mockResolvedValueOnce({
+        commits: [{ provider: "github", repoPath: "acme/api", sha: "partial123" }],
+        unresolvedConflicts: unresolved,
+      });
+
+    const result = await execute(makeNode("fix_agent"), {}, makeCtx());
+
+    expect(result).toEqual({
+      kind: "needs_human_input",
+      output: {
+        status: "needs_human_input",
+        workspaceId: "sbx-1",
+        commits: [{ provider: "github", repoPath: "acme/api", sha: "partial123" }],
+        resolvedConflicts: [],
+        unresolvedConflicts: unresolved,
+        questions: [
+          "Merge conflicts remain in github:acme/api (src/conflict.ts). How should they be resolved before publication?",
+        ],
+      },
+      questions: [
+        "Merge conflicts remain in github:acme/api (src/conflict.ts). How should they be resolved before publication?",
+      ],
     });
   });
 
@@ -183,16 +347,59 @@ describe("fix_agent execute", () => {
     const result = await execute(makeNode("fix_agent"), {}, makeCtx());
 
     expect(result.kind).toBe("failed");
-    if (result.kind === "failed") expect(result.reason).toBe("could not fix");
+    if (result.kind === "failed") {
+      expect(result.reason).toBe("could not fix");
+      expect(result.output).toEqual({
+        status: "failed",
+        workspaceId: "sbx-1",
+        commits: [],
+        resolvedConflicts: [],
+        unresolvedConflicts: [],
+      });
+    }
   });
 
-  it("fails when the phase times out", async () => {
-    mocks.checkPhaseDone.mockResolvedValue("stopped");
+  it.each(runControlErrorCases())("rethrows %s from Fix execution", async (_label, error) => {
+    mocks.pollPhaseUntilDone.mockRejectedValue(error);
+
+    await expect(execute(makeNode("fix_agent"), {}, makeCtx())).rejects.toBe(error);
+  });
+
+  it("reports the post-termination workspace state when the phase times out", async () => {
+    mocks.pollPhaseUntilDone.mockResolvedValue(false);
+    const before = {
+      commits: [{ provider: "github" as const, repoPath: "acme/api", sha: "before123" }],
+      unresolvedConflicts: [
+        { provider: "github" as const, repoPath: "acme/api", files: ["src/old.ts"] },
+      ],
+    };
+    const after = {
+      commits: [
+        { provider: "github" as const, repoPath: "acme/api", sha: "before123" },
+        { provider: "github" as const, repoPath: "acme/api", sha: "partial456" },
+      ],
+      unresolvedConflicts: [
+        { provider: "github" as const, repoPath: "acme/api", files: ["src/new.ts"] },
+      ],
+    };
+    mocks.inspectFixWorkspace.mockResolvedValueOnce(before).mockResolvedValueOnce(after);
 
     const result = await execute(makeNode("fix_agent"), {}, makeCtx());
 
-    expect(result.kind).toBe("failed");
-    if (result.kind === "failed") expect(result.reason).toBe("fix phase timed out");
+    expect(result).toEqual({
+      kind: "failed",
+      output: {
+        status: "failed",
+        workspaceId: "sbx-1",
+        commits: after.commits,
+        resolvedConflicts: [
+          { provider: "github", repoPath: "acme/api", files: ["src/old.ts"] },
+        ],
+        unresolvedConflicts: after.unresolvedConflicts,
+      },
+      reason: "fix phase timed out",
+    });
+    expect(mocks.inspectFixWorkspace).toHaveBeenCalledTimes(2);
     expect(mocks.collectPhase).not.toHaveBeenCalled();
   });
 });

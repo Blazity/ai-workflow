@@ -4,6 +4,30 @@ export interface PullRequest {
   branch: string;
 }
 
+export interface PullRequestHead {
+  headSha: string;
+  /** Provider-authoritative target branch (GitHub base / GitLab target). */
+  baseRef: string;
+  /** Provider-neutral current PR/MR lifecycle state. */
+  state: "open" | "closed" | "merged";
+  /** GitLab's current MR head pipeline. Absent for providers without this concept. */
+  headPipelineId?: number;
+  /** GitLab's provider-authoritative current status for the MR head pipeline. */
+  headPipelineStatus?: string;
+  /** Jobs that are still failed in GitLab's current MR head pipeline. */
+  headPipelineFailedChecks?: Array<{ id: number; name: string }>;
+  /** GitHub's latest run for each check name on this exact head. */
+  latestCheckRuns?: LatestCheckRun[];
+}
+
+export interface LatestCheckRun {
+  id: number;
+  name: string;
+  appSlug: string;
+  status: string;
+  conclusion: string | null;
+}
+
 export interface PRComment {
   author: string;
   body: string;
@@ -32,8 +56,13 @@ export interface VCSAdapter {
   postPRComment(prId: number, body: string): Promise<{ url: string | null }>;
   getCheckRunResults(prId: number): Promise<CheckRunResult[]>;
   getPRConflictStatus(prId: number): Promise<boolean>;
+  /** Re-read the provider's authoritative current PR/MR head commit. */
+  getPRHeadSha(prId: number): Promise<string>;
   findPR(branch: string): Promise<PullRequest | null>;
   getBranchSha(branch: string): Promise<string>;
+  getPRHead(prId: number): Promise<PullRequestHead>;
+  /** Optional because only GitHub exposes Check Run identities. */
+  getLatestCheckRuns?(headSha: string): Promise<LatestCheckRun[]>;
 }
 
 export interface CheckRunAnnotation {

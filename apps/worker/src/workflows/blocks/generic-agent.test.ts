@@ -11,15 +11,21 @@ const mocks = vi.hoisted(() => ({
   writeFiles: vi.fn(),
   runCommand: vi.fn().mockResolvedValue({ exitCode: 0 }),
   sandboxGet: vi.fn(),
+  ensureAgentSandbox: vi.fn(),
+  pollPhaseUntilDone: vi.fn().mockResolvedValue(true),
 }));
 
-vi.mock("workflow", () => ({ sleep: mocks.sleep }));
+vi.mock("workflow", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("workflow")>()),
+  sleep: mocks.sleep,
+}));
 vi.mock("../../sandbox/poll-agent.js", () => ({
   checkPhaseDone: mocks.checkPhaseDone,
   collectPhase: mocks.collectPhase,
 }));
 vi.mock("../../sandbox/credentials.js", () => ({ getSandboxCredentials: () => ({}) }));
 vi.mock("@vercel/sandbox", () => ({ Sandbox: { get: mocks.sandboxGet } }));
+vi.mock("./poll-phase.js", () => ({ pollPhaseUntilDone: mocks.pollPhaseUntilDone }));
 vi.mock("../../sandbox/agents/index.js", () => ({
   createAgentAdapter: vi.fn(() => ({
     setCommitGuard: mocks.setCommitGuard,
@@ -28,10 +34,13 @@ vi.mock("../../sandbox/agents/index.js", () => ({
     extractUsage: mocks.extractUsage,
   })),
 }));
+vi.mock("./agent-sandbox.js", () => ({
+  ensureAgentSandbox: mocks.ensureAgentSandbox,
+}));
 
 import { GENERIC_SCHEMA } from "../../sandbox/agents/types.js";
 import { execute, paramsSchema } from "./generic-agent.js";
-import { makeCtx, makeNode } from "./test-support.js";
+import { makeCtx, makeNode, runControlErrorCases } from "./test-support.js";
 
 function pathsFor(phase: string) {
   return {
@@ -45,10 +54,13 @@ function pathsFor(phase: string) {
 }
 
 describe("generic_agent paramsSchema", () => {
-  it("requires a prompt and rejects unknown keys", () => {
-    expect(paramsSchema.safeParse({ prompt: "do things" }).success).toBe(true);
-    expect(paramsSchema.safeParse({ prompt: "" }).success).toBe(false);
-    expect(paramsSchema.safeParse({}).success).toBe(false);
+  it("allows a binding-only prompt and rejects unknown keys", () => {
+    expect(paramsSchema.parse({ prompt: "do things" })).toMatchObject({
+      prompt: "do things",
+      workspaceMode: "none",
+    });
+    expect(paramsSchema.safeParse({ prompt: "" }).success).toBe(true);
+    expect(paramsSchema.safeParse({}).success).toBe(true);
     expect(
       paramsSchema.safeParse({ prompt: "p", provider: "codex", model: "m", outputSchema: "{}" })
         .success,
@@ -68,6 +80,9 @@ describe("generic_agent execute", () => {
     mocks.buildPhaseScript.mockReturnValue("#!/bin/bash");
     mocks.checkPhaseDone.mockResolvedValue(true);
     mocks.extractUsage.mockReturnValue(null);
+    mocks.ensureAgentSandbox.mockResolvedValue("scratch-new");
+    mocks.runCommand.mockResolvedValue({ cmdId: "cmd-1", exitCode: null });
+    mocks.pollPhaseUntilDone.mockResolvedValue(true);
   });
 
   it("fails on an unparseable outputSchema before touching the sandbox", async () => {
@@ -82,14 +97,119 @@ describe("generic_agent execute", () => {
     expect(mocks.sandboxGet).not.toHaveBeenCalled();
   });
 
-  it("fails without a workspace", async () => {
+  it("fails without a workspace in read_write mode", async () => {
     const result = await execute(
-      makeNode("generic_agent", { prompt: "p" }),
+      makeNode("generic_agent", { prompt: "p", workspaceMode: "read_write" }),
       {},
       makeCtx({ sandboxId: null }),
     );
     expect(result.kind).toBe("failed");
     if (result.kind === "failed") expect(result.reason).toContain("no workspace");
+  });
+
+  it("uses an agent-only scratch sandbox in none mode", async () => {
+    mocks.collectPhase.mockResolvedValue({
+      raw: "",
+      structured: JSON.stringify({ status: "ok", body: "planned", questions: null, error: null }),
+    });
+    const ctx = makeCtx({
+      sandboxId: null,
+      agentSandboxIds: { claude: "scratch-1" },
+    } as never);
+
+    const result = await execute(
+      makeNode("generic_agent", { prompt: "Plan only", workspaceMode: "none" }),
+      {},
+      ctx,
+    );
+
+    expect(mocks.sandboxGet).toHaveBeenCalledWith(
+      expect.objectContaining({ sandboxId: "scratch-1" }),
+    );
+    expect(result).toEqual({ kind: "next", output: { status: "completed", body: "planned" } });
+  });
+
+  it("adds the clarification answer to the rerun prompt", async () => {
+    mocks.collectPhase.mockResolvedValue({
+      raw: "",
+      structured: JSON.stringify({ status: "ok", body: "continued", questions: null, error: null }),
+    });
+    const ctx = makeCtx({
+      sandboxId: null,
+      agentSandboxIds: { claude: "scratch-1" },
+    } as never);
+
+    await (execute as any)(
+      makeNode("generic_agent", { prompt: "Choose a cache", workspaceMode: "none" }),
+      {},
+      ctx,
+      {},
+      { clarificationAnswer: "Use Redis" },
+    );
+
+    const inputWrite = mocks.writeFiles.mock.calls
+      .flatMap(([files]) => files)
+      .find((file: { path: string }) => file.path.endsWith("requirements.md"));
+    expect(inputWrite.content.toString("utf8")).toContain("Human clarification answer:\nUse Redis");
+  });
+
+  it("provisions agent-only scratch on demand in none mode", async () => {
+    mocks.collectPhase.mockResolvedValue({
+      raw: "",
+      structured: JSON.stringify({ status: "ok", body: "planned", questions: null, error: null }),
+    });
+    const ctx = makeCtx({ sandboxId: null, agentSandboxIds: {} } as never);
+
+    const result = await execute(
+      makeNode("generic_agent", { prompt: "Plan only", workspaceMode: "none" }),
+      {},
+      ctx,
+    );
+
+    expect(mocks.ensureAgentSandbox).toHaveBeenCalledWith(ctx, "claude", "claude-model");
+    expect(mocks.sandboxGet).toHaveBeenCalledWith(
+      expect.objectContaining({ sandboxId: "scratch-new" }),
+    );
+    expect(result.kind).toBe("next");
+  });
+
+  it("maps agent-only scratch provisioning failures to a failed block", async () => {
+    mocks.ensureAgentSandbox.mockRejectedValueOnce(new Error("sandbox unavailable"));
+
+    const result = await execute(
+      makeNode("generic_agent", { prompt: "Plan only", workspaceMode: "none" }),
+      {},
+      makeCtx({ sandboxId: null, agentSandboxIds: {} } as never),
+    );
+
+    expect(result).toEqual({
+      kind: "failed",
+      output: { status: "failed" },
+      reason: "sandbox unavailable",
+    });
+  });
+
+  it.each(runControlErrorCases())(
+    "rethrows %s from agent-only scratch provisioning",
+    async (_label, error) => {
+      mocks.ensureAgentSandbox.mockRejectedValueOnce(error);
+
+      await expect(
+        execute(
+          makeNode("generic_agent", { prompt: "Plan only", workspaceMode: "none" }),
+          {},
+          makeCtx({ sandboxId: null, agentSandboxIds: {} } as never),
+        ),
+      ).rejects.toBe(error);
+    },
+  );
+
+  it.each(runControlErrorCases())("rethrows %s from agent execution", async (_label, error) => {
+    mocks.pollPhaseUntilDone.mockRejectedValue(error);
+
+    await expect(
+      execute(makeNode("generic_agent", { prompt: "Plan only" }), {}, makeCtx()),
+    ).rejects.toBe(error);
   });
 
   it("writes the prompt verbatim, uses GENERIC_SCHEMA, and maps ok output", async () => {
@@ -116,8 +236,46 @@ describe("generic_agent execute", () => {
       { path: "/tmp/agent-my-agent-wrapper.sh", content: Buffer.from("#!/bin/bash") },
     ]);
     expect(ctx.markLaunched).toHaveBeenCalledWith("Agent My Agent");
+    expect(mocks.pollPhaseUntilDone).toHaveBeenCalledWith(
+      "sbx-1",
+      "/tmp/agent-my-agent-done",
+      25,
+      "cmd-1",
+      ctx.observeBudget,
+    );
     expect(ctx.recordUsage).toHaveBeenCalledWith("Agent My Agent", null, "claude-model");
-    expect(result).toEqual({ kind: "next", output: { status: "ok", body: "done" } });
+    expect(result).toEqual({ kind: "next", output: { status: "completed", body: "done" } });
+  });
+
+  it("emits the guaranteed body field when an unstructured success body is empty", async () => {
+    mocks.collectPhase.mockResolvedValue({
+      raw: "",
+      structured: JSON.stringify({ status: "ok", body: "", questions: null, error: null }),
+    });
+
+    const result = await execute(makeNode("generic_agent", { prompt: "p" }), {}, makeCtx());
+
+    expect(result).toEqual({ kind: "next", output: { status: "completed", body: "" } });
+  });
+
+  it("prefers a resolved prompt over the static param", async () => {
+    mocks.collectPhase.mockResolvedValue({
+      raw: "",
+      structured: JSON.stringify({ status: "ok", body: "done", questions: null, error: null }),
+    });
+
+    await execute(
+      makeNode("generic_agent", { prompt: "static" }),
+      {},
+      makeCtx(),
+      { prompt: "bound" },
+    );
+
+    expect(mocks.writeFiles).toHaveBeenCalledWith(
+      expect.arrayContaining([
+        expect.objectContaining({ content: Buffer.from("bound") }),
+      ]),
+    );
   });
 
   it("keeps the telemetry label unique per raw block id while sanitizing the artifact path", async () => {
@@ -194,22 +352,63 @@ describe("generic_agent execute", () => {
     if (result.kind === "failed") expect(result.reason).toBe("broke");
   });
 
-  it("wraps custom-schema output as ok data", async () => {
+  it("returns custom-schema fields at the top level with a compatibility data alias", async () => {
     mocks.collectPhase.mockResolvedValue({
       raw: "",
       structured: JSON.stringify({ answer: 42 }),
     });
+    const outputSchema =
+      '{"type":"object","properties":{"answer":{"type":"number"}},"required":["answer"],"additionalProperties":false}';
 
     const result = await execute(
-      makeNode("generic_agent", { prompt: "p", outputSchema: '{"type":"object"}' }),
+      makeNode("generic_agent", { prompt: "p", outputSchema }),
       {},
       makeCtx(),
     );
 
     expect(mocks.buildPhaseScript).toHaveBeenCalledWith(
-      expect.objectContaining({ jsonSchema: '{"type":"object"}' }),
+      expect.objectContaining({ jsonSchema: outputSchema }),
     );
-    expect(result).toEqual({ kind: "next", output: { status: "ok", data: { answer: 42 } } });
+    expect(result).toEqual({
+      kind: "next",
+      output: { status: "completed", answer: 42, data: { answer: 42 } },
+    });
+  });
+
+  it("fails when custom-schema output has the wrong declared shape", async () => {
+    mocks.collectPhase.mockResolvedValue({
+      raw: "",
+      structured: JSON.stringify({ answer: "forty-two" }),
+    });
+    const outputSchema =
+      '{"type":"object","properties":{"answer":{"type":"number"}},"required":["answer"],"additionalProperties":false}';
+
+    const result = await execute(
+      makeNode("generic_agent", { prompt: "p", outputSchema }),
+      {},
+      makeCtx(),
+    );
+
+    expect(result.kind).toBe("failed");
+    if (result.kind === "failed") {
+      expect(result.reason).toBe("agent output did not match the requested schema");
+    }
+  });
+
+  it("rejects a non-object custom schema because declared fields are top-level", async () => {
+    mocks.collectPhase.mockResolvedValue({ raw: "", structured: "null" });
+    const node = makeNode("generic_agent", {
+      prompt: "p",
+      outputSchema: '{"type":"null"}',
+    });
+
+    const result = await execute(node, {}, makeCtx());
+
+    expect(result).toEqual({
+      kind: "failed",
+      output: { status: "failed" },
+      reason: "invalid outputSchema: outputSchema must declare an object for Generic Agent.",
+    });
   });
 
   it("fails when custom-schema output is unparseable", async () => {
@@ -240,12 +439,12 @@ describe("generic_agent execute", () => {
 
     expect(result).toEqual({
       kind: "next",
-      output: { status: "ok", body: "from envelope" },
+      output: { status: "completed", body: "from envelope" },
     });
   });
 
   it("fails when the phase times out", async () => {
-    mocks.checkPhaseDone.mockResolvedValue(false);
+    mocks.pollPhaseUntilDone.mockResolvedValue(false);
 
     const result = await execute(makeNode("generic_agent", { prompt: "p" }), {}, makeCtx());
 

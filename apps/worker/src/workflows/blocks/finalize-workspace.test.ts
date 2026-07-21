@@ -1,21 +1,23 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const mocks = vi.hoisted(() => ({
-  publishWorkspaceChanges: vi.fn(),
-  postComment: vi.fn(),
-}));
+const mocks = vi.hoisted(() => ({ finalizeWorkspacePublication: vi.fn() }));
 
 vi.mock("../workspace-publication.js", () => ({
-  publishWorkspaceChanges: mocks.publishWorkspaceChanges,
+  finalizeWorkspacePublication: mocks.finalizeWorkspacePublication,
 }));
 
-vi.mock("../../lib/step-adapters.js", () => ({
-  createStepAdapters: () => ({ issueTracker: { postComment: mocks.postComment } }),
-}));
-
-import type { WorkspaceRepositoryInput } from "../../sandbox/repo-workspace.js";
+import type {
+  WorkspaceManifest,
+  WorkspaceRepositoryInput,
+} from "../../sandbox/repo-workspace.js";
 import { execute, paramsSchema } from "./finalize-workspace.js";
-import { makeCtx, makeNode } from "./test-support.js";
+import {
+  expectOutputConformsToRegistry,
+  makeCtx,
+  makeNode,
+  makePrPayload,
+  runControlErrorCases,
+} from "./test-support.js";
 
 const repo: WorkspaceRepositoryInput = {
   provider: "github",
@@ -24,20 +26,38 @@ const repo: WorkspaceRepositoryInput = {
   selectedRationale: "selected",
 };
 
-const publishedPr = {
-  provider: "github" as const,
-  repoPath: "acme/api",
-  id: 7,
-  url: "https://github.com/acme/api/pull/7",
-  branch: "blazebot/awt-1",
-  isNew: true,
+const trustedManifest: WorkspaceManifest = {
+  version: 1,
+  repositories: [{
+    ...repo,
+    slug: "acme__api",
+    localPath: "/vercel/sandbox",
+    branchName: "blazebot/awt-1",
+    expectedRemoteSha: "before",
+    preAgentSha: "before",
+  }],
+};
+
+const finalized = {
+  status: "finalized" as const,
+  repositories: [
+    {
+      provider: "github" as const,
+      repoPath: "acme/api",
+      branchName: "blazebot/awt-1",
+      defaultBranch: "main",
+      expectedHead: "before",
+      pushedHead: "after",
+    },
+  ],
+  prs: [] as [],
 };
 
 describe("finalize_workspace paramsSchema", () => {
-  it("accepts empty params and a requiredChecks array", () => {
+  it("accepts empty params and rejects retired authoring params", () => {
     expect(paramsSchema.safeParse({}).success).toBe(true);
-    expect(paramsSchema.safeParse({ requiredChecks: ["checks-1"] }).success).toBe(true);
-    expect(paramsSchema.safeParse({ requiredChecks: [""] }).success).toBe(false);
+    expect(paramsSchema.safeParse({ legacyRequiredChecks: ["checks.with dots"] }).success).toBe(false);
+    expect(paramsSchema.safeParse({ requiredChecks: ["checks-1"] }).success).toBe(false);
     expect(paramsSchema.safeParse({ extra: 1 }).success).toBe(false);
   });
 });
@@ -45,38 +65,43 @@ describe("finalize_workspace paramsSchema", () => {
 describe("finalize_workspace execute", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.finalizeWorkspacePublication.mockResolvedValue(finalized);
   });
 
-  it("fails before pushing when a required check is not ok", async () => {
+  it("ignores unrelated prior step records", async () => {
     const result = await execute(
-      makeNode("finalize_workspace", { requiredChecks: ["checks-1", "missing"] }),
-      { "checks-1": { output: { status: "ok", ok: false } } },
-      makeCtx(),
+      makeNode("finalize_workspace"),
+      { "checks-1": { output: { status: "failed", ok: false } } },
+      makeCtx({ selectedRepositories: [repo], workspaceManifest: trustedManifest }),
     );
-
-    expect(result.kind).toBe("failed");
-    if (result.kind === "failed") {
-      expect(result.reason).toContain("missing");
-      expect(result.output.unmetChecks).toEqual(["missing"]);
-    }
-    expect(mocks.publishWorkspaceChanges).not.toHaveBeenCalled();
+    expect(result.kind).toBe("next");
   });
 
-  it("passes the gate when required check outputs report status ok", async () => {
-    mocks.publishWorkspaceChanges.mockResolvedValue({
-      status: "published",
-      pushResult: { pushed: true, repositories: [] },
-      prs: [publishedPr],
-    });
-
+  it("rejects any resolved check status that is not ok", async () => {
     const result = await execute(
-      makeNode("finalize_workspace", { requiredChecks: ["checks-1"] }),
-      { "checks-1": { output: { status: "ok", ok: true } } },
-      makeCtx({ selectedRepositories: [repo] }),
+      makeNode("finalize_workspace"),
+      {},
+      makeCtx(),
+      { "checks.lint": "ok", "checks.test": "failed" },
+    );
+    expect(result).toEqual({
+      kind: "failed",
+      output: { status: "failed", unmetChecks: ["test"] },
+      reason: "required checks not satisfied: test",
+    });
+    expect(mocks.finalizeWorkspacePublication).not.toHaveBeenCalled();
+  });
+
+  it("publishes when every resolved check status is ok", async () => {
+    const result = await execute(
+      makeNode("finalize_workspace"),
+      {},
+      makeCtx({ selectedRepositories: [repo], workspaceManifest: trustedManifest }),
+      { "checks.lint": "ok", "checks.test": "ok" },
     );
 
     expect(result.kind).toBe("next");
-    expect(mocks.publishWorkspaceChanges).toHaveBeenCalled();
+    expect(mocks.finalizeWorkspacePublication).toHaveBeenCalledOnce();
   });
 
   it("fails when no workspace is attached", async () => {
@@ -86,91 +111,130 @@ describe("finalize_workspace execute", () => {
       makeCtx({ sandboxId: null }),
     );
     expect(result.kind).toBe("failed");
-    if (result.kind === "failed") expect(result.reason).toContain("no workspace");
-    expect(mocks.publishWorkspaceChanges).not.toHaveBeenCalled();
+    expect(mocks.finalizeWorkspacePublication).not.toHaveBeenCalled();
   });
 
-  it("publishes, sets ctx.publication, comments PR links, and unregisters before PRs", async () => {
-    mocks.publishWorkspaceChanges.mockImplementation(
-      async (input: { beforeCreatePullRequests?: () => Promise<void> }) => {
-        await input.beforeCreatePullRequests?.();
-        return {
-          status: "published",
-          pushResult: { pushed: true, repositories: [] },
-          prs: [publishedPr],
-        };
-      },
+  it("fails closed when the workspace has no manager-authored trusted manifest", async () => {
+    const result = await execute(
+      makeNode("finalize_workspace"),
+      {},
+      makeCtx({ sandboxId: "sbx-1", workspaceManifest: null }),
     );
-    const ctx = makeCtx({ selectedRepositories: [repo] });
 
-    const result = await execute(makeNode("finalize_workspace"), {}, ctx);
+    expect(result).toEqual(expect.objectContaining({
+      kind: "failed",
+      reason: expect.stringContaining("trusted"),
+    }));
+    expect(mocks.finalizeWorkspacePublication).not.toHaveBeenCalled();
+  });
 
-    expect(mocks.publishWorkspaceChanges).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sandboxId: "sbx-1",
-        ticketKey: "AWT-1",
-        branchName: "blazebot/awt-1",
-        repositories: [repo],
-        title: "Ticket title",
-        agentKind: "claude",
-        model: "claude-model",
+  it("passes the manager-authored manifest as the publication authority", async () => {
+    await execute(
+      makeNode("finalize_workspace", {}, "finalize"),
+      {},
+      makeCtx({
+        selectedRepositories: [repo],
+        workspaceManifest: trustedManifest,
       }),
     );
-    expect(ctx.unregisterBeforePr).toHaveBeenCalledTimes(1);
-    expect(ctx.publication?.status).toBe("published");
-    expect(mocks.postComment).toHaveBeenCalledWith(
-      "AWT-1",
-      expect.stringContaining("Pull requests ready for review:"),
+
+    expect(mocks.finalizeWorkspacePublication).toHaveBeenCalledWith(
+      expect.objectContaining({ workspaceManifest: trustedManifest }),
     );
+  });
+
+  it("pushes and emits finalized branch metadata", async () => {
+    const ctx = makeCtx({
+      selectedRepositories: [repo],
+      workspaceManifest: trustedManifest,
+    });
+    const result = await execute(makeNode("finalize_workspace", {}, "finalize"), {}, ctx);
+
+    expect(mocks.finalizeWorkspacePublication).toHaveBeenCalledWith({
+      runId: "run-1",
+      subjectKey: "ticket:jira:AWT-1",
+      ownerToken: "owner:test",
+      sandboxId: "sbx-1",
+      ticketKey: "AWT-1",
+      workspaceManifest: trustedManifest,
+      clarifications: undefined,
+      sourcePullRequest: undefined,
+    });
+    expect(ctx.publication).toEqual(finalized);
     expect(result).toEqual({
       kind: "next",
       output: {
-        status: "published",
-        prs: [
-          {
-            provider: "github",
-            repoPath: "acme/api",
-            id: 7,
-            url: "https://github.com/acme/api/pull/7",
-            isNew: true,
-          },
-        ],
+        status: "finalized",
+        repositories: finalized.repositories,
       },
     });
+    expectOutputConformsToRegistry("finalize_workspace", result.output);
   });
 
-  it("does not comment when every PR already existed", async () => {
-    mocks.publishWorkspaceChanges.mockResolvedValue({
-      status: "published",
-      pushResult: { pushed: true, repositories: [] },
-      prs: [{ ...publishedPr, isNew: false }],
-    });
-
-    await execute(makeNode("finalize_workspace"), {}, makeCtx({ selectedRepositories: [repo] }));
-
-    expect(mocks.postComment).not.toHaveBeenCalled();
+  it("passes the exact triggering PR/MR source head into publication", async () => {
+    const pr = makePrPayload({ headSha: "trigger-head" });
+    await execute(
+      makeNode("finalize_workspace", {}, "finalize"),
+      {},
+      makeCtx({
+        entry: {
+          kind: "pr_trigger",
+          triggerType: "trigger_pr_review",
+          subjectKey: "pr:github:acme/api#7",
+          ticketKey: "AWT-1",
+          ownerToken: "owner-1",
+          scope: "workflow_owned",
+          definitionId: 1,
+          definitionVersion: 1,
+          pr,
+        },
+        selectedRepositories: [repo],
+        workspaceManifest: trustedManifest,
+      }),
+    );
+    expect(mocks.finalizeWorkspacePublication).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sourcePullRequest: {
+          provider: "github",
+          repoPath: "acme/api",
+          prId: 7,
+          headSha: "trigger-head",
+          baseRef: "main",
+        },
+      }),
+    );
   });
 
-  it("maps a failed publication to kind failed with the push phase", async () => {
-    mocks.publishWorkspaceChanges.mockResolvedValue({
+  it("maps a failed durable publication to the push phase without PR side effects", async () => {
+    mocks.finalizeWorkspacePublication.mockResolvedValue({
       status: "failed",
-      reason: "push rejected",
-      pushResult: { pushed: false, repositories: [] },
-      prs: [publishedPr],
+      reason: "lease rejected",
+      repositories: [],
+      prs: [],
     });
-    const ctx = makeCtx({ selectedRepositories: [repo] });
-
+    const ctx = makeCtx({
+      selectedRepositories: [repo],
+      workspaceManifest: trustedManifest,
+    });
     const result = await execute(makeNode("finalize_workspace"), {}, ctx);
 
-    expect(result.kind).toBe("failed");
-    if (result.kind === "failed") {
-      expect(result.reason).toBe("push rejected");
-      expect(result.phase).toBe("push");
-    }
-    expect(ctx.publication?.status).toBe("failed");
-    expect(mocks.postComment).toHaveBeenCalledWith(
-      "AWT-1",
-      expect.stringContaining("Pull requests created before publication failed:"),
-    );
+    expect(result).toEqual({
+      kind: "failed",
+      output: { status: "failed" },
+      reason: "lease rejected",
+      phase: "push",
+    });
+  });
+
+  it.each(runControlErrorCases())("rethrows %s from publication", async (_label, error) => {
+    mocks.finalizeWorkspacePublication.mockRejectedValue(error);
+
+    await expect(
+      execute(
+        makeNode("finalize_workspace"),
+        {},
+        makeCtx({ selectedRepositories: [repo], workspaceManifest: trustedManifest }),
+      ),
+    ).rejects.toBe(error);
   });
 });

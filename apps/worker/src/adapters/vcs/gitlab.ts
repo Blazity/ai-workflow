@@ -8,6 +8,7 @@ import type {
   PRFile,
   PRFilesCapableVCS,
   PullRequest,
+  PullRequestHead,
   PRComment,
   CheckRunResult,
 } from "./types.js";
@@ -19,6 +20,14 @@ interface GitLabMR {
   iid: number;
   web_url: string;
   source_branch: string;
+  sha?: string;
+}
+interface GitLabMRHead {
+  diff_refs?: { head_sha?: string };
+  sha?: string;
+  target_branch?: string;
+  state?: string;
+  head_pipeline?: { id?: number; status?: string } | null;
 }
 interface GitLabNotePosition {
   new_path?: string;
@@ -147,6 +156,20 @@ export class GitLabAdapter implements VCSAdapter, GateStatusCapableVCS, PRFilesC
     );
   }
 
+  private throwWithProviderRetrySemantics(err: any): never {
+    const status = this.getStatusCode(err);
+    const retryableClientStatuses = new Set([408, 425, 429]);
+    if (
+      status !== undefined &&
+      status >= 400 &&
+      status < 500 &&
+      !retryableClientStatuses.has(status)
+    ) {
+      throw new FatalError(err instanceof Error ? err.message : String(err));
+    }
+    throw err;
+  }
+
   private async gitLabRest<T>(
     path: string,
     options: {
@@ -227,11 +250,7 @@ export class GitLabAdapter implements VCSAdapter, GateStatusCapableVCS, PRFilesC
       );
       return { id: mr.iid, url: String(mr.web_url), branch };
     } catch (err: any) {
-      const status = this.getStatusCode(err);
-      if (status === 409 || status === 404) {
-        throw new FatalError(err.message);
-      }
-      throw err;
+      this.throwWithProviderRetrySemantics(err);
     }
   }
 
@@ -290,19 +309,82 @@ export class GitLabAdapter implements VCSAdapter, GateStatusCapableVCS, PRFilesC
   }
 
   async getBranchSha(branch: string): Promise<string> {
-    const data = await this.gl.Branches.show(this.projectId, branch);
-    return (data.commit as { id: string }).id;
+    try {
+      const data = await this.gl.Branches.show(this.projectId, branch);
+      return (data.commit as { id: string }).id;
+    } catch (err) {
+      this.throwWithProviderRetrySemantics(err);
+    }
+  }
+
+  async getPRHead(prId: number): Promise<PullRequestHead> {
+    const mr = (await this.gl.MergeRequests.show(
+      this.projectId,
+      prId,
+    )) as unknown as GitLabMRHead;
+    const headSha = mr.diff_refs?.head_sha ?? mr.sha ?? "";
+    if (!headSha) throw new Error(`GitLab MR !${prId} is missing its authoritative head SHA`);
+    const baseRef = mr.target_branch?.trim();
+    if (!baseRef) throw new Error(`GitLab MR !${prId} is missing its target branch`);
+    const state =
+      mr.state === "opened"
+        ? "open"
+        : mr.state === "closed" || mr.state === "merged"
+          ? mr.state
+          : null;
+    if (!state) {
+      throw new Error(`GitLab MR !${prId} has unsupported lifecycle state ${String(mr.state)}`);
+    }
+    const headPipelineId = mr.head_pipeline?.id;
+    const headPipelineStatus = mr.head_pipeline?.status;
+    const headPipelineFailedChecks =
+      typeof headPipelineId === "number" && headPipelineStatus === "failed"
+        ? ((await this.gl.Jobs.all(this.projectId, {
+            pipelineId: headPipelineId,
+          })) as unknown as GitLabJob[])
+            .filter((job) => job.status === "failed")
+            .map((job) => ({ id: job.id, name: job.name }))
+        : undefined;
+    return {
+      headSha,
+      baseRef,
+      state,
+      ...(typeof headPipelineId === "number" ? { headPipelineId } : {}),
+      ...(typeof headPipelineStatus === "string" ? { headPipelineStatus } : {}),
+      ...(headPipelineFailedChecks ? { headPipelineFailedChecks } : {}),
+    };
   }
 
   async findPR(branch: string): Promise<PullRequest | null> {
-    const mrs = (await this.gl.MergeRequests.all({
-      projectId: this.projectId,
-      sourceBranch: branch,
-      state: "opened",
-    })) as unknown as GitLabMR[];
-    if (mrs.length === 0) return null;
-    const mr = mrs[0];
-    return { id: mr.iid, url: mr.web_url, branch: mr.source_branch };
+    try {
+      const mrs = (await this.gl.MergeRequests.all({
+        projectId: this.projectId,
+        sourceBranch: branch,
+        targetBranch: this.baseBranch,
+        state: "opened",
+      })) as unknown as GitLabMR[];
+      if (mrs.length === 0) return null;
+      const mr = mrs[0];
+      return { id: mr.iid, url: mr.web_url, branch: mr.source_branch };
+    } catch (err) {
+      this.throwWithProviderRetrySemantics(err);
+    }
+  }
+
+  async getPRHeadSha(prId: number): Promise<string> {
+    try {
+      const mr = (await this.gl.MergeRequests.show(
+        this.projectId,
+        prId,
+      )) as unknown as GitLabMR;
+      if (!mr.sha) {
+        throw new FatalError(`GitLab merge request !${prId} did not include a head SHA`);
+      }
+      return mr.sha;
+    } catch (err) {
+      if (err instanceof FatalError) throw err;
+      this.throwWithProviderRetrySemantics(err);
+    }
   }
 
   async listPRFiles(prId: number): Promise<PRFile[]> {

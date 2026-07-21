@@ -11,6 +11,7 @@ import type {
   PullRequest,
   PRComment,
   CheckRunResult,
+  PullRequestHead,
   RichGateStatusCapableVCS,
   RichGateStatusUpdate,
 } from "./types.js";
@@ -190,6 +191,39 @@ export class GitHubAdapter
     return data.object.sha;
   }
 
+  async getPRHead(prId: number): Promise<PullRequestHead> {
+    const { data } = await this.octokit.pulls.get({
+      ...this.ownerRepo,
+      pull_number: prId,
+    });
+    const baseRef = data.base.ref?.trim();
+    if (!baseRef) throw new Error(`GitHub PR #${prId} is missing its target branch`);
+    const state = data.merged === true ? "merged" : data.state;
+    if (state !== "open" && state !== "closed" && state !== "merged") {
+      throw new Error(`GitHub PR #${prId} has unsupported lifecycle state ${String(state)}`);
+    }
+    return { headSha: data.head.sha, baseRef, state };
+  }
+
+  async getLatestCheckRuns(headSha: string) {
+    const checkRuns = await this.octokit.paginate(
+      this.octokit.checks.listForRef,
+      {
+        ...this.ownerRepo,
+        ref: headSha,
+        filter: "latest",
+        per_page: 100,
+      },
+    );
+    return checkRuns.map((check) => ({
+      id: check.id,
+      name: check.name,
+      appSlug: check.app?.slug ?? "",
+      status: check.status,
+      conclusion: check.conclusion ?? null,
+    }));
+  }
+
   async getPRComments(prId: number): Promise<PRComment[]> {
     const { data: reviewComments } =
       await this.octokit.pulls.listReviewComments({
@@ -298,10 +332,19 @@ export class GitHubAdapter
     return data.mergeable === false;
   }
 
+  async getPRHeadSha(prId: number): Promise<string> {
+    const { data } = await this.octokit.pulls.get({
+      ...this.ownerRepo,
+      pull_number: prId,
+    });
+    return data.head.sha;
+  }
+
   async findPR(branch: string): Promise<PullRequest | null> {
     const { data } = await this.octokit.pulls.list({
       ...this.ownerRepo,
       head: `${this.config.owner}:${branch}`,
+      base: this.config.baseBranch,
       state: "open",
     });
     if (data.length === 0) return null;

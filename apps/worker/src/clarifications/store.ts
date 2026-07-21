@@ -1,12 +1,14 @@
-import { randomUUID } from "node:crypto";
-import { and, asc, desc, eq, isNull } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNotNull, sql } from "drizzle-orm";
 import type { ClarificationRequest, ClarificationStatus } from "@shared/contracts";
 import type { Db } from "../db/client.js";
-import { clarificationRequests } from "../db/schema.js";
+import { activeRuns, clarificationRequests } from "../db/schema.js";
+import type { ActiveRunOwner } from "../lib/active-run-owner.js";
+import { ActiveRunOwnerError } from "../lib/run-control-errors.js";
 
 export interface ClarificationRow {
   id: string;
-  ticketKey: string;
+  ticketKey: string | null;
+  subjectKey: string;
   runId: string;
   blockId: string | null;
   definitionId: number | null;
@@ -14,52 +16,50 @@ export interface ClarificationRow {
   questions: string[];
   suggestedAnswers: string[] | null;
   status: ClarificationStatus;
+  hookToken: string | null;
   askedAt: Date;
   answer: string | null;
   answeredById: string | null;
   answeredByLabel: string | null;
   answeredAt: Date | null;
-  dispatchedRunId: string | null;
+  dispatchedRunId: null;
+  snapshotId: string | null;
+  sourceSandboxId: string | null;
+  snapshotExpiresAt: Date | null;
+  cleanupState: string;
+  cleanupError: string | null;
 }
 
-/** Domain-level failure a write raises (409 conflict). Routes map statusCode onto
- *  the HTTP response; distinct from the 403 auth gate. */
-export class ClarificationStoreError extends Error {
-  constructor(
-    public readonly statusCode: number,
-    message: string,
-  ) {
-    super(message);
-  }
-}
+type SelectRow = typeof clarificationRequests.$inferSelect;
 
-type ClarificationSelect = typeof clarificationRequests.$inferSelect;
-
-function mapRow(row: ClarificationSelect): ClarificationRow {
+function mapRow(row: SelectRow): ClarificationRow {
   return {
     id: row.id,
     ticketKey: row.ticketKey,
+    subjectKey: row.subjectKey ?? (row.ticketKey ? `ticket:jira:${row.ticketKey}` : row.id),
     runId: row.runId,
-    blockId: row.blockId ?? null,
-    definitionId: row.definitionId ?? null,
-    definitionVersion: row.definitionVersion ?? null,
+    blockId: row.blockId,
+    definitionId: row.definitionId,
+    definitionVersion: row.definitionVersion,
     questions: row.questions,
-    suggestedAnswers: row.suggestedAnswers ?? null,
+    suggestedAnswers: row.suggestedAnswers,
     status: row.status as ClarificationStatus,
+    hookToken: row.hookToken,
     askedAt: row.askedAt,
     answer: row.answer,
     answeredById: row.answeredById,
     answeredByLabel: row.answeredByLabel,
     answeredAt: row.answeredAt,
-    dispatchedRunId: row.dispatchedRunId,
+    dispatchedRunId: null,
+    snapshotId: row.snapshotId,
+    sourceSandboxId: row.sourceSandboxId,
+    snapshotExpiresAt: row.snapshotExpiresAt,
+    cleanupState: row.cleanupState,
+    cleanupError: row.cleanupError,
   };
 }
 
-/**
- * Inserts a fresh pending clarification for a ticket, superseding any existing
- * pending one for the same ticket so the partial unique index (one pending row
- * per ticket) never trips. The id is generated app-side.
- */
+/** Test/backfill helper for legacy callers; runtime creation uses hook-store directly. */
 export async function createClarificationRequest(
   db: Db,
   input: {
@@ -72,76 +72,47 @@ export async function createClarificationRequest(
     suggestedAnswers?: string[] | null;
   },
 ): Promise<ClarificationRow> {
-  // neon-http (loaded inside the WDK step that runs this block) has no interactive
-  // transactions. Supersede the current pending row, then insert the new one; the
-  // partial unique index (one pending row per ticket) still guarantees a single
-  // open clarification. If the insert fails, the run fails and re-runs a fresh ask.
-  await db
-    .update(clarificationRequests)
-    .set({ status: "superseded" })
-    .where(
-      and(
-        eq(clarificationRequests.ticketKey, input.ticketKey),
-        eq(clarificationRequests.status, "pending"),
-      ),
-    );
-  const rows = await db
-    .insert(clarificationRequests)
-    .values({
-      id: randomUUID(),
-      ticketKey: input.ticketKey,
-      runId: input.runId,
-      blockId: input.blockId ?? null,
-      definitionId: input.definitionId ?? null,
-      definitionVersion: input.definitionVersion ?? null,
-      questions: input.questions,
-      suggestedAnswers: input.suggestedAnswers ?? null,
-    })
-    .returning();
-  return mapRow(rows[0]!);
+  const { prepareHookClarification, publishHookClarification } = await import(
+    "./hook-store.js"
+  );
+  const prepared = await prepareHookClarification(db, {
+    ticketKey: input.ticketKey,
+    subjectKey: `ticket:jira:${input.ticketKey}`,
+    runId: input.runId,
+    blockId: input.blockId ?? "human_question",
+    definitionId: input.definitionId ?? null,
+    definitionVersion: input.definitionVersion ?? null,
+    questions: input.questions,
+    suggestedAnswers: input.suggestedAnswers,
+  });
+  await publishHookClarification(db, prepared.id);
+  const row = await getClarification(db, prepared.id);
+  if (!row) throw new Error("failed to publish clarification");
+  return row;
 }
 
 export async function getClarification(db: Db, id: string): Promise<ClarificationRow | null> {
-  const rows = await db
+  const [row] = await db
     .select()
     .from(clarificationRequests)
     .where(eq(clarificationRequests.id, id))
     .limit(1);
-  return rows[0] ? mapRow(rows[0]) : null;
+  return row ? mapRow(row) : null;
 }
 
-/** Latest clarification for a run (newest ask first); null when the run asked nothing. */
 export async function getClarificationForRun(
   db: Db,
   runId: string,
 ): Promise<ClarificationRow | null> {
-  const rows = await db
+  const [row] = await db
     .select()
     .from(clarificationRequests)
     .where(eq(clarificationRequests.runId, runId))
     .orderBy(desc(clarificationRequests.askedAt))
     .limit(1);
-  return rows[0] ? mapRow(rows[0]) : null;
+  return row ? mapRow(row) : null;
 }
 
-export async function getPendingForTicket(
-  db: Db,
-  ticketKey: string,
-): Promise<ClarificationRow | null> {
-  const rows = await db
-    .select()
-    .from(clarificationRequests)
-    .where(
-      and(
-        eq(clarificationRequests.ticketKey, ticketKey),
-        eq(clarificationRequests.status, "pending"),
-      ),
-    )
-    .limit(1);
-  return rows[0] ? mapRow(rows[0]) : null;
-}
-
-/** Answered Q&A history for a ticket, oldest first; injected into resume prompts. */
 export async function listAnsweredForTicket(
   db: Db,
   ticketKey: string,
@@ -159,37 +130,40 @@ export async function listAnsweredForTicket(
   return rows.map(mapRow);
 }
 
-/**
- * Compare-and-set answer: transitions a pending row to answered. Zero rows
- * updated means it was already answered (or superseded) by a racer, surfaced as
- * ClarificationStoreError(409) so callers release any held claim.
- */
-export async function answerClarification(
-  db: Db,
-  input: { id: string; answer: string; actor: { id: string; label: string } },
-): Promise<ClarificationRow> {
-  const rows = await db
-    .update(clarificationRequests)
-    .set({
-      status: "answered",
-      answer: input.answer,
-      answeredById: input.actor.id,
-      answeredByLabel: input.actor.label,
-      answeredAt: new Date(),
-    })
-    .where(
-      and(eq(clarificationRequests.id, input.id), eq(clarificationRequests.status, "pending")),
-    )
-    .returning();
-  const row = rows[0];
-  if (!row) {
-    throw new ClarificationStoreError(409, "already_answered");
-  }
-  return mapRow(row);
+export interface ProtectedClarificationSubjects {
+  all: string[];
+  retained: string[];
+  terminal: string[];
 }
 
-/** Supersedes any pending clarification for a ticket; returns the number superseded. */
-export async function supersedePendingForTicket(db: Db, ticketKey: string): Promise<number> {
+/** Protect the same asking run while its ticket is parked outside the AI column. */
+export async function classifyProtectedClarificationSubjects(
+  db: Db,
+): Promise<ProtectedClarificationSubjects> {
+  const rows = await db
+    .select({ subjectKey: clarificationRequests.subjectKey })
+    .from(clarificationRequests)
+    .where(
+      and(
+        isNotNull(clarificationRequests.subjectKey),
+        inArray(clarificationRequests.status, ["pending", "answered"]),
+        sql`exists (
+          select 1 from ${activeRuns}
+          where ${activeRuns.subjectKey} = ${clarificationRequests.subjectKey}
+            and ${activeRuns.runId} = ${clarificationRequests.runId}
+            and ${activeRuns.state} = 'bound'
+        )`,
+      ),
+    );
+  const retained = [...new Set(rows.flatMap((row) => row.subjectKey ? [row.subjectKey] : []))]
+    .sort();
+  return { all: retained, retained, terminal: [] };
+}
+
+export async function supersedePendingForTicket(
+  db: Db,
+  ticketKey: string,
+): Promise<number> {
   const rows = await db
     .update(clarificationRequests)
     .set({ status: "superseded" })
@@ -203,14 +177,6 @@ export async function supersedePendingForTicket(db: Db, ticketKey: string): Prom
   return rows.length;
 }
 
-/**
- * Terminal dead-end for a clarification whose ticket disappeared: supersede the
- * row by id regardless of its current status (pending or answered-without-run),
- * so the dashboard stops re-rendering an answer/retry form for a ticket that can
- * never resume. Guarded on dispatched_run_id IS NULL so a clarification that
- * already started a resume run keeps its answered history intact. Returns the
- * number of rows superseded.
- */
 export async function supersedeClarification(db: Db, id: string): Promise<number> {
   const rows = await db
     .update(clarificationRequests)
@@ -218,40 +184,64 @@ export async function supersedeClarification(db: Db, id: string): Promise<number
     .where(
       and(
         eq(clarificationRequests.id, id),
-        isNull(clarificationRequests.dispatchedRunId),
+        inArray(clarificationRequests.status, ["preparing", "pending", "answered"]),
       ),
     )
     .returning({ id: clarificationRequests.id });
   return rows.length;
 }
 
-export async function setDispatchedRunId(db: Db, id: string, runId: string): Promise<void> {
-  await db
-    .update(clarificationRequests)
-    .set({ dispatchedRunId: runId })
-    .where(eq(clarificationRequests.id, id));
+export async function reconcileClarificationPickupState(
+  db: Db,
+  input: { ticketKey: string; currentRunId: string; owner: ActiveRunOwner },
+): Promise<{ superseded: number; resolvedAwaiting: 0 }> {
+  const result = await db.execute(sql`
+    WITH exact_owner AS MATERIALIZED (
+      SELECT subject_key
+      FROM active_runs
+      WHERE subject_key = ${input.owner.subjectKey}
+        AND owner_token = ${input.owner.ownerToken}
+        AND run_id = ${input.owner.runId}
+        AND state = 'bound'
+      FOR UPDATE
+    ), superseded AS (
+      UPDATE clarification_requests
+      SET status = 'superseded'
+      WHERE ticket_key = ${input.ticketKey}
+        AND status = 'pending'
+        AND run_id <> ${input.currentRunId}
+        AND EXISTS (SELECT 1 FROM exact_owner)
+      RETURNING id
+    )
+    SELECT
+      (SELECT count(*)::integer FROM exact_owner) AS owner_count,
+      (SELECT count(*)::integer FROM superseded) AS superseded_count
+  `);
+  const row = ((result as { rows?: Array<{ owner_count: number; superseded_count: number }> }).rows ?? [])[0];
+  if (Number(row?.owner_count ?? 0) !== 1) {
+    throw new ActiveRunOwnerError(
+      "Cannot reconcile clarification pickup without the exact bound owner.",
+    );
+  }
+  return { superseded: Number(row?.superseded_count ?? 0), resolvedAwaiting: 0 };
 }
 
-/**
- * Resume run's self-heal for a lost endpoint write. The answer endpoint records
- * the dispatched run best-effort; if that single write is lost the answered row
- * would stay dispatched_run_id=null forever and read as retryable, spawning a
- * duplicate resume run. The resume run itself calls this on pickup. Guarded on
- * dispatched_run_id IS NULL so it never overwrites an id the endpoint already
- * set. Returns whether a row was written.
- */
-export async function recordDispatchedRun(db: Db, id: string, runId: string): Promise<boolean> {
+export async function tombstoneClarificationCancellation(
+  db: Db,
+  input: { subjectKey: string; ownerToken: string; runId: string | null },
+): Promise<{ matched: boolean; successorOwnerToken: null }> {
   const rows = await db
     .update(clarificationRequests)
-    .set({ dispatchedRunId: runId })
+    .set({ status: "superseded" })
     .where(
       and(
-        eq(clarificationRequests.id, id),
-        isNull(clarificationRequests.dispatchedRunId),
+        eq(clarificationRequests.subjectKey, input.subjectKey),
+        inArray(clarificationRequests.status, ["preparing", "pending", "answered"]),
+        ...(input.runId ? [eq(clarificationRequests.runId, input.runId)] : []),
       ),
     )
     .returning({ id: clarificationRequests.id });
-  return rows.length > 0;
+  return { matched: rows.length > 0, successorOwnerToken: null };
 }
 
 export function serializeClarification(row: ClarificationRow): ClarificationRequest {
@@ -269,7 +259,7 @@ export function serializeClarification(row: ClarificationRow): ClarificationRequ
     answer: row.answer,
     answeredById: row.answeredById,
     answeredByLabel: row.answeredByLabel,
-    answeredAt: row.answeredAt ? row.answeredAt.toISOString() : null,
-    dispatchedRunId: row.dispatchedRunId,
+    answeredAt: row.answeredAt?.toISOString() ?? null,
+    dispatchedRunId: null,
   };
 }

@@ -16,8 +16,8 @@ export interface CollectLiveRunsOptions {
  * live progress fields (currentSpan, progress, etaSec) are not tracked yet —
  * returned as null or omitted. The dashboard renders `—` for null metrics.
  *
- * `status` defaults to `"running"`; a clarification-detection signal needed to
- * distinguish `"awaiting"` is a follow-up.
+ * Durable owner state distinguishes a clarification that is still draining
+ * (`parking`, rendered running) from one safely awaiting input (`parked`).
  */
 export async function collectLiveRuns(
   opts: CollectLiveRunsOptions,
@@ -26,22 +26,33 @@ export async function collectLiveRuns(
   const entries = await registry.listAll();
   const tenantOrigin = jiraBaseUrl.replace(/\/+$/, "");
 
+  const liveEntries = entries.filter(
+    (entry): entry is typeof entry & { runId: string } =>
+      (entry.state === "bound" ||
+        entry.state === "parking" ||
+        entry.state === "parked") &&
+      entry.runId !== null,
+  );
+
   return Promise.all(
-    entries.map(async ({ ticketKey, runId }): Promise<Run> => {
-      let ticketTitle = ticketKey;
-      try {
-        const ticket = await issueTracker.fetchTicket(ticketKey);
-        if (ticket.title) ticketTitle = ticket.title;
-      } catch {
-        // Best-effort lookup — fall through to the key as the title.
+    liveEntries.map(async ({ subjectKey, ticketKey, runId, state }): Promise<Run> => {
+      let ticketTitle = ticketKey ?? subjectKey;
+      if (ticketKey) {
+        try {
+          const ticket = await issueTracker.fetchTicket(ticketKey);
+          if (ticket.title) ticketTitle = ticket.title;
+        } catch {
+          // Best-effort lookup — fall through to the durable subject identity.
+        }
       }
+      const displayKey = ticketKey ?? subjectKey;
 
       return {
         id: runId,
         workflow: "wf_agent",
         workflowName: "Agent",
-        status: "running",
-        ticket: ticketKey,
+        status: state === "parked" ? "awaiting" : "running",
+        ticket: displayKey,
         actor: "ai-bot",
         model,
         startedAtMin: 0,
@@ -53,7 +64,7 @@ export async function collectLiveRuns(
         guardrailHits: null,
         ticketTitle,
         prNumber: null,
-        ticketUrl: `${tenantOrigin}/browse/${ticketKey}`,
+        ticketUrl: ticketKey ? `${tenantOrigin}/browse/${ticketKey}` : "",
         prUrl: null,
       };
     }),

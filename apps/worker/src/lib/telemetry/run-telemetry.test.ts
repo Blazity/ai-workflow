@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { eq } from "drizzle-orm";
 import { createTestDb } from "../../db/test-db.js";
 import type { Db } from "../../db/client.js";
+import type { ResolvedPromptReference } from "@shared/contracts";
 import { workflowRuns } from "../../db/schema.js";
 import {
   upsertRunSnapshots,
@@ -30,6 +31,7 @@ function row(runId: string) {
 
 const snapshot = (over: Partial<RunSnapshot> = {}): RunSnapshot => ({
   runId: "wrun_1",
+  subjectKey: "ticket:jira:PROJ-1",
   workflowId: "wf_agent",
   workflowName: "Agent",
   status: "running",
@@ -48,6 +50,7 @@ const snapshot = (over: Partial<RunSnapshot> = {}): RunSnapshot => ({
 
 const usage = (over: Partial<RunUsage> = {}): RunUsage => ({
   runId: "wrun_1",
+  subjectKey: "ticket:jira:PROJ-1",
   workflowId: "wf_agent",
   workflowName: "Agent",
   status: "success",
@@ -61,6 +64,7 @@ const usage = (over: Partial<RunUsage> = {}): RunUsage => ({
   tokensCached: 200,
   tokensOutput: 500,
   phases: { Research: { costUsd: 0.5, tokens: null, durationMs: 60000, numTurns: 3 } },
+  budgetFailure: null,
   prUrl: "https://github.com/o/r/pull/7",
   prNumber: 7,
   steps: null,
@@ -69,6 +73,7 @@ const usage = (over: Partial<RunUsage> = {}): RunUsage => ({
 
 const blockWrite = (over: Partial<RunBlockStatusWrite> = {}): RunBlockStatusWrite => ({
   runId: "wrun_1",
+  subjectKey: "ticket:jira:PROJ-1",
   ticketKey: "PROJ-1",
   ticketTitle: "Add login",
   ticketUrl: "https://jira/browse/PROJ-1",
@@ -150,6 +155,20 @@ describe("recordRunUsage", () => {
     await recordRunUsage(db, usage({ status: "failed" }));
     const r = await row("wrun_1");
     expect(r.status).toBe("failed");
+  });
+
+  it("persists structured terminal budget telemetry", async () => {
+    const budgetFailure = {
+      status: "budget_exceeded" as const,
+      metric: "cost" as const,
+      limit: 0.3,
+      consumed: 0.31,
+      reason: "budget_exceeded: cost 0.31 exceeds limit 0.3",
+    };
+
+    await recordRunUsage(db, usage({ status: "failed", budgetFailure }));
+
+    expect((await row("wrun_1")).budgetFailure).toEqual(budgetFailure);
   });
 
   it("records the workflow identity so a cron-less run is attributable to its workflow", async () => {
@@ -264,6 +283,23 @@ describe("two writers converge on one row", () => {
 });
 
 describe("recordBlockStatuses", () => {
+  it("stores the frozen prompt manifest and later writers preserve it", async () => {
+    const promptManifest: ResolvedPromptReference[] = [{
+      promptId: 42,
+      promptName: "research-plan",
+      requestedVersion: "latest",
+      resolvedVersion: 7,
+      bodyHash: "0a1b2c3d",
+    }];
+    await recordBlockStatuses(db, blockWrite({ promptManifest }));
+    expect((await row("wrun_1")).promptManifest).toEqual(promptManifest);
+
+    await recordBlockStatuses(db, blockWrite({ blockStatuses: { b1: { status: "ok" } } }));
+    await upsertRunSnapshots(db, [snapshot()]);
+    await recordRunUsage(db, usage());
+    expect((await row("wrun_1")).promptManifest).toEqual(promptManifest);
+  });
+
   it("inserts a row with statuses, version, identity and running status", async () => {
     await recordBlockStatuses(db, blockWrite());
     const r = await row("wrun_1");

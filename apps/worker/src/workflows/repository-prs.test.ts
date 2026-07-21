@@ -4,6 +4,7 @@ const mocks = vi.hoisted(() => ({
   getDb: vi.fn(),
   createRepositoryVCS: vi.fn(),
   upsertWorkflowOwnedBranch: vi.fn(),
+  assertActiveRunOwner: vi.fn(),
 }));
 
 vi.mock("../db/client.js", () => ({
@@ -18,29 +19,49 @@ vi.mock("../db/queries/workflow-owned-branches.js", () => ({
   upsertWorkflowOwnedBranch: mocks.upsertWorkflowOwnedBranch,
 }));
 
+vi.mock("../lib/active-run-owner.js", () => ({
+  assertActiveRunOwner: (...args: any[]) => mocks.assertActiveRunOwner(...args),
+}));
+
 import {
+  createOrFindWorkflowOwnedPullRequest,
   createOrUseWorkflowOwnedPullRequestsForRepos,
+  findWorkflowOwnedPullRequestForBranch,
   prepareSelectedRepositoryBranches,
+  recordWorkflowOwnedPullRequest,
+  recordWorkflowOwnedPullRequestIntent,
 } from "./repository-prs.js";
+
+const durableOwner = {
+  subjectKey: "ticket:jira:AIW-100",
+  ownerToken: "owner-1",
+  runId: "run-1",
+};
 
 describe("prepareSelectedRepositoryBranches", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.getDb.mockReturnValue({ db: true });
+    mocks.assertActiveRunOwner.mockResolvedValue(undefined);
   });
 
   it("creates branches and records ownership for repositories without workflow-owned branches", async () => {
     const createBranch = vi.fn().mockResolvedValue(undefined);
     mocks.createRepositoryVCS.mockReturnValue({ createBranch });
 
-    await prepareSelectedRepositoryBranches("AIW-45", "blazebot/aiw-45", [
-      {
-        provider: "github",
-        repoPath: "acme/api",
-        defaultBranch: "main",
-        selectedRationale: "ticket mentions api",
-      },
-    ]);
+    await prepareSelectedRepositoryBranches(
+      "AIW-45",
+      "blazebot/aiw-45",
+      [
+        {
+          provider: "github",
+          repoPath: "acme/api",
+          defaultBranch: "main",
+          selectedRationale: "ticket mentions api",
+        },
+      ],
+      durableOwner,
+    );
 
     expect(createBranch).toHaveBeenCalledWith("blazebot/aiw-45", "main");
     expect(mocks.createRepositoryVCS).toHaveBeenCalledWith({
@@ -60,18 +81,60 @@ describe("prepareSelectedRepositoryBranches", () => {
     const createBranch = vi.fn().mockResolvedValue(undefined);
     mocks.createRepositoryVCS.mockReturnValue({ createBranch });
 
-    await prepareSelectedRepositoryBranches("AIW-45", "blazebot/aiw-45", [
-      {
-        provider: "github",
-        repoPath: "acme/web",
-        defaultBranch: "main",
-        selectedRationale: "workflow-owned branch for this ticket",
-        workflowOwnedBranch: { branchName: "blazebot/aiw-45" },
-      },
-    ]);
+    await prepareSelectedRepositoryBranches(
+      "AIW-45",
+      "blazebot/aiw-45",
+      [
+        {
+          provider: "github",
+          repoPath: "acme/web",
+          defaultBranch: "main",
+          selectedRationale: "workflow-owned branch for this ticket",
+          workflowOwnedBranch: { branchName: "blazebot/aiw-45" },
+        },
+      ],
+      durableOwner,
+    );
 
     expect(createBranch).not.toHaveBeenCalled();
     expect(mocks.upsertWorkflowOwnedBranch).not.toHaveBeenCalled();
+  });
+
+  it("reasserts the exact active owner before each repository branch creation", async () => {
+    const createBranch = vi.fn().mockResolvedValue(undefined);
+    mocks.createRepositoryVCS.mockReturnValue({ createBranch });
+    mocks.assertActiveRunOwner
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(
+        new Error("Provider mutation requires the exact active run owner."),
+      );
+
+    await expect(
+      prepareSelectedRepositoryBranches(
+        "AIW-45",
+        "blazebot/aiw-45",
+        [
+          {
+            provider: "github",
+            repoPath: "acme/api",
+            defaultBranch: "main",
+            selectedRationale: "ticket mentions api",
+          },
+          {
+            provider: "github",
+            repoPath: "acme/web",
+            defaultBranch: "main",
+            selectedRationale: "ticket mentions web",
+          },
+        ],
+        durableOwner,
+      ),
+    ).rejects.toThrow("exact active run owner");
+
+    expect(mocks.assertActiveRunOwner).toHaveBeenCalledTimes(2);
+    expect(createBranch).toHaveBeenCalledTimes(1);
+    expect(createBranch).toHaveBeenCalledWith("blazebot/aiw-45", "main");
+    expect(mocks.upsertWorkflowOwnedBranch).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -83,11 +146,15 @@ describe("createOrUseWorkflowOwnedPullRequestsForRepos", () => {
 
   it("reuses existing workflow-owned PR metadata", async () => {
     const createPR = vi.fn();
-    mocks.createRepositoryVCS.mockReturnValue({ createPR });
+    mocks.createRepositoryVCS.mockReturnValue({
+      createPR,
+      findPR: vi.fn().mockResolvedValue(null),
+    });
 
     const prs = await createOrUseWorkflowOwnedPullRequestsForRepos({
       ticketKey: "AIW-45",
       branchName: "blazebot/aiw-45",
+      owner: durableOwner,
       repositories: [
         {
           provider: "github",
@@ -120,11 +187,15 @@ describe("createOrUseWorkflowOwnedPullRequestsForRepos", () => {
       url: "https://github.com/acme/api/pull/43",
       branch: "blazebot/aiw-45",
     });
-    mocks.createRepositoryVCS.mockReturnValue({ createPR });
+    mocks.createRepositoryVCS.mockReturnValue({
+      createPR,
+      findPR: vi.fn().mockResolvedValue(null),
+    });
 
     const prs = await createOrUseWorkflowOwnedPullRequestsForRepos({
       ticketKey: "AIW-45",
       branchName: "blazebot/aiw-45",
+      owner: durableOwner,
       repositories: [
         {
           provider: "github",
@@ -138,6 +209,7 @@ describe("createOrUseWorkflowOwnedPullRequestsForRepos", () => {
     });
 
     expect(createPR).toHaveBeenCalledWith("blazebot/aiw-45", "Fix API", "");
+    expect(mocks.assertActiveRunOwner).toHaveBeenCalledWith({ db: true }, durableOwner);
     expect(mocks.upsertWorkflowOwnedBranch).toHaveBeenCalledWith({ db: true }, {
       ticketKey: "AIW-45",
       provider: "github",
@@ -167,11 +239,15 @@ describe("createOrUseWorkflowOwnedPullRequestsForRepos", () => {
       url: "https://gitlab.example.com/acme/api/-/merge_requests/44",
       branch: "blazebot/aiw-45",
     });
-    mocks.createRepositoryVCS.mockReturnValue({ createPR });
+    mocks.createRepositoryVCS.mockReturnValue({
+      createPR,
+      findPR: vi.fn().mockResolvedValue(null),
+    });
 
     await createOrUseWorkflowOwnedPullRequestsForRepos({
       ticketKey: "AIW-45",
       branchName: "blazebot/aiw-45",
+      owner: durableOwner,
       repositories: [
         {
           provider: "gitlab",
@@ -204,6 +280,7 @@ describe("createOrUseWorkflowOwnedPullRequestsForRepos", () => {
     const prs = await createOrUseWorkflowOwnedPullRequestsForRepos({
       ticketKey: "AIW-45",
       branchName: "blazebot/aiw-45",
+      owner: durableOwner,
       repositories: [
         {
           provider: "github",
@@ -234,5 +311,230 @@ describe("createOrUseWorkflowOwnedPullRequestsForRepos", () => {
         isNew: false,
       },
     ]);
+  });
+});
+
+describe("durable publication PR phases", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.getDb.mockReturnValue({ db: true });
+    mocks.assertActiveRunOwner.mockResolvedValue(undefined);
+  });
+
+  it("reasserts the exact active owner immediately before provider PR creation", async () => {
+    const order: string[] = [];
+    const findPR = vi.fn().mockImplementation(async () => {
+      order.push("reconcile");
+      return null;
+    });
+    const createPR = vi.fn().mockImplementation(async () => {
+      order.push("create");
+      return {
+        id: 46,
+        url: "https://github.com/acme/api/pull/46",
+        branch: "blazebot/aiw-100",
+      };
+    });
+    mocks.assertActiveRunOwner.mockImplementation(async () => {
+      order.push("owner-fence");
+    });
+    mocks.createRepositoryVCS.mockReturnValue({ findPR, createPR });
+    await createOrFindWorkflowOwnedPullRequest({
+      branchName: "blazebot/aiw-100",
+      repository: {
+        provider: "github",
+        repoPath: "acme/api",
+        defaultBranch: "main",
+        selectedRationale: "durable finalized publication",
+        workflowOwnedBranch: { branchName: "blazebot/aiw-100" },
+      },
+      title: "Safe publication",
+      owner: durableOwner,
+    });
+
+    expect(order).toEqual(["reconcile", "owner-fence", "create"]);
+    expect(mocks.assertActiveRunOwner).toHaveBeenCalledWith({ db: true }, durableOwner);
+  });
+
+  it("does not create a provider PR when cancellation wins after reconciliation", async () => {
+    const createPR = vi.fn();
+    const findPR = vi.fn().mockResolvedValue(null);
+    mocks.createRepositoryVCS.mockReturnValue({
+      findPR,
+      createPR,
+    });
+    const ownerLoss = new Error("Provider mutation requires the exact active run owner.");
+    ownerLoss.name = "ActiveRunOwnerError";
+    mocks.assertActiveRunOwner.mockRejectedValue(ownerLoss);
+
+    await expect(
+      createOrFindWorkflowOwnedPullRequest({
+        branchName: "blazebot/aiw-100",
+        repository: {
+          provider: "github",
+          repoPath: "acme/api",
+          defaultBranch: "main",
+          selectedRationale: "durable finalized publication",
+          workflowOwnedBranch: { branchName: "blazebot/aiw-100" },
+        },
+        title: "Safe publication",
+        owner: durableOwner,
+      }),
+    ).rejects.toBe(ownerLoss);
+    expect(findPR).toHaveBeenCalledOnce();
+    expect(createPR).not.toHaveBeenCalled();
+  });
+
+  it("returns the provider PR before writing workflow-owned branch correlation", async () => {
+    mocks.createRepositoryVCS.mockReturnValue({
+      findPR: vi.fn().mockResolvedValue(null),
+      createPR: vi.fn().mockResolvedValue({
+        id: 46,
+        url: "https://github.com/acme/api/pull/46",
+        branch: "blazebot/aiw-100",
+      }),
+    });
+
+    const pr = await createOrFindWorkflowOwnedPullRequest({
+      branchName: "blazebot/aiw-100",
+      repository: {
+        provider: "github",
+        repoPath: "acme/api",
+        defaultBranch: "main",
+        selectedRationale: "durable finalized publication",
+        workflowOwnedBranch: { branchName: "blazebot/aiw-100" },
+      },
+      title: "Safe publication",
+      owner: durableOwner,
+    });
+
+    expect(pr).toEqual(expect.objectContaining({ id: 46, repoPath: "acme/api" }));
+    expect(mocks.upsertWorkflowOwnedBranch).not.toHaveBeenCalled();
+  });
+
+  it("reconciles a PR created remotely before an ambiguous timeout", async () => {
+    const existing = {
+      id: 47,
+      url: "https://github.com/acme/api/pull/47",
+      branch: "blazebot/aiw-100",
+    };
+    const findPR = vi
+      .fn()
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(existing);
+    const createPR = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("request timed out after provider accepted it"));
+    mocks.createRepositoryVCS.mockReturnValue({ findPR, createPR });
+
+    await expect(
+      createOrFindWorkflowOwnedPullRequest({
+        branchName: "blazebot/aiw-100",
+        repository: {
+          provider: "github",
+          repoPath: "acme/api",
+          defaultBranch: "main",
+          selectedRationale: "durable finalized publication",
+          workflowOwnedBranch: { branchName: "blazebot/aiw-100" },
+        },
+        title: "Safe publication",
+        owner: durableOwner,
+      }),
+    ).resolves.toEqual({
+      provider: "github",
+      repoPath: "acme/api",
+      ...existing,
+      isNew: false,
+    });
+    expect(findPR).toHaveBeenCalledTimes(2);
+    expect(createPR).toHaveBeenCalledOnce();
+  });
+
+  it("finds an existing provider PR without entering the create phase", async () => {
+    const existing = {
+      id: 48,
+      url: "https://github.com/acme/api/pull/48",
+      branch: "blazebot/aiw-100",
+    };
+    const findPR = vi.fn().mockResolvedValue(existing);
+    const createPR = vi.fn();
+    mocks.createRepositoryVCS.mockReturnValue({ findPR, createPR });
+
+    await expect(
+      findWorkflowOwnedPullRequestForBranch({
+        branchName: "blazebot/aiw-100",
+        repository: {
+          provider: "github",
+          repoPath: "acme/api",
+          defaultBranch: "main",
+          selectedRationale: "durable finalized publication",
+          workflowOwnedBranch: { branchName: "blazebot/aiw-100" },
+        },
+      }),
+    ).resolves.toEqual({
+      provider: "github",
+      repoPath: "acme/api",
+      ...existing,
+      isNew: false,
+    });
+    expect(findPR).toHaveBeenCalledOnce();
+    expect(createPR).not.toHaveBeenCalled();
+  });
+
+  it("records an exact branch/head intent before the provider PR id is known", async () => {
+    await recordWorkflowOwnedPullRequestIntent({
+      ticketKey: "AIW-100",
+      provider: "github",
+      repoPath: "acme/api",
+      branchName: "blazebot/aiw-100",
+      publishedHeadSha: "published-sha",
+      targetBranch: "main",
+    });
+
+    expect(mocks.upsertWorkflowOwnedBranch).toHaveBeenCalledWith(
+      { db: true },
+      {
+        ticketKey: "AIW-100",
+        provider: "github",
+        repoPath: "acme/api",
+        branchName: "blazebot/aiw-100",
+        publishedHeadSha: "published-sha",
+        targetBranch: "main",
+        prCorrelationPending: true,
+      },
+    );
+  });
+
+  it("records workflow-owned branch correlation as a separate idempotent phase", async () => {
+    await recordWorkflowOwnedPullRequest({
+      ticketKey: "AIW-100",
+      publishedHeadSha: "published-sha",
+      targetBranch: "main",
+      pr: {
+        provider: "github",
+        repoPath: "acme/api",
+        id: 46,
+        url: "https://github.com/acme/api/pull/46",
+        branch: "blazebot/aiw-100",
+        isNew: true,
+      },
+    });
+
+    expect(mocks.upsertWorkflowOwnedBranch).toHaveBeenCalledWith(
+      { db: true },
+      {
+        ticketKey: "AIW-100",
+        provider: "github",
+        repoPath: "acme/api",
+        branchName: "blazebot/aiw-100",
+        publishedHeadSha: "published-sha",
+        targetBranch: "main",
+        pr: {
+          id: 46,
+          url: "https://github.com/acme/api/pull/46",
+          branch: "blazebot/aiw-100",
+        },
+      },
+    );
   });
 });

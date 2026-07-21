@@ -3,14 +3,30 @@
 import { useState, useMemo } from "react";
 import Link from "next/link";
 import type { FlowNodeDef } from "@/lib/flows";
-import type { WorkflowEditorOptions, WorkflowParamValue } from "@shared/contracts";
+import type {
+  PromptSourceRef,
+  WorkflowBlockType,
+  WorkflowEditorOptions,
+  WorkflowParamValue,
+} from "@shared/contracts";
+import { DEFAULT_PROMPT_NAME_BY_AGENT } from "@shared/contracts";
 import { parseCondition } from "@shared/conditions";
-import { arrayToLines, linesToArray, textMatchesLines } from "@/lib/workflow-editor/params";
+import {
+  arrayToLines,
+  linesToArray,
+  textMatchesLines,
+  toggleRequiredArrayValue,
+} from "@/lib/workflow-editor/params";
 import { Listbox } from "@/components/cockpit/listbox";
+import { PromptField } from "./prompt-field";
 
-const inputCls = "h-[26px] px-2 bg-off-white border border-neutral-200 rounded-xs font-mono text-xs text-coal outline-none disabled:opacity-60";
-const textareaCls = "min-h-[64px] px-2 py-1.5 bg-off-white border border-neutral-200 rounded-xs font-body text-xs leading-[1.5] text-coal outline-none resize-y disabled:opacity-60";
-const monoTextareaCls = "min-h-[64px] px-2 py-1.5 bg-off-white border border-neutral-200 rounded-xs font-mono text-xs leading-[1.5] text-coal outline-none resize-y disabled:opacity-60";
+/** The inspector change callback. Widened past WorkflowParamValue so PromptField
+ *  can set/clear provenance refs under `promptRefs.<paramKey>` paths too. */
+type ConfigChange = (path: string, value: WorkflowParamValue | PromptSourceRef | undefined) => void;
+
+export const inputCls = "h-[26px] px-2 bg-off-white border border-neutral-200 rounded-xs font-mono text-xs text-coal outline-none disabled:opacity-60";
+export const textareaCls = "min-h-[64px] px-2 py-1.5 bg-off-white border border-neutral-200 rounded-xs font-body text-xs leading-[1.5] text-coal outline-none resize-y disabled:opacity-60";
+export const monoTextareaCls = "min-h-[64px] px-2 py-1.5 bg-off-white border border-neutral-200 rounded-xs font-mono text-xs leading-[1.5] text-coal outline-none resize-y disabled:opacity-60";
 
 function str(value: WorkflowParamValue | undefined): string {
   return typeof value === "string" ? value : "";
@@ -45,10 +61,25 @@ function CheckboxRow({
   );
 }
 
-function ConfigField({ label, children }: { label: string; children: React.ReactNode }) {
+export function ConfigField({
+  label,
+  action,
+  children,
+}: {
+  label: string;
+  action?: React.ReactNode;
+  children: React.ReactNode;
+}) {
   return (
     <div className="flex flex-col gap-1 py-2.5 px-[14px] border-b border-neutral-200">
-      <label className="font-mono text-[9px] text-neutral-700 tracking-[0.06em] uppercase">{label}</label>
+      {action ? (
+        <div className="flex items-center gap-2">
+          <label className="font-mono text-[9px] text-neutral-700 tracking-[0.06em] uppercase">{label}</label>
+          <div className="ml-auto flex items-center gap-1">{action}</div>
+        </div>
+      ) : (
+        <label className="font-mono text-[9px] text-neutral-700 tracking-[0.06em] uppercase">{label}</label>
+      )}
       {children}
     </div>
   );
@@ -309,7 +340,7 @@ function AgentProviderModel({
   node: FlowNodeDef;
   options: WorkflowEditorOptions;
   canEdit: boolean;
-  onChange: (path: string, value: WorkflowParamValue | undefined) => void;
+  onChange: ConfigChange;
 }) {
   const provider = str(node.params.provider);
   return (
@@ -339,6 +370,72 @@ function AgentProviderModel({
   );
 }
 
+function PrScopeField({
+  node,
+  canEdit,
+  onChange,
+}: {
+  node: FlowNodeDef;
+  canEdit: boolean;
+  onChange: (path: string, value: WorkflowParamValue | undefined) => void;
+}) {
+  const scope = node.params.scope === "any" ? "any" : "workflow_owned";
+  return (
+    <ConfigField label="Scope">
+      <Listbox
+        options={[
+          { value: "workflow_owned", label: "Workflow-owned PRs only" },
+          { value: "any", label: "Any PR" },
+        ]}
+        value={scope}
+        disabled={!canEdit}
+        ariaLabel="Pull request scope"
+        onChange={(value) => onChange("params.scope", value)}
+      />
+    </ConfigField>
+  );
+}
+
+function PrProvidersField({
+  node,
+  canEdit,
+  onChange,
+}: {
+  node: FlowNodeDef;
+  canEdit: boolean;
+  onChange: (path: string, value: WorkflowParamValue | undefined) => void;
+}) {
+  const configured = arr(node.params.providers).filter(
+    (provider) => provider === "github" || provider === "gitlab",
+  );
+  const effective = configured.length > 0 ? configured : ["github", "gitlab"];
+  const toggle = (provider: "github" | "gitlab") => (checked: boolean) => {
+    onChange(
+      "params.providers",
+      toggleRequiredArrayValue(effective, provider, checked),
+    );
+  };
+
+  return (
+    <ConfigField label="Providers">
+      <div className="flex flex-col gap-1.5">
+        {(["github", "gitlab"] as const).map((provider) => {
+          const checked = effective.includes(provider);
+          return (
+            <CheckboxRow
+              key={provider}
+              label={provider === "github" ? "GitHub" : "GitLab"}
+              checked={checked}
+              disabled={!canEdit || (checked && effective.length === 1)}
+              onChange={toggle(provider)}
+            />
+          );
+        })}
+      </div>
+    </ConfigField>
+  );
+}
+
 export function ConfigFields({
   node,
   options,
@@ -348,7 +445,7 @@ export function ConfigFields({
   node: FlowNodeDef;
   options: WorkflowEditorOptions;
   canEdit: boolean;
-  onChange: (path: string, value: WorkflowParamValue | undefined) => void;
+  onChange: ConfigChange;
 }) {
   switch (node.type) {
     case "trigger_ticket_ai":
@@ -356,60 +453,125 @@ export function ConfigFields({
     case "trigger_plan_approved":
       return <ConfigNote>Fires when a proposed plan is approved.</ConfigNote>;
     case "trigger_pr_checks_failed":
-      return <ConfigNote>Fires when a pull request&apos;s checks report a failure.</ConfigNote>;
+      return (
+        <>
+          <PrProvidersField node={node} canEdit={canEdit} onChange={onChange} />
+          <PrScopeField node={node} canEdit={canEdit} onChange={onChange} />
+          <ConfigField label="Exact check names">
+            <ArrayTextarea
+              key={`${node.id}:checkNames`}
+              value={node.params.checkNames}
+              disabled={!canEdit}
+              mono
+              placeholder="ci / build"
+              onChange={(value) => onChange("params.checkNames", value ?? [])}
+            />
+          </ConfigField>
+          <ConfigField label="Trusted GitHub App slugs">
+            <ArrayTextarea
+              key={`${node.id}:githubAppSlugs`}
+              value={node.params.githubAppSlugs}
+              disabled={!canEdit}
+              mono
+              placeholder="github-actions"
+              onChange={(value) => onChange("params.githubAppSlugs", value)}
+            />
+          </ConfigField>
+          <ConfigField label="Trusted GitLab pipeline sources">
+            <ArrayTextarea
+              key={`${node.id}:gitlabPipelineSources`}
+              value={node.params.gitlabPipelineSources}
+              disabled={!canEdit}
+              mono
+              placeholder="merge_request_event"
+              onChange={(value) => onChange("params.gitlabPipelineSources", value)}
+            />
+          </ConfigField>
+          <ConfigNote>
+            Events fail closed until an exact check name matches. GitHub defaults to the
+            github-actions App; GitLab defaults to merge-request pipelines.
+          </ConfigNote>
+        </>
+      );
     case "trigger_pr_created":
       return (
         <>
-          <ConfigField label="Scope">
-            <CheckboxRow
-              label="Only PRs opened by this workflow"
-              checked={node.params.onlyWorkflowOwned !== false}
-              disabled={!canEdit}
-              onChange={(v) => onChange("params.onlyWorkflowOwned", v)}
-            />
-          </ConfigField>
-          <ConfigNote>Providers are configured in the VCS integration settings.</ConfigNote>
+          <PrProvidersField node={node} canEdit={canEdit} onChange={onChange} />
+          <PrScopeField node={node} canEdit={canEdit} onChange={onChange} />
+          <ConfigNote>Only configured VCS integrations can receive these events.</ConfigNote>
+        </>
+      );
+    case "trigger_pr_merged":
+      return (
+        <>
+          <PrProvidersField node={node} canEdit={canEdit} onChange={onChange} />
+          <PrScopeField node={node} canEdit={canEdit} onChange={onChange} />
+          <ConfigNote>Fires after a pull or merge request is merged.</ConfigNote>
         </>
       );
     case "trigger_pr_review": {
       const onStates = arr(node.params.on);
       const effective = onStates.length > 0 ? onStates : ["changes_requested"];
       const toggle = (value: string) => (checked: boolean) => {
-        const next = checked
-          ? [...new Set([...effective, value])]
-          : effective.filter((s) => s !== value);
-        onChange("params.on", next);
+        onChange("params.on", toggleRequiredArrayValue(effective, value, checked));
       };
       return (
-        <ConfigField label="On review">
-          <div className="flex flex-col gap-1.5">
-            <CheckboxRow
-              label="Changes requested"
-              checked={effective.includes("changes_requested")}
-              disabled={!canEdit}
-              onChange={toggle("changes_requested")}
-            />
-            <CheckboxRow
-              label="Commented (untrusted body, opt-in)"
-              checked={effective.includes("commented")}
-              disabled={!canEdit}
-              onChange={toggle("commented")}
-            />
-          </div>
-        </ConfigField>
+        <>
+          <PrProvidersField node={node} canEdit={canEdit} onChange={onChange} />
+          <PrScopeField node={node} canEdit={canEdit} onChange={onChange} />
+          <ConfigField label="On review">
+            <div className="flex flex-col gap-1.5">
+              <CheckboxRow
+                label="Changes requested"
+                checked={effective.includes("changes_requested")}
+                disabled={
+                  !canEdit ||
+                  (effective.length === 1 && effective.includes("changes_requested"))
+                }
+                onChange={toggle("changes_requested")}
+              />
+              <CheckboxRow
+                label="Commented (untrusted body, opt-in)"
+                checked={effective.includes("commented")}
+                disabled={
+                  !canEdit || (effective.length === 1 && effective.includes("commented"))
+                }
+                onChange={toggle("commented")}
+              />
+            </div>
+          </ConfigField>
+        </>
       );
     }
     case "planning_agent":
     case "implementation_agent":
-    case "review_agent":
-      return <AgentProviderModel node={node} options={options} canEdit={canEdit} onChange={onChange} />;
+    case "review_agent": {
+      return (
+        <>
+          <AgentProviderModel node={node} options={options} canEdit={canEdit} onChange={onChange} />
+          <PromptField
+            label="Prompt"
+            paramKey="prompt"
+            node={node}
+            disabled={!canEdit}
+            mono
+            defaultPromptName={DEFAULT_PROMPT_NAME_BY_AGENT[node.type]}
+            onChange={onChange}
+          />
+        </>
+      );
+    }
     case "fix_agent":
       return (
         <>
           <AgentProviderModel node={node} options={options} canEdit={canEdit} onChange={onChange} />
-          <ConfigField label="Instructions">
-            <TextArea value={str(node.params.instructions)} disabled={!canEdit} onChange={(v) => onChange("params.instructions", v)} />
-          </ConfigField>
+          <PromptField
+            label="Instructions"
+            paramKey="instructions"
+            node={node}
+            disabled={!canEdit}
+            onChange={onChange}
+          />
           <ConfigField label="Max minutes">
             <NumberField value={node.params.maxMinutes} min={5} max={60} disabled={!canEdit} onChange={(v) => onChange("params.maxMinutes", v)} />
           </ConfigField>
@@ -419,9 +581,25 @@ export function ConfigFields({
       return (
         <>
           <AgentProviderModel node={node} options={options} canEdit={canEdit} onChange={onChange} />
-          <ConfigField label="Prompt">
-            <TextArea value={str(node.params.prompt)} disabled={!canEdit} onChange={(v) => onChange("params.prompt", v)} />
+          <ConfigField label="Workspace access">
+            <Listbox
+              options={[
+                { value: "none", label: "No code workspace" },
+                { value: "read_write", label: "Attached code workspace (read/write)" },
+              ]}
+              value={str(node.params.workspaceMode) || "none"}
+              disabled={!canEdit}
+              ariaLabel="Workspace access"
+              onChange={(v) => onChange("params.workspaceMode", v)}
+            />
           </ConfigField>
+          <PromptField
+            label="Prompt"
+            paramKey="prompt"
+            node={node}
+            disabled={!canEdit}
+            onChange={onChange}
+          />
           <ConfigField label="Output schema">
             <TextArea value={str(node.params.outputSchema)} disabled={!canEdit} mono onChange={(v) => onChange("params.outputSchema", v)} />
           </ConfigField>
@@ -430,12 +608,20 @@ export function ConfigFields({
     case "call_llm":
       return (
         <>
-          <ConfigField label="Prompt">
-            <TextArea value={str(node.params.prompt)} disabled={!canEdit} onChange={(v) => onChange("params.prompt", v)} />
-          </ConfigField>
-          <ConfigField label="System">
-            <TextArea value={str(node.params.system)} disabled={!canEdit} onChange={(v) => onChange("params.system", v)} />
-          </ConfigField>
+          <PromptField
+            label="Prompt"
+            paramKey="prompt"
+            node={node}
+            disabled={!canEdit}
+            onChange={onChange}
+          />
+          <PromptField
+            label="System"
+            paramKey="system"
+            node={node}
+            disabled={!canEdit}
+            onChange={onChange}
+          />
           <ConfigField label="Model">
             <TextInput value={str(node.params.model)} disabled={!canEdit} onChange={(v) => onChange("params.model", v)} />
           </ConfigField>
@@ -445,24 +631,12 @@ export function ConfigFields({
         </>
       );
     case "prepare_workspace":
-      return <ConfigNote>Provisions a fresh sandbox and checks out the ticket branch.</ConfigNote>;
+      return <ConfigNote>Creates or reuses a managed code workspace for modular blocks.</ConfigNote>;
     case "finalize_workspace":
       return (
-        <>
-          <ConfigField label="Required checks">
-            <ArrayTextarea
-              key={`${node.id}:requiredChecks`}
-              value={node.params.requiredChecks}
-              disabled={!canEdit}
-              mono
-              placeholder="block-id"
-              onChange={(v) => onChange("params.requiredChecks", v)}
-            />
-          </ConfigField>
-          <ConfigNote>
-            Lists upstream block ids that must have completed; to gate on CHECK RESULTS route a branch on steps.&lt;id&gt;.output.ok instead.
-          </ConfigNote>
-        </>
+        <ConfigNote>
+          To gate publication on check results, route a Branch using steps.&lt;id&gt;.output.ok.
+        </ConfigNote>
       );
     case "run_pre_pr_checks":
       return (
@@ -551,14 +725,6 @@ export function ConfigFields({
     case "send_plan_approval":
       return (
         <>
-          <ConfigField label="Plan from step">
-            <TextInput
-              value={str(node.params.planFromStep)}
-              disabled={!canEdit}
-              placeholder="block-id"
-              onChange={(v) => onChange("params.planFromStep", v)}
-            />
-          </ConfigField>
           <ConfigField label="Mirror comment">
             <label className="flex items-center gap-2 font-body text-xs text-coal">
               <input
@@ -572,24 +738,12 @@ export function ConfigFields({
             </label>
           </ConfigField>
           <ConfigNote>
-            The run ends here and resumes from the Plan approved trigger once an approver accepts.
+            Bind the plan input to an upstream output. The run resumes from the Plan approved trigger after approval.
           </ConfigNote>
         </>
       );
     case "arthur_injection_check":
-      return (
-        <>
-          <ConfigField label="Content from step">
-            <TextInput
-              value={str(node.params.contentFromStep)}
-              disabled={!canEdit}
-              placeholder="block-id"
-              onChange={(v) => onChange("params.contentFromStep", v)}
-            />
-          </ConfigField>
-          <ConfigNote>Scans the referenced step output for prompt-injection attempts.</ConfigNote>
-        </>
-      );
+      return <ConfigNote>Bind content to the string output that Arthur should scan.</ConfigNote>;
     case "branch": {
       const condition = str(node.params.condition);
       const parsed = condition.trim() !== "" ? parseCondition(condition) : null;

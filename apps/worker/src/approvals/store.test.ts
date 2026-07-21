@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { sql } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import type { Db } from "../db/client.js";
 import { approvalRequests } from "../db/schema.js";
@@ -8,7 +9,11 @@ import {
   createApprovalRequest,
   decideApproval,
   getApproval,
+  hasDispatchBlockingApprovalForTicket,
   listApprovals,
+  listDispatchBlockingApprovals,
+  rejectUndispatchableApproval,
+  retireApprovalCancellation,
   setDispatchedRunId,
 } from "./store.js";
 
@@ -62,6 +67,41 @@ describe("createApprovalRequest", () => {
 
     const pending = await listApprovals(db, { status: "pending" });
     expect(pending.map((r) => r.id)).toEqual([second.id]);
+  });
+
+  it("keeps the previous pending approval when replacement insertion fails", async () => {
+    const db = await createTestDb();
+    const previous = await createApprovalRequest(db, seed("AWT-ROLLBACK"));
+    await db.execute(sql`
+      create function fail_selected_approval_insert() returns trigger as $$
+      begin
+        if new.plan->>'markdown' = 'FAIL_INSERT' then
+          raise exception 'forced approval insert failure';
+        end if;
+        return new;
+      end;
+      $$ language plpgsql
+    `);
+    await db.execute(sql`
+      create trigger fail_selected_approval_insert_trigger
+      before insert on approval_requests
+      for each row execute function fail_selected_approval_insert()
+    `);
+
+    await expect(
+      createApprovalRequest(db, {
+        ...seed("AWT-ROLLBACK"),
+        plan: { markdown: "FAIL_INSERT" },
+      }),
+    ).rejects.toThrow();
+
+    await expect(getApproval(db, previous.id)).resolves.toMatchObject({
+      status: "pending",
+      ticketKey: "AWT-ROLLBACK",
+    });
+    await expect(listApprovals(db)).resolves.toEqual([
+      expect.objectContaining({ id: previous.id, status: "pending" }),
+    ]);
   });
 });
 
@@ -145,13 +185,209 @@ describe("listApprovals ordering", () => {
   });
 });
 
+describe("listDispatchBlockingApprovals", () => {
+  it("protects pending decisions and approved plans until a pinned successor acknowledges dispatch", async () => {
+    const db = await createTestDb();
+    const recoverable = await createApprovalRequest(db, seed("AWT-RECOVER"));
+    const dispatched = await createApprovalRequest(db, seed("AWT-DISPATCHED"));
+    const pending = await createApprovalRequest(db, seed("AWT-PENDING"));
+    const rejected = await createApprovalRequest(db, seed("AWT-REJECTED"));
+    await decideApproval(db, {
+      id: recoverable.id,
+      decision: "approved",
+      actor: { id: "u1", label: "Alice" },
+    });
+    await decideApproval(db, {
+      id: dispatched.id,
+      decision: "approved",
+      actor: { id: "u1", label: "Alice" },
+    });
+    await setDispatchedRunId(db, dispatched.id, "run-successor");
+    await decideApproval(db, {
+      id: rejected.id,
+      decision: "rejected",
+      actor: { id: "u1", label: "Alice" },
+    });
+
+    await expect(listDispatchBlockingApprovals(db)).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: recoverable.id,
+          ticketKey: "AWT-RECOVER",
+          status: "approved",
+          dispatchedRunId: null,
+        }),
+        expect.objectContaining({
+          id: pending.id,
+          ticketKey: "AWT-PENDING",
+          status: "pending",
+          dispatchedRunId: null,
+        }),
+      ]),
+    );
+    expect(await listDispatchBlockingApprovals(db)).toHaveLength(2);
+  });
+
+  it("checks one ticket without treating another ticket's approval as a blocker", async () => {
+    const db = await createTestDb();
+    await createApprovalRequest(db, seed("AWT-BLOCKED"));
+
+    await expect(
+      hasDispatchBlockingApprovalForTicket(db, "AWT-BLOCKED"),
+    ).resolves.toBe(true);
+    await expect(
+      hasDispatchBlockingApprovalForTicket(db, "AWT-OTHER"),
+    ).resolves.toBe(false);
+  });
+});
+
 describe("setDispatchedRunId", () => {
   it("records the dispatched run", async () => {
     const db = await createTestDb();
     const row = await createApprovalRequest(db, seed());
+    await decideApproval(db, {
+      id: row.id,
+      decision: "approved",
+      actor: { id: "u1", label: "Alice" },
+    });
     await setDispatchedRunId(db, row.id, "run-dispatched");
     const after = await getApproval(db, row.id);
     expect(after?.dispatchedRunId).toBe("run-dispatched");
+  });
+
+  it("is idempotent for the same run and refuses to replace a recorded dispatch", async () => {
+    const db = await createTestDb();
+    const row = await createApprovalRequest(db, seed());
+    await decideApproval(db, {
+      id: row.id,
+      decision: "approved",
+      actor: { id: "u1", label: "Alice" },
+    });
+    await setDispatchedRunId(db, row.id, "run-first");
+    await expect(setDispatchedRunId(db, row.id, "run-first")).resolves.toBeUndefined();
+    await expect(setDispatchedRunId(db, row.id, "run-second")).rejects.toMatchObject({
+      statusCode: 409,
+      message: "dispatch_already_recorded",
+    });
+    expect((await getApproval(db, row.id))?.dispatchedRunId).toBe("run-first");
+  });
+
+  it("refuses to attach a run after terminal rejection wins the CAS", async () => {
+    const db = await createTestDb();
+    const row = await createApprovalRequest(db, seed());
+    await rejectUndispatchableApproval(db, row.id);
+
+    await expect(setDispatchedRunId(db, row.id, "run-late")).rejects.toMatchObject({
+      statusCode: 409,
+      message: "dispatch_already_recorded",
+    });
+    expect(await getApproval(db, row.id)).toMatchObject({
+      status: "rejected",
+      dispatchedRunId: null,
+    });
+  });
+});
+
+describe("rejectUndispatchableApproval", () => {
+  it("cannot revoke an approved human decision", async () => {
+    const db = await createTestDb();
+    const row = await createApprovalRequest(db, seed());
+    await decideApproval(db, {
+      id: row.id,
+      decision: "approved",
+      actor: { id: "u1", label: "Alice" },
+    });
+
+    await expect(rejectUndispatchableApproval(db, row.id)).rejects.toMatchObject({
+      statusCode: 409,
+    });
+    await expect(getApproval(db, row.id)).resolves.toMatchObject({
+      status: "approved",
+      decidedById: "u1",
+    });
+  });
+});
+
+describe("retireApprovalCancellation", () => {
+  it("lets cancellation retire the pending request before a human decision wins", async () => {
+    const db = await createTestDb();
+    const pending = await createApprovalRequest(db, seed("AWT-PENDING"));
+
+    await expect(
+      retireApprovalCancellation(db, {
+        ticketKey: "AWT-PENDING",
+        runId: "run-produced",
+      }),
+    ).resolves.toBe(1);
+    await expect(
+      decideApproval(db, {
+        id: pending.id,
+        decision: "approved",
+        actor: { id: "u1", label: "Alice" },
+      }),
+    ).rejects.toMatchObject({ statusCode: 409 });
+
+    expect(await getApproval(db, pending.id)).toMatchObject({ status: "superseded" });
+  });
+
+  it("cannot revoke an approval after the human decision wins the race", async () => {
+    const db = await createTestDb();
+    const approved = await createApprovalRequest(db, seed("AWT-APPROVED"));
+    await decideApproval(db, {
+      id: approved.id,
+      decision: "approved",
+      actor: { id: "u1", label: "Alice" },
+    });
+
+    await expect(
+      retireApprovalCancellation(db, {
+        ticketKey: "AWT-APPROVED",
+        runId: "run-produced",
+      }),
+    ).resolves.toBe(0);
+
+    expect(await getApproval(db, approved.id)).toMatchObject({
+      status: "approved",
+      decidedById: "u1",
+      dispatchedRunId: null,
+    });
+    await expect(listDispatchBlockingApprovals(db)).resolves.toEqual([
+      expect.objectContaining({ id: approved.id, status: "approved" }),
+    ]);
+  });
+
+  it("does not retire another run or an approval already attached to a successor", async () => {
+    const db = await createTestDb();
+    const other = await createApprovalRequest(db, {
+      ...seed("AWT-OTHER"),
+      runId: "run-other",
+    });
+    const dispatched = await createApprovalRequest(db, seed("AWT-DISPATCHED"));
+    await decideApproval(db, {
+      id: dispatched.id,
+      decision: "approved",
+      actor: { id: "u1", label: "Alice" },
+    });
+    await setDispatchedRunId(db, dispatched.id, "run-successor");
+
+    await expect(
+      retireApprovalCancellation(db, {
+        ticketKey: "AWT-OTHER",
+        runId: "run-produced",
+      }),
+    ).resolves.toBe(0);
+    await expect(
+      retireApprovalCancellation(db, {
+        ticketKey: "AWT-DISPATCHED",
+        runId: "run-produced",
+      }),
+    ).resolves.toBe(0);
+
+    expect(await getApproval(db, other.id)).toMatchObject({ status: "pending" });
+    expect(await getApproval(db, dispatched.id)).toMatchObject({
+      status: "approved",
+      dispatchedRunId: "run-successor",
+    });
   });
 });
 

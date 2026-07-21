@@ -63,7 +63,7 @@ Important boundary:
 - Design for self-hosting — users provide their own API keys (issue tracker, VCS, messaging, AI
   model) and deploy onto their own Vercel account. The project is intended to be open source.
 - Provide an observability dashboard (separate Next.js app) with runs, KPIs, cost & usage, eval
-  health, prompt versions, and user administration, authenticated against the worker.
+  health, the prompt library, and user administration, authenticated against the worker.
 
 ### 2.2 Non-Goals
 
@@ -161,7 +161,7 @@ All paths below are relative to `apps/worker/src/` unless stated otherwise.
 - Vercel Workflows (durable orchestration), Vercel Sandbox (isolated execution), Vercel Cron.
 - Neon Postgres (Vercel Marketplace integration; one branch per environment) — **required**.
 - Anthropic API (Claude Code) and/or OpenAI (Codex CLI).
-- Optional: Arthur GenAI Engine (tracing/evals/prompt versioning), Resend (dashboard email).
+- Optional: Arthur GenAI Engine (tracing/evals/prompt-injection check), Resend (dashboard email).
 
 Deferred: Linear, Teams, Docker sandbox provider (self-hosted without Vercel).
 
@@ -196,11 +196,10 @@ Tables:
 Prompts are **not** files in the client repo. There are three named prompts — `research-plan`,
 `implement`, and `review` — with fallback bodies hardcoded in `apps/worker/src/lib/prompts.ts`.
 
-Resolution order at run time (`workflows/prompts-step.ts` → `lib/overview/collect-prompts.ts`):
-
-1. Versioned prompt from Arthur (GenAI Engine), when `GENAI_ENGINE_*` is configured. Prompts are
-   viewable/editable per version through the dashboard.
-2. Otherwise the hardcoded fallback body.
+Resolution at run time (`workflows/prompts-step.ts`): the in-code default body for each named
+prompt is used directly (the bodies are the single source of truth in `@shared/contracts`,
+re-exported through `apps/worker/src/lib/prompts.ts`). Per-block prompt overrides authored in the
+dashboard prompt library are applied elsewhere in the graph.
 
 The resolved prompt body is appended to the assembled per-phase context (Section 12) and written
 into the sandbox as that phase's input file. The agent also picks up repo-level instruction files
@@ -245,8 +244,7 @@ per-variable reference lives in `SETUP.md`; the groups are:
   built-in default workflow definition, the review phase itself is gated by the `review_agent`
   block in the active definition). Pre-PR check commands are dashboard-managed (Section 9.3),
   not env config.
-- **Arthur (optional):** `GENAI_ENGINE_API_KEY`, `GENAI_ENGINE_TRACE_ENDPOINT`,
-  `GENAI_ENGINE_PROMPT_TASK_ID`.
+- **Arthur (optional):** `GENAI_ENGINE_API_KEY`, `GENAI_ENGINE_TRACE_ENDPOINT`.
 - **Database:** `DATABASE_URL` (required; Neon via Vercel Marketplace).
 - **Vercel / cron:** `VERCEL_TOKEN` / `VERCEL_TEAM_ID` / `VERCEL_PROJECT_ID` (local dev only —
   OIDC on Vercel), `CRON_SECRET`.
@@ -304,8 +302,9 @@ then reconciles (Section 8.5) and snapshots telemetry.
 
 ### 8.2 Jira Webhook
 
-Real-time dispatch/cancellation as described in Section 3.1(2). Signature verification is skipped
-if `JIRA_WEBHOOK_SECRET` is unset (not recommended). Events for other projects and non-status
+Real-time dispatch/cancellation as described in Section 3.1(2). The public route is disabled with
+HTTP 503 when `JIRA_WEBHOOK_SECRET` is unset, leaving cron polling as the only ticket-ingestion
+path. Configured webhooks require a valid signature. Events for other projects and non-status
 changes are ignored.
 
 ### 8.3 Dispatch Logic (`dispatchTicket`)
@@ -352,7 +351,7 @@ and:
    `/vercel/sandbox/repos/`. When the ticket's PR has conflicts, the base branch is merged into the
    checkout during provisioning so the agent resolves conflicts as part of the run.
 2. Writes the workspace manifest `/vercel/sandbox/aiw-repos.json` (per repo: local path, branch,
-   pre-agent HEAD SHA).
+   the remote HEAD observed before local preparation, and the pre-agent HEAD SHA).
 3. Installs the agent CLI globally (`@anthropic-ai/claude-code` or `@openai/codex`) and the
    configured skills (via `npx skills add … -g --agent claude-code codex --copy`).
 4. Writes agent auth to `/tmp/agent-env.sh` (mode 0600), sourced by each phase wrapper — the key
@@ -379,31 +378,47 @@ checks are fed back to the agent (fix and commit, no push) for up to 3 fix cycle
 fail, publication is blocked and the ticket moves to Backlog with a `failed (pre-pr-checks)`
 notification carrying the check logs.
 
-### 9.4 Push (from inside the sandbox, after the agent exits)
+### 9.4 Trusted Publication (after the agent exits)
 
-The v2 rule "no push from inside the sandbox" evolved: the push *command* runs inside the sandbox,
-but only in an orchestrator-controlled step after the agent process is dead, using an ephemeral
-token the agent never sees (`sandbox/poll-agent.ts`):
+Publication starts only after the agent process is dead. The orchestrator validates the
+manager-authored workspace manifest, then uses a separate short-lived publisher sandbox; the agent
+workspace never receives push credentials (`sandbox/trusted-workspace-publisher.ts`):
 
-1. Read the workspace manifest.
-2. Compare each repo's `preAgentSha` to its current HEAD; skip unchanged repos. If no repo changed,
-   fail the run ("Agent reported success but made no commits").
-3. Resolve the VCS token (on GitHub, a freshly minted short-lived App installation token) and pass
-   it per push as an `http.extraHeader` authorization header — never written to the remote URL or
-   disk. After a successful push, `origin` is reset to the token-less clone URL.
-4. Unshallow when needed (shallow clones break PR/MR creation).
-5. `git push --force origin HEAD:refs/heads/{branch}` per changed repo — force-push is scoped to
-   workflow-owned `blazebot/*` branches.
-6. If a push fails, the agent is re-invoked once with a fix prompt (fix and commit, no push), then
-   the push is retried.
+1. Verify that the sandbox manifest still exactly matches the manager-authored manifest. Each
+   repository includes the remote head observed during preparation (`expectedRemoteSha`) and its
+   pre-agent head (`preAgentSha`).
+2. Preflight every source repository before any remote mutation: require a clean tracked, staged,
+   untracked, and conflict-free worktree; read the exact target head; and prove that it descends
+   from both trusted baselines. If any repository fails, none are pushed.
+3. Re-read provider state and reject remote-branch drift. For remediation runs, also verify that
+   the exact source PR/MR remains open at the expected head.
+4. Export every changed target as a bundle. In a fresh publisher sandbox, clone each canonical
+   remote branch, import its bundle, and validate every target before the first push.
+5. Resolve the VCS token only inside the publisher and push each changed repository with an exact
+   lease: `--force-with-lease=refs/heads/{branch}:{expectedRemoteSha}`. The token is passed per
+   command and is never written to a remote URL or disk.
+6. Re-read provider state after each push and require it to equal the exact target head.
+
+Remote drift, lease rejection, and failed preflight stop publication without re-invoking the agent.
+Durable workflow retries are safe because the publisher recognizes an already-published exact
+target and every remaining mutation uses an exact lease. Finalize Workspace emits exact finalized
+branch metadata to Open PR/MR; failed or partial publication creates no PRs and cannot report
+success.
 
 ### 9.5 Teardown
 
-The sandbox is destroyed after every run, in `finally`, regardless of outcome.
+The agent sandbox is destroyed after every run, in `finally`, regardless of outcome. The publisher
+sandbox is also destroyed in its own `finally` block.
 
 ### 9.6 Safety Invariants
 
-- The agent never holds push credentials; tokens are injected only after the agent process exits.
+- The agent never holds push credentials; publication runs in a separate publisher after the agent
+  process exits.
+- The manager-authored workspace manifest is immutable publication authority and is verified before
+  use.
+- Every repository passes preflight before the first remote mutation.
+- Every push uses an exact lease and is verified against provider state afterward.
+- Failed or partial publication creates no PRs and cannot be reported as success.
 - Sandboxes are isolated — no access to production infrastructure or other sandboxes.
 - Commits are authored as the configured/derived bot identity (Section 6).
 
@@ -593,8 +608,9 @@ PRs **after** creation. Full spec: `docs/post-pr-gate-spec.md`.
 ## 17. Dashboard and Auth
 
 `apps/dashboard` is a Next.js "cockpit", deployed as a separate Vercel project. Sections: Overview
-(KPIs, eval health), Workflow runs (+ live view, run trace, ticket detail), Prompts (versioned,
-Arthur-backed), Arthur evals, Cost & usage, Workflow editor, and Users (invites, roles).
+(KPIs, eval health), Workflow runs (+ live view, run trace, ticket detail), Prompt library
+(dashboard-authored reusable prompts, versioned), Arthur evals, Cost & usage, Workflow editor,
+and Users (invites, roles).
 
 - **The worker is the auth authority** (Better Auth at `/api/auth/**`; dashboard data API under
   `/api/v1/*` gated by session middleware). The dashboard is a thin BFF: it stores the
@@ -626,7 +642,7 @@ Arthur-backed), Arthur evals, Cost & usage, Workflow editor, and Users (invites,
   agent fix cycles before push/PR creation.
 - Post-PR gate workflow with check-run reporting.
 - Dashboard with Better Auth (password + optional SSO), invites/roles, Resend email.
-- Arthur tracing, eval health, prompt versioning (optional).
+- Arthur tracing, eval health, prompt-injection check (optional).
 - Token/cost usage tracking per run (including live Codex pricing).
 - pnpm monorepo (`apps/worker`, `apps/dashboard`, `apps/shared` type contracts).
 

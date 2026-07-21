@@ -2,24 +2,48 @@
 
 import React, { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import type { FlowNodeDef, FlowEdgeDef, NodeRunStatus, RunStatusMap } from "@/lib/flows";
-import type { WorkflowEditorOptions, WorkflowParamValue } from "@shared/contracts";
+import type {
+  PromptSourceRef,
+  WorkflowDefinition,
+  WorkflowEditorOptions,
+  WorkflowExecutionBudgets,
+  WorkflowParamValue,
+} from "@shared/contracts";
 import { FAILURE_PORT, isTriggerBlockType } from "@shared/contracts";
 import { useIsMobileViewport } from "@/lib/use-media-query";
 import { MobileSheet } from "@/components/cockpit/mobile/mobile-sheet";
 import {
   defaultPort,
+  edgeDeleteActionVisible,
+  edgeDeleteTargetRadius,
+  edgeInstanceKey,
+  edgeKeyboardAction,
   edgeKey,
   isBackEdge,
+  reconcileSelectedEdgeKey,
+  removeEdge as removeEdgeFromList,
   resolvedPort,
   upsertEdge,
   visibleOutPorts,
 } from "@/lib/workflow-editor/edges";
-import { NODE_CATEGORIES, buildPaletteItems, nodeSummary } from "./blocks";
+import {
+  blockPresentation,
+  buildPaletteItems,
+  CONNECTED_CARD_TEXT_CLASS,
+  nodeSummary,
+} from "./blocks";
 import type { PaletteItem } from "./blocks";
 import { NODE_W, NODE_H, inPortPos, outPortPos, bezier } from "./ports";
 import type { Point } from "./ports";
 import { NodePalette, MobilePaletteList } from "./palette";
 import { ConfigFields } from "./config-fields";
+import { BindingFields, updateInputBindings } from "./binding-fields";
+import type { WorkflowValidationState } from "@/lib/workflow-editor/validation-controller";
+import { removeNodeFromGraph } from "@/lib/workflow-editor/graph-edit";
+import {
+  setExecutionLimit,
+  type WorkflowExecutionLimitKey,
+} from "@/lib/workflow-editor/execution-limits";
 
 const RUN_STATUS_COLORS: Record<NodeRunStatus, string> = {
   pending: "#9EA3AA",
@@ -29,6 +53,59 @@ const RUN_STATUS_COLORS: Record<NodeRunStatus, string> = {
   fail: "#D14343",
 };
 
+const EXECUTION_LIMIT_FIELDS: Array<{
+  key: WorkflowExecutionLimitKey;
+  label: string;
+  placeholder: string;
+  step: number;
+}> = [
+  { key: "maxDurationMs", label: "Duration (ms)", placeholder: "Default", step: 1 },
+  { key: "maxTokens", label: "Tokens", placeholder: "Unset", step: 1 },
+  { key: "maxCostUsd", label: "Cost (USD)", placeholder: "Unset", step: 0.01 },
+];
+
+function ExecutionLimitsBar({
+  limits,
+  canEdit,
+  onChange,
+}: {
+  limits: WorkflowExecutionBudgets;
+  canEdit: boolean;
+  onChange: (limits: WorkflowExecutionBudgets) => void;
+}) {
+  return (
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-2 px-6 py-2 border-b border-neutral-200 bg-app-bg">
+      <div className="min-w-[110px]">
+        <div className="font-mono text-[9px] font-semibold tracking-[0.06em] uppercase text-neutral-700">
+          Execution limits
+        </div>
+        <div className="font-body text-[10px] text-neutral-500">Optional per run</div>
+      </div>
+      {EXECUTION_LIMIT_FIELDS.map((field) => (
+        <label key={field.key} className="flex items-center gap-1.5">
+          <span className="font-mono text-[9px] tracking-[0.04em] uppercase text-neutral-600">
+            {field.label}
+          </span>
+          <input
+            type="number"
+            min={field.step}
+            step={field.step}
+            value={limits[field.key] ?? ""}
+            placeholder={field.placeholder}
+            disabled={!canEdit}
+            onChange={(event) => {
+              const value = event.target.value === "" ? undefined : Number(event.target.value);
+              if (value !== undefined && !Number.isFinite(value)) return;
+              onChange(setExecutionLimit(limits, field.key, value));
+            }}
+            className="h-[26px] w-[104px] px-2 bg-panel border border-neutral-200 rounded-xs font-mono text-[10px] text-coal outline-none disabled:opacity-60"
+          />
+        </label>
+      ))}
+    </div>
+  );
+}
+
 const FlowNode = React.memo(function FlowNode({
   node,
   options,
@@ -37,6 +114,7 @@ const FlowNode = React.memo(function FlowNode({
   locked,
   outPorts,
   onSelect,
+  onDelete,
   onDragStart,
   onPortDown,
   onPortUp,
@@ -51,6 +129,7 @@ const FlowNode = React.memo(function FlowNode({
   locked: boolean;
   outPorts: string[];
   onSelect: (id: string) => void;
+  onDelete: (id: string) => void;
   onDragStart: (e: React.PointerEvent, node: FlowNodeDef) => void;
   onPortDown: (e: React.PointerEvent, nodeId: string, portId: string) => void;
   onPortUp: (e: React.PointerEvent, nodeId: string) => void;
@@ -58,16 +137,29 @@ const FlowNode = React.memo(function FlowNode({
   runError?: string;
   connectingPort?: string | null;
 }) {
-  const cat = NODE_CATEGORIES[node.type];
+  const cat = blockPresentation(options, node.type);
   const summary = nodeSummary(node, options);
   const portCount = outPorts.length;
   const running = runStatus === "running";
 
   return (
     <div
-      onPointerDown={(e) => onDragStart(e, node)}
+      onPointerDown={(e) => {
+        if (e.button === 2) {
+          e.stopPropagation();
+          return;
+        }
+        onDragStart(e, node);
+      }}
+      onContextMenu={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (canEdit && !locked) onDelete(node.id);
+      }}
       onClick={(e) => { e.stopPropagation(); onSelect(node.id); }}
-      className={`absolute rounded-sm select-none transition-[box-shadow,border-color] duration-[120ms] bg-panel ${
+      role="group"
+      aria-label={`${cat.label}: ${node.name || cat.label}`}
+      className={`absolute rounded-[4px] select-none transition-[box-shadow,border-color] duration-[120ms] bg-panel ${
         canEdit ? "cursor-grab" : "cursor-pointer"
       } ${
         running
@@ -82,16 +174,15 @@ const FlowNode = React.memo(function FlowNode({
       }}
     >
       <div
-        className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-t-[3px] font-mono text-[9px] font-semibold tracking-[0.06em] uppercase border-b"
-        style={{ background: cat.soft, borderBottomColor: cat.soft, color: cat.color }}
+        className="flex h-8 min-w-0 items-center gap-2 overflow-hidden rounded-t-[3px] border-b px-2.5 font-mono text-[8px] font-semibold uppercase tracking-[0.06em]"
+        style={{ background: cat.softColor, borderBottomColor: cat.softColor, color: cat.color }}
       >
         <span
-          className="w-4 h-4 rounded-xs text-white inline-flex items-center justify-center text-[10px] font-bold"
+          className="inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-[2px] text-[9px] font-bold text-white"
           style={{ background: cat.color }}
         >{cat.glyph}</span>
-        {cat.label}
-        <span className="ml-auto font-mono text-[9px] text-neutral-500">{node.id}</span>
-        {locked && <span title="Anchor step, can't be removed" className="text-[9px] leading-none" aria-hidden>🔒</span>}
+        <span className="min-w-0 truncate">{cat.label}</span>
+        {locked && <span title="Anchor step, can't be removed" className="ml-auto shrink-0 text-[9px] leading-none" aria-hidden>🔒</span>}
         {runStatus && (
           <span
             title={
@@ -99,16 +190,14 @@ const FlowNode = React.memo(function FlowNode({
                 ? `last run: ${runStatus} (${runError})`
                 : "last run: " + runStatus
             }
-            className={`w-1.5 h-1.5 rounded-full ${runStatus === "running" ? "animate-pulse" : ""}`}
+            className={`h-1.5 w-1.5 shrink-0 rounded-full ${locked ? "" : "ml-auto"} ${runStatus === "running" ? "animate-pulse" : ""}`}
             style={{ background: RUN_STATUS_COLORS[runStatus] }}
           />
         )}
       </div>
-      <div className="px-2.5 py-2 flex flex-col gap-0.5">
-        <div className="font-body text-[13px] font-semibold leading-[1.2] overflow-hidden text-ellipsis whitespace-nowrap text-coal">{node.name || cat.label}</div>
-        {summary && (
-          <div className="font-mono text-[10px] overflow-hidden text-ellipsis whitespace-nowrap text-neutral-700">{summary}</div>
-        )}
+      <div className="flex min-w-0 flex-col px-2.5 py-2">
+        <div className={`font-body text-[13px] font-semibold leading-[1.2] text-coal ${CONNECTED_CARD_TEXT_CLASS}`}>{node.name || cat.label}</div>
+        <div className={`mt-1 font-mono text-[9px] leading-[1.2] text-neutral-500 ${CONNECTED_CARD_TEXT_CLASS}`}>{summary ?? node.id}</div>
       </div>
 
       {!isTriggerBlockType(node.type) && (
@@ -174,6 +263,7 @@ function FlowCanvas({
   onNodesChange,
   onAddEdge,
   onRemoveEdge,
+  onDeleteNode,
   onDropNode,
   runStatuses,
   runErrors,
@@ -189,7 +279,8 @@ function FlowCanvas({
   options: WorkflowEditorOptions;
   onNodesChange: React.Dispatch<React.SetStateAction<FlowNodeDef[]>>;
   onAddEdge: (from: string, fromPort: string, to: string) => void;
-  onRemoveEdge: (edge: FlowEdgeDef) => void;
+  onRemoveEdge: (instanceKey: string) => void;
+  onDeleteNode: (nodeId: string) => void;
   onDropNode: (item: PaletteItem, at: Point) => void;
   runStatuses?: RunStatusMap;
   runErrors?: Record<string, string>;
@@ -204,6 +295,7 @@ function FlowCanvas({
   const [drag, setDrag] = useState<DragState | null>(null);  // { kind: "node"|"pan", id, ox, oy }
   const [connect, setConnect] = useState<ConnectState | null>(null);
   const [hoverEdge, setHoverEdge] = useState<number | null>(null);
+  const [selectedEdgeKey, setSelectedEdgeKey] = useState<string | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const pointers = useRef<Map<number, Point>>(new Map());
   const pinch = useRef<{ dist: number; cx: number; cy: number } | null>(null);
@@ -214,6 +306,10 @@ function FlowCanvas({
   // Mirror latest pan/zoom for the native wheel listener (attached once).
   const viewRef = useRef({ pan, zoom });
   viewRef.current = { pan, zoom };
+
+  useEffect(() => {
+    setSelectedEdgeKey((current) => reconcileSelectedEdgeKey(current, edges, selectedId));
+  }, [edges, selectedId]);
 
   // Convert a client point into canvas (unscaled) coordinates.
   const toCanvas = useCallback((clientX: number, clientY: number): Point => {
@@ -372,6 +468,7 @@ function FlowCanvas({
       return;
     }
     setSelectedId(null);
+    setSelectedEdgeKey(null);
     e.currentTarget.setPointerCapture?.(e.pointerId);
     setDrag({ kind: "pan", ox: pan.x, oy: pan.y, startX: e.clientX, startY: e.clientY, pointerId: e.pointerId });
   };
@@ -387,6 +484,10 @@ function FlowCanvas({
     if (connect && connect.from !== nodeId) onAddEdge(connect.from, connect.fromPort, nodeId);
     setConnect(null);
   }, [connect, onAddEdge]);
+  const selectNode = useCallback((nodeId: string) => {
+    setSelectedEdgeKey(null);
+    setSelectedId(nodeId);
+  }, [setSelectedId]);
 
   // For edges
   const nodeById = useMemo(() => Object.fromEntries(nodes.map(n => [n.id, n])), [nodes]);
@@ -473,20 +574,33 @@ function FlowCanvas({
           {edges.map((e, i) => {
             const a = nodeById[e.from], b = nodeById[e.to];
             if (!a || !b) return null;
+            const key = edgeInstanceKey(edges, i);
             const ports = portsByNode[a.id] ?? [];
             const port = resolvedPort(e, a.type);
             const idx = ports.indexOf(port);
             const p1 = outPortPos(a, idx < 0 ? 0 : idx, ports.length || 1);
             const p2 = inPortPos(b);
-            const isActive = (selectedId === a.id || selectedId === b.id);
+            const selected = selectedEdgeKey === key;
+            const isActive = selected || selectedId === a.id || selectedId === b.id;
             const stroke = isActive ? "#3C43E7" : "#9EA3AA";
             const hovered = hoverEdge === i;
+            const showDelete = edgeDeleteActionVisible({ canEdit, hovered, selected });
             const mx = (p1.x + p2.x) / 2, my = (p1.y + p2.y) / 2;
             const back = backEdgeKeys.has(edgeKey(e));
             const labelPort = e.fromPort !== undefined && e.fromPort !== defaultPort(a.type) ? e.fromPort : null;
+            const connectionLabel = `Connection ${port} from ${a.name || a.id} to ${b.name || b.id}`;
+            const selectConnection = () => {
+              setSelectedId(null);
+              setSelectedEdgeKey(key);
+            };
+            const deleteConnection = () => {
+              onRemoveEdge(key);
+              setHoverEdge(null);
+              setSelectedEdgeKey(null);
+            };
             return (
               <g
-                key={i}
+                key={key}
                 onMouseEnter={() => { if (canEdit) setHoverEdge(i); }}
                 onMouseLeave={() => setHoverEdge((h) => (h === i ? null : h))}
               >
@@ -500,8 +614,32 @@ function FlowCanvas({
                   className="transition-[stroke] duration-[120ms] pointer-events-none"
                 />
                 {/* Fat transparent hit area so the thin edge is easy to hover */}
-                <path d={bezier(p1, p2)} stroke="transparent" strokeWidth={18} fill="none" style={{ pointerEvents: "stroke" }} />
-                {labelPort && !hovered && (
+                <path
+                  d={bezier(p1, p2)}
+                  stroke="transparent"
+                  strokeWidth={18}
+                  fill="none"
+                  role="button"
+                  tabIndex={0}
+                  aria-label={`Select ${connectionLabel}`}
+                  aria-pressed={selected}
+                  onPointerDown={(ev) => ev.stopPropagation()}
+                  onClick={(ev) => {
+                    ev.stopPropagation();
+                    selectConnection();
+                  }}
+                  onFocus={selectConnection}
+                  onKeyDown={(ev) => {
+                    const action = edgeKeyboardAction(ev.key, canEdit);
+                    if (!action) return;
+                    ev.preventDefault();
+                    ev.stopPropagation();
+                    if (action === "delete") deleteConnection();
+                    else selectConnection();
+                  }}
+                  style={{ pointerEvents: "stroke", cursor: "pointer" }}
+                />
+                {labelPort && !showDelete && (
                   <text
                     x={mx} y={my - 8} textAnchor="middle" fontSize={11} fontWeight={800}
                     fill="#181b20" stroke="#fff" strokeWidth={4} paintOrder="stroke"
@@ -509,17 +647,42 @@ function FlowCanvas({
                     style={{ fontFamily: '"JetBrains Mono", monospace' }}
                   >{labelPort}</text>
                 )}
-                {/* Hover to delete: ✕ badge at the edge midpoint */}
-                {hovered && (
+                {/* Hover or select to reveal the delete action at the edge midpoint. */}
+                {showDelete && (
                   <g
                     transform={`translate(${mx}, ${my})`}
-                    style={{ cursor: "pointer", pointerEvents: "auto" }}
+                    className="group outline-none"
+                    style={{ cursor: "pointer", pointerEvents: "auto", touchAction: "manipulation" }}
+                    role="button"
+                    tabIndex={0}
+                    aria-label={`Delete ${connectionLabel}`}
                     onPointerDown={(ev) => ev.stopPropagation()}
-                    onClick={(ev) => { ev.stopPropagation(); onRemoveEdge(e); setHoverEdge(null); }}
+                    onClick={(ev) => {
+                      ev.stopPropagation();
+                      deleteConnection();
+                    }}
+                    onKeyDown={(ev) => {
+                      if (ev.key !== "Enter" && ev.key !== " ") return;
+                      ev.preventDefault();
+                      ev.stopPropagation();
+                      deleteConnection();
+                    }}
                   >
+                    <circle
+                      r={edgeDeleteTargetRadius(zoom)}
+                      fill="transparent"
+                      pointerEvents="all"
+                    />
                     <circle r={9} fill="#fff" stroke="#D14343" strokeWidth={1.5} />
                     <text x={0} y={3.5} textAnchor="middle" fontSize={12} fontWeight={700} fill="#D14343"
                           style={{ fontFamily: '"JetBrains Mono", monospace' }}>×</text>
+                    <circle
+                      r={edgeDeleteTargetRadius(zoom) + 3 / zoom}
+                      fill="none"
+                      stroke="#3C43E7"
+                      strokeWidth={2 / zoom}
+                      className="pointer-events-none opacity-0 group-focus-visible:opacity-100"
+                    />
                   </g>
                 )}
               </g>
@@ -556,7 +719,8 @@ function FlowCanvas({
             selected={selectedId === n.id}
             locked={isTriggerBlockType(n.type) && triggerCount === 1}
             outPorts={portsByNode[n.id] ?? []}
-            onSelect={setSelectedId}
+            onSelect={selectNode}
+            onDelete={onDeleteNode}
             onDragStart={startNodeDrag}
             onPortDown={onPortDown}
             onPortUp={onPortUp}
@@ -602,6 +766,8 @@ function FlowCanvas({
 export function FlowEditor({
   nodes,
   edges,
+  limits,
+  onLimitsChange,
   onNodesChange,
   onEdgesChange,
   canEdit,
@@ -609,7 +775,9 @@ export function FlowEditor({
   saveEnabled,
   saving,
   error,
+  validation,
   onSave,
+  saveLabel = "Save changes",
   headerTitle,
   headerVersionBadge,
   headerExtra,
@@ -617,9 +785,12 @@ export function FlowEditor({
   runStatuses,
   runErrors,
   fitSignal,
+  initialSelectedId,
 }: {
   nodes: FlowNodeDef[];
   edges: FlowEdgeDef[];
+  limits: WorkflowExecutionBudgets;
+  onLimitsChange: (limits: WorkflowExecutionBudgets) => void;
   onNodesChange: React.Dispatch<React.SetStateAction<FlowNodeDef[]>>;
   onEdgesChange: React.Dispatch<React.SetStateAction<FlowEdgeDef[]>>;
   canEdit: boolean;
@@ -627,7 +798,9 @@ export function FlowEditor({
   saveEnabled: boolean;
   saving: boolean;
   error: string | null;
+  validation: WorkflowValidationState;
   onSave: () => void;
+  saveLabel?: string;
   headerTitle: string;
   headerVersionBadge: string;
   headerExtra?: React.ReactNode;
@@ -635,8 +808,11 @@ export function FlowEditor({
   runStatuses?: RunStatusMap;
   runErrors?: Record<string, string>;
   fitSignal?: number;
+  initialSelectedId?: string;
 }) {
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(() =>
+    initialSelectedId && nodes.some((n) => n.id === initialSelectedId) ? initialSelectedId : null,
+  );
   const [fullView, setFullView] = useState(false);
   const isMobile = useIsMobileViewport();
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -652,9 +828,14 @@ export function FlowEditor({
   const triggerCount = nodes.filter(n => isTriggerBlockType(n.type)).length;
   const selectedLocked = selected ? isTriggerBlockType(selected.type) && triggerCount === 1 : false;
 
-  const paletteGroups = useMemo(() => buildPaletteItems(options.defaultModel), [options.defaultModel]);
+  const paletteGroups = useMemo(() => buildPaletteItems(options), [options]);
+  const bindingDefinition = useMemo<WorkflowDefinition>(
+    () => ({ schemaVersion: 1, nodes, edges }),
+    [edges, nodes],
+  );
 
   const addNode = (item: PaletteItem, at?: Point) => {
+    if (!item.available) return;
     const num = (s: string) => parseInt(s.replace(/\D/g, ""), 10) || 0;
     const id = "n" + (Math.max(0, ...nodes.map(n => num(n.id))) + 1);
     let x: number, y: number;
@@ -665,7 +846,10 @@ export function FlowEditor({
       x = (nodes.length ? Math.max(...nodes.map(n => n.x)) : 200) + 60;
       y = nodes.length ? Math.round(nodes.reduce((s, n) => s + n.y, 0) / nodes.length) : 280;
     }
-    onNodesChange(prev => [...prev, { id, type: item.type, name: item.name, x, y, params: { ...item.params } }]);
+    onNodesChange(prev => [
+      ...prev,
+      { id, type: item.type, name: item.name, x, y, params: { ...item.params }, inputs: {} },
+    ]);
     setSelectedId(id);
   };
 
@@ -676,11 +860,11 @@ export function FlowEditor({
     onEdgesChange(prev => upsertEdge(prev, from, fromPort, to, source.type));
   };
 
-  const removeEdge = (edge: FlowEdgeDef) => {
-    onEdgesChange(prev => prev.filter(e => edgeKey(e) !== edgeKey(edge)));
+  const removeEdge = (instanceKey: string) => {
+    onEdgesChange(prev => removeEdgeFromList(prev, instanceKey));
   };
 
-  const updateSelected = (path: string, value: WorkflowParamValue | undefined) => {
+  const updateSelected = (path: string, value: WorkflowParamValue | PromptSourceRef | undefined) => {
     onNodesChange((prev) => prev.map(n => {
       if (n.id !== selectedId) return n;
       if (path === "name") return { ...n, name: value as string };
@@ -688,17 +872,43 @@ export function FlowEditor({
         const k = path.slice(7);
         const params = { ...n.params };
         if (value === undefined) delete params[k];
-        else params[k] = value;
+        else params[k] = value as WorkflowParamValue;
         return { ...n, params };
+      }
+      if (path.startsWith("promptRefs.")) {
+        const k = path.slice(11);
+        const promptRefs: Record<string, PromptSourceRef> = { ...n.promptRefs };
+        if (value === undefined) delete promptRefs[k];
+        else promptRefs[k] = value as PromptSourceRef;
+        const next = { ...n };
+        if (Object.keys(promptRefs).length === 0) delete next.promptRefs;
+        else next.promptRefs = promptRefs;
+        return next;
+      }
+      if (path.startsWith("inputs.")) {
+        const name = path.slice(7);
+        const bindingValue = typeof value === "string" ? value : undefined;
+        return {
+          ...n,
+          inputs: updateInputBindings(
+            n.inputs,
+            name,
+            bindingValue,
+          ),
+        };
       }
       return n;
     }));
   };
+  const deleteNode = (nodeId: string) => {
+    const result = removeNodeFromGraph(nodes, edges, nodeId);
+    if (!result.removed) return;
+    onNodesChange(result.nodes);
+    onEdgesChange(result.edges);
+    if (selectedId === nodeId) setSelectedId(null);
+  };
   const deleteSelected = () => {
-    if (!selected || selectedLocked) return;
-    onNodesChange(prev => prev.filter(n => n.id !== selectedId));
-    onEdgesChange(prev => prev.filter(e => e.from !== selectedId && e.to !== selectedId));
-    setSelectedId(null);
+    if (selected) deleteNode(selected.id);
   };
 
   return (
@@ -714,6 +924,21 @@ export function FlowEditor({
           {!canEdit && (
             <span className="rounded-full border border-neutral-200 bg-app-bg px-2 py-0.5 font-mono text-[10px] font-semibold tracking-[0.04em] uppercase text-neutral-600">Read-only</span>
           )}
+          <span
+            className={`rounded-full border px-2 py-0.5 font-mono text-[10px] font-semibold tracking-[0.04em] uppercase ${
+              validation.status === "valid"
+                ? "border-emerald-300 text-emerald-700"
+                : validation.status === "checking"
+                  ? "border-neutral-200 text-neutral-500"
+                  : "border-red-300 text-red-700"
+            }`}
+          >
+            {validation.status === "valid"
+              ? "Validated"
+              : validation.status === "checking"
+                ? "Validating…"
+                : `${validation.issues.length} validation issue${validation.issues.length === 1 ? "" : "s"}`}
+          </span>
         </div>
         <div className="ml-auto flex items-center gap-2">
           {headerExtra}
@@ -722,12 +947,22 @@ export function FlowEditor({
               onClick={onSave}
               disabled={!saveEnabled || saving}
               className="appearance-none cursor-pointer border border-mariner bg-mariner text-white py-1.5 px-3.5 rounded-[3px] font-mono text-[11px] tracking-[0.04em] uppercase disabled:opacity-40 disabled:cursor-default"
-            >{saving ? "Saving…" : "Save changes"}</button>
+            >{saving ? "Saving…" : saveLabel}</button>
           )}
         </div>
       </div>
+      <ExecutionLimitsBar limits={limits} canEdit={canEdit} onChange={onLimitsChange} />
       {error && (
         <div className="px-6 py-2 border-b border-red-300 bg-red-50 font-body text-[12px] text-red-700">{error}</div>
+      )}
+      {(validation.status === "invalid" || validation.status === "error") && (
+        <div className="px-6 py-2 border-b border-amber-300 bg-amber-50 font-body text-[12px] text-amber-900">
+          <ul className="m-0 pl-4 space-y-0.5">
+            {validation.issues.map((issue, index) => (
+              <li key={`${issue.nodeId ?? "workflow"}-${index}`}>{issue.message}</li>
+            ))}
+          </ul>
+        </div>
       )}
 
       {/* Editor body */}
@@ -741,6 +976,7 @@ export function FlowEditor({
           onNodesChange={onNodesChange}
           onAddEdge={addEdge}
           onRemoveEdge={removeEdge}
+          onDeleteNode={deleteNode}
           onDropNode={addNode}
           runStatuses={runStatuses ?? {}}
           runErrors={runErrors ?? {}}
@@ -754,6 +990,8 @@ export function FlowEditor({
           <NodeConfig
             node={selected}
             options={options}
+            definition={bindingDefinition}
+            nodeContracts={validation.nodeContracts}
             canEdit={canEdit}
             locked={selectedLocked}
             onChange={updateSelected}
@@ -765,13 +1003,15 @@ export function FlowEditor({
           <MobileSheet
             open={!!selected}
             onClose={() => setSelectedId(null)}
-            title={selected ? `${NODE_CATEGORIES[selected.type].label} · ${selected.name ?? ""}` : ""}
+            title={selected ? `${blockPresentation(options, selected.type).label} · ${selected.name ?? ""}` : ""}
             heightClass="max-h-[80vh]"
           >
             {selected && (
               <NodeConfig
                 node={selected}
                 options={options}
+                definition={bindingDefinition}
+                nodeContracts={validation.nodeContracts}
                 canEdit={canEdit}
                 locked={selectedLocked}
                 onChange={updateSelected}
@@ -802,6 +1042,8 @@ export function FlowEditor({
 function NodeConfig({
   node,
   options,
+  definition,
+  nodeContracts,
   canEdit,
   locked,
   onChange,
@@ -811,14 +1053,17 @@ function NodeConfig({
 }: {
   node: FlowNodeDef;
   options: WorkflowEditorOptions;
+  definition: WorkflowDefinition;
+  nodeContracts: WorkflowValidationState["nodeContracts"];
   canEdit: boolean;
   locked: boolean;
-  onChange: (path: string, value: WorkflowParamValue | undefined) => void;
+  onChange: (path: string, value: WorkflowParamValue | PromptSourceRef | undefined) => void;
   onDelete: () => void;
   onClose: () => void;
   embedded?: boolean;
 }) {
-  const cat = NODE_CATEGORIES[node.type];
+  const cat = blockPresentation(options, node.type);
+  const contract = nodeContracts[node.id] ?? options.blockRegistry[node.type];
   const inner = (
     <>
       <div className="pt-[14px] px-[18px] pb-[14px] border-b border-neutral-200 flex flex-col gap-1.5">
@@ -849,6 +1094,23 @@ function NodeConfig({
 
       <div className="flex-1 overflow-auto">
         <ConfigFields node={node} options={options} canEdit={canEdit} onChange={onChange} />
+        <BindingFields
+          key={node.id}
+          definition={definition}
+          nodeId={node.id}
+          options={options}
+          nodeContracts={nodeContracts}
+          canEdit={canEdit}
+          onChange={(name, value) => onChange(`inputs.${name}`, value)}
+        />
+        {!contract.availability.available && (
+          <div className="py-2.5 px-[14px] border-b border-amber-300 bg-amber-50 font-body text-xs leading-[1.5] text-amber-900">
+            <span className="block font-mono text-[9px] font-semibold tracking-[0.05em] uppercase mb-1">
+              Unavailable
+            </span>
+            {contract.availability.unavailableReason}
+          </div>
+        )}
       </div>
 
       {(locked || canEdit) && (

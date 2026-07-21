@@ -18,7 +18,7 @@ vi.mock("../../pre-pr-checks/runner.js", () => ({
 }));
 
 import { execute, paramsSchema } from "./run-checks.js";
-import { makeCtx, makeNode } from "./test-support.js";
+import { makeCtx, makeNode, runControlErrorCases } from "./test-support.js";
 
 const manifest = JSON.stringify({
   version: 1,
@@ -118,6 +118,48 @@ describe("run_checks execute", () => {
     expect(result.output.failures).toEqual([]);
   });
 
+  it("aborts explicit commands at the remaining duration and starts no later command", async () => {
+    let startedCommands = 0;
+    const runCommand = vi.fn(async (cmdOrSpec: unknown, args?: string[]) => {
+      if (cmdOrSpec === "cat" && args) {
+        return { exitCode: 0, stdout: async () => manifest, stderr: async () => "" };
+      }
+      const spec = cmdOrSpec as { signal?: AbortSignal };
+      expect(spec.signal).toBeInstanceOf(AbortSignal);
+      startedCommands += 1;
+      throw new DOMException("duration expired", "TimeoutError");
+    });
+    mocks.sandboxGet.mockResolvedValue({ runCommand });
+    const failure = {
+      status: "budget_exceeded" as const,
+      metric: "duration" as const,
+      limit: 100,
+      consumed: 100,
+      reason: "budget_exceeded: duration 100 reached limit 100 during Run checks",
+    };
+    const ctx = makeCtx({
+      observeBudget: vi
+        .fn()
+        .mockResolvedValueOnce({
+          check: { status: "ok" },
+          remainingDurationMs: 25,
+          durationLimitMs: 100,
+          activeElapsedMs: 75,
+        })
+        .mockResolvedValueOnce({ check: failure, remainingDurationMs: 0 }),
+    });
+
+    await expect(
+      execute(
+        makeNode("run_checks", { commands: ["pnpm lint", "pnpm test"] }),
+        {},
+        ctx,
+      ),
+    ).rejects.toMatchObject({ name: "RunBudgetError", failure });
+
+    expect(startedCommands).toBe(1);
+  });
+
   it("runs the pre-PR-checks config report-only when no commands are set", async () => {
     mocks.getCurrentPrePrCheckConfig.mockResolvedValue({
       version: 3,
@@ -147,12 +189,51 @@ describe("run_checks execute", () => {
       "claude",
       "claude-model",
       0,
+      1_800_000,
     );
     expect(result.kind).toBe("next");
     expect(result.output.ok).toBe(false);
     expect(result.output.failures).toEqual([
       { repo: "github:acme/api", command: "pnpm lint", exitCode: 1, output: "lint output" },
     ]);
+  });
+
+  it("passes the remaining duration to configured checks and classifies their abort", async () => {
+    mocks.getCurrentPrePrCheckConfig.mockResolvedValue(null);
+    mocks.runPrePrChecksWithFixes.mockRejectedValue(
+      new DOMException("duration expired", "TimeoutError"),
+    );
+    const failure = {
+      status: "budget_exceeded" as const,
+      metric: "duration" as const,
+      limit: 100,
+      consumed: 100,
+      reason: "budget_exceeded: duration 100 reached limit 100 during Run checks",
+    };
+    const ctx = makeCtx({
+      observeBudget: vi
+        .fn()
+        .mockResolvedValueOnce({
+          check: { status: "ok" },
+          remainingDurationMs: 25,
+          durationLimitMs: 100,
+          activeElapsedMs: 75,
+        })
+        .mockResolvedValueOnce({ check: failure, remainingDurationMs: 0 }),
+    });
+
+    await expect(execute(makeNode("run_checks"), {}, ctx)).rejects.toMatchObject({
+      name: "RunBudgetError",
+      failure,
+    });
+    expect(mocks.runPrePrChecksWithFixes).toHaveBeenCalledWith(
+      "sbx-1",
+      { repositories: [] },
+      "claude",
+      "claude-model",
+      0,
+      25,
+    );
   });
 
   it("maps infrastructure errors to a failed result", async () => {
@@ -166,5 +247,17 @@ describe("run_checks execute", () => {
 
     expect(result.kind).toBe("failed");
     if (result.kind === "failed") expect(result.reason).toBe("sandbox gone");
+  });
+
+  it.each(runControlErrorCases())("rethrows %s from checks", async (_label, error) => {
+    mocks.sandboxGet.mockRejectedValue(error);
+
+    await expect(
+      execute(
+        makeNode("run_checks", { commands: ["pnpm lint"] }),
+        {},
+        makeCtx(),
+      ),
+    ).rejects.toBe(error);
   });
 });

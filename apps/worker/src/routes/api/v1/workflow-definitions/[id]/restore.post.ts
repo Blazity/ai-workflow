@@ -1,11 +1,10 @@
 import { createError, defineEventHandler, readBody } from "h3";
-import type { WorkflowDefinitionSaveResponse } from "@shared/contracts";
+import type { WorkflowDefinitionDeploymentResponse } from "@shared/contracts";
 import { getDb } from "../../../../../db/client.js";
 import { requireDashboardActor } from "../../../../../lib/auth/request-context.js";
 import { dashboardUserLabel } from "../../../../../pre-pr-checks/store.js";
 import {
-  getWorkflowDefinition,
-  restoreWorkflowDefinitionVersion,
+  rollbackWorkflowDefinition,
   serializeWorkflowDefinitionVersion,
 } from "../../../../../workflow-definition/store.js";
 import {
@@ -15,29 +14,41 @@ import {
 } from "../../workflow-definitions.get.js";
 
 export default defineEventHandler(
-  async (event): Promise<WorkflowDefinitionSaveResponse | undefined> => {
+  async (event): Promise<WorkflowDefinitionDeploymentResponse | undefined> => {
     try {
       const actor = await requireDashboardActor(event);
       const id = parseDefinitionId(event);
-      const body = (await readBody<{ version?: unknown }>(event).catch(() => null)) ?? {};
-      if (typeof body.version !== "number" || !Number.isInteger(body.version)) {
+      const body = (await readBody<{ version?: unknown; expectedDeployedVersion?: unknown }>(event).catch(() => null)) ?? {};
+      if (
+        typeof body.version !== "number" ||
+        !Number.isInteger(body.version) ||
+        body.version <= 0
+      ) {
         throw createError({ statusCode: 400, statusMessage: "Invalid version" });
+      }
+      if (
+        body.expectedDeployedVersion !== null &&
+        (typeof body.expectedDeployedVersion !== "number" ||
+          !Number.isInteger(body.expectedDeployedVersion) ||
+          body.expectedDeployedVersion <= 0)
+      ) {
+        throw createError({ statusCode: 400, statusMessage: "Invalid deployed version" });
       }
 
       const dbHandle = getDb();
-      const restored = await restoreWorkflowDefinitionVersion(dbHandle, {
+      const restored = await rollbackWorkflowDefinition(dbHandle, {
         definitionId: id,
         version: body.version,
+        expectedDeployedVersion: body.expectedDeployedVersion,
         actor: {
           role: actor.role,
           id: actor.userId,
           label: await dashboardUserLabel(dbHandle, actor.userId),
         },
       });
-      const row = await getWorkflowDefinition(dbHandle, id);
       return {
-        meta: serializeDefinitionMeta(row!, restored.version),
-        version: serializeWorkflowDefinitionVersion(restored),
+        meta: serializeDefinitionMeta(restored.definition),
+        deployed: serializeWorkflowDefinitionVersion(restored.version),
       };
     } catch (error) {
       toWorkflowDefinitionHttpError(error);
