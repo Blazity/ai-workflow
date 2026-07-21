@@ -33,7 +33,7 @@ test("resolved read-only references render a responsive expandable card", () => 
   assert.match(html, />Show content</);
   assert.match(html, /w-full/);
   assert.match(html, /flex-wrap/);
-  assert.match(html, /href="\/prompts\?prompt=7"/);
+  assert.match(html, /href="\/prompts\?prompt=research-plan"/);
   assert.doesNotMatch(html, /More actions|Detach|Pin v3/);
   assert.doesNotMatch(html, />Preview</);
 });
@@ -48,7 +48,7 @@ test("editable references expose detach as a primary action", () => {
   );
 
   assert.match(html, />Show content</);
-  assert.match(html, /href="\/prompts\?prompt=7"/);
+  assert.match(html, /href="\/prompts\?prompt=research-plan"/);
   assert.match(html, />Detach and edit</);
   assert.match(html, /More actions/);
 });

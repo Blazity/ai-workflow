@@ -207,7 +207,7 @@ export function PromptReferenceChipsView({
                 )}
                 {capabilities.canOpenLibrary && (
                   <Link
-                    href={promptLibraryHref(row.id)}
+                    href={promptLibraryHref(row.slug)}
                     target="_blank"
                     rel="noreferrer"
                     aria-label={`Open ${row.name} in prompt library (new tab)`}

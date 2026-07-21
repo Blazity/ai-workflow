@@ -8,8 +8,8 @@ export type PromptPreviewRequest = {
 
 export type PromptPreviewTarget = Omit<PromptPreviewRequest, "requestId">;
 
-export function promptLibraryHref(promptId: number): string {
-  return `/prompts?prompt=${promptId}`;
+export function promptLibraryHref(slug: string): string {
+  return `/prompts?prompt=${encodeURIComponent(slug)}`;
 }
 
 export function promptReferenceCapabilities(resolved: boolean, disabled: boolean) {
