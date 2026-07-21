@@ -816,6 +816,7 @@ export function FlowEditor({
   const [fullView, setFullView] = useState(false);
   const isMobile = useIsMobileViewport();
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [validationExpanded, setValidationExpanded] = useState(false);
 
   useEffect(() => {
     if (!fullView) return;
@@ -955,18 +956,37 @@ export function FlowEditor({
       {error && (
         <div className="px-6 py-2 border-b border-red-300 bg-red-50 font-body text-[12px] text-red-700">{error}</div>
       )}
-      {(validation.status === "invalid" || validation.status === "error") && (
-        <div className="px-6 py-2 border-b border-amber-300 bg-amber-50 font-body text-[12px] text-amber-900">
-          <ul className="m-0 pl-4 space-y-0.5">
-            {validation.issues.map((issue, index) => (
-              <li key={`${issue.nodeId ?? "workflow"}-${index}`}>{issue.message}</li>
-            ))}
-          </ul>
-        </div>
-      )}
 
       {/* Editor body */}
-      <div className="flex-1 flex min-h-0">
+      <div className="flex-1 flex min-h-0 relative">
+        {(validation.status === "invalid" || validation.status === "error") && (
+          <div
+            className={`pointer-events-none absolute top-3 right-3 z-20 flex ${!isMobile && canEdit ? "left-[13.75rem]" : "left-3"}`}
+          >
+            <div className="pointer-events-auto w-full max-w-md overflow-hidden rounded-[4px] border border-amber-300 bg-amber-50 shadow-[0_4px_12px_rgba(24,27,32,0.12)]">
+              <button
+                type="button"
+                onClick={() => setValidationExpanded((v) => !v)}
+                aria-expanded={validationExpanded}
+                className="flex w-full cursor-pointer appearance-none items-center gap-2 border-none bg-transparent px-3 py-2 text-left"
+              >
+                <span className="font-mono text-[10px] font-semibold uppercase tracking-[0.04em] text-amber-900">
+                  {validation.issues.length} validation issue{validation.issues.length === 1 ? "" : "s"}
+                </span>
+                <span className="ml-auto font-mono text-[10px] tracking-[0.04em] text-amber-700">
+                  {validationExpanded ? "▾ Hide" : "▸ Details"}
+                </span>
+              </button>
+              {validationExpanded && (
+                <ul className="m-0 max-h-[40vh] list-disc space-y-0.5 overflow-y-auto border-t border-amber-200 py-2 pl-7 pr-3 font-body text-[12px] text-amber-900">
+                  {validation.issues.map((issue, index) => (
+                    <li key={`${issue.nodeId ?? "workflow"}-${index}`}>{issue.message}</li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </div>
+        )}
         {!isMobile && canEdit && <NodePalette groups={paletteGroups} onAdd={addNode} />}
         <FlowCanvas
           nodes={nodes}
