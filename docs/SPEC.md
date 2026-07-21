@@ -351,7 +351,7 @@ and:
    `/vercel/sandbox/repos/`. When the ticket's PR has conflicts, the base branch is merged into the
    checkout during provisioning so the agent resolves conflicts as part of the run.
 2. Writes the workspace manifest `/vercel/sandbox/aiw-repos.json` (per repo: local path, branch,
-   pre-agent HEAD SHA).
+   the remote HEAD observed before local preparation, and the pre-agent HEAD SHA).
 3. Installs the agent CLI globally (`@anthropic-ai/claude-code` or `@openai/codex`) and the
    configured skills (via `npx skills add … -g --agent claude-code codex --copy`).
 4. Writes agent auth to `/tmp/agent-env.sh` (mode 0600), sourced by each phase wrapper — the key
@@ -378,31 +378,47 @@ checks are fed back to the agent (fix and commit, no push) for up to 3 fix cycle
 fail, publication is blocked and the ticket moves to Backlog with a `failed (pre-pr-checks)`
 notification carrying the check logs.
 
-### 9.4 Push (from inside the sandbox, after the agent exits)
+### 9.4 Trusted Publication (after the agent exits)
 
-The v2 rule "no push from inside the sandbox" evolved: the push *command* runs inside the sandbox,
-but only in an orchestrator-controlled step after the agent process is dead, using an ephemeral
-token the agent never sees (`sandbox/poll-agent.ts`):
+Publication starts only after the agent process is dead. The orchestrator validates the
+manager-authored workspace manifest, then uses a separate short-lived publisher sandbox; the agent
+workspace never receives push credentials (`sandbox/trusted-workspace-publisher.ts`):
 
-1. Read the workspace manifest.
-2. Compare each repo's `preAgentSha` to its current HEAD; skip unchanged repos. If no repo changed,
-   fail the run ("Agent reported success but made no commits").
-3. Resolve the VCS token (on GitHub, a freshly minted short-lived App installation token) and pass
-   it per push as an `http.extraHeader` authorization header — never written to the remote URL or
-   disk. After a successful push, `origin` is reset to the token-less clone URL.
-4. Unshallow when needed (shallow clones break PR/MR creation).
-5. `git push --force origin HEAD:refs/heads/{branch}` per changed repo — force-push is scoped to
-   workflow-owned `blazebot/*` branches.
-6. If a push fails, the agent is re-invoked once with a fix prompt (fix and commit, no push), then
-   the push is retried.
+1. Verify that the sandbox manifest still exactly matches the manager-authored manifest. Each
+   repository includes the remote head observed during preparation (`expectedRemoteSha`) and its
+   pre-agent head (`preAgentSha`).
+2. Preflight every source repository before any remote mutation: require a clean tracked, staged,
+   untracked, and conflict-free worktree; read the exact target head; and prove that it descends
+   from both trusted baselines. If any repository fails, none are pushed.
+3. Re-read provider state and reject remote-branch drift. For remediation runs, also verify that
+   the exact source PR/MR remains open at the expected head.
+4. Export every changed target as a bundle. In a fresh publisher sandbox, clone each canonical
+   remote branch, import its bundle, and validate every target before the first push.
+5. Resolve the VCS token only inside the publisher and push each changed repository with an exact
+   lease: `--force-with-lease=refs/heads/{branch}:{expectedRemoteSha}`. The token is passed per
+   command and is never written to a remote URL or disk.
+6. Re-read provider state after each push and require it to equal the exact target head.
+
+Remote drift, lease rejection, and failed preflight stop publication without re-invoking the agent.
+Durable workflow retries are safe because the publisher recognizes an already-published exact
+target and every remaining mutation uses an exact lease. Finalize Workspace emits exact finalized
+branch metadata to Open PR/MR; failed or partial publication creates no PRs and cannot report
+success.
 
 ### 9.5 Teardown
 
-The sandbox is destroyed after every run, in `finally`, regardless of outcome.
+The agent sandbox is destroyed after every run, in `finally`, regardless of outcome. The publisher
+sandbox is also destroyed in its own `finally` block.
 
 ### 9.6 Safety Invariants
 
-- The agent never holds push credentials; tokens are injected only after the agent process exits.
+- The agent never holds push credentials; publication runs in a separate publisher after the agent
+  process exits.
+- The manager-authored workspace manifest is immutable publication authority and is verified before
+  use.
+- Every repository passes preflight before the first remote mutation.
+- Every push uses an exact lease and is verified against provider state afterward.
+- Failed or partial publication creates no PRs and cannot be reported as success.
 - Sandboxes are isolated — no access to production infrastructure or other sandboxes.
 - Commits are authored as the configured/derived bot identity (Section 6).
 
