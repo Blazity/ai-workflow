@@ -685,7 +685,7 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
       "Notifies the configured Slack channel about a workflow milestone.",
       "✉",
     ),
-    defaults: { message: "" },
+    defaults: { message: "", sendOn: "pr_ready" },
     inputs: { message: input(stringType()) },
     output: statusOutput(),
     statusVariants: ["ok", "skipped", "failed"],

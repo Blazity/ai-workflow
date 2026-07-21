@@ -97,7 +97,7 @@ export const BLOCK_PARAM_KEYS: Record<WorkflowBlockType, readonly string[]> = {
   update_ticket_status: ["target"],
   post_ticket_comment: ["body"],
   post_pr_comment: ["body", "target"],
-  send_slack_message: ["message"],
+  send_slack_message: ["message", "sendOn"],
   send_plan_approval: ["mirrorComment"],
   human_question: ["questions", "suggestedAnswers"],
   arthur_injection_check: [],

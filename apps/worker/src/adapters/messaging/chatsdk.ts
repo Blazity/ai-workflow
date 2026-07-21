@@ -77,6 +77,36 @@ export class ChatSDKAdapter implements MessagingAdapter {
     ticketKey: string,
     event: TicketEvent,
   ): Promise<void> {
+    if (event.kind === "note") {
+      // A note is a standalone message from a send_slack_message block in "always"
+      // mode. Post it as a thread reply under the existing status parent WITHOUT
+      // editing the top-level status line — a mid-run message must not overwrite the
+      // "in progress"/"PR ready" status. Falls back to top-level if no parent exists.
+      const parent = await this.threadStore.getParent(ticketKey).catch((err) => {
+        logger.warn(
+          { ticketKey, error: (err as Error).message },
+          "thread_parent_lookup_failed",
+        );
+        return null;
+      });
+      await this.postDetail(
+        ticketKey,
+        parent,
+        formatTicketEvent(event, ticketKey, this.jiraBaseUrl),
+        event.kind,
+      );
+      logger.info(
+        {
+          ticketKey,
+          eventKind: event.kind,
+          threadParentId: parent,
+          channelId: this.channelId,
+        },
+        "notification_sent",
+      );
+      return;
+    }
+
     const status = formatTicketStatus(event, ticketKey, this.jiraBaseUrl);
     const detail = formatTicketEvent(event, ticketKey, this.jiraBaseUrl);
 

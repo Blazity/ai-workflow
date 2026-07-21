@@ -14,6 +14,7 @@ const EVENT_EMOJI: Record<TicketEvent["kind"], string> = {
   failed: ":warning:",
   plan_approval_requested: ":memo:",
   canceled: ":no_entry:",
+  note: ":speech_balloon:",
 };
 
 /**
@@ -48,6 +49,10 @@ export function formatTicketStatus(
       return `${head} plan awaiting approval`;
     case "canceled":
       return `${head} canceled`;
+    case "note":
+      // Notes never edit the top-level status; chatsdk's note branch posts the
+      // detail directly and never calls this. Present only for switch exhaustiveness.
+      return "";
   }
 }
 
@@ -113,6 +118,12 @@ export function formatTicketEvent(
 
     case "canceled":
       return `${head} canceled: ${event.reason}`;
+
+    case "note":
+      // A note carries only the user's own message (already {{variable}}-substituted).
+      // No system head/emoji so it reads as a plain message; defang broadcast tokens
+      // so ticket-derived text can't ping the whole channel.
+      return neutralizeSlackBroadcasts(event.text);
   }
 }
 
