@@ -10,7 +10,10 @@ import type {
   WorkflowDefinitionsResponse,
 } from "@shared/contracts";
 
-export async function EditorData() {
+export async function EditorData({
+  definitionId,
+  nodeId,
+}: { definitionId?: number; nodeId?: string } = {}) {
   const now = new Date().toISOString();
   try {
     const [session, list, liveBlocks] = await Promise.all([
@@ -20,7 +23,12 @@ export async function EditorData() {
         authAwareFallback(e, (): RunBlockStatusesResponse => ({ generatedAt: now, run: null })),
       ),
     ]);
+    // Deep link wins when it names a definition that exists; otherwise fall back
+    // to the AI-trigger default (invalid params are ignored silently).
+    const requested =
+      definitionId !== undefined ? list.definitions.find((d) => d.id === definitionId) : undefined;
     const initialMeta =
+      requested ??
       list.definitions.find((d) => d.enabled && d.triggerTypes.includes("trigger_ticket_ai")) ??
       list.definitions[0];
     if (!initialMeta) throw new Error("No workflow definitions available");
@@ -45,6 +53,7 @@ export async function EditorData() {
         options={list.options}
         liveBlocks={liveBlocks}
         canEdit={session.canEditWorkflows}
+        initialNodeId={nodeId}
       />
     );
   } catch (error) {

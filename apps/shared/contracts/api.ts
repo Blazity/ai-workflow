@@ -2,7 +2,6 @@ import type {
   ApprovalRequest,
   ClarificationRequest,
   PrePrCheckConfigVersion,
-  PromptDef,
   RepositoryOption,
   Run,
   RunBlockStatusSnapshot,
@@ -93,26 +92,6 @@ export interface CostResponse {
   byWorkflow: CostByWorkflowEntry[];
   /** Per-day spend, oldest→newest, bucketed by trace start_time. */
   daily: { date: string; cost: number; tokens: number }[];
-}
-
-export interface PromptsResponse {
-  generatedAt: string;
-  /** `false` when the worker can't resolve prompts (degrades to empty list). */
-  available: boolean;
-  /**
-   * Whether Arthur is configured (key + endpoint + task id all set). When
-   * false, every prompt's `source` is "fallback" and `versions` is empty.
-   */
-  arthurEnabled: boolean;
-  rows: PromptDef[];
-  total: number;
-}
-
-/** On-demand body for a single historical Arthur version. */
-export interface PromptVersionBodyResponse {
-  generatedAt: string;
-  available: boolean;
-  body: string | null;
 }
 
 export interface LiveRunsResponse {
@@ -288,4 +267,94 @@ export interface ClarificationAnswerResponse {
   clarification: ClarificationRequest;
   /** The same asking run resumed by the answer. */
   runId: string | null;
+}
+
+// --- Prompt library (dashboard-authored reusable prompts) ---
+
+export interface PromptLibraryEntryMeta {
+  id: number;
+  /** Immutable, human-readable reference key ({{prompt:<slug>}}). Assigned at
+   *  create time from the name; renames do not change it. */
+  slug: string;
+  name: string;
+  description: string | null;
+  tags: string[];
+  /** Head version number; always >= 1 (create seeds version 1). */
+  currentVersion: number;
+  /** Non-null when the prompt is archived (soft delete). */
+  archivedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+  createdByLabel: string;
+}
+
+export interface PromptLibraryVersion {
+  promptId: number;
+  version: number;
+  body: string;
+  createdAt: string;
+  createdById: string;
+  createdByLabel: string;
+  restoredFromVersion: number | null;
+}
+
+/** List row = meta + head body, so the editor's insert picker and the drift
+ *  check need no per-prompt fetch. */
+export interface PromptLibraryListRowDto extends PromptLibraryEntryMeta {
+  body: string;
+}
+
+export interface PromptLibraryListResponse {
+  prompts: PromptLibraryListRowDto[];
+  /** Distinct tags computed across the returned (possibly filtered) prompts,
+   *  not the whole library; sorted, for the filter chips. */
+  tags: string[];
+}
+
+export interface PromptLibraryDetailResponse {
+  meta: PromptLibraryEntryMeta;
+  current: PromptLibraryVersion;
+  /** Newest first, capped at 50. */
+  versions: PromptLibraryVersion[];
+}
+
+export interface PromptLibrarySaveResponse {
+  meta: PromptLibraryEntryMeta;
+  version: PromptLibraryVersion;
+  /** false when the submitted body equaled the head and nothing was appended. */
+  changed: boolean;
+}
+
+export interface PromptLibraryVersionResponse {
+  version: PromptLibraryVersion;
+}
+
+/** One workflow-definition block param that carries text copied from a
+ *  library prompt, with its sync state against the library. */
+export interface PromptLibraryUsageRow {
+  definitionId: number;
+  definitionName: string;
+  nodeId: string;
+  nodeName: string | null;
+  blockType: WorkflowBlockType;
+  paramKey: string;
+  /** Library version recorded at insert time. */
+  version: number;
+  state: "current" | "behind" | "modified";
+}
+
+/** Another library prompt whose head body references this prompt via a
+ *  {{prompt:...}} token (prompt-in-prompt composition). */
+export interface PromptLibraryPromptUsageRow {
+  promptId: number;
+  slug: string;
+  name: string;
+  /** Version the reference resolves to today (latest maps to the current head). */
+  version: number;
+  state: "current" | "behind";
+}
+
+export interface PromptLibraryUsageResponse {
+  rows: PromptLibraryUsageRow[];
+  prompts: PromptLibraryPromptUsageRow[];
 }

@@ -356,8 +356,8 @@ Configured:
 
 Skipped (see SETUP.md for the full how-to):
   - Arthur AI tracing — SETUP.md §12. Set GENAI_ENGINE_API_KEY and
-    GENAI_ENGINE_TRACE_ENDPOINT, then run `pnpm setup:arthur-prompts`
-    and persist the resulting GENAI_ENGINE_PROMPT_TASK_ID.
+    GENAI_ENGINE_TRACE_ENDPOINT to enable per-run tracing and the
+    prompt-injection check.
   - GitLab swap — SETUP.md §12. Flip VCS_KIND=gitlab and provide
     GITLAB_TOKEN + GITLAB_PROJECT_ID (+ GITLAB_HOST for self-hosted).
   - CI / GitHub Actions — SETUP.md §11. The `e2e` GitHub environment

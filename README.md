@@ -22,7 +22,7 @@ ai-workflow/
 | Package | Name | What it is |
 |---------|------|-----------|
 | `apps/worker` | `worker` | The actual automation service: Nitro server, durable workflow, sandbox lifecycle, Jira/VCS/Slack adapters. This is what you deploy to run the bot. Everything in the [Workflow Deep-dive](#workflow-deep-dive) below lives here, under `apps/worker/src/`. |
-| `apps/dashboard` | `ai-workflow-dashboard` | A Next.js "cockpit" that visualizes runs, KPIs, cost & usage, Arthur eval health, prompt versions, and dashboard user administration. It proxies worker APIs server-side and stores only the worker-issued dashboard session cookie. Optional: the bot runs fine without it. |
+| `apps/dashboard` | `ai-workflow-dashboard` | A Next.js "cockpit" that visualizes runs, KPIs, cost & usage, Arthur eval health, the prompt library, and dashboard user administration. It proxies worker APIs server-side and stores only the worker-issued dashboard session cookie. Optional: the bot runs fine without it. |
 | `apps/shared` | `@shared/contracts`, `@shared/conditions` | Built workspace packages: `contracts` holds the shared TypeScript types (`domain.ts`, `api.ts`, `workflow-graph.ts`) describing the worker's API responses and workflow block graph, so the dashboard and worker stay in sync at the type level; `conditions` holds the branch-condition parser/evaluator both apps use. |
 
 ### How the packages connect

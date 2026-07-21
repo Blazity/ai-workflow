@@ -883,7 +883,7 @@
             ),
           ],
         ),
-        planning_agent: runtimeContract(["provider", "model"], {
+        planning_agent: runtimeContract(["provider", "model", "prompt"], {
           optionalInputs: [
             ...typedPaths("object", "ticket"),
             ...typedPaths("object[]", "comments", "priorAnswers"),
@@ -892,7 +892,7 @@
           optionalOutputs: typedPaths("string[]", "questions", "suggestedAnswers"),
           statuses: ["ready", "needs_human_input", "failed"],
         }),
-        implementation_agent: runtimeContract(["provider", "model"], {
+        implementation_agent: runtimeContract(["provider", "model", "prompt"], {
           optionalInputs: [...typedPaths("object", "ticket"), ...typedPaths("string", "plan")],
           requiredOutputs: [
             ...STATUS_OUTPUT,
@@ -905,7 +905,7 @@
           ],
           statuses: ["implemented", "needs_human_input", "failed"],
         }),
-        review_agent: runtimeContract(["provider", "model"], {
+        review_agent: runtimeContract(["provider", "model", "prompt"], {
           requiredOutputs: [
             ...STATUS_OUTPUT,
             ...typedPaths("object[]", "findings"),

@@ -3,6 +3,7 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import type { FlowNodeDef, FlowEdgeDef, NodeRunStatus, RunStatusMap } from "@/lib/flows";
 import type {
+  PromptSourceRef,
   WorkflowDefinition,
   WorkflowEditorOptions,
   WorkflowExecutionBudgets,
@@ -784,6 +785,7 @@ export function FlowEditor({
   runStatuses,
   runErrors,
   fitSignal,
+  initialSelectedId,
 }: {
   nodes: FlowNodeDef[];
   edges: FlowEdgeDef[];
@@ -806,8 +808,11 @@ export function FlowEditor({
   runStatuses?: RunStatusMap;
   runErrors?: Record<string, string>;
   fitSignal?: number;
+  initialSelectedId?: string;
 }) {
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(() =>
+    initialSelectedId && nodes.some((n) => n.id === initialSelectedId) ? initialSelectedId : null,
+  );
   const [fullView, setFullView] = useState(false);
   const isMobile = useIsMobileViewport();
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -859,7 +864,7 @@ export function FlowEditor({
     onEdgesChange(prev => removeEdgeFromList(prev, instanceKey));
   };
 
-  const updateSelected = (path: string, value: WorkflowParamValue | undefined) => {
+  const updateSelected = (path: string, value: WorkflowParamValue | PromptSourceRef | undefined) => {
     onNodesChange((prev) => prev.map(n => {
       if (n.id !== selectedId) return n;
       if (path === "name") return { ...n, name: value as string };
@@ -867,8 +872,18 @@ export function FlowEditor({
         const k = path.slice(7);
         const params = { ...n.params };
         if (value === undefined) delete params[k];
-        else params[k] = value;
+        else params[k] = value as WorkflowParamValue;
         return { ...n, params };
+      }
+      if (path.startsWith("promptRefs.")) {
+        const k = path.slice(11);
+        const promptRefs: Record<string, PromptSourceRef> = { ...n.promptRefs };
+        if (value === undefined) delete promptRefs[k];
+        else promptRefs[k] = value as PromptSourceRef;
+        const next = { ...n };
+        if (Object.keys(promptRefs).length === 0) delete next.promptRefs;
+        else next.promptRefs = promptRefs;
+        return next;
       }
       if (path.startsWith("inputs.")) {
         const name = path.slice(7);
@@ -1042,7 +1057,7 @@ function NodeConfig({
   nodeContracts: WorkflowValidationState["nodeContracts"];
   canEdit: boolean;
   locked: boolean;
-  onChange: (path: string, value: WorkflowParamValue | undefined) => void;
+  onChange: (path: string, value: WorkflowParamValue | PromptSourceRef | undefined) => void;
   onDelete: () => void;
   onClose: () => void;
   embedded?: boolean;

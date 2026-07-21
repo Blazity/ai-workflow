@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { eq } from "drizzle-orm";
 import { createTestDb } from "../../db/test-db.js";
 import type { Db } from "../../db/client.js";
+import type { ResolvedPromptReference } from "@shared/contracts";
 import { workflowRuns } from "../../db/schema.js";
 import {
   upsertRunSnapshots,
@@ -282,6 +283,23 @@ describe("two writers converge on one row", () => {
 });
 
 describe("recordBlockStatuses", () => {
+  it("stores the frozen prompt manifest and later writers preserve it", async () => {
+    const promptManifest: ResolvedPromptReference[] = [{
+      promptId: 42,
+      promptName: "research-plan",
+      requestedVersion: "latest",
+      resolvedVersion: 7,
+      bodyHash: "0a1b2c3d",
+    }];
+    await recordBlockStatuses(db, blockWrite({ promptManifest }));
+    expect((await row("wrun_1")).promptManifest).toEqual(promptManifest);
+
+    await recordBlockStatuses(db, blockWrite({ blockStatuses: { b1: { status: "ok" } } }));
+    await upsertRunSnapshots(db, [snapshot()]);
+    await recordRunUsage(db, usage());
+    expect((await row("wrun_1")).promptManifest).toEqual(promptManifest);
+  });
+
   it("inserts a row with statuses, version, identity and running status", async () => {
     await recordBlockStatuses(db, blockWrite());
     const r = await row("wrun_1");

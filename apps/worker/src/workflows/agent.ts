@@ -34,6 +34,11 @@ import {
 import type { TicketTransitionOwner } from "../lib/ticket-transition.js";
 import { moveTicketStep } from "./ticket-transition-step.js";
 import type { BlockExecuteFn, EngineCtx } from "./blocks/types.js";
+import {
+  buildPromptVariables,
+  substituteNodePromptParams,
+  substitutePromptVariables,
+} from "./prompt-vars.js";
 import type { HumanDecision } from "../lib/human-decisions-memory.js";
 import type { WorkspacePublicationResult } from "./workspace-publication.js";
 import type { WorkspaceManifest } from "../sandbox/repo-workspace.js";
@@ -78,9 +83,18 @@ import type {
   BlockOutput,
   BlockRunState,
   JsonValue,
+  ResolvedPromptReference,
   WorkflowBlockType,
   WorkflowDefinitionNode,
 } from "@shared/contracts";
+
+/** The agent-block prompt override: a non-empty `prompt` param replaces the
+ *  built-in phase template. Empty / whitespace / non-string falls through to the
+ *  built-in prompt. */
+const promptOverride = (node: WorkflowDefinitionNode): string | undefined => {
+  const raw = node.params.prompt;
+  return typeof raw === "string" && raw.trim().length > 0 ? raw : undefined;
+};
 
 const BLOCK_EXECUTORS: Partial<Record<WorkflowBlockType, BlockExecuteFn>> = {
   prepare_workspace: executePrepareWorkspace,
@@ -1185,6 +1199,7 @@ async function recordBlockStatusesStep(payload: {
   definitionVersion: number | null;
   definitionId: number | null;
   blockStatuses: Record<string, BlockRunState>;
+  promptManifest?: ResolvedPromptReference[];
 }) {
   "use step";
   const { getDb } = await import("../db/client.js");
@@ -1333,6 +1348,10 @@ async function agentWorkflowBody(
     if (observation.check.status !== "ok") throw new RunBudgetError(observation.check);
   };
 
+  const { resolvePromptReferencesForRun } = await import("./prompt-references-step.js");
+  const resolvedPrompts = await resolvePromptReferencesForRun(plan.nodes);
+  plan.nodes = resolvedPrompts.nodes;
+
   const blockStatuses: Record<string, BlockRunState> = Object.fromEntries(
     plan.nodes
       .filter((node) => !isTriggerBlockType(node.type))
@@ -1353,6 +1372,7 @@ async function agentWorkflowBody(
       definitionVersion: plan.version,
       definitionId: plan.definitionId,
       blockStatuses: { ...blockStatuses },
+      promptManifest: resolvedPrompts.manifest,
     }).catch(() => {});
   await writeBlockStatuses();
 
@@ -1770,9 +1790,17 @@ async function agentWorkflowBody(
           postComment?: string;
         },
       ): Promise<void> => {
+        // terminate is dispatched inline by the interpreter, so it never passes
+        // through executeBlock's substituteNodePromptParams wrapper. Substitute
+        // {{variables}} into the comment here so every terminal read below sees
+        // resolved text.
+        const postComment =
+          typeof params.postComment === "string"
+            ? substitutePromptVariables(params.postComment, buildPromptVariables(ctx))
+            : params.postComment;
         if (params.terminalStatus === "done" || params.terminalStatus === "skipped") {
-          if (params.postComment && entry.ticketKey) {
-            await postTicketComment(ticket.identifier, params.postComment, transitionOwner);
+          if (postComment && entry.ticketKey) {
+            await postTicketComment(ticket.identifier, postComment, transitionOwner);
           }
           runOutcome = "success";
           return;
@@ -1784,7 +1812,7 @@ async function agentWorkflowBody(
         await moveTicketStep(ticketId, backlogMoveTarget(), transitionOwner);
         await notifyTicket(ticket.identifier, {
           kind: "failed",
-          reason: params.postComment ?? "Terminated by workflow.",
+          reason: postComment ?? "Terminated by workflow.",
           usageReport: usageReportOrUndefined(),
         }, transitionOwner);
         runOutcome = "failed";
@@ -1814,11 +1842,15 @@ async function agentWorkflowBody(
       };
 
       const executeBlock: BlockExecutor = async (
-        node,
+        rawNode,
         steps,
         resolvedInputs,
         execution,
       ): Promise<BlockExecutionResult> => {
+        // Substitute {{variables}} into prompt-bearing params per execution: the
+        // run context (research plan, publication, selected repos) mutates
+        // mid-run, so each block sees the values current at its turn.
+        const node = substituteNodePromptParams(rawNode, buildPromptVariables(ctx));
         const blockExecute = BLOCK_EXECUTORS[node.type];
         if (blockExecute) {
           const result = await blockExecute(
@@ -1852,7 +1884,7 @@ async function agentWorkflowBody(
               await planPhaseStep(kind, "research", model, RESEARCH_SCHEMA);
             const researchInput = assembleResearchPlanContext({
               ticket: resolveAgentTicketInput(resolvedInputs, ticketData),
-              prompt: prompts.research,
+              prompt: promptOverride(node) ?? prompts.research,
               branchName,
               attachments: downloadedAttachments,
               preSandboxAdditions: ctx.preSandboxAdditions.research,
@@ -1925,7 +1957,7 @@ async function agentWorkflowBody(
               await planPhaseStep(kind, "impl", model, AGENT_SCHEMA);
             const implInput = assembleImplementationContext({
               ticket: resolveAgentTicketInput(resolvedInputs, ticketData),
-              prompt: prompts.implement,
+              prompt: promptOverride(node) ?? prompts.implement,
               researchPlanMarkdown: resolveImplementationPlanInput(
                 resolvedInputs,
                 ctx.researchPlanMarkdown,
@@ -2022,7 +2054,7 @@ async function agentWorkflowBody(
               await planPhaseStep(kind, "review", model, REVIEW_SCHEMA);
             const reviewInput = assembleReviewContext({
               ticket: ticketData,
-              prompt: prompts.review,
+              prompt: promptOverride(node) ?? prompts.review,
               researchPlanMarkdown: ctx.researchPlanMarkdown,
               attachments: downloadedAttachments,
               preSandboxAdditions: ctx.preSandboxAdditions.review,

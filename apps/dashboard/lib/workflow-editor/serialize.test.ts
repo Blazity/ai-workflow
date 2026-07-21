@@ -437,6 +437,142 @@ test("leaves legacy edges without fromPort byte-comparable", () => {
   assert.deepEqual(out.edges, [{ from: "trigger", to: "status" }]);
 });
 
+test("keeps a promptRef when its param serialized", () => {
+  const nodes = flowNodes([
+    {
+      id: "llm",
+      type: "call_llm",
+      x: 0,
+      y: 0,
+      params: { prompt: "summarize the ticket" },
+      promptRefs: { prompt: { promptId: 7, version: 2, insertedHash: "abc" } },
+    },
+  ]);
+
+  const out = serializeWorkflowDefinition(nodes, []);
+  assertSerializedNodes(out.nodes, [
+    {
+      id: "llm",
+      type: "call_llm",
+      x: 0,
+      y: 0,
+      params: { prompt: "summarize the ticket" },
+      promptRefs: { prompt: { promptId: 7, version: 2, insertedHash: "abc" } },
+    },
+  ]);
+});
+
+test("drops a promptRef when the param is an empty string or absent", () => {
+  const nodes = flowNodes([
+    {
+      id: "cleared",
+      type: "call_llm",
+      x: 0,
+      y: 0,
+      params: { prompt: "" },
+      promptRefs: { prompt: { promptId: 7, version: 2 } },
+    },
+    {
+      id: "absent",
+      type: "call_llm",
+      x: 0,
+      y: 0,
+      params: {},
+      promptRefs: { system: { promptId: 9, version: 1 } },
+    },
+  ]);
+
+  const out = serializeWorkflowDefinition(nodes, []);
+  assertSerializedNodes(out.nodes, [
+    { id: "cleared", type: "call_llm", x: 0, y: 0, params: {} },
+    { id: "absent", type: "call_llm", x: 0, y: 0, params: {} },
+  ]);
+  assert.equal("promptRefs" in out.nodes[0], false);
+  assert.equal("promptRefs" in out.nodes[1], false);
+});
+
+test("prunes each promptRef independently against its param", () => {
+  const nodes = flowNodes([
+    {
+      id: "llm",
+      type: "call_llm",
+      x: 0,
+      y: 0,
+      params: { prompt: "do the thing", system: "" },
+      promptRefs: {
+        prompt: { promptId: 7, version: 2 },
+        system: { promptId: 9, version: 1 },
+      },
+    },
+  ]);
+
+  const out = serializeWorkflowDefinition(nodes, []);
+  assertSerializedNodes(out.nodes, [
+    {
+      id: "llm",
+      type: "call_llm",
+      x: 0,
+      y: 0,
+      params: { prompt: "do the thing" },
+      promptRefs: { prompt: { promptId: 7, version: 2 } },
+    },
+  ]);
+});
+
+test("serializes nodes without promptRefs byte-identically to before", () => {
+  const nodes = flowNodes([
+    {
+      id: "trigger",
+      type: "trigger_ticket_ai",
+      name: "Ticket assigned to AI",
+      x: 40.4,
+      y: 279.6,
+      params: {},
+      locked: true,
+    },
+    {
+      id: "status",
+      type: "update_ticket_status",
+      name: "Update ticket status",
+      x: 300,
+      y: 280,
+      params: { target: "ai_review", stray: "drop me" },
+    },
+  ]);
+  const edges: FlowEdgeDef[] = [{ from: "trigger", to: "status" }];
+
+  // Key order matters here: the serializer appends `name` after `params`, and
+  // this locks that byte-identical output so the promptRefs change cannot shift it.
+  const out = serializeWorkflowDefinition(nodes, edges);
+  assert.equal(
+    JSON.stringify(out),
+    JSON.stringify({
+      schemaVersion: 1,
+      nodes: [
+        {
+          id: "trigger",
+          type: "trigger_ticket_ai",
+          x: 40,
+          y: 280,
+          params: {},
+          inputs: {},
+          name: "Ticket assigned to AI",
+        },
+        {
+          id: "status",
+          type: "update_ticket_status",
+          x: 300,
+          y: 280,
+          params: { target: "ai_review" },
+          inputs: {},
+          name: "Update ticket status",
+        },
+      ],
+      edges: [{ from: "trigger", to: "status" }],
+    }),
+  );
+});
+
 test("never emits provider for non-agent node types", () => {
   const nodes = flowNodes([
     {

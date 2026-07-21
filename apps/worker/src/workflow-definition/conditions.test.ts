@@ -229,7 +229,7 @@ describe("contract helpers", () => {
   });
 
   it("mirrors the editor param keys, including the control blocks", () => {
-    expect(BLOCK_PARAM_KEYS.planning_agent).toEqual(["provider", "model"]);
+    expect(BLOCK_PARAM_KEYS.planning_agent).toEqual(["provider", "model", "prompt"]);
     expect(BLOCK_PARAM_KEYS.run_pre_pr_checks).toEqual(["maxFixCycles"]);
     expect(BLOCK_PARAM_KEYS.branch).toEqual(["condition"]);
     expect(BLOCK_PARAM_KEYS.loop).toEqual(["maxAttempts", "onExhaust"]);

@@ -1894,3 +1894,80 @@ describe("validateWorkflowGraph rules", () => {
   );
 
 });
+
+describe("workflowDefinitionSchema prompt param and promptRefs", () => {
+  // A raw node carrying promptRefs, on a non-agent block, to prove promptRefs
+  // lives on the shared base fields rather than any one param schema.
+  const withRefs = (promptRefs: unknown) => ({
+    id: "n",
+    type: "open_pr",
+    x: 0,
+    y: 0,
+    params: {},
+    promptRefs,
+  });
+
+  it("accepts a legacy node without prompt or promptRefs (agent and non-agent)", () => {
+    expect(shapeOk([node("p", "planning_agent")])).toBe(true);
+    expect(shapeOk([node("o", "open_pr")])).toBe(true);
+  });
+
+  it("accepts a prompt param on every agent block and bounds its length", () => {
+    for (const type of ["planning_agent", "implementation_agent", "review_agent"] as const) {
+      expect(shapeOk([node("n", type, { prompt: "Follow the house style." })]), type).toBe(true);
+      // The cap aligns with the prompt library body max so any library prompt
+      // can be inserted as an agent override. 50000 passes post-trim; 50001 fails.
+      expect(shapeOk([node("n", type, { prompt: "x".repeat(50000) })]), type).toBe(true);
+      expect(shapeOk([node("n", type, { prompt: "x".repeat(50001) })]), type).toBe(false);
+    }
+  });
+
+  it("keeps agent params strict against unknown keys", () => {
+    for (const type of ["planning_agent", "implementation_agent", "review_agent"] as const) {
+      expect(shapeOk([node("n", type, { prompt: "p", bogus: 1 })]), type).toBe(false);
+    }
+  });
+
+  it("accepts promptRefs on any block type, with and without insertedHash", () => {
+    expect(shapeOk([withRefs({ prompt: { promptId: 1, version: 2 } })])).toBe(true);
+    expect(
+      shapeOk([withRefs({ prompt: { promptId: 1, version: 2, insertedHash: "0a1b2c3d" } })]),
+    ).toBe(true);
+    // Agent block, alongside a prompt param.
+    expect(
+      shapeOk([
+        {
+          id: "p",
+          type: "planning_agent",
+          x: 0,
+          y: 0,
+          params: { prompt: "p" },
+          promptRefs: { prompt: { promptId: 1, version: 2 } },
+        },
+      ]),
+    ).toBe(true);
+  });
+
+  it("rejects malformed promptRefs entries", () => {
+    // Non-integer, zero, or negative promptId / version.
+    expect(shapeOk([withRefs({ prompt: { promptId: 1.5, version: 2 } })])).toBe(false);
+    expect(shapeOk([withRefs({ prompt: { promptId: 0, version: 2 } })])).toBe(false);
+    expect(shapeOk([withRefs({ prompt: { promptId: -1, version: 2 } })])).toBe(false);
+    expect(shapeOk([withRefs({ prompt: { promptId: 1, version: 2.5 } })])).toBe(false);
+    expect(shapeOk([withRefs({ prompt: { promptId: 1, version: 0 } })])).toBe(false);
+    expect(shapeOk([withRefs({ prompt: { promptId: 1, version: -1 } })])).toBe(false);
+    // Extra keys inside a ref are rejected (strict).
+    expect(shapeOk([withRefs({ prompt: { promptId: 1, version: 2, extra: 1 } })])).toBe(false);
+    // An empty-string record key is rejected.
+    expect(shapeOk([withRefs({ "": { promptId: 1, version: 2 } })])).toBe(false);
+  });
+
+  it("validateWorkflowGraph is indifferent to the prompt param and promptRefs", () => {
+    const def = clone(defaultWorkflowDefinition({ includeReview: true }));
+    const planning = def.nodes.find((n: WorkflowDefinitionNode) => n.type === "planning_agent");
+    planning.params.prompt = "Follow the house style.";
+    planning.promptRefs = { prompt: { promptId: 1, version: 2, insertedHash: "0a1b2c3d" } };
+    expect(workflowDefinitionSchema.safeParse(def).success).toBe(true);
+    expect(validateWorkflowGraph(def)).toEqual([]);
+  });
+});

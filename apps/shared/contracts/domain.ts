@@ -136,39 +136,6 @@ export interface HourPoint {
   errors: number;
 }
 
-/** One Arthur version of a named prompt (metadata; body fetched on demand). */
-export interface PromptVersion {
-  /** Arthur integer version number. */
-  version: number;
-  /** ISO timestamp the version was created. */
-  createdAt: string;
-  /** Real Arthur tags on this version, e.g. ["production"]. */
-  tags: string[];
-  modelProvider: string;
-  modelName: string;
-  numMessages: number;
-  numTools: number;
-  /** Body text. Present only for the production version (eager); other
-   *  versions are fetched on demand via the by-version endpoint. */
-  body?: string;
-}
-
-/** A workflow phase prompt as resolved by the worker at runtime. */
-export interface PromptDef {
-  /** Stable Arthur/fallback key: "research-plan" | "implement" | "review". */
-  name: string;
-  /** Human label for the workflow phase, e.g. "Research & Plan". */
-  phase: string;
-  /** Resolved production prompt body (Arthur production tag, or in-code fallback). */
-  body: string;
-  /** Where the resolved `body` came from. */
-  source: "arthur" | "fallback";
-  /** Model the agent runs this prompt with (env-derived). */
-  model: string;
-  /** Real Arthur version history, newest first. Empty when source is "fallback". */
-  versions: PromptVersion[];
-}
-
 // --- Pre-PR checks (dashboard-managed gate config) ---
 
 export type VcsProviderKind = "github" | "gitlab";
@@ -256,6 +223,19 @@ export interface BlockOutput {
 export type TicketStatusTarget = string;
 
 export type WorkflowParamValue = string | number | boolean | string[];
+
+/** Provenance of a prompt param copied from the prompt library. Purely
+ *  informational: the runtime never reads it; the editor uses it to render
+ *  "from library: Name vN" and to detect drift against the library head. */
+export interface PromptSourceRef {
+  /** prompt_library.id the text was copied from. */
+  promptId: number;
+  /** prompt_library_versions.version whose body was copied. */
+  version: number;
+  /** fnv1a hex of the inserted text, set by the editor at insert time so a
+   *  later manual edit of the field can be detected as "edited". */
+  insertedHash?: string;
+}
 
 /** Exact persisted source path for one block input. Syntax and graph safety are
  * validated by the worker; the template union keeps authored definitions on
@@ -346,6 +326,9 @@ export interface WorkflowDefinitionNode {
   x: number;
   y: number;
   params: Record<string, WorkflowParamValue>;
+  /** Keyed by the param key the text was inserted into (e.g. "prompt",
+   *  "system", "body", "instructions", "message"). */
+  promptRefs?: Record<string, PromptSourceRef>;
   inputs: WorkflowInputBindings;
 }
 

@@ -499,7 +499,7 @@ The E2E jobs need the production env vars exposed as GitHub Actions secrets in t
 
 The dashboard holds no worker secret. Human login is handled by the worker (Better Auth); the dashboard stores the worker-issued session token in a first-party `httpOnly` cookie and replays it server-side. Set `DASHBOARD_ORIGIN` on the **worker** to this dashboard's URL so Better Auth trusts it. Password-only mode needs no SSO vars; sign in at `/login` with `DASHBOARD_AUTH_EMAIL` / `DASHBOARD_AUTH_PASSWORD`. Optional SSO, Resend, and fixed organization vars belong on the worker project, not the dashboard project.
 
-### Arthur AI Engine (tracing + hosted prompts)
+### Arthur AI Engine (tracing + prompt-injection check)
 
 Set both:
 
@@ -508,15 +508,7 @@ GENAI_ENGINE_API_KEY=...
 GENAI_ENGINE_TRACE_ENDPOINT=https://your-arthur-host/api/v1/traces
 ```
 
-Then run once to register hosted prompts:
-
-```bash
-pnpm setup:arthur-prompts
-# saves the resulting task ID — set it as:
-GENAI_ENGINE_PROMPT_TASK_ID=<uuid>
-```
-
-The tracer is built into every sandbox via `pnpm build:arthur-tracer` during deploy.
+This enables per-run tracing and the optional `arthur_injection_check` block. The tracer is built into every sandbox via `pnpm build:arthur-tracer` during deploy.
 
 ### GitLab instead of GitHub
 

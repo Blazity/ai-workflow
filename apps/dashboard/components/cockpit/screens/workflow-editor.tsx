@@ -18,6 +18,7 @@ import {
   type WorkflowEditorOptions,
 } from "@shared/contracts";
 import { FlowEditor } from "@/components/cockpit/flow-editor/flow-editor";
+import { PromptLibraryProvider } from "@/components/cockpit/flow-editor/prompt-library-context";
 import { Listbox } from "@/components/cockpit/listbox";
 import type { FlowEdgeDef, FlowNodeDef } from "@/lib/flows";
 import { readErrorMessage } from "@/lib/api/error-message";
@@ -84,6 +85,7 @@ export function WorkflowEditorScreen({
   options,
   liveBlocks,
   canEdit,
+  initialNodeId,
 }: {
   definitions: WorkflowDefinitionMeta[];
   templates: WorkflowDefinitionTemplate[];
@@ -92,6 +94,7 @@ export function WorkflowEditorScreen({
   options: WorkflowEditorOptions;
   liveBlocks: RunBlockStatusesResponse;
   canEdit: boolean;
+  initialNodeId?: string;
 }) {
   const seed = initialDetail.draft ?? initialDetail.deployed?.definition ?? defaultDefinition;
   const [metas, setMetas] = useState<WorkflowDefinitionMeta[]>(definitions);
@@ -154,6 +157,14 @@ export function WorkflowEditorScreen({
     });
   }
   const validationController = validationControllerRef.current;
+
+  // Deep-link preselect is first-load only. FlowEditor is remounted on definition
+  // switch (key={selectedId}), so hold the node id in a ref and clear it after the
+  // first render consumes it; later definitions must not re-apply the deep link.
+  const deepLinkNodeId = useRef(initialNodeId);
+  useEffect(() => {
+    deepLinkNodeId.current = undefined;
+  }, []);
 
   const selectedMeta = metas.find((m) => m.id === selectedId);
   const semanticDefinition = useMemo(
@@ -540,6 +551,7 @@ export function WorkflowEditorScreen({
     options.blockRegistry[type]?.presentation.label ?? type;
 
   return (
+    <PromptLibraryProvider>
     <div className="flex flex-col h-full min-h-0">
       {deployed === null && (
         <div className="px-6 py-2 border-b border-neutral-200 bg-app-bg font-body text-[12px] text-neutral-600">
@@ -634,6 +646,7 @@ export function WorkflowEditorScreen({
           runStatuses={derived?.statuses}
           runErrors={derived?.errors}
           fitSignal={fitSignal}
+          initialSelectedId={deepLinkNodeId.current}
         />
         {defsOpen && (
           <div className="absolute right-4 top-[56px] z-[60] w-[440px] max-h-[70vh] overflow-y-auto bg-panel border border-neutral-200 rounded-[4px] shadow-[0_12px_28px_-8px_rgba(24,27,32,0.22),0_2px_6px_rgba(24,27,32,0.08)] px-4 py-3">
@@ -874,5 +887,6 @@ export function WorkflowEditorScreen({
         )}
       </div>
     </div>
+    </PromptLibraryProvider>
   );
 }

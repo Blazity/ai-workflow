@@ -49,11 +49,20 @@ const bindingInputName = z.custom<string>(
   { message: "Input name contains an empty or unsafe path segment." },
 );
 
+const promptSourceRefSchema = z
+  .object({
+    promptId: z.number().int().positive(),
+    version: z.number().int().positive(),
+    insertedHash: z.string().max(16).optional(),
+  })
+  .strict();
+
 const baseNodeFields = {
   id: nodeId,
   name: z.string().optional(),
   x: coordinate,
   y: coordinate,
+  promptRefs: z.record(z.string().min(1).max(64), promptSourceRefSchema).optional(),
   inputs: z.record(bindingInputName, bindingSource).default({}),
 };
 
@@ -62,6 +71,7 @@ const agentParams = z
   .object({
     model: z.string().trim().max(200).regex(/^[A-Za-z0-9._:\/-]+$/).optional(),
     provider: z.enum(["claude", "codex"]).optional(),
+    prompt: z.string().trim().min(1).max(50000).optional(),
   })
   .strict();
 

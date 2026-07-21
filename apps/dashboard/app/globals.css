@@ -112,6 +112,8 @@
   --animate-ck-march: ck-march-dash 600ms linear infinite;
   --animate-ck-pop: ck-pop 140ms cubic-bezier(0.2, 0, 0, 1);
   --animate-ck-glow: ck-glow 1.7s ease-in-out infinite;
+  --animate-ck-fade-up: ck-fade-up 260ms cubic-bezier(0.2, 0, 0, 1) both;
+  --animate-ck-chip-in: ck-chip-in 200ms cubic-bezier(0.2, 0, 0, 1) both;
 }
 
 /* ==========================================================================
@@ -217,4 +219,209 @@ body {
   to {
     stroke-dashoffset: var(--ck-dash);
   }
+}
+/* Staggered list/item entrance: fade + rise + de-blur. One-shot (keyframe),
+   so callers cap the stagger to the first few rows to keep long lists snappy. */
+@keyframes ck-fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+    filter: blur(3px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+    filter: blur(0);
+  }
+}
+/* A freshly inserted variable chip pops in: a small scale-up from 0.9 with a
+   fade. Paired at the call site with a brief mariner ring that transitions out. */
+@keyframes ck-chip-in {
+  from {
+    opacity: 0;
+    transform: scale(0.9);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* ==========================================================================
+   Prompt WYSIWYG editor (Tiptap) — prose + {{variable}} chips
+   ========================================================================== */
+.ck-prose {
+  font-family: var(--font-body);
+  font-size: 13px;
+  line-height: 1.65;
+  color: #181b20;
+  overflow-wrap: break-word;
+  word-break: break-word;
+}
+.ck-prose:focus {
+  outline: none;
+}
+.ck-prose > * + * {
+  margin-top: 0.9em;
+}
+/* Headings breathe more above so sections read at a glance. */
+.ck-prose > h1 + *,
+.ck-prose > h2 + *,
+.ck-prose > h3 + * {
+  margin-top: 0;
+}
+.ck-prose > h1,
+.ck-prose > h2,
+.ck-prose > h3 {
+  margin-bottom: 0.5em;
+}
+.ck-prose > * + h1,
+.ck-prose > * + h2 {
+  margin-top: 0;
+  padding-top: 1.25em;
+}
+.ck-prose > * + h3 {
+  margin-top: 0;
+  padding-top: 0.9em;
+}
+.ck-prose h1,
+.ck-prose h2,
+.ck-prose h3 {
+  font-family: var(--font-display);
+  font-weight: 600;
+  color: #181b20;
+  line-height: 1.3;
+  letter-spacing: -0.01em;
+  margin: 0;
+}
+.ck-prose h1 {
+  font-size: 19px;
+}
+.ck-prose h2 {
+  font-size: 16px;
+}
+.ck-prose h3 {
+  font-size: 14px;
+}
+.ck-prose p {
+  margin: 0;
+}
+.ck-prose ul,
+.ck-prose ol {
+  margin: 0;
+  padding-left: 1.5em;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35em;
+}
+.ck-prose ul {
+  list-style: disc;
+}
+.ck-prose ol {
+  list-style: decimal;
+}
+.ck-prose li {
+  margin: 0;
+  padding-left: 0.15em;
+}
+.ck-prose li::marker {
+  color: #8a8ef1;
+}
+.ck-prose li > p {
+  margin: 0;
+}
+.ck-prose strong {
+  font-weight: 600;
+}
+.ck-prose code {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  background: #f9fafb;
+  border: 1px solid #e6e8eb;
+  border-radius: 3px;
+  padding: 0.1em 0.36em;
+}
+.ck-prose pre {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1.6;
+  background: #f9fafb;
+  border: 1px solid #e6e8eb;
+  border-radius: 4px;
+  padding: 10px 12px;
+  overflow-x: auto;
+}
+.ck-prose pre code {
+  background: transparent;
+  border: none;
+  padding: 0;
+}
+
+/* Compact read-only markdown rhythm shared by the library rail and built-in
+   template modal. Headings create sections without overpowering narrow panes. */
+.ck-markdown-preview {
+  color: #34383f;
+  font-family: var(--font-body);
+  font-size: 12.5px;
+  line-height: 1.62;
+  overflow-wrap: anywhere;
+}
+.ck-markdown-preview > * {
+  margin: 0;
+}
+.ck-markdown-preview > * + * {
+  margin-top: 0.72em;
+}
+.ck-markdown-preview > * + h1,
+.ck-markdown-preview > * + h2,
+.ck-markdown-preview > * + h3 {
+  margin-top: 1.35em;
+}
+.ck-markdown-preview > h1 + *,
+.ck-markdown-preview > h2 + *,
+.ck-markdown-preview > h3 + * {
+  margin-top: 0.42em;
+}
+.ck-markdown-preview h1,
+.ck-markdown-preview h2,
+.ck-markdown-preview h3 {
+  color: #181b20;
+  font-family: var(--font-display);
+  font-weight: 600;
+  line-height: 1.3;
+  letter-spacing: -0.01em;
+  text-wrap: balance;
+}
+.ck-markdown-preview h1 {
+  font-size: 17px;
+}
+.ck-markdown-preview h2 {
+  font-size: 14.5px;
+}
+.ck-markdown-preview h3 {
+  font-size: 13px;
+}
+.ck-markdown-preview p {
+  text-wrap: pretty;
+}
+
+/* {{variable}} tokens are decorations over literal text (never nodes), so they
+   round-trip untouched. Styled as inline chips. */
+.ck-var {
+  border-radius: 2px;
+  padding: 0.02em 0.22em;
+  font-weight: 600;
+}
+.ck-var-known {
+  background: #ececfd;
+  color: #3c43e7;
+}
+.ck-var-unknown {
+  background: #fff4cc;
+  color: #7a5a00;
+}
+.ck-prompt-ref {
+  background: #e8f1ff;
+  color: #1f5aa6;
+  box-shadow: inset 0 0 0 1px #bfd4f2;
 }

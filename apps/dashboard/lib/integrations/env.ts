@@ -12,10 +12,6 @@ export const env = {
     teamId: () => read("VERCEL_TEAM_ID"),
     projectId: () => read("VERCEL_PROJECT_ID"),
   },
-  arthur: {
-    apiKey: () => read("ARTHUR_API_KEY"),
-    baseUrl: () => read("ARTHUR_BASE_URL") ?? "https://platform.arthur.ai",
-  },
   jira: {
     baseUrl: () => read("JIRA_BASE_URL"),
     email: () => read("JIRA_EMAIL"),
@@ -30,7 +26,6 @@ export const env = {
 
 export const isConfigured = {
   vercel: () => !!(env.vercel.token() && env.vercel.projectId()),
-  arthur: () => !!env.arthur.apiKey(),
   jira: () => !!(env.jira.baseUrl() && env.jira.email() && env.jira.token()),
   github: () => !!(env.github.appId() && env.github.installationId() && env.github.privateKey()),
 };

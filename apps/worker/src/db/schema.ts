@@ -16,7 +16,12 @@ import {
   timestamp,
   uniqueIndex,
 } from "drizzle-orm/pg-core";
-import type { BlockRunState, WorkflowRunBudgetFailure } from "@shared/contracts";
+import type {
+  BlockRunState,
+  ResolvedPromptReference,
+  WorkflowDefinition,
+  WorkflowRunBudgetFailure,
+} from "@shared/contracts";
 import type { GateStatusRef } from "../adapters/vcs/types.js";
 import type { PrePrCheckConfig } from "../pre-pr-checks/config.js";
 
@@ -249,6 +254,7 @@ export const workflowRuns = pgTable("workflow_runs", {
   definitionVersion: integer("definition_version"),
   definitionId: integer("definition_id"),
   blockStatuses: jsonb("block_statuses").$type<Record<string, BlockRunState>>(),
+  promptManifest: jsonb("prompt_manifest").$type<ResolvedPromptReference[]>(),
 
   // Bookkeeping.
   firstSeenAt: timestamp("first_seen_at", { withTimezone: true })
@@ -406,6 +412,68 @@ export const workflowDefinitionTriggers = pgTable("workflow_definition_triggers"
     .notNull()
     .references(() => workflowDefinitions.id, { onDelete: "cascade" }),
 });
+
+/**
+ * Prompt library: one row per reusable prompt the dashboard manages. The
+ * metadata here (name, description, tags) is mutable in place, while the prompt
+ * text is append-only in prompt_library_versions, the same split
+ * workflow_definitions uses. A prompt is archived (soft-deleted) via
+ * archived_at; the partial unique index frees its name for reuse once archived.
+ * Distinct from the read-only Arthur prompt registry served by /api/v1/prompts:
+ * those are runtime agent prompts discovered from the codebase, these are
+ * user-authored text blocks copied into workflow-definition block params.
+ */
+export const promptLibrary = pgTable(
+  "prompt_library",
+  {
+    id: serial("id").primaryKey(),
+    /** Immutable reference key used by {{prompt:<slug>}} tokens; derived from
+     *  the name at create time, never changed by renames. */
+    slug: text("slug").notNull(),
+    name: text("name").notNull(),
+    description: text("description"),
+    tags: text("tags")
+      .array()
+      .notNull()
+      .default(sql`'{}'::text[]`),
+    archivedAt: timestamp("archived_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+    createdById: text("created_by_id").notNull(),
+    createdByLabel: text("created_by_label").notNull(),
+  },
+  (t) => [
+    uniqueIndex("prompt_library_name_active_idx")
+      .on(t.name)
+      .where(sql`${t.archivedAt} is null`),
+    uniqueIndex("prompt_library_slug_active_idx")
+      .on(t.slug)
+      .where(sql`${t.archivedAt} is null`),
+  ],
+);
+
+/**
+ * Prompt library versions, append-only per prompt. Each row belongs to a
+ * prompt_library row; a prompt's head is its highest version, and a restore
+ * appends a copy of an older body with restored_from_version set. The body
+ * lives here (never mutated) so the version history is the audit trail, while
+ * the parent row carries only mutable metadata.
+ */
+export const promptLibraryVersions = pgTable(
+  "prompt_library_versions",
+  {
+    promptId: integer("prompt_id")
+      .notNull()
+      .references(() => promptLibrary.id),
+    version: integer("version").notNull(),
+    body: text("body").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    createdById: text("created_by_id").notNull(),
+    createdByLabel: text("created_by_label").notNull(),
+    restoredFromVersion: integer("restored_from_version"),
+  },
+  (t) => [primaryKey({ columns: [t.promptId, t.version] })],
+);
 
 export * from "./auth-schema.js";
 export * from "./email-delivery-schema.js";
