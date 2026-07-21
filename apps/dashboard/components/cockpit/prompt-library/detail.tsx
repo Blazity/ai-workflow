@@ -56,7 +56,7 @@ export function PromptDetail({
 }) {
   // null selected version = show the head; any other value = an inspected version.
   const [selectedVersion, setSelectedVersion] = useState<number | null>(null);
-  const [bodyTab, setBodyTab] = useState<"preview" | "diff">("preview");
+  const [bodyTab, setBodyTab] = useState<"preview" | "raw" | "diff">("preview");
   const [confirmArchive, setConfirmArchive] = useState(false);
   const [confirmRestore, setConfirmRestore] = useState<number | null>(null);
   const [copied, setCopied] = useState(false);
@@ -109,13 +109,13 @@ export function PromptDetail({
     }
   }
 
-  const tabs = canDiff
-    ? [
-        { id: "preview", label: "Preview" },
-        { id: "diff", label: "Diff vs previous" },
-      ]
-    : [{ id: "preview", label: "Preview" }];
+  const tabs = [
+    { id: "preview", label: "Preview" },
+    { id: "raw", label: "Raw" },
+    ...(canDiff ? [{ id: "diff", label: "Diff vs previous" }] : []),
+  ];
   const showDiff = bodyTab === "diff" && canDiff;
+  const showRaw = bodyTab === "raw";
 
   return (
     <div className="flex flex-col gap-3 lg:h-full min-w-0">
@@ -211,7 +211,7 @@ export function PromptDetail({
 
       <CkCard eyebrow={`Prompt body · v${shownVersion}`}>
         <div className="flex items-center justify-between gap-2 mb-3 flex-wrap">
-          <CkTabs tabs={tabs} active={showDiff ? "diff" : "preview"} onChange={(id) => setBodyTab(id as "preview" | "diff")} />
+          <CkTabs tabs={tabs} active={showDiff ? "diff" : showRaw ? "raw" : "preview"} onChange={(id) => setBodyTab(id as "preview" | "raw" | "diff")} />
           <div className="flex items-center gap-3">
             {canRestore &&
               (confirmRestore === shownVersion ? (
@@ -250,6 +250,10 @@ export function PromptDetail({
           <div className="py-3 px-4">
             {showDiff && prev ? (
               <DiffView oldText={prev.body} newText={shownBody} />
+            ) : showRaw ? (
+              <pre className="m-0 max-h-[480px] overflow-auto whitespace-pre-wrap break-words font-mono text-[12px] leading-[1.6] text-coal">
+                {shownBody}
+              </pre>
             ) : (
               <PromptBodyBlocks body={shownBody} maxHeightClass="max-h-[480px]" />
             )}
