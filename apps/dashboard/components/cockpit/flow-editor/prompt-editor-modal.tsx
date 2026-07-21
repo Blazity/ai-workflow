@@ -81,7 +81,7 @@ export function PromptEditorModal({
   library?: PromptEditorModalLibraryProps;
 }) {
   const { mounted, state } = useEnterExit(open, 180);
-  const [libOpen, setLibOpen] = useState(true);
+  const [libOpen, setLibOpen] = useState(!library);
   const [saveOpen, setSaveOpen] = useState(false);
   const [confirmDiscard, setConfirmDiscard] = useState(false);
   const [syncRequest, setSyncRequest] = useState<{ id: number; mode: "replace" | "append" } | null>(null);
@@ -198,9 +198,13 @@ export function PromptEditorModal({
     }
   }, [initialPreviewTarget, open, previewReference]);
 
+  // Field mode opens with the rail visible (inserting is the common intent);
+  // library mode starts with it closed so the edited prompt is unmistakably
+  // the only thing on screen until the user asks for the insert panel.
+  const isLibrary = library !== undefined;
   useEffect(() => {
-    if (open) setLibOpen(true);
-  }, [open]);
+    if (open) setLibOpen(!isLibrary);
+  }, [open, isLibrary]);
 
   // Escape yields to the save popover (it closes itself first); otherwise it
   // closes the library rail, then the whole modal. This listener may refresh as
@@ -355,6 +359,7 @@ export function PromptEditorModal({
                 targetHasContent={hasContent}
                 previewRequest={previewRequest}
                 excludeId={library?.excludeId}
+                autoSelectFirst={!library}
               />
             </div>
           </div>

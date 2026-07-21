@@ -51,6 +51,7 @@ export function PromptLibraryRail({
   targetHasContent,
   previewRequest,
   excludeId,
+  autoSelectFirst = true,
 }: {
   disabled?: boolean;
   onInsert: (payload: PromptInsertPayload) => void;
@@ -59,6 +60,9 @@ export function PromptLibraryRail({
   /** Hide this prompt from the rail (library mode edits it; a latest
    *  self-reference would be an instant cycle). */
   excludeId?: number;
+  /** Library mode passes false: a silently highlighted first row reads as
+   *  "this is the prompt being edited", which it is not. */
+  autoSelectFirst?: boolean;
 }) {
   const { status, rows: allRows } = usePromptLibrary();
   const rows = useMemo(
@@ -85,7 +89,8 @@ export function PromptLibraryRail({
   const tags = useMemo(() => Array.from(new Set(nonArchived.flatMap((r) => r.tags))).sort(), [nonArchived]);
   const filtered = useMemo(() => filterPrompts(rows, query, tag), [rows, query, tag]);
   const activeRow: PromptLibraryListRowDto | null =
-    (activeId !== null ? filtered.find((r) => r.id === activeId) : undefined) ?? filtered[0] ?? null;
+    (activeId !== null ? filtered.find((r) => r.id === activeId) : undefined)
+    ?? (autoSelectFirst ? filtered[0] ?? null : null);
 
   useEffect(() => {
     // Apply each request exactly once: without the handled guard, a later rows
@@ -234,6 +239,10 @@ export function PromptLibraryRail({
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-panel">
+      <div className="flex h-8 shrink-0 items-center gap-1.5 border-b border-neutral-200 bg-off-white/70 px-3 font-mono text-[9px] uppercase tracking-[0.06em] text-neutral-500">
+        <span aria-hidden="true" className="text-mariner">❡</span>
+        Insert from library
+      </div>
       <div className="shrink-0 border-b border-neutral-200 px-3 py-2">
         <input
           type="text"
