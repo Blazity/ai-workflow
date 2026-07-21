@@ -33,10 +33,16 @@ export function trappedDialogTabTarget<T extends DialogFocusTarget>(
   return null;
 }
 
-export function promptEditorModalCapabilities(disabled: boolean, hasContent: boolean) {
+export function promptEditorModalCapabilities(
+  disabled: boolean,
+  hasContent: boolean,
+  variant: "field" | "library" = "field",
+) {
   return {
     canEdit: !disabled,
     canInsert: !disabled,
-    canSave: !disabled && hasContent,
+    // "Save to library" lifts a block field's text into a new library prompt;
+    // in library mode the prompt already lives there, so the button hides.
+    canSave: !disabled && hasContent && variant === "field",
   };
 }

@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { CkCard, CkChip, CkTabs } from "@/components/ui";
 import { Block } from "@/app/skeleton-block";
 import { DiffView } from "@/components/cockpit/prompt-diff";
-import { PromptPreview } from "@/components/cockpit/prompt-library/prompt-preview";
+import { PromptBodyBlocks } from "@/components/cockpit/prompt-library/prompt-body-blocks";
 import type {
   PromptLibraryDetailResponse,
   PromptLibraryListRowDto,
@@ -239,12 +239,12 @@ export function PromptDetail({
             </button>
           </div>
         </div>
-        <div className="border border-neutral-200 rounded-xs overflow-hidden">
-          <div className="py-3 px-1">
+        <div className="border border-neutral-200 rounded-xs overflow-hidden bg-off-white/50">
+          <div className="py-3 px-4">
             {showDiff && prev ? (
               <DiffView oldText={prev.body} newText={shownBody} />
             ) : (
-              <PromptPreview body={shownBody} maxHeightClass="max-h-[420px]" />
+              <PromptBodyBlocks body={shownBody} maxHeightClass="max-h-[480px]" />
             )}
           </div>
         </div>

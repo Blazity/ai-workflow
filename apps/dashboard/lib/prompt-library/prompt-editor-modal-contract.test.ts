@@ -53,3 +53,11 @@ test("read-only modal capabilities allow inspection but no mutation", () => {
     canSave: false,
   });
 });
+
+test("library variant keeps editing but never offers save-to-library", () => {
+  assert.deepEqual(promptEditorModalCapabilities(false, true, "library"), {
+    canEdit: true,
+    canInsert: true,
+    canSave: false,
+  });
+});

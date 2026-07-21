@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { formatPromptReferenceToken, type PromptLibraryEntryMeta } from "@shared/contracts";
 import { PromptSectionComposer } from "@/components/cockpit/prompt-editor/prompt-section-composer";
+import { TagChipsInput } from "@/components/cockpit/prompt-library/tag-chips-input";
 import { useEnterExit } from "@/lib/use-enter-exit";
 import { PromptLibraryRail } from "./prompt-library-rail";
 import { PromptSavePopover } from "./prompt-save-popover";
@@ -19,12 +20,42 @@ import type { PromptPreviewRequest, PromptPreviewTarget } from "@/lib/prompt-lib
 const headBtn =
   "appearance-none cursor-pointer inline-flex items-center gap-1 border border-neutral-200 bg-panel text-coal py-1 px-2 rounded-[3px] font-mono text-[10px] tracking-[0.04em] uppercase transition-[background-color,color,transform] duration-150 ease-standard hover:bg-app-bg active:scale-[0.96]";
 const headBtnActive = "border-mariner-200 bg-mariner-100 text-mariner";
+const primaryHeadBtn =
+  "appearance-none cursor-pointer inline-flex items-center gap-1 border border-mariner bg-mariner text-white py-1 px-2.5 rounded-[3px] font-mono text-[10px] tracking-[0.04em] uppercase transition-transform duration-150 ease-standard active:scale-[0.96] disabled:opacity-40 disabled:cursor-default";
+const metaLabelCls = "font-mono text-[10px] uppercase tracking-[0.06em] text-neutral-500";
+const metaInputCls =
+  "w-full border border-neutral-200 bg-panel rounded-[3px] px-2 py-1.5 font-body text-[13px] text-neutral-900 outline-none focus:border-mariner";
+
+export interface PromptEditorModalMeta {
+  name: string;
+  description: string;
+  tags: string[];
+}
+
+/** Library mode: the modal is the library's prompt editor. It gains a meta
+ *  strip (name/description/tags), a primary save action, a dirty-guarded
+ *  close, and hides "Save to library" (the prompt already lives there). */
+export interface PromptEditorModalLibraryProps {
+  meta: PromptEditorModalMeta;
+  onMetaChange: (meta: PromptEditorModalMeta) => void;
+  primaryLabel: string;
+  primaryDisabled: boolean;
+  primaryBusy: boolean;
+  onPrimary: () => void;
+  /** Unsaved changes: closing asks for confirmation first. */
+  dirty: boolean;
+  /** Save error surfaced inside the modal (the page banner sits behind it). */
+  error?: string | null;
+  /** The edited prompt's id, hidden from the rail (self-reference = cycle). */
+  excludeId?: number;
+}
 
 /**
- * Large "all-in" editor for a block's prompt field: the full WYSIWYG editor with
- * an optional library panel that slides in from the left (one modal, never a
+ * Large "all-in" editor for a prompt body: the full WYSIWYG editor with an
+ * optional library panel that slides in from the left (one modal, never a
  * modal-on-modal). Edits flow live through `onChange`; `onInsert` applies a
- * library payload (replace/append + provenance).
+ * library payload (replace/append + provenance). Field mode edits a workflow
+ * block's param; `library` mode turns it into the prompt library's editor.
  */
 export function PromptEditorModal({
   open,
@@ -36,6 +67,7 @@ export function PromptEditorModal({
   blockName,
   fieldLabel,
   initialPreviewTarget,
+  library,
 }: {
   open: boolean;
   disabled: boolean;
@@ -46,10 +78,12 @@ export function PromptEditorModal({
   blockName: string;
   fieldLabel: string;
   initialPreviewTarget?: PromptPreviewTarget | null;
+  library?: PromptEditorModalLibraryProps;
 }) {
   const { mounted, state } = useEnterExit(open, 180);
   const [libOpen, setLibOpen] = useState(true);
   const [saveOpen, setSaveOpen] = useState(false);
+  const [confirmDiscard, setConfirmDiscard] = useState(false);
   const [syncRequest, setSyncRequest] = useState<{ id: number; mode: "replace" | "append" } | null>(null);
   const [previewRequest, setPreviewRequest] = useState<PromptPreviewRequest | null>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
@@ -58,10 +92,23 @@ export function PromptEditorModal({
   const previewRequestId = useRef(0);
   const handledInitialPreview = useRef(false);
   const onCloseRef = useRef(onClose);
+  const libraryDirtyRef = useRef(false);
   const closeSave = useCallback(() => setSaveOpen(false), []);
   onCloseRef.current = onClose;
+  libraryDirtyRef.current = library?.dirty ?? false;
   const hasContent = value.trim().length > 0;
-  const { canEdit, canInsert, canSave } = promptEditorModalCapabilities(disabled, hasContent);
+  const { canEdit, canInsert, canSave } = promptEditorModalCapabilities(
+    disabled,
+    hasContent,
+    library ? "library" : "field",
+  );
+
+  // Every close path (button, backdrop, Escape) funnels through here so a
+  // dirty library draft always gets its confirmation.
+  const attemptClose = useCallback(() => {
+    if (libraryDirtyRef.current) setConfirmDiscard(true);
+    else onCloseRef.current();
+  }, []);
 
   const handleLibraryInsert = useCallback(
     (payload: PromptInsertPayload) => {
@@ -141,6 +188,7 @@ export function PromptEditorModal({
     if (!open) {
       setSyncRequest(null);
       setPreviewRequest(null);
+      setConfirmDiscard(false);
       handledInitialPreview.current = false;
       return;
     }
@@ -168,17 +216,17 @@ export function PromptEditorModal({
       e.preventDefault();
       e.stopImmediatePropagation();
       if (libOpen) setLibOpen(false);
-      else onCloseRef.current();
+      else attemptClose();
     };
     window.addEventListener("keydown", onEsc, { capture: true });
     return () => window.removeEventListener("keydown", onEsc, { capture: true });
-  }, [open, libOpen, saveOpen]);
+  }, [attemptClose, open, libOpen, saveOpen]);
 
   if (!mounted) return null;
   return createPortal(
     <div
       role="presentation"
-      onMouseDown={onClose}
+      onMouseDown={attemptClose}
       data-state={state}
       className={`fixed inset-0 z-[100] flex items-start justify-center px-[3vw] pt-[5vh] bg-coal/50 backdrop-blur-[2px] transition-opacity duration-200 ease-standard motion-reduce:transition-none ${
         state === "open" ? "opacity-100" : "opacity-0"
@@ -214,11 +262,84 @@ export function PromptEditorModal({
                 ↥ Save
               </button>
             )}
-            <button type="button" data-dialog-initial-focus onClick={onClose} className={headBtn}>
+            {library && (
+              <button
+                type="button"
+                onClick={library.onPrimary}
+                disabled={library.primaryDisabled}
+                className={primaryHeadBtn}
+              >
+                {library.primaryBusy ? "Saving…" : library.primaryLabel}
+              </button>
+            )}
+            <button type="button" data-dialog-initial-focus onClick={attemptClose} className={headBtn}>
               Close
             </button>
           </div>
         </div>
+
+        {confirmDiscard && (
+          <div className="flex shrink-0 items-center gap-3 border-b border-yellow-300 bg-[#FFF9E6] px-4 py-2 font-body text-[12px] text-neutral-700">
+            <span>Discard draft?</span>
+            <button
+              type="button"
+              onClick={() => {
+                setConfirmDiscard(false);
+                onCloseRef.current();
+              }}
+              className="appearance-none border-none bg-transparent font-body text-[12px] font-semibold text-red-600 cursor-pointer"
+            >
+              Discard
+            </button>
+            <button
+              type="button"
+              onClick={() => setConfirmDiscard(false)}
+              className="appearance-none border-none bg-transparent font-body text-[12px] text-neutral-500 cursor-pointer"
+            >
+              Keep editing
+            </button>
+          </div>
+        )}
+
+        {library && (
+          <div className="flex shrink-0 flex-col gap-2 border-b border-neutral-200 bg-off-white/60 px-4 py-3">
+            <div className="flex flex-wrap items-start gap-3">
+              <div className="flex min-w-[200px] flex-1 flex-col gap-1">
+                <label className={metaLabelCls} htmlFor="pl-modal-name">
+                  Name
+                </label>
+                <input
+                  id="pl-modal-name"
+                  value={library.meta.name}
+                  disabled={!canEdit}
+                  onChange={(e) => library.onMetaChange({ ...library.meta, name: e.target.value })}
+                  className={metaInputCls}
+                />
+              </div>
+              <div className="flex min-w-[200px] flex-1 flex-col gap-1">
+                <span className={metaLabelCls}>Tags</span>
+                <TagChipsInput
+                  tags={library.meta.tags}
+                  disabled={!canEdit}
+                  onChange={(tags) => library.onMetaChange({ ...library.meta, tags })}
+                />
+              </div>
+              <div className="flex min-w-[240px] flex-[1.4] flex-col gap-1">
+                <label className={metaLabelCls} htmlFor="pl-modal-description">
+                  Description
+                </label>
+                <input
+                  id="pl-modal-description"
+                  value={library.meta.description}
+                  disabled={!canEdit}
+                  onChange={(e) => library.onMetaChange({ ...library.meta, description: e.target.value })}
+                  className={metaInputCls}
+                />
+              </div>
+            </div>
+            {library.error && <div className="font-body text-[11px] text-red-600">{library.error}</div>}
+          </div>
+        )}
 
         <div className="flex min-h-0 min-w-0 flex-1">
           {/* Library rail — slides in by animating width, editor stays put. */}
@@ -233,6 +354,7 @@ export function PromptEditorModal({
                 onInsert={handleLibraryInsert}
                 targetHasContent={hasContent}
                 previewRequest={previewRequest}
+                excludeId={library?.excludeId}
               />
             </div>
           </div>
@@ -248,7 +370,7 @@ export function PromptEditorModal({
         </div>
       </div>
 
-      {canEdit && (
+      {canEdit && !library && (
         <PromptSavePopover
           open={saveOpen}
           onClose={closeSave}

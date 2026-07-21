@@ -51,6 +51,6 @@ test("read-only references keep navigation but hide mutation", () => {
   });
 });
 
-test("builds the prompt library deep link", () => {
-  assert.equal(promptLibraryHref(7), "/prompts?prompt=7");
+test("builds the prompt library deep link from the slug", () => {
+  assert.equal(promptLibraryHref("research-plan"), "/prompts?prompt=research-plan");
 });

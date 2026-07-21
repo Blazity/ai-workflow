@@ -50,13 +50,21 @@ export function PromptLibraryRail({
   onInsert,
   targetHasContent,
   previewRequest,
+  excludeId,
 }: {
   disabled?: boolean;
   onInsert: (payload: PromptInsertPayload) => void;
   targetHasContent: boolean;
   previewRequest?: PromptPreviewRequest | null;
+  /** Hide this prompt from the rail (library mode edits it; a latest
+   *  self-reference would be an instant cycle). */
+  excludeId?: number;
 }) {
-  const { status, rows } = usePromptLibrary();
+  const { status, rows: allRows } = usePromptLibrary();
+  const rows = useMemo(
+    () => (excludeId === undefined ? allRows : allRows.filter((row) => row.id !== excludeId)),
+    [allRows, excludeId],
+  );
   const [query, setQuery] = useState("");
   const [tag, setTag] = useState<string | null>(null);
   const [activeId, setActiveId] = useState<number | null>(null);

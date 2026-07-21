@@ -6,7 +6,12 @@ import { CkCard } from "@/components/ui";
 import { readErrorMessage } from "@/lib/api/error-message";
 import { PromptListRail } from "@/components/cockpit/prompt-library/list-rail";
 import { PromptDetail } from "@/components/cockpit/prompt-library/detail";
-import { PromptEditorForm, type PromptDraft } from "@/components/cockpit/prompt-library/editor-form";
+import {
+  PromptEditorModal,
+  type PromptEditorModalMeta,
+} from "@/components/cockpit/flow-editor/prompt-editor-modal";
+import { PromptLibraryProvider } from "@/components/cockpit/flow-editor/prompt-library-context";
+import type { PromptInsertPayload } from "@/components/cockpit/flow-editor/prompt-insert-popup";
 import type {
   PromptLibraryDetailResponse,
   PromptLibraryEntryMeta,
@@ -28,6 +33,22 @@ function rowFrom(meta: PromptLibraryEntryMeta, body: string): PromptLibraryListR
   return { ...meta, body };
 }
 
+interface PromptDraft {
+  name: string;
+  description: string;
+  tags: string[];
+  body: string;
+}
+
+/** Edit/create both happen in the shared PromptEditorModal; the page behind it
+ *  always shows the detail view. promptId is pinned at open time so a selection
+ *  change behind the overlay can never redirect the save. */
+interface EditorState {
+  mode: "edit" | "create";
+  promptId: number | null;
+  draft: PromptDraft;
+}
+
 export function PromptLibraryScreen({
   data,
   canEdit,
@@ -43,17 +64,12 @@ export function PromptLibraryScreen({
   const [activeId, setActiveId] = useState<number | null>(() =>
     initialPromptSelection(requestedPrompt, data.prompts),
   );
-  const [mode, setMode] = useState<"view" | "edit" | "create">("view");
+  const [editor, setEditor] = useState<EditorState | null>(null);
   const [query, setQuery] = useState("");
   const [tag, setTag] = useState<string | null>(null);
   const [showArchived, setShowArchived] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  // Guarding an in-progress edit/create draft against navigation that would drop
-  // it. `formDirty` mirrors the mounted form's dirtiness; `pendingNav` holds a
-  // navigation the user must confirm before the dirty draft is discarded.
-  const [formDirty, setFormDirty] = useState(false);
-  const [pendingNav, setPendingNav] = useState<(() => void) | null>(null);
   const [detailCache, setDetailCache] = useState<Map<number, PromptLibraryDetailResponse>>(new Map());
   const [usageCache, setUsageCache] = useState<Map<number, PromptLibraryUsageResponse>>(new Map());
   // The prompt id whose lazy detail load failed, so the pane can offer a retry.
@@ -66,19 +82,11 @@ export function PromptLibraryScreen({
 
   // Lazily load the selected prompt's detail + usage in parallel and cache both.
   useEffect(() => {
-    if (activeId === null || mode === "create") return;
+    if (activeId === null) return;
     if (detailCache.has(activeId) && usageCache.has(activeId)) return;
     void loadDetail(activeId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeId, mode, retryNonce]);
-
-  // If the mounted form stops being dirty (e.g. the user hit the form's own
-  // Cancel, unmounting it), any stashed navigation is moot. Drop it so the
-  // confirm bar cannot linger, and cannot resurface with a stale action once a
-  // later draft turns dirty again.
-  useEffect(() => {
-    if (!formDirty && pendingNav) setPendingNav(null);
-  }, [formDirty, pendingNav]);
+  }, [activeId, retryNonce]);
 
   // CockpitShell's live-poll fires router.refresh() every ~5s, re-running the RSC
   // and handing us a fresh `data` object. Seeding `rows` once via useState would
@@ -89,7 +97,7 @@ export function PromptLibraryScreen({
   // correct). The effect keys solely on the stable `data` reference (new only on
   // an actual server refresh), so replacing `rows` here cannot loop.
   useEffect(() => {
-    if (mode !== "view" || pendingNav !== null || busy !== null) return;
+    if (editor !== null || busy !== null) return;
     setRows(data.prompts);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data]);
@@ -100,20 +108,25 @@ export function PromptLibraryScreen({
   useEffect(() => {
     if (handledPromptQuery.current === requestedPrompt) return;
     handledPromptQuery.current = requestedPrompt;
-    if (requestedPrompt === null || !/^[1-9]\d*$/.test(requestedPrompt)) return;
-    const requestedId = Number(requestedPrompt);
+    if (requestedPrompt === null) return;
+    // The query addresses prompts by slug (new links) or numeric id (legacy).
+    // Only navigate when the query actually matched a row: the helper falls
+    // back to the first row for unknown values, which is fine for initial
+    // selection but must not yank an in-session user around.
     const selection = initialPromptSelection(requestedPrompt, rows);
-    if (!Number.isSafeInteger(requestedId) || selection !== requestedId || selection === activeId) return;
+    const matched = rows.some(
+      (row) =>
+        row.id === selection &&
+        (row.slug === requestedPrompt || String(row.id) === requestedPrompt),
+    );
+    if (!matched || selection === activeId) return;
 
-    const go = () => {
-      setActiveId(selection);
-      setMode("view");
-      setError(null);
-      setDetailErrorId(null);
-    };
-    if (mode !== "view" && formDirty) setPendingNav(() => go);
-    else go();
-  }, [activeId, formDirty, mode, requestedPrompt, rows]);
+    // The editor modal blocks page interaction, so a query change can only
+    // arrive in view state; navigate directly.
+    setActiveId(selection);
+    setError(null);
+    setDetailErrorId(null);
+  }, [activeId, requestedPrompt, rows]);
 
   async function loadDetail(id: number) {
     try {
@@ -178,25 +191,36 @@ export function PromptLibraryScreen({
     });
   }
 
-  // Run a navigation immediately, unless a dirty draft is open, in which case
-  // stash it so the confirm bar can ask before discarding the draft. A fresh
-  // request while one is pending replaces it.
-  function requestNav(action: () => void) {
-    if (mode !== "view" && formDirty) setPendingNav(() => action);
-    else action();
+  function selectRow(id: number) {
+    setActiveId(id);
+    setError(null);
+    setDetailErrorId(null);
   }
 
-  function selectRow(id: number) {
-    const go = () => {
-      setActiveId(id);
-      setMode("view");
-      setError(null);
-      setDetailErrorId(null);
-    };
-    // Clicking the already-open prompt in view mode changes nothing, so skip the
-    // guard; any real switch routes through requestNav.
-    if (id === activeId && mode === "view") go();
-    else requestNav(go);
+  function openCreate() {
+    setError(null);
+    setEditor({
+      mode: "create",
+      promptId: null,
+      draft: { name: "", description: "", tags: [], body: "" },
+    });
+  }
+
+  function openEdit() {
+    if (activeId === null) return;
+    const detail = detailCache.get(activeId);
+    if (!detail) return;
+    setError(null);
+    setEditor({
+      mode: "edit",
+      promptId: activeId,
+      draft: {
+        name: detail.meta.name,
+        description: detail.meta.description ?? "",
+        tags: detail.meta.tags,
+        body: detail.current.body,
+      },
+    });
   }
 
   async function createPrompt(draft: PromptDraft) {
@@ -220,7 +244,7 @@ export function PromptLibraryScreen({
       const detail = (await res.json()) as PromptLibraryDetailResponse;
       applyDetail(detail);
       setActiveId(detail.meta.id);
-      setMode("view");
+      setEditor(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unable to create prompt");
     } finally {
@@ -228,9 +252,8 @@ export function PromptLibraryScreen({
     }
   }
 
-  async function saveEdit(draft: PromptDraft) {
-    if (activeId === null) return;
-    const detail = detailCache.get(activeId);
+  async function saveEdit(promptId: number, draft: PromptDraft) {
+    const detail = detailCache.get(promptId);
     if (!detail) return;
     const bodyChanged = draft.body !== detail.current.body;
     const descNext = draft.description.trim() ? draft.description : null;
@@ -243,7 +266,7 @@ export function PromptLibraryScreen({
     setError(null);
     try {
       if (bodyChanged) {
-        const res = await fetch(`/api/prompt-library/${activeId}`, {
+        const res = await fetch(`/api/prompt-library/${promptId}`, {
           method: "PUT",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ body: draft.body }),
@@ -252,12 +275,12 @@ export function PromptLibraryScreen({
           setError(await readErrorMessage(res));
           return;
         }
-        applySave(activeId, (await res.json()) as PromptLibrarySaveResponse);
+        applySave(promptId, (await res.json()) as PromptLibrarySaveResponse);
         // The head version changed, so cached usage drift is stale — re-fetch.
-        await loadUsage(activeId);
+        await loadUsage(promptId);
       }
       if (metaChanged) {
-        const res = await fetch(`/api/prompt-library/${activeId}`, {
+        const res = await fetch(`/api/prompt-library/${promptId}`, {
           method: "PATCH",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ name: draft.name, description: descNext, tags: draft.tags }),
@@ -270,7 +293,7 @@ export function PromptLibraryScreen({
         // reflects any version appended by the PUT above.
         applyDetail((await res.json()) as PromptLibraryDetailResponse);
       }
-      setMode("view");
+      setEditor(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unable to save prompt");
     } finally {
@@ -329,42 +352,47 @@ export function PromptLibraryScreen({
   const noPrompts = rows.length === 0;
   // The empty library shows its own "New prompt" CTA card, so the header button
   // would be a duplicate in that state.
-  const showEmptyState = available && noPrompts && mode !== "create";
+  const showEmptyState = available && noPrompts;
+
+  const editorDetail = editor?.promptId != null ? detailCache.get(editor.promptId) : undefined;
+  const editorBusy = busy === "create" || busy === "save";
+  const editorDirty =
+    editor !== null &&
+    (editor.mode === "create"
+      ? editor.draft.name.trim() !== "" ||
+        editor.draft.body.trim() !== "" ||
+        editor.draft.description.trim() !== "" ||
+        editor.draft.tags.length > 0
+      : editorDetail === undefined ||
+        editor.draft.name !== editorDetail.meta.name ||
+        editor.draft.description.trim() !== (editorDetail.meta.description ?? "").trim() ||
+        !sameTags(editor.draft.tags, editorDetail.meta.tags) ||
+        editor.draft.body !== editorDetail.current.body);
+  const editorSubmitDisabled =
+    editorBusy ||
+    editor === null ||
+    !editor.draft.name.trim() ||
+    !editor.draft.body.trim() ||
+    (editor.mode === "edit" && !editorDirty);
+
+  function updateDraft(patch: Partial<PromptDraft>) {
+    setEditor((prev) => (prev ? { ...prev, draft: { ...prev.draft, ...patch } } : prev));
+  }
+
+  // The rail decides replace-vs-append from the current content, mirroring the
+  // block-field editor; provenance refs do not exist on library prompts.
+  function applyEditorInsert(payload: PromptInsertPayload) {
+    setEditor((prev) => {
+      if (!prev) return prev;
+      const body = payload.mode === "replace" || prev.draft.body.trim() === ""
+        ? payload.text
+        : `${prev.draft.body}\n\n${payload.text}`;
+      return { ...prev, draft: { ...prev.draft, body } };
+    });
+  }
 
   let rightPane: ReactNode;
-  if (mode === "create") {
-    rightPane = (
-      <PromptEditorForm
-        key="create"
-        mode="create"
-        initialName=""
-        initialDescription=""
-        initialTags={[]}
-        initialBody=""
-        currentVersion={0}
-        busy={busy === "create"}
-        onSubmit={createPrompt}
-        onCancel={() => setMode("view")}
-        onDirtyChange={setFormDirty}
-      />
-    );
-  } else if (mode === "edit" && activeRow && activeDetail) {
-    rightPane = (
-      <PromptEditorForm
-        key={`edit-${activeId}`}
-        mode="edit"
-        initialName={activeDetail.meta.name}
-        initialDescription={activeDetail.meta.description ?? ""}
-        initialTags={activeDetail.meta.tags}
-        initialBody={activeDetail.current.body}
-        currentVersion={activeDetail.meta.currentVersion}
-        busy={busy === "save"}
-        onSubmit={saveEdit}
-        onCancel={() => setMode("view")}
-        onDirtyChange={setFormDirty}
-      />
-    );
-  } else if (activeRow && activeDetail === undefined && detailErrorId === activeId) {
+  if (activeRow && activeDetail === undefined && detailErrorId === activeId) {
     // A failed lazy load would otherwise strand the pane on the skeleton, and the
     // effect will not re-run for the same id, so offer an explicit retry.
     rightPane = (
@@ -389,7 +417,7 @@ export function PromptLibraryScreen({
         usage={activeId !== null ? usageCache.get(activeId) : undefined}
         canEdit={canEdit}
         busy={busy}
-        onEdit={() => setMode("edit")}
+        onEdit={openEdit}
         onArchive={archive}
         onRestore={restore}
       />
@@ -403,7 +431,8 @@ export function PromptLibraryScreen({
   }
 
   return (
-    <div className="px-4 lg:px-6 pt-5 pb-8 flex flex-col gap-4">
+    <PromptLibraryProvider>
+      <div className="px-4 lg:px-6 pt-5 pb-8 flex flex-col gap-4">
       <div className="flex items-end justify-between gap-4">
         <div>
           <div className="font-mono text-[10px] text-neutral-500 tracking-[0.06em] uppercase">
@@ -417,15 +446,7 @@ export function PromptLibraryScreen({
           </p>
         </div>
         {canEdit && available && !showEmptyState && (
-          <button
-            onClick={() =>
-              requestNav(() => {
-                setMode("create");
-                setError(null);
-              })
-            }
-            className={primaryButtonClass}
-          >
+          <button onClick={openCreate} className={primaryButtonClass}>
             New prompt
           </button>
         )}
@@ -446,7 +467,7 @@ export function PromptLibraryScreen({
             </p>
             {canEdit && (
               <div className="mt-4">
-                <button onClick={() => setMode("create")} className={primaryButtonClass}>
+                <button onClick={openCreate} className={primaryButtonClass}>
                   New prompt
                 </button>
               </div>
@@ -458,7 +479,7 @@ export function PromptLibraryScreen({
           <PromptListRail
             rows={rows}
             tags={tags}
-            activeId={mode === "create" ? null : activeId}
+            activeId={activeId}
             query={query}
             onQueryChange={setQuery}
             tag={tag}
@@ -472,33 +493,56 @@ export function PromptLibraryScreen({
               setShowArchived(false);
             }}
           />
-          <div className="flex flex-col gap-3 min-w-0">
-            {pendingNav && formDirty && (
-              <span className="flex items-center gap-3 font-body text-[12px] text-neutral-700">
-                <span>Discard draft?</span>
-                <button
-                  type="button"
-                  onClick={() => {
-                    pendingNav?.();
-                    setPendingNav(null);
-                  }}
-                  className="appearance-none border-none bg-transparent font-body text-[12px] font-semibold text-red-600 cursor-pointer"
-                >
-                  Discard
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setPendingNav(null)}
-                  className="appearance-none border-none bg-transparent font-body text-[12px] text-neutral-500 cursor-pointer"
-                >
-                  Keep editing
-                </button>
-              </span>
-            )}
-            {rightPane}
-          </div>
+          <div className="flex flex-col gap-3 min-w-0">{rightPane}</div>
         </div>
       )}
-    </div>
+
+      {editor && (
+        <PromptEditorModal
+          open
+          disabled={!canEdit}
+          onClose={() => {
+            setEditor(null);
+            setError(null);
+          }}
+          value={editor.draft.body}
+          onChange={(markdown) => updateDraft({ body: markdown })}
+          onInsert={applyEditorInsert}
+          blockName="Prompt library"
+          fieldLabel={
+            editor.mode === "create"
+              ? "New prompt"
+              : editorDetail?.meta.name ?? (editor.draft.name || "Edit prompt")
+          }
+          library={{
+            meta: {
+              name: editor.draft.name,
+              description: editor.draft.description,
+              tags: editor.draft.tags,
+            },
+            onMetaChange: (meta: PromptEditorModalMeta) => updateDraft(meta),
+            primaryLabel:
+              editor.mode === "create"
+                ? "Create prompt"
+                : `Save as v${(editorDetail?.meta.currentVersion ?? 0) + 1}`,
+            primaryDisabled: editorSubmitDisabled,
+            primaryBusy: editorBusy,
+            onPrimary: () => {
+              if (editorSubmitDisabled) return;
+              const draft: PromptDraft = {
+                ...editor.draft,
+                name: editor.draft.name.trim(),
+              };
+              if (editor.mode === "create") void createPrompt(draft);
+              else if (editor.promptId !== null) void saveEdit(editor.promptId, draft);
+            },
+            dirty: editorDirty,
+            error,
+            excludeId: editor.promptId ?? undefined,
+          }}
+        />
+      )}
+      </div>
+    </PromptLibraryProvider>
   );
 }
