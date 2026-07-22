@@ -234,6 +234,14 @@ export class GitHubAdapter
       ...this.ownerRepo,
       issue_number: prId,
     });
+    // The review's own summary body ("Request Changes" / "Comment" text typed in
+    // the main review box) lives on the review object, not on listReviewComments
+    // (those are only the line-anchored inline notes). Without this, a review
+    // carrying only a summary is invisible to the agent.
+    const { data: reviews } = await this.octokit.pulls.listReviews({
+      ...this.ownerRepo,
+      pull_number: prId,
+    });
 
     const comments: PRComment[] = [
       ...reviewComments.map((c) => ({
@@ -249,6 +257,13 @@ export class GitHubAdapter
         body: c.body ?? "",
         liked: (c.reactions?.total_count ?? 0) > 0,
       })),
+      ...reviews
+        .filter((r) => (r.body ?? "").trim().length > 0)
+        .map((r) => ({
+          author: r.user?.login ?? "unknown",
+          body: `[Review: ${formatReviewState(r.state)}] ${r.body}`,
+          liked: false,
+        })),
     ];
     return comments;
   }
@@ -452,6 +467,19 @@ export class GitHubAdapter
         },
       });
     }
+  }
+}
+
+function formatReviewState(state: string | null | undefined): string {
+  switch (state) {
+    case "CHANGES_REQUESTED":
+      return "changes requested";
+    case "APPROVED":
+      return "approved";
+    case "COMMENTED":
+      return "comment";
+    default:
+      return (state ?? "review").toLowerCase();
   }
 }
 

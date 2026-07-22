@@ -15,6 +15,8 @@ const mockOctokit = {
     create: vi.fn(),
     list: vi.fn(),
     get: vi.fn(),
+    listReviewComments: vi.fn(),
+    listReviews: vi.fn(),
   },
   issues: {
     listComments: vi.fn(),
@@ -300,6 +302,55 @@ describe("GitHubAdapter", () => {
       expect(result).toEqual({
         url: "https://github.com/test-org/test-repo/pull/42#issuecomment-1",
       });
+    });
+  });
+
+  describe("getPRComments", () => {
+    it("includes inline comments, issue comments, and review summary bodies", async () => {
+      mockOctokit.pulls.listReviewComments.mockResolvedValueOnce({
+        data: [
+          {
+            user: { login: "reviewer" },
+            body: "rename this",
+            reactions: { total_count: 0 },
+            path: "src/a.ts",
+            line: 12,
+            start_line: null,
+          },
+        ],
+      });
+      mockOctokit.issues.listComments.mockResolvedValueOnce({
+        data: [{ user: { login: "reviewer" }, body: "general note", reactions: { total_count: 1 } }],
+      });
+      mockOctokit.pulls.listReviews.mockResolvedValueOnce({
+        data: [
+          { user: { login: "reviewer" }, state: "CHANGES_REQUESTED", body: "please fix the null check" },
+          // Approvals/dismissals with no summary text must not pollute the prompt.
+          { user: { login: "reviewer" }, state: "APPROVED", body: "" },
+        ],
+      });
+
+      const adapter = ghAdapter();
+      const comments = await adapter.getPRComments(42);
+
+      expect(mockOctokit.pulls.listReviews).toHaveBeenCalledWith({
+        owner: "test-org",
+        repo: "test-repo",
+        pull_number: 42,
+      });
+      expect(comments).toContainEqual(
+        expect.objectContaining({ filePath: "src/a.ts", body: "rename this", endLine: 12 }),
+      );
+      expect(comments).toContainEqual(
+        expect.objectContaining({ body: "general note", liked: true }),
+      );
+      expect(comments).toContainEqual({
+        author: "reviewer",
+        body: "[Review: changes requested] please fix the null check",
+        liked: false,
+      });
+      // The empty-body approval is filtered out.
+      expect(comments).toHaveLength(3);
     });
   });
 

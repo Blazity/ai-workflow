@@ -88,6 +88,7 @@ function makeSource(overrides: Partial<Source> = {}): Source {
     researchPlanMarkdown: "",
     publication: null,
     selectedRepositories: [],
+    repositoryContexts: [],
     ...overrides,
   };
 }
@@ -101,7 +102,7 @@ describe("buildPromptVariables", () => {
     expect(Object.keys(vars).sort()).toEqual(PROMPT_VARIABLES.map((v) => v.name).sort());
   });
 
-  it("resolves all twelve variables from a stubbed context", () => {
+  it("resolves all variables from a stubbed context", () => {
     const vars = buildPromptVariables(
       makeSource({
         entry: prEntry,
@@ -122,7 +123,33 @@ describe("buildPromptVariables", () => {
       pr_url: "https://github.com/acme/api/pull/77",
       pr_title: "Implement dark mode",
       repo_path: "acme/api",
+      pr_review_feedback: "",
     });
+  });
+
+  it("renders pr_review_feedback from workflow-owned PR comments, empty when none", () => {
+    expect(buildPromptVariables(makeSource()).pr_review_feedback).toBe("");
+
+    const vars = buildPromptVariables(
+      makeSource({
+        repositoryContexts: [
+          {
+            repository: {
+              provider: "github",
+              repoPath: "acme/api",
+              defaultBranch: "main",
+              selectedRationale: "workflow-owned branch for this ticket",
+            },
+            prComments: [
+              { author: "reviewer", body: "[Review: changes requested] fix the null check", liked: false },
+            ],
+            checkResults: [],
+            hasConflicts: false,
+          },
+        ],
+      }),
+    );
+    expect(vars.pr_review_feedback).toContain("fix the null check");
   });
 
   it("leaves pr variables empty on a ticket-triggered run", () => {

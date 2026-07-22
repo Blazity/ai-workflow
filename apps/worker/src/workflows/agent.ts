@@ -1989,6 +1989,7 @@ async function agentWorkflowBody(
               attachments: downloadedAttachments,
               preSandboxAdditions: ctx.preSandboxAdditions.implementation,
               selectedRepositories: ctx.selectedRepositories,
+              repositoryContexts: ctx.repositoryContexts,
             });
 
             const implCommandId = await writeAndStartPhase(
