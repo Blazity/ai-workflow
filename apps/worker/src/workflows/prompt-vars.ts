@@ -5,6 +5,7 @@ import type {
   WorkflowParamValue,
 } from "@shared/contracts";
 import type { EngineCtx } from "./blocks/types.js";
+import { formatPRComments } from "../sandbox/context.js";
 
 /** Which string/string[] params of each block type receive {{var}} substitution.
  *  Deliberately excludes machine-shaped params (branch.condition, outputSchema,
@@ -41,14 +42,26 @@ type PromptVariableSource = Pick<
   | "researchPlanMarkdown"
   | "publication"
   | "selectedRepositories"
+  | "repositoryContexts"
 >;
 
 /** Snapshot every prompt variable for the current point of the run. Called per
  *  block execution because researchPlanMarkdown / publication / selectedRepositories
  *  mutate mid-run. */
 export function buildPromptVariables(ctx: PromptVariableSource): PromptVariableValues {
-  const { entry, ticket, publication, selectedRepositories } = ctx;
+  const { entry, ticket, publication, selectedRepositories, repositoryContexts } = ctx;
   const prEntry = entry.kind === "pr_trigger" ? entry.pr : null;
+  // Human PR review feedback for {{pr_review_feedback}}: one block per
+  // workflow-owned repo, each under its own `provider:repoPath` heading so a
+  // multi-repo run never conflates same-path comments across checkouts. Same
+  // formatter the fix/impl context envelopes use. Empty when no feedback yet.
+  const prReviewFeedback = repositoryContexts
+    .filter((context) => context.prComments.length > 0)
+    .map(
+      (context) =>
+        `### ${context.repository.provider}:${context.repository.repoPath}\n${formatPRComments(context.prComments)}`,
+    )
+    .join("\n\n");
   // The PR this run opened (open_pr / finalize_workspace) once publication lands.
   const openedPr = publication?.prs[0];
 
@@ -74,6 +87,7 @@ export function buildPromptVariables(ctx: PromptVariableSource): PromptVariableV
     pr_url: prUrl,
     pr_title: prTitle,
     repo_path: repoPath,
+    pr_review_feedback: prReviewFeedback,
   };
 }
 

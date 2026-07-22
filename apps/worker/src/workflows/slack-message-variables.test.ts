@@ -61,6 +61,7 @@ function makeSource(overrides: Partial<Source> = {}): Source {
     researchPlanMarkdown: "",
     publication: publishedPr,
     selectedRepositories: [],
+    repositoryContexts: [],
     ...overrides,
   };
 }

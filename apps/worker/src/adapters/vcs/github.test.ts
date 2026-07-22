@@ -15,6 +15,8 @@ const mockOctokit = {
     create: vi.fn(),
     list: vi.fn(),
     get: vi.fn(),
+    listReviewComments: vi.fn(),
+    listReviews: vi.fn(),
   },
   issues: {
     listComments: vi.fn(),
@@ -300,6 +302,60 @@ describe("GitHubAdapter", () => {
       expect(result).toEqual({
         url: "https://github.com/test-org/test-repo/pull/42#issuecomment-1",
       });
+    });
+  });
+
+  describe("getPRComments", () => {
+    it("paginates and includes inline comments, issue comments, and review summary bodies", async () => {
+      const reviewComments = [
+        {
+          user: { login: "reviewer" },
+          body: "rename this",
+          reactions: { total_count: 0 },
+          path: "src/a.ts",
+          line: 12,
+          start_line: null,
+        },
+      ];
+      const issueComments = [
+        { user: { login: "reviewer" }, body: "general note", reactions: { total_count: 1 } },
+      ];
+      const reviews = [
+        { user: { login: "reviewer" }, state: "CHANGES_REQUESTED", body: "please fix the null check" },
+        // Approvals/dismissals with no summary text must not pollute the prompt.
+        { user: { login: "reviewer" }, state: "APPROVED", body: "" },
+      ];
+      // paginate() follows every page; the adapter must read all three lists
+      // through it, not a single first page.
+      mockOctokit.paginate.mockImplementation(async (endpoint: unknown) => {
+        if (endpoint === mockOctokit.pulls.listReviewComments) return reviewComments;
+        if (endpoint === mockOctokit.issues.listComments) return issueComments;
+        if (endpoint === mockOctokit.pulls.listReviews) return reviews;
+        return [];
+      });
+
+      const adapter = ghAdapter();
+      const comments = await adapter.getPRComments(42);
+
+      // Regression: review summaries (and inline/issue comments) are paginated so
+      // feedback past the first page is never dropped.
+      expect(mockOctokit.paginate).toHaveBeenCalledWith(
+        mockOctokit.pulls.listReviews,
+        expect.objectContaining({ pull_number: 42, per_page: 100 }),
+      );
+      expect(comments).toContainEqual(
+        expect.objectContaining({ filePath: "src/a.ts", body: "rename this", endLine: 12 }),
+      );
+      expect(comments).toContainEqual(
+        expect.objectContaining({ body: "general note", liked: true }),
+      );
+      expect(comments).toContainEqual({
+        author: "reviewer",
+        body: "[Review: changes requested] please fix the null check",
+        liked: false,
+      });
+      // The empty-body approval is filtered out.
+      expect(comments).toHaveLength(3);
     });
   });
 

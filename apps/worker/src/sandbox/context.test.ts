@@ -225,6 +225,65 @@ describe("assembleImplementationContext (new)", () => {
     expect(result).toContain("You are an implementation agent...");
   });
 
+  it("surfaces PR review feedback when re-run against an existing PR", () => {
+    const result = assembleImplementationContext({
+      ticket: {
+        identifier: "TEST-9",
+        title: "Add login page",
+        description: "Build a login page",
+        acceptanceCriteria: "User can log in",
+        comments: [],
+      },
+      prompt: "You are an implementation agent...",
+      researchPlanMarkdown: "plan",
+      repositoryContexts: [
+        {
+          repository: {
+            provider: "github",
+            repoPath: "acme/api",
+            defaultBranch: "main",
+            selectedRationale: "workflow-owned branch for this ticket",
+          },
+          prComments: [
+            { author: "Bob", body: "[Review: changes requested] fix the null check", liked: false },
+          ],
+          checkResults: [],
+          hasConflicts: false,
+        },
+      ],
+    });
+
+    expect(result).toContain("## PR Review Feedback: github:acme/api");
+    expect(result).toContain("fix the null check");
+  });
+
+  it("omits PR review feedback when repositoryContexts are absent or empty", () => {
+    const base = {
+      ticket: { identifier: "X", title: "t", description: "d", acceptanceCriteria: "a", comments: [] },
+      prompt: "p",
+      researchPlanMarkdown: "plan",
+    };
+    expect(assembleImplementationContext(base)).not.toContain("## PR Review Feedback");
+    expect(
+      assembleImplementationContext({
+        ...base,
+        repositoryContexts: [
+          {
+            repository: {
+              provider: "github",
+              repoPath: "acme/api",
+              defaultBranch: "main",
+              selectedRationale: "workflow-owned branch for this ticket",
+            },
+            prComments: [],
+            checkResults: [],
+            hasConflicts: false,
+          },
+        ],
+      }),
+    ).not.toContain("## PR Review Feedback");
+  });
+
   it("renders attachments index when attachments are provided", () => {
     const result = assembleImplementationContext({
       ticket: {

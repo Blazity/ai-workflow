@@ -225,14 +225,25 @@ export class GitHubAdapter
   }
 
   async getPRComments(prId: number): Promise<PRComment[]> {
-    const { data: reviewComments } =
-      await this.octokit.pulls.listReviewComments({
-        ...this.ownerRepo,
-        pull_number: prId,
-      });
-    const { data: issueComments } = await this.octokit.issues.listComments({
+    // Paginate all three: a PR with many comments/reviews would otherwise drop
+    // feedback past the first page (default 30), silently starving the agent.
+    const reviewComments = await this.octokit.paginate(
+      this.octokit.pulls.listReviewComments,
+      { ...this.ownerRepo, pull_number: prId, per_page: 100 },
+    );
+    const issueComments = await this.octokit.paginate(this.octokit.issues.listComments, {
       ...this.ownerRepo,
       issue_number: prId,
+      per_page: 100,
+    });
+    // The review's own summary body ("Request Changes" / "Comment" text typed in
+    // the main review box) lives on the review object, not on listReviewComments
+    // (those are only the line-anchored inline notes). Without this, a review
+    // carrying only a summary is invisible to the agent.
+    const reviews = await this.octokit.paginate(this.octokit.pulls.listReviews, {
+      ...this.ownerRepo,
+      pull_number: prId,
+      per_page: 100,
     });
 
     const comments: PRComment[] = [
@@ -249,6 +260,13 @@ export class GitHubAdapter
         body: c.body ?? "",
         liked: (c.reactions?.total_count ?? 0) > 0,
       })),
+      ...reviews
+        .filter((r) => (r.body ?? "").trim().length > 0)
+        .map((r) => ({
+          author: r.user?.login ?? "unknown",
+          body: `[Review: ${formatReviewState(r.state)}] ${r.body}`,
+          liked: false,
+        })),
     ];
     return comments;
   }
@@ -452,6 +470,19 @@ export class GitHubAdapter
         },
       });
     }
+  }
+}
+
+function formatReviewState(state: string | null | undefined): string {
+  switch (state) {
+    case "CHANGES_REQUESTED":
+      return "changes requested";
+    case "APPROVED":
+      return "approved";
+    case "COMMENTED":
+      return "comment";
+    default:
+      return (state ?? "review").toLowerCase();
   }
 }
 
