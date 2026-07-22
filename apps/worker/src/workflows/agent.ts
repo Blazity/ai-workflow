@@ -953,10 +953,12 @@ export async function parkForClarificationStep(
   );
   const db = getDb();
   const { issueTracker } = createStepAdapters();
-  // No Jira comment: the questions live durably in the clarification store and
-  // the overview reads awaiting state from the DB. The label is ticket-status
-  // truth only now (it no longer drives any Jira scan). Best-effort, so a label
-  // failure never blocks the park.
+  // The questions live durably in the clarification store and the overview reads
+  // awaiting state from the DB; the caller also posts a best-effort Jira comment
+  // with the questions separately (postClarificationQuestionsCommentStep). This
+  // step only moves the label/column. The label is ticket-status truth only now
+  // (it no longer drives any Jira scan). Best-effort, so a label failure never
+  // blocks the park.
   if (typeof issueTracker.updateLabels === "function") {
     try {
       await updateTicketLabelsForRun({
@@ -1066,6 +1068,52 @@ export async function postPickupCommentStep(
   }
 }
 postPickupCommentStep.maxRetries = 0;
+
+export async function postClarificationQuestionsCommentStep(
+  ticketKey: string,
+  input: {
+    questions: string[];
+    suggestedAnswers: string[] | null;
+    dashboardUrl: string;
+    expiresAtIso: string | null;
+  },
+  owner: ActiveRunOwner,
+): Promise<string | null> {
+  "use step";
+  const { getDb } = await import("../db/client.js");
+  const { assertActiveRunOwner } = await import("../lib/active-run-owner.js");
+  const { createStepAdapters } = await import("../lib/step-adapters.js");
+  const { env } = await import("../../env.js");
+  const { formatClarificationQuestionsComment } = await import(
+    "../clarifications/comment-format.js"
+  );
+  const { issueTracker } = createStepAdapters();
+  // Best-effort: surfacing the questions in Jira must never fail the paused run.
+  // Returns the comment deep-link on success, null on any failure. A run-control
+  // error still rethrows so the workflow ownership CAS is honored.
+  try {
+    await assertActiveRunOwner(getDb(), owner);
+    return await issueTracker.postComment(
+      ticketKey,
+      formatClarificationQuestionsComment({
+        questions: input.questions,
+        suggestedAnswers: input.suggestedAnswers,
+        dashboardUrl: input.dashboardUrl,
+        aiColumnName: env.COLUMN_AI,
+        expiresAtIso: input.expiresAtIso,
+      }),
+    );
+  } catch (err) {
+    if (isRunControlError(err)) throw err;
+    const { logger } = await import("../lib/logger.js");
+    logger.warn(
+      { ticketKey, err: errorMessage(err) },
+      "clarification_questions_comment_failed",
+    );
+    return null;
+  }
+}
+postClarificationQuestionsCommentStep.maxRetries = 0;
 
 async function loadClarificationHistoryStep(
   ticketKey: string,
@@ -1734,9 +1782,22 @@ async function agentWorkflowBody(
               console.error(`Clarification ticket parking failed for ${clarification.id}:`, error);
               return false;
             });
+            const questionsCommentUrl = await postClarificationQuestionsCommentStep(
+              ticket.identifier,
+              {
+                questions,
+                suggestedAnswers: suggestedAnswers ?? null,
+                dashboardUrl: ticketRunUrl(env.DASHBOARD_ORIGIN, ticket.identifier, workflowRunId),
+                expiresAtIso: clarification.expiresAt,
+              },
+              transitionOwner,
+            );
             await notifyTicketBestEffort(ticket.identifier, {
               kind: "needs_clarification",
               dashboardUrl: ticketRunUrl(env.DASHBOARD_ORIGIN, ticket.identifier, workflowRunId),
+              ...(questionsCommentUrl ? { commentUrl: questionsCommentUrl } : {}),
+              questions,
+              ...(suggestedAnswers && suggestedAnswers.length > 0 ? { suggestedAnswers } : {}),
               usageReport: usageReportOrUndefined(),
             }, transitionOwner);
           }

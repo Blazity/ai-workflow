@@ -17,6 +17,7 @@ export interface HookClarificationRow {
   status: ClarificationStatus;
   hookToken: string;
   askedAt: Date;
+  expiresAt: Date | null;
   answer: string | null;
   answeredById: string | null;
   answeredByLabel: string | null;
@@ -46,6 +47,7 @@ function mapHookRow(
     status: row.status as ClarificationStatus,
     hookToken: row.hookToken,
     askedAt: row.askedAt,
+    expiresAt: row.expiresAt,
     answer: row.answer,
     answeredById: row.answeredById,
     answeredByLabel: row.answeredByLabel,

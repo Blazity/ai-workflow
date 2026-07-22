@@ -37,6 +37,7 @@ export async function prepareClarificationHookStep(input: {
     id: row.id,
     hookToken: row.hookToken,
     snapshotRequestedAt: row.askedAt.toISOString(),
+    expiresAt: row.expiresAt?.toISOString() ?? null,
   };
 }
 
