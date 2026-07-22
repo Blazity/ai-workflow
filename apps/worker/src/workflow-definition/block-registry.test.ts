@@ -90,6 +90,8 @@ describe("workflow block registry", () => {
         required: true,
         schema: expect.objectContaining({ type: "array" }),
       },
+      title: { required: false, schema: { type: "string" } },
+      body: { required: false, schema: { type: "string" } },
     });
     expect(registry.planning_agent.inputs).toEqual({
       ticket: { required: false, schema: expect.objectContaining({ type: "object" }) },

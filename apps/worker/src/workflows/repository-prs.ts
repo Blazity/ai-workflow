@@ -44,6 +44,7 @@ export async function createOrFindWorkflowOwnedPullRequest(input: {
   branchName: string;
   repository: SelectedRepository;
   title: string;
+  body: string;
   owner: ActiveRunOwner;
 }): Promise<WorkflowPrLink> {
   "use step";
@@ -198,6 +199,7 @@ async function resolveWorkflowOwnedPullRequest(
     branchName: string;
     repository: SelectedRepository;
     title: string;
+    body?: string;
   },
   createVcs: (input: {
     provider: SelectedRepository["provider"];
@@ -233,6 +235,7 @@ async function resolveWorkflowOwnedPullRequest(
     vcs,
     branchName,
     input.title,
+    input.body ?? "",
     assertProviderMutation,
   );
   return {
@@ -249,6 +252,7 @@ async function createOrFindPullRequest(
   vcs: VCSAdapter,
   branchName: string,
   title: string,
+  body: string,
   assertProviderMutation?: () => Promise<void>,
 ): Promise<{ pr: PullRequest; isNew: boolean }> {
   const beforeCreate = await vcs.findPR(branchName);
@@ -256,7 +260,7 @@ async function createOrFindPullRequest(
 
   try {
     await assertProviderMutation?.();
-    return { pr: await vcs.createPR(branchName, title, ""), isNew: true };
+    return { pr: await vcs.createPR(branchName, title, body), isNew: true };
   } catch (err) {
     if (isRunControlError(err)) throw err;
     // Creation can succeed remotely and still time out before the response

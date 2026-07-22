@@ -9,7 +9,7 @@ import type {
   WorkflowEditorOptions,
   WorkflowParamValue,
 } from "@shared/contracts";
-import { DEFAULT_PROMPT_NAME_BY_AGENT } from "@shared/contracts";
+import { DEFAULT_OPEN_PR_TITLE, DEFAULT_PROMPT_NAME_BY_AGENT } from "@shared/contracts";
 import { parseCondition } from "@shared/conditions";
 import {
   arrayToLines,
@@ -691,7 +691,28 @@ export function ConfigFields({
     case "fetch_pr_context":
       return <ConfigNote>Loads the pull request diff, files and metadata for downstream steps.</ConfigNote>;
     case "open_pr":
-      return <ConfigNote>Opens a pull request with the agent&apos;s changes on the ticket branch.</ConfigNote>;
+      return (
+        <>
+          <ConfigField label="Title">
+            <TextInput
+              value={str(node.params.title)}
+              disabled={!canEdit}
+              placeholder={DEFAULT_OPEN_PR_TITLE}
+              onChange={(v) => onChange("params.title", v)}
+            />
+          </ConfigField>
+          <ConfigField label="Description">
+            <RichTextField
+              value={str(node.params.body)}
+              disabled={!canEdit}
+              onChange={(v) => onChange("params.body", v)}
+            />
+          </ConfigField>
+          <ConfigNote>
+            {"Templates for the pull request opened on the ticket branch. Variables like {{ticket_key}}, {{ticket_title}}, {{ticket_url}} (issue tracker link) and {{change_summary}} (what the agent changed) are substituted at run time. Leave a field empty to use the default."}
+          </ConfigNote>
+        </>
+      );
     case "update_ticket_status":
       return (
         <ConfigField label="Target status">

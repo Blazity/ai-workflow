@@ -1,5 +1,7 @@
 import {
   BLOCK_TYPE_SPECS,
+  DEFAULT_OPEN_PR_BODY,
+  DEFAULT_OPEN_PR_TITLE,
   isWorkflowAddressablePathSegment,
   type BlockOutput,
   type VcsProviderKind,
@@ -628,8 +630,12 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
       "Creates or reuses pull or merge requests from a successful Finalize output.",
       "⇪",
     ),
-    defaults: {},
-    inputs: { repositories: input(arrayType(finalizedBranchType), true) },
+    defaults: { title: DEFAULT_OPEN_PR_TITLE, body: DEFAULT_OPEN_PR_BODY },
+    inputs: {
+      repositories: input(arrayType(finalizedBranchType), true),
+      title: input(stringType(), false),
+      body: input(stringType(), false),
+    },
     output: statusOutput({
       prs: arrayType(workflowPrRefType),
       prUrl: stringType(),

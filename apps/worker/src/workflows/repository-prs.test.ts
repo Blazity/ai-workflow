@@ -349,11 +349,18 @@ describe("durable publication PR phases", () => {
         workflowOwnedBranch: { branchName: "blazebot/aiw-100" },
       },
       title: "Safe publication",
+      body: "## What changed\nThings.",
       owner: durableOwner,
     });
 
     expect(order).toEqual(["reconcile", "owner-fence", "create"]);
     expect(mocks.assertActiveRunOwner).toHaveBeenCalledWith({ db: true }, durableOwner);
+    // The resolved title and body are handed to the provider verbatim.
+    expect(createPR).toHaveBeenCalledWith(
+      "blazebot/aiw-100",
+      "Safe publication",
+      "## What changed\nThings.",
+    );
   });
 
   it("does not create a provider PR when cancellation wins after reconciliation", async () => {
@@ -378,6 +385,7 @@ describe("durable publication PR phases", () => {
           workflowOwnedBranch: { branchName: "blazebot/aiw-100" },
         },
         title: "Safe publication",
+        body: "## What changed\nThings.",
         owner: durableOwner,
       }),
     ).rejects.toBe(ownerLoss);
@@ -405,6 +413,7 @@ describe("durable publication PR phases", () => {
         workflowOwnedBranch: { branchName: "blazebot/aiw-100" },
       },
       title: "Safe publication",
+      body: "## What changed\nThings.",
       owner: durableOwner,
     });
 
@@ -438,6 +447,7 @@ describe("durable publication PR phases", () => {
           workflowOwnedBranch: { branchName: "blazebot/aiw-100" },
         },
         title: "Safe publication",
+        body: "## What changed\nThings.",
         owner: durableOwner,
       }),
     ).resolves.toEqual({

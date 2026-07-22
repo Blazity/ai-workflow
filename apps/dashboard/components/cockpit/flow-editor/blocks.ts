@@ -90,6 +90,10 @@ export function nodeSummary(node: FlowNodeDef, options: WorkflowEditorOptions): 
       const body = str(node.params.body);
       return body !== "" ? truncate(body) : null;
     }
+    case "open_pr": {
+      const title = str(node.params.title);
+      return title !== "" ? truncate(title) : null;
+    }
     case "update_ticket_status": {
       const target = node.params.target;
       const label = options.ticketStatusTargets.find((t) => t.value === target)?.label;

@@ -49,6 +49,14 @@ export interface EngineCtx {
   /** What started this run. */
   entry: AgentWorkflowInput;
   ticket: TicketContent;
+  /** Ticket URL in the issue tracker (JIRA_BASE_URL/browse/<key>); empty when the
+   *  run has no ticket. Backs the {{ticket_url}} prompt variable so open_pr and
+   *  comment templates can link back to the ticket. */
+  ticketUrl: string;
+  /** Summary of what the agent changed, carried from the implementation phase.
+   *  Backs {{change_summary}} for the open_pr description; empty until the
+   *  implementation phase produces one. */
+  changeSummary: string;
   /** Answered Q&A history for the ticket, injected into fix-phase context so a
    *  resumed run sees what a human already answered; absent when there is none. */
   clarifications?: Array<{

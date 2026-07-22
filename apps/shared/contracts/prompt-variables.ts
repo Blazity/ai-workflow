@@ -9,9 +9,11 @@ export interface PromptVariableSpec {
 export const PROMPT_VARIABLES = [
   { name: "ticket_key", description: "Ticket identifier, e.g. ABC-123." },
   { name: "ticket_title", description: "Ticket title." },
+  { name: "ticket_url", description: "URL of the ticket in the issue tracker; empty for non-ticket runs." },
   { name: "ticket_description", description: "Ticket description (markdown)." },
   { name: "ticket_acceptance_criteria", description: "Acceptance criteria; empty when none." },
   { name: "ticket_labels", description: "Comma-separated ticket labels." },
+  { name: "change_summary", description: "Summary of what the agent changed, from the implementation phase; empty before it runs." },
   { name: "branch_name", description: "Work branch for this run." },
   { name: "run_id", description: "Durable workflow run id." },
   { name: "plan_markdown", description: "Plan produced by the planning agent (or the approved plan); empty before planning." },
@@ -22,3 +24,14 @@ export const PROMPT_VARIABLES = [
 ] as const satisfies readonly PromptVariableSpec[];
 
 export type PromptVariableName = (typeof PROMPT_VARIABLES)[number]["name"];
+
+/** Default {{variable}} templates for the open_pr block's title and body. New
+ *  blocks are seeded with these (block registry defaults); a deployed definition
+ *  authored before these fields existed falls back to them at run time. Editable
+ *  per-block in the flow editor. The title carries the ticket key for tracking;
+ *  the body opens with the ticket link and the agent's change summary. */
+export const DEFAULT_OPEN_PR_TITLE = "[{{ticket_key}}] {{ticket_title}}";
+export const DEFAULT_OPEN_PR_BODY = `**Ticket:** [{{ticket_key}}]({{ticket_url}})
+
+## What changed
+{{change_summary}}`;

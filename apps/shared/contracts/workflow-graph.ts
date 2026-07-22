@@ -93,7 +93,7 @@ export const BLOCK_PARAM_KEYS: Record<WorkflowBlockType, readonly string[]> = {
   run_checks: ["commands"],
   call_llm: ["prompt", "system", "model", "provider", "outputSchema"],
   fetch_pr_context: [],
-  open_pr: [],
+  open_pr: ["title", "body"],
   update_ticket_status: ["target"],
   post_ticket_comment: ["body"],
   post_pr_comment: ["body", "target"],

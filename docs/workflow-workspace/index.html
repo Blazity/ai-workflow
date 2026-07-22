@@ -1026,8 +1026,9 @@
           requiredOutputs: [...STATUS_OUTPUT, ...typedPaths("unknown[]", "contexts")],
           statuses: ["ok"],
         }),
-        open_pr: runtimeContract([], {
+        open_pr: runtimeContract(["title", "body"], {
           requiredInputs: typedPaths("object[]", "repositories"),
+          optionalInputs: typedPaths("string", "title", "body"),
           requiredOutputs: [...STATUS_OUTPUT, ...typedPaths("object[]", "prs")],
           optionalOutputs: [
             ...typedPaths("string", "prUrl"),
