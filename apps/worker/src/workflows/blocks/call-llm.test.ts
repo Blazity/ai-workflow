@@ -44,7 +44,7 @@ describe("call_llm execute", () => {
     const result = await execute(makeNode("call_llm", { prompt: "hi" }, "llm-1"), {}, ctx);
 
     expect(result.kind).toBe("next");
-    expect(result.output).toEqual({ status: "ok", output: "answer" });
+    expect(result.output!).toEqual({ status: "ok", output: "answer" });
     expect(mocks.generateStructured).toHaveBeenCalledWith({
       provider: "claude",
       model: "claude-haiku-4-5",
@@ -207,7 +207,7 @@ describe("call_llm execute", () => {
       makeCtx(),
     );
 
-    expect(result.output).toEqual({ status: "ok", output: { answer: 42 } });
+    expect(result.output!).toEqual({ status: "ok", output: { answer: 42 } });
     expect(mocks.generateStructured).toHaveBeenCalledWith({
       model: "claude-opus-4",
       prompt: "hi",
@@ -240,8 +240,8 @@ describe("call_llm execute", () => {
       makeCtx(),
     );
 
-    expect(result.kind).toBe("failed");
-    if (result.kind === "failed") expect(result.reason).toBe("invalid outputSchema");
+    expect(result.kind).toBe("execution_error");
+    if (result.kind === "execution_error") expect(result.error.detail).toBe("invalid outputSchema");
     expect(mocks.generateStructured).not.toHaveBeenCalled();
   });
 
@@ -251,8 +251,8 @@ describe("call_llm execute", () => {
 
     const result = await execute(makeNode("call_llm", { prompt: "hi" }), {}, ctx);
 
-    expect(result.kind).toBe("failed");
-    if (result.kind === "failed") expect(result.reason).toBe("api down");
+    expect(result.kind).toBe("execution_error");
+    if (result.kind === "execution_error") expect(result.error.detail).toBe("api down");
     expect(ctx.markLaunched).toHaveBeenCalledWith("LLM blk");
     expect(ctx.recordUsage).toHaveBeenCalledWith("LLM blk", null, "claude-haiku-4-5");
   });
@@ -301,9 +301,12 @@ describe("call_llm execute", () => {
     const result = await execute(makeNode("call_llm", { prompt: "hi" }), {}, ctx);
 
     expect(result).toEqual({
-      kind: "failed",
-      output: { status: "failed" },
-      reason: "provider timed out",
+      kind: "execution_error",
+      error: {
+        category: "provider",
+        message: "An external service could not complete this block.",
+        detail: "provider timed out",
+      },
     });
     expect(ctx.recordUsage).toHaveBeenCalledWith("LLM blk", null, "claude-haiku-4-5");
   });

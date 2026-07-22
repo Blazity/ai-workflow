@@ -151,7 +151,7 @@ describe("post_pr_comment execute", () => {
     );
     expect(result.kind).toBe("next");
     if (result.kind === "next") {
-      expect(result.output.comments).toHaveLength(2);
+      expect(result.output!.comments).toHaveLength(2);
     }
   });
 
@@ -225,8 +225,8 @@ describe("post_pr_comment execute", () => {
         }),
       );
 
-      expect(result.kind).toBe("failed");
-      if (result.kind === "failed") expect(result.reason).toContain(expectedReason);
+      expect(result.kind).toBe("execution_error");
+      if (result.kind === "execution_error") expect(result.error.detail).toContain(expectedReason);
       expect(postPRComment).not.toHaveBeenCalled();
     },
   );
@@ -259,8 +259,8 @@ describe("post_pr_comment execute", () => {
         makeCtx({ publication: publication() }),
       );
 
-      expect(result.kind).toBe("failed");
-      if (result.kind === "failed") expect(result.reason).toContain(expectedReason);
+      expect(result.kind).toBe("execution_error");
+      if (result.kind === "execution_error") expect(result.error.detail).toContain(expectedReason);
       expect(postPRComment).not.toHaveBeenCalled();
     },
   );
@@ -298,7 +298,7 @@ describe("post_pr_comment execute", () => {
     expect(postPRComment).toHaveBeenCalledWith(7, "merged");
   });
 
-  it("returns failed with partial comments when one target errors", async () => {
+  it("returns an execution error without publishing partial comments", async () => {
     const postPRComment = vi
       .fn()
       .mockResolvedValueOnce({ url: "https://pr/comment" })
@@ -311,19 +311,17 @@ describe("post_pr_comment execute", () => {
       makeCtx({ publication: publication() }),
     );
 
-    expect(result.kind).toBe("failed");
-    if (result.kind === "failed") {
-      expect(result.reason).toContain("gitlab down");
-      expect(result.output.comments).toEqual([
-        { provider: "github", repoPath: "acme/api", prId: 7, url: "https://pr/comment" },
-      ]);
+    expect(result.kind).toBe("execution_error");
+    if (result.kind === "execution_error") {
+      expect(result.error.detail).toContain("gitlab down");
+      expect(result.output).toBeUndefined();
     }
   });
 
   it("fails when no pull request is in scope", async () => {
     const result = await execute(makeNode("post_pr_comment", { body: "hi" }), {}, makeCtx());
-    expect(result.kind).toBe("failed");
-    if (result.kind === "failed") expect(result.reason).toContain("no pull request in scope");
+    expect(result.kind).toBe("execution_error");
+    if (result.kind === "execution_error") expect(result.error.detail).toContain("no pull request in scope");
   });
 
   it.each(runControlErrorCases())(

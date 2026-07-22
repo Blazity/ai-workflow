@@ -16,7 +16,13 @@ import {
   resolvedFixConflicts,
   type FixWorkspaceState,
 } from "./fix-workspace-state.js";
-import { sanitizeBlockId, type BlockExecuteFn, type BlockExecutionResult, type EngineCtx } from "./types.js";
+import {
+  executionError,
+  sanitizeBlockId,
+  type BlockExecuteFn,
+  type BlockExecutionResult,
+  type EngineCtx,
+} from "./types.js";
 
 export const paramsSchema = z
   .object({
@@ -164,7 +170,7 @@ export const execute: BlockExecuteFn = async (
   const workspace = await ensureWorkspace(ctx, execution);
   if (workspace.kind !== "next") return workspace;
   if (!ctx.sandboxId) {
-    return { kind: "failed", output: { status: "failed" }, reason: "workspace was not attached" };
+    return executionError("workspace was not attached", { category: "sandbox" });
   }
   const sandboxId = ctx.sandboxId;
   const { kind, model } = resolveBlockAgent(block.params, ctx.runDefaultKind, ctx.defaults);
@@ -196,15 +202,7 @@ export const execute: BlockExecuteFn = async (
       ctx.observeBudget,
     );
     if (!done) {
-      // The shared poller's timeout contract (implemented with AIW-102) stops
-      // the detached command before returning false. Re-read afterward because
-      // the phase may still have committed work or partially resolved conflicts.
-      const after = await inspectFixWorkspace(sandboxId);
-      return {
-        kind: "failed",
-        output: workspaceStateOutput("failed", sandboxId, before, after),
-        reason: "fix phase timed out",
-      };
+      return executionError("fix phase timed out", { category: "timeout" });
     }
 
     const { collectPhase } = await import("../../sandbox/poll-agent.js");
@@ -235,11 +233,7 @@ export const execute: BlockExecuteFn = async (
       };
     }
     if (output.result === "failed") {
-      return {
-        kind: "failed",
-        output: workspaceStateOutput("failed", sandboxId, before, after),
-        reason: output.error ?? "unknown",
-      };
+      return executionError(output.error ?? "unknown", { category: "provider" });
     }
     if (after.unresolvedConflicts.length > 0) {
       const questions = [formatUnresolvedConflictQuestion(after)];
@@ -263,17 +257,9 @@ export const execute: BlockExecuteFn = async (
     };
   } catch (err) {
     if (isRunControlError(err)) throw err;
-    return {
-      kind: "failed",
-      output: {
-        status: "failed",
-        workspaceId: sandboxId,
-        commits: [],
-        resolvedConflicts: [],
-        unresolvedConflicts: [],
-      },
-      reason: err instanceof Error ? err.message : String(err),
-    };
+    return executionError(err instanceof Error ? err.message : String(err), {
+      category: "provider",
+    });
   }
 };
 
@@ -290,18 +276,6 @@ function workspaceStateFields(
     commits: after.commits,
     resolvedConflicts: resolvedFixConflicts(before, after),
     unresolvedConflicts: after.unresolvedConflicts,
-  };
-}
-
-function workspaceStateOutput(
-  status: "fixed" | "failed",
-  sandboxId: string,
-  before: FixWorkspaceState,
-  after: FixWorkspaceState,
-) {
-  return {
-    status,
-    ...workspaceStateFields(sandboxId, before, after),
   };
 }
 

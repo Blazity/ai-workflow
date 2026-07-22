@@ -116,6 +116,7 @@ export type {
   BlockExecutionResult,
   StepsRecord,
 } from "../../workflow-definition/interpreter.js";
+export { executionError } from "../../workflow-definition/interpreter.js";
 
 /** Executor signature every block module in this directory exports. */
 export type BlockExecuteFn = (

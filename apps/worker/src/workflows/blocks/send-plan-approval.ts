@@ -3,7 +3,7 @@ import type { IssueTrackerMoveTarget } from "../../adapters/issue-tracker/types.
 import type { ActiveRunOwner } from "../../lib/active-run-owner.js";
 import type { TicketTransitionOwner } from "../../lib/ticket-transition.js";
 import { isRunControlError } from "../run-control-error.js";
-import type { BlockExecuteFn, BlockExecutionResult } from "./types.js";
+import { executionError, type BlockExecuteFn, type BlockExecutionResult } from "./types.js";
 
 export const paramsSchema = z
   .object({
@@ -138,15 +138,13 @@ export const execute: BlockExecuteFn = async (
       ? resolvedInputs.plan
       : ctx.researchPlanMarkdown;
   if (markdown.trim().length === 0) {
-    return { kind: "failed", output: { status: "failed" }, reason: "no plan available" };
+    return executionError("no plan available", { category: "binding" });
   }
 
   if (ctx.definitionId === null) {
-    return {
-      kind: "failed",
-      output: { status: "failed" },
-      reason: "approval requires a stored definition",
-    };
+    return executionError("approval requires a stored definition", {
+      category: "binding",
+    });
   }
 
   const rawAssumptions = resolvedInputs?.assumptions;
@@ -174,11 +172,9 @@ export const execute: BlockExecuteFn = async (
     });
   } catch (err) {
     if (isRunControlError(err)) throw err;
-    return {
-      kind: "failed",
-      output: { status: "failed" },
-      reason: err instanceof Error ? err.message : String(err),
-    };
+    return executionError(err instanceof Error ? err.message : String(err), {
+      category: "provider",
+    });
   }
 
   if (block.params.mirrorComment !== false) {

@@ -6,6 +6,7 @@ import type {
   RunStatus,
   StepStatus,
 } from "@shared/contracts";
+import { EXECUTION_DIAGNOSTIC_PREFIX } from "@shared/contracts";
 
 type WorkflowStatus =
   | "pending"
@@ -101,7 +102,26 @@ function stepLabel(stepName: string): string {
 function normalizeRunError(error: string | RunError | undefined): RunError | null {
   if (!error) return null;
   if (typeof error === "string") return { message: error };
+  const diagnosticId = error.code?.startsWith(EXECUTION_DIAGNOSTIC_PREFIX)
+    ? error.code
+    : error.message.match(/Diagnostic ID: (AIW-DIAG-[A-Za-z0-9._:-]+)/)?.[1];
+  if (diagnosticId) {
+    return { message: error.message, code: diagnosticId };
+  }
   return error;
+}
+
+export function sanitizeRunStepsForDiagnosticError(
+  steps: RunStep[] | null,
+  error: RunError | null,
+): RunStep[] | null {
+  if (!steps || !error?.code?.startsWith(EXECUTION_DIAGNOSTIC_PREFIX)) {
+    return steps;
+  }
+  const safeError = { message: error.message, code: error.code };
+  return steps.map((step) =>
+    step.error ? { ...step, error: safeError } : step,
+  );
 }
 
 export interface CollectRunDetailOptions {
@@ -137,8 +157,9 @@ export async function collectRunDetail(
 
   const runStart = (run.startedAt ?? run.createdAt).getTime();
   const { id, name } = mapWorkflow(run.workflowName);
+  const runError = normalizeRunError(run.error);
 
-  const steps: RunStep[] = stepsPage.data
+  const mappedSteps: RunStep[] = stepsPage.data
     .map((s): RunStep => {
       const start = (s.startedAt ?? s.createdAt).getTime();
       const durationMs =
@@ -160,6 +181,7 @@ export async function collectRunDetail(
       };
     })
     .sort((a, b) => a.startOffsetMs - b.startOffsetMs);
+  const steps = sanitizeRunStepsForDiagnosticError(mappedSteps, runError) ?? [];
 
   const startedAt = run.startedAt ?? run.createdAt;
   const durationSec =
@@ -187,7 +209,7 @@ export async function collectRunDetail(
     startedAt: run.startedAt?.toISOString() ?? null,
     completedAt: run.completedAt?.toISOString() ?? null,
     durationSec,
-    error: normalizeRunError(run.error),
+    error: runError,
     deploymentId: run.deploymentId ?? null,
   };
 

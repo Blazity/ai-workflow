@@ -41,11 +41,11 @@ describe("workflow block registry", () => {
     }
   });
 
-  it("accepts the normalized failed envelope for every executable action", () => {
+  it("does not advertise execution errors as normal action outputs", () => {
     const registry = buildWorkflowBlockRegistry(context);
     for (const [type, spec] of Object.entries(BLOCK_TYPE_SPECS)) {
       if (spec.category !== "action") continue;
-      expect(registry[type as WorkflowBlockType].output.statusVariants, type).toContain(
+      expect(registry[type as WorkflowBlockType].output.statusVariants, type).not.toContain(
         "failed",
       );
     }
@@ -129,7 +129,6 @@ describe("workflow block registry", () => {
     expect(registry.fix_agent.output.statusVariants).toEqual([
       "fixed",
       "needs_human_input",
-      "failed",
     ]);
     expect(registry.fix_agent.output.bindingSchema).toMatchObject({
       required: [

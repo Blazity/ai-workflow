@@ -6,7 +6,7 @@ import {
   isDurationAbortError,
 } from "../run-budget.js";
 import { isRunControlError } from "../run-control-error.js";
-import type { BlockExecuteFn, BlockExecutionResult } from "./types.js";
+import { executionError, type BlockExecuteFn, type BlockExecutionResult } from "./types.js";
 
 export const paramsSchema = z
   .object({
@@ -113,16 +113,15 @@ blockRunChecksConfiguredStep.maxRetries = 0;
  * command in every workspace repository; without it it runs the dashboard's
  * pre-PR-checks config once (no fix cycles). Failing checks are a normal
  * branchable outcome: the block returns kind "next" with { status: "ok",
- * ok: false } when checks ran and failed, reserving kind "failed" for
+ * ok: false } when checks ran and failed, reserving kind "execution_error" for
  * infrastructure errors (checks could not run at all).
  */
 export const execute: BlockExecuteFn = async (block, _steps, ctx): Promise<BlockExecutionResult> => {
   if (!ctx.sandboxId) {
-    return {
-      kind: "failed",
-      output: { status: "failed" },
-      reason: "no workspace: connect prepare_workspace before run_checks",
-    };
+    return executionError(
+      "no workspace: connect prepare_workspace before run_checks",
+      { category: "sandbox" },
+    );
   }
   const commands = Array.isArray(block.params.commands)
     ? block.params.commands.filter((c): c is string => typeof c === "string")
@@ -157,10 +156,8 @@ export const execute: BlockExecuteFn = async (block, _steps, ctx): Promise<Block
     if (isDurationAbortError(err)) {
       throw new RunBudgetError(durationBudgetFailure(after, "Run checks"));
     }
-    return {
-      kind: "failed",
-      output: { status: "failed" },
-      reason: err instanceof Error ? err.message : String(err),
-    };
+    return executionError(err instanceof Error ? err.message : String(err), {
+      category: "checks",
+    });
   }
 };

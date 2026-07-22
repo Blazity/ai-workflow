@@ -67,8 +67,8 @@ describe("send_plan_approval execute", () => {
       {},
       makeCtx({ researchPlanMarkdown: "" }),
     );
-    expect(result.kind).toBe("failed");
-    if (result.kind === "failed") expect(result.reason).toBe("no plan available");
+    expect(result.kind).toBe("execution_error");
+    if (result.kind === "execution_error") expect(result.error.detail).toBe("no plan available");
     expect(mocks.createApprovalRequest).not.toHaveBeenCalled();
   });
 
@@ -78,8 +78,8 @@ describe("send_plan_approval execute", () => {
       {},
       makeCtx({ researchPlanMarkdown: "# Plan", definitionId: null }),
     );
-    expect(result.kind).toBe("failed");
-    if (result.kind === "failed") expect(result.reason).toBe("approval requires a stored definition");
+    expect(result.kind).toBe("execution_error");
+    if (result.kind === "execution_error") expect(result.error.detail).toBe("approval requires a stored definition");
   });
 
   it("stores the plan, mirrors a comment, notifies, parks the ticket, and ends while retaining ownership", async () => {

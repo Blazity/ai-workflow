@@ -16,9 +16,14 @@ import type { DownloadedAttachment } from "../sandbox/attachments.js";
 import type { SelectedRepository } from "../adapters/vcs/repository-directory.js";
 import {
   buildRuntimeGraph,
+  createWorkflowExecutionErrorState,
+  executionError,
   executeGraph,
+  formatExecutionErrorForUser,
+  WorkflowExecutionError,
   type RuntimeGraph,
   type StepsRecord,
+  type WorkflowExecutionErrorState,
 } from "../workflow-definition/interpreter.js";
 import type {
   BlockExecutionContext,
@@ -384,18 +389,16 @@ export async function ensurePlanningAgentSandboxForBlock(
   model: string,
 ): Promise<
   | { kind: "ready"; sandboxId: string }
-  | Extract<BlockExecutionResult, { kind: "failed" }>
+  | Extract<BlockExecutionResult, { kind: "execution_error" }>
 > {
   try {
     return { kind: "ready", sandboxId: await ensureAgentSandbox(ctx, kind, model) };
   } catch (error) {
     if (isRunControlError(error)) throw error;
-    return {
-      kind: "failed",
-      output: { status: "failed" },
-      reason: error instanceof Error ? error.message : String(error),
+    return executionError(error instanceof Error ? error.message : String(error), {
+      category: "sandbox",
       phase: "research",
-    };
+    });
   }
 }
 
@@ -1150,6 +1153,7 @@ export async function recordRunTelemetryStep(payload: {
   totals: UsageTotals;
   budgetFailure: RunBudgetFailure | null;
   pr: { url: string; number: number } | null;
+  executionError: { message: string; code: string } | null;
 }) {
   "use step";
   const { getDb } = await import("../db/client.js");
@@ -1158,9 +1162,13 @@ export async function recordRunTelemetryStep(payload: {
   const collectRunDetailMod = await import(
     "../lib/overview/collect-run-detail.js"
   );
-  const steps = await collectRunDetailMod.captureRunStepsBestEffort(
+  const capturedSteps = await collectRunDetailMod.captureRunStepsBestEffort(
     getWorld() as unknown as import("../lib/overview/collect-run-detail.js").RunDetailSource,
     payload.runId,
+  );
+  const steps = collectRunDetailMod.sanitizeRunStepsForDiagnosticError(
+    capturedSteps,
+    payload.executionError,
   );
   const { totals } = payload;
   await recordRunUsage(getDb(), {
@@ -1240,13 +1248,22 @@ export async function agentWorkflow(input: string | AgentWorkflowInput) {
     if (!(await acknowledgePrTriggerDispatchStep(entry, workflowRunId))) return;
     await acknowledgePendingTriggerStep(entry);
   }
-  await agentWorkflowBody(entry, workflowRunId);
+  const result = await agentWorkflowBody(entry, workflowRunId);
+  if (result && typeof result === "object") {
+    throw new WorkflowExecutionError(result.error);
+  }
 }
 
 async function agentWorkflowBody(
   entry: AgentWorkflowInput,
   workflowRunId: string,
-): Promise<"success" | "failed" | "awaiting" | undefined> {
+): Promise<
+  | "success"
+  | "failed"
+  | "awaiting"
+  | { kind: "execution_error"; error: WorkflowExecutionErrorState }
+  | undefined
+> {
   const budgetStartedAtMs = await readRunBudgetClockStep();
 
   const { env } = await import("../../env.js");
@@ -1405,6 +1422,7 @@ async function agentWorkflowBody(
   // flips it to success). Every phase failure / timeout / thrown error keeps
   // "failed".
   let runOutcome: "success" | "failed" | "awaiting" = "failed";
+  let terminalExecutionError: WorkflowExecutionErrorState | null = null;
   let terminalBudgetFailure: RunBudgetFailure | null = null;
   // Seeded with the run default model once prepare_workspace provisions the
   // sandbox, then set to the implementation block's model once it runs.
@@ -1819,9 +1837,9 @@ async function agentWorkflowBody(
       };
 
       const noWorkspace = (type: WorkflowBlockType): BlockExecutionResult => ({
-        kind: "failed",
-        output: { status: "failed" },
-        reason: `no workspace: connect prepare_workspace before ${type}`,
+        ...executionError(`no workspace: connect prepare_workspace before ${type}`, {
+          category: "sandbox",
+        }),
       });
 
       const attachmentSandboxIds = new Set<string>();
@@ -1873,7 +1891,7 @@ async function agentWorkflowBody(
             const researchPhase = phaseKey("Research", state.attempt);
             const { kind, model } = resolveAgent(node.params);
             const provisioned = await ensurePlanningAgentSandboxForBlock(ctx, kind, model);
-            if (provisioned.kind === "failed") return provisioned;
+            if (provisioned.kind === "execution_error") return provisioned;
             const sandboxId = provisioned.sandboxId;
             await writeAttachmentsOnce(sandboxId);
             phaseModels[researchPhase] = model;
@@ -1906,7 +1924,10 @@ async function agentWorkflowBody(
               ctx.observeBudget,
             );
             if (!researchDone) {
-              return { kind: "failed", output: { status: "failed" }, reason: "phase timed out", phase: "research" };
+              return executionError("phase timed out", {
+                category: "timeout",
+                phase: "research",
+              });
             }
 
             const { raw: researchRaw, structured: researchStructured } =
@@ -1932,7 +1953,10 @@ async function agentWorkflowBody(
 
             if (research.status === "failed") {
               const reason = research.body.slice(0, 200);
-              return { kind: "failed", output: { status: "failed" }, reason, phase: "research" };
+              return executionError(reason, {
+                category: "provider",
+                phase: "research",
+              });
             }
 
             ctx.researchPlanMarkdown = research.body;
@@ -2005,16 +2029,17 @@ async function agentWorkflowBody(
 
             if (implOutput.result === "failed") {
               const reason = implOutput.error ?? "unknown";
-              return { kind: "failed", output: { status: "failed" }, reason, phase: "impl" };
+              return executionError(reason, {
+                category: implDone ? "provider" : "timeout",
+                phase: "impl",
+              });
             }
 
             if (!ctx.workspaceManifest) {
-              return {
-                kind: "failed",
-                output: { status: "failed" },
-                reason: "implementation workspace manifest is unavailable",
+              return executionError("implementation workspace manifest is unavailable", {
+                category: "sandbox",
                 phase: "impl",
-              };
+              });
             }
             try {
               const { inspectFixWorkspace } = await import("./blocks/fix-workspace-state.js");
@@ -2030,12 +2055,10 @@ async function agentWorkflowBody(
               };
             } catch (error) {
               if (isRunControlError(error)) throw error;
-              return {
-                kind: "failed",
-                output: { status: "failed" },
-                reason: `could not inspect implementation workspace: ${errorMessage(error)}`,
-                phase: "impl",
-              };
+              return executionError(
+                `could not inspect implementation workspace: ${errorMessage(error)}`,
+                { category: "sandbox", phase: "impl" },
+              );
             }
           }
 
@@ -2083,18 +2106,18 @@ async function agentWorkflowBody(
               ctx.recordUsage("Review", reviewUsage, model);
               reviewOutput = output;
             } else {
-              reviewOutput = { result: "failed", feedback: "", issues: [], error: "Review phase timed out" };
+              return executionError("Review phase timed out", {
+                category: "timeout",
+                phase: "review",
+              });
             }
 
             if (reviewOutput.result === "failed") {
               const reason = reviewOutput.error ?? "unknown";
-              const feedback = reviewOutput.feedback.trim();
-              return {
-                kind: "failed",
-                output: { status: "failed", ...(feedback ? { feedback } : {}) },
-                reason,
+              return executionError(reason, {
+                category: "provider",
                 phase: "review",
-              };
+              });
             }
 
             return {
@@ -2140,15 +2163,13 @@ async function agentWorkflowBody(
             );
             if (!prePrChecks.passed) {
               return {
-                kind: "failed",
+                kind: "next",
                 output: {
-                  status: "failed",
+                  status: "ok",
                   ok: false,
                   fixCycles: prePrChecks.fixCycles,
                   summary: prePrChecks.summary,
                 },
-                reason: prePrChecks.summary,
-                phase: "pre-pr-checks",
               };
             }
             return {
@@ -2165,12 +2186,10 @@ async function agentWorkflowBody(
           case "open_pr": {
             const repositories = resolvedInputs.repositories;
             if (!Array.isArray(repositories)) {
-              return {
-                kind: "failed",
-                output: { status: "failed" },
-                reason: "Open PR/MR requires successful Finalize repository metadata",
-                phase: "open-pr",
-              };
+              return executionError(
+                "Open PR/MR requires successful Finalize repository metadata",
+                { category: "binding", phase: "open-pr" },
+              );
             }
             const publication = await openPullRequestsForPublication({
               repositories: repositories as import("./workspace-publication.js").FinalizedBranch[],
@@ -2201,21 +2220,17 @@ async function agentWorkflowBody(
                   "Pull requests created before publication failed:",
                 );
               }
-              return {
-                kind: "failed",
-                output: { status: "failed" },
-                reason: publication.reason,
+              return executionError(publication.reason, {
+                category: "provider",
                 phase: "open-pr",
-              };
+              });
             }
 
             if (publication.status !== "published") {
-              return {
-                kind: "failed",
-                output: { status: "failed" },
-                reason: `Open PR/MR received unexpected publication status: ${publication.status}`,
-                phase: "open-pr",
-              };
+              return executionError(
+                `Open PR/MR received unexpected publication status: ${publication.status}`,
+                { category: "engine", phase: "open-pr" },
+              );
             }
 
             if (publication.prs.some((pr) => pr.isNew)) {
@@ -2306,6 +2321,7 @@ async function agentWorkflowBody(
       };
 
       const walk = await executeGraph({
+        runId: workflowRunId,
         graph,
         entryTriggerId: entryTrigger.id,
         triggerOutput,
@@ -2319,6 +2335,7 @@ async function agentWorkflowBody(
         shouldRethrowExecutionError: isRunControlError,
         maxTotalExecutions: 200,
       });
+      terminalExecutionError = walk.executionError ?? null;
       // "ended" is a clean awaiting stop (e.g. send_plan_approval parked the
       // run for human approval and already moved the ticket): a success, not a
       // failure. No ticket move here; the block owns that.
@@ -2329,6 +2346,7 @@ async function agentWorkflowBody(
       // because TS can't see the hook closures writing runOutcome and narrows
       // it to its "failed" initializer.
       if (
+        !terminalExecutionError &&
         (walk.outcome === "completed" || walk.outcome === "ended") &&
         (runOutcome as string) !== "awaiting"
       ) {
@@ -2349,13 +2367,37 @@ async function agentWorkflowBody(
       if (observation.check.status !== "ok") err = new RunBudgetError(observation.check);
     }
     terminalBudgetFailure = runBudgetFailureFromError(err);
+    const controlError = isRunControlError(err);
+    if (!controlError) {
+      const nodeId = currentBlockId ?? "engine";
+      const attempt = blockStatuses[nodeId]?.attempt ?? 1;
+      const blockError = executionError(errorMessage(err), {
+        category: currentBlockId ? "unknown" : "engine",
+        phase: currentBlockId ? undefined : "engine",
+      }).error;
+      const diagnostic = createWorkflowExecutionErrorState(
+        workflowRunId,
+        nodeId,
+        attempt,
+        blockError,
+      );
+      terminalExecutionError ??= diagnostic;
+      console.error(
+        `[${diagnostic.diagnosticId}] unhandled workflow execution error:`,
+        err,
+      );
+      err = new WorkflowExecutionError(terminalExecutionError);
+    }
     const { handleUnhandledWorkflowError } = await import("./workflow-failure-exit.js");
     await handleUnhandledWorkflowError(err, {
       recordBlockFailure: async (error) => {
         if (!currentBlockId) return;
         blockStatuses[currentBlockId] = {
           status: "fail",
-          error: truncateError(errorMessage(error)),
+          error: terminalExecutionError?.message ?? truncateError(errorMessage(error)),
+          ...(terminalExecutionError
+            ? { diagnosticId: terminalExecutionError.diagnosticId }
+            : {}),
         };
         await writeBlockStatuses();
       },
@@ -2395,7 +2437,7 @@ async function agentWorkflowBody(
         }
       },
     });
-    throw err;
+    if (controlError) throw err;
   } finally {
     // A launched phase with no parsed usage (timed out / errored before
     // collect) records as unknown, so computeUsageTotals reports
@@ -2427,6 +2469,12 @@ async function agentWorkflowBody(
       ),
       budgetFailure: terminalBudgetFailure,
       pr: prForTelemetry,
+      executionError: terminalExecutionError
+        ? {
+            message: formatExecutionErrorForUser(terminalExecutionError),
+            code: terminalExecutionError.diagnosticId,
+          }
+        : null,
     }).catch((err) => {
       console.error(
         `Run telemetry failed to persist for ${ticket.identifier} (run ${workflowRunId}):`,
@@ -2434,5 +2482,7 @@ async function agentWorkflowBody(
       );
     });
   }
-  return runOutcome;
+  return terminalExecutionError
+    ? { kind: "execution_error", error: terminalExecutionError }
+    : runOutcome;
 }

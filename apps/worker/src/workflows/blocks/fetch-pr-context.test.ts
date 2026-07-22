@@ -152,8 +152,8 @@ describe("fetch_pr_context execute", () => {
 
   it("fails when no repositories are in scope", async () => {
     const result = await execute(makeNode("fetch_pr_context"), {}, makeCtx());
-    expect(result.kind).toBe("failed");
-    if (result.kind === "failed") expect(result.reason).toContain("no repositories in scope");
+    expect(result.kind).toBe("execution_error");
+    if (result.kind === "execution_error") expect(result.error.detail).toContain("no repositories in scope");
   });
 
   it.each(runControlErrorCases())("rethrows %s from context loading", async (_label, error) => {

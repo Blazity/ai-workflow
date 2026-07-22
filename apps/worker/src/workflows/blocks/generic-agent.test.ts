@@ -92,8 +92,8 @@ describe("generic_agent execute", () => {
       makeCtx(),
     );
 
-    expect(result.kind).toBe("failed");
-    if (result.kind === "failed") expect(result.reason).toBe("invalid outputSchema");
+    expect(result.kind).toBe("execution_error");
+    if (result.kind === "execution_error") expect(result.error.detail).toBe("invalid outputSchema");
     expect(mocks.sandboxGet).not.toHaveBeenCalled();
   });
 
@@ -103,8 +103,8 @@ describe("generic_agent execute", () => {
       {},
       makeCtx({ sandboxId: null }),
     );
-    expect(result.kind).toBe("failed");
-    if (result.kind === "failed") expect(result.reason).toContain("no workspace");
+    expect(result.kind).toBe("execution_error");
+    if (result.kind === "execution_error") expect(result.error.detail).toContain("no workspace");
   });
 
   it("uses an agent-only scratch sandbox in none mode", async () => {
@@ -173,7 +173,7 @@ describe("generic_agent execute", () => {
     expect(result.kind).toBe("next");
   });
 
-  it("maps agent-only scratch provisioning failures to a failed block", async () => {
+  it("maps agent-only scratch provisioning failures to an execution error", async () => {
     mocks.ensureAgentSandbox.mockRejectedValueOnce(new Error("sandbox unavailable"));
 
     const result = await execute(
@@ -183,9 +183,12 @@ describe("generic_agent execute", () => {
     );
 
     expect(result).toEqual({
-      kind: "failed",
-      output: { status: "failed" },
-      reason: "sandbox unavailable",
+      kind: "execution_error",
+      error: {
+        category: "sandbox",
+        message: "The workspace environment could not complete this block.",
+        detail: "sandbox unavailable",
+      },
     });
   });
 
@@ -348,8 +351,8 @@ describe("generic_agent execute", () => {
 
     const result = await execute(makeNode("generic_agent", { prompt: "p" }), {}, makeCtx());
 
-    expect(result.kind).toBe("failed");
-    if (result.kind === "failed") expect(result.reason).toBe("broke");
+    expect(result.kind).toBe("execution_error");
+    if (result.kind === "execution_error") expect(result.error.detail).toBe("broke");
   });
 
   it("returns custom-schema fields at the top level with a compatibility data alias", async () => {
@@ -389,9 +392,9 @@ describe("generic_agent execute", () => {
       makeCtx(),
     );
 
-    expect(result.kind).toBe("failed");
-    if (result.kind === "failed") {
-      expect(result.reason).toBe("agent output did not match the requested schema");
+    expect(result.kind).toBe("execution_error");
+    if (result.kind === "execution_error") {
+      expect(result.error.detail).toBe("agent output did not match the requested schema");
     }
   });
 
@@ -405,9 +408,13 @@ describe("generic_agent execute", () => {
     const result = await execute(node, {}, makeCtx());
 
     expect(result).toEqual({
-      kind: "failed",
-      output: { status: "failed" },
-      reason: "invalid outputSchema: outputSchema must declare an object for Generic Agent.",
+      kind: "execution_error",
+      error: {
+        category: "schema",
+        message: "The block returned an invalid result.",
+        detail:
+          "invalid outputSchema: outputSchema must declare an object for Generic Agent.",
+      },
     });
   });
 
@@ -420,9 +427,9 @@ describe("generic_agent execute", () => {
       makeCtx(),
     );
 
-    expect(result.kind).toBe("failed");
-    if (result.kind === "failed") {
-      expect(result.reason).toBe("agent output did not match the requested schema");
+    expect(result.kind).toBe("execution_error");
+    if (result.kind === "execution_error") {
+      expect(result.error.detail).toBe("agent output did not match the requested schema");
     }
   });
 
@@ -448,7 +455,7 @@ describe("generic_agent execute", () => {
 
     const result = await execute(makeNode("generic_agent", { prompt: "p" }), {}, makeCtx());
 
-    expect(result.kind).toBe("failed");
-    if (result.kind === "failed") expect(result.reason).toBe("agent phase timed out");
+    expect(result.kind).toBe("execution_error");
+    if (result.kind === "execution_error") expect(result.error.detail).toBe("agent phase timed out");
   }, 15000);
 });

@@ -75,7 +75,7 @@ describe("post_ticket_comment execute", () => {
 
   it("fails when the body param is missing", async () => {
     const result = await execute(makeNode("post_ticket_comment"), {}, makeCtx());
-    expect(result.kind).toBe("failed");
+    expect(result.kind).toBe("execution_error");
     expect(mocks.postComment).not.toHaveBeenCalled();
   });
 
@@ -89,7 +89,7 @@ describe("post_ticket_comment execute", () => {
     );
 
     expect(result).toEqual({ kind: "next", output: { status: "ok", commentUrl: null } });
-    expectOutputConformsToRegistry("post_ticket_comment", result.output);
+    expectOutputConformsToRegistry("post_ticket_comment", result.output!);
   });
 
   it("maps tracker errors to a failed result", async () => {
@@ -101,8 +101,8 @@ describe("post_ticket_comment execute", () => {
       makeCtx(),
     );
 
-    expect(result.kind).toBe("failed");
-    if (result.kind === "failed") expect(result.reason).toBe("jira down");
+    expect(result.kind).toBe("execution_error");
+    if (result.kind === "execution_error") expect(result.error.detail).toBe("jira down");
   });
 
   it.each(runControlErrorCases())(

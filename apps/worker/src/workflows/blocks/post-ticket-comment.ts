@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { ActiveRunOwner } from "../../lib/active-run-owner.js";
 import { isRunControlError } from "../run-control-error.js";
-import type { BlockExecuteFn, BlockExecutionResult } from "./types.js";
+import { executionError, type BlockExecuteFn, type BlockExecutionResult } from "./types.js";
 
 export const paramsSchema = z
   .object({
@@ -41,11 +41,9 @@ export const execute: BlockExecuteFn = async (
         ? block.params.body.trim()
         : "";
   if (body.length === 0) {
-    return {
-      kind: "failed",
-      output: { status: "failed" },
-      reason: "post_ticket_comment requires a body",
-    };
+    return executionError("post_ticket_comment requires a body", {
+      category: "binding",
+    });
   }
 
   try {
@@ -57,10 +55,8 @@ export const execute: BlockExecuteFn = async (
     return { kind: "next", output: { status: "ok", commentUrl } };
   } catch (err) {
     if (isRunControlError(err)) throw err;
-    return {
-      kind: "failed",
-      output: { status: "failed" },
-      reason: err instanceof Error ? err.message : String(err),
-    };
+    return executionError(err instanceof Error ? err.message : String(err), {
+      category: "provider",
+    });
   }
 };

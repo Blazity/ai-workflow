@@ -10,7 +10,7 @@ import type {
 import { resolveBlockAgent } from "../../workflow-definition/resolve-agent.js";
 import { isRunControlError } from "../run-control-error.js";
 import { blockFetchPrContextsStep, blockPrTriggerRepositoriesStep } from "./fetch-pr-context.js";
-import type { BlockExecuteFn, BlockExecutionResult } from "./types.js";
+import { executionError, type BlockExecuteFn, type BlockExecutionResult } from "./types.js";
 import type { BlockExecutionContext } from "../../workflow-definition/interpreter.js";
 
 export const paramsSchema = z.object({}).strict();
@@ -233,11 +233,9 @@ export async function ensureWorkspace(
       };
     } catch (err) {
       if (isRunControlError(err)) throw err;
-      return {
-        kind: "failed",
-        output: { status: "failed" },
-        reason: err instanceof Error ? err.message : String(err),
-      };
+      return executionError(err instanceof Error ? err.message : String(err), {
+        category: "sandbox",
+      });
     }
   }
 
@@ -275,11 +273,9 @@ export async function ensureWorkspace(
             questions,
           };
         }
-        return {
-          kind: "failed",
-          output: { status: "failed" },
-          reason: `pre-sandbox: ${preSandbox.message}`,
-        };
+        return executionError(`pre-sandbox: ${preSandbox.message}`, {
+          category: "sandbox",
+        });
       }
       if (preSandbox.promptAdditions) {
         ctx.preSandboxAdditions = preSandbox.promptAdditions;
@@ -360,11 +356,9 @@ export async function ensureWorkspace(
     };
   } catch (err) {
     if (isRunControlError(err)) throw err;
-    return {
-      kind: "failed",
-      output: { status: "failed" },
-      reason: err instanceof Error ? err.message : String(err),
-    };
+    return executionError(err instanceof Error ? err.message : String(err), {
+      category: "sandbox",
+    });
   }
 }
 

@@ -2,10 +2,12 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { eq } from "drizzle-orm";
 import {
   buildRuntimeGraph,
+  executionError,
   executeGraph,
   type BlockExecutionResult,
   type BlockExecutor,
   type ExecuteGraphHooks,
+  type WorkflowExecutionErrorState,
 } from "../workflow-definition/interpreter.js";
 import { recordBlockStatuses, recordRunUsage } from "../lib/telemetry/run-telemetry.js";
 import { entryOwnsClarificationThread } from "./agent.js";
@@ -98,6 +100,7 @@ interface RunFixture {
 interface RunResult {
   outcome: "completed" | "stopped" | "ended";
   runOutcome: "success" | "failed" | "awaiting";
+  executionError?: WorkflowExecutionErrorState;
   /** block_statuses read back from the DB after every persisted write. */
   persistedSnapshots: Array<Record<string, BlockRunState>>;
 }
@@ -226,8 +229,10 @@ async function runWorkflowAgainstDb(db: Db, fx: RunFixture): Promise<RunResult> 
   const triggerOutput: BlockOutput = { status: "fired", ticketKey: TICKET.identifier };
 
   let outcome: "completed" | "stopped" | "ended" = "stopped";
+  let terminalExecutionError: WorkflowExecutionErrorState | undefined;
   try {
     const walk = await executeGraph({
+      runId: fx.runId,
       graph,
       entryTriggerId: entryTrigger.id,
       triggerOutput,
@@ -237,10 +242,12 @@ async function runWorkflowAgainstDb(db: Db, fx: RunFixture): Promise<RunResult> 
       outputValidator: () => [],
     });
     outcome = walk.outcome;
+    terminalExecutionError = walk.executionError;
     // Mirror agent.ts: never promote a clarification park (awaiting) to success.
     // `as string` because TS narrows runOutcome to its "failed" initializer (it
     // can't see the hook closures writing it).
     if (
+      !terminalExecutionError &&
       (walk.outcome === "completed" || walk.outcome === "ended") &&
       (runOutcome as string) !== "awaiting"
     ) {
@@ -286,7 +293,14 @@ async function runWorkflowAgainstDb(db: Db, fx: RunFixture): Promise<RunResult> 
     } as Parameters<typeof recordRunUsage>[1]);
   }
 
-  return { outcome, runOutcome, persistedSnapshots };
+  return {
+    outcome,
+    runOutcome,
+    persistedSnapshots,
+    ...(terminalExecutionError
+      ? { executionError: terminalExecutionError }
+      : {}),
+  };
 }
 
 let db: Db;
@@ -522,12 +536,10 @@ describe("run telemetry integration (executeGraph -> pglite)", () => {
           usage: { phase: "Research", usage: claudeUsage(0.5), model: "claude-opus" },
         },
         impl: {
-          result: {
-            kind: "failed",
-            output: { status: "failed" },
-            reason: "impl blew up",
+          result: executionError("impl blew up", {
+            category: "provider",
             phase: "impl",
-          },
+          }),
           usage: { phase: "Impl", usage: claudeUsage(1.0), model: "claude-sonnet" },
           activeModel: "claude-sonnet",
         },
@@ -542,7 +554,13 @@ describe("run telemetry integration (executeGraph -> pglite)", () => {
     expect(persisted.prep.status).toBe("ok");
     expect(persisted.plan.status).toBe("ok");
     expect(persisted.impl.status).toBe("fail");
-    expect(persisted.impl.error).toBe("impl blew up");
+    expect(persisted.impl.error).toBe(
+      "An external service could not complete this block.",
+    );
+    expect(persisted.impl.diagnosticId).toBe(
+      "AIW-DIAG-wrun_fail-impl-1",
+    );
+    expect(persisted.impl.output).toBeUndefined();
     expect(persisted.pr).toEqual({ status: "pending" });
 
     // Run is failed, yet cost/usage from the phases that ran is still recorded.
@@ -555,7 +573,7 @@ describe("run telemetry integration (executeGraph -> pglite)", () => {
     expect(r.completedAt).not.toBeNull();
   });
 
-  it("failed block routed through a wired failure edge: fail persisted but run completes as success", async () => {
+  it("keeps an execution error sticky after a wired cleanup edge completes", async () => {
     const nodes = [
       node("trig", "trigger_ticket_ai"),
       node("prep", "prepare_workspace"),
@@ -576,29 +594,30 @@ describe("run telemetry integration (executeGraph -> pglite)", () => {
       scripts: {
         prep: { result: { kind: "next", output: { status: "ok" } }, activeModel: "claude-default" },
         checks: {
-          result: {
-            kind: "failed",
-            output: { status: "failed" },
-            reason: "lint broke",
+          result: executionError("lint broke", {
+            category: "checks",
             phase: "checks",
-          },
+          }),
         },
         recover: { result: { kind: "next", output: { status: "ok" } } },
       },
     });
 
     expect(result.outcome).toBe("completed");
-    expect(result.runOutcome).toBe("success");
+    expect(result.runOutcome).toBe("failed");
+    expect(result.executionError?.diagnosticId).toBe(
+      "AIW-DIAG-wrun_recover-checks-1",
+    );
 
     const r = await runRow("wrun_recover");
     const persisted = r.blockStatuses as Record<string, BlockRunState>;
     expect(persisted.prep.status).toBe("ok");
     expect(persisted.checks.status).toBe("fail");
-    expect(persisted.checks.error).toBe("lint broke");
+    expect(persisted.checks.error).toBe("The checks could not be started.");
+    expect(persisted.checks.output).toBeUndefined();
     expect(persisted.recover.status).toBe("ok");
 
-    // A recovered failure edge leaves the run itself successful.
-    expect(r.status).toBe("success");
+    expect(r.status).toBe("failed");
   });
 
   it("persists a budget failure and never executes the downstream side effect", async () => {

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { BlockExecuteFn, BlockExecutionResult } from "./types.js";
+import { executionError, type BlockExecuteFn, type BlockExecutionResult } from "./types.js";
 
 export const paramsSchema = z
   .object({
@@ -67,12 +67,10 @@ export const execute: BlockExecuteFn = async (
   }
 
   if (questions.length === 0) {
-    return {
-      kind: "failed",
-      output: { status: "failed" },
-      reason:
-        "human_question has no questions: set the questions param or place it after a block that produces questions",
-    };
+    return executionError(
+      "human_question has no questions: set the questions param or place it after a block that produces questions",
+      { category: "binding" },
+    );
   }
 
   return {

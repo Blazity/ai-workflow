@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { isRunControlError } from "../run-control-error.js";
-import type { BlockExecuteFn, BlockExecutionResult } from "./types.js";
+import { executionError, type BlockExecuteFn, type BlockExecutionResult } from "./types.js";
 
 export const paramsSchema = z.object({}).strict();
 
@@ -33,7 +33,8 @@ blockArthurValidatePromptStep.maxRetries = 0;
  * validate_prompt. Content is either the resolved `content` input or the
  * ticket description plus comments. Every outcome is a
  * kind "next" output so graphs can branch on it: "ok", "flagged" (with
- * findings), or "skipped" (Arthur unconfigured, no task, or a client error).
+ * findings), or "skipped" (Arthur unconfigured or no task). Provider failures
+ * are execution errors and carry no bindable output.
  */
 export const execute: BlockExecuteFn = async (
   _block,
@@ -76,12 +77,8 @@ export const execute: BlockExecuteFn = async (
     };
   } catch (err) {
     if (isRunControlError(err)) throw err;
-    return {
-      kind: "next",
-      output: {
-        status: "skipped",
-        reason: (err instanceof Error ? err.message : String(err)).slice(0, 300),
-      },
-    };
+    return executionError(err instanceof Error ? err.message : String(err), {
+      category: "provider",
+    });
   }
 };

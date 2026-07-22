@@ -430,7 +430,7 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
       [],
     ),
     normalOutputRequired: ["plan"],
-    statusVariants: ["ready", "needs_human_input", "failed"],
+    statusVariants: ["ready", "needs_human_input"],
   },
   implementation_agent: {
     presentation: presentation(
@@ -454,7 +454,7 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
       suggestedAnswers: arrayType(stringType()),
     }),
     normalOutputRequired: ["workspaceId", "branches", "commits", "summary"],
-    statusVariants: ["implemented", "needs_human_input", "failed"],
+    statusVariants: ["implemented", "needs_human_input"],
   },
   review_agent: {
     presentation: presentation(
@@ -471,7 +471,7 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
       feedback: stringType(),
     }),
     normalOutputRequired: ["findings", "decision"],
-    statusVariants: ["reviewed", "failed"],
+    statusVariants: ["reviewed"],
   },
   fix_agent: {
     presentation: presentation(
@@ -498,7 +498,7 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
       "unresolvedConflicts",
       "summary",
     ],
-    statusVariants: ["fixed", "needs_human_input", "failed"],
+    statusVariants: ["fixed", "needs_human_input"],
   },
   generic_agent: {
     presentation: presentation(
@@ -520,7 +520,7 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
       [],
     ),
     normalOutputRequired: ["body"],
-    statusVariants: ["completed", "needs_human_input", "failed"],
+    statusVariants: ["completed", "needs_human_input"],
   },
   prepare_workspace: {
     presentation: presentation(
@@ -538,7 +538,7 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
       questions: arrayType(stringType()),
     }),
     normalOutputRequired: ["sandboxId", "repositories", "workspace"],
-    statusVariants: ["ok", "needs_human_input", "failed"],
+    statusVariants: ["ok", "needs_human_input"],
   },
   finalize_workspace: {
     presentation: presentation(
@@ -557,10 +557,9 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
     ],
     output: statusOutput({
       repositories: arrayType(finalizedBranchType),
-      unmetChecks: arrayType(stringType()),
     }),
     normalOutputRequired: ["repositories"],
-    statusVariants: ["finalized", "failed"],
+    statusVariants: ["finalized"],
   },
   run_pre_pr_checks: {
     presentation: presentation(
@@ -577,7 +576,7 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
       summary: stringType(),
     }),
     normalOutputRequired: ["ok", "fixCycles", "summary"],
-    statusVariants: ["ok", "failed"],
+    statusVariants: ["ok"],
   },
   run_checks: {
     presentation: presentation(
@@ -594,7 +593,7 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
       failures: arrayType(unknownType()),
     }),
     normalOutputRequired: ["ok", "results", "failures"],
-    statusVariants: ["ok", "failed"],
+    statusVariants: ["ok"],
   },
   call_llm: {
     presentation: presentation(
@@ -607,7 +606,7 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
     inputs: { prompt: input(stringType()), system: input(stringType(), false) },
     output: statusOutput({ output: stringType() }),
     normalOutputRequired: ["output"],
-    statusVariants: ["ok", "failed"],
+    statusVariants: ["ok"],
   },
   fetch_pr_context: {
     presentation: presentation(
@@ -620,7 +619,7 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
     inputs: {},
     output: statusOutput({ contexts: arrayType(unknownType()) }),
     normalOutputRequired: ["contexts"],
-    statusVariants: ["ok", "failed"],
+    statusVariants: ["ok"],
   },
   open_pr: {
     presentation: presentation(
@@ -637,7 +636,7 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
       prNumber: numberType(),
     }),
     normalOutputRequired: ["prs"],
-    statusVariants: ["ok", "failed"],
+    statusVariants: ["ok"],
   },
   update_ticket_status: {
     presentation: presentation(
@@ -650,7 +649,7 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
     inputs: { target: input(stringType()) },
     output: statusOutput({ target: stringType() }),
     normalOutputRequired: ["target"],
-    statusVariants: ["ok", "failed"],
+    statusVariants: ["ok"],
   },
   post_ticket_comment: {
     presentation: presentation(
@@ -663,7 +662,7 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
     inputs: { body: input(stringType()) },
     output: statusOutput({ commentUrl: nullableType(stringType()) }),
     normalOutputRequired: ["commentUrl"],
-    statusVariants: ["ok", "failed"],
+    statusVariants: ["ok"],
   },
   post_pr_comment: {
     presentation: presentation(
@@ -676,7 +675,7 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
     inputs: { body: input(stringType()) },
     output: statusOutput({ comments: arrayType(unknownType()) }),
     normalOutputRequired: ["comments"],
-    statusVariants: ["ok", "failed"],
+    statusVariants: ["ok"],
   },
   send_slack_message: {
     presentation: presentation(
@@ -688,7 +687,7 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
     defaults: { message: "", sendOn: "pr_ready" },
     inputs: { message: input(stringType()) },
     output: statusOutput(),
-    statusVariants: ["ok", "skipped", "failed"],
+    statusVariants: ["ok", "skipped"],
   },
   send_plan_approval: {
     presentation: presentation(
@@ -704,7 +703,7 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
     },
     output: statusOutput({ approvalRequestId: stringType() }),
     normalOutputRequired: ["approvalRequestId"],
-    statusVariants: ["awaiting_approval", "failed"],
+    statusVariants: ["awaiting_approval"],
   },
   human_question: {
     presentation: presentation(
@@ -723,7 +722,7 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
       suggestedAnswers: arrayType(stringType()),
       answer: stringType(),
     }),
-    statusVariants: ["needs_human_input", "answered", "failed"],
+    statusVariants: ["needs_human_input", "answered"],
   },
   arthur_injection_check: {
     presentation: presentation(
@@ -735,7 +734,7 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
     defaults: {},
     inputs: { content: input(stringType()) },
     output: statusOutput({ findings: arrayType(unknownType()), reason: stringType() }),
-    statusVariants: ["ok", "flagged", "skipped", "failed"],
+    statusVariants: ["ok", "flagged", "skipped"],
   },
   branch: {
     presentation: presentation(
@@ -746,8 +745,8 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
     ),
     defaults: { condition: "" },
     inputs: {},
-    output: statusOutput({ path: stringType(), reason: stringType(), error: stringType() }),
-    statusVariants: ["ok", "failed"],
+    output: statusOutput({ path: stringType(), reason: stringType() }),
+    statusVariants: ["ok"],
   },
   loop: {
     presentation: presentation(

@@ -1,6 +1,7 @@
 import { getStepMetadata } from "workflow";
 import { ActiveRunOwnerError } from "../../src/lib/run-control-errors.js";
 import { isRunControlError } from "../../src/workflows/run-control-error.js";
+import { WorkflowExecutionError } from "../../src/workflow-definition/interpreter.js";
 import {
   RunBudgetError,
   runBudgetFailureFromError,
@@ -40,6 +41,16 @@ async function failOrdinaryWithDefaultRetries(): Promise<never> {
   throw new Error(`ordinary failure attempt=${getStepMetadata().attempt}`);
 }
 
+async function failProviderWithoutRetries(): Promise<never> {
+  "use step";
+  throw new Error("provider secret detail");
+}
+failProviderWithoutRetries.maxRetries = 0;
+
+async function deterministicCleanupStep(): Promise<void> {
+  "use step";
+}
+
 export async function probeRunControlStepBoundary(kind: ProbeKind) {
   "use workflow";
   try {
@@ -63,5 +74,21 @@ export async function probeRunControlStepBoundary(kind: ProbeKind) {
       hasFailureProperty:
         typeof error === "object" && error !== null && "failure" in error,
     };
+  }
+}
+
+export async function probeStickyExecutionFailure() {
+  "use workflow";
+  try {
+    await failProviderWithoutRetries();
+  } catch {
+    await deterministicCleanupStep();
+    throw new WorkflowExecutionError({
+      category: "provider",
+      message: "An external service could not complete this block.",
+      diagnosticId: "AIW-DIAG-sdk-run-provider-1",
+      nodeId: "provider",
+      attempt: 1,
+    });
   }
 }

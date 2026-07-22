@@ -70,8 +70,8 @@ describe("run_checks execute", () => {
 
   it("fails when no workspace is attached", async () => {
     const result = await execute(makeNode("run_checks"), {}, makeCtx({ sandboxId: null }));
-    expect(result.kind).toBe("failed");
-    if (result.kind === "failed") expect(result.reason).toContain("no workspace");
+    expect(result.kind).toBe("execution_error");
+    if (result.kind === "execution_error") expect(result.error.detail).toContain("no workspace");
   });
 
   it("returns kind next with ok false when explicit commands fail", async () => {
@@ -86,7 +86,7 @@ describe("run_checks execute", () => {
     );
 
     expect(result.kind).toBe("next");
-    expect(result.output).toEqual({
+    expect(result.output!).toEqual({
       status: "ok",
       ok: false,
       results: [
@@ -114,8 +114,8 @@ describe("run_checks execute", () => {
     );
 
     expect(result.kind).toBe("next");
-    expect(result.output.ok).toBe(true);
-    expect(result.output.failures).toEqual([]);
+    expect(result.output!.ok).toBe(true);
+    expect(result.output!.failures).toEqual([]);
   });
 
   it("aborts explicit commands at the remaining duration and starts no later command", async () => {
@@ -192,8 +192,8 @@ describe("run_checks execute", () => {
       1_800_000,
     );
     expect(result.kind).toBe("next");
-    expect(result.output.ok).toBe(false);
-    expect(result.output.failures).toEqual([
+    expect(result.output!.ok).toBe(false);
+    expect(result.output!.failures).toEqual([
       { repo: "github:acme/api", command: "pnpm lint", exitCode: 1, output: "lint output" },
     ]);
   });
@@ -245,8 +245,8 @@ describe("run_checks execute", () => {
       makeCtx(),
     );
 
-    expect(result.kind).toBe("failed");
-    if (result.kind === "failed") expect(result.reason).toBe("sandbox gone");
+    expect(result.kind).toBe("execution_error");
+    if (result.kind === "execution_error") expect(result.error.detail).toBe("sandbox gone");
   });
 
   it.each(runControlErrorCases())("rethrows %s from checks", async (_label, error) => {

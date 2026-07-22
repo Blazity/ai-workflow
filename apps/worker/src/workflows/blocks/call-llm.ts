@@ -3,7 +3,7 @@ import type { JsonValue } from "@shared/contracts";
 import { validateBlockOutputForDefinition } from "../../workflow-definition/block-registry.js";
 import { RunBudgetError } from "../run-budget.js";
 import { isRunControlError } from "../run-control-error.js";
-import type { BlockExecuteFn, BlockExecutionResult } from "./types.js";
+import { executionError, type BlockExecuteFn, type BlockExecutionResult } from "./types.js";
 
 export const paramsSchema = z
   .object({
@@ -90,7 +90,7 @@ export const execute: BlockExecuteFn = async (
     try {
       JSON.parse(schema);
     } catch {
-      return { kind: "failed", output: { status: "failed" }, reason: "invalid outputSchema" };
+      return executionError("invalid outputSchema", { category: "schema" });
     }
   }
 
@@ -101,7 +101,7 @@ export const execute: BlockExecuteFn = async (
         ? block.params.prompt
         : "";
   if (prompt.length === 0) {
-    return { kind: "failed", output: { status: "failed" }, reason: "call_llm requires a prompt" };
+    return executionError("call_llm requires a prompt", { category: "binding" });
   }
   // With an explicit model, pass it through and let generateStructured infer the
   // provider from the id unless one is set. Without a model, default to the run
@@ -152,11 +152,9 @@ export const execute: BlockExecuteFn = async (
 
     if (schema !== undefined) {
       if (!result.hasObject) {
-        return {
-          kind: "failed",
-          output: { status: "failed" },
-          reason: "LLM output did not match the requested schema",
-        };
+        return executionError("LLM output did not match the requested schema", {
+          category: "schema",
+        });
       }
       const output = { status: "ok", output: result.object as JsonValue } as const;
       if (
@@ -164,11 +162,9 @@ export const execute: BlockExecuteFn = async (
           requireNormalOutput: true,
         }).length > 0
       ) {
-        return {
-          kind: "failed",
-          output: { status: "failed" },
-          reason: "LLM output did not match the requested schema",
-        };
+        return executionError("LLM output did not match the requested schema", {
+          category: "schema",
+        });
       }
       return { kind: "next", output };
     }
@@ -189,10 +185,8 @@ export const execute: BlockExecuteFn = async (
         reason: `budget_exceeded: duration ${consumed} reached limit ${limit} during Call LLM`,
       });
     }
-    return {
-      kind: "failed",
-      output: { status: "failed" },
-      reason: err instanceof Error ? err.message : String(err),
-    };
+    return executionError(err instanceof Error ? err.message : String(err), {
+      category: "provider",
+    });
   }
 };

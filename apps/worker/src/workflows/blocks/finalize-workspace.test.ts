@@ -71,7 +71,7 @@ describe("finalize_workspace execute", () => {
   it("ignores unrelated prior step records", async () => {
     const result = await execute(
       makeNode("finalize_workspace"),
-      { "checks-1": { output: { status: "failed", ok: false } } },
+      { "checks-1": { output: { status: "ok", ok: false } } },
       makeCtx({ selectedRepositories: [repo], workspaceManifest: trustedManifest }),
     );
     expect(result.kind).toBe("next");
@@ -85,9 +85,12 @@ describe("finalize_workspace execute", () => {
       { "checks.lint": "ok", "checks.test": "failed" },
     );
     expect(result).toEqual({
-      kind: "failed",
-      output: { status: "failed", unmetChecks: ["test"] },
-      reason: "required checks not satisfied: test",
+      kind: "execution_error",
+      error: {
+        category: "checks",
+        message: "The checks could not be started.",
+        detail: "required checks not satisfied: test",
+      },
     });
     expect(mocks.finalizeWorkspacePublication).not.toHaveBeenCalled();
   });
@@ -110,7 +113,7 @@ describe("finalize_workspace execute", () => {
       {},
       makeCtx({ sandboxId: null }),
     );
-    expect(result.kind).toBe("failed");
+    expect(result.kind).toBe("execution_error");
     expect(mocks.finalizeWorkspacePublication).not.toHaveBeenCalled();
   });
 
@@ -122,8 +125,8 @@ describe("finalize_workspace execute", () => {
     );
 
     expect(result).toEqual(expect.objectContaining({
-      kind: "failed",
-      reason: expect.stringContaining("trusted"),
+      kind: "execution_error",
+      error: expect.objectContaining({ detail: expect.stringContaining("trusted") }),
     }));
     expect(mocks.finalizeWorkspacePublication).not.toHaveBeenCalled();
   });
@@ -168,7 +171,7 @@ describe("finalize_workspace execute", () => {
         repositories: finalized.repositories,
       },
     });
-    expectOutputConformsToRegistry("finalize_workspace", result.output);
+    expectOutputConformsToRegistry("finalize_workspace", result.output!);
   });
 
   it("passes the exact triggering PR/MR source head into publication", async () => {
@@ -219,10 +222,13 @@ describe("finalize_workspace execute", () => {
     const result = await execute(makeNode("finalize_workspace"), {}, ctx);
 
     expect(result).toEqual({
-      kind: "failed",
-      output: { status: "failed" },
-      reason: "lease rejected",
-      phase: "push",
+      kind: "execution_error",
+      error: {
+        category: "provider",
+        message: "An external service could not complete this block.",
+        detail: "lease rejected",
+        phase: "push",
+      },
     });
   });
 

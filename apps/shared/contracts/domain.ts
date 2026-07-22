@@ -64,6 +64,8 @@ export interface Run {
 }
 
 /** Structured error as returned by the Workflow runtime for failed runs/steps. */
+export const EXECUTION_DIAGNOSTIC_PREFIX = "AIW-DIAG-";
+
 export interface RunError {
   message: string;
   stack?: string;
@@ -310,7 +312,7 @@ export interface WorkflowBlockContract {
   inputs: Record<string, WorkflowBlockInputContract>;
   additionalInputs: WorkflowBlockAdditionalInputContract[];
   output: {
-    /** Complete executor envelope, including failure and clarification output. */
+    /** Complete domain-output envelope, including clarification outcomes. */
     schema: WorkflowValueSchema;
     /** Fields guaranteed when execution continues through a normal output port. */
     bindingSchema: WorkflowValueSchema;
@@ -398,6 +400,8 @@ export type BlockRunStatus = "pending" | "running" | "ok" | "warn" | "fail";
 export interface BlockRunState {
   status: BlockRunStatus;
   error?: string;
+  /** Stable, user-safe correlation key for an execution error. */
+  diagnosticId?: string;
   attempt?: number;
   output?: BlockOutput;
 }
