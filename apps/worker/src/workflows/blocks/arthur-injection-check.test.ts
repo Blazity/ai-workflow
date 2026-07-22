@@ -119,7 +119,7 @@ describe("arthur_injection_check execute", () => {
       kind: "execution_error",
       error: {
         category: "provider",
-        message: "An external service could not complete this block.",
+        message: "An external service could not complete this block. (arthur 500)",
         detail: "arthur 500",
       },
     });

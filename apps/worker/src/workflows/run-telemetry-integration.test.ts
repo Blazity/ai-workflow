@@ -555,7 +555,7 @@ describe("run telemetry integration (executeGraph -> pglite)", () => {
     expect(persisted.plan.status).toBe("ok");
     expect(persisted.impl.status).toBe("fail");
     expect(persisted.impl.error).toBe(
-      "An external service could not complete this block.",
+      "An external service could not complete this block. (impl blew up)",
     );
     expect(persisted.impl.diagnosticId).toBe(
       "AIW-DIAG-wrun_fail-impl-1",
@@ -613,7 +613,7 @@ describe("run telemetry integration (executeGraph -> pglite)", () => {
     const persisted = r.blockStatuses as Record<string, BlockRunState>;
     expect(persisted.prep.status).toBe("ok");
     expect(persisted.checks.status).toBe("fail");
-    expect(persisted.checks.error).toBe("The checks could not be started.");
+    expect(persisted.checks.error).toBe("The checks could not be started. (lint broke)");
     expect(persisted.checks.output).toBeUndefined();
     expect(persisted.recover.status).toBe("ok");
 

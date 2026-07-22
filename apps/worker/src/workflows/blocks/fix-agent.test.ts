@@ -384,7 +384,7 @@ describe("fix_agent execute", () => {
       kind: "execution_error",
       error: {
         category: "timeout",
-        message: "The block timed out.",
+        message: "The block timed out. (fix phase timed out)",
         detail: "fix phase timed out",
       },
     });

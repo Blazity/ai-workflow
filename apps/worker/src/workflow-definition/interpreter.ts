@@ -17,6 +17,7 @@ import {
   type WorkflowRunBindingValues,
 } from "./bindings.js";
 import { validateBlockOutputForDefinition } from "./block-registry.js";
+import { deriveFailureMessage } from "./failure-message.js";
 
 /** Resolved graph shape the walker consumes: node lookup, per-port targets, and triggers. */
 export interface RuntimeGraph {
@@ -105,7 +106,13 @@ export function executionError(
     kind: "execution_error",
     error: {
       category,
-      message: options.message ?? SAFE_EXECUTION_ERROR_MESSAGES[category],
+      message:
+        options.message ??
+        deriveFailureMessage({
+          category,
+          detail,
+          genericMessage: SAFE_EXECUTION_ERROR_MESSAGES[category],
+        }),
       detail,
       ...(options.phase ? { phase: options.phase } : {}),
     },

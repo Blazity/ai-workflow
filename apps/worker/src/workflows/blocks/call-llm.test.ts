@@ -304,7 +304,7 @@ describe("call_llm execute", () => {
       kind: "execution_error",
       error: {
         category: "provider",
-        message: "An external service could not complete this block.",
+        message: "An external service could not complete this block. (provider timed out)",
         detail: "provider timed out",
       },
     });

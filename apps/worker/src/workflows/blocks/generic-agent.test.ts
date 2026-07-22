@@ -186,7 +186,7 @@ describe("generic_agent execute", () => {
       kind: "execution_error",
       error: {
         category: "sandbox",
-        message: "The workspace environment could not complete this block.",
+        message: "The workspace environment could not complete this block. (sandbox unavailable)",
         detail: "sandbox unavailable",
       },
     });
@@ -411,7 +411,8 @@ describe("generic_agent execute", () => {
       kind: "execution_error",
       error: {
         category: "schema",
-        message: "The block returned an invalid result.",
+        message:
+          "The block returned an invalid result. (invalid outputSchema: outputSchema must declare an object for Generic Agent.)",
         detail:
           "invalid outputSchema: outputSchema must declare an object for Generic Agent.",
       },
