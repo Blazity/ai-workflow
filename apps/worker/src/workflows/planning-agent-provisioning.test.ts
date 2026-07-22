@@ -85,7 +85,7 @@ describe("planning agent scratch provisioning", () => {
       "AIW-DIAG-test-run-plan-1",
     );
     expect(failures).toEqual([
-      "The workspace environment could not complete this block. Diagnostic ID: AIW-DIAG-test-run-plan-1",
+      "The workspace environment could not complete this block. (registry unavailable) Diagnostic ID: AIW-DIAG-test-run-plan-1",
     ]);
   });
 

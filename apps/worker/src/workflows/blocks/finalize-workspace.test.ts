@@ -88,7 +88,7 @@ describe("finalize_workspace execute", () => {
       kind: "execution_error",
       error: {
         category: "checks",
-        message: "The checks could not be started.",
+        message: "The checks could not be started. (required checks not satisfied: test)",
         detail: "required checks not satisfied: test",
       },
     });
@@ -225,7 +225,7 @@ describe("finalize_workspace execute", () => {
       kind: "execution_error",
       error: {
         category: "provider",
-        message: "An external service could not complete this block.",
+        message: "An external service could not complete this block. (lease rejected)",
         detail: "lease rejected",
         phase: "push",
       },
