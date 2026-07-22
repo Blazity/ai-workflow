@@ -890,7 +890,7 @@
           ],
           requiredOutputs: [...STATUS_OUTPUT, ...typedPaths("string", "plan")],
           optionalOutputs: typedPaths("string[]", "questions", "suggestedAnswers"),
-          statuses: ["ready", "needs_human_input", "failed"],
+          statuses: ["ready", "needs_human_input"],
         }),
         implementation_agent: runtimeContract(["provider", "model", "prompt"], {
           optionalInputs: [...typedPaths("object", "ticket"), ...typedPaths("string", "plan")],
@@ -903,7 +903,7 @@
             ...typedPaths("unknown", "verification"),
             ...typedPaths("string[]", "questions", "suggestedAnswers"),
           ],
-          statuses: ["implemented", "needs_human_input", "failed"],
+          statuses: ["implemented", "needs_human_input"],
         }),
         review_agent: runtimeContract(["provider", "model", "prompt"], {
           requiredOutputs: [
@@ -912,7 +912,7 @@
             ...typedPaths("string", "decision"),
           ],
           optionalOutputs: typedPaths("string", "feedback"),
-          statuses: ["reviewed", "failed"],
+          statuses: ["reviewed"],
         }),
         fix_agent: runtimeContract(["provider", "model", "instructions", "maxMinutes"], {
           requiredOutputs: [
@@ -921,7 +921,7 @@
             ...typedPaths("object[]", "commits", "resolvedConflicts", "unresolvedConflicts"),
           ],
           optionalOutputs: typedPaths("string[]", "questions", "suggestedAnswers"),
-          statuses: ["fixed", "needs_human_input", "failed"],
+          statuses: ["fixed", "needs_human_input"],
         }),
         generic_agent: runtimeContract(
           ["provider", "model", "prompt", "outputSchema", "workspaceMode"],
@@ -929,7 +929,7 @@
             optionalInputs: typedPaths("string", "prompt"),
             requiredOutputs: [...STATUS_OUTPUT, ...typedPaths("string", "body")],
             optionalOutputs: typedPaths("string[]", "questions", "suggestedAnswers"),
-            statuses: ["completed", "needs_human_input", "failed"],
+            statuses: ["completed", "needs_human_input"],
           },
           [
             runtimeProbe(
@@ -949,7 +949,7 @@
                   ...typedPaths("object", "data"),
                 ],
                 optionalOutputs: typedPaths("number", "confidence", "data.confidence"),
-                statuses: ["completed", "needs_human_input", "failed"],
+                statuses: ["completed", "needs_human_input"],
               },
             ),
           ],
@@ -964,7 +964,7 @@
           optionalOutputs: [
             ...typedPaths("string[]", "workspace.repositories", "questions"),
           ],
-          statuses: ["ok", "needs_human_input", "failed"],
+          statuses: ["ok", "needs_human_input"],
         }),
         finalize_workspace: runtimeContract([], {
           additionalInputs: [{
@@ -976,8 +976,7 @@
             ...STATUS_OUTPUT,
             ...typedPaths("object[]", "repositories"),
           ],
-          optionalOutputs: typedPaths("string[]", "unmetChecks"),
-          statuses: ["finalized", "failed"],
+          statuses: ["finalized"],
         }),
         run_pre_pr_checks: runtimeContract(["maxFixCycles"], {
           requiredOutputs: [
@@ -986,7 +985,7 @@
             ...typedPaths("number", "fixCycles"),
             ...typedPaths("string", "summary"),
           ],
-          statuses: ["ok", "failed"],
+          statuses: ["ok"],
         }),
         run_checks: runtimeContract(["commands"], {
           requiredOutputs: [
@@ -994,14 +993,14 @@
             ...typedPaths("boolean", "ok"),
             ...typedPaths("unknown[]", "results", "failures"),
           ],
-          statuses: ["ok", "failed"],
+          statuses: ["ok"],
         }),
         call_llm: runtimeContract(
           ["prompt", "system", "model", "provider", "outputSchema"],
           {
             optionalInputs: typedPaths("string", "prompt", "system"),
             requiredOutputs: [...STATUS_OUTPUT, ...typedPaths("string", "output")],
-            statuses: ["ok", "failed"],
+            statuses: ["ok"],
           },
           [
             runtimeProbe(
@@ -1018,14 +1017,14 @@
                   ...typedPaths("string", "output.summary"),
                 ],
                 optionalOutputs: typedPaths("number", "output.score"),
-                statuses: ["ok", "failed"],
+                statuses: ["ok"],
               },
             ),
           ],
         ),
         fetch_pr_context: runtimeContract([], {
           requiredOutputs: [...STATUS_OUTPUT, ...typedPaths("unknown[]", "contexts")],
-          statuses: ["ok", "failed"],
+          statuses: ["ok"],
         }),
         open_pr: runtimeContract([], {
           requiredInputs: typedPaths("object[]", "repositories"),
@@ -1034,12 +1033,12 @@
             ...typedPaths("string", "prUrl"),
             ...typedPaths("number", "prNumber"),
           ],
-          statuses: ["ok", "failed"],
+          statuses: ["ok"],
         }),
         update_ticket_status: runtimeContract(["target"], {
           optionalInputs: typedPaths("string", "target"),
           requiredOutputs: [...STATUS_OUTPUT, ...typedPaths("string", "target")],
-          statuses: ["ok", "failed"],
+          statuses: ["ok"],
         }),
         post_ticket_comment: runtimeContract(["body"], {
           optionalInputs: typedPaths("string", "body"),
@@ -1047,17 +1046,17 @@
             ...STATUS_OUTPUT,
             ...typedPaths("string | null", "commentUrl"),
           ],
-          statuses: ["ok", "failed"],
+          statuses: ["ok"],
         }),
         post_pr_comment: runtimeContract(["body", "target"], {
           optionalInputs: typedPaths("string", "body"),
           requiredOutputs: [...STATUS_OUTPUT, ...typedPaths("unknown[]", "comments")],
-          statuses: ["ok", "failed"],
+          statuses: ["ok"],
         }),
         send_slack_message: runtimeContract(["message"], {
           optionalInputs: typedPaths("string", "message"),
           requiredOutputs: STATUS_OUTPUT,
-          statuses: ["ok", "skipped", "failed"],
+          statuses: ["ok", "skipped"],
         }),
         send_plan_approval: runtimeContract(["mirrorComment"], {
           requiredInputs: typedPaths("string", "plan"),
@@ -1066,7 +1065,7 @@
             ...STATUS_OUTPUT,
             ...typedPaths("string", "approvalRequestId"),
           ],
-          statuses: ["awaiting_approval", "failed"],
+          statuses: ["awaiting_approval"],
         }),
         human_question: runtimeContract(["questions", "suggestedAnswers"], {
           optionalInputs: typedPaths("string[]", "questions", "suggestedAnswers"),
@@ -1075,7 +1074,7 @@
             ...typedPaths("string[]", "questions", "suggestedAnswers"),
             ...typedPaths("string", "answer"),
           ],
-          statuses: ["needs_human_input", "answered", "failed"],
+          statuses: ["needs_human_input", "answered"],
         }),
         arthur_injection_check: runtimeContract([], {
           optionalInputs: typedPaths("string", "content"),
@@ -1084,12 +1083,12 @@
             ...typedPaths("unknown[]", "findings"),
             ...typedPaths("string", "reason"),
           ],
-          statuses: ["ok", "flagged", "skipped", "failed"],
+          statuses: ["ok", "flagged", "skipped"],
         }),
         branch: runtimeContract(["condition"], {
           requiredOutputs: STATUS_OUTPUT,
-          optionalOutputs: typedPaths("string", "path", "reason", "error"),
-          statuses: ["ok", "failed"],
+          optionalOutputs: typedPaths("string", "path", "reason"),
+          statuses: ["ok"],
         }),
         loop: runtimeContract(["maxAttempts", "onExhaust"], {
           requiredOutputs: [...STATUS_OUTPUT, ...typedPaths("number", "attempt")],
@@ -1182,7 +1181,7 @@
           group: "agent",
           title: "Fix Agent",
           blurb: "Repair pass scoped to structured failures, review feedback, or current merge conflicts.",
-          note: "Reuses an upstream prepared workspace when present; otherwise prepares or resumes the target workspace automatically. Accepted PR head, failures, ticket, and workspace context are carried by the run rather than authored as bindings. status: fixed is the specialized agent's built-in readiness classification and continues to Finalize workspace; it is not a CI verdict or permission to bypass publication guards. needs_human_input creates the runtime clarification checkpoint; failed follows default failure policy. Use Generic Agent + Branch for a custom classification. Merge conflicts are auto-resolved only when the agent can produce a clean committed tree. Before publication, the runtime re-reads the accepted PR head and refuses to overwrite a different SHA; provider CI remains authoritative for correctness."
+          note: "Reuses an upstream prepared workspace when present; otherwise prepares or resumes the target workspace automatically. Accepted PR head, failures, ticket, and workspace context are carried by the run rather than authored as bindings. status: fixed is the specialized agent's built-in readiness classification and continues to Finalize workspace; it is not a CI verdict or permission to bypass publication guards. needs_human_input creates the runtime clarification checkpoint; execution errors follow the failed cleanup port when authored and keep the run failed. Use Generic Agent + Branch for a custom classification. Merge conflicts are auto-resolved only when the agent can produce a clean committed tree. Before publication, the runtime re-reads the accepted PR head and refuses to overwrite a different SHA; provider CI remains authoritative for correctness."
         },
         "agent.generic": {
           runtimeType: "generic_agent",
@@ -1190,7 +1189,7 @@
           group: "agent",
           title: "Generic Agent",
           blurb: "Prompted agent with a declared output schema. Must attach a workspace to touch code.",
-          note: "The escape hatch: everything the specialized agents do can be rebuilt from Generic Agent + workspace + control blocks. Non-code uses such as planning need no workspace; repository-reading or mutating configurations require an upstream Prepare workspace binding. For custom routing, use a declared classification field in the output schema and evaluate it with Branch; the runtime status remains reserved for completed, needs_human_input, and failed."
+          note: "The escape hatch: everything the specialized agents do can be rebuilt from Generic Agent + workspace + control blocks. Non-code uses such as planning need no workspace; repository-reading or mutating configurations require an upstream Prepare workspace binding. For custom routing, use a declared classification field in the output schema and evaluate it with Branch; execution errors have no output and use the failed cleanup port rather than a status field."
         },
 
         "ws.prepare": {
@@ -1458,7 +1457,7 @@
             },
             {
               head: "Failure has a default path",
-              body: "Any block can end <code>status: \"failed\"</code>. Unless an explicit failure edge overrides it, the runtime applies the default policy: terminate the run, move the ticket to the configured column, notify the channel. Run-control stops — cancellation, budget exhaustion, or loss of the exact active owner — are not block failures and cannot be routed around by a failure edge. Graphs draw the happy path — no <code>if err != nil</code> ladders."
+              body: "Any block can encounter an execution error. The errored block has no bindable output and the run stays failed even when an explicit <code>failed</code> edge runs deterministic cleanup. Without that edge, the runtime terminates the graph path. After cleanup it moves the ticket to the configured column and notifies the channel once. Run-control stops — cancellation, budget exhaustion, or loss of the exact active owner — are not block execution errors and cannot be routed around by a failure edge. Graphs draw the happy path — no <code>if err != nil</code> ladders."
             },
             {
               head: "Runs serialize per subject",
@@ -1626,7 +1625,7 @@
             },
             { x: 1130, y: 760, w: 650,
               head: "Publish safety is not validation",
-              body: "The specialized Fix Agent initializes its workspace when necessary and classifies its result. <code>fixed</code> continues directly to Finalize workspace; <code>needs_human_input</code> suspends the same Workflow run on a durable hook and <code>failed</code> follows default failure policy. Authors who need custom classification declare it through Generic Agent and route it with control blocks. Finalization only protects the write: current source SHA, clean committed tree, and a branch allowed by the selected PR-ownership policy. It does not decide whether the PR passes. Finalize preflights every repository, pushes with exact leases, and emits finalized branch metadata directly to Open PR/MR. Workflow owns retries; an exact target already present is a safe replay, while remote drift is terminal. Open PR/MR revalidates the exact branch, source PR, and created or recovered PR before recording ownership. The Fix Agent may safely resolve a merge conflict; unresolved conflicts suspend on the same human-input hook. A multi-repository preflight failure creates no partial push and cannot be reported as success. Terminal cleanup destroys the live sandbox; clarification snapshots are restored by the same run and removed after use or expiry."
+              body: "The specialized Fix Agent initializes its workspace when necessary and classifies its result. <code>fixed</code> continues directly to Finalize workspace; <code>needs_human_input</code> suspends the same Workflow run on a durable hook. Execution errors have no output, may follow the <code>failed</code> cleanup port, and keep the run failed. Authors who need custom classification declare it through Generic Agent and route it with control blocks. Finalization only protects the write: current source SHA, clean committed tree, and a branch allowed by the selected PR-ownership policy. It does not decide whether the PR passes. Finalize preflights every repository, pushes with exact leases, and emits finalized branch metadata directly to Open PR/MR. Workflow owns retries; an exact target already present is a safe replay, while remote drift is terminal. Open PR/MR revalidates the exact branch, source PR, and created or recovered PR before recording ownership. The Fix Agent may safely resolve a merge conflict; unresolved conflicts suspend on the same human-input hook. A multi-repository preflight failure creates no partial push and cannot be reported as success. Terminal cleanup destroys the live sandbox; clarification snapshots are restored by the same run and removed after use or expiry."
             }
           ]
         },

@@ -1,5 +1,6 @@
 import {
   BLOCK_TYPE_SPECS,
+  EXECUTION_DIAGNOSTIC_PREFIX,
   FAILURE_PORT,
   isTriggerBlockType,
   wirablePorts,
@@ -52,6 +53,97 @@ export function buildRuntimeGraph(
 /** Accumulated block outputs keyed by node id, readable by later condition evaluation. */
 export type StepsRecord = Record<string, { output: BlockOutput }>;
 
+export type ExecutionErrorCategory =
+  | "sandbox"
+  | "provider"
+  | "engine"
+  | "binding"
+  | "timeout"
+  | "parsing"
+  | "schema"
+  | "checks"
+  | "unknown";
+
+export interface BlockExecutionError {
+  category: ExecutionErrorCategory;
+  /** Safe text that may be persisted or shown to a user. */
+  message: string;
+  /** Internal context for correlated server logs. Never persist or expose it. */
+  detail?: string;
+  phase?: string;
+}
+
+export interface WorkflowExecutionErrorState
+  extends Omit<BlockExecutionError, "detail"> {
+  diagnosticId: string;
+  nodeId: string;
+  attempt: number;
+}
+
+const SAFE_EXECUTION_ERROR_MESSAGES: Record<ExecutionErrorCategory, string> = {
+  sandbox: "The workspace environment could not complete this block.",
+  provider: "An external service could not complete this block.",
+  engine: "The workflow engine could not continue.",
+  binding: "A block input could not be resolved.",
+  timeout: "The block timed out.",
+  parsing: "The block response could not be parsed.",
+  schema: "The block returned an invalid result.",
+  checks: "The checks could not be started.",
+  unknown: "The block could not be completed.",
+};
+
+export function executionError(
+  detail: string,
+  options: {
+    category?: ExecutionErrorCategory;
+    message?: string;
+    phase?: string;
+  } = {},
+): Extract<BlockExecutionResult, { kind: "execution_error" }> {
+  const category = options.category ?? "unknown";
+  return {
+    kind: "execution_error",
+    error: {
+      category,
+      message: options.message ?? SAFE_EXECUTION_ERROR_MESSAGES[category],
+      detail,
+      ...(options.phase ? { phase: options.phase } : {}),
+    },
+  };
+}
+
+export function formatExecutionErrorForUser(
+  error: Pick<WorkflowExecutionErrorState, "message" | "diagnosticId">,
+): string {
+  return `${error.message} Diagnostic ID: ${error.diagnosticId}`;
+}
+
+export function createWorkflowExecutionErrorState(
+  runId: string,
+  nodeId: string,
+  attempt: number,
+  error: BlockExecutionError,
+): WorkflowExecutionErrorState {
+  return {
+    category: error.category,
+    message: error.message,
+    ...(error.phase ? { phase: error.phase } : {}),
+    diagnosticId: `${EXECUTION_DIAGNOSTIC_PREFIX}${runId}-${nodeId}-${attempt}`,
+    nodeId,
+    attempt,
+  };
+}
+
+export class WorkflowExecutionError extends Error {
+  readonly code: string;
+
+  constructor(error: WorkflowExecutionErrorState) {
+    super(formatExecutionErrorForUser(error));
+    this.name = "WorkflowExecutionError";
+    this.code = error.diagnosticId;
+  }
+}
+
 /** Outcome an action block reports back to the engine. */
 export type BlockExecutionResult =
   | { kind: "next"; output: BlockOutput; port?: string }
@@ -61,7 +153,7 @@ export type BlockExecutionResult =
       questions: string[];
       suggestedAnswers?: string[];
     }
-  | { kind: "failed"; output: BlockOutput; reason: string; phase?: string }
+  | { kind: "execution_error"; error: BlockExecutionError; output?: never }
   | { kind: "ended"; output: BlockOutput };
 
 /** Runs a single action-category block and reports how the walk should proceed. */
@@ -118,6 +210,12 @@ export interface ExecuteGraphHooks {
   ): Promise<void>;
 }
 
+export interface ExecuteGraphResult {
+  outcome: "completed" | "stopped" | "ended";
+  steps: StepsRecord;
+  executionError?: WorkflowExecutionErrorState;
+}
+
 const ERROR_MAX_LENGTH = 500;
 const DEFAULT_MAX_TOTAL_EXECUTIONS = 200;
 
@@ -147,6 +245,7 @@ function contractViolation(node: WorkflowDefinitionNode, issues: string[]): stri
 
 /** Walk the graph from a trigger, driving action blocks through `executeBlock` and control blocks inline. */
 export async function executeGraph(opts: {
+  runId?: string;
   graph: RuntimeGraph;
   entryTriggerId: string;
   triggerOutput: BlockOutput;
@@ -160,36 +259,106 @@ export async function executeGraph(opts: {
   outputValidator?: BlockOutputValidator;
   /** Run-level control errors (for example a hard budget stop) must escape the
    * block failure graph. Ordinary executor/provider errors are normalized to
-   * the block's failed result so an authored failure edge can handle them. */
+   * execution errors so an authored failure edge can run cleanup. */
   shouldRethrowExecutionError?: (error: unknown) => boolean;
-}): Promise<{ outcome: "completed" | "stopped" | "ended"; steps: StepsRecord }> {
+}): Promise<ExecuteGraphResult> {
   const { graph, entryTriggerId, triggerOutput, executeBlock, hooks } = opts;
+  const runId = opts.runId ?? "test-run";
   const maxTotalExecutions = opts.maxTotalExecutions ?? DEFAULT_MAX_TOTAL_EXECUTIONS;
+  let primaryExecutionError: WorkflowExecutionErrorState | undefined;
+  let failureExitCalled = false;
+
+  const recordExecutionError = async (
+    nodeId: string,
+    attempt: number,
+    error: BlockExecutionError,
+  ): Promise<WorkflowExecutionErrorState> => {
+    const state = createWorkflowExecutionErrorState(
+      runId,
+      nodeId,
+      attempt,
+      error,
+    );
+    if (error.detail) {
+      console.error(
+        `[${state.diagnosticId}] workflow execution error in ${nodeId}: ${error.detail}`,
+      );
+    }
+    primaryExecutionError ??= state;
+    await hooks.onBlockFinish(nodeId, {
+      status: "fail",
+      attempt,
+      error: state.message,
+      diagnosticId: state.diagnosticId,
+    });
+    return state;
+  };
+  const finish = async (
+    outcome: ExecuteGraphResult["outcome"],
+  ): Promise<ExecuteGraphResult> => {
+    if (primaryExecutionError && !failureExitCalled) {
+      failureExitCalled = true;
+      await hooks.failureExit(
+        primaryExecutionError.phase ?? primaryExecutionError.category,
+        formatExecutionErrorForUser(primaryExecutionError),
+        primaryExecutionError.nodeId,
+      );
+    }
+    return {
+      outcome,
+      steps,
+      ...(primaryExecutionError
+        ? { executionError: primaryExecutionError }
+        : {}),
+    };
+  };
+
+  const steps: StepsRecord = Object.create(null) as StepsRecord;
+  for (const [nodeId, state] of Object.entries(opts.resume?.priorSteps ?? {})) {
+    steps[nodeId] = state;
+  }
 
   const entry = graph.nodes.get(entryTriggerId);
   if (!entry) {
-    throw new Error(`entry trigger "${entryTriggerId}" is not present in the graph`);
+    await recordExecutionError(
+      entryTriggerId,
+      1,
+      executionError(
+        `entry trigger "${entryTriggerId}" is not present in the graph`,
+        { category: "engine", phase: "engine" },
+      ).error,
+    );
+    return finish("stopped");
   }
 
   const resume = opts.resume;
   if (resume && !graph.nodes.has(resume.waitingNodeId)) {
-    throw new Error(
-      `clarification waiting node "${resume.waitingNodeId}" is not present in the graph`,
+    await recordExecutionError(
+      resume.waitingNodeId,
+      (resume.controlState?.attempts[resume.waitingNodeId] ?? 0) + 1,
+      executionError(
+        `clarification waiting node "${resume.waitingNodeId}" is not present in the graph`,
+        { category: "engine", phase: "engine" },
+      ).error,
     );
+    return finish("stopped");
   }
 
-  const steps: StepsRecord = Object.create(null) as StepsRecord;
-  for (const [nodeId, state] of Object.entries(resume?.priorSteps ?? {})) {
-    steps[nodeId] = state;
-  }
   const outputValidator = opts.outputValidator ?? defaultOutputValidator;
   // Stored runs and clarification checkpoints created before typed trigger
   // inputs may carry the legacy minimal envelope. Validate every field they do
   // carry, but reserve normal-output guarantees for new authored bindings.
   const triggerIssues = outputValidator(entry, triggerOutput, false);
   if (triggerIssues.length > 0) {
-    await hooks.failureExit("contract", contractViolation(entry, triggerIssues), entryTriggerId);
-    return { outcome: "stopped", steps };
+    await recordExecutionError(
+      entryTriggerId,
+      1,
+      executionError(contractViolation(entry, triggerIssues), {
+        category: "schema",
+        phase: "contract",
+      }).error,
+    );
+    return finish("stopped");
   }
   steps[entryTriggerId] = { output: triggerOutput };
   const attempts = new Map<string, number>(
@@ -211,18 +380,28 @@ export async function executeGraph(opts: {
 
     executions += 1;
     if (executions > maxTotalExecutions) {
-      await hooks.failureExit(
-        "engine",
-        `workflow exceeded the maximum of ${maxTotalExecutions} block executions`,
+      await recordExecutionError(
         id,
+        (attempts.get(id) ?? 0) + 1,
+        executionError(
+          `workflow exceeded the maximum of ${maxTotalExecutions} block executions`,
+          { category: "engine", phase: "engine" },
+        ).error,
       );
-      return { outcome: "stopped", steps };
+      return finish("stopped");
     }
 
     const node = graph.nodes.get(id);
     if (!node) {
-      await hooks.failureExit("engine", `workflow referenced an unknown block "${id}"`, id);
-      return { outcome: "stopped", steps };
+      await recordExecutionError(
+        id,
+        (attempts.get(id) ?? 0) + 1,
+        executionError(`workflow referenced an unknown block "${id}"`, {
+          category: "engine",
+          phase: "engine",
+        }).error,
+      );
+      return finish("stopped");
     }
 
     const resumingWaitingNode =
@@ -284,17 +463,27 @@ export async function executeGraph(opts: {
             // run fails here with the reason rather than taking an arbitrary port.
           } catch (error) {
             const message = error instanceof Error ? error.message : String(error);
-            const output: BlockOutput = { status: "failed", error: message };
-            await hooks.onBlockFinish(id, { status: "fail", attempt, error: message, output });
-            await hooks.failureExit("branch", message, id);
-            return { outcome: "stopped", steps };
+            await recordExecutionError(
+              id,
+              attempt,
+              executionError(message, {
+                category: "engine",
+                phase: "branch",
+              }).error,
+            );
+            return finish("stopped");
           }
         } else {
           const message = parsed.error;
-          const output: BlockOutput = { status: "failed", error: message };
-          await hooks.onBlockFinish(id, { status: "fail", attempt, error: message, output });
-          await hooks.failureExit("branch", message, id);
-          return { outcome: "stopped", steps };
+          await recordExecutionError(
+            id,
+            attempt,
+            executionError(message, {
+              category: "engine",
+              phase: "branch",
+            }).error,
+          );
+          return finish("stopped");
         }
 
         const path = value ? "true" : "false";
@@ -339,7 +528,7 @@ export async function executeGraph(opts: {
           );
           if (answer === undefined) {
             await hooks.onBlockFinish(id, { status: "warn", attempt, error: message, output });
-            return { outcome: "stopped", steps };
+            return finish("stopped");
           }
           const answeredOutput: BlockOutput = {
             status: "exhausted",
@@ -359,6 +548,7 @@ export async function executeGraph(opts: {
         }
         const message = `loop "${id}" exhausted after ${maxAttempts} attempts`;
         await hooks.onBlockFinish(id, { status: "fail", attempt, error: message, output });
+        if (primaryExecutionError) return finish("stopped");
         await hooks.failureExit("loop", message, id);
         return { outcome: "stopped", steps };
       }
@@ -385,13 +575,15 @@ export async function executeGraph(opts: {
             output = { status: "done", answer };
             steps[id] = { output };
             await hooks.onBlockFinish(id, { status: "ok", attempt, output });
-            return { outcome: "completed", steps };
+            return finish("completed");
           }
         }
         const finishStatus = terminalStatus === "failed" ? "fail" : terminalStatus === "waiting_for_human" ? "warn" : "ok";
         await hooks.onBlockFinish(id, { status: finishStatus, attempt, output });
-        await hooks.terminate({ terminalStatus, postComment }, id, steps, controlState());
-        return { outcome: "stopped", steps };
+        if (!primaryExecutionError) {
+          await hooks.terminate({ terminalStatus, postComment }, id, steps, controlState());
+        }
+        return finish("stopped");
       }
     }
 
@@ -405,16 +597,15 @@ export async function executeGraph(opts: {
       );
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      const output: BlockOutput = { status: "failed", error: message };
-      steps[id] = { output };
-      await hooks.onBlockFinish(id, {
-        status: "fail",
+      await recordExecutionError(
+        id,
         attempt,
-        output,
-        error: truncate(message),
-      });
-      await hooks.failureExit("bindings", truncate(message), id);
-      return { outcome: "stopped", steps };
+        executionError(truncate(message), {
+          category: "binding",
+          phase: "bindings",
+        }).error,
+      );
+      return finish("stopped");
     }
 
     const execution = resumingWaitingNode
@@ -426,39 +617,52 @@ export async function executeGraph(opts: {
       result = await executeBlock(node, steps, resolvedInputs, execution);
     } catch (error) {
       if (opts.shouldRethrowExecutionError?.(error)) throw error;
-      result = {
-        kind: "failed",
-        output: { status: "failed" },
-        reason: error instanceof Error ? error.message : String(error),
-        phase: node.type,
-      };
+      result = executionError(
+        error instanceof Error ? error.stack ?? error.message : String(error),
+        { phase: node.type },
+      );
     }
 
-    const requireNormalOutput =
-      result.kind === "ended" ||
-      (result.kind === "next" &&
-        (result.port ?? defaultPortOf(node)) !== FAILURE_PORT);
-    const outputIssues = outputValidator(node, result.output, requireNormalOutput);
-    if (outputIssues.length > 0) {
-      const message = contractViolation(node, outputIssues);
-      await hooks.onBlockFinish(id, { status: "fail", attempt, error: message });
-      await hooks.failureExit("contract", message, id);
-      return { outcome: "stopped", steps };
+    if (result.kind !== "execution_error") {
+      const outputIssues = outputValidator(
+        node,
+        result.output,
+        result.kind === "next" || result.kind === "ended",
+      );
+      if (outputIssues.length > 0) {
+        const message = contractViolation(node, outputIssues);
+        await recordExecutionError(
+          id,
+          attempt,
+          executionError(message, {
+            category: "schema",
+            phase: "contract",
+          }).error,
+        );
+        return finish("stopped");
+      }
     }
 
     if (result.kind === "next") {
       const output = result.output;
+      const port = result.port ?? defaultPortOf(node);
+      if (
+        port === undefined ||
+        port === FAILURE_PORT ||
+        !wirablePorts(node.type).includes(port)
+      ) {
+        await recordExecutionError(
+          id,
+          attempt,
+          executionError(
+            `block "${id}" returned an unknown port "${String(port)}"`,
+            { category: "engine", phase: "engine" },
+          ).error,
+        );
+        return finish("stopped");
+      }
       steps[id] = { output };
       await hooks.onBlockFinish(id, { status: "ok", attempt, output });
-      const port = result.port ?? defaultPortOf(node);
-      if (port === undefined || !wirablePorts(node.type).includes(port)) {
-        await hooks.failureExit(
-          "engine",
-          `block "${id}" returned an unknown port "${String(port)}"`,
-          id,
-        );
-        return { outcome: "stopped", steps };
-      }
       current = graph.outEdges.get(id)?.get(port);
       continue;
     }
@@ -476,7 +680,7 @@ export async function executeGraph(opts: {
       );
       if (answer === undefined) {
         await hooks.onBlockFinish(id, { status: "warn", attempt, output, error });
-        return { outcome: "stopped", steps };
+        return finish("stopped");
       }
       const answeredOutput: BlockOutput = { status: "answered", answer };
       steps[id] = { output: answeredOutput };
@@ -486,22 +690,14 @@ export async function executeGraph(opts: {
       continue;
     }
 
-    if (result.kind === "failed") {
-      const output = result.output;
-      steps[id] = { output };
-      await hooks.onBlockFinish(id, {
-        status: "fail",
-        attempt,
-        output,
-        error: truncate(result.reason),
-      });
+    if (result.kind === "execution_error") {
+      await recordExecutionError(id, attempt, result.error);
       const failureTarget = graph.outEdges.get(id)?.get(FAILURE_PORT);
       if (failureTarget !== undefined) {
         current = failureTarget;
         continue;
       }
-      await hooks.failureExit(result.phase ?? node.type, truncate(result.reason), id);
-      return { outcome: "stopped", steps };
+      return finish("stopped");
     }
 
     // result.kind === "ended": a block (e.g. send_plan_approval) parked the run
@@ -510,8 +706,8 @@ export async function executeGraph(opts: {
     const output = result.output;
     steps[id] = { output };
     await hooks.onBlockFinish(id, { status: "warn", attempt, output });
-    return { outcome: "ended", steps };
+    return finish("ended");
   }
 
-  return { outcome: "completed", steps };
+  return finish("completed");
 }

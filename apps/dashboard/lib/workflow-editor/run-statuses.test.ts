@@ -75,6 +75,23 @@ test("errors map contains only entries with an error", () => {
   assert.deepEqual(derived?.errors, { n3: "boom", n4: "why?" });
 });
 
+test("execution errors include their diagnostic id without exposing internal detail", () => {
+  const run = snapshot({
+    blockStatuses: {
+      n1: {
+        status: "fail",
+        error: "An external service could not complete this block.",
+        diagnosticId: "AIW-DIAG-run-1-n1-1",
+      },
+    },
+  });
+
+  assert.deepEqual(deriveRunStatuses(run, editor)?.errors, {
+    n1:
+      "An external service could not complete this block. Diagnostic ID: AIW-DIAG-run-1-n1-1",
+  });
+});
+
 test("empty blockStatuses yields empty maps", () => {
   const derived = deriveRunStatuses(snapshot({ blockStatuses: {} }), editor);
   assert.deepEqual(derived, { statuses: {}, errors: {} });

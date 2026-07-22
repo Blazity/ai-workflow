@@ -13,6 +13,7 @@ Current reference for the 28 server-owned workflow block contracts in nine group
 - Moving nodes changes layout only. It does not change the semantic draft or deployed version.
 - Specialized Implementation, Review, and Fix agents prepare or resume their workspace automatically. Planning is workspace-free. Explicit Prepare is available for modular/custom graphs; Generic Agent requires it only when `workspaceMode` reads or mutates repositories.
 - Any agent may return `needs_human_input`. The runtime creates a pinned checkpoint/snapshot continuation and reruns only the waiting agent after an answer; authors do not need to recreate that behavior with a Human Question block.
+- Execution errors are not block outputs. The errored block is excluded from `steps`, receives a safe message plus diagnostic ID, and may route through its existing `failed` port for deterministic cleanup. Cleanup cannot turn the run back into success.
 - Finalize is the sole push boundary. Open PR/MR consumes Finalize's durable `publicationAttemptId`; it never pushes workspace changes. The active-run claim remains held through every downstream block.
 
 ## Catalog summary
@@ -25,26 +26,26 @@ Current reference for the 28 server-owned workflow block contracts in nine group
 | `trigger_pr_checks_failed` | Trigger | `providers`, `scope`, exact `checkNames`, GitHub App slugs, GitLab pipeline sources | `fired` | Starts from an allowlisted external CI failure on the current head. |
 | `trigger_pr_review` | Trigger | `providers`, `scope`, non-empty `on[]` | `fired` | Starts from selected GitHub review states or external GitLab comments. |
 | `trigger_pr_merged` | Trigger | `providers`, `scope` | `fired` | Starts after an allowed PR/MR merge and carries merge metadata. |
-| `planning_agent` | Agents | optional provider/model | `ready`, `needs_human_input`, `failed` | Produces a plan or clarification questions without requiring a workspace. |
-| `implementation_agent` | Agents | optional provider/model | `implemented`, `needs_human_input`, `failed` | Implements in an implicitly prepared/resumed managed workspace. |
-| `review_agent` | Agents | optional provider/model | `reviewed`, `failed` | Reviews the current workspace diff before publication. |
-| `fix_agent` | Agents | optional provider/model/instructions/max minutes | `fixed`, `needs_human_input`, `failed` | Applies CI, review, or merge-conflict remediation. `fixed` is its built-in publication classification. |
-| `generic_agent` | Agents | prompt, optional declared object schema and `workspaceMode` | `completed`, `needs_human_input`, `failed` | Configurable escape hatch; custom classification is a declared field plus Branch. |
-| `prepare_workspace` | Workspace | none | `ok`, `needs_human_input`, `failed` | Explicitly selects repositories and creates/reuses a workspace for modular graphs. |
-| `finalize_workspace` | Workspace | optional `checks.<id>` bindings | `finalized`, `failed` | Preflights all repositories, pushes committed changes, and records the durable publication attempt. It does not open PRs. |
-| `branch` | Control | restricted `condition` | `ok`, `failed` | Chooses `true` or `false` using parsed expressions over prior outputs. |
+| `planning_agent` | Agents | optional provider/model | `ready`, `needs_human_input` | Produces a plan or clarification questions without requiring a workspace. |
+| `implementation_agent` | Agents | optional provider/model | `implemented`, `needs_human_input` | Implements in an implicitly prepared/resumed managed workspace. |
+| `review_agent` | Agents | optional provider/model | `reviewed` | Reviews the current workspace diff before publication. |
+| `fix_agent` | Agents | optional provider/model/instructions/max minutes | `fixed`, `needs_human_input` | Applies CI, review, or merge-conflict remediation. `fixed` is its built-in publication classification. |
+| `generic_agent` | Agents | prompt, optional declared object schema and `workspaceMode` | `completed`, `needs_human_input` | Configurable escape hatch; custom classification is a declared field plus Branch. |
+| `prepare_workspace` | Workspace | none | `ok`, `needs_human_input` | Explicitly selects repositories and creates/reuses a workspace for modular graphs. |
+| `finalize_workspace` | Workspace | optional `checks.<id>` bindings | `finalized` | Preflights all repositories, pushes committed changes, and records the durable publication attempt. It does not open PRs. |
+| `branch` | Control | restricted `condition` | `ok` | Chooses `true` or `false` using parsed expressions over prior outputs. |
 | `loop` | Control | `maxAttempts`, `onExhaust` | `ok`, `exhausted` | Bounds the single permitted re-entry point for a cycle. |
 | `terminate` | Control | terminal status | `waiting_for_human`, `failed`, `skipped`, `done` | Stops the path with an explicit terminal outcome. |
-| `post_ticket_comment` | Ticket | body input/param | `ok`, `failed` | Posts questions, plans, or status to the real ticket. |
+| `post_ticket_comment` | Ticket | body input/param | `ok` | Posts questions, plans, or status to the real ticket. |
 | `update_ticket_status` | Ticket | target input/param | `ok` | Moves the real ticket to a configured/discovered provider status. |
-| `fetch_pr_context` | VCS | none | `ok`, `failed` | Loads PR/MR comments, checks, conflicts, and normalized remediation context. |
-| `open_pr` | VCS | required `publicationAttemptId` binding | `ok`, `failed` | Creates/reuses PRs/MRs from a successful Finalize output; no pushing. |
-| `post_pr_comment` | VCS | body input/param | `ok`, `failed` | Posts a summary or response to the selected PRs/MRs. |
-| `send_plan_approval` | Human | required plan; optional assumptions | `awaiting_approval`, `failed` | Creates a durable approval item and ends that path. |
-| `human_question` | Human | questions; optional suggested answers | `needs_human_input`, `answered`, `failed` | Explicit authoring primitive for a scoped question; agent clarification does not require it. |
-| `run_pre_pr_checks` | Utility | `maxFixCycles` | `ok`, `failed` | Existing bounded pre-PR validation/fix gate before publication. |
-| `run_checks` | Utility | optional commands | `ok`, `failed` | Runs configured/explicit commands and exposes branchable aggregate/results/failures. |
-| `call_llm` | Utility | prompt; optional system/provider/model/output schema | `ok`, `failed` | Focused non-agent LLM transform with an optional declared output contract. |
+| `fetch_pr_context` | VCS | none | `ok` | Loads PR/MR comments, checks, conflicts, and normalized remediation context. |
+| `open_pr` | VCS | required `publicationAttemptId` binding | `ok` | Creates/reuses PRs/MRs from a successful Finalize output; no pushing. |
+| `post_pr_comment` | VCS | body input/param | `ok` | Posts a summary or response to the selected PRs/MRs. |
+| `send_plan_approval` | Human | required plan; optional assumptions | `awaiting_approval` | Creates a durable approval item and ends that path. |
+| `human_question` | Human | questions; optional suggested answers | `needs_human_input`, `answered` | Explicit authoring primitive for a scoped question; agent clarification does not require it. |
+| `run_pre_pr_checks` | Utility | `maxFixCycles` | `ok` | Existing bounded pre-PR validation/fix gate before publication. Command failures are exposed as `ok: false`. |
+| `run_checks` | Utility | optional commands | `ok` | Runs configured/explicit commands and exposes branchable aggregate/results/failures. Command failures are exposed as `ok: false`. |
+| `call_llm` | Utility | prompt; optional system/provider/model/output schema | `ok` | Focused non-agent LLM transform with an optional declared output contract. |
 | `send_slack_message` | Utility | message input/param | `ok`, `skipped` | Sends a milestone to the configured channel or skips when there is nothing applicable to send. |
 | `arthur_injection_check` | Arthur | optional content input | `ok`, `flagged`, `skipped` | Optional prompt-injection scan; unavailable when Arthur is not configured. |
 
@@ -106,7 +107,7 @@ PR checks failed ─┐
 PR review ────────┘
 ```
 
-There is no explicit Prepare or readiness Branch. `fixed` follows Fix's normal output; `needs_human_input` creates a pinned continuation; `failed` follows failure policy.
+There is no explicit Prepare or readiness Branch. `fixed` follows Fix's normal output; `needs_human_input` creates a pinned continuation. Execution errors can follow an authored `failed` cleanup edge, but they never produce a bindable block output and the run remains failed.
 
 ### Pinned clarification
 

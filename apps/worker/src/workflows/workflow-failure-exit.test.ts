@@ -28,6 +28,24 @@ describe("handleWorkflowFailureExit", () => {
 
     expect(order).toEqual(["log", "move", "notify"]);
   });
+
+  it("attempts each ordinary failure side effect once without replacing the primary error", async () => {
+    const logFailure = vi.fn().mockRejectedValue(new Error("log unavailable"));
+    const moveTicket = vi.fn().mockRejectedValue(new Error("Jira unavailable"));
+    const notifyTicket = vi.fn().mockRejectedValue(new Error("Slack unavailable"));
+
+    await expect(
+      handleWorkflowFailureExit("PROJ-1", {
+        logFailure,
+        moveTicket,
+        notifyTicket,
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(logFailure).toHaveBeenCalledOnce();
+    expect(moveTicket).toHaveBeenCalledOnce();
+    expect(notifyTicket).toHaveBeenCalledOnce();
+  });
 });
 
 describe("handleUnhandledWorkflowError", () => {

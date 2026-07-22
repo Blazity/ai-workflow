@@ -127,6 +127,73 @@ describe("collectRunDetail", () => {
     expect(run.ticketTitle).toBe("");
     expect(run.ticketUrl).toBe("");
   });
+
+  it("drops the stack from diagnostic-coded execution errors", async () => {
+    const source = makeSource(
+      {
+        runId: "run_diag",
+        status: "failed",
+        error: {
+          message: "The block could not be completed.",
+          code: "AIW-DIAG-run_diag-engine-1",
+          stack: "provider secret stack",
+        },
+      },
+      [
+        step({
+          stepId: "provider-step",
+          status: "failed",
+          error: {
+            message: "provider secret detail",
+            stack: "provider secret stack",
+          },
+        }),
+      ],
+    );
+
+    const { run, steps } = await collectRunDetail({
+      world: source,
+      model: "m",
+      runId: "run_diag",
+    });
+
+    expect(run.error).toEqual({
+      message: "The block could not be completed.",
+      code: "AIW-DIAG-run_diag-engine-1",
+    });
+    expect(steps[0]?.error).toEqual({
+      message: "The block could not be completed.",
+      code: "AIW-DIAG-run_diag-engine-1",
+    });
+  });
+
+  it("recovers the diagnostic ID when the SDK replaces the thrown code", async () => {
+    const source = makeSource(
+      {
+        runId: "run_sdk_diag",
+        status: "failed",
+        error: {
+          message:
+            "The block could not be completed. Diagnostic ID: AIW-DIAG-run_sdk_diag-engine-1",
+          code: "USER_ERROR",
+          stack: "safe workflow stack",
+        },
+      },
+      [],
+    );
+
+    const { run } = await collectRunDetail({
+      world: source,
+      model: "m",
+      runId: "run_sdk_diag",
+    });
+
+    expect(run.error).toEqual({
+      message:
+        "The block could not be completed. Diagnostic ID: AIW-DIAG-run_sdk_diag-engine-1",
+      code: "AIW-DIAG-run_sdk_diag-engine-1",
+    });
+  });
 });
 
 describe("captureRunStepsBestEffort", () => {

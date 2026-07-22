@@ -17,7 +17,11 @@ export function deriveRunStatuses(
   const errors: Record<string, string> = {};
   for (const [nodeId, state] of Object.entries(run.blockStatuses)) {
     statuses[nodeId] = state.status;
-    if (state.error !== undefined) errors[nodeId] = state.error;
+    if (state.error !== undefined) {
+      errors[nodeId] = state.diagnosticId
+        ? `${state.error} Diagnostic ID: ${state.diagnosticId}`
+        : state.error;
+    }
   }
   return { statuses, errors };
 }

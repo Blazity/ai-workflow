@@ -15,6 +15,7 @@ vi.mock("../clarifications/store.js", () => ({
 }));
 vi.mock("../lib/overview/collect-run-detail.js", () => ({
   captureRunStepsBestEffort: (...args: unknown[]) => mocks.captureRunSteps(...args),
+  sanitizeRunStepsForDiagnosticError: (steps: unknown) => steps,
 }));
 vi.mock("workflow/runtime", () => ({ getWorld: () => ({ world: true }) }));
 
@@ -47,6 +48,7 @@ describe("clarification terminal telemetry", () => {
       },
       budgetFailure: null,
       pr: null,
+      executionError: null,
       awaitingClarificationId: "clarification-answered",
     } as never);
 

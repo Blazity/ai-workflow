@@ -63,9 +63,9 @@ describe("human_question execute", () => {
   it("fails with a clear reason when nothing is derivable", async () => {
     const steps: StepsRecord = { a: { output: { status: "ok" } } };
     const result = await execute(makeNode("human_question"), steps, makeCtx());
-    expect(result.kind).toBe("failed");
-    if (result.kind === "failed") {
-      expect(result.reason).toContain("human_question has no questions");
+    expect(result.kind).toBe("execution_error");
+    if (result.kind === "execution_error") {
+      expect(result.error.detail).toContain("human_question has no questions");
     }
   });
 

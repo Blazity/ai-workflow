@@ -9,6 +9,7 @@ import type {
 } from "@shared/contracts";
 import {
   buildRuntimeGraph,
+  executionError,
   executeGraph as executeGraphWithContractValidation,
   type BlockExecutionResult,
   type BlockExecutor,
@@ -233,10 +234,13 @@ describe("executeGraph output contracts", () => {
 
     expect(result.outcome).toBe("stopped");
     expect(rec.failures[0]).toMatchObject({ phase: "contract", nodeId: "comment" });
-    expect(rec.failures[0]?.reason).toContain("output.comments is required");
+    expect(rec.failures[0]?.reason).toBe(
+      "The block returned an invalid result. Diagnostic ID: AIW-DIAG-test-run-comment-1",
+    );
+    expect(result.executionError?.category).toBe("schema");
   });
 
-  it("does not require normal-only fields from an authored failure output", async () => {
+  it("does not validate normal output fields for an execution error", async () => {
     const graph = graphFrom(
       [
         node("trig", "trigger_ticket_ai"),
@@ -256,13 +260,15 @@ describe("executeGraph output contracts", () => {
       triggerOutput: { status: "fired", ticketKey: "AIW-103" },
       executeBlock: async (block) =>
         block.id === "comment"
-          ? { kind: "failed", output: { status: "failed" }, reason: "provider rejected" }
+          ? executionError("provider rejected", { category: "provider" })
           : { kind: "next", output: { status: "ok" } },
       hooks: rec.hooks,
     });
 
     expect(result.outcome).toBe("completed");
-    expect(rec.failures).toEqual([]);
+    expect(result.steps.comment).toBeUndefined();
+    expect(result.executionError?.category).toBe("provider");
+    expect(rec.failures).toHaveLength(1);
   });
 
   it("routes a thrown executor error through an authored failure edge", async () => {
@@ -294,12 +300,20 @@ describe("executeGraph output contracts", () => {
 
     expect(result.outcome).toBe("completed");
     expect(calls).toEqual(["comment", "recover"]);
-    expect(result.steps.comment?.output).toEqual({ status: "failed" });
+    expect(result.steps.comment).toBeUndefined();
     expect(rec.finishes.find((finish) => finish.nodeId === "comment")?.state).toMatchObject({
       status: "fail",
-      error: "provider rejected the comment",
+      error: "The block could not be completed.",
+      diagnosticId: "AIW-DIAG-test-run-comment-1",
     });
-    expect(rec.failures).toEqual([]);
+    expect(rec.failures).toEqual([
+      {
+        phase: "post_ticket_comment",
+        reason:
+          "The block could not be completed. Diagnostic ID: AIW-DIAG-test-run-comment-1",
+        nodeId: "comment",
+      },
+    ]);
   });
 
   it.each([
@@ -367,11 +381,12 @@ describe("executeGraph output contracts", () => {
     });
 
     expect(result.outcome).toBe("stopped");
-    expect(result.steps.comment?.output).toEqual({ status: "failed" });
+    expect(result.steps.comment).toBeUndefined();
     expect(rec.failures).toEqual([
       {
         phase: "post_ticket_comment",
-        reason: "provider rejected the comment",
+        reason:
+          "The block could not be completed. Diagnostic ID: AIW-DIAG-test-run-comment-1",
         nodeId: "comment",
       },
     ]);
@@ -601,7 +616,7 @@ describe("executeGraph branch", () => {
     expect(rec.failures[0].phase).toBe("branch");
     expect(rec.failures[0].nodeId).toBe("br");
     expect(rec.failures[0].reason).toBe(
-      "steps.trig.output.failures: expected boolean, got array",
+      "The workflow engine could not continue. Diagnostic ID: AIW-DIAG-test-run-br-1",
     );
     expect(finishStatuses(rec, "br")).toEqual(["fail"]);
     expect(result.steps.br).toBeUndefined();
@@ -836,7 +851,9 @@ describe("executeGraph loop", () => {
     });
 
     expect(result.outcome).toBe("stopped");
-    expect(rec.failures[0]?.reason).toMatch(/maximum of 2 block executions/);
+    expect(rec.failures[0]?.reason).toBe(
+      "The workflow engine could not continue. Diagnostic ID: AIW-DIAG-test-run-waiting-2",
+    );
   });
 });
 
@@ -855,7 +872,10 @@ describe("executeGraph failure port override", () => {
   it("continues along a wired failure edge and persists a fail state", async () => {
     const rec = makeRecorder();
     const { executor, calls } = makeExecutor({
-      checks: { kind: "failed", output: { status: "failed" }, reason: "lint broke", phase: "checks" },
+      checks: executionError("lint broke", {
+        category: "checks",
+        phase: "checks",
+      }),
     });
     const result = await executeGraph({
       graph: failGraph(true),
@@ -866,15 +886,74 @@ describe("executeGraph failure port override", () => {
     });
     expect(result.outcome).toBe("completed");
     expect(calls).toEqual(["checks", "recover"]);
-    expect(rec.failures).toEqual([]);
+    expect(rec.failures).toHaveLength(1);
     expect(finishStatuses(rec, "checks")).toEqual(["fail"]);
-    expect(rec.finishes[0].state.error).toBe("lint broke");
+    expect(rec.finishes[0].state.error).toBe("The checks could not be started.");
+    expect(result.steps.checks).toBeUndefined();
+    expect(result.executionError?.diagnosticId).toBe(
+      "AIW-DIAG-test-run-checks-1",
+    );
+  });
+
+  it("keeps the first error primary when cleanup also errors", async () => {
+    const rec = makeRecorder();
+    const { executor } = makeExecutor({
+      checks: executionError("provider rejected checks", {
+        category: "provider",
+        phase: "checks",
+      }),
+      recover: executionError("cleanup sandbox unavailable", {
+        category: "sandbox",
+        phase: "cleanup",
+      }),
+    });
+
+    const result = await executeGraph({
+      graph: failGraph(true),
+      entryTriggerId: "trig",
+      triggerOutput: { status: "ok" },
+      executeBlock: executor,
+      hooks: rec.hooks,
+    });
+
+    expect(result.executionError).toMatchObject({
+      category: "provider",
+      diagnosticId: "AIW-DIAG-test-run-checks-1",
+      nodeId: "checks",
+    });
+    expect(rec.finishes).toEqual([
+      expect.objectContaining({
+        nodeId: "checks",
+        state: expect.objectContaining({
+          status: "fail",
+          diagnosticId: "AIW-DIAG-test-run-checks-1",
+        }),
+      }),
+      expect.objectContaining({
+        nodeId: "recover",
+        state: expect.objectContaining({
+          status: "fail",
+          diagnosticId: "AIW-DIAG-test-run-recover-1",
+        }),
+      }),
+    ]);
+    expect(rec.failures).toEqual([
+      {
+        phase: "checks",
+        reason:
+          "An external service could not complete this block. Diagnostic ID: AIW-DIAG-test-run-checks-1",
+        nodeId: "checks",
+      },
+    ]);
   });
 
   it("calls failureExit with the phase when no failure edge is wired", async () => {
     const rec = makeRecorder();
     const { executor } = makeExecutor({
-      checks: { kind: "failed", output: { status: "failed" }, reason: "lint broke", phase: "checks" },
+      checks: executionError("lint broke", {
+        category: "checks",
+        phase: "checks",
+      }),
     });
     const result = await executeGraph({
       graph: failGraph(false),
@@ -886,7 +965,9 @@ describe("executeGraph failure port override", () => {
     expect(result.outcome).toBe("stopped");
     expect(rec.failures).toHaveLength(1);
     expect(rec.failures[0].phase).toBe("checks");
-    expect(rec.failures[0].reason).toBe("lint broke");
+    expect(rec.failures[0].reason).toBe(
+      "The checks could not be started. Diagnostic ID: AIW-DIAG-test-run-checks-1",
+    );
   });
 });
 
@@ -1036,6 +1117,38 @@ describe("executeGraph terminate", () => {
       ]);
     },
   );
+
+  it("does not let a cleanup terminate replace or repeat the primary failure exit", async () => {
+    const graph = graphFrom(
+      [
+        node("trig", "trigger_ticket_ai"),
+        node("action", "post_ticket_comment", { body: "work" }),
+        node("term", "terminate", { terminalStatus: "failed", postComment: "cleanup" }),
+      ],
+      [
+        { from: "trig", to: "action" },
+        { from: "action", to: "term", fromPort: "failed" },
+      ],
+    );
+    const rec = makeRecorder();
+    const result = await executeGraph({
+      graph,
+      entryTriggerId: "trig",
+      triggerOutput: { status: "ok" },
+      executeBlock: async () =>
+        executionError("provider rejected the action", { category: "provider" }),
+      hooks: rec.hooks,
+    });
+
+    expect(result.executionError).toMatchObject({
+      category: "provider",
+      diagnosticId: "AIW-DIAG-test-run-action-1",
+    });
+    expect(rec.terminations).toEqual([]);
+    expect(rec.failures).toEqual([
+      expect.objectContaining({ nodeId: "action" }),
+    ]);
+  });
 });
 
 describe("executeGraph multi-trigger", () => {
@@ -1094,7 +1207,9 @@ describe("executeGraph execution cap", () => {
     expect(result.outcome).toBe("stopped");
     expect(rec.failures).toHaveLength(1);
     expect(rec.failures[0].phase).toBe("engine");
-    expect(rec.failures[0].reason).toContain("maximum of 5 block executions");
+    expect(rec.failures[0].reason).toBe(
+      "The workflow engine could not continue. Diagnostic ID: AIW-DIAG-test-run-body-3",
+    );
   });
 });
 
@@ -1171,7 +1286,8 @@ describe("executeGraph steps propagation", () => {
     expect(rec.failures).toEqual([
       {
         phase: "bindings",
-        reason: 'binding "trigger.missing" could not be resolved',
+        reason:
+          "A block input could not be resolved. Diagnostic ID: AIW-DIAG-test-run-target-1",
         nodeId: "target",
       },
     ]);
@@ -1263,18 +1379,26 @@ describe("executeGraph steps propagation", () => {
     expect(result.steps.a.output.value).toBe(42);
   });
 
-  it("throws when the entry trigger is missing from the graph", async () => {
+  it("normalizes a missing entry trigger through the execution-error path", async () => {
     const graph = graphFrom([node("trig", "trigger_ticket_ai")], []);
     const rec = makeRecorder();
     const { executor } = makeExecutor();
-    await expect(
-      executeGraph({
-        graph,
-        entryTriggerId: "ghost",
-        triggerOutput: { status: "ok" },
-        executeBlock: executor,
-        hooks: rec.hooks,
-      }),
-    ).rejects.toThrow(/entry trigger/);
+    const result = await executeGraph({
+      graph,
+      entryTriggerId: "ghost",
+      triggerOutput: { status: "ok" },
+      executeBlock: executor,
+      hooks: rec.hooks,
+    });
+
+    expect(result.outcome).toBe("stopped");
+    expect(result.executionError).toMatchObject({
+      category: "engine",
+      diagnosticId: "AIW-DIAG-test-run-ghost-1",
+      nodeId: "ghost",
+    });
+    expect(rec.failures).toEqual([
+      expect.objectContaining({ phase: "engine", nodeId: "ghost" }),
+    ]);
   });
 });

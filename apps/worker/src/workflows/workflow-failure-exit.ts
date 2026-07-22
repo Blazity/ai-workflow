@@ -19,10 +19,19 @@ export async function handleWorkflowFailureExit(
   ticketKey: string | undefined,
   deps: WorkflowFailureExitDeps,
 ): Promise<void> {
-  await deps.logFailure();
+  const runOnce = async (label: string, task: () => Promise<void>) => {
+    try {
+      await task();
+    } catch (error) {
+      if (isRunControlError(error)) throw error;
+      console.error(`Workflow failure ${label} failed:`, error);
+    }
+  };
+
+  await runOnce("logging", deps.logFailure);
   if (!ticketKey) return;
-  await deps.moveTicket();
-  await deps.notifyTicket();
+  await runOnce("ticket parking", deps.moveTicket);
+  await runOnce("notification", deps.notifyTicket);
 }
 
 /**

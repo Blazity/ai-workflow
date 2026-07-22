@@ -404,8 +404,8 @@ describe("post_ticket_comment edge cases", () => {
       makeCtx(),
     );
 
-    expect(result.kind).toBe("failed");
-    if (result.kind === "failed") expect(result.reason).toContain("requires a body");
+    expect(result.kind).toBe("execution_error");
+    if (result.kind === "execution_error") expect(result.error.detail).toContain("requires a body");
     expect(mocks.postComment).not.toHaveBeenCalled();
   });
 
@@ -488,9 +488,9 @@ describe("post_pr_comment edge cases", () => {
       makeCtx({ publication: singlePublication() }),
     );
 
-    expect(result.kind).toBe("failed");
-    if (result.kind === "failed") {
-      expect(result.reason).toContain("not in AGENT_ALLOWED_REPOS");
+    expect(result.kind).toBe("execution_error");
+    if (result.kind === "execution_error") {
+      expect(result.error.detail).toContain("not in AGENT_ALLOWED_REPOS");
     }
     expect(mocks.createRepositoryVCS).not.toHaveBeenCalled();
   });
@@ -553,8 +553,8 @@ describe("post_pr_comment edge cases", () => {
       }),
     );
 
-    expect(result.kind).toBe("failed");
-    if (result.kind === "failed") expect(result.reason).toContain("identity is incomplete");
+    expect(result.kind).toBe("execution_error");
+    if (result.kind === "execution_error") expect(result.error.detail).toContain("identity is incomplete");
     expect(mocks.createRepositoryVCS).not.toHaveBeenCalled();
   });
 
@@ -567,8 +567,8 @@ describe("post_pr_comment edge cases", () => {
       makeCtx({ publication: incomplete }),
     );
 
-    expect(result.kind).toBe("failed");
-    if (result.kind === "failed") expect(result.reason).toContain("identity is incomplete");
+    expect(result.kind).toBe("execution_error");
+    if (result.kind === "execution_error") expect(result.error.detail).toContain("identity is incomplete");
     expect(mocks.createRepositoryVCS).not.toHaveBeenCalled();
   });
 
@@ -579,8 +579,8 @@ describe("post_pr_comment edge cases", () => {
       makeCtx({ publication: publication() }),
     );
 
-    expect(result.kind).toBe("failed");
-    if (result.kind === "failed") expect(result.reason).toContain("requires a body");
+    expect(result.kind).toBe("execution_error");
+    if (result.kind === "execution_error") expect(result.error.detail).toContain("requires a body");
     expect(mocks.createRepositoryVCS).not.toHaveBeenCalled();
   });
 });
@@ -662,8 +662,8 @@ describe("run_checks edge cases", () => {
     const result = await executeRunChecks(makeNode("run_checks"), {}, makeCtx());
 
     expect(result.kind).toBe("next");
-    expect(result.output.ok).toBe(true);
-    expect(result.output.failures).toEqual([]);
+    expect(result.output!.ok).toBe(true);
+    expect(result.output!.failures).toEqual([]);
   });
 
   it("fails when the workspace manifest is missing", async () => {
@@ -675,8 +675,8 @@ describe("run_checks edge cases", () => {
       makeCtx(),
     );
 
-    expect(result.kind).toBe("failed");
-    if (result.kind === "failed") expect(result.reason).toContain("Workspace manifest not found");
+    expect(result.kind).toBe("execution_error");
+    if (result.kind === "execution_error") expect(result.error.detail).toContain("Workspace manifest not found");
   });
 
   it("routes an empty commands array to the configured pre-PR-checks path", async () => {
@@ -704,7 +704,7 @@ describe("run_checks edge cases", () => {
     );
 
     expect(result.kind).toBe("next");
-    expect(result.output.results).toEqual([
+    expect(result.output!.results).toEqual([
       { repo: "github:acme/api", command: "pnpm lint", exitCode: 0 },
       { repo: "github:acme/web", command: "pnpm lint", exitCode: 0 },
     ]);
@@ -747,10 +747,10 @@ describe("finalize_workspace edge cases", () => {
       makeCtx({ selectedRepositories: [repo], workspaceManifest }),
     );
 
-    expect(result.kind).toBe("failed");
-    if (result.kind === "failed") {
-      expect(result.reason).toBe("boom");
-      expect(result.phase).toBe("push");
+    expect(result.kind).toBe("execution_error");
+    if (result.kind === "execution_error") {
+      expect(result.error.detail).toBe("boom");
+      expect(result.error.phase).toBe("push");
     }
   });
 
@@ -768,7 +768,7 @@ describe("finalize_workspace edge cases", () => {
       makeCtx({ selectedRepositories: [repo], workspaceManifest }),
     );
 
-    expect(result.kind).toBe("failed");
+    expect(result.kind).toBe("execution_error");
     expect(mocks.postComment).not.toHaveBeenCalled();
   });
 
@@ -828,9 +828,9 @@ describe("fetch_pr_context edge cases", () => {
       makeCtx({ selectedRepositories: [repoWithPr] }),
     );
 
-    expect(result.kind).toBe("failed");
-    if (result.kind === "failed") {
-      expect(result.reason).toContain("not in AGENT_ALLOWED_REPOS");
+    expect(result.kind).toBe("execution_error");
+    if (result.kind === "execution_error") {
+      expect(result.error.detail).toContain("not in AGENT_ALLOWED_REPOS");
     }
     expect(mocks.createRepositoryVCS).not.toHaveBeenCalled();
   });
@@ -878,8 +878,8 @@ describe("fetch_pr_context edge cases", () => {
       makeCtx({ selectedRepositories: [repoWithPr] }),
     );
 
-    expect(result.kind).toBe("failed");
-    if (result.kind === "failed") expect(result.reason).toBe("github 500");
+    expect(result.kind).toBe("execution_error");
+    if (result.kind === "execution_error") expect(result.error.detail).toBe("github 500");
   });
 
   it("returns full context for a repo with a PR and empty context for one without", async () => {

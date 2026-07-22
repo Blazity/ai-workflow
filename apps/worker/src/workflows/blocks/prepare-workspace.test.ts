@@ -155,7 +155,7 @@ describe("prepare_workspace execute", () => {
         workspace: { id: "sbx-9", repositories: ["github:acme/api"] },
       },
     });
-    expectOutputConformsToRegistry("prepare_workspace", result.output);
+    expectOutputConformsToRegistry("prepare_workspace", result.output!);
   });
 
   it("passes the clarification answer back into pre-sandbox repository selection", async () => {
@@ -327,8 +327,8 @@ describe("prepare_workspace execute", () => {
     const ctx = makeCtx({ sandboxId: null, sandboxIds: new Set<string>() });
     const result = await execute(makeNode("prepare_workspace"), {}, ctx);
 
-    expect(result.kind).toBe("failed");
-    if (result.kind === "failed") expect(result.reason).toBe("registry write failed");
+    expect(result.kind).toBe("execution_error");
+    if (result.kind === "execution_error") expect(result.error.detail).toBe("registry write failed");
     expect(ctx.sandboxId).toBeNull();
     expect([...ctx.sandboxIds]).toEqual([]);
   });
@@ -360,8 +360,8 @@ describe("prepare_workspace execute", () => {
 
     const result = await execute(makeNode("prepare_workspace"), {}, makeCtx({ sandboxId: null }));
 
-    expect(result.kind).toBe("failed");
-    if (result.kind === "failed") expect(result.reason).toBe("pre-sandbox: step exploded");
+    expect(result.kind).toBe("execution_error");
+    if (result.kind === "execution_error") expect(result.error.detail).toBe("pre-sandbox: step exploded");
   });
 
   it("asks for a repository when none is selectable", async () => {
@@ -450,8 +450,8 @@ describe("prepare_workspace execute", () => {
 
     const result = await execute(makeNode("prepare_workspace"), {}, makeCtx({ sandboxId: null }));
 
-    expect(result.kind).toBe("failed");
-    if (result.kind === "failed") expect(result.reason).toBe("no capacity");
+    expect(result.kind).toBe("execution_error");
+    if (result.kind === "execution_error") expect(result.error.detail).toBe("no capacity");
   });
 
   it.each(runControlErrorCases())("rethrows %s from provisioning", async (_label, error) => {

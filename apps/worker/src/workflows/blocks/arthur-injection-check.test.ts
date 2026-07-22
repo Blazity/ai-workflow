@@ -105,7 +105,7 @@ describe("arthur_injection_check execute", () => {
     expect(mocks.validatePrompt).toHaveBeenCalledWith("task-1", "text");
   });
 
-  it("skips on client errors instead of failing the run", async () => {
+  it("returns an execution error without output on client failures", async () => {
     configureArthur();
     mocks.validatePrompt.mockRejectedValue(new Error("arthur 500"));
 
@@ -115,8 +115,14 @@ describe("arthur_injection_check execute", () => {
       makeCtx({ arthur: { taskId: "task-1" } }),
     );
 
-    expect(result.kind).toBe("next");
-    expect(result.output).toEqual({ status: "skipped", reason: "arthur 500" });
+    expect(result).toEqual({
+      kind: "execution_error",
+      error: {
+        category: "provider",
+        message: "An external service could not complete this block.",
+        detail: "arthur 500",
+      },
+    });
   });
 
   it.each(runControlErrorCases())("rethrows %s from Arthur validation", async (_label, error) => {

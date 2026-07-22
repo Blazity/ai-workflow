@@ -3,7 +3,7 @@ import type { SelectedRepository } from "../../adapters/vcs/repository-directory
 import type { SelectedRepositoryPromptContext } from "../../sandbox/context.js";
 import type { PrTriggerPayload } from "../agent-input.js";
 import { isRunControlError } from "../run-control-error.js";
-import type { BlockExecuteFn, BlockExecutionResult } from "./types.js";
+import { executionError, type BlockExecuteFn, type BlockExecutionResult } from "./types.js";
 
 export const paramsSchema = z.object({}).strict();
 
@@ -83,11 +83,10 @@ export const execute: BlockExecuteFn = async (_block, _steps, ctx): Promise<Bloc
       repositories = await blockPrTriggerRepositoriesStep(ctx.ticket.identifier, ctx.entry.pr);
     }
     if (repositories.length === 0) {
-      return {
-        kind: "failed",
-        output: { status: "failed" },
-        reason: "no repositories in scope: run prepare_workspace first or use a PR trigger",
-      };
+      return executionError(
+        "no repositories in scope: run prepare_workspace first or use a PR trigger",
+        { category: "binding" },
+      );
     }
 
     const contexts = await blockFetchPrContextsStep(repositories);
@@ -110,10 +109,8 @@ export const execute: BlockExecuteFn = async (_block, _steps, ctx): Promise<Bloc
     };
   } catch (err) {
     if (isRunControlError(err)) throw err;
-    return {
-      kind: "failed",
-      output: { status: "failed" },
-      reason: err instanceof Error ? err.message : String(err),
-    };
+    return executionError(err instanceof Error ? err.message : String(err), {
+      category: "provider",
+    });
   }
 };

@@ -10,7 +10,12 @@ import { resolveBlockAgent } from "../../workflow-definition/resolve-agent.js";
 import { ensureAgentSandbox } from "./agent-sandbox.js";
 import { isRunControlError } from "../run-control-error.js";
 import { pollPhaseUntilDone } from "./poll-phase.js";
-import { sanitizeBlockId, type BlockExecuteFn, type BlockExecutionResult } from "./types.js";
+import {
+  executionError,
+  sanitizeBlockId,
+  type BlockExecuteFn,
+  type BlockExecutionResult,
+} from "./types.js";
 
 export const paramsSchema = z
   .object({
@@ -138,7 +143,7 @@ async function blockGenericAgentParseStep(
  * generic_agent: run a free-form agent phase on the attached workspace. The
  * prompt param is written verbatim as the phase input file. Without an
  * outputSchema param the phase uses GENERIC_SCHEMA and its status maps to
- * next / needs_human_input / failed; with a custom schema the parsed object is
+ * next / needs_human_input / execution_error; with a custom schema the parsed object is
  * returned at the top level with the reserved runtime status plus a compatibility
  * `data` alias. The outputSchema string is validated before anything reaches
  * the agent CLI.
@@ -158,15 +163,13 @@ export const execute: BlockExecuteFn = async (
     try {
       JSON.parse(customSchema);
     } catch {
-      return { kind: "failed", output: { status: "failed" }, reason: "invalid outputSchema" };
+      return executionError("invalid outputSchema", { category: "schema" });
     }
     const definitionIssue = workflowBlockDefinitionIssue(block.type, block.params);
     if (definitionIssue) {
-      return {
-        kind: "failed",
-        output: { status: "failed" },
-        reason: `invalid outputSchema: ${definitionIssue}`,
-      };
+      return executionError(`invalid outputSchema: ${definitionIssue}`, {
+        category: "schema",
+      });
     }
   }
 
@@ -183,21 +186,17 @@ export const execute: BlockExecuteFn = async (
         : ctx.sandboxId;
   } catch (err) {
     if (isRunControlError(err)) throw err;
-    return {
-      kind: "failed",
-      output: { status: "failed" },
-      reason: err instanceof Error ? err.message : String(err),
-    };
+    return executionError(err instanceof Error ? err.message : String(err), {
+      category: "sandbox",
+    });
   }
   if (!sandboxId) {
-    return {
-      kind: "failed",
-      output: { status: "failed" },
-      reason:
+    return executionError(
         workspaceMode === "read_write"
           ? "no workspace: connect prepare_workspace before generic_agent"
           : "could not provision an agent-only sandbox for generic_agent",
-    };
+      { category: "sandbox" },
+    );
   }
   const basePrompt =
     typeof resolvedInputs.prompt === "string"
@@ -209,7 +208,9 @@ export const execute: BlockExecuteFn = async (
     ? `${basePrompt}\n\nHuman clarification answer:\n${execution.clarificationAnswer}`
     : basePrompt;
   if (prompt.length === 0) {
-    return { kind: "failed", output: { status: "failed" }, reason: "generic_agent requires a prompt" };
+    return executionError("generic_agent requires a prompt", {
+      category: "binding",
+    });
   }
 
   // Artifact phase must be shell/file-safe (drives /tmp paths); telemetry label
@@ -246,7 +247,7 @@ export const execute: BlockExecuteFn = async (
       ctx.observeBudget,
     );
     if (!done) {
-      return { kind: "failed", output: { status: "failed" }, reason: "agent phase timed out" };
+      return executionError("agent phase timed out", { category: "timeout" });
     }
 
     const { collectPhase } = await import("../../sandbox/poll-agent.js");
@@ -256,18 +257,14 @@ export const execute: BlockExecuteFn = async (
 
     if (customSchema !== undefined) {
       if (object === undefined) {
-        return {
-          kind: "failed",
-          output: { status: "failed" },
-          reason: "agent output did not match the requested schema",
-        };
+        return executionError("agent output did not match the requested schema", {
+          category: "schema",
+        });
       }
       if (object === null || typeof object !== "object" || Array.isArray(object)) {
-        return {
-          kind: "failed",
-          output: { status: "failed" },
-          reason: "agent output did not match the requested schema",
-        };
+        return executionError("agent output did not match the requested schema", {
+          category: "schema",
+        });
       }
       const data = object as Record<string, JsonValue>;
       const output = { ...data, status: "completed", data } as const;
@@ -276,22 +273,18 @@ export const execute: BlockExecuteFn = async (
           requireNormalOutput: true,
         }).length > 0
       ) {
-        return {
-          kind: "failed",
-          output: { status: "failed" },
-          reason: "agent output did not match the requested schema",
-        };
+        return executionError("agent output did not match the requested schema", {
+          category: "schema",
+        });
       }
       return { kind: "next", output };
     }
 
     const parsed = genericOutputSchema.safeParse(object);
     if (!parsed.success) {
-      return {
-        kind: "failed",
-        output: { status: "failed" },
-        reason: "agent output was not structured JSON",
-      };
+      return executionError("agent output was not structured JSON", {
+        category: "parsing",
+      });
     }
     if (parsed.data.status === "needs_input") {
       const listed = (parsed.data.questions ?? []).filter((q) => q.trim().length > 0);
@@ -311,11 +304,10 @@ export const execute: BlockExecuteFn = async (
       };
     }
     if (parsed.data.status === "failed") {
-      return {
-        kind: "failed",
-        output: { status: "failed" },
-        reason: parsed.data.error ?? parsed.data.body.slice(0, 500),
-      };
+      return executionError(
+        parsed.data.error ?? parsed.data.body.slice(0, 500),
+        { category: "provider" },
+      );
     }
     return {
       kind: "next",
@@ -326,10 +318,8 @@ export const execute: BlockExecuteFn = async (
     };
   } catch (err) {
     if (isRunControlError(err)) throw err;
-    return {
-      kind: "failed",
-      output: { status: "failed" },
-      reason: err instanceof Error ? err.message : String(err),
-    };
+    return executionError(err instanceof Error ? err.message : String(err), {
+      category: "provider",
+    });
   }
 };

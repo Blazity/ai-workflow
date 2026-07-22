@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { isRunControlError } from "../run-control-error.js";
-import type { BlockExecuteFn, BlockExecutionResult } from "./types.js";
+import { executionError, type BlockExecuteFn, type BlockExecutionResult } from "./types.js";
 
 export const paramsSchema = z.object({}).strict();
 
@@ -23,27 +23,22 @@ export const execute: BlockExecuteFn = async (
   );
   if (unmetChecks.size > 0) {
     const unmet = [...unmetChecks];
-    return {
-      kind: "failed",
-      output: { status: "failed", unmetChecks: unmet },
-      reason: `required checks not satisfied: ${unmet.join(", ")}`,
-    };
+    return executionError(`required checks not satisfied: ${unmet.join(", ")}`, {
+      category: "checks",
+    });
   }
 
   if (!ctx.sandboxId) {
-    return {
-      kind: "failed",
-      output: { status: "failed" },
-      reason: "no workspace: connect prepare_workspace before finalize_workspace",
-    };
+    return executionError(
+      "no workspace: connect prepare_workspace before finalize_workspace",
+      { category: "sandbox" },
+    );
   }
 
   if (!ctx.workspaceManifest) {
-    return {
-      kind: "failed",
-      output: { status: "failed" },
-      reason: "workspace has no manager-authored trusted manifest",
-    };
+    return executionError("workspace has no manager-authored trusted manifest", {
+      category: "sandbox",
+    });
   }
 
   try {
@@ -70,21 +65,17 @@ export const execute: BlockExecuteFn = async (
     ctx.publication = publication;
 
     if (publication.status === "failed") {
-      return {
-        kind: "failed",
-        output: { status: "failed" },
-        reason: publication.reason,
+      return executionError(publication.reason, {
+        category: "provider",
         phase: "push",
-      };
+      });
     }
 
     if (publication.status !== "finalized") {
-      return {
-        kind: "failed",
-        output: { status: "failed" },
-        reason: `Finalize Workspace received unexpected publication status: ${publication.status}`,
-        phase: "push",
-      };
+      return executionError(
+        `Finalize Workspace received unexpected publication status: ${publication.status}`,
+        { category: "engine", phase: "push" },
+      );
     }
 
     return {
@@ -103,11 +94,9 @@ export const execute: BlockExecuteFn = async (
     };
   } catch (err) {
     if (isRunControlError(err)) throw err;
-    return {
-      kind: "failed",
-      output: { status: "failed" },
-      reason: err instanceof Error ? err.message : String(err),
+    return executionError(err instanceof Error ? err.message : String(err), {
+      category: "provider",
       phase: "push",
-    };
+    });
   }
 };

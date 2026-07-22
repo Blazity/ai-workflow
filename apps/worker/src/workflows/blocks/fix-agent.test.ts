@@ -178,7 +178,7 @@ describe("fix_agent execute", () => {
         summary: "patched",
       },
     });
-    expectOutputConformsToRegistry("fix_agent", result.output);
+    expectOutputConformsToRegistry("fix_agent", result.output!);
   });
 
   it("feeds pr_trigger failed checks and review into the fix context", async () => {
@@ -267,7 +267,7 @@ describe("fix_agent execute", () => {
         expect(result.questions).toEqual([
           "The Fix Agent needs more information. What should it use to continue?",
         ]);
-        expect(result.output.questions).toEqual(result.questions);
+        expect(result.output!.questions).toEqual(result.questions);
       }
     },
   );
@@ -341,21 +341,15 @@ describe("fix_agent execute", () => {
     });
   });
 
-  it("maps a failed agent result to kind failed", async () => {
+  it("maps a failed agent result to an execution error without output", async () => {
     mocks.parseAgentOutput.mockReturnValue({ result: "failed", error: "could not fix" });
 
     const result = await execute(makeNode("fix_agent"), {}, makeCtx());
 
-    expect(result.kind).toBe("failed");
-    if (result.kind === "failed") {
-      expect(result.reason).toBe("could not fix");
-      expect(result.output).toEqual({
-        status: "failed",
-        workspaceId: "sbx-1",
-        commits: [],
-        resolvedConflicts: [],
-        unresolvedConflicts: [],
-      });
+    expect(result.kind).toBe("execution_error");
+    if (result.kind === "execution_error") {
+      expect(result.error.detail).toBe("could not fix");
+      expect(result.output).toBeUndefined();
     }
   });
 
@@ -365,7 +359,7 @@ describe("fix_agent execute", () => {
     await expect(execute(makeNode("fix_agent"), {}, makeCtx())).rejects.toBe(error);
   });
 
-  it("reports the post-termination workspace state when the phase times out", async () => {
+  it("returns a timeout execution error without publishing workspace output", async () => {
     mocks.pollPhaseUntilDone.mockResolvedValue(false);
     const before = {
       commits: [{ provider: "github" as const, repoPath: "acme/api", sha: "before123" }],
@@ -387,19 +381,14 @@ describe("fix_agent execute", () => {
     const result = await execute(makeNode("fix_agent"), {}, makeCtx());
 
     expect(result).toEqual({
-      kind: "failed",
-      output: {
-        status: "failed",
-        workspaceId: "sbx-1",
-        commits: after.commits,
-        resolvedConflicts: [
-          { provider: "github", repoPath: "acme/api", files: ["src/old.ts"] },
-        ],
-        unresolvedConflicts: after.unresolvedConflicts,
+      kind: "execution_error",
+      error: {
+        category: "timeout",
+        message: "The block timed out.",
+        detail: "fix phase timed out",
       },
-      reason: "fix phase timed out",
     });
-    expect(mocks.inspectFixWorkspace).toHaveBeenCalledTimes(2);
+    expect(mocks.inspectFixWorkspace).toHaveBeenCalledTimes(1);
     expect(mocks.collectPhase).not.toHaveBeenCalled();
   });
 });

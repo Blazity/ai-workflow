@@ -44,7 +44,7 @@ describe("planning agent scratch provisioning", () => {
           "claude",
           "claude-model",
         );
-        if (provisioned.kind === "failed") return provisioned;
+        if (provisioned.kind === "execution_error") return provisioned;
       }
       return { kind: "next", output: { status: "ok" } };
     };
@@ -80,8 +80,13 @@ describe("planning agent scratch provisioning", () => {
 
     expect(result.outcome).toBe("completed");
     expect(calls).toEqual(["plan", "recover"]);
-    expect(result.steps.plan.output).toEqual({ status: "failed" });
-    expect(failures).toEqual([]);
+    expect(result.steps.plan).toBeUndefined();
+    expect(result.executionError?.diagnosticId).toBe(
+      "AIW-DIAG-test-run-plan-1",
+    );
+    expect(failures).toEqual([
+      "The workspace environment could not complete this block. Diagnostic ID: AIW-DIAG-test-run-plan-1",
+    ]);
   });
 
   it.each(runControlErrorCases())(

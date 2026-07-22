@@ -3,7 +3,12 @@ import type { VcsProvider } from "../../adapters/vcs/repository-directory.js";
 import type { PullRequestHead } from "../../adapters/vcs/types.js";
 import type { ActiveRunOwner } from "../../lib/active-run-owner.js";
 import { isRunControlError } from "../run-control-error.js";
-import type { BlockExecuteFn, BlockExecutionResult, EngineCtx } from "./types.js";
+import {
+  executionError,
+  type BlockExecuteFn,
+  type BlockExecutionResult,
+  type EngineCtx,
+} from "./types.js";
 
 export const paramsSchema = z
   .object({
@@ -100,8 +105,8 @@ function assertCurrentPrCommentTarget(
  * post_pr_comment: comment on the run's pull requests. The PR set comes from
  * ctx.publication when the workspace was published, otherwise from the
  * pr_trigger entry payload. target "primary" comments only the first PR;
- * "all" comments every PR. Partial failures return kind "failed" with the
- * comments that did land in the output.
+ * "all" comments every PR. Partial provider failures are execution errors;
+ * successful partial results are not published as normal block output.
  */
 export const execute: BlockExecuteFn = async (
   block,
@@ -116,11 +121,9 @@ export const execute: BlockExecuteFn = async (
         ? block.params.body.trim()
         : "";
   if (body.length === 0) {
-    return {
-      kind: "failed",
-      output: { status: "failed" },
-      reason: "post_pr_comment requires a body",
-    };
+    return executionError("post_pr_comment requires a body", {
+      category: "binding",
+    });
   }
 
   let prs: PrCommentTarget[] = [];
@@ -131,13 +134,11 @@ export const execute: BlockExecuteFn = async (
           repository.provider === pr.provider && repository.repoPath === pr.repoPath,
       );
       if (!finalized?.defaultBranch) {
-        return {
-          kind: "failed",
-          output: { status: "failed" },
-          reason:
-            `publication identity is incomplete for ${pr.provider}:${pr.repoPath}#${pr.id}: ` +
+        return executionError(
+          `publication identity is incomplete for ${pr.provider}:${pr.repoPath}#${pr.id}: ` +
             "missing finalized head or target branch",
-        };
+          { category: "binding" },
+        );
       }
       prs.push({
         provider: pr.provider,
@@ -161,11 +162,10 @@ export const execute: BlockExecuteFn = async (
     ];
   }
   if (prs.length === 0) {
-    return {
-      kind: "failed",
-      output: { status: "failed" },
-      reason: "no pull request in scope: publish the workspace first or use a PR trigger",
-    };
+    return executionError(
+      "no pull request in scope: publish the workspace first or use a PR trigger",
+      { category: "binding" },
+    );
   }
 
   const target = block.params.target === "all" ? "all" : "primary";
@@ -178,19 +178,15 @@ export const execute: BlockExecuteFn = async (
       runId: ctx.runId,
     });
     if (errors.length > 0) {
-      return {
-        kind: "failed",
-        output: { status: "failed", comments },
-        reason: errors.join("; ").slice(0, 500),
-      };
+      return executionError(errors.join("; ").slice(0, 500), {
+        category: "provider",
+      });
     }
     return { kind: "next", output: { status: "ok", comments } };
   } catch (err) {
     if (isRunControlError(err)) throw err;
-    return {
-      kind: "failed",
-      output: { status: "failed" },
-      reason: err instanceof Error ? err.message : String(err),
-    };
+    return executionError(err instanceof Error ? err.message : String(err), {
+      category: "provider",
+    });
   }
 };
