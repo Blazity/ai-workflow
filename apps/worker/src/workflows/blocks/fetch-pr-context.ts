@@ -40,6 +40,7 @@ export async function blockFetchPrContextsStep(
   "use step";
   const { createRepositoryVCS } = await import("../../lib/vcs-runtime.js");
   const { isRepoAllowed } = await import("../../lib/repo-allowlist.js");
+  const { logger } = await import("../../lib/logger.js");
 
   return Promise.all(
     repositories.map(async (repo) => {
@@ -48,6 +49,10 @@ export async function blockFetchPrContextsStep(
       }
       const pr = repo.workflowOwnedBranch?.pr;
       if (!pr) {
+        logger.info(
+          { repoPath: repo.repoPath, hasPr: false, prCommentCount: 0 },
+          "fetch_pr_context_debug",
+        );
         return {
           repository: repo,
           prComments: [],
@@ -65,6 +70,18 @@ export async function blockFetchPrContextsStep(
         vcs.getCheckRunResults(pr.id),
         vcs.getPRConflictStatus(pr.id),
       ]);
+      logger.info(
+        {
+          repoPath: repo.repoPath,
+          hasPr: true,
+          prId: pr.id,
+          prCommentCount: prComments.length,
+          prCommentPreview: prComments
+            .map((c) => `${c.author}: ${c.body.slice(0, 60)}`)
+            .slice(0, 6),
+        },
+        "fetch_pr_context_debug",
+      );
       return { repository: repo, prComments, checkResults, hasConflicts };
     }),
   );
