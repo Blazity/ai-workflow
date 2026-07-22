@@ -2,6 +2,8 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 import { defineEventHandler, readRawBody, getHeader, createError } from "h3";
 import { env } from "../../../env.js";
 import { IssueTrackerNotFoundError } from "../../adapters/issue-tracker/types.js";
+import { resumeClarificationFromComments } from "../../clarifications/resume-from-comments.js";
+import { getDb } from "../../db/client.js";
 import { createAdapters } from "../../lib/adapters.js";
 import { cancelRun } from "../../lib/cancel-run.js";
 import { dispatchTicket } from "../../lib/dispatch.js";
@@ -161,6 +163,13 @@ export default defineEventHandler(async (event) => {
         },
         "webhook_skip_cancel_live_ticket_in_ai_column",
       );
+      const resumeResult = await tryResumeClarification(
+        ticketKey,
+        adapters,
+        Boolean(statusChange),
+      );
+      if (resumeResult) return resumeResult;
+
       logger.info(
         {
           ticketKey,
@@ -231,6 +240,13 @@ export default defineEventHandler(async (event) => {
     };
   }
 
+  const resumeResult = await tryResumeClarification(
+    ticketKey,
+    adapters,
+    Boolean(statusChange),
+  );
+  if (resumeResult) return resumeResult;
+
   logger.info(
     {
       ticketKey,
@@ -252,6 +268,58 @@ export default defineEventHandler(async (event) => {
     reason: result.reason,
   };
 });
+
+// ---------------------------------------------------------------------------
+// Clarification resume
+// ---------------------------------------------------------------------------
+
+/**
+ * A ticket moved into the AI column may carry a suspended clarification run
+ * whose answers were left as human comments. Wake that run instead of
+ * dispatching. Returns the handler response to send, or null to fall through
+ * to dispatchTicket (no clarification, or the live ticket is not in AI). The
+ * move is the commit gesture, so nudging is only allowed when the delivery
+ * carries a real status changelog item.
+ */
+async function tryResumeClarification(
+  ticketKey: string,
+  adapters: ReturnType<typeof createAdapters>,
+  allowNudge: boolean,
+): Promise<{ status: string; reason: string; ticketKey: string } | null> {
+  const resume = await resumeClarificationFromComments({
+    db: getDb(),
+    issueTracker: adapters.issueTracker,
+    ticketKey,
+    allowNudge,
+  }).catch((err) => {
+    logger.warn(
+      { ticketKey, error: (err as Error).message },
+      "webhook_clarification_resume_failed",
+    );
+    return null;
+  });
+  if (
+    resume &&
+    resume.status !== "no_clarification" &&
+    resume.status !== "not_in_ai_column"
+  ) {
+    logger.info(
+      { ticketKey, resumeStatus: resume.status, runId: resume.runId },
+      "webhook_clarification_resume",
+    );
+    return {
+      status: resume.status === "resumed" ? "resumed" : "skipped",
+      reason: `clarification_${resume.status}`,
+      ticketKey,
+    };
+  }
+  if (resume === null) {
+    // Unexpected resume failure: skip dispatch this delivery, the cron retries.
+    return { status: "skipped", reason: "clarification_resume_error", ticketKey };
+  }
+  // fall through to dispatchTicket (returns already_claimed / not_in_ai itself)
+  return null;
+}
 
 // ---------------------------------------------------------------------------
 // Auth

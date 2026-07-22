@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
-import { and, eq, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNotNull, sql } from "drizzle-orm";
 import type { ClarificationStatus } from "@shared/contracts";
 import type { Db } from "../db/client.js";
-import { clarificationRequests } from "../db/schema.js";
+import { activeRuns, clarificationRequests } from "../db/schema.js";
 
 export interface HookClarificationRow {
   id: string;
@@ -136,6 +136,35 @@ export async function getHookClarification(
     .select()
     .from(clarificationRequests)
     .where(eq(clarificationRequests.id, id))
+    .limit(1);
+  return row?.hookToken ? mapHookRow(row) : null;
+}
+
+/** Latest pending-or-answered hook clarification for a ticket whose asking run
+ *  still holds the bound subject claim (i.e. is suspended and resumable). */
+export async function getResumableClarificationForTicket(
+  db: Db,
+  ticketKey: string,
+): Promise<HookClarificationRow | null> {
+  const [row] = await db
+    .select()
+    .from(clarificationRequests)
+    .where(
+      and(
+        eq(clarificationRequests.ticketKey, ticketKey),
+        inArray(clarificationRequests.status, ["pending", "answered"]),
+        isNotNull(clarificationRequests.hookToken),
+        // The asking run must still hold its bound subject claim; a released
+        // claim means the run is no longer suspended and cannot be resumed.
+        sql`exists (
+          select 1 from ${activeRuns}
+          where ${activeRuns.subjectKey} = ${clarificationRequests.subjectKey}
+            and ${activeRuns.runId} = ${clarificationRequests.runId}
+            and ${activeRuns.state} = 'bound'
+        )`,
+      ),
+    )
+    .orderBy(desc(clarificationRequests.askedAt))
     .limit(1);
   return row?.hookToken ? mapHookRow(row) : null;
 }
