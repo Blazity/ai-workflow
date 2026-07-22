@@ -196,15 +196,30 @@ export default defineEventHandler(async (event) => {
     // human abort still cancels, because a live run is never recorded "failed".
     const subjectKey = ticketSubjectKey("jira", ticketKey);
     const activeRun = await adapters.runRegistry.get(subjectKey).catch(() => null);
-    if (
-      activeRun?.runId &&
-      (await isRunRecordedFailed(getDb(), activeRun.runId).catch(() => false))
-    ) {
-      logger.info(
-        { ticketKey, runId: activeRun.runId, payloadStatus: ticketStatus },
-        "webhook_skip_cancel_run_already_failed",
-      );
-      return { status: "ignored", reason: "run_already_failed", ticketKey };
+    if (activeRun?.runId) {
+      let recordedFailed: boolean;
+      try {
+        recordedFailed = await isRunRecordedFailed(getDb(), activeRun.runId);
+      } catch (lookupError) {
+        // Do not guess on a lookup failure: treating it as "not failed" would let
+        // this self-triggered webhook cancel a genuinely failed run (the exact
+        // masking bug). Surface a retryable error so the webhook is redelivered.
+        logger.warn(
+          { ticketKey, runId: activeRun.runId, err: String(lookupError) },
+          "webhook_run_failed_lookup_failed",
+        );
+        throw createError({
+          statusCode: 503,
+          statusMessage: "Run status lookup failed",
+        });
+      }
+      if (recordedFailed) {
+        logger.info(
+          { ticketKey, runId: activeRun.runId, payloadStatus: ticketStatus },
+          "webhook_skip_cancel_run_already_failed",
+        );
+        return { status: "ignored", reason: "run_already_failed", ticketKey };
+      }
     }
 
     const cancellation = await cancelTrackedRun(

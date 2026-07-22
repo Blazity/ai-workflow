@@ -303,14 +303,14 @@ describe("executeGraph output contracts", () => {
     expect(result.steps.comment).toBeUndefined();
     expect(rec.finishes.find((finish) => finish.nodeId === "comment")?.state).toMatchObject({
       status: "fail",
-      error: "The block could not be completed. (Error: provider rejected the comment)",
+      error: "The block could not be completed. (provider rejected the comment)",
       diagnosticId: "AIW-DIAG-test-run-comment-1",
     });
     expect(rec.failures).toEqual([
       {
         phase: "post_ticket_comment",
         reason:
-          "The block could not be completed. (Error: provider rejected the comment) Diagnostic ID: AIW-DIAG-test-run-comment-1",
+          "The block could not be completed. (provider rejected the comment) Diagnostic ID: AIW-DIAG-test-run-comment-1",
         nodeId: "comment",
       },
     ]);
@@ -386,7 +386,7 @@ describe("executeGraph output contracts", () => {
       {
         phase: "post_ticket_comment",
         reason:
-          "The block could not be completed. (Error: provider rejected the comment) Diagnostic ID: AIW-DIAG-test-run-comment-1",
+          "The block could not be completed. (provider rejected the comment) Diagnostic ID: AIW-DIAG-test-run-comment-1",
         nodeId: "comment",
       },
     ]);
