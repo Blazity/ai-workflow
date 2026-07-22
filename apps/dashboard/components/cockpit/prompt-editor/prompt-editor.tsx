@@ -255,8 +255,9 @@ export function PromptEditor({ value, onChange, syncRequest, disabled, minHeight
         fill ? "h-full min-h-0" : ""
       }`}
     >
-      {/* Toolbar (pinned) */}
-      <div className="flex shrink-0 items-center gap-0.5 border-b border-neutral-200 px-1.5 py-1">
+      {/* Toolbar (pinned). Wraps to a second row in narrow hosts (e.g. the flow
+          inspector) so buttons never overlap; stays single-line where it fits. */}
+      <div className="flex flex-wrap shrink-0 items-center gap-y-1 gap-x-0.5 border-b border-neutral-200 px-1.5 py-1">
         {!raw &&
           actions.map((a) => (
             <span key={a.key} className="flex items-center">

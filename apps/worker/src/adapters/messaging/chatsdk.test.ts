@@ -236,4 +236,33 @@ describe("ChatSDKAdapter.notifyForTicket", () => {
       `:no_entry: Task ${JIRA_LINK} canceled: left AI column`,
     );
   });
+
+  it("note — posts the raw message as a thread reply WITHOUT editing the top-level status", async () => {
+    const store = createThreadStore();
+    store.getParent.mockResolvedValueOnce("1700000000.000111");
+    const adapter = createAdapter(store);
+
+    await adapter.notifyForTicket("AWT-42", {
+      kind: "note",
+      text: "Deploy to staging is done",
+    });
+
+    // A standalone message never overwrites the status line or re-anchors the parent.
+    expect(mockEditMessage).not.toHaveBeenCalled();
+    expect(mockChannelPost).not.toHaveBeenCalled();
+    expect(store.setParent).not.toHaveBeenCalled();
+    // Just the user's message, no system head/emoji.
+    expect(mockThreadPost).toHaveBeenCalledWith("Deploy to staging is done");
+  });
+
+  it("note — falls back to a top-level post when no thread parent exists yet", async () => {
+    const store = createThreadStore(); // getParent resolves null
+    const adapter = createAdapter(store);
+
+    await adapter.notifyForTicket("AWT-42", { kind: "note", text: "Heads up" });
+
+    expect(mockEditMessage).not.toHaveBeenCalled();
+    expect(mockThreadPost).not.toHaveBeenCalled();
+    expect(mockChannelPost).toHaveBeenCalledWith("Heads up");
+  });
 });

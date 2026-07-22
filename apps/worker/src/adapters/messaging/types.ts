@@ -35,7 +35,16 @@ export type TicketEvent =
       /** Short excerpt of the proposed plan. Not rendered in the Slack copy. */
       planPreview?: string;
     }
-  | { kind: "canceled"; reason: string };
+  | { kind: "canceled"; reason: string }
+  | {
+      /**
+       * Free-form message from a `send_slack_message` block in "always" mode.
+       * Posted as a thread reply under the ticket status without touching the
+       * top-level status line (see chatsdk `notifyForTicket`).
+       */
+      kind: "note";
+      text: string;
+    };
 
 export interface MessagingAdapter {
   /**

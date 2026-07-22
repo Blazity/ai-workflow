@@ -2228,11 +2228,24 @@ async function agentWorkflowBody(
           }
 
           case "send_slack_message": {
+            // node.params.message is already {{variable}}-substituted (executeBlock).
+            const message = resolveSlackMessageInput(node.params, resolvedInputs);
+            const sendOn = node.params.sendOn === "always" ? "always" : "pr_ready";
+
+            if (sendOn === "always") {
+              // Standalone message: post it as a thread note whenever this block
+              // runs, independent of any PR. Empty message is a no-op.
+              if (!message) return { kind: "next", output: { status: "skipped" } };
+              await notifyTicket(ticket.identifier, { kind: "note", text: message }, transitionOwner);
+              return { kind: "next", output: { status: "ok" } };
+            }
+
+            // Default "pr_ready": ride along with the PR-ready card, only once a PR
+            // has been published.
             const publication = ctx.publication;
             if (publication?.status === "published") {
               const primaryPr = publication.prs[0]!;
               const usageReport = formatUsageReport(phaseUsages, priceLookup, activeModel, phaseModels);
-              const message = resolveSlackMessageInput(node.params, resolvedInputs);
               await notifyTicket(ticket.identifier, {
                 kind: "pr_ready",
                 pr: { url: primaryPr.url, number: primaryPr.id },

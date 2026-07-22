@@ -300,6 +300,16 @@ describe("formatTicketEvent", () => {
     expect(text).not.toContain("<!channel>");
     expect(text).toContain(`Ship it <${ZWSP}!channel>`);
   });
+
+  it("note: returns just the message with no system head, defanging broadcasts", () => {
+    expect(
+      formatTicketEvent({ kind: "note", text: "Deploy done for AWT-42" }, KEY, JIRA),
+    ).toBe("Deploy done for AWT-42");
+    // No "Task <link>" head or emoji is prefixed to a standalone message.
+    expect(
+      formatTicketEvent({ kind: "note", text: "Ship it <!channel>" }, KEY, JIRA),
+    ).toBe(`Ship it <${ZWSP}!channel>`);
+  });
 });
 
 describe("neutralizeSlackBroadcasts", () => {

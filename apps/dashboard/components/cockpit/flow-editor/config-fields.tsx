@@ -19,6 +19,7 @@ import {
 } from "@/lib/workflow-editor/params";
 import { Listbox } from "@/components/cockpit/listbox";
 import { PromptField } from "./prompt-field";
+import { PromptEditor } from "@/components/cockpit/prompt-editor/prompt-editor";
 
 /** The inspector change callback. Widened past WorkflowParamValue so PromptField
  *  can set/clear provenance refs under `promptRefs.<paramKey>` paths too. */
@@ -132,6 +133,31 @@ function TextArea({
       rows={3}
       onChange={(e) => onChange(e.target.value)}
       className={mono ? monoTextareaCls : textareaCls}
+    />
+  );
+}
+
+/** Rich text (Tiptap) surface for prose params: Slack messages, comment bodies.
+ *  Reuses the prompt editor so these fields match the Prompt Library editor and
+ *  get {{variable}} insertion + highlighting for free. Markdown is the stored
+ *  value; the worker substitutes {{variables}} at runtime per VARIABLE_PARAM_KEYS. */
+function RichTextField({
+  value,
+  disabled,
+  minHeightClass,
+  onChange,
+}: {
+  value: string;
+  disabled: boolean;
+  minHeightClass?: string;
+  onChange: (v: string) => void;
+}) {
+  return (
+    <PromptEditor
+      value={value}
+      disabled={disabled}
+      minHeightClass={minHeightClass ?? "min-h-[96px]"}
+      onChange={onChange}
     />
   );
 }
@@ -681,14 +707,22 @@ export function ConfigFields({
     case "post_ticket_comment":
       return (
         <ConfigField label="Body">
-          <TextArea value={str(node.params.body)} disabled={!canEdit} onChange={(v) => onChange("params.body", v)} />
+          <RichTextField
+            value={str(node.params.body)}
+            disabled={!canEdit}
+            onChange={(v) => onChange("params.body", v)}
+          />
         </ConfigField>
       );
     case "post_pr_comment":
       return (
         <>
           <ConfigField label="Body">
-            <TextArea value={str(node.params.body)} disabled={!canEdit} onChange={(v) => onChange("params.body", v)} />
+            <RichTextField
+              value={str(node.params.body)}
+              disabled={!canEdit}
+              onChange={(v) => onChange("params.body", v)}
+            />
           </ConfigField>
           <ConfigField label="Target">
             <Listbox
@@ -704,12 +738,37 @@ export function ConfigFields({
           </ConfigField>
         </>
       );
-    case "send_slack_message":
+    case "send_slack_message": {
+      const sendOn = str(node.params.sendOn) === "always" ? "always" : "pr_ready";
       return (
-        <ConfigField label="Message">
-          <TextInput value={str(node.params.message)} disabled={!canEdit} onChange={(v) => onChange("params.message", v)} />
-        </ConfigField>
+        <>
+          <ConfigField label="When to send">
+            <Listbox
+              options={[
+                { value: "pr_ready", label: "Only when a PR is ready" },
+                { value: "always", label: "Always (standalone message)" },
+              ]}
+              value={sendOn}
+              disabled={!canEdit}
+              ariaLabel="When to send"
+              onChange={(v) => onChange("params.sendOn", v)}
+            />
+          </ConfigField>
+          <ConfigField label="Message">
+            <RichTextField
+              value={str(node.params.message)}
+              disabled={!canEdit}
+              onChange={(v) => onChange("params.message", v)}
+            />
+          </ConfigField>
+          <ConfigNote>
+            {sendOn === "always"
+              ? "Posts your message as a standalone note in the ticket thread whenever this block runs. Add {{pr_url}} if you want a PR link."
+              : "Appends your message under the PR ready card, only after a pull request is published."}
+          </ConfigNote>
+        </>
       );
+    }
     case "human_question":
       return (
         <ConfigField label="Questions">
@@ -800,7 +859,11 @@ export function ConfigFields({
             />
           </ConfigField>
           <ConfigField label="Post comment">
-            <TextArea value={str(node.params.postComment)} disabled={!canEdit} onChange={(v) => onChange("params.postComment", v)} />
+            <RichTextField
+              value={str(node.params.postComment)}
+              disabled={!canEdit}
+              onChange={(v) => onChange("params.postComment", v)}
+            />
           </ConfigField>
         </>
       );

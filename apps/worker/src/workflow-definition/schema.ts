@@ -242,7 +242,12 @@ const sendSlackMessageNode = z
   .object({
     ...baseNodeFields,
     type: z.literal("send_slack_message"),
-    params: z.object({ message: z.string().trim().max(2000).optional() }).strict(),
+    params: z
+      .object({
+        message: z.string().trim().max(2000).optional(),
+        sendOn: z.enum(["pr_ready", "always"]).optional(),
+      })
+      .strict(),
   })
   .strict();
 

@@ -1054,7 +1054,7 @@
           requiredOutputs: [...STATUS_OUTPUT, ...typedPaths("unknown[]", "comments")],
           statuses: ["ok", "failed"],
         }),
-        send_slack_message: runtimeContract(["message"], {
+        send_slack_message: runtimeContract(["message", "sendOn"], {
           optionalInputs: typedPaths("string", "message"),
           requiredOutputs: STATUS_OUTPUT,
           statuses: ["ok", "skipped", "failed"],
