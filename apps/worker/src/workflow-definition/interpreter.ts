@@ -11,6 +11,7 @@ import type {
   WorkflowDefinition,
   WorkflowDefinitionNode,
 } from "@shared/contracts";
+import type { AgentProtocolDiagnostic } from "../sandbox/agents/types.js";
 import { evaluateCondition, parseCondition } from "@shared/conditions";
 import {
   resolveWorkflowInputBindings,
@@ -71,11 +72,13 @@ export interface BlockExecutionError {
   message: string;
   /** Internal context for correlated server logs. Never persist or expose it. */
   detail?: string;
+  /** Redacted internal provider-protocol context. Never persist or expose it. */
+  diagnostic?: AgentProtocolDiagnostic;
   phase?: string;
 }
 
 export interface WorkflowExecutionErrorState
-  extends Omit<BlockExecutionError, "detail"> {
+  extends Omit<BlockExecutionError, "detail" | "diagnostic"> {
   diagnosticId: string;
   nodeId: string;
   attempt: number;
@@ -99,6 +102,7 @@ export function executionError(
     category?: ExecutionErrorCategory;
     message?: string;
     phase?: string;
+    diagnostic?: AgentProtocolDiagnostic;
   } = {},
 ): Extract<BlockExecutionResult, { kind: "execution_error" }> {
   const category = options.category ?? "unknown";
@@ -114,6 +118,7 @@ export function executionError(
           genericMessage: SAFE_EXECUTION_ERROR_MESSAGES[category],
         }),
       detail,
+      ...(options.diagnostic ? { diagnostic: options.diagnostic } : {}),
       ...(options.phase ? { phase: options.phase } : {}),
     },
   };
@@ -206,6 +211,7 @@ export interface ExecuteGraphHooks {
     controlState?: InterpreterControlState,
   ): Promise<string | void>;
   failureExit(phase: string, reason: string, nodeId: string): Promise<void>;
+  onExecutionError?(event: WorkflowExecutionLogEvent): Promise<void>;
   terminate(
     params: {
       terminalStatus: "waiting_for_human" | "failed" | "skipped" | "done";
@@ -215,6 +221,16 @@ export interface ExecuteGraphHooks {
     steps?: StepsRecord,
     controlState?: InterpreterControlState,
   ): Promise<void>;
+}
+
+export interface WorkflowExecutionLogEvent {
+  diagnosticId: string;
+  nodeId: string;
+  attempt: number;
+  category: ExecutionErrorCategory;
+  phase?: string;
+  detail?: string;
+  agentProtocol?: AgentProtocolDiagnostic;
 }
 
 export interface ExecuteGraphResult {
@@ -286,11 +302,17 @@ export async function executeGraph(opts: {
       attempt,
       error,
     );
-    if (error.detail) {
-      console.error(
-        `[${state.diagnosticId}] workflow execution error in ${nodeId}: ${error.detail}`,
-      );
-    }
+    await hooks.onExecutionError?.({
+      diagnosticId: state.diagnosticId,
+      nodeId,
+      attempt,
+      category: state.category,
+      ...(state.phase ? { phase: state.phase } : {}),
+      ...(error.detail ? { detail: error.detail } : {}),
+      ...(error.diagnostic
+        ? { agentProtocol: serializableProtocolDiagnostic(error.diagnostic) }
+        : {}),
+    });
     primaryExecutionError ??= state;
     await hooks.onBlockFinish(nodeId, {
       status: "fail",
@@ -717,4 +739,23 @@ export async function executeGraph(opts: {
   }
 
   return finish("completed");
+}
+
+function serializableProtocolDiagnostic(
+  diagnostic: AgentProtocolDiagnostic,
+): AgentProtocolDiagnostic {
+  try {
+    JSON.stringify(diagnostic);
+    return diagnostic;
+  } catch {
+    return {
+      provider: diagnostic.provider,
+      packageName: diagnostic.packageName,
+      cliVersion: diagnostic.cliVersion,
+      protocol: diagnostic.protocol,
+      phase: diagnostic.phase,
+      failureKind: diagnostic.failureKind,
+      exitCode: diagnostic.exitCode,
+    };
+  }
 }

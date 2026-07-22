@@ -1,8 +1,23 @@
 import type {
-  AgentAdapter, AgentOutput, ConfigureOpts, PhaseArtifactPaths, PhaseKind,
-  PhaseScriptOpts, PhaseUsage, ResearchResult, ReviewOutput, RunnableSandbox,
+  AgentAdapter, AgentOutput, AgentProtocolResult, CollectedPhaseArtifacts,
+  ConfigureOpts, PhaseArtifactPaths, PhaseKind, PhaseScriptOpts, PhaseUsage,
+  ResearchResult, ReviewOutput, RunnableSandbox,
 } from "./types.js";
-import { agentOutputSchema, foldResearchOutput, researchOutputSchema, reviewOutputSchema } from "./types.js";
+import {
+  AGENT_SCHEMA, agentOutputSchema, foldResearchOutput, RESEARCH_SCHEMA,
+  researchOutputSchema, REVIEW_SCHEMA, reviewOutputSchema,
+} from "./types.js";
+import {
+  AGENT_CLI_SPECS,
+  artifactFailure,
+  attachSchemaDiagnostic,
+  eventMetadata,
+  installAndVerifyCli,
+  protocolFailure,
+  requireProviderSetup,
+  runtimePreparationError,
+  validateStructuredValue,
+} from "./protocol.js";
 import {
   AGENT_ENV_CLAUDE_PATH,
   AGENT_ENV_PATH,
@@ -23,19 +38,24 @@ const ARTHUR_HOOK_EVENTS: ReadonlyArray<readonly [string, string]> = [
 
 export class ClaudeAgentAdapter implements AgentAdapter {
   readonly kind = "claude" as const;
+  readonly cliSpec = AGENT_CLI_SPECS.claude;
 
   async install(sandbox: RunnableSandbox): Promise<void> {
-    await sandbox.runCommand("npm", ["install", "-g", "@anthropic-ai/claude-code"]);
+    await installAndVerifyCli(sandbox, this.cliSpec);
     // Skip interactive onboarding
-    await sandbox.runCommand("bash", [
+    const onboarding = await sandbox.runCommand("bash", [
       "-c",
       `mkdir -p ~/.claude && echo '{"hasCompletedOnboarding":true}' > ~/.claude.json`,
     ]);
+    await requireProviderSetup(onboarding, this.cliSpec, "Claude onboarding setup");
   }
 
   async configure(sandbox: RunnableSandbox, opts: ConfigureOpts): Promise<void> {
     if (!opts.anthropicApiKey) {
-      throw new Error("ClaudeAgentAdapter.configure requires anthropicApiKey");
+      throw runtimePreparationError(
+        this.cliSpec,
+        "Claude authentication credentials were not configured.",
+      );
     }
     // Claude Code CLI accepts standard API keys (`sk-ant-api...`) via
     // ANTHROPIC_API_KEY and OAuth tokens (`sk-ant-oat...`, issued by
@@ -52,10 +72,11 @@ export class ClaudeAgentAdapter implements AgentAdapter {
       { path: AGENT_ENV_CLAUDE_PATH, content: Buffer.from(envLines.join("\n") + "\n") },
       { path: AGENT_ENV_PATH, content: Buffer.from(AGENT_ENV_SHIM) },
     ]);
-    await sandbox.runCommand("chmod", ["600", AGENT_ENV_CLAUDE_PATH]);
+    const secureEnv = await sandbox.runCommand("chmod", ["600", AGENT_ENV_CLAUDE_PATH]);
+    await requireProviderSetup(secureEnv, this.cliSpec, "Claude credential setup");
 
     // Skills: installer writes to ~/.claude/skills and ~/.agents/skills directly.
-    await installSkillsToAgentsDir(sandbox);
+    await installSkillsToAgentsDir(sandbox, this.cliSpec);
 
     // Arthur tracer (no-op without config)
     if (opts.arthur) {
@@ -65,7 +86,7 @@ export class ClaudeAgentAdapter implements AgentAdapter {
 
   async setCommitGuard(sandbox: RunnableSandbox, enabled: boolean): Promise<void> {
     // 1) Drop the guard script (idempotent)
-    await sandbox.runCommand("bash", [
+    const guardScript = await sandbox.runCommand("bash", [
       "-c",
       [
         "mkdir -p ~/.claude",
@@ -85,6 +106,7 @@ export class ClaudeAgentAdapter implements AgentAdapter {
         "chmod +x ~/.claude/commit-guard.sh",
       ].join("\n"),
     ]);
+    await requireProviderSetup(guardScript, this.cliSpec, "Claude commit guard setup");
 
     // 2) Toggle the Stop hook entry via merge-aware settings.json writer
     await this.mergeSettings(sandbox, { commitGuard: enabled ? "enable" : "disable" });
@@ -101,7 +123,7 @@ export class ClaudeAgentAdapter implements AgentAdapter {
     return `#!/bin/bash
 
 # --- Cleanup stale files from prior runs ---
-rm -f ${paths.sentinel} ${paths.stdout} ${paths.stderr}
+rm -f ${paths.sentinel} ${paths.stdout} ${paths.stderr} ${paths.exitCode}
 
 # --- Source auth env vars ---
 [ -f /tmp/agent-env.sh ] && source /tmp/agent-env.sh
@@ -109,7 +131,9 @@ rm -f ${paths.sentinel} ${paths.stdout} ${paths.stderr}
 # --- Phase: ${safePhase} ---
 cat ${paths.input} | claude \\
   ${claudeFlags} \\
-  > ${paths.stdout} 2>${paths.stderr}; echo $? > /tmp/${safePhase}-exit-code || true
+  > ${paths.stdout} 2>${paths.stderr}
+PHASE_EXIT_CODE=$?
+echo "$PHASE_EXIT_CODE" > ${paths.exitCode}
 
 # --- Cleanup ---
 cd /vercel/sandbox
@@ -128,9 +152,139 @@ touch ${paths.sentinel}
       input: `/tmp/${p}-requirements.md`,
       stdout: `/tmp/${p}-stdout.txt`,
       stderr: `/tmp/${p}-stderr.txt`,
+      exitCode: `/tmp/${p}-exit-code`,
       sentinel: `/tmp/${p}-done`,
       structuredOutput: null,
     };
+  }
+
+  parseAgentOutputProtocol(
+    artifacts: CollectedPhaseArtifacts,
+    phase: string,
+  ): AgentProtocolResult<AgentOutput> {
+    const extracted = attachSchemaDiagnostic(
+      extractClaudePayload(this.cliSpec, artifacts, phase),
+      "agent-output",
+      AGENT_SCHEMA,
+    );
+    if (!extracted.ok) return extracted;
+    return validateStructuredValue({
+      spec: this.cliSpec,
+      phase,
+      artifacts,
+      value: extracted.value,
+      schema: agentOutputSchema,
+      schemaIdentity: "agent-output",
+      schemaSource: AGENT_SCHEMA,
+      event: extracted.event,
+    });
+  }
+
+  parseReviewOutputProtocol(
+    artifacts: CollectedPhaseArtifacts,
+    phase: string,
+  ): AgentProtocolResult<ReviewOutput> {
+    const extracted = attachSchemaDiagnostic(
+      extractClaudePayload(this.cliSpec, artifacts, phase),
+      "review-output",
+      REVIEW_SCHEMA,
+    );
+    if (!extracted.ok) return extracted;
+    return validateStructuredValue({
+      spec: this.cliSpec,
+      phase,
+      artifacts,
+      value: extracted.value,
+      schema: reviewOutputSchema,
+      schemaIdentity: "review-output",
+      schemaSource: REVIEW_SCHEMA,
+      event: extracted.event,
+    });
+  }
+
+  parseResearchProtocol(
+    artifacts: CollectedPhaseArtifacts,
+    phase: string,
+  ): AgentProtocolResult<ResearchResult> {
+    const extracted = attachSchemaDiagnostic(
+      extractClaudePayload(this.cliSpec, artifacts, phase),
+      "research-output",
+      RESEARCH_SCHEMA,
+    );
+    if (!extracted.ok) return extracted;
+    const validated = validateStructuredValue({
+      spec: this.cliSpec,
+      phase,
+      artifacts,
+      value: extracted.value,
+      schema: researchOutputSchema,
+      schemaIdentity: "research-output",
+      schemaSource: RESEARCH_SCHEMA,
+      event: extracted.event,
+    });
+    return validated.ok
+      ? { ok: true, value: foldResearchOutput(validated.value) }
+      : validated;
+  }
+
+  parseStructuredObjectProtocol(
+    artifacts: CollectedPhaseArtifacts,
+    phase: string,
+    schemaIdentity: string,
+    schema: string,
+  ): AgentProtocolResult<unknown> {
+    return attachSchemaDiagnostic(
+      extractClaudePayload(this.cliSpec, artifacts, phase),
+      schemaIdentity,
+      schema,
+    );
+  }
+
+  validateFreeformProtocol(
+    artifacts: CollectedPhaseArtifacts,
+    phase: string,
+  ): AgentProtocolResult<void> {
+    const envelope = findResultEnvelope(artifacts.stdout);
+    const event = eventMetadata(envelope);
+    const processFailure = artifactFailure(this.cliSpec, phase, artifacts, event);
+    if (processFailure) return processFailure;
+    if (!envelope) {
+      return protocolFailure({
+        spec: this.cliSpec,
+        phase,
+        artifacts,
+        failureKind: artifacts.stdout.trim() ? "invalid_json" : "missing_result",
+        category: "parsing",
+        message: "The current agent phase returned an invalid structured response.",
+        detail: "Claude did not emit a terminal result envelope.",
+        includeStdoutTail: true,
+      });
+    }
+    if (envelope.is_error === true || envelope.subtype === "error") {
+      return protocolFailure({
+        spec: this.cliSpec,
+        phase,
+        artifacts,
+        failureKind: "provider_error",
+        category: "provider",
+        message: "The current agent phase could not be completed.",
+        event,
+        detail: "Claude emitted an error result envelope.",
+      });
+    }
+    if (envelope.subtype !== "success") {
+      return protocolFailure({
+        spec: this.cliSpec,
+        phase,
+        artifacts,
+        failureKind: "protocol_mismatch",
+        category: "parsing",
+        message: "The current agent phase returned an invalid structured response.",
+        event,
+        detail: "Claude emitted an unrecognized terminal result subtype.",
+      });
+    }
+    return { ok: true, value: undefined };
   }
 
   parseAgentOutput(raw: string, _structured: string | null): AgentOutput {
@@ -329,7 +483,8 @@ touch ${paths.sentinel}
       }
       fs.writeFileSync(settingsPath, JSON.stringify(s, null, 2));
     `;
-    await sandbox.runCommand("node", ["--input-type=module", "-e", script]);
+    const merge = await sandbox.runCommand("node", ["--input-type=module", "-e", script]);
+    await requireProviderSetup(merge, this.cliSpec, "Claude settings setup");
   }
 }
 
@@ -342,6 +497,94 @@ function shellQuote(val: string): string {
 /** Collapse an arbitrary phase label to a shell/file-safe token ([a-z0-9-]). */
 function sanitizePhase(phase: string): string {
   return phase.toLowerCase().replace(/[^a-z0-9-]/g, "-");
+}
+
+function extractClaudePayload(
+  spec: typeof AGENT_CLI_SPECS.claude,
+  artifacts: CollectedPhaseArtifacts,
+  phase: string,
+): AgentProtocolResult<unknown> {
+  const envelope = findResultEnvelope(artifacts.stdout);
+  const event = eventMetadata(envelope);
+  const processFailure = artifactFailure(spec, phase, artifacts, event);
+  if (processFailure) return processFailure;
+
+  if (envelope) {
+    if (envelope.is_error === true || envelope.subtype === "error") {
+      return protocolFailure({
+        spec,
+        phase,
+        artifacts,
+        failureKind: "provider_error",
+        category: "provider",
+        message: "The current agent phase could not be completed.",
+        event,
+        detail: "Claude emitted an error result envelope.",
+      });
+    }
+    if (envelope.subtype !== "success") {
+      return protocolFailure({
+        spec,
+        phase,
+        artifacts,
+        failureKind: "protocol_mismatch",
+        category: "parsing",
+        message: "The current agent phase returned an invalid structured response.",
+        event,
+        detail: "Claude emitted an unrecognized terminal result subtype.",
+      });
+    }
+    if (envelope.structured_output != null) {
+      return { ok: true, value: envelope.structured_output, event };
+    }
+    if (typeof envelope.result === "string") {
+      try {
+        return { ok: true, value: JSON.parse(envelope.result), event };
+      } catch {
+        return protocolFailure({
+          spec,
+          phase,
+          artifacts,
+          failureKind: "protocol_mismatch",
+          category: "parsing",
+          message: "The current agent phase returned an invalid structured response.",
+          event,
+          detail: "Claude emitted a result envelope without structured JSON.",
+        });
+      }
+    }
+    return protocolFailure({
+      spec,
+      phase,
+      artifacts,
+      failureKind: "missing_result",
+      category: "parsing",
+      message: "The current agent phase returned an invalid structured response.",
+      event,
+      detail: "Claude emitted a terminal envelope without a result payload.",
+    });
+  }
+
+  const records = artifacts.stdout
+    .split("\n")
+    .filter((line) => line.trim().length > 0)
+    .flatMap((line) => {
+      try { return [JSON.parse(line)]; } catch { return []; }
+    });
+  const lastEvent = eventMetadata(records.at(-1));
+  return protocolFailure({
+    spec,
+    phase,
+    artifacts,
+    failureKind: records.length > 0 ? "protocol_mismatch" : "invalid_json",
+    category: "parsing",
+    message: "The current agent phase returned an invalid structured response.",
+    event: lastEvent,
+    detail: records.length > 0
+      ? "Claude emitted JSON events without a terminal result."
+      : "Claude output was not valid JSON.",
+    includeStdoutTail: records.length === 0,
+  });
 }
 
 function findResultEnvelope(raw: string): Record<string, unknown> | null {

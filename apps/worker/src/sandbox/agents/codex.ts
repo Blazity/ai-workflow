@@ -1,8 +1,23 @@
 import type {
-  AgentAdapter, AgentOutput, ConfigureOpts, PhaseArtifactPaths, PhaseKind,
-  PhaseScriptOpts, PhaseUsage, ResearchResult, ReviewOutput, RunnableSandbox,
+  AgentAdapter, AgentOutput, AgentProtocolResult, CollectedPhaseArtifacts,
+  ConfigureOpts, PhaseArtifactPaths, PhaseKind, PhaseScriptOpts, PhaseUsage,
+  ResearchResult, ReviewOutput, RunnableSandbox,
 } from "./types.js";
-import { agentOutputSchema, foldResearchOutput, researchOutputSchema, reviewOutputSchema } from "./types.js";
+import {
+  AGENT_SCHEMA, agentOutputSchema, foldResearchOutput, RESEARCH_SCHEMA,
+  researchOutputSchema, REVIEW_SCHEMA, reviewOutputSchema,
+} from "./types.js";
+import {
+  AGENT_CLI_SPECS,
+  artifactFailure,
+  attachSchemaDiagnostic,
+  eventMetadata,
+  installAndVerifyCli,
+  protocolFailure,
+  requireProviderSetup,
+  runtimePreparationError,
+  validateStructuredValue,
+} from "./protocol.js";
 import {
   AGENT_ENV_CODEX_PATH,
   AGENT_ENV_PATH,
@@ -20,16 +35,32 @@ const ARTHUR_HOOK_EVENTS: ReadonlyArray<readonly [string, string]> = [
   ["Stop", "stop"],
 ];
 
+const CODEX_PROTOCOL_EVENTS = new Set([
+  "thread.started",
+  "turn.started",
+  "item.started",
+  "item.updated",
+  "item.completed",
+  "turn.completed",
+  "turn.failed",
+  "error",
+  "phase.duration",
+]);
+
 export class CodexAgentAdapter implements AgentAdapter {
   readonly kind = "codex" as const;
+  readonly cliSpec = AGENT_CLI_SPECS.codex;
 
   async install(sandbox: RunnableSandbox): Promise<void> {
-    await sandbox.runCommand("npm", ["install", "-g", "@openai/codex"]);
+    await installAndVerifyCli(sandbox, this.cliSpec);
   }
 
   async configure(sandbox: RunnableSandbox, opts: ConfigureOpts): Promise<void> {
     if (!opts.codexApiKey && !opts.codexChatGptOauthToken) {
-      throw new Error("CodexAgentAdapter.configure requires codexApiKey or codexChatGptOauthToken");
+      throw runtimePreparationError(
+        this.cliSpec,
+        "Codex authentication credentials were not configured.",
+      );
     }
 
     // 1) auth env file. Codex CLI auto-reads OPENAI_API_KEY when no auth.json
@@ -48,7 +79,8 @@ export class CodexAgentAdapter implements AgentAdapter {
       { path: AGENT_ENV_CODEX_PATH, content: Buffer.from(envLines.join("\n") + "\n") },
       { path: AGENT_ENV_PATH, content: Buffer.from(AGENT_ENV_SHIM) },
     ]);
-    await sandbox.runCommand("chmod", ["600", AGENT_ENV_CODEX_PATH]);
+    const secureEnv = await sandbox.runCommand("chmod", ["600", AGENT_ENV_CODEX_PATH]);
+    await requireProviderSetup(secureEnv, this.cliSpec, "Codex credential setup");
 
     // 2) ~/.codex/config.toml — model + sandbox profile + hooks feature flag
     // (codex_hooks is gated; without it ~/.codex/hooks.json is ignored).
@@ -65,20 +97,25 @@ export class CodexAgentAdapter implements AgentAdapter {
       `codex_hooks = true`,
     ].join("\n") + "\n";
     await sandbox.writeFiles([{ path: "/tmp/config.toml", content: Buffer.from(configToml) }]);
-    await sandbox.runCommand("bash", ["-c", "mkdir -p $HOME/.codex && mv /tmp/config.toml $HOME/.codex/config.toml"]);
+    const configureCli = await sandbox.runCommand("bash", [
+      "-c",
+      "mkdir -p $HOME/.codex && mv /tmp/config.toml $HOME/.codex/config.toml",
+    ]);
+    await requireProviderSetup(configureCli, this.cliSpec, "Codex configuration setup");
 
     // 3) Persist API-key auth to ~/.codex/auth.json (OAuth token path uses the
     // ChatGPT-cached auth.json shape directly; for now only API-key login is
     // automated — OAuth tokens are exported via env above).
     if (opts.codexApiKey) {
-      await sandbox.runCommand("bash", [
+      const login = await sandbox.runCommand("bash", [
         "-c",
         `[ -f /tmp/agent-env.sh ] && source /tmp/agent-env.sh; printenv OPENAI_API_KEY | codex login --with-api-key`,
       ]);
+      await requireProviderSetup(login, this.cliSpec, "Codex API-key login");
     }
 
     // 4) skills (~/.agents/skills via `--agent codex`)
-    await installSkillsToAgentsDir(sandbox);
+    await installSkillsToAgentsDir(sandbox, this.cliSpec);
 
     // 5) commit-guard script (idempotent)
     await this.writeCommitGuardScript(sandbox);
@@ -88,10 +125,11 @@ export class CodexAgentAdapter implements AgentAdapter {
     // `.gitignore`, commits only that, and the implementation never runs —
     // observed on AWT-641 ($14 of impl-phase tokens, PR diff = .gitignore).
     // .git/info/exclude is local to this clone and never pushed.
-    await sandbox.runCommand("bash", [
+    const exclude = await sandbox.runCommand("bash", [
       "-c",
       `mkdir -p /vercel/sandbox/.git/info && grep -qxF '.codex/' /vercel/sandbox/.git/info/exclude 2>/dev/null || echo '.codex/' >> /vercel/sandbox/.git/info/exclude`,
     ]);
+    await requireProviderSetup(exclude, this.cliSpec, "Codex workspace exclusion setup");
 
     // 7) Arthur tracer. Re-uses the Claude Code tracer; Codex traces will be
     // labeled as "claude-code" in Arthur until a dedicated Codex tracer ships.
@@ -134,7 +172,7 @@ export class CodexAgentAdapter implements AgentAdapter {
     return `#!/bin/bash
 
 # --- Cleanup stale files ---
-rm -f ${paths.sentinel} ${paths.stdout} ${paths.stderr} ${paths.structuredOutput}
+rm -f ${paths.sentinel} ${paths.stdout} ${paths.stderr} ${paths.exitCode} ${paths.structuredOutput}
 
 # --- Source auth env vars ---
 [ -f /tmp/agent-env.sh ] && source /tmp/agent-env.sh
@@ -148,7 +186,9 @@ START_MS=$(date +%s%3N)
 cat ${paths.input} | codex exec \\
   ${flags.join(" \\\n  ")} \\
   - \\
-  > ${paths.stdout} 2> ${paths.stderr}; echo $? > /tmp/${safePhase}-exit-code || true
+  > ${paths.stdout} 2> ${paths.stderr}
+PHASE_EXIT_CODE=$?
+echo "$PHASE_EXIT_CODE" > ${paths.exitCode}
 END_MS=$(date +%s%3N)
 echo "{\\"type\\":\\"phase.duration\\",\\"duration_ms\\":$((END_MS - START_MS))}" >> ${paths.stdout}
 
@@ -168,9 +208,140 @@ touch ${paths.sentinel}
       input: `/tmp/${p}-requirements.md`,
       stdout: `/tmp/${p}-stdout.txt`,
       stderr: `/tmp/${p}-stderr.txt`,
+      exitCode: `/tmp/${p}-exit-code`,
       sentinel: `/tmp/${p}-done`,
       structuredOutput: `/tmp/${p}-result.json`,
     };
+  }
+
+  parseAgentOutputProtocol(
+    artifacts: CollectedPhaseArtifacts,
+    phase: string,
+  ): AgentProtocolResult<AgentOutput> {
+    const extracted = attachSchemaDiagnostic(
+      extractCodexPayload(this.cliSpec, artifacts, phase),
+      "agent-output",
+      AGENT_SCHEMA,
+    );
+    if (!extracted.ok) return extracted;
+    return validateStructuredValue({
+      spec: this.cliSpec,
+      phase,
+      artifacts,
+      value: extracted.value,
+      schema: agentOutputSchema,
+      schemaIdentity: "agent-output",
+      schemaSource: AGENT_SCHEMA,
+      event: extracted.event,
+    });
+  }
+
+  parseReviewOutputProtocol(
+    artifacts: CollectedPhaseArtifacts,
+    phase: string,
+  ): AgentProtocolResult<ReviewOutput> {
+    const extracted = attachSchemaDiagnostic(
+      extractCodexPayload(this.cliSpec, artifacts, phase),
+      "review-output",
+      REVIEW_SCHEMA,
+    );
+    if (!extracted.ok) return extracted;
+    return validateStructuredValue({
+      spec: this.cliSpec,
+      phase,
+      artifacts,
+      value: extracted.value,
+      schema: reviewOutputSchema,
+      schemaIdentity: "review-output",
+      schemaSource: REVIEW_SCHEMA,
+      event: extracted.event,
+    });
+  }
+
+  parseResearchProtocol(
+    artifacts: CollectedPhaseArtifacts,
+    phase: string,
+  ): AgentProtocolResult<ResearchResult> {
+    const extracted = attachSchemaDiagnostic(
+      extractCodexPayload(this.cliSpec, artifacts, phase),
+      "research-output",
+      RESEARCH_SCHEMA,
+    );
+    if (!extracted.ok) return extracted;
+    const validated = validateStructuredValue({
+      spec: this.cliSpec,
+      phase,
+      artifacts,
+      value: extracted.value,
+      schema: researchOutputSchema,
+      schemaIdentity: "research-output",
+      schemaSource: RESEARCH_SCHEMA,
+      event: extracted.event,
+    });
+    return validated.ok
+      ? { ok: true, value: foldResearchOutput(validated.value) }
+      : validated;
+  }
+
+  parseStructuredObjectProtocol(
+    artifacts: CollectedPhaseArtifacts,
+    phase: string,
+    schemaIdentity: string,
+    schema: string,
+  ): AgentProtocolResult<unknown> {
+    return attachSchemaDiagnostic(
+      extractCodexPayload(this.cliSpec, artifacts, phase),
+      schemaIdentity,
+      schema,
+    );
+  }
+
+  validateFreeformProtocol(
+    artifacts: CollectedPhaseArtifacts,
+    phase: string,
+  ): AgentProtocolResult<void> {
+    const records = parseCodexRecords(artifacts.stdout);
+    const terminal = findCodexTerminal(records.events);
+    const event = eventMetadata(terminal ?? records.events.at(-1));
+    const processFailure = artifactFailure(this.cliSpec, phase, artifacts, event);
+    if (processFailure) return processFailure;
+    const providerError = records.events.find((record) =>
+      record?.type === "error" || record?.type === "turn.failed",
+    );
+    if (providerError) {
+      return protocolFailure({
+        spec: this.cliSpec,
+        phase,
+        artifacts,
+        failureKind: "provider_error",
+        category: "provider",
+        message: "The current agent phase could not be completed.",
+        event: eventMetadata(providerError),
+        detail: "Codex emitted a provider error event.",
+      });
+    }
+    const shapeFailure = codexRecordShapeFailure(
+      this.cliSpec,
+      phase,
+      artifacts,
+      records,
+      event,
+    );
+    if (shapeFailure) return shapeFailure;
+    if (!terminal) {
+      return protocolFailure({
+        spec: this.cliSpec,
+        phase,
+        artifacts,
+        failureKind: records.events.length > 0 ? "missing_result" : "invalid_json",
+        category: "parsing",
+        message: "The current agent phase returned an invalid structured response.",
+        event,
+        detail: "Codex did not emit a turn.completed event.",
+        includeStdoutTail: records.events.length === 0,
+      });
+    }
+    return { ok: true, value: undefined };
   }
 
   parseAgentOutput(raw: string, structured: string | null): AgentOutput {
@@ -295,7 +466,7 @@ touch ${paths.sentinel}
     //   - to FORCE Codex to keep working: print {"decision":"block","reason":"..."}
     //     to stdout, exit 0. (The "continue:false / stopReason" shape stops the
     //     hook itself, NOT Codex — wrong for this use case.)
-    await sandbox.runCommand("bash", [
+    const guardScript = await sandbox.runCommand("bash", [
       "-c",
       [
         "mkdir -p ~/.codex/hooks",
@@ -316,6 +487,7 @@ touch ${paths.sentinel}
         "chmod +x ~/.codex/hooks/commit-guard.sh",
       ].join("\n"),
     ]);
+    await requireProviderSetup(guardScript, this.cliSpec, "Codex commit guard setup");
   }
 
   private async mergeHooks(
@@ -360,7 +532,8 @@ touch ${paths.sentinel}
       }
       fs.writeFileSync(cfgPath, JSON.stringify(s, null, 2));
     `;
-    await sandbox.runCommand("node", ["--input-type=module", "-e", script]);
+    const merge = await sandbox.runCommand("node", ["--input-type=module", "-e", script]);
+    await requireProviderSetup(merge, this.cliSpec, "Codex hooks setup");
   }
 
   private async installArthurTracer(
@@ -411,6 +584,164 @@ function shellQuote(val: string): string {
 /** Collapse an arbitrary phase label to a shell/file-safe token ([a-z0-9-]). */
 function sanitizePhase(phase: string): string {
   return phase.toLowerCase().replace(/[^a-z0-9-]/g, "-");
+}
+
+function extractCodexPayload(
+  spec: typeof AGENT_CLI_SPECS.codex,
+  artifacts: CollectedPhaseArtifacts,
+  phase: string,
+): AgentProtocolResult<unknown> {
+  const records = parseCodexRecords(artifacts.stdout);
+  const terminal = findCodexTerminal(records.events);
+  const event = eventMetadata(terminal ?? records.events.at(-1));
+  const processFailure = artifactFailure(spec, phase, artifacts, event);
+  if (processFailure) return processFailure;
+
+  const providerError = records.events.find((record) =>
+    record?.type === "error" || record?.type === "turn.failed",
+  );
+  if (providerError) {
+    return protocolFailure({
+      spec,
+      phase,
+      artifacts,
+      failureKind: "provider_error",
+      category: "provider",
+      message: "The current agent phase could not be completed.",
+      event: eventMetadata(providerError),
+      detail: "Codex emitted a provider error event.",
+    });
+  }
+  const shapeFailure = codexRecordShapeFailure(spec, phase, artifacts, records, event);
+  if (shapeFailure) return shapeFailure;
+  if (!terminal) {
+    return protocolFailure({
+      spec,
+      phase,
+      artifacts,
+      failureKind: records.events.length > 0 ? "missing_result" : "invalid_json",
+      category: "parsing",
+      message: "The current agent phase returned an invalid structured response.",
+      event,
+      detail: "Codex did not emit a turn.completed event.",
+      includeStdoutTail: records.events.length === 0,
+    });
+  }
+
+  if (artifacts.structuredOutput !== null) {
+    try {
+      return { ok: true, value: JSON.parse(artifacts.structuredOutput), event };
+    } catch {
+      return protocolFailure({
+        spec,
+        phase,
+        artifacts,
+        failureKind: "invalid_json",
+        category: "parsing",
+        message: "The current agent phase returned an invalid structured response.",
+        event,
+        detail: "Codex wrote an invalid structured-output JSON file.",
+      });
+    }
+  }
+
+  const message = unwrapLastAgentMessage(artifacts.stdout);
+  if (message) {
+    try {
+      return { ok: true, value: JSON.parse(message), event };
+    } catch {
+      return protocolFailure({
+        spec,
+        phase,
+        artifacts,
+        failureKind: "protocol_mismatch",
+        category: "parsing",
+        message: "The current agent phase returned an invalid structured response.",
+        event,
+        detail: "Codex emitted a non-JSON final agent message for a structured phase.",
+      });
+    }
+  }
+  return protocolFailure({
+    spec,
+    phase,
+    artifacts,
+    failureKind: "missing_result",
+    category: "parsing",
+    message: "The current agent phase returned an invalid structured response.",
+    event,
+    detail: "Codex completed without a structured-output file or final agent message.",
+  });
+}
+
+function parseCodexRecords(raw: string): {
+  events: Array<Record<string, unknown>>;
+  malformedLines: number;
+} {
+  const events: Array<Record<string, unknown>> = [];
+  let malformedLines = 0;
+  for (const line of raw.split("\n")) {
+    if (!line.trim()) continue;
+    try {
+      const parsed = JSON.parse(line);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        events.push(parsed as Record<string, unknown>);
+      } else {
+        malformedLines++;
+      }
+    } catch {
+      malformedLines++;
+    }
+  }
+  return { events, malformedLines };
+}
+
+function codexRecordShapeFailure(
+  spec: typeof AGENT_CLI_SPECS.codex,
+  phase: string,
+  artifacts: CollectedPhaseArtifacts,
+  records: ReturnType<typeof parseCodexRecords>,
+  event: ReturnType<typeof eventMetadata>,
+): AgentProtocolResult<never> | null {
+  if (records.malformedLines > 0) {
+    return protocolFailure({
+      spec,
+      phase,
+      artifacts,
+      failureKind: "invalid_json",
+      category: "parsing",
+      message: "The current agent phase returned an invalid structured response.",
+      event,
+      detail: "Codex emitted malformed JSONL output.",
+      includeStdoutTail: true,
+    });
+  }
+  const unknown = records.events.find((record) =>
+    typeof record.type !== "string" || !CODEX_PROTOCOL_EVENTS.has(record.type),
+  );
+  if (unknown) {
+    return protocolFailure({
+      spec,
+      phase,
+      artifacts,
+      failureKind: "protocol_mismatch",
+      category: "parsing",
+      message: "The current agent phase returned an invalid structured response.",
+      event: eventMetadata(unknown),
+      detail: "Codex emitted an unrecognized protocol event.",
+    });
+  }
+  return null;
+}
+
+function findCodexTerminal(
+  events: Array<Record<string, unknown>>,
+): Record<string, unknown> | undefined {
+  for (let index = events.length - 1; index >= 0; index--) {
+    const event = events[index];
+    if (event?.type === "turn.completed") return event;
+  }
+  return undefined;
 }
 
 function numOr0(x: unknown): number { return typeof x === "number" ? x : 0; }

@@ -3,6 +3,8 @@ import type { WorkflowDefinitionNode } from "@shared/contracts";
 import type { AgentKind } from "../../sandbox/agents/index.js";
 import type {
   AgentOutput,
+  AgentProtocolResult,
+  CollectedPhaseArtifacts,
   PhaseArtifactPaths,
   PhaseUsage,
 } from "../../sandbox/agents/types.js";
@@ -18,6 +20,7 @@ import {
 } from "./fix-workspace-state.js";
 import {
   executionError,
+  agentProtocolExecutionError,
   sanitizeBlockId,
   type BlockExecuteFn,
   type BlockExecutionResult,
@@ -40,7 +43,7 @@ async function blockFixAgentCommitGuardStep(
   sandboxId: string,
   agentKind: AgentKind,
   enabled: boolean,
-): Promise<void> {
+): Promise<AgentProtocolResult<void>> {
   "use step";
   const { Sandbox } = await import("@vercel/sandbox");
   const { getSandboxCredentials } = await import("../../sandbox/credentials.js");
@@ -48,7 +51,19 @@ async function blockFixAgentCommitGuardStep(
 
   const sandbox = await Sandbox.get({ sandboxId, ...getSandboxCredentials() });
   const agent = createAgentAdapter(agentKind);
-  await agent.setCommitGuard(sandbox, enabled);
+  try {
+    await agent.setCommitGuard(sandbox, enabled);
+    return { ok: true, value: undefined };
+  } catch (error) {
+    const { isAgentRuntimeError } = await import("../../sandbox/agents/protocol.js");
+    if (!isAgentRuntimeError(error)) throw error;
+    return {
+      ok: false,
+      category: error.category,
+      message: error.safeMessage,
+      diagnostic: error.diagnostic,
+    };
+  }
 }
 
 async function blockFixAgentPlanPhaseStep(
@@ -67,42 +82,94 @@ async function blockFixAgentPlanPhaseStep(
 
 async function blockFixAgentStartPhaseStep(
   sandboxId: string,
+  agentKind: AgentKind,
+  phase: string,
   inputFilePath: string,
   inputContent: string,
   scriptPath: string,
   scriptContent: string,
-): Promise<string> {
+): Promise<
+  | { ok: true; commandId: string }
+  | { ok: false; failure: Extract<AgentProtocolResult<unknown>, { ok: false }> }
+> {
   "use step";
-  const { Sandbox } = await import("@vercel/sandbox");
-  const { getSandboxCredentials } = await import("../../sandbox/credentials.js");
+  const { createAgentAdapter } = await import("../../sandbox/agents/index.js");
+  const { commandProtocolFailure, protocolFailure } = await import(
+    "../../sandbox/agents/protocol.js"
+  );
+  const spec = createAgentAdapter(agentKind).cliSpec;
+  try {
+    const { Sandbox } = await import("@vercel/sandbox");
+    const { getSandboxCredentials } = await import("../../sandbox/credentials.js");
 
-  const sandbox = await Sandbox.get({ sandboxId, ...getSandboxCredentials() });
-  await sandbox.writeFiles([
-    { path: inputFilePath, content: Buffer.from(inputContent) },
-    { path: scriptPath, content: Buffer.from(scriptContent) },
-  ]);
-  await sandbox.runCommand("chmod", ["+x", scriptPath]);
-  const command = await sandbox.runCommand({
-    cmd: "bash",
-    args: [scriptPath],
-    cwd: "/vercel/sandbox",
-    detached: true,
-  });
-  return command.cmdId;
+    const sandbox = await Sandbox.get({ sandboxId, ...getSandboxCredentials() });
+    await sandbox.writeFiles([
+      { path: inputFilePath, content: Buffer.from(inputContent) },
+      { path: scriptPath, content: Buffer.from(scriptContent) },
+    ]);
+    const chmod = await sandbox.runCommand("chmod", ["+x", scriptPath]);
+    if (chmod.exitCode !== 0) {
+      return {
+        ok: false,
+        failure: await commandProtocolFailure({
+          spec,
+          phase,
+          result: chmod,
+          failureKind: "setup_failed",
+          message: "The current agent phase could not be completed.",
+          detail: "The agent phase wrapper could not be made executable.",
+        }),
+      };
+    }
+    const command = await sandbox.runCommand({
+      cmd: "bash",
+      args: [scriptPath],
+      cwd: "/vercel/sandbox",
+      detached: true,
+    });
+    if (command.exitCode !== null && command.exitCode !== 0) {
+      return {
+        ok: false,
+        failure: await commandProtocolFailure({
+          spec,
+          phase,
+          result: command,
+          failureKind: "cli_exit",
+          message: "The current agent phase could not be completed.",
+          detail: "The agent phase process could not be launched.",
+        }),
+      };
+    }
+    return { ok: true, commandId: command.cmdId };
+  } catch (error) {
+    const { isRunControlError } = await import("../run-control-error.js");
+    if (isRunControlError(error)) throw error;
+    const failure = protocolFailure({
+      spec,
+      phase,
+      artifacts: { stdout: "", stderr: "", structuredOutput: null, exitCode: null },
+      failureKind: "provider_error",
+      category: "provider",
+      message: "The current agent phase could not be completed.",
+      detail: "The agent phase process could not be launched.",
+    });
+    if (failure.ok) throw new Error("unreachable");
+    return { ok: false, failure };
+  }
 }
 blockFixAgentStartPhaseStep.maxRetries = 0;
 
 async function blockFixAgentParseStep(
   agentKind: AgentKind,
-  raw: string,
-  structured: string | null,
-): Promise<{ output: AgentOutput; usage: PhaseUsage | null }> {
+  artifacts: CollectedPhaseArtifacts,
+  phase: string,
+): Promise<{ result: AgentProtocolResult<AgentOutput>; usage: PhaseUsage | null }> {
   "use step";
   const { createAgentAdapter } = await import("../../sandbox/agents/index.js");
   const adapter = createAgentAdapter(agentKind);
   return {
-    output: adapter.parseAgentOutput(raw, structured),
-    usage: adapter.extractUsage(raw, structured),
+    result: adapter.parseAgentOutputProtocol(artifacts, phase),
+    usage: adapter.extractUsage(artifacts.stdout, artifacts.structuredOutput),
   };
 }
 
@@ -183,15 +250,20 @@ export const execute: BlockExecuteFn = async (
     const input = await buildFixInput(block, ctx);
     const { AGENT_SCHEMA } = await import("../../sandbox/agents/types.js");
 
-    await blockFixAgentCommitGuardStep(sandboxId, kind, true);
+    const guard = await blockFixAgentCommitGuardStep(sandboxId, kind, true);
+    if (!guard.ok) return agentProtocolExecutionError(guard);
     const { paths, script } = await blockFixAgentPlanPhaseStep(kind, phase, model, AGENT_SCHEMA);
-    const commandId = await blockFixAgentStartPhaseStep(
+    const launch = await blockFixAgentStartPhaseStep(
       sandboxId,
+      kind,
+      phase,
       paths.input,
       input,
       paths.wrapper,
       script,
     );
+    if (!launch.ok) return agentProtocolExecutionError(launch.failure);
+    const commandId = launch.commandId;
     ctx.markLaunched(usageLabel(block.id));
 
     const done = await pollPhaseUntilDone(
@@ -206,9 +278,11 @@ export const execute: BlockExecuteFn = async (
     }
 
     const { collectPhase } = await import("../../sandbox/poll-agent.js");
-    const { raw, structured } = await collectPhase(sandboxId, paths);
-    const { output, usage } = await blockFixAgentParseStep(kind, raw, structured);
+    const artifacts = await collectPhase(sandboxId, paths);
+    const { result, usage } = await blockFixAgentParseStep(kind, artifacts, phase);
     ctx.recordUsage(usageLabel(block.id), usage, model);
+    if (!result.ok) return agentProtocolExecutionError(result);
+    const output = result.value;
     const after = await inspectFixWorkspace(sandboxId);
 
     if (output.result === "clarification_needed") {

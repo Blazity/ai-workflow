@@ -1,0 +1,12 @@
+{
+  "package": "@openai/codex",
+  "version": "0.144.6",
+  "protocol": "codex-jsonl-0.144.6",
+  "provenance": "normalized pinned-protocol sample; refresh with the capture script",
+  "artifacts": {
+    "stdout": "{\"type\":\"thread.started\",\"thread_id\":\"normalized\"}\n{\"type\":\"item.completed\",\"item\":{\"id\":\"normalized\",\"type\":\"agent_message\",\"text\":\"fixture complete\"}}\n{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":8,\"cached_input_tokens\":2,\"output_tokens\":3}}",
+    "stderr": "",
+    "structuredOutput": "fixture complete",
+    "exitCode": 0
+  }
+}

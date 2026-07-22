@@ -401,6 +401,7 @@ describe("ClaudeAgentAdapter.artifactPaths", () => {
       input: "/tmp/research-requirements.md",
       stdout: "/tmp/research-stdout.txt",
       stderr: "/tmp/research-stderr.txt",
+      exitCode: "/tmp/research-exit-code",
       sentinel: "/tmp/research-done",
       structuredOutput: null,
     });
@@ -418,6 +419,7 @@ describe("ClaudeAgentAdapter.artifactPaths", () => {
       input: "/tmp/agent-block-1-requirements.md",
       stdout: "/tmp/agent-block-1-stdout.txt",
       stderr: "/tmp/agent-block-1-stderr.txt",
+      exitCode: "/tmp/agent-block-1-exit-code",
       sentinel: "/tmp/agent-block-1-done",
       structuredOutput: null,
     });

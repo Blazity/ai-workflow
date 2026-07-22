@@ -1,4 +1,4 @@
-import type { RunnableSandbox } from "./types.js";
+import type { AgentCliSpec, RunnableSandbox } from "./types.js";
 
 // Auth env is split per provider so configuring one adapter never clobbers the
 // other's file. Every consumer keeps sourcing AGENT_ENV_PATH; the shim written
@@ -22,7 +22,11 @@ export const GLOBAL_SKILLS = [
   { repo: "https://github.com/anthropics/skills", skill: "frontend-design" },
 ] as const;
 
-export async function installSkillsToAgentsDir(sandbox: RunnableSandbox): Promise<void> {
+export async function installSkillsToAgentsDir(
+  sandbox: RunnableSandbox,
+  spec: AgentCliSpec,
+): Promise<void> {
+  const { requireProviderSetup } = await import("./protocol.js");
   const already = await sandbox.runCommand("bash", ["-c", `test -f ${SKILLS_SENTINEL}`]);
   if (already.exitCode === 0) return;
 
@@ -36,17 +40,15 @@ export async function installSkillsToAgentsDir(sandbox: RunnableSandbox): Promis
       "--copy",
     ]);
     if (result.exitCode !== 0) {
-      const { logger } = await import("../../lib/logger.js");
-      const stderr = await result.stderr().catch(() => "");
-      logger.error(
-        { repo, skill, exitCode: result.exitCode, output: stderr.slice(0, 500) },
-        "skill_install_failed",
-      );
-      throw new Error(`Failed to install skill ${skill} from ${repo} (exit ${result.exitCode})`);
+      await requireProviderSetup(result, spec, `Agent skill setup (${skill} from ${repo})`);
     }
   }
 
-  await sandbox.runCommand("bash", ["-c", `touch ${SKILLS_SENTINEL}`]);
+  const markInstalled = await sandbox.runCommand("bash", [
+    "-c",
+    `touch ${SKILLS_SENTINEL}`,
+  ]);
+  await requireProviderSetup(markInstalled, spec, "Agent skill setup sentinel");
 }
 
 /** Bash body for the commit-guard hook. The output protocol differs between agents,
