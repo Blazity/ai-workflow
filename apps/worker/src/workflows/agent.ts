@@ -1898,6 +1898,20 @@ async function agentWorkflowBody(
             runPhaseModels[researchPhase] = model;
             await setCommitGuardStep(sandboxId, kind, false);
 
+            // Review-remediation framing: when this ticket already has a
+            // workflow-owned PR, pull its human review feedback in BEFORE the
+            // plan exists so the plan targets the requested changes. Workspace
+            // prep refreshes this later; here it would otherwise be empty
+            // because planning runs before any code workspace is provisioned.
+            if (ctx.entry.kind === "ticket" && ctx.repositoryContexts.length === 0) {
+              const { resolveTicketWorkflowOwnedReposStep, blockFetchPrContextsStep } =
+                await import("./blocks/fetch-pr-context.js");
+              const ownedRepos = await resolveTicketWorkflowOwnedReposStep(ctx.ticket.identifier);
+              if (ownedRepos.length > 0) {
+                ctx.repositoryContexts = await blockFetchPrContextsStep(ownedRepos);
+              }
+            }
+
             const { paths: researchPaths, script: researchScript } =
               await planPhaseStep(kind, "research", model, RESEARCH_SCHEMA);
             const researchInput = assembleResearchPlanContext({

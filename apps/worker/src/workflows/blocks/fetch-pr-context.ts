@@ -40,7 +40,6 @@ export async function blockFetchPrContextsStep(
   "use step";
   const { createRepositoryVCS } = await import("../../lib/vcs-runtime.js");
   const { isRepoAllowed } = await import("../../lib/repo-allowlist.js");
-  const { logger } = await import("../../lib/logger.js");
 
   return Promise.all(
     repositories.map(async (repo) => {
@@ -49,10 +48,6 @@ export async function blockFetchPrContextsStep(
       }
       const pr = repo.workflowOwnedBranch?.pr;
       if (!pr) {
-        logger.info(
-          { repoPath: repo.repoPath, hasPr: false, prCommentCount: 0 },
-          "fetch_pr_context_debug",
-        );
         return {
           repository: repo,
           prComments: [],
@@ -70,21 +65,41 @@ export async function blockFetchPrContextsStep(
         vcs.getCheckRunResults(pr.id),
         vcs.getPRConflictStatus(pr.id),
       ]);
-      logger.info(
-        {
-          repoPath: repo.repoPath,
-          hasPr: true,
-          prId: pr.id,
-          prCommentCount: prComments.length,
-          prCommentPreview: prComments
-            .map((c) => `${c.author}: ${c.body.slice(0, 60)}`)
-            .slice(0, 6),
-        },
-        "fetch_pr_context_debug",
-      );
       return { repository: repo, prComments, checkResults, hasConflicts };
     }),
   );
+}
+
+/**
+ * Resolve the workflow-owned pull requests already correlated for a ticket, as
+ * SelectedRepository entries ready for {@link blockFetchPrContextsStep}. Used to
+ * pull PR review feedback into the run BEFORE planning on a remediation
+ * re-trigger, so the plan targets the requested changes instead of re-deriving
+ * the original ticket (which the PR already satisfies). Returns [] when the
+ * ticket has no correlated PR yet (i.e. the first run).
+ */
+export async function resolveTicketWorkflowOwnedReposStep(
+  ticketKey: string,
+): Promise<SelectedRepository[]> {
+  "use step";
+  const { getDb } = await import("../../db/client.js");
+  const { listWorkflowOwnedBranchesForTicket } = await import(
+    "../../db/queries/workflow-owned-branches.js"
+  );
+  const records = await listWorkflowOwnedBranchesForTicket(getDb(), ticketKey);
+  return records
+    .filter((record) => record.pr)
+    .map((record) => ({
+      provider: record.provider,
+      repoPath: record.repoPath,
+      // Only used to construct the VCS adapter; the PR reads key off the PR id.
+      defaultBranch: record.targetBranch ?? "",
+      selectedRationale: "workflow-owned PR for this ticket (review remediation)",
+      workflowOwnedBranch: {
+        branchName: record.branchName,
+        pr: record.pr!,
+      },
+    }));
 }
 
 /**

@@ -255,6 +255,8 @@ describe("assembleImplementationContext (new)", () => {
 
     expect(result).toContain("## PR Review Feedback: github:acme/api");
     expect(result).toContain("fix the null check");
+    // Remediation framing leads so the agent targets the review, not the ticket.
+    expect(result).toContain("## Existing pull request — address this review feedback");
   });
 
   it("omits PR review feedback when repositoryContexts are absent or empty", () => {

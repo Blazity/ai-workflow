@@ -37,6 +37,9 @@ export async function listWorkflowOwnedBranchesForTicket(
     repoPath: row.repoPath,
     branchName: row.branchName,
     ...(row.publishedHeadSha ? { publishedHeadSha: row.publishedHeadSha } : {}),
+    ...(row.prTargetBranch ?? row.targetBranch
+      ? { targetBranch: (row.prTargetBranch ?? row.targetBranch) as string }
+      : {}),
     ...(!row.prCorrelationPending && row.prId !== null && row.prUrl && row.prBranchName
       ? { pr: { id: row.prId, url: row.prUrl, branch: row.prBranchName } }
       : {}),

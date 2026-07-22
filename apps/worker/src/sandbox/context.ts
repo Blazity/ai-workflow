@@ -380,6 +380,18 @@ function renderRepositoryContexts(
   if (!contexts || contexts.length === 0) return "";
 
   const sections: string[] = [];
+  // When any repo carries human review feedback, this is a remediation of an
+  // existing PR, not a fresh build. Lead with that framing so the plan and the
+  // implementation target the requested changes instead of concluding the
+  // original ticket is already satisfied (its work is already on the PR branch).
+  if (contexts.some((context) => context.prComments.length > 0)) {
+    sections.push(
+      "## Existing pull request — address this review feedback\n\n" +
+        "A pull request already exists for this ticket and its original implementation is already committed on the PR branch. " +
+        "Human reviewers requested the changes below. For this run, treat addressing every point of this review feedback as the task. " +
+        "Do not stop or report success just because the original ticket looks already implemented.",
+    );
+  }
   for (const context of contexts) {
     const repoPath = `${context.repository.provider}:${context.repository.repoPath}`;
     if (context.prComments.length > 0) {
