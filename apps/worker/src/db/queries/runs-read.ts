@@ -85,6 +85,22 @@ function searchCondition(q: string): SQL {
   return sql`(${workflowRuns.ticketKey} ilike ${pat} or ${workflowRuns.ticketTitle} ilike ${pat})`;
 }
 
+/**
+ * True when the run has already recorded a terminal "failed" outcome. The Jira
+ * webhook consults this before cancelling a run whose ticket left the AI
+ * column: the bot's own failure handling moves a failed ticket to the backlog,
+ * which fires that webhook, and cancelling would overwrite the run's genuine
+ * failure with a "cancelled" status the errors KPI never counts.
+ */
+export async function isRunRecordedFailed(db: Db, runId: string): Promise<boolean> {
+  const [row] = await db
+    .select({ status: workflowRuns.status })
+    .from(workflowRuns)
+    .where(eq(workflowRuns.runId, runId))
+    .limit(1);
+  return row?.status === "failed";
+}
+
 const RUN_STATUSES = new Set<RunStatus>([
   "success",
   "running",

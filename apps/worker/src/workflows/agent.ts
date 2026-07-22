@@ -879,6 +879,19 @@ async function logPhaseFailure(
 }
 logPhaseFailure.maxRetries = 0;
 
+/**
+ * Records the run's "failed" status before its failure-handling backlog move
+ * fires the self-triggered "ticket left the AI column" webhook, so that webhook
+ * cannot cancel the run out of a genuine failure. See markRunFailedOnSelfMove.
+ */
+async function markRunFailedOnSelfMoveStep(runId: string): Promise<void> {
+  "use step";
+  const { getDb } = await import("../db/client.js");
+  const { markRunFailedOnSelfMove } = await import("../lib/telemetry/run-telemetry.js");
+  await markRunFailedOnSelfMove(getDb(), runId);
+}
+markRunFailedOnSelfMoveStep.maxRetries = 0;
+
 export function clarificationExitDisposition(providerParked: boolean): {
   outcome: "awaiting";
   notify: boolean;
@@ -1786,6 +1799,14 @@ async function agentWorkflowBody(
       const clarificationExit = awaitClarification;
 
       const failureExit = async (phase: string, reason: string): Promise<void> => {
+        // Commit the run's "failed" status BEFORE the backlog move below fires a
+        // Jira webhook. That self-triggered "ticket left the AI column" event
+        // would otherwise race in and cancel this still-finalizing run,
+        // overwriting a genuine failure with a "cancelled"/"blocked" status the
+        // errors KPI never counts. The cron never downgrades a frozen status, so
+        // recording "failed" first keeps the outcome correct even if the cancel
+        // still lands.
+        await markRunFailedOnSelfMoveStep(workflowRunId);
         const usageReport = usageReportOrUndefined();
         const knownPhase = FAILURE_PHASES.has(phase) ? (phase as NotifyPhase) : undefined;
         const { handleWorkflowFailureExit } = await import("./workflow-failure-exit.js");
