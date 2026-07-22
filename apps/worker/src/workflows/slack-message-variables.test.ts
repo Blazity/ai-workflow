@@ -63,6 +63,7 @@ function makeSource(overrides: Partial<Source> = {}): Source {
     changeSummary: "",
     publication: publishedPr,
     selectedRepositories: [],
+    repositoryContexts: [],
     ...overrides,
   };
 }

@@ -21,6 +21,7 @@ export const PROMPT_VARIABLES = [
   { name: "pr_url", description: "PR URL that triggered the run, or the PR opened by it; empty before either exists." },
   { name: "pr_title", description: "Title of the triggering PR; empty for non-PR runs." },
   { name: "repo_path", description: "Repository path (owner/repo) of the triggering PR, else the first selected repository." },
+  { name: "pr_review_feedback", description: "Human PR review feedback on the workflow-owned PR (review summaries, inline and conversation comments); empty when there is none." },
 ] as const satisfies readonly PromptVariableSpec[];
 
 export type PromptVariableName = (typeof PROMPT_VARIABLES)[number]["name"];

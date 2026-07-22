@@ -71,6 +71,38 @@ export async function blockFetchPrContextsStep(
 }
 
 /**
+ * Resolve the workflow-owned pull requests already correlated for a ticket, as
+ * SelectedRepository entries ready for {@link blockFetchPrContextsStep}. Used to
+ * pull PR review feedback into the run BEFORE planning on a remediation
+ * re-trigger, so the plan targets the requested changes instead of re-deriving
+ * the original ticket (which the PR already satisfies). Returns [] when the
+ * ticket has no correlated PR yet (i.e. the first run).
+ */
+export async function resolveTicketWorkflowOwnedReposStep(
+  ticketKey: string,
+): Promise<SelectedRepository[]> {
+  "use step";
+  const { getDb } = await import("../../db/client.js");
+  const { listWorkflowOwnedBranchesForTicket } = await import(
+    "../../db/queries/workflow-owned-branches.js"
+  );
+  const records = await listWorkflowOwnedBranchesForTicket(getDb(), ticketKey);
+  return records
+    .filter((record) => record.pr)
+    .map((record) => ({
+      provider: record.provider,
+      repoPath: record.repoPath,
+      // Only used to construct the VCS adapter; the PR reads key off the PR id.
+      defaultBranch: record.targetBranch ?? "",
+      selectedRationale: "workflow-owned PR for this ticket (review remediation)",
+      workflowOwnedBranch: {
+        branchName: record.branchName,
+        pr: record.pr!,
+      },
+    }));
+}
+
+/**
  * fetch_pr_context: refresh per-repository PR context. Full data lands in
  * ctx.repositoryContexts for downstream agent prompts; the block output stays
  * compact (counts, check names and conclusions, conflict flags) because

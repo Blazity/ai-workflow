@@ -50,6 +50,7 @@ export interface ImplementationContextInput {
   attachments?: DownloadedAttachment[];
   preSandboxAdditions?: PreSandboxPromptAddition[];
   selectedRepositories?: SelectedRepository[];
+  repositoryContexts?: SelectedRepositoryPromptContext[];
 }
 
 export interface ReviewContextInput {
@@ -106,10 +107,14 @@ ${branchName}
 }
 
 export function assembleImplementationContext(input: ImplementationContextInput): string {
-  const { ticket, prompt, researchPlanMarkdown, attachments, preSandboxAdditions, selectedRepositories } = input;
+  const { ticket, prompt, researchPlanMarkdown, attachments, preSandboxAdditions, selectedRepositories, repositoryContexts } = input;
   const attachmentsSection = renderAttachmentsSection(attachments);
   const preSandboxSection = renderPreSandboxAdditions(preSandboxAdditions);
   const selectedRepositoriesSection = renderSelectedRepositories(selectedRepositories);
+  // On a re-run against an existing workflow-owned PR this surfaces the human PR
+  // review feedback (comments, failing checks, conflicts) so the implementation
+  // agent actually addresses it. Empty on the first run, so the section vanishes.
+  const repositoryContextSection = renderRepositoryContexts(repositoryContexts);
   const clarificationsSection = renderClarificationsSection(ticket.clarifications);
   return `# Requirements
 
@@ -128,7 +133,7 @@ ${clarificationsSection}
 ## Research & Plan
 
 ${researchPlanMarkdown}
-${selectedRepositoriesSection}
+${repositoryContextSection}${selectedRepositoriesSection}
 ${preSandboxSection}
 
 ---
@@ -285,7 +290,7 @@ function renderClarificationsSection(
   return `${header}${CLARIFICATIONS_TRUNCATION_NOTE}${kept.join(separator)}${footer}`;
 }
 
-function formatPRComments(comments: PRComment[]): string {
+export function formatPRComments(comments: PRComment[]): string {
   if (comments.length === 0) return "No review feedback.";
 
   const lineCoupled = comments
@@ -375,6 +380,18 @@ function renderRepositoryContexts(
   if (!contexts || contexts.length === 0) return "";
 
   const sections: string[] = [];
+  // When any repo carries human review feedback, this is a remediation of an
+  // existing PR, not a fresh build. Lead with that framing so the plan and the
+  // implementation target the requested changes instead of concluding the
+  // original ticket is already satisfied (its work is already on the PR branch).
+  if (contexts.some((context) => context.prComments.length > 0)) {
+    sections.push(
+      "## Existing pull request — address this review feedback\n\n" +
+        "A pull request already exists for this ticket and its original implementation is already committed on the PR branch. " +
+        "Human reviewers requested the changes below. For this run, treat addressing every point of this review feedback as the task. " +
+        "Do not stop or report success just because the original ticket looks already implemented.",
+    );
+  }
   for (const context of contexts) {
     const repoPath = `${context.repository.provider}:${context.repository.repoPath}`;
     if (context.prComments.length > 0) {
