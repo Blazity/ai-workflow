@@ -43,6 +43,7 @@ import {
   buildPromptVariables,
   substituteNodePromptParams,
   substitutePromptVariables,
+  type PromptVariableValues,
 } from "./prompt-vars.js";
 import type { HumanDecision } from "../lib/human-decisions-memory.js";
 import type { WorkspacePublicationResult } from "./workspace-publication.js";
@@ -83,7 +84,12 @@ import { execute as executePostPrComment } from "./blocks/post-pr-comment.js";
 import { execute as executeHumanQuestion } from "./blocks/human-question.js";
 import { execute as executeArthurInjectionCheck } from "./blocks/arthur-injection-check.js";
 import { execute as executeSendPlanApproval } from "./blocks/send-plan-approval.js";
-import { BLOCK_TYPE_SPECS, isTriggerBlockType } from "@shared/contracts";
+import {
+  BLOCK_TYPE_SPECS,
+  DEFAULT_OPEN_PR_BODY,
+  DEFAULT_OPEN_PR_TITLE,
+  isTriggerBlockType,
+} from "@shared/contracts";
 import type {
   BlockOutput,
   BlockRunState,
@@ -336,6 +342,52 @@ export function resolveTicketStatusInput(
     throw new Error("Update Ticket Status requires a non-empty status target.");
   }
   return target.trim();
+}
+
+/** The implementation block's own account of what it changed, read from the
+ *  durable step outputs so it survives workflow replay (the implementation case
+ *  may be skipped on resume, yet its output persists in `steps`). Backs
+ *  {{change_summary}} for the open_pr description; empty until an
+ *  implementation_agent block has produced a summary. */
+export function implementationChangeSummary(
+  steps: StepsRecord,
+  nodes: WorkflowDefinitionNode[],
+): string {
+  for (const node of nodes) {
+    if (node.type !== "implementation_agent") continue;
+    const summary = steps[node.id]?.output?.summary;
+    if (typeof summary === "string" && summary.trim() !== "") return summary;
+  }
+  return "";
+}
+
+/** open_pr title: a binding wins, else the authored (already {{var}}-substituted)
+ *  template param, else the default template resolved against `vars`. */
+export function resolveOpenPrTitle(
+  params: Record<string, unknown>,
+  resolvedInputs: Record<string, unknown>,
+  vars: PromptVariableValues,
+): string {
+  const bound = typeof resolvedInputs.title === "string" ? resolvedInputs.title.trim() : "";
+  if (bound !== "") return bound;
+  const authored = typeof params.title === "string" ? params.title.trim() : "";
+  if (authored !== "") return authored;
+  return substitutePromptVariables(DEFAULT_OPEN_PR_TITLE, vars).trim();
+}
+
+/** open_pr body: same precedence as the title. Whitespace is preserved for the
+ *  authored/bound value so markdown structure survives; only emptiness decides
+ *  the fallback. */
+export function resolveOpenPrBody(
+  params: Record<string, unknown>,
+  resolvedInputs: Record<string, unknown>,
+  vars: PromptVariableValues,
+): string {
+  const bound = typeof resolvedInputs.body === "string" ? resolvedInputs.body : "";
+  if (bound.trim() !== "") return bound;
+  const authored = typeof params.body === "string" ? params.body : "";
+  if (authored.trim() !== "") return authored;
+  return substitutePromptVariables(DEFAULT_OPEN_PR_BODY, vars);
 }
 
 function publicationPrForTelemetry(
@@ -1539,6 +1591,10 @@ async function agentWorkflowBody(
       definitionNodes: plan.nodes,
       entry,
       ticket,
+      ticketUrl: entry.ticketKey
+        ? `${env.JIRA_BASE_URL.replace(/\/+$/, "")}/browse/${ticket.identifier}`
+        : "",
+      changeSummary: "",
       ...(clarificationHistory && clarificationHistory.length > 0
         ? { clarifications: clarificationHistory }
         : {}),
@@ -1865,6 +1921,10 @@ async function agentWorkflowBody(
         resolvedInputs,
         execution,
       ): Promise<BlockExecutionResult> => {
+        // Refresh {{change_summary}} from the implementation block's durable
+        // output before substituting, so open_pr's description reflects what the
+        // agent changed even on a resumed run where the impl case was skipped.
+        ctx.changeSummary = implementationChangeSummary(steps, ctx.definitionNodes);
         // Substitute {{variables}} into prompt-bearing params per execution: the
         // run context (research plan, publication, selected repos) mutates
         // mid-run, so each block sees the values current at its turn.
@@ -2206,13 +2266,20 @@ async function agentWorkflowBody(
                 { category: "binding", phase: "open-pr" },
               );
             }
+            // node.params.title/body are already {{var}}-substituted (executeBlock).
+            // ticket.title is the last-resort title if a template resolves empty.
+            const prVars = buildPromptVariables(ctx);
+            const prTitle =
+              resolveOpenPrTitle(node.params, resolvedInputs, prVars) || ticket.title;
+            const prBody = resolveOpenPrBody(node.params, resolvedInputs, prVars);
             const publication = await openPullRequestsForPublication({
               repositories: repositories as import("./workspace-publication.js").FinalizedBranch[],
               runId: ctx.runId,
               subjectKey: transitionOwner.subjectKey,
               ownerToken: transitionOwner.ownerToken,
               ticketKey: ticket.identifier,
-              title: ticket.title,
+              title: prTitle,
+              body: prBody,
               sourcePullRequest:
                 ctx.entry.kind === "pr_trigger"
                   ? {

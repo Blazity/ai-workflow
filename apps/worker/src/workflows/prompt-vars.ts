@@ -19,6 +19,7 @@ export const VARIABLE_PARAM_KEYS: Partial<Record<WorkflowBlockType, readonly str
   fix_agent: ["instructions"],
   post_ticket_comment: ["body"],
   post_pr_comment: ["body"],
+  open_pr: ["title", "body"],
   send_slack_message: ["message"],
   human_question: ["questions"],
   terminate: ["postComment"],
@@ -37,9 +38,11 @@ type PromptVariableSource = Pick<
   EngineCtx,
   | "runId"
   | "ticket"
+  | "ticketUrl"
   | "branchName"
   | "entry"
   | "researchPlanMarkdown"
+  | "changeSummary"
   | "publication"
   | "selectedRepositories"
   | "repositoryContexts"
@@ -77,9 +80,11 @@ export function buildPromptVariables(ctx: PromptVariableSource): PromptVariableV
   return {
     ticket_key: ticket.identifier,
     ticket_title: ticket.title,
+    ticket_url: ctx.ticketUrl,
     ticket_description: ticket.description,
     ticket_acceptance_criteria: ticket.acceptanceCriteria ?? "",
     ticket_labels: ticket.labels.join(", "),
+    change_summary: ctx.changeSummary,
     branch_name: ctx.branchName,
     run_id: ctx.runId,
     plan_markdown: ctx.researchPlanMarkdown ?? "",

@@ -107,6 +107,8 @@ export function makeCtx(overrides: Partial<EngineCtx> = {}): EngineCtx {
       trackerStatus: "AI",
       attachments: [],
     },
+    ticketUrl: "https://jira.example.com/browse/AWT-1",
+    changeSummary: "",
     branchName: "blazebot/awt-1",
     sandboxId: "sbx-1",
     workspaceManifest: null,

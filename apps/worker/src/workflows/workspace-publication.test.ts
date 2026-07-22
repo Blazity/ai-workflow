@@ -138,6 +138,7 @@ describe("workspace publication", () => {
     const result = await openPullRequestsForPublication({
       ...common,
       title: "Implement the ticket",
+      body: "## What changed\nImplemented the ticket.",
       repositories: [finalized],
     });
 
@@ -158,6 +159,7 @@ describe("workspace publication", () => {
     const result = await openPullRequestsForPublication({
       ...common,
       title: "Implement the ticket",
+      body: "## What changed\nImplemented the ticket.",
       repositories: [finalized],
     });
 
@@ -172,6 +174,7 @@ describe("workspace publication", () => {
     const result = await openPullRequestsForPublication({
       ...common,
       title: "Implement the ticket",
+      body: "## What changed\nImplemented the ticket.",
       repositories: [finalized],
     });
 
@@ -191,6 +194,7 @@ describe("workspace publication", () => {
     const result = await openPullRequestsForPublication({
       ...common,
       title: "Fix review",
+      body: "## What changed\nAddressed the review.",
       repositories: [finalized],
       sourcePullRequest: {
         provider: "github",

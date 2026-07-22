@@ -83,9 +83,11 @@ function makeSource(overrides: Partial<Source> = {}): Source {
   return {
     runId: "run_abc",
     ticket: baseTicket,
+    ticketUrl: "",
     branchName: "ai/abc-123",
     entry: ticketEntry,
     researchPlanMarkdown: "",
+    changeSummary: "",
     publication: null,
     selectedRepositories: [],
     repositoryContexts: [],
@@ -102,20 +104,24 @@ describe("buildPromptVariables", () => {
     expect(Object.keys(vars).sort()).toEqual(PROMPT_VARIABLES.map((v) => v.name).sort());
   });
 
-  it("resolves all variables from a stubbed context", () => {
+  it("resolves every variable from a stubbed context", () => {
     const vars = buildPromptVariables(
       makeSource({
         entry: prEntry,
+        ticketUrl: "https://jira.example.com/browse/ABC-123",
         researchPlanMarkdown: "1. Do the thing",
+        changeSummary: "Added a theme toggle that persists.",
       }),
     );
 
     expect(vars).toEqual({
       ticket_key: "ABC-123",
       ticket_title: "Add dark mode",
+      ticket_url: "https://jira.example.com/browse/ABC-123",
       ticket_description: "Users want a dark theme.",
       ticket_acceptance_criteria: "Toggle persists across reloads.",
       ticket_labels: "frontend, ui",
+      change_summary: "Added a theme toggle that persists.",
       branch_name: "ai/abc-123",
       run_id: "run_abc",
       plan_markdown: "1. Do the thing",
@@ -302,8 +308,18 @@ describe("substituteNodePromptParams", () => {
     expect(result.promptRefs).toBe(node.promptRefs);
   });
 
+  it("substitutes into open_pr title and body params", () => {
+    const node = makeNode("open_pr", {
+      title: "PR: {{ticket_title}}",
+      body: "Changed {{ticket_title}}",
+    });
+    const result = substituteNodePromptParams(node, vars);
+    expect(result.params.title).toBe("PR: Add dark mode");
+    expect(result.params.body).toBe("Changed Add dark mode");
+  });
+
   it("returns the identical node for a block type with no variable params", () => {
-    const node = makeNode("open_pr", { prompt: "{{ticket_title}}" });
+    const node = makeNode("finalize_workspace", { prompt: "{{ticket_title}}" });
     expect(substituteNodePromptParams(node, vars)).toBe(node);
   });
 

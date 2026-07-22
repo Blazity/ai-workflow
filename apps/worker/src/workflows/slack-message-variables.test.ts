@@ -56,9 +56,11 @@ function makeSource(overrides: Partial<Source> = {}): Source {
   return {
     runId: "run_awt42",
     ticket,
+    ticketUrl: "",
     branchName: "ai/awt-42",
     entry: ticketEntry,
     researchPlanMarkdown: "",
+    changeSummary: "",
     publication: publishedPr,
     selectedRepositories: [],
     repositoryContexts: [],

@@ -121,6 +121,7 @@ export async function openPullRequestsForPublication(input: {
   ownerToken: string;
   ticketKey: string;
   title: string;
+  body: string;
   sourcePullRequest?: SourcePullRequestIdentity;
 }): Promise<WorkspacePublicationResult> {
   if (input.repositories.length === 0) {
@@ -182,6 +183,7 @@ export async function openPullRequestsForPublication(input: {
           branchName: repository.branchName,
           repository: selected,
           title: input.title,
+          body: input.body,
           owner: {
             subjectKey: input.subjectKey,
             ownerToken: input.ownerToken,
