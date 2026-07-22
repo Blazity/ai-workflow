@@ -306,38 +306,43 @@ describe("GitHubAdapter", () => {
   });
 
   describe("getPRComments", () => {
-    it("includes inline comments, issue comments, and review summary bodies", async () => {
-      mockOctokit.pulls.listReviewComments.mockResolvedValueOnce({
-        data: [
-          {
-            user: { login: "reviewer" },
-            body: "rename this",
-            reactions: { total_count: 0 },
-            path: "src/a.ts",
-            line: 12,
-            start_line: null,
-          },
-        ],
-      });
-      mockOctokit.issues.listComments.mockResolvedValueOnce({
-        data: [{ user: { login: "reviewer" }, body: "general note", reactions: { total_count: 1 } }],
-      });
-      mockOctokit.pulls.listReviews.mockResolvedValueOnce({
-        data: [
-          { user: { login: "reviewer" }, state: "CHANGES_REQUESTED", body: "please fix the null check" },
-          // Approvals/dismissals with no summary text must not pollute the prompt.
-          { user: { login: "reviewer" }, state: "APPROVED", body: "" },
-        ],
+    it("paginates and includes inline comments, issue comments, and review summary bodies", async () => {
+      const reviewComments = [
+        {
+          user: { login: "reviewer" },
+          body: "rename this",
+          reactions: { total_count: 0 },
+          path: "src/a.ts",
+          line: 12,
+          start_line: null,
+        },
+      ];
+      const issueComments = [
+        { user: { login: "reviewer" }, body: "general note", reactions: { total_count: 1 } },
+      ];
+      const reviews = [
+        { user: { login: "reviewer" }, state: "CHANGES_REQUESTED", body: "please fix the null check" },
+        // Approvals/dismissals with no summary text must not pollute the prompt.
+        { user: { login: "reviewer" }, state: "APPROVED", body: "" },
+      ];
+      // paginate() follows every page; the adapter must read all three lists
+      // through it, not a single first page.
+      mockOctokit.paginate.mockImplementation(async (endpoint: unknown) => {
+        if (endpoint === mockOctokit.pulls.listReviewComments) return reviewComments;
+        if (endpoint === mockOctokit.issues.listComments) return issueComments;
+        if (endpoint === mockOctokit.pulls.listReviews) return reviews;
+        return [];
       });
 
       const adapter = ghAdapter();
       const comments = await adapter.getPRComments(42);
 
-      expect(mockOctokit.pulls.listReviews).toHaveBeenCalledWith({
-        owner: "test-org",
-        repo: "test-repo",
-        pull_number: 42,
-      });
+      // Regression: review summaries (and inline/issue comments) are paginated so
+      // feedback past the first page is never dropped.
+      expect(mockOctokit.paginate).toHaveBeenCalledWith(
+        mockOctokit.pulls.listReviews,
+        expect.objectContaining({ pull_number: 42, per_page: 100 }),
+      );
       expect(comments).toContainEqual(
         expect.objectContaining({ filePath: "src/a.ts", body: "rename this", endLine: 12 }),
       );

@@ -51,11 +51,17 @@ type PromptVariableSource = Pick<
 export function buildPromptVariables(ctx: PromptVariableSource): PromptVariableValues {
   const { entry, ticket, publication, selectedRepositories, repositoryContexts } = ctx;
   const prEntry = entry.kind === "pr_trigger" ? entry.pr : null;
-  // Human PR review feedback for {{pr_review_feedback}}: flatten every
-  // workflow-owned repo's comments (same source and formatter the fix/impl
-  // context envelopes use). Empty string when there is no feedback yet.
-  const prComments = repositoryContexts.flatMap((context) => context.prComments);
-  const prReviewFeedback = prComments.length > 0 ? formatPRComments(prComments) : "";
+  // Human PR review feedback for {{pr_review_feedback}}: one block per
+  // workflow-owned repo, each under its own `provider:repoPath` heading so a
+  // multi-repo run never conflates same-path comments across checkouts. Same
+  // formatter the fix/impl context envelopes use. Empty when no feedback yet.
+  const prReviewFeedback = repositoryContexts
+    .filter((context) => context.prComments.length > 0)
+    .map(
+      (context) =>
+        `### ${context.repository.provider}:${context.repository.repoPath}\n${formatPRComments(context.prComments)}`,
+    )
+    .join("\n\n");
   // The PR this run opened (open_pr / finalize_workspace) once publication lands.
   const openedPr = publication?.prs[0];
 

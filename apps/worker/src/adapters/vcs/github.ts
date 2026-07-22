@@ -225,22 +225,25 @@ export class GitHubAdapter
   }
 
   async getPRComments(prId: number): Promise<PRComment[]> {
-    const { data: reviewComments } =
-      await this.octokit.pulls.listReviewComments({
-        ...this.ownerRepo,
-        pull_number: prId,
-      });
-    const { data: issueComments } = await this.octokit.issues.listComments({
+    // Paginate all three: a PR with many comments/reviews would otherwise drop
+    // feedback past the first page (default 30), silently starving the agent.
+    const reviewComments = await this.octokit.paginate(
+      this.octokit.pulls.listReviewComments,
+      { ...this.ownerRepo, pull_number: prId, per_page: 100 },
+    );
+    const issueComments = await this.octokit.paginate(this.octokit.issues.listComments, {
       ...this.ownerRepo,
       issue_number: prId,
+      per_page: 100,
     });
     // The review's own summary body ("Request Changes" / "Comment" text typed in
     // the main review box) lives on the review object, not on listReviewComments
     // (those are only the line-anchored inline notes). Without this, a review
     // carrying only a summary is invisible to the agent.
-    const { data: reviews } = await this.octokit.pulls.listReviews({
+    const reviews = await this.octokit.paginate(this.octokit.pulls.listReviews, {
       ...this.ownerRepo,
       pull_number: prId,
+      per_page: 100,
     });
 
     const comments: PRComment[] = [

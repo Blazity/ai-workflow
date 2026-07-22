@@ -149,7 +149,39 @@ describe("buildPromptVariables", () => {
         ],
       }),
     );
+    expect(vars.pr_review_feedback).toContain("### github:acme/api");
     expect(vars.pr_review_feedback).toContain("fix the null check");
+  });
+
+  it("keeps each repository's feedback under its own heading in multi-repo runs", () => {
+    const context = (repoPath: string, body: string) => ({
+      repository: {
+        provider: "github" as const,
+        repoPath,
+        defaultBranch: "main",
+        selectedRationale: "workflow-owned branch for this ticket",
+      },
+      prComments: [{ author: "reviewer", body, liked: false }],
+      checkResults: [],
+      hasConflicts: false,
+    });
+    const vars = buildPromptVariables(
+      makeSource({
+        repositoryContexts: [
+          context("acme/api", "fix the api null check"),
+          context("acme/web", "fix the web button copy"),
+        ],
+      }),
+    );
+    // Repo identity is preserved so same-path comments never get conflated.
+    expect(vars.pr_review_feedback).toContain("### github:acme/api");
+    expect(vars.pr_review_feedback).toContain("fix the api null check");
+    expect(vars.pr_review_feedback).toContain("### github:acme/web");
+    expect(vars.pr_review_feedback).toContain("fix the web button copy");
+    // api heading precedes web's (order follows repositoryContexts).
+    expect(vars.pr_review_feedback!.indexOf("acme/api")).toBeLessThan(
+      vars.pr_review_feedback!.indexOf("acme/web"),
+    );
   });
 
   it("leaves pr variables empty on a ticket-triggered run", () => {
