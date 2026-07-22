@@ -17,12 +17,12 @@ const PROVIDER_CAUSES: Array<{ pattern: RegExp; message: string }> = [
       "The AI provider rejected the request: the account credit or billing balance is too low.",
   },
   {
-    pattern: /rate.?limit|429|too many requests/i,
+    pattern: /rate.?limit(?!er)|\b429\b|too many requests/i,
     message: "The AI provider rate-limited the request. Please retry shortly.",
   },
   {
     pattern:
-      /401|unauthorized|authentication|invalid.*(api.?key|x-api-key)|permission denied/i,
+      /\b401\b|unauthorized|authentication|invalid.*(api.?key|x-api-key)|permission denied/i,
     message:
       "The AI provider rejected the credentials (authentication failed). Check the API key.",
   },
@@ -31,7 +31,7 @@ const PROVIDER_CAUSES: Array<{ pattern: RegExp; message: string }> = [
     message: "The requested AI model is unavailable or access is denied.",
   },
   {
-    pattern: /529|overloaded/i,
+    pattern: /\b529\b|overloaded/i,
     message: "The AI provider is overloaded. Please retry shortly.",
   },
 ];
@@ -86,7 +86,13 @@ function redactSecrets(text: string): string {
  * the length. Empty or whitespace-only detail yields an empty string. */
 export function sanitizeDetail(detail: string): string {
   if (!detail || !detail.trim()) return "";
-  const redacted = redactSecrets(stripStackFrames(detail));
+  // Drop a leading generic JS error-class prefix ("Error:", "TypeError:", ...)
+  // so the snippet leads with the actual cause, not the error class name.
+  const withoutErrorClass = stripStackFrames(detail).replace(
+    /^\s*(?:[A-Za-z_$][\w$]*)?Error:\s*/,
+    "",
+  );
+  const redacted = redactSecrets(withoutErrorClass);
   const collapsed = redacted.replace(/\s+/g, " ").trim();
   if (!collapsed) return "";
   return collapsed.length > SNIPPET_MAX_LENGTH

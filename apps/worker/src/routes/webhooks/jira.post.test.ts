@@ -155,6 +155,19 @@ describe("POST /webhooks/jira", () => {
     expect(state.cancel).not.toHaveBeenCalled();
   });
 
+  it("surfaces a retryable error when the failed-status lookup fails (does not cancel)", async () => {
+    // A transient lookup failure must not be read as "not failed": guessing
+    // would cancel a genuinely failed run. Return a retryable 503 instead.
+    const connected = adapters();
+    state.createAdapters.mockReturnValue(connected);
+    state.isRunRecordedFailed.mockRejectedValue(new Error("db down"));
+
+    const response = await app()(request({ actor: "human-account" }));
+
+    expect(response.status).toBe(503);
+    expect(state.cancel).not.toHaveBeenCalled();
+  });
+
   it.each([
     ["missing actor", null],
     ["different actor", "another-account"],

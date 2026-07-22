@@ -48,6 +48,13 @@ describe("classifyProviderFailure", () => {
   it("returns undefined when nothing matches", () => {
     expect(classifyProviderFailure("the socket hung up")).toBeUndefined();
   });
+
+  it("does not match status codes embedded in larger numbers or 'rate-limiter'", () => {
+    expect(classifyProviderFailure("processed 4013 items")).toBeUndefined();
+    expect(classifyProviderFailure("processed 14290 tokens")).toBeUndefined();
+    expect(classifyProviderFailure("elapsed 5290 ms")).toBeUndefined();
+    expect(classifyProviderFailure("our rate-limiter dropped it")).toBeUndefined();
+  });
 });
 
 describe("sanitizeDetail", () => {
@@ -78,6 +85,13 @@ describe("sanitizeDetail", () => {
     expect(out).not.toContain("abcdef.ghijkl-mnop_qrstuv");
   });
 
+  it("strips a leading generic error-class prefix", () => {
+    expect(sanitizeDetail("TypeError: cannot read x of undefined")).toBe(
+      "cannot read x of undefined",
+    );
+    expect(sanitizeDetail("Error: boom")).toBe("boom");
+  });
+
   it("redacts credentials in URLs but keeps the host", () => {
     const out = sanitizeDetail(
       "clone failed: https://admin:s3cr3tPassw0rd@internal.example.com/repo.git",
@@ -103,7 +117,7 @@ describe("sanitizeDetail", () => {
   it("strips stack-trace frames", () => {
     const detail =
       "Error: boom\n    at Object.<anonymous> (/Users/x/app/file.ts:12:5)\n    at run (/Users/x/app/run.ts:3:1)";
-    expect(sanitizeDetail(detail)).toBe("Error: boom");
+    expect(sanitizeDetail(detail)).toBe("boom");
   });
 
   it("collapses whitespace and truncates to the cap", () => {

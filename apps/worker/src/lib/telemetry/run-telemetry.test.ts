@@ -399,6 +399,18 @@ describe("markRunFailedOnSelfMove", () => {
     }
   });
 
+  it("marks a null-status (in-flight) row as failed", async () => {
+    await db.insert(workflowRuns).values({
+      runId: "wrun_null",
+      subjectKey: "ticket:jira:PROJ-2",
+      workflowId: "wf_agent",
+      workflowName: "Agent",
+      // status omitted -> stored NULL; must be treated as in-flight, not skipped
+    });
+    await markRunFailedOnSelfMove(db, "wrun_null");
+    expect((await row("wrun_null")).status).toBe("failed");
+  });
+
   it("is a no-op for a missing run", async () => {
     await markRunFailedOnSelfMove(db, "wrun_missing");
     expect(await row("wrun_missing")).toBeUndefined();

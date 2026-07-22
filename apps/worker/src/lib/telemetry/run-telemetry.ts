@@ -1,4 +1,4 @@
-import { and, eq, ne, notInArray, sql } from "drizzle-orm";
+import { and, eq, isNull, ne, notInArray, or, sql } from "drizzle-orm";
 import type { Db } from "../../db/client.js";
 import { workflowRuns } from "../../db/schema.js";
 import type {
@@ -297,7 +297,13 @@ export async function markRunFailedOnSelfMove(db: Db, runId: string): Promise<vo
     .where(
       and(
         eq(workflowRuns.runId, runId),
-        notInArray(workflowRuns.status, ["success", "failed", "blocked", "awaiting"]),
+        // A NULL status is an in-flight row too: `status NOT IN (...)` is NULL
+        // (not true) for NULL, so without this a null-status run would be
+        // skipped and its failure lost.
+        or(
+          isNull(workflowRuns.status),
+          notInArray(workflowRuns.status, ["success", "failed", "blocked", "awaiting"]),
+        ),
       ),
     );
 }

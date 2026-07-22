@@ -1904,6 +1904,9 @@ async function agentWorkflowBody(
           runOutcome = "failed";
           return;
         }
+        // Persist "failed" before this backlog move fires the self-triggered
+        // "ticket left the AI column" webhook (same race as failureExit).
+        await markRunFailedOnSelfMoveStep(workflowRunId);
         await moveTicketStep(ticketId, backlogMoveTarget(), transitionOwner);
         await notifyTicket(ticket.identifier, {
           kind: "failed",
@@ -2508,6 +2511,9 @@ async function agentWorkflowBody(
         console.error(`Workflow failed for ${ticket.identifier}:`, error);
         if (!entry.ticketKey) return;
 
+        // Persist "failed" before this backlog move fires the self-triggered
+        // "ticket left the AI column" webhook (same race as failureExit).
+        await markRunFailedOnSelfMoveStep(workflowRunId);
         let moved = false;
         try {
           await moveTicketStep(
