@@ -127,7 +127,17 @@ export async function reconcileRuns(
       );
       continue;
     }
-    if (!(await verifyTicketLeftAiColumn(ticketKey, issueTracker))) continue;
+    const departure = await verifyTicketLeftAiColumn(ticketKey, issueTracker);
+    if (!departure.left) continue;
+    if (
+      await shouldRetainFinalizingRunInAiReview(
+        ticketKey,
+        entry.runId,
+        departure.trackerStatus,
+      )
+    ) {
+      continue;
+    }
 
     const cancellationConfirmed = await cancelRun(
       ticketKey,
@@ -384,8 +394,8 @@ async function stopOwnedSandboxes(
 async function verifyTicketLeftAiColumn(
   ticketKey: string,
   issueTracker?: IssueTrackerAdapter,
-): Promise<boolean> {
-  if (!issueTracker) return true;
+): Promise<{ left: boolean; trackerStatus: string | null }> {
+  if (!issueTracker) return { left: true, trackerStatus: null };
 
   try {
     const ticket = await issueTracker.fetchTicket(ticketKey);
@@ -398,19 +408,54 @@ async function verifyTicketLeftAiColumn(
         { ticketKey, status: ticket.trackerStatus, projectKey: ticketProjectKey },
         "reconcile_kept_run_missing_from_poll_snapshot",
       );
-      return false;
+      return { left: false, trackerStatus: ticket.trackerStatus };
     }
-    return true;
+    return { left: true, trackerStatus: ticket.trackerStatus };
   } catch (err) {
     if (err instanceof IssueTrackerNotFoundError || getErrorCode(err) === "NOT_FOUND") {
-      return true;
+      return { left: true, trackerStatus: null };
     }
     logger.warn(
       { ticketKey, error: (err as Error).message },
       "reconcile_orphan_verification_failed",
     );
+    return { left: false, trackerStatus: null };
+  }
+}
+
+/**
+ * A ticket sitting in the AI Review column while its bound run is still
+ * executing is the run's own success destination reached early: a Jira
+ * automation rule (or an eager human) raced the run's final self-move as soon
+ * as the PR appeared, before the run could freeze its "success" status.
+ * Cancelling would record that genuine success as "cancelled"/"blocked".
+ * Retain the owner until the Workflow world reports a terminal status; the
+ * next tick then releases it through this same orphan path (cancelRun's
+ * already-terminal branch) exactly as for a normal completion.
+ */
+async function shouldRetainFinalizingRunInAiReview(
+  ticketKey: string,
+  runId: string,
+  trackerStatus: string | null,
+): Promise<boolean> {
+  if (
+    trackerStatus === null ||
+    trackerStatus.trim().toLowerCase() !== env.COLUMN_AI_REVIEW.trim().toLowerCase()
+  ) {
     return false;
   }
+  try {
+    const status = await getRun(runId).status;
+    if (TERMINAL_STATUSES.has(status)) return false;
+  } catch {
+    // Reachability is not terminal proof (same rule as cleanFinishedRun):
+    // retain the exact owner and let a later tick decide.
+  }
+  logger.info(
+    { ticketKey, runId },
+    "reconcile_retained_finalizing_run_in_ai_review",
+  );
+  return true;
 }
 
 function resolveTicketProjectKey(ticket: {

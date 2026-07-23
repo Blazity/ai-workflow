@@ -10,6 +10,7 @@ vi.mock("../../env.js", () => ({
   env: {
     JIRA_PROJECT_KEY: "PROJ",
     COLUMN_AI: "AI",
+    COLUMN_AI_REVIEW: "Review",
     COLUMN_BACKLOG: "Backlog",
     JIRA_BACKLOG_TRANSITION_ID: undefined,
   },
@@ -502,6 +503,38 @@ describe("reconcileRuns owner-CAS recovery", () => {
       onReleased,
     );
     expect(onReleased).toHaveBeenCalledWith(bound.subjectKey);
+  });
+
+  it("retains a bound run whose ticket sits in the AI Review column while it still executes", async () => {
+    // A Jira automation rule raced the run's own success move: the ticket
+    // reached AI Review while the run is still finalizing (world status
+    // "running"). Cancelling now would record a genuine success as blocked.
+    const bound = entry();
+    const runRegistry = registry([bound]);
+    mockGetRun.mockReturnValue({ status: Promise.resolve("running") });
+    const { reconcileRuns } = await import("./reconcile.js");
+
+    expect(
+      await reconcileRuns(new Set(), runRegistry, issueTracker("Review")),
+    ).toEqual({ cancelled: 0, cleaned: 0 });
+    expect(mockCancelRun).not.toHaveBeenCalled();
+    expect(runRegistry.release).not.toHaveBeenCalled();
+  });
+
+  it("still releases an AI Review ticket's owner once its world run is terminal", async () => {
+    // Normal post-success janitor duty: the run completed, its ticket sits in
+    // AI Review, and the orphan path's already-terminal cancellation releases
+    // the exact owner as before.
+    const bound = entry();
+    const runRegistry = registry([bound]);
+    mockGetRun.mockReturnValue({ status: Promise.resolve("completed") });
+    mockCancelRun.mockResolvedValue(true);
+    const { reconcileRuns } = await import("./reconcile.js");
+
+    expect(
+      await reconcileRuns(new Set(), runRegistry, issueTracker("Review")),
+    ).toEqual({ cancelled: 1, cleaned: 0 });
+    expect(mockCancelRun).toHaveBeenCalledOnce();
   });
 
   it("never releases an owner solely because the Workflow status API is unreachable", async () => {

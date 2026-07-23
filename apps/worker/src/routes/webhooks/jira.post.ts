@@ -197,6 +197,28 @@ export default defineEventHandler(async (event) => {
       };
     }
 
+    // The AI Review column is the flow's own success destination: the run's
+    // final update_ticket_status block moves the finished ticket there right
+    // after the PR opens. A Jira automation rule (or an eager human) can race
+    // that same move as soon as the PR link appears, landing the ticket in AI
+    // Review while the run is still finalizing and BEFORE the self-move froze
+    // the "success" status, so the recorded-outcome guard below cannot help.
+    // Entering the review column is a completion gesture, never an abort:
+    // skip cancellation and let the run finish. Its own later move lands as a
+    // no-op (moveTicketForRun's already-at-target check). A human abort still
+    // cancels, because it moves the ticket to a non-review column.
+    if (isAiReviewColumnStatus(liveTicketState.status)) {
+      logger.info(
+        {
+          ticketKey,
+          payloadStatus: ticketStatus,
+          liveStatus: liveTicketState.status,
+        },
+        "webhook_skip_cancel_ticket_in_ai_review_column",
+      );
+      return { status: "ignored", reason: "ticket_in_ai_review_column", ticketKey };
+    }
+
     // The bot's OWN finalization moves this ticket out of the AI column: its
     // failure handling moves a failed run's ticket to the backlog, and its
     // success handling moves a finished run's ticket to AI Review. Both fire
@@ -460,6 +482,13 @@ function extractStatusChange(
 
 function isAiColumnStatus(status: string): boolean {
   return status.trim().toLowerCase() === env.COLUMN_AI.trim().toLowerCase();
+}
+
+function isAiReviewColumnStatus(status: string | null): boolean {
+  return (
+    status !== null &&
+    status.trim().toLowerCase() === env.COLUMN_AI_REVIEW.trim().toLowerCase()
+  );
 }
 
 async function cancelTrackedRun(
