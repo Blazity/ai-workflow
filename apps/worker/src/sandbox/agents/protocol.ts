@@ -13,6 +13,11 @@ import type {
 } from "./types.js";
 import { AgentRuntimeError } from "./runtime-error.js";
 
+export {
+  AgentRuntimeError,
+  isAgentRuntimeError,
+} from "./runtime-error.js";
+
 const DIAGNOSTIC_TAIL_BYTES = 2 * 1024;
 const MAX_SCHEMA_ISSUES = 20;
 
@@ -65,9 +70,6 @@ export function hydrateAgentCliSpec(
   }
   return supported;
 }
-
-export { AgentRuntimeError };
-export { isAgentRuntimeError } from "./runtime-error.js";
 
 export async function installAndVerifyCli(
   sandbox: RunnableSandbox,
