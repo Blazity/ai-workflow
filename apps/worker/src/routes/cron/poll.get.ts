@@ -23,6 +23,7 @@ import {
   listDispatchBlockingApprovals,
   type ApprovalRow,
 } from "../../approvals/store.js";
+import { deleteExpiredRunObservations } from "../../run-observability/store.js";
 
 const PENDING_TRIGGER_RECOVERY_SCAN_LIMIT = 20;
 
@@ -120,6 +121,18 @@ export default defineEventHandler(async (event) => {
     .purgeExpired()
     .catch((err) => logger.warn({ err: (err as Error).message }, "poll_gate_purge_failed"));
 
+  // Replay retention: delete at most one bounded batch per poll. The durable
+  // expiry markers remain on workflow_runs, so the UI can still distinguish an
+  // expired replay from a historical run that was never captured.
+  const replayRetention = await deleteExpiredRunObservations({ db, limit: 100 })
+    .catch((err) => {
+      logger.warn(
+        { err: (err as Error).message },
+        "poll_replay_retention_failed",
+      );
+      return { deleted: 0, runIds: [] };
+    });
+
   // Telemetry: snapshot run lifecycle from the Workflow world into Neon so run
   // history, active counts and durations stay SQL-queryable beyond Vercel's
   // ~24h observability window. Per-run cost is filled separately by the agent
@@ -148,6 +161,7 @@ export default defineEventHandler(async (event) => {
     },
     clarificationExpiry,
     approvalRecovery,
+    replayRetention: { deleted: replayRetention.deleted },
   };
 });
 

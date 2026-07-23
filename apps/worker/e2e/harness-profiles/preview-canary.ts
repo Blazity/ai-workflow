@@ -1,3 +1,5 @@
+import { randomBytes } from "node:crypto";
+import { open, stat } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 import { neon } from "@neondatabase/serverless";
 import type {
@@ -5,6 +7,8 @@ import type {
   HarnessProfilesResponse,
   HarnessRunManifestRecord,
   RunDetailResponse,
+  WorkflowReplayAttemptDetail,
+  WorkflowRunReplayResponse,
   WorkflowDefinitionDetailResponse,
   WorkflowDefinitionMeta,
   WorkflowDefinitionsResponse,
@@ -16,6 +20,13 @@ import {
   parseHarnessCanaryEnv,
   type HarnessCanaryEnv,
 } from "./canary-contract.js";
+import {
+  assertReplayCanaryEvidence,
+  createReplayCanaryFixture,
+  parseReplayCanaryEnv,
+  type ReplayCanaryEnv,
+  type ReplayCanaryFixture,
+} from "../replay/canary-contract.js";
 
 type SqlClient = ReturnType<typeof neon>;
 
@@ -41,10 +52,18 @@ interface CanaryCase {
   };
 }
 
+export interface HarnessProfilePreviewCanaryOptions {
+  verifyReplay?: boolean;
+}
+
 export async function runHarnessProfilePreviewCanary(
   source: NodeJS.ProcessEnv = process.env,
+  options: HarnessProfilePreviewCanaryOptions = {},
 ): Promise<void> {
   const env = parseHarnessCanaryEnv(source);
+  const replayEnv = options.verifyReplay
+    ? parseReplayCanaryEnv(source)
+    : null;
   const sql = neon(env.DATABASE_URL);
   const api = createWorkerApi(env);
 
@@ -89,6 +108,12 @@ export async function runHarnessProfilePreviewCanary(
 
   await assertPinnedSkillExists(sql, env, custom.profile.organizationId);
   await assertNoActiveRuns(sql);
+  const replayLogCapture = replayEnv
+    ? await prepareReplayLogCapture(replayEnv)
+    : null;
+  const replayFixture = replayEnv
+    ? createReplayCanaryFixture(randomBytes(12).toString("hex"))
+    : null;
 
   const restore = findDefinition(
     definitions.definitions,
@@ -175,7 +200,18 @@ export async function runHarnessProfilePreviewCanary(
       });
       activeCanary = canary.workflowId;
       try {
-        const run = await executeCase(env, api, sql, canary);
+        const replay =
+          canary.label === "custom" &&
+          replayEnv &&
+          replayLogCapture &&
+          replayFixture
+            ? {
+                env: replayEnv,
+                fixture: replayFixture,
+                logCapture: replayLogCapture,
+              }
+            : undefined;
+        const run = await executeCase(env, api, sql, canary, replay);
         assertRunHarnessManifest(run.harnessManifests, {
           reference: canary.reference,
           provider: canary.provider,
@@ -208,8 +244,16 @@ export async function runHarnessProfilePreviewCanary(
   }
 
   console.log(
-    "[harness-canary] PASS: built-in Claude, built-in Codex, and the exact custom skill profile completed on the preview.",
+    options.verifyReplay
+      ? "[harness-canary] PASS: provider/profile execution and replay sanitization completed on the preview."
+      : "[harness-canary] PASS: built-in Claude, built-in Codex, and the exact custom skill profile completed on the preview.",
   );
+}
+
+interface ReplayCaseVerification {
+  env: ReplayCanaryEnv;
+  fixture: ReplayCanaryFixture;
+  logCapture: ReplayLogCapture;
 }
 
 async function executeCase(
@@ -217,8 +261,13 @@ async function executeCase(
   api: ReturnType<typeof createWorkerApi>,
   sql: SqlClient,
   canary: CanaryCase,
+  replay?: ReplayCaseVerification,
 ): Promise<DurableRun> {
-  const ticketKey = await createTicket(env, canary.label);
+  const ticketKey = await createTicket(
+    env,
+    canary.label,
+    replay?.fixture.ticketDescription,
+  );
   try {
     await transitionTicket(env, ticketKey, env.COLUMN_AI);
     const deadline = Date.now() + env.HARNESS_CANARY_TIMEOUT_MS;
@@ -238,6 +287,16 @@ async function executeCase(
           );
           if (captured.definitionVersion === null) {
             throw new Error(`Run ${run.runId} did not pin a definition version`);
+          }
+          if (replay) {
+            await verifyReplayCase(
+              env,
+              replay,
+              api,
+              sql,
+              run.runId,
+              deadline,
+            );
           }
           return captured;
         }
@@ -266,6 +325,236 @@ async function executeCase(
   }
 }
 
+interface ReplayLogCapture {
+  path: string;
+  startOffset: number;
+}
+
+async function prepareReplayLogCapture(
+  env: ReplayCanaryEnv,
+): Promise<ReplayLogCapture> {
+  const metadata = await stat(env.REPLAY_CANARY_LOG_EXPORT_PATH).catch(
+    () => null,
+  );
+  if (!metadata?.isFile()) {
+    throw new Error(
+      "Replay canary log export must exist as a regular file before mutation",
+    );
+  }
+  return {
+    path: env.REPLAY_CANARY_LOG_EXPORT_PATH,
+    startOffset: metadata.size,
+  };
+}
+
+async function verifyReplayCase(
+  harnessEnv: HarnessCanaryEnv,
+  replay: ReplayCaseVerification,
+  api: ReturnType<typeof createWorkerApi>,
+  sql: SqlClient,
+  runId: string,
+  deadline: number,
+): Promise<void> {
+  const { summary, details } = await waitForReplayApi(
+    api,
+    runId,
+    deadline,
+  );
+  const [databaseRows, dashboardHtml, appendedLogExport] = await Promise.all([
+    readReplayDatabaseRows(sql, runId),
+    fetchRenderedReplay(harnessEnv, replay.env, runId),
+    waitForReplayLogExport(replay.env, replay.logCapture, runId),
+  ]);
+
+  assertReplayCanaryEvidence(
+    {
+      runId,
+      databaseRows,
+      apiSummary: summary,
+      apiDetails: details,
+      dashboardHtml,
+      appendedLogExport,
+    },
+    replay.fixture,
+  );
+}
+
+async function waitForReplayApi(
+  api: ReturnType<typeof createWorkerApi>,
+  runId: string,
+  deadline: number,
+): Promise<{
+  summary: WorkflowRunReplayResponse;
+  details: WorkflowReplayAttemptDetail[];
+}> {
+  while (Date.now() < deadline) {
+    const summary = await api.get<WorkflowRunReplayResponse>(
+      `/api/v1/runs/${encodeURIComponent(runId)}/replay?limit=200`,
+    );
+    if (summary.nextCursor !== null) {
+      throw new Error("Minimal replay canary unexpectedly exceeded 200 attempts");
+    }
+    const expectedAttempts = summary.snapshot?.graph.nodes.length ?? 0;
+    const terminal =
+      summary.attempts.length >= expectedAttempts &&
+      summary.attempts.every(
+        (attempt) =>
+          ![
+            "running",
+            "waiting_loop",
+            "waiting_for_clarification",
+          ].includes(attempt.state),
+      );
+    if (
+      summary.availability === "available" &&
+      summary.snapshot &&
+      expectedAttempts > 0 &&
+      terminal
+    ) {
+      const details = await Promise.all(
+        summary.attempts.map((attempt) =>
+          api.get<WorkflowReplayAttemptDetail>(
+            `/api/v1/runs/${encodeURIComponent(runId)}/attempts/${attempt.id}`,
+          ),
+        ),
+      );
+      if (details.some((detail) => detail.logs !== null)) {
+        return { summary, details };
+      }
+    }
+    await delay(2_000);
+  }
+  throw new Error("Replay API did not finish capture before the canary deadline");
+}
+
+async function readReplayDatabaseRows(
+  sql: SqlClient,
+  runId: string,
+): Promise<{ observation: unknown; attempts: unknown[] }> {
+  const observations = await sql`
+    SELECT to_jsonb(observation) AS payload
+    FROM workflow_run_observations observation
+    WHERE observation.run_id = ${runId}
+    LIMIT 1
+  `;
+  const attempts = await sql`
+    SELECT to_jsonb(attempt) AS payload
+    FROM workflow_block_attempts attempt
+    WHERE attempt.run_id = ${runId}
+    ORDER BY attempt.id
+  `;
+  if (!observations[0]?.payload || attempts.length === 0) {
+    throw new Error("Replay canary database capture is incomplete");
+  }
+  return {
+    observation: observations[0].payload,
+    attempts: attempts.map((row) => row.payload),
+  };
+}
+
+async function fetchRenderedReplay(
+  harnessEnv: HarnessCanaryEnv,
+  replayEnv: ReplayCanaryEnv,
+  runId: string,
+): Promise<string> {
+  const base = replayEnv.REPLAY_CANARY_DASHBOARD_BASE_URL.replace(/\/+$/, "");
+  const response = await fetch(`${base}/trace/${encodeURIComponent(runId)}`, {
+    cache: "no-store",
+    redirect: "manual",
+    headers: {
+      Cookie: `ba_session=${harnessEnv.HARNESS_CANARY_SESSION_TOKEN}`,
+      "x-vercel-protection-bypass":
+        replayEnv.REPLAY_CANARY_DASHBOARD_AUTOMATION_BYPASS_SECRET,
+    },
+    signal: AbortSignal.timeout(30_000),
+  });
+  if (!response.ok) {
+    throw new Error(
+      `Dashboard replay trace request failed with status ${response.status}`,
+    );
+  }
+  const contentLength = Number(response.headers.get("content-length"));
+  if (Number.isFinite(contentLength) && contentLength > 10 * 1024 * 1024) {
+    throw new Error("Dashboard replay trace exceeds the canary response limit");
+  }
+  const html = await response.text();
+  if (Buffer.byteLength(html, "utf8") > 10 * 1024 * 1024) {
+    throw new Error("Dashboard replay trace exceeds the canary response limit");
+  }
+  return html;
+}
+
+async function waitForReplayLogExport(
+  env: ReplayCanaryEnv,
+  capture: ReplayLogCapture,
+  runId: string,
+): Promise<string> {
+  const deadline = Date.now() + env.REPLAY_CANARY_LOG_WAIT_MS;
+  let lastSize = -1;
+  let unchangedSince = 0;
+  let latest = "";
+  while (Date.now() < deadline) {
+    const current = await stat(capture.path).catch(() => null);
+    if (!current?.isFile() || current.size < capture.startOffset) {
+      throw new Error("Replay canary log export was removed or truncated");
+    }
+    const appendedBytes = current.size - capture.startOffset;
+    if (appendedBytes > env.REPLAY_CANARY_LOG_MAX_BYTES) {
+      throw new Error("Replay canary log export exceeds its bounded scan limit");
+    }
+    if (current.size !== lastSize) {
+      latest = await readLogRange(
+        capture.path,
+        capture.startOffset,
+        appendedBytes,
+      );
+      lastSize = current.size;
+      unchangedSince = Date.now();
+    }
+    if (
+      latest.includes(runId) &&
+      unchangedSince > 0 &&
+      Date.now() - unchangedSince >= env.REPLAY_CANARY_LOG_SETTLE_MS
+    ) {
+      return latest;
+    }
+    await delay(2_000);
+  }
+  throw new Error(
+    "Replay canary log export did not cover and settle after the canary run",
+  );
+}
+
+async function readLogRange(
+  path: string,
+  startOffset: number,
+  byteLength: number,
+): Promise<string> {
+  if (byteLength === 0) return "";
+  const handle = await open(path, "r");
+  try {
+    const buffer = Buffer.alloc(byteLength);
+    let offset = 0;
+    while (offset < buffer.length) {
+      const result = await handle.read(
+        buffer,
+        offset,
+        buffer.length - offset,
+        startOffset + offset,
+      );
+      if (result.bytesRead === 0) break;
+      offset += result.bytesRead;
+    }
+    return new TextDecoder("utf-8", { fatal: true }).decode(
+      buffer.subarray(0, offset),
+    );
+  } catch {
+    throw new Error("Replay canary log export is not valid UTF-8");
+  } finally {
+    await handle.close();
+  }
+}
+
 function createWorkerApi(env: HarnessCanaryEnv) {
   const base = env.HARNESS_CANARY_BASE_URL.replace(/\/+$/, "");
   const request = async <T>(
@@ -287,7 +576,7 @@ function createWorkerApi(env: HarnessCanaryEnv) {
       throw new Error(
         `Preview API ${init.method ?? "GET"} ${path} failed: ${
           response.status
-        } ${text.slice(0, 500)}`,
+        }`,
       );
     }
     return (text ? JSON.parse(text) : null) as T;
@@ -456,6 +745,7 @@ async function jiraRequest<T>(
 async function createTicket(
   env: HarnessCanaryEnv,
   label: string,
+  description = "Return the deployed canary workflow's structured success response. Do not modify repositories or external systems.",
 ): Promise<string> {
   const result = await jiraRequest<{ key: string }>(
     env,
@@ -475,7 +765,7 @@ async function createTicket(
                 content: [
                   {
                     type: "text",
-                    text: "Return the deployed canary workflow's structured success response. Do not modify repositories or external systems.",
+                    text: description,
                   },
                 ],
               },

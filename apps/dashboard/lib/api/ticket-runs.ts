@@ -5,10 +5,12 @@ import type {
   TicketRunsResponse,
   RunDetailResponse,
   LiveRunsResponse,
+  WorkflowRunReplayResponse,
 } from "@shared/contracts";
 import {
   ticketRunsFallback,
   runDetailFallback,
+  runReplayFallback,
   liveRunsFallback,
 } from "./fallbacks";
 import { mergeTicketLiveRuns } from "@/lib/ticket";
@@ -50,4 +52,14 @@ export const getRunDetail = cache(
       `/api/v1/runs/${encodeURIComponent(runId)}`,
     ).catch((e) => authAwareFallback(e, () => runDetailFallback(now)));
   },
+);
+
+/** Replay summaries and the captured graph. Attempt envelopes stay lazy. */
+export const getRunReplay = cache(
+  async (runId: string): Promise<WorkflowRunReplayResponse> =>
+    getJSON<WorkflowRunReplayResponse>(
+      `/api/v1/runs/${encodeURIComponent(runId)}/replay?limit=100`,
+    ).catch((error) =>
+      authAwareFallback(error, () => runReplayFallback()),
+    ),
 );

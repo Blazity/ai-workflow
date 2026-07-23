@@ -33,6 +33,26 @@ import {
   type V2SchedulerCheckpoint,
   type V2SchedulerHooks,
 } from "../workflow-definition/v2-scheduler.js";
+import {
+  buildV2ReplayGraphSnapshot,
+  createV2RunObservationHooks,
+  type V2RunObservationHooks,
+} from "../run-observability/runtime-hooks.js";
+import { configuredReplaySecrets } from "../run-observability/configured-secrets.js";
+import {
+  emitAgentInvocationObservations,
+  emitTimedOutAgentInvocationObservations,
+} from "../run-observability/agent-observations.js";
+import {
+  sanitizeReplayAttemptOutcome,
+  sanitizeReplayGraphSnapshot,
+  sanitizeReplayValue,
+} from "../run-observability/sanitizer.js";
+import {
+  safeReplayAgentProtocolMetadata,
+  safeWorkflowExecutionLogEvent,
+} from "../run-observability/safe-execution-log.js";
+import { replayCaptureWithinTimeout } from "../run-observability/capture-timeout.js";
 import { executeTransform } from "../workflow-definition/transform.js";
 import {
   isJsonValue,
@@ -133,6 +153,9 @@ import type {
   BlockOutput,
   BlockRunState,
   JsonValue,
+  ReplayAttemptOutcome,
+  ReplayObservationKind,
+  ReplaySanitizedEnvelope,
   ResolvedPromptReference,
   TransformConfiguration,
   WorkflowBlockType,
@@ -142,6 +165,8 @@ import type {
   WorkflowDefinitionV2,
   WorkflowDefinitionV2Node,
   WorkflowParamValue,
+  WorkflowReplayGraphSnapshot,
+  WorkflowReplaySelectedTransition,
   HarnessRunManifestRecord,
 } from "@shared/contracts";
 import {
@@ -514,6 +539,11 @@ export function shouldReconcilePhaseUsageOnBlockFinish(
   schemaVersion: 1 | 2,
 ): boolean {
   return schemaVersion === 1;
+}
+
+export function blockRunStateSummary(state: BlockRunState): BlockRunState {
+  const { output: _output, ...summary } = state;
+  return summary;
 }
 
 export function resolveSlackMessageInput(
@@ -1233,7 +1263,7 @@ export async function notifyTicketBestEffort(
     await notifyTicket(ticketKey, event, owner);
   } catch (error) {
     if (isRunControlError(error)) throw error;
-    console.error(`Ticket notification failed for ${ticketKey}:`, error);
+    console.error(`Ticket notification failed for ${ticketKey}`);
   }
 }
 
@@ -1798,6 +1828,281 @@ async function recordBlockStatusesStep(payload: {
 }
 recordBlockStatusesStep.maxRetries = 0;
 
+async function markV2ReplayCaptureUnavailable(payload: {
+  runId: string;
+  organizationId: string;
+}): Promise<void> {
+  try {
+    const { getDb } = await import("../db/client.js");
+    const { markRunReplayCaptureUnavailable } = await import(
+      "../run-observability/store.js"
+    );
+    await replayCaptureWithinTimeout(
+      markRunReplayCaptureUnavailable({
+        db: getDb(),
+        ...payload,
+      }),
+    );
+  } catch {
+    const { logger } = await import("../lib/logger.js");
+    logger.warn(
+      { runId: payload.runId },
+      "run_replay_capture_unavailable_marker_failed",
+    );
+  }
+}
+
+async function markV2RunObservationUnavailableStep(payload: {
+  runId: string;
+  organizationId: string;
+}): Promise<void> {
+  "use step";
+  await markV2ReplayCaptureUnavailable(payload);
+}
+markV2RunObservationUnavailableStep.maxRetries = 0;
+
+async function captureV2RunObservationStartStep(payload: {
+  runId: string;
+  definitionId: number | null;
+  definitionVersion: number | null;
+  graph: WorkflowReplayGraphSnapshot;
+  runtimeManifest: ReplaySanitizedEnvelope;
+}): Promise<{ organizationId: string } | null> {
+  "use step";
+  if (
+    payload.definitionId === null ||
+    payload.definitionVersion === null
+  ) {
+    return null;
+  }
+  let organizationId: string | null = null;
+  let captureAbandoned = false;
+  try {
+    const capture = await replayCaptureWithinTimeout(
+      (async () => {
+        const { env } = await import("../../env.js");
+        const { getDb } = await import("../db/client.js");
+        const { dashboardOrganizationId } = await import(
+          "../workflow-definition/harness-profile-runtime.js"
+        );
+        const { getWorkflowDefinitionRawState } = await import(
+          "../workflow-definition/store.js"
+        );
+        const { captureRunObservationStart } = await import(
+          "../run-observability/store.js"
+        );
+        const db = getDb();
+        organizationId = await dashboardOrganizationId(
+          db,
+          env.DASHBOARD_ORG_SLUG,
+        );
+        if (captureAbandoned) {
+          throw new Error("Replay capture was abandoned");
+        }
+        const definition = await getWorkflowDefinitionRawState(
+          db,
+          payload.definitionId!,
+        );
+        if (captureAbandoned) {
+          throw new Error("Replay capture was abandoned");
+        }
+        const layout = definition?.layout ?? {
+          nodes: Object.fromEntries(
+            payload.graph.nodes.map((node) => [
+              node.id,
+              { x: node.x, y: node.y },
+            ]),
+          ),
+        };
+        const graph = {
+          ...payload.graph,
+          nodes: payload.graph.nodes.map((node) => ({
+            ...node,
+            ...(layout.nodes[node.id] ?? { x: node.x, y: node.y }),
+          })),
+        };
+        return captureRunObservationStart({
+          db,
+          runId: payload.runId,
+          organizationId: organizationId!,
+          definitionId: payload.definitionId!,
+          definitionVersion: payload.definitionVersion!,
+          definitionSchemaVersion: 2,
+          graph,
+          layout,
+          runtimeManifest: payload.runtimeManifest,
+          secrets: configuredReplaySecrets(),
+        });
+      })(),
+    );
+    if (!organizationId) {
+      throw new Error("Replay capture organization could not be resolved");
+    }
+    if (capture.captureStatus !== "available") {
+      await markV2ReplayCaptureUnavailable({
+        runId: payload.runId,
+        organizationId,
+      });
+      return null;
+    }
+    return organizationId ? { organizationId } : null;
+  } catch {
+    captureAbandoned = true;
+    if (organizationId) {
+      await markV2ReplayCaptureUnavailable({
+        runId: payload.runId,
+        organizationId,
+      });
+    }
+    const { logger } = await import("../lib/logger.js");
+    logger.warn(
+      { runId: payload.runId },
+      "run_replay_capture_start_failed",
+    );
+    return null;
+  }
+}
+captureV2RunObservationStartStep.maxRetries = 0;
+
+async function startV2RunObservationAttemptStep(payload: {
+  runId: string;
+  organizationId: string;
+  nodeId: string;
+  attempt: number;
+  activationScopeId: string;
+  startedAt: string;
+}): Promise<number | null> {
+  "use step";
+  try {
+    const { getDb } = await import("../db/client.js");
+    const { startWorkflowBlockAttempt } = await import(
+      "../run-observability/store.js"
+    );
+    const result = await replayCaptureWithinTimeout(
+      startWorkflowBlockAttempt({
+        db: getDb(),
+        runId: payload.runId,
+        organizationId: payload.organizationId,
+        nodeId: payload.nodeId,
+        attempt: payload.attempt,
+        activationScopeId: payload.activationScopeId,
+        startedAt: new Date(payload.startedAt),
+      }),
+    );
+    return result.attemptId;
+  } catch {
+    await markV2ReplayCaptureUnavailable(payload);
+    const { logger } = await import("../lib/logger.js");
+    logger.warn(
+      {
+        runId: payload.runId,
+        nodeId: payload.nodeId,
+        attempt: payload.attempt,
+      },
+      "run_replay_attempt_start_failed",
+    );
+    return null;
+  }
+}
+startV2RunObservationAttemptStep.maxRetries = 0;
+
+interface SanitizedReplayObservation {
+  kind: ReplayObservationKind;
+  envelope: ReplaySanitizedEnvelope;
+}
+
+async function updateV2RunObservationWaitingStep(payload: {
+  runId: string;
+  organizationId: string;
+  attemptId: number;
+  selectedTransition: WorkflowReplaySelectedTransition;
+  observations: SanitizedReplayObservation[];
+}): Promise<boolean> {
+  "use step";
+  try {
+    const { getDb } = await import("../db/client.js");
+    const { updateWorkflowBlockAttemptState } = await import(
+      "../run-observability/store.js"
+    );
+    const updated = await replayCaptureWithinTimeout(
+      updateWorkflowBlockAttemptState({
+        db: getDb(),
+        runId: payload.runId,
+        organizationId: payload.organizationId,
+        attemptId: payload.attemptId,
+        selectedTransition: payload.selectedTransition,
+        state: "waiting_loop",
+        observations: payload.observations,
+      }),
+    );
+    if (!updated) {
+      throw new Error("Replay attempt is no longer available");
+    }
+    return true;
+  } catch {
+    await markV2ReplayCaptureUnavailable(payload);
+    const { logger } = await import("../lib/logger.js");
+    logger.warn(
+      { runId: payload.runId, attemptId: payload.attemptId },
+      "run_replay_attempt_waiting_failed",
+    );
+    return false;
+  }
+}
+updateV2RunObservationWaitingStep.maxRetries = 0;
+
+async function finishV2RunObservationAttemptStep(payload: {
+  runId: string;
+  organizationId: string;
+  attemptId: number;
+  state:
+    | "waiting_for_clarification"
+    | "completed"
+    | "failed"
+    | "cancelled"
+    | "skipped";
+  outcome: ReplayAttemptOutcome;
+  selectedTransition: WorkflowReplaySelectedTransition | null;
+  diagnosticId: string | null;
+  observations: SanitizedReplayObservation[];
+  completedAt: string;
+}): Promise<boolean> {
+  "use step";
+  try {
+    const { getDb } = await import("../db/client.js");
+    const { finishWorkflowBlockAttempt } = await import(
+      "../run-observability/store.js"
+    );
+    const finished = await replayCaptureWithinTimeout(
+      finishWorkflowBlockAttempt({
+        db: getDb(),
+        runId: payload.runId,
+        organizationId: payload.organizationId,
+        attemptId: payload.attemptId,
+        state: payload.state,
+        outcome: payload.outcome,
+        selectedTransition: payload.selectedTransition,
+        diagnosticId: payload.diagnosticId,
+        observations: payload.observations,
+        completedAt: new Date(payload.completedAt),
+      }),
+    );
+    if (!finished) {
+      throw new Error("Replay attempt is no longer available");
+    }
+    return true;
+  } catch {
+    await markV2ReplayCaptureUnavailable(payload);
+    const { logger } = await import("../lib/logger.js");
+    logger.warn(
+      { runId: payload.runId, attemptId: payload.attemptId },
+      "run_replay_attempt_finish_failed",
+    );
+    return false;
+  }
+}
+finishV2RunObservationAttemptStep.maxRetries = 0;
+
 // --- Main Workflow ---
 
 export async function agentWorkflow(input: string | AgentWorkflowInput) {
@@ -1851,7 +2156,11 @@ async function agentWorkflowBody(
   const { env } = await import("../../env.js");
   const { assembleResearchPlanContext, assembleImplementationContext, assembleReviewContext } =
     await import("../sandbox/context.js");
-  const { collectPhase, teardownSandboxes } =
+  const {
+    collectPhase,
+    collectPhaseReplayDiagnostics,
+    teardownSandboxes,
+  } =
     await import("../sandbox/poll-agent.js");
   const { openPullRequestsForPublication } = await import("./workspace-publication.js");
   const { formatUsageReport } = await import("../sandbox/usage.js");
@@ -2023,6 +2332,127 @@ async function agentWorkflowBody(
       harnessManifests,
     }).catch(() => {});
   await writeBlockStatuses();
+  let v2RunObservation: V2RunObservationHooks | null = null;
+  if (plan.schemaVersion === 2) {
+    const replayCaptureStartedAt = await readRunBudgetClockStep();
+    const definition = plan.definition as WorkflowDefinitionV2;
+    const replayGraph = sanitizeReplayGraphSnapshot(
+      buildV2ReplayGraphSnapshot(definition),
+      configuredReplaySecrets(),
+    );
+    const capture = replayGraph
+      ? await captureV2RunObservationStartStep({
+          runId: workflowRunId,
+          definitionId: plan.definitionId,
+          definitionVersion: plan.version,
+          graph: replayGraph,
+          runtimeManifest: sanitizeReplayValue(
+            {
+              defaultAgent: {
+                provider: runDefaultKind,
+                model: defaultModel,
+              },
+              harnesses: harnessManifests,
+            },
+            { secrets: configuredReplaySecrets() },
+          ),
+        })
+      : null;
+    if (capture) {
+      const common = {
+        runId: workflowRunId,
+        organizationId: capture.organizationId,
+      };
+      const pendingObservations = new Map<
+        number,
+        SanitizedReplayObservation[]
+      >();
+      let replayCaptureUnavailable = false;
+      const takePendingObservations = (
+        attemptId: number,
+        terminal: boolean,
+      ): SanitizedReplayObservation[] => {
+        const observations = pendingObservations.get(attemptId) ?? [];
+        if (terminal) pendingObservations.delete(attemptId);
+        else pendingObservations.set(attemptId, []);
+        return observations;
+      };
+      v2RunObservation = createV2RunObservationHooks({
+        nodeTypes: new Map(
+          definition.nodes.map((node) => [node.id, node.type] as const),
+        ),
+        sink: {
+          async start(identity, startedAt) {
+            if (replayCaptureUnavailable) return null;
+            const attemptId = await startV2RunObservationAttemptStep({
+              ...common,
+              ...identity,
+              startedAt: startedAt.toISOString(),
+            });
+            if (replayCaptureUnavailable) return null;
+            if (attemptId !== null && !pendingObservations.has(attemptId)) {
+              pendingObservations.set(attemptId, []);
+            }
+            return attemptId;
+          },
+          async observe(attemptId, observation) {
+            const observations = pendingObservations.get(attemptId);
+            if (!observations) return;
+            observations.push({
+              kind: observation.kind,
+              envelope: sanitizeReplayValue(observation.value, {
+                secrets: configuredReplaySecrets(),
+                retain:
+                  observation.kind === "log" ? "tail" : "head",
+              }),
+            });
+          },
+          async updateWaiting(attemptId, selectedTransition) {
+            const captured = await updateV2RunObservationWaitingStep({
+              ...common,
+              attemptId,
+              selectedTransition,
+              observations: takePendingObservations(attemptId, false),
+            });
+            if (!captured) {
+              throw new Error("Replay waiting-state capture failed");
+            }
+          },
+          async finish(attemptId, finish, completedAt) {
+            const outcome =
+              sanitizeReplayAttemptOutcome(
+                finish.outcome,
+                configuredReplaySecrets(),
+              ) ?? {
+                kind: finish.outcome.kind,
+                status: "unavailable",
+              };
+            const captured = await finishV2RunObservationAttemptStep({
+              ...common,
+              attemptId,
+              ...finish,
+              outcome,
+              observations: takePendingObservations(attemptId, true),
+              completedAt: completedAt.toISOString(),
+            });
+            if (!captured) {
+              throw new Error("Replay attempt finalization failed");
+            }
+          },
+          async markUnavailable() {
+            replayCaptureUnavailable = true;
+            pendingObservations.clear();
+            await markV2RunObservationUnavailableStep(common);
+          },
+        },
+      });
+    }
+    const replayCaptureFinishedAt = await readRunBudgetClockStep();
+    lastBudgetClockMs += Math.max(
+      0,
+      replayCaptureFinishedAt - replayCaptureStartedAt,
+    );
+  }
 
   const phaseUsages: Record<string, PhaseUsage | null> = {};
   const phaseModels: Record<string, string> = {};
@@ -2354,7 +2784,9 @@ async function agentWorkflowBody(
               transitionOwner,
             ).catch((error) => {
               if (isRunControlError(error)) throw error;
-              console.error(`Clarification ticket parking failed for ${clarification.id}:`, error);
+              console.error(
+                `Clarification ticket parking failed for ${clarification.id}`,
+              );
               return false;
             });
             await notifyTicketBestEffort(ticket.identifier, {
@@ -2714,6 +3146,17 @@ async function agentWorkflowBody(
               execution?.cancellation,
             );
             if (!researchDone) {
+              await emitTimedOutAgentInvocationObservations({
+                observations: execution?.observations,
+                provider: kind,
+                model,
+                phase: researchArtifactPhase,
+                collectArtifacts: () =>
+                  collectPhaseReplayDiagnostics(
+                    sandboxId,
+                    researchPaths,
+                  ),
+              });
               return executionError("phase timed out", {
                 category: "timeout",
                 phase: "research",
@@ -2728,6 +3171,15 @@ async function agentWorkflowBody(
                 researchArtifactPhase,
                 runtime,
               );
+            await emitAgentInvocationObservations({
+              observations: execution?.observations,
+              provider: kind,
+              model,
+              phase: researchArtifactPhase,
+              artifacts: researchArtifacts,
+              usage: researchUsage,
+              result: researchResult,
+            });
             recordBlockPhaseUsage(
               ctx,
               researchLabel,
@@ -2871,6 +3323,15 @@ async function agentWorkflowBody(
                 implementationArtifactPhase,
                 runtime,
               );
+              await emitAgentInvocationObservations({
+                observations: execution?.observations,
+                provider: kind,
+                model,
+                phase: implementationArtifactPhase,
+                artifacts: implArtifacts,
+                usage: implUsage,
+                result,
+              });
               recordBlockPhaseUsage(
                 ctx,
                 implementationLabel,
@@ -2881,6 +3342,14 @@ async function agentWorkflowBody(
               if (!result.ok) return agentProtocolBlockError(result);
               implOutput = result.value;
             } else {
+              await emitTimedOutAgentInvocationObservations({
+                observations: execution?.observations,
+                provider: kind,
+                model,
+                phase: implementationArtifactPhase,
+                collectArtifacts: () =>
+                  collectPhaseReplayDiagnostics(sandboxId, implPaths),
+              });
               implOutput = { result: "failed", error: "Implementation phase timed out" };
             }
 
@@ -3053,6 +3522,17 @@ async function agentWorkflowBody(
                 execution?.cancellation,
               );
               if (!reviewDone) {
+                await emitTimedOutAgentInvocationObservations({
+                  observations: execution?.observations,
+                  provider: kind,
+                  model,
+                  phase: reviewArtifactPhase,
+                  collectArtifacts: () =>
+                    collectPhaseReplayDiagnostics(
+                      sandboxId,
+                      reviewPaths,
+                    ),
+                });
                 return executionError("Review phase timed out", {
                   category: "timeout",
                   phase: "review",
@@ -3066,6 +3546,15 @@ async function agentWorkflowBody(
                 reviewArtifactPhase,
                 runtime,
               );
+              await emitAgentInvocationObservations({
+                observations: execution?.observations,
+                provider: kind,
+                model,
+                phase: reviewArtifactPhase,
+                artifacts: reviewArtifacts,
+                usage: reviewUsage,
+                result,
+              });
               recordBlockPhaseUsage(
                 ctx,
                 reviewLabel,
@@ -3342,7 +3831,10 @@ async function agentWorkflowBody(
       };
 
       const hooks: ExecuteGraphHooks = {
-        onExecutionError: logWorkflowExecutionErrorStep,
+        onExecutionError: (event) =>
+          logWorkflowExecutionErrorStep(
+            safeWorkflowExecutionLogEvent(event),
+          ),
         async onBlockStart(nodeId, attempt) {
           await enforceBudgetAtBoundary(true);
           currentBlockId = nodeId;
@@ -3358,11 +3850,7 @@ async function agentWorkflowBody(
           if (shouldReconcilePhaseUsageOnBlockFinish(plan.schemaVersion)) {
             reconcileMissingPhaseUsages();
           }
-          let guarded = state;
-          if (state.output && JSON.stringify(state.output).length > 8192) {
-            guarded = { ...state, output: { status: state.output.status, _truncated: true } };
-          }
-          blockStatuses[nodeId] = guarded;
+          blockStatuses[nodeId] = blockRunStateSummary(state);
           await writeBlockStatuses();
           activeBlockIds.delete(nodeId);
           currentBlockId = [...activeBlockIds].at(-1) ?? null;
@@ -3608,6 +4096,7 @@ async function agentWorkflowBody(
             attempt: invocation.attempt,
             agentArtifactKey: v2AgentArtifactKeys.get(node.id)!,
             cancellation: invocation.cancellation,
+            observations: invocation.observations,
             compileEffectivePrompt: compileInvocationPrompt,
             ...(invocationBudget
               ? {
@@ -3631,24 +4120,73 @@ async function agentWorkflowBody(
       };
 
       const v2Hooks: V2SchedulerHooks = {
-        onNodeStart: ({ nodeId, attempt }) =>
-          hooks.onBlockStart(nodeId, attempt),
-        onNodeFinish: ({ nodeId, state: nodeState }) =>
-          hooks.onBlockFinish(nodeId, nodeState),
-        async onNodeSkipped({ nodeId }) {
-          blockStatuses[nodeId] = { status: "ok" };
+        onTriggerActivated(event) {
+          void v2RunObservation?.onTriggerActivated?.(event);
+        },
+        async onNodeStart(event) {
+          await hooks.onBlockStart(event.nodeId, event.attempt);
+          void v2RunObservation?.onNodeStart?.(event);
+        },
+        onNodeWaiting(event) {
+          void v2RunObservation?.onNodeWaiting?.(event);
+        },
+        async onNodeFinish(event) {
+          void v2RunObservation?.onNodeFinish?.(event);
+          await hooks.onBlockFinish(event.nodeId, event.state);
+        },
+        async onNodeSkipped(event) {
+          void v2RunObservation?.onNodeSkipped?.(event);
+          blockStatuses[event.nodeId] = {
+            status: "ok",
+            attempt: event.attempt,
+          };
           await writeBlockStatuses();
         },
-        onExecutionError: ({ state: errorState, error }) =>
-          logWorkflowExecutionErrorStep({
-            diagnosticId: errorState.diagnosticId,
-            nodeId: errorState.nodeId,
-            attempt: errorState.attempt,
-            category: errorState.category,
-            ...(errorState.phase ? { phase: errorState.phase } : {}),
-            ...(error.detail ? { detail: error.detail } : {}),
-            ...(error.diagnostic ? { agentProtocol: error.diagnostic } : {}),
-          }),
+        async onExecutionError({ state: errorState, error, activationScopeId }) {
+          if (error.diagnostic) {
+            const observation =
+              v2RunObservation?.observationHooksFor?.({
+                nodeId: errorState.nodeId,
+                attempt: errorState.attempt,
+                activationScopeId,
+              });
+            const { stdoutTail, stderrTail } = error.diagnostic;
+            void observation?.emit({
+              kind: "metadata",
+              value: {
+                agentProtocol: safeReplayAgentProtocolMetadata(error.diagnostic),
+              },
+            });
+            if (stdoutTail) {
+              void observation?.emit({
+                kind: "log",
+                value: { stream: "stdout", tail: stdoutTail },
+              });
+            }
+            if (stderrTail) {
+              void observation?.emit({
+                kind: "log",
+                value: { stream: "stderr", tail: stderrTail },
+              });
+            }
+          }
+          await logWorkflowExecutionErrorStep(
+            safeWorkflowExecutionLogEvent({
+              diagnosticId: errorState.diagnosticId,
+              nodeId: errorState.nodeId,
+              attempt: errorState.attempt,
+              category: errorState.category,
+              ...(errorState.phase ? { phase: errorState.phase } : {}),
+              ...(error.diagnostic
+                ? { agentProtocol: error.diagnostic }
+                : {}),
+            }),
+          );
+        },
+        observationHooksFor: (identity) =>
+          v2RunObservation?.observationHooksFor?.(identity) ?? {
+            emit() {},
+          },
       };
 
       let walk:
@@ -3775,8 +4313,7 @@ async function agentWorkflowBody(
       );
       terminalExecutionError ??= diagnostic;
       console.error(
-        `[${diagnostic.diagnosticId}] unhandled workflow execution error:`,
-        err,
+        `[${diagnostic.diagnosticId}] unhandled workflow execution error`,
       );
       err = new WorkflowExecutionError(terminalExecutionError);
     }
@@ -3794,7 +4331,9 @@ async function agentWorkflowBody(
         await writeBlockStatuses();
       },
       applyDefaultFailure: async (error) => {
-        console.error(`Workflow failed for ${ticket.identifier}:`, error);
+        console.error(
+          `[${terminalExecutionError?.diagnosticId ?? "workflow-failed"}] Workflow failed for ${ticket.identifier}`,
+        );
         if (!entry.ticketKey) return;
 
         // Persist "failed" before this backlog move fires the self-triggered
@@ -3834,6 +4373,7 @@ async function agentWorkflowBody(
     });
     if (controlError) throw err;
   } finally {
+    await v2RunObservation?.finalize("workflow_finished");
     // A launched phase with no parsed usage (timed out / errored before
     // collect) records as unknown, so computeUsageTotals reports
     // costKnown=false instead of a misleading costUsd=0 / costKnown=true.
@@ -3871,10 +4411,9 @@ async function agentWorkflowBody(
           }
         : null,
       harnessManifests,
-    }).catch((err) => {
+    }).catch(() => {
       console.error(
-        `Run telemetry failed to persist for ${ticket.identifier} (run ${workflowRunId}):`,
-        err,
+        `Run telemetry failed to persist for ${ticket.identifier} (run ${workflowRunId})`,
       );
     });
   }

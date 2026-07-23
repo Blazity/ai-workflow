@@ -249,6 +249,17 @@ export interface RunBlockStatusWrite {
   harnessManifests?: HarnessRunManifestRecord[];
 }
 
+export function summarizeBlockStatuses(
+  blockStatuses: Record<string, BlockRunState>,
+): Record<string, BlockRunState> {
+  return Object.fromEntries(
+    Object.entries(blockStatuses).map(([nodeId, state]) => {
+      const { output: _output, ...summary } = state;
+      return [nodeId, summary];
+    }),
+  );
+}
+
 /**
  * Block-status writer. Upserts per-block progress for one run, owning exactly
  * block_statuses, definition_version and definition_id (plus updated_at).
@@ -260,6 +271,7 @@ export async function recordBlockStatuses(
   db: Db,
   write: RunBlockStatusWrite,
 ): Promise<void> {
+  const blockStatuses = summarizeBlockStatuses(write.blockStatuses);
   await db
     .insert(workflowRuns)
     .values({
@@ -273,7 +285,7 @@ export async function recordBlockStatuses(
       ticketUrl: write.ticketUrl,
       definitionVersion: write.definitionVersion,
       definitionId: write.definitionId,
-      blockStatuses: write.blockStatuses,
+      blockStatuses,
       promptManifest: write.promptManifest,
       harnessManifests: write.harnessManifests,
     })

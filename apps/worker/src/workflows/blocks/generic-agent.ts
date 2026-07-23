@@ -27,6 +27,10 @@ import {
 import { isRunControlError } from "../run-control-error.js";
 import { pollPhaseUntilDone } from "./poll-phase.js";
 import {
+  emitAgentInvocationObservations,
+  emitTimedOutAgentInvocationObservations,
+} from "../../run-observability/agent-observations.js";
+import {
   agentArtifactPhase,
   agentProtocolExecutionError,
   blockBudgetObserver,
@@ -444,6 +448,17 @@ export const execute: BlockExecuteFn = async (
       execution?.cancellation,
     );
     if (!done) {
+      const { collectPhaseReplayDiagnostics } = await import(
+        "../../sandbox/poll-agent.js"
+      );
+      await emitTimedOutAgentInvocationObservations({
+        observations: execution?.observations,
+        provider: kind,
+        model,
+        phase,
+        collectArtifacts: () =>
+          collectPhaseReplayDiagnostics(sandboxId, paths),
+      });
       return executionError("agent phase timed out", { category: "timeout" });
     }
 
@@ -456,6 +471,15 @@ export const execute: BlockExecuteFn = async (
       customSchema,
       runtime,
     );
+    await emitAgentInvocationObservations({
+      observations: execution?.observations,
+      provider: kind,
+      model,
+      phase,
+      artifacts,
+      usage,
+      result,
+    });
     recordBlockPhaseUsage(
       ctx,
       usageLabel,

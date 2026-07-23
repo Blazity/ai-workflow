@@ -5,5 +5,6 @@ export * from "./prompt-variables.js";
 export * from "./prompt-references.js";
 export * from "./prompt-slots.js";
 export * from "./harness-profiles.js";
+export * from "./run-replay.js";
 export * from "./default-prompts.js";
 export * from "./default-agent-prompt-references.js";

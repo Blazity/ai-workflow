@@ -24,6 +24,7 @@ vi.mock("workflow", async (importOriginal) => ({
 vi.mock("../../sandbox/poll-agent.js", () => ({
   checkPhaseDone: mocks.checkPhaseDone,
   collectPhase: mocks.collectPhase,
+  collectPhaseReplayDiagnostics: mocks.collectPhase,
 }));
 vi.mock("../../sandbox/credentials.js", () => ({ getSandboxCredentials: () => ({}) }));
 vi.mock("@vercel/sandbox", () => ({ Sandbox: { get: mocks.sandboxGet } }));
@@ -937,10 +938,72 @@ describe("generic_agent execute", () => {
 
   it("fails when the phase times out", async () => {
     mocks.pollPhaseUntilDone.mockResolvedValue(false);
+    mocks.collectPhase.mockResolvedValue({
+      stdout: "partial stdout",
+      stderr: "partial stderr",
+      structuredOutput: null,
+      exitCode: null,
+    });
+    const emit = vi.fn();
 
-    const result = await execute(makeNode("generic_agent", { prompt: "p" }), {}, makeCtx());
+    const result = await execute(
+      makeNode("generic_agent", { prompt: "p" }),
+      {},
+      makeCtx(),
+      {},
+      { observations: { emit } },
+    );
 
     expect(result.kind).toBe("execution_error");
     if (result.kind === "execution_error") expect(result.error.detail).toBe("agent phase timed out");
+    expect(mocks.collectPhase).toHaveBeenCalledOnce();
+    expect(emit).toHaveBeenCalledWith({
+      kind: "log",
+      value: { stream: "stdout", tail: "partial stdout" },
+    });
+    expect(emit).toHaveBeenLastCalledWith({
+      kind: "metadata",
+      value: expect.objectContaining({
+        protocol: {
+          outcome: "timeout",
+          partialArtifacts: "captured",
+        },
+      }),
+    });
   }, 15000);
+
+  it("keeps the timeout outcome when partial replay artifacts are unavailable", async () => {
+    mocks.pollPhaseUntilDone.mockResolvedValue(false);
+    mocks.collectPhase.mockRejectedValue(new Error("diagnostic read timed out"));
+    const emit = vi.fn();
+
+    const result = await execute(
+      makeNode("generic_agent", { prompt: "p" }),
+      {},
+      makeCtx(),
+      {},
+      { observations: { emit } },
+    );
+
+    expect(result).toMatchObject({
+      kind: "execution_error",
+      error: {
+        category: "timeout",
+        detail: "agent phase timed out",
+      },
+    });
+    expect(emit).toHaveBeenCalledOnce();
+    expect(emit).toHaveBeenCalledWith({
+      kind: "metadata",
+      value: expect.objectContaining({
+        protocol: {
+          outcome: "timeout",
+          partialArtifacts: "unavailable",
+        },
+      }),
+    });
+    expect(JSON.stringify(emit.mock.calls)).not.toContain(
+      "diagnostic read timed out",
+    );
+  });
 });

@@ -8,6 +8,7 @@ import {
   type WorkflowDefinitionV2,
   type WorkflowDefinitionV2ControlEdge,
   type WorkflowDefinitionV2Node,
+  type WorkflowReplaySelectedTransition,
 } from "@shared/contracts";
 import type {
   BlockExecutionError,
@@ -130,6 +131,20 @@ export interface V2RuntimeGraph {
 
 export type V2StepsRecord = Record<string, { output: BlockOutput }>;
 
+export interface V2InvocationIdentity {
+  nodeId: string;
+  attempt: number;
+  activationScopeId: string;
+}
+
+export type V2SelectedTransition = WorkflowReplaySelectedTransition;
+
+export type V2InvocationTerminalState =
+  | "completed"
+  | "waiting_for_clarification"
+  | "cancelled"
+  | "failed";
+
 export type V2BlockExecutor = (
   node: WorkflowDefinitionV2Node,
   steps: Readonly<V2StepsRecord>,
@@ -138,31 +153,39 @@ export type V2BlockExecutor = (
 ) => Promise<BlockExecutionResult>;
 
 export interface V2SchedulerHooks {
-  onNodeStart?(event: {
-    nodeId: string;
-    attempt: number;
-    activationScopeId: string;
+  onTriggerActivated?(event: V2InvocationIdentity & {
+    startedAt: Date;
+    completedAt: Date;
+    output: BlockOutput;
+    selectedTransition: V2SelectedTransition | null;
   }): void | Promise<void>;
-  onNodeFinish?(event: {
-    nodeId: string;
-    attempt: number;
-    activationScopeId: string;
+  onNodeStart?(
+    event: V2InvocationIdentity & { startedAt: Date },
+  ): void | Promise<void>;
+  onNodeWaiting?(event: V2InvocationIdentity & {
+    state: "waiting_loop";
+    selectedTransition: V2SelectedTransition;
+  }): void | Promise<void>;
+  onNodeFinish?(event: V2InvocationIdentity & {
+    completedAt: Date;
     state: BlockRunState;
+    runtimeState: V2InvocationTerminalState;
+    selectedTransition: V2SelectedTransition | null;
   }): void | Promise<void>;
-  onNodeSkipped?(event: {
-    nodeId: string;
-    activationScopeId: string;
-  }): void | Promise<void>;
+  onNodeSkipped?(
+    event: V2InvocationIdentity & {
+      startedAt: Date;
+      completedAt: Date;
+    },
+  ): void | Promise<void>;
   onExecutionError?(event: {
     state: WorkflowExecutionErrorState;
     error: BlockExecutionError;
     activationScopeId: string;
   }): void | Promise<void>;
-  observationHooksFor?(identity: {
-    nodeId: string;
-    attempt: number;
-    activationScopeId: string;
-  }): V2InvocationObservationHooks;
+  observationHooksFor?(
+    identity: V2InvocationIdentity,
+  ): V2InvocationObservationHooks;
 }
 
 export interface ExecuteV2GraphOptions {
@@ -181,6 +204,7 @@ export interface ExecuteV2GraphOptions {
     clarificationAnswer: string;
   };
   shouldRethrowExecutionError?: (error: unknown) => boolean;
+  clock?: () => Date;
 }
 
 export interface V2SchedulerResult {
@@ -450,6 +474,11 @@ class V2SchedulerRuntime {
     }
   }
 
+  private boundaryTime(): Date {
+    const value = this.options.clock?.() ?? new Date();
+    return new Date(value.getTime());
+  }
+
   async run(): Promise<V2SchedulerResult> {
     await this.flushHookCalls();
     while (true) {
@@ -475,13 +504,19 @@ class V2SchedulerRuntime {
             this.sortedClarifications()[0],
           );
         }
-        if (this.checkpoint.ended) return this.result("ended");
+        if (this.checkpoint.ended) {
+          this.cancelWaitingLoopAttempts(
+            "Cancelled because the workflow ended before the loop returned.",
+          );
+          await this.flushHookCalls();
+          return this.result("ended");
+        }
         const deadlockedLoop = this.deadlockedLoop();
         if (deadlockedLoop) {
           await this.failNode(
             deadlockedLoop.scopeId,
             deadlockedLoop.nodeId,
-            this.nextAttempt(deadlockedLoop.nodeId),
+            deadlockedLoop.attempt,
             runtimeError(
               `loop "${deadlockedLoop.nodeId}" did not return to its Loop block`,
               { phase: "loop" },
@@ -575,15 +610,46 @@ class V2SchedulerRuntime {
       }
     }
     for (const trigger of this.graph.triggers) {
+      const active = trigger.id === this.options.entryTriggerId;
+      const attempt = this.nextAttempt(trigger.id);
       root.nodeStates[trigger.id] = {
-        status:
-          trigger.id === this.options.entryTriggerId ? "completed" : "skipped",
+        status: active ? "completed" : "skipped",
+        attempt,
       };
       const selectedPort =
-        trigger.id === this.options.entryTriggerId
+        active
           ? BLOCK_TYPE_SPECS[trigger.type].ports[0]
           : undefined;
       this.propagatePort(root.id, trigger.id, selectedPort);
+      if (active) {
+        const boundaryAt = this.boundaryTime();
+        const selectedTransition = this.selectedTransition(
+          trigger.id,
+          selectedPort,
+        );
+        this.pendingHookCalls.push(() =>
+          this.hooks.onTriggerActivated?.({
+            nodeId: trigger.id,
+            attempt,
+            activationScopeId: root.id,
+            startedAt: boundaryAt,
+            completedAt: boundaryAt,
+            output: structuredClone(this.options.triggerOutput),
+            selectedTransition,
+          }),
+        );
+      } else {
+        const boundaryAt = this.boundaryTime();
+        this.pendingHookCalls.push(() =>
+          this.hooks.onNodeSkipped?.({
+            nodeId: trigger.id,
+            attempt,
+            activationScopeId: root.id,
+            startedAt: boundaryAt,
+            completedAt: boundaryAt,
+          }),
+        );
+      }
     }
     this.drainResolutionQueue();
     return checkpoint;
@@ -665,6 +731,22 @@ class V2SchedulerRuntime {
     this.drainResolutionQueue();
   }
 
+  private selectedTransition(
+    nodeId: string,
+    selectedPort: string | undefined,
+    selectedEdgeIds?: ReadonlySet<string>,
+  ): V2SelectedTransition | null {
+    if (selectedPort === undefined) return null;
+    const edgeIds = (this.graph.outgoing.get(nodeId) ?? [])
+      .filter(
+        (edge) =>
+          edge.port === selectedPort &&
+          (selectedEdgeIds === undefined || selectedEdgeIds.has(edge.id)),
+      )
+      .map((edge) => edge.id);
+    return { port: selectedPort, edgeIds };
+  }
+
   private drainResolutionQueue(): void {
     while (this.resolutionQueue.length > 0) {
       const next = this.resolutionQueue.shift()!;
@@ -690,11 +772,17 @@ class V2SchedulerRuntime {
       return;
     }
 
+    const attempt = this.nextAttempt(nodeId);
+    const boundaryAt = this.boundaryTime();
     state.status = "skipped";
+    state.attempt = attempt;
     this.pendingHookCalls.push(() =>
       this.hooks.onNodeSkipped?.({
         nodeId,
+        attempt,
         activationScopeId: scopeId,
+        startedAt: boundaryAt,
+        completedAt: boundaryAt,
       }),
     );
     if (scope.loop?.loopNodeId === nodeId) {
@@ -784,6 +872,7 @@ class V2SchedulerRuntime {
         `workflow exceeded ${this.maxTotalExecutions} block executions`,
       );
     }
+    const startedAt = this.boundaryTime();
     const state = this.scope(scopeId).nodeStates[nodeId];
     if (state) {
       state.status = "running";
@@ -795,6 +884,7 @@ class V2SchedulerRuntime {
         nodeId,
         attempt,
         activationScopeId: scopeId,
+        startedAt,
       }),
     );
     return attempt;
@@ -910,15 +1000,21 @@ class V2SchedulerRuntime {
       };
       await context.observations.emit({ kind: "output", value: output });
       scope.outputs[node.id] = output;
-      this.finishHook(scopeId, node.id, attempt, {
-        status: "ok",
+      const continues =
+        activeLoop.iteration < this.loopMaxAttempts(node);
+      this.finishHook(
+        scopeId,
+        node.id,
         attempt,
-        output,
-      });
-      if (
-        activeLoop.iteration <
-        this.loopMaxAttempts(node)
-      ) {
+        {
+          status: "ok",
+          attempt,
+          output,
+        },
+        "completed",
+        continues ? "continue" : undefined,
+      );
+      if (continues) {
         this.spawnLoopIteration(
           activeLoop.ownerScopeId,
           node,
@@ -961,6 +1057,21 @@ class V2SchedulerRuntime {
     const output: BlockOutput = { status: "ok", attempt: 1 };
     scope.outputs[node.id] = output;
     scope.nodeStates[node.id] = { status: "waiting_loop", attempt };
+    const selectedTransition = this.selectedTransition(node.id, "continue");
+    if (!selectedTransition) {
+      throw new V2SchedulerDefinitionError(
+        `loop "${node.id}" has no continue transition`,
+      );
+    }
+    this.pendingHookCalls.push(() =>
+      this.hooks.onNodeWaiting?.({
+        nodeId: node.id,
+        attempt,
+        activationScopeId: scopeId,
+        state: "waiting_loop",
+        selectedTransition,
+      }),
+    );
     for (const edge of this.graph.outgoing.get(node.id) ?? []) {
       if (edge.port !== "exhausted") {
         this.setEdgeToken(scopeId, edge.id, "inactive");
@@ -1067,6 +1178,18 @@ class V2SchedulerRuntime {
           `Loop "${node.name ?? node.id}" exhausted after ${maxAttempts} attempts. How should we proceed?`,
         ],
       });
+      this.finishHook(
+        ownerScopeId,
+        node.id,
+        attempt,
+        {
+          status: "warn",
+          attempt,
+          output,
+          error: `Loop exhausted after ${maxAttempts} attempts.`,
+        },
+        "waiting_for_clarification",
+      );
       this.admissionStopped = true;
       return;
     }
@@ -1083,11 +1206,19 @@ class V2SchedulerRuntime {
       return;
     }
     owner.nodeStates[node.id] = { status: "completed", attempt };
-    this.finishHook(ownerScopeId, node.id, attempt, {
-      status: "ok",
+    this.finishHook(
+      ownerScopeId,
+      node.id,
       attempt,
-      output,
-    });
+      {
+        status: "ok",
+        attempt,
+        output,
+      },
+      "completed",
+      "exhausted",
+      new Set(exhaustedEdges.map((edge) => edge.id)),
+    );
     this.resolveLoopBoundaryEdges(
       ownerScopeId,
       node.id,
@@ -1161,7 +1292,7 @@ class V2SchedulerRuntime {
           attempt,
           context,
           result: runtimeError(
-            error instanceof Error ? error.stack ?? error.message : String(error),
+            error instanceof Error ? error.message : String(error),
             {
               category:
                 error instanceof Error &&
@@ -1188,17 +1319,13 @@ class V2SchedulerRuntime {
       attempt,
       activationScopeId: scopeId,
     };
-    let suppliedObservations = NOOP_V2_INVOCATION_OBSERVATIONS;
-    try {
-      suppliedObservations =
-        this.hooks.observationHooksFor?.(identity) ??
-        NOOP_V2_INVOCATION_OBSERVATIONS;
-    } catch {
-      // Observation setup is best-effort and must not alter a run.
-    }
+    const schedulerHooks = this.hooks;
     const observations: V2InvocationObservationHooks = Object.freeze({
       async emit(observation: V2InvocationObservation) {
         try {
+          const suppliedObservations =
+            schedulerHooks.observationHooksFor?.(identity) ??
+            NOOP_V2_INVOCATION_OBSERVATIONS;
           await suppliedObservations.emit(observation);
         } catch {
           // Observation is deliberately best-effort and must not alter a run.
@@ -1222,6 +1349,7 @@ class V2SchedulerRuntime {
       return;
     }
 
+    await context.observations.emit({ kind: "output", value: result.output });
     const outputIssues = validateBlockOutputForDefinition(
       node.type,
       node.configuration as unknown as Record<string, WorkflowParamValue>,
@@ -1244,7 +1372,6 @@ class V2SchedulerRuntime {
       return;
     }
 
-    await context.observations.emit({ kind: "output", value: result.output });
     if (result.kind === "next") {
       const ports = BLOCK_TYPE_SPECS[node.type].ports;
       const port = result.port ?? ports[0];
@@ -1301,12 +1428,18 @@ class V2SchedulerRuntime {
           ? { suggestedAnswers: [...result.suggestedAnswers] }
           : {}),
       });
-      this.finishHook(scopeId, nodeId, attempt, {
-        status: "warn",
+      this.finishHook(
+        scopeId,
+        nodeId,
         attempt,
-        output: result.output,
-        error: result.questions.join("; "),
-      });
+        {
+          status: "warn",
+          attempt,
+          output: result.output,
+          error: result.questions.join("; "),
+        },
+        "waiting_for_clarification",
+      );
       this.admissionStopped = true;
       return;
     }
@@ -1314,11 +1447,17 @@ class V2SchedulerRuntime {
     const scope = this.scope(scopeId);
     scope.outputs[nodeId] = structuredClone(result.output);
     scope.nodeStates[nodeId] = { status: "completed", attempt };
-    this.finishHook(scopeId, nodeId, attempt, {
-      status: "warn",
+    this.finishHook(
+      scopeId,
+      nodeId,
       attempt,
-      output: result.output,
-    });
+      {
+        status: "warn",
+        attempt,
+        output: result.output,
+      },
+      "completed",
+    );
     this.checkpoint.ended = true;
     this.admissionStopped = true;
   }
@@ -1333,11 +1472,18 @@ class V2SchedulerRuntime {
     const scope = this.scope(scopeId);
     scope.outputs[nodeId] = structuredClone(output);
     scope.nodeStates[nodeId] = { status: "completed", attempt };
-    this.finishHook(scopeId, nodeId, attempt, {
-      status: "ok",
+    this.finishHook(
+      scopeId,
+      nodeId,
       attempt,
-      output,
-    });
+      {
+        status: "ok",
+        attempt,
+        output,
+      },
+      "completed",
+      selectedPort,
+    );
     if (selectedPort !== undefined) {
       this.propagatePort(scopeId, nodeId, selectedPort);
     }
@@ -1375,13 +1521,19 @@ class V2SchedulerRuntime {
           entry.scopeId !== iterationScopeId ||
           entry.nodeId !== activeLoop.loopNodeId,
       );
+      const skippedAttempt = this.nextAttempt(activeLoop.loopNodeId);
+      const boundaryAt = this.boundaryTime();
       iterationScope.nodeStates[activeLoop.loopNodeId] = {
         status: "skipped",
+        attempt: skippedAttempt,
       };
       this.pendingHookCalls.push(() =>
         this.hooks.onNodeSkipped?.({
           nodeId: activeLoop.loopNodeId,
+          attempt: skippedAttempt,
           activationScopeId: iterationScopeId,
+          startedAt: boundaryAt,
+          completedAt: boundaryAt,
         }),
       );
     }
@@ -1414,6 +1566,9 @@ class V2SchedulerRuntime {
         attempt: ownerAttempt,
         output,
       },
+      "completed",
+      selectedPort,
+      new Set(selectedBoundaryEdges.map((edge) => edge.id)),
     );
     this.resolveLoopBoundaryEdges(
       activeLoop.ownerScopeId,
@@ -1445,6 +1600,7 @@ class V2SchedulerRuntime {
       nodeState.status = "failed";
       nodeState.attempt = attempt;
     }
+    const completedAt = this.boundaryTime();
     this.pendingHookCalls.push(() =>
       this.hooks.onExecutionError?.({
         state,
@@ -1457,6 +1613,9 @@ class V2SchedulerRuntime {
         nodeId,
         attempt,
         activationScopeId: scopeId,
+        completedAt,
+        runtimeState: "failed",
+        selectedTransition: null,
         state: {
           status: "fail",
           attempt,
@@ -1473,13 +1632,24 @@ class V2SchedulerRuntime {
     nodeId: string,
     attempt: number,
     state: BlockRunState,
+    runtimeState: V2InvocationTerminalState,
+    selectedPort?: string,
+    selectedEdgeIds?: ReadonlySet<string>,
   ): void {
+    const completedAt = this.boundaryTime();
     this.pendingHookCalls.push(() =>
       this.hooks.onNodeFinish?.({
         nodeId,
         attempt,
         activationScopeId: scopeId,
+        completedAt,
         state,
+        runtimeState,
+        selectedTransition: this.selectedTransition(
+          nodeId,
+          selectedPort,
+          selectedEdgeIds,
+        ),
       }),
     );
   }
@@ -1511,16 +1681,45 @@ class V2SchedulerRuntime {
       const state = this.scope(scopeId).nodeStates[nodeId];
       if (!state || state.status !== "running") continue;
       state.status = "cancelled";
-      this.finishHook(scopeId, nodeId, state.attempt ?? 1, {
-        status: "warn",
-        attempt: state.attempt,
-        error: reason,
-      });
+      this.finishHook(
+        scopeId,
+        nodeId,
+        state.attempt ?? 1,
+        {
+          status: "warn",
+          attempt: state.attempt,
+          error: reason,
+        },
+        "cancelled",
+      );
     }
+    this.cancelWaitingLoopAttempts(reason);
 
     await this.flushHookCalls();
     await Promise.allSettled(running.map(([, invocation]) => invocation));
     for (const [key] of running) this.running.delete(key);
+  }
+
+  private cancelWaitingLoopAttempts(reason: string): void {
+    for (const scope of Object.values(this.checkpoint.scopes)) {
+      for (const [nodeId, state] of Object.entries(scope.nodeStates)) {
+        if (state.status !== "waiting_loop" || state.attempt === undefined) {
+          continue;
+        }
+        state.status = "cancelled";
+        this.finishHook(
+          scope.id,
+          nodeId,
+          state.attempt,
+          {
+            status: "warn",
+            attempt: state.attempt,
+            error: reason,
+          },
+          "cancelled",
+        );
+      }
+    }
   }
 
   private bindingContext(scopeId: string): V2BindingResolutionContext {
@@ -1619,25 +1818,45 @@ class V2SchedulerRuntime {
         ...(prior ?? { status: "exhausted" }),
         answer,
       };
+      const resumedAttempt = this.startAttempt(
+        clarification.scopeId,
+        clarification.nodeId,
+      );
+      const context = this.invocationContext(
+        clarification.scopeId,
+        clarification.nodeId,
+        resumedAttempt,
+        answer,
+      );
+      this.pendingHookCalls.push(async () => {
+        await context.observations.emit({
+          kind: "input",
+          value: { clarificationAnswer: answer },
+        });
+        await context.observations.emit({ kind: "output", value: output });
+      });
       scope.outputs[clarification.nodeId] = output;
       scope.nodeStates[clarification.nodeId] = {
         status: "completed",
-        attempt: clarification.attempt,
+        attempt: resumedAttempt,
       };
-      this.finishHook(
-        clarification.scopeId,
-        clarification.nodeId,
-        clarification.attempt,
-        {
-          status: "ok",
-          attempt: clarification.attempt,
-          output,
-        },
-      );
       const exhaustedEdgeIds = new Set(
         (this.graph.outgoing.get(clarification.nodeId) ?? [])
           .filter((edge) => edge.port === "exhausted")
           .map((edge) => edge.id),
+      );
+      this.finishHook(
+        clarification.scopeId,
+        clarification.nodeId,
+        resumedAttempt,
+        {
+          status: "ok",
+          attempt: resumedAttempt,
+          output,
+        },
+        "completed",
+        "exhausted",
+        exhaustedEdgeIds,
       );
       this.resolveLoopBoundaryEdges(
         clarification.scopeId,
@@ -1675,7 +1894,11 @@ class V2SchedulerRuntime {
     return answer;
   }
 
-  private deadlockedLoop(): { scopeId: string; nodeId: string } | null {
+  private deadlockedLoop(): {
+    scopeId: string;
+    nodeId: string;
+    attempt: number;
+  } | null {
     for (const scope of Object.values(this.checkpoint.scopes)) {
       if (!scope.loop) continue;
       const state = scope.nodeStates[scope.loop.loopNodeId];
@@ -1687,9 +1910,16 @@ class V2SchedulerRuntime {
         state.status !== "failed" &&
         ownerState?.status !== "completed"
       ) {
+        if (
+          ownerState?.status !== "waiting_loop" ||
+          ownerState.attempt === undefined
+        ) {
+          continue;
+        }
         return {
           scopeId: scope.loop.ownerScopeId,
           nodeId: scope.loop.loopNodeId,
+          attempt: ownerState.attempt,
         };
       }
     }

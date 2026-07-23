@@ -26,6 +26,7 @@ vi.mock("workflow", async (importOriginal) => ({
 vi.mock("../../sandbox/poll-agent.js", () => ({
   checkPhaseDone: mocks.checkPhaseDone,
   collectPhase: mocks.collectPhase,
+  collectPhaseReplayDiagnostics: mocks.collectPhase,
 }));
 vi.mock("../../sandbox/context.js", () => ({
   assembleFixContext: mocks.assembleFixContext,
@@ -548,6 +549,13 @@ describe("fix_agent execute", () => {
 
   it("returns a timeout execution error without publishing workspace output", async () => {
     mocks.pollPhaseUntilDone.mockResolvedValue(false);
+    mocks.collectPhase.mockResolvedValue({
+      stdout: "partial stdout",
+      stderr: "partial stderr",
+      structuredOutput: null,
+      exitCode: null,
+    });
+    const emit = vi.fn();
     const before = {
       commits: [{ provider: "github" as const, repoPath: "acme/api", sha: "before123" }],
       unresolvedConflicts: [
@@ -565,7 +573,13 @@ describe("fix_agent execute", () => {
     };
     mocks.inspectFixWorkspace.mockResolvedValueOnce(before).mockResolvedValueOnce(after);
 
-    const result = await execute(makeNode("fix_agent"), {}, makeCtx());
+    const result = await execute(
+      makeNode("fix_agent"),
+      {},
+      makeCtx(),
+      {},
+      { observations: { emit } },
+    );
 
     expect(result).toEqual({
       kind: "execution_error",
@@ -576,6 +590,19 @@ describe("fix_agent execute", () => {
       },
     });
     expect(mocks.inspectFixWorkspace).toHaveBeenCalledTimes(1);
-    expect(mocks.collectPhase).not.toHaveBeenCalled();
+    expect(mocks.collectPhase).toHaveBeenCalledOnce();
+    expect(emit).toHaveBeenCalledWith({
+      kind: "log",
+      value: { stream: "stderr", tail: "partial stderr" },
+    });
+    expect(emit).toHaveBeenLastCalledWith({
+      kind: "metadata",
+      value: expect.objectContaining({
+        protocol: {
+          outcome: "timeout",
+          partialArtifacts: "captured",
+        },
+      }),
+    });
   });
 });

@@ -14,6 +14,7 @@ import {
   serial,
   text,
   timestamp,
+  unique,
   uniqueIndex,
 } from "drizzle-orm/pg-core";
 import type {
@@ -22,8 +23,14 @@ import type {
   HarnessProfileManifestV1,
   HarnessRunManifestRecord,
   PromptSlotDefinition,
+  ReplayAttemptOutcome,
+  ReplayAttemptState,
+  ReplayCaptureStatus,
+  ReplaySanitizedEnvelope,
   ResolvedPromptReference,
-  WorkflowDefinition,
+  WorkflowReplayGraphSnapshot,
+  WorkflowReplayLayoutSnapshot,
+  WorkflowReplaySelectedTransition,
   WorkflowRunBudgetFailure,
 } from "@shared/contracts";
 import type { GateStatusRef } from "../adapters/vcs/types.js";
@@ -216,6 +223,8 @@ export const envMarker = pgTable("env_marker", {
  * whichever writes first inserts the row and the others fill in the rest,
  * regardless of order.
  */
+type BlockRunStateSummary = Omit<BlockRunState, "output">;
+
 export const workflowRuns = pgTable("workflow_runs", {
   runId: text("run_id").primaryKey(),
 
@@ -258,9 +267,21 @@ export const workflowRuns = pgTable("workflow_runs", {
 
   definitionVersion: integer("definition_version"),
   definitionId: integer("definition_id"),
-  blockStatuses: jsonb("block_statuses").$type<Record<string, BlockRunState>>(),
+  blockStatuses: jsonb("block_statuses")
+    .$type<Record<string, BlockRunStateSummary>>(),
   promptManifest: jsonb("prompt_manifest").$type<ResolvedPromptReference[]>(),
   harnessManifests: jsonb("harness_manifests").$type<HarnessRunManifestRecord[]>(),
+  /** Durable markers distinguish a captured replay that expired from a
+   * historical run for which replay was never captured. */
+  replayOrganizationId: text("replay_organization_id").references(
+    () => organization.id,
+    { onDelete: "set null" },
+  ),
+  replayCapturedAt: timestamp("replay_captured_at", { withTimezone: true }),
+  replayExpiresAt: timestamp("replay_expires_at", { withTimezone: true }),
+  replayCaptureFailedAt: timestamp("replay_capture_failed_at", {
+    withTimezone: true,
+  }),
 
   // Bookkeeping.
   firstSeenAt: timestamp("first_seen_at", { withTimezone: true })
@@ -278,6 +299,142 @@ export const workflowRuns = pgTable("workflow_runs", {
   index("workflow_runs_ticket_key_idx").on(t.ticketKey),
   index("workflow_runs_definition_id_idx").on(t.definitionId),
 ]);
+
+/**
+ * Replay-safe snapshot captured at the beginning of a v2 run. The exact
+ * definition and layout are copied here because both mutable draft state and
+ * independently persisted layout can change after dispatch.
+ */
+export const workflowRunObservations = pgTable(
+  "workflow_run_observations",
+  {
+    runId: text("run_id")
+      .primaryKey()
+      .references(() => workflowRuns.runId, { onDelete: "cascade" }),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    definitionId: integer("definition_id").notNull(),
+    definitionVersion: integer("definition_version").notNull(),
+    definitionSchemaVersion: integer("definition_schema_version").notNull(),
+    graph: jsonb("graph").$type<WorkflowReplayGraphSnapshot>().notNull(),
+    layout: jsonb("layout").$type<WorkflowReplayLayoutSnapshot>().notNull(),
+    runtimeManifest: jsonb("runtime_manifest")
+      .$type<ReplaySanitizedEnvelope>()
+      .notNull(),
+    captureStatus: text("capture_status").$type<ReplayCaptureStatus>().notNull(),
+    capturedAt: timestamp("captured_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  },
+  (t) => [
+    unique("workflow_run_observations_run_org_unique").on(
+      t.runId,
+      t.organizationId,
+    ),
+    index("workflow_run_observations_org_captured_idx").on(
+      t.organizationId,
+      t.capturedAt,
+    ),
+    index("workflow_run_observations_expires_at_idx").on(t.expiresAt),
+    check(
+      "workflow_run_observations_schema_version_check",
+      sql`${t.definitionSchemaVersion} in (1, 2)`,
+    ),
+    check(
+      "workflow_run_observations_capture_status_check",
+      sql`${t.captureStatus} in ('available', 'unavailable')`,
+    ),
+    foreignKey({
+      columns: [t.definitionId, t.definitionVersion],
+      foreignColumns: [
+        workflowDefinitionVersions.definitionId,
+        workflowDefinitionVersions.version,
+      ],
+      name: "workflow_run_observations_definition_version_fk",
+    }).onDelete("restrict"),
+  ],
+);
+
+/**
+ * One durable row per invocation. Inputs, outputs, logs, and metadata are
+ * diagnostic copies only; they are sanitized and bounded before persistence.
+ */
+export const workflowBlockAttempts = pgTable(
+  "workflow_block_attempts",
+  {
+    id: serial("id").primaryKey(),
+    runId: text("run_id").notNull(),
+    organizationId: text("organization_id").notNull(),
+    nodeId: text("node_id").notNull(),
+    attempt: integer("attempt").notNull(),
+    activationScopeId: text("activation_scope_id").notNull(),
+    state: text("state").$type<ReplayAttemptState>().notNull(),
+    outcome: jsonb("outcome").$type<ReplayAttemptOutcome>(),
+    selectedTransition: jsonb("selected_transition")
+      .$type<WorkflowReplaySelectedTransition>(),
+    startedAt: timestamp("started_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+    durationMs: integer("duration_ms"),
+    diagnosticId: text("diagnostic_id"),
+    inputEnvelope: jsonb("input_envelope").$type<ReplaySanitizedEnvelope>(),
+    outputEnvelope: jsonb("output_envelope").$type<ReplaySanitizedEnvelope>(),
+    logEnvelope: jsonb("log_envelope").$type<ReplaySanitizedEnvelope>(),
+    metadataEnvelope: jsonb("metadata_envelope").$type<ReplaySanitizedEnvelope>(),
+    observationRevision: integer("observation_revision").notNull().default(0),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("workflow_block_attempts_identity_unique").on(
+      t.runId,
+      t.nodeId,
+      t.attempt,
+      t.activationScopeId,
+    ),
+    index("workflow_block_attempts_run_id_idx").on(t.runId, t.id),
+    index("workflow_block_attempts_org_run_idx").on(
+      t.organizationId,
+      t.runId,
+      t.id,
+    ),
+    check("workflow_block_attempts_attempt_check", sql`${t.attempt} > 0`),
+    check(
+      "workflow_block_attempts_observation_revision_check",
+      sql`${t.observationRevision} >= 0`,
+    ),
+    check(
+      "workflow_block_attempts_state_check",
+      sql`${t.state} in ('running', 'waiting_loop', 'waiting_for_clarification', 'completed', 'failed', 'cancelled', 'skipped')`,
+    ),
+    check(
+      "workflow_block_attempts_duration_check",
+      sql`${t.durationMs} is null or ${t.durationMs} >= 0`,
+    ),
+    check(
+      "workflow_block_attempts_completion_check",
+      sql`(${t.state} in ('running', 'waiting_loop') and ${t.completedAt} is null) or (${t.state} not in ('running', 'waiting_loop') and ${t.completedAt} is not null)`,
+    ),
+    foreignKey({
+      columns: [t.runId, t.organizationId],
+      foreignColumns: [
+        workflowRunObservations.runId,
+        workflowRunObservations.organizationId,
+      ],
+      name: "workflow_block_attempts_run_org_fk",
+    }).onDelete("cascade"),
+  ],
+);
 
 export const workflowOwnedBranches = pgTable(
   "workflow_owned_branches",

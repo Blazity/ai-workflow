@@ -10,7 +10,10 @@ import {
   type WorkflowExecutionErrorState,
 } from "../workflow-definition/interpreter.js";
 import { recordBlockStatuses, recordRunUsage } from "../lib/telemetry/run-telemetry.js";
-import { entryOwnsClarificationThread } from "./agent.js";
+import {
+  blockRunStateSummary,
+  entryOwnsClarificationThread,
+} from "./agent.js";
 import { computeUsageTotals, type PhaseUsage, type PriceLookup } from "../sandbox/usage.js";
 import { createTestDb } from "../db/test-db.js";
 import type { Db } from "../db/client.js";
@@ -197,11 +200,7 @@ async function runWorkflowAgainstDb(db: Db, fx: RunFixture): Promise<RunResult> 
       await writeBlockStatuses();
     },
     async onBlockFinish(nodeId, state) {
-      let guarded = state;
-      if (state.output && JSON.stringify(state.output).length > 8192) {
-        guarded = { ...state, output: { status: state.output.status, _truncated: true } };
-      }
-      blockStatuses[nodeId] = guarded;
+      blockStatuses[nodeId] = blockRunStateSummary(state);
       await writeBlockStatuses();
       currentBlockId = null;
       if (fx.budgetLimits) {
@@ -397,11 +396,11 @@ describe("run telemetry integration (executeGraph -> pglite)", () => {
     // Terminal block statuses in the DB: every node ok.
     const r = await runRow("wrun_happy");
     expect(r.blockStatuses).toEqual({
-      prep: { status: "ok", attempt: 1, output: { status: "ok" } },
-      plan: { status: "ok", attempt: 1, output: { status: "ready" } },
-      impl: { status: "ok", attempt: 1, output: { status: "implemented" } },
-      pr: { status: "ok", attempt: 1, output: { status: "ok", prNumber: 7 } },
-      status: { status: "ok", attempt: 1, output: { status: "ok" } },
+      prep: { status: "ok", attempt: 1 },
+      plan: { status: "ok", attempt: 1 },
+      impl: { status: "ok", attempt: 1 },
+      pr: { status: "ok", attempt: 1 },
+      status: { status: "ok", attempt: 1 },
     });
 
     // Run row: authoritative success + cost/model/token/phase telemetry.
@@ -458,11 +457,10 @@ describe("run telemetry integration (executeGraph -> pglite)", () => {
 
     const r = await runRow("wrun_clarify");
     expect(r.blockStatuses).toEqual({
-      prep: { status: "ok", attempt: 1, output: { status: "ok" } },
+      prep: { status: "ok", attempt: 1 },
       plan: {
         status: "warn",
         attempt: 1,
-        output: { status: "needs_human_input" },
         error: "Which auth provider?; Do we support SSO?",
       },
       // never reached
@@ -671,7 +669,7 @@ describe("run telemetry integration (executeGraph -> pglite)", () => {
       reason: "budget_exceeded: tokens 1700 exceeds limit 1699",
     });
     expect(row.blockStatuses).toMatchObject({
-      llm: { status: "ok", output: { status: "ok" } },
+      llm: { status: "ok" },
       comment: { status: "pending" },
     });
   });
@@ -729,7 +727,7 @@ describe("run telemetry integration (executeGraph -> pglite)", () => {
       reason: "budget_unverifiable: cost usage or pricing is unavailable",
     });
     expect(row.blockStatuses).toMatchObject({
-      llm: { status: "ok", output: { status: "ok" } },
+      llm: { status: "ok" },
       comment: { status: "pending" },
     });
   });

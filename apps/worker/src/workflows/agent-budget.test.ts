@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { WorkflowDefinitionNode } from "@shared/contracts";
 import type { PhaseUsage } from "../sandbox/agents/types.js";
 import {
+  blockRunStateSummary,
   createHarnessInvocationBudget,
   modelsRequiringPriceLookup,
   modelsRequiringPriceLookupForRun,
@@ -104,6 +105,16 @@ describe("agent workflow budget integration", () => {
   it("does not reconcile still-running sibling usage on v2 block finishes", () => {
     expect(shouldReconcilePhaseUsageOnBlockFinish(1)).toBe(true);
     expect(shouldReconcilePhaseUsageOnBlockFinish(2)).toBe(false);
+  });
+
+  it("keeps workflow block status state summary-only", () => {
+    expect(
+      blockRunStateSummary({
+        status: "ok",
+        attempt: 2,
+        output: { status: "ok", body: "runtime data" },
+      }),
+    ).toEqual({ status: "ok", attempt: 2 });
   });
 
   it("prefetches prices for codex agents and every Call LLM model", () => {

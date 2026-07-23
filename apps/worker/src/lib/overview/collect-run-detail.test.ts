@@ -167,6 +167,40 @@ describe("collectRunDetail", () => {
     });
   });
 
+  it("drops stacks and internal codes from non-diagnostic run and step errors", async () => {
+    const source = makeSource(
+      {
+        runId: "run_legacy",
+        status: "failed",
+        error: {
+          message: "TypeError: legacy run failed",
+          code: "INTERNAL_PROVIDER_CODE",
+          stack: "SECRET_RUN_STACK at /srv/private.ts:4:2",
+        },
+      },
+      [
+        step({
+          status: "failed",
+          error: {
+            message: "Error: legacy step failed",
+            code: "SDK_INTERNAL",
+            stack: "SECRET_STEP_STACK at /srv/step.ts:9:1",
+          },
+        }),
+      ],
+    );
+
+    const { run, steps } = await collectRunDetail({
+      world: source,
+      model: "m",
+      runId: "run_legacy",
+    });
+
+    expect(run.error).toEqual({ message: "legacy run failed" });
+    expect(steps[0]?.error).toEqual({ message: "legacy step failed" });
+    expect(JSON.stringify({ run, steps })).not.toContain("SECRET_");
+  });
+
   it("recovers the diagnostic ID when the SDK replaces the thrown code", async () => {
     const source = makeSource(
       {
