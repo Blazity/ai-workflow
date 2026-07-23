@@ -1524,6 +1524,16 @@ export function WorkflowEditorScreen({
                 className="flex items-center gap-3 border-b border-neutral-100 py-2 font-body text-[12px] text-neutral-700"
               >
                 <span className="font-mono text-neutral-900">v{v.version}</span>
+                <span
+                  title={`Workflow definition schema v${v.definition.schemaVersion}`}
+                  className={`shrink-0 rounded-[3px] border px-[6px] py-[2px] font-mono text-[9px] uppercase tracking-[0.04em] ${
+                    v.definition.schemaVersion === 1
+                      ? "border-amber-200 bg-amber-50 text-amber-800"
+                      : "border-mariner-200 bg-mariner-100 text-mariner"
+                  }`}
+                >
+                  schema v{v.definition.schemaVersion}
+                </span>
                 {v.version === deployed?.version && (
                   <span className="rounded-[3px] bg-emerald-50 px-[6px] py-[2px] font-mono text-[10px] text-emerald-700">
                     deployed
