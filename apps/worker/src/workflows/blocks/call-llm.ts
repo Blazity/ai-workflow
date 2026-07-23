@@ -1,6 +1,11 @@
 import { z } from "zod";
 import type { JsonValue } from "@shared/contracts";
 import { validateBlockOutputForDefinition } from "../../workflow-definition/block-registry.js";
+import {
+  parseJsonSchema202012,
+  validateJsonSchemaValue,
+  type ParsedJsonSchema,
+} from "../../workflow-definition/json-schema.js";
 import { RunBudgetError } from "../run-budget.js";
 import { isRunControlError } from "../run-control-error.js";
 import { executionError, type BlockExecuteFn, type BlockExecutionResult } from "./types.js";
@@ -86,12 +91,13 @@ export const execute: BlockExecuteFn = async (
     typeof block.params.outputSchema === "string" && block.params.outputSchema.trim().length > 0
       ? block.params.outputSchema
       : undefined;
+  let parsedSchema: Extract<ParsedJsonSchema, { ok: true }> | undefined;
   if (schema !== undefined) {
-    try {
-      JSON.parse(schema);
-    } catch {
+    const parsed = parseJsonSchema202012(schema, { legacyCompatibility: true });
+    if (!parsed.ok) {
       return executionError("invalid outputSchema", { category: "schema" });
     }
+    parsedSchema = parsed;
   }
 
   const prompt =
@@ -152,6 +158,14 @@ export const execute: BlockExecuteFn = async (
 
     if (schema !== undefined) {
       if (!result.hasObject) {
+        return executionError("LLM output did not match the requested schema", {
+          category: "schema",
+        });
+      }
+      if (
+        parsedSchema === undefined ||
+        validateJsonSchemaValue(parsedSchema.schema, result.object).length > 0
+      ) {
         return executionError("LLM output did not match the requested schema", {
           category: "schema",
         });

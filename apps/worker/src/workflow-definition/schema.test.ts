@@ -1848,6 +1848,40 @@ describe("validateWorkflowGraph rules", () => {
     );
   });
 
+  it("requires closed nested objects for new deployments but loads legacy v1 snapshots", () => {
+    const def = graph(
+      [
+        node("t", "trigger_ticket_ai"),
+        node("classify", "call_llm", {
+          prompt: "classify",
+          outputSchema: JSON.stringify({
+            type: "object",
+            properties: {
+              nested: {
+                type: "object",
+                properties: { state: { type: "string" } },
+              },
+            },
+            required: ["nested"],
+            additionalProperties: false,
+          }),
+        }),
+      ],
+      [{ from: "t", to: "classify" }],
+    );
+
+    expect(validateWorkflowDefinitionForDeployment(def, registryContext)).toEqual([
+      expect.stringContaining(
+        "outputSchema.properties.nested must set additionalProperties to false.",
+      ),
+    ]);
+    expect(
+      validateWorkflowDefinitionForDeployment(def, registryContext, {
+        allowLegacyCompatibility: true,
+      }),
+    ).toEqual([]);
+  });
+
   it.each(["contains.dot", "has space", "1leading", "__proto__"])(
     "keeps stored block id %j loadable but rejects it for deployment",
     (unsafeId) => {

@@ -11,6 +11,13 @@ import {
   validateBlockOutputForDefinition,
   workflowBlockDefinitionIssue,
 } from "../../workflow-definition/block-registry.js";
+import {
+  jsonSchemaForProvider,
+  normalizeJsonSchemaProviderOutput,
+  parseJsonSchema202012,
+  validateJsonSchemaValue,
+  type ParsedJsonSchema,
+} from "../../workflow-definition/json-schema.js";
 import { resolveBlockAgent } from "../../workflow-definition/resolve-agent.js";
 import { ensureAgentSandbox } from "./agent-sandbox.js";
 import { isRunControlError } from "../run-control-error.js";
@@ -245,12 +252,15 @@ export const execute: BlockExecuteFn = async (
     typeof block.params.outputSchema === "string" && block.params.outputSchema.trim().length > 0
       ? block.params.outputSchema
       : undefined;
+  let parsedCustomSchema: Extract<ParsedJsonSchema, { ok: true }> | undefined;
   if (customSchema !== undefined) {
-    try {
-      JSON.parse(customSchema);
-    } catch {
+    const parsed = parseJsonSchema202012(customSchema, {
+      legacyCompatibility: true,
+    });
+    if (!parsed.ok) {
       return executionError("invalid outputSchema", { category: "schema" });
     }
+    parsedCustomSchema = parsed;
     const definitionIssue = workflowBlockDefinitionIssue(block.type, block.params);
     if (definitionIssue) {
       return executionError(`invalid outputSchema: ${definitionIssue}`, {
@@ -260,6 +270,10 @@ export const execute: BlockExecuteFn = async (
   }
 
   const { kind, model } = resolveBlockAgent(block.params, ctx.runDefaultKind, ctx.defaults);
+  const providerCustomSchema =
+    parsedCustomSchema === undefined
+      ? undefined
+      : JSON.stringify(jsonSchemaForProvider(parsedCustomSchema.schema, kind));
   // Missing workspaceMode is a deployed PR #118 definition and deliberately
   // retains its old code-workspace behavior. New blocks receive `none` from
   // the registry/schema defaults.
@@ -316,7 +330,7 @@ export const execute: BlockExecuteFn = async (
 
   try {
     const { GENERIC_SCHEMA } = await import("../../sandbox/agents/types.js");
-    const jsonSchema = customSchema ?? GENERIC_SCHEMA;
+    const jsonSchema = providerCustomSchema ?? GENERIC_SCHEMA;
 
     // Install this provider's commit guard explicitly. Without it the phase
     // inherits whatever the previous agent block left (planning_agent disables
@@ -364,7 +378,14 @@ export const execute: BlockExecuteFn = async (
     );
     ctx.recordUsage(usageLabel, usage, model);
     if (!result.ok) return agentProtocolExecutionError(result);
-    const object = result.value;
+    const object =
+      parsedCustomSchema === undefined
+        ? result.value
+        : normalizeJsonSchemaProviderOutput(
+            parsedCustomSchema.schema,
+            kind,
+            result.value,
+          );
 
     if (customSchema !== undefined) {
       if (object === undefined) {
@@ -376,6 +397,20 @@ export const execute: BlockExecuteFn = async (
         return executionError("agent output did not match the requested schema", {
           category: "schema",
         });
+      }
+      const schemaIssues =
+        parsedCustomSchema === undefined
+          ? []
+          : validateJsonSchemaValue(parsedCustomSchema.schema, object);
+      if (schemaIssues.length > 0) {
+        const failure = await blockGenericAgentSchemaFailureStep(
+          kind,
+          artifacts,
+          phase,
+          customSchema,
+          schemaIssues.map((issue) => issue.message),
+        );
+        return agentProtocolExecutionError(failure);
       }
       const data = object as Record<string, JsonValue>;
       const output = { ...data, status: "completed", data } as const;

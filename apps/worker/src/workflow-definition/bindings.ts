@@ -4,6 +4,7 @@ import type {
   WorkflowBlockInputContract,
   WorkflowDefinition,
   WorkflowDefinitionNode,
+  WorkflowDefinitionValidationIssue,
   WorkflowInputBindings,
   WorkflowValueSchema,
 } from "@shared/contracts";
@@ -358,7 +359,26 @@ export function validateWorkflowBindings(
   registryContext: WorkflowBlockRegistryContext,
   graphContext = buildWorkflowBindingGraphContext(definition),
 ): string[] {
-  const issues: string[] = [];
+  return validateWorkflowBindingIssues(definition, registryContext, graphContext).map(
+    ({ message }) => message,
+  );
+}
+
+export function validateWorkflowBindingIssues(
+  definition: WorkflowDefinition,
+  registryContext: WorkflowBlockRegistryContext,
+  graphContext = buildWorkflowBindingGraphContext(definition),
+): WorkflowDefinitionValidationIssue[] {
+  const issues: WorkflowDefinitionValidationIssue[] = [];
+  const addIssue = (nodeId: string, message: string, path?: string) => {
+    issues.push({
+      code: "deployment",
+      severity: "error",
+      nodeId,
+      ...(path ? { path } : {}),
+      message,
+    });
+  };
   const {
     nodeById,
     dominators,
@@ -367,27 +387,39 @@ export function validateWorkflowBindings(
     outgoing,
   } = graphContext;
 
-  for (const node of definition.nodes) {
+  for (const [nodeIndex, node] of definition.nodes.entries()) {
     const contract = resolveWorkflowBlockContract(node.type, node.params, registryContext);
     for (const [inputName, inputContract] of Object.entries(contract.inputs)) {
       if (
         inputContract.required &&
         !Object.prototype.hasOwnProperty.call(node.inputs, inputName)
       ) {
-        issues.push(`Block "${node.id}" is missing required input "${inputName}".`);
+        addIssue(
+          node.id,
+          `Block "${node.id}" is missing required input "${inputName}".`,
+          `/nodes/${nodeIndex}/inputs/${inputName}`,
+        );
       }
     }
 
     for (const [inputName, source] of Object.entries(node.inputs)) {
       const inputContract = inputContractFor(contract, inputName);
       if (!inputContract) {
-        issues.push(`Block "${node.id}" has unknown input "${inputName}".`);
+        addIssue(
+          node.id,
+          `Block "${node.id}" has unknown input "${inputName}".`,
+          `/nodes/${nodeIndex}/inputs/${inputName}`,
+        );
         continue;
       }
 
       const parsed = parseWorkflowBindingSource(source);
       if (!parsed) {
-        issues.push(`Block "${node.id}" input "${inputName}" has invalid binding "${source}".`);
+        addIssue(
+          node.id,
+          `Block "${node.id}" input "${inputName}" has invalid binding "${source}".`,
+          `/nodes/${nodeIndex}/inputs/${inputName}`,
+        );
         continue;
       }
 
@@ -400,8 +432,10 @@ export function validateWorkflowBindings(
           sourceNode?.type === "finalize_workspace" &&
           (dominators.get(node.id)?.has(parsed.nodeId) ?? false);
         if (!isExactFinalizeOutput) {
-          issues.push(
+          addIssue(
+            node.id,
             `Block "${node.id}" input "repositories" must bind exactly to steps.<finalize_workspace_id>.output.repositories from a dominating Finalize Workspace block.`,
+            `/nodes/${nodeIndex}/inputs/repositories`,
           );
           continue;
         }
@@ -415,21 +449,27 @@ export function validateWorkflowBindings(
       ): void => {
         const declared = resolveWorkflowSchemaPath(sourceSchema, path);
         if (!declared) {
-          issues.push(
+          addIssue(
+            node.id,
             `Block "${node.id}" input "${inputName}" references missing field "${source}"${sourceLabel}.`,
+            `/nodes/${nodeIndex}/inputs/${inputName}`,
           );
           return;
         }
         const guaranteed = resolveRequiredWorkflowSchemaPath(sourceSchema, path);
         if (!guaranteed) {
-          issues.push(
+          addIssue(
+            node.id,
             `Block "${node.id}" input "${inputName}" ${notGuaranteedReason}.`,
+            `/nodes/${nodeIndex}/inputs/${inputName}`,
           );
           return;
         }
         if (!isWorkflowSchemaAssignable(guaranteed, inputContract.schema)) {
-          issues.push(
+          addIssue(
+            node.id,
             `Block "${node.id}" input "${inputName}" expects ${schemaLabel(inputContract.schema)} but "${source}" provides ${schemaLabel(guaranteed)}.`,
+            `/nodes/${nodeIndex}/inputs/${inputName}`,
           );
         }
       };
@@ -446,20 +486,28 @@ export function validateWorkflowBindings(
 
       if (parsed.root === "steps") {
         if (parsed.nodeId === node.id) {
-          issues.push(`Block "${node.id}" input "${inputName}" references itself.`);
+          addIssue(
+            node.id,
+            `Block "${node.id}" input "${inputName}" references itself.`,
+            `/nodes/${nodeIndex}/inputs/${inputName}`,
+          );
           continue;
         }
         const sourceNode = nodeById.get(parsed.nodeId);
         if (!sourceNode) {
-          issues.push(
+          addIssue(
+            node.id,
             `Block "${node.id}" input "${inputName}" references unknown block "${parsed.nodeId}".`,
+            `/nodes/${nodeIndex}/inputs/${inputName}`,
           );
           continue;
         }
         if (!(dominators.get(node.id)?.has(parsed.nodeId) ?? false)) {
           const downstream = dominators.get(parsed.nodeId)?.has(node.id) ?? false;
-          issues.push(
+          addIssue(
+            node.id,
             `Block "${node.id}" input "${inputName}" references ${downstream ? "downstream" : "a block that does not dominate it"}: "${parsed.nodeId}".`,
+            `/nodes/${nodeIndex}/inputs/${inputName}`,
           );
           continue;
         }
@@ -508,5 +556,13 @@ export function validateWorkflowBindings(
     }
   }
 
-  return [...new Set(issues)];
+  return issues.filter(
+    (issue, index) =>
+      issues.findIndex(
+        (candidate) =>
+          candidate.nodeId === issue.nodeId &&
+          candidate.path === issue.path &&
+          candidate.message === issue.message,
+      ) === index,
+  );
 }

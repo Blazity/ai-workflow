@@ -217,6 +217,38 @@ describe("call_llm execute", () => {
     });
   });
 
+  it("executes an already-deployed v1 draft-07 schema with annotations", async () => {
+    mocks.generateStructured.mockResolvedValue({
+      object: { state: "ready" },
+      text: "{}",
+      usage: { inputTokens: 1, outputTokens: 1, cachedTokens: 0 },
+    });
+    const outputSchema = JSON.stringify({
+      $schema: "http://json-schema.org/draft-07/schema#",
+      title: "Legacy classifier",
+      type: "object",
+      properties: {
+        state: { title: "State", type: "string" },
+      },
+      required: ["state"],
+      additionalProperties: false,
+    });
+
+    const result = await execute(
+      makeNode("call_llm", { prompt: "classify", outputSchema }),
+      {},
+      makeCtx(),
+    );
+
+    expect(result).toEqual({
+      kind: "next",
+      output: { status: "ok", output: { state: "ready" } },
+    });
+    expect(mocks.generateStructured).toHaveBeenCalledWith(
+      expect.objectContaining({ schema: outputSchema }),
+    );
+  });
+
   it("preserves null when the declared output schema requires null", async () => {
     mocks.generateStructured.mockResolvedValue({
       object: null,
@@ -231,6 +263,38 @@ describe("call_llm execute", () => {
     );
 
     expect(result).toEqual({ kind: "next", output: { status: "ok", output: null } });
+  });
+
+  it("revalidates provider output against the canonical schema", async () => {
+    mocks.generateStructured.mockResolvedValue({
+      object: { state: "unknown" },
+      text: "{}",
+      usage: { inputTokens: 1, outputTokens: 1, cachedTokens: 0 },
+    });
+
+    const result = await execute(
+      makeNode("call_llm", {
+        prompt: "p",
+        outputSchema: JSON.stringify({
+          type: "object",
+          properties: { state: { type: "string", enum: ["ready", "blocked"] } },
+          required: ["state"],
+          additionalProperties: false,
+        }),
+      }),
+      {},
+      makeCtx(),
+    );
+
+    expect(result).toEqual({
+      kind: "execution_error",
+      error: {
+        category: "schema",
+        message:
+          "The block returned an invalid result. (LLM output did not match the requested schema)",
+        detail: "LLM output did not match the requested schema",
+      },
+    });
   });
 
   it("fails on an unparseable outputSchema without calling the LLM", async () => {

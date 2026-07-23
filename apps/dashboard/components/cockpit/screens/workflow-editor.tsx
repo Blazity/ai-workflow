@@ -1,11 +1,12 @@
 "use client";
 
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   isTriggerBlockType,
   type RunBlockStatusesResponse,
   type WorkflowDefinition,
   type WorkflowDefinitionDeploymentResponse,
+  type WorkflowDefinitionDeploymentValidationResponse,
   type WorkflowDefinitionDetailResponse,
   type WorkflowDefinitionLayoutResponse,
   type WorkflowDefinitionMeta,
@@ -43,7 +44,10 @@ import {
   type WorkflowValidationController,
   type WorkflowValidationState,
 } from "@/lib/workflow-editor/validation-controller";
-import { workflowEditorActions } from "@/lib/workflow-editor/editor-actions";
+import {
+  workflowDeploymentAfterSave,
+  workflowEditorActions,
+} from "@/lib/workflow-editor/editor-actions";
 import { executionLimitsFromDefinition } from "@/lib/workflow-editor/execution-limits";
 import {
   createEditorResponseGuard,
@@ -157,6 +161,10 @@ export function WorkflowEditorScreen({
     });
   }
   const validationController = validationControllerRef.current;
+  const handleSelectionChange = useCallback(
+    (nodeId: string | null) => validationController.setFocused(nodeId !== null),
+    [validationController],
+  );
 
   // Deep-link preselect is first-load only. FlowEditor is remounted on definition
   // switch (key={selectedId}), so hold the node id in a ref and clear it after the
@@ -193,8 +201,6 @@ export function WorkflowEditorScreen({
     dirty,
     structurallyValid: nodesValid(nodes),
     hasDraft: baselineDraft !== null,
-    validationStatus: validation.state.status,
-    validationIsCurrent,
   });
 
   useEffect(() => {
@@ -317,20 +323,73 @@ export function WorkflowEditorScreen({
       setEdges(structuredClone(res.draft.edges));
     }
     setMetas((prev) => prev.map((m) => (m.id === res.meta.id ? res.meta : m)));
+    if (replaceEditorState) {
+      const savedKey = `${res.meta.id}:${JSON.stringify(
+        serializeSemanticWorkflowDefinition(
+          toViewNodes(res.draft.nodes),
+          structuredClone(res.draft.edges),
+          executionLimitsFromDefinition(res.draft),
+        ),
+      )}`;
+      validationKeyRef.current = savedKey;
+      setValidation({
+        key: savedKey,
+        state: res.validation
+          ? {
+              status: res.validation.valid ? "valid" : "invalid",
+              issues: res.validation.issues,
+              nodeContracts: res.validation.nodeContracts,
+            }
+          : {
+              status: "error",
+              issues: [
+                {
+                  code: "deployment",
+                  severity: "error",
+                  nodeId: null,
+                  message: res.validationError ?? "Unable to validate the saved draft",
+                },
+              ],
+              nodeContracts: {},
+            },
+      });
+    }
     if (refit && replaceEditorState) setFitSignal((s) => s + 1);
+  }
+
+  function showValidationActionError(
+    code: "validation.transport" | "validation.superseded",
+    message: string,
+  ) {
+    const key = validationKeyRef.current ?? validationTargetKey;
+    validationKeyRef.current = key;
+    setValidation({
+      key,
+      state: {
+        status: "error",
+        issues: [{ code, severity: "error", nodeId: null, message }],
+        nodeContracts: {},
+      },
+    });
   }
 
   async function save() {
     const requestRevision = editorResponseGuard.capture();
+    const definition = serializeWorkflowDefinition(nodes, edges, budgets);
     setBusy("save");
     setError(null);
     try {
+      // Save is intentionally fail-open for deployment validation: an outage
+      // must not discard an editable, structurally valid draft.
+      await validationController
+        .validateNow({ definitionId: selectedId, definition })
+        .catch(() => undefined);
       await afterPendingLayoutSave(pendingLayoutSave, async () => {
         const res = await fetch(`/api/workflow-definitions/${selectedId}`, {
           method: "PUT",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({
-            definition: serializeWorkflowDefinition(nodes, edges, budgets),
+            definition,
             expectedDraftRevision: selectedMeta?.draftRevision ?? 0,
           }),
         });
@@ -338,11 +397,19 @@ export function WorkflowEditorScreen({
           setError(await readErrorMessage(res));
           return;
         }
+        const saved = (await res.json()) as WorkflowDefinitionSaveResponse;
+        const responseIsCurrent = editorResponseGuard.isCurrent(requestRevision);
         applySave(
-          (await res.json()) as WorkflowDefinitionSaveResponse,
+          saved,
           false,
-          editorResponseGuard.isCurrent(requestRevision),
+          responseIsCurrent,
         );
+        if (!responseIsCurrent) {
+          showValidationActionError(
+            "validation.superseded",
+            "The workflow changed while it was being saved. Save again to validate the latest changes.",
+          );
+        }
       });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unable to save changes");
@@ -353,18 +420,92 @@ export function WorkflowEditorScreen({
 
   async function deploy() {
     if (!selectedMeta) return;
+    const requestRevision = editorResponseGuard.capture();
+    const definition = serializeWorkflowDefinition(nodes, edges, budgets);
+    const candidateKey = validationTargetKey;
     setBusy("deploy");
     setError(null);
     try {
+      let immediateValidation: WorkflowDefinitionValidationResponse;
+      try {
+        immediateValidation = await validationController.validateNow({
+          definitionId: selectedId,
+          definition,
+        });
+      } catch (validationFailure) {
+        const superseded = !editorResponseGuard.isCurrent(requestRevision);
+        showValidationActionError(
+          superseded ? "validation.superseded" : "validation.transport",
+          superseded
+            ? "The workflow changed while it was being validated. Deploy again."
+            : validationFailure instanceof Error
+              ? validationFailure.message
+              : "Unable to validate workflow",
+        );
+        return;
+      }
+      if (!immediateValidation.valid) return;
+      if (!editorResponseGuard.isCurrent(requestRevision)) {
+        showValidationActionError(
+          "validation.superseded",
+          "The workflow changed while it was being validated. Deploy again.",
+        );
+        return;
+      }
+
+      let draftRevision = selectedMeta.draftRevision;
+      let deployedVersion = selectedMeta.deployedVersion;
+      if (dirty) {
+        const saveRes = await fetch(`/api/workflow-definitions/${selectedId}`, {
+          method: "PUT",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            definition,
+            expectedDraftRevision: draftRevision,
+          }),
+        });
+        if (!saveRes.ok) {
+          setError(await readErrorMessage(saveRes));
+          return;
+        }
+        const saved = (await saveRes.json()) as WorkflowDefinitionSaveResponse;
+        const responseIsCurrent = editorResponseGuard.isCurrent(requestRevision);
+        applySave(saved, false, responseIsCurrent);
+        if (!responseIsCurrent) {
+          showValidationActionError(
+            "validation.superseded",
+            "The workflow changed while it was being saved. Deploy again.",
+          );
+          return;
+        }
+        const saveDecision = workflowDeploymentAfterSave(immediateValidation, saved);
+        if (saveDecision.kind !== "ready") return;
+        draftRevision = saved.meta.draftRevision;
+        deployedVersion = saved.meta.deployedVersion;
+      }
+
       const res = await fetch(`/api/workflow-definitions/${selectedId}/deploy`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          expectedDraftRevision: selectedMeta.draftRevision,
-          expectedDeployedVersion: selectedMeta.deployedVersion,
+          expectedDraftRevision: draftRevision,
+          expectedDeployedVersion: deployedVersion,
         }),
       });
       if (!res.ok) {
+        if (res.status === 422) {
+          const body = (await res.json()) as WorkflowDefinitionDeploymentValidationResponse;
+          validationKeyRef.current = candidateKey;
+          setValidation({
+            key: candidateKey,
+            state: {
+              status: "invalid",
+              issues: body.issues,
+              nodeContracts: immediateValidation.nodeContracts,
+            },
+          });
+          return;
+        }
         setError(await readErrorMessage(res));
         return;
       }
@@ -647,6 +788,7 @@ export function WorkflowEditorScreen({
           runErrors={derived?.errors}
           fitSignal={fitSignal}
           initialSelectedId={deepLinkNodeId.current}
+          onSelectionChange={handleSelectionChange}
         />
         {defsOpen && (
           <div className="absolute right-4 top-[56px] z-[60] w-[440px] max-h-[70vh] overflow-y-auto bg-panel border border-neutral-200 rounded-[4px] shadow-[0_12px_28px_-8px_rgba(24,27,32,0.22),0_2px_6px_rgba(24,27,32,0.08)] px-4 py-3">

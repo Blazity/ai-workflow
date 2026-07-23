@@ -2,14 +2,17 @@ import { createError, defineEventHandler, readBody } from "h3";
 import type { WorkflowDefinitionSaveResponse } from "@shared/contracts";
 import { getDb } from "../../../../db/client.js";
 import { requireDashboardActor } from "../../../../lib/auth/request-context.js";
+import { logger } from "../../../../lib/logger.js";
 import { dashboardUserLabel } from "../../../../pre-pr-checks/store.js";
 import {
   describeWorkflowDefinitionIssues,
   workflowDefinitionSchema,
 } from "../../../../workflow-definition/schema.js";
+import { workflowBlockRegistryContextFromEnv } from "../../../../workflow-definition/models.js";
 import {
   saveWorkflowDefinitionDraft,
 } from "../../../../workflow-definition/store.js";
+import { validateWorkflowDefinitionCandidate } from "../../../../workflow-definition/validation.js";
 import {
   parseDefinitionId,
   serializeDefinitionMeta,
@@ -48,9 +51,32 @@ export default defineEventHandler(
           label: await dashboardUserLabel(dbHandle, actor.userId),
         },
       });
+      let validation: WorkflowDefinitionSaveResponse["validation"] = null;
+      let validationError: string | null = null;
+      try {
+        validation = validateWorkflowDefinitionCandidate(
+          saved.draft,
+          workflowBlockRegistryContextFromEnv(),
+        ).response;
+      } catch (validationFailure) {
+        validationError = "Validation is temporarily unavailable. Your draft was saved.";
+        logger.warn(
+          {
+            definitionId: id,
+            draftRevision: saved.draftRevision,
+            error:
+              validationFailure instanceof Error
+                ? validationFailure.message
+                : String(validationFailure),
+          },
+          "workflow_draft_validation_failed_after_save",
+        );
+      }
       return {
         meta: serializeDefinitionMeta(saved.definition),
         draft: saved.draft,
+        validation,
+        validationError,
       };
     } catch (error) {
       toWorkflowDefinitionHttpError(error);

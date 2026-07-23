@@ -137,6 +137,43 @@ describe("loadWorkflowDefinition", () => {
     expect(loggerError).not.toHaveBeenCalled();
   });
 
+  it("loads a deployed v1 definition with its previously accepted output schema", async () => {
+    const legacySchema = JSON.stringify({
+      $schema: "http://json-schema.org/draft-07/schema#",
+      title: "Legacy classifier",
+      type: "object",
+      properties: {
+        state: { title: "State", type: "string" },
+      },
+      required: ["state"],
+      additionalProperties: false,
+    });
+    const definition: WorkflowDefinition = {
+      schemaVersion: 1,
+      nodes: [
+        { id: "t", type: "trigger_ticket_ai", x: 0, y: 0, params: {}, inputs: {} },
+        {
+          id: "classify",
+          type: "call_llm",
+          x: 0,
+          y: 0,
+          params: { prompt: "Classify", outputSchema: legacySchema },
+          inputs: {},
+        },
+      ],
+      edges: [{ from: "t", to: "classify" }],
+    };
+    mockGetEnabled.mockResolvedValue(enabled(definition, 15, 9));
+
+    const plan = await loadWorkflowDefinition();
+
+    expect(plan).toMatchObject({ version: 15, definitionId: 9 });
+    expect(plan.nodes.find((node) => node.id === "classify")?.params.outputSchema).toBe(
+      legacySchema,
+    );
+    expect(loggerError).not.toHaveBeenCalled();
+  });
+
   it("preserves configured execution budgets in the loaded plan", async () => {
     const definition = {
       ...defaultWorkflowDefinition({ includeReview: false }),

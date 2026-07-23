@@ -2,7 +2,6 @@ import {
   BLOCK_TYPE_SPECS,
   DEFAULT_OPEN_PR_BODY,
   DEFAULT_OPEN_PR_TITLE,
-  isWorkflowAddressablePathSegment,
   type BlockOutput,
   type VcsProviderKind,
   type WorkflowBlockAvailability,
@@ -16,6 +15,12 @@ import {
   type WorkflowValueSchema,
 } from "@shared/contracts";
 import { resolveLlmProvider, type LlmProvider } from "../lib/llm-provider.js";
+import {
+  parseJsonSchema202012,
+  type JsonSchemaInspectionOptions,
+  type JsonSchemaIssue,
+  type ParsedJsonSchema,
+} from "./json-schema.js";
 
 export interface WorkflowBlockRegistryContext {
   agentProviders: { claude: boolean; codex: boolean };
@@ -911,186 +916,77 @@ function availabilityFor(
   return available;
 }
 
-type ParsedDeclaredSchema =
-  | { ok: true; schema: WorkflowValueSchema }
-  | { ok: false; reason: string };
-
-const unsupportedJsonSchemaValidationKeywords = new Set([
-  "$defs",
-  "$ref",
-  "allOf",
-  "anyOf",
-  "const",
-  "contains",
-  "dependentRequired",
-  "dependencies",
-  "definitions",
-  "else",
-  "enum",
-  "exclusiveMaximum",
-  "exclusiveMinimum",
-  "format",
-  "if",
-  "maxContains",
-  "maxItems",
-  "maxLength",
-  "maxProperties",
-  "maximum",
-  "minContains",
-  "minItems",
-  "minLength",
-  "minProperties",
-  "minimum",
-  "multipleOf",
-  "not",
-  "oneOf",
-  "pattern",
-  "patternProperties",
-  "prefixItems",
-  "propertyNames",
-  "then",
-  "uniqueItems",
-  "unevaluatedItems",
-  "unevaluatedProperties",
-]);
-
-function parseJsonValueSchema(
-  raw: unknown,
-  path: string,
-  depth = 0,
-): ParsedDeclaredSchema {
-  if (depth > 32) return { ok: false, reason: `${path} is nested too deeply.` };
-  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
-    return {
-      ok: false,
-      reason:
-        path === "outputSchema"
-          ? "outputSchema must be a JSON Schema object."
-          : `${path} must be a JSON Schema object.`,
-    };
-  }
-
-  const schema = raw as Record<string, unknown>;
-  if (schema.type === "integer") {
-    return { ok: false, reason: `${path} has unsupported type "integer".` };
-  }
-  const unsupportedKeyword = Object.keys(schema).find((key) =>
-    unsupportedJsonSchemaValidationKeywords.has(key),
-  );
-  if (unsupportedKeyword) {
-    return {
-      ok: false,
-      reason: `${path} uses unsupported validation keyword "${unsupportedKeyword}".`,
-    };
-  }
-  switch (schema.type) {
-    case "string":
-      return { ok: true, schema: stringType() };
-    case "number":
-      return { ok: true, schema: numberType() };
-    case "boolean":
-      return { ok: true, schema: booleanType() };
-    case "null":
-      return { ok: true, schema: { type: "null" } };
-    case "array": {
-      const items = parseJsonValueSchema(schema.items, `${path}.items`, depth + 1);
-      return items.ok ? { ok: true, schema: arrayType(items.schema) } : items;
-    }
-    case "object": {
-      if (
-        schema.properties !== undefined &&
-        (schema.properties === null ||
-          typeof schema.properties !== "object" ||
-          Array.isArray(schema.properties))
-      ) {
-        return { ok: false, reason: `${path}.properties must be an object.` };
-      }
-      const rawProperties = (schema.properties ?? {}) as Record<string, unknown>;
-      const properties: Record<string, WorkflowValueSchema> = {};
-      for (const [key, childRaw] of Object.entries(rawProperties)) {
-        if (!isWorkflowAddressablePathSegment(key)) {
-          return {
-            ok: false,
-            reason: `${path} property "${key}" is not addressable.`,
-          };
-        }
-        const child = parseJsonValueSchema(childRaw, `${path}.properties.${key}`, depth + 1);
-        if (!child.ok) return child;
-        properties[key] = child.schema;
-      }
-      if (
-        schema.required !== undefined &&
-        (!Array.isArray(schema.required) ||
-          schema.required.some(
-            (key) =>
-              typeof key !== "string" ||
-              !Object.prototype.hasOwnProperty.call(properties, key),
-          ))
-      ) {
-        return {
-          ok: false,
-          reason: `${path}.required must contain only declared property names.`,
-        };
-      }
-      if (
-        schema.additionalProperties !== undefined &&
-        typeof schema.additionalProperties !== "boolean"
-      ) {
-        return { ok: false, reason: `${path}.additionalProperties must be a boolean.` };
-      }
-      return {
-        ok: true,
-        schema: objectType(
-          properties,
-          (schema.required as string[] | undefined) ?? [],
-          schema.additionalProperties !== false,
-        ),
-      };
-    }
-    default:
-      return {
-        ok: false,
-        reason:
-          typeof schema.type === "string"
-            ? `${path} has unsupported type "${schema.type}".`
-            : `${path} must declare a supported type.`,
-      };
-  }
-}
-
 function declaredOutputSchema(
   params: Record<string, WorkflowParamValue>,
-): ParsedDeclaredSchema | null {
+  options: JsonSchemaInspectionOptions = {},
+): ParsedJsonSchema | null {
   const raw = params.outputSchema;
   if (typeof raw !== "string" || raw.trim() === "") return null;
-  try {
-    return parseJsonValueSchema(JSON.parse(raw), "outputSchema");
-  } catch {
-    return { ok: false, reason: "outputSchema is not valid JSON." };
-  }
+  return parseJsonSchema202012(raw, options);
 }
 
 /** Definition-local registry issue, separate from environment availability so
  * pinned deployed definitions can execute after credentials/configuration
  * change while malformed authored contracts still fail closed. */
+function inspectWorkflowBlockDefinition(
+  type: WorkflowBlockType,
+  params: Record<string, WorkflowParamValue>,
+  options: JsonSchemaInspectionOptions,
+): JsonSchemaIssue[] {
+  if (type !== "generic_agent" && type !== "call_llm") return [];
+  const result = declaredOutputSchema(params, options);
+  if (result && !result.ok) return result.issues;
+  if (type === "generic_agent" && result?.ok) {
+    if (result.valueSchema.type !== "object") {
+      return [{
+        code: "invalid_schema",
+        path: "/type",
+        message: "outputSchema must declare an object for Generic Agent.",
+      }];
+    }
+    for (const reserved of ["status", "data"] as const) {
+      if (
+        Object.prototype.hasOwnProperty.call(
+          result.valueSchema.properties,
+          reserved,
+        )
+      ) {
+        return [{
+          code: "invalid_schema",
+          path: `/properties/${reserved}`,
+          message: `outputSchema property "${reserved}" is reserved by Generic Agent.`,
+        }];
+      }
+    }
+  }
+  return [];
+}
+
+export function workflowBlockDefinitionIssues(
+  type: WorkflowBlockType,
+  params: Record<string, WorkflowParamValue>,
+): JsonSchemaIssue[] {
+  return inspectWorkflowBlockDefinition(type, params, {
+    legacyCompatibility: true,
+  });
+}
+
+/** Deployment requires a schema with identical semantics across providers.
+ * Runtime compatibility remains permissive for already-deployed v1 schemas. */
+export function workflowBlockDeploymentDefinitionIssues(
+  type: WorkflowBlockType,
+  params: Record<string, WorkflowParamValue>,
+): JsonSchemaIssue[] {
+  return inspectWorkflowBlockDefinition(type, params, {
+    requireClosedObjects: true,
+  });
+}
+
 export function workflowBlockDefinitionIssue(
   type: WorkflowBlockType,
   params: Record<string, WorkflowParamValue>,
 ): string | null {
-  if (type !== "generic_agent" && type !== "call_llm") return null;
-  const result = declaredOutputSchema(params);
-  if (result && !result.ok) return result.reason;
-  if (type === "generic_agent" && result?.ok) {
-    if (result.schema.type !== "object") {
-      return "outputSchema must declare an object for Generic Agent.";
-    }
-    for (const reserved of ["status", "data"] as const) {
-      if (Object.prototype.hasOwnProperty.call(result.schema.properties, reserved)) {
-        return `outputSchema property "${reserved}" is reserved by Generic Agent.`;
-      }
-    }
-  }
-  return null;
+  return workflowBlockDefinitionIssues(type, params)[0]?.message ?? null;
 }
 
 function resolvedOutput(
@@ -1098,25 +994,25 @@ function resolvedOutput(
   params: Record<string, WorkflowParamValue>,
   fallback: WorkflowValueSchema,
 ): WorkflowValueSchema {
-  const declared = declaredOutputSchema(params);
+  const declared = declaredOutputSchema(params, { legacyCompatibility: true });
   if (type === "generic_agent" && declared !== null) {
-    if (declared.ok && declared.schema.type === "object") {
+    if (declared.ok && declared.valueSchema.type === "object") {
       return objectType(
         {
           status: stringType(),
-          ...declared.schema.properties,
+          ...declared.valueSchema.properties,
           // Compatibility alias for definitions authored against PR #118's
           // nested shape. New bindings address declared fields at top level.
-          data: declared.schema,
+          data: declared.valueSchema,
         },
         ["status"],
-        declared.schema.additionalProperties,
+        declared.valueSchema.additionalProperties,
       );
     }
     return statusOutput({ data: unknownType() });
   }
   if (type === "call_llm" && declared !== null) {
-    return statusOutput({ output: declared.ok ? declared.schema : unknownType() });
+    return statusOutput({ output: declared.ok ? declared.valueSchema : unknownType() });
   }
   if (
     params.scope === "any" &&
@@ -1146,7 +1042,7 @@ function resolvedBindingOutput(
   definition: ContractDefinition,
   output: WorkflowValueSchema,
 ): WorkflowValueSchema {
-  const declared = declaredOutputSchema(params);
+  const declared = declaredOutputSchema(params, { legacyCompatibility: true });
   const dynamicField =
     declared?.ok === true
       ? type === "generic_agent"
@@ -1156,8 +1052,8 @@ function resolvedBindingOutput(
           : null
       : null;
   const declaredRequiredFields =
-    type === "generic_agent" && declared?.ok === true && declared.schema.type === "object"
-      ? declared.schema.required
+    type === "generic_agent" && declared?.ok === true && declared.valueSchema.type === "object"
+      ? declared.valueSchema.required
       : [];
   return withRequiredFields(output, [
     ...(definition.normalOutputRequired ?? []),

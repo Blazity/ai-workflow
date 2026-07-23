@@ -5,6 +5,7 @@ import type { FlowNodeDef, FlowEdgeDef, NodeRunStatus, RunStatusMap } from "@/li
 import type {
   PromptSourceRef,
   WorkflowDefinition,
+  WorkflowDefinitionValidationIssue,
   WorkflowEditorOptions,
   WorkflowExecutionBudgets,
   WorkflowParamValue,
@@ -44,6 +45,12 @@ import {
   setExecutionLimit,
   type WorkflowExecutionLimitKey,
 } from "@/lib/workflow-editor/execution-limits";
+import {
+  groupValidationIssues,
+  NodeValidationErrors,
+  validationDescriptionId,
+  ValidationSummary,
+} from "./validation-feedback";
 
 const RUN_STATUS_COLORS: Record<NodeRunStatus, string> = {
   pending: "#9EA3AA",
@@ -120,6 +127,7 @@ const FlowNode = React.memo(function FlowNode({
   onPortUp,
   runStatus,
   runError,
+  validationIssues,
   connectingPort,
 }: {
   node: FlowNodeDef;
@@ -135,12 +143,14 @@ const FlowNode = React.memo(function FlowNode({
   onPortUp: (e: React.PointerEvent, nodeId: string) => void;
   runStatus?: NodeRunStatus;
   runError?: string;
+  validationIssues: WorkflowDefinitionValidationIssue[];
   connectingPort?: string | null;
 }) {
   const cat = blockPresentation(options, node.type);
   const summary = nodeSummary(node, options);
   const portCount = outPorts.length;
   const running = runStatus === "running";
+  const invalid = validationIssues.length > 0;
 
   return (
     <div
@@ -159,10 +169,14 @@ const FlowNode = React.memo(function FlowNode({
       onClick={(e) => { e.stopPropagation(); onSelect(node.id); }}
       role="group"
       aria-label={`${cat.label}: ${node.name || cat.label}`}
+      aria-invalid={invalid || undefined}
+      aria-describedby={invalid ? validationDescriptionId(node.id) : undefined}
       className={`absolute rounded-[4px] select-none transition-[box-shadow,border-color] duration-[120ms] bg-panel ${
         canEdit ? "cursor-grab" : "cursor-pointer"
       } ${
-        running
+        invalid
+          ? "border-2 border-red-500 shadow-[0_0_0_4px_rgba(209,67,67,0.12),0_4px_12px_rgba(24,27,32,0.08)] z-[5]"
+          : running
           ? "border-2 border-mariner z-[4] animate-ck-glow"
           : selected
             ? "border-2 border-mariner shadow-[0_0_0_4px_rgba(60,67,231,0.12),0_4px_12px_rgba(24,27,32,0.08)] z-[3]"
@@ -173,6 +187,11 @@ const FlowNode = React.memo(function FlowNode({
         width: NODE_W, height: NODE_H,
       }}
     >
+      {invalid && (
+        <span id={validationDescriptionId(node.id)} className="sr-only">
+          Validation errors: {validationIssues.map((issue) => issue.message).join("; ")}
+        </span>
+      )}
       <div
         className="flex h-8 min-w-0 items-center gap-2 overflow-hidden rounded-t-[3px] border-b px-2.5 font-mono text-[8px] font-semibold uppercase tracking-[0.06em]"
         style={{ background: cat.softColor, borderBottomColor: cat.softColor, color: cat.color }}
@@ -267,6 +286,7 @@ function FlowCanvas({
   onDropNode,
   runStatuses,
   runErrors,
+  validationIssuesByNode,
   selectedId,
   setSelectedId,
   fullView,
@@ -284,6 +304,7 @@ function FlowCanvas({
   onDropNode: (item: PaletteItem, at: Point) => void;
   runStatuses?: RunStatusMap;
   runErrors?: Record<string, string>;
+  validationIssuesByNode: Record<string, WorkflowDefinitionValidationIssue[]>;
   selectedId: string | null;
   setSelectedId: (id: string | null) => void;
   fullView: boolean;
@@ -726,6 +747,7 @@ function FlowCanvas({
             onPortUp={onPortUp}
             runStatus={runStatuses?.[n.id]}
             runError={runErrors?.[n.id]}
+            validationIssues={validationIssuesByNode[n.id] ?? []}
             connectingPort={connect?.from === n.id ? connect.fromPort : null}
           />
         ))}
@@ -786,6 +808,7 @@ export function FlowEditor({
   runErrors,
   fitSignal,
   initialSelectedId,
+  onSelectionChange,
 }: {
   nodes: FlowNodeDef[];
   edges: FlowEdgeDef[];
@@ -809,6 +832,7 @@ export function FlowEditor({
   runErrors?: Record<string, string>;
   fitSignal?: number;
   initialSelectedId?: string;
+  onSelectionChange?: (nodeId: string | null) => void;
 }) {
   const [selectedId, setSelectedId] = useState<string | null>(() =>
     initialSelectedId && nodes.some((n) => n.id === initialSelectedId) ? initialSelectedId : null,
@@ -816,6 +840,10 @@ export function FlowEditor({
   const [fullView, setFullView] = useState(false);
   const isMobile = useIsMobileViewport();
   const [paletteOpen, setPaletteOpen] = useState(false);
+
+  useEffect(() => {
+    onSelectionChange?.(selectedId);
+  }, [onSelectionChange, selectedId]);
 
   useEffect(() => {
     if (!fullView) return;
@@ -827,6 +855,14 @@ export function FlowEditor({
   const selected = selectedId ? nodes.find(n => n.id === selectedId) ?? null : null;
   const triggerCount = nodes.filter(n => isTriggerBlockType(n.type)).length;
   const selectedLocked = selected ? isTriggerBlockType(selected.type) && triggerCount === 1 : false;
+  const groupedValidationIssues = useMemo(
+    () => groupValidationIssues(validation.issues),
+    [validation.issues],
+  );
+  const nodeNames = useMemo(
+    () => Object.fromEntries(nodes.map((node) => [node.id, node.name || node.id])),
+    [nodes],
+  );
 
   const paletteGroups = useMemo(() => buildPaletteItems(options), [options]);
   const bindingDefinition = useMemo<WorkflowDefinition>(
@@ -924,21 +960,11 @@ export function FlowEditor({
           {!canEdit && (
             <span className="rounded-full border border-neutral-200 bg-app-bg px-2 py-0.5 font-mono text-[10px] font-semibold tracking-[0.04em] uppercase text-neutral-600">Read-only</span>
           )}
-          <span
-            className={`rounded-full border px-2 py-0.5 font-mono text-[10px] font-semibold tracking-[0.04em] uppercase ${
-              validation.status === "valid"
-                ? "border-emerald-300 text-emerald-700"
-                : validation.status === "checking"
-                  ? "border-neutral-200 text-neutral-500"
-                  : "border-red-300 text-red-700"
-            }`}
-          >
-            {validation.status === "valid"
-              ? "Validated"
-              : validation.status === "checking"
-                ? "Validating…"
-                : `${validation.issues.length} validation issue${validation.issues.length === 1 ? "" : "s"}`}
-          </span>
+          <ValidationSummary
+            validation={validation}
+            nodeNames={nodeNames}
+            onSelectNode={setSelectedId}
+          />
         </div>
         <div className="ml-auto flex items-center gap-2">
           {headerExtra}
@@ -953,18 +979,14 @@ export function FlowEditor({
       </div>
       <ExecutionLimitsBar limits={limits} canEdit={canEdit} onChange={onLimitsChange} />
       {error && (
-        <div className="px-6 py-2 border-b border-red-300 bg-red-50 font-body text-[12px] text-red-700">{error}</div>
-      )}
-      {(validation.status === "invalid" || validation.status === "error") && (
-        <div className="px-6 py-2 border-b border-amber-300 bg-amber-50 font-body text-[12px] text-amber-900">
-          <ul className="m-0 pl-4 space-y-0.5">
-            {validation.issues.map((issue, index) => (
-              <li key={`${issue.nodeId ?? "workflow"}-${index}`}>{issue.message}</li>
-            ))}
-          </ul>
+        <div
+          role="alert"
+          data-error-presentation="inline"
+          className="px-6 py-2 border-b border-red-300 bg-red-50 font-body text-[12px] text-red-700"
+        >
+          {error}
         </div>
       )}
-
       {/* Editor body */}
       <div className="flex-1 flex min-h-0">
         {!isMobile && canEdit && <NodePalette groups={paletteGroups} onAdd={addNode} />}
@@ -980,6 +1002,7 @@ export function FlowEditor({
           onDropNode={addNode}
           runStatuses={runStatuses ?? {}}
           runErrors={runErrors ?? {}}
+          validationIssuesByNode={groupedValidationIssues.byNode}
           selectedId={selectedId}
           setSelectedId={setSelectedId}
           fullView={fullView}
@@ -992,6 +1015,7 @@ export function FlowEditor({
             options={options}
             definition={bindingDefinition}
             nodeContracts={validation.nodeContracts}
+            validationIssues={groupedValidationIssues.byNode[selected.id] ?? []}
             canEdit={canEdit}
             locked={selectedLocked}
             onChange={updateSelected}
@@ -1012,6 +1036,7 @@ export function FlowEditor({
                 options={options}
                 definition={bindingDefinition}
                 nodeContracts={validation.nodeContracts}
+                validationIssues={groupedValidationIssues.byNode[selected.id] ?? []}
                 canEdit={canEdit}
                 locked={selectedLocked}
                 onChange={updateSelected}
@@ -1044,6 +1069,7 @@ function NodeConfig({
   options,
   definition,
   nodeContracts,
+  validationIssues,
   canEdit,
   locked,
   onChange,
@@ -1055,6 +1081,7 @@ function NodeConfig({
   options: WorkflowEditorOptions;
   definition: WorkflowDefinition;
   nodeContracts: WorkflowValidationState["nodeContracts"];
+  validationIssues: WorkflowDefinitionValidationIssue[];
   canEdit: boolean;
   locked: boolean;
   onChange: (path: string, value: WorkflowParamValue | PromptSourceRef | undefined) => void;
@@ -1093,6 +1120,7 @@ function NodeConfig({
       </div>
 
       <div className="flex-1 overflow-auto">
+        <NodeValidationErrors nodeId={node.id} issues={validationIssues} />
         <ConfigFields node={node} options={options} canEdit={canEdit} onChange={onChange} />
         <BindingFields
           key={node.id}

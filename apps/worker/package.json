@@ -37,6 +37,7 @@
     "@vercel/functions": "^3.5.0",
     "@vercel/sandbox": "^1.8.1",
     "ai": "^6.0.188",
+    "ajv": "^8.17.1",
     "better-auth": "^1.6.20",
     "chat": "^4.20.2",
     "drizzle-orm": "^0.45.2",
