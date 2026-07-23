@@ -1,8 +1,8 @@
-import type {
-  PromptVariableName,
-  WorkflowBlockType,
-  WorkflowDefinitionNode,
-  WorkflowParamValue,
+import {
+  WORKFLOW_PROMPT_PARAM_KEYS,
+  type PromptVariableName,
+  type WorkflowDefinitionNode,
+  type WorkflowParamValue,
 } from "@shared/contracts";
 import type { EngineCtx } from "./blocks/types.js";
 import { formatPRComments } from "../sandbox/context.js";
@@ -10,20 +10,7 @@ import { formatPRComments } from "../sandbox/context.js";
 /** Which string/string[] params of each block type receive {{var}} substitution.
  *  Deliberately excludes machine-shaped params (branch.condition, outputSchema,
  *  model, provider, commands, target, ...). */
-export const VARIABLE_PARAM_KEYS: Partial<Record<WorkflowBlockType, readonly string[]>> = {
-  planning_agent: ["prompt"],
-  implementation_agent: ["prompt"],
-  review_agent: ["prompt"],
-  generic_agent: ["prompt"],
-  call_llm: ["prompt", "system"],
-  fix_agent: ["instructions"],
-  post_ticket_comment: ["body"],
-  post_pr_comment: ["body"],
-  open_pr: ["title", "body"],
-  send_slack_message: ["message"],
-  human_question: ["questions"],
-  terminate: ["postComment"],
-};
+export const VARIABLE_PARAM_KEYS = WORKFLOW_PROMPT_PARAM_KEYS;
 
 /** Resolved {{name}} -> text map. Missing/unavailable known values are "" (never
  *  undefined) so a substituted placeholder never leaks the string "undefined". */

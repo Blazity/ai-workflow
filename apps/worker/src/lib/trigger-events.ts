@@ -1,5 +1,11 @@
 import type { PrTriggerPayload } from "../workflows/agent-input.js";
 import { vcsLoginsMatch } from "./vcs-bot-identity.js";
+import { isManagedGateCheckName } from "./workflow-naming.js";
+
+export {
+  GATE_CHECK_NAME_PREFIX,
+  LEGACY_GATE_CHECK_NAME_PREFIX,
+} from "./workflow-naming.js";
 
 export type PrTriggerType =
   | "trigger_pr_created"
@@ -31,8 +37,6 @@ export interface NormalizeGitHubOptions {
    */
   reviewStates?: readonly string[];
 }
-
-export const GATE_CHECK_NAME_PREFIX = "blazebot / ";
 
 export const DEFAULT_REVIEW_STATES: readonly string[] = ["changes_requested"];
 
@@ -144,6 +148,7 @@ export function normalizeGitLabEvent(
     deliveryId?: string;
     botUsername?: string;
     reviewStates?: readonly string[];
+    gateCheckNames?: readonly string[];
   } = {},
 ): TriggerEvent | null {
   const producer = body?.user?.username ?? body?.user?.name ?? "unknown";
@@ -222,8 +227,19 @@ export function normalizeGitLabEvent(
     if (!attrs || !mr || !project) return null;
     if (attrs.status !== "failed") return null;
     const failedBuilds = Array.isArray(body?.builds)
-      ? body.builds.filter((build: any) => build?.status === "failed")
+      ? body.builds.filter(
+          (build: any) =>
+            build?.status === "failed" &&
+            !isGateCheckName(build?.name, options.gateCheckNames ?? []),
+        )
       : [];
+    if (
+      Array.isArray(body?.builds) &&
+      body.builds.some((build: any) => build?.status === "failed") &&
+      failedBuilds.length === 0
+    ) {
+      return null;
+    }
     const failedChecks =
       failedBuilds.length > 0
         ? failedBuilds.map((build: any) => ({
@@ -327,7 +343,7 @@ function isGateCheckName(
 ): boolean {
   if (typeof name !== "string") return false;
   if (gateCheckNames.includes(name)) return true;
-  return name.startsWith(GATE_CHECK_NAME_PREFIX);
+  return isManagedGateCheckName(name);
 }
 
 function isGitLabDraft(attrs: any): boolean {

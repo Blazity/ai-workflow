@@ -71,7 +71,7 @@ describe("US-06: Clarification answered → ticket completes", () => {
         ].join("\n"),
       });
       ticketKey = ticket.ticketKey;
-      branchName = `blazebot/${ticketKey.toLowerCase()}`;
+      branchName = `ai-workflow/${ticketKey.toLowerCase()}`;
 
       await moveTicketToColumn(ticketKey, e2eEnv.COLUMN_AI);
       await callCronPoll();

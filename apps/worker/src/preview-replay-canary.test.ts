@@ -87,7 +87,7 @@ function evidence(): ReplayCanaryEvidence {
         ],
         edges: [],
       },
-      layout: { nodes: {} },
+      layout: { nodes: {}, edges: {} },
       runtimeManifest: envelope("safe manifest"),
       captureStatus: "available",
       capturedAt: new Date(0).toISOString(),

@@ -3,6 +3,7 @@ import type {
   WorkflowDefinitionV1,
   WorkflowDefinitionV2,
 } from "@shared/contracts";
+import { normalizeWorkflowDefinitionLayout } from "@shared/contracts";
 import {
   applyWorkflowDefinitionLayout,
   canonicalizeWorkflowDefinition,
@@ -23,6 +24,7 @@ describe("workflow definition layout", () => {
     const semantic = canonicalizeWorkflowDefinition(definition);
 
     expect(semantic.nodes[0]).toMatchObject({ x: 0, y: 0 });
+    expect(layout.edges).toEqual({});
     expect(applyWorkflowDefinitionLayout(semantic, layout)).toEqual(definition);
   });
 
@@ -53,5 +55,16 @@ describe("workflow definition layout", () => {
       configuration: { scope: "workflow_owned" },
     });
     expect(applyWorkflowDefinitionLayout(semantic, layout)).toEqual(v2);
+  });
+
+  it("normalizes legacy node-only layout JSON without rewriting coordinates", () => {
+    expect(
+      normalizeWorkflowDefinitionLayout({
+        nodes: { a: { x: 12, y: 34 } },
+      }),
+    ).toEqual({
+      nodes: { a: { x: 12, y: 34 } },
+      edges: {},
+    });
   });
 });

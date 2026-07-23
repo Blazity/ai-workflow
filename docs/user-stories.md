@@ -23,7 +23,7 @@ Acceptance criteria:
 
 **Expected behavior:**
 1. Ticket discovered in AI column (via cron poll or Jira webhook)
-2. Agent creates branch `blazebot/awt-123`
+2. Agent creates branch `ai-workflow/awt-123`
 3. Research phase analyzes repo and produces implementation plan
 4. Implementation phase creates the endpoint (framework-agnostic) and commits
 5. Internal review phase approves the changes
@@ -32,7 +32,7 @@ Acceptance criteria:
 8. Redis entry cleaned up, sandbox torn down
 
 **Verifications:**
-- PR exists on branch `blazebot/awt-123`
+- PR exists on branch `ai-workflow/awt-123`
 - PR has at least 1 commit
 - Ticket status = "AI Review"
 - Redis has no entry for ticket
@@ -382,4 +382,3 @@ Developer moves AWT-123 from "AI" to "In Progress"
 - Workflow status = cancelled
 - No sandbox running for the ticket
 - Redis has no entry for ticket
-

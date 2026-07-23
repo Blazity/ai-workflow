@@ -54,7 +54,7 @@ describe("US-12: Ticket moved out of AI during dispatch", () => {
       description: "Ticket never enters AI; webhook lies, dispatch must bail.",
     });
     ticketKey = ticket.ticketKey;
-    branchName = `blazebot/${ticketKey.toLowerCase()}`;
+    branchName = `ai-workflow/${ticketKey.toLowerCase()}`;
 
     await moveTicketToColumn(ticketKey, e2eEnv.COLUMN_BACKLOG);
     expect(await getTicketStatus(ticketKey)).toBe(e2eEnv.COLUMN_BACKLOG);

@@ -1,6 +1,7 @@
 import type {
   JsonValue,
   WorkflowBlockType,
+  WorkflowDefinitionLayout,
 } from "./domain.js";
 
 export type ReplayAvailability = "available" | "not_captured" | "expired";
@@ -101,10 +102,7 @@ export interface WorkflowReplayGraphSnapshot {
   edges: WorkflowReplayGraphEdge[];
 }
 
-export interface WorkflowReplayLayoutSnapshot {
-  nodes: Record<string, { x: number; y: number }>;
-  edges?: Record<string, JsonValue>;
-}
+export type WorkflowReplayLayoutSnapshot = WorkflowDefinitionLayout;
 
 export interface WorkflowReplaySnapshot {
   runId: string;

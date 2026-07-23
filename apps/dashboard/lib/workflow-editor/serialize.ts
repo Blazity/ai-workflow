@@ -1,6 +1,7 @@
 import { BLOCK_PARAM_KEYS } from "@shared/contracts";
 import type {
   WorkflowDefinition,
+  WorkflowEdgeGeometry,
   WorkflowDefinitionLayout,
   WorkflowDefinitionV1,
   WorkflowDefinitionV2,
@@ -191,10 +192,22 @@ export function serializeSemanticWorkflowDefinition(
 
 export function serializeWorkflowLayout(
   nodes: readonly FlowNodeDef[],
+  edgeGeometry: Readonly<Record<string, WorkflowEdgeGeometry>> = {},
 ): WorkflowDefinitionLayout {
   return {
     nodes: Object.fromEntries(
       nodes.map((node) => [node.id, { x: Math.round(node.x), y: Math.round(node.y) }]),
+    ),
+    edges: Object.fromEntries(
+      Object.entries(edgeGeometry).map(([edgeId, geometry]) => [
+        edgeId,
+        {
+          bend: {
+            x: Math.round(geometry.bend.x),
+            y: Math.round(geometry.bend.y),
+          },
+        },
+      ]),
     ),
   };
 }
@@ -208,7 +221,12 @@ export function serializeWorkflowLayout(
 export function serializeWorkflowLayoutWithBaseline(
   nodes: readonly FlowNodeDef[],
   baseline: WorkflowDefinitionLayout,
+  edgeGeometry: Readonly<Record<string, WorkflowEdgeGeometry>> =
+    baseline.edges ?? {},
 ): WorkflowDefinitionLayout {
-  const current = serializeWorkflowLayout(nodes);
-  return { nodes: { ...baseline.nodes, ...current.nodes } };
+  const current = serializeWorkflowLayout(nodes, edgeGeometry);
+  return {
+    nodes: { ...baseline.nodes, ...current.nodes },
+    edges: current.edges,
+  };
 }

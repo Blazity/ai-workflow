@@ -7,6 +7,7 @@ import {
   LIVE_POLL_MS,
   useLivePoll,
 } from "@/lib/use-live-poll";
+import { edgeBezierPath } from "@/lib/workflow-editor/layout-geometry";
 import type {
   ReplayAttemptState,
   ReplaySanitizedEnvelope,
@@ -445,13 +446,33 @@ function ReplayCanvas({
             const y1 = from.y + NODE_HEIGHT / 2;
             const x2 = to.x;
             const y2 = to.y + NODE_HEIGHT / 2;
-            const bend = Math.max(48, Math.abs(x2 - x1) * 0.45);
+            const storedGeometry = snapshot.layout.edges[edge.id];
+            const geometry = storedGeometry
+              ? {
+                  bend: {
+                    x: storedGeometry.bend.x - minX + CANVAS_PADDING,
+                    y: storedGeometry.bend.y - minY + CANVAS_PADDING,
+                  },
+                }
+              : undefined;
+            const automaticBend = Math.max(
+              48,
+              Math.abs(x2 - x1) * 0.45,
+            );
             const active = replayEdgeIsActive(edge, graphAttempts);
             const historyPending = !graphHistoryComplete && !active;
             return (
               <path
                 key={edgeId(edge)}
-                d={`M ${x1} ${y1} C ${x1 + bend} ${y1}, ${x2 - bend} ${y2}, ${x2} ${y2}`}
+                d={
+                  geometry
+                    ? edgeBezierPath(
+                        { x: x1, y: y1 },
+                        { x: x2, y: y2 },
+                        geometry,
+                      )
+                    : `M ${x1} ${y1} C ${x1 + automaticBend} ${y1}, ${x2 - automaticBend} ${y2}, ${x2} ${y2}`
+                }
                 fill="none"
                 stroke={
                   active

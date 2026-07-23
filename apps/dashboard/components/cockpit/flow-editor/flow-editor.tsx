@@ -18,6 +18,7 @@ import type {
   WorkflowDefinitionV1,
   WorkflowDefinitionV2,
   WorkflowDefinitionValidationIssue,
+  WorkflowEdgeGeometry,
   WorkflowEditorOptions,
   WorkflowExecutionBudgets,
   WorkflowInputBindingV2,
@@ -34,7 +35,6 @@ import {
   edgeKeyboardAction,
   edgeKey,
   isBackEdge,
-  reconcileSelectedEdgeKey,
   removeEdge as removeEdgeFromList,
   resolvedPort,
   upsertEdge,
@@ -64,7 +64,7 @@ import {
 import { BranchFields } from "./branch-fields";
 import { instantiateWorkflowEditorBlockTemplate } from "@/lib/workflow-editor/block-templates";
 import type { WorkflowValidationState } from "@/lib/workflow-editor/validation-controller";
-import { removeNodeFromGraph } from "@/lib/workflow-editor/graph-edit";
+import { removeSelectionFromGraph } from "@/lib/workflow-editor/graph-edit";
 import { serializeWorkflowDefinition } from "@/lib/workflow-editor/serialize";
 import {
   setExecutionLimit,
@@ -76,6 +76,35 @@ import {
   validationDescriptionId,
   ValidationSummary,
 } from "./validation-feedback";
+import {
+  dragSelectionNodeIds,
+  EMPTY_CANVAS_SELECTION,
+  isAdditiveCanvasSelection,
+  reconcileCanvasSelection,
+  selectCanvasEdge,
+  selectCanvasNode,
+  type CanvasSelection,
+} from "@/lib/workflow-editor/canvas-selection";
+import { sourceNodeIdsForReference } from "@/lib/workflow-editor/reference-highlight";
+import {
+  createWorkflowClipboardPayload,
+  planWorkflowClipboardPaste,
+  readSessionWorkflowClipboard,
+  writeSessionWorkflowClipboard,
+  type WorkflowClipboardPayload,
+} from "@/lib/workflow-editor/clipboard";
+import {
+  workflowEditorKeyboardAction,
+  workflowShortcutLabel,
+  wrappedDialogTabIndex,
+} from "@/lib/workflow-editor/keyboard-actions";
+import {
+  automaticEdgeBendPoint,
+  canvasGridMetrics,
+  nudgeEdgeGeometry,
+  offsetEdgeGeometry,
+} from "@/lib/workflow-editor/layout-geometry";
+import { finishEditingSurfaceTransaction } from "@/lib/workflow-editor/history";
 
 const RUN_STATUS_COLORS: Record<NodeRunStatus, string> = {
   pending: "#9EA3AA",
@@ -84,6 +113,42 @@ const RUN_STATUS_COLORS: Record<NodeRunStatus, string> = {
   warn: "#FFC800",
   fail: "#D14343",
 };
+
+let fallbackWorkflowClipboard:
+  | WorkflowClipboardPayload<WorkflowEdgeGeometry>
+  | null = null;
+
+function referenceValueFromTarget(target: EventTarget | null): string | null {
+  if (
+    target instanceof HTMLInputElement ||
+    target instanceof HTMLTextAreaElement ||
+    target instanceof HTMLSelectElement
+  ) {
+    return target.value;
+  }
+  if (!(target instanceof Element)) return null;
+  return (
+    target
+      .closest<HTMLElement>("[data-prompt-token-kind='data']")
+      ?.dataset.promptToken ?? null
+  );
+}
+
+function editableSurfaceFromTarget(
+  target: EventTarget | null,
+): HTMLElement | null {
+  if (!(target instanceof HTMLElement)) return null;
+  if (
+    target instanceof HTMLInputElement ||
+    target instanceof HTMLTextAreaElement ||
+    target instanceof HTMLSelectElement
+  ) {
+    return target;
+  }
+  return target.closest<HTMLElement>(
+    '[contenteditable="true"], [role="textbox"]',
+  );
+}
 
 const EXECUTION_LIMIT_FIELDS: Array<{
   key: WorkflowExecutionLimitKey;
@@ -143,13 +208,16 @@ const FlowNode = React.memo(function FlowNode({
   options,
   canEdit,
   selected,
+  dataSourceHighlighted,
   locked,
   outPorts,
   onSelect,
-  onDelete,
+  onRequestDelete,
   onDragStart,
   onPortDown,
   onPortUp,
+  onPortKeyStart,
+  onPortKeyEnd,
   runStatus,
   runError,
   validationIssues,
@@ -159,13 +227,16 @@ const FlowNode = React.memo(function FlowNode({
   options: WorkflowEditorOptions;
   canEdit: boolean;
   selected: boolean;
+  dataSourceHighlighted: boolean;
   locked: boolean;
   outPorts: string[];
-  onSelect: (id: string) => void;
-  onDelete: (id: string) => void;
+  onSelect: (id: string, event: React.MouseEvent) => void;
+  onRequestDelete: (id: string) => void;
   onDragStart: (e: React.PointerEvent, node: FlowNodeDef) => void;
   onPortDown: (e: React.PointerEvent, nodeId: string, portId: string) => void;
   onPortUp: (e: React.PointerEvent, nodeId: string) => void;
+  onPortKeyStart: (nodeId: string, portId: string) => void;
+  onPortKeyEnd: (nodeId: string) => void;
   runStatus?: NodeRunStatus;
   runError?: string;
   validationIssues: WorkflowDefinitionValidationIssue[];
@@ -179,23 +250,10 @@ const FlowNode = React.memo(function FlowNode({
 
   return (
     <div
-      onPointerDown={(e) => {
-        if (e.button === 2) {
-          e.stopPropagation();
-          return;
-        }
-        onDragStart(e, node);
-      }}
-      onContextMenu={(e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        if (canEdit && !locked) onDelete(node.id);
-      }}
-      onClick={(e) => { e.stopPropagation(); onSelect(node.id); }}
       role="group"
-      aria-label={`${cat.label}: ${node.name || cat.label}`}
-      aria-invalid={invalid || undefined}
-      aria-describedby={invalid ? validationDescriptionId(node.id) : undefined}
+      aria-label={`${cat.label} block controls`}
+      data-canvas-node-id={node.id}
+      data-data-source-highlight={dataSourceHighlighted || undefined}
       className={`absolute rounded-[4px] select-none transition-[box-shadow,border-color] duration-[120ms] bg-panel ${
         canEdit ? "cursor-grab" : "cursor-pointer"
       } ${
@@ -205,6 +263,8 @@ const FlowNode = React.memo(function FlowNode({
           ? "border-2 border-mariner z-[4] animate-ck-glow"
           : selected
             ? "border-2 border-mariner shadow-[0_0_0_4px_rgba(60,67,231,0.12),0_4px_12px_rgba(24,27,32,0.08)] z-[3]"
+            : dataSourceHighlighted
+              ? "border-2 border-cyan-600 shadow-[0_0_0_4px_rgba(8,145,178,0.14),0_4px_12px_rgba(24,27,32,0.08)] z-[3]"
             : "border border-neutral-200 shadow-[0_1px_2px_rgba(24,27,32,0.05)] z-[2]"
       }`}
       style={{
@@ -212,9 +272,41 @@ const FlowNode = React.memo(function FlowNode({
         width: NODE_W, height: NODE_H,
       }}
     >
+      <button
+        type="button"
+        onPointerDown={(event) => {
+          if (event.button === 2) {
+            event.stopPropagation();
+            return;
+          }
+          onDragStart(event, node);
+        }}
+        onContextMenu={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          if (canEdit && !locked) onRequestDelete(node.id);
+        }}
+        onClick={(event) => {
+          event.stopPropagation();
+          onSelect(node.id, event);
+        }}
+        aria-label={`${cat.label}: ${node.name || cat.label}`}
+        aria-pressed={selected}
+        aria-invalid={invalid || undefined}
+        aria-describedby={
+          invalid ? validationDescriptionId(node.id) : undefined
+        }
+        data-canvas-node-selector={node.id}
+        className="absolute inset-0 z-[1] appearance-none rounded-[3px] bg-transparent text-left outline-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-mariner focus-visible:outline-offset-2"
+      />
       {invalid && (
         <span id={validationDescriptionId(node.id)} className="sr-only">
           Validation errors: {validationIssues.map((issue) => issue.message).join("; ")}
+        </span>
+      )}
+      {dataSourceHighlighted && (
+        <span className="pointer-events-none absolute -top-5 left-0 z-[2] rounded-[3px] border border-cyan-300 bg-cyan-50 px-1.5 py-0.5 font-mono text-[8px] font-semibold uppercase tracking-[0.05em] text-cyan-800">
+          Data source
         </span>
       )}
       <div
@@ -245,11 +337,25 @@ const FlowNode = React.memo(function FlowNode({
       </div>
 
       {!isTriggerBlockType(node.type) && (
-        <span
+        <button
+          type="button"
+          disabled={!canEdit}
           onPointerDown={(e) => e.stopPropagation()}
           onPointerUp={(e) => onPortUp(e, node.id)}
           title={canEdit ? "Drop a connection here" : undefined}
-          className={`absolute w-3.5 h-3.5 rounded-full bg-panel border-2 ${canEdit ? "cursor-crosshair hover:scale-125 transition-transform" : ""}`}
+          aria-label={`Complete connection to ${node.name || node.id}`}
+          onKeyDown={(event) => {
+            if (
+              !canEdit ||
+              (event.key !== "Enter" && event.key !== " ")
+            ) {
+              return;
+            }
+            event.preventDefault();
+            event.stopPropagation();
+            onPortKeyEnd(node.id);
+          }}
+          className={`absolute z-[2] m-0 h-3.5 w-3.5 appearance-none rounded-full border-2 bg-panel p-0 ${canEdit ? "cursor-crosshair hover:scale-125 transition-transform" : "cursor-default"}`}
           style={{
             left: -7, top: NODE_H / 2 - 7,
             borderColor: cat.color,
@@ -263,14 +369,29 @@ const FlowNode = React.memo(function FlowNode({
           <span key={port}>
             {showLabel && (
               <span
-                className="absolute font-mono text-[8px] font-semibold tracking-[0.06em] uppercase leading-none pointer-events-none"
+                className="absolute z-[2] font-mono text-[8px] font-semibold tracking-[0.06em] uppercase leading-none pointer-events-none"
                 style={{ right: 12, top: top - 4, color: cat.color }}
               >{port}</span>
             )}
-            <span
+            <button
+              type="button"
+              disabled={!canEdit}
               onPointerDown={(e) => onPortDown(e, node.id, port)}
               title={canEdit ? "Drag to another node to connect" : undefined}
-              className={`absolute w-3.5 h-3.5 rounded-full border-2 border-white ${canEdit ? "cursor-crosshair hover:scale-125 transition-transform" : ""} ${connectingPort === port ? "ring-2 ring-mariner ring-offset-1 scale-125" : ""}`}
+              aria-label={`Start connection from ${node.name || node.id}, ${port} output`}
+              aria-pressed={connectingPort === port || undefined}
+              onKeyDown={(event) => {
+                if (
+                  !canEdit ||
+                  (event.key !== "Enter" && event.key !== " ")
+                ) {
+                  return;
+                }
+                event.preventDefault();
+                event.stopPropagation();
+                onPortKeyStart(node.id, port);
+              }}
+              className={`absolute z-[2] m-0 h-3.5 w-3.5 appearance-none rounded-full border-2 border-white p-0 ${canEdit ? "cursor-crosshair hover:scale-125 transition-transform" : "cursor-default"} ${connectingPort === port ? "ring-2 ring-mariner ring-offset-1 scale-125" : ""}`}
               style={{
                 left: NODE_W - 5, top: top - 7,
                 background: cat.color,
@@ -283,15 +404,27 @@ const FlowNode = React.memo(function FlowNode({
   );
 });
 
-interface DragState {
-  kind: "node" | "pan";
-  id?: string;
-  ox: number;
-  oy: number;
-  startX: number;
-  startY: number;
-  pointerId?: number;
-}
+type DragState =
+  | {
+      kind: "node";
+      positions: Record<string, Point>;
+      startX: number;
+      startY: number;
+      pointerId: number;
+    }
+  | {
+      kind: "pan";
+      ox: number;
+      oy: number;
+      startX: number;
+      startY: number;
+      pointerId: number;
+    }
+  | {
+      kind: "edge";
+      edgeId: string;
+      pointerId: number;
+    };
 
 interface ConnectState {
   from: string;
@@ -302,10 +435,12 @@ interface ConnectState {
 function FlowCanvas({
   nodes,
   edges,
+  edgeGeometry,
   schemaVersion,
   canEdit,
   options,
   onNodesChange,
+  onEdgeGeometryChange,
   onAddEdge,
   onRemoveEdge,
   onDeleteNode,
@@ -313,18 +448,27 @@ function FlowCanvas({
   runStatuses,
   runErrors,
   validationIssuesByNode,
-  selectedId,
-  setSelectedId,
+  selection,
+  setSelection,
+  highlightedSourceIds,
   fullView,
   onToggleFullView,
   fitSignal,
+  onBeforeSelectionChange,
+  onBeginTransaction,
+  onCommitTransaction,
+  onCancelTransaction,
 }: {
   nodes: FlowNodeDef[];
   edges: FlowEdgeDef[];
+  edgeGeometry: Record<string, WorkflowEdgeGeometry>;
   schemaVersion: 1 | 2;
   canEdit: boolean;
   options: WorkflowEditorOptions;
   onNodesChange: React.Dispatch<React.SetStateAction<FlowNodeDef[]>>;
+  onEdgeGeometryChange: React.Dispatch<
+    React.SetStateAction<Record<string, WorkflowEdgeGeometry>>
+  >;
   onAddEdge: (from: string, fromPort: string, to: string) => void;
   onRemoveEdge: (instanceKey: string) => void;
   onDeleteNode: (nodeId: string) => void;
@@ -332,18 +476,22 @@ function FlowCanvas({
   runStatuses?: RunStatusMap;
   runErrors?: Record<string, string>;
   validationIssuesByNode: Record<string, WorkflowDefinitionValidationIssue[]>;
-  selectedId: string | null;
-  setSelectedId: (id: string | null) => void;
+  selection: CanvasSelection;
+  setSelection: React.Dispatch<React.SetStateAction<CanvasSelection>>;
+  highlightedSourceIds: ReadonlySet<string>;
   fullView: boolean;
   onToggleFullView: () => void;
   fitSignal: number;
+  onBeforeSelectionChange: () => void;
+  onBeginTransaction: () => void;
+  onCommitTransaction: () => void;
+  onCancelTransaction: () => void;
 }) {
   const [pan, setPan] = useState({ x: 0, y: -40 });
   const [zoom, setZoom] = useState(0.85);
   const [drag, setDrag] = useState<DragState | null>(null);  // { kind: "node"|"pan", id, ox, oy }
   const [connect, setConnect] = useState<ConnectState | null>(null);
   const [hoverEdge, setHoverEdge] = useState<number | null>(null);
-  const [selectedEdgeKey, setSelectedEdgeKey] = useState<string | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const pointers = useRef<Map<number, Point>>(new Map());
   const pinch = useRef<{ dist: number; cx: number; cy: number } | null>(null);
@@ -351,13 +499,23 @@ function FlowCanvas({
   // screen px. Below it, the press stays a tap — so touch jitter neither nudges
   // the node nor suppresses the synthetic click that selects it.
   const movedRef = useRef(false);
+  const selectionHandledOnPointerDownRef = useRef(false);
+  const edgePointerFocusRef = useRef<string | null>(null);
   // Mirror latest pan/zoom for the native wheel listener (attached once).
   const viewRef = useRef({ pan, zoom });
   viewRef.current = { pan, zoom };
 
+  const edgeKeys = useMemo(
+    () => new Set(edges.map((_, index) => edgeInstanceKey(edges, index))),
+    [edges],
+  );
+  const nodeIds = useMemo(() => new Set(nodes.map((node) => node.id)), [nodes]);
   useEffect(() => {
-    setSelectedEdgeKey((current) => reconcileSelectedEdgeKey(current, edges, selectedId));
-  }, [edges, selectedId]);
+    setSelection((current) =>
+      reconcileCanvasSelection(current, nodeIds, edgeKeys),
+    );
+  }, [edgeKeys, nodeIds, setSelection]);
+  const selectedId = selection.primaryNodeId;
 
   // Convert a client point into canvas (unscaled) coordinates.
   const toCanvas = useCallback((clientX: number, clientY: number): Point => {
@@ -484,39 +642,95 @@ function FlowCanvas({
       movedRef.current = true;
       const dx = dxPx / zoom;
       const dy = dyPx / zoom;
-      onNodesChange((prev) => prev.map(n => n.id === drag.id ? { ...n, x: drag.ox + dx, y: drag.oy + dy } : n));
+      onNodesChange((prev) =>
+        prev.map((node) => {
+          const origin = drag.positions[node.id];
+          return origin
+            ? { ...node, x: origin.x + dx, y: origin.y + dy }
+            : node;
+        }),
+      );
     } else if (drag.kind === "pan") {
       setPan({ x: drag.ox + (e.clientX - drag.startX), y: drag.oy + (e.clientY - drag.startY) });
+    } else {
+      const bend = toCanvas(e.clientX, e.clientY);
+      onEdgeGeometryChange((current) => ({
+        ...current,
+        [drag.edgeId]: { bend },
+      }));
     }
   };
   // Drop on empty canvas cancels an in-progress connection.
   const onPointerUp = (e: React.PointerEvent) => {
     pointers.current.delete(e.pointerId);
     pinch.current = null;
+    if (drag?.kind === "node" || drag?.kind === "edge") {
+      onCommitTransaction();
+    }
     setDrag(null);
     // On touch, keep an armed connection alive until the user taps a target
     // input port (completes) or empty canvas (cancels); mouse release ends drag-connect.
     if (e.pointerType !== "touch") setConnect(null);
   };
+  const onPointerCancel = (e: React.PointerEvent) => {
+    pointers.current.delete(e.pointerId);
+    pinch.current = null;
+    selectionHandledOnPointerDownRef.current = false;
+    edgePointerFocusRef.current = null;
+    if (drag?.kind === "node" || drag?.kind === "edge") {
+      onCancelTransaction();
+    }
+    setDrag(null);
+    setConnect(null);
+  };
 
   const startNodeDrag = useCallback((e: React.PointerEvent, node: FlowNodeDef) => {
     e.stopPropagation();
     if (!canEdit) return;
+    onBeginTransaction();
     e.currentTarget.setPointerCapture?.(e.pointerId);
     movedRef.current = false;
-    setDrag({ kind: "node", id: node.id, ox: node.x, oy: node.y, startX: e.clientX, startY: e.clientY, pointerId: e.pointerId });
-  }, [canEdit]);
+    const selectedNodeIds = dragSelectionNodeIds(selection, node.id);
+    selectionHandledOnPointerDownRef.current =
+      !selection.nodeIds.includes(node.id);
+    if (!selection.nodeIds.includes(node.id)) {
+      setSelection((current) =>
+        selectCanvasNode(current, node.id, isAdditiveCanvasSelection(e)),
+      );
+    }
+    const selectedSet = new Set(selectedNodeIds);
+    setDrag({
+      kind: "node",
+      positions: Object.fromEntries(
+        nodes
+          .filter((candidate) => selectedSet.has(candidate.id))
+          .map((candidate) => [
+            candidate.id,
+            { x: candidate.x, y: candidate.y },
+          ]),
+      ),
+      startX: e.clientX,
+      startY: e.clientY,
+      pointerId: e.pointerId,
+    });
+  }, [
+    canEdit,
+    nodes,
+    onBeginTransaction,
+    selection,
+    setSelection,
+  ]);
   const startPanDrag = (e: React.PointerEvent) => {
     // Node pointerdown stops propagation, so this only fires for empty canvas hits.
     // Bottom-corner control overlays also stopPropagation in their handlers.
+    onBeforeSelectionChange();
     pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
     if (e.pointerType === "touch" && connect) {
       pointers.current.delete(e.pointerId);
       setConnect(null);
       return;
     }
-    setSelectedId(null);
-    setSelectedEdgeKey(null);
+    setSelection(EMPTY_CANVAS_SELECTION);
     e.currentTarget.setPointerCapture?.(e.pointerId);
     setDrag({ kind: "pan", ox: pan.x, oy: pan.y, startX: e.clientX, startY: e.clientY, pointerId: e.pointerId });
   };
@@ -532,10 +746,28 @@ function FlowCanvas({
     if (connect && connect.from !== nodeId) onAddEdge(connect.from, connect.fromPort, nodeId);
     setConnect(null);
   }, [connect, onAddEdge]);
-  const selectNode = useCallback((nodeId: string) => {
-    setSelectedEdgeKey(null);
-    setSelectedId(nodeId);
-  }, [setSelectedId]);
+  const selectNode = useCallback((
+    nodeId: string,
+    event: React.MouseEvent,
+  ) => {
+    if (movedRef.current) {
+      movedRef.current = false;
+      selectionHandledOnPointerDownRef.current = false;
+      return;
+    }
+    if (selectionHandledOnPointerDownRef.current) {
+      selectionHandledOnPointerDownRef.current = false;
+      return;
+    }
+    onBeforeSelectionChange();
+    setSelection((current) =>
+      selectCanvasNode(
+        current,
+        nodeId,
+        isAdditiveCanvasSelection(event.nativeEvent),
+      ),
+    );
+  }, [onBeforeSelectionChange, setSelection]);
 
   // For edges
   const nodeById = useMemo(() => Object.fromEntries(nodes.map(n => [n.id, n])), [nodes]);
@@ -565,6 +797,34 @@ function FlowCanvas({
     }
     return map;
   }, [nodes, failureUsed, selectedId, canEdit, schemaVersion]);
+  const onPortKeyStart = useCallback(
+    (nodeId: string, portId: string) => {
+      if (!canEdit) return;
+      const node = nodes.find((candidate) => candidate.id === nodeId);
+      if (!node) return;
+      const ports = portsByNode[nodeId] ?? [];
+      const index = Math.max(0, ports.indexOf(portId));
+      setConnect((current) =>
+        current?.from === nodeId && current.fromPort === portId
+          ? null
+          : {
+              from: nodeId,
+              fromPort: portId,
+              cursor: outPortPos(node, index, ports.length || 1),
+            },
+      );
+    },
+    [canEdit, nodes, portsByNode],
+  );
+  const onPortKeyEnd = useCallback(
+    (nodeId: string) => {
+      if (connect && connect.from !== nodeId) {
+        onAddEdge(connect.from, connect.fromPort, nodeId);
+      }
+      setConnect(null);
+    },
+    [connect, onAddEdge],
+  );
 
   // Edges that close a cycle (their target can already reach their source) are
   // drawn dashed. Recomputed only when the edge set changes.
@@ -573,6 +833,7 @@ function FlowCanvas({
     for (const e of edges) if (isBackEdge(edges, e)) set.add(edgeKey(e));
     return set;
   }, [edges]);
+  const grid = canvasGridMetrics(pan, zoom);
 
   return (
     <div
@@ -585,7 +846,7 @@ function FlowCanvas({
       // one move in. Capture guarantees a real pointerup/cancel, so only use
       // pointerleave as the desktop mouse-left-the-window fallback.
       onPointerLeave={(e) => { if (e.pointerType !== "touch") onPointerUp(e); }}
-      onPointerCancel={onPointerUp}
+      onPointerCancel={onPointerCancel}
       onDragOver={(e) => {
         if (e.dataTransfer.types.includes("application/x-flow-node")) {
           e.preventDefault();
@@ -602,8 +863,8 @@ function FlowCanvas({
       className={`flow-canvas-bg flex-1 relative overflow-hidden touch-none bg-[#FAFBFC] ${drag?.kind === "pan" ? "cursor-grabbing" : "cursor-grab"}`}
       style={{
         backgroundImage: "radial-gradient(circle, #D2D6DA 1px, transparent 1px)",
-        backgroundSize: "20px 20px",
-        backgroundPosition: pan.x + "px " + pan.y + "px",
+        backgroundSize: `${grid.size}px ${grid.size}px`,
+        backgroundPosition: `${grid.offset.x}px ${grid.offset.y}px`,
       }}
     >
       {/* Inner scaled layer */}
@@ -633,23 +894,40 @@ function FlowCanvas({
             const idx = ports.indexOf(port);
             const p1 = outPortPos(a, idx < 0 ? 0 : idx, ports.length || 1);
             const p2 = inPortPos(b);
-            const selected = selectedEdgeKey === key;
-            const isActive = selected || selectedId === a.id || selectedId === b.id;
+            const geometry = e.id ? edgeGeometry[e.id] : undefined;
+            const path = bezier(p1, p2, geometry);
+            const selected = selection.edgeKeys.includes(key);
+            const isActive =
+              selected ||
+              selection.nodeIds.includes(a.id) ||
+              selection.nodeIds.includes(b.id);
             const stroke = isActive ? "#3C43E7" : "#9EA3AA";
             const hovered = hoverEdge === i;
             const showDelete = edgeDeleteActionVisible({ canEdit, hovered, selected });
-            const mx = (p1.x + p2.x) / 2, my = (p1.y + p2.y) / 2;
+            const automaticBend = automaticEdgeBendPoint(p1, p2);
+            const bend = geometry?.bend ?? automaticBend;
+            const mx = bend.x;
+            const my = bend.y;
             const back = backEdgeKeys.has(edgeKey(e));
             const labelPort = e.fromPort !== undefined && e.fromPort !== defaultPort(a.type) ? e.fromPort : null;
             const connectionLabel = `Connection ${port} from ${a.name || a.id} to ${b.name || b.id}`;
-            const selectConnection = () => {
-              setSelectedId(null);
-              setSelectedEdgeKey(key);
+            const selectConnection = (
+              additive = false,
+            ) => {
+              onBeforeSelectionChange();
+              setSelection((current) =>
+                selectCanvasEdge(current, key, additive),
+              );
             };
             const deleteConnection = () => {
               onRemoveEdge(key);
               setHoverEdge(null);
-              setSelectedEdgeKey(null);
+              setSelection((current) => ({
+                ...current,
+                edgeKeys: current.edgeKeys.filter(
+                  (candidate) => candidate !== key,
+                ),
+              }));
             };
             return (
               <g
@@ -658,7 +936,7 @@ function FlowCanvas({
                 onMouseLeave={() => setHoverEdge((h) => (h === i ? null : h))}
               >
                 <path
-                  d={bezier(p1, p2)}
+                  d={path}
                   stroke={hovered ? "#D14343" : stroke}
                   strokeWidth={isActive || hovered ? 2 : 1.5}
                   strokeDasharray={back ? "6 6" : undefined}
@@ -668,7 +946,7 @@ function FlowCanvas({
                 />
                 {/* Fat transparent hit area so the thin edge is easy to hover */}
                 <path
-                  d={bezier(p1, p2)}
+                  d={path}
                   stroke="transparent"
                   strokeWidth={18}
                   fill="none"
@@ -676,19 +954,38 @@ function FlowCanvas({
                   tabIndex={0}
                   aria-label={`Select ${connectionLabel}`}
                   aria-pressed={selected}
-                  onPointerDown={(ev) => ev.stopPropagation()}
+                  onPointerDown={(ev) => {
+                    onBeforeSelectionChange();
+                    edgePointerFocusRef.current = key;
+                    ev.stopPropagation();
+                  }}
+                  onPointerUp={() => {
+                    if (edgePointerFocusRef.current === key) {
+                      edgePointerFocusRef.current = null;
+                    }
+                  }}
+                  onPointerCancel={() => {
+                    if (edgePointerFocusRef.current === key) {
+                      edgePointerFocusRef.current = null;
+                    }
+                  }}
                   onClick={(ev) => {
                     ev.stopPropagation();
-                    selectConnection();
+                    edgePointerFocusRef.current = null;
+                    selectConnection(isAdditiveCanvasSelection(ev.nativeEvent));
                   }}
-                  onFocus={selectConnection}
+                  onFocus={() => {
+                    if (edgePointerFocusRef.current !== key) {
+                      selectConnection(false);
+                    }
+                  }}
                   onKeyDown={(ev) => {
                     const action = edgeKeyboardAction(ev.key, canEdit);
                     if (!action) return;
                     ev.preventDefault();
                     ev.stopPropagation();
                     if (action === "delete") deleteConnection();
-                    else selectConnection();
+                    else selectConnection(false);
                   }}
                   style={{ pointerEvents: "stroke", cursor: "pointer" }}
                 />
@@ -703,7 +1000,7 @@ function FlowCanvas({
                 {/* Hover or select to reveal the delete action at the edge midpoint. */}
                 {showDelete && (
                   <g
-                    transform={`translate(${mx}, ${my})`}
+                    transform={`translate(${selected && e.id ? mx - 26 : mx}, ${my})`}
                     className="group outline-none"
                     style={{ cursor: "pointer", pointerEvents: "auto", touchAction: "manipulation" }}
                     role="button"
@@ -738,6 +1035,142 @@ function FlowCanvas({
                     />
                   </g>
                 )}
+                {selected && e.id && canEdit && (
+                  <>
+                    <g
+                      transform={`translate(${mx}, ${my})`}
+                      role="button"
+                      tabIndex={0}
+                      aria-label={`Adjust bend for ${connectionLabel}`}
+                      className="group outline-none"
+                      style={{
+                        cursor: "move",
+                        pointerEvents: "auto",
+                        touchAction: "none",
+                      }}
+                      onPointerDown={(event) => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        event.currentTarget.setPointerCapture?.(
+                          event.pointerId,
+                        );
+                        onBeginTransaction();
+                        setDrag({
+                          kind: "edge",
+                          edgeId: e.id!,
+                          pointerId: event.pointerId,
+                        });
+                      }}
+                      onKeyDown={(event) => {
+                        const step = (event.shiftKey ? 1 : 8) / zoom;
+                        const delta =
+                          event.key === "ArrowLeft"
+                            ? { x: -step, y: 0 }
+                            : event.key === "ArrowRight"
+                              ? { x: step, y: 0 }
+                              : event.key === "ArrowUp"
+                                ? { x: 0, y: -step }
+                                : event.key === "ArrowDown"
+                                  ? { x: 0, y: step }
+                                  : null;
+                        if (!delta) return;
+                        event.preventDefault();
+                        event.stopPropagation();
+                        onEdgeGeometryChange((current) => ({
+                          ...current,
+                          [e.id!]: nudgeEdgeGeometry(
+                            current[e.id!],
+                            delta,
+                            automaticBend,
+                          ),
+                        }));
+                      }}
+                    >
+                      <circle
+                        r={9}
+                        fill="#fff"
+                        stroke="#3C43E7"
+                        strokeWidth={2}
+                      />
+                      <circle
+                        r={3}
+                        fill="#3C43E7"
+                        className="pointer-events-none"
+                      />
+                      <circle
+                        r={13}
+                        fill="none"
+                        stroke="#3C43E7"
+                        strokeWidth={2 / zoom}
+                        className="pointer-events-none opacity-0 group-focus-visible:opacity-100"
+                      />
+                    </g>
+                    {geometry && (
+                      <g
+                        transform={`translate(${mx + 26}, ${my})`}
+                        role="button"
+                        tabIndex={0}
+                        aria-label={`Reset ${connectionLabel} to automatic routing`}
+                        className="group outline-none"
+                        style={{
+                          cursor: "pointer",
+                          pointerEvents: "auto",
+                        }}
+                        onPointerDown={(event) => event.stopPropagation()}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          onEdgeGeometryChange((current) => {
+                            const next = { ...current };
+                            delete next[e.id!];
+                            return next;
+                          });
+                        }}
+                        onKeyDown={(event) => {
+                          if (
+                            event.key !== "Enter" &&
+                            event.key !== " "
+                          ) {
+                            return;
+                          }
+                          event.preventDefault();
+                          event.stopPropagation();
+                          onEdgeGeometryChange((current) => {
+                            const next = { ...current };
+                            delete next[e.id!];
+                            return next;
+                          });
+                        }}
+                      >
+                        <circle
+                          r={9}
+                          fill="#fff"
+                          stroke="#6B7280"
+                          strokeWidth={1.5}
+                        />
+                        <text
+                          x={0}
+                          y={3.5}
+                          textAnchor="middle"
+                          fontSize={10}
+                          fontWeight={700}
+                          fill="#4B5563"
+                          style={{
+                            fontFamily: '"JetBrains Mono", monospace',
+                          }}
+                        >
+                          ↺
+                        </text>
+                        <circle
+                          r={13}
+                          fill="none"
+                          stroke="#3C43E7"
+                          strokeWidth={2 / zoom}
+                          className="pointer-events-none opacity-0 group-focus-visible:opacity-100"
+                        />
+                      </g>
+                    )}
+                  </>
+                )}
               </g>
             );
           })}
@@ -769,14 +1202,17 @@ function FlowCanvas({
             node={n}
             options={options}
             canEdit={canEdit}
-            selected={selectedId === n.id}
+            selected={selection.nodeIds.includes(n.id)}
+            dataSourceHighlighted={highlightedSourceIds.has(n.id)}
             locked={isTriggerBlockType(n.type) && triggerCount === 1}
             outPorts={portsByNode[n.id] ?? []}
             onSelect={selectNode}
-            onDelete={onDeleteNode}
+            onRequestDelete={onDeleteNode}
             onDragStart={startNodeDrag}
             onPortDown={onPortDown}
             onPortUp={onPortUp}
+            onPortKeyStart={onPortKeyStart}
+            onPortKeyEnd={onPortKeyEnd}
             runStatus={runStatuses?.[n.id]}
             runError={runErrors?.[n.id]}
             validationIssues={validationIssuesByNode[n.id] ?? []}
@@ -798,13 +1234,23 @@ function FlowCanvas({
         >{fullView ? "⤡" : "⤢"}</button>
         <div className="h-px bg-neutral-200 mx-1" />
         {[
-          { label: "+", onClick: () => setZoom(z => Math.min(1.4, z + 0.1)) },
-          { label: "−", onClick: () => setZoom(z => Math.max(0.4, z - 0.1)) },
-          { label: "⊡", onClick: () => fit() },
+          {
+            label: "+",
+            name: "Zoom in",
+            onClick: () => setZoom(z => Math.min(1.4, z + 0.1)),
+          },
+          {
+            label: "−",
+            name: "Zoom out",
+            onClick: () => setZoom(z => Math.max(0.4, z - 0.1)),
+          },
+          { label: "⊡", name: "Fit workflow", onClick: () => fit() },
         ].map((b, i) => (
           <button
             key={i}
             onClick={(e) => { e.stopPropagation(); b.onClick(); }}
+            title={b.name}
+            aria-label={b.name}
             className="appearance-none border-none bg-transparent cursor-pointer w-[26px] h-[26px] rounded-xs font-mono text-sm text-coal hover:bg-app-bg"
           >{b.label}</button>
         ))}
@@ -820,11 +1266,22 @@ function FlowCanvas({
 export function FlowEditor({
   nodes,
   edges,
+  edgeGeometry,
   schemaVersion,
   limits,
   onLimitsChange,
   onNodesChange,
+  onNodePositionsChange,
   onEdgesChange,
+  onEdgeGeometryChange,
+  onGraphChange,
+  canUndo,
+  canRedo,
+  onUndo,
+  onRedo,
+  onBeginTransaction,
+  onCommitTransaction,
+  onCancelTransaction,
   canEdit,
   dirty,
   saveEnabled,
@@ -846,11 +1303,30 @@ export function FlowEditor({
 }: {
   nodes: FlowNodeDef[];
   edges: FlowEdgeDef[];
+  edgeGeometry: Record<string, WorkflowEdgeGeometry>;
   schemaVersion: 1 | 2;
   limits: WorkflowExecutionBudgets;
   onLimitsChange: (limits: WorkflowExecutionBudgets) => void;
   onNodesChange: React.Dispatch<React.SetStateAction<FlowNodeDef[]>>;
+  onNodePositionsChange: React.Dispatch<
+    React.SetStateAction<FlowNodeDef[]>
+  >;
   onEdgesChange: React.Dispatch<React.SetStateAction<FlowEdgeDef[]>>;
+  onEdgeGeometryChange: React.Dispatch<
+    React.SetStateAction<Record<string, WorkflowEdgeGeometry>>
+  >;
+  onGraphChange: (next: {
+    nodes: FlowNodeDef[];
+    edges: FlowEdgeDef[];
+    edgeGeometry: Record<string, WorkflowEdgeGeometry>;
+  }) => void;
+  canUndo: boolean;
+  canRedo: boolean;
+  onUndo: () => void;
+  onRedo: () => void;
+  onBeginTransaction: () => void;
+  onCommitTransaction: () => void;
+  onCancelTransaction: () => void;
   canEdit: boolean;
   dirty: boolean;
   saveEnabled: boolean;
@@ -870,12 +1346,65 @@ export function FlowEditor({
   onSelectionChange?: (nodeId: string | null) => void;
   definitionId?: number;
 }) {
-  const [selectedId, setSelectedId] = useState<string | null>(() =>
-    initialSelectedId && nodes.some((n) => n.id === initialSelectedId) ? initialSelectedId : null,
+  const [selection, setSelection] = useState<CanvasSelection>(() =>
+    initialSelectedId && nodes.some((n) => n.id === initialSelectedId)
+      ? {
+          nodeIds: [initialSelectedId],
+          edgeKeys: [],
+          primaryNodeId: initialSelectedId,
+        }
+      : EMPTY_CANVAS_SELECTION,
   );
+  const selectedId = selection.primaryNodeId;
+  const setSelectedId = useCallback((nodeId: string | null) => {
+    setSelection(
+      nodeId
+        ? { nodeIds: [nodeId], edgeKeys: [], primaryNodeId: nodeId }
+        : EMPTY_CANVAS_SELECTION,
+    );
+  }, []);
+  const [highlightedSourceIds, setHighlightedSourceIds] = useState<string[]>([]);
   const [fullView, setFullView] = useState(false);
   const isMobile = useIsMobileViewport();
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [interactionError, setInteractionError] = useState<string | null>(
+    null,
+  );
+  const [clipboardIssues, setClipboardIssues] = useState<
+    WorkflowDefinitionValidationIssue[]
+  >([]);
+  const [pendingContextDelete, setPendingContextDelete] =
+    useState<CanvasSelection | null>(null);
+  const editingSurfaceRef = useRef<HTMLElement | null>(null);
+  const editorRootRef = useRef<HTMLDivElement | null>(null);
+  const deleteDialogRef = useRef<HTMLDivElement | null>(null);
+  const deleteDialogRestoreFocusRef = useRef<HTMLElement | null>(null);
+  const [shortcutPlatform, setShortcutPlatform] = useState<"mac" | "other">(
+    "other",
+  );
+
+  useEffect(() => {
+    if (/Mac|iPhone|iPad|iPod/.test(navigator.platform)) {
+      setShortcutPlatform("mac");
+    }
+  }, []);
+
+  const finalizeEditingSurfaceTransaction = useCallback(() => {
+    finishEditingSurfaceTransaction({
+      hasActiveSurface: () => editingSurfaceRef.current !== null,
+      clearActiveSurface: () => {
+        editingSurfaceRef.current = null;
+      },
+      commitTransaction: onCommitTransaction,
+    });
+  }, [onCommitTransaction]);
+  const beginCanvasTransaction = useCallback(() => {
+    finalizeEditingSurfaceTransaction();
+    onBeginTransaction();
+  }, [finalizeEditingSurfaceTransaction, onBeginTransaction]);
+  const closeContextDelete = useCallback(() => {
+    setPendingContextDelete(null);
+  }, []);
 
   useEffect(() => {
     onSelectionChange?.(selectedId);
@@ -889,11 +1418,38 @@ export function FlowEditor({
   }, [fullView]);
 
   const selected = selectedId ? nodes.find(n => n.id === selectedId) ?? null : null;
+  const highlightedSourceIdSet = useMemo(
+    () => new Set(highlightedSourceIds),
+    [highlightedSourceIds],
+  );
+  const highlightReference = useCallback(
+    (value: string | null) => {
+      setHighlightedSourceIds(
+        value ? sourceNodeIdsForReference(value, nodes) : [],
+      );
+    },
+    [nodes],
+  );
   const triggerCount = nodes.filter(n => isTriggerBlockType(n.type)).length;
   const selectedLocked = selected ? isTriggerBlockType(selected.type) && triggerCount === 1 : false;
+  useEffect(() => {
+    if (validation.status === "checking") return;
+    setClipboardIssues((current) => (current.length === 0 ? current : []));
+  }, [validation.issues, validation.status]);
+  const effectiveValidation = useMemo<WorkflowValidationState>(
+    () =>
+      clipboardIssues.length === 0
+        ? validation
+        : {
+            ...validation,
+            status: "invalid",
+            issues: [...validation.issues, ...clipboardIssues],
+          },
+    [clipboardIssues, validation],
+  );
   const groupedValidationIssues = useMemo(
-    () => groupValidationIssues(validation.issues),
-    [validation.issues],
+    () => groupValidationIssues(effectiveValidation.issues),
+    [effectiveValidation.issues],
   );
   const nodeNames = useMemo(
     () => Object.fromEntries(nodes.map((node) => [node.id, node.name || node.id])),
@@ -954,8 +1510,11 @@ export function FlowEditor({
         existingNodes: nodes,
         existingEdges: edges,
       });
-      onNodesChange((prev) => [...prev, ...instantiated.nodes]);
-      onEdgesChange((prev) => [...prev, ...instantiated.edges]);
+      onGraphChange({
+        nodes: [...nodes, ...instantiated.nodes],
+        edges: [...edges, ...instantiated.edges],
+        edgeGeometry,
+      });
       setSelectedId(instantiated.selectedNodeId);
       return;
     }
@@ -1006,7 +1565,19 @@ export function FlowEditor({
   };
 
   const removeEdge = (instanceKey: string) => {
-    onEdgesChange(prev => removeEdgeFromList(prev, instanceKey));
+    const removedIndex = edges.findIndex(
+      (_, index) => edgeInstanceKey(edges, index) === instanceKey,
+    );
+    if (removedIndex < 0) return;
+    const removedEdge = removedIndex >= 0 ? edges[removedIndex] : undefined;
+    const nextEdges = removeEdgeFromList(edges, instanceKey);
+    const nextGeometry = { ...edgeGeometry };
+    if (removedEdge?.id) delete nextGeometry[removedEdge.id];
+    onGraphChange({
+      nodes,
+      edges: nextEdges,
+      edgeGeometry: nextGeometry,
+    });
   };
 
   const updateSelected = (path: string, value: WorkflowParamValue | PromptSourceRef | undefined) => {
@@ -1085,19 +1656,230 @@ export function FlowEditor({
       ),
     );
   };
-  const deleteNode = (nodeId: string) => {
-    const result = removeNodeFromGraph(nodes, edges, nodeId);
-    if (!result.removed) return;
-    onNodesChange(result.nodes);
-    onEdgesChange(result.edges);
-    if (selectedId === nodeId) setSelectedId(null);
-  };
-  const deleteSelected = () => {
-    if (selected) deleteNode(selected.id);
-  };
+  const deleteCanvasSelection = useCallback(
+    (target: CanvasSelection) => {
+      const result = removeSelectionFromGraph(nodes, edges, target);
+      if (result.blocker === "trigger_required") {
+        setInteractionError(
+          "A workflow must keep at least one trigger. Add another trigger before deleting this selection.",
+        );
+        return;
+      }
+      if (!result.removed) return;
+      const retainedEdgeIds = new Set(
+        result.edges.flatMap((edge) => (edge.id ? [edge.id] : [])),
+      );
+      onGraphChange({
+        nodes: result.nodes,
+        edges: result.edges,
+        edgeGeometry: Object.fromEntries(
+          Object.entries(edgeGeometry).filter(([edgeId]) =>
+            retainedEdgeIds.has(edgeId),
+          ),
+        ),
+      });
+      setSelection(EMPTY_CANVAS_SELECTION);
+      setHighlightedSourceIds([]);
+      setInteractionError(null);
+    },
+    [edgeGeometry, edges, nodes, onGraphChange],
+  );
+  const requestContextDelete = useCallback(
+    (nodeId: string) => {
+      finalizeEditingSurfaceTransaction();
+      const target = selection.nodeIds.includes(nodeId)
+        ? selection
+        : {
+            nodeIds: [nodeId],
+            edgeKeys: [],
+            primaryNodeId: nodeId,
+          };
+      deleteDialogRestoreFocusRef.current =
+        document.activeElement instanceof HTMLElement
+          ? document.activeElement
+          : null;
+      setSelection(target);
+      setPendingContextDelete(target);
+    },
+    [finalizeEditingSurfaceTransaction, selection],
+  );
+  const deleteSelected = useCallback(
+    () => deleteCanvasSelection(selection),
+    [deleteCanvasSelection, selection],
+  );
+
+  const copySelection = useCallback(() => {
+    const payload = createWorkflowClipboardPayload<WorkflowEdgeGeometry>({
+      schemaVersion,
+      nodes,
+      edges,
+      selectedNodeIds: selection.nodeIds,
+      edgeGeometry,
+    });
+    if (!payload) {
+      setInteractionError("Select one or more blocks to copy.");
+      return;
+    }
+    fallbackWorkflowClipboard = payload;
+    try {
+      writeSessionWorkflowClipboard(window.sessionStorage, payload);
+    } catch {
+      // The module-scoped fallback still preserves the clipboard this session.
+    }
+    setInteractionError(null);
+  }, [edgeGeometry, edges, nodes, schemaVersion, selection.nodeIds]);
+
+  const pasteSelection = useCallback(() => {
+    let stored: WorkflowClipboardPayload<WorkflowEdgeGeometry> | null = null;
+    try {
+      stored = readSessionWorkflowClipboard<WorkflowEdgeGeometry>(
+        window.sessionStorage,
+      );
+    } catch {
+      // Fall through to the module-scoped clipboard.
+    }
+    const payload = stored ?? fallbackWorkflowClipboard;
+    if (!payload) {
+      setInteractionError("Copy one or more blocks before pasting.");
+      return;
+    }
+    const result = planWorkflowClipboardPaste({
+      payload,
+      schemaVersion,
+      destinationNodes: nodes,
+      destinationEdges: edges,
+      destinationEdgeGeometry: edgeGeometry,
+      offsetEdgeGeometry,
+    });
+    if (!result.ok) {
+      setInteractionError(
+        result.reason === "schema_version_mismatch"
+          ? "Copied blocks come from a different workflow definition version."
+          : "The copied selection is empty.",
+      );
+      return;
+    }
+    onGraphChange({
+      nodes: result.nodes,
+      edges: result.edges,
+      edgeGeometry: result.edgeGeometry,
+    });
+    setSelection({
+      nodeIds: result.selectedNodeIds,
+      edgeKeys: result.selectedEdgeKeys,
+      primaryNodeId: result.selectedNodeIds.at(-1) ?? null,
+    });
+    setClipboardIssues(result.issues);
+    fallbackWorkflowClipboard = result.nextClipboard;
+    try {
+      writeSessionWorkflowClipboard(
+        window.sessionStorage,
+        result.nextClipboard,
+      );
+    } catch {
+      // The module-scoped fallback still preserves the clipboard this session.
+    }
+    setInteractionError(null);
+  }, [edgeGeometry, edges, nodes, onGraphChange, schemaVersion]);
+
+  useEffect(() => {
+    const handleKeyboard = (event: KeyboardEvent) => {
+      if (pendingContextDelete) return;
+      const action = workflowEditorKeyboardAction(event, { canEdit });
+      if (!action) return;
+      event.preventDefault();
+      if (action === "undo") onUndo();
+      else if (action === "redo") onRedo();
+      else if (action === "copy") copySelection();
+      else if (action === "paste") pasteSelection();
+      else deleteSelected();
+    };
+    window.addEventListener("keydown", handleKeyboard);
+    return () => window.removeEventListener("keydown", handleKeyboard);
+  }, [
+    canEdit,
+    copySelection,
+    deleteSelected,
+    onRedo,
+    onUndo,
+    pasteSelection,
+    pendingContextDelete,
+  ]);
+
+  useEffect(() => {
+    if (!pendingContextDelete) return;
+    const dialog = deleteDialogRef.current;
+    if (!dialog) return;
+    const restoreFocus = deleteDialogRestoreFocusRef.current;
+    const handleDialogKeyboard = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        closeContextDelete();
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const focusable = Array.from(
+        dialog.querySelectorAll<HTMLElement>(
+          'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+        ),
+      ).filter((element) => !element.hidden);
+      const targetIndex = wrappedDialogTabIndex({
+        activeIndex: focusable.indexOf(
+          document.activeElement as HTMLElement,
+        ),
+        focusableCount: focusable.length,
+        shiftKey: event.shiftKey,
+      });
+      if (targetIndex === null) return;
+      event.preventDefault();
+      focusable[targetIndex]?.focus();
+    };
+    window.addEventListener("keydown", handleDialogKeyboard, true);
+    return () => {
+      window.removeEventListener("keydown", handleDialogKeyboard, true);
+      queueMicrotask(() => {
+        if (restoreFocus?.isConnected) restoreFocus.focus();
+        else editorRootRef.current?.focus();
+      });
+    };
+  }, [closeContextDelete, pendingContextDelete]);
+
+  const handleEditorFocusCapture = useCallback(
+    (event: React.FocusEvent) => {
+      if (!canEdit || editingSurfaceRef.current) return;
+      const surface = editableSurfaceFromTarget(event.target);
+      if (!surface) return;
+      editingSurfaceRef.current = surface;
+      onBeginTransaction();
+    },
+    [canEdit, onBeginTransaction],
+  );
+  const handleEditorBlurCapture = useCallback(
+    (event: React.FocusEvent) => {
+      const surface = editingSurfaceRef.current;
+      if (!surface) return;
+      if (
+        event.relatedTarget instanceof Node &&
+        surface.contains(event.relatedTarget)
+      ) {
+        return;
+      }
+      editingSurfaceRef.current = null;
+      onCommitTransaction();
+    },
+    [onCommitTransaction],
+  );
+  const displayedError = interactionError ?? error;
 
   return (
-    <div className={`flex flex-col min-h-0 ${fullView ? "fixed inset-0 z-50 bg-app-bg" : "h-full"}`}>
+    <div
+      ref={editorRootRef}
+      tabIndex={-1}
+      className={`flex flex-col min-h-0 ${fullView ? "fixed inset-0 z-50 bg-app-bg" : "h-full"}`}
+      onFocusCapture={handleEditorFocusCapture}
+      onBlurCapture={handleEditorBlurCapture}
+    >
       {/* Editor toolbar */}
       <div className="flex items-center gap-4 py-3 px-6 bg-panel border-b border-neutral-200">
         <div className="flex items-center gap-2.5 min-w-0">
@@ -1110,10 +1892,66 @@ export function FlowEditor({
             <span className="rounded-full border border-neutral-200 bg-app-bg px-2 py-0.5 font-mono text-[10px] font-semibold tracking-[0.04em] uppercase text-neutral-600">Read-only</span>
           )}
           <ValidationSummary
-            validation={validation}
+            validation={effectiveValidation}
             nodeNames={nodeNames}
             onSelectNode={setSelectedId}
           />
+          <div
+            className="ml-1 flex items-center gap-1"
+            role="group"
+            aria-label="Workflow editing history and clipboard"
+          >
+            {[
+              {
+                label: "Undo",
+                shortcut: workflowShortcutLabel(
+                  "undo",
+                  shortcutPlatform,
+                ),
+                onClick: onUndo,
+                disabled: !canEdit || !canUndo,
+              },
+              {
+                label: "Redo",
+                shortcut: workflowShortcutLabel(
+                  "redo",
+                  shortcutPlatform,
+                ),
+                onClick: onRedo,
+                disabled: !canEdit || !canRedo,
+              },
+              {
+                label: "Copy",
+                shortcut: workflowShortcutLabel(
+                  "copy",
+                  shortcutPlatform,
+                ),
+                onClick: copySelection,
+                disabled: selection.nodeIds.length === 0,
+              },
+              {
+                label: "Paste",
+                shortcut: workflowShortcutLabel(
+                  "paste",
+                  shortcutPlatform,
+                ),
+                onClick: pasteSelection,
+                disabled: !canEdit,
+              },
+            ].map((action) => (
+              <button
+                key={action.label}
+                type="button"
+                onClick={action.onClick}
+                disabled={action.disabled}
+                title={`${action.label} (${action.shortcut})`}
+                aria-label={`${action.label} (${action.shortcut})`}
+                className="appearance-none rounded-[3px] border border-neutral-200 bg-panel px-2 py-1 font-mono text-[9px] uppercase tracking-[0.04em] text-neutral-700 hover:bg-app-bg disabled:cursor-default disabled:opacity-40"
+              >
+                {action.label}
+              </button>
+            ))}
+          </div>
         </div>
         <div className="ml-auto flex items-center gap-2">
           {headerExtra}
@@ -1127,13 +1965,13 @@ export function FlowEditor({
         </div>
       </div>
       <ExecutionLimitsBar limits={limits} canEdit={canEdit} onChange={onLimitsChange} />
-      {error && (
+      {displayedError && (
         <div
           role="alert"
           data-error-presentation="inline"
           className="px-6 py-2 border-b border-red-300 bg-red-50 font-body text-[12px] text-red-700"
         >
-          {error}
+          {displayedError}
         </div>
       )}
       {/* Editor body */}
@@ -1142,22 +1980,29 @@ export function FlowEditor({
         <FlowCanvas
           nodes={nodes}
           edges={edges}
+          edgeGeometry={edgeGeometry}
           schemaVersion={schemaVersion}
           canEdit={canEdit}
           options={options}
-          onNodesChange={onNodesChange}
+          onNodesChange={onNodePositionsChange}
+          onEdgeGeometryChange={onEdgeGeometryChange}
           onAddEdge={addEdge}
           onRemoveEdge={removeEdge}
-          onDeleteNode={deleteNode}
+          onDeleteNode={requestContextDelete}
           onDropNode={addNode}
           runStatuses={runStatuses ?? {}}
           runErrors={runErrors ?? {}}
           validationIssuesByNode={groupedValidationIssues.byNode}
-          selectedId={selectedId}
-          setSelectedId={setSelectedId}
+          selection={selection}
+          setSelection={setSelection}
+          highlightedSourceIds={highlightedSourceIdSet}
           fullView={fullView}
           onToggleFullView={() => setFullView((v) => !v)}
           fitSignal={fitSignal ?? 0}
+          onBeforeSelectionChange={finalizeEditingSurfaceTransaction}
+          onBeginTransaction={beginCanvasTransaction}
+          onCommitTransaction={onCommitTransaction}
+          onCancelTransaction={onCancelTransaction}
         />
         {selected && !isMobile && (
           <NodeConfig
@@ -1167,8 +2012,8 @@ export function FlowEditor({
             definition={bindingDefinition}
             previewDefinition={previewDefinition}
             definitionId={definitionId}
-            nodeContracts={validation.nodeContracts}
-            availableValues={validation.availableValuesByNode[selected.id] ?? []}
+            nodeContracts={effectiveValidation.nodeContracts}
+            availableValues={effectiveValidation.availableValuesByNode[selected.id] ?? []}
             validationIssues={groupedValidationIssues.byNode[selected.id] ?? []}
             canEdit={canEdit}
             locked={selectedLocked}
@@ -1177,6 +2022,7 @@ export function FlowEditor({
             onV2ConfigurationChange={updateSelectedV2Configuration}
             onDelete={deleteSelected}
             onClose={() => setSelectedId(null)}
+            onReferenceHighlight={highlightReference}
           />
         )}
         {isMobile && (
@@ -1194,8 +2040,8 @@ export function FlowEditor({
                 definition={bindingDefinition}
                 previewDefinition={previewDefinition}
                 definitionId={definitionId}
-                nodeContracts={validation.nodeContracts}
-                availableValues={validation.availableValuesByNode[selected.id] ?? []}
+                nodeContracts={effectiveValidation.nodeContracts}
+                availableValues={effectiveValidation.availableValuesByNode[selected.id] ?? []}
                 validationIssues={groupedValidationIssues.byNode[selected.id] ?? []}
                 canEdit={canEdit}
                 locked={selectedLocked}
@@ -1204,6 +2050,7 @@ export function FlowEditor({
                 onV2ConfigurationChange={updateSelectedV2Configuration}
                 onDelete={deleteSelected}
                 onClose={() => setSelectedId(null)}
+                onReferenceHighlight={highlightReference}
                 embedded
               />
             )}
@@ -1222,6 +2069,59 @@ export function FlowEditor({
           </MobileSheet>
         )}
       </div>
+      {pendingContextDelete && (
+        <div
+          className="fixed inset-0 z-[70] flex items-center justify-center bg-black/25 p-4"
+          role="presentation"
+          onPointerDown={(event) => {
+            if (event.target === event.currentTarget) {
+              closeContextDelete();
+            }
+          }}
+        >
+          <div
+            ref={deleteDialogRef}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="confirm-canvas-delete-title"
+            className="w-full max-w-sm rounded-[4px] border border-neutral-200 bg-panel p-5 shadow-xl"
+          >
+            <h2
+              id="confirm-canvas-delete-title"
+              className="font-display text-base font-semibold text-coal"
+            >
+              Delete canvas selection?
+            </h2>
+            <p className="mt-2 font-body text-sm text-neutral-600">
+              This removes{" "}
+              {pendingContextDelete.nodeIds.length === 1
+                ? "this block"
+                : `${pendingContextDelete.nodeIds.length} selected blocks`}{" "}
+              and their connected edges. You can undo the change.
+            </p>
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                type="button"
+                autoFocus
+                onClick={closeContextDelete}
+                className="appearance-none rounded-[3px] border border-neutral-200 bg-panel px-3 py-1.5 font-mono text-[11px] uppercase text-neutral-700"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  deleteCanvasSelection(pendingContextDelete);
+                  closeContextDelete();
+                }}
+                className="appearance-none rounded-[3px] border border-red-600 bg-red-600 px-3 py-1.5 font-mono text-[11px] uppercase text-white"
+              >
+                Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -1243,6 +2143,7 @@ function NodeConfig({
   onV2ConfigurationChange,
   onDelete,
   onClose,
+  onReferenceHighlight,
   embedded,
 }: {
   node: FlowNodeDef;
@@ -1264,6 +2165,7 @@ function NodeConfig({
   onV2ConfigurationChange: (configuration: Record<string, JsonValue>) => void;
   onDelete: () => void;
   onClose: () => void;
+  onReferenceHighlight: (value: string | null) => void;
   embedded?: boolean;
 }) {
   const cat = blockPresentation(options, node.type);
@@ -1296,7 +2198,20 @@ function NodeConfig({
         />
       </div>
 
-      <div className="flex-1 overflow-auto">
+      <div
+        className="flex-1 overflow-auto"
+        onFocusCapture={(event) =>
+          onReferenceHighlight(referenceValueFromTarget(event.target))
+        }
+        onChangeCapture={(event) =>
+          onReferenceHighlight(referenceValueFromTarget(event.target))
+        }
+        onClickCapture={(event) => {
+          const reference = referenceValueFromTarget(event.target);
+          if (reference !== null) onReferenceHighlight(reference);
+        }}
+        onBlurCapture={() => onReferenceHighlight(null)}
+      >
         <NodeValidationErrors nodeId={node.id} issues={validationIssues} />
         {(schemaVersion === 1 || node.type !== "branch") && (
           <PromptAuthoringProvider

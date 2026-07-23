@@ -86,7 +86,7 @@ function workflowDetail(
       updatedAt: new Date(0).toISOString(),
     },
     draft: definition,
-    layout: { nodes: {} },
+    layout: { nodes: {}, edges: {} },
     deployed: {
       definitionId: 2,
       version: 1,

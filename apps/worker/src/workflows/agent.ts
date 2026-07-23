@@ -1,5 +1,5 @@
 import { createHook, getWorkflowMetadata } from "workflow";
-import { branchForTicket } from "../lib/branch-prefix.js";
+import { branchForTicket } from "../lib/workflow-naming.js";
 import { ticketRunUrl, ticketPageUrl, hasDashboardLinkComment } from "../lib/dashboard-links.js";
 import { computeUsageTotals, type UsageTotals } from "../sandbox/usage.js";
 import type {
@@ -1913,6 +1913,7 @@ async function captureV2RunObservationStartStep(payload: {
               { x: node.x, y: node.y },
             ]),
           ),
+          edges: {},
         };
         const graph = {
           ...payload.graph,

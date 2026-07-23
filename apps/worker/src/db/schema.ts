@@ -28,6 +28,7 @@ import type {
   ReplayCaptureStatus,
   ReplaySanitizedEnvelope,
   ResolvedPromptReference,
+  WorkflowDefinitionLayoutInput,
   WorkflowReplayGraphSnapshot,
   WorkflowReplayLayoutSnapshot,
   WorkflowReplaySelectedTransition,
@@ -523,9 +524,9 @@ export const workflowDefinitions = pgTable(
       .array()
       .notNull()
       .default(sql`'{}'::text[]`),
-    /** Node coordinates are CAS-patched independently from semantic edits. */
+    /** Canvas geometry is CAS-patched independently from semantic edits. */
     layout: jsonb("layout")
-      .$type<{ nodes: Record<string, { x: number; y: number }> }>()
+      .$type<WorkflowDefinitionLayoutInput>()
       .notNull()
       .default(sql`'{"nodes":{}}'::jsonb`),
     layoutRevision: integer("layout_revision").notNull().default(0),

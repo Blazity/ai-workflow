@@ -1,5 +1,8 @@
 import { createError, defineEventHandler, readBody } from "h3";
-import type { WorkflowDefinitionLayout, WorkflowDefinitionLayoutResponse } from "@shared/contracts";
+import type {
+  WorkflowDefinitionLayoutInput,
+  WorkflowDefinitionLayoutResponse,
+} from "@shared/contracts";
 import { getDb } from "../../../../../db/client.js";
 import { requireDashboardActor } from "../../../../../lib/auth/request-context.js";
 import { dashboardUserLabel } from "../../../../../pre-pr-checks/store.js";
@@ -35,7 +38,7 @@ export default defineEventHandler(
       const dbHandle = getDb();
       const updated = await saveWorkflowDefinitionLayout(dbHandle, {
         definitionId: id,
-        layout: body.layout as WorkflowDefinitionLayout,
+        layout: body.layout as WorkflowDefinitionLayoutInput,
         expectedLayoutRevision: body.expectedLayoutRevision,
         actor: {
           role: actor.role,

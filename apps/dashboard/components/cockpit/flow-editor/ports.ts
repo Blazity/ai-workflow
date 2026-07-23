@@ -1,4 +1,6 @@
 import type { FlowNodeDef } from "@/lib/flows";
+import type { WorkflowEdgeGeometry } from "@shared/contracts";
+import { edgeBezierPath } from "@/lib/workflow-editor/layout-geometry";
 
 // Match the original editor's card footprint. The smaller PR #118 dimensions
 // forced long block labels and ids to wrap inside a fixed-height card.
@@ -16,7 +18,10 @@ export function outPortPos(node: FlowNodeDef, portIndex: number, portCount: numb
   return { x: node.x + NODE_W, y: node.y + (NODE_H * (portIndex + 1)) / (count + 1) };
 }
 
-export function bezier(p1: Point, p2: Point): string {
-  const dx = Math.max(40, Math.abs(p2.x - p1.x) * 0.45);
-  return `M ${p1.x} ${p1.y} C ${p1.x + dx} ${p1.y}, ${p2.x - dx} ${p2.y}, ${p2.x} ${p2.y}`;
+export function bezier(
+  p1: Point,
+  p2: Point,
+  geometry?: WorkflowEdgeGeometry,
+): string {
+  return edgeBezierPath(p1, p2, geometry);
 }
