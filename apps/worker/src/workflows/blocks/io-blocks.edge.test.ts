@@ -53,6 +53,7 @@ import type {
 } from "../../sandbox/repo-workspace.js";
 import { emptyPrePrCheckConfig } from "../../pre-pr-checks/config.js";
 import { isRepoAllowed, filterAllowedRepositories } from "../../lib/repo-allowlist.js";
+import { AI_WORKFLOW_COMMENT_MARKER } from "../../lib/vcs-bot-identity.js";
 import {
   createRepositoryDirectory,
   createRepositoryDirectoryForProviders,
@@ -77,6 +78,8 @@ const activeOwner = {
   ownerToken: "owner-1",
   runId: "run-1",
 };
+
+const marked = (body: string) => `${body}\n\n${AI_WORKFLOW_COMMENT_MARKER}`;
 
 function setAllowlist(value: string | undefined): void {
   if (value === undefined) delete process.env.AGENT_ALLOWED_REPOS;
@@ -527,8 +530,8 @@ describe("post_pr_comment edge cases", () => {
 
     expect(result.kind).toBe("next");
     expect(postPRComment).toHaveBeenCalledTimes(2);
-    expect(postPRComment).toHaveBeenCalledWith(7, "LGTM");
-    expect(postPRComment).toHaveBeenCalledWith(9, "LGTM");
+    expect(postPRComment).toHaveBeenCalledWith(7, marked("LGTM"));
+    expect(postPRComment).toHaveBeenCalledWith(9, marked("LGTM"));
   });
 
   it("does not infer a missing publication target from the trigger payload", async () => {
