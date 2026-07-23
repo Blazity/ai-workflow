@@ -453,7 +453,7 @@ export async function ensurePlanningAgentSandboxForBlock(
     return { kind: "ready", sandboxId: await ensureAgentSandbox(ctx, kind, model) };
   } catch (error) {
     if (isRunControlError(error)) throw error;
-    const { isAgentRuntimeError } = await import("../sandbox/agents/protocol.js");
+    const { isAgentRuntimeError } = await import("../sandbox/agents/runtime-error.js");
     if (isAgentRuntimeError(error)) {
       return agentProtocolBlockError({
         ok: false,
@@ -870,7 +870,7 @@ async function setCommitGuardStep(
     await agent.setCommitGuard(sandbox, enabled);
     return { ok: true, value: undefined };
   } catch (error) {
-    const { isAgentRuntimeError } = await import("../sandbox/agents/protocol.js");
+    const { isAgentRuntimeError } = await import("../sandbox/agents/runtime-error.js");
     if (!isAgentRuntimeError(error)) throw error;
     return {
       ok: false,
