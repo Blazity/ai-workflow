@@ -1414,6 +1414,7 @@ export function FlowEditor({
     useState<CanvasSelection | null>(null);
   const editingSurfaceRef = useRef<HTMLElement | null>(null);
   const editorRootRef = useRef<HTMLDivElement | null>(null);
+  const handledSelectionRequestIdRef = useRef<number | null>(null);
   const deleteDialogRef = useRef<HTMLDivElement | null>(null);
   const deleteDialogRestoreFocusRef = useRef<HTMLElement | null>(null);
   const [shortcutPlatform, setShortcutPlatform] = useState<"mac" | "other">(
@@ -1450,8 +1451,10 @@ export function FlowEditor({
   useEffect(() => {
     if (
       selectionRequest &&
+      selectionRequest.requestId !== handledSelectionRequestIdRef.current &&
       nodes.some((node) => node.id === selectionRequest.nodeId)
     ) {
+      handledSelectionRequestIdRef.current = selectionRequest.requestId;
       setSelectedId(selectionRequest.nodeId);
     }
   }, [nodes, selectionRequest, setSelectedId]);

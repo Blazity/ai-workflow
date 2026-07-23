@@ -60,6 +60,8 @@ export function WorkflowMigrationDrawer({
 }) {
   const dialogRef = useRef<HTMLElement>(null);
   const restoreFocus = useRef<HTMLElement | null>(null);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
   const [showAllConversions, setShowAllConversions] = useState(false);
 
   useEffect(() => {
@@ -79,7 +81,7 @@ export function WorkflowMigrationDrawer({
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         event.preventDefault();
-        onClose();
+        onCloseRef.current();
         return;
       }
       if (event.key !== "Tab") return;
@@ -108,7 +110,7 @@ export function WorkflowMigrationDrawer({
       window.removeEventListener("keydown", onKeyDown, { capture: true });
       restoreFocus.current?.focus?.();
     };
-  }, [onClose, open]);
+  }, [open]);
 
   useEffect(() => {
     if (open) setShowAllConversions(false);
@@ -477,12 +479,6 @@ function plainDiagnosticMessage(
 ): string {
   if (diagnostic.code === "migration.prompt.default_materialized") {
     return diagnostic.message.replace(/^Materialized/, "Added");
-  }
-  if (diagnostic.code === "migration.prompt.reference_pinned") {
-    return diagnostic.message.replace(/^Pinned/, "Pinned");
-  }
-  if (diagnostic.code === "migration.prompt.nested_snapshot") {
-    return diagnostic.message.replace(/^Snapshotted/, "Snapshotted");
   }
   if (diagnostic.code === "migration.edge.id_assigned") {
     return "Added stable connection IDs so this workflow remains editable.";

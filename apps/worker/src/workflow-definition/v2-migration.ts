@@ -24,6 +24,7 @@ import { upgradeStoredWorkflowDefinition } from "./schema.js";
 import { prepareWorkflowV1PromptsForMigration } from "./v2-migration-prompts.js";
 import {
   convertWorkflowDefinitionV1ToV2,
+  dedupeWorkflowV2MigrationDiagnostics,
   workflowV2PromptResolutionKey,
   type WorkflowV2MigrationDiagnostic,
   type WorkflowV2MigrationResult,
@@ -122,7 +123,7 @@ export async function previewWorkflowDefinitionV2Migration(
     registryContext,
   });
   const rawSourceBlocked = preflight.blockers.length > 0;
-  const preliminaryBlockers = dedupeMigrationDiagnostics([
+  const preliminaryBlockers = dedupeWorkflowV2MigrationDiagnostics([
     ...preflight.blockers,
     ...preparedPrompts.blockers,
     ...converted.blockers,
@@ -144,7 +145,7 @@ export async function previewWorkflowDefinitionV2Migration(
       });
     }
   }
-  const blockers = dedupeMigrationDiagnostics([
+  const blockers = dedupeWorkflowV2MigrationDiagnostics([
     ...preliminaryBlockers,
     ...targetBlockers,
   ]);
@@ -159,7 +160,7 @@ export async function previewWorkflowDefinitionV2Migration(
     // normalized away into an applicable conversion.
     conversionHash: applicable ? converted.conversionHash : null,
     definition: applicable ? converted.definition : null,
-    conversions: dedupeMigrationDiagnostics([
+    conversions: dedupeWorkflowV2MigrationDiagnostics([
       ...preflight.conversions,
       ...preparedPrompts.conversions,
       ...converted.conversions,
@@ -454,23 +455,6 @@ function blockedMigrationResult(
     warnings: preflight.warnings,
     blockers: preflight.blockers,
   };
-}
-
-function dedupeMigrationDiagnostics(
-  diagnostics: WorkflowV2MigrationDiagnostic[],
-): WorkflowV2MigrationDiagnostic[] {
-  const seen = new Set<string>();
-  return diagnostics.filter((diagnostic) => {
-    const key = JSON.stringify([
-      diagnostic.code,
-      diagnostic.nodeId,
-      diagnostic.path ?? null,
-      diagnostic.message,
-    ]);
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
 }
 
 function restoreRawPromptProvenance(

@@ -17,7 +17,10 @@ import type {
   LoadedPromptReference,
   PromptReferenceLoader,
 } from "../workflows/prompt-references.js";
-import type { WorkflowV2MigrationDiagnostic } from "./v2-converter.js";
+import {
+  dedupeWorkflowV2MigrationDiagnostics,
+  type WorkflowV2MigrationDiagnostic,
+} from "./v2-converter.js";
 
 const MAX_PROMPT_REFERENCE_DEPTH = 10;
 const MAX_MIGRATED_PROMPT_LENGTH = 200_000;
@@ -92,8 +95,8 @@ export async function prepareWorkflowV1PromptsForMigration(
 
   return {
     definition: prepared,
-    conversions: dedupeDiagnostics(conversions),
-    blockers: dedupeDiagnostics(blockers),
+    conversions: dedupeWorkflowV2MigrationDiagnostics(conversions),
+    blockers: dedupeWorkflowV2MigrationDiagnostics(blockers),
   };
 }
 
@@ -304,21 +307,4 @@ function humanAgentName(type: string): string {
 
 function pointerSegment(value: string): string {
   return value.replaceAll("~", "~0").replaceAll("/", "~1");
-}
-
-function dedupeDiagnostics(
-  diagnostics: WorkflowV2MigrationDiagnostic[],
-): WorkflowV2MigrationDiagnostic[] {
-  const seen = new Set<string>();
-  return diagnostics.filter((diagnostic) => {
-    const key = JSON.stringify([
-      diagnostic.code,
-      diagnostic.nodeId,
-      diagnostic.path ?? null,
-      diagnostic.message,
-    ]);
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
 }
