@@ -10,6 +10,8 @@ The handler dispatches when the ticket lands in `COLUMN_AI` and cancels in-fligh
 
 If you want creates and new comments to dispatch immediately (rather than waiting for the next `jira:issue_updated` from a transition or edit), also check **Issue → Issue created** and **Comment → Comment created**. Tradeoff: more webhook traffic, but no perceptible latency on freshly-created tickets or replies. The handler still applies the same column/state filters either way — extra events are filtered out, not acted on.
 
+Clarification answers do not need **Comment created**: the `jira:issue_updated` event from moving the ticket back to the AI column triggers the resume, and the cron poller is the backstop if that webhook is missed.
+
 ## Open the webhook admin page
 
 ```
