@@ -1,5 +1,7 @@
 import type { VcsProviderKind } from "@shared/contracts";
 
+const BOT_LOGIN_SUFFIX = "[bot]";
+
 export interface VcsBotLoginConfig {
   github?: string;
   gitlab?: string;
@@ -30,6 +32,16 @@ export function vcsLoginsMatch(
 }
 
 export function normalizeVcsLogin(login: string | null | undefined): string | undefined {
-  const normalized = login?.trim().toLowerCase();
-  return normalized ? normalized : undefined;
+  const lowercased = login?.trim().toLowerCase();
+  if (!lowercased) return undefined;
+  const stripped = lowercased.endsWith(BOT_LOGIN_SUFFIX)
+    ? lowercased.slice(0, -BOT_LOGIN_SUFFIX.length)
+    : lowercased;
+  return stripped ? stripped : undefined;
+}
+
+export const AI_WORKFLOW_COMMENT_MARKER = "<!-- ai-workflow:bot -->";
+
+export function hasAiWorkflowCommentMarker(body: string | null | undefined): boolean {
+  return typeof body === "string" && body.includes(AI_WORKFLOW_COMMENT_MARKER);
 }
