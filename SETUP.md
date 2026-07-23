@@ -364,7 +364,7 @@ Without this, ai-workflow only learns about ticket changes via the 1-minute cron
 2. Create a webhook:
    - **URL:** `https://<your-vercel-domain>/webhooks/jira`
    - **Secret:** the `JIRA_WEBHOOK_SECRET` value from step 5. Jira signs each delivery with HMAC-SHA256 in the `X-Hub-Signature` header; the handler at `apps/worker/src/routes/webhooks/jira.post.ts` verifies it with `timingSafeEqual`.
-   - **Events:** `jira:issue_updated` (required). Add `jira:issue_created` and `comment_created` if you want creates and comments to dispatch instantly.
+   - **Events:** `jira:issue_updated` (required). Add `jira:issue_created` and `comment_created` if you want creates and comments to dispatch instantly. Answering clarification questions does not require `comment_created`: the answers are picked up when the ticket is moved back to the AI column (comment first, then move), and the cron poller is the backstop if that webhook is missed.
    - **JQL filter** (optional): `project = AWT` to limit deliveries to the relevant project.
 3. Save.
 
@@ -445,6 +445,8 @@ curl -H "Authorization: Bearer $CRON_SECRET" https://<your-vercel-domain>/cron/p
    - Jira ticket — moves to **AI Review** (success) or **Backlog** (clarification needed).
    - Target repo — new branch `blazebot/<ticket-key>` and an open PR.
    - Slack channel — notification fires.
+
+> **Answering a clarification request.** When a run needs input it posts the numbered questions (with suggested answers and a dashboard link) as a Jira comment, includes them in the Slack notification, and parks the ticket in **Backlog**. Answer it either in the dashboard (the run resumes immediately, as before) or by replying in a Jira comment and then moving the ticket back to the **AI** column: the move is the commit gesture (a comment on its own triggers nothing, and the bot's own comments are ignored), and the resumed run reads the comments as the answer. The paused run stays resumable for 7 days; after that the next move to **AI** starts the ticket over fresh.
 
 If anything stalls, jump to [troubleshooting](#13-troubleshooting).
 

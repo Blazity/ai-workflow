@@ -340,7 +340,17 @@ export async function executeGraph(opts: {
       attempt,
       error,
     );
-    await hooks.onExecutionError?.({
+    // Invoke the callback detached from the hooks object. agent.ts wires a
+    // "use step" function here directly, and the Workflow SDK captures the
+    // receiver of a method call (`hooks.onExecutionError?.(...)` would pass
+    // `this` = the hooks object) as serialized step state. The hooks object
+    // holds unserializable closures, so that capture makes the SDK's
+    // suspension handler fail before the step is ever created, and the queue
+    // redelivers into the same failure forever: the run stalls silently on its
+    // first error. A detached call passes no receiver, so nothing extra is
+    // serialized.
+    const { onExecutionError } = hooks;
+    await onExecutionError?.({
       diagnosticId: state.diagnosticId,
       nodeId,
       attempt,
@@ -433,6 +443,9 @@ export async function executeGraph(opts: {
   );
   let executions = resume?.controlState?.executions ?? 0;
   let resumeAnswerPending = resume !== undefined;
+  // Set when an in-run clarification is answered for an action block; consumed
+  // by that same block's immediate re-execution.
+  let pendingClarificationAnswer: string | undefined;
   const controlState = (): InterpreterControlState => ({
     attempts: Object.fromEntries(attempts),
     executions,
@@ -679,9 +692,12 @@ export async function executeGraph(opts: {
       attempt,
       ...(resumingWaitingNode
         ? { clarificationAnswer: resume.clarificationAnswer }
-        : {}),
+        : pendingClarificationAnswer !== undefined
+          ? { clarificationAnswer: pendingClarificationAnswer }
+          : {}),
     };
     resumeAnswerPending = false;
+    pendingClarificationAnswer = undefined;
     let result: BlockExecutionResult;
     try {
       result = await executeBlock(node, steps, resolvedInputs, execution);
@@ -752,11 +768,24 @@ export async function executeGraph(opts: {
         await hooks.onBlockFinish(id, { status: "warn", attempt, output, error });
         return finish("stopped");
       }
-      const answeredOutput: BlockOutput = { status: "answered", answer };
-      steps[id] = { output: answeredOutput };
-      await hooks.onBlockFinish(id, { status: "ok", attempt, output: answeredOutput });
-      const port = defaultPortOf(node);
-      current = port === undefined ? undefined : graph.outEdges.get(id)?.get(port);
+      if (node.type === "human_question") {
+        // Collecting the answer IS this block's contract, so the answered
+        // envelope is its real output and downstream bindings consume it.
+        const answeredOutput: BlockOutput = { status: "answered", answer };
+        steps[id] = { output: answeredOutput };
+        await hooks.onBlockFinish(id, { status: "ok", attempt, output: answeredOutput });
+        const port = defaultPortOf(node);
+        current = port === undefined ? undefined : graph.outEdges.get(id)?.get(port);
+        continue;
+      }
+      // An action block that asked mid-execution has not produced its real
+      // output yet (a planning agent still owes the plan that downstream
+      // bindings read). Re-execute the same node with the answer available so
+      // the block re-runs informed by it; a block may ask again, bounded by
+      // maxTotalExecutions. This mirrors the cross-run resume path, which also
+      // re-executes the waiting action node with execution.clarificationAnswer.
+      pendingClarificationAnswer = answer;
+      current = id;
       continue;
     }
 

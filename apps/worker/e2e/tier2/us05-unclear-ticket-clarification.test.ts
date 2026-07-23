@@ -18,9 +18,11 @@ import { e2eEnv } from "../env.js";
  * US-5: Unclear ticket triggers clarification
  *
  * When a ticket is too vague/subjective to implement, the agent should
- * return status: "clarification_needed", park the run as awaiting (questions
- * live in the dashboard, not in Jira comments), label the ticket
- * needs-clarification, move it to Backlog, and clean up registry/sandbox.
+ * return status: "clarification_needed" and park the run as awaiting: post a
+ * numbered clarification-questions comment (plus the one-time pickup link) to
+ * Jira, label the ticket needs-clarification, move it to Backlog, snapshot and
+ * stop the sandbox, and KEEP the bound active_runs claim so the same run can
+ * later resume from the snapshot when a human answers.
  */
 describe("US-05: Unclear ticket triggers clarification", () => {
   let ticketKey: string;
@@ -68,13 +70,17 @@ describe("US-05: Unclear ticket triggers clarification", () => {
       },
     );
 
-    // 4. Questions are no longer posted to Jira: the run parks with the
-    //    needs-clarification label and the questions live in the dashboard.
-    //    The only comment the workflow posts is the one-time pickup link
-    //    to the dashboard ticket view.
+    // 4. The parked run posts a numbered clarification-questions comment
+    //    (best-effort postClarificationQuestionsCommentStep) alongside the
+    //    one-time pickup link. The questions comment carries a numbered list
+    //    AND the how-to-answer instructions from comment-format.ts, so a human
+    //    can answer straight from Jira. Match a stable substring, not the whole
+    //    template, so copy tweaks don't break the test.
     const comments = await getTicketComments(ticketKey);
-    const questionComment = comments.find((c) => /^\s*1\.\s/m.test(c.body));
-    expect(questionComment).toBeUndefined();
+    const questionComment = comments.find(
+      (c) => /^\s*1\.\s/m.test(c.body) && c.body.includes("How to answer:"),
+    );
+    expect(questionComment).toBeDefined();
     const pickupComment = comments.find((c) =>
       c.body.includes(`/ticket/${ticketKey}`),
     );
@@ -86,16 +92,22 @@ describe("US-05: Unclear ticket triggers clarification", () => {
     const pr = await findPR(branchName);
     expect(pr).toBeNull();
 
-    // 6. Registry entry cleaned up
-    await waitFor(
-      async () => {
-        const runId = await getRunId(ticketKey);
-        return runId === null ? true : null;
-      },
-      { description: `Registry clean for ${ticketKey}`, timeoutMs: 30_000 },
-    );
+    // 6. The suspended run deliberately KEEPS its bound active_runs claim while
+    //    parked: the registry entry is NOT cleaned up, so the SAME runId can
+    //    resume from the snapshot once a human answers. Assert the claim is
+    //    present and stays present across a short recheck.
+    const parkedRunId = await waitFor(() => getRunId(ticketKey), {
+      description: `bound run for parked ${ticketKey}`,
+      timeoutMs: 30_000,
+    });
+    expect(parkedRunId).not.toBeNull();
+    await new Promise((resolve) => setTimeout(resolve, 5_000));
+    expect(await getRunId(ticketKey)).toBe(parkedRunId);
 
-    // 7. No sandbox still running for this ticket
+    // 7. No sandbox is still running for this ticket. The clarification
+    //    snapshot step (clarification-snapshot-steps.ts) snapshots the source
+    //    workspace and polls until Sandbox.get reports it `stopped` before the
+    //    run parks, so nothing is left running to stop here.
     const stopped = await stopSandboxesForTicket(ticketKey);
     expect(stopped).toBe(0);
 
