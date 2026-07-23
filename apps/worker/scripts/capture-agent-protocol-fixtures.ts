@@ -186,7 +186,7 @@ function fixtureDocument(
     package: spec.packageName,
     version: spec.version,
     protocol: spec.protocol,
-    provenance: "captured in a disposable Vercel Sandbox and normalized",
+    provenance: "captured locally in a disposable Vercel Sandbox and normalized",
     artifacts: normalizeArtifacts(artifacts),
   };
 }

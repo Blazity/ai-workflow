@@ -5,6 +5,20 @@ import { AGENT_SCHEMA, GENERIC_SCHEMA, RESEARCH_SCHEMA, REVIEW_SCHEMA } from "./
 
 const adapter = new ClaudeAgentAdapter();
 
+describe.each([
+  ["valid JSON events without a terminal result", '{"type":"assistant"}', "protocol_mismatch"],
+  ["non-JSON output", "not json", "invalid_json"],
+  ["empty output", "", "missing_result"],
+] as const)("ClaudeAgentAdapter.validateFreeformProtocol: %s", (_case, stdout, failureKind) => {
+  it(`reports ${failureKind}`, () => {
+    const result = adapter.validateFreeformProtocol(
+      { stdout, stderr: "", structuredOutput: null, exitCode: 0 },
+      "pre-pr-fix-1",
+    );
+    expect(result).toMatchObject({ ok: false, diagnostic: { failureKind } });
+  });
+});
+
 describe("ClaudeAgentAdapter.parseAgentOutput", () => {
   it("parses implemented result", () => {
     const raw = JSON.stringify({ result: "implemented", summary: "done" });

@@ -249,11 +249,14 @@ touch ${paths.sentinel}
     const processFailure = artifactFailure(this.cliSpec, phase, artifacts, event);
     if (processFailure) return processFailure;
     if (!envelope) {
+      const records = parseClaudeRecords(artifacts.stdout);
       return protocolFailure({
         spec: this.cliSpec,
         phase,
         artifacts,
-        failureKind: artifacts.stdout.trim() ? "invalid_json" : "missing_result",
+        failureKind: artifacts.stdout.trim()
+          ? records.length > 0 ? "protocol_mismatch" : "invalid_json"
+          : "missing_result",
         category: "parsing",
         message: "The current agent phase returned an invalid structured response.",
         detail: "Claude did not emit a terminal result envelope.",
@@ -565,12 +568,7 @@ function extractClaudePayload(
     });
   }
 
-  const records = artifacts.stdout
-    .split("\n")
-    .filter((line) => line.trim().length > 0)
-    .flatMap((line) => {
-      try { return [JSON.parse(line)]; } catch { return []; }
-    });
+  const records = parseClaudeRecords(artifacts.stdout);
   const lastEvent = eventMetadata(records.at(-1));
   return protocolFailure({
     spec,
@@ -585,6 +583,15 @@ function extractClaudePayload(
       : "Claude output was not valid JSON.",
     includeStdoutTail: records.length === 0,
   });
+}
+
+function parseClaudeRecords(raw: string): unknown[] {
+  return raw
+    .split("\n")
+    .filter((line) => line.trim().length > 0)
+    .flatMap((line) => {
+      try { return [JSON.parse(line)]; } catch { return []; }
+    });
 }
 
 function findResultEnvelope(raw: string): Record<string, unknown> | null {

@@ -300,47 +300,8 @@ touch ${paths.sentinel}
     artifacts: CollectedPhaseArtifacts,
     phase: string,
   ): AgentProtocolResult<void> {
-    const records = parseCodexRecords(artifacts.stdout);
-    const terminal = findCodexTerminal(records.events);
-    const event = eventMetadata(terminal ?? records.events.at(-1));
-    const processFailure = artifactFailure(this.cliSpec, phase, artifacts, event);
-    if (processFailure) return processFailure;
-    const providerError = records.events.find((record) =>
-      record?.type === "error" || record?.type === "turn.failed",
-    );
-    if (providerError) {
-      return protocolFailure({
-        spec: this.cliSpec,
-        phase,
-        artifacts,
-        failureKind: "provider_error",
-        category: "provider",
-        message: "The current agent phase could not be completed.",
-        event: eventMetadata(providerError),
-        detail: "Codex emitted a provider error event.",
-      });
-    }
-    const shapeFailure = codexRecordShapeFailure(
-      this.cliSpec,
-      phase,
-      artifacts,
-      records,
-      event,
-    );
-    if (shapeFailure) return shapeFailure;
-    if (!terminal) {
-      return protocolFailure({
-        spec: this.cliSpec,
-        phase,
-        artifacts,
-        failureKind: records.events.length > 0 ? "missing_result" : "invalid_json",
-        category: "parsing",
-        message: "The current agent phase returned an invalid structured response.",
-        event,
-        detail: "Codex did not emit a turn.completed event.",
-        includeStdoutTail: records.events.length === 0,
-      });
-    }
+    const preamble = codexProtocolPreamble(this.cliSpec, phase, artifacts);
+    if (!preamble.ok) return preamble;
     return { ok: true, value: undefined };
   }
 
@@ -586,11 +547,15 @@ function sanitizePhase(phase: string): string {
   return phase.toLowerCase().replace(/[^a-z0-9-]/g, "-");
 }
 
-function extractCodexPayload(
+function codexProtocolPreamble(
   spec: typeof AGENT_CLI_SPECS.codex,
-  artifacts: CollectedPhaseArtifacts,
   phase: string,
-): AgentProtocolResult<unknown> {
+  artifacts: CollectedPhaseArtifacts,
+): AgentProtocolResult<{
+  records: ReturnType<typeof parseCodexRecords>;
+  terminal: Record<string, unknown>;
+  event: ReturnType<typeof eventMetadata>;
+}> {
   const records = parseCodexRecords(artifacts.stdout);
   const terminal = findCodexTerminal(records.events);
   const event = eventMetadata(terminal ?? records.events.at(-1));
@@ -627,6 +592,17 @@ function extractCodexPayload(
       includeStdoutTail: records.events.length === 0,
     });
   }
+  return { ok: true, value: { records, terminal, event } };
+}
+
+function extractCodexPayload(
+  spec: typeof AGENT_CLI_SPECS.codex,
+  artifacts: CollectedPhaseArtifacts,
+  phase: string,
+): AgentProtocolResult<unknown> {
+  const preamble = codexProtocolPreamble(spec, phase, artifacts);
+  if (!preamble.ok) return preamble;
+  const { event } = preamble.value;
 
   if (artifacts.structuredOutput !== null) {
     try {
