@@ -25,6 +25,8 @@ import {
   type ApprovalRow,
 } from "../../approvals/store.js";
 import { deleteExpiredRunObservations } from "../../run-observability/store.js";
+import { recoverManualDispatches } from "../../manual-dispatch/service.js";
+import { listRecoverableManualDispatches } from "../../manual-dispatch/store.js";
 
 const PENDING_TRIGGER_RECOVERY_SCAN_LIMIT = 20;
 
@@ -61,6 +63,16 @@ export default defineEventHandler(async (event) => {
   // protected and cannot be replaced by a fresh ticket workflow.
   const ticketKeys = await discoverAiColumnTickets(adapters);
 
+  const manualDispatchRecovery = await recoverManualDispatches({
+    db,
+    adapters,
+    maxConcurrentAgents: env.MAX_CONCURRENT_AGENTS,
+  });
+  const protectedRunSubjects = new Set(retainedClarificationSubjects);
+  for (const request of await listRecoverableManualDispatches(db)) {
+    protectedRunSubjects.add(request.subjectKey);
+  }
+
   const releasedTriggerRecovery = { attempted: 0, started: 0, errors: 0 };
   const releasedTriggerSubjects = new Set<string>();
   const { cancelled, cleaned } = await reconcileRuns(
@@ -94,7 +106,7 @@ export default defineEventHandler(async (event) => {
         throw error;
       }
     },
-    retainedClarificationSubjects,
+    protectedRunSubjects,
     db,
     terminalClarificationSubjects,
   );
@@ -163,6 +175,7 @@ export default defineEventHandler(async (event) => {
     },
     clarificationExpiry,
     approvalRecovery,
+    manualDispatchRecovery,
     replayRetention: { deleted: replayRetention.deleted },
   };
 });

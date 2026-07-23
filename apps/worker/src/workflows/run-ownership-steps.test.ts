@@ -25,6 +25,7 @@ const assertActiveRunOwner = vi.fn();
 const moveTicket = vi.fn();
 const fetchTicket = vi.fn();
 const updateTicketLabels = vi.fn();
+const acknowledgeManualDispatch = vi.fn();
 vi.mock("../lib/step-adapters.js", () => ({
   createStepAdapters: () => ({
     runRegistry: {
@@ -80,6 +81,10 @@ vi.mock("../lib/ticket-label-mutation.js", () => ({
   updateTicketLabelsForRun: (...args: any[]) =>
     updateTicketLabels(...args),
 }));
+vi.mock("../manual-dispatch/service.js", () => ({
+  acknowledgeManualDispatchWorkflow: (...args: unknown[]) =>
+    acknowledgeManualDispatch(...args),
+}));
 
 describe("workflow owner steps", () => {
   beforeEach(() => {
@@ -119,6 +124,51 @@ describe("workflow owner steps", () => {
     moveTicket.mockReset().mockResolvedValue(undefined);
     fetchTicket.mockReset();
     updateTicketLabels.mockReset().mockResolvedValue(undefined);
+    acknowledgeManualDispatch.mockReset().mockResolvedValue(true);
+  });
+
+  it("acknowledges a manual request after the workflow wins owner binding", async () => {
+    const { acknowledgeManualDispatchStep } = await import(
+      "./run-ownership-steps.js"
+    );
+    await acknowledgeManualDispatchStep(
+      {
+        kind: "ticket",
+        subjectKey: "ticket:jira:AIW-173",
+        ticketKey: "AIW-173",
+        ownerToken: "owner-1",
+        manualDispatchId: "dispatch-1",
+      },
+      "run-1",
+    );
+
+    expect(acknowledgeManualDispatch).toHaveBeenCalledWith(
+      { db: true },
+      {
+        requestId: "dispatch-1",
+        ownerToken: "owner-1",
+        runId: "run-1",
+      },
+    );
+  });
+
+  it("fails closed when a manual request cannot acknowledge the bound owner", async () => {
+    acknowledgeManualDispatch.mockResolvedValue(false);
+    const { acknowledgeManualDispatchStep } = await import(
+      "./run-ownership-steps.js"
+    );
+    await expect(
+      acknowledgeManualDispatchStep(
+        {
+          kind: "ticket",
+          subjectKey: "ticket:jira:AIW-173",
+          ticketKey: "AIW-173",
+          ownerToken: "owner-1",
+          manualDispatchId: "dispatch-1",
+        },
+        "run-loser",
+      ),
+    ).rejects.toThrow("could not be acknowledged");
   });
 
   it("self-records the exact plan-approval workflow after owner bind", async () => {

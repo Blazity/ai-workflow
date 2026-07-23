@@ -2012,12 +2012,19 @@ describe("POST /api/v1/workflow-definition/restore (shim)", () => {
 });
 
 describe("GET /api/v1/session", () => {
-  it("reports canEditWorkflows per role", async () => {
+  it("reports workflow edit and dispatch capabilities per role", async () => {
     let res = await handlerFor(sessionGet)(new Request("http://worker.test/"));
-    expect((await res.json()).canEditWorkflows).toBe(true);
+    expect(await res.json()).toMatchObject({
+      actorLabel: "Admin",
+      canEditWorkflows: true,
+      canDispatchWorkflows: true,
+    });
 
     state.sessionUserId = "user_member";
     res = await handlerFor(sessionGet)(new Request("http://worker.test/"));
-    expect((await res.json()).canEditWorkflows).toBe(false);
+    expect(await res.json()).toMatchObject({
+      canEditWorkflows: false,
+      canDispatchWorkflows: false,
+    });
   });
 });

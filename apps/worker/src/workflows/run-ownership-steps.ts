@@ -9,6 +9,30 @@ export async function bindWorkflowCandidateStep(
 }
 bindWorkflowCandidateStep.maxRetries = 0;
 
+/** Close the manual-dispatch start ambiguity from inside the winning workflow.
+ * The request is acknowledged only after the candidate owns the reserved
+ * subject, so duplicate workflow candidates cannot both publish success. */
+export async function acknowledgeManualDispatchStep(
+  entry: import("./agent-input.js").AgentWorkflowInput,
+  workflowRunId: string,
+): Promise<void> {
+  "use step";
+  if (!("manualDispatchId" in entry) || !entry.manualDispatchId) return;
+  const { getDb } = await import("../db/client.js");
+  const { acknowledgeManualDispatchWorkflow } = await import(
+    "../manual-dispatch/service.js"
+  );
+  const acknowledged = await acknowledgeManualDispatchWorkflow(getDb(), {
+    requestId: entry.manualDispatchId,
+    ownerToken: entry.ownerToken,
+    runId: workflowRunId,
+  });
+  if (!acknowledged) {
+    throw new Error(`Manual dispatch ${entry.manualDispatchId} could not be acknowledged`);
+  }
+}
+acknowledgeManualDispatchStep.maxRetries = 0;
+
 /** The dashboard starts the run before it can persist the returned run id. The
  * winning Workflow candidate records the same correlation after owner bind so
  * a lost route response/write cannot make a later approval retry start twice. */

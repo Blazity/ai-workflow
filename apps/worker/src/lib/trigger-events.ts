@@ -337,7 +337,7 @@ function gitLabMergeRequestAuthor(attrs: any, fallback?: any): string {
   return fallback?.username ?? fallback?.name ?? "unknown";
 }
 
-function isGateCheckName(
+export function isGateCheckName(
   name: string,
   gateCheckNames: readonly string[],
 ): boolean {

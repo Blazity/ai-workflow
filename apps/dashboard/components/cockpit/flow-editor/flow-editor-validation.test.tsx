@@ -236,6 +236,53 @@ test("generic editor errors retain their in-flow presentation", () => {
   assert.doesNotMatch(html, /data-error-presentation="overlay"/);
 });
 
+test("a runnable deployed trigger shows the circular play button beside the node", () => {
+  const html = renderToStaticMarkup(
+    <FlowEditor
+      nodes={[node]}
+      edges={[]}
+      {...editorInteractionProps}
+      schemaVersion={1}
+      limits={{}}
+      onLimitsChange={() => undefined}
+      onNodesChange={() => undefined}
+      onEdgesChange={() => undefined}
+      canEdit
+      runnableTriggerIds={new Set(["entry"])}
+      onRunTrigger={() => undefined}
+      dirty={false}
+      saveEnabled
+      saving={false}
+      error={null}
+      validation={{
+        status: "valid",
+        issues: [],
+        nodeContracts: { entry: triggerContract },
+        availableValuesByNode: {},
+      }}
+      onSave={() => undefined}
+      headerTitle="Ticket workflow"
+      headerVersionBadge="deployed v3"
+      options={options}
+    />,
+  );
+
+  assert.match(html, /aria-label="Run Ticket received"/);
+  assert.match(html, /h-7 w-7/);
+  assert.match(html, /-right-\[38px\] -top-\[15px\]/);
+  assert.match(html, /title="Run trigger"/);
+});
+
+test("draft-only triggers do not expose manual dispatch", () => {
+  const html = renderEditor({
+    status: "valid",
+    issues: [],
+    nodeContracts: { entry: triggerContract },
+    availableValuesByNode: {},
+  });
+  assert.doesNotMatch(html, /aria-label="Run Ticket received"/);
+});
+
 test("editor actions and canvas controls expose keyboard labels and names", () => {
   const html = renderEditor({
     status: "valid",

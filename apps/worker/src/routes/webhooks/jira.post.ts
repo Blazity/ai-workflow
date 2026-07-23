@@ -229,6 +229,20 @@ export default defineEventHandler(async (event) => {
     // human abort still cancels, because a live run records neither outcome.
     const subjectKey = ticketSubjectKey("jira", ticketKey);
     const activeRun = await adapters.runRegistry.get(subjectKey).catch(() => null);
+    // Manual PR/MR dispatch can correlate through a workflow-owned Jira ticket
+    // for ownership, but its lifecycle remains provider-driven. A human Jira
+    // move must therefore never cancel this independently dispatched run.
+    if (activeRun?.kind === "manual_pr_trigger") {
+      logger.info(
+        { ticketKey, runId: activeRun.runId, payloadStatus: ticketStatus },
+        "webhook_skip_cancel_manual_pr_dispatch",
+      );
+      return {
+        status: "ignored",
+        reason: "manual_pr_dispatch_independent",
+        ticketKey,
+      };
+    }
     if (activeRun?.runId) {
       let recordedFailed: boolean;
       let recordedSucceeded: boolean;

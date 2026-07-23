@@ -104,7 +104,9 @@ export async function reconcileRuns(
     if (!entry.runId) continue;
     const boundEntry = { ...entry, runId: entry.runId };
 
-    const followsTicketColumn = entry.kind === "ticket" && entry.ticketKey !== null;
+    const followsTicketColumn =
+      (entry.kind === "ticket" || entry.kind === "manual_ticket") &&
+      entry.ticketKey !== null;
     const ticketStillInAiColumn =
       followsTicketColumn && aiColumnTickets.has(entry.ticketKey as string);
 

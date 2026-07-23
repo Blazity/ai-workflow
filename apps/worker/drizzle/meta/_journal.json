@@ -176,6 +176,13 @@
       "when": 1784804822580,
       "tag": "0024_mighty_ink",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1784826395341,
+      "tag": "0025_manual_dispatch_requests",
+      "breakpoints": true
     }
   ]
 }

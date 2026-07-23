@@ -120,6 +120,52 @@ export const triggerDeliveries = pgTable(
   ],
 );
 
+export const manualDispatchRequests = pgTable(
+  "manual_dispatch_requests",
+  {
+    requestId: text("request_id").primaryKey(),
+    payloadHash: text("payload_hash").notNull(),
+    definitionId: integer("definition_id").notNull(),
+    definitionVersion: integer("definition_version").notNull(),
+    triggerNodeId: text("trigger_node_id").notNull(),
+    triggerType: text("trigger_type").notNull(),
+    inputKind: text("input_kind").notNull(),
+    subjectKey: text("subject_key").notNull(),
+    ticketKey: text("ticket_key"),
+    inputPayload: jsonb("input_payload").$type<Record<string, unknown>>().notNull(),
+    actorUserId: text("actor_user_id").notNull(),
+    actorLabel: text("actor_label").notNull(),
+    ownerToken: text("owner_token"),
+    runId: text("run_id"),
+    status: text("status").notNull().default("pending"),
+    errorCode: text("error_code"),
+    errorMessage: text("error_message"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    check(
+      "manual_dispatch_requests_status_check",
+      sql`${t.status} in ('pending', 'reserved', 'prepared', 'candidate_started', 'started', 'failed')`,
+    ),
+    check(
+      "manual_dispatch_requests_input_kind_check",
+      sql`${t.inputKind} in ('ticket', 'pull_request')`,
+    ),
+    index("manual_dispatch_requests_status_idx").on(t.status),
+    index("manual_dispatch_requests_subject_key_idx").on(t.subjectKey),
+    index("manual_dispatch_requests_run_id_idx").on(t.runId),
+    foreignKey({
+      columns: [t.definitionId, t.definitionVersion],
+      foreignColumns: [
+        workflowDefinitionVersions.definitionId,
+        workflowDefinitionVersions.version,
+      ],
+      name: "manual_dispatch_requests_definition_version_fk",
+    }),
+  ],
+);
+
 /** Replaces blazebot:failed-tickets — FailedTicketMeta as typed columns. */
 export const failedTickets = pgTable("failed_tickets", {
   ticketKey: text("ticket_key").primaryKey(),

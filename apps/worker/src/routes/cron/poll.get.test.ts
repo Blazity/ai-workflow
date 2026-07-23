@@ -21,6 +21,8 @@ const mocks = vi.hoisted(() => ({
   listPendingTriggers: vi.fn(),
   deleteExpiredRunObservations: vi.fn(),
   resumeClarificationFromComments: vi.fn(),
+  recoverManualDispatches: vi.fn(),
+  listRecoverableManualDispatches: vi.fn(),
 }));
 
 vi.mock("../../../env.js", () => ({
@@ -105,6 +107,14 @@ vi.mock("../../post-pr-gate/gate-store.js", () => ({
     purgeExpired = vi.fn().mockResolvedValue(undefined);
   },
 }));
+vi.mock("../../manual-dispatch/service.js", () => ({
+  recoverManualDispatches: (...args: unknown[]) =>
+    mocks.recoverManualDispatches(...args),
+}));
+vi.mock("../../manual-dispatch/store.js", () => ({
+  listRecoverableManualDispatches: (...args: unknown[]) =>
+    mocks.listRecoverableManualDispatches(...args),
+}));
 vi.mock("../../lib/telemetry/collect-snapshots.js", () => ({
   collectSnapshots: vi.fn().mockResolvedValue([]),
 }));
@@ -170,6 +180,11 @@ describe("cron clarification recovery ordering", () => {
       runIds: [],
     });
     mocks.resumeClarificationFromComments.mockResolvedValue({ status: "no_clarification" });
+    mocks.recoverManualDispatches.mockImplementation(async () => {
+      state.order.push("recover-manual-dispatches");
+      return { scanned: 0, started: 0, recovering: 0, failed: 0 };
+    });
+    mocks.listRecoverableManualDispatches.mockResolvedValue([]);
   });
 
   it("protects same-run clarifications before discovering generic ticket work", async () => {
@@ -276,6 +291,9 @@ describe("cron clarification recovery ordering", () => {
       state.order.indexOf("discover"),
     );
     expect(state.order.indexOf("discover")).toBeLessThan(
+      state.order.indexOf("recover-manual-dispatches"),
+    );
+    expect(state.order.indexOf("recover-manual-dispatches")).toBeLessThan(
       state.order.indexOf("reconcile-runs"),
     );
     expect(state.order.indexOf("reconcile-runs")).toBeLessThan(
@@ -294,6 +312,12 @@ describe("cron clarification recovery ordering", () => {
     );
     await expect(response.json()).resolves.toMatchObject({
       approvalRecovery: { scanned: 1, started: 1, blocked: 0, errors: 0 },
+      manualDispatchRecovery: {
+        scanned: 0,
+        started: 0,
+        recovering: 0,
+        failed: 0,
+      },
     });
   });
 

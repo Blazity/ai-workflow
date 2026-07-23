@@ -70,7 +70,7 @@ export interface DispatchTriggerDeps {
   deletePending?: typeof deletePendingTrigger;
 }
 
-function triggerNodeParams(
+export function triggerNodeParams(
   definition: WorkflowDefinition,
   triggerType: string,
 ): Record<string, unknown> {
@@ -223,7 +223,7 @@ async function readRepositoryScope(
   }
 }
 
-async function isConfiguredTriggerRepository(pr: PrTriggerPayload): Promise<boolean> {
+export async function isConfiguredTriggerRepository(pr: PrTriggerPayload): Promise<boolean> {
   if (pr.provider !== "gitlab") return true;
   const { env, getConfiguredVcsProviders } = await import("../../env.js");
   if (env.GITLAB_PROJECT_ID) {
@@ -249,7 +249,7 @@ async function isConfiguredTriggerRepository(pr: PrTriggerPayload): Promise<bool
 }
 
 
-function selectEligibleEvent(
+export function selectEligibleEvent(
   event: TriggerEvent,
   params: Record<string, unknown>,
 ): TriggerEvent | null {
@@ -289,7 +289,7 @@ function selectEligibleEvent(
   };
 }
 
-function selectedReviewStates(
+export function selectedReviewStates(
   params: Record<string, unknown>,
   provider: VcsProviderKind,
   botLogin: string | undefined,

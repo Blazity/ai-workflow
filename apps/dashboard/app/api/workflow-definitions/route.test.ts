@@ -12,11 +12,16 @@ import {
   handleDefinitionRollback,
   handleDefinitionValidate,
   handleDefinitionRestore,
+  handleManualDispatch,
+  handleManualDispatchPreflight,
   handleDefinitionsCreate,
   handleDefinitionsList,
 } from "./handler.ts";
 
 const idParams = (id: string) => ({ params: Promise.resolve({ id }) });
+const triggerParams = (id: string, nodeId: string) => ({
+  params: Promise.resolve({ id, nodeId }),
+});
 
 test("list GET forwards to the worker and re-serializes status", async () => {
   const res = await handleDefinitionsList(async (path, init) => {
@@ -107,6 +112,53 @@ test("detail DELETE forwards and re-serializes status", async () => {
   });
   assert.equal(res.status, 200);
   assert.deepEqual(await res.json(), { ok: true });
+});
+
+test("manual dispatch preflight forwards the trigger path and body", async () => {
+  const calls: Array<{ path: string; init: RequestInit }> = [];
+  const res = await handleManualDispatchPreflight(
+    new Request("https://dashboard.example.com/api/workflow-definitions/12", {
+      method: "POST",
+      body: JSON.stringify({ kind: "ticket", ticketKey: "AIW-173" }),
+    }),
+    triggerParams("12", "ticket trigger"),
+    async (path, init) => {
+      calls.push({ path, init: init ?? {} });
+      return Response.json({ runnable: true }, { status: 200 });
+    },
+  );
+  assert.equal(res.status, 200);
+  assert.equal(
+    calls[0].path,
+    "/api/v1/workflow-definitions/12/triggers/ticket%20trigger/manual-dispatch/preflight",
+  );
+  assert.deepEqual(JSON.parse(String(calls[0].init.body)), {
+    kind: "ticket",
+    ticketKey: "AIW-173",
+  });
+});
+
+test("manual dispatch preserves recovering status from the worker", async () => {
+  const res = await handleManualDispatch(
+    new Request("https://dashboard.example.com/api/workflow-definitions/12", {
+      method: "POST",
+      body: JSON.stringify({
+        requestId: "1b02cf6d-d510-4ae1-a26d-c22f777b1b3a",
+        expectedDeployedVersion: 3,
+        input: { kind: "ticket", ticketKey: "AIW-173" },
+      }),
+    }),
+    triggerParams("12", "trigger"),
+    async (path) => {
+      assert.equal(
+        path,
+        "/api/v1/workflow-definitions/12/triggers/trigger/manual-dispatch",
+      );
+      return Response.json({ status: "recovering" }, { status: 202 });
+    },
+  );
+  assert.equal(res.status, 202);
+  assert.deepEqual(await res.json(), { status: "recovering" });
 });
 
 test("restore forwards to the nested worker path", async () => {
