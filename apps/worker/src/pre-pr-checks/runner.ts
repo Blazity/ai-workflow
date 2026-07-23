@@ -12,8 +12,10 @@ import type {
   CollectedPhaseArtifacts,
   PhaseArtifactPaths,
   PhaseUsage,
+  RunnableSandbox,
 } from "../sandbox/agents/types.js";
 import type { TokenPrice } from "../sandbox/agents/pricing.js";
+import type { ResolvedHarnessRuntime } from "../sandbox/harness-runtime.js";
 import {
   checkRunBudget,
   recordBudgetUsage,
@@ -70,21 +72,7 @@ export interface PrePrFixBudgetContext {
 type SandboxInstance = Awaited<ReturnType<typeof SandboxType.create>>;
 type SandboxCommandResult = Awaited<ReturnType<SandboxInstance["runCommand"]>>;
 
-type RunCommand = {
-  (cmd: string, args: string[]): Promise<SandboxCommandResult>;
-  (command: {
-    cmd: string;
-    args: string[];
-    cwd?: string;
-    detached?: boolean;
-    signal?: AbortSignal;
-  }): Promise<SandboxCommandResult>;
-};
-
-interface SandboxSession {
-  runCommand: RunCommand;
-  writeFiles: (files: Array<{ path: string; content: Buffer }>) => Promise<unknown>;
-}
+type SandboxSession = RunnableSandbox;
 
 export async function runPrePrChecksWithFixes(
   sandboxId: string,
@@ -94,6 +82,8 @@ export async function runPrePrChecksWithFixes(
   maxFixCycles: number = MAX_PRE_PR_FIX_CYCLES,
   timeoutMs?: number,
   budget?: PrePrFixBudgetContext,
+  runtime?: ResolvedHarnessRuntime,
+  arthurTaskId?: string | null,
 ): Promise<PrePrCheckRunResult> {
   if (config.repositories.length === 0) {
     return {
@@ -128,6 +118,8 @@ export async function runPrePrChecksWithFixes(
       model,
       fixCycles,
       signal,
+      runtime,
+      arthurTaskId,
     );
     fixCycleUsages.push(fixer.usage);
     if (fixer.failure) {
@@ -258,15 +250,80 @@ async function runFixAgent(
   model: string,
   fixCycle: number,
   signal?: AbortSignal,
+  runtime?: ResolvedHarnessRuntime,
+  arthurTaskId?: string | null,
 ): Promise<{
   usage: PhaseUsage | null;
   failure?: Extract<AgentProtocolResult<unknown>, { ok: false }>;
 }> {
   const { createAgentAdapter } = await import("../sandbox/agents/index.js");
-  const adapter = createAgentAdapter(agentKind);
+  const adapter = createAgentAdapter(agentKind, runtime?.cliSpec);
+  if (runtime) {
+    const { env } = await import("../../env.js");
+    const { getDb } = await import("../db/client.js");
+    const { dashboardOrganizationId } = await import(
+      "../workflow-definition/harness-profile-runtime.js"
+    );
+    const { resolveHarnessProfileVersion } = await import(
+      "../harness-profiles/store.js"
+    );
+    const {
+      materializePinnedHarnessFiles,
+      resetHarnessRuntimeHomes,
+      resolveRuntimeCredentials,
+    } = await import("../sandbox/harness-runtime.js");
+    await resetHarnessRuntimeHomes(sandbox);
+    const organizationId = await dashboardOrganizationId(
+      getDb(),
+      env.DASHBOARD_ORG_SLUG,
+    );
+    const resolved = await resolveHarnessProfileVersion(getDb(), {
+      organizationId,
+      profileId: runtime.manifest.profileId,
+      version: runtime.manifest.version,
+    });
+    if (!resolved || resolved.manifestHash !== runtime.manifestHash) {
+      throw new Error(
+        "The pinned Harness Profile changed or became unavailable before Pre-PR repair.",
+      );
+    }
+    await materializePinnedHarnessFiles(
+      sandbox,
+      runtime,
+      resolved.skillArtifacts,
+    );
+    await adapter.install(sandbox, runtime.paths);
+    const arthur =
+      env.GENAI_ENGINE_API_KEY &&
+      env.GENAI_ENGINE_TRACE_ENDPOINT &&
+      arthurTaskId
+        ? {
+            apiKey: env.GENAI_ENGINE_API_KEY,
+            taskId: arthurTaskId,
+            endpoint: env.GENAI_ENGINE_TRACE_ENDPOINT,
+          }
+        : undefined;
+    await adapter.configure(sandbox, {
+      ...resolveRuntimeCredentials(runtime.manifest, {
+        anthropicApiKey: env.ANTHROPIC_API_KEY,
+        codexApiKey: env.CODEX_API_KEY,
+        codexChatGptOauthToken: env.CODEX_CHATGPT_OAUTH_TOKEN,
+      }),
+      model,
+      arthur,
+      runtime: runtime.paths,
+      legacyDynamicSkills: false,
+    });
+  }
+  await adapter.setCommitGuard(sandbox, true, runtime?.paths);
   const phase = `pre-pr-fix-${fixCycle}`;
   const paths = adapter.artifactPaths(phase);
-  const script = adapter.buildPhaseScript({ phase, model, paths });
+  const script = adapter.buildPhaseScript({
+    phase,
+    model,
+    paths,
+    ...(runtime ? { runtime: runtime.paths } : {}),
+  });
   await sandbox.writeFiles([
     {
       path: paths.input,

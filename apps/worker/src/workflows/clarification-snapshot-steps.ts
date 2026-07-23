@@ -1,16 +1,197 @@
 import type { AgentKind } from "../sandbox/agents/index.js";
+import type { ResolvedHarnessRuntime } from "../sandbox/harness-runtime.js";
 
 export const CLARIFICATION_SNAPSHOT_RETENTION_MS = 7 * 24 * 60 * 60 * 1_000;
 const MAX_SOURCE_STOP_POLLS = 180;
 const MAX_SNAPSHOT_LIST_PAGES = 100;
 const SNAPSHOT_CLOCK_SKEW_TOLERANCE_MS = 5 * 60 * 1_000;
+const CREDENTIAL_REMAINS_EXIT_CODE = 86;
+const CREDENTIAL_PATTERN_FILE_PREFIX =
+  "/tmp/.aiw-clarification-credential-patterns-";
 
-const SCRUB_CREDENTIALS_SCRIPT = `set -eu
-find /tmp -maxdepth 1 -type f -name 'agent-env*.sh' -delete
-rm -rf "$HOME/.codex" "$HOME/.claude" "$HOME/.config/claude" "$HOME/.config/claude-code"
-rm -f "$HOME/.claude.json" /tmp/config.toml /tmp/arthur_config.json /tmp/arthur-tracer.py
-find /tmp -maxdepth 1 -type f \( -iname '*arthur*credential*' -o -iname '*tracer*credential*' \) -delete
+const EXACT_CREDENTIAL_SCAN_SOURCE = String.raw`
+import { createReadStream } from "node:fs";
+import { lstat, opendir, readFile, readlink } from "node:fs/promises";
+import { resolve } from "node:path";
+
+const CREDENTIAL_REMAINS_EXIT_CODE = 86;
+const CREDENTIAL_SCAN_FAILED_EXIT_CODE = 87;
+const CREDENTIAL_FOUND = Symbol("credential-found");
+const [, , patternFile, ...requestedRoots] = process.argv;
+
+function assertNoCredential(value, credentials) {
+  const bytes = Buffer.isBuffer(value) ? value : Buffer.from(value, "utf8");
+  for (const credential of credentials) {
+    if (bytes.indexOf(credential) !== -1) throw CREDENTIAL_FOUND;
+  }
+}
+
+async function scanFile(path, credentials, overlapBytes) {
+  let overlap = Buffer.alloc(0);
+  try {
+    for await (const rawChunk of createReadStream(path)) {
+      const chunk = Buffer.isBuffer(rawChunk) ? rawChunk : Buffer.from(rawChunk);
+      const searchable =
+        overlap.length === 0 ? chunk : Buffer.concat([overlap, chunk]);
+      assertNoCredential(searchable, credentials);
+      overlap =
+        overlapBytes === 0
+          ? Buffer.alloc(0)
+          : searchable.subarray(Math.max(0, searchable.length - overlapBytes));
+    }
+  } catch (error) {
+    if (error === CREDENTIAL_FOUND) throw error;
+    if (error && typeof error === "object" && error.code === "ENOENT") return;
+    throw error;
+  }
+}
+
+async function scanPath(path, excludedPath, credentials, overlapBytes, visited) {
+  const absolute = resolve(path);
+  if (absolute === excludedPath || visited.has(absolute)) return;
+  visited.add(absolute);
+  assertNoCredential(absolute, credentials);
+
+  let stat;
+  try {
+    stat = await lstat(absolute);
+  } catch (error) {
+    if (error && typeof error === "object" && error.code === "ENOENT") return;
+    throw error;
+  }
+
+  if (stat.isSymbolicLink()) {
+    assertNoCredential(await readlink(absolute), credentials);
+    return;
+  }
+  if (stat.isFile()) {
+    await scanFile(absolute, credentials, overlapBytes);
+    return;
+  }
+  if (!stat.isDirectory()) return;
+
+  let directory;
+  try {
+    directory = await opendir(absolute);
+    for await (const entry of directory) {
+      await scanPath(
+        resolve(absolute, entry.name),
+        excludedPath,
+        credentials,
+        overlapBytes,
+        visited,
+      );
+    }
+  } catch (error) {
+    if (error && typeof error === "object" && error.code === "ENOENT") return;
+    throw error;
+  } finally {
+    await directory?.close().catch(() => undefined);
+  }
+}
+
+try {
+  const encoded = JSON.parse(await readFile(patternFile, "utf8"));
+  if (!Array.isArray(encoded) || encoded.some((value) => typeof value !== "string")) {
+    throw new Error("invalid credential pattern file");
+  }
+  const credentials = encoded
+    .map((value) => Buffer.from(value, "base64"))
+    .filter((value) => value.length > 0);
+  const overlapBytes = Math.max(
+    0,
+    ...credentials.map((credential) => credential.length - 1),
+  );
+  const excludedPath = resolve(patternFile);
+  const visited = new Set();
+  for (const root of requestedRoots) {
+    await scanPath(root, excludedPath, credentials, overlapBytes, visited);
+  }
+} catch (error) {
+  process.exitCode =
+    error === CREDENTIAL_FOUND
+      ? CREDENTIAL_REMAINS_EXIT_CODE
+      : CREDENTIAL_SCAN_FAILED_EXIT_CODE;
+}
 `;
+
+export function profileRuntimeCredentialScrubScript(
+  root = "/tmp/aiw-harness",
+): string {
+  const quotedRoot = shellQuote(root);
+  return `profile_runtime_root=${quotedRoot}
+if [ -d "$profile_runtime_root" ]; then
+  find "$profile_runtime_root" -mindepth 2 -maxdepth 2 -type d -name home -exec rm -rf -- {} +
+  find "$profile_runtime_root" -mindepth 2 -maxdepth 2 -type f -name 'credentials.sh' -delete
+fi`;
+}
+
+export function clarificationSnapshotCredentialSanitizationScript(input: {
+  credentialPatternFile: string;
+  scanRoots?: readonly string[];
+  profileRuntimeRoot?: string;
+  homeDir?: string;
+}): string {
+  const credentialPatternFile = shellQuote(input.credentialPatternFile);
+  const scanRoots = [...new Set(
+    input.scanRoots ?? ["/vercel/sandbox", "/tmp", "/var/tmp"],
+  )];
+  const scanRootArguments = scanRoots.map(shellQuote).join(" ");
+  const snapshotHome = input.homeDir
+    ? shellQuote(input.homeDir)
+    : '"${HOME:-/vercel/sandbox}"';
+  return `set -eu
+credential_pattern_file=${credentialPatternFile}
+snapshot_home=${snapshotHome}
+trap 'rm -f -- "$credential_pattern_file"' EXIT HUP INT TERM
+find /tmp -maxdepth 1 -type f -name '.aiw-clarification-credential-patterns-*' ! -path "$credential_pattern_file" -delete
+find /tmp -maxdepth 1 -type f -name 'agent-env*.sh' -delete
+rm -rf "$snapshot_home/.codex" "$snapshot_home/.claude" "$snapshot_home/.config/claude" "$snapshot_home/.config/claude-code"
+rm -f "$snapshot_home/.claude.json" /tmp/config.toml /tmp/arthur_config.json /tmp/arthur-tracer.py
+find /tmp -maxdepth 1 -type f \\( -iname '*arthur*credential*' -o -iname '*tracer*credential*' \\) -delete
+${profileRuntimeCredentialScrubScript(input.profileRuntimeRoot)}
+chmod 600 "$credential_pattern_file"
+node --input-type=module - "$credential_pattern_file" ${scanRootArguments} "$snapshot_home" <<'AIW_CREDENTIAL_SCAN'
+${EXACT_CREDENTIAL_SCAN_SOURCE}
+AIW_CREDENTIAL_SCAN
+`;
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", "'\\''")}'`;
+}
+
+/**
+ * Check common reversible representations as well as the raw secret. This is
+ * intentionally finite: the checkpoint contract protects against accidental
+ * copies and ordinary serialization/encoding, while the sandbox remains the
+ * security boundary for deliberately transformed exfiltration.
+ */
+export function clarificationCredentialScanPatterns(
+  credentialValues: readonly string[],
+): string[] {
+  const patterns = new Set<string>();
+  for (const value of credentialValues) {
+    if (value.length === 0) continue;
+    const bytes = Buffer.from(value, "utf8");
+    const base64 = bytes.toString("base64");
+    patterns.add(value);
+    patterns.add(base64);
+    patterns.add(base64.replaceAll("+", "-").replaceAll("/", "_"));
+    patterns.add(base64.replace(/=+$/, ""));
+    patterns.add(
+      base64
+        .replaceAll("+", "-")
+        .replaceAll("/", "_")
+        .replace(/=+$/, ""),
+    );
+    patterns.add(bytes.toString("hex"));
+    patterns.add(bytes.toString("hex").toUpperCase());
+    patterns.add(encodeURIComponent(value));
+    patterns.add(JSON.stringify(value).slice(1, -1));
+  }
+  return [...patterns].filter((pattern) => pattern.length > 0);
+}
 
 export interface SnapshotClarificationSandboxInput {
   subjectKey: string;
@@ -144,21 +325,67 @@ export async function snapshotClarificationSandboxStep(
       "source sandbox lookup",
       (signal) => Sandbox.get({ sandboxId: input.sandboxId, ...credentials, signal }),
     );
-    const scrub = await withinSnapshotDeadline(
-      deadline,
-      "credential scrub",
-      (signal) => sandbox.runCommand(
-        "bash",
-        ["-lc", SCRUB_CREDENTIALS_SCRIPT],
-        { signal },
-      ),
+    const { randomUUID } = await import("node:crypto");
+    const { env } = await import("../../env.js");
+    const credentialValues = [
+      env.ANTHROPIC_API_KEY,
+      env.CODEX_API_KEY,
+      env.CODEX_CHATGPT_OAUTH_TOKEN,
+      env.GENAI_ENGINE_API_KEY,
+    ].filter(
+      (value): value is string =>
+        typeof value === "string" && value.length > 0,
     );
-    if (scrub.exitCode !== 0) {
-      const stderr = await scrub.stderr();
-      const stdout = await scrub.stdout();
-      throw new Error(
-        `clarification credential scrub failed for ${input.sandboxId}: ${stderr || stdout || "command failed"}`,
+    const encodedCredentialValues = clarificationCredentialScanPatterns(
+      credentialValues,
+    ).map((value) => Buffer.from(value, "utf8").toString("base64"));
+    const credentialPatternFile =
+      `${CREDENTIAL_PATTERN_FILE_PREFIX}${randomUUID()}.json`;
+    try {
+      await withinSnapshotDeadline(
+        deadline,
+        "credential scan preparation",
+        (signal) =>
+          sandbox.writeFiles(
+            [{
+              path: credentialPatternFile,
+              content: Buffer.from(JSON.stringify(encodedCredentialValues)),
+            }],
+            { signal },
+          ),
       );
+    } catch {
+      throw new Error("clarification credential scan could not be prepared");
+    }
+    let sanitization: Awaited<ReturnType<typeof sandbox.runCommand>>;
+    try {
+      sanitization = await withinSnapshotDeadline(
+        deadline,
+        "credential sanitization",
+        (signal) =>
+          sandbox.runCommand(
+            "bash",
+            [
+              "--noprofile",
+              "--norc",
+              "-c",
+              clarificationSnapshotCredentialSanitizationScript({
+                credentialPatternFile,
+              }),
+            ],
+            { signal },
+          ),
+      );
+    } catch {
+      throw new Error("clarification credential sanitization could not be verified");
+    }
+    if (sanitization.exitCode === CREDENTIAL_REMAINS_EXIT_CODE) {
+      throw new Error(
+        "clarification snapshot was blocked because credential material remained after sanitization",
+      );
+    }
+    if (sanitization.exitCode !== 0) {
+      throw new Error("clarification credential sanitization could not be verified");
     }
 
     const snapshot = await withinSnapshotDeadline(
@@ -254,7 +481,11 @@ export interface RestoreClarificationSandboxInput {
   subjectKey: string;
   ownerToken: string;
   timeoutMs: number;
-  agents: Array<{ kind: AgentKind; model: string }>;
+  agents: Array<{
+    kind: AgentKind;
+    model: string;
+    runtime?: ResolvedHarnessRuntime;
+  }>;
   arthurTaskId: string | null;
 }
 
@@ -292,13 +523,24 @@ export async function restoreClarificationSandboxStep(
           }
         : undefined;
     for (const selected of input.agents) {
-      await createAgentAdapter(selected.kind).configure(sandbox, {
-        model: selected.model,
-        anthropicApiKey: env.ANTHROPIC_API_KEY,
-        codexApiKey: env.CODEX_API_KEY,
-        codexChatGptOauthToken: env.CODEX_CHATGPT_OAUTH_TOKEN,
-        arthur,
-      });
+      const adapter = createAgentAdapter(
+        selected.kind,
+        selected.runtime?.cliSpec,
+      );
+      if (selected.runtime) {
+        // The restored snapshot retains only installed, content-addressed CLI
+        // packages. Profile homes and credentials are rebuilt at the next
+        // invocation boundary, never while the run is suspended.
+        continue;
+      } else {
+        await adapter.configure(sandbox, {
+          model: selected.model,
+          anthropicApiKey: env.ANTHROPIC_API_KEY,
+          codexApiKey: env.CODEX_API_KEY,
+          codexChatGptOauthToken: env.CODEX_CHATGPT_OAUTH_TOKEN,
+          arthur,
+        });
+      }
     }
     return { sandboxId: sandbox.sandboxId };
   } catch (error) {

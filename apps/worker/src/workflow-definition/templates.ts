@@ -1,5 +1,6 @@
 import type {
   HarnessProvider,
+  HarnessProfileReference,
   WorkflowDefinitionTemplate,
   WorkflowDefinitionV2,
 } from "@shared/contracts";
@@ -15,12 +16,15 @@ export const DEFAULT_WORKFLOW_TEMPLATE_ID = "ticket-workflow";
 interface TemplateOptions {
   includeReview: boolean;
   provider?: HarnessProvider;
+  profileReference?: HarnessProfileReference;
 }
 
 function humanApprovedPlanDefinition(
   provider: HarnessProvider,
+  profileReference?: HarnessProfileReference,
 ): WorkflowDefinitionV2 {
-  const profile = () => builtinHarnessProfileConfiguration(provider);
+  const profile = () =>
+    builtinHarnessProfileConfiguration(provider, profileReference);
   const specs: V2BlockSpec[] = [
     {
       id: "trigger-ticket",
@@ -160,6 +164,7 @@ function humanApprovedPlanDefinition(
 
 function reviewFixAfterPrDefinition(
   provider: HarnessProvider,
+  profileReference?: HarnessProfileReference,
 ): WorkflowDefinitionV2 {
   const specs: V2BlockSpec[] = [
     {
@@ -209,7 +214,7 @@ function reviewFixAfterPrDefinition(
       column: 3,
       row: 0,
       configuration: {
-        ...builtinHarnessProfileConfiguration(provider),
+        ...builtinHarnessProfileConfiguration(provider, profileReference),
         instructions:
           "Resolve the fetched pull-request review feedback or failing checks, verify the fix, and commit the resulting changes.",
       },
@@ -253,6 +258,7 @@ function reviewFixAfterPrDefinition(
 
 function fullyModularDefinition(
   provider: HarnessProvider,
+  profileReference?: HarnessProfileReference,
 ): WorkflowDefinitionV2 {
   const planningOutput = JSON.stringify({
     type: "object",
@@ -285,7 +291,7 @@ function fullyModularDefinition(
       name: "Generic agent — planning",
       column: 2,
       configuration: {
-        ...builtinHarnessProfileConfiguration(provider),
+        ...builtinHarnessProfileConfiguration(provider, profileReference),
         prompt: "Produce an implementation plan for this ticket.",
         outputSchema: planningOutput,
         outputSchemaDialect:
@@ -299,7 +305,7 @@ function fullyModularDefinition(
       name: "Generic agent — implementation",
       column: 3,
       configuration: {
-        ...builtinHarnessProfileConfiguration(provider),
+        ...builtinHarnessProfileConfiguration(provider, profileReference),
         prompt:
           "Implement this plan in the prepared workspace:\n\n{{data:steps.planning.output.plan}}",
         outputSchema: implementationOutput,
@@ -383,6 +389,7 @@ function fullyModularDefinition(
 export function workflowDefinitionTemplates({
   includeReview,
   provider = "claude",
+  profileReference,
 }: TemplateOptions): WorkflowDefinitionTemplate[] {
   return [
     {
@@ -390,28 +397,32 @@ export function workflowDefinitionTemplates({
       name: "Ticket workflow",
       description:
         "The current production delivery flow from ticket assignment through PR publication.",
-      definition: defaultWorkflowDefinitionV2({ includeReview, provider }),
+      definition: defaultWorkflowDefinitionV2({
+        includeReview,
+        provider,
+        profileReference,
+      }),
     },
     {
       id: "human-approved-plan",
       name: "Human-approved plan",
       description:
         "Plans first, waits for approval, then implements the approved plan.",
-      definition: humanApprovedPlanDefinition(provider),
+      definition: humanApprovedPlanDefinition(provider, profileReference),
     },
     {
       id: "review-fix-after-pr",
       name: "Review & fix after PR",
       description:
         "Responds to failed checks or requested changes on workflow-owned pull requests.",
-      definition: reviewFixAfterPrDefinition(provider),
+      definition: reviewFixAfterPrDefinition(provider, profileReference),
     },
     {
       id: "fully-modular",
       name: "Fully modular",
       description:
         "Builds delivery from generic agents, workspace, checks, and a visible Branch.",
-      definition: fullyModularDefinition(provider),
+      definition: fullyModularDefinition(provider, profileReference),
     },
   ];
 }

@@ -27,6 +27,7 @@ import {
   resolveWorkflowDataReferenceV2,
   type V2BindingResolutionContext,
 } from "../workflow-definition/v2-bindings.js";
+import type { ResolvedHarnessRuntime } from "../sandbox/harness-runtime.js";
 
 export type EffectivePromptSectionKind =
   | "profile"
@@ -73,6 +74,27 @@ export interface ResolveProfileInstructionsInput {
 export type ResolveProfileInstructions = (
   input: ResolveProfileInstructionsInput,
 ) => Promise<EffectivePromptProfileSource | null>;
+
+export function effectivePromptProfileSource(
+  runtime: ResolvedHarnessRuntime,
+): EffectivePromptProfileSource {
+  const instructions = [
+    runtime.manifest.instructions,
+    ...runtime.manifest.homeFiles.map(
+      (file) =>
+        `<profile-home-file path="${file.path}">\n${file.content}\n</profile-home-file>`,
+    ),
+  ]
+    .filter((value) => value.trim().length > 0)
+    .join("\n\n");
+  return {
+    profileId: runtime.manifest.profileId,
+    version: runtime.manifest.version,
+    name: runtime.manifest.displayName,
+    instructions,
+    hash: runtime.manifestHash,
+  };
+}
 
 /**
  * Compatibility resolver until the code-owned built-in profile manifests are

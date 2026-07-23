@@ -34,6 +34,10 @@ import {
   inspectJsonSchema202012,
 } from "./json-schema.js";
 import {
+  dashboardOrganizationId,
+  validateHarnessProfileReferences,
+} from "./harness-profile-runtime.js";
+import {
   validateWorkflowDefinitionCandidate,
   type WorkflowDefinitionCandidateValidation,
 } from "./validation.js";
@@ -219,11 +223,25 @@ export async function validateWorkflowPromptAuthoringIssues(
   const context =
     registryContext ??
     (await import("./models.js")).workflowBlockRegistryContextFromEnv();
-  return validateWorkflowPromptAuthoringIssuesWithLoader(
-    definition,
-    context,
-    createPromptReferenceLoader(db),
+  const promptIssues =
+    await validateWorkflowPromptAuthoringIssuesWithLoader(
+      definition,
+      context,
+      createPromptReferenceLoader(db),
+    );
+  if (!definition.nodes.some((node) => isPromptAuthoringBlock(node))) {
+    return promptIssues;
+  }
+  const { env } = await import("../../env.js");
+  const organizationId = await dashboardOrganizationId(
+    db,
+    env.DASHBOARD_ORG_SLUG,
   );
+  const profileIssues = await validateHarnessProfileReferences(db, {
+    definition,
+    organizationId,
+  });
+  return dedupeIssues([...promptIssues, ...profileIssues]);
 }
 
 export async function validateWorkflowPromptAuthoringIssuesWithLoader(

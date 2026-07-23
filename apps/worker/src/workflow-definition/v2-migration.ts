@@ -1,10 +1,12 @@
 import { isDeepStrictEqual } from "node:util";
 import {
   BLOCK_TYPE_SPECS,
+  BUILTIN_HARNESS_PROFILE_MANIFESTS,
   parsePromptReferenceTokens,
   type WorkflowDefinitionV1,
 } from "@shared/contracts";
 import type { Db } from "../db/client.js";
+import { getCurrentSystemHarnessProfileReference } from "../harness-profiles/store.js";
 import {
   createPromptReferenceLoader,
   getPrompt,
@@ -135,11 +137,27 @@ export async function convertWorkflowDefinitionV1ToV2WithPromptResolution(
     registryContext?: WorkflowBlockRegistryContext;
   },
 ): Promise<WorkflowV2MigrationResult> {
+  const [claudeReference, codexReference] = await Promise.all([
+    getCurrentSystemHarnessProfileReference(db, "claude"),
+    getCurrentSystemHarnessProfileReference(db, "codex"),
+  ]);
   return convertWorkflowDefinitionV1ToV2({
     ...input,
     registryContext:
       input.registryContext ?? workflowBlockRegistryContextFromEnv(),
     promptResolutions: await resolvePromptVersions(db, input.definition),
+    harnessProfiles: {
+      claude: {
+        reference: claudeReference,
+        modelId:
+          BUILTIN_HARNESS_PROFILE_MANIFESTS["builtin-claude"].model.id,
+      },
+      codex: {
+        reference: codexReference,
+        modelId:
+          BUILTIN_HARNESS_PROFILE_MANIFESTS["builtin-codex"].model.id,
+      },
+    },
   });
 }
 

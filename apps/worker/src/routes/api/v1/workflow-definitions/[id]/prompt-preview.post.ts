@@ -24,7 +24,7 @@ interface PromptPreviewBody {
 export default defineEventHandler(async (event) => {
   try {
     setResponseHeader(event, "Cache-Control", "private, no-store");
-    await requireDashboardActor(event);
+    const actor = await requireDashboardActor(event);
     const definitionId = parseDefinitionId(event);
     const body =
       (await readBody<PromptPreviewBody>(event).catch(() => null)) ?? {};
@@ -52,6 +52,7 @@ export default defineEventHandler(async (event) => {
       body.definition,
       body.blockId,
       workflowBlockRegistryContextFromEnv(),
+      { organizationId: actor.organizationId },
     );
     if (!result.ok) {
       throw createError({

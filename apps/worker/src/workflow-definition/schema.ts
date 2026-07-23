@@ -1675,16 +1675,6 @@ function validateWorkflowV2ConfigurationIssues(
         isV2PromptAuthoringBlock(node.type) &&
         isHarnessProfileReference(profileReference)
       ) {
-        if (resolveBuiltinHarnessProfile(profileReference) === null) {
-          issues.push(
-            invalidConfigurationIssue(
-              node,
-              nodeIndex,
-              ["harnessProfile"],
-              `Harness Profile "${profileReference.profileId}" version ${profileReference.version} is not available.`,
-            ),
-          );
-        }
         if (
           node.configuration.provider !== undefined ||
           node.configuration.model !== undefined

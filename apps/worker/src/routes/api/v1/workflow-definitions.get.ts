@@ -2,6 +2,7 @@ import { createError, defineEventHandler, getRouterParam, type H3Event } from "h
 import type { WorkflowDefinitionMeta, WorkflowDefinitionsResponse } from "@shared/contracts";
 import { env } from "../../../../env.js";
 import { getDb } from "../../../db/client.js";
+import { getCurrentSystemHarnessProfileReference } from "../../../harness-profiles/store.js";
 import { requireDashboardActor, toHttpError } from "../../../lib/auth/request-context.js";
 import { defaultWorkflowDefinitionV2 } from "../../../workflow-definition/default.js";
 import { workflowDefinitionTemplates } from "../../../workflow-definition/templates.js";
@@ -55,22 +56,26 @@ export default defineEventHandler(
   async (event): Promise<WorkflowDefinitionsResponse | undefined> => {
     try {
       await requireDashboardActor(event);
-      const definitions = (await listWorkflowDefinitions(getDb())).map((row) =>
+      const db = getDb();
+      const definitions = (await listWorkflowDefinitions(db)).map((row) =>
         serializeDefinitionMeta(row),
       );
-      const [models, ticketStatuses] = await Promise.all([
+      const [models, ticketStatuses, profileReference] = await Promise.all([
         fetchAvailableModels(),
         fetchTicketStatuses(),
+        getCurrentSystemHarnessProfileReference(db, env.AGENT_KIND),
       ]);
       return {
         definitions,
         templates: workflowDefinitionTemplates({
           includeReview: env.ENABLE_REVIEW_PHASE,
           provider: env.AGENT_KIND,
+          profileReference,
         }),
         defaultDefinition: defaultWorkflowDefinitionV2({
           includeReview: env.ENABLE_REVIEW_PHASE,
           provider: env.AGENT_KIND,
+          profileReference,
         }),
         options: buildWorkflowEditorOptions(models, ticketStatuses),
       };

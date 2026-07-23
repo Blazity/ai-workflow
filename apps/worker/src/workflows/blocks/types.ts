@@ -27,6 +27,7 @@ import type { LoadedPrompts } from "../prompts-step.js";
 import type { AgentWorkflowInput } from "../agent-input.js";
 import type { RunBudgetObservation } from "../run-budget.js";
 import type { WorkspaceGate } from "../workspace-gate.js";
+import type { ResolvedHarnessRuntime } from "../../sandbox/harness-runtime.js";
 
 /**
  * Frozen contract between the graph engine (agent.ts, wired in stage C4) and
@@ -80,7 +81,13 @@ export interface EngineCtx {
   /** Agent-only scratch sandboxes used by planning and workspace-free Generic
    *  blocks. They never contain checked-out repositories and therefore do not
    * satisfy modular workspace consumers. */
-  agentSandboxIds: Partial<Record<AgentKind, string>>;
+  /**
+   * Repository-free scratch sandboxes keyed by immutable manifest hash. Legacy
+   * v1 entries use a `legacy:<provider>` compatibility key.
+   */
+  agentSandboxIds: Record<string, string>;
+  /** Exact resolved profile runtime for every agent node in this definition. */
+  harnessRuntimes: Record<string, ResolvedHarnessRuntime>;
   /**
    * Authoritative in-memory terminal-cleanup set for every code and agent-only
    * scratch sandbox provisioned by this run. Every id is also persisted as a
@@ -221,4 +228,12 @@ export function recordBlockPhaseUsage(
   } else {
     ctx.recordUsage(label, usage, model, execution.attempt);
   }
+  execution?.recordBudgetUsage?.(usage, model);
+}
+
+export function blockBudgetObserver(
+  ctx: Pick<EngineCtx, "observeBudget">,
+  execution?: BlockExecutionContext,
+): EngineCtx["observeBudget"] {
+  return execution?.observeBudget ?? ctx.observeBudget;
 }

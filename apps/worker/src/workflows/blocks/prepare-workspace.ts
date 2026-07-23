@@ -18,6 +18,7 @@ import {
   type BlockExecutionResult,
 } from "./types.js";
 import type { BlockExecutionContext } from "../../workflow-definition/interpreter.js";
+import type { ResolvedHarnessRuntime } from "../../sandbox/harness-runtime.js";
 
 export const paramsSchema = z.object({}).strict();
 
@@ -31,6 +32,12 @@ interface PreSandboxTicketContext {
     labels: string[];
   };
   run: { branchName: string };
+}
+
+interface WorkspaceAgentRuntime {
+  kind: AgentKind;
+  model: string;
+  runtime?: ResolvedHarnessRuntime;
 }
 
 type PreSandboxOutcome =
@@ -99,7 +106,7 @@ async function blockPrepareWorkspaceProvisionStep(
   branchName: string,
   selectedRepositories: WorkspaceRepositoryInput[],
   arthurTaskId: string | null,
-  requiredKinds: AgentKind[],
+  requiredAgents: WorkspaceAgentRuntime[],
 ): Promise<
   | { ok: true; sandboxId: string; workspaceManifest: WorkspaceManifest }
   | { ok: false; failure: Extract<AgentProtocolResult<unknown>, { ok: false }> }
@@ -119,13 +126,14 @@ async function blockPrepareWorkspaceProvisionStep(
         }
       : undefined;
 
-  for (const kind of requiredKinds) {
+  for (const { kind, runtime } of requiredAgents) {
+    const spec = createAgentAdapter(kind, runtime?.cliSpec).cliSpec;
     if (kind === "codex" && !env.CODEX_API_KEY && !env.CODEX_CHATGPT_OAUTH_TOKEN) {
       const { runtimePreparationError } = await import(
         "../../sandbox/agents/protocol.js"
       );
       const error = runtimePreparationError(
-        createAgentAdapter(kind).cliSpec,
+        spec,
         "Codex authentication credentials are missing from the deployed environment.",
       );
       return {
@@ -143,7 +151,7 @@ async function blockPrepareWorkspaceProvisionStep(
         "../../sandbox/agents/protocol.js"
       );
       const error = runtimePreparationError(
-        createAgentAdapter(kind).cliSpec,
+        spec,
         "Claude authentication credentials are missing from the deployed environment.",
       );
       return {
@@ -158,19 +166,35 @@ async function blockPrepareWorkspaceProvisionStep(
     }
   }
 
-  const configureOptsFor = (kind: AgentKind) => ({
-    anthropicApiKey: env.ANTHROPIC_API_KEY,
-    codexApiKey: env.CODEX_API_KEY,
-    codexChatGptOauthToken: env.CODEX_CHATGPT_OAUTH_TOKEN,
-    model: kind === "codex" ? env.CODEX_MODEL : env.CLAUDE_MODEL,
-    arthur,
-  });
+  const configureOptsFor = async ({
+    kind,
+    model,
+    runtime,
+  }: WorkspaceAgentRuntime) => {
+    if (!runtime) {
+      return {
+        anthropicApiKey: env.ANTHROPIC_API_KEY,
+        codexApiKey: env.CODEX_API_KEY,
+        codexChatGptOauthToken: env.CODEX_CHATGPT_OAUTH_TOKEN,
+        model,
+        arthur,
+      };
+    }
+    return {
+      model: runtime.manifest.model.id,
+      runtime: runtime.paths,
+      legacyDynamicSkills: false,
+    };
+  };
 
-  const [primaryKind, ...restKinds] = requiredKinds;
-  const additionalAgents = restKinds.map((kind) => ({
-    agent: createAgentAdapter(kind),
-    configureOpts: configureOptsFor(kind),
-  }));
+  const [primary, ...rest] = requiredAgents;
+  const additionalAgents = await Promise.all(
+    rest.map(async (entry) => ({
+      agent: createAgentAdapter(entry.kind, entry.runtime?.cliSpec),
+      configureOpts: await configureOptsFor(entry),
+      ...(entry.runtime ? { runtime: entry.runtime } : {}),
+    })),
+  );
 
   const manager = new SandboxManager({
     providers: await buildSandboxProviderConfigs(
@@ -182,8 +206,10 @@ async function blockPrepareWorkspaceProvisionStep(
   try {
     const { sandbox, workspaceManifest } = await manager.provisionMultiRepo(
       { branchName, repositories: selectedRepositories },
-      createAgentAdapter(primaryKind),
-      configureOptsFor(primaryKind),
+      primary
+        ? createAgentAdapter(primary.kind, primary.runtime?.cliSpec)
+        : null,
+      primary ? await configureOptsFor(primary) : null,
       additionalAgents,
       {
         onCreated: async (sandboxId) => {
@@ -195,6 +221,7 @@ async function blockPrepareWorkspaceProvisionStep(
           );
         },
       },
+      primary?.runtime,
     );
     return { ok: true, sandboxId: sandbox.sandboxId, workspaceManifest };
   } catch (error) {
@@ -233,19 +260,52 @@ const CODE_WORKSPACE_AGENT_BLOCK_TYPES = new Set<string>([
   "generic_agent",
 ]);
 
-function requiredKindsForDefinition(
-  nodes: WorkflowDefinitionNode[],
-  defaultKind: AgentKind,
-  defaults: { claude: string; codex: string },
-): AgentKind[] {
-  const kinds: AgentKind[] = [defaultKind];
-  for (const node of nodes) {
-    if (!CODE_WORKSPACE_AGENT_BLOCK_TYPES.has(node.type)) continue;
-    if (node.type === "generic_agent" && node.params.workspaceMode === "none") continue;
-    const resolved = resolveBlockAgent(node.params, defaultKind, defaults);
-    if (!kinds.includes(resolved.kind)) kinds.push(resolved.kind);
+export function requiredAgentsForDefinition(input: {
+  schemaVersion: 1 | 2;
+  nodes: WorkflowDefinitionNode[];
+  defaultKind: AgentKind;
+  defaults: { claude: string; codex: string };
+  harnessRuntimes: Readonly<Record<string, ResolvedHarnessRuntime>>;
+}): WorkspaceAgentRuntime[] {
+  if (input.schemaVersion === 1) {
+    const kinds: AgentKind[] = [input.defaultKind];
+    for (const node of input.nodes) {
+      if (!CODE_WORKSPACE_AGENT_BLOCK_TYPES.has(node.type)) continue;
+      if (node.type === "generic_agent" && node.params.workspaceMode === "none") {
+        continue;
+      }
+      const resolved = resolveBlockAgent(
+        node.params,
+        input.defaultKind,
+        input.defaults,
+      );
+      if (!kinds.includes(resolved.kind)) kinds.push(resolved.kind);
+    }
+    return kinds.map((kind) => ({
+      kind,
+      model: input.defaults[kind],
+    }));
   }
-  return kinds;
+
+  const runtimes = new Map<string, ResolvedHarnessRuntime>();
+  for (const node of input.nodes) {
+    if (!CODE_WORKSPACE_AGENT_BLOCK_TYPES.has(node.type)) continue;
+    if (node.type === "generic_agent" && node.params.workspaceMode === "none") {
+      continue;
+    }
+    const runtime = input.harnessRuntimes[node.id];
+    if (!runtime) {
+      throw new Error(
+        `Harness Profile runtime for block "${node.id}" is unavailable.`,
+      );
+    }
+    runtimes.set(runtime.manifestHash, runtime);
+  }
+  return [...runtimes.values()].map((runtime) => ({
+    kind: runtime.manifest.harness.provider,
+    model: runtime.manifest.model.id,
+    runtime,
+  }));
 }
 
 /**
@@ -366,18 +426,20 @@ export async function ensureWorkspace(
 
     const arthurTaskId = await ensureArthurTask(ctx);
 
-    const requiredKinds = requiredKindsForDefinition(
-      ctx.definitionNodes,
-      ctx.runDefaultKind,
-      ctx.defaults,
-    );
+    const requiredAgents = requiredAgentsForDefinition({
+      schemaVersion: ctx.schemaVersion,
+      nodes: ctx.definitionNodes,
+      defaultKind: ctx.runDefaultKind,
+      defaults: ctx.defaults,
+      harnessRuntimes: ctx.harnessRuntimes,
+    });
     const provisioned = await blockPrepareWorkspaceProvisionStep(
       ctx.entry.subjectKey,
       ctx.entry.ownerToken,
       ctx.branchName,
       workspaceRepositories,
       arthurTaskId,
-      requiredKinds,
+      requiredAgents,
     );
     if (!provisioned.ok) return agentProtocolExecutionError(provisioned.failure);
     const { sandboxId, workspaceManifest } = provisioned;

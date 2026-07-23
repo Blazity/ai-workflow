@@ -5,6 +5,7 @@ import type { Db } from "../db/client.js";
 import { createPromptReferenceLoader } from "../prompt-library/store.js";
 import {
   exampleValueForJsonSchema,
+  effectivePromptProfileSource,
   resolveProfileInstructions,
   type EffectivePromptCompilation,
 } from "../workflows/effective-prompt.js";
@@ -15,6 +16,7 @@ import {
   resolveNodePromptAuthoring,
 } from "./prompt-authoring.js";
 import { validateWorkflowDefinitionCandidate } from "./validation.js";
+import { resolveHarnessRuntimesForDefinition } from "./harness-profile-runtime.js";
 
 export interface WorkflowPromptPreview {
   blockId: string;
@@ -40,6 +42,7 @@ export async function previewWorkflowPromptCandidate(
   candidate: unknown,
   blockId: string,
   registryContext: WorkflowBlockRegistryContext,
+  options: { organizationId?: string } = {},
 ): Promise<WorkflowPromptPreviewResult> {
   const validated = validateWorkflowDefinitionCandidate(
     candidate,
@@ -76,10 +79,26 @@ export async function previewWorkflowPromptCandidate(
 
   const availableValues =
     validated.response.availableValuesByNode[node.id] ?? [];
-  const profileSource = await resolveProfileInstructions({
+  let profileSource = await resolveProfileInstructions({
     node,
     defaultProvider: registryContext.defaultAgent.provider,
   });
+  if (options.organizationId) {
+    try {
+      const runtimes = await resolveHarnessRuntimesForDefinition(db, {
+        definition: validated.parsed,
+        organizationId: options.organizationId,
+        defaultProvider: registryContext.defaultAgent.provider,
+      });
+      const runtime = runtimes[node.id];
+      profileSource = runtime
+        ? effectivePromptProfileSource(runtime)
+        : profileSource;
+    } catch {
+      // Keep the code-owned compatibility source in the preview and surface
+      // the unavailable persisted profile through normal validation.
+    }
+  }
   const resolved = await resolveNodePromptAuthoring({
     node,
     nodeIndex,

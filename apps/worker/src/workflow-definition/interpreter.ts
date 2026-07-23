@@ -183,6 +183,19 @@ export interface BlockExecutionContext {
   clarificationAnswer?: string;
   cancellation?: import("./invocation-context.js").V2InvocationCancellation;
   /**
+   * V2 Harness Profile budget seam. The workflow-level budget remains on
+   * EngineCtx; this observer additionally enforces only the profile selected
+   * for the current invocation.
+   */
+  observeBudget?: (
+    requireRemainingDuration?: boolean,
+  ) => Promise<import("../workflows/run-budget.js").RunBudgetObservation>;
+  /** Record usage against the current invocation's Harness Profile limits. */
+  recordBudgetUsage?: (
+    usage: import("../sandbox/agents/types.js").PhaseUsage | null,
+    model: string,
+  ) => void;
+  /**
    * V2-only compiler seam. Agent executors call it after assembling the exact
    * runtime context and workspace, immediately before launching the provider.
    */

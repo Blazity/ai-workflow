@@ -6,15 +6,22 @@ import type {
   AgentProtocolFailureCategory,
   AgentProtocolFailureKind,
   AgentProtocolResult,
+  AgentRuntimePaths,
   CollectedPhaseArtifacts,
   RunnableSandbox,
+  SerializableAgentCliSpec,
 } from "./types.js";
 
 const DIAGNOSTIC_TAIL_BYTES = 2 * 1024;
 const MAX_SCHEMA_ISSUES = 20;
 
-export const AGENT_CLI_SPECS = {
-  claude: {
+/**
+ * Append-only runtime protocol catalog. Published Harness Profile versions
+ * pin one exact entry, so old entries must remain here when a newer CLI becomes
+ * the default.
+ */
+export const AGENT_CLI_SPEC_CATALOG = [
+  {
     kind: "claude",
     packageName: "@anthropic-ai/claude-code",
     version: "2.1.216",
@@ -23,7 +30,7 @@ export const AGENT_CLI_SPECS = {
       output.trim().match(/^(\d+\.\d+\.\d+)(?:\s+\(Claude Code\))?$/)?.[1] ?? null,
     protocol: "claude-json-2.1.216",
   },
-  codex: {
+  {
     kind: "codex",
     packageName: "@openai/codex",
     version: "0.144.6",
@@ -32,7 +39,31 @@ export const AGENT_CLI_SPECS = {
       output.trim().match(/^(?:codex(?:-cli)?\s+)?(\d+\.\d+\.\d+)$/i)?.[1] ?? null,
     protocol: "codex-jsonl-0.144.6",
   },
+] as const satisfies readonly AgentCliSpec[];
+
+export const AGENT_CLI_SPECS = {
+  claude: AGENT_CLI_SPEC_CATALOG[0],
+  codex: AGENT_CLI_SPEC_CATALOG[1],
 } as const satisfies Record<AgentCliSpec["kind"], AgentCliSpec>;
+
+export function hydrateAgentCliSpec(
+  serialized: SerializableAgentCliSpec,
+): AgentCliSpec {
+  const supported = AGENT_CLI_SPEC_CATALOG.find(
+    (candidate) =>
+      serialized.kind === candidate.kind &&
+      serialized.packageName === candidate.packageName &&
+      serialized.version === candidate.version &&
+      serialized.executable === candidate.executable &&
+      serialized.protocol === candidate.protocol,
+  );
+  if (!supported) {
+    throw new Error(
+      `Agent CLI specification ${serialized.kind}:${serialized.packageName}@${serialized.version}/${serialized.protocol} is not in the code-owned runtime catalog.`,
+    );
+  }
+  return supported;
+}
 
 export class AgentRuntimeError extends Error {
   readonly category: AgentProtocolFailureCategory;
@@ -59,17 +90,38 @@ export function isAgentRuntimeError(error: unknown): error is AgentRuntimeError 
 export async function installAndVerifyCli(
   sandbox: RunnableSandbox,
   spec: AgentCliSpec,
+  runtime?: AgentRuntimePaths,
 ): Promise<void> {
-  const install = await sandbox.runCommand("npm", [
-    "install",
-    "-g",
-    `${spec.packageName}@${spec.version}`,
-  ]);
+  const install = runtime
+    ? await sandbox.runCommand("npm", [
+        "install",
+        "--prefix",
+        runtime.cliDir,
+        "--omit=dev",
+        "--no-save",
+        `${spec.packageName}@${spec.version}`,
+      ])
+    : await sandbox.runCommand("npm", [
+        "install",
+        "-g",
+        `${spec.packageName}@${spec.version}`,
+      ]);
   if (install.exitCode !== 0) {
     throw await commandRuntimeError(spec, "install", "install_failed", install);
   }
 
-  const versionCommand = await sandbox.runCommand(spec.executable, ["--version"]);
+  await verifyInstalledCli(sandbox, spec, runtime);
+}
+
+export async function verifyInstalledCli(
+  sandbox: RunnableSandbox,
+  spec: AgentCliSpec,
+  runtime?: AgentRuntimePaths,
+): Promise<void> {
+  const versionCommand = await sandbox.runCommand(
+    runtime?.executablePath ?? spec.executable,
+    ["--version"],
+  );
   if (versionCommand.exitCode !== 0) {
     throw await commandRuntimeError(
       spec,

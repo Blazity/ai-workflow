@@ -12,6 +12,7 @@ import type {
 } from "@shared/contracts";
 import { env } from "../../../../env.js";
 import { getDb } from "../../../db/client.js";
+import { getCurrentSystemHarnessProfileReference } from "../../../harness-profiles/store.js";
 import { requireDashboardActor } from "../../../lib/auth/request-context.js";
 import { canEditWorkflowDefinitions } from "../../../lib/auth/roles.js";
 import { dashboardUserLabel } from "../../../pre-pr-checks/store.js";
@@ -112,6 +113,11 @@ export default defineEventHandler(
       }
 
       const dbHandle = getDb();
+      const currentSystemProfile =
+        await getCurrentSystemHarnessProfileReference(
+          dbHandle,
+          env.AGENT_KIND,
+        );
 
       let seed: WorkflowDefinition;
       if (source.kind === "duplicate") {
@@ -215,6 +221,7 @@ export default defineEventHandler(
         const template = workflowDefinitionTemplate(source.templateId, {
           includeReview: env.ENABLE_REVIEW_PHASE,
           provider: env.AGENT_KIND,
+          profileReference: currentSystemProfile,
         });
         if (!template) {
           throw createError({ statusCode: 400, statusMessage: "Unknown template" });
@@ -224,6 +231,7 @@ export default defineEventHandler(
         seed = defaultWorkflowDefinitionV2({
           includeReview: env.ENABLE_REVIEW_PHASE,
           provider: env.AGENT_KIND,
+          profileReference: currentSystemProfile,
         });
       }
 

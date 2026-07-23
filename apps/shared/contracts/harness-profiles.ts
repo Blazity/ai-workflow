@@ -9,6 +9,13 @@ export type HarnessProvider = keyof typeof BUILTIN_HARNESS_PROFILE_IDS;
 export type BuiltinHarnessProfileId =
   (typeof BUILTIN_HARNESS_PROFILE_IDS)[HarnessProvider];
 
+export const HARNESS_TOOL_IDS = ["filesystem", "shell", "git"] as const;
+export type HarnessToolId = (typeof HARNESS_TOOL_IDS)[number];
+
+export const HARNESS_MCP_INTEGRATION_IDS = [] as const;
+export type HarnessMcpIntegrationId =
+  (typeof HARNESS_MCP_INTEGRATION_IDS)[number];
+
 /** Exact immutable profile version pinned by a v2 agent block. */
 export interface HarnessProfileReference {
   profileId: string;
@@ -26,18 +33,10 @@ export interface HarnessProfileSkillReference {
   name: string;
 }
 
-/**
- * Complete non-secret manifest used by the code-owned PR4 compatibility
- * profiles. PR5 persists this same contract as an immutable profile version.
- */
-export interface HarnessProfileManifestV1 {
+export interface HarnessProfileDraftManifestV1 {
   schemaVersion: 1;
-  profileId: BuiltinHarnessProfileId;
-  version: 1;
-  slug: string;
   displayName: string;
   description: string;
-  system: true;
   harness: {
     provider: HarnessProvider;
     packageName: string;
@@ -76,6 +75,203 @@ export interface HarnessProfileManifestV1 {
   credentialReferences: string[];
 }
 
+/**
+ * Complete non-secret manifest used by the code-owned PR4 compatibility
+ * profiles. PR5 persists this same contract as an immutable profile version.
+ */
+export interface HarnessProfileManifestV1
+  extends HarnessProfileDraftManifestV1 {
+  profileId: string;
+  version: number;
+  slug: string;
+  system: boolean;
+}
+
+export interface HarnessProfileDto {
+  id: string;
+  organizationId: string | null;
+  slug: string;
+  system: boolean;
+  readOnly: boolean;
+  archivedAt: string | null;
+  draftRevision: number;
+  draftRestoredFromVersion: number | null;
+  publishedVersion: number | null;
+  draft: HarnessProfileDraftManifestV1;
+  createdAt: string;
+  updatedAt: string;
+  createdById: string;
+  updatedById: string;
+}
+
+export interface HarnessProfileVersionDto {
+  profileId: string;
+  version: number;
+  manifest: HarnessProfileManifestV1;
+  manifestHash: string;
+  createdAt: string;
+  createdById: string;
+  restoredFromVersion: number | null;
+}
+
+export interface HarnessProfileResolvedVersion {
+  manifest: HarnessProfileManifestV1;
+  manifestHash: string;
+  skillArtifacts: HarnessResolvedSkillArtifact[];
+}
+
+export interface HarnessRunManifestRecord {
+  nodeId: string;
+  reference: HarnessProfileReference;
+  manifestHash: string;
+  manifest: {
+    schemaVersion: 1;
+    profileId: string;
+    version: number;
+    slug: string;
+    displayName: string;
+    system: boolean;
+    harness: HarnessProfileManifestV1["harness"];
+    model: HarnessProfileManifestV1["model"];
+    context: HarnessProfileManifestV1["context"];
+    compaction: HarnessProfileManifestV1["compaction"];
+    subagents: HarnessProfileManifestV1["subagents"];
+    limits: HarnessProfileManifestV1["limits"];
+    workspace: HarnessProfileManifestV1["workspace"];
+    instructionsSha256: string;
+    homeFiles: {
+      count: number;
+      totalBytes: number;
+      sha256: string;
+    };
+    skills: HarnessProfileSkillReference[];
+    tools: string[];
+    mcpIntegrations: string[];
+    credentialReferences: string[];
+  };
+  skills: Array<{
+    artifactHash: string;
+    name: string;
+    source: HarnessSkillSource;
+    fileCount: number;
+    totalBytes: number;
+  }>;
+  declaredCapabilities: string[];
+  effectiveCapabilities: string[];
+  clippedCapabilities: string[];
+}
+
+export interface HarnessProfileCapabilities {
+  requestedTools: string[];
+  tools: HarnessToolId[];
+  clippedTools: string[];
+  requestedMcpIntegrations: string[];
+  mcpIntegrations: HarnessMcpIntegrationId[];
+  clippedMcpIntegrations: string[];
+  subagents: {
+    requested: boolean;
+    enabled: boolean;
+    maxConcurrent: number;
+    clipped: boolean;
+  };
+}
+
+export interface HarnessProfilesResponse {
+  profiles: HarnessProfileDto[];
+  canManageProfiles: boolean;
+}
+
+export interface HarnessProfileDetailResponse {
+  profile: HarnessProfileDto;
+  published: HarnessProfileVersionDto | null;
+  versions: HarnessProfileVersionDto[];
+  canManageProfile: boolean;
+}
+
+export interface HarnessProfileMutationResponse {
+  profile: HarnessProfileDto;
+}
+
+export interface HarnessProfilePublishResponse {
+  profile: HarnessProfileDto;
+  version: HarnessProfileVersionDto;
+  changed: boolean;
+}
+
+export interface HarnessSkillSource {
+  owner: string;
+  repository: string;
+  path: string;
+  commitSha: string;
+}
+
+export interface HarnessSkillDiscovery {
+  name: string;
+  path: string;
+  description: string | null;
+}
+
+export interface HarnessSkillDiscoveryResponse {
+  source: Omit<HarnessSkillSource, "path">;
+  skills: HarnessSkillDiscovery[];
+}
+
+export interface HarnessSkillDiscoverRequest {
+  source: string;
+}
+
+export interface HarnessSkillImportRequest {
+  source: Omit<HarnessSkillSource, "path">;
+  paths: string[];
+}
+
+export interface HarnessSkillArtifactFile {
+  path: string;
+  mode: number;
+  sizeBytes: number;
+  sha256: string;
+}
+
+export interface HarnessSkillArtifact {
+  artifactHash: string;
+  organizationId: string;
+  name: string;
+  description: string | null;
+  source: HarnessSkillSource;
+  files: HarnessSkillArtifactFile[];
+  createdAt: string;
+  createdById: string;
+}
+
+export interface HarnessResolvedSkillArtifact
+  extends HarnessSkillArtifact {
+  files: Array<HarnessSkillArtifactFile & { contentBase64: string }>;
+}
+
+export interface HarnessSkillImportResponse {
+  artifacts: HarnessSkillArtifact[];
+}
+
+export interface HarnessSkillRefreshRequest {
+  expectedRevision: number;
+  artifactHash: string;
+}
+
+export interface HarnessSkillRefreshResponse {
+  profile: HarnessProfileDto;
+  artifact: HarnessSkillArtifact;
+}
+
+export const HARNESS_SKILL_IMPORT_LIMITS = {
+  maxFiles: 500,
+  maxFileBytes: 1024 * 1024,
+  maxSkillBytes: 5 * 1024 * 1024,
+} as const;
+
+/**
+ * A built-in manifest's version is its monotonic code-owned catalog revision.
+ * Changing any persisted field requires increasing this value.
+ */
 const CLAUDE_COMPATIBILITY_MANIFEST = {
   schemaVersion: 1,
   profileId: BUILTIN_HARNESS_PROFILE_IDS.claude,
@@ -118,7 +314,7 @@ const CLAUDE_COMPATIBILITY_MANIFEST = {
   instructions:
     "Follow the block's fixed role, the repository instructions, and the supplied workflow data.",
   skills: [],
-  tools: [],
+  tools: ["filesystem", "shell", "git"],
   mcpIntegrations: [],
   credentialReferences: ["anthropic"],
 } as const satisfies HarnessProfileManifestV1;
@@ -165,7 +361,7 @@ const CODEX_COMPATIBILITY_MANIFEST = {
   instructions:
     "Follow the block's fixed role, the repository instructions, and the supplied workflow data.",
   skills: [],
-  tools: [],
+  tools: ["filesystem", "shell", "git"],
   mcpIntegrations: [],
   credentialReferences: ["openai"],
 } as const satisfies HarnessProfileManifestV1;
@@ -204,9 +400,10 @@ export function isHarnessProfileReference(
 export function builtinHarnessProfileReference(
   provider: HarnessProvider,
 ): HarnessProfileReference {
+  const profileId = BUILTIN_HARNESS_PROFILE_IDS[provider];
   return {
-    profileId: BUILTIN_HARNESS_PROFILE_IDS[provider],
-    version: 1,
+    profileId,
+    version: BUILTIN_HARNESS_PROFILE_MANIFESTS[profileId].version,
   };
 }
 

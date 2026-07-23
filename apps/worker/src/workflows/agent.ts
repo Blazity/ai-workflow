@@ -56,7 +56,9 @@ import { moveTicketStep } from "./ticket-transition-step.js";
 import {
   agentArtifactPhase,
   agentProtocolExecutionError as agentProtocolBlockError,
+  blockBudgetObserver,
   buildV2AgentArtifactKeys,
+  recordBlockPhaseUsage,
   type BlockExecuteFn,
   type EngineCtx,
 } from "./blocks/types.js";
@@ -70,7 +72,7 @@ import {
 import {
   compatibilityPromptSourceForV2Node,
   compileEffectivePrompt,
-  resolveProfileInstructions,
+  effectivePromptProfileSource,
 } from "./effective-prompt.js";
 import { loadInvocationRepositoryInstructionSources } from "./repository-instructions.js";
 import type { HumanDecision } from "../lib/human-decisions-memory.js";
@@ -84,8 +86,12 @@ import type { WorkspaceManifest } from "../sandbox/repo-workspace.js";
 import {
   ensureWorkspace,
   execute as executePrepareWorkspace,
+  requiredAgentsForDefinition,
 } from "./blocks/prepare-workspace.js";
-import { ensureAgentSandbox } from "./blocks/agent-sandbox.js";
+import {
+  ensureAgentSandbox,
+  prepareHarnessAgentInvocationStep,
+} from "./blocks/agent-sandbox.js";
 import { execute as executeFinalizeWorkspace } from "./blocks/finalize-workspace.js";
 import { execute as executeFixAgent } from "./blocks/fix-agent.js";
 import { execute as executeGenericAgent } from "./blocks/generic-agent.js";
@@ -131,11 +137,17 @@ import type {
   TransformConfiguration,
   WorkflowBlockType,
   WorkflowBlockTypeV1,
+  WorkflowDefinition,
   WorkflowDefinitionNode,
   WorkflowDefinitionV2,
   WorkflowDefinitionV2Node,
   WorkflowParamValue,
+  HarnessRunManifestRecord,
 } from "@shared/contracts";
+import {
+  combineHarnessRuntimeLimits,
+  type ResolvedHarnessRuntime,
+} from "../sandbox/harness-runtime.js";
 
 /** The agent-block prompt override: a non-empty `prompt` param replaces the
  *  built-in phase template. Empty / whitespace / non-string falls through to the
@@ -597,6 +609,22 @@ export function appendClarificationRound(
   return [...(history ?? []), round];
 }
 
+/**
+ * Scratch agent sandboxes are not part of the code-workspace checkpoint.
+ * Detach them before a hook suspension so resume can never reuse an expired
+ * sandbox ID.
+ */
+export function detachScratchSandboxesForClarification(
+  ctx: Pick<EngineCtx, "agentSandboxIds" | "sandboxIds">,
+): string[] {
+  const sandboxIds = [...new Set(Object.values(ctx.agentSandboxIds))];
+  for (const sandboxId of sandboxIds) ctx.sandboxIds.delete(sandboxId);
+  for (const key of Object.keys(ctx.agentSandboxIds)) {
+    delete ctx.agentSandboxIds[key];
+  }
+  return sandboxIds;
+}
+
 /** Build the planning clarification envelope once so persisted step output and
  * the interpreter-facing fields cannot drift apart. */
 export function planningClarificationResult(
@@ -622,13 +650,19 @@ export async function ensurePlanningAgentSandboxForBlock(
   kind: AgentKind,
   model: string,
   isolated = false,
+  runtime?: ResolvedHarnessRuntime,
 ): Promise<
   | { kind: "ready"; sandboxId: string }
   | Extract<BlockExecutionResult, { kind: "execution_error" }>
 > {
   try {
-    const sandboxId = isolated
-      ? await ensureAgentSandbox(ctx, kind, model, { reuse: false })
+    const options = isolated
+      ? { reuse: false, ...(runtime ? { runtime } : {}) }
+      : runtime
+        ? { runtime }
+        : null;
+    const sandboxId = options
+      ? await ensureAgentSandbox(ctx, kind, model, options)
       : await ensureAgentSandbox(ctx, kind, model);
     return {
       kind: "ready",
@@ -946,6 +980,7 @@ async function writeAndStartPhase(
   inputContent: string,
   scriptPath: string,
   scriptContent: string,
+  runtime?: ResolvedHarnessRuntime,
 ): Promise<
   | { ok: true; commandId: string }
   | { ok: false; failure: Extract<AgentProtocolResult<unknown>, { ok: false }> }
@@ -955,7 +990,7 @@ async function writeAndStartPhase(
   const { commandProtocolFailure, protocolFailure } = await import(
     "../sandbox/agents/protocol.js"
   );
-  const spec = createAgentAdapter(agentKind).cliSpec;
+  const spec = createAgentAdapter(agentKind, runtime?.cliSpec).cliSpec;
   try {
     const { Sandbox } = await import("@vercel/sandbox");
     const { getSandboxCredentials } = await import("../sandbox/credentials.js");
@@ -1041,6 +1076,7 @@ async function setCommitGuardStep(
   sandboxId: string,
   agentKind: AgentKind,
   enabled: boolean,
+  runtime?: ResolvedHarnessRuntime,
 ): Promise<AgentProtocolResult<void>> {
   "use step";
   const { Sandbox } = await import("@vercel/sandbox");
@@ -1048,9 +1084,9 @@ async function setCommitGuardStep(
   const { createAgentAdapter } = await import("../sandbox/agents/index.js");
 
   const sandbox = await Sandbox.get({ sandboxId, ...getSandboxCredentials() });
-  const agent = createAgentAdapter(agentKind);
+  const agent = createAgentAdapter(agentKind, runtime?.cliSpec);
   try {
-    await agent.setCommitGuard(sandbox, enabled);
+    await agent.setCommitGuard(sandbox, enabled, runtime?.paths);
     return { ok: true, value: undefined };
   } catch (error) {
     const { isAgentRuntimeError } = await import("../sandbox/agents/protocol.js");
@@ -1073,12 +1109,19 @@ async function planPhaseStep(
   phase: PhaseKind,
   model: string,
   jsonSchema?: string,
+  runtime?: ResolvedHarnessRuntime,
 ): Promise<{ paths: PhaseArtifactPaths; script: string }> {
   "use step";
   const { createAgentAdapter } = await import("../sandbox/agents/index.js");
-  const a = createAgentAdapter(agentKind);
+  const a = createAgentAdapter(agentKind, runtime?.cliSpec);
   const paths = a.artifactPaths(phase);
-  const script = a.buildPhaseScript({ phase, model, paths, jsonSchema });
+  const script = a.buildPhaseScript({
+    phase,
+    model,
+    paths,
+    jsonSchema,
+    ...(runtime ? { runtime: runtime.paths } : {}),
+  });
   return { paths, script };
 }
 
@@ -1086,10 +1129,11 @@ async function parseResearchStep(
   agentKind: AgentKind,
   artifacts: CollectedPhaseArtifacts,
   phase: PhaseKind = "research",
+  runtime?: ResolvedHarnessRuntime,
 ): Promise<{ result: AgentProtocolResult<ResearchResult>; usage: PhaseUsage | null }> {
   "use step";
   const { createAgentAdapter } = await import("../sandbox/agents/index.js");
-  const a = createAgentAdapter(agentKind);
+  const a = createAgentAdapter(agentKind, runtime?.cliSpec);
   return {
     result: a.parseResearchProtocol(artifacts, phase),
     usage: a.extractUsage(artifacts.stdout, artifacts.structuredOutput),
@@ -1100,10 +1144,11 @@ async function parseAgentOutputStep(
   agentKind: AgentKind,
   artifacts: CollectedPhaseArtifacts,
   phase: PhaseKind = "impl",
+  runtime?: ResolvedHarnessRuntime,
 ): Promise<{ result: AgentProtocolResult<AgentOutput>; usage: PhaseUsage | null }> {
   "use step";
   const { createAgentAdapter } = await import("../sandbox/agents/index.js");
-  const a = createAgentAdapter(agentKind);
+  const a = createAgentAdapter(agentKind, runtime?.cliSpec);
   return {
     result: a.parseAgentOutputProtocol(artifacts, phase),
     usage: a.extractUsage(artifacts.stdout, artifacts.structuredOutput),
@@ -1114,10 +1159,11 @@ async function parseReviewStep(
   agentKind: AgentKind,
   artifacts: CollectedPhaseArtifacts,
   phase: PhaseKind = "review",
+  runtime?: ResolvedHarnessRuntime,
 ): Promise<{ result: AgentProtocolResult<ReviewOutput>; usage: PhaseUsage | null }> {
   "use step";
   const { createAgentAdapter } = await import("../sandbox/agents/index.js");
-  const a = createAgentAdapter(agentKind);
+  const a = createAgentAdapter(agentKind, runtime?.cliSpec);
   return {
     result: a.parseReviewOutputProtocol(artifacts, phase),
     usage: a.extractUsage(artifacts.stdout, artifacts.structuredOutput),
@@ -1465,6 +1511,40 @@ async function resolveAgentKindOverride(labels: readonly string[]): Promise<Agen
   return parseAgentKindOverride(labels);
 }
 
+async function resolveHarnessRuntimesStep(
+  definition: WorkflowDefinition,
+  defaultProvider: AgentKind,
+): Promise<Record<string, ResolvedHarnessRuntime>> {
+  "use step";
+  if (definition.schemaVersion === 1) {
+    const { resolveHarnessRuntimesWithLoader } = await import(
+      "../workflow-definition/harness-profile-runtime.js"
+    );
+    return resolveHarnessRuntimesWithLoader(
+      definition,
+      defaultProvider,
+      async () => null,
+    );
+  }
+  const { env } = await import("../../env.js");
+  const { getDb } = await import("../db/client.js");
+  const {
+    dashboardOrganizationId,
+    resolveHarnessRuntimesForDefinition,
+  } = await import("../workflow-definition/harness-profile-runtime.js");
+  const db = getDb();
+  const organizationId = await dashboardOrganizationId(
+    db,
+    env.DASHBOARD_ORG_SLUG,
+  );
+  return resolveHarnessRuntimesForDefinition(db, {
+    definition,
+    organizationId,
+    defaultProvider,
+  });
+}
+resolveHarnessRuntimesStep.maxRetries = 0;
+
 async function runPrePrChecksStep(
   sandboxId: string,
   agentKind: AgentKind,
@@ -1476,6 +1556,8 @@ async function runPrePrChecksStep(
     limits: RunBudgetLimits;
     price: { input: number; cached_input: number; output: number } | null;
   },
+  runtime?: ResolvedHarnessRuntime,
+  arthurTaskId?: string | null,
 ): Promise<{
   configurationVersion: number | null;
   outcome: "passed" | "failed" | "missing_configuration";
@@ -1505,6 +1587,8 @@ async function runPrePrChecksStep(
     maxFixCycles,
     timeoutMs,
     budget,
+    runtime,
+    arthurTaskId,
   );
   return {
     ...result,
@@ -1550,6 +1634,87 @@ function phaseKey(base: string, attempt: number): string {
   return attempt <= 1 ? base : `${base} #${attempt}`;
 }
 
+export interface HarnessInvocationBudget {
+  limits: RunBudgetLimits;
+  observeBudget(
+    requireRemainingDuration?: boolean,
+  ): Promise<RunBudgetObservation>;
+  recordUsage(usage: PhaseUsage | null, model: string): void;
+}
+
+/**
+ * Profile limits are invocation-local. The workflow observer still runs on
+ * every boundary, while the local state contains only this invocation's usage
+ * and active time.
+ */
+export async function createHarnessInvocationBudget(input: {
+  workflowLimits: RunBudgetLimits;
+  runtime: ResolvedHarnessRuntime;
+  observeWorkflowBudget(
+    requireRemainingDuration?: boolean,
+  ): Promise<RunBudgetObservation>;
+  readClock(): Promise<number>;
+  priceLookup?(
+    model: string,
+  ): { input: number; cached_input: number; output: number } | null;
+}): Promise<HarnessInvocationBudget> {
+  const limits = combineHarnessRuntimeLimits(
+    input.workflowLimits,
+    input.runtime,
+  );
+  let state = createRunBudgetState();
+  let lastClockMs = await input.readClock();
+  return {
+    limits,
+    async observeBudget(requireRemainingDuration = true) {
+      const workflow = await input.observeWorkflowBudget(
+        requireRemainingDuration,
+      );
+      const now = await input.readClock();
+      state = addActiveElapsed(state, now - lastClockMs);
+      lastClockMs = Math.max(lastClockMs, now);
+      const profile = observeRunBudget(
+        state,
+        limits,
+        requireRemainingDuration,
+      );
+      return mergeBudgetObservations(workflow, profile);
+    },
+    recordUsage(usage, model) {
+      state = recordBudgetUsage(
+        state,
+        usage,
+        input.priceLookup?.(model) ?? null,
+      );
+    },
+  };
+}
+
+function mergeBudgetObservations(
+  workflow: RunBudgetObservation,
+  profile: RunBudgetObservation,
+): RunBudgetObservation {
+  const remainingDurationMs = Math.min(
+    workflow.remainingDurationMs,
+    profile.remainingDurationMs,
+  );
+  if (workflow.check.status !== "ok") {
+    return { ...workflow, remainingDurationMs };
+  }
+  if (profile.check.status !== "ok") {
+    return { ...profile, remainingDurationMs };
+  }
+  const tighter =
+    profile.remainingDurationMs < workflow.remainingDurationMs
+      ? profile
+      : workflow;
+  return {
+    ...tighter,
+    check: { status: "ok" },
+    remainingDurationMs,
+  };
+}
+
 /**
  * Persist the run's cost/usage (+ agent PR + ticket) to the durable telemetry
  * table. Called from the workflow's outer finally so cost is recorded on every
@@ -1568,6 +1733,7 @@ export async function recordRunTelemetryStep(payload: {
   budgetFailure: RunBudgetFailure | null;
   pr: { url: string; number: number } | null;
   executionError: { message: string; code: string } | null;
+  harnessManifests?: HarnessRunManifestRecord[];
 }) {
   "use step";
   const { getDb } = await import("../db/client.js");
@@ -1608,6 +1774,7 @@ export async function recordRunTelemetryStep(payload: {
     budgetFailure: payload.budgetFailure,
     prUrl: payload.pr?.url ?? null,
     prNumber: payload.pr?.number ?? null,
+    harnessManifests: payload.harnessManifests,
   });
 }
 recordRunTelemetryStep.maxRetries = 0;
@@ -1622,6 +1789,7 @@ async function recordBlockStatusesStep(payload: {
   definitionId: number | null;
   blockStatuses: Record<string, BlockRunState>;
   promptManifest?: ResolvedPromptReference[];
+  harnessManifests?: HarnessRunManifestRecord[];
 }) {
   "use step";
   const { getDb } = await import("../db/client.js");
@@ -1759,10 +1927,33 @@ async function agentWorkflowBody(
     }
   }
 
+  const agentKindOverride = await resolveAgentKindOverride(ticket.labels);
+  const runDefaultKind: AgentKind = resolveRunDefaultKind(
+    agentKindOverride,
+    env.AGENT_KIND,
+  );
+  const modelDefaults = {
+    claude: env.CLAUDE_MODEL,
+    codex: env.CODEX_MODEL,
+  };
+  const defaultModel = modelDefaults[runDefaultKind];
+  const harnessRuntimes = await resolveHarnessRuntimesStep(
+    plan.definition,
+    runDefaultKind,
+  );
+  const harnessManifests: HarnessRunManifestRecord[] = Object.values(
+    harnessRuntimes,
+  )
+    .map((runtime) => structuredClone(runtime.safeManifest))
+    .sort((left, right) => left.nodeId.localeCompare(right.nodeId));
   const budgetLimits: RunBudgetLimits = {
     maxDurationMs: plan.budgets?.maxDurationMs ?? env.JOB_TIMEOUT_MS,
-    ...(plan.budgets?.maxTokens !== undefined ? { maxTokens: plan.budgets.maxTokens } : {}),
-    ...(plan.budgets?.maxCostUsd !== undefined ? { maxCostUsd: plan.budgets.maxCostUsd } : {}),
+    ...(plan.budgets?.maxTokens !== undefined
+      ? { maxTokens: plan.budgets.maxTokens }
+      : {}),
+    ...(plan.budgets?.maxCostUsd !== undefined
+      ? { maxCostUsd: plan.budgets.maxCostUsd }
+      : {}),
   };
   let budgetState: RunBudgetState = createRunBudgetState();
   let lastBudgetClockMs = budgetStartedAtMs;
@@ -1829,6 +2020,7 @@ async function agentWorkflowBody(
       definitionId: plan.definitionId,
       blockStatuses: { ...blockStatuses },
       promptManifest: resolvedPrompts.manifest,
+      harnessManifests,
     }).catch(() => {});
   await writeBlockStatuses();
 
@@ -1918,25 +2110,28 @@ async function agentWorkflowBody(
     };
     const triggerOutput: BlockOutput = triggerOutputWithTicketContext(entry, ticketData);
 
-    // Per-ticket agent override via labels (e.g. `agent:codex`). Falls
-    // back to env.AGENT_KIND when the ticket has no override or the labels
-    // are ambiguous (multiple distinct kinds).
-    const agentKindOverride = await resolveAgentKindOverride(ticket.labels);
-    // The run default drives blocks that don't pin a provider, plus the pre-PR
-    // fix cycle and push fixes. Per-block overrides layer on top of it.
-    const runDefaultKind: AgentKind = resolveRunDefaultKind(agentKindOverride, env.AGENT_KIND);
-
-    const defaultModel = runDefaultKind === "codex" ? env.CODEX_MODEL : env.CLAUDE_MODEL;
-    const resolveAgent = (params: WorkflowDefinitionNode["params"]) =>
-      resolveBlockAgent(params, runDefaultKind, { claude: env.CLAUDE_MODEL, codex: env.CODEX_MODEL });
+    const resolveAgentForNode = (node: WorkflowDefinitionNode) => {
+      const runtime =
+        plan.schemaVersion === 2 ? harnessRuntimes[node.id] : undefined;
+      return runtime
+        ? {
+            kind: runtime.manifest.harness.provider,
+            model: runtime.manifest.model.id,
+            runtime,
+          }
+        : {
+            ...resolveBlockAgent(
+              node.params,
+              runDefaultKind,
+              modelDefaults,
+            ),
+            runtime: undefined,
+          };
+    };
 
     // Codex agents and every in-process Call LLM need token pricing. Fetch all
     // resolved models before any block can record usage so configured cost caps
     // fail closed instead of depending on network timing during execution.
-    const modelDefaults = {
-      claude: env.CLAUDE_MODEL,
-      codex: env.CODEX_MODEL,
-    };
     const pricedModels =
       plan.schemaVersion === 1
         ? modelsRequiringPriceLookupForRun(
@@ -1945,11 +2140,24 @@ async function agentWorkflowBody(
             runDefaultKind,
             modelDefaults,
           )
-        : modelsRequiringPriceLookup(
-            plan.nodes,
-            runDefaultKind,
-            modelDefaults,
-          );
+        : new Set([
+            ...Object.values(harnessRuntimes)
+              .filter(
+                (runtime) =>
+                  runtime.manifest.harness.provider === "codex",
+              )
+              .map((runtime) => runtime.manifest.model.id),
+            ...plan.nodes
+              .filter((node) => node.type === "call_llm")
+              .map(
+                (node) =>
+                  resolveCallLlmTarget(
+                    node.params,
+                    runDefaultKind,
+                    modelDefaults,
+                  ).model,
+              ),
+          ]);
     if (
       plan.schemaVersion === 2 &&
       runDefaultKind === "codex" &&
@@ -1983,10 +2191,12 @@ async function agentWorkflowBody(
     const state: {
       implementationModel: string;
       implementationKind: AgentKind | undefined;
+      implementationRuntime: ResolvedHarnessRuntime | undefined;
       attempt: number;
     } = {
       implementationModel: defaultModel,
       implementationKind: undefined,
+      implementationRuntime: undefined,
       attempt: 1,
     };
 
@@ -2009,6 +2219,7 @@ async function agentWorkflowBody(
       sandboxId: null,
       workspaceManifest: null,
       agentSandboxIds: {},
+      harnessRuntimes,
       sandboxIds: new Set<string>(),
       selectedRepositories: [],
       repositoryContexts: [],
@@ -2108,6 +2319,10 @@ async function agentWorkflowBody(
             );
           }
 
+          const scratchSandboxIds =
+            detachScratchSandboxesForClarification(ctx);
+          await teardownSandboxes(scratchSandboxIds);
+
           if (ctx.sandboxId) {
             const snapshotBudget = await observeBudgetAtBoundary(true);
             if (snapshotBudget.check.status !== "ok") {
@@ -2171,20 +2386,13 @@ async function agentWorkflowBody(
               "./clarification-snapshot-steps.js"
             );
             const { ensureArthurTask } = await import("./blocks/prepare-workspace.js");
-            const requiredKinds = new Set<AgentKind>([runDefaultKind]);
-            for (const definitionNode of plan.nodes) {
-              if (
-                definitionNode.type !== "implementation_agent" &&
-                definitionNode.type !== "review_agent" &&
-                definitionNode.type !== "fix_agent" &&
-                definitionNode.type !== "generic_agent"
-              ) continue;
-              if (
-                definitionNode.type === "generic_agent" &&
-                definitionNode.params.workspaceMode === "none"
-              ) continue;
-              requiredKinds.add(resolveAgent(definitionNode.params).kind);
-            }
+            const requiredAgents = requiredAgentsForDefinition({
+              schemaVersion: plan.schemaVersion,
+              nodes: plan.nodes,
+              defaultKind: runDefaultKind,
+              defaults: modelDefaults,
+              harnessRuntimes,
+            });
             const restoreBudget = await observeBudgetAtBoundary(true);
             if (restoreBudget.check.status !== "ok") {
               throw new RunBudgetError(restoreBudget.check);
@@ -2194,10 +2402,7 @@ async function agentWorkflowBody(
               subjectKey: entry.subjectKey,
               ownerToken: entry.ownerToken,
               timeoutMs: Math.max(1, Math.floor(restoreBudget.remainingDurationMs)),
-              agents: [...requiredKinds].map((kind) => ({
-                kind,
-                model: kind === "codex" ? env.CODEX_MODEL : env.CLAUDE_MODEL,
-              })),
+              agents: requiredAgents,
               arthurTaskId: await ensureArthurTask(ctx),
             });
             ctx.sandboxId = restored.sandboxId;
@@ -2411,19 +2616,35 @@ async function agentWorkflowBody(
                 : "Research";
             const researchArtifactPhase = agentArtifactPhase("research", execution);
             const researchPhase = phaseKey(researchLabel, invocationAttempt);
-            const { kind, model } = resolveAgent(node.params);
+            const { kind, model, runtime } = resolveAgentForNode(node);
             const provisioned = await ensurePlanningAgentSandboxForBlock(
               ctx,
               kind,
               model,
               ctx.schemaVersion === 2,
+              runtime,
             );
             if (provisioned.kind === "execution_error") return provisioned;
             const sandboxId = provisioned.sandboxId;
             await writeAttachmentsOnce(sandboxId);
             phaseModels[researchPhase] = model;
             runPhaseModels[researchPhase] = model;
-            const researchGuard = await setCommitGuardStep(sandboxId, kind, false);
+            const researchRuntime = await prepareHarnessAgentInvocationStep(
+              sandboxId,
+              kind,
+              model,
+              ctx.arthur.taskId,
+              runtime,
+            );
+            if (!researchRuntime.ok) {
+              return agentProtocolBlockError(researchRuntime);
+            }
+            const researchGuard = await setCommitGuardStep(
+              sandboxId,
+              kind,
+              false,
+              runtime,
+            );
             if (!researchGuard.ok) return agentProtocolBlockError(researchGuard);
 
             // Review-remediation framing: when this ticket already has a
@@ -2441,7 +2662,13 @@ async function agentWorkflowBody(
             }
 
             const { paths: researchPaths, script: researchScript } =
-              await planPhaseStep(kind, researchArtifactPhase, model, RESEARCH_SCHEMA);
+              await planPhaseStep(
+                kind,
+                researchArtifactPhase,
+                model,
+                RESEARCH_SCHEMA,
+                runtime,
+              );
             const researchContext = {
               ticket: resolveAgentTicketInput(resolvedInputs, ticketData),
               branchName,
@@ -2472,6 +2699,7 @@ async function agentWorkflowBody(
               sandboxId, kind, researchArtifactPhase,
               researchPaths.input, researchInput,
               researchPaths.wrapper, researchScript,
+              runtime,
             );
             if (!researchLaunch.ok) return agentProtocolBlockError(researchLaunch.failure);
             const researchCommandId = researchLaunch.commandId;
@@ -2482,7 +2710,7 @@ async function agentWorkflowBody(
               researchPaths.sentinel,
               20,
               researchCommandId,
-              ctx.observeBudget,
+              blockBudgetObserver(ctx, execution),
               execution?.cancellation,
             );
             if (!researchDone) {
@@ -2494,12 +2722,18 @@ async function agentWorkflowBody(
 
             const researchArtifacts = await collectPhase(sandboxId, researchPaths);
             const { result: researchResult, usage: researchUsage } =
-              await parseResearchStep(kind, researchArtifacts, researchArtifactPhase);
-            ctx.recordUsage(
+              await parseResearchStep(
+                kind,
+                researchArtifacts,
+                researchArtifactPhase,
+                runtime,
+              );
+            recordBlockPhaseUsage(
+              ctx,
               researchLabel,
               researchUsage,
               model,
-              invocationAttempt,
+              execution,
             );
             if (!researchResult.ok) return agentProtocolBlockError(researchResult);
             const research = researchResult.value;
@@ -2544,18 +2778,41 @@ async function agentWorkflowBody(
               implementationLabel,
               invocationAttempt,
             );
-            const { kind, model } = resolveAgent(node.params);
+            const { kind, model, runtime } = resolveAgentForNode(node);
             phaseModels[implPhase] = model;
             runPhaseModels[implPhase] = model;
             state.implementationModel = model;
             state.implementationKind = kind;
+            state.implementationRuntime = runtime;
             // Mixed-run telemetry: the run's headline model is the impl block's.
             activeModel = model;
-            const implementationGuard = await setCommitGuardStep(sandboxId, kind, true);
+            const implementationRuntime =
+              await prepareHarnessAgentInvocationStep(
+                sandboxId,
+                kind,
+                model,
+                ctx.arthur.taskId,
+                runtime,
+              );
+            if (!implementationRuntime.ok) {
+              return agentProtocolBlockError(implementationRuntime);
+            }
+            const implementationGuard = await setCommitGuardStep(
+              sandboxId,
+              kind,
+              true,
+              runtime,
+            );
             if (!implementationGuard.ok) return agentProtocolBlockError(implementationGuard);
 
             const { paths: implPaths, script: implScript } =
-              await planPhaseStep(kind, implementationArtifactPhase, model, AGENT_SCHEMA);
+              await planPhaseStep(
+                kind,
+                implementationArtifactPhase,
+                model,
+                AGENT_SCHEMA,
+                runtime,
+              );
             const implementationContext = {
               ticket: resolveAgentTicketInput(resolvedInputs, ticketData),
               researchPlanMarkdown: resolveImplementationPlanInput(
@@ -2590,6 +2847,7 @@ async function agentWorkflowBody(
               sandboxId, kind, implementationArtifactPhase,
               implPaths.input, implInput,
               implPaths.wrapper, implScript,
+              runtime,
             );
             if (!implLaunch.ok) return agentProtocolBlockError(implLaunch.failure);
             const implCommandId = implLaunch.commandId;
@@ -2600,7 +2858,7 @@ async function agentWorkflowBody(
               implPaths.sentinel,
               35,
               implCommandId,
-              ctx.observeBudget,
+              blockBudgetObserver(ctx, execution),
               execution?.cancellation,
             );
             let implOutput: AgentOutput;
@@ -2611,12 +2869,14 @@ async function agentWorkflowBody(
                 kind,
                 implArtifacts,
                 implementationArtifactPhase,
+                runtime,
               );
-              ctx.recordUsage(
+              recordBlockPhaseUsage(
+                ctx,
                 implementationLabel,
                 implUsage,
                 model,
-                invocationAttempt,
+                execution,
               );
               if (!result.ok) return agentProtocolBlockError(result);
               implOutput = result.value;
@@ -2683,7 +2943,7 @@ async function agentWorkflowBody(
                 message: reviewFeedback.message,
               });
             }
-            const { kind, model } = resolveAgent(node.params);
+            const { kind, model, runtime } = resolveAgentForNode(node);
             if (!ctx.workspaceManifest) {
               return executionError("review source workspace manifest is unavailable", {
                 category: "sandbox",
@@ -2702,6 +2962,7 @@ async function agentWorkflowBody(
               agentKind: kind,
               model,
               arthurTaskId: ctx.arthur.taskId,
+              runtime,
             });
             if (!provisioned.ok) {
               return agentProtocolBlockError(provisioned.failure);
@@ -2717,8 +2978,33 @@ async function agentWorkflowBody(
             phaseModels[reviewPhase] = model;
             runPhaseModels[reviewPhase] = model;
             try {
+              const reviewRuntime = await prepareHarnessAgentInvocationStep(
+                sandboxId,
+                kind,
+                model,
+                ctx.arthur.taskId,
+                runtime,
+              );
+              if (!reviewRuntime.ok) {
+                return agentProtocolBlockError(reviewRuntime);
+              }
+              const reviewGuard = await setCommitGuardStep(
+                sandboxId,
+                kind,
+                false,
+                runtime,
+              );
+              if (!reviewGuard.ok) {
+                return agentProtocolBlockError(reviewGuard);
+              }
               const { paths: reviewPaths, script: reviewScript } =
-                await planPhaseStep(kind, reviewArtifactPhase, model, REVIEW_SCHEMA);
+                await planPhaseStep(
+                  kind,
+                  reviewArtifactPhase,
+                  model,
+                  REVIEW_SCHEMA,
+                  runtime,
+                );
               const reviewContext = {
                 ticket: ticketData,
                 researchPlanMarkdown: ctx.researchPlanMarkdown,
@@ -2752,6 +3038,7 @@ async function agentWorkflowBody(
                 sandboxId, kind, reviewArtifactPhase,
                 reviewPaths.input, reviewInput,
                 reviewPaths.wrapper, reviewScript,
+                runtime,
               );
               if (!reviewLaunch.ok) return agentProtocolBlockError(reviewLaunch.failure);
               const reviewCommandId = reviewLaunch.commandId;
@@ -2762,7 +3049,7 @@ async function agentWorkflowBody(
                 reviewPaths.sentinel,
                 15,
                 reviewCommandId,
-                ctx.observeBudget,
+                blockBudgetObserver(ctx, execution),
                 execution?.cancellation,
               );
               if (!reviewDone) {
@@ -2777,12 +3064,14 @@ async function agentWorkflowBody(
                 kind,
                 reviewArtifacts,
                 reviewArtifactPhase,
+                runtime,
               );
-              ctx.recordUsage(
+              recordBlockPhaseUsage(
+                ctx,
                 reviewLabel,
                 reviewUsage,
                 model,
-                invocationAttempt,
+                execution,
               );
               if (!result.ok) return agentProtocolBlockError(result);
               const reviewOutput: ReviewOutput = result.value;
@@ -2821,21 +3110,62 @@ async function agentWorkflowBody(
             if (!ctx.sandboxId) return noWorkspace(node.type);
             const maxFixCycles =
               typeof node.params.maxFixCycles === "number" ? node.params.maxFixCycles : undefined;
+            const repairRuntime =
+              state.implementationRuntime ??
+              (ctx.schemaVersion === 2
+                ? ctx.definitionNodes
+                    .filter(
+                      (candidate) =>
+                        candidate.type === "implementation_agent" ||
+                        candidate.type === "fix_agent" ||
+                        (candidate.type === "generic_agent" &&
+                          candidate.params.workspaceMode !== "none"),
+                    )
+                    .map((candidate) => ctx.harnessRuntimes[candidate.id])
+                    .find(
+                      (
+                        candidate,
+                      ): candidate is ResolvedHarnessRuntime =>
+                        candidate !== undefined,
+                    )
+                : undefined);
+            if (
+              ctx.schemaVersion === 2 &&
+              (maxFixCycles ?? 3) > 0 &&
+              !repairRuntime
+            ) {
+              return executionError(
+                "Pre-PR repair cycles require a pinned write-capable Harness Profile.",
+                {
+                  category: "schema",
+                  phase: "pre-pr-checks",
+                },
+              );
+            }
+            const repairKind =
+              repairRuntime?.manifest.harness.provider ??
+              state.implementationKind ??
+              runDefaultKind;
+            const repairModel =
+              repairRuntime?.manifest.model.id ??
+              state.implementationModel;
             const budget = await ctx.observeBudget();
             if (budget.check.status !== "ok") throw new RunBudgetError(budget.check);
             let prePrChecks: Awaited<ReturnType<typeof runPrePrChecksStep>>;
             try {
               prePrChecks = await runPrePrChecksStep(
                 ctx.sandboxId,
-                state.implementationKind ?? runDefaultKind,
-                state.implementationModel,
+                repairKind,
+                repairModel,
                 maxFixCycles,
                 Math.max(1, Math.floor(budget.remainingDurationMs)),
                 {
                   state: budgetState,
                   limits: budgetLimits,
-                  price: priceLookup?.(state.implementationModel) ?? null,
+                  price: priceLookup?.(repairModel) ?? null,
                 },
+                repairRuntime,
+                ctx.arthur.taskId,
               );
             } catch (err) {
               if (isRunControlError(err)) throw err;
@@ -2849,7 +3179,7 @@ async function agentWorkflowBody(
             recordPrePrFixCycleUsages(
               ctx,
               prePrChecks.fixCycleUsages,
-              state.implementationModel,
+              repairModel,
               prePrChecks.budgetFailure,
               invocationAttempt,
               ctx.schemaVersion === 2 ? node.id : undefined,
@@ -3062,6 +3392,16 @@ async function agentWorkflowBody(
       ) => {
         invocation.cancellation.throwIfCancelled();
         state.attempt = invocation.attempt;
+        const harnessRuntime = ctx.harnessRuntimes[node.id];
+        const invocationBudget = harnessRuntime
+          ? await createHarnessInvocationBudget({
+              workflowLimits: budgetLimits,
+              runtime: harnessRuntime,
+              observeWorkflowBudget: observeBudgetAtBoundary,
+              readClock: readRunBudgetClockStep,
+              priceLookup,
+            })
+          : undefined;
         const bindingContext: V2BindingResolutionContext = {
           entryOutput: triggerOutput,
           runValues,
@@ -3087,11 +3427,8 @@ async function agentWorkflowBody(
         const compileInvocationPrompt: NonNullable<
           BlockExecutionContext["compileEffectivePrompt"]
         > = async ({ blockPrompt, runtimeData, sandboxId }) => {
-          const profileSource = await resolveProfileInstructions({
-            node,
-            defaultProvider: ctx.runDefaultKind,
-          });
-          if (!profileSource) {
+          const runtime = harnessRuntime;
+          if (!runtime) {
             return {
               ok: false,
               result: executionError(
@@ -3105,10 +3442,14 @@ async function agentWorkflowBody(
               ),
             };
           }
+          const profileSource = effectivePromptProfileSource(runtime);
           let repositorySources: Awaited<
             ReturnType<typeof loadInvocationRepositoryInstructionSources>
           > = [];
-          if (ctx.workspaceManifest) {
+          if (
+            runtime.manifest.context.includeRepositoryInstructions &&
+            ctx.workspaceManifest
+          ) {
             try {
               repositorySources =
                 await loadInvocationRepositoryInstructionSources({
@@ -3139,7 +3480,9 @@ async function agentWorkflowBody(
               blockPrompt.trim().length > 0
                 ? blockPrompt
                 : compatibilityPromptSourceForV2Node(node) ?? blockPrompt,
-            runtimeData,
+            runtimeData: runtime.manifest.context.includeWorkflowData
+              ? runtimeData
+              : "",
             slots: resolvedPrompts.slotsByNode[node.id] ?? [],
             slotBindings: node.configuration.promptSlotBindings,
             promptManifest:
@@ -3266,11 +3609,23 @@ async function agentWorkflowBody(
             agentArtifactKey: v2AgentArtifactKeys.get(node.id)!,
             cancellation: invocation.cancellation,
             compileEffectivePrompt: compileInvocationPrompt,
+            ...(invocationBudget
+              ? {
+                  observeBudget: invocationBudget.observeBudget,
+                  recordBudgetUsage: invocationBudget.recordUsage,
+                }
+              : {}),
             ...(invocation.clarificationAnswer === undefined
               ? {}
               : { clarificationAnswer: invocation.clarificationAnswer }),
           },
         );
+        if (invocationBudget) {
+          const after = await invocationBudget.observeBudget(false);
+          if (after.check.status !== "ok") {
+            throw new RunBudgetError(after.check);
+          }
+        }
         invocation.cancellation.throwIfCancelled();
         return result;
       };
@@ -3515,6 +3870,7 @@ async function agentWorkflowBody(
             code: terminalExecutionError.diagnosticId,
           }
         : null,
+      harnessManifests,
     }).catch((err) => {
       console.error(
         `Run telemetry failed to persist for ${ticket.identifier} (run ${workflowRunId}):`,

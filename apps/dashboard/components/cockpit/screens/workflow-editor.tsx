@@ -19,6 +19,7 @@ import {
 } from "@shared/contracts";
 import { FlowEditor } from "@/components/cockpit/flow-editor/flow-editor";
 import { PromptLibraryProvider } from "@/components/cockpit/flow-editor/prompt-library-context";
+import { HarnessProfileCatalogProvider } from "@/components/cockpit/flow-editor/harness-profile-context";
 import { Listbox } from "@/components/cockpit/listbox";
 import {
   toFlowDefinition,
@@ -719,6 +720,7 @@ export function WorkflowEditorScreen({
     options.blockRegistry[type]?.presentation.label ?? type;
 
   return (
+    <HarnessProfileCatalogProvider>
     <PromptLibraryProvider>
     <div className="flex flex-col h-full min-h-0">
       {deployed === null && (
@@ -1064,5 +1066,6 @@ export function WorkflowEditorScreen({
       </div>
     </div>
     </PromptLibraryProvider>
+    </HarnessProfileCatalogProvider>
   );
 }

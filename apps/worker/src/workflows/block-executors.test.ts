@@ -3,6 +3,7 @@ import { BLOCK_TYPE_SPECS } from "@shared/contracts";
 import type { WorkflowBlockType, WorkflowDefinitionNode } from "@shared/contracts";
 import {
   blockTypesMissingExecutor,
+  detachScratchSandboxesForClarification,
   implementationChangeSummary,
   planningClarificationResult,
   resolveOpenPrBody,
@@ -49,6 +50,24 @@ describe("block executor exhaustiveness", () => {
       "backlog",
     );
     expect(resolveTicketStatusInput({ target: "10042" }, {})).toBe("10042");
+  });
+
+  it("detaches every cached scratch sandbox before clarification suspension", () => {
+    const ctx = {
+      agentSandboxIds: {
+        first: "scratch-1",
+        duplicate: "scratch-1",
+        second: "scratch-2",
+      },
+      sandboxIds: new Set(["code-1", "scratch-1", "scratch-2"]),
+    };
+
+    expect(detachScratchSandboxesForClarification(ctx)).toEqual([
+      "scratch-1",
+      "scratch-2",
+    ]);
+    expect(ctx.agentSandboxIds).toEqual({});
+    expect([...ctx.sandboxIds]).toEqual(["code-1"]);
   });
 });
 

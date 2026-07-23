@@ -18,6 +18,8 @@ import {
   validateWorkflowDefinitionIssuesForDeployment,
   workflowDefinitionV2Schema,
 } from "./schema.js";
+import { validateHarnessProfileReferencesWithLoader } from "./harness-profile-runtime.js";
+import { hashHarnessProfileManifest } from "../harness-profiles/manifest.js";
 
 const registryContext: WorkflowBlockRegistryContext = {
   agentProviders: { claude: true, codex: true },
@@ -181,7 +183,7 @@ describe("v2 built-in authoring definitions", () => {
 });
 
 describe("v2 Harness Profile validation", () => {
-  it("accepts one exact built-in reference and rejects unknown or mixed overrides", () => {
+  it("accepts one exact reference and rejects unknown or mixed overrides", async () => {
     const valid = defaultWorkflowDefinitionV2({
       includeReview: false,
       provider: "claude",
@@ -196,12 +198,26 @@ describe("v2 Harness Profile validation", () => {
       profileId: "missing",
       version: 1,
     };
-    expect(
-      validateWorkflowDefinitionIssuesForDeployment(unknown, registryContext),
-    ).toEqual(
+    const profileIssues = await validateHarnessProfileReferencesWithLoader(
+      unknown,
+      async (reference) => {
+        const manifest =
+          BUILTIN_HARNESS_PROFILE_MANIFESTS[
+            reference.profileId as keyof typeof BUILTIN_HARNESS_PROFILE_MANIFESTS
+          ];
+        if (!manifest || manifest.version !== reference.version) return null;
+        const cloned = structuredClone(manifest);
+        return {
+          manifest: cloned,
+          manifestHash: hashHarnessProfileManifest(cloned),
+          skillArtifacts: [],
+        };
+      },
+    );
+    expect(profileIssues).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          code: "invalid_configuration",
+          code: "harness_profile_unavailable",
           nodeId: "planning",
           path: "/nodes/2/configuration/harnessProfile",
         }),

@@ -1,5 +1,6 @@
 import type {
   HarnessProvider,
+  HarnessProfileReference,
   JsonValue,
   WorkflowBlockTypeV1,
   WorkflowDefinitionV1,
@@ -94,8 +95,8 @@ export interface V2BlockSpec {
 
 export function builtinHarnessProfileConfiguration(
   provider: HarnessProvider,
+  reference: HarnessProfileReference = builtinHarnessProfileReference(provider),
 ): Record<string, JsonValue> {
-  const reference = builtinHarnessProfileReference(provider);
   return {
     harnessProfile: {
       profileId: reference.profileId,
@@ -161,11 +162,14 @@ export function buildBuiltinV2Definition(
 export function defaultWorkflowDefinitionV2({
   includeReview,
   provider = "claude",
+  profileReference = builtinHarnessProfileReference(provider),
 }: {
   includeReview: boolean;
   provider?: HarnessProvider;
+  profileReference?: HarnessProfileReference;
 }): WorkflowDefinitionV2 {
-  const profile = () => builtinHarnessProfileConfiguration(provider);
+  const profile = () =>
+    builtinHarnessProfileConfiguration(provider, profileReference);
   const specs: V2BlockSpec[] = [
     {
       id: "trigger",

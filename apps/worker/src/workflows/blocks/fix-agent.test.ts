@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   runCommand: vi.fn().mockResolvedValue({ exitCode: 0 }),
   ensureWorkspace: vi.fn(),
   inspectFixWorkspace: vi.fn(),
+  prepareHarnessAgentInvocation: vi.fn(),
   pollPhaseUntilDone: vi.fn().mockResolvedValue(true),
 }));
 
@@ -55,6 +56,9 @@ vi.mock("../../sandbox/agents/index.js", () => ({
 vi.mock("./prepare-workspace.js", () => ({
   ensureWorkspace: mocks.ensureWorkspace,
 }));
+vi.mock("./agent-sandbox.js", () => ({
+  prepareHarnessAgentInvocationStep: mocks.prepareHarnessAgentInvocation,
+}));
 vi.mock("./fix-workspace-state.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./fix-workspace-state.js")>()),
   inspectFixWorkspace: mocks.inspectFixWorkspace,
@@ -64,6 +68,7 @@ import { execute, paramsSchema } from "./fix-agent.js";
 import {
   expectOutputConformsToRegistry,
   makeCtx,
+  makeHarnessRuntime,
   makeNode,
   makePrPayload,
   runControlErrorCases,
@@ -133,6 +138,10 @@ describe("fix_agent execute", () => {
       };
     });
     mocks.inspectFixWorkspace.mockResolvedValue({ commits: [], unresolvedConflicts: [] });
+    mocks.prepareHarnessAgentInvocation.mockResolvedValue({
+      ok: true,
+      value: undefined,
+    });
     mocks.runCommand.mockImplementation((command) =>
       command === "chmod"
         ? {
@@ -176,7 +185,11 @@ describe("fix_agent execute", () => {
     );
 
     expect(mocks.artifactPaths).toHaveBeenCalledWith("fix-fix-block-");
-    expect(mocks.setCommitGuard).toHaveBeenCalledWith(expect.anything(), true);
+    expect(mocks.setCommitGuard).toHaveBeenCalledWith(
+      expect.anything(),
+      true,
+      undefined,
+    );
     expect(mocks.writeFiles).toHaveBeenCalledWith([
       { path: "/tmp/fix-fix-block--requirements.md", content: Buffer.from("FIX INPUT") },
       { path: "/tmp/fix-fix-block--wrapper.sh", content: Buffer.from("#!/bin/bash") },
@@ -218,10 +231,18 @@ describe("fix_agent execute", () => {
       prompt: "COMPILED FIX PROMPT",
     });
 
+    const block = makeNode("fix_agent", {
+      instructions: "Focus on the failing test",
+    });
+    const runtime = makeHarnessRuntime(block.id, block.type);
+
     await execute(
-      makeNode("fix_agent", { instructions: "Focus on the failing test" }),
+      block,
       {},
-      makeCtx({ schemaVersion: 2 }),
+      makeCtx({
+        schemaVersion: 2,
+        harnessRuntimes: { [block.id]: runtime },
+      }),
       {},
       { compileEffectivePrompt },
     );

@@ -38,6 +38,10 @@ export function canEditPromptLibrary(role: DashboardRole): boolean {
   return role === "owner" || role === "admin";
 }
 
+export function canManageHarnessProfiles(role: DashboardRole): boolean {
+  return role === "owner" || role === "admin";
+}
+
 export function canCancelWorkflowRuns(role: DashboardRole): boolean {
   return role === "owner" || role === "admin";
 }

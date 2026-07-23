@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   runCommand: vi.fn().mockResolvedValue({ exitCode: 0 }),
   sandboxGet: vi.fn(),
   ensureAgentSandbox: vi.fn(),
+  prepareHarnessAgentInvocation: vi.fn(),
   pollPhaseUntilDone: vi.fn().mockResolvedValue(true),
 }));
 
@@ -45,11 +46,17 @@ vi.mock("../../sandbox/agents/index.js", () => ({
 }));
 vi.mock("./agent-sandbox.js", () => ({
   ensureAgentSandbox: mocks.ensureAgentSandbox,
+  prepareHarnessAgentInvocationStep: mocks.prepareHarnessAgentInvocation,
 }));
 
 import { GENERIC_SCHEMA } from "../../sandbox/agents/types.js";
 import { execute, paramsSchema } from "./generic-agent.js";
-import { makeCtx, makeNode, runControlErrorCases } from "./test-support.js";
+import {
+  makeCtx,
+  makeHarnessRuntime,
+  makeNode,
+  runControlErrorCases,
+} from "./test-support.js";
 
 function pathsFor(phase: string) {
   return {
@@ -117,6 +124,10 @@ describe("generic_agent execute", () => {
       }
     });
     mocks.ensureAgentSandbox.mockResolvedValue("scratch-new");
+    mocks.prepareHarnessAgentInvocation.mockResolvedValue({
+      ok: true,
+      value: undefined,
+    });
     mocks.runCommand.mockImplementation((command) =>
       command === "chmod"
         ? {
@@ -158,9 +169,10 @@ describe("generic_agent execute", () => {
       structuredOutput: JSON.stringify({ status: "ok", body: "planned", questions: null, error: null }),
       exitCode: 0,
     });
+    mocks.ensureAgentSandbox.mockResolvedValueOnce("scratch-1");
     const ctx = makeCtx({
       sandboxId: null,
-      agentSandboxIds: { claude: "scratch-1" },
+      agentSandboxIds: { "legacy:claude": "scratch-1" },
     } as never);
 
     const result = await execute(
@@ -184,7 +196,7 @@ describe("generic_agent execute", () => {
     });
     const ctx = makeCtx({
       sandboxId: null,
-      agentSandboxIds: { claude: "scratch-1" },
+      agentSandboxIds: { "legacy:claude": "scratch-1" },
     } as never);
 
     await (execute as any)(
@@ -218,15 +230,22 @@ describe("generic_agent execute", () => {
       prompt: "COMPILED EFFECTIVE PROMPT",
     });
 
-    await execute(
-      makeNode("generic_agent", {
+    const block = makeNode("generic_agent", {
         prompt: "Authored prompt",
         workspaceMode: "none",
-      }),
+      });
+    const runtime = makeHarnessRuntime(block.id, block.type, {
+      workspaceMode: "none",
+    });
+    mocks.ensureAgentSandbox.mockResolvedValueOnce("scratch-1");
+
+    await execute(
+      block,
       {},
       makeCtx({
         sandboxId: null,
-        agentSandboxIds: { claude: "scratch-1" },
+        schemaVersion: 2,
+        harnessRuntimes: { [block.id]: runtime },
       } as never),
       { plan: "Bound plan", count: 2 },
       {
@@ -250,6 +269,165 @@ describe("generic_agent execute", () => {
     );
   });
 
+  it("requests isolated scratch sandboxes for parallel same-manifest v2 fan-out", async () => {
+    mocks.collectPhase.mockResolvedValue({
+      stdout: "",
+      stderr: "",
+      structuredOutput: JSON.stringify({
+        status: "ok",
+        body: "done",
+        questions: null,
+        error: null,
+      }),
+      exitCode: 0,
+    });
+    const firstBlock = makeNode(
+      "generic_agent",
+      { prompt: "First", workspaceMode: "none" },
+      "first",
+    );
+    const secondBlock = makeNode(
+      "generic_agent",
+      { prompt: "Second", workspaceMode: "none" },
+      "second",
+    );
+    const firstRuntime = makeHarnessRuntime(
+      firstBlock.id,
+      firstBlock.type,
+      { workspaceMode: "none" },
+    );
+    const secondRuntime = makeHarnessRuntime(
+      secondBlock.id,
+      secondBlock.type,
+      { workspaceMode: "none" },
+    );
+    expect(firstRuntime.manifestHash).toBe(secondRuntime.manifestHash);
+    mocks.ensureAgentSandbox.mockReset();
+    mocks.ensureAgentSandbox.mockImplementation(
+      async (
+        _ctx,
+        _kind,
+        _model,
+        options: { runtime?: { safeManifest: { nodeId: string } } },
+      ) =>
+        options.runtime?.safeManifest.nodeId === firstBlock.id
+          ? "scratch-1"
+          : "scratch-2",
+    );
+    const ctx = makeCtx({
+      sandboxId: null,
+      schemaVersion: 2,
+      harnessRuntimes: {
+        [firstBlock.id]: firstRuntime,
+        [secondBlock.id]: secondRuntime,
+      },
+    });
+
+    await execute(
+      firstBlock,
+      {},
+      ctx,
+      {},
+      { attempt: 1, agentArtifactKey: "1" },
+    );
+    await execute(
+      secondBlock,
+      {},
+      ctx,
+      {},
+      { attempt: 1, agentArtifactKey: "2" },
+    );
+    expect(mocks.ensureAgentSandbox).toHaveBeenNthCalledWith(
+      1,
+      ctx,
+      "claude",
+      "claude-model",
+      { runtime: firstRuntime, reuse: false },
+    );
+    expect(mocks.ensureAgentSandbox).toHaveBeenNthCalledWith(
+      2,
+      ctx,
+      "claude",
+      "claude-model",
+      { runtime: secondRuntime, reuse: false },
+    );
+    expect(
+      new Set(
+        mocks.sandboxGet.mock.calls.map(
+          ([input]) => (input as { sandboxId: string }).sandboxId,
+        ),
+      ),
+    ).toEqual(new Set(["scratch-1", "scratch-2"]));
+  });
+
+  it("uses the active v2 invocation budget for polling and usage", async () => {
+    const usage = {
+      cost_usd: 0.25,
+      tokens: { input: 20, cached_input: 2, output: 3 },
+      duration_ms: 100,
+      duration_api_ms: 90,
+      num_turns: 1,
+    };
+    mocks.collectPhase.mockResolvedValue({
+      stdout: "",
+      stderr: "",
+      structuredOutput: JSON.stringify({
+        status: "ok",
+        body: "done",
+        questions: null,
+        error: null,
+      }),
+      exitCode: 0,
+    });
+    mocks.extractUsage.mockReturnValue(usage);
+    const block = makeNode(
+      "generic_agent",
+      { prompt: "Work", workspaceMode: "none" },
+      "budgeted",
+    );
+    const runtime = makeHarnessRuntime(
+      block.id,
+      block.type,
+      { workspaceMode: "none" },
+    );
+    const observeBudget = vi.fn().mockResolvedValue({
+      check: { status: "ok" },
+      remainingDurationMs: 10_000,
+    });
+    const recordBudgetUsage = vi.fn();
+    const ctx = makeCtx({
+      sandboxId: null,
+      schemaVersion: 2,
+      harnessRuntimes: { [block.id]: runtime },
+    });
+
+    await execute(
+      block,
+      {},
+      ctx,
+      {},
+      {
+        attempt: 1,
+        agentArtifactKey: "1",
+        observeBudget,
+        recordBudgetUsage,
+      },
+    );
+
+    expect(mocks.pollPhaseUntilDone).toHaveBeenCalledWith(
+      "scratch-new",
+      expect.any(String),
+      25,
+      "cmd-1",
+      observeBudget,
+      undefined,
+    );
+    expect(recordBudgetUsage).toHaveBeenCalledWith(
+      usage,
+      runtime.manifest.model.id,
+    );
+  });
+
   it("provisions agent-only scratch on demand in none mode", async () => {
     mocks.collectPhase.mockResolvedValue({
       stdout: "",
@@ -265,7 +443,12 @@ describe("generic_agent execute", () => {
       ctx,
     );
 
-    expect(mocks.ensureAgentSandbox).toHaveBeenCalledWith(ctx, "claude", "claude-model");
+    expect(mocks.ensureAgentSandbox).toHaveBeenCalledWith(
+      ctx,
+      "claude",
+      "claude-model",
+      { runtime: undefined },
+    );
     expect(mocks.sandboxGet).toHaveBeenCalledWith(
       expect.objectContaining({ sandboxId: "scratch-new" }),
     );
@@ -331,7 +514,11 @@ describe("generic_agent execute", () => {
 
     expect(mocks.artifactPaths).toHaveBeenCalledWith("agent-my-agent");
     // Explicit, not inherited from whatever agent block ran before this one.
-    expect(mocks.setCommitGuard).toHaveBeenCalledWith(expect.anything(), true);
+    expect(mocks.setCommitGuard).toHaveBeenCalledWith(
+      expect.anything(),
+      true,
+      undefined,
+    );
     expect(mocks.buildPhaseScript).toHaveBeenCalledWith(
       expect.objectContaining({ jsonSchema: GENERIC_SCHEMA }),
     );
@@ -417,17 +604,39 @@ describe("generic_agent execute", () => {
       }),
       exitCode: 0,
     });
-    const ctx = makeCtx({ schemaVersion: 2 });
+    const firstBlock = makeNode(
+      "generic_agent",
+      { prompt: "p" },
+      "Blk_One",
+    );
+    const secondBlock = makeNode(
+      "generic_agent",
+      { prompt: "p" },
+      "blk-one",
+    );
+    const ctx = makeCtx({
+      schemaVersion: 2,
+      harnessRuntimes: {
+        [firstBlock.id]: makeHarnessRuntime(
+          firstBlock.id,
+          firstBlock.type,
+        ),
+        [secondBlock.id]: makeHarnessRuntime(
+          secondBlock.id,
+          secondBlock.type,
+        ),
+      },
+    });
 
     await execute(
-      makeNode("generic_agent", { prompt: "p" }, "Blk_One"),
+      firstBlock,
       {},
       ctx,
       {},
       { attempt: 1, agentArtifactKey: "2" },
     );
     await execute(
-      makeNode("generic_agent", { prompt: "p" }, "blk-one"),
+      secondBlock,
       {},
       ctx,
       {},

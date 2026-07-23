@@ -2,16 +2,21 @@ import { createHash } from "node:crypto";
 import {
   BLOCK_PARAM_KEYS,
   BLOCK_TYPE_SPECS,
+  BUILTIN_HARNESS_PROFILE_MANIFESTS,
   FAILURE_PORT,
+  builtinHarnessProfileReference,
   containsMalformedPromptReference,
   formatPromptReferenceToken,
   isTriggerBlockType,
   parsePromptReferenceTokens,
+  type HarnessProfileReference,
+  type HarnessProvider,
   type JsonSchema202012,
   type JsonValue,
   type ParsedPromptReference,
   type PromptReferenceSelector,
   type WorkflowAdditionalInputV2,
+  type WorkflowBlockType,
   type WorkflowDataReferenceV2,
   type WorkflowDefinitionV1,
   type WorkflowDefinitionV2,
@@ -72,9 +77,26 @@ export interface ConvertWorkflowDefinitionV1ToV2Input {
   definition: WorkflowDefinitionV1;
   registryContext: WorkflowBlockRegistryContext;
   promptResolutions?: ReadonlyMap<string, WorkflowV2PromptResolution>;
+  harnessProfiles?: Partial<
+    Record<
+      HarnessProvider,
+      {
+        reference: HarnessProfileReference;
+        modelId: string;
+      }
+    >
+  >;
 }
 
 type DiagnosticKind = "conversion" | "warning" | "blocker";
+
+const AGENT_BLOCK_TYPES: ReadonlySet<WorkflowBlockType> = new Set([
+  "planning_agent",
+  "implementation_agent",
+  "review_agent",
+  "fix_agent",
+  "generic_agent",
+]);
 
 interface ConversionState {
   input: ConvertWorkflowDefinitionV1ToV2Input;
@@ -351,6 +373,10 @@ function convertNode(
     );
   }
 
+  if (AGENT_BLOCK_TYPES.has(node.type)) {
+    pinMigratedAgentHarnessProfile(state, node, configuration, nodePath);
+  }
+
   if (node.type === "branch") {
     convertBranchCondition(state, node, configuration, nodeIndex);
   }
@@ -439,6 +465,54 @@ function convertNode(
     inputs,
     additionalInputs,
   };
+}
+
+function pinMigratedAgentHarnessProfile(
+  state: ConversionState,
+  node: WorkflowDefinitionV1["nodes"][number],
+  configuration: Record<string, JsonValue>,
+  nodePath: string,
+): void {
+  const provider: HarnessProvider =
+    configuration.provider === "claude" || configuration.provider === "codex"
+      ? configuration.provider
+      : state.input.registryContext.defaultAgent.provider;
+  const builtin = BUILTIN_HARNESS_PROFILE_MANIFESTS[
+    provider === "claude" ? "builtin-claude" : "builtin-codex"
+  ];
+  const target = state.input.harnessProfiles?.[provider] ?? {
+    reference: builtinHarnessProfileReference(provider),
+    modelId: builtin.model.id,
+  };
+  const explicitModel =
+    typeof configuration.model === "string" &&
+    configuration.model.trim().length > 0
+      ? configuration.model.trim()
+      : null;
+  if (explicitModel !== null && explicitModel !== target.modelId) {
+    addDiagnostic(
+      state,
+      "blocker",
+      "migration.agent.profile_model_override",
+      `Block "${node.id}" selects model "${explicitModel}", which is not represented by the published ${provider} Harness Profile model "${target.modelId}". Create and select a matching Harness Profile before converting this workflow.`,
+      node.id,
+      `${nodePath}/params/model`,
+    );
+  }
+  delete configuration.provider;
+  delete configuration.model;
+  configuration.harnessProfile = {
+    profileId: target.reference.profileId,
+    version: target.reference.version,
+  };
+  addDiagnostic(
+    state,
+    "conversion",
+    "migration.agent.profile_pinned",
+    `Pinned block "${node.id}" to Harness Profile "${target.reference.profileId}" version ${target.reference.version}.`,
+    node.id,
+    `${nodePath}/configuration/harnessProfile`,
+  );
 }
 
 function convertConfigurationValue(

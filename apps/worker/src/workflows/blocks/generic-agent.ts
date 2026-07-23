@@ -19,12 +19,17 @@ import {
   type ParsedJsonSchema,
 } from "../../workflow-definition/json-schema.js";
 import { resolveBlockAgent } from "../../workflow-definition/resolve-agent.js";
-import { ensureAgentSandbox } from "./agent-sandbox.js";
+import type { ResolvedHarnessRuntime } from "../../sandbox/harness-runtime.js";
+import {
+  ensureAgentSandbox,
+  prepareHarnessAgentInvocationStep,
+} from "./agent-sandbox.js";
 import { isRunControlError } from "../run-control-error.js";
 import { pollPhaseUntilDone } from "./poll-phase.js";
 import {
   agentArtifactPhase,
   agentProtocolExecutionError,
+  blockBudgetObserver,
   executionError,
   markBlockPhaseLaunched,
   recordBlockPhaseUsage,
@@ -57,6 +62,7 @@ async function blockGenericAgentCommitGuardStep(
   sandboxId: string,
   agentKind: AgentKind,
   enabled: boolean,
+  runtime?: ResolvedHarnessRuntime,
 ): Promise<AgentProtocolResult<void>> {
   "use step";
   const { Sandbox } = await import("@vercel/sandbox");
@@ -64,9 +70,9 @@ async function blockGenericAgentCommitGuardStep(
   const { createAgentAdapter } = await import("../../sandbox/agents/index.js");
 
   const sandbox = await Sandbox.get({ sandboxId, ...getSandboxCredentials() });
-  const agent = createAgentAdapter(agentKind);
+  const agent = createAgentAdapter(agentKind, runtime?.cliSpec);
   try {
-    await agent.setCommitGuard(sandbox, enabled);
+    await agent.setCommitGuard(sandbox, enabled, runtime?.paths);
     return { ok: true, value: undefined };
   } catch (error) {
     const { isAgentRuntimeError } = await import("../../sandbox/agents/protocol.js");
@@ -85,12 +91,19 @@ async function blockGenericAgentPlanPhaseStep(
   phase: string,
   model: string,
   jsonSchema: string,
+  runtime?: ResolvedHarnessRuntime,
 ): Promise<{ paths: PhaseArtifactPaths; script: string }> {
   "use step";
   const { createAgentAdapter } = await import("../../sandbox/agents/index.js");
-  const adapter = createAgentAdapter(agentKind);
+  const adapter = createAgentAdapter(agentKind, runtime?.cliSpec);
   const paths = adapter.artifactPaths(phase);
-  const script = adapter.buildPhaseScript({ phase, model, paths, jsonSchema });
+  const script = adapter.buildPhaseScript({
+    phase,
+    model,
+    paths,
+    jsonSchema,
+    ...(runtime ? { runtime: runtime.paths } : {}),
+  });
   return { paths, script };
 }
 
@@ -102,6 +115,7 @@ async function blockGenericAgentStartPhaseStep(
   inputContent: string,
   scriptPath: string,
   scriptContent: string,
+  runtime?: ResolvedHarnessRuntime,
 ): Promise<
   | { ok: true; commandId: string }
   | { ok: false; failure: Extract<AgentProtocolResult<unknown>, { ok: false }> }
@@ -111,7 +125,7 @@ async function blockGenericAgentStartPhaseStep(
   const { commandProtocolFailure, protocolFailure } = await import(
     "../../sandbox/agents/protocol.js"
   );
-  const spec = createAgentAdapter(agentKind).cliSpec;
+  const spec = createAgentAdapter(agentKind, runtime?.cliSpec).cliSpec;
   try {
     const { Sandbox } = await import("@vercel/sandbox");
     const { getSandboxCredentials } = await import("../../sandbox/credentials.js");
@@ -178,12 +192,13 @@ async function blockGenericAgentParseStep(
   artifacts: CollectedPhaseArtifacts,
   phase: string,
   customSchema: string | undefined,
+  runtime?: ResolvedHarnessRuntime,
 ): Promise<{ result: AgentProtocolResult<unknown>; usage: PhaseUsage | null }> {
   "use step";
   const { createAgentAdapter } = await import("../../sandbox/agents/index.js");
   const { GENERIC_SCHEMA } = await import("../../sandbox/agents/types.js");
   const { validateStructuredValue } = await import("../../sandbox/agents/protocol.js");
-  const adapter = createAgentAdapter(agentKind);
+  const adapter = createAgentAdapter(agentKind, runtime?.cliSpec);
   const extracted = adapter.parseStructuredObjectProtocol(
     artifacts,
     phase,
@@ -213,12 +228,13 @@ async function blockGenericAgentSchemaFailureStep(
   phase: string,
   schema: string,
   issues: string[],
+  runtime?: ResolvedHarnessRuntime,
 ): Promise<Extract<AgentProtocolResult<unknown>, { ok: false }>> {
   "use step";
   const { createAgentAdapter } = await import("../../sandbox/agents/index.js");
   const { protocolFailure } = await import("../../sandbox/agents/protocol.js");
   const failure = protocolFailure({
-    spec: createAgentAdapter(agentKind).cliSpec,
+    spec: createAgentAdapter(agentKind, runtime?.cliSpec).cliSpec,
     phase,
     artifacts,
     failureKind: "schema_mismatch",
@@ -272,7 +288,19 @@ export const execute: BlockExecuteFn = async (
     }
   }
 
-  const { kind, model } = resolveBlockAgent(block.params, ctx.runDefaultKind, ctx.defaults);
+  const runtime =
+    ctx.schemaVersion === 2 ? ctx.harnessRuntimes[block.id] : undefined;
+  if (ctx.schemaVersion === 2 && !runtime) {
+    return executionError("The pinned Harness Profile could not be resolved.", {
+      category: "schema",
+    });
+  }
+  const { kind, model } = runtime
+    ? {
+        kind: runtime.manifest.harness.provider,
+        model: runtime.manifest.model.id,
+      }
+    : resolveBlockAgent(block.params, ctx.runDefaultKind, ctx.defaults);
   const providerCustomSchema =
     parsedCustomSchema === undefined
       ? undefined
@@ -285,7 +313,10 @@ export const execute: BlockExecuteFn = async (
   try {
     sandboxId =
       workspaceMode === "none"
-        ? ctx.agentSandboxIds[kind] ?? (await ensureAgentSandbox(ctx, kind, model))
+        ? await ensureAgentSandbox(ctx, kind, model, {
+            runtime,
+            ...(ctx.schemaVersion === 2 ? { reuse: false } : {}),
+          })
         : ctx.sandboxId;
   } catch (err) {
     if (isRunControlError(err)) throw err;
@@ -360,6 +391,17 @@ export const execute: BlockExecuteFn = async (
     const { GENERIC_SCHEMA } = await import("../../sandbox/agents/types.js");
     const jsonSchema = providerCustomSchema ?? GENERIC_SCHEMA;
 
+    const preparedRuntime = await prepareHarnessAgentInvocationStep(
+      sandboxId,
+      kind,
+      model,
+      ctx.arthur.taskId,
+      runtime,
+    );
+    if (!preparedRuntime.ok) {
+      return agentProtocolExecutionError(preparedRuntime);
+    }
+
     // Install this provider's commit guard explicitly. Without it the phase
     // inherits whatever the previous agent block left (planning_agent disables
     // it), so the same graph would commit or not depending on block order. Only
@@ -369,9 +411,16 @@ export const execute: BlockExecuteFn = async (
       sandboxId,
       kind,
       workspaceMode === "read_write",
+      runtime,
     );
     if (!guard.ok) return agentProtocolExecutionError(guard);
-    const { paths, script } = await blockGenericAgentPlanPhaseStep(kind, phase, model, jsonSchema);
+    const { paths, script } = await blockGenericAgentPlanPhaseStep(
+      kind,
+      phase,
+      model,
+      jsonSchema,
+      runtime,
+    );
     const launch = await blockGenericAgentStartPhaseStep(
       sandboxId,
       kind,
@@ -380,6 +429,7 @@ export const execute: BlockExecuteFn = async (
       prompt,
       paths.wrapper,
       script,
+      runtime,
     );
     if (!launch.ok) return agentProtocolExecutionError(launch.failure);
     const commandId = launch.commandId;
@@ -390,7 +440,7 @@ export const execute: BlockExecuteFn = async (
       paths.sentinel,
       MAX_MINUTES,
       commandId,
-      ctx.observeBudget,
+      blockBudgetObserver(ctx, execution),
       execution?.cancellation,
     );
     if (!done) {
@@ -404,6 +454,7 @@ export const execute: BlockExecuteFn = async (
       artifacts,
       phase,
       customSchema,
+      runtime,
     );
     recordBlockPhaseUsage(
       ctx,
@@ -444,6 +495,7 @@ export const execute: BlockExecuteFn = async (
           phase,
           customSchema,
           schemaIssues.map((issue) => issue.message),
+          runtime,
         );
         return agentProtocolExecutionError(failure);
       }
@@ -459,6 +511,7 @@ export const execute: BlockExecuteFn = async (
           phase,
           customSchema,
           issues,
+          runtime,
         );
         return agentProtocolExecutionError(failure);
       }

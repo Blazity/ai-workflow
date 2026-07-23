@@ -205,7 +205,11 @@ describe("disposable review workspace", () => {
           ((args as string[]).includes("clone") || (args as string[]).includes("push")),
       ),
     ).toBe(false);
-    expect(mocks.setCommitGuard).toHaveBeenCalledWith(expect.anything(), false);
+    expect(mocks.setCommitGuard).toHaveBeenCalledWith(
+      expect.anything(),
+      false,
+      undefined,
+    );
     expect(mocks.reviewCommand).toHaveBeenCalledWith(
       "chmod",
       ["-R", "a-w", "/vercel/sandbox/repos/gitlab__acme__web"],

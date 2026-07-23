@@ -4,7 +4,6 @@ import { useState, useMemo } from "react";
 import Link from "next/link";
 import type { FlowNodeDef } from "@/lib/flows";
 import type {
-  JsonValue,
   PromptSourceRef,
   WorkflowAvailableValue,
   WorkflowBlockType,
@@ -12,10 +11,8 @@ import type {
   WorkflowParamValue,
 } from "@shared/contracts";
 import {
-  BUILTIN_HARNESS_PROFILE_MANIFESTS,
   DEFAULT_OPEN_PR_TITLE,
   DEFAULT_PROMPT_NAME_BY_AGENT,
-  isHarnessProfileReference,
 } from "@shared/contracts";
 import { parseCondition } from "@shared/conditions";
 import {
@@ -29,6 +26,7 @@ import { PromptField } from "./prompt-field";
 import { PromptEditor } from "@/components/cockpit/prompt-editor/prompt-editor";
 import { JsonSchemaEditor } from "./json-schema-editor";
 import { usePromptAuthoringContext } from "./prompt-authoring-context";
+import { AgentHarnessProfile } from "./agent-harness-profile";
 
 /** The inspector change callback. Widened past WorkflowParamValue so PromptField
  *  can set/clear provenance refs under `promptRefs.<paramKey>` paths too. */
@@ -492,59 +490,13 @@ function AgentProviderModel({
   canEdit: boolean;
   onChange: ConfigChange;
 }) {
-  const promptAuthoring = usePromptAuthoringContext();
   if (node.v2) {
-    const configured = node.v2.configuration.harnessProfile;
-    const reference = isHarnessProfileReference(configured)
-      ? configured
-      : null;
-    const manifests = Object.values(BUILTIN_HARNESS_PROFILE_MANIFESTS);
-    const selected =
-      manifests.find(
-        (manifest) =>
-          manifest.profileId === reference?.profileId &&
-          manifest.version === reference.version,
-      ) ??
-      manifests.find(
-        (manifest) =>
-          manifest.harness.provider ===
-          (node.params.provider === "codex" ? "codex" : "claude"),
-      ) ??
-      manifests[0]!;
     return (
-      <>
-        <ConfigField label="Harness profile">
-          <Listbox
-            options={manifests.map((manifest) => ({
-              value: manifest.profileId,
-              label: `${manifest.displayName} · v${manifest.version}`,
-            }))}
-            value={selected.profileId}
-            disabled={!canEdit || promptAuthoring === null}
-            ariaLabel="Harness profile"
-            onChange={(profileId) => {
-              const manifest = manifests.find(
-                (candidate) => candidate.profileId === profileId,
-              );
-              if (!manifest || !promptAuthoring) return;
-              const configuration: Record<string, JsonValue> = {
-                ...node.v2!.configuration,
-                harnessProfile: {
-                  profileId: manifest.profileId,
-                  version: manifest.version,
-                },
-              };
-              delete configuration.provider;
-              delete configuration.model;
-              promptAuthoring.onV2ConfigurationChange(configuration);
-            }}
-          />
-        </ConfigField>
-        <ConfigNote>
-          {selected.harness.provider === "codex" ? "Codex" : "Claude"}{" "}
-          {selected.model.id} · pinned profile version {selected.version}
-        </ConfigNote>
-      </>
+      <AgentHarnessProfile
+        node={node}
+        options={options}
+        canEdit={canEdit}
+      />
     );
   }
   const provider = str(node.params.provider);
@@ -760,7 +712,7 @@ export function ConfigFields({
         <>
           <AgentProviderModel node={node} options={options} canEdit={canEdit} onChange={onChange} />
           <PromptField
-            label="Prompt"
+            label={node.v2 ? "Role / task prompt" : "Prompt"}
             paramKey="prompt"
             node={node}
             disabled={!canEdit}
@@ -776,7 +728,7 @@ export function ConfigFields({
         <>
           <AgentProviderModel node={node} options={options} canEdit={canEdit} onChange={onChange} />
           <PromptField
-            label="Instructions"
+            label={node.v2 ? "Role / task instructions" : "Instructions"}
             paramKey="instructions"
             node={node}
             disabled={!canEdit}
@@ -804,7 +756,7 @@ export function ConfigFields({
             />
           </ConfigField>
           <PromptField
-            label="Prompt"
+            label={node.v2 ? "Role / task prompt" : "Prompt"}
             paramKey="prompt"
             node={node}
             disabled={!canEdit}

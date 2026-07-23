@@ -1,5 +1,9 @@
 import type { AgentKind } from "./agents/index.js";
 import type { AgentProtocolResult } from "./agents/types.js";
+import type {
+  ResolvedHarnessRuntime,
+  ResolvedRuntimeCredentials,
+} from "./harness-runtime.js";
 import {
   WORKSPACE_MANIFEST_PATH,
   WORKSPACE_REPOS_DIR,
@@ -37,6 +41,7 @@ export interface ProvisionDisposableReviewWorkspaceInput {
   agentKind: AgentKind;
   model: string;
   arthurTaskId: string | null;
+  runtime?: ResolvedHarnessRuntime;
 }
 
 interface ExportedRepository extends DisposableReviewRepository {
@@ -259,19 +264,27 @@ export async function provisionDisposableReviewWorkspaceStep(
             endpoint: env.GENAI_ENGINE_TRACE_ENDPOINT,
           }
         : undefined;
-    const adapter = createAgentAdapter(input.agentKind);
-    await adapter.install(sandbox);
-    await adapter.configure(sandbox, {
-      anthropicApiKey: env.ANTHROPIC_API_KEY,
-      codexApiKey: env.CODEX_API_KEY,
-      codexChatGptOauthToken: env.CODEX_CHATGPT_OAUTH_TOKEN,
-      model: input.model,
-      arthur,
-    });
-    // A review must never be prompted to commit. The filesystem policy below
-    // is the enforcement boundary, while the detached bundle checkouts have no
-    // remote or provider credential with which to publish.
-    await adapter.setCommitGuard(sandbox, false);
+    const adapter = createAgentAdapter(
+      input.agentKind,
+      input.runtime?.cliSpec,
+    );
+    if (!input.runtime) {
+      const runtimeCredentials: ResolvedRuntimeCredentials = {
+        anthropicApiKey: env.ANTHROPIC_API_KEY,
+        codexApiKey: env.CODEX_API_KEY,
+        codexChatGptOauthToken: env.CODEX_CHATGPT_OAUTH_TOKEN,
+      };
+      await adapter.install(sandbox);
+      await adapter.configure(sandbox, {
+        ...runtimeCredentials,
+        model: input.model,
+        arthur,
+      });
+      // A review must never be prompted to commit. The filesystem policy below
+      // is the enforcement boundary, while the detached bundle checkouts have
+      // no remote or provider credential with which to publish.
+      await adapter.setCommitGuard(sandbox, false, undefined);
+    }
 
     await requireCommand(
       await sandbox.runCommand("bash", [
@@ -367,6 +380,7 @@ export async function provisionDisposableReviewWorkspaceStep(
     throw error;
   }
 }
+
 provisionDisposableReviewWorkspaceStep.maxRetries = 0;
 
 export type DisposableReviewWorkspaceVerification =

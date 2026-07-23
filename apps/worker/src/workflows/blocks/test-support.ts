@@ -1,16 +1,27 @@
 import { expect, vi } from "vitest";
 import type {
   BlockOutput,
+  HarnessProfileManifestV1,
+  HarnessProvider,
   WorkflowBlockType,
   WorkflowBlockTypeV1,
   WorkflowDefinitionNode,
   WorkflowParamValue,
 } from "@shared/contracts";
 import {
+  BUILTIN_HARNESS_PROFILE_IDS,
+  BUILTIN_HARNESS_PROFILE_MANIFESTS,
+} from "@shared/contracts";
+import {
   resolveWorkflowBlockContract,
   validateBlockOutputAgainstContract,
   type WorkflowBlockRegistryContext,
 } from "../../workflow-definition/block-registry.js";
+import { hashHarnessProfileManifest } from "../../harness-profiles/manifest.js";
+import {
+  resolveHarnessRuntime,
+  type ResolvedHarnessRuntime,
+} from "../../sandbox/harness-runtime.js";
 import type { PrTriggerPayload } from "../agent-input.js";
 import type { EngineCtx } from "./types.js";
 
@@ -58,6 +69,41 @@ export function makePrPayload(overrides: Partial<PrTriggerPayload> = {}): PrTrig
     isDraft: false,
     ...overrides,
   };
+}
+
+/** Build a verified persisted-profile runtime for v2 block executor tests. */
+export function makeHarnessRuntime(
+  nodeId: string,
+  nodeType: WorkflowBlockType,
+  options: {
+    provider?: HarnessProvider;
+    model?: string;
+    limits?: HarnessProfileManifestV1["limits"];
+    preserveAcrossBlocks?: boolean;
+    workspaceMode?: unknown;
+  } = {},
+): ResolvedHarnessRuntime {
+  const provider = options.provider ?? "claude";
+  const manifest: HarnessProfileManifestV1 = structuredClone(
+    BUILTIN_HARNESS_PROFILE_MANIFESTS[
+      BUILTIN_HARNESS_PROFILE_IDS[provider]
+    ],
+  );
+  manifest.model.id = options.model ?? `${provider}-model`;
+  if (options.limits) {
+    manifest.limits = structuredClone(options.limits);
+  }
+  if (options.preserveAcrossBlocks !== undefined) {
+    manifest.workspace.preserveAcrossBlocks =
+      options.preserveAcrossBlocks;
+  }
+  const manifestHash = hashHarnessProfileManifest(manifest);
+  return resolveHarnessRuntime({
+    nodeId,
+    nodeType,
+    workspaceMode: options.workspaceMode,
+    resolved: { manifest, manifestHash, skillArtifacts: [] },
+  });
 }
 
 /** Serialized shapes model errors crossing a Workflow step/VM boundary. */
@@ -115,6 +161,7 @@ export function makeCtx(overrides: Partial<EngineCtx> = {}): EngineCtx {
     sandboxId: "sbx-1",
     workspaceManifest: null,
     agentSandboxIds: {},
+    harnessRuntimes: {},
     sandboxIds: new Set<string>(),
     selectedRepositories: [],
     repositoryContexts: [],

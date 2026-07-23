@@ -1,6 +1,7 @@
 import {
   isTriggerBlockType,
   type HarnessProvider,
+  type HarnessProfileReference,
 } from "@shared/contracts";
 import { and, eq, isNull, or } from "drizzle-orm";
 import type { Db } from "../db/client.js";
@@ -16,7 +17,11 @@ import { workflowDefinitionTemplates } from "./templates.js";
  */
 export async function seedWorkflowDefinitionTemplates(
   db: Db,
-  options: { includeReview: boolean; provider?: HarnessProvider },
+  options: {
+    includeReview: boolean;
+    provider?: HarnessProvider;
+    profileReference?: HarnessProfileReference;
+  },
 ): Promise<void> {
   for (const template of workflowDefinitionTemplates(options).slice(1)) {
     const marker = `System template:${template.id}`;
