@@ -71,11 +71,14 @@ export default defineEventHandler(async (event) => {
   // Normalize every structurally supported review state here. The dispatcher
   // applies provider/state selectors from the same immutable definition
   // snapshot that it pins, avoiding a load-then-deploy race in this route.
+  // Comment events (inline diff + PR conversation) can only ever be "commented".
   const botLogin = getVcsBotLogin("github");
   const reviewStates =
     ghEvent === "pull_request_review"
       ? ["changes_requested", "commented"] as const
-      : undefined;
+      : ghEvent === "pull_request_review_comment" || ghEvent === "issue_comment"
+        ? ["commented"] as const
+        : undefined;
   const evt = normalizeGitHubEvent(ghEvent, body, {
     gateCheckNames,
     deliveryId,

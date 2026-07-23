@@ -386,6 +386,87 @@ describe("POST /webhooks/github", () => {
     expect(mockDispatchPostPrGateWebhook).not.toHaveBeenCalled();
   });
 
+  it("dispatches a pull_request_review_comment through the trigger path", async () => {
+    mockDispatchTriggerEvent.mockResolvedValueOnce({ result: "started", runId: "run_rc" });
+    const body = {
+      action: "created",
+      repository: repo(),
+      pull_request: {
+        number: 7,
+        html_url: "https://github.com/acme/app/pull/7",
+        head: { ref: "blazebot/aiw-1", sha: "abc123" },
+        base: { ref: "main" },
+        title: "Fix",
+        user: { login: "human" },
+        draft: false,
+      },
+      comment: {
+        id: 5,
+        pull_request_review_id: 9,
+        user: { login: "human", type: "User" },
+        body: "please fix",
+      },
+    };
+
+    const response = await makeApp()(makeRequest(body, "pull_request_review_comment"));
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ status: "dispatched", runId: "run_rc" });
+    expect(mockDispatchTriggerEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        triggerType: "trigger_pr_review",
+        pr: expect.objectContaining({
+          review: expect.objectContaining({ state: "commented" }),
+        }),
+      }),
+      expect.anything(),
+    );
+    expect(mockDispatchPostPrGateWebhook).not.toHaveBeenCalled();
+  });
+
+  it("dispatches an issue_comment on a PR through the trigger path", async () => {
+    mockDispatchTriggerEvent.mockResolvedValueOnce({ result: "started", runId: "run_ic" });
+    const body = {
+      action: "created",
+      repository: repo(),
+      issue: {
+        number: 7,
+        title: "Fix",
+        user: { login: "author-person" },
+        pull_request: { html_url: "https://github.com/acme/app/pull/7" },
+      },
+      comment: { id: 77, user: { login: "human", type: "User" }, body: "conversation feedback" },
+    };
+
+    const response = await makeApp()(makeRequest(body, "issue_comment"));
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ status: "dispatched", runId: "run_ic" });
+    expect(mockDispatchTriggerEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        triggerType: "trigger_pr_review",
+        pr: expect.objectContaining({
+          prNumber: 7,
+          review: expect.objectContaining({ state: "commented" }),
+        }),
+      }),
+      expect.anything(),
+    );
+    expect(mockDispatchPostPrGateWebhook).not.toHaveBeenCalled();
+  });
+
+  it("ignores an unrelated event without dispatching or gating", async () => {
+    const response = await makeApp()(makeRequest({ repository: repo() }, "workflow_run"));
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      status: "ignored",
+      reason: "event_workflow_run",
+    });
+    expect(mockDispatchTriggerEvent).not.toHaveBeenCalled();
+    expect(mockDispatchPostPrGateWebhook).not.toHaveBeenCalled();
+  });
+
   it("matches the configured repo case-insensitively", async () => {
     // GitHub org/repo slugs are case-insensitive: payload "acme/app" must match
     // a configured "Acme/App" instead of dropping as other_repo.
