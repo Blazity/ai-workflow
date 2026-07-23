@@ -33,12 +33,28 @@ export interface PrePrCheckFailure {
   stderr: string;
 }
 
+export type CheckOutcome =
+  | "passed"
+  | "failed"
+  | "skipped"
+  | "missing_configuration";
+
+export interface PrePrCheckCommandResult {
+  provider: WorkspaceRepo["provider"];
+  repoPath: string;
+  command: string;
+  exitCode: number;
+}
+
 export interface PrePrCheckRunResult {
+  outcome: Exclude<CheckOutcome, "skipped">;
   passed: boolean;
   fixCycles: number;
   /** One entry per launched fixer; null means the CLI returned no authoritative usage. */
   fixCycleUsages: Array<PhaseUsage | null>;
   budgetFailure: RunBudgetFailure | null;
+  /** Every normally started command, in workspace/repository and authored command order. */
+  results: PrePrCheckCommandResult[];
   failures: PrePrCheckFailure[];
   summary: string;
   /** Runtime/protocol failure from a launched repair agent. */
@@ -81,10 +97,12 @@ export async function runPrePrChecksWithFixes(
 ): Promise<PrePrCheckRunResult> {
   if (config.repositories.length === 0) {
     return {
+      outcome: "missing_configuration",
       passed: true,
       fixCycles: 0,
       fixCycleUsages: [],
       budgetFailure: null,
+      results: [],
       failures: [],
       summary: "No pre-PR checks configured.",
     };
@@ -144,6 +162,7 @@ async function runConfiguredPrePrChecks(
   const checksByRepo = new Map(
     config.repositories.map((repo) => [repositoryKey(repo), repo.commands]),
   );
+  const results: PrePrCheckCommandResult[] = [];
   const failures: PrePrCheckFailure[] = [];
   let ranChecks = 0;
 
@@ -151,7 +170,7 @@ async function runConfiguredPrePrChecks(
     const commands = checksByRepo.get(repositoryKey(repo));
     if (!commands) continue;
 
-    const changed = await hasRepositoryChanged(sandbox, repo, failures);
+    const changed = await hasRepositoryChanged(sandbox, repo, signal);
     if (!changed) continue;
 
     for (const command of commands) {
@@ -161,6 +180,12 @@ async function runConfiguredPrePrChecks(
         args: ["-lc", command],
         cwd: repo.localPath,
         ...(signal ? { signal } : {}),
+      });
+      results.push({
+        provider: repo.provider,
+        repoPath: repo.repoPath,
+        command,
+        exitCode: result.exitCode,
       });
       if (result.exitCode !== 0) {
         failures.push({
@@ -176,10 +201,12 @@ async function runConfiguredPrePrChecks(
   }
 
   return {
+    outcome: failures.length > 0 ? "failed" : "passed",
     passed: failures.length === 0,
     fixCycles,
     fixCycleUsages: [],
     budgetFailure: null,
+    results,
     failures,
     summary: failures.length > 0
       ? formatPrePrCheckFailures(failures)
@@ -200,22 +227,27 @@ async function readWorkspaceManifest(sandbox: SandboxSession): Promise<Workspace
 async function hasRepositoryChanged(
   sandbox: SandboxSession,
   repo: WorkspaceRepo,
-  failures: PrePrCheckFailure[],
+  signal?: AbortSignal,
 ): Promise<boolean> {
-  const headResult = await sandbox.runCommand("git", ["-C", repo.localPath, "rev-parse", "HEAD"]);
+  const headResult = signal
+    ? await sandbox.runCommand({
+        cmd: "git",
+        args: ["-C", repo.localPath, "rev-parse", "HEAD"],
+        signal,
+      })
+    : await sandbox.runCommand("git", ["-C", repo.localPath, "rev-parse", "HEAD"]);
   if (headResult.exitCode !== 0) {
-    failures.push({
-      provider: repo.provider,
-      repoPath: repo.repoPath,
-      command: "git rev-parse HEAD",
-      exitCode: headResult.exitCode,
-      stdout: await commandStdout(headResult),
-      stderr: await commandStderr(headResult),
-    });
-    return false;
+    throw new Error(
+      `Could not inspect workspace HEAD for ${repo.provider}:${repo.repoPath}`,
+    );
   }
 
   const headSha = (await headResult.stdout()).trim();
+  if (!headSha) {
+    throw new Error(
+      `Could not inspect workspace HEAD for ${repo.provider}:${repo.repoPath}`,
+    );
+  }
   return !repo.preAgentSha || repo.preAgentSha !== headSha;
 }
 

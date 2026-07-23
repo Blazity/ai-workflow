@@ -191,6 +191,7 @@ describe("fix_agent execute", () => {
       25,
       "cmd-2",
       ctx.observeBudget,
+      undefined,
     );
     expect(ctx.recordUsage).toHaveBeenCalledWith("Fix Fix Block!", usage, "claude-model");
     expect(result).toEqual({
@@ -233,6 +234,86 @@ describe("fix_agent execute", () => {
       { name: "ci", status: "completed", conclusion: "failure", logs: "Details: https://ci" },
     ]);
     expect(input.prComments).toEqual([{ author: "bob", body: "rename this", liked: false }]);
+  });
+
+  it("prefers explicitly bound review feedback and avoids provider-comment duplicates", async () => {
+    mocks.parseAgentOutput.mockReturnValue({ result: "implemented" });
+    const ctx = makeCtx({
+      entry: {
+        kind: "pr_trigger",
+        triggerType: "trigger_pr_review",
+        subjectKey: "ticket:jira:AWT-1",
+        ticketKey: "AWT-1",
+        ownerToken: "owner:test",
+        definitionId: 1,
+        definitionVersion: 1,
+        scope: "workflow_owned",
+        pr: makePrPayload({
+          review: {
+            state: "changes_requested",
+            author: "Ambient reviewer",
+            body: "Ambient feedback",
+          },
+        }),
+      },
+      repositoryContexts: [
+        {
+          repository: {
+            provider: "github",
+            repoPath: "acme/api",
+            defaultBranch: "main",
+            selectedRationale: "workflow-owned",
+          },
+          prComments: [
+            {
+              author: "Alice",
+              body: "[Review: changes requested] Please add coverage.",
+              liked: false,
+            },
+          ],
+          checkResults: [],
+          hasConflicts: false,
+        },
+      ],
+    });
+
+    await execute(makeNode("fix_agent"), {}, ctx, {
+      reviewFeedback: {
+        state: "changes_requested",
+        author: "Alice",
+        body: "Please add coverage.",
+      },
+    });
+
+    expect(mocks.assembleFixContext.mock.calls[0][0].prComments).toEqual([
+      {
+        author: "Alice",
+        body: "[Review: changes requested] Please add coverage.",
+        liked: false,
+      },
+    ]);
+  });
+
+  it("fails safely when explicitly bound review feedback is malformed", async () => {
+    const result = await execute(makeNode("fix_agent"), {}, makeCtx(), {
+      reviewFeedback: {
+        state: "approved",
+        author: "Alice",
+        body: "Looks good",
+        secret: "must-not-leak",
+      },
+    });
+
+    expect(result).toEqual({
+      kind: "execution_error",
+      error: expect.objectContaining({
+        category: "binding",
+        message:
+          "The review feedback input must contain a valid state, author, and body.",
+      }),
+    });
+    expect(JSON.stringify(result)).not.toContain("must-not-leak");
+    expect(mocks.assembleFixContext).not.toHaveBeenCalled();
   });
 
   it("threads clarification history from ctx into the fix context", async () => {

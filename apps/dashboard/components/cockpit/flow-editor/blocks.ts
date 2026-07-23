@@ -4,6 +4,14 @@ import type {
   WorkflowEditorOptions,
   WorkflowParamValue,
 } from "@shared/contracts";
+import {
+  WORKFLOW_EDITOR_BLOCK_TEMPLATES,
+  type WorkflowEditorBlockTemplateId,
+} from "@/lib/workflow-editor/block-templates";
+import {
+  parseWorkflowBranchConfigurationV2,
+  summarizeWorkflowBranchCondition,
+} from "@/lib/workflow-editor/branch-ast";
 
 export const CONNECTED_CARD_TEXT_CLASS = "overflow-hidden text-ellipsis whitespace-nowrap";
 
@@ -59,6 +67,14 @@ export function nodeSummary(node: FlowNodeDef, options: WorkflowEditorOptions): 
       return prompt !== "" ? truncate(prompt) : null;
     }
     case "branch": {
+      if (node.v2) {
+        const configuration = parseWorkflowBranchConfigurationV2(
+          node.v2.configuration,
+        );
+        return configuration
+          ? truncate(summarizeWorkflowBranchCondition(configuration.condition))
+          : "Condition needs setup";
+      }
       const condition = str(node.params.condition);
       return condition !== "" ? truncate(condition) : null;
     }
@@ -118,12 +134,14 @@ export function nodeSummary(node: FlowNodeDef, options: WorkflowEditorOptions): 
 }
 
 export interface PaletteItem {
+  id: string;
   type: WorkflowBlockType;
   name: string;
   params: Record<string, WorkflowParamValue>;
   presentation: WorkflowBlockPresentation;
   available: boolean;
   unavailableReason: string | null;
+  templateId?: WorkflowEditorBlockTemplateId;
 }
 
 export interface PaletteGroup {
@@ -157,9 +175,12 @@ const GROUP_LABELS: Record<string, string> = {
   arthur: "Arthur",
 };
 
-export function buildPaletteItems(options: WorkflowEditorOptions): PaletteGroup[] {
+export function buildPaletteItems(
+  options: WorkflowEditorOptions,
+  schemaVersion: 1 | 2 = 1,
+): PaletteGroup[] {
   const contracts = Object.values(options.blockRegistry);
-  return GROUP_ORDER.flatMap((group) => {
+  const groups: PaletteGroup[] = GROUP_ORDER.flatMap((group) => {
     const groupContracts = contracts.filter((contract) => contract.presentation.group === group);
     if (groupContracts.length === 0) return [];
     return [{
@@ -167,6 +188,7 @@ export function buildPaletteItems(options: WorkflowEditorOptions): PaletteGroup[
       label: GROUP_LABELS[group],
       color: groupContracts[0]!.presentation.color,
       items: groupContracts.map((contract) => ({
+        id: `block:${contract.type}`,
         type: contract.type,
         name: contract.presentation.label,
         params: { ...contract.defaults },
@@ -176,4 +198,32 @@ export function buildPaletteItems(options: WorkflowEditorOptions): PaletteGroup[
       })),
     }];
   });
+  if (schemaVersion === 1) return groups;
+
+  for (const template of WORKFLOW_EDITOR_BLOCK_TEMPLATES) {
+    const source = options.blockRegistry[template.sourceType];
+    if (!source) continue;
+    const group = groups.find(
+      (candidate) => candidate.group === source.presentation.group,
+    );
+    if (!group) continue;
+    const sourceIndex = group.items.findIndex(
+      (item) => item.type === template.sourceType && !item.templateId,
+    );
+    const item: PaletteItem = {
+      id: `template:${template.id}`,
+      templateId: template.id,
+      type: template.sourceType,
+      name: template.name,
+      params: { ...source.defaults },
+      presentation: {
+        ...source.presentation,
+        description: template.description,
+      },
+      available: source.availability.available,
+      unavailableReason: source.availability.unavailableReason,
+    };
+    group.items.splice(sourceIndex < 0 ? group.items.length : sourceIndex + 1, 0, item);
+  }
+  return groups;
 }

@@ -88,6 +88,7 @@ function namedError(name: string, message: string): Error {
 export function makeCtx(overrides: Partial<EngineCtx> = {}): EngineCtx {
   return {
     runId: "run-1",
+    schemaVersion: 1,
     definitionId: 1,
     definitionVersion: 1,
     definitionNodes: [],
@@ -120,6 +121,7 @@ export function makeCtx(overrides: Partial<EngineCtx> = {}): EngineCtx {
     preSandboxAdditions: { research: [], implementation: [], review: [] },
     researchPlanMarkdown: "",
     publication: null,
+    prePrGate: null,
     runDefaultKind: "claude",
     defaults: { claude: "claude-model", codex: "codex-model" },
     prompts: { research: "r", implement: "i", review: "v" },

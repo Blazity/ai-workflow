@@ -16,6 +16,7 @@ import {
   verifyGitLabWebhookToken,
 } from "../../lib/gitlab-webhook.js";
 import { logger } from "../../lib/logger.js";
+import { recordIngestionFailure } from "../../lib/ingestion-diagnostic.js";
 import { dispatchPostPrGateWebhook } from "../../lib/post-pr-gate-dispatch.js";
 import { isRepoAllowed } from "../../lib/repo-allowlist.js";
 import { normalizeGitLabEvent } from "../../lib/trigger-events.js";
@@ -183,8 +184,17 @@ function triggerResponse(result: DispatchTriggerResult) {
   if (result.result === "at_capacity" || result.result === "error") {
     // Surface a retryable HTTP failure. Received envelopes also have local poll
     // recovery; failures before durable receipt still need provider retry.
-    logger.info({ reason: result.result }, "trigger_webhook_retryable_failure");
-    throw createError({ statusCode: 503, statusMessage: `trigger_${result.result}` });
+    const diagnosticId =
+      result.result === "error" ? result.diagnosticId : undefined;
+    logger.info(
+      { reason: result.result, ...(diagnosticId ? { diagnosticId } : {}) },
+      "trigger_webhook_retryable_failure",
+    );
+    throw createError({
+      statusCode: 503,
+      statusMessage: `trigger_${result.result}`,
+      ...(diagnosticId ? { data: { diagnosticId } } : {}),
+    });
   }
   return { status: "ignored", reason: result.result };
 }
@@ -207,13 +217,15 @@ async function gitLabProjectIsAllowed(project: GitLabProject): Promise<boolean> 
       (repo) => repo.provider === "gitlab" && repo.repoPath === project.path_with_namespace,
     );
   } catch (err) {
-    logger.warn(
-      { err: (err as Error).message, project },
+    const diagnosticId = recordIngestionFailure(
       "post_pr_gate_gitlab_webhook_scope_check_failed_closed",
+      err,
+      { project },
     );
     throw createError({
       statusCode: 503,
       statusMessage: "gitlab_repository_scope_unavailable",
+      data: { diagnosticId },
     });
   }
 }

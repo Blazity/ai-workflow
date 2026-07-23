@@ -73,6 +73,36 @@ describe("ensureAgentSandbox", () => {
     );
   });
 
+  it("provisions distinct unshared sandboxes across isolated invocations", async () => {
+    mocks.sandboxCreate
+      .mockResolvedValueOnce({
+        sandboxId: "scratch-1",
+        status: "running",
+        stop: mocks.stop,
+      })
+      .mockResolvedValueOnce({
+        sandboxId: "scratch-2",
+        status: "running",
+        stop: mocks.stop,
+      });
+    const ctx = makeCtx({
+      sandboxId: null,
+      agentSandboxIds: {},
+      sandboxIds: new Set(),
+      arthur: { taskId: "task-1" },
+    });
+
+    const sandboxes = [
+      await ensureAgentSandbox(ctx, "claude", "claude-model", { reuse: false }),
+      await ensureAgentSandbox(ctx, "claude", "claude-model", { reuse: false }),
+    ];
+
+    expect(sandboxes).toEqual(["scratch-1", "scratch-2"]);
+    expect(mocks.sandboxCreate).toHaveBeenCalledTimes(2);
+    expect(ctx.agentSandboxIds.claude).toBeUndefined();
+    expect([...ctx.sandboxIds].sort()).toEqual(["scratch-1", "scratch-2"]);
+  });
+
   it("tracks a created sandbox before a registry failure", async () => {
     mocks.registerSandbox.mockRejectedValueOnce(new Error("registry unavailable"));
     const ctx = makeCtx({ sandboxId: null, agentSandboxIds: {}, sandboxIds: new Set() });

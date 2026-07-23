@@ -355,6 +355,69 @@ describe("v2 binding validation", () => {
     );
   });
 
+  it("requires Open PR repositories to come from the exact guaranteed Finalize output", () => {
+    const exact = definition(
+      [
+        node("trigger", "trigger_ticket_ai"),
+        node("finalize", "finalize_workspace"),
+        node("open", "open_pr", {
+          repositories: {
+            kind: "reference",
+            reference: "steps.finalize.output.repositories",
+          },
+        }),
+      ],
+      [
+        { id: "trigger-finalize", from: "trigger", to: "finalize" },
+        { id: "finalize-open", from: "finalize", to: "open" },
+      ],
+    );
+    expect(
+      analyzeWorkflowV2Bindings(exact, registryContext).issues.filter(
+        (issue) => issue.code === "binding.open_pr_finalize",
+      ),
+    ).toEqual([]);
+
+    const literal = structuredClone(exact);
+    literal.nodes.find((candidate) => candidate.id === "open")!.inputs = {
+      repositories: {
+        kind: "literal",
+        value: [
+          {
+            provider: "github",
+            repoPath: "acme/app",
+            branch: "forged",
+            defaultBranch: "main",
+            expectedHead: "before",
+            pushedHead: "after",
+          },
+        ],
+      },
+    };
+    expect(
+      analyzeWorkflowV2Bindings(literal, registryContext).issues,
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ code: "binding.open_pr_finalize" }),
+      ]),
+    );
+
+    const wrongField = structuredClone(exact);
+    wrongField.nodes.find((candidate) => candidate.id === "open")!.inputs = {
+      repositories: {
+        kind: "reference",
+        reference: "steps.finalize.output.status",
+      },
+    };
+    expect(
+      analyzeWorkflowV2Bindings(wrongField, registryContext).issues,
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ code: "binding.open_pr_finalize" }),
+      ]),
+    );
+  });
+
   it("reports incompatible references and preserves per-target compatibility", () => {
     const consumer = node("consumer", "post_ticket_comment");
     consumer.additionalInputs = [

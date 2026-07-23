@@ -906,6 +906,7 @@
           statuses: ["implemented", "needs_human_input"],
         }),
         review_agent: runtimeContract(["provider", "model", "prompt"], {
+          optionalInputs: typedPaths("object", "reviewFeedback"),
           requiredOutputs: [
             ...STATUS_OUTPUT,
             ...typedPaths("object[]", "findings"),
@@ -915,6 +916,7 @@
           statuses: ["reviewed"],
         }),
         fix_agent: runtimeContract(["provider", "model", "instructions", "maxMinutes"], {
+          optionalInputs: typedPaths("object", "reviewFeedback"),
           requiredOutputs: [
             ...STATUS_OUTPUT,
             ...typedPaths("string", "workspaceId", "summary"),
@@ -983,7 +985,7 @@
             ...STATUS_OUTPUT,
             ...typedPaths("boolean", "ok"),
             ...typedPaths("number", "fixCycles"),
-            ...typedPaths("string", "summary"),
+            ...typedPaths("string", "outcome", "summary"),
           ],
           statuses: ["ok"],
         }),
@@ -991,8 +993,10 @@
           requiredOutputs: [
             ...STATUS_OUTPUT,
             ...typedPaths("boolean", "ok"),
+            ...typedPaths("string", "outcome"),
             ...typedPaths("unknown[]", "results", "failures"),
           ],
+          optionalOutputs: typedPaths("string", "skipReason"),
           statuses: ["ok"],
         }),
         transform: runtimeContract([], {
@@ -1186,7 +1190,7 @@
           group: "agent",
           title: "Review Agent",
           blurb: "Reviews a diff or PR and produces structured findings plus a decision.",
-          note: "The review target and scope come from the run context; the block exposes no bindable input path in the current runtime."
+          note: "The review target and scope come from the run context. V2 workflows may bind typed review feedback explicitly; v1 keeps its legacy ambient review context."
         },
         "agent.fix": {
           runtimeType: "fix_agent",
@@ -1194,7 +1198,7 @@
           group: "agent",
           title: "Fix Agent",
           blurb: "Repair pass scoped to structured failures, review feedback, or current merge conflicts.",
-          note: "Reuses an upstream prepared workspace when present; otherwise prepares or resumes the target workspace automatically. Accepted PR head, failures, ticket, and workspace context are carried by the run rather than authored as bindings. status: fixed is the specialized agent's built-in readiness classification and continues to Finalize workspace; it is not a CI verdict or permission to bypass publication guards. needs_human_input creates the runtime clarification checkpoint; execution errors follow the failed cleanup port when authored and keep the run failed. Use Generic Agent + Branch for a custom classification. Merge conflicts are auto-resolved only when the agent can produce a clean committed tree. Before publication, the runtime re-reads the accepted PR head and refuses to overwrite a different SHA; provider CI remains authoritative for correctness."
+          note: "Reuses an upstream prepared workspace when present; otherwise prepares or resumes the target workspace automatically. V2 workflows may bind typed review feedback explicitly; accepted PR head, failures, ticket, and workspace context otherwise come from the run. status: fixed is the specialized agent's built-in readiness classification and continues to Finalize workspace; it is not a CI verdict or permission to bypass publication guards. needs_human_input creates the runtime clarification checkpoint; v2 execution errors fail the run and v1 may follow a legacy failed cleanup port. Use Generic Agent + Branch for a custom classification. Merge conflicts are auto-resolved only when the agent can produce a clean committed tree. Before publication, the runtime re-reads the accepted PR head and refuses to overwrite a different SHA; provider CI remains authoritative for correctness."
         },
         "agent.generic": {
           runtimeType: "generic_agent",

@@ -6,7 +6,10 @@ import {
   publishTrustedWorkspaceFromSandbox,
   type TrustedWorkspacePushResult,
 } from "../sandbox/trusted-workspace-publisher.js";
-import { writeHumanDecisionsMemory } from "../sandbox/write-human-decisions-memory.js";
+import {
+  assertCurrentWorkspaceGate,
+  type WorkspaceGate,
+} from "./workspace-gate.js";
 import {
   createOrFindWorkflowOwnedPullRequest,
   findWorkflowOwnedPullRequestForBranch,
@@ -46,6 +49,7 @@ export type WorkspacePublicationResult =
   | {
       status: "failed";
       reason: string;
+      failureKind?: "pre_pr_gate";
       repositories: FinalizedBranch[];
       prs: WorkflowPrLink[];
       pushResult?: TrustedWorkspacePushResult;
@@ -63,11 +67,23 @@ export async function finalizeWorkspacePublication(input: {
   sandboxId: string;
   ticketKey: string;
   workspaceManifest: WorkspaceManifest;
+  prePrGate?: WorkspaceGate | null;
+  /**
+   * Compatibility input only. Decision-memory materialization is a workspace
+   * mutation and must happen before checks, never inside this boundary.
+   */
   clarifications?: HumanDecision[];
   sourcePullRequest?: SourcePullRequestIdentity;
 }): Promise<WorkspacePublicationResult> {
-  if (input.clarifications?.length) {
-    await writeHumanDecisionsMemory(input.sandboxId, input.ticketKey, input.clarifications);
+  try {
+    await assertCurrentWorkspaceGate({
+      sandboxId: input.sandboxId,
+      workspaceManifest: input.workspaceManifest,
+      gate: input.prePrGate ?? null,
+    });
+  } catch (error) {
+    if (isRunControlError(error)) throw error;
+    return failed(error, [], [], "pre_pr_gate");
   }
 
   if (input.sourcePullRequest) {
@@ -346,10 +362,12 @@ function failed(
   error: unknown,
   repositories: FinalizedBranch[] = [],
   prs: WorkflowPrLink[] = [],
+  failureKind?: "pre_pr_gate",
 ): WorkspacePublicationResult {
   return {
     status: "failed",
     reason: error instanceof Error ? error.message : String(error),
+    ...(failureKind ? { failureKind } : {}),
     repositories,
     prs,
   };

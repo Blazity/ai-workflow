@@ -176,9 +176,17 @@ export type BlockExecutor = (
   execution?: BlockExecutionContext,
 ) => Promise<BlockExecutionResult>;
 
-/** Metadata available only to the checkpointed block on a clarification resume. */
+/** Invocation metadata supplied to every block. Clarification answers are
+ * present only when resuming the checkpointed block. */
 export interface BlockExecutionContext {
-  clarificationAnswer: string;
+  attempt?: number;
+  clarificationAnswer?: string;
+  cancellation?: import("./invocation-context.js").V2InvocationCancellation;
+  /**
+   * Definition-local, collision-free identity for runtime artifact names.
+   * V1 omits it so existing phase names remain unchanged.
+   */
+  agentArtifactKey?: string;
 }
 
 export interface ClarificationResume {
@@ -637,9 +645,12 @@ export async function executeGraph(opts: {
       return finish("stopped");
     }
 
-    const execution = resumingWaitingNode
-      ? { clarificationAnswer: resume.clarificationAnswer }
-      : undefined;
+    const execution: BlockExecutionContext = {
+      attempt,
+      ...(resumingWaitingNode
+        ? { clarificationAnswer: resume.clarificationAnswer }
+        : {}),
+    };
     resumeAnswerPending = false;
     let result: BlockExecutionResult;
     try {

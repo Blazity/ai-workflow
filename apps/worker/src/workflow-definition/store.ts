@@ -190,7 +190,7 @@ function assertValidDefinition(definition: WorkflowDefinition): void {
     // immutable version was written. New deployments still pass through the
     // strict `assertDeployableDefinition` path below.
     { allowLegacyCompatibility: true },
-  ).filter((issue) => issue.code !== "v2_runtime_unavailable");
+  );
   if (issues.length > 0) {
     throw new WorkflowDefinitionStoreError(
       400,

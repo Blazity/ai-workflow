@@ -19,13 +19,21 @@ import {
   type FixWorkspaceState,
 } from "./fix-workspace-state.js";
 import {
+  agentArtifactPhase,
   executionError,
   agentProtocolExecutionError,
+  markBlockPhaseLaunched,
+  recordBlockPhaseUsage,
   sanitizeBlockId,
   type BlockExecuteFn,
   type BlockExecutionResult,
   type EngineCtx,
 } from "./types.js";
+import {
+  appendReviewFeedbackComment,
+  resolveReviewFeedbackInput,
+  type ReviewFeedback,
+} from "../review-feedback.js";
 
 export const paramsSchema = z
   .object({
@@ -173,10 +181,14 @@ async function blockFixAgentParseStep(
   };
 }
 
-async function buildFixInput(block: WorkflowDefinitionNode, ctx: EngineCtx): Promise<string> {
+async function buildFixInput(
+  block: WorkflowDefinitionNode,
+  ctx: EngineCtx,
+  reviewFeedback: ReviewFeedback | undefined,
+): Promise<string> {
   const { assembleFixContext } = await import("../../sandbox/context.js");
 
-  const prComments: PRComment[] = ctx.repositoryContexts.flatMap(
+  let prComments: PRComment[] = ctx.repositoryContexts.flatMap(
     (context) => context.prComments,
   );
   const failedChecks: CheckRunResult[] = ctx.repositoryContexts.flatMap(
@@ -196,10 +208,8 @@ async function buildFixInput(block: WorkflowDefinitionNode, ctx: EngineCtx): Pro
         ...(check.detailsUrl ? { logs: `Details: ${check.detailsUrl}` } : {}),
       });
     }
-    if (pr.review) {
-      prComments.push({ author: pr.review.author, body: pr.review.body, liked: false });
-    }
   }
+  prComments = appendReviewFeedbackComment(prComments, reviewFeedback);
 
   const instructions =
     typeof block.params.instructions === "string" && block.params.instructions.trim().length > 0
@@ -231,7 +241,7 @@ export const execute: BlockExecuteFn = async (
   block,
   _steps,
   ctx,
-  _resolvedInputs,
+  resolvedInputs = {},
   execution,
 ): Promise<BlockExecutionResult> => {
   const workspace = await ensureWorkspace(ctx, execution);
@@ -243,11 +253,21 @@ export const execute: BlockExecuteFn = async (
   const { kind, model } = resolveBlockAgent(block.params, ctx.runDefaultKind, ctx.defaults);
   const maxMinutes =
     typeof block.params.maxMinutes === "number" ? block.params.maxMinutes : DEFAULT_MAX_MINUTES;
-  const phase = `fix-${sanitizeBlockId(block.id)}`;
+  const phase = agentArtifactPhase(`fix-${sanitizeBlockId(block.id)}`, execution);
 
   try {
+    const reviewFeedback = resolveReviewFeedbackInput(resolvedInputs, {
+      ambient: ctx.entry.kind === "pr_trigger" ? ctx.entry.pr.review : undefined,
+      allowAmbientFallback: ctx.schemaVersion === 1,
+    });
+    if (!reviewFeedback.ok) {
+      return executionError("invalid reviewFeedback binding", {
+        category: "binding",
+        message: reviewFeedback.message,
+      });
+    }
     const before = await inspectFixWorkspace(sandboxId);
-    const input = await buildFixInput(block, ctx);
+    const input = await buildFixInput(block, ctx, reviewFeedback.value);
     const { AGENT_SCHEMA } = await import("../../sandbox/agents/types.js");
 
     const guard = await blockFixAgentCommitGuardStep(sandboxId, kind, true);
@@ -264,7 +284,7 @@ export const execute: BlockExecuteFn = async (
     );
     if (!launch.ok) return agentProtocolExecutionError(launch.failure);
     const commandId = launch.commandId;
-    ctx.markLaunched(usageLabel(block.id));
+    markBlockPhaseLaunched(ctx, usageLabel(block.id), execution);
 
     const done = await pollPhaseUntilDone(
       sandboxId,
@@ -272,6 +292,7 @@ export const execute: BlockExecuteFn = async (
       maxMinutes,
       commandId,
       ctx.observeBudget,
+      execution?.cancellation,
     );
     if (!done) {
       return executionError("fix phase timed out", { category: "timeout" });
@@ -280,7 +301,13 @@ export const execute: BlockExecuteFn = async (
     const { collectPhase } = await import("../../sandbox/poll-agent.js");
     const artifacts = await collectPhase(sandboxId, paths);
     const { result, usage } = await blockFixAgentParseStep(kind, artifacts, phase);
-    ctx.recordUsage(usageLabel(block.id), usage, model);
+    recordBlockPhaseUsage(
+      ctx,
+      usageLabel(block.id),
+      usage,
+      model,
+      execution,
+    );
     if (!result.ok) return agentProtocolExecutionError(result);
     const output = result.value;
     const after = await inspectFixWorkspace(sandboxId);

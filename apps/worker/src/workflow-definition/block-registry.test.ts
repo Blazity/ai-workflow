@@ -3,6 +3,7 @@ import { BLOCK_TYPE_SPECS, type WorkflowBlockType } from "@shared/contracts";
 import {
   buildWorkflowBlockRegistry,
   resolveWorkflowBlockContract,
+  validateBlockOutputForDefinition,
   workflowBlockDefinitionIssues,
   workflowBlockDeploymentDefinitionIssues,
   type WorkflowBlockRegistryContext,
@@ -110,7 +111,28 @@ describe("workflow block registry", () => {
       ticket: { required: false, schema: expect.objectContaining({ type: "object" }) },
       plan: { required: false, schema: { type: "string" } },
     });
-    expect(registry.fix_agent.inputs).toEqual({});
+    const reviewFeedbackInput = {
+      required: false,
+      schema: {
+        type: "object",
+        properties: {
+          state: {
+            type: "string",
+            enum: ["changes_requested", "commented"],
+          },
+          author: { type: "string" },
+          body: { type: "string" },
+        },
+        required: ["state", "author", "body"],
+        additionalProperties: false,
+      },
+    };
+    expect(registry.review_agent.inputs).toEqual({
+      reviewFeedback: reviewFeedbackInput,
+    });
+    expect(registry.fix_agent.inputs).toEqual({
+      reviewFeedback: reviewFeedbackInput,
+    });
     expect(registry.fetch_pr_context.inputs).toEqual({});
     expect(Object.keys(registry.generic_agent.inputs)).toEqual(["prompt"]);
     expect(Object.keys(registry.call_llm.inputs)).toEqual(["prompt", "system"]);
@@ -144,6 +166,96 @@ describe("workflow block registry", () => {
         "summary",
       ],
     });
+  });
+
+  it("publishes typed review decisions, finding severity, and check outcomes", () => {
+    const registry = buildWorkflowBlockRegistry(context);
+    expect(registry.review_agent.output.bindingSchema).toMatchObject({
+      properties: {
+        decision: {
+          type: "string",
+          enum: ["approve", "request_changes"],
+        },
+        findings: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              severity: {
+                type: "string",
+                enum: ["critical", "suggestion"],
+              },
+            },
+          },
+        },
+      },
+    });
+    for (const type of ["run_pre_pr_checks", "run_checks"] as const) {
+      expect(registry[type].output.bindingSchema).toMatchObject({
+        properties: {
+          outcome: {
+            type: "string",
+            enum: [
+              "passed",
+              "failed",
+              "skipped",
+              "missing_configuration",
+            ],
+          },
+        },
+        required: expect.arrayContaining(["outcome"]),
+      });
+    }
+    expect(registry.run_checks.output.bindingSchema).toMatchObject({
+      properties: { skipReason: { type: "string" } },
+    });
+    expect(
+      (registry.run_checks.output.bindingSchema as { required?: string[] })
+        .required,
+    ).not.toContain("skipReason");
+  });
+
+  it("rejects runtime values outside nested typed enums", () => {
+    expect(
+      validateBlockOutputForDefinition(
+        "review_agent",
+        {},
+        {
+          status: "reviewed",
+          findings: [
+            {
+              file: "src/index.ts",
+              description: "Invalid severity",
+              severity: "blocker",
+            },
+          ],
+          decision: "maybe",
+        },
+        { requireNormalOutput: true },
+      ),
+    ).toEqual(
+      expect.arrayContaining([
+        "output.decision must be one of: approve, request_changes.",
+        "output.findings[0].severity must be one of: critical, suggestion.",
+      ]),
+    );
+
+    expect(
+      validateBlockOutputForDefinition(
+        "run_checks",
+        {},
+        {
+          status: "ok",
+          ok: false,
+          outcome: "unknown",
+          results: [],
+          failures: [],
+        },
+        { requireNormalOutput: true },
+      ),
+    ).toContain(
+      "output.outcome must be one of: passed, failed, skipped, missing_configuration.",
+    );
   });
 
   it("defaults newly authored Generic Agent blocks to workspace-free mode", () => {

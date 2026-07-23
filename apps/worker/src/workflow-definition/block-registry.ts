@@ -45,6 +45,10 @@ interface ContractDefinition {
 }
 
 const stringType = (): WorkflowValueSchema => ({ type: "string" });
+const enumStringType = (values: string[]): WorkflowValueSchema => ({
+  type: "string",
+  enum: values,
+});
 const numberType = (): WorkflowValueSchema => ({ type: "number" });
 const booleanType = (): WorkflowValueSchema => ({ type: "boolean" });
 const unknownType = (): WorkflowValueSchema => ({ type: "unknown" });
@@ -122,10 +126,15 @@ const branchRefType = objectType({
   repoPath: stringType(),
   branch: stringType(),
 });
+const reviewFeedbackType = objectType({
+  state: enumStringType(["changes_requested", "commented"]),
+  author: stringType(),
+  body: stringType(),
+});
 const reviewFindingType = objectType({
   file: stringType(),
   description: stringType(),
-  severity: stringType(),
+  severity: enumStringType(["critical", "suggestion"]),
 });
 const workflowPrRefType = objectType({
   provider: stringType(),
@@ -348,10 +357,7 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
         title: stringType(),
         author: stringType(),
         isDraft: booleanType(),
-        review: objectType(
-          { state: stringType(), author: stringType(), body: stringType() },
-          ["state", "author", "body"],
-        ),
+        review: reviewFeedbackType,
         ...ticketTriggerOutputFields,
       },
       [
@@ -471,10 +477,12 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
       "☰",
     ),
     defaults: {},
-    inputs: {},
+    inputs: {
+      reviewFeedback: input(reviewFeedbackType),
+    },
     output: statusOutput({
       findings: arrayType(reviewFindingType),
-      decision: stringType(),
+      decision: enumStringType(["approve", "request_changes"]),
       feedback: stringType(),
     }),
     normalOutputRequired: ["findings", "decision"],
@@ -488,7 +496,9 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
       "✚",
     ),
     defaults: { maxMinutes: 25 },
-    inputs: {},
+    inputs: {
+      reviewFeedback: input(reviewFeedbackType),
+    },
     output: statusOutput({
       workspaceId: stringType(),
       commits: arrayType(commitRefType),
@@ -579,10 +589,16 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
     inputs: {},
     output: statusOutput({
       ok: booleanType(),
+      outcome: enumStringType([
+        "passed",
+        "failed",
+        "skipped",
+        "missing_configuration",
+      ]),
       fixCycles: numberType(),
       summary: stringType(),
     }),
-    normalOutputRequired: ["ok", "fixCycles", "summary"],
+    normalOutputRequired: ["ok", "outcome", "fixCycles", "summary"],
     statusVariants: ["ok"],
   },
   run_checks: {
@@ -596,10 +612,17 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
     inputs: {},
     output: statusOutput({
       ok: booleanType(),
+      outcome: enumStringType([
+        "passed",
+        "failed",
+        "skipped",
+        "missing_configuration",
+      ]),
       results: arrayType(unknownType()),
       failures: arrayType(unknownType()),
+      skipReason: stringType(),
     }),
-    normalOutputRequired: ["ok", "results", "failures"],
+    normalOutputRequired: ["ok", "outcome", "results", "failures"],
     statusVariants: ["ok"],
   },
   call_llm: {
@@ -1086,6 +1109,12 @@ function validateValueAgainstSchema(
   value: unknown,
   path: string,
 ): string[] {
+  if (
+    schema.enum !== undefined &&
+    !schema.enum.some((candidate) => jsonValuesEqual(candidate, value))
+  ) {
+    return [`${path} must be one of: ${schema.enum.map(String).join(", ")}.`];
+  }
   switch (schema.type) {
     case "unknown":
       return [];
@@ -1128,6 +1157,40 @@ function validateValueAgainstSchema(
       return issues;
     }
   }
+}
+
+function jsonValuesEqual(expected: unknown, actual: unknown): boolean {
+  if (Object.is(expected, actual)) return true;
+  if (
+    expected === null ||
+    actual === null ||
+    typeof expected !== "object" ||
+    typeof actual !== "object"
+  ) {
+    return false;
+  }
+  if (Array.isArray(expected) || Array.isArray(actual)) {
+    return (
+      Array.isArray(expected) &&
+      Array.isArray(actual) &&
+      expected.length === actual.length &&
+      expected.every((item, index) =>
+        jsonValuesEqual(item, actual[index]),
+      )
+    );
+  }
+  const expectedRecord = expected as Record<string, unknown>;
+  const actualRecord = actual as Record<string, unknown>;
+  const expectedKeys = Object.keys(expectedRecord).sort();
+  const actualKeys = Object.keys(actualRecord).sort();
+  return (
+    expectedKeys.length === actualKeys.length &&
+    expectedKeys.every(
+      (key, index) =>
+        key === actualKeys[index] &&
+        jsonValuesEqual(expectedRecord[key], actualRecord[key]),
+    )
+  );
 }
 
 /** Validate an executor result against the same serializable contract exposed

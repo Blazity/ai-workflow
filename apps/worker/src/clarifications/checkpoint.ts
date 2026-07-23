@@ -6,12 +6,26 @@ export function restoreCheckpointSandboxReferences(
   sourceSandboxId: string,
   restoredSandboxId: string,
 ): StepsRecord {
-  return rewriteSandboxReferences(
+  return restoreCheckpointValueSandboxReferences(
     steps,
     sourceSandboxId,
     restoredSandboxId,
+  );
+}
+
+/** Apply the same structured sandbox-reference rewrite to versioned scheduler
+ * checkpoints without replacing arbitrary prose that happens to contain an ID. */
+export function restoreCheckpointValueSandboxReferences<T>(
+  value: T,
+  sourceSandboxId: string,
+  restoredSandboxId: string,
+): T {
+  return rewriteSandboxReferences(
+    value,
+    sourceSandboxId,
+    restoredSandboxId,
     null,
-  ) as StepsRecord;
+  ) as T;
 }
 
 function rewriteSandboxReferences(

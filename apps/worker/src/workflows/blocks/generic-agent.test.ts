@@ -297,6 +297,7 @@ describe("generic_agent execute", () => {
       25,
       "cmd-1",
       ctx.observeBudget,
+      undefined,
     );
     expect(ctx.recordUsage).toHaveBeenCalledWith("Agent My Agent", null, "claude-model");
     expect(result).toEqual({ kind: "next", output: { status: "completed", body: "done" } });
@@ -353,6 +354,59 @@ describe("generic_agent execute", () => {
     expect(mocks.artifactPaths).toHaveBeenCalledWith("agent-blk-one");
     expect(ctx.markLaunched).toHaveBeenCalledWith("Agent Blk.One");
     expect(ctx.recordUsage).toHaveBeenCalledWith("Agent Blk.One", null, "claude-model");
+  });
+
+  it("keeps colliding valid v2 ids distinct in artifact paths and usage labels", async () => {
+    mocks.collectPhase.mockResolvedValue({
+      stdout: "",
+      stderr: "",
+      structuredOutput: JSON.stringify({
+        status: "ok",
+        body: "done",
+        questions: null,
+        error: null,
+      }),
+      exitCode: 0,
+    });
+    const ctx = makeCtx({ schemaVersion: 2 });
+
+    await execute(
+      makeNode("generic_agent", { prompt: "p" }, "Blk_One"),
+      {},
+      ctx,
+      {},
+      { attempt: 1, agentArtifactKey: "2" },
+    );
+    await execute(
+      makeNode("generic_agent", { prompt: "p" }, "blk-one"),
+      {},
+      ctx,
+      {},
+      { attempt: 1, agentArtifactKey: "3" },
+    );
+
+    expect(mocks.artifactPaths.mock.calls).toEqual([
+      ["agent-blk-one-v2-2-a1"],
+      ["agent-blk-one-v2-3-a1"],
+    ]);
+    expect(ctx.markLaunched).toHaveBeenCalledTimes(2);
+    expect(ctx.markLaunched).toHaveBeenNthCalledWith(1, "Agent Blk_One", 1);
+    expect(ctx.markLaunched).toHaveBeenNthCalledWith(2, "Agent blk-one", 1);
+    expect(ctx.recordUsage).toHaveBeenCalledTimes(2);
+    expect(ctx.recordUsage).toHaveBeenNthCalledWith(
+      1,
+      "Agent Blk_One",
+      null,
+      "claude-model",
+      1,
+    );
+    expect(ctx.recordUsage).toHaveBeenNthCalledWith(
+      2,
+      "Agent blk-one",
+      null,
+      "claude-model",
+      1,
+    );
   });
 
   it("maps needs_input output to needs_human_input", async () => {

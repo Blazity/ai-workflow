@@ -16,11 +16,11 @@ export interface AcceptedTriggerDelivery extends TriggerEvent {
 export type StoredTriggerResult =
   | { result: "started"; runId: string }
   | { result: "candidate_started"; runId: string }
+  | { result: "error"; diagnosticId: string }
   | {
       result:
         | "coalesced"
         | "at_capacity"
-        | "error"
         | "ignored_provider"
         | "ignored_stale_head"
         | "ignored_not_workflow_owned";
@@ -77,17 +77,23 @@ export async function completeTriggerDelivery(
   result: StoredTriggerResult,
 ): Promise<void> {
   const serializedResult = JSON.stringify(result);
+  const pending =
+    result.result === "error"
+      ? true
+      : result.result === "coalesced"
+        ? sql`${triggerDeliveries.pending}`
+        : false;
   await db
     .update(triggerDeliveries)
     .set({
-      pending:
-        result.result === "coalesced"
-          ? sql`${triggerDeliveries.pending}`
-          : false,
+      pending,
       result: sql`case
         when ${triggerDeliveries.result} is null
           then ${serializedResult}::jsonb
-        when ${triggerDeliveries.result}->>'result' in ('candidate_started', 'coalesced')
+        when ${triggerDeliveries.result}->>'result' = 'coalesced'
+          and ${result.result} = 'error'
+          then ${serializedResult}::jsonb
+        when ${triggerDeliveries.result}->>'result' in ('candidate_started', 'coalesced', 'error')
           and ${result.result} in ('ignored_stale_head', 'ignored_not_workflow_owned')
           then ${serializedResult}::jsonb
         else ${triggerDeliveries.result}
@@ -219,6 +225,19 @@ export async function listPendingTriggersForSubject(
     )
     .orderBy(asc(triggerDeliveries.createdAt))
     .limit(1);
+  return rows.map(mapDelivery);
+}
+
+export async function listPendingTriggers(
+  db: Db,
+  limit: number,
+): Promise<AcceptedTriggerDelivery[]> {
+  const rows = await db
+    .select()
+    .from(triggerDeliveries)
+    .where(eq(triggerDeliveries.pending, true))
+    .orderBy(asc(triggerDeliveries.createdAt))
+    .limit(limit);
   return rows.map(mapDelivery);
 }
 

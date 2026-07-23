@@ -112,6 +112,33 @@ function branchingDefinition(condition: JsonValue): WorkflowDefinitionV2 {
   };
 }
 
+function loopNode(
+  id: string,
+  onExhaust: "fail" | "human" | "continue",
+): WorkflowDefinitionV2["nodes"][number] {
+  return {
+    id,
+    type: "loop",
+    x: 100,
+    y: 0,
+    configuration: { maxAttempts: 2, onExhaust },
+    inputs: {},
+    additionalInputs: [],
+  };
+}
+
+function loopBodyNode(id: string): WorkflowDefinitionV2["nodes"][number] {
+  return {
+    id,
+    type: "send_slack_message",
+    x: 200,
+    y: 0,
+    configuration: { message: "Retrying" },
+    inputs: {},
+    additionalInputs: [],
+  };
+}
+
 describe("Workflow Definition v2 schema", () => {
   it("parses v1 and v2 through a discriminated public contract", () => {
     const v1: WorkflowDefinitionV1 = {
@@ -238,11 +265,7 @@ describe("Workflow Definition v2 schema", () => {
     expect(workflowDefinitionV2Schema.safeParse(definition).success).toBe(true);
     expect(
       validateWorkflowDefinitionIssuesForDeployment(definition, registryContext),
-    ).toEqual([
-      expect.objectContaining({
-        code: "v2_runtime_unavailable",
-      }),
-    ]);
+    ).toEqual([]);
 
     definition.nodes[1]!.configuration = {
       operation: "map_object",
@@ -276,18 +299,12 @@ describe("Workflow Definition v2 schema", () => {
     ).toBe(false);
   });
 
-  it("reports the runtime gate only after all real deployment issues are clear", () => {
+  it("accepts a valid v2 definition and still reports real deployment issues", () => {
     const validIssues = validateWorkflowDefinitionIssuesForDeployment(
       v2Definition(),
       registryContext,
     );
-    expect(validIssues).toEqual([
-      expect.objectContaining({
-        code: "v2_runtime_unavailable",
-        nodeId: null,
-        path: "/schemaVersion",
-      }),
-    ]);
+    expect(validIssues).toEqual([]);
 
     const invalid = v2Definition();
     invalid.nodes[0]!.id = "entry";
@@ -302,7 +319,119 @@ describe("Workflow Definition v2 schema", () => {
         path: "/nodes/0/id",
       }),
     ]);
-    expect(invalidIssues.some(({ code }) => code === "v2_runtime_unavailable")).toBe(false);
+  });
+
+  it("runs block deployment and environment checks for v2 definitions", () => {
+    const unsupportedSchema = v2Definition();
+    unsupportedSchema.nodes.push({
+      id: "agent",
+      type: "generic_agent",
+      x: 100,
+      y: 20,
+      configuration: {
+        prompt: "Return a result",
+        outputSchema: JSON.stringify({
+          type: "object",
+          properties: {
+            result: { type: "string", pattern: "^ready$" },
+          },
+          required: ["result"],
+          additionalProperties: false,
+        }),
+        workspaceMode: "none",
+      },
+      inputs: {},
+      additionalInputs: [],
+    });
+    unsupportedSchema.edges.push({
+      id: "ticket-agent",
+      from: "ticket",
+      to: "agent",
+    });
+    expect(
+      validateWorkflowDefinitionIssuesForDeployment(
+        unsupportedSchema,
+        registryContext,
+      ),
+    ).toEqual([
+      expect.objectContaining({
+        code: "unsupported_keyword",
+        nodeId: "agent",
+        path: "/nodes/1/configuration/outputSchema/properties/result/pattern",
+      }),
+    ]);
+
+    const unavailable = v2Definition();
+    unavailable.nodes.push({
+      id: "notify",
+      type: "send_slack_message",
+      x: 100,
+      y: 20,
+      configuration: { message: "Ready" },
+      inputs: {},
+      additionalInputs: [],
+    });
+    unavailable.edges.push({
+      id: "ticket-notify",
+      from: "ticket",
+      to: "notify",
+    });
+    const noSlack = { ...registryContext, slackConfigured: false };
+    expect(
+      validateWorkflowDefinitionIssuesForDeployment(unavailable, noSlack),
+    ).toEqual([
+      expect.objectContaining({
+        code: "deployment",
+        nodeId: "notify",
+        path: "/nodes/1/configuration",
+      }),
+    ]);
+    expect(
+      validateWorkflowDefinitionIssuesForDeployment(unavailable, noSlack, {
+        checkEnvironmentAvailability: false,
+      }),
+    ).toEqual([]);
+
+    const defaultedReviewTrigger = v2Definition();
+    defaultedReviewTrigger.nodes[0] = {
+      ...defaultedReviewTrigger.nodes[0]!,
+      type: "trigger_pr_review",
+      configuration: {},
+    };
+    expect(
+      validateWorkflowDefinitionIssuesForDeployment(defaultedReviewTrigger, {
+        ...registryContext,
+        vcsProviders: ["gitlab"],
+        vcsBotIdentities: ["gitlab"],
+      }),
+    ).toEqual([
+      expect.objectContaining({
+        code: "deployment",
+        nodeId: "ticket",
+        path: "/nodes/0/configuration",
+      }),
+    ]);
+  });
+
+  it("requires exact CI check names for v2 failed-check triggers", () => {
+    const definition = v2Definition();
+    definition.nodes[0] = {
+      ...definition.nodes[0]!,
+      type: "trigger_pr_checks_failed",
+      configuration: {},
+    };
+    expect(
+      validateWorkflowDefinitionIssuesForDeployment(
+        definition,
+        registryContext,
+      ),
+    ).toEqual([
+      expect.objectContaining({
+        code: "deployment",
+        nodeId: "ticket",
+        path: "/nodes/0/configuration/checkNames",
+      }),
+    ]);
   });
 
   it("allows multi-edge fan-out but rejects execution-failure ports", () => {
@@ -335,7 +464,7 @@ describe("Workflow Definition v2 schema", () => {
       validateWorkflowDefinitionIssuesForDeployment(fanOut, registryContext).map(
         ({ code }) => code,
       ),
-    ).toEqual(["v2_runtime_unavailable"]);
+    ).toEqual([]);
 
     fanOut.edges[0]!.fromPort = "failed";
     const issues = validateWorkflowDefinitionIssuesForDeployment(fanOut, registryContext);
@@ -345,6 +474,168 @@ describe("Workflow Definition v2 schema", () => {
         path: "/edges/0/fromPort",
       }),
     ]);
+  });
+
+  it("requires every v2 Loop continue route to form a cycle", () => {
+    const missingContinue = v2Definition();
+    missingContinue.nodes.push(loopNode("retry", "fail"));
+    missingContinue.edges.push({
+      id: "ticket-retry",
+      from: "ticket",
+      to: "retry",
+    });
+    expect(
+      validateWorkflowDefinitionIssuesForDeployment(
+        missingContinue,
+        registryContext,
+      ),
+    ).toContainEqual(
+      expect.objectContaining({
+        code: "deployment",
+        nodeId: "retry",
+        message: 'Loop "retry" must have its "continue" port connected.',
+      }),
+    );
+
+    const noCycle = v2Definition();
+    noCycle.nodes.push(loopNode("retry", "fail"), {
+      id: "done",
+      type: "terminate",
+      x: 200,
+      y: 0,
+      configuration: { terminalStatus: "done" },
+      inputs: {},
+      additionalInputs: [],
+    });
+    noCycle.edges.push(
+      { id: "ticket-retry", from: "ticket", to: "retry" },
+      {
+        id: "retry-done",
+        from: "retry",
+        fromPort: "continue",
+        to: "done",
+      },
+    );
+    expect(
+      validateWorkflowDefinitionIssuesForDeployment(noCycle, registryContext),
+    ).toContainEqual(
+      expect.objectContaining({
+        code: "deployment",
+        nodeId: "retry",
+        message: 'Loop "retry"\'s continue port must lead back to it.',
+      }),
+    );
+  });
+
+  it('requires an exhausted route when a v2 Loop uses onExhaust "continue"', () => {
+    const definition = v2Definition();
+    definition.nodes.push(
+      loopNode("retry", "continue"),
+      loopBodyNode("body"),
+    );
+    definition.edges.push(
+      { id: "ticket-retry", from: "ticket", to: "retry" },
+      {
+        id: "retry-body",
+        from: "retry",
+        fromPort: "continue",
+        to: "body",
+      },
+      { id: "body-retry", from: "body", to: "retry" },
+    );
+
+    expect(
+      validateWorkflowDefinitionIssuesForDeployment(
+        definition,
+        registryContext,
+      ),
+    ).toContainEqual(
+      expect.objectContaining({
+        code: "deployment",
+        nodeId: "retry",
+        message:
+          'Loop "retry" with onExhaust "continue" must have its "exhausted" port connected.',
+      }),
+    );
+  });
+
+  it("rejects v2 cycle regions containing multiple Loop blocks", () => {
+    const definition = v2Definition();
+    definition.nodes.push(
+      loopNode("outer", "fail"),
+      loopNode("inner", "fail"),
+      loopBodyNode("body"),
+    );
+    definition.edges.push(
+      { id: "ticket-outer", from: "ticket", to: "outer" },
+      {
+        id: "outer-inner",
+        from: "outer",
+        fromPort: "continue",
+        to: "inner",
+      },
+      {
+        id: "inner-body",
+        from: "inner",
+        fromPort: "continue",
+        to: "body",
+      },
+      { id: "body-outer", from: "body", to: "outer" },
+    );
+
+    expect(
+      validateWorkflowDefinitionIssuesForDeployment(
+        definition,
+        registryContext,
+      ),
+    ).toContainEqual(
+      expect.objectContaining({
+        code: "deployment",
+        message: expect.stringContaining(
+          "form a cycle region with 2 Loop blocks; each cycle region must contain exactly one.",
+        ),
+      }),
+    );
+  });
+
+  it("accepts a valid v2 Loop cycle and exhausted route", () => {
+    const definition = v2Definition();
+    definition.nodes.push(
+      loopNode("retry", "continue"),
+      loopBodyNode("body"),
+      {
+        id: "done",
+        type: "terminate",
+        x: 300,
+        y: 0,
+        configuration: { terminalStatus: "done" },
+        inputs: {},
+        additionalInputs: [],
+      },
+    );
+    definition.edges.push(
+      { id: "ticket-retry", from: "ticket", to: "retry" },
+      {
+        id: "retry-body",
+        from: "retry",
+        fromPort: "continue",
+        to: "body",
+      },
+      { id: "body-retry", from: "body", to: "retry" },
+      {
+        id: "retry-done",
+        from: "retry",
+        fromPort: "exhausted",
+        to: "done",
+      },
+    );
+
+    expect(
+      validateWorkflowDefinitionIssuesForDeployment(
+        definition,
+        registryContext,
+      ),
+    ).toEqual([]);
   });
 
   it("keeps invalid non-Transform configuration in drafts but blocks deployment", () => {
@@ -395,11 +686,7 @@ describe("Workflow Definition v2 schema", () => {
     });
     expect(
       validateWorkflowDefinitionIssuesForDeployment(valid, registryContext),
-    ).toEqual([
-      expect.objectContaining({
-        code: "v2_runtime_unavailable",
-      }),
-    ]);
+    ).toEqual([]);
 
     const unavailable = branchingDefinition({
       kind: "path",
@@ -452,6 +739,27 @@ describe("Workflow Definition v2 schema", () => {
         path: "/nodes/2/configuration/condition/reference",
       }),
     ]);
+
+    const nonScalarComparison = branchingDefinition({
+      kind: "eq",
+      left: {
+        kind: "path",
+        reference: "steps.checks.output.results",
+      },
+      right: { kind: "lit", value: "passed" },
+    });
+    expect(
+      validateWorkflowDefinitionIssuesForDeployment(
+        nonScalarComparison,
+        registryContext,
+      ),
+    ).toEqual([
+      expect.objectContaining({
+        code: "invalid_configuration",
+        nodeId: "decision",
+        path: "/nodes/2/configuration/condition/left/reference",
+      }),
+    ]);
   });
 
   it("rejects malformed or excessively nested Branch ASTs at deployment", () => {
@@ -470,11 +778,21 @@ describe("Workflow Definition v2 schema", () => {
       }),
     ]);
 
-    let condition: JsonValue = { kind: "lit", value: true };
-    for (let depth = 0; depth <= 20; depth += 1) {
-      condition = { kind: "not", operand: condition };
+    let maximumDepth: JsonValue = { kind: "lit", value: true };
+    for (let depth = 0; depth < 16; depth += 1) {
+      maximumDepth = { kind: "not", operand: maximumDepth };
     }
-    const nested = branchingDefinition(condition);
+    expect(
+      validateWorkflowDefinitionIssuesForDeployment(
+        branchingDefinition(maximumDepth),
+        registryContext,
+      ),
+    ).toEqual([]);
+
+    const nested = branchingDefinition({
+      kind: "not",
+      operand: maximumDepth,
+    });
     expect(workflowDefinitionV2Schema.safeParse(nested).success).toBe(true);
     expect(
       validateWorkflowDefinitionIssuesForDeployment(nested, registryContext),
@@ -485,6 +803,60 @@ describe("Workflow Definition v2 schema", () => {
         path: "/nodes/2/configuration/condition",
       }),
     ]);
+  });
+
+  it("rejects potentially concurrent shared-workspace writers", () => {
+    const definition: WorkflowDefinitionV2 = {
+      schemaVersion: 2,
+      nodes: [
+        {
+          id: "ticket",
+          type: "trigger_ticket_ai",
+          x: 0,
+          y: 0,
+          configuration: {},
+          inputs: {},
+          additionalInputs: [],
+        },
+        {
+          id: "left",
+          type: "generic_agent",
+          x: 100,
+          y: -50,
+          configuration: {
+            prompt: "Left",
+            workspaceMode: "read_write",
+          },
+          inputs: {},
+          additionalInputs: [],
+        },
+        {
+          id: "right",
+          type: "generic_agent",
+          x: 100,
+          y: 50,
+          configuration: {
+            prompt: "Right",
+            workspaceMode: "read_write",
+          },
+          inputs: {},
+          additionalInputs: [],
+        },
+      ],
+      edges: [
+        { id: "left-edge", from: "ticket", to: "left" },
+        { id: "right-edge", from: "ticket", to: "right" },
+      ],
+    };
+
+    expect(
+      validateWorkflowDefinitionIssuesForDeployment(definition, registryContext),
+    ).toContainEqual(
+      expect.objectContaining({
+        code: "workspace.concurrent_access",
+        nodeId: "right",
+      }),
+    );
   });
 
   it("round-trips stored v2 snapshots without applying v1 upgrades", () => {

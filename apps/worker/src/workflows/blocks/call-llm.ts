@@ -8,7 +8,13 @@ import {
 } from "../../workflow-definition/json-schema.js";
 import { RunBudgetError } from "../run-budget.js";
 import { isRunControlError } from "../run-control-error.js";
-import { executionError, type BlockExecuteFn, type BlockExecutionResult } from "./types.js";
+import {
+  executionError,
+  markBlockPhaseLaunched,
+  recordBlockPhaseUsage,
+  type BlockExecuteFn,
+  type BlockExecutionResult,
+} from "./types.js";
 
 export const paramsSchema = z
   .object({
@@ -86,6 +92,7 @@ export const execute: BlockExecuteFn = async (
   _steps,
   ctx,
   resolvedInputs = {},
+  execution,
 ): Promise<BlockExecutionResult> => {
   const schema =
     typeof block.params.outputSchema === "string" && block.params.outputSchema.trim().length > 0
@@ -127,7 +134,7 @@ export const execute: BlockExecuteFn = async (
   if (budget.check.status !== "ok") throw new RunBudgetError(budget.check);
   const timeoutMs = Math.max(1, Math.floor(budget.remainingDurationMs));
   const usageLabel = `LLM ${block.id}`;
-  ctx.markLaunched(usageLabel);
+  markBlockPhaseLaunched(ctx, usageLabel, execution);
 
   try {
     const result = await blockCallLlmGenerateStep({
@@ -138,7 +145,8 @@ export const execute: BlockExecuteFn = async (
       ...(system !== undefined ? { system } : {}),
       ...(schema !== undefined ? { schema } : {}),
     });
-    ctx.recordUsage(
+    recordBlockPhaseUsage(
+      ctx,
       usageLabel,
       result.usage
         ? {
@@ -154,6 +162,7 @@ export const execute: BlockExecuteFn = async (
           }
         : null,
       model,
+      execution,
     );
 
     if (schema !== undefined) {
@@ -185,7 +194,7 @@ export const execute: BlockExecuteFn = async (
     return { kind: "next", output: { status: "ok", output: result.text } };
   } catch (err) {
     if (isRunControlError(err)) throw err;
-    ctx.recordUsage(usageLabel, null, model);
+    recordBlockPhaseUsage(ctx, usageLabel, null, model, execution);
     const after = await ctx.observeBudget();
     if (after.check.status !== "ok") throw new RunBudgetError(after.check);
     if (after.remainingDurationMs <= 0) {

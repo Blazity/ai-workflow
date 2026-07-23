@@ -215,7 +215,6 @@ export function convertWorkflowDefinitionV1ToV2(
     candidate,
     input.registryContext,
   )) {
-    if (issue.code === "v2_runtime_unavailable") continue;
     addDiagnostic(
       state,
       "blocker",

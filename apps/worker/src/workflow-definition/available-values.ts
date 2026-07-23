@@ -655,6 +655,33 @@ function validateBindings(
         }
         continue;
       }
+      if (node.type === "open_pr" && target.name === "repositories") {
+        const binding = target.binding;
+        const available =
+          binding.kind === "reference"
+            ? availableByReference.get(binding.reference)
+            : undefined;
+        const exactFinalizeReference =
+          binding.kind === "reference" &&
+          available?.source.kind === "step" &&
+          available.source.blockType === "finalize_workspace" &&
+          available.source.nodeId !== null &&
+          binding.reference ===
+            `steps.${available.source.nodeId}.output.repositories`;
+        if (!exactFinalizeReference) {
+          issues.push({
+            code: "binding.open_pr_finalize",
+            severity: "error",
+            nodeId: node.id,
+            path:
+              binding.kind === "reference"
+                ? `${target.path}/reference`
+                : target.path,
+            message: `Block "${node.id}" input "repositories" must bind exactly to steps.<finalize_workspace_id>.output.repositories from a guaranteed Finalize Workspace block.`,
+          });
+          continue;
+        }
+      }
       if (target.binding.kind === "literal") {
         for (const issue of validateLiteral(target, target.binding.value)) {
           issues.push({

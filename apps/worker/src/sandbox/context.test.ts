@@ -404,6 +404,29 @@ describe("assembleReviewContext", () => {
     expect(result).toContain("You are a review agent...");
   });
 
+  it("includes explicitly supplied typed pull request review feedback", () => {
+    const result = assembleReviewContext({
+      ticket: {
+        identifier: "TEST-1",
+        title: "Add login page",
+        description: "Build a login page",
+        acceptanceCriteria: "User can log in",
+        comments: [],
+      },
+      prompt: "You are a review agent...",
+      researchPlanMarkdown: "# Plan",
+      reviewFeedback: {
+        state: "changes_requested",
+        author: "Alice",
+        body: "Please cover the failure path.",
+      },
+    });
+
+    expect(result).toContain("## Pull request review feedback");
+    expect(result).toContain("State: changes_requested");
+    expect(result).toContain("Alice: Please cover the failure path.");
+  });
+
   it("renders attachments index when attachments are provided", () => {
     const result = assembleReviewContext({
       ticket: {

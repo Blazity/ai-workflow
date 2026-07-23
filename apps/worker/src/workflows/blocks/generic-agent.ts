@@ -23,8 +23,11 @@ import { ensureAgentSandbox } from "./agent-sandbox.js";
 import { isRunControlError } from "../run-control-error.js";
 import { pollPhaseUntilDone } from "./poll-phase.js";
 import {
+  agentArtifactPhase,
   agentProtocolExecutionError,
   executionError,
+  markBlockPhaseLaunched,
+  recordBlockPhaseUsage,
   sanitizeBlockId,
   type BlockExecuteFn,
   type BlockExecutionResult,
@@ -325,7 +328,7 @@ export const execute: BlockExecuteFn = async (
   // Artifact phase must be shell/file-safe (drives /tmp paths); telemetry label
   // must stay unique per block. Two block ids that sanitize to the same token
   // would collide and lose usage attribution, so keep the raw id for telemetry.
-  const phase = `agent-${sanitizeBlockId(block.id)}`;
+  const phase = agentArtifactPhase(`agent-${sanitizeBlockId(block.id)}`, execution);
   const usageLabel = `Agent ${block.id}`;
 
   try {
@@ -355,7 +358,7 @@ export const execute: BlockExecuteFn = async (
     );
     if (!launch.ok) return agentProtocolExecutionError(launch.failure);
     const commandId = launch.commandId;
-    ctx.markLaunched(usageLabel);
+    markBlockPhaseLaunched(ctx, usageLabel, execution);
 
     const done = await pollPhaseUntilDone(
       sandboxId,
@@ -363,6 +366,7 @@ export const execute: BlockExecuteFn = async (
       MAX_MINUTES,
       commandId,
       ctx.observeBudget,
+      execution?.cancellation,
     );
     if (!done) {
       return executionError("agent phase timed out", { category: "timeout" });
@@ -376,7 +380,13 @@ export const execute: BlockExecuteFn = async (
       phase,
       customSchema,
     );
-    ctx.recordUsage(usageLabel, usage, model);
+    recordBlockPhaseUsage(
+      ctx,
+      usageLabel,
+      usage,
+      model,
+      execution,
+    );
     if (!result.ok) return agentProtocolExecutionError(result);
     const object =
       parsedCustomSchema === undefined

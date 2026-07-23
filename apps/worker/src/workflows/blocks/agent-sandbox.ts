@@ -120,9 +120,13 @@ export async function ensureAgentSandbox(
   ctx: EngineCtx,
   agentKind: AgentKind,
   model: string,
+  options: { reuse?: boolean } = {},
 ): Promise<string> {
-  const existing = ctx.agentSandboxIds[agentKind];
-  if (existing) return existing;
+  const reuse = options.reuse !== false;
+  if (reuse) {
+    const existing = ctx.agentSandboxIds[agentKind];
+    if (existing) return existing;
+  }
 
   const arthurTaskId = await ensureArthurTask(ctx);
   const provisioned = await blockProvisionAgentSandboxStep(
@@ -137,7 +141,7 @@ export async function ensureAgentSandbox(
     throw new AgentRuntimeError(provisioned.failure);
   }
   const { sandboxId } = provisioned;
-  ctx.agentSandboxIds[agentKind] = sandboxId;
+  if (reuse) ctx.agentSandboxIds[agentKind] = sandboxId;
   // The in-workflow set covers normal teardown; the durable owner-child row
   // registered immediately after create covers cancel/reconcile crash cleanup.
   ctx.sandboxIds.add(sandboxId);

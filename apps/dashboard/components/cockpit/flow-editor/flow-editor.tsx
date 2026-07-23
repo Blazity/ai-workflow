@@ -59,6 +59,8 @@ import {
   defaultTransformConfiguration,
   TransformFields,
 } from "./transform-fields";
+import { BranchFields } from "./branch-fields";
+import { instantiateWorkflowEditorBlockTemplate } from "@/lib/workflow-editor/block-templates";
 import type { WorkflowValidationState } from "@/lib/workflow-editor/validation-controller";
 import { removeNodeFromGraph } from "@/lib/workflow-editor/graph-edit";
 import {
@@ -894,7 +896,7 @@ export function FlowEditor({
   );
 
   const paletteGroups = useMemo(() => {
-    const groups = buildPaletteItems(options);
+    const groups = buildPaletteItems(options, schemaVersion);
     if (schemaVersion === 2) return groups;
     return groups
       .map((group) => ({
@@ -931,6 +933,20 @@ export function FlowEditor({
       x = (nodes.length ? Math.max(...nodes.map(n => n.x)) : 200) + 60;
       y = nodes.length ? Math.round(nodes.reduce((s, n) => s + n.y, 0) / nodes.length) : 280;
     }
+    if (schemaVersion === 2 && item.templateId) {
+      const instantiated = instantiateWorkflowEditorBlockTemplate({
+        templateId: item.templateId,
+        sourceName: blockPresentation(options, item.type).label,
+        sourceParams: item.params,
+        position: { x, y },
+        existingNodes: nodes,
+        existingEdges: edges,
+      });
+      onNodesChange((prev) => [...prev, ...instantiated.nodes]);
+      onEdgesChange((prev) => [...prev, ...instantiated.edges]);
+      setSelectedId(instantiated.selectedNodeId);
+      return;
+    }
     onNodesChange(prev => [
       ...prev,
       {
@@ -949,7 +965,9 @@ export function FlowEditor({
                     ? (structuredClone(
                         defaultTransformConfiguration("map_object"),
                       ) as unknown as Record<string, JsonValue>)
-                    : ({ ...item.params } as Record<string, JsonValue>),
+                    : item.type === "branch"
+                      ? {}
+                      : ({ ...item.params } as Record<string, JsonValue>),
                 inputs: {},
                 additionalInputs: [],
               },
@@ -1039,7 +1057,7 @@ export function FlowEditor({
     );
   };
   const updateSelectedV2Configuration = (
-    configuration: TransformConfiguration,
+    configuration: Record<string, JsonValue>,
   ) => {
     onNodesChange((prev) =>
       prev.map((node) =>
@@ -1223,7 +1241,7 @@ function NodeConfig({
     inputs: Record<string, WorkflowInputBindingV2>,
     additionalInputs: WorkflowAdditionalInputV2[],
   ) => void;
-  onV2ConfigurationChange: (configuration: TransformConfiguration) => void;
+  onV2ConfigurationChange: (configuration: Record<string, JsonValue>) => void;
   onDelete: () => void;
   onClose: () => void;
   embedded?: boolean;
@@ -1295,7 +1313,23 @@ function NodeConfig({
                 }
                 inputNames={node.v2.additionalInputs.map((input) => input.name)}
                 canEdit={canEdit}
-                onChange={onV2ConfigurationChange}
+                onChange={(configuration) =>
+                  onV2ConfigurationChange(
+                    configuration as unknown as Record<string, JsonValue>,
+                  )
+                }
+              />
+            )}
+            {node.type === "branch" && node.v2 && (
+              <BranchFields
+                configuration={node.v2.configuration}
+                availableValues={availableValues}
+                canEdit={canEdit}
+                onChange={(configuration) =>
+                  onV2ConfigurationChange(
+                    configuration as unknown as Record<string, JsonValue>,
+                  )
+                }
               />
             )}
           </>

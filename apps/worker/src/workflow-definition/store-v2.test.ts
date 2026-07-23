@@ -28,7 +28,6 @@ import {
   restoreWorkflowDefinitionVersion,
   rollbackWorkflowDefinition,
   saveWorkflowDefinitionDraft,
-  WorkflowDefinitionValidationError,
   type WorkflowDefinitionActor,
 } from "./store.js";
 
@@ -78,7 +77,7 @@ describe("v2 workflow definition storage", () => {
       .toMatchObject({ schemaVersion: 2 });
   });
 
-  it("blocks v2 deployment and rollback until the v2 runtime exists", async () => {
+  it("deploys and rolls back valid v2 versions", async () => {
     const created = await createWorkflowDefinition(db, {
       name: "V2 gated",
       seed: null,
@@ -91,29 +90,23 @@ describe("v2 workflow definition storage", () => {
       actor: ADMIN,
     });
 
-    const deploy = deployWorkflowDefinition(db, {
+    const deployed = await deployWorkflowDefinition(db, {
       definitionId: created.definition.id,
       expectedDraftRevision: 1,
       expectedDeployedVersion: null,
       actor: ADMIN,
     });
-    await expect(deploy).rejects.toBeInstanceOf(WorkflowDefinitionValidationError);
-    await expect(deploy).rejects.toMatchObject({
-      statusCode: 422,
-      issues: [expect.objectContaining({ code: "v2_runtime_unavailable" })],
-    });
+    expect(deployed.version.version).toBe(1);
+    expect(deployed.version.definition.schemaVersion).toBe(2);
 
-    await expect(
-      rollbackWorkflowDefinition(db, {
-        definitionId: created.definition.id,
-        version: 1,
-        expectedDeployedVersion: null,
-        actor: ADMIN,
-      }),
-    ).rejects.toMatchObject({
-      statusCode: 422,
-      issues: [expect.objectContaining({ code: "v2_runtime_unavailable" })],
+    const rolledBack = await rollbackWorkflowDefinition(db, {
+      definitionId: created.definition.id,
+      version: 1,
+      expectedDeployedVersion: 1,
+      actor: ADMIN,
     });
+    expect(rolledBack.version.version).toBe(1);
+    expect(rolledBack.version.definition.schemaVersion).toBe(2);
   });
 
   it("restores a historical v2 version as a new draft", async () => {

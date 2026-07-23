@@ -136,7 +136,10 @@ describe("provider trigger dispatch", () => {
         event(),
         deps({ getCurrentHead: vi.fn().mockRejectedValue(new Error("provider down")) }),
       ),
-    ).resolves.toEqual({ result: "error" });
+    ).resolves.toMatchObject({
+      result: "error",
+      diagnosticId: expect.stringMatching(/^AIW-DIAG-ingest-/),
+    });
     await expect(getTriggerDelivery(db, "github", "delivery-1")).resolves.toBeNull();
   });
 
@@ -156,6 +159,86 @@ describe("provider trigger dispatch", () => {
       pending: false,
       result: { result: "ignored_stale_head" },
     });
+  });
+
+  it("reuses one safe diagnostic while a durable failure retries and recovers", async () => {
+    mockGetEnabled.mockResolvedValue(enabled());
+    const getCurrentHead = vi
+      .fn()
+      .mockResolvedValueOnce("abc123")
+      .mockRejectedValue(new Error("provider secret detail"));
+    const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
+
+    const first = await dispatchTriggerEvent(event(), deps({ getCurrentHead }));
+    expect(first).toMatchObject({
+      result: "error",
+      diagnosticId: expect.stringMatching(/^AIW-DIAG-ingest-/),
+    });
+    expect(JSON.stringify(first)).not.toContain("provider secret detail");
+
+    const stored = await getTriggerDelivery(db, "github", "delivery-1");
+    expect(stored).toMatchObject({
+      pending: true,
+      result: first,
+    });
+
+    await expect(
+      dispatchTriggerEvent(event(), deps({ getCurrentHead })),
+    ).resolves.toEqual(first);
+
+    getCurrentHead.mockResolvedValue("abc123");
+    await expect(
+      dispatchTriggerEvent(event(), deps({ getCurrentHead })),
+    ).resolves.toEqual({
+      result: "started",
+      runId: "run-pr",
+    });
+    await expect(getTriggerDelivery(db, "github", "delivery-1")).resolves.toMatchObject({
+      pending: true,
+      result: { result: "candidate_started", runId: "run-pr" },
+    });
+  });
+
+  it("keeps an accepted retryable failure available for poll recovery", async () => {
+    mockGetEnabled.mockResolvedValue(enabled());
+    const getCurrentHead = vi
+      .fn()
+      .mockResolvedValueOnce("abc123")
+      .mockRejectedValueOnce(new Error("provider unavailable"))
+      .mockRejectedValueOnce(new Error("provider still unavailable"))
+      .mockResolvedValue("abc123");
+    const { dispatchTriggerEvent, drainOldestPendingTrigger } = await import(
+      "./dispatch-trigger.js"
+    );
+
+    const failure = await dispatchTriggerEvent(event(), deps({ getCurrentHead }));
+    expect(failure).toMatchObject({
+      result: "error",
+      diagnosticId: expect.stringMatching(/^AIW-DIAG-ingest-/),
+    });
+
+    await expect(
+      drainOldestPendingTrigger("pr:github:acme/app#7", deps({ getCurrentHead })),
+    ).resolves.toEqual(failure);
+
+    await expect(
+      drainOldestPendingTrigger("pr:github:acme/app#7", deps({ getCurrentHead })),
+    ).resolves.toEqual({
+      result: "started",
+      runId: "run-pr",
+    });
+  });
+
+  it("returns a safe diagnostic when the initial definition lookup fails", async () => {
+    mockGetEnabled.mockRejectedValue(new Error("database secret detail"));
+    const { dispatchTriggerEvent } = await import("./dispatch-trigger.js");
+
+    const result = await dispatchTriggerEvent(event(), deps());
+    expect(result).toMatchObject({
+      result: "error",
+      diagnosticId: expect.stringMatching(/^AIW-DIAG-ingest-/),
+    });
+    expect(JSON.stringify(result)).not.toContain("database secret detail");
   });
 
   it("starts an arbitrary human PR in review-only scope without inventing a ticket", async () => {

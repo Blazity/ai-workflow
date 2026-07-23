@@ -21,6 +21,7 @@ import {
 import { getEnabledWorkflowDefinitionForTrigger } from "../workflow-definition/store.js";
 import { createAdapters } from "./adapters.js";
 import { claimSubjectRun } from "./dispatch.js";
+import { recordIngestionFailure } from "./ingestion-diagnostic.js";
 import { logger } from "./logger.js";
 import { isRepoAllowed } from "./repo-allowlist.js";
 import { prSubjectKey, ticketSubjectKey } from "./subject-key.js";
@@ -53,7 +54,7 @@ export type DispatchTriggerResult =
   | { result: "ignored_malformed_delivery" }
   | { result: "coalesced" }
   | { result: "at_capacity" }
-  | { result: "error" }
+  | { result: "error"; diagnosticId: string }
   | { result: "started"; runId: string };
 
 export interface DispatchTriggerDeps {
@@ -104,40 +105,76 @@ export async function dispatchTriggerEvent(
     return { result: "ignored_malformed_delivery" };
   }
 
-  const enabled = await getEnabledWorkflowDefinitionForTrigger(deps.db, event.triggerType);
-  if (!enabled?.current) return { result: "no_definition" };
-
-  const params = triggerNodeParams(enabled.current.definition, event.triggerType);
-  const providers = params.providers;
-  if (Array.isArray(providers) && providers.length > 0 && !providers.includes(event.pr.provider)) {
-    return { result: "ignored_provider" };
-  }
-  const scope: TriggerScope = params.scope === "any" ? "any" : "workflow_owned";
-  if (scope === "any" && !isRepoAllowed(event.pr.repoPath)) {
-    logger.info(
-      { provider: event.pr.provider, repoPath: event.pr.repoPath },
-      "trigger_repo_not_allowed",
-    );
-    return { result: "ignored_provider" };
-  }
-
-  const eligibleEvent = selectEligibleEvent(event, params);
-  if (!eligibleEvent) return { result: "ignored_untrusted_event" };
-
   try {
+    const existing = await getTriggerDelivery(
+      deps.db,
+      event.delivery.provider,
+      event.delivery.deliveryId,
+    );
+    if (existing?.pending && existing.result?.result === "error") {
+      return await dispatchAcceptedTrigger(
+        existing,
+        deps,
+        undefined,
+        existing.result.diagnosticId,
+      );
+    }
+    if (existing?.result) return storedResultToDispatch(existing.result);
+    if (existing?.pending) return { result: "coalesced" };
+
+    const enabled = await getEnabledWorkflowDefinitionForTrigger(deps.db, event.triggerType);
+    if (!enabled?.current) return { result: "no_definition" };
+
+    const params = triggerNodeParams(enabled.current.definition, event.triggerType);
+    const providers = params.providers;
+    if (
+      Array.isArray(providers) &&
+      providers.length > 0 &&
+      !providers.includes(event.pr.provider)
+    ) {
+      return { result: "ignored_provider" };
+    }
+    const scope: TriggerScope = params.scope === "any" ? "any" : "workflow_owned";
+    if (scope === "any" && !isRepoAllowed(event.pr.repoPath)) {
+      logger.info(
+        { provider: event.pr.provider, repoPath: event.pr.repoPath },
+        "trigger_repo_not_allowed",
+      );
+      return { result: "ignored_provider" };
+    }
+
+    const eligibleEvent = selectEligibleEvent(event, params);
+    if (!eligibleEvent) return { result: "ignored_untrusted_event" };
+
     const repositoryScope = await readRepositoryScope(eligibleEvent.pr, deps);
-    if (repositoryScope.status === "unreachable") return { result: "error" };
+    if (repositoryScope.status === "unreachable") {
+      return { result: "error", diagnosticId: repositoryScope.diagnosticId };
+    }
     if (!repositoryScope.configured) return { result: "ignored_provider" };
 
     const currentResult = await readCurrentPullRequest(eligibleEvent, deps);
-    if (currentResult.status === "unreachable") return { result: "error" };
+    if (currentResult.status === "unreachable") {
+      return { result: "error", diagnosticId: currentResult.diagnosticId };
+    }
     const currentEvent = bindCurrentPullRequest(eligibleEvent, currentResult.current);
     if (!currentEvent) return { result: "ignored_stale_head" };
 
     const identity = await resolveSubjectIdentity(currentEvent, scope, deps);
     if (identity.status === "ignored") return { result: "ignored_not_workflow_owned" };
-    if (identity.status === "pending_correlation" || identity.status === "retryable_error") {
-      return { result: "error" };
+    if (identity.status === "retryable_error") {
+      return { result: "error", diagnosticId: identity.diagnosticId };
+    }
+    if (identity.status === "pending_correlation") {
+      const diagnosticId = recordIngestionFailure(
+        "trigger_workflow_correlation_pending",
+        new Error("Workflow-owned pull request correlation is not durable yet."),
+        {
+          delivery: eligibleEvent.delivery,
+          provider: eligibleEvent.pr.provider,
+          repoPath: eligibleEvent.pr.repoPath,
+        },
+      );
+      return { result: "error", diagnosticId };
     }
 
     const accepted: AcceptedTriggerDelivery = {
@@ -155,29 +192,34 @@ export async function dispatchTriggerEvent(
     }
     return await dispatchAcceptedTrigger(durable.stored, deps);
   } catch (error) {
-    logger.warn(
-      { delivery: event.delivery, error: (error as Error).message },
+    const diagnosticId = recordIngestionFailure(
       "trigger_delivery_dispatch_failed",
+      error,
+      { delivery: event.delivery },
     );
-    return { result: "error" };
+    return { result: "error", diagnosticId };
   }
 }
 
 async function readRepositoryScope(
   pr: PrTriggerPayload,
   deps: DispatchTriggerDeps,
-): Promise<{ status: "ok"; configured: boolean } | { status: "unreachable" }> {
+): Promise<
+  | { status: "ok"; configured: boolean }
+  | { status: "unreachable"; diagnosticId: string }
+> {
   try {
     const configured = deps.isRepositoryConfigured
       ? await deps.isRepositoryConfigured(pr)
       : await isConfiguredTriggerRepository(pr);
     return { status: "ok", configured };
   } catch (error) {
-    logger.warn(
-      { provider: pr.provider, repoPath: pr.repoPath, error: (error as Error).message },
+    const diagnosticId = recordIngestionFailure(
       "trigger_repository_scope_lookup_failed_closed",
+      error,
+      { provider: pr.provider, repoPath: pr.repoPath },
     );
-    return { status: "unreachable" };
+    return { status: "unreachable", diagnosticId };
   }
 }
 
@@ -274,79 +316,103 @@ async function dispatchAcceptedTrigger(
     triggerType: AcceptedTriggerDelivery["triggerType"];
     deliveryId: string;
   },
+  existingDiagnosticId?: string,
 ): Promise<DispatchTriggerResult> {
-  const currentResult = await readCurrentPullRequest(acceptedInput, deps);
-  if (currentResult.status === "unreachable") return { result: "error" };
-  const accepted = bindCurrentPullRequest(acceptedInput, currentResult.current);
-  if (!accepted) {
-    await completeDelivery(deps.db, acceptedInput, { result: "ignored_stale_head" });
-    return { result: "ignored_stale_head" };
-  }
+  try {
+    const currentResult = await readCurrentPullRequest(
+      acceptedInput,
+      deps,
+      existingDiagnosticId,
+    );
+    if (currentResult.status === "unreachable") {
+      const result = {
+        result: "error" as const,
+        diagnosticId: currentResult.diagnosticId,
+      };
+      await persistAcceptedRetryableFailure(deps.db, acceptedInput, result);
+      return result;
+    }
+    const accepted = bindCurrentPullRequest(acceptedInput, currentResult.current);
+    if (!accepted) {
+      await completeDelivery(deps.db, acceptedInput, { result: "ignored_stale_head" });
+      return { result: "ignored_stale_head" };
+    }
 
-  // Persist the exact accepted envelope before a Workflow candidate can be
-  // started. The candidate removes this row only after it wins owner CAS and
-  // binds its runtime id. If start returns but that candidate never reaches
-  // bind, stale-owner reconciliation can therefore recover the same pinned
-  // definition and provider snapshot without waiting for a redelivery.
-  await coalescePendingTrigger(deps.db, accepted);
+    // Persist the exact accepted envelope before a Workflow candidate can be
+    // started. The candidate removes this row only after it wins owner CAS and
+    // binds its runtime id. If start returns but that candidate never reaches
+    // bind, stale-owner reconciliation can therefore recover the same pinned
+    // definition and provider snapshot without waiting for a redelivery.
+    await coalescePendingTrigger(deps.db, accepted);
 
-  const inputBase = {
-    kind: "pr_trigger" as const,
-    triggerType: accepted.triggerType,
-    subjectKey: accepted.subjectKey,
-    ...(accepted.ticketKey ? { ticketKey: accepted.ticketKey } : {}),
-    definitionId: accepted.definitionId,
-    definitionVersion: accepted.definitionVersion,
-    scope: accepted.scope,
-    delivery: accepted.delivery,
-    ...(pendingEvent ? { pendingEvent } : {}),
-    pr: accepted.pr,
-  };
-  const dispatched = await claimSubjectRun(
-    {
+    const inputBase = {
+      kind: "pr_trigger" as const,
+      triggerType: accepted.triggerType,
       subjectKey: accepted.subjectKey,
-      ticketKey: accepted.ticketKey,
-      kind: "pr_trigger",
-    },
-    deps.runRegistry,
-    deps.maxConcurrentAgents,
-    {
-      startWorkflow: async (ownerToken) => {
-        const input: AgentWorkflowInput = { ...inputBase, ownerToken };
-        const handle = await start(agentWorkflow, [input]);
-        return handle.runId;
+      ...(accepted.ticketKey ? { ticketKey: accepted.ticketKey } : {}),
+      definitionId: accepted.definitionId,
+      definitionVersion: accepted.definitionVersion,
+      scope: accepted.scope,
+      delivery: accepted.delivery,
+      ...(pendingEvent ? { pendingEvent } : {}),
+      pr: accepted.pr,
+    };
+    const dispatched = await claimSubjectRun(
+      {
+        subjectKey: accepted.subjectKey,
+        ticketKey: accepted.ticketKey,
+        kind: "pr_trigger",
       },
-    },
-  );
-
-  if (dispatched.started) {
-    const result = { result: "started" as const, runId: dispatched.runId! };
-    const recorded = await recordCandidateStartedTriggerDelivery(
-      deps.db,
-      accepted,
-      dispatched.ownerToken!,
-      dispatched.runId!,
+      deps.runRegistry,
+      deps.maxConcurrentAgents,
+      {
+        startWorkflow: async (ownerToken) => {
+          const input: AgentWorkflowInput = { ...inputBase, ownerToken };
+          const handle = await start(agentWorkflow, [input]);
+          return handle.runId;
+        },
+      },
     );
-    if (recorded) return result;
 
-    // The candidate may have completed freshness validation before start()
-    // returned to this dispatcher, or a newer recovery owner may have won.
-    // Report the durable winner instead of acknowledging the stale candidate.
-    const stored = await getTriggerDelivery(
-      deps.db,
-      accepted.delivery.provider,
-      accepted.delivery.deliveryId,
-    );
-    return storedResultToDispatch(stored?.result ?? null);
-  }
+    if (dispatched.started) {
+      const result = { result: "started" as const, runId: dispatched.runId! };
+      const recorded = await recordCandidateStartedTriggerDelivery(
+        deps.db,
+        accepted,
+        dispatched.ownerToken!,
+        dispatched.runId!,
+      );
+      if (recorded) return result;
 
-  if (dispatched.reason === "already_claimed" || dispatched.reason === "at_capacity") {
+      // The candidate may have completed freshness validation before start()
+      // returned to this dispatcher, or a newer recovery owner may have won.
+      // Report the durable winner instead of acknowledging the stale candidate.
+      const stored = await getTriggerDelivery(
+        deps.db,
+        accepted.delivery.provider,
+        accepted.delivery.deliveryId,
+      );
+      return storedResultToDispatch(stored?.result ?? null);
+    }
+
+    if (dispatched.reason === "already_claimed" || dispatched.reason === "at_capacity") {
+      return coalesceOrRecoverStarted(accepted, deps.db);
+    }
+
+    // A start failure is durable too: retain the accepted semantic event for the
+    // owner/reconciliation drain instead of relying on provider retry timing.
     return coalesceOrRecoverStarted(accepted, deps.db);
+  } catch (error) {
+    const diagnosticId = recordIngestionFailure(
+      "accepted_trigger_dispatch_retryable_failure",
+      error,
+      { delivery: acceptedInput.delivery },
+      existingDiagnosticId,
+    );
+    const result = { result: "error" as const, diagnosticId };
+    await persistAcceptedRetryableFailure(deps.db, acceptedInput, result);
+    return result;
   }
-
-  // A start failure is durable too: retain the accepted semantic event for the
-  // owner/reconciliation drain instead of relying on provider retry timing.
-  return coalesceOrRecoverStarted(accepted, deps.db);
 }
 
 async function coalesceOrRecoverStarted(
@@ -388,6 +454,10 @@ export async function drainOldestPendingTrigger(
       pending.delivery.provider,
       pending.delivery.deliveryId,
     );
+    const existingDiagnosticId =
+      stored?.result?.result === "error"
+        ? stored.result.diagnosticId
+        : undefined;
     if (stored?.result?.result === "started") {
       await (deps.deletePending ?? deletePendingTrigger)(deps.db, pending).catch((error) => {
         logger.warn(
@@ -399,19 +469,35 @@ export async function drainOldestPendingTrigger(
       continue;
     }
 
-    const currentResult = await readCurrentPullRequest(pending, deps);
-    if (currentResult.status === "unreachable") return { result: "error" };
+    const currentResult = await readCurrentPullRequest(
+      pending,
+      deps,
+      existingDiagnosticId,
+    );
+    if (currentResult.status === "unreachable") {
+      const result = {
+        result: "error",
+        diagnosticId: currentResult.diagnosticId,
+      } as const;
+      await persistAcceptedRetryableFailure(deps.db, pending, result);
+      return result;
+    }
     const currentPending = bindCurrentPullRequest(pending, currentResult.current);
     if (!currentPending) {
       await deletePendingTrigger(deps.db, pending);
       await completeDelivery(deps.db, pending, { result: "ignored_stale_head" });
       continue;
     }
-    const result = await dispatchAcceptedTrigger(currentPending, deps, {
-      headSha: pending.pr.headSha,
-      triggerType: pending.triggerType,
-      deliveryId: pending.delivery.deliveryId,
-    });
+    const result = await dispatchAcceptedTrigger(
+      currentPending,
+      deps,
+      {
+        headSha: pending.pr.headSha,
+        triggerType: pending.triggerType,
+        deliveryId: pending.delivery.deliveryId,
+      },
+      existingDiagnosticId,
+    );
     // Capacity/claim races stay pending. Drain starts at most one successor.
     return result;
   }
@@ -429,7 +515,7 @@ async function resolveSubjectIdentity(
       ticketKey: string | null;
     }
   | { status: "ignored" }
-  | { status: "retryable_error" }
+  | { status: "retryable_error"; diagnosticId: string }
 > {
   if (scope === "any") {
     return {
@@ -509,7 +595,7 @@ async function resolveTicketIdentity(
       ticketKey: string;
     }
   | { status: "ignored" }
-  | { status: "retryable_error" }
+  | { status: "retryable_error"; diagnosticId: string }
 > {
   try {
     const issueTracker = deps.issueTracker ?? createAdapters().issueTracker;
@@ -524,20 +610,22 @@ async function resolveTicketIdentity(
     };
   } catch (error) {
     if (error instanceof IssueTrackerNotFoundError) return { status: "ignored" };
-    logger.warn(
-      { ticketKey, error: (error as Error).message },
+    const diagnosticId = recordIngestionFailure(
       "trigger_ticket_identity_lookup_retryable_failure",
+      error,
+      { ticketKey },
     );
-    return { status: "retryable_error" };
+    return { status: "retryable_error", diagnosticId };
   }
 }
 
 async function readCurrentPullRequest(
   event: Pick<TriggerEvent, "triggerType" | "pr">,
   deps: DispatchTriggerDeps,
+  existingDiagnosticId?: string,
 ): Promise<
   | { status: "ok"; current: PullRequestHead }
-  | { status: "unreachable" }
+  | { status: "unreachable"; diagnosticId: string }
 > {
   const { pr } = event;
   try {
@@ -566,11 +654,13 @@ async function readCurrentPullRequest(
     }
     return { status: "ok", current };
   } catch (error) {
-    logger.warn(
-      { provider: pr.provider, repoPath: pr.repoPath, error: (error as Error).message },
+    const diagnosticId = recordIngestionFailure(
       "trigger_current_head_lookup_failed_closed",
+      error,
+      { provider: pr.provider, repoPath: pr.repoPath },
+      existingDiagnosticId,
     );
-    return { status: "unreachable" };
+    return { status: "unreachable", diagnosticId };
   }
 }
 
@@ -587,6 +677,23 @@ async function completeDelivery(
   );
 }
 
+async function persistAcceptedRetryableFailure(
+  db: Db,
+  accepted: Pick<TriggerEvent, "delivery">,
+  result: Extract<StoredTriggerResult, { result: "error" }>,
+): Promise<void> {
+  try {
+    await completeDelivery(db, accepted, result);
+  } catch (error) {
+    recordIngestionFailure(
+      "accepted_trigger_retry_state_persistence_failed",
+      error,
+      { delivery: accepted.delivery },
+      result.diagnosticId,
+    );
+  }
+}
+
 function storedResultToDispatch(result: StoredTriggerResult | null): DispatchTriggerResult {
   if (!result) return { result: "coalesced" };
   if (result.result === "started") return result;
@@ -599,6 +706,8 @@ function storedResultToDispatch(result: StoredTriggerResult | null): DispatchTri
   }
   if (result.result === "ignored_provider") return { result: "ignored_provider" };
   if (result.result === "at_capacity") return { result: "at_capacity" };
-  if (result.result === "error") return { result: "error" };
+  if (result.result === "error") {
+    return { result: "error", diagnosticId: result.diagnosticId };
+  }
   return { result: "coalesced" };
 }

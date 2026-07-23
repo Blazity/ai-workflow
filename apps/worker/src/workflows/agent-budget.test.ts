@@ -5,6 +5,7 @@ import {
   modelsRequiringPriceLookup,
   modelsRequiringPriceLookupForRun,
   recordPrePrFixCycleUsages,
+  shouldReconcilePhaseUsageOnBlockFinish,
 } from "./agent.js";
 import { buildRuntimeGraph } from "../workflow-definition/interpreter.js";
 import {
@@ -21,6 +22,11 @@ const node = (
 ): WorkflowDefinitionNode => ({ id, type, x: 0, y: 0, params, inputs: {} });
 
 describe("agent workflow budget integration", () => {
+  it("does not reconcile still-running sibling usage on v2 block finishes", () => {
+    expect(shouldReconcilePhaseUsageOnBlockFinish(1)).toBe(true);
+    expect(shouldReconcilePhaseUsageOnBlockFinish(2)).toBe(false);
+  });
+
   it("prefetches prices for codex agents and every Call LLM model", () => {
     const models = modelsRequiringPriceLookup(
       [

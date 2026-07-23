@@ -368,6 +368,40 @@ export type WorkflowInputBindingV2 =
   | { kind: "reference"; reference: WorkflowDataReferenceV2 }
   | { kind: "literal"; value: JsonValue };
 
+export interface WorkflowBranchLiteralOperandV2 {
+  kind: "lit";
+  value: string | number | boolean | null;
+}
+
+export interface WorkflowBranchPathOperandV2 {
+  kind: "path";
+  reference: WorkflowDataReferenceV2;
+}
+
+export type WorkflowBranchOperandV2 =
+  | WorkflowBranchLiteralOperandV2
+  | WorkflowBranchPathOperandV2;
+
+/** Typed Boolean expression authored by v2 Branch blocks. */
+export type WorkflowBranchBooleanAstV2 =
+  | { kind: "lit"; value: boolean }
+  | WorkflowBranchPathOperandV2
+  | { kind: "not"; operand: WorkflowBranchBooleanAstV2 }
+  | {
+      kind: "and" | "or";
+      left: WorkflowBranchBooleanAstV2;
+      right: WorkflowBranchBooleanAstV2;
+    }
+  | {
+      kind: "eq" | "neq";
+      left: WorkflowBranchOperandV2;
+      right: WorkflowBranchOperandV2;
+    };
+
+export interface WorkflowBranchConfigurationV2 {
+  condition: WorkflowBranchBooleanAstV2;
+}
+
 /** Ordered, author-defined input exposed alongside a block's fixed inputs. */
 export interface WorkflowAdditionalInputV2 {
   name: string;

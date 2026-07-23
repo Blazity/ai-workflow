@@ -17,6 +17,8 @@ const mocks = vi.hoisted(() => ({
   getApproval: vi.fn(),
   rejectUndispatchableApproval: vi.fn(),
   dispatchPlanApproved: vi.fn(),
+  drainOldestPendingTrigger: vi.fn(),
+  listPendingTriggers: vi.fn(),
 }));
 
 vi.mock("../../../env.js", () => ({
@@ -82,7 +84,11 @@ vi.mock("../../clarifications/expiry.js", () => ({
   expireHookClarifications: (...args: any[]) => mocks.expireClarifications(...args),
 }));
 vi.mock("../../lib/dispatch-trigger.js", () => ({
-  drainOldestPendingTrigger: vi.fn().mockResolvedValue(null),
+  drainOldestPendingTrigger: (...args: any[]) =>
+    mocks.drainOldestPendingTrigger(...args),
+}));
+vi.mock("../../lib/trigger-delivery-store.js", () => ({
+  listPendingTriggers: (...args: any[]) => mocks.listPendingTriggers(...args),
 }));
 vi.mock("../../post-pr-gate/gate-store.js", () => ({
   GateStore: class {
@@ -147,6 +153,8 @@ describe("cron clarification recovery ordering", () => {
     mocks.getApproval.mockResolvedValue(null);
     mocks.rejectUndispatchableApproval.mockResolvedValue(undefined);
     mocks.dispatchPlanApproved.mockResolvedValue({ status: "run_in_flight" });
+    mocks.drainOldestPendingTrigger.mockResolvedValue(null);
+    mocks.listPendingTriggers.mockResolvedValue([]);
   });
 
   it("protects same-run clarifications before discovering generic ticket work", async () => {
@@ -237,6 +245,63 @@ describe("cron clarification recovery ordering", () => {
     );
     await expect(response.json()).resolves.toMatchObject({
       approvalRecovery: { scanned: 1, started: 1, blocked: 0, errors: 0 },
+    });
+  });
+
+  it("polls a bounded pending-trigger batch and stops after one start", async () => {
+    mocks.listPendingTriggers.mockResolvedValue([
+      { subjectKey: "pr:github:acme/app#1" },
+      { subjectKey: "pr:github:acme/app#2" },
+      { subjectKey: "pr:github:acme/app#3" },
+    ]);
+    mocks.drainOldestPendingTrigger
+      .mockResolvedValueOnce({
+        result: "error",
+        diagnosticId: "AIW-DIAG-ingest-retry",
+      })
+      .mockResolvedValueOnce({ result: "started", runId: "run-trigger" })
+      .mockResolvedValueOnce({ result: "started", runId: "run-should-not-start" });
+
+    const response = await request();
+
+    expect(mocks.listPendingTriggers).toHaveBeenCalledWith({ db: true }, 20);
+    expect(mocks.drainOldestPendingTrigger).toHaveBeenCalledTimes(2);
+    expect(mocks.drainOldestPendingTrigger.mock.calls.map(([subject]) => subject)).toEqual([
+      "pr:github:acme/app#1",
+      "pr:github:acme/app#2",
+    ]);
+    await expect(response.json()).resolves.toMatchObject({
+      pendingRecovered: 1,
+      triggerRecovery: {
+        polled: { listed: 3, attempted: 2, started: 1, errors: 1 },
+      },
+    });
+  });
+
+  it("does not add a polled start after released-owner recovery starts one", async () => {
+    mocks.reconcileRuns.mockImplementationOnce(async (...args: any[]) => {
+      await args[4]("pr:github:acme/app#released");
+      await args[4]("pr:github:acme/app#also-released");
+      return { cancelled: 0, cleaned: 1 };
+    });
+    mocks.drainOldestPendingTrigger.mockResolvedValueOnce({
+      result: "started",
+      runId: "run-released",
+    });
+    mocks.listPendingTriggers.mockResolvedValue([
+      { subjectKey: "pr:github:acme/app#orphan" },
+    ]);
+
+    const response = await request();
+
+    expect(mocks.drainOldestPendingTrigger).toHaveBeenCalledOnce();
+    expect(mocks.listPendingTriggers).not.toHaveBeenCalled();
+    await expect(response.json()).resolves.toMatchObject({
+      pendingRecovered: 1,
+      triggerRecovery: {
+        released: { attempted: 1, started: 1, errors: 0 },
+        polled: { listed: 0, attempted: 0, started: 0, errors: 0 },
+      },
     });
   });
 });

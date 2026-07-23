@@ -5,6 +5,7 @@ import type {
   WorkflowDefinitionV1,
   WorkflowDefinitionEdge,
   WorkflowDefinitionNode,
+  WorkflowDefinitionV2,
 } from "@shared/contracts";
 import type { WorkflowDefinitionVersionRow } from "../workflow-definition/store.js";
 import {
@@ -13,6 +14,11 @@ import {
 } from "./agent-input.js";
 
 export interface LoadedWorkflowPlan {
+  schemaVersion: 1 | 2;
+  /** Exact immutable definition selected for this run. V2 execution consumes
+   * this graph directly so stable edge IDs, fan-out, and typed bindings are
+   * never flattened into the legacy cursor model. */
+  definition: WorkflowDefinition;
   version: number | null;
   /** Definition selected for dispatch; legacy unpinned fallback loads use null. */
   definitionId: number | null;
@@ -76,6 +82,7 @@ export async function loadWorkflowDefinitionFor(
   } = await import("../workflow-definition/store.js");
   const {
     workflowDefinitionV1Schema,
+    workflowDefinitionV2Schema,
     upgradeStoredWorkflowDefinition,
     validateWorkflowDefinitionForDeployment,
     describeWorkflowDefinitionIssues,
@@ -85,13 +92,39 @@ export async function loadWorkflowDefinitionFor(
   const { defaultWorkflowDefinition } = await import("../workflow-definition/default.js");
   const { logger } = await import("../lib/logger.js");
 
+  const toLegacyRuntimeShape = (
+    def: WorkflowDefinition,
+  ): { nodes: WorkflowDefinitionNode[]; edges: WorkflowDefinitionEdge[] } => {
+    if (def.schemaVersion === 1) {
+      return normalizeDefinitionForExecution(def.nodes, def.edges);
+    }
+    return {
+      nodes: def.nodes.map((node) => ({
+        id: node.id,
+        type: node.type,
+        ...(node.name ? { name: node.name } : {}),
+        x: node.x,
+        y: node.y,
+        params: node.configuration,
+        inputs: {},
+      })) as unknown as WorkflowDefinitionNode[],
+      edges: def.edges.map(({ from, to, fromPort }) => ({
+        from,
+        to,
+        ...(fromPort ? { fromPort } : {}),
+      })),
+    };
+  };
+
   const toPlan = (
-    def: WorkflowDefinitionV1,
+    def: WorkflowDefinition,
     version: number | null,
     id: number | null,
   ): LoadedWorkflowPlan => {
-    const normalized = normalizeDefinitionForExecution(def.nodes, def.edges);
+    const normalized = toLegacyRuntimeShape(def);
     return {
+      schemaVersion: def.schemaVersion,
+      definition: def,
       version,
       definitionId: id,
       nodes: normalized.nodes,
@@ -186,27 +219,20 @@ export async function loadWorkflowDefinitionFor(
     );
     return null;
   }
-  if (upgraded.schemaVersion === 2) {
-    logger.error(
-      {
-        definitionId: row.definitionId,
-        version: row.version,
-        schemaVersion: upgraded.schemaVersion,
-      },
-      "workflow_definition_v2_runtime_unavailable",
-    );
-    return null;
-  }
-
-  const parsed = workflowDefinitionV1Schema.safeParse(upgraded);
+  const parsed =
+    upgraded.schemaVersion === 2
+      ? workflowDefinitionV2Schema.safeParse(upgraded)
+      : workflowDefinitionV1Schema.safeParse(upgraded);
   const graphIssues = parsed.success
     ? validateWorkflowDefinitionForDeployment(
         parsed.data,
         workflowBlockRegistryContextFromEnv(),
-        {
-          allowLegacyCompatibility: true,
-          checkEnvironmentAvailability: false,
-        },
+        parsed.data.schemaVersion === 1
+          ? {
+              allowLegacyCompatibility: true,
+              checkEnvironmentAvailability: false,
+            }
+          : { checkEnvironmentAvailability: false },
       )
     : [];
   if (!parsed.success || graphIssues.length > 0) {
@@ -220,7 +246,7 @@ export async function loadWorkflowDefinitionFor(
     return null;
   }
 
-  return toPlan(parsed.data, row.version, row.definitionId);
+  return toPlan(parsed.data as WorkflowDefinitionV1 | WorkflowDefinitionV2, row.version, row.definitionId);
 }
 loadWorkflowDefinitionFor.maxRetries = 0;
 
