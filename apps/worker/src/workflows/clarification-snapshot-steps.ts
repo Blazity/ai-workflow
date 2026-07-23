@@ -5,11 +5,14 @@ const MAX_SOURCE_STOP_POLLS = 180;
 const MAX_SNAPSHOT_LIST_PAGES = 100;
 const SNAPSHOT_CLOCK_SKEW_TOLERANCE_MS = 5 * 60 * 1_000;
 
-const SCRUB_CREDENTIALS_SCRIPT = `set -eu
+// NOTE: this is a JS template literal, so bash's escaped parens must be written
+// as \\( \\) — a single \( collapses to a bare ( in the emitted string, which
+// is a bash syntax error ("syntax error near unexpected token `('").
+export const SCRUB_CREDENTIALS_SCRIPT = `set -eu
 find /tmp -maxdepth 1 -type f -name 'agent-env*.sh' -delete
 rm -rf "$HOME/.codex" "$HOME/.claude" "$HOME/.config/claude" "$HOME/.config/claude-code"
 rm -f "$HOME/.claude.json" /tmp/config.toml /tmp/arthur_config.json /tmp/arthur-tracer.py
-find /tmp -maxdepth 1 -type f \( -iname '*arthur*credential*' -o -iname '*tracer*credential*' \) -delete
+find /tmp -maxdepth 1 -type f \\( -iname '*arthur*credential*' -o -iname '*tracer*credential*' \\) -delete
 `;
 
 export interface SnapshotClarificationSandboxInput {
