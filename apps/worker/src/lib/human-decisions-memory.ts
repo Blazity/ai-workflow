@@ -25,7 +25,7 @@ function defangMarkers(text: string): string {
 
 function renderRound(roundNumber: number, decision: HumanDecision): string {
   const meta: string[] = [];
-  if (decision.answeredBy) meta.push(`answered by ${decision.answeredBy}`);
+  if (decision.answeredBy) meta.push(`answered by ${defangMarkers(decision.answeredBy)}`);
   if (decision.answeredAt) meta.push(decision.answeredAt);
   const heading = meta.length > 0
     ? `### Round ${roundNumber} (${meta.join(", ")})`

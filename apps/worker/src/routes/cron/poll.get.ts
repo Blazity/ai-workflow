@@ -14,6 +14,7 @@ import { drainOldestPendingTrigger } from "../../lib/dispatch-trigger.js";
 import {
   classifyProtectedClarificationSubjects,
 } from "../../clarifications/store.js";
+import { resumeClarificationFromComments } from "../../clarifications/resume-from-comments.js";
 import { ticketSubjectKey } from "../../lib/subject-key.js";
 import { expireHookClarifications } from "../../clarifications/expiry.js";
 import { dispatchPlanApproved } from "../../approvals/dispatch.js";
@@ -100,6 +101,7 @@ export default defineEventHandler(async (event) => {
     ticketKeys,
     adapters,
     protectedDiscoverySubjects,
+    db,
   );
 
   // Housekeeping: physically drop expired gate rows (reads already treat
@@ -221,6 +223,7 @@ async function dispatchDiscoveredTickets(
   ticketKeys: string[],
   adapters: ReturnType<typeof createAdapters>,
   protectedSubjects: ReadonlySet<string>,
+  db: ReturnType<typeof getDb>,
 ): Promise<string[]> {
   // Dispatch in parallel. dispatchTicket is internally atomic — the
   // post-claim fairness check in src/lib/dispatch.ts caps started
@@ -229,6 +232,28 @@ async function dispatchDiscoveredTickets(
   const results = await Promise.all(
     ticketKeys.map(async (key) => {
       if (protectedSubjects.has(ticketSubjectKey("jira", key))) {
+        // A protected subject may hold a suspended clarification run whose
+        // answers arrived as human comments. Try to wake it (no nudging on the
+        // poll: the cron JQL snapshot is not the human's commit gesture). A
+        // resumed run needs no dispatch, so this always returns started:false.
+        const resume = await resumeClarificationFromComments({
+          db,
+          issueTracker: adapters.issueTracker,
+          ticketKey: key,
+          allowNudge: false,
+        }).catch((err) => {
+          logger.warn(
+            { ticketKey: key, error: (err as Error).message },
+            "poll_clarification_resume_failed",
+          );
+          return null;
+        });
+        if (resume && resume.status !== "no_clarification") {
+          logger.info(
+            { ticketKey: key, resumeStatus: resume.status, runId: resume.runId },
+            "poll_clarification_resume",
+          );
+        }
         return { key, started: false };
       }
       try {
