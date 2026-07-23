@@ -29,6 +29,7 @@ import { FlowEditor } from "@/components/cockpit/flow-editor/flow-editor";
 import { PromptLibraryProvider } from "@/components/cockpit/flow-editor/prompt-library-context";
 import { HarnessProfileCatalogProvider } from "@/components/cockpit/flow-editor/harness-profile-context";
 import { Listbox } from "@/components/cockpit/listbox";
+import { ManualDispatchModal } from "@/components/cockpit/manual-dispatch-modal";
 import {
   toFlowDefinition,
   type FlowEdgeDef,
@@ -136,6 +137,8 @@ export function WorkflowEditorScreen({
   options,
   liveBlocks,
   canEdit,
+  canDispatch,
+  actorLabel,
   initialNodeId,
 }: {
   definitions: WorkflowDefinitionMeta[];
@@ -145,6 +148,8 @@ export function WorkflowEditorScreen({
   options: WorkflowEditorOptions;
   liveBlocks: RunBlockStatusesResponse;
   canEdit: boolean;
+  canDispatch: boolean;
+  actorLabel: string;
   initialNodeId?: string;
 }) {
   const seed = initialDetail.draft ?? initialDetail.deployed?.definition ?? defaultDefinition;
@@ -186,6 +191,9 @@ export function WorkflowEditorScreen({
   const [switchState, setSwitchState] = useState<DefinitionSwitchState>({ kind: "idle" });
   const [defsOpen, setDefsOpen] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState<number | null>(null);
+  const [manualDispatchTrigger, setManualDispatchTrigger] =
+    useState<FlowNodeDef | null>(null);
+  useEffect(() => setManualDispatchTrigger(null), [selectedId]);
   const [rowError, setRowError] = useState<{ id: number; message: string } | null>(null);
   const [createError, setCreateError] = useState<string | null>(null);
   const [newName, setNewName] = useState("");
@@ -398,6 +406,22 @@ export function WorkflowEditorScreen({
   const validationTargetKey = `${selectedId}:${semanticKey}`;
   const validationIsCurrent = validation.key === validationTargetKey;
   const dirty = editorHistoryIsDirty(editorHistory, semanticKey);
+  const runnableTriggerIds = useMemo(() => {
+    if (!canDispatch || !deployed) return new Set<string>();
+    const deployedTypes = new Map(
+      deployed.definition.nodes.map((node) => [node.id, node.type]),
+    );
+    return new Set(
+      nodes
+        .filter(
+          (node) =>
+            isTriggerBlockType(node.type) &&
+            node.type !== "trigger_plan_approved" &&
+            deployedTypes.get(node.id) === node.type,
+        )
+        .map((node) => node.id),
+    );
+  }, [canDispatch, deployed, nodes]);
   const { canSave, canDeploy } = workflowEditorActions({
     dirty,
     structurallyValid: nodesValid(nodes),
@@ -974,6 +998,8 @@ export function WorkflowEditorScreen({
           onCommitTransaction={commitEditorTransaction}
           onCancelTransaction={cancelEditorTransaction}
           canEdit={canEdit}
+          runnableTriggerIds={runnableTriggerIds}
+          onRunTrigger={setManualDispatchTrigger}
           dirty={dirty}
           saveEnabled={canSave}
           saving={busy === "save"}
@@ -1032,6 +1058,18 @@ export function WorkflowEditorScreen({
           initialSelectedId={deepLinkNodeId.current}
           onSelectionChange={handleSelectionChange}
         />
+        {manualDispatchTrigger && deployed && (
+          <ManualDispatchModal
+            definitionId={selectedId}
+            workflowName={selectedMeta?.name ?? "Workflow"}
+            deployedVersion={deployed.version}
+            trigger={manualDispatchTrigger}
+            options={options}
+            actorLabel={actorLabel}
+            dirty={dirty}
+            onClose={() => setManualDispatchTrigger(null)}
+          />
+        )}
         {defsOpen && (
           <div className="absolute right-4 top-[56px] z-[60] w-[440px] max-h-[70vh] overflow-y-auto bg-panel border border-neutral-200 rounded-[4px] shadow-[0_12px_28px_-8px_rgba(24,27,32,0.22),0_2px_6px_rgba(24,27,32,0.08)] px-4 py-3">
             <div className="flex items-center justify-between mb-1">

@@ -215,6 +215,63 @@ export interface WorkflowDefinitionDetailResponse {
   versions: WorkflowDefinitionVersion[];
 }
 
+export type ManualDispatchInput =
+  | { kind: "ticket"; ticketKey: string }
+  | { kind: "pull_request"; url: string };
+
+export type ManualDispatchBlockerCode =
+  | "active_run"
+  | "at_capacity"
+  | "approval_pending"
+  | "deployment_changed"
+  | "invalid_input"
+  | "not_eligible"
+  | "provider_unavailable";
+
+export interface ManualDispatchPreflightStep {
+  title: string;
+  description: string;
+}
+
+export interface ManualDispatchPreflightResponse {
+  definitionId: number;
+  definitionName: string;
+  deployedVersion: number;
+  triggerNodeId: string;
+  triggerType: WorkflowBlockType;
+  input: ManualDispatchInput;
+  subject: {
+    kind: "ticket" | "pull_request";
+    key: string;
+    title: string;
+    currentStatus?: string;
+    url?: string;
+  };
+  steps: ManualDispatchPreflightStep[];
+  runnable: boolean;
+  blocker?: {
+    code: ManualDispatchBlockerCode;
+    message: string;
+  };
+}
+
+export interface ManualDispatchRequest {
+  requestId: string;
+  expectedDeployedVersion: number;
+  input: ManualDispatchInput;
+}
+
+export type ManualDispatchResponse =
+  | {
+      requestId: string;
+      status: "started";
+      runId: string;
+    }
+  | {
+      requestId: string;
+      status: "recovering";
+    };
+
 /** Legacy single-definition GET shim response; removed once the dashboard
  *  switches to the multi-definition routes. */
 export interface WorkflowDefinitionResponse {

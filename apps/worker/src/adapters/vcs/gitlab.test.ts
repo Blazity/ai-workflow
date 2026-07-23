@@ -35,6 +35,9 @@ const mockJobs = {
   all: vi.fn(),
   showLog: vi.fn(),
 };
+const mockPipelines = {
+  show: vi.fn(),
+};
 
 const mockFetch = vi.fn();
 
@@ -62,6 +65,7 @@ vi.mock("@gitbeaker/rest", () => ({
     MergeRequestNotes: mockMergeRequestNotes,
     MergeRequestDiscussions: mockMergeRequestDiscussions,
     Jobs: mockJobs,
+    Pipelines: mockPipelines,
   })),
 }));
 
@@ -351,6 +355,65 @@ describe("GitLabAdapter", () => {
         headSha: "source-head-sha",
         baseRef: "main",
         state: "merged",
+      });
+    });
+  });
+
+  describe("getManualDispatchPullRequest", () => {
+    it("returns current MR pipeline failures and human review comments", async () => {
+      mockMergeRequests.show
+        .mockResolvedValueOnce({
+          web_url: "https://gitlab.com/blazity/demo-app/-/merge_requests/42",
+          source_branch: "feature/manual",
+          target_branch: "main",
+          title: "Manual dispatch",
+          author: { username: "alice" },
+          draft: false,
+          state: "opened",
+          diff_refs: { head_sha: "head-sha" },
+          head_pipeline: { id: 901, status: "failed" },
+        })
+        .mockResolvedValueOnce({
+          target_branch: "main",
+          state: "opened",
+          diff_refs: { head_sha: "head-sha" },
+          head_pipeline: { id: 901, status: "failed" },
+        });
+      mockJobs.all.mockResolvedValueOnce([
+        { id: 11, name: "lint", status: "failed" },
+      ]);
+      mockMergeRequestDiscussions.all.mockResolvedValueOnce([]);
+      mockMergeRequestNotes.all.mockResolvedValueOnce([
+        {
+          author: { username: "reviewer" },
+          body: "Please cover the retry path.",
+          system: false,
+          type: null,
+        },
+      ]);
+      mockPipelines.show.mockResolvedValueOnce({
+        id: 901,
+        source: "merge_request_event",
+      });
+
+      await expect(
+        glAdapter().getManualDispatchPullRequest(42),
+      ).resolves.toMatchObject({
+        prNumber: 42,
+        headRef: "feature/manual",
+        headSha: "head-sha",
+        baseRef: "main",
+        state: "open",
+        pipelineId: 901,
+        pipelineSource: "merge_request_event",
+        failedChecks: [{ name: "lint", conclusion: "failed" }],
+        reviews: [
+          {
+            state: "commented",
+            author: "reviewer",
+            body: "Please cover the retry path.",
+          },
+        ],
       });
     });
   });

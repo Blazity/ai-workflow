@@ -15,7 +15,11 @@ export interface FailedTicketOwner {
  * covers the PR webhook triggers. Stored on active_runs.run_kind (default
  * 'ticket'); reconcile and the Jira webhook branch on it.
  */
-export type RunKind = "ticket" | "pr_trigger";
+export type RunKind =
+  | "ticket"
+  | "pr_trigger"
+  | "manual_ticket"
+  | "manual_pr_trigger";
 
 /** Unbound reservations stop occupying capacity and become ineligible to bind
  * after this grace period. Both checks must use the same boundary. */

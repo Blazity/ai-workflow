@@ -28,6 +28,47 @@ export interface LatestCheckRun {
   conclusion: string | null;
 }
 
+export interface ManualDispatchPullRequestSnapshot {
+  prNumber: number;
+  prUrl: string;
+  headRef: string;
+  headSha: string;
+  baseRef: string;
+  title: string;
+  author: string;
+  isDraft: boolean;
+  state: "open" | "closed" | "merged";
+  mergeSha?: string;
+  mergedAt?: string;
+  pipelineId?: number;
+  pipelineSource?: string;
+  failedChecks: Array<{
+    name: string;
+    conclusion: string;
+    detailsUrl?: string;
+    checkRunId?: number;
+    appSlug?: string;
+  }>;
+  reviews: Array<{
+    state: "changes_requested" | "commented";
+    author: string;
+    body: string;
+  }>;
+}
+
+export interface ManualDispatchPrCapableVCS {
+  getManualDispatchPullRequest(prId: number): Promise<ManualDispatchPullRequestSnapshot>;
+}
+
+export function hasManualDispatchPrCapability(
+  adapter: VCSAdapter,
+): adapter is VCSAdapter & ManualDispatchPrCapableVCS {
+  return (
+    typeof (adapter as Partial<ManualDispatchPrCapableVCS>)
+      .getManualDispatchPullRequest === "function"
+  );
+}
+
 export interface PRComment {
   author: string;
   body: string;

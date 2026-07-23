@@ -505,6 +505,25 @@ describe("reconcileRuns owner-CAS recovery", () => {
     expect(onReleased).toHaveBeenCalledWith(bound.subjectKey);
   });
 
+  it("applies normal AI-column cancellation semantics to manual ticket runs", async () => {
+    const bound = entry({ kind: "manual_ticket" });
+    const runRegistry = registry([bound]);
+    mockCancelRun.mockResolvedValue(true);
+    const { reconcileRuns } = await import("./reconcile.js");
+
+    await expect(
+      reconcileRuns(new Set(), runRegistry, issueTracker("Done")),
+    ).resolves.toEqual({ cancelled: 1, cleaned: 0 });
+    expect(mockCancelRun).toHaveBeenCalledWith(
+      "PROJ-1",
+      "run-1",
+      runRegistry,
+      expect.anything(),
+      undefined,
+      undefined,
+    );
+  });
+
   it("retains a bound run whose ticket sits in the AI Review column while it still executes", async () => {
     // A Jira automation rule raced the run's own success move: the ticket
     // reached AI Review while the run is still finalizing (world status

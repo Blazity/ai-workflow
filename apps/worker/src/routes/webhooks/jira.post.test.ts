@@ -70,7 +70,11 @@ function request(input: {
   });
 }
 
-function adapters(options: { state?: "bound" | "cancelling"; active?: boolean } = {}) {
+function adapters(options: {
+  state?: "bound" | "cancelling";
+  active?: boolean;
+  kind?: "ticket" | "manual_pr_trigger";
+} = {}) {
   const active = options.active === false
     ? null
     : {
@@ -79,7 +83,7 @@ function adapters(options: { state?: "bound" | "cancelling"; active?: boolean } 
         ownerToken: "owner-1",
         runId: "run-1",
         state: options.state ?? "bound",
-        kind: "ticket",
+        kind: options.kind ?? "ticket",
         createdAt: Date.now(),
         updatedAt: Date.now(),
       };
@@ -142,6 +146,21 @@ describe("POST /webhooks/jira", () => {
       connected.runRegistry,
       connected.issueTracker,
     );
+  });
+
+  it("keeps a manual PR dispatch independent from linked Jira status", async () => {
+    const connected = adapters({ kind: "manual_pr_trigger" });
+    state.createAdapters.mockReturnValue(connected);
+
+    const response = await app()(request({ actor: "human-account" }));
+
+    await expect(response.json()).resolves.toEqual({
+      status: "ignored",
+      reason: "manual_pr_dispatch_independent",
+      ticketKey: "PROJ-42",
+    });
+    expect(state.isRunRecordedFailed).not.toHaveBeenCalled();
+    expect(state.cancel).not.toHaveBeenCalled();
   });
 
   it("does not cancel a run whose failure is already recorded (its own backlog move)", async () => {

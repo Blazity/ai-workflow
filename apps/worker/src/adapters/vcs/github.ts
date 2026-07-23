@@ -14,6 +14,8 @@ import type {
   PullRequestHead,
   RichGateStatusCapableVCS,
   RichGateStatusUpdate,
+  ManualDispatchPrCapableVCS,
+  ManualDispatchPullRequestSnapshot,
 } from "./types.js";
 
 export interface GitHubConfig {
@@ -28,7 +30,8 @@ export class GitHubAdapter
     VCSAdapter,
     GateStatusCapableVCS,
     RichGateStatusCapableVCS,
-    PRFilesCapableVCS
+    PRFilesCapableVCS,
+    ManualDispatchPrCapableVCS
 {
   private octokit: Octokit;
 
@@ -203,6 +206,74 @@ export class GitHubAdapter
       throw new Error(`GitHub PR #${prId} has unsupported lifecycle state ${String(state)}`);
     }
     return { headSha: data.head.sha, baseRef, state };
+  }
+
+  async getManualDispatchPullRequest(
+    prId: number,
+  ): Promise<ManualDispatchPullRequestSnapshot> {
+    const { data } = await this.octokit.pulls.get({
+      ...this.ownerRepo,
+      pull_number: prId,
+    });
+    const baseRef = data.base.ref?.trim();
+    if (!baseRef) throw new Error(`GitHub PR #${prId} is missing its target branch`);
+    const state = data.merged === true ? "merged" : data.state;
+    if (state !== "open" && state !== "closed" && state !== "merged") {
+      throw new Error(`GitHub PR #${prId} has unsupported lifecycle state ${String(state)}`);
+    }
+    const [checks, reviews] = await Promise.all([
+      this.getLatestCheckRuns(data.head.sha),
+      this.octokit.paginate(this.octokit.pulls.listReviews, {
+        ...this.ownerRepo,
+        pull_number: prId,
+        per_page: 100,
+      }),
+    ]);
+    const failedChecks = checks
+      .filter(
+        (check) =>
+          check.status === "completed" &&
+          (check.conclusion === "failure" || check.conclusion === "timed_out"),
+      )
+      .map((check) => ({
+        name: check.name,
+        conclusion: check.conclusion!,
+        checkRunId: check.id,
+        appSlug: check.appSlug,
+      }));
+    return {
+      prNumber: prId,
+      prUrl: data.html_url,
+      headRef: data.head.ref,
+      headSha: data.head.sha,
+      baseRef,
+      title: data.title,
+      author: data.user?.login ?? "unknown",
+      isDraft: data.draft === true,
+      state,
+      ...(state === "merged" && data.merge_commit_sha
+        ? { mergeSha: data.merge_commit_sha }
+        : {}),
+      ...(state === "merged" && data.merged_at
+        ? { mergedAt: data.merged_at }
+        : {}),
+      failedChecks,
+      reviews: reviews.flatMap((review) => {
+        const reviewState =
+          review.state === "CHANGES_REQUESTED"
+            ? "changes_requested"
+            : review.state === "COMMENTED"
+              ? "commented"
+              : null;
+        return reviewState
+          ? [{
+              state: reviewState,
+              author: review.user?.login ?? "unknown",
+              body: review.body ?? "",
+            }]
+          : [];
+      }),
+    };
   }
 
   async getLatestCheckRuns(headSha: string) {

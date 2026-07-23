@@ -2201,6 +2201,7 @@ export async function agentWorkflow(input: string | AgentWorkflowInput) {
   if (!legacyInput) {
     const {
       acknowledgeApprovalDispatchStep,
+      acknowledgeManualDispatchStep,
       acknowledgePendingTriggerStep,
       acknowledgePrTriggerDispatchStep,
       bindWorkflowCandidateStep,
@@ -2211,6 +2212,7 @@ export async function agentWorkflow(input: string | AgentWorkflowInput) {
       workflowRunId,
     );
     if (!bound) return;
+    await acknowledgeManualDispatchStep(entry, workflowRunId);
     await acknowledgeApprovalDispatchStep(entry, workflowRunId);
     if (!(await acknowledgePrTriggerDispatchStep(entry, workflowRunId))) return;
     await acknowledgePendingTriggerStep(entry);

@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useRef, useMemo, useCallback } from "react";
+import { PlayIcon } from "@phosphor-icons/react/dist/csr/Play";
 import {
   fromFlowDefinitionV1Node,
   fromFlowDefinitionV2Node,
@@ -207,11 +208,13 @@ const FlowNode = React.memo(function FlowNode({
   node,
   options,
   canEdit,
+  canRun,
   selected,
   dataSourceHighlighted,
   locked,
   outPorts,
   onSelect,
+  onRun,
   onRequestDelete,
   onDragStart,
   onPortDown,
@@ -226,11 +229,13 @@ const FlowNode = React.memo(function FlowNode({
   node: FlowNodeDef;
   options: WorkflowEditorOptions;
   canEdit: boolean;
+  canRun: boolean;
   selected: boolean;
   dataSourceHighlighted: boolean;
   locked: boolean;
   outPorts: string[];
   onSelect: (id: string, event: React.MouseEvent) => void;
+  onRun: (node: FlowNodeDef) => void;
   onRequestDelete: (id: string) => void;
   onDragStart: (e: React.PointerEvent, node: FlowNodeDef) => void;
   onPortDown: (e: React.PointerEvent, nodeId: string, portId: string) => void;
@@ -299,6 +304,22 @@ const FlowNode = React.memo(function FlowNode({
         data-canvas-node-selector={node.id}
         className="absolute inset-0 z-[1] appearance-none rounded-[3px] bg-transparent text-left outline-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-mariner focus-visible:outline-offset-2"
       />
+      {canRun && (
+        <button
+          type="button"
+          aria-label={`Run ${node.name || cat.label}`}
+          title="Run trigger"
+          onPointerDown={(event) => event.stopPropagation()}
+          onPointerUp={(event) => event.stopPropagation()}
+          onClick={(event) => {
+            event.stopPropagation();
+            onRun(node);
+          }}
+          className="absolute -right-[38px] -top-[15px] z-[8] inline-flex h-7 w-7 cursor-pointer items-center justify-center rounded-full border border-mariner bg-panel text-mariner shadow-[0_2px_5px_rgba(24,27,32,0.16)] transition-[background,color,transform] duration-[120ms] hover:scale-105 hover:bg-mariner hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-mariner focus-visible:ring-offset-2"
+        >
+          <PlayIcon size={13} weight="fill" aria-hidden />
+        </button>
+      )}
       {invalid && (
         <span id={validationDescriptionId(node.id)} className="sr-only">
           Validation errors: {validationIssues.map((issue) => issue.message).join("; ")}
@@ -438,6 +459,7 @@ function FlowCanvas({
   edgeGeometry,
   schemaVersion,
   canEdit,
+  runnableTriggerIds,
   options,
   onNodesChange,
   onEdgeGeometryChange,
@@ -451,6 +473,7 @@ function FlowCanvas({
   selection,
   setSelection,
   highlightedSourceIds,
+  onRunTrigger,
   fullView,
   onToggleFullView,
   fitSignal,
@@ -464,6 +487,7 @@ function FlowCanvas({
   edgeGeometry: Record<string, WorkflowEdgeGeometry>;
   schemaVersion: 1 | 2;
   canEdit: boolean;
+  runnableTriggerIds?: ReadonlySet<string>;
   options: WorkflowEditorOptions;
   onNodesChange: React.Dispatch<React.SetStateAction<FlowNodeDef[]>>;
   onEdgeGeometryChange: React.Dispatch<
@@ -479,6 +503,7 @@ function FlowCanvas({
   selection: CanvasSelection;
   setSelection: React.Dispatch<React.SetStateAction<CanvasSelection>>;
   highlightedSourceIds: ReadonlySet<string>;
+  onRunTrigger?: (node: FlowNodeDef) => void;
   fullView: boolean;
   onToggleFullView: () => void;
   fitSignal: number;
@@ -1202,11 +1227,15 @@ function FlowCanvas({
             node={n}
             options={options}
             canEdit={canEdit}
+            canRun={Boolean(
+              onRunTrigger && runnableTriggerIds?.has(n.id),
+            )}
             selected={selection.nodeIds.includes(n.id)}
             dataSourceHighlighted={highlightedSourceIds.has(n.id)}
             locked={isTriggerBlockType(n.type) && triggerCount === 1}
             outPorts={portsByNode[n.id] ?? []}
             onSelect={selectNode}
+            onRun={(node) => onRunTrigger?.(node)}
             onRequestDelete={onDeleteNode}
             onDragStart={startNodeDrag}
             onPortDown={onPortDown}
@@ -1283,6 +1312,8 @@ export function FlowEditor({
   onCommitTransaction,
   onCancelTransaction,
   canEdit,
+  runnableTriggerIds,
+  onRunTrigger,
   dirty,
   saveEnabled,
   saving,
@@ -1328,6 +1359,8 @@ export function FlowEditor({
   onCommitTransaction: () => void;
   onCancelTransaction: () => void;
   canEdit: boolean;
+  runnableTriggerIds?: ReadonlySet<string>;
+  onRunTrigger?: (node: FlowNodeDef) => void;
   dirty: boolean;
   saveEnabled: boolean;
   saving: boolean;
@@ -1983,6 +2016,7 @@ export function FlowEditor({
           edgeGeometry={edgeGeometry}
           schemaVersion={schemaVersion}
           canEdit={canEdit}
+          runnableTriggerIds={runnableTriggerIds}
           options={options}
           onNodesChange={onNodePositionsChange}
           onEdgeGeometryChange={onEdgeGeometryChange}
@@ -1996,6 +2030,7 @@ export function FlowEditor({
           selection={selection}
           setSelection={setSelection}
           highlightedSourceIds={highlightedSourceIdSet}
+          onRunTrigger={onRunTrigger}
           fullView={fullView}
           onToggleFullView={() => setFullView((v) => !v)}
           fitSignal={fitSignal ?? 0}
