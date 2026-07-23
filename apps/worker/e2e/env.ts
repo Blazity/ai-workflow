@@ -7,6 +7,16 @@ const schema = z.object({
   JIRA_API_TOKEN: z.string().min(1),
   JIRA_PROJECT_KEY: z.string().min(1),
 
+  /**
+   * Optional SECOND Jira identity, used only by US-06 to post the clarification
+   * answer as a NON-bot user. The comment-driven resume path excludes the bot's
+   * own comments by accountId (see src/clarifications/resume-from-comments.ts),
+   * so an answer posted with the bot's JIRA_API_TOKEN is ignored and can never
+   * wake the suspended run. When this is absent, US-06 is skipped. Bearer token
+   * for a user distinct from the one JIRA_API_TOKEN authenticates.
+   */
+  JIRA_E2E_COMMENTER_TOKEN: z.string().min(1).optional(),
+
   COLUMN_AI: z.string().min(1),
   COLUMN_AI_REVIEW: z.string().min(1),
   COLUMN_BACKLOG: z.string().min(1),
