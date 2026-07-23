@@ -120,11 +120,11 @@ With these, both new events flow through the existing chain (section 2.1) to the
 The ticket's scope note ("Audit merged AIW-141 and PR #130 first. Keep this ticket limited to uncovered legacy or v2 gaps rather than reimplementing shipped behavior") rules the originally drafted builtin webhook fallback out of AIW-140:
 
 - AIW-141 (Done, verified on prod, AWP-11 / ai-workflow-prod#7) established the legacy consumption path: a human moves the ticket back to the AI column, the remediation run fetches PR feedback BEFORE planning (`agent.ts:1925-1937`) and reframes the run around addressing the review (`sandbox/context.ts:387-399`). PR #130 additionally made `getPRComments` fetch review summary bodies, so plain comments, inline comments, and Request Changes text all reach that run.
-- A webhook-triggered builtin fix run on legacy would mean one human review can produce TWO remediation runs (the immediate webhook one plus the AIW-141 AI-column one), and "trigger remediation from Request Changes" is tracked separately as AIW-109.
+- A webhook-triggered builtin fix run on legacy would mean one human review can produce TWO remediation runs (the immediate webhook one plus the AIW-141 AI-column one). Webhook-triggered remediation itself already shipped in AIW-109 / PR #120 for the v2 path (enabled `trigger_pr_review` definition); extending it to definition-less legacy installs is a product decision that needs its own ticket, not a side effect of this one.
 
 AC2 is therefore satisfied without new code: legacy coverage = the shipped AIW-141 AI-column path (which now also benefits from this ticket's ingestion fixes: the new GitHub comment events are readable through `getPRComments`, bot-loop guards protect normalization, and the marker keeps bot comments out of triggering). v2 coverage = an enabled definition with a `trigger_pr_review` node, now correctly fed by the AC1 ingestion work and protected by the AC3 dedup. On a legacy install a review webhook keeps answering `no_definition` (with the AC5 `diagnosticId`), by design.
 
-The builtin fallback design above (defaultReviewFixDefinition + nullable delivery pins + sentinel loading) remains documented in this section's history for AIW-109 to pick up if that ticket chooses the webhook-triggered route.
+The builtin fallback design (defaultReviewFixDefinition + nullable delivery pins + sentinel loading) remains documented here as the starting point for a future ticket, should the team decide legacy installs need webhook-triggered remediation without a stored definition (AIW-109 is closed and covered v2 only; GitLab formal Request Changes detection is AIW-116).
 
 ### AC3: duplicate webhook deliveries do not create duplicate runs
 
@@ -255,7 +255,7 @@ Expected sequence:
 
 ## 6. Explicitly out of scope
 
-- Webhook-triggered remediation on legacy installs (builtin review-fix fallback): descoped after the AIW-141 / PR #130 audit; belongs to AIW-109. See section AC2.
+- Webhook-triggered remediation on legacy installs (builtin review-fix fallback): descoped after the AIW-141 / PR #130 audit; would need a new ticket (AIW-109 shipped the v2 webhook path and is closed). See section AC2.
 - Pruning `trigger_deliveries` (no TTL today, rows grow forever): known issue, separate ticket.
 - Filtering the bot's own comments out of `{{pr_review_feedback}}` context (prompt pollution, not a trigger loop): follow-up ticket.
 - Carrying per-comment file/line anchors inside the trigger payload: unnecessary, `fetch_pr_context` fetches anchored comments in-run.
