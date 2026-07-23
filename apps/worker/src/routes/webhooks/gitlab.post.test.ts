@@ -46,6 +46,17 @@ vi.mock("../../adapters/vcs/repository-directory.js", () => ({
   })),
 }));
 
+const loggerInfo = vi.fn();
+const loggerWarn = vi.fn();
+vi.mock("../../lib/logger.js", () => ({
+  logger: {
+    info: (...a: any[]) => loggerInfo(...a),
+    warn: (...a: any[]) => loggerWarn(...a),
+    error: vi.fn(),
+    debug: vi.fn(),
+  },
+}));
+
 const gitLabHandler = (await import("./gitlab.post.js")).default;
 
 function makeApp() {
@@ -166,6 +177,7 @@ describe("POST /webhooks/gitlab", () => {
     await expect(response.json()).resolves.toEqual({
       status: "ignored",
       reason: "malformed_payload",
+      diagnosticId: expect.any(String),
     });
     expect(mockDispatchPostPrGateWebhook).not.toHaveBeenCalled();
   });
@@ -246,6 +258,7 @@ describe("POST /webhooks/gitlab", () => {
     await expect(response.json()).resolves.toEqual({
       status: "ignored",
       reason: "missing_delivery_id",
+      diagnosticId: expect.any(String),
     });
     expect(mockDispatchTriggerEvent).not.toHaveBeenCalled();
   });
@@ -290,6 +303,7 @@ describe("POST /webhooks/gitlab", () => {
     await expect(response.json()).resolves.toEqual({
       status: "ignored",
       reason: "other_project",
+      diagnosticId: expect.any(String),
     });
     expect(mockDispatchPostPrGateWebhook).not.toHaveBeenCalled();
   });
@@ -304,6 +318,7 @@ describe("POST /webhooks/gitlab", () => {
     await expect(response.json()).resolves.toEqual({
       status: "ignored",
       reason: "other_project",
+      diagnosticId: expect.any(String),
     });
     expect(mocks.isRepoAllowed).toHaveBeenCalledWith("group/demo");
     expect(mocks.listRepositories).not.toHaveBeenCalled();
@@ -333,6 +348,7 @@ describe("POST /webhooks/gitlab", () => {
     await expect(response.json()).resolves.toEqual({
       status: "ignored",
       reason: "other_project",
+      diagnosticId: expect.any(String),
     });
     expect(mockDispatchPostPrGateWebhook).not.toHaveBeenCalled();
   });
@@ -347,6 +363,7 @@ describe("POST /webhooks/gitlab", () => {
     await expect(response.json()).resolves.toEqual({
       status: "ignored",
       reason: "action_close",
+      diagnosticId: expect.any(String),
     });
     expect(mocks.listRepositories).not.toHaveBeenCalled();
     expect(mockDispatchPostPrGateWebhook).not.toHaveBeenCalled();
@@ -474,7 +491,7 @@ describe("POST /webhooks/gitlab", () => {
     const response = await makeApp()(makeRequest(validMergeRequestPayload()));
 
     expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toEqual({ status: "ignored", reason: "coalesced" });
+    await expect(response.json()).resolves.toEqual({ status: "ignored", reason: "coalesced", diagnosticId: expect.any(String) });
     expect(mockDispatchPostPrGateWebhook).not.toHaveBeenCalled();
   });
 
@@ -544,7 +561,7 @@ describe("POST /webhooks/gitlab", () => {
     const response = await makeApp()(makeRequest(JSON.stringify(payload)));
 
     expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toEqual({ status: "ignored", reason: "no_definition" });
+    await expect(response.json()).resolves.toEqual({ status: "ignored", reason: "no_definition", diagnosticId: expect.any(String) });
     expect(mockDispatchPostPrGateWebhook).not.toHaveBeenCalled();
   });
 
@@ -579,6 +596,7 @@ describe("POST /webhooks/gitlab", () => {
     await expect(response.json()).resolves.toEqual({
       status: "ignored",
       reason: "note_ignored",
+      diagnosticId: expect.any(String),
     });
     expect(mockDispatchTriggerEvent).not.toHaveBeenCalled();
     expect(mocks.listRepositories).not.toHaveBeenCalled();
@@ -595,6 +613,7 @@ describe("POST /webhooks/gitlab", () => {
     await expect(response.json()).resolves.toEqual({
       status: "ignored",
       reason: "note_ignored",
+      diagnosticId: expect.any(String),
     });
     expect(mockDispatchTriggerEvent).not.toHaveBeenCalled();
     expect(mocks.listRepositories).not.toHaveBeenCalled();
@@ -666,11 +685,82 @@ describe("POST /webhooks/gitlab", () => {
     await expect(response.json()).resolves.toEqual({
       status: "ignored",
       reason: "ignored_untrusted_event",
+      diagnosticId: expect.any(String),
     });
     expect(mocks.fetch).not.toHaveBeenCalled();
     expect(mockDispatchTriggerEvent).toHaveBeenCalledWith(
       expect.objectContaining({ triggerType: "trigger_pr_review" }),
       expect.anything(),
     );
+  });
+
+  it("returns the event uuid as the diagnosticId on an unsupported event", async () => {
+    const response = await makeApp()(
+      makeRequest(validMergeRequestPayload(), "secret", "Push Hook", {
+        "x-gitlab-event-uuid": "delivery-abc",
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      status: "ignored",
+      reason: "not_supported_event",
+      diagnosticId: "delivery-abc",
+    });
+  });
+
+  it("mints a uuid diagnosticId when no delivery header is present", async () => {
+    const response = await makeApp()(
+      makeRequest(validMergeRequestPayload(), "secret", "Merge Request Hook", {}),
+    );
+
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.reason).toBe("missing_delivery_id");
+    expect(body.diagnosticId).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+    );
+  });
+
+  it("carries the diagnosticId in the 401 error data on a token failure", async () => {
+    const response = await makeApp()(makeRequest(validMergeRequestPayload(), "wrong"));
+
+    expect(response.status).toBe(401);
+    const body = await response.json();
+    expect(body.data).toEqual({ diagnosticId: "delivery-test" });
+  });
+
+  it("logs exactly one trigger_ingestion_rejected on a rejected request", async () => {
+    await makeApp()(
+      makeRequest(validMergeRequestPayload(), "secret", "Push Hook", {
+        "x-gitlab-event-uuid": "delivery-abc",
+      }),
+    );
+
+    const rejectedLogs = loggerInfo.mock.calls.filter(
+      ([, msg]) => msg === "trigger_ingestion_rejected",
+    );
+    expect(rejectedLogs).toHaveLength(1);
+    expect(rejectedLogs[0][0]).toMatchObject({
+      diagnosticId: "delivery-abc",
+      provider: "gitlab",
+      event: "Push Hook",
+      reason: "not_supported_event",
+    });
+  });
+
+  it("does not log trigger_ingestion_rejected on a dispatched request", async () => {
+    mockDispatchTriggerEvent.mockResolvedValueOnce({ result: "started", runId: "run_note" });
+
+    await makeApp()(makeRequest(validNotePayload(), "secret", "Note Hook"));
+
+    const rejectedInfo = loggerInfo.mock.calls.filter(
+      ([, msg]) => msg === "trigger_ingestion_rejected",
+    );
+    const rejectedWarn = loggerWarn.mock.calls.filter(
+      ([, msg]) => msg === "trigger_ingestion_rejected",
+    );
+    expect(rejectedInfo).toHaveLength(0);
+    expect(rejectedWarn).toHaveLength(0);
   });
 });

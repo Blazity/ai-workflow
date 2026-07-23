@@ -1,5 +1,5 @@
 import type { PrTriggerPayload } from "../workflows/agent-input.js";
-import { vcsLoginsMatch } from "./vcs-bot-identity.js";
+import { hasAiWorkflowCommentMarker, vcsLoginsMatch } from "./vcs-bot-identity.js";
 
 export type PrTriggerType =
   | "trigger_pr_created"
@@ -14,6 +14,10 @@ export interface TriggerEvent {
     /** Provider event source, such as GitLab's merge_request_event pipeline source. */
     source?: string;
     deliveryId: string;
+    /** Stable identity of the human action behind this delivery, used for
+     * semantic dedup so one review's fan-out of N webhooks starts one run.
+     * Derived here at normalization; a later stage consumes it. */
+    semanticKey?: string;
   };
   triggerType: PrTriggerType;
   pr: PrTriggerPayload;
@@ -121,7 +125,10 @@ export function normalizeGitHubEvent(
     if (!allowedStates.includes(review.state)) return null;
     if (vcsLoginsMatch(review.user?.login, options.botLogin)) return null;
     return {
-      delivery: githubDelivery(options.deliveryId, review.user?.login),
+      delivery: {
+        ...githubDelivery(options.deliveryId, review.user?.login),
+        ...(typeof review.id === "number" ? { semanticKey: `review:${review.id}` } : {}),
+      },
       triggerType: "trigger_pr_review",
       pr: {
         ...mapGitHubPullRequest(pr, repo),
@@ -129,6 +136,83 @@ export function normalizeGitHubEvent(
           state: review.state as "changes_requested" | "commented",
           author: review.user?.login ?? "unknown",
           body: review.body ?? "",
+        },
+      },
+    };
+  }
+
+  if (eventName === "pull_request_review_comment") {
+    if (body?.action !== "created") return null;
+    const comment = body?.comment;
+    const pr = body?.pull_request;
+    if (!comment || !pr) return null;
+    const allowedStates = options.reviewStates ?? DEFAULT_REVIEW_STATES;
+    if (!allowedStates.includes("commented")) return null;
+    if (vcsLoginsMatch(comment.user?.login, options.botLogin)) return null;
+    if (comment.user?.type === "Bot") return null;
+    if (hasAiWorkflowCommentMarker(comment.body)) return null;
+    // GitHub wraps inline comments in a review container, so the N sibling
+    // comments and their parent review submission share one semantic key.
+    const semanticKey =
+      typeof comment.pull_request_review_id === "number"
+        ? `review:${comment.pull_request_review_id}`
+        : typeof comment.id === "number"
+          ? `comment:${comment.id}`
+          : undefined;
+    return {
+      delivery: {
+        ...githubDelivery(options.deliveryId, comment.user?.login),
+        ...(semanticKey ? { semanticKey } : {}),
+      },
+      triggerType: "trigger_pr_review",
+      pr: {
+        ...mapGitHubPullRequest(pr, repo),
+        review: {
+          state: "commented",
+          author: comment.user?.login ?? "unknown",
+          body: comment.body ?? "",
+        },
+      },
+    };
+  }
+
+  if (eventName === "issue_comment") {
+    if (body?.action !== "created") return null;
+    const comment = body?.comment;
+    const issue = body?.issue;
+    // issue.pull_request is only present when the issue is a PR conversation.
+    if (!comment || !issue?.pull_request) return null;
+    const allowedStates = options.reviewStates ?? DEFAULT_REVIEW_STATES;
+    if (!allowedStates.includes("commented")) return null;
+    if (vcsLoginsMatch(comment.user?.login, options.botLogin)) return null;
+    if (comment.user?.type === "Bot") return null;
+    if (hasAiWorkflowCommentMarker(comment.body)) return null;
+    const semanticKey =
+      typeof comment.id === "number" ? `comment:${comment.id}` : undefined;
+    return {
+      delivery: {
+        ...githubDelivery(options.deliveryId, comment.user?.login),
+        ...(semanticKey ? { semanticKey } : {}),
+      },
+      triggerType: "trigger_pr_review",
+      pr: {
+        // issue_comment carries no pull_request object, so head facts are
+        // unknown here. Dispatch binds the authoritative values before
+        // acceptance, mirroring the GitLab Pipeline Hook empty-head pattern.
+        provider: "github",
+        repoPath: `${repo.owner.login}/${repo.name}`,
+        prNumber: issue.number,
+        prUrl: issue.pull_request.html_url ?? `${repo.html_url}/pull/${issue.number}`,
+        headRef: "",
+        headSha: "",
+        baseRef: "",
+        title: issue.title ?? "",
+        author: issue.user?.login ?? "unknown",
+        isDraft: false,
+        review: {
+          state: "commented",
+          author: comment.user?.login ?? "unknown",
+          body: comment.body ?? "",
         },
       },
     };
@@ -194,14 +278,18 @@ export function normalizeGitLabEvent(
       attrs.noteable_type !== "MergeRequest" ||
       attrs.system === true ||
       attrs.internal === true ||
-      attrs.confidential === true
+      attrs.confidential === true ||
+      hasAiWorkflowCommentMarker(attrs.note)
     ) {
       return null;
     }
     const allowedStates = options.reviewStates ?? DEFAULT_REVIEW_STATES;
     if (!allowedStates.includes("commented")) return null;
     return {
-      delivery: gitLabDelivery(options.deliveryId, producer),
+      delivery: {
+        ...gitLabDelivery(options.deliveryId, producer),
+        ...(typeof attrs.id === "number" ? { semanticKey: `note:${attrs.id}` } : {}),
+      },
       triggerType: "trigger_pr_review",
       pr: {
         ...mapGitLabMergeRequest(mr, project),

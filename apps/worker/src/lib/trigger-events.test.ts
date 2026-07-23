@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { normalizeGitHubEvent, normalizeGitLabEvent } from "./trigger-events.js";
+import { AI_WORKFLOW_COMMENT_MARKER } from "./vcs-bot-identity.js";
 
 const options = {
   gateCheckNames: ["blazebot / code-hygiene"],
@@ -334,6 +335,315 @@ describe("normalizeGitHubEvent", () => {
     expect(evt).toBeNull();
   });
 
+  it("adds a semantic key derived from the review id", () => {
+    const evt = normalizeGitHubEvent(
+      "pull_request_review",
+      {
+        action: "submitted",
+        repository: githubRepo(),
+        pull_request: githubPr(),
+        review: { id: 321, state: "changes_requested", user: { login: "human" }, body: "please fix" },
+      },
+      options,
+    );
+    expect(evt?.delivery.semanticKey).toBe("review:321");
+  });
+
+  const commentOptions = { ...options, reviewStates: ["commented"] as const };
+
+  it("maps a pull_request_review_comment created to a commented review", () => {
+    const evt = normalizeGitHubEvent(
+      "pull_request_review_comment",
+      {
+        action: "created",
+        repository: githubRepo(),
+        pull_request: githubPr({ user: { login: "human" } }),
+        comment: {
+          id: 555,
+          pull_request_review_id: 999,
+          user: { login: "human", type: "User" },
+          body: "please fix the null check",
+        },
+      },
+      commentOptions,
+    );
+    expect(evt).toEqual({
+      delivery: {
+        provider: "github",
+        producer: "human",
+        deliveryId: "github-delivery-1",
+        semanticKey: "review:999",
+      },
+      triggerType: "trigger_pr_review",
+      pr: {
+        provider: "github",
+        repoPath: "acme/app",
+        prNumber: 7,
+        prUrl: "https://github.com/acme/app/pull/7",
+        headRef: "blazebot/aiw-1",
+        headSha: "abc123",
+        baseRef: "main",
+        title: "Fix things",
+        author: "human",
+        isDraft: false,
+        review: {
+          state: "commented",
+          author: "human",
+          body: "please fix the null check",
+        },
+      },
+    });
+  });
+
+  it("falls back to comment:<id> when the review-comment has no parent review id", () => {
+    const evt = normalizeGitHubEvent(
+      "pull_request_review_comment",
+      {
+        action: "created",
+        repository: githubRepo(),
+        pull_request: githubPr(),
+        comment: { id: 555, user: { login: "human", type: "User" }, body: "x" },
+      },
+      commentOptions,
+    );
+    expect(evt?.delivery.semanticKey).toBe("comment:555");
+  });
+
+  it("ignores non-created review-comment actions", () => {
+    for (const action of ["edited", "deleted"]) {
+      expect(
+        normalizeGitHubEvent(
+          "pull_request_review_comment",
+          {
+            action,
+            repository: githubRepo(),
+            pull_request: githubPr(),
+            comment: { id: 1, user: { login: "human", type: "User" }, body: "x" },
+          },
+          commentOptions,
+        ),
+      ).toBeNull();
+    }
+  });
+
+  it("drops a review-comment authored by the bot itself", () => {
+    expect(
+      normalizeGitHubEvent(
+        "pull_request_review_comment",
+        {
+          action: "created",
+          repository: githubRepo(),
+          pull_request: githubPr(),
+          comment: { id: 1, user: { login: "blazebot[bot]", type: "User" }, body: "self" },
+        },
+        commentOptions,
+      ),
+    ).toBeNull();
+  });
+
+  it("drops a review-comment from any Bot-type account", () => {
+    expect(
+      normalizeGitHubEvent(
+        "pull_request_review_comment",
+        {
+          action: "created",
+          repository: githubRepo(),
+          pull_request: githubPr(),
+          comment: { id: 1, user: { login: "dependabot", type: "Bot" }, body: "ci noise" },
+        },
+        commentOptions,
+      ),
+    ).toBeNull();
+  });
+
+  it("drops a review-comment carrying the AI Workflow marker", () => {
+    expect(
+      normalizeGitHubEvent(
+        "pull_request_review_comment",
+        {
+          action: "created",
+          repository: githubRepo(),
+          pull_request: githubPr(),
+          comment: {
+            id: 1,
+            user: { login: "human", type: "User" },
+            body: `looks good ${AI_WORKFLOW_COMMENT_MARKER}`,
+          },
+        },
+        commentOptions,
+      ),
+    ).toBeNull();
+  });
+
+  it("drops a review-comment when reviewStates is not opted into commented", () => {
+    expect(
+      normalizeGitHubEvent(
+        "pull_request_review_comment",
+        {
+          action: "created",
+          repository: githubRepo(),
+          pull_request: githubPr(),
+          comment: { id: 1, user: { login: "human", type: "User" }, body: "x" },
+        },
+        options,
+      ),
+    ).toBeNull();
+  });
+
+  it("maps an issue_comment on a PR to a commented review", () => {
+    const evt = normalizeGitHubEvent(
+      "issue_comment",
+      {
+        action: "created",
+        repository: githubRepo(),
+        issue: {
+          number: 7,
+          title: "Fix things",
+          user: { login: "author-person" },
+          pull_request: { html_url: "https://github.com/acme/app/pull/7" },
+        },
+        comment: { id: 777, user: { login: "human", type: "User" }, body: "conversation feedback" },
+      },
+      commentOptions,
+    );
+    expect(evt).toEqual({
+      delivery: {
+        provider: "github",
+        producer: "human",
+        deliveryId: "github-delivery-1",
+        semanticKey: "comment:777",
+      },
+      triggerType: "trigger_pr_review",
+      pr: {
+        provider: "github",
+        repoPath: "acme/app",
+        prNumber: 7,
+        prUrl: "https://github.com/acme/app/pull/7",
+        headRef: "",
+        headSha: "",
+        baseRef: "",
+        title: "Fix things",
+        author: "author-person",
+        isDraft: false,
+        review: {
+          state: "commented",
+          author: "human",
+          body: "conversation feedback",
+        },
+      },
+    });
+  });
+
+  it("derives the PR url from the repo when issue.pull_request omits html_url", () => {
+    const evt = normalizeGitHubEvent(
+      "issue_comment",
+      {
+        action: "created",
+        repository: githubRepo(),
+        issue: { number: 7, title: "t", user: { login: "a" }, pull_request: {} },
+        comment: { id: 1, user: { login: "human", type: "User" }, body: "x" },
+      },
+      commentOptions,
+    );
+    expect(evt?.pr.prUrl).toBe("https://github.com/acme/app/pull/7");
+  });
+
+  it("ignores an issue_comment on a plain issue (no pull_request)", () => {
+    expect(
+      normalizeGitHubEvent(
+        "issue_comment",
+        {
+          action: "created",
+          repository: githubRepo(),
+          issue: { number: 7, title: "bug", user: { login: "author-person" } },
+          comment: { id: 1, user: { login: "human", type: "User" }, body: "x" },
+        },
+        commentOptions,
+      ),
+    ).toBeNull();
+  });
+
+  it("ignores non-created issue_comment actions", () => {
+    for (const action of ["edited", "deleted"]) {
+      expect(
+        normalizeGitHubEvent(
+          "issue_comment",
+          {
+            action,
+            repository: githubRepo(),
+            issue: { number: 7, title: "t", user: { login: "a" }, pull_request: {} },
+            comment: { id: 1, user: { login: "human", type: "User" }, body: "x" },
+          },
+          commentOptions,
+        ),
+      ).toBeNull();
+    }
+  });
+
+  it("drops an issue_comment authored by the bot itself", () => {
+    expect(
+      normalizeGitHubEvent(
+        "issue_comment",
+        {
+          action: "created",
+          repository: githubRepo(),
+          issue: { number: 7, title: "t", user: { login: "a" }, pull_request: {} },
+          comment: { id: 1, user: { login: "blazebot[bot]", type: "User" }, body: "self" },
+        },
+        commentOptions,
+      ),
+    ).toBeNull();
+  });
+
+  it("drops an issue_comment from any Bot-type account", () => {
+    expect(
+      normalizeGitHubEvent(
+        "issue_comment",
+        {
+          action: "created",
+          repository: githubRepo(),
+          issue: { number: 7, title: "t", user: { login: "a" }, pull_request: {} },
+          comment: { id: 1, user: { login: "dependabot", type: "Bot" }, body: "ci noise" },
+        },
+        commentOptions,
+      ),
+    ).toBeNull();
+  });
+
+  it("drops an issue_comment carrying the AI Workflow marker", () => {
+    expect(
+      normalizeGitHubEvent(
+        "issue_comment",
+        {
+          action: "created",
+          repository: githubRepo(),
+          issue: { number: 7, title: "t", user: { login: "a" }, pull_request: {} },
+          comment: {
+            id: 1,
+            user: { login: "human", type: "User" },
+            body: `looks good ${AI_WORKFLOW_COMMENT_MARKER}`,
+          },
+        },
+        commentOptions,
+      ),
+    ).toBeNull();
+  });
+
+  it("drops an issue_comment when reviewStates is not opted into commented", () => {
+    expect(
+      normalizeGitHubEvent(
+        "issue_comment",
+        {
+          action: "created",
+          repository: githubRepo(),
+          issue: { number: 7, title: "t", user: { login: "a" }, pull_request: {} },
+          comment: { id: 1, user: { login: "human", type: "User" }, body: "x" },
+        },
+        options,
+      ),
+    ).toBeNull();
+  });
+
   it("ignores unrelated events", () => {
     expect(normalizeGitHubEvent("push", { repository: githubRepo() }, options)).toBeNull();
   });
@@ -550,6 +860,23 @@ describe("normalizeGitLabEvent", () => {
         botUsername: "  GitLab-Bot  ",
         reviewStates: ["commented"],
       }),
+    ).toBeNull();
+  });
+
+  it("adds a semantic key derived from the GitLab note id", () => {
+    const note = notePayload();
+    note.object_attributes.id = 4321;
+    const evt = normalizeGitLabEvent("Note Hook", note, {
+      reviewStates: ["commented"],
+    });
+    expect(evt?.delivery.semanticKey).toBe("note:4321");
+  });
+
+  it("drops a GitLab note carrying the AI Workflow marker", () => {
+    const note = notePayload();
+    note.object_attributes.note = `looks good ${AI_WORKFLOW_COMMENT_MARKER}`;
+    expect(
+      normalizeGitLabEvent("Note Hook", note, { reviewStates: ["commented"] }),
     ).toBeNull();
   });
 

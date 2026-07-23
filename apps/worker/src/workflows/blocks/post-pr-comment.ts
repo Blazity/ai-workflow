@@ -2,6 +2,10 @@ import { z } from "zod";
 import type { VcsProvider } from "../../adapters/vcs/repository-directory.js";
 import type { PullRequestHead } from "../../adapters/vcs/types.js";
 import type { ActiveRunOwner } from "../../lib/active-run-owner.js";
+import {
+  AI_WORKFLOW_COMMENT_MARKER,
+  hasAiWorkflowCommentMarker,
+} from "../../lib/vcs-bot-identity.js";
 import { isRunControlError } from "../run-control-error.js";
 import {
   executionError,
@@ -45,6 +49,12 @@ async function blockPostPrCommentStep(
   const comments: PostPrCommentsResult["comments"] = [];
   const errors: string[] = [];
 
+  // Every comment we post carries the marker so that even a misconfigured bot
+  // login cannot let our own comments re-trigger the workflow (AIW-140).
+  const markedBody = hasAiWorkflowCommentMarker(body)
+    ? body
+    : `${body}\n\n${AI_WORKFLOW_COMMENT_MARKER}`;
+
   for (const target of targets) {
     try {
       if (!isRepoAllowed(target.repoPath)) {
@@ -58,7 +68,7 @@ async function blockPostPrCommentStep(
       const current = await vcs.getPRHead(target.prId);
       assertCurrentPrCommentTarget(target, current);
       await assertActiveRunOwner(db, owner);
-      const { url } = await vcs.postPRComment(target.prId, body);
+      const { url } = await vcs.postPRComment(target.prId, markedBody);
       comments.push({
         provider: target.provider,
         repoPath: target.repoPath,

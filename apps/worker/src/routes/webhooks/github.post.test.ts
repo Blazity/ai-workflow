@@ -19,8 +19,20 @@ vi.mock("../../../env.js", () => ({
   getVcsBotLogin: mocks.getVcsBotLogin,
 }));
 
+const mockVerifySignature = vi.fn();
 vi.mock("../../lib/github-webhook-sig.js", () => ({
-  verifyGitHubWebhookSignature: vi.fn(),
+  verifyGitHubWebhookSignature: (...args: any[]) => mockVerifySignature(...args),
+}));
+
+const loggerInfo = vi.fn();
+const loggerWarn = vi.fn();
+vi.mock("../../lib/logger.js", () => ({
+  logger: {
+    info: (...a: any[]) => loggerInfo(...a),
+    warn: (...a: any[]) => loggerWarn(...a),
+    error: vi.fn(),
+    debug: vi.fn(),
+  },
 }));
 vi.mock("../../lib/repo-allowlist.js", () => ({
   isRepoAllowed: (...args: any[]) => mocks.isRepoAllowed(...args),
@@ -124,6 +136,7 @@ describe("POST /webhooks/github", () => {
     await expect(response.json()).resolves.toEqual({
       status: "ignored",
       reason: "other_repo",
+      diagnosticId: "delivery-test",
     });
     expect(mocks.isRepoAllowed).toHaveBeenCalledWith("acme/app");
     expect(mockDispatchTriggerEvent).not.toHaveBeenCalled();
@@ -141,6 +154,7 @@ describe("POST /webhooks/github", () => {
     await expect(response.json()).resolves.toEqual({
       status: "ignored",
       reason: "ignored_untrusted_event",
+      diagnosticId: "delivery-test",
     });
     expect(mockDispatchTriggerEvent).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -211,6 +225,7 @@ describe("POST /webhooks/github", () => {
     await expect(response.json()).resolves.toEqual({
       status: "ignored",
       reason: "ignored_untrusted_event",
+      diagnosticId: "delivery-test",
     });
     expect(mockDispatchTriggerEvent).toHaveBeenCalledWith(
       expect.objectContaining({ triggerType: "trigger_pr_review" }),
@@ -298,7 +313,7 @@ describe("POST /webhooks/github", () => {
     const response = await makeApp()(makeRequest(checkRunBody, "check_run"));
 
     expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toEqual({ status: "ignored", reason: "no_definition" });
+    await expect(response.json()).resolves.toEqual({ status: "ignored", reason: "no_definition", diagnosticId: "delivery-test" });
     expect(mockDispatchTriggerEvent).toHaveBeenCalledWith(
       expect.objectContaining({ triggerType: "trigger_pr_checks_failed" }),
       expect.anything(),
@@ -333,7 +348,7 @@ describe("POST /webhooks/github", () => {
     const response = await makeApp()(makeRequest(body));
 
     expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toEqual({ status: "ignored", reason: "no_definition" });
+    await expect(response.json()).resolves.toEqual({ status: "ignored", reason: "no_definition", diagnosticId: "delivery-test" });
     expect(mockDispatchPostPrGateWebhook).not.toHaveBeenCalled();
   });
 
@@ -361,7 +376,7 @@ describe("POST /webhooks/github", () => {
     const response = await makeApp()(makeRequest(pullRequestBody("opened")));
 
     expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toEqual({ status: "ignored", reason: "coalesced" });
+    await expect(response.json()).resolves.toEqual({ status: "ignored", reason: "coalesced", diagnosticId: "delivery-test" });
     expect(mockDispatchPostPrGateWebhook).not.toHaveBeenCalled();
   });
 
@@ -369,7 +384,7 @@ describe("POST /webhooks/github", () => {
     const response = await makeApp()(makeRequest(pullRequestBody("closed")));
 
     expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toEqual({ status: "ignored", reason: "action_closed" });
+    await expect(response.json()).resolves.toEqual({ status: "ignored", reason: "action_closed", diagnosticId: "delivery-test" });
     expect(mockDispatchTriggerEvent).not.toHaveBeenCalled();
     expect(mockDispatchPostPrGateWebhook).not.toHaveBeenCalled();
   });
@@ -381,7 +396,89 @@ describe("POST /webhooks/github", () => {
     const response = await makeApp()(makeRequest(pullRequestBody("opened")));
 
     expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toEqual({ status: "ignored", reason: "other_repo" });
+    await expect(response.json()).resolves.toEqual({ status: "ignored", reason: "other_repo", diagnosticId: "delivery-test" });
+    expect(mockDispatchTriggerEvent).not.toHaveBeenCalled();
+    expect(mockDispatchPostPrGateWebhook).not.toHaveBeenCalled();
+  });
+
+  it("dispatches a pull_request_review_comment through the trigger path", async () => {
+    mockDispatchTriggerEvent.mockResolvedValueOnce({ result: "started", runId: "run_rc" });
+    const body = {
+      action: "created",
+      repository: repo(),
+      pull_request: {
+        number: 7,
+        html_url: "https://github.com/acme/app/pull/7",
+        head: { ref: "blazebot/aiw-1", sha: "abc123" },
+        base: { ref: "main" },
+        title: "Fix",
+        user: { login: "human" },
+        draft: false,
+      },
+      comment: {
+        id: 5,
+        pull_request_review_id: 9,
+        user: { login: "human", type: "User" },
+        body: "please fix",
+      },
+    };
+
+    const response = await makeApp()(makeRequest(body, "pull_request_review_comment"));
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ status: "dispatched", runId: "run_rc" });
+    expect(mockDispatchTriggerEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        triggerType: "trigger_pr_review",
+        pr: expect.objectContaining({
+          review: expect.objectContaining({ state: "commented" }),
+        }),
+      }),
+      expect.anything(),
+    );
+    expect(mockDispatchPostPrGateWebhook).not.toHaveBeenCalled();
+  });
+
+  it("dispatches an issue_comment on a PR through the trigger path", async () => {
+    mockDispatchTriggerEvent.mockResolvedValueOnce({ result: "started", runId: "run_ic" });
+    const body = {
+      action: "created",
+      repository: repo(),
+      issue: {
+        number: 7,
+        title: "Fix",
+        user: { login: "author-person" },
+        pull_request: { html_url: "https://github.com/acme/app/pull/7" },
+      },
+      comment: { id: 77, user: { login: "human", type: "User" }, body: "conversation feedback" },
+    };
+
+    const response = await makeApp()(makeRequest(body, "issue_comment"));
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ status: "dispatched", runId: "run_ic" });
+    expect(mockDispatchTriggerEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        triggerType: "trigger_pr_review",
+        pr: expect.objectContaining({
+          prNumber: 7,
+          review: expect.objectContaining({ state: "commented" }),
+        }),
+      }),
+      expect.anything(),
+    );
+    expect(mockDispatchPostPrGateWebhook).not.toHaveBeenCalled();
+  });
+
+  it("ignores an unrelated event without dispatching or gating", async () => {
+    const response = await makeApp()(makeRequest({ repository: repo() }, "workflow_run"));
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      status: "ignored",
+      reason: "event_workflow_run",
+      diagnosticId: "delivery-test",
+    });
     expect(mockDispatchTriggerEvent).not.toHaveBeenCalled();
     expect(mockDispatchPostPrGateWebhook).not.toHaveBeenCalled();
   });
@@ -398,5 +495,79 @@ describe("POST /webhooks/github", () => {
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({ status: "dispatched", runId: "run-x" });
     expect(mockDispatchTriggerEvent).toHaveBeenCalled();
+  });
+
+  it("returns the delivery header as the diagnosticId on a rejected event", async () => {
+    const response = await makeApp()(makeRequest({ repository: repo() }, "workflow_run"));
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      status: "ignored",
+      reason: "event_workflow_run",
+      diagnosticId: "delivery-test",
+    });
+  });
+
+  it("mints a uuid diagnosticId when the delivery header is absent", async () => {
+    const request = new Request("http://localhost/", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-hub-signature-256": "sha256=whatever",
+        "x-github-event": "workflow_run",
+      },
+      body: JSON.stringify({ repository: repo() }),
+    });
+
+    const response = await makeApp()(request);
+
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.reason).toBe("missing_delivery_id");
+    expect(body.diagnosticId).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+    );
+  });
+
+  it("carries the diagnosticId in the 401 error data on a signature failure", async () => {
+    mockVerifySignature.mockImplementationOnce(() => {
+      throw new Error("invalid signature");
+    });
+
+    const response = await makeApp()(makeRequest(pullRequestBody("opened")));
+
+    expect(response.status).toBe(401);
+    const body = await response.json();
+    expect(body.data).toEqual({ diagnosticId: "delivery-test" });
+  });
+
+  it("logs exactly one trigger_ingestion_rejected on a rejected request", async () => {
+    await makeApp()(makeRequest({ repository: repo() }, "workflow_run"));
+
+    const rejectedLogs = loggerInfo.mock.calls.filter(
+      ([, msg]) => msg === "trigger_ingestion_rejected",
+    );
+    expect(rejectedLogs).toHaveLength(1);
+    expect(rejectedLogs[0][0]).toMatchObject({
+      diagnosticId: "delivery-test",
+      provider: "github",
+      event: "workflow_run",
+      reason: "event_workflow_run",
+    });
+  });
+
+  it("does not log trigger_ingestion_rejected on a dispatched request", async () => {
+    mockDispatchTriggerEvent.mockResolvedValueOnce({ result: "started", runId: "run_ok" });
+
+    await makeApp()(makeRequest(reviewBody("commented"), "pull_request_review"));
+
+    const rejectedInfo = loggerInfo.mock.calls.filter(
+      ([, msg]) => msg === "trigger_ingestion_rejected",
+    );
+    const rejectedWarn = loggerWarn.mock.calls.filter(
+      ([, msg]) => msg === "trigger_ingestion_rejected",
+    );
+    expect(rejectedInfo).toHaveLength(0);
+    expect(rejectedWarn).toHaveLength(0);
   });
 });

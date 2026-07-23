@@ -337,6 +337,7 @@ describe("POST /webhooks/github edge cases", () => {
     await expect(response.json()).resolves.toEqual({
       status: "ignored",
       reason: "malformed_payload",
+      diagnosticId: "delivery-edge-test",
     });
     expect(mockDispatchTriggerEvent).not.toHaveBeenCalled();
   });
@@ -348,6 +349,7 @@ describe("POST /webhooks/github edge cases", () => {
     await expect(response.json()).resolves.toEqual({
       status: "ignored",
       reason: "malformed_payload",
+      diagnosticId: "delivery-edge-test",
     });
   });
 
@@ -360,6 +362,7 @@ describe("POST /webhooks/github edge cases", () => {
     await expect(response.json()).resolves.toEqual({
       status: "ignored",
       reason: "malformed_payload",
+      diagnosticId: "delivery-edge-test",
     });
     expect(mockDispatchTriggerEvent).not.toHaveBeenCalled();
   });
@@ -373,6 +376,7 @@ describe("POST /webhooks/github edge cases", () => {
     await expect(response.json()).resolves.toEqual({
       status: "ignored",
       reason: "event_check_run",
+      diagnosticId: "delivery-edge-test",
     });
     expect(mockDispatchTriggerEvent).not.toHaveBeenCalled();
   });
