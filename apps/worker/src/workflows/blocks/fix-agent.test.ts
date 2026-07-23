@@ -208,6 +208,41 @@ describe("fix_agent execute", () => {
     expectOutputConformsToRegistry("fix_agent", result.output!);
   });
 
+  it("compiles the v2 role prompt around runtime fix data before launch", async () => {
+    mocks.parseAgentOutput.mockReturnValue({
+      result: "implemented",
+      summary: "patched",
+    });
+    const compileEffectivePrompt = vi.fn().mockResolvedValue({
+      ok: true,
+      prompt: "COMPILED FIX PROMPT",
+    });
+
+    await execute(
+      makeNode("fix_agent", { instructions: "Focus on the failing test" }),
+      {},
+      makeCtx({ schemaVersion: 2 }),
+      {},
+      { compileEffectivePrompt },
+    );
+
+    expect(mocks.assembleFixContext).toHaveBeenCalledWith(
+      expect.not.objectContaining({ instructions: expect.anything() }),
+    );
+    expect(compileEffectivePrompt).toHaveBeenCalledWith({
+      blockPrompt: "Focus on the failing test",
+      runtimeData: "FIX INPUT",
+      sandboxId: "sbx-1",
+    });
+    expect(mocks.writeFiles).toHaveBeenCalledWith(
+      expect.arrayContaining([
+        expect.objectContaining({
+          content: Buffer.from("COMPILED FIX PROMPT"),
+        }),
+      ]),
+    );
+  });
+
   it("feeds pr_trigger failed checks and review into the fix context", async () => {
     mocks.parseAgentOutput.mockReturnValue({ result: "implemented" });
     const ctx = makeCtx({

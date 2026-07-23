@@ -4,12 +4,19 @@ import { useState, useMemo } from "react";
 import Link from "next/link";
 import type { FlowNodeDef } from "@/lib/flows";
 import type {
+  JsonValue,
   PromptSourceRef,
+  WorkflowAvailableValue,
   WorkflowBlockType,
   WorkflowEditorOptions,
   WorkflowParamValue,
 } from "@shared/contracts";
-import { DEFAULT_OPEN_PR_TITLE, DEFAULT_PROMPT_NAME_BY_AGENT } from "@shared/contracts";
+import {
+  BUILTIN_HARNESS_PROFILE_MANIFESTS,
+  DEFAULT_OPEN_PR_TITLE,
+  DEFAULT_PROMPT_NAME_BY_AGENT,
+  isHarnessProfileReference,
+} from "@shared/contracts";
 import { parseCondition } from "@shared/conditions";
 import {
   arrayToLines,
@@ -20,6 +27,8 @@ import {
 import { Listbox } from "@/components/cockpit/listbox";
 import { PromptField } from "./prompt-field";
 import { PromptEditor } from "@/components/cockpit/prompt-editor/prompt-editor";
+import { JsonSchemaEditor } from "./json-schema-editor";
+import { usePromptAuthoringContext } from "./prompt-authoring-context";
 
 /** The inspector change callback. Widened past WorkflowParamValue so PromptField
  *  can set/clear provenance refs under `promptRefs.<paramKey>` paths too. */
@@ -137,6 +146,36 @@ function TextArea({
   );
 }
 
+function OutputSchemaField({
+  node,
+  disabled,
+  onChange,
+}: {
+  node: FlowNodeDef;
+  disabled: boolean;
+  onChange: ConfigChange;
+}) {
+  return (
+    <ConfigField label="Output schema">
+      <JsonSchemaEditor
+        label={`${node.name ?? node.id} output schema`}
+        value={str(node.params.outputSchema)}
+        disabled={disabled}
+        onChange={(value) => onChange("params.outputSchema", value)}
+        onDialectChange={
+          node.v2
+            ? (dialect) => {
+                if (node.v2?.configuration.outputSchemaDialect !== dialect) {
+                  onChange("params.outputSchemaDialect", dialect);
+                }
+              }
+            : undefined
+        }
+      />
+    </ConfigField>
+  );
+}
+
 /** Rich text (Tiptap) surface for prose params: Slack messages, comment bodies.
  *  Reuses the prompt editor so these fields match the Prompt Library editor and
  *  get {{variable}} insertion + highlighting for free. Markdown is the stored
@@ -145,11 +184,19 @@ function RichTextField({
   value,
   disabled,
   minHeightClass,
+  authoringMode = "v1",
+  availableValues = [],
+  compact,
+  singleLine,
   onChange,
 }: {
   value: string;
   disabled: boolean;
   minHeightClass?: string;
+  authoringMode?: "v1" | "v2";
+  availableValues?: readonly WorkflowAvailableValue[];
+  compact?: boolean;
+  singleLine?: boolean;
   onChange: (v: string) => void;
 }) {
   return (
@@ -157,8 +204,85 @@ function RichTextField({
       value={value}
       disabled={disabled}
       minHeightClass={minHeightClass ?? "min-h-[96px]"}
+      authoringMode={authoringMode}
+      availableValues={availableValues}
+      compact={compact}
+      singleLine={singleLine}
       onChange={onChange}
     />
+  );
+}
+
+function CanonicalQuestionsField({
+  value,
+  disabled,
+  availableValues,
+  onChange,
+}: {
+  value: WorkflowParamValue | undefined;
+  disabled: boolean;
+  availableValues: readonly WorkflowAvailableValue[];
+  onChange: (value: string[] | undefined) => void;
+}) {
+  const questions = Array.isArray(value)
+    ? value.filter((question): question is string => typeof question === "string")
+    : [];
+  const visibleQuestions = questions.length > 0 ? questions : [""];
+  const update = (index: number, question: string) => {
+    const next = [...visibleQuestions];
+    next[index] = question;
+    onChange(next.some((candidate) => candidate.trim().length > 0) ? next : undefined);
+  };
+
+  return (
+    <div className="flex flex-col gap-2">
+      {visibleQuestions.map((question, index) => (
+        <div
+          key={`${index}:${visibleQuestions.length}`}
+          className="flex items-start gap-1.5"
+        >
+          <div className="min-w-0 flex-1">
+            <PromptEditor
+              value={question}
+              disabled={disabled}
+              authoringMode="v2"
+              availableValues={availableValues}
+              minHeightClass="min-h-[54px]"
+              compact
+              onChange={(next) => update(index, next)}
+            />
+          </div>
+          {visibleQuestions.length > 1 && (
+            <button
+              type="button"
+              disabled={disabled}
+              aria-label={`Remove question ${index + 1}`}
+              onClick={() => {
+                const next = visibleQuestions.filter(
+                  (_, candidate) => candidate !== index,
+                );
+                onChange(
+                  next.some((candidate) => candidate.trim().length > 0)
+                    ? next
+                    : undefined,
+                );
+              }}
+              className="appearance-none rounded-xs border border-neutral-200 bg-panel px-2 py-1 font-mono text-[9px] uppercase tracking-[0.04em] text-red-700 disabled:opacity-40"
+            >
+              Remove
+            </button>
+          )}
+        </div>
+      ))}
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={() => onChange([...visibleQuestions, ""])}
+        className="self-start appearance-none rounded-xs border border-mariner bg-panel px-2 py-1 font-mono text-[9px] uppercase tracking-[0.04em] text-mariner disabled:opacity-40"
+      >
+        + Add question
+      </button>
+    </div>
   );
 }
 
@@ -368,6 +492,61 @@ function AgentProviderModel({
   canEdit: boolean;
   onChange: ConfigChange;
 }) {
+  const promptAuthoring = usePromptAuthoringContext();
+  if (node.v2) {
+    const configured = node.v2.configuration.harnessProfile;
+    const reference = isHarnessProfileReference(configured)
+      ? configured
+      : null;
+    const manifests = Object.values(BUILTIN_HARNESS_PROFILE_MANIFESTS);
+    const selected =
+      manifests.find(
+        (manifest) =>
+          manifest.profileId === reference?.profileId &&
+          manifest.version === reference.version,
+      ) ??
+      manifests.find(
+        (manifest) =>
+          manifest.harness.provider ===
+          (node.params.provider === "codex" ? "codex" : "claude"),
+      ) ??
+      manifests[0]!;
+    return (
+      <>
+        <ConfigField label="Harness profile">
+          <Listbox
+            options={manifests.map((manifest) => ({
+              value: manifest.profileId,
+              label: `${manifest.displayName} · v${manifest.version}`,
+            }))}
+            value={selected.profileId}
+            disabled={!canEdit || promptAuthoring === null}
+            ariaLabel="Harness profile"
+            onChange={(profileId) => {
+              const manifest = manifests.find(
+                (candidate) => candidate.profileId === profileId,
+              );
+              if (!manifest || !promptAuthoring) return;
+              const configuration: Record<string, JsonValue> = {
+                ...node.v2!.configuration,
+                harnessProfile: {
+                  profileId: manifest.profileId,
+                  version: manifest.version,
+                },
+              };
+              delete configuration.provider;
+              delete configuration.model;
+              promptAuthoring.onV2ConfigurationChange(configuration);
+            }}
+          />
+        </ConfigField>
+        <ConfigNote>
+          {selected.harness.provider === "codex" ? "Codex" : "Claude"}{" "}
+          {selected.model.id} · pinned profile version {selected.version}
+        </ConfigNote>
+      </>
+    );
+  }
   const provider = str(node.params.provider);
   return (
     <>
@@ -473,6 +652,11 @@ export function ConfigFields({
   canEdit: boolean;
   onChange: ConfigChange;
 }) {
+  const promptAuthoring = usePromptAuthoringContext();
+  const proseAuthoringMode = node.v2 ? "v2" : "v1";
+  const proseValues = node.v2
+    ? (promptAuthoring?.availableValues ?? [])
+    : [];
   switch (node.type) {
     case "trigger_ticket_ai":
       return <ConfigNote>Fires when a Jira ticket enters the AI column.</ConfigNote>;
@@ -626,9 +810,7 @@ export function ConfigFields({
             disabled={!canEdit}
             onChange={onChange}
           />
-          <ConfigField label="Output schema">
-            <TextArea value={str(node.params.outputSchema)} disabled={!canEdit} mono onChange={(v) => onChange("params.outputSchema", v)} />
-          </ConfigField>
+          <OutputSchemaField node={node} disabled={!canEdit} onChange={onChange} />
         </>
       );
     case "call_llm":
@@ -639,6 +821,7 @@ export function ConfigFields({
             paramKey="prompt"
             node={node}
             disabled={!canEdit}
+            agentPromptAuthoring={false}
             onChange={onChange}
           />
           <PromptField
@@ -646,14 +829,13 @@ export function ConfigFields({
             paramKey="system"
             node={node}
             disabled={!canEdit}
+            agentPromptAuthoring={false}
             onChange={onChange}
           />
           <ConfigField label="Model">
             <TextInput value={str(node.params.model)} disabled={!canEdit} onChange={(v) => onChange("params.model", v)} />
           </ConfigField>
-          <ConfigField label="Output schema">
-            <TextArea value={str(node.params.outputSchema)} disabled={!canEdit} mono onChange={(v) => onChange("params.outputSchema", v)} />
-          </ConfigField>
+          <OutputSchemaField node={node} disabled={!canEdit} onChange={onChange} />
         </>
       );
     case "prepare_workspace":
@@ -694,22 +876,39 @@ export function ConfigFields({
       return (
         <>
           <ConfigField label="Title">
-            <TextInput
-              value={str(node.params.title)}
-              disabled={!canEdit}
-              placeholder={DEFAULT_OPEN_PR_TITLE}
-              onChange={(v) => onChange("params.title", v)}
-            />
+            {node.v2 ? (
+              <RichTextField
+                value={str(node.params.title)}
+                disabled={!canEdit}
+                authoringMode="v2"
+                availableValues={proseValues}
+                minHeightClass="min-h-[42px]"
+                compact
+                singleLine
+                onChange={(v) => onChange("params.title", v)}
+              />
+            ) : (
+              <TextInput
+                value={str(node.params.title)}
+                disabled={!canEdit}
+                placeholder={DEFAULT_OPEN_PR_TITLE}
+                onChange={(v) => onChange("params.title", v)}
+              />
+            )}
           </ConfigField>
           <ConfigField label="Description">
             <RichTextField
               value={str(node.params.body)}
               disabled={!canEdit}
+              authoringMode={proseAuthoringMode}
+              availableValues={proseValues}
               onChange={(v) => onChange("params.body", v)}
             />
           </ConfigField>
           <ConfigNote>
-            {"Templates for the pull request opened on the ticket branch. Variables like {{ticket_key}}, {{ticket_title}}, {{ticket_url}} (issue tracker link) and {{change_summary}} (what the agent changed) are substituted at run time. Leave a field empty to use the default."}
+            {node.v2
+              ? "Use the Value picker to insert data guaranteed to be available at this step. Leave a field empty to use the default."
+              : "Templates for the pull request opened on the ticket branch. Variables like {{ticket_key}}, {{ticket_title}}, {{ticket_url}} (issue tracker link) and {{change_summary}} (what the agent changed) are substituted at run time. Leave a field empty to use the default."}
           </ConfigNote>
         </>
       );
@@ -731,6 +930,8 @@ export function ConfigFields({
           <RichTextField
             value={str(node.params.body)}
             disabled={!canEdit}
+            authoringMode={proseAuthoringMode}
+            availableValues={proseValues}
             onChange={(v) => onChange("params.body", v)}
           />
         </ConfigField>
@@ -742,6 +943,8 @@ export function ConfigFields({
             <RichTextField
               value={str(node.params.body)}
               disabled={!canEdit}
+              authoringMode={proseAuthoringMode}
+              availableValues={proseValues}
               onChange={(v) => onChange("params.body", v)}
             />
           </ConfigField>
@@ -779,12 +982,16 @@ export function ConfigFields({
             <RichTextField
               value={str(node.params.message)}
               disabled={!canEdit}
+              authoringMode={proseAuthoringMode}
+              availableValues={proseValues}
               onChange={(v) => onChange("params.message", v)}
             />
           </ConfigField>
           <ConfigNote>
             {sendOn === "always"
-              ? "Posts your message as a standalone note in the ticket thread whenever this block runs. Add {{pr_url}} if you want a PR link."
+              ? node.v2
+                ? "Posts your message as a standalone note in the ticket thread whenever this block runs. Use the Value picker to add a PR link when one is available."
+                : "Posts your message as a standalone note in the ticket thread whenever this block runs. Add {{pr_url}} if you want a PR link."
               : "Appends your message under the PR ready card, only after a pull request is published."}
           </ConfigNote>
         </>
@@ -793,13 +1000,22 @@ export function ConfigFields({
     case "human_question":
       return (
         <ConfigField label="Questions">
-          <ArrayTextarea
-            key={`${node.id}:questions`}
-            value={node.params.questions}
-            disabled={!canEdit}
-            placeholder="One question per line"
-            onChange={(v) => onChange("params.questions", v)}
-          />
+          {node.v2 ? (
+            <CanonicalQuestionsField
+              value={node.params.questions}
+              disabled={!canEdit}
+              availableValues={proseValues}
+              onChange={(v) => onChange("params.questions", v)}
+            />
+          ) : (
+            <ArrayTextarea
+              key={`${node.id}:questions`}
+              value={node.params.questions}
+              disabled={!canEdit}
+              placeholder="One question per line"
+              onChange={(v) => onChange("params.questions", v)}
+            />
+          )}
         </ConfigField>
       );
     case "send_plan_approval":
@@ -883,6 +1099,8 @@ export function ConfigFields({
             <RichTextField
               value={str(node.params.postComment)}
               disabled={!canEdit}
+              authoringMode={proseAuthoringMode}
+              availableValues={proseValues}
               onChange={(v) => onChange("params.postComment", v)}
             />
           </ConfigField>

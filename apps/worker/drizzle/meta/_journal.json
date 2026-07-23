@@ -155,6 +155,13 @@
       "when": 1784572984693,
       "tag": "0021_common_kingpin",
       "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1784793105493,
+      "tag": "0022_prompt_slots",
+      "breakpoints": true
     }
   ]
 }

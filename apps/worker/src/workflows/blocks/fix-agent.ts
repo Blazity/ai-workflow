@@ -185,6 +185,7 @@ async function buildFixInput(
   block: WorkflowDefinitionNode,
   ctx: EngineCtx,
   reviewFeedback: ReviewFeedback | undefined,
+  includeInstructions = true,
 ): Promise<string> {
   const { assembleFixContext } = await import("../../sandbox/context.js");
 
@@ -212,7 +213,9 @@ async function buildFixInput(
   prComments = appendReviewFeedbackComment(prComments, reviewFeedback);
 
   const instructions =
-    typeof block.params.instructions === "string" && block.params.instructions.trim().length > 0
+    includeInstructions &&
+    typeof block.params.instructions === "string" &&
+    block.params.instructions.trim().length > 0
       ? block.params.instructions.trim()
       : undefined;
 
@@ -267,7 +270,25 @@ export const execute: BlockExecuteFn = async (
       });
     }
     const before = await inspectFixWorkspace(sandboxId);
-    const input = await buildFixInput(block, ctx, reviewFeedback.value);
+    let input = await buildFixInput(
+      block,
+      ctx,
+      reviewFeedback.value,
+      execution?.compileEffectivePrompt === undefined,
+    );
+    if (execution?.compileEffectivePrompt) {
+      const authoredInstructions =
+        typeof block.params.instructions === "string"
+          ? block.params.instructions
+          : "";
+      const compiled = await execution.compileEffectivePrompt({
+        blockPrompt: authoredInstructions,
+        runtimeData: input,
+        sandboxId,
+      });
+      if (!compiled.ok) return compiled.result;
+      input = compiled.prompt;
+    }
     const { AGENT_SCHEMA } = await import("../../sandbox/agents/types.js");
 
     const guard = await blockFixAgentCommitGuardStep(sandboxId, kind, true);

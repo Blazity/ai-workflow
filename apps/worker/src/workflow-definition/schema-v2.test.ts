@@ -413,6 +413,42 @@ describe("Workflow Definition v2 schema", () => {
     ]);
   });
 
+  it("accepts canonical JSON Schema dialect metadata without passing it to the block", () => {
+    const definition = v2Definition();
+    definition.nodes.push({
+      id: "agent",
+      type: "generic_agent",
+      x: 100,
+      y: 20,
+      configuration: {
+        prompt: "Return a result",
+        outputSchemaDialect:
+          "https://json-schema.org/draft/2020-12/schema",
+        outputSchema: JSON.stringify({
+          type: "object",
+          properties: { result: { type: "string" } },
+          required: ["result"],
+          additionalProperties: false,
+        }),
+        workspaceMode: "none",
+      },
+      inputs: {},
+      additionalInputs: [],
+    });
+    definition.edges.push({
+      id: "ticket-agent",
+      from: "ticket",
+      to: "agent",
+    });
+
+    expect(
+      validateWorkflowDefinitionIssuesForDeployment(
+        definition,
+        registryContext,
+      ),
+    ).toEqual([]);
+  });
+
   it("requires exact CI check names for v2 failed-check triggers", () => {
     const definition = v2Definition();
     definition.nodes[0] = {

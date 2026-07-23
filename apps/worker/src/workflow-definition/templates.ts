@@ -1,20 +1,259 @@
 import type {
-  WorkflowDefinitionV1,
-  WorkflowDefinitionEdge,
-  WorkflowDefinitionNode,
+  HarnessProvider,
   WorkflowDefinitionTemplate,
+  WorkflowDefinitionV2,
 } from "@shared/contracts";
-import { defaultWorkflowDefinition } from "./default.js";
 import {
-  buildEdge,
-  buildNode,
-  planApprovalDefinition,
-  prReviewFixDefinition,
-} from "./graph-fixtures.js";
+  buildBuiltinV2Definition,
+  builtinHarnessProfileConfiguration,
+  defaultWorkflowDefinitionV2,
+  type V2BlockSpec,
+} from "./default.js";
 
 export const DEFAULT_WORKFLOW_TEMPLATE_ID = "ticket-workflow";
 
-function fullyModularDefinition(): WorkflowDefinitionV1 {
+interface TemplateOptions {
+  includeReview: boolean;
+  provider?: HarnessProvider;
+}
+
+function humanApprovedPlanDefinition(
+  provider: HarnessProvider,
+): WorkflowDefinitionV2 {
+  const profile = () => builtinHarnessProfileConfiguration(provider);
+  const specs: V2BlockSpec[] = [
+    {
+      id: "trigger-ticket",
+      type: "trigger_ticket_ai",
+      name: "Ticket assigned to AI",
+      column: 0,
+      row: 0,
+    },
+    {
+      id: "prepare-plan",
+      type: "prepare_workspace",
+      name: "Prepare planning workspace",
+      column: 1,
+      row: 0,
+    },
+    {
+      id: "planning",
+      type: "planning_agent",
+      name: "Planning agent",
+      column: 2,
+      row: 0,
+      configuration: {
+        ...profile(),
+        prompt: "{{prompt:research-plan@1}}",
+      },
+      inputs: {
+        ticket: {
+          kind: "reference",
+          reference: "steps.entry.output.ticket",
+        },
+        comments: {
+          kind: "reference",
+          reference: "steps.entry.output.comments",
+        },
+        priorAnswers: {
+          kind: "reference",
+          reference: "steps.entry.output.priorAnswers",
+        },
+      },
+    },
+    {
+      id: "send-approval",
+      type: "send_plan_approval",
+      name: "Send plan for approval",
+      column: 3,
+      row: 0,
+      inputs: {
+        plan: {
+          kind: "reference",
+          reference: "steps.planning.output.plan",
+        },
+      },
+    },
+    {
+      id: "trigger-approved",
+      type: "trigger_plan_approved",
+      name: "Plan approved",
+      column: 0,
+      row: 1,
+    },
+    {
+      id: "prepare-implementation",
+      type: "prepare_workspace",
+      name: "Prepare implementation workspace",
+      column: 1,
+      row: 1,
+    },
+    {
+      id: "implementation",
+      type: "implementation_agent",
+      name: "Implementation agent",
+      column: 2,
+      row: 1,
+      configuration: {
+        ...profile(),
+        prompt: "{{prompt:implement@1}}",
+      },
+      inputs: {
+        ticket: {
+          kind: "reference",
+          reference: "steps.entry.output.ticket",
+        },
+        plan: {
+          kind: "reference",
+          reference: "steps.entry.output.approvedPlan",
+        },
+      },
+    },
+    {
+      id: "checks",
+      type: "run_pre_pr_checks",
+      name: "Run pre-PR checks",
+      column: 3,
+      row: 1,
+    },
+    {
+      id: "finalize",
+      type: "finalize_workspace",
+      name: "Finalize workspace",
+      column: 4,
+      row: 1,
+    },
+    {
+      id: "open-pr",
+      type: "open_pr",
+      name: "Open pull request",
+      column: 5,
+      row: 1,
+      inputs: {
+        repositories: {
+          kind: "reference",
+          reference: "steps.finalize.output.repositories",
+        },
+      },
+    },
+    {
+      id: "status",
+      type: "update_ticket_status",
+      name: "Update ticket status",
+      column: 6,
+      row: 1,
+      configuration: { target: "ai_review" },
+    },
+  ];
+  return buildBuiltinV2Definition("human-approved-plan", specs, [
+    { from: "trigger-ticket", to: "prepare-plan" },
+    { from: "prepare-plan", to: "planning" },
+    { from: "planning", to: "send-approval" },
+    { from: "trigger-approved", to: "prepare-implementation" },
+    { from: "prepare-implementation", to: "implementation" },
+    { from: "implementation", to: "checks" },
+    { from: "checks", to: "finalize" },
+    { from: "finalize", to: "open-pr" },
+    { from: "open-pr", to: "status" },
+  ]);
+}
+
+function reviewFixAfterPrDefinition(
+  provider: HarnessProvider,
+): WorkflowDefinitionV2 {
+  const specs: V2BlockSpec[] = [
+    {
+      id: "trigger-checks-failed",
+      type: "trigger_pr_checks_failed",
+      name: "PR checks failed",
+      column: 0,
+      row: 0,
+      configuration: {
+        providers: ["github", "gitlab"],
+        scope: "workflow_owned",
+        checkNames: ["CI"],
+        githubAppSlugs: ["github-actions"],
+        gitlabPipelineSources: ["merge_request_event"],
+      },
+    },
+    {
+      id: "trigger-review",
+      type: "trigger_pr_review",
+      name: "PR review submitted",
+      column: 0,
+      row: 1,
+      configuration: {
+        providers: ["github"],
+        on: ["changes_requested"],
+        scope: "workflow_owned",
+      },
+    },
+    {
+      id: "prepare",
+      type: "prepare_workspace",
+      name: "Prepare workspace",
+      column: 1,
+      row: 0,
+    },
+    {
+      id: "fetch-context",
+      type: "fetch_pr_context",
+      name: "Fetch PR context",
+      column: 2,
+      row: 0,
+    },
+    {
+      id: "fix",
+      type: "fix_agent",
+      name: "Fix agent",
+      column: 3,
+      row: 0,
+      configuration: {
+        ...builtinHarnessProfileConfiguration(provider),
+        instructions:
+          "Resolve the fetched pull-request review feedback or failing checks, verify the fix, and commit the resulting changes.",
+      },
+    },
+    {
+      id: "checks",
+      type: "run_pre_pr_checks",
+      name: "Run pre-PR checks",
+      column: 4,
+      row: 0,
+    },
+    {
+      id: "finalize",
+      type: "finalize_workspace",
+      name: "Finalize workspace",
+      column: 5,
+      row: 0,
+    },
+    {
+      id: "comment",
+      type: "post_pr_comment",
+      name: "Post PR comment",
+      column: 6,
+      row: 0,
+      configuration: {
+        body: "Automated fix pushed. Please re-review.",
+        target: "all",
+      },
+    },
+  ];
+  return buildBuiltinV2Definition("review-fix-after-pr", specs, [
+    { from: "trigger-checks-failed", to: "prepare" },
+    { from: "trigger-review", to: "prepare" },
+    { from: "prepare", to: "fetch-context" },
+    { from: "fetch-context", to: "fix" },
+    { from: "fix", to: "checks" },
+    { from: "checks", to: "finalize" },
+    { from: "finalize", to: "comment" },
+  ]);
+}
+
+function fullyModularDefinition(
+  provider: HarnessProvider,
+): WorkflowDefinitionV2 {
   const planningOutput = JSON.stringify({
     type: "object",
     properties: { plan: { type: "string" } },
@@ -27,122 +266,163 @@ function fullyModularDefinition(): WorkflowDefinitionV1 {
     required: ["summary"],
     additionalProperties: false,
   });
-  const nodes: WorkflowDefinitionNode[] = [
-    buildNode({ id: "trigger", type: "trigger_ticket_ai", name: "Ticket assigned to AI" }, 0),
-    buildNode(
-      {
-        id: "planning",
-        type: "generic_agent",
-        name: "Generic agent — planning",
-        params: {
-          prompt: "Produce an implementation plan for this ticket.",
-          outputSchema: planningOutput,
-          workspaceMode: "none",
+  const specs: V2BlockSpec[] = [
+    {
+      id: "trigger",
+      type: "trigger_ticket_ai",
+      name: "Ticket assigned to AI",
+      column: 0,
+    },
+    {
+      id: "prepare",
+      type: "prepare_workspace",
+      name: "Prepare workspace",
+      column: 1,
+    },
+    {
+      id: "planning",
+      type: "generic_agent",
+      name: "Generic agent — planning",
+      column: 2,
+      configuration: {
+        ...builtinHarnessProfileConfiguration(provider),
+        prompt: "Produce an implementation plan for this ticket.",
+        outputSchema: planningOutput,
+        outputSchemaDialect:
+          "https://json-schema.org/draft/2020-12/schema",
+        workspaceMode: "none",
+      },
+    },
+    {
+      id: "implementation",
+      type: "generic_agent",
+      name: "Generic agent — implementation",
+      column: 3,
+      configuration: {
+        ...builtinHarnessProfileConfiguration(provider),
+        prompt:
+          "Implement this plan in the prepared workspace:\n\n{{data:steps.planning.output.plan}}",
+        outputSchema: implementationOutput,
+        outputSchemaDialect:
+          "https://json-schema.org/draft/2020-12/schema",
+        workspaceMode: "read_write",
+      },
+    },
+    {
+      id: "checks",
+      type: "run_checks",
+      name: "Run checks",
+      column: 4,
+      configuration: { commands: [] },
+    },
+    {
+      id: "checks-passed",
+      type: "branch",
+      name: "Checks passed?",
+      column: 5,
+      configuration: {
+        condition: {
+          kind: "eq",
+          left: {
+            kind: "path",
+            reference: "steps.checks.output.outcome",
+          },
+          right: { kind: "lit", value: "passed" },
         },
       },
-      1,
-    ),
-    buildNode({ id: "prepare", type: "prepare_workspace", name: "Prepare workspace" }, 2),
-    buildNode(
-      {
-        id: "implementation",
-        type: "generic_agent",
-        name: "Generic agent — implementation",
-        params: { outputSchema: implementationOutput, workspaceMode: "read_write" },
-        inputs: { prompt: "steps.planning.output.plan" },
+    },
+    {
+      id: "finalize",
+      type: "finalize_workspace",
+      name: "Finalize workspace",
+      column: 6,
+      row: -1,
+    },
+    {
+      id: "open-pr",
+      type: "open_pr",
+      name: "Open pull request",
+      column: 7,
+      row: -1,
+      inputs: {
+        repositories: {
+          kind: "reference",
+          reference: "steps.finalize.output.repositories",
+        },
       },
-      3,
-    ),
-    buildNode({ id: "checks", type: "run_checks", name: "Run checks" }, 4),
-    buildNode(
-      {
-        id: "checks_ok",
-        type: "branch",
-        name: "All checks pass?",
-        params: { condition: "steps.checks.output.ok" },
-      },
-      5,
-    ),
-    buildNode(
-      { id: "retry", type: "loop", name: "Retry fixes", params: { maxAttempts: 3, onExhaust: "fail" } },
-      5,
-      1,
-    ),
-    buildNode({ id: "fix", type: "fix_agent", name: "Fix agent" }, 4, 1),
-    buildNode({ id: "finalize", type: "finalize_workspace", name: "Finalize workspace" }, 6),
-    buildNode(
-      {
-        id: "open_pr",
-        type: "open_pr",
-        name: "Open pull request",
-        inputs: { repositories: "steps.finalize.output.repositories" },
-      },
-      7,
-    ),
+    },
+    {
+      id: "checks-failed",
+      type: "terminate",
+      name: "Stop after failed checks",
+      column: 6,
+      row: 1,
+      configuration: { terminalStatus: "failed" },
+    },
   ];
-  const edges: WorkflowDefinitionEdge[] = [
-    buildEdge("trigger", "planning"),
-    buildEdge("planning", "prepare"),
-    buildEdge("prepare", "implementation"),
-    buildEdge("implementation", "checks"),
-    buildEdge("checks", "checks_ok"),
-    buildEdge("checks_ok", "finalize", "true"),
-    buildEdge("checks_ok", "retry", "false"),
-    buildEdge("retry", "fix", "continue"),
-    buildEdge("fix", "checks"),
-    buildEdge("finalize", "open_pr"),
-  ];
-  return { schemaVersion: 1, nodes, edges };
-}
-
-function reviewFixAfterPrDefinition(): WorkflowDefinitionV1 {
-  const definition = prReviewFixDefinition();
-  return {
-    ...definition,
-    nodes: definition.nodes.map((node) =>
-      node.type === "trigger_pr_checks_failed"
-        ? { ...node, params: { ...node.params, checkNames: ["CI"] } }
-        : node,
-    ),
-  };
+  return buildBuiltinV2Definition("fully-modular", specs, [
+    { from: "trigger", to: "prepare" },
+    { from: "prepare", to: "planning" },
+    { from: "planning", to: "implementation" },
+    { from: "implementation", to: "checks" },
+    { from: "checks", to: "checks-passed" },
+    {
+      from: "checks-passed",
+      fromPort: "true",
+      to: "finalize",
+    },
+    {
+      from: "checks-passed",
+      fromPort: "false",
+      to: "checks-failed",
+    },
+    { from: "finalize", to: "open-pr" },
+  ]);
 }
 
 export function workflowDefinitionTemplates({
   includeReview,
-}: {
-  includeReview: boolean;
-}): WorkflowDefinitionTemplate[] {
+  provider = "claude",
+}: TemplateOptions): WorkflowDefinitionTemplate[] {
   return [
     {
       id: DEFAULT_WORKFLOW_TEMPLATE_ID,
       name: "Ticket workflow",
-      description: "The current production delivery flow from ticket assignment through PR publication.",
-      definition: defaultWorkflowDefinition({ includeReview }),
+      description:
+        "The current production delivery flow from ticket assignment through PR publication.",
+      definition: defaultWorkflowDefinitionV2({ includeReview, provider }),
     },
     {
       id: "human-approved-plan",
       name: "Human-approved plan",
-      description: "Plans first, waits for approval, then implements the approved plan.",
-      definition: planApprovalDefinition(),
+      description:
+        "Plans first, waits for approval, then implements the approved plan.",
+      definition: humanApprovedPlanDefinition(provider),
     },
     {
       id: "review-fix-after-pr",
       name: "Review & fix after PR",
-      description: "Responds to failed checks or requested changes on workflow-owned pull requests.",
-      definition: reviewFixAfterPrDefinition(),
+      description:
+        "Responds to failed checks or requested changes on workflow-owned pull requests.",
+      definition: reviewFixAfterPrDefinition(provider),
     },
     {
       id: "fully-modular",
       name: "Fully modular",
-      description: "Builds delivery from generic agents, workspace, checks, branch, and loop blocks.",
-      definition: fullyModularDefinition(),
+      description:
+        "Builds delivery from generic agents, workspace, checks, and a visible Branch.",
+      definition: fullyModularDefinition(provider),
     },
   ];
 }
 
 export function workflowDefinitionTemplate(
   id: string,
-  options: { includeReview: boolean },
+  options: TemplateOptions,
 ): WorkflowDefinitionTemplate | null {
-  return workflowDefinitionTemplates(options).find((template) => template.id === id) ?? null;
+  return (
+    workflowDefinitionTemplates(options).find(
+      (template) => template.id === id,
+    ) ?? null
+  );
 }

@@ -183,6 +183,21 @@ export interface BlockExecutionContext {
   clarificationAnswer?: string;
   cancellation?: import("./invocation-context.js").V2InvocationCancellation;
   /**
+   * V2-only compiler seam. Agent executors call it after assembling the exact
+   * runtime context and workspace, immediately before launching the provider.
+   */
+  compileEffectivePrompt?: (input: {
+    blockPrompt: string;
+    runtimeData: string;
+    sandboxId: string | null;
+  }) => Promise<
+    | { ok: true; prompt: string }
+    | {
+        ok: false;
+        result: Extract<BlockExecutionResult, { kind: "execution_error" }>;
+      }
+  >;
+  /**
    * Definition-local, collision-free identity for runtime artifact names.
    * V1 omits it so existing phase names remain unchanged.
    */

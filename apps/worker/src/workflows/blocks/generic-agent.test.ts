@@ -201,6 +201,55 @@ describe("generic_agent execute", () => {
     expect(inputWrite.content.toString("utf8")).toContain("Human clarification answer:\nUse Redis");
   });
 
+  it("uses the v2 effective-prompt compiler immediately before launch", async () => {
+    mocks.collectPhase.mockResolvedValue({
+      stdout: "",
+      stderr: "",
+      structuredOutput: JSON.stringify({
+        status: "ok",
+        body: "continued",
+        questions: null,
+        error: null,
+      }),
+      exitCode: 0,
+    });
+    const compileEffectivePrompt = vi.fn().mockResolvedValue({
+      ok: true,
+      prompt: "COMPILED EFFECTIVE PROMPT",
+    });
+
+    await execute(
+      makeNode("generic_agent", {
+        prompt: "Authored prompt",
+        workspaceMode: "none",
+      }),
+      {},
+      makeCtx({
+        sandboxId: null,
+        agentSandboxIds: { claude: "scratch-1" },
+      } as never),
+      { plan: "Bound plan", count: 2 },
+      {
+        clarificationAnswer: "Use Redis",
+        compileEffectivePrompt,
+      },
+    );
+
+    expect(compileEffectivePrompt).toHaveBeenCalledWith({
+      blockPrompt: "Authored prompt",
+      runtimeData:
+        'Resolved inputs:\n{\n  "plan": "Bound plan",\n  "count": 2\n}\n\nHuman clarification answer:\nUse Redis',
+      sandboxId: "scratch-1",
+    });
+    expect(mocks.writeFiles).toHaveBeenCalledWith(
+      expect.arrayContaining([
+        expect.objectContaining({
+          content: Buffer.from("COMPILED EFFECTIVE PROMPT"),
+        }),
+      ]),
+    );
+  });
+
   it("provisions agent-only scratch on demand in none mode", async () => {
     mocks.collectPhase.mockResolvedValue({
       stdout: "",

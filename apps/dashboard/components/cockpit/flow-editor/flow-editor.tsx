@@ -16,6 +16,7 @@ import type {
   WorkflowAdditionalInputV2,
   WorkflowAvailableValue,
   WorkflowDefinitionV1,
+  WorkflowDefinitionV2,
   WorkflowDefinitionValidationIssue,
   WorkflowEditorOptions,
   WorkflowExecutionBudgets,
@@ -50,6 +51,7 @@ import { NODE_W, NODE_H, inPortPos, outPortPos, bezier } from "./ports";
 import type { Point } from "./ports";
 import { NodePalette, MobilePaletteList } from "./palette";
 import { ConfigFields } from "./config-fields";
+import { PromptAuthoringProvider } from "./prompt-authoring-context";
 import {
   BindingFields,
   updateInputBindings,
@@ -63,6 +65,7 @@ import { BranchFields } from "./branch-fields";
 import { instantiateWorkflowEditorBlockTemplate } from "@/lib/workflow-editor/block-templates";
 import type { WorkflowValidationState } from "@/lib/workflow-editor/validation-controller";
 import { removeNodeFromGraph } from "@/lib/workflow-editor/graph-edit";
+import { serializeWorkflowDefinition } from "@/lib/workflow-editor/serialize";
 import {
   setExecutionLimit,
   type WorkflowExecutionLimitKey,
@@ -839,6 +842,7 @@ export function FlowEditor({
   fitSignal,
   initialSelectedId,
   onSelectionChange,
+  definitionId,
 }: {
   nodes: FlowNodeDef[];
   edges: FlowEdgeDef[];
@@ -864,6 +868,7 @@ export function FlowEditor({
   fitSignal?: number;
   initialSelectedId?: string;
   onSelectionChange?: (nodeId: string | null) => void;
+  definitionId?: number;
 }) {
   const [selectedId, setSelectedId] = useState<string | null>(() =>
     initialSelectedId && nodes.some((n) => n.id === initialSelectedId) ? initialSelectedId : null,
@@ -919,6 +924,13 @@ export function FlowEditor({
           }
         : null,
     [edges, nodes, schemaVersion],
+  );
+  const previewDefinition = useMemo<WorkflowDefinitionV2 | null>(
+    () =>
+      schemaVersion === 2
+        ? serializeWorkflowDefinition(nodes, edges, limits, 2)
+        : null,
+    [edges, limits, nodes, schemaVersion],
   );
 
   const addNode = (item: PaletteItem, at?: Point) => {
@@ -1153,6 +1165,8 @@ export function FlowEditor({
             options={options}
             schemaVersion={schemaVersion}
             definition={bindingDefinition}
+            previewDefinition={previewDefinition}
+            definitionId={definitionId}
             nodeContracts={validation.nodeContracts}
             availableValues={validation.availableValuesByNode[selected.id] ?? []}
             validationIssues={groupedValidationIssues.byNode[selected.id] ?? []}
@@ -1178,6 +1192,8 @@ export function FlowEditor({
                 options={options}
                 schemaVersion={schemaVersion}
                 definition={bindingDefinition}
+                previewDefinition={previewDefinition}
+                definitionId={definitionId}
                 nodeContracts={validation.nodeContracts}
                 availableValues={validation.availableValuesByNode[selected.id] ?? []}
                 validationIssues={groupedValidationIssues.byNode[selected.id] ?? []}
@@ -1215,6 +1231,8 @@ function NodeConfig({
   options,
   schemaVersion,
   definition,
+  previewDefinition,
+  definitionId,
   nodeContracts,
   availableValues,
   validationIssues,
@@ -1231,6 +1249,8 @@ function NodeConfig({
   options: WorkflowEditorOptions;
   schemaVersion: 1 | 2;
   definition: WorkflowDefinitionV1 | null;
+  previewDefinition: WorkflowDefinitionV2 | null;
+  definitionId?: number;
   nodeContracts: WorkflowValidationState["nodeContracts"];
   availableValues: WorkflowAvailableValue[];
   validationIssues: WorkflowDefinitionValidationIssue[];
@@ -1279,12 +1299,28 @@ function NodeConfig({
       <div className="flex-1 overflow-auto">
         <NodeValidationErrors nodeId={node.id} issues={validationIssues} />
         {(schemaVersion === 1 || node.type !== "branch") && (
-          <ConfigFields
-            node={node}
-            options={options}
-            canEdit={canEdit}
-            onChange={onChange}
-          />
+          <PromptAuthoringProvider
+            availableValues={availableValues}
+            onV2ConfigurationChange={onV2ConfigurationChange}
+            previewCandidate={
+              schemaVersion === 2 &&
+              previewDefinition &&
+              definitionId !== undefined
+                ? {
+                    definitionId,
+                    definition: previewDefinition,
+                    blockId: node.id,
+                  }
+                : undefined
+            }
+          >
+            <ConfigFields
+              node={node}
+              options={options}
+              canEdit={canEdit}
+              onChange={onChange}
+            />
+          </PromptAuthoringProvider>
         )}
         {schemaVersion === 1 && definition ? (
           <BindingFields

@@ -12,7 +12,7 @@ import { workflowBlockRegistryContextFromEnv } from "../../../../workflow-defini
 import {
   saveWorkflowDefinitionDraft,
 } from "../../../../workflow-definition/store.js";
-import { validateWorkflowDefinitionCandidate } from "../../../../workflow-definition/validation.js";
+import { validateWorkflowDefinitionCandidateWithPromptAuthoring } from "../../../../workflow-definition/prompt-authoring.js";
 import {
   parseDefinitionId,
   serializeDefinitionMeta,
@@ -54,10 +54,11 @@ export default defineEventHandler(
       let validation: WorkflowDefinitionSaveResponse["validation"] = null;
       let validationError: string | null = null;
       try {
-        validation = validateWorkflowDefinitionCandidate(
+        validation = (await validateWorkflowDefinitionCandidateWithPromptAuthoring(
+          dbHandle,
           saved.draft,
           workflowBlockRegistryContextFromEnv(),
-        ).response;
+        )).response;
       } catch (validationFailure) {
         validationError = "Validation is temporarily unavailable. Your draft was saved.";
         logger.warn(

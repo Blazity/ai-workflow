@@ -67,6 +67,12 @@ import {
   VARIABLE_PARAM_KEYS,
   type PromptVariableValues,
 } from "./prompt-vars.js";
+import {
+  compatibilityPromptSourceForV2Node,
+  compileEffectivePrompt,
+  resolveProfileInstructions,
+} from "./effective-prompt.js";
+import { loadInvocationRepositoryInstructionSources } from "./repository-instructions.js";
 import type { HumanDecision } from "../lib/human-decisions-memory.js";
 import type { WorkspacePublicationResult } from "./workspace-publication.js";
 import {
@@ -142,12 +148,19 @@ const promptOverride = (node: WorkflowDefinitionNode): string | undefined => {
 export function resolveV2PromptDataConfiguration(
   node: WorkflowDefinitionV2Node,
   context: V2BindingResolutionContext,
+  options: { preserveAgentPromptSource?: boolean } = {},
 ): WorkflowDefinitionV2Node["configuration"] {
   const keys = VARIABLE_PARAM_KEYS[node.type];
   if (!keys) return node.configuration;
   let changed = false;
   const configuration = { ...node.configuration };
   for (const key of keys) {
+    if (
+      options.preserveAgentPromptSource &&
+      isV2AgentPromptField(node.type, key)
+    ) {
+      continue;
+    }
     const value = node.configuration[key];
     if (typeof value === "string") {
       const resolved = resolveWorkflowPromptDataTokensV2(value, context);
@@ -171,6 +184,50 @@ export function resolveV2PromptDataConfiguration(
     }
   }
   return changed ? configuration : node.configuration;
+}
+
+export function v2NonAgentPromptPlaceholderIssue(
+  type: WorkflowBlockType,
+  configuration: Readonly<Record<string, unknown>>,
+): string | null {
+  for (const field of VARIABLE_PARAM_KEYS[type] ?? []) {
+    if (isV2AgentPromptField(type, field)) continue;
+    const value = configuration[field];
+    const values = typeof value === "string"
+      ? [value]
+      : Array.isArray(value)
+        ? value.filter((item): item is string => typeof item === "string")
+        : [];
+    if (values.some((item) => item.includes("{{") || item.includes("}}"))) {
+      return `${type} ${field} contains an unresolved placeholder.`;
+    }
+  }
+  return null;
+}
+
+export function substituteNodePromptParamsForSchema(
+  rawNode: WorkflowDefinitionNode,
+  variables: PromptVariableValues,
+  schemaVersion: 1 | 2,
+): WorkflowDefinitionNode {
+  return schemaVersion === 2
+    ? rawNode
+    : substituteNodePromptParams(rawNode, variables);
+}
+
+function isV2AgentPromptField(
+  type: WorkflowBlockType,
+  key: string,
+): boolean {
+  return (
+    (
+      type === "planning_agent" ||
+      type === "implementation_agent" ||
+      type === "review_agent" ||
+      type === "generic_agent"
+    ) &&
+    key === "prompt"
+  ) || (type === "fix_agent" && key === "instructions");
 }
 
 export function v2OpenPrRepositoriesProvenanceIssue(input: {
@@ -1723,7 +1780,10 @@ async function agentWorkflowBody(
   };
 
   const { resolvePromptReferencesForRun } = await import("./prompt-references-step.js");
-  const resolvedPrompts = await resolvePromptReferencesForRun(plan.nodes);
+  const resolvedPrompts = await resolvePromptReferencesForRun(
+    plan.nodes,
+    plan.schemaVersion,
+  );
   plan.nodes = resolvedPrompts.nodes;
   if (plan.schemaVersion === 2) {
     const definition = plan.definition as WorkflowDefinitionV2;
@@ -1732,12 +1792,18 @@ async function agentWorkflowBody(
     );
     plan.definition = {
       ...definition,
-      nodes: definition.nodes.map((node) => ({
-        ...node,
-        configuration: structuredClone(
-          resolvedConfigurationByNodeId.get(node.id) ?? node.configuration,
-        ),
-      })),
+      nodes: definition.nodes.map((node) => {
+        const resolved = resolvedConfigurationByNodeId.get(node.id);
+        if (!resolved) return node;
+        const configuration = structuredClone(node.configuration);
+        for (const key of VARIABLE_PARAM_KEYS[node.type] ?? []) {
+          const value = resolved[key];
+          if (value !== undefined) {
+            configuration[key] = structuredClone(value);
+          }
+        }
+        return { ...node, configuration };
+      }),
     } as WorkflowDefinitionV2;
   }
 
@@ -2305,7 +2371,11 @@ async function agentWorkflowBody(
         // Substitute {{variables}} into prompt-bearing params per execution: the
         // run context (research plan, publication, selected repos) mutates
         // mid-run, so each block sees the values current at its turn.
-        const node = substituteNodePromptParams(rawNode, buildPromptVariables(ctx));
+        const node = substituteNodePromptParamsForSchema(
+          rawNode,
+          buildPromptVariables(ctx),
+          ctx.schemaVersion,
+        );
         await materializeHumanDecisions();
         if (
           node.type === "implementation_agent" ||
@@ -2372,14 +2442,31 @@ async function agentWorkflowBody(
 
             const { paths: researchPaths, script: researchScript } =
               await planPhaseStep(kind, researchArtifactPhase, model, RESEARCH_SCHEMA);
-            const researchInput = assembleResearchPlanContext({
+            const researchContext = {
               ticket: resolveAgentTicketInput(resolvedInputs, ticketData),
-              prompt: promptOverride(node) ?? prompts.research,
               branchName,
               attachments: downloadedAttachments,
               preSandboxAdditions: ctx.preSandboxAdditions.research,
               repositoryContexts: ctx.repositoryContexts,
-            });
+            };
+            let researchInput: string;
+            if (execution?.compileEffectivePrompt) {
+              const compiled = await execution.compileEffectivePrompt({
+                blockPrompt: promptOverride(node) ?? "",
+                runtimeData: assembleResearchPlanContext({
+                  ...researchContext,
+                  prompt: "",
+                }),
+                sandboxId,
+              });
+              if (!compiled.ok) return compiled.result;
+              researchInput = compiled.prompt;
+            } else {
+              researchInput = assembleResearchPlanContext({
+                ...researchContext,
+                prompt: promptOverride(node) ?? prompts.research,
+              });
+            }
 
             const researchLaunch = await writeAndStartPhase(
               sandboxId, kind, researchArtifactPhase,
@@ -2469,9 +2556,8 @@ async function agentWorkflowBody(
 
             const { paths: implPaths, script: implScript } =
               await planPhaseStep(kind, implementationArtifactPhase, model, AGENT_SCHEMA);
-            const implInput = assembleImplementationContext({
+            const implementationContext = {
               ticket: resolveAgentTicketInput(resolvedInputs, ticketData),
-              prompt: promptOverride(node) ?? prompts.implement,
               researchPlanMarkdown: resolveImplementationPlanInput(
                 resolvedInputs,
                 ctx.researchPlanMarkdown,
@@ -2480,7 +2566,25 @@ async function agentWorkflowBody(
               preSandboxAdditions: ctx.preSandboxAdditions.implementation,
               selectedRepositories: ctx.selectedRepositories,
               repositoryContexts: ctx.repositoryContexts,
-            });
+            };
+            let implInput: string;
+            if (execution?.compileEffectivePrompt) {
+              const compiled = await execution.compileEffectivePrompt({
+                blockPrompt: promptOverride(node) ?? "",
+                runtimeData: assembleImplementationContext({
+                  ...implementationContext,
+                  prompt: "",
+                }),
+                sandboxId,
+              });
+              if (!compiled.ok) return compiled.result;
+              implInput = compiled.prompt;
+            } else {
+              implInput = assembleImplementationContext({
+                ...implementationContext,
+                prompt: promptOverride(node) ?? prompts.implement,
+              });
+            }
 
             const implLaunch = await writeAndStartPhase(
               sandboxId, kind, implementationArtifactPhase,
@@ -2615,9 +2719,8 @@ async function agentWorkflowBody(
             try {
               const { paths: reviewPaths, script: reviewScript } =
                 await planPhaseStep(kind, reviewArtifactPhase, model, REVIEW_SCHEMA);
-              const reviewInput = assembleReviewContext({
+              const reviewContext = {
                 ticket: ticketData,
-                prompt: promptOverride(node) ?? prompts.review,
                 researchPlanMarkdown: ctx.researchPlanMarkdown,
                 ...(reviewFeedback.value
                   ? { reviewFeedback: reviewFeedback.value }
@@ -2625,7 +2728,25 @@ async function agentWorkflowBody(
                 attachments: downloadedAttachments,
                 preSandboxAdditions: ctx.preSandboxAdditions.review,
                 selectedRepositories: ctx.selectedRepositories,
-              });
+              };
+              let reviewInput: string;
+              if (execution?.compileEffectivePrompt) {
+                const compiled = await execution.compileEffectivePrompt({
+                  blockPrompt: promptOverride(node) ?? "",
+                  runtimeData: assembleReviewContext({
+                    ...reviewContext,
+                    prompt: "",
+                  }),
+                  sandboxId,
+                });
+                if (!compiled.ok) return compiled.result;
+                reviewInput = compiled.prompt;
+              } else {
+                reviewInput = assembleReviewContext({
+                  ...reviewContext,
+                  prompt: promptOverride(node) ?? prompts.review,
+                });
+              }
 
               const reviewLaunch = await writeAndStartPhase(
                 sandboxId, kind, reviewArtifactPhase,
@@ -2941,11 +3062,110 @@ async function agentWorkflowBody(
       ) => {
         invocation.cancellation.throwIfCancelled();
         state.attempt = invocation.attempt;
-        const configuration = resolveV2PromptDataConfiguration(node, {
+        const bindingContext: V2BindingResolutionContext = {
           entryOutput: triggerOutput,
           runValues,
           getStepOutput: (nodeId) => steps[nodeId]?.output,
-        });
+        };
+        const configuration = resolveV2PromptDataConfiguration(
+          node,
+          bindingContext,
+          { preserveAgentPromptSource: true },
+        );
+        const placeholderIssue = v2NonAgentPromptPlaceholderIssue(
+          node.type,
+          configuration,
+        );
+        if (placeholderIssue) {
+          return executionError(placeholderIssue, {
+            category: "binding",
+            phase: node.type,
+            message:
+              "The block has an unresolved prompt placeholder. Update and redeploy the workflow.",
+          });
+        }
+        const compileInvocationPrompt: NonNullable<
+          BlockExecutionContext["compileEffectivePrompt"]
+        > = async ({ blockPrompt, runtimeData, sandboxId }) => {
+          const profileSource = await resolveProfileInstructions({
+            node,
+            defaultProvider: ctx.runDefaultKind,
+          });
+          if (!profileSource) {
+            return {
+              ok: false,
+              result: executionError(
+                "The pinned Harness Profile could not be resolved.",
+                {
+                  category: "schema",
+                  phase: node.type,
+                  message:
+                    "The agent's Harness Profile is unavailable. Select a published profile version and deploy again.",
+                },
+              ),
+            };
+          }
+          let repositorySources: Awaited<
+            ReturnType<typeof loadInvocationRepositoryInstructionSources>
+          > = [];
+          if (ctx.workspaceManifest) {
+            try {
+              repositorySources =
+                await loadInvocationRepositoryInstructionSources({
+                  nodeType: node.type,
+                  executionSandboxId: sandboxId,
+                  sharedCodeSandboxId: ctx.sandboxId,
+                  manifest: ctx.workspaceManifest,
+                });
+            } catch (error) {
+              if (isRunControlError(error)) throw error;
+              return {
+                ok: false,
+                result: executionError(
+                  `Repository instructions could not be loaded: ${errorMessage(error)}`,
+                  {
+                    category: "sandbox",
+                    phase: node.type,
+                    message:
+                      "Repository instructions could not be loaded safely.",
+                  },
+                ),
+              };
+            }
+          }
+          const compilation = await compileEffectivePrompt({
+            nodeId: node.id,
+            blockPrompt:
+              blockPrompt.trim().length > 0
+                ? blockPrompt
+                : compatibilityPromptSourceForV2Node(node) ?? blockPrompt,
+            runtimeData,
+            slots: resolvedPrompts.slotsByNode[node.id] ?? [],
+            slotBindings: node.configuration.promptSlotBindings,
+            promptManifest:
+              resolvedPrompts.manifestByNode[node.id] ?? [],
+            profileSource,
+            repositorySources,
+            bindingContext,
+          });
+          if (compilation.issues.length > 0) {
+            return {
+              ok: false,
+              result: executionError(
+                compilation.issues
+                  .map((issue) => issue.message)
+                  .join("; "),
+                {
+                  category: "binding",
+                  phase: node.type,
+                  message:
+                    "The effective prompt is incomplete or has invalid values.",
+                },
+              ),
+            };
+          }
+          return { ok: true, prompt: compilation.prompt };
+        };
         if (node.type === "transform") {
           if (!Object.values(resolvedInputs).every(isJsonValue)) {
             return executionError("Transform received a non-JSON input.", {
@@ -3045,6 +3265,7 @@ async function agentWorkflowBody(
             attempt: invocation.attempt,
             agentArtifactKey: v2AgentArtifactKeys.get(node.id)!,
             cancellation: invocation.cancellation,
+            compileEffectivePrompt: compileInvocationPrompt,
             ...(invocation.clarificationAnswer === undefined
               ? {}
               : { clarificationAnswer: invocation.clarificationAnswer }),

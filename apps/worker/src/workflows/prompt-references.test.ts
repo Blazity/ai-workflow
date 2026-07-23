@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   formatPromptReferenceToken,
   parsePromptReferenceTokens,
+  type PromptSlotDefinition,
   type PromptReferenceSelector,
 } from "@shared/contracts";
 import { resolvePromptReferences, type PromptReferenceTarget } from "./prompt-references.js";
@@ -28,7 +29,10 @@ type Fixture = {
   id: number;
   name: string;
   archived: boolean;
-  versions: Record<number, string>;
+  versions: Record<
+    number,
+    string | { body: string; slots: PromptSlotDefinition[] }
+  >;
 };
 
 function loader(fixtures: Record<string, Fixture>) {
@@ -44,11 +48,29 @@ function loader(fixtures: Record<string, Fixture>) {
     const resolvedVersion = requested === "latest"
       ? Math.max(...Object.keys(prompt.versions).map(Number))
       : requested;
-    const body = prompt.versions[resolvedVersion];
-    if (body === undefined) throw new Error(`Prompt ${label} version ${resolvedVersion} does not exist`);
-    return { promptId: prompt.id, promptName: prompt.name, requestedVersion: requested, resolvedVersion, body };
+    const version = prompt.versions[resolvedVersion];
+    if (version === undefined) throw new Error(`Prompt ${label} version ${resolvedVersion} does not exist`);
+    return {
+      promptId: prompt.id,
+      promptName: prompt.name,
+      requestedVersion: requested,
+      resolvedVersion,
+      body: typeof version === "string" ? version : version.body,
+      slots: typeof version === "string" ? [] : version.slots,
+    };
   });
 }
+
+const textSlot = (
+  name: string,
+  overrides: Partial<PromptSlotDefinition> = {},
+): PromptSlotDefinition => ({
+  name,
+  description: `${name} value`,
+  schema: { type: "string" },
+  required: true,
+  ...overrides,
+});
 
 describe("resolvePromptReferences", () => {
   it("expands nested prompt references before leaving global variables for the existing pass", async () => {
@@ -136,5 +158,97 @@ describe("resolvePromptReferences", () => {
     await expect(resolvePromptReferences("{{prompt:Not A Slug}}", load)).rejects.toThrow("Malformed prompt reference");
     await expect(resolvePromptReferences("{{prompt:a}}", load, { maxDepth: 2 })).rejects.toThrow("maximum depth");
     await expect(resolvePromptReferences("{{prompt:large}}", load, { maxOutputLength: 5 })).rejects.toThrow("maximum length");
+  });
+
+  it("requires every v2 reusable-prompt reference to pin an exact version", async () => {
+    const load = loader({
+      shared: {
+        id: 1,
+        name: "Shared",
+        archived: false,
+        versions: { 1: "BODY" },
+      },
+    });
+
+    await expect(
+      resolvePromptReferences("{{prompt:shared}}", load, {
+        requirePinned: true,
+      }),
+    ).rejects.toThrow("must pin an exact version");
+    await expect(
+      resolvePromptReferences("{{prompt:shared@1}}", load, {
+        requirePinned: true,
+      }),
+    ).resolves.toMatchObject({ text: "BODY" });
+  });
+
+  it("unions identical slot declarations across nested reusable prompts", async () => {
+    const plan = textSlot("plan");
+    const load = loader({
+      outer: {
+        id: 1,
+        name: "Outer",
+        archived: false,
+        versions: {
+          1: {
+            body: "{{slot:plan}}\n{{prompt:inner@1}}",
+            slots: [plan],
+          },
+        },
+      },
+      inner: {
+        id: 2,
+        name: "Inner",
+        archived: false,
+        versions: {
+          1: {
+            body: "Again: {{slot:plan}}",
+            slots: [structuredClone(plan)],
+          },
+        },
+      },
+    });
+
+    const result = await resolvePromptReferences(
+      "{{prompt:outer@1}}",
+      load,
+      { requirePinned: true },
+    );
+
+    expect(result.slots).toEqual([plan]);
+    expect(result.text).toBe("{{slot:plan}}\nAgain: {{slot:plan}}");
+  });
+
+  it("rejects conflicting slot declarations across nested reusable prompts", async () => {
+    const load = loader({
+      outer: {
+        id: 1,
+        name: "Outer",
+        archived: false,
+        versions: {
+          1: {
+            body: "{{prompt:inner@1}}",
+            slots: [textSlot("plan")],
+          },
+        },
+      },
+      inner: {
+        id: 2,
+        name: "Inner",
+        archived: false,
+        versions: {
+          1: {
+            body: "{{slot:plan}}",
+            slots: [textSlot("plan", { schema: { type: "number" } })],
+          },
+        },
+      },
+    });
+
+    await expect(
+      resolvePromptReferences("{{prompt:outer@1}}", load, {
+        requirePinned: true,
+      }),
+    ).rejects.toThrow('Prompt slot conflict for "plan"');
   });
 });

@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   isSafeWorkflowInputName,
   type JsonSchema202012,
@@ -20,6 +20,7 @@ import {
   buildBindingEditorRows,
   canAddAdditionalInput,
 } from "@/lib/workflow-editor/binding-options";
+import { JsonSchemaEditor } from "./json-schema-editor";
 
 const inputClass =
   "h-[28px] min-w-0 px-2 bg-off-white border border-neutral-200 rounded-xs font-mono text-[11px] text-coal outline-none disabled:opacity-60";
@@ -244,7 +245,7 @@ function JsonValueField({
   );
 }
 
-function JsonSchemaField({
+function JsonSchemaObjectField({
   value,
   disabled,
   label,
@@ -256,38 +257,29 @@ function JsonSchemaField({
   onChange: (value: JsonSchema202012) => void;
 }) {
   const serialized = JSON.stringify(value, null, 2);
-  const [draft, setDraft] = useState(serialized);
-  const [lastValue, setLastValue] = useState(serialized);
-  const [error, setError] = useState<string | null>(null);
-  if (serialized !== lastValue) {
-    setLastValue(serialized);
-    setDraft(serialized);
-    setError(null);
-  }
-  const commit = () => {
+  const [source, setSource] = useState(serialized);
+  useEffect(() => {
+    setSource(serialized);
+  }, [serialized]);
+  const update = (nextSource: string) => {
+    setSource(nextSource);
     try {
-      const parsed = JSON.parse(draft) as unknown;
+      const parsed = JSON.parse(nextSource) as unknown;
       if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
         throw new Error("schema");
       }
-      setError(null);
       onChange(parsed as JsonSchema202012);
     } catch {
-      setError("Enter a JSON Schema object.");
+      // Keep invalid source in the raw editor until the author finishes it.
     }
   };
   return (
-    <>
-      <textarea
-        aria-label={label}
-        value={draft}
-        disabled={disabled}
-        onChange={(event) => setDraft(event.target.value)}
-        onBlur={commit}
-        className={jsonFieldClass}
-      />
-      {error && <p className="m-0 mt-1 font-body text-[10px] text-red-700">{error}</p>}
-    </>
+    <JsonSchemaEditor
+      label={label}
+      value={source}
+      disabled={disabled}
+      onChange={update}
+    />
   );
 }
 
@@ -492,7 +484,7 @@ export function V2BindingFields({
             <div className="mb-1 font-mono text-[8px] uppercase tracking-[0.05em] text-neutral-500">
               JSON Schema
             </div>
-            <JsonSchemaField
+            <JsonSchemaObjectField
               label={`${input.name} JSON Schema`}
               value={input.schema}
               disabled={!canEdit}
@@ -551,7 +543,7 @@ export function V2BindingFields({
               Add
             </button>
           </div>
-          <JsonSchemaField
+          <JsonSchemaObjectField
             label="New input JSON Schema"
             value={newInputSchema}
             disabled={false}

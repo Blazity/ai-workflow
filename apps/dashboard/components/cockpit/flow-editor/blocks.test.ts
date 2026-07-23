@@ -5,6 +5,10 @@ import type {
   WorkflowBlockType,
   WorkflowEditorOptions,
 } from "@shared/contracts";
+import {
+  DEFAULT_OPEN_PR_BODY,
+  DEFAULT_OPEN_PR_TITLE,
+} from "@shared/contracts";
 import { buildPaletteItems, CONNECTED_CARD_TEXT_CLASS } from "./blocks.ts";
 
 const unknownSchema = { type: "unknown" } as const;
@@ -153,4 +157,38 @@ test("v2 palette offers composite Review and Checks helpers without replacing ba
       },
     ],
   );
+});
+
+test("new v2 Open PR blocks do not inherit legacy flat-variable templates", () => {
+  const openPr = contract(
+    "open_pr",
+    "Open PR/MR",
+    {
+      title: DEFAULT_OPEN_PR_TITLE,
+      body: DEFAULT_OPEN_PR_BODY,
+    },
+    { available: true, unavailableReason: null },
+  );
+  const withOpenPr = {
+    ...options,
+    blockRegistry: {
+      ...options.blockRegistry,
+      open_pr: openPr,
+    },
+  } as WorkflowEditorOptions;
+
+  const v1OpenPr = buildPaletteItems(withOpenPr, 1)
+    .flatMap((group) => group.items)
+    .find((item) => item.type === "open_pr");
+  const v2OpenPr = buildPaletteItems(withOpenPr, 2)
+    .flatMap((group) => group.items)
+    .find((item) => item.type === "open_pr");
+
+  assert.deepEqual(v1OpenPr?.params, {
+    title: DEFAULT_OPEN_PR_TITLE,
+    body: DEFAULT_OPEN_PR_BODY,
+  });
+  assert.deepEqual(v2OpenPr?.params, {});
+  assert.doesNotMatch(JSON.stringify(v2OpenPr?.params), /\{\{ticket_/);
+  assert.doesNotMatch(JSON.stringify(v2OpenPr?.params), /\{\{change_summary\}\}/);
 });

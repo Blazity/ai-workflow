@@ -16,6 +16,7 @@ function row(id: number, name: string, currentVersion: number): PromptLibraryLis
     updatedAt: "2026-01-01T00:00:00Z",
     createdByLabel: "System",
     body: "# Prompt",
+    slots: [],
   };
 }
 

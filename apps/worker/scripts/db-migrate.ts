@@ -71,6 +71,7 @@ if (process.exitCode !== 1) {
   const db = drizzle({ client: sql, schema }) as unknown as Db;
   await seedWorkflowDefinitionTemplates(db, {
     includeReview: process.env.ENABLE_REVIEW_PHASE === "true",
+    provider: process.env.AGENT_KIND === "codex" ? "codex" : "claude",
   });
   console.log("[db-migrate] Workflow templates are ready.");
 }

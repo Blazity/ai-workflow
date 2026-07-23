@@ -1,7 +1,10 @@
 import { eq } from "drizzle-orm";
 import { createApp, createRouter, toWebHandler } from "h3";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { WorkflowDefinition } from "@shared/contracts";
+import type {
+  PromptSlotDefinition,
+  WorkflowDefinition,
+} from "@shared/contracts";
 import type { Db } from "../../../db/client.js";
 import {
   member,
@@ -17,6 +20,12 @@ const state = vi.hoisted(() => ({
   sessionUserId: "user_admin" as string | null,
   env: { DASHBOARD_ORG_SLUG: "ai-workflow" },
 }));
+const PLAN_SLOT: PromptSlotDefinition = {
+  name: "plan",
+  description: "Implementation plan",
+  schema: { type: "string" },
+  required: true,
+};
 
 vi.mock("../../../../env.js", () => ({ env: state.env }));
 vi.mock("../../../db/client.js", () => ({ getDb: () => state.db }));
@@ -105,11 +114,18 @@ beforeEach(async () => {
 describe("CRUD happy path", () => {
   it("creates, lists, reads, patches, saves, restores, and archives a prompt", async () => {
     // Create.
-    let res = await create({ name: "My prompt", body: "v1", description: "Desc", tags: ["team"] });
+    let res = await create({
+      name: "My prompt",
+      body: "v1 {{slot:plan}}",
+      slots: [PLAN_SLOT],
+      description: "Desc",
+      tags: ["team"],
+    });
     expect(res.status).toBe(200);
     let body = await res.json();
     expect(body.meta).toMatchObject({ id: 4, name: "My prompt", currentVersion: 1, tags: ["team"] });
     expect(body.current.version).toBe(1);
+    expect(body.current.slots).toEqual([PLAN_SLOT]);
     expect(body.versions).toHaveLength(1);
 
     // List (built-ins + created); tags sorted distinct.
@@ -117,7 +133,10 @@ describe("CRUD happy path", () => {
     body = await res.json();
     expect(body.prompts.map((p: { name: string }) => p.name)).toContain("My prompt");
     expect(body.tags).toEqual(["built-in", "team"]);
-    expect(body.prompts.find((p: { id: number }) => p.id === 4).body).toBe("v1");
+    expect(body.prompts.find((p: { id: number }) => p.id === 4)).toMatchObject({
+      body: "v1 {{slot:plan}}",
+      slots: [PLAN_SLOT],
+    });
 
     // Read detail.
     res = await detail("get", detailGet)(new Request("http://worker.test/p/4"));
@@ -125,6 +144,7 @@ describe("CRUD happy path", () => {
     body = await res.json();
     expect(body.meta.id).toBe(4);
     expect(body.current.version).toBe(1);
+    expect(body.current.slots).toEqual([PLAN_SLOT]);
 
     // Patch metadata (returns the full detail response).
     res = await detail("patch", detailPatch)(jsonRequest("PATCH", { name: "Renamed" }, "http://worker.test/p/4"));
@@ -134,11 +154,21 @@ describe("CRUD happy path", () => {
     expect(body.current.version).toBe(1);
 
     // Save a new version.
-    res = await detail("put", detailPut)(jsonRequest("PUT", { body: "v2" }, "http://worker.test/p/4"));
+    res = await detail("put", detailPut)(
+      jsonRequest(
+        "PUT",
+        {
+          body: "v2 {{slot:plan}}",
+          slots: [{ ...PLAN_SLOT, description: "Updated plan" }],
+        },
+        "http://worker.test/p/4",
+      ),
+    );
     expect(res.status).toBe(200);
     body = await res.json();
     expect(body.changed).toBe(true);
     expect(body.version.version).toBe(2);
+    expect(body.version.slots[0].description).toBe("Updated plan");
     expect(body.meta.currentVersion).toBe(2);
 
     // Restore version 1 -> appends version 3.
@@ -147,7 +177,8 @@ describe("CRUD happy path", () => {
     body = await res.json();
     expect(body.changed).toBe(true);
     expect(body.version.version).toBe(3);
-    expect(body.version.body).toBe("v1");
+    expect(body.version.body).toBe("v1 {{slot:plan}}");
+    expect(body.version.slots).toEqual([PLAN_SLOT]);
     expect(body.version.restoredFromVersion).toBe(1);
 
     // Archive (delete) -> returns the archived detail.
@@ -177,6 +208,37 @@ describe("PUT unchanged body", () => {
     expect(body.changed).toBe(false);
     expect(body.version.version).toBe(1);
     expect(body.meta.currentVersion).toBe(1);
+  });
+
+  it("appends when only slots change and preserves head slots when omitted", async () => {
+    await create({
+      name: "Slot change",
+      body: "keep",
+      slots: [PLAN_SLOT],
+    });
+    let res = await detail("put", detailPut)(
+      jsonRequest(
+        "PUT",
+        {
+          body: "keep",
+          slots: [{ ...PLAN_SLOT, required: false }],
+        },
+        "http://worker.test/p/4",
+      ),
+    );
+    expect(res.status).toBe(200);
+    let body = await res.json();
+    expect(body.changed).toBe(true);
+    expect(body.version.version).toBe(2);
+    expect(body.version.slots[0].required).toBe(false);
+
+    res = await detail("put", detailPut)(
+      jsonRequest("PUT", { body: "changed body" }, "http://worker.test/p/4"),
+    );
+    expect(res.status).toBe(200);
+    body = await res.json();
+    expect(body.version.version).toBe(3);
+    expect(body.version.slots[0].required).toBe(false);
   });
 });
 
@@ -248,6 +310,19 @@ describe("versions/:version", () => {
     expect(body.version.body).toBe("v1");
   });
 
+  it("returns the exact slots stored with a historical version", async () => {
+    await create({
+      name: "Slotted version",
+      body: "v1",
+      slots: [PLAN_SLOT],
+    });
+    const res = await versions(
+      new Request("http://worker.test/p/4/versions/1"),
+    );
+    expect(res.status).toBe(200);
+    expect((await res.json()).version.slots).toEqual([PLAN_SLOT]);
+  });
+
   it("404s an unknown version", async () => {
     await create({ name: "V", body: "v1" });
     const res = await versions(new Request("http://worker.test/p/4/versions/99"));
@@ -288,6 +363,35 @@ describe("conflict mapping", () => {
       jsonRequest("PUT", { body: "v2" }, "http://worker.test/p/4"),
     );
     expect(res.status).toBe(409);
+  });
+});
+
+describe("slot validation", () => {
+  it("400s malformed slot payloads on create and save", async () => {
+    const invalidCreate = await create({
+      name: "Bad slots",
+      body: "v1",
+      slots: "not-an-array",
+    });
+    expect(invalidCreate.status).toBe(400);
+
+    await create({ name: "Valid first", body: "v1" });
+    const invalidSave = await detail("put", detailPut)(
+      jsonRequest(
+        "PUT",
+        {
+          body: "v2",
+          slots: [
+            {
+              ...PLAN_SLOT,
+              defaultValue: 42,
+            },
+          ],
+        },
+        "http://worker.test/p/4",
+      ),
+    );
+    expect(invalidSave.status).toBe(400);
   });
 });
 

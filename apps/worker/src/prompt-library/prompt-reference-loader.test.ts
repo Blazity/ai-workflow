@@ -36,11 +36,42 @@ describe("createPromptReferenceLoader", () => {
   });
 
   it("resolves a pinned version exactly and rejects a missing one", async () => {
-    const { prompt } = await createPrompt(db, { name: "Pinme", body: "v1", actor: ADMIN });
-    await savePromptVersion(db, { promptId: prompt.id, body: "v2", actor: ADMIN });
+    const { prompt } = await createPrompt(db, {
+      name: "Pinme",
+      body: "v1",
+      slots: [
+        {
+          name: "plan",
+          description: "Implementation plan",
+          schema: { type: "string" },
+          required: true,
+        },
+      ],
+      actor: ADMIN,
+    });
+    await savePromptVersion(db, {
+      promptId: prompt.id,
+      body: "v2",
+      slots: [],
+      actor: ADMIN,
+    });
     const load = createPromptReferenceLoader(db);
 
-    await expect(load({ slug: "pinme" }, 1)).resolves.toMatchObject({ resolvedVersion: 1, body: "v1" });
+    await expect(load({ slug: "pinme" }, 1)).resolves.toMatchObject({
+      resolvedVersion: 1,
+      body: "v1",
+      slots: [
+        expect.objectContaining({
+          name: "plan",
+          required: true,
+        }),
+      ],
+    });
+    await expect(load({ slug: "pinme" }, 2)).resolves.toMatchObject({
+      resolvedVersion: 2,
+      body: "v2",
+      slots: [],
+    });
     await expect(load({ slug: "pinme" }, 9)).rejects.toThrow("does not have version 9");
   });
 

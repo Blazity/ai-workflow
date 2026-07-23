@@ -48,7 +48,10 @@ import {
   loadWorkflowDefinitionFor,
   normalizeDefinitionForExecution,
 } from "./definition-step.js";
-import { defaultWorkflowDefinition } from "../workflow-definition/default.js";
+import {
+  defaultWorkflowDefinition,
+  defaultWorkflowDefinitionV2,
+} from "../workflow-definition/default.js";
 import type { WorkflowDefinitionEdge, WorkflowDefinitionNode } from "@shared/contracts";
 
 async function setEnv(partial: Record<string, unknown>) {
@@ -265,6 +268,31 @@ describe("loadWorkflowDefinition", () => {
       (plan.definition as WorkflowDefinitionV2).edges[0]?.id,
     ).toBe("ticket-finish");
     expect(loggerError).not.toHaveBeenCalled();
+  });
+
+  it("preserves a pinned built-in profile for executor-boundary resolution", async () => {
+    const definition = defaultWorkflowDefinitionV2({
+      includeReview: false,
+      provider: "codex",
+    });
+    mockGetEnabled.mockResolvedValue(enabled(definition, 10, 6));
+
+    const plan = await loadWorkflowDefinition();
+
+    expect(
+      plan.nodes.find((node) => node.id === "planning")?.params,
+    ).toEqual({
+      harnessProfile: { profileId: "builtin-codex", version: 1 },
+      prompt: "{{prompt:research-plan@1}}",
+    });
+    expect(
+      (plan.definition as WorkflowDefinitionV2).nodes.find(
+        (node) => node.id === "planning",
+      )?.configuration,
+    ).toEqual({
+      harnessProfile: { profileId: "builtin-codex", version: 1 },
+      prompt: "{{prompt:research-plan@1}}",
+    });
   });
 
   it("fails closed when an eager store upgrade raises a deterministic Zod error", async () => {

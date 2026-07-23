@@ -175,6 +175,22 @@ const GROUP_LABELS: Record<string, string> = {
   arthur: "Arthur",
 };
 
+function paletteDefaults(
+  contract: WorkflowEditorOptions["blockRegistry"][WorkflowBlockType],
+  schemaVersion: 1 | 2,
+): Record<string, WorkflowParamValue> {
+  const defaults = { ...contract.defaults };
+  if (schemaVersion === 2 && contract.type === "open_pr") {
+    // The registry's Open PR prose templates are the v1 compatibility
+    // templates and contain flat {{ticket_*}} variables. V2 leaves these
+    // fields absent so it cannot seed placeholders that its canonical data
+    // authoring/runtime deliberately rejects.
+    delete defaults.title;
+    delete defaults.body;
+  }
+  return defaults;
+}
+
 export function buildPaletteItems(
   options: WorkflowEditorOptions,
   schemaVersion: 1 | 2 = 1,
@@ -191,7 +207,7 @@ export function buildPaletteItems(
         id: `block:${contract.type}`,
         type: contract.type,
         name: contract.presentation.label,
-        params: { ...contract.defaults },
+        params: paletteDefaults(contract, schemaVersion),
         presentation: contract.presentation,
         available: contract.availability.available,
         unavailableReason: contract.availability.unavailableReason,
@@ -215,7 +231,7 @@ export function buildPaletteItems(
       templateId: template.id,
       type: template.sourceType,
       name: template.name,
-      params: { ...source.defaults },
+      params: paletteDefaults(source, schemaVersion),
       presentation: {
         ...source.presentation,
         description: template.description,

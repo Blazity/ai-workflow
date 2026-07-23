@@ -107,7 +107,9 @@ ${branchName}
 
   md += repositoryContextSection;
   md += preSandboxSection;
-  md += `\n---\n\n${prompt}\n`;
+  if (prompt.length > 0) {
+    md += `\n---\n\n${prompt}\n`;
+  }
   return md;
 }
 
@@ -121,7 +123,7 @@ export function assembleImplementationContext(input: ImplementationContextInput)
   // agent actually addresses it. Empty on the first run, so the section vanishes.
   const repositoryContextSection = renderRepositoryContexts(repositoryContexts);
   const clarificationsSection = renderClarificationsSection(ticket.clarifications);
-  return `# Requirements
+  const runtimeData = `# Requirements
 
 ## Ticket ID
 
@@ -139,12 +141,15 @@ ${clarificationsSection}
 
 ${researchPlanMarkdown}
 ${repositoryContextSection}${selectedRepositoriesSection}
-${preSandboxSection}
+${preSandboxSection}`;
+  return prompt.length > 0
+    ? `${runtimeData}
 
 ---
 
 ${prompt}
-`;
+`
+    : runtimeData;
 }
 
 export function assembleReviewContext(input: ReviewContextInput): string {
@@ -164,7 +169,7 @@ export function assembleReviewContext(input: ReviewContextInput): string {
   const reviewFeedbackSection = reviewFeedback
     ? `\n## Pull request review feedback\n\nState: ${reviewFeedback.state}\n\n${reviewFeedback.author}: ${reviewFeedback.body}\n`
     : "";
-  return `# Requirements
+  const runtimeData = `# Requirements
 
 ## Ticket ID
 
@@ -182,12 +187,15 @@ ${clarificationsSection}
 
 ${researchPlanMarkdown}
 ${reviewFeedbackSection}${selectedRepositoriesSection}
-${preSandboxSection}
+${preSandboxSection}`;
+  return prompt.length > 0
+    ? `${runtimeData}
 
 ---
 
 ${prompt}
-`;
+`
+    : runtimeData;
 }
 
 export interface FixContextInput {

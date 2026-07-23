@@ -4,6 +4,7 @@ import type {
   WorkflowDefinition,
   WorkflowDefinitionV1,
 } from "@shared/contracts";
+import { BUILTIN_HARNESS_PROFILE_IDS } from "@shared/contracts";
 import type { Db } from "../../../db/client.js";
 import {
   member,
@@ -16,7 +17,10 @@ import {
   createPrompt,
   savePromptVersion,
 } from "../../../prompt-library/store.js";
-import { defaultWorkflowDefinition } from "../../../workflow-definition/default.js";
+import {
+  defaultWorkflowDefinition,
+  defaultWorkflowDefinitionV2,
+} from "../../../workflow-definition/default.js";
 import {
   deployWorkflowDefinition,
   saveWorkflowDefinitionDraft,
@@ -95,6 +99,9 @@ const detailDeploy = (await import("./workflow-definitions/[id]/deploy.post.js")
 const detailRollback = (await import("./workflow-definitions/[id]/rollback.post.js")).default;
 const detailLayout = (await import("./workflow-definitions/[id]/layout.patch.js")).default;
 const detailValidate = (await import("./workflow-definitions/[id]/validate.post.js")).default;
+const detailPromptPreview = (
+  await import("./workflow-definitions/[id]/prompt-preview.post.js")
+).default;
 const detailMigrate = (await import("./workflow-definitions/[id]/migrate.post.js")).default;
 const shimGet = (await import("./workflow-definition.get.js")).default;
 const shimPut = (await import("./workflow-definition.put.js")).default;
@@ -311,13 +318,27 @@ describe("GET /api/v1/workflow-definitions", () => {
       triggerTypes: ["trigger_ticket_ai"],
       currentVersion: null,
     });
-    expect(body.defaultDefinition.schemaVersion).toBe(1);
+    expect(body.defaultDefinition.schemaVersion).toBe(2);
+    expect(
+      body.defaultDefinition.nodes.find(
+        (node: { id: string }) => node.id === "planning",
+      ).configuration.harnessProfile,
+    ).toEqual({
+      profileId: BUILTIN_HARNESS_PROFILE_IDS.claude,
+      version: 1,
+    });
     expect(body.templates.map((template: { name: string }) => template.name)).toEqual([
       "Ticket workflow",
       "Human-approved plan",
       "Review & fix after PR",
       "Fully modular",
     ]);
+    expect(
+      body.templates.every(
+        (template: { definition: { schemaVersion: number } }) =>
+          template.definition.schemaVersion === 2,
+      ),
+    ).toBe(true);
     expect(body.options.agentKind).toBe("claude");
     expect(body.options.defaultModel).toBe("claude-test-default");
     expect(body.options.blockRegistry.trigger_ticket_ai.type).toBe("trigger_ticket_ai");
@@ -330,6 +351,50 @@ describe("GET /api/v1/workflow-definitions", () => {
     const res = await handlerFor(definitionsGet)(new Request("http://worker.test/"));
     const body = await res.json();
     expect(body.definitions[0]).toMatchObject({ currentVersion: 1, deployedVersion: 1 });
+  });
+
+  it("pins the installation's configured built-in profile in new authoring choices", async () => {
+    state.env.AGENT_KIND = "codex";
+    try {
+      const res = await handlerFor(definitionsGet)(
+        new Request("http://worker.test/"),
+      );
+      const body = await res.json();
+      const agentConfigurations = [
+        body.defaultDefinition,
+        ...body.templates.map(
+          (template: { definition: unknown }) => template.definition,
+        ),
+      ].flatMap(
+        (definition: {
+          nodes: Array<{ type: string; configuration: Record<string, unknown> }>;
+        }) =>
+          definition.nodes
+            .filter((node) =>
+              [
+                "planning_agent",
+                "implementation_agent",
+                "review_agent",
+                "fix_agent",
+                "generic_agent",
+              ].includes(node.type),
+            )
+            .map((node) => node.configuration),
+      );
+      expect(agentConfigurations.length).toBeGreaterThan(0);
+      expect(
+        agentConfigurations.every(
+          (configuration) =>
+            JSON.stringify(configuration.harnessProfile) ===
+            JSON.stringify({
+              profileId: BUILTIN_HARNESS_PROFILE_IDS.codex,
+              version: 1,
+            }),
+        ),
+      ).toBe(true);
+    } finally {
+      state.env.AGENT_KIND = "claude";
+    }
   });
 });
 
@@ -344,6 +409,7 @@ describe("POST /api/v1/workflow-definitions", () => {
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.meta).toMatchObject({ name: "Approved delivery", enabled: false });
+    expect(body.draft.schemaVersion).toBe(2);
     expect(body.draft.nodes.some((node: { type: string }) => node.type === "send_plan_approval")).toBe(
       true,
     );
@@ -380,6 +446,15 @@ describe("POST /api/v1/workflow-definitions", () => {
     expect(body.current).toBeNull();
     expect(body.deployed).toBeNull();
     expect(body.versions).toHaveLength(1);
+    expect(body.draft.schemaVersion).toBe(2);
+    expect(
+      body.draft.nodes.find(
+        (node: { id: string }) => node.id === "planning",
+      ).configuration.harnessProfile,
+    ).toEqual({
+      profileId: BUILTIN_HARNESS_PROFILE_IDS.claude,
+      version: 1,
+    });
     expect(body.draft.nodes.some((n: { type: string }) => n.type === "review_agent")).toBe(
       true,
     );
@@ -1270,6 +1345,66 @@ describe("POST /api/v1/workflow-definitions/:id/migrate", () => {
   });
 });
 
+describe("POST /api/v1/workflow-definitions/:id/prompt-preview", () => {
+  const preview = paramHandler(
+    "post",
+    "/d/:id/prompt-preview",
+    detailPromptPreview,
+  );
+
+  it("compiles one block from the exact unsaved v2 candidate without caching it", async () => {
+    const definition = defaultWorkflowDefinitionV2({
+      includeReview: false,
+      provider: "claude",
+    });
+    const res = await preview(
+      jsonRequest(
+        "POST",
+        { definition, blockId: "planning" },
+        "http://worker.test/d/1/prompt-preview",
+      ),
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get("cache-control")).toBe("private, no-store");
+    expect(await res.json()).toMatchObject({
+      blockId: "planning",
+      hash: expect.stringMatching(/^[a-f0-9]{64}$/),
+      sections: [
+        expect.objectContaining({ kind: "profile" }),
+        expect.objectContaining({ kind: "block" }),
+        expect.objectContaining({ kind: "runtime" }),
+      ],
+      provenance: expect.arrayContaining([
+        expect.objectContaining({
+          kind: "profile",
+          id: BUILTIN_HARNESS_PROFILE_IDS.claude,
+          version: 1,
+        }),
+      ]),
+      unresolvedSources: expect.arrayContaining([
+        expect.objectContaining({ kind: "repository" }),
+      ]),
+      issues: [],
+    });
+  });
+
+  it("keeps the preview parent organization-scoped to an existing definition", async () => {
+    const definition = defaultWorkflowDefinitionV2({
+      includeReview: false,
+    });
+    const res = await preview(
+      jsonRequest(
+        "POST",
+        { definition, blockId: "planning" },
+        "http://worker.test/d/999/prompt-preview",
+      ),
+    );
+
+    expect(res.status).toBe(404);
+  });
+});
+
 describe("POST /api/v1/workflow-definitions/:id/validate", () => {
   const validate = paramHandler("post", "/d/:id/validate", detailValidate);
 
@@ -1576,6 +1711,38 @@ describe("POST /api/v1/workflow-definitions/:id/rollback", () => {
     expect(res.status).toBe(404);
   });
 
+  it("returns structured 422 issues when the selected v2 prompt is invalid", async () => {
+    await saveAndDeploy(VALID_DEFINITION, 0, null);
+    const invalid = defaultWorkflowDefinitionV2({ includeReview: false });
+    invalid.nodes.find((node) => node.id === "planning")!.configuration.prompt =
+      "{{unknown}}";
+    await saveWorkflowDefinitionDraft(db, {
+      definitionId: 1,
+      definition: invalid,
+      expectedDraftRevision: 1,
+      actor: STORE_ACTOR,
+    });
+
+    const res = await rollback(
+      jsonRequest(
+        "POST",
+        { version: 2, expectedDeployedVersion: 1 },
+        "http://worker.test/d/1/rollback",
+      ),
+    );
+
+    expect(res.status).toBe(422);
+    expect(await res.json()).toMatchObject({
+      error: "Workflow has validation errors",
+      issues: [
+        expect.objectContaining({
+          code: "prompt_placeholder_unresolved",
+          nodeId: "planning",
+        }),
+      ],
+    });
+  });
+
   it("rejects members with 403", async () => {
     await saveAndDeploy(VALID_DEFINITION, 0, null);
     state.sessionUserId = "user_member";
@@ -1606,6 +1773,38 @@ describe("POST /api/v1/workflow-definitions/:id/restore (compatibility alias)", 
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.deployed.version).toBe(1);
+  });
+
+  it("returns structured 422 issues for an invalid v2 compatibility restore", async () => {
+    await saveAndDeploy(VALID_DEFINITION, 0, null);
+    const invalid = defaultWorkflowDefinitionV2({ includeReview: false });
+    invalid.nodes.find((node) => node.id === "planning")!.configuration.prompt =
+      "{{plan}}";
+    await saveWorkflowDefinitionDraft(db, {
+      definitionId: 1,
+      definition: invalid,
+      expectedDraftRevision: 1,
+      actor: STORE_ACTOR,
+    });
+
+    const res = await restore(
+      jsonRequest(
+        "POST",
+        { version: 2, expectedDeployedVersion: 1 },
+        "http://worker.test/d/1/restore",
+      ),
+    );
+
+    expect(res.status).toBe(422);
+    expect(await res.json()).toMatchObject({
+      error: "Workflow has validation errors",
+      issues: [
+        expect.objectContaining({
+          code: "prompt_placeholder_unresolved",
+          nodeId: "planning",
+        }),
+      ],
+    });
   });
 });
 
@@ -1747,6 +1946,32 @@ describe("POST /api/v1/workflow-definition/restore (shim)", () => {
       jsonRequest("POST", { version: 42, expectedDeployedVersion: null }),
     );
     expect(res.status).toBe(404);
+  });
+
+  it("returns structured 422 issues for an invalid v2 version", async () => {
+    await saveAndDeploy(VALID_DEFINITION, 0, null);
+    const invalid = defaultWorkflowDefinitionV2({ includeReview: false });
+    invalid.nodes.find((node) => node.id === "planning")!.configuration.prompt =
+      "{{unknown}}";
+    await saveWorkflowDefinitionDraft(db, {
+      definitionId: 1,
+      definition: invalid,
+      expectedDraftRevision: 1,
+      actor: STORE_ACTOR,
+    });
+
+    const res = await handlerFor(shimRestore)(
+      jsonRequest("POST", { version: 2, expectedDeployedVersion: 1 }),
+    );
+    expect(res.status).toBe(422);
+    expect(await res.json()).toMatchObject({
+      issues: [
+        expect.objectContaining({
+          code: "prompt_placeholder_unresolved",
+          nodeId: "planning",
+        }),
+      ],
+    });
   });
 
   it("rejects members with 403", async () => {

@@ -18,6 +18,7 @@ import {
 } from "drizzle-orm/pg-core";
 import type {
   BlockRunState,
+  PromptSlotDefinition,
   ResolvedPromptReference,
   WorkflowDefinition,
   WorkflowRunBudgetFailure,
@@ -467,6 +468,10 @@ export const promptLibraryVersions = pgTable(
       .references(() => promptLibrary.id),
     version: integer("version").notNull(),
     body: text("body").notNull(),
+    slots: jsonb("slots")
+      .$type<PromptSlotDefinition[]>()
+      .notNull()
+      .default(sql`'[]'::jsonb`),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     createdById: text("created_by_id").notNull(),
     createdByLabel: text("created_by_label").notNull(),

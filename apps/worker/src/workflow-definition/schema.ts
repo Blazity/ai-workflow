@@ -25,8 +25,11 @@ import {
   BLOCK_PARAM_KEYS,
   BLOCK_TYPE_SPECS,
   FAILURE_PORT,
+  PROMPT_SLOT_NAME_PATTERN,
+  isHarnessProfileReference,
   isTriggerBlockType,
   isWorkflowAddressablePathSegment,
+  resolveBuiltinHarnessProfile,
   wirablePorts,
 } from "@shared/contracts";
 import { parseCondition } from "@shared/conditions";
@@ -594,6 +597,26 @@ const v2TerminateConfiguration = z
     postComment: z.string().trim().min(1).max(2000).optional(),
   })
   .strict();
+const jsonSchemaDialect202012 = z
+  .literal("https://json-schema.org/draft/2020-12/schema")
+  .optional();
+const v2PromptSlotBindings = z
+  .record(
+    z.string().regex(PROMPT_SLOT_NAME_PATTERN),
+    workflowInputBindingV2Schema,
+  )
+  .optional();
+const harnessProfileReferenceSchema = z
+  .object({
+    profileId: z.string().trim().min(1).max(200),
+    version: z.number().int().positive(),
+  })
+  .strict()
+  .optional();
+const v2PromptAuthoringConfiguration = {
+  harnessProfile: harnessProfileReferenceSchema,
+  promptSlotBindings: v2PromptSlotBindings,
+};
 
 /** The v2 runtime consumes the same code-owned configuration surface as the
  * corresponding v1 executor. Transform and Branch intentionally use their own
@@ -605,16 +628,21 @@ const v2ConfigurationSchemas = {
   trigger_pr_checks_failed: v2TriggerPrChecksFailedConfiguration,
   trigger_pr_review: v2TriggerPrReviewConfiguration,
   trigger_pr_merged: v2TriggerPrMergedConfiguration,
-  planning_agent: agentParams,
-  implementation_agent: agentParams,
-  review_agent: agentParams,
-  fix_agent: fixAgentParams,
-  generic_agent: genericAgentParams,
+  planning_agent: agentParams.extend(v2PromptAuthoringConfiguration),
+  implementation_agent: agentParams.extend(v2PromptAuthoringConfiguration),
+  review_agent: agentParams.extend(v2PromptAuthoringConfiguration),
+  fix_agent: fixAgentParams.extend(v2PromptAuthoringConfiguration),
+  generic_agent: genericAgentParams.extend({
+    outputSchemaDialect: jsonSchemaDialect202012,
+    ...v2PromptAuthoringConfiguration,
+  }),
   prepare_workspace: prepareWorkspaceParams,
   finalize_workspace: finalizeWorkspaceParams,
   run_pre_pr_checks: v2RunPrePrChecksConfiguration,
   run_checks: runChecksParams,
-  call_llm: callLlmParams,
+  call_llm: callLlmParams.extend({
+    outputSchemaDialect: jsonSchemaDialect202012,
+  }),
   fetch_pr_context: fetchPrContextParams,
   open_pr: v2OpenPrConfiguration,
   update_ticket_status: v2UpdateTicketStatusConfiguration,
@@ -1598,7 +1626,15 @@ function validateWorkflowV2ConfigurationIssues(
     // separate avoids accidentally accepting executor params as operations.
     if (node.type === "transform") continue;
 
-    const allowedKeys = new Set(BLOCK_PARAM_KEYS[node.type]);
+    const allowedKeys = new Set([
+      ...BLOCK_PARAM_KEYS[node.type],
+      ...(isV2PromptAuthoringBlock(node.type)
+        ? ["harnessProfile", "promptSlotBindings"]
+        : []),
+      ...(node.type === "generic_agent" || node.type === "call_llm"
+        ? ["outputSchemaDialect"]
+        : []),
+    ]);
     for (const key of Object.keys(node.configuration)) {
       if (allowedKeys.has(key)) continue;
       issues.push(
@@ -1633,7 +1669,38 @@ function validateWorkflowV2ConfigurationIssues(
         ? v2BranchConfigurationSchema
         : v2ConfigurationSchemas[node.type];
     const parsed = schema.safeParse(node.configuration);
-    if (parsed.success) continue;
+    if (parsed.success) {
+      const profileReference = node.configuration.harnessProfile;
+      if (
+        isV2PromptAuthoringBlock(node.type) &&
+        isHarnessProfileReference(profileReference)
+      ) {
+        if (resolveBuiltinHarnessProfile(profileReference) === null) {
+          issues.push(
+            invalidConfigurationIssue(
+              node,
+              nodeIndex,
+              ["harnessProfile"],
+              `Harness Profile "${profileReference.profileId}" version ${profileReference.version} is not available.`,
+            ),
+          );
+        }
+        if (
+          node.configuration.provider !== undefined ||
+          node.configuration.model !== undefined
+        ) {
+          issues.push(
+            invalidConfigurationIssue(
+              node,
+              nodeIndex,
+              ["harnessProfile"],
+              "provider and model cannot override a pinned Harness Profile.",
+            ),
+          );
+        }
+      }
+      continue;
+    }
     for (const issue of parsed.error.issues) {
       // Emit one exact issue per unknown property above instead of Zod's
       // aggregate object-level "unrecognized keys" diagnostic.
@@ -1653,6 +1720,23 @@ function validateWorkflowV2ConfigurationIssues(
   return issues;
 }
 
+function isV2PromptAuthoringBlock(
+  type: WorkflowBlockType,
+): type is
+  | "planning_agent"
+  | "implementation_agent"
+  | "review_agent"
+  | "fix_agent"
+  | "generic_agent" {
+  return (
+    type === "planning_agent" ||
+    type === "implementation_agent" ||
+    type === "review_agent" ||
+    type === "fix_agent" ||
+    type === "generic_agent"
+  );
+}
+
 function v2ConfigurationParams(
   node: WorkflowDefinitionV2Node,
 ): Record<string, WorkflowParamValue> {
@@ -1667,6 +1751,13 @@ function v2ConfigurationParams(
   const params: Record<string, WorkflowParamValue> = {};
   for (const [name, value] of Object.entries(configuration)) {
     if (
+      name === "harnessProfile" ||
+      name === "outputSchemaDialect" ||
+      name === "promptSlotBindings"
+    ) {
+      continue;
+    }
+    if (
       typeof value === "string" ||
       typeof value === "number" ||
       typeof value === "boolean" ||
@@ -1674,6 +1765,15 @@ function v2ConfigurationParams(
         value.every((item) => typeof item === "string"))
     ) {
       params[name] = value;
+    }
+  }
+  if (isHarnessProfileReference(node.configuration.harnessProfile)) {
+    const profile = resolveBuiltinHarnessProfile(
+      node.configuration.harnessProfile,
+    );
+    if (profile !== null) {
+      params.provider = profile.harness.provider;
+      params.model = profile.model.id;
     }
   }
   return params;

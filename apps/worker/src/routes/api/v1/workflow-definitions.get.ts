@@ -3,7 +3,7 @@ import type { WorkflowDefinitionMeta, WorkflowDefinitionsResponse } from "@share
 import { env } from "../../../../env.js";
 import { getDb } from "../../../db/client.js";
 import { requireDashboardActor, toHttpError } from "../../../lib/auth/request-context.js";
-import { defaultWorkflowDefinition } from "../../../workflow-definition/default.js";
+import { defaultWorkflowDefinitionV2 } from "../../../workflow-definition/default.js";
 import { workflowDefinitionTemplates } from "../../../workflow-definition/templates.js";
 import {
   buildWorkflowEditorOptions,
@@ -64,8 +64,14 @@ export default defineEventHandler(
       ]);
       return {
         definitions,
-        templates: workflowDefinitionTemplates({ includeReview: env.ENABLE_REVIEW_PHASE }),
-        defaultDefinition: defaultWorkflowDefinition({ includeReview: env.ENABLE_REVIEW_PHASE }),
+        templates: workflowDefinitionTemplates({
+          includeReview: env.ENABLE_REVIEW_PHASE,
+          provider: env.AGENT_KIND,
+        }),
+        defaultDefinition: defaultWorkflowDefinitionV2({
+          includeReview: env.ENABLE_REVIEW_PHASE,
+          provider: env.AGENT_KIND,
+        }),
         options: buildWorkflowEditorOptions(models, ticketStatuses),
       };
     } catch (error) {

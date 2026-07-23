@@ -385,6 +385,37 @@ describe("assembleImplementationContext (new)", () => {
   });
 });
 
+describe("runtime-only context assembly", () => {
+  it("omits the role-prompt divider when the effective compiler requests runtime data", () => {
+    const ticket = {
+      identifier: "AIW-124",
+      title: "Prompt authoring",
+      description: "Compile one effective prompt.",
+      acceptanceCriteria: "Preview and runtime match.",
+      comments: [],
+    };
+    const research = assembleResearchPlanContext({
+      ticket,
+      prompt: "",
+      branchName: "ai-workflow/AIW-124",
+    });
+    const implementation = assembleImplementationContext({
+      ticket,
+      prompt: "",
+      researchPlanMarkdown: "Approved plan",
+    });
+    const review = assembleReviewContext({
+      ticket,
+      prompt: "",
+      researchPlanMarkdown: "Approved plan",
+    });
+
+    for (const runtimeData of [research, implementation, review]) {
+      expect(runtimeData).not.toContain("\n---\n");
+    }
+  });
+});
+
 describe("assembleReviewContext", () => {
   it("includes plan and prompt", () => {
     const result = assembleReviewContext({
