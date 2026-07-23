@@ -79,6 +79,9 @@ export const triggerDeliveries = pgTable(
     provider: text("provider").notNull(),
     deliveryId: text("delivery_id").notNull(),
     producer: text("producer").notNull(),
+    /** Stable identity of the human action behind this delivery. One review's
+     * fan-out of N webhooks shares one key so it accepts exactly one run. */
+    semanticKey: text("semantic_key"),
     triggerType: text("trigger_type").notNull(),
     subjectKey: text("subject_key").notNull(),
     ticketKey: text("ticket_key"),
@@ -96,6 +99,9 @@ export const triggerDeliveries = pgTable(
     uniqueIndex("trigger_deliveries_one_pending_per_subject_idx")
       .on(t.subjectKey)
       .where(sql`${t.pending} = true`),
+    uniqueIndex("trigger_deliveries_semantic_key_idx")
+      .on(t.provider, t.semanticKey)
+      .where(sql`${t.semanticKey} is not null`),
     foreignKey({
       columns: [t.definitionId, t.definitionVersion],
       foreignColumns: [

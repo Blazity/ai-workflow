@@ -10,6 +10,7 @@ import {
   acceptTriggerDelivery,
   acknowledgeStartedTriggerDelivery,
   coalescePendingTrigger,
+  completeTriggerDelivery,
   getTriggerDelivery,
   listPendingTriggersForSubject,
   recordCandidateStartedTriggerDelivery,
@@ -71,6 +72,14 @@ function delivery(
     },
     ...overrides,
   };
+}
+
+function reviewFanout(
+  deliveryId: string,
+  semanticKey: string,
+): AcceptedTriggerDelivery {
+  const base = delivery(deliveryId, { triggerType: "trigger_pr_review" });
+  return { ...base, delivery: { ...base.delivery, semanticKey } };
 }
 
 describe("provider event inbox", () => {
@@ -148,5 +157,54 @@ describe("provider event inbox", () => {
       pending: false,
       result: { result: "started", runId: "run-1" },
     });
+  });
+
+  it("accepts one review fan-out: a shared semantic key returns the winner's envelope", async () => {
+    const winner = await acceptTriggerDelivery(db, reviewFanout("d-review", "review:99"));
+    expect(winner.inserted).toBe(true);
+
+    const sibling = await acceptTriggerDelivery(db, reviewFanout("d-comment", "review:99"));
+    expect(sibling.inserted).toBe(false);
+    expect(sibling.stored.delivery.deliveryId).toBe("d-review");
+    expect(sibling.stored.delivery.semanticKey).toBe("review:99");
+  });
+
+  it("resolves the semantic winner even after it has a result recorded", async () => {
+    await acceptTriggerDelivery(db, reviewFanout("d-review", "review:100"));
+    await completeTriggerDelivery(db, "github", "d-review", {
+      result: "started",
+      runId: "run-9",
+    });
+
+    const sibling = await acceptTriggerDelivery(db, reviewFanout("d-comment", "review:100"));
+    expect(sibling.inserted).toBe(false);
+    expect(sibling.stored).toMatchObject({
+      delivery: { deliveryId: "d-review" },
+      result: { result: "started", runId: "run-9" },
+    });
+  });
+
+  it("inserts separately when semantic keys differ", async () => {
+    const first = await acceptTriggerDelivery(db, reviewFanout("d-1", "review:1"));
+    const second = await acceptTriggerDelivery(db, reviewFanout("d-2", "review:2"));
+    expect(first.inserted).toBe(true);
+    expect(second.inserted).toBe(true);
+  });
+
+  it("never conflicts two deliveries that carry no semantic key", async () => {
+    const first = await acceptTriggerDelivery(db, delivery("d-1"));
+    const second = await acceptTriggerDelivery(db, delivery("d-2"));
+    expect(first.inserted).toBe(true);
+    expect(second.inserted).toBe(true);
+  });
+
+  it("replays the original by delivery id even when a semantic key is set", async () => {
+    await acceptTriggerDelivery(db, reviewFanout("d-review", "review:7"));
+    const replay = await acceptTriggerDelivery(
+      db,
+      reviewFanout("d-review", "review:7"),
+    );
+    expect(replay.inserted).toBe(false);
+    expect(replay.stored.delivery.deliveryId).toBe("d-review");
   });
 });

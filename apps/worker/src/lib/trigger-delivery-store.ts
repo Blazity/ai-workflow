@@ -34,7 +34,10 @@ export interface StoredTriggerDelivery extends AcceptedTriggerDelivery {
 }
 
 /** Insert one fully authenticated and normalized provider event. Provider
- * retries return the first stored envelope and can never change its pin. */
+ * retries return the first stored envelope and can never change its pin. A
+ * delivery whose semantic key already exists returns the semantic winner's
+ * envelope instead: the loser's delivery id is never recorded, and provider
+ * redeliveries of the loser keep resolving to the same winner. */
 export async function acceptTriggerDelivery(
   db: Db,
   accepted: AcceptedTriggerDelivery,
@@ -48,6 +51,7 @@ export async function acceptTriggerDelivery(
       provider: accepted.delivery.provider,
       deliveryId: accepted.delivery.deliveryId,
       producer: accepted.delivery.producer,
+      semanticKey: accepted.delivery.semanticKey ?? null,
       triggerType: accepted.triggerType,
       subjectKey: accepted.subjectKey,
       ticketKey: accepted.ticketKey,
@@ -56,16 +60,22 @@ export async function acceptTriggerDelivery(
       definitionVersion: accepted.definitionVersion,
       payload: accepted,
     })
-    .onConflictDoNothing({
-      target: [triggerDeliveries.provider, triggerDeliveries.deliveryId],
-    })
+    .onConflictDoNothing()
     .returning();
   if (rows[0]) return { inserted: true, stored: mapDelivery(rows[0]) };
-  const stored = await getTriggerDelivery(
-    db,
-    accepted.delivery.provider,
-    accepted.delivery.deliveryId,
-  );
+  const stored =
+    (await getTriggerDelivery(
+      db,
+      accepted.delivery.provider,
+      accepted.delivery.deliveryId,
+    )) ??
+    (accepted.delivery.semanticKey
+      ? await getTriggerDeliveryBySemanticKey(
+          db,
+          accepted.delivery.provider,
+          accepted.delivery.semanticKey,
+        )
+      : null);
   if (!stored) throw new Error("trigger delivery disappeared after unique conflict");
   return { inserted: false, stored };
 }
@@ -114,6 +124,26 @@ export async function getTriggerDelivery(
       and(
         eq(triggerDeliveries.provider, provider),
         eq(triggerDeliveries.deliveryId, deliveryId),
+      ),
+    )
+    .limit(1);
+  return rows[0] ? mapDelivery(rows[0]) : null;
+}
+
+/** Resolve the delivery that owns a semantic key (the winner of a
+ * semantic-key conflict). */
+export async function getTriggerDeliveryBySemanticKey(
+  db: Db,
+  provider: "github" | "gitlab",
+  semanticKey: string,
+): Promise<StoredTriggerDelivery | null> {
+  const rows = await db
+    .select()
+    .from(triggerDeliveries)
+    .where(
+      and(
+        eq(triggerDeliveries.provider, provider),
+        eq(triggerDeliveries.semanticKey, semanticKey),
       ),
     )
     .limit(1);
@@ -330,6 +360,7 @@ function mapDelivery(row: typeof triggerDeliveries.$inferSelect): StoredTriggerD
       deliveryId: row.deliveryId,
       producer: row.producer,
       ...(payload.delivery.source ? { source: payload.delivery.source } : {}),
+      ...(row.semanticKey ? { semanticKey: row.semanticKey } : {}),
     },
     triggerType: row.triggerType as PrTriggerType,
     subjectKey: row.subjectKey,
