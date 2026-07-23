@@ -1,10 +1,23 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   ActiveRunEntry,
   RunRegistryAdapter,
   RunReservation,
 } from "../adapters/run-registry/types.js";
+import type { Db } from "../db/client.js";
+import {
+  workflowDefinitions,
+  workflowDefinitionVersions,
+} from "../db/schema.js";
+import { createTestDb } from "../db/test-db.js";
 import { claimSubjectRun } from "./dispatch.js";
+import {
+  acceptTriggerDelivery,
+  coalescePendingTrigger,
+  completeTriggerDelivery,
+  listPendingTriggersForSubject,
+  type AcceptedTriggerDelivery,
+} from "./trigger-delivery-store.js";
 
 vi.mock("../../env.js", () => ({
   env: { JIRA_PROJECT_KEY: "PROJ", COLUMN_AI: "AI" },
@@ -120,5 +133,101 @@ describe("PR trigger coalescing with owner-CAS", () => {
     });
     expect(await runRegistry.release(subject.subjectKey, predecessorOwner, "run-1")).toBe(false);
     expect(await runRegistry.get(subject.subjectKey)).not.toBeNull();
+  });
+});
+
+describe("PR trigger semantic dedup at the coalesce boundary", () => {
+  let db: Db;
+
+  beforeEach(async () => {
+    db = await createTestDb();
+    await db.insert(workflowDefinitions).values({
+      id: 7,
+      name: "Coalesce test",
+      createdById: "test",
+      createdByLabel: "Test",
+    });
+    await db.insert(workflowDefinitionVersions).values({
+      definitionId: 7,
+      version: 11,
+      definition: {},
+      createdById: "test",
+      createdByLabel: "Test",
+    });
+  });
+
+  function prReview(
+    deliveryId: string,
+    semanticKey: string,
+  ): AcceptedTriggerDelivery {
+    return {
+      delivery: {
+        provider: "github",
+        producer: "human",
+        deliveryId,
+        semanticKey,
+      },
+      triggerType: "trigger_pr_review",
+      scope: "workflow_owned",
+      subjectKey: subject.subjectKey,
+      ticketKey: null,
+      definitionId: 7,
+      definitionVersion: 11,
+      pr: {
+        provider: "github",
+        repoPath: "acme/app",
+        prNumber: 7,
+        prUrl: "https://github.com/acme/app/pull/7",
+        headRef: "feature/x",
+        headSha: "sha-1",
+        baseRef: "main",
+        title: "Review me",
+        author: "alice",
+        isDraft: false,
+        review: { state: "commented", author: "human", body: "fix this" },
+      },
+    };
+  }
+
+  // Faithful model of dispatchTriggerEvent's accept-then-coalesce decision
+  // (dispatch-trigger.ts:148-153 and :288): a duplicate (semantic or exact)
+  // short-circuits without ever coalescing; a fresh delivery either becomes the
+  // run on an idle subject or coalesces into the one pending successor while the
+  // subject is busy.
+  async function dispatch(
+    accepted: AcceptedTriggerDelivery,
+    subjectBusy: boolean,
+  ): Promise<"started" | "coalesced" | "deduped"> {
+    const durable = await acceptTriggerDelivery(db, accepted);
+    if (!durable.inserted) return "deduped";
+    if (subjectBusy) {
+      await coalescePendingTrigger(db, durable.stored);
+      return "coalesced";
+    }
+    await completeTriggerDelivery(db, "github", accepted.delivery.deliveryId, {
+      result: "started",
+      runId: `run-${accepted.delivery.deliveryId}`,
+    });
+    return "started";
+  }
+
+  it("accepts one run for a review fan-out and queues no successor", async () => {
+    const results = [
+      await dispatch(prReview("d-review", "review:99"), false),
+      await dispatch(prReview("d-c1", "review:99"), true),
+      await dispatch(prReview("d-c2", "review:99"), true),
+    ];
+    expect(results).toEqual(["started", "deduped", "deduped"]);
+    expect(await listPendingTriggersForSubject(db, subject.subjectKey)).toHaveLength(0);
+  });
+
+  it("still coalesces two independent comments into at most one successor", async () => {
+    const results = [
+      await dispatch(prReview("d-1", "comment:1"), false),
+      await dispatch(prReview("d-2", "comment:2"), true),
+      await dispatch(prReview("d-3", "comment:3"), true),
+    ];
+    expect(results).toEqual(["started", "coalesced", "coalesced"]);
+    expect(await listPendingTriggersForSubject(db, subject.subjectKey)).toHaveLength(1);
   });
 });
