@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 
 type WorkerProxy = (path: string, init?: RequestInit) => Promise<Response>;
 type IdRouteContext = { params: Promise<{ id: string }> };
+type TriggerRouteContext = { params: Promise<{ id: string; nodeId: string }> };
 
 export async function handleDefinitionsList(workerProxy: WorkerProxy) {
   return forward(workerProxy, "/api/v1/workflow-definitions", { method: "GET" });
@@ -89,12 +90,63 @@ export async function handleDefinitionValidate(
   return forwardJsonAction(req, context, workerProxy, "validate", "POST");
 }
 
+export async function handleDefinitionPromptPreview(
+  req: Request,
+  context: IdRouteContext,
+  workerProxy: WorkerProxy,
+) {
+  const response = await forwardJsonAction(
+    req,
+    context,
+    workerProxy,
+    "prompt-preview",
+    "POST",
+  );
+  response.headers.set("cache-control", "private, no-store");
+  return response;
+}
+
 export async function handleDefinitionLayout(
   req: Request,
   context: IdRouteContext,
   workerProxy: WorkerProxy,
 ) {
   return forwardJsonAction(req, context, workerProxy, "layout", "PATCH");
+}
+
+export async function handleManualDispatchPreflight(
+  req: Request,
+  context: TriggerRouteContext,
+  workerProxy: WorkerProxy,
+) {
+  return forwardManualDispatch(req, context, workerProxy, "preflight");
+}
+
+export async function handleManualDispatch(
+  req: Request,
+  context: TriggerRouteContext,
+  workerProxy: WorkerProxy,
+) {
+  return forwardManualDispatch(req, context, workerProxy);
+}
+
+async function forwardManualDispatch(
+  req: Request,
+  { params }: TriggerRouteContext,
+  workerProxy: WorkerProxy,
+  action?: "preflight",
+) {
+  const { id, nodeId } = await params;
+  const suffix = action ? `/manual-dispatch/${action}` : "/manual-dispatch";
+  return forward(
+    workerProxy,
+    `/api/v1/workflow-definitions/${encodeURIComponent(id)}/triggers/${encodeURIComponent(nodeId)}${suffix}`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: await req.text(),
+    },
+  );
 }
 
 async function forwardJsonAction(

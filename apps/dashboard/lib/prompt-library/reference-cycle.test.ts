@@ -16,6 +16,7 @@ function row(id: number, slug: string, body: string, archived = false): PromptLi
     updatedAt: "2026-01-01T00:00:00Z",
     createdByLabel: "tester",
     body,
+    slots: [],
   };
 }
 

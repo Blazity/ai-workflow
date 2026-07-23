@@ -1,4 +1,7 @@
-import type { WorkflowDefinitionNode } from "@shared/contracts";
+import type {
+  WorkflowDefinitionNode,
+  WorkflowDefinitionV2Node,
+} from "@shared/contracts";
 import type {
   BlockExecutionContext,
   BlockExecutionResult,
@@ -23,6 +26,8 @@ import type { WorkspacePublicationResult } from "../workspace-publication.js";
 import type { LoadedPrompts } from "../prompts-step.js";
 import type { AgentWorkflowInput } from "../agent-input.js";
 import type { RunBudgetObservation } from "../run-budget.js";
+import type { WorkspaceGate } from "../workspace-gate.js";
+import type { ResolvedHarnessRuntime } from "../../sandbox/harness-runtime.js";
 
 /**
  * Frozen contract between the graph engine (agent.ts, wired in stage C4) and
@@ -40,6 +45,7 @@ import type { RunBudgetObservation } from "../run-budget.js";
 export interface EngineCtx {
   /** Durable workflow run id (getWorkflowMetadata().workflowRunId). */
   runId: string;
+  schemaVersion: 1 | 2;
   definitionId: number | null;
   definitionVersion: number | null;
   /**
@@ -75,7 +81,13 @@ export interface EngineCtx {
   /** Agent-only scratch sandboxes used by planning and workspace-free Generic
    *  blocks. They never contain checked-out repositories and therefore do not
    * satisfy modular workspace consumers. */
-  agentSandboxIds: Partial<Record<AgentKind, string>>;
+  /**
+   * Repository-free scratch sandboxes keyed by immutable manifest hash. Legacy
+   * v1 entries use a `legacy:<provider>` compatibility key.
+   */
+  agentSandboxIds: Record<string, string>;
+  /** Exact resolved profile runtime for every agent node in this definition. */
+  harnessRuntimes: Record<string, ResolvedHarnessRuntime>;
   /**
    * Authoritative in-memory terminal-cleanup set for every code and agent-only
    * scratch sandbox provisioned by this run. Every id is also persisted as a
@@ -99,6 +111,11 @@ export interface EngineCtx {
   researchPlanMarkdown: string;
   /** Result of finalize_workspace / open_pr; null before publication. */
   publication: WorkspacePublicationResult | null;
+  /**
+   * Exact check configuration and clean workspace fingerprint most recently
+   * approved for publication. Any shared-workspace mutation clears the gate.
+   */
+  prePrGate: WorkspaceGate | null;
   /** Run-level default agent kind (ticket label override applied). */
   runDefaultKind: AgentKind;
   /** Default model per agent kind (env CLAUDE_MODEL / CODEX_MODEL). */
@@ -113,12 +130,17 @@ export interface EngineCtx {
   /** Observe and enforce the run budget before further agent work. */
   observeBudget(requireRemainingDuration?: boolean): Promise<RunBudgetObservation>;
   /** Record a phase's parsed usage under a display label for run telemetry. */
-  recordUsage(label: string, usage: PhaseUsage | null, model: string): void;
+  recordUsage(
+    label: string,
+    usage: PhaseUsage | null,
+    model: string,
+    attempt?: number,
+  ): void;
   /**
    * Mark a phase as launched so a timeout before usage parsing reconciles to
    * "cost unknown" instead of a misleading zero cost.
    */
-  markLaunched(label: string): void;
+  markLaunched(label: string, attempt?: number): void;
 }
 
 export type {
@@ -155,4 +177,63 @@ export type BlockExecuteFn = (
  */
 export function sanitizeBlockId(id: string): string {
   return id.toLowerCase().replace(/[^a-z0-9-]/g, "-");
+}
+
+/**
+ * Assign a short, deterministic, collision-free key to each node in one
+ * immutable v2 definition. The key is deliberately independent of the node id:
+ * distinct valid ids may collapse to the same provider-safe phase token.
+ */
+export function buildV2AgentArtifactKeys(
+  nodes: readonly Pick<WorkflowDefinitionV2Node, "id">[],
+): ReadonlyMap<string, string> {
+  return new Map(nodes.map((node, index) => [node.id, (index + 1).toString(36)]));
+}
+
+/**
+ * Keep legacy artifact paths byte-for-byte stable, while v2 uses the
+ * definition-local identity supplied by the scheduler adapter. The attempt is
+ * part of the v2 name so loop and clarification invocations of one node cannot
+ * reuse a live phase's files.
+ */
+export function agentArtifactPhase(
+  legacyPhase: string,
+  execution?: BlockExecutionContext,
+): string {
+  if (execution?.agentArtifactKey === undefined) return legacyPhase;
+  return `${legacyPhase}-v2-${execution.agentArtifactKey}-a${execution.attempt ?? 1}`;
+}
+
+export function markBlockPhaseLaunched(
+  ctx: Pick<EngineCtx, "markLaunched">,
+  label: string,
+  execution?: BlockExecutionContext,
+): void {
+  if (execution?.attempt === undefined) {
+    ctx.markLaunched(label);
+  } else {
+    ctx.markLaunched(label, execution.attempt);
+  }
+}
+
+export function recordBlockPhaseUsage(
+  ctx: Pick<EngineCtx, "recordUsage">,
+  label: string,
+  usage: PhaseUsage | null,
+  model: string,
+  execution?: BlockExecutionContext,
+): void {
+  if (execution?.attempt === undefined) {
+    ctx.recordUsage(label, usage, model);
+  } else {
+    ctx.recordUsage(label, usage, model, execution.attempt);
+  }
+  execution?.recordBudgetUsage?.(usage, model);
+}
+
+export function blockBudgetObserver(
+  ctx: Pick<EngineCtx, "observeBudget">,
+  execution?: BlockExecutionContext,
+): EngineCtx["observeBudget"] {
+  return execution?.observeBudget ?? ctx.observeBudget;
 }

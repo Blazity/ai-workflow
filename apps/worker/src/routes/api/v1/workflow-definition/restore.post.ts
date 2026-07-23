@@ -1,5 +1,13 @@
-import { createError, defineEventHandler, readBody } from "h3";
-import type { WorkflowDefinitionDeploymentResponse } from "@shared/contracts";
+import {
+  createError,
+  defineEventHandler,
+  readBody,
+  setResponseStatus,
+} from "h3";
+import type {
+  WorkflowDefinitionDeploymentResponse,
+  WorkflowDefinitionDeploymentValidationResponse,
+} from "@shared/contracts";
 import { getDb } from "../../../../db/client.js";
 import { requireDashboardActor } from "../../../../lib/auth/request-context.js";
 import { dashboardUserLabel } from "../../../../pre-pr-checks/store.js";
@@ -7,6 +15,7 @@ import {
   resolveDefaultDefinitionId,
   rollbackWorkflowDefinition,
   serializeWorkflowDefinitionVersion,
+  WorkflowDefinitionValidationError,
 } from "../../../../workflow-definition/store.js";
 import {
   serializeDefinitionMeta,
@@ -19,7 +28,13 @@ import {
  * so a single-definition install behaves exactly as before.
  */
 export default defineEventHandler(
-  async (event): Promise<WorkflowDefinitionDeploymentResponse | undefined> => {
+  async (
+    event,
+  ): Promise<
+    | WorkflowDefinitionDeploymentResponse
+    | WorkflowDefinitionDeploymentValidationResponse
+    | undefined
+  > => {
     try {
       const actor = await requireDashboardActor(event);
       const body = (await readBody<{ version?: unknown; expectedDeployedVersion?: unknown }>(event).catch(() => null)) ?? {};
@@ -51,6 +66,10 @@ export default defineEventHandler(
         deployed: serializeWorkflowDefinitionVersion(restored.version),
       };
     } catch (error) {
+      if (error instanceof WorkflowDefinitionValidationError) {
+        setResponseStatus(event, 422, error.message);
+        return { error: error.message, issues: error.issues };
+      }
       toWorkflowDefinitionHttpError(error);
     }
   },

@@ -8,7 +8,7 @@ import {
 import type {
   BlockOutput,
   BlockRunState,
-  WorkflowDefinition,
+  WorkflowDefinitionV1,
   WorkflowDefinitionNode,
 } from "@shared/contracts";
 import type { AgentProtocolDiagnostic } from "../sandbox/agents/types.js";
@@ -29,7 +29,7 @@ export interface RuntimeGraph {
 
 /** Build a walk-ready graph, resolving each edge's port to `fromPort` or the source type's first port. */
 export function buildRuntimeGraph(
-  def: Pick<WorkflowDefinition, "nodes" | "edges">,
+  def: Pick<WorkflowDefinitionV1, "nodes" | "edges">,
 ): RuntimeGraph {
   const nodes = new Map<string, WorkflowDefinitionNode>();
   for (const node of def.nodes) nodes.set(node.id, node);
@@ -176,9 +176,47 @@ export type BlockExecutor = (
   execution?: BlockExecutionContext,
 ) => Promise<BlockExecutionResult>;
 
-/** Metadata available only to the checkpointed block on a clarification resume. */
+/** Invocation metadata supplied to every block. Clarification answers are
+ * present only when resuming the checkpointed block. */
 export interface BlockExecutionContext {
-  clarificationAnswer: string;
+  attempt?: number;
+  clarificationAnswer?: string;
+  cancellation?: import("./invocation-context.js").V2InvocationCancellation;
+  /** V2 replay-safe diagnostic capture for this exact invocation. */
+  observations?: import("./invocation-context.js").V2InvocationObservationHooks;
+  /**
+   * V2 Harness Profile budget seam. The workflow-level budget remains on
+   * EngineCtx; this observer additionally enforces only the profile selected
+   * for the current invocation.
+   */
+  observeBudget?: (
+    requireRemainingDuration?: boolean,
+  ) => Promise<import("../workflows/run-budget.js").RunBudgetObservation>;
+  /** Record usage against the current invocation's Harness Profile limits. */
+  recordBudgetUsage?: (
+    usage: import("../sandbox/agents/types.js").PhaseUsage | null,
+    model: string,
+  ) => void;
+  /**
+   * V2-only compiler seam. Agent executors call it after assembling the exact
+   * runtime context and workspace, immediately before launching the provider.
+   */
+  compileEffectivePrompt?: (input: {
+    blockPrompt: string;
+    runtimeData: string;
+    sandboxId: string | null;
+  }) => Promise<
+    | { ok: true; prompt: string }
+    | {
+        ok: false;
+        result: Extract<BlockExecutionResult, { kind: "execution_error" }>;
+      }
+  >;
+  /**
+   * Definition-local, collision-free identity for runtime artifact names.
+   * V1 omits it so existing phase names remain unchanged.
+   */
+  agentArtifactKey?: string;
 }
 
 export interface ClarificationResume {
@@ -302,7 +340,17 @@ export async function executeGraph(opts: {
       attempt,
       error,
     );
-    await hooks.onExecutionError?.({
+    // Invoke the callback detached from the hooks object. agent.ts wires a
+    // "use step" function here directly, and the Workflow SDK captures the
+    // receiver of a method call (`hooks.onExecutionError?.(...)` would pass
+    // `this` = the hooks object) as serialized step state. The hooks object
+    // holds unserializable closures, so that capture makes the SDK's
+    // suspension handler fail before the step is ever created, and the queue
+    // redelivers into the same failure forever: the run stalls silently on its
+    // first error. A detached call passes no receiver, so nothing extra is
+    // serialized.
+    const { onExecutionError } = hooks;
+    await onExecutionError?.({
       diagnosticId: state.diagnosticId,
       nodeId,
       attempt,
@@ -395,6 +443,9 @@ export async function executeGraph(opts: {
   );
   let executions = resume?.controlState?.executions ?? 0;
   let resumeAnswerPending = resume !== undefined;
+  // Set when an in-run clarification is answered for an action block; consumed
+  // by that same block's immediate re-execution.
+  let pendingClarificationAnswer: string | undefined;
   const controlState = (): InterpreterControlState => ({
     attempts: Object.fromEntries(attempts),
     executions,
@@ -637,10 +688,16 @@ export async function executeGraph(opts: {
       return finish("stopped");
     }
 
-    const execution = resumingWaitingNode
-      ? { clarificationAnswer: resume.clarificationAnswer }
-      : undefined;
+    const execution: BlockExecutionContext = {
+      attempt,
+      ...(resumingWaitingNode
+        ? { clarificationAnswer: resume.clarificationAnswer }
+        : pendingClarificationAnswer !== undefined
+          ? { clarificationAnswer: pendingClarificationAnswer }
+          : {}),
+    };
     resumeAnswerPending = false;
+    pendingClarificationAnswer = undefined;
     let result: BlockExecutionResult;
     try {
       result = await executeBlock(node, steps, resolvedInputs, execution);
@@ -711,11 +768,24 @@ export async function executeGraph(opts: {
         await hooks.onBlockFinish(id, { status: "warn", attempt, output, error });
         return finish("stopped");
       }
-      const answeredOutput: BlockOutput = { status: "answered", answer };
-      steps[id] = { output: answeredOutput };
-      await hooks.onBlockFinish(id, { status: "ok", attempt, output: answeredOutput });
-      const port = defaultPortOf(node);
-      current = port === undefined ? undefined : graph.outEdges.get(id)?.get(port);
+      if (node.type === "human_question") {
+        // Collecting the answer IS this block's contract, so the answered
+        // envelope is its real output and downstream bindings consume it.
+        const answeredOutput: BlockOutput = { status: "answered", answer };
+        steps[id] = { output: answeredOutput };
+        await hooks.onBlockFinish(id, { status: "ok", attempt, output: answeredOutput });
+        const port = defaultPortOf(node);
+        current = port === undefined ? undefined : graph.outEdges.get(id)?.get(port);
+        continue;
+      }
+      // An action block that asked mid-execution has not produced its real
+      // output yet (a planning agent still owes the plan that downstream
+      // bindings read). Re-execute the same node with the answer available so
+      // the block re-runs informed by it; a block may ask again, bounded by
+      // maxTotalExecutions. This mirrors the cross-run resume path, which also
+      // re-executes the waiting action node with execution.clarificationAnswer.
+      pendingClarificationAnswer = answer;
+      current = id;
       continue;
     }
 

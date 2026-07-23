@@ -17,6 +17,7 @@ function row(overrides: Partial<PromptLibraryListRowDto> = {}): PromptLibraryLis
     updatedAt: "2026-01-01T00:00:00Z",
     createdByLabel: "tester",
     body: "body",
+    slots: [],
     ...overrides,
   };
 }

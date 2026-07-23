@@ -17,6 +17,10 @@ vi.mock("../../sandbox/credentials.js", () => ({ getSandboxCredentials: () => ({
 vi.mock("@vercel/sandbox", () => ({ Sandbox: { get: mocks.sandboxGet } }));
 
 import { pollPhaseUntilDone } from "./poll-phase.js";
+import {
+  createV2InvocationCancellationController,
+  V2InvocationCancelledError,
+} from "../../workflow-definition/invocation-context.js";
 
 const ok = (remainingDurationMs: number) => ({
   check: { status: "ok" as const },
@@ -157,5 +161,31 @@ describe("pollPhaseUntilDone", () => {
 
     expect(mocks.getCommand).toHaveBeenCalledWith("cmd-normal-cap");
     expect(mocks.kill).toHaveBeenCalledOnce();
+  });
+
+  it("kills the exact detached command when a sibling cancels the invocation", async () => {
+    const controller = createV2InvocationCancellationController();
+    const observeBudget = vi.fn().mockResolvedValue(ok(60_000));
+    mocks.sleep.mockImplementationOnce(async () => {
+      controller.cancel("another block failed");
+    });
+
+    await expect(
+      pollPhaseUntilDone(
+        "sbx-1",
+        "/tmp/done",
+        25,
+        "cmd-cancelled",
+        observeBudget,
+        controller.view,
+      ),
+    ).rejects.toMatchObject({
+      name: "V2InvocationCancelledError",
+      reason: "another block failed",
+    } satisfies Partial<V2InvocationCancelledError>);
+
+    expect(mocks.getCommand).toHaveBeenCalledWith("cmd-cancelled");
+    expect(mocks.kill).toHaveBeenCalledOnce();
+    expect(mocks.checkPhaseDone).not.toHaveBeenCalled();
   });
 });

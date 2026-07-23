@@ -23,6 +23,16 @@ const pressable = "transition-transform duration-150 ease-standard active:scale-
 const primaryBtn = `flex-1 appearance-none cursor-pointer inline-flex items-center justify-center border border-mariner bg-mariner text-white py-1.5 px-2 rounded-[3px] font-mono text-[10px] tracking-[0.04em] uppercase ${pressable}`;
 const secondaryBtn = `flex-1 appearance-none cursor-pointer inline-flex items-center justify-center border border-neutral-200 bg-panel text-coal py-1.5 px-2 rounded-[3px] font-mono text-[10px] tracking-[0.04em] uppercase hover:bg-app-bg ${pressable}`;
 
+export function promptReferenceVersionForAuthoring(
+  pinReferences: boolean,
+  selectedVersion: number | null,
+  currentVersion: number,
+): "latest" | number {
+  return pinReferences
+    ? selectedVersion ?? currentVersion
+    : "latest";
+}
+
 function TagChip({ label, active, onClick }: { label: string; active: boolean; onClick: () => void }) {
   return (
     <button
@@ -52,6 +62,7 @@ export function PromptLibraryRail({
   previewRequest,
   excludeId,
   autoSelectFirst = true,
+  pinReferences = false,
 }: {
   disabled?: boolean;
   onInsert: (payload: PromptInsertPayload) => void;
@@ -63,6 +74,8 @@ export function PromptLibraryRail({
   /** Library mode passes false: a silently highlighted first row reads as
    *  "this is the prompt being edited", which it is not. */
   autoSelectFirst?: boolean;
+  /** V2 definitions must point at an immutable prompt version. */
+  pinReferences?: boolean;
 }) {
   const { status, rows: allRows } = usePromptLibrary();
   const rows = useMemo(
@@ -275,9 +288,22 @@ export function PromptLibraryRail({
                   kind: "library-reference",
                   slug: activeRow.slug,
                   label: activeRow.name,
+                  version: promptReferenceVersionForAuthoring(
+                    pinReferences,
+                    selectedVersion,
+                    activeRow.currentVersion,
+                  ),
                 })}
-                aria-label={`Drag ${activeRow.name} as latest reference`}
-                title="Drag as latest reference"
+                aria-label={
+                  pinReferences
+                    ? `Drag ${activeRow.name} as pinned version ${selectedVersion ?? activeRow.currentVersion}`
+                    : `Drag ${activeRow.name} as latest reference`
+                }
+                title={
+                  pinReferences
+                    ? `Drag as pinned v${selectedVersion ?? activeRow.currentVersion}`
+                    : "Drag as latest reference"
+                }
                 className="inline-flex size-7 shrink-0 cursor-grab items-center justify-center rounded-[3px] border border-transparent bg-transparent font-mono text-[12px] text-neutral-400 hover:border-neutral-200 hover:bg-off-white hover:text-mariner active:cursor-grabbing"
               >
                 ⠿
@@ -372,19 +398,21 @@ export function PromptLibraryRail({
               <button
                 type="button"
                 onClick={() => insertReference(selectedVersion ?? activeRow.currentVersion)}
-                className={secondaryBtn}
+                className={pinReferences ? primaryBtn : secondaryBtn}
                 title={`Always use version ${selectedVersion ?? activeRow.currentVersion}`}
               >
                 Pin v{selectedVersion ?? activeRow.currentVersion}
               </button>
-              <button
-                type="button"
-                onClick={() => insertReference("latest")}
-                className={primaryBtn}
-                title="Use the newest version for every new run"
-              >
-                Use latest
-              </button>
+              {!pinReferences && (
+                <button
+                  type="button"
+                  onClick={() => insertReference("latest")}
+                  className={primaryBtn}
+                  title="Use the newest version for every new run"
+                >
+                  Use latest
+                </button>
+              )}
             </div>
           )}
         </div>

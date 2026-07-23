@@ -6,10 +6,12 @@ import { fetchAuthWorker } from "@/lib/auth/worker";
 
 export type DashboardSession = {
   organizationName: string;
+  actorLabel: string;
   role: "owner" | "admin" | "member";
   canManageUsers: boolean;
   canEditChecks: boolean;
   canEditWorkflows: boolean;
+  canDispatchWorkflows: boolean;
 };
 
 function isDashboardSession(value: unknown): value is DashboardSession {
@@ -18,12 +20,15 @@ function isDashboardSession(value: unknown): value is DashboardSession {
   return (
     typeof session.organizationName === "string" &&
     session.organizationName.trim().length > 0 &&
+    typeof session.actorLabel === "string" &&
+    session.actorLabel.trim().length > 0 &&
     (session.role === "owner" ||
       session.role === "admin" ||
       session.role === "member") &&
     typeof session.canManageUsers === "boolean" &&
     typeof session.canEditChecks === "boolean" &&
-    typeof session.canEditWorkflows === "boolean"
+    typeof session.canEditWorkflows === "boolean" &&
+    typeof session.canDispatchWorkflows === "boolean"
   );
 }
 

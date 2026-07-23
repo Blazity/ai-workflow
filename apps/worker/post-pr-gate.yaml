@@ -13,7 +13,7 @@ postPrGate:
     # Requires ANTHROPIC_API_KEY in env.
     #
     # The `name` field becomes part of the GitHub Check Run name
-    # ("blazebot / <name>"). GitHub does NOT allow renaming check runs after
+    # ("AI Workflow / <name>"). GitHub does NOT allow renaming check runs after
     # creation. Pick a stable value.
     - uses: code-hygiene
       name: code-hygiene

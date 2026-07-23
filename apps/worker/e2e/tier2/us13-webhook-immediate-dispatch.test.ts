@@ -69,7 +69,7 @@ describe("US-13: Webhook-triggered immediate dispatch", () => {
       ].join("\n"),
     });
     ticketKey = ticket.ticketKey;
-    branchName = `blazebot/${ticketKey.toLowerCase()}`;
+    branchName = `ai-workflow/${ticketKey.toLowerCase()}`;
 
     // 2. Move to AI — Jira fires the webhook. No cron poll is invoked, so any
     //    claim we observe must be attributable to the webhook path.

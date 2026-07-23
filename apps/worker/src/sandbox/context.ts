@@ -57,6 +57,11 @@ export interface ReviewContextInput {
   ticket: TicketData;
   prompt: string;
   researchPlanMarkdown: string;
+  reviewFeedback?: {
+    state: "changes_requested" | "commented";
+    author: string;
+    body: string;
+  };
   attachments?: DownloadedAttachment[];
   preSandboxAdditions?: PreSandboxPromptAddition[];
   selectedRepositories?: SelectedRepository[];
@@ -102,7 +107,9 @@ ${branchName}
 
   md += repositoryContextSection;
   md += preSandboxSection;
-  md += `\n---\n\n${prompt}\n`;
+  if (prompt.length > 0) {
+    md += `\n---\n\n${prompt}\n`;
+  }
   return md;
 }
 
@@ -116,7 +123,7 @@ export function assembleImplementationContext(input: ImplementationContextInput)
   // agent actually addresses it. Empty on the first run, so the section vanishes.
   const repositoryContextSection = renderRepositoryContexts(repositoryContexts);
   const clarificationsSection = renderClarificationsSection(ticket.clarifications);
-  return `# Requirements
+  const runtimeData = `# Requirements
 
 ## Ticket ID
 
@@ -134,21 +141,35 @@ ${clarificationsSection}
 
 ${researchPlanMarkdown}
 ${repositoryContextSection}${selectedRepositoriesSection}
-${preSandboxSection}
+${preSandboxSection}`;
+  return prompt.length > 0
+    ? `${runtimeData}
 
 ---
 
 ${prompt}
-`;
+`
+    : runtimeData;
 }
 
 export function assembleReviewContext(input: ReviewContextInput): string {
-  const { ticket, prompt, researchPlanMarkdown, attachments, preSandboxAdditions, selectedRepositories } = input;
+  const {
+    ticket,
+    prompt,
+    researchPlanMarkdown,
+    reviewFeedback,
+    attachments,
+    preSandboxAdditions,
+    selectedRepositories,
+  } = input;
   const attachmentsSection = renderAttachmentsSection(attachments);
   const preSandboxSection = renderPreSandboxAdditions(preSandboxAdditions);
   const selectedRepositoriesSection = renderSelectedRepositories(selectedRepositories);
   const clarificationsSection = renderClarificationsSection(ticket.clarifications);
-  return `# Requirements
+  const reviewFeedbackSection = reviewFeedback
+    ? `\n## Pull request review feedback\n\nState: ${reviewFeedback.state}\n\n${reviewFeedback.author}: ${reviewFeedback.body}\n`
+    : "";
+  const runtimeData = `# Requirements
 
 ## Ticket ID
 
@@ -165,13 +186,16 @@ ${clarificationsSection}
 ## Research & Plan
 
 ${researchPlanMarkdown}
-${selectedRepositoriesSection}
-${preSandboxSection}
+${reviewFeedbackSection}${selectedRepositoriesSection}
+${preSandboxSection}`;
+  return prompt.length > 0
+    ? `${runtimeData}
 
 ---
 
 ${prompt}
-`;
+`
+    : runtimeData;
 }
 
 export interface FixContextInput {

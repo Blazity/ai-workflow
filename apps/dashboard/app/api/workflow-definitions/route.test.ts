@@ -6,16 +6,22 @@ import {
   handleDefinitionDeploy,
   handleDefinitionGet,
   handleDefinitionPatch,
+  handleDefinitionPromptPreview,
   handleDefinitionPut,
   handleDefinitionLayout,
   handleDefinitionRollback,
   handleDefinitionValidate,
   handleDefinitionRestore,
+  handleManualDispatch,
+  handleManualDispatchPreflight,
   handleDefinitionsCreate,
   handleDefinitionsList,
 } from "./handler.ts";
 
 const idParams = (id: string) => ({ params: Promise.resolve({ id }) });
+const triggerParams = (id: string, nodeId: string) => ({
+  params: Promise.resolve({ id, nodeId }),
+});
 
 test("list GET forwards to the worker and re-serializes status", async () => {
   const res = await handleDefinitionsList(async (path, init) => {
@@ -108,6 +114,53 @@ test("detail DELETE forwards and re-serializes status", async () => {
   assert.deepEqual(await res.json(), { ok: true });
 });
 
+test("manual dispatch preflight forwards the trigger path and body", async () => {
+  const calls: Array<{ path: string; init: RequestInit }> = [];
+  const res = await handleManualDispatchPreflight(
+    new Request("https://dashboard.example.com/api/workflow-definitions/12", {
+      method: "POST",
+      body: JSON.stringify({ kind: "ticket", ticketKey: "AIW-173" }),
+    }),
+    triggerParams("12", "ticket trigger"),
+    async (path, init) => {
+      calls.push({ path, init: init ?? {} });
+      return Response.json({ runnable: true }, { status: 200 });
+    },
+  );
+  assert.equal(res.status, 200);
+  assert.equal(
+    calls[0].path,
+    "/api/v1/workflow-definitions/12/triggers/ticket%20trigger/manual-dispatch/preflight",
+  );
+  assert.deepEqual(JSON.parse(String(calls[0].init.body)), {
+    kind: "ticket",
+    ticketKey: "AIW-173",
+  });
+});
+
+test("manual dispatch preserves recovering status from the worker", async () => {
+  const res = await handleManualDispatch(
+    new Request("https://dashboard.example.com/api/workflow-definitions/12", {
+      method: "POST",
+      body: JSON.stringify({
+        requestId: "1b02cf6d-d510-4ae1-a26d-c22f777b1b3a",
+        expectedDeployedVersion: 3,
+        input: { kind: "ticket", ticketKey: "AIW-173" },
+      }),
+    }),
+    triggerParams("12", "trigger"),
+    async (path) => {
+      assert.equal(
+        path,
+        "/api/v1/workflow-definitions/12/triggers/trigger/manual-dispatch",
+      );
+      return Response.json({ status: "recovering" }, { status: 202 });
+    },
+  );
+  assert.equal(res.status, 202);
+  assert.deepEqual(await res.json(), { status: "recovering" });
+});
+
 test("restore forwards to the nested worker path", async () => {
   const calls: Array<{ path: string; init: RequestInit }> = [];
   const res = await handleDefinitionRestore(
@@ -140,6 +193,35 @@ test("restore maps worker timeouts to 504", async () => {
   );
   assert.equal(res.status, 504);
   assert.deepEqual(await res.json(), { error: "Worker request timed out" });
+});
+
+test("prompt preview forwards the unsaved v2 candidate and is never cached", async () => {
+  const payload = {
+    definition: { schemaVersion: 2, nodes: [], edges: [] },
+    blockId: "implementation",
+  };
+  const res = await handleDefinitionPromptPreview(
+    new Request(
+      "https://dashboard.example.com/api/workflow-definitions/12/prompt-preview",
+      {
+        method: "POST",
+        body: JSON.stringify(payload),
+      },
+    ),
+    idParams("12"),
+    async (path, init) => {
+      assert.equal(
+        path,
+        "/api/v1/workflow-definitions/12/prompt-preview",
+      );
+      assert.equal(init?.method, "POST");
+      assert.deepEqual(JSON.parse(String(init?.body)), payload);
+      return Response.json({ blockId: "implementation", sections: [] });
+    },
+  );
+
+  assert.equal(res.status, 200);
+  assert.equal(res.headers.get("cache-control"), "private, no-store");
 });
 
 for (const [name, handler, method] of [

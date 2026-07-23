@@ -11,6 +11,7 @@ import { collectSnapshots } from "../../lib/telemetry/collect-snapshots.js";
 import { upsertRunSnapshots } from "../../lib/telemetry/run-telemetry.js";
 import type { RunsLister } from "../../lib/overview/collect-runs.js";
 import { drainOldestPendingTrigger } from "../../lib/dispatch-trigger.js";
+import { listPendingTriggers } from "../../lib/trigger-delivery-store.js";
 import {
   classifyProtectedClarificationSubjects,
 } from "../../clarifications/store.js";
@@ -23,6 +24,11 @@ import {
   listDispatchBlockingApprovals,
   type ApprovalRow,
 } from "../../approvals/store.js";
+import { deleteExpiredRunObservations } from "../../run-observability/store.js";
+import { recoverManualDispatches } from "../../manual-dispatch/service.js";
+import { listRecoverableManualDispatches } from "../../manual-dispatch/store.js";
+
+const PENDING_TRIGGER_RECOVERY_SCAN_LIMIT = 20;
 
 export default defineEventHandler(async (event) => {
   verifyCronAuth(getHeader(event, "authorization"));
@@ -57,7 +63,18 @@ export default defineEventHandler(async (event) => {
   // protected and cannot be replaced by a fresh ticket workflow.
   const ticketKeys = await discoverAiColumnTickets(adapters);
 
+  const manualDispatchRecovery = await recoverManualDispatches({
+    db,
+    adapters,
+    maxConcurrentAgents: env.MAX_CONCURRENT_AGENTS,
+  });
+  const protectedRunSubjects = new Set(retainedClarificationSubjects);
+  for (const request of await listRecoverableManualDispatches(db)) {
+    protectedRunSubjects.add(request.subjectKey);
+  }
+
   const releasedTriggerRecovery = { attempted: 0, started: 0, errors: 0 };
+  const releasedTriggerSubjects = new Set<string>();
   const { cancelled, cleaned } = await reconcileRuns(
     new Set(ticketKeys),
     adapters.runRegistry,
@@ -73,6 +90,8 @@ export default defineEventHandler(async (event) => {
       });
     },
     async (subjectKey) => {
+      releasedTriggerSubjects.add(subjectKey);
+      if (releasedTriggerRecovery.started > 0) return;
       releasedTriggerRecovery.attempted++;
       try {
         const result = await drainOldestPendingTrigger(subjectKey, {
@@ -87,11 +106,17 @@ export default defineEventHandler(async (event) => {
         throw error;
       }
     },
-    retainedClarificationSubjects,
+    protectedRunSubjects,
     db,
     terminalClarificationSubjects,
   );
 
+  const polledTriggerRecovery = await recoverPendingTriggers(
+    db,
+    adapters,
+    releasedTriggerSubjects,
+    releasedTriggerRecovery.started === 0,
+  );
   const approvalRecovery = await recoverApprovedPlanDispatches(
     blockingApprovals,
     db,
@@ -109,6 +134,18 @@ export default defineEventHandler(async (event) => {
   await new GateStore(db)
     .purgeExpired()
     .catch((err) => logger.warn({ err: (err as Error).message }, "poll_gate_purge_failed"));
+
+  // Replay retention: delete at most one bounded batch per poll. The durable
+  // expiry markers remain on workflow_runs, so the UI can still distinguish an
+  // expired replay from a historical run that was never captured.
+  const replayRetention = await deleteExpiredRunObservations({ db, limit: 100 })
+    .catch((err) => {
+      logger.warn(
+        { err: (err as Error).message },
+        "poll_replay_retention_failed",
+      );
+      return { deleted: 0, runIds: [] };
+    });
 
   // Telemetry: snapshot run lifecycle from the Workflow world into Neon so run
   // history, active counts and durations stay SQL-queryable beyond Vercel's
@@ -130,12 +167,74 @@ export default defineEventHandler(async (event) => {
     started: started.length,
     cancelled,
     cleaned,
-    pendingRecovered: releasedTriggerRecovery.started,
-    triggerRecovery: { released: releasedTriggerRecovery },
+    pendingRecovered:
+      releasedTriggerRecovery.started + polledTriggerRecovery.started,
+    triggerRecovery: {
+      released: releasedTriggerRecovery,
+      polled: polledTriggerRecovery,
+    },
     clarificationExpiry,
     approvalRecovery,
+    manualDispatchRecovery,
+    replayRetention: { deleted: replayRetention.deleted },
   };
 });
+
+async function recoverPendingTriggers(
+  db: ReturnType<typeof getDb>,
+  adapters: ReturnType<typeof createAdapters>,
+  releasedSubjects: ReadonlySet<string>,
+  mayStart: boolean,
+): Promise<{ listed: number; attempted: number; started: number; errors: number }> {
+  const metrics = { listed: 0, attempted: 0, started: 0, errors: 0 };
+  if (!mayStart) return metrics;
+
+  let pending: Awaited<ReturnType<typeof listPendingTriggers>>;
+  try {
+    pending = await listPendingTriggers(
+      db,
+      PENDING_TRIGGER_RECOVERY_SCAN_LIMIT,
+    );
+    metrics.listed = pending.length;
+  } catch (error) {
+    metrics.errors++;
+    logger.warn(
+      {
+        error: error instanceof Error ? error.message : String(error),
+      },
+      "poll_pending_trigger_list_failed",
+    );
+    return metrics;
+  }
+
+  for (const trigger of pending) {
+    if (releasedSubjects.has(trigger.subjectKey)) continue;
+    metrics.attempted++;
+    try {
+      const result = await drainOldestPendingTrigger(trigger.subjectKey, {
+        db,
+        runRegistry: adapters.runRegistry,
+        maxConcurrentAgents: env.MAX_CONCURRENT_AGENTS,
+      });
+      if (result?.result === "error") metrics.errors++;
+      if (result?.result === "started") {
+        metrics.started++;
+        break;
+      }
+    } catch (error) {
+      metrics.errors++;
+      logger.warn(
+        {
+          subjectKey: trigger.subjectKey,
+          error: error instanceof Error ? error.message : String(error),
+        },
+        "poll_pending_trigger_recovery_failed",
+      );
+    }
+  }
+
+  return metrics;
+}
 
 async function recoverApprovedPlanDispatches(
   blockingApprovals: ApprovalRow[],

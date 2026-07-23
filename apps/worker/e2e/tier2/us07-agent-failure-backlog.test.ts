@@ -51,7 +51,7 @@ describe("US-07: Agent failure moves ticket to Backlog", () => {
       ].join("\n"),
     });
     ticketKey = ticket.ticketKey;
-    branchName = `blazebot/${ticketKey.toLowerCase()}`;
+    branchName = `ai-workflow/${ticketKey.toLowerCase()}`;
 
     // 2. Move to AI column — Jira webhook triggers dispatch
     await moveTicketToColumn(ticketKey, e2eEnv.COLUMN_AI);

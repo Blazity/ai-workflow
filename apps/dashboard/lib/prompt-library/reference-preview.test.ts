@@ -19,6 +19,7 @@ const row: PromptLibraryListRowDto = {
   updatedAt: "2026-01-03T00:00:00Z",
   createdByLabel: "System",
   body: "# Current body",
+  slots: [],
 };
 
 function reference(version: "latest" | number): ParsedPromptReference {
@@ -31,6 +32,7 @@ const detail: PromptLibraryDetailResponse = {
     promptId: 7,
     version: 3,
     body: row.body,
+    slots: [],
     createdAt: row.updatedAt,
     createdById: "system",
     createdByLabel: "System",
@@ -41,6 +43,7 @@ const detail: PromptLibraryDetailResponse = {
       promptId: 7,
       version: 3,
       body: row.body,
+      slots: [],
       createdAt: row.updatedAt,
       createdById: "system",
       createdByLabel: "System",
@@ -50,6 +53,7 @@ const detail: PromptLibraryDetailResponse = {
       promptId: 7,
       version: 2,
       body: "# Historical body",
+      slots: [],
       createdAt: "2026-01-02T00:00:00Z",
       createdById: "system",
       createdByLabel: "System",

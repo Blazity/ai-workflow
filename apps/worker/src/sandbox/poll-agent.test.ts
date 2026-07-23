@@ -19,6 +19,7 @@ vi.mock("./credentials.js", () => ({ getSandboxCredentials: () => ({}) }));
 import {
   checkPhaseDone,
   collectPhase,
+  collectPhaseReplayDiagnostics,
   collectPhaseOutput,
   teardownSandbox,
   teardownSandboxes,
@@ -133,5 +134,83 @@ describe("collectPhase", () => {
       structuredOutput: '{"result":"implemented"}',
       exitCode: 17,
     });
+  });
+
+  it("bounds replay-only partial artifact reads", async () => {
+    mockRunCommand.mockResolvedValue({
+      exitCode: null,
+      stdout: vi.fn(() => new Promise<string>(() => {})),
+      stderr: vi.fn().mockResolvedValue(""),
+    });
+
+    await expect(
+      collectPhaseReplayDiagnostics(
+        "sbx-test-123",
+        {
+          stdout: "/tmp/stdout",
+          stderr: "/tmp/stderr",
+          structuredOutput: null,
+          exitCode: "/tmp/exit-code",
+        },
+        5,
+      ),
+    ).rejects.toThrow("Replay capture timed out");
+  });
+
+  it("sanitizes replay-only diagnostics before returning the step result", async () => {
+    const structuredOutput = '{"result":"private output"}';
+    mockRunCommand.mockImplementation((cmd: string, args: string[]) => {
+      const file = args.at(-1) ?? "";
+      if (cmd === "wc") {
+        return result(file.includes("stdout") ? "40" : "48");
+      }
+      const text = file.includes("stdout")
+        ? "contact person@example.com"
+        : file.includes("stderr")
+          ? "Authorization: Bearer must-not-survive"
+          : file.includes("exit-code")
+            ? "124"
+            : file.includes("result")
+              ? structuredOutput
+              : "";
+      return result(text);
+    });
+
+    const diagnostics = await collectPhaseReplayDiagnostics(
+      "sbx-test-123",
+      {
+        stdout: "/tmp/stdout",
+        stderr: "/tmp/stderr",
+        structuredOutput: "/tmp/result",
+        exitCode: "/tmp/exit-code",
+      },
+    );
+    const durableStepResult = JSON.stringify(diagnostics);
+
+    expect(durableStepResult).not.toContain("private output");
+    expect(durableStepResult).not.toContain("person@example.com");
+    expect(durableStepResult).not.toContain("must-not-survive");
+    expect(diagnostics.structuredOutput).toBeNull();
+    expect(diagnostics.stdout).toContain("[REDACTED:email]");
+    expect(diagnostics.stderr).toContain("[REDACTED:hard_exclusion]");
+    expect(
+      diagnostics.diagnosticSanitization.stdout.redactions.email,
+    ).toBe(1);
+    expect(
+      mockRunCommand.mock.calls.some(([command]) => command === "cat"),
+    ).toBe(false);
+    expect(
+      mockRunCommand.mock.calls.some(([, args]) =>
+        (args as string[]).includes("/tmp/result"),
+      ),
+    ).toBe(false);
+    expect(
+      mockRunCommand.mock.calls.filter(
+        ([command, args]) =>
+          command === "tail" &&
+          (args as string[])[0] === "-c" &&
+          (args as string[])[1] === String(128 * 1024),
+      ),
+    ).toHaveLength(2);
   });
 });

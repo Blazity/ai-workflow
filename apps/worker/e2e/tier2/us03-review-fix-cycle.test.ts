@@ -65,7 +65,7 @@ describe("US-03: Review feedback triggers a fix cycle", () => {
       ].join("\n"),
     });
     ticketKey = ticket.ticketKey;
-    branchName = `blazebot/${ticketKey.toLowerCase()}`;
+    branchName = `ai-workflow/${ticketKey.toLowerCase()}`;
 
     // Create branch with a simple implementation
     await createBranch(branchName);

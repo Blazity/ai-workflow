@@ -11,6 +11,7 @@ import {
   resolveAwaitingRun,
   resolveAwaitingRunsForTicket,
   markRunFailedOnSelfMove,
+  markRunSucceededOnSelfMove,
   type RunSnapshot,
   type RunUsage,
   type RunBlockStatusWrite,
@@ -284,6 +285,28 @@ describe("two writers converge on one row", () => {
 });
 
 describe("recordBlockStatuses", () => {
+  it("persists summary-only block state without legacy output values", async () => {
+    await recordBlockStatuses(
+      db,
+      blockWrite({
+        blockStatuses: {
+          b1: {
+            status: "ok",
+            attempt: 2,
+            output: {
+              status: "ok",
+              body: "sensitive execution output",
+            },
+          },
+        },
+      }),
+    );
+
+    expect((await row("wrun_1")).blockStatuses).toEqual({
+      b1: { status: "ok", attempt: 2 },
+    });
+  });
+
   it("stores the frozen prompt manifest and later writers preserve it", async () => {
     const promptManifest: ResolvedPromptReference[] = [{
       promptId: 42,
@@ -414,6 +437,46 @@ describe("markRunFailedOnSelfMove", () => {
   it("is a no-op for a missing run", async () => {
     await markRunFailedOnSelfMove(db, "wrun_missing");
     expect(await row("wrun_missing")).toBeUndefined();
+  });
+});
+
+describe("markRunSucceededOnSelfMove", () => {
+  it("advances an in-flight 'running' row to 'success'", async () => {
+    await recordBlockStatuses(db, blockWrite()); // inserts status 'running'
+    await markRunSucceededOnSelfMove(db, "wrun_1");
+    expect((await row("wrun_1")).status).toBe("success");
+  });
+
+  it("never downgrades an already-frozen outcome", async () => {
+    for (const frozen of ["failed", "blocked", "awaiting"] as const) {
+      const runId = `wrun_s_${frozen}`;
+      await db.insert(workflowRuns).values({
+        runId,
+        subjectKey: "ticket:jira:PROJ-1",
+        workflowId: "wf_agent",
+        workflowName: "Agent",
+        status: frozen,
+      });
+      await markRunSucceededOnSelfMove(db, runId);
+      expect((await row(runId)).status).toBe(frozen);
+    }
+  });
+
+  it("marks a null-status (in-flight) row as success", async () => {
+    await db.insert(workflowRuns).values({
+      runId: "wrun_s_null",
+      subjectKey: "ticket:jira:PROJ-2",
+      workflowId: "wf_agent",
+      workflowName: "Agent",
+      // status omitted -> stored NULL; must be treated as in-flight, not skipped
+    });
+    await markRunSucceededOnSelfMove(db, "wrun_s_null");
+    expect((await row("wrun_s_null")).status).toBe("success");
+  });
+
+  it("is a no-op for a missing run", async () => {
+    await markRunSucceededOnSelfMove(db, "wrun_s_missing");
+    expect(await row("wrun_s_missing")).toBeUndefined();
   });
 });
 

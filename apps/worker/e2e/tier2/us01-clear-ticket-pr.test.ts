@@ -57,7 +57,7 @@ describe("US-01: Clear ticket produces a PR", () => {
       ].join("\n"),
     });
     ticketKey = ticket.ticketKey;
-    branchName = `blazebot/${ticketKey.toLowerCase()}`;
+    branchName = `ai-workflow/${ticketKey.toLowerCase()}`;
 
     // 2. Move to AI column — webhook or cron triggers dispatch
     await moveTicketToColumn(ticketKey, e2eEnv.COLUMN_AI);

@@ -14,16 +14,29 @@ import {
   serial,
   text,
   timestamp,
+  unique,
   uniqueIndex,
 } from "drizzle-orm/pg-core";
 import type {
   BlockRunState,
+  HarnessProfileDraftManifestV1,
+  HarnessProfileManifestV1,
+  HarnessRunManifestRecord,
+  PromptSlotDefinition,
+  ReplayAttemptOutcome,
+  ReplayAttemptState,
+  ReplayCaptureStatus,
+  ReplaySanitizedEnvelope,
   ResolvedPromptReference,
-  WorkflowDefinition,
+  WorkflowDefinitionLayoutInput,
+  WorkflowReplayGraphSnapshot,
+  WorkflowReplayLayoutSnapshot,
+  WorkflowReplaySelectedTransition,
   WorkflowRunBudgetFailure,
 } from "@shared/contracts";
 import type { GateStatusRef } from "../adapters/vcs/types.js";
 import type { PrePrCheckConfig } from "../pre-pr-checks/config.js";
+import { organization } from "./auth-schema.js";
 
 /** One owner-CAS reservation per provider-neutral workflow subject. */
 export const activeRuns = pgTable(
@@ -103,6 +116,52 @@ export const triggerDeliveries = pgTable(
         workflowDefinitionVersions.version,
       ],
       name: "trigger_deliveries_definition_version_fk",
+    }),
+  ],
+);
+
+export const manualDispatchRequests = pgTable(
+  "manual_dispatch_requests",
+  {
+    requestId: text("request_id").primaryKey(),
+    payloadHash: text("payload_hash").notNull(),
+    definitionId: integer("definition_id").notNull(),
+    definitionVersion: integer("definition_version").notNull(),
+    triggerNodeId: text("trigger_node_id").notNull(),
+    triggerType: text("trigger_type").notNull(),
+    inputKind: text("input_kind").notNull(),
+    subjectKey: text("subject_key").notNull(),
+    ticketKey: text("ticket_key"),
+    inputPayload: jsonb("input_payload").$type<Record<string, unknown>>().notNull(),
+    actorUserId: text("actor_user_id").notNull(),
+    actorLabel: text("actor_label").notNull(),
+    ownerToken: text("owner_token"),
+    runId: text("run_id"),
+    status: text("status").notNull().default("pending"),
+    errorCode: text("error_code"),
+    errorMessage: text("error_message"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    check(
+      "manual_dispatch_requests_status_check",
+      sql`${t.status} in ('pending', 'reserved', 'prepared', 'candidate_started', 'started', 'failed')`,
+    ),
+    check(
+      "manual_dispatch_requests_input_kind_check",
+      sql`${t.inputKind} in ('ticket', 'pull_request')`,
+    ),
+    index("manual_dispatch_requests_status_idx").on(t.status),
+    index("manual_dispatch_requests_subject_key_idx").on(t.subjectKey),
+    index("manual_dispatch_requests_run_id_idx").on(t.runId),
+    foreignKey({
+      columns: [t.definitionId, t.definitionVersion],
+      foreignColumns: [
+        workflowDefinitionVersions.definitionId,
+        workflowDefinitionVersions.version,
+      ],
+      name: "manual_dispatch_requests_definition_version_fk",
     }),
   ],
 );
@@ -211,6 +270,8 @@ export const envMarker = pgTable("env_marker", {
  * whichever writes first inserts the row and the others fill in the rest,
  * regardless of order.
  */
+type BlockRunStateSummary = Omit<BlockRunState, "output">;
+
 export const workflowRuns = pgTable("workflow_runs", {
   runId: text("run_id").primaryKey(),
 
@@ -253,8 +314,21 @@ export const workflowRuns = pgTable("workflow_runs", {
 
   definitionVersion: integer("definition_version"),
   definitionId: integer("definition_id"),
-  blockStatuses: jsonb("block_statuses").$type<Record<string, BlockRunState>>(),
+  blockStatuses: jsonb("block_statuses")
+    .$type<Record<string, BlockRunStateSummary>>(),
   promptManifest: jsonb("prompt_manifest").$type<ResolvedPromptReference[]>(),
+  harnessManifests: jsonb("harness_manifests").$type<HarnessRunManifestRecord[]>(),
+  /** Durable markers distinguish a captured replay that expired from a
+   * historical run for which replay was never captured. */
+  replayOrganizationId: text("replay_organization_id").references(
+    () => organization.id,
+    { onDelete: "set null" },
+  ),
+  replayCapturedAt: timestamp("replay_captured_at", { withTimezone: true }),
+  replayExpiresAt: timestamp("replay_expires_at", { withTimezone: true }),
+  replayCaptureFailedAt: timestamp("replay_capture_failed_at", {
+    withTimezone: true,
+  }),
 
   // Bookkeeping.
   firstSeenAt: timestamp("first_seen_at", { withTimezone: true })
@@ -272,6 +346,142 @@ export const workflowRuns = pgTable("workflow_runs", {
   index("workflow_runs_ticket_key_idx").on(t.ticketKey),
   index("workflow_runs_definition_id_idx").on(t.definitionId),
 ]);
+
+/**
+ * Replay-safe snapshot captured at the beginning of a v2 run. The exact
+ * definition and layout are copied here because both mutable draft state and
+ * independently persisted layout can change after dispatch.
+ */
+export const workflowRunObservations = pgTable(
+  "workflow_run_observations",
+  {
+    runId: text("run_id")
+      .primaryKey()
+      .references(() => workflowRuns.runId, { onDelete: "cascade" }),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    definitionId: integer("definition_id").notNull(),
+    definitionVersion: integer("definition_version").notNull(),
+    definitionSchemaVersion: integer("definition_schema_version").notNull(),
+    graph: jsonb("graph").$type<WorkflowReplayGraphSnapshot>().notNull(),
+    layout: jsonb("layout").$type<WorkflowReplayLayoutSnapshot>().notNull(),
+    runtimeManifest: jsonb("runtime_manifest")
+      .$type<ReplaySanitizedEnvelope>()
+      .notNull(),
+    captureStatus: text("capture_status").$type<ReplayCaptureStatus>().notNull(),
+    capturedAt: timestamp("captured_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  },
+  (t) => [
+    unique("workflow_run_observations_run_org_unique").on(
+      t.runId,
+      t.organizationId,
+    ),
+    index("workflow_run_observations_org_captured_idx").on(
+      t.organizationId,
+      t.capturedAt,
+    ),
+    index("workflow_run_observations_expires_at_idx").on(t.expiresAt),
+    check(
+      "workflow_run_observations_schema_version_check",
+      sql`${t.definitionSchemaVersion} in (1, 2)`,
+    ),
+    check(
+      "workflow_run_observations_capture_status_check",
+      sql`${t.captureStatus} in ('available', 'unavailable')`,
+    ),
+    foreignKey({
+      columns: [t.definitionId, t.definitionVersion],
+      foreignColumns: [
+        workflowDefinitionVersions.definitionId,
+        workflowDefinitionVersions.version,
+      ],
+      name: "workflow_run_observations_definition_version_fk",
+    }).onDelete("restrict"),
+  ],
+);
+
+/**
+ * One durable row per invocation. Inputs, outputs, logs, and metadata are
+ * diagnostic copies only; they are sanitized and bounded before persistence.
+ */
+export const workflowBlockAttempts = pgTable(
+  "workflow_block_attempts",
+  {
+    id: serial("id").primaryKey(),
+    runId: text("run_id").notNull(),
+    organizationId: text("organization_id").notNull(),
+    nodeId: text("node_id").notNull(),
+    attempt: integer("attempt").notNull(),
+    activationScopeId: text("activation_scope_id").notNull(),
+    state: text("state").$type<ReplayAttemptState>().notNull(),
+    outcome: jsonb("outcome").$type<ReplayAttemptOutcome>(),
+    selectedTransition: jsonb("selected_transition")
+      .$type<WorkflowReplaySelectedTransition>(),
+    startedAt: timestamp("started_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+    durationMs: integer("duration_ms"),
+    diagnosticId: text("diagnostic_id"),
+    inputEnvelope: jsonb("input_envelope").$type<ReplaySanitizedEnvelope>(),
+    outputEnvelope: jsonb("output_envelope").$type<ReplaySanitizedEnvelope>(),
+    logEnvelope: jsonb("log_envelope").$type<ReplaySanitizedEnvelope>(),
+    metadataEnvelope: jsonb("metadata_envelope").$type<ReplaySanitizedEnvelope>(),
+    observationRevision: integer("observation_revision").notNull().default(0),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("workflow_block_attempts_identity_unique").on(
+      t.runId,
+      t.nodeId,
+      t.attempt,
+      t.activationScopeId,
+    ),
+    index("workflow_block_attempts_run_id_idx").on(t.runId, t.id),
+    index("workflow_block_attempts_org_run_idx").on(
+      t.organizationId,
+      t.runId,
+      t.id,
+    ),
+    check("workflow_block_attempts_attempt_check", sql`${t.attempt} > 0`),
+    check(
+      "workflow_block_attempts_observation_revision_check",
+      sql`${t.observationRevision} >= 0`,
+    ),
+    check(
+      "workflow_block_attempts_state_check",
+      sql`${t.state} in ('running', 'waiting_loop', 'waiting_for_clarification', 'completed', 'failed', 'cancelled', 'skipped')`,
+    ),
+    check(
+      "workflow_block_attempts_duration_check",
+      sql`${t.durationMs} is null or ${t.durationMs} >= 0`,
+    ),
+    check(
+      "workflow_block_attempts_completion_check",
+      sql`(${t.state} in ('running', 'waiting_loop') and ${t.completedAt} is null) or (${t.state} not in ('running', 'waiting_loop') and ${t.completedAt} is not null)`,
+    ),
+    foreignKey({
+      columns: [t.runId, t.organizationId],
+      foreignColumns: [
+        workflowRunObservations.runId,
+        workflowRunObservations.organizationId,
+      ],
+      name: "workflow_block_attempts_run_org_fk",
+    }).onDelete("cascade"),
+  ],
+);
 
 export const workflowOwnedBranches = pgTable(
   "workflow_owned_branches",
@@ -360,9 +570,9 @@ export const workflowDefinitions = pgTable(
       .array()
       .notNull()
       .default(sql`'{}'::text[]`),
-    /** Node coordinates are CAS-patched independently from semantic edits. */
+    /** Canvas geometry is CAS-patched independently from semantic edits. */
     layout: jsonb("layout")
-      .$type<{ nodes: Record<string, { x: number; y: number }> }>()
+      .$type<WorkflowDefinitionLayoutInput>()
       .notNull()
       .default(sql`'{"nodes":{}}'::jsonb`),
     layoutRevision: integer("layout_revision").notNull().default(0),
@@ -467,12 +677,208 @@ export const promptLibraryVersions = pgTable(
       .references(() => promptLibrary.id),
     version: integer("version").notNull(),
     body: text("body").notNull(),
+    slots: jsonb("slots")
+      .$type<PromptSlotDefinition[]>()
+      .notNull()
+      .default(sql`'[]'::jsonb`),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     createdById: text("created_by_id").notNull(),
     createdByLabel: text("created_by_label").notNull(),
     restoredFromVersion: integer("restored_from_version"),
   },
   (t) => [primaryKey({ columns: [t.promptId, t.version] })],
+);
+
+/**
+ * Harness profiles split mutable draft state from immutable published
+ * versions. System profiles are global and read-only; organization profiles
+ * are tenant-owned and all store access must scope them to organization_id.
+ */
+export const harnessProfileVersions = pgTable(
+  "harness_profile_versions",
+  {
+    profileId: text("profile_id")
+      .notNull()
+      .references((): AnyPgColumn => harnessProfiles.id, {
+        onDelete: "restrict",
+      }),
+    version: integer("version").notNull(),
+    manifest: jsonb("manifest").$type<HarnessProfileManifestV1>().notNull(),
+    manifestHash: text("manifest_hash").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    createdById: text("created_by_id").notNull(),
+    restoredFromVersion: integer("restored_from_version"),
+  },
+  (t) => [
+    primaryKey({ columns: [t.profileId, t.version] }),
+    uniqueIndex("harness_profile_versions_hash_unique").on(
+      t.profileId,
+      t.manifestHash,
+    ),
+    check("harness_profile_versions_version_check", sql`${t.version} > 0`),
+  ],
+);
+
+export const harnessProfiles = pgTable(
+  "harness_profiles",
+  {
+    id: text("id").primaryKey(),
+    organizationId: text("organization_id").references(() => organization.id, {
+      onDelete: "cascade",
+    }),
+    slug: text("slug").notNull(),
+    draftManifest: jsonb("draft_manifest")
+      .$type<HarnessProfileDraftManifestV1>()
+      .notNull(),
+    draftRevision: integer("draft_revision").notNull().default(1),
+    draftRestoredFromVersion: integer("draft_restored_from_version"),
+    publishedVersion: integer("published_version"),
+    system: boolean("system").notNull().default(false),
+    readOnly: boolean("read_only").notNull().default(false),
+    archivedAt: timestamp("archived_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    createdById: text("created_by_id").notNull(),
+    updatedById: text("updated_by_id").notNull(),
+  },
+  (t) => [
+    uniqueIndex("harness_profiles_org_slug_unique")
+      .on(t.organizationId, t.slug)
+      .where(sql`${t.organizationId} is not null`),
+    uniqueIndex("harness_profiles_system_slug_unique")
+      .on(t.slug)
+      .where(sql`${t.organizationId} is null`),
+    index("harness_profiles_organization_id_idx").on(t.organizationId),
+    check(
+      "harness_profiles_ownership_check",
+      sql`(${t.system} = true and ${t.readOnly} = true and ${t.organizationId} is null) or (${t.system} = false and ${t.organizationId} is not null)`,
+    ),
+    check(
+      "harness_profiles_draft_revision_check",
+      sql`${t.draftRevision} > 0`,
+    ),
+    check(
+      "harness_profiles_published_version_check",
+      sql`${t.publishedVersion} is null or ${t.publishedVersion} > 0`,
+    ),
+    foreignKey({
+      columns: [t.id, t.publishedVersion],
+      foreignColumns: [
+        harnessProfileVersions.profileId,
+        harnessProfileVersions.version,
+      ],
+      name: "harness_profiles_published_version_fk",
+    }).onDelete("restrict"),
+  ],
+);
+
+/**
+ * Content-addressed, organization-private snapshots of imported GitHub skills.
+ * The artifact hash covers the exact source commit, root path, file paths,
+ * modes, hashes, and bytes.
+ */
+export const harnessSkillArtifacts = pgTable(
+  "harness_skill_artifacts",
+  {
+    id: serial("id").primaryKey(),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    artifactHash: text("artifact_hash").notNull(),
+    name: text("name").notNull(),
+    description: text("description"),
+    sourceOwner: text("source_owner").notNull(),
+    sourceRepository: text("source_repository").notNull(),
+    sourcePath: text("source_path").notNull(),
+    sourceCommitSha: text("source_commit_sha").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    createdById: text("created_by_id").notNull(),
+  },
+  (t) => [
+    uniqueIndex("harness_skill_artifacts_org_hash_unique").on(
+      t.organizationId,
+      t.artifactHash,
+    ),
+    index("harness_skill_artifacts_source_idx").on(
+      t.organizationId,
+      t.sourceOwner,
+      t.sourceRepository,
+      t.sourcePath,
+    ),
+  ],
+);
+
+export const harnessSkillArtifactFiles = pgTable(
+  "harness_skill_artifact_files",
+  {
+    artifactId: integer("artifact_id")
+      .notNull()
+      .references(() => harnessSkillArtifacts.id, { onDelete: "cascade" }),
+    path: text("path").notNull(),
+    mode: integer("mode").notNull(),
+    sizeBytes: integer("size_bytes").notNull(),
+    sha256: text("sha256").notNull(),
+    contentBase64: text("content_base64").notNull(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.artifactId, t.path] }),
+    check(
+      "harness_skill_artifact_files_mode_check",
+      sql`${t.mode} in (420, 493)`,
+    ),
+    check(
+      "harness_skill_artifact_files_size_check",
+      sql`${t.sizeBytes} >= 0`,
+    ),
+  ],
+);
+
+export const harnessProfileVersionSkills = pgTable(
+  "harness_profile_version_skills",
+  {
+    profileId: text("profile_id").notNull(),
+    profileVersion: integer("profile_version").notNull(),
+    artifactId: integer("artifact_id")
+      .notNull()
+      .references(() => harnessSkillArtifacts.id, { onDelete: "restrict" }),
+    skillName: text("skill_name").notNull(),
+    position: integer("position").notNull(),
+  },
+  (t) => [
+    primaryKey({
+      columns: [t.profileId, t.profileVersion, t.artifactId],
+    }),
+    foreignKey({
+      columns: [t.profileId, t.profileVersion],
+      foreignColumns: [
+        harnessProfileVersions.profileId,
+        harnessProfileVersions.version,
+      ],
+      name: "harness_profile_version_skills_profile_version_fk",
+    }).onDelete("restrict"),
+    uniqueIndex("harness_profile_version_skills_name_unique").on(
+      t.profileId,
+      t.profileVersion,
+      t.skillName,
+    ),
+    uniqueIndex("harness_profile_version_skills_position_unique").on(
+      t.profileId,
+      t.profileVersion,
+      t.position,
+    ),
+    check(
+      "harness_profile_version_skills_position_check",
+      sql`${t.position} >= 0`,
+    ),
+  ],
 );
 
 export * from "./auth-schema.js";

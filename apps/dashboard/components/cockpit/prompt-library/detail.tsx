@@ -92,7 +92,9 @@ export function PromptDetail({
   const archived = meta.archivedAt !== null;
   const shownVersion = selectedVersion ?? meta.currentVersion;
   const shownIdx = versions.findIndex((v) => v.version === shownVersion);
-  const shownBody = shownIdx >= 0 ? versions[shownIdx].body : detail.current.body;
+  const shownRecord = shownIdx >= 0 ? versions[shownIdx] : detail.current;
+  const shownBody = shownRecord.body;
+  const shownSlots = shownRecord.slots;
   const prev = shownIdx >= 0 ? versions[shownIdx + 1] : undefined;
   const canDiff = prev !== undefined;
   const isHead = shownVersion === meta.currentVersion;
@@ -210,6 +212,28 @@ export function PromptDetail({
       </CkCard>
 
       <CkCard eyebrow={`Prompt body · v${shownVersion}`}>
+        {shownSlots.length > 0 && (
+          <div className="mb-3 rounded-xs border border-neutral-200 bg-off-white/60 px-3 py-2">
+            <div className="mb-1.5 font-mono text-[9px] uppercase tracking-[0.06em] text-neutral-600">
+              Prompt slots · v{shownVersion}
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              {shownSlots.map((slot) => (
+                <span
+                  key={slot.name}
+                  title={slot.description || undefined}
+                  className="inline-flex items-center gap-1 rounded-full border border-mariner-200 bg-panel px-2 py-1 font-mono text-[9px] text-mariner"
+                >
+                  ◇ {slot.name}
+                  <span className="text-neutral-500">
+                    {slot.required ? "required" : "optional"}
+                    {Object.hasOwn(slot, "defaultValue") ? " · default" : ""}
+                  </span>
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
         <div className="flex items-center justify-between gap-2 mb-3 flex-wrap">
           <CkTabs tabs={tabs} active={showDiff ? "diff" : showRaw ? "raw" : "preview"} onChange={(id) => setBodyTab(id as "preview" | "raw" | "diff")} />
           <div className="flex items-center gap-3">

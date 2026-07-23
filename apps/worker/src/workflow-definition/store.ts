@@ -2,9 +2,14 @@ import type {
   WorkflowBlockType,
   WorkflowDefinition,
   WorkflowDefinitionLayout,
+  WorkflowDefinitionLayoutInput,
+  WorkflowDefinitionValidationIssue,
   WorkflowDefinitionVersion,
 } from "@shared/contracts";
-import { isTriggerBlockType } from "@shared/contracts";
+import {
+  isTriggerBlockType,
+  normalizeWorkflowDefinitionLayout,
+} from "@shared/contracts";
 import { and, arrayContains, arrayOverlaps, asc, desc, eq, isNull, max, ne, sql } from "drizzle-orm";
 import type { Db } from "../db/client.js";
 import {
@@ -17,10 +22,11 @@ import { DashboardAuthError } from "../lib/auth/users-read.js";
 import {
   describeWorkflowDefinitionIssues,
   upgradeStoredWorkflowDefinition,
-  validateWorkflowDefinitionForDeployment,
+  validateWorkflowDefinitionIssuesForDeployment,
   workflowDefinitionSchema,
 } from "./schema.js";
 import { workflowBlockRegistryContextFromEnv } from "./models.js";
+import { validateWorkflowPromptAuthoringIssues } from "./prompt-authoring.js";
 import {
   applyWorkflowDefinitionLayout,
   canonicalizeWorkflowDefinition,
@@ -73,6 +79,14 @@ export interface WorkflowDefinitionVersionRow {
   restoredFromVersion: number | null;
 }
 
+/** Exact append-only JSON stored for a version, before compatibility reads
+ * normalize legacy v1 shapes. Migration preflight uses this to ensure no
+ * historical configuration is silently discarded. */
+export interface RawWorkflowDefinitionVersionRow
+  extends Omit<WorkflowDefinitionVersionRow, "definition"> {
+  definition: unknown;
+}
+
 /** Domain-level failure a write raises (409 conflict, 404 not found). Routes map
  *  statusCode onto the HTTP response; distinct from the 403 auth gate. */
 export class WorkflowDefinitionStoreError extends Error {
@@ -84,12 +98,17 @@ export class WorkflowDefinitionStoreError extends Error {
   }
 }
 
+export class WorkflowDefinitionValidationError extends WorkflowDefinitionStoreError {
+  constructor(public readonly issues: WorkflowDefinitionValidationIssue[]) {
+    super(422, "Workflow has validation errors");
+  }
+}
+
 type DefinitionSelect = typeof workflowDefinitions.$inferSelect;
 type VersionSelect = typeof workflowDefinitionVersions.$inferSelect;
 
 function normalizeLayout(value: unknown): WorkflowDefinitionLayout {
-  if (!value || typeof value !== "object" || !("nodes" in value)) return EMPTY_WORKFLOW_LAYOUT;
-  return value as WorkflowDefinitionLayout;
+  return normalizeWorkflowDefinitionLayout(value);
 }
 
 function mapDefinitionRow(
@@ -118,6 +137,18 @@ function mapVersionRow(row: VersionSelect): WorkflowDefinitionVersionRow {
     definitionId: row.definitionId,
     version: row.version,
     definition: upgradeStoredWorkflowDefinition(row.definition),
+    createdAt: row.createdAt,
+    createdById: row.createdById,
+    createdByLabel: row.createdByLabel,
+    restoredFromVersion: row.restoredFromVersion,
+  };
+}
+
+function mapRawVersionRow(row: VersionSelect): RawWorkflowDefinitionVersionRow {
+  return {
+    definitionId: row.definitionId,
+    version: row.version,
+    definition: row.definition,
     createdAt: row.createdAt,
     createdById: row.createdById,
     createdByLabel: row.createdByLabel,
@@ -155,12 +186,49 @@ function assertValidDefinition(definition: WorkflowDefinition): void {
       `Invalid definition: ${describeWorkflowDefinitionIssues(parsed.error)}`,
     );
   }
-  const issues = validateWorkflowDefinitionForDeployment(
+  const issues = validateWorkflowDefinitionIssuesForDeployment(
+    parsed.data,
+    workflowBlockRegistryContextFromEnv(),
+    // This guard is used only when an already-stored snapshot is selected or
+    // copied. Keep the v1 validation subset that was in force when that
+    // immutable version was written. New deployments still pass through the
+    // strict `assertDeployableDefinition` path below.
+    { allowLegacyCompatibility: true },
+  );
+  if (issues.length > 0) {
+    throw new WorkflowDefinitionStoreError(
+      400,
+      `Invalid workflow: ${issues.map(({ message }) => message).join("; ")}`,
+    );
+  }
+}
+
+function assertDeployableDefinition(definition: WorkflowDefinition): void {
+  const parsed = workflowDefinitionSchema.safeParse(definition);
+  if (!parsed.success) {
+    throw new WorkflowDefinitionStoreError(
+      400,
+      `Invalid definition: ${describeWorkflowDefinitionIssues(parsed.error)}`,
+    );
+  }
+  const issues = validateWorkflowDefinitionIssuesForDeployment(
     parsed.data,
     workflowBlockRegistryContextFromEnv(),
   );
-  if (issues.length > 0) {
-    throw new WorkflowDefinitionStoreError(400, `Invalid workflow: ${issues.join("; ")}`);
+  if (issues.length > 0) throw new WorkflowDefinitionValidationError(issues);
+}
+
+async function assertDeployableDefinitionWithPromptAuthoring(
+  db: Db,
+  definition: WorkflowDefinition,
+): Promise<void> {
+  assertDeployableDefinition(definition);
+  const promptIssues = await validateWorkflowPromptAuthoringIssues(
+    db,
+    definition,
+  );
+  if (promptIssues.length > 0) {
+    throw new WorkflowDefinitionValidationError(promptIssues);
   }
 }
 
@@ -175,8 +243,17 @@ function parseStructuralDefinition(definition: WorkflowDefinition): WorkflowDefi
   return parsed.data;
 }
 
-function assertValidLayout(layout: WorkflowDefinitionLayout): void {
-  if (!layout || typeof layout !== "object" || !layout.nodes || typeof layout.nodes !== "object") {
+function assertValidLayout(
+  layout: unknown,
+): asserts layout is WorkflowDefinitionLayoutInput {
+  if (
+    !layout ||
+    typeof layout !== "object" ||
+    !("nodes" in layout) ||
+    !layout.nodes ||
+    typeof layout.nodes !== "object" ||
+    Array.isArray(layout.nodes)
+  ) {
     throw new WorkflowDefinitionStoreError(400, "Invalid workflow layout");
   }
   for (const [nodeId, position] of Object.entries(layout.nodes)) {
@@ -185,6 +262,30 @@ function assertValidLayout(layout: WorkflowDefinitionLayout): void {
       !position ||
       !Number.isFinite(position.x) ||
       !Number.isFinite(position.y)
+    ) {
+      throw new WorkflowDefinitionStoreError(400, "Invalid workflow layout");
+    }
+  }
+  if (!("edges" in layout) || layout.edges === undefined) return;
+  if (
+    !layout.edges ||
+    typeof layout.edges !== "object" ||
+    Array.isArray(layout.edges)
+  ) {
+    throw new WorkflowDefinitionStoreError(400, "Invalid workflow layout");
+  }
+  for (const [edgeId, geometry] of Object.entries(layout.edges)) {
+    if (
+      !edgeId ||
+      !geometry ||
+      typeof geometry !== "object" ||
+      !("bend" in geometry) ||
+      !geometry.bend ||
+      typeof geometry.bend !== "object" ||
+      !("x" in geometry.bend) ||
+      !("y" in geometry.bend) ||
+      !Number.isFinite(geometry.bend.x) ||
+      !Number.isFinite(geometry.bend.y)
     ) {
       throw new WorkflowDefinitionStoreError(400, "Invalid workflow layout");
     }
@@ -253,6 +354,28 @@ export async function getWorkflowDefinition(
   return mapDefinitionRow(rows[0], current?.version ?? 0);
 }
 
+/** Loads definition lifecycle metadata and its head revision without decoding
+ * the head JSON. Normal editor/runtime reads continue through
+ * getWorkflowDefinition; raw migration preflight uses this seam so malformed
+ * or retired history can be reported as blockers instead of normalized first. */
+export async function getWorkflowDefinitionRawState(
+  db: Db,
+  id: number,
+): Promise<WorkflowDefinitionRow | null> {
+  const rows = await db
+    .select()
+    .from(workflowDefinitions)
+    .where(eq(workflowDefinitions.id, id))
+    .limit(1);
+  const row = rows[0];
+  if (!row) return null;
+  const [{ currentVersion }] = await db
+    .select({ currentVersion: max(workflowDefinitionVersions.version) })
+    .from(workflowDefinitionVersions)
+    .where(eq(workflowDefinitionVersions.definitionId, id));
+  return mapDefinitionRow(row, currentVersion ?? 0);
+}
+
 export async function getWorkflowDefinitionDraft(
   db: Db,
   definitionId: number,
@@ -299,6 +422,26 @@ export async function getWorkflowDefinitionVersion(
     )
     .limit(1);
   return rows[0] ? mapVersionRow(rows[0]) : null;
+}
+
+/** Returns the exact immutable JSON blob without applying v1 compatibility
+ * upgrades. This is intentionally separate from every normal read API. */
+export async function getRawWorkflowDefinitionVersion(
+  db: Db,
+  definitionId: number,
+  version: number,
+): Promise<RawWorkflowDefinitionVersionRow | null> {
+  const rows = await db
+    .select()
+    .from(workflowDefinitionVersions)
+    .where(
+      and(
+        eq(workflowDefinitionVersions.definitionId, definitionId),
+        eq(workflowDefinitionVersions.version, version),
+      ),
+    )
+    .limit(1);
+  return rows[0] ? mapRawVersionRow(rows[0]) : null;
 }
 
 export async function getDeployedWorkflowDefinitionVersion(
@@ -623,17 +766,18 @@ export async function saveWorkflowDefinitionLayout(
   db: Db,
   input: {
     definitionId: number;
-    layout: WorkflowDefinitionLayout;
+    layout: WorkflowDefinitionLayoutInput;
     expectedLayoutRevision: number;
     actor: WorkflowDefinitionActor;
   },
 ): Promise<WorkflowDefinitionRow> {
   requireEditRole(input.actor.role);
   assertValidLayout(input.layout);
+  const layout = normalizeWorkflowDefinitionLayout(input.layout);
   const rows = await db
     .update(workflowDefinitions)
     .set({
-      layout: input.layout,
+      layout,
       layoutRevision: sql`${workflowDefinitions.layoutRevision} + 1`,
       updatedAt: new Date(),
     })
@@ -690,7 +834,7 @@ export async function deployWorkflowDefinition(
     input.expectedDraftRevision,
   );
   if (!target) throw new WorkflowDefinitionStoreError(409, "Save a draft before deploying");
-  assertValidDefinition(target.definition);
+  await assertDeployableDefinitionWithPromptAuthoring(db, target.definition);
   const triggerTypes = triggerTypesOf(target.definition);
   const triggerArray = triggerArraySql(triggerTypes);
 
@@ -775,7 +919,11 @@ export async function rollbackWorkflowDefinition(
   if (current.deployedVersion !== input.expectedDeployedVersion) {
     throw new WorkflowDefinitionStoreError(409, "Definition changed; reload before rolling back");
   }
-  assertValidDefinition(target.definition);
+  if (target.definition.schemaVersion === 2) {
+    await assertDeployableDefinitionWithPromptAuthoring(db, target.definition);
+  } else {
+    assertValidDefinition(target.definition);
+  }
   const triggerTypes = triggerTypesOf(target.definition);
   const triggerArray = triggerArraySql(triggerTypes);
 
@@ -925,7 +1073,14 @@ export async function updateWorkflowDefinition(
         if (!deployed) {
           throw new WorkflowDefinitionStoreError(409, "The deployed version is unavailable");
         }
-        assertValidDefinition(deployed.definition);
+        if (deployed.definition.schemaVersion === 2) {
+          await assertDeployableDefinitionWithPromptAuthoring(
+            db,
+            deployed.definition,
+          );
+        } else {
+          assertValidDefinition(deployed.definition);
+        }
         triggerTypes = triggerTypesOf(deployed.definition);
       } else {
         const latest = await getCurrentWorkflowDefinitionVersion(db, current.id);

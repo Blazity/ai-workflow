@@ -17,6 +17,7 @@ const row: PromptLibraryListRowDto = {
   updatedAt: "2026-01-01T00:00:00Z",
   createdByLabel: "System",
   body: "# Research",
+  slots: [],
 };
 
 test("resolved read-only references render a responsive expandable card", () => {

@@ -1,26 +1,40 @@
 "use client";
 
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useReducer,
+  useRef,
+  useState,
+} from "react";
 import {
   isTriggerBlockType,
   type RunBlockStatusesResponse,
   type WorkflowDefinition,
   type WorkflowDefinitionDeploymentResponse,
+  type WorkflowDefinitionDeploymentValidationResponse,
   type WorkflowDefinitionDetailResponse,
   type WorkflowDefinitionLayoutResponse,
   type WorkflowDefinitionMeta,
-  type WorkflowDefinitionNode,
   type WorkflowDefinitionTemplate,
   type WorkflowDefinitionSaveResponse,
   type WorkflowDefinitionValidationResponse,
   type WorkflowDefinitionVersion,
+  type WorkflowEdgeGeometry,
   type WorkflowExecutionBudgets,
   type WorkflowEditorOptions,
 } from "@shared/contracts";
 import { FlowEditor } from "@/components/cockpit/flow-editor/flow-editor";
 import { PromptLibraryProvider } from "@/components/cockpit/flow-editor/prompt-library-context";
+import { HarnessProfileCatalogProvider } from "@/components/cockpit/flow-editor/harness-profile-context";
 import { Listbox } from "@/components/cockpit/listbox";
-import type { FlowEdgeDef, FlowNodeDef } from "@/lib/flows";
+import { ManualDispatchModal } from "@/components/cockpit/manual-dispatch-modal";
+import {
+  toFlowDefinition,
+  type FlowEdgeDef,
+  type FlowNodeDef,
+} from "@/lib/flows";
 import { readErrorMessage } from "@/lib/api/error-message";
 import {
   serializeSemanticWorkflowDefinition,
@@ -43,23 +57,61 @@ import {
   type WorkflowValidationController,
   type WorkflowValidationState,
 } from "@/lib/workflow-editor/validation-controller";
-import { workflowEditorActions } from "@/lib/workflow-editor/editor-actions";
+import {
+  workflowDeploymentAfterSave,
+  workflowEditorActions,
+} from "@/lib/workflow-editor/editor-actions";
 import { executionLimitsFromDefinition } from "@/lib/workflow-editor/execution-limits";
 import {
   createEditorResponseGuard,
   type EditorResponseGuard,
 } from "@/lib/workflow-editor/response-guard";
+import {
+  createEditorHistory,
+  editorHistoryCanRedo,
+  editorHistoryCanUndo,
+  editorHistoryIsDirty,
+  reduceEditorHistory,
+  type EditorHistoryAction,
+  type EditorHistoryState,
+} from "@/lib/workflow-editor/history";
 
 interface ValidationRequest {
   definitionId: number;
   definition: WorkflowDefinition;
 }
 
-function toViewNodes(nodes: WorkflowDefinitionNode[]): FlowNodeDef[] {
-  return structuredClone(nodes).map((node) => ({
-    ...node,
-    locked: node.type === "trigger_ticket_ai",
-  }));
+interface WorkflowEditorDocument {
+  nodes: FlowNodeDef[];
+  edges: FlowEdgeDef[];
+  budgets: WorkflowExecutionBudgets;
+  edgeGeometry: Record<string, WorkflowEdgeGeometry>;
+}
+
+function semanticKeyForDefinition(definition: WorkflowDefinition): string {
+  const flow = toFlowDefinition(definition);
+  return JSON.stringify(
+    serializeSemanticWorkflowDefinition(
+      flow.nodes,
+      flow.edges,
+      executionLimitsFromDefinition(definition),
+      definition.schemaVersion,
+    ),
+  );
+}
+
+function semanticKeyForDocument(
+  document: WorkflowEditorDocument,
+  schemaVersion: 1 | 2,
+): string {
+  return JSON.stringify(
+    serializeSemanticWorkflowDefinition(
+      document.nodes,
+      document.edges,
+      document.budgets,
+      schemaVersion,
+    ),
+  );
 }
 
 function nodesValid(nodes: FlowNodeDef[]): boolean {
@@ -85,6 +137,8 @@ export function WorkflowEditorScreen({
   options,
   liveBlocks,
   canEdit,
+  canDispatch,
+  actorLabel,
   initialNodeId,
 }: {
   definitions: WorkflowDefinitionMeta[];
@@ -94,20 +148,41 @@ export function WorkflowEditorScreen({
   options: WorkflowEditorOptions;
   liveBlocks: RunBlockStatusesResponse;
   canEdit: boolean;
+  canDispatch: boolean;
+  actorLabel: string;
   initialNodeId?: string;
 }) {
   const seed = initialDetail.draft ?? initialDetail.deployed?.definition ?? defaultDefinition;
+  const seedFlow = toFlowDefinition(seed);
   const [metas, setMetas] = useState<WorkflowDefinitionMeta[]>(definitions);
   const [selectedId, setSelectedId] = useState(initialDetail.meta.id);
   const [versions, setVersions] = useState<WorkflowDefinitionVersion[]>(initialDetail.versions);
   const [deployed, setDeployed] = useState<WorkflowDefinitionVersion | null>(initialDetail.deployed);
   const [baselineDraft, setBaselineDraft] = useState<WorkflowDefinition | null>(initialDetail.draft);
-  const [budgets, setBudgets] = useState<WorkflowExecutionBudgets>(() =>
-    executionLimitsFromDefinition(seed),
+  const [schemaVersion, setSchemaVersion] = useState<1 | 2>(seed.schemaVersion);
+  const [editorHistory, dispatchEditorHistory] = useReducer(
+    (
+      state: EditorHistoryState<WorkflowEditorDocument>,
+      action: EditorHistoryAction<WorkflowEditorDocument>,
+    ) => reduceEditorHistory(state, action),
+    undefined,
+    () =>
+      createEditorHistory(
+        {
+          nodes: seedFlow.nodes,
+          edges: seedFlow.edges,
+          budgets: executionLimitsFromDefinition(seed),
+          edgeGeometry: structuredClone(initialDetail.layout.edges),
+        },
+        {
+          savedSemanticKey: initialDetail.draft
+            ? semanticKeyForDefinition(initialDetail.draft)
+            : null,
+        },
+      ),
   );
+  const { nodes, edges, budgets, edgeGeometry } = editorHistory.present;
   const [layoutBaseline, setLayoutBaseline] = useState(() => JSON.stringify(initialDetail.layout));
-  const [nodes, setNodes] = useState<FlowNodeDef[]>(() => toViewNodes(seed.nodes));
-  const [edges, setEdges] = useState<FlowEdgeDef[]>(() => structuredClone(seed.edges));
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [confirmRestore, setConfirmRestore] = useState<number | null>(null);
@@ -116,6 +191,9 @@ export function WorkflowEditorScreen({
   const [switchState, setSwitchState] = useState<DefinitionSwitchState>({ kind: "idle" });
   const [defsOpen, setDefsOpen] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState<number | null>(null);
+  const [manualDispatchTrigger, setManualDispatchTrigger] =
+    useState<FlowNodeDef | null>(null);
+  useEffect(() => setManualDispatchTrigger(null), [selectedId]);
   const [rowError, setRowError] = useState<{ id: number; message: string } | null>(null);
   const [createError, setCreateError] = useState<string | null>(null);
   const [newName, setNewName] = useState("");
@@ -125,7 +203,12 @@ export function WorkflowEditorScreen({
     state: WorkflowValidationState;
   }>({
     key: null,
-    state: { status: "checking", issues: [], nodeContracts: {} },
+    state: {
+      status: "checking",
+      issues: [],
+      nodeContracts: {},
+      availableValuesByNode: {},
+    },
   });
   const pendingLayoutSaveRef = useRef<PendingLayoutSave | null>(null);
   if (pendingLayoutSaveRef.current === null) {
@@ -137,6 +220,148 @@ export function WorkflowEditorScreen({
     editorResponseGuardRef.current = createEditorResponseGuard();
   }
   const editorResponseGuard = editorResponseGuardRef.current;
+  const editorHistoryRef = useRef(editorHistory);
+  editorHistoryRef.current = editorHistory;
+  const editorDocumentRef = useRef(editorHistory.present);
+  editorDocumentRef.current = editorHistory.present;
+  const applyEditorDocument = useCallback(
+    (
+      update: (
+        current: WorkflowEditorDocument,
+      ) => WorkflowEditorDocument,
+      options: { semantic?: boolean } = {},
+    ) => {
+      const next = update(editorDocumentRef.current);
+      editorDocumentRef.current = next;
+      if (options.semantic !== false) editorResponseGuard.invalidate();
+      dispatchEditorHistory({ type: "apply", value: next });
+    },
+    [editorResponseGuard],
+  );
+  const changeNodes = useCallback<
+    React.Dispatch<React.SetStateAction<FlowNodeDef[]>>
+  >(
+    (update) =>
+      applyEditorDocument((current) => ({
+        ...current,
+        nodes:
+          typeof update === "function"
+            ? update(current.nodes)
+            : update,
+      })),
+    [applyEditorDocument],
+  );
+  const changeEdges = useCallback<
+    React.Dispatch<React.SetStateAction<FlowEdgeDef[]>>
+  >(
+    (update) =>
+      applyEditorDocument((current) => ({
+        ...current,
+        edges:
+          typeof update === "function"
+            ? update(current.edges)
+            : update,
+      })),
+    [applyEditorDocument],
+  );
+  const changeNodePositions = useCallback<
+    React.Dispatch<React.SetStateAction<FlowNodeDef[]>>
+  >(
+    (update) =>
+      applyEditorDocument(
+        (current) => ({
+          ...current,
+          nodes:
+            typeof update === "function"
+              ? update(current.nodes)
+              : update,
+        }),
+        { semantic: false },
+      ),
+    [applyEditorDocument],
+  );
+  const changeBudgets = useCallback(
+    (next: WorkflowExecutionBudgets) =>
+      applyEditorDocument((current) => ({ ...current, budgets: next })),
+    [applyEditorDocument],
+  );
+  const changeEdgeGeometry = useCallback<
+    React.Dispatch<
+      React.SetStateAction<Record<string, WorkflowEdgeGeometry>>
+    >
+  >(
+    (update) =>
+      applyEditorDocument(
+        (current) => ({
+          ...current,
+          edgeGeometry:
+            typeof update === "function"
+              ? update(current.edgeGeometry)
+              : update,
+        }),
+        { semantic: false },
+      ),
+    [applyEditorDocument],
+  );
+  const changeGraph = useCallback(
+    (
+      next: Pick<
+        WorkflowEditorDocument,
+        "nodes" | "edges" | "edgeGeometry"
+      >,
+    ) =>
+      applyEditorDocument((current) => ({
+        ...current,
+        ...next,
+      })),
+    [applyEditorDocument],
+  );
+  const beginEditorTransaction = useCallback(() => {
+    pendingLayoutSave.discard();
+    dispatchEditorHistory({ type: "begin_transaction" });
+  }, [pendingLayoutSave]);
+  const commitEditorTransaction = useCallback(() => {
+    dispatchEditorHistory({ type: "commit_transaction" });
+  }, []);
+  const cancelEditorTransaction = useCallback(() => {
+    const state = editorHistoryRef.current;
+    const before = state.transaction?.before;
+    if (before) editorDocumentRef.current = before;
+    if (
+      before &&
+      semanticKeyForDocument(before, schemaVersion) !==
+        semanticKeyForDocument(state.present, schemaVersion)
+    ) {
+      editorResponseGuard.invalidate();
+    }
+    dispatchEditorHistory({ type: "cancel_transaction" });
+  }, [editorResponseGuard, schemaVersion]);
+  const undoEditor = useCallback(() => {
+    const state = editorHistoryRef.current;
+    const previous = state.past.at(-1);
+    if (previous) editorDocumentRef.current = previous;
+    if (
+      previous &&
+      semanticKeyForDocument(previous, schemaVersion) !==
+        semanticKeyForDocument(state.present, schemaVersion)
+    ) {
+      editorResponseGuard.invalidate();
+    }
+    dispatchEditorHistory({ type: "undo" });
+  }, [editorResponseGuard, schemaVersion]);
+  const redoEditor = useCallback(() => {
+    const state = editorHistoryRef.current;
+    const next = state.future[0];
+    if (next) editorDocumentRef.current = next;
+    if (
+      next &&
+      semanticKeyForDocument(next, schemaVersion) !==
+        semanticKeyForDocument(state.present, schemaVersion)
+    ) {
+      editorResponseGuard.invalidate();
+    }
+    dispatchEditorHistory({ type: "redo" });
+  }, [editorResponseGuard, schemaVersion]);
   const validationKeyRef = useRef<string | null>(null);
   const validationControllerRef = useRef<WorkflowValidationController<ValidationRequest> | null>(
     null,
@@ -157,6 +382,10 @@ export function WorkflowEditorScreen({
     });
   }
   const validationController = validationControllerRef.current;
+  const handleSelectionChange = useCallback(
+    (nodeId: string | null) => validationController.setFocused(nodeId !== null),
+    [validationController],
+  );
 
   // Deep-link preselect is first-load only. FlowEditor is remounted on definition
   // switch (key={selectedId}), so hold the node id in a ref and clear it after the
@@ -168,33 +397,35 @@ export function WorkflowEditorScreen({
 
   const selectedMeta = metas.find((m) => m.id === selectedId);
   const semanticDefinition = useMemo(
-    () => serializeSemanticWorkflowDefinition(nodes, edges, budgets),
-    [budgets, edges, nodes],
+    () => serializeSemanticWorkflowDefinition(nodes, edges, budgets, schemaVersion),
+    [budgets, edges, nodes, schemaVersion],
   );
   const semanticDefinitionRef = useRef(semanticDefinition);
   semanticDefinitionRef.current = semanticDefinition;
   const semanticKey = JSON.stringify(semanticDefinition);
-  const baselineSemanticKey =
-    baselineDraft === null
-      ? null
-      : JSON.stringify(
-          serializeSemanticWorkflowDefinition(
-            toViewNodes(baselineDraft.nodes),
-            structuredClone(baselineDraft.edges),
-            executionLimitsFromDefinition(baselineDraft),
-          ),
-        );
   const validationTargetKey = `${selectedId}:${semanticKey}`;
   const validationIsCurrent = validation.key === validationTargetKey;
-  const dirty =
-    baselineSemanticKey === null ||
-    semanticKey !== baselineSemanticKey;
+  const dirty = editorHistoryIsDirty(editorHistory, semanticKey);
+  const runnableTriggerIds = useMemo(() => {
+    if (!canDispatch || !deployed) return new Set<string>();
+    const deployedTypes = new Map(
+      deployed.definition.nodes.map((node) => [node.id, node.type]),
+    );
+    return new Set(
+      nodes
+        .filter(
+          (node) =>
+            isTriggerBlockType(node.type) &&
+            node.type !== "trigger_plan_approved" &&
+            deployedTypes.get(node.id) === node.type,
+        )
+        .map((node) => node.id),
+    );
+  }, [canDispatch, deployed, nodes]);
   const { canSave, canDeploy } = workflowEditorActions({
     dirty,
     structurallyValid: nodesValid(nodes),
     hasDraft: baselineDraft !== null,
-    validationStatus: validation.state.status,
-    validationIsCurrent,
   });
 
   useEffect(() => {
@@ -224,13 +455,14 @@ export function WorkflowEditorScreen({
   }, [pendingLayoutSave, selectedId, selectedMeta]);
 
   useEffect(() => {
-    if (!canEdit || !selectedMeta) {
+    if (!canEdit || !selectedMeta || editorHistory.transaction !== null) {
       pendingLayoutSave.discard();
       return;
     }
     const layout = serializeWorkflowLayoutWithBaseline(
       nodes,
       JSON.parse(layoutBaseline) as WorkflowDefinitionLayoutResponse["layout"],
+      edgeGeometry,
     );
     const serialized = JSON.stringify(layout);
     if (serialized === layoutBaseline) {
@@ -258,7 +490,16 @@ export function WorkflowEditorScreen({
         return false;
       }
     });
-  }, [canEdit, layoutBaseline, nodes, pendingLayoutSave, selectedId, selectedMeta]);
+  }, [
+    canEdit,
+    edgeGeometry,
+    editorHistory.transaction,
+    layoutBaseline,
+    nodes,
+    pendingLayoutSave,
+    selectedId,
+    selectedMeta,
+  ]);
 
   useEffect(() => () => pendingLayoutSave.discard(), [pendingLayoutSave]);
 
@@ -308,29 +549,84 @@ export function WorkflowEditorScreen({
   function applySave(
     res: WorkflowDefinitionSaveResponse,
     refit: boolean,
-    replaceEditorState = true,
+    responseIsCurrent = true,
   ) {
     setBaselineDraft(res.draft);
-    if (replaceEditorState) {
-      setBudgets(executionLimitsFromDefinition(res.draft));
-      setNodes(toViewNodes(res.draft.nodes));
-      setEdges(structuredClone(res.draft.edges));
-    }
     setMetas((prev) => prev.map((m) => (m.id === res.meta.id ? res.meta : m)));
-    if (refit && replaceEditorState) setFitSignal((s) => s + 1);
+    if (responseIsCurrent) {
+      const savedSemanticKey = semanticKeyForDefinition(res.draft);
+      const savedValidationKey = `${res.meta.id}:${savedSemanticKey}`;
+      dispatchEditorHistory({
+        type: "mark_saved",
+        savedSemanticKey,
+      });
+      validationKeyRef.current = savedValidationKey;
+      setValidation({
+        key: savedValidationKey,
+        state: res.validation
+          ? {
+              status: res.validation.valid ? "valid" : "invalid",
+              issues: res.validation.issues,
+              nodeContracts: res.validation.nodeContracts,
+              availableValuesByNode: res.validation.availableValuesByNode,
+            }
+          : {
+              status: "error",
+              issues: [
+                {
+                  code: "deployment",
+                  severity: "error",
+                  nodeId: null,
+                  message: res.validationError ?? "Unable to validate the saved draft",
+                },
+              ],
+              nodeContracts: {},
+              availableValuesByNode: {},
+            },
+      });
+    }
+    if (refit && responseIsCurrent) setFitSignal((s) => s + 1);
+  }
+
+  function showValidationActionError(
+    code: "validation.transport" | "validation.superseded",
+    message: string,
+  ) {
+    const key = validationKeyRef.current ?? validationTargetKey;
+    validationKeyRef.current = key;
+    setValidation({
+      key,
+      state: {
+        status: "error",
+        issues: [{ code, severity: "error", nodeId: null, message }],
+        nodeContracts: {},
+        availableValuesByNode: {},
+      },
+    });
   }
 
   async function save() {
     const requestRevision = editorResponseGuard.capture();
+    const definition = serializeWorkflowDefinition(
+      nodes,
+      edges,
+      budgets,
+      schemaVersion,
+    );
     setBusy("save");
     setError(null);
     try {
+      // Save is intentionally fail-open for deployment validation: an outage
+      // must not discard an editable, structurally valid draft.
+      await validationController
+        .validateNow({ definitionId: selectedId, definition })
+        .catch(() => undefined);
       await afterPendingLayoutSave(pendingLayoutSave, async () => {
         const res = await fetch(`/api/workflow-definitions/${selectedId}`, {
           method: "PUT",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({
-            definition: serializeWorkflowDefinition(nodes, edges, budgets),
+            definition,
             expectedDraftRevision: selectedMeta?.draftRevision ?? 0,
           }),
         });
@@ -338,11 +634,19 @@ export function WorkflowEditorScreen({
           setError(await readErrorMessage(res));
           return;
         }
+        const saved = (await res.json()) as WorkflowDefinitionSaveResponse;
+        const responseIsCurrent = editorResponseGuard.isCurrent(requestRevision);
         applySave(
-          (await res.json()) as WorkflowDefinitionSaveResponse,
+          saved,
           false,
-          editorResponseGuard.isCurrent(requestRevision),
+          responseIsCurrent,
         );
+        if (!responseIsCurrent) {
+          showValidationActionError(
+            "validation.superseded",
+            "The workflow changed while it was being saved. Save again to validate the latest changes.",
+          );
+        }
       });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unable to save changes");
@@ -353,18 +657,98 @@ export function WorkflowEditorScreen({
 
   async function deploy() {
     if (!selectedMeta) return;
+    const requestRevision = editorResponseGuard.capture();
+    const definition = serializeWorkflowDefinition(
+      nodes,
+      edges,
+      budgets,
+      schemaVersion,
+    );
+    const candidateKey = validationTargetKey;
     setBusy("deploy");
     setError(null);
     try {
+      let immediateValidation: WorkflowDefinitionValidationResponse;
+      try {
+        immediateValidation = await validationController.validateNow({
+          definitionId: selectedId,
+          definition,
+        });
+      } catch (validationFailure) {
+        const superseded = !editorResponseGuard.isCurrent(requestRevision);
+        showValidationActionError(
+          superseded ? "validation.superseded" : "validation.transport",
+          superseded
+            ? "The workflow changed while it was being validated. Deploy again."
+            : validationFailure instanceof Error
+              ? validationFailure.message
+              : "Unable to validate workflow",
+        );
+        return;
+      }
+      if (!immediateValidation.valid) return;
+      if (!editorResponseGuard.isCurrent(requestRevision)) {
+        showValidationActionError(
+          "validation.superseded",
+          "The workflow changed while it was being validated. Deploy again.",
+        );
+        return;
+      }
+
+      let draftRevision = selectedMeta.draftRevision;
+      let deployedVersion = selectedMeta.deployedVersion;
+      if (dirty) {
+        const saveRes = await fetch(`/api/workflow-definitions/${selectedId}`, {
+          method: "PUT",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            definition,
+            expectedDraftRevision: draftRevision,
+          }),
+        });
+        if (!saveRes.ok) {
+          setError(await readErrorMessage(saveRes));
+          return;
+        }
+        const saved = (await saveRes.json()) as WorkflowDefinitionSaveResponse;
+        const responseIsCurrent = editorResponseGuard.isCurrent(requestRevision);
+        applySave(saved, false, responseIsCurrent);
+        if (!responseIsCurrent) {
+          showValidationActionError(
+            "validation.superseded",
+            "The workflow changed while it was being saved. Deploy again.",
+          );
+          return;
+        }
+        const saveDecision = workflowDeploymentAfterSave(immediateValidation, saved);
+        if (saveDecision.kind !== "ready") return;
+        draftRevision = saved.meta.draftRevision;
+        deployedVersion = saved.meta.deployedVersion;
+      }
+
       const res = await fetch(`/api/workflow-definitions/${selectedId}/deploy`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          expectedDraftRevision: selectedMeta.draftRevision,
-          expectedDeployedVersion: selectedMeta.deployedVersion,
+          expectedDraftRevision: draftRevision,
+          expectedDeployedVersion: deployedVersion,
         }),
       });
       if (!res.ok) {
+        if (res.status === 422) {
+          const body = (await res.json()) as WorkflowDefinitionDeploymentValidationResponse;
+          validationKeyRef.current = candidateKey;
+          setValidation({
+            key: candidateKey,
+            state: {
+              status: "invalid",
+              issues: body.issues,
+              nodeContracts: immediateValidation.nodeContracts,
+              availableValuesByNode: immediateValidation.availableValuesByNode,
+            },
+          });
+          return;
+        }
         setError(await readErrorMessage(res));
         return;
       }
@@ -426,9 +810,22 @@ export function WorkflowEditorScreen({
       setBaselineDraft(detail.draft);
       setLayoutBaseline(JSON.stringify(detail.layout));
       const def = detail.draft ?? detail.deployed?.definition ?? defaultDefinition;
-      setBudgets(executionLimitsFromDefinition(def));
-      setNodes(toViewNodes(def.nodes));
-      setEdges(structuredClone(def.edges));
+      const flow = toFlowDefinition(def);
+      const nextDocument: WorkflowEditorDocument = {
+        nodes: flow.nodes,
+        edges: flow.edges,
+        budgets: executionLimitsFromDefinition(def),
+        edgeGeometry: structuredClone(detail.layout.edges),
+      };
+      setSchemaVersion(flow.schemaVersion);
+      editorDocumentRef.current = nextDocument;
+      dispatchEditorHistory({
+        type: "reset",
+        value: nextDocument,
+        savedSemanticKey: detail.draft
+          ? semanticKeyForDefinition(detail.draft)
+          : null,
+      });
       setConfirmRestore(null);
       setFitSignal((s) => s + 1);
     } catch (err) {
@@ -551,6 +948,7 @@ export function WorkflowEditorScreen({
     options.blockRegistry[type]?.presentation.label ?? type;
 
   return (
+    <HarnessProfileCatalogProvider>
     <PromptLibraryProvider>
     <div className="flex flex-col h-full min-h-0">
       {deployed === null && (
@@ -580,22 +978,28 @@ export function WorkflowEditorScreen({
       <div className="relative flex-1 min-h-0">
         <FlowEditor
           key={selectedId}
+          definitionId={selectedId}
           nodes={nodes}
           edges={edges}
+          schemaVersion={schemaVersion}
           limits={budgets}
-          onLimitsChange={(next) => {
-            editorResponseGuard.invalidate();
-            setBudgets(next);
-          }}
-          onNodesChange={(next) => {
-            editorResponseGuard.invalidate();
-            setNodes(next);
-          }}
-          onEdgesChange={(next) => {
-            editorResponseGuard.invalidate();
-            setEdges(next);
-          }}
+          edgeGeometry={edgeGeometry}
+          onLimitsChange={changeBudgets}
+          onNodesChange={changeNodes}
+          onNodePositionsChange={changeNodePositions}
+          onEdgesChange={changeEdges}
+          onEdgeGeometryChange={changeEdgeGeometry}
+          onGraphChange={changeGraph}
+          canUndo={editorHistoryCanUndo(editorHistory)}
+          canRedo={editorHistoryCanRedo(editorHistory)}
+          onUndo={undoEditor}
+          onRedo={redoEditor}
+          onBeginTransaction={beginEditorTransaction}
+          onCommitTransaction={commitEditorTransaction}
+          onCancelTransaction={cancelEditorTransaction}
           canEdit={canEdit}
+          runnableTriggerIds={runnableTriggerIds}
+          onRunTrigger={setManualDispatchTrigger}
           dirty={dirty}
           saveEnabled={canSave}
           saving={busy === "save"}
@@ -603,7 +1007,12 @@ export function WorkflowEditorScreen({
           validation={
             validationIsCurrent
               ? validation.state
-              : { status: "checking", issues: [], nodeContracts: {} }
+              : {
+                  status: "checking",
+                  issues: [],
+                  nodeContracts: {},
+                  availableValuesByNode: {},
+                }
           }
           onSave={save}
           saveLabel="Save draft"
@@ -647,7 +1056,20 @@ export function WorkflowEditorScreen({
           runErrors={derived?.errors}
           fitSignal={fitSignal}
           initialSelectedId={deepLinkNodeId.current}
+          onSelectionChange={handleSelectionChange}
         />
+        {manualDispatchTrigger && deployed && (
+          <ManualDispatchModal
+            definitionId={selectedId}
+            workflowName={selectedMeta?.name ?? "Workflow"}
+            deployedVersion={deployed.version}
+            trigger={manualDispatchTrigger}
+            options={options}
+            actorLabel={actorLabel}
+            dirty={dirty}
+            onClose={() => setManualDispatchTrigger(null)}
+          />
+        )}
         {defsOpen && (
           <div className="absolute right-4 top-[56px] z-[60] w-[440px] max-h-[70vh] overflow-y-auto bg-panel border border-neutral-200 rounded-[4px] shadow-[0_12px_28px_-8px_rgba(24,27,32,0.22),0_2px_6px_rgba(24,27,32,0.08)] px-4 py-3">
             <div className="flex items-center justify-between mb-1">
@@ -888,5 +1310,6 @@ export function WorkflowEditorScreen({
       </div>
     </div>
     </PromptLibraryProvider>
+    </HarnessProfileCatalogProvider>
   );
 }

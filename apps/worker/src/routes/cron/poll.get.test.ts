@@ -17,7 +17,12 @@ const mocks = vi.hoisted(() => ({
   getApproval: vi.fn(),
   rejectUndispatchableApproval: vi.fn(),
   dispatchPlanApproved: vi.fn(),
+  drainOldestPendingTrigger: vi.fn(),
+  listPendingTriggers: vi.fn(),
+  deleteExpiredRunObservations: vi.fn(),
   resumeClarificationFromComments: vi.fn(),
+  recoverManualDispatches: vi.fn(),
+  listRecoverableManualDispatches: vi.fn(),
 }));
 
 vi.mock("../../../env.js", () => ({
@@ -87,12 +92,28 @@ vi.mock("../../clarifications/resume-from-comments.js", () => ({
     mocks.resumeClarificationFromComments(...args),
 }));
 vi.mock("../../lib/dispatch-trigger.js", () => ({
-  drainOldestPendingTrigger: vi.fn().mockResolvedValue(null),
+  drainOldestPendingTrigger: (...args: any[]) =>
+    mocks.drainOldestPendingTrigger(...args),
+}));
+vi.mock("../../lib/trigger-delivery-store.js", () => ({
+  listPendingTriggers: (...args: any[]) => mocks.listPendingTriggers(...args),
+}));
+vi.mock("../../run-observability/store.js", () => ({
+  deleteExpiredRunObservations: (...args: any[]) =>
+    mocks.deleteExpiredRunObservations(...args),
 }));
 vi.mock("../../post-pr-gate/gate-store.js", () => ({
   GateStore: class {
     purgeExpired = vi.fn().mockResolvedValue(undefined);
   },
+}));
+vi.mock("../../manual-dispatch/service.js", () => ({
+  recoverManualDispatches: (...args: unknown[]) =>
+    mocks.recoverManualDispatches(...args),
+}));
+vi.mock("../../manual-dispatch/store.js", () => ({
+  listRecoverableManualDispatches: (...args: unknown[]) =>
+    mocks.listRecoverableManualDispatches(...args),
 }));
 vi.mock("../../lib/telemetry/collect-snapshots.js", () => ({
   collectSnapshots: vi.fn().mockResolvedValue([]),
@@ -152,7 +173,18 @@ describe("cron clarification recovery ordering", () => {
     mocks.getApproval.mockResolvedValue(null);
     mocks.rejectUndispatchableApproval.mockResolvedValue(undefined);
     mocks.dispatchPlanApproved.mockResolvedValue({ status: "run_in_flight" });
+    mocks.drainOldestPendingTrigger.mockResolvedValue(null);
+    mocks.listPendingTriggers.mockResolvedValue([]);
+    mocks.deleteExpiredRunObservations.mockResolvedValue({
+      deleted: 0,
+      runIds: [],
+    });
     mocks.resumeClarificationFromComments.mockResolvedValue({ status: "no_clarification" });
+    mocks.recoverManualDispatches.mockImplementation(async () => {
+      state.order.push("recover-manual-dispatches");
+      return { scanned: 0, started: 0, recovering: 0, failed: 0 };
+    });
+    mocks.listRecoverableManualDispatches.mockResolvedValue([]);
   });
 
   it("protects same-run clarifications before discovering generic ticket work", async () => {
@@ -177,9 +209,43 @@ describe("cron clarification recovery ordering", () => {
     );
     await expect(response.json()).resolves.toMatchObject({
       pendingRecovered: 0,
+      replayRetention: { deleted: 0 },
       triggerRecovery: {
         released: { attempted: 0, started: 0, errors: 0 },
       },
+    });
+    expect(mocks.deleteExpiredRunObservations).toHaveBeenCalledWith({
+      db: { db: true },
+      limit: 100,
+    });
+  });
+
+  it("deletes one bounded replay-retention batch without failing the poll", async () => {
+    mocks.deleteExpiredRunObservations.mockResolvedValue({
+      deleted: 100,
+      runIds: Array.from({ length: 100 }, (_, index) => `run-${index}`),
+    });
+
+    const response = await request();
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      status: "ok",
+      replayRetention: { deleted: 100 },
+    });
+  });
+
+  it("keeps polling when replay-retention cleanup fails", async () => {
+    mocks.deleteExpiredRunObservations.mockRejectedValue(
+      new Error("database unavailable"),
+    );
+
+    const response = await request();
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      status: "ok",
+      replayRetention: { deleted: 0 },
     });
   });
 
@@ -225,6 +291,9 @@ describe("cron clarification recovery ordering", () => {
       state.order.indexOf("discover"),
     );
     expect(state.order.indexOf("discover")).toBeLessThan(
+      state.order.indexOf("recover-manual-dispatches"),
+    );
+    expect(state.order.indexOf("recover-manual-dispatches")).toBeLessThan(
       state.order.indexOf("reconcile-runs"),
     );
     expect(state.order.indexOf("reconcile-runs")).toBeLessThan(
@@ -243,6 +312,69 @@ describe("cron clarification recovery ordering", () => {
     );
     await expect(response.json()).resolves.toMatchObject({
       approvalRecovery: { scanned: 1, started: 1, blocked: 0, errors: 0 },
+      manualDispatchRecovery: {
+        scanned: 0,
+        started: 0,
+        recovering: 0,
+        failed: 0,
+      },
+    });
+  });
+
+  it("polls a bounded pending-trigger batch and stops after one start", async () => {
+    mocks.listPendingTriggers.mockResolvedValue([
+      { subjectKey: "pr:github:acme/app#1" },
+      { subjectKey: "pr:github:acme/app#2" },
+      { subjectKey: "pr:github:acme/app#3" },
+    ]);
+    mocks.drainOldestPendingTrigger
+      .mockResolvedValueOnce({
+        result: "error",
+        diagnosticId: "AIW-DIAG-ingest-retry",
+      })
+      .mockResolvedValueOnce({ result: "started", runId: "run-trigger" })
+      .mockResolvedValueOnce({ result: "started", runId: "run-should-not-start" });
+
+    const response = await request();
+
+    expect(mocks.listPendingTriggers).toHaveBeenCalledWith({ db: true }, 20);
+    expect(mocks.drainOldestPendingTrigger).toHaveBeenCalledTimes(2);
+    expect(mocks.drainOldestPendingTrigger.mock.calls.map(([subject]) => subject)).toEqual([
+      "pr:github:acme/app#1",
+      "pr:github:acme/app#2",
+    ]);
+    await expect(response.json()).resolves.toMatchObject({
+      pendingRecovered: 1,
+      triggerRecovery: {
+        polled: { listed: 3, attempted: 2, started: 1, errors: 1 },
+      },
+    });
+  });
+
+  it("does not add a polled start after released-owner recovery starts one", async () => {
+    mocks.reconcileRuns.mockImplementationOnce(async (...args: any[]) => {
+      await args[4]("pr:github:acme/app#released");
+      await args[4]("pr:github:acme/app#also-released");
+      return { cancelled: 0, cleaned: 1 };
+    });
+    mocks.drainOldestPendingTrigger.mockResolvedValueOnce({
+      result: "started",
+      runId: "run-released",
+    });
+    mocks.listPendingTriggers.mockResolvedValue([
+      { subjectKey: "pr:github:acme/app#orphan" },
+    ]);
+
+    const response = await request();
+
+    expect(mocks.drainOldestPendingTrigger).toHaveBeenCalledOnce();
+    expect(mocks.listPendingTriggers).not.toHaveBeenCalled();
+    await expect(response.json()).resolves.toMatchObject({
+      pendingRecovered: 1,
+      triggerRecovery: {
+        released: { attempted: 1, started: 1, errors: 0 },
+        polled: { listed: 0, attempted: 0, started: 0, errors: 0 },
+      },
     });
   });
 

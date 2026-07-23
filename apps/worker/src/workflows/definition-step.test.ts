@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import type { WorkflowDefinition } from "@shared/contracts";
+import type { WorkflowDefinition, WorkflowDefinitionV2 } from "@shared/contracts";
 
 vi.mock("../../env.js", () => ({
   env: {
@@ -48,7 +48,10 @@ import {
   loadWorkflowDefinitionFor,
   normalizeDefinitionForExecution,
 } from "./definition-step.js";
-import { defaultWorkflowDefinition } from "../workflow-definition/default.js";
+import {
+  defaultWorkflowDefinition,
+  defaultWorkflowDefinitionV2,
+} from "../workflow-definition/default.js";
 import type { WorkflowDefinitionEdge, WorkflowDefinitionNode } from "@shared/contracts";
 
 async function setEnv(partial: Record<string, unknown>) {
@@ -137,6 +140,43 @@ describe("loadWorkflowDefinition", () => {
     expect(loggerError).not.toHaveBeenCalled();
   });
 
+  it("loads a deployed v1 definition with its previously accepted output schema", async () => {
+    const legacySchema = JSON.stringify({
+      $schema: "http://json-schema.org/draft-07/schema#",
+      title: "Legacy classifier",
+      type: "object",
+      properties: {
+        state: { title: "State", type: "string" },
+      },
+      required: ["state"],
+      additionalProperties: false,
+    });
+    const definition: WorkflowDefinition = {
+      schemaVersion: 1,
+      nodes: [
+        { id: "t", type: "trigger_ticket_ai", x: 0, y: 0, params: {}, inputs: {} },
+        {
+          id: "classify",
+          type: "call_llm",
+          x: 0,
+          y: 0,
+          params: { prompt: "Classify", outputSchema: legacySchema },
+          inputs: {},
+        },
+      ],
+      edges: [{ from: "t", to: "classify" }],
+    };
+    mockGetEnabled.mockResolvedValue(enabled(definition, 15, 9));
+
+    const plan = await loadWorkflowDefinition();
+
+    expect(plan).toMatchObject({ version: 15, definitionId: 9 });
+    expect(plan.nodes.find((node) => node.id === "classify")?.params.outputSchema).toBe(
+      legacySchema,
+    );
+    expect(loggerError).not.toHaveBeenCalled();
+  });
+
   it("preserves configured execution budgets in the loaded plan", async () => {
     const definition = {
       ...defaultWorkflowDefinition({ includeReview: false }),
@@ -157,14 +197,102 @@ describe("loadWorkflowDefinition", () => {
     expect(plan.reviewEnabled).toBe(false);
   });
 
-  it("fails closed and logs when the row fails schema validation", async () => {
+  it("loads an exact v2 plan without flattening its persisted definition", async () => {
+    const definition: WorkflowDefinitionV2 = {
+      schemaVersion: 2,
+      nodes: [
+        {
+          id: "ticket",
+          type: "trigger_ticket_ai",
+          x: 0,
+          y: 0,
+          configuration: {},
+          inputs: {},
+          additionalInputs: [],
+        },
+        {
+          id: "finish",
+          type: "terminate",
+          x: 240,
+          y: 0,
+          configuration: {
+            terminalStatus: "done",
+            postComment: "Completed by the v2 runtime.",
+          },
+          inputs: {},
+          additionalInputs: [],
+        },
+      ],
+      edges: [
+        {
+          id: "ticket-finish",
+          from: "ticket",
+          to: "finish",
+        },
+      ],
+    };
     mockGetEnabled.mockResolvedValue(
-      enabled({ schemaVersion: 2, nodes: [], edges: [] } as unknown as WorkflowDefinition, 9, 5),
+      enabled(definition, 9, 5),
     );
     const plan = await loadWorkflowDefinition();
-    expect(plan).toBeNull();
-    expect(loggerError).toHaveBeenCalledTimes(1);
-    expect(loggerError.mock.calls[0][0]).toMatchObject({ version: 9, definitionId: 5 });
+    expect(plan).toMatchObject({
+      schemaVersion: 2,
+      definition,
+      version: 9,
+      definitionId: 5,
+      reviewEnabled: false,
+    });
+    expect(plan.nodes).toEqual([
+      {
+        id: "ticket",
+        type: "trigger_ticket_ai",
+        x: 0,
+        y: 0,
+        params: {},
+        inputs: {},
+      },
+      {
+        id: "finish",
+        type: "terminate",
+        x: 240,
+        y: 0,
+        params: {
+          terminalStatus: "done",
+          postComment: "Completed by the v2 runtime.",
+        },
+        inputs: {},
+      },
+    ]);
+    expect(plan.edges).toEqual([{ from: "ticket", to: "finish" }]);
+    expect(
+      (plan.definition as WorkflowDefinitionV2).edges[0]?.id,
+    ).toBe("ticket-finish");
+    expect(loggerError).not.toHaveBeenCalled();
+  });
+
+  it("preserves a pinned built-in profile for executor-boundary resolution", async () => {
+    const definition = defaultWorkflowDefinitionV2({
+      includeReview: false,
+      provider: "codex",
+    });
+    mockGetEnabled.mockResolvedValue(enabled(definition, 10, 6));
+
+    const plan = await loadWorkflowDefinition();
+
+    expect(
+      plan.nodes.find((node) => node.id === "planning")?.params,
+    ).toEqual({
+      harnessProfile: { profileId: "builtin-codex", version: 1 },
+      prompt: "{{prompt:research-plan@1}}",
+    });
+    expect(
+      (plan.definition as WorkflowDefinitionV2).nodes.find(
+        (node) => node.id === "planning",
+      )?.configuration,
+    ).toEqual({
+      harnessProfile: { profileId: "builtin-codex", version: 1 },
+      prompt: "{{prompt:research-plan@1}}",
+    });
   });
 
   it("fails closed when an eager store upgrade raises a deterministic Zod error", async () => {

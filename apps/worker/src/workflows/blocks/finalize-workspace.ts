@@ -5,8 +5,9 @@ import { executionError, type BlockExecuteFn, type BlockExecutionResult } from "
 export const paramsSchema = z.object({}).strict();
 
 /**
- * finalize_workspace: gate on typed `checks.*` status inputs, preflight every
- * repository, push with exact leases, and emit finalized branch metadata.
+ * finalize_workspace: retain the v1 `checks.*` compatibility gate, then rely on
+ * the publication boundary to independently verify the current versioned
+ * pre-publication gate and exact workspace fingerprint before any push.
  * It never creates PRs; subject ownership remains held until the workflow's
  * terminal release.
  */
@@ -50,6 +51,7 @@ export const execute: BlockExecuteFn = async (
       sandboxId: ctx.sandboxId,
       ticketKey: ctx.ticket.identifier,
       workspaceManifest: ctx.workspaceManifest,
+      prePrGate: ctx.prePrGate,
       clarifications: ctx.clarifications,
       sourcePullRequest:
         ctx.entry.kind === "pr_trigger"
@@ -66,8 +68,8 @@ export const execute: BlockExecuteFn = async (
 
     if (publication.status === "failed") {
       return executionError(publication.reason, {
-        category: "provider",
-        phase: "push",
+        category: publication.failureKind === "pre_pr_gate" ? "checks" : "provider",
+        phase: publication.failureKind === "pre_pr_gate" ? "pre-pr-checks" : "push",
       });
     }
 

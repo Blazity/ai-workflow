@@ -2,6 +2,7 @@
 
 import React from "react";
 import { BlazityLogo } from "@/components/ui";
+import { harnessProfileAuthoringEnabled } from "@/lib/harness-profiles/rollout";
 
 const NAV = [
   { id: "overview", label: "Overview", glyph: "◇", group: "obs" },
@@ -11,6 +12,7 @@ const NAV = [
   { id: "evals", label: "Arthur evals", glyph: "✓", group: "obs" },
   { id: "cost", label: "Cost & usage", glyph: "$", group: "obs" },
   { id: "editor", label: "Workflow editor", glyph: "▷", group: "flow" },
+  { id: "profiles", label: "Harness profiles", glyph: "⌘", group: "flow" },
   { id: "checks", label: "Pre-PR checks", glyph: "☑", group: "flow" },
   { id: "users", label: "Users", glyph: "U", group: "team" },
 ];
@@ -21,7 +23,15 @@ const NAV_GROUPS = [
   { id: "team", label: "Users" },
 ];
 
-export const MOBILE_MORE_NAV_IDS = ["approvals", "prompts", "evals", "cost", "checks", "users"] as const;
+export const MOBILE_MORE_NAV_IDS = [
+  "approvals",
+  "prompts",
+  "evals",
+  "cost",
+  "profiles",
+  "checks",
+  "users",
+] as const;
 
 export function isMobileMoreNavItem(id: string): boolean {
   return (MOBILE_MORE_NAV_IDS as readonly string[]).includes(id);
@@ -32,7 +42,11 @@ export function cockpitNavItems({
 }: {
   canManageUsers: boolean;
 }) {
-  return NAV.filter((item) => item.id !== "users" || canManageUsers);
+  return NAV.filter(
+    (item) =>
+      (item.id !== "users" || canManageUsers) &&
+      (item.id !== "profiles" || harnessProfileAuthoringEnabled),
+  );
 }
 
 export function CkSidebar({

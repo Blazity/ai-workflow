@@ -11,6 +11,8 @@ import type {
   PullRequestHead,
   PRComment,
   CheckRunResult,
+  ManualDispatchPrCapableVCS,
+  ManualDispatchPullRequestSnapshot,
 } from "./types.js";
 
 // Minimal shapes for gitbeaker responses we touch. Declared locally so we do
@@ -26,7 +28,15 @@ interface GitLabMRHead {
   diff_refs?: { head_sha?: string };
   sha?: string;
   target_branch?: string;
+  source_branch?: string;
   state?: string;
+  web_url?: string;
+  title?: string;
+  author?: { username?: string };
+  draft?: boolean;
+  work_in_progress?: boolean;
+  merge_commit_sha?: string;
+  merged_at?: string;
   head_pipeline?: { id?: number; status?: string } | null;
 }
 interface GitLabNotePosition {
@@ -79,7 +89,12 @@ export interface GitLabConfig {
   host?: string;
 }
 
-export class GitLabAdapter implements VCSAdapter, GateStatusCapableVCS, PRFilesCapableVCS {
+export class GitLabAdapter implements
+  VCSAdapter,
+  GateStatusCapableVCS,
+  PRFilesCapableVCS,
+  ManualDispatchPrCapableVCS
+{
   private gl: InstanceType<typeof Gitlab>;
   private projectId: string;
   private baseBranch: string;
@@ -352,6 +367,58 @@ export class GitLabAdapter implements VCSAdapter, GateStatusCapableVCS, PRFilesC
       ...(typeof headPipelineId === "number" ? { headPipelineId } : {}),
       ...(typeof headPipelineStatus === "string" ? { headPipelineStatus } : {}),
       ...(headPipelineFailedChecks ? { headPipelineFailedChecks } : {}),
+    };
+  }
+
+  async getManualDispatchPullRequest(
+    prId: number,
+  ): Promise<ManualDispatchPullRequestSnapshot> {
+    const mr = (await this.gl.MergeRequests.show(
+      this.projectId,
+      prId,
+    )) as unknown as GitLabMRHead;
+    const current = await this.getPRHead(prId);
+    const [comments, pipeline] = await Promise.all([
+      this.getPRComments(prId),
+      typeof current.headPipelineId === "number"
+        ? this.gl.Pipelines.show(this.projectId, current.headPipelineId)
+        : Promise.resolve(null),
+    ]);
+    return {
+      prNumber: prId,
+      prUrl:
+        mr.web_url ??
+        `${(this.config.host ?? "https://gitlab.com").replace(/\/+$/, "")}/${this.projectId}/-/merge_requests/${prId}`,
+      headRef: mr.source_branch ?? "",
+      headSha: current.headSha,
+      baseRef: current.baseRef,
+      title: mr.title ?? "",
+      author: mr.author?.username ?? "unknown",
+      isDraft: mr.draft === true || mr.work_in_progress === true,
+      state: current.state,
+      ...(current.state === "merged" && mr.merge_commit_sha
+        ? { mergeSha: mr.merge_commit_sha }
+        : {}),
+      ...(current.state === "merged" && mr.merged_at
+        ? { mergedAt: mr.merged_at }
+        : {}),
+      ...(typeof current.headPipelineId === "number"
+        ? { pipelineId: current.headPipelineId }
+        : {}),
+      ...(pipeline && typeof (pipeline as { source?: unknown }).source === "string"
+        ? { pipelineSource: (pipeline as { source: string }).source }
+        : {}),
+      failedChecks: (current.headPipelineFailedChecks ?? []).map((check) => ({
+        name: check.name,
+        conclusion: "failed",
+      })),
+      reviews: comments
+        .filter((comment) => comment.body.trim().length > 0)
+        .map((comment) => ({
+          state: "commented" as const,
+          author: comment.author,
+          body: comment.body,
+        })),
     };
   }
 

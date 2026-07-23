@@ -55,7 +55,7 @@ describe("US-08: Previously-failed ticket is skipped", () => {
       description: "Clear ticket; this test verifies it is NOT dispatched.",
     });
     ticketKey = ticket.ticketKey;
-    branchName = `blazebot/${ticketKey.toLowerCase()}`;
+    branchName = `ai-workflow/${ticketKey.toLowerCase()}`;
 
     // 2. Seed the failure marker in Redis (simulates the catch-block safeguard)
     await markFailed(ticketKey, {

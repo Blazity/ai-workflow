@@ -1,13 +1,21 @@
 import { ClaudeAgentAdapter } from "./claude.js";
 import { CodexAgentAdapter } from "./codex.js";
-import type { AgentAdapter } from "./types.js";
+import type {
+  AgentAdapter,
+  SerializableAgentCliSpec,
+} from "./types.js";
+import { hydrateAgentCliSpec } from "./protocol.js";
 
 export type AgentKind = "claude" | "codex";
 
-export function createAgentAdapter(kind: AgentKind): AgentAdapter {
+export function createAgentAdapter(
+  kind: AgentKind,
+  cliSpec?: SerializableAgentCliSpec,
+): AgentAdapter {
+  const hydrated = cliSpec ? hydrateAgentCliSpec(cliSpec) : undefined;
   switch (kind) {
-    case "claude": return new ClaudeAgentAdapter();
-    case "codex":  return new CodexAgentAdapter();
+    case "claude": return new ClaudeAgentAdapter(hydrated);
+    case "codex":  return new CodexAgentAdapter(hydrated);
     default: {
       const _exhaustive: never = kind;
       throw new Error(`Unknown AGENT_KIND: ${_exhaustive}`);

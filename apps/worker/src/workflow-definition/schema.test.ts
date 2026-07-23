@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type {
-  WorkflowBlockType,
+  WorkflowBlockTypeV1,
   WorkflowDefinition,
+  WorkflowDefinitionV1,
   WorkflowDefinitionEdge,
   WorkflowDefinitionNode,
   WorkflowParamValue,
@@ -19,7 +20,8 @@ import {
   upgradeStoredWorkflowDefinition,
   validateWorkflowDefinitionForDeployment,
   validateWorkflowGraph,
-  workflowDefinitionSchema,
+  workflowDefinitionV2Schema,
+  workflowDefinitionV1Schema as workflowDefinitionSchema,
 } from "./schema.js";
 import { BLOCK_TYPE_SPECS } from "@shared/contracts";
 import {
@@ -39,7 +41,7 @@ const registryContext: WorkflowBlockRegistryContext = {
 
 function node(
   id: string,
-  type: WorkflowBlockType,
+  type: WorkflowBlockTypeV1,
   params: Record<string, WorkflowParamValue> = {},
   inputs: WorkflowDefinitionNode["inputs"] = {},
 ): WorkflowDefinitionNode {
@@ -49,7 +51,7 @@ function node(
 function graph(
   nodes: WorkflowDefinitionNode[],
   edges: WorkflowDefinitionEdge[],
-): WorkflowDefinition {
+): WorkflowDefinitionV1 {
   return { schemaVersion: 1, nodes, edges };
 }
 
@@ -679,7 +681,7 @@ describe("workflowDefinitionSchema block-executor node types", () => {
   }
 
   it("accepts valid params for every new block type", () => {
-    const valid: Array<[WorkflowBlockType, Record<string, WorkflowParamValue>]> = [
+    const valid: Array<[WorkflowBlockTypeV1, Record<string, WorkflowParamValue>]> = [
       ["trigger_plan_approved", {}],
       ["trigger_pr_created", {}],
       ["trigger_pr_checks_failed", {}],
@@ -703,7 +705,7 @@ describe("workflowDefinitionSchema block-executor node types", () => {
   });
 
   it("rejects unknown param keys on every new block type", () => {
-    const types: WorkflowBlockType[] = [
+    const types: WorkflowBlockTypeV1[] = [
       "trigger_plan_approved",
       "trigger_pr_created",
       "trigger_pr_checks_failed",
@@ -894,7 +896,11 @@ describe("validateWorkflowGraph fixtures", () => {
     ]);
     expect(templates[0].definition.nodes.some((node) => node.type === "review_agent")).toBe(true);
     for (const template of templates) {
-      expect(workflowDefinitionSchema.safeParse(template.definition).success).toBe(true);
+      const parsed =
+        template.definition.schemaVersion === 2
+          ? workflowDefinitionV2Schema.safeParse(template.definition)
+          : workflowDefinitionSchema.safeParse(template.definition);
+      expect(parsed.success).toBe(true);
       expect(validateWorkflowDefinitionForDeployment(template.definition, registryContext)).toEqual([]);
     }
   });
@@ -1733,7 +1739,9 @@ describe("validateWorkflowGraph rules", () => {
 
   it("classifies every block type and exposes only an exact positive safe allowlist", () => {
     expect(Object.keys(ANY_SCOPE_BLOCK_POLICY).sort()).toEqual(
-      Object.keys(BLOCK_TYPE_SPECS).sort(),
+      Object.keys(BLOCK_TYPE_SPECS)
+        .filter((type) => type !== "transform")
+        .sort(),
     );
     expect(
       Object.entries(ANY_SCOPE_BLOCK_POLICY)
@@ -1846,6 +1854,40 @@ describe("validateWorkflowGraph rules", () => {
         'Block "generate" (generic_agent) is unavailable: outputSchema has unsupported type "made-up".',
       ]),
     );
+  });
+
+  it("requires closed nested objects for new deployments but loads legacy v1 snapshots", () => {
+    const def = graph(
+      [
+        node("t", "trigger_ticket_ai"),
+        node("classify", "call_llm", {
+          prompt: "classify",
+          outputSchema: JSON.stringify({
+            type: "object",
+            properties: {
+              nested: {
+                type: "object",
+                properties: { state: { type: "string" } },
+              },
+            },
+            required: ["nested"],
+            additionalProperties: false,
+          }),
+        }),
+      ],
+      [{ from: "t", to: "classify" }],
+    );
+
+    expect(validateWorkflowDefinitionForDeployment(def, registryContext)).toEqual([
+      expect.stringContaining(
+        "outputSchema.properties.nested must set additionalProperties to false.",
+      ),
+    ]);
+    expect(
+      validateWorkflowDefinitionForDeployment(def, registryContext, {
+        allowLegacyCompatibility: true,
+      }),
+    ).toEqual([]);
   });
 
   it.each(["contains.dot", "has space", "1leading", "__proto__"])(

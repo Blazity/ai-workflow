@@ -3,6 +3,9 @@ import { BLOCK_TYPE_SPECS, type WorkflowBlockType } from "@shared/contracts";
 import {
   buildWorkflowBlockRegistry,
   resolveWorkflowBlockContract,
+  validateBlockOutputForDefinition,
+  workflowBlockDefinitionIssues,
+  workflowBlockDeploymentDefinitionIssues,
   type WorkflowBlockRegistryContext,
 } from "./block-registry.js";
 
@@ -108,7 +111,28 @@ describe("workflow block registry", () => {
       ticket: { required: false, schema: expect.objectContaining({ type: "object" }) },
       plan: { required: false, schema: { type: "string" } },
     });
-    expect(registry.fix_agent.inputs).toEqual({});
+    const reviewFeedbackInput = {
+      required: false,
+      schema: {
+        type: "object",
+        properties: {
+          state: {
+            type: "string",
+            enum: ["changes_requested", "commented"],
+          },
+          author: { type: "string" },
+          body: { type: "string" },
+        },
+        required: ["state", "author", "body"],
+        additionalProperties: false,
+      },
+    };
+    expect(registry.review_agent.inputs).toEqual({
+      reviewFeedback: reviewFeedbackInput,
+    });
+    expect(registry.fix_agent.inputs).toEqual({
+      reviewFeedback: reviewFeedbackInput,
+    });
     expect(registry.fetch_pr_context.inputs).toEqual({});
     expect(Object.keys(registry.generic_agent.inputs)).toEqual(["prompt"]);
     expect(Object.keys(registry.call_llm.inputs)).toEqual(["prompt", "system"]);
@@ -142,6 +166,96 @@ describe("workflow block registry", () => {
         "summary",
       ],
     });
+  });
+
+  it("publishes typed review decisions, finding severity, and check outcomes", () => {
+    const registry = buildWorkflowBlockRegistry(context);
+    expect(registry.review_agent.output.bindingSchema).toMatchObject({
+      properties: {
+        decision: {
+          type: "string",
+          enum: ["approve", "request_changes"],
+        },
+        findings: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              severity: {
+                type: "string",
+                enum: ["critical", "suggestion"],
+              },
+            },
+          },
+        },
+      },
+    });
+    for (const type of ["run_pre_pr_checks", "run_checks"] as const) {
+      expect(registry[type].output.bindingSchema).toMatchObject({
+        properties: {
+          outcome: {
+            type: "string",
+            enum: [
+              "passed",
+              "failed",
+              "skipped",
+              "missing_configuration",
+            ],
+          },
+        },
+        required: expect.arrayContaining(["outcome"]),
+      });
+    }
+    expect(registry.run_checks.output.bindingSchema).toMatchObject({
+      properties: { skipReason: { type: "string" } },
+    });
+    expect(
+      (registry.run_checks.output.bindingSchema as { required?: string[] })
+        .required,
+    ).not.toContain("skipReason");
+  });
+
+  it("rejects runtime values outside nested typed enums", () => {
+    expect(
+      validateBlockOutputForDefinition(
+        "review_agent",
+        {},
+        {
+          status: "reviewed",
+          findings: [
+            {
+              file: "src/index.ts",
+              description: "Invalid severity",
+              severity: "blocker",
+            },
+          ],
+          decision: "maybe",
+        },
+        { requireNormalOutput: true },
+      ),
+    ).toEqual(
+      expect.arrayContaining([
+        "output.decision must be one of: approve, request_changes.",
+        "output.findings[0].severity must be one of: critical, suggestion.",
+      ]),
+    );
+
+    expect(
+      validateBlockOutputForDefinition(
+        "run_checks",
+        {},
+        {
+          status: "ok",
+          ok: false,
+          outcome: "unknown",
+          results: [],
+          failures: [],
+        },
+        { requireNormalOutput: true },
+      ),
+    ).toContain(
+      "output.outcome must be one of: passed, failed, skipped, missing_configuration.",
+    );
   });
 
   it("defaults newly authored Generic Agent blocks to workspace-free mode", () => {
@@ -293,10 +407,6 @@ describe("workflow block registry", () => {
       'outputSchema uses unsupported validation keyword "pattern".',
     ],
     [
-      '{"type":"object","properties":{"state":{"type":"string","enum":["ready"]}}}',
-      'outputSchema.properties.state uses unsupported validation keyword "enum".',
-    ],
-    [
       '{"type":"object","properties":{"nested":{"type":"made-up"}}}',
       'outputSchema.properties.nested has unsupported type "made-up".',
     ],
@@ -310,6 +420,69 @@ describe("workflow block registry", () => {
       available: false,
       unavailableReason: reason,
     });
+  });
+
+  it("retains enum, description, and nullable metadata from a declared schema", () => {
+    const contract = resolveWorkflowBlockContract(
+      "call_llm",
+      {
+        prompt: "classify",
+        outputSchema: JSON.stringify({
+          type: "object",
+          properties: {
+            state: {
+              type: "string",
+              description: "Current state",
+              enum: ["ready", "blocked"],
+            },
+            reason: { type: ["string", "null"] },
+          },
+          required: ["state"],
+          additionalProperties: false,
+        }),
+      },
+      context,
+    );
+
+    expect(contract.output.schema).toMatchObject({
+      properties: {
+        output: {
+          type: "object",
+          properties: {
+            state: {
+              type: "string",
+              description: "Current state",
+              enum: ["ready", "blocked"],
+            },
+            reason: { type: "nullable", value: { type: "string" } },
+          },
+        },
+      },
+    });
+  });
+
+  it("keeps open v1 schemas runtime-compatible but rejects them for deployment", () => {
+    const params = {
+      prompt: "classify",
+      outputSchema: JSON.stringify({
+        type: "object",
+        properties: {
+          nested: {
+            type: "object",
+            properties: { state: { type: "string" } },
+          },
+        },
+        additionalProperties: false,
+      }),
+    };
+
+    expect(workflowBlockDefinitionIssues("call_llm", params)).toEqual([]);
+    expect(workflowBlockDeploymentDefinitionIssues("call_llm", params)).toEqual([
+      expect.objectContaining({
+        code: "invalid_schema",
+        path: "/properties/nested/additionalProperties",
+      }),
+    ]);
   });
 
   it("treats a blank outputSchema as the block's unstructured default", () => {

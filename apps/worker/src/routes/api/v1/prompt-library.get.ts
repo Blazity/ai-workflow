@@ -12,9 +12,13 @@ import {
   type PromptLibraryListRow,
 } from "../../../prompt-library/store.js";
 
-/** Serializes a list row into its DTO (meta + head body). */
+/** Serializes a list row into its DTO (meta + head body and slot contract). */
 export function serializeListRow(row: PromptLibraryListRow): PromptLibraryListRowDto {
-  return { ...serializePromptMeta(row, row.currentVersion), body: row.body };
+  return {
+    ...serializePromptMeta(row, row.currentVersion),
+    body: row.body,
+    slots: structuredClone(row.slots),
+  };
 }
 
 /** Maps a store write failure (400/404/409) to its HTTP error, then defers the

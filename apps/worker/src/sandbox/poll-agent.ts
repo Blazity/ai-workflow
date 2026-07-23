@@ -1,5 +1,12 @@
 import { getSandboxCredentials } from "./credentials.js";
 import type { CollectedPhaseArtifacts, PhaseArtifactPaths } from "./agents/types.js";
+import {
+  REPLAY_CAPTURE_TIMEOUT_MS,
+  replayCaptureWithinTimeout,
+} from "../run-observability/capture-timeout.js";
+import { configuredReplaySecrets } from "../run-observability/configured-secrets.js";
+import { sanitizeReplayValue } from "../run-observability/sanitizer.js";
+import type { ReplaySanitizationMetadata } from "@shared/contracts";
 
 /**
  * Generalized sentinel check — works with any sentinel file path.
@@ -51,11 +58,10 @@ export async function collectPhaseOutput(
  * Collect raw + (optional) structured phase output. Replaces collectPhaseOutput
  * in adapter-aware code paths.
  */
-export async function collectPhase(
+async function collectPhaseArtifacts(
   sandboxId: string,
   paths: Pick<PhaseArtifactPaths, "stdout" | "stderr" | "structuredOutput" | "exitCode">,
 ): Promise<CollectedPhaseArtifacts> {
-  "use step";
   const { Sandbox } = await import("@vercel/sandbox");
   const sandbox = await Sandbox.get({ sandboxId, ...getSandboxCredentials() });
 
@@ -79,6 +85,137 @@ export async function collectPhase(
     stderr: stderrText,
     structuredOutput,
     exitCode: parsedExitCode,
+  };
+}
+
+export async function collectPhase(
+  sandboxId: string,
+  paths: Pick<PhaseArtifactPaths, "stdout" | "stderr" | "structuredOutput" | "exitCode">,
+): Promise<CollectedPhaseArtifacts> {
+  "use step";
+  return collectPhaseArtifacts(sandboxId, paths);
+}
+
+export interface CollectedReplayPhaseDiagnostics
+  extends CollectedPhaseArtifacts {
+  diagnosticSanitization: {
+    stdout: ReplaySanitizationMetadata;
+    stderr: ReplaySanitizationMetadata;
+  };
+}
+
+interface BoundedDiagnosticTail {
+  text: string;
+  sourceBytes: number | null;
+  truncated: boolean;
+}
+
+function safeReplayDiagnostic(
+  source: BoundedDiagnosticTail,
+): {
+  text: string;
+  metadata: ReplaySanitizationMetadata;
+} {
+  const envelope = sanitizeReplayValue(source.text, {
+    secrets: configuredReplaySecrets(),
+    retain: "tail",
+  });
+  return {
+    text:
+      typeof envelope.value === "string"
+        ? envelope.value
+        : "[replay diagnostic unavailable]",
+    metadata: {
+      ...envelope.metadata,
+      truncated: envelope.metadata.truncated || source.truncated,
+      originalBytes: Math.max(
+        envelope.metadata.originalBytes,
+        source.sourceBytes ?? 0,
+      ),
+    },
+  };
+}
+
+const REPLAY_DIAGNOSTIC_SOURCE_MAX_BYTES = 128 * 1024;
+
+async function collectBoundedReplayPhaseDiagnostics(
+  sandboxId: string,
+  paths: Pick<
+    PhaseArtifactPaths,
+    "stdout" | "stderr" | "structuredOutput" | "exitCode"
+  >,
+): Promise<{
+  stdout: BoundedDiagnosticTail;
+  stderr: BoundedDiagnosticTail;
+  exitCode: number | null;
+}> {
+  const { Sandbox } = await import("@vercel/sandbox");
+  const sandbox = await Sandbox.get({
+    sandboxId,
+    ...getSandboxCredentials(),
+  });
+  const boundedTail = async (path: string): Promise<BoundedDiagnosticTail> => {
+    const sizeResult = await sandbox.runCommand("wc", ["-c", "--", path]);
+    const sizeText = (await sizeResult.stdout()).trim();
+    const sizeMatch = /^(\d+)(?:\s|$)/.exec(sizeText);
+    const sourceBytes = sizeMatch ? Number(sizeMatch[1]) : null;
+    const tailResult = await sandbox.runCommand("tail", [
+      "-c",
+      String(REPLAY_DIAGNOSTIC_SOURCE_MAX_BYTES),
+      "--",
+      path,
+    ]);
+    const text = (await tailResult.stdout()).trim();
+    return {
+      text,
+      sourceBytes,
+      truncated:
+        sourceBytes === null
+          ? Buffer.byteLength(text, "utf8") >=
+            REPLAY_DIAGNOSTIC_SOURCE_MAX_BYTES
+          : sourceBytes > REPLAY_DIAGNOSTIC_SOURCE_MAX_BYTES,
+    };
+  };
+  const [stdout, stderr, exitCodeResult] = await Promise.all([
+    boundedTail(paths.stdout),
+    boundedTail(paths.stderr),
+    sandbox.runCommand("tail", ["-c", "32", "--", paths.exitCode]),
+  ]);
+  const exitCodeText = (await exitCodeResult.stdout()).trim();
+  return {
+    stdout,
+    stderr,
+    exitCode: /^-?\d+$/.test(exitCodeText) ? Number(exitCodeText) : null,
+  };
+}
+
+/**
+ * Timeout diagnostics must never replace the phase timeout with a stuck
+ * sandbox read or persist raw provider output as a durable Workflow step
+ * result. This replay-only collector sanitizes inside the step and abandons
+ * diagnostic I/O after the same short bound used by other replay writes.
+ */
+export async function collectPhaseReplayDiagnostics(
+  sandboxId: string,
+  paths: Pick<PhaseArtifactPaths, "stdout" | "stderr" | "structuredOutput" | "exitCode">,
+  timeoutMs = REPLAY_CAPTURE_TIMEOUT_MS,
+): Promise<CollectedReplayPhaseDiagnostics> {
+  "use step";
+  const artifacts = await replayCaptureWithinTimeout(
+    collectBoundedReplayPhaseDiagnostics(sandboxId, paths),
+    timeoutMs,
+  );
+  const stdout = safeReplayDiagnostic(artifacts.stdout);
+  const stderr = safeReplayDiagnostic(artifacts.stderr);
+  return {
+    stdout: stdout.text,
+    stderr: stderr.text,
+    structuredOutput: null,
+    exitCode: artifacts.exitCode,
+    diagnosticSanitization: {
+      stdout: stdout.metadata,
+      stderr: stderr.metadata,
+    },
   };
 }
 

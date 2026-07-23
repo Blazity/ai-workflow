@@ -1,10 +1,13 @@
+import { isDeepStrictEqual } from "node:util";
 import { and, arrayContains, asc, desc, eq, inArray, isNull, max, notExists, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import type {
+  JsonValue,
   PromptLibraryEntryMeta,
   PromptLibraryPromptUsageRow,
   PromptLibraryUsageRow,
   PromptLibraryVersion,
+  PromptSlotDefinition,
   WorkflowBlockType,
 } from "@shared/contracts";
 import type { Db } from "../db/client.js";
@@ -22,6 +25,10 @@ import {
 import { canEditPromptLibrary, type DashboardRole } from "../lib/auth/roles.js";
 import { DashboardAuthError } from "../lib/auth/users-read.js";
 import type { PromptReferenceLoader } from "../workflows/prompt-references.js";
+import {
+  inspectJsonSchema202012,
+  validateJsonSchemaValue,
+} from "../workflow-definition/json-schema.js";
 
 /** Built-in agent defaults are looked up BY NAME at run time (implicit
  *  materialization); archiving or renaming one would fail every workflow run
@@ -74,6 +81,7 @@ export interface PromptLibraryVersionRow {
   promptId: number;
   version: number;
   body: string;
+  slots: PromptSlotDefinition[];
   createdAt: Date;
   createdById: string;
   createdByLabel: string;
@@ -85,6 +93,7 @@ export interface PromptLibraryVersionRow {
 export interface PromptLibraryListRow extends PromptLibraryRow {
   currentVersion: number;
   body: string;
+  slots: PromptSlotDefinition[];
 }
 
 /** Domain-level failure a write raises (400 invalid, 409 conflict, 404 not
@@ -122,6 +131,7 @@ function mapVersionRow(row: PromptVersionSelect): PromptLibraryVersionRow {
     promptId: row.promptId,
     version: row.version,
     body: row.body,
+    slots: structuredClone(row.slots),
     createdAt: row.createdAt,
     createdById: row.createdById,
     createdByLabel: row.createdByLabel,
@@ -165,6 +175,65 @@ function validateBody(body: string): string {
   const parsed = z.string().min(1).max(50000).safeParse(body);
   if (!parsed.success) throw new PromptLibraryStoreError(400, "Invalid body");
   return parsed.data;
+}
+
+const jsonValueSchema: z.ZodType<JsonValue> = z.lazy(() =>
+  z.union([
+    z.string(),
+    z.number().finite(),
+    z.boolean(),
+    z.null(),
+    z.array(jsonValueSchema),
+    z.record(z.string(), jsonValueSchema),
+  ]),
+);
+
+const promptSlotDefinitionSchema = z
+  .object({
+    name: z.string().regex(/^[A-Za-z_][A-Za-z0-9_-]{0,63}$/),
+    description: z.string().trim().max(2000),
+    schema: z.record(z.string(), jsonValueSchema),
+    required: z.boolean().default(true),
+    defaultValue: jsonValueSchema.optional(),
+  })
+  .strict();
+
+function validateSlots(value: unknown): PromptSlotDefinition[] {
+  const parsed = z.array(promptSlotDefinitionSchema).max(100).safeParse(value);
+  if (!parsed.success) {
+    throw new PromptLibraryStoreError(400, "Invalid slots");
+  }
+  const names = new Set<string>();
+  for (const slot of parsed.data) {
+    if (names.has(slot.name)) {
+      throw new PromptLibraryStoreError(
+        400,
+        `Invalid slots: duplicate slot "${slot.name}"`,
+      );
+    }
+    names.add(slot.name);
+    const inspected = inspectJsonSchema202012(slot.schema);
+    if (!inspected.ok) {
+      const issue = inspected.issues[0]!;
+      throw new PromptLibraryStoreError(
+        400,
+        `Invalid slots: slot "${slot.name}" schema${issue.path || "/"} ${issue.message}`,
+      );
+    }
+    if (slot.defaultValue !== undefined) {
+      const issues = validateJsonSchemaValue(
+        inspected.schema,
+        slot.defaultValue,
+      );
+      if (issues.length > 0) {
+        throw new PromptLibraryStoreError(
+          400,
+          `Invalid slots: slot "${slot.name}" defaultValue${issues[0]!.path || "/"} ${issues[0]!.message}`,
+        );
+      }
+    }
+  }
+  return structuredClone(parsed.data);
 }
 
 /** Walks the error cause chain (drizzle wraps the driver error) looking for a
@@ -269,13 +338,17 @@ export async function listPrompts(
     )
     .groupBy(promptLibraryVersions.promptId);
 
-  const headByPrompt = new Map<number, { version: number; body: string }>();
+  const headByPrompt = new Map<
+    number,
+    { version: number; body: string; slots: PromptSlotDefinition[] }
+  >();
   if (maxRows.length > 0) {
     const headRows = await db
       .select({
         promptId: promptLibraryVersions.promptId,
         version: promptLibraryVersions.version,
         body: promptLibraryVersions.body,
+        slots: promptLibraryVersions.slots,
       })
       .from(promptLibraryVersions)
       .where(
@@ -289,7 +362,11 @@ export async function listPrompts(
         ),
       );
     for (const row of headRows) {
-      headByPrompt.set(row.promptId, { version: row.version, body: row.body });
+      headByPrompt.set(row.promptId, {
+        version: row.version,
+        body: row.body,
+        slots: structuredClone(row.slots),
+      });
     }
   }
 
@@ -302,7 +379,12 @@ export async function listPrompts(
   for (const p of prompts) {
     const head = headByPrompt.get(p.id);
     if (!head) continue;
-    rows.push({ ...mapPromptRow(p), currentVersion: head.version, body: head.body });
+    rows.push({
+      ...mapPromptRow(p),
+      currentVersion: head.version,
+      body: head.body,
+      slots: head.slots,
+    });
   }
 
   const q = normalizeQuery(filter?.q);
@@ -351,6 +433,7 @@ export function createPromptReferenceLoader(db: Db): PromptReferenceLoader {
       requestedVersion,
       resolvedVersion: version.version,
       body: version.body,
+      slots: structuredClone(version.slots),
     };
   };
 }
@@ -495,6 +578,7 @@ export async function createPrompt(
   input: {
     name: string;
     body: string;
+    slots?: PromptSlotDefinition[];
     description?: string | null;
     tags?: string[];
     actor: PromptLibraryActor;
@@ -503,6 +587,7 @@ export async function createPrompt(
   requireEditRole(input.actor.role);
   const name = validateName(input.name);
   const body = validateBody(input.body);
+  const slots = validateSlots(input.slots ?? []);
   const description = validateDescription(input.description ?? null);
   const tags = validateTags(input.tags ?? []);
   const slug = await nextAvailableSlug(db, slugifyPromptName(name));
@@ -547,6 +632,7 @@ export async function createPrompt(
         promptId: created.id,
         version: 1,
         body,
+        slots,
         createdById: input.actor.id,
         createdByLabel: input.actor.label,
         restoredFromVersion: null,
@@ -567,6 +653,7 @@ export async function savePromptVersion(
   input: {
     promptId: number;
     body: string;
+    slots?: PromptSlotDefinition[];
     restoredFromVersion?: number;
     actor: PromptLibraryActor;
   },
@@ -587,7 +674,15 @@ export async function savePromptVersion(
   }
 
   const head = await getCurrentPromptVersion(db, input.promptId);
-  if (head && head.body === body) {
+  const slots =
+    input.slots === undefined
+      ? (head?.slots ?? [])
+      : validateSlots(input.slots);
+  if (
+    head &&
+    head.body === body &&
+    isDeepStrictEqual(head.slots, slots)
+  ) {
     return { version: head, changed: false };
   }
 
@@ -605,6 +700,7 @@ export async function savePromptVersion(
         promptId: input.promptId,
         version: next,
         body,
+        slots,
         createdById: input.actor.id,
         createdByLabel: input.actor.label,
         restoredFromVersion: input.restoredFromVersion ?? null,
@@ -753,6 +849,7 @@ export async function restorePromptVersion(
         promptId: input.promptId,
         version: next,
         body: source.body,
+        slots: source.slots,
         createdById: input.actor.id,
         createdByLabel: input.actor.label,
         restoredFromVersion: source.version,
@@ -968,6 +1065,7 @@ export function serializePromptVersion(row: PromptLibraryVersionRow): PromptLibr
     promptId: row.promptId,
     version: row.version,
     body: row.body,
+    slots: structuredClone(row.slots),
     createdAt: row.createdAt.toISOString(),
     createdById: row.createdById,
     createdByLabel: row.createdByLabel,

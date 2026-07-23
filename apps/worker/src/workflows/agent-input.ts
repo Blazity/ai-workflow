@@ -56,6 +56,8 @@ export type AgentWorkflowInput =
       subjectKey: string;
       ticketKey: string;
       ownerToken: string;
+      /** Durable manual-dispatch request acknowledged after owner binding. */
+      manualDispatchId?: string;
       continuation?: ClarificationContinuationMarker;
       definitionId?: number;
       definitionVersion?: WorkflowDefinitionVersionPin;
@@ -70,6 +72,8 @@ export type AgentWorkflowInput =
       subjectKey: string;
       ticketKey?: string;
       ownerToken: string;
+      /** Durable manual-dispatch request acknowledged after owner binding. */
+      manualDispatchId?: string;
       continuation?: ClarificationContinuationMarker;
       definitionId: number;
       definitionVersion: number;

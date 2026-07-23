@@ -6,6 +6,7 @@ const state = vi.hoisted(() => ({
   env: {
     JIRA_PROJECT_KEY: "PROJ",
     COLUMN_AI: "AI",
+    COLUMN_AI_REVIEW: "Review",
     MAX_CONCURRENT_AGENTS: 3,
     JIRA_WEBHOOK_SECRET: "secret" as string | undefined,
   },
@@ -14,6 +15,7 @@ const state = vi.hoisted(() => ({
   cancel: vi.fn(),
   resume: vi.fn(),
   isRunRecordedFailed: vi.fn(),
+  isRunRecordedSucceeded: vi.fn(),
 }));
 
 vi.mock("../../../env.js", () => ({ env: state.env }));
@@ -26,6 +28,7 @@ vi.mock("../../clarifications/resume-from-comments.js", () => ({
 }));
 vi.mock("../../db/queries/runs-read.js", () => ({
   isRunRecordedFailed: state.isRunRecordedFailed,
+  isRunRecordedSucceeded: state.isRunRecordedSucceeded,
 }));
 
 const handler = (await import("./jira.post.js")).default;
@@ -67,7 +70,11 @@ function request(input: {
   });
 }
 
-function adapters(options: { state?: "bound" | "cancelling"; active?: boolean } = {}) {
+function adapters(options: {
+  state?: "bound" | "cancelling";
+  active?: boolean;
+  kind?: "ticket" | "manual_pr_trigger";
+} = {}) {
   const active = options.active === false
     ? null
     : {
@@ -76,7 +83,7 @@ function adapters(options: { state?: "bound" | "cancelling"; active?: boolean } 
         ownerToken: "owner-1",
         runId: "run-1",
         state: options.state ?? "bound",
-        kind: "ticket",
+        kind: options.kind ?? "ticket",
         createdAt: Date.now(),
         updatedAt: Date.now(),
       };
@@ -101,6 +108,7 @@ describe("POST /webhooks/jira", () => {
     state.cancel.mockResolvedValue(true);
     state.dispatch.mockResolvedValue({ started: false, reason: "not_applicable" });
     state.isRunRecordedFailed.mockResolvedValue(false);
+    state.isRunRecordedSucceeded.mockResolvedValue(false);
   });
 
   it("rejects unauthenticated configuration", async () => {
@@ -140,6 +148,21 @@ describe("POST /webhooks/jira", () => {
     );
   });
 
+  it("keeps a manual PR dispatch independent from linked Jira status", async () => {
+    const connected = adapters({ kind: "manual_pr_trigger" });
+    state.createAdapters.mockReturnValue(connected);
+
+    const response = await app()(request({ actor: "human-account" }));
+
+    await expect(response.json()).resolves.toEqual({
+      status: "ignored",
+      reason: "manual_pr_dispatch_independent",
+      ticketKey: "PROJ-42",
+    });
+    expect(state.isRunRecordedFailed).not.toHaveBeenCalled();
+    expect(state.cancel).not.toHaveBeenCalled();
+  });
+
   it("does not cancel a run whose failure is already recorded (its own backlog move)", async () => {
     // The bot's failure handling moved the ticket to the backlog, firing this
     // webhook. The run already recorded 'failed', so cancelling would overwrite
@@ -159,12 +182,71 @@ describe("POST /webhooks/jira", () => {
     expect(state.cancel).not.toHaveBeenCalled();
   });
 
+  it("does not cancel a run whose success is already recorded (its own AI Review move)", async () => {
+    // The bot's success finalization moved the ticket to AI Review, firing this
+    // webhook. The run already recorded 'success', so cancelling would
+    // overwrite that with a 'blocked' status even though the PR already opened.
+    const connected = adapters();
+    state.createAdapters.mockReturnValue(connected);
+    state.isRunRecordedSucceeded.mockResolvedValue(true);
+
+    const response = await app()(request({ actor: "human-account" }));
+
+    await expect(response.json()).resolves.toMatchObject({
+      status: "ignored",
+      reason: "run_already_succeeded",
+      ticketKey: "PROJ-42",
+    });
+    expect(state.isRunRecordedSucceeded).toHaveBeenCalledWith(expect.anything(), "run-1");
+    expect(state.cancel).not.toHaveBeenCalled();
+  });
+
+  it("does not cancel a still-finalizing run when the live ticket sits in the AI Review column", async () => {
+    // A Jira automation rule races the run's own success move: it lands the
+    // ticket in AI Review right after the PR link appears, BEFORE the run
+    // froze its "success" status. Entering the review column is a completion
+    // gesture, never an abort, so the webhook must not cancel the run.
+    const connected = adapters();
+    connected.issueTracker.fetchTicket.mockResolvedValue({
+      identifier: "PROJ-42",
+      projectKey: "PROJ",
+      trackerStatus: "Review",
+    });
+    state.createAdapters.mockReturnValue(connected);
+
+    const response = await app()(request({ actor: "automation-account", status: "Review" }));
+
+    await expect(response.json()).resolves.toEqual({
+      status: "ignored",
+      reason: "ticket_in_ai_review_column",
+      ticketKey: "PROJ-42",
+    });
+    expect(state.cancel).not.toHaveBeenCalled();
+    // The guard sits before the recorded-outcome lookup: a review-column move
+    // must never surface the retryable 503 of a failed lookup either.
+    expect(state.isRunRecordedFailed).not.toHaveBeenCalled();
+    expect(state.isRunRecordedSucceeded).not.toHaveBeenCalled();
+  });
+
   it("surfaces a retryable error when the failed-status lookup fails (does not cancel)", async () => {
     // A transient lookup failure must not be read as "not failed": guessing
     // would cancel a genuinely failed run. Return a retryable 503 instead.
     const connected = adapters();
     state.createAdapters.mockReturnValue(connected);
     state.isRunRecordedFailed.mockRejectedValue(new Error("db down"));
+
+    const response = await app()(request({ actor: "human-account" }));
+
+    expect(response.status).toBe(503);
+    expect(state.cancel).not.toHaveBeenCalled();
+  });
+
+  it("surfaces a retryable error when the success-status lookup fails (does not cancel)", async () => {
+    // Same fail-closed rule for the success lookup: guessing "not succeeded"
+    // would cancel a genuinely finished run. Return a retryable 503 instead.
+    const connected = adapters();
+    state.createAdapters.mockReturnValue(connected);
+    state.isRunRecordedSucceeded.mockRejectedValue(new Error("db down"));
 
     const response = await app()(request({ actor: "human-account" }));
 

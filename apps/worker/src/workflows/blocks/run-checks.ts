@@ -1,22 +1,38 @@
 import { z } from "zod";
 import type { AgentKind } from "../../sandbox/agents/index.js";
+import type { CheckOutcome } from "../../pre-pr-checks/runner.js";
 import {
   RunBudgetError,
   durationBudgetFailure,
   isDurationAbortError,
 } from "../run-budget.js";
 import { isRunControlError } from "../run-control-error.js";
+import {
+  invalidateWorkspaceGate,
+  recordSuccessfulWorkspaceGate,
+} from "../workspace-gate.js";
 import { executionError, type BlockExecuteFn, type BlockExecutionResult } from "./types.js";
 
 export const paramsSchema = z
   .object({
     commands: z.array(z.string().trim().min(1)).optional(),
+    skipReason: z.string().trim().min(1).max(2_000).optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((value, ctx) => {
+    if (value.skipReason && (value.commands?.length ?? 0) > 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["skipReason"],
+        message: "Skip reason cannot be combined with commands.",
+      });
+    }
+  });
 
 const OUTPUT_TRUNCATE = 2000;
 
 interface RunChecksStepResult {
+  outcome: Exclude<CheckOutcome, "skipped" | "missing_configuration">;
   results: Array<{ repo: string; command: string; exitCode: number }>;
   failures: Array<{ repo: string; command: string; exitCode: number; output: string }>;
 }
@@ -65,7 +81,11 @@ async function blockRunChecksCommandsStep(
       }
     }
   }
-  return { results, failures };
+  return {
+    outcome: failures.length > 0 ? "failed" : "passed",
+    results,
+    failures,
+  };
 }
 blockRunChecksCommandsStep.maxRetries = 0;
 
@@ -74,7 +94,13 @@ async function blockRunChecksConfiguredStep(
   agentKind: AgentKind,
   model: string,
   timeoutMs: number,
-): Promise<RunChecksStepResult & { summary: string }> {
+): Promise<
+  Omit<RunChecksStepResult, "outcome"> & {
+    outcome: Exclude<CheckOutcome, "skipped">;
+    configurationVersion: number | null;
+    summary: string;
+  }
+> {
   "use step";
   const { getDb } = await import("../../db/client.js");
   const { getCurrentPrePrCheckConfig } = await import("../../pre-pr-checks/store.js");
@@ -100,8 +126,22 @@ async function blockRunChecksConfiguredStep(
       .join("\n")
       .slice(0, OUTPUT_TRUNCATE),
   }));
+  const results = (run.results ?? run.failures).map((result) => ({
+    repo: `${result.provider}:${result.repoPath}`,
+    command: result.command,
+    exitCode: result.exitCode,
+  }));
+  const outcome =
+    run.outcome ??
+    (current === null || current.config.repositories.length === 0
+      ? "missing_configuration"
+      : run.passed
+        ? "passed"
+        : "failed");
   return {
-    results: failures.map(({ repo, command, exitCode }) => ({ repo, command, exitCode })),
+    outcome,
+    configurationVersion: current?.version ?? null,
+    results,
     failures,
     summary: run.summary,
   };
@@ -117,12 +157,28 @@ blockRunChecksConfiguredStep.maxRetries = 0;
  * infrastructure errors (checks could not run at all).
  */
 export const execute: BlockExecuteFn = async (block, _steps, ctx): Promise<BlockExecutionResult> => {
+  const skipReason =
+    typeof block.params.skipReason === "string" ? block.params.skipReason.trim() : "";
+  if (skipReason) {
+    return {
+      kind: "next",
+      output: {
+        status: "ok",
+        ok: true,
+        outcome: "skipped",
+        skipReason,
+        results: [],
+        failures: [],
+      },
+    };
+  }
   if (!ctx.sandboxId) {
     return executionError(
       "no workspace: connect prepare_workspace before run_checks",
       { category: "sandbox" },
     );
   }
+  invalidateWorkspaceGate(ctx);
   const commands = Array.isArray(block.params.commands)
     ? block.params.commands.filter((c): c is string => typeof c === "string")
     : [];
@@ -140,11 +196,26 @@ export const execute: BlockExecuteFn = async (block, _steps, ctx): Promise<Block
             ctx.defaults[ctx.runDefaultKind],
             timeoutMs,
           );
+    if (
+      "configurationVersion" in result &&
+      result.outcome === "passed" &&
+      result.configurationVersion !== null &&
+      ctx.workspaceManifest
+    ) {
+      ctx.prePrGate = await recordSuccessfulWorkspaceGate({
+        sandboxId: ctx.sandboxId,
+        workspaceManifest: ctx.workspaceManifest,
+        configurationVersion: result.configurationVersion,
+      });
+    }
     return {
       kind: "next",
       output: {
         status: "ok",
-        ok: result.failures.length === 0,
+        // Preserve the v1 Boolean contract: missing configuration was
+        // historically a no-op, while the typed outcome makes it visible to v2.
+        ok: result.outcome !== "failed",
+        outcome: result.outcome,
         results: result.results,
         failures: result.failures,
       },

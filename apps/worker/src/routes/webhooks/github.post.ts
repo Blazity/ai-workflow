@@ -2,7 +2,6 @@ import { defineEventHandler, readRawBody, getHeader, createError } from "h3";
 import { env, getVcsBotLogin } from "../../../env.js";
 import { PostgresRunRegistry } from "../../adapters/run-registry/postgres.js";
 import { getDb } from "../../db/client.js";
-import { ticketKeyFromBranch } from "../../lib/branch-prefix.js";
 import {
   dispatchTriggerEvent,
   type DispatchTriggerResult,
@@ -12,6 +11,10 @@ import { logger } from "../../lib/logger.js";
 import { dispatchPostPrGateWebhook } from "../../lib/post-pr-gate-dispatch.js";
 import { isRepoAllowed } from "../../lib/repo-allowlist.js";
 import { normalizeGitHubEvent } from "../../lib/trigger-events.js";
+import {
+  gateCheckNameAliases,
+  ticketKeyFromBranch,
+} from "../../lib/workflow-naming.js";
 import { loadPostPrGateConfig } from "../../post-pr-gate/config.js";
 
 const GATE_ACTIONS = new Set(["opened", "synchronize", "reopened"]);
@@ -65,8 +68,8 @@ export default defineEventHandler(async (event) => {
   }
 
   const config = loadPostPrGateConfig();
-  const gateCheckNames = config.postPrGate.steps.map(
-    (step) => `blazebot / ${step.name ?? step.uses}`,
+  const gateCheckNames = config.postPrGate.steps.flatMap(
+    (step) => gateCheckNameAliases(step.name ?? step.uses),
   );
   // Normalize every structurally supported review state here. The dispatcher
   // applies provider/state selectors from the same immutable definition
@@ -151,8 +154,17 @@ function triggerResponse(result: DispatchTriggerResult) {
   if (result.result === "at_capacity" || result.result === "error") {
     // Surface a retryable HTTP failure. Received envelopes also have local poll
     // recovery; failures before durable receipt still need provider retry.
-    logger.info({ reason: result.result }, "trigger_webhook_retryable_failure");
-    throw createError({ statusCode: 503, statusMessage: `trigger_${result.result}` });
+    const diagnosticId =
+      result.result === "error" ? result.diagnosticId : undefined;
+    logger.info(
+      { reason: result.result, ...(diagnosticId ? { diagnosticId } : {}) },
+      "trigger_webhook_retryable_failure",
+    );
+    throw createError({
+      statusCode: 503,
+      statusMessage: `trigger_${result.result}`,
+      ...(diagnosticId ? { data: { diagnosticId } } : {}),
+    });
   }
   return { status: "ignored", reason: result.result };
 }

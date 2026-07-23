@@ -4,6 +4,7 @@ import { hasGateStatusCapability } from "../adapters/vcs/types.js";
 import { getDb, type Db } from "../db/client.js";
 import { createAdapters } from "./adapters.js";
 import { logger } from "./logger.js";
+import { isManagedBranch } from "./workflow-naming.js";
 import { GateStore, type CurrentGateRun } from "../post-pr-gate/gate-store.js";
 import { loadPostPrGateConfig } from "../post-pr-gate/config.js";
 import { getEnabledWorkflowDefinitionForTrigger } from "../workflow-definition/store.js";
@@ -116,7 +117,7 @@ function checkPostPrGateEligibility(
   input: PostPrGateWorkflowInput,
   config: ReturnType<typeof loadPostPrGateConfig>,
 ): { status: "ignored"; reason: "not_bot_branch" | "draft" | "base_branch" } | null {
-  if (config.postPrGate.runOn.botPrsOnly && !input.headRef.startsWith("blazebot/")) {
+  if (config.postPrGate.runOn.botPrsOnly && !isManagedBranch(input.headRef)) {
     logger.info({ headRef: input.headRef }, "post_pr_gate_skipped_not_bot_branch");
     return { status: "ignored", reason: "not_bot_branch" };
   }

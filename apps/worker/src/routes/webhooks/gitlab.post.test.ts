@@ -460,11 +460,17 @@ describe("POST /webhooks/gitlab", () => {
   });
 
   it("returns a retryable 503 when dispatch errors", async () => {
-    mockDispatchTriggerEvent.mockResolvedValueOnce({ result: "error" });
+    mockDispatchTriggerEvent.mockResolvedValueOnce({
+      result: "error",
+      diagnosticId: "AIW-DIAG-ingest-gitlab-test",
+    });
 
     const response = await makeApp()(makeRequest(validMergeRequestPayload()));
 
     expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toMatchObject({
+      data: { diagnosticId: "AIW-DIAG-ingest-gitlab-test" },
+    });
     expect(mockDispatchPostPrGateWebhook).not.toHaveBeenCalled();
   });
 

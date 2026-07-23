@@ -3,6 +3,7 @@ import type { Db } from "../../db/client.js";
 import { workflowRuns } from "../../db/schema.js";
 import type {
   BlockRunState,
+  HarnessRunManifestRecord,
   ResolvedPromptReference,
   RunStep,
   WorkflowRunBudgetFailure,
@@ -81,6 +82,8 @@ export interface RunUsage {
   budgetFailure: WorkflowRunBudgetFailure | null;
   prUrl: string | null;
   prNumber: number | null;
+  /** Exact non-secret profile/runtime capabilities resolved for this run. */
+  harnessManifests?: HarnessRunManifestRecord[];
 }
 
 /** `coalesce(excluded.<col>, "workflow_runs"."<col>")` — take the incoming
@@ -189,6 +192,7 @@ export async function recordRunUsage(db: Db, usage: RunUsage): Promise<void> {
       budgetFailure: usage.budgetFailure,
       prUrl: usage.prUrl,
       prNumber: usage.prNumber,
+      harnessManifests: usage.harnessManifests,
     })
     .onConflictDoUpdate({
       target: workflowRuns.runId,
@@ -218,6 +222,10 @@ export async function recordRunUsage(db: Db, usage: RunUsage): Promise<void> {
         budgetFailure: sql`excluded.budget_failure`,
         prUrl: keepIfNull(workflowRuns.prUrl, workflowRuns.prUrl),
         prNumber: keepIfNull(workflowRuns.prNumber, workflowRuns.prNumber),
+        harnessManifests: keepIfNull(
+          workflowRuns.harnessManifests,
+          workflowRuns.harnessManifests,
+        ),
         updatedAt: sql`now()`,
       },
     });
@@ -238,6 +246,18 @@ export interface RunBlockStatusWrite {
   definitionId: number | null;
   blockStatuses: Record<string, BlockRunState>;
   promptManifest?: ResolvedPromptReference[];
+  harnessManifests?: HarnessRunManifestRecord[];
+}
+
+export function summarizeBlockStatuses(
+  blockStatuses: Record<string, BlockRunState>,
+): Record<string, BlockRunState> {
+  return Object.fromEntries(
+    Object.entries(blockStatuses).map(([nodeId, state]) => {
+      const { output: _output, ...summary } = state;
+      return [nodeId, summary];
+    }),
+  );
 }
 
 /**
@@ -251,6 +271,7 @@ export async function recordBlockStatuses(
   db: Db,
   write: RunBlockStatusWrite,
 ): Promise<void> {
+  const blockStatuses = summarizeBlockStatuses(write.blockStatuses);
   await db
     .insert(workflowRuns)
     .values({
@@ -264,8 +285,9 @@ export async function recordBlockStatuses(
       ticketUrl: write.ticketUrl,
       definitionVersion: write.definitionVersion,
       definitionId: write.definitionId,
-      blockStatuses: write.blockStatuses,
+      blockStatuses,
       promptManifest: write.promptManifest,
+      harnessManifests: write.harnessManifests,
     })
     .onConflictDoUpdate({
       target: workflowRuns.runId,
@@ -274,6 +296,10 @@ export async function recordBlockStatuses(
         definitionVersion: sql`excluded.definition_version`,
         definitionId: sql`excluded.definition_id`,
         promptManifest: keepIfNull(workflowRuns.promptManifest, workflowRuns.promptManifest),
+        harnessManifests: keepIfNull(
+          workflowRuns.harnessManifests,
+          workflowRuns.harnessManifests,
+        ),
         updatedAt: sql`now()`,
       },
     });
@@ -300,6 +326,36 @@ export async function markRunFailedOnSelfMove(db: Db, runId: string): Promise<vo
         // A NULL status is an in-flight row too: `status NOT IN (...)` is NULL
         // (not true) for NULL, so without this a null-status run would be
         // skipped and its failure lost.
+        or(
+          isNull(workflowRuns.status),
+          notInArray(workflowRuns.status, ["success", "failed", "blocked", "awaiting"]),
+        ),
+      ),
+    );
+}
+
+/**
+ * Commits a run's authoritative "success" status the moment its own
+ * success-finalizing AI Review move is about to fire a Jira webhook. The bot
+ * moving a finished ticket out of the AI column triggers the "ticket left the
+ * AI column" webhook, which would otherwise race in and cancel this
+ * still-finalizing run, flipping its world status to "cancelled" (stored as
+ * "blocked") even though the PR and ticket move already happened. Recording
+ * "success" first makes the outcome durable before that self-triggered cancel
+ * can land: the cron never downgrades a frozen status, so the run stays
+ * "success". Guarded to only advance an in-flight row and never clobber an
+ * already-frozen outcome.
+ */
+export async function markRunSucceededOnSelfMove(db: Db, runId: string): Promise<void> {
+  await db
+    .update(workflowRuns)
+    .set({ status: "success", updatedAt: sql`now()` })
+    .where(
+      and(
+        eq(workflowRuns.runId, runId),
+        // A NULL status is an in-flight row too: `status NOT IN (...)` is NULL
+        // (not true) for NULL, so without this a null-status run would be
+        // skipped and its success lost.
         or(
           isNull(workflowRuns.status),
           notInArray(workflowRuns.status, ["success", "failed", "blocked", "awaiting"]),

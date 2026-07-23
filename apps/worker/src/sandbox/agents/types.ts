@@ -201,6 +201,21 @@ export interface ConfigureOpts {
   codexChatGptOauthToken?: string;
   model: string;
   arthur?: ArthurConfig;
+  /**
+   * PR5 v2 profiles use an immutable, manifest-hash-addressed runtime. V1
+   * omits this and retains its historical shared-home compatibility behavior.
+   */
+  runtime?: AgentRuntimePaths;
+  legacyDynamicSkills?: boolean;
+}
+
+export interface AgentRuntimePaths {
+  manifestHash: string;
+  rootDir: string;
+  homeDir: string;
+  cliDir: string;
+  executablePath: string;
+  envPath: string;
 }
 
 export interface PhaseArtifactPaths {
@@ -234,13 +249,16 @@ export type AgentProtocolFailureKind =
   | "schema_mismatch"
   | "protocol_mismatch";
 
-export interface AgentCliSpec {
+export interface SerializableAgentCliSpec {
   kind: "claude" | "codex";
   packageName: string;
   version: string;
   executable: string;
-  parseVersion(output: string): string | null;
   protocol: string;
+}
+
+export interface AgentCliSpec extends SerializableAgentCliSpec {
+  parseVersion(output: string): string | null;
 }
 
 export interface AgentProtocolDiagnostic {
@@ -292,14 +310,22 @@ export interface PhaseScriptOpts {
   paths: PhaseArtifactPaths;
   /** When set, the phase requests schema-validated structured output. */
   jsonSchema?: string;
+  runtime?: AgentRuntimePaths;
 }
 
 export interface AgentAdapter {
   kind: "claude" | "codex";
   cliSpec: AgentCliSpec;
-  install(sandbox: RunnableSandbox): Promise<void>;
+  install(
+    sandbox: RunnableSandbox,
+    runtime?: AgentRuntimePaths,
+  ): Promise<void>;
   configure(sandbox: RunnableSandbox, opts: ConfigureOpts): Promise<void>;
-  setCommitGuard(sandbox: RunnableSandbox, enabled: boolean): Promise<void>;
+  setCommitGuard(
+    sandbox: RunnableSandbox,
+    enabled: boolean,
+    runtime?: AgentRuntimePaths,
+  ): Promise<void>;
   buildPhaseScript(opts: PhaseScriptOpts): string;
   artifactPaths(phase: PhaseKind): PhaseArtifactPaths;
   parseAgentOutputProtocol(

@@ -46,3 +46,9 @@ export function promptEditorModalCapabilities(
     canSave: !disabled && hasContent && variant === "field",
   };
 }
+
+export function promptEditorSurface(
+  authoringMode: "v1" | "v2",
+): "sections" | "continuous" {
+  return authoringMode === "v2" ? "continuous" : "sections";
+}

@@ -4,6 +4,7 @@ import type { WorkspaceManifest } from "../sandbox/repo-workspace.js";
 const mocks = vi.hoisted(() => ({
   publish: vi.fn(),
   writeDecisions: vi.fn(),
+  assertGate: vi.fn(),
   findPr: vi.fn(),
   createPr: vi.fn(),
   recordIntent: vi.fn(),
@@ -17,6 +18,9 @@ vi.mock("../sandbox/trusted-workspace-publisher.js", () => ({
 }));
 vi.mock("../sandbox/write-human-decisions-memory.js", () => ({
   writeHumanDecisionsMemory: mocks.writeDecisions,
+}));
+vi.mock("./workspace-gate.js", () => ({
+  assertCurrentWorkspaceGate: mocks.assertGate,
 }));
 vi.mock("./repository-prs.js", () => ({
   findWorkflowOwnedPullRequestForBranch: mocks.findPr,
@@ -84,6 +88,11 @@ describe("workspace publication", () => {
       ],
     });
     mocks.writeDecisions.mockResolvedValue(undefined);
+    mocks.assertGate.mockResolvedValue({
+      required: false,
+      reason: "missing_configuration",
+      configurationVersion: null,
+    });
     mocks.findPr.mockResolvedValue(null);
     mocks.createPr.mockResolvedValue({
       provider: "github",
@@ -107,12 +116,45 @@ describe("workspace publication", () => {
       clarifications: [{ questions: ["Which API?"], answer: "Public API" }],
     });
 
-    expect(mocks.writeDecisions).toHaveBeenCalledOnce();
+    expect(mocks.assertGate).toHaveBeenCalledWith({
+      sandboxId: "sandbox-1",
+      workspaceManifest: manifest,
+      gate: null,
+    });
+    expect(mocks.writeDecisions).not.toHaveBeenCalled();
     expect(mocks.publish).toHaveBeenCalledWith(
       expect.objectContaining({ sourceSandboxId: "sandbox-1", workspaceManifest: manifest }),
     );
     expect(result).toMatchObject({ status: "finalized", repositories: [finalized] });
     expect(result).not.toHaveProperty("attemptId");
+  });
+
+  it("fails before every publication side effect when the workspace gate is stale", async () => {
+    mocks.assertGate.mockRejectedValue(
+      new Error("The Run Workspace changed after pre-publication checks passed."),
+    );
+
+    const result = await finalizeWorkspacePublication({
+      ...common,
+      sandboxId: "sandbox-1",
+      workspaceManifest: manifest,
+      prePrGate: {
+        configurationVersion: 7,
+        fingerprint: "stale-fingerprint",
+      },
+      clarifications: [{ questions: ["Which API?"], answer: "Public API" }],
+    });
+
+    expect(result).toEqual({
+      status: "failed",
+      failureKind: "pre_pr_gate",
+      reason: "The Run Workspace changed after pre-publication checks passed.",
+      repositories: [],
+      prs: [],
+    });
+    expect(mocks.writeDecisions).not.toHaveBeenCalled();
+    expect(mocks.getPrHead).not.toHaveBeenCalled();
+    expect(mocks.publish).not.toHaveBeenCalled();
   });
 
   it("does not publish when the triggering PR identity is stale", async () => {

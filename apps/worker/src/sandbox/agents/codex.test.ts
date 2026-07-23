@@ -272,6 +272,45 @@ describe("CodexAgentAdapter.configure", () => {
   const writtenFiles = (writeFiles: any) =>
     writeFiles.mock.calls.flatMap(([files]: [any[]]) => files);
 
+  it("logs in with an OAuth access token without putting it in command arguments", async () => {
+    const token = "oauth-secret-must-only-exist-in-the-env-file";
+    const runCommand = vi.fn().mockResolvedValue({ exitCode: 0 });
+    const writeFiles = vi.fn().mockResolvedValue(undefined);
+    const sandbox = { runCommand, writeFiles } as any;
+    const runtime = {
+      manifestHash: "a".repeat(64),
+      rootDir: `/tmp/aiw-harness/${"a".repeat(64)}`,
+      homeDir: `/tmp/aiw-harness/${"a".repeat(64)}/home`,
+      cliDir: `/tmp/aiw-harness/${"a".repeat(64)}/cli`,
+      executablePath: `/tmp/aiw-harness/${"a".repeat(64)}/cli/node_modules/.bin/codex`,
+      envPath: `/tmp/aiw-harness/${"a".repeat(64)}/credentials.sh`,
+    };
+
+    await adapter.configure(sandbox, {
+      codexChatGptOauthToken: token,
+      model: "gpt-5-codex",
+      runtime,
+      legacyDynamicSkills: false,
+    });
+
+    const loginCall = runCommand.mock.calls.find(
+      ([command, args]) =>
+        command === "bash" &&
+        typeof args?.[1] === "string" &&
+        args[1].includes("login --with-access-token"),
+    );
+    expect(loginCall).toBeDefined();
+    expect(loginCall![1][1]).toContain("printenv CODEX_ACCESS_TOKEN");
+    expect(loginCall![1][1]).toContain(runtime.executablePath);
+    expect(loginCall![1][1]).not.toContain("--with-api-key");
+    expect(JSON.stringify(runCommand.mock.calls)).not.toContain(token);
+
+    const envFile = writtenFiles(writeFiles).find(
+      (file: any) => file.path === runtime.envPath,
+    );
+    expect(envFile.content.toString("utf8")).toContain(token);
+  });
+
   it("adds .codex/ to .git/info/exclude so the agent never sees session pollution", async () => {
     const runCommand = vi.fn().mockResolvedValue({ exitCode: 0 });
     const writeFiles = vi.fn().mockResolvedValue(undefined);

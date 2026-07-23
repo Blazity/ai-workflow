@@ -243,8 +243,15 @@ describe("prepare_workspace execute", () => {
 
     await execute(makeNode("prepare_workspace"), {}, ctx);
 
-    expect(mocks.createAgentAdapter).not.toHaveBeenCalledWith("codex");
-    expect(mocks.createAgentAdapter).toHaveBeenCalledWith("claude");
+    expect(
+      mocks.createAgentAdapter.mock.calls.some(
+        ([kind]) => kind === "codex",
+      ),
+    ).toBe(false);
+    expect(mocks.createAgentAdapter).toHaveBeenCalledWith(
+      "claude",
+      undefined,
+    );
   });
 
   it("is idempotent and reuses an already attached workspace", async () => {

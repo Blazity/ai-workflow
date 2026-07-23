@@ -1,6 +1,6 @@
 import { createApp, createRouter, toWebHandler } from "h3";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { WorkflowDefinition } from "@shared/contracts";
+import type { WorkflowDefinitionV1 } from "@shared/contracts";
 import type { IssueTrackerAdapter } from "../adapters/issue-tracker/types.js";
 import type { Db } from "../db/client.js";
 import { member, organization, user } from "../db/schema.js";
@@ -88,7 +88,7 @@ function jsonRequest(method: string, body: unknown, url: string): Request {
   });
 }
 
-function withComment(definition: WorkflowDefinition, body: string): WorkflowDefinition {
+function withComment(definition: WorkflowDefinitionV1, body: string): WorkflowDefinitionV1 {
   return {
     ...definition,
     nodes: definition.nodes.map((node) => {
@@ -417,7 +417,9 @@ describe("revised Workflows lifecycle", () => {
     expect(immutableVersions.map((row) => row.version)).toEqual([2, 1]);
     expect(
       immutableVersions.map((row) =>
-        row.definition.nodes.find((node) => node.type === "post_pr_comment")?.params.body,
+        row.definition.schemaVersion === 1
+          ? row.definition.nodes.find((node) => node.type === "post_pr_comment")?.params.body
+          : undefined,
       ),
     ).toEqual(["Version two remediation complete.", "Version one remediation complete."]);
 

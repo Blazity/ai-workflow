@@ -102,6 +102,40 @@ describe("generateStructured", () => {
     expect(result.usage).toEqual({ inputTokens: 0, outputTokens: 2, cachedTokens: 4 });
   });
 
+  it("accepts a legacy draft-07 schema but omits its dialect marker from the provider", async () => {
+    mockGenerateText.mockResolvedValueOnce({
+      text: "{}",
+      output: { state: "ready" },
+      usage: {},
+    });
+
+    const result = await generateStructured({
+      model: "claude-opus-4-6",
+      prompt: "classify",
+      schema: JSON.stringify({
+        $schema: "http://json-schema.org/draft-07/schema#",
+        title: "Legacy classifier",
+        type: "object",
+        properties: {
+          state: { title: "State", type: "string" },
+        },
+        required: ["state"],
+        additionalProperties: false,
+      }),
+    });
+
+    expect(mockJsonSchema).toHaveBeenCalledWith({
+      title: "Legacy classifier",
+      type: "object",
+      properties: {
+        state: { title: "State", type: "string" },
+      },
+      required: ["state"],
+      additionalProperties: false,
+    });
+    expect(result.object).toEqual({ state: "ready" });
+  });
+
   it("reports usage as unknown when the SDK omits authoritative token counts", async () => {
     mockGenerateText.mockResolvedValueOnce({ text: "x", usage: {} });
 
@@ -152,6 +186,41 @@ describe("generateStructured", () => {
     expect(mockOpenAiModel).toHaveBeenCalledWith("gpt-5-codex");
     expect(mockAnthropic).not.toHaveBeenCalled();
     expect(mockGenerateText.mock.calls[0][0].model).toEqual({ __openaiModel: "gpt-5-codex" });
+  });
+
+  it("adapts optional fields for Codex and removes only synthetic null placeholders", async () => {
+    mockGenerateText.mockResolvedValueOnce({
+      text: "{}",
+      output: { requiredName: "Ada", optionalCount: null, nullableNote: null },
+      usage: {},
+    });
+
+    const result = await generateStructured({
+      provider: "codex",
+      model: "gpt-5-codex",
+      prompt: "classify",
+      schema: JSON.stringify({
+        type: "object",
+        properties: {
+          requiredName: { type: "string" },
+          optionalCount: { type: "number" },
+          nullableNote: { type: ["string", "null"] },
+        },
+        required: ["requiredName"],
+      }),
+    });
+
+    expect(mockJsonSchema).toHaveBeenCalledWith({
+      type: "object",
+      properties: {
+        requiredName: { type: "string" },
+        optionalCount: { type: ["number", "null"] },
+        nullableNote: { type: ["string", "null"] },
+      },
+      required: ["requiredName", "optionalCount", "nullableNote"],
+      additionalProperties: false,
+    });
+    expect(result.object).toEqual({ requiredName: "Ada", nullableNote: null });
   });
 
   it("infers the codex provider from a gpt model id when none is passed", async () => {

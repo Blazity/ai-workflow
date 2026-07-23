@@ -277,7 +277,7 @@ function repo() {
   return { owner: { login: "acme" }, name: "app", html_url: "https://github.com/acme/app" };
 }
 
-function pullRequestBody(action: string, headRef = "blazebot/aiw-1") {
+function pullRequestBody(action: string, headRef = "ai-workflow/aiw-1") {
   return {
     action,
     repository: repo(),
@@ -304,7 +304,7 @@ function checkRunBody(name: string, conclusion = "failure") {
       name,
       conclusion,
       pull_requests: [
-        { number: 7, head: { ref: "blazebot/aiw-1", sha: "abc123" }, base: { ref: "main" } },
+        { number: 7, head: { ref: "ai-workflow/aiw-1", sha: "abc123" }, base: { ref: "main" } },
       ],
     },
   };
@@ -364,10 +364,13 @@ describe("POST /webhooks/github edge cases", () => {
     expect(mockDispatchTriggerEvent).not.toHaveBeenCalled();
   });
 
-  it("does not self-trigger on the bot's own gate check_run", async () => {
+  it.each([
+    "AI Workflow / lint",
+    "blazebot / lint",
+  ])("does not self-trigger on the bot's own %s check_run", async (name) => {
     mockLoadPostPrGateConfig.mockReturnValueOnce({ postPrGate: { steps: [{ name: "lint" }] } });
 
-    const response = await send(makeRequest(checkRunBody("blazebot / lint"), "check_run"));
+    const response = await send(makeRequest(checkRunBody(name), "check_run"));
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({

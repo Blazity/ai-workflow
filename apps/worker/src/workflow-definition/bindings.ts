@@ -1,18 +1,26 @@
 import type {
   BlockOutput,
+  JsonValue,
   WorkflowBindingSource,
   WorkflowBlockInputContract,
-  WorkflowDefinition,
-  WorkflowDefinitionNode,
+  WorkflowDefinitionV1,
+  WorkflowDefinitionV1Node,
+  WorkflowDefinitionValidationIssue,
   WorkflowInputBindings,
   WorkflowValueSchema,
 } from "@shared/contracts";
-import { BLOCK_TYPE_SPECS, FAILURE_PORT } from "@shared/contracts";
+import {
+  BLOCK_TYPE_SPECS,
+  FAILURE_PORT,
+  isSafeWorkflowInputName,
+} from "@shared/contracts";
 import type { StepsRecord } from "./interpreter.js";
 import {
   resolveWorkflowBlockContract,
   type WorkflowBlockRegistryContext,
 } from "./block-registry.js";
+
+export { isSafeWorkflowInputName } from "@shared/contracts";
 
 const FORBIDDEN_SEGMENTS = new Set(["__proto__", "prototype", "constructor"]);
 
@@ -28,7 +36,7 @@ export interface WorkflowRunBindingValues {
 }
 
 export interface WorkflowBindingGraphContext {
-  nodeById: Map<string, WorkflowDefinitionNode>;
+  nodeById: Map<string, WorkflowDefinitionV1Node>;
   reachable: Set<string>;
   dominators: Map<string, Set<string>>;
   reachableFromTrigger: Map<string, Set<string>>;
@@ -67,18 +75,6 @@ function safeSegments(source: string): string[] | null {
     return null;
   }
   return segments;
-}
-
-export function isSafeWorkflowInputName(name: string): boolean {
-  if (name.trim() !== name) return false;
-  const segments = name.split(".");
-  return (
-    segments.length > 0 &&
-    segments.every(
-      (segment) =>
-        /^[A-Za-z0-9_-]+$/.test(segment) && !FORBIDDEN_SEGMENTS.has(segment),
-    )
-  );
 }
 
 export function parseWorkflowBindingSource(source: string): ParsedWorkflowBindingSource | null {
@@ -152,6 +148,21 @@ export function isWorkflowSchemaAssignable(
 ): boolean {
   if (target.type === "unknown") return true;
   if (source.type === "unknown") return false;
+
+  // A schema with an enum denotes only those exact values. Checking those
+  // values directly is both more precise and safer than comparing only the
+  // surrounding structural type (for example, an object enum may be narrower
+  // than its declared properties). Boolean and null schemas are finite too.
+  const finiteSourceValues = finiteWorkflowSchemaValues(source);
+  if (finiteSourceValues !== null) {
+    return finiteSourceValues.every((value) =>
+      workflowSchemaAcceptsValue(target, value),
+    );
+  }
+  // A non-finite source can always produce a value outside a finite target
+  // enum, so it cannot be assigned safely.
+  if (target.enum !== undefined) return false;
+
   if (target.type === "nullable") {
     if (source.type === "null") return true;
     return source.type === "nullable"
@@ -173,10 +184,128 @@ export function isWorkflowSchemaAssignable(
     }
     for (const [key, targetChild] of Object.entries(target.properties)) {
       const sourceChild = source.properties[key];
-      if (sourceChild && !isWorkflowSchemaAssignable(sourceChild, targetChild)) return false;
+      if (sourceChild) {
+        if (!isWorkflowSchemaAssignable(sourceChild, targetChild)) return false;
+      } else if (
+        source.additionalProperties &&
+        !isWorkflowSchemaAssignable({ type: "unknown" }, targetChild)
+      ) {
+        // An open source without a declaration for this key may emit any value
+        // there, including values outside the target property's schema.
+        return false;
+      }
+    }
+    if (!target.additionalProperties) {
+      if (source.additionalProperties) return false;
+      for (const key of Object.keys(source.properties)) {
+        if (!Object.prototype.hasOwnProperty.call(target.properties, key)) {
+          // Even an optional source property may be present, while a closed
+          // target rejects every undeclared key.
+          return false;
+        }
+      }
     }
   }
   return true;
+}
+
+function finiteWorkflowSchemaValues(
+  schema: WorkflowValueSchema,
+): JsonValue[] | null {
+  if (schema.enum !== undefined) {
+    return schema.enum.filter((value) => workflowSchemaAcceptsValue(schema, value));
+  }
+  if (schema.type === "null") return [null];
+  if (schema.type === "boolean") return [false, true];
+  if (schema.type !== "nullable") return null;
+
+  const inner = finiteWorkflowSchemaValues(schema.value);
+  if (inner === null) return null;
+  return dedupeJsonValues([...inner, null]);
+}
+
+function workflowSchemaAcceptsValue(
+  schema: WorkflowValueSchema,
+  value: JsonValue,
+): boolean {
+  if (
+    schema.enum !== undefined &&
+    !schema.enum.some((candidate) => jsonValuesEqual(candidate, value))
+  ) {
+    return false;
+  }
+
+  switch (schema.type) {
+    case "unknown":
+      return true;
+    case "string":
+      return typeof value === "string";
+    case "number":
+      return typeof value === "number" && Number.isFinite(value);
+    case "boolean":
+      return typeof value === "boolean";
+    case "null":
+      return value === null;
+    case "nullable":
+      return value === null || workflowSchemaAcceptsValue(schema.value, value);
+    case "array":
+      return (
+        Array.isArray(value) &&
+        value.every((item) => workflowSchemaAcceptsValue(schema.items, item))
+      );
+    case "object": {
+      if (value === null || typeof value !== "object" || Array.isArray(value)) {
+        return false;
+      }
+      for (const required of schema.required) {
+        if (!Object.prototype.hasOwnProperty.call(value, required)) return false;
+      }
+      for (const [key, child] of Object.entries(value)) {
+        const childSchema = schema.properties[key];
+        if (childSchema) {
+          if (!workflowSchemaAcceptsValue(childSchema, child)) return false;
+        } else if (!schema.additionalProperties) {
+          return false;
+        }
+      }
+      return true;
+    }
+  }
+}
+
+function dedupeJsonValues(values: JsonValue[]): JsonValue[] {
+  return values.filter(
+    (value, index) =>
+      values.findIndex((candidate) => jsonValuesEqual(candidate, value)) ===
+      index,
+  );
+}
+
+function jsonValuesEqual(left: JsonValue, right: JsonValue): boolean {
+  if (left === right) return true;
+  if (left === null || right === null || typeof left !== typeof right) {
+    return false;
+  }
+  if (Array.isArray(left) || Array.isArray(right)) {
+    return (
+      Array.isArray(left) &&
+      Array.isArray(right) &&
+      left.length === right.length &&
+      left.every((value, index) => jsonValuesEqual(value, right[index]!))
+    );
+  }
+  if (typeof left !== "object" || typeof right !== "object") return false;
+  const leftKeys = Object.keys(left).sort();
+  const rightKeys = Object.keys(right).sort();
+  return (
+    leftKeys.length === rightKeys.length &&
+    leftKeys.every(
+      (key, index) =>
+        key === rightKeys[index] &&
+        Object.prototype.hasOwnProperty.call(right, key) &&
+        jsonValuesEqual(left[key]!, right[key]!),
+    )
+  );
 }
 
 function ownPathValue(root: unknown, path: readonly string[]): { found: boolean; value?: unknown } {
@@ -287,7 +416,7 @@ export function computeWorkflowDominators(
 }
 
 export function buildWorkflowBindingGraphContext(
-  definition: WorkflowDefinition,
+  definition: WorkflowDefinitionV1,
 ): WorkflowBindingGraphContext {
   const nodeById = new Map(definition.nodes.map((node) => [node.id, node]));
   const forward = new Map<string, string[]>();
@@ -354,11 +483,30 @@ function inputContractFor(
 }
 
 export function validateWorkflowBindings(
-  definition: WorkflowDefinition,
+  definition: WorkflowDefinitionV1,
   registryContext: WorkflowBlockRegistryContext,
   graphContext = buildWorkflowBindingGraphContext(definition),
 ): string[] {
-  const issues: string[] = [];
+  return validateWorkflowBindingIssues(definition, registryContext, graphContext).map(
+    ({ message }) => message,
+  );
+}
+
+export function validateWorkflowBindingIssues(
+  definition: WorkflowDefinitionV1,
+  registryContext: WorkflowBlockRegistryContext,
+  graphContext = buildWorkflowBindingGraphContext(definition),
+): WorkflowDefinitionValidationIssue[] {
+  const issues: WorkflowDefinitionValidationIssue[] = [];
+  const addIssue = (nodeId: string, message: string, path?: string) => {
+    issues.push({
+      code: "deployment",
+      severity: "error",
+      nodeId,
+      ...(path ? { path } : {}),
+      message,
+    });
+  };
   const {
     nodeById,
     dominators,
@@ -367,27 +515,39 @@ export function validateWorkflowBindings(
     outgoing,
   } = graphContext;
 
-  for (const node of definition.nodes) {
+  for (const [nodeIndex, node] of definition.nodes.entries()) {
     const contract = resolveWorkflowBlockContract(node.type, node.params, registryContext);
     for (const [inputName, inputContract] of Object.entries(contract.inputs)) {
       if (
         inputContract.required &&
         !Object.prototype.hasOwnProperty.call(node.inputs, inputName)
       ) {
-        issues.push(`Block "${node.id}" is missing required input "${inputName}".`);
+        addIssue(
+          node.id,
+          `Block "${node.id}" is missing required input "${inputName}".`,
+          `/nodes/${nodeIndex}/inputs/${inputName}`,
+        );
       }
     }
 
     for (const [inputName, source] of Object.entries(node.inputs)) {
       const inputContract = inputContractFor(contract, inputName);
       if (!inputContract) {
-        issues.push(`Block "${node.id}" has unknown input "${inputName}".`);
+        addIssue(
+          node.id,
+          `Block "${node.id}" has unknown input "${inputName}".`,
+          `/nodes/${nodeIndex}/inputs/${inputName}`,
+        );
         continue;
       }
 
       const parsed = parseWorkflowBindingSource(source);
       if (!parsed) {
-        issues.push(`Block "${node.id}" input "${inputName}" has invalid binding "${source}".`);
+        addIssue(
+          node.id,
+          `Block "${node.id}" input "${inputName}" has invalid binding "${source}".`,
+          `/nodes/${nodeIndex}/inputs/${inputName}`,
+        );
         continue;
       }
 
@@ -400,8 +560,10 @@ export function validateWorkflowBindings(
           sourceNode?.type === "finalize_workspace" &&
           (dominators.get(node.id)?.has(parsed.nodeId) ?? false);
         if (!isExactFinalizeOutput) {
-          issues.push(
+          addIssue(
+            node.id,
             `Block "${node.id}" input "repositories" must bind exactly to steps.<finalize_workspace_id>.output.repositories from a dominating Finalize Workspace block.`,
+            `/nodes/${nodeIndex}/inputs/repositories`,
           );
           continue;
         }
@@ -415,21 +577,27 @@ export function validateWorkflowBindings(
       ): void => {
         const declared = resolveWorkflowSchemaPath(sourceSchema, path);
         if (!declared) {
-          issues.push(
+          addIssue(
+            node.id,
             `Block "${node.id}" input "${inputName}" references missing field "${source}"${sourceLabel}.`,
+            `/nodes/${nodeIndex}/inputs/${inputName}`,
           );
           return;
         }
         const guaranteed = resolveRequiredWorkflowSchemaPath(sourceSchema, path);
         if (!guaranteed) {
-          issues.push(
+          addIssue(
+            node.id,
             `Block "${node.id}" input "${inputName}" ${notGuaranteedReason}.`,
+            `/nodes/${nodeIndex}/inputs/${inputName}`,
           );
           return;
         }
         if (!isWorkflowSchemaAssignable(guaranteed, inputContract.schema)) {
-          issues.push(
+          addIssue(
+            node.id,
             `Block "${node.id}" input "${inputName}" expects ${schemaLabel(inputContract.schema)} but "${source}" provides ${schemaLabel(guaranteed)}.`,
+            `/nodes/${nodeIndex}/inputs/${inputName}`,
           );
         }
       };
@@ -446,20 +614,28 @@ export function validateWorkflowBindings(
 
       if (parsed.root === "steps") {
         if (parsed.nodeId === node.id) {
-          issues.push(`Block "${node.id}" input "${inputName}" references itself.`);
+          addIssue(
+            node.id,
+            `Block "${node.id}" input "${inputName}" references itself.`,
+            `/nodes/${nodeIndex}/inputs/${inputName}`,
+          );
           continue;
         }
         const sourceNode = nodeById.get(parsed.nodeId);
         if (!sourceNode) {
-          issues.push(
+          addIssue(
+            node.id,
             `Block "${node.id}" input "${inputName}" references unknown block "${parsed.nodeId}".`,
+            `/nodes/${nodeIndex}/inputs/${inputName}`,
           );
           continue;
         }
         if (!(dominators.get(node.id)?.has(parsed.nodeId) ?? false)) {
           const downstream = dominators.get(parsed.nodeId)?.has(node.id) ?? false;
-          issues.push(
+          addIssue(
+            node.id,
             `Block "${node.id}" input "${inputName}" references ${downstream ? "downstream" : "a block that does not dominate it"}: "${parsed.nodeId}".`,
+            `/nodes/${nodeIndex}/inputs/${inputName}`,
           );
           continue;
         }
@@ -508,5 +684,13 @@ export function validateWorkflowBindings(
     }
   }
 
-  return [...new Set(issues)];
+  return issues.filter(
+    (issue, index) =>
+      issues.findIndex(
+        (candidate) =>
+          candidate.nodeId === issue.nodeId &&
+          candidate.path === issue.path &&
+          candidate.message === issue.message,
+      ) === index,
+  );
 }

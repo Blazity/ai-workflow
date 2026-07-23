@@ -15,6 +15,7 @@ import {
 } from "../../../../lib/overview/collect-run-detail.js";
 import { logger } from "../../../../lib/logger.js";
 import { resolveRunDetail } from "../../../../lib/overview/resolve-run-detail.js";
+import { sanitizeRunDetailForResponse } from "../../../../lib/overview/sanitize-run-detail.js";
 
 const EMPTY: Omit<RunDetailResponse, "generatedAt"> = {
   available: false,
@@ -83,11 +84,12 @@ export default defineEventHandler(async (event): Promise<RunDetailResponse> => {
     });
 
     if (!result) return { generatedAt, ...EMPTY };
+    const safe = sanitizeRunDetailForResponse(result);
     return {
       generatedAt,
       available: true,
-      run: result.run,
-      steps: result.steps,
+      run: safe.run,
+      steps: safe.steps,
       clarification,
     };
   } catch (err) {
@@ -106,11 +108,12 @@ export default defineEventHandler(async (event): Promise<RunDetailResponse> => {
         modelFallback: model,
       });
       if (fallback) {
+        const safe = sanitizeRunDetailForResponse(fallback);
         return {
           generatedAt,
           available: true,
-          run: fallback.run,
-          steps: fallback.steps,
+          run: safe.run,
+          steps: safe.steps,
           clarification,
         };
       }

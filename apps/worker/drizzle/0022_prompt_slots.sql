@@ -1,0 +1,1 @@
+ALTER TABLE "prompt_library_versions" ADD COLUMN "slots" jsonb DEFAULT '[]'::jsonb NOT NULL;

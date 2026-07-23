@@ -10,7 +10,9 @@ import {
   acceptTriggerDelivery,
   acknowledgeStartedTriggerDelivery,
   coalescePendingTrigger,
+  completeTriggerDelivery,
   getTriggerDelivery,
+  listPendingTriggers,
   listPendingTriggersForSubject,
   recordCandidateStartedTriggerDelivery,
   type AcceptedTriggerDelivery,
@@ -117,6 +119,47 @@ describe("provider event inbox", () => {
         await getTriggerDelivery(db, "github", "d-2"),
       ].filter((row) => row?.pending),
     ).toHaveLength(1);
+  });
+
+  it("keeps retryable accepted failures pending with their diagnostic", async () => {
+    const accepted = delivery();
+    await acceptTriggerDelivery(db, accepted);
+
+    await completeTriggerDelivery(db, "github", "d-1", {
+      result: "error",
+      diagnosticId: "AIW-DIAG-ingest-stable",
+    });
+
+    await expect(getTriggerDelivery(db, "github", "d-1")).resolves.toMatchObject({
+      pending: true,
+      result: {
+        result: "error",
+        diagnosticId: "AIW-DIAG-ingest-stable",
+      },
+    });
+    await expect(
+      listPendingTriggersForSubject(db, accepted.subjectKey),
+    ).resolves.toHaveLength(1);
+  });
+
+  it("lists only the bounded oldest pending deliveries", async () => {
+    const first = delivery("d-1");
+    const second = delivery("d-2", {
+      subjectKey: "pr:github:acme/api#43",
+      pr: {
+        ...delivery().pr,
+        prNumber: 43,
+        prUrl: "https://github.com/acme/api/pull/43",
+      },
+    });
+    await acceptTriggerDelivery(db, first);
+    await coalescePendingTrigger(db, first);
+    await acceptTriggerDelivery(db, second);
+    await coalescePendingTrigger(db, second);
+
+    await expect(listPendingTriggers(db, 1)).resolves.toMatchObject([
+      { subjectKey: first.subjectKey },
+    ]);
   });
 
   it("publishes and consumes a start only for the exact active owner", async () => {

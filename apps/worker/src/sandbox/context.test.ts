@@ -385,6 +385,37 @@ describe("assembleImplementationContext (new)", () => {
   });
 });
 
+describe("runtime-only context assembly", () => {
+  it("omits the role-prompt divider when the effective compiler requests runtime data", () => {
+    const ticket = {
+      identifier: "AIW-124",
+      title: "Prompt authoring",
+      description: "Compile one effective prompt.",
+      acceptanceCriteria: "Preview and runtime match.",
+      comments: [],
+    };
+    const research = assembleResearchPlanContext({
+      ticket,
+      prompt: "",
+      branchName: "ai-workflow/AIW-124",
+    });
+    const implementation = assembleImplementationContext({
+      ticket,
+      prompt: "",
+      researchPlanMarkdown: "Approved plan",
+    });
+    const review = assembleReviewContext({
+      ticket,
+      prompt: "",
+      researchPlanMarkdown: "Approved plan",
+    });
+
+    for (const runtimeData of [research, implementation, review]) {
+      expect(runtimeData).not.toContain("\n---\n");
+    }
+  });
+});
+
 describe("assembleReviewContext", () => {
   it("includes plan and prompt", () => {
     const result = assembleReviewContext({
@@ -402,6 +433,29 @@ describe("assembleReviewContext", () => {
     expect(result).toContain("## Research & Plan");
     expect(result).toContain("1. Create LoginForm");
     expect(result).toContain("You are a review agent...");
+  });
+
+  it("includes explicitly supplied typed pull request review feedback", () => {
+    const result = assembleReviewContext({
+      ticket: {
+        identifier: "TEST-1",
+        title: "Add login page",
+        description: "Build a login page",
+        acceptanceCriteria: "User can log in",
+        comments: [],
+      },
+      prompt: "You are a review agent...",
+      researchPlanMarkdown: "# Plan",
+      reviewFeedback: {
+        state: "changes_requested",
+        author: "Alice",
+        body: "Please cover the failure path.",
+      },
+    });
+
+    expect(result).toContain("## Pull request review feedback");
+    expect(result).toContain("State: changes_requested");
+    expect(result).toContain("Alice: Please cover the failure path.");
   });
 
   it("renders attachments index when attachments are provided", () => {

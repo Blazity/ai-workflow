@@ -61,7 +61,7 @@ describe("US-10: Duplicate dispatch prevented by atomic claim", () => {
       description: "Clear ticket; this test verifies it is NOT dispatched twice.",
     });
     ticketKey = ticket.ticketKey;
-    branchName = `blazebot/${ticketKey.toLowerCase()}`;
+    branchName = `ai-workflow/${ticketKey.toLowerCase()}`;
 
     // 2. Seed an active-run entry BEFORE the ticket reaches AI. The production
     //    `claim()` uses HSETNX, so any pre-existing value blocks future claims.

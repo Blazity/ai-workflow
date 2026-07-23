@@ -51,7 +51,7 @@ describe("prepareSelectedRepositoryBranches", () => {
 
     await prepareSelectedRepositoryBranches(
       "AIW-45",
-      "blazebot/aiw-45",
+      "ai-workflow/aiw-45",
       [
         {
           provider: "github",
@@ -63,7 +63,7 @@ describe("prepareSelectedRepositoryBranches", () => {
       durableOwner,
     );
 
-    expect(createBranch).toHaveBeenCalledWith("blazebot/aiw-45", "main");
+    expect(createBranch).toHaveBeenCalledWith("ai-workflow/aiw-45", "main");
     expect(mocks.createRepositoryVCS).toHaveBeenCalledWith({
       provider: "github",
       repoPath: "acme/api",
@@ -73,7 +73,7 @@ describe("prepareSelectedRepositoryBranches", () => {
       ticketKey: "AIW-45",
       provider: "github",
       repoPath: "acme/api",
-      branchName: "blazebot/aiw-45",
+      branchName: "ai-workflow/aiw-45",
     });
   });
 
@@ -83,7 +83,7 @@ describe("prepareSelectedRepositoryBranches", () => {
 
     await prepareSelectedRepositoryBranches(
       "AIW-45",
-      "blazebot/aiw-45",
+      "ai-workflow/aiw-45",
       [
         {
           provider: "github",
@@ -112,7 +112,7 @@ describe("prepareSelectedRepositoryBranches", () => {
     await expect(
       prepareSelectedRepositoryBranches(
         "AIW-45",
-        "blazebot/aiw-45",
+        "ai-workflow/aiw-45",
         [
           {
             provider: "github",
@@ -133,7 +133,7 @@ describe("prepareSelectedRepositoryBranches", () => {
 
     expect(mocks.assertActiveRunOwner).toHaveBeenCalledTimes(2);
     expect(createBranch).toHaveBeenCalledTimes(1);
-    expect(createBranch).toHaveBeenCalledWith("blazebot/aiw-45", "main");
+    expect(createBranch).toHaveBeenCalledWith("ai-workflow/aiw-45", "main");
     expect(mocks.upsertWorkflowOwnedBranch).toHaveBeenCalledTimes(1);
   });
 });
@@ -153,7 +153,7 @@ describe("createOrUseWorkflowOwnedPullRequestsForRepos", () => {
 
     const prs = await createOrUseWorkflowOwnedPullRequestsForRepos({
       ticketKey: "AIW-45",
-      branchName: "blazebot/aiw-45",
+      branchName: "ai-workflow/aiw-45",
       owner: durableOwner,
       repositories: [
         {
@@ -194,7 +194,7 @@ describe("createOrUseWorkflowOwnedPullRequestsForRepos", () => {
 
     const prs = await createOrUseWorkflowOwnedPullRequestsForRepos({
       ticketKey: "AIW-45",
-      branchName: "blazebot/aiw-45",
+      branchName: "ai-workflow/aiw-45",
       owner: durableOwner,
       repositories: [
         {

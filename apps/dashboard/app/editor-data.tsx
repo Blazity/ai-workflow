@@ -53,6 +53,8 @@ export async function EditorData({
         options={list.options}
         liveBlocks={liveBlocks}
         canEdit={session.canEditWorkflows}
+        canDispatch={session.canDispatchWorkflows}
+        actorLabel={session.actorLabel}
         initialNodeId={nodeId}
       />
     );

@@ -1,6 +1,7 @@
 import type {
   ApprovalRequest,
   ClarificationRequest,
+  JsonSchema202012,
   PrePrCheckConfigVersion,
   RepositoryOption,
   Run,
@@ -12,9 +13,13 @@ import type {
   WorkflowBlockType,
   WorkflowDefinition,
   WorkflowDefinitionLayout,
+  WorkflowDefinitionV2,
   WorkflowDefinitionVersion,
+  WorkflowDataReferenceV2,
   WorkflowEditorOptions,
+  WorkflowValueSchema,
 } from "./domain.js";
+import type { PromptSlotDefinition } from "./prompt-slots.js";
 
 export interface ErrorEnvelope {
   error: { code: string; message: string; details?: unknown };
@@ -210,6 +215,63 @@ export interface WorkflowDefinitionDetailResponse {
   versions: WorkflowDefinitionVersion[];
 }
 
+export type ManualDispatchInput =
+  | { kind: "ticket"; ticketKey: string }
+  | { kind: "pull_request"; url: string };
+
+export type ManualDispatchBlockerCode =
+  | "active_run"
+  | "at_capacity"
+  | "approval_pending"
+  | "deployment_changed"
+  | "invalid_input"
+  | "not_eligible"
+  | "provider_unavailable";
+
+export interface ManualDispatchPreflightStep {
+  title: string;
+  description: string;
+}
+
+export interface ManualDispatchPreflightResponse {
+  definitionId: number;
+  definitionName: string;
+  deployedVersion: number;
+  triggerNodeId: string;
+  triggerType: WorkflowBlockType;
+  input: ManualDispatchInput;
+  subject: {
+    kind: "ticket" | "pull_request";
+    key: string;
+    title: string;
+    currentStatus?: string;
+    url?: string;
+  };
+  steps: ManualDispatchPreflightStep[];
+  runnable: boolean;
+  blocker?: {
+    code: ManualDispatchBlockerCode;
+    message: string;
+  };
+}
+
+export interface ManualDispatchRequest {
+  requestId: string;
+  expectedDeployedVersion: number;
+  input: ManualDispatchInput;
+}
+
+export type ManualDispatchResponse =
+  | {
+      requestId: string;
+      status: "started";
+      runId: string;
+    }
+  | {
+      requestId: string;
+      status: "recovering";
+    };
+
 /** Legacy single-definition GET shim response; removed once the dashboard
  *  switches to the multi-definition routes. */
 export interface WorkflowDefinitionResponse {
@@ -222,6 +284,12 @@ export interface WorkflowDefinitionResponse {
 export interface WorkflowDefinitionSaveResponse {
   meta: WorkflowDefinitionMeta;
   draft: WorkflowDefinition;
+  /**
+   * Deployment validation for the exact saved snapshot. A draft is still
+   * persisted when validation is unavailable, in which case this is null.
+   */
+  validation: WorkflowDefinitionValidationResponse | null;
+  validationError: string | null;
 }
 
 export interface WorkflowDefinitionLayoutResponse {
@@ -234,18 +302,117 @@ export interface WorkflowDefinitionDeploymentResponse {
   deployed: WorkflowDefinitionVersion;
 }
 
+export interface WorkflowDefinitionDeploymentValidationResponse {
+  error: string;
+  issues: WorkflowDefinitionValidationIssue[];
+}
+
+export interface WorkflowDefinitionMigrationDiagnostic {
+  code: string;
+  message: string;
+  nodeId: string | null;
+  path?: string;
+}
+
+export interface WorkflowDefinitionMigrationPreview {
+  sourceDefinitionId: number;
+  sourceVersion: number;
+  targetSchemaVersion: 2;
+  conversionHash: string | null;
+  definition: WorkflowDefinitionV2 | null;
+  conversions: WorkflowDefinitionMigrationDiagnostic[];
+  warnings: WorkflowDefinitionMigrationDiagnostic[];
+  blockers: WorkflowDefinitionMigrationDiagnostic[];
+}
+
+export type WorkflowDefinitionMigrationResponse =
+  | (WorkflowDefinitionMigrationPreview & { mode: "preview" })
+  | (WorkflowDefinitionMigrationPreview & {
+      mode: "apply";
+      error: string;
+    })
+  | (WorkflowDefinitionMigrationPreview & {
+      mode: "apply";
+      meta: WorkflowDefinitionMeta;
+      draft: WorkflowDefinitionV2;
+    });
+
+export interface WorkflowDefinitionDuplicateMigrationBlockedResponse
+  extends WorkflowDefinitionMigrationPreview {
+  error: string;
+}
+
+export interface WorkflowAvailableValueSource {
+  kind: "entry" | "step" | "run";
+  nodeId: string | null;
+  blockType: WorkflowBlockType | null;
+}
+
+export interface WorkflowAvailableValueGuarantee {
+  kind: "active_entry" | "unconditional_activation" | "join";
+  triggerNodeIds: string[];
+  viaEdgeIds: string[];
+}
+
+/** One value that is guaranteed to exist when a particular v2 block runs. */
+export interface WorkflowAvailableValue {
+  reference: WorkflowDataReferenceV2;
+  label: string;
+  description: string | null;
+  schema: JsonSchema202012;
+  source: WorkflowAvailableValueSource;
+  guarantee: WorkflowAvailableValueGuarantee;
+  /** Fixed or author-defined input names that can accept this value. */
+  compatibleInputNames: string[];
+}
+
+export type WorkflowAvailableValuesByNode = Record<string, WorkflowAvailableValue[]>;
+
 export interface WorkflowDefinitionValidationResponse {
   valid: boolean;
   issues: WorkflowDefinitionValidationIssue[];
   /** Parameter-resolved contracts for the exact candidate graph. */
   nodeContracts: Record<string, WorkflowBlockContract>;
+  /** Worker-owned v2 data-flow catalog, keyed by consuming block id. */
+  availableValuesByNode: WorkflowAvailableValuesByNode;
 }
 
 export interface WorkflowDefinitionValidationIssue {
-  code: "schema" | "deployment";
+  code: string;
+  severity: "error";
   nodeId: string | null;
+  /** JSON Pointer identifying the offending value when one is available. */
+  path?: string;
   message: string;
 }
+
+export interface JsonSchemaAuthoringIssue {
+  code:
+    | "invalid_json"
+    | "invalid_schema"
+    | "unsupported_keyword"
+    | "unsupported_type";
+  /** RFC 6901 pointer into the authored schema. Empty means the root. */
+  path: string;
+  message: string;
+}
+
+/** Result returned by the worker-owned JSON Schema 2020-12 authoring service. */
+export type JsonSchemaAuthoringInspectionResponse =
+  | {
+      deployable: true;
+      dialect: "https://json-schema.org/draft/2020-12/schema";
+      schema: JsonSchema202012;
+      valueSchema: WorkflowValueSchema;
+      issues: [];
+    }
+  | {
+      deployable: false;
+      dialect: "https://json-schema.org/draft/2020-12/schema";
+      schema: JsonSchema202012 | null;
+      valueSchema: null;
+      issues: JsonSchemaAuthoringIssue[];
+    };
 
 export interface RunBlockStatusesResponse {
   generatedAt: string;
@@ -292,6 +459,7 @@ export interface PromptLibraryVersion {
   promptId: number;
   version: number;
   body: string;
+  slots: PromptSlotDefinition[];
   createdAt: string;
   createdById: string;
   createdByLabel: string;
@@ -302,6 +470,7 @@ export interface PromptLibraryVersion {
  *  check need no per-prompt fetch. */
 export interface PromptLibraryListRowDto extends PromptLibraryEntryMeta {
   body: string;
+  slots: PromptSlotDefinition[];
 }
 
 export interface PromptLibraryListResponse {
@@ -321,7 +490,7 @@ export interface PromptLibraryDetailResponse {
 export interface PromptLibrarySaveResponse {
   meta: PromptLibraryEntryMeta;
   version: PromptLibraryVersion;
-  /** false when the submitted body equaled the head and nothing was appended. */
+  /** false when the submitted body and slots equaled the head and nothing was appended. */
   changed: boolean;
 }
 

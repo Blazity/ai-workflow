@@ -347,11 +347,17 @@ describe("POST /webhooks/github", () => {
   });
 
   it("returns a retryable 503 when dispatch errors", async () => {
-    mockDispatchTriggerEvent.mockResolvedValueOnce({ result: "error" });
+    mockDispatchTriggerEvent.mockResolvedValueOnce({
+      result: "error",
+      diagnosticId: "AIW-DIAG-ingest-github-test",
+    });
 
     const response = await makeApp()(makeRequest(pullRequestBody("opened")));
 
     expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toMatchObject({
+      data: { diagnosticId: "AIW-DIAG-ingest-github-test" },
+    });
     expect(mockDispatchPostPrGateWebhook).not.toHaveBeenCalled();
   });
 

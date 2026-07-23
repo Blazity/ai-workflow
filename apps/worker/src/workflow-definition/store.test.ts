@@ -1,6 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { eq } from "drizzle-orm";
-import type { WorkflowBlockType, WorkflowDefinition } from "@shared/contracts";
+import type {
+  WorkflowBlockType,
+  WorkflowBlockTypeV1,
+  WorkflowDefinition,
+  WorkflowDefinitionV1,
+} from "@shared/contracts";
 import type { Db } from "../db/client.js";
 
 vi.mock("../../env.js", () => ({
@@ -30,10 +35,12 @@ import { DashboardAuthError } from "../lib/auth/users-read.js";
 import {
   archiveWorkflowDefinition,
   createWorkflowDefinition,
+  createWorkflowDefinitionDraft,
   deployWorkflowDefinition,
   getCurrentWorkflowDefinition,
   getCurrentWorkflowDefinitionVersion,
   getEnabledWorkflowDefinitionForTrigger,
+  getRawWorkflowDefinitionVersion,
   getWorkflowDefinition,
   getWorkflowDefinitionVersion,
   listWorkflowDefinitions,
@@ -59,7 +66,9 @@ const MEMBER: WorkflowDefinitionActor = { role: "member", id: "u_member", label:
  *  complete graph. The store reads node types to derive trigger_types. A
  *  trigger-less graph is not valid, so a definition with no trigger is made with
  *  `seed: null` (no version) instead. */
-function def(triggers: WorkflowBlockType[] = ["trigger_ticket_ai"]): WorkflowDefinition {
+function def(
+  triggers: WorkflowBlockTypeV1[] = ["trigger_ticket_ai"],
+): WorkflowDefinitionV1 {
   return {
     schemaVersion: 1,
     nodes: triggers.map((type, i) => ({ id: `n${i}`, type, x: 0, y: 0, params: {}, inputs: {} })),
@@ -69,7 +78,7 @@ function def(triggers: WorkflowBlockType[] = ["trigger_ticket_ai"]): WorkflowDef
 
 /** A graph that is well-shaped but structurally invalid (an unreachable block),
  *  standing in for a version stored before a schema/rule tightened. */
-function invalidDef(): WorkflowDefinition {
+function invalidDef(): WorkflowDefinitionV1 {
   return {
     schemaVersion: 1,
     nodes: [
@@ -80,7 +89,7 @@ function invalidDef(): WorkflowDefinition {
   };
 }
 
-function invalidBindingDef(): WorkflowDefinition {
+function invalidBindingDef(): WorkflowDefinitionV1 {
   return {
     schemaVersion: 1,
     nodes: [
@@ -88,6 +97,40 @@ function invalidBindingDef(): WorkflowDefinition {
       { id: "approval", type: "send_plan_approval", x: 0, y: 0, params: {}, inputs: {} },
     ],
     edges: [{ from: "t", to: "approval" }],
+  };
+}
+
+function legacyStructuredOutputDef(
+  trigger: WorkflowBlockTypeV1 = "trigger_pr_review",
+): WorkflowDefinitionV1 {
+  const outputSchema = JSON.stringify({
+    $schema: "http://json-schema.org/draft-07/schema#",
+    title: "Legacy classifier",
+    type: "object",
+    properties: {
+      state: { title: "State", type: "string" },
+      metadata: {
+        type: "object",
+        properties: { note: { type: "string" } },
+      },
+    },
+    required: ["state"],
+    additionalProperties: false,
+  });
+  return {
+    schemaVersion: 1,
+    nodes: [
+      { id: "trigger", type: trigger, x: 0, y: 0, params: {}, inputs: {} },
+      {
+        id: "classify",
+        type: "call_llm",
+        x: 0,
+        y: 0,
+        params: { prompt: "Classify", outputSchema },
+        inputs: {},
+      },
+    ],
+    edges: [{ from: "trigger", to: "classify" }],
   };
 }
 
@@ -256,7 +299,17 @@ describe("legacy version read normalization", () => {
       restoredFromVersion: null,
     });
 
+    const raw = await getRawWorkflowDefinitionVersion(
+      db,
+      created.definition.id,
+      1,
+    );
     const current = await getCurrentWorkflowDefinitionVersion(db, created.definition.id);
+    expect(
+      (raw?.definition as { nodes: Array<{ type: string }> }).nodes.map(
+        (node) => node.type,
+      ),
+    ).toEqual(["trigger_ticket_ai", "arthur_trace", "open_pr"]);
     expect(current?.definition.nodes.map((node) => node.type)).toEqual([
       "trigger_ticket_ai",
       "finalize_workspace",
@@ -395,6 +448,77 @@ describe("enabled-per-trigger overlap", () => {
       actor: ADMIN,
     });
     expect(await triggerTypesOf(db, e.id)).toEqual(["trigger_pr_review"]);
+  });
+});
+
+describe("stored v1 structured-output compatibility", () => {
+  it("rolls back to and re-enables a deployed schema accepted before strict validation", async () => {
+    const current = await createDeployed("Legacy rollback", def(["trigger_pr_review"]));
+    const legacy = legacyStructuredOutputDef();
+    await db.insert(workflowDefinitionVersions).values({
+      definitionId: current.id,
+      version: 2,
+      definition: legacy,
+      createdById: "legacy",
+      createdByLabel: "Legacy",
+      restoredFromVersion: null,
+    });
+
+    const selected = await rollbackWorkflowDefinition(db, {
+      definitionId: current.id,
+      version: 2,
+      expectedDeployedVersion: 1,
+      actor: ADMIN,
+    });
+    expect(selected.version.definition).toMatchObject(legacy);
+
+    await updateWorkflowDefinition(db, {
+      definitionId: current.id,
+      enabled: false,
+      actor: ADMIN,
+    });
+    await expect(
+      updateWorkflowDefinition(db, {
+        definitionId: current.id,
+        enabled: true,
+        actor: ADMIN,
+      }),
+    ).resolves.toMatchObject({ enabled: true, deployedVersion: 2 });
+  });
+
+  it("restores and duplicates an immutable legacy schema without weakening new deployment checks", async () => {
+    const source = await createDeployed("Legacy stored source", def(["trigger_pr_review"]));
+    const legacy = legacyStructuredOutputDef();
+    await db.insert(workflowDefinitionVersions).values({
+      definitionId: source.id,
+      version: 2,
+      definition: legacy,
+      createdById: "legacy",
+      createdByLabel: "Legacy",
+      restoredFromVersion: null,
+    });
+
+    const restored = await restoreWorkflowDefinitionVersion(db, {
+      definitionId: source.id,
+      version: 2,
+      actor: ADMIN,
+    });
+    expect(restored.definition).toMatchObject(legacy);
+
+    const duplicate = await createWorkflowDefinitionDraft(db, {
+      name: "Legacy stored copy",
+      seed: legacy,
+      actor: ADMIN,
+    });
+    expect(duplicate.draft).toMatchObject(legacy);
+    await expect(
+      deployWorkflowDefinition(db, {
+        definitionId: duplicate.definition.id,
+        expectedDraftRevision: 1,
+        expectedDeployedVersion: null,
+        actor: ADMIN,
+      }),
+    ).rejects.toMatchObject({ statusCode: 422 });
   });
 });
 

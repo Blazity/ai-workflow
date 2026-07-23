@@ -15,6 +15,7 @@
   "dependencies": {
     "@octokit/auth-app": "^8.2.0",
     "@octokit/request": "^10.0.10",
+    "@phosphor-icons/react": "2.1.10",
     "@shared/conditions": "workspace:*",
     "@shared/contracts": "workspace:*",
     "@tiptap/core": "^3.28.0",

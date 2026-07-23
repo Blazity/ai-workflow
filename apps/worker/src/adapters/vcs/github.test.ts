@@ -163,6 +163,77 @@ describe("GitHubAdapter", () => {
     });
   });
 
+  describe("getManualDispatchPullRequest", () => {
+    it("returns authoritative lifecycle, current failures, and eligible review facts", async () => {
+      mockOctokit.pulls.get.mockResolvedValueOnce({
+        data: {
+          html_url: "https://github.com/test-org/test-repo/pull/42",
+          head: { ref: "feature/manual", sha: "head-sha" },
+          base: { ref: "main" },
+          title: "Manual dispatch",
+          user: { login: "alice" },
+          draft: false,
+          state: "open",
+          merged: false,
+        },
+      });
+      mockOctokit.paginate
+        .mockResolvedValueOnce([
+          {
+            id: 100,
+            name: "ci / build",
+            app: { slug: "github-actions" },
+            status: "completed",
+            conclusion: "failure",
+          },
+          {
+            id: 101,
+            name: "ci / lint",
+            app: { slug: "github-actions" },
+            status: "completed",
+            conclusion: "success",
+          },
+        ])
+        .mockResolvedValueOnce([
+          {
+            state: "CHANGES_REQUESTED",
+            user: { login: "reviewer" },
+            body: "Please cover the retry path.",
+          },
+          {
+            state: "APPROVED",
+            user: { login: "maintainer" },
+            body: "",
+          },
+        ]);
+
+      await expect(
+        ghAdapter().getManualDispatchPullRequest(42),
+      ).resolves.toMatchObject({
+        prNumber: 42,
+        headRef: "feature/manual",
+        headSha: "head-sha",
+        baseRef: "main",
+        state: "open",
+        failedChecks: [
+          {
+            name: "ci / build",
+            conclusion: "failure",
+            checkRunId: 100,
+            appSlug: "github-actions",
+          },
+        ],
+        reviews: [
+          {
+            state: "changes_requested",
+            author: "reviewer",
+            body: "Please cover the retry path.",
+          },
+        ],
+      });
+    });
+  });
+
   describe("getLatestCheckRuns", () => {
     it("returns latest check-run identity and conclusion for an exact head", async () => {
       mockOctokit.paginate.mockResolvedValueOnce([

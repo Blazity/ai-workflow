@@ -1,7 +1,7 @@
 import type {
-  AgentAdapter, AgentOutput, AgentProtocolResult, CollectedPhaseArtifacts,
+  AgentAdapter, AgentCliSpec, AgentOutput, AgentProtocolResult, CollectedPhaseArtifacts,
   ConfigureOpts, PhaseArtifactPaths, PhaseKind, PhaseScriptOpts, PhaseUsage,
-  ResearchResult, ReviewOutput, RunnableSandbox,
+  ResearchResult, ReviewOutput, RunnableSandbox, AgentRuntimePaths,
 } from "./types.js";
 import {
   AGENT_SCHEMA, agentOutputSchema, foldResearchOutput, RESEARCH_SCHEMA,
@@ -38,14 +38,27 @@ const ARTHUR_HOOK_EVENTS: ReadonlyArray<readonly [string, string]> = [
 
 export class ClaudeAgentAdapter implements AgentAdapter {
   readonly kind = "claude" as const;
-  readonly cliSpec = AGENT_CLI_SPECS.claude;
+  readonly cliSpec: AgentCliSpec;
 
-  async install(sandbox: RunnableSandbox): Promise<void> {
-    await installAndVerifyCli(sandbox, this.cliSpec);
+  constructor(cliSpec: AgentCliSpec = AGENT_CLI_SPECS.claude) {
+    if (cliSpec.kind !== "claude") {
+      throw new Error("Claude adapter requires a Claude CLI specification.");
+    }
+    this.cliSpec = cliSpec;
+  }
+
+  async install(
+    sandbox: RunnableSandbox,
+    runtime?: AgentRuntimePaths,
+  ): Promise<void> {
+    await installAndVerifyCli(sandbox, this.cliSpec, runtime);
     // Skip interactive onboarding
     const onboarding = await sandbox.runCommand("bash", [
       "-c",
-      `mkdir -p ~/.claude && echo '{"hasCompletedOnboarding":true}' > ~/.claude.json`,
+      withRuntimeHome(
+        runtime,
+        `mkdir -p "$HOME/.claude" && echo '{"hasCompletedOnboarding":true}' > "$HOME/.claude.json"`,
+      ),
     ]);
     await requireProviderSetup(onboarding, this.cliSpec, "Claude onboarding setup");
   }
@@ -68,27 +81,54 @@ export class ClaudeAgentAdapter implements AgentAdapter {
         ? `export CLAUDE_CODE_OAUTH_TOKEN=${shellQuote(opts.anthropicApiKey)}`
         : `export ANTHROPIC_API_KEY=${shellQuote(opts.anthropicApiKey)}`,
     ];
+    const envPath = opts.runtime?.envPath ?? AGENT_ENV_CLAUDE_PATH;
     await sandbox.writeFiles([
-      { path: AGENT_ENV_CLAUDE_PATH, content: Buffer.from(envLines.join("\n") + "\n") },
-      { path: AGENT_ENV_PATH, content: Buffer.from(AGENT_ENV_SHIM) },
+      { path: envPath, content: Buffer.from(envLines.join("\n") + "\n") },
+      ...(opts.runtime
+        ? []
+        : [{ path: AGENT_ENV_PATH, content: Buffer.from(AGENT_ENV_SHIM) }]),
     ]);
-    const secureEnv = await sandbox.runCommand("chmod", ["600", AGENT_ENV_CLAUDE_PATH]);
+    const secureEnv = await sandbox.runCommand("chmod", ["600", envPath]);
     await requireProviderSetup(secureEnv, this.cliSpec, "Claude credential setup");
 
-    // Skills: installer writes to ~/.claude/skills and ~/.agents/skills directly.
-    await installSkillsToAgentsDir(sandbox, this.cliSpec);
+    // The profile home is rebuilt for every invocation, so configure must also
+    // recreate the nonsecret onboarding marker (restore never persists it).
+    if (opts.runtime) {
+      const onboarding = await sandbox.runCommand("bash", [
+        "-c",
+        withRuntimeHome(
+          opts.runtime,
+          `mkdir -p "$HOME/.claude" && echo '{"hasCompletedOnboarding":true}' > "$HOME/.claude.json"`,
+        ),
+      ]);
+      await requireProviderSetup(
+        onboarding,
+        this.cliSpec,
+        "Claude onboarding setup",
+      );
+    }
+
+    // V1 retains the historical skills.sh compatibility setup. V2 profile
+    // skills are content-addressed and materialized before configure.
+    if (opts.legacyDynamicSkills !== false) {
+      await installSkillsToAgentsDir(sandbox, this.cliSpec);
+    }
 
     // Arthur tracer (no-op without config)
     if (opts.arthur) {
-      await this.installArthurTracer(sandbox, opts.arthur);
+      await this.installArthurTracer(sandbox, opts.arthur, opts.runtime);
     }
   }
 
-  async setCommitGuard(sandbox: RunnableSandbox, enabled: boolean): Promise<void> {
+  async setCommitGuard(
+    sandbox: RunnableSandbox,
+    enabled: boolean,
+    runtime?: AgentRuntimePaths,
+  ): Promise<void> {
     // 1) Drop the guard script (idempotent)
     const guardScript = await sandbox.runCommand("bash", [
       "-c",
-      [
+      withRuntimeHome(runtime, [
         "mkdir -p ~/.claude",
         "cat > ~/.claude/commit-guard.sh << 'SCRIPT'",
         "#!/bin/bash",
@@ -104,18 +144,27 @@ export class ClaudeAgentAdapter implements AgentAdapter {
         "fi",
         "SCRIPT",
         "chmod +x ~/.claude/commit-guard.sh",
-      ].join("\n"),
+      ].join("\n")),
     ]);
     await requireProviderSetup(guardScript, this.cliSpec, "Claude commit guard setup");
 
     // 2) Toggle the Stop hook entry via merge-aware settings.json writer
-    await this.mergeSettings(sandbox, { commitGuard: enabled ? "enable" : "disable" });
+    await this.mergeSettings(
+      sandbox,
+      { commitGuard: enabled ? "enable" : "disable" },
+      runtime,
+    );
   }
 
   buildPhaseScript(opts: PhaseScriptOpts): string {
-    const { paths, jsonSchema, model, phase } = opts;
+    const { paths, jsonSchema, model, phase, runtime } = opts;
     const safePhase = sanitizePhase(phase);
     let claudeFlags = `--print --model ${shellQuote(model)} --dangerously-skip-permissions --output-format json`;
+    if (runtime) {
+      // Profile subagents are clipped until a versioned concurrency contract is
+      // available. Enforce the current declaration instead of only reporting it.
+      claudeFlags += " --disallowedTools Task";
+    }
     if (jsonSchema) {
       const escapedSchema = jsonSchema.replace(/'/g, "'\\''");
       claudeFlags += ` --json-schema '${escapedSchema}'`;
@@ -125,11 +174,12 @@ export class ClaudeAgentAdapter implements AgentAdapter {
 # --- Cleanup stale files from prior runs ---
 rm -f ${paths.sentinel} ${paths.stdout} ${paths.stderr} ${paths.exitCode}
 
-# --- Source auth env vars ---
-[ -f /tmp/agent-env.sh ] && source /tmp/agent-env.sh
+# --- Select immutable profile runtime and source runtime-only credentials ---
+${runtime ? `export HOME=${shellQuote(runtime.homeDir)}` : ""}
+[ -f ${runtime ? shellQuote(runtime.envPath) : "/tmp/agent-env.sh"} ] && source ${runtime ? shellQuote(runtime.envPath) : "/tmp/agent-env.sh"}
 
 # --- Phase: ${safePhase} ---
-cat ${paths.input} | claude \\
+cat ${paths.input} | ${runtime ? shellQuote(runtime.executablePath) : "claude"} \\
   ${claudeFlags} \\
   > ${paths.stdout} 2>${paths.stderr}
 PHASE_EXIT_CODE=$?
@@ -139,6 +189,7 @@ echo "$PHASE_EXIT_CODE" > ${paths.exitCode}
 cd /vercel/sandbox
 rm -rf .claude/
 git checkout -- .claude/ 2>/dev/null || true
+${runtime ? `rm -f ${shellQuote(runtime.envPath)}\nrm -rf ${shellQuote(runtime.homeDir)} ${shellQuote(runtime.cliDir)}` : ""}
 
 # --- Signal completion ---
 touch ${paths.sentinel}
@@ -407,13 +458,17 @@ touch ${paths.sentinel}
   private async installArthurTracer(
     sandbox: RunnableSandbox,
     arthur: NonNullable<ConfigureOpts["arthur"]>,
+    runtime?: AgentRuntimePaths,
   ): Promise<void> {
     const { logger } = await import("../../lib/logger.js");
     logger.info({ endpoint: arthur.endpoint, taskId: arthur.taskId, agent: this.kind }, "agent_install_arthur_started");
 
     const pip = await sandbox.runCommand("bash", [
       "-c",
-      "python3 -m ensurepip --user && python3 -m pip install --user --quiet 'opentelemetry-sdk>=1.20.0' 'opentelemetry-exporter-otlp-proto-http>=1.20.0'",
+      withRuntimeHome(
+        runtime,
+        "python3 -m ensurepip --user && python3 -m pip install --user --quiet 'opentelemetry-sdk>=1.20.0' 'opentelemetry-exporter-otlp-proto-http>=1.20.0'",
+      ),
     ]);
     if (pip.exitCode !== 0) {
       logger.warn({}, "arthur_pip_install_failed");
@@ -424,7 +479,10 @@ touch ${paths.sentinel}
     await sandbox.writeFiles([{ path: "/tmp/arthur-tracer.py", content: tracerBytes }]);
     const mvTracer = await sandbox.runCommand("bash", [
       "-c",
-      "mkdir -p $HOME/.claude/hooks && mv /tmp/arthur-tracer.py $HOME/.claude/hooks/claude_code_tracer.py && chmod +x $HOME/.claude/hooks/claude_code_tracer.py",
+      withRuntimeHome(
+        runtime,
+        "mkdir -p $HOME/.claude/hooks && mv /tmp/arthur-tracer.py $HOME/.claude/hooks/claude_code_tracer.py && chmod +x $HOME/.claude/hooks/claude_code_tracer.py",
+      ),
     ]);
     if (mvTracer.exitCode !== 0) {
       logger.warn({}, "arthur_tracer_install_failed");
@@ -438,10 +496,13 @@ touch ${paths.sentinel}
     await sandbox.writeFiles([{ path: "/tmp/arthur_config.json", content: Buffer.from(configJson) }]);
     await sandbox.runCommand("bash", [
       "-c",
-      "mkdir -p $HOME/.claude && mv /tmp/arthur_config.json $HOME/.claude/arthur_config.json && chmod 600 $HOME/.claude/arthur_config.json",
+      withRuntimeHome(
+        runtime,
+        "mkdir -p $HOME/.claude && mv /tmp/arthur_config.json $HOME/.claude/arthur_config.json && chmod 600 $HOME/.claude/arthur_config.json",
+      ),
     ]);
 
-    await this.mergeSettings(sandbox, { arthur: "install" });
+    await this.mergeSettings(sandbox, { arthur: "install" }, runtime);
     logger.info({ agent: this.kind }, "agent_install_arthur_complete");
   }
 
@@ -449,6 +510,7 @@ touch ${paths.sentinel}
   private async mergeSettings(
     sandbox: RunnableSandbox,
     opts: { commitGuard?: "enable" | "disable"; arthur?: "install" },
+    runtime?: AgentRuntimePaths,
   ): Promise<void> {
     const arthurEvents = JSON.stringify(ARTHUR_HOOK_EVENTS);
     const script = `
@@ -486,7 +548,15 @@ touch ${paths.sentinel}
       }
       fs.writeFileSync(settingsPath, JSON.stringify(s, null, 2));
     `;
-    const merge = await sandbox.runCommand("node", ["--input-type=module", "-e", script]);
+    const merge = runtime
+      ? await sandbox.runCommand("env", [
+          `HOME=${runtime.homeDir}`,
+          "node",
+          "--input-type=module",
+          "-e",
+          script,
+        ])
+      : await sandbox.runCommand("node", ["--input-type=module", "-e", script]);
     await requireProviderSetup(merge, this.cliSpec, "Claude settings setup");
   }
 }
@@ -497,13 +567,22 @@ function shellQuote(val: string): string {
   return `'${val.replace(/'/g, "'\\''")}'`;
 }
 
+function withRuntimeHome(
+  runtime: AgentRuntimePaths | undefined,
+  command: string,
+): string {
+  return runtime
+    ? `export HOME=${shellQuote(runtime.homeDir)}\n${command}`
+    : command;
+}
+
 /** Collapse an arbitrary phase label to a shell/file-safe token ([a-z0-9-]). */
 function sanitizePhase(phase: string): string {
   return phase.toLowerCase().replace(/[^a-z0-9-]/g, "-");
 }
 
 function extractClaudePayload(
-  spec: typeof AGENT_CLI_SPECS.claude,
+  spec: AgentCliSpec,
   artifacts: CollectedPhaseArtifacts,
   phase: string,
 ): AgentProtocolResult<unknown> {

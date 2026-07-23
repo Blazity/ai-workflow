@@ -14,6 +14,7 @@ import { isActiveRunOwnerError } from "../lib/run-control-errors.js";
 import { buildVcsUrls, gitAuthArgs } from "../lib/vcs-urls.js";
 import { stopSandboxAndConfirm } from "./stop-ticket-sandboxes.js";
 import { isAgentRuntimeError } from "./agents/protocol.js";
+import type { ResolvedHarnessRuntime } from "./harness-runtime.js";
 
 export interface SandboxProviderConfig {
   kind: "github" | "gitlab";
@@ -44,10 +45,15 @@ export class SandboxManager {
 
   async provisionMultiRepo(
     input: { branchName: string; repositories: WorkspaceRepositoryInput[] },
-    agent: AgentAdapter,
-    configureOpts: ConfigureOpts,
-    additionalAgents: ReadonlyArray<{ agent: AgentAdapter; configureOpts: ConfigureOpts }> = [],
+    agent: AgentAdapter | null,
+    configureOpts: ConfigureOpts | null,
+    additionalAgents: ReadonlyArray<{
+      agent: AgentAdapter;
+      configureOpts: ConfigureOpts;
+      runtime?: ResolvedHarnessRuntime;
+    }> = [],
     lifecycle: SandboxLifecycle = {},
+    primaryRuntime?: ResolvedHarnessRuntime,
   ): Promise<{ sandbox: SandboxInstance; workspaceManifest: WorkspaceManifest }> {
     if (input.repositories.length === 0) {
       throw new Error("Cannot provision sandbox without selected repositories");
@@ -181,11 +187,21 @@ export class SandboxManager {
         },
       ]);
 
-      await agent.install(sandbox);
-      await agent.configure(sandbox, configureOpts);
+      if (agent && configureOpts) {
+        await this.prepareAgent(
+          sandbox,
+          agent,
+          configureOpts,
+          primaryRuntime,
+        );
+      }
       for (const extra of additionalAgents) {
-        await extra.agent.install(sandbox);
-        await extra.agent.configure(sandbox, extra.configureOpts);
+        await this.prepareAgent(
+          sandbox,
+          extra.agent,
+          extra.configureOpts,
+          extra.runtime,
+        );
       }
 
       return { sandbox, workspaceManifest: manifest };
@@ -209,6 +225,21 @@ export class SandboxManager {
     const provider = this.config.providers.find((candidate) => candidate.kind === kind);
     if (!provider) throw new Error(`Sandbox provider is not configured: ${kind}`);
     return provider;
+  }
+
+  private async prepareAgent(
+    sandbox: SandboxInstance,
+    agent: AgentAdapter,
+    configureOpts: ConfigureOpts,
+    runtime?: ResolvedHarnessRuntime,
+  ): Promise<void> {
+    if (runtime) {
+      // Profile CLI/home/skills are rebuilt as one invocation boundary. An
+      // unrestricted earlier agent must not be able to poison a cached CLI.
+      return;
+    }
+    await agent.install(sandbox);
+    await agent.configure(sandbox, configureOpts);
   }
 }
 

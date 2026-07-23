@@ -3,6 +3,7 @@ import { BLOCK_TYPE_SPECS } from "@shared/contracts";
 import type { WorkflowBlockType, WorkflowDefinitionNode } from "@shared/contracts";
 import {
   blockTypesMissingExecutor,
+  detachScratchSandboxesForClarification,
   implementationChangeSummary,
   planningClarificationResult,
   resolveOpenPrBody,
@@ -11,14 +12,12 @@ import {
   resolveTicketStatusInput,
 } from "./agent.js";
 
-// Exhaustiveness guard for the block dispatch in agent.ts. If a new action-category
-// WorkflowBlockType is added to the contract without wiring an executor (registry
-// or inline switch case), this test goes red instead of the run silently
-// succeeding as a no-op (executeBlock's default throws at runtime).
+// Exhaustiveness guard for the v1 block dispatch in agent.ts. V2-only action
+// types are executed by the v2 scheduler once that runtime is enabled.
 describe("block executor exhaustiveness", () => {
-  it("wires an executor for every action block type", () => {
+  it("wires an executor for every v1 action block type", () => {
     const actionTypes = (Object.keys(BLOCK_TYPE_SPECS) as WorkflowBlockType[]).filter(
-      (type) => BLOCK_TYPE_SPECS[type].category === "action",
+      (type) => type !== "transform" && BLOCK_TYPE_SPECS[type].category === "action",
     );
     // Sanity: the assertion below is not vacuously true.
     expect(actionTypes.length).toBeGreaterThan(0);
@@ -51,6 +50,24 @@ describe("block executor exhaustiveness", () => {
       "backlog",
     );
     expect(resolveTicketStatusInput({ target: "10042" }, {})).toBe("10042");
+  });
+
+  it("detaches every cached scratch sandbox before clarification suspension", () => {
+    const ctx = {
+      agentSandboxIds: {
+        first: "scratch-1",
+        duplicate: "scratch-1",
+        second: "scratch-2",
+      },
+      sandboxIds: new Set(["code-1", "scratch-1", "scratch-2"]),
+    };
+
+    expect(detachScratchSandboxesForClarification(ctx)).toEqual([
+      "scratch-1",
+      "scratch-2",
+    ]);
+    expect(ctx.agentSandboxIds).toEqual({});
+    expect([...ctx.sandboxIds]).toEqual(["code-1"]);
   });
 });
 
