@@ -63,3 +63,14 @@ Omit `--write` for a smoke test that prints only versions, artifact sizes, and
 hashes. A secret-scan or protocol-validation failure refuses fixture writes.
 Review the fixture diff, run the protocol fixture tests, and record only exact
 versions plus sanitized success/failure metadata in the pull request.
+
+When production credentials must not be copied, the pre-merge protocol smoke
+may instead use an existing local Claude Code or Codex login. Install the exact
+source-controlled packages in a temporary directory; do not use whatever
+global versions happen to be installed. Disable tools or use read-only mode for
+structured-output checks. Run repair checks only in disposable Git repositories,
+with Claude limited to read/edit tools and Codex limited to `workspace-write`.
+This verifies the pinned CLI envelopes and repair behavior; fixture-based tests
+remain responsible for provisioning failures and other negative paths. Delete
+all raw stdout, stderr, structured-output, and temporary repository artifacts
+after recording sanitized versions and results.

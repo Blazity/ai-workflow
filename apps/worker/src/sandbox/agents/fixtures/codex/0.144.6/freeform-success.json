@@ -2,11 +2,11 @@
   "package": "@openai/codex",
   "version": "0.144.6",
   "protocol": "codex-jsonl-0.144.6",
-  "provenance": "normalized pinned-protocol sample; refresh with the capture script",
+  "provenance": "captured locally with authenticated @openai/codex@0.144.6 on 2026-07-23 during a workspace-sandboxed disposable-repository repair; volatile fields and response content normalized",
   "artifacts": {
-    "stdout": "{\"type\":\"thread.started\",\"thread_id\":\"normalized\"}\n{\"type\":\"item.completed\",\"item\":{\"id\":\"normalized\",\"type\":\"agent_message\",\"text\":\"fixture complete\"}}\n{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":8,\"cached_input_tokens\":2,\"output_tokens\":3}}",
+    "stdout": "{\"type\":\"thread.started\",\"thread_id\":\"normalized\"}\n{\"type\":\"item.completed\",\"item\":{\"id\":\"normalized\",\"type\":\"error\"}}\n{\"type\":\"turn.started\"}\n{\"type\":\"item.completed\",\"item\":{\"id\":\"normalized\",\"type\":\"error\"}}\n{\"type\":\"item.completed\",\"item\":{\"id\":\"normalized\",\"type\":\"agent_message\",\"text\":\"[sanitized response]\"}}\n{\"type\":\"item.started\",\"item\":{\"id\":\"normalized\",\"type\":\"file_change\"}}\n{\"type\":\"item.completed\",\"item\":{\"id\":\"normalized\",\"type\":\"file_change\"}}\n{\"type\":\"item.completed\",\"item\":{\"id\":\"normalized\",\"type\":\"agent_message\",\"text\":\"[sanitized repair response]\"}}\n{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":38874,\"cached_input_tokens\":29184,\"output_tokens\":84,\"reasoning_output_tokens\":0}}",
     "stderr": "",
-    "structuredOutput": "fixture complete",
+    "structuredOutput": "[sanitized repair response]",
     "exitCode": 0
   }
 }

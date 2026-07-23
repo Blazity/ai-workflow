@@ -40,14 +40,14 @@ describe.each([
     malformed: "malformed-jsonl",
   },
 ])("$provider pinned protocol fixtures", ({ provider, version, adapter, malformed }) => {
-  it("records the pinned package, version, protocol, and refresh provenance", () => {
+  it("records the pinned package, version, protocol, and real-capture provenance", () => {
     const loaded = fixture(provider, version, "structured-success");
     expect(loaded).toMatchObject({
       package: adapter.cliSpec.packageName,
       version: adapter.cliSpec.version,
       protocol: adapter.cliSpec.protocol,
     });
-    expect(loaded.provenance).toContain("capture script");
+    expect(loaded.provenance).toContain("captured locally");
   });
 
   it("accepts the structured success envelope", () => {
