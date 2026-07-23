@@ -8,6 +8,7 @@ import React, {
   useRef,
   useState,
 } from "react";
+import { CircleIcon } from "@phosphor-icons/react/dist/csr/Circle";
 import {
   isTriggerBlockType,
   type RunBlockStatusesResponse,
@@ -1500,7 +1501,7 @@ export function WorkflowEditorScreen({
           </div>
         )}
         {historyOpen && (
-          <div className="absolute right-4 top-[56px] z-[60] w-[380px] max-h-[60vh] overflow-y-auto bg-panel border border-neutral-200 rounded-[4px] shadow-[0_12px_28px_-8px_rgba(24,27,32,0.22),0_2px_6px_rgba(24,27,32,0.08)] px-4 py-3">
+          <div className="absolute right-4 top-[56px] z-[60] w-[720px] max-w-[calc(100vw-2rem)] bg-panel border border-neutral-200 rounded-[4px] shadow-[0_12px_28px_-8px_rgba(24,27,32,0.22),0_2px_6px_rgba(24,27,32,0.08)] px-4 py-3">
             <div className="flex items-center justify-between mb-1">
               <h2 className="font-body text-[14px] font-semibold text-neutral-900">History</h2>
               <button
@@ -1521,9 +1522,9 @@ export function WorkflowEditorScreen({
             {versions.map((v) => (
               <div
                 key={v.version}
-                className="flex items-center gap-3 border-b border-neutral-100 py-2 font-body text-[12px] text-neutral-700"
+                className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-neutral-100 py-2 font-body text-[12px] text-neutral-700"
               >
-                <span className="font-mono text-neutral-900">v{v.version}</span>
+                <span className="shrink-0 font-mono text-neutral-900">v{v.version}</span>
                 <span
                   title={`Workflow definition schema v${v.definition.schemaVersion}`}
                   className={`shrink-0 rounded-[3px] border px-[6px] py-[2px] font-mono text-[9px] uppercase tracking-[0.04em] ${
@@ -1535,14 +1536,32 @@ export function WorkflowEditorScreen({
                   schema v{v.definition.schemaVersion}
                 </span>
                 {v.version === deployed?.version && (
-                  <span className="rounded-[3px] bg-emerald-50 px-[6px] py-[2px] font-mono text-[10px] text-emerald-700">
-                    deployed
+                  <span
+                    className="group relative shrink-0"
+                    tabIndex={0}
+                    aria-label="Currently deployed version"
+                    aria-describedby={`history-version-${v.version}-deployed-tooltip`}
+                  >
+                    <CircleIcon
+                      aria-hidden="true"
+                      weight="fill"
+                      className="size-2.5 text-emerald-500"
+                    />
+                    <span
+                      id={`history-version-${v.version}-deployed-tooltip`}
+                      role="tooltip"
+                      className="pointer-events-none absolute left-1/2 top-full z-10 mt-2 -translate-x-1/2 whitespace-nowrap rounded-[3px] bg-neutral-900 px-2 py-1 font-body text-[10px] text-white opacity-0 shadow-sm transition-opacity group-hover:opacity-100 group-focus:opacity-100"
+                    >
+                      Currently deployed version
+                    </span>
                   </span>
                 )}
-                <span>{v.createdByLabel}</span>
-                <span className="text-neutral-400">{new Date(v.createdAt).toLocaleString()}</span>
+                <span className="min-w-0 flex-1 basis-[170px] truncate">{v.createdByLabel}</span>
+                <span className="shrink-0 text-neutral-400">
+                  {new Date(v.createdAt).toLocaleString()}
+                </span>
                 {v.restoredFromVersion !== null && (
-                  <span className="rounded-[3px] bg-app-bg px-[6px] py-[2px] font-mono text-[10px] text-neutral-600">
+                  <span className="shrink-0 rounded-[3px] bg-app-bg px-[6px] py-[2px] font-mono text-[10px] text-neutral-600">
                     restored from v{v.restoredFromVersion}
                   </span>
                 )}
