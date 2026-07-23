@@ -11,6 +11,7 @@ import {
   workflowAgg,
   costAgg,
   listRunsForTicket,
+  isRunRecordedFailed,
 } from "./runs-read.js";
 
 const NOW = new Date("2026-06-16T12:00:00.000Z");
@@ -307,5 +308,25 @@ describe("listRunsForTicket", () => {
     expect(res.runs).toEqual([]);
     expect(res.totals.runCount).toBe(0);
     expect(res.ticket).toBeNull();
+  });
+});
+
+describe("isRunRecordedFailed", () => {
+  it("is true only for a run whose recorded status is failed", async () => {
+    await seed({ runId: "wrun_failed", status: "failed" });
+    expect(await isRunRecordedFailed(db, "wrun_failed")).toBe(true);
+  });
+
+  it("is false for non-failed statuses", async () => {
+    await seed({ runId: "wrun_running", status: "running" });
+    await seed({ runId: "wrun_success", status: "success" });
+    await seed({ runId: "wrun_blocked", status: "blocked" });
+    expect(await isRunRecordedFailed(db, "wrun_running")).toBe(false);
+    expect(await isRunRecordedFailed(db, "wrun_success")).toBe(false);
+    expect(await isRunRecordedFailed(db, "wrun_blocked")).toBe(false);
+  });
+
+  it("is false for a missing run", async () => {
+    expect(await isRunRecordedFailed(db, "wrun_missing")).toBe(false);
   });
 });

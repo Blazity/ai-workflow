@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { WorkflowDefinitionNode } from "@shared/contracts";
 import type { AgentKind } from "../../sandbox/agents/index.js";
+import type { AgentProtocolResult } from "../../sandbox/agents/types.js";
 import type { SelectedRepository } from "../../adapters/vcs/repository-directory.js";
 import type { PreSandboxPromptAdditionsByTarget } from "../../pre-sandbox/types.js";
 import type {
@@ -10,7 +11,12 @@ import type {
 import { resolveBlockAgent } from "../../workflow-definition/resolve-agent.js";
 import { isRunControlError } from "../run-control-error.js";
 import { blockFetchPrContextsStep, blockPrTriggerRepositoriesStep } from "./fetch-pr-context.js";
-import { executionError, type BlockExecuteFn, type BlockExecutionResult } from "./types.js";
+import {
+  agentProtocolExecutionError,
+  executionError,
+  type BlockExecuteFn,
+  type BlockExecutionResult,
+} from "./types.js";
 import type { BlockExecutionContext } from "../../workflow-definition/interpreter.js";
 
 export const paramsSchema = z.object({}).strict();
@@ -94,7 +100,10 @@ async function blockPrepareWorkspaceProvisionStep(
   selectedRepositories: WorkspaceRepositoryInput[],
   arthurTaskId: string | null,
   requiredKinds: AgentKind[],
-): Promise<{ sandboxId: string; workspaceManifest: WorkspaceManifest }> {
+): Promise<
+  | { ok: true; sandboxId: string; workspaceManifest: WorkspaceManifest }
+  | { ok: false; failure: Extract<AgentProtocolResult<unknown>, { ok: false }> }
+> {
   "use step";
   const { env } = await import("../../../env.js");
   const { SandboxManager } = await import("../../sandbox/manager.js");
@@ -112,14 +121,40 @@ async function blockPrepareWorkspaceProvisionStep(
 
   for (const kind of requiredKinds) {
     if (kind === "codex" && !env.CODEX_API_KEY && !env.CODEX_CHATGPT_OAUTH_TOKEN) {
-      throw new Error(
-        "a workflow block requires agent codex, which needs CODEX_API_KEY or CODEX_CHATGPT_OAUTH_TOKEN in the deployed environment",
+      const { runtimePreparationError } = await import(
+        "../../sandbox/agents/protocol.js"
       );
+      const error = runtimePreparationError(
+        createAgentAdapter(kind).cliSpec,
+        "Codex authentication credentials are missing from the deployed environment.",
+      );
+      return {
+        ok: false,
+        failure: {
+          ok: false,
+          category: error.category,
+          message: error.safeMessage,
+          diagnostic: error.diagnostic,
+        },
+      };
     }
     if (kind === "claude" && !env.ANTHROPIC_API_KEY) {
-      throw new Error(
-        "a workflow block requires agent claude, which needs ANTHROPIC_API_KEY in the deployed environment",
+      const { runtimePreparationError } = await import(
+        "../../sandbox/agents/protocol.js"
       );
+      const error = runtimePreparationError(
+        createAgentAdapter(kind).cliSpec,
+        "Claude authentication credentials are missing from the deployed environment.",
+      );
+      return {
+        ok: false,
+        failure: {
+          ok: false,
+          category: error.category,
+          message: error.safeMessage,
+          diagnostic: error.diagnostic,
+        },
+      };
     }
   }
 
@@ -144,24 +179,39 @@ async function blockPrepareWorkspaceProvisionStep(
     jobTimeoutMs: env.JOB_TIMEOUT_MS,
   });
 
-  const { sandbox, workspaceManifest } = await manager.provisionMultiRepo(
-    { branchName, repositories: selectedRepositories },
-    createAgentAdapter(primaryKind),
-    configureOptsFor(primaryKind),
-    additionalAgents,
-    {
-      onCreated: async (sandboxId) => {
-        const { createStepAdapters } = await import("../../lib/step-adapters.js");
-        await createStepAdapters().runRegistry.registerSandbox(
-          subjectKey,
-          ownerToken,
-          sandboxId,
-        );
+  try {
+    const { sandbox, workspaceManifest } = await manager.provisionMultiRepo(
+      { branchName, repositories: selectedRepositories },
+      createAgentAdapter(primaryKind),
+      configureOptsFor(primaryKind),
+      additionalAgents,
+      {
+        onCreated: async (sandboxId) => {
+          const { createStepAdapters } = await import("../../lib/step-adapters.js");
+          await createStepAdapters().runRegistry.registerSandbox(
+            subjectKey,
+            ownerToken,
+            sandboxId,
+          );
+        },
       },
-    },
-  );
-
-  return { sandboxId: sandbox.sandboxId, workspaceManifest };
+    );
+    return { ok: true, sandboxId: sandbox.sandboxId, workspaceManifest };
+  } catch (error) {
+    const { isAgentRuntimeError } = await import("../../sandbox/agents/protocol.js");
+    if (isAgentRuntimeError(error)) {
+      return {
+        ok: false,
+        failure: {
+          ok: false,
+          category: error.category,
+          message: error.safeMessage,
+          diagnostic: error.diagnostic,
+        },
+      };
+    }
+    throw error;
+  }
 }
 blockPrepareWorkspaceProvisionStep.maxRetries = 0;
 
@@ -321,7 +371,7 @@ export async function ensureWorkspace(
       ctx.runDefaultKind,
       ctx.defaults,
     );
-    const { sandboxId, workspaceManifest } = await blockPrepareWorkspaceProvisionStep(
+    const provisioned = await blockPrepareWorkspaceProvisionStep(
       ctx.entry.subjectKey,
       ctx.entry.ownerToken,
       ctx.branchName,
@@ -329,6 +379,8 @@ export async function ensureWorkspace(
       arthurTaskId,
       requiredKinds,
     );
+    if (!provisioned.ok) return agentProtocolExecutionError(provisioned.failure);
+    const { sandboxId, workspaceManifest } = provisioned;
     // The manager registered this sandbox immediately after external creation,
     // before clone/install/configure. Keep the in-workflow set for normal
     // teardown; the durable child row covers crash/cancel cleanup.

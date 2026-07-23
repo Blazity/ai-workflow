@@ -7,7 +7,12 @@ import {
   type WorkspaceRepo,
 } from "../sandbox/repo-workspace.js";
 import type { PrePrCheckConfig } from "./config.js";
-import type { PhaseUsage } from "../sandbox/agents/types.js";
+import type {
+  AgentProtocolResult,
+  CollectedPhaseArtifacts,
+  PhaseArtifactPaths,
+  PhaseUsage,
+} from "../sandbox/agents/types.js";
 import type { TokenPrice } from "../sandbox/agents/pricing.js";
 import {
   checkRunBudget,
@@ -36,6 +41,8 @@ export interface PrePrCheckRunResult {
   budgetFailure: RunBudgetFailure | null;
   failures: PrePrCheckFailure[];
   summary: string;
+  /** Runtime/protocol failure from a launched repair agent. */
+  agentFailure?: Extract<AgentProtocolResult<unknown>, { ok: false }>;
 }
 
 export interface PrePrFixBudgetContext {
@@ -96,10 +103,26 @@ export async function runPrePrChecksWithFixes(
 
   while (!result.passed && fixCycles < maxFixCycles) {
     fixCycles++;
-    const usage = await runFixAgent(sandbox, result, agentKind, model, signal);
-    fixCycleUsages.push(usage);
+    const fixer = await runFixAgent(
+      sandbox,
+      result,
+      agentKind,
+      model,
+      fixCycles,
+      signal,
+    );
+    fixCycleUsages.push(fixer.usage);
+    if (fixer.failure) {
+      return {
+        ...result,
+        fixCycles,
+        fixCycleUsages,
+        budgetFailure: null,
+        agentFailure: fixer.failure,
+      };
+    }
     if (budget && budgetState) {
-      budgetState = recordBudgetUsage(budgetState, usage, budget.price);
+      budgetState = recordBudgetUsage(budgetState, fixer.usage, budget.price);
       const check = checkRunBudget(budgetState, budget.limits);
       if (check.status !== "ok") {
         return { ...result, fixCycles, fixCycleUsages, budgetFailure: check };
@@ -201,37 +224,108 @@ async function runFixAgent(
   failedRun: PrePrCheckRunResult,
   agentKind: "claude" | "codex",
   model: string,
+  fixCycle: number,
   signal?: AbortSignal,
-): Promise<PhaseUsage | null> {
-  const { logger } = await import("../lib/logger.js");
+): Promise<{
+  usage: PhaseUsage | null;
+  failure?: Extract<AgentProtocolResult<unknown>, { ok: false }>;
+}> {
+  const { createAgentAdapter } = await import("../sandbox/agents/index.js");
+  const adapter = createAgentAdapter(agentKind);
+  const phase = `pre-pr-fix-${fixCycle}`;
+  const paths = adapter.artifactPaths(phase);
+  const script = adapter.buildPhaseScript({ phase, model, paths });
   await sandbox.writeFiles([
     {
-      path: "/tmp/pre-pr-checks-fix-prompt.txt",
+      path: paths.input,
       content: Buffer.from(buildFixPrompt(failedRun)),
     },
+    { path: paths.wrapper, content: Buffer.from(script) },
   ]);
-
-  const cli =
-    agentKind === "codex"
-      ? `codex exec --model "${model}" --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check --json -`
-      : `claude --print --output-format json --model '${model}' --dangerously-skip-permissions`;
-
-  await sandbox.runCommand({
-    cmd: "bash",
-    args: [
-      "-c",
-      `cd /vercel/sandbox || exit 1; if [ -f /tmp/agent-env.sh ]; then source /tmp/agent-env.sh; fi; cat /tmp/pre-pr-checks-fix-prompt.txt | ${cli} > /tmp/pre-pr-checks-fix-stdout.txt 2>/tmp/pre-pr-checks-fix-stderr.txt || true`,
-    ],
-    ...(signal ? { signal } : {}),
-  });
-
-  const fixOut = await sandbox.runCommand("cat", ["/tmp/pre-pr-checks-fix-stdout.txt"]);
-  const fixLog = (await fixOut.stdout()).trim();
-  if (fixLog) {
-    logger.info({ output: fixLog.slice(0, 500) }, "pre_pr_checks_fix_agent_output");
+  const chmod = await sandbox.runCommand("chmod", ["+x", paths.wrapper]);
+  if (chmod.exitCode !== 0) {
+    const { protocolFailure } = await import("../sandbox/agents/protocol.js");
+    const artifacts = await collectPhaseFromSandbox(sandbox, paths);
+    const failure = protocolFailure({
+      spec: adapter.cliSpec,
+      phase,
+      artifacts,
+      failureKind: "setup_failed",
+      category: "provider",
+      message: "The current agent phase could not be completed.",
+      detail: "The Pre-PR repair wrapper could not be made executable.",
+    });
+    if (failure.ok) throw new Error("unreachable");
+    return { usage: null, failure };
   }
-  const { createAgentAdapter } = await import("../sandbox/agents/index.js");
-  return createAgentAdapter(agentKind).extractUsage(fixLog, null);
+  let launch: SandboxCommandResult;
+  try {
+    launch = await sandbox.runCommand({
+      cmd: "bash",
+      args: [paths.wrapper],
+      cwd: "/vercel/sandbox",
+      ...(signal ? { signal } : {}),
+    });
+  } catch (error) {
+    if (
+      error instanceof DOMException ||
+      (error instanceof Error && (error.name === "AbortError" || error.name === "TimeoutError"))
+    ) {
+      throw error;
+    }
+    const { protocolFailure } = await import("../sandbox/agents/protocol.js");
+    const failure = protocolFailure({
+      spec: adapter.cliSpec,
+      phase,
+      artifacts: { stdout: "", stderr: "", structuredOutput: null, exitCode: null },
+      failureKind: "provider_error",
+      category: "provider",
+      message: "The current agent phase could not be completed.",
+      detail: "The Pre-PR repair process could not be launched.",
+    });
+    if (failure.ok) throw new Error("unreachable");
+    return { usage: null, failure };
+  }
+  if (launch.exitCode !== 0) {
+    const { commandProtocolFailure } = await import("../sandbox/agents/protocol.js");
+    return {
+      usage: null,
+      failure: await commandProtocolFailure({
+        spec: adapter.cliSpec,
+        phase,
+        result: launch,
+        failureKind: "cli_exit",
+        message: "The current agent phase could not be completed.",
+        detail: "The Pre-PR repair process could not be launched.",
+      }),
+    };
+  }
+  const artifacts = await collectPhaseFromSandbox(sandbox, paths);
+  const usage = adapter.extractUsage(artifacts.stdout, artifacts.structuredOutput);
+  const protocol = adapter.validateFreeformProtocol(artifacts, phase);
+  return protocol.ok ? { usage } : { usage, failure: protocol };
+}
+
+async function collectPhaseFromSandbox(
+  sandbox: SandboxSession,
+  paths: PhaseArtifactPaths,
+): Promise<CollectedPhaseArtifacts> {
+  const read = async (path: string): Promise<string> => {
+    const result = await sandbox.runCommand("cat", [path]);
+    return result.exitCode === 0 ? (await result.stdout()).trim() : "";
+  };
+  const stdout = await read(paths.stdout);
+  const stderr = await read(paths.stderr);
+  const structuredOutput = paths.structuredOutput
+    ? (await read(paths.structuredOutput)) || null
+    : null;
+  const exitCodeText = await read(paths.exitCode);
+  return {
+    stdout,
+    stderr,
+    structuredOutput,
+    exitCode: /^-?\d+$/.test(exitCodeText) ? Number(exitCodeText) : null,
+  };
 }
 
 function buildFixPrompt(failedRun: PrePrCheckRunResult): string {

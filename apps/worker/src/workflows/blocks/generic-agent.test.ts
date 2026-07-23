@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
   setCommitGuard: vi.fn(),
   artifactPaths: vi.fn(),
   buildPhaseScript: vi.fn(),
+  parseStructuredObjectProtocol: vi.fn(),
   extractUsage: vi.fn(),
   writeFiles: vi.fn(),
   runCommand: vi.fn().mockResolvedValue({ exitCode: 0 }),
@@ -28,9 +29,17 @@ vi.mock("@vercel/sandbox", () => ({ Sandbox: { get: mocks.sandboxGet } }));
 vi.mock("./poll-phase.js", () => ({ pollPhaseUntilDone: mocks.pollPhaseUntilDone }));
 vi.mock("../../sandbox/agents/index.js", () => ({
   createAgentAdapter: vi.fn(() => ({
+    cliSpec: {
+      kind: "claude",
+      packageName: "@anthropic-ai/claude-code",
+      version: "2.1.216",
+      executable: "claude",
+      protocol: "claude-json-2.1.216",
+    },
     setCommitGuard: mocks.setCommitGuard,
     artifactPaths: mocks.artifactPaths,
     buildPhaseScript: mocks.buildPhaseScript,
+    parseStructuredObjectProtocol: mocks.parseStructuredObjectProtocol,
     extractUsage: mocks.extractUsage,
   })),
 }));
@@ -48,6 +57,7 @@ function pathsFor(phase: string) {
     input: `/tmp/${phase}-requirements.md`,
     stdout: `/tmp/${phase}-stdout.txt`,
     stderr: `/tmp/${phase}-stderr.txt`,
+    exitCode: `/tmp/${phase}-exit-code`,
     sentinel: `/tmp/${phase}-done`,
     structuredOutput: `/tmp/${phase}-result.json`,
   };
@@ -80,8 +90,42 @@ describe("generic_agent execute", () => {
     mocks.buildPhaseScript.mockReturnValue("#!/bin/bash");
     mocks.checkPhaseDone.mockResolvedValue(true);
     mocks.extractUsage.mockReturnValue(null);
+    mocks.parseStructuredObjectProtocol.mockImplementation((artifacts) => {
+      const source = artifacts.structuredOutput ?? artifacts.stdout;
+      try {
+        const envelope = JSON.parse(source);
+        return {
+          ok: true,
+          value: envelope?.type === "result" ? envelope.structured_output : envelope,
+        };
+      } catch {
+        return {
+          ok: false,
+          category: "parsing",
+          message: "The current agent phase returned an invalid structured response.",
+          diagnostic: {
+            provider: "claude",
+            packageName: "@anthropic-ai/claude-code",
+            cliVersion: "2.1.216",
+            protocol: "claude-json-2.1.216",
+            phase: "agent-test",
+            failureKind: "invalid_json",
+            exitCode: 0,
+            detail: "Agent output was not valid JSON.",
+          },
+        };
+      }
+    });
     mocks.ensureAgentSandbox.mockResolvedValue("scratch-new");
-    mocks.runCommand.mockResolvedValue({ cmdId: "cmd-1", exitCode: null });
+    mocks.runCommand.mockImplementation((command) =>
+      command === "chmod"
+        ? {
+            exitCode: 0,
+            stdout: vi.fn().mockResolvedValue(""),
+            stderr: vi.fn().mockResolvedValue(""),
+          }
+        : { cmdId: "cmd-1", exitCode: null },
+    );
     mocks.pollPhaseUntilDone.mockResolvedValue(true);
   });
 
@@ -109,8 +153,10 @@ describe("generic_agent execute", () => {
 
   it("uses an agent-only scratch sandbox in none mode", async () => {
     mocks.collectPhase.mockResolvedValue({
-      raw: "",
-      structured: JSON.stringify({ status: "ok", body: "planned", questions: null, error: null }),
+      stdout: "",
+      stderr: "",
+      structuredOutput: JSON.stringify({ status: "ok", body: "planned", questions: null, error: null }),
+      exitCode: 0,
     });
     const ctx = makeCtx({
       sandboxId: null,
@@ -131,8 +177,10 @@ describe("generic_agent execute", () => {
 
   it("adds the clarification answer to the rerun prompt", async () => {
     mocks.collectPhase.mockResolvedValue({
-      raw: "",
-      structured: JSON.stringify({ status: "ok", body: "continued", questions: null, error: null }),
+      stdout: "",
+      stderr: "",
+      structuredOutput: JSON.stringify({ status: "ok", body: "continued", questions: null, error: null }),
+      exitCode: 0,
     });
     const ctx = makeCtx({
       sandboxId: null,
@@ -155,8 +203,10 @@ describe("generic_agent execute", () => {
 
   it("provisions agent-only scratch on demand in none mode", async () => {
     mocks.collectPhase.mockResolvedValue({
-      raw: "",
-      structured: JSON.stringify({ status: "ok", body: "planned", questions: null, error: null }),
+      stdout: "",
+      stderr: "",
+      structuredOutput: JSON.stringify({ status: "ok", body: "planned", questions: null, error: null }),
+      exitCode: 0,
     });
     const ctx = makeCtx({ sandboxId: null, agentSandboxIds: {} } as never);
 
@@ -186,7 +236,7 @@ describe("generic_agent execute", () => {
       kind: "execution_error",
       error: {
         category: "sandbox",
-        message: "The workspace environment could not complete this block.",
+        message: "The workspace environment could not complete this block. (sandbox unavailable)",
         detail: "sandbox unavailable",
       },
     });
@@ -217,8 +267,10 @@ describe("generic_agent execute", () => {
 
   it("writes the prompt verbatim, uses GENERIC_SCHEMA, and maps ok output", async () => {
     mocks.collectPhase.mockResolvedValue({
-      raw: "",
-      structured: JSON.stringify({ status: "ok", body: "done", questions: null, error: null }),
+      stdout: "",
+      stderr: "",
+      structuredOutput: JSON.stringify({ status: "ok", body: "done", questions: null, error: null }),
+      exitCode: 0,
     });
     const ctx = makeCtx();
 
@@ -252,8 +304,10 @@ describe("generic_agent execute", () => {
 
   it("emits the guaranteed body field when an unstructured success body is empty", async () => {
     mocks.collectPhase.mockResolvedValue({
-      raw: "",
-      structured: JSON.stringify({ status: "ok", body: "", questions: null, error: null }),
+      stdout: "",
+      stderr: "",
+      structuredOutput: JSON.stringify({ status: "ok", body: "", questions: null, error: null }),
+      exitCode: 0,
     });
 
     const result = await execute(makeNode("generic_agent", { prompt: "p" }), {}, makeCtx());
@@ -263,8 +317,10 @@ describe("generic_agent execute", () => {
 
   it("prefers a resolved prompt over the static param", async () => {
     mocks.collectPhase.mockResolvedValue({
-      raw: "",
-      structured: JSON.stringify({ status: "ok", body: "done", questions: null, error: null }),
+      stdout: "",
+      stderr: "",
+      structuredOutput: JSON.stringify({ status: "ok", body: "done", questions: null, error: null }),
+      exitCode: 0,
     });
 
     await execute(
@@ -283,8 +339,10 @@ describe("generic_agent execute", () => {
 
   it("keeps the telemetry label unique per raw block id while sanitizing the artifact path", async () => {
     mocks.collectPhase.mockResolvedValue({
-      raw: "",
-      structured: JSON.stringify({ status: "ok", body: "done", questions: null, error: null }),
+      stdout: "",
+      stderr: "",
+      structuredOutput: JSON.stringify({ status: "ok", body: "done", questions: null, error: null }),
+      exitCode: 0,
     });
     const ctx = makeCtx();
 
@@ -299,13 +357,15 @@ describe("generic_agent execute", () => {
 
   it("maps needs_input output to needs_human_input", async () => {
     mocks.collectPhase.mockResolvedValue({
-      raw: "",
-      structured: JSON.stringify({
+      stdout: "",
+      stderr: "",
+      structuredOutput: JSON.stringify({
         status: "needs_input",
         body: "",
         questions: ["Which region?"],
         error: null,
       }),
+      exitCode: 0,
     });
 
     const result = await execute(makeNode("generic_agent", { prompt: "p" }), {}, makeCtx());
@@ -319,14 +379,16 @@ describe("generic_agent execute", () => {
 
   it("threads suggestedAnswers through needs_input output", async () => {
     mocks.collectPhase.mockResolvedValue({
-      raw: "",
-      structured: JSON.stringify({
+      stdout: "",
+      stderr: "",
+      structuredOutput: JSON.stringify({
         status: "needs_input",
         body: "",
         questions: ["Which region?"],
         suggestedAnswers: ["us-east-1", "eu-west-1"],
         error: null,
       }),
+      exitCode: 0,
     });
 
     const result = await execute(makeNode("generic_agent", { prompt: "p" }), {}, makeCtx());
@@ -345,8 +407,10 @@ describe("generic_agent execute", () => {
 
   it("maps failed output to kind failed with the reported error", async () => {
     mocks.collectPhase.mockResolvedValue({
-      raw: "",
-      structured: JSON.stringify({ status: "failed", body: "", questions: null, error: "broke" }),
+      stdout: "",
+      stderr: "",
+      structuredOutput: JSON.stringify({ status: "failed", body: "", questions: null, error: "broke" }),
+      exitCode: 0,
     });
 
     const result = await execute(makeNode("generic_agent", { prompt: "p" }), {}, makeCtx());
@@ -357,8 +421,10 @@ describe("generic_agent execute", () => {
 
   it("returns custom-schema fields at the top level with a compatibility data alias", async () => {
     mocks.collectPhase.mockResolvedValue({
-      raw: "",
-      structured: JSON.stringify({ answer: 42 }),
+      stdout: "",
+      stderr: "",
+      structuredOutput: JSON.stringify({ answer: 42 }),
+      exitCode: 0,
     });
     const outputSchema =
       '{"type":"object","properties":{"answer":{"type":"number"}},"required":["answer"],"additionalProperties":false}';
@@ -380,8 +446,10 @@ describe("generic_agent execute", () => {
 
   it("fails when custom-schema output has the wrong declared shape", async () => {
     mocks.collectPhase.mockResolvedValue({
-      raw: "",
-      structured: JSON.stringify({ answer: "forty-two" }),
+      stdout: "",
+      stderr: "",
+      structuredOutput: JSON.stringify({ answer: "forty-two" }),
+      exitCode: 0,
     });
     const outputSchema =
       '{"type":"object","properties":{"answer":{"type":"number"}},"required":["answer"],"additionalProperties":false}';
@@ -394,12 +462,20 @@ describe("generic_agent execute", () => {
 
     expect(result.kind).toBe("execution_error");
     if (result.kind === "execution_error") {
-      expect(result.error.detail).toBe("agent output did not match the requested schema");
+      expect(result.error.category).toBe("schema");
+      expect(result.error.detail).toBe(
+        "The structured response did not satisfy the requested schema.",
+      );
     }
   });
 
   it("rejects a non-object custom schema because declared fields are top-level", async () => {
-    mocks.collectPhase.mockResolvedValue({ raw: "", structured: "null" });
+    mocks.collectPhase.mockResolvedValue({
+      stdout: "",
+      stderr: "",
+      structuredOutput: "null",
+      exitCode: 0,
+    });
     const node = makeNode("generic_agent", {
       prompt: "p",
       outputSchema: '{"type":"null"}',
@@ -411,7 +487,8 @@ describe("generic_agent execute", () => {
       kind: "execution_error",
       error: {
         category: "schema",
-        message: "The block returned an invalid result.",
+        message:
+          "The block returned an invalid result. (invalid outputSchema: outputSchema must declare an object for Generic Agent.)",
         detail:
           "invalid outputSchema: outputSchema must declare an object for Generic Agent.",
       },
@@ -419,7 +496,12 @@ describe("generic_agent execute", () => {
   });
 
   it("fails when custom-schema output is unparseable", async () => {
-    mocks.collectPhase.mockResolvedValue({ raw: "gibberish", structured: "not json" });
+    mocks.collectPhase.mockResolvedValue({
+      stdout: "gibberish",
+      stderr: "",
+      structuredOutput: "not json",
+      exitCode: 0,
+    });
 
     const result = await execute(
       makeNode("generic_agent", { prompt: "p", outputSchema: '{"type":"object"}' }),
@@ -429,17 +511,20 @@ describe("generic_agent execute", () => {
 
     expect(result.kind).toBe("execution_error");
     if (result.kind === "execution_error") {
-      expect(result.error.detail).toBe("agent output did not match the requested schema");
+      expect(result.error.category).toBe("parsing");
+      expect(result.error.detail).toBe("Agent output was not valid JSON.");
     }
   });
 
   it("parses a claude result envelope from raw output", async () => {
     mocks.collectPhase.mockResolvedValue({
-      raw: JSON.stringify({
+      stdout: JSON.stringify({
         type: "result",
         structured_output: { status: "ok", body: "from envelope", questions: null, error: null },
       }),
-      structured: null,
+      stderr: "",
+      structuredOutput: null,
+      exitCode: 0,
     });
 
     const result = await execute(makeNode("generic_agent", { prompt: "p" }), {}, makeCtx());

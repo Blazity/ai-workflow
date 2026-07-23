@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { WorkflowRunCancelledError } from "workflow/errors";
 import type {
   BlockRunState,
@@ -235,7 +235,7 @@ describe("executeGraph output contracts", () => {
     expect(result.outcome).toBe("stopped");
     expect(rec.failures[0]).toMatchObject({ phase: "contract", nodeId: "comment" });
     expect(rec.failures[0]?.reason).toBe(
-      "The block returned an invalid result. Diagnostic ID: AIW-DIAG-test-run-comment-1",
+      'The block returned an invalid result. (block "comment" (post_pr_comment) returned output that violates its contract: output.comments is required.) Diagnostic ID: AIW-DIAG-test-run-comment-1',
     );
     expect(result.executionError?.category).toBe("schema");
   });
@@ -303,14 +303,14 @@ describe("executeGraph output contracts", () => {
     expect(result.steps.comment).toBeUndefined();
     expect(rec.finishes.find((finish) => finish.nodeId === "comment")?.state).toMatchObject({
       status: "fail",
-      error: "The block could not be completed.",
+      error: "The block could not be completed. (provider rejected the comment)",
       diagnosticId: "AIW-DIAG-test-run-comment-1",
     });
     expect(rec.failures).toEqual([
       {
         phase: "post_ticket_comment",
         reason:
-          "The block could not be completed. Diagnostic ID: AIW-DIAG-test-run-comment-1",
+          "The block could not be completed. (provider rejected the comment) Diagnostic ID: AIW-DIAG-test-run-comment-1",
         nodeId: "comment",
       },
     ]);
@@ -386,10 +386,64 @@ describe("executeGraph output contracts", () => {
       {
         phase: "post_ticket_comment",
         reason:
-          "The block could not be completed. Diagnostic ID: AIW-DIAG-test-run-comment-1",
+          "The block could not be completed. (provider rejected the comment) Diagnostic ID: AIW-DIAG-test-run-comment-1",
         nodeId: "comment",
       },
     ]);
+  });
+});
+
+describe("executeGraph protocol diagnostics", () => {
+  it("logs one stable structured event and omits protocol detail from run state", async () => {
+    const graph = graphFrom(
+      [node("trig", "trigger_ticket_ai"), node("impl", "implementation_agent")],
+      [{ from: "trig", to: "impl" }],
+    );
+    const rec = makeRecorder();
+    const diagnostic = {
+      provider: "codex" as const,
+      packageName: "@openai/codex",
+      cliVersion: "0.144.6",
+      protocol: "codex-jsonl-0.144.6",
+      phase: "impl",
+      failureKind: "invalid_json" as const,
+      exitCode: 0,
+      stderrTail: "redacted detail",
+    };
+    const onExecutionError = vi.fn();
+
+    const result = await executeGraphWithContractValidation({
+      graph,
+      entryTriggerId: "trig",
+      triggerOutput: { status: "fired", ticketKey: "AIW-106" },
+      executeBlock: async () => executionError("internal parser detail", {
+        category: "parsing",
+        message: "The current agent phase returned an invalid structured response.",
+        phase: "impl",
+        diagnostic,
+      }),
+      hooks: { ...rec.hooks, onExecutionError },
+    });
+
+    expect(onExecutionError).toHaveBeenCalledTimes(1);
+    expect(onExecutionError).toHaveBeenCalledWith({
+      diagnosticId: "AIW-DIAG-test-run-impl-1",
+      nodeId: "impl",
+      attempt: 1,
+      category: "parsing",
+      phase: "impl",
+      detail: "internal parser detail",
+      agentProtocol: diagnostic,
+    });
+    expect(result.executionError).toEqual({
+      category: "parsing",
+      message: "The current agent phase returned an invalid structured response.",
+      phase: "impl",
+      diagnosticId: "AIW-DIAG-test-run-impl-1",
+      nodeId: "impl",
+      attempt: 1,
+    });
+    expect(JSON.stringify(result.executionError)).not.toContain("redacted detail");
   });
 });
 
@@ -616,7 +670,7 @@ describe("executeGraph branch", () => {
     expect(rec.failures[0].phase).toBe("branch");
     expect(rec.failures[0].nodeId).toBe("br");
     expect(rec.failures[0].reason).toBe(
-      "The workflow engine could not continue. Diagnostic ID: AIW-DIAG-test-run-br-1",
+      "The workflow engine could not continue. (steps.trig.output.failures: expected boolean, got array) Diagnostic ID: AIW-DIAG-test-run-br-1",
     );
     expect(finishStatuses(rec, "br")).toEqual(["fail"]);
     expect(result.steps.br).toBeUndefined();
@@ -852,7 +906,7 @@ describe("executeGraph loop", () => {
 
     expect(result.outcome).toBe("stopped");
     expect(rec.failures[0]?.reason).toBe(
-      "The workflow engine could not continue. Diagnostic ID: AIW-DIAG-test-run-waiting-2",
+      "The workflow engine could not continue. (workflow exceeded the maximum of 2 block executions) Diagnostic ID: AIW-DIAG-test-run-waiting-2",
     );
   });
 });
@@ -888,7 +942,7 @@ describe("executeGraph failure port override", () => {
     expect(calls).toEqual(["checks", "recover"]);
     expect(rec.failures).toHaveLength(1);
     expect(finishStatuses(rec, "checks")).toEqual(["fail"]);
-    expect(rec.finishes[0].state.error).toBe("The checks could not be started.");
+    expect(rec.finishes[0].state.error).toBe("The checks could not be started. (lint broke)");
     expect(result.steps.checks).toBeUndefined();
     expect(result.executionError?.diagnosticId).toBe(
       "AIW-DIAG-test-run-checks-1",
@@ -941,7 +995,7 @@ describe("executeGraph failure port override", () => {
       {
         phase: "checks",
         reason:
-          "An external service could not complete this block. Diagnostic ID: AIW-DIAG-test-run-checks-1",
+          "An external service could not complete this block. (provider rejected checks) Diagnostic ID: AIW-DIAG-test-run-checks-1",
         nodeId: "checks",
       },
     ]);
@@ -966,7 +1020,7 @@ describe("executeGraph failure port override", () => {
     expect(rec.failures).toHaveLength(1);
     expect(rec.failures[0].phase).toBe("checks");
     expect(rec.failures[0].reason).toBe(
-      "The checks could not be started. Diagnostic ID: AIW-DIAG-test-run-checks-1",
+      "The checks could not be started. (lint broke) Diagnostic ID: AIW-DIAG-test-run-checks-1",
     );
   });
 });
@@ -1151,6 +1205,42 @@ describe("executeGraph terminate", () => {
   });
 });
 
+describe("executionError message derivation", () => {
+  it("keeps an explicit safe message and ignores the detail", () => {
+    const { error } = executionError("Credit balance is too low", {
+      category: "provider",
+      message: "A curated caller message.",
+    });
+    expect(error.message).toBe("A curated caller message.");
+    expect(error.detail).toBe("Credit balance is too low");
+  });
+
+  it("derives the curated billing message for a provider credit failure", () => {
+    const { error } = executionError("Credit balance is too low", {
+      category: "provider",
+    });
+    expect(error.message).toBe(
+      "The AI provider rejected the request: the account credit or billing balance is too low.",
+    );
+    // detail is untouched so server logs still see the raw cause.
+    expect(error.detail).toBe("Credit balance is too low");
+  });
+
+  it("appends a sanitized snippet for an unknown provider cause", () => {
+    const { error } = executionError("the upstream socket hung up", {
+      category: "provider",
+    });
+    expect(error.message).toBe(
+      "An external service could not complete this block. (the upstream socket hung up)",
+    );
+  });
+
+  it("falls back to the plain generic text when detail is empty", () => {
+    const { error } = executionError("   ", { category: "provider" });
+    expect(error.message).toBe("An external service could not complete this block.");
+  });
+});
+
 describe("executeGraph multi-trigger", () => {
   it("walks only the entry trigger's chain", async () => {
     const graph = graphFrom(
@@ -1208,7 +1298,7 @@ describe("executeGraph execution cap", () => {
     expect(rec.failures).toHaveLength(1);
     expect(rec.failures[0].phase).toBe("engine");
     expect(rec.failures[0].reason).toBe(
-      "The workflow engine could not continue. Diagnostic ID: AIW-DIAG-test-run-body-3",
+      "The workflow engine could not continue. (workflow exceeded the maximum of 5 block executions) Diagnostic ID: AIW-DIAG-test-run-body-3",
     );
   });
 });
@@ -1287,7 +1377,7 @@ describe("executeGraph steps propagation", () => {
       {
         phase: "bindings",
         reason:
-          "A block input could not be resolved. Diagnostic ID: AIW-DIAG-test-run-target-1",
+          'A block input could not be resolved. (binding "trigger.missing" could not be resolved) Diagnostic ID: AIW-DIAG-test-run-target-1',
         nodeId: "target",
       },
     ]);

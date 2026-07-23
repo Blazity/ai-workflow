@@ -1,4 +1,4 @@
-import { and, eq, ne, sql } from "drizzle-orm";
+import { and, eq, isNull, ne, notInArray, or, sql } from "drizzle-orm";
 import type { Db } from "../../db/client.js";
 import { workflowRuns } from "../../db/schema.js";
 import type {
@@ -277,6 +277,35 @@ export async function recordBlockStatuses(
         updatedAt: sql`now()`,
       },
     });
+}
+
+/**
+ * Commits a run's authoritative "failed" status the moment its own
+ * failure-handling backlog move is about to fire a Jira webhook. The bot moving
+ * a failed ticket out of the AI column triggers the "ticket left the AI column"
+ * webhook, which would otherwise race in and cancel this still-finalizing run,
+ * flipping its world status to "cancelled" (stored as "blocked"), a genuine
+ * failure the errors KPI never counts. Recording "failed" first makes the
+ * outcome durable before that self-triggered cancel can land: the cron never
+ * downgrades a frozen status, so the run stays "failed". Guarded to only
+ * advance an in-flight row and never clobber an already-frozen outcome.
+ */
+export async function markRunFailedOnSelfMove(db: Db, runId: string): Promise<void> {
+  await db
+    .update(workflowRuns)
+    .set({ status: "failed", updatedAt: sql`now()` })
+    .where(
+      and(
+        eq(workflowRuns.runId, runId),
+        // A NULL status is an in-flight row too: `status NOT IN (...)` is NULL
+        // (not true) for NULL, so without this a null-status run would be
+        // skipped and its failure lost.
+        or(
+          isNull(workflowRuns.status),
+          notInArray(workflowRuns.status, ["success", "failed", "blocked", "awaiting"]),
+        ),
+      ),
+    );
 }
 
 /**

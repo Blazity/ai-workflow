@@ -4,6 +4,7 @@ import { env } from "../../../env.js";
 import { IssueTrackerNotFoundError } from "../../adapters/issue-tracker/types.js";
 import { resumeClarificationFromComments } from "../../clarifications/resume-from-comments.js";
 import { getDb } from "../../db/client.js";
+import { isRunRecordedFailed } from "../../db/queries/runs-read.js";
 import { createAdapters } from "../../lib/adapters.js";
 import { cancelRun } from "../../lib/cancel-run.js";
 import { dispatchTicket } from "../../lib/dispatch.js";
@@ -194,6 +195,39 @@ export default defineEventHandler(async (event) => {
         ticketKey,
         reason: result.reason,
       };
+    }
+
+    // The bot's OWN failure handling moves a failed run's ticket to the
+    // backlog, which fires this exact webhook. Refuse to cancel a run whose
+    // failure is already recorded: cancelling would overwrite its "failed"
+    // outcome with a "cancelled" world status the errors KPI never counts. A
+    // human abort still cancels, because a live run is never recorded "failed".
+    const subjectKey = ticketSubjectKey("jira", ticketKey);
+    const activeRun = await adapters.runRegistry.get(subjectKey).catch(() => null);
+    if (activeRun?.runId) {
+      let recordedFailed: boolean;
+      try {
+        recordedFailed = await isRunRecordedFailed(getDb(), activeRun.runId);
+      } catch (lookupError) {
+        // Do not guess on a lookup failure: treating it as "not failed" would let
+        // this self-triggered webhook cancel a genuinely failed run (the exact
+        // masking bug). Surface a retryable error so the webhook is redelivered.
+        logger.warn(
+          { ticketKey, runId: activeRun.runId, err: String(lookupError) },
+          "webhook_run_failed_lookup_failed",
+        );
+        throw createError({
+          statusCode: 503,
+          statusMessage: "Run status lookup failed",
+        });
+      }
+      if (recordedFailed) {
+        logger.info(
+          { ticketKey, runId: activeRun.runId, payloadStatus: ticketStatus },
+          "webhook_skip_cancel_run_already_failed",
+        );
+        return { status: "ignored", reason: "run_already_failed", ticketKey };
+      }
     }
 
     const cancellation = await cancelTrackedRun(

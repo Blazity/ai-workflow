@@ -13,6 +13,7 @@ const state = vi.hoisted(() => ({
   dispatch: vi.fn(),
   cancel: vi.fn(),
   resume: vi.fn(),
+  isRunRecordedFailed: vi.fn(),
 }));
 
 vi.mock("../../../env.js", () => ({ env: state.env }));
@@ -22,6 +23,9 @@ vi.mock("../../lib/cancel-run.js", () => ({ cancelRun: state.cancel }));
 vi.mock("../../db/client.js", () => ({ getDb: () => ({}) }));
 vi.mock("../../clarifications/resume-from-comments.js", () => ({
   resumeClarificationFromComments: (...args: unknown[]) => state.resume(...args),
+}));
+vi.mock("../../db/queries/runs-read.js", () => ({
+  isRunRecordedFailed: state.isRunRecordedFailed,
 }));
 
 const handler = (await import("./jira.post.js")).default;
@@ -96,6 +100,7 @@ describe("POST /webhooks/jira", () => {
     state.env.JIRA_WEBHOOK_SECRET = "secret";
     state.cancel.mockResolvedValue(true);
     state.dispatch.mockResolvedValue({ started: false, reason: "not_applicable" });
+    state.isRunRecordedFailed.mockResolvedValue(false);
   });
 
   it("rejects unauthenticated configuration", async () => {
@@ -133,6 +138,38 @@ describe("POST /webhooks/jira", () => {
       connected.runRegistry,
       connected.issueTracker,
     );
+  });
+
+  it("does not cancel a run whose failure is already recorded (its own backlog move)", async () => {
+    // The bot's failure handling moved the ticket to the backlog, firing this
+    // webhook. The run already recorded 'failed', so cancelling would overwrite
+    // that with a 'cancelled' status the errors KPI never counts.
+    const connected = adapters();
+    state.createAdapters.mockReturnValue(connected);
+    state.isRunRecordedFailed.mockResolvedValue(true);
+
+    const response = await app()(request({ actor: "human-account" }));
+
+    await expect(response.json()).resolves.toMatchObject({
+      status: "ignored",
+      reason: "run_already_failed",
+      ticketKey: "PROJ-42",
+    });
+    expect(state.isRunRecordedFailed).toHaveBeenCalledWith(expect.anything(), "run-1");
+    expect(state.cancel).not.toHaveBeenCalled();
+  });
+
+  it("surfaces a retryable error when the failed-status lookup fails (does not cancel)", async () => {
+    // A transient lookup failure must not be read as "not failed": guessing
+    // would cancel a genuinely failed run. Return a retryable 503 instead.
+    const connected = adapters();
+    state.createAdapters.mockReturnValue(connected);
+    state.isRunRecordedFailed.mockRejectedValue(new Error("db down"));
+
+    const response = await app()(request({ actor: "human-account" }));
+
+    expect(response.status).toBe(503);
+    expect(state.cancel).not.toHaveBeenCalled();
   });
 
   it.each([

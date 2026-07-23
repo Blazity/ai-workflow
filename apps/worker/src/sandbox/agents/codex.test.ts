@@ -216,7 +216,9 @@ describe("CodexAgentAdapter.buildPhaseScript", () => {
   it("removes stale phase artifacts before invoking codex", () => {
     const paths = adapter.artifactPaths("impl");
     const s = adapter.buildPhaseScript({ phase: "impl", model: "gpt-5-codex", paths });
-    expect(s).toContain(`rm -f ${paths.sentinel} ${paths.stdout} ${paths.stderr} ${paths.structuredOutput}`);
+    expect(s).toContain(
+      `rm -f ${paths.sentinel} ${paths.stdout} ${paths.stderr} ${paths.exitCode} ${paths.structuredOutput}`,
+    );
     expect(s).toContain(`touch ${paths.sentinel}`);
   });
 

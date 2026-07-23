@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   artifactPaths: vi.fn(),
   buildPhaseScript: vi.fn(),
   parseAgentOutput: vi.fn(),
+  parseAgentOutputProtocol: vi.fn(),
   extractUsage: vi.fn(),
   writeFiles: vi.fn(),
   runCommand: vi.fn().mockResolvedValue({ exitCode: 0 }),
@@ -37,10 +38,17 @@ vi.mock("@vercel/sandbox", () => ({
 vi.mock("./poll-phase.js", () => ({ pollPhaseUntilDone: mocks.pollPhaseUntilDone }));
 vi.mock("../../sandbox/agents/index.js", () => ({
   createAgentAdapter: vi.fn(() => ({
+    cliSpec: {
+      kind: "claude",
+      packageName: "@anthropic-ai/claude-code",
+      version: "2.1.216",
+      executable: "claude",
+      protocol: "claude-json-2.1.216",
+    },
     setCommitGuard: mocks.setCommitGuard,
     artifactPaths: mocks.artifactPaths,
     buildPhaseScript: mocks.buildPhaseScript,
-    parseAgentOutput: mocks.parseAgentOutput,
+    parseAgentOutputProtocol: mocks.parseAgentOutputProtocol,
     extractUsage: mocks.extractUsage,
   })),
 }));
@@ -75,6 +83,7 @@ function pathsFor(phase: string) {
     input: `/tmp/${phase}-requirements.md`,
     stdout: `/tmp/${phase}-stdout.txt`,
     stderr: `/tmp/${phase}-stderr.txt`,
+    exitCode: `/tmp/${phase}-exit-code`,
     sentinel: `/tmp/${phase}-done`,
     structuredOutput: null,
   };
@@ -100,7 +109,16 @@ describe("fix_agent execute", () => {
     mocks.artifactPaths.mockImplementation((phase: string) => pathsFor(phase));
     mocks.buildPhaseScript.mockReturnValue("#!/bin/bash");
     mocks.checkPhaseDone.mockResolvedValue(true);
-    mocks.collectPhase.mockResolvedValue({ raw: "raw", structured: null });
+    mocks.collectPhase.mockResolvedValue({
+      stdout: "raw",
+      stderr: "",
+      structuredOutput: null,
+      exitCode: 0,
+    });
+    mocks.parseAgentOutputProtocol.mockImplementation(() => ({
+      ok: true,
+      value: mocks.parseAgentOutput(),
+    }));
     mocks.extractUsage.mockReturnValue(usage);
     mocks.ensureWorkspace.mockImplementation(async (ctx) => {
       ctx.sandboxId ??= "sbx-auto";
@@ -115,7 +133,15 @@ describe("fix_agent execute", () => {
       };
     });
     mocks.inspectFixWorkspace.mockResolvedValue({ commits: [], unresolvedConflicts: [] });
-    mocks.runCommand.mockResolvedValue({ cmdId: "cmd-2", exitCode: null });
+    mocks.runCommand.mockImplementation((command) =>
+      command === "chmod"
+        ? {
+            exitCode: 0,
+            stdout: vi.fn().mockResolvedValue(""),
+            stderr: vi.fn().mockResolvedValue(""),
+          }
+        : { cmdId: "cmd-2", exitCode: null },
+    );
     mocks.pollPhaseUntilDone.mockResolvedValue(true);
   });
 
@@ -353,6 +379,30 @@ describe("fix_agent execute", () => {
     }
   });
 
+  it("maps wrapper launch setup failure to a provider protocol error", async () => {
+    mocks.runCommand.mockImplementation((command) =>
+      command === "chmod"
+        ? {
+            exitCode: 1,
+            stdout: vi.fn().mockResolvedValue(""),
+            stderr: vi.fn().mockResolvedValue("permission denied"),
+          }
+        : { cmdId: "cmd-2", exitCode: null },
+    );
+
+    const result = await execute(makeNode("fix_agent"), {}, makeCtx());
+
+    expect(result.kind).toBe("execution_error");
+    if (result.kind === "execution_error") {
+      expect(result.error).toMatchObject({
+        category: "provider",
+        message: "The current agent phase could not be completed.",
+        diagnostic: { failureKind: "setup_failed", stderrTail: "permission denied" },
+      });
+    }
+    expect(mocks.pollPhaseUntilDone).not.toHaveBeenCalled();
+  });
+
   it.each(runControlErrorCases())("rethrows %s from Fix execution", async (_label, error) => {
     mocks.pollPhaseUntilDone.mockRejectedValue(error);
 
@@ -384,7 +434,7 @@ describe("fix_agent execute", () => {
       kind: "execution_error",
       error: {
         category: "timeout",
-        message: "The block timed out.",
+        message: "The block timed out. (fix phase timed out)",
         detail: "fix phase timed out",
       },
     });

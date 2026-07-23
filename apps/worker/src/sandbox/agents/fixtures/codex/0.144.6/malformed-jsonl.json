@@ -1,0 +1,12 @@
+{
+  "package": "@openai/codex",
+  "version": "0.144.6",
+  "protocol": "codex-jsonl-0.144.6",
+  "provenance": "normalized pinned-protocol sample; refresh with the capture script",
+  "artifacts": {
+    "stdout": "{\"type\":\"thread.started\",\"thread_id\":\"normalized\"}\n{malformed\n{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":4,\"cached_input_tokens\":0,\"output_tokens\":1}}",
+    "stderr": "",
+    "structuredOutput": "{\"result\":\"implemented\",\"summary\":null,\"questions\":null,\"suggestedAnswers\":null,\"error\":null}",
+    "exitCode": 0
+  }
+}
