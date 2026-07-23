@@ -101,6 +101,22 @@ export async function isRunRecordedFailed(db: Db, runId: string): Promise<boolea
   return row?.status === "failed";
 }
 
+/**
+ * True when the run has already recorded a terminal "success" outcome. Same
+ * webhook guard as isRunRecordedFailed: the bot's own success finalization
+ * moves a finished ticket to AI Review, which fires the "ticket left the AI
+ * column" webhook, and cancelling would overwrite the run's genuine success
+ * with a "cancelled" status even though the PR and ticket move already landed.
+ */
+export async function isRunRecordedSucceeded(db: Db, runId: string): Promise<boolean> {
+  const [row] = await db
+    .select({ status: workflowRuns.status })
+    .from(workflowRuns)
+    .where(eq(workflowRuns.runId, runId))
+    .limit(1);
+  return row?.status === "success";
+}
+
 const RUN_STATUSES = new Set<RunStatus>([
   "success",
   "running",
