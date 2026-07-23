@@ -55,7 +55,7 @@ async function blockFixAgentCommitGuardStep(
     await agent.setCommitGuard(sandbox, enabled);
     return { ok: true, value: undefined };
   } catch (error) {
-    const { isAgentRuntimeError } = await import("../../sandbox/agents/protocol.js");
+    const { isAgentRuntimeError } = await import("../../sandbox/agents/runtime-error.js");
     if (!isAgentRuntimeError(error)) throw error;
     return {
       ok: false,

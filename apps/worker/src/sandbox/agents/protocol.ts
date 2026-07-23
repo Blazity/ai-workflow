@@ -34,27 +34,10 @@ export const AGENT_CLI_SPECS = {
   },
 } as const satisfies Record<AgentCliSpec["kind"], AgentCliSpec>;
 
-export class AgentRuntimeError extends Error {
-  readonly category: AgentProtocolFailureCategory;
-  readonly safeMessage: string;
-  readonly diagnostic: AgentProtocolDiagnostic;
+import { AgentRuntimeError } from "./runtime-error.js";
 
-  constructor(input: {
-    category: AgentProtocolFailureCategory;
-    message: string;
-    diagnostic: AgentProtocolDiagnostic;
-  }) {
-    super(input.message);
-    this.name = "AgentRuntimeError";
-    this.category = input.category;
-    this.safeMessage = input.message;
-    this.diagnostic = input.diagnostic;
-  }
-}
-
-export function isAgentRuntimeError(error: unknown): error is AgentRuntimeError {
-  return error instanceof AgentRuntimeError;
-}
+export { AgentRuntimeError };
+export { isAgentRuntimeError } from "./runtime-error.js";
 
 export async function installAndVerifyCli(
   sandbox: RunnableSandbox,
