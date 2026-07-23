@@ -110,6 +110,45 @@ describe("fetchRunDetailFromDb", () => {
     expect(res?.steps.map((s) => s.name)).toEqual(["provisionSandbox"]);
   });
 
+  it("sanitizes historical persisted step errors before returning them", async () => {
+    await db.insert(workflowRuns).values({
+      runId: "legacy-errors",
+      status: "failed",
+      startedAt: new Date("2026-06-16T10:00:00Z"),
+      steps: [
+        {
+          stepId: "s1",
+          name: "legacyStep",
+          rawName: "step//legacyStep",
+          status: "failed",
+          attempt: 1,
+          createdAt: "2026-06-16T10:00:00Z",
+          startedAt: "2026-06-16T10:00:00Z",
+          completedAt: "2026-06-16T10:00:01Z",
+          startOffsetMs: 0,
+          durationMs: 1_000,
+          error: {
+            message: "Error: legacy provider failure",
+            code: "INTERNAL_PROVIDER_CODE",
+            stack: "SECRET_STACK at /srv/provider.ts:7:3",
+          },
+        },
+      ],
+    });
+
+    const result = await fetchRunDetailFromDb({
+      db,
+      runId: "legacy-errors",
+      ...base,
+    });
+
+    expect(result?.steps[0]?.error).toEqual({
+      message: "legacy provider failure",
+    });
+    expect(JSON.stringify(result?.steps)).not.toContain("SECRET_STACK");
+    expect(JSON.stringify(result?.steps)).not.toContain("/srv/provider.ts");
+  });
+
   it("normalizes a still-running step in a finished run to completed", async () => {
     await db.insert(workflowRuns).values({
       runId: "r1",

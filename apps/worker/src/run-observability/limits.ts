@@ -1,0 +1,1 @@
+export const MAX_REPLAY_ATTEMPTS_PER_RUN = 1_000;

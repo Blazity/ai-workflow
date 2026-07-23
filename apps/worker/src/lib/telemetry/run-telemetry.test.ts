@@ -285,6 +285,28 @@ describe("two writers converge on one row", () => {
 });
 
 describe("recordBlockStatuses", () => {
+  it("persists summary-only block state without legacy output values", async () => {
+    await recordBlockStatuses(
+      db,
+      blockWrite({
+        blockStatuses: {
+          b1: {
+            status: "ok",
+            attempt: 2,
+            output: {
+              status: "ok",
+              body: "sensitive execution output",
+            },
+          },
+        },
+      }),
+    );
+
+    expect((await row("wrun_1")).blockStatuses).toEqual({
+      b1: { status: "ok", attempt: 2 },
+    });
+  });
+
   it("stores the frozen prompt manifest and later writers preserve it", async () => {
     const promptManifest: ResolvedPromptReference[] = [{
       promptId: 42,

@@ -3,6 +3,7 @@ import type { RunDetail, RunStep } from "@shared/contracts";
 import type { Db } from "../client.js";
 import { workflowRuns } from "../schema.js";
 import { coerceStatus } from "./runs-read.js";
+import { sanitizeRunSteps } from "../../lib/overview/sanitize-run-detail.js";
 
 /**
  * Postgres fallback for the single-run trace. The Vercel Workflow step waterfall
@@ -125,9 +126,10 @@ export async function fetchRunDetailFromDb(
 
   const persisted = Array.isArray(row.steps) ? (row.steps as RunStep[]) : null;
   if (persisted && persisted.length > 0) {
+    const safePersisted = sanitizeRunSteps(persisted) ?? [];
     const steps = TERMINAL.has(run.status)
-      ? normalizeFinishedSteps(persisted, run.completedAt)
-      : persisted;
+      ? normalizeFinishedSteps(safePersisted, run.completedAt)
+      : safePersisted;
     return { run, steps, hasRealSteps: true };
   }
   return { run, steps: phasesToSteps(row.phases, base), hasRealSteps: false };

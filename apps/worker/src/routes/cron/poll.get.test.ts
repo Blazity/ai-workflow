@@ -19,6 +19,7 @@ const mocks = vi.hoisted(() => ({
   dispatchPlanApproved: vi.fn(),
   drainOldestPendingTrigger: vi.fn(),
   listPendingTriggers: vi.fn(),
+  deleteExpiredRunObservations: vi.fn(),
   resumeClarificationFromComments: vi.fn(),
 }));
 
@@ -95,6 +96,10 @@ vi.mock("../../lib/dispatch-trigger.js", () => ({
 vi.mock("../../lib/trigger-delivery-store.js", () => ({
   listPendingTriggers: (...args: any[]) => mocks.listPendingTriggers(...args),
 }));
+vi.mock("../../run-observability/store.js", () => ({
+  deleteExpiredRunObservations: (...args: any[]) =>
+    mocks.deleteExpiredRunObservations(...args),
+}));
 vi.mock("../../post-pr-gate/gate-store.js", () => ({
   GateStore: class {
     purgeExpired = vi.fn().mockResolvedValue(undefined);
@@ -160,6 +165,10 @@ describe("cron clarification recovery ordering", () => {
     mocks.dispatchPlanApproved.mockResolvedValue({ status: "run_in_flight" });
     mocks.drainOldestPendingTrigger.mockResolvedValue(null);
     mocks.listPendingTriggers.mockResolvedValue([]);
+    mocks.deleteExpiredRunObservations.mockResolvedValue({
+      deleted: 0,
+      runIds: [],
+    });
     mocks.resumeClarificationFromComments.mockResolvedValue({ status: "no_clarification" });
   });
 
@@ -185,9 +194,43 @@ describe("cron clarification recovery ordering", () => {
     );
     await expect(response.json()).resolves.toMatchObject({
       pendingRecovered: 0,
+      replayRetention: { deleted: 0 },
       triggerRecovery: {
         released: { attempted: 0, started: 0, errors: 0 },
       },
+    });
+    expect(mocks.deleteExpiredRunObservations).toHaveBeenCalledWith({
+      db: { db: true },
+      limit: 100,
+    });
+  });
+
+  it("deletes one bounded replay-retention batch without failing the poll", async () => {
+    mocks.deleteExpiredRunObservations.mockResolvedValue({
+      deleted: 100,
+      runIds: Array.from({ length: 100 }, (_, index) => `run-${index}`),
+    });
+
+    const response = await request();
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      status: "ok",
+      replayRetention: { deleted: 100 },
+    });
+  });
+
+  it("keeps polling when replay-retention cleanup fails", async () => {
+    mocks.deleteExpiredRunObservations.mockRejectedValue(
+      new Error("database unavailable"),
+    );
+
+    const response = await request();
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      status: "ok",
+      replayRetention: { deleted: 0 },
     });
   });
 

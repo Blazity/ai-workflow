@@ -6,7 +6,10 @@ import type {
   RunStatus,
   StepStatus,
 } from "@shared/contracts";
-import { EXECUTION_DIAGNOSTIC_PREFIX } from "@shared/contracts";
+import {
+  sanitizeRunError,
+  sanitizeRunSteps,
+} from "./sanitize-run-detail.js";
 
 type WorkflowStatus =
   | "pending"
@@ -100,28 +103,14 @@ function stepLabel(stepName: string): string {
 
 /** Normalize the run's `error` field (string or structured) into a RunError. */
 function normalizeRunError(error: string | RunError | undefined): RunError | null {
-  if (!error) return null;
-  if (typeof error === "string") return { message: error };
-  const diagnosticId = error.code?.startsWith(EXECUTION_DIAGNOSTIC_PREFIX)
-    ? error.code
-    : error.message.match(/Diagnostic ID: (AIW-DIAG-[A-Za-z0-9._:-]+)/)?.[1];
-  if (diagnosticId) {
-    return { message: error.message, code: diagnosticId };
-  }
-  return error;
+  return sanitizeRunError(error, "Workflow execution failed.");
 }
 
 export function sanitizeRunStepsForDiagnosticError(
   steps: RunStep[] | null,
   error: RunError | null,
 ): RunStep[] | null {
-  if (!steps || !error?.code?.startsWith(EXECUTION_DIAGNOSTIC_PREFIX)) {
-    return steps;
-  }
-  const safeError = { message: error.message, code: error.code };
-  return steps.map((step) =>
-    step.error ? { ...step, error: safeError } : step,
-  );
+  return sanitizeRunSteps(steps, error);
 }
 
 export interface CollectRunDetailOptions {
@@ -177,7 +166,7 @@ export async function collectRunDetail(
         completedAt: s.completedAt?.toISOString() ?? null,
         startOffsetMs: Math.max(0, start - runStart),
         durationMs,
-        error: s.error ?? null,
+        error: sanitizeRunError(s.error, "Workflow step failed."),
       };
     })
     .sort((a, b) => a.startOffsetMs - b.startOffsetMs);

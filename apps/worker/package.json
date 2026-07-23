@@ -19,6 +19,8 @@
     "test:e2e:capacity": "pnpm build:shared && vitest run --config e2e/vitest.e2e.config.ts --project capacity",
     "test:e2e:harness-profiles": "pnpm build:shared && node --import tsx e2e/harness-profiles/preview-canary.ts",
     "test:e2e:harness-profiles:dry": "vitest run src/preview-harness-canary.test.ts",
+    "test:e2e:replay": "pnpm build:shared && node --import tsx e2e/replay/preview-canary.ts",
+    "test:e2e:replay:dry": "vitest run src/preview-harness-canary.test.ts src/preview-replay-canary.test.ts",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "tsx scripts/db-migrate.ts",
     "seed:auth-user": "tsx scripts/seed-auth-user.ts",

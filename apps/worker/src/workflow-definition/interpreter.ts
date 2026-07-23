@@ -182,6 +182,8 @@ export interface BlockExecutionContext {
   attempt?: number;
   clarificationAnswer?: string;
   cancellation?: import("./invocation-context.js").V2InvocationCancellation;
+  /** V2 replay-safe diagnostic capture for this exact invocation. */
+  observations?: import("./invocation-context.js").V2InvocationObservationHooks;
   /**
    * V2 Harness Profile budget seam. The workflow-level budget remains on
    * EngineCtx; this observer additionally enforces only the profile selected

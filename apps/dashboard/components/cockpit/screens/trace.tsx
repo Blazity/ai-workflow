@@ -6,6 +6,10 @@ import { useRouter } from "next/navigation";
 
 import { FlameGraph } from "@/components/flame-graph";
 import { CkCard, CkKPI, CkChip, CkStatusPill } from "@/components/ui";
+import {
+  WorkflowReplay,
+  countReplayRetries,
+} from "./workflow-replay";
 import { answerPanelMode } from "@/lib/answer-panel-mode";
 import { readErrorMessage } from "@/lib/api/error-message";
 import { runHref } from "@/lib/run-href";
@@ -18,6 +22,7 @@ import type {
   RunStatus,
   RunStep,
   StepStatus,
+  WorkflowRunReplayResponse,
 } from "@shared/contracts";
 
 /* ───────────────────── RUN TRACE ───────────────────── */
@@ -126,9 +131,11 @@ function fmtClock(iso: string | null): string {
 export function TraceScreen({
   runId,
   data,
+  replay,
 }: {
   runId: string;
   data: RunDetailResponse;
+  replay: WorkflowRunReplayResponse;
 }) {
   const router = useRouter();
   const onBack = () => router.push("/runs");
@@ -141,19 +148,52 @@ export function TraceScreen({
         onBack={onBack}
         onTicket={onTicket}
       />
-      <TraceDetail runId={runId} data={data} />
+      <TraceDetail runId={runId} data={data} replay={replay} />
     </div>
   );
+}
+
+export function replayForRunLifecycle(
+  candidate: WorkflowRunReplayResponse,
+  runMayAdvance: boolean,
+): WorkflowRunReplayResponse {
+  const mayAdvance =
+    candidate.availability !== "expired" && runMayAdvance;
+  return candidate.mayAdvance === mayAdvance
+    ? candidate
+    : { ...candidate, mayAdvance };
 }
 
 export function TraceDetail({
   runId,
   data,
+  replay,
 }: {
   runId: string;
   data: RunDetailResponse;
+  replay: WorkflowRunReplayResponse;
 }) {
   const { run, steps } = data;
+  const runMayAdvance =
+    !!run &&
+    !["success", "failed", "blocked"].includes(run.status);
+  const normalizeReplay = React.useCallback(
+    (candidate: WorkflowRunReplayResponse): WorkflowRunReplayResponse =>
+      replayForRunLifecycle(candidate, runMayAdvance),
+    [runMayAdvance],
+  );
+  const [currentReplay, setCurrentReplay] = React.useState(() =>
+    normalizeReplay(replay),
+  );
+  React.useEffect(() => {
+    setCurrentReplay(normalizeReplay(replay));
+  }, [normalizeReplay, replay, runId]);
+  const handleReplayResponse = React.useCallback(
+    (candidate: WorkflowRunReplayResponse) => {
+      setCurrentReplay(normalizeReplay(candidate));
+    },
+    [normalizeReplay],
+  );
 
   // Whether the run is still in flight — drives the "Running" indicator only. The
   // auto-refresh is owned globally by CockpitShell's live-poll control (the
@@ -261,6 +301,15 @@ export function TraceDetail({
 
   const failedSteps = steps.filter((s) => s.status === "failed").length;
   const retries = steps.reduce((n, s) => n + Math.max(0, s.attempt - 1), 0);
+  const hasReplay =
+    currentReplay.availability === "available" &&
+    currentReplay.snapshot !== null;
+  const replayPending =
+    currentReplay.availability === "not_captured" &&
+    currentReplay.mayAdvance;
+  const replayFailed = currentReplay.attempts.filter(
+    (attempt) => attempt.state === "failed",
+  ).length;
 
   return (
     <div className="flex flex-col gap-4">
@@ -318,10 +367,34 @@ export function TraceDetail({
           value={run.durationSec === null ? "—" : `${run.durationSec}s`}
           sub={run.status === "running" ? "in progress" : "elapsed"}
         />
-        <CkKPI label="Phases" value={groups.length} sub="detected" />
-        <CkKPI label="Steps" value={steps.length} sub="durable" />
-        <CkKPI label="Retries" value={retries} sub="step re-attempts" />
-        <CkKPI label="Failed" value={failedSteps} sub="failed steps" />
+        <CkKPI
+          label={hasReplay ? "Blocks" : "Phases"}
+          value={
+            hasReplay
+              ? currentReplay.snapshot?.graph.nodes.length ?? 0
+              : groups.length
+          }
+          sub={hasReplay ? "captured" : "detected"}
+        />
+        <CkKPI
+          label={hasReplay ? "Attempts" : "Steps"}
+          value={hasReplay ? currentReplay.attempts.length : steps.length}
+          sub={hasReplay ? "observed" : "durable"}
+        />
+        <CkKPI
+          label="Retries"
+          value={
+            hasReplay
+              ? countReplayRetries(currentReplay.attempts)
+              : retries
+          }
+          sub={hasReplay ? "block re-attempts" : "step re-attempts"}
+        />
+        <CkKPI
+          label="Failed"
+          value={hasReplay ? replayFailed : failedSteps}
+          sub={hasReplay ? "failed attempts" : "failed steps"}
+        />
       </div>
 
       {run.error && (
@@ -329,11 +402,6 @@ export function TraceDetail({
           <div className="font-mono text-xs text-fail-fg break-all">
             {run.error.message}
           </div>
-          {run.error.stack && (
-            <pre className="mt-2 bg-[#0E1014] text-neutral-300 rounded-[3px] p-3 font-mono text-[11px] leading-[1.6] max-h-48 overflow-auto whitespace-pre-wrap">
-              {run.error.stack}
-            </pre>
-          )}
         </CkCard>
       )}
 
@@ -345,124 +413,155 @@ export function TraceDetail({
         />
       )}
 
-      <CkCard
-        eyebrow="Vercel Workflow · steps.list"
-        title="Step timeline · phases"
-        action={
-          <div className="flex flex-wrap gap-3 font-body text-xs text-neutral-700">
-            {groups.map((g) => (
-              <span key={g.name} className="flex items-center gap-1.5">
-                <span
-                  className="w-2.5 h-2.5 rounded-[1px]"
-                  style={{ background: g.color }}
-                />
-                {g.name}
-              </span>
-            ))}
+      {hasReplay || replayPending ? (
+        <WorkflowReplay
+          runId={runId}
+          initialResponse={currentReplay}
+          onResponse={handleReplayResponse}
+        />
+      ) : (
+        <>
+          <div
+            role="status"
+            className="rounded-[3px] border border-neutral-200 bg-app-bg px-3 py-2 font-body text-[12px] text-neutral-700"
+          >
+            {currentReplay.availability === "expired"
+              ? "The replay observation expired. Showing the legacy step trace."
+              : "Visual replay was not captured for this run. Showing the legacy step trace."}
           </div>
-        }
-      >
-        {steps.length === 0 ? (
-          <div className="py-6 text-center text-neutral-500 font-body text-[13px]">
-            No steps recorded for this run yet.
-          </div>
-        ) : (
-          <div className="mt-[18px] overflow-x-auto -mx-4 px-4 lg:mx-0 lg:px-0">
-            <div className="min-w-[640px] lg:min-w-0">
-              <FlameGraph
-                spans={spans}
-                width={1040}
-                rowH={30}
-                gap={4}
-                selectedId={selected?.stepId ?? undefined}
-                onSelect={onSelect}
-              />
-            </div>
-          </div>
-        )}
-      </CkCard>
-
-      {selected && (
-        <div className="flex flex-col lg:grid lg:grid-cols-[1.4fr_1fr] gap-3">
-          <CkCard eyebrow={selectedPhase ?? "step"} title={selected.name}>
-            <div className="grid grid-cols-[auto_1fr] gap-y-2 gap-x-6 font-mono text-xs">
-              <span className="text-neutral-500">step_id</span>
-              <span className="text-neutral-900 break-all">{selected.stepId}</span>
-              <span className="text-neutral-500">step_name</span>
-              <span className="text-neutral-900 break-all">{selected.rawName}</span>
-              <span className="text-neutral-500">status</span>
-              <span>
-                {selected.status === "failed" ? (
-                  <CkChip tone="failed">failed</CkChip>
-                ) : selected.status === "completed" ? (
-                  <CkChip tone="success">ok</CkChip>
-                ) : (
-                  <CkChip>{selected.status}</CkChip>
-                )}
-              </span>
-              <span className="text-neutral-500">attempt</span>
-              <span className="text-neutral-900">
-                {selected.attempt}
-                {selected.attempt > 1 && (
-                  <span className="text-burnt-orange"> · retried</span>
-                )}
-              </span>
-              <span className="text-neutral-500">started_at</span>
-              <span className="text-neutral-900">
-                +{(selected.startOffsetMs / 1000).toFixed(2)}s
-              </span>
-              <span className="text-neutral-500">duration</span>
-              <span className="text-neutral-900">{fmtMs(selected.durationMs)}</span>
-              <span className="text-neutral-500">created</span>
-              <span className="text-neutral-900">{fmtClock(selected.createdAt)}</span>
-              <span className="text-neutral-500">completed</span>
-              <span className="text-neutral-900">
-                {fmtClock(selected.completedAt)}
-              </span>
-              {selected.error && (
-                <>
-                  <span className="text-neutral-500">error</span>
-                  <span className="text-fail-fg break-all">
-                    {selected.error.message}
-                  </span>
-                </>
-              )}
-            </div>
-          </CkCard>
-
           <CkCard
-            eyebrow="Phase"
-            title={selectedPhase ?? "—"}
+            eyebrow="Vercel Workflow · steps.list"
+            title="Step timeline · phases"
             action={
-              selectedGroup && (
-                <CkChip tone={selectedGroup.failed ? "failed" : "success"}>
-                  {selectedGroup.failed ? "had failures" : "ok"}
-                </CkChip>
-              )
+              <div className="flex flex-wrap gap-3 font-body text-xs text-neutral-700">
+                {groups.map((g) => (
+                  <span key={g.name} className="flex items-center gap-1.5">
+                    <span
+                      className="w-2.5 h-2.5 rounded-[1px]"
+                      style={{ background: g.color }}
+                    />
+                    {g.name}
+                  </span>
+                ))}
+              </div>
             }
           >
-            {selectedGroup && (
-              <div className="grid grid-cols-[auto_1fr] gap-y-2 gap-x-6 font-mono text-xs">
-                <span className="text-neutral-500">steps</span>
-                <span className="text-neutral-900">
-                  {selectedGroup.steps.length}
-                </span>
-                <span className="text-neutral-500">started</span>
-                <span className="text-neutral-900">
-                  +{(selectedGroup.start / 1000).toFixed(2)}s
-                </span>
-                <span className="text-neutral-500">duration</span>
-                <span className="text-neutral-900">
-                  {fmtMs(selectedGroup.end - selectedGroup.start)}
-                </span>
+            {steps.length === 0 ? (
+              <div className="py-6 text-center text-neutral-500 font-body text-[13px]">
+                No steps recorded for this run yet.
+              </div>
+            ) : (
+              <div className="mt-[18px] overflow-x-auto -mx-4 px-4 lg:mx-0 lg:px-0">
+                <div className="min-w-[640px] lg:min-w-0">
+                  <FlameGraph
+                    spans={spans}
+                    width={1040}
+                    rowH={30}
+                    gap={4}
+                    selectedId={selected?.stepId ?? undefined}
+                    onSelect={onSelect}
+                  />
+                </div>
               </div>
             )}
-            <div className="mt-4 pt-3 border-t border-neutral-200 font-body text-[12px] text-neutral-500 leading-snug">
-              Step input &amp; output are encrypted at rest by the Workflow
-              runtime and are not viewable here.
-            </div>
           </CkCard>
-        </div>
+
+          {selected && (
+            <div className="flex flex-col lg:grid lg:grid-cols-[1.4fr_1fr] gap-3">
+              <CkCard
+                eyebrow={selectedPhase ?? "step"}
+                title={selected.name}
+              >
+                <div className="grid grid-cols-[auto_1fr] gap-y-2 gap-x-6 font-mono text-xs">
+                  <span className="text-neutral-500">step_id</span>
+                  <span className="text-neutral-900 break-all">
+                    {selected.stepId}
+                  </span>
+                  <span className="text-neutral-500">step_name</span>
+                  <span className="text-neutral-900 break-all">
+                    {selected.rawName}
+                  </span>
+                  <span className="text-neutral-500">status</span>
+                  <span>
+                    {selected.status === "failed" ? (
+                      <CkChip tone="failed">failed</CkChip>
+                    ) : selected.status === "completed" ? (
+                      <CkChip tone="success">ok</CkChip>
+                    ) : (
+                      <CkChip>{selected.status}</CkChip>
+                    )}
+                  </span>
+                  <span className="text-neutral-500">attempt</span>
+                  <span className="text-neutral-900">
+                    {selected.attempt}
+                    {selected.attempt > 1 && (
+                      <span className="text-burnt-orange"> · retried</span>
+                    )}
+                  </span>
+                  <span className="text-neutral-500">started_at</span>
+                  <span className="text-neutral-900">
+                    +{(selected.startOffsetMs / 1000).toFixed(2)}s
+                  </span>
+                  <span className="text-neutral-500">duration</span>
+                  <span className="text-neutral-900">
+                    {fmtMs(selected.durationMs)}
+                  </span>
+                  <span className="text-neutral-500">created</span>
+                  <span className="text-neutral-900">
+                    {fmtClock(selected.createdAt)}
+                  </span>
+                  <span className="text-neutral-500">completed</span>
+                  <span className="text-neutral-900">
+                    {fmtClock(selected.completedAt)}
+                  </span>
+                  {selected.error && (
+                    <>
+                      <span className="text-neutral-500">error</span>
+                      <span className="text-fail-fg break-all">
+                        {selected.error.message}
+                      </span>
+                    </>
+                  )}
+                </div>
+              </CkCard>
+
+              <CkCard
+                eyebrow="Phase"
+                title={selectedPhase ?? "—"}
+                action={
+                  selectedGroup && (
+                    <CkChip
+                      tone={selectedGroup.failed ? "failed" : "success"}
+                    >
+                      {selectedGroup.failed ? "had failures" : "ok"}
+                    </CkChip>
+                  )
+                }
+              >
+                {selectedGroup && (
+                  <div className="grid grid-cols-[auto_1fr] gap-y-2 gap-x-6 font-mono text-xs">
+                    <span className="text-neutral-500">steps</span>
+                    <span className="text-neutral-900">
+                      {selectedGroup.steps.length}
+                    </span>
+                    <span className="text-neutral-500">started</span>
+                    <span className="text-neutral-900">
+                      +{(selectedGroup.start / 1000).toFixed(2)}s
+                    </span>
+                    <span className="text-neutral-500">duration</span>
+                    <span className="text-neutral-900">
+                      {fmtMs(selectedGroup.end - selectedGroup.start)}
+                    </span>
+                  </div>
+                )}
+                <div className="mt-4 pt-3 border-t border-neutral-200 font-body text-[12px] text-neutral-500 leading-snug">
+                  Step input &amp; output are encrypted at rest by the Workflow
+                  runtime and are not viewable here.
+                </div>
+              </CkCard>
+            </div>
+          )}
+        </>
       )}
     </div>
   );

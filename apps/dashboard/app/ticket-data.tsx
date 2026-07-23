@@ -3,7 +3,11 @@ import { TicketScreen } from "@/components/cockpit/screens/ticket";
 import { TicketMobileScreen } from "@/components/cockpit/mobile/screens/ticket-mobile";
 import { TraceDetail } from "@/components/cockpit/screens/trace";
 import { CkCard } from "@/components/ui";
-import { getTicketRuns, getRunDetail } from "@/lib/api/ticket-runs";
+import {
+  getTicketRuns,
+  getRunDetail,
+  getRunReplay,
+} from "@/lib/api/ticket-runs";
 import { pickSelectedRunId } from "@/lib/ticket";
 
 /** Header rollup + runs rail (desktop). Depends only on the ticket, not `?run=`. */
@@ -51,6 +55,9 @@ export async function RunDetailData({
       </CkCard>
     );
   }
-  const detail = await getRunDetail(runId);
-  return <TraceDetail runId={runId} data={detail} />;
+  const [detail, replay] = await Promise.all([
+    getRunDetail(runId),
+    getRunReplay(runId),
+  ]);
+  return <TraceDetail runId={runId} data={detail} replay={replay} />;
 }

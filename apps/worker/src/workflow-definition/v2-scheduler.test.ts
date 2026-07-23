@@ -85,6 +85,76 @@ describe("v2 runtime graph", () => {
 });
 
 describe("executeV2Graph edge tokens", () => {
+  it("reports the activated trigger and every selected fan-out edge by stable ID", async () => {
+    const triggers: unknown[] = [];
+    const finishes: unknown[] = [];
+    const result = await executeV2Graph({
+      definition: definition(
+        [
+          node("trigger", "trigger_ticket_ai"),
+          node("branch", "branch", {
+            condition: { kind: "lit", value: true },
+          }),
+          node("one", "generic_agent"),
+          node("two", "generic_agent"),
+        ],
+        [
+          { id: "trigger-branch", from: "trigger", to: "branch" },
+          {
+            id: "branch-one",
+            from: "branch",
+            fromPort: "true",
+            to: "one",
+          },
+          {
+            id: "branch-two",
+            from: "branch",
+            fromPort: "true",
+            to: "two",
+          },
+        ],
+      ),
+      entryTriggerId: "trigger",
+      triggerOutput: { status: "ok", ticket: { key: "AIW-134" } },
+      hooks: {
+        onTriggerActivated(event) {
+          triggers.push(event);
+        },
+        onNodeFinish(event) {
+          finishes.push(event);
+        },
+      },
+      executeBlock: async (current) => ({
+        kind: "next",
+        output: successfulOutput(current),
+      }),
+    });
+
+    expect(result.outcome).toBe("completed");
+    expect(triggers).toEqual([
+      expect.objectContaining({
+        nodeId: "trigger",
+        attempt: 1,
+        activationScopeId: "root",
+        output: { status: "ok", ticket: { key: "AIW-134" } },
+        selectedTransition: {
+          port: "out",
+          edgeIds: ["trigger-branch"],
+        },
+      }),
+    ]);
+    expect(finishes).toContainEqual(
+      expect.objectContaining({
+        nodeId: "branch",
+        runtimeState: "completed",
+        selectedTransition: {
+          port: "true",
+          edgeIds: ["branch-one", "branch-two"],
+        },
+      }),
+    );
+  });
+
   it("runs all fan-out targets and waits for every fan-in edge to resolve", async () => {
     const first = deferred<BlockExecutionResult>();
     const second = deferred<BlockExecutionResult>();
@@ -143,6 +213,11 @@ describe("executeV2Graph edge tokens", () => {
 
   it("propagates inactive Branch paths so a join does not wait forever", async () => {
     const calls: string[] = [];
+    const skipped: Array<{
+      nodeId: string;
+      attempt: number;
+      activationScopeId: string;
+    }> = [];
     const result = await executeV2Graph({
       definition: definition(
         [
@@ -174,6 +249,11 @@ describe("executeV2Graph edge tokens", () => {
       ),
       entryTriggerId: "trigger",
       triggerOutput: { status: "ok" },
+      hooks: {
+        onNodeSkipped(event) {
+          skipped.push(event);
+        },
+      },
       executeBlock: async (current) => {
         calls.push(current.id);
         return { kind: "next", output: successfulOutput(current) };
@@ -183,7 +263,17 @@ describe("executeV2Graph edge tokens", () => {
     expect(result.outcome).toBe("completed");
     expect(calls).toEqual(["yes", "join"]);
     expect(result.state.scopes.root.nodeStates.no?.status).toBe("skipped");
+    expect(result.state.scopes.root.nodeStates.no?.attempt).toBe(1);
     expect(result.state.scopes.root.edgeTokens["no-join"]).toBe("inactive");
+    expect(skipped).toEqual([
+      {
+        nodeId: "no",
+        attempt: 1,
+        activationScopeId: "root",
+        startedAt: expect.any(Date),
+        completedAt: expect.any(Date),
+      },
+    ]);
   });
 
   it("resolves non-selected trigger paths as inactive", async () => {
@@ -334,7 +424,7 @@ describe("executeV2Graph concurrency and failure", () => {
     const slow = deferred<BlockExecutionResult>();
     const calls: string[] = [];
     let slowContext: V2InvocationContext | undefined;
-    const finishes: string[] = [];
+    const finishes: Array<{ nodeId: string; runtimeState: string }> = [];
     const run = executeV2Graph({
       runId: "run-120",
       maxConcurrency: 2,
@@ -362,7 +452,10 @@ describe("executeV2Graph concurrency and failure", () => {
       triggerOutput: { status: "ok" },
       hooks: {
         onNodeFinish(event) {
-          finishes.push(event.nodeId);
+          finishes.push({
+            nodeId: event.nodeId,
+            runtimeState: event.runtimeState,
+          });
         },
       },
       executeBlock: async (current, _steps, _inputs, context) => {
@@ -416,7 +509,41 @@ describe("executeV2Graph concurrency and failure", () => {
       attempt: 1,
     });
     expect(result.steps.slow).toBeUndefined();
-    expect(finishes).toEqual(["failure", "slow"]);
+    expect(finishes).toEqual([
+      { nodeId: "failure", runtimeState: "failed" },
+      { nodeId: "slow", runtimeState: "cancelled" },
+    ]);
+  });
+
+  it("keeps thrown stack traces out of scheduler diagnostics", async () => {
+    let detail = "";
+    const error = new Error("provider failed safely");
+    error.stack = "provider failed safely\nSECRET_INTERNAL_STACK";
+
+    const result = await executeV2Graph({
+      runId: "safe-diagnostic",
+      definition: definition(
+        [
+          node("trigger", "trigger_ticket_ai"),
+          node("agent", "generic_agent"),
+        ],
+        [{ id: "trigger-agent", from: "trigger", to: "agent" }],
+      ),
+      entryTriggerId: "trigger",
+      triggerOutput: { status: "ok" },
+      hooks: {
+        onExecutionError(event) {
+          detail = event.error.detail ?? "";
+        },
+      },
+      executeBlock: async () => {
+        throw error;
+      },
+    });
+
+    expect(result.outcome).toBe("failed");
+    expect(detail).toBe("provider failed safely");
+    expect(detail).not.toContain("SECRET_INTERNAL_STACK");
   });
 
   it("serializes scheduler hook mutations across concurrent invocations", async () => {
@@ -468,6 +595,7 @@ describe("executeV2Graph concurrency and failure", () => {
   });
 
   it("promotes an invalid executor output to a top-level schema failure", async () => {
+    const observations: unknown[] = [];
     const result = await executeV2Graph({
       runId: "run-invalid-output",
       definition: definition(
@@ -479,6 +607,15 @@ describe("executeV2Graph concurrency and failure", () => {
       ),
       entryTriggerId: "trigger",
       triggerOutput: { status: "ok" },
+      hooks: {
+        observationHooksFor(identity) {
+          return {
+            emit(observation) {
+              observations.push({ ...identity, ...observation });
+            },
+          };
+        },
+      },
       executeBlock: async () => ({
         kind: "next",
         output: { status: "completed" },
@@ -492,6 +629,13 @@ describe("executeV2Graph concurrency and failure", () => {
       nodeId: "agent",
       diagnosticId: "AIW-DIAG-run-invalid-output-agent-1",
     });
+    expect(observations).toContainEqual({
+      nodeId: "agent",
+      attempt: 1,
+      activationScopeId: "root",
+      kind: "output",
+      value: { status: "completed" },
+    });
   });
 });
 
@@ -502,6 +646,10 @@ describe("executeV2Graph clarification and cancellation", () => {
       nodeId: string;
       attempt: number;
       answer: string | undefined;
+    }> = [];
+    const questionFinishes: Array<{
+      attempt: number;
+      runtimeState: string;
     }> = [];
     const def = definition(
       [
@@ -575,6 +723,16 @@ describe("executeV2Graph clarification and cancellation", () => {
       entryTriggerId: "trigger",
       triggerOutput: { status: "ok" },
       executeBlock: executor,
+      hooks: {
+        onNodeFinish(event) {
+          if (event.nodeId === "question") {
+            questionFinishes.push({
+              attempt: event.attempt,
+              runtimeState: event.runtimeState,
+            });
+          }
+        },
+      },
     });
     await vi.waitFor(() =>
       expect(calls.map((call) => call.nodeId)).toEqual([
@@ -599,6 +757,16 @@ describe("executeV2Graph clarification and cancellation", () => {
       entryTriggerId: "trigger",
       triggerOutput: { status: "ok" },
       executeBlock: executor,
+      hooks: {
+        onNodeFinish(event) {
+          if (event.nodeId === "question") {
+            questionFinishes.push({
+              attempt: event.attempt,
+              runtimeState: event.runtimeState,
+            });
+          }
+        },
+      },
       resume: {
         checkpoint: paused.state,
         clarificationAnswer: "Yes",
@@ -614,6 +782,10 @@ describe("executeV2Graph clarification and cancellation", () => {
     expect(calls.map((call) => call.nodeId)).toEqual(
       expect.arrayContaining(["after-question", "after-sibling"]),
     );
+    expect(questionFinishes).toEqual([
+      { attempt: 1, runtimeState: "waiting_for_clarification" },
+      { attempt: 2, runtimeState: "completed" },
+    ]);
   });
 
   it("exposes external cancellation to active invocations and aborts scheduling", async () => {
@@ -751,10 +923,165 @@ describe("executeV2Graph clarification and cancellation", () => {
 });
 
 describe("executeV2Graph loop scopes", () => {
+  it("fails the existing waiting owner attempt when a loop body deadlocks", async () => {
+    const loopStarts: Array<{
+      attempt: number;
+      activationScopeId: string;
+    }> = [];
+    const loopFinishes: Array<{
+      attempt: number;
+      activationScopeId: string;
+      runtimeState: string;
+      diagnosticId?: string;
+    }> = [];
+    const result = await executeV2Graph({
+      runId: "loop-deadlock",
+      definition: definition(
+        [
+          node("trigger", "trigger_ticket_ai"),
+          node("loop", "loop", {
+            maxAttempts: 2,
+            onExhaust: "fail",
+          }),
+          node("verdict", "branch", {
+            condition: { kind: "lit", value: true },
+          }),
+        ],
+        [
+          { id: "trigger-loop", from: "trigger", to: "loop" },
+          {
+            id: "loop-verdict",
+            from: "loop",
+            fromPort: "continue",
+            to: "verdict",
+          },
+          {
+            id: "verdict-loop",
+            from: "verdict",
+            fromPort: "false",
+            to: "loop",
+          },
+        ],
+      ),
+      entryTriggerId: "trigger",
+      triggerOutput: { status: "ok" },
+      hooks: {
+        onNodeStart(event) {
+          if (event.nodeId === "loop") {
+            loopStarts.push({
+              attempt: event.attempt,
+              activationScopeId: event.activationScopeId,
+            });
+          }
+        },
+        onNodeFinish(event) {
+          if (event.nodeId === "loop") {
+            loopFinishes.push({
+              attempt: event.attempt,
+              activationScopeId: event.activationScopeId,
+              runtimeState: event.runtimeState,
+              ...(event.state.diagnosticId
+                ? { diagnosticId: event.state.diagnosticId }
+                : {}),
+            });
+          }
+        },
+      },
+      executeBlock: async (current) => ({
+        kind: "next",
+        output: successfulOutput(current),
+      }),
+    });
+
+    expect(result.outcome).toBe("failed");
+    expect(result.executionError).toMatchObject({
+      nodeId: "loop",
+      attempt: 1,
+      diagnosticId: "AIW-DIAG-loop-deadlock-loop-1",
+    });
+    expect(result.state.scopes.root.nodeStates.loop).toEqual({
+      status: "failed",
+      attempt: 1,
+    });
+    expect(loopStarts).toEqual([
+      { attempt: 1, activationScopeId: "root" },
+    ]);
+    expect(loopFinishes).toContainEqual({
+      attempt: 1,
+      activationScopeId: "root",
+      runtimeState: "failed",
+      diagnosticId: "AIW-DIAG-loop-deadlock-loop-1",
+    });
+    expect(loopFinishes).not.toContainEqual(
+      expect.objectContaining({ attempt: 3 }),
+    );
+  });
+
+  it("finalizes the root Loop attempt when a body failure aborts the workflow", async () => {
+    const loopStates: string[] = [];
+    const result = await executeV2Graph({
+      runId: "loop-body-failure",
+      definition: definition(
+        [
+          node("trigger", "trigger_ticket_ai"),
+          node("loop", "loop", {
+            maxAttempts: 3,
+            onExhaust: "fail",
+          }),
+          node("body", "generic_agent"),
+        ],
+        [
+          { id: "trigger-loop", from: "trigger", to: "loop" },
+          {
+            id: "loop-body",
+            from: "loop",
+            fromPort: "continue",
+            to: "body",
+          },
+          { id: "body-loop", from: "body", to: "loop" },
+        ],
+      ),
+      entryTriggerId: "trigger",
+      triggerOutput: { status: "ok" },
+      hooks: {
+        onNodeWaiting(event) {
+          if (event.nodeId === "loop") loopStates.push(event.state);
+        },
+        onNodeFinish(event) {
+          if (
+            event.nodeId === "loop" &&
+            event.activationScopeId === "root"
+          ) {
+            loopStates.push(event.runtimeState);
+          }
+        },
+      },
+      executeBlock: async () => ({
+        kind: "execution_error",
+        error: {
+          category: "provider",
+          message: "The provider could not complete this block.",
+          detail: "provider failed",
+        },
+      }),
+    });
+
+    expect(result.outcome).toBe("failed");
+    expect(result.state.scopes.root.nodeStates.loop).toMatchObject({
+      status: "cancelled",
+      attempt: 1,
+    });
+    expect(loopStates).toEqual(["waiting_loop", "cancelled"]);
+  });
+
   it("runs each iteration in a distinct scope with increasing node attempts", async () => {
     const bodyInvocations: Array<{
       attempt: number;
       activationScopeId: string;
+    }> = [];
+    const rootLoopLifecycle: Array<{
+      state: string;
+      transition: { port: string; edgeIds: string[] } | null;
     }> = [];
     const result = await executeV2Graph({
       definition: definition(
@@ -786,6 +1113,30 @@ describe("executeV2Graph loop scopes", () => {
       ),
       entryTriggerId: "trigger",
       triggerOutput: { status: "ok" },
+      hooks: {
+        onNodeWaiting(event) {
+          if (
+            event.nodeId === "loop" &&
+            event.activationScopeId === "root"
+          ) {
+            rootLoopLifecycle.push({
+              state: event.state,
+              transition: event.selectedTransition,
+            });
+          }
+        },
+        onNodeFinish(event) {
+          if (
+            event.nodeId === "loop" &&
+            event.activationScopeId === "root"
+          ) {
+            rootLoopLifecycle.push({
+              state: event.runtimeState,
+              transition: event.selectedTransition,
+            });
+          }
+        },
+      },
       executeBlock: async (current, _steps, inputs, context) => {
         if (current.id === "body") {
           bodyInvocations.push({
@@ -808,6 +1159,16 @@ describe("executeV2Graph loop scopes", () => {
       attempt: 2,
     });
     expect(result.steps.after?.output.status).toBe("completed");
+    expect(rootLoopLifecycle).toEqual([
+      {
+        state: "waiting_loop",
+        transition: { port: "continue", edgeIds: ["loop-body"] },
+      },
+      {
+        state: "completed",
+        transition: { port: "exhausted", edgeIds: ["loop-after"] },
+      },
+    ]);
   });
 
   it("exits through an active body boundary after an inactive earlier iteration", async () => {

@@ -13,6 +13,10 @@ import { resolveBlockAgent } from "../../workflow-definition/resolve-agent.js";
 import type { ResolvedHarnessRuntime } from "../../sandbox/harness-runtime.js";
 import { isRunControlError } from "../run-control-error.js";
 import { pollPhaseUntilDone } from "./poll-phase.js";
+import {
+  emitAgentInvocationObservations,
+  emitTimedOutAgentInvocationObservations,
+} from "../../run-observability/agent-observations.js";
 import { prepareHarnessAgentInvocationStep } from "./agent-sandbox.js";
 import { ensureWorkspace } from "./prepare-workspace.js";
 import {
@@ -363,6 +367,17 @@ export const execute: BlockExecuteFn = async (
       execution?.cancellation,
     );
     if (!done) {
+      const { collectPhaseReplayDiagnostics } = await import(
+        "../../sandbox/poll-agent.js"
+      );
+      await emitTimedOutAgentInvocationObservations({
+        observations: execution?.observations,
+        provider: kind,
+        model,
+        phase,
+        collectArtifacts: () =>
+          collectPhaseReplayDiagnostics(sandboxId, paths),
+      });
       return executionError("fix phase timed out", { category: "timeout" });
     }
 
@@ -374,6 +389,15 @@ export const execute: BlockExecuteFn = async (
       phase,
       runtime,
     );
+    await emitAgentInvocationObservations({
+      observations: execution?.observations,
+      provider: kind,
+      model,
+      phase,
+      artifacts,
+      usage,
+      result,
+    });
     recordBlockPhaseUsage(
       ctx,
       usageLabel(block.id),
