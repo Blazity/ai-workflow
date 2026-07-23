@@ -213,6 +213,9 @@ export type JsonValue =
   | JsonValue[]
   | { [key: string]: JsonValue };
 
+/** JSON Schema 2020-12 document persisted by structured-output blocks. */
+export type JsonSchema202012 = { [key: string]: JsonValue };
+
 /** Structured result a block reports on completion. `status` is always present;
  *  the remaining keys are block-specific JSON the graph engine can read. */
 export interface BlockOutput {
@@ -249,21 +252,26 @@ export type WorkflowBindingSource =
 
 export type WorkflowInputBindings = Record<string, WorkflowBindingSource>;
 
+export interface WorkflowValueSchemaMetadata {
+  description?: string;
+  enum?: JsonValue[];
+}
+
 /** Small JSON-shaped type language used by block input/output contracts. */
 export type WorkflowValueSchema =
-  | { type: "string" }
-  | { type: "number" }
-  | { type: "boolean" }
-  | { type: "null" }
-  | { type: "unknown" }
-  | { type: "nullable"; value: WorkflowValueSchema }
-  | { type: "array"; items: WorkflowValueSchema }
-  | {
+  | ({ type: "string" } & WorkflowValueSchemaMetadata)
+  | ({ type: "number" } & WorkflowValueSchemaMetadata)
+  | ({ type: "boolean" } & WorkflowValueSchemaMetadata)
+  | ({ type: "null" } & WorkflowValueSchemaMetadata)
+  | ({ type: "unknown" } & WorkflowValueSchemaMetadata)
+  | ({ type: "nullable"; value: WorkflowValueSchema } & WorkflowValueSchemaMetadata)
+  | ({ type: "array"; items: WorkflowValueSchema } & WorkflowValueSchemaMetadata)
+  | ({
       type: "object";
       properties: Record<string, WorkflowValueSchema>;
       required: string[];
       additionalProperties: boolean;
-    };
+    } & WorkflowValueSchemaMetadata);
 
 export type WorkflowBlockGroup =
   | "trigger"

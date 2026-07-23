@@ -3,6 +3,11 @@ import type { LanguageModel } from "ai";
 import { anthropic } from "@ai-sdk/anthropic";
 import { createOpenAI } from "@ai-sdk/openai";
 import { env } from "../../env.js";
+import {
+  jsonSchemaForProvider,
+  normalizeJsonSchemaProviderOutput,
+  parseJsonSchema202012,
+} from "../workflow-definition/json-schema.js";
 import { resolveLlmProvider, type LlmProvider } from "./llm-provider.js";
 
 export { inferProvider } from "./llm-provider.js";
@@ -82,11 +87,22 @@ export async function generateStructured(
   };
 
   if (schema) {
+    const parsed = parseJsonSchema202012(schema, { legacyCompatibility: true });
+    if (!parsed.ok) throw new Error(parsed.issues[0]?.message ?? "outputSchema is invalid.");
+    const providerSchema = jsonSchemaForProvider(parsed.schema, effectiveProvider);
     const result = await generateText({
       ...base,
-      output: Output.object({ schema: jsonSchema(JSON.parse(schema)) }),
+      output: Output.object({ schema: jsonSchema(providerSchema) }),
     });
-    return { object: result.output, text: result.text, usage: mapUsage(result.usage) };
+    return {
+      object: normalizeJsonSchemaProviderOutput(
+        parsed.schema,
+        effectiveProvider,
+        result.output,
+      ),
+      text: result.text,
+      usage: mapUsage(result.usage),
+    };
   }
 
   const result = await generateText(base);

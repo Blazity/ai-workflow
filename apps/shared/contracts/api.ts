@@ -222,6 +222,12 @@ export interface WorkflowDefinitionResponse {
 export interface WorkflowDefinitionSaveResponse {
   meta: WorkflowDefinitionMeta;
   draft: WorkflowDefinition;
+  /**
+   * Deployment validation for the exact saved snapshot. A draft is still
+   * persisted when validation is unavailable, in which case this is null.
+   */
+  validation: WorkflowDefinitionValidationResponse | null;
+  validationError: string | null;
 }
 
 export interface WorkflowDefinitionLayoutResponse {
@@ -234,6 +240,11 @@ export interface WorkflowDefinitionDeploymentResponse {
   deployed: WorkflowDefinitionVersion;
 }
 
+export interface WorkflowDefinitionDeploymentValidationResponse {
+  error: string;
+  issues: WorkflowDefinitionValidationIssue[];
+}
+
 export interface WorkflowDefinitionValidationResponse {
   valid: boolean;
   issues: WorkflowDefinitionValidationIssue[];
@@ -242,8 +253,11 @@ export interface WorkflowDefinitionValidationResponse {
 }
 
 export interface WorkflowDefinitionValidationIssue {
-  code: "schema" | "deployment";
+  code: string;
+  severity: "error";
   nodeId: string | null;
+  /** JSON Pointer identifying the offending value when one is available. */
+  path?: string;
   message: string;
 }
 

@@ -13,6 +13,7 @@ import {
 const state = vi.hoisted(() => ({
   db: undefined as unknown,
   sessionUserId: "user_admin",
+  failValidation: false,
   env: {
     DASHBOARD_ORG_SLUG: "ai-workflow",
     ENABLE_REVIEW_PHASE: true,
@@ -33,6 +34,19 @@ const state = vi.hoisted(() => ({
 
 vi.mock("../../../../env.js", () => ({ env: state.env }));
 vi.mock("../../../db/client.js", () => ({ getDb: () => state.db }));
+vi.mock("../../../workflow-definition/validation.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../../workflow-definition/validation.js")>();
+  return {
+    ...actual,
+    validateWorkflowDefinitionCandidate: (
+      ...args: Parameters<typeof actual.validateWorkflowDefinitionCandidate>
+    ) => {
+      if (state.failValidation) throw new Error("validation backend unavailable");
+      return actual.validateWorkflowDefinitionCandidate(...args);
+    },
+  };
+});
 vi.mock("../../../auth-instance.js", () => ({
   auth: {
     api: {
@@ -182,6 +196,7 @@ async function saveAndDeploy(
 beforeEach(async () => {
   vi.clearAllMocks();
   state.sessionUserId = "user_admin";
+  state.failValidation = false;
   db = await createTestDb();
   state.db = db;
   await db.insert(organization).values({ id: "org_aiw", name: "AI Workflow", slug: "ai-workflow" });
@@ -399,6 +414,8 @@ describe("PUT /api/v1/workflow-definitions/:id", () => {
       deployedVersion: null,
       draftRevision: 1,
     });
+    expect(body.validation).toMatchObject({ valid: true, issues: [] });
+    expect(body.validationError).toBeNull();
 
     res = await put(
       jsonRequest(
@@ -426,7 +443,42 @@ describe("PUT /api/v1/workflow-definitions/:id", () => {
       ),
     );
     expect(res.status).toBe(200);
-    expect((await res.json()).meta.draftRevision).toBe(1);
+    const body = await res.json();
+    expect(body.meta.draftRevision).toBe(1);
+    expect(body.validation).toMatchObject({
+      valid: false,
+      issues: [
+        expect.objectContaining({
+          code: "deployment",
+          severity: "error",
+          nodeId: expect.any(String),
+          path: expect.stringContaining("/inputs/target"),
+        }),
+      ],
+    });
+  });
+
+  it("keeps a saved draft when immediate deployment validation is unavailable", async () => {
+    state.failValidation = true;
+    const res = await put(
+      jsonRequest(
+        "PUT",
+        { definition: VALID_DEFINITION, expectedDraftRevision: 0 },
+        "http://worker.test/d/1",
+      ),
+    );
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({
+      meta: { draftRevision: 1 },
+      validation: null,
+      validationError: "Validation is temporarily unavailable. Your draft was saved.",
+    });
+
+    state.failValidation = false;
+    const detail = await paramHandler("get", "/d/:id", detailGet)(
+      new Request("http://worker.test/d/1"),
+    );
+    expect((await detail.json()).meta.draftRevision).toBe(1);
   });
 
   it("rejects members with 403", async () => {
@@ -512,7 +564,9 @@ describe("POST /api/v1/workflow-definitions/:id/validate", () => {
       expect.arrayContaining([
         expect.objectContaining({
           code: "deployment",
+          severity: "error",
           nodeId: expect.any(String),
+          path: expect.any(String),
           message: expect.stringContaining("unknown block"),
         }),
       ]),
@@ -556,8 +610,10 @@ describe("POST /api/v1/workflow-definitions/:id/validate", () => {
       issues: [
         {
           code: "schema",
+          severity: "error",
           nodeId: null,
-          message: expect.stringContaining("Invalid definition"),
+          path: "/schemaVersion",
+          message: expect.any(String),
         },
       ],
       nodeContracts: {},
@@ -597,8 +653,18 @@ describe("POST /api/v1/workflow-definitions/:id/deploy", () => {
         "http://worker.test/d/1/deploy",
       ),
     );
-    expect(res.status).toBe(400);
-    expect(res.statusText).toMatch(/^Invalid workflow:/);
+    expect(res.status).toBe(422);
+    expect(await res.json()).toMatchObject({
+      error: "Workflow has validation errors",
+      issues: [
+        expect.objectContaining({
+          code: "deployment",
+          severity: "error",
+          nodeId: expect.any(String),
+          message: expect.stringContaining("not reachable"),
+        }),
+      ],
+    });
   });
 
   it("409s on stale expected state", async () => {

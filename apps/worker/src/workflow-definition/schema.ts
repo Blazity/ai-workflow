@@ -4,6 +4,7 @@ import type {
   WorkflowBlockType,
   WorkflowDefinition,
   WorkflowDefinitionNode,
+  WorkflowDefinitionValidationIssue,
 } from "@shared/contracts";
 import {
   BLOCK_TYPE_SPECS,
@@ -29,12 +30,13 @@ import {
   buildWorkflowBindingGraphContext,
   isSafeWorkflowInputName,
   isWorkflowBindingSource,
-  validateWorkflowBindings,
+  validateWorkflowBindingIssues,
   type WorkflowBindingGraphContext,
 } from "./bindings.js";
 import {
   resolveWorkflowBlockContract,
-  workflowBlockDefinitionIssue,
+  workflowBlockDeploymentDefinitionIssues,
+  workflowBlockDefinitionIssues,
   type WorkflowBlockRegistryContext,
 } from "./block-registry.js";
 
@@ -843,13 +845,33 @@ export function validateWorkflowGraph(
   def: WorkflowDefinition,
   bindingGraphContext?: WorkflowBindingGraphContext,
 ): string[] {
-  const issues: string[] = [];
+  return validateWorkflowGraphIssues(def, bindingGraphContext).map(({ message }) => message);
+}
+
+export function validateWorkflowGraphIssues(
+  def: WorkflowDefinition,
+  bindingGraphContext?: WorkflowBindingGraphContext,
+): WorkflowDefinitionValidationIssue[] {
+  const issues: WorkflowDefinitionValidationIssue[] = [];
+  const addIssue = (message: string, nodeId: string | null = null, path?: string) => {
+    issues.push({
+      code: "deployment",
+      severity: "error",
+      nodeId,
+      ...(path ? { path } : {}),
+      message,
+    });
+  };
   const { nodes, edges } = def;
 
   const nodeById = new Map<string, WorkflowDefinitionNode>();
-  for (const node of nodes) {
+  for (const [nodeIndex, node] of nodes.entries()) {
     if (nodeById.has(node.id)) {
-      issues.push(`Block id "${node.id}" is used more than once.`);
+      addIssue(
+        `Block id "${node.id}" is used more than once.`,
+        node.id,
+        `/nodes/${nodeIndex}/id`,
+      );
     }
     nodeById.set(node.id, node);
   }
@@ -858,7 +880,7 @@ export function validateWorkflowGraph(
   const triggerNodes = nodes.filter((node) => isTriggerBlockType(node.type));
 
   if (triggerNodes.length === 0) {
-    issues.push("Workflow must contain at least one trigger block.");
+    addIssue("Workflow must contain at least one trigger block.", null, "/nodes");
   }
 
   const triggerTypeCounts = new Map<WorkflowBlockType, number>();
@@ -867,39 +889,55 @@ export function validateWorkflowGraph(
   }
   for (const [type, count] of triggerTypeCounts) {
     if (count > 1) {
-      issues.push(`Workflow contains more than one ${type} trigger block.`);
+      addIssue(`Workflow contains more than one ${type} trigger block.`, null, "/nodes");
     }
   }
 
   const graphEdges: GraphEdge[] = [];
-  for (const edge of edges) {
+  for (const [edgeIndex, edge] of edges.entries()) {
     const fromNode = nodeById.get(edge.from);
     const toNode = nodeById.get(edge.to);
     if (!fromNode) {
-      issues.push(`Connection references an unknown source block "${edge.from}".`);
+      addIssue(
+        `Connection references an unknown source block "${edge.from}".`,
+        null,
+        `/edges/${edgeIndex}/from`,
+      );
     }
     if (!toNode) {
-      issues.push(`Connection references an unknown target block "${edge.to}".`);
+      addIssue(
+        `Connection references an unknown target block "${edge.to}".`,
+        null,
+        `/edges/${edgeIndex}/to`,
+      );
     }
     if (edge.from === edge.to) {
-      issues.push(`Block "${edge.from}" cannot connect to itself.`);
+      addIssue(`Block "${edge.from}" cannot connect to itself.`, edge.from, `/edges/${edgeIndex}`);
     }
     if (!fromNode || !toNode || edge.from === edge.to) continue;
 
     const spec = BLOCK_TYPE_SPECS[fromNode.type];
     if (spec.ports.length === 0) {
-      issues.push(`Terminal block "${edge.from}" (${fromNode.type}) cannot have outgoing connections.`);
+      addIssue(
+        `Terminal block "${edge.from}" (${fromNode.type}) cannot have outgoing connections.`,
+        edge.from,
+        `/edges/${edgeIndex}`,
+      );
       continue;
     }
     const resolvedPort = edge.fromPort ?? spec.ports[0];
     if (!wirablePorts(fromNode.type).includes(resolvedPort)) {
-      issues.push(
+      addIssue(
         `Connection from "${edge.from}" uses unknown port "${resolvedPort}" of block type ${fromNode.type}.`,
+        edge.from,
+        `/edges/${edgeIndex}/fromPort`,
       );
     } else if (edge.fromPort === undefined && spec.ports.length > 1) {
       const label = fromNode.type === "loop" ? "loop" : "branch";
-      issues.push(
+      addIssue(
         `Connection from ${label} "${edge.from}" must specify a port (${spec.ports.join("/")}).`,
+        edge.from,
+        `/edges/${edgeIndex}/fromPort`,
       );
     }
     graphEdges.push({ from: edge.from, to: edge.to, port: resolvedPort, fromType: fromNode.type });
@@ -911,13 +949,17 @@ export function validateWorkflowGraph(
     const portKey = `${edge.from}\0${edge.port}`;
     const exactKey = `${portKey}\0${edge.to}`;
     if (exactSeen.has(exactKey)) {
-      issues.push(`Duplicate connection from "${edge.from}" to "${edge.to}".`);
+      addIssue(`Duplicate connection from "${edge.from}" to "${edge.to}".`, edge.from, "/edges");
       continue;
     }
     exactSeen.add(exactKey);
     const targets = portTargets.get(portKey);
     if (targets) {
-      issues.push(`Block "${edge.from}" has multiple connections from port "${edge.port}".`);
+      addIssue(
+        `Block "${edge.from}" has multiple connections from port "${edge.port}".`,
+        edge.from,
+        "/edges",
+      );
       targets.add(edge.to);
     } else {
       portTargets.set(portKey, new Set([edge.to]));
@@ -930,7 +972,7 @@ export function validateWorkflowGraph(
   }
   for (const node of triggerNodes) {
     if ((incoming.get(node.id) ?? 0) > 0) {
-      issues.push(`The trigger block "${node.id}" must not have incoming connections.`);
+      addIssue(`The trigger block "${node.id}" must not have incoming connections.`, node.id);
     }
   }
 
@@ -960,7 +1002,7 @@ export function validateWorkflowGraph(
   );
   for (const node of nodes) {
     if (!isTriggerBlockType(node.type) && !reachable.has(node.id)) {
-      issues.push(`Block "${node.id}" is not reachable from a trigger.`);
+      addIssue(`Block "${node.id}" is not reachable from a trigger.`, node.id);
     }
   }
 
@@ -968,19 +1010,20 @@ export function validateWorkflowGraph(
     if (node.type === "branch") {
       const used = portsOut.get(node.id) ?? new Set<string>();
       if (!used.has("true")) {
-        issues.push(`Branch "${node.id}" must have its "true" port connected.`);
+        addIssue(`Branch "${node.id}" must have its "true" port connected.`, node.id);
       }
       if (!used.has("false")) {
-        issues.push(`Branch "${node.id}" must have its "false" port connected.`);
+        addIssue(`Branch "${node.id}" must have its "false" port connected.`, node.id);
       }
     } else if (node.type === "loop") {
       const used = portsOut.get(node.id) ?? new Set<string>();
       if (!used.has("continue")) {
-        issues.push(`Loop "${node.id}" must have its "continue" port connected.`);
+        addIssue(`Loop "${node.id}" must have its "continue" port connected.`, node.id);
       }
       if (node.params.onExhaust === "continue" && !used.has("exhausted")) {
-        issues.push(
+        addIssue(
           `Loop "${node.id}" with onExhaust "continue" must have its "exhausted" port connected.`,
+          node.id,
         );
       }
       const continueTargets = graphEdges
@@ -989,7 +1032,7 @@ export function validateWorkflowGraph(
       if (continueTargets.length > 0) {
         const downstream = reachableFrom(continueTargets, forward);
         if (!downstream.has(node.id)) {
-          issues.push(`Loop "${node.id}"'s continue port must lead back to it.`);
+          addIssue(`Loop "${node.id}"'s continue port must lead back to it.`, node.id);
         }
       }
     }
@@ -998,7 +1041,7 @@ export function validateWorkflowGraph(
   const acyclicCycle = findCycle(forwardNoLoopBack, nodeIds);
   if (acyclicCycle) {
     const rendered = acyclicCycle.map((id) => `"${id}"`).join(" -> ");
-    issues.push(`Blocks ${rendered} form a cycle that does not pass through a Loop block.`);
+    addIssue(`Blocks ${rendered} form a cycle that does not pass through a Loop block.`);
   }
 
   for (const component of stronglyConnectedComponents(forward, nodeIds)) {
@@ -1008,14 +1051,15 @@ export function validateWorkflowGraph(
       for (const finalizeId of component.filter(
         (id) => nodeById.get(id)?.type === "finalize_workspace",
       )) {
-        issues.push(
+        addIssue(
           `Finalize Workspace block "${finalizeId}" cannot execute inside a Loop cycle.`,
+          finalizeId,
         );
       }
     }
     if (loopCount >= 2) {
       const rendered = component.map((id) => `"${id}"`).join(", ");
-      issues.push(
+      addIssue(
         `Blocks [${rendered}] form a cycle region with ${loopCount} Loop blocks; each cycle region must contain exactly one.`,
       );
     }
@@ -1026,8 +1070,9 @@ export function validateWorkflowGraph(
     const downstream = reachableFrom(forward.get(finalize.id) ?? [], forward);
     for (const laterFinalize of finalizeNodes) {
       if (laterFinalize.id === finalize.id || !downstream.has(laterFinalize.id)) continue;
-      issues.push(
+      addIssue(
         `Finalize Workspace block "${finalize.id}" can reach Finalize Workspace block "${laterFinalize.id}"; a workflow path may publish at most once.`,
+        finalize.id,
       );
     }
   }
@@ -1045,7 +1090,11 @@ export function validateWorkflowGraph(
     if (typeof condition !== "string") continue;
     const parsed = parseCondition(condition);
     if (!parsed.ok) {
-      issues.push(`Branch "${node.id}" has an invalid condition: ${parsed.error}.`);
+      addIssue(
+        `Branch "${node.id}" has an invalid condition: ${parsed.error}.`,
+        node.id,
+        `/nodes/${nodes.indexOf(node)}/params/condition`,
+      );
       continue;
     }
     // A referenced block must dominate this branch: every path from a trigger to
@@ -1057,8 +1106,10 @@ export function validateWorkflowGraph(
       const dominates =
         ref !== node.id && nodeById.has(ref) && (nodeDominators?.has(ref) ?? false);
       if (!dominates) {
-        issues.push(
+        addIssue(
           `Branch "${node.id}" condition references block "${ref}" which does not run before it.`,
+          node.id,
+          `/nodes/${nodes.indexOf(node)}/params/condition`,
         );
       }
     }
@@ -1078,24 +1129,41 @@ export function validateWorkflowDefinitionForDeployment(
     checkEnvironmentAvailability?: boolean;
   } = {},
 ): string[] {
+  return validateWorkflowDefinitionIssuesForDeployment(def, registryContext, options).map(
+    ({ message }) => message,
+  );
+}
+
+export function validateWorkflowDefinitionIssuesForDeployment(
+  def: WorkflowDefinition,
+  registryContext: WorkflowBlockRegistryContext,
+  options: {
+    allowLegacyCompatibility?: boolean;
+    checkEnvironmentAvailability?: boolean;
+  } = {},
+): WorkflowDefinitionValidationIssue[] {
   const graphContext = buildWorkflowBindingGraphContext(def);
   const issues = [
-    ...validateWorkflowGraph(def, graphContext),
-    ...validateWorkflowBindings(def, registryContext, graphContext),
-    ...validateStaticFallbackInputs(def),
+    ...validateWorkflowGraphIssues(def, graphContext),
+    ...validateWorkflowBindingIssues(def, registryContext, graphContext),
+    ...validateStaticFallbackInputIssues(def),
     // Existing deployed snapshots predate workspace-capability validation.
     // Keep those snapshots loadable; the affected executors still fail closed
     // before side effects when no workspace exists. New deployments retain the
     // strict producer requirement through the default validation path.
     ...(options.allowLegacyCompatibility
       ? []
-      : validateWorkspaceCapabilities(def, graphContext)),
-    ...validateAnyScopeReviewSafety(def),
+      : validateWorkspaceCapabilityIssues(def, graphContext)),
+    ...validateAnyScopeReviewSafetyIssues(def),
   ];
-  for (const node of def.nodes) {
+  for (const [nodeIndex, node] of def.nodes.entries()) {
     if (!isWorkflowAddressablePathSegment(node.id)) {
       issues.push(
-        `Block id "${node.id}" is not addressable; use a letter or underscore followed by letters, numbers, underscores, or hyphens.`,
+        deploymentIssue(
+          `Block id "${node.id}" is not addressable; use a letter or underscore followed by letters, numbers, underscores, or hyphens.`,
+          node.id,
+          `/nodes/${nodeIndex}/id`,
+        ),
       );
     }
     if (
@@ -1103,13 +1171,25 @@ export function validateWorkflowDefinitionForDeployment(
       !(Array.isArray(node.params.checkNames) && node.params.checkNames.length > 0)
     ) {
       issues.push(
-        `Block "${node.id}" (trigger_pr_checks_failed) must configure at least one exact CI check name before deployment.`,
+        deploymentIssue(
+          `Block "${node.id}" (trigger_pr_checks_failed) must configure at least one exact CI check name before deployment.`,
+          node.id,
+          `/nodes/${nodeIndex}/params/checkNames`,
+        ),
       );
     }
-    const definitionIssue = workflowBlockDefinitionIssue(node.type, node.params);
-    if (definitionIssue) {
+    const definitionIssues = options.allowLegacyCompatibility
+      ? workflowBlockDefinitionIssues(node.type, node.params)
+      : workflowBlockDeploymentDefinitionIssues(node.type, node.params);
+    if (definitionIssues.length > 0) {
       issues.push(
-        `Block "${node.id}" (${node.type}) is unavailable: ${definitionIssue}`,
+        ...definitionIssues.map((issue) => ({
+          code: issue.code,
+          severity: "error" as const,
+          nodeId: node.id,
+          path: `/nodes/${nodeIndex}/params/outputSchema${issue.path}`,
+          message: `Block "${node.id}" (${node.type}) is unavailable: ${issue.message}`,
+        })),
       );
     } else if (options.checkEnvironmentAvailability !== false) {
       const availability = resolveWorkflowBlockContract(
@@ -1119,12 +1199,45 @@ export function validateWorkflowDefinitionForDeployment(
       ).availability;
       if (!availability.available) {
         issues.push(
-          `Block "${node.id}" (${node.type}) is unavailable: ${availability.unavailableReason}`,
+          deploymentIssue(
+            `Block "${node.id}" (${node.type}) is unavailable: ${availability.unavailableReason}`,
+            node.id,
+            `/nodes/${nodeIndex}/params`,
+          ),
         );
       }
     }
   }
-  return [...new Set(issues)];
+  return dedupeDeploymentIssues(issues);
+}
+
+function deploymentIssue(
+  message: string,
+  nodeId: string | null,
+  path?: string,
+): WorkflowDefinitionValidationIssue {
+  return {
+    code: "deployment",
+    severity: "error",
+    nodeId,
+    ...(path ? { path } : {}),
+    message,
+  };
+}
+
+function dedupeDeploymentIssues(
+  issues: WorkflowDefinitionValidationIssue[],
+): WorkflowDefinitionValidationIssue[] {
+  return issues.filter(
+    (issue, index) =>
+      issues.findIndex(
+        (candidate) =>
+          candidate.code === issue.code &&
+          candidate.nodeId === issue.nodeId &&
+          candidate.path === issue.path &&
+          candidate.message === issue.message,
+      ) === index,
+  );
 }
 
 const STATIC_FALLBACK_INPUTS = {
@@ -1134,9 +1247,11 @@ const STATIC_FALLBACK_INPUTS = {
   post_pr_comment: "body",
 } as const satisfies Partial<Record<WorkflowBlockType, string>>;
 
-function validateStaticFallbackInputs(def: WorkflowDefinition): string[] {
-  const issues: string[] = [];
-  for (const node of def.nodes) {
+function validateStaticFallbackInputIssues(
+  def: WorkflowDefinition,
+): WorkflowDefinitionValidationIssue[] {
+  const issues: WorkflowDefinitionValidationIssue[] = [];
+  for (const [nodeIndex, node] of def.nodes.entries()) {
     const inputName = STATIC_FALLBACK_INPUTS[node.type as keyof typeof STATIC_FALLBACK_INPUTS];
     if (inputName === undefined) continue;
     const staticValue = node.params[inputName];
@@ -1144,7 +1259,11 @@ function validateStaticFallbackInputs(def: WorkflowDefinition): string[] {
     const hasBinding = Object.prototype.hasOwnProperty.call(node.inputs, inputName);
     if (!hasStaticValue && !hasBinding) {
       issues.push(
-        `Block "${node.id}" (${node.type}) requires either a non-empty "${inputName}" parameter or a compatible "${inputName}" input binding.`,
+        deploymentIssue(
+          `Block "${node.id}" (${node.type}) requires either a non-empty "${inputName}" parameter or a compatible "${inputName}" input binding.`,
+          node.id,
+          `/nodes/${nodeIndex}/params/${inputName}`,
+        ),
       );
     }
   }
@@ -1167,12 +1286,12 @@ function requiresWorkspaceProducer(node: WorkflowDefinitionNode): boolean {
   );
 }
 
-function validateWorkspaceCapabilities(
+function validateWorkspaceCapabilityIssues(
   def: WorkflowDefinition,
   graphContext: WorkflowBindingGraphContext,
-): string[] {
-  const issues: string[] = [];
-  for (const consumer of def.nodes) {
+): WorkflowDefinitionValidationIssue[] {
+  const issues: WorkflowDefinitionValidationIssue[] = [];
+  for (const [nodeIndex, consumer] of def.nodes.entries()) {
     if (!requiresWorkspaceProducer(consumer)) continue;
     const dominators = graphContext.dominators.get(consumer.id);
     const hasGuaranteedProducer = def.nodes.some((producer) => {
@@ -1184,7 +1303,11 @@ function validateWorkspaceCapabilities(
     });
     if (!hasGuaranteedProducer) {
       issues.push(
-        `Block "${consumer.id}" (${consumer.type}) requires a workspace-producing block to run before it on every path.`,
+        deploymentIssue(
+          `Block "${consumer.id}" (${consumer.type}) requires a workspace-producing block to run before it on every path.`,
+          consumer.id,
+          `/nodes/${nodeIndex}`,
+        ),
       );
     }
   }
@@ -1232,6 +1355,12 @@ export const ANY_SCOPE_BLOCK_POLICY = {
 } as const satisfies Record<WorkflowBlockType, "entry" | "safe" | "deny">;
 
 export function validateAnyScopeReviewSafety(def: WorkflowDefinition): string[] {
+  return validateAnyScopeReviewSafetyIssues(def).map(({ message }) => message);
+}
+
+export function validateAnyScopeReviewSafetyIssues(
+  def: WorkflowDefinition,
+): WorkflowDefinitionValidationIssue[] {
   const nodes = new Map(def.nodes.map((node) => [node.id, node]));
   const outgoing = new Map<string, string[]>();
   for (const edge of def.edges) {
@@ -1240,7 +1369,7 @@ export function validateAnyScopeReviewSafety(def: WorkflowDefinition): string[] 
     else outgoing.set(edge.from, [edge.to]);
   }
 
-  const issues: string[] = [];
+  const issues: WorkflowDefinitionValidationIssue[] = [];
   for (const trigger of def.nodes) {
     if (
       (trigger.type !== "trigger_pr_created" &&
@@ -1261,7 +1390,11 @@ export function validateAnyScopeReviewSafety(def: WorkflowDefinition): string[] 
       if (!node) continue;
       if (ANY_SCOPE_BLOCK_POLICY[node.type] !== "safe") {
         issues.push(
-          `scope:any trigger "${trigger.id}" reaches unsafe block "${node.id}" (${node.type}).`,
+          deploymentIssue(
+            `scope:any trigger "${trigger.id}" reaches unsafe block "${node.id}" (${node.type}).`,
+            node.id,
+            `/nodes/${def.nodes.indexOf(node)}`,
+          ),
         );
       }
       queue.push(...(outgoing.get(id) ?? []));

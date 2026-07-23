@@ -444,6 +444,94 @@ describe("generic_agent execute", () => {
     });
   });
 
+  it("executes an already-deployed v1 draft-07 schema with annotations", async () => {
+    mocks.collectPhase.mockResolvedValue({
+      stdout: "",
+      stderr: "",
+      structuredOutput: JSON.stringify({ state: "ready" }),
+      exitCode: 0,
+    });
+    const outputSchema = JSON.stringify({
+      $schema: "http://json-schema.org/draft-07/schema#",
+      title: "Legacy classifier",
+      type: "object",
+      properties: {
+        state: { title: "State", type: "string" },
+      },
+      required: ["state"],
+      additionalProperties: false,
+    });
+
+    const result = await execute(
+      makeNode("generic_agent", { prompt: "classify", outputSchema }),
+      {},
+      makeCtx(),
+    );
+
+    expect(mocks.buildPhaseScript).toHaveBeenCalledWith(
+      expect.objectContaining({
+        jsonSchema: JSON.stringify({
+          title: "Legacy classifier",
+          type: "object",
+          properties: {
+            state: { title: "State", type: "string" },
+          },
+          required: ["state"],
+          additionalProperties: false,
+        }),
+      }),
+    );
+    expect(result).toEqual({
+      kind: "next",
+      output: {
+        status: "completed",
+        state: "ready",
+        data: { state: "ready" },
+      },
+    });
+  });
+
+  it("uses the Codex strict schema without turning optional null placeholders into data", async () => {
+    mocks.collectPhase.mockResolvedValue({
+      stdout: "",
+      stderr: "",
+      structuredOutput: JSON.stringify({ answer: 42, explanation: null }),
+      exitCode: 0,
+    });
+    const outputSchema = JSON.stringify({
+      type: "object",
+      properties: {
+        answer: { type: "number" },
+        explanation: { type: "string" },
+      },
+      required: ["answer"],
+    });
+
+    const result = await execute(
+      makeNode("generic_agent", { provider: "codex", prompt: "p", outputSchema }),
+      {},
+      makeCtx(),
+    );
+
+    expect(mocks.buildPhaseScript).toHaveBeenCalledWith(
+      expect.objectContaining({
+        jsonSchema: JSON.stringify({
+          type: "object",
+          properties: {
+            answer: { type: "number" },
+            explanation: { type: ["string", "null"] },
+          },
+          required: ["answer", "explanation"],
+          additionalProperties: false,
+        }),
+      }),
+    );
+    expect(result).toEqual({
+      kind: "next",
+      output: { status: "completed", answer: 42, data: { answer: 42 } },
+    });
+  });
+
   it("fails when custom-schema output has the wrong declared shape", async () => {
     mocks.collectPhase.mockResolvedValue({
       stdout: "",

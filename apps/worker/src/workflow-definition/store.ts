@@ -2,6 +2,7 @@ import type {
   WorkflowBlockType,
   WorkflowDefinition,
   WorkflowDefinitionLayout,
+  WorkflowDefinitionValidationIssue,
   WorkflowDefinitionVersion,
 } from "@shared/contracts";
 import { isTriggerBlockType } from "@shared/contracts";
@@ -18,6 +19,7 @@ import {
   describeWorkflowDefinitionIssues,
   upgradeStoredWorkflowDefinition,
   validateWorkflowDefinitionForDeployment,
+  validateWorkflowDefinitionIssuesForDeployment,
   workflowDefinitionSchema,
 } from "./schema.js";
 import { workflowBlockRegistryContextFromEnv } from "./models.js";
@@ -81,6 +83,12 @@ export class WorkflowDefinitionStoreError extends Error {
     message: string,
   ) {
     super(message);
+  }
+}
+
+export class WorkflowDefinitionValidationError extends WorkflowDefinitionStoreError {
+  constructor(public readonly issues: WorkflowDefinitionValidationIssue[]) {
+    super(422, "Workflow has validation errors");
   }
 }
 
@@ -158,10 +166,30 @@ function assertValidDefinition(definition: WorkflowDefinition): void {
   const issues = validateWorkflowDefinitionForDeployment(
     parsed.data,
     workflowBlockRegistryContextFromEnv(),
+    // This guard is used only when an already-stored snapshot is selected or
+    // copied. Keep the v1 validation subset that was in force when that
+    // immutable version was written. New deployments still pass through the
+    // strict `assertDeployableDefinition` path below.
+    { allowLegacyCompatibility: true },
   );
   if (issues.length > 0) {
     throw new WorkflowDefinitionStoreError(400, `Invalid workflow: ${issues.join("; ")}`);
   }
+}
+
+function assertDeployableDefinition(definition: WorkflowDefinition): void {
+  const parsed = workflowDefinitionSchema.safeParse(definition);
+  if (!parsed.success) {
+    throw new WorkflowDefinitionStoreError(
+      400,
+      `Invalid definition: ${describeWorkflowDefinitionIssues(parsed.error)}`,
+    );
+  }
+  const issues = validateWorkflowDefinitionIssuesForDeployment(
+    parsed.data,
+    workflowBlockRegistryContextFromEnv(),
+  );
+  if (issues.length > 0) throw new WorkflowDefinitionValidationError(issues);
 }
 
 function parseStructuralDefinition(definition: WorkflowDefinition): WorkflowDefinition {
@@ -690,7 +718,7 @@ export async function deployWorkflowDefinition(
     input.expectedDraftRevision,
   );
   if (!target) throw new WorkflowDefinitionStoreError(409, "Save a draft before deploying");
-  assertValidDefinition(target.definition);
+  assertDeployableDefinition(target.definition);
   const triggerTypes = triggerTypesOf(target.definition);
   const triggerArray = triggerArraySql(triggerTypes);
 

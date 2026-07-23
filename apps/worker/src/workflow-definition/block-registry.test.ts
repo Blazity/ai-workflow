@@ -3,6 +3,8 @@ import { BLOCK_TYPE_SPECS, type WorkflowBlockType } from "@shared/contracts";
 import {
   buildWorkflowBlockRegistry,
   resolveWorkflowBlockContract,
+  workflowBlockDefinitionIssues,
+  workflowBlockDeploymentDefinitionIssues,
   type WorkflowBlockRegistryContext,
 } from "./block-registry.js";
 
@@ -293,10 +295,6 @@ describe("workflow block registry", () => {
       'outputSchema uses unsupported validation keyword "pattern".',
     ],
     [
-      '{"type":"object","properties":{"state":{"type":"string","enum":["ready"]}}}',
-      'outputSchema.properties.state uses unsupported validation keyword "enum".',
-    ],
-    [
       '{"type":"object","properties":{"nested":{"type":"made-up"}}}',
       'outputSchema.properties.nested has unsupported type "made-up".',
     ],
@@ -310,6 +308,69 @@ describe("workflow block registry", () => {
       available: false,
       unavailableReason: reason,
     });
+  });
+
+  it("retains enum, description, and nullable metadata from a declared schema", () => {
+    const contract = resolveWorkflowBlockContract(
+      "call_llm",
+      {
+        prompt: "classify",
+        outputSchema: JSON.stringify({
+          type: "object",
+          properties: {
+            state: {
+              type: "string",
+              description: "Current state",
+              enum: ["ready", "blocked"],
+            },
+            reason: { type: ["string", "null"] },
+          },
+          required: ["state"],
+          additionalProperties: false,
+        }),
+      },
+      context,
+    );
+
+    expect(contract.output.schema).toMatchObject({
+      properties: {
+        output: {
+          type: "object",
+          properties: {
+            state: {
+              type: "string",
+              description: "Current state",
+              enum: ["ready", "blocked"],
+            },
+            reason: { type: "nullable", value: { type: "string" } },
+          },
+        },
+      },
+    });
+  });
+
+  it("keeps open v1 schemas runtime-compatible but rejects them for deployment", () => {
+    const params = {
+      prompt: "classify",
+      outputSchema: JSON.stringify({
+        type: "object",
+        properties: {
+          nested: {
+            type: "object",
+            properties: { state: { type: "string" } },
+          },
+        },
+        additionalProperties: false,
+      }),
+    };
+
+    expect(workflowBlockDefinitionIssues("call_llm", params)).toEqual([]);
+    expect(workflowBlockDeploymentDefinitionIssues("call_llm", params)).toEqual([
+      expect.objectContaining({
+        code: "invalid_schema",
+        path: "/properties/nested/additionalProperties",
+      }),
+    ]);
   });
 
   it("treats a blank outputSchema as the block's unstructured default", () => {
