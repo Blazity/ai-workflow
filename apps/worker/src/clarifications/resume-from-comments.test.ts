@@ -203,6 +203,40 @@ describe("resumeClarificationFromComments", () => {
     });
   });
 
+  it("treats an empty/whitespace-only comment body as no answer and nudges", async () => {
+    await seedPending();
+    const tracker = makeTracker({
+      comments: [
+        { author: "Jane", accountId: "human-1", body: "   ", createdAt: AFTER },
+      ],
+    });
+
+    const result = await run(tracker, true);
+
+    expect(result).toEqual({ status: "no_answer_comments", nudged: true });
+    expect(mocks.resumeHook).not.toHaveBeenCalled();
+    expect(tracker.postComment).toHaveBeenCalledTimes(1);
+    expect(tracker.postComment.mock.calls[0]?.[1]).toContain(CLARIFICATION_NUDGE_MARKER);
+  });
+
+  it("caps the answeredBy label at 200 characters for many commenters", async () => {
+    const row = await seedPending();
+    const comments = Array.from({ length: 60 }, (_, i) => ({
+      author: `Person ${i}`,
+      accountId: `acct-${i}`,
+      body: `answer ${i}`,
+      createdAt: AFTER,
+    }));
+    const tracker = makeTracker({ comments });
+
+    const result = await run(tracker);
+
+    expect(result).toEqual({ status: "resumed", runId: RUN });
+    const stored = await getHookClarification(db, row.id);
+    expect(stored?.answeredByLabel?.length).toBe(200);
+    expect(stored?.answeredByLabel?.startsWith("Person 0, Person 1")).toBe(true);
+  });
+
   it("fails closed and skips the nudge when bot identity is unavailable", async () => {
     await seedPending();
     const tracker = makeTracker({

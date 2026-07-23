@@ -131,7 +131,11 @@ export async function resumeClarificationFromComments(input: {
           // Comments without an accountId cannot be proven non-bot.
           c.accountId &&
           c.accountId !== botAccountId &&
-          Date.parse(c.createdAt) > askedAtMs,
+          Date.parse(c.createdAt) > askedAtMs &&
+          // An empty/whitespace body (e.g. an image-only comment flattened by
+          // extractAdfText) is not an answer; treat it like no comment so the
+          // nudge rules apply instead of resuming with a junk answer.
+          c.body.trim().length > 0,
       )
     : [];
 
@@ -186,7 +190,9 @@ export async function resumeClarificationFromComments(input: {
   for (const c of qualifying) {
     if (!uniqueAuthors.includes(c.author)) uniqueAuthors.push(c.author);
   }
-  const answeredByLabel = `${uniqueAuthors.join(", ")} (via Jira)`;
+  // Cap the label: many distinct commenters would otherwise store an unbounded
+  // string in answered_by_label and inject it into prompts/memory.
+  const answeredByLabel = `${uniqueAuthors.join(", ")} (via Jira)`.slice(0, 200);
 
   const outcome = await answerClarificationAndResume({
     db,
