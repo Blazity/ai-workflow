@@ -84,20 +84,42 @@ describe("selectRepositoriesFromMetadata", () => {
 
     expect(selected).toEqual({
       status: "clarification_needed",
-      questions: ["Which repository should this ticket modify?"],
+      questions: [
+        "Which repository should this ticket modify? Reply with the full repository path in the form owner/repo. Accessible candidates: web, api.",
+      ],
     });
   });
 
-  it("selects repositories by name and description terms", () => {
+  it("asks instead of trusting keyword scoring across multiple repositories", () => {
+    // Scoring picked the wrong repository outright in production, so a
+    // metadata match is a ranking signal for the question, not a selection.
     const selected = selectRepositoriesFromMetadata({
       ticketText: "Fix billing webhook retry behavior",
       repositories: repos,
       workflowOwnedBranches: [],
     });
 
-    expect(selected.status).toBe("selected");
-    if (selected.status !== "selected") throw new Error("expected selected");
-    expect(selected.repositories.map((r) => r.repoPath)).toEqual(["acme/api"]);
+    expect(selected).toEqual({
+      status: "clarification_needed",
+      questions: [
+        "Which repository should this ticket modify? Reply with the full repository path in the form owner/repo. Accessible candidates: api, web.",
+      ],
+    });
+  });
+
+  it("never leaks full repository paths into the question (a posted question comment would pin every candidate)", () => {
+    const selected = selectRepositoriesFromMetadata({
+      ticketText: "Fix billing webhook retry behavior",
+      repositories: repos,
+      workflowOwnedBranches: [],
+    });
+
+    expect(selected.status).toBe("clarification_needed");
+    if (selected.status !== "clarification_needed") throw new Error("expected clarification");
+    for (const question of selected.questions) {
+      expect(question).not.toContain("acme/api");
+      expect(question).not.toContain("acme/web");
+    }
   });
 
   it("asks clarification when no repository matches", () => {
@@ -109,7 +131,9 @@ describe("selectRepositoriesFromMetadata", () => {
 
     expect(selected).toEqual({
       status: "clarification_needed",
-      questions: ["Which repository should this ticket modify?"],
+      questions: [
+        "Which repository should this ticket modify? Reply with the full repository path in the form owner/repo. Accessible candidates: web, api.",
+      ],
     });
   });
 
