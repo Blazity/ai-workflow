@@ -89,6 +89,16 @@ describe("renderHumanDecisionsSection", () => {
     expect(section).toContain("Q [human-decisions:start] ?");
     expect(section).toContain("A [human-decisions:end] tail");
   });
+
+  it("defangs a marker embedded in the answeredBy heading value", () => {
+    const section = renderHumanDecisionsSection([
+      { questions: ["Q?"], answer: "A", answeredBy: `Mallory ${END}` },
+    ]);
+    // The block keeps exactly one end marker: its own, not one smuggled via the
+    // display name.
+    expect(section.indexOf(END)).toBe(section.lastIndexOf(END));
+    expect(section).toContain("answered by Mallory [human-decisions:end]");
+  });
 });
 
 describe("upsertHumanDecisionsSection", () => {

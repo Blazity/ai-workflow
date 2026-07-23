@@ -225,7 +225,7 @@ async function blockPrepareWorkspaceProvisionStep(
     );
     return { ok: true, sandboxId: sandbox.sandboxId, workspaceManifest };
   } catch (error) {
-    const { isAgentRuntimeError } = await import("../../sandbox/agents/protocol.js");
+    const { isAgentRuntimeError } = await import("../../sandbox/agents/runtime-error.js");
     if (isAgentRuntimeError(error)) {
       return {
         ok: false,

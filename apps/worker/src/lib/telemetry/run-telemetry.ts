@@ -335,6 +335,36 @@ export async function markRunFailedOnSelfMove(db: Db, runId: string): Promise<vo
 }
 
 /**
+ * Commits a run's authoritative "success" status the moment its own
+ * success-finalizing AI Review move is about to fire a Jira webhook. The bot
+ * moving a finished ticket out of the AI column triggers the "ticket left the
+ * AI column" webhook, which would otherwise race in and cancel this
+ * still-finalizing run, flipping its world status to "cancelled" (stored as
+ * "blocked") even though the PR and ticket move already happened. Recording
+ * "success" first makes the outcome durable before that self-triggered cancel
+ * can land: the cron never downgrades a frozen status, so the run stays
+ * "success". Guarded to only advance an in-flight row and never clobber an
+ * already-frozen outcome.
+ */
+export async function markRunSucceededOnSelfMove(db: Db, runId: string): Promise<void> {
+  await db
+    .update(workflowRuns)
+    .set({ status: "success", updatedAt: sql`now()` })
+    .where(
+      and(
+        eq(workflowRuns.runId, runId),
+        // A NULL status is an in-flight row too: `status NOT IN (...)` is NULL
+        // (not true) for NULL, so without this a null-status run would be
+        // skipped and its success lost.
+        or(
+          isNull(workflowRuns.status),
+          notInArray(workflowRuns.status, ["success", "failed", "blocked", "awaiting"]),
+        ),
+      ),
+    );
+}
+
+/**
  * Flips a run parked on a clarification from "awaiting" to "success". Called
  * when the clarification is answered (or superseded by a re-pickup) so parked
  * runs don't stay "awaiting" forever. Guarded on status='awaiting', so it is a

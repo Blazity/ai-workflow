@@ -8,12 +8,16 @@ export type TicketEvent =
        */
       dashboardUrl?: string;
       /**
-       * Deep link to a posted Jira comment (e.g. `?focusedCommentId=...`).
-       * Retained for back-compat; the workflow no longer posts question
-       * comments, so this is no longer sent. Falls back to the plain ticket
-       * link when neither url is present.
+       * Deep link to the posted Jira comment (e.g. `?focusedCommentId=...`).
+       * The workflow posts a best-effort questions comment on pause, so this is
+       * sent when that post succeeds. Falls back to the plain ticket link when
+       * neither url is present.
        */
       commentUrl?: string;
+      /** The clarification questions, rendered numbered in the thread reply. */
+      questions?: string[];
+      /** Optional suggested answers, rendered on a single "Suggested" line. */
+      suggestedAnswers?: string[];
       usageReport?: string;
     }
   | {

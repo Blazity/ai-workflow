@@ -85,10 +85,23 @@ export function formatTicketEvent(
         : event.commentUrl
           ? ` (<${event.commentUrl}|view questions>)`
           : "";
-      return appendUsage(
-        `${head} needs clarification${tail}`,
-        event.usageReport,
-      );
+      let body = `${head} needs clarification${tail}`;
+      // Question and suggestion text derive from untrusted ticket content, so
+      // defang Slack broadcast tokens in them (same rationale as extraText)
+      // before they join our system-built copy.
+      if (event.questions && event.questions.length > 0) {
+        const lines = event.questions.map(
+          (q, i) => `${i + 1}. ${neutralizeSlackBroadcasts(q)}`,
+        );
+        body += `\n${lines.join("\n")}`;
+      }
+      if (event.suggestedAnswers && event.suggestedAnswers.length > 0) {
+        const suggested = event.suggestedAnswers
+          .map((s) => neutralizeSlackBroadcasts(s))
+          .join(" · ");
+        body += `\nSuggested: ${suggested}`;
+      }
+      return appendUsage(body, event.usageReport);
     }
 
     case "pr_ready": {
