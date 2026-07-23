@@ -1,0 +1,12 @@
+{
+  "package": "@openai/codex",
+  "version": "0.144.6",
+  "protocol": "codex-jsonl-0.144.6",
+  "provenance": "normalized pinned-protocol sample; refresh with the capture script",
+  "artifacts": {
+    "stdout": "{\"type\":\"thread.started\",\"thread_id\":\"normalized\"}\n{\"type\":\"item.completed\",\"item\":{\"id\":\"normalized\",\"type\":\"agent_message\",\"text\":\"incomplete\"}}",
+    "stderr": "",
+    "structuredOutput": "incomplete",
+    "exitCode": 0
+  }
+}

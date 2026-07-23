@@ -1,4 +1,5 @@
 import { getSandboxCredentials } from "./credentials.js";
+import type { CollectedPhaseArtifacts, PhaseArtifactPaths } from "./agents/types.js";
 
 /**
  * Generalized sentinel check — works with any sentinel file path.
@@ -52,8 +53,8 @@ export async function collectPhaseOutput(
  */
 export async function collectPhase(
   sandboxId: string,
-  paths: { stdout: string; stderr: string; structuredOutput: string | null },
-): Promise<{ raw: string; structured: string | null }> {
+  paths: Pick<PhaseArtifactPaths, "stdout" | "stderr" | "structuredOutput" | "exitCode">,
+): Promise<CollectedPhaseArtifacts> {
   "use step";
   const { Sandbox } = await import("@vercel/sandbox");
   const sandbox = await Sandbox.get({ sandboxId, ...getSandboxCredentials() });
@@ -62,15 +63,23 @@ export async function collectPhase(
   const stdoutText = (await stdoutResult.stdout()).trim();
   const stderrResult = await sandbox.runCommand("cat", [paths.stderr]);
   const stderrText = (await stderrResult.stdout()).trim();
-  const raw = stdoutText || stderrText;
 
-  let structured: string | null = null;
+  let structuredOutput: string | null = null;
   if (paths.structuredOutput) {
     const result = await sandbox.runCommand("cat", [paths.structuredOutput]);
     const text = (await result.stdout()).trim();
-    structured = text || null;
+    structuredOutput = text || null;
   }
-  return { raw, structured };
+
+  const exitCodeResult = await sandbox.runCommand("cat", [paths.exitCode]);
+  const exitCodeText = (await exitCodeResult.stdout()).trim();
+  const parsedExitCode = /^-?\d+$/.test(exitCodeText) ? Number(exitCodeText) : null;
+  return {
+    stdout: stdoutText,
+    stderr: stderrText,
+    structuredOutput,
+    exitCode: parsedExitCode,
+  };
 }
 
 /**

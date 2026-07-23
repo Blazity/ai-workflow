@@ -11,6 +11,7 @@
     "test:watch": "vitest",
     "typecheck": "pnpm build:shared && tsc --noEmit",
     "validate:pre-sandbox": "tsx scripts/validate-pre-sandbox-config.ts",
+    "capture:agent-protocol-fixtures": "tsx scripts/capture-agent-protocol-fixtures.ts",
     "build:arthur-tracer": "node scripts/build-arthur-tracer.mjs",
     "test:e2e": "pnpm test:e2e:agent && pnpm test:e2e:orchestration && pnpm test:e2e:capacity",
     "test:e2e:agent": "pnpm build:shared && vitest run --config e2e/vitest.e2e.config.ts --project agent",

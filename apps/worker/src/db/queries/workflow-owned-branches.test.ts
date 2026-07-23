@@ -229,6 +229,7 @@ describe("workflow-owned branch records", () => {
         repoPath: "acme/web",
         branchName: "blazebot/aiw-45",
         publishedHeadSha: "new-head",
+        targetBranch: "main",
       },
     ]);
     await expect(

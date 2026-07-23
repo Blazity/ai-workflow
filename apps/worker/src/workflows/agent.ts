@@ -3,7 +3,8 @@ import { branchForTicket } from "../lib/branch-prefix.js";
 import { ticketRunUrl, ticketPageUrl, hasDashboardLinkComment } from "../lib/dashboard-links.js";
 import { computeUsageTotals, type UsageTotals } from "../sandbox/usage.js";
 import type {
-  AgentOutput, PhaseUsage, PhaseKind, PhaseArtifactPaths, ResearchResult, ReviewOutput,
+  AgentOutput, AgentProtocolResult, CollectedPhaseArtifacts, PhaseUsage, PhaseKind,
+  PhaseArtifactPaths, ResearchResult, ReviewOutput,
 } from "../sandbox/agents/types.js";
 import type { AgentKind } from "../sandbox/agents/index.js";
 import type {
@@ -23,6 +24,7 @@ import {
   WorkflowExecutionError,
   type RuntimeGraph,
   type StepsRecord,
+  type WorkflowExecutionLogEvent,
   type WorkflowExecutionErrorState,
 } from "../workflow-definition/interpreter.js";
 import type {
@@ -38,7 +40,11 @@ import {
 } from "./agent-input.js";
 import type { TicketTransitionOwner } from "../lib/ticket-transition.js";
 import { moveTicketStep } from "./ticket-transition-step.js";
-import type { BlockExecuteFn, EngineCtx } from "./blocks/types.js";
+import {
+  agentProtocolExecutionError as agentProtocolBlockError,
+  type BlockExecuteFn,
+  type EngineCtx,
+} from "./blocks/types.js";
 import {
   buildPromptVariables,
   substituteNodePromptParams,
@@ -447,6 +453,15 @@ export async function ensurePlanningAgentSandboxForBlock(
     return { kind: "ready", sandboxId: await ensureAgentSandbox(ctx, kind, model) };
   } catch (error) {
     if (isRunControlError(error)) throw error;
+    const { isAgentRuntimeError } = await import("../sandbox/agents/protocol.js");
+    if (isAgentRuntimeError(error)) {
+      return agentProtocolBlockError({
+        ok: false,
+        category: error.category,
+        message: error.safeMessage,
+        diagnostic: error.diagnostic,
+      });
+    }
     return executionError(error instanceof Error ? error.message : String(error), {
       category: "sandbox",
       phase: "research",
@@ -742,30 +757,81 @@ writeAttachments.maxRetries = 0;
 
 async function writeAndStartPhase(
   sandboxId: string,
+  agentKind: AgentKind,
+  phase: PhaseKind,
   inputFilePath: string,
   inputContent: string,
   scriptPath: string,
   scriptContent: string,
-): Promise<string> {
+): Promise<
+  | { ok: true; commandId: string }
+  | { ok: false; failure: Extract<AgentProtocolResult<unknown>, { ok: false }> }
+> {
   "use step";
-  const { Sandbox } = await import("@vercel/sandbox");
-  const { getSandboxCredentials } = await import("../sandbox/credentials.js");
+  const { createAgentAdapter } = await import("../sandbox/agents/index.js");
+  const { commandProtocolFailure, protocolFailure } = await import(
+    "../sandbox/agents/protocol.js"
+  );
+  const spec = createAgentAdapter(agentKind).cliSpec;
+  try {
+    const { Sandbox } = await import("@vercel/sandbox");
+    const { getSandboxCredentials } = await import("../sandbox/credentials.js");
+    const sandbox = await Sandbox.get({ sandboxId, ...getSandboxCredentials() });
 
-  const sandbox = await Sandbox.get({ sandboxId, ...getSandboxCredentials() });
+    await sandbox.writeFiles([
+      { path: inputFilePath, content: Buffer.from(inputContent) },
+      { path: scriptPath, content: Buffer.from(scriptContent) },
+    ]);
+    const chmod = await sandbox.runCommand("chmod", ["+x", scriptPath]);
+    if (chmod.exitCode !== 0) {
+      return {
+        ok: false,
+        failure: await commandProtocolFailure({
+          spec,
+          phase,
+          result: chmod,
+          failureKind: "setup_failed",
+          message: "The current agent phase could not be completed.",
+          detail: "The agent phase wrapper could not be made executable.",
+        }),
+      };
+    }
 
-  await sandbox.writeFiles([
-    { path: inputFilePath, content: Buffer.from(inputContent) },
-    { path: scriptPath, content: Buffer.from(scriptContent) },
-  ]);
-  await sandbox.runCommand("chmod", ["+x", scriptPath]);
-
-  const command = await sandbox.runCommand({
-    cmd: "bash",
-    args: [scriptPath],
-    cwd: "/vercel/sandbox",
-    detached: true,
-  });
-  return command.cmdId;
+    const command = await sandbox.runCommand({
+      cmd: "bash",
+      args: [scriptPath],
+      cwd: "/vercel/sandbox",
+      detached: true,
+    });
+    if (command.exitCode !== null && command.exitCode !== 0) {
+      return {
+        ok: false,
+        failure: await commandProtocolFailure({
+          spec,
+          phase,
+          result: command,
+          failureKind: "cli_exit",
+          message: "The current agent phase could not be completed.",
+          detail: "The agent phase process could not be launched.",
+        }),
+      };
+    }
+    return { ok: true, commandId: command.cmdId };
+  } catch (error) {
+    const { isRunControlError } = await import("./run-control-error.js");
+    if (isRunControlError(error)) throw error;
+    const failure = protocolFailure({
+      spec,
+      phase,
+      artifacts: { stdout: "", stderr: "", structuredOutput: null, exitCode: null },
+      failureKind: "provider_error",
+      category: "provider",
+      message: "The current agent phase could not be completed.",
+      detail: "The agent phase process could not be launched.",
+    });
+    if (failure.ok) throw new Error("unreachable");
+    return { ok: false, failure };
+  }
 }
 writeAndStartPhase.maxRetries = 0;
 
@@ -788,7 +854,11 @@ async function readRunBudgetClockStep(): Promise<number> {
 }
 readRunBudgetClockStep.maxRetries = 0;
 
-async function setCommitGuardStep(sandboxId: string, agentKind: AgentKind, enabled: boolean): Promise<void> {
+async function setCommitGuardStep(
+  sandboxId: string,
+  agentKind: AgentKind,
+  enabled: boolean,
+): Promise<AgentProtocolResult<void>> {
   "use step";
   const { Sandbox } = await import("@vercel/sandbox");
   const { getSandboxCredentials } = await import("../sandbox/credentials.js");
@@ -796,7 +866,19 @@ async function setCommitGuardStep(sandboxId: string, agentKind: AgentKind, enabl
 
   const sandbox = await Sandbox.get({ sandboxId, ...getSandboxCredentials() });
   const agent = createAgentAdapter(agentKind);
-  await agent.setCommitGuard(sandbox, enabled);
+  try {
+    await agent.setCommitGuard(sandbox, enabled);
+    return { ok: true, value: undefined };
+  } catch (error) {
+    const { isAgentRuntimeError } = await import("../sandbox/agents/protocol.js");
+    if (!isAgentRuntimeError(error)) throw error;
+    return {
+      ok: false,
+      category: error.category,
+      message: error.safeMessage,
+      diagnostic: error.diagnostic,
+    };
+  }
 }
 
 // Step wrappers around the AgentAdapter class methods. The adapter classes
@@ -819,35 +901,41 @@ async function planPhaseStep(
 
 async function parseResearchStep(
   agentKind: AgentKind,
-  raw: string,
-  structured: string | null,
-): Promise<{ research: ResearchResult; usage: PhaseUsage | null }> {
+  artifacts: CollectedPhaseArtifacts,
+): Promise<{ result: AgentProtocolResult<ResearchResult>; usage: PhaseUsage | null }> {
   "use step";
   const { createAgentAdapter } = await import("../sandbox/agents/index.js");
   const a = createAgentAdapter(agentKind);
-  return { research: a.parseResearchStatus(raw, structured), usage: a.extractUsage(raw, structured) };
+  return {
+    result: a.parseResearchProtocol(artifacts, "research"),
+    usage: a.extractUsage(artifacts.stdout, artifacts.structuredOutput),
+  };
 }
 
 async function parseAgentOutputStep(
   agentKind: AgentKind,
-  raw: string,
-  structured: string | null,
-): Promise<{ output: AgentOutput; usage: PhaseUsage | null }> {
+  artifacts: CollectedPhaseArtifacts,
+): Promise<{ result: AgentProtocolResult<AgentOutput>; usage: PhaseUsage | null }> {
   "use step";
   const { createAgentAdapter } = await import("../sandbox/agents/index.js");
   const a = createAgentAdapter(agentKind);
-  return { output: a.parseAgentOutput(raw, structured), usage: a.extractUsage(raw, structured) };
+  return {
+    result: a.parseAgentOutputProtocol(artifacts, "impl"),
+    usage: a.extractUsage(artifacts.stdout, artifacts.structuredOutput),
+  };
 }
 
 async function parseReviewStep(
   agentKind: AgentKind,
-  raw: string,
-  structured: string | null,
-): Promise<{ output: ReviewOutput; usage: PhaseUsage | null }> {
+  artifacts: CollectedPhaseArtifacts,
+): Promise<{ result: AgentProtocolResult<ReviewOutput>; usage: PhaseUsage | null }> {
   "use step";
   const { createAgentAdapter } = await import("../sandbox/agents/index.js");
   const a = createAgentAdapter(agentKind);
-  return { output: a.parseReviewOutput(raw, structured), usage: a.extractUsage(raw, structured) };
+  return {
+    result: a.parseReviewOutputProtocol(artifacts, "review"),
+    usage: a.extractUsage(artifacts.stdout, artifacts.structuredOutput),
+  };
 }
 
 export async function postPrLinksComment(
@@ -943,6 +1031,15 @@ async function markRunFailedOnSelfMoveStep(runId: string): Promise<void> {
   await markRunFailedOnSelfMove(getDb(), runId);
 }
 markRunFailedOnSelfMoveStep.maxRetries = 0;
+
+async function logWorkflowExecutionErrorStep(
+  event: WorkflowExecutionLogEvent,
+): Promise<void> {
+  "use step";
+  const { logger } = await import("../lib/logger.js");
+  logger.error(event, "workflow_execution_error");
+}
+logWorkflowExecutionErrorStep.maxRetries = 0;
 
 export function clarificationExitDisposition(providerParked: boolean): {
   outcome: "awaiting";
@@ -1140,6 +1237,7 @@ async function runPrePrChecksStep(
   fixCycleUsages: Array<PhaseUsage | null>;
   budgetFailure: RunBudgetFailure | null;
   summary: string;
+  agentFailure?: Extract<AgentProtocolResult<unknown>, { ok: false }>;
 }> {
   "use step";
   const { getDb } = await import("../db/client.js");
@@ -1980,7 +2078,8 @@ async function agentWorkflowBody(
             await writeAttachmentsOnce(sandboxId);
             phaseModels[researchPhase] = model;
             runPhaseModels[researchPhase] = model;
-            await setCommitGuardStep(sandboxId, kind, false);
+            const researchGuard = await setCommitGuardStep(sandboxId, kind, false);
+            if (!researchGuard.ok) return agentProtocolBlockError(researchGuard);
 
             // Review-remediation framing: when this ticket already has a
             // workflow-owned PR, pull its human review feedback in BEFORE the
@@ -2007,11 +2106,13 @@ async function agentWorkflowBody(
               repositoryContexts: ctx.repositoryContexts,
             });
 
-            const researchCommandId = await writeAndStartPhase(
-              sandboxId,
+            const researchLaunch = await writeAndStartPhase(
+              sandboxId, kind, "research",
               researchPaths.input, researchInput,
               researchPaths.wrapper, researchScript,
             );
+            if (!researchLaunch.ok) return agentProtocolBlockError(researchLaunch.failure);
+            const researchCommandId = researchLaunch.commandId;
             launchedPhases.add(researchPhase);
 
             const researchDone = await pollPhaseUntilDone(
@@ -2028,11 +2129,12 @@ async function agentWorkflowBody(
               });
             }
 
-            const { raw: researchRaw, structured: researchStructured } =
-              await collectPhase(sandboxId, researchPaths);
-            const { research, usage: researchUsage } =
-              await parseResearchStep(kind, researchRaw, researchStructured);
+            const researchArtifacts = await collectPhase(sandboxId, researchPaths);
+            const { result: researchResult, usage: researchUsage } =
+              await parseResearchStep(kind, researchArtifacts);
             ctx.recordUsage("Research", researchUsage, model);
+            if (!researchResult.ok) return agentProtocolBlockError(researchResult);
+            const research = researchResult.value;
 
             if (research.status === "clarification_needed") {
               // Prefer the structured questions the parser now folds out; fall
@@ -2073,7 +2175,8 @@ async function agentWorkflowBody(
             state.implementationKind = kind;
             // Mixed-run telemetry: the run's headline model is the impl block's.
             activeModel = model;
-            await setCommitGuardStep(sandboxId, kind, true);
+            const implementationGuard = await setCommitGuardStep(sandboxId, kind, true);
+            if (!implementationGuard.ok) return agentProtocolBlockError(implementationGuard);
 
             const { paths: implPaths, script: implScript } =
               await planPhaseStep(kind, "impl", model, AGENT_SCHEMA);
@@ -2090,11 +2193,13 @@ async function agentWorkflowBody(
               repositoryContexts: ctx.repositoryContexts,
             });
 
-            const implCommandId = await writeAndStartPhase(
-              sandboxId,
+            const implLaunch = await writeAndStartPhase(
+              sandboxId, kind, "impl",
               implPaths.input, implInput,
               implPaths.wrapper, implScript,
             );
+            if (!implLaunch.ok) return agentProtocolBlockError(implLaunch.failure);
+            const implCommandId = implLaunch.commandId;
             launchedPhases.add(implPhase);
 
             const implDone = await pollPhaseUntilDone(
@@ -2107,10 +2212,11 @@ async function agentWorkflowBody(
             let implOutput: AgentOutput;
 
             if (implDone) {
-              const { raw: implRaw, structured: implStructured } = await collectPhase(sandboxId, implPaths);
-              const { output, usage: implUsage } = await parseAgentOutputStep(kind, implRaw, implStructured);
+              const implArtifacts = await collectPhase(sandboxId, implPaths);
+              const { result, usage: implUsage } = await parseAgentOutputStep(kind, implArtifacts);
               ctx.recordUsage("Impl", implUsage, model);
-              implOutput = output;
+              if (!result.ok) return agentProtocolBlockError(result);
+              implOutput = result.value;
             } else {
               implOutput = { result: "failed", error: "Implementation phase timed out" };
             }
@@ -2171,7 +2277,8 @@ async function agentWorkflowBody(
             runPhaseModels[reviewPhase] = model;
             // Install the review provider's commit guard: in a mixed run it may
             // differ from impl's provider, so its guard was never set up.
-            await setCommitGuardStep(sandboxId, kind, true);
+            const reviewGuard = await setCommitGuardStep(sandboxId, kind, true);
+            if (!reviewGuard.ok) return agentProtocolBlockError(reviewGuard);
             const { paths: reviewPaths, script: reviewScript } =
               await planPhaseStep(kind, "review", model, REVIEW_SCHEMA);
             const reviewInput = assembleReviewContext({
@@ -2183,11 +2290,13 @@ async function agentWorkflowBody(
               selectedRepositories: ctx.selectedRepositories,
             });
 
-            const reviewCommandId = await writeAndStartPhase(
-              sandboxId,
+            const reviewLaunch = await writeAndStartPhase(
+              sandboxId, kind, "review",
               reviewPaths.input, reviewInput,
               reviewPaths.wrapper, reviewScript,
             );
+            if (!reviewLaunch.ok) return agentProtocolBlockError(reviewLaunch.failure);
+            const reviewCommandId = reviewLaunch.commandId;
             launchedPhases.add(reviewPhase);
 
             const reviewDone = await pollPhaseUntilDone(
@@ -2200,10 +2309,11 @@ async function agentWorkflowBody(
             let reviewOutput: ReviewOutput;
 
             if (reviewDone) {
-              const { raw: reviewRaw, structured: reviewStructured } = await collectPhase(sandboxId, reviewPaths);
-              const { output, usage: reviewUsage } = await parseReviewStep(kind, reviewRaw, reviewStructured);
+              const reviewArtifacts = await collectPhase(sandboxId, reviewPaths);
+              const { result, usage: reviewUsage } = await parseReviewStep(kind, reviewArtifacts);
               ctx.recordUsage("Review", reviewUsage, model);
-              reviewOutput = output;
+              if (!result.ok) return agentProtocolBlockError(result);
+              reviewOutput = result.value;
             } else {
               return executionError("Review phase timed out", {
                 category: "timeout",
@@ -2260,6 +2370,9 @@ async function agentWorkflowBody(
               state.implementationModel,
               prePrChecks.budgetFailure,
             );
+            if (prePrChecks.agentFailure) {
+              return agentProtocolBlockError(prePrChecks.agentFailure);
+            }
             if (!prePrChecks.passed) {
               return {
                 kind: "next",
@@ -2403,6 +2516,7 @@ async function agentWorkflowBody(
       };
 
       const hooks: ExecuteGraphHooks = {
+        onExecutionError: logWorkflowExecutionErrorStep,
         async onBlockStart(nodeId, attempt) {
           await enforceBudgetAtBoundary(true);
           currentBlockId = nodeId;

@@ -5,6 +5,20 @@ import { AGENT_SCHEMA, GENERIC_SCHEMA, RESEARCH_SCHEMA, REVIEW_SCHEMA } from "./
 
 const adapter = new ClaudeAgentAdapter();
 
+describe.each([
+  ["valid JSON events without a terminal result", '{"type":"assistant"}', "protocol_mismatch"],
+  ["non-JSON output", "not json", "invalid_json"],
+  ["empty output", "", "missing_result"],
+] as const)("ClaudeAgentAdapter.validateFreeformProtocol: %s", (_case, stdout, failureKind) => {
+  it(`reports ${failureKind}`, () => {
+    const result = adapter.validateFreeformProtocol(
+      { stdout, stderr: "", structuredOutput: null, exitCode: 0 },
+      "pre-pr-fix-1",
+    );
+    expect(result).toMatchObject({ ok: false, diagnostic: { failureKind } });
+  });
+});
+
 describe("ClaudeAgentAdapter.parseAgentOutput", () => {
   it("parses implemented result", () => {
     const raw = JSON.stringify({ result: "implemented", summary: "done" });
@@ -401,6 +415,7 @@ describe("ClaudeAgentAdapter.artifactPaths", () => {
       input: "/tmp/research-requirements.md",
       stdout: "/tmp/research-stdout.txt",
       stderr: "/tmp/research-stderr.txt",
+      exitCode: "/tmp/research-exit-code",
       sentinel: "/tmp/research-done",
       structuredOutput: null,
     });
@@ -418,6 +433,7 @@ describe("ClaudeAgentAdapter.artifactPaths", () => {
       input: "/tmp/agent-block-1-requirements.md",
       stdout: "/tmp/agent-block-1-stdout.txt",
       stderr: "/tmp/agent-block-1-stderr.txt",
+      exitCode: "/tmp/agent-block-1-exit-code",
       sentinel: "/tmp/agent-block-1-done",
       structuredOutput: null,
     });

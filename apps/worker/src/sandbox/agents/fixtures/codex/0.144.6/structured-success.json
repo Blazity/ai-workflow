@@ -1,0 +1,12 @@
+{
+  "package": "@openai/codex",
+  "version": "0.144.6",
+  "protocol": "codex-jsonl-0.144.6",
+  "provenance": "captured locally with authenticated @openai/codex@0.144.6 on 2026-07-23; volatile fields and response content normalized",
+  "artifacts": {
+    "stdout": "{\"type\":\"thread.started\",\"thread_id\":\"normalized\"}\n{\"type\":\"item.completed\",\"item\":{\"id\":\"normalized\",\"type\":\"error\"}}\n{\"type\":\"turn.started\"}\n{\"type\":\"item.completed\",\"item\":{\"id\":\"normalized\",\"type\":\"error\"}}\n{\"type\":\"item.completed\",\"item\":{\"id\":\"normalized\",\"type\":\"agent_message\",\"text\":\"[sanitized response]\"}}\n{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":19232,\"cached_input_tokens\":0,\"output_tokens\":35,\"reasoning_output_tokens\":0}}",
+    "stderr": "",
+    "structuredOutput": "{\"result\":\"implemented\",\"summary\":\"sanitized local pinned smoke\",\"questions\":null,\"suggestedAnswers\":null,\"error\":null}",
+    "exitCode": 0
+  }
+}

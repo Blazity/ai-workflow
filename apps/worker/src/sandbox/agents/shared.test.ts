@@ -6,6 +6,7 @@ import {
   GLOBAL_SKILLS,
   installSkillsToAgentsDir,
 } from "./shared.js";
+import { AGENT_CLI_SPECS } from "./protocol.js";
 
 // Sentinel absent -> `test -f` reports exit 1 so the install proceeds.
 const notYetInstalled = (cmd: string, args?: string[]) =>
@@ -33,7 +34,7 @@ describe("installSkillsToAgentsDir", () => {
     const writeFiles = vi.fn().mockResolvedValue(undefined);
     const sandbox = { runCommand, writeFiles } as any;
 
-    await installSkillsToAgentsDir(sandbox);
+    await installSkillsToAgentsDir(sandbox, AGENT_CLI_SPECS.claude);
 
     const calls = runCommand.mock.calls.filter((c) => c[0] === "npx");
     expect(calls).toHaveLength(GLOBAL_SKILLS.length);
@@ -54,7 +55,7 @@ describe("installSkillsToAgentsDir", () => {
     const runCommand = vi.fn().mockImplementation((cmd, args) => notYetInstalled(cmd, args));
     const sandbox = { runCommand, writeFiles: vi.fn() } as any;
 
-    await installSkillsToAgentsDir(sandbox);
+    await installSkillsToAgentsDir(sandbox, AGENT_CLI_SPECS.claude);
 
     const touch = runCommand.mock.calls.find(
       ([cmd, args]) => cmd === "bash" && typeof args?.[1] === "string" && args[1].startsWith("touch"),
@@ -68,7 +69,7 @@ describe("installSkillsToAgentsDir", () => {
     const runCommand = vi.fn().mockResolvedValue({ exitCode: 0 });
     const sandbox = { runCommand, writeFiles: vi.fn() } as any;
 
-    await installSkillsToAgentsDir(sandbox);
+    await installSkillsToAgentsDir(sandbox, AGENT_CLI_SPECS.claude);
 
     expect(runCommand.mock.calls.filter((c) => c[0] === "npx")).toHaveLength(0);
   });

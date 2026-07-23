@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { WorkflowRunCancelledError } from "workflow/errors";
 import type {
   BlockRunState,
@@ -390,6 +390,60 @@ describe("executeGraph output contracts", () => {
         nodeId: "comment",
       },
     ]);
+  });
+});
+
+describe("executeGraph protocol diagnostics", () => {
+  it("logs one stable structured event and omits protocol detail from run state", async () => {
+    const graph = graphFrom(
+      [node("trig", "trigger_ticket_ai"), node("impl", "implementation_agent")],
+      [{ from: "trig", to: "impl" }],
+    );
+    const rec = makeRecorder();
+    const diagnostic = {
+      provider: "codex" as const,
+      packageName: "@openai/codex",
+      cliVersion: "0.144.6",
+      protocol: "codex-jsonl-0.144.6",
+      phase: "impl",
+      failureKind: "invalid_json" as const,
+      exitCode: 0,
+      stderrTail: "redacted detail",
+    };
+    const onExecutionError = vi.fn();
+
+    const result = await executeGraphWithContractValidation({
+      graph,
+      entryTriggerId: "trig",
+      triggerOutput: { status: "fired", ticketKey: "AIW-106" },
+      executeBlock: async () => executionError("internal parser detail", {
+        category: "parsing",
+        message: "The current agent phase returned an invalid structured response.",
+        phase: "impl",
+        diagnostic,
+      }),
+      hooks: { ...rec.hooks, onExecutionError },
+    });
+
+    expect(onExecutionError).toHaveBeenCalledTimes(1);
+    expect(onExecutionError).toHaveBeenCalledWith({
+      diagnosticId: "AIW-DIAG-test-run-impl-1",
+      nodeId: "impl",
+      attempt: 1,
+      category: "parsing",
+      phase: "impl",
+      detail: "internal parser detail",
+      agentProtocol: diagnostic,
+    });
+    expect(result.executionError).toEqual({
+      category: "parsing",
+      message: "The current agent phase returned an invalid structured response.",
+      phase: "impl",
+      diagnosticId: "AIW-DIAG-test-run-impl-1",
+      nodeId: "impl",
+      attempt: 1,
+    });
+    expect(JSON.stringify(result.executionError)).not.toContain("redacted detail");
   });
 });
 

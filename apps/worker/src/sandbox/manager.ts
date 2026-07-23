@@ -13,6 +13,7 @@ import type { VcsProviderKind } from "../../env.js";
 import { isActiveRunOwnerError } from "../lib/run-control-errors.js";
 import { buildVcsUrls, gitAuthArgs } from "../lib/vcs-urls.js";
 import { stopSandboxAndConfirm } from "./stop-ticket-sandboxes.js";
+import { isAgentRuntimeError } from "./agents/protocol.js";
 
 export interface SandboxProviderConfig {
   kind: "github" | "gitlab";
@@ -193,7 +194,7 @@ export class SandboxManager {
         try {
           await this.teardown(sandbox);
         } catch (cleanupError) {
-          if (!isActiveRunOwnerError(err)) throw cleanupError;
+          if (!isActiveRunOwnerError(err) && !isAgentRuntimeError(err)) throw cleanupError;
         }
       }
       throw err;

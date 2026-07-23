@@ -208,10 +208,83 @@ export interface PhaseArtifactPaths {
   input: string;
   stdout: string;
   stderr: string;
+  exitCode: string;
   sentinel: string;
   /** Schema-validated JSON file (Codex --output-schema). null for Claude. */
   structuredOutput: string | null;
 }
+
+export interface CollectedPhaseArtifacts {
+  stdout: string;
+  stderr: string;
+  structuredOutput: string | null;
+  exitCode: number | null;
+}
+
+export type AgentProtocolFailureKind =
+  | "install_failed"
+  | "setup_failed"
+  | "version_unreadable"
+  | "version_mismatch"
+  | "missing_exit_code"
+  | "cli_exit"
+  | "provider_error"
+  | "missing_result"
+  | "invalid_json"
+  | "schema_mismatch"
+  | "protocol_mismatch";
+
+export interface AgentCliSpec {
+  kind: "claude" | "codex";
+  packageName: string;
+  version: string;
+  executable: string;
+  parseVersion(output: string): string | null;
+  protocol: string;
+}
+
+export interface AgentProtocolDiagnostic {
+  provider: AgentCliSpec["kind"];
+  packageName: string;
+  cliVersion: string;
+  protocol: string;
+  phase: string;
+  failureKind: AgentProtocolFailureKind;
+  exitCode: number | null;
+  event?: {
+    type?: string;
+    subtype?: string;
+    isError?: boolean;
+    itemType?: string;
+  };
+  artifacts?: {
+    stdoutBytes: number;
+    stderrBytes: number;
+    structuredOutputBytes: number;
+    stdoutSha256: string;
+    stderrSha256: string;
+    structuredOutputSha256: string | null;
+  };
+  schema?: {
+    identity: string;
+    sha256: string;
+    issues: Array<{ path: string; code: string; message: string }>;
+  };
+  stdoutTail?: string;
+  stderrTail?: string;
+  detail?: string;
+}
+
+export type AgentProtocolFailureCategory = "provider" | "parsing" | "schema";
+
+export type AgentProtocolResult<T> =
+  | { ok: true; value: T; event?: AgentProtocolDiagnostic["event"] }
+  | {
+      ok: false;
+      category: AgentProtocolFailureCategory;
+      message: string;
+      diagnostic: AgentProtocolDiagnostic;
+    };
 
 export interface PhaseScriptOpts {
   phase: PhaseKind;
@@ -223,11 +296,34 @@ export interface PhaseScriptOpts {
 
 export interface AgentAdapter {
   kind: "claude" | "codex";
+  cliSpec: AgentCliSpec;
   install(sandbox: RunnableSandbox): Promise<void>;
   configure(sandbox: RunnableSandbox, opts: ConfigureOpts): Promise<void>;
   setCommitGuard(sandbox: RunnableSandbox, enabled: boolean): Promise<void>;
   buildPhaseScript(opts: PhaseScriptOpts): string;
   artifactPaths(phase: PhaseKind): PhaseArtifactPaths;
+  parseAgentOutputProtocol(
+    artifacts: CollectedPhaseArtifacts,
+    phase: string,
+  ): AgentProtocolResult<AgentOutput>;
+  parseReviewOutputProtocol(
+    artifacts: CollectedPhaseArtifacts,
+    phase: string,
+  ): AgentProtocolResult<ReviewOutput>;
+  parseResearchProtocol(
+    artifacts: CollectedPhaseArtifacts,
+    phase: string,
+  ): AgentProtocolResult<ResearchResult>;
+  parseStructuredObjectProtocol(
+    artifacts: CollectedPhaseArtifacts,
+    phase: string,
+    schemaIdentity: string,
+    schema: string,
+  ): AgentProtocolResult<unknown>;
+  validateFreeformProtocol(
+    artifacts: CollectedPhaseArtifacts,
+    phase: string,
+  ): AgentProtocolResult<void>;
   parseAgentOutput(raw: string, structured: string | null): AgentOutput;
   parseReviewOutput(raw: string, structured: string | null): ReviewOutput;
   parseResearchStatus(raw: string, structured: string | null): ResearchResult;

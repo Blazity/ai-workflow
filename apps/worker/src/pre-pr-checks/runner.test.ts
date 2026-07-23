@@ -106,6 +106,8 @@ describe("runPrePrChecksWithFixes", () => {
   it("sends failed check logs back to the agent and retries", async () => {
     let checkRuns = 0;
     mockRunCommand.mockImplementation((cmd, args) => {
+      const artifact = phaseArtifactCommand(cmd, args, "claude");
+      if (artifact) return artifact;
       if (cmd === "cat" && args[0] === WORKSPACE_MANIFEST_PATH) {
         return commandResult(0, JSON.stringify(manifest));
       }
@@ -125,13 +127,21 @@ describe("runPrePrChecksWithFixes", () => {
 
     expect(result.passed).toBe(true);
     expect(result.fixCycles).toBe(1);
-    expect(mockWriteFiles).toHaveBeenCalledWith([
-      {
-        path: "/tmp/pre-pr-checks-fix-prompt.txt",
-        content: expect.any(Buffer),
-      },
-    ]);
-    const prompt = mockWriteFiles.mock.calls[0][0][0].content.toString();
+    expect(mockWriteFiles).toHaveBeenCalledWith(
+      expect.arrayContaining([
+        {
+          path: "/tmp/pre-pr-fix-1-requirements.md",
+          content: expect.any(Buffer),
+        },
+        {
+          path: "/tmp/pre-pr-fix-1-wrapper.sh",
+          content: expect.any(Buffer),
+        },
+      ]),
+    );
+    const prompt = mockWriteFiles.mock.calls[0][0]
+      .find((file: { path: string; content: Buffer }) => file.path.endsWith("requirements.md"))
+      .content.toString();
     expect(prompt).toContain("github:acme/web");
     expect(prompt).toContain("Type error on line 12");
   });
@@ -152,11 +162,10 @@ describe("runPrePrChecksWithFixes", () => {
       },
     });
     mockRunCommand.mockImplementation((cmd, args) => {
+      const artifact = phaseArtifactCommand(cmd, args, "claude", claudeOutput);
+      if (artifact) return artifact;
       if (cmd === "cat" && args[0] === WORKSPACE_MANIFEST_PATH) {
         return commandResult(0, JSON.stringify(manifest));
-      }
-      if (cmd === "cat" && args[0] === "/tmp/pre-pr-checks-fix-stdout.txt") {
-        return commandResult(0, claudeOutput);
       }
       if (cmd === "git" && args[0] === "-C" && args[2] === "rev-parse") {
         return commandResult(0, "web-head");
@@ -186,25 +195,20 @@ describe("runPrePrChecksWithFixes", () => {
         num_turns: 2,
       },
     ]);
-    const fixerCall = mockRunCommand.mock.calls.find(
-      ([command]) =>
-        typeof command === "object" &&
-        command !== null &&
-        (command as { args?: string[] }).args?.some((arg) => arg.includes("claude --print")),
-    );
-    expect((fixerCall?.[0] as { args: string[] }).args.join(" ")).toContain(
-      "--output-format json",
-    );
+    const wrapper = mockWriteFiles.mock.calls[0][0]
+      .find((file: { path: string; content: Buffer }) => file.path.endsWith("wrapper.sh"))
+      .content.toString();
+    expect(wrapper).toContain("claude");
+    expect(wrapper).toContain("--output-format json");
   });
 
   it("returns null usage for a launched fix cycle whose CLI output has no usage", async () => {
     let checkRuns = 0;
     mockRunCommand.mockImplementation((cmd, args) => {
+      const artifact = phaseArtifactCommand(cmd, args, "codex");
+      if (artifact) return artifact;
       if (cmd === "cat" && args[0] === WORKSPACE_MANIFEST_PATH) {
         return commandResult(0, JSON.stringify(manifest));
-      }
-      if (cmd === "cat" && args[0] === "/tmp/pre-pr-checks-fix-stdout.txt") {
-        return commandResult(0, "");
       }
       if (cmd === "git" && args[0] === "-C" && args[2] === "rev-parse") {
         return commandResult(0, "web-head");
@@ -229,21 +233,101 @@ describe("runPrePrChecksWithFixes", () => {
     expect(result.fixCycleUsages).toEqual([null]);
   });
 
-  it("stops before another check or fixer when the first fix cycle exceeds the token cap", async () => {
+  it("returns an execution failure when the repair process exits nonzero", async () => {
     let checkRuns = 0;
-    const oneRepoConfig: PrePrCheckConfig = { repositories: [config.repositories[0]!] };
     mockRunCommand.mockImplementation((cmd, args) => {
+      const artifact = phaseArtifactCommand(cmd, args, "codex", undefined, 7);
+      if (artifact) return artifact;
       if (cmd === "cat" && args[0] === WORKSPACE_MANIFEST_PATH) {
         return commandResult(0, JSON.stringify(manifest));
       }
-      if (cmd === "cat" && args[0] === "/tmp/pre-pr-checks-fix-stdout.txt") {
-        return commandResult(
-          0,
-          JSON.stringify({
-            type: "turn.completed",
-            usage: { input_tokens: 10, cached_input_tokens: 2, output_tokens: 3 },
-          }),
-        );
+      if (cmd === "git" && args[0] === "-C" && args[2] === "rev-parse") {
+        return commandResult(0, "web-head");
+      }
+      if (isConfiguredCheck(cmd)) {
+        checkRuns++;
+        return commandResult(1, "", "still failing");
+      }
+      return commandResult(0, "");
+    });
+
+    const result = await runPrePrChecksWithFixes(
+      "sbx-test-123",
+      { repositories: [config.repositories[0]!] },
+      "codex",
+      "gpt-5",
+    );
+
+    expect(result.passed).toBe(false);
+    expect(result.fixCycles).toBe(1);
+    expect(result.agentFailure).toMatchObject({
+      category: "provider",
+      diagnostic: { failureKind: "cli_exit", exitCode: 7 },
+    });
+    expect(checkRuns).toBe(1);
+  });
+
+  it("keeps valid repair usage when malformed protocol output becomes an execution failure", async () => {
+    let checkRuns = 0;
+    const malformedWithUsage = [
+      JSON.stringify({ type: "thread.started", thread_id: "normalized" }),
+      "{malformed",
+      JSON.stringify({
+        type: "turn.completed",
+        usage: { input_tokens: 10, cached_input_tokens: 2, output_tokens: 3 },
+      }),
+    ].join("\n");
+    mockRunCommand.mockImplementation((cmd, args) => {
+      const artifact = phaseArtifactCommand(cmd, args, "codex", malformedWithUsage);
+      if (artifact) return artifact;
+      if (cmd === "cat" && args[0] === WORKSPACE_MANIFEST_PATH) {
+        return commandResult(0, JSON.stringify(manifest));
+      }
+      if (cmd === "git" && args[0] === "-C" && args[2] === "rev-parse") {
+        return commandResult(0, "web-head");
+      }
+      if (isConfiguredCheck(cmd)) {
+        checkRuns++;
+        return commandResult(1, "", "still failing");
+      }
+      return commandResult(0, "");
+    });
+
+    const result = await runPrePrChecksWithFixes(
+      "sbx-test-123",
+      { repositories: [config.repositories[0]!] },
+      "codex",
+      "gpt-5",
+    );
+
+    expect(result.agentFailure).toMatchObject({
+      category: "parsing",
+      diagnostic: { failureKind: "invalid_json" },
+    });
+    expect(result.fixCycleUsages).toEqual([
+      {
+        cost_usd: null,
+        tokens: { input: 8, cached_input: 2, output: 3 },
+        duration_ms: 0,
+        duration_api_ms: 0,
+        num_turns: 1,
+      },
+    ]);
+    expect(checkRuns).toBe(1);
+  });
+
+  it("stops before another check or fixer when the first fix cycle exceeds the token cap", async () => {
+    let checkRuns = 0;
+    const oneRepoConfig: PrePrCheckConfig = { repositories: [config.repositories[0]!] };
+    const codexOutput = JSON.stringify({
+      type: "turn.completed",
+      usage: { input_tokens: 10, cached_input_tokens: 2, output_tokens: 3 },
+    });
+    mockRunCommand.mockImplementation((cmd, args) => {
+      const artifact = phaseArtifactCommand(cmd, args, "codex", codexOutput);
+      if (artifact) return artifact;
+      if (cmd === "cat" && args[0] === WORKSPACE_MANIFEST_PATH) {
+        return commandResult(0, JSON.stringify(manifest));
       }
       if (cmd === "git" && args[0] === "-C" && args[2] === "rev-parse") {
         return commandResult(0, "web-head");
@@ -285,11 +369,10 @@ describe("runPrePrChecksWithFixes", () => {
     let checkRuns = 0;
     const oneRepoConfig: PrePrCheckConfig = { repositories: [config.repositories[0]!] };
     mockRunCommand.mockImplementation((cmd, args) => {
+      const artifact = phaseArtifactCommand(cmd, args, "codex");
+      if (artifact) return artifact;
       if (cmd === "cat" && args[0] === WORKSPACE_MANIFEST_PATH) {
         return commandResult(0, JSON.stringify(manifest));
-      }
-      if (cmd === "cat" && args[0] === "/tmp/pre-pr-checks-fix-stdout.txt") {
-        return commandResult(0, "");
       }
       if (cmd === "git" && args[0] === "-C" && args[2] === "rev-parse") {
         return commandResult(0, "web-head");
@@ -327,6 +410,8 @@ describe("runPrePrChecksWithFixes", () => {
 
   it("fails after three unsuccessful fix cycles", async () => {
     mockRunCommand.mockImplementation((cmd, args) => {
+      const artifact = phaseArtifactCommand(cmd, args, "codex");
+      if (artifact) return artifact;
       if (cmd === "cat" && args[0] === WORKSPACE_MANIFEST_PATH) {
         return commandResult(0, JSON.stringify(manifest));
       }
@@ -348,6 +433,8 @@ describe("runPrePrChecksWithFixes", () => {
 
   it("caps fix cycles at a caller-supplied maxFixCycles", async () => {
     mockRunCommand.mockImplementation((cmd, args) => {
+      const artifact = phaseArtifactCommand(cmd, args, "codex");
+      if (artifact) return artifact;
       if (cmd === "cat" && args[0] === WORKSPACE_MANIFEST_PATH) {
         return commandResult(0, JSON.stringify(manifest));
       }
@@ -419,6 +506,25 @@ function commandResult(exitCode: number, stdout = "", stderr = "") {
     stdout: vi.fn().mockResolvedValue(stdout),
     stderr: vi.fn().mockResolvedValue(stderr),
   };
+}
+
+function phaseArtifactCommand(
+  cmd: unknown,
+  args: unknown,
+  provider: "claude" | "codex",
+  stdout = provider === "claude"
+    ? JSON.stringify({ type: "result", subtype: "success", is_error: false })
+    : JSON.stringify({ type: "turn.completed" }),
+  phaseExitCode = 0,
+) {
+  if (cmd !== "cat" || !Array.isArray(args) || typeof args[0] !== "string") return null;
+  const path = args[0];
+  if (!path.startsWith("/tmp/pre-pr-fix-")) return null;
+  if (path.endsWith("-stdout.txt")) return commandResult(0, stdout);
+  if (path.endsWith("-stderr.txt")) return commandResult(0, "");
+  if (path.endsWith("-exit-code")) return commandResult(0, String(phaseExitCode));
+  if (path.endsWith("-result.json")) return commandResult(0, "repair complete");
+  return null;
 }
 
 function isConfiguredCheck(cmd: unknown): boolean {

@@ -106,11 +106,15 @@ describe("collectPhaseOutput", () => {
 describe("collectPhase", () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it("returns raw and optional structured output", async () => {
+  it("returns stdout, stderr, structured output, and exit code independently", async () => {
     mockRunCommand.mockImplementation((_cmd: string, args: string[]) => {
       const file = args[0];
       const text = file.includes("stdout")
         ? "ndjson body"
+        : file.includes("stderr")
+          ? "warning"
+          : file.includes("exit-code")
+            ? "17"
         : file.includes("result")
           ? '{"result":"implemented"}'
           : "";
@@ -121,7 +125,13 @@ describe("collectPhase", () => {
         stdout: "/tmp/stdout",
         stderr: "/tmp/stderr",
         structuredOutput: "/tmp/result",
+        exitCode: "/tmp/exit-code",
       }),
-    ).resolves.toEqual({ raw: "ndjson body", structured: '{"result":"implemented"}' });
+    ).resolves.toEqual({
+      stdout: "ndjson body",
+      stderr: "warning",
+      structuredOutput: '{"result":"implemented"}',
+      exitCode: 17,
+    });
   });
 });

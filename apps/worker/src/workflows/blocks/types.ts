@@ -4,8 +4,9 @@ import type {
   BlockExecutionResult,
   StepsRecord,
 } from "../../workflow-definition/interpreter.js";
+import { executionError } from "../../workflow-definition/interpreter.js";
 import type { AgentKind } from "../../sandbox/agents/index.js";
-import type { PhaseUsage } from "../../sandbox/agents/types.js";
+import type { AgentProtocolResult, PhaseUsage } from "../../sandbox/agents/types.js";
 import type {
   IssueTrackerMoveTarget,
   TicketContent,
@@ -124,7 +125,18 @@ export type {
   BlockExecutionResult,
   StepsRecord,
 } from "../../workflow-definition/interpreter.js";
-export { executionError } from "../../workflow-definition/interpreter.js";
+export { executionError };
+
+export function agentProtocolExecutionError(
+  result: Extract<AgentProtocolResult<unknown>, { ok: false }>,
+): Extract<BlockExecutionResult, { kind: "execution_error" }> {
+  return executionError(result.diagnostic.detail ?? result.diagnostic.failureKind, {
+    category: result.category,
+    message: result.message,
+    phase: result.diagnostic.phase,
+    diagnostic: result.diagnostic,
+  });
+}
 
 /** Executor signature every block module in this directory exports. */
 export type BlockExecuteFn = (

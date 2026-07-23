@@ -1,4 +1,5 @@
 import type { AgentKind } from "../../sandbox/agents/index.js";
+import type { AgentProtocolResult } from "../../sandbox/agents/types.js";
 import { isRunControlError } from "../run-control-error.js";
 import type { EngineCtx } from "./types.js";
 import { ensureArthurTask } from "./prepare-workspace.js";
@@ -9,7 +10,10 @@ async function blockProvisionAgentSandboxStep(
   agentKind: AgentKind,
   model: string,
   arthurTaskId: string | null,
-): Promise<{ sandboxId: string }> {
+): Promise<
+  | { ok: true; sandboxId: string }
+  | { ok: false; failure: Extract<AgentProtocolResult<unknown>, { ok: false }> }
+> {
   "use step";
   const { env } = await import("../../../env.js");
   const { Sandbox } = await import("@vercel/sandbox");
@@ -17,12 +21,36 @@ async function blockProvisionAgentSandboxStep(
   const { createAgentAdapter } = await import("../../sandbox/agents/index.js");
 
   if (agentKind === "codex" && !env.CODEX_API_KEY && !env.CODEX_CHATGPT_OAUTH_TOKEN) {
-    throw new Error(
-      "agent codex needs CODEX_API_KEY or CODEX_CHATGPT_OAUTH_TOKEN in the deployed environment",
+    const { runtimePreparationError } = await import("../../sandbox/agents/protocol.js");
+    const error = runtimePreparationError(
+      createAgentAdapter(agentKind).cliSpec,
+      "Codex authentication credentials are missing from the deployed environment.",
     );
+    return {
+      ok: false,
+      failure: {
+        ok: false,
+        category: error.category,
+        message: error.safeMessage,
+        diagnostic: error.diagnostic,
+      },
+    };
   }
   if (agentKind === "claude" && !env.ANTHROPIC_API_KEY) {
-    throw new Error("agent claude needs ANTHROPIC_API_KEY in the deployed environment");
+    const { runtimePreparationError } = await import("../../sandbox/agents/protocol.js");
+    const error = runtimePreparationError(
+      createAgentAdapter(agentKind).cliSpec,
+      "Claude authentication credentials are missing from the deployed environment.",
+    );
+    return {
+      ok: false,
+      failure: {
+        ok: false,
+        category: error.category,
+        message: error.safeMessage,
+        diagnostic: error.diagnostic,
+      },
+    };
   }
 
   const arthur =
@@ -55,15 +83,28 @@ async function blockProvisionAgentSandboxStep(
       model,
       arthur,
     });
-    return { sandboxId: sandbox.sandboxId };
+    return { ok: true, sandboxId: sandbox.sandboxId };
   } catch (error) {
+    const { isAgentRuntimeError } = await import("../../sandbox/agents/protocol.js");
+    const agentRuntimeError = isAgentRuntimeError(error);
     const { stopSandboxAndConfirm } = await import(
       "../../sandbox/stop-ticket-sandboxes.js"
     );
     try {
       await stopSandboxAndConfirm(sandbox);
     } catch (cleanupError) {
-      if (!isRunControlError(error)) throw cleanupError;
+      if (!isRunControlError(error) && !agentRuntimeError) throw cleanupError;
+    }
+    if (agentRuntimeError) {
+      return {
+        ok: false,
+        failure: {
+          ok: false,
+          category: error.category,
+          message: error.safeMessage,
+          diagnostic: error.diagnostic,
+        },
+      };
     }
     throw error;
   }
@@ -84,13 +125,18 @@ export async function ensureAgentSandbox(
   if (existing) return existing;
 
   const arthurTaskId = await ensureArthurTask(ctx);
-  const { sandboxId } = await blockProvisionAgentSandboxStep(
+  const provisioned = await blockProvisionAgentSandboxStep(
     ctx.entry.subjectKey,
     ctx.entry.ownerToken,
     agentKind,
     model,
     arthurTaskId,
   );
+  if (!provisioned.ok) {
+    const { AgentRuntimeError } = await import("../../sandbox/agents/protocol.js");
+    throw new AgentRuntimeError(provisioned.failure);
+  }
+  const { sandboxId } = provisioned;
   ctx.agentSandboxIds[agentKind] = sandboxId;
   // The in-workflow set covers normal teardown; the durable owner-child row
   // registered immediately after create covers cancel/reconcile crash cleanup.

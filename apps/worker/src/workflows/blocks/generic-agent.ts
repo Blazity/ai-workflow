@@ -1,7 +1,12 @@
 import { z } from "zod";
 import type { JsonValue } from "@shared/contracts";
 import type { AgentKind } from "../../sandbox/agents/index.js";
-import type { PhaseArtifactPaths, PhaseUsage } from "../../sandbox/agents/types.js";
+import type {
+  AgentProtocolResult,
+  CollectedPhaseArtifacts,
+  PhaseArtifactPaths,
+  PhaseUsage,
+} from "../../sandbox/agents/types.js";
 import {
   validateBlockOutputForDefinition,
   workflowBlockDefinitionIssue,
@@ -11,6 +16,7 @@ import { ensureAgentSandbox } from "./agent-sandbox.js";
 import { isRunControlError } from "../run-control-error.js";
 import { pollPhaseUntilDone } from "./poll-phase.js";
 import {
+  agentProtocolExecutionError,
   executionError,
   sanitizeBlockId,
   type BlockExecuteFn,
@@ -37,43 +43,11 @@ const genericOutputSchema = z.object({
   error: z.string().nullish(),
 });
 
-function extractStructuredObject(raw: string, structured: string | null): unknown {
-  if (structured) {
-    try {
-      return JSON.parse(structured);
-    } catch {
-      return undefined;
-    }
-  }
-  const candidates = [raw, ...raw.split("\n").filter(Boolean).reverse()];
-  for (const candidate of candidates) {
-    try {
-      const parsed = JSON.parse(candidate);
-      if (parsed && typeof parsed === "object" && (parsed as { type?: string }).type === "result") {
-        const envelope = parsed as { structured_output?: unknown; result?: unknown };
-        if (envelope.structured_output != null) return envelope.structured_output;
-        if (typeof envelope.result === "string") {
-          try {
-            return JSON.parse(envelope.result);
-          } catch {
-            return undefined;
-          }
-        }
-        continue;
-      }
-      if (parsed && typeof parsed === "object") return parsed;
-    } catch {
-      continue;
-    }
-  }
-  return undefined;
-}
-
 async function blockGenericAgentCommitGuardStep(
   sandboxId: string,
   agentKind: AgentKind,
   enabled: boolean,
-): Promise<void> {
+): Promise<AgentProtocolResult<void>> {
   "use step";
   const { Sandbox } = await import("@vercel/sandbox");
   const { getSandboxCredentials } = await import("../../sandbox/credentials.js");
@@ -81,7 +55,19 @@ async function blockGenericAgentCommitGuardStep(
 
   const sandbox = await Sandbox.get({ sandboxId, ...getSandboxCredentials() });
   const agent = createAgentAdapter(agentKind);
-  await agent.setCommitGuard(sandbox, enabled);
+  try {
+    await agent.setCommitGuard(sandbox, enabled);
+    return { ok: true, value: undefined };
+  } catch (error) {
+    const { isAgentRuntimeError } = await import("../../sandbox/agents/protocol.js");
+    if (!isAgentRuntimeError(error)) throw error;
+    return {
+      ok: false,
+      category: error.category,
+      message: error.safeMessage,
+      diagnostic: error.diagnostic,
+    };
+  }
 }
 
 async function blockGenericAgentPlanPhaseStep(
@@ -100,43 +86,143 @@ async function blockGenericAgentPlanPhaseStep(
 
 async function blockGenericAgentStartPhaseStep(
   sandboxId: string,
+  agentKind: AgentKind,
+  phase: string,
   inputFilePath: string,
   inputContent: string,
   scriptPath: string,
   scriptContent: string,
-): Promise<string> {
+): Promise<
+  | { ok: true; commandId: string }
+  | { ok: false; failure: Extract<AgentProtocolResult<unknown>, { ok: false }> }
+> {
   "use step";
-  const { Sandbox } = await import("@vercel/sandbox");
-  const { getSandboxCredentials } = await import("../../sandbox/credentials.js");
+  const { createAgentAdapter } = await import("../../sandbox/agents/index.js");
+  const { commandProtocolFailure, protocolFailure } = await import(
+    "../../sandbox/agents/protocol.js"
+  );
+  const spec = createAgentAdapter(agentKind).cliSpec;
+  try {
+    const { Sandbox } = await import("@vercel/sandbox");
+    const { getSandboxCredentials } = await import("../../sandbox/credentials.js");
 
-  const sandbox = await Sandbox.get({ sandboxId, ...getSandboxCredentials() });
-  await sandbox.writeFiles([
-    { path: inputFilePath, content: Buffer.from(inputContent) },
-    { path: scriptPath, content: Buffer.from(scriptContent) },
-  ]);
-  await sandbox.runCommand("chmod", ["+x", scriptPath]);
-  const command = await sandbox.runCommand({
-    cmd: "bash",
-    args: [scriptPath],
-    cwd: "/vercel/sandbox",
-    detached: true,
-  });
-  return command.cmdId;
+    const sandbox = await Sandbox.get({ sandboxId, ...getSandboxCredentials() });
+    await sandbox.writeFiles([
+      { path: inputFilePath, content: Buffer.from(inputContent) },
+      { path: scriptPath, content: Buffer.from(scriptContent) },
+    ]);
+    const chmod = await sandbox.runCommand("chmod", ["+x", scriptPath]);
+    if (chmod.exitCode !== 0) {
+      return {
+        ok: false,
+        failure: await commandProtocolFailure({
+          spec,
+          phase,
+          result: chmod,
+          failureKind: "setup_failed",
+          message: "The current agent phase could not be completed.",
+          detail: "The agent phase wrapper could not be made executable.",
+        }),
+      };
+    }
+    const command = await sandbox.runCommand({
+      cmd: "bash",
+      args: [scriptPath],
+      cwd: "/vercel/sandbox",
+      detached: true,
+    });
+    if (command.exitCode !== null && command.exitCode !== 0) {
+      return {
+        ok: false,
+        failure: await commandProtocolFailure({
+          spec,
+          phase,
+          result: command,
+          failureKind: "cli_exit",
+          message: "The current agent phase could not be completed.",
+          detail: "The agent phase process could not be launched.",
+        }),
+      };
+    }
+    return { ok: true, commandId: command.cmdId };
+  } catch (error) {
+    const { isRunControlError } = await import("../run-control-error.js");
+    if (isRunControlError(error)) throw error;
+    const failure = protocolFailure({
+      spec,
+      phase,
+      artifacts: { stdout: "", stderr: "", structuredOutput: null, exitCode: null },
+      failureKind: "provider_error",
+      category: "provider",
+      message: "The current agent phase could not be completed.",
+      detail: "The agent phase process could not be launched.",
+    });
+    if (failure.ok) throw new Error("unreachable");
+    return { ok: false, failure };
+  }
 }
 blockGenericAgentStartPhaseStep.maxRetries = 0;
 
 async function blockGenericAgentParseStep(
   agentKind: AgentKind,
-  raw: string,
-  structured: string | null,
-): Promise<{ object: unknown; usage: PhaseUsage | null }> {
+  artifacts: CollectedPhaseArtifacts,
+  phase: string,
+  customSchema: string | undefined,
+): Promise<{ result: AgentProtocolResult<unknown>; usage: PhaseUsage | null }> {
   "use step";
   const { createAgentAdapter } = await import("../../sandbox/agents/index.js");
+  const { GENERIC_SCHEMA } = await import("../../sandbox/agents/types.js");
+  const { validateStructuredValue } = await import("../../sandbox/agents/protocol.js");
   const adapter = createAgentAdapter(agentKind);
+  const extracted = adapter.parseStructuredObjectProtocol(
+    artifacts,
+    phase,
+    customSchema === undefined ? "generic-agent" : "generic-agent-custom",
+    customSchema ?? GENERIC_SCHEMA,
+  );
+  const result = customSchema === undefined && extracted.ok
+    ? validateStructuredValue({
+        spec: adapter.cliSpec,
+        phase,
+        artifacts,
+        value: extracted.value,
+        schema: genericOutputSchema,
+        schemaIdentity: "generic-agent",
+        schemaSource: GENERIC_SCHEMA,
+      })
+    : extracted;
   return {
-    object: extractStructuredObject(raw, structured),
-    usage: adapter.extractUsage(raw, structured),
+    result,
+    usage: adapter.extractUsage(artifacts.stdout, artifacts.structuredOutput),
   };
+}
+
+async function blockGenericAgentSchemaFailureStep(
+  agentKind: AgentKind,
+  artifacts: CollectedPhaseArtifacts,
+  phase: string,
+  schema: string,
+  issues: string[],
+): Promise<Extract<AgentProtocolResult<unknown>, { ok: false }>> {
+  "use step";
+  const { createAgentAdapter } = await import("../../sandbox/agents/index.js");
+  const { protocolFailure } = await import("../../sandbox/agents/protocol.js");
+  const failure = protocolFailure({
+    spec: createAgentAdapter(agentKind).cliSpec,
+    phase,
+    artifacts,
+    failureKind: "schema_mismatch",
+    category: "schema",
+    message: "The current agent phase returned an invalid structured response.",
+    schema: {
+      identity: "generic-agent-custom",
+      source: schema,
+      issues: issues.map((message) => ({ path: [], code: "custom", message })),
+    },
+    detail: "The structured response did not satisfy the requested schema.",
+  });
+  if (failure.ok) throw new Error("unreachable");
+  return failure;
 }
 
 /**
@@ -186,6 +272,15 @@ export const execute: BlockExecuteFn = async (
         : ctx.sandboxId;
   } catch (err) {
     if (isRunControlError(err)) throw err;
+    const { isAgentRuntimeError } = await import("../../sandbox/agents/protocol.js");
+    if (isAgentRuntimeError(err)) {
+      return agentProtocolExecutionError({
+        ok: false,
+        category: err.category,
+        message: err.safeMessage,
+        diagnostic: err.diagnostic,
+      });
+    }
     return executionError(err instanceof Error ? err.message : String(err), {
       category: "sandbox",
     });
@@ -228,15 +323,24 @@ export const execute: BlockExecuteFn = async (
     // it), so the same graph would commit or not depending on block order. Only
     // committed work is pushed, so an unguarded agent's changes are dropped
     // silently; the guard is a no-op when the agent leaves a clean tree.
-    await blockGenericAgentCommitGuardStep(sandboxId, kind, workspaceMode === "read_write");
-    const { paths, script } = await blockGenericAgentPlanPhaseStep(kind, phase, model, jsonSchema);
-    const commandId = await blockGenericAgentStartPhaseStep(
+    const guard = await blockGenericAgentCommitGuardStep(
       sandboxId,
+      kind,
+      workspaceMode === "read_write",
+    );
+    if (!guard.ok) return agentProtocolExecutionError(guard);
+    const { paths, script } = await blockGenericAgentPlanPhaseStep(kind, phase, model, jsonSchema);
+    const launch = await blockGenericAgentStartPhaseStep(
+      sandboxId,
+      kind,
+      phase,
       paths.input,
       prompt,
       paths.wrapper,
       script,
     );
+    if (!launch.ok) return agentProtocolExecutionError(launch.failure);
+    const commandId = launch.commandId;
     ctx.markLaunched(usageLabel);
 
     const done = await pollPhaseUntilDone(
@@ -251,9 +355,16 @@ export const execute: BlockExecuteFn = async (
     }
 
     const { collectPhase } = await import("../../sandbox/poll-agent.js");
-    const { raw, structured } = await collectPhase(sandboxId, paths);
-    const { object, usage } = await blockGenericAgentParseStep(kind, raw, structured);
+    const artifacts = await collectPhase(sandboxId, paths);
+    const { result, usage } = await blockGenericAgentParseStep(
+      kind,
+      artifacts,
+      phase,
+      customSchema,
+    );
     ctx.recordUsage(usageLabel, usage, model);
+    if (!result.ok) return agentProtocolExecutionError(result);
+    const object = result.value;
 
     if (customSchema !== undefined) {
       if (object === undefined) {
@@ -268,28 +379,27 @@ export const execute: BlockExecuteFn = async (
       }
       const data = object as Record<string, JsonValue>;
       const output = { ...data, status: "completed", data } as const;
-      if (
-        validateBlockOutputForDefinition(block.type, block.params, output, {
-          requireNormalOutput: true,
-        }).length > 0
-      ) {
-        return executionError("agent output did not match the requested schema", {
-          category: "schema",
-        });
+      const issues = validateBlockOutputForDefinition(block.type, block.params, output, {
+        requireNormalOutput: true,
+      });
+      if (issues.length > 0) {
+        const failure = await blockGenericAgentSchemaFailureStep(
+          kind,
+          artifacts,
+          phase,
+          customSchema,
+          issues,
+        );
+        return agentProtocolExecutionError(failure);
       }
       return { kind: "next", output };
     }
 
-    const parsed = genericOutputSchema.safeParse(object);
-    if (!parsed.success) {
-      return executionError("agent output was not structured JSON", {
-        category: "parsing",
-      });
-    }
-    if (parsed.data.status === "needs_input") {
-      const listed = (parsed.data.questions ?? []).filter((q) => q.trim().length > 0);
-      const questions = listed.length > 0 ? listed : [parsed.data.body];
-      const suggestedAnswers = (parsed.data.suggestedAnswers ?? []).filter(
+    const parsed = genericOutputSchema.parse(object);
+    if (parsed.status === "needs_input") {
+      const listed = (parsed.questions ?? []).filter((q) => q.trim().length > 0);
+      const questions = listed.length > 0 ? listed : [parsed.body];
+      const suggestedAnswers = (parsed.suggestedAnswers ?? []).filter(
         (s) => s.trim().length > 0,
       );
       return {
@@ -303,9 +413,9 @@ export const execute: BlockExecuteFn = async (
         ...(suggestedAnswers.length > 0 ? { suggestedAnswers } : {}),
       };
     }
-    if (parsed.data.status === "failed") {
+    if (parsed.status === "failed") {
       return executionError(
-        parsed.data.error ?? parsed.data.body.slice(0, 500),
+        parsed.error ?? parsed.body.slice(0, 500),
         { category: "provider" },
       );
     }
@@ -313,7 +423,7 @@ export const execute: BlockExecuteFn = async (
       kind: "next",
       output: {
         status: "completed",
-        body: parsed.data.body.slice(0, 4000),
+        body: parsed.body.slice(0, 4000),
       },
     };
   } catch (err) {
