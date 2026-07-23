@@ -1,5 +1,6 @@
 import {
   DEFAULT_AGENT_PROMPTS,
+  DEFAULT_FIX_PROMPT,
   containsMalformedPromptDataToken,
   containsMalformedPromptReference,
   containsMalformedPromptSlotToken,
@@ -157,9 +158,6 @@ export interface EffectivePromptCompilation {
 }
 
 const MAX_SECTION_LENGTH = 200_000;
-const COMPATIBILITY_FIX_PROMPT =
-  "Resolve the supplied pull-request feedback, failing checks, and merge conflicts.";
-
 /**
  * PR2/PR3 v2 snapshots predate explicit Harness Profile and prompt pinning.
  * Only those profile-less specialized blocks retain their former code-owned
@@ -177,7 +175,7 @@ export function compatibilityPromptSourceForV2Node(
     case "review_agent":
       return DEFAULT_AGENT_PROMPTS.review;
     case "fix_agent":
-      return COMPATIBILITY_FIX_PROMPT;
+      return DEFAULT_FIX_PROMPT;
     default:
       return null;
   }

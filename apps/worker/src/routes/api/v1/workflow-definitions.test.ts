@@ -15,6 +15,7 @@ import {
 import { createTestDb } from "../../../db/test-db.js";
 import {
   createPrompt,
+  getPromptVersion,
   savePromptVersion,
 } from "../../../prompt-library/store.js";
 import {
@@ -144,6 +145,31 @@ function migratableV1Definition(prompt?: string): WorkflowDefinitionV1 {
     schemaVersion: 1,
     nodes,
     edges: [{ from: "trigger", to: nodes[1]!.id }],
+  };
+}
+
+function migratableImplementationDefinition(): WorkflowDefinitionV1 {
+  return {
+    schemaVersion: 1,
+    nodes: [
+      {
+        id: "trigger",
+        type: "trigger_ticket_ai",
+        x: 0,
+        y: 0,
+        params: {},
+        inputs: {},
+      },
+      {
+        id: "implementation",
+        type: "implementation_agent",
+        x: 240,
+        y: 0,
+        params: {},
+        inputs: {},
+      },
+    ],
+    edges: [{ from: "trigger", to: "implementation" }],
   };
 }
 
@@ -785,6 +811,256 @@ describe("PUT /api/v1/workflow-definitions/:id", () => {
 
 describe("POST /api/v1/workflow-definitions/:id/migrate", () => {
   const migrate = paramHandler("post", "/d/:id/migrate", detailMigrate);
+
+  it("materializes the exact pinned v1 default prompt before validating v2", async () => {
+    await saveDraft(migratableImplementationDefinition(), 0);
+
+    const previewRes = await migrate(
+      jsonRequest(
+        "POST",
+        {
+          mode: "preview",
+          sourceVersion: 1,
+          targetSchemaVersion: 2,
+          expectedDraftRevision: 1,
+        },
+        "http://worker.test/d/1/migrate",
+      ),
+    );
+
+    expect(previewRes.status).toBe(200);
+    const preview = await previewRes.json();
+    expect(preview.blockers).toEqual([]);
+    expect(
+      preview.definition.nodes.find(
+        ({ id }: { id: string }) => id === "implementation",
+      ).configuration.prompt,
+    ).toBe("{{prompt:implement@1}}");
+    expect(preview.conversions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "migration.prompt.default_materialized",
+          nodeId: "implementation",
+        }),
+        expect.objectContaining({
+          code: "migration.prompt.reference_pinned",
+          nodeId: "implementation",
+        }),
+      ]),
+    );
+  });
+
+  it("produces a deployable v2 candidate for the legacy Ticket workflow", async () => {
+    await saveDraft(defaultWorkflowDefinition({ includeReview: true }), 0);
+
+    const previewRes = await migrate(
+      jsonRequest(
+        "POST",
+        {
+          mode: "preview",
+          sourceVersion: 1,
+          targetSchemaVersion: 2,
+          expectedDraftRevision: 1,
+        },
+        "http://worker.test/d/1/migrate",
+      ),
+    );
+    const preview = await previewRes.json();
+
+    expect(preview.blockers).toEqual([]);
+    expect(preview.conversionHash).toMatch(/^[a-f0-9]{64}$/);
+    expect(preview.definition).toMatchObject({ schemaVersion: 2 });
+  });
+
+  it("snapshots only legacy nested prompt composition without changing the library", async () => {
+    const leaf = await createPrompt(db, {
+      name: "Migration nested leaf",
+      body: "Leaf body",
+      actor: STORE_ACTOR,
+    });
+    const outer = await createPrompt(db, {
+      name: "Migration nested outer",
+      body: `Outer {{prompt:${leaf.prompt.id}}}`,
+      actor: STORE_ACTOR,
+    });
+    await saveDraft(
+      migratableV1Definition(
+        `Use {{prompt:${outer.prompt.id}}}`,
+      ),
+      0,
+    );
+
+    const previewRes = await migrate(
+      jsonRequest(
+        "POST",
+        {
+          mode: "preview",
+          sourceVersion: 1,
+          targetSchemaVersion: 2,
+          expectedDraftRevision: 1,
+        },
+        "http://worker.test/d/1/migrate",
+      ),
+    );
+
+    expect(previewRes.status).toBe(200);
+    const preview = await previewRes.json();
+    expect(preview.blockers).toEqual([]);
+    expect(
+      preview.definition.nodes.find(({ id }: { id: string }) => id === "llm")
+        .configuration.prompt,
+    ).toBe("Use Outer {{prompt:migration-nested-leaf@1}}");
+    expect(preview.conversions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "migration.prompt.nested_snapshot",
+          nodeId: "llm",
+        }),
+        expect.objectContaining({
+          code: "migration.prompt.reference_pinned",
+          nodeId: "llm",
+        }),
+      ]),
+    );
+    expect(
+      (await getPromptVersion(db, outer.prompt.id, 1))?.body,
+    ).toBe(`Outer {{prompt:${leaf.prompt.id}}}`);
+  });
+
+  it("blocks missing, malformed, and cyclic prompt trees at their exact workflow paths", async () => {
+    const cycleA = await createPrompt(db, {
+      name: "Migration cycle A",
+      body: "Initial A",
+      actor: STORE_ACTOR,
+    });
+    const cycleB = await createPrompt(db, {
+      name: "Migration cycle B",
+      body: "{{prompt:migration-cycle-a@2}}",
+      actor: STORE_ACTOR,
+    });
+    await savePromptVersion(db, {
+      promptId: cycleA.prompt.id,
+      body: `{{prompt:${cycleB.prompt.id}@1}}`,
+      actor: STORE_ACTOR,
+    });
+    const invalidPrompts: WorkflowDefinitionV1 = {
+      schemaVersion: 1,
+      nodes: [
+        {
+          id: "trigger",
+          type: "trigger_ticket_ai",
+          x: 0,
+          y: 0,
+          params: {},
+          inputs: {},
+        },
+        ...[
+          ["missing", "{{prompt:migration-does-not-exist@1}}"],
+          ["malformed", "{{prompt:}}"],
+          ["cyclic", "{{prompt:migration-cycle-a@2}}"],
+        ].map(([id, prompt], index) => ({
+          id: id!,
+          type: "call_llm" as const,
+          x: 240,
+          y: index * 160,
+          params: { prompt: prompt! },
+          inputs: {},
+        })),
+      ],
+      edges: [
+        { from: "trigger", to: "missing" },
+        { from: "trigger", to: "malformed" },
+        { from: "trigger", to: "cyclic" },
+      ],
+    };
+    await saveDraft(invalidPrompts, 0);
+
+    const previewRes = await migrate(
+      jsonRequest(
+        "POST",
+        {
+          mode: "preview",
+          sourceVersion: 1,
+          targetSchemaVersion: 2,
+          expectedDraftRevision: 1,
+        },
+        "http://worker.test/d/1/migrate",
+      ),
+    );
+    const preview = await previewRes.json();
+
+    expect(preview.definition).toBeNull();
+    expect(preview.conversionHash).toBeNull();
+    expect(preview.blockers).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "migration.prompt.resolution_failed",
+          nodeId: "missing",
+          path: "/nodes/1/params/prompt",
+        }),
+        expect.objectContaining({
+          code: "migration.prompt.resolution_failed",
+          nodeId: "malformed",
+          path: "/nodes/2/params/prompt",
+        }),
+        expect.objectContaining({
+          code: "migration.prompt.resolution_failed",
+          nodeId: "cyclic",
+          path: "/nodes/3/params/prompt",
+        }),
+      ]),
+    );
+  });
+
+  it("turns asynchronous v2 prompt validation failures into apply blockers", async () => {
+    const invalid: WorkflowDefinitionV1 = {
+      schemaVersion: 1,
+      nodes: [
+        {
+          id: "trigger",
+          type: "trigger_ticket_ai",
+          x: 0,
+          y: 0,
+          params: {},
+          inputs: {},
+        },
+        {
+          id: "generic",
+          type: "generic_agent",
+          x: 240,
+          y: 0,
+          params: { workspaceMode: "none" },
+          inputs: {},
+        },
+      ],
+      edges: [{ from: "trigger", to: "generic" }],
+    };
+    await saveDraft(invalid, 0);
+
+    const previewRes = await migrate(
+      jsonRequest(
+        "POST",
+        {
+          mode: "preview",
+          sourceVersion: 1,
+          targetSchemaVersion: 2,
+          expectedDraftRevision: 1,
+        },
+        "http://worker.test/d/1/migrate",
+      ),
+    );
+    const preview = await previewRes.json();
+
+    expect(preview.definition).toBeNull();
+    expect(preview.conversionHash).toBeNull();
+    expect(preview.blockers).toContainEqual(
+      expect.objectContaining({
+        code: "migration.target.prompt_empty",
+        nodeId: "generic",
+        path: "/nodes/1/configuration/prompt",
+      }),
+    );
+  });
 
   it("previews and applies an exact immutable source without changing deployment", async () => {
     await saveDraft(migratableV1Definition(), 0);

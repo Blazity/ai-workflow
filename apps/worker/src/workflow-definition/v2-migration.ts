@@ -19,9 +19,12 @@ import {
   getWorkflowDefinitionRawState,
   WorkflowDefinitionStoreError,
 } from "./store.js";
+import { validateWorkflowDefinitionCandidateWithPromptAuthoring } from "./prompt-authoring.js";
 import { upgradeStoredWorkflowDefinition } from "./schema.js";
+import { prepareWorkflowV1PromptsForMigration } from "./v2-migration-prompts.js";
 import {
   convertWorkflowDefinitionV1ToV2,
+  dedupeWorkflowV2MigrationDiagnostics,
   workflowV2PromptResolutionKey,
   type WorkflowV2MigrationDiagnostic,
   type WorkflowV2MigrationResult,
@@ -107,24 +110,63 @@ export async function previewWorkflowDefinitionV2Migration(
     });
   }
 
+  const registryContext =
+    input.registryContext ?? workflowBlockRegistryContextFromEnv();
+  const preparedPrompts = await prepareWorkflowV1PromptsForMigration(
+    db,
+    upgraded,
+  );
   const converted = await convertWorkflowDefinitionV1ToV2WithPromptResolution(db, {
     sourceDefinitionId: input.definitionId,
     sourceVersion: input.sourceVersion,
-    definition: upgraded,
-    registryContext:
-      input.registryContext ?? workflowBlockRegistryContextFromEnv(),
+    definition: preparedPrompts.definition,
+    registryContext,
   });
   const rawSourceBlocked = preflight.blockers.length > 0;
+  const preliminaryBlockers = dedupeWorkflowV2MigrationDiagnostics([
+    ...preflight.blockers,
+    ...preparedPrompts.blockers,
+    ...converted.blockers,
+  ]);
+  const targetBlockers: WorkflowV2MigrationDiagnostic[] = [];
+  if (preliminaryBlockers.length === 0 && converted.definition) {
+    const validation =
+      await validateWorkflowDefinitionCandidateWithPromptAuthoring(
+        db,
+        converted.definition,
+        registryContext,
+      );
+    for (const issue of validation.response.issues) {
+      targetBlockers.push({
+        code: `migration.target.${issue.code}`,
+        message: `Converted v2 workflow is not deployable: ${issue.message}`,
+        nodeId: issue.nodeId,
+        ...(issue.path === undefined ? {} : { path: issue.path }),
+      });
+    }
+  }
+  const blockers = dedupeWorkflowV2MigrationDiagnostics([
+    ...preliminaryBlockers,
+    ...targetBlockers,
+  ]);
+  const applicable =
+    !rawSourceBlocked &&
+    blockers.length === 0 &&
+    converted.definition !== null;
   return {
     ...converted,
     // The compatibility copy is used only to discover additional actionable
     // blockers. Unknown raw fields remain authoritative and can never be
     // normalized away into an applicable conversion.
-    conversionHash: rawSourceBlocked ? null : converted.conversionHash,
-    definition: rawSourceBlocked ? null : converted.definition,
-    conversions: [...preflight.conversions, ...converted.conversions],
+    conversionHash: applicable ? converted.conversionHash : null,
+    definition: applicable ? converted.definition : null,
+    conversions: dedupeWorkflowV2MigrationDiagnostics([
+      ...preflight.conversions,
+      ...preparedPrompts.conversions,
+      ...converted.conversions,
+    ]),
     warnings: [...preflight.warnings, ...converted.warnings],
-    blockers: [...preflight.blockers, ...converted.blockers],
+    blockers,
   };
 }
 

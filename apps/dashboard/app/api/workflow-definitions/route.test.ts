@@ -9,6 +9,7 @@ import {
   handleDefinitionPromptPreview,
   handleDefinitionPut,
   handleDefinitionLayout,
+  handleDefinitionMigrate,
   handleDefinitionRollback,
   handleDefinitionValidate,
   handleDefinitionRestore,
@@ -228,6 +229,7 @@ for (const [name, handler, method] of [
   ["deploy", handleDefinitionDeploy, "POST"],
   ["rollback", handleDefinitionRollback, "POST"],
   ["validate", handleDefinitionValidate, "POST"],
+  ["migrate", handleDefinitionMigrate, "POST"],
   ["layout", handleDefinitionLayout, "PATCH"],
 ] as const) {
   test(`${name} forwards its body to the nested worker path`, async () => {
@@ -246,6 +248,9 @@ for (const [name, handler, method] of [
       },
     );
     assert.equal(res.status, 200);
+    if (name === "migrate") {
+      assert.equal(res.headers.get("cache-control"), "private, no-store");
+    }
   });
 }
 
@@ -273,3 +278,37 @@ for (const workerResponse of [
     assert.equal(await res.text(), expectedBody);
   });
 }
+
+test("migration preserves the worker status and structured blockers", async () => {
+  const payload = {
+    error: "Workflow migration is blocked",
+    blockers: [
+      {
+        code: "migration.edge.failure_port",
+        message: "A connected FAILED path cannot be converted.",
+        nodeId: "implementation",
+      },
+    ],
+  };
+  const res = await handleDefinitionMigrate(
+    new Request(
+      "https://dashboard.example.com/api/workflow-definitions/12/migrate",
+      {
+        method: "POST",
+        body: JSON.stringify({
+          mode: "apply",
+          sourceVersion: 3,
+          targetSchemaVersion: 2,
+          expectedDraftRevision: 3,
+          expectedConversionHash: "a".repeat(64),
+        }),
+      },
+    ),
+    idParams("12"),
+    async () => Response.json(payload, { status: 422 }),
+  );
+
+  assert.equal(res.status, 422);
+  assert.deepEqual(await res.json(), payload);
+  assert.equal(res.headers.get("cache-control"), "private, no-store");
+});

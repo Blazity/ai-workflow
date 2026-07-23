@@ -60,6 +60,18 @@ export interface WorkflowV2MigrationDiagnostic {
   path?: string;
 }
 
+export function dedupeWorkflowV2MigrationDiagnostics(
+  diagnostics: WorkflowV2MigrationDiagnostic[],
+): WorkflowV2MigrationDiagnostic[] {
+  const seen = new Set<string>();
+  return diagnostics.filter((diagnostic) => {
+    const key = stableStringify(diagnostic);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 export interface WorkflowV2MigrationResult {
   sourceDefinitionId: number;
   sourceVersion: number;
@@ -246,7 +258,7 @@ export function convertWorkflowDefinitionV1ToV2(
       issue.path,
     );
   }
-  const blockers = dedupeDiagnostics(state.blockers);
+  const blockers = dedupeWorkflowV2MigrationDiagnostics(state.blockers);
   const definition = blockers.length === 0 ? candidate : null;
   return {
     sourceDefinitionId: input.sourceDefinitionId,
@@ -266,8 +278,8 @@ export function convertWorkflowDefinitionV1ToV2(
             )
             .digest("hex"),
     definition,
-    conversions: dedupeDiagnostics(state.conversions),
-    warnings: dedupeDiagnostics(state.warnings),
+    conversions: dedupeWorkflowV2MigrationDiagnostics(state.conversions),
+    warnings: dedupeWorkflowV2MigrationDiagnostics(state.warnings),
     blockers,
   };
 }
@@ -1012,18 +1024,6 @@ function addDiagnostic(
   if (kind === "conversion") state.conversions.push(diagnostic);
   else if (kind === "warning") state.warnings.push(diagnostic);
   else state.blockers.push(diagnostic);
-}
-
-function dedupeDiagnostics(
-  diagnostics: WorkflowV2MigrationDiagnostic[],
-): WorkflowV2MigrationDiagnostic[] {
-  const seen = new Set<string>();
-  return diagnostics.filter((diagnostic) => {
-    const key = stableStringify(diagnostic);
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
 }
 
 function escapePointerSegment(segment: string): string {
