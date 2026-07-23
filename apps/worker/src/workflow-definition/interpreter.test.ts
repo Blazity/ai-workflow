@@ -1,8 +1,10 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, expectTypeOf, it, vi } from "vitest";
 import { WorkflowRunCancelledError } from "workflow/errors";
 import type {
   BlockRunState,
-  WorkflowBlockType,
+  WorkflowBlockTypeV1,
+  WorkflowDefinitionV1,
+  WorkflowDefinitionV2,
   WorkflowDefinitionEdge,
   WorkflowDefinitionNode,
   WorkflowParamValue,
@@ -29,7 +31,7 @@ function executeGraph(opts: ExecuteGraphOptions) {
 
 function node(
   id: string,
-  type: WorkflowBlockType,
+  type: WorkflowBlockTypeV1,
   params: Record<string, WorkflowParamValue> = {},
   name?: string,
 ): WorkflowDefinitionNode {
@@ -105,6 +107,15 @@ const attemptsFor = (rec: Recorder, nodeId: string): number[] =>
   rec.starts.filter((s) => s.nodeId === nodeId).map((s) => s.attempt);
 
 describe("buildRuntimeGraph", () => {
+  it("accepts the unchanged v1 graph contract and excludes v2 definitions", () => {
+    expectTypeOf<WorkflowDefinitionV1>().toMatchTypeOf<
+      Parameters<typeof buildRuntimeGraph>[0]
+    >();
+    expectTypeOf<WorkflowDefinitionV2>().not.toMatchTypeOf<
+      Parameters<typeof buildRuntimeGraph>[0]
+    >();
+  });
+
   it("resolves the default port when an edge omits fromPort", () => {
     const graph = graphFrom(
       [node("trig", "trigger_ticket_ai"), node("plan", "planning_agent")],

@@ -1,6 +1,6 @@
 import type {
-  WorkflowBlockType,
-  WorkflowDefinition,
+  WorkflowBlockTypeV1,
+  WorkflowDefinitionV1,
   WorkflowDefinitionEdge,
   WorkflowDefinitionNode,
   WorkflowParamValue,
@@ -8,7 +8,7 @@ import type {
 
 export interface BlockSpec {
   id: string;
-  type: WorkflowBlockType;
+  type: WorkflowBlockTypeV1;
   params?: Record<string, WorkflowParamValue>;
   inputs?: WorkflowDefinitionNode["inputs"];
   name?: string;
@@ -33,7 +33,7 @@ export function buildEdge(from: string, to: string, fromPort?: string): Workflow
 }
 
 /** Build a fan-out-free linear chain: every block wires from its default port to the next. */
-export function buildLinearChain(specs: BlockSpec[]): WorkflowDefinition {
+export function buildLinearChain(specs: BlockSpec[]): WorkflowDefinitionV1 {
   const nodes = specs.map((spec, index) => buildNode(spec, index));
   const edges = specs.slice(1).map((spec, index) => buildEdge(specs[index].id, spec.id));
   return { schemaVersion: 1, nodes, edges };
@@ -43,7 +43,7 @@ export function buildLinearChain(specs: BlockSpec[]): WorkflowDefinition {
  * A V1-shaped pipeline authored as a straight chain. V1 has no fan-out (frozen
  * decision), so every block hands off to exactly one successor via its default port.
  */
-export function linearPipelineDefinition(): WorkflowDefinition {
+export function linearPipelineDefinition(): WorkflowDefinitionV1 {
   return buildLinearChain([
     { id: "trigger", type: "trigger_ticket_ai" },
     {
@@ -77,7 +77,7 @@ export interface HumanGateLoopOptions {
    * Block type used for the in-loop "fix" agent. Defaults to review_agent as a
    * stand-in; later waves can pass a dedicated fix-agent type once it exists.
    */
-  fixAgentType?: WorkflowBlockType;
+  fixAgentType?: WorkflowBlockTypeV1;
 }
 
 /**
@@ -90,7 +90,9 @@ export interface HumanGateLoopOptions {
  *       verdict --false--> retry(loop) --continue--> fix -> back to checks
  * Parameterised so later waves can swap in real V3/V4 types for the stand-ins.
  */
-export function humanGateLoopDefinition(options: HumanGateLoopOptions = {}): WorkflowDefinition {
+export function humanGateLoopDefinition(
+  options: HumanGateLoopOptions = {},
+): WorkflowDefinitionV1 {
   const fixAgentType = options.fixAgentType ?? "review_agent";
   const nodes: WorkflowDefinitionNode[] = [
     buildNode({ id: "trigger", type: "trigger_ticket_ai" }, 0),
@@ -170,7 +172,7 @@ export function humanGateLoopDefinition(options: HumanGateLoopOptions = {}): Wor
  *   trigger_ticket_ai -> planning_agent -> send_plan_approval
  *   trigger_plan_approved -> implementation_agent -> open_pr -> update_ticket_status
  */
-export function planApprovalDefinition(): WorkflowDefinition {
+export function planApprovalDefinition(): WorkflowDefinitionV1 {
   const nodes: WorkflowDefinitionNode[] = [
     buildNode({ id: "trigger-ticket", type: "trigger_ticket_ai" }, 0),
     buildNode(
@@ -237,7 +239,7 @@ export function planApprovalDefinition(): WorkflowDefinition {
  *                             -> fetch_pr_context -> fix_agent
  *   trigger_pr_review        /      -> finalize_workspace -> post_pr_comment
  */
-export function prReviewFixDefinition(): WorkflowDefinition {
+export function prReviewFixDefinition(): WorkflowDefinitionV1 {
   const nodes: WorkflowDefinitionNode[] = [
     buildNode({ id: "trigger-checks-failed", type: "trigger_pr_checks_failed" }, 0, 0),
     buildNode({ id: "trigger-review", type: "trigger_pr_review" }, 0, 1),

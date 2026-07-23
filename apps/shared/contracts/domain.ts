@@ -191,6 +191,7 @@ export type WorkflowBlockType =
   | "run_pre_pr_checks"
   | "run_checks"
   | "call_llm"
+  | "transform"
   | "fetch_pr_context"
   | "open_pr"
   | "update_ticket_status"
@@ -203,6 +204,9 @@ export type WorkflowBlockType =
   | "branch"
   | "loop"
   | "terminate";
+
+/** Block types executable by the legacy definition/interpreter. */
+export type WorkflowBlockTypeV1 = Exclude<WorkflowBlockType, "transform">;
 
 /** Any value expressible in JSON, used for block outputs and condition operands. */
 export type JsonValue =
@@ -329,9 +333,9 @@ export interface WorkflowBlockContract {
   availability: WorkflowBlockAvailability;
 }
 
-export interface WorkflowDefinitionNode {
+export interface WorkflowDefinitionV1Node {
   id: string;
-  type: WorkflowBlockType;
+  type: WorkflowBlockTypeV1;
   name?: string;
   x: number;
   y: number;
@@ -342,7 +346,103 @@ export interface WorkflowDefinitionNode {
   inputs: WorkflowInputBindings;
 }
 
-export interface WorkflowDefinitionEdge {
+export interface WorkflowDefinitionV1Edge {
+  from: string;
+  to: string;
+  fromPort?: string;
+}
+
+/** Compatibility aliases for the v1 editor and interpreter. New version-aware
+ * code should use the explicitly versioned names below. */
+export type WorkflowDefinitionNode = WorkflowDefinitionV1Node;
+export type WorkflowDefinitionEdge = WorkflowDefinitionV1Edge;
+
+/** Canonical data paths persisted by v2 bindings. `entry` is the virtual
+ * active-trigger source and is therefore reserved as a real node id. */
+export type WorkflowDataReferenceV2 =
+  | `steps.entry.output.${string}`
+  | `steps.${string}.output.${string}`
+  | `run.${string}`;
+
+export type WorkflowInputBindingV2 =
+  | { kind: "reference"; reference: WorkflowDataReferenceV2 }
+  | { kind: "literal"; value: JsonValue };
+
+/** Ordered, author-defined input exposed alongside a block's fixed inputs. */
+export interface WorkflowAdditionalInputV2 {
+  name: string;
+  schema: JsonSchema202012;
+  binding: WorkflowInputBindingV2;
+}
+
+export interface TransformInputPath {
+  input: string;
+  path: string[];
+}
+
+export type TransformMapValue =
+  | {
+      kind: "input";
+      source: TransformInputPath;
+      /** Used only when the source path is absent. An explicit null is kept. */
+      defaultValue?: JsonValue;
+    }
+  | { kind: "literal"; value: JsonValue };
+
+export interface TransformMapField {
+  name: string;
+  value: TransformMapValue;
+}
+
+export type TransformComparisonOperator =
+  | "equals"
+  | "not_equals"
+  | "contains"
+  | "greater_than"
+  | "greater_than_or_equal"
+  | "less_than"
+  | "less_than_or_equal";
+
+export type TransformPredicate =
+  | {
+      kind: "comparison";
+      /** Path within the current array item. Empty means the item itself. */
+      path: string[];
+      operator: TransformComparisonOperator;
+      value: JsonValue;
+    }
+  | {
+      kind: "is_null";
+      /** Path within the current array item. Empty means the item itself. */
+      path: string[];
+      /** Absent paths do not count as null. */
+      isNull: boolean;
+    }
+  | { kind: "all"; predicates: TransformPredicate[] }
+  | { kind: "any"; predicates: TransformPredicate[] }
+  | { kind: "not"; predicate: TransformPredicate };
+
+export type TransformConfiguration =
+  | { operation: "map_object"; fields: TransformMapField[] }
+  | {
+      operation: "filter_array";
+      source: TransformInputPath;
+      predicate: TransformPredicate;
+    };
+
+export interface WorkflowDefinitionV2Node {
+  id: string;
+  type: WorkflowBlockType;
+  name?: string;
+  x: number;
+  y: number;
+  configuration: Record<string, JsonValue>;
+  inputs: Record<string, WorkflowInputBindingV2>;
+  additionalInputs: WorkflowAdditionalInputV2[];
+}
+
+export interface WorkflowDefinitionV2ControlEdge {
+  id: string;
   from: string;
   to: string;
   fromPort?: string;
@@ -371,12 +471,21 @@ export type WorkflowRunBudgetFailure =
       reason: string;
     };
 
-export interface WorkflowDefinition {
+export interface WorkflowDefinitionV1 {
   schemaVersion: 1;
   budgets?: WorkflowExecutionBudgets;
-  nodes: WorkflowDefinitionNode[];
-  edges: WorkflowDefinitionEdge[];
+  nodes: WorkflowDefinitionV1Node[];
+  edges: WorkflowDefinitionV1Edge[];
 }
+
+export interface WorkflowDefinitionV2 {
+  schemaVersion: 2;
+  budgets?: WorkflowExecutionBudgets;
+  nodes: WorkflowDefinitionV2Node[];
+  edges: WorkflowDefinitionV2ControlEdge[];
+}
+
+export type WorkflowDefinition = WorkflowDefinitionV1 | WorkflowDefinitionV2;
 
 /** Presentation-only node coordinates, persisted independently from a draft. */
 export interface WorkflowDefinitionLayout {

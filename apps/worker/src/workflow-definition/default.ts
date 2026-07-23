@@ -1,19 +1,23 @@
 import type {
-  WorkflowBlockType,
-  WorkflowDefinition,
+  WorkflowBlockTypeV1,
+  WorkflowDefinitionV1,
   WorkflowDefinitionNode,
   WorkflowParamValue,
 } from "@shared/contracts";
 
 interface BlockSpec {
   id: string;
-  type: WorkflowBlockType;
+  type: WorkflowBlockTypeV1;
   name: string;
   params: Record<string, WorkflowParamValue>;
   inputs?: WorkflowDefinitionNode["inputs"];
 }
 
-export function defaultWorkflowDefinition({ includeReview }: { includeReview: boolean }): WorkflowDefinition {
+export function defaultWorkflowDefinition({
+  includeReview,
+}: {
+  includeReview: boolean;
+}): WorkflowDefinitionV1 {
   const specs: BlockSpec[] = [
     { id: "trigger", type: "trigger_ticket_ai", name: "Ticket assigned to AI", params: {} },
     {

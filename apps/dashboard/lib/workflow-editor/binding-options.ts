@@ -1,10 +1,11 @@
 import {
   FAILURE_PORT,
+  isSafeWorkflowInputName,
   isTriggerBlockType,
   type WorkflowBindingSource,
   type WorkflowBlockContract,
   type WorkflowBlockInputContract,
-  type WorkflowDefinition,
+  type WorkflowDefinitionV1,
   type WorkflowEditorOptions,
   type WorkflowValueSchema,
 } from "@shared/contracts";
@@ -21,7 +22,7 @@ export interface BindingEditorRow {
 }
 
 export interface BindingEditorInput {
-  definition: WorkflowDefinition;
+  definition: WorkflowDefinitionV1;
   consumerId: string;
   options: WorkflowEditorOptions;
   nodeContracts?: Record<string, WorkflowBlockContract>;
@@ -34,18 +35,6 @@ function contractForNode(
   const node = input.definition.nodes.find((candidate) => candidate.id === nodeId);
   if (!node) return null;
   return input.nodeContracts?.[nodeId] ?? input.options.blockRegistry[node.type];
-}
-
-function isSafeInputName(name: string): boolean {
-  if (name.trim() !== name) return false;
-  const segments = name.split(".");
-  return (
-    segments.length > 0 &&
-    segments.every(
-      (segment) =>
-        /^[A-Za-z0-9_-]+$/.test(segment) && !FORBIDDEN_SEGMENTS.has(segment),
-    )
-  );
 }
 
 function resolveRequiredPath(
@@ -299,7 +288,7 @@ export function canAddAdditionalInput(
   rows: readonly Pick<BindingEditorRow, "name">[],
   contract: WorkflowBlockContract,
 ): { allowed: boolean; reason: string | null } {
-  if (!isSafeInputName(name)) {
+  if (!isSafeWorkflowInputName(name)) {
     return { allowed: false, reason: "Input names use letters, numbers, dashes, underscores, and dots." };
   }
   if (rows.some((row) => row.name === name)) {

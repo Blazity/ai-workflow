@@ -1,5 +1,5 @@
 import type {
-  WorkflowDefinition,
+  WorkflowDefinitionV1,
   WorkflowDefinitionEdge,
   WorkflowDefinitionNode,
   WorkflowDefinitionTemplate,
@@ -14,7 +14,7 @@ import {
 
 export const DEFAULT_WORKFLOW_TEMPLATE_ID = "ticket-workflow";
 
-function fullyModularDefinition(): WorkflowDefinition {
+function fullyModularDefinition(): WorkflowDefinitionV1 {
   const planningOutput = JSON.stringify({
     type: "object",
     properties: { plan: { type: "string" } },
@@ -95,7 +95,7 @@ function fullyModularDefinition(): WorkflowDefinition {
   return { schemaVersion: 1, nodes, edges };
 }
 
-function reviewFixAfterPrDefinition(): WorkflowDefinition {
+function reviewFixAfterPrDefinition(): WorkflowDefinitionV1 {
   const definition = prReviewFixDefinition();
   return {
     ...definition,

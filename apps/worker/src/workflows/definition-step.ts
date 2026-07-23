@@ -2,6 +2,7 @@ import type {
   WorkflowExecutionBudgets,
   WorkflowBlockType,
   WorkflowDefinition,
+  WorkflowDefinitionV1,
   WorkflowDefinitionEdge,
   WorkflowDefinitionNode,
 } from "@shared/contracts";
@@ -74,7 +75,7 @@ export async function loadWorkflowDefinitionFor(
     getEnabledWorkflowDefinitionForTrigger,
   } = await import("../workflow-definition/store.js");
   const {
-    workflowDefinitionSchema,
+    workflowDefinitionV1Schema,
     upgradeStoredWorkflowDefinition,
     validateWorkflowDefinitionForDeployment,
     describeWorkflowDefinitionIssues,
@@ -85,11 +86,7 @@ export async function loadWorkflowDefinitionFor(
   const { logger } = await import("../lib/logger.js");
 
   const toPlan = (
-    def: {
-      nodes: WorkflowDefinitionNode[];
-      edges: WorkflowDefinitionEdge[];
-      budgets?: WorkflowExecutionBudgets;
-    },
+    def: WorkflowDefinitionV1,
     version: number | null,
     id: number | null,
   ): LoadedWorkflowPlan => {
@@ -189,7 +186,19 @@ export async function loadWorkflowDefinitionFor(
     );
     return null;
   }
-  const parsed = workflowDefinitionSchema.safeParse(upgraded);
+  if (upgraded.schemaVersion === 2) {
+    logger.error(
+      {
+        definitionId: row.definitionId,
+        version: row.version,
+        schemaVersion: upgraded.schemaVersion,
+      },
+      "workflow_definition_v2_runtime_unavailable",
+    );
+    return null;
+  }
+
+  const parsed = workflowDefinitionV1Schema.safeParse(upgraded);
   const graphIssues = parsed.success
     ? validateWorkflowDefinitionForDeployment(
         parsed.data,

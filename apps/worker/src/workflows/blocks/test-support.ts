@@ -2,6 +2,7 @@ import { expect, vi } from "vitest";
 import type {
   BlockOutput,
   WorkflowBlockType,
+  WorkflowBlockTypeV1,
   WorkflowDefinitionNode,
   WorkflowParamValue,
 } from "@shared/contracts";
@@ -35,7 +36,7 @@ export function expectOutputConformsToRegistry(
 
 /** Build a definition node for executor tests. */
 export function makeNode(
-  type: WorkflowBlockType,
+  type: WorkflowBlockTypeV1,
   params: Record<string, WorkflowParamValue> = {},
   id = "blk",
 ): WorkflowDefinitionNode {

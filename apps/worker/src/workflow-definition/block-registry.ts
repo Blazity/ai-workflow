@@ -615,6 +615,25 @@ const definitions: Record<WorkflowBlockType, ContractDefinition> = {
     normalOutputRequired: ["output"],
     statusVariants: ["ok"],
   },
+  transform: {
+    presentation: presentation(
+      "utility",
+      "Transform",
+      "Maps an object or filters an array using typed, visual operations.",
+      "↦",
+    ),
+    defaults: {},
+    inputs: {},
+    additionalInputs: [
+      {
+        keyPattern: "^[A-Za-z_][A-Za-z0-9_-]*$",
+        schema: unknownType(),
+      },
+    ],
+    output: statusOutput({ output: unknownType() }),
+    normalOutputRequired: ["output"],
+    statusVariants: ["ok"],
+  },
   fetch_pr_context: {
     presentation: presentation(
       "vcs",

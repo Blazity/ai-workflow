@@ -8,7 +8,7 @@ import {
 import type {
   BlockOutput,
   BlockRunState,
-  WorkflowDefinition,
+  WorkflowDefinitionV1,
   WorkflowDefinitionNode,
 } from "@shared/contracts";
 import type { AgentProtocolDiagnostic } from "../sandbox/agents/types.js";
@@ -29,7 +29,7 @@ export interface RuntimeGraph {
 
 /** Build a walk-ready graph, resolving each edge's port to `fromPort` or the source type's first port. */
 export function buildRuntimeGraph(
-  def: Pick<WorkflowDefinition, "nodes" | "edges">,
+  def: Pick<WorkflowDefinitionV1, "nodes" | "edges">,
 ): RuntimeGraph {
   const nodes = new Map<string, WorkflowDefinitionNode>();
   for (const node of def.nodes) nodes.set(node.id, node);

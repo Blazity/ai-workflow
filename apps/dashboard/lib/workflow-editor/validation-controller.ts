@@ -1,5 +1,6 @@
 import type {
   WorkflowBlockContract,
+  WorkflowAvailableValuesByNode,
   WorkflowDefinitionValidationIssue,
   WorkflowDefinitionValidationResponse,
 } from "@shared/contracts";
@@ -14,6 +15,7 @@ interface ValidationStatePayload<Status extends string> {
   status: Status;
   issues: WorkflowDefinitionValidationIssue[];
   nodeContracts: Record<string, WorkflowBlockContract>;
+  availableValuesByNode: WorkflowAvailableValuesByNode;
 }
 
 export type ValidationTimer = (callback: () => void, delayMs: number) => () => void;
@@ -62,7 +64,12 @@ export function createWorkflowValidationController<T>(options: {
   }
 
   function checkingState() {
-    options.onState({ status: "checking", issues: [], nodeContracts: {} });
+    options.onState({
+      status: "checking",
+      issues: [],
+      nodeContracts: {},
+      availableValuesByNode: {},
+    });
   }
 
   function applyResult(
@@ -74,6 +81,7 @@ export function createWorkflowValidationController<T>(options: {
       status: result.valid ? "valid" : "invalid",
       issues: result.issues,
       nodeContracts: result.nodeContracts,
+      availableValuesByNode: result.availableValuesByNode,
     });
   }
 
@@ -90,6 +98,7 @@ export function createWorkflowValidationController<T>(options: {
         },
       ],
       nodeContracts: {},
+      availableValuesByNode: {},
     });
   }
 

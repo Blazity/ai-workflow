@@ -139,6 +139,12 @@ The audit corrected the earlier record in these ways:
 - The initial operations are:
   - **Map object**: select, rename, and combine fields, and add literal or default values.
   - **Filter array**: retain array items using typed field conditions.
+- Map defaults apply only when the selected source path is absent. An explicit
+  `null` value is preserved rather than replaced by the default.
+- Filter array preserves the source order. Its typed conditions support
+  string/enum equality, inequality and containment; numeric equality and
+  ordering; boolean equality; null checks; and nested `all`, `any`, and `not`.
+- A missing filter path matches neither “is null” nor “is not null.”
 - Additional operations are added only after real workflow usage demonstrates a gap.
 
 ### Harness profiles and specialized agent blocks

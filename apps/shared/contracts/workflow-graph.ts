@@ -23,6 +23,22 @@ export function isWorkflowAddressablePathSegment(segment: string): boolean {
   );
 }
 
+/** A fixed or additional input name may use safe dot-separated segments.
+ * Dots are part of the authored input name; each segment must remain safe for
+ * object traversal and cannot use prototype-mutating property names. */
+export function isSafeWorkflowInputName(name: string): boolean {
+  if (name.trim() !== name) return false;
+  const segments = name.split(".");
+  return (
+    segments.length > 0 &&
+    segments.every(
+      (segment) =>
+        /^[A-Za-z0-9_-]+$/.test(segment) &&
+        !RESERVED_WORKFLOW_PATH_SEGMENTS.has(segment),
+    )
+  );
+}
+
 export const BLOCK_TYPE_SPECS: Record<WorkflowBlockType, BlockTypeSpec> = {
   trigger_ticket_ai: { category: "trigger", ports: [DEFAULT_OUT_PORT], allowsFailurePort: false },
   trigger_plan_approved: { category: "trigger", ports: [DEFAULT_OUT_PORT], allowsFailurePort: false },
@@ -40,6 +56,7 @@ export const BLOCK_TYPE_SPECS: Record<WorkflowBlockType, BlockTypeSpec> = {
   run_pre_pr_checks: { category: "action", ports: [DEFAULT_OUT_PORT], allowsFailurePort: true },
   run_checks: { category: "action", ports: [DEFAULT_OUT_PORT], allowsFailurePort: true },
   call_llm: { category: "action", ports: [DEFAULT_OUT_PORT], allowsFailurePort: true },
+  transform: { category: "action", ports: [DEFAULT_OUT_PORT], allowsFailurePort: false },
   fetch_pr_context: { category: "action", ports: [DEFAULT_OUT_PORT], allowsFailurePort: true },
   open_pr: { category: "action", ports: [DEFAULT_OUT_PORT], allowsFailurePort: true },
   update_ticket_status: { category: "action", ports: [DEFAULT_OUT_PORT], allowsFailurePort: true },
@@ -92,6 +109,7 @@ export const BLOCK_PARAM_KEYS: Record<WorkflowBlockType, readonly string[]> = {
   run_pre_pr_checks: ["maxFixCycles"],
   run_checks: ["commands"],
   call_llm: ["prompt", "system", "model", "provider", "outputSchema"],
+  transform: [],
   fetch_pr_context: [],
   open_pr: ["title", "body"],
   update_ticket_status: ["target"],

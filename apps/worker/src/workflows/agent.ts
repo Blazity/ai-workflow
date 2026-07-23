@@ -102,6 +102,7 @@ import type {
   JsonValue,
   ResolvedPromptReference,
   WorkflowBlockType,
+  WorkflowBlockTypeV1,
   WorkflowDefinitionNode,
 } from "@shared/contracts";
 
@@ -142,17 +143,17 @@ const INLINE_EXECUTED_BLOCK_TYPES: readonly WorkflowBlockType[] = [
   "update_ticket_status",
 ];
 
-/** Action block types with no executor wired in either BLOCK_EXECUTORS or the
- *  inline switch. Empty in a correct build: a non-empty result means a
- *  WorkflowBlockType was added to the contract without an executor. executeBlock
- *  fails such a run loudly at runtime; this makes the same gap catchable in a test. */
-export function blockTypesMissingExecutor(): WorkflowBlockType[] {
-  return (Object.keys(BLOCK_TYPE_SPECS) as WorkflowBlockType[]).filter(
-    (type) =>
-      BLOCK_TYPE_SPECS[type].category === "action" &&
-      BLOCK_EXECUTORS[type] === undefined &&
-      !INLINE_EXECUTED_BLOCK_TYPES.includes(type),
-  );
+/** V1 action block types with no executor wired in either BLOCK_EXECUTORS or
+ *  the inline switch. V2-only blocks are owned by the v2 scheduler. */
+export function blockTypesMissingExecutor(): WorkflowBlockTypeV1[] {
+  return (Object.keys(BLOCK_TYPE_SPECS) as WorkflowBlockType[])
+    .filter((type): type is WorkflowBlockTypeV1 => type !== "transform")
+    .filter(
+      (type) =>
+        BLOCK_TYPE_SPECS[type].category === "action" &&
+        BLOCK_EXECUTORS[type] === undefined &&
+        !INLINE_EXECUTED_BLOCK_TYPES.includes(type),
+    );
 }
 
 export function buildImplementationAgentSuccessOutput(input: {

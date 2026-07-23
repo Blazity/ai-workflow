@@ -19,7 +19,7 @@ import { isTriggerBlockType } from "@shared/contracts";
 import type {
   BlockOutput,
   BlockRunState,
-  WorkflowBlockType,
+  WorkflowBlockTypeV1,
   WorkflowDefinitionEdge,
   WorkflowDefinitionNode,
   WorkflowParamValue,
@@ -57,7 +57,7 @@ import { handleUnhandledWorkflowError } from "./workflow-failure-exit.js";
 
 function node(
   id: string,
-  type: WorkflowBlockType,
+  type: WorkflowBlockTypeV1,
   params: Record<string, WorkflowParamValue> = {},
   name?: string,
 ): WorkflowDefinitionNode {
@@ -91,7 +91,7 @@ interface RunFixture {
   runId: string;
   nodes: WorkflowDefinitionNode[];
   edges: WorkflowDefinitionEdge[];
-  entryTriggerType: WorkflowBlockType;
+  entryTriggerType: WorkflowBlockTypeV1;
   scripts?: Record<string, NodeScript>;
   priceLookup?: PriceLookup;
   budgetLimits?: RunBudgetLimits;

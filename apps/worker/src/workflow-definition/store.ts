@@ -18,7 +18,6 @@ import { DashboardAuthError } from "../lib/auth/users-read.js";
 import {
   describeWorkflowDefinitionIssues,
   upgradeStoredWorkflowDefinition,
-  validateWorkflowDefinitionForDeployment,
   validateWorkflowDefinitionIssuesForDeployment,
   workflowDefinitionSchema,
 } from "./schema.js";
@@ -73,6 +72,14 @@ export interface WorkflowDefinitionVersionRow {
   createdById: string;
   createdByLabel: string;
   restoredFromVersion: number | null;
+}
+
+/** Exact append-only JSON stored for a version, before compatibility reads
+ * normalize legacy v1 shapes. Migration preflight uses this to ensure no
+ * historical configuration is silently discarded. */
+export interface RawWorkflowDefinitionVersionRow
+  extends Omit<WorkflowDefinitionVersionRow, "definition"> {
+  definition: unknown;
 }
 
 /** Domain-level failure a write raises (409 conflict, 404 not found). Routes map
@@ -133,6 +140,18 @@ function mapVersionRow(row: VersionSelect): WorkflowDefinitionVersionRow {
   };
 }
 
+function mapRawVersionRow(row: VersionSelect): RawWorkflowDefinitionVersionRow {
+  return {
+    definitionId: row.definitionId,
+    version: row.version,
+    definition: row.definition,
+    createdAt: row.createdAt,
+    createdById: row.createdById,
+    createdByLabel: row.createdByLabel,
+    restoredFromVersion: row.restoredFromVersion,
+  };
+}
+
 function triggerTypesOf(definition: WorkflowDefinition): WorkflowBlockType[] {
   const types = new Set<WorkflowBlockType>();
   for (const node of definition.nodes) {
@@ -163,7 +182,7 @@ function assertValidDefinition(definition: WorkflowDefinition): void {
       `Invalid definition: ${describeWorkflowDefinitionIssues(parsed.error)}`,
     );
   }
-  const issues = validateWorkflowDefinitionForDeployment(
+  const issues = validateWorkflowDefinitionIssuesForDeployment(
     parsed.data,
     workflowBlockRegistryContextFromEnv(),
     // This guard is used only when an already-stored snapshot is selected or
@@ -171,9 +190,12 @@ function assertValidDefinition(definition: WorkflowDefinition): void {
     // immutable version was written. New deployments still pass through the
     // strict `assertDeployableDefinition` path below.
     { allowLegacyCompatibility: true },
-  );
+  ).filter((issue) => issue.code !== "v2_runtime_unavailable");
   if (issues.length > 0) {
-    throw new WorkflowDefinitionStoreError(400, `Invalid workflow: ${issues.join("; ")}`);
+    throw new WorkflowDefinitionStoreError(
+      400,
+      `Invalid workflow: ${issues.map(({ message }) => message).join("; ")}`,
+    );
   }
 }
 
@@ -281,6 +303,28 @@ export async function getWorkflowDefinition(
   return mapDefinitionRow(rows[0], current?.version ?? 0);
 }
 
+/** Loads definition lifecycle metadata and its head revision without decoding
+ * the head JSON. Normal editor/runtime reads continue through
+ * getWorkflowDefinition; raw migration preflight uses this seam so malformed
+ * or retired history can be reported as blockers instead of normalized first. */
+export async function getWorkflowDefinitionRawState(
+  db: Db,
+  id: number,
+): Promise<WorkflowDefinitionRow | null> {
+  const rows = await db
+    .select()
+    .from(workflowDefinitions)
+    .where(eq(workflowDefinitions.id, id))
+    .limit(1);
+  const row = rows[0];
+  if (!row) return null;
+  const [{ currentVersion }] = await db
+    .select({ currentVersion: max(workflowDefinitionVersions.version) })
+    .from(workflowDefinitionVersions)
+    .where(eq(workflowDefinitionVersions.definitionId, id));
+  return mapDefinitionRow(row, currentVersion ?? 0);
+}
+
 export async function getWorkflowDefinitionDraft(
   db: Db,
   definitionId: number,
@@ -327,6 +371,26 @@ export async function getWorkflowDefinitionVersion(
     )
     .limit(1);
   return rows[0] ? mapVersionRow(rows[0]) : null;
+}
+
+/** Returns the exact immutable JSON blob without applying v1 compatibility
+ * upgrades. This is intentionally separate from every normal read API. */
+export async function getRawWorkflowDefinitionVersion(
+  db: Db,
+  definitionId: number,
+  version: number,
+): Promise<RawWorkflowDefinitionVersionRow | null> {
+  const rows = await db
+    .select()
+    .from(workflowDefinitionVersions)
+    .where(
+      and(
+        eq(workflowDefinitionVersions.definitionId, definitionId),
+        eq(workflowDefinitionVersions.version, version),
+      ),
+    )
+    .limit(1);
+  return rows[0] ? mapRawVersionRow(rows[0]) : null;
 }
 
 export async function getDeployedWorkflowDefinitionVersion(
@@ -803,7 +867,11 @@ export async function rollbackWorkflowDefinition(
   if (current.deployedVersion !== input.expectedDeployedVersion) {
     throw new WorkflowDefinitionStoreError(409, "Definition changed; reload before rolling back");
   }
-  assertValidDefinition(target.definition);
+  if (target.definition.schemaVersion === 2) {
+    assertDeployableDefinition(target.definition);
+  } else {
+    assertValidDefinition(target.definition);
+  }
   const triggerTypes = triggerTypesOf(target.definition);
   const triggerArray = triggerArraySql(triggerTypes);
 
@@ -953,7 +1021,11 @@ export async function updateWorkflowDefinition(
         if (!deployed) {
           throw new WorkflowDefinitionStoreError(409, "The deployed version is unavailable");
         }
-        assertValidDefinition(deployed.definition);
+        if (deployed.definition.schemaVersion === 2) {
+          assertDeployableDefinition(deployed.definition);
+        } else {
+          assertValidDefinition(deployed.definition);
+        }
         triggerTypes = triggerTypesOf(deployed.definition);
       } else {
         const latest = await getCurrentWorkflowDefinitionVersion(db, current.id);

@@ -299,4 +299,39 @@ describe("resolveEnabledReviewStates", () => {
       "commented",
     ]);
   });
+
+  it("reads trigger configuration from a v2 definition without v1 params", async () => {
+    mockGetEnabled.mockResolvedValue({
+      definition: { id: 5, name: "PR flow" },
+      current: {
+        definitionId: 5,
+        version: 12,
+        definition: {
+          schemaVersion: 2,
+          nodes: [
+            {
+              id: "review-trigger",
+              type: "trigger_pr_review",
+              x: 0,
+              y: 0,
+              configuration: {
+                providers: ["gitlab"],
+                on: ["commented"],
+                scope: "workflow_owned",
+              },
+              inputs: {},
+              additionalInputs: [],
+            },
+          ],
+          edges: [],
+        },
+      },
+    });
+    const { resolveEnabledReviewStates } = await import("./dispatch-trigger.js");
+
+    await expect(resolveEnabledReviewStates(db, "gitlab", "gitlab-bot")).resolves.toEqual([
+      "commented",
+    ]);
+    await expect(resolveEnabledReviewStates(db, "github", "github-app[bot]")).resolves.toEqual([]);
+  });
 });

@@ -1,5 +1,5 @@
 import { start } from "workflow/api";
-import type { VcsProviderKind } from "@shared/contracts";
+import type { VcsProviderKind, WorkflowDefinition } from "@shared/contracts";
 import { getVcsBotLogin } from "../../env.js";
 import type { Db } from "../db/client.js";
 import {
@@ -70,10 +70,13 @@ export interface DispatchTriggerDeps {
 }
 
 function triggerNodeParams(
-  definition: { nodes: { type: string; params: Record<string, unknown> }[] },
+  definition: WorkflowDefinition,
   triggerType: string,
 ): Record<string, unknown> {
-  return definition.nodes.find((node) => node.type === triggerType)?.params ?? {};
+  if (definition.schemaVersion === 1) {
+    return definition.nodes.find((node) => node.type === triggerType)?.params ?? {};
+  }
+  return definition.nodes.find((node) => node.type === triggerType)?.configuration ?? {};
 }
 
 export async function resolveEnabledReviewStates(

@@ -995,6 +995,18 @@
           ],
           statuses: ["ok"],
         }),
+        transform: runtimeContract([], {
+          additionalInputs: [{
+            path: "^[A-Za-z_][A-Za-z0-9_-]*$",
+            keyPattern: "^[A-Za-z_][A-Za-z0-9_-]*$",
+            type: "unknown",
+          }],
+          requiredOutputs: [
+            ...STATUS_OUTPUT,
+            ...typedPaths("unknown", "output"),
+          ],
+          statuses: ["ok"],
+        }),
         call_llm: runtimeContract(
           ["prompt", "system", "model", "provider", "outputSchema"],
           {
@@ -1309,6 +1321,14 @@
           title: "Run checks",
           blurb: "Runs each repo's configured validation commands in the workspace; per-repo results plus one aggregate verdict.",
           note: "The workspace and repository scope come from run context; commands is an authored parameter. Collections stay inside blocks: conditions branch on the aggregate (steps.checks.output.ok) while the Fix Agent consumes the per-repo failures[]. No fan-out construct needed in MVP. The registry currently types results and failures as unknown arrays rather than promising a more specific bindable item schema."
+        },
+        "util.transform": {
+          runtimeType: "transform",
+          runtimeContract: RUNTIME_CONTRACTS.transform,
+          group: "utility",
+          title: "Transform",
+          blurb: "Maps an object or filters an array with one typed visual operation.",
+          note: "Workflow Definition v2 only. Transform accepts author-declared typed inputs and has no JavaScript or free-form expression surface. Chain blocks when more than one operation is needed."
         },
         "util.llm": {
           runtimeType: "call_llm",
