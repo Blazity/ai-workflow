@@ -30,6 +30,7 @@ import { DashboardAuthError } from "../lib/auth/users-read.js";
 import {
   archiveWorkflowDefinition,
   createWorkflowDefinition,
+  createWorkflowDefinitionDraft,
   deployWorkflowDefinition,
   getCurrentWorkflowDefinition,
   getCurrentWorkflowDefinitionVersion,
@@ -88,6 +89,40 @@ function invalidBindingDef(): WorkflowDefinition {
       { id: "approval", type: "send_plan_approval", x: 0, y: 0, params: {}, inputs: {} },
     ],
     edges: [{ from: "t", to: "approval" }],
+  };
+}
+
+function legacyStructuredOutputDef(
+  trigger: WorkflowBlockType = "trigger_pr_review",
+): WorkflowDefinition {
+  const outputSchema = JSON.stringify({
+    $schema: "http://json-schema.org/draft-07/schema#",
+    title: "Legacy classifier",
+    type: "object",
+    properties: {
+      state: { title: "State", type: "string" },
+      metadata: {
+        type: "object",
+        properties: { note: { type: "string" } },
+      },
+    },
+    required: ["state"],
+    additionalProperties: false,
+  });
+  return {
+    schemaVersion: 1,
+    nodes: [
+      { id: "trigger", type: trigger, x: 0, y: 0, params: {}, inputs: {} },
+      {
+        id: "classify",
+        type: "call_llm",
+        x: 0,
+        y: 0,
+        params: { prompt: "Classify", outputSchema },
+        inputs: {},
+      },
+    ],
+    edges: [{ from: "trigger", to: "classify" }],
   };
 }
 
@@ -395,6 +430,77 @@ describe("enabled-per-trigger overlap", () => {
       actor: ADMIN,
     });
     expect(await triggerTypesOf(db, e.id)).toEqual(["trigger_pr_review"]);
+  });
+});
+
+describe("stored v1 structured-output compatibility", () => {
+  it("rolls back to and re-enables a deployed schema accepted before strict validation", async () => {
+    const current = await createDeployed("Legacy rollback", def(["trigger_pr_review"]));
+    const legacy = legacyStructuredOutputDef();
+    await db.insert(workflowDefinitionVersions).values({
+      definitionId: current.id,
+      version: 2,
+      definition: legacy,
+      createdById: "legacy",
+      createdByLabel: "Legacy",
+      restoredFromVersion: null,
+    });
+
+    const selected = await rollbackWorkflowDefinition(db, {
+      definitionId: current.id,
+      version: 2,
+      expectedDeployedVersion: 1,
+      actor: ADMIN,
+    });
+    expect(selected.version.definition).toMatchObject(legacy);
+
+    await updateWorkflowDefinition(db, {
+      definitionId: current.id,
+      enabled: false,
+      actor: ADMIN,
+    });
+    await expect(
+      updateWorkflowDefinition(db, {
+        definitionId: current.id,
+        enabled: true,
+        actor: ADMIN,
+      }),
+    ).resolves.toMatchObject({ enabled: true, deployedVersion: 2 });
+  });
+
+  it("restores and duplicates an immutable legacy schema without weakening new deployment checks", async () => {
+    const source = await createDeployed("Legacy stored source", def(["trigger_pr_review"]));
+    const legacy = legacyStructuredOutputDef();
+    await db.insert(workflowDefinitionVersions).values({
+      definitionId: source.id,
+      version: 2,
+      definition: legacy,
+      createdById: "legacy",
+      createdByLabel: "Legacy",
+      restoredFromVersion: null,
+    });
+
+    const restored = await restoreWorkflowDefinitionVersion(db, {
+      definitionId: source.id,
+      version: 2,
+      actor: ADMIN,
+    });
+    expect(restored.definition).toMatchObject(legacy);
+
+    const duplicate = await createWorkflowDefinitionDraft(db, {
+      name: "Legacy stored copy",
+      seed: legacy,
+      actor: ADMIN,
+    });
+    expect(duplicate.draft).toMatchObject(legacy);
+    await expect(
+      deployWorkflowDefinition(db, {
+        definitionId: duplicate.definition.id,
+        expectedDraftRevision: 1,
+        expectedDeployedVersion: null,
+        actor: ADMIN,
+      }),
+    ).rejects.toMatchObject({ statusCode: 422 });
   });
 });
 

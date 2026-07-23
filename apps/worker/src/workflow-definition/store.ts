@@ -166,6 +166,11 @@ function assertValidDefinition(definition: WorkflowDefinition): void {
   const issues = validateWorkflowDefinitionForDeployment(
     parsed.data,
     workflowBlockRegistryContextFromEnv(),
+    // This guard is used only when an already-stored snapshot is selected or
+    // copied. Keep the v1 validation subset that was in force when that
+    // immutable version was written. New deployments still pass through the
+    // strict `assertDeployableDefinition` path below.
+    { allowLegacyCompatibility: true },
   );
   if (issues.length > 0) {
     throw new WorkflowDefinitionStoreError(400, `Invalid workflow: ${issues.join("; ")}`);
