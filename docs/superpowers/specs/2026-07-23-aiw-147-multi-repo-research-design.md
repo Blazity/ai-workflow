@@ -1,7 +1,7 @@
 # AIW-147 Multi-Repository Research and Discovery Design
 
 **Date:** 2026-07-23
-**Status:** Approved in conversation, pending written-spec review
+**Status:** Updated against `origin/main` at `2136f0c`, pending re-review
 **Ticket:** AIW-147
 
 ## Goal
@@ -34,7 +34,7 @@ changed repository.
 - Existing trusted multi-repository publication remains the basis for push and
   PR/MR creation.
 
-## Current-State Findings
+## Current-State Findings on Latest Main
 
 The current system already has most multi-repository publication primitives:
 
@@ -45,17 +45,90 @@ The current system already has most multi-repository publication primitives:
   repository.
 - Workflow-owned branches are provider-scoped and persisted per
   ticket/repository pair.
+- Newly authored V2 workflows place `prepare_workspace` before
+  `planning_agent`.
+- V2 graph validation already classifies `planning_agent` as
+  `shared_read` and prevents unsafe concurrent reader/writer scheduling.
+- A prepared code workspace installs every harness profile required by the
+  graph, and clarification restore can rebuild those runtimes.
+- Repository-instruction prompt composition already tries to read instructions
+  for planning from `ctx.sandboxId`.
 
-The missing behavior is orchestration before planning:
+The runtime still contradicts those newer graph-level contracts:
 
-- `planning_agent` uses a repository-free scratch sandbox.
-- Repository selection and workspace provisioning happen only when an
-  implementation or explicit prepare-workspace block needs a code workspace.
+- `planning_agent` always executes in a repository-free scratch sandbox, even
+  after V2 `prepare_workspace` created a shared code workspace.
+- The instruction loader may read repository instructions from the shared
+  workspace, but the planning CLI itself cannot inspect repository files.
+- V1 workflows still reach planning before any explicit workspace block.
 - Repository selection trusts only deterministic signals. When multiple
   repositories are accessible and none is named exactly, it asks the user.
+- `prepare_workspace` creates or resets remote workflow branches before
+  research, so the existing provisioning path is not safe for read-only
+  discovery.
+- The manifest has one implicit write-oriented repository shape; it cannot
+  distinguish research-only checkouts from repositories authorized for
+  changes.
 
 AIW-147 therefore extends discovery and workspace lifecycle rather than
-replacing the existing multi-repository publication system.
+replacing the existing multi-repository publication system. It also closes the
+specific V2 runtime mismatch instead of adding a second planning mechanism.
+
+## Latest-Main Integration Decisions
+
+- Keep `prepare_workspace` before planning in V2. Repository discovery becomes
+  part of workspace preparation when deterministic selection is insufficient.
+- Make planning use the prepared shared workspace. Do not leave the V2
+  `shared_read` classification as validation-only metadata.
+- Preserve V1 compatibility by having `planning_agent` implicitly call the same
+  idempotent workspace preparation path when no workspace exists.
+- Keep harness-profile resolution as the single source of the planning
+  provider, model, CLI version, skills, authentication, runtime limits, and
+  telemetry. AIW-147 must not create a parallel direct-API model path.
+- Split read checkout from write promotion. Existing branch preparation moves
+  out of initial workspace provisioning and runs only for the research-approved
+  write set.
+- Extend the existing trusted manifest rather than introducing a second
+  unrelated research manifest.
+- Treat scratch-to-code conversion as an explicit ownership transfer:
+  `agentSandboxIds` must stop identifying the sandbox once it becomes
+  `ctx.sandboxId`, otherwise clarification cleanup could detach the live code
+  workspace.
+
+The resulting control flow is:
+
+```text
+ticket/PR trigger
+  -> list and normalize accessible repositories
+  -> deterministic scope?
+       yes: provision read workspace
+       no:  harness-based metadata discovery -> promote sandbox to read workspace
+  -> planning in shared read workspace
+       -> request bounded repository expansion -> attach -> repeat planning
+       -> clarification -> snapshot/restore expanded workspace
+       -> complete -> validate read/write scope
+  -> promote only write repositories
+  -> implementation/review/checks
+  -> verify every read repo stayed unchanged
+  -> publish one PR/MR per changed write repo
+```
+
+Primary implementation seams on current main:
+
+- `pre-sandbox/steps/repo-selection.ts`: deterministic selection, bounded
+  catalog construction, and clarification inputs;
+- `workflows/blocks/prepare-workspace.ts`: discovery fallback, read-only
+  provisioning, scratch ownership transfer, and idempotent state return;
+- `sandbox/manager.ts` and `sandbox/repo-workspace.ts`: attach/hydrate,
+  manifest V2, baseline verification, and write promotion support;
+- `workflows/agent.ts`: run planning in `ctx.sandboxId`, process
+  `repositories_needed`, and preserve expansion state across clarification;
+- `workflows/repository-prs.ts` plus provider adapters: ownership-safe delayed
+  branch creation;
+- approval schema/store/dispatch: persist and revalidate approved repository
+  scope;
+- trusted finalization/publication: reject read-repository mutations before the
+  first push.
 
 ## Chosen Architecture
 
@@ -76,10 +149,24 @@ round and provisions research directly.
 
 ### 2. Agent-based discovery
 
-When deterministic resolution is insufficient, the existing planning agent
-runs a repository-discovery phase in its repository-free sandbox. This reuses
-the configured CLI, provider, model, authentication method, telemetry, budget,
+When deterministic resolution is insufficient, workspace preparation runs a
+repository-discovery invocation using the run's resolved default harness. It
+starts in the existing repository-free sandbox form and reuses the configured
+CLI, provider, model, authentication method, runtime limits, telemetry, budget,
 and Arthur wiring.
+
+The discovery runtime is intentionally independent of any one downstream
+planning node. Current V2 graphs may contain several planning nodes with
+different harness profiles or mutually exclusive activation paths, so choosing
+an arbitrary "first planning node" would make repository access depend on
+graph layout. Once the workspace exists, each planning node still runs with its
+own pinned harness profile.
+
+This is deliberately not implemented with `generateStructured()` or the
+`call_llm` block. The in-process Codex path requires `CODEX_API_KEY`, while an
+otherwise valid planning profile may authenticate with
+`CODEX_CHATGPT_OAUTH_TOKEN`. The harness CLI is the only path that preserves all
+currently supported authentication modes and custom profile behavior.
 
 The discovery prompt contains:
 
@@ -118,9 +205,23 @@ Low confidence becomes clarification.
 
 ### 3. Convert the discovery sandbox into a research workspace
 
-The sandbox used for discovery is reused. The worker attaches the initial
-repository set to that running sandbox rather than provisioning another VM or
-reinstalling agent CLIs.
+The sandbox used for discovery is reused. The worker promotes it into
+`ctx.sandboxId` and attaches the initial repository set rather than provisioning
+another VM. If deterministic selection skipped discovery, the normal
+multi-repository provisioner creates `ctx.sandboxId` directly.
+
+Promotion must update all workflow bookkeeping atomically:
+
+- remove the sandbox from every `ctx.agentSandboxIds` cache entry;
+- retain it in `ctx.sandboxIds` for normal and crash-reconciliation cleanup;
+- assign `ctx.sandboxId`, `ctx.workspaceManifest`,
+  `ctx.selectedRepositories`, and `ctx.repositoryContexts`;
+- register the sandbox as the durable child of the active run;
+- ensure every harness runtime required by the graph is available in the
+  promoted workspace.
+
+After promotion, scratch-sandbox clarification cleanup must not detach or stop
+the code workspace.
 
 Repository attachment is a durable, idempotent server-side operation:
 
@@ -137,14 +238,17 @@ A retry first inspects the trusted manifest and final path. It reuses an exact,
 verified checkout and rejects a partial or mismatched one. A failed clone
 removes its temporary path and leaves the trusted manifest unchanged.
 
-Clone operations within one expansion round use bounded concurrency of 2.
+Clone operations within one expansion round use bounded concurrency of 2. The
+primary checkout may remain the sandbox root to preserve current path and
+publication assumptions; later repositories use the existing
+`/vercel/sandbox/repos/<provider>__<slug>` layout.
 
 ### 4. Research workspace manifest
 
 The manifest gains an explicit access mode and research baseline:
 
 ```ts
-interface ResearchWorkspaceRepository {
+interface WorkspaceRepositoryV2 {
   provider: "github" | "gitlab";
   repoPath: string;
   localPath: string;
@@ -162,14 +266,25 @@ interface ResearchWorkspaceRepository {
 Repositories start with `access: "read"` unless they already carry a
 workflow-owned branch that the run is explicitly remediating.
 
+This is a versioned extension of `WorkspaceManifest`, not a second file.
+Parsing keeps explicit V1 compatibility for clarification snapshots and runs
+started before deployment, while every newly provisioned workspace writes the
+new version. All existing manifest consumers must either understand access
+mode or reject the newer manifest; none may silently treat `read` as writable.
+
 The manifest stored in workflow context is authoritative. The sandbox copy must
 match it field-for-field before clarification snapshots, repository expansion,
 write promotion, implementation, and publication.
 
 ### 5. Iterative planning
 
-After initial attachment, the normal research/planning phase runs against the
-code workspace. Its structured output supports:
+After initial attachment, the normal `planning_agent` invocation runs against
+`ctx.sandboxId`. In V2 this realizes the existing `shared_read` contract; in V1
+the planning block first invokes idempotent workspace preparation. The
+repository-free `ensurePlanningAgentSandboxForBlock()` path remains only for
+metadata discovery before a code workspace exists.
+
+The existing research schema is versioned to support:
 
 ```ts
 type ResearchStatus =
@@ -186,7 +301,12 @@ identities and a reason for each. The worker:
 2. removes already attached repositories;
 3. enforces per-round, round-count, and total-workspace limits;
 4. attaches the validated repositories to the same sandbox;
-5. reruns planning with existing session memory and the expanded manifest.
+5. reruns planning with the expanded manifest plus the previous research
+   result and expansion rationale.
+
+No correctness assumption is made about provider session memory surviving
+between harness invocations. Reuse is an optimization; the prompt and trusted
+workflow state are sufficient to resume deterministically.
 
 When the round or workspace limit would be exceeded, the workflow asks a
 targeted clarification instead of silently dropping repositories.
@@ -206,6 +326,11 @@ set is rejected for a code-changing ticket.
 ### 6. Promote write repositories after research
 
 Research never creates new remote branches merely to read code.
+
+Accordingly, `prepareSelectedRepositoryBranches()` is removed from the initial
+`ensureWorkspace()` path. Initial clones check out the trusted default-branch
+SHA in detached or explicitly read-only form. Branch creation becomes part of a
+new promotion step after successful research.
 
 Before promotion, the worker verifies:
 
@@ -228,6 +353,12 @@ The current provider adapters force-reset an existing same-name branch. That
 behavior must not be used unless the database proves the branch belongs to this
 ticket and repository.
 
+The promotion step first consults the workflow-owned-branch ledger. For a
+foreign same-name remote branch it fails before calling either adapter's
+destructive existing-branch path. A separately tested adapter operation may
+create a missing branch or reset an exactly owned branch; ownership checking
+must remain outside and before the provider mutation.
+
 ### 7. Implementation and publication
 
 Implementation runs once in the promoted workspace and sees all read and write
@@ -248,12 +379,19 @@ repositories.
 
 Declared write repositories that remain unchanged do not produce empty PRs.
 
+The V2 interpreter may replay durable steps, so attachment and promotion return
+complete state rather than depending only on in-memory mutation. Re-execution
+must reconcile the trusted manifest, branch ledger, remote head, and local
+checkout before deciding that an operation already succeeded.
+
 ## Plan-Approval Runs
 
 Plan approval ends the planning run and starts implementation later as a fresh
 run. A live sandbox is therefore not the contract between the two runs.
 
-The approval record and approved-run payload persist:
+The latest approval flow already pins the workflow definition and version, but
+its payload persists only plan markdown and assumptions. The approval record
+and approved-run payload additionally persist:
 
 ```ts
 interface ApprovedRepositoryScope {
@@ -275,6 +413,11 @@ baseline, the approval is stale. The implementation does not silently run the
 approved plan against different code; the ticket must be replanned and approved
 again.
 
+The scope is bound to the same pinned workflow-definition version as the plan.
+Dispatch must copy both together into `trigger_plan_approved`; a legacy approval
+without scope uses the existing compatibility path and performs ordinary
+selection rather than inventing trusted baselines.
+
 ## Clarification and Snapshot Durability
 
 Clarification before repository attachment suspends without a workspace
@@ -294,6 +437,12 @@ clarification mechanism. Restore must:
 
 Planning providers must be included when computing agent kinds required in a
 code workspace and after snapshot restoration.
+
+Current main already includes all definition-required harnesses in prepared
+workspaces. AIW-147 preserves that mechanism and adds regression coverage that
+the planning harness executes in the restored shared workspace. A promoted
+discovery sandbox must be absent from `agentSandboxIds` before snapshot
+creation.
 
 ## Repository Catalog and Allowlist Corrections
 
@@ -358,7 +507,10 @@ truncates the security and discovery scope.
 - Deterministic signals skip model discovery when sufficient.
 - One sandbox is reused for discovery, research expansion, planning, and
   implementation within one continuous run.
-- Agent CLIs are installed once per continuous run.
+- Legacy agent CLIs are installed once per continuous run. Versioned harness
+  profiles may rebuild their invocation boundary as required by the current
+  runtime; AIW-147 does not add an extra rebuild beyond those existing
+  guarantees.
 - Repository catalogs are compact and bounded.
 - Only selected repositories are cloned.
 - Expansion clones use concurrency 2.
@@ -405,6 +557,9 @@ deployment. Tokens, auth headers, and repository file contents are never logged.
 - Read/write scope validation.
 - Foreign branch collision refusal.
 - Plan-approval scope serialization and stale-baseline detection.
+- Scratch-to-code ownership transfer removes `agentSandboxIds` without losing
+  durable cleanup registration.
+- Manifest V1 compatibility and V2 fail-closed access parsing.
 
 ### Sandbox/workspace tests
 
@@ -423,11 +578,16 @@ deployment. Tokens, auth headers, and repository file contents are never logged.
 ### Workflow tests
 
 - Planning has repository code available before producing a completed plan.
+- The default V2 `prepare -> planning` graph executes planning in the prepared
+  shared workspace, matching `workflowWorkspaceAccessOf(planning_agent)`.
+- A V1 planning-first graph implicitly prepares the same workspace.
 - An ambiguous ticket uses model discovery instead of immediately asking.
 - Planning requests another repository and completes on the next round.
 - A second expansion works; a third becomes clarification.
 - Planning and implementation can use different agent providers in one
   workspace.
+- Clarification cleanup never detaches a discovery sandbox after it has been
+  promoted to the shared workspace.
 - A plan-approval run persists scope, recreates it after approval, and rejects
   changed baselines.
 - A PR-trigger run keeps its source repository mandatory while allowing
@@ -468,4 +628,3 @@ dedicated test repositories are available.
 - Publishing changes from repositories that planning did not promote to write
   scope.
 - Silently updating an approved plan when repository baselines changed.
-
