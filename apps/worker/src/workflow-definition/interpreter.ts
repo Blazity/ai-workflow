@@ -302,7 +302,17 @@ export async function executeGraph(opts: {
       attempt,
       error,
     );
-    await hooks.onExecutionError?.({
+    // Invoke the callback detached from the hooks object. agent.ts wires a
+    // "use step" function here directly, and the Workflow SDK captures the
+    // receiver of a method call (`hooks.onExecutionError?.(...)` would pass
+    // `this` = the hooks object) as serialized step state. The hooks object
+    // holds unserializable closures, so that capture makes the SDK's
+    // suspension handler fail before the step is ever created, and the queue
+    // redelivers into the same failure forever: the run stalls silently on its
+    // first error. A detached call passes no receiver, so nothing extra is
+    // serialized.
+    const { onExecutionError } = hooks;
+    await onExecutionError?.({
       diagnosticId: state.diagnosticId,
       nodeId,
       attempt,
