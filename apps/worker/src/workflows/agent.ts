@@ -700,7 +700,7 @@ export async function ensurePlanningAgentSandboxForBlock(
     };
   } catch (error) {
     if (isRunControlError(error)) throw error;
-    const { isAgentRuntimeError } = await import("../sandbox/agents/protocol.js");
+    const { isAgentRuntimeError } = await import("../sandbox/agents/runtime-error.js");
     if (isAgentRuntimeError(error)) {
       return agentProtocolBlockError({
         ok: false,
@@ -871,6 +871,26 @@ export function resolveImplementationPlanInput(
 }
 
 function resolveAgentTicketInput(
+  resolvedInputs: Record<string, unknown>,
+  fallback: WorkflowTicketInputContext,
+  liveClarifications?: HumanDecision[],
+): WorkflowTicketInputContext {
+  const base = resolveAgentTicketInputFromBindings(resolvedInputs, fallback);
+  if (!liveClarifications || liveClarifications.length === 0) return base;
+  // Same-run clarification rounds (answered via the in-run hook) postdate both
+  // the journaled trigger output and the run-start ticket snapshot, so a
+  // re-executed agent phase would otherwise never see the answer it just asked
+  // for. Merge them in; appendClarificationRound dedupes rounds the snapshot
+  // already carries. Mirrors fix-agent's live read of ctx.clarifications.
+  let clarifications = base.clarifications;
+  for (const round of liveClarifications) {
+    clarifications = appendClarificationRound(clarifications, round);
+  }
+  if (clarifications === base.clarifications) return base;
+  return { ...base, clarifications };
+}
+
+function resolveAgentTicketInputFromBindings(
   resolvedInputs: Record<string, unknown>,
   fallback: WorkflowTicketInputContext,
 ): WorkflowTicketInputContext {
@@ -1119,7 +1139,7 @@ async function setCommitGuardStep(
     await agent.setCommitGuard(sandbox, enabled, runtime?.paths);
     return { ok: true, value: undefined };
   } catch (error) {
-    const { isAgentRuntimeError } = await import("../sandbox/agents/protocol.js");
+    const { isAgentRuntimeError } = await import("../sandbox/agents/runtime-error.js");
     if (!isAgentRuntimeError(error)) throw error;
     return {
       ok: false,
@@ -1294,6 +1314,20 @@ async function markRunFailedOnSelfMoveStep(runId: string): Promise<void> {
 }
 markRunFailedOnSelfMoveStep.maxRetries = 0;
 
+/**
+ * Records the run's "success" status before its success-finalizing AI Review
+ * move fires the self-triggered "ticket left the AI column" webhook, so that
+ * webhook cannot cancel the run out of a genuine success. See
+ * markRunSucceededOnSelfMove.
+ */
+async function markRunSucceededOnSelfMoveStep(runId: string): Promise<void> {
+  "use step";
+  const { getDb } = await import("../db/client.js");
+  const { markRunSucceededOnSelfMove } = await import("../lib/telemetry/run-telemetry.js");
+  await markRunSucceededOnSelfMove(getDb(), runId);
+}
+markRunSucceededOnSelfMoveStep.maxRetries = 0;
+
 async function logWorkflowExecutionErrorStep(
   event: WorkflowExecutionLogEvent,
 ): Promise<void> {
@@ -1384,10 +1418,12 @@ export async function parkForClarificationStep(
   );
   const db = getDb();
   const { issueTracker } = createStepAdapters();
-  // No Jira comment: the questions live durably in the clarification store and
-  // the overview reads awaiting state from the DB. The label is ticket-status
-  // truth only now (it no longer drives any Jira scan). Best-effort, so a label
-  // failure never blocks the park.
+  // The questions live durably in the clarification store and the overview reads
+  // awaiting state from the DB; the caller also posts a best-effort Jira comment
+  // with the questions separately (postClarificationQuestionsCommentStep). This
+  // step only moves the label/column. The label is ticket-status truth only now
+  // (it no longer drives any Jira scan). Best-effort, so a label failure never
+  // blocks the park.
   if (typeof issueTracker.updateLabels === "function") {
     try {
       await updateTicketLabelsForRun({
@@ -1497,6 +1533,52 @@ export async function postPickupCommentStep(
   }
 }
 postPickupCommentStep.maxRetries = 0;
+
+export async function postClarificationQuestionsCommentStep(
+  ticketKey: string,
+  input: {
+    questions: string[];
+    suggestedAnswers: string[] | null;
+    dashboardUrl: string;
+    expiresAtIso: string | null;
+  },
+  owner: ActiveRunOwner,
+): Promise<string | null> {
+  "use step";
+  const { getDb } = await import("../db/client.js");
+  const { assertActiveRunOwner } = await import("../lib/active-run-owner.js");
+  const { createStepAdapters } = await import("../lib/step-adapters.js");
+  const { env } = await import("../../env.js");
+  const { formatClarificationQuestionsComment } = await import(
+    "../clarifications/comment-format.js"
+  );
+  const { issueTracker } = createStepAdapters();
+  // Best-effort: surfacing the questions in Jira must never fail the paused run.
+  // Returns the comment deep-link on success, null on any failure. A run-control
+  // error still rethrows so the workflow ownership CAS is honored.
+  try {
+    await assertActiveRunOwner(getDb(), owner);
+    return await issueTracker.postComment(
+      ticketKey,
+      formatClarificationQuestionsComment({
+        questions: input.questions,
+        suggestedAnswers: input.suggestedAnswers,
+        dashboardUrl: input.dashboardUrl,
+        aiColumnName: env.COLUMN_AI,
+        expiresAtIso: input.expiresAtIso,
+      }),
+    );
+  } catch (err) {
+    if (isRunControlError(err)) throw err;
+    const { logger } = await import("../lib/logger.js");
+    logger.warn(
+      { ticketKey, err: errorMessage(err) },
+      "clarification_questions_comment_failed",
+    );
+    return null;
+  }
+}
+postClarificationQuestionsCommentStep.maxRetries = 0;
 
 async function loadClarificationHistoryStep(
   ticketKey: string,
@@ -2789,9 +2871,22 @@ async function agentWorkflowBody(
               );
               return false;
             });
+            const questionsCommentUrl = await postClarificationQuestionsCommentStep(
+              ticket.identifier,
+              {
+                questions,
+                suggestedAnswers: suggestedAnswers ?? null,
+                dashboardUrl: ticketRunUrl(env.DASHBOARD_ORIGIN, ticket.identifier, workflowRunId),
+                expiresAtIso: clarification.expiresAt,
+              },
+              transitionOwner,
+            );
             await notifyTicketBestEffort(ticket.identifier, {
               kind: "needs_clarification",
               dashboardUrl: ticketRunUrl(env.DASHBOARD_ORIGIN, ticket.identifier, workflowRunId),
+              ...(questionsCommentUrl ? { commentUrl: questionsCommentUrl } : {}),
+              questions,
+              ...(suggestedAnswers && suggestedAnswers.length > 0 ? { suggestedAnswers } : {}),
               usageReport: usageReportOrUndefined(),
             }, transitionOwner);
           }
@@ -2801,6 +2896,12 @@ async function agentWorkflowBody(
           if ("expired" in answered) {
             throw new Error("clarification expired before it was answered");
           }
+          // Scratch agent sandboxes have a JOB_TIMEOUT_MS lifetime while the
+          // hook stays answerable for days, so any cached id may point at an
+          // expired sandbox after the park. Drop the cache so the re-executed
+          // block re-provisions; the code workspace is restored from its
+          // snapshot separately below.
+          ctx.agentSandboxIds = {};
           // Hook suspension is free wall time; only active work counts against
           // the run duration budget.
           if (entry.ticketKey) {
@@ -3102,7 +3203,7 @@ async function agentWorkflowBody(
                 runtime,
               );
             const researchContext = {
-              ticket: resolveAgentTicketInput(resolvedInputs, ticketData),
+              ticket: resolveAgentTicketInput(resolvedInputs, ticketData, ctx.clarifications),
               branchName,
               attachments: downloadedAttachments,
               preSandboxAdditions: ctx.preSandboxAdditions.research,
@@ -3266,7 +3367,7 @@ async function agentWorkflowBody(
                 runtime,
               );
             const implementationContext = {
-              ticket: resolveAgentTicketInput(resolvedInputs, ticketData),
+              ticket: resolveAgentTicketInput(resolvedInputs, ticketData, ctx.clarifications),
               researchPlanMarkdown: resolveImplementationPlanInput(
                 resolvedInputs,
                 ctx.researchPlanMarkdown,
@@ -3814,6 +3915,17 @@ async function agentWorkflowBody(
             });
             if (!entry.ticketKey) {
               throw new Error("Update Ticket Status requires a correlated ticket.");
+            }
+            // The "ai_review" move is the run's own successful completion.
+            // Commit the run's "success" status BEFORE that move fires the
+            // self-triggered "ticket left the AI column" webhook (same race as
+            // failureExit): when the webhook's actor lookup transiently fails
+            // it fails safe as a human move and would cancel this
+            // still-finalizing run, recording a real success as "blocked".
+            // Only the symbolic success target gets this; backlog or arbitrary
+            // status moves are generic ticket moves, not a completion.
+            if (targetName === "ai_review") {
+              await markRunSucceededOnSelfMoveStep(workflowRunId);
             }
             await moveTicketStep(entry.ticketKey, target, transitionOwner);
             return { kind: "next", output: { status: "ok", target: targetName } };

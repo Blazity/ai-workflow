@@ -2,8 +2,9 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 import { defineEventHandler, readRawBody, getHeader, createError } from "h3";
 import { env } from "../../../env.js";
 import { IssueTrackerNotFoundError } from "../../adapters/issue-tracker/types.js";
+import { resumeClarificationFromComments } from "../../clarifications/resume-from-comments.js";
 import { getDb } from "../../db/client.js";
-import { isRunRecordedFailed } from "../../db/queries/runs-read.js";
+import { isRunRecordedFailed, isRunRecordedSucceeded } from "../../db/queries/runs-read.js";
 import { createAdapters } from "../../lib/adapters.js";
 import { cancelRun } from "../../lib/cancel-run.js";
 import { dispatchTicket } from "../../lib/dispatch.js";
@@ -163,6 +164,13 @@ export default defineEventHandler(async (event) => {
         },
         "webhook_skip_cancel_live_ticket_in_ai_column",
       );
+      const resumeResult = await tryResumeClarification(
+        ticketKey,
+        adapters,
+        Boolean(statusChange),
+      );
+      if (resumeResult) return resumeResult;
+
       logger.info(
         {
           ticketKey,
@@ -189,21 +197,51 @@ export default defineEventHandler(async (event) => {
       };
     }
 
-    // The bot's OWN failure handling moves a failed run's ticket to the
-    // backlog, which fires this exact webhook. Refuse to cancel a run whose
-    // failure is already recorded: cancelling would overwrite its "failed"
-    // outcome with a "cancelled" world status the errors KPI never counts. A
-    // human abort still cancels, because a live run is never recorded "failed".
+    // The AI Review column is the flow's own success destination: the run's
+    // final update_ticket_status block moves the finished ticket there right
+    // after the PR opens. A Jira automation rule (or an eager human) can race
+    // that same move as soon as the PR link appears, landing the ticket in AI
+    // Review while the run is still finalizing and BEFORE the self-move froze
+    // the "success" status, so the recorded-outcome guard below cannot help.
+    // Entering the review column is a completion gesture, never an abort:
+    // skip cancellation and let the run finish. Its own later move lands as a
+    // no-op (moveTicketForRun's already-at-target check). A human abort still
+    // cancels, because it moves the ticket to a non-review column.
+    if (isAiReviewColumnStatus(liveTicketState.status)) {
+      logger.info(
+        {
+          ticketKey,
+          payloadStatus: ticketStatus,
+          liveStatus: liveTicketState.status,
+        },
+        "webhook_skip_cancel_ticket_in_ai_review_column",
+      );
+      return { status: "ignored", reason: "ticket_in_ai_review_column", ticketKey };
+    }
+
+    // The bot's OWN finalization moves this ticket out of the AI column: its
+    // failure handling moves a failed run's ticket to the backlog, and its
+    // success handling moves a finished run's ticket to AI Review. Both fire
+    // this exact webhook. Refuse to cancel a run whose terminal outcome is
+    // already recorded: cancelling would overwrite a "failed" outcome with a
+    // "cancelled" world status the errors KPI never counts, or a "success"
+    // outcome with a "blocked" status even though the PR already opened. A
+    // human abort still cancels, because a live run records neither outcome.
     const subjectKey = ticketSubjectKey("jira", ticketKey);
     const activeRun = await adapters.runRegistry.get(subjectKey).catch(() => null);
     if (activeRun?.runId) {
       let recordedFailed: boolean;
+      let recordedSucceeded: boolean;
       try {
         recordedFailed = await isRunRecordedFailed(getDb(), activeRun.runId);
+        recordedSucceeded = recordedFailed
+          ? false
+          : await isRunRecordedSucceeded(getDb(), activeRun.runId);
       } catch (lookupError) {
-        // Do not guess on a lookup failure: treating it as "not failed" would let
-        // this self-triggered webhook cancel a genuinely failed run (the exact
-        // masking bug). Surface a retryable error so the webhook is redelivered.
+        // Do not guess on a lookup failure: treating it as "not terminal" would
+        // let this self-triggered webhook cancel a genuinely finished run (the
+        // exact masking bug). Surface a retryable error so the webhook is
+        // redelivered.
         logger.warn(
           { ticketKey, runId: activeRun.runId, err: String(lookupError) },
           "webhook_run_failed_lookup_failed",
@@ -219,6 +257,13 @@ export default defineEventHandler(async (event) => {
           "webhook_skip_cancel_run_already_failed",
         );
         return { status: "ignored", reason: "run_already_failed", ticketKey };
+      }
+      if (recordedSucceeded) {
+        logger.info(
+          { ticketKey, runId: activeRun.runId, payloadStatus: ticketStatus },
+          "webhook_skip_cancel_run_already_succeeded",
+        );
+        return { status: "ignored", reason: "run_already_succeeded", ticketKey };
       }
     }
 
@@ -266,6 +311,13 @@ export default defineEventHandler(async (event) => {
     };
   }
 
+  const resumeResult = await tryResumeClarification(
+    ticketKey,
+    adapters,
+    Boolean(statusChange),
+  );
+  if (resumeResult) return resumeResult;
+
   logger.info(
     {
       ticketKey,
@@ -287,6 +339,58 @@ export default defineEventHandler(async (event) => {
     reason: result.reason,
   };
 });
+
+// ---------------------------------------------------------------------------
+// Clarification resume
+// ---------------------------------------------------------------------------
+
+/**
+ * A ticket moved into the AI column may carry a suspended clarification run
+ * whose answers were left as human comments. Wake that run instead of
+ * dispatching. Returns the handler response to send, or null to fall through
+ * to dispatchTicket (no clarification, or the live ticket is not in AI). The
+ * move is the commit gesture, so nudging is only allowed when the delivery
+ * carries a real status changelog item.
+ */
+async function tryResumeClarification(
+  ticketKey: string,
+  adapters: ReturnType<typeof createAdapters>,
+  allowNudge: boolean,
+): Promise<{ status: string; reason: string; ticketKey: string } | null> {
+  const resume = await resumeClarificationFromComments({
+    db: getDb(),
+    issueTracker: adapters.issueTracker,
+    ticketKey,
+    allowNudge,
+  }).catch((err) => {
+    logger.warn(
+      { ticketKey, error: (err as Error).message },
+      "webhook_clarification_resume_failed",
+    );
+    return null;
+  });
+  if (
+    resume &&
+    resume.status !== "no_clarification" &&
+    resume.status !== "not_in_ai_column"
+  ) {
+    logger.info(
+      { ticketKey, resumeStatus: resume.status, runId: resume.runId },
+      "webhook_clarification_resume",
+    );
+    return {
+      status: resume.status === "resumed" ? "resumed" : "skipped",
+      reason: `clarification_${resume.status}`,
+      ticketKey,
+    };
+  }
+  if (resume === null) {
+    // Unexpected resume failure: skip dispatch this delivery, the cron retries.
+    return { status: "skipped", reason: "clarification_resume_error", ticketKey };
+  }
+  // fall through to dispatchTicket (returns already_claimed / not_in_ai itself)
+  return null;
+}
 
 // ---------------------------------------------------------------------------
 // Auth
@@ -378,6 +482,13 @@ function extractStatusChange(
 
 function isAiColumnStatus(status: string): boolean {
   return status.trim().toLowerCase() === env.COLUMN_AI.trim().toLowerCase();
+}
+
+function isAiReviewColumnStatus(status: string | null): boolean {
+  return (
+    status !== null &&
+    status.trim().toLowerCase() === env.COLUMN_AI_REVIEW.trim().toLowerCase()
+  );
 }
 
 async function cancelTrackedRun(

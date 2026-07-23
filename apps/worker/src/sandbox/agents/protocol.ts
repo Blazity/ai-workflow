@@ -11,6 +11,7 @@ import type {
   RunnableSandbox,
   SerializableAgentCliSpec,
 } from "./types.js";
+import { AgentRuntimeError } from "./runtime-error.js";
 
 const DIAGNOSTIC_TAIL_BYTES = 2 * 1024;
 const MAX_SCHEMA_ISSUES = 20;
@@ -65,27 +66,8 @@ export function hydrateAgentCliSpec(
   return supported;
 }
 
-export class AgentRuntimeError extends Error {
-  readonly category: AgentProtocolFailureCategory;
-  readonly safeMessage: string;
-  readonly diagnostic: AgentProtocolDiagnostic;
-
-  constructor(input: {
-    category: AgentProtocolFailureCategory;
-    message: string;
-    diagnostic: AgentProtocolDiagnostic;
-  }) {
-    super(input.message);
-    this.name = "AgentRuntimeError";
-    this.category = input.category;
-    this.safeMessage = input.message;
-    this.diagnostic = input.diagnostic;
-  }
-}
-
-export function isAgentRuntimeError(error: unknown): error is AgentRuntimeError {
-  return error instanceof AgentRuntimeError;
-}
+export { AgentRuntimeError };
+export { isAgentRuntimeError } from "./runtime-error.js";
 
 export async function installAndVerifyCli(
   sandbox: RunnableSandbox,

@@ -98,7 +98,7 @@ async function blockProvisionAgentSandboxStep(
     });
     return { ok: true, sandboxId: sandbox.sandboxId };
   } catch (error) {
-    const { isAgentRuntimeError } = await import("../../sandbox/agents/protocol.js");
+    const { isAgentRuntimeError } = await import("../../sandbox/agents/runtime-error.js");
     const agentRuntimeError = isAgentRuntimeError(error);
     const { stopSandboxAndConfirm } = await import(
       "../../sandbox/stop-ticket-sandboxes.js"
@@ -255,7 +255,7 @@ export async function ensureAgentSandbox(
     runtime,
   );
   if (!provisioned.ok) {
-    const { AgentRuntimeError } = await import("../../sandbox/agents/protocol.js");
+    const { AgentRuntimeError } = await import("../../sandbox/agents/runtime-error.js");
     throw new AgentRuntimeError(provisioned.failure);
   }
   const { sandboxId } = provisioned;
