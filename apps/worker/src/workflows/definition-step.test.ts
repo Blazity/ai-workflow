@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import type { WorkflowDefinition } from "@shared/contracts";
+import type { WorkflowDefinition, WorkflowDefinitionV2 } from "@shared/contracts";
 
 vi.mock("../../env.js", () => ({
   env: {
@@ -194,14 +194,31 @@ describe("loadWorkflowDefinition", () => {
     expect(plan.reviewEnabled).toBe(false);
   });
 
-  it("fails closed and logs when the row fails schema validation", async () => {
+  it("fails closed before the v1 interpreter when a valid v2 row is selected", async () => {
+    const definition: WorkflowDefinitionV2 = {
+      schemaVersion: 2,
+      nodes: [
+        {
+          id: "ticket",
+          type: "trigger_ticket_ai",
+          x: 0,
+          y: 0,
+          configuration: {},
+          inputs: {},
+          additionalInputs: [],
+        },
+      ],
+      edges: [],
+    };
     mockGetEnabled.mockResolvedValue(
-      enabled({ schemaVersion: 2, nodes: [], edges: [] } as unknown as WorkflowDefinition, 9, 5),
+      enabled(definition, 9, 5),
     );
     const plan = await loadWorkflowDefinition();
     expect(plan).toBeNull();
-    expect(loggerError).toHaveBeenCalledTimes(1);
-    expect(loggerError.mock.calls[0][0]).toMatchObject({ version: 9, definitionId: 5 });
+    expect(loggerError).toHaveBeenCalledWith(
+      { version: 9, definitionId: 5, schemaVersion: 2 },
+      "workflow_definition_v2_runtime_unavailable",
+    );
   });
 
   it("fails closed when an eager store upgrade raises a deterministic Zod error", async () => {

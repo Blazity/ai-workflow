@@ -10,7 +10,6 @@ import {
   type WorkflowDefinitionDetailResponse,
   type WorkflowDefinitionLayoutResponse,
   type WorkflowDefinitionMeta,
-  type WorkflowDefinitionNode,
   type WorkflowDefinitionTemplate,
   type WorkflowDefinitionSaveResponse,
   type WorkflowDefinitionValidationResponse,
@@ -21,7 +20,11 @@ import {
 import { FlowEditor } from "@/components/cockpit/flow-editor/flow-editor";
 import { PromptLibraryProvider } from "@/components/cockpit/flow-editor/prompt-library-context";
 import { Listbox } from "@/components/cockpit/listbox";
-import type { FlowEdgeDef, FlowNodeDef } from "@/lib/flows";
+import {
+  toFlowDefinition,
+  type FlowEdgeDef,
+  type FlowNodeDef,
+} from "@/lib/flows";
 import { readErrorMessage } from "@/lib/api/error-message";
 import {
   serializeSemanticWorkflowDefinition,
@@ -59,13 +62,6 @@ interface ValidationRequest {
   definition: WorkflowDefinition;
 }
 
-function toViewNodes(nodes: WorkflowDefinitionNode[]): FlowNodeDef[] {
-  return structuredClone(nodes).map((node) => ({
-    ...node,
-    locked: node.type === "trigger_ticket_ai",
-  }));
-}
-
 function nodesValid(nodes: FlowNodeDef[]): boolean {
   if (!nodes.some((n) => isTriggerBlockType(n.type))) return false;
   for (const node of nodes) {
@@ -101,17 +97,19 @@ export function WorkflowEditorScreen({
   initialNodeId?: string;
 }) {
   const seed = initialDetail.draft ?? initialDetail.deployed?.definition ?? defaultDefinition;
+  const seedFlow = toFlowDefinition(seed);
   const [metas, setMetas] = useState<WorkflowDefinitionMeta[]>(definitions);
   const [selectedId, setSelectedId] = useState(initialDetail.meta.id);
   const [versions, setVersions] = useState<WorkflowDefinitionVersion[]>(initialDetail.versions);
   const [deployed, setDeployed] = useState<WorkflowDefinitionVersion | null>(initialDetail.deployed);
   const [baselineDraft, setBaselineDraft] = useState<WorkflowDefinition | null>(initialDetail.draft);
+  const [schemaVersion, setSchemaVersion] = useState<1 | 2>(seed.schemaVersion);
   const [budgets, setBudgets] = useState<WorkflowExecutionBudgets>(() =>
     executionLimitsFromDefinition(seed),
   );
   const [layoutBaseline, setLayoutBaseline] = useState(() => JSON.stringify(initialDetail.layout));
-  const [nodes, setNodes] = useState<FlowNodeDef[]>(() => toViewNodes(seed.nodes));
-  const [edges, setEdges] = useState<FlowEdgeDef[]>(() => structuredClone(seed.edges));
+  const [nodes, setNodes] = useState<FlowNodeDef[]>(() => seedFlow.nodes);
+  const [edges, setEdges] = useState<FlowEdgeDef[]>(() => seedFlow.edges);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [confirmRestore, setConfirmRestore] = useState<number | null>(null);
@@ -129,7 +127,12 @@ export function WorkflowEditorScreen({
     state: WorkflowValidationState;
   }>({
     key: null,
-    state: { status: "checking", issues: [], nodeContracts: {} },
+    state: {
+      status: "checking",
+      issues: [],
+      nodeContracts: {},
+      availableValuesByNode: {},
+    },
   });
   const pendingLayoutSaveRef = useRef<PendingLayoutSave | null>(null);
   if (pendingLayoutSaveRef.current === null) {
@@ -176,8 +179,8 @@ export function WorkflowEditorScreen({
 
   const selectedMeta = metas.find((m) => m.id === selectedId);
   const semanticDefinition = useMemo(
-    () => serializeSemanticWorkflowDefinition(nodes, edges, budgets),
-    [budgets, edges, nodes],
+    () => serializeSemanticWorkflowDefinition(nodes, edges, budgets, schemaVersion),
+    [budgets, edges, nodes, schemaVersion],
   );
   const semanticDefinitionRef = useRef(semanticDefinition);
   semanticDefinitionRef.current = semanticDefinition;
@@ -185,13 +188,17 @@ export function WorkflowEditorScreen({
   const baselineSemanticKey =
     baselineDraft === null
       ? null
-      : JSON.stringify(
-          serializeSemanticWorkflowDefinition(
-            toViewNodes(baselineDraft.nodes),
-            structuredClone(baselineDraft.edges),
-            executionLimitsFromDefinition(baselineDraft),
-          ),
-        );
+      : (() => {
+          const baselineFlow = toFlowDefinition(baselineDraft);
+          return JSON.stringify(
+            serializeSemanticWorkflowDefinition(
+              baselineFlow.nodes,
+              baselineFlow.edges,
+              executionLimitsFromDefinition(baselineDraft),
+              baselineDraft.schemaVersion,
+            ),
+          );
+        })();
   const validationTargetKey = `${selectedId}:${semanticKey}`;
   const validationIsCurrent = validation.key === validationTargetKey;
   const dirty =
@@ -318,17 +325,21 @@ export function WorkflowEditorScreen({
   ) {
     setBaselineDraft(res.draft);
     if (replaceEditorState) {
+      const flow = toFlowDefinition(res.draft);
+      setSchemaVersion(flow.schemaVersion);
       setBudgets(executionLimitsFromDefinition(res.draft));
-      setNodes(toViewNodes(res.draft.nodes));
-      setEdges(structuredClone(res.draft.edges));
+      setNodes(flow.nodes);
+      setEdges(flow.edges);
     }
     setMetas((prev) => prev.map((m) => (m.id === res.meta.id ? res.meta : m)));
     if (replaceEditorState) {
+      const savedFlow = toFlowDefinition(res.draft);
       const savedKey = `${res.meta.id}:${JSON.stringify(
         serializeSemanticWorkflowDefinition(
-          toViewNodes(res.draft.nodes),
-          structuredClone(res.draft.edges),
+          savedFlow.nodes,
+          savedFlow.edges,
           executionLimitsFromDefinition(res.draft),
+          savedFlow.schemaVersion,
         ),
       )}`;
       validationKeyRef.current = savedKey;
@@ -339,6 +350,7 @@ export function WorkflowEditorScreen({
               status: res.validation.valid ? "valid" : "invalid",
               issues: res.validation.issues,
               nodeContracts: res.validation.nodeContracts,
+              availableValuesByNode: res.validation.availableValuesByNode,
             }
           : {
               status: "error",
@@ -351,6 +363,7 @@ export function WorkflowEditorScreen({
                 },
               ],
               nodeContracts: {},
+              availableValuesByNode: {},
             },
       });
     }
@@ -369,13 +382,19 @@ export function WorkflowEditorScreen({
         status: "error",
         issues: [{ code, severity: "error", nodeId: null, message }],
         nodeContracts: {},
+        availableValuesByNode: {},
       },
     });
   }
 
   async function save() {
     const requestRevision = editorResponseGuard.capture();
-    const definition = serializeWorkflowDefinition(nodes, edges, budgets);
+    const definition = serializeWorkflowDefinition(
+      nodes,
+      edges,
+      budgets,
+      schemaVersion,
+    );
     setBusy("save");
     setError(null);
     try {
@@ -421,7 +440,12 @@ export function WorkflowEditorScreen({
   async function deploy() {
     if (!selectedMeta) return;
     const requestRevision = editorResponseGuard.capture();
-    const definition = serializeWorkflowDefinition(nodes, edges, budgets);
+    const definition = serializeWorkflowDefinition(
+      nodes,
+      edges,
+      budgets,
+      schemaVersion,
+    );
     const candidateKey = validationTargetKey;
     setBusy("deploy");
     setError(null);
@@ -502,6 +526,7 @@ export function WorkflowEditorScreen({
               status: "invalid",
               issues: body.issues,
               nodeContracts: immediateValidation.nodeContracts,
+              availableValuesByNode: immediateValidation.availableValuesByNode,
             },
           });
           return;
@@ -567,9 +592,11 @@ export function WorkflowEditorScreen({
       setBaselineDraft(detail.draft);
       setLayoutBaseline(JSON.stringify(detail.layout));
       const def = detail.draft ?? detail.deployed?.definition ?? defaultDefinition;
+      const flow = toFlowDefinition(def);
+      setSchemaVersion(flow.schemaVersion);
       setBudgets(executionLimitsFromDefinition(def));
-      setNodes(toViewNodes(def.nodes));
-      setEdges(structuredClone(def.edges));
+      setNodes(flow.nodes);
+      setEdges(flow.edges);
       setConfirmRestore(null);
       setFitSignal((s) => s + 1);
     } catch (err) {
@@ -723,6 +750,7 @@ export function WorkflowEditorScreen({
           key={selectedId}
           nodes={nodes}
           edges={edges}
+          schemaVersion={schemaVersion}
           limits={budgets}
           onLimitsChange={(next) => {
             editorResponseGuard.invalidate();
@@ -744,7 +772,12 @@ export function WorkflowEditorScreen({
           validation={
             validationIsCurrent
               ? validation.state
-              : { status: "checking", issues: [], nodeContracts: {} }
+              : {
+                  status: "checking",
+                  issues: [],
+                  nodeContracts: {},
+                  availableValuesByNode: {},
+                }
           }
           onSave={save}
           saveLabel="Save draft"

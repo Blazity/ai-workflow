@@ -57,6 +57,7 @@ const valid: WorkflowDefinitionValidationResponse = {
   valid: true,
   issues: [],
   nodeContracts: {},
+  availableValuesByNode: {},
 };
 const invalid: WorkflowDefinitionValidationResponse = {
   valid: false,
@@ -69,6 +70,7 @@ const invalid: WorkflowDefinitionValidationResponse = {
     },
   ],
   nodeContracts: {},
+  availableValuesByNode: {},
 };
 
 async function flushPromises() {
@@ -95,8 +97,8 @@ test("semantic edits wait five idle seconds and only validate the latest value",
   controller.schedule("second");
 
   assert.deepEqual(states, [
-    { status: "checking", issues: [], nodeContracts: {} },
-    { status: "checking", issues: [], nodeContracts: {} },
+    { status: "checking", issues: [], nodeContracts: {}, availableValuesByNode: {} },
+    { status: "checking", issues: [], nodeContracts: {}, availableValuesByNode: {} },
   ]);
   assert.deepEqual(clock.delays, [5_000, 5_000]);
   assert.equal(clock.cancellations, 1);
@@ -106,7 +108,12 @@ test("semantic edits wait five idle seconds and only validate the latest value",
   await flushPromises();
 
   assert.deepEqual(requests, ["second"]);
-  assert.deepEqual(states.at(-1), { status: "valid", issues: [], nodeContracts: {} });
+  assert.deepEqual(states.at(-1), {
+    status: "valid",
+    issues: [],
+    nodeContracts: {},
+    availableValuesByNode: {},
+  });
 });
 
 test("a focused block pauses validation and deselection honors the remaining idle time", async () => {
@@ -215,6 +222,7 @@ test("validateNow cancels debounce and runs while a block is focused", async () 
     status: "invalid",
     issues: invalid.issues,
     nodeContracts: {},
+    availableValuesByNode: {},
   });
 });
 
@@ -265,7 +273,12 @@ test("an older response cannot overwrite the latest validation result", async ()
   first.resolve(invalid);
   await flushPromises();
 
-  assert.deepEqual(states.at(-1), { status: "valid", issues: [], nodeContracts: {} });
+  assert.deepEqual(states.at(-1), {
+    status: "valid",
+    issues: [],
+    nodeContracts: {},
+    availableValuesByNode: {},
+  });
   assert.equal(states.some((state) => state.status === "invalid"), false);
 });
 
@@ -296,5 +309,6 @@ test("network failures become workflow-level validation errors", async () => {
       },
     ],
     nodeContracts: {},
+    availableValuesByNode: {},
   });
 });

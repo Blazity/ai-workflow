@@ -43,6 +43,7 @@ test("renders errors in a red overlay that can focus the affected block", () => 
     status: "invalid",
     issues,
     nodeContracts: {},
+    availableValuesByNode: {},
   };
   const html = renderToStaticMarkup(
     <ValidationSummary

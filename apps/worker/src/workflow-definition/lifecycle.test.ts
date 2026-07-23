@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { WorkflowBlockType, WorkflowDefinition } from "@shared/contracts";
+import type {
+  WorkflowBlockTypeV1,
+  WorkflowDefinitionV1,
+} from "@shared/contracts";
 import type { Db } from "../db/client.js";
 
 vi.mock("../../env.js", () => ({
@@ -41,7 +44,7 @@ import {
 
 const ADMIN: WorkflowDefinitionActor = { role: "admin", id: "u_admin", label: "Admin" };
 
-function graph(trigger: WorkflowBlockType, x = 10): WorkflowDefinition {
+function graph(trigger: WorkflowBlockTypeV1, x = 10): WorkflowDefinitionV1 {
   return {
     schemaVersion: 1,
     nodes: [{ id: "trigger", type: trigger, x, y: 20, params: {}, inputs: {} }],

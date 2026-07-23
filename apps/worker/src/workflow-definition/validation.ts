@@ -4,10 +4,13 @@ import type {
   WorkflowDefinitionValidationResponse,
 } from "@shared/contracts";
 import type { z } from "zod";
+import { analyzeWorkflowV2Bindings } from "./available-values.js";
 import { resolveWorkflowBlockContract } from "./block-registry.js";
 import type { WorkflowBlockRegistryContext } from "./block-registry.js";
 import {
   validateWorkflowDefinitionIssuesForDeployment,
+  workflowDefinitionV1Schema,
+  workflowDefinitionV2Schema,
   workflowDefinitionSchema,
 } from "./schema.js";
 
@@ -24,7 +27,19 @@ export function validateWorkflowDefinitionCandidate(
   candidate: unknown,
   registryContext: WorkflowBlockRegistryContext,
 ): WorkflowDefinitionCandidateValidation {
-  const parsed = workflowDefinitionSchema.safeParse(candidate);
+  const schema =
+    candidate !== null &&
+    typeof candidate === "object" &&
+    "schemaVersion" in candidate &&
+    candidate.schemaVersion === 1
+      ? workflowDefinitionV1Schema
+      : candidate !== null &&
+          typeof candidate === "object" &&
+          "schemaVersion" in candidate &&
+          candidate.schemaVersion === 2
+        ? workflowDefinitionV2Schema
+        : workflowDefinitionSchema;
+  const parsed = schema.safeParse(candidate);
   if (!parsed.success) {
     return {
       parsed: null,
@@ -32,24 +47,57 @@ export function validateWorkflowDefinitionCandidate(
         valid: false,
         issues: structuralIssues(candidate, parsed.error),
         nodeContracts: {},
+        availableValuesByNode: {},
       },
     };
   }
 
-  const issues = validateWorkflowDefinitionIssuesForDeployment(parsed.data, registryContext);
+  const deploymentIssues = validateWorkflowDefinitionIssuesForDeployment(
+    parsed.data,
+    registryContext,
+  );
+  const v2Analysis =
+    parsed.data.schemaVersion === 2
+      ? analyzeWorkflowV2Bindings(parsed.data, registryContext)
+      : null;
+  const issues = dedupeIssues([
+    ...deploymentIssues,
+    ...(v2Analysis?.issues ?? []),
+  ]);
   return {
     parsed: parsed.data,
     response: {
       valid: issues.length === 0,
       issues,
-      nodeContracts: Object.fromEntries(
-        parsed.data.nodes.map((node) => [
-          node.id,
-          resolveWorkflowBlockContract(node.type, node.params, registryContext),
-        ]),
-      ),
+      nodeContracts:
+        parsed.data.schemaVersion === 1
+          ? Object.fromEntries(
+              parsed.data.nodes.map((node) => [
+                node.id,
+                resolveWorkflowBlockContract(node.type, node.params, registryContext),
+              ]),
+            )
+          : v2Analysis?.nodeContracts ?? {},
+      availableValuesByNode: v2Analysis?.availableValuesByNode ?? {},
     },
   };
+}
+
+function dedupeIssues(
+  issues: WorkflowDefinitionValidationIssue[],
+): WorkflowDefinitionValidationIssue[] {
+  const seen = new Set<string>();
+  return issues.filter((issue) => {
+    const key = JSON.stringify([
+      issue.code,
+      issue.nodeId,
+      issue.path ?? null,
+      issue.message,
+    ]);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 function structuralIssues(

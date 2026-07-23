@@ -208,7 +208,7 @@ describe("buildWorkflowEditorOptions", () => {
       available: false,
       unavailableReason: "Arthur Engine is not configured.",
     });
-    expect(Object.keys(options.blockRegistry)).toHaveLength(28);
+    expect(Object.keys(options.blockRegistry)).toHaveLength(29);
     expect(options.runBindingSchema).toMatchObject({
       type: "object",
       properties: {

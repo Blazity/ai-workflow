@@ -1,6 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { eq } from "drizzle-orm";
-import type { WorkflowBlockType, WorkflowDefinition } from "@shared/contracts";
+import type {
+  WorkflowBlockType,
+  WorkflowBlockTypeV1,
+  WorkflowDefinition,
+  WorkflowDefinitionV1,
+} from "@shared/contracts";
 import type { Db } from "../db/client.js";
 
 vi.mock("../../env.js", () => ({
@@ -35,6 +40,7 @@ import {
   getCurrentWorkflowDefinition,
   getCurrentWorkflowDefinitionVersion,
   getEnabledWorkflowDefinitionForTrigger,
+  getRawWorkflowDefinitionVersion,
   getWorkflowDefinition,
   getWorkflowDefinitionVersion,
   listWorkflowDefinitions,
@@ -60,7 +66,9 @@ const MEMBER: WorkflowDefinitionActor = { role: "member", id: "u_member", label:
  *  complete graph. The store reads node types to derive trigger_types. A
  *  trigger-less graph is not valid, so a definition with no trigger is made with
  *  `seed: null` (no version) instead. */
-function def(triggers: WorkflowBlockType[] = ["trigger_ticket_ai"]): WorkflowDefinition {
+function def(
+  triggers: WorkflowBlockTypeV1[] = ["trigger_ticket_ai"],
+): WorkflowDefinitionV1 {
   return {
     schemaVersion: 1,
     nodes: triggers.map((type, i) => ({ id: `n${i}`, type, x: 0, y: 0, params: {}, inputs: {} })),
@@ -70,7 +78,7 @@ function def(triggers: WorkflowBlockType[] = ["trigger_ticket_ai"]): WorkflowDef
 
 /** A graph that is well-shaped but structurally invalid (an unreachable block),
  *  standing in for a version stored before a schema/rule tightened. */
-function invalidDef(): WorkflowDefinition {
+function invalidDef(): WorkflowDefinitionV1 {
   return {
     schemaVersion: 1,
     nodes: [
@@ -81,7 +89,7 @@ function invalidDef(): WorkflowDefinition {
   };
 }
 
-function invalidBindingDef(): WorkflowDefinition {
+function invalidBindingDef(): WorkflowDefinitionV1 {
   return {
     schemaVersion: 1,
     nodes: [
@@ -93,8 +101,8 @@ function invalidBindingDef(): WorkflowDefinition {
 }
 
 function legacyStructuredOutputDef(
-  trigger: WorkflowBlockType = "trigger_pr_review",
-): WorkflowDefinition {
+  trigger: WorkflowBlockTypeV1 = "trigger_pr_review",
+): WorkflowDefinitionV1 {
   const outputSchema = JSON.stringify({
     $schema: "http://json-schema.org/draft-07/schema#",
     title: "Legacy classifier",
@@ -291,7 +299,17 @@ describe("legacy version read normalization", () => {
       restoredFromVersion: null,
     });
 
+    const raw = await getRawWorkflowDefinitionVersion(
+      db,
+      created.definition.id,
+      1,
+    );
     const current = await getCurrentWorkflowDefinitionVersion(db, created.definition.id);
+    expect(
+      (raw?.definition as { nodes: Array<{ type: string }> }).nodes.map(
+        (node) => node.type,
+      ),
+    ).toEqual(["trigger_ticket_ai", "arthur_trace", "open_pr"]);
     expect(current?.definition.nodes.map((node) => node.type)).toEqual([
       "trigger_ticket_ai",
       "finalize_workspace",

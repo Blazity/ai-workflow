@@ -1,13 +1,20 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { BLOCK_PARAM_KEYS } from "@shared/contracts";
+import {
+  BLOCK_PARAM_KEYS,
+  type WorkflowDefinitionV2,
+} from "@shared/contracts";
 import {
   serializeSemanticWorkflowDefinition,
   serializeWorkflowDefinition,
   serializeWorkflowLayout,
   serializeWorkflowLayoutWithBaseline,
 } from "./serialize.ts";
-import type { FlowEdgeDef, FlowNodeDef } from "../flows.ts";
+import {
+  toFlowDefinition,
+  type FlowEdgeDef,
+  type FlowNodeDef,
+} from "../flows.ts";
 
 type TestFlowNode = Omit<FlowNodeDef, "inputs"> & Partial<Pick<FlowNodeDef, "inputs">>;
 
@@ -218,6 +225,170 @@ test("preserves a non-empty exact input binding map", () => {
   assert.deepEqual(out.nodes[0].inputs, {
     prompt: "steps.plan.output.plan",
     context: "trigger.ticket.description",
+  });
+});
+
+test("round-trips v2 configuration, typed bindings, and stable control-edge ids", () => {
+  const nodes = flowNodes([
+    {
+      id: "trigger",
+      type: "trigger_ticket_ai",
+      x: 10,
+      y: 20,
+      params: {},
+      v2: {
+        configuration: {},
+        inputs: {},
+        additionalInputs: [],
+      },
+    },
+    {
+      id: "consumer",
+      type: "post_ticket_comment",
+      x: 100.4,
+      y: 200.6,
+      params: { body: "Fallback display value" },
+      v2: {
+        configuration: {
+          body: "Original value",
+          nested: { preserved: true },
+        },
+        inputs: {
+          body: {
+            kind: "reference",
+            reference: "steps.entry.output.ticketKey",
+          },
+        },
+        additionalInputs: [
+          {
+            name: "score",
+            schema: { type: "number" },
+            binding: { kind: "literal", value: 3 },
+          },
+        ],
+      },
+    },
+  ]);
+
+  const out = serializeWorkflowDefinition(
+    nodes,
+    [{ id: "trigger-consumer", from: "trigger", to: "consumer" }],
+    {},
+    2,
+  );
+
+  assert.deepEqual(out, {
+    schemaVersion: 2,
+    nodes: [
+      {
+        id: "trigger",
+        type: "trigger_ticket_ai",
+        x: 10,
+        y: 20,
+        configuration: {},
+        inputs: {},
+        additionalInputs: [],
+      },
+      {
+        id: "consumer",
+        type: "post_ticket_comment",
+        x: 100,
+        y: 201,
+        configuration: {
+          body: "Fallback display value",
+          nested: { preserved: true },
+        },
+        inputs: {
+          body: {
+            kind: "reference",
+            reference: "steps.entry.output.ticketKey",
+          },
+        },
+        additionalInputs: [
+          {
+            name: "score",
+            schema: { type: "number" },
+            binding: { kind: "literal", value: 3 },
+          },
+        ],
+      },
+    ],
+    edges: [
+      {
+        id: "trigger-consumer",
+        from: "trigger",
+        to: "consumer",
+      },
+    ],
+  });
+});
+
+test("round-trips an object-valued v2 Branch condition without loss", () => {
+  const original: WorkflowDefinitionV2 = {
+    schemaVersion: 2,
+    nodes: [
+      {
+        id: "branch",
+        type: "branch",
+        x: 120,
+        y: 80,
+        configuration: {
+          condition: {
+            kind: "eq",
+            left: {
+              kind: "path",
+              reference: "steps.entry.output.ticket.key",
+            },
+            right: { kind: "lit", value: "AIW-119" },
+          },
+        },
+        inputs: {},
+        additionalInputs: [],
+      },
+    ],
+    edges: [],
+  };
+
+  const flow = toFlowDefinition(original);
+
+  assert.equal(flow.nodes[0].params.condition, undefined);
+  assert.deepEqual(
+    serializeWorkflowDefinition(flow.nodes, flow.edges, {}, 2),
+    original,
+  );
+});
+
+test("clears display-valued v2 configuration without deleting nested JSON", () => {
+  const original: WorkflowDefinitionV2 = {
+    schemaVersion: 2,
+    nodes: [
+      {
+        id: "comment",
+        type: "post_ticket_comment",
+        x: 120,
+        y: 80,
+        configuration: {
+          body: "Ready for review",
+          metadata: { preserved: true },
+        },
+        inputs: {},
+        additionalInputs: [],
+      },
+    ],
+    edges: [],
+  };
+  const flow = toFlowDefinition(original);
+
+  delete flow.nodes[0].params.body;
+
+  const serialized = serializeWorkflowDefinition(
+    flow.nodes,
+    flow.edges,
+    {},
+    2,
+  );
+  assert.deepEqual(serialized.nodes[0].configuration, {
+    metadata: { preserved: true },
   });
 });
 

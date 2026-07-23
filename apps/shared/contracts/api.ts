@@ -1,6 +1,7 @@
 import type {
   ApprovalRequest,
   ClarificationRequest,
+  JsonSchema202012,
   PrePrCheckConfigVersion,
   RepositoryOption,
   Run,
@@ -12,7 +13,9 @@ import type {
   WorkflowBlockType,
   WorkflowDefinition,
   WorkflowDefinitionLayout,
+  WorkflowDefinitionV2,
   WorkflowDefinitionVersion,
+  WorkflowDataReferenceV2,
   WorkflowEditorOptions,
 } from "./domain.js";
 
@@ -245,11 +248,74 @@ export interface WorkflowDefinitionDeploymentValidationResponse {
   issues: WorkflowDefinitionValidationIssue[];
 }
 
+export interface WorkflowDefinitionMigrationDiagnostic {
+  code: string;
+  message: string;
+  nodeId: string | null;
+  path?: string;
+}
+
+export interface WorkflowDefinitionMigrationPreview {
+  sourceDefinitionId: number;
+  sourceVersion: number;
+  targetSchemaVersion: 2;
+  conversionHash: string | null;
+  definition: WorkflowDefinitionV2 | null;
+  conversions: WorkflowDefinitionMigrationDiagnostic[];
+  warnings: WorkflowDefinitionMigrationDiagnostic[];
+  blockers: WorkflowDefinitionMigrationDiagnostic[];
+}
+
+export type WorkflowDefinitionMigrationResponse =
+  | (WorkflowDefinitionMigrationPreview & { mode: "preview" })
+  | (WorkflowDefinitionMigrationPreview & {
+      mode: "apply";
+      error: string;
+    })
+  | (WorkflowDefinitionMigrationPreview & {
+      mode: "apply";
+      meta: WorkflowDefinitionMeta;
+      draft: WorkflowDefinitionV2;
+    });
+
+export interface WorkflowDefinitionDuplicateMigrationBlockedResponse
+  extends WorkflowDefinitionMigrationPreview {
+  error: string;
+}
+
+export interface WorkflowAvailableValueSource {
+  kind: "entry" | "step" | "run";
+  nodeId: string | null;
+  blockType: WorkflowBlockType | null;
+}
+
+export interface WorkflowAvailableValueGuarantee {
+  kind: "active_entry" | "unconditional_activation" | "join";
+  triggerNodeIds: string[];
+  viaEdgeIds: string[];
+}
+
+/** One value that is guaranteed to exist when a particular v2 block runs. */
+export interface WorkflowAvailableValue {
+  reference: WorkflowDataReferenceV2;
+  label: string;
+  description: string | null;
+  schema: JsonSchema202012;
+  source: WorkflowAvailableValueSource;
+  guarantee: WorkflowAvailableValueGuarantee;
+  /** Fixed or author-defined input names that can accept this value. */
+  compatibleInputNames: string[];
+}
+
+export type WorkflowAvailableValuesByNode = Record<string, WorkflowAvailableValue[]>;
+
 export interface WorkflowDefinitionValidationResponse {
   valid: boolean;
   issues: WorkflowDefinitionValidationIssue[];
   /** Parameter-resolved contracts for the exact candidate graph. */
   nodeContracts: Record<string, WorkflowBlockContract>;
+  /** Worker-owned v2 data-flow catalog, keyed by consuming block id. */
+  availableValuesByNode: WorkflowAvailableValuesByNode;
 }
 
 export interface WorkflowDefinitionValidationIssue {

@@ -44,6 +44,7 @@ test("dirty deploy stops when saved-snapshot validation diverges from the immedi
     valid: true,
     issues: [],
     nodeContracts: {},
+    availableValuesByNode: {},
   };
   const authoritative: WorkflowDefinitionValidationResponse = {
     valid: false,
@@ -57,6 +58,7 @@ test("dirty deploy stops when saved-snapshot validation diverges from the immedi
       },
     ],
     nodeContracts: {},
+    availableValuesByNode: {},
   };
   const saved = {
     meta: { draftRevision: 2 },
