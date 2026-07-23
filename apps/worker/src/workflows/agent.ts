@@ -1052,6 +1052,20 @@ async function markRunFailedOnSelfMoveStep(runId: string): Promise<void> {
 }
 markRunFailedOnSelfMoveStep.maxRetries = 0;
 
+/**
+ * Records the run's "success" status before its success-finalizing AI Review
+ * move fires the self-triggered "ticket left the AI column" webhook, so that
+ * webhook cannot cancel the run out of a genuine success. See
+ * markRunSucceededOnSelfMove.
+ */
+async function markRunSucceededOnSelfMoveStep(runId: string): Promise<void> {
+  "use step";
+  const { getDb } = await import("../db/client.js");
+  const { markRunSucceededOnSelfMove } = await import("../lib/telemetry/run-telemetry.js");
+  await markRunSucceededOnSelfMove(getDb(), runId);
+}
+markRunSucceededOnSelfMoveStep.maxRetries = 0;
+
 async function logWorkflowExecutionErrorStep(
   event: WorkflowExecutionLogEvent,
 ): Promise<void> {
@@ -2586,6 +2600,17 @@ async function agentWorkflowBody(
             });
             if (!entry.ticketKey) {
               throw new Error("Update Ticket Status requires a correlated ticket.");
+            }
+            // The "ai_review" move is the run's own successful completion.
+            // Commit the run's "success" status BEFORE that move fires the
+            // self-triggered "ticket left the AI column" webhook (same race as
+            // failureExit): when the webhook's actor lookup transiently fails
+            // it fails safe as a human move and would cancel this
+            // still-finalizing run, recording a real success as "blocked".
+            // Only the symbolic success target gets this; backlog or arbitrary
+            // status moves are generic ticket moves, not a completion.
+            if (targetName === "ai_review") {
+              await markRunSucceededOnSelfMoveStep(workflowRunId);
             }
             await moveTicketStep(entry.ticketKey, target, transitionOwner);
             return { kind: "next", output: { status: "ok", target: targetName } };
