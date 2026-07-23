@@ -5,6 +5,7 @@ import { WorkflowRunFailedError } from "workflow/errors";
 import { parseStepName } from "workflow/observability";
 import { getWorld } from "workflow/runtime";
 import {
+  probeClarificationHappyPath,
   probeHookResumeBindingStall,
   probeResumeBindingStall,
   probeUnserializableStepErrorStall,
@@ -84,5 +85,41 @@ describe("workflow error paths must terminate instead of stalling", () => {
       `stall-${randomUUID()}`,
     ]);
     await expectDiagnosticFailure(run, "The block could not be completed.");
+  });
+});
+
+describe("clarification answers complete the run", () => {
+  it("re-executes the asking block with the answer and completes downstream", async () => {
+    const token = `clarification:${randomUUID()}`;
+    const run = await start(probeClarificationHappyPath, [token]);
+
+    const hook = await waitForHook(token);
+    expect(hook.runId).toBe(run.runId);
+
+    await resumeHook(token, {
+      answer: "Use this exact greeting: Hi hi",
+      answeredById: "user-1",
+      answeredByLabel: "Filip Maszota",
+      answeredAt: new Date().toISOString(),
+    });
+
+    await expect(run.returnValue).resolves.toEqual({
+      outcome: "completed",
+      implementationPlan: "Plan honoring: Use this exact greeting: Hi hi",
+    });
+    expect(await run.status).toBe("completed");
+
+    const steps = await getWorld().steps.list({
+      runId: run.runId,
+      resolveData: "none",
+    });
+    const shortNames = steps.data.map(
+      (step) => parseStepName(step.stepName)?.shortName,
+    );
+    expect(shortNames).toContain("prepareProbeHookStep");
+    expect(shortNames).toContain("repairProbeLabelStep");
+    // No error-path steps: the run finished cleanly.
+    expect(shortNames).not.toContain("logProbeExecutionErrorStep");
+    expect(shortNames).not.toContain("markProbeRunFailedStep");
   });
 });

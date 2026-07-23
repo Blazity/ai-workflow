@@ -405,6 +405,9 @@ export async function executeGraph(opts: {
   );
   let executions = resume?.controlState?.executions ?? 0;
   let resumeAnswerPending = resume !== undefined;
+  // Set when an in-run clarification is answered for an action block; consumed
+  // by that same block's immediate re-execution.
+  let pendingClarificationAnswer: string | undefined;
   const controlState = (): InterpreterControlState => ({
     attempts: Object.fromEntries(attempts),
     executions,
@@ -649,8 +652,11 @@ export async function executeGraph(opts: {
 
     const execution = resumingWaitingNode
       ? { clarificationAnswer: resume.clarificationAnswer }
-      : undefined;
+      : pendingClarificationAnswer !== undefined
+        ? { clarificationAnswer: pendingClarificationAnswer }
+        : undefined;
     resumeAnswerPending = false;
+    pendingClarificationAnswer = undefined;
     let result: BlockExecutionResult;
     try {
       result = await executeBlock(node, steps, resolvedInputs, execution);
@@ -721,11 +727,24 @@ export async function executeGraph(opts: {
         await hooks.onBlockFinish(id, { status: "warn", attempt, output, error });
         return finish("stopped");
       }
-      const answeredOutput: BlockOutput = { status: "answered", answer };
-      steps[id] = { output: answeredOutput };
-      await hooks.onBlockFinish(id, { status: "ok", attempt, output: answeredOutput });
-      const port = defaultPortOf(node);
-      current = port === undefined ? undefined : graph.outEdges.get(id)?.get(port);
+      if (node.type === "human_question") {
+        // Collecting the answer IS this block's contract, so the answered
+        // envelope is its real output and downstream bindings consume it.
+        const answeredOutput: BlockOutput = { status: "answered", answer };
+        steps[id] = { output: answeredOutput };
+        await hooks.onBlockFinish(id, { status: "ok", attempt, output: answeredOutput });
+        const port = defaultPortOf(node);
+        current = port === undefined ? undefined : graph.outEdges.get(id)?.get(port);
+        continue;
+      }
+      // An action block that asked mid-execution has not produced its real
+      // output yet (a planning agent still owes the plan that downstream
+      // bindings read). Re-execute the same node with the answer available so
+      // the block re-runs informed by it; a block may ask again, bounded by
+      // maxTotalExecutions. This mirrors the cross-run resume path, which also
+      // re-executes the waiting action node with execution.clarificationAnswer.
+      pendingClarificationAnswer = answer;
+      current = id;
       continue;
     }
 

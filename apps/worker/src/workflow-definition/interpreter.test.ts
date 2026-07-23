@@ -1116,6 +1116,181 @@ describe("executeGraph human input and ended", () => {
     ]);
   });
 
+  it("re-executes an action block with the answer and resolves downstream bindings", async () => {
+    const graph = graphFrom(
+      [
+        node("trig", "trigger_ticket_ai"),
+        node("plan", "planning_agent"),
+        { ...node("impl", "implementation_agent"), inputs: { plan: "steps.plan.output.plan" } },
+      ],
+      [
+        { from: "trig", to: "plan" },
+        { from: "plan", to: "impl" },
+      ],
+    );
+    const rec = makeRecorder();
+    rec.hooks.clarificationExit = async (questions, nodeId) => {
+      rec.clarifications.push({ questions, nodeId, suggestedAnswers: undefined });
+      return "Use the exact greeting: Hi hi";
+    };
+    const calls: Array<{ id: string; answer?: string; plan?: unknown }> = [];
+    const executor: BlockExecutor = async (
+      block,
+      _steps,
+      resolvedInputs,
+      execution,
+    ): Promise<BlockExecutionResult> => {
+      calls.push({
+        id: block.id,
+        answer: execution?.clarificationAnswer,
+        plan: resolvedInputs.plan,
+      });
+      if (block.id === "plan") {
+        if (!execution?.clarificationAnswer) {
+          return {
+            kind: "needs_human_input",
+            output: { status: "needs_human_input", questions: ["Which greeting?"] },
+            questions: ["Which greeting?"],
+          };
+        }
+        return {
+          kind: "next",
+          output: { status: "ready", plan: `Plan for: ${execution.clarificationAnswer}` },
+        };
+      }
+      return { kind: "next", output: { status: "implemented", id: block.id } };
+    };
+
+    const result = await executeGraph({
+      graph,
+      entryTriggerId: "trig",
+      triggerOutput: { status: "fired" },
+      executeBlock: executor,
+      hooks: rec.hooks,
+    });
+
+    expect(result.outcome).toBe("completed");
+    expect(result.executionError).toBeUndefined();
+    expect(calls.map((c) => c.id)).toEqual(["plan", "plan", "impl"]);
+    expect(calls[1].answer).toBe("Use the exact greeting: Hi hi");
+    expect(calls[2].answer).toBeUndefined();
+    expect(calls[2].plan).toBe("Plan for: Use the exact greeting: Hi hi");
+    expect(attemptsFor(rec, "plan")).toEqual([1, 2]);
+    // The asking attempt does not finish; only the informed re-execution does.
+    expect(finishStatuses(rec, "plan")).toEqual(["ok"]);
+    expect(result.steps.plan.output).toEqual({
+      status: "ready",
+      plan: "Plan for: Use the exact greeting: Hi hi",
+    });
+  });
+
+  it("keeps the human_question answered envelope without re-executing it", async () => {
+    const graph = graphFrom(
+      [
+        node("trig", "trigger_ticket_ai"),
+        node("waiting", "human_question", { questions: ["Which region?"] }),
+        node("after", "send_slack_message"),
+      ],
+      [
+        { from: "trig", to: "waiting" },
+        { from: "waiting", to: "after" },
+      ],
+    );
+    const rec = makeRecorder();
+    rec.hooks.clarificationExit = async () => "eu-central";
+    const { executor, calls } = makeExecutor({
+      waiting: {
+        kind: "needs_human_input",
+        output: { status: "needs_human_input", questions: ["Which region?"] },
+        questions: ["Which region?"],
+      },
+    });
+
+    const result = await executeGraph({
+      graph,
+      entryTriggerId: "trig",
+      triggerOutput: { status: "fired" },
+      executeBlock: executor,
+      hooks: rec.hooks,
+    });
+
+    expect(result.outcome).toBe("completed");
+    expect(calls).toEqual(["waiting", "after"]);
+    expect(result.steps.waiting.output).toEqual({ status: "answered", answer: "eu-central" });
+    expect(finishStatuses(rec, "waiting")).toEqual(["ok"]);
+  });
+
+  it("supports a block asking again after re-execution, one round per ask", async () => {
+    const graph = graphFrom(
+      [node("trig", "trigger_ticket_ai"), node("plan", "planning_agent")],
+      [{ from: "trig", to: "plan" }],
+    );
+    const rec = makeRecorder();
+    const answers = ["First answer", "Second answer"];
+    rec.hooks.clarificationExit = async (questions, nodeId) => {
+      rec.clarifications.push({ questions, nodeId, suggestedAnswers: undefined });
+      return answers[rec.clarifications.length - 1];
+    };
+    const seen: Array<string | undefined> = [];
+    const executor: BlockExecutor = async (
+      _block,
+      _steps,
+      _inputs,
+      execution,
+    ): Promise<BlockExecutionResult> => {
+      seen.push(execution?.clarificationAnswer);
+      if (execution?.clarificationAnswer !== "Second answer") {
+        return {
+          kind: "needs_human_input",
+          output: { status: "needs_human_input", questions: [`Q${seen.length}`] },
+          questions: [`Q${seen.length}`],
+        };
+      }
+      return { kind: "next", output: { status: "ready", plan: "final" } };
+    };
+
+    const result = await executeGraph({
+      graph,
+      entryTriggerId: "trig",
+      triggerOutput: { status: "fired" },
+      executeBlock: executor,
+      hooks: rec.hooks,
+    });
+
+    expect(result.outcome).toBe("completed");
+    expect(seen).toEqual([undefined, "First answer", "Second answer"]);
+    expect(attemptsFor(rec, "plan")).toEqual([1, 2, 3]);
+    expect(rec.clarifications.map((c) => c.questions)).toEqual([["Q1"], ["Q2"]]);
+    expect(result.steps.plan.output).toEqual({ status: "ready", plan: "final" });
+  });
+
+  it("bounds an endlessly re-asking block by maxTotalExecutions", async () => {
+    const graph = graphFrom(
+      [node("trig", "trigger_ticket_ai"), node("plan", "planning_agent")],
+      [{ from: "trig", to: "plan" }],
+    );
+    const rec = makeRecorder();
+    rec.hooks.clarificationExit = async () => "still unclear";
+    const executor: BlockExecutor = async () => ({
+      kind: "needs_human_input",
+      output: { status: "needs_human_input", questions: ["Again?"] },
+      questions: ["Again?"],
+    });
+
+    const result = await executeGraph({
+      graph,
+      entryTriggerId: "trig",
+      triggerOutput: { status: "fired" },
+      executeBlock: executor,
+      hooks: rec.hooks,
+      maxTotalExecutions: 3,
+    });
+
+    expect(result.outcome).toBe("stopped");
+    expect(result.executionError).toMatchObject({ category: "engine" });
+    expect(rec.failures).toEqual([expect.objectContaining({ nodeId: "plan" })]);
+  });
+
   it("ended reports outcome ended with a warn finish and no exit hooks", async () => {
     const rec = makeRecorder();
     const { executor } = makeExecutor({

@@ -103,14 +103,14 @@ const TRIGGER_OUTPUT: BlockOutput = {
   ticket: { identifier: "AIW-1", title: "Probe ticket" },
 };
 
-function bindingStallGraph() {
+function bindingStallGraph(planningType: "human_question" | "planning_agent") {
   return buildRuntimeGraph({
     nodes: [
       node("trigger", "trigger_ticket_ai"),
-      node("planning", "human_question", {}, { questions: "Which greeting?" }),
+      node("planning", planningType, {}, { questions: "Which greeting?" }),
       node("implementation", "implementation_agent", {
-        // Mirrors prod definition v4: the resumed planning output carries only
-        // {status:"answered", answer}, so this binding cannot resolve.
+        // Mirrors prod definition v4: this binding resolves only when the
+        // planning node's final output carries a "plan" field.
         plan: "steps.planning.output.plan",
         ticket: "trigger.ticket",
       }),
@@ -196,7 +196,9 @@ export async function probeResumeBindingStall(runId: string) {
   };
   return runProbeGraph({
     runId,
-    graph: bindingStallGraph(),
+    // human_question keeps the synthesized answered envelope on resume, so
+    // the downstream "plan" binding cannot resolve and the error path fires.
+    graph: bindingStallGraph("human_question"),
     executeBlock,
     hooks: buildProbeHooks({
       runId,
@@ -215,21 +217,10 @@ export async function probeResumeBindingStall(runId: string) {
 
 // --- Probe 2: real hook suspension resumed mid-run (prod run 1's shape) ---
 
-export async function probeHookResumeBindingStall(hookToken: string) {
-  "use workflow";
-  const executeBlock: BlockExecutor = async (block) => {
-    if (block.id === "planning") {
-      const questions = ["Which greeting?"];
-      return {
-        kind: "needs_human_input",
-        output: { status: "needs_human_input", questions },
-        questions,
-      };
-    }
-    throw new Error("unreachable: bindings must throw before implementation");
-  };
-
-  const awaitClarification: ExecuteGraphHooks["clarificationExit"] = async (
+function makeProbeAwaitClarification(
+  hookToken: string,
+): ExecuteGraphHooks["clarificationExit"] {
+  return async (
     _questions,
     nodeId,
     _suggestedAnswers,
@@ -270,13 +261,79 @@ export async function probeHookResumeBindingStall(hookToken: string) {
       hook.dispose();
     }
   };
+}
+
+export async function probeHookResumeBindingStall(hookToken: string) {
+  "use workflow";
+  const executeBlock: BlockExecutor = async (block, _steps, _inputs, execution) => {
+    if (block.id === "planning") {
+      if (!execution?.clarificationAnswer) {
+        const questions = ["Which greeting?"];
+        return {
+          kind: "needs_human_input",
+          output: { status: "needs_human_input", questions },
+          questions,
+        };
+      }
+      // The informed re-execution still omits the "plan" field the downstream
+      // binding reads, so the continuation dies in pure code exactly like the
+      // stalled prod run. The regression is that this must FAIL cleanly.
+      return { kind: "next", output: { status: "ready" } };
+    }
+    throw new Error("unreachable: bindings must throw before implementation");
+  };
 
   return runProbeGraph({
     runId: hookToken,
-    graph: bindingStallGraph(),
+    graph: bindingStallGraph("planning_agent"),
     executeBlock,
-    hooks: buildProbeHooks({ runId: hookToken, clarificationExit: awaitClarification }),
+    hooks: buildProbeHooks({
+      runId: hookToken,
+      clarificationExit: makeProbeAwaitClarification(hookToken),
+    }),
   });
+}
+
+// --- Probe 4: the clarification happy path (feature-completing proof). An
+// action block asks, the hook resumes with the answer, the block re-executes
+// informed by it and produces its real output, and the downstream binding
+// resolves so the run completes. ---
+
+export async function probeClarificationHappyPath(hookToken: string) {
+  "use workflow";
+  let implementationPlan: unknown;
+  const executeBlock: BlockExecutor = async (block, _steps, resolvedInputs, execution) => {
+    if (block.id === "planning") {
+      if (!execution?.clarificationAnswer) {
+        const questions = ["Which greeting?"];
+        return {
+          kind: "needs_human_input",
+          output: { status: "needs_human_input", questions },
+          questions,
+        };
+      }
+      return {
+        kind: "next",
+        output: {
+          status: "ready",
+          plan: `Plan honoring: ${execution.clarificationAnswer}`,
+        },
+      };
+    }
+    implementationPlan = resolvedInputs.plan;
+    return { kind: "next", output: { status: "implemented" } };
+  };
+
+  const outcome = await runProbeGraph({
+    runId: hookToken,
+    graph: bindingStallGraph("planning_agent"),
+    executeBlock,
+    hooks: buildProbeHooks({
+      runId: hookToken,
+      clarificationExit: makeProbeAwaitClarification(hookToken),
+    }),
+  });
+  return { outcome, implementationPlan };
 }
 
 // --- Probe 3: unserializable step failure caught in-workflow (prod run 2) ---

@@ -626,6 +626,26 @@ export function resolveImplementationPlanInput(
 function resolveAgentTicketInput(
   resolvedInputs: Record<string, unknown>,
   fallback: WorkflowTicketInputContext,
+  liveClarifications?: HumanDecision[],
+): WorkflowTicketInputContext {
+  const base = resolveAgentTicketInputFromBindings(resolvedInputs, fallback);
+  if (!liveClarifications || liveClarifications.length === 0) return base;
+  // Same-run clarification rounds (answered via the in-run hook) postdate both
+  // the journaled trigger output and the run-start ticket snapshot, so a
+  // re-executed agent phase would otherwise never see the answer it just asked
+  // for. Merge them in; appendClarificationRound dedupes rounds the snapshot
+  // already carries. Mirrors fix-agent's live read of ctx.clarifications.
+  let clarifications = base.clarifications;
+  for (const round of liveClarifications) {
+    clarifications = appendClarificationRound(clarifications, round);
+  }
+  if (clarifications === base.clarifications) return base;
+  return { ...base, clarifications };
+}
+
+function resolveAgentTicketInputFromBindings(
+  resolvedInputs: Record<string, unknown>,
+  fallback: WorkflowTicketInputContext,
 ): WorkflowTicketInputContext {
   if (!Object.prototype.hasOwnProperty.call(resolvedInputs, "ticket")) return fallback;
   if (
@@ -1918,6 +1938,12 @@ async function agentWorkflowBody(
           if ("expired" in answered) {
             throw new Error("clarification expired before it was answered");
           }
+          // Scratch agent sandboxes have a JOB_TIMEOUT_MS lifetime while the
+          // hook stays answerable for days, so any cached id may point at an
+          // expired sandbox after the park. Drop the cache so the re-executed
+          // block re-provisions; the code workspace is restored from its
+          // snapshot separately below.
+          ctx.agentSandboxIds = {};
           // Hook suspension is free wall time; only active work counts against
           // the run duration budget.
           if (entry.ticketKey) {
@@ -2159,7 +2185,7 @@ async function agentWorkflowBody(
             const { paths: researchPaths, script: researchScript } =
               await planPhaseStep(kind, "research", model, RESEARCH_SCHEMA);
             const researchInput = assembleResearchPlanContext({
-              ticket: resolveAgentTicketInput(resolvedInputs, ticketData),
+              ticket: resolveAgentTicketInput(resolvedInputs, ticketData, ctx.clarifications),
               prompt: promptOverride(node) ?? prompts.research,
               branchName,
               attachments: downloadedAttachments,
@@ -2242,7 +2268,7 @@ async function agentWorkflowBody(
             const { paths: implPaths, script: implScript } =
               await planPhaseStep(kind, "impl", model, AGENT_SCHEMA);
             const implInput = assembleImplementationContext({
-              ticket: resolveAgentTicketInput(resolvedInputs, ticketData),
+              ticket: resolveAgentTicketInput(resolvedInputs, ticketData, ctx.clarifications),
               prompt: promptOverride(node) ?? prompts.implement,
               researchPlanMarkdown: resolveImplementationPlanInput(
                 resolvedInputs,
