@@ -4,9 +4,11 @@ import type {
   ReplayRedactionClass,
   ReplaySanitizationMetadata,
   ReplaySanitizedEnvelope,
+  WorkflowDefinitionLayoutInput,
   WorkflowReplayGraphSnapshot,
   WorkflowReplayLayoutSnapshot,
 } from "@shared/contracts";
+import { normalizeWorkflowDefinitionLayout } from "@shared/contracts";
 
 export const REPLAY_FIELD_MAX_BYTES = 64 * 1024;
 export const REPLAY_ATTEMPT_MAX_BYTES = 256 * 1024;
@@ -911,11 +913,12 @@ export function sanitizeReplayGraphSnapshot(
 }
 
 export function sanitizeReplayLayoutSnapshot(
-  layout: WorkflowReplayLayoutSnapshot,
+  layout: WorkflowDefinitionLayoutInput,
   secrets?: readonly string[],
 ): WorkflowReplayLayoutSnapshot | null {
+  const normalized = normalizeWorkflowDefinitionLayout(layout);
   const nodes: WorkflowReplayLayoutSnapshot["nodes"] = {};
-  for (const [nodeId, position] of Object.entries(layout.nodes)) {
+  for (const [nodeId, position] of Object.entries(normalized.nodes)) {
     if (!isSafeReplayIdentifier(nodeId, secrets)) return null;
     if (
       Number.isFinite(position.x) &&
@@ -924,35 +927,23 @@ export function sanitizeReplayLayoutSnapshot(
       nodes[nodeId] = { x: position.x, y: position.y };
     }
   }
-  if (!layout.edges) {
-    const sanitized = { nodes };
-    return jsonBytes(sanitized) <= REPLAY_LAYOUT_MAX_BYTES
-      ? sanitized
-      : null;
+  const edges: WorkflowReplayLayoutSnapshot["edges"] = {};
+  for (const [edgeId, geometry] of Object.entries(normalized.edges)) {
+    if (!isSafeReplayIdentifier(edgeId, secrets)) return null;
+    if (
+      !Number.isFinite(geometry.bend.x) ||
+      !Number.isFinite(geometry.bend.y)
+    ) {
+      return null;
+    }
+    edges[edgeId] = {
+      bend: {
+        x: geometry.bend.x,
+        y: geometry.bend.y,
+      },
+    };
   }
-  if (
-    Object.keys(layout.edges).some(
-      (edgeId) => !isSafeReplayIdentifier(edgeId, secrets),
-    )
-  ) {
-    return null;
-  }
-  const edges = sanitizeReplayValue(layout.edges, {
-    secrets,
-    maxBytes: REPLAY_LAYOUT_MAX_BYTES,
-  });
-  if (
-    edges.metadata.unavailable ||
-    !edges.value ||
-    typeof edges.value !== "object" ||
-    Array.isArray(edges.value)
-  ) {
-    return null;
-  }
-  const sanitized = {
-    nodes,
-    edges: edges.value as Record<string, JsonValue>,
-  };
+  const sanitized = { nodes, edges };
   return jsonBytes(sanitized) <= REPLAY_LAYOUT_MAX_BYTES
     ? sanitized
     : null;

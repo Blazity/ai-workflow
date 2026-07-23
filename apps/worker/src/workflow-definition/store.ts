@@ -2,10 +2,14 @@ import type {
   WorkflowBlockType,
   WorkflowDefinition,
   WorkflowDefinitionLayout,
+  WorkflowDefinitionLayoutInput,
   WorkflowDefinitionValidationIssue,
   WorkflowDefinitionVersion,
 } from "@shared/contracts";
-import { isTriggerBlockType } from "@shared/contracts";
+import {
+  isTriggerBlockType,
+  normalizeWorkflowDefinitionLayout,
+} from "@shared/contracts";
 import { and, arrayContains, arrayOverlaps, asc, desc, eq, isNull, max, ne, sql } from "drizzle-orm";
 import type { Db } from "../db/client.js";
 import {
@@ -104,8 +108,7 @@ type DefinitionSelect = typeof workflowDefinitions.$inferSelect;
 type VersionSelect = typeof workflowDefinitionVersions.$inferSelect;
 
 function normalizeLayout(value: unknown): WorkflowDefinitionLayout {
-  if (!value || typeof value !== "object" || !("nodes" in value)) return EMPTY_WORKFLOW_LAYOUT;
-  return value as WorkflowDefinitionLayout;
+  return normalizeWorkflowDefinitionLayout(value);
 }
 
 function mapDefinitionRow(
@@ -240,8 +243,17 @@ function parseStructuralDefinition(definition: WorkflowDefinition): WorkflowDefi
   return parsed.data;
 }
 
-function assertValidLayout(layout: WorkflowDefinitionLayout): void {
-  if (!layout || typeof layout !== "object" || !layout.nodes || typeof layout.nodes !== "object") {
+function assertValidLayout(
+  layout: unknown,
+): asserts layout is WorkflowDefinitionLayoutInput {
+  if (
+    !layout ||
+    typeof layout !== "object" ||
+    !("nodes" in layout) ||
+    !layout.nodes ||
+    typeof layout.nodes !== "object" ||
+    Array.isArray(layout.nodes)
+  ) {
     throw new WorkflowDefinitionStoreError(400, "Invalid workflow layout");
   }
   for (const [nodeId, position] of Object.entries(layout.nodes)) {
@@ -250,6 +262,30 @@ function assertValidLayout(layout: WorkflowDefinitionLayout): void {
       !position ||
       !Number.isFinite(position.x) ||
       !Number.isFinite(position.y)
+    ) {
+      throw new WorkflowDefinitionStoreError(400, "Invalid workflow layout");
+    }
+  }
+  if (!("edges" in layout) || layout.edges === undefined) return;
+  if (
+    !layout.edges ||
+    typeof layout.edges !== "object" ||
+    Array.isArray(layout.edges)
+  ) {
+    throw new WorkflowDefinitionStoreError(400, "Invalid workflow layout");
+  }
+  for (const [edgeId, geometry] of Object.entries(layout.edges)) {
+    if (
+      !edgeId ||
+      !geometry ||
+      typeof geometry !== "object" ||
+      !("bend" in geometry) ||
+      !geometry.bend ||
+      typeof geometry.bend !== "object" ||
+      !("x" in geometry.bend) ||
+      !("y" in geometry.bend) ||
+      !Number.isFinite(geometry.bend.x) ||
+      !Number.isFinite(geometry.bend.y)
     ) {
       throw new WorkflowDefinitionStoreError(400, "Invalid workflow layout");
     }
@@ -730,17 +766,18 @@ export async function saveWorkflowDefinitionLayout(
   db: Db,
   input: {
     definitionId: number;
-    layout: WorkflowDefinitionLayout;
+    layout: WorkflowDefinitionLayoutInput;
     expectedLayoutRevision: number;
     actor: WorkflowDefinitionActor;
   },
 ): Promise<WorkflowDefinitionRow> {
   requireEditRole(input.actor.role);
   assertValidLayout(input.layout);
+  const layout = normalizeWorkflowDefinitionLayout(input.layout);
   const rows = await db
     .update(workflowDefinitions)
     .set({
-      layout: input.layout,
+      layout,
       layoutRevision: sql`${workflowDefinitions.layoutRevision} + 1`,
       updatedAt: new Date(),
     })

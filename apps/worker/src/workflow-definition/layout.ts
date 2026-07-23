@@ -4,8 +4,9 @@ import type {
   WorkflowDefinitionV1,
   WorkflowDefinitionV2,
 } from "@shared/contracts";
+import { EMPTY_WORKFLOW_DEFINITION_LAYOUT } from "@shared/contracts";
 
-export const EMPTY_WORKFLOW_LAYOUT: WorkflowDefinitionLayout = { nodes: {} };
+export const EMPTY_WORKFLOW_LAYOUT = EMPTY_WORKFLOW_DEFINITION_LAYOUT;
 
 /** Strip presentation coordinates from the semantic graph deterministically. */
 export function canonicalizeWorkflowDefinition(
@@ -39,6 +40,7 @@ export function extractWorkflowDefinitionLayout(
     nodes: Object.fromEntries(
       definition.nodes.map((node) => [node.id, { x: node.x, y: node.y }]),
     ),
+    edges: {},
   };
 }
 

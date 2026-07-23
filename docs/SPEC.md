@@ -346,10 +346,11 @@ changes are ignored.
 For each run, the Sandbox Manager provisions a fresh Vercel Sandbox (Node 24, Firecracker microVM)
 and:
 
-1. Clones the first selected repository at its `blazebot/{ticket-key}` branch (ticket key
+1. Clones the first selected repository at its `ai-workflow/{ticket-key}` branch (ticket key
    lowercased) to `/vercel/sandbox`; clones additional selected repositories under
    `/vercel/sandbox/repos/`. When the ticket's PR has conflicts, the base branch is merged into the
-   checkout during provisioning so the agent resolves conflicts as part of the run.
+   checkout during provisioning so the agent resolves conflicts as part of the run. A durable
+   workflow-owned `blazebot/*` branch remains authoritative for its existing ticket/repository.
 2. Writes the workspace manifest `/vercel/sandbox/aiw-repos.json` (per repo: local path, branch,
    the remote HEAD observed before local preparation, and the pre-agent HEAD SHA).
 3. Installs the agent CLI globally (`@anthropic-ai/claude-code` or `@openai/codex`) and the
@@ -597,9 +598,11 @@ by webhook cancellation.
 A separate durable workflow (`postPrGateWorkflow`) runs configurable checks against workflow-owned
 PRs **after** creation. Full spec: `docs/post-pr-gate-spec.md`.
 
-- Triggered by GitHub/GitLab webhooks (PR opened/synchronized) on `blazebot/*` branches.
+- Triggered by GitHub/GitLab webhooks (PR opened/synchronized) on `ai-workflow/*` branches.
+  Legacy `blazebot/*` branches remain recognized.
 - Each configured step is surfaced as a real check run (GitHub) / commit status (GitLab) on the PR
-  head SHA.
+  head SHA under `AI Workflow / `. Existing `blazebot / ` checks remain recognized, and their
+  exact stored provider references remain authoritative.
 - Steps come from `post-pr-gate.yaml`; v1 ships `pr-title-format` (Conventional Commits) and
   `code-hygiene`.
 - Idempotency, dedupe, and force-push handling via the `gate_locks` / `gate_dedupe` /

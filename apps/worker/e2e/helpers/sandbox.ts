@@ -1,11 +1,11 @@
 /**
  * Best-effort cleanup: find and stop any running sandboxes whose checked-out
- * branch matches `blazebot/{ticketKey}`.
+ * branch matches `ai-workflow/{ticketKey}`.
  */
 export async function stopSandboxesForTicket(
   ticketKey: string,
 ): Promise<number> {
-  const expectedBranch = `blazebot/${ticketKey.trim().toLowerCase()}`;
+  const expectedBranch = `ai-workflow/${ticketKey.trim().toLowerCase()}`;
   try {
     const { Sandbox } = await import("@vercel/sandbox");
     const { getSandboxCredentials } = await import(
@@ -81,7 +81,7 @@ export async function stopSandboxesForTicket(
 export async function killClaudeForTicket(
   ticketKey: string,
 ): Promise<boolean> {
-  const expectedBranch = `blazebot/${ticketKey.trim().toLowerCase()}`;
+  const expectedBranch = `ai-workflow/${ticketKey.trim().toLowerCase()}`;
   const { getTicketLabels } = await import("./jira.js");
   const { parseAgentKindOverride } = await import(
     "../../src/sandbox/agents/index.js"

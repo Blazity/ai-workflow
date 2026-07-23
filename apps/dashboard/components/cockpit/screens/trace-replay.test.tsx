@@ -145,7 +145,7 @@ test("terminal run state also stops stale polling for available replay", () => {
       definitionSchemaVersion: 2,
       captureStatus: "available",
       graph: { nodes: [], edges: [] },
-      layout: { nodes: {} },
+      layout: { nodes: {}, edges: {} },
       runtimeManifest: {
         value: {},
         metadata: {

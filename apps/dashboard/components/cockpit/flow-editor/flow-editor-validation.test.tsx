@@ -133,6 +133,19 @@ const validation: WorkflowValidationState = {
   nodeContracts: { entry: triggerContract },
   availableValuesByNode: {},
 };
+const editorInteractionProps = {
+  edgeGeometry: {},
+  onNodePositionsChange: () => undefined,
+  onEdgeGeometryChange: () => undefined,
+  onGraphChange: () => undefined,
+  canUndo: false,
+  canRedo: false,
+  onUndo: () => undefined,
+  onRedo: () => undefined,
+  onBeginTransaction: () => undefined,
+  onCommitTransaction: () => undefined,
+  onCancelTransaction: () => undefined,
+};
 
 function renderEditor(
   validationState: WorkflowValidationState,
@@ -143,6 +156,7 @@ function renderEditor(
     <FlowEditor
       nodes={[node]}
       edges={[]}
+      {...editorInteractionProps}
       schemaVersion={1}
       limits={{}}
       onLimitsChange={() => undefined}
@@ -222,6 +236,33 @@ test("generic editor errors retain their in-flow presentation", () => {
   assert.doesNotMatch(html, /data-error-presentation="overlay"/);
 });
 
+test("editor actions and canvas controls expose keyboard labels and names", () => {
+  const html = renderEditor({
+    status: "valid",
+    issues: [],
+    nodeContracts: { entry: triggerContract },
+    availableValuesByNode: {},
+  });
+
+  assert.match(html, /aria-label="Undo \(Ctrl\+Z\)"/);
+  assert.match(html, /aria-label="Redo \(Ctrl\+Shift\+Z\)"/);
+  assert.match(html, /aria-label="Copy \(Ctrl\+C\)"/);
+  assert.match(html, /aria-label="Paste \(Ctrl\+V\)"/);
+  assert.match(html, /aria-label="Zoom in"/);
+  assert.match(html, /aria-label="Zoom out"/);
+  assert.match(html, /aria-label="Fit workflow"/);
+  assert.match(html, /data-canvas-node-id="entry"/);
+  assert.match(
+    html,
+    /role="group" aria-label="Ticket trigger block controls"/,
+  );
+  assert.match(html, /data-canvas-node-selector="entry"/);
+  assert.match(
+    html,
+    /<button[^>]+aria-label="Start connection from Ticket received, out output"/,
+  );
+});
+
 test("a selected v2 Transform exposes typed inputs and its visual operation editor", () => {
   const transformNode: FlowNodeDef = {
     id: "map",
@@ -263,6 +304,7 @@ test("a selected v2 Transform exposes typed inputs and its visual operation edit
     <FlowEditor
       nodes={[node, transformNode]}
       edges={[{ id: "edge-1", from: "entry", to: "map" }]}
+      {...editorInteractionProps}
       schemaVersion={2}
       limits={{}}
       onLimitsChange={() => undefined}
@@ -345,6 +387,7 @@ function renderSelectedBranch(schemaVersion: 1 | 2): string {
           to: "decision",
         },
       ]}
+      {...editorInteractionProps}
       schemaVersion={schemaVersion}
       limits={{}}
       onLimitsChange={() => undefined}
@@ -423,6 +466,7 @@ function renderSelectedOpenPr(schemaVersion: 1 | 2): string {
           to: "publish",
         },
       ]}
+      {...editorInteractionProps}
       schemaVersion={schemaVersion}
       limits={{}}
       onLimitsChange={() => undefined}

@@ -2,7 +2,10 @@ import { describe, it, expect } from "vitest";
 import { normalizeGitHubEvent, normalizeGitLabEvent } from "./trigger-events.js";
 
 const options = {
-  gateCheckNames: ["blazebot / code-hygiene"],
+  gateCheckNames: [
+    "AI Workflow / code-hygiene",
+    "blazebot / code-hygiene",
+  ],
   botLogin: "blazebot[bot]",
   deliveryId: "github-delivery-1",
 };
@@ -181,14 +184,17 @@ describe("normalizeGitHubEvent", () => {
     expect(evt).toBeNull();
   });
 
-  it("ignores any gate check by name prefix (anti-loop)", () => {
+  it.each([
+    "AI Workflow / some-future-step",
+    "blazebot / some-future-step",
+  ])("ignores a managed %s check by either name prefix (anti-loop)", (name) => {
     const evt = normalizeGitHubEvent(
       "check_run",
       {
         action: "completed",
         repository: githubRepo(),
         check_run: {
-          name: "blazebot / some-future-step",
+          name,
           conclusion: "timed_out",
           pull_requests: [{ number: 7, head: { ref: "blazebot/aiw-1", sha: "x" }, base: { ref: "main" } }],
         },
@@ -605,6 +611,54 @@ describe("normalizeGitLabEvent", () => {
     expect(evt?.pr.pipelineId).toBe(901);
     expect(evt?.delivery.source).toBe("merge_request_event");
     expect(evt?.pr.failedChecks).toEqual([{ name: "lint", conclusion: "failed" }]);
+  });
+
+  it.each([
+    "AI Workflow / code-hygiene",
+    "blazebot / code-hygiene",
+  ])("ignores a GitLab pipeline containing only managed %s failures", (name) => {
+    const evt = normalizeGitLabEvent("Pipeline Hook", {
+      object_kind: "pipeline",
+      project: { id: 1, path_with_namespace: "group/demo" },
+      object_attributes: {
+        id: 902,
+        source: "merge_request_event",
+        status: "failed",
+      },
+      merge_request: {
+        iid: 42,
+        source_branch: "ai-workflow/aiw-3",
+        target_branch: "main",
+      },
+      builds: [{ name, status: "failed" }],
+    });
+
+    expect(evt).toBeNull();
+  });
+
+  it("keeps external failures while suppressing managed GitLab checks", () => {
+    const evt = normalizeGitLabEvent("Pipeline Hook", {
+      object_kind: "pipeline",
+      project: { id: 1, path_with_namespace: "group/demo" },
+      object_attributes: {
+        id: 903,
+        source: "merge_request_event",
+        status: "failed",
+      },
+      merge_request: {
+        iid: 42,
+        source_branch: "ai-workflow/aiw-3",
+        target_branch: "main",
+      },
+      builds: [
+        { name: "AI Workflow / code-hygiene", status: "failed" },
+        { name: "ci / build", status: "failed" },
+      ],
+    });
+
+    expect(evt?.pr.failedChecks).toEqual([
+      { name: "ci / build", conclusion: "failed" },
+    ]);
   });
 
   it("does not filter bot-created merge requests or external pipeline outcomes", () => {

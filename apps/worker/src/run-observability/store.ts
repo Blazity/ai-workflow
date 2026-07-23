@@ -21,6 +21,7 @@ import type {
   WorkflowReplaySelectedTransition,
   WorkflowRunReplayResponse,
 } from "@shared/contracts";
+import { normalizeWorkflowDefinitionLayout } from "@shared/contracts";
 import type { Db } from "../db/client.js";
 import {
   workflowBlockAttempts,
@@ -1021,7 +1022,7 @@ export async function getRunReplay(
             definitionSchemaVersion:
               observation.definitionSchemaVersion === 1 ? 1 : 2,
             graph: observation.graph,
-            layout: observation.layout,
+            layout: normalizeWorkflowDefinitionLayout(observation.layout),
             runtimeManifest: observation.runtimeManifest,
             captureStatus: observation.captureStatus,
             capturedAt: observation.capturedAt.toISOString(),

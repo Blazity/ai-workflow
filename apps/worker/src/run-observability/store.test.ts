@@ -47,6 +47,7 @@ const graph: WorkflowReplayGraphSnapshot = {
 };
 const layout: WorkflowReplayLayoutSnapshot = {
   nodes: { agent: { x: 100, y: 200 } },
+  edges: {},
 };
 const capturedAt = new Date("2026-07-23T10:00:00.000Z");
 
@@ -674,6 +675,27 @@ describe("attempt lifecycle", () => {
 });
 
 describe("replay queries and retention", () => {
+  it("normalizes historical node-only replay layouts", async () => {
+    await capture("run-legacy-replay-layout");
+    await db.execute(sql`
+      UPDATE workflow_run_observations
+      SET layout = ${JSON.stringify({
+        nodes: { agent: { x: 20, y: 30 } },
+      })}::jsonb
+      WHERE run_id = 'run-legacy-replay-layout'
+    `);
+
+    const replay = await getRunReplay({
+      db,
+      runId: "run-legacy-replay-layout",
+      organizationId: "org-replay",
+    });
+    expect(replay.snapshot?.layout).toEqual({
+      nodes: { agent: { x: 20, y: 30 } },
+      edges: {},
+    });
+  });
+
   it("returns the latest 100 envelope-free summaries before older pages", async () => {
     await capture("run-pagination");
     await db.insert(workflowBlockAttempts).values(

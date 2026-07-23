@@ -64,6 +64,7 @@ test("layout autosave preserves entries for semantically deleted nodes", () => {
         kept: { x: 10, y: 20 },
         deleted: { x: 30, y: 40 },
       },
+      edges: {},
     }),
     {
       nodes: {
@@ -71,6 +72,36 @@ test("layout autosave preserves entries for semantically deleted nodes", () => {
         deleted: { x: 30, y: 40 },
         new: { x: 300, y: 400 },
       },
+      edges: {},
+    },
+  );
+});
+
+test("layout autosave preserves, rounds, and can reset stable edge geometry", () => {
+  const current = flowNodes([
+    { id: "trigger", type: "trigger_ticket_ai", x: 10, y: 20, params: {} },
+  ]);
+  const baseline = {
+    nodes: { trigger: { x: 10, y: 20 } },
+    edges: {
+      "edge-stable": { bend: { x: 100.4, y: 200.6 } },
+    },
+  };
+
+  assert.deepEqual(
+    serializeWorkflowLayoutWithBaseline(current, baseline),
+    {
+      nodes: { trigger: { x: 10, y: 20 } },
+      edges: {
+        "edge-stable": { bend: { x: 100, y: 201 } },
+      },
+    },
+  );
+  assert.deepEqual(
+    serializeWorkflowLayoutWithBaseline(current, baseline, {}),
+    {
+      nodes: { trigger: { x: 10, y: 20 } },
+      edges: {},
     },
   );
 });

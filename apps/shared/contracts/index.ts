@@ -1,6 +1,7 @@
 export * from "./domain.js";
 export * from "./api.js";
 export * from "./workflow-graph.js";
+export * from "./workflow-layout.js";
 export * from "./prompt-variables.js";
 export * from "./prompt-references.js";
 export * from "./prompt-slots.js";

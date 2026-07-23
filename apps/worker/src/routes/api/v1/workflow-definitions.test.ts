@@ -1552,7 +1552,12 @@ describe("PATCH /api/v1/workflow-definitions/:id/layout", () => {
 
   it("persists layout with an independent compare-and-set revision", async () => {
     await saveDraft(VALID_DEFINITION, 0);
-    const nextLayout = { nodes: { [nodeId]: { x: 140, y: 280 } } };
+    const nextLayout = {
+      nodes: { [nodeId]: { x: 140, y: 280 } },
+      edges: {
+        "stable-edge": { bend: { x: 240, y: 320 } },
+      },
+    };
     const res = await layout(
       jsonRequest(
         "PATCH",
@@ -1569,6 +1574,7 @@ describe("PATCH /api/v1/workflow-definitions/:id/layout", () => {
       new Request("http://worker.test/d/1"),
     );
     const detailBody = await detail.json();
+    expect(detailBody.layout).toEqual(nextLayout);
     expect(detailBody.draft.nodes.find((node: { id: string }) => node.id === nodeId)).toMatchObject({
       x: 140,
       y: 280,
@@ -1576,7 +1582,10 @@ describe("PATCH /api/v1/workflow-definitions/:id/layout", () => {
   });
 
   it("409s on a stale layout revision", async () => {
-    const nextLayout = { nodes: { [nodeId]: { x: 140, y: 280 } } };
+    const nextLayout = {
+      nodes: { [nodeId]: { x: 140, y: 280 } },
+      edges: {},
+    };
     await layout(
       jsonRequest(
         "PATCH",
@@ -1592,6 +1601,24 @@ describe("PATCH /api/v1/workflow-definitions/:id/layout", () => {
       ),
     );
     expect(res.status).toBe(409);
+  });
+
+  it("normalizes legacy node-only layout requests", async () => {
+    const res = await layout(
+      jsonRequest(
+        "PATCH",
+        {
+          layout: { nodes: { [nodeId]: { x: 75, y: 125 } } },
+          expectedLayoutRevision: 0,
+        },
+        "http://worker.test/d/1/layout",
+      ),
+    );
+    expect(res.status).toBe(200);
+    expect((await res.json()).layout).toEqual({
+      nodes: { [nodeId]: { x: 75, y: 125 } },
+      edges: {},
+    });
   });
 });
 

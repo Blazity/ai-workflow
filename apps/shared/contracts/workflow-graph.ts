@@ -123,3 +123,25 @@ export const BLOCK_PARAM_KEYS: Record<WorkflowBlockType, readonly string[]> = {
   loop: ["maxAttempts", "onExhaust"],
   terminate: ["terminalStatus", "postComment"],
 };
+
+/**
+ * String fields that intentionally carry user-authored prompt/prose content.
+ * Machine-shaped strings such as Branch conditions and JSON Schema sources are
+ * excluded so reference/token visitors never rewrite arbitrary data.
+ */
+export const WORKFLOW_PROMPT_PARAM_KEYS: Partial<
+  Record<WorkflowBlockType, readonly string[]>
+> = {
+  planning_agent: ["prompt"],
+  implementation_agent: ["prompt"],
+  review_agent: ["prompt"],
+  generic_agent: ["prompt"],
+  call_llm: ["prompt", "system"],
+  fix_agent: ["instructions"],
+  post_ticket_comment: ["body"],
+  post_pr_comment: ["body"],
+  open_pr: ["title", "body"],
+  send_slack_message: ["message"],
+  human_question: ["questions"],
+  terminate: ["postComment"],
+};

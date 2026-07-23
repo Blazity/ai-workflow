@@ -37,7 +37,11 @@ async function runGate(input: PostPrGateWorkflowInput) {
   const { executePostPrGatePhase } = await import("../post-pr-gate/runner.js");
   const { GateStore } = await import("../post-pr-gate/gate-store.js");
   const { getDb } = await import("../db/client.js");
-  const { ticketKeyFromBranch } = await import("../lib/branch-prefix.js");
+  const {
+    gateCheckName,
+    isManagedBranch,
+    ticketKeyFromBranch,
+  } = await import("../lib/workflow-naming.js");
   const { createAdapters } = await import("../lib/adapters.js");
   const { logger } = await import("../lib/logger.js");
   const { hasGateStatusCapability } = await import("../adapters/vcs/types.js");
@@ -50,7 +54,7 @@ async function runGate(input: PostPrGateWorkflowInput) {
   });
   const gateStore = new GateStore(getDb());
 
-  if (config.postPrGate.runOn.botPrsOnly && !input.headRef.startsWith("blazebot/")) {
+  if (config.postPrGate.runOn.botPrsOnly && !isManagedBranch(input.headRef)) {
     logger.info({ headRef: input.headRef }, "post_pr_gate_skipped_not_bot_branch");
     return { ranSteps: 0, failed: false };
   }
@@ -92,7 +96,7 @@ async function runGate(input: PostPrGateWorkflowInput) {
 
   const gateStatusRefs: GateStatusRef[] = [];
   for (const step of config.postPrGate.steps) {
-    const name = `blazebot / ${step.name ?? step.uses}`;
+    const name = gateCheckName(step.name ?? step.uses);
     const ref = await (vcs as GateStatusCapableVCS).createGateStatus(
       name,
       input.headSha,

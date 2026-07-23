@@ -68,7 +68,7 @@ const { dispatchPostPrGateWebhook } = await import("./post-pr-gate-dispatch.js")
 const workflowInput = {
   prNumber: 42,
   headSha: "sha1",
-  headRef: "blazebot/AIW-32",
+  headRef: "ai-workflow/AIW-32",
   baseRef: "main",
   title: "AIW-32",
   body: "",
@@ -117,6 +117,19 @@ describe("dispatchPostPrGateWebhook eligibility", () => {
 
     expect(result).toEqual({ status: "ignored", reason: "not_bot_branch" });
     expectNoGateMutation();
+  });
+
+  it("continues to accept a legacy managed branch", async () => {
+    const result = await dispatchPostPrGateWebhook({
+      action: "opened",
+      workflowInput: {
+        ...workflowInput,
+        headRef: "blazebot/AIW-32",
+      },
+    });
+
+    expect(result).toEqual({ status: "dispatched", runId: "run_123" });
+    expect(mockStart).toHaveBeenCalledOnce();
   });
 
   it("skips draft pull requests before locking or dedupe", async () => {

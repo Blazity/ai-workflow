@@ -78,7 +78,7 @@ describe.skipIf(!e2eEnv.JIRA_E2E_COMMENTER_TOKEN)(
         ].join("\n"),
       });
       ticketKey = ticket.ticketKey;
-      branchName = `blazebot/${ticketKey.toLowerCase()}`;
+      branchName = `ai-workflow/${ticketKey.toLowerCase()}`;
 
       await moveTicketToColumn(ticketKey, e2eEnv.COLUMN_AI);
       await callCronPoll();

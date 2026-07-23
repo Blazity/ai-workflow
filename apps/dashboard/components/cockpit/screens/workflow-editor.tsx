@@ -1,6 +1,13 @@
 "use client";
 
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useReducer,
+  useRef,
+  useState,
+} from "react";
 import {
   isTriggerBlockType,
   type RunBlockStatusesResponse,
@@ -14,6 +21,7 @@ import {
   type WorkflowDefinitionSaveResponse,
   type WorkflowDefinitionValidationResponse,
   type WorkflowDefinitionVersion,
+  type WorkflowEdgeGeometry,
   type WorkflowExecutionBudgets,
   type WorkflowEditorOptions,
 } from "@shared/contracts";
@@ -57,10 +65,52 @@ import {
   createEditorResponseGuard,
   type EditorResponseGuard,
 } from "@/lib/workflow-editor/response-guard";
+import {
+  createEditorHistory,
+  editorHistoryCanRedo,
+  editorHistoryCanUndo,
+  editorHistoryIsDirty,
+  reduceEditorHistory,
+  type EditorHistoryAction,
+  type EditorHistoryState,
+} from "@/lib/workflow-editor/history";
 
 interface ValidationRequest {
   definitionId: number;
   definition: WorkflowDefinition;
+}
+
+interface WorkflowEditorDocument {
+  nodes: FlowNodeDef[];
+  edges: FlowEdgeDef[];
+  budgets: WorkflowExecutionBudgets;
+  edgeGeometry: Record<string, WorkflowEdgeGeometry>;
+}
+
+function semanticKeyForDefinition(definition: WorkflowDefinition): string {
+  const flow = toFlowDefinition(definition);
+  return JSON.stringify(
+    serializeSemanticWorkflowDefinition(
+      flow.nodes,
+      flow.edges,
+      executionLimitsFromDefinition(definition),
+      definition.schemaVersion,
+    ),
+  );
+}
+
+function semanticKeyForDocument(
+  document: WorkflowEditorDocument,
+  schemaVersion: 1 | 2,
+): string {
+  return JSON.stringify(
+    serializeSemanticWorkflowDefinition(
+      document.nodes,
+      document.edges,
+      document.budgets,
+      schemaVersion,
+    ),
+  );
 }
 
 function nodesValid(nodes: FlowNodeDef[]): boolean {
@@ -105,12 +155,29 @@ export function WorkflowEditorScreen({
   const [deployed, setDeployed] = useState<WorkflowDefinitionVersion | null>(initialDetail.deployed);
   const [baselineDraft, setBaselineDraft] = useState<WorkflowDefinition | null>(initialDetail.draft);
   const [schemaVersion, setSchemaVersion] = useState<1 | 2>(seed.schemaVersion);
-  const [budgets, setBudgets] = useState<WorkflowExecutionBudgets>(() =>
-    executionLimitsFromDefinition(seed),
+  const [editorHistory, dispatchEditorHistory] = useReducer(
+    (
+      state: EditorHistoryState<WorkflowEditorDocument>,
+      action: EditorHistoryAction<WorkflowEditorDocument>,
+    ) => reduceEditorHistory(state, action),
+    undefined,
+    () =>
+      createEditorHistory(
+        {
+          nodes: seedFlow.nodes,
+          edges: seedFlow.edges,
+          budgets: executionLimitsFromDefinition(seed),
+          edgeGeometry: structuredClone(initialDetail.layout.edges),
+        },
+        {
+          savedSemanticKey: initialDetail.draft
+            ? semanticKeyForDefinition(initialDetail.draft)
+            : null,
+        },
+      ),
   );
+  const { nodes, edges, budgets, edgeGeometry } = editorHistory.present;
   const [layoutBaseline, setLayoutBaseline] = useState(() => JSON.stringify(initialDetail.layout));
-  const [nodes, setNodes] = useState<FlowNodeDef[]>(() => seedFlow.nodes);
-  const [edges, setEdges] = useState<FlowEdgeDef[]>(() => seedFlow.edges);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [confirmRestore, setConfirmRestore] = useState<number | null>(null);
@@ -145,6 +212,148 @@ export function WorkflowEditorScreen({
     editorResponseGuardRef.current = createEditorResponseGuard();
   }
   const editorResponseGuard = editorResponseGuardRef.current;
+  const editorHistoryRef = useRef(editorHistory);
+  editorHistoryRef.current = editorHistory;
+  const editorDocumentRef = useRef(editorHistory.present);
+  editorDocumentRef.current = editorHistory.present;
+  const applyEditorDocument = useCallback(
+    (
+      update: (
+        current: WorkflowEditorDocument,
+      ) => WorkflowEditorDocument,
+      options: { semantic?: boolean } = {},
+    ) => {
+      const next = update(editorDocumentRef.current);
+      editorDocumentRef.current = next;
+      if (options.semantic !== false) editorResponseGuard.invalidate();
+      dispatchEditorHistory({ type: "apply", value: next });
+    },
+    [editorResponseGuard],
+  );
+  const changeNodes = useCallback<
+    React.Dispatch<React.SetStateAction<FlowNodeDef[]>>
+  >(
+    (update) =>
+      applyEditorDocument((current) => ({
+        ...current,
+        nodes:
+          typeof update === "function"
+            ? update(current.nodes)
+            : update,
+      })),
+    [applyEditorDocument],
+  );
+  const changeEdges = useCallback<
+    React.Dispatch<React.SetStateAction<FlowEdgeDef[]>>
+  >(
+    (update) =>
+      applyEditorDocument((current) => ({
+        ...current,
+        edges:
+          typeof update === "function"
+            ? update(current.edges)
+            : update,
+      })),
+    [applyEditorDocument],
+  );
+  const changeNodePositions = useCallback<
+    React.Dispatch<React.SetStateAction<FlowNodeDef[]>>
+  >(
+    (update) =>
+      applyEditorDocument(
+        (current) => ({
+          ...current,
+          nodes:
+            typeof update === "function"
+              ? update(current.nodes)
+              : update,
+        }),
+        { semantic: false },
+      ),
+    [applyEditorDocument],
+  );
+  const changeBudgets = useCallback(
+    (next: WorkflowExecutionBudgets) =>
+      applyEditorDocument((current) => ({ ...current, budgets: next })),
+    [applyEditorDocument],
+  );
+  const changeEdgeGeometry = useCallback<
+    React.Dispatch<
+      React.SetStateAction<Record<string, WorkflowEdgeGeometry>>
+    >
+  >(
+    (update) =>
+      applyEditorDocument(
+        (current) => ({
+          ...current,
+          edgeGeometry:
+            typeof update === "function"
+              ? update(current.edgeGeometry)
+              : update,
+        }),
+        { semantic: false },
+      ),
+    [applyEditorDocument],
+  );
+  const changeGraph = useCallback(
+    (
+      next: Pick<
+        WorkflowEditorDocument,
+        "nodes" | "edges" | "edgeGeometry"
+      >,
+    ) =>
+      applyEditorDocument((current) => ({
+        ...current,
+        ...next,
+      })),
+    [applyEditorDocument],
+  );
+  const beginEditorTransaction = useCallback(() => {
+    pendingLayoutSave.discard();
+    dispatchEditorHistory({ type: "begin_transaction" });
+  }, [pendingLayoutSave]);
+  const commitEditorTransaction = useCallback(() => {
+    dispatchEditorHistory({ type: "commit_transaction" });
+  }, []);
+  const cancelEditorTransaction = useCallback(() => {
+    const state = editorHistoryRef.current;
+    const before = state.transaction?.before;
+    if (before) editorDocumentRef.current = before;
+    if (
+      before &&
+      semanticKeyForDocument(before, schemaVersion) !==
+        semanticKeyForDocument(state.present, schemaVersion)
+    ) {
+      editorResponseGuard.invalidate();
+    }
+    dispatchEditorHistory({ type: "cancel_transaction" });
+  }, [editorResponseGuard, schemaVersion]);
+  const undoEditor = useCallback(() => {
+    const state = editorHistoryRef.current;
+    const previous = state.past.at(-1);
+    if (previous) editorDocumentRef.current = previous;
+    if (
+      previous &&
+      semanticKeyForDocument(previous, schemaVersion) !==
+        semanticKeyForDocument(state.present, schemaVersion)
+    ) {
+      editorResponseGuard.invalidate();
+    }
+    dispatchEditorHistory({ type: "undo" });
+  }, [editorResponseGuard, schemaVersion]);
+  const redoEditor = useCallback(() => {
+    const state = editorHistoryRef.current;
+    const next = state.future[0];
+    if (next) editorDocumentRef.current = next;
+    if (
+      next &&
+      semanticKeyForDocument(next, schemaVersion) !==
+        semanticKeyForDocument(state.present, schemaVersion)
+    ) {
+      editorResponseGuard.invalidate();
+    }
+    dispatchEditorHistory({ type: "redo" });
+  }, [editorResponseGuard, schemaVersion]);
   const validationKeyRef = useRef<string | null>(null);
   const validationControllerRef = useRef<WorkflowValidationController<ValidationRequest> | null>(
     null,
@@ -186,25 +395,9 @@ export function WorkflowEditorScreen({
   const semanticDefinitionRef = useRef(semanticDefinition);
   semanticDefinitionRef.current = semanticDefinition;
   const semanticKey = JSON.stringify(semanticDefinition);
-  const baselineSemanticKey =
-    baselineDraft === null
-      ? null
-      : (() => {
-          const baselineFlow = toFlowDefinition(baselineDraft);
-          return JSON.stringify(
-            serializeSemanticWorkflowDefinition(
-              baselineFlow.nodes,
-              baselineFlow.edges,
-              executionLimitsFromDefinition(baselineDraft),
-              baselineDraft.schemaVersion,
-            ),
-          );
-        })();
   const validationTargetKey = `${selectedId}:${semanticKey}`;
   const validationIsCurrent = validation.key === validationTargetKey;
-  const dirty =
-    baselineSemanticKey === null ||
-    semanticKey !== baselineSemanticKey;
+  const dirty = editorHistoryIsDirty(editorHistory, semanticKey);
   const { canSave, canDeploy } = workflowEditorActions({
     dirty,
     structurallyValid: nodesValid(nodes),
@@ -238,13 +431,14 @@ export function WorkflowEditorScreen({
   }, [pendingLayoutSave, selectedId, selectedMeta]);
 
   useEffect(() => {
-    if (!canEdit || !selectedMeta) {
+    if (!canEdit || !selectedMeta || editorHistory.transaction !== null) {
       pendingLayoutSave.discard();
       return;
     }
     const layout = serializeWorkflowLayoutWithBaseline(
       nodes,
       JSON.parse(layoutBaseline) as WorkflowDefinitionLayoutResponse["layout"],
+      edgeGeometry,
     );
     const serialized = JSON.stringify(layout);
     if (serialized === layoutBaseline) {
@@ -272,7 +466,16 @@ export function WorkflowEditorScreen({
         return false;
       }
     });
-  }, [canEdit, layoutBaseline, nodes, pendingLayoutSave, selectedId, selectedMeta]);
+  }, [
+    canEdit,
+    edgeGeometry,
+    editorHistory.transaction,
+    layoutBaseline,
+    nodes,
+    pendingLayoutSave,
+    selectedId,
+    selectedMeta,
+  ]);
 
   useEffect(() => () => pendingLayoutSave.discard(), [pendingLayoutSave]);
 
@@ -322,30 +525,20 @@ export function WorkflowEditorScreen({
   function applySave(
     res: WorkflowDefinitionSaveResponse,
     refit: boolean,
-    replaceEditorState = true,
+    responseIsCurrent = true,
   ) {
     setBaselineDraft(res.draft);
-    if (replaceEditorState) {
-      const flow = toFlowDefinition(res.draft);
-      setSchemaVersion(flow.schemaVersion);
-      setBudgets(executionLimitsFromDefinition(res.draft));
-      setNodes(flow.nodes);
-      setEdges(flow.edges);
-    }
     setMetas((prev) => prev.map((m) => (m.id === res.meta.id ? res.meta : m)));
-    if (replaceEditorState) {
-      const savedFlow = toFlowDefinition(res.draft);
-      const savedKey = `${res.meta.id}:${JSON.stringify(
-        serializeSemanticWorkflowDefinition(
-          savedFlow.nodes,
-          savedFlow.edges,
-          executionLimitsFromDefinition(res.draft),
-          savedFlow.schemaVersion,
-        ),
-      )}`;
-      validationKeyRef.current = savedKey;
+    if (responseIsCurrent) {
+      const savedSemanticKey = semanticKeyForDefinition(res.draft);
+      const savedValidationKey = `${res.meta.id}:${savedSemanticKey}`;
+      dispatchEditorHistory({
+        type: "mark_saved",
+        savedSemanticKey,
+      });
+      validationKeyRef.current = savedValidationKey;
       setValidation({
-        key: savedKey,
+        key: savedValidationKey,
         state: res.validation
           ? {
               status: res.validation.valid ? "valid" : "invalid",
@@ -368,7 +561,7 @@ export function WorkflowEditorScreen({
             },
       });
     }
-    if (refit && replaceEditorState) setFitSignal((s) => s + 1);
+    if (refit && responseIsCurrent) setFitSignal((s) => s + 1);
   }
 
   function showValidationActionError(
@@ -594,10 +787,21 @@ export function WorkflowEditorScreen({
       setLayoutBaseline(JSON.stringify(detail.layout));
       const def = detail.draft ?? detail.deployed?.definition ?? defaultDefinition;
       const flow = toFlowDefinition(def);
+      const nextDocument: WorkflowEditorDocument = {
+        nodes: flow.nodes,
+        edges: flow.edges,
+        budgets: executionLimitsFromDefinition(def),
+        edgeGeometry: structuredClone(detail.layout.edges),
+      };
       setSchemaVersion(flow.schemaVersion);
-      setBudgets(executionLimitsFromDefinition(def));
-      setNodes(flow.nodes);
-      setEdges(flow.edges);
+      editorDocumentRef.current = nextDocument;
+      dispatchEditorHistory({
+        type: "reset",
+        value: nextDocument,
+        savedSemanticKey: detail.draft
+          ? semanticKeyForDefinition(detail.draft)
+          : null,
+      });
       setConfirmRestore(null);
       setFitSignal((s) => s + 1);
     } catch (err) {
@@ -755,18 +959,20 @@ export function WorkflowEditorScreen({
           edges={edges}
           schemaVersion={schemaVersion}
           limits={budgets}
-          onLimitsChange={(next) => {
-            editorResponseGuard.invalidate();
-            setBudgets(next);
-          }}
-          onNodesChange={(next) => {
-            editorResponseGuard.invalidate();
-            setNodes(next);
-          }}
-          onEdgesChange={(next) => {
-            editorResponseGuard.invalidate();
-            setEdges(next);
-          }}
+          edgeGeometry={edgeGeometry}
+          onLimitsChange={changeBudgets}
+          onNodesChange={changeNodes}
+          onNodePositionsChange={changeNodePositions}
+          onEdgesChange={changeEdges}
+          onEdgeGeometryChange={changeEdgeGeometry}
+          onGraphChange={changeGraph}
+          canUndo={editorHistoryCanUndo(editorHistory)}
+          canRedo={editorHistoryCanRedo(editorHistory)}
+          onUndo={undoEditor}
+          onRedo={redoEditor}
+          onBeginTransaction={beginEditorTransaction}
+          onCommitTransaction={commitEditorTransaction}
+          onCancelTransaction={cancelEditorTransaction}
           canEdit={canEdit}
           dirty={dirty}
           saveEnabled={canSave}

@@ -52,7 +52,7 @@ describe("US-09: Failed marker cleared when ticket leaves AI", () => {
         "Ticket sits outside AI; reconcile should clear the seeded failure marker.",
     });
     ticketKey = ticket.ticketKey;
-    branchName = `blazebot/${ticketKey.toLowerCase()}`;
+    branchName = `ai-workflow/${ticketKey.toLowerCase()}`;
 
     await moveTicketToColumn(ticketKey, e2eEnv.COLUMN_BACKLOG);
 

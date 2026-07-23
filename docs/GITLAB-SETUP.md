@@ -52,9 +52,9 @@ Save the token as `GITLAB_TOKEN`.
 
 The token identity must have enough project access to create branches, open merge requests, push commits, and create commit statuses.
 
-Use the Maintainer role for the simplest setup. Developer can work only if the project's branch protection rules allow that identity to push and force-push `blazebot/*` branches and open merge requests.
+Use the Maintainer role for the simplest setup. Developer can work only if the project's branch protection rules allow that identity to push and force-push `ai-workflow/*` branches and open merge requests. Keep the same permission for legacy `blazebot/*` branches while historical workflow-owned branches remain active.
 
-Prefer leaving `blazebot/*` branches unprotected. If you protect that branch pattern, make sure the token identity is allowed to push and allowed to force-push `blazebot/*`. The worker always updates bot branches with `git push --force` from the sandbox after each run.
+Prefer leaving `ai-workflow/*` branches unprotected. If you protect that branch pattern, make sure the token identity is allowed to push and allowed to force-push it. Apply equivalent rules to legacy `blazebot/*` branches until those historical workflow-owned branches are retired. The worker always updates its managed branches with `git push --force` from the sandbox after each run.
 
 ## Optional: set a legacy project ID
 
@@ -90,9 +90,9 @@ Redeploy the worker after setting or rotating `GITLAB_WEBHOOK_SECRET`.
 
 After deployment, verify:
 
-- Opening or updating a `blazebot/<ticket>` merge request triggers the webhook.
+- Opening or updating an `ai-workflow/<ticket>` merge request triggers the webhook. Existing `blazebot/<ticket>` merge requests remain recognized.
 - The webhook route dispatches the post-PR gate for eligible merge request events.
-- The merge request shows `blazebot / ...` commit statuses on the head commit.
+- New merge requests show `AI Workflow / ...` commit statuses on the head commit. Existing `blazebot / ...` statuses remain recognized and updated through their stored references.
 - Force-pushing the branch cancels or replaces stale statuses for the previous head commit.
 - Changed files are read from GitLab merge request diffs.
 - A merge request comment dispatches `trigger_pr_review` when that event is enabled.

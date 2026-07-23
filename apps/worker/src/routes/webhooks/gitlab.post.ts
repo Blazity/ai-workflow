@@ -4,7 +4,6 @@ import { env, getConfiguredVcsProviders, getVcsBotLogin } from "../../../env.js"
 import { PostgresRunRegistry } from "../../adapters/run-registry/postgres.js";
 import { createRepositoryDirectoryForProviders } from "../../adapters/vcs/repository-directory.js";
 import { getDb } from "../../db/client.js";
-import { ticketKeyFromBranch } from "../../lib/branch-prefix.js";
 import {
   dispatchTriggerEvent,
   type DispatchTriggerResult,
@@ -20,6 +19,7 @@ import { recordIngestionFailure } from "../../lib/ingestion-diagnostic.js";
 import { dispatchPostPrGateWebhook } from "../../lib/post-pr-gate-dispatch.js";
 import { isRepoAllowed } from "../../lib/repo-allowlist.js";
 import { normalizeGitLabEvent } from "../../lib/trigger-events.js";
+import { ticketKeyFromBranch } from "../../lib/workflow-naming.js";
 
 const ALLOWED_ACTIONS = new Set(["opened", "update", "reopened"]);
 

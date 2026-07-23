@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { eq } from "drizzle-orm";
 import type {
   WorkflowBlockTypeV1,
   WorkflowDefinitionV1,
@@ -23,7 +24,10 @@ vi.mock("../../env.js", () => ({
   },
 }));
 
-import { workflowDefinitionVersions } from "../db/schema.js";
+import {
+  workflowDefinitions,
+  workflowDefinitionVersions,
+} from "../db/schema.js";
 import { createTestDb } from "../db/test-db.js";
 import {
   archiveWorkflowDefinition,
@@ -83,16 +87,68 @@ describe("workflow definition lifecycle", () => {
 
     const layout = await saveWorkflowDefinitionLayout(db, {
       definitionId: created.definition.id,
-      layout: { nodes: { trigger: { x: 99, y: 101 } } },
+      layout: {
+        nodes: { trigger: { x: 99, y: 101 } },
+        edges: {
+          "stable-edge": { bend: { x: 150, y: 175 } },
+        },
+      },
       expectedLayoutRevision: 0,
       actor: ADMIN,
     });
     expect(layout.layoutRevision).toBe(1);
+    expect(layout.layout.edges).toEqual({
+      "stable-edge": { bend: { x: 150, y: 175 } },
+    });
     expect((await getWorkflowDefinitionDraft(db, created.definition.id))?.draft.nodes[0]).toMatchObject({
       x: 99,
       y: 101,
     });
     expect((await getWorkflowDefinition(db, created.definition.id))?.draftRevision).toBe(1);
+  });
+
+  it("normalizes legacy layout writes and rejects malformed edge geometry", async () => {
+    const created = await createWorkflowDefinition(db, {
+      name: "Legacy layout",
+      seed: null,
+      actor: ADMIN,
+    });
+    await db
+      .update(workflowDefinitions)
+      .set({ layout: { nodes: { trigger: { x: 5, y: 15 } } } })
+      .where(eq(workflowDefinitions.id, created.definition.id));
+    expect(
+      (await getWorkflowDefinition(db, created.definition.id))?.layout,
+    ).toEqual({
+      nodes: { trigger: { x: 5, y: 15 } },
+      edges: {},
+    });
+    const legacy = await saveWorkflowDefinitionLayout(db, {
+      definitionId: created.definition.id,
+      layout: { nodes: { trigger: { x: 10, y: 20 } } },
+      expectedLayoutRevision: 0,
+      actor: ADMIN,
+    });
+    expect(legacy.layout).toEqual({
+      nodes: { trigger: { x: 10, y: 20 } },
+      edges: {},
+    });
+
+    await expect(
+      saveWorkflowDefinitionLayout(db, {
+        definitionId: created.definition.id,
+        layout: {
+          nodes: {},
+          edges: {
+            broken: {
+              bend: { x: Number.NaN, y: 20 },
+            },
+          },
+        },
+        expectedLayoutRevision: 1,
+        actor: ADMIN,
+      }),
+    ).rejects.toMatchObject({ statusCode: 400 });
   });
 
   it("deploys immutable snapshots, leaves the draft live-neutral, and rollback selects without copying", async () => {

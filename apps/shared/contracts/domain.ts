@@ -521,9 +521,26 @@ export interface WorkflowDefinitionV2 {
 
 export type WorkflowDefinition = WorkflowDefinitionV1 | WorkflowDefinitionV2;
 
-/** Presentation-only node coordinates, persisted independently from a draft. */
+export interface WorkflowLayoutPoint {
+  x: number;
+  y: number;
+}
+
+/** A missing edge entry means the editor should use automatic routing. */
+export interface WorkflowEdgeGeometry {
+  bend: WorkflowLayoutPoint;
+}
+
+/** Presentation-only geometry, persisted independently from a draft. */
 export interface WorkflowDefinitionLayout {
-  nodes: Record<string, { x: number; y: number }>;
+  nodes: Record<string, WorkflowLayoutPoint>;
+  edges: Record<string, WorkflowEdgeGeometry>;
+}
+
+/** Read compatibility for layouts persisted before edge routing existed. */
+export interface WorkflowDefinitionLayoutInput {
+  nodes: Record<string, WorkflowLayoutPoint>;
+  edges?: Record<string, WorkflowEdgeGeometry>;
 }
 
 export interface WorkflowDefinitionVersion {

@@ -70,7 +70,7 @@ describe("US-04: PR with merge conflicts — agent rebases", () => {
       ].join("\n"),
     });
     ticketKey = ticket.ticketKey;
-    branchName = `blazebot/${ticketKey.toLowerCase()}`;
+    branchName = `ai-workflow/${ticketKey.toLowerCase()}`;
 
     // Create branch and add the file with the correct content
     await createBranch(branchName);
